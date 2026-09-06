@@ -59,7 +59,7 @@ func appendUDPAddrCopy(addr *net.UDPAddr) *net.UDPAddr {
 	return &copy
 }
 
-func bindMemoryGossipTransport(t *testing.T, runtime *Runtime, peerIDs ...string) (*gossip.Transport, *memoryGossipDatagram) {
+func bindMemoryGossipTransport(t *testing.T, driver *GossipDriver, peerIDs ...string) (*gossip.Transport, *memoryGossipDatagram) {
 	t.Helper()
 	datagram := &memoryGossipDatagram{addr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 33434}}
 	known := make(map[string]*net.UDPAddr, len(peerIDs))
@@ -70,22 +70,22 @@ func bindMemoryGossipTransport(t *testing.T, runtime *Runtime, peerIDs ...string
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.BindGossipTransport(transport); err != nil {
+	if err := driver.BindGossipTransport(transport); err != nil {
 		t.Fatal(err)
 	}
 	return transport, datagram
 }
 
-func TestRuntimeRepliesToUnverifiedPeerAtInboundAddress(t *testing.T) {
+func TestGossipDriverRepliesToUnverifiedPeerAtInboundAddress(t *testing.T) {
 	now := time.Unix(1000, 0)
 	peerID := "unverified.catofes."
 	state := &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}
-	runtime := NewRuntime(newFakeClock(now), 1, state, GossipRuntimeConfig{PeerID: "local.catofes."})
-	defer runtime.Stop()
-	_, datagram := bindMemoryGossipTransport(t, runtime, peerID)
+	driver := NewGossipDriver(newFakeClock(now), 1, state, GossipDriverConfig{PeerID: "local.catofes."})
+	defer driver.Stop()
+	_, datagram := bindMemoryGossipTransport(t, driver, peerID)
 	inboundAddr := &net.UDPAddr{IP: net.ParseIP("198.51.100.20"), Port: 33434}
 
-	result, err := runtime.HandleGossipHostEvent(context.Background(), GossipPacketReceived{Packet: &gossip.Packet{
+	result, err := driver.HandleGossipHostEvent(context.Background(), GossipPacketReceived{Packet: &gossip.Packet{
 		Message: &gossip.Message{Type: gossip.MessagePing, PeerID: peerID, Ping: &gossip.Ping{}},
 		Addr:    inboundAddr,
 	}}, now, nil)

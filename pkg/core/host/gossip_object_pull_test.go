@@ -25,8 +25,8 @@ func (client *blockingObjectPullClient) Exchange(ctx context.Context, _ string, 
 
 func TestGossipObjectPullWorkersUpdateRuntimeObservability(t *testing.T) {
 	now := time.Unix(100, 0)
-	runtime := NewRuntime(newFakeClock(now), 4, nil, GossipRuntimeConfig{})
-	defer runtime.Stop()
+	driver := NewGossipDriver(newFakeClock(now), 4, nil, GossipDriverConfig{})
+	defer driver.Stop()
 	client := &memoryObjectPullClient{response: &gossip.ObjectPullResponse{OK: true, Snapshot: &corestate.ZoneSnapshot{Zone: "a.catofes."}}}
 	executor := NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{
 		Client: client,
@@ -35,25 +35,25 @@ func TestGossipObjectPullWorkersUpdateRuntimeObservability(t *testing.T) {
 			return GossipDiscoveryInput{Network: zone.NewNetworkState(), Bootstrap: map[string]*net.UDPAddr{"peer-a": {IP: net.ParseIP("127.0.0.1"), Port: 1}}}
 		},
 	})
-	if err := runtime.StartGossipObjectPullWorkers(t.Context(), executor, 1, 1); err != nil {
+	if err := driver.StartGossipObjectPullWorkers(t.Context(), executor, 1, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.SubmitGossipObjectPull(gossip.StartObjectPullAction{PeerID: "peer-a", Zone: "a.catofes."}); err != nil {
+	if err := driver.SubmitGossipObjectPull(gossip.StartObjectPullAction{PeerID: "peer-a", Zone: "a.catofes."}); err != nil {
 		t.Fatal(err)
 	}
 	select {
-	case <-runtime.Events():
+	case <-driver.Events():
 	case <-time.After(time.Second):
 		t.Fatal("object-pull completion was not delivered")
 	}
-	diagnostics, ok := runtime.Observability.Snapshot("peer-a", now)
+	diagnostics, ok := driver.Observability.Snapshot("peer-a", now)
 	if !ok || diagnostics.ObjectPullStats == nil || diagnostics.ObjectPullStats.Attempts != 1 || diagnostics.ObjectPullStats.Successes != 1 || diagnostics.ObjectPullStats.LastBytes == 0 {
 		t.Fatalf("object-pull diagnostics = %#v", diagnostics)
 	}
 }
 
 func TestGossipObjectPullWorkersProvideBoundedBackpressureAndStop(t *testing.T) {
-	runtime := NewRuntime(nil, 4, nil, GossipRuntimeConfig{})
+	driver := NewGossipDriver(nil, 4, nil, GossipDriverConfig{})
 	client := &blockingObjectPullClient{entered: make(chan struct{}, 1)}
 	executor := NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{
 		Client: client,
@@ -67,28 +67,28 @@ func TestGossipObjectPullWorkersProvideBoundedBackpressureAndStop(t *testing.T) 
 			}
 		},
 	})
-	if err := runtime.StartGossipObjectPullWorkers(t.Context(), executor, 1, 1); err != nil {
+	if err := driver.StartGossipObjectPullWorkers(t.Context(), executor, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	first := gossip.StartObjectPullAction{PeerID: "peer-a", Zone: "a.catofes."}
-	if err := runtime.SubmitGossipObjectPull(first); err != nil {
+	if err := driver.SubmitGossipObjectPull(first); err != nil {
 		t.Fatal(err)
 	}
 	<-client.entered
-	if err := runtime.SubmitGossipObjectPull(gossip.StartObjectPullAction{PeerID: "peer-b", Zone: "b.catofes."}); err != nil {
+	if err := driver.SubmitGossipObjectPull(gossip.StartObjectPullAction{PeerID: "peer-b", Zone: "b.catofes."}); err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.SubmitGossipObjectPull(gossip.StartObjectPullAction{PeerID: "peer-c", Zone: "c.catofes."}); !errors.Is(err, ErrGossipObjectPullQueueFull) {
+	if err := driver.SubmitGossipObjectPull(gossip.StartObjectPullAction{PeerID: "peer-c", Zone: "c.catofes."}); !errors.Is(err, ErrGossipObjectPullQueueFull) {
 		t.Fatalf("third submit error = %v, want %v", err, ErrGossipObjectPullQueueFull)
 	}
-	if got := runtime.PendingGossipObjectPullCount(); got != 2 {
+	if got := driver.PendingGossipObjectPullCount(); got != 2 {
 		t.Fatalf("pending = %d, want 2", got)
 	}
-	runtime.Stop()
-	if got := runtime.PendingGossipObjectPullCount(); got != 0 {
+	driver.Stop()
+	if got := driver.PendingGossipObjectPullCount(); got != 0 {
 		t.Fatalf("pending after stop = %d, want 0", got)
 	}
-	if err := runtime.SubmitGossipObjectPull(first); !errors.Is(err, ErrRuntimeStopped) {
-		t.Fatalf("submit after stop = %v, want %v", err, ErrRuntimeStopped)
+	if err := driver.SubmitGossipObjectPull(first); !errors.Is(err, ErrGossipDriverStopped) {
+		t.Fatalf("submit after stop = %v, want %v", err, ErrGossipDriverStopped)
 	}
 }

@@ -67,14 +67,14 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 	if err := startObjectPullServer(ctx, serviceB); err != nil {
 		t.Fatalf("startObjectPullServer(B): %v", err)
 	}
-	if err := serviceA.hostRuntime.StartGossipObjectPullWorkers(ctx, serviceA.objectPullExecutor, 0, 0); err != nil {
+	if err := serviceA.gossipDriver.StartGossipObjectPullWorkers(ctx, serviceA.objectPullExecutor, 0, 0); err != nil {
 		t.Fatal(err)
 	}
-	defer serviceA.hostRuntime.Stop()
-	if err := serviceB.hostRuntime.StartGossipObjectPullWorkers(ctx, serviceB.objectPullExecutor, 0, 0); err != nil {
+	defer serviceA.gossipDriver.Stop()
+	if err := serviceB.gossipDriver.StartGossipObjectPullWorkers(ctx, serviceB.objectPullExecutor, 0, 0); err != nil {
 		t.Fatal(err)
 	}
-	defer serviceB.hostRuntime.Stop()
+	defer serviceB.gossipDriver.Stop()
 	if err := serviceA.handleSyncTimerEvent(ctx, true); err != nil {
 		t.Fatalf("handleSyncTimerEvent(A): %v", err)
 	}
@@ -84,14 +84,14 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 
 	for {
 		pumpEventLoopSync(ctx, []*Daemon{serviceA, serviceB}, []*gossip.Transport{transportA, transportB})
-		a := serviceA.hostRuntime.Gossip.Session(configB.PeerID)
-		b := serviceB.hostRuntime.Gossip.Session(configA.PeerID)
+		a := serviceA.gossipDriver.Gossip.Session(configB.PeerID)
+		b := serviceB.gossipDriver.Gossip.Session(configA.PeerID)
 		if (a == nil || a.Done()) && (b == nil || b.Done()) {
 			break
 		}
 		clock.Advance(5 * time.Second)
 	}
-	if serviceA.hostRuntime.Gossip.Session(configB.PeerID) != nil || serviceB.hostRuntime.Gossip.Session(configA.PeerID) != nil {
+	if serviceA.gossipDriver.Gossip.Session(configB.PeerID) != nil || serviceB.gossipDriver.Gossip.Session(configA.PeerID) != nil {
 		t.Fatal("completed two-node sync retained an active session")
 	}
 	latestA := serviceA.StateStore.common.ReadView()
@@ -114,7 +114,7 @@ func TestObjectPullTCPAddrUsesGossipPort(t *testing.T) {
 }
 
 // The timer fallback remains app-specific while daemon scheduling still owns
-// the periodic bootstrap trigger around HostRuntime's bounded event queue.
+// the periodic bootstrap trigger around GossipDriver's bounded event queue.
 func TestDaemonSyncTimerStartsWhenInternalEventQueueIsFull(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(1000, 0)
@@ -126,14 +126,14 @@ func TestDaemonSyncTimerStartsWhenInternalEventQueueIsFull(t *testing.T) {
 		verified, checkpoint, runtime, config, time.Minute,
 	)
 	for {
-		if err := service.hostRuntime.PostGossip(&gossip.SyncTimerEvent{PeerID: "queued.catofes."}); err != nil {
+		if err := service.gossipDriver.PostGossip(&gossip.SyncTimerEvent{PeerID: "queued.catofes."}); err != nil {
 			break
 		}
 	}
 	if err := service.handleSyncTimerEvent(context.Background(), false); err != nil {
 		t.Fatalf("handleSyncTimerEvent: %v", err)
 	}
-	session := service.hostRuntime.Gossip.Session(peerID)
+	session := service.gossipDriver.Gossip.Session(peerID)
 	if session == nil || session.State != gossip.SyncSessionSummarySent {
 		t.Fatalf("bootstrap session = %#v, want directly started summary_sent session", session)
 	}

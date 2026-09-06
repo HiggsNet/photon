@@ -11,7 +11,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
-func TestRuntimeCommitsBackoffAndCompletionOnceWithoutAdvancingRevision(t *testing.T) {
+func TestGossipDriverCommitsBackoffAndCompletionOnceWithoutAdvancingRevision(t *testing.T) {
 	now := time.Unix(100, 0)
 	commits := 0
 	var committed *corestate.CommitCandidate
@@ -27,13 +27,13 @@ func TestRuntimeCommitsBackoffAndCompletionOnceWithoutAdvancingRevision(t *testi
 			return nil
 		},
 	)
-	runtime := NewRuntime(newFakeClock(now), 2, store, GossipRuntimeConfig{PeerID: "local.catofes."})
-	defer runtime.Stop()
-	session := runtime.Gossip.NewSession("peer-a")
+	driver := NewGossipDriver(newFakeClock(now), 2, store, GossipDriverConfig{PeerID: "local.catofes."})
+	defer driver.Stop()
+	session := driver.Gossip.NewSession("peer-a")
 	session.State = gossip.SyncSessionSummarySent
 	controller := &memoryGossipController{}
 
-	result, err := runtime.handleGossipSessionEvent(context.Background(), &gossip.RoundTimeoutEvent{PeerID: "peer-a"}, now, controller)
+	result, err := driver.handleGossipSessionEvent(context.Background(), &gossip.RoundTimeoutEvent{PeerID: "peer-a"}, now, controller)
 	if err != nil || !result.Done || result.NewState != gossip.SyncSessionFailed {
 		t.Fatalf("result/error = %#v/%v", result, err)
 	}
@@ -52,18 +52,18 @@ func TestRuntimeCommitsBackoffAndCompletionOnceWithoutAdvancingRevision(t *testi
 	}
 }
 
-func TestRuntimeReportsCheckpointCommitFailure(t *testing.T) {
+func TestGossipDriverReportsCheckpointCommitFailure(t *testing.T) {
 	wantErr := errors.New("checkpoint commit failed")
 	state := &memoryGossipStateStore{
 		views:     []corestate.View{loadedGossipState(), loadedGossipState()},
 		updateErr: wantErr,
 	}
 	controller := &memoryGossipController{}
-	runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1, state, gossipConfigCapturingIssues(GossipRuntimeConfig{}, &controller.issues))
-	defer runtime.Stop()
+	driver := NewGossipDriver(newFakeClock(time.Unix(100, 0)), 1, state, gossipConfigCapturingIssues(GossipDriverConfig{}, &controller.issues))
+	defer driver.Stop()
 	session := &gossip.SyncSession{PeerID: "peer-a", State: gossip.SyncSessionCompleted}
 
-	result := runtime.ExecuteGossipActions(context.Background(), session, nil, controller)
+	result := driver.ExecuteGossipActions(context.Background(), session, nil, controller)
 	if result.Aborted || len(controller.issues) != 1 || controller.issues[0].Phase != GossipPhasePersistence || !errors.Is(controller.issues[0].Err, wantErr) {
 		t.Fatalf("result/issues = %#v/%#v", result, controller.issues)
 	}

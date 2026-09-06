@@ -42,7 +42,7 @@ type GossipExecutionIssue struct {
 	Err    error
 }
 
-// GossipSender is the narrow outbound datagram capability used by Runtime.
+// GossipSender is the narrow outbound datagram capability used by GossipDriver.
 type GossipSender interface {
 	SendGossip(context.Context, gossip.OutboundMessage) error
 }
@@ -58,21 +58,21 @@ type GossipExecutionResult struct {
 // ExecuteGossipActions owns the shared effect ordering for one FSM event:
 // read/apply, refresh/reconcile, send, object pull, timer, backoff and
 // persistence. The sender performs only actual datagram I/O.
-func (runtime *Runtime) ExecuteGossipActions(
+func (driver *GossipDriver) ExecuteGossipActions(
 	ctx context.Context,
 	session *gossip.SyncSession,
 	actions []gossip.SyncAction,
 	controller GossipSender,
 ) GossipExecutionResult {
 	var result GossipExecutionResult
-	if runtime == nil || controller == nil {
+	if driver == nil || controller == nil {
 		result.Aborted = true
 		return result
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	view := runtime.gossipStateView()
+	view := driver.gossipStateView()
 	if !view.Loaded {
 		return result
 	}
@@ -85,17 +85,17 @@ func (runtime *Runtime) ExecuteGossipActions(
 			peerID = session.PeerID
 		}
 		var err error
-		applyResult, err = runtime.applyGossipSnapshots(ctx, peerID, plan.Snapshots, view)
+		applyResult, err = driver.applyGossipSnapshots(ctx, peerID, plan.Snapshots, view)
 		if err != nil {
-			runtime.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseApply, PeerID: peerID, Err: err})
+			driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseApply, PeerID: peerID, Err: err})
 			result.Aborted = true
 			return result
 		}
 		result.NetworkChanged = applyResult.NetworkChanged
 		if result.NetworkChanged {
-			view = runtime.gossipStateView()
+			view = driver.gossipStateView()
 			if !view.Loaded {
-				runtime.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseStateRead, PeerID: peerID, Err: errors.New("gossip state unavailable after snapshot apply")})
+				driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseStateRead, PeerID: peerID, Err: errors.New("gossip state unavailable after snapshot apply")})
 				result.Aborted = true
 				return result
 			}
@@ -109,26 +109,26 @@ func (runtime *Runtime) ExecuteGossipActions(
 
 	for _, outbound := range plan.Outbound {
 		if err := controller.SendGossip(ctx, outbound); err != nil {
-			runtime.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseSend, PeerID: outbound.PeerID, Err: err})
+			driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseSend, PeerID: outbound.PeerID, Err: err})
 		}
 	}
 	for _, pull := range plan.ObjectPulls {
-		if err := runtime.SubmitGossipObjectPull(pull); err != nil {
-			runtime.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseObjectPull, PeerID: pull.PeerID, Err: err})
-			_ = runtime.PostGossip(&gossip.ObjectPullResultEvent{PeerID: pull.PeerID, Zone: pull.Zone, Err: err})
+		if err := driver.SubmitGossipObjectPull(pull); err != nil {
+			driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseObjectPull, PeerID: pull.PeerID, Err: err})
+			_ = driver.PostGossip(&gossip.ObjectPullResultEvent{PeerID: pull.PeerID, Zone: pull.Zone, Err: err})
 		}
 	}
 	for _, timer := range plan.Timers {
-		if _, err := runtime.ApplyGossipTimerAction(timer); err != nil {
-			runtime.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseTimer, PeerID: syncActionPeerID(timer), Err: err})
+		if _, err := driver.ApplyGossipTimerAction(timer); err != nil {
+			driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseTimer, PeerID: syncActionPeerID(timer), Err: err})
 		}
 	}
-	if err := runtime.commitGossipEventCheckpoint(ctx, session, plan.Backoffs, runtime.schedulerForRead().clock.Now()); err != nil {
+	if err := driver.commitGossipEventCheckpoint(ctx, session, plan.Backoffs, driver.schedulerForRead().clock.Now()); err != nil {
 		peerID := ""
 		if session != nil {
 			peerID = session.PeerID
 		}
-		runtime.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhasePersistence, PeerID: peerID, Err: err})
+		driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhasePersistence, PeerID: peerID, Err: err})
 	}
 	return result
 }

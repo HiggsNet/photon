@@ -16,7 +16,7 @@
 ```text
 Daemon
 ├── event loop / daemon scheduler
-├── GossipDriver             current: pkg/core/host.Runtime
+├── GossipDriver
 ├── StateStore               current: pkg/core/state.Store
 │   ├── VerifiedState
 │   └── GossipCheckpoint
@@ -29,7 +29,7 @@ Daemon
 固定约束：
 
 - `Daemon` 是唯一产品生命周期和平台 mutation 编排者；Linux 当前由 `Daemon.Run` 承担。
-- 以前的 `CommonRuntime` 就是当前 HostRuntime 的概念名，不是额外层；后续统一称 `GossipDriver`。
+- 以前的 `CommonRuntime` 就是当前 GossipDriver 的概念名，不是额外层；后续统一称 `GossipDriver`。
 - `StateStore` 不是 GossipStore：VerifiedState 是公共权威事实，GossipCheckpoint 才是 gossip 可丢失恢复提示。
 - LinuxDriver/WindowsDriver 是具体平台实现，不预建统一 `PlatformDriver`、`PlatformCapabilities` 或成套 controller interface。
 - LinuxState/WindowsState 只保存无法重建的本地 intent/secret 和非幂等操作最小 journal；当前实际系统状态进入纯内存 Observation。
@@ -44,16 +44,16 @@ Daemon
 - [x] 将 `DaemonService` 直接改名并收敛为唯一顶层 `Daemon`，没有在外面增加 supervisor 或兼容 alias。
 - [x] 删除 `SyncRuntime`：Daemon 直接持有 AppContext，clock/logger 使用真实 owner；gossip transport/config 随后继续归回 GossipDriver。
 - [x] 将 `app/photon.Runtime` 改名为 `AppContext`，明确它只承载 CLI/config/state-path/clock，不再冒充产品 Runtime。
-- [ ] 将 `pkg/core/host.Runtime` 的对外概念收敛为 GossipDriver/GossipHost；先整理职责和调用关系，再决定是否直接重命名 Go 类型。
-- [ ] 将 `internal/photonlinux.Runtime` 收敛为 LinuxDriver；保留具体 Linux API，不增加与 Windows 强行对称的公共接口。
+- [x] 将 `pkg/core/host.Runtime` 直接改名为 `GossipDriver`，同步构造器、配置、错误、调用方和文档术语，不保留兼容 alias。
+- [x] 将 `internal/photonlinux.Runtime` 直接改名为 `LinuxDriver`，同步构造器、options、Daemon owner 和测试，不增加跨平台公共接口或兼容 alias。
 
 ### A2. 收紧 GossipDriver
 
 - [ ] GossipDriver 只拥有 gossip Engine、UDP/TCP transport、object-pull、session/chunk/address book、协议 timer 和 gossip observability。
-- [x] 删除 Daemon 保存的第二份 gossip transport 和测试专用 transport deps；transport/address book 只由当前 HostRuntime 持有。
-- [x] 删除 `Daemon.GossipConfig`；协议 limits/discovery/peer identity 由 HostRuntime 持有可替换的 detached config，app 侧 endpoint/log/展示配置从 AppContext 按需派生，不增加 app 级 wrapper。
+- [x] 删除 Daemon 保存的第二份 gossip transport 和测试专用 transport deps；transport/address book 只由当前 GossipDriver 持有。
+- [x] 删除 `Daemon.GossipConfig`；协议 limits/discovery/peer identity 由 GossipDriver 持有可替换的 detached config，app 侧 endpoint/log/展示配置从 AppContext 按需派生，不增加 app 级 wrapper。
 - [x] `syncConfigFile` 已缩减并改名为 `gossipStartupConfig`，只作为 composition root 创建 GossipDriver/transport 的短生命周期输入；日志和本机 endpoint 发布策略直接读取 AppConfig。
-- [x] IPsec/routing/firewall/health timer 已迁入 Daemon 自己的 scheduler/queue；健康完成直接由 Daemon event loop 消费，不再包装成 HostRuntime completion。
+- [x] IPsec/routing/firewall/health timer 已迁入 Daemon 自己的 scheduler/queue；健康完成直接由 Daemon event loop 消费，不再包装成 GossipDriver completion。
 - [ ] 审计剩余平台异步 completion；全部迁回 Daemon，安全 deny-first 仍立即处理。
 - [ ] 保持一个 gossip ingress/event queue 和一个 Engine action ordering 实现；Linux/Windows 不复制协议 executor。
 - [ ] 明确 shutdown/backpressure：GossipDriver 停止后不再投递，Daemon drain 已完成的平台 completion 后再关闭 BoltStore。

@@ -9,7 +9,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/host"
 )
 
-func TestRuntimeDatagramReceiverAcceptsGossipTransport(t *testing.T) {
+func TestGossipDriverDatagramReceiverAcceptsGossipTransport(t *testing.T) {
 	datagramA, err := photonlinux.ListenGossipDatagram("127.0.0.1:0")
 	if err != nil {
 		t.Skipf("UDP sockets are unavailable: %v", err)
@@ -30,16 +30,16 @@ func TestRuntimeDatagramReceiverAcceptsGossipTransport(t *testing.T) {
 
 	transportA.AddPeer("test-b", transportB.LocalAddr())
 	transportB.AddPeer("test-a", transportA.LocalAddr())
-	runtime := host.NewRuntime(host.NewClock(nil), host.DefaultEventBuffer, nil, host.GossipRuntimeConfig{})
-	if err := runtime.StartGossipTransport(t.Context(), transportB, nil); err != nil {
+	driver := host.NewGossipDriver(host.NewClock(nil), host.DefaultEventBuffer, nil, host.GossipDriverConfig{})
+	if err := driver.StartGossipTransport(t.Context(), transportB, nil); err != nil {
 		t.Fatalf("StartGossipTransport: %v", err)
 	}
-	defer runtime.Stop()
+	defer driver.Stop()
 	if err := transportA.Send("test-b", &gossip.Message{Type: gossip.MessagePing, Ping: &gossip.Ping{}}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	select {
-	case event := <-runtime.Events():
+	case event := <-driver.Events():
 		received, ok := event.(host.GossipPacketReceived)
 		packet := received.Packet
 		if !ok || packet == nil || packet.Message == nil || packet.Message.Type != gossip.MessagePing {

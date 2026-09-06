@@ -196,7 +196,7 @@ type Prober interface {
 
 `ProbeResult` 携带 `RTT`、`Success` 和原始 `Error` 字符串；`Error` 只进入 debug 展示和 reason 分类，**不作为 metrics label**。每次 `Probe` 调用（含整个 burst）只产生 rolling window 中的一条样本。
 
-唯一 `photonlinux.Runtime` 初始化并持有 Linux raw-ICMP prober，daemon 只把公共
+唯一 `photonlinux.LinuxDriver` 初始化并持有 Linux raw-ICMP prober，daemon 只把公共
 `health.Prober` 接口注入 manager：
 
 ```go
@@ -204,7 +204,7 @@ type Prober interface {
 r.healthProber = healthprobe.NewRawICMProber(healthprobe.NewICMProber(nil))
 
 // app/photon/daemon.go
-d.health = newHealthManager(cfg, d.linuxRuntime.HealthProber())
+d.health = newHealthManager(cfg, d.linuxDriver.HealthProber())
 ```
 
 ### 4.2 RawICMProber（默认）

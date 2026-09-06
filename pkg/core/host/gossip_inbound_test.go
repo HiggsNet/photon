@@ -29,7 +29,7 @@ func (controller *memoryInboundController) SendGossip(_ context.Context, outboun
 	return controller.controllerErr
 }
 
-func TestRuntimeInboundOwnsObservedCheckpointAndAddressBookPublication(t *testing.T) {
+func TestGossipDriverInboundOwnsObservedCheckpointAndAddressBookPublication(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	path := zone.ZonePath("catofes.")
 	rootPublic, rootPrivate, err := ed25519.GenerateKey(nil)
@@ -58,14 +58,14 @@ func TestRuntimeInboundOwnsObservedCheckpointAndAddressBookPublication(t *testin
 		path.String(): {ObservedEndpoint: "198.51.100.10:33434", ObservedUntilUnix: now.Add(time.Minute).Unix()},
 	}}}
 	state := &memoryGossipStateStore{views: []corestate.View{initial, committed, committed}}
-	runtime := NewRuntime(newFakeClock(now), 2, state, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
-	defer runtime.Stop()
-	transport, _ := bindMemoryGossipTransport(t, runtime, path.String())
+	driver := NewGossipDriver(newFakeClock(now), 2, state, GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+	defer driver.Stop()
+	transport, _ := bindMemoryGossipTransport(t, driver, path.String())
 	packet := &gossip.Packet{
 		Addr:    &net.UDPAddr{IP: net.ParseIP("198.51.100.10"), Port: 33434},
 		Message: &gossip.Message{Type: gossip.MessageFetchCatalogPage, PeerID: path.String(), FetchCatalogPage: &gossip.FetchCatalogPage{}},
 	}
-	if _, err := runtime.HandleGossipHostEvent(context.Background(), GossipPacketReceived{Packet: packet}, now, nil); err != nil {
+	if _, err := driver.HandleGossipHostEvent(context.Background(), GossipPacketReceived{Packet: packet}, now, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(state.updates) != 1 || !state.updates[0][path.String()].ObservedEndpoint.Set {
@@ -74,45 +74,45 @@ func TestRuntimeInboundOwnsObservedCheckpointAndAddressBookPublication(t *testin
 	if observed := transport.ObservedPeerAddr(path.String()); observed == nil || observed.String() != packet.Addr.String() {
 		t.Fatalf("observed publication = %v", observed)
 	}
-	diagnostics, ok := runtime.Observability.Snapshot(path.String(), now)
+	diagnostics, ok := driver.Observability.Snapshot(path.String(), now)
 	if !ok || diagnostics.ObservedSource != string(gossip.MessageFetchCatalogPage) {
 		t.Fatalf("diagnostics = %#v", diagnostics)
 	}
 }
 
-func TestRuntimeExecuteGossipPacketActionsPlansPingResponsesAndHint(t *testing.T) {
-	runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState("local.catofes.")}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
-	defer runtime.Stop()
+func TestGossipDriverExecuteGossipPacketActionsPlansPingResponsesAndHint(t *testing.T) {
+	driver := NewGossipDriver(newFakeClock(time.Unix(100, 0)), 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState("local.catofes.")}}, GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+	defer driver.Stop()
 	controller := &memoryInboundController{}
 	packet := &gossip.Packet{Message: &gossip.Message{
 		Type:   gossip.MessagePing,
 		PeerID: "peer-a",
 		Ping:   &gossip.Ping{Summary: &corestate.CatalogSummary{CatalogRoot: []byte("remote"), ZoneCount: 1}},
 	}}
-	actions := runtime.Gossip.PlanInbound(packet)
-	if err := runtime.executeGossipPacketActions(context.Background(), actions, controller, controller.budget); err != nil {
+	actions := driver.Gossip.PlanInbound(packet)
+	if err := driver.executeGossipPacketActions(context.Background(), actions, controller, controller.budget); err != nil {
 		t.Fatalf("executeGossipPacketActions: %v", err)
 	}
 	if len(controller.outbound) != 2 || controller.outbound[0].Message.Type != gossip.MessagePong || controller.outbound[1].Message.Type != gossip.MessageFetchCatalogPage {
 		t.Fatalf("outbound = %#v, want PONG then FETCH_CATALOG_PAGE", controller.outbound)
 	}
-	diagnostics, ok := runtime.Observability.Snapshot("peer-a", time.Unix(100, 0))
+	diagnostics, ok := driver.Observability.Snapshot("peer-a", time.Unix(100, 0))
 	if !ok || diagnostics.DatagramStats == nil || diagnostics.DatagramStats.LastCatalogRootHex == "" || diagnostics.HintAccepted != 1 {
 		t.Fatalf("diagnostics = %#v", diagnostics)
 	}
 }
 
-func TestRuntimePingSummaryShortcutOwnsCheckpointAndSkipsSession(t *testing.T) {
+func TestGossipDriverPingSummaryShortcutOwnsCheckpointAndSkipsSession(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	peerID := zone.ZonePath("peer.catofes.")
 	network, _ := signedDiscoveryNetwork(t, peerID, true, nil, now)
 	store := corestate.NewStore(&corestate.VerifiedState{ManagedZone: "local.catofes.", Network: network}, nil)
-	runtime := NewRuntime(newFakeClock(now), 2, store, GossipRuntimeConfig{PeerID: "local.catofes."})
-	defer runtime.Stop()
-	bindMemoryGossipTransport(t, runtime, peerID.String())
+	driver := NewGossipDriver(newFakeClock(now), 2, store, GossipDriverConfig{PeerID: "local.catofes."})
+	defer driver.Stop()
+	bindMemoryGossipTransport(t, driver, peerID.String())
 	summary := corestate.CatalogSummaryFor(network)
 
-	result, err := runtime.HandleGossipHostEvent(context.Background(), GossipPacketReceived{Packet: &gossip.Packet{
+	result, err := driver.HandleGossipHostEvent(context.Background(), GossipPacketReceived{Packet: &gossip.Packet{
 		Addr: &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 33434},
 		Message: &gossip.Message{
 			Type: gossip.MessagePing, PeerID: peerID.String(), Ping: &gossip.Ping{Summary: summary},
@@ -121,78 +121,78 @@ func TestRuntimePingSummaryShortcutOwnsCheckpointAndSkipsSession(t *testing.T) {
 	if err != nil || !result.Handled {
 		t.Fatalf("HandleGossipHostEvent result/error = %#v/%v", result, err)
 	}
-	if runtime.Gossip.Session(peerID.String()) != nil || runtime.PendingEventCount() != 0 {
-		t.Fatalf("matching summary created session/event: session=%#v events=%d", runtime.Gossip.Session(peerID.String()), runtime.PendingEventCount())
+	if driver.Gossip.Session(peerID.String()) != nil || driver.PendingEventCount() != 0 {
+		t.Fatalf("matching summary created session/event: session=%#v events=%d", driver.Gossip.Session(peerID.String()), driver.PendingEventCount())
 	}
 	view := store.ReadView()
 	peer := view.Gossip.Peers[peerID.String()]
 	if view.Revision != 0 || peer.LastSyncUnix != now.Unix() || peer.BackoffUntilUnix != 0 || peer.ObservedEndpoint != "127.0.0.1:33434" {
 		t.Fatalf("shortcut view = revision %d peer %#v", view.Revision, peer)
 	}
-	diagnostics, ok := runtime.Observability.Snapshot(peerID.String(), now)
+	diagnostics, ok := driver.Observability.Snapshot(peerID.String(), now)
 	if !ok || diagnostics.LastHintReason != "ping_summary_match" {
 		t.Fatalf("shortcut diagnostics = %#v", diagnostics)
 	}
 }
 
-func TestRuntimePingSummaryMismatchStartsCommonSession(t *testing.T) {
+func TestGossipDriverPingSummaryMismatchStartsCommonSession(t *testing.T) {
 	now := time.Unix(1000, 0)
 	store := corestate.NewStore(&corestate.VerifiedState{ManagedZone: "local.catofes.", Network: zone.NewNetworkState()}, nil)
-	runtime := NewRuntime(newFakeClock(now), 2, store, GossipRuntimeConfig{PeerID: "local.catofes."})
-	defer runtime.Stop()
-	bindMemoryGossipTransport(t, runtime, "peer-a")
+	driver := NewGossipDriver(newFakeClock(now), 2, store, GossipDriverConfig{PeerID: "local.catofes."})
+	defer driver.Stop()
+	bindMemoryGossipTransport(t, driver, "peer-a")
 
-	_, err := runtime.HandleGossipHostEvent(context.Background(), GossipPacketReceived{Packet: &gossip.Packet{Message: &gossip.Message{
+	_, err := driver.HandleGossipHostEvent(context.Background(), GossipPacketReceived{Packet: &gossip.Packet{Message: &gossip.Message{
 		Type: gossip.MessagePing, PeerID: "peer-a", Ping: &gossip.Ping{Summary: &corestate.CatalogSummary{CatalogRoot: []byte("mismatch"), ZoneCount: 99}},
 	}}}, now, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if session := runtime.Gossip.Session("peer-a"); session == nil || session.State != gossip.SyncSessionIdle {
+	if session := driver.Gossip.Session("peer-a"); session == nil || session.State != gossip.SyncSessionIdle {
 		t.Fatalf("mismatch session = %#v", session)
 	}
-	if runtime.PendingEventCount() != 1 {
-		t.Fatalf("pending events = %d, want 1", runtime.PendingEventCount())
+	if driver.PendingEventCount() != 1 {
+		t.Fatalf("pending events = %d, want 1", driver.PendingEventCount())
 	}
 }
 
-func TestRuntimeAnnounceIsHintAndDefersWhileSessionActive(t *testing.T) {
+func TestGossipDriverAnnounceIsHintAndDefersWhileSessionActive(t *testing.T) {
 	now := time.Unix(1000, 0)
 	network := zone.NewNetworkState()
 	store := corestate.NewStore(&corestate.VerifiedState{ManagedZone: "local.catofes.", Network: network}, nil)
-	runtime := NewRuntime(newFakeClock(now), 2, store, GossipRuntimeConfig{PeerID: "local.catofes."})
-	defer runtime.Stop()
-	bindMemoryGossipTransport(t, runtime, "peer-a")
+	driver := NewGossipDriver(newFakeClock(now), 2, store, GossipDriverConfig{PeerID: "local.catofes."})
+	defer driver.Stop()
+	bindMemoryGossipTransport(t, driver, "peer-a")
 	rootBefore := corestate.CatalogRoot(corestate.ZoneDigests(network))
 	packet := GossipPacketReceived{Packet: &gossip.Packet{Message: &gossip.Message{
 		Type: gossip.MessageAnnounce, PeerID: "peer-a",
 		Announce: &gossip.Announce{Zones: []corestate.ZoneDigest{{Zone: "remote.catofes.", RootHash: []byte("remote")}}},
 	}}}
 
-	if _, err := runtime.HandleGossipHostEvent(context.Background(), packet, now, nil); err != nil {
+	if _, err := driver.HandleGossipHostEvent(context.Background(), packet, now, nil); err != nil {
 		t.Fatal(err)
 	}
-	if session := runtime.Gossip.Session("peer-a"); session == nil || session.State != gossip.SyncSessionIdle {
+	if session := driver.Gossip.Session("peer-a"); session == nil || session.State != gossip.SyncSessionIdle {
 		t.Fatalf("announce session = %#v", session)
 	}
-	if runtime.PendingEventCount() != 1 {
-		t.Fatalf("announce events = %d, want 1", runtime.PendingEventCount())
+	if driver.PendingEventCount() != 1 {
+		t.Fatalf("announce events = %d, want 1", driver.PendingEventCount())
 	}
 	if rootAfter := corestate.CatalogRoot(corestate.ZoneDigests(store.ReadView().State.Network)); !bytes.Equal(rootAfter, rootBefore) {
 		t.Fatal("announce mutated verified network")
 	}
-	<-runtime.Events()
-	if _, err := runtime.HandleGossipHostEvent(context.Background(), packet, now, nil); err != nil {
+	<-driver.Events()
+	if _, err := driver.HandleGossipHostEvent(context.Background(), packet, now, nil); err != nil {
 		t.Fatal(err)
 	}
-	if runtime.PendingEventCount() != 0 || !runtime.Gossip.PendingHint("peer-a") {
-		t.Fatalf("active announce events/pending = %d/%t", runtime.PendingEventCount(), runtime.Gossip.PendingHint("peer-a"))
+	if driver.PendingEventCount() != 0 || !driver.Gossip.PendingHint("peer-a") {
+		t.Fatalf("active announce events/pending = %d/%t", driver.PendingEventCount(), driver.Gossip.PendingHint("peer-a"))
 	}
 }
 
-func TestRuntimeExecuteGossipPacketActionsBuildsBoundedCatalogPage(t *testing.T) {
-	runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState("a.catofes.", "b.catofes.")}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
-	defer runtime.Stop()
+func TestGossipDriverExecuteGossipPacketActionsBuildsBoundedCatalogPage(t *testing.T) {
+	driver := NewGossipDriver(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState("a.catofes.", "b.catofes.")}}, GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+	defer driver.Stop()
 	controller := &memoryInboundController{
 		budget: gossip.DefaultDatagramBudget,
 	}
@@ -201,7 +201,7 @@ func TestRuntimeExecuteGossipPacketActionsBuildsBoundedCatalogPage(t *testing.T)
 		PeerID:           "peer-a",
 		FetchCatalogPage: &gossip.FetchCatalogPage{},
 	}}
-	if err := runtime.executeGossipPacketActions(context.Background(), runtime.Gossip.PlanInbound(packet), controller, controller.budget); err != nil {
+	if err := driver.executeGossipPacketActions(context.Background(), driver.Gossip.PlanInbound(packet), controller, controller.budget); err != nil {
 		t.Fatalf("executeGossipPacketActions: %v", err)
 	}
 	if len(controller.outbound) != 1 || controller.outbound[0].Message.CatalogPage == nil {
@@ -212,23 +212,23 @@ func TestRuntimeExecuteGossipPacketActionsBuildsBoundedCatalogPage(t *testing.T)
 	}
 }
 
-func TestRuntimeOwnsFetchZoneChunkSendAndNACKRepair(t *testing.T) {
+func TestGossipDriverOwnsFetchZoneChunkSendAndNACKRepair(t *testing.T) {
 	now := time.Unix(100, 0)
 	view := loadedGossipState("remote.catofes.")
 	view.State.Network.Zones["remote.catofes."].Records["large"] = &zone.Record{
 		Zone: "remote.catofes.", Key: "large", Type: "test.data", Value: make([]byte, 3000), Version: 1,
 	}
-	runtime := NewRuntime(newFakeClock(now), 4, &memoryGossipStateStore{views: []corestate.View{view}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
-	defer runtime.Stop()
+	driver := NewGossipDriver(newFakeClock(now), 4, &memoryGossipStateStore{views: []corestate.View{view}}, GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+	defer driver.Stop()
 	controller := &memoryInboundController{budget: gossip.DefaultDatagramBudget}
 	fetch := &gossip.Message{
 		Type: gossip.MessageFetchZone, PeerID: "peer-a",
 		FetchZone: &gossip.FetchZone{Zone: "remote.catofes.", ChunkFallback: true},
 	}
-	if err := runtime.executeGossipPacketActions(context.Background(), runtime.Gossip.PlanInbound(&gossip.Packet{Message: fetch}), controller, controller.budget); err != nil {
+	if err := driver.executeGossipPacketActions(context.Background(), driver.Gossip.PlanInbound(&gossip.Packet{Message: fetch}), controller, controller.budget); err != nil {
 		t.Fatalf("execute FETCH_ZONE: %v", err)
 	}
-	diagnostics, ok := runtime.Observability.Snapshot("peer-a", now)
+	diagnostics, ok := driver.Observability.Snapshot("peer-a", now)
 	if !ok || diagnostics.DatagramStats == nil || diagnostics.DatagramStats.ChunkFallbacks == 0 || diagnostics.LastResponderKind != "chunk_fallback" {
 		t.Fatalf("fetch diagnostics = %#v", diagnostics)
 	}
@@ -247,10 +247,10 @@ func TestRuntimeOwnsFetchZoneChunkSendAndNACKRepair(t *testing.T) {
 		Type: gossip.MessageObjectChunkNACK, PeerID: "peer-a",
 		ObjectChunkNACK: &gossip.ObjectChunkNACK{TransferID: append([]byte(nil), firstChunk.TransferID...), Missing: []uint16{firstChunk.Index}},
 	}
-	if err := runtime.executeGossipPacketActions(context.Background(), runtime.Gossip.PlanInbound(&gossip.Packet{Message: nack}), controller, controller.budget); err != nil {
+	if err := driver.executeGossipPacketActions(context.Background(), driver.Gossip.PlanInbound(&gossip.Packet{Message: nack}), controller, controller.budget); err != nil {
 		t.Fatalf("execute OBJECT_CHUNK_NACK: %v", err)
 	}
-	diagnostics, _ = runtime.Observability.Snapshot("peer-a", now)
+	diagnostics, _ = driver.Observability.Snapshot("peer-a", now)
 	if diagnostics.DatagramStats.ChunkRepairNACKs != 1 || diagnostics.DatagramStats.ChunkRepairChunks != 1 {
 		t.Fatalf("NACK diagnostics = %#v", diagnostics.DatagramStats)
 	}
@@ -259,12 +259,12 @@ func TestRuntimeOwnsFetchZoneChunkSendAndNACKRepair(t *testing.T) {
 	}
 }
 
-func TestRuntimeExecuteGossipPacketActionsRespondsToActivePingWhenQueueFull(t *testing.T) {
+func TestGossipDriverExecuteGossipPacketActionsRespondsToActivePingWhenQueueFull(t *testing.T) {
 	controller := &memoryInboundController{}
-	runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, gossipConfigCapturingIssues(GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()}, &controller.issues))
-	defer runtime.Stop()
-	runtime.Gossip.NewSession("peer-a")
-	if err := runtime.PostGossip(&gossip.SyncTimerEvent{PeerID: "occupy"}); err != nil {
+	driver := NewGossipDriver(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, gossipConfigCapturingIssues(GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()}, &controller.issues))
+	defer driver.Stop()
+	driver.Gossip.NewSession("peer-a")
+	if err := driver.PostGossip(&gossip.SyncTimerEvent{PeerID: "occupy"}); err != nil {
 		t.Fatalf("fill queue: %v", err)
 	}
 	packet := &gossip.Packet{Message: &gossip.Message{
@@ -272,13 +272,13 @@ func TestRuntimeExecuteGossipPacketActionsRespondsToActivePingWhenQueueFull(t *t
 		PeerID: "peer-a",
 		Ping:   &gossip.Ping{Summary: &corestate.CatalogSummary{CatalogRoot: []byte("remote")}},
 	}}
-	if err := runtime.executeGossipPacketActions(context.Background(), runtime.Gossip.PlanInbound(packet), controller, controller.budget); err != nil {
+	if err := driver.executeGossipPacketActions(context.Background(), driver.Gossip.PlanInbound(packet), controller, controller.budget); err != nil {
 		t.Fatalf("executeGossipPacketActions: %v", err)
 	}
 	if len(controller.outbound) == 0 || controller.outbound[0].Message.Type != gossip.MessagePong {
 		t.Fatalf("outbound = %#v, want responder PONG", controller.outbound)
 	}
-	if len(controller.issues) != 1 || !errors.Is(controller.issues[0].Err, ErrEventQueueFull) {
+	if len(controller.issues) != 1 || !errors.Is(controller.issues[0].Err, ErrGossipEventQueueFull) {
 		t.Fatalf("issues = %#v, want queue-full report", controller.issues)
 	}
 }

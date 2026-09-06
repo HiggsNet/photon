@@ -13,7 +13,7 @@ import (
 )
 
 // This app-level test only covers the Linux composition reaction to a common
-// HostRuntime result. Chunk assembly, snapshot validation, checkpoint updates
+// GossipDriver result. Chunk assembly, snapshot validation, checkpoint updates
 // and session completion are unit-tested in pkg/core/host.
 func TestDaemonObjectChunkCompletionNotifiesPlatformOnce(t *testing.T) {
 	sourceVerified, _, _, _ := buildTestDaemonOwners(t)
@@ -43,7 +43,7 @@ func TestDaemonObjectChunkCompletionNotifiesPlatformOnce(t *testing.T) {
 	_, _ = session.OnEvent(&gossip.SyncTimerEvent{PeerID: peerID}, now)
 	_, _ = session.OnEvent(&gossip.PongReceivedEvent{PeerID: peerID, Pong: &gossip.Pong{}, MissingZones: []zone.ZonePath{"catofes."}}, now)
 	_, _ = session.OnEvent(&gossip.ObjectPullResultEvent{PeerID: peerID, Zone: "catofes.", Err: errors.New("tcp unavailable")}, now)
-	service.hostRuntime.Gossip.SetSession(peerID, session)
+	service.gossipDriver.Gossip.SetSession(peerID, session)
 	notifications := 0
 	service.Hooks.OnStateChanged = func() { notifications++ }
 	beforeRevision := service.StateStore.common.VerifiedRevision()
@@ -73,12 +73,12 @@ func TestDaemonObjectChunkCompletionNotifiesPlatformOnce(t *testing.T) {
 	}
 drainEvents:
 	for range 4 {
-		if service.hostRuntime.Gossip.Session(peerID) == nil && service.hostRuntime.PendingEventCount() == 0 {
+		if service.gossipDriver.Gossip.Session(peerID) == nil && service.gossipDriver.PendingEventCount() == 0 {
 			break
 		}
 		select {
-		case hostEvent := <-service.hostRuntime.Events():
-			_, _ = service.handleHostRuntimeGossipEvent(context.Background(), hostEvent)
+		case hostEvent := <-service.gossipDriver.Events():
+			_, _ = service.handleGossipDriverEvent(context.Background(), hostEvent)
 		default:
 			break drainEvents
 		}
@@ -91,7 +91,7 @@ drainEvents:
 	if committed.Revision <= beforeRevision || committed.State.Network.Zones["catofes."] == nil {
 		t.Fatalf("common owner did not publish chunk snapshot: revision %d -> %d", beforeRevision, committed.Revision)
 	}
-	if active := service.hostRuntime.Gossip.Session(peerID); active != nil {
+	if active := service.gossipDriver.Gossip.Session(peerID); active != nil {
 		t.Fatalf("chunk sync session remained active: state=%s pending=%d inflight=%d", active.State, active.PendingCount(), active.InflightCount())
 	}
 	if notifications != 1 {

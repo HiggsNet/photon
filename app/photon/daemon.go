@@ -36,7 +36,7 @@ type Daemon struct {
 	Events                 chan daemonEvent
 	Hooks                  DaemonHooks
 	StateStore             *DaemonStateStore
-	linuxRuntime           *photonlinux.Runtime
+	linuxDriver            *photonlinux.LinuxDriver
 	ipsecDNSResolver       ipsec.DNSResolver
 	health                 *healthDriver
 	observerHub            *observer.Hub
@@ -53,7 +53,7 @@ type Daemon struct {
 	daemonTimers           *corehost.Scheduler
 	daemonTimerEvents      chan corehost.Event
 
-	hostRuntime        *corehost.Runtime
+	gossipDriver       *corehost.GossipDriver
 	objectPullExecutor *corehost.GossipObjectPullExecutor
 }
 
@@ -172,7 +172,7 @@ func newDaemonWithStore(rt *AppContext, stateStore *DaemonStateStore, config *go
 		loggerConfig = rt.Config
 	}
 	logger := newAppLogger(loggerConfig)
-	hostRuntime := corehost.NewRuntime(corehost.NewClock(clock), corehost.DefaultEventBuffer, stateStore.common, gossipHostRuntimeConfig(config, loggerConfig, logger))
+	gossipDriver := corehost.NewGossipDriver(corehost.NewClock(clock), corehost.DefaultEventBuffer, stateStore.common, gossipDriverConfig(config, loggerConfig, logger))
 	d := &Daemon{
 		App:               rt,
 		Interval:          interval,
@@ -190,7 +190,7 @@ func newDaemonWithStore(rt *AppContext, stateStore *DaemonStateStore, config *go
 		d.routingLastRunUnix.Store(runtime.RoutingReconcile.LastRunUnix)
 	}
 	d.ipsecTakeoverNotBefore = d.now().Add(2 * time.Minute)
-	d.hostRuntime = hostRuntime
+	d.gossipDriver = gossipDriver
 	d.objectPullExecutor = newDaemonObjectPullExecutor(d)
 	return d
 }
@@ -223,7 +223,7 @@ func openDaemon(rt *AppContext, interval time.Duration) (*Daemon, *corestate.Bol
 func (d *Daemon) configureHealthManager() {
 	if d != nil && d.health != nil {
 		d.health.Manager = nil
-		d.health.runtimeManaged = false
+		d.health.driverManaged = false
 	}
 	if d == nil || d.App == nil || d.App.Config == nil {
 		return
@@ -232,14 +232,14 @@ func (d *Daemon) configureHealthManager() {
 	if !cfg.Enabled {
 		return
 	}
-	if d.linuxRuntime == nil {
+	if d.linuxDriver == nil {
 		return
 	}
 	if d.health == nil {
 		d.health = &healthDriver{}
 	}
-	d.health.Manager = newHealthManager(cfg, d.linuxRuntime.HealthProber())
-	d.health.runtimeManaged = d.health.Manager != nil
+	d.health.Manager = newHealthManager(cfg, d.linuxDriver.HealthProber())
+	d.health.driverManaged = d.health.Manager != nil
 }
 
 func (d *Daemon) Run(ctx context.Context) error {
@@ -249,13 +249,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 	if initial := d.StateStore.common.ReadView(); initial.State == nil {
 		return errors.New("daemon committed state is not initialized")
 	}
-	if d.linuxRuntime == nil {
-		if err := d.configureLinuxRuntimeFromConfig(); err != nil {
+	if d.linuxDriver == nil {
+		if err := d.configureLinuxDriverFromConfig(); err != nil {
 			return err
 		}
 	}
-	if d.hostRuntime != nil {
-		defer d.hostRuntime.Stop()
+	if d.gossipDriver != nil {
+		defer d.gossipDriver.Stop()
 	}
 	d.daemonTimerEvents = make(chan corehost.Event, corehost.DefaultEventBuffer)
 	d.daemonTimers = corehost.NewScheduler(corehost.NewClock(d.now), d.daemonTimerEvents)
@@ -264,7 +264,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.daemonTimers = nil
 		d.daemonTimerEvents = nil
 	}()
-	defer d.closeLinuxRuntime()
+	defer d.closeLinuxDriver()
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -277,7 +277,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return err
 	}
 	d.updateDiscoveredPeers()
-	err = d.hostRuntime.StartGossipTransport(ctx, transport, func(err error) {
+	err = d.gossipDriver.StartGossipTransport(ctx, transport, func(err error) {
 		d.logWarn("transport", "receive_failed", map[string]any{"error": err})
 	})
 	if err != nil {
@@ -287,7 +287,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	if err != nil {
 		d.logError("object_pull", "server_start_failed", map[string]any{"error": err})
 	}
-	if err := d.hostRuntime.StartGossipObjectPullWorkers(ctx, d.objectPullExecutor, 0, 0); err != nil {
+	if err := d.gossipDriver.StartGossipObjectPullWorkers(ctx, d.objectPullExecutor, 0, 0); err != nil {
 		return err
 	}
 	stopControl, err := d.startControlServer(ctx)
@@ -505,8 +505,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 				}
 				continue
 			}
-		case hostEvent := <-d.hostRuntime.Events():
-			_, _ = d.handleHostRuntimeGossipEvent(ctx, hostEvent)
+		case hostEvent := <-d.gossipDriver.Events():
+			_, _ = d.handleGossipDriverEvent(ctx, hostEvent)
 		}
 	}
 }
@@ -1052,8 +1052,8 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		d.StateStore.mu.RLock()
 		view := buildStoredLinkInspection(observerRuntime(d), d.StateStore.runtime.LinkInstances, d.StateStore.runtime.IPsecReconcile, d.StateStore.runtime.BirdInstances, health)
 		d.StateStore.mu.RUnlock()
-		if d.linuxRuntime != nil && d.App != nil && d.App.Config != nil && d.App.Config.IPsec.Driver != ipsecDriverDryRun {
-			sas, err := d.linuxRuntime.ListIPsecSAs(ctx)
+		if d.linuxDriver != nil && d.App != nil && d.App.Config != nil && d.App.Config.IPsec.Driver != ipsecDriverDryRun {
+			sas, err := d.linuxDriver.ListIPsecSAs(ctx)
 			if err != nil {
 				view.LiveSAError = err.Error()
 			} else {
@@ -1319,22 +1319,22 @@ func (d *Daemon) handleReloadConfigEvent() error {
 	}
 	syncConfig := gossipStartupConfigFromAppConfig(config, common.State)
 	nextLogger := newAppLogger(config)
-	linuxRuntime, err := newConfiguredLinuxRuntime(config.IPsec, config.Netns.Names, nextLogger)
+	linuxDriver, err := newConfiguredLinuxDriver(config.IPsec, config.Netns.Names, nextLogger)
 	if err != nil {
 		return err
 	}
 	d.App.Config = config
 	d.App.StatePath = statePath
-	if err := d.hostRuntime.ReplaceGossipConfig(gossipHostRuntimeConfig(syncConfig, config, nextLogger)); err != nil {
-		_ = linuxRuntime.Close()
+	if err := d.gossipDriver.ReplaceGossipConfig(gossipDriverConfig(syncConfig, config, nextLogger)); err != nil {
+		_ = linuxDriver.Close()
 		return err
 	}
-	if err := d.installLinuxRuntime(linuxRuntime); err != nil {
+	if err := d.installLinuxDriver(linuxDriver); err != nil {
 		return err
 	}
 	d.Log = nextLogger
 	d.ControlSocketPath = socketPath
-	if d.hostRuntime != nil && d.hostRuntime.Transport() != nil {
+	if d.gossipDriver != nil && d.gossipDriver.Transport() != nil {
 		d.updateDiscoveredPeers()
 	}
 	d.notifyStateChanged()
@@ -1501,9 +1501,9 @@ func (d *Daemon) handleRecoveryPurgeRevokedEvent(ctx context.Context, target zon
 		return nil, err
 	}
 	for _, peerID := range plan.SyncPeers {
-		d.hostRuntime.Observability.Delete(peerID)
+		d.gossipDriver.Observability.Delete(peerID)
 	}
-	if d.hostRuntime != nil && d.hostRuntime.Transport() != nil {
+	if d.gossipDriver != nil && d.gossipDriver.Transport() != nil {
 		d.updateDiscoveredPeers()
 	}
 	if result.Committed || len(plan.LinkInstances) > 0 {
@@ -1519,11 +1519,11 @@ func (d *Daemon) cleanupPurgePlanIPsecLinks(ctx context.Context, runtime *linuxR
 	if d == nil || runtime == nil || d.App == nil {
 		return errors.New("daemon service is not initialized")
 	}
-	platformRuntime := d.linuxRuntime
-	if platformRuntime == nil {
-		return errors.New("linux runtime is not initialized")
+	platformDriver := d.linuxDriver
+	if platformDriver == nil {
+		return errors.New("linux driver is not initialized")
 	}
-	_, err := cleanupLinuxRuntimeIPsecLinks(ctx, runtime, plan.LinkInstances, platformRuntime, d.now())
+	_, err := cleanupLinuxDriverIPsecLinks(ctx, runtime, plan.LinkInstances, platformDriver, d.now())
 	return err
 }
 
@@ -1551,7 +1551,7 @@ func (d *Daemon) handleJoinAcceptEvent(bundle *joinBundle, key *privateKeyFile) 
 	if err != nil {
 		return nil, err
 	}
-	if commit.Committed && d.hostRuntime != nil && d.hostRuntime.Transport() != nil {
+	if commit.Committed && d.gossipDriver != nil && d.gossipDriver.Transport() != nil {
 		d.updateDiscoveredPeers()
 	}
 	if commit.Committed {
@@ -1629,7 +1629,7 @@ func (d *Daemon) publishLocalProtocols(updateAdmission bool) (bool, error) {
 	}
 	changed := result.RuntimeCommitted || result.Common.Committed
 	if changed {
-		if d.hostRuntime != nil && d.hostRuntime.Transport() != nil {
+		if d.gossipDriver != nil && d.gossipDriver.Transport() != nil {
 			d.updateDiscoveredPeers()
 		}
 		d.notifyStateChanged()
@@ -1666,7 +1666,7 @@ func (d *Daemon) handleCommonRecordMutationEvent(intent corestate.LocalIntent, d
 		out.Zone, out.Key, out.Version = result.Record.Zone, result.Record.Key, result.Record.Version
 	}
 	if result.Committed {
-		if d.hostRuntime != nil && d.hostRuntime.Transport() != nil {
+		if d.gossipDriver != nil && d.gossipDriver.Transport() != nil {
 			d.updateDiscoveredPeers()
 		}
 		d.notifyStateChanged()
@@ -1724,10 +1724,10 @@ func (d *Daemon) notifyStateChanged() {
 	// Long-offline peers use a separate persisted local marker: their cache is
 	// removed here and IPsec planning excludes them until a successful sync.
 	d.flushPeerLifecycleCleanup()
-	// Gossip-only commands construct the common host runtime without a Linux
-	// platform runtime. Their committed state is still valid, but platform
+	// Gossip-only commands construct the common host driver without a Linux
+	// platform driver. Their committed state is still valid, but platform
 	// reconciliation belongs to the full daemon that owns those drivers.
-	if d.linuxRuntime == nil {
+	if d.linuxDriver == nil {
 		d.notifyObserver("peer_updated", d.observerPeerIDsPayload())
 		return
 	}
@@ -1828,7 +1828,7 @@ func (d *Daemon) flushRevocationCleanup() {
 	}
 	for peerID := range d.peerObservabilitySnapshots() {
 		if revokedZones[zone.ZonePath(peerID)] {
-			d.hostRuntime.Observability.Delete(peerID)
+			d.gossipDriver.Observability.Delete(peerID)
 		}
 	}
 }
@@ -1918,11 +1918,11 @@ func (d *Daemon) flushIPsecReconcile(ctx context.Context) bool {
 }
 
 func (d *Daemon) startIPsecLifecycleEventWatcher(ctx context.Context) func() {
-	if d == nil || d.linuxRuntime == nil {
+	if d == nil || d.linuxDriver == nil {
 		return func() {}
 	}
 	watchCtx, cancel := context.WithCancel(ctx)
-	go d.runIPsecLifecycleEventWatcher(watchCtx, d.linuxRuntime)
+	go d.runIPsecLifecycleEventWatcher(watchCtx, d.linuxDriver)
 	return cancel
 }
 
@@ -1931,11 +1931,11 @@ func (d *Daemon) startIPsecLifecycleEventWatcher(ctx context.Context) func() {
 // attempt is bounded by a timeout and retried with backoff: a wedged VICI
 // daemon (accepting connections but never answering) must degrade to warning
 // logs instead of blocking daemon startup, which a synchronous subscribe did.
-func (d *Daemon) runIPsecLifecycleEventWatcher(ctx context.Context, runtime *photonlinux.Runtime) {
+func (d *Daemon) runIPsecLifecycleEventWatcher(ctx context.Context, driver *photonlinux.LinuxDriver) {
 	backoff := time.Second
 	for {
 		subscribeCtx, cancelSubscribe := context.WithTimeout(ctx, ipsecLifecycleSubscribeTimeout)
-		events, stop, supported, err := runtime.SubscribeIPsecLifecycle(subscribeCtx)
+		events, stop, supported, err := driver.SubscribeIPsecLifecycle(subscribeCtx)
 		cancelSubscribe()
 		if !supported {
 			return
@@ -2074,32 +2074,32 @@ func daemonRun(ctx context.Context, interval time.Duration) error {
 	return service.Run(ctx)
 }
 
-func (d *Daemon) configureLinuxRuntimeFromConfig() error {
+func (d *Daemon) configureLinuxDriverFromConfig() error {
 	if d == nil || d.App == nil || d.App.Config == nil {
 		return nil
 	}
-	runtime, err := newConfiguredLinuxRuntime(d.App.Config.IPsec, d.App.Config.Netns.Names, d.Log)
+	driver, err := newConfiguredLinuxDriver(d.App.Config.IPsec, d.App.Config.Netns.Names, d.Log)
 	if err != nil {
 		return err
 	}
-	return d.installLinuxRuntime(runtime)
+	return d.installLinuxDriver(driver)
 }
 
-func newConfiguredLinuxRuntime(config ipsecConfig, networkNamespaces map[string]ipsec.NetNSSpec, logger photonlinux.Logger) (*photonlinux.Runtime, error) {
+func newConfiguredLinuxDriver(config ipsecConfig, networkNamespaces map[string]ipsec.NetNSSpec, logger photonlinux.Logger) (*photonlinux.LinuxDriver, error) {
 	var logConfig func(event string, fields map[string]any)
 	if logger != nil {
 		logConfig = func(event string, fields map[string]any) {
 			logger.Debug("ipsec", event, fields)
 		}
 	}
-	driver := config.Driver
-	if driver == "" {
-		driver = ipsecDriverStrongSwan
+	driverName := config.Driver
+	if driverName == "" {
+		driverName = ipsecDriverStrongSwan
 	}
-	switch driver {
+	switch driverName {
 	case ipsecDriverDryRun:
 		dryRun := &ipsec.DryRunDriver{}
-		return photonlinux.NewRuntime(photonlinux.RuntimeOptions{
+		return photonlinux.NewLinuxDriver(photonlinux.LinuxDriverOptions{
 			IPsecDriver:       dryRun,
 			XFRMDriver:        dryRun,
 			NetworkNamespaces: networkNamespaces,
@@ -2108,7 +2108,7 @@ func newConfiguredLinuxRuntime(config ipsecConfig, networkNamespaces map[string]
 	case ipsecDriverStrongSwan:
 		if len(config.LinkGroups) == 0 {
 			dryRun := &ipsec.DryRunDriver{}
-			return photonlinux.NewRuntime(photonlinux.RuntimeOptions{
+			return photonlinux.NewLinuxDriver(photonlinux.LinuxDriverOptions{
 				IPsecDriver:       dryRun,
 				XFRMDriver:        dryRun,
 				NetworkNamespaces: networkNamespaces,
@@ -2126,7 +2126,7 @@ func newConfiguredLinuxRuntime(config ipsecConfig, networkNamespaces map[string]
 			}
 			return client, client.Close, nil
 		}
-		return photonlinux.NewRuntime(photonlinux.RuntimeOptions{
+		return photonlinux.NewLinuxDriver(photonlinux.LinuxDriverOptions{
 			IPsecDriver: &ipsec.StrongSwanDriver{
 				VICI:                  client,
 				LogConfig:             logConfig,
@@ -2139,37 +2139,37 @@ func newConfiguredLinuxRuntime(config ipsecConfig, networkNamespaces map[string]
 			Logger:            logger,
 		})
 	default:
-		return nil, fmt.Errorf("unsupported ipsec driver %q", driver)
+		return nil, fmt.Errorf("unsupported ipsec driver %q", driverName)
 	}
 }
 
-func (d *Daemon) installLinuxRuntime(runtime *photonlinux.Runtime) error {
+func (d *Daemon) installLinuxDriver(driver *photonlinux.LinuxDriver) error {
 	if d == nil {
-		if runtime != nil {
-			_ = runtime.Close()
+		if driver != nil {
+			_ = driver.Close()
 		}
 		return errors.New("daemon service is nil")
 	}
-	if err := d.closeLinuxRuntime(); err != nil {
-		if runtime != nil {
-			_ = runtime.Close()
+	if err := d.closeLinuxDriver(); err != nil {
+		if driver != nil {
+			_ = driver.Close()
 		}
 		return err
 	}
-	d.linuxRuntime = runtime
-	if d.health == nil || d.health.Manager == nil || d.health.runtimeManaged {
+	d.linuxDriver = driver
+	if d.health == nil || d.health.Manager == nil || d.health.driverManaged {
 		d.configureHealthManager()
 	}
 	return nil
 }
 
-func (d *Daemon) closeLinuxRuntime() error {
-	if d == nil || d.linuxRuntime == nil {
+func (d *Daemon) closeLinuxDriver() error {
+	if d == nil || d.linuxDriver == nil {
 		return nil
 	}
-	runtime := d.linuxRuntime
-	d.linuxRuntime = nil
-	return runtime.Close()
+	driver := d.linuxDriver
+	d.linuxDriver = nil
+	return driver.Close()
 }
 
 func (d *Daemon) logDebug(component, event string, fields map[string]any) {
@@ -2198,7 +2198,7 @@ func (d *Daemon) logError(component, event string, fields map[string]any) {
 
 func (d *Daemon) scheduleDaemonTimer(key string, deadline time.Time) error {
 	if d == nil || d.daemonTimers == nil {
-		return corehost.ErrRuntimeStopped
+		return corehost.ErrSchedulerStopped
 	}
 	id := corehost.TimerID{Namespace: daemonRuntimeNamespace, Owner: daemonTimerOwner, Key: key}
 	if deadline.IsZero() {

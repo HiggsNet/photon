@@ -236,31 +236,31 @@ func TestSchedulerStopAndValidation(t *testing.T) {
 	_, _ = scheduler.Schedule(TimerID{Namespace: "test", Owner: "owner", Key: "key"}, clock.Now().Add(time.Hour))
 	requireSchedulerStops(t, scheduler)
 	requireSchedulerStops(t, scheduler)
-	if _, err := scheduler.Schedule(TimerID{Namespace: "test", Owner: "owner", Key: "key"}, clock.Now()); !errors.Is(err, ErrRuntimeStopped) {
+	if _, err := scheduler.Schedule(TimerID{Namespace: "test", Owner: "owner", Key: "key"}, clock.Now()); !errors.Is(err, ErrSchedulerStopped) {
 		t.Fatalf("schedule after stop error = %v", err)
 	}
 }
 
-func TestRuntimeOwnsQueueSchedulerAndPureGossipEngine(t *testing.T) {
+func TestGossipDriverOwnsQueueSchedulerAndPureGossipEngine(t *testing.T) {
 	clock := newFakeClock(time.Unix(1000, 0))
-	runtime := NewRuntime(clock, 1, nil, GossipRuntimeConfig{})
-	defer runtime.Stop()
+	driver := NewGossipDriver(clock, 1, nil, GossipDriverConfig{})
+	defer driver.Stop()
 	external := &gossip.SyncTimerEvent{PeerID: "peer-a"}
-	if err := runtime.PostGossip(external); err != nil {
+	if err := driver.PostGossip(external); err != nil {
 		t.Fatalf("PostGossip: %v", err)
 	}
-	if err := runtime.PostGossip(external); !errors.Is(err, ErrEventQueueFull) {
+	if err := driver.PostGossip(external); !errors.Is(err, ErrGossipEventQueueFull) {
 		t.Fatalf("full queue error = %v", err)
 	}
-	if event, ok := runtime.GossipSessionEventFor(<-runtime.Events()); !ok || event != external {
+	if event, ok := driver.GossipSessionEventFor(<-driver.Events()); !ok || event != external {
 		t.Fatalf("external event = %T ok=%v", event, ok)
 	}
 	deadline := clock.Now().Add(time.Second)
-	if handled, err := runtime.ApplyGossipTimerAction(gossip.StartTimerAction{PeerID: "peer-a", Kind: gossip.TimerKindRound, Deadline: deadline}); !handled || err != nil {
+	if handled, err := driver.ApplyGossipTimerAction(gossip.StartTimerAction{PeerID: "peer-a", Kind: gossip.TimerKindRound, Deadline: deadline}); !handled || err != nil {
 		t.Fatalf("timer action handled=%v err=%v", handled, err)
 	}
 	clock.Advance(time.Second)
-	event, ok := runtime.GossipSessionEventFor(<-runtime.Events())
+	event, ok := driver.GossipSessionEventFor(<-driver.Events())
 	if !ok {
 		t.Fatal("timer fire was not accepted")
 	}

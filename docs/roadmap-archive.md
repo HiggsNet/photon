@@ -5,11 +5,11 @@
 ## 2026-09 Runtime/State 重构阶段归档
 
 - Observer Web UI Phase 9 已完成：原生 ES module 拆分、统一视觉/页面信息架构、按 endpoint 缓存与 SSE 精确失效、Events 时间线和后端测试均已落地。详细设计见 `docs/new/observer-ui-redesign.md` 与 `docs/new/observer.md`。
-- Windows 前置 F0a-F0e 已完成：撤销重复的 `photonclient.Runtime`，公共 gossip FSM、receive、timer、object-pull、chunk、discovery、checkpoint、transport 与 observability 已收口到 `pkg/core/{gossip,host,state}`；Linux/Windows memory convergence 直接使用同一 HostRuntime/Store/Transport。
+- Windows 前置 F0a-F0e 已完成：撤销重复的 `photonclient.Runtime`，公共 gossip FSM、receive、timer、object-pull、chunk、discovery、checkpoint、transport 与 observability 已收口到 `pkg/core/{gossip,host,state}`；Linux/Windows memory convergence 直接使用同一 GossipDriver/Store/Transport。
 - Linux verified/runtime aggregate 已拆开：公共 `state.Store/BoltStore` 拥有 verified/checkpoint，current Linux state type/clone/codec/commit 已进入 `internal/photonlinux`；`stateFile/stateMeta` 只留旧库单向迁移和 legacy dump。
-- Linux 实际执行已逐步下沉：IPsec/XFRM、firewall、BIRD/upstream、health probe 和 cleanup 使用唯一 `internal/photonlinux.Runtime` 实例；旧 app driver 字段、重复 adapter、单调用方 commit wrapper 和大量 legacy 测试 fixture 已删除。
+- Linux 实际执行已逐步下沉：IPsec/XFRM、firewall、BIRD/upstream、health probe 和 cleanup 使用唯一 `internal/photonlinux.LinuxDriver` 实例；旧 app driver 字段、重复 adapter、单调用方 commit wrapper 和大量 legacy 测试 fixture 已删除。
 - canonical inspect DTO 已成为 control/CLI/HTTP 的公共展示边界；platform runtime 查询要求在线 Daemon，离线只允许 verified/common 与明确标记的 gossip last-known checkpoint。
-- 本阶段曾把 `CommonRuntime`、`HostRuntime`、Linux Runtime 和 Daemon coordinator 混称为 Runtime。2026-09 的所有权复核已纠正：目标术语和剩余删除条件见 `docs/runtime-state-ownership.md`，当前执行队列见 `todo.md`。
+- 本阶段曾把 `CommonRuntime`、`GossipDriver`、Linux Runtime 和 Daemon coordinator 混称为 Runtime。2026-09 的所有权复核已纠正：目标术语和剩余删除条件见 `docs/runtime-state-ownership.md`，当前执行队列见 `todo.md`。
 
 精确提交级实施记录继续由 Git 历史和 `docs/app-photon-runtime-migration-report.md` 保存，不再把逐文件完成日志复制回主 TODO。
 

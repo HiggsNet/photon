@@ -15,7 +15,7 @@ type healthFallbackLogState struct {
 	suppressed int
 }
 
-func (r *Runtime) initializeHealthProber() {
+func (r *LinuxDriver) initializeHealthProber() {
 	if r == nil || r.healthProber != nil {
 		return
 	}
@@ -25,17 +25,17 @@ func (r *Runtime) initializeHealthProber() {
 	)
 }
 
-// HealthProber returns the Linux probe implementation owned by this runtime.
+// HealthProber returns the Linux probe implementation owned by this LinuxDriver.
 // Probe scheduling and health policy remain in the platform-independent
 // health manager; raw sockets, setns workers and exec fallback are Linux-owned.
-func (r *Runtime) HealthProber() health.Prober {
+func (r *LinuxDriver) HealthProber() health.Prober {
 	if r == nil {
 		return nil
 	}
 	return r.healthProber
 }
 
-func (r *Runtime) reportHealthFallback(target health.ProbeTarget, rawErr error) {
+func (r *LinuxDriver) reportHealthFallback(target health.ProbeTarget, rawErr error) {
 	if r == nil || r.logger == nil {
 		return
 	}

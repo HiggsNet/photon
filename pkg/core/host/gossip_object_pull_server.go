@@ -21,17 +21,17 @@ var (
 	ErrGossipObjectPullServerStarted    = errors.New("gossip object-pull server is already started")
 )
 
-// StartGossipObjectPullServer transfers listener ownership to Runtime and
+// StartGossipObjectPullServer transfers listener ownership to GossipDriver and
 // starts its only bounded object-pull accept loop.
-func (runtime *Runtime) StartGossipObjectPullServer(
+func (driver *GossipDriver) StartGossipObjectPullServer(
 	ctx context.Context,
 	listener net.Listener,
 	lookup func(*gossip.ObjectPullRequest) *gossip.ObjectPullResponse,
 	maxConnections int,
 	connectionDeadline time.Duration,
 ) error {
-	if runtime == nil {
-		return ErrRuntimeStopped
+	if driver == nil {
+		return ErrGossipDriverStopped
 	}
 	if listener == nil {
 		return ErrGossipObjectPullListenerRequired
@@ -50,34 +50,34 @@ func (runtime *Runtime) StartGossipObjectPullServer(
 	}
 
 	serverCtx, cancel := context.WithCancel(ctx)
-	runtime.mu.Lock()
-	if runtime.stopped {
-		runtime.mu.Unlock()
+	driver.mu.Lock()
+	if driver.stopped {
+		driver.mu.Unlock()
 		cancel()
-		return ErrRuntimeStopped
+		return ErrGossipDriverStopped
 	}
-	if runtime.objectPullServerListener != nil {
-		runtime.mu.Unlock()
+	if driver.objectPullServerListener != nil {
+		driver.mu.Unlock()
 		cancel()
 		return ErrGossipObjectPullServerStarted
 	}
-	runtime.objectPullServerCancel = cancel
-	runtime.objectPullServerListener = listener
-	runtime.objectPullServerWG.Add(1)
-	runtime.mu.Unlock()
+	driver.objectPullServerCancel = cancel
+	driver.objectPullServerListener = listener
+	driver.objectPullServerWG.Add(1)
+	driver.mu.Unlock()
 
-	go runtime.runGossipObjectPullServer(serverCtx, listener, lookup, maxConnections, connectionDeadline)
+	go driver.runGossipObjectPullServer(serverCtx, listener, lookup, maxConnections, connectionDeadline)
 	return nil
 }
 
-func (runtime *Runtime) runGossipObjectPullServer(
+func (driver *GossipDriver) runGossipObjectPullServer(
 	ctx context.Context,
 	listener net.Listener,
 	lookup func(*gossip.ObjectPullRequest) *gossip.ObjectPullResponse,
 	maxConnections int,
 	connectionDeadline time.Duration,
 ) {
-	defer runtime.objectPullServerWG.Done()
+	defer driver.objectPullServerWG.Done()
 	var closeOnce sync.Once
 	closeListener := func() { closeOnce.Do(func() { _ = listener.Close() }) }
 	stopClose := context.AfterFunc(ctx, closeListener)
@@ -99,9 +99,9 @@ func (runtime *Runtime) runGossipObjectPullServer(
 			_ = conn.Close()
 			continue
 		}
-		runtime.objectPullServerWG.Add(1)
+		driver.objectPullServerWG.Add(1)
 		go func() {
-			defer runtime.objectPullServerWG.Done()
+			defer driver.objectPullServerWG.Done()
 			defer func() { <-slots }()
 			defer conn.Close()
 			stopClose := context.AfterFunc(ctx, func() { _ = conn.Close() })

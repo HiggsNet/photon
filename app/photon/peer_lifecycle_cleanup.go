@@ -178,8 +178,8 @@ func (d *Daemon) flushPeerLifecycleCleanup() bool {
 		return false
 	}
 	for _, peerID := range removed {
-		if d.hostRuntime != nil && d.hostRuntime.Observability != nil {
-			d.hostRuntime.Observability.Delete(peerID)
+		if d.gossipDriver != nil && d.gossipDriver.Observability != nil {
+			d.gossipDriver.Observability.Delete(peerID)
 		}
 	}
 	d.logInfo("peer_lifecycle", "cleanup_applied", map[string]any{"peers": removed})

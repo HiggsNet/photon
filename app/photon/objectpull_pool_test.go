@@ -35,7 +35,7 @@ func TestDaemonObjectPullWorkerPullsZone(t *testing.T) {
 		skipRestrictedSocket(t, err)
 		t.Fatalf("Listen: %v", err)
 	}
-	runtime := corehost.NewRuntime(corehost.NewClock(nil), corehost.DefaultEventBuffer, nil, corehost.GossipRuntimeConfig{})
+	runtime := corehost.NewGossipDriver(corehost.NewClock(nil), corehost.DefaultEventBuffer, nil, corehost.GossipDriverConfig{})
 	server := newTestDaemonFromOwners(
 		&AppContext{}, verified, checkpoint, &linuxRuntimeState{}, &gossipStartupConfig{PeerID: "node-b.catofes."}, time.Second,
 	)

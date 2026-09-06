@@ -38,9 +38,9 @@ Health 与 observer 都是 Daemon 管理生命周期的可选子系统，不是�
 | 目标名称 | 当前实现 | 处理方式 |
 |---|---|---|
 | `Daemon` | `app/photon.Daemon` | 已直接收敛为顶层 owner；`Daemon.Run` 是当前主事件循环 |
-| `GossipDriver` | `pkg/core/host.Runtime` | 保留公共 gossip 闭环，逐步移出非 gossip 的 controller timer/completion |
+| `GossipDriver` | `pkg/core/host.GossipDriver` | 已直接改名；保留公共 gossip 闭环，逐步移出非 gossip 的 controller timer/completion |
 | `StateStore` | `pkg/core/state.Store` | 保留；它是公共可信状态 owner，不是 Gossip 专属 Store |
-| `LinuxDriver` | `internal/photonlinux.Runtime` | 改名并保持具体 Linux API；不预建统一 `PlatformDriver` 接口 |
+| `LinuxDriver` | `internal/photonlinux.LinuxDriver` | 已直接改名并保持具体 Linux API；不预建统一 `PlatformDriver` 接口 |
 | `LinuxState` | `internal/photonlinux.RuntimeState` | 缩减并改名；它只是持久数据，不是运行对象 |
 | `WindowsDriver` | `internal/photonwindows` 后续真实平台实现 | 只按真实调用点增加 API，不要求与 Linux 方法对称 |
 | `WindowsState` | Windows 平台持久分区 | 只在有真实跨重启数据时增加字段 |
@@ -49,7 +49,7 @@ Health 与 observer 都是 Daemon 管理生命周期的可选子系统，不是�
 | `AppContext` | 原 `app/photon.Runtime` | 已改名；只承载 CLI/config/state-path/clock，不是产品 Runtime |
 | 删除 | `app/photon.DaemonStateStore` | 迁移期 common/Linux 顺序协调器，不属于终态 |
 
-以前文档中的 `CommonRuntime` 只是“Linux/Windows 共用的 gossip 执行闭环”的概念名，当前实现就是 `pkg/core/host.Runtime`。它不是额外组件，也不是顶层 Daemon。后续文档统一使用 `GossipDriver`；“common”只描述代码可跨平台复用，不再作为一个 Runtime 名称。
+以前文档中的 `CommonRuntime` 只是“Linux/Windows 共用的 gossip 执行闭环”的概念名，当前实现就是 `pkg/core/host.GossipDriver`。它不是额外组件，也不是顶层 Daemon。后续文档统一使用 `GossipDriver`；“common”只描述代码可跨平台复用，不再作为一个 Runtime 名称。
 
 ## 3. StateStore
 

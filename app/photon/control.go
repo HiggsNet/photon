@@ -281,7 +281,7 @@ func (d *Daemon) birdRoutesForControl(ctx context.Context, dump *inspect.RoutesR
 			views = append(views, view)
 			continue
 		}
-		observed, err := d.linuxRuntime.ObserveBird(ctx, socketPath, bird.InternalRouteTableNames(inst.NetNS)...)
+		observed, err := d.linuxDriver.ObserveBird(ctx, socketPath, bird.InternalRouteTableNames(inst.NetNS)...)
 		if err != nil {
 			view.Error = err.Error()
 			views = append(views, view)

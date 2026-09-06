@@ -116,13 +116,13 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `config.go` | 混合解析 gossip、identity 和全部 Linux subsystem | 顶层 YAML 进 `internal/photonlinux/config`；公共参数转换为 host/gossip config；各 Linux 配置归各 controller |
 | `control.go` | 私有 DTO、Unix socket client、命令 wrapper 和部分 view | DTO 进 `internal/controlapi`；Unix transport 进 `internal/photonlinux/control`；CLI/view 分别进 photoncli/inspect |
 | `cpu_profile.go` | daemon CPU profile 生命周期 | `internal/runtimeprofile` 或薄 app helper；不属于状态层 |
-| `daemon.go` | event loop、控制服务、admin mutation、publisher、controller 生命周期 | sync/endpoint/IPsec/routing/firewall 周期 deadline 已进入 HostRuntime Scheduler；剩余公共循环进 `pkg/core/host`，Unix control 和 Linux controller 下沉，最终只留 composition root |
+| `daemon.go` | event loop、控制服务、admin mutation、publisher、controller 生命周期 | sync/endpoint/IPsec/routing/firewall/health 周期 deadline 由 Daemon 自己的 Scheduler/queue 管理；GossipDriver 只投递协议事件，Unix control 和 Linux controller 继续下沉，最终只留 composition root |
 | `daemon_common_intent.go` | control DTO 到公共 intent 的转换 | typed control command 落地后删除，不保留永久 adapter |
-| `daemon_discovery.go` | common/Linux owner 到 discovery input 的组装与触发 | 规划、checkpoint patch、persist-before-publish 和地址簿更新已进 HostRuntime；地址簿是可重建的公共 transport runtime state。Runtime 直接持有 owner 后删除剩余文件 |
-| `daemon_object_chunk.go` | 已删除 | chunk assembly、repair deadline、snapshot decode/root check、reject checkpoint 和 completion 回投已归 HostRuntime；剩余 sent-chunk/NACK repair 随 F0e3b 从 `sync.go` 收口 |
+| `daemon_discovery.go` | common/Linux owner 到 discovery input 的组装与触发 | 规划、checkpoint patch、persist-before-publish 和地址簿更新已进 GossipDriver；地址簿是可重建的公共 transport runtime state。Runtime 直接持有 owner 后删除剩余文件 |
+| `daemon_object_chunk.go` | 已删除 | chunk assembly、repair deadline、snapshot decode/root check、reject checkpoint 和 completion 回投已归 GossipDriver；剩余 sent-chunk/NACK repair 随 F0e3b 从 `sync.go` 收口 |
 | `daemon_runtime_commit.go` | 已删除 | 原函数只做 nil guard 和单次转发；调用方现直接进入 typed Linux runtime commit，后续整体迁入 platform owner |
-| `daemon_state_store.go` | Linux runtime 持久化顺序和少量 mutation coordinator | HostRuntime 已直接持有 common Store，remote/checkpoint/read forwarding 与生产 Snapshot API 已删除；剩余 Linux commit 迁入 platform owner 后删除该文件 |
-| `daemon_sync.go` | HostRuntime 终态结果到 Linux reconcile 的接线 | gossip packet/session FSM、发送、observed checkpoint、relay、日志和 observability 已在 HostRuntime 闭环；daemon 不再提供 gossip I/O/controller adapter |
+| `daemon_state_store.go` | Linux runtime 持久化顺序和少量 mutation coordinator | GossipDriver 已直接持有 common Store，remote/checkpoint/read forwarding 与生产 Snapshot API 已删除；剩余 Linux commit 迁入 platform owner 后删除该文件 |
+| `daemon_sync.go` | GossipDriver 终态结果到 Linux reconcile 的接线 | gossip packet/session FSM、发送、observed checkpoint、relay、日志和 observability 已在 GossipDriver 闭环；daemon 不再提供 gossip I/O/controller adapter |
 
 ### 3.2 DB、debug 和 diagnostics
 
@@ -154,16 +154,16 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `forwarding_config.go` | Linux forwarding policy | Linux firewall/routing config |
 | `gossip_checkpoint_migration.go` | 旧 SyncPeers 到 GossipCheckpoint | `internal/photonlinux/migration`；仅由旧数据库单向迁移调用，不属于在线兼容层；只有明确停止支持旧 schema 时才删除 |
 | `health_config.go` | probe/hysteresis/metrics 配置 | 通用类型留 `pkg/health`；Linux YAML 进 Linux health config |
-| `health_reconcile.go` | health manager 装配、快照发布和 CLI 展示壳 | manager/状态机留 `pkg/health`；raw ICMP、setns、exec fallback 在 `internal/photonlinux/healthprobe`；tick/completion 已统一进入 HostRuntime scheduler/queue；`LinkOutput -> ProbeTarget` 规则已进 `internal/photonlinux/linkstate` |
+| `health_reconcile.go` | health manager 装配、快照发布和 CLI 展示壳 | manager/状态机留 `pkg/health`；raw ICMP、setns、exec fallback 在 `internal/photonlinux/healthprobe`；tick/completion 已进入 Daemon scheduler/event loop；`LinkOutput -> ProbeTarget` 规则已进 `internal/photonlinux/linkstate` |
 | `health_spool.go` | JSONL health 历史和查询 | 已整体迁入 `internal/observability/healthspool` 并删除 app 文件；不属于 state/checkpoint |
 | `identity_bootstrap.go` | identity key/config、pending auto-join bootstrap 和 refresh | 空库直接初始化 current common/Linux partitions：common 保存 trusted root、identity key 与 authority-less managed-zone placeholder，runtime 保存 canonical key path；不再写临时 legacy schema，正式 root pin/private-key/managed-zone entry 校验不放宽 |
 | `init.go` | root 初始化 | 已直接原子初始化 common/Linux buckets，不再写 legacy aggregate schema；文件/CLI 壳后续进 photoncli |
 | `inspect_links.go` | Linux link 到 inspect input | Linux controller 输出稳定 DTO，view 进 inspect |
 | `inspect_peers.go` | verified/checkpoint/bootstrap/observability endpoint view | `internal/inspect`，不再依赖 stateFile |
 | `ipam.go` | IPAM CLI、旧 mutation 和报告 | mutation 只调 state intent；报告进 inspect；CLI 进 photoncli；旧 apply 函数删除 |
-| `ipsec_cleanup.go` | StrongSwan/XFRM cleanup 的 CLI、装配与 runtime adapter | owner 校验、link teardown、缺失资源幂等和 orphan cleanup 已作为唯一 `photonlinux.Runtime` 的真实方法迁入 `internal/photonlinux/ipsec_cleanup.go`；online cleanup、IPsec reconcile、lifecycle watcher 与 purge 复用该实例，只有 direct 命令临时创建；driver 在配置构造时明确选择，不在运行中隐式补 DryRun；direct cleanup 已写 Linux runtime owner、不再写旧 stateFile；剩余 control/CLI 进 photoncli |
+| `ipsec_cleanup.go` | StrongSwan/XFRM cleanup 的 CLI 与装配 | owner 校验、link teardown、缺失资源幂等和 orphan cleanup 已作为唯一 `photonlinux.LinuxDriver` 的真实方法迁入 `internal/photonlinux/ipsec_cleanup.go`；online cleanup、IPsec reconcile、lifecycle watcher 与 purge 复用该实例，只有 direct 命令临时创建；driver 在配置构造时明确选择，不在运行中隐式补 DryRun；direct cleanup 已写 Linux runtime owner、不再写旧 stateFile；剩余 control/CLI 进 photoncli |
 | `ipsec_publish.go` | transport key/address/port/overlay record 和私有 runtime | record 构造进 transport/state publisher；key/port 本机事实进 platform runtime；排序由 host 保证 |
-| `ipsec_reconcile.go` | StrongSwan/XFRM/SA/rotation reconcile | app 仅保留协议规划、rotation 编排与结果提交；SA live observation、action apply、lifecycle subscription，以及 XFRM batch observe、missing-link filter、diagnostic address、drift repair 都直接实现为唯一 `photonlinux.Runtime` 的方法，并按 `runtime.go`、`xfrm.go`、`ipsec_cleanup.go` 分文件组织；没有嵌套子 Runtime 或逐方法代理，迁移期 `XFRMDriver()` 访问口已删除 |
+| `ipsec_reconcile.go` | StrongSwan/XFRM/SA/rotation reconcile | app 仅保留协议规划、rotation 编排与结果提交；SA live observation、action apply、lifecycle subscription，以及 XFRM batch observe、missing-link filter、diagnostic address、drift repair 都直接实现为唯一 `photonlinux.LinuxDriver` 的方法，并按 `linux_driver.go`、`xfrm.go`、`ipsec_cleanup.go` 分文件组织；没有再套平台聚合层或逐方法代理，迁移期 `XFRMDriver()` 访问口已删除 |
 | `join.go` | join DTO、issue/revoke/accept、key/bundle、旧 direct writer | DTO/验证进 state admission；文件 CLI 进 photoncli；全部 mutation 复用 Store；旧 writer 删除 |
 
 ### 3.4 Key、link、logging、object-pull、observer、peer
@@ -209,7 +209,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 1. **删除剩余旧 direct writer**：record、IPAM、route、service 和 delegation issue/grant/revoke 的 `--direct`
    已统一为打开唯一 BoltStore/common Store 后调用同一个 typed intent；旧手工签名、授权校验和聚合 state mutation
    已删除。fresh join accept 现在会在同一 Bolt 事务中直接建立 common 与 Linux runtime bucket；`state_gc --direct` 也只提交 Linux runtime owner，不再保存聚合状态。
-2. **迁移公共 HostRuntime**：依次拆 `daemon_sync.go`、`daemon_object_chunk.go`、`daemon_discovery.go`、`objectpull.go`、`sync.go` 和 `daemon.go` 的 event loop。
+2. **迁移公共 GossipDriver**：依次拆 `daemon_sync.go`、`daemon_object_chunk.go`、`daemon_discovery.go`、`objectpull.go`、`sync.go` 和 `daemon.go` 的 event loop。
 3. **收拢 Linux runtime**：先把 IPsec、routing、firewall 的真实平台动作和共享 netns 执行上下文迁入同一个 Linux composition root；内部仍可按领域分模块。等 Windows/Android 出现真实同构调用点后，再从 consumer 侧提取最小平台接口，不预建成套 controllers。
 4. **删除聚合 stateFile**：在线与普通测试迁移已完成；production `stateFile` 只剩旧 schema 单向 migration decoder，legacy test helper 只负责写入退役 schema。`DaemonStateStore` 现只协调 common commit 与 Linux runtime completion 的顺序，不再提供 aggregate snapshot。
 5. **收口 CLI/展示**：`debug_*.go`、`status.go`、`zone.go`、`db.go` 最终只做参数解析、control/read model 调用和 presenter 输出。
@@ -224,7 +224,7 @@ production staticcheck 已清零。
 
 这次复核确认可以继续保留的只有三类代码：可执行程序装配和 Linux control transport、尚待下沉的 Linux
 controller/driver 实现、以及旧数据库单向迁移。后两类“仍有生产调用”不代表最终永久留在 app：例如
-`firewall_reconcile.go` 的策略输入和调度归公共 HostRuntime，nftables/iptables/netns 观测与 apply 已进入
+`firewall_reconcile.go` 的策略输入和调度归 Daemon，nftables/iptables/netns 观测与 apply 已进入
 `photonlinux`；BIRD process/client、upstream veth/route 以及 Linux health probe 执行也已下沉。
 `gossip_checkpoint_migration.go` 和 `runtime_state_migration.go` 则只在启动事务读取旧 schema。
 未再发现仅为测试或旧在线双路径保留的 production wrapper。
@@ -232,7 +232,7 @@ controller/driver 实现、以及旧数据库单向迁移。后两类“仍有�
 ### 5.1 E2g 后还留在 app 的原因
 
 本轮将原 `pkg/health` 中混入的 Linux raw socket、`setns` worker、`ip netns exec ping` fallback
-及其实现级测试整体迁入 `internal/photonlinux/healthprobe`。唯一 `photonlinux.Runtime` 在初始化时选择
+及其实现级测试整体迁入 `internal/photonlinux/healthprobe`。唯一 `photonlinux.LinuxDriver` 在初始化时选择
 真实或注入 prober，在关闭/替换 runtime 时一并关闭 raw socket worker。daemon 不再构造、记录或关闭
 Linux prober，只把平台实现交给公共 `health.Manager`。没有保留旧入口；语义不可靠且从未真正接线的
 “UDP write 成功即健康” prober 同时删除。
@@ -240,7 +240,7 @@ Linux prober，只把平台实现交给公共 `health.Manager`。没有保留旧
 `health_reconcile.go` 的 runtime 边界现已收口：
 
 1. Linux link output 到 `ProbeTarget` 的组合已进入 `internal/photonlinux/linkstate`；
-2. `health.Manager` 的一秒异步 tick 与 completion 唤醒已使用公共 HostRuntime scheduler/queue；
+2. `health.Manager` 的一秒异步 tick 与 completion 唤醒已进入 Daemon scheduler/event loop；
 3. spool 已进入 `internal/observability/healthspool`，Observer/control 使用 canonical inspect DTO。
 
 app 中剩余的是配置装配、把 committed Linux link output 交给 manager，以及 CLI/text 入口，不再拥有平台 probe、
@@ -256,12 +256,12 @@ app 中剩余的是配置装配、把 committed Linux link output 交给 manager
 - `app/photon` 的 CLI flag、Unix control、composition、完整 daemon 顺序和 root smoke 测试仍属于 executable 集成边界，不能迁成底层包单测；
 - 普通测试已经使用 typed owners；只有旧 schema migration/codec 测试可以继续构造 `stateFile`，不得把该 fixture 用回在线行为测试。
 
-HostRuntime 公共 gossip 闭环、aggregate 清理和 current Linux codec 迁移已完成。旧 schema decoder 仍留在 app migration
+GossipDriver 公共 gossip 闭环、aggregate 清理和 current Linux codec 迁移已完成。旧 schema decoder 仍留在 app migration
 边界，不能随 current codec 一起误搬成在线兼容层。这里的 codec owner 完成不等于 live state 边界完成：当前
 `photonlinux.RuntimeState` 仍混合 durable input、operation journal、derived reconcile summary 和 live observation。
 
 目标所有权与命名统一见 [`runtime-state-ownership.md`](runtime-state-ownership.md)：当前 `Daemon` 是唯一顶层
-`Daemon`，`host.Runtime` 是公共 `GossipDriver`，`photonlinux.Runtime` 是具体 `LinuxDriver`，`state.Store` 是公共
+`Daemon`，`host.GossipDriver` 是公共 `GossipDriver`，`photonlinux.LinuxDriver` 是具体 Linux 平台实现，`state.Store` 是公共
 `StateStore`。`DaemonStateStore` 仍是迁移期 common/Linux 顺序协调器，最终必须删除；不能把它描述为长期 Repository，
 也不能通过把同一把 mutex/commit callback 整体搬进 LinuxDriver 来假装完成。单调用方的 Bird GC、revoked purge 和
 peer cleanup commit 壳已删除，剩余 typed commit 要在 LinuxState 字段收缩和 Daemon owner 切换时一起消除。

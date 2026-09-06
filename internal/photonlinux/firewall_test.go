@@ -9,7 +9,7 @@ import (
 
 func TestFirewallDriverResolvesConfiguredNamespace(t *testing.T) {
 	dryRun := &transportipsec.DryRunDriver{}
-	runtime, err := NewRuntime(RuntimeOptions{
+	linuxDriver, err := NewLinuxDriver(LinuxDriverOptions{
 		IPsecDriver: dryRun,
 		XFRMDriver:  dryRun,
 		NetworkNamespaces: map[string]transportipsec.NetNSSpec{
@@ -17,10 +17,10 @@ func TestFirewallDriverResolvesConfiguredNamespace(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("NewRuntime: %v", err)
+		t.Fatalf("NewLinuxDriver: %v", err)
 	}
 
-	driver, err := runtime.newFirewallDriver(firewall.FirewallInstanceSpec{ID: "photon", NetNS: "default"}, firewall.BackendNFT)
+	driver, err := linuxDriver.newFirewallDriver(firewall.FirewallInstanceSpec{ID: "photon", NetNS: "default"}, firewall.BackendNFT)
 	if err != nil {
 		t.Fatalf("newFirewallDriver: %v", err)
 	}
@@ -32,7 +32,7 @@ func TestFirewallDriverResolvesConfiguredNamespace(t *testing.T) {
 		t.Fatalf("driver netns = %q, want photontesth2", nft.NetNS)
 	}
 
-	hostDriver, err := runtime.newFirewallDriver(firewall.FirewallInstanceSpec{ID: "host", IsHost: true}, firewall.BackendIptables)
+	hostDriver, err := linuxDriver.newFirewallDriver(firewall.FirewallInstanceSpec{ID: "host", IsHost: true}, firewall.BackendIptables)
 	if err != nil {
 		t.Fatalf("host newFirewallDriver: %v", err)
 	}
@@ -47,11 +47,11 @@ func TestFirewallDriverResolvesConfiguredNamespace(t *testing.T) {
 
 func TestFirewallDriverRejectsUnknownNamespace(t *testing.T) {
 	dryRun := &transportipsec.DryRunDriver{}
-	runtime, err := NewRuntime(RuntimeOptions{IPsecDriver: dryRun, XFRMDriver: dryRun})
+	driver, err := NewLinuxDriver(LinuxDriverOptions{IPsecDriver: dryRun, XFRMDriver: dryRun})
 	if err != nil {
-		t.Fatalf("NewRuntime: %v", err)
+		t.Fatalf("NewLinuxDriver: %v", err)
 	}
-	if _, err := runtime.newFirewallDriver(firewall.FirewallInstanceSpec{ID: "missing", NetNS: "missing"}, firewall.BackendNFT); err == nil {
+	if _, err := driver.newFirewallDriver(firewall.FirewallInstanceSpec{ID: "missing", NetNS: "missing"}, firewall.BackendNFT); err == nil {
 		t.Fatal("newFirewallDriver accepted an unknown namespace")
 	}
 }

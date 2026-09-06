@@ -25,24 +25,24 @@ func TestNewDaemonDefaultsInterval(t *testing.T) {
 	}
 }
 
-func TestConfiguredStrongSwanRuntimeWithoutLinkGroupsUsesDryRunObservation(t *testing.T) {
-	runtime, err := newConfiguredLinuxRuntime(ipsecConfig{Driver: ipsecDriverStrongSwan}, nil, nil)
+func TestConfiguredStrongSwanLinuxDriverWithoutLinkGroupsUsesDryRunObservation(t *testing.T) {
+	driver, err := newConfiguredLinuxDriver(ipsecConfig{Driver: ipsecDriverStrongSwan}, nil, nil)
 	if err != nil {
-		t.Fatalf("newConfiguredLinuxRuntime: %v", err)
+		t.Fatalf("newConfiguredLinuxDriver: %v", err)
 	}
-	sas, err := runtime.ListIPsecSAs(context.Background())
+	sas, err := driver.ListIPsecSAs(context.Background())
 	if err != nil || len(sas) != 0 {
 		t.Fatalf("ListIPsecSAs = (%v, %v), want empty dry-run observation", sas, err)
 	}
 }
 
-func TestDaemonReplacesAndClosesSingleLinuxRuntime(t *testing.T) {
+func TestDaemonReplacesAndClosesSingleLinuxDriver(t *testing.T) {
 	service := newTestDaemonFromOwners(
 		&AppContext{}, &corestate.VerifiedState{}, nil, &linuxRuntimeState{}, &gossipStartupConfig{}, time.Second,
 	)
 	firstClosed := 0
 	firstDriver := &ipsec.DryRunDriver{}
-	first := newTestLinuxRuntimeWithOptions(photonlinux.RuntimeOptions{
+	first := newTestLinuxDriverWithOptions(photonlinux.LinuxDriverOptions{
 		IPsecDriver: firstDriver,
 		XFRMDriver:  firstDriver,
 		Close: func() error {
@@ -50,16 +50,16 @@ func TestDaemonReplacesAndClosesSingleLinuxRuntime(t *testing.T) {
 			return nil
 		},
 	})
-	if err := service.installLinuxRuntime(first); err != nil {
-		t.Fatalf("install first Linux runtime: %v", err)
+	if err := service.installLinuxDriver(first); err != nil {
+		t.Fatalf("install first Linux driver: %v", err)
 	}
-	if service.linuxRuntime != first {
-		t.Fatal("first Linux runtime was not installed")
+	if service.linuxDriver != first {
+		t.Fatal("first Linux driver was not installed")
 	}
 
 	secondClosed := 0
 	secondDriver := &ipsec.DryRunDriver{}
-	second := newTestLinuxRuntimeWithOptions(photonlinux.RuntimeOptions{
+	second := newTestLinuxDriverWithOptions(photonlinux.LinuxDriverOptions{
 		IPsecDriver: secondDriver,
 		XFRMDriver:  secondDriver,
 		Close: func() error {
@@ -67,23 +67,23 @@ func TestDaemonReplacesAndClosesSingleLinuxRuntime(t *testing.T) {
 			return nil
 		},
 	})
-	if err := service.installLinuxRuntime(second); err != nil {
-		t.Fatalf("replace Linux runtime: %v", err)
+	if err := service.installLinuxDriver(second); err != nil {
+		t.Fatalf("replace Linux driver: %v", err)
 	}
 	if firstClosed != 1 {
-		t.Fatalf("first runtime close calls = %d, want 1", firstClosed)
+		t.Fatalf("first driver close calls = %d, want 1", firstClosed)
 	}
-	if service.linuxRuntime != second {
-		t.Fatal("replacement Linux runtime was not installed")
+	if service.linuxDriver != second {
+		t.Fatal("replacement Linux driver was not installed")
 	}
-	if err := service.closeLinuxRuntime(); err != nil {
-		t.Fatalf("close Linux runtime: %v", err)
+	if err := service.closeLinuxDriver(); err != nil {
+		t.Fatalf("close Linux driver: %v", err)
 	}
 	if secondClosed != 1 {
-		t.Fatalf("second runtime close calls = %d, want 1", secondClosed)
+		t.Fatalf("second driver close calls = %d, want 1", secondClosed)
 	}
-	if service.linuxRuntime != nil {
-		t.Fatal("Linux runtime remains installed after close")
+	if service.linuxDriver != nil {
+		t.Fatal("Linux driver remains installed after close")
 	}
 }
 
@@ -106,13 +106,13 @@ func TestDaemonStateChangedHook(t *testing.T) {
 	}
 }
 
-func TestDaemonStateChangedWithoutLinuxRuntimeSkipsPlatformReconcile(t *testing.T) {
+func TestDaemonStateChangedWithoutLinuxDriverSkipsPlatformReconcile(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	service := newTestDaemonFromOwners(
 		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
-	if err := service.closeLinuxRuntime(); err != nil {
-		t.Fatalf("close Linux runtime: %v", err)
+	if err := service.closeLinuxDriver(); err != nil {
+		t.Fatalf("close Linux driver: %v", err)
 	}
 	var flushed []string
 	service.Hooks.OnReconcileFlush = func(layer string) {
@@ -122,10 +122,10 @@ func TestDaemonStateChangedWithoutLinuxRuntimeSkipsPlatformReconcile(t *testing.
 	service.notifyStateChanged()
 
 	if len(flushed) != 0 {
-		t.Fatalf("platform reconcile flushed without Linux runtime: %v", flushed)
+		t.Fatalf("platform reconcile flushed without Linux driver: %v", flushed)
 	}
 	if service.ipsecDirty || service.routingDirty || service.firewallDirty {
-		t.Fatalf("platform dirty flags set without Linux runtime: ipsec:%v routing:%v firewall:%v", service.ipsecDirty, service.routingDirty, service.firewallDirty)
+		t.Fatalf("platform dirty flags set without Linux driver: ipsec:%v routing:%v firewall:%v", service.ipsecDirty, service.routingDirty, service.firewallDirty)
 	}
 }
 

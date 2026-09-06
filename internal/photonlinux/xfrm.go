@@ -22,7 +22,7 @@ type xfrmMaintenanceItem struct {
 	reason    string
 }
 
-func (r *Runtime) ObserveXFRMLinks(ctx context.Context, desired []transportipsec.TransportLinkSpec, instances map[string]transportipsec.LinkInstance, groups []transportipsec.LinkGroupSpec) *XFRMObservations {
+func (r *LinuxDriver) ObserveXFRMLinks(ctx context.Context, desired []transportipsec.TransportLinkSpec, instances map[string]transportipsec.LinkInstance, groups []transportipsec.LinkGroupSpec) *XFRMObservations {
 	driver := r.xfrmDriver
 	inspector, ok := driver.(transportipsec.XFRMLinkBatchInspector)
 	if !ok || len(desired) == 0 {
@@ -65,7 +65,7 @@ func (r *Runtime) ObserveXFRMLinks(ctx context.Context, desired []transportipsec
 	return observed
 }
 
-func (r *Runtime) FilterSAsWithMissingXFRMLinks(ctx context.Context, desired []transportipsec.TransportLinkSpec, instances map[string]transportipsec.LinkInstance, sas []transportipsec.SAState, observed *XFRMObservations) ([]transportipsec.SAState, map[string]transportipsec.TransportLinkSpec, error) {
+func (r *LinuxDriver) FilterSAsWithMissingXFRMLinks(ctx context.Context, desired []transportipsec.TransportLinkSpec, instances map[string]transportipsec.LinkInstance, sas []transportipsec.SAState, observed *XFRMObservations) ([]transportipsec.SAState, map[string]transportipsec.TransportLinkSpec, error) {
 	driver := r.xfrmDriver
 	if inspector, ok := driver.(transportipsec.XFRMLinkInspector); ok && len(instances) > 0 {
 		return filterSAsWithMissingRuntimeLinks(ctx, inspector, desired, instances, sas, observed, r.logger)
@@ -84,7 +84,7 @@ func (r *Runtime) FilterSAsWithMissingXFRMLinks(ctx context.Context, desired []t
 	return filtered, missing, nil
 }
 
-func (r *Runtime) MaintainXFRMInterfaces(ctx context.Context, desired []transportipsec.TransportLinkSpec, instances map[string]transportipsec.LinkInstance, actions []transportipsec.ReconcileAction, groups []transportipsec.LinkGroupSpec, diagnosticPrefixes []netip.Prefix, observed *XFRMObservations) error {
+func (r *LinuxDriver) MaintainXFRMInterfaces(ctx context.Context, desired []transportipsec.TransportLinkSpec, instances map[string]transportipsec.LinkInstance, actions []transportipsec.ReconcileAction, groups []transportipsec.LinkGroupSpec, diagnosticPrefixes []netip.Prefix, observed *XFRMObservations) error {
 	driver := r.xfrmDriver
 	inspector, ok := driver.(interface {
 		transportipsec.XFRMDriver
@@ -184,11 +184,11 @@ func (r *Runtime) MaintainXFRMInterfaces(ctx context.Context, desired []transpor
 	return nil
 }
 
-func (r *Runtime) AssignDiagnosticAddresses(ctx context.Context, spec transportipsec.TransportLinkSpec, prefixes []netip.Prefix) error {
+func (r *LinuxDriver) AssignDiagnosticAddresses(ctx context.Context, spec transportipsec.TransportLinkSpec, prefixes []netip.Prefix) error {
 	return r.assignDiagnosticAddresses(ctx, spec, prefixes, nil)
 }
 
-func (r *Runtime) assignDiagnosticAddresses(ctx context.Context, spec transportipsec.TransportLinkSpec, prefixes []netip.Prefix, observed *transportipsec.XFRMLinkState) error {
+func (r *LinuxDriver) assignDiagnosticAddresses(ctx context.Context, spec transportipsec.TransportLinkSpec, prefixes []netip.Prefix, observed *transportipsec.XFRMLinkState) error {
 	if len(prefixes) == 0 {
 		return nil
 	}

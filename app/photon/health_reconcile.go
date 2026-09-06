@@ -31,9 +31,9 @@ func newHealthManager(cfg healthConfig, prober health.Prober) *health.Manager {
 // do not want background health probing do not install one.
 type healthDriver struct {
 	*health.Manager
-	spool          *healthspool.Store
-	runtimeManaged bool
-	asyncRunning   bool
+	spool         *healthspool.Store
+	driverManaged bool
+	asyncRunning  bool
 }
 
 // stripScope removes the %iface and netns=... suffixes from a scoped tunnel

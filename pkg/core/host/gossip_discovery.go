@@ -22,7 +22,7 @@ const (
 	GossipObservedPathMigrationGrace = time.Minute
 )
 
-// GossipDiscoveryInput is the detached common/runtime input used to rebuild
+// GossipDiscoveryInput is the detached common/driver input used to rebuild
 // the in-memory peer address book. Suppressed peers remain dialable but do not
 // regain a checkpoint until their platform cleanup marker is cleared.
 type GossipDiscoveryInput struct {
@@ -39,7 +39,7 @@ type GossipDiscoveryInput struct {
 
 // GossipDiscoveryConfig contains the platform-neutral, fixed discovery policy
 // selected by the composition root. Verified network and checkpoint data are
-// always read from Runtime's Store and therefore do not appear here.
+// always read from GossipDriver's Store and therefore do not appear here.
 type GossipDiscoveryConfig struct {
 	Bootstrap      map[string]*net.UDPAddr
 	BootstrapPeers []string
@@ -48,24 +48,24 @@ type GossipDiscoveryConfig struct {
 }
 
 // GossipDiscoveryInput returns one detached discovery view built from the
-// Runtime's committed common Store. suppressed is the only platform-owned
+// GossipDriver's committed common Store. suppressed is the only platform-owned
 // overlay: it represents peers whose Linux/Windows resource cleanup is still
 // in progress and is never persisted as gossip protocol state.
-func (runtime *Runtime) GossipDiscoveryInput(suppressed map[string]bool) GossipDiscoveryInput {
+func (driver *GossipDriver) GossipDiscoveryInput(suppressed map[string]bool) GossipDiscoveryInput {
 	input := GossipDiscoveryInput{Suppressed: cloneSuppressedPeers(suppressed)}
-	if runtime == nil {
+	if driver == nil {
 		return input
 	}
-	config := runtime.GossipConfig()
+	config := driver.GossipConfig()
 	input.LocalPeerID = config.PeerID
 	input.Bootstrap = config.Discovery.Bootstrap
 	input.BootstrapPeers = config.Discovery.BootstrapPeers
 	input.EndpointGrace = config.Discovery.EndpointGrace
 	input.SourceOrder = config.Discovery.SourceOrder
-	if runtime.gossipState == nil {
+	if driver.gossipState == nil {
 		return input
 	}
-	view := runtime.gossipState.ReadView()
+	view := driver.gossipState.ReadView()
 	if view.State != nil {
 		input.ManagedZone = view.State.ManagedZone
 		input.Network = view.State.Network
@@ -292,17 +292,17 @@ func discoveryTCPAddressFromUDP(udp *net.UDPAddr) string {
 
 // RefreshGossipDiscovery persists checkpoint changes before publishing the
 // rebuilt, loss-tolerant address book to the live transport.
-func (runtime *Runtime) RefreshGossipDiscovery(ctx context.Context, suppressed map[string]bool, now time.Time, transport *gossip.Transport) error {
-	if !runtime.gossipDiscoveryAvailable() {
-		return ErrRuntimeStopped
+func (driver *GossipDriver) RefreshGossipDiscovery(ctx context.Context, suppressed map[string]bool, now time.Time, transport *gossip.Transport) error {
+	if !driver.gossipDiscoveryAvailable() {
+		return ErrGossipDriverStopped
 	}
-	input := runtime.GossipDiscoveryInput(suppressed)
+	input := driver.GossipDiscoveryInput(suppressed)
 	plan := PlanGossipDiscovery(input, now)
 	if len(plan.Patches) > 0 {
-		if runtime.gossipState == nil {
+		if driver.gossipState == nil {
 			return ErrGossipCheckpointWriterRequired
 		}
-		if _, err := runtime.gossipState.UpdatePeerCheckpoints(ctx, plan.Patches); err != nil {
+		if _, err := driver.gossipState.UpdatePeerCheckpoints(ctx, plan.Patches); err != nil {
 			return err
 		}
 	}
@@ -312,14 +312,14 @@ func (runtime *Runtime) RefreshGossipDiscovery(ctx context.Context, suppressed m
 
 // restoreGossipObservedPath republishes one already-persisted observed path
 // into the loss-tolerant address book after packet/checkpoint processing.
-func (runtime *Runtime) restoreGossipObservedPath(peerID string, suppressed map[string]bool, now time.Time, transport *gossip.Transport) error {
-	if !runtime.gossipDiscoveryAvailable() {
-		return ErrRuntimeStopped
+func (driver *GossipDriver) restoreGossipObservedPath(peerID string, suppressed map[string]bool, now time.Time, transport *gossip.Transport) error {
+	if !driver.gossipDiscoveryAvailable() {
+		return ErrGossipDriverStopped
 	}
 	if transport == nil || peerID == "" {
 		return nil
 	}
-	input := runtime.GossipDiscoveryInput(suppressed)
+	input := driver.GossipDiscoveryInput(suppressed)
 	paths, prefer, ok := discoveryObservedPaths(input, peerID, input.Peers[peerID], now)
 	if !ok {
 		transport.RemoveObservedPeerAddr(peerID)
@@ -329,13 +329,13 @@ func (runtime *Runtime) restoreGossipObservedPath(peerID string, suppressed map[
 	return nil
 }
 
-func (runtime *Runtime) gossipDiscoveryAvailable() bool {
-	if runtime == nil {
+func (driver *GossipDriver) gossipDiscoveryAvailable() bool {
+	if driver == nil {
 		return false
 	}
-	runtime.mu.RLock()
-	defer runtime.mu.RUnlock()
-	return !runtime.stopped
+	driver.mu.RLock()
+	defer driver.mu.RUnlock()
+	return !driver.stopped
 }
 
 func PlanGossipDiscovery(input GossipDiscoveryInput, now time.Time) GossipDiscoveryPlan {

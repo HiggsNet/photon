@@ -1,5 +1,5 @@
-// Package host owns the platform-neutral runtime resources shared by Photon
-// hosts. Protocol packages describe policy and actions; Runtime owns the
+// Package host owns the platform-neutral driver resources shared by Photon
+// hosts. Protocol packages describe policy and actions; GossipDriver owns the
 // bounded queue and scheduling mechanism used to execute those actions.
 package host
 
@@ -24,11 +24,11 @@ const (
 )
 
 var (
-	ErrEventQueueFull = errors.New("host event queue full")
-	ErrRuntimeStopped = errors.New("host runtime stopped")
+	ErrGossipEventQueueFull = errors.New("gossip driver event queue full")
+	ErrGossipDriverStopped  = errors.New("gossip driver stopped")
 )
 
-// Event is delivered to the single-writer HostRuntime event loop.
+// Event is delivered to the single-writer GossipDriver event loop.
 type Event interface {
 	isHostEvent()
 }
@@ -42,22 +42,22 @@ func (GossipEvent) isHostEvent() {}
 
 // GossipPacketReceived carries one packet accepted by the injected datagram
 // receiver. Packets and protocol timer/completion events share the same
-// bounded runtime queue, preserving one backpressure and ordering boundary.
+// bounded driver queue, preserving one backpressure and ordering boundary.
 type GossipPacketReceived struct {
 	Packet *gossip.Packet
 }
 
 func (GossipPacketReceived) isHostEvent() {}
 
-// Runtime owns the common gossip engine, bounded event queue and scheduler.
+// GossipDriver owns the common gossip engine, bounded event queue and scheduler.
 // Platform composition roots inject datagram I/O around this object;
 // they do not create a second protocol queue or timer manager.
-type Runtime struct {
+type GossipDriver struct {
 	Gossip        *gossip.Engine
 	Observability *observability.PeerObservabilityStore
 
 	gossipState  GossipStateStore
-	gossipConfig GossipRuntimeConfig
+	gossipConfig GossipDriverConfig
 
 	events chan Event
 
@@ -79,89 +79,89 @@ type Runtime struct {
 	stopped                  bool
 }
 
-func NewRuntime(clock Clock, eventBuffer int, gossipState GossipStateStore, gossipConfig GossipRuntimeConfig) *Runtime {
+func NewGossipDriver(clock Clock, eventBuffer int, gossipState GossipStateStore, gossipConfig GossipDriverConfig) *GossipDriver {
 	if eventBuffer <= 0 {
 		eventBuffer = DefaultEventBuffer
 	}
-	runtime := &Runtime{
+	driver := &GossipDriver{
 		Gossip:           gossip.NewEngine(),
 		Observability:    observability.NewPeerObservabilityStore(DefaultPeerObservabilityLimit, DefaultPeerObservabilityTTL),
 		gossipState:      gossipState,
-		gossipConfig:     cloneGossipRuntimeConfig(gossipConfig),
+		gossipConfig:     cloneGossipDriverConfig(gossipConfig),
 		events:           make(chan Event, eventBuffer),
 		gossipChunks:     gossip.NewChunkAssemblyStore(),
 		gossipSentChunks: gossip.NewSentChunkCache(),
 	}
-	runtime.scheduler = NewScheduler(clock, runtime.events)
-	return runtime
+	driver.scheduler = NewScheduler(clock, driver.events)
+	return driver
 }
 
-func (runtime *Runtime) Events() <-chan Event {
-	if runtime == nil {
+func (driver *GossipDriver) Events() <-chan Event {
+	if driver == nil {
 		return nil
 	}
-	return runtime.events
+	return driver.events
 }
 
-func (runtime *Runtime) PendingEventCount() int {
-	if runtime == nil {
+func (driver *GossipDriver) PendingEventCount() int {
+	if driver == nil {
 		return 0
 	}
-	return len(runtime.events)
+	return len(driver.events)
 }
 
 // GossipConfig returns a detached snapshot of the protocol configuration
-// currently owned by Runtime.
-func (runtime *Runtime) GossipConfig() GossipRuntimeConfig {
-	if runtime == nil {
-		return GossipRuntimeConfig{}
+// currently owned by GossipDriver.
+func (driver *GossipDriver) GossipConfig() GossipDriverConfig {
+	if driver == nil {
+		return GossipDriverConfig{}
 	}
-	runtime.mu.RLock()
-	defer runtime.mu.RUnlock()
-	return cloneGossipRuntimeConfig(runtime.gossipConfig)
+	driver.mu.RLock()
+	defer driver.mu.RUnlock()
+	return cloneGossipDriverConfig(driver.gossipConfig)
 }
 
 // ReplaceGossipConfig atomically replaces protocol/discovery configuration
 // during a daemon-controlled reload.
-func (runtime *Runtime) ReplaceGossipConfig(config GossipRuntimeConfig) error {
-	if runtime == nil {
-		return ErrRuntimeStopped
+func (driver *GossipDriver) ReplaceGossipConfig(config GossipDriverConfig) error {
+	if driver == nil {
+		return ErrGossipDriverStopped
 	}
-	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
-	if runtime.stopped {
-		return ErrRuntimeStopped
+	driver.mu.Lock()
+	defer driver.mu.Unlock()
+	if driver.stopped {
+		return ErrGossipDriverStopped
 	}
-	runtime.gossipConfig = cloneGossipRuntimeConfig(config)
+	driver.gossipConfig = cloneGossipDriverConfig(config)
 	return nil
 }
 
 // PostGossip enqueues an external protocol event without blocking. Producers
 // receive explicit backpressure; scheduler delivery uses its own blocking,
 // shutdown-aware path so timeouts are never silently dropped.
-func (runtime *Runtime) PostGossip(event gossip.SyncEvent) error {
-	if runtime == nil || event == nil {
+func (driver *GossipDriver) PostGossip(event gossip.SyncEvent) error {
+	if driver == nil || event == nil {
 		return nil
 	}
-	runtime.mu.RLock()
-	stopped := runtime.stopped
-	runtime.mu.RUnlock()
+	driver.mu.RLock()
+	stopped := driver.stopped
+	driver.mu.RUnlock()
 	if stopped {
-		return ErrRuntimeStopped
+		return ErrGossipDriverStopped
 	}
 	select {
-	case runtime.events <- GossipEvent{Value: event}:
+	case driver.events <- GossipEvent{Value: event}:
 		return nil
 	default:
-		return ErrEventQueueFull
+		return ErrGossipEventQueueFull
 	}
 }
 
 // GossipSessionEventFor converts a host event into one session-FSM event. Timer
 // generations are accepted here, at the single-writer boundary, so a queued
 // timeout made stale by cancel/replace cannot advance a session.
-func (runtime *Runtime) GossipSessionEventFor(event Event) (gossip.SyncEvent, bool) {
-	if runtime == nil || event == nil {
+func (driver *GossipDriver) GossipSessionEventFor(event Event) (gossip.SyncEvent, bool) {
+	if driver == nil || event == nil {
 		return nil, false
 	}
 	switch typed := event.(type) {
@@ -171,7 +171,7 @@ func (runtime *Runtime) GossipSessionEventFor(event Event) (gossip.SyncEvent, bo
 		if typed.ID.Namespace != GossipTimerNamespace && typed.ID.Namespace != GossipChunkRepairNamespace {
 			return nil, false
 		}
-		if !runtime.schedulerForRead().Accept(typed) {
+		if !driver.schedulerForRead().Accept(typed) {
 			return nil, false
 		}
 		if typed.ID.Namespace == GossipChunkRepairNamespace {
@@ -199,20 +199,20 @@ func (runtime *Runtime) GossipSessionEventFor(event Event) (gossip.SyncEvent, bo
 
 // ApplyGossipTimerAction executes the scheduling subset of gossip actions.
 // Deadline choice remains in the protocol FSM; only timer resources live here.
-func (runtime *Runtime) ApplyGossipTimerAction(action gossip.SyncAction) (bool, error) {
-	if runtime == nil {
-		return false, ErrRuntimeStopped
+func (driver *GossipDriver) ApplyGossipTimerAction(action gossip.SyncAction) (bool, error) {
+	if driver == nil {
+		return false, ErrGossipDriverStopped
 	}
 	switch typed := action.(type) {
 	case gossip.StartTimerAction:
-		_, err := runtime.schedulerForRead().Schedule(TimerID{
+		_, err := driver.schedulerForRead().Schedule(TimerID{
 			Namespace: GossipTimerNamespace,
 			Owner:     typed.PeerID,
 			Key:       typed.Kind,
 		}, typed.Deadline)
 		return true, err
 	case gossip.CancelTimerAction:
-		runtime.schedulerForRead().Cancel(TimerID{
+		driver.schedulerForRead().Cancel(TimerID{
 			Namespace: GossipTimerNamespace,
 			Owner:     typed.PeerID,
 			Key:       typed.Kind,
@@ -223,47 +223,47 @@ func (runtime *Runtime) ApplyGossipTimerAction(action gossip.SyncAction) (bool, 
 	}
 }
 
-func (runtime *Runtime) CancelGossipTimers(peerID string) {
-	if runtime == nil || peerID == "" {
+func (driver *GossipDriver) CancelGossipTimers(peerID string) {
+	if driver == nil || peerID == "" {
 		return
 	}
-	runtime.schedulerForRead().CancelOwner(GossipTimerNamespace, peerID)
+	driver.schedulerForRead().CancelOwner(GossipTimerNamespace, peerID)
 }
 
-// ResetScheduler replaces only the runtime scheduling resource. It is used by
+// ResetScheduler replaces only the driver scheduling resource. It is used by
 // deterministic tests before the event loop starts; protocol sessions remain
 // owned by the same gossip Engine.
-func (runtime *Runtime) ResetScheduler(clock Clock) {
-	if runtime == nil {
+func (driver *GossipDriver) ResetScheduler(clock Clock) {
+	if driver == nil {
 		return
 	}
-	runtime.mu.Lock()
-	if runtime.stopped {
-		runtime.mu.Unlock()
+	driver.mu.Lock()
+	if driver.stopped {
+		driver.mu.Unlock()
 		return
 	}
-	old := runtime.scheduler
-	runtime.scheduler = NewScheduler(clock, runtime.events)
-	runtime.mu.Unlock()
+	old := driver.scheduler
+	driver.scheduler = NewScheduler(clock, driver.events)
+	driver.mu.Unlock()
 	old.Stop()
 }
 
-func (runtime *Runtime) Stop() {
-	if runtime == nil {
+func (driver *GossipDriver) Stop() {
+	if driver == nil {
 		return
 	}
-	runtime.mu.Lock()
-	if runtime.stopped {
-		runtime.mu.Unlock()
+	driver.mu.Lock()
+	if driver.stopped {
+		driver.mu.Unlock()
 		return
 	}
-	runtime.stopped = true
-	scheduler := runtime.scheduler
-	objectPullCancel := runtime.objectPullCancel
-	objectPullServerCancel := runtime.objectPullServerCancel
-	objectPullServerListener := runtime.objectPullServerListener
-	datagramCancel := runtime.datagramCancel
-	runtime.mu.Unlock()
+	driver.stopped = true
+	scheduler := driver.scheduler
+	objectPullCancel := driver.objectPullCancel
+	objectPullServerCancel := driver.objectPullServerCancel
+	objectPullServerListener := driver.objectPullServerListener
+	datagramCancel := driver.datagramCancel
+	driver.mu.Unlock()
 	if datagramCancel != nil {
 		datagramCancel()
 	}
@@ -277,22 +277,22 @@ func (runtime *Runtime) Stop() {
 		_ = objectPullServerListener.Close()
 	}
 	scheduler.Stop()
-	runtime.datagramWG.Wait()
-	runtime.objectPullWG.Wait()
-	runtime.objectPullServerWG.Wait()
-	runtime.objectPullPending.Store(0)
-	if runtime.gossipChunks != nil {
-		runtime.gossipChunks.Close()
+	driver.datagramWG.Wait()
+	driver.objectPullWG.Wait()
+	driver.objectPullServerWG.Wait()
+	driver.objectPullPending.Store(0)
+	if driver.gossipChunks != nil {
+		driver.gossipChunks.Close()
 	}
 }
 
-func (runtime *Runtime) schedulerForRead() *Scheduler {
-	runtime.mu.RLock()
-	defer runtime.mu.RUnlock()
-	return runtime.scheduler
+func (driver *GossipDriver) schedulerForRead() *Scheduler {
+	driver.mu.RLock()
+	defer driver.mu.RUnlock()
+	return driver.scheduler
 }
 
-// Clock returns the standard runtime clock. A custom now function is useful
+// Clock returns the standard driver clock. A custom now function is useful
 // when protocol deadlines and scheduler time must share a deterministic base.
 func NewClock(now func() time.Time) Clock {
 	if now == nil {

@@ -95,7 +95,7 @@ state transaction 语义。未来若需要平台加固，只能作为兼容相�
 raw private key。它不包含 peer session 或同步统计。
 
 Gossip 状态分成两类：session phase、round/catalog cursor、timer generation、chunk assembly、repair
-cache 和在途 object-pull 是协议正确性所需的活状态，只存在于 Engine/HostRuntime 内存，重启后重新同步；
+cache 和在途 object-pull 是协议正确性所需的活状态，只存在于 Engine/GossipDriver 内存，重启后重新同步；
 backoff、最近 endpoint、observed grace、relay suppression 和 rejected digest TTL 是可丢失的
 `GossipCheckpoint`，丢失最多带来额外重试或重新发现，不能改变验签、授权与最终收敛。attempt/error、
 hint/responder、datagram/object-pull 等纯统计进入有界 observability/metrics，不进入公共持久状态。
@@ -146,7 +146,7 @@ Metadata-only 写入不产生新的版本域：Gossip checkpoint 仍通过同一
 app/photon-windows
   CLI/version and the one Windows composition root
 
-pkg/core/host.Runtime
+pkg/core/host.GossipDriver
   the one common gossip/event/scheduler runtime
 
 pkg/core/state.Store + BoltStore
@@ -170,26 +170,26 @@ root/diff/projection 和 `ApplySnapshot`；`pkg/core/gossip` 直接引用这些 
 `internal/photonwindows`，也不得引入 Windows 专属 snapshot 或“精简 gossip”语义。
 每 peer 无 I/O 的同步 FSM 也位于 `pkg/core/gossip`；Linux daemon 已直接引用公共事件、action 与状态机，
 Photon Windows 后续复用同一入口，不在自己的 composition 中保留类型别名或转发函数。
-有界 packet receive loop 位于 `pkg/core/host`，由唯一 `host.Runtime` 持有，只依赖
+有界 packet receive loop 位于 `pkg/core/host`，由唯一 `host.GossipDriver` 持有，只依赖
 `DatagramReceiver` 的 `Receive/Close` capability。Linux `Transport` 与未来 Windows adapter
-共用该 loop；packet 直接进入 Runtime 已有的默认 64 项 event queue，与 timer/completion 共用同一
-backpressure 和顺序边界，不创建第二条 packet channel 或 per-packet goroutine。`Runtime.Stop` 取消接收、
+共用该 loop；packet 直接进入 GossipDriver 默认的 64 项 event queue，与协议 timer/completion 共用同一
+backpressure 和顺序边界，不创建第二条 packet channel 或 per-packet goroutine。`GossipDriver.Stop` 取消接收、
 关闭 receiver 以解除不感知 context 的阻塞读取，并等待 receive goroutine 退出。`gossip.Transport`
 不再持有 `UDPConn` 或执行 bind/read/write，只通过 `DatagramIO` capability 使用注入的 packet socket；它继续
 统一负责 wire codec、allowlist、replay/quota 和地址选择。Linux 的 bind、`SO_REUSEPORT`、read/write/deadline
 实现位于 `internal/photonlinux`，未来 Windows 注入自己的 adapter，不复制 Transport 策略。
-TCP object-pull 的 listener 生命周期同样由唯一 HostRuntime 持有：平台 composition 只创建并注入
-`net.Listener`，Runtime 统一执行有界 accept、连接 deadline、过载关闭、context cancellation 和 shutdown drain。
+TCP object-pull 的 listener 生命周期同样由唯一 GossipDriver 持有：平台 composition 只创建并注入
+`net.Listener`，GossipDriver 统一执行有界 accept、连接 deadline、过载关闭、context cancellation 和 shutdown drain。
 `pkg/core/gossip` 继续唯一拥有 object-pull framing、codec 与 request/response 语义；Linux app 目前只保留
 listener/client 的 composition 与 verified-state lookup，不另建 server worker/event queue。公共 host executor 统一
 地址选择、peer 并发、quota、响应校验和 completion/diagnostics 结果；Linux TCP adapter 只执行 dial、deadline 和
 一次 stream exchange，Windows 后续注入等价 adapter 即可。
 active-session/unsolicited packet classifier 也位于同一 `pkg/core/gossip`；它只按已验证
 message 的 `PeerID` 查询当前 `SyncSession` map，不解释 message type。当前 Linux composition 负责仍未收口的
-responder、状态提交和日志接线；这些公共执行语义应继续进入 HostRuntime，不能在 Windows 再实现一份。
-daemon 的 sync、endpoint publisher、IPsec、routing 和 firewall 周期 deadline 也复用 HostRuntime 的 namespaced Scheduler；
-平台循环不再另建 deadline 集合或 wakeup timer。timer fire 与 gossip packet/object-pull completion 进入同一有界
-event queue，在 single-writer 接受 generation 后才触发 controller reconcile。
+responder、状态提交和日志接线；这些公共执行语义应继续进入 GossipDriver，不能在 Windows 再实现一份。
+daemon 的 sync、endpoint publisher、IPsec、routing、firewall 和 health 周期 deadline 由 Daemon 自己的 Scheduler/queue
+管理；GossipDriver Scheduler 只处理协议 timer。两条队列分别保持平台编排与 gossip action 的 single-writer 顺序，
+Windows composition 不得把平台 completion 回投到 GossipDriver。
 同步事件的稳定诊断名和 peer ID 提取也由公共包提供，executor 不重复维护 event type switch。
 在 classifier 之后，共享 inbound planner 统一解释 message type，产出有序的 session-event、
 Ping/fetch responder、announce、chunk 或 NACK action。它固定 active/unsolicited policy 和
@@ -198,11 +198,11 @@ Read-only fetch 分类与 Ping response message planning 同样共享：公共�
 catalog-root equality，以及 Pong 后按需请求 catalog page 的顺序；executor 负责读取本地 summary、
 观测和实际发送。
 `gossip.Engine` 是同步 FSM/session registry：拥有 per-peer session 与 pending announce hint，但不拥有
-event queue、timer 资源、数据库或平台副作用。公共 `host.Runtime` 拥有 bounded event queue 和单
+event queue、timer 资源、数据库或平台副作用。公共 `host.GossipDriver` 拥有 bounded event queue 和单
 heap/wakeup Scheduler；timer policy/期限仍由 gossip session action 决定，Scheduler 只统一执行
 replace/cancel、generation stale 防护、背压和 stop。Linux daemon 已把共享 receive loop 产出的 verified packet
-注入 HostRuntime event queue；Photon Windows 后续必须走同一入口和 action 顺序。
-send action 到 wire message 的映射由 gossip 唯一实现；HostRuntime 的公共 action plan 固定
+注入 GossipDriver event queue；Photon Windows 后续必须走同一入口和 action 顺序。
+send action 到 wire message 的映射由 gossip 唯一实现；GossipDriver 的公共 action plan 固定
 apply -> outbound -> object-pull -> timer -> backoff/persistence 分相和 persistence scope 合并。
 平台 controller 只执行各相，不得再次按具体 gossip action 类型建立 switch。
 
@@ -212,7 +212,7 @@ apply/object-pull completion，以及 send/persistence/log effect executor。公
 adapter 不泄漏进状态机。
 UDP object chunk assembly、quiet-period NACK 和 sent-chunk repair cache 也复用
 `pkg/core/gossip` 的同一实现。共享策略固定 object/hash/metadata 校验、per-peer inflight、
-repair rounds、NACK index、TTL 和内存 byte 上限；HostRuntime 负责公共 NACK/chunk 与完整对象处理，平台只提供
+repair rounds、NACK index、TTL 和内存 byte 上限；GossipDriver 负责公共 NACK/chunk 与完整对象处理，平台只提供
 实际 I/O，不在 Linux/Windows 各保留一套 executor。
 Datagram announce planning、wire-size/MTU budget 计算和 zone snapshot chunk packing 也位于
 gossip。它直接使用 state 的 `ZoneRoot`，统一排序、oversized 分类、object/root hash 与 chunk metadata；平台 executor
@@ -228,7 +228,7 @@ portable core 不得：
 - 监听 Unix signal。
 
 `app/photon-windows` 是唯一 Windows composition root：它创建顶层 Daemon、一个公共 GossipDriver（当前类型
-`pkg/core/host.Runtime`）、一个由公共 `state.BoltStore` 恢复的 `pkg/core/state.Store`、WindowsDriver/WindowsState，
+`pkg/core/host.GossipDriver`）、一个由公共 `state.BoltStore` 恢复的 `pkg/core/state.Store`、WindowsDriver/WindowsState，
 以及未来真正出现的用户态 packet engine。不得再建立一个持有这些组件的通用 `photonclient.Runtime`，也不得让事件按
 `photonclient -> host -> photonclient` 往返。完整命名和持久化边界见 `docs/runtime-state-ownership.md`。
 

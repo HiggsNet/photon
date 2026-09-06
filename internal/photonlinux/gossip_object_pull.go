@@ -13,7 +13,7 @@ const (
 	DefaultGossipObjectPullIOTimeout   = 3 * time.Second
 )
 
-// GossipObjectPullClient performs one Linux TCP exchange. HostRuntime owns
+// GossipObjectPullClient performs one Linux TCP exchange. GossipDriver owns
 // queueing, concurrency, peer limits, quota, address policy and completion.
 type GossipObjectPullClient struct {
 	DialTimeout time.Duration

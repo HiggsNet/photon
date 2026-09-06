@@ -95,7 +95,7 @@ func newTestDaemonFromOwners(
 	if err != nil {
 		panic(err)
 	}
-	if err := service.hostRuntime.BindGossipTransport(transport); err != nil {
+	if err := service.gossipDriver.BindGossipTransport(transport); err != nil {
 		panic(err)
 	}
 	dryRun := &ipsec.DryRunDriver{}
@@ -141,7 +141,7 @@ func installTestLinuxDrivers(service *Daemon, drivers testLinuxDrivers) {
 	if drivers.xfrm == nil {
 		drivers.xfrm = &ipsec.DryRunDriver{}
 	}
-	if err := service.installLinuxRuntime(newTestLinuxRuntimeWithOptions(photonlinux.RuntimeOptions{
+	if err := service.installLinuxDriver(newTestLinuxDriverWithOptions(photonlinux.LinuxDriverOptions{
 		IPsecDriver:       drivers.ipsec,
 		XFRMDriver:        drivers.xfrm,
 		FirewallDriver:    drivers.firewall,
@@ -155,19 +155,19 @@ func installTestLinuxDrivers(service *Daemon, drivers testLinuxDrivers) {
 	}
 }
 
-func newTestLinuxRuntime(ipsecDriver ipsec.IPsecDriver, xfrmDriver ipsec.XFRMDriver) *photonlinux.Runtime {
-	return newTestLinuxRuntimeWithOptions(photonlinux.RuntimeOptions{
+func newTestLinuxDriver(ipsecDriver ipsec.IPsecDriver, xfrmDriver ipsec.XFRMDriver) *photonlinux.LinuxDriver {
+	return newTestLinuxDriverWithOptions(photonlinux.LinuxDriverOptions{
 		IPsecDriver: ipsecDriver,
 		XFRMDriver:  xfrmDriver,
 	})
 }
 
-func newTestLinuxRuntimeWithOptions(options photonlinux.RuntimeOptions) *photonlinux.Runtime {
-	runtime, err := photonlinux.NewRuntime(options)
+func newTestLinuxDriverWithOptions(options photonlinux.LinuxDriverOptions) *photonlinux.LinuxDriver {
+	driver, err := photonlinux.NewLinuxDriver(options)
 	if err != nil {
 		panic(err)
 	}
-	return runtime
+	return driver
 }
 
 func newTestDaemonStateStore(verified *corestate.VerifiedState, checkpoint *corestate.GossipCheckpoint, runtime *linuxRuntimeState) *DaemonStateStore {

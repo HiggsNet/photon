@@ -14,7 +14,7 @@ func RoutePacket(packet *Packet, sessions map[string]*SyncSession) SyncEvent {
 }
 
 // PacketEvent identifies a packet matched to an active sync session. The
-// HostRuntime packet dispatcher translates it into a protocol event/response.
+// GossipDriver packet dispatcher translates it into a protocol event/response.
 type PacketEvent struct {
 	Session *SyncSession
 	Packet  *Packet
@@ -23,7 +23,7 @@ type PacketEvent struct {
 func (*PacketEvent) SyncEventMarker() {}
 
 // UnsolicitedPacketEvent identifies a packet without an active session. The
-// HostRuntime may service read-only requests or use announcements as a hint.
+// GossipDriver may service read-only requests or use announcements as a hint.
 type UnsolicitedPacketEvent struct {
 	Packet *Packet
 }

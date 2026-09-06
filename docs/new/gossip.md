@@ -72,8 +72,8 @@ Gossip 运行于事件驱动的 daemon 架构中：
 
 关键特征：
 - **单一 UDP reader**：只有 `startGossipPacketReceiver` 调用 `transport.Receive()`
-- **统一资源 ownership**：`pkg/core/host.Runtime` 拥有 bounded event queue 和 Scheduler；`gossip.Engine` 不持有 channel、clock、timer 或 goroutine
-- **统一事件入口**：packet、timer、object-pull result 都进入 HostRuntime queue，再由 event loop 驱动 `SyncSession.OnEvent`
+- **统一资源 ownership**：`pkg/core/host.GossipDriver` 拥有 bounded event queue 和 Scheduler；`gossip.Engine` 不持有 channel、clock、timer 或 goroutine
+- **统一事件入口**：packet、timer、object-pull result 都进入 GossipDriver queue，再由 event loop 驱动 `SyncSession.OnEvent`
 - **串行事件处理**：所有状态变更经 daemon event loop 串行处理，无需额外锁
 - **FSM 无 I/O**：`SyncSession.OnEvent` 不执行 I/O，只返回 `SyncAction` 由事件循环执行
 
@@ -737,12 +737,10 @@ Relay 的 key 约束：
 ```
 daemon Run() 主循环:
   ┌──────────────────────────────────────────────────────────┐
-  │  1. processEvents() – 处理 Events channel 中的所有排队事件 │
-  │  2. 检查 stateFile change (digest 变化 → 重新加载状态)      │
-  │  3. 检查 endpoint publish timer                           │
-  │  4. 检查 sync timer (handleSyncTimerEventLoop)           │
-  │  5. 检查 IPsec / routing reconcile timer                  │
-  │  6. 等待：Events / packetCh / hostRuntime.Events / timer │
+  │  1. 处理 Daemon control/admin 事件                        │
+  │  2. 处理 health completion                               │
+  │  3. 消费 Daemon timer（endpoint/sync/platform/health）     │
+  │  4. 消费 GossipDriver 事件（packet/protocol timer/pull）   │
   └──────────────────────────────────────────────────────────┘
 ```
 
@@ -751,10 +749,9 @@ daemon Run() 主循环:
 | 来源 | 通道 | 说明 |
 |------|------|------|
 | 控制请求 | `d.Events` | control socket 操作（record_put, delegate_issue 等） |
-| UDP 数据包 | `packetCh` | `startGossipPacketReceiver` 收到的 gossip 消息 |
-| 同步事件 | `d.hostRuntime.Events()` | 外部 gossip event 与 namespaced `TimerFired` |
-| 定时器 | `timer.C` | 周期同步、endpoint publish、IPsec reconcile |
-| Object pull 结果 | `d.objectPullResults` | 异步 TCP pull 完成通知 |
+| 健康完成 | `healthUpdates` | health worker 完成后由 Daemon 更新在线结果 |
+| Daemon 定时器 | `d.daemonTimerEvents` | endpoint、sync、IPsec、routing、firewall、health 周期事件 |
+| Gossip 事件 | `d.gossipDriver.Events()` | 已验证 UDP packet、协议 timer 和 object-pull completion |
 
 ### 11.3 Packet Demux
 
@@ -784,7 +781,7 @@ gossip packet 事件直接以 StateStore committed state 为唯一权威。`hand
 
 **unsolicited PING 的处理**：无匹配 session 时，带 `Summary` 的 `PING` 先由 `respondPing` 回复 `PONG`（如果 root 不一致还会额外发送 `FETCH_CATALOG_PAGE`），然后进入 `maybeShortcutSyncFromPingSummary`。root 一致则记录 peer sync 状态并直接返回；不一致或 summary 生成失败则回退到 `handleAnnounceHint`，按 hint 创建/唤醒 active pull。
 
-### 11.4 HostRuntime Scheduler
+### 11.4 GossipDriver Scheduler
 
 `SyncSession` 通过 `StartTimerAction` / `CancelTimerAction` 表达 deadline policy；公共
 `pkg/core/host.Scheduler` 管理调度资源：
@@ -795,9 +792,9 @@ gossip packet 事件直接以 StateStore committed state 为唯一权威。`hand
 | `catalog_page` | catalog 分页超时 | `max(250ms, 3 × RTT)` |
 
 Scheduler 使用 `(namespace, owner, key, generation)` 标识 timer，以一个 deadline heap 和一个 wakeup loop
-完成 replace/cancel/delivery。到期事件先进入 HostRuntime bounded queue，single-writer 消费时再校验 generation；
+完成 replace/cancel/delivery。到期事件先进入 GossipDriver bounded queue，single-writer 消费时再校验 generation；
 因此 cancel/replace 后已经排队的旧 fire 也不会推进 session。队列满时 timeout 等待消费或 shutdown，不静默丢弃。
-当 session 完成或失败时，HostRuntime 取消该 peer 在 gossip namespace 下的所有 timer。
+当 session 完成或失败时，GossipDriver 取消该 peer 在 gossip namespace 下的所有 timer。
 
 ### 11.5 状态变更通知链
 

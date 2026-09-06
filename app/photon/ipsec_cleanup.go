@@ -62,18 +62,18 @@ func recoveryCleanupIPsecDirect(ctx context.Context, rt *AppContext, includeOrph
 		}
 		return 0, 0, nil
 	}
-	platformRuntime, err := newLinuxRuntimeForIPsecCleanup(rt.Config)
+	platformDriver, err := newLinuxDriverForIPsecCleanup(rt.Config)
 	if err != nil {
 		return 0, 0, err
 	}
-	defer func() { _ = platformRuntime.Close() }()
+	defer func() { _ = platformDriver.Close() }()
 	cleaned := 0
 	if len(runtimeCandidate.LinkInstances) > 0 {
 		ids := make([]string, 0, len(runtimeCandidate.LinkInstances))
 		for id := range runtimeCandidate.LinkInstances {
 			ids = append(ids, id)
 		}
-		cleaned, err = cleanupLinuxRuntimeIPsecLinks(ctx, runtimeCandidate, ids, platformRuntime, now)
+		cleaned, err = cleanupLinuxDriverIPsecLinks(ctx, runtimeCandidate, ids, platformDriver, now)
 		if err != nil {
 			return cleaned, 0, err
 		}
@@ -82,7 +82,7 @@ func recoveryCleanupIPsecDirect(ctx context.Context, rt *AppContext, includeOrph
 	}
 	orphans := 0
 	if includeOrphans {
-		orphans, err = platformRuntime.CleanupIPsecOrphans(ctx, managedIPsecConnectionNamesFromLinks(runtimeCandidate.LinkInstances))
+		orphans, err = platformDriver.CleanupIPsecOrphans(ctx, managedIPsecConnectionNamesFromLinks(runtimeCandidate.LinkInstances))
 		if err != nil {
 			return cleaned, orphans, err
 		}
@@ -104,10 +104,10 @@ func (d *Daemon) handleIPsecCleanupEvent(ctx context.Context, includeOrphans boo
 	if common.State == nil || runtimeCandidate == nil {
 		return 0, 0, errors.New("daemon state is not loaded")
 	}
-	platformRuntime := d.linuxRuntime
+	platformDriver := d.linuxDriver
 	if len(runtimeCandidate.LinkInstances) > 0 || includeOrphans {
-		if platformRuntime == nil {
-			return 0, 0, errors.New("linux runtime is not initialized")
+		if platformDriver == nil {
+			return 0, 0, errors.New("linux driver is not initialized")
 		}
 	}
 
@@ -120,7 +120,7 @@ func (d *Daemon) handleIPsecCleanupEvent(ctx context.Context, includeOrphans boo
 		for id := range runtimeCandidate.LinkInstances {
 			ids = append(ids, id)
 		}
-		cleaned, err = cleanupLinuxRuntimeIPsecLinks(ctx, runtimeCandidate, ids, platformRuntime, now)
+		cleaned, err = cleanupLinuxDriverIPsecLinks(ctx, runtimeCandidate, ids, platformDriver, now)
 		if err != nil {
 			return cleaned, orphans, err
 		}
@@ -128,7 +128,7 @@ func (d *Daemon) handleIPsecCleanupEvent(ctx context.Context, includeOrphans boo
 		runtimeCandidate.IPsecReconcile = markIPsecCleanupReconcile(runtimeCandidate.IPsecReconcile, now)
 	}
 	if includeOrphans {
-		orphans, err = platformRuntime.CleanupIPsecOrphans(ctx, managedIPsecConnectionNamesFromLinks(runtimeCandidate.LinkInstances))
+		orphans, err = platformDriver.CleanupIPsecOrphans(ctx, managedIPsecConnectionNamesFromLinks(runtimeCandidate.LinkInstances))
 		if err != nil {
 			return cleaned, orphans, err
 		}
@@ -148,7 +148,7 @@ func (d *Daemon) handleIPsecCleanupEvent(ctx context.Context, includeOrphans boo
 	return cleaned, orphans, nil
 }
 
-func newLinuxRuntimeForIPsecCleanup(config *appConfig) (*photonlinux.Runtime, error) {
+func newLinuxDriverForIPsecCleanup(config *appConfig) (*photonlinux.LinuxDriver, error) {
 	if config == nil {
 		return nil, errors.New("config is nil")
 	}
@@ -159,13 +159,13 @@ func newLinuxRuntimeForIPsecCleanup(config *appConfig) (*photonlinux.Runtime, er
 	switch driver {
 	case ipsecDriverDryRun:
 		dryRun := &ipsec.DryRunDriver{}
-		return photonlinux.NewRuntime(photonlinux.RuntimeOptions{IPsecDriver: dryRun, XFRMDriver: dryRun})
+		return photonlinux.NewLinuxDriver(photonlinux.LinuxDriverOptions{IPsecDriver: dryRun, XFRMDriver: dryRun})
 	case ipsecDriverStrongSwan:
 		client, err := ipsec.NewGoviciClient(config.IPsec.VICISocket)
 		if err != nil {
 			return nil, fmt.Errorf("initialize strongswan vici client: %w", err)
 		}
-		return photonlinux.NewRuntime(photonlinux.RuntimeOptions{
+		return photonlinux.NewLinuxDriver(photonlinux.LinuxDriverOptions{
 			IPsecDriver: &ipsec.StrongSwanDriver{VICI: client},
 			XFRMDriver:  ipsec.NewSystemXFRMDriver(config.IPsec.DefaultNetNS),
 			Close:       client.Close,
@@ -175,11 +175,11 @@ func newLinuxRuntimeForIPsecCleanup(config *appConfig) (*photonlinux.Runtime, er
 	}
 }
 
-func cleanupLinuxRuntimeIPsecLinks(ctx context.Context, runtime *linuxRuntimeState, ids []string, platformRuntime *photonlinux.Runtime, now time.Time) (int, error) {
+func cleanupLinuxDriverIPsecLinks(ctx context.Context, runtime *linuxRuntimeState, ids []string, platformDriver *photonlinux.LinuxDriver, now time.Time) (int, error) {
 	if runtime == nil {
 		return 0, errors.New("linux runtime state is nil")
 	}
-	links, cleaned, err := cleanupIPsecLinkInstanceSet(ctx, runtime.LinkInstances, ids, platformRuntime)
+	links, cleaned, err := cleanupIPsecLinkInstanceSet(ctx, runtime.LinkInstances, ids, platformDriver)
 	if err != nil {
 		return cleaned, err
 	}
@@ -190,9 +190,9 @@ func cleanupLinuxRuntimeIPsecLinks(ctx context.Context, runtime *linuxRuntimeSta
 	return cleaned, nil
 }
 
-func cleanupIPsecLinkInstanceSet(ctx context.Context, linkInstances map[string]linkInstanceState, ids []string, platformRuntime *photonlinux.Runtime) (map[string]linkInstanceState, int, error) {
+func cleanupIPsecLinkInstanceSet(ctx context.Context, linkInstances map[string]linkInstanceState, ids []string, platformDriver *photonlinux.LinuxDriver) (map[string]linkInstanceState, int, error) {
 	instances := linkInstancesToIPsec(linkInstances)
-	remaining, cleaned, err := platformRuntime.CleanupIPsecLinks(ctx, instances, ids)
+	remaining, cleaned, err := platformDriver.CleanupIPsecLinks(ctx, instances, ids)
 	if err != nil {
 		return nil, cleaned, err
 	}

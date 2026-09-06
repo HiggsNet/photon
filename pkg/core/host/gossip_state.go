@@ -11,8 +11,8 @@ import (
 )
 
 // GossipStateStore is the common committed-state dependency owned by one
-// HostRuntime. Platform composition may serialize this store with its own
-// runtime bucket, but it must not reinterpret the returned verified state or
+// GossipDriver. Platform composition may serialize this store with its own
+// driver bucket, but it must not reinterpret the returned verified state or
 // maintain a second gossip projection.
 type GossipStateStore interface {
 	ReadView() corestate.View
@@ -20,17 +20,17 @@ type GossipStateStore interface {
 	UpdatePeerCheckpoints(context.Context, map[string]corestate.PeerCheckpointPatch) (corestate.CommitResult, error)
 }
 
-// GossipRuntimeConfig contains platform-neutral values fixed when one
-// HostRuntime is constructed. Socket addresses and platform handles do not
+// GossipDriverConfig contains platform-neutral values fixed when one
+// GossipDriver is constructed. Socket addresses and platform handles do not
 // belong here.
-type GossipRuntimeConfig struct {
+type GossipDriverConfig struct {
 	PeerID    string
 	Limits    corestate.SyncLimits
 	Discovery GossipDiscoveryConfig
-	Log       func(GossipRuntimeLog)
+	Log       func(GossipDriverLog)
 }
 
-type GossipRuntimeLog struct {
+type GossipDriverLog struct {
 	Level  string
 	Event  string
 	PeerID string
@@ -39,21 +39,21 @@ type GossipRuntimeLog struct {
 	Fields map[string]any
 }
 
-func cloneGossipRuntimeConfig(config GossipRuntimeConfig) GossipRuntimeConfig {
+func cloneGossipDriverConfig(config GossipDriverConfig) GossipDriverConfig {
 	config.Discovery.Bootstrap = cloneBootstrapPeers(config.Discovery.Bootstrap)
 	config.Discovery.BootstrapPeers = append([]string(nil), config.Discovery.BootstrapPeers...)
 	config.Discovery.SourceOrder = append([]string(nil), config.Discovery.SourceOrder...)
 	return config
 }
 
-func (runtime *Runtime) logGossip(level, event, peerID, phase string, err error, fields map[string]any) {
-	config := runtime.GossipConfig()
+func (driver *GossipDriver) logGossip(level, event, peerID, phase string, err error, fields map[string]any) {
+	config := driver.GossipConfig()
 	if config.Log != nil {
-		config.Log(GossipRuntimeLog{Level: level, Event: event, PeerID: peerID, Phase: phase, Err: err, Fields: fields})
+		config.Log(GossipDriverLog{Level: level, Event: event, PeerID: peerID, Phase: phase, Err: err, Fields: fields})
 	}
 }
 
-func (runtime *Runtime) reportGossipIssue(issue GossipExecutionIssue) {
+func (driver *GossipDriver) reportGossipIssue(issue GossipExecutionIssue) {
 	event := "gossip_effect_failed"
 	switch issue.Phase {
 	case GossipPhaseApply:
@@ -65,14 +65,14 @@ func (runtime *Runtime) reportGossipIssue(issue GossipExecutionIssue) {
 	case GossipPhasePersistence:
 		event = "save_failed"
 	}
-	runtime.logGossip("warn", event, issue.PeerID, issue.Phase, issue.Err, nil)
+	driver.logGossip("warn", event, issue.PeerID, issue.Phase, issue.Err, nil)
 }
 
-func (runtime *Runtime) gossipStateView() GossipStateView {
-	if runtime == nil || runtime.gossipState == nil {
+func (driver *GossipDriver) gossipStateView() GossipStateView {
+	if driver == nil || driver.gossipState == nil {
 		return GossipStateView{}
 	}
-	view := runtime.gossipState.ReadView()
+	view := driver.gossipState.ReadView()
 	if view.State == nil || view.State.Network == nil {
 		return GossipStateView{}
 	}
@@ -80,27 +80,27 @@ func (runtime *Runtime) gossipStateView() GossipStateView {
 		Loaded:       true,
 		ManagedZone:  view.State.ManagedZone,
 		Digests:      corestate.ZoneDigests(view.State.Network),
-		SenderPeerID: runtime.GossipConfig().PeerID,
+		SenderPeerID: driver.GossipConfig().PeerID,
 	}
 }
 
 // GossipCatalogSummary returns the current committed catalog summary without
 // exposing the verified Network back to platform orchestration.
-func (runtime *Runtime) GossipCatalogSummary() *corestate.CatalogSummary {
-	view := runtime.gossipStateView()
+func (driver *GossipDriver) GossipCatalogSummary() *corestate.CatalogSummary {
+	view := driver.gossipStateView()
 	if !view.Loaded {
 		return nil
 	}
 	return corestate.CatalogSummaryForDigests(view.Digests)
 }
 
-func (runtime *Runtime) applyGossipSnapshots(
+func (driver *GossipDriver) applyGossipSnapshots(
 	ctx context.Context,
 	peerID string,
 	actions []gossip.ApplySnapshotAction,
 	view GossipStateView,
 ) (GossipSnapshotApplyResult, error) {
-	if runtime == nil || runtime.gossipState == nil {
+	if driver == nil || driver.gossipState == nil {
 		return GossipSnapshotApplyResult{}, errors.New("gossip state store is not configured")
 	}
 	managedZone := view.ManagedZone
@@ -111,10 +111,10 @@ func (runtime *Runtime) applyGossipSnapshots(
 			continue
 		}
 		if action.Snapshot.Zone == managedZone {
-			runtime.logGossip("debug", "skipping_own_zone_snapshot", peerID, GossipPhaseApply, nil, map[string]any{"zone": action.Snapshot.Zone})
+			driver.logGossip("debug", "skipping_own_zone_snapshot", peerID, GossipPhaseApply, nil, map[string]any{"zone": action.Snapshot.Zone})
 			continue
 		}
-		limits := runtime.GossipConfig().Limits
+		limits := driver.GossipConfig().Limits
 		if limits.MaxZones <= 0 || limits.MaxRecords <= 0 || limits.MaxBytes <= 0 {
 			limits = corestate.DefaultSyncLimits()
 		}
@@ -129,7 +129,7 @@ func (runtime *Runtime) applyGossipSnapshots(
 	if len(batch) == 0 {
 		return GossipSnapshotApplyResult{}, nil
 	}
-	result, err := runtime.gossipState.ApplyRemoteBatch(ctx, peerID, batch, runtime.schedulerForRead().clock.Now())
+	result, err := driver.gossipState.ApplyRemoteBatch(ctx, peerID, batch, driver.schedulerForRead().clock.Now())
 	if err != nil {
 		return GossipSnapshotApplyResult{}, err
 	}
@@ -140,24 +140,24 @@ func (runtime *Runtime) applyGossipSnapshots(
 		} else {
 			outcome.Err = errors.New("snapshot apply produced no outcome")
 		}
-		runtime.logGossipSnapshotOutcome(peerID, managedZone, action, outcome)
+		driver.logGossipSnapshotOutcome(peerID, managedZone, action, outcome)
 		if action.ReportResult {
-			_ = runtime.PostGossip(&gossip.SnapshotAppliedEvent{PeerID: peerID, Zone: action.Snapshot.Zone, Err: outcome.Err})
+			_ = driver.PostGossip(&gossip.SnapshotAppliedEvent{PeerID: peerID, Zone: action.Snapshot.Zone, Err: outcome.Err})
 		}
 	}
 	return GossipSnapshotApplyResult{NetworkChanged: result.Changes.NetworkChanged}, nil
 }
 
-func (runtime *Runtime) logGossipSnapshotOutcome(peerID string, managedZone zone.ZonePath, action gossip.ApplySnapshotAction, outcome corestate.RemoteApplyOutcome) {
+func (driver *GossipDriver) logGossipSnapshotOutcome(peerID string, managedZone zone.ZonePath, action gossip.ApplySnapshotAction, outcome corestate.RemoteApplyOutcome) {
 	if outcome.Err != nil {
-		runtime.logGossip("warn", "zone_apply_failed", peerID, GossipPhaseApply, outcome.Err, map[string]any{"zone": action.Snapshot.Zone, "reason": gossip.RejectReason(outcome.Err)})
+		driver.logGossip("warn", "zone_apply_failed", peerID, GossipPhaseApply, outcome.Err, map[string]any{"zone": action.Snapshot.Zone, "reason": gossip.RejectReason(outcome.Err)})
 		return
 	}
 	if outcome.ManagedZoneAdopted {
-		runtime.logGossip("info", "auto_join_adopted", peerID, GossipPhaseApply, nil, map[string]any{"zone": managedZone})
+		driver.logGossip("info", "auto_join_adopted", peerID, GossipPhaseApply, nil, map[string]any{"zone": managedZone})
 	}
 	if outcome.AuthorityRefreshed {
-		runtime.logGossip("info", "managed_zone_authority_refreshed", peerID, GossipPhaseApply, nil, map[string]any{"zone": managedZone})
+		driver.logGossip("info", "managed_zone_authority_refreshed", peerID, GossipPhaseApply, nil, map[string]any{"zone": managedZone})
 	}
 	if outcome.Result == nil || (!outcome.Result.NetworkChanged && !outcome.ManagedZoneAdopted && !outcome.AuthorityRefreshed) {
 		return
@@ -166,7 +166,7 @@ func (runtime *Runtime) logGossipSnapshotOutcome(peerID string, managedZone zone
 	if via == "" {
 		via = "event_loop"
 	}
-	runtime.logGossip("info", "zone_applied", peerID, GossipPhaseApply, nil, map[string]any{
+	driver.logGossip("info", "zone_applied", peerID, GossipPhaseApply, nil, map[string]any{
 		"zone": action.Snapshot.Zone, "records": outcome.Result.Records, "delegations": outcome.Result.Delegation, "via": via,
 	})
 }

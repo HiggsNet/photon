@@ -15,72 +15,72 @@ var (
 	ErrGossipTransportRequired  = errors.New("gossip transport is required")
 )
 
-// BindGossipTransport installs the common UDP transport used by Runtime for
+// BindGossipTransport installs the common UDP transport used by GossipDriver for
 // send, reply routing and its rebuildable peer address book. Composition may
 // replace it before the receive loop starts, for example after config reload.
-func (runtime *Runtime) BindGossipTransport(transport *gossip.Transport) error {
-	if runtime == nil {
-		return ErrRuntimeStopped
+func (driver *GossipDriver) BindGossipTransport(transport *gossip.Transport) error {
+	if driver == nil {
+		return ErrGossipDriverStopped
 	}
 	if transport == nil {
 		return ErrGossipTransportRequired
 	}
-	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
-	if runtime.stopped {
-		return ErrRuntimeStopped
+	driver.mu.Lock()
+	defer driver.mu.Unlock()
+	if driver.stopped {
+		return ErrGossipDriverStopped
 	}
-	if runtime.datagramReceiver != nil && runtime.gossipTransport != transport {
+	if driver.datagramReceiver != nil && driver.gossipTransport != transport {
 		return ErrDatagramReceiverStarted
 	}
-	runtime.gossipTransport = transport
+	driver.gossipTransport = transport
 	return nil
 }
 
 // StartGossipTransport binds the concrete common transport and starts its
-// single runtime-owned receive loop.
-func (runtime *Runtime) StartGossipTransport(ctx context.Context, transport *gossip.Transport, onError func(error)) error {
-	if err := runtime.BindGossipTransport(transport); err != nil {
+// single driver-owned receive loop.
+func (driver *GossipDriver) StartGossipTransport(ctx context.Context, transport *gossip.Transport, onError func(error)) error {
+	if err := driver.BindGossipTransport(transport); err != nil {
 		return err
 	}
-	return runtime.startGossipDatagramReceiver(ctx, transport, onError)
+	return driver.startGossipDatagramReceiver(ctx, transport, onError)
 }
 
-func (runtime *Runtime) gossipTransportForRead() *gossip.Transport {
-	if runtime == nil {
+func (driver *GossipDriver) gossipTransportForRead() *gossip.Transport {
+	if driver == nil {
 		return nil
 	}
-	runtime.mu.RLock()
-	defer runtime.mu.RUnlock()
-	return runtime.gossipTransport
+	driver.mu.RLock()
+	defer driver.mu.RUnlock()
+	return driver.gossipTransport
 }
 
-// Transport returns the common gossip transport owned by Runtime. Callers may
+// Transport returns the common gossip transport owned by GossipDriver. Callers may
 // inspect or update its address book, but must not keep a second transport
 // pointer as an independent source of truth.
-func (runtime *Runtime) Transport() *gossip.Transport {
-	return runtime.gossipTransportForRead()
+func (driver *GossipDriver) Transport() *gossip.Transport {
+	return driver.gossipTransportForRead()
 }
 
-// datagramReceiver is the receive/close capability owned by Runtime.
+// datagramReceiver is the receive/close capability owned by GossipDriver.
 // Protocol decoding and peer validation may still live in the adapter; the
-// common runtime owns the single blocking receive goroutine, event-queue
+// common driver owns the single blocking receive goroutine, event-queue
 // backpressure and shutdown ordering.
 type datagramReceiver interface {
 	Receive() (*gossip.Packet, error)
 	Close() error
 }
 
-// startGossipDatagramReceiver starts the runtime-owned, bounded receive loop.
-// Runtime.Stop cancels the loop, closes the injected receiver to unblock a
+// startGossipDatagramReceiver starts the driver-owned, bounded receive loop.
+// GossipDriver.Stop cancels the loop, closes the injected receiver to unblock a
 // blocking Receive call, and waits for the receive goroutine to exit.
-func (runtime *Runtime) startGossipDatagramReceiver(
+func (driver *GossipDriver) startGossipDatagramReceiver(
 	ctx context.Context,
 	receiver datagramReceiver,
 	onError func(error),
 ) error {
-	if runtime == nil {
-		return ErrRuntimeStopped
+	if driver == nil {
+		return ErrGossipDriverStopped
 	}
 	if receiver == nil {
 		return ErrDatagramReceiverRequired
@@ -89,32 +89,32 @@ func (runtime *Runtime) startGossipDatagramReceiver(
 		ctx = context.Background()
 	}
 	receiveCtx, cancel := context.WithCancel(ctx)
-	runtime.mu.Lock()
-	if runtime.stopped {
-		runtime.mu.Unlock()
+	driver.mu.Lock()
+	if driver.stopped {
+		driver.mu.Unlock()
 		cancel()
-		return ErrRuntimeStopped
+		return ErrGossipDriverStopped
 	}
-	if runtime.datagramReceiver != nil {
-		runtime.mu.Unlock()
+	if driver.datagramReceiver != nil {
+		driver.mu.Unlock()
 		cancel()
 		return ErrDatagramReceiverStarted
 	}
-	runtime.datagramReceiver = receiver
-	runtime.datagramCancel = cancel
-	runtime.datagramWG.Add(1)
-	runtime.mu.Unlock()
+	driver.datagramReceiver = receiver
+	driver.datagramCancel = cancel
+	driver.datagramWG.Add(1)
+	driver.mu.Unlock()
 
-	go runtime.runGossipDatagramReceiver(receiveCtx, receiver, onError)
+	go driver.runGossipDatagramReceiver(receiveCtx, receiver, onError)
 	return nil
 }
 
-func (runtime *Runtime) runGossipDatagramReceiver(
+func (driver *GossipDriver) runGossipDatagramReceiver(
 	ctx context.Context,
 	receiver datagramReceiver,
 	onError func(error),
 ) {
-	defer runtime.datagramWG.Done()
+	defer driver.datagramWG.Done()
 	var closeOnce sync.Once
 	closeReceiver := func() { closeOnce.Do(func() { _ = receiver.Close() }) }
 	stopClose := context.AfterFunc(ctx, closeReceiver)
@@ -143,7 +143,7 @@ func (runtime *Runtime) runGossipDatagramReceiver(
 			}
 		}
 		select {
-		case runtime.events <- GossipPacketReceived{Packet: packet}:
+		case driver.events <- GossipPacketReceived{Packet: packet}:
 		case <-ctx.Done():
 			return
 		}

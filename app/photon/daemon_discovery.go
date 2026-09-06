@@ -7,28 +7,28 @@ import (
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 )
 
-// updateDiscoveredPeers supplies detached owner data to HostRuntime. Peer
+// updateDiscoveredPeers supplies detached owner data to GossipDriver. Peer
 // selection, endpoint ordering, checkpoint patches and address-book updates
 // are common runtime responsibilities.
 func (d *Daemon) updateDiscoveredPeers() {
-	if d == nil || d.StateStore == nil || d.hostRuntime == nil || d.hostRuntime.Transport() == nil {
+	if d == nil || d.StateStore == nil || d.gossipDriver == nil || d.gossipDriver.Transport() == nil {
 		return
 	}
-	if err := d.hostRuntime.RefreshGossipDiscovery(context.Background(), d.currentGossipSuppressions(), d.now(), d.hostRuntime.Transport()); err != nil {
+	if err := d.gossipDriver.RefreshGossipDiscovery(context.Background(), d.currentGossipSuppressions(), d.now(), d.gossipDriver.Transport()); err != nil {
 		d.logWarn("endpoint", "discovered_peer_commit_failed", map[string]any{"error": err})
 	}
 }
 
 // currentGossipConfig derives app/platform gossip settings from the current
 // app config and verified identity. Protocol execution keeps its own detached
-// configuration inside host.Runtime.
+// configuration inside host.GossipDriver.
 func (d *Daemon) currentGossipConfig() *gossipStartupConfig {
 	if d == nil || d.App == nil || d.App.Config == nil {
 		return nil
 	}
 	config := gossipStartupConfigFromAppConfig(d.App.Config, nil)
-	if d.hostRuntime != nil {
-		driverConfig := d.hostRuntime.GossipConfig()
+	if d.gossipDriver != nil {
+		driverConfig := d.gossipDriver.GossipConfig()
 		if driverConfig.PeerID != "" {
 			config.PeerID = driverConfig.PeerID
 		}
@@ -70,32 +70,32 @@ func peerCleanupSuppressions(cleanups map[string]peerLifecycleCleanupState) map[
 	return suppressed
 }
 
-func gossipHostRuntimeConfig(config *gossipStartupConfig, app *appConfig, logger *appLogger) corehost.GossipRuntimeConfig {
+func gossipDriverConfig(config *gossipStartupConfig, app *appConfig, logger *appLogger) corehost.GossipDriverConfig {
 	if config == nil {
-		return corehost.GossipRuntimeConfig{}
+		return corehost.GossipDriverConfig{}
 	}
 	bootstrapPeers := make([]string, 0, len(config.Bootstrap))
 	for _, peer := range config.Bootstrap {
 		bootstrapPeers = append(bootstrapPeers, peer.ID)
 	}
-	runtimeConfig := corehost.GossipRuntimeConfig{
+	driverConfig := corehost.GossipDriverConfig{
 		PeerID: config.PeerID,
 		Limits: syncLimits(config),
-		Log:    gossipRuntimeLogger(logger),
+		Log:    gossipDriverLogger(logger),
 		Discovery: corehost.GossipDiscoveryConfig{
 			Bootstrap:      configuredKnownPeers(config),
 			BootstrapPeers: bootstrapPeers,
 		},
 	}
 	if app != nil {
-		runtimeConfig.Discovery.EndpointGrace = app.EndpointGrace
-		runtimeConfig.Discovery.SourceOrder = append([]string(nil), app.EndpointSourceOrder...)
+		driverConfig.Discovery.EndpointGrace = app.EndpointGrace
+		driverConfig.Discovery.SourceOrder = append([]string(nil), app.EndpointSourceOrder...)
 	}
-	return runtimeConfig
+	return driverConfig
 }
 
-func gossipRuntimeLogger(logger *appLogger) func(corehost.GossipRuntimeLog) {
-	return func(event corehost.GossipRuntimeLog) {
+func gossipDriverLogger(logger *appLogger) func(corehost.GossipDriverLog) {
+	return func(event corehost.GossipDriverLog) {
 		if logger == nil {
 			return
 		}

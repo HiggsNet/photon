@@ -101,7 +101,7 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 			}
 			continue
 		}
-		resolvedBackend, preflight, resolveErr := d.linuxRuntime.ResolveFirewallBackend(ctx, spec)
+		resolvedBackend, preflight, resolveErr := d.linuxDriver.ResolveFirewallBackend(ctx, spec)
 		summary.Backend = preflight.Backend
 		if resolveErr != nil {
 			entry := getOrCreateFirewallEntry(summary, instCfg.ID)
@@ -136,7 +136,7 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 			OwnerPrefix: instCfg.OwnerPrefix,
 			Token:       firewall.OwnerToken(spec),
 		}
-		result, err := d.linuxRuntime.ApplyFirewall(ctx, spec, resolvedBackend, owner, desired)
+		result, err := d.linuxDriver.ApplyFirewall(ctx, spec, resolvedBackend, owner, desired)
 		entry := getOrCreateFirewallEntry(summary, instCfg.ID)
 		entry.LastRunUnix = now.Unix()
 		entry.Backend = resolvedBackend

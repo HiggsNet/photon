@@ -275,13 +275,13 @@ func TestObserverPeersAPIIncludesEndpointAndDiagnosticsDetails(t *testing.T) {
 			},
 		}
 	})
-	srv.daemon.hostRuntime.Observability.Update("node-b.catofes.", now, func(diagnostics *observability.PeerDiagnostics) {
+	srv.daemon.gossipDriver.Observability.Update("node-b.catofes.", now, func(diagnostics *observability.PeerDiagnostics) {
 		diagnostics.LastUpdateSource = "announce"
 		diagnostics.LastRelaySuppression = "relay_fanout_limited"
 		diagnostics.ObservedSource = "verified_packet"
 		diagnostics.DatagramStats = &observability.PeerDatagramStats{ChunkFallbacks: 2}
 	})
-	srv.daemon.hostRuntime.Observability.Update("node-b.catofes.", now, func(diagnostics *observability.PeerDiagnostics) {
+	srv.daemon.gossipDriver.Observability.Update("node-b.catofes.", now, func(diagnostics *observability.PeerDiagnostics) {
 		diagnostics.ObjectPullStats = &observability.PeerObjectPullStats{Attempts: 3, Successes: 2, LastUnix: now.Unix(), LastObject: "zone", LastZone: "node-b.catofes.", LastSourcePeer: "node-b.catofes."}
 	})
 

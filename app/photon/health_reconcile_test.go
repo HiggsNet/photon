@@ -200,8 +200,8 @@ func TestConfigureHealthManagerUsesRealProber(t *testing.T) {
 		App: &AppContext{Config: &appConfig{Health: cfg}},
 	}
 	driver := &ipsec.DryRunDriver{}
-	d.linuxRuntime = newTestLinuxRuntime(driver, driver)
-	t.Cleanup(func() { _ = d.closeLinuxRuntime() })
+	d.linuxDriver = newTestLinuxDriver(driver, driver)
+	t.Cleanup(func() { _ = d.closeLinuxDriver() })
 	d.configureHealthManager()
 	if d.health == nil {
 		t.Fatal("health manager was not configured")

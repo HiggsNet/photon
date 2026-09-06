@@ -10,13 +10,13 @@ import (
 
 func TestWriteBirdConfigCreatesPrivateFile(t *testing.T) {
 	dryRun := &transportipsec.DryRunDriver{}
-	runtime, err := NewRuntime(RuntimeOptions{IPsecDriver: dryRun, XFRMDriver: dryRun})
+	driver, err := NewLinuxDriver(LinuxDriverOptions{IPsecDriver: dryRun, XFRMDriver: dryRun})
 	if err != nil {
-		t.Fatalf("NewRuntime: %v", err)
+		t.Fatalf("NewLinuxDriver: %v", err)
 	}
 	path := filepath.Join(t.TempDir(), "bird", "bird.conf")
 	want := []byte("router id 10.0.0.1;\n")
-	if err := runtime.WriteBirdConfig(path, want); err != nil {
+	if err := driver.WriteBirdConfig(path, want); err != nil {
 		t.Fatalf("WriteBirdConfig: %v", err)
 	}
 	got, err := os.ReadFile(path)

@@ -12,9 +12,9 @@ import (
 )
 
 // CleanupLinkInstances tears down the selected Photon-owned StrongSwan/XFRM
-// resources and returns the remaining platform runtime instances. Missing IDs
+// resources and returns the remaining platform driver instances. Missing IDs
 // are already clean and therefore succeed, making retries idempotent.
-func (r *Runtime) CleanupIPsecLinks(ctx context.Context, instances map[string]transportipsec.LinkInstance, ids []string) (map[string]transportipsec.LinkInstance, int, error) {
+func (r *LinuxDriver) CleanupIPsecLinks(ctx context.Context, instances map[string]transportipsec.LinkInstance, ids []string) (map[string]transportipsec.LinkInstance, int, error) {
 	remaining := maps.Clone(instances)
 	if remaining == nil {
 		remaining = make(map[string]transportipsec.LinkInstance)
@@ -50,8 +50,8 @@ func (r *Runtime) CleanupIPsecLinks(ctx context.Context, instances map[string]tr
 }
 
 // CleanupOrphanConnections removes Photon-named StrongSwan connections that
-// are no longer referenced by platform runtime state.
-func (r *Runtime) CleanupIPsecOrphans(ctx context.Context, keep map[string]bool) (int, error) {
+// are no longer referenced by platform state.
+func (r *LinuxDriver) CleanupIPsecOrphans(ctx context.Context, keep map[string]bool) (int, error) {
 	if r == nil || r.ipsecDriver == nil {
 		return 0, errors.New("ipsec driver is nil")
 	}

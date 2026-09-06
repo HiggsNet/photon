@@ -11,24 +11,24 @@ import (
 )
 
 // recordGossipObservedPath persists one authenticated packet source after
-// validating it against the Runtime's current verified state.
-func (runtime *Runtime) recordGossipObservedPath(ctx context.Context, peerID, endpoint string, suppressed map[string]bool, now time.Time) (bool, error) {
-	if runtime == nil || runtime.gossipState == nil {
-		return false, ErrRuntimeStopped
+// validating it against the GossipDriver's current verified state.
+func (driver *GossipDriver) recordGossipObservedPath(ctx context.Context, peerID, endpoint string, suppressed map[string]bool, now time.Time) (bool, error) {
+	if driver == nil || driver.gossipState == nil {
+		return false, ErrGossipDriverStopped
 	}
-	patch, ok := PlanVerifiedObservedCheckpoint(runtime.GossipDiscoveryInput(suppressed), peerID, endpoint, now)
+	patch, ok := PlanVerifiedObservedCheckpoint(driver.GossipDiscoveryInput(suppressed), peerID, endpoint, now)
 	if !ok {
 		return false, nil
 	}
-	_, err := runtime.gossipState.UpdatePeerCheckpoints(ctx, map[string]corestate.PeerCheckpointPatch{peerID: patch})
+	_, err := driver.gossipState.UpdatePeerCheckpoints(ctx, map[string]corestate.PeerCheckpointPatch{peerID: patch})
 	return err == nil, err
 }
 
 // RecordGossipRejectedObject stores a bounded retry-suppression hint for a
 // chunk whose advertised object could not be decoded or verified.
-func (runtime *Runtime) RecordGossipRejectedObject(ctx context.Context, peerID string, chunk *gossip.ObjectChunk, rejection error, now time.Time) error {
-	if runtime == nil || runtime.gossipState == nil {
-		return ErrRuntimeStopped
+func (driver *GossipDriver) RecordGossipRejectedObject(ctx context.Context, peerID string, chunk *gossip.ObjectChunk, rejection error, now time.Time) error {
+	if driver == nil || driver.gossipState == nil {
+		return ErrGossipDriverStopped
 	}
 	if peerID == "" || chunk == nil || chunk.Object != gossip.ObjectPullZone || !chunk.Zone.Valid() || len(chunk.RootHash) == 0 {
 		return nil
@@ -37,7 +37,7 @@ func (runtime *Runtime) RecordGossipRejectedObject(ctx context.Context, peerID s
 	if reason == "" {
 		reason = "verify_failed"
 	}
-	_, err := runtime.gossipState.UpdatePeerCheckpoints(ctx, map[string]corestate.PeerCheckpointPatch{peerID: {
+	_, err := driver.gossipState.UpdatePeerCheckpoints(ctx, map[string]corestate.PeerCheckpointPatch{peerID: {
 		Reject: map[zone.ZonePath]corestate.RejectedObject{chunk.Zone: {
 			RootHash: append([]byte(nil), chunk.RootHash...), Reason: reason,
 			UpdatedUnix: now.Unix(), UntilUnix: now.Add(corestate.RejectedObjectTTL).Unix(),
@@ -48,14 +48,14 @@ func (runtime *Runtime) RecordGossipRejectedObject(ctx context.Context, peerID s
 
 // RecordGossipRelay persists relay throttling state without reading or
 // rewriting unrelated peer checkpoint fields.
-func (runtime *Runtime) RecordGossipRelay(ctx context.Context, peerID, catalogRoot string, now time.Time) (bool, error) {
-	if runtime == nil || runtime.gossipState == nil {
-		return false, ErrRuntimeStopped
+func (driver *GossipDriver) RecordGossipRelay(ctx context.Context, peerID, catalogRoot string, now time.Time) (bool, error) {
+	if driver == nil || driver.gossipState == nil {
+		return false, ErrGossipDriverStopped
 	}
 	if peerID == "" {
 		return false, errors.New("gossip relay peer is required")
 	}
-	result, err := runtime.gossipState.UpdatePeerCheckpoints(ctx, map[string]corestate.PeerCheckpointPatch{peerID: {
+	result, err := driver.gossipState.UpdatePeerCheckpoints(ctx, map[string]corestate.PeerCheckpointPatch{peerID: {
 		LastRelayUnix:    corestate.PatchField[int64]{Set: true, Value: now.Unix()},
 		LastRelayRootHex: corestate.PatchField[string]{Set: true, Value: catalogRoot},
 	}})
@@ -66,14 +66,14 @@ func (runtime *Runtime) RecordGossipRelay(ctx context.Context, peerID, catalogRo
 // one FSM event into one checkpoint-only Store transaction. Backoff actions
 // retain protocol order and terminal completion is applied last, matching the
 // session's final outcome without involving a platform mutation batch.
-func (runtime *Runtime) commitGossipEventCheckpoint(ctx context.Context, session *gossip.SyncSession, backoffs []gossip.RecordBackoffAction, now time.Time) error {
-	if runtime == nil || runtime.gossipState == nil {
+func (driver *GossipDriver) commitGossipEventCheckpoint(ctx context.Context, session *gossip.SyncSession, backoffs []gossip.RecordBackoffAction, now time.Time) error {
+	if driver == nil || driver.gossipState == nil {
 		return nil
 	}
 	if len(backoffs) == 0 && (session == nil || !session.Done()) {
 		return nil
 	}
-	view := runtime.gossipState.ReadView()
+	view := driver.gossipState.ReadView()
 	peers := make(map[string]corestate.PeerCheckpoint)
 	patches := make(map[string]corestate.PeerCheckpointPatch)
 	if view.Gossip != nil {
@@ -114,7 +114,7 @@ func (runtime *Runtime) commitGossipEventCheckpoint(ctx context.Context, session
 		}
 		patches[session.PeerID] = patch
 	}
-	_, err := runtime.gossipState.UpdatePeerCheckpoints(ctx, patches)
+	_, err := driver.gossipState.UpdatePeerCheckpoints(ctx, patches)
 	return err
 }
 

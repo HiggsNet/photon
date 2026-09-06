@@ -24,10 +24,10 @@ func objectPullTCPAddr(udpAddr string) string {
 }
 
 func (d *Daemon) objectPullResponse(req *gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
-	if d == nil || d.hostRuntime == nil {
+	if d == nil || d.gossipDriver == nil {
 		return &gossip.ObjectPullResponse{Error: "invalid request"}
 	}
-	response := d.hostRuntime.GossipObjectPullResponse(req, d.now())
+	response := d.gossipDriver.GossipObjectPullResponse(req, d.now())
 	if req != nil && response != nil && response.OK && response.Snapshot != nil {
 		encoded, _ := gossip.EncodeZoneSnapshotObject(response.Snapshot)
 		d.logDebug("object_pull", "lookup_snapshot", map[string]any{
@@ -41,19 +41,19 @@ func newDaemonObjectPullExecutor(d *Daemon) *corehost.GossipObjectPullExecutor {
 	return corehost.NewGossipObjectPullExecutor(corehost.GossipObjectPullExecutorConfig{
 		Client: photonlinux.GossipObjectPullClient{},
 		Discovery: func() corehost.GossipDiscoveryInput {
-			return d.hostRuntime.GossipDiscoveryInput(d.currentGossipSuppressions())
+			return d.gossipDriver.GossipDiscoveryInput(d.currentGossipSuppressions())
 		},
 		Now: d.now,
 	})
 }
 
 // startObjectPullServer binds the platform listener and gives its lifecycle to
-// HostRuntime.
+// GossipDriver.
 func startObjectPullServer(ctx context.Context, d *Daemon) error {
-	if d == nil || d.hostRuntime == nil || d.hostRuntime.Transport() == nil {
+	if d == nil || d.gossipDriver == nil || d.gossipDriver.Transport() == nil {
 		return errors.New("object-pull server runtime is not configured")
 	}
-	addr := objectPullTCPAddr(d.hostRuntime.Transport().LocalAddr().String())
+	addr := objectPullTCPAddr(d.gossipDriver.Transport().LocalAddr().String())
 	if addr == "" {
 		return nil
 	}
@@ -61,7 +61,7 @@ func startObjectPullServer(ctx context.Context, d *Daemon) error {
 	if err != nil {
 		return err
 	}
-	if err := d.hostRuntime.StartGossipObjectPullServer(ctx, listener, d.objectPullResponse, 0, 0); err != nil {
+	if err := d.gossipDriver.StartGossipObjectPullServer(ctx, listener, d.objectPullResponse, 0, 0); err != nil {
 		_ = listener.Close()
 		return err
 	}
@@ -79,11 +79,11 @@ func (d *Daemon) EnableEventLoopSync(clock corehost.Clock) {
 			clock = corehost.NewClock(nil)
 		}
 	}
-	if d.hostRuntime == nil {
-		d.hostRuntime = corehost.NewRuntime(clock, corehost.DefaultEventBuffer, d.StateStore.common, gossipHostRuntimeConfig(d.currentGossipConfig(), d.App.Config, d.Log))
+	if d.gossipDriver == nil {
+		d.gossipDriver = corehost.NewGossipDriver(clock, corehost.DefaultEventBuffer, d.StateStore.common, gossipDriverConfig(d.currentGossipConfig(), d.App.Config, d.Log))
 		return
 	}
-	d.hostRuntime.ResetScheduler(clock)
+	d.gossipDriver.ResetScheduler(clock)
 }
 
 func (d *Daemon) handleSyncTimerEvent(ctx context.Context, force bool) error {
@@ -91,7 +91,7 @@ func (d *Daemon) handleSyncTimerEvent(ctx context.Context, force bool) error {
 		return nil
 	}
 	now := d.now()
-	input := d.hostRuntime.GossipDiscoveryInput(d.currentGossipSuppressions())
+	input := d.gossipDriver.GossipDiscoveryInput(d.currentGossipSuppressions())
 	peers := corehost.GossipOutboundPeers(input, now)
 	if len(peers) == 0 {
 		return nil
@@ -109,14 +109,14 @@ func (d *Daemon) handleSyncTimerEvent(ctx context.Context, force bool) error {
 			})
 			continue
 		}
-		if d.hostRuntime.Gossip.HasActiveSession(peerID) {
+		if d.gossipDriver.Gossip.HasActiveSession(peerID) {
 			d.logDebug("sync", "event_loop_skipped", map[string]any{
 				"peer_id": peerID,
 				"reason":  "session_active",
 			})
 			continue
 		}
-		d.hostRuntime.Gossip.NewSession(peerID)
+		d.gossipDriver.Gossip.NewSession(peerID)
 		event := &gossip.SyncTimerEvent{
 			PeerID:       peerID,
 			LocalSummary: summary,
@@ -134,22 +134,22 @@ func (d *Daemon) processPacketEvent(packet *gossip.Packet, ctx context.Context) 
 	if packet == nil || packet.Message == nil {
 		return errors.New("packet event is nil")
 	}
-	_, err := d.hostRuntime.HandleGossipHostEvent(ctx, corehost.GossipPacketReceived{Packet: packet}, d.now(), d.currentGossipSuppressions())
+	_, err := d.gossipDriver.HandleGossipHostEvent(ctx, corehost.GossipPacketReceived{Packet: packet}, d.now(), d.currentGossipSuppressions())
 	return err
 }
 
 func (d *Daemon) handleSyncEvent(ctx context.Context, event gossip.SyncEvent) bool {
 	eventNow := d.now()
-	hostResult, err := d.hostRuntime.HandleGossipHostEvent(ctx, corehost.GossipEvent{Value: event}, eventNow, d.currentGossipSuppressions())
+	hostResult, err := d.gossipDriver.HandleGossipHostEvent(ctx, corehost.GossipEvent{Value: event}, eventNow, d.currentGossipSuppressions())
 	if err != nil {
 		return false
 	}
 	return d.observeSyncEventResult(hostResult.Session)
 }
 
-func (d *Daemon) handleHostRuntimeGossipEvent(ctx context.Context, hostEvent corehost.Event) (corehost.GossipHostEventResult, error) {
+func (d *Daemon) handleGossipDriverEvent(ctx context.Context, hostEvent corehost.Event) (corehost.GossipHostEventResult, error) {
 	now := d.now()
-	result, err := d.hostRuntime.HandleGossipHostEvent(ctx, hostEvent, now, d.currentGossipSuppressions())
+	result, err := d.gossipDriver.HandleGossipHostEvent(ctx, hostEvent, now, d.currentGossipSuppressions())
 	if result.Session.PeerID != "" && err == nil {
 		d.observeSyncEventResult(result.Session)
 	}
@@ -160,9 +160,9 @@ func (d *Daemon) observeSyncEventResult(result corehost.GossipEventResult) bool 
 	peerID := result.PeerID
 	if result.Done {
 		// Address health and the ephemeral reply route belong to the platform
-		// transport. The common Runtime has already removed the session, queued
+		// transport. The GossipDriver has already removed the session, queued
 		// any deferred hint and scheduled relay work before returning here.
-		transport := d.hostRuntime.Transport()
+		transport := d.gossipDriver.Transport()
 		if result.TerminalErr != nil && transport != nil && strings.Contains(result.TerminalErr.Error(), "timeout") {
 			if lastAddr := transport.LastSendAddr(peerID); lastAddr != nil {
 				transport.RecordAddrFailure(peerID, lastAddr)

@@ -2,7 +2,7 @@
 
 > Phase 10 的最新逐文件盘点和 platform runtime 持久化边界见
 > [`app-photon-runtime-migration-report.md`](app-photon-runtime-migration-report.md)。本文前半部分保留
-> Phase 6.7.7 的历史落地记录；后续迁移以新报告和 Photon Windows 设计中的 HostRuntime 边界为准。
+> Phase 6.7.7 的历史落地记录；后续迁移以新报告和 Photon Windows 设计中的 GossipDriver 边界为准。
 
 > **文档状态**：Phase 6.7.7 第一阶段已落地；本文继续作为后续模块化约束和演进记录。
 > **目标**：将 `app/photon` 从单一巨大 `main` 包逐步拆成清晰的应用模块。`app/photon` 最终只保留 executable wiring、CLI 命令注册、配置装配和少量 daemon live adapter；health、routing、revocation、peer lifecycle、observer、debug/inspect、firewall、IPsec reconcile、sync runtime 等可复用或相对独立的应用逻辑应下沉到 internal/package 模块中。

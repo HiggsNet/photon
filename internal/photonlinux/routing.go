@@ -34,23 +34,23 @@ type BirdClient interface {
 	Raw(context.Context, string) (string, error)
 }
 
-func (r *Runtime) EnsureRoutingVeth(ctx context.Context, spec bird.VethSpec) error {
+func (r *LinuxDriver) EnsureRoutingVeth(ctx context.Context, spec bird.VethSpec) error {
 	if r == nil || r.vethManager == nil {
-		return fmt.Errorf("linux routing runtime is not configured")
+		return fmt.Errorf("linux routing driver is not configured")
 	}
 	return r.vethManager.EnsureVethPair(ctx, spec)
 }
 
-func (r *Runtime) EnsureUpstreamRoutes(ctx context.Context, spec UpstreamRouteSpec) error {
+func (r *LinuxDriver) EnsureUpstreamRoutes(ctx context.Context, spec UpstreamRouteSpec) error {
 	if r == nil || r.upstreamRoutes == nil {
-		return fmt.Errorf("linux routing runtime is not configured")
+		return fmt.Errorf("linux routing driver is not configured")
 	}
 	return r.upstreamRoutes.EnsureRoutes(ctx, spec)
 }
 
-func (r *Runtime) WriteBirdConfig(path string, config []byte) error {
+func (r *LinuxDriver) WriteBirdConfig(path string, config []byte) error {
 	if r == nil {
-		return fmt.Errorf("linux routing runtime is not configured")
+		return fmt.Errorf("linux routing driver is not configured")
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create BIRD config directory: %w", err)
@@ -61,7 +61,7 @@ func (r *Runtime) WriteBirdConfig(path string, config []byte) error {
 	return nil
 }
 
-func (r *Runtime) BirdProcessStatus(ctx context.Context, netns string) (bool, *bird.ProcessExit) {
+func (r *LinuxDriver) BirdProcessStatus(ctx context.Context, netns string) (bool, *bird.ProcessExit) {
 	manager := r.birdProcessManager(netns)
 	if manager == nil {
 		return false, nil
@@ -69,15 +69,15 @@ func (r *Runtime) BirdProcessStatus(ctx context.Context, netns string) (bool, *b
 	return manager.IsRunning(ctx), manager.LastExit()
 }
 
-func (r *Runtime) StartBird(ctx context.Context, spec bird.BirdInstanceSpec) error {
+func (r *LinuxDriver) StartBird(ctx context.Context, spec bird.BirdInstanceSpec) error {
 	manager := r.birdProcessManager(spec.NetNSName)
 	if manager == nil {
-		return fmt.Errorf("linux BIRD runtime is not configured")
+		return fmt.Errorf("linux BIRD driver is not configured")
 	}
 	return manager.Start(ctx, spec)
 }
 
-func (r *Runtime) StopBird(ctx context.Context, spec bird.BirdInstanceSpec) error {
+func (r *LinuxDriver) StopBird(ctx context.Context, spec bird.BirdInstanceSpec) error {
 	manager := r.existingBirdProcessManager(spec.NetNSName)
 	if manager == nil {
 		return nil
@@ -85,28 +85,28 @@ func (r *Runtime) StopBird(ctx context.Context, spec bird.BirdInstanceSpec) erro
 	return manager.Stop(ctx, spec)
 }
 
-func (r *Runtime) ConfigureBird(ctx context.Context, socketPath, configPath string) error {
+func (r *LinuxDriver) ConfigureBird(ctx context.Context, socketPath, configPath string) error {
 	if r == nil {
-		return fmt.Errorf("linux BIRD runtime is not configured")
+		return fmt.Errorf("linux BIRD driver is not configured")
 	}
 	return r.birdClient(socketPath, nil).Configure(ctx, configPath)
 }
 
-func (r *Runtime) ObserveBird(ctx context.Context, socketPath string, routeTables ...string) (*bird.BirdObservedState, error) {
+func (r *LinuxDriver) ObserveBird(ctx context.Context, socketPath string, routeTables ...string) (*bird.BirdObservedState, error) {
 	if r == nil {
-		return nil, fmt.Errorf("linux BIRD runtime is not configured")
+		return nil, fmt.Errorf("linux BIRD driver is not configured")
 	}
 	return r.birdClient(socketPath, routeTables).Status(ctx)
 }
 
-func (r *Runtime) RawBird(ctx context.Context, socketPath, command string) (string, error) {
+func (r *LinuxDriver) RawBird(ctx context.Context, socketPath, command string) (string, error) {
 	if r == nil {
-		return "", fmt.Errorf("linux BIRD runtime is not configured")
+		return "", fmt.Errorf("linux BIRD driver is not configured")
 	}
 	return r.birdClient(socketPath, nil).Raw(ctx, command)
 }
 
-func (r *Runtime) birdProcessManager(netns string) bird.ProcessManager {
+func (r *LinuxDriver) birdProcessManager(netns string) bird.ProcessManager {
 	if r == nil {
 		return nil
 	}
@@ -126,7 +126,7 @@ func (r *Runtime) birdProcessManager(netns string) bird.ProcessManager {
 	return manager
 }
 
-func (r *Runtime) existingBirdProcessManager(netns string) bird.ProcessManager {
+func (r *LinuxDriver) existingBirdProcessManager(netns string) bird.ProcessManager {
 	if r == nil {
 		return nil
 	}
@@ -138,7 +138,7 @@ func (r *Runtime) existingBirdProcessManager(netns string) bird.ProcessManager {
 	return r.birdProcesses[netns]
 }
 
-func (r *Runtime) birdClient(socketPath string, routeTables []string) BirdClient {
+func (r *LinuxDriver) birdClient(socketPath string, routeTables []string) BirdClient {
 	if r != nil && r.birdClientFactory != nil {
 		return r.birdClientFactory(socketPath, 10*time.Second)
 	}

@@ -21,7 +21,7 @@ func newTestObserverServer() *observerServer {
 			PeerID: "test-node", ListenAddr: "127.0.0.1:33434",
 		}},
 	}
-	d.hostRuntime = corehost.NewRuntime(corehost.NewClock(nil), corehost.DefaultEventBuffer, store.common, corehost.GossipRuntimeConfig{})
+	d.gossipDriver = corehost.NewGossipDriver(corehost.NewClock(nil), corehost.DefaultEventBuffer, store.common, corehost.GossipDriverConfig{})
 	cfg := defaultObserverConfig()
 	cfg.Enabled = true
 	return newObserverServer(d, cfg)
@@ -38,7 +38,7 @@ func updateTestObserverOwners(srv *observerServer, fn func(*corestate.VerifiedSt
 	srv.daemon.StateStore.common = store
 	srv.daemon.StateStore.runtime = runtime
 	srv.daemon.StateStore.writeMu.Unlock()
-	srv.daemon.hostRuntime = corehost.NewRuntime(corehost.NewClock(nil), corehost.DefaultEventBuffer, store, corehost.GossipRuntimeConfig{})
+	srv.daemon.gossipDriver = corehost.NewGossipDriver(corehost.NewClock(nil), corehost.DefaultEventBuffer, store, corehost.GossipDriverConfig{})
 }
 
 func addObserverEndpointZone(t *testing.T, ns *zone.NetworkState, path zone.ZonePath, ip string, port uint16, now time.Time) {

@@ -10,11 +10,11 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
-func (runtime *Runtime) observeCatalogSummary(peerID string, summary *corestate.CatalogSummary, now time.Time) {
-	if runtime == nil || summary == nil {
+func (driver *GossipDriver) observeCatalogSummary(peerID string, summary *corestate.CatalogSummary, now time.Time) {
+	if driver == nil || summary == nil {
 		return
 	}
-	runtime.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
+	driver.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
 		if peer.DatagramStats == nil {
 			peer.DatagramStats = &observability.PeerDatagramStats{}
 		}
@@ -29,11 +29,11 @@ func (runtime *Runtime) observeCatalogSummary(peerID string, summary *corestate.
 	})
 }
 
-func (runtime *Runtime) observeCatalogPage(peerID string, page *corestate.CatalogPage, now time.Time) {
-	if runtime == nil || page == nil {
+func (driver *GossipDriver) observeCatalogPage(peerID string, page *corestate.CatalogPage, now time.Time) {
+	if driver == nil || page == nil {
 		return
 	}
-	runtime.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
+	driver.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
 		if peer.DatagramStats == nil {
 			peer.DatagramStats = &observability.PeerDatagramStats{}
 		}
@@ -45,11 +45,11 @@ func (runtime *Runtime) observeCatalogPage(peerID string, page *corestate.Catalo
 	})
 }
 
-func (runtime *Runtime) observeCatalogReject(peerID, cursor, reason string, now time.Time) {
-	if runtime == nil {
+func (driver *GossipDriver) observeCatalogReject(peerID, cursor, reason string, now time.Time) {
+	if driver == nil {
 		return
 	}
-	runtime.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
+	driver.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
 		if peer.DatagramStats == nil {
 			peer.DatagramStats = &observability.PeerDatagramStats{}
 		}
@@ -59,11 +59,11 @@ func (runtime *Runtime) observeCatalogReject(peerID, cursor, reason string, now 
 	})
 }
 
-func (runtime *Runtime) observeReadOnlyResponder(peerID, kind string, path zone.ZonePath, now time.Time) {
-	if runtime == nil {
+func (driver *GossipDriver) observeReadOnlyResponder(peerID, kind string, path zone.ZonePath, now time.Time) {
+	if driver == nil {
 		return
 	}
-	runtime.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
+	driver.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
 		peer.ReadOnlyResponder++
 		peer.LastResponderUnix = now.Unix()
 		peer.LastResponderKind = kind
@@ -71,11 +71,11 @@ func (runtime *Runtime) observeReadOnlyResponder(peerID, kind string, path zone.
 	})
 }
 
-func (runtime *Runtime) observeSyncHint(peerID, reason, suppression string, accepted bool, now time.Time) {
-	if runtime == nil {
+func (driver *GossipDriver) observeSyncHint(peerID, reason, suppression string, accepted bool, now time.Time) {
+	if driver == nil {
 		return
 	}
-	runtime.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
+	driver.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
 		if accepted {
 			peer.HintAccepted++
 		} else {
@@ -87,41 +87,41 @@ func (runtime *Runtime) observeSyncHint(peerID, reason, suppression string, acce
 	})
 }
 
-func (runtime *Runtime) observeRelaySuccess(peerID, sourcePeerID string, now time.Time) {
-	if runtime == nil || peerID == "" {
+func (driver *GossipDriver) observeRelaySuccess(peerID, sourcePeerID string, now time.Time) {
+	if driver == nil || peerID == "" {
 		return
 	}
-	runtime.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
+	driver.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
 		peer.LastUpdateSource = sourcePeerID
 		peer.LastRelaySuppression = ""
 		peer.LastRelaySuppressedAt = 0
 	})
 }
 
-func (runtime *Runtime) observeRelaySuppression(peerID, reason string, now time.Time) {
-	if runtime == nil || peerID == "" || reason == "" {
+func (driver *GossipDriver) observeRelaySuppression(peerID, reason string, now time.Time) {
+	if driver == nil || peerID == "" || reason == "" {
 		return
 	}
-	runtime.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
+	driver.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
 		peer.LastRelaySuppression = reason
 		peer.LastRelaySuppressedAt = now.Unix()
 	})
 }
 
-func (runtime *Runtime) observeObservedSource(peerID string, source gossip.MessageType, now time.Time) {
-	if runtime == nil || peerID == "" {
+func (driver *GossipDriver) observeObservedSource(peerID string, source gossip.MessageType, now time.Time) {
+	if driver == nil || peerID == "" {
 		return
 	}
-	runtime.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
+	driver.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
 		peer.ObservedSource = string(source)
 	})
 }
 
-func (runtime *Runtime) observeActivePull(peerID, event string, session *gossip.SyncSession, now time.Time) {
-	if runtime == nil {
+func (driver *GossipDriver) observeActivePull(peerID, event string, session *gossip.SyncSession, now time.Time) {
+	if driver == nil {
 		return
 	}
-	runtime.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
+	driver.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
 		if session != nil {
 			peer.ActivePullState = string(session.State)
 		} else {
@@ -132,11 +132,11 @@ func (runtime *Runtime) observeActivePull(peerID, event string, session *gossip.
 	})
 }
 
-func (runtime *Runtime) observeDatagramTooLarge(peerID, object string, path zone.ZonePath, key string, size, limit int, now time.Time) {
-	if runtime == nil {
+func (driver *GossipDriver) observeDatagramTooLarge(peerID, object string, path zone.ZonePath, key string, size, limit int, now time.Time) {
+	if driver == nil {
 		return
 	}
-	runtime.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
+	driver.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
 		if peer.DatagramStats == nil {
 			peer.DatagramStats = &observability.PeerDatagramStats{}
 		}
@@ -151,11 +151,11 @@ func (runtime *Runtime) observeDatagramTooLarge(peerID, object string, path zone
 	})
 }
 
-func (runtime *Runtime) observeChunkFallback(peerID string, count int, now time.Time) {
-	if runtime == nil || count <= 0 {
+func (driver *GossipDriver) observeChunkFallback(peerID string, count int, now time.Time) {
+	if driver == nil || count <= 0 {
 		return
 	}
-	runtime.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
+	driver.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
 		if peer.DatagramStats == nil {
 			peer.DatagramStats = &observability.PeerDatagramStats{}
 		}
@@ -163,11 +163,11 @@ func (runtime *Runtime) observeChunkFallback(peerID string, count int, now time.
 	})
 }
 
-func (runtime *Runtime) observeChunkRepair(peerID string, ignored bool, chunks int, now time.Time) {
-	if runtime == nil {
+func (driver *GossipDriver) observeChunkRepair(peerID string, ignored bool, chunks int, now time.Time) {
+	if driver == nil {
 		return
 	}
-	runtime.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
+	driver.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
 		if peer.DatagramStats == nil {
 			peer.DatagramStats = &observability.PeerDatagramStats{}
 		}
@@ -180,11 +180,11 @@ func (runtime *Runtime) observeChunkRepair(peerID string, ignored bool, chunks i
 	})
 }
 
-func (runtime *Runtime) observeObjectPullAttempt(peerID string, path zone.ZonePath, now time.Time) {
-	if runtime == nil {
+func (driver *GossipDriver) observeObjectPullAttempt(peerID string, path zone.ZonePath, now time.Time) {
+	if driver == nil {
 		return
 	}
-	runtime.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
+	driver.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
 		if peer.ObjectPullStats == nil {
 			peer.ObjectPullStats = &observability.PeerObjectPullStats{}
 		}
@@ -198,11 +198,11 @@ func (runtime *Runtime) observeObjectPullAttempt(peerID string, path zone.ZonePa
 	})
 }
 
-func (runtime *Runtime) observeObjectPullResult(result GossipObjectPullCompletion, now time.Time) {
-	if runtime == nil {
+func (driver *GossipDriver) observeObjectPullResult(result GossipObjectPullCompletion, now time.Time) {
+	if driver == nil {
 		return
 	}
-	runtime.Observability.Update(result.PeerID, now, func(peer *observability.PeerDiagnostics) {
+	driver.Observability.Update(result.PeerID, now, func(peer *observability.PeerDiagnostics) {
 		if peer.ObjectPullStats == nil {
 			peer.ObjectPullStats = &observability.PeerObjectPullStats{}
 		}

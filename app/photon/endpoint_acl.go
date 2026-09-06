@@ -264,7 +264,7 @@ func (d *Daemon) commitEndpointACLMutation(rev uint64, acls map[string]endpointA
 	} else if !committed {
 		return errDaemonStateRevisionStale
 	}
-	if d.hostRuntime != nil && d.hostRuntime.Transport() != nil {
+	if d.gossipDriver != nil && d.gossipDriver.Transport() != nil {
 		d.updateDiscoveredPeers()
 	}
 	d.notifyStateChanged()
@@ -277,7 +277,7 @@ func (d *Daemon) hasEnforcingHostFirewall() bool {
 	}
 	for _, instance := range firewallInstancesEnabled(d.App.Config) {
 		if instance.IsHost && instance.Mode == firewall.ModeManaged && instance.Backend != firewall.BackendNone {
-			backend, _, err := d.linuxRuntime.ResolveFirewallBackend(context.Background(), firewall.FirewallInstanceSpec{
+			backend, _, err := d.linuxDriver.ResolveFirewallBackend(context.Background(), firewall.FirewallInstanceSpec{
 				ID: instance.ID, Backend: instance.Backend, NativeHooks: instance.NativeHooks,
 			})
 			if err != nil {

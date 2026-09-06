@@ -77,19 +77,19 @@ func TestXFRMReconcileReusesHealthyBatchObservation(t *testing.T) {
 	}
 	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, time.Unix(4000, 0))
 	driver := &batchObservedIPsecDriver{}
-	platformRuntime := newTestLinuxRuntime(driver, driver)
+	platformDriver := newTestLinuxDriver(driver, driver)
 	instances := map[string]ipsec.LinkInstance{inst.ID: inst}
 
-	observed := platformRuntime.ObserveXFRMLinks(context.Background(), []ipsec.TransportLinkSpec{spec}, instances, nil)
+	observed := platformDriver.ObserveXFRMLinks(context.Background(), []ipsec.TransportLinkSpec{spec}, instances, nil)
 	if observed == nil || driver.batchCalls != 1 {
 		t.Fatalf("batch observation = %v, calls = %d", observed, driver.batchCalls)
 	}
-	if _, missing, err := platformRuntime.FilterSAsWithMissingXFRMLinks(context.Background(), []ipsec.TransportLinkSpec{spec}, instances, nil, observed); err != nil {
+	if _, missing, err := platformDriver.FilterSAsWithMissingXFRMLinks(context.Background(), []ipsec.TransportLinkSpec{spec}, instances, nil, observed); err != nil {
 		t.Fatalf("filterSAsWithMissingXFRMLinks: %v", err)
 	} else if len(missing) != 0 {
 		t.Fatalf("missing = %+v, want none", missing)
 	}
-	if err := platformRuntime.MaintainXFRMInterfaces(context.Background(), []ipsec.TransportLinkSpec{spec}, instances, []ipsec.ReconcileAction{{Action: ipsec.ReconcileActionNoop, Instance: &inst}}, nil, nil, observed); err != nil {
+	if err := platformDriver.MaintainXFRMInterfaces(context.Background(), []ipsec.TransportLinkSpec{spec}, instances, []ipsec.ReconcileAction{{Action: ipsec.ReconcileActionNoop, Instance: &inst}}, nil, nil, observed); err != nil {
 		t.Fatalf("maintainExistingXFRMInterfaces: %v", err)
 	}
 	if driver.inspectCalls != 0 || driver.observedEnsureCall != 0 || len(driver.Interfaces) != 0 || len(driver.Addresses) != 0 {
@@ -101,14 +101,14 @@ func TestXFRMReconcileFallsBackWhenBatchObservationFails(t *testing.T) {
 	spec := ipsec.TransportLinkSpec{TransportID: "ipsec-main-ab", InterfaceName: "phx1", NetNS: "photon", LocalTunnelAddr: netip.MustParseAddr("fe80::1")}
 	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, time.Unix(4000, 0))
 	driver := &batchObservedIPsecDriver{batchErr: errors.New("unsupported iproute2 JSON")}
-	platformRuntime := newTestLinuxRuntime(driver, driver)
+	platformDriver := newTestLinuxDriver(driver, driver)
 	instances := map[string]ipsec.LinkInstance{inst.ID: inst}
 
-	observed := platformRuntime.ObserveXFRMLinks(context.Background(), []ipsec.TransportLinkSpec{spec}, instances, nil)
+	observed := platformDriver.ObserveXFRMLinks(context.Background(), []ipsec.TransportLinkSpec{spec}, instances, nil)
 	if observed != nil {
 		t.Fatal("failed batch observation should return nil for fail-closed fallback")
 	}
-	if _, _, err := platformRuntime.FilterSAsWithMissingXFRMLinks(context.Background(), []ipsec.TransportLinkSpec{spec}, instances, nil, observed); err != nil {
+	if _, _, err := platformDriver.FilterSAsWithMissingXFRMLinks(context.Background(), []ipsec.TransportLinkSpec{spec}, instances, nil, observed); err != nil {
 		t.Fatalf("fallback filter: %v", err)
 	}
 	if driver.inspectCalls == 0 {
@@ -230,9 +230,9 @@ func TestMaintainExistingXFRMInterfacesSkipsNoopUpLinkWhenMatched(t *testing.T) 
 	}
 	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, time.Unix(4000, 0))
 	driver := &observedIPsecDriver{}
-	platformRuntime := newTestLinuxRuntime(driver, driver)
+	platformDriver := newTestLinuxDriver(driver, driver)
 
-	if err := platformRuntime.MaintainXFRMInterfaces(context.Background(), []ipsec.TransportLinkSpec{spec}, map[string]ipsec.LinkInstance{inst.ID: inst}, []ipsec.ReconcileAction{{Action: ipsec.ReconcileActionNoop, Instance: &inst}}, nil, nil, nil); err != nil {
+	if err := platformDriver.MaintainXFRMInterfaces(context.Background(), []ipsec.TransportLinkSpec{spec}, map[string]ipsec.LinkInstance{inst.ID: inst}, []ipsec.ReconcileAction{{Action: ipsec.ReconcileActionNoop, Instance: &inst}}, nil, nil, nil); err != nil {
 		t.Fatalf("maintainExistingXFRMInterfaces: %v", err)
 	}
 	if len(driver.Interfaces) != 0 {
@@ -281,9 +281,9 @@ func TestMaintainExistingXFRMInterfacesUsesRuntimeAddressDuringRotate(t *testing
 			Multicast:       true,
 		},
 	}
-	platformRuntime := newTestLinuxRuntime(driver, driver)
+	platformDriver := newTestLinuxDriver(driver, driver)
 
-	if err := platformRuntime.MaintainXFRMInterfaces(context.Background(), []ipsec.TransportLinkSpec{desired}, map[string]ipsec.LinkInstance{inst.ID: inst}, []ipsec.ReconcileAction{{Action: ipsec.ReconcileActionNoop, Reason: "route_cutover_pending", Instance: &inst}}, []ipsec.LinkGroupSpec{group}, nil, nil); err != nil {
+	if err := platformDriver.MaintainXFRMInterfaces(context.Background(), []ipsec.TransportLinkSpec{desired}, map[string]ipsec.LinkInstance{inst.ID: inst}, []ipsec.ReconcileAction{{Action: ipsec.ReconcileActionNoop, Reason: "route_cutover_pending", Instance: &inst}}, []ipsec.LinkGroupSpec{group}, nil, nil); err != nil {
 		t.Fatalf("maintainExistingXFRMInterfaces: %v", err)
 	}
 	if len(driver.Interfaces) != 1 || driver.Interfaces[0].InterfaceName != oldRuntime.InterfaceName {
@@ -305,9 +305,9 @@ func TestMaintainExistingXFRMInterfacesSkipsAdoptedLinkWhenMatched(t *testing.T)
 	}
 	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, time.Unix(4000, 0))
 	driver := &observedIPsecDriver{}
-	platformRuntime := newTestLinuxRuntime(driver, driver)
+	platformDriver := newTestLinuxDriver(driver, driver)
 
-	if err := platformRuntime.MaintainXFRMInterfaces(context.Background(), []ipsec.TransportLinkSpec{spec}, map[string]ipsec.LinkInstance{inst.ID: inst}, []ipsec.ReconcileAction{{Action: ipsec.ReconcileActionAdopt, Spec: &spec, Instance: &inst}}, nil, nil, nil); err != nil {
+	if err := platformDriver.MaintainXFRMInterfaces(context.Background(), []ipsec.TransportLinkSpec{spec}, map[string]ipsec.LinkInstance{inst.ID: inst}, []ipsec.ReconcileAction{{Action: ipsec.ReconcileActionAdopt, Spec: &spec, Instance: &inst}}, nil, nil, nil); err != nil {
 		t.Fatalf("maintainExistingXFRMInterfaces: %v", err)
 	}
 	if len(driver.Interfaces) != 0 {
@@ -328,9 +328,9 @@ func TestMaintainExistingXFRMInterfacesSkipsLinkWithActiveAction(t *testing.T) {
 	}
 	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateConnecting, time.Unix(4000, 0))
 	driver := &observedIPsecDriver{}
-	platformRuntime := newTestLinuxRuntime(driver, driver)
+	platformDriver := newTestLinuxDriver(driver, driver)
 
-	if err := platformRuntime.MaintainXFRMInterfaces(context.Background(), []ipsec.TransportLinkSpec{spec}, map[string]ipsec.LinkInstance{inst.ID: inst}, []ipsec.ReconcileAction{{Action: ipsec.ReconcileActionCreate, Spec: &spec}}, nil, nil, nil); err != nil {
+	if err := platformDriver.MaintainXFRMInterfaces(context.Background(), []ipsec.TransportLinkSpec{spec}, map[string]ipsec.LinkInstance{inst.ID: inst}, []ipsec.ReconcileAction{{Action: ipsec.ReconcileActionCreate, Spec: &spec}}, nil, nil, nil); err != nil {
 		t.Fatalf("maintainExistingXFRMInterfaces: %v", err)
 	}
 	if len(driver.Interfaces) != 0 || len(driver.Addresses) != 0 {

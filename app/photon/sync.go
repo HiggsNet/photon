@@ -96,17 +96,17 @@ func syncServe(ctx context.Context) error {
 		return err
 	}
 	service.updateDiscoveredPeers()
-	err = service.hostRuntime.StartGossipTransport(ctx, transport, func(err error) {
+	err = service.gossipDriver.StartGossipTransport(ctx, transport, func(err error) {
 		logger.Warn("transport", "receive_failed", map[string]any{"error": err})
 	})
 	if err != nil {
 		return err
 	}
-	defer service.hostRuntime.Stop()
+	defer service.gossipDriver.Stop()
 	if err := startObjectPullServer(ctx, service); err != nil {
 		return err
 	}
-	if err := service.hostRuntime.StartGossipObjectPullWorkers(ctx, service.objectPullExecutor, 0, 0); err != nil {
+	if err := service.gossipDriver.StartGossipObjectPullWorkers(ctx, service.objectPullExecutor, 0, 0); err != nil {
 		return err
 	}
 	stopControl, err := service.startControlServer(ctx)
@@ -122,8 +122,8 @@ func syncServe(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		case hostEvent := <-service.hostRuntime.Events():
-			_, _ = service.handleHostRuntimeGossipEvent(ctx, hostEvent)
+		case hostEvent := <-service.gossipDriver.Events():
+			_, _ = service.handleGossipDriverEvent(ctx, hostEvent)
 		}
 	}
 }
@@ -146,26 +146,26 @@ func syncOnce(peerID string) error {
 	logger := service.Log
 	ctx, cancel := context.WithTimeout(context.Background(), defaultSyncRoundTimeout)
 	defer cancel()
-	err = service.hostRuntime.StartGossipTransport(ctx, transport, func(err error) {
+	err = service.gossipDriver.StartGossipTransport(ctx, transport, func(err error) {
 		logger.Warn("transport", "receive_failed", map[string]any{"error": err})
 	})
 	if err != nil {
 		return err
 	}
-	defer service.hostRuntime.Stop()
+	defer service.gossipDriver.Stop()
 	if err := startObjectPullServer(ctx, service); err != nil {
 		return err
 	}
-	if err := service.hostRuntime.StartGossipObjectPullWorkers(ctx, service.objectPullExecutor, 0, 0); err != nil {
+	if err := service.gossipDriver.StartGossipObjectPullWorkers(ctx, service.objectPullExecutor, 0, 0); err != nil {
 		return err
 	}
-	if err := service.hostRuntime.StartGossipSession(peerID, "sync_once"); err != nil {
+	if err := service.gossipDriver.StartGossipSession(peerID, "sync_once"); err != nil {
 		return err
 	}
 	var responderQuietUntil time.Time
 	for {
 		drained := false
-		if service.hostRuntime.Gossip.Session(peerID) == nil && service.hostRuntime.PendingEventCount() == 0 && service.hostRuntime.PendingGossipObjectPullCount() == 0 {
+		if service.gossipDriver.Gossip.Session(peerID) == nil && service.gossipDriver.PendingEventCount() == 0 && service.gossipDriver.PendingGossipObjectPullCount() == 0 {
 			drained = true
 			if responderQuietUntil.IsZero() {
 				responderQuietUntil = time.Now().Add(syncOnceResponderQuiet)
@@ -191,17 +191,17 @@ func syncOnce(peerID string) error {
 			if quietTimer != nil {
 				quietTimer.Stop()
 			}
-			if session := service.hostRuntime.Gossip.Session(peerID); session != nil && session.PendingCount() > 0 {
+			if session := service.gossipDriver.Gossip.Session(peerID); session != nil && session.PendingCount() > 0 {
 				pending := session.PendingZones()
 				return &syncPendingZonesError{zones: pending}
 			}
 			return errors.New("sync receive timed out")
-		case hostEvent := <-service.hostRuntime.Events():
+		case hostEvent := <-service.gossipDriver.Events():
 			if quietTimer != nil {
 				quietTimer.Stop()
 			}
 			responderQuietUntil = time.Time{}
-			if _, err := service.handleHostRuntimeGossipEvent(ctx, hostEvent); err != nil {
+			if _, err := service.handleGossipDriverEvent(ctx, hostEvent); err != nil {
 				return err
 			}
 		case <-quiet:
@@ -258,7 +258,7 @@ func (d *Daemon) openGossipTransport() (*gossip.Transport, error) {
 		_ = datagram.Close()
 		return nil, err
 	}
-	if err := d.hostRuntime.BindGossipTransport(transport); err != nil {
+	if err := d.gossipDriver.BindGossipTransport(transport); err != nil {
 		_ = datagram.Close()
 		return nil, err
 	}

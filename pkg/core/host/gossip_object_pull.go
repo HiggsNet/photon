@@ -21,7 +21,7 @@ var (
 )
 
 // GossipObjectPullCompletion is the platform-neutral result returned by an
-// object-pull controller. Runtime owns its conversion to an FSM event and the
+// object-pull controller. GossipDriver owns its conversion to an FSM event and the
 // queue backpressure contract.
 type GossipObjectPullCompletion struct {
 	PeerID      string
@@ -33,11 +33,11 @@ type GossipObjectPullCompletion struct {
 	Err         error
 }
 
-// StartGossipObjectPullWorkers starts Runtime's only object-pull worker group.
+// StartGossipObjectPullWorkers starts GossipDriver's only object-pull worker group.
 // Platform composition supplies the TCP I/O capability, not another queue.
-func (runtime *Runtime) StartGossipObjectPullWorkers(ctx context.Context, executor *GossipObjectPullExecutor, workers, buffer int) error {
-	if runtime == nil {
-		return ErrRuntimeStopped
+func (driver *GossipDriver) StartGossipObjectPullWorkers(ctx context.Context, executor *GossipObjectPullExecutor, workers, buffer int) error {
+	if driver == nil {
+		return ErrGossipDriverStopped
 	}
 	if executor == nil {
 		return ErrGossipObjectPullExecutorRequired
@@ -51,70 +51,70 @@ func (runtime *Runtime) StartGossipObjectPullWorkers(ctx context.Context, execut
 	if buffer <= 0 {
 		buffer = DefaultGossipObjectPullBuffer
 	}
-	runtime.mu.Lock()
-	if runtime.stopped {
-		runtime.mu.Unlock()
-		return ErrRuntimeStopped
+	driver.mu.Lock()
+	if driver.stopped {
+		driver.mu.Unlock()
+		return ErrGossipDriverStopped
 	}
-	if runtime.objectPullJobs != nil {
-		runtime.mu.Unlock()
+	if driver.objectPullJobs != nil {
+		driver.mu.Unlock()
 		return ErrGossipObjectPullAlreadyStarted
 	}
 	workerCtx, cancel := context.WithCancel(ctx)
-	runtime.objectPullCancel = cancel
-	runtime.objectPullJobs = make(chan gossip.StartObjectPullAction, buffer)
-	jobs := runtime.objectPullJobs
-	runtime.mu.Unlock()
+	driver.objectPullCancel = cancel
+	driver.objectPullJobs = make(chan gossip.StartObjectPullAction, buffer)
+	jobs := driver.objectPullJobs
+	driver.mu.Unlock()
 
 	for range workers {
-		runtime.objectPullWG.Add(1)
-		go runtime.runGossipObjectPullWorker(workerCtx, jobs, executor)
+		driver.objectPullWG.Add(1)
+		go driver.runGossipObjectPullWorker(workerCtx, jobs, executor)
 	}
 	return nil
 }
 
 // SubmitGossipObjectPull never blocks the single-writer event loop.
-func (runtime *Runtime) SubmitGossipObjectPull(action gossip.StartObjectPullAction) error {
-	if runtime == nil {
-		return ErrRuntimeStopped
+func (driver *GossipDriver) SubmitGossipObjectPull(action gossip.StartObjectPullAction) error {
+	if driver == nil {
+		return ErrGossipDriverStopped
 	}
-	runtime.mu.RLock()
-	stopped := runtime.stopped
-	jobs := runtime.objectPullJobs
-	runtime.mu.RUnlock()
+	driver.mu.RLock()
+	stopped := driver.stopped
+	jobs := driver.objectPullJobs
+	driver.mu.RUnlock()
 	if stopped {
-		return ErrRuntimeStopped
+		return ErrGossipDriverStopped
 	}
 	if jobs == nil {
 		return ErrGossipObjectPullExecutorRequired
 	}
-	runtime.objectPullPending.Add(1)
+	driver.objectPullPending.Add(1)
 	select {
 	case jobs <- action:
 		return nil
 	default:
-		runtime.objectPullPending.Add(-1)
+		driver.objectPullPending.Add(-1)
 		return ErrGossipObjectPullQueueFull
 	}
 }
 
-func (runtime *Runtime) PendingGossipObjectPullCount() int {
-	if runtime == nil {
+func (driver *GossipDriver) PendingGossipObjectPullCount() int {
+	if driver == nil {
 		return 0
 	}
-	return int(runtime.objectPullPending.Load())
+	return int(driver.objectPullPending.Load())
 }
 
-func (runtime *Runtime) runGossipObjectPullWorker(ctx context.Context, jobs <-chan gossip.StartObjectPullAction, executor *GossipObjectPullExecutor) {
-	defer runtime.objectPullWG.Done()
+func (driver *GossipDriver) runGossipObjectPullWorker(ctx context.Context, jobs <-chan gossip.StartObjectPullAction, executor *GossipObjectPullExecutor) {
+	defer driver.objectPullWG.Done()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case action := <-jobs:
-			now := runtime.schedulerForRead().clock.Now()
-			runtime.observeObjectPullAttempt(action.PeerID, action.Zone, now)
-			runtime.logGossip("debug", "worker_start", action.PeerID, GossipPhaseObjectPull, nil, map[string]any{"zone": action.Zone})
+			now := driver.schedulerForRead().clock.Now()
+			driver.observeObjectPullAttempt(action.PeerID, action.Zone, now)
+			driver.logGossip("debug", "worker_start", action.PeerID, GossipPhaseObjectPull, nil, map[string]any{"zone": action.Zone})
 			completion := executor.PullGossipObject(ctx, action)
 			if completion.PeerID == "" {
 				completion.PeerID = action.PeerID
@@ -122,8 +122,8 @@ func (runtime *Runtime) runGossipObjectPullWorker(ctx context.Context, jobs <-ch
 			if !completion.Zone.Valid() {
 				completion.Zone = action.Zone
 			}
-			runtime.observeObjectPullResult(completion, runtime.schedulerForRead().clock.Now())
-			runtime.logGossip("debug", "worker_done", completion.PeerID, GossipPhaseObjectPull, completion.Err, map[string]any{
+			driver.observeObjectPullResult(completion, driver.schedulerForRead().clock.Now())
+			driver.logGossip("debug", "worker_done", completion.PeerID, GossipPhaseObjectPull, completion.Err, map[string]any{
 				"zone": completion.Zone, "bytes": completion.Bytes, "ok": completion.Err == nil,
 			})
 			event := GossipEvent{Value: &gossip.ObjectPullResultEvent{
@@ -131,10 +131,10 @@ func (runtime *Runtime) runGossipObjectPullWorker(ctx context.Context, jobs <-ch
 				Snapshot: completion.Snapshot, Err: completion.Err,
 			}}
 			select {
-			case runtime.events <- event:
-				runtime.objectPullPending.Add(-1)
+			case driver.events <- event:
+				driver.objectPullPending.Add(-1)
 			case <-ctx.Done():
-				runtime.objectPullPending.Add(-1)
+				driver.objectPullPending.Add(-1)
 				return
 			}
 		}

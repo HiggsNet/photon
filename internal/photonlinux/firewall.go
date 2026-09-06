@@ -10,9 +10,9 @@ import (
 
 // ResolveFirewallBackend probes the Linux host (or an injected test driver)
 // and selects the backend allowed by one instance's native hook requirements.
-func (r *Runtime) ResolveFirewallBackend(ctx context.Context, spec firewall.FirewallInstanceSpec) (string, firewall.FirewallPreflight, error) {
+func (r *LinuxDriver) ResolveFirewallBackend(ctx context.Context, spec firewall.FirewallInstanceSpec) (string, firewall.FirewallPreflight, error) {
 	if r == nil {
-		return firewall.BackendNone, firewall.FirewallPreflight{}, fmt.Errorf("linux runtime is not configured")
+		return firewall.BackendNone, firewall.FirewallPreflight{}, fmt.Errorf("linux driver is not configured")
 	}
 	var (
 		preflight firewall.FirewallPreflight
@@ -32,8 +32,8 @@ func (r *Runtime) ResolveFirewallBackend(ctx context.Context, spec firewall.Fire
 
 // ApplyFirewall observes and applies one desired firewall instance through the
 // selected Linux backend. Desired policy construction remains outside the
-// platform runtime; all driver I/O and namespace selection are owned here.
-func (r *Runtime) ApplyFirewall(ctx context.Context, spec firewall.FirewallInstanceSpec, backend string, owner firewall.Owner, desired *firewall.FirewallDesiredState) (firewall.FirewallApplyResult, error) {
+// platform driver; all driver I/O and namespace selection are owned here.
+func (r *LinuxDriver) ApplyFirewall(ctx context.Context, spec firewall.FirewallInstanceSpec, backend string, owner firewall.Owner, desired *firewall.FirewallDesiredState) (firewall.FirewallApplyResult, error) {
 	driver, err := r.newFirewallDriver(spec, backend)
 	if err != nil {
 		return firewall.FirewallApplyResult{}, err
@@ -49,9 +49,9 @@ func (r *Runtime) ApplyFirewall(ctx context.Context, spec firewall.FirewallInsta
 	return driver.Apply(ctx, plan, desired)
 }
 
-func (r *Runtime) newFirewallDriver(spec firewall.FirewallInstanceSpec, backend string) (firewall.FirewallDriver, error) {
+func (r *LinuxDriver) newFirewallDriver(spec firewall.FirewallInstanceSpec, backend string) (firewall.FirewallDriver, error) {
 	if r == nil {
-		return nil, fmt.Errorf("linux runtime is not configured")
+		return nil, fmt.Errorf("linux driver is not configured")
 	}
 	if r.firewallDriver != nil {
 		return r.firewallDriver, nil
@@ -78,7 +78,7 @@ func (r *Runtime) newFirewallDriver(spec firewall.FirewallInstanceSpec, backend 
 	}
 }
 
-func (r *Runtime) firewallNetNS(spec firewall.FirewallInstanceSpec) (string, error) {
+func (r *LinuxDriver) firewallNetNS(spec firewall.FirewallInstanceSpec) (string, error) {
 	if spec.IsHost {
 		return "", nil
 	}

@@ -67,7 +67,7 @@ func TestIPsecDiagnosticSuffixFromPathKeyOrLocalAddress(t *testing.T) {
 
 func TestAssignIPsecDiagnosticAddressesAllowsSameFamilyAddressOnMultipleInterfaces(t *testing.T) {
 	driver := &ipsec.DryRunDriver{}
-	platformRuntime := newTestLinuxRuntime(driver, driver)
+	platformDriver := newTestLinuxDriver(driver, driver)
 	prefixes := []netip.Prefix{netip.MustParsePrefix("fd00:1234:5678:9abc::/64")}
 
 	specs := []ipsec.TransportLinkSpec{
@@ -76,7 +76,7 @@ func TestAssignIPsecDiagnosticAddressesAllowsSameFamilyAddressOnMultipleInterfac
 		{InterfaceName: "phx6a", PathKey: "family:ipv6"},
 	}
 	for _, spec := range specs {
-		if err := platformRuntime.AssignDiagnosticAddresses(context.Background(), spec, prefixes); err != nil {
+		if err := platformDriver.AssignDiagnosticAddresses(context.Background(), spec, prefixes); err != nil {
 			t.Fatalf("assignIPsecDiagnosticAddresses(%s): %v", spec.InterfaceName, err)
 		}
 	}

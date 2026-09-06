@@ -3,7 +3,7 @@ package gossip
 import "time"
 
 // Engine owns only mutable per-peer protocol state. It is a synchronous,
-// deterministic protocol machine: the HostRuntime serially supplies events and
+// deterministic protocol machine: the GossipDriver serially supplies events and
 // executes the returned actions.
 type Engine struct {
 	sessions     map[string]*SyncSession

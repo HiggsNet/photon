@@ -29,7 +29,7 @@ type GossipObjectPullExecutorConfig struct {
 	Quota        gossip.QuotaConfig
 }
 
-// GossipObjectPullExecutor is the common worker used by Runtime and offline
+// GossipObjectPullExecutor is the common worker used by GossipDriver and offline
 // recovery. It owns peer concurrency, quota, address resolution and response
 // validation; the injected client performs only the TCP exchange.
 type GossipObjectPullExecutor struct {

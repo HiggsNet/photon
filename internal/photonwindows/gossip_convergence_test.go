@@ -19,7 +19,7 @@ import (
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
-func TestHostRuntimesConvergeCommonStateAndReloadWithoutClientRuntime(t *testing.T) {
+func TestGossipDriversConvergeCommonStateAndReloadWithoutClientRuntime(t *testing.T) {
 	fixture := newWindowsGossipFixture(t)
 	leftIO, rightIO := newMemoryGossipDatagramPair()
 	leftTransport := newWindowsGossipTransport(t, "node-a.catofes.", "node-b.catofes.", leftIO, rightIO.LocalAddr())
@@ -46,7 +46,7 @@ func TestHostRuntimesConvergeCommonStateAndReloadWithoutClientRuntime(t *testing
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for gossip session completion")
 	}
-	// HostRuntime now owns authenticated inbound-path checkpointing. The
+	// GossipDriver now owns authenticated inbound-path checkpointing. The
 	// completion that triggered relay is reported before the remote relay packet
 	// necessarily reaches this node, so wait for that independent checkpoint
 	// commit before taking the byte-for-byte persistence baseline.
@@ -69,7 +69,7 @@ func TestHostRuntimesConvergeCommonStateAndReloadWithoutClientRuntime(t *testing
 		t.Fatal(err)
 	}
 	beforeReject := right.store.VerifiedRevision()
-	// Completed sessions are now removed by HostRuntime itself. This direct
+	// Completed sessions are now removed by GossipDriver itself. This direct
 	// executor check supplies its own detached protocol context instead of
 	// relying on a stale session retained after convergence.
 	rejectSession := gossip.NewSyncSession("node-a.catofes.")
@@ -110,7 +110,7 @@ func TestHostRuntimesConvergeCommonStateAndReloadWithoutClientRuntime(t *testing
 }
 
 type memoryHostNode struct {
-	runtime   *corehost.Runtime
+	runtime   *corehost.GossipDriver
 	storeRoot *StateStore
 	store     *corestate.Store
 	transport *gossip.Transport
@@ -126,7 +126,7 @@ type memoryHostNode struct {
 func newMemoryHostNode(state *StateStore, transport *gossip.Transport) *memoryHostNode {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &memoryHostNode{
-		runtime: corehost.NewRuntime(corehost.NewClock(nil), corehost.DefaultEventBuffer, state.Store(), corehost.GossipRuntimeConfig{
+		runtime: corehost.NewGossipDriver(corehost.NewClock(nil), corehost.DefaultEventBuffer, state.Store(), corehost.GossipDriverConfig{
 			PeerID: transport.PeerID(), Limits: corestate.DefaultSyncLimits(),
 		}),
 		storeRoot: state,
@@ -214,7 +214,7 @@ func (node *memoryHostNode) stop(t *testing.T) {
 	select {
 	case <-node.done:
 	case <-time.After(time.Second):
-		t.Fatal("timed out stopping memory HostRuntime")
+		t.Fatal("timed out stopping memory GossipDriver")
 	}
 	if err := node.storeRoot.Close(); err != nil {
 		t.Fatal(err)
@@ -369,7 +369,7 @@ func waitForWindowsState(t *testing.T, timeout time.Duration, ready func() bool)
 	deadline := time.Now().Add(timeout)
 	for !ready() {
 		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for memory HostRuntimes to converge")
+			t.Fatal("timed out waiting for memory GossipDrivers to converge")
 		}
 		time.Sleep(time.Millisecond)
 	}

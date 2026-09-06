@@ -261,7 +261,7 @@ func TestDaemonFlushRevocationCleanupAlreadyCleanDoesNotCommit(t *testing.T) {
 	}
 	rt := &AppContext{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-	service.hostRuntime.Observability.Update("node-b.catofes.", now, func(peer *observability.PeerDiagnostics) {
+	service.gossipDriver.Observability.Update("node-b.catofes.", now, func(peer *observability.PeerDiagnostics) {
 		peer.DatagramStats = &observability.PeerDatagramStats{ChunkFallbacks: 1}
 	})
 	before := service.StateStore.Meta().Revision
@@ -271,7 +271,7 @@ func TestDaemonFlushRevocationCleanupAlreadyCleanDoesNotCommit(t *testing.T) {
 	if after := service.StateStore.Meta().Revision; after != before {
 		t.Fatalf("state revision after already-clean cleanup = %d, want %d", after, before)
 	}
-	if _, ok := service.hostRuntime.Observability.Snapshot("node-b.catofes.", now); ok {
+	if _, ok := service.gossipDriver.Observability.Snapshot("node-b.catofes.", now); ok {
 		t.Fatal("already-clean fast path retained revoked peer observability")
 	}
 }

@@ -28,7 +28,7 @@ func (*testGossipDatagram) Close() error                     { return nil }
 
 func setTestGossipTransport(t *testing.T, service *Daemon, transport *gossip.Transport) {
 	t.Helper()
-	if err := service.hostRuntime.BindGossipTransport(transport); err != nil {
+	if err := service.gossipDriver.BindGossipTransport(transport); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -98,8 +98,8 @@ func pumpEventLoopSync(ctx context.Context, services []*Daemon, transports []*go
 		processed := false
 		for _, service := range services {
 			select {
-			case hostEvent := <-service.hostRuntime.Events():
-				if result, err := service.handleHostRuntimeGossipEvent(ctx, hostEvent); err == nil && result.Handled {
+			case hostEvent := <-service.gossipDriver.Events():
+				if result, err := service.handleGossipDriverEvent(ctx, hostEvent); err == nil && result.Handled {
 					processed = true
 				}
 			default:

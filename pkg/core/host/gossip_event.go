@@ -12,12 +12,12 @@ import (
 
 const DefaultGossipRelayFanout = 8
 
-type runtimeGossipSender struct {
+type gossipDriverSender struct {
 	transport *gossip.Transport
 	replyAddr *net.UDPAddr
 }
 
-func (sender runtimeGossipSender) SendGossip(_ context.Context, outbound gossip.OutboundMessage) error {
+func (sender gossipDriverSender) SendGossip(_ context.Context, outbound gossip.OutboundMessage) error {
 	if sender.transport == nil {
 		return ErrGossipTransportRequired
 	}
@@ -27,7 +27,7 @@ func (sender runtimeGossipSender) SendGossip(_ context.Context, outbound gossip.
 	return sender.transport.Send(outbound.PeerID, outbound.Message)
 }
 
-func (sender runtimeGossipSender) datagramBudget() int {
+func (sender gossipDriverSender) datagramBudget() int {
 	if sender.transport == nil {
 		return gossip.DefaultDatagramBudget
 	}
@@ -36,33 +36,33 @@ func (sender runtimeGossipSender) datagramBudget() int {
 
 // StartGossipSession creates and queues one common gossip pull session. It is
 // also the only announce-hint suppression/defer boundary.
-func (runtime *Runtime) StartGossipSession(peerID, reason string) error {
-	if runtime == nil {
-		return ErrRuntimeStopped
+func (driver *GossipDriver) StartGossipSession(peerID, reason string) error {
+	if driver == nil {
+		return ErrGossipDriverStopped
 	}
 	if peerID == "" {
 		return nil
 	}
-	now := runtime.schedulerForRead().clock.Now()
-	if runtime.Gossip.HasActiveSession(peerID) {
-		runtime.Gossip.DeferHint(peerID)
-		runtime.observeSyncHint(peerID, reason, "session_active", false, now)
-		runtime.logGossip("debug", "announce_hint_suppressed", peerID, "session", nil, map[string]any{"reason": "session_active"})
+	now := driver.schedulerForRead().clock.Now()
+	if driver.Gossip.HasActiveSession(peerID) {
+		driver.Gossip.DeferHint(peerID)
+		driver.observeSyncHint(peerID, reason, "session_active", false, now)
+		driver.logGossip("debug", "announce_hint_suppressed", peerID, "session", nil, map[string]any{"reason": "session_active"})
 		return nil
 	}
-	summary := runtime.GossipCatalogSummary()
+	summary := driver.GossipCatalogSummary()
 	if summary == nil {
 		return nil
 	}
-	session := runtime.Gossip.NewSession(peerID)
-	if err := runtime.PostGossip(&gossip.SyncTimerEvent{PeerID: peerID, LocalSummary: summary}); err != nil {
-		runtime.Gossip.RemoveSession(peerID)
-		runtime.logGossip("warn", "event_dropped", peerID, "session", err, map[string]any{"reason": "sync_events_full"})
+	session := driver.Gossip.NewSession(peerID)
+	if err := driver.PostGossip(&gossip.SyncTimerEvent{PeerID: peerID, LocalSummary: summary}); err != nil {
+		driver.Gossip.RemoveSession(peerID)
+		driver.logGossip("warn", "event_dropped", peerID, "session", err, map[string]any{"reason": "sync_events_full"})
 		return err
 	}
-	runtime.observeSyncHint(peerID, reason, "", true, now)
-	runtime.observeActivePull(peerID, "hint_queued", session, now)
-	runtime.logGossip("debug", "hinted_sync_started", peerID, "session", nil, map[string]any{"reason": reason})
+	driver.observeSyncHint(peerID, reason, "", true, now)
+	driver.observeActivePull(peerID, "hint_queued", session, now)
+	driver.logGossip("debug", "hinted_sync_started", peerID, "session", nil, map[string]any{"reason": reason})
 	return nil
 }
 
@@ -87,22 +87,22 @@ type GossipEventResult struct {
 }
 
 // GossipHostEventResult describes the common gossip work performed for one
-// Runtime event. It does not expose the received packet or logging outcome;
+// GossipDriver event. It does not expose the received packet or logging outcome;
 // platform composition only observes session changes needed during migration.
 type GossipHostEventResult struct {
 	Handled bool
 	Session GossipEventResult
 }
 
-// HandleGossipHostEvent is the only switch from Runtime queue events to the
+// HandleGossipHostEvent is the only switch from GossipDriver queue events to the
 // gossip inbound planner or session FSM. Packet, timer and object-pull
 // completion producers therefore share one consumer on every platform.
-func (runtime *Runtime) HandleGossipHostEvent(ctx context.Context, hostEvent Event, now time.Time, suppressedPeers map[string]bool) (GossipHostEventResult, error) {
+func (driver *GossipDriver) HandleGossipHostEvent(ctx context.Context, hostEvent Event, now time.Time, suppressedPeers map[string]bool) (GossipHostEventResult, error) {
 	var out GossipHostEventResult
-	if runtime == nil {
-		return out, ErrRuntimeStopped
+	if driver == nil {
+		return out, ErrGossipDriverStopped
 	}
-	transport := runtime.gossipTransportForRead()
+	transport := driver.gossipTransportForRead()
 	if transport == nil {
 		return out, ErrGossipTransportRequired
 	}
@@ -111,72 +111,72 @@ func (runtime *Runtime) HandleGossipHostEvent(ctx context.Context, hostEvent Eve
 		if received.Packet == nil {
 			return out, nil
 		}
-		runtime.acceptGossipInboundPath(ctx, received.Packet, now, suppressedPeers, transport)
-		sender := runtimeGossipSender{transport: transport, replyAddr: received.Packet.Addr}
-		err := runtime.executeGossipPacketActions(ctx, runtime.Gossip.PlanInbound(received.Packet), sender, sender.datagramBudget())
+		driver.acceptGossipInboundPath(ctx, received.Packet, now, suppressedPeers, transport)
+		sender := gossipDriverSender{transport: transport, replyAddr: received.Packet.Addr}
+		err := driver.executeGossipPacketActions(ctx, driver.Gossip.PlanInbound(received.Packet), sender, sender.datagramBudget())
 		if err != nil {
-			runtime.logGossipPacketFailure(received.Packet, err)
+			driver.logGossipPacketFailure(received.Packet, err)
 		}
 		return out, err
 	}
-	event, ok := runtime.GossipSessionEventFor(hostEvent)
+	event, ok := driver.GossipSessionEventFor(hostEvent)
 	if !ok {
 		return out, nil
 	}
 	out.Handled = true
-	result, err := runtime.handleGossipSessionEvent(ctx, event, now, runtimeGossipSender{transport: transport})
+	result, err := driver.handleGossipSessionEvent(ctx, event, now, gossipDriverSender{transport: transport})
 	if err == nil && result.Done {
-		runtime.finishGossipSession(ctx, &result, now, suppressedPeers)
+		driver.finishGossipSession(ctx, &result, now, suppressedPeers)
 	}
 	out.Session = result
 	return out, err
 }
 
-func (runtime *Runtime) acceptGossipInboundPath(ctx context.Context, packet *gossip.Packet, now time.Time, suppressedPeers map[string]bool, transport *gossip.Transport) {
-	if runtime == nil || packet == nil || packet.Message == nil || packet.Addr == nil {
+func (driver *GossipDriver) acceptGossipInboundPath(ctx context.Context, packet *gossip.Packet, now time.Time, suppressedPeers map[string]bool, transport *gossip.Transport) {
+	if driver == nil || packet == nil || packet.Message == nil || packet.Addr == nil {
 		return
 	}
 	peerID := packet.Message.PeerID
-	committed, err := runtime.recordGossipObservedPath(ctx, peerID, packet.Addr.String(), suppressedPeers, now)
+	committed, err := driver.recordGossipObservedPath(ctx, peerID, packet.Addr.String(), suppressedPeers, now)
 	if err != nil {
-		runtime.logGossip("warn", "observed_checkpoint_commit_failed", peerID, "persistence", err, nil)
+		driver.logGossip("warn", "observed_checkpoint_commit_failed", peerID, "persistence", err, nil)
 	} else if committed {
-		runtime.observeObservedSource(peerID, packet.Message.Type, now)
+		driver.observeObservedSource(peerID, packet.Message.Type, now)
 	}
-	if err := runtime.restoreGossipObservedPath(peerID, suppressedPeers, now, transport); err != nil {
-		runtime.logGossip("debug", "observed_path_restore_failed", peerID, "discovery", err, nil)
+	if err := driver.restoreGossipObservedPath(peerID, suppressedPeers, now, transport); err != nil {
+		driver.logGossip("debug", "observed_path_restore_failed", peerID, "discovery", err, nil)
 	}
 }
 
 // finishGossipSession closes the common session lifecycle at the same boundary
 // that advanced its FSM. Platform composition receives only the detached
 // terminal result needed for data-plane reconciliation and route cleanup.
-func (runtime *Runtime) finishGossipSession(ctx context.Context, result *GossipEventResult, now time.Time, suppressedPeers map[string]bool) {
-	if runtime == nil || result == nil || result.PeerID == "" {
+func (driver *GossipDriver) finishGossipSession(ctx context.Context, result *GossipEventResult, now time.Time, suppressedPeers map[string]bool) {
+	if driver == nil || result == nil || result.PeerID == "" {
 		return
 	}
 	peerID := result.PeerID
-	session := runtime.Gossip.Session(peerID)
+	session := driver.Gossip.Session(peerID)
 	if session == nil {
 		return
 	}
-	runtime.CancelGossipTimers(peerID)
+	driver.CancelGossipTimers(peerID)
 	result.NetworkChanged = session.NetworkChanged()
 	result.TerminalErr = session.LastError()
 	if session.State == gossip.SyncSessionCompleted && result.NetworkChanged {
-		runtime.relayGossipUpdate(ctx, peerID, now, suppressedPeers)
+		driver.relayGossipUpdate(ctx, peerID, now, suppressedPeers)
 	}
-	runtime.Gossip.RemoveSession(peerID)
-	if runtime.Gossip.TakePendingHint(peerID) {
-		if err := runtime.StartGossipSession(peerID, "announce_hint_followup"); err == nil {
-			result.FollowupQueued = runtime.Gossip.HasActiveSession(peerID)
+	driver.Gossip.RemoveSession(peerID)
+	if driver.Gossip.TakePendingHint(peerID) {
+		if err := driver.StartGossipSession(peerID, "announce_hint_followup"); err == nil {
+			result.FollowupQueued = driver.Gossip.HasActiveSession(peerID)
 		}
 	}
 }
 
-func (runtime *Runtime) relayGossipUpdate(ctx context.Context, sourcePeerID string, now time.Time, suppressedPeers map[string]bool) {
-	input := runtime.GossipDiscoveryInput(suppressedPeers)
-	summary := runtime.GossipCatalogSummary()
+func (driver *GossipDriver) relayGossipUpdate(ctx context.Context, sourcePeerID string, now time.Time, suppressedPeers map[string]bool) {
+	input := driver.GossipDiscoveryInput(suppressedPeers)
+	summary := driver.GossipCatalogSummary()
 	if summary == nil {
 		return
 	}
@@ -187,97 +187,97 @@ func (runtime *Runtime) relayGossipUpdate(ctx context.Context, sourcePeerID stri
 			continue
 		}
 		if relayed >= DefaultGossipRelayFanout {
-			runtime.observeRelaySuppression(peerID, "relay_fanout_limited", now)
+			driver.observeRelaySuppression(peerID, "relay_fanout_limited", now)
 			continue
 		}
 		allowed, reason := ShouldRelayGossipUpdate(input.Peers[peerID], peerID, sourcePeerID, root, now)
 		if !allowed {
-			runtime.observeRelaySuppression(peerID, reason, now)
+			driver.observeRelaySuppression(peerID, reason, now)
 			continue
 		}
 		relayed++
-		if runtime.Gossip.HasActiveSession(peerID) {
+		if driver.Gossip.HasActiveSession(peerID) {
 			continue
 		}
-		runtime.Gossip.NewSession(peerID)
-		if err := runtime.PostGossip(&gossip.SyncTimerEvent{PeerID: peerID, LocalSummary: summary}); err != nil {
-			runtime.Gossip.RemoveSession(peerID)
-			runtime.logGossip("warn", "relay_event_dropped", peerID, "session", err, map[string]any{"source_peer": sourcePeerID})
+		driver.Gossip.NewSession(peerID)
+		if err := driver.PostGossip(&gossip.SyncTimerEvent{PeerID: peerID, LocalSummary: summary}); err != nil {
+			driver.Gossip.RemoveSession(peerID)
+			driver.logGossip("warn", "relay_event_dropped", peerID, "session", err, map[string]any{"source_peer": sourcePeerID})
 			continue
 		}
-		committed, err := runtime.RecordGossipRelay(ctx, peerID, root, now)
+		committed, err := driver.RecordGossipRelay(ctx, peerID, root, now)
 		if err != nil {
-			runtime.logGossip("warn", "relay_checkpoint_commit_failed", peerID, "persistence", err, nil)
+			driver.logGossip("warn", "relay_checkpoint_commit_failed", peerID, "persistence", err, nil)
 			continue
 		}
 		if committed {
-			runtime.observeRelaySuccess(peerID, sourcePeerID, now)
+			driver.observeRelaySuccess(peerID, sourcePeerID, now)
 		}
 	}
 }
 
-func (runtime *Runtime) logGossipPacketFailure(packet *gossip.Packet, err error) {
+func (driver *GossipDriver) logGossipPacketFailure(packet *gossip.Packet, err error) {
 	peerID := ""
 	fields := map[string]any{"reason": gossip.RejectReason(err)}
 	if packet != nil && packet.Message != nil {
 		peerID = packet.Message.PeerID
 		fields["type"] = packet.Message.Type
 	}
-	runtime.logGossip("warn", "packet_failed", peerID, "packet", err, fields)
+	driver.logGossip("warn", "packet_failed", peerID, "packet", err, fields)
 }
 
 // handleGossipSessionEvent is the internal bridge from Engine/FSM advancement
-// to ordered HostRuntime effects. Platform code may enrich an event before
+// to ordered GossipDriver effects. Platform code may enrich an event before
 // calling it and observe the detached result afterwards, but cannot implement
 // a second Engine-to-action loop.
-func (runtime *Runtime) handleGossipSessionEvent(ctx context.Context, event gossip.SyncEvent, now time.Time, controller GossipSender) (GossipEventResult, error) {
+func (driver *GossipDriver) handleGossipSessionEvent(ctx context.Context, event gossip.SyncEvent, now time.Time, controller GossipSender) (GossipEventResult, error) {
 	var out GossipEventResult
-	if runtime == nil {
-		return out, ErrRuntimeStopped
+	if driver == nil {
+		return out, ErrGossipDriverStopped
 	}
 	if controller == nil {
 		return out, errGossipSenderRequired
 	}
 	peerID := gossip.SyncEventPeerID(event)
 	if peerID == "" {
-		runtime.logGossip("debug", "event_dropped", "", "session", ErrGossipEventPeerRequired, nil)
+		driver.logGossip("debug", "event_dropped", "", "session", ErrGossipEventPeerRequired, nil)
 		return out, ErrGossipEventPeerRequired
 	}
-	session := runtime.Gossip.Session(peerID)
+	session := driver.Gossip.Session(peerID)
 	if session == nil {
-		runtime.logGossip("debug", "event_dropped", peerID, "session", ErrGossipSessionNotFound, nil)
+		driver.logGossip("debug", "event_dropped", peerID, "session", ErrGossipSessionNotFound, nil)
 		return out, ErrGossipSessionNotFound
 	}
 	if _, ok := event.(*gossip.RoundTimeoutEvent); ok {
-		runtime.dropGossipPeerChunks(peerID)
+		driver.dropGossipPeerChunks(peerID)
 	}
 	if typed, ok := event.(*gossip.ChunkRepairTimeoutEvent); ok {
-		nack := runtime.gossipChunks.BuildRepairNACK(peerID, typed.TransferID)
+		nack := driver.gossipChunks.BuildRepairNACK(peerID, typed.TransferID)
 		out = GossipEventResult{PeerID: peerID, OldState: session.State, NewState: session.State, Pending: session.PendingCount(), Inflight: session.InflightCount(), Done: session.Done()}
 		if nack == nil {
 			return out, nil
 		}
 		err := controller.SendGossip(ctx, gossip.OutboundMessage{PeerID: peerID, Message: &gossip.Message{Type: gossip.MessageObjectChunkNACK, ObjectChunkNACK: nack}})
 		if err != nil {
-			runtime.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseSend, PeerID: peerID, Err: err})
+			driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseSend, PeerID: peerID, Err: err})
 			return out, nil
 		}
-		runtime.observeChunkRepair(peerID, false, 0, now)
+		driver.observeChunkRepair(peerID, false, 0, now)
 		return out, nil
 	}
 	switch typed := event.(type) {
 	case *gossip.PongReceivedEvent:
 		if typed.Pong != nil && typed.Pong.Summary != nil {
-			runtime.observeCatalogSummary(peerID, typed.Pong.Summary, now)
+			driver.observeCatalogSummary(peerID, typed.Pong.Summary, now)
 		}
 	case *gossip.CatalogSummaryReceivedEvent:
-		runtime.observeCatalogSummary(peerID, typed.Summary, now)
+		driver.observeCatalogSummary(peerID, typed.Summary, now)
 	case *gossip.CatalogPageReceivedEvent:
-		typed.LocalEntries, typed.Page = FilterGossipCatalogPage(runtime.GossipDiscoveryInput(nil), peerID, typed.Page, now)
-		runtime.observeCatalogPage(peerID, typed.Page, now)
+		typed.LocalEntries, typed.Page = FilterGossipCatalogPage(driver.GossipDiscoveryInput(nil), peerID, typed.Page, now)
+		driver.observeCatalogPage(peerID, typed.Page, now)
 	}
-	engineResult := runtime.Gossip.HandleEvent(event, now)
-	execution := runtime.ExecuteGossipActions(ctx, session, engineResult.Actions, controller)
+	engineResult := driver.Gossip.HandleEvent(event, now)
+	execution := driver.ExecuteGossipActions(ctx, session, engineResult.Actions, controller)
 	session.AccumulateNetworkChanged(execution.NetworkChanged)
 	out = GossipEventResult{
 		PeerID:         peerID,
@@ -289,12 +289,12 @@ func (runtime *Runtime) handleGossipSessionEvent(ctx context.Context, event goss
 		NetworkChanged: execution.NetworkChanged,
 		ProtocolErr:    engineResult.Err,
 	}
-	runtime.observeActivePull(peerID, gossip.SyncEventName(event), session, now)
+	driver.observeActivePull(peerID, gossip.SyncEventName(event), session, now)
 	if out.ProtocolErr != nil {
-		runtime.logGossip("warn", "session_event_error", peerID, "session", out.ProtocolErr, nil)
+		driver.logGossip("warn", "session_event_error", peerID, "session", out.ProtocolErr, nil)
 	}
 	if out.NewState != out.OldState {
-		runtime.logGossip("debug", "session_state_changed", peerID, "session", nil, map[string]any{
+		driver.logGossip("debug", "session_state_changed", peerID, "session", nil, map[string]any{
 			"event": gossip.SyncEventName(event), "old_state": out.OldState, "new_state": out.NewState,
 			"pending": out.Pending, "inflight": out.Inflight,
 		})

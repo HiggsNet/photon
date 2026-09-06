@@ -27,10 +27,10 @@ type GossipObjectChunkResult struct {
 // HandleGossipObjectChunk owns bounded assembly, repair scheduling, snapshot
 // decoding/root verification and completion delivery. These are common gossip
 // semantics; platforms only observe the detached result.
-func (runtime *Runtime) HandleGossipObjectChunk(ctx context.Context, message *gossip.Message, now time.Time) (GossipObjectChunkResult, error) {
+func (driver *GossipDriver) HandleGossipObjectChunk(ctx context.Context, message *gossip.Message, now time.Time) (GossipObjectChunkResult, error) {
 	var result GossipObjectChunkResult
-	if runtime == nil {
-		return result, ErrRuntimeStopped
+	if driver == nil {
+		return result, ErrGossipDriverStopped
 	}
 	if message == nil || message.ObjectChunk == nil {
 		return result, nil
@@ -38,12 +38,12 @@ func (runtime *Runtime) HandleGossipObjectChunk(ctx context.Context, message *go
 	chunk := message.ObjectChunk
 	result.PeerID = message.PeerID
 	result.Zone = chunk.Zone.String()
-	data, complete, err := runtime.AddGossipObjectChunk(message.PeerID, chunk, now)
+	data, complete, err := driver.AddGossipObjectChunk(message.PeerID, chunk, now)
 	if err != nil {
-		return runtime.rejectGossipObjectChunk(ctx, message.PeerID, chunk, result, err, now)
+		return driver.rejectGossipObjectChunk(ctx, message.PeerID, chunk, result, err, now)
 	}
 	if !complete {
-		return result, runtime.ScheduleGossipChunkRepair(message.PeerID, chunk)
+		return result, driver.ScheduleGossipChunkRepair(message.PeerID, chunk)
 	}
 	result.Complete = true
 	if chunk.Object != gossip.ObjectPullZone {
@@ -51,37 +51,37 @@ func (runtime *Runtime) HandleGossipObjectChunk(ctx context.Context, message *go
 	}
 	snapshot, err := gossip.DecodeZoneSnapshotObject(data)
 	if err != nil {
-		return runtime.rejectGossipObjectChunk(ctx, message.PeerID, chunk, result, err, now)
+		return driver.rejectGossipObjectChunk(ctx, message.PeerID, chunk, result, err, now)
 	}
 	actualRoot := corestate.ZoneRoot(corestate.ZoneStateFromSnapshot(snapshot))
 	if len(chunk.RootHash) > 0 && !bytes.Equal(chunk.RootHash, actualRoot) {
 		err = fmt.Errorf("chunk snapshot root mismatch for %s: advertised %x, decoded %x", snapshot.Zone, chunk.RootHash, actualRoot)
-		return runtime.rejectGossipObjectChunk(ctx, message.PeerID, chunk, result, err, now)
+		return driver.rejectGossipObjectChunk(ctx, message.PeerID, chunk, result, err, now)
 	}
 	result.ChunkFallback = true
-	err = runtime.PostGossip(&gossip.ObjectChunkEvent{PeerID: message.PeerID, Zone: chunk.Zone, Snapshot: snapshot})
+	err = driver.PostGossip(&gossip.ObjectChunkEvent{PeerID: message.PeerID, Zone: chunk.Zone, Snapshot: snapshot})
 	return result, err
 }
 
-func (runtime *Runtime) rejectGossipObjectChunk(ctx context.Context, peerID string, chunk *gossip.ObjectChunk, result GossipObjectChunkResult, chunkErr error, now time.Time) (GossipObjectChunkResult, error) {
-	result.CheckpointErr = runtime.RecordGossipRejectedObject(ctx, peerID, chunk, chunkErr, now)
-	_ = runtime.PostGossip(&gossip.ObjectChunkEvent{PeerID: peerID, Zone: chunk.Zone, Err: chunkErr})
+func (driver *GossipDriver) rejectGossipObjectChunk(ctx context.Context, peerID string, chunk *gossip.ObjectChunk, result GossipObjectChunkResult, chunkErr error, now time.Time) (GossipObjectChunkResult, error) {
+	result.CheckpointErr = driver.RecordGossipRejectedObject(ctx, peerID, chunk, chunkErr, now)
+	_ = driver.PostGossip(&gossip.ObjectChunkEvent{PeerID: peerID, Zone: chunk.Zone, Err: chunkErr})
 	return result, chunkErr
 }
 
 // AddGossipObjectChunk adds one UDP chunk to this host's bounded in-memory
-// assembly store. Chunk state is scoped to one Runtime and never persisted.
-func (runtime *Runtime) AddGossipObjectChunk(peerID string, chunk *gossip.ObjectChunk, now time.Time) ([]byte, bool, error) {
-	if runtime == nil || runtime.gossipChunks == nil {
+// assembly store. Chunk state is scoped to one GossipDriver and never persisted.
+func (driver *GossipDriver) AddGossipObjectChunk(peerID string, chunk *gossip.ObjectChunk, now time.Time) ([]byte, bool, error) {
+	if driver == nil || driver.gossipChunks == nil {
 		return nil, false, ErrGossipChunkStoreUnavailable
 	}
-	runtime.mu.RLock()
-	defer runtime.mu.RUnlock()
-	if runtime.stopped {
-		return nil, false, ErrRuntimeStopped
+	driver.mu.RLock()
+	defer driver.mu.RUnlock()
+	if driver.stopped {
+		return nil, false, ErrGossipDriverStopped
 	}
-	scheduler := runtime.scheduler
-	data, complete, err := runtime.gossipChunks.Add(peerID, chunk, now)
+	scheduler := driver.scheduler
+	data, complete, err := driver.gossipChunks.Add(peerID, chunk, now)
 	if complete && chunk != nil {
 		scheduler.Cancel(gossipChunkRepairTimerID(peerID, chunk.TransferID))
 	}
@@ -89,18 +89,18 @@ func (runtime *Runtime) AddGossipObjectChunk(peerID string, chunk *gossip.Object
 }
 
 // ScheduleGossipChunkRepair puts the gossip-selected quiet deadline onto the
-// one HostRuntime scheduler. No protocol package creates a timer or goroutine.
-func (runtime *Runtime) ScheduleGossipChunkRepair(peerID string, chunk *gossip.ObjectChunk) error {
-	if runtime == nil || runtime.gossipChunks == nil {
+// one GossipDriver scheduler. No protocol package creates a timer or goroutine.
+func (driver *GossipDriver) ScheduleGossipChunkRepair(peerID string, chunk *gossip.ObjectChunk) error {
+	if driver == nil || driver.gossipChunks == nil {
 		return ErrGossipChunkStoreUnavailable
 	}
-	runtime.mu.RLock()
-	defer runtime.mu.RUnlock()
-	if runtime.stopped {
-		return ErrRuntimeStopped
+	driver.mu.RLock()
+	defer driver.mu.RUnlock()
+	if driver.stopped {
+		return ErrGossipDriverStopped
 	}
-	scheduler := runtime.scheduler
-	deadline, ok := runtime.gossipChunks.RepairDeadline(peerID, chunk)
+	scheduler := driver.scheduler
+	deadline, ok := driver.gossipChunks.RepairDeadline(peerID, chunk)
 	if !ok {
 		return nil
 	}
@@ -108,10 +108,10 @@ func (runtime *Runtime) ScheduleGossipChunkRepair(peerID string, chunk *gossip.O
 	return err
 }
 
-func (runtime *Runtime) dropGossipPeerChunks(peerID string) {
-	if runtime != nil && runtime.gossipChunks != nil {
-		runtime.gossipChunks.DropPeer(peerID)
-		runtime.schedulerForRead().CancelOwner(GossipChunkRepairNamespace, peerID)
+func (driver *GossipDriver) dropGossipPeerChunks(peerID string) {
+	if driver != nil && driver.gossipChunks != nil {
+		driver.gossipChunks.DropPeer(peerID)
+		driver.schedulerForRead().CancelOwner(GossipChunkRepairNamespace, peerID)
 	}
 }
 

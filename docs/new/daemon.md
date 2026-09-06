@@ -84,19 +84,19 @@ Daemon 是 Photon 中唯一长期运行的系统进程。它不在每次 CLI 调
 | 字段 | 类型 | 作用 |
 |------|------|------|
 | `App` | `*AppContext` | config、state path、clock 等应用上下文；不是产品 Runtime |
-| `hostRuntime` | `*corehost.Runtime` | 持有 detached gossip 协议配置、transport/address book 和协议执行闭环；Daemon 不再重复保存 GossipConfig/transport |
+| `gossipDriver` | `*corehost.GossipDriver` | 持有 detached gossip 协议配置、transport/address book 和协议执行闭环；Daemon 不再重复保存 GossipConfig/transport |
 | `gossipTransport` | `*gossip.Transport` | 当前 gossip UDP transport |
 | `StateStore` | `*DaemonStateStore` | 迁移期 common/Linux 顺序协调器，最终删除 |
 | `Events` | `chan daemonEvent` | 统一事件入口（64 buffer） |
 | `Interval` | `time.Duration` | 出站 sync 周期（默认 60s） |
 | `ControlSocketPath` | `string` | Unix domain socket 路径 |
-| `linuxRuntime` | `*photonlinux.Runtime` | 当前 LinuxDriver；持有 IPsec/XFRM/BIRD/firewall/health 平台实现 |
+| `linuxDriver` | `*photonlinux.LinuxDriver` | 持有 IPsec/XFRM/BIRD/firewall/health 平台实现 |
 | `health` | `*health.Manager` | 链路健康探测管理器 |
 | `observerHub` | `*observer.Hub` | Observer SSE 事件广播 |
 | `ipsecDirty` | `bool` | IPsec reconcile 待调度标记 |
 | `routingDirty` | `bool` | Routing reconcile 待调度标记 |
 | `firewallDirty` | `bool` | Firewall reconcile 待调度标记 |
-| `hostRuntime` | `*host.Runtime` | 当前 GossipDriver：协议 queue/scheduler/Engine/transport/object-pull owner |
+| `gossipDriver` | `*host.GossipDriver` | 当前 GossipDriver：协议 queue/scheduler/Engine/transport/object-pull owner |
 | `objectPullExecutor` | `*host.GossipObjectPullExecutor` | Linux TCP exchange 注入点；worker 生命周期由 GossipDriver 管理 |
 
 **DaemonEvent 类型**（[`daemon.go:70-95`](../../app/photon/daemon.go#L70-L95)）：
@@ -121,7 +121,7 @@ Daemon 启动流程（[`daemonRun()`](../../app/photon/daemon.go#L1522-L1540)）
 
 ```
 daemonRun()
- ├─ NewRuntime()          加载应用配置
+ ├─ NewAppContext()       加载应用配置
  ├─ rt.LoadState()        加载 BoltDB 状态文件
  ├─ openDaemon()          创建 Daemon 与唯一 BoltStore
  ├─ configureIPsecDriversFromConfig()
@@ -215,16 +215,16 @@ Demuxer 只按 `peer_id` 路由，不解释 message type；message type 由 `Syn
 1. 把 summary 转成 `CatalogSummaryReceivedEvent` 交给 session FSM。
 2. 直接回复 `PONG` summary（respondPing）。
 
-### 3.2 HostRuntime Scheduler
+### 3.2 GossipDriver Scheduler
 
-`gossip.SyncSession` 只返回 start/cancel timer action，不创建计时资源。公共 `pkg/core/host.Runtime`
+`gossip.SyncSession` 只返回 start/cancel timer action，不创建计时资源。公共 `pkg/core/host.GossipDriver`
 执行 action，其 Scheduler 用 `(namespace, owner, key, generation)` 管理 timer；gossip 当前使用：
 
 - `round`：整轮同步超时。
 - `catalog_page`：catalog page 请求超时。
 
 Scheduler 只有一个 deadline heap 和一个 wakeup loop。Timer 到期后把带 deadline/generation 的 `TimerFired`
-投递到 HostRuntime bounded queue；事件循环消费时再次验证 generation，再转换为 gossip timeout event。
+投递到 GossipDriver bounded queue；事件循环消费时再次验证 generation，再转换为 gossip timeout event。
 timer callback 不直接修改 session/state；队列满时不会按固定超时丢弃。Session 进入 `Completed` / `Failed`
 时，取消该 peer 在 gossip namespace 下的所有 timer。
 
@@ -507,7 +507,7 @@ Daemon 作为编排器，各子模块通过清晰的接口与 daemon 集成：
 
 - **输入**：UDP 包（从 transport.Receive() 接收）、定时器事件、object pull 结果
 - **输出**：GossipDriver 直接调用公共 StateStore 的 remote batch/checkpoint API，并通过同一 transport 发送协议响应
-- **集成点**：`pkg/core/host.Runtime` 是当前 GossipDriver，拥有 Engine、协议 queue/scheduler、transport、object-pull、chunk/session runtime 和 gossip observability；Daemon 只消费其事件并接收需要触发平台 reconcile 的终态结果
+- **集成点**：`pkg/core/host.GossipDriver` 是当前 GossipDriver，拥有 Engine、协议 queue/scheduler、transport、object-pull、chunk/session runtime 和 gossip observability；Daemon 只消费其事件并接收需要触发平台 reconcile 的终态结果
 - **状态范围**：verified signed facts 进入 VerifiedState；retry/backoff/observed endpoint 等 restart hint 进入 GossipCheckpoint；session/chunk/address book 等只在内存
 
 **稳态 unsolicited ping 短路**：收到对端主动发来的 `MessagePing` 时，如果 ping 携带的 catalog root 与本端一致，`maybeShortcutSyncFromPingSummary` 直接记录 peer sync 状态并返回，不再创建 SyncSession。只有 root 不一致或 summary 生成失败时，才回退到完整 sync round。respondPing 仍正常回复 PONG，让对端拿到本端 summary。
@@ -516,7 +516,7 @@ Daemon 作为编排器，各子模块通过清晰的接口与 daemon 集成：
 
 - **输入**：detached VerifiedState、最小 LinuxState、本地配置和 LinuxDriver observation
 - **输出**：StrongSwan IKE child SA、XFRM interface、network namespace 内接口；只有不可重建的最小 journal 才写 LinuxState
-- **集成点**：Daemon 编排 reconcile，`internal/photonlinux.Runtime`（目标名 LinuxDriver）直接执行 SA/XFRM observe、apply 和 cleanup；实际 SA、动作和错误进入内存 Observation
+- **集成点**：Daemon 编排 reconcile，`internal/photonlinux.LinuxDriver` 直接执行 SA/XFRM observe、apply 和 cleanup；实际 SA、动作和错误进入内存 Observation
 - **状态范围**：LinkInstances、IPsecReconcile 仅存在于本机 state file，不进入 gossip
 
 **XFRM 维护短路**：在 `maintainExistingXFRMInterfaces` 中，如果 observed 状态与期望状态已经匹配，则跳过 `EnsureInterface`/`AssignAddress` 等冗余命令，只保留诊断地址分配。这减少了 reconcile 周期中对已有接口的无意义重写。

@@ -509,10 +509,10 @@ func TestCleanupIPsecLinkInstancesTearsDownManagedLinks(t *testing.T) {
 	runtime := &linuxRuntimeState{LinkInstances: linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})}
 	driver := &ipsec.DryRunDriver{}
 
-	platformRuntime := newTestLinuxRuntime(driver, driver)
-	cleaned, err := cleanupLinuxRuntimeIPsecLinks(context.Background(), runtime, []string{inst.ID}, platformRuntime, now)
+	platformDriver := newTestLinuxDriver(driver, driver)
+	cleaned, err := cleanupLinuxDriverIPsecLinks(context.Background(), runtime, []string{inst.ID}, platformDriver, now)
 	if err != nil {
-		t.Fatalf("cleanupLinuxRuntimeIPsecLinks: %v", err)
+		t.Fatalf("cleanupLinuxDriverIPsecLinks: %v", err)
 	}
 	if cleaned != 1 {
 		t.Fatalf("cleaned = %d, want 1", cleaned)
@@ -641,8 +641,8 @@ func TestCleanupIPsecOrphanConnectionsOnlyRemovesUnreferencedPhotonConnections(t
 		},
 	}
 
-	platformRuntime := newTestLinuxRuntime(driver, driver)
-	cleaned, err := platformRuntime.CleanupIPsecOrphans(context.Background(), managedIPsecConnectionNamesFromLinks(links))
+	platformDriver := newTestLinuxDriver(driver, driver)
+	cleaned, err := platformDriver.CleanupIPsecOrphans(context.Background(), managedIPsecConnectionNamesFromLinks(links))
 	if err != nil {
 		t.Fatalf("CleanupIPsecOrphans: %v", err)
 	}

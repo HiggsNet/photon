@@ -36,7 +36,7 @@ type VerifiedState struct {
 // GossipCheckpoint is a loss-tolerant restart hint. None of its fields may be
 // required for signature verification, authorization or eventual convergence.
 // Live sessions, timers, cursors, chunk assembly and in-flight pulls belong to
-// gossip.Engine/HostRuntime memory and are deliberately absent here.
+// gossip.Engine/GossipDriver memory and are deliberately absent here.
 type GossipCheckpoint struct {
 	Peers map[string]PeerCheckpoint `json:"peers,omitempty"`
 }

@@ -9,13 +9,13 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 )
 
-func TestRuntimeGossipObjectPullServerServesAndOwnsListener(t *testing.T) {
+func TestGossipDriverGossipObjectPullServerServesAndOwnsListener(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Skipf("TCP sockets are unavailable: %v", err)
 	}
-	runtime := NewRuntime(NewClock(nil), DefaultEventBuffer, nil, GossipRuntimeConfig{})
-	if err := runtime.StartGossipObjectPullServer(t.Context(), listener, func(request *gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
+	driver := NewGossipDriver(NewClock(nil), DefaultEventBuffer, nil, GossipDriverConfig{})
+	if err := driver.StartGossipObjectPullServer(t.Context(), listener, func(request *gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
 		return &gossip.ObjectPullResponse{OK: request != nil && request.Type == gossip.ObjectPullZone}
 	}, 1, time.Second); err != nil {
 		t.Fatalf("StartGossipObjectPullServer: %v", err)
@@ -35,31 +35,31 @@ func TestRuntimeGossipObjectPullServerServesAndOwnsListener(t *testing.T) {
 		t.Fatalf("response = %#v, want OK", response)
 	}
 
-	runtime.Stop()
+	driver.Stop()
 	if conn, err := net.DialTimeout("tcp", listener.Addr().String(), 50*time.Millisecond); err == nil {
 		_ = conn.Close()
-		t.Fatal("listener still accepts after Runtime.Stop")
+		t.Fatal("listener still accepts after GossipDriver.Stop")
 	}
 }
 
-func TestRuntimeGossipObjectPullServerValidatesSingleOwnership(t *testing.T) {
-	runtime := NewRuntime(NewClock(nil), DefaultEventBuffer, nil, GossipRuntimeConfig{})
-	defer runtime.Stop()
+func TestGossipDriverGossipObjectPullServerValidatesSingleOwnership(t *testing.T) {
+	driver := NewGossipDriver(NewClock(nil), DefaultEventBuffer, nil, GossipDriverConfig{})
+	defer driver.Stop()
 	lookup := func(*gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
 		return &gossip.ObjectPullResponse{OK: true}
 	}
-	if err := runtime.StartGossipObjectPullServer(t.Context(), nil, lookup, 0, 0); !errors.Is(err, ErrGossipObjectPullListenerRequired) {
+	if err := driver.StartGossipObjectPullServer(t.Context(), nil, lookup, 0, 0); !errors.Is(err, ErrGossipObjectPullListenerRequired) {
 		t.Fatalf("nil listener error = %v", err)
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Skipf("TCP sockets are unavailable: %v", err)
 	}
-	if err := runtime.StartGossipObjectPullServer(t.Context(), listener, nil, 0, 0); !errors.Is(err, ErrGossipObjectPullLookupRequired) {
+	if err := driver.StartGossipObjectPullServer(t.Context(), listener, nil, 0, 0); !errors.Is(err, ErrGossipObjectPullLookupRequired) {
 		_ = listener.Close()
 		t.Fatalf("nil lookup error = %v", err)
 	}
-	if err := runtime.StartGossipObjectPullServer(t.Context(), listener, lookup, 0, 0); err != nil {
+	if err := driver.StartGossipObjectPullServer(t.Context(), listener, lookup, 0, 0); err != nil {
 		_ = listener.Close()
 		t.Fatalf("first start: %v", err)
 	}
@@ -68,21 +68,21 @@ func TestRuntimeGossipObjectPullServerValidatesSingleOwnership(t *testing.T) {
 		t.Skipf("second TCP listener is unavailable: %v", err)
 	}
 	defer second.Close()
-	if err := runtime.StartGossipObjectPullServer(t.Context(), second, lookup, 0, 0); !errors.Is(err, ErrGossipObjectPullServerStarted) {
+	if err := driver.StartGossipObjectPullServer(t.Context(), second, lookup, 0, 0); !errors.Is(err, ErrGossipObjectPullServerStarted) {
 		t.Fatalf("second start error = %v", err)
 	}
 }
 
-func TestRuntimeGossipObjectPullServerRejectsConnectionsAboveLimit(t *testing.T) {
+func TestGossipDriverGossipObjectPullServerRejectsConnectionsAboveLimit(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Skipf("TCP sockets are unavailable: %v", err)
 	}
-	runtime := NewRuntime(NewClock(nil), DefaultEventBuffer, nil, GossipRuntimeConfig{})
-	defer runtime.Stop()
+	driver := NewGossipDriver(NewClock(nil), DefaultEventBuffer, nil, GossipDriverConfig{})
+	defer driver.Stop()
 	entered := make(chan struct{}, 1)
 	release := make(chan struct{})
-	if err := runtime.StartGossipObjectPullServer(t.Context(), listener, func(*gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
+	if err := driver.StartGossipObjectPullServer(t.Context(), listener, func(*gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
 		entered <- struct{}{}
 		<-release
 		return &gossip.ObjectPullResponse{OK: true}

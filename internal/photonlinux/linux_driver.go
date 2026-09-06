@@ -12,14 +12,14 @@ import (
 	transportipsec "github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
-// Runtime owns the Linux platform dependencies used by Photon. It is the
-// Linux composition boundary: common runtime code must not depend on netns,
+// LinuxDriver owns the Linux platform dependencies used by Photon. It is the
+// Linux composition boundary: platform-neutral code must not depend on netns,
 // XFRM, VICI, BIRD, nftables, or other Linux implementation details.
 //
-// Additional Linux subsystems should share this runtime when they need common
+// Additional Linux subsystems should share this driver when they need common
 // execution context such as a network namespace. They should not cause a
 // matching set of speculative common controller interfaces to be introduced.
-type Runtime struct {
+type LinuxDriver struct {
 	ipsecDriver       transportipsec.IPsecDriver
 	xfrmDriver        transportipsec.XFRMDriver
 	firewallDriver    firewall.FirewallDriver
@@ -44,7 +44,7 @@ type Logger interface {
 	Warn(component, event string, fields map[string]any)
 }
 
-type RuntimeOptions struct {
+type LinuxDriverOptions struct {
 	IPsecDriver       transportipsec.IPsecDriver
 	XFRMDriver        transportipsec.XFRMDriver
 	FirewallDriver    firewall.FirewallDriver
@@ -59,7 +59,7 @@ type RuntimeOptions struct {
 	Logger            Logger
 }
 
-func NewRuntime(options RuntimeOptions) (*Runtime, error) {
+func NewLinuxDriver(options LinuxDriverOptions) (*LinuxDriver, error) {
 	if options.IPsecDriver == nil {
 		return nil, errors.New("ipsec driver is required")
 	}
@@ -74,7 +74,7 @@ func NewRuntime(options RuntimeOptions) (*Runtime, error) {
 	if upstreamRoutes == nil {
 		upstreamRoutes = newExecUpstreamRouteManager()
 	}
-	runtime := &Runtime{
+	driver := &LinuxDriver{
 		ipsecDriver:       options.IPsecDriver,
 		xfrmDriver:        options.XFRMDriver,
 		firewallDriver:    options.FirewallDriver,
@@ -88,8 +88,8 @@ func NewRuntime(options RuntimeOptions) (*Runtime, error) {
 		close:             options.Close,
 		logger:            options.Logger,
 	}
-	runtime.initializeHealthProber()
-	return runtime, nil
+	driver.initializeHealthProber()
+	return driver, nil
 }
 
 func cloneBirdProcesses(source map[string]bird.ProcessManager) map[string]bird.ProcessManager {
@@ -114,11 +114,11 @@ func cloneNetworkNamespaces(source map[string]transportipsec.NetNSSpec) map[stri
 	return cloned
 }
 
-func (r *Runtime) ListIPsecSAs(ctx context.Context) ([]transportipsec.SAState, error) {
+func (r *LinuxDriver) ListIPsecSAs(ctx context.Context) ([]transportipsec.SAState, error) {
 	return r.ipsecDriver.ListSAs(ctx)
 }
 
-func (r *Runtime) ApplyIPsecAction(ctx context.Context, action transportipsec.ReconcileAction, netns transportipsec.NetNSSpec) (transportipsec.ApplyPlan, error) {
+func (r *LinuxDriver) ApplyIPsecAction(ctx context.Context, action transportipsec.ReconcileAction, netns transportipsec.NetNSSpec) (transportipsec.ApplyPlan, error) {
 	return transportipsec.ApplyReconcileAction(ctx, r.ipsecDriver, r.xfrmDriver, action, netns)
 }
 
@@ -126,7 +126,7 @@ type ipsecLifecycleSubscriber interface {
 	SubscribeLifecycleEvents(context.Context) (<-chan transportipsec.VICIEvent, func(), error)
 }
 
-func (r *Runtime) SubscribeIPsecLifecycle(ctx context.Context) (<-chan transportipsec.VICIEvent, func(), bool, error) {
+func (r *LinuxDriver) SubscribeIPsecLifecycle(ctx context.Context) (<-chan transportipsec.VICIEvent, func(), bool, error) {
 	subscriber, ok := r.ipsecDriver.(ipsecLifecycleSubscriber)
 	if !ok || subscriber == nil {
 		return nil, nil, false, nil
@@ -135,9 +135,9 @@ func (r *Runtime) SubscribeIPsecLifecycle(ctx context.Context) (<-chan transport
 	return events, stop, true, err
 }
 
-// Close releases dependencies created for this runtime. Dependencies injected
-// from a long-lived daemon can omit RuntimeOptions.Close and remain daemon-owned.
-func (r *Runtime) Close() error {
+// Close releases dependencies created for this driver. Dependencies injected
+// from a long-lived daemon can omit LinuxDriverOptions.Close and remain daemon-owned.
+func (r *LinuxDriver) Close() error {
 	if r == nil {
 		return nil
 	}

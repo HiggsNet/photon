@@ -1011,14 +1011,14 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := serviceA.hostRuntime.StartGossipObjectPullWorkers(ctx, serviceA.objectPullExecutor, 0, 0); err != nil {
+	if err := serviceA.gossipDriver.StartGossipObjectPullWorkers(ctx, serviceA.objectPullExecutor, 0, 0); err != nil {
 		t.Fatal(err)
 	}
-	defer serviceA.hostRuntime.Stop()
-	if err := serviceB.hostRuntime.StartGossipObjectPullWorkers(ctx, serviceB.objectPullExecutor, 0, 0); err != nil {
+	defer serviceA.gossipDriver.Stop()
+	if err := serviceB.gossipDriver.StartGossipObjectPullWorkers(ctx, serviceB.objectPullExecutor, 0, 0); err != nil {
 		t.Fatal(err)
 	}
-	defer serviceB.hostRuntime.Stop()
+	defer serviceB.gossipDriver.Stop()
 
 	if err := serviceB.handleSyncTimerEvent(ctx, true); err != nil {
 		t.Fatalf("start sync node-b from node-a: %v", err)
@@ -1029,11 +1029,11 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 	for {
 		pumpEventLoopSync(ctx, []*Daemon{serviceA, serviceB}, []*gossip.Transport{transportA, transportB})
 		aActive := false
-		if s := serviceA.hostRuntime.Gossip.Session(configB.PeerID); s != nil && !s.Done() {
+		if s := serviceA.gossipDriver.Gossip.Session(configB.PeerID); s != nil && !s.Done() {
 			aActive = true
 		}
 		bActive := false
-		if s := serviceB.hostRuntime.Gossip.Session(configA.PeerID); s != nil && !s.Done() {
+		if s := serviceB.gossipDriver.Gossip.Session(configA.PeerID); s != nil && !s.Done() {
 			bActive = true
 		}
 		if !aActive && !bActive {

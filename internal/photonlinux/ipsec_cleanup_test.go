@@ -15,8 +15,8 @@ func TestCleanupLinkInstancesTearsDownOwnedResourcesAndIgnoresMissing(t *testing
 	}
 	instance := transportipsec.NewLinkInstance(spec, transportipsec.LinkStateUp, time.Unix(1000, 0))
 	driver := &transportipsec.DryRunDriver{}
-	runtime := mustNewRuntime(t, RuntimeOptions{IPsecDriver: driver, XFRMDriver: driver})
-	remaining, cleaned, err := runtime.CleanupIPsecLinks(context.Background(), map[string]transportipsec.LinkInstance{
+	linuxDriver := mustNewLinuxDriver(t, LinuxDriverOptions{IPsecDriver: driver, XFRMDriver: driver})
+	remaining, cleaned, err := linuxDriver.CleanupIPsecLinks(context.Background(), map[string]transportipsec.LinkInstance{
 		instance.ID: instance,
 	}, []string{"already-missing", instance.ID})
 	if err != nil {
@@ -39,8 +39,8 @@ func TestCleanupOrphanConnectionsKeepsReferencedAndForeignNames(t *testing.T) {
 		{Name: "ipsec-orphan"},
 		{Name: "foreign"},
 	}}
-	runtime := mustNewRuntime(t, RuntimeOptions{IPsecDriver: driver, XFRMDriver: driver})
-	cleaned, err := runtime.CleanupIPsecOrphans(context.Background(), map[string]bool{"ipsec-keep": true})
+	linuxDriver := mustNewLinuxDriver(t, LinuxDriverOptions{IPsecDriver: driver, XFRMDriver: driver})
+	cleaned, err := linuxDriver.CleanupIPsecOrphans(context.Background(), map[string]bool{"ipsec-keep": true})
 	if err != nil {
 		t.Fatal(err)
 	}

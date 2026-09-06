@@ -13,14 +13,14 @@ import (
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
-func TestRuntimeHandleGossipSessionEventOwnsEngineToActionBridge(t *testing.T) {
+func TestGossipDriverHandleGossipSessionEventOwnsEngineToActionBridge(t *testing.T) {
 	clock := newFakeClock(time.Unix(100, 0))
 	controller := &memoryGossipController{}
-	runtime := NewRuntime(clock, 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}, trace: &controller.trace}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
-	defer runtime.Stop()
-	runtime.Gossip.NewSession("peer-a")
+	driver := NewGossipDriver(clock, 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}, trace: &controller.trace}, GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+	defer driver.Stop()
+	driver.Gossip.NewSession("peer-a")
 
-	result, err := runtime.handleGossipSessionEvent(context.Background(), &gossip.SyncTimerEvent{PeerID: "peer-a"}, clock.Now(), controller)
+	result, err := driver.handleGossipSessionEvent(context.Background(), &gossip.SyncTimerEvent{PeerID: "peer-a"}, clock.Now(), controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,15 +32,15 @@ func TestRuntimeHandleGossipSessionEventOwnsEngineToActionBridge(t *testing.T) {
 	}
 }
 
-func TestRuntimeCatalogSummaryUpdatesSessionObservability(t *testing.T) {
+func TestGossipDriverCatalogSummaryUpdatesSessionObservability(t *testing.T) {
 	clock := newFakeClock(time.Unix(100, 0))
 	peerID := "peer-a"
-	runtime := NewRuntime(clock, 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
-	defer runtime.Stop()
-	bindMemoryGossipTransport(t, runtime, peerID)
-	runtime.Gossip.SetSession(peerID, gossip.NewSyncSession(peerID))
+	driver := NewGossipDriver(clock, 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+	defer driver.Stop()
+	bindMemoryGossipTransport(t, driver, peerID)
+	driver.Gossip.SetSession(peerID, gossip.NewSyncSession(peerID))
 
-	result, err := runtime.HandleGossipHostEvent(context.Background(), GossipEvent{Value: &gossip.CatalogSummaryReceivedEvent{
+	result, err := driver.HandleGossipHostEvent(context.Background(), GossipEvent{Value: &gossip.CatalogSummaryReceivedEvent{
 		PeerID: peerID,
 		Summary: &corestate.CatalogSummary{
 			CatalogRoot: []byte{0x21, 0x22},
@@ -54,7 +54,7 @@ func TestRuntimeCatalogSummaryUpdatesSessionObservability(t *testing.T) {
 	if result.Session.NetworkChanged {
 		t.Fatal("metadata-only catalog event reported a Network change")
 	}
-	diagnostics, ok := runtime.Observability.Snapshot(peerID, clock.Now())
+	diagnostics, ok := driver.Observability.Snapshot(peerID, clock.Now())
 	if !ok || diagnostics.DatagramStats == nil {
 		t.Fatalf("diagnostics = %#v", diagnostics)
 	}
@@ -67,14 +67,14 @@ func TestRuntimeCatalogSummaryUpdatesSessionObservability(t *testing.T) {
 	}
 }
 
-func TestRuntimeHandleGossipHostEventOwnsPacketTimerAndCompletionDispatch(t *testing.T) {
+func TestGossipDriverHandleGossipHostEventOwnsPacketTimerAndCompletionDispatch(t *testing.T) {
 	clock := newFakeClock(time.Unix(100, 0))
-	runtime := NewRuntime(clock, 4, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
-	defer runtime.Stop()
-	_, datagram := bindMemoryGossipTransport(t, runtime, "peer-a", "peer-b")
+	driver := NewGossipDriver(clock, 4, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+	defer driver.Stop()
+	_, datagram := bindMemoryGossipTransport(t, driver, "peer-a", "peer-b")
 
 	packet := &gossip.Packet{Message: &gossip.Message{Type: gossip.MessageFetchCatalogPage, PeerID: "peer-a", FetchCatalogPage: &gossip.FetchCatalogPage{}}}
-	packetResult, err := runtime.HandleGossipHostEvent(context.Background(), GossipPacketReceived{Packet: packet}, clock.Now(), nil)
+	packetResult, err := driver.HandleGossipHostEvent(context.Background(), GossipPacketReceived{Packet: packet}, clock.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,12 +82,12 @@ func TestRuntimeHandleGossipHostEventOwnsPacketTimerAndCompletionDispatch(t *tes
 		t.Fatalf("packet result = %#v, writes = %d", packetResult, datagram.writeCount())
 	}
 
-	runtime.Gossip.NewSession("peer-a")
-	if _, err := runtime.ApplyGossipTimerAction(gossip.StartTimerAction{PeerID: "peer-a", Kind: gossip.TimerKindRound, Deadline: clock.Now().Add(time.Second)}); err != nil {
+	driver.Gossip.NewSession("peer-a")
+	if _, err := driver.ApplyGossipTimerAction(gossip.StartTimerAction{PeerID: "peer-a", Kind: gossip.TimerKindRound, Deadline: clock.Now().Add(time.Second)}); err != nil {
 		t.Fatal(err)
 	}
 	clock.Advance(time.Second)
-	timerResult, err := runtime.HandleGossipHostEvent(context.Background(), <-runtime.Events(), clock.Now(), nil)
+	timerResult, err := driver.HandleGossipHostEvent(context.Background(), <-driver.Events(), clock.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,9 +95,9 @@ func TestRuntimeHandleGossipHostEventOwnsPacketTimerAndCompletionDispatch(t *tes
 		t.Fatalf("timer result = %#v", timerResult)
 	}
 
-	runtime.Gossip.NewSession("peer-b")
+	driver.Gossip.NewSession("peer-b")
 	completion := &gossip.ObjectPullResultEvent{PeerID: "peer-b", Zone: "remote.catofes.", Err: errors.New("pull failed")}
-	completionResult, err := runtime.HandleGossipHostEvent(context.Background(), GossipEvent{Value: completion}, clock.Now(), nil)
+	completionResult, err := driver.HandleGossipHostEvent(context.Background(), GossipEvent{Value: completion}, clock.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,48 +106,48 @@ func TestRuntimeHandleGossipHostEventOwnsPacketTimerAndCompletionDispatch(t *tes
 	}
 }
 
-func TestRuntimeHandleGossipSessionEventRejectsMissingPeerOrSession(t *testing.T) {
-	runtime := NewRuntime(nil, 1, nil, GossipRuntimeConfig{})
-	defer runtime.Stop()
+func TestGossipDriverHandleGossipSessionEventRejectsMissingPeerOrSession(t *testing.T) {
+	driver := NewGossipDriver(nil, 1, nil, GossipDriverConfig{})
+	defer driver.Stop()
 	controller := &memoryGossipController{}
-	if _, err := runtime.handleGossipSessionEvent(context.Background(), &gossip.PacketEvent{}, time.Now(), controller); !errors.Is(err, ErrGossipEventPeerRequired) {
+	if _, err := driver.handleGossipSessionEvent(context.Background(), &gossip.PacketEvent{}, time.Now(), controller); !errors.Is(err, ErrGossipEventPeerRequired) {
 		t.Fatalf("missing peer error = %v", err)
 	}
-	if _, err := runtime.handleGossipSessionEvent(context.Background(), &gossip.SyncTimerEvent{PeerID: "missing"}, time.Now(), controller); !errors.Is(err, ErrGossipSessionNotFound) {
+	if _, err := driver.handleGossipSessionEvent(context.Background(), &gossip.SyncTimerEvent{PeerID: "missing"}, time.Now(), controller); !errors.Is(err, ErrGossipSessionNotFound) {
 		t.Fatalf("missing session error = %v", err)
 	}
 }
 
-func TestRuntimeRoundTimeoutDropsOnlyItsPeerChunkAssemblies(t *testing.T) {
-	runtime := NewRuntime(nil, 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState("local.catofes.")}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
-	defer runtime.Stop()
-	runtime.Gossip.NewSession("peer-a")
+func TestGossipDriverRoundTimeoutDropsOnlyItsPeerChunkAssemblies(t *testing.T) {
+	driver := NewGossipDriver(nil, 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState("local.catofes.")}}, GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+	defer driver.Stop()
+	driver.Gossip.NewSession("peer-a")
 	id := []byte("0123456789abcdef")
 	first := &gossip.ObjectChunk{TransferID: id, Object: gossip.ObjectPullZone, Zone: "catofes.", ObjectHash: make([]byte, 32), Index: 0, Total: 2, Data: []byte("first")}
-	if _, complete, err := runtime.AddGossipObjectChunk("peer-a", first, time.Now()); err != nil || complete {
+	if _, complete, err := driver.AddGossipObjectChunk("peer-a", first, time.Now()); err != nil || complete {
 		t.Fatalf("first chunk: complete=%t err=%v", complete, err)
 	}
 	controller := &memoryGossipController{}
-	if _, err := runtime.handleGossipSessionEvent(context.Background(), &gossip.RoundTimeoutEvent{PeerID: "peer-a"}, time.Now(), controller); err != nil {
+	if _, err := driver.handleGossipSessionEvent(context.Background(), &gossip.RoundTimeoutEvent{PeerID: "peer-a"}, time.Now(), controller); err != nil {
 		t.Fatal(err)
 	}
 	second := &gossip.ObjectChunk{TransferID: id, Object: gossip.ObjectPullZone, Zone: "catofes.", ObjectHash: make([]byte, 32), Index: 1, Total: 2, Data: []byte("second")}
-	if _, complete, err := runtime.AddGossipObjectChunk("peer-a", second, time.Now()); err != nil || complete {
+	if _, complete, err := driver.AddGossipObjectChunk("peer-a", second, time.Now()); err != nil || complete {
 		t.Fatalf("chunk after timeout: complete=%t err=%v", complete, err)
 	}
 }
 
-func TestRuntimeHandleGossipSessionEventOwnsCatalogEnrichment(t *testing.T) {
-	runtime := NewRuntime(nil, 2, &memoryGossipStateStore{views: []corestate.View{loadedManagedGossipState("local.catofes.")}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
-	defer runtime.Stop()
-	session := runtime.Gossip.NewSession("peer-a")
+func TestGossipDriverHandleGossipSessionEventOwnsCatalogEnrichment(t *testing.T) {
+	driver := NewGossipDriver(nil, 2, &memoryGossipStateStore{views: []corestate.View{loadedManagedGossipState("local.catofes.")}}, GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+	defer driver.Stop()
+	session := driver.Gossip.NewSession("peer-a")
 	session.State = gossip.SyncSessionCatalogDiffing
 	controller := &memoryGossipController{}
 	event := &gossip.CatalogPageReceivedEvent{PeerID: "peer-a", Page: &corestate.CatalogPage{Entries: []corestate.ZoneDigest{
 		{Zone: "local.catofes.", RootHash: []byte("local")},
 		{Zone: "remote.catofes.", RootHash: []byte("remote")},
 	}}}
-	if _, err := runtime.handleGossipSessionEvent(context.Background(), event, time.Now(), controller); err != nil {
+	if _, err := driver.handleGossipSessionEvent(context.Background(), event, time.Now(), controller); err != nil {
 		t.Fatal(err)
 	}
 	if len(event.Page.Entries) != 1 || event.Page.Entries[0].Zone != "remote.catofes." {
@@ -155,21 +155,21 @@ func TestRuntimeHandleGossipSessionEventOwnsCatalogEnrichment(t *testing.T) {
 	}
 }
 
-func TestRuntimeFinishesSessionAndStartsDeferredHint(t *testing.T) {
+func TestGossipDriverFinishesSessionAndStartsDeferredHint(t *testing.T) {
 	now := time.Unix(100, 0)
-	runtime := NewRuntime(newFakeClock(now), 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipRuntimeConfig{PeerID: "local.catofes."})
-	defer runtime.Stop()
-	session := runtime.Gossip.NewSession("peer-a")
+	driver := NewGossipDriver(newFakeClock(now), 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipDriverConfig{PeerID: "local.catofes."})
+	defer driver.Stop()
+	session := driver.Gossip.NewSession("peer-a")
 	session.State = gossip.SyncSessionCompleted
-	runtime.Gossip.DeferHint("peer-a")
+	driver.Gossip.DeferHint("peer-a")
 
 	result := GossipEventResult{PeerID: "peer-a", Done: true}
-	runtime.finishGossipSession(context.Background(), &result, now, nil)
+	driver.finishGossipSession(context.Background(), &result, now, nil)
 
-	if !result.FollowupQueued || runtime.Gossip.Session("peer-a") == nil {
-		t.Fatalf("result=%#v session=%#v", result, runtime.Gossip.Session("peer-a"))
+	if !result.FollowupQueued || driver.Gossip.Session("peer-a") == nil {
+		t.Fatalf("result=%#v session=%#v", result, driver.Gossip.Session("peer-a"))
 	}
-	event, ok := runtime.GossipSessionEventFor(<-runtime.Events())
+	event, ok := driver.GossipSessionEventFor(<-driver.Events())
 	if !ok {
 		t.Fatal("deferred hint did not queue a session event")
 	}
@@ -178,30 +178,30 @@ func TestRuntimeFinishesSessionAndStartsDeferredHint(t *testing.T) {
 	}
 }
 
-func TestRuntimeFinishesChangedSessionAndOwnsRelay(t *testing.T) {
+func TestGossipDriverFinishesChangedSessionAndOwnsRelay(t *testing.T) {
 	now := time.Unix(100, 0)
 	view := loadedManagedGossipState("local.catofes.", "remote.catofes.")
 	view.Gossip = &corestate.GossipCheckpoint{Peers: map[string]corestate.PeerCheckpoint{"peer-c": {}}}
 	state := &memoryGossipStateStore{views: []corestate.View{view, view}}
-	runtime := NewRuntime(newFakeClock(now), 4, state, GossipRuntimeConfig{
+	driver := NewGossipDriver(newFakeClock(now), 4, state, GossipDriverConfig{
 		PeerID: "local.catofes.",
 		Discovery: GossipDiscoveryConfig{
 			Bootstrap:      map[string]*net.UDPAddr{"peer-c": {IP: net.ParseIP("127.0.0.1"), Port: 33434}},
 			BootstrapPeers: []string{"peer-c"},
 		},
 	})
-	defer runtime.Stop()
-	session := runtime.Gossip.NewSession("peer-b")
+	defer driver.Stop()
+	session := driver.Gossip.NewSession("peer-b")
 	session.State = gossip.SyncSessionCompleted
 	session.AccumulateNetworkChanged(true)
 
 	result := GossipEventResult{PeerID: "peer-b", Done: true}
-	runtime.finishGossipSession(context.Background(), &result, now, nil)
+	driver.finishGossipSession(context.Background(), &result, now, nil)
 
-	if !result.NetworkChanged || runtime.Gossip.Session("peer-b") != nil {
-		t.Fatalf("result=%#v source_session=%#v", result, runtime.Gossip.Session("peer-b"))
+	if !result.NetworkChanged || driver.Gossip.Session("peer-b") != nil {
+		t.Fatalf("result=%#v source_session=%#v", result, driver.Gossip.Session("peer-b"))
 	}
-	event, ok := runtime.GossipSessionEventFor(<-runtime.Events())
+	event, ok := driver.GossipSessionEventFor(<-driver.Events())
 	if !ok {
 		t.Fatal("relay did not queue a session event")
 	}
@@ -216,33 +216,33 @@ func TestRuntimeFinishesChangedSessionAndOwnsRelay(t *testing.T) {
 	if len(state.updates) != 1 || !state.updates[0]["peer-c"].LastRelayRootHex.Set {
 		t.Fatalf("relay checkpoint updates = %#v", state.updates)
 	}
-	diagnostics, ok := runtime.Observability.Snapshot("peer-c", now)
+	diagnostics, ok := driver.Observability.Snapshot("peer-c", now)
 	if !ok || diagnostics.LastUpdateSource != "peer-b" || diagnostics.LastRelaySuppression != "" {
 		t.Fatalf("relay diagnostics = %#v", diagnostics)
 	}
 }
 
-func TestRuntimeSchedulerDeliversChunkRepairThroughCommonEventBridge(t *testing.T) {
+func TestGossipDriverSchedulerDeliversChunkRepairThroughCommonEventBridge(t *testing.T) {
 	clock := newFakeClock(time.Unix(100, 0))
-	runtime := NewRuntime(clock, 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
-	defer runtime.Stop()
-	runtime.Gossip.NewSession("peer-a")
+	driver := NewGossipDriver(clock, 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+	defer driver.Stop()
+	driver.Gossip.NewSession("peer-a")
 	id := []byte("0123456789abcdef")
 	chunk := &gossip.ObjectChunk{TransferID: id, Object: gossip.ObjectPullZone, Zone: "catofes.", ObjectHash: make([]byte, 32), Index: 0, Total: 2, Data: []byte("partial")}
-	if _, complete, err := runtime.AddGossipObjectChunk("peer-a", chunk, clock.Now()); err != nil || complete {
+	if _, complete, err := driver.AddGossipObjectChunk("peer-a", chunk, clock.Now()); err != nil || complete {
 		t.Fatalf("add chunk: complete=%t err=%v", complete, err)
 	}
-	if err := runtime.ScheduleGossipChunkRepair("peer-a", chunk); err != nil {
+	if err := driver.ScheduleGossipChunkRepair("peer-a", chunk); err != nil {
 		t.Fatal(err)
 	}
 	clock.Advance(gossip.ChunkRepairQuiet)
-	hostEvent := <-runtime.Events()
-	event, ok := runtime.GossipSessionEventFor(hostEvent)
+	hostEvent := <-driver.Events()
+	event, ok := driver.GossipSessionEventFor(hostEvent)
 	if !ok {
 		t.Fatalf("host event %#v was not a gossip event", hostEvent)
 	}
 	controller := &memoryGossipController{}
-	if _, err := runtime.handleGossipSessionEvent(context.Background(), event, clock.Now(), controller); err != nil {
+	if _, err := driver.handleGossipSessionEvent(context.Background(), event, clock.Now(), controller); err != nil {
 		t.Fatal(err)
 	}
 	if want := []string{"send:object_chunk_nack"}; !reflect.DeepEqual(controller.trace, want) {

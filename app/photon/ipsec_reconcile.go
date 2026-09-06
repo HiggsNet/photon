@@ -49,13 +49,13 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		}
 		plan.Desired = injectIPsecKeyMaterial(verified, runtime.IPsecTransportKey, plan.Desired)
 	}
-	if d.linuxRuntime == nil {
-		err := errors.New("linux runtime is not configured")
+	if d.linuxDriver == nil {
+		err := errors.New("linux driver is not configured")
 		d.recordIPsecReconcileError(rev, now.Unix(), err)
 		return err
 	}
-	platformRuntime := d.linuxRuntime
-	sas, err := platformRuntime.ListIPsecSAs(ctx)
+	platformDriver := d.linuxDriver
+	sas, err := platformDriver.ListIPsecSAs(ctx)
 	if err != nil {
 		d.recordIPsecReconcileError(rev, now.Unix(), err)
 		return fmt.Errorf("list ipsec sas: %w", err)
@@ -72,8 +72,8 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		"instances":    len(instances),
 		"sas":          len(sas),
 	})
-	xfrmObservations := platformRuntime.ObserveXFRMLinks(ctx, plan.Desired, instances, groups)
-	sas, missingXFRMLinks, err := platformRuntime.FilterSAsWithMissingXFRMLinks(ctx, plan.Desired, instances, sas, xfrmObservations)
+	xfrmObservations := platformDriver.ObserveXFRMLinks(ctx, plan.Desired, instances, groups)
+	sas, missingXFRMLinks, err := platformDriver.FilterSAsWithMissingXFRMLinks(ctx, plan.Desired, instances, sas, xfrmObservations)
 	if err != nil {
 		d.recordIPsecReconcileError(rev, now.Unix(), err)
 		return fmt.Errorf("inspect xfrm links: %w", err)
@@ -101,7 +101,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		d.logDebug("ipsec", "reconcile_action", ipsecReconcileActionLogFields(action))
 		switch action.Action {
 		case ipsec.ReconcileActionCleanupDuplicateSA:
-			if _, err := platformRuntime.ApplyIPsecAction(ctx, action, ipsec.NetNSSpec{}); err != nil {
+			if _, err := platformDriver.ApplyIPsecAction(ctx, action, ipsec.NetNSSpec{}); err != nil {
 				d.logWarn("ipsec", "duplicate_sa_gc_failed", map[string]any{
 					"sa_unique_id": action.SAUniqueID,
 					"error":        err,
@@ -111,7 +111,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 			ipsec.ReconcileActionTeardown, ipsec.ReconcileActionPrepareRotate, ipsec.ReconcileActionCommitRotate,
 			ipsec.ReconcileActionRollbackRotate, ipsec.ReconcileActionCleanupRotate:
 			netns := netnsForAction(action, groups)
-			if _, err := platformRuntime.ApplyIPsecAction(ctx, action, netns); err != nil {
+			if _, err := platformDriver.ApplyIPsecAction(ctx, action, netns); err != nil {
 				markIPsecActionFailed(result.Instances, action, groupBackoffPolicy(action, groups), now, err)
 				if saveErr := d.commitIPsecReconcileResult(rev, runtime, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
 					return fmt.Errorf("save failed ipsec reconcile state after apply error %q: %w", err.Error(), saveErr)
@@ -119,7 +119,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 				return err
 			}
 			if shouldAssignIPsecDiagnosticAddresses(action) {
-				if err := platformRuntime.AssignDiagnosticAddresses(ctx, *action.Spec, diagnosticPrefixes); err != nil {
+				if err := platformDriver.AssignDiagnosticAddresses(ctx, *action.Spec, diagnosticPrefixes); err != nil {
 					markIPsecActionFailed(result.Instances, action, groupBackoffPolicy(action, groups), now, err)
 					if saveErr := d.commitIPsecReconcileResult(rev, runtime, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
 						return fmt.Errorf("save failed ipsec reconcile state after diagnostic address error %q: %w", err.Error(), saveErr)
@@ -130,7 +130,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 			markIPsecActionSucceeded(result.Instances, action, now)
 		}
 	}
-	if err := platformRuntime.MaintainXFRMInterfaces(ctx, plan.Desired, result.Instances, result.Actions, groups, diagnosticPrefixes, xfrmObservations); err != nil {
+	if err := platformDriver.MaintainXFRMInterfaces(ctx, plan.Desired, result.Instances, result.Actions, groups, diagnosticPrefixes, xfrmObservations); err != nil {
 		if saveErr := d.commitIPsecReconcileResult(rev, runtime, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
 			return fmt.Errorf("save failed ipsec reconcile state after xfrm maintenance error %q: %w", err.Error(), saveErr)
 		}
@@ -498,10 +498,10 @@ func (d *Daemon) recordIPsecReconcileError(rev uint64, unix int64, err error) {
 // IPsec planner deprioritize addresses that are currently in backoff or have
 // recent failures, matching the gossip transport's own dialing preferences.
 func (d *Daemon) buildIPsecContactPointQuality(verified *corestate.VerifiedState, now time.Time) map[zone.ZonePath]map[string]ipsec.ContactPointQuality {
-	if d == nil || d.hostRuntime == nil || d.hostRuntime.Transport() == nil || verified == nil || verified.Network == nil {
+	if d == nil || d.gossipDriver == nil || d.gossipDriver.Transport() == nil || verified == nil || verified.Network == nil {
 		return nil
 	}
-	transport := d.hostRuntime.Transport()
+	transport := d.gossipDriver.Transport()
 	ns := verified.Network
 	out := make(map[zone.ZonePath]map[string]ipsec.ContactPointQuality)
 

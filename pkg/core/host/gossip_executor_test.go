@@ -18,8 +18,8 @@ type memoryGossipController struct {
 	issues []GossipExecutionIssue
 }
 
-func gossipConfigCapturingIssues(config GossipRuntimeConfig, issues *[]GossipExecutionIssue) GossipRuntimeConfig {
-	config.Log = func(event GossipRuntimeLog) {
+func gossipConfigCapturingIssues(config GossipDriverConfig, issues *[]GossipExecutionIssue) GossipDriverConfig {
+	config.Log = func(event GossipDriverLog) {
 		if event.Err != nil {
 			*issues = append(*issues, GossipExecutionIssue{Phase: event.Phase, PeerID: event.PeerID, Err: event.Err})
 		}
@@ -119,7 +119,7 @@ func (controller *memoryGossipController) SendGossip(_ context.Context, outbound
 	return nil
 }
 
-func TestRuntimeExecuteGossipActionsUsesCommonOrdering(t *testing.T) {
+func TestGossipDriverExecuteGossipActionsUsesCommonOrdering(t *testing.T) {
 	clock := newFakeClock(time.Unix(100, 0))
 	controller := &memoryGossipController{}
 	state := &memoryGossipStateStore{
@@ -127,10 +127,10 @@ func TestRuntimeExecuteGossipActionsUsesCommonOrdering(t *testing.T) {
 		trace:       &controller.trace,
 		applyResult: corestate.RemoteBatchResult{CommitResult: corestate.CommitResult{Committed: true, Changes: corestate.ChangeSet{NetworkChanged: true}}, Outcomes: []corestate.RemoteApplyOutcome{{Zone: "node-a.catofes.", Result: &corestate.ApplyResult{NetworkChanged: true}}}},
 	}
-	runtime := NewRuntime(clock, 4, state, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
-	defer runtime.Stop()
+	driver := NewGossipDriver(clock, 4, state, GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+	defer driver.Stop()
 	pulls := make(chan gossip.StartObjectPullAction, 1)
-	if err := runtime.StartGossipObjectPullWorkers(t.Context(), memoryObjectPullExecutor(pulls), 1, 1); err != nil {
+	if err := driver.StartGossipObjectPullWorkers(t.Context(), memoryObjectPullExecutor(pulls), 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	session := &gossip.SyncSession{PeerID: "peer-a", State: gossip.SyncSessionCompleted}
@@ -143,7 +143,7 @@ func TestRuntimeExecuteGossipActionsUsesCommonOrdering(t *testing.T) {
 		gossip.RecordBackoffAction{PeerID: "peer-a", Err: errors.New("retry")},
 	}
 
-	result := runtime.ExecuteGossipActions(context.Background(), session, actions, controller)
+	result := driver.ExecuteGossipActions(context.Background(), session, actions, controller)
 	if result.Aborted || !result.NetworkChanged {
 		t.Fatalf("result = %#v", result)
 	}
@@ -161,24 +161,24 @@ func TestRuntimeExecuteGossipActionsUsesCommonOrdering(t *testing.T) {
 	if pull := <-pulls; pull.PeerID != "peer-a" || pull.Zone != "node-a.catofes." {
 		t.Fatalf("pull = %#v", pull)
 	}
-	if event, ok := runtime.GossipSessionEventFor(<-runtime.Events()); !ok {
+	if event, ok := driver.GossipSessionEventFor(<-driver.Events()); !ok {
 		t.Fatal("object-pull completion was not queued")
 	} else if _, ok := event.(*gossip.ObjectPullResultEvent); !ok {
 		t.Fatalf("event = %T, want *gossip.ObjectPullResultEvent", event)
 	}
 	clock.Advance(time.Second)
-	if fired := receiveTimer(t, runtime.Events()); fired.ID.Owner != "peer-a" || fired.ID.Key != gossip.TimerKindRound {
+	if fired := receiveTimer(t, driver.Events()); fired.ID.Owner != "peer-a" || fired.ID.Key != gossip.TimerKindRound {
 		t.Fatalf("timer = %#v", fired)
 	}
 }
 
-func TestRuntimeExecuteGossipActionsApplyFailureStopsLaterPhases(t *testing.T) {
+func TestGossipDriverExecuteGossipActionsApplyFailureStopsLaterPhases(t *testing.T) {
 	applyErr := errors.New("commit failed")
 	controller := &memoryGossipController{}
-	runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState(), loadedGossipState()}, trace: &controller.trace, applyErr: applyErr}, gossipConfigCapturingIssues(GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()}, &controller.issues))
-	defer runtime.Stop()
+	driver := NewGossipDriver(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState(), loadedGossipState()}, trace: &controller.trace, applyErr: applyErr}, gossipConfigCapturingIssues(GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()}, &controller.issues))
+	defer driver.Stop()
 	session := &gossip.SyncSession{PeerID: "peer-a", State: gossip.SyncSessionObjectPulling}
-	result := runtime.ExecuteGossipActions(context.Background(), session, []gossip.SyncAction{
+	result := driver.ExecuteGossipActions(context.Background(), session, []gossip.SyncAction{
 		gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "node-a.catofes."}},
 		gossip.SendPingAction{PeerID: "peer-a"},
 	}, controller)
@@ -193,7 +193,7 @@ func TestRuntimeExecuteGossipActionsApplyFailureStopsLaterPhases(t *testing.T) {
 	}
 }
 
-func TestRuntimeApplySnapshotsOwnsStoreTransactionAndCompletion(t *testing.T) {
+func TestGossipDriverApplySnapshotsOwnsStoreTransactionAndCompletion(t *testing.T) {
 	now := time.Unix(100, 0)
 	clock := newFakeClock(now)
 	controller := &memoryGossipController{}
@@ -207,9 +207,9 @@ func TestRuntimeApplySnapshotsOwnsStoreTransactionAndCompletion(t *testing.T) {
 			Outcomes:     []corestate.RemoteApplyOutcome{{Zone: "remote.catofes.", Result: &corestate.ApplyResult{NetworkChanged: true}}},
 		},
 	}
-	runtime := NewRuntime(clock, 2, state, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
-	defer runtime.Stop()
-	result := runtime.ExecuteGossipActions(context.Background(), &gossip.SyncSession{PeerID: "peer-a"}, []gossip.SyncAction{
+	driver := NewGossipDriver(clock, 2, state, GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+	defer driver.Stop()
+	result := driver.ExecuteGossipActions(context.Background(), &gossip.SyncSession{PeerID: "peer-a"}, []gossip.SyncAction{
 		gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "local.catofes."}},
 		gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "remote.catofes."}, RelaxedLimits: true, ReportResult: true},
 	}, controller)
@@ -219,7 +219,7 @@ func TestRuntimeApplySnapshotsOwnsStoreTransactionAndCompletion(t *testing.T) {
 	if len(state.batch) != 1 || state.batch[0].Snapshot.Zone != "remote.catofes." || state.batch[0].Limits.MaxBytes != 8<<20 || !state.appliedAt.Equal(now) {
 		t.Fatalf("batch/time = %#v/%v", state.batch, state.appliedAt)
 	}
-	event, ok := runtime.GossipSessionEventFor(<-runtime.Events())
+	event, ok := driver.GossipSessionEventFor(<-driver.Events())
 	if !ok {
 		t.Fatal("snapshot completion was not queued")
 	}
@@ -229,7 +229,7 @@ func TestRuntimeApplySnapshotsOwnsStoreTransactionAndCompletion(t *testing.T) {
 	}
 }
 
-func TestRuntimeExecuteGossipActionsMemoryAdaptersAreEquivalent(t *testing.T) {
+func TestGossipDriverExecuteGossipActionsMemoryAdaptersAreEquivalent(t *testing.T) {
 	actions := []gossip.SyncAction{
 		gossip.SendFetchCatalogPageAction{PeerID: "peer-a", Cursor: "2"},
 		gossip.StartObjectPullAction{PeerID: "peer-a", Zone: "node-a.catofes."},
@@ -262,20 +262,20 @@ func TestRuntimeExecuteGossipActionsMemoryAdaptersAreEquivalent(t *testing.T) {
 	commitErr := errors.New("commit failed")
 	for _, adapter := range adapters {
 		controller, memory := adapter.new()
-		runtime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}, trace: &memory.trace}, GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
-		if err := runtime.StartGossipObjectPullWorkers(t.Context(), memoryObjectPullExecutor(nil), 1, 1); err != nil {
+		driver := NewGossipDriver(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}, trace: &memory.trace}, GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+		if err := driver.StartGossipObjectPullWorkers(t.Context(), memoryObjectPullExecutor(nil), 1, 1); err != nil {
 			t.Fatal(err)
 		}
-		runtime.ExecuteGossipActions(context.Background(), &gossip.SyncSession{PeerID: "peer-a"}, actions, controller)
-		runtime.Stop()
+		driver.ExecuteGossipActions(context.Background(), &gossip.SyncSession{PeerID: "peer-a"}, actions, controller)
+		driver.Stop()
 
 		failureController, failureMemory := adapter.new()
-		failureRuntime := NewRuntime(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState(), loadedGossipState()}, trace: &failureMemory.trace, applyErr: commitErr}, gossipConfigCapturingIssues(GossipRuntimeConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()}, &failureMemory.issues))
-		failureRuntime.ExecuteGossipActions(context.Background(), &gossip.SyncSession{PeerID: "peer-a"}, []gossip.SyncAction{
+		failureDriver := NewGossipDriver(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState(), loadedGossipState()}, trace: &failureMemory.trace, applyErr: commitErr}, gossipConfigCapturingIssues(GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()}, &failureMemory.issues))
+		failureDriver.ExecuteGossipActions(context.Background(), &gossip.SyncSession{PeerID: "peer-a"}, []gossip.SyncAction{
 			gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "node-a.catofes."}},
 			gossip.SendPingAction{PeerID: "peer-a"},
 		}, failureController)
-		failureRuntime.Stop()
+		failureDriver.Stop()
 		if len(failureMemory.issues) != 1 {
 			t.Fatalf("%s issues = %#v, want one", adapter.name, failureMemory.issues)
 		}

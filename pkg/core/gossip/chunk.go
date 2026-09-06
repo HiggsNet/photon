@@ -135,7 +135,7 @@ func (s *ChunkAssemblyStore) Add(peerID string, chunk *ObjectChunk, now time.Tim
 }
 
 // RepairDeadline returns the quiet-period deadline for an incomplete transfer.
-// Scheduling resources are owned by HostRuntime.
+// Scheduling resources are owned by GossipDriver.
 func (s *ChunkAssemblyStore) RepairDeadline(peerID string, chunk *ObjectChunk) (time.Time, bool) {
 	if s == nil || chunk == nil {
 		return time.Time{}, false
@@ -150,7 +150,7 @@ func (s *ChunkAssemblyStore) RepairDeadline(peerID string, chunk *ObjectChunk) (
 	return entry.updated.Add(ChunkRepairQuiet), true
 }
 
-// BuildRepairNACK consumes one repair round at a HostRuntime timer fire.
+// BuildRepairNACK consumes one repair round at a GossipDriver timer fire.
 func (s *ChunkAssemblyStore) BuildRepairNACK(peerID string, transferID []byte) *ObjectChunkNACK {
 	if s == nil || peerID == "" || len(transferID) == 0 {
 		return nil
@@ -192,7 +192,7 @@ func (s *ChunkAssemblyStore) DropPeer(peerID string) {
 }
 
 // Close discards every incomplete assembly. It is idempotent and is called by
-// the owning HostRuntime.
+// the owning GossipDriver.
 func (s *ChunkAssemblyStore) Close() {
 	if s == nil {
 		return

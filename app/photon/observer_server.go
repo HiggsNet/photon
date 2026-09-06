@@ -226,14 +226,14 @@ func (p *observerProvider) Peers(peerFilter string) (any, error) {
 }
 
 func (d *Daemon) peerObservabilitySnapshots() map[string]observability.PeerDiagnostics {
-	if d == nil || d.hostRuntime == nil || d.hostRuntime.Observability == nil {
+	if d == nil || d.gossipDriver == nil || d.gossipDriver.Observability == nil {
 		return nil
 	}
 	now := time.Now()
 	if d != nil {
 		now = d.now()
 	}
-	return d.hostRuntime.Observability.Snapshots(now)
+	return d.gossipDriver.Observability.Snapshots(now)
 }
 
 func (p *observerProvider) Links(linkFilter string) (any, error) {

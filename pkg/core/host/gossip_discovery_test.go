@@ -31,7 +31,7 @@ func (writer failingDiscoveryWriter) UpdatePeerCheckpoints(context.Context, map[
 	return corestate.CommitResult{}, writer.err
 }
 
-func TestRuntimeDiscoveryDoesNotPublishAddressBookBeforeCheckpoint(t *testing.T) {
+func TestGossipDriverDiscoveryDoesNotPublishAddressBookBeforeCheckpoint(t *testing.T) {
 	wantErr := errors.New("checkpoint failed")
 	now := time.Unix(1000, 0)
 	transport := &gossip.Transport{}
@@ -43,12 +43,12 @@ func TestRuntimeDiscoveryDoesNotPublishAddressBookBeforeCheckpoint(t *testing.T)
 			ObservedUntilUnix: now.Add(-time.Minute).Unix(),
 		}},
 	}
-	runtime := NewRuntime(nil, 1, failingDiscoveryWriter{err: wantErr, view: corestate.View{
+	driver := NewGossipDriver(nil, 1, failingDiscoveryWriter{err: wantErr, view: corestate.View{
 		State:  &corestate.VerifiedState{Network: input.Network},
 		Gossip: &corestate.GossipCheckpoint{Peers: input.Peers},
-	}}, GossipRuntimeConfig{Discovery: GossipDiscoveryConfig{Bootstrap: input.Bootstrap}})
-	defer runtime.Stop()
-	if err := runtime.RefreshGossipDiscovery(context.Background(), nil, now, transport); !errors.Is(err, wantErr) {
+	}}, GossipDriverConfig{Discovery: GossipDiscoveryConfig{Bootstrap: input.Bootstrap}})
+	defer driver.Stop()
+	if err := driver.RefreshGossipDiscovery(context.Background(), nil, now, transport); !errors.Is(err, wantErr) {
 		t.Fatalf("RefreshGossipDiscovery error = %v", err)
 	}
 	if addr := transport.PeerAddr("peer-a"); addr != nil {

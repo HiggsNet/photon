@@ -9,7 +9,10 @@ import (
 
 const maxTimerDrainBatch = 64
 
-var ErrInvalidTimerID = errors.New("invalid timer id")
+var (
+	ErrInvalidTimerID   = errors.New("invalid timer id")
+	ErrSchedulerStopped = errors.New("scheduler stopped")
+)
 
 // EventTimer is the clock timer resource used by Scheduler.
 type EventTimer interface {
@@ -18,7 +21,7 @@ type EventTimer interface {
 	Reset(time.Duration) bool
 }
 
-// Clock makes HostRuntime scheduling deterministic in tests.
+// Clock makes Scheduler timing deterministic in tests.
 type Clock interface {
 	Now() time.Time
 	NewTimer(time.Duration) EventTimer
@@ -98,8 +101,8 @@ func (items *timerHeap) Pop() any {
 }
 
 // Scheduler owns one deadline heap and one wakeup loop for all namespaces.
-// Scheduling methods are concurrency-safe; only the HostRuntime event loop
-// accepts fired generations.
+// Scheduling methods are concurrency-safe; the owning single-writer event
+// loop accepts fired generations.
 type Scheduler struct {
 	clock  Clock
 	events chan<- Event
@@ -141,7 +144,7 @@ func (scheduler *Scheduler) Schedule(id TimerID, deadline time.Time) (uint64, er
 	scheduler.mu.Lock()
 	if scheduler.stopped {
 		scheduler.mu.Unlock()
-		return 0, ErrRuntimeStopped
+		return 0, ErrSchedulerStopped
 	}
 	generation := scheduler.lastGeneration[id] + 1
 	scheduler.lastGeneration[id] = generation

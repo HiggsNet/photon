@@ -40,7 +40,7 @@ const (
 	kRoundMultiplier              = 5
 )
 
-// SyncEvent advances one per-peer SyncSession. HostRuntime owns delivery;
+// SyncEvent advances one per-peer SyncSession. GossipDriver owns delivery;
 // platform composition does not dispatch these concrete event types.
 type SyncEvent interface {
 	SyncEventMarker()
@@ -82,7 +82,7 @@ type CatalogPageTimeoutEvent struct {
 
 func (*CatalogPageTimeoutEvent) SyncEventMarker() {}
 
-// ChunkRepairTimeoutEvent is produced by HostRuntime's scheduler. It is a
+// ChunkRepairTimeoutEvent is produced by GossipDriver's scheduler. It is a
 // protocol runtime event handled before SyncSession FSM advancement.
 type ChunkRepairTimeoutEvent struct {
 	PeerID     string

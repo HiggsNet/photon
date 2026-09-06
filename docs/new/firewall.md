@@ -606,7 +606,7 @@ photon debug preflight
 | 无变更 reconcile | `policy_hash` 未变化时 no-op | `PlanDiff` 只比较对象名；nft 每次 apply 原子整表替换，iptables 每次 apply 重建并切换同 hash 的另一个 `a`/`b` 槽位 | 无业务变更也会产生内核写入；nft 有短暂事务切换成本，iptables builtin jump 会经历一次 generation 切换 | 问题不大 暂时保留 |
 | Generation 递增 | 每次成功 apply 递增并可追踪历史 | iptables 物理 chain 已带 desired hash 和 `a`/`b` staging 槽，但 NFT/IPTables/DryRun driver 对外仍返回 `Generation: 1` | 持久化/debug 状态无法按 generation 区分历史，也不能表达实际槽位 | 问题不大 暂时保留 |
 | 生命周期与跨 backend 清理 | shutdown、禁用/删除实例、scope/prefix/backend 变化时回滚旧 owned rules | daemon 不调用 `DeleteStale`；只对当前启用实例、当前 scope 和当前 backend 做 reconcile。禁用/删除实例、退出、改变 owner/scope 或切换 backend 不会遍历并清理旧 backend 对象 | 旧 nft table 或 iptables chain/jump 可能长期残留，并与新策略同时生效 | 问题不大 暂时保留 |
-| 周期 reconcile timer | 设计建议有周期 timer | `defaultFirewallReconcileInterval`（30s）通过 HostRuntime namespaced Scheduler 调度 | 启动恢复、事件触发和周期 safety reconcile 共用同一 single-writer 入口 | 已完成 |
+| 周期 reconcile timer | 设计建议有周期 timer | `defaultFirewallReconcileInterval`（30s）通过 Daemon Scheduler 调度 | 启动恢复、事件触发和周期 safety reconcile 共用同一 single-writer 入口 | 已完成 |
 | 冲突检测 | 检测非 Photon 规则冲突 | `MergeConflicts` 直接返回 `nil` | 冲突检测未实现 | 问题不大 暂时保留 |
 | 优先级配置 | nft base-chain priority 可按 hook 阶段配置 | 已支持 `priority.filter`、`priority.prerouting`、`priority.postrouting`；默认分别是 `filter`、`dstnat`、`srcnat`，只允许对应基准加整数偏移 | 可以在不混淆 DNAT/SNAT 阶段的前提下与管理员 chain 排序 | 已完成 |
 | `AllowPeers`/`DenyPeers` | 按 peer zone 过滤 transit | 字段存在但**未实际使用** | 仅前缀过滤生效 | 问题不大 暂时保留 |
