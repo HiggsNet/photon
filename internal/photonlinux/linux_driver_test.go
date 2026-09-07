@@ -100,6 +100,20 @@ func TestLinuxDriverOwnsIPsecObservationAndLifecycleSubscription(t *testing.T) {
 	stop()
 }
 
+func TestLinuxDriverListsIPsecConnections(t *testing.T) {
+	driver := &transportipsec.DryRunDriver{
+		LoadedConnections: []transportipsec.ConnectionState{{Name: "ipsec-a"}},
+	}
+	linuxDriver := mustNewLinuxDriver(t, LinuxDriverOptions{IPsecDriver: driver, XFRMDriver: driver})
+	connections, err := linuxDriver.ListIPsecConnections(context.Background())
+	if err != nil {
+		t.Fatalf("ListIPsecConnections: %v", err)
+	}
+	if len(connections) != 1 || connections[0].Name != "ipsec-a" {
+		t.Fatalf("connections = %+v", connections)
+	}
+}
+
 func TestNewLinuxDriverRequiresExplicitDrivers(t *testing.T) {
 	driver := &transportipsec.DryRunDriver{}
 	if _, err := NewLinuxDriver(LinuxDriverOptions{XFRMDriver: driver}); err == nil {

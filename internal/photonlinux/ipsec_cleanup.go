@@ -55,11 +55,7 @@ func (r *LinuxDriver) CleanupIPsecOrphans(ctx context.Context, keep map[string]b
 	if r == nil || r.ipsecDriver == nil {
 		return 0, errors.New("ipsec driver is nil")
 	}
-	lister, ok := r.ipsecDriver.(transportipsec.ConnectionLister)
-	if !ok {
-		return 0, errors.New("ipsec driver does not support listing loaded connections")
-	}
-	connections, err := lister.ListConnections(ctx)
+	connections, err := r.ipsecDriver.ListConnections(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("list ipsec connections: %w", err)
 	}

@@ -28,8 +28,9 @@ func TestSystemXFRMDriverBatchObserveHealthyInterfacesIsMutationFree(t *testing.
 				return []byte(`[{"name":"photon"}]`), nil
 			case "netns exec photon ip -j -d link show":
 				return []byte(`[
-					{"ifname":"phx1","flags":["MULTICAST","UP"],"inet6_addr_gen_mode":"none"},
-					{"ifname":"phx2","flags":["MULTICAST","UP"],"inet6_addr_gen_mode":"none"}
+					{"ifname":"phx1","flags":["MULTICAST","UP"],"inet6_addr_gen_mode":"none","linkinfo":{"info_kind":"xfrm","info_data":{"if_id":11}}},
+					{"ifname":"phx2","flags":["MULTICAST","UP"],"inet6_addr_gen_mode":"none","linkinfo":{"info_kind":"xfrm","info_data":{"if_id":12}}},
+					{"ifname":"phx-not-xfrm","linkinfo":{"info_kind":"dummy"}}
 				]`), nil
 			case "netns exec photon ip -j addr show":
 				return []byte(`[
@@ -49,7 +50,7 @@ func TestSystemXFRMDriverBatchObserveHealthyInterfacesIsMutationFree(t *testing.
 		{InterfaceName: "phx2", NetNS: "photon", LocalTunnelAddr: netip.MustParseAddr("fe80::2")},
 	}
 
-	states, err := driver.InspectLinks(context.Background(), specs)
+	states, inventory, err := driver.InspectLinks(context.Background(), specs, []NetNSSpec{{Kind: NetNSName, Name: "photon"}})
 	if err != nil {
 		t.Fatalf("InspectLinks: %v", err)
 	}
@@ -62,6 +63,9 @@ func TestSystemXFRMDriverBatchObserveHealthyInterfacesIsMutationFree(t *testing.
 	if got := states[0].Addresses; len(got) != 2 || got[1] != netip.MustParsePrefix("fd00::fff4/128") {
 		t.Fatalf("phx1 addresses = %+v", got)
 	}
+	if len(inventory) != 2 || inventory[0].InterfaceName != "phx1" || inventory[0].XFRMIfID != 11 || inventory[1].XFRMIfID != 12 {
+		t.Fatalf("inventory = %+v", inventory)
+	}
 
 	beforeEnsure := len(commands)
 	items := []XFRMObservedInterface{{Spec: specs[0], State: states[0]}, {Spec: specs[1], State: states[1]}}
@@ -70,6 +74,15 @@ func TestSystemXFRMDriverBatchObserveHealthyInterfacesIsMutationFree(t *testing.
 	}
 	if len(commands) != beforeEnsure {
 		t.Fatalf("healthy ensure issued mutations: %v", commandStrings(commands[beforeEnsure:]))
+	}
+
+	beforeInventory := len(commands)
+	states, inventory, err = driver.InspectLinks(context.Background(), nil, []NetNSSpec{{Kind: NetNSName, Name: "photon"}})
+	if err != nil || len(states) != 0 || len(inventory) != 2 {
+		t.Fatalf("inventory-only observation = states=%+v inventory=%+v err=%v", states, inventory, err)
+	}
+	if got := len(commands) - beforeInventory; got != 3 {
+		t.Fatalf("inventory-only commands = %d, want netns/link/address reads", got)
 	}
 }
 

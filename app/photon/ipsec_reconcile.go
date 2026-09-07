@@ -55,6 +55,11 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		return err
 	}
 	platformDriver := d.linuxDriver
+	connections, err := platformDriver.ListIPsecConnections(ctx)
+	if err != nil {
+		d.recordIPsecReconcileError(rev, now.Unix(), err)
+		return fmt.Errorf("list ipsec connections: %w", err)
+	}
 	sas, err := platformDriver.ListIPsecSAs(ctx)
 	if err != nil {
 		d.recordIPsecReconcileError(rev, now.Unix(), err)
@@ -70,6 +75,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		"groups":       len(groups),
 		"desired":      len(plan.Desired),
 		"instances":    len(instances),
+		"connections":  len(connections),
 		"sas":          len(sas),
 	})
 	xfrmObservations := platformDriver.ObserveXFRMLinks(ctx, plan.Desired, instances, groups)

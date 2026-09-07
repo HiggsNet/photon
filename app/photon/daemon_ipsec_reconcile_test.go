@@ -22,16 +22,16 @@ type batchObservedIPsecDriver struct {
 	observedEnsureCall int
 }
 
-func (d *batchObservedIPsecDriver) InspectLinks(_ context.Context, specs []ipsec.TransportLinkSpec) ([]ipsec.XFRMLinkState, error) {
+func (d *batchObservedIPsecDriver) InspectLinks(_ context.Context, specs []ipsec.TransportLinkSpec, _ []ipsec.NetNSSpec) ([]ipsec.XFRMLinkState, []ipsec.XFRMLinkState, error) {
 	d.batchCalls++
 	if d.batchErr != nil {
-		return nil, d.batchErr
+		return nil, nil, d.batchErr
 	}
 	states := make([]ipsec.XFRMLinkState, len(specs))
 	for i, spec := range specs {
 		states[i] = healthyObservedXFRMState(spec)
 	}
-	return states, nil
+	return states, nil, nil
 }
 
 func (d *batchObservedIPsecDriver) InspectLink(ctx context.Context, spec ipsec.TransportLinkSpec) (ipsec.XFRMLinkState, error) {

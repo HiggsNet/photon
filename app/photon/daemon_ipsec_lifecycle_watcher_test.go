@@ -19,6 +19,9 @@ func (f *fakeLifecycleDriver) LoadConnection(context.Context, ipsec.TransportLin
 }
 func (f *fakeLifecycleDriver) UnloadConnection(context.Context, string) error { return nil }
 func (f *fakeLifecycleDriver) TerminateSA(context.Context, string) error      { return nil }
+func (f *fakeLifecycleDriver) ListConnections(context.Context) ([]ipsec.ConnectionState, error) {
+	return nil, nil
+}
 func (f *fakeLifecycleDriver) ListSAs(context.Context) ([]ipsec.SAState, error) {
 	return nil, nil
 }

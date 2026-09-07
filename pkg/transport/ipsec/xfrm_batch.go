@@ -19,6 +19,12 @@ type ipJSONLink struct {
 	IfName          string   `json:"ifname"`
 	Flags           []string `json:"flags"`
 	IPv6AddrGenMode string   `json:"inet6_addr_gen_mode"`
+	LinkInfo        struct {
+		InfoKind string `json:"info_kind"`
+		InfoData struct {
+			IfID uint32 `json:"if_id"`
+		} `json:"info_data"`
+	} `json:"linkinfo"`
 }
 
 type ipJSONAddressLink struct {
@@ -35,25 +41,23 @@ type ipJSONNetNS struct {
 	Name string `json:"name"`
 }
 
-// InspectLinks performs one link read, one address read and one sysctl read per
-// namespace. Named namespace existence is discovered once for the whole batch.
-func (d SystemXFRMDriver) InspectLinks(ctx context.Context, specs []TransportLinkSpec) ([]XFRMLinkState, error) {
+// InspectLinks performs one link/address read per namespace and, when desired
+// interfaces are present, one forwarding read. Named namespace existence is
+// discovered once for the whole batch.
+func (d SystemXFRMDriver) InspectLinks(ctx context.Context, specs []TransportLinkSpec, namespaces []NetNSSpec) ([]XFRMLinkState, []XFRMLinkState, error) {
 	states := make([]XFRMLinkState, len(specs))
-	if len(specs) == 0 {
-		return states, nil
-	}
 	groups := make(map[string]*xfrmBatchGroup)
 	needNamedNamespaces := false
 	for i, spec := range specs {
 		if spec.InterfaceName == "" {
-			return nil, fmt.Errorf("interface name is required at batch index %d", i)
+			return nil, nil, fmt.Errorf("interface name is required at batch index %d", i)
 		}
 		netns, err := d.specNetNS(spec)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if netns.Kind == NetNSPath {
-			return nil, fmt.Errorf("path netns %q is not supported by batch exec inspection", netns.Path)
+			return nil, nil, fmt.Errorf("path netns %q is not supported by batch exec inspection", netns.Path)
 		}
 		if netns.Kind == NetNSName {
 			needNamedNamespaces = true
@@ -68,17 +72,33 @@ func (d SystemXFRMDriver) InspectLinks(ctx context.Context, specs []TransportLin
 		group.specs = append(group.specs, spec)
 		states[i].NetNS = netns
 	}
+	for _, netns := range namespaces {
+		netns = netns.Normalized()
+		if err := netns.Validate(); err != nil {
+			return nil, nil, err
+		}
+		if netns.Kind == NetNSPath {
+			return nil, nil, fmt.Errorf("path netns %q is not supported by batch exec inspection", netns.Path)
+		}
+		if netns.Kind == NetNSName {
+			needNamedNamespaces = true
+		}
+		key := xfrmBatchNetNSKey(netns)
+		if groups[key] == nil {
+			groups[key] = &xfrmBatchGroup{netns: netns}
+		}
+	}
 
 	namedNamespaces := map[string]bool{}
 	if needNamedNamespaces {
 		out, err := d.output(ctx, d.ipCommand(), "-j", "netns", "list")
 		if err != nil {
-			return nil, fmt.Errorf("list network namespaces: %w", err)
+			return nil, nil, fmt.Errorf("list network namespaces: %w", err)
 		}
 		if len(strings.TrimSpace(string(out))) != 0 {
 			var rows []ipJSONNetNS
 			if err := json.Unmarshal(out, &rows); err != nil {
-				return nil, fmt.Errorf("parse network namespace JSON: %w", err)
+				return nil, nil, fmt.Errorf("parse network namespace JSON: %w", err)
 			}
 			for _, row := range rows {
 				namedNamespaces[row.Name] = true
@@ -91,6 +111,7 @@ func (d SystemXFRMDriver) InspectLinks(ctx context.Context, specs []TransportLin
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	var inventory []XFRMLinkState
 	for _, key := range keys {
 		group := groups[key]
 		exists := group.netns.Kind == NetNSHost || namedNamespaces[group.netns.Name]
@@ -100,25 +121,26 @@ func (d SystemXFRMDriver) InspectLinks(ctx context.Context, specs []TransportLin
 		if !exists {
 			continue
 		}
-		groupStates, err := d.inspectLinksInNamespace(ctx, group.netns, group.specs)
+		groupStates, groupInventory, err := d.inspectLinksInNamespace(ctx, group.netns, group.specs)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
+		inventory = append(inventory, groupInventory...)
 		for i, index := range group.indices {
 			states[index] = groupStates[i]
 		}
 	}
-	return states, nil
+	return states, inventory, nil
 }
 
-func (d SystemXFRMDriver) inspectLinksInNamespace(ctx context.Context, netns NetNSSpec, specs []TransportLinkSpec) ([]XFRMLinkState, error) {
+func (d SystemXFRMDriver) inspectLinksInNamespace(ctx context.Context, netns NetNSSpec, specs []TransportLinkSpec) ([]XFRMLinkState, []XFRMLinkState, error) {
 	linkOut, err := d.outputInNetNS(ctx, netns, "-j", "-d", "link", "show")
 	if err != nil {
-		return nil, fmt.Errorf("batch inspect links in %s: %w", netnsLabel(netns), err)
+		return nil, nil, fmt.Errorf("batch inspect links in %s: %w", netnsLabel(netns), err)
 	}
 	var links []ipJSONLink
 	if err := json.Unmarshal(linkOut, &links); err != nil {
-		return nil, fmt.Errorf("parse link JSON in %s: %w", netnsLabel(netns), err)
+		return nil, nil, fmt.Errorf("parse link JSON in %s: %w", netnsLabel(netns), err)
 	}
 	linksByName := make(map[string]ipJSONLink, len(links))
 	for _, link := range links {
@@ -127,11 +149,11 @@ func (d SystemXFRMDriver) inspectLinksInNamespace(ctx context.Context, netns Net
 
 	addrOut, err := d.outputInNetNS(ctx, netns, "-j", "addr", "show")
 	if err != nil {
-		return nil, fmt.Errorf("batch inspect addresses in %s: %w", netnsLabel(netns), err)
+		return nil, nil, fmt.Errorf("batch inspect addresses in %s: %w", netnsLabel(netns), err)
 	}
 	var addressLinks []ipJSONAddressLink
 	if err := json.Unmarshal(addrOut, &addressLinks); err != nil {
-		return nil, fmt.Errorf("parse address JSON in %s: %w", netnsLabel(netns), err)
+		return nil, nil, fmt.Errorf("parse address JSON in %s: %w", netnsLabel(netns), err)
 	}
 	addressesByName := make(map[string][]netip.Prefix, len(addressLinks))
 	for _, link := range addressLinks {
@@ -142,6 +164,16 @@ func (d SystemXFRMDriver) inspectLinksInNamespace(ctx context.Context, netns Net
 			}
 			addressesByName[link.IfName] = append(addressesByName[link.IfName], netip.PrefixFrom(addr, info.PrefixLen))
 		}
+	}
+	var inventory []XFRMLinkState
+	for _, link := range links {
+		if link.LinkInfo.InfoKind != "xfrm" {
+			continue
+		}
+		inventory = append(inventory, observedXFRMLink(netns, link, addressesByName[link.IfName]))
+	}
+	if len(specs) == 0 {
+		return nil, inventory, nil
 	}
 
 	interfaceNames := make([]string, 0, len(specs))
@@ -155,13 +187,14 @@ func (d SystemXFRMDriver) inspectLinksInNamespace(ctx context.Context, netns Net
 	sort.Strings(interfaceNames)
 	namespaceForwarding, interfaceForwarding, err := d.inspectForwardingInNamespace(ctx, netns, interfaceNames)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	states := make([]XFRMLinkState, len(specs))
 	for i, spec := range specs {
 		state := XFRMLinkState{
 			NetNS:                    netns,
+			InterfaceName:            spec.InterfaceName,
 			NamespaceExists:          true,
 			NamespaceForwardingKnown: true,
 			NamespaceForwarding:      namespaceForwarding,
@@ -169,24 +202,43 @@ func (d SystemXFRMDriver) inspectLinksInNamespace(ctx context.Context, netns Net
 		link, exists := linksByName[spec.InterfaceName]
 		state.InterfaceExists = exists
 		if exists {
-			state.FlagsKnown = link.Flags != nil
-			for _, flag := range link.Flags {
-				switch strings.ToUpper(flag) {
-				case "UP":
-					state.InterfaceUp = true
-				case "MULTICAST":
-					state.Multicast = true
-				}
-			}
-			state.IPv6AddrGenModeKnown = link.IPv6AddrGenMode != ""
-			state.IPv6AddrGenDisabled = link.IPv6AddrGenMode == "none"
+			observed := observedXFRMLink(netns, link, addressesByName[spec.InterfaceName])
+			state.XFRMIfID = observed.XFRMIfID
+			state.FlagsKnown = observed.FlagsKnown
+			state.InterfaceUp = observed.InterfaceUp
+			state.Multicast = observed.Multicast
+			state.IPv6AddrGenModeKnown = observed.IPv6AddrGenModeKnown
+			state.IPv6AddrGenDisabled = observed.IPv6AddrGenDisabled
 			state.InterfaceForwardingKnown = true
 			state.InterfaceForwarding = interfaceForwarding[spec.InterfaceName]
-			state.Addresses = append([]netip.Prefix(nil), addressesByName[spec.InterfaceName]...)
+			state.Addresses = observed.Addresses
 		}
 		states[i] = state
 	}
-	return states, nil
+	return states, inventory, nil
+}
+
+func observedXFRMLink(netns NetNSSpec, link ipJSONLink, addresses []netip.Prefix) XFRMLinkState {
+	state := XFRMLinkState{
+		NetNS:                netns,
+		InterfaceName:        link.IfName,
+		XFRMIfID:             link.LinkInfo.InfoData.IfID,
+		NamespaceExists:      true,
+		InterfaceExists:      true,
+		FlagsKnown:           link.Flags != nil,
+		IPv6AddrGenModeKnown: link.IPv6AddrGenMode != "",
+		IPv6AddrGenDisabled:  link.IPv6AddrGenMode == "none",
+		Addresses:            append([]netip.Prefix(nil), addresses...),
+	}
+	for _, flag := range link.Flags {
+		switch strings.ToUpper(flag) {
+		case "UP":
+			state.InterfaceUp = true
+		case "MULTICAST":
+			state.Multicast = true
+		}
+	}
+	return state
 }
 
 func (d SystemXFRMDriver) inspectForwardingInNamespace(ctx context.Context, netns NetNSSpec, interfaces []string) (bool, map[string]bool, error) {

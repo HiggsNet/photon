@@ -79,13 +79,10 @@ type IPsecDriver interface {
 	LoadConnection(context.Context, TransportLinkSpec) error
 	UnloadConnection(context.Context, string) error
 	TerminateSA(context.Context, string) error
+	ListConnections(context.Context) ([]ConnectionState, error)
 	ListSAs(context.Context) ([]SAState, error)
 	LoadPrivateKey(ctx context.Context, id string, key []byte, algorithm string) error
 	UnloadPrivateKey(ctx context.Context, id string) error
-}
-
-type ConnectionLister interface {
-	ListConnections(context.Context) ([]ConnectionState, error)
 }
 
 type SAUniqueIDTerminator interface {
@@ -109,6 +106,8 @@ type XFRMExtraAddressAssigner interface {
 
 type XFRMLinkState struct {
 	NetNS                    NetNSSpec
+	InterfaceName            string
+	XFRMIfID                 uint32
 	NamespaceExists          bool
 	InterfaceExists          bool
 	FlagsKnown               bool
@@ -128,9 +127,10 @@ type XFRMLinkInspector interface {
 }
 
 // XFRMLinkBatchInspector observes all requested interfaces with a bounded
-// number of namespace-wide reads. Results are aligned with specs.
+// number of namespace-wide reads. Link results are aligned with specs; the
+// inventory contains every XFRM interface found in the requested namespaces.
 type XFRMLinkBatchInspector interface {
-	InspectLinks(context.Context, []TransportLinkSpec) ([]XFRMLinkState, error)
+	InspectLinks(context.Context, []TransportLinkSpec, []NetNSSpec) ([]XFRMLinkState, []XFRMLinkState, error)
 }
 
 type XFRMObservedInterface struct {

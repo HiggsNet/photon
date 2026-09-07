@@ -11,7 +11,8 @@ import (
 )
 
 type XFRMObservations struct {
-	links map[string]transportipsec.XFRMLinkState
+	links      map[string]transportipsec.XFRMLinkState
+	Interfaces []transportipsec.XFRMLinkState
 }
 
 type xfrmMaintenanceItem struct {
@@ -25,7 +26,7 @@ type xfrmMaintenanceItem struct {
 func (r *LinuxDriver) ObserveXFRMLinks(ctx context.Context, desired []transportipsec.TransportLinkSpec, instances map[string]transportipsec.LinkInstance, groups []transportipsec.LinkGroupSpec) *XFRMObservations {
 	driver := r.xfrmDriver
 	inspector, ok := driver.(transportipsec.XFRMLinkBatchInspector)
-	if !ok || len(desired) == 0 {
+	if !ok {
 		return nil
 	}
 	seen := make(map[string]struct{})
@@ -48,7 +49,11 @@ func (r *LinuxDriver) ObserveXFRMLinks(ctx context.Context, desired []transporti
 			appendSpec(xfrmMaintenanceSpec(spec, instance, groups))
 		}
 	}
-	states, err := inspector.InspectLinks(ctx, specs)
+	namespaces := make([]transportipsec.NetNSSpec, 0, len(groups))
+	for _, group := range groups {
+		namespaces = append(namespaces, group.Normalized().NetNS)
+	}
+	states, inventory, err := inspector.InspectLinks(ctx, specs, namespaces)
 	if err != nil {
 		logWarn(r.logger, "xfrm_batch_observe_fallback", map[string]any{"candidates": len(specs), "error": err.Error()})
 		return nil
@@ -57,11 +62,11 @@ func (r *LinuxDriver) ObserveXFRMLinks(ctx context.Context, desired []transporti
 		logWarn(r.logger, "xfrm_batch_observe_fallback", map[string]any{"candidates": len(specs), "observed": len(states), "error": "batch result length mismatch"})
 		return nil
 	}
-	observed := &XFRMObservations{links: make(map[string]transportipsec.XFRMLinkState, len(specs))}
+	observed := &XFRMObservations{links: make(map[string]transportipsec.XFRMLinkState, len(specs)), Interfaces: inventory}
 	for index, spec := range specs {
 		observed.links[xfrmObservationKey(spec)] = states[index]
 	}
-	logDebug(r.logger, "xfrm_batch_observed", map[string]any{"candidates": len(specs)})
+	logDebug(r.logger, "xfrm_batch_observed", map[string]any{"candidates": len(specs), "inventory": len(inventory)})
 	return observed
 }
 

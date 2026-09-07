@@ -118,6 +118,10 @@ func (r *LinuxDriver) ListIPsecSAs(ctx context.Context) ([]transportipsec.SAStat
 	return r.ipsecDriver.ListSAs(ctx)
 }
 
+func (r *LinuxDriver) ListIPsecConnections(ctx context.Context) ([]transportipsec.ConnectionState, error) {
+	return r.ipsecDriver.ListConnections(ctx)
+}
+
 func (r *LinuxDriver) ApplyIPsecAction(ctx context.Context, action transportipsec.ReconcileAction, netns transportipsec.NetNSSpec) (transportipsec.ApplyPlan, error) {
 	return transportipsec.ApplyReconcileAction(ctx, r.ipsecDriver, r.xfrmDriver, action, netns)
 }
