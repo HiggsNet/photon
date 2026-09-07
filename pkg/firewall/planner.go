@@ -178,6 +178,20 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 		}
 	}
 
+	// 0. xfrm-decapsulated traffic from mesh-authorized sources may have
+	// invalid conntrack state (the gateway didn't see the outbound direction).
+	// Accept it before the invalid drop rule. Without this, TCP/UDP from
+	// policy-based xfrm clients is silently dropped.
+	if len(prefixes.MeshAuthorizedV4) > 0 || len(prefixes.MeshAuthorizedV6) > 0 {
+		allMesh := append(append([]netip.Prefix{}, prefixes.MeshAuthorizedV4...), prefixes.MeshAuthorizedV6...)
+		addRule(ChainInput, Rule{
+			Action:   ActionAccept,
+			CtStates: []string{CtStateInvalid},
+			Src:      allMesh,
+			Comment:  "xfrm mesh invalid accept",
+		})
+	}
+
 	// 1. invalid drop (ct state)
 	addRule(ChainInput, Rule{Action: ActionDrop, CtStates: []string{CtStateInvalid}, Comment: "invalid drop"})
 

@@ -2,6 +2,7 @@ package ipsec
 
 import (
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -75,10 +76,12 @@ func duplicateSACandidates(spec TransportLinkSpec, sas []SAState) []SAState {
 	child := ChildSAName(spec)
 	byID := make(map[uint64]SAState)
 	for _, sa := range sas {
-		if !sa.Established || sa.Name != spec.TransportID || sa.ChildSA != child {
+		if !sa.Established || sa.Name != spec.TransportID || !duplicateChildSAMatch(sa.ChildSA, child) {
 			continue
 		}
-		if spec.XFRMIfID != 0 && sa.XFRMIfID != spec.XFRMIfID {
+		// VTI-mode SAs never carry an if_id (they bind via marks), so only
+		// reject an SA whose non-zero if_id disagrees with the spec.
+		if spec.XFRMIfID != 0 && sa.XFRMIfID != 0 && sa.XFRMIfID != spec.XFRMIfID {
 			continue
 		}
 		if !saMatchesPathKey(sa, spec.PathKey) || !saIdentityMatchesSpec(sa, spec) {
@@ -97,6 +100,34 @@ func duplicateSACandidates(spec TransportLinkSpec, sas []SAState) []SAState {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].UniqueID < out[j].UniqueID })
 	return out
+}
+
+// duplicateChildSAMatch matches a VICI child SA name against the configured
+// child. charon appends a "-<uniqueid>" (6.x) or "{reqid}" (older) suffix to
+// the runtime child name.
+func duplicateChildSAMatch(saChild, child string) bool {
+	if saChild == child {
+		return true
+	}
+	if strings.HasPrefix(saChild, child+"-") && isAllDigits(strings.TrimPrefix(saChild, child+"-")) {
+		return true
+	}
+	if i := strings.LastIndex(saChild, "{"); i > 0 && saChild[:i] == child {
+		return true
+	}
+	return false
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func duplicateSAsStable(sas []SAState) bool {
