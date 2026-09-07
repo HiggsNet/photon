@@ -21,8 +21,6 @@ func TestWriteAdmissionDiagnosis(t *testing.T) {
 		ParentAuthorityKnown:  true,
 		DelegationKnown:       false,
 		LastBootstrapSyncUnix: time.Unix(5000, 0).Unix(),
-		PendingSinceUnix:      time.Unix(4000, 0).Unix(),
-		LastAdoptionError:     "adoption failed",
 	}
 	var buf strings.Builder
 	if err := WriteAdmissionDiagnosis(&buf, d); err != nil {
@@ -37,8 +35,6 @@ func TestWriteAdmissionDiagnosis(t *testing.T) {
 		"reason_detail: parent zone has no delegation",
 		"has_zone_private_key: true",
 		"last_bootstrap_sync: 1970-01-01T01:23:20Z",
-		"pending_since: 1970-01-01T01:06:40Z",
-		"last_adoption_error: adoption failed",
 		"join_request: eyJqb2luIjoidGVzdCJ9",
 		"join_hint: photon gossip delegate issue <join_request> (on parent zone admin)",
 		"boundary:",

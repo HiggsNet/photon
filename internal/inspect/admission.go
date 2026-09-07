@@ -10,7 +10,6 @@ const (
 	AdmissionReasonMissingDelegation      = "missing_delegation"
 	AdmissionReasonDelegationKeyMismatch  = "delegation_key_mismatch"
 	AdmissionReasonVerifyDelegationFailed = "verify_delegation_failed"
-	AdmissionReasonVerifyChainFailed      = "verify_chain_failed"
 	AdmissionReasonNoBootstrapSync        = "no_bootstrap_sync"
 	AdmissionReasonWaitingForAdoption     = "waiting_for_adoption"
 )
@@ -49,10 +48,4 @@ type AdmissionDiagnosis struct {
 	// LastBootstrapSyncUnix is the most recent successful bootstrap sync
 	// timestamp (0 = never).
 	LastBootstrapSyncUnix int64 `json:"last_bootstrap_sync_unix,omitempty"`
-	// PendingSinceUnix is when the node entered pending state (0 = unknown).
-	PendingSinceUnix int64 `json:"pending_since_unix,omitempty"`
-	// AdoptedAtUnix is when the node was most recently adopted (0 = never).
-	AdoptedAtUnix int64 `json:"adopted_at_unix,omitempty"`
-	// LastAdoptionError records the most recent adoption failure.
-	LastAdoptionError string `json:"last_adoption_error,omitempty"`
 }

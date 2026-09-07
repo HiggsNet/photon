@@ -34,7 +34,6 @@ func TestCloneRuntimeStateDeepCopiesMutableFields(t *testing.T) {
 			"mesh": {Overlays: []string{"main"}},
 			"nil":  nil,
 		},
-		Admission: &photonstate.AdmissionState{Pending: true, PendingReason: "missing_delegation"},
 	}
 
 	cloned := CloneRuntimeState(original)
@@ -53,7 +52,6 @@ func TestCloneRuntimeStateDeepCopiesMutableFields(t *testing.T) {
 	cloned.FirewallReconcile.Instances["fw-a"].PolicyHash = "hash-b"
 	cloned.EndpointACLs["api"].Selectors[0] = "zone:changed."
 	cloned.BirdInstances["mesh"].Overlays[0] = "changed"
-	cloned.Admission.PendingReason = "changed"
 
 	if original.PeerCleanups["peer-a"].Reason != "offline" ||
 		string(original.IPsecTransportKey.PublicKey) != "public" ||
@@ -71,8 +69,7 @@ func TestCloneRuntimeStateDeepCopiesMutableFields(t *testing.T) {
 	if original.RoutingReconcile.LastError != "routing-error" ||
 		original.FirewallReconcile.Instances["fw-a"].PolicyHash != "hash-a" ||
 		original.EndpointACLs["api"].Selectors[0] != "zone:catofes." ||
-		original.BirdInstances["mesh"].Overlays[0] != "main" ||
-		original.Admission.PendingReason != "missing_delegation" {
+		original.BirdInstances["mesh"].Overlays[0] != "main" {
 		t.Fatalf("nested runtime fields share mutable state: %#v", original)
 	}
 	if cloned.FirewallReconcile.Instances["nil"] != nil || cloned.BirdInstances["nil"] != nil {
@@ -105,7 +102,7 @@ func TestCloneRuntimeStatePreservesNilAndEmptyShape(t *testing.T) {
 func TestRuntimeStateSchemaGuard(t *testing.T) {
 	want := []string{
 		"PeerCleanups", "IPsecTransportKey", "IPsecPortRecord", "LinkInstances",
-		"IPsecReconcile", "RoutingReconcile", "FirewallReconcile", "EndpointACLs", "BirdInstances", "Admission",
+		"IPsecReconcile", "RoutingReconcile", "FirewallReconcile", "EndpointACLs", "BirdInstances",
 	}
 	typ := reflect.TypeOf(RuntimeState{})
 	if typ.NumField() != len(want) {
@@ -118,16 +115,16 @@ func TestRuntimeStateSchemaGuard(t *testing.T) {
 	}
 }
 
-func TestRuntimeStateJSONDropsLegacyIdentityPath(t *testing.T) {
+func TestRuntimeStateJSONDropsLegacyDerivedFields(t *testing.T) {
 	var state RuntimeState
-	if err := json.Unmarshal([]byte(`{"identity_key_path":"/old/key.json","endpoint_acls":{"api":{"name":"api"}}}`), &state); err != nil {
+	if err := json.Unmarshal([]byte(`{"identity_key_path":"/old/key.json","admission":{"pending":true},"endpoint_acls":{"api":{"name":"api"}}}`), &state); err != nil {
 		t.Fatalf("decode old payload: %v", err)
 	}
 	payload, err := json.Marshal(&state)
 	if err != nil {
 		t.Fatalf("encode current payload: %v", err)
 	}
-	if strings.Contains(string(payload), "identity_key_path") || state.EndpointACLs["api"].Name != "api" {
-		t.Fatalf("current state retained legacy identity path or lost durable fields: %s", payload)
+	if strings.Contains(string(payload), "identity_key_path") || strings.Contains(string(payload), "admission") || state.EndpointACLs["api"].Name != "api" {
+		t.Fatalf("current state retained legacy derived fields or lost durable fields: %s", payload)
 	}
 }

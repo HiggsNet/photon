@@ -14,7 +14,6 @@ type RuntimeState struct {
 	FirewallReconcile *photonstate.FirewallReconcileState              `json:"firewall_reconcile,omitempty"`
 	EndpointACLs      map[string]photonstate.EndpointACL               `json:"endpoint_acls,omitempty"`
 	BirdInstances     map[string]*photonstate.BirdInstanceState        `json:"bird_instances,omitempty"`
-	Admission         *photonstate.AdmissionState                      `json:"admission,omitempty"`
 }
 
 // CloneRuntimeState returns a detached controller candidate suitable for
@@ -33,6 +32,5 @@ func CloneRuntimeState(runtime *RuntimeState) *RuntimeState {
 		FirewallReconcile: photonstate.CloneFirewallReconcileState(runtime.FirewallReconcile),
 		EndpointACLs:      photonstate.CloneEndpointACLs(runtime.EndpointACLs),
 		BirdInstances:     photonstate.CloneBirdInstances(runtime.BirdInstances),
-		Admission:         photonstate.CloneAdmissionState(runtime.Admission),
 	}
 }

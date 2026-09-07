@@ -35,9 +35,7 @@ func writeAutoJoinStatus(out *lineWriter, view inspect.StatusView) {
 	out.Linef("  reason: %s", dash(d.Reason))
 	out.LineIf(d.ReasonDetail != "", "  detail: %s", d.ReasonDetail)
 	out.Linef("  parent_zone: %s", dash(string(d.ParentZone)))
-	out.Linef("  pending_since: %s", formatUnixTime(d.PendingSinceUnix))
 	out.Linef("  last_bootstrap_sync: %s", formatUnixTime(d.LastBootstrapSyncUnix))
-	out.LineIf(d.LastAdoptionError != "", "  last_error: %s", d.LastAdoptionError)
 	out.Linef("  join_request: %s", dash(d.JoinRequestB64))
 	if d.JoinRequestB64 != "" {
 		out.Linef("  next: photon gossip delegate issue <request> (on parent zone admin)")

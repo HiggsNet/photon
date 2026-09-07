@@ -84,7 +84,6 @@ func migrateLegacyRuntimeStateTx(tx *bolt.Tx, trustedRoot ed25519.PublicKey) (le
 		FirewallReconcile: meta.FirewallReconcile,
 		EndpointACLs:      meta.EndpointACLs,
 		BirdInstances:     meta.BirdInstances,
-		Admission:         meta.Admission,
 	}
 	candidate, gossipReport, err := projectLegacyCommonState(legacy, trustedRoot)
 	if err != nil {
@@ -120,6 +119,5 @@ func linuxRuntimeStateFromLegacy(state *stateFile) *linuxRuntimeState {
 		FirewallReconcile: state.FirewallReconcile,
 		EndpointACLs:      state.EndpointACLs,
 		BirdInstances:     state.BirdInstances,
-		Admission:         state.Admission,
 	}
 }

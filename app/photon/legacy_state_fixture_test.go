@@ -32,7 +32,6 @@ func stateMetaFromState(state *stateFile) stateMeta {
 		FirewallReconcile: state.FirewallReconcile,
 		EndpointACLs:      state.EndpointACLs,
 		BirdInstances:     state.BirdInstances,
-		Admission:         state.Admission,
 	}
 }
 
@@ -72,6 +71,5 @@ func loadLegacyStateAt(path string) (*stateFile, error) {
 		FirewallReconcile: meta.FirewallReconcile,
 		EndpointACLs:      meta.EndpointACLs,
 		BirdInstances:     meta.BirdInstances,
-		Admission:         meta.Admission,
 	}, nil
 }

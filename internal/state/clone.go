@@ -64,14 +64,6 @@ func CloneEndpointACLs(in map[string]EndpointACL) map[string]EndpointACL {
 	return out
 }
 
-func CloneAdmissionState(in *AdmissionState) *AdmissionState {
-	if in == nil {
-		return nil
-	}
-	out := *in
-	return &out
-}
-
 func CloneBirdInstances(in map[string]*BirdInstanceState) map[string]*BirdInstanceState {
 	if in == nil {
 		return nil

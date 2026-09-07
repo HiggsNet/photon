@@ -109,7 +109,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 
 | 文件 | 当前作用 | 最终位置 / 层 |
 |---|---|---|
-| `admission_diagnostics.go` | auto-join 诊断和 admission 标记 | 诊断进 `internal/inspect`；状态转换进 `pkg/core/host` 的 admission runtime；CLI wrapper 进 `internal/photoncli` |
+| `admission_diagnostics.go` | auto-join 诊断 | 保持纯投影：从 VerifiedState 与 GossipCheckpoint 即时生成 `internal/inspect` DTO；不再持久化 admission snapshot，CLI wrapper 后续进 `internal/photoncli` |
 | `authority.go` | 权限解析、delegate grant、旧 direct 修改 | CLI 进 `internal/photoncli`；权限合并/epoch/父子 authority 更新成为 `pkg/core/state` intent；旧 direct writer 删除 |
 | `bolt_state_store.go` | 组合公共 state 与 Linux runtime 的启动/提交 | 启动已优先读取新 schema，仅未初始化时进入旧 bootstrap/migration；最终迁入 `internal/photonlinux/persistence`，app 只负责构造和注入 |
 | `cmd.go` | Linux CLI 命令树 | 留 `app/photon` 但缩成注册；handler 进 `internal/photoncli` |
@@ -260,6 +260,7 @@ GossipDriver 公共 gossip 闭环、aggregate 清理和 current Linux codec 迁�
 边界，不能随 current codec 一起误搬成在线兼容层。这里的 codec owner 完成不等于 live state 边界完成：当前
 `photonlinux.RuntimeState` 仍混合 durable input、operation journal、derived reconcile summary 和 live observation。
 `IdentityKeyPath` 已从 current RuntimeState、clone 和 codec 中删除，启动不再为配置路径补写一次 Linux state；配置路径移动时只要密钥身份不变即可，启动与 reload 都以配置 key 的公钥匹配 VerifiedState 为准。旧 `stateFile/stateMeta` 仍解码该字段以读取旧库，但迁移投影明确丢弃，不形成 current schema 的第二真相源。
+持久化 `Admission` 也已删除：pending/adopted、reason/detail 与 join request 直接从 VerifiedState 推导，最近 bootstrap sync 从 GossipCheckpoint 中对应 peer 的 `LastSyncUnix` 推导。原有 pending 时间、adopted 时间和 error 字段没有生产写入者，不为它们新增公共 owner、bucket 或 schema migration；旧 JSON 字段由 current/legacy decoder 忽略。
 
 目标所有权与命名统一见 [`runtime-state-ownership.md`](runtime-state-ownership.md)：当前 `Daemon` 是唯一顶层
 `Daemon`，`host.GossipDriver` 是公共 `GossipDriver`，`photonlinux.LinuxDriver` 是具体 Linux 平台实现，`state.Store` 是公共
@@ -280,7 +281,7 @@ peer cleanup commit 壳已删除，剩余 typed commit 要在 LinuxState 字段�
 3. Linux driver：IPsec/XFRM、firewall、upstream routing、BIRD 和 health probe 实际执行均已下沉；执行侧主体完成。
    current `RuntimeState`、detached clone、bbolt codec 和 revision-guarded commit 已归 `internal/photonlinux`；app 旧库迁移只负责
    `stateFile/stateMeta` 解码及一次性字段投影。平台包不自行打开数据库，仍使用 composition root 传入的唯一 BoltStore/transaction。
-   `IdentityKeyPath` 已从 current schema 删除并回归配置 owner；其余 RuntimeState 仍过宽，需按 durable intent/journal 与 live observation 再拆；不能把单字段收缩或 codec 迁移误报为状态模型完成。
+   `IdentityKeyPath` 已从 current schema 删除并回归配置 owner；`Admission` 已作为纯派生诊断从 current/legacy schema 删除；其余 RuntimeState 仍过宽，需按 durable intent/journal 与 live observation 再拆；不能把单字段收缩或 codec 迁移误报为状态模型完成。
 4. 聚合 `stateFile`：在线和普通测试迁移已经完成；fresh join 与 state GC 已退出聚合写入；在线 IPsec cleanup、revoked purge、Endpoint ACL、
    state GC、reconcile completion 以及 Firewall/IPsec 主 planner 已直接读取 common/Linux 两个 owner，不再构造完整 Snapshot。
    本机 endpoint/IPsec/routing protocol publish 也已直接使用两个 owner，routing 主 reconcile planner 同样完成切换。

@@ -30,7 +30,6 @@ type stateFile struct {
 	FirewallReconcile *firewallReconcileState
 	EndpointACLs      map[string]endpointACL
 	BirdInstances     map[string]*BirdInstanceState
-	Admission         *admissionState `json:"admission,omitempty"`
 }
 
 type stateMeta struct {
@@ -48,14 +47,11 @@ type stateMeta struct {
 	FirewallReconcile *firewallReconcileState              `json:"firewall_reconcile,omitempty"`
 	EndpointACLs      map[string]endpointACL               `json:"endpoint_acls,omitempty"`
 	BirdInstances     map[string]*BirdInstanceState        `json:"bird_instances,omitempty"`
-	Admission         *admissionState                      `json:"admission,omitempty"`
 }
 
 type firewallReconcileState = photonstate.FirewallReconcileState
 type firewallInstanceReconcileStateEntry = photonstate.FirewallReconcileInstance
 type endpointACL = photonstate.EndpointACL
-
-type admissionState = photonstate.AdmissionState
 
 type BirdInstanceState = photonstate.BirdInstanceState
 

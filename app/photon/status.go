@@ -30,12 +30,16 @@ func statusViewFromOwners(rt *AppContext, common corestate.View, runtime *linuxR
 		return inspect.BuildStatus(inspect.StatusInput{DaemonOnline: daemonOnline})
 	}
 	verified := common.State
+	var bootstrap []syncConfigPeer
+	if rt != nil && rt.Config != nil {
+		bootstrap = rt.Config.Bootstrap
+	}
 	input := inspect.StatusInput{
 		DaemonOnline:   daemonOnline,
 		GossipSource:   "checkpoint",
 		PlatformSource: "unavailable",
 		ManagedZone:    verified.ManagedZone,
-		Admission:      diagnoseAutoJoinAdmission(verified, runtime.Admission, rt.Now()),
+		Admission:      diagnoseAutoJoinAdmission(verified, common.Gossip, bootstrap, rt.Now()),
 	}
 	if daemonOnline {
 		input.GossipSource = "runtime"

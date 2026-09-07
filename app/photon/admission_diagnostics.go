@@ -9,12 +9,14 @@ import (
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
-// diagnoseAutoJoinAdmission combines the common verified identity/network
-// with loss-tolerant Linux admission history. It is pure and performs no I/O.
-func diagnoseAutoJoinAdmission(verified *corestate.VerifiedState, admission *admissionState, now time.Time) inspect.AdmissionDiagnosis {
+// diagnoseAutoJoinAdmission derives the current auto-join status from common
+// verified state and the loss-tolerant gossip checkpoint. It performs no I/O
+// and owns no separately persisted admission snapshot.
+func diagnoseAutoJoinAdmission(verified *corestate.VerifiedState, checkpoint *corestate.GossipCheckpoint, bootstrap []syncConfigPeer, now time.Time) inspect.AdmissionDiagnosis {
 	if verified == nil {
 		return inspect.AdmissionDiagnosis{}
 	}
@@ -22,16 +24,11 @@ func diagnoseAutoJoinAdmission(verified *corestate.VerifiedState, admission *adm
 		ManagedZone: verified.ManagedZone,
 		ParentZone:  verified.ManagedZone.Parent(),
 	}
-	if admission != nil {
-		d.LastBootstrapSyncUnix = admission.LastBootstrapSyncUnix
-		d.PendingSinceUnix = admission.PendingSinceUnix
-		d.AdoptedAtUnix = admission.AdoptedAtUnix
-		d.LastAdoptionError = admission.LastAdoptionError
-	}
+	d.LastBootstrapSyncUnix = lastBootstrapSyncUnix(checkpoint, bootstrap)
 
 	if !autoJoinPendingVerified(verified) {
 		d.Pending = false
-		if admission != nil && admission.AdoptedAtUnix > 0 {
+		if verified.ManagedZone != zone.RootZone && verified.ManagedZone.Valid() {
 			d.Reason = inspect.AdmissionReasonAdopted
 		} else {
 			d.Reason = inspect.AdmissionReasonNotApplicable
@@ -113,6 +110,19 @@ func diagnoseAutoJoinAdmission(verified *corestate.VerifiedState, admission *adm
 	return d
 }
 
+func lastBootstrapSyncUnix(checkpoint *corestate.GossipCheckpoint, bootstrap []syncConfigPeer) int64 {
+	if checkpoint == nil {
+		return 0
+	}
+	var latest int64
+	for _, peer := range bootstrap {
+		if synced := checkpoint.Peers[peer.ID].LastSyncUnix; synced > latest {
+			latest = synced
+		}
+	}
+	return latest
+}
+
 func debugAdmission() error {
 	rt, err := NewAppContext()
 	if err != nil {
@@ -124,46 +134,13 @@ func debugAdmission() error {
 		fmt.Fprintln(os.Stdout, "daemon: online")
 		return inspecttext.WriteAdmissionDiagnosis(os.Stdout, diagnosis)
 	}
-	common, runtime, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(rt)
 	if err != nil {
 		return err
 	}
-	if common.State == nil || runtime == nil {
-		return fmt.Errorf("state owners are not initialized")
+	if common.State == nil {
+		return fmt.Errorf("common state owner is not initialized")
 	}
-	diagnosis := diagnoseAutoJoinAdmission(common.State, runtime.Admission, rt.Now())
+	diagnosis := diagnoseAutoJoinAdmission(common.State, common.Gossip, rt.Config.Bootstrap, rt.Now())
 	return inspecttext.WriteAdmissionDiagnosis(os.Stdout, diagnosis)
-}
-
-// updateAdmissionOnPending records the current pending diagnosis into the
-// admission state. It should be called when the daemon detects it is in
-// pending state, e.g. at startup or after a sync round that did not
-// result in adoption.
-func updateAdmissionOnPending(verified *corestate.VerifiedState, runtime *linuxRuntimeState, now time.Time) {
-	if verified == nil || runtime == nil {
-		return
-	}
-	pending := autoJoinPendingVerified(verified)
-	if runtime.Admission == nil {
-		runtime.Admission = &admissionState{}
-	}
-	if pending {
-		if runtime.Admission.PendingSinceUnix == 0 {
-			runtime.Admission.PendingSinceUnix = now.Unix()
-		}
-		runtime.Admission.Pending = true
-		runtime.Admission.AdoptedAtUnix = 0
-		d := diagnoseAutoJoinAdmission(verified, runtime.Admission, now)
-		runtime.Admission.PendingReason = d.Reason
-		runtime.Admission.PendingReasonDetail = d.ReasonDetail
-		runtime.Admission.JoinRequestB64 = d.JoinRequestB64
-	} else {
-		// Not pending — clear pending fields but preserve adopted timestamp.
-		if runtime.Admission.Pending {
-			runtime.Admission.Pending = false
-			runtime.Admission.AdoptedAtUnix = now.Unix()
-			runtime.Admission.PendingReason = ""
-			runtime.Admission.PendingReasonDetail = ""
-		}
-	}
 }

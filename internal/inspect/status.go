@@ -171,7 +171,7 @@ func AutoJoinStage(reason string) string {
 		return "syncing_parent"
 	case AdmissionReasonMissingDelegation:
 		return "awaiting_delegation"
-	case AdmissionReasonDelegationKeyMismatch, AdmissionReasonVerifyDelegationFailed, AdmissionReasonVerifyChainFailed:
+	case AdmissionReasonDelegationKeyMismatch, AdmissionReasonVerifyDelegationFailed:
 		return "delegation_invalid"
 	case AdmissionReasonWaitingForAdoption:
 		return "adopting"

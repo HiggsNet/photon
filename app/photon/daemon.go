@@ -1032,17 +1032,16 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		routesDump.BIRD = d.birdRoutesForControl(ctx, routesDump, routingInstances, birdInstances)
 		writeCanonicalView(conn, *routesDump)
 	case "admission_status":
-		d.StateStore.writeMu.Lock()
 		view := d.StateStore.common.ReadView()
-		d.StateStore.mu.RLock()
-		admission := photonstate.CloneAdmissionState(d.StateStore.runtime.Admission)
-		d.StateStore.mu.RUnlock()
-		d.StateStore.writeMu.Unlock()
 		if view.State == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		diagnosis := diagnoseAutoJoinAdmission(view.State, admission, d.now())
+		var bootstrap []syncConfigPeer
+		if d.App != nil && d.App.Config != nil {
+			bootstrap = d.App.Config.Bootstrap
+		}
+		diagnosis := diagnoseAutoJoinAdmission(view.State, view.Gossip, bootstrap, d.now())
 		writeCanonicalView(conn, diagnosis)
 	case "firewall_view":
 		d.StateStore.mu.RLock()
@@ -1563,7 +1562,7 @@ func (d *Daemon) handleJoinAcceptEvent(bundle *joinBundle, key *privateKeyFile) 
 
 func (d *Daemon) handleEndpointTimerEvent() (bool, error) {
 	d.logDebug("endpoint", "timer_begin", nil)
-	changed, err := d.publishLocalProtocols(false)
+	changed, err := d.publishLocalProtocols()
 	if err != nil {
 		return false, err
 	}
@@ -1582,11 +1581,11 @@ func (d *Daemon) prepareStartupState() (bool, error) {
 			d.logInfo("authority", "managed_zone_refreshed", map[string]any{"zone": view.State.ManagedZone})
 		}
 	}
-	published, err := d.publishLocalProtocols(true)
+	published, err := d.publishLocalProtocols()
 	return commit.Committed || published, err
 }
 
-func (d *Daemon) publishLocalProtocols(updateAdmission bool) (bool, error) {
+func (d *Daemon) publishLocalProtocols() (bool, error) {
 	if d == nil || d.StateStore == nil {
 		return false, errors.New("daemon service is not initialized")
 	}
@@ -1595,9 +1594,6 @@ func (d *Daemon) publishLocalProtocols(updateAdmission bool) (bool, error) {
 		return false, errors.New("daemon state network is nil")
 	}
 	revision := uint64(common.Revision)
-	if updateAdmission {
-		updateAdmissionOnPending(common.State, runtime, d.now())
-	}
 	var intents []corestate.LocalIntent
 	endpoint, err := d.endpointProtocolIntent(common.State)
 	if err != nil {

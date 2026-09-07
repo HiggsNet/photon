@@ -81,7 +81,7 @@ func TestPublishIPsecRecordsSignsStableLocalCapability(t *testing.T) {
 		Clock:     func() time.Time { return now },
 	}
 	service, closeStore := newPersistedIPsecPublishTestService(t, rt, verified, checkpoint, runtime, config)
-	if _, err := service.publishLocalProtocols(false); err != nil {
+	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols: %v", err)
 	}
 	common, runtime := service.StateStore.readCommonAndRuntime()
@@ -137,7 +137,7 @@ func TestPublishIPsecRecordsSignsStableLocalCapability(t *testing.T) {
 	}
 
 	rt.Clock = func() time.Time { return now.Add(time.Hour) }
-	if _, err := service.publishLocalProtocols(false); err != nil {
+	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols(second): %v", err)
 	}
 	againView, _ := service.StateStore.readCommonAndRuntime()
@@ -192,7 +192,7 @@ func TestPublishIPsecRecordsMigratesDeprecatedAcceptProfileToRole(t *testing.T) 
 	}
 
 	service, _ := newPersistedIPsecPublishTestService(t, rt, verified, checkpoint, runtime, config)
-	if _, err := service.publishLocalProtocols(false); err != nil {
+	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols: %v", err)
 	}
 	common := service.StateStore.common.ReadView()
@@ -297,7 +297,7 @@ func TestPublishIPsecRecordsRotatesPortGenerationByInterval(t *testing.T) {
 		Clock:     func() time.Time { return now },
 	}
 	service, _ := newPersistedIPsecPublishTestService(t, rt, verified, checkpoint, runtime, config)
-	if _, err := service.publishLocalProtocols(false); err != nil {
+	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols: %v", err)
 	}
 	common, runtime := service.StateStore.readCommonAndRuntime()
@@ -314,7 +314,7 @@ func TestPublishIPsecRecordsRotatesPortGenerationByInterval(t *testing.T) {
 
 	for i, offset := range []time.Duration{30 * time.Minute, 55 * time.Minute} {
 		rt.Clock = func() time.Time { return now.Add(offset) }
-		if _, err := service.publishLocalProtocols(false); err != nil {
+		if _, err := service.publishLocalProtocols(); err != nil {
 			t.Fatalf("publishLocalProtocols(refresh %d): %v", i, err)
 		}
 		refreshedView := service.StateStore.common.ReadView()
@@ -331,7 +331,7 @@ func TestPublishIPsecRecordsRotatesPortGenerationByInterval(t *testing.T) {
 	}
 
 	rt.Clock = func() time.Time { return now.Add(2 * time.Hour) }
-	if _, err := service.publishLocalProtocols(false); err != nil {
+	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols(third): %v", err)
 	}
 	thirdView := service.StateStore.common.ReadView()
@@ -365,7 +365,7 @@ func TestPublishIPsecRecordsRotatesFromExistingPortRecordWhenMetaMissing(t *test
 		Clock:     func() time.Time { return now },
 	}
 	service, _ := newPersistedIPsecPublishTestService(t, rt, verified, checkpoint, runtime, config)
-	if _, err := service.publishLocalProtocols(false); err != nil {
+	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols(first): %v", err)
 	}
 	firstView, _ := service.StateStore.readCommonAndRuntime()
@@ -380,7 +380,7 @@ func TestPublishIPsecRecordsRotatesFromExistingPortRecordWhenMetaMissing(t *test
 	}
 
 	rt.Clock = func() time.Time { return now.Add(2 * time.Hour) }
-	if _, err := service.publishLocalProtocols(false); err != nil {
+	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols(second): %v", err)
 	}
 	rotatedView, rotatedRuntime := service.StateStore.readCommonAndRuntime()
@@ -415,7 +415,7 @@ func TestDirectIPsecPortRotateAdvancesAndPersistsRangeGeneration(t *testing.T) {
 		Clock:     func() time.Time { return now },
 	}
 	service, closeStore := newPersistedIPsecPublishTestService(t, rt, verified, checkpoint, runtimeOwner, config)
-	if _, err := service.publishLocalProtocols(false); err != nil {
+	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols(first): %v", err)
 	}
 	firstView := service.StateStore.common.ReadView()
@@ -483,7 +483,7 @@ func TestPublishIPsecRecordsSkipsWithoutLinkGroups(t *testing.T) {
 		Clock:     func() time.Time { return time.Unix(5100, 0) },
 	}
 	service, _ := newPersistedIPsecPublishTestService(t, rt, verified, checkpoint, runtime, config)
-	if _, err := service.publishLocalProtocols(false); err != nil {
+	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols: %v", err)
 	}
 	common := service.StateStore.common.ReadView()
@@ -745,7 +745,7 @@ func TestPublishIPsecOverlayIntentStableWhenUnchanged(t *testing.T) {
 		Clock:     func() time.Time { return now },
 	}
 	service, _ := newPersistedIPsecPublishTestService(t, rt, verified, checkpoint, runtime, config)
-	if _, err := service.publishLocalProtocols(false); err != nil {
+	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols: %v", err)
 	}
 	key := ipsec.OverlayIntentRecordKey("main")
@@ -760,7 +760,7 @@ func TestPublishIPsecOverlayIntentStableWhenUnchanged(t *testing.T) {
 	}
 
 	rt.Clock = func() time.Time { return now.Add(5 * time.Minute) }
-	if _, err := service.publishLocalProtocols(false); err != nil {
+	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols(second): %v", err)
 	}
 	secondView := service.StateStore.common.ReadView()
@@ -781,7 +781,7 @@ func TestPublishIPsecOverlayIntentStableWhenUnchanged(t *testing.T) {
 
 	appConfig.IPsec.LinkGroups[0].TunnelAddressSpec.Pool = netip.MustParsePrefix("10.45.0.0/29")
 	rt.Clock = func() time.Time { return now.Add(10 * time.Minute) }
-	if _, err := service.publishLocalProtocols(false); err != nil {
+	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols(third): %v", err)
 	}
 	thirdView := service.StateStore.common.ReadView()

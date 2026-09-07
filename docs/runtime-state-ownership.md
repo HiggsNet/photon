@@ -129,7 +129,7 @@ Daemon 可以直接持有一个无独立锁/线程的 `LinuxObservation` 或 `Wi
 | `FirewallReconcile` | 当前实际状态和诊断移到 Observation；可重建 policy hash/generation 不落盘 |
 | `BirdInstances` | desired 从配置/可信状态推导；PID/socket/status 重新 Observe；仅保留不可推导 journal |
 | `PeerCleanups` | 只保留确有安全 grace/cleanup 恢复意义的字段，其余从 GossipCheckpoint/VerifiedState 推导 |
-| `Admission` | 是跨平台 bootstrap/join 状态，应迁到公共 bootstrap owner，不属于 LinuxState |
+| `Admission` | 已从 LinuxState 删除；它是由 VerifiedState 与 GossipCheckpoint 即时生成的 inspect diagnosis，不是持久 state。旧 schema 字段解码时直接丢弃 |
 
 在该审计完成前，不把现有整个 `RuntimeState` 搬进 `LinuxDriver`，也不以 current codec 已迁入 `internal/photonlinux` 为理由宣布状态边界完成。
 

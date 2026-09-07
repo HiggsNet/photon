@@ -124,7 +124,7 @@ func TestDaemonIPsecPortRotateEventTriggersDataPlaneReconcile(t *testing.T) {
 	driver := &countingIPsecDriver{}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
-	if _, err := service.publishLocalProtocols(false); err != nil {
+	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols: %v", err)
 	}
 	published := service.StateStore.common.ReadView()
@@ -593,10 +593,9 @@ func TestDaemonEndpointTimerNoChangeSkipsFlushAndSync(t *testing.T) {
 	}
 }
 
-func TestPrepareStartupStateCommitsAdmissionOnceWithoutMutatingConstructorInput(t *testing.T) {
+func TestPrepareStartupStateDoesNotPersistDerivedAdmission(t *testing.T) {
 	dir := t.TempDir()
 	verified, runtime, _ := buildPendingAutoJoinOwners(t, dir, "node-b.catofes.", false)
-	runtime.Admission = nil
 	now := time.Unix(7250, 0)
 	rt := &AppContext{
 		Config:    defaultAppConfig(),
@@ -614,19 +613,13 @@ func TestPrepareStartupStateCommitsAdmissionOnceWithoutMutatingConstructorInput(
 	if err != nil {
 		t.Fatalf("prepareStartupState: %v", err)
 	}
-	if !changed {
-		t.Fatal("prepareStartupState changed = false, want admission commit")
+	if changed {
+		t.Fatal("prepareStartupState changed = true for derived admission-only state")
 	}
-	if runtime.Admission != nil {
-		t.Fatal("prepareStartupState mutated the detached constructor input")
-	}
-	common, committed := service.StateStore.readCommonAndRuntime()
+	common, _ := service.StateStore.readCommonAndRuntime()
 	rev := uint64(common.Revision)
 	if rev != beforeRev {
 		t.Fatalf("verified revision = %d, want runtime-only startup to keep %d", rev, beforeRev)
-	}
-	if committed.Admission == nil || !committed.Admission.Pending || committed.Admission.PendingSinceUnix != now.Unix() {
-		t.Fatalf("committed admission = %+v, want pending startup diagnosis", committed.Admission)
 	}
 	changed, err = service.prepareStartupState()
 	if err != nil {

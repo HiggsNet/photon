@@ -79,7 +79,7 @@ Daemon
 
 - [ ] 把 `internal/photonlinux.RuntimeState` 改名/收缩为 `LinuxState`，逐字段给出“保留、推导、迁移、删除”的测试证据。
 - [x] `IdentityKeyPath` 已回到配置/应用上下文：current Linux state 不再保存或回填路径，启动/reload 校验配置 key 与 VerifiedState 身份一致，旧 schema 路径迁移时丢弃。
-- [ ] `Admission` 迁到跨平台 bootstrap/join owner。
+- [x] 删除持久化 `Admission`：pending/adopted、reason/detail 和 join request 由 VerifiedState 即时推导，最近 bootstrap sync 从 GossipCheckpoint 推导；旧 schema 字段直接丢弃，不新增 owner、bucket 或 revision。
 - [ ] 审计 `IPsecTransportKey`、`IPsecPortRecord` 和 Endpoint ACL：只保留没有其他真相源且跨重启必须保留的数据。
 - [ ] 拆分 `LinkInstances`：rotation/takeover/ownership 的最小恢复 journal 可持久化；ActualState、计数、LastError 和实时 SA 信息进入 Observation。
 - [ ] 删除 `IPsecReconcile` 中持久化的 ActualSAs、actions、LastRun/LastError 和可重新推导的 desired snapshot。
