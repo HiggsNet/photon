@@ -136,7 +136,6 @@ func (d *Daemon) handleIPsecCleanupEvent(ctx context.Context, includeOrphans boo
 	if _, committed, err := d.StateStore.commitIPsecIfRevision(
 		uint64(common.Revision),
 		runtimeCandidate.IPsecTransportKey,
-		runtimeCandidate.IPsecPortRecord,
 		runtimeCandidate.LinkInstances,
 		runtimeCandidate.IPsecReconcile,
 	); err != nil {

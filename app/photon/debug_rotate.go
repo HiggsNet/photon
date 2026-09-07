@@ -138,7 +138,7 @@ func rotateIPsecPortDirect(rt *AppContext) (*manualPortRotateResult, error) {
 	if common.State == nil || runtime == nil {
 		return nil, fmt.Errorf("state owners are not initialized")
 	}
-	record, portRuntime, result, err := planLocalIPsecPortRotation(rt.Config, common.State, runtime, rt.Now())
+	record, result, err := planLocalIPsecPortRotation(rt.Config, common.State, rt.Now())
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +146,6 @@ func rotateIPsecPortDirect(rt *AppContext) (*manualPortRotateResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	runtime.IPsecPortRecord = portRuntime
 	committed, err := store.publishLocalProtocols(context.Background(), uint64(common.Revision), []corestate.LocalIntent{
 		corestate.PutProtocolRecordIntent{Kind: corestate.ProtocolRecordIPsec, Zone: common.State.ManagedZone, Key: ipsec.RecordKeyPorts, Type: ipsec.RecordTypePorts, Value: value},
 	}, runtime, rt.Now())
@@ -159,41 +158,33 @@ func rotateIPsecPortDirect(rt *AppContext) (*manualPortRotateResult, error) {
 	return result, nil
 }
 
-func planLocalIPsecPortRotation(config *appConfig, verified *corestate.VerifiedState, ownersRuntime *linuxRuntimeState, now time.Time) (*ipsec.PortRecord, *ipsecPortRecordState, *manualPortRotateResult, error) {
+func planLocalIPsecPortRotation(config *appConfig, verified *corestate.VerifiedState, now time.Time) (*ipsec.PortRecord, *manualPortRotateResult, error) {
 	if config == nil {
 		config = defaultAppConfig()
 	}
 	if verified == nil || verified.Network == nil {
-		return nil, nil, nil, fmt.Errorf("verified state is nil")
+		return nil, nil, fmt.Errorf("verified state is nil")
 	}
 	if verified.ManagedZone == zone.RootZone || !verified.ManagedZone.Valid() {
-		return nil, nil, nil, fmt.Errorf("managed zone is required")
+		return nil, nil, fmt.Errorf("managed zone is required")
 	}
 	if len(verified.IdentityPrivateKey) == 0 {
-		return nil, nil, nil, fmt.Errorf("managed zone private key is required")
+		return nil, nil, fmt.Errorf("managed zone private key is required")
 	}
 	mode := config.IPsec.PortMode
 	if mode == "" {
 		mode = ipsec.PortModeFixed
 	}
 	if mode != ipsec.PortModeRange {
-		return nil, nil, nil, fmt.Errorf("manual port rotate requires ipsec.port_mode=range, got %q", mode)
+		return nil, nil, fmt.Errorf("manual port rotate requires ipsec.port_mode=range, got %q", mode)
 	}
 	if now.IsZero() {
 		now = time.Now()
 	}
 	existing := existingIPsecPortRecord(verified)
-	previous := existing
-	if previous == nil {
-		previous = previousIPsecPortRecord(ownersRuntime)
-	}
-	prevState := ipsecPortRecordStateFromRuntime(ownersRuntime)
-	if prevState == nil {
-		prevState = ipsecPortRecordStateFromRecord(existing)
-	}
 	nextGeneration := uint64(1)
-	if prevState != nil && prevState.Generation > 0 {
-		nextGeneration = prevState.Generation + 1
+	if existing != nil && existing.Current != nil && existing.Current.Generation > 0 {
+		nextGeneration = existing.Current.Generation + 1
 	}
 	record, err := ipsec.PlanPortRecord(ipsec.PortPlanOptions{
 		Mode:          mode,
@@ -201,18 +192,12 @@ func planLocalIPsecPortRotation(config *appConfig, verified *corestate.VerifiedS
 		FixedIKE:      uint16(ipsec.DefaultIKEPort),
 		FixedNATT:     uint16(ipsec.DefaultNATTPort),
 		Generation:    nextGeneration,
-		Previous:      previous,
+		Previous:      existing,
 		PreviousGrace: config.IPsec.PortPreviousGrace,
 		Now:           now,
 	})
 	if err != nil {
-		return nil, nil, nil, err
-	}
-	runtime := &ipsecPortRecordState{
-		Mode:       record.Mode,
-		Range:      record.Range,
-		Generation: record.Current.Generation,
-		UpdatedAt:  record.UpdatedAt,
+		return nil, nil, err
 	}
 	result := &manualPortRotateResult{
 		Zone:              verified.ManagedZone,
@@ -220,13 +205,13 @@ func planLocalIPsecPortRotation(config *appConfig, verified *corestate.VerifiedS
 		CurrentIKE:        record.Current.IKE.Advertised,
 		CurrentNATT:       record.Current.NATT.Advertised,
 	}
-	if previous != nil && previous.Current != nil {
-		result.PreviousGeneration = previous.Current.Generation
-		result.PreviousIKE = previous.Current.IKE.Advertised
-		result.PreviousNATT = previous.Current.NATT.Advertised
+	if existing != nil && existing.Current != nil {
+		result.PreviousGeneration = existing.Current.Generation
+		result.PreviousIKE = existing.Current.IKE.Advertised
+		result.PreviousNATT = existing.Current.NATT.Advertised
 	}
 	if len(record.Previous) > 0 {
 		result.PreviousValidUntil = record.Previous[0].ValidUntil
 	}
-	return record, runtime, result, nil
+	return record, result, nil
 }

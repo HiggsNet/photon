@@ -1610,9 +1610,6 @@ func (d *Daemon) publishLocalProtocols() (bool, error) {
 	if ipsecPlan.TransportKey != nil {
 		runtime.IPsecTransportKey = photonstate.CloneIPsecTransportKeyState(ipsecPlan.TransportKey)
 	}
-	if ipsecPlan.PortRecord != nil {
-		runtime.IPsecPortRecord = photonstate.CloneIPsecPortRecordState(ipsecPlan.PortRecord)
-	}
 	routingIntent, err := d.routingNetnsProtocolIntent(common.State)
 	if err != nil {
 		return false, fmt.Errorf("plan routing record: %w", err)
@@ -1684,7 +1681,7 @@ func (d *Daemon) handleIPsecPortRotateEvent() (*manualPortRotateResult, error) {
 		return nil, errors.New("daemon state is not initialized")
 	}
 	revision := uint64(common.Revision)
-	record, portRuntime, result, err := planLocalIPsecPortRotation(d.App.Config, common.State, runtime, d.now())
+	record, result, err := planLocalIPsecPortRotation(d.App.Config, common.State, d.now())
 	if err != nil {
 		return nil, err
 	}
@@ -1692,7 +1689,6 @@ func (d *Daemon) handleIPsecPortRotateEvent() (*manualPortRotateResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	runtime.IPsecPortRecord = portRuntime
 	committed, err := d.StateStore.publishLocalProtocols(context.Background(), revision, []corestate.LocalIntent{
 		corestate.PutProtocolRecordIntent{Kind: corestate.ProtocolRecordIPsec, Zone: common.State.ManagedZone, Key: ipsec.RecordKeyPorts, Type: ipsec.RecordTypePorts, Value: value},
 	}, runtime, d.now())

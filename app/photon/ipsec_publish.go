@@ -23,7 +23,6 @@ import (
 type localIPsecPublishPlan struct {
 	Intents      []corestate.LocalIntent
 	TransportKey *ipsecTransportKeyState
-	PortRecord   *ipsecPortRecordState
 }
 
 func (d *Daemon) ipsecProtocolPlan(verified *corestate.VerifiedState, runtime *linuxRuntimeState) (localIPsecPublishPlan, error) {
@@ -66,7 +65,7 @@ func (d *Daemon) ipsecProtocolPlan(verified *corestate.VerifiedState, runtime *l
 		return plan, err
 	}
 	plan.TransportKey = photonstate.CloneIPsecTransportKeyState(key)
-	records, err := localIPsecRecords(config, verified, runtime, keyRecord, now)
+	records, err := localIPsecRecords(config, verified, keyRecord, now)
 	if err != nil {
 		return plan, err
 	}
@@ -102,18 +101,7 @@ func (d *Daemon) ipsecProtocolPlan(verified *corestate.VerifiedState, runtime *l
 		default:
 			continue
 		}
-		var r *ipsec.PortRange
-		if portRecord.Range != nil {
-			r = portRecord.Range
-		}
-		previousState := runtime.IPsecPortRecord
-		d.logDebug("ipsec", "port_publish_decision", ipsecPortPublishLogFields(config, previousState, portRecord, now))
-		plan.PortRecord = &ipsecPortRecordState{
-			Mode:       portRecord.Mode,
-			Range:      r,
-			Generation: portRecord.Current.Generation,
-			UpdatedAt:  portRecord.UpdatedAt,
-		}
+		d.logDebug("ipsec", "port_publish_decision", ipsecPortPublishLogFields(config, existingIPsecPortRecord(verified), portRecord, now))
 	}
 	if len(plan.Intents) > 0 || !sameIPsecPublishRuntime(runtime, plan) {
 		d.logDebug("ipsec", "publish_saved", map[string]any{"managed_zone": verified.ManagedZone, "records": len(records)})
@@ -124,8 +112,7 @@ func (d *Daemon) ipsecProtocolPlan(verified *corestate.VerifiedState, runtime *l
 }
 
 func sameIPsecPublishRuntime(runtime *linuxRuntimeState, plan localIPsecPublishPlan) bool {
-	return runtime != nil && ipsecTransportKeyStateEqual(runtime.IPsecTransportKey, plan.TransportKey) &&
-		ipsecPortRecordStateEqual(runtime.IPsecPortRecord, plan.PortRecord)
+	return runtime != nil && ipsecTransportKeyStateEqual(runtime.IPsecTransportKey, plan.TransportKey)
 }
 
 func ipsecTransportKeyStateEqual(a, b *ipsecTransportKeyState) bool {
@@ -137,14 +124,7 @@ func ipsecTransportKeyStateEqual(a, b *ipsecTransportKeyState) bool {
 		a.NotAfter == b.NotAfter && a.UpdatedAt == b.UpdatedAt
 }
 
-func ipsecPortRecordStateEqual(a, b *ipsecPortRecordState) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	return a.Mode == b.Mode && a.Generation == b.Generation && a.UpdatedAt == b.UpdatedAt && ipsecPortRangesEqual(a.Range, b.Range)
-}
-
-func ipsecPortPublishLogFields(config *appConfig, previous *ipsecPortRecordState, record *ipsec.PortRecord, now time.Time) map[string]any {
+func ipsecPortPublishLogFields(config *appConfig, previous *ipsec.PortRecord, record *ipsec.PortRecord, now time.Time) map[string]any {
 	fields := map[string]any{
 		"now": now.Unix(),
 	}
@@ -153,11 +133,13 @@ func ipsecPortPublishLogFields(config *appConfig, previous *ipsecPortRecordState
 		fields["previous_grace_seconds"] = int64(config.IPsec.PortPreviousGrace.Seconds())
 	}
 	if previous != nil {
-		fields["meta_mode"] = previous.Mode
-		fields["meta_generation"] = previous.Generation
-		fields["meta_updated_at"] = previous.UpdatedAt
+		fields["existing_mode"] = previous.Mode
+		if previous.Current != nil {
+			fields["existing_generation"] = previous.Current.Generation
+		}
+		fields["existing_updated_at"] = previous.UpdatedAt
 		if previous.Range != nil {
-			fields["meta_range"] = fmt.Sprintf("%d-%d", previous.Range.From, previous.Range.To)
+			fields["existing_range"] = fmt.Sprintf("%d-%d", previous.Range.From, previous.Range.To)
 		}
 		if config != nil && config.IPsec.PortRotateInterval > 0 && previous.UpdatedAt > 0 {
 			dueAt := time.Unix(previous.UpdatedAt, 0).Add(config.IPsec.PortRotateInterval)
@@ -165,7 +147,7 @@ func ipsecPortPublishLogFields(config *appConfig, previous *ipsecPortRecordState
 			fields["rotate_due"] = !now.Before(dueAt)
 		}
 	} else {
-		fields["meta_generation"] = 0
+		fields["existing_generation"] = 0
 	}
 	if record != nil {
 		fields["record_mode"] = record.Mode
@@ -255,7 +237,7 @@ func zonePublicKey(identityPrivateKey ed25519.PrivateKey) [][]byte {
 	return [][]byte{append([]byte(nil), pub...)}
 }
 
-func localIPsecRecords(config *appConfig, verified *corestate.VerifiedState, runtime *linuxRuntimeState, key *ipsec.TransportKeyRecord, now time.Time) ([]localIPsecRecord, error) {
+func localIPsecRecords(config *appConfig, verified *corestate.VerifiedState, key *ipsec.TransportKeyRecord, now time.Time) ([]localIPsecRecord, error) {
 	if config == nil {
 		return nil, fmt.Errorf("config is nil")
 	}
@@ -263,7 +245,7 @@ func localIPsecRecords(config *appConfig, verified *corestate.VerifiedState, run
 		return nil, fmt.Errorf("transport key record is required")
 	}
 	addresses := localIPsecAddressRecord(config, verified, now)
-	ports, err := localIPsecPortRecord(config, verified, runtime, now)
+	ports, err := localIPsecPortRecord(config, verified, now)
 	if err != nil {
 		return nil, err
 	}
@@ -584,16 +566,12 @@ func mapGossipEndpointSourceToIPsec(ep gossip.EndpointEntry) (source, reachabili
 	return
 }
 
-func localIPsecPortRecord(config *appConfig, verified *corestate.VerifiedState, runtime *linuxRuntimeState, now time.Time) (*ipsec.PortRecord, error) {
+func localIPsecPortRecord(config *appConfig, verified *corestate.VerifiedState, now time.Time) (*ipsec.PortRecord, error) {
 	// IPsec ports are independent of the gossip listen address. Use the IKEv2
 	// defaults unless the configuration explicitly requests a different mode.
 	ike := uint16(ipsec.DefaultIKEPort)
 	natt := uint16(ipsec.DefaultNATTPort)
 	existing := existingIPsecPortRecord(verified)
-	previous := existing
-	if previous == nil {
-		previous = previousIPsecPortRecord(runtime)
-	}
 	mode := config.IPsec.PortMode
 	if mode == "" {
 		mode = ipsec.PortModeFixed
@@ -602,7 +580,7 @@ func localIPsecPortRecord(config *appConfig, verified *corestate.VerifiedState, 
 	var portRange *ipsec.PortRange
 	if mode == ipsec.PortModeRange {
 		portRange = &config.IPsec.PortRange
-		generation = nextPortGeneration(runtime, existing, config, now)
+		generation = nextPortGeneration(existing, config, now)
 	}
 	if existing != nil && existing.Current != nil && existing.Current.Generation == generation && portRecordMatchesConfig(existing, mode, portRange) {
 		return existing, nil
@@ -613,7 +591,7 @@ func localIPsecPortRecord(config *appConfig, verified *corestate.VerifiedState, 
 		FixedIKE:      ike,
 		FixedNATT:     natt,
 		Generation:    generation,
-		Previous:      previous,
+		Previous:      existing,
 		PreviousGrace: config.IPsec.PortPreviousGrace,
 		Now:           now,
 	})
@@ -634,73 +612,21 @@ func existingIPsecPortRecord(verified *corestate.VerifiedState) *ipsec.PortRecor
 	return record
 }
 
-func previousIPsecPortRecord(runtime *linuxRuntimeState) *ipsec.PortRecord {
-	if runtime == nil || runtime.IPsecPortRecord == nil {
-		return nil
-	}
-	prev := runtime.IPsecPortRecord
-	record := &ipsec.PortRecord{
-		Version:   1,
-		Mode:      prev.Mode,
-		UpdatedAt: prev.UpdatedAt,
-		Current: &ipsec.PortSelection{
-			Generation: prev.Generation,
-			IKE:        ipsec.PortBinding{Local: uint16(ipsec.DefaultIKEPort), Advertised: uint16(ipsec.DefaultIKEPort)},
-			NATT:       ipsec.PortBinding{Local: uint16(ipsec.DefaultNATTPort), Advertised: uint16(ipsec.DefaultNATTPort)},
-		},
-	}
-	if prev.Range != nil {
-		r := *prev.Range
-		record.Range = &r
-		ike, natt, _ := ipsec.SelectPortsFromRange(r, prev.Generation)
-		record.Current.IKE = ipsec.PortBinding{Local: ike, Advertised: ike}
-		record.Current.NATT = ipsec.PortBinding{Local: natt, Advertised: natt}
-	}
-	return record
-}
-
-func nextPortGeneration(runtime *linuxRuntimeState, existing *ipsec.PortRecord, config *appConfig, now time.Time) uint64 {
-	prev := ipsecPortRecordStateFromRuntime(runtime)
-	if prev == nil {
-		prev = ipsecPortRecordStateFromRecord(existing)
-	}
-	if prev == nil {
+func nextPortGeneration(existing *ipsec.PortRecord, config *appConfig, now time.Time) uint64 {
+	if existing == nil || existing.Current == nil {
 		return 1
 	}
 	if config.IPsec.PortRotateInterval <= 0 {
-		return prev.Generation
+		return existing.Current.Generation
 	}
-	if prev.UpdatedAt == 0 {
-		return prev.Generation + 1
+	if existing.UpdatedAt == 0 {
+		return existing.Current.Generation + 1
 	}
-	last := time.Unix(prev.UpdatedAt, 0)
+	last := time.Unix(existing.UpdatedAt, 0)
 	if now.After(last.Add(config.IPsec.PortRotateInterval)) {
-		return prev.Generation + 1
+		return existing.Current.Generation + 1
 	}
-	return prev.Generation
-}
-
-func ipsecPortRecordStateFromRuntime(runtime *linuxRuntimeState) *ipsecPortRecordState {
-	if runtime == nil || runtime.IPsecPortRecord == nil {
-		return nil
-	}
-	return runtime.IPsecPortRecord
-}
-
-func ipsecPortRecordStateFromRecord(record *ipsec.PortRecord) *ipsecPortRecordState {
-	if record == nil || record.Current == nil {
-		return nil
-	}
-	state := &ipsecPortRecordState{
-		Mode:       record.Mode,
-		Generation: record.Current.Generation,
-		UpdatedAt:  record.UpdatedAt,
-	}
-	if record.Range != nil {
-		r := *record.Range
-		state.Range = &r
-	}
-	return state
+	return existing.Current.Generation
 }
 
 func portRecordMatchesConfig(record *ipsec.PortRecord, mode string, r *ipsec.PortRange) bool {

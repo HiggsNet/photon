@@ -23,7 +23,6 @@ type stateFile struct {
 	SyncPeers         map[string]syncPeerState
 	PeerCleanups      map[string]peerLifecycleCleanupState
 	IPsecTransportKey *ipsecTransportKeyState
-	IPsecPortRecord   *ipsecPortRecordState
 	LinkInstances     map[string]linkInstanceState
 	IPsecReconcile    *ipsecReconcileState
 	RoutingReconcile  *routingReconcileState
@@ -40,7 +39,6 @@ type stateMeta struct {
 	SyncPeers         map[string]syncPeerState             `json:"sync_peers,omitempty"`
 	PeerCleanups      map[string]peerLifecycleCleanupState `json:"peer_cleanups,omitempty"`
 	IPsecTransportKey *ipsecTransportKeyState              `json:"ipsec_transport_key,omitempty"`
-	IPsecPortRecord   *ipsecPortRecordState                `json:"ipsec_port_record,omitempty"`
 	LinkInstances     map[string]linkInstanceState         `json:"link_instances,omitempty"`
 	IPsecReconcile    *ipsecReconcileState                 `json:"ipsec_reconcile,omitempty"`
 	RoutingReconcile  *routingReconcileState               `json:"routing_reconcile,omitempty"`
@@ -58,7 +56,6 @@ type BirdInstanceState = photonstate.BirdInstanceState
 type routingReconcileState = photonstate.RoutingReconcileState
 
 type ipsecTransportKeyState = photonstate.IPsecTransportKeyState
-type ipsecPortRecordState = photonstate.IPsecPortRecordState
 
 type linkInstanceState = photonstate.LinkInstanceState
 type linkOwnerState = photonstate.LinkOwnerState

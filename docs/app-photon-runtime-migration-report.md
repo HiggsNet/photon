@@ -46,15 +46,15 @@ Platform controller 必须满足幂等、可重试和最终收敛的 reconcile �
 | resource owner/token | 不需要 | 从 manager、group、link、transport 等稳定输入推导 |
 | XFRM if_id/interface name | 不需要 | 已有稳定 hash/命名函数；也可通过 XFRM Observe 验证 |
 | reqid、实际 SA、实际进程状态 | 不需要 | 属于外部 observed state，每次启动重新查询 |
-| port generation | 通常不需要 | 当前 verified port record 已包含 generation、range 和更新时间，可作为恢复输入 |
+| port generation | 不需要 | 当前 verified port record 已包含 generation、range、更新时间和 previous grace；自动/手动轮换直接从它恢复，发布失败也不会产生必须单独保存的 staged generation |
 | 配置文件中的 Endpoint ACL | 不需要 | 配置文件是 desired source of truth |
-| CLI 动态创建且要求跨重启保留的 Endpoint ACL | 需要，或者取消该持久语义 | 它不在配置和 gossip 中；产品必须明确“持久本机配置”或“重启丢失”二选一 |
-| 随机生成的 IPsec transport private key | 可选 | gossip 只有公钥，不能反推出私钥；可以持久保持 transport identity，也可以规定每次启动重新生成并发布新 record |
+| CLI 动态创建且要求跨重启保留的 Endpoint ACL | 需要 | 当前产品选择“持久本机配置”语义；它不在配置和 gossip 中，系统规则也不能无损还原 selector intent |
+| 随机生成的 IPsec transport private key | 需要 | 当前产品选择跨重启保持 transport identity；gossip 只有公钥且没有独立 key-file owner，不能反推出私钥 |
 | LastError、LastRun、action/skip、backoff | 不需要保证 | 属于 diagnostics/observability；可丢失，不参与 reconcile 正确性 |
 
 因此目标不应是建立一个内容越来越多的 `PlatformCheckpoint`，而应尽量删除 platform runtime 字段。只有无法推导、无法 Observe、且产品明确要求跨重启连续的本机值才持久化。
 
-如果最终所有 Linux 资源身份均可稳定推导、所有外部状态均可 Observe，并且 transport key 采用“重启即轮换”、动态 ACL 采用“仅内存”语义，那么 `photon:linux-runtime` 可以缩到没有 correctness-critical payload，甚至完全删除；这不影响公共 `VerifiedRevision`。
+当前审计已删除重复的 `IPsecPortRecord` runtime 缓存，并明确保留 transport private key 与动态 Endpoint ACL。若未来把 transport key 迁入独立 key-file owner，且产品另行改为 ACL 重启丢失或配置托管语义，`photon:linux-runtime` 才可能继续缩到没有 correctness-critical payload；这不影响公共 `VerifiedRevision`。
 
 ### 2.2 幂等是 controller 的硬性要求
 
@@ -162,7 +162,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `inspect_peers.go` | verified/checkpoint/bootstrap/observability endpoint view | `internal/inspect`，不再依赖 stateFile |
 | `ipam.go` | IPAM CLI、旧 mutation 和报告 | mutation 只调 state intent；报告进 inspect；CLI 进 photoncli；旧 apply 函数删除 |
 | `ipsec_cleanup.go` | StrongSwan/XFRM cleanup 的 CLI 与装配 | owner 校验、link teardown、缺失资源幂等和 orphan cleanup 已作为唯一 `photonlinux.LinuxDriver` 的真实方法迁入 `internal/photonlinux/ipsec_cleanup.go`；online cleanup、IPsec reconcile、lifecycle watcher 与 purge 复用该实例，只有 direct 命令临时创建；driver 在配置构造时明确选择，不在运行中隐式补 DryRun；direct cleanup 已写 Linux runtime owner、不再写旧 stateFile；剩余 control/CLI 进 photoncli |
-| `ipsec_publish.go` | transport key/address/port/overlay record 和私有 runtime | record 构造进 transport/state publisher；key/port 本机事实进 platform runtime；排序由 host 保证 |
+| `ipsec_publish.go` | transport key/address/port/overlay record 和私有 runtime | record 构造进 transport/state publisher；只有无第二来源的 transport private key 进入 platform runtime，port generation 从 verified record 恢复；排序由 host 保证 |
 | `ipsec_reconcile.go` | StrongSwan/XFRM/SA/rotation reconcile | app 仅保留协议规划、rotation 编排与结果提交；SA live observation、action apply、lifecycle subscription，以及 XFRM batch observe、missing-link filter、diagnostic address、drift repair 都直接实现为唯一 `photonlinux.LinuxDriver` 的方法，并按 `linux_driver.go`、`xfrm.go`、`ipsec_cleanup.go` 分文件组织；没有再套平台聚合层或逐方法代理，迁移期 `XFRMDriver()` 访问口已删除 |
 | `join.go` | join DTO、issue/revoke/accept、key/bundle、旧 direct writer | DTO/验证进 state admission；文件 CLI 进 photoncli；全部 mutation 复用 Store；旧 writer 删除 |
 

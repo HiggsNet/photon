@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	photonstate "github.com/HiggsNet/photon/internal/state"
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func TestCloneRuntimeStateDeepCopiesMutableFields(t *testing.T) {
@@ -16,7 +15,6 @@ func TestCloneRuntimeStateDeepCopiesMutableFields(t *testing.T) {
 			"peer-a": {LastActiveUnix: 10, CleanupUnix: 20, Reason: "offline"},
 		},
 		IPsecTransportKey: &photonstate.IPsecTransportKeyState{PublicKey: []byte("public"), PrivateKey: []byte("private")},
-		IPsecPortRecord:   &photonstate.IPsecPortRecordState{Range: &ipsec.PortRange{From: 4500, To: 4510}},
 		LinkInstances:     map[string]photonstate.LinkInstanceState{"link-a": {ID: "link-a", Owner: photonstate.LinkOwnerState{Token: "token-a"}}},
 		IPsecReconcile: &photonstate.IPsecReconcileState{
 			Desired:   []photonstate.DesiredLinkState{{InstanceID: "link-a", Endpoint: "198.51.100.10:4500"}},
@@ -40,7 +38,6 @@ func TestCloneRuntimeStateDeepCopiesMutableFields(t *testing.T) {
 	cloned.PeerCleanups["peer-a"] = photonstate.PeerLifecycleCleanupState{Reason: "changed"}
 	cloned.IPsecTransportKey.PublicKey[0] = 'P'
 	cloned.IPsecTransportKey.PrivateKey[0] = 'S'
-	cloned.IPsecPortRecord.Range.From = 4600
 	link := cloned.LinkInstances["link-a"]
 	link.Owner.Token = "token-b"
 	cloned.LinkInstances["link-a"] = link
@@ -56,7 +53,6 @@ func TestCloneRuntimeStateDeepCopiesMutableFields(t *testing.T) {
 	if original.PeerCleanups["peer-a"].Reason != "offline" ||
 		string(original.IPsecTransportKey.PublicKey) != "public" ||
 		string(original.IPsecTransportKey.PrivateKey) != "private" ||
-		original.IPsecPortRecord.Range.From != 4500 ||
 		original.LinkInstances["link-a"].Owner.Token != "token-a" {
 		t.Fatalf("top-level runtime fields share mutable state: %#v", original)
 	}
@@ -101,7 +97,7 @@ func TestCloneRuntimeStatePreservesNilAndEmptyShape(t *testing.T) {
 
 func TestRuntimeStateSchemaGuard(t *testing.T) {
 	want := []string{
-		"PeerCleanups", "IPsecTransportKey", "IPsecPortRecord", "LinkInstances",
+		"PeerCleanups", "IPsecTransportKey", "LinkInstances",
 		"IPsecReconcile", "RoutingReconcile", "FirewallReconcile", "EndpointACLs", "BirdInstances",
 	}
 	typ := reflect.TypeOf(RuntimeState{})
@@ -117,14 +113,14 @@ func TestRuntimeStateSchemaGuard(t *testing.T) {
 
 func TestRuntimeStateJSONDropsLegacyDerivedFields(t *testing.T) {
 	var state RuntimeState
-	if err := json.Unmarshal([]byte(`{"identity_key_path":"/old/key.json","admission":{"pending":true},"endpoint_acls":{"api":{"name":"api"}}}`), &state); err != nil {
+	if err := json.Unmarshal([]byte(`{"identity_key_path":"/old/key.json","admission":{"pending":true},"ipsec_port_record":{"generation":7},"endpoint_acls":{"api":{"name":"api"}}}`), &state); err != nil {
 		t.Fatalf("decode old payload: %v", err)
 	}
 	payload, err := json.Marshal(&state)
 	if err != nil {
 		t.Fatalf("encode current payload: %v", err)
 	}
-	if strings.Contains(string(payload), "identity_key_path") || strings.Contains(string(payload), "admission") || state.EndpointACLs["api"].Name != "api" {
+	if strings.Contains(string(payload), "identity_key_path") || strings.Contains(string(payload), "admission") || strings.Contains(string(payload), "ipsec_port_record") || state.EndpointACLs["api"].Name != "api" {
 		t.Fatalf("current state retained legacy derived fields or lost durable fields: %s", payload)
 	}
 }

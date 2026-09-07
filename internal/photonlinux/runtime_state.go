@@ -7,7 +7,6 @@ import photonstate "github.com/HiggsNet/photon/internal/state"
 type RuntimeState struct {
 	PeerCleanups      map[string]photonstate.PeerLifecycleCleanupState `json:"peer_cleanups,omitempty"`
 	IPsecTransportKey *photonstate.IPsecTransportKeyState              `json:"ipsec_transport_key,omitempty"`
-	IPsecPortRecord   *photonstate.IPsecPortRecordState                `json:"ipsec_port_record,omitempty"`
 	LinkInstances     map[string]photonstate.LinkInstanceState         `json:"link_instances,omitempty"`
 	IPsecReconcile    *photonstate.IPsecReconcileState                 `json:"ipsec_reconcile,omitempty"`
 	RoutingReconcile  *photonstate.RoutingReconcileState               `json:"routing_reconcile,omitempty"`
@@ -25,7 +24,6 @@ func CloneRuntimeState(runtime *RuntimeState) *RuntimeState {
 	return &RuntimeState{
 		PeerCleanups:      photonstate.ClonePeerLifecycleCleanups(runtime.PeerCleanups),
 		IPsecTransportKey: photonstate.CloneIPsecTransportKeyState(runtime.IPsecTransportKey),
-		IPsecPortRecord:   photonstate.CloneIPsecPortRecordState(runtime.IPsecPortRecord),
 		LinkInstances:     photonstate.CloneLinkInstances(runtime.LinkInstances),
 		IPsecReconcile:    photonstate.CloneIPsecReconcileState(runtime.IPsecReconcile),
 		RoutingReconcile:  photonstate.CloneRoutingReconcileState(runtime.RoutingReconcile),

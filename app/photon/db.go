@@ -118,25 +118,12 @@ func dumpMetaBucket(bucket *bolt.Bucket) error {
 			fmt.Printf("  managed_zone: %s\n", valueOrDash(meta.ManagedZone.String()))
 			fmt.Printf("  root_private_key: %s\n", present(len(meta.RootPrivateKey) == ed25519.PrivateKeySize))
 			fmt.Printf("  zone_private_key: %s\n", present(len(meta.ZonePrivateKey) == ed25519.PrivateKeySize))
-			dumpIPsecPortRecordState(meta.IPsecPortRecord)
 			dumpSyncPeers(meta.SyncPeers)
 		default:
 			return dumpRawEntry(k, v, "  ")
 		}
 		return nil
 	})
-}
-
-func dumpIPsecPortRecordState(state *ipsecPortRecordState) {
-	if state == nil {
-		fmt.Printf("  ipsec_port_record: -\n")
-		return
-	}
-	fmt.Printf("  ipsec_port_record: mode=%s generation=%d updated_at=%s", valueOrDash(state.Mode), state.Generation, formatUnixTime(state.UpdatedAt))
-	if state.Range != nil {
-		fmt.Printf(" range=%d-%d", state.Range.From, state.Range.To)
-	}
-	fmt.Printf("\n")
 }
 
 func dumpZoneBucket(path zone.ZonePath, bucket *bolt.Bucket) error {

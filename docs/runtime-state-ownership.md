@@ -120,9 +120,9 @@ Daemon 可以直接持有一个无独立锁/线程的 `LinuxObservation` 或 `Wi
 | 当前字段 | 目标处理 |
 |---|---|
 | `IdentityKeyPath` | 已从 current Linux state 删除；路径只由配置/应用上下文持有，启动与 reload 直接校验该文件的公钥匹配 VerifiedState 中的身份私钥；旧 schema decoder 读取后丢弃 |
-| `IPsecTransportKey` | 无其他来源的私钥可保留；有配置或独立文件 owner 时只保留一个真相源 |
-| `IPsecPortRecord` | 优先从本机 verified record 恢复；只保留无法恢复的 staged generation |
-| `EndpointACLs` | 显式本地平台 intent，可保留 |
+| `IPsecTransportKey` | 保留；当前由本机随机生成，gossip 只发布公钥，没有第二个私钥 owner，跨重启保持 transport identity 需要它 |
+| `IPsecPortRecord` | 已删除；本机 verified `ipsec/ports` record 已包含 mode、range、generation、更新时间和 previous grace，自动/手动轮换均直接以它为恢复输入，不存在独立 staged generation |
+| `EndpointACLs` | 保留；它由 control API 显式创建，是非 gossip 的本机平台 intent，配置和操作系统规则都不是其完整真相源，产品语义要求跨重启继续生效 |
 | `LinkInstances` | 拆出最小 rotation/takeover/ownership journal；实际状态、计数和错误进 Observation |
 | `IPsecReconcile` | `ActualSAs`、actions、LastRun、LastError 等移到 Observation；derived desired 不落盘 |
 | `RoutingReconcile` | 移到 Observation |

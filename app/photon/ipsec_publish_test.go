@@ -53,6 +53,9 @@ func newPersistedIPsecPublishTestService(
 		t.Fatalf("newPersistedDaemonStateStore: %v", err)
 	}
 	service := newDaemonWithStore(rt, stateStore, config, time.Second)
+	// These tests call the publisher directly and do not run the daemon event
+	// loop. Stop its unused scheduler so tests can advance the fake clock safely.
+	service.gossipDriver.Stop()
 	var once sync.Once
 	closeStore := func() {
 		once.Do(func() {
@@ -308,10 +311,6 @@ func TestPublishIPsecRecordsRotatesPortGenerationByInterval(t *testing.T) {
 	if first.Current.Generation != 1 {
 		t.Fatalf("first generation = %d, want 1", first.Current.Generation)
 	}
-	if runtime.IPsecPortRecord == nil || runtime.IPsecPortRecord.Generation != 1 {
-		t.Fatalf("port state not persisted")
-	}
-
 	for i, offset := range []time.Duration{30 * time.Minute, 55 * time.Minute} {
 		rt.Clock = func() time.Time { return now.Add(offset) }
 		if _, err := service.publishLocalProtocols(); err != nil {
@@ -347,7 +346,7 @@ func TestPublishIPsecRecordsRotatesPortGenerationByInterval(t *testing.T) {
 	}
 }
 
-func TestPublishIPsecRecordsRotatesFromExistingPortRecordWhenMetaMissing(t *testing.T) {
+func TestPublishIPsecRecordsRotatesFromVerifiedPortRecord(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	verified.ManagedZone = "node-b.catofes."
 	config.PeerID = string(verified.ManagedZone)
@@ -373,17 +372,11 @@ func TestPublishIPsecRecordsRotatesFromExistingPortRecordWhenMetaMissing(t *test
 	if err != nil {
 		t.Fatalf("ParsePortRecord(first): %v", err)
 	}
-	if _, committed, err := service.StateStore.commitRuntimeIfRevision(uint64(firstView.Revision), func(runtime *linuxRuntimeState) {
-		runtime.IPsecPortRecord = nil
-	}); err != nil || !committed {
-		t.Fatalf("clear port metadata = committed %v err %v", committed, err)
-	}
-
 	rt.Clock = func() time.Time { return now.Add(2 * time.Hour) }
 	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols(second): %v", err)
 	}
-	rotatedView, rotatedRuntime := service.StateStore.readCommonAndRuntime()
+	rotatedView, _ := service.StateStore.readCommonAndRuntime()
 	rotated, err := ipsec.ParsePortRecord(rotatedView.State.Network.Zones[rotatedView.State.ManagedZone].Records[ipsec.RecordKeyPorts])
 	if err != nil {
 		t.Fatalf("ParsePortRecord(rotated): %v", err)
@@ -393,9 +386,6 @@ func TestPublishIPsecRecordsRotatesFromExistingPortRecordWhenMetaMissing(t *test
 	}
 	if len(rotated.Previous) == 0 || rotated.Previous[0].Generation != first.Current.Generation {
 		t.Fatalf("previous grace missing: %+v", rotated.Previous)
-	}
-	if rotatedRuntime.IPsecPortRecord == nil || rotatedRuntime.IPsecPortRecord.Generation != rotated.Current.Generation {
-		t.Fatalf("port meta not restored: %+v", rotatedRuntime.IPsecPortRecord)
 	}
 }
 
@@ -430,7 +420,7 @@ func TestDirectIPsecPortRotateAdvancesAndPersistsRangeGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rotateIPsecPortDirect: %v", err)
 	}
-	common, runtime, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(rt)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}
@@ -446,9 +436,6 @@ func TestDirectIPsecPortRotateAdvancesAndPersistsRangeGeneration(t *testing.T) {
 	}
 	if rotated.Previous[0].ValidUntil != now.Add(time.Minute).Add(2*time.Hour).Unix() {
 		t.Fatalf("previous valid_until = %d, want %d", rotated.Previous[0].ValidUntil, now.Add(time.Minute).Add(2*time.Hour).Unix())
-	}
-	if runtime.IPsecPortRecord == nil || runtime.IPsecPortRecord.Generation != rotated.Current.Generation {
-		t.Fatalf("port runtime = %+v, want generation %d", runtime.IPsecPortRecord, rotated.Current.Generation)
 	}
 	if result.PreviousGeneration != first.Current.Generation || result.CurrentGeneration != rotated.Current.Generation {
 		t.Fatalf("result = %+v, want previous %d current %d", result, first.Current.Generation, rotated.Current.Generation)
@@ -546,7 +533,7 @@ func TestLocalIPsecOverlayIntentUsesDNSFamilies(t *testing.T) {
 	config.IPsec.AnnounceDNS = []string{"vpn.example.com"}
 	config.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
 
-	records, err := localIPsecRecords(config, &corestate.VerifiedState{ManagedZone: "node-a.catofes.", Network: zone.NewNetworkState()}, &linuxRuntimeState{}, &ipsec.TransportKeyRecord{
+	records, err := localIPsecRecords(config, &corestate.VerifiedState{ManagedZone: "node-a.catofes.", Network: zone.NewNetworkState()}, &ipsec.TransportKeyRecord{
 		Version:     1,
 		Kind:        ipsec.TransportKeyRawPublicKey,
 		Algorithm:   ipsec.AlgorithmEd25519,

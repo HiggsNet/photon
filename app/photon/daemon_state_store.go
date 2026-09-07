@@ -213,10 +213,9 @@ func (s *DaemonStateStore) commitRoutingIfRevision(revision uint64, birdInstance
 	})
 }
 
-func (s *DaemonStateStore) commitIPsecIfRevision(revision uint64, transportKey *ipsecTransportKeyState, portRecord *ipsecPortRecordState, linkInstances map[string]linkInstanceState, reconcile *ipsecReconcileState) (uint64, bool, error) {
+func (s *DaemonStateStore) commitIPsecIfRevision(revision uint64, transportKey *ipsecTransportKeyState, linkInstances map[string]linkInstanceState, reconcile *ipsecReconcileState) (uint64, bool, error) {
 	return s.commitRuntimeIfRevision(revision, func(runtime *linuxRuntimeState) {
 		runtime.IPsecTransportKey = photonstate.CloneIPsecTransportKeyState(transportKey)
-		runtime.IPsecPortRecord = photonstate.CloneIPsecPortRecordState(portRecord)
 		runtime.LinkInstances = photonstate.CloneLinkInstances(linkInstances)
 		runtime.IPsecReconcile = photonstate.CloneIPsecReconcileState(reconcile)
 	})

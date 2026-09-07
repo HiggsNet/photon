@@ -2,7 +2,6 @@ package state
 
 import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 // IPsecTransportKeyState stores the local node's IPsec transport key.
@@ -15,14 +14,6 @@ type IPsecTransportKeyState struct {
 	NotBefore   int64  `json:"not_before,omitempty"`
 	NotAfter    int64  `json:"not_after,omitempty"`
 	UpdatedAt   int64  `json:"updated_at,omitempty"`
-}
-
-// IPsecPortRecordState caches the local advertised IPsec port record.
-type IPsecPortRecordState struct {
-	Mode       string           `json:"mode,omitempty"`
-	Range      *ipsec.PortRange `json:"range,omitempty"`
-	Generation uint64           `json:"generation,omitempty"`
-	UpdatedAt  int64            `json:"updated_at,omitempty"`
 }
 
 // IPsecReconcileState captures the last IPsec reconcile run and its outputs.

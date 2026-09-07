@@ -166,34 +166,6 @@ func TestDaemonIPsecPortRotateEventTriggersDataPlaneReconcile(t *testing.T) {
 	}
 }
 
-func TestDaemonIPsecPortRotateCommitsLinuxRuntimeOwner(t *testing.T) {
-	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	verified.ManagedZone = "node-b.catofes."
-	config.PeerID = string(verified.ManagedZone)
-	now := time.Unix(2300, 0)
-	appConfig := defaultAppConfig()
-	appConfig.IPsec.PortMode = ipsec.PortModeRange
-	appConfig.IPsec.PortRange = ipsec.PortRange{From: 31000, To: 31099}
-	appConfig.IPsec.PortPreviousGrace = time.Hour
-	rt := &AppContext{
-		Config: appConfig,
-		Clock:  func() time.Time { return now },
-	}
-	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-
-	result, err := service.handleIPsecPortRotateEvent()
-	if err != nil {
-		t.Fatalf("handleIPsecPortRotateEvent: %v", err)
-	}
-	if result == nil || result.CurrentGeneration == 0 {
-		t.Fatalf("rotate result = %#v", result)
-	}
-	_, currentRuntime := service.StateStore.readCommonAndRuntime()
-	if currentRuntime.IPsecPortRecord == nil || currentRuntime.IPsecPortRecord.Generation != result.CurrentGeneration {
-		t.Fatalf("committed IPsecPortRecord = %#v, want generation %d", currentRuntime.IPsecPortRecord, result.CurrentGeneration)
-	}
-}
-
 func TestDaemonConcurrentRecordPutEventsAreSerialized(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(3000, 0)

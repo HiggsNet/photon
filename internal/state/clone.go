@@ -24,18 +24,6 @@ func CloneIPsecTransportKeyState(in *IPsecTransportKeyState) *IPsecTransportKeyS
 	return &out
 }
 
-func CloneIPsecPortRecordState(in *IPsecPortRecordState) *IPsecPortRecordState {
-	if in == nil {
-		return nil
-	}
-	out := *in
-	if in.Range != nil {
-		portRange := *in.Range
-		out.Range = &portRange
-	}
-	return &out
-}
-
 func CloneLinkInstances(in map[string]LinkInstanceState) map[string]LinkInstanceState {
 	return maps.Clone(in)
 }
