@@ -17,7 +17,7 @@ func writeConfiguredPendingBootstrap(path string, config *appConfig) error {
 	if err := validateAutoJoinBootstrapConfig(config); err != nil {
 		return err
 	}
-	key, keyPath, err := configuredIdentityKey(config)
+	key, _, err := configuredIdentityKey(config)
 	if err != nil {
 		return err
 	}
@@ -53,7 +53,7 @@ func writeConfiguredPendingBootstrap(path string, config *appConfig) error {
 		},
 		Gossip: &corestate.GossipCheckpoint{},
 	}
-	if err := initializeLinuxState(store, candidate, 0, &linuxRuntimeState{IdentityKeyPath: keyPath}); err != nil {
+	if err := initializeLinuxState(store, candidate, 0, &linuxRuntimeState{}); err != nil {
 		_ = store.Close()
 		return err
 	}
@@ -99,41 +99,38 @@ func configuredIdentityKey(config *appConfig) (*privateKeyFile, string, error) {
 }
 
 // validateConfiguredIdentityState checks that immutable identity settings still
-// describe the identity restored from the current common/Linux partitions.
+// describe the identity restored from the current common partition.
 // Pending auto-join is represented by a current-schema verified owner whose
 // managed zone exists with no authority until gossip adoption completes.
-func validateConfiguredIdentityState(verified *corestate.VerifiedState, runtime *linuxRuntimeState, config *appConfig) (string, error) {
+func validateConfiguredIdentityState(verified *corestate.VerifiedState, config *appConfig) error {
 	if config == nil || (config.ManagedZone == "" && config.Identity.KeyPath == "") {
-		return "", nil
+		return nil
 	}
 	if verified == nil || verified.ManagedZone == "" {
-		return "", errors.New("configured identity requires initialized managed zone; use a new data_dir/state_path to create this node")
+		return errors.New("configured identity requires initialized managed zone; use a new data_dir/state_path to create this node")
 	}
 	if config.ManagedZone != "" && verified.ManagedZone != config.ManagedZone {
-		return "", fmt.Errorf("managed_zone %s does not match persisted managed zone %s; identity is immutable, use a new data_dir/state_path to create a different node", config.ManagedZone, verified.ManagedZone)
+		return fmt.Errorf("managed_zone %s does not match persisted managed zone %s; identity is immutable, use a new data_dir/state_path to create a different node", config.ManagedZone, verified.ManagedZone)
 	}
 	if config.Identity.KeyPath == "" {
-		return "", nil
+		return nil
 	}
-	key, keyPath, err := configuredIdentityKey(config)
+	key, _, err := configuredIdentityKey(config)
 	if err != nil {
-		return "", err
-	}
-	if runtime != nil && runtime.IdentityKeyPath != "" && runtime.IdentityKeyPath != keyPath {
-		return "", fmt.Errorf("identity.key_path %s does not match persisted identity key path %s; identity is immutable, use a new data_dir/state_path to create a different node", keyPath, runtime.IdentityKeyPath)
+		return err
 	}
 	if len(verified.IdentityPrivateKey) != ed25519.PrivateKeySize {
-		return "", errors.New("persisted identity private key is missing or invalid")
+		return errors.New("persisted identity private key is missing or invalid")
 	}
 	if !equalPublicKey(verified.IdentityPrivateKey.Public().(ed25519.PublicKey), key.PublicKey) {
-		return "", errors.New("identity.key_path public key does not match persisted identity private key; identity is immutable, use a new data_dir/state_path to create a different node")
+		return errors.New("identity.key_path public key does not match persisted identity private key; identity is immutable, use a new data_dir/state_path to create a different node")
 	}
 	if verified.Network != nil {
 		if zs := verified.Network.Zones[verified.ManagedZone]; zs != nil && zs.Authority != nil && !authorityHasKey(zs.Authority, key.PublicKey) {
-			return "", fmt.Errorf("identity.key_path public key does not match managed zone authority for %s; identity is immutable, use a new data_dir/state_path to create a different node", verified.ManagedZone)
+			return fmt.Errorf("identity.key_path public key does not match managed zone authority for %s; identity is immutable, use a new data_dir/state_path to create a different node", verified.ManagedZone)
 		}
 	}
-	return keyPath, nil
+	return nil
 }
 
 func canonicalIdentityKeyPath(path string) (string, error) {

@@ -119,7 +119,7 @@ Daemon 可以直接持有一个无独立锁/线程的 `LinuxObservation` 或 `Wi
 
 | 当前字段 | 目标处理 |
 |---|---|
-| `IdentityKeyPath` | 归配置/应用上下文，不进 LinuxState |
+| `IdentityKeyPath` | 已从 current Linux state 删除；路径只由配置/应用上下文持有，启动与 reload 直接校验该文件的公钥匹配 VerifiedState 中的身份私钥；旧 schema decoder 读取后丢弃 |
 | `IPsecTransportKey` | 无其他来源的私钥可保留；有配置或独立文件 owner 时只保留一个真相源 |
 | `IPsecPortRecord` | 优先从本机 verified record 恢复；只保留无法恢复的 staged generation |
 | `EndpointACLs` | 显式本地平台 intent，可保留 |

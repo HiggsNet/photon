@@ -110,21 +110,10 @@ func openLinuxDaemonState(rt *AppContext) (*corestate.BoltStore, linuxStartupSta
 			return nil, linuxStartupState{}, errors.New("daemon state is not initialized")
 		}
 	}
-	keyPath, err := validateConfiguredIdentityState(startup.Common.ReadView().State, startup.Runtime, rt.Config)
-	if err != nil {
+	if err := validateConfiguredIdentityState(startup.Common.ReadView().State, rt.Config); err != nil {
 		startup.Common.Close()
 		_ = store.Close()
 		return nil, linuxStartupState{}, err
-	}
-	if keyPath != "" && startup.Runtime.IdentityKeyPath == "" {
-		nextRuntime := photonlinux.CloneRuntimeState(startup.Runtime)
-		nextRuntime.IdentityKeyPath = keyPath
-		if err := photonlinux.CommitRuntimeState(store, startup.Common.VerifiedRevision(), nextRuntime); err != nil {
-			startup.Common.Close()
-			_ = store.Close()
-			return nil, linuxStartupState{}, err
-		}
-		startup.Runtime = nextRuntime
 	}
 	return store, startup, nil
 }

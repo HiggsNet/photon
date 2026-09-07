@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/HiggsNet/photon/internal/photonlinux"
@@ -55,8 +56,15 @@ func TestLegacyRuntimeStateMigrationIsAtomicAndIdempotent(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if !found || runtime.IdentityKeyPath != "/etc/photon/identity.key" || runtime.PeerCleanups["peer.catofes."].Reason != "expired" {
+		if !found || runtime.PeerCleanups["peer.catofes."].Reason != "expired" {
 			t.Fatalf("linux runtime state = %+v", runtime)
+		}
+		payload, err := json.Marshal(runtime)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(payload), "identity_key_path") {
+			t.Fatalf("legacy identity path survived Linux state migration: %s", payload)
 		}
 		if meta := tx.Bucket(bucketLegacyMeta); meta != nil && meta.Get([]byte(cliMetaKey)) != nil {
 			t.Fatal("legacy cli_state survived migration")

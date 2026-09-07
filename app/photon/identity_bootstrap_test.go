@@ -60,7 +60,6 @@ func TestOpenLinuxDaemonStateAutoJoinCreatesPendingBootstrapState(t *testing.T) 
 		t.Fatalf("trusted root authority missing: %+v", root)
 	}
 
-	wantIdentityPath := startup.Runtime.IdentityKeyPath
 	startup.Common.Close()
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close BoltStore: %v", err)
@@ -69,9 +68,6 @@ func TestOpenLinuxDaemonStateAutoJoinCreatesPendingBootstrapState(t *testing.T) 
 	reopenedStore, reopened, err := openLinuxDaemonState(rt)
 	if err != nil {
 		t.Fatalf("openLinuxDaemonState(reopened): %v", err)
-	}
-	if reopened.Runtime.IdentityKeyPath == "" || reopened.Runtime.IdentityKeyPath != wantIdentityPath {
-		t.Fatalf("IdentityKeyPath = %q, want %q", reopened.Runtime.IdentityKeyPath, wantIdentityPath)
 	}
 	reopened.Common.Close()
 	if err := reopenedStore.Close(); err != nil {
@@ -172,7 +168,7 @@ func TestOpenLinuxDaemonStateRejectsConfiguredManagedZoneMismatch(t *testing.T) 
 	}
 }
 
-func TestOpenLinuxDaemonStatePersistsConfiguredIdentityPath(t *testing.T) {
+func TestOpenLinuxDaemonStateAllowsConfiguredIdentityPathMove(t *testing.T) {
 	dir := t.TempDir()
 	verified, keyPath := buildIdentityVerifiedState(t, dir, "node-b.catofes.")
 	config := defaultAppConfig()
@@ -186,17 +182,6 @@ func TestOpenLinuxDaemonStatePersistsConfiguredIdentityPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openLinuxDaemonState: %v", err)
 	}
-	wantPath, err := canonicalIdentityKeyPath(keyPath)
-	if err != nil {
-		startup.Common.Close()
-		_ = store.Close()
-		t.Fatalf("canonicalIdentityKeyPath: %v", err)
-	}
-	if startup.Runtime.IdentityKeyPath != wantPath {
-		startup.Common.Close()
-		_ = store.Close()
-		t.Fatalf("identity key path = %q, want %q", startup.Runtime.IdentityKeyPath, wantPath)
-	}
 	startup.Common.Close()
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close BoltStore: %v", err)
@@ -206,27 +191,28 @@ func TestOpenLinuxDaemonStatePersistsConfiguredIdentityPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openLinuxDaemonState(reopened): %v", err)
 	}
-	if reopened.Runtime.IdentityKeyPath != wantPath {
-		reopened.Common.Close()
-		_ = reopenedStore.Close()
-		t.Fatalf("reopened identity key path = %q, want %q", reopened.Runtime.IdentityKeyPath, wantPath)
-	}
 	reopened.Common.Close()
 	if err := reopenedStore.Close(); err != nil {
 		t.Fatalf("Close reopened BoltStore: %v", err)
 	}
 
 	config.Identity.KeyPath = copyTestPrivateKey(t, keyPath, filepath.Join(dir, "moved.key.json"))
-	if _, _, err := openLinuxDaemonState(rt); err == nil || !strings.Contains(err.Error(), "does not match persisted identity key path") {
-		t.Fatalf("openLinuxDaemonState moved key error = %v", err)
+	movedStore, moved, err := openLinuxDaemonState(rt)
+	if err != nil {
+		t.Fatalf("openLinuxDaemonState moved key: %v", err)
+	}
+	moved.Common.Close()
+	if err := movedStore.Close(); err != nil {
+		t.Fatalf("Close moved-path BoltStore: %v", err)
 	}
 }
 
-func TestDaemonReloadRejectsIdentityKeyPathChange(t *testing.T) {
+func TestDaemonReloadAllowsPathMoveAndRejectsIdentityChange(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")
 	verified, keyPath := buildIdentityVerifiedState(t, dir, "node-b.catofes.")
-	otherKeyPath := copyTestPrivateKey(t, keyPath, filepath.Join(dir, "copy.key.json"))
+	movedKeyPath := copyTestPrivateKey(t, keyPath, filepath.Join(dir, "copy.key.json"))
+	otherKeyPath, _ := writeTestPrivateKey(t, dir, "other")
 	dataDir := filepath.Join(dir, "data")
 	statePath := filepath.Join(dataDir, "photon.db")
 	t.Setenv("PHOTON_CONFIG", configPath)
@@ -241,13 +227,21 @@ func TestDaemonReloadRejectsIdentityKeyPathChange(t *testing.T) {
 	appConfig.ManagedZone = "node-b.catofes."
 	appConfig.Identity.KeyPath = keyPath
 	runtime := &linuxRuntimeState{}
-	runtime.IdentityKeyPath, _ = canonicalIdentityKeyPath(keyPath)
 	rt := &AppContext{Config: appConfig, StatePath: statePath}
 	config := gossipStartupConfigFromAppConfig(appConfig, verified)
 	service := newTestDaemonFromOwners(rt, verified, nil, runtime, config, time.Second)
 
-	writeIdentityConfig(t, configPath, dataDir, "node-b.catofes.", otherKeyPath)
+	writeIdentityConfig(t, configPath, dataDir, "node-b.catofes.", movedKeyPath)
 	result, syncNow, shutdown := service.handleEvent(daemonEvent{Type: daemonEventReloadConfig})
+	if result.Error != nil {
+		t.Fatalf("reload moved identity key: %v", result.Error)
+	}
+	if !syncNow || shutdown {
+		t.Fatalf("moved-key reload syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
+	}
+
+	writeIdentityConfig(t, configPath, dataDir, "node-b.catofes.", otherKeyPath)
+	result, syncNow, shutdown = service.handleEvent(daemonEvent{Type: daemonEventReloadConfig})
 	if result.Error == nil || !strings.Contains(result.Error.Error(), "identity.key_path") {
 		t.Fatalf("reload error = %v, want identity.key_path rejection", result.Error)
 	}

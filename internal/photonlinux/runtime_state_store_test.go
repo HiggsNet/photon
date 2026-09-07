@@ -16,7 +16,6 @@ func TestRuntimeStateCodecRoundTripAndByteNoop(t *testing.T) {
 	}
 	defer db.Close()
 	want := &RuntimeState{
-		IdentityKeyPath: "/keys/identity.json",
 		EndpointACLs: map[string]photonstate.EndpointACL{
 			"api": {Name: "api", Selectors: []string{"zone:catofes."}},
 		},
@@ -44,7 +43,7 @@ func TestRuntimeStateCodecRoundTripAndByteNoop(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if !found || got.IdentityKeyPath != want.IdentityKeyPath || got.EndpointACLs["api"].Selectors[0] != "zone:catofes." {
+		if !found || got.EndpointACLs["api"].Selectors[0] != "zone:catofes." {
 			t.Fatalf("loaded runtime = found %v state %#v", found, got)
 		}
 		return nil

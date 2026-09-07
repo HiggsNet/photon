@@ -111,7 +111,6 @@ func linuxRuntimeStateFromLegacy(state *stateFile) *linuxRuntimeState {
 		return &linuxRuntimeState{}
 	}
 	return &linuxRuntimeState{
-		IdentityKeyPath:   state.IdentityKeyPath,
 		PeerCleanups:      state.PeerCleanups,
 		IPsecTransportKey: state.IPsecTransportKey,
 		IPsecPortRecord:   state.IPsecPortRecord,

@@ -29,7 +29,7 @@ func TestBoltStateStoreLinuxMigratesAndReloadsAggregate(t *testing.T) {
 	if !found || !snapshot.Migrated || snapshot.Candidate == nil || snapshot.Runtime == nil {
 		t.Fatalf("migration snapshot = found=%v %+v", found, snapshot)
 	}
-	if snapshot.Runtime.IdentityKeyPath != legacy.IdentityKeyPath || snapshot.MigrationReport.Gossip.PeersMigrated != 1 {
+	if snapshot.MigrationReport.Gossip.PeersMigrated != 1 {
 		t.Fatalf("migration snapshot runtime/report = %+v/%+v", snapshot.Runtime, snapshot.MigrationReport)
 	}
 	if err := store.Close(); err != nil {
@@ -189,7 +189,7 @@ func TestBoltStateStoreLinuxMetadataOnlyWritesKeepVerifiedRevision(t *testing.T)
 	}
 
 	runtimeOnly := *snapshot.Runtime
-	runtimeOnly.IdentityKeyPath = "/runtime-only-change"
+	runtimeOnly.EndpointACLs = map[string]endpointACL{"runtime-only": {Name: "runtime-only"}}
 	if err := photonlinux.CommitRuntimeState(store, snapshot.Revision, &runtimeOnly); err != nil {
 		t.Fatalf("CommitRuntimeState: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestBoltStateStoreLinuxMetadataOnlyWritesKeepVerifiedRevision(t *testing.T)
 	if reloaded.Revision != snapshot.Revision {
 		t.Fatalf("metadata-only writes advanced verified revision from %d to %d", snapshot.Revision, reloaded.Revision)
 	}
-	if reloaded.Runtime.IdentityKeyPath != runtimeOnly.IdentityKeyPath || reloaded.Candidate.Gossip.Peers["metadata.catofes."].BackoffUntilUnix != 42 {
+	if reloaded.Runtime.EndpointACLs["runtime-only"].Name != "runtime-only" || reloaded.Candidate.Gossip.Peers["metadata.catofes."].BackoffUntilUnix != 42 {
 		t.Fatalf("metadata-only reload = runtime=%+v gossip=%+v", reloaded.Runtime, reloaded.Candidate.Gossip)
 	}
 	if !reflect.DeepEqual(reloaded.Candidate.Verified, snapshot.Candidate.Verified) {
@@ -230,7 +230,7 @@ func TestBoltStateStoreLinuxRejectsStaleRuntimeCompletion(t *testing.T) {
 		t.Fatalf("advance verified revision: %v", err)
 	}
 	stale := *snapshot.Runtime
-	stale.IdentityKeyPath = "/stale-completion"
+	stale.EndpointACLs = map[string]endpointACL{"stale": {Name: "stale"}}
 	if err := photonlinux.CommitRuntimeState(store, snapshot.Revision, &stale); !errors.Is(err, photonlinux.ErrRuntimeStateSourceRevisionMismatch) {
 		t.Fatalf("CommitRuntimeState stale error = %v", err)
 	}
@@ -238,7 +238,7 @@ func TestBoltStateStoreLinuxRejectsStaleRuntimeCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if reloaded.Runtime.IdentityKeyPath == stale.IdentityKeyPath {
+	if _, found := reloaded.Runtime.EndpointACLs["stale"]; found {
 		t.Fatal("stale runtime completion was persisted")
 	}
 }

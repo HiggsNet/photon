@@ -1315,16 +1315,8 @@ func (d *Daemon) handleReloadConfigEvent() error {
 	if common.State == nil || runtime == nil {
 		return errors.New("daemon state is not initialized")
 	}
-	currentIdentityKeyPath := runtime.IdentityKeyPath
-	requestedIdentityKeyPath := config.Identity.KeyPath
-	if requestedIdentityKeyPath != "" {
-		requestedIdentityKeyPath, err = canonicalIdentityKeyPath(requestedIdentityKeyPath)
-		if err != nil {
-			return err
-		}
-	}
-	if currentIdentityKeyPath != "" && requestedIdentityKeyPath != "" && requestedIdentityKeyPath != currentIdentityKeyPath {
-		return fmt.Errorf("reload would change identity.key_path from %s to %s; identity is immutable, use a new data_dir/state_path to create a different node", currentIdentityKeyPath, requestedIdentityKeyPath)
+	if err := validateConfiguredIdentityState(common.State, config); err != nil {
+		return err
 	}
 	syncConfig := gossipStartupConfigFromAppConfig(config, common.State)
 	nextLogger := newAppLogger(config)

@@ -259,6 +259,7 @@ app 中剩余的是配置装配、把 committed Linux link output 交给 manager
 GossipDriver 公共 gossip 闭环、aggregate 清理和 current Linux codec 迁移已完成。旧 schema decoder 仍留在 app migration
 边界，不能随 current codec 一起误搬成在线兼容层。这里的 codec owner 完成不等于 live state 边界完成：当前
 `photonlinux.RuntimeState` 仍混合 durable input、operation journal、derived reconcile summary 和 live observation。
+`IdentityKeyPath` 已从 current RuntimeState、clone 和 codec 中删除，启动不再为配置路径补写一次 Linux state；配置路径移动时只要密钥身份不变即可，启动与 reload 都以配置 key 的公钥匹配 VerifiedState 为准。旧 `stateFile/stateMeta` 仍解码该字段以读取旧库，但迁移投影明确丢弃，不形成 current schema 的第二真相源。
 
 目标所有权与命名统一见 [`runtime-state-ownership.md`](runtime-state-ownership.md)：当前 `Daemon` 是唯一顶层
 `Daemon`，`host.GossipDriver` 是公共 `GossipDriver`，`photonlinux.LinuxDriver` 是具体 Linux 平台实现，`state.Store` 是公共
@@ -279,7 +280,7 @@ peer cleanup commit 壳已删除，剩余 typed commit 要在 LinuxState 字段�
 3. Linux driver：IPsec/XFRM、firewall、upstream routing、BIRD 和 health probe 实际执行均已下沉；执行侧主体完成。
    current `RuntimeState`、detached clone、bbolt codec 和 revision-guarded commit 已归 `internal/photonlinux`；app 旧库迁移只负责
    `stateFile/stateMeta` 解码及一次性字段投影。平台包不自行打开数据库，仍使用 composition root 传入的唯一 BoltStore/transaction。
-   但现有 RuntimeState 仍过宽，需按 durable intent/journal 与 live observation 再拆；不能把 codec 迁移误报为状态模型完成。
+   `IdentityKeyPath` 已从 current schema 删除并回归配置 owner；其余 RuntimeState 仍过宽，需按 durable intent/journal 与 live observation 再拆；不能把单字段收缩或 codec 迁移误报为状态模型完成。
 4. 聚合 `stateFile`：在线和普通测试迁移已经完成；fresh join 与 state GC 已退出聚合写入；在线 IPsec cleanup、revoked purge、Endpoint ACL、
    state GC、reconcile completion 以及 Firewall/IPsec 主 planner 已直接读取 common/Linux 两个 owner，不再构造完整 Snapshot。
    本机 endpoint/IPsec/routing protocol publish 也已直接使用两个 owner，routing 主 reconcile planner 同样完成切换。

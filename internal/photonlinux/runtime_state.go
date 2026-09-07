@@ -5,7 +5,6 @@ import photonstate "github.com/HiggsNet/photon/internal/state"
 // RuntimeState contains only Linux-local controller and configuration state.
 // Verified network facts and gossip restart hints are owned by pkg/core/state.
 type RuntimeState struct {
-	IdentityKeyPath   string                                           `json:"identity_key_path,omitempty"`
 	PeerCleanups      map[string]photonstate.PeerLifecycleCleanupState `json:"peer_cleanups,omitempty"`
 	IPsecTransportKey *photonstate.IPsecTransportKeyState              `json:"ipsec_transport_key,omitempty"`
 	IPsecPortRecord   *photonstate.IPsecPortRecordState                `json:"ipsec_port_record,omitempty"`
@@ -25,7 +24,6 @@ func CloneRuntimeState(runtime *RuntimeState) *RuntimeState {
 		return &RuntimeState{}
 	}
 	return &RuntimeState{
-		IdentityKeyPath:   runtime.IdentityKeyPath,
 		PeerCleanups:      photonstate.ClonePeerLifecycleCleanups(runtime.PeerCleanups),
 		IPsecTransportKey: photonstate.CloneIPsecTransportKeyState(runtime.IPsecTransportKey),
 		IPsecPortRecord:   photonstate.CloneIPsecPortRecordState(runtime.IPsecPortRecord),

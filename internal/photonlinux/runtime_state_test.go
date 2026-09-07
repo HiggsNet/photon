@@ -1,7 +1,9 @@
 package photonlinux
 
 import (
+	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	photonstate "github.com/HiggsNet/photon/internal/state"
@@ -10,7 +12,6 @@ import (
 
 func TestCloneRuntimeStateDeepCopiesMutableFields(t *testing.T) {
 	original := &RuntimeState{
-		IdentityKeyPath: "/keys/identity.json",
 		PeerCleanups: map[string]photonstate.PeerLifecycleCleanupState{
 			"peer-a": {LastActiveUnix: 10, CleanupUnix: 20, Reason: "offline"},
 		},
@@ -103,7 +104,7 @@ func TestCloneRuntimeStatePreservesNilAndEmptyShape(t *testing.T) {
 
 func TestRuntimeStateSchemaGuard(t *testing.T) {
 	want := []string{
-		"IdentityKeyPath", "PeerCleanups", "IPsecTransportKey", "IPsecPortRecord", "LinkInstances",
+		"PeerCleanups", "IPsecTransportKey", "IPsecPortRecord", "LinkInstances",
 		"IPsecReconcile", "RoutingReconcile", "FirewallReconcile", "EndpointACLs", "BirdInstances", "Admission",
 	}
 	typ := reflect.TypeOf(RuntimeState{})
@@ -114,5 +115,19 @@ func TestRuntimeStateSchemaGuard(t *testing.T) {
 		if got := typ.Field(index).Name; got != name {
 			t.Fatalf("RuntimeState field %d = %s, want %s", index, got, name)
 		}
+	}
+}
+
+func TestRuntimeStateJSONDropsLegacyIdentityPath(t *testing.T) {
+	var state RuntimeState
+	if err := json.Unmarshal([]byte(`{"identity_key_path":"/old/key.json","endpoint_acls":{"api":{"name":"api"}}}`), &state); err != nil {
+		t.Fatalf("decode old payload: %v", err)
+	}
+	payload, err := json.Marshal(&state)
+	if err != nil {
+		t.Fatalf("encode current payload: %v", err)
+	}
+	if strings.Contains(string(payload), "identity_key_path") || state.EndpointACLs["api"].Name != "api" {
+		t.Fatalf("current state retained legacy identity path or lost durable fields: %s", payload)
 	}
 }
