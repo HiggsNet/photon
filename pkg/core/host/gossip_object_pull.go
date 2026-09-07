@@ -79,10 +79,9 @@ func (driver *GossipDriver) SubmitGossipObjectPull(action gossip.StartObjectPull
 		return ErrGossipDriverStopped
 	}
 	driver.mu.RLock()
-	stopped := driver.stopped
+	defer driver.mu.RUnlock()
 	jobs := driver.objectPullJobs
-	driver.mu.RUnlock()
-	if stopped {
+	if driver.stopped {
 		return ErrGossipDriverStopped
 	}
 	if jobs == nil {

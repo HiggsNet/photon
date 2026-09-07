@@ -444,6 +444,25 @@ func TestManagerTickAsyncReturnsBeforeProbeCompletes(t *testing.T) {
 	}
 }
 
+func TestManagerWaitAsyncReturnsAfterCancellation(t *testing.T) {
+	cfg := ProbeConfig{Interval: time.Hour, Timeout: time.Second, Burst: 1, LossWindow: 5, MaxConcurrent: 2}
+	m := NewManager(cfg, DefaultHysteresisConfig(), &fakeProber{})
+	ctx, cancel := context.WithCancel(context.Background())
+	m.StartAsync(ctx)
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		m.WaitAsync()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("async health workers did not stop after cancellation")
+	}
+}
+
 func TestManagerAsyncProbeHardDeadlineReleasesWorker(t *testing.T) {
 	cfg := ProbeConfig{Interval: time.Hour, Timeout: 10 * time.Millisecond, Burst: 1, LossWindow: 5, MaxConcurrent: 1}
 	prober := newStubbornProber()

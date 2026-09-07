@@ -144,9 +144,8 @@ func (driver *GossipDriver) PostGossip(event gossip.SyncEvent) error {
 		return nil
 	}
 	driver.mu.RLock()
-	stopped := driver.stopped
-	driver.mu.RUnlock()
-	if stopped {
+	defer driver.mu.RUnlock()
+	if driver.stopped {
 		return ErrGossipDriverStopped
 	}
 	select {

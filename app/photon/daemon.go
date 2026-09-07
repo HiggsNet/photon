@@ -300,14 +300,23 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return err
 	}
 	defer stopObserver()
-	stopIPsecEvents := d.startIPsecLifecycleEventWatcher(ctx)
-	defer stopIPsecEvents()
+	subsystemCtx, stopSubsystems := context.WithCancel(ctx)
+	stopIPsecEvents := d.startIPsecLifecycleEventWatcher(subsystemCtx)
 	var healthUpdates <-chan struct{}
 	if d.health != nil && d.health.Manager != nil {
-		healthUpdates = d.health.StartAsync(ctx)
+		healthUpdates = d.health.StartAsync(subsystemCtx)
 		d.health.asyncRunning = true
 		defer func() { d.health.asyncRunning = false }()
 	}
+	// This defer is registered after closeLinuxDriver, so the worker owners are
+	// canceled and joined before their injected Linux capabilities are closed.
+	defer func() {
+		stopSubsystems()
+		stopIPsecEvents()
+		if d.health != nil && d.health.Manager != nil {
+			d.health.WaitAsync()
+		}
+	}()
 	startFields := map[string]any{
 		"peer_id":  d.currentGossipConfig().PeerID,
 		"addr":     transport.LocalAddr(),
@@ -1922,8 +1931,15 @@ func (d *Daemon) startIPsecLifecycleEventWatcher(ctx context.Context) func() {
 		return func() {}
 	}
 	watchCtx, cancel := context.WithCancel(ctx)
-	go d.runIPsecLifecycleEventWatcher(watchCtx, d.linuxDriver)
-	return cancel
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		d.runIPsecLifecycleEventWatcher(watchCtx, d.linuxDriver)
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 // runIPsecLifecycleEventWatcher subscribes to StrongSwan lifecycle events in

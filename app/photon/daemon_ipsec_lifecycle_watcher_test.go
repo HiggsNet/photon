@@ -70,9 +70,13 @@ func TestStartIPsecLifecycleEventWatcherDoesNotBlockStartup(t *testing.T) {
 
 func TestStartIPsecLifecycleEventWatcherForwardsEvents(t *testing.T) {
 	stream := make(chan ipsec.VICIEvent, 1)
-	stopped := make(chan struct{})
+	stopStarted := make(chan struct{})
+	releaseStop := make(chan struct{})
 	driver := &fakeLifecycleDriver{subscribe: func(ctx context.Context) (<-chan ipsec.VICIEvent, func(), error) {
-		return stream, func() { close(stopped) }, nil
+		return stream, func() {
+			close(stopStarted)
+			<-releaseStop
+		}, nil
 	}}
 	d := &Daemon{Events: make(chan daemonEvent, 4)}
 	installTestIPsecDrivers(d, driver, &ipsec.DryRunDriver{})
@@ -90,10 +94,25 @@ func TestStartIPsecLifecycleEventWatcherForwardsEvents(t *testing.T) {
 	}
 
 	cancel()
-	stop()
+	stopReturned := make(chan struct{})
+	go func() {
+		stop()
+		close(stopReturned)
+	}()
 	select {
-	case <-stopped:
+	case <-stopStarted:
 	case <-time.After(2 * time.Second):
 		t.Fatal("watcher stop function was not called on shutdown")
+	}
+	select {
+	case <-stopReturned:
+		t.Fatal("watcher stop returned before the subscription was closed")
+	default:
+	}
+	close(releaseStop)
+	select {
+	case <-stopReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watcher did not finish after the subscription stopped")
 	}
 }

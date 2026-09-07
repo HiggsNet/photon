@@ -40,6 +40,7 @@ type Manager struct {
 	asyncOnce    sync.Once
 	asyncJobs    chan probeDispatch
 	asyncUpdates chan struct{}
+	asyncWG      sync.WaitGroup
 }
 
 type probeDispatch struct {
@@ -196,10 +197,19 @@ func (m *Manager) StartAsync(ctx context.Context) <-chan struct{} {
 		m.asyncJobs = make(chan probeDispatch, m.maxInflight)
 		m.asyncUpdates = make(chan struct{}, 1)
 		for i := 0; i < m.maxInflight; i++ {
+			m.asyncWG.Add(1)
 			go m.runAsyncWorker(ctx)
 		}
 	})
 	return m.asyncUpdates
+}
+
+// WaitAsync waits for the worker pool started by StartAsync. The caller must
+// first cancel that method's context.
+func (m *Manager) WaitAsync() {
+	if m != nil {
+		m.asyncWG.Wait()
+	}
 }
 
 // TickAsync queues due probes for the worker pool and returns immediately.
@@ -216,6 +226,7 @@ func (m *Manager) TickAsync(ctx context.Context, now time.Time) int {
 }
 
 func (m *Manager) runAsyncWorker(ctx context.Context) {
+	defer m.asyncWG.Done()
 	for {
 		select {
 		case <-ctx.Done():

@@ -36,6 +36,23 @@ Daemon
 - composition root 创建唯一 BoltStore；Store、Driver 和平台 codec 不自行按路径打开数据库。
 - 不新增 `ClientRuntime`、Repository、aggregate snapshot 或只为迁移存在的转发 wrapper。
 
+依赖方向固定为 `app -> host -> gossip -> state -> zone`；app 可以装配具体平台实现，但
+`pkg/core/{host,gossip,state,zone}` 不得反向 import `app` 或 `internal/photonlinux/photonwindows`。
+
+### 迁移执行护栏
+
+以下约束与目标结构同等重要；TODO 条目描述的是要达到的结果，不是要求新增同名类型、接口或队列：
+
+- **默认做减法**：迁移切片应删除旧 owner、旧路径和重复语义，生产代码的类型、队列、wrapper 与净行数默认持平或减少。只有新增真实产品能力，或现有结构无法表达且测试能证明的安全/生命周期约束，才允许净增加生产代码，并必须在该切片说明原因。
+- **先证明消费者再抽象**：没有至少两个真实、同语义的生产消费者，不新增通用 interface、manager、event envelope、completion bus、Store 或跨平台 facade。Linux/Windows 名字相似不等于需要公共抽象。
+- **迁移必须当场删除旧路**：移动或改名时直接切换全部调用方并删除旧定义、alias、forwarder、兼容入口和只为旧路径存在的测试 fixture；不以“后续再删”作为完成标准。
+- **一个 owner 不等于一个 channel**：Daemon 是唯一平台 mutation writer，但可以直接 `select` 多个有明确语义的输入源；不得为了表面上的“统一入口”把已有 channel 再转发到新 channel。GossipDriver 仍只有一条协议 queue 和一份 Engine action ordering。
+- **严格使用 completion 一词**：只有异步 `Observe/Plan/Apply` 产生、需要回到 Daemon 做 source-revision 校验和状态提交的 typed result 才叫 platform completion。VICI lifecycle 是 reconcile wakeup，health update 是可合并的 observation 通知，都不是持久状态 completion，不为它们创建通用包装。
+- **审计可以零代码完成**：若调用图证明职责已经在正确 owner，记录证据并勾选即可；不得为了匹配 TODO 名词制造新层。已有直接调用能满足边界时，优先保留直接调用。
+- **关闭只等待真实资源 owner**：`Run` 返回前必须取消并等待仍可能访问 Driver/Store 的子 goroutine；owner 关闭后不得再投递。纯 wakeup/展示通知可以安全丢弃，不要求为了“drain”创建持久化或通用队列。
+- **安全路径不参与普通合并**：revocation、ACL/authorization withdrawal 等继续 fail closed，并按 deny-first 顺序在管理请求成功前生效；不得被普通 timer、health 或 lifecycle wakeup 延迟。
+- **完成勾选必须有证据**：每批记录生产代码增删、删除的旧 owner/入口、调用图审计结果和测试范围。若迁移切片生产代码净增长，默认视为未收紧，必须重新审查。
+
 ## A. 当前主线：收口 Linux Daemon/State 边界
 
 ### A1. 纠正 Runtime 命名和职责
@@ -49,14 +66,14 @@ Daemon
 
 ### A2. 收紧 GossipDriver
 
-- [ ] GossipDriver 只拥有 gossip Engine、UDP/TCP transport、object-pull、session/chunk/address book、协议 timer 和 gossip observability。
+- [x] 调用图审计确认 GossipDriver 只拥有 gossip Engine、UDP/TCP transport、object-pull、session/chunk/address book、协议 timer 和 gossip observability；不再接收平台 timer/completion。
 - [x] 删除 Daemon 保存的第二份 gossip transport 和测试专用 transport deps；transport/address book 只由当前 GossipDriver 持有。
 - [x] 删除 `Daemon.GossipConfig`；协议 limits/discovery/peer identity 由 GossipDriver 持有可替换的 detached config，app 侧 endpoint/log/展示配置从 AppContext 按需派生，不增加 app 级 wrapper。
 - [x] `syncConfigFile` 已缩减并改名为 `gossipStartupConfig`，只作为 composition root 创建 GossipDriver/transport 的短生命周期输入；日志和本机 endpoint 发布策略直接读取 AppConfig。
 - [x] IPsec/routing/firewall/health timer 已迁入 Daemon 自己的 scheduler/queue；健康完成直接由 Daemon event loop 消费，不再包装成 GossipDriver completion。
-- [ ] 审计剩余平台异步 completion；全部迁回 Daemon，安全 deny-first 仍立即处理。
-- [ ] 保持一个 gossip ingress/event queue 和一个 Engine action ordering 实现；Linux/Windows 不复制协议 executor。
-- [ ] 明确 shutdown/backpressure：GossipDriver 停止后不再投递，Daemon drain 已完成的平台 completion 后再关闭 BoltStore。
+- [x] 审计平台异步路径：IPsec/routing/firewall 的 apply 与 typed state commit 当前在 Daemon 调用链同步完成；VICI lifecycle 只是 reconcile wakeup，health update 只是 observation 通知。没有遗留的 platform state completion，不新增 envelope/channel；安全 deny-first 保持原路径。
+- [x] 调用图审计确认只有一个 gossip ingress/event queue 和一个 Engine action ordering 实现；Linux/Windows 只注入 transport/I/O capability，不复制协议 executor。
+- [x] 收紧现有 shutdown/backpressure，未新增队列：GossipDriver 的外部投递在读锁内完成，Stop 取得写锁后拒绝新投递并等待自有 goroutine；Daemon 用同一子 context 取消并等待 VICI watcher 与 health worker 后才关闭 LinuxDriver，`Run` 返回后 composition root 才关闭 BoltStore。纯 lifecycle/health 通知无需 drain。
 
 ### A3. 将 RuntimeState 拆成 State 与 Observation
 
@@ -76,7 +93,7 @@ Daemon
 - [x] common Store 已由 GossipDriver 直接使用；生产 aggregate Snapshot、重复 revision metadata 和单调用方 Bird GC/purge/peer-cleanup commit wrapper 已删除。
 - [ ] Daemon 直接持有 StateStore、LinuxState、LinuxObservation、LinuxDriver 和 BoltStore 的引用/生命周期。
 - [ ] 把剩余 routing/IPsec/firewall typed candidate commit 移到 Daemon 的平台 state mutation 边界；保留真正的多字段原子替换，不保留 forwarding Store。
-- [ ] 将 common mutation、platform completion 和 security barrier 都串回 Daemon owner，删除 `DaemonStateStore.writeMu`、coherent aggregate read 和 commit callback 包装。
+- [ ] 将 common mutation、真实 platform state completion 和 security barrier 都串回 Daemon owner，删除 `DaemonStateStore.writeMu`、coherent aggregate read 和 commit callback 包装；不得把 wakeup/notification 泛化成 completion bus。
 - [ ] 删除 `daemon_state_store.go`、app 内 Linux state alias，以及仅测试迁移 coordinator 的 fixture。
 - [ ] 旧 `stateFile/stateMeta` 只留启动单向 migration decoder 和 legacy DB dump；停止支持该 schema 时整组删除，不形成在线兼容层。
 
