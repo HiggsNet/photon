@@ -3,6 +3,7 @@ package ipsec
 import (
 	"context"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,6 +44,36 @@ func TestReconcileRepairsLoadedConnectionWithoutSA(t *testing.T) {
 	}
 }
 
+func TestReconcileRotateReportsRuntimeDerivationError(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	group := LinkGroupSpec{
+		ID: "main",
+		TunnelAddressSpec: TunnelAddressSpec{
+			Mode:   TunnelAddressDerivedPool,
+			Family: FamilyIPv6,
+		},
+	}
+	desired := TransportLinkSpec{
+		LocalZone: "node-a.catofes.", PeerZone: "node-b.catofes.", OverlayID: group.ID,
+		Provider: ProviderStrongSwan, LinkID: "link-a", Generation: 2, InitiatorRole: InitiatorRolePrimary,
+	}
+	existing := NewLinkInstance(desired, LinkStateUp, now)
+	existing.RemoteGeneration = 1
+
+	result := ReconcileLinkInstances(ReconcileInputs{
+		Desired:    []TransportLinkSpec{desired},
+		Instances:  map[string]LinkInstance{existing.ID: existing},
+		Now:        now,
+		GroupSpecs: map[string]LinkGroupSpec{group.ID: group},
+	})
+	if result.Err == nil || !strings.Contains(result.Err.Error(), "derived-pool requires a valid pool") {
+		t.Fatalf("reconcile error = %v, want runtime derivation failure", result.Err)
+	}
+	if len(result.Actions) != 0 {
+		t.Fatalf("actions = %+v, want no action with an invalid runtime spec", result.Actions)
+	}
+}
+
 func TestReconcileRecoversPreviousGenerationBeforeRotating(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	group := LinkGroupSpec{ID: "main"}
@@ -77,7 +108,10 @@ func TestReconcileRecoversPreviousGenerationBeforeRotating(t *testing.T) {
 		Addresses: []netip.Prefix{netip.PrefixFrom(previous.LocalTunnelAddr, 64)},
 	}
 
-	recovered, ok := RecoverObservedLinkInstance(desired, group, []uint64{2, 1}, nil, []SAState{previousSA}, []XFRMLinkState{previousLink}, now)
+	recovered, ok, err := RecoverObservedLinkInstance(desired, group, []uint64{2, 1}, nil, []SAState{previousSA}, []XFRMLinkState{previousLink}, now)
+	if err != nil {
+		t.Fatalf("RecoverObservedLinkInstance(previous): %v", err)
+	}
 	if !ok {
 		t.Fatal("previous generation was not recovered")
 	}
@@ -85,16 +119,19 @@ func TestReconcileRecoversPreviousGenerationBeforeRotating(t *testing.T) {
 		t.Fatalf("recovered instance = %+v, want generation 1 runtime", recovered)
 	}
 
-	if _, ok := RecoverObservedLinkInstance(desired, group, []uint64{1}, nil, []SAState{previousSA}, nil, now); ok {
+	if _, ok, err := RecoverObservedLinkInstance(desired, group, []uint64{1}, nil, []SAState{previousSA}, nil, now); err != nil || ok {
 		t.Fatal("previous generation recovered without matching xfrm")
 	}
 	loaded := ConnectionState{Name: previous.TransportID, LocalIdentity: string(previous.LocalZone), RemoteIdentity: string(previous.PeerZone)}
-	connecting, ok := RecoverObservedLinkInstance(desired, group, []uint64{2, 1}, []ConnectionState{loaded}, nil, []XFRMLinkState{previousLink}, now)
+	connecting, ok, err := RecoverObservedLinkInstance(desired, group, []uint64{2, 1}, []ConnectionState{loaded}, nil, []XFRMLinkState{previousLink}, now)
+	if err != nil {
+		t.Fatalf("RecoverObservedLinkInstance(loaded): %v", err)
+	}
 	if !ok || connecting.ActualState != LinkStateConnecting || connecting.RemoteGeneration != 1 {
 		t.Fatalf("loaded previous generation = (%+v, %v), want connecting generation 1", connecting, ok)
 	}
 	loaded.RemoteIdentity = "other.catofes."
-	if _, ok := RecoverObservedLinkInstance(desired, group, []uint64{2, 1}, []ConnectionState{loaded}, nil, []XFRMLinkState{previousLink}, now); ok {
+	if _, ok, err := RecoverObservedLinkInstance(desired, group, []uint64{2, 1}, []ConnectionState{loaded}, nil, []XFRMLinkState{previousLink}, now); err != nil || ok {
 		t.Fatal("previous generation recovered from mismatched connection identity")
 	}
 
@@ -109,7 +146,10 @@ func TestReconcileRecoversPreviousGenerationBeforeRotating(t *testing.T) {
 	standbyDesired := desired
 	standbyDesired.InitiatorRole = InitiatorRoleSecondaryStandby
 	standbySA := previousSA
-	standbyRecovered, ok := RecoverObservedLinkInstance(standbyDesired, group, []uint64{2, 1}, nil, []SAState{standbySA}, []XFRMLinkState{previousLink}, now)
+	standbyRecovered, ok, err := RecoverObservedLinkInstance(standbyDesired, group, []uint64{2, 1}, nil, []SAState{standbySA}, []XFRMLinkState{previousLink}, now)
+	if err != nil {
+		t.Fatalf("RecoverObservedLinkInstance(standby): %v", err)
+	}
 	if !ok {
 		t.Fatal("standby previous generation was not recovered")
 	}
@@ -333,13 +373,13 @@ func TestReconcileRetainsOldGenerationAfterStagedSAObserved(t *testing.T) {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
 	newSpec := plan.Desired[0]
+	stagedSpec := mustRuntimeSpecForPortGeneration(newSpec, 2)
 
-	existing := NewLinkInstance(runtimeSpecForPortGeneration(newSpec, 1), LinkStateUp, now)
+	existing := NewLinkInstance(mustRuntimeSpecForPortGeneration(newSpec, 1), LinkStateUp, now)
 	existing.RemoteGeneration = 1
 	existing.StagedGeneration = 2
-	existing.StagedIKEName = stagedRuntimeID(existing, 2)
+	existing.StagedIKEName = stagedSpec.TransportID
 	existing.StagedChildSAName = existing.StagedIKEName + "-child"
-	stagedSpec := rotateSpec(newSpec, 2)
 	existing.StagedInterfaceName = stagedSpec.InterfaceName
 	existing.StagedXFRMIfID = stagedSpec.XFRMIfID
 	existing.StagedLocalTunnelAddr = stagedSpec.LocalTunnelAddr
@@ -463,7 +503,7 @@ func TestReconcileCommitsRotateAfterRetentionExpires(t *testing.T) {
 	existing := NewLinkInstance(oldSpec, LinkStateUp, now)
 	existing.RemoteGeneration = 1
 	existing.StagedGeneration = 2
-	existing.StagedIKEName = stagedRuntimeID(existing, 2)
+	existing.StagedIKEName = stagedSpec.TransportID
 	existing.StagedChildSAName = existing.StagedIKEName + "-child"
 	existing.StagedInterfaceName = stagedSpec.InterfaceName
 	existing.StagedXFRMIfID = stagedSpec.XFRMIfID
@@ -494,7 +534,7 @@ func TestReconcileCommitsRotateAfterRetentionExpires(t *testing.T) {
 	if inst.StagedGeneration != 0 {
 		t.Fatalf("staged generation not cleared = %d", inst.StagedGeneration)
 	}
-	if inst.IKEName != stagedRuntimeID(existing, 2) {
+	if inst.IKEName != stagedSpec.TransportID {
 		t.Fatalf("ike name = %q, want rotated", inst.IKEName)
 	}
 	if inst.InterfaceName != stagedSpec.InterfaceName {
@@ -533,9 +573,9 @@ func TestReconcileCommitsRotateWhenStagedSAAlreadyCurrent(t *testing.T) {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
 	newSpec := plan.Desired[0]
+	stagedSpec := mustRuntimeSpecForPortGeneration(newSpec, 2)
 
-	existing := NewLinkInstance(runtimeSpecForPortGeneration(newSpec, 1), LinkStateUp, now)
-	stagedSpec := rotateSpec(newSpec, 2)
+	existing := NewLinkInstance(mustRuntimeSpecForPortGeneration(newSpec, 1), LinkStateUp, now)
 	existing.RemoteGeneration = 1
 	existing.IKEName = stagedSpec.TransportID
 	existing.ChildSAName = ChildSAName(stagedSpec)
@@ -602,9 +642,9 @@ func TestReconcileHoldsRotateWhenRouteCutoverPending(t *testing.T) {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
 	newSpec := plan.Desired[0]
-	stagedSpec := rotateSpec(newSpec, 2)
+	stagedSpec := mustRuntimeSpecForPortGeneration(newSpec, 2)
 
-	existing := NewLinkInstance(runtimeSpecForPortGeneration(newSpec, 1), LinkStateUp, now)
+	existing := NewLinkInstance(mustRuntimeSpecForPortGeneration(newSpec, 1), LinkStateUp, now)
 	existing.RemoteGeneration = 1
 	existing.StagedGeneration = 2
 	existing.StagedIKEName = stagedSpec.TransportID
@@ -684,9 +724,9 @@ func TestReconcileCommitsRotateWhenOldSADisappearsDuringRetention(t *testing.T) 
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
 	newSpec := plan.Desired[0]
-	stagedSpec := rotateSpec(newSpec, 2)
+	stagedSpec := mustRuntimeSpecForPortGeneration(newSpec, 2)
 
-	existing := NewLinkInstance(runtimeSpecForPortGeneration(newSpec, 1), LinkStateUp, now)
+	existing := NewLinkInstance(mustRuntimeSpecForPortGeneration(newSpec, 1), LinkStateUp, now)
 	existing.RemoteGeneration = 1
 	existing.StagedGeneration = 2
 	existing.StagedIKEName = stagedSpec.TransportID
@@ -746,7 +786,7 @@ func TestReconcileSecondaryConvergedCommitsRotateWhenOldSADisappears(t *testing.
 	newSpec.Generation = 2
 	stagedSpec := rotateSpecForRole(newSpec, 2, InitiatorRoleSecondaryStandby)
 
-	existing := NewLinkInstance(runtimeSpecForPortGeneration(newSpec, 1), LinkStateUp, now)
+	existing := NewLinkInstance(mustRuntimeSpecForPortGeneration(newSpec, 1), LinkStateUp, now)
 	existing.RemoteGeneration = 1
 	existing.InitiatorRole = InitiatorRoleConverged
 	existing.StagedGeneration = 2
@@ -799,7 +839,7 @@ func TestReconcileRecoversRotatedRuntimeMetadataFromSA(t *testing.T) {
 			NATTPort:   DefaultNATTPort,
 		}},
 	}
-	stagedSpec := rotateSpec(spec, 2)
+	stagedSpec := mustRuntimeSpecForPortGeneration(spec, 2)
 	existing := NewLinkInstance(spec, LinkStateUp, now)
 	existing.RemoteGeneration = 2
 	existing.IKEName = stagedSpec.TransportID
@@ -995,11 +1035,12 @@ func TestReconcileRollbackRotateOnTimeout(t *testing.T) {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
 	newSpec := plan.Desired[0]
+	stagedSpec := mustRuntimeSpecForPortGeneration(newSpec, 2)
 
-	existing := NewLinkInstance(runtimeSpecForPortGeneration(newSpec, 1), LinkStateUp, now)
+	existing := NewLinkInstance(mustRuntimeSpecForPortGeneration(newSpec, 1), LinkStateUp, now)
 	existing.RemoteGeneration = 1
 	existing.StagedGeneration = 2
-	existing.StagedIKEName = stagedRuntimeID(existing, 2)
+	existing.StagedIKEName = stagedSpec.TransportID
 	existing.StagedChildSAName = existing.StagedIKEName + "-child"
 	existing.RotatePhase = RotatePhaseTestingNew
 	existing.RotateDeadline = now.Add(-time.Second).Unix()
@@ -1052,11 +1093,12 @@ func TestReconcileCleanupStaleStagedGeneration(t *testing.T) {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
 	newSpec := plan.Desired[0]
+	staleSpec := mustRuntimeSpecForPortGeneration(newSpec, 3)
 
 	existing := NewLinkInstance(newSpec, LinkStateUp, now)
 	existing.RemoteGeneration = 2
 	existing.StagedGeneration = 3 // stale; desired is 5
-	existing.StagedIKEName = stagedRuntimeID(existing, 3)
+	existing.StagedIKEName = staleSpec.TransportID
 	existing.StagedChildSAName = existing.StagedIKEName + "-child"
 	existing.RotatePhase = RotatePhaseTestingNew
 
@@ -1071,7 +1113,7 @@ func TestReconcileCleanupStaleStagedGeneration(t *testing.T) {
 	if action == nil {
 		t.Fatalf("expected cleanup_rotate action, got %+v", result.Actions)
 	}
-	if action.Spec == nil || action.Spec.TransportID != stagedRuntimeID(existing, 3) {
+	if action.Spec == nil || action.Spec.TransportID != staleSpec.TransportID {
 		t.Fatalf("cleanup spec = %+v", action.Spec)
 	}
 	inst := result.Instances[existing.ID]
@@ -1105,16 +1147,16 @@ func TestReconcileRestartRecoversRotationPhase(t *testing.T) {
 		t.Fatalf("PlanTransportLinks: %v", err)
 	}
 	newSpec := plan.Desired[0]
+	stagedSpec := mustRuntimeSpecForPortGeneration(newSpec, 2)
 
-	// Simulate a persisted instance in the testing_new phase after daemon restart.
-	existing := NewLinkInstance(runtimeSpecForPortGeneration(newSpec, 1), LinkStateUp, now)
+	// Simulate the testing_new phase reconstructed from runtime observation.
+	existing := NewLinkInstance(mustRuntimeSpecForPortGeneration(newSpec, 1), LinkStateUp, now)
 	existing.RemoteGeneration = 1
 	existing.IKEName = existing.TransportID
 	existing.ChildSAName = ChildSAName(newSpec)
 	existing.StagedGeneration = 2
-	existing.StagedIKEName = stagedRuntimeID(existing, 2)
+	existing.StagedIKEName = stagedSpec.TransportID
 	existing.StagedChildSAName = existing.StagedIKEName + "-child"
-	stagedSpec := rotateSpec(newSpec, 2)
 	existing.StagedInterfaceName = stagedSpec.InterfaceName
 	existing.StagedXFRMIfID = stagedSpec.XFRMIfID
 	existing.StagedLocalTunnelAddr = stagedSpec.LocalTunnelAddr

@@ -103,7 +103,12 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 			generationZone = spec.PeerZone
 		}
 		generations := ipsecPortGenerations(verified, generationZone, now)
-		if instance, ok := ipsec.RecoverObservedLinkInstance(spec, groupSpecs[spec.OverlayID], generations, connections, sas, xfrmLinks, now); ok {
+		instance, ok, err := ipsec.RecoverObservedLinkInstance(spec, groupSpecs[spec.OverlayID], generations, connections, sas, xfrmLinks, now)
+		if err != nil {
+			d.recordIPsecReconcileError(rev, now.Unix(), err)
+			return fmt.Errorf("derive observed ipsec runtime: %w", err)
+		}
+		if ok {
 			instances[id] = instance
 		}
 	}
@@ -124,6 +129,10 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		TakeoverNotBefore:     d.ipsecTakeoverNotBefore,
 		ForceUpdates:          forceUpdates,
 	})
+	if result.Err != nil {
+		d.recordIPsecReconcileError(rev, now.Unix(), result.Err)
+		return fmt.Errorf("derive ipsec runtime: %w", result.Err)
+	}
 	result.Actions = append(result.Actions, ipsec.PlanDuplicateSAGC(plan.Desired, result.Instances, sas, plan.Roles)...)
 	diagnosticPrefixes := d.localIPv6DiagnosticPrefixes(verified, now)
 	for _, action := range result.Actions {

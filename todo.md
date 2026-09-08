@@ -83,7 +83,7 @@ Daemon
 - [x] 审计 `IPsecTransportKey`、`IPsecPortRecord` 和 Endpoint ACL：保留无其他私钥来源的 transport key 与显式本机 ACL；删除可由 VerifiedState 本机签名 `ipsec/ports` record 完整恢复的 `IPsecPortRecord` 缓存。
 - [x] 完全删除持久化 `LinkInstances`，不新增 `LinkJournal` / `IPsecTransitions` checkpoint；`IPsecTransportKey` 和 `EndpointACLs` 继续由 Linux state 持久化。
   - [x] 补全 StrongSwan loaded connection、SA 和配置 namespace 的全局 XFRM inventory；同一 namespace 的 link/address 只读取一次，第一阶段只 Observe、不自动删除。
-  - [ ] 从 VerifiedState current/previous generation、配置和确定性命名直接计算可保留资源；不新增 `AllowedRuntime`、journal、capability wrapper 或第二套 owner/token。
+  - [x] 从 VerifiedState current/previous generation、配置和确定性命名直接计算可保留 resource specs；恢复逻辑直接消费该纯函数结果，不新增 `AllowedRuntime`、journal、capability wrapper 或第二套 owner/token。
   - [x] 按保守策略恢复 restart rotation/takeover：reconcile 工作集启动时为空；current/previous 从 verified generation 加 connection/SA/XFRM 观察恢复，previous-only 保留旧链路并准备 current，takeover deadline 与 backoff 不从磁盘恢复。
   - [ ] orphan cleanup 后置接入：StrongSwan connection 必须匹配可推导的完整 ID；XFRM interface 必须同时位于配置 namespace、类型为 xfrm，并匹配可推导的 name 与 `if_id`；普通 reconcile 不按前缀批量删除。
   - [x] 将在线 link 数据放进无 DB/线程的 `LinuxObservation`；reconcile、health、routing/firewall、control/Observer 均读取该在线快照，`pkg/transport/ipsec.LinkInstance` 仅作为 daemon 内存工作对象。

@@ -335,9 +335,9 @@ func applyRuntimeGeneration(spec *TransportLinkSpec, group LinkGroupSpec, linkIn
 	return nil
 }
 
-// RuntimeSpecForPortGeneration returns the runtime resources for a link at a
-// specific port generation. Derived tunnel address modes are epoch-scoped;
-// sequential pool addresses are stable across generations and keep base addrs.
+// RuntimeSpecForPortGeneration returns the complete runtime spec for one port
+// generation. Derived tunnel address modes are epoch-scoped; sequential pool
+// addresses are stable across generations and keep base addresses.
 func RuntimeSpecForPortGeneration(base TransportLinkSpec, group LinkGroupSpec, generation uint64) (TransportLinkSpec, error) {
 	spec := base
 	spec.Generation = generation
@@ -347,22 +347,33 @@ func RuntimeSpecForPortGeneration(base TransportLinkSpec, group LinkGroupSpec, g
 		spec.TransportID = RuntimeConnectionID(spec.LinkID, runtimeGeneration, spec.Provider)
 		spec.XFRMIfID = RuntimeXFRMIfID(spec.LinkID, runtimeGeneration, spec.Provider)
 	} else {
+		if runtimeGeneration != 0 {
+			spec.TransportID = RotateConnectionName(base.TransportID, runtimeGeneration)
+		}
 		spec.XFRMIfID = StableXFRMIfID(spec.LocalZone, spec.PeerZone, spec.TransportID)
 	}
 	spec.InterfaceName = StableInterfaceName(spec.XFRMIfID)
-	if group.ID == "" {
-		return spec, nil
+	if group.ID != "" && group.normalizedTunnelAddress().Mode != TunnelAddressSequentialPool {
+		localAddr, peerAddr, err := group.DeriveTunnelAddressesForLink(spec.LocalZone, spec.PeerZone, spec.LinkID, spec.PathKey, spec.AddressEpoch, 0)
+		if err != nil {
+			return TransportLinkSpec{}, err
+		}
+		spec.LocalTunnelAddr = localAddr
+		spec.PeerTunnelAddr = peerAddr
 	}
-	tunnel := group.normalizedTunnelAddress()
-	if tunnel.Mode == TunnelAddressSequentialPool {
-		return spec, nil
+	var contacts []ContactPoint
+	for _, point := range base.ContactPoints {
+		if point.Generation == generation {
+			contacts = append(contacts, point)
+		}
 	}
-	localAddr, peerAddr, err := group.DeriveTunnelAddressesForLink(spec.LocalZone, spec.PeerZone, spec.LinkID, spec.PathKey, spec.AddressEpoch, 0)
-	if err != nil {
-		return TransportLinkSpec{}, err
+	if len(contacts) == 0 {
+		contacts = append([]ContactPoint(nil), base.ContactPoints...)
 	}
-	spec.LocalTunnelAddr = localAddr
-	spec.PeerTunnelAddr = peerAddr
+	spec.ContactPoints = contacts
+	if !IsActiveInitiatorRole(spec.InitiatorRole) {
+		spec.ContactPoints = nil
+	}
 	return spec, nil
 }
 

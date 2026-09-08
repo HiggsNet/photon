@@ -131,6 +131,7 @@ type ReconcileInputs struct {
 type ReconcileResult struct {
 	Actions   []ReconcileAction
 	Instances map[string]LinkInstance
+	Err       error
 }
 
 type ReconcileAction struct {
@@ -313,56 +314,6 @@ func contactGeneration(spec TransportLinkSpec) uint64 {
 	return point.Generation
 }
 
-func rotateSpec(base TransportLinkSpec, generation uint64) TransportLinkSpec {
-	spec := base
-	spec.Generation = generation
-	runtimeGeneration := runtimeGenerationForPortGeneration(generation)
-	spec.AddressEpoch = runtimeGeneration
-	spec.TransportID = base.TransportID
-	if runtimeGeneration != 0 {
-		spec.TransportID = RotateConnectionName(base.TransportID, runtimeGeneration)
-	}
-	if spec.LinkID != "" {
-		spec.TransportID = RuntimeConnectionID(spec.LinkID, runtimeGeneration, spec.Provider)
-		spec.XFRMIfID = RuntimeXFRMIfID(spec.LinkID, runtimeGeneration, spec.Provider)
-	} else {
-		spec.XFRMIfID = StableXFRMIfID(base.LocalZone, base.PeerZone, spec.TransportID)
-	}
-	spec.InterfaceName = StableInterfaceName(spec.XFRMIfID)
-	var contacts []ContactPoint
-	for _, point := range base.ContactPoints {
-		if point.Generation == generation {
-			contacts = append(contacts, point)
-		}
-	}
-	if len(contacts) == 0 {
-		contacts = append([]ContactPoint(nil), base.ContactPoints...)
-	}
-	spec.ContactPoints = contacts
-	return spec
-}
-
-func rotateSpecForRoleWithGroup(base TransportLinkSpec, generation uint64, role string, group LinkGroupSpec) TransportLinkSpec {
-	spec, err := RuntimeSpecForPortGeneration(base, group, generation)
-	if err != nil {
-		spec = rotateSpec(base, generation)
-	}
-	var contacts []ContactPoint
-	for _, point := range base.ContactPoints {
-		if point.Generation == generation {
-			contacts = append(contacts, point)
-		}
-	}
-	if len(contacts) == 0 {
-		contacts = append([]ContactPoint(nil), base.ContactPoints...)
-	}
-	spec.ContactPoints = contacts
-	if !IsActiveInitiatorRole(role) {
-		spec.ContactPoints = nil
-	}
-	return spec
-}
-
 func groupSpecForSpec(spec TransportLinkSpec, groups map[string]LinkGroupSpec) LinkGroupSpec {
 	if len(groups) == 0 {
 		return LinkGroupSpec{}
@@ -440,6 +391,9 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 				sa = SAState{}
 			}
 			result.reconcileSecondaryStandby(id, spec, existing, exists, sa, in.SAs, groupSpecForSpec(spec, in.GroupSpecs), in.GroupBackoff, in.GroupRotateRetention, in.RotateActivationReady, in.RotateCutoverReady, in.PrepareStandby, in.TakeoverNotBefore, now)
+			if result.Err != nil {
+				return result
+			}
 			continue
 		}
 		// Primary / outbound initiator path.
@@ -467,6 +421,9 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 		if existing.RemoteGeneration != desiredGen {
 			activationReady, activationGated := rotateActivationReady(id, in.RotateActivationReady)
 			result.handleRotate(id, spec, existing, in.SAs, groupSpecForSpec(spec, in.GroupSpecs), rotateRetentionForSpec(spec, in.GroupRotateRetention), activationReady, activationGated, rotateCutoverReady(id, in.RotateCutoverReady), now, role)
+			if result.Err != nil {
+				return result
+			}
 			continue
 		}
 		rotateActive := existing.StagedGeneration != 0 || existing.RotatePhase != RotatePhaseIdle
@@ -782,12 +739,17 @@ func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLin
 }
 
 func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existing LinkInstance, sas []SAState, group LinkGroupSpec, retention time.Duration, activationReady, activationGated, cutoverReady bool, now time.Time, initiatorRole string) {
+	spec.InitiatorRole = initiatorRole
 	desiredGen := contactGeneration(spec)
 	if existing.StagedGeneration != 0 && existing.StagedGeneration != desiredGen {
 		inst := existing
 		inst.RotatePhase = RotatePhaseCleanup
 		r.Instances[id] = inst
-		stagedSpec := rotateSpecForRoleWithGroup(spec, existing.StagedGeneration, initiatorRole, group)
+		stagedSpec, err := RuntimeSpecForPortGeneration(spec, group, existing.StagedGeneration)
+		if err != nil {
+			r.Err = fmt.Errorf("derive stale staged runtime for %s generation %d: %w", id, existing.StagedGeneration, err)
+			return
+		}
 		r.add(ReconcileActionCleanupRotate, &stagedSpec, &inst, "stale staged generation")
 		return
 	}
@@ -797,7 +759,11 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 	}
 	if existing.StagedGeneration == desiredGen {
 		stagedSA := findStagedSA(sas, existing)
-		stagedSpec := rotateSpecForRoleWithGroup(spec, existing.StagedGeneration, initiatorRole, group)
+		stagedSpec, err := RuntimeSpecForPortGeneration(spec, group, existing.StagedGeneration)
+		if err != nil {
+			r.Err = fmt.Errorf("derive staged runtime for %s generation %d: %w", id, existing.StagedGeneration, err)
+			return
+		}
 		stagedInterfaceName := firstNonEmptyString(existing.StagedInterfaceName, stagedSpec.InterfaceName)
 		stagedXFRMIfID := firstNonZeroUint32(existing.StagedXFRMIfID, stagedSpec.XFRMIfID)
 		if stagedSA.Established {
@@ -927,7 +893,11 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 	}
 	inst := existing
 	inst.StagedGeneration = desiredGen
-	stagedSpec := rotateSpecForRoleWithGroup(spec, desiredGen, initiatorRole, group)
+	stagedSpec, err := RuntimeSpecForPortGeneration(spec, group, desiredGen)
+	if err != nil {
+		r.Err = fmt.Errorf("derive staged runtime for %s generation %d: %w", id, desiredGen, err)
+		return
+	}
 	inst.StagedIKEName = stagedSpec.TransportID
 	inst.StagedChildSAName = ChildSAName(stagedSpec)
 	inst.StagedInterfaceName = stagedSpec.InterfaceName
@@ -1486,32 +1456,35 @@ func hasMatchingConnection(states []ConnectionState, spec TransportLinkSpec) boo
 // allowed generation has its exact XFRM resource and either its loaded
 // connection or an established SA. The caller derives generations from the
 // current verified port record.
-func RecoverObservedLinkInstance(spec TransportLinkSpec, group LinkGroupSpec, generations []uint64, connections []ConnectionState, sas []SAState, links []XFRMLinkState, now time.Time) (LinkInstance, bool) {
-	desiredGeneration := contactGeneration(spec)
-	seen := map[uint64]bool{desiredGeneration: true}
+func RecoverObservedLinkInstance(spec TransportLinkSpec, group LinkGroupSpec, generations []uint64, connections []ConnectionState, sas []SAState, links []XFRMLinkState, now time.Time) (LinkInstance, bool, error) {
+	seen := make(map[uint64]bool, len(generations))
 	for _, generation := range generations {
-		if seen[generation] {
+		runtimeGeneration := runtimeGenerationForPortGeneration(generation)
+		if seen[runtimeGeneration] {
 			continue
 		}
-		seen[generation] = true
-		candidate := rotateSpecForRoleWithGroup(spec, generation, spec.InitiatorRole, group)
+		seen[runtimeGeneration] = true
+		candidate, err := RuntimeSpecForPortGeneration(spec, group, generation)
+		if err != nil {
+			return LinkInstance{}, false, err
+		}
 		if !hasMatchingXFRMLink(links, candidate, group.Normalized().NetNS) {
 			continue
 		}
 		state := findMatchingSA(sas, candidate)
 		if state.Established {
 			instance := NewLinkInstance(candidate, LinkStateUp, now)
-			instance.RemoteGeneration = generation
+			instance.RemoteGeneration = candidate.Generation
 			instance.Endpoint = state.Endpoint
-			return instance, true
+			return instance, true, nil
 		}
 		if hasMatchingConnection(connections, candidate) {
 			instance := NewLinkInstance(candidate, LinkStateConnecting, now)
-			instance.RemoteGeneration = generation
-			return instance, true
+			instance.RemoteGeneration = candidate.Generation
+			return instance, true, nil
 		}
 	}
-	return LinkInstance{}, false
+	return LinkInstance{}, false, nil
 }
 
 func hasMatchingXFRMLink(states []XFRMLinkState, spec TransportLinkSpec, netns NetNSSpec) bool {

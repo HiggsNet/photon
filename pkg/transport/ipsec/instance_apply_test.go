@@ -3,6 +3,7 @@ package ipsec
 import (
 	"context"
 	"net/netip"
+	"slices"
 	"testing"
 	"time"
 )
@@ -26,7 +27,7 @@ func TestApplyReconcileActionPrepareRotateSkipsPrivateKeyLoad(t *testing.T) {
 			NATTPort:   4501,
 		}},
 	}
-	stagedSpec := rotateSpec(spec, 2)
+	stagedSpec := mustRuntimeSpecForPortGeneration(spec, 2)
 	ipsecDrv := &DryRunDriver{}
 	xfrmDrv := &DryRunDriver{}
 	_, err := ApplyReconcileAction(context.TODO(), ipsecDrv, xfrmDrv, ReconcileAction{
@@ -65,7 +66,7 @@ func TestApplyReconcileActionPrepareRotateKeepsOldSA(t *testing.T) {
 			NATTPort:   DefaultNATTPort,
 		}},
 	}
-	stagedSpec := rotateSpec(spec, 2)
+	stagedSpec := mustRuntimeSpecForPortGeneration(spec, 2)
 	inst := NewLinkInstance(spec, LinkStateUp, time.Unix(4100, 0))
 	inst.IKEName = spec.TransportID
 	inst.StagedIKEName = stagedSpec.TransportID
@@ -290,7 +291,7 @@ func TestApplyReconcileActionPrepareRotateUnloadsBaseConfig(t *testing.T) {
 	}, NetNSSpec{Kind: NetNSName, Name: "photontesth2", Create: true}); err != nil {
 		t.Fatalf("ApplyReconcileAction: %v", err)
 	}
-	if !stringSliceContains(ipsecDrv.Unloaded, inst.IKEName) {
+	if !slices.Contains(ipsecDrv.Unloaded, inst.IKEName) {
 		t.Fatalf("unloaded = %+v, want base config %s", ipsecDrv.Unloaded, inst.IKEName)
 	}
 	if len(ipsecDrv.Terminated) != 0 {
@@ -347,7 +348,7 @@ func TestApplyReconcileActionPrepareRotateInitiatesActiveChild(t *testing.T) {
 			NATTPort:   DefaultNATTPort,
 		}},
 	}
-	stagedSpec := rotateSpec(spec, 2)
+	stagedSpec := mustRuntimeSpecForPortGeneration(spec, 2)
 	ipsecDrv := &DryRunDriver{}
 	xfrmDrv := &DryRunDriver{}
 	plan, err := ApplyReconcileAction(context.Background(), ipsecDrv, xfrmDrv, ReconcileAction{

@@ -29,11 +29,8 @@ func NewTransportLinkSpecForGroup(local, peer zone.ZonePath, group LinkGroupSpec
 }
 
 func rotateSpecForRole(base TransportLinkSpec, generation uint64, role string) TransportLinkSpec {
-	spec := rotateSpec(base, generation)
-	if !IsActiveInitiatorRole(role) {
-		spec.ContactPoints = nil
-	}
-	return spec
+	base.InitiatorRole = role
+	return mustRuntimeSpecForPortGeneration(base, generation)
 }
 
 func RotateChildSAName(transportID string, generation uint64) string {

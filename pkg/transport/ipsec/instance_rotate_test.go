@@ -30,7 +30,7 @@ func TestRotateSpecUsesIndependentXFRMInterface(t *testing.T) {
 			NATTPort:   DefaultNATTPort,
 		}},
 	}
-	staged := rotateSpec(spec, 2)
+	staged := mustRuntimeSpecForPortGeneration(spec, 2)
 	if staged.TransportID != RotateConnectionName(spec.TransportID, 2) {
 		t.Fatalf("staged transport id = %q", staged.TransportID)
 	}
