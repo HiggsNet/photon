@@ -16,9 +16,11 @@ import (
 // tests: root -> catofes. -> node-a.catofes./node-b.catofes. with signed
 // delegations. The managed zone is node-a.catofes.
 type peerStateTestOwners struct {
-	verified   *corestate.VerifiedState
-	checkpoint *corestate.GossipCheckpoint
-	runtime    *linuxRuntimeState
+	verified             *corestate.VerifiedState
+	checkpoint           *corestate.GossipCheckpoint
+	runtime              *linuxRuntimeState
+	observationLinks     map[string]linkInstanceState
+	observationReconcile *ipsecReconcileState
 }
 
 func buildPeerStateTestOwners(t *testing.T) (*peerStateTestOwners, ed25519.PrivateKey, ed25519.PrivateKey, ed25519.PrivateKey) {
@@ -104,11 +106,9 @@ func buildPeerStateTestOwners(t *testing.T) (*peerStateTestOwners, ed25519.Priva
 			Network:            ns,
 			IdentityPrivateKey: nodeAPriv,
 		},
-		checkpoint: &corestate.GossipCheckpoint{Peers: make(map[string]corestate.PeerCheckpoint)},
-		runtime: &linuxRuntimeState{
-			LinkInstances: make(map[string]linkInstanceState),
-			PeerCleanups:  make(map[string]peerLifecycleCleanupState),
-		},
+		checkpoint:       &corestate.GossipCheckpoint{Peers: make(map[string]corestate.PeerCheckpoint)},
+		runtime:          &linuxRuntimeState{PeerCleanups: make(map[string]peerLifecycleCleanupState)},
+		observationLinks: make(map[string]linkInstanceState),
 	}
 	return owners, catofesPriv, nodeAPriv, nodeBPriv
 }
@@ -140,7 +140,7 @@ func addRevocationToParent(t *testing.T, network *zone.NetworkState, parentZone,
 func peerStatusForTest(owners *peerStateTestOwners, peerID string, peerZone zone.ZonePath, now time.Time, cfg inspect.PeerLifecycleConfig) inspect.PeerStatusInfo {
 	return inspect.BuildPeerLifecycleStatus(peerLifecycleInput(
 		owners.verified.Network, owners.checkpoint, owners.runtime.PeerCleanups,
-		owners.runtime.LinkInstances, owners.runtime.IPsecReconcile,
+		owners.observationLinks, owners.observationReconcile,
 		peerID, peerZone, now, cfg, false,
 	))
 }
@@ -175,7 +175,7 @@ func TestDerivePeerStatusActiveWithUpLink(t *testing.T) {
 	cfg := inspect.DefaultPeerLifecycleConfig()
 
 	// Add a LinkInstance for node-b that is up.
-	state.runtime.LinkInstances["link-node-b"] = linkInstanceState{
+	state.observationLinks["link-node-b"] = linkInstanceState{
 		ID:             "link-node-b",
 		PeerZone:       "node-b.catofes.",
 		ActualState:    "up",
@@ -200,7 +200,7 @@ func TestDerivePeerStatusConnectingWithNonUpLink(t *testing.T) {
 	cfg := inspect.DefaultPeerLifecycleConfig()
 
 	// Add a LinkInstance for node-b that is connecting (not up).
-	state.runtime.LinkInstances["link-node-b"] = linkInstanceState{
+	state.observationLinks["link-node-b"] = linkInstanceState{
 		ID:             "link-node-b",
 		PeerZone:       "node-b.catofes.",
 		ActualState:    "connecting",
@@ -283,7 +283,7 @@ func TestDerivePeerStatusCleanupAfterOverridesStaleLinkState(t *testing.T) {
 	state.checkpoint.Peers["node-b.catofes."] = corestate.PeerCheckpoint{
 		LastSyncUnix: now.Add(-cfg.CleanupAfter - time.Minute).Unix(),
 	}
-	state.runtime.LinkInstances["stale-link"] = linkInstanceState{
+	state.observationLinks["stale-link"] = linkInstanceState{
 		ID:          "stale-link",
 		PeerZone:    "node-b.catofes.",
 		ActualState: "connecting",
@@ -314,20 +314,20 @@ func TestCollectRevokedPeerZones(t *testing.T) {
 	now := time.Unix(2000, 0)
 
 	// Before revocation: no revoked peers.
-	revoked := collectRevokedPeerZones(state.verified.Network, state.runtime.LinkInstances, state.checkpoint, now)
+	revoked := collectRevokedPeerZones(state.verified.Network, state.observationLinks, state.checkpoint, now)
 	if len(revoked) != 0 {
 		t.Fatalf("expected 0 revoked zones, got %d", len(revoked))
 	}
 
 	// Add a LinkInstance for node-b.
-	state.runtime.LinkInstances["link-node-b"] = linkInstanceState{
+	state.observationLinks["link-node-b"] = linkInstanceState{
 		PeerZone: "node-b.catofes.",
 	}
 	// Add node-b to SyncPeers.
 	state.checkpoint.Peers["node-b.catofes."] = corestate.PeerCheckpoint{}
 
 	// Still no revoked zones.
-	revoked = collectRevokedPeerZones(state.verified.Network, state.runtime.LinkInstances, state.checkpoint, now)
+	revoked = collectRevokedPeerZones(state.verified.Network, state.observationLinks, state.checkpoint, now)
 	if len(revoked) != 0 {
 		t.Fatalf("expected 0 revoked zones before revocation, got %d", len(revoked))
 	}
@@ -336,7 +336,7 @@ func TestCollectRevokedPeerZones(t *testing.T) {
 	addRevocationToParent(t, state.verified.Network, "catofes.", "node-b.catofes.", catofesPriv, now)
 
 	// Now node-b should be in the revoked set (from both LinkInstances and SyncPeers).
-	revoked = collectRevokedPeerZones(state.verified.Network, state.runtime.LinkInstances, state.checkpoint, now)
+	revoked = collectRevokedPeerZones(state.verified.Network, state.observationLinks, state.checkpoint, now)
 	if !revoked["node-b.catofes."] {
 		t.Fatalf("expected node-b.catofes. in revoked set, got %v", revoked)
 	}
@@ -444,7 +444,7 @@ func TestDerivePeerStatusesAllPeers(t *testing.T) {
 		LastSyncUnix: now.Add(-1 * time.Minute).Unix(),
 	}
 
-	peers := derivePeerStatuses(state.verified.ManagedZone, state.verified.Network, state.checkpoint, state.runtime.PeerCleanups, state.runtime.LinkInstances, state.runtime.IPsecReconcile, now, cfg, false)
+	peers := derivePeerStatuses(state.verified.ManagedZone, state.verified.Network, state.checkpoint, state.runtime.PeerCleanups, state.observationLinks, state.observationReconcile, now, cfg, false)
 	if len(peers) == 0 {
 		t.Fatalf("expected at least 1 peer, got 0")
 	}
@@ -469,7 +469,7 @@ func TestRevokedLinkPeersIncludesSyncPeers(t *testing.T) {
 	state.checkpoint.Peers["node-b.catofes."] = corestate.PeerCheckpoint{}
 
 	// Before revocation: no revoked peers.
-	revoked := revokedLinkPeers(state.verified.Network, state.runtime.LinkInstances, state.checkpoint, now)
+	revoked := revokedLinkPeers(state.verified.Network, state.observationLinks, state.checkpoint, now)
 	if len(revoked) != 0 {
 		t.Fatalf("expected 0 revoked, got %d", len(revoked))
 	}
@@ -478,7 +478,7 @@ func TestRevokedLinkPeersIncludesSyncPeers(t *testing.T) {
 	addRevocationToParent(t, state.verified.Network, "catofes.", "node-b.catofes.", catofesPriv, now)
 
 	// After revocation: node-b should be in revoked set even without LinkInstance.
-	revoked = revokedLinkPeers(state.verified.Network, state.runtime.LinkInstances, state.checkpoint, now)
+	revoked = revokedLinkPeers(state.verified.Network, state.observationLinks, state.checkpoint, now)
 	if !revoked["node-b.catofes."] {
 		t.Fatalf("expected node-b.catofes. in revoked set from SyncPeers, got %v", revoked)
 	}

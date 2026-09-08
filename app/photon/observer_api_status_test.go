@@ -39,7 +39,7 @@ func TestObserverStatusAPI(t *testing.T) {
 
 func TestObserverReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	runtime.LinkInstances = map[string]linkInstanceState{
+	observationLinks := map[string]linkInstanceState{
 		"link-committed": {
 			ID:          "link-committed",
 			GroupID:     "main",
@@ -47,21 +47,21 @@ func TestObserverReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T) {
 			ActualState: "up",
 		},
 	}
-	runtime.IPsecReconcile = &ipsecReconcileState{DesiredLinks: 1}
+	observationReconcile := &ipsecReconcileState{DesiredLinks: 1}
 	appConfig := defaultAppConfig()
 	appConfig.Observer.Enabled = true
 	service := newTestDaemonFromOwners(
 		&AppContext{Config: appConfig}, verified, checkpoint, runtime, config, time.Second,
 	)
-	service.linuxObservation.replaceIPsec(linkInstancesToIPsec(runtime.LinkInstances), runtime.IPsecReconcile)
+	setTestIPsecObservation(service, observationLinks, observationReconcile)
 	srv := newObserverServer(service, appConfig.Observer)
 	if srv == nil {
 		t.Fatal("observer server is nil")
 	}
 	committedRev := service.StateStore.Meta().Revision
 
-	runtime.LinkInstances["link-uncommitted"] = linkInstanceState{ID: "link-uncommitted"}
-	runtime.IPsecReconcile.DesiredLinks = 99
+	observationLinks["link-uncommitted"] = linkInstanceState{ID: "link-uncommitted"}
+	observationReconcile.DesiredLinks = 99
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
 	rr := httptest.NewRecorder()

@@ -57,11 +57,11 @@ func TestCollectAllRevokedZonesWithRevocation(t *testing.T) {
 // TestComputeRevocationImpactBasic verifies that inspect.RevocationImpact correctly
 // identifies affected link instances, sync peers, and the source zone.
 func TestComputeRevocationImpactBasic(t *testing.T) {
-	verified, checkpoint, runtime, _ := buildTestDaemonOwners(t)
+	verified, checkpoint, _, _ := buildTestDaemonOwners(t)
 	now := time.Unix(4140, 0)
 
 	// Set up a link instance to node-b.catofes.
-	runtime.LinkInstances = map[string]linkInstanceState{
+	links := map[string]linkInstanceState{
 		"link-to-node-b": {
 			ID:          "link-to-node-b",
 			PeerZone:    "node-b.catofes.",
@@ -88,7 +88,7 @@ func TestComputeRevocationImpactBasic(t *testing.T) {
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
 
-	impact := ComputeRevocationImpact(verified.Network, runtime.LinkInstances, checkpoint, "node-b.catofes.", now)
+	impact := ComputeRevocationImpact(verified.Network, links, checkpoint, "node-b.catofes.", now)
 	if impact.RevokedZone != "node-b.catofes." {
 		t.Fatalf("revoked zone = %s, want node-b.catofes.", impact.RevokedZone)
 	}
@@ -112,7 +112,7 @@ func TestComputeRevocationImpactBasic(t *testing.T) {
 // TestComputeRevocationImpactSubtree verifies that descendant zones are
 // correctly identified as part of the revoked subtree.
 func TestComputeRevocationImpactSubtree(t *testing.T) {
-	verified, checkpoint, runtime, _ := buildTestDaemonOwners(t)
+	verified, checkpoint, _, _ := buildTestDaemonOwners(t)
 	now := time.Unix(4140, 0)
 
 	// Add a grandchild zone under node-b.catofes.
@@ -128,7 +128,7 @@ func TestComputeRevocationImpactSubtree(t *testing.T) {
 		RecordHistory: make(map[string][]*zone.Record),
 	}
 	// Also set up link instance and sync peer for the leaf.
-	runtime.LinkInstances = map[string]linkInstanceState{
+	links := map[string]linkInstanceState{
 		"link-to-leaf": {
 			ID:          "link-to-leaf",
 			PeerZone:    leafZone,
@@ -153,7 +153,7 @@ func TestComputeRevocationImpactSubtree(t *testing.T) {
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
 
-	impact := ComputeRevocationImpact(verified.Network, runtime.LinkInstances, checkpoint, "node-b.catofes.", now)
+	impact := ComputeRevocationImpact(verified.Network, links, checkpoint, "node-b.catofes.", now)
 	// The leaf should be in the subtree.
 	found := slices.Contains(impact.RevokedSubtree, leafZone)
 	if !found {
@@ -304,7 +304,7 @@ func BenchmarkDaemonFlushRevocationCleanupAlreadyClean(b *testing.B) {
 
 // TestAllRevocationImpact verifies the combined impact for multiple revoked zones.
 func TestAllRevocationImpact(t *testing.T) {
-	verified, checkpoint, runtime, _ := buildTestDaemonOwners(t)
+	verified, checkpoint, _, _ := buildTestDaemonOwners(t)
 	now := time.Unix(4140, 0)
 
 	// Revoke node-b.catofes.
@@ -318,7 +318,7 @@ func TestAllRevocationImpact(t *testing.T) {
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
 
-	impacts := AllRevocationImpact(verified.Network, runtime.LinkInstances, checkpoint, nil, now)
+	impacts := AllRevocationImpact(verified.Network, nil, checkpoint, nil, now)
 	if len(impacts) != 1 {
 		t.Fatalf("expected 1 impact, got %d", len(impacts))
 	}
@@ -329,10 +329,10 @@ func TestAllRevocationImpact(t *testing.T) {
 
 // TestAllRevocationImpactEmpty verifies empty output when no zones are revoked.
 func TestAllRevocationImpactEmpty(t *testing.T) {
-	verified, checkpoint, runtime, _ := buildTestDaemonOwners(t)
+	verified, checkpoint, _, _ := buildTestDaemonOwners(t)
 	now := time.Unix(4140, 0)
 
-	impacts := AllRevocationImpact(verified.Network, runtime.LinkInstances, checkpoint, nil, now)
+	impacts := AllRevocationImpact(verified.Network, nil, checkpoint, nil, now)
 	if impacts != nil {
 		t.Fatalf("expected nil impacts, got %d", len(impacts))
 	}
@@ -372,7 +372,8 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 	service.notifyStateChanged()
 
 	// Now revoke node-b.catofes.
-	common, current := readTestDaemonOwners(service)
+	common, currentRuntime := service.StateStore.readCommonAndRuntime()
+	currentLinks, currentReconcile := readTestIPsecObservation(service)
 	parent := common.State.Network.Zones["catofes."]
 	delegation := parent.Delegations["node-b.catofes."]
 	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
@@ -383,12 +384,14 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 		Reason:                "test revoke cleanup",
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
-	service = newTestDaemonFromOwners(rt, common.State, common.Gossip, current, config, time.Second)
+	service = newTestDaemonFromOwners(rt, common.State, common.Gossip, currentRuntime, config, time.Second)
+	setTestIPsecObservation(service, currentLinks, currentReconcile)
 	installTestIPsecDrivers(service, driver, driver)
 	service.notifyStateChanged()
 
 	// Verify peer cache was cleared after notifyStateChanged.
-	common, current = readTestDaemonOwners(service)
+	common, _ = service.StateStore.readCommonAndRuntime()
+	currentLinks, currentReconcile = readTestIPsecObservation(service)
 	peer := common.Gossip.Peers["node-b.catofes."]
 	if peer.DiscoveredEndpoint != "" {
 		t.Fatalf("discovered addr should be cleared: %s", peer.DiscoveredEndpoint)
@@ -400,8 +403,8 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 		t.Fatalf("last failure = %+v, want zone revoked", peer.LastFailure)
 	}
 	// Verify link instance was torn down.
-	if len(current.LinkInstances) != 0 {
-		t.Fatalf("link instances should be empty after revocation, got %d", len(current.LinkInstances))
+	if len(currentLinks) != 0 {
+		t.Fatalf("link instances should be empty after revocation, got %d", len(currentLinks))
 	}
 }
 
@@ -459,15 +462,16 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 	})
 
 	service.notifyStateChanged()
-	common, current := readTestDaemonOwners(service)
-	if len(current.LinkInstances) != 1 {
-		t.Fatalf("initial link instances = %d, want 1", len(current.LinkInstances))
+	common, currentRuntime := service.StateStore.readCommonAndRuntime()
+	currentLinks, currentReconcile := readTestIPsecObservation(service)
+	if len(currentLinks) != 1 {
+		t.Fatalf("initial link instances = %d, want 1", len(currentLinks))
 	}
 	initialFirewall := lastFirewallDesired(t, firewallDriver)
 	if !prefixIn(initialFirewall.Prefixes.MeshAuthorizedV4, "10.1.0.0/24") {
 		t.Fatalf("initial firewall authorized prefixes = %v, want node-b route", initialFirewall.Prefixes.MeshAuthorizedV4)
 	}
-	initialBirdCfg := readBirdConfigForNetns(t, current, "photontesth2")
+	initialBirdCfg := readBirdConfigForNetns(t, currentRuntime, "photontesth2")
 	if !strings.Contains(initialBirdCfg, "10.1.0.0/24") {
 		t.Fatalf("initial BIRD config missing transit export for node-b route:\n%s", initialBirdCfg)
 	}
@@ -490,8 +494,8 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 			ObservedUntilUnix:    now.Add(5 * time.Minute).Unix(),
 		},
 	}
-	service = newTestDaemonFromOwners(rt, common.State, common.Gossip, current, config, time.Second)
-	service.linuxObservation.replaceIPsec(linkInstancesToIPsec(current.LinkInstances), current.IPsecReconcile)
+	service = newTestDaemonFromOwners(rt, common.State, common.Gossip, currentRuntime, config, time.Second)
+	setTestIPsecObservation(service, currentLinks, currentReconcile)
 	installTestLinuxDrivers(service, testLinuxDrivers{
 		ipsec: ipsecDriver, xfrm: ipsecDriver, firewall: firewallDriver,
 		birdProcess:       &fakeBirdProcessManager{running: false},
@@ -518,9 +522,10 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 		t.Fatalf("revoked node-b route missing from firewall audit set: %v", revokedFirewall.Prefixes.RevokedV4)
 	}
 
-	common, current = readTestDaemonOwners(service)
-	if len(current.LinkInstances) != 0 {
-		t.Fatalf("link instances should be empty after revocation, got %d", len(current.LinkInstances))
+	common, currentRuntime = service.StateStore.readCommonAndRuntime()
+	currentLinks, currentReconcile = readTestIPsecObservation(service)
+	if len(currentLinks) != 0 {
+		t.Fatalf("link instances should be empty after revocation, got %d", len(currentLinks))
 	}
 	if len(ipsecDriver.Terminated) == 0 || len(ipsecDriver.Unloaded) == 0 || len(ipsecDriver.DeletedIFs) == 0 {
 		t.Fatalf("ipsec teardown incomplete: terminated=%v unloaded=%v deleted_ifs=%v", ipsecDriver.Terminated, ipsecDriver.Unloaded, ipsecDriver.DeletedIFs)
@@ -529,7 +534,7 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 		t.Fatalf("revoked peer cache not cleaned: %+v", peer)
 	}
 
-	revokedBirdCfg := readBirdConfigForNetns(t, current, "photontesth2")
+	revokedBirdCfg := readBirdConfigForNetns(t, currentRuntime, "photontesth2")
 	if strings.Contains(revokedBirdCfg, "10.1.0.0/24") {
 		t.Fatalf("BIRD config still exports revoked node-b route:\n%s", revokedBirdCfg)
 	}
@@ -567,7 +572,7 @@ func readBirdConfigForNetns(t *testing.T, runtime *linuxRuntimeState, netns stri
 // TestConfiguredBootstrapPeerRevoked verifies that a revoked bootstrap peer is
 // detected in the impact's ConfiguredButRevoked list.
 func TestConfiguredBootstrapPeerRevoked(t *testing.T) {
-	verified, checkpoint, runtime, _ := buildTestDaemonOwners(t)
+	verified, checkpoint, _, _ := buildTestDaemonOwners(t)
 	now := time.Unix(4140, 0)
 
 	// Revoke node-b.catofes.
@@ -587,7 +592,7 @@ func TestConfiguredBootstrapPeerRevoked(t *testing.T) {
 		},
 	}
 
-	impacts := AllRevocationImpact(verified.Network, runtime.LinkInstances, checkpoint, config, now)
+	impacts := AllRevocationImpact(verified.Network, nil, checkpoint, config, now)
 	if len(impacts) != 1 {
 		t.Fatalf("expected 1 impact, got %d", len(impacts))
 	}

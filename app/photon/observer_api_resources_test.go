@@ -444,8 +444,10 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 			}},
 		},
 	}
+	var observationLinks map[string]linkInstanceState
+	var observationReconcile *ipsecReconcileState
 	updateTestObserverOwners(srv, func(_ *corestate.VerifiedState, _ *corestate.GossipCheckpoint, runtime *linuxRuntimeState) {
-		runtime.LinkInstances = map[string]linkInstanceState{
+		observationLinks = map[string]linkInstanceState{
 			"link-1": {
 				ID:              "link-1",
 				GroupID:         "blue",
@@ -459,7 +461,7 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 				InitiatorRole:   "primary",
 			},
 		}
-		runtime.IPsecReconcile = &ipsecReconcileState{
+		observationReconcile = &ipsecReconcileState{
 			LastRunUnix:  123,
 			DesiredLinks: 1,
 			Desired: []desiredLinkState{{
@@ -486,6 +488,7 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 			"phx-blue": {State: "running"},
 		}
 	})
+	setTestIPsecObservation(srv.daemon, observationLinks, observationReconcile)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/links", nil)
 	rr := httptest.NewRecorder()
@@ -522,8 +525,10 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 
 func TestObserverHealthAPIIncludesLinkContextWithoutSamples(t *testing.T) {
 	srv := newTestObserverServer()
-	updateTestObserverOwners(srv, func(_ *corestate.VerifiedState, _ *corestate.GossipCheckpoint, runtime *linuxRuntimeState) {
-		runtime.LinkInstances = map[string]linkInstanceState{
+	var observationLinks map[string]linkInstanceState
+	var observationReconcile *ipsecReconcileState
+	updateTestObserverOwners(srv, func(_ *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *linuxRuntimeState) {
+		observationLinks = map[string]linkInstanceState{
 			"link-1": {
 				ID:            "link-1",
 				GroupID:       "blue",
@@ -533,7 +538,7 @@ func TestObserverHealthAPIIncludesLinkContextWithoutSamples(t *testing.T) {
 				Endpoint:      "198.51.100.10:4500",
 			},
 		}
-		runtime.IPsecReconcile = &ipsecReconcileState{
+		observationReconcile = &ipsecReconcileState{
 			Desired: []desiredLinkState{{
 				InstanceID:      "link-1",
 				GroupID:         "blue",
@@ -544,6 +549,7 @@ func TestObserverHealthAPIIncludesLinkContextWithoutSamples(t *testing.T) {
 			}},
 		}
 	})
+	setTestIPsecObservation(srv.daemon, observationLinks, observationReconcile)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
 	rr := httptest.NewRecorder()

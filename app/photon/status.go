@@ -22,10 +22,10 @@ func showStatus() error {
 	if err != nil {
 		return err
 	}
-	return inspecttext.WriteStatus(os.Stdout, statusViewFromOwners(rt, common, runtime, nil, false))
+	return inspecttext.WriteStatus(os.Stdout, statusViewFromOwners(rt, common, runtime, nil, nil, nil, false))
 }
 
-func statusViewFromOwners(rt *AppContext, common corestate.View, runtime *linuxRuntimeState, health []healthLinkJSON, daemonOnline bool) inspect.StatusView {
+func statusViewFromOwners(rt *AppContext, common corestate.View, runtime *linuxRuntimeState, links map[string]linkInstanceState, reconcile *ipsecReconcileState, health []healthLinkJSON, daemonOnline bool) inspect.StatusView {
 	if common.State == nil || runtime == nil {
 		return inspect.BuildStatus(inspect.StatusInput{DaemonOnline: daemonOnline})
 	}
@@ -44,7 +44,7 @@ func statusViewFromOwners(rt *AppContext, common corestate.View, runtime *linuxR
 	if daemonOnline {
 		input.GossipSource = "runtime"
 		input.PlatformSource = "runtime"
-		input.Links = buildStoredLinkInspection(rt, runtime.LinkInstances, runtime.IPsecReconcile, runtime.BirdInstances, health).Inspection
+		input.Links = buildStoredLinkInspection(rt, links, reconcile, runtime.BirdInstances, health).Inspection
 	}
 	cfg := inspect.PeerLifecycleConfig{}
 	hasOverlay := false
@@ -52,7 +52,7 @@ func statusViewFromOwners(rt *AppContext, common corestate.View, runtime *linuxR
 		cfg = rt.Config.PeerLifecycle
 		hasOverlay = len(rt.Config.IPsec.LinkGroups) > 0
 	}
-	input.Peers = derivePeerStatuses(verified.ManagedZone, verified.Network, common.Gossip, runtime.PeerCleanups, runtime.LinkInstances, runtime.IPsecReconcile, rt.Now(), cfg, hasOverlay)
+	input.Peers = derivePeerStatuses(verified.ManagedZone, verified.Network, common.Gossip, runtime.PeerCleanups, links, reconcile, rt.Now(), cfg, hasOverlay)
 	return inspect.BuildStatus(input)
 }
 

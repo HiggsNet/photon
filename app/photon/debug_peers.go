@@ -59,7 +59,7 @@ func showPeers(filter string, verbose bool) error {
 	return inspecttext.WriteGossipPeers(os.Stdout, inspect.BuildGossipPeerDebugViews(common, gossipPeersOptions(config, nil, rt.Now())), filter, verbose)
 }
 
-func buildPeerLifecycleDebugView(rt *AppContext, common corestate.View, runtime *linuxRuntimeState) inspect.PeerLifecycleDebugView {
+func buildPeerLifecycleDebugView(rt *AppContext, common corestate.View, runtime *linuxRuntimeState, links map[string]linkInstanceState, reconcile *ipsecReconcileState) inspect.PeerLifecycleDebugView {
 	if common.State == nil || common.State.Network == nil || runtime == nil {
 		return inspect.PeerLifecycleDebugView{}
 	}
@@ -70,7 +70,7 @@ func buildPeerLifecycleDebugView(rt *AppContext, common corestate.View, runtime 
 	}
 	hasOverlay := rt != nil && rt.Config != nil && len(rt.Config.IPsec.LinkGroups) > 0
 
-	statuses := derivePeerStatuses(common.State.ManagedZone, common.State.Network, common.Gossip, runtime.PeerCleanups, runtime.LinkInstances, runtime.IPsecReconcile, now, cfg, hasOverlay)
+	statuses := derivePeerStatuses(common.State.ManagedZone, common.State.Network, common.Gossip, runtime.PeerCleanups, links, reconcile, now, cfg, hasOverlay)
 	return inspect.BuildPeerLifecycleDebug(cfg, statuses)
 }
 

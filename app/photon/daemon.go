@@ -624,7 +624,8 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		writeCanonicalView(conn, rootPublicKey)
 	case "status_view":
 		common, runtime := d.StateStore.readCommonAndRuntime()
-		writeCanonicalView(conn, statusViewFromOwners(d.App, common, d.runtimeWithObservation(runtime), d.healthStatusResponse(), true))
+		links, reconcile := d.ipsecStateSnapshot()
+		writeCanonicalView(conn, statusViewFromOwners(d.App, common, runtime, links, reconcile, d.healthStatusResponse(), true))
 	case "record_put":
 		if err := validateControlRecordPut(request); err != nil {
 			writeControlResponse(conn, controlError(err))
@@ -765,13 +766,13 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		endpoints := inspect.BuildEndpointDebug(view.State, d.now())
 		writeCanonicalView(conn, endpoints)
 	case "ping_targets":
-		common, runtime := d.StateStore.readCommonAndRuntime()
-		if common.State == nil || runtime == nil {
+		common, _ := d.StateStore.readCommonAndRuntime()
+		if common.State == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
 		}
-		runtime = d.runtimeWithObservation(runtime)
-		targets := linkstate.HealthTargets(buildLinkOutputs(runtime.LinkInstances, runtime.IPsecReconcile), string(common.State.ManagedZone))
+		links, reconcile := d.ipsecStateSnapshot()
+		targets := linkstate.HealthTargets(buildLinkOutputs(links, reconcile), string(common.State.ManagedZone))
 		writeCanonicalView(conn, inspectHealthProbeTargets(targets))
 	case "sync_view":
 		common, _ := d.StateStore.readCommonAndRuntime()
@@ -1079,7 +1080,8 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		writeCanonicalView(conn, buildPeerLifecycleDebugView(d.App, common, d.runtimeWithObservation(runtime)))
+		links, reconcile := d.ipsecStateSnapshot()
+		writeCanonicalView(conn, buildPeerLifecycleDebugView(d.App, common, runtime, links, reconcile))
 	case "gossip_peers_view":
 		writeCanonicalView(conn, d.gossipPeerSnapshotForControl())
 	case "revocation_view":
@@ -1104,8 +1106,9 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		d.StateStore.writeMu.Unlock()
 		writeCanonicalView(conn, impacts)
 	case "health_status":
-		common, runtime := d.StateStore.readCommonAndRuntime()
-		writeCanonicalView(conn, healthViewFromOwners(common, d.runtimeWithObservation(runtime), d.healthStatusResponse()))
+		common, _ := d.StateStore.readCommonAndRuntime()
+		links, reconcile := d.ipsecStateSnapshot()
+		writeCanonicalView(conn, healthViewFromOwners(common, links, reconcile, d.healthStatusResponse()))
 	default:
 		writeControlResponse(conn, controlError(fmt.Errorf("unknown control method: %s", request.Method)))
 	}
@@ -1485,18 +1488,15 @@ func (d *Daemon) handleRecoveryPurgeRevokedEvent(ctx context.Context, target zon
 	if common.State == nil || runtime == nil {
 		return nil, errors.New("daemon state is not loaded")
 	}
-	runtime = d.runtimeWithObservation(runtime)
-	plan := mergePurgePlan(commonPlan, runtime)
+	links, reconcile := d.ipsecStateSnapshot()
+	plan := mergePurgePlan(commonPlan, links)
 	if !apply {
 		return plan, nil
 	}
-	if err := d.cleanupPurgePlanIPsecLinks(ctx, runtime, plan); err != nil {
+	if err := d.cleanupPurgePlanIPsecLinks(ctx, links, reconcile, plan); err != nil {
 		return nil, err
 	}
 	if _, _, err := d.StateStore.commitRuntimeIfRevision(uint64(common.Revision), func(candidate *linuxRuntimeState) {
-		for _, id := range plan.LinkInstances {
-			delete(candidate.LinkInstances, id)
-		}
 		for _, peerID := range plan.SyncPeers {
 			delete(candidate.PeerCleanups, peerID)
 		}
@@ -1513,25 +1513,27 @@ func (d *Daemon) handleRecoveryPurgeRevokedEvent(ctx context.Context, target zon
 	if d.gossipDriver != nil && d.gossipDriver.Transport() != nil {
 		d.updateDiscoveredPeers()
 	}
-	d.linuxObservation.replaceIPsec(linkInstancesToIPsec(runtime.LinkInstances), runtime.IPsecReconcile)
 	if result.Committed || len(plan.LinkInstances) > 0 {
 		d.notifyStateChanged()
 	}
 	return plan, nil
 }
 
-func (d *Daemon) cleanupPurgePlanIPsecLinks(ctx context.Context, runtime *linuxRuntimeState, plan *purgePlan) error {
+func (d *Daemon) cleanupPurgePlanIPsecLinks(ctx context.Context, links map[string]linkInstanceState, reconcile *ipsecReconcileState, plan *purgePlan) error {
 	if plan == nil || len(plan.LinkInstances) == 0 {
 		return nil
 	}
-	if d == nil || runtime == nil || d.App == nil {
+	if d == nil || d.App == nil {
 		return errors.New("daemon service is not initialized")
 	}
 	platformDriver := d.linuxDriver
 	if platformDriver == nil {
 		return errors.New("linux driver is not initialized")
 	}
-	_, err := cleanupLinuxDriverIPsecLinks(ctx, runtime, plan.LinkInstances, platformDriver, d.now())
+	remaining, _, err := cleanupIPsecLinkInstanceSet(ctx, links, plan.LinkInstances, platformDriver)
+	if err == nil {
+		d.linuxObservation.replaceIPsec(linkInstancesToIPsec(remaining), markIPsecCleanupReconcile(reconcile, d.now()))
+	}
 	return err
 }
 

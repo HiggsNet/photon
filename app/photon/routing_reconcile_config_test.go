@@ -41,7 +41,7 @@ func TestReconcileRoutingGeneratesConfig(t *testing.T) {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
 
-	_, latest := readTestDaemonOwners(service)
+	_, latest := service.StateStore.readCommonAndRuntime()
 	if len(latest.BirdInstances) != 1 {
 		t.Fatalf("BirdInstances len = %d, want 1", len(latest.BirdInstances))
 	}
@@ -266,7 +266,7 @@ func TestReconcileRoutingStaleRevisionDoesNotCommitBirdInstance(t *testing.T) {
 	if !meta.Dirty.Routing {
 		t.Fatal("state store routing dirty flag = false, want retry visible to readers")
 	}
-	_, currentRuntime := readTestDaemonOwners(service)
+	_, currentRuntime := service.StateStore.readCommonAndRuntime()
 	if len(currentRuntime.BirdInstances) != 0 {
 		t.Fatalf("bird instances = %+v, want stale result discarded", currentRuntime.BirdInstances)
 	}
@@ -316,7 +316,7 @@ func TestReconcileRoutingExternalModeOnlyStatus(t *testing.T) {
 		t.Fatalf("external mode should call client.Status")
 	}
 
-	_, latest := readTestDaemonOwners(service)
+	_, latest := service.StateStore.readCommonAndRuntime()
 	inst := latest.BirdInstances["photontesth2"]
 	if inst == nil || inst.State != birdInstanceStateRunning {
 		t.Fatalf("external instance state = %+v, want running", inst)
@@ -346,7 +346,7 @@ func TestReconcileRoutingSkipsWhenDisabled(t *testing.T) {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
 
-	_, latest := readTestDaemonOwners(service)
+	_, latest := service.StateStore.readCommonAndRuntime()
 	if len(latest.BirdInstances) != 0 {
 		t.Fatalf("BirdInstances len = %d, want 0", len(latest.BirdInstances))
 	}

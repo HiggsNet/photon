@@ -30,7 +30,7 @@ func TestDaemonPurgeDryRunMergesCommonAndLinuxRuntimePlan(t *testing.T) {
 	now := time.Unix(123, 0)
 	verified.Network.Zones["leaf.node-b.catofes."] = zone.NewZoneState("leaf.node-b.catofes.", nil)
 	addRevocationTombstoneForTest(t, verified.Network, "node-b.catofes.", "catofes.")
-	runtime.LinkInstances = map[string]linkInstanceState{
+	observationLinks := map[string]linkInstanceState{
 		"link-b":     {ID: "link-b", PeerZone: "node-b.catofes."},
 		"link-leaf":  {ID: "link-leaf", PeerZone: "leaf.node-b.catofes."},
 		"link-other": {ID: "link-other", PeerZone: "node-c.catofes."},
@@ -41,7 +41,7 @@ func TestDaemonPurgeDryRunMergesCommonAndLinuxRuntimePlan(t *testing.T) {
 	service := newTestDaemonFromOwners(
 		&AppContext{Clock: func() time.Time { return now }}, verified, checkpoint, runtime, config, defaultDaemonInterval,
 	)
-	setTestIPsecObservation(service, runtime)
+	setTestIPsecObservation(service, observationLinks, nil)
 
 	plan, err := service.handleRecoveryPurgeRevokedEvent(context.Background(), "", false)
 	if err != nil {
@@ -52,8 +52,9 @@ func TestDaemonPurgeDryRunMergesCommonAndLinuxRuntimePlan(t *testing.T) {
 		!slices.Equal(plan.SyncPeers, []string{"leaf.node-b.catofes.", "node-b.catofes."}) {
 		t.Fatalf("merged purge plan = %+v", plan)
 	}
-	common, runtime := readTestDaemonOwners(service)
-	if common.State.Network.Zones["node-b.catofes."] == nil || runtime.LinkInstances["link-b"].ID == "" {
+	common, _ := service.StateStore.readCommonAndRuntime()
+	currentLinks, _ := readTestIPsecObservation(service)
+	if common.State.Network.Zones["node-b.catofes."] == nil || currentLinks["link-b"].ID == "" {
 		t.Fatal("dry-run mutated common or Linux runtime state")
 	}
 }

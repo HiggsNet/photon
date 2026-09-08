@@ -15,23 +15,21 @@ import (
 
 func TestHealthTargetsParseScopedNetNS(t *testing.T) {
 	managedZone := zone.ZonePath("node-a.catofes.")
-	runtime := &linuxRuntimeState{
-		LinkInstances: map[string]linkInstanceState{
-			"link-1": {ActualState: "up"},
-		},
-		IPsecReconcile: &ipsecReconcileState{
-			Desired: []desiredLinkState{{
-				InstanceID:      "link-1",
-				GroupID:         "blue",
-				PeerZone:        zone.ZonePath("node-b.catofes."),
-				InterfaceName:   "phx0",
-				LocalTunnelAddr: "fd00::1%phx0 netns=photontesth2",
-				PeerTunnelAddr:  "fd00::2%phx0 netns=photontesth2",
-			}},
-		},
+	links := map[string]linkInstanceState{
+		"link-1": {ActualState: "up"},
+	}
+	reconcile := &ipsecReconcileState{
+		Desired: []desiredLinkState{{
+			InstanceID:      "link-1",
+			GroupID:         "blue",
+			PeerZone:        zone.ZonePath("node-b.catofes."),
+			InterfaceName:   "phx0",
+			LocalTunnelAddr: "fd00::1%phx0 netns=photontesth2",
+			PeerTunnelAddr:  "fd00::2%phx0 netns=photontesth2",
+		}},
 	}
 
-	targets := linkstate.HealthTargets(buildLinkOutputs(runtime.LinkInstances, runtime.IPsecReconcile), string(managedZone))
+	targets := linkstate.HealthTargets(buildLinkOutputs(links, reconcile), string(managedZone))
 	if len(targets) != 1 {
 		t.Fatalf("targets = %d, want 1", len(targets))
 	}
@@ -49,33 +47,31 @@ func TestHealthTargetsParseScopedNetNS(t *testing.T) {
 
 func TestHealthTargetsUseRotatedRuntimeInterface(t *testing.T) {
 	managedZone := zone.ZonePath("node-a.catofes.")
-	runtime := &linuxRuntimeState{
-		LinkInstances: map[string]linkInstanceState{
-			"link-1": {
-				ActualState:           "up",
-				InterfaceName:         "phx-old",
-				LocalTunnelAddr:       "fe80::10",
-				PeerTunnelAddr:        "fe80::20",
-				StagedGeneration:      2,
-				RotatePhase:           "testing_new",
-				StagedInterfaceName:   "phx-new",
-				StagedLocalTunnelAddr: "fe80::11",
-				StagedPeerTunnelAddr:  "fe80::21",
-			},
-		},
-		IPsecReconcile: &ipsecReconcileState{
-			Desired: []desiredLinkState{{
-				InstanceID:      "link-1",
-				GroupID:         "blue",
-				PeerZone:        zone.ZonePath("node-b.catofes."),
-				InterfaceName:   "phx-desired",
-				LocalTunnelAddr: "fe80::1%phx-desired netns=photontesth2",
-				PeerTunnelAddr:  "fe80::2%phx-desired netns=photontesth2",
-			}},
+	links := map[string]linkInstanceState{
+		"link-1": {
+			ActualState:           "up",
+			InterfaceName:         "phx-old",
+			LocalTunnelAddr:       "fe80::10",
+			PeerTunnelAddr:        "fe80::20",
+			StagedGeneration:      2,
+			RotatePhase:           "testing_new",
+			StagedInterfaceName:   "phx-new",
+			StagedLocalTunnelAddr: "fe80::11",
+			StagedPeerTunnelAddr:  "fe80::21",
 		},
 	}
+	reconcile := &ipsecReconcileState{
+		Desired: []desiredLinkState{{
+			InstanceID:      "link-1",
+			GroupID:         "blue",
+			PeerZone:        zone.ZonePath("node-b.catofes."),
+			InterfaceName:   "phx-desired",
+			LocalTunnelAddr: "fe80::1%phx-desired netns=photontesth2",
+			PeerTunnelAddr:  "fe80::2%phx-desired netns=photontesth2",
+		}},
+	}
 
-	targets := linkstate.HealthTargets(buildLinkOutputs(runtime.LinkInstances, runtime.IPsecReconcile), string(managedZone))
+	targets := linkstate.HealthTargets(buildLinkOutputs(links, reconcile), string(managedZone))
 	if len(targets) != 2 {
 		t.Fatalf("targets = %d, want 2", len(targets))
 	}
@@ -87,56 +83,54 @@ func TestHealthTargetsUseRotatedRuntimeInterface(t *testing.T) {
 		t.Fatalf("old target = %+v, want old interface without staged flag", old)
 	}
 	if old := byRole["old"]; old.LocalTunnelAddr.String() != "fe80::10" || old.PeerTunnelAddr.String() != "fe80::20" {
-		t.Fatalf("old target addrs = %s/%s, want persisted old runtime addrs", old.LocalTunnelAddr, old.PeerTunnelAddr)
+		t.Fatalf("old target addrs = %s/%s, want observed old runtime addrs", old.LocalTunnelAddr, old.PeerTunnelAddr)
 	}
 	if staged := byRole["staged"]; staged.InterfaceName != "phx-new" || staged.ProbeID != "link-1#staged" || !staged.Staged {
 		t.Fatalf("staged target = %+v, want staged interface", staged)
 	}
 	if staged := byRole["staged"]; staged.LocalTunnelAddr.String() != "fe80::11" || staged.PeerTunnelAddr.String() != "fe80::21" {
-		t.Fatalf("staged target addrs = %s/%s, want persisted staged runtime addrs", staged.LocalTunnelAddr, staged.PeerTunnelAddr)
+		t.Fatalf("staged target addrs = %s/%s, want observed staged runtime addrs", staged.LocalTunnelAddr, staged.PeerTunnelAddr)
 	}
 	if staged := byRole["staged"]; staged.State != "up" {
 		t.Fatalf("staged target state = %q, want up", staged.State)
 	}
 }
 
-func TestHealthTargetsUsePersistedDesiredTunnelAddressesForActive(t *testing.T) {
+func TestHealthTargetsUseObservedDesiredTunnelAddressesForActive(t *testing.T) {
 	local := zone.ZonePath("less.catofes.")
 	peer := zone.ZonePath("more.catofes.")
 	group := ipsec.LinkGroupSpec{ID: "blue"}.Normalized()
-	runtime := &linuxRuntimeState{
-		LinkInstances: map[string]linkInstanceState{
-			"link-1": {
-				ID:               "link-1",
-				ActualState:      "up",
-				InterfaceName:    "phxa0f3bb66",
-				RemoteGeneration: 1,
-			},
-		},
-		IPsecReconcile: &ipsecReconcileState{
-			Desired: []desiredLinkState{{
-				InstanceID:      "link-1",
-				GroupID:         group.ID,
-				PeerZone:        peer,
-				LinkID:          "link-1",
-				PathKey:         "family:ipv4",
-				InterfaceName:   "phxa0f3bb66",
-				LocalTunnelAddr: "fe80::7454:3eca:1ff:6f5a%phxa0f3bb66 netns=photontesth2",
-				PeerTunnelAddr:  "fe80::91eb:8d94:108b:d6d%phxa0f3bb66 netns=photontesth2",
-			}},
+	links := map[string]linkInstanceState{
+		"link-1": {
+			ID:               "link-1",
+			ActualState:      "up",
+			InterfaceName:    "phxa0f3bb66",
+			RemoteGeneration: 1,
 		},
 	}
+	reconcile := &ipsecReconcileState{
+		Desired: []desiredLinkState{{
+			InstanceID:      "link-1",
+			GroupID:         group.ID,
+			PeerZone:        peer,
+			LinkID:          "link-1",
+			PathKey:         "family:ipv4",
+			InterfaceName:   "phxa0f3bb66",
+			LocalTunnelAddr: "fe80::7454:3eca:1ff:6f5a%phxa0f3bb66 netns=photontesth2",
+			PeerTunnelAddr:  "fe80::91eb:8d94:108b:d6d%phxa0f3bb66 netns=photontesth2",
+		}},
+	}
 
-	targets := linkstate.HealthTargets(buildLinkOutputs(runtime.LinkInstances, runtime.IPsecReconcile), string(local))
+	targets := linkstate.HealthTargets(buildLinkOutputs(links, reconcile), string(local))
 	if len(targets) != 1 {
 		t.Fatalf("targets = %d, want 1", len(targets))
 	}
 	target := targets[0]
 	if got := target.LocalTunnelAddr.String(); got != "fe80::7454:3eca:1ff:6f5a" {
-		t.Fatalf("local tunnel addr = %q, want persisted desired address", got)
+		t.Fatalf("local tunnel addr = %q, want observed desired address", got)
 	}
 	if got := target.PeerTunnelAddr.String(); got != "fe80::91eb:8d94:108b:d6d" {
-		t.Fatalf("peer tunnel addr = %q, want persisted desired address", got)
+		t.Fatalf("peer tunnel addr = %q, want observed desired address", got)
 	}
 	if target.InterfaceName != "phxa0f3bb66" || target.NetNS != "photontesth2" {
 		t.Fatalf("target scope = iface %q netns %q, want phxa0f3bb66/photontesth2", target.InterfaceName, target.NetNS)
@@ -146,7 +140,7 @@ func TestHealthTargetsUsePersistedDesiredTunnelAddressesForActive(t *testing.T) 
 	}
 }
 
-func TestHealthTargetsSkipRotateProbeWithoutPersistedRuntimeTunnelAddresses(t *testing.T) {
+func TestHealthTargetsSkipRotateProbeWithoutObservedRuntimeTunnelAddresses(t *testing.T) {
 	local := zone.ZonePath("node-a.catofes.")
 	peer := zone.ZonePath("node-b.catofes.")
 	group := ipsec.LinkGroupSpec{ID: "blue"}.Normalized()
@@ -156,35 +150,33 @@ func TestHealthTargetsSkipRotateProbeWithoutPersistedRuntimeTunnelAddresses(t *t
 	if err != nil {
 		t.Fatalf("derive staged tunnel addresses: %v", err)
 	}
-	runtime := &linuxRuntimeState{
-		LinkInstances: map[string]linkInstanceState{
-			linkID: {
-				ID:                  linkID,
-				ActualState:         "up",
-				InterfaceName:       "phx-old",
-				RemoteGeneration:    1,
-				StagedGeneration:    2,
-				RotatePhase:         "testing_new",
-				StagedInterfaceName: "phx-new",
-			},
-		},
-		IPsecReconcile: &ipsecReconcileState{
-			Desired: []desiredLinkState{{
-				InstanceID:      linkID,
-				GroupID:         group.ID,
-				PeerZone:        peer,
-				LinkID:          linkID,
-				PathKey:         pathKey,
-				InterfaceName:   "phx-new",
-				LocalTunnelAddr: ipsec.FormatScopedTunnelAddress(newLocal, "phx-new", "photontesth2"),
-				PeerTunnelAddr:  ipsec.FormatScopedTunnelAddress(newPeer, "phx-new", "photontesth2"),
-			}},
+	links := map[string]linkInstanceState{
+		linkID: {
+			ID:                  linkID,
+			ActualState:         "up",
+			InterfaceName:       "phx-old",
+			RemoteGeneration:    1,
+			StagedGeneration:    2,
+			RotatePhase:         "testing_new",
+			StagedInterfaceName: "phx-new",
 		},
 	}
+	reconcile := &ipsecReconcileState{
+		Desired: []desiredLinkState{{
+			InstanceID:      linkID,
+			GroupID:         group.ID,
+			PeerZone:        peer,
+			LinkID:          linkID,
+			PathKey:         pathKey,
+			InterfaceName:   "phx-new",
+			LocalTunnelAddr: ipsec.FormatScopedTunnelAddress(newLocal, "phx-new", "photontesth2"),
+			PeerTunnelAddr:  ipsec.FormatScopedTunnelAddress(newPeer, "phx-new", "photontesth2"),
+		}},
+	}
 
-	targets := linkstate.HealthTargets(buildLinkOutputs(runtime.LinkInstances, runtime.IPsecReconcile), string(local))
+	targets := linkstate.HealthTargets(buildLinkOutputs(links, reconcile), string(local))
 	if len(targets) != 0 {
-		t.Fatalf("targets = %+v, want no guessed rotate probes without persisted runtime tunnel addrs", targets)
+		t.Fatalf("targets = %+v, want no guessed rotate probes without observed runtime tunnel addrs", targets)
 	}
 }
 

@@ -36,28 +36,28 @@ func TestDaemonStateChangedRemovesTeardownIPsecLinks(t *testing.T) {
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
 	service.notifyStateChanged()
-	_, latest := readTestDaemonOwners(service)
-	if len(latest.LinkInstances) != 1 {
-		t.Fatalf("link instances len = %d, want 1", len(latest.LinkInstances))
+	latestLinks, _ := readTestIPsecObservation(service)
+	if len(latestLinks) != 1 {
+		t.Fatalf("link instances len = %d, want 1", len(latestLinks))
 	}
 
 	appConfig.IPsec.LinkGroups = nil
 	service.notifyStateChanged()
-	_, removed := readTestDaemonOwners(service)
-	if len(removed.LinkInstances) != 0 {
-		t.Fatalf("link instances after teardown = %+v, want none", removed.LinkInstances)
+	removedLinks, removedReconcile := readTestIPsecObservation(service)
+	if len(removedLinks) != 0 {
+		t.Fatalf("link instances after teardown = %+v, want none", removedLinks)
 	}
-	if len(removed.IPsecReconcile.Actions) != 1 || removed.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionTeardown {
-		t.Fatalf("teardown actions = %+v, want one teardown", removed.IPsecReconcile.Actions)
+	if len(removedReconcile.Actions) != 1 || removedReconcile.Actions[0].Action != ipsec.ReconcileActionTeardown {
+		t.Fatalf("teardown actions = %+v, want one teardown", removedReconcile.Actions)
 	}
 
 	service.notifyStateChanged()
-	_, stable := readTestDaemonOwners(service)
-	if len(stable.LinkInstances) != 0 {
-		t.Fatalf("stable link instances = %+v, want none", stable.LinkInstances)
+	stableLinks, stableReconcile := readTestIPsecObservation(service)
+	if len(stableLinks) != 0 {
+		t.Fatalf("stable link instances = %+v, want none", stableLinks)
 	}
-	if len(stable.IPsecReconcile.Actions) != 0 {
-		t.Fatalf("stable actions = %+v, want no repeated teardown", stable.IPsecReconcile.Actions)
+	if len(stableReconcile.Actions) != 0 {
+		t.Fatalf("stable actions = %+v, want no repeated teardown", stableReconcile.Actions)
 	}
 }
 
@@ -101,19 +101,19 @@ func TestDaemonStateChangedAdoptsObservedIPsecSA(t *testing.T) {
 
 	service.notifyStateChanged()
 
-	_, latest := readTestDaemonOwners(service)
-	if len(latest.IPsecReconcile.Actions) != 1 || latest.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionAdopt {
-		t.Fatalf("actions = %+v, want adopt", latest.IPsecReconcile.Actions)
+	latestLinks, latestReconcile := readTestIPsecObservation(service)
+	if len(latestReconcile.Actions) != 1 || latestReconcile.Actions[0].Action != ipsec.ReconcileActionAdopt {
+		t.Fatalf("actions = %+v, want adopt", latestReconcile.Actions)
 	}
-	inst := latest.LinkInstances[ipsec.LinkInstanceID(spec)]
+	inst := latestLinks[ipsec.LinkInstanceID(spec)]
 	if inst.ActualState != ipsec.LinkStateUp || inst.Endpoint != "198.51.100.20" {
 		t.Fatalf("instance = %+v, want up adopted endpoint", inst)
 	}
-	if latest.IPsecReconcile == nil || len(latest.IPsecReconcile.Desired) != 1 || len(latest.IPsecReconcile.ActualSAs) != 1 {
-		t.Fatalf("ipsec reconcile detail = %+v, want desired and actual sa snapshots", latest.IPsecReconcile)
+	if latestReconcile == nil || len(latestReconcile.Desired) != 1 || len(latestReconcile.ActualSAs) != 1 {
+		t.Fatalf("ipsec reconcile detail = %+v, want desired and actual sa snapshots", latestReconcile)
 	}
 	var out bytes.Buffer
-	view := buildStoredLinkInspection(rt, latest.LinkInstances, latest.IPsecReconcile, latest.BirdInstances, nil)
+	view := buildStoredLinkInspection(rt, latestLinks, latestReconcile, nil, nil)
 	if err := inspecttext.WriteLinksDebug(&out, view); err != nil {
 		t.Fatalf("WriteLinksDebug: %v", err)
 	}
@@ -159,10 +159,6 @@ func TestDaemonStartupRecoversIPsecLinkState(t *testing.T) {
 		t.Fatalf("desired links = %d, want 1", len(plan.Desired))
 	}
 	spec := plan.Desired[0]
-	persisted := ipsec.NewLinkInstance(spec, ipsec.LinkStateConnecting, now.Add(-time.Minute))
-	runtime.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{
-		persisted.ID: persisted,
-	})
 	driver := &observedIPsecDriver{
 		sas: []ipsec.SAState{{
 			Name:        spec.TransportID,
@@ -185,13 +181,13 @@ func TestDaemonStartupRecoversIPsecLinkState(t *testing.T) {
 	if driver.listCalls != 1 {
 		t.Fatalf("ListSAs calls = %d, want 1", driver.listCalls)
 	}
-	_, latest := readTestDaemonOwners(service)
-	inst := latest.LinkInstances[ipsec.LinkInstanceID(spec)]
+	latestLinks, latestReconcile := readTestIPsecObservation(service)
+	inst := latestLinks[ipsec.LinkInstanceID(spec)]
 	if inst.ActualState != ipsec.LinkStateUp || inst.Endpoint != "198.51.100.20" {
 		t.Fatalf("startup recovered instance = %+v, want up adopted endpoint", inst)
 	}
-	if latest.IPsecReconcile == nil || len(latest.IPsecReconcile.Actions) != 1 || latest.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionAdopt {
-		t.Fatalf("startup reconcile = %+v, want adopt", latest.IPsecReconcile)
+	if latestReconcile == nil || len(latestReconcile.Actions) != 1 || latestReconcile.Actions[0].Action != ipsec.ReconcileActionAdopt {
+		t.Fatalf("startup reconcile = %+v, want adopt", latestReconcile)
 	}
 	if len(driver.Connections) != 0 || len(driver.Interfaces) != 0 {
 		t.Fatalf("startup adopt maintenance = connections:%d interfaces:%+v, want no redundant apply when observed state matches", len(driver.Connections), driver.Interfaces)
@@ -238,17 +234,17 @@ func TestDaemonStartupRecreatesWhenEstablishedSAHasNoXFRMLink(t *testing.T) {
 
 	service.recoverIPsecLinksOnStart(context.Background())
 
-	_, latest := readTestDaemonOwners(service)
-	if latest.IPsecReconcile == nil || len(latest.IPsecReconcile.Actions) != 1 || latest.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionCreate {
-		t.Fatalf("startup reconcile = %+v, want create", latest.IPsecReconcile)
+	latestLinks, latestReconcile := readTestIPsecObservation(service)
+	if latestReconcile == nil || len(latestReconcile.Actions) != 1 || latestReconcile.Actions[0].Action != ipsec.ReconcileActionCreate {
+		t.Fatalf("startup reconcile = %+v, want create", latestReconcile)
 	}
-	inst := latest.LinkInstances[ipsec.LinkInstanceID(spec)]
+	inst := latestLinks[ipsec.LinkInstanceID(spec)]
 	if inst.ActualState != ipsec.LinkStateConnecting {
 		t.Fatalf("instance = %+v, want connecting after repair apply", inst)
 	}
 	assertDryRunApply(t, driver, spec, group.NetNS)
-	if len(latest.IPsecReconcile.ActualSAs) != 0 {
-		t.Fatalf("actual SAs = %+v, want missing xfrm link to suppress matching SA", latest.IPsecReconcile.ActualSAs)
+	if len(latestReconcile.ActualSAs) != 0 {
+		t.Fatalf("actual SAs = %+v, want missing xfrm link to suppress matching SA", latestReconcile.ActualSAs)
 	}
 }
 
@@ -280,15 +276,6 @@ func TestDaemonStartupKeepsRotatedRuntimeSAWhenActiveXFRMLinkExists(t *testing.T
 	rotatedIKE := ipsec.RuntimeConnectionID(ipsec.LinkInstanceID(rotatedDesired), 2, rotatedDesired.Provider)
 	rotatedIfID := ipsec.RuntimeXFRMIfID(ipsec.LinkInstanceID(rotatedDesired), 2, rotatedDesired.Provider)
 	rotatedInterface := ipsec.StableInterfaceName(rotatedIfID)
-	persisted := ipsec.NewLinkInstance(rotatedDesired, ipsec.LinkStateUp, now)
-	persisted.RemoteGeneration = 2
-	persisted.IKEName = rotatedIKE
-	persisted.ChildSAName = rotatedIKE + "-child"
-	persisted.InterfaceName = rotatedInterface
-	persisted.XFRMIfID = rotatedIfID
-	runtime.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{
-		persisted.ID: persisted,
-	})
 	driver := &observedIPsecDriver{
 		sas: []ipsec.SAState{{
 			Name:        rotatedIKE,
@@ -321,16 +308,16 @@ func TestDaemonStartupKeepsRotatedRuntimeSAWhenActiveXFRMLinkExists(t *testing.T
 
 	service.recoverIPsecLinksOnStart(context.Background())
 
-	_, latest := readTestDaemonOwners(service)
-	if latest.IPsecReconcile == nil || len(latest.IPsecReconcile.ActualSAs) != 1 {
-		t.Fatalf("startup reconcile actual SAs = %+v, want rotated SA retained", latest.IPsecReconcile)
+	latestLinks, latestReconcile := readTestIPsecObservation(service)
+	if latestReconcile == nil || len(latestReconcile.ActualSAs) != 1 {
+		t.Fatalf("startup reconcile actual SAs = %+v, want rotated SA retained", latestReconcile)
 	}
-	for _, action := range latest.IPsecReconcile.Actions {
+	for _, action := range latestReconcile.Actions {
 		if action.Action == ipsec.ReconcileActionRepair {
 			t.Fatalf("startup reconcile action = %+v, want no repair for existing rotated xfrm link", action)
 		}
 	}
-	inst := latest.LinkInstances[ipsec.LinkInstanceID(rotatedDesired)]
+	inst := latestLinks[ipsec.LinkInstanceID(rotatedDesired)]
 	if inst.InterfaceName != rotatedInterface || inst.XFRMIfID != rotatedIfID || inst.RemoteGeneration != 2 {
 		t.Fatalf("instance = %+v, want rotated runtime interface %s/%d generation 2", inst, rotatedInterface, rotatedIfID)
 	}
@@ -370,13 +357,13 @@ func TestDaemonStartupCreatesWhenNoRuntimeResourcesObserved(t *testing.T) {
 		t.Fatalf("ListSAs calls = %d, want 1", driver.listCalls)
 	}
 	assertDryRunApply(t, driver, spec, group.NetNS)
-	_, latest := readTestDaemonOwners(service)
-	inst := latest.LinkInstances[ipsec.LinkInstanceID(spec)]
+	latestLinks, latestReconcile := readTestIPsecObservation(service)
+	inst := latestLinks[ipsec.LinkInstanceID(spec)]
 	if inst.ActualState != ipsec.LinkStateConnecting {
 		t.Fatalf("startup repaired instance = %+v, want connecting", inst)
 	}
-	if latest.IPsecReconcile == nil || len(latest.IPsecReconcile.Actions) != 1 || latest.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionCreate {
-		t.Fatalf("startup reconcile = %+v, want create", latest.IPsecReconcile)
+	if latestReconcile == nil || len(latestReconcile.Actions) != 1 || latestReconcile.Actions[0].Action != ipsec.ReconcileActionCreate {
+		t.Fatalf("startup reconcile = %+v, want create", latestReconcile)
 	}
 }
 
@@ -398,10 +385,11 @@ func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
 	installTestIPsecDrivers(service, driver, driver)
 
 	service.notifyStateChanged()
-	common, latest := readTestDaemonOwners(service)
-	spec := singleDesiredSpec(t, common.State.ManagedZone, latest)
-	if len(latest.LinkInstances) != 1 {
-		t.Fatalf("link instances after create = %+v, want one", latest.LinkInstances)
+	common, persistedRuntime := service.StateStore.readCommonAndRuntime()
+	latestLinks, latestReconcile := readTestIPsecObservation(service)
+	spec := singleDesiredSpec(t, common.State.ManagedZone, latestReconcile)
+	if len(latestLinks) != 1 {
+		t.Fatalf("link instances after create = %+v, want one", latestLinks)
 	}
 
 	parent := common.State.Network.Zones["catofes."]
@@ -414,29 +402,29 @@ func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
 		Reason:                "ipsec smoke revoke",
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
-	service = newTestDaemonFromOwners(rt, common.State, common.Gossip, latest, config, time.Second)
-	service.linuxObservation.replaceIPsec(linkInstancesToIPsec(latest.LinkInstances), latest.IPsecReconcile)
+	service = newTestDaemonFromOwners(rt, common.State, common.Gossip, persistedRuntime, config, time.Second)
+	service.linuxObservation.replaceIPsec(linkInstancesToIPsec(latestLinks), latestReconcile)
 	installTestIPsecDrivers(service, driver, driver)
 	service.notifyStateChanged()
 
-	_, revoked := readTestDaemonOwners(service)
-	if len(revoked.LinkInstances) != 0 {
-		t.Fatalf("link instances after revoke = %+v, want none", revoked.LinkInstances)
+	revokedLinks, revokedReconcile := readTestIPsecObservation(service)
+	if len(revokedLinks) != 0 {
+		t.Fatalf("link instances after revoke = %+v, want none", revokedLinks)
 	}
-	if revoked.IPsecReconcile == nil || len(revoked.IPsecReconcile.Actions) != 1 || revoked.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionTeardown {
-		t.Fatalf("revoke reconcile = %+v, want teardown", revoked.IPsecReconcile)
+	if revokedReconcile == nil || len(revokedReconcile.Actions) != 1 || revokedReconcile.Actions[0].Action != ipsec.ReconcileActionTeardown {
+		t.Fatalf("revoke reconcile = %+v, want teardown", revokedReconcile)
 	}
 	if len(driver.Terminated) != 1 || driver.Terminated[0] != spec.TransportID || len(driver.Unloaded) != 1 || driver.Unloaded[0] != spec.TransportID || len(driver.DeletedIFs) != 1 || driver.DeletedIFs[0] != spec.InterfaceName {
 		t.Fatalf("teardown driver state terminated=%+v unloaded=%+v deleted=%+v", driver.Terminated, driver.Unloaded, driver.DeletedIFs)
 	}
-	if !hasDebugSkip(revoked.IPsecReconcile.Skipped, "node-b.catofes.", ipsec.SkipRevokedZone) {
-		t.Fatalf("skips = %+v, want revoked zone", revoked.IPsecReconcile.Skipped)
+	if !hasDebugSkip(revokedReconcile.Skipped, "node-b.catofes.", ipsec.SkipRevokedZone) {
+		t.Fatalf("skips = %+v, want revoked zone", revokedReconcile.Skipped)
 	}
 
 	service.notifyStateChanged()
-	_, stable := readTestDaemonOwners(service)
-	if len(stable.LinkInstances) != 0 || len(stable.IPsecReconcile.Actions) != 0 || stable.IPsecReconcile.DesiredLinks != 0 {
-		t.Fatalf("stable revoked reconcile = %+v instances=%+v, want no recreate", stable.IPsecReconcile, stable.LinkInstances)
+	stableLinks, stableReconcile := readTestIPsecObservation(service)
+	if len(stableLinks) != 0 || len(stableReconcile.Actions) != 0 || stableReconcile.DesiredLinks != 0 {
+		t.Fatalf("stable revoked reconcile = %+v instances=%+v, want no recreate", stableReconcile, stableLinks)
 	}
 }
 
@@ -451,19 +439,19 @@ func TestCleanupIPsecLinkInstancesTearsDownManagedLinks(t *testing.T) {
 		XFRMIfID:      5100,
 	}
 	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, now)
-	runtime := &linuxRuntimeState{LinkInstances: linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})}
+	links := linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
 	driver := &ipsec.DryRunDriver{}
 
 	platformDriver := newTestLinuxDriver(driver, driver)
-	cleaned, err := cleanupLinuxDriverIPsecLinks(context.Background(), runtime, []string{inst.ID}, platformDriver, now)
+	remaining, cleaned, err := cleanupIPsecLinkInstanceSet(context.Background(), links, []string{inst.ID}, platformDriver)
 	if err != nil {
 		t.Fatalf("cleanupLinuxDriverIPsecLinks: %v", err)
 	}
 	if cleaned != 1 {
 		t.Fatalf("cleaned = %d, want 1", cleaned)
 	}
-	if len(runtime.LinkInstances) != 0 {
-		t.Fatalf("link instances = %+v, want empty", runtime.LinkInstances)
+	if len(remaining) != 0 {
+		t.Fatalf("link instances = %+v, want empty", remaining)
 	}
 	if len(driver.Terminated) != 1 || driver.Terminated[0] != spec.TransportID {
 		t.Fatalf("terminated = %+v, want %s", driver.Terminated, spec.TransportID)
@@ -473,9 +461,6 @@ func TestCleanupIPsecLinkInstancesTearsDownManagedLinks(t *testing.T) {
 	}
 	if len(driver.DeletedIFs) != 1 || driver.DeletedIFs[0] != spec.InterfaceName {
 		t.Fatalf("deleted interfaces = %+v, want %s", driver.DeletedIFs, spec.InterfaceName)
-	}
-	if runtime.IPsecReconcile == nil || runtime.IPsecReconcile.LastRunUnix != now.Unix() || runtime.IPsecReconcile.LastError != "" {
-		t.Fatalf("ipsec reconcile = %+v, want cleanup timestamp and no error", runtime.IPsecReconcile)
 	}
 }
 
@@ -492,7 +477,7 @@ func TestRecoveryPurgeRevokedApplyCleansIPsecLinksBeforeDeletingState(t *testing
 		XFRMIfID:      5101,
 	}
 	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, now)
-	runtime.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
+	observationLinks := linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
 	checkpoint.Peers = map[string]corestate.PeerCheckpoint{"node-b.catofes.": {}}
 	rt := &AppContext{
 		Config:    defaultAppConfig(),
@@ -501,7 +486,7 @@ func TestRecoveryPurgeRevokedApplyCleansIPsecLinksBeforeDeletingState(t *testing
 	}
 	driver := &ipsec.DryRunDriver{}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-	setTestIPsecObservation(service, runtime)
+	setTestIPsecObservation(service, observationLinks, nil)
 	installTestIPsecDrivers(service, driver, driver)
 
 	plan, err := service.handleRecoveryPurgeRevokedEvent(context.Background(), "", true)
@@ -520,25 +505,25 @@ func TestRecoveryPurgeRevokedApplyCleansIPsecLinksBeforeDeletingState(t *testing
 	if len(driver.DeletedIFs) != 1 || driver.DeletedIFs[0] != spec.InterfaceName {
 		t.Fatalf("deleted interfaces = %+v, want %s", driver.DeletedIFs, spec.InterfaceName)
 	}
-	common, latest := readTestDaemonOwners(service)
+	common, _ := service.StateStore.readCommonAndRuntime()
+	latestLinks, latestReconcile := readTestIPsecObservation(service)
 	if common.State.Network.Zones["node-b.catofes."] != nil {
 		t.Fatalf("revoked zone still present after purge")
 	}
-	if _, ok := latest.LinkInstances[inst.ID]; ok {
+	if _, ok := latestLinks[inst.ID]; ok {
 		t.Fatalf("revoked link instance still present after purge")
 	}
 	if _, ok := common.Gossip.Peers["node-b.catofes."]; ok {
 		t.Fatalf("revoked sync peer still present after purge")
 	}
-	if latest.IPsecReconcile == nil || latest.IPsecReconcile.LastRunUnix != now.Unix() {
-		t.Fatalf("ipsec cleanup snapshot = %+v, want timestamp", latest.IPsecReconcile)
+	if latestReconcile == nil || latestReconcile.LastRunUnix != now.Unix() {
+		t.Fatalf("ipsec cleanup snapshot = %+v, want timestamp", latestReconcile)
 	}
 }
 
 func TestRecoveryCleanupIPsecDirectNoLinksDoesNotRequireVICI(t *testing.T) {
 	verified, checkpoint, runtime, _ := buildTestDaemonOwners(t)
 	verified.ManagedZone = "node-b.catofes."
-	runtime.LinkInstances = nil
 	now := time.Unix(5105, 0)
 	rt := &AppContext{
 		Config:    defaultAppConfig(),
@@ -555,15 +540,6 @@ func TestRecoveryCleanupIPsecDirectNoLinksDoesNotRequireVICI(t *testing.T) {
 	}
 	if orphans != 0 {
 		t.Fatalf("orphans = %d, want 0", orphans)
-	}
-	boltStore, startup, err := openLinuxDaemonState(rt)
-	if err != nil {
-		t.Fatalf("openLinuxDaemonState: %v", err)
-	}
-	defer boltStore.Close()
-	defer startup.Common.Close()
-	if startup.Runtime.IPsecReconcile != nil || len(startup.Runtime.LinkInstances) != 0 {
-		t.Fatalf("offline cleanup persisted observation fields: links=%+v reconcile=%+v", startup.Runtime.LinkInstances, startup.Runtime.IPsecReconcile)
 	}
 }
 
@@ -620,7 +596,7 @@ func TestDaemonIPsecCleanupEventTearsDownManagedLinks(t *testing.T) {
 	}
 	spec := plan.Desired[0]
 	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, now)
-	runtime.LinkInstances = linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
+	observationLinks := linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
 	rt := &AppContext{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
@@ -628,7 +604,7 @@ func TestDaemonIPsecCleanupEventTearsDownManagedLinks(t *testing.T) {
 	}
 	driver := &observedIPsecDriver{}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-	setTestIPsecObservation(service, runtime)
+	setTestIPsecObservation(service, observationLinks, nil)
 	installTestIPsecDrivers(service, driver, driver)
 
 	reply := make(chan daemonEventResult, 1)
@@ -644,11 +620,11 @@ func TestDaemonIPsecCleanupEventTearsDownManagedLinks(t *testing.T) {
 	if !ipsecFlushed {
 		t.Fatal("ipsec cleanup did not flush reconcile")
 	}
-	_, latest := readTestDaemonOwners(service)
-	if len(latest.LinkInstances) != 1 {
-		t.Fatalf("persisted link instances = %+v, want recreated link", latest.LinkInstances)
+	latestLinks, _ := readTestIPsecObservation(service)
+	if len(latestLinks) != 1 {
+		t.Fatalf("observed link instances = %+v, want recreated link", latestLinks)
 	}
-	recreated := latest.LinkInstances[ipsec.LinkInstanceID(spec)]
+	recreated := latestLinks[ipsec.LinkInstanceID(spec)]
 	if recreated.ActualState != ipsec.LinkStateConnecting {
 		t.Fatalf("recreated instance = %+v, want connecting", recreated)
 	}
@@ -662,7 +638,6 @@ func TestDaemonIPsecCleanupEventTearsDownManagedLinks(t *testing.T) {
 
 func TestDaemonIPsecCleanupEventCanCleanOrphanConnections(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	runtime.LinkInstances = nil
 	now := time.Unix(5112, 0)
 	rt := &AppContext{
 		Config:    defaultAppConfig(),

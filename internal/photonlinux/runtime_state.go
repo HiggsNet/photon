@@ -7,19 +7,14 @@ import photonstate "github.com/HiggsNet/photon/internal/state"
 type RuntimeState struct {
 	PeerCleanups      map[string]photonstate.PeerLifecycleCleanupState `json:"peer_cleanups,omitempty"`
 	IPsecTransportKey *photonstate.IPsecTransportKeyState              `json:"ipsec_transport_key,omitempty"`
-	// LinkInstances and IPsecReconcile are temporary in-process projection
-	// slots for callers being moved to LinuxObservation. They are never
-	// decoded, cloned or persisted.
-	LinkInstances     map[string]photonstate.LinkInstanceState  `json:"-"`
-	IPsecReconcile    *photonstate.IPsecReconcileState          `json:"-"`
-	RoutingReconcile  *photonstate.RoutingReconcileState        `json:"routing_reconcile,omitempty"`
-	FirewallReconcile *photonstate.FirewallReconcileState       `json:"firewall_reconcile,omitempty"`
-	EndpointACLs      map[string]photonstate.EndpointACL        `json:"endpoint_acls,omitempty"`
-	BirdInstances     map[string]*photonstate.BirdInstanceState `json:"bird_instances,omitempty"`
+	RoutingReconcile  *photonstate.RoutingReconcileState               `json:"routing_reconcile,omitempty"`
+	FirewallReconcile *photonstate.FirewallReconcileState              `json:"firewall_reconcile,omitempty"`
+	EndpointACLs      map[string]photonstate.EndpointACL               `json:"endpoint_acls,omitempty"`
+	BirdInstances     map[string]*photonstate.BirdInstanceState        `json:"bird_instances,omitempty"`
 }
 
-// CloneRuntimeState returns a detached controller candidate suitable for
-// observe/plan/commit without publishing mutations into the live owner.
+// CloneRuntimeState returns a detached persistent-state candidate suitable for
+// plan/commit without publishing mutations into the live owner.
 func CloneRuntimeState(runtime *RuntimeState) *RuntimeState {
 	if runtime == nil {
 		return &RuntimeState{}

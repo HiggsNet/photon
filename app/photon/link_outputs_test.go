@@ -9,28 +9,26 @@ import (
 )
 
 func TestLinkOutputsProjectIPsecRuntimeWithoutLifecycleState(t *testing.T) {
-	runtime := &linuxRuntimeState{
-		LinkInstances: map[string]linkInstanceState{
-			"instance-a": {
-				ID:               "instance-a",
-				LinkID:           "link-a",
-				GroupID:          "blue",
-				PeerZone:         "node-b.catofes.",
-				TransportKind:    ipsec.ProviderStrongSwan,
-				PathKey:          "family:ipv6",
-				ActualState:      "up",
-				InterfaceName:    "phx0",
-				LocalTunnelAddr:  "fe80::1%phx0 netns=photon",
-				PeerTunnelAddr:   "fe80::2%phx0 netns=photon",
-				RemoteGeneration: 3,
-				Endpoint:         "198.51.100.2:4500",
-				LastTransition:   123,
-				Owner:            linkOwnerState{Token: "must-not-leak"},
-			},
+	links := map[string]linkInstanceState{
+		"instance-a": {
+			ID:               "instance-a",
+			LinkID:           "link-a",
+			GroupID:          "blue",
+			PeerZone:         "node-b.catofes.",
+			TransportKind:    ipsec.ProviderStrongSwan,
+			PathKey:          "family:ipv6",
+			ActualState:      "up",
+			InterfaceName:    "phx0",
+			LocalTunnelAddr:  "fe80::1%phx0 netns=photon",
+			PeerTunnelAddr:   "fe80::2%phx0 netns=photon",
+			RemoteGeneration: 3,
+			Endpoint:         "198.51.100.2:4500",
+			LastTransition:   123,
+			Owner:            linkOwnerState{Token: "must-not-leak"},
 		},
 	}
 
-	got := buildLinkOutputs(runtime.LinkInstances, runtime.IPsecReconcile)
+	got := buildLinkOutputs(links, nil)
 	if len(got) != 1 {
 		t.Fatalf("outputs = %d, want 1", len(got))
 	}
@@ -50,28 +48,26 @@ func TestLinkOutputsProjectIPsecRuntimeWithoutLifecycleState(t *testing.T) {
 }
 
 func TestLinkOutputsProjectStagedRuntimeSeparately(t *testing.T) {
-	runtime := &linuxRuntimeState{
-		LinkInstances: map[string]linkInstanceState{
-			"link-a": {
-				ID:                    "link-a",
-				GroupID:               "blue",
-				ActualState:           "up",
-				InterfaceName:         "phx-old",
-				LocalTunnelAddr:       "fe80::1%phx-old netns=photon",
-				PeerTunnelAddr:        "fe80::2%phx-old netns=photon",
-				RemoteGeneration:      1,
-				StagedGeneration:      2,
-				RotatePhase:           "testing_new",
-				StagedInterfaceName:   "phx-new",
-				StagedLocalTunnelAddr: "fe80::3%phx-new netns=photon",
-				StagedPeerTunnelAddr:  "fe80::4%phx-new netns=photon",
-				StagedIKEName:         "provider-private-runtime-name",
-				StagedChildSAName:     "provider-private-child-name",
-			},
+	links := map[string]linkInstanceState{
+		"link-a": {
+			ID:                    "link-a",
+			GroupID:               "blue",
+			ActualState:           "up",
+			InterfaceName:         "phx-old",
+			LocalTunnelAddr:       "fe80::1%phx-old netns=photon",
+			PeerTunnelAddr:        "fe80::2%phx-old netns=photon",
+			RemoteGeneration:      1,
+			StagedGeneration:      2,
+			RotatePhase:           "testing_new",
+			StagedInterfaceName:   "phx-new",
+			StagedLocalTunnelAddr: "fe80::3%phx-new netns=photon",
+			StagedPeerTunnelAddr:  "fe80::4%phx-new netns=photon",
+			StagedIKEName:         "provider-private-runtime-name",
+			StagedChildSAName:     "provider-private-child-name",
 		},
 	}
 
-	got := buildLinkOutputs(runtime.LinkInstances, runtime.IPsecReconcile)
+	got := buildLinkOutputs(links, nil)
 	if len(got) != 2 {
 		t.Fatalf("outputs = %+v, want active and staged", got)
 	}

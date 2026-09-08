@@ -4,7 +4,6 @@ import (
 	"maps"
 	"sync"
 
-	"github.com/HiggsNet/photon/internal/photonlinux"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
@@ -40,13 +39,7 @@ func (o *linuxObservation) replaceIPsec(links map[string]ipsec.LinkInstance, rec
 	o.mu.Unlock()
 }
 
-func (d *Daemon) runtimeWithObservation(runtime *linuxRuntimeState) *linuxRuntimeState {
-	if runtime == nil {
-		return nil
-	}
-	view := photonlinux.CloneRuntimeState(runtime)
+func (d *Daemon) ipsecStateSnapshot() (map[string]linkInstanceState, *ipsecReconcileState) {
 	links, reconcile := d.linuxObservation.ipsecSnapshot()
-	view.LinkInstances = linkInstancesFromIPsec(links)
-	view.IPsecReconcile = reconcile
-	return view
+	return linkInstancesFromIPsec(links), reconcile
 }

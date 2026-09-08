@@ -72,8 +72,8 @@ func TestCloneRuntimeStatePreservesNilAndEmptyShape(t *testing.T) {
 
 func TestRuntimeStateSchemaGuard(t *testing.T) {
 	want := []string{
-		"PeerCleanups", "IPsecTransportKey", "LinkInstances",
-		"IPsecReconcile", "RoutingReconcile", "FirewallReconcile", "EndpointACLs", "BirdInstances",
+		"PeerCleanups", "IPsecTransportKey", "RoutingReconcile",
+		"FirewallReconcile", "EndpointACLs", "BirdInstances",
 	}
 	typ := reflect.TypeOf(RuntimeState{})
 	if typ.NumField() != len(want) {
@@ -95,7 +95,7 @@ func TestRuntimeStateJSONDropsLegacyDerivedFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode current payload: %v", err)
 	}
-	if strings.Contains(string(payload), "identity_key_path") || strings.Contains(string(payload), "admission") || strings.Contains(string(payload), "ipsec_port_record") || strings.Contains(string(payload), "link_instances") || strings.Contains(string(payload), "ipsec_reconcile") || state.LinkInstances != nil || state.IPsecReconcile != nil || state.EndpointACLs["api"].Name != "api" {
+	if strings.Contains(string(payload), "identity_key_path") || strings.Contains(string(payload), "admission") || strings.Contains(string(payload), "ipsec_port_record") || strings.Contains(string(payload), "link_instances") || strings.Contains(string(payload), "ipsec_reconcile") || state.EndpointACLs["api"].Name != "api" {
 		t.Fatalf("current state retained legacy derived fields or lost durable fields: %s", payload)
 	}
 }

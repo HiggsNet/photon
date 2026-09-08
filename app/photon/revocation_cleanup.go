@@ -171,7 +171,7 @@ type purgePlan struct {
 	ManagedZoneSkipped []zone.ZonePath `json:"managed_zone_skipped,omitempty"`
 }
 
-func mergePurgePlan(common corestate.PurgeRevokedPlan, runtime *linuxRuntimeState) *purgePlan {
+func mergePurgePlan(common corestate.PurgeRevokedPlan, links map[string]linkInstanceState) *purgePlan {
 	plan := &purgePlan{
 		Zones:              append([]zone.ZonePath(nil), common.Zones...),
 		SyncPeers:          append([]string(nil), common.CheckpointPeers...),
@@ -181,11 +181,9 @@ func mergePurgePlan(common corestate.PurgeRevokedPlan, runtime *linuxRuntimeStat
 	for _, path := range plan.Zones {
 		zoneSet[path] = true
 	}
-	if runtime != nil {
-		for id, instance := range runtime.LinkInstances {
-			if zoneSet[instance.PeerZone] {
-				plan.LinkInstances = append(plan.LinkInstances, id)
-			}
+	for id, instance := range links {
+		if zoneSet[instance.PeerZone] {
+			plan.LinkInstances = append(plan.LinkInstances, id)
 		}
 	}
 	slices.Sort(plan.LinkInstances)

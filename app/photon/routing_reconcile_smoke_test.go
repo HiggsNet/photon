@@ -51,7 +51,7 @@ func TestRoutingDryRunSmoke(t *testing.T) {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
 
-	_, latest := readTestDaemonOwners(service)
+	_, latest := service.StateStore.readCommonAndRuntime()
 	if len(latest.BirdInstances) != 1 {
 		t.Fatalf("BirdInstances len = %d, want 1", len(latest.BirdInstances))
 	}
@@ -149,7 +149,7 @@ func TestIPAMRoutingSmoke(t *testing.T) {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
 
-	_, latest := readTestDaemonOwners(service)
+	_, latest := service.StateStore.readCommonAndRuntime()
 	inst := latest.BirdInstances["photontesth2"]
 	if inst == nil || inst.ConfigPath == "" {
 		t.Fatalf("missing bird instance state or config path")
@@ -226,7 +226,7 @@ func TestAutoAnnounceAssignedIPsRoutingSmoke(t *testing.T) {
 	}
 
 	// Verify the BIRD export filter includes the auto-announced prefix.
-	_, latest := readTestDaemonOwners(service)
+	_, latest := service.StateStore.readCommonAndRuntime()
 	inst := latest.BirdInstances["photontesth2"]
 	if inst == nil || inst.ConfigPath == "" {
 		t.Fatalf("missing bird instance state or config path")
@@ -318,7 +318,7 @@ func TestRoutingDryRunSmokeRevokeAssignment(t *testing.T) {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
 
-	_, latest := readTestDaemonOwners(service)
+	_, latest := service.StateStore.readCommonAndRuntime()
 	inst := latest.BirdInstances["photontesth2"]
 	if inst == nil || inst.ConfigPath == "" {
 		t.Fatalf("missing bird instance state or config path")

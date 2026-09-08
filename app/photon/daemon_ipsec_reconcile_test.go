@@ -194,29 +194,29 @@ func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 
 	service.notifyStateChanged()
 
-	_, latest := readTestDaemonOwners(service)
-	if len(latest.LinkInstances) != 1 {
-		t.Fatalf("link instances len = %d, want 1", len(latest.LinkInstances))
+	latestLinks, latestReconcile := readTestIPsecObservation(service)
+	if len(latestLinks) != 1 {
+		t.Fatalf("link instances len = %d, want 1", len(latestLinks))
 	}
-	if latest.IPsecReconcile == nil || latest.IPsecReconcile.DesiredLinks != 1 {
-		t.Fatalf("ipsec reconcile = %+v, want one desired link", latest.IPsecReconcile)
+	if latestReconcile == nil || latestReconcile.DesiredLinks != 1 {
+		t.Fatalf("ipsec reconcile = %+v, want one desired link", latestReconcile)
 	}
-	if len(latest.IPsecReconcile.Actions) != 1 || latest.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionCreate {
-		t.Fatalf("actions = %+v, want create", latest.IPsecReconcile.Actions)
+	if len(latestReconcile.Actions) != 1 || latestReconcile.Actions[0].Action != ipsec.ReconcileActionCreate {
+		t.Fatalf("actions = %+v, want create", latestReconcile.Actions)
 	}
-	for _, inst := range latest.LinkInstances {
+	for _, inst := range latestLinks {
 		if inst.Owner.Manager != "photon" || inst.ActualState != ipsec.LinkStateConnecting {
 			t.Fatalf("instance = %+v, want photon connecting", inst)
 		}
 	}
 
 	service.notifyStateChanged()
-	_, reloaded := readTestDaemonOwners(service)
-	if len(reloaded.LinkInstances) != 1 {
-		t.Fatalf("second link instances len = %d, want 1", len(reloaded.LinkInstances))
+	reloadedLinks, reloadedReconcile := readTestIPsecObservation(service)
+	if len(reloadedLinks) != 1 {
+		t.Fatalf("second link instances len = %d, want 1", len(reloadedLinks))
 	}
-	if len(reloaded.IPsecReconcile.Actions) != 1 || reloaded.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionNoop {
-		t.Fatalf("second actions = %+v, want noop", reloaded.IPsecReconcile.Actions)
+	if len(reloadedReconcile.Actions) != 1 || reloadedReconcile.Actions[0].Action != ipsec.ReconcileActionNoop {
+		t.Fatalf("second actions = %+v, want noop", reloadedReconcile.Actions)
 	}
 }
 
@@ -367,16 +367,17 @@ func TestDaemonIPsecReconcileDiscardsResultWhenRevisionChanged(t *testing.T) {
 	if !service.ipsecDirty {
 		t.Fatal("ipsecDirty = false, want stale reconcile to be retried")
 	}
-	common, runtime := readTestDaemonOwners(service)
+	common, runtime := service.StateStore.readCommonAndRuntime()
+	observationLinks, observationReconcile := readTestIPsecObservation(service)
 	rev := uint64(common.Revision)
 	if rev != baseRev+1 {
 		t.Fatalf("state revision = %d, want only external update at %d", rev, baseRev+1)
 	}
-	if len(runtime.LinkInstances) != 0 {
-		t.Fatalf("link instances = %+v, want stale result discarded", runtime.LinkInstances)
+	if len(observationLinks) != 0 {
+		t.Fatalf("link instances = %+v, want stale result discarded", observationLinks)
 	}
-	if runtime.IPsecReconcile != nil {
-		t.Fatalf("ipsec reconcile summary = %+v, want stale summary discarded", runtime.IPsecReconcile)
+	if observationReconcile != nil {
+		t.Fatalf("ipsec reconcile summary = %+v, want stale summary discarded", observationReconcile)
 	}
 }
 
@@ -474,9 +475,10 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	service.notifyStateChanged()
 
-	common, latest := readTestDaemonOwners(service)
+	common, persistedRuntime := service.StateStore.readCommonAndRuntime()
+	latestLinks, latestReconcile := readTestIPsecObservation(service)
 	var inst linkInstanceState
-	for _, v := range latest.LinkInstances {
+	for _, v := range latestLinks {
 		inst = v
 	}
 	if inst.ActualState != ipsec.LinkStateConnecting {
@@ -495,12 +497,12 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 		},
 		UpdatedAt: now.Unix(),
 	})
-	service = newTestDaemonFromOwners(rt, common.State, common.Gossip, latest, config, time.Second)
-	service.linuxObservation.replaceIPsec(linkInstancesToIPsec(latest.LinkInstances), latest.IPsecReconcile)
+	service = newTestDaemonFromOwners(rt, common.State, common.Gossip, persistedRuntime, config, time.Second)
+	service.linuxObservation.replaceIPsec(linkInstancesToIPsec(latestLinks), latestReconcile)
 	service.notifyStateChanged()
 
-	_, rotated := readTestDaemonOwners(service)
-	for _, v := range rotated.LinkInstances {
+	rotatedLinks, rotatedReconcile := readTestIPsecObservation(service)
+	for _, v := range rotatedLinks {
 		inst = v
 	}
 	if inst.RotatePhase != ipsec.RotatePhaseTestingNew {
@@ -513,13 +515,13 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 		t.Fatalf("staged ike name = %q", inst.StagedIKEName)
 	}
 	foundPrepare := false
-	for _, action := range rotated.IPsecReconcile.Actions {
+	for _, action := range rotatedReconcile.Actions {
 		if action.Action == ipsec.ReconcileActionPrepareRotate {
 			foundPrepare = true
 		}
 	}
 	if !foundPrepare {
-		t.Fatalf("expected prepare_rotate action, got %+v", rotated.IPsecReconcile.Actions)
+		t.Fatalf("expected prepare_rotate action, got %+v", rotatedReconcile.Actions)
 	}
 }
 
@@ -577,12 +579,13 @@ func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 	if len(driver.Connections) != 1 {
 		t.Fatalf("connections = %d, want one coalesced apply", len(driver.Connections))
 	}
-	common, latest := readTestDaemonOwners(service)
+	common, _ := service.StateStore.readCommonAndRuntime()
+	_, latestReconcile := readTestIPsecObservation(service)
 	if common.State.Network.Zones["node-b.catofes."].Records["coalesce-a"] == nil || common.State.Network.Zones["node-b.catofes."].Records["coalesce-b"] == nil {
 		t.Fatalf("queued record puts were not both persisted")
 	}
-	if latest.IPsecReconcile == nil || len(latest.IPsecReconcile.Actions) != 1 || latest.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionCreate {
-		t.Fatalf("ipsec reconcile = %+v, want one create", latest.IPsecReconcile)
+	if latestReconcile == nil || len(latestReconcile.Actions) != 1 || latestReconcile.Actions[0].Action != ipsec.ReconcileActionCreate {
+		t.Fatalf("ipsec reconcile = %+v, want one create", latestReconcile)
 	}
 }
 

@@ -620,6 +620,8 @@ func TestBuildFirewallPolicyInputHostRedirectGracePorts(t *testing.T) {
 		&routing.AuthorizedRouteSet{},
 		verified,
 		runtime,
+		nil,
+		nil,
 		defaultAppConfig(),
 		now,
 	)
@@ -658,6 +660,8 @@ func TestBuildFirewallPolicyInputIncludesLocalSharedAssignment(t *testing.T) {
 		ars,
 		&corestate.VerifiedState{ManagedZone: "node-b.catofes."},
 		&linuxRuntimeState{},
+		nil,
+		nil,
 		defaultAppConfig(),
 		time.Now(),
 	)
@@ -669,20 +673,19 @@ func TestBuildFirewallPolicyInputIncludesLocalSharedAssignment(t *testing.T) {
 
 func TestBuildFirewallPolicyInputScopesInterfacesByNetNS(t *testing.T) {
 	verified := &corestate.VerifiedState{ManagedZone: "node-a.catofes."}
-	runtime := &linuxRuntimeState{
-		LinkInstances: map[string]linkInstanceState{
-			"a": {
-				ID:              "a",
-				ActualState:     "up",
-				InterfaceName:   "phx11111111",
-				LocalTunnelAddr: "fe80::1%phx11111111 netns=photon",
-			},
-			"b": {
-				ID:              "b",
-				ActualState:     "up",
-				InterfaceName:   "phx22222222",
-				LocalTunnelAddr: "fe80::2%phx22222222 netns=h3",
-			},
+	runtime := &linuxRuntimeState{}
+	links := map[string]linkInstanceState{
+		"a": {
+			ID:              "a",
+			ActualState:     "up",
+			InterfaceName:   "phx11111111",
+			LocalTunnelAddr: "fe80::1%phx11111111 netns=photon",
+		},
+		"b": {
+			ID:              "b",
+			ActualState:     "up",
+			InterfaceName:   "phx22222222",
+			LocalTunnelAddr: "fe80::2%phx22222222 netns=h3",
 		},
 	}
 	config := defaultAppConfig()
@@ -701,6 +704,8 @@ func TestBuildFirewallPolicyInputScopesInterfacesByNetNS(t *testing.T) {
 		&routing.AuthorizedRouteSet{},
 		verified,
 		runtime,
+		links,
+		nil,
 		config,
 		time.Now(),
 	)
@@ -906,7 +911,7 @@ func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
 	if !service.firewallDirty {
 		t.Fatal("firewallDirty = false, want stale firewall summary commit to schedule another reconcile")
 	}
-	common, runtime := readTestDaemonOwners(service)
+	common, runtime := service.StateStore.readCommonAndRuntime()
 	rev := uint64(common.Revision)
 	if rev != baseRev+1 {
 		t.Fatalf("state revision = %d, want only external update at %d", rev, baseRev+1)
@@ -951,7 +956,7 @@ func TestFirewallReconcileDirtyIntervalAndRecover(t *testing.T) {
 	if service.firewallDirty {
 		t.Fatal("recoverFirewallOnStart should flush and clear firewallDirty")
 	}
-	_, currentRuntime := readTestDaemonOwners(service)
+	_, currentRuntime := service.StateStore.readCommonAndRuntime()
 	if currentRuntime.FirewallReconcile == nil || currentRuntime.FirewallReconcile.Instances["photontesth2"] == nil {
 		t.Fatalf("firewall reconcile state missing after recover: %+v", currentRuntime.FirewallReconcile)
 	}

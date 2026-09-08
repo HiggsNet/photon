@@ -360,13 +360,12 @@ func recoveryPurgeRevoked(ctx context.Context, apply bool, target zone.ZonePath,
 	if err != nil {
 		return err
 	}
-	plan := mergePurgePlan(commonPlan, startup.Runtime)
+	// Offline state has no IPsec observation. The next daemon reconcile cleans
+	// resources that no longer belong to the verified keep set.
+	plan := mergePurgePlan(commonPlan, nil)
 	if apply {
 		view := startup.Common.ReadView()
 		runtimeCandidate := photonlinux.CloneRuntimeState(startup.Runtime)
-		if err := cleanupPurgePlanIPsecLinks(ctx, rt, runtimeCandidate, plan); err != nil {
-			return err
-		}
 		for _, peerID := range plan.SyncPeers {
 			delete(runtimeCandidate.PeerCleanups, peerID)
 		}
@@ -382,22 +381,6 @@ func recoveryPurgeRevoked(ctx context.Context, apply bool, target zone.ZonePath,
 		fmt.Println("(dry-run; pass --apply to delete)")
 	}
 	return nil
-}
-
-func cleanupPurgePlanIPsecLinks(ctx context.Context, rt *AppContext, runtime *linuxRuntimeState, plan *purgePlan) error {
-	if plan == nil || len(plan.LinkInstances) == 0 {
-		return nil
-	}
-	if rt == nil {
-		return errors.New("runtime is nil")
-	}
-	platformDriver, err := newLinuxDriverForIPsecCleanup(rt.Config)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = platformDriver.Close() }()
-	_, err = cleanupLinuxDriverIPsecLinks(ctx, runtime, plan.LinkInstances, platformDriver, rt.Now())
-	return err
 }
 
 func purgePlanSuffix(apply bool) string {

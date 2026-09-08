@@ -42,7 +42,7 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 	if common.State == nil || runtime == nil {
 		return nil
 	}
-	runtime = d.runtimeWithObservation(runtime)
+	links, ipsecReconcile := d.ipsecStateSnapshot()
 	rev := uint64(common.Revision)
 	verified := common.State
 	baseBird := photonstate.CloneBirdInstances(runtime.BirdInstances)
@@ -90,7 +90,6 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 	// transaction. Refresh both detached owners only in that uncommon case.
 	if autoAnnounceChanged {
 		common, runtime = d.StateStore.readCommonAndRuntime()
-		runtime = d.runtimeWithObservation(runtime)
 		if common.State == nil || runtime == nil {
 			return firstErr
 		}
@@ -116,7 +115,7 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 	overlayByNetns := groupOverlaysByNetns(config.IPsec.LinkGroups, config.Overlay.DefaultNetNS)
 
 	for _, inst := range routingInstances {
-		if err := d.reconcileRoutingForInstance(ctx, verified, runtime, inst, ars, dataDir, overlayByNetns, config, now, forceReload); err != nil && firstErr == nil {
+		if err := d.reconcileRoutingForInstance(ctx, verified, runtime, links, ipsecReconcile, inst, ars, dataDir, overlayByNetns, config, now, forceReload); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -242,7 +241,7 @@ func birdInstanceStatesEqual(a, b *BirdInstanceState) bool {
 	return true
 }
 
-func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *corestate.VerifiedState, runtime *linuxRuntimeState, inst RoutingInstance, ars *routing.AuthorizedRouteSet, dataDir string, overlayByNetns map[string]*netnsOverlayGroup, config *appConfig, now time.Time, forceReload bool) error {
+func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *corestate.VerifiedState, runtime *linuxRuntimeState, links map[string]linkInstanceState, reconcile *ipsecReconcileState, inst RoutingInstance, ars *routing.AuthorizedRouteSet, dataDir string, overlayByNetns map[string]*netnsOverlayGroup, config *appConfig, now time.Time, forceReload bool) error {
 	netnsName := inst.NetNS
 	instState := runtime.BirdInstances[netnsName]
 	if instState == nil {
@@ -262,7 +261,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 	instState.RouterID = routerID
 
 	spec := buildBirdInstanceSpecForNetns(inst, routerID, dataDir, overlayByNetns[netnsName], config.Netns, ars, verified.ManagedZone)
-	spec.InterfacePolicies = birdRotateInterfacePolicies(runtime.LinkInstances, runtime.IPsecReconcile, netnsName, overlays, inst)
+	spec.InterfacePolicies = birdRotateInterfacePolicies(links, reconcile, netnsName, overlays, inst)
 	instState.ConfigPath = spec.ConfigPath
 	instState.ControlSocket = spec.ControlSocketPath
 	instState.PIDFile = spec.PIDFilePath
@@ -396,20 +395,20 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 			instState.BackoffUntilUnix = 0
 			instState.LastExit = ""
 		}
-		d.observeBirdForHealth(ctx, runtime.LinkInstances, runtime.IPsecReconcile, netnsName, instState.Overlays, spec.ControlSocketPath)
+		d.observeBirdForHealth(ctx, links, reconcile, netnsName, instState.Overlays, spec.ControlSocketPath)
 
 	case bird.BirdModeExternal:
 		observed, err := d.linuxDriver.ObserveBird(ctx, spec.ControlSocketPath, bird.InternalRouteTableNames(netnsName)...)
 		if err != nil {
 			instState.State = birdInstanceStateError
 			instState.LastError = err.Error()
-			d.recordBirdHealthObservationUnavailableForLinks(runtime.LinkInstances, runtime.IPsecReconcile, netnsName, instState.Overlays)
+			d.recordBirdHealthObservationUnavailableForLinks(links, reconcile, netnsName, instState.Overlays)
 			if !isDryRunConnectError(err) {
 				return fmt.Errorf("bird status for netns %q: %w", netnsName, err)
 			}
 		} else {
 			instState.State = birdInstanceStateRunning
-			d.recordBirdHealthObservationForLinks(runtime.LinkInstances, runtime.IPsecReconcile, netnsName, instState.Overlays, observed)
+			d.recordBirdHealthObservationForLinks(links, reconcile, netnsName, instState.Overlays, observed)
 		}
 	}
 
@@ -542,11 +541,7 @@ func (d *Daemon) birdDumpForControl(ctx context.Context, netnsName string, view 
 	if err != nil {
 		return nil, err
 	}
-	var runtime *linuxRuntimeState
-	if d.StateStore != nil {
-		_, runtime = d.StateStore.readCommonAndRuntime()
-		runtime = d.runtimeWithObservation(runtime)
-	}
+	links, reconcile := d.ipsecStateSnapshot()
 	for _, inst := range d.App.Config.Routing.Instances {
 		if !inst.Enabled || inst.Mode == ipsec.RoutingModeDisabled {
 			continue
@@ -579,9 +574,7 @@ func (d *Daemon) birdDumpForControl(ctx context.Context, netnsName string, view 
 			}
 			item.Raw[cmd] = out
 		}
-		if runtime != nil {
-			enrichBirdDumpInstance(&item, runtime.LinkInstances, runtime.IPsecReconcile)
-		}
+		enrichBirdDumpInstance(&item, links, reconcile)
 		response.Instances[inst.NetNS] = item
 	}
 	return response, nil

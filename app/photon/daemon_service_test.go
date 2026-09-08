@@ -215,9 +215,9 @@ func TestDaemonReloadConfigReconcilesIPsecLinkGroups(t *testing.T) {
 	if !syncNow || shutdown {
 		t.Fatalf("initial reload syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
 	}
-	_, latest := readTestDaemonOwners(service)
-	if len(latest.LinkInstances) != 0 {
-		t.Fatalf("initial link instances = %+v, want none", latest.LinkInstances)
+	latestLinks, latestReconcile := readTestIPsecObservation(service)
+	if len(latestLinks) != 0 {
+		t.Fatalf("initial link instances = %+v, want none", latestLinks)
 	}
 
 	reloadedConfig := strings.Join([]string{
@@ -250,12 +250,12 @@ func TestDaemonReloadConfigReconcilesIPsecLinkGroups(t *testing.T) {
 	if !syncNow || shutdown {
 		t.Fatalf("overlay reload syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
 	}
-	_, latest = readTestDaemonOwners(service)
-	if len(latest.LinkInstances) != 1 {
-		t.Fatalf("link instances after reload = %d, want 1", len(latest.LinkInstances))
+	latestLinks, latestReconcile = readTestIPsecObservation(service)
+	if len(latestLinks) != 1 {
+		t.Fatalf("link instances after reload = %d, want 1", len(latestLinks))
 	}
-	if latest.IPsecReconcile == nil || len(latest.IPsecReconcile.Actions) != 1 || latest.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionCreate {
-		t.Fatalf("ipsec reconcile after reload = %+v, want create", latest.IPsecReconcile)
+	if latestReconcile == nil || len(latestReconcile.Actions) != 1 || latestReconcile.Actions[0].Action != ipsec.ReconcileActionCreate {
+		t.Fatalf("ipsec reconcile after reload = %+v, want create", latestReconcile)
 	}
 	if current := service.currentGossipConfig(); len(service.App.Config.IPsec.LinkGroups) != 1 || current.PeerID != config.PeerID {
 		t.Fatalf("daemon config was not refreshed: app=%+v sync=%+v", service.App.Config.IPsec.LinkGroups, current)

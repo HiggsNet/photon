@@ -77,7 +77,7 @@ func TestReconcileRoutingBacksOffAfterManagedBirdCrash(t *testing.T) {
 	if pm.started {
 		t.Fatalf("managed BIRD should not restart while crash backoff is active")
 	}
-	_, latest := readTestDaemonOwners(service)
+	_, latest := service.StateStore.readCommonAndRuntime()
 	inst := latest.BirdInstances["photontesth2"]
 	if inst == nil {
 		t.Fatalf("missing bird instance state")
@@ -144,7 +144,7 @@ func TestReconcileRoutingRestartsManagedBirdAfterCrashBackoff(t *testing.T) {
 	if pm.startSpec.Owner.RouteTableToken == "" || pm.startSpec.Owner.RuleToken == "" {
 		t.Fatalf("start spec owner tokens are incomplete: %+v", pm.startSpec.Owner)
 	}
-	_, latest := readTestDaemonOwners(service)
+	_, latest := service.StateStore.readCommonAndRuntime()
 	inst := latest.BirdInstances["photontesth2"]
 	if inst == nil || inst.State != birdInstanceStateRunning {
 		t.Fatalf("bird instance = %+v, want running", inst)
@@ -199,7 +199,7 @@ func TestReconcileRoutingClearsStaleBackoffForRunningBird(t *testing.T) {
 	if err := service.reconcileRouting(context.Background()); err != nil {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
-	_, latest := readTestDaemonOwners(service)
+	_, latest := service.StateStore.readCommonAndRuntime()
 	inst := latest.BirdInstances["photontesth2"]
 	if inst == nil || inst.State != birdInstanceStateRunning || inst.LastError != "" {
 		t.Fatalf("bird instance = %+v, want running with no error", inst)
@@ -385,7 +385,7 @@ func TestFlushRoutingReconcileCoalesces(t *testing.T) {
 		t.Fatalf("routingDirty should be cleared after flush")
 	}
 
-	_, latest := readTestDaemonOwners(service)
+	_, latest := service.StateStore.readCommonAndRuntime()
 	if len(latest.BirdInstances) != 1 {
 		t.Fatalf("BirdInstances len = %d, want 1", len(latest.BirdInstances))
 	}
@@ -413,7 +413,7 @@ func TestCommitRoutingReconcileResultSkipsTimestampOnlyChange(t *testing.T) {
 		RoutingReconcile: &routingReconcileState{LastRunUnix: 10},
 	}
 	service := &Daemon{StateStore: newTestDaemonStateStore(verified, nil, runtime)}
-	common, workspace := readTestDaemonOwners(service)
+	common, workspace := service.StateStore.readCommonAndRuntime()
 	rev := uint64(common.Revision)
 	baseBird := photonstate.CloneBirdInstances(workspace.BirdInstances)
 	baseReconcile := photonstate.CloneRoutingReconcileState(workspace.RoutingReconcile)

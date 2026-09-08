@@ -96,21 +96,22 @@ func TestPeerLifecycleCleanupTearsDownAndSuccessfulSyncRestoresLink(t *testing.T
 		t.Fatalf("seed peer checkpoint: %v", err)
 	}
 	service.notifyStateChanged()
-	_, initial := readTestDaemonOwners(service)
-	if len(initial.LinkInstances) != 1 {
-		t.Fatalf("initial links = %+v, want one", initial.LinkInstances)
+	initialLinks, _ := readTestIPsecObservation(service)
+	if len(initialLinks) != 1 {
+		t.Fatalf("initial links = %+v, want one", initialLinks)
 	}
 
 	now = now.Add(config.PeerLifecycle.CleanupAfter + time.Second)
 	service.notifyStateChanged()
-	common, cleaned := readTestDaemonOwners(service)
-	if len(cleaned.LinkInstances) != 0 || cleaned.IPsecReconcile.DesiredLinks != 0 {
-		t.Fatalf("cleaned links = %+v desired=%d", cleaned.LinkInstances, cleaned.IPsecReconcile.DesiredLinks)
+	common, cleanedRuntime := service.StateStore.readCommonAndRuntime()
+	cleanedLinks, cleanedReconcile := readTestIPsecObservation(service)
+	if len(cleanedLinks) != 0 || cleanedReconcile.DesiredLinks != 0 {
+		t.Fatalf("cleaned links = %+v desired=%d", cleanedLinks, cleanedReconcile.DesiredLinks)
 	}
 	if _, ok := common.Gossip.Peers["node-b.catofes."]; ok {
 		t.Fatal("offline peer cache was not removed")
 	}
-	if _, ok := cleaned.PeerCleanups["node-b.catofes."]; !ok {
+	if _, ok := cleanedRuntime.PeerCleanups["node-b.catofes."]; !ok {
 		t.Fatal("offline peer suppression marker is missing")
 	}
 	if _, err := service.StateStore.common.UpdatePeerCheckpoint(context.Background(), "node-b.catofes.", corestate.PeerCheckpointPatch{
@@ -119,11 +120,12 @@ func TestPeerLifecycleCleanupTearsDownAndSuccessfulSyncRestoresLink(t *testing.T
 		t.Fatalf("record successful sync: %v", err)
 	}
 	service.notifyStateChanged()
-	_, recovered := readTestDaemonOwners(service)
-	if _, ok := recovered.PeerCleanups["node-b.catofes."]; ok {
+	_, recoveredRuntime := service.StateStore.readCommonAndRuntime()
+	recoveredLinks, recoveredReconcile := readTestIPsecObservation(service)
+	if _, ok := recoveredRuntime.PeerCleanups["node-b.catofes."]; ok {
 		t.Fatal("successful sync did not clear lifecycle suppression")
 	}
-	if len(recovered.LinkInstances) != 1 || recovered.IPsecReconcile.DesiredLinks != 1 {
-		t.Fatalf("recovered links = %+v desired=%d", recovered.LinkInstances, recovered.IPsecReconcile.DesiredLinks)
+	if len(recoveredLinks) != 1 || recoveredReconcile.DesiredLinks != 1 {
+		t.Fatalf("recovered links = %+v desired=%d", recoveredLinks, recoveredReconcile.DesiredLinks)
 	}
 }

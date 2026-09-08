@@ -47,7 +47,7 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 	if common.State == nil || runtime == nil {
 		return nil
 	}
-	runtime = d.runtimeWithObservation(runtime)
+	links, ipsecReconcile := d.ipsecStateSnapshot()
 	rev := uint64(common.Revision)
 	config := d.App.Config
 	instances := firewallInstancesEnabled(config)
@@ -91,7 +91,7 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 			}
 			spec.EndpointServices = endpointServices
 		}
-		input := buildFirewallPolicyInput(spec, ars, common.State, runtime, config, now)
+		input := buildFirewallPolicyInput(spec, ars, common.State, runtime, links, ipsecReconcile, config, now)
 		desired, err := firewall.BuildDesiredState(spec, input)
 		if err != nil {
 			entry := getOrCreateFirewallEntry(summary, instCfg.ID)
@@ -243,7 +243,7 @@ func firewallOwnerScope(spec firewall.FirewallInstanceSpec) string {
 }
 
 // buildFirewallPolicyInput assembles the verified derived state for the planner.
-func buildFirewallPolicyInput(spec firewall.FirewallInstanceSpec, ars *routing.AuthorizedRouteSet, verified *corestate.VerifiedState, runtime *linuxRuntimeState, config *appConfig, now time.Time) firewall.FirewallPolicyInput {
+func buildFirewallPolicyInput(spec firewall.FirewallInstanceSpec, ars *routing.AuthorizedRouteSet, verified *corestate.VerifiedState, runtime *linuxRuntimeState, links map[string]linkInstanceState, reconcile *ipsecReconcileState, config *appConfig, now time.Time) firewall.FirewallPolicyInput {
 	input := firewall.FirewallPolicyInput{}
 	if ars == nil || verified == nil || runtime == nil {
 		return input
@@ -268,7 +268,7 @@ func buildFirewallPolicyInput(spec firewall.FirewallInstanceSpec, ars *routing.A
 	input.AssignmentPrefixes = assignmentPrefixes(ars)
 
 	// Provider-neutral live Babel-facing interfaces.
-	for _, link := range buildLinkOutputs(runtime.LinkInstances, runtime.IPsecReconcile) {
+	for _, link := range buildLinkOutputs(links, reconcile) {
 		if link.InterfaceName != "" &&
 			link.Readiness.Interface == "ready" &&
 			(link.Provider == "" || link.Provider == ipsec.ProviderStrongSwan) &&

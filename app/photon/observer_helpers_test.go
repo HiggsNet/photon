@@ -31,9 +31,8 @@ func updateTestObserverOwners(srv *observerServer, fn func(*corestate.VerifiedSt
 	if srv == nil || srv.daemon == nil || srv.daemon.StateStore == nil || fn == nil {
 		return
 	}
-	common, runtime := readTestDaemonOwners(srv.daemon)
+	common, runtime := srv.daemon.StateStore.readCommonAndRuntime()
 	fn(common.State, common.Gossip, runtime)
-	srv.daemon.linuxObservation.replaceIPsec(linkInstancesToIPsec(runtime.LinkInstances), runtime.IPsecReconcile)
 	store := corestate.NewStoreWithCheckpoint(common.State, common.Gossip, nil)
 	srv.daemon.StateStore.writeMu.Lock()
 	srv.daemon.StateStore.common = store

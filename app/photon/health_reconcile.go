@@ -64,9 +64,6 @@ func (d *Daemon) reconcileHealth(ctx context.Context) int {
 	if d == nil || d.health == nil || d.health.Manager == nil {
 		return 0
 	}
-	if d == nil {
-		return 0
-	}
 	view := d.StateStore.common.ReadView()
 	localZone := ""
 	if view.State != nil {
@@ -185,12 +182,12 @@ func showHealth(sortBy string, verbose bool) error {
 	return inspecttext.WriteHealth(os.Stdout, view, sortBy, verbose)
 }
 
-func healthViewFromOwners(common corestate.View, runtime *linuxRuntimeState, live []healthLinkJSON) inspect.HealthDebugView {
+func healthViewFromOwners(common corestate.View, links map[string]linkInstanceState, reconcile *ipsecReconcileState, live []healthLinkJSON) inspect.HealthDebugView {
 	view := inspect.HealthDebugView{Live: inspectHealthLiveLinks(live)}
-	if common.State == nil || runtime == nil {
+	if common.State == nil {
 		return view
 	}
-	view.Targets = inspectHealthProbeTargets(linkstate.HealthTargets(buildLinkOutputs(runtime.LinkInstances, runtime.IPsecReconcile), string(common.State.ManagedZone)))
+	view.Targets = inspectHealthProbeTargets(linkstate.HealthTargets(buildLinkOutputs(links, reconcile), string(common.State.ManagedZone)))
 	return view
 }
 

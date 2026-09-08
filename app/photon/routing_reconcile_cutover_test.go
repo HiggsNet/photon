@@ -29,7 +29,7 @@ func TestReconcileRoutingFeedsBirdObservationToRotateCutoverGate(t *testing.T) {
 	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
-	runtime.LinkInstances = map[string]linkInstanceState{
+	observationLinks := map[string]linkInstanceState{
 		"link-1": {
 			ID:                  "link-1",
 			GroupID:             "main",
@@ -66,7 +66,7 @@ func TestReconcileRoutingFeedsBirdObservationToRotateCutoverGate(t *testing.T) {
 		Neighbors: []bird.BirdNeighbor{{Interface: "phx-new", Metric: 96}},
 	}}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-	setTestIPsecObservation(service, runtime)
+	setTestIPsecObservation(service, observationLinks, nil)
 	service.health = &healthDriver{Manager: manager}
 	installTestBirdDrivers(service, &fakeBirdProcessManager{running: false}, func(socketPath string, timeout time.Duration) birdClient {
 		return client
@@ -115,7 +115,7 @@ func TestBirdObservationAcceptsUnselectedBabelRouteOnStagedInterface(t *testing.
 }
 
 func TestBirdRotateInterfacePoliciesPromoteStagedAndDrainOld(t *testing.T) {
-	runtime := &linuxRuntimeState{LinkInstances: map[string]linkInstanceState{
+	observationLinks := map[string]linkInstanceState{
 		"link-1": {
 			ID:                    "link-1",
 			GroupID:               "main",
@@ -129,15 +129,16 @@ func TestBirdRotateInterfacePoliciesPromoteStagedAndDrainOld(t *testing.T) {
 			StagedLocalTunnelAddr: "fe80::3%phx-new netns=photon",
 			StagedPeerTunnelAddr:  "fe80::4%phx-new netns=photon",
 		},
-	}}
+	}
+	var observationReconcile *ipsecReconcileState
 	routingInst := RoutingInstance{MetricBase: 100, MetricStaged: 200, MetricDraining: 500}
 
 	wantPolicies := func(phase string, want map[string]uint) {
 		t.Helper()
-		instance := runtime.LinkInstances["link-1"]
+		instance := observationLinks["link-1"]
 		instance.RotatePhase = phase
-		runtime.LinkInstances["link-1"] = instance
-		got := birdRotateInterfacePolicies(runtime.LinkInstances, runtime.IPsecReconcile, "photon", []string{"main"}, routingInst)
+		observationLinks["link-1"] = instance
+		got := birdRotateInterfacePolicies(observationLinks, observationReconcile, "photon", []string{"main"}, routingInst)
 		gotMap := make(map[string]uint, len(got))
 		for _, policy := range got {
 			gotMap[policy.InterfaceName] = policy.Metric

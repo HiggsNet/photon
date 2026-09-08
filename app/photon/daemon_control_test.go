@@ -332,7 +332,7 @@ func TestDaemonControlBirdDump(t *testing.T) {
 
 func TestDaemonControlLinksStatusUsesReconcileSnapshot(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	runtime.LinkInstances = map[string]linkInstanceState{
+	observationLinks := map[string]linkInstanceState{
 		"link-1": {
 			ID:            "link-1",
 			GroupID:       "main",
@@ -348,7 +348,7 @@ func TestDaemonControlLinksStatusUsesReconcileSnapshot(t *testing.T) {
 			Endpoint:      "198.51.100.2:4500",
 		},
 	}
-	runtime.IPsecReconcile = &ipsecReconcileState{
+	observationReconcile := &ipsecReconcileState{
 		LastRunUnix:  1234,
 		DesiredLinks: 1,
 		Desired: []desiredLinkState{{
@@ -374,7 +374,7 @@ func TestDaemonControlLinksStatusUsesReconcileSnapshot(t *testing.T) {
 	service := newTestDaemonFromOwners(
 		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
-	setTestIPsecObservation(service, runtime)
+	setTestIPsecObservation(service, observationLinks, observationReconcile)
 
 	response := controlViewRequestViaPipe[inspect.LinksDebugView](t, service, controlRequest{Method: "links_view"})
 	if !response.OK {
@@ -397,7 +397,7 @@ func TestDaemonControlLinksStatusUsesReconcileSnapshot(t *testing.T) {
 
 func TestDaemonControlReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	runtime.LinkInstances = map[string]linkInstanceState{
+	observationLinks := map[string]linkInstanceState{
 		"link-committed": {
 			ID:          "link-committed",
 			GroupID:     "main",
@@ -405,7 +405,7 @@ func TestDaemonControlReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T)
 			ActualState: "up",
 		},
 	}
-	runtime.IPsecReconcile = &ipsecReconcileState{
+	observationReconcile := &ipsecReconcileState{
 		LastRunUnix:  1234,
 		DesiredLinks: 1,
 		Desired: []desiredLinkState{{
@@ -425,11 +425,11 @@ func TestDaemonControlReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T)
 	service := newTestDaemonFromOwners(
 		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
-	setTestIPsecObservation(service, runtime)
+	setTestIPsecObservation(service, observationLinks, observationReconcile)
 	committedRev := service.StateStore.Meta().Revision
 
-	runtime.LinkInstances["link-uncommitted"] = linkInstanceState{ID: "link-uncommitted"}
-	runtime.IPsecReconcile.DesiredLinks = 99
+	observationLinks["link-uncommitted"] = linkInstanceState{ID: "link-uncommitted"}
+	observationReconcile.DesiredLinks = 99
 
 	status := controlViewRequestViaPipe[inspect.DaemonStatusView](t, service, controlRequest{Method: "daemon_status_view"})
 	if !status.OK {

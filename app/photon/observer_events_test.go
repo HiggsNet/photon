@@ -22,9 +22,8 @@ func TestObserverIDsPayloadSortsAndOmitsEmpty(t *testing.T) {
 }
 
 func TestObserverLinkIDsPayload(t *testing.T) {
-	runtime := &linuxRuntimeState{LinkInstances: map[string]linkInstanceState{"link-b": {}, "link-a": {}}}
-	d := &Daemon{StateStore: newTestDaemonStateStore(nil, nil, runtime)}
-	d.linuxObservation.replaceIPsec(linkInstancesToIPsec(runtime.LinkInstances), nil)
+	d := &Daemon{StateStore: newTestDaemonStateStore(nil, nil, &linuxRuntimeState{})}
+	d.linuxObservation.replaceIPsec(linkInstancesToIPsec(map[string]linkInstanceState{"link-b": {}, "link-a": {}}), nil)
 	payload, ok := d.observerLinkIDsPayload().(map[string]any)
 	if !ok {
 		t.Fatal("observerLinkIDsPayload should return a map payload")
@@ -93,7 +92,7 @@ func TestNotifyObserverBroadcastsPayloadWithTimestamp(t *testing.T) {
 }
 
 func TestNotifyStateChangedBroadcastsIDPayloads(t *testing.T) {
-	runtime := &linuxRuntimeState{LinkInstances: map[string]linkInstanceState{"link-a": {}}}
+	runtime := &linuxRuntimeState{}
 	checkpoint := &corestate.GossipCheckpoint{Peers: map[string]corestate.PeerCheckpoint{
 		"peer-a": {LastSyncUnix: 1},
 	}}

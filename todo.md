@@ -81,14 +81,14 @@ Daemon
 - [x] `IdentityKeyPath` 已回到配置/应用上下文：current Linux state 不再保存或回填路径，启动/reload 校验配置 key 与 VerifiedState 身份一致，旧 schema 路径迁移时丢弃。
 - [x] 删除持久化 `Admission`：pending/adopted、reason/detail 和 join request 由 VerifiedState 即时推导，最近 bootstrap sync 从 GossipCheckpoint 推导；旧 schema 字段直接丢弃，不新增 owner、bucket 或 revision。
 - [x] 审计 `IPsecTransportKey`、`IPsecPortRecord` 和 Endpoint ACL：保留无其他私钥来源的 transport key 与显式本机 ACL；删除可由 VerifiedState 本机签名 `ipsec/ports` record 完整恢复的 `IPsecPortRecord` 缓存。
-- [ ] 完全删除持久化 `LinkInstances`，不新增 `LinkJournal` / `IPsecTransitions` checkpoint；`IPsecTransportKey` 和 `EndpointACLs` 继续由 Linux state 持久化。
+- [x] 完全删除持久化 `LinkInstances`，不新增 `LinkJournal` / `IPsecTransitions` checkpoint；`IPsecTransportKey` 和 `EndpointACLs` 继续由 Linux state 持久化。
   - [x] 补全 StrongSwan loaded connection、SA 和配置 namespace 的全局 XFRM inventory；同一 namespace 的 link/address 只读取一次，第一阶段只 Observe、不自动删除。
   - [ ] 从 VerifiedState current/previous generation、配置和确定性命名直接计算可保留资源；不新增 `AllowedRuntime`、journal、capability wrapper 或第二套 owner/token。
   - [x] 按保守策略恢复 restart rotation/takeover：reconcile 工作集启动时为空；current/previous 从 verified generation 加 connection/SA/XFRM 观察恢复，previous-only 保留旧链路并准备 current，takeover deadline 与 backoff 不从磁盘恢复。
   - [ ] orphan cleanup 后置接入：StrongSwan connection 必须匹配可推导的完整 ID；XFRM interface 必须同时位于配置 namespace、类型为 xfrm，并匹配可推导的 name 与 `if_id`；普通 reconcile 不按前缀批量删除。
   - [x] 将在线 link 数据放进无 DB/线程的 `LinuxObservation`；reconcile、health、routing/firewall、control/Observer 均读取该在线快照，`pkg/transport/ipsec.LinkInstance` 仅作为 daemon 内存工作对象。
   - [x] 停止持久化 IPsec observation：reconcile/cleanup 不再调用 runtime commit，current/legacy JSON 不再编码或恢复 `LinkInstances`、`IPsecReconcile`，旧字段解码时直接忽略。
-  - [ ] 删除 RuntimeState 中仅剩的 `json:"-"` 兼容投影槽，并把仍接收聚合 runtime 参数的纯展示/规划函数改为显式接收 observation；不新增 schema、bucket 或 checkpoint。
+  - [x] 删除 RuntimeState 中仅剩的 `json:"-"` 兼容投影槽；展示、health、routing/firewall、cleanup 与撤销规划显式接收 observation，测试也不再把 StateStore 与在线观察拼成伪 runtime。
   - [ ] 用 crash/restart 测试覆盖 create、rotation 各阶段、current-only、previous-only、loaded-no-SA、takeover、revoke/config removal 和 orphan cleanup；未被测试证明的恢复规则不标完成。
 - [ ] 将 `RoutingReconcile`、`FirewallReconcile`、BIRD status/PID/socket 可用性改为启动后重新 Observe；确定性路径、resource ID 和 policy hash 不重复落盘。
 - [ ] 审计 `PeerCleanups`：只保留真正影响安全 grace/cleanup 恢复的字段，其余由 VerifiedState/GossipCheckpoint 推导。
