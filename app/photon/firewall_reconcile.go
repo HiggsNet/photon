@@ -47,6 +47,7 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 	if common.State == nil || runtime == nil {
 		return nil
 	}
+	runtime = d.runtimeWithObservation(runtime)
 	rev := uint64(common.Revision)
 	config := d.App.Config
 	instances := firewallInstancesEnabled(config)

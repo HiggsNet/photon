@@ -491,6 +491,7 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 		},
 	}
 	service = newTestDaemonFromOwners(rt, common.State, common.Gossip, current, config, time.Second)
+	service.linuxObservation.replaceIPsec(linkInstancesToIPsec(current.LinkInstances), current.IPsecReconcile)
 	installTestLinuxDrivers(service, testLinuxDrivers{
 		ipsec: ipsecDriver, xfrm: ipsecDriver, firewall: firewallDriver,
 		birdProcess:       &fakeBirdProcessManager{running: false},

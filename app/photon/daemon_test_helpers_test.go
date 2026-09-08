@@ -182,6 +182,13 @@ func newTestDaemonStateStore(verified *corestate.VerifiedState, checkpoint *core
 	return store
 }
 
+func setTestIPsecObservation(d *Daemon, runtime *linuxRuntimeState) {
+	if d == nil || runtime == nil {
+		return
+	}
+	d.linuxObservation.replaceIPsec(linkInstancesToIPsec(runtime.LinkInstances), runtime.IPsecReconcile)
+}
+
 func buildSignedRecordAt(network *zone.NetworkState, signer ed25519.PrivateKey, path zone.ZonePath, key string, value []byte, recordType string, now time.Time) (*zone.Record, error) {
 	if network == nil {
 		return nil, fmt.Errorf("network is nil")

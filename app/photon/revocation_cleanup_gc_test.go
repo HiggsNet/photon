@@ -41,6 +41,7 @@ func TestDaemonPurgeDryRunMergesCommonAndLinuxRuntimePlan(t *testing.T) {
 	service := newTestDaemonFromOwners(
 		&AppContext{Clock: func() time.Time { return now }}, verified, checkpoint, runtime, config, defaultDaemonInterval,
 	)
+	setTestIPsecObservation(service, runtime)
 
 	plan, err := service.handleRecoveryPurgeRevokedEvent(context.Background(), "", false)
 	if err != nil {

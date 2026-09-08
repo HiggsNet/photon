@@ -53,6 +53,7 @@ func TestObserverReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T) {
 	service := newTestDaemonFromOwners(
 		&AppContext{Config: appConfig}, verified, checkpoint, runtime, config, time.Second,
 	)
+	service.linuxObservation.replaceIPsec(linkInstancesToIPsec(runtime.LinkInstances), runtime.IPsecReconcile)
 	srv := newObserverServer(service, appConfig.Observer)
 	if srv == nil {
 		t.Fatal("observer server is nil")

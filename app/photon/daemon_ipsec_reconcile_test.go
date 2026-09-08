@@ -31,7 +31,7 @@ func (d *batchObservedIPsecDriver) InspectLinks(_ context.Context, specs []ipsec
 	for i, spec := range specs {
 		states[i] = healthyObservedXFRMState(spec)
 	}
-	return states, nil, nil
+	return states, states, nil
 }
 
 func (d *batchObservedIPsecDriver) InspectLink(ctx context.Context, spec ipsec.TransportLinkSpec) (ipsec.XFRMLinkState, error) {
@@ -496,6 +496,7 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 		UpdatedAt: now.Unix(),
 	})
 	service = newTestDaemonFromOwners(rt, common.State, common.Gossip, latest, config, time.Second)
+	service.linuxObservation.replaceIPsec(linkInstancesToIPsec(latest.LinkInstances), latest.IPsecReconcile)
 	service.notifyStateChanged()
 
 	_, rotated := service.StateStore.readCommonAndRuntime()
@@ -636,19 +637,11 @@ func TestDaemonIPsecReconcileInterval(t *testing.T) {
 		t.Fatalf("interval without link groups = %s, want 0", interval)
 	}
 
-	if _, _, err := updateTestRuntime(service.StateStore, func(runtime *linuxRuntimeState) {
-		runtime.LinkInstances = map[string]linkInstanceState{"stale": {ID: "stale"}}
-	}); err != nil {
-		t.Fatalf("StateStore.Update(stale links): %v", err)
-	}
+	service.linuxObservation.replaceIPsec(map[string]ipsec.LinkInstance{"stale": {ID: "stale"}}, nil)
 	if interval := service.ipsecReconcileInterval(); interval != defaultIPsecReconcileInterval {
-		t.Fatalf("interval with stale instances = %s, want %s", interval, defaultIPsecReconcileInterval)
+		t.Fatalf("interval with observed instances = %s, want %s", interval, defaultIPsecReconcileInterval)
 	}
-	if _, _, err := updateTestRuntime(service.StateStore, func(runtime *linuxRuntimeState) {
-		runtime.LinkInstances = nil
-	}); err != nil {
-		t.Fatalf("StateStore.Update(clear links): %v", err)
-	}
+	service.linuxObservation.replaceIPsec(nil, nil)
 
 	defaultGroup := testIPsecLinkGroup()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{defaultGroup}

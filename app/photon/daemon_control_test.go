@@ -374,6 +374,7 @@ func TestDaemonControlLinksStatusUsesReconcileSnapshot(t *testing.T) {
 	service := newTestDaemonFromOwners(
 		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
+	setTestIPsecObservation(service, runtime)
 
 	response := controlViewRequestViaPipe[inspect.LinksDebugView](t, service, controlRequest{Method: "links_view"})
 	if !response.OK {
@@ -424,6 +425,7 @@ func TestDaemonControlReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T)
 	service := newTestDaemonFromOwners(
 		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
+	setTestIPsecObservation(service, runtime)
 	committedRev := service.StateStore.Meta().Revision
 
 	runtime.LinkInstances["link-uncommitted"] = linkInstanceState{ID: "link-uncommitted"}

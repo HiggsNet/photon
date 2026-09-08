@@ -67,16 +67,13 @@ func (d *Daemon) reconcileHealth(ctx context.Context) int {
 	if d == nil {
 		return 0
 	}
-	d.StateStore.writeMu.Lock()
 	view := d.StateStore.common.ReadView()
-	d.StateStore.mu.RLock()
 	localZone := ""
 	if view.State != nil {
 		localZone = view.State.ManagedZone.String()
 	}
-	targets := linkstate.HealthTargets(buildLinkOutputs(d.StateStore.runtime.LinkInstances, d.StateStore.runtime.IPsecReconcile), localZone)
-	d.StateStore.mu.RUnlock()
-	d.StateStore.writeMu.Unlock()
+	links, reconcile := d.linuxObservation.ipsecSnapshot()
+	targets := linkstate.HealthTargets(buildLinkOutputs(linkInstancesFromIPsec(links), reconcile), localZone)
 	now := d.now()
 	d.health.SetTargets(targets, now)
 	return d.tickHealth(ctx, now)

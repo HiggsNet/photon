@@ -113,6 +113,7 @@ type ResourceOwner struct {
 type ReconcileInputs struct {
 	Desired               []TransportLinkSpec
 	Instances             map[string]LinkInstance
+	Connections           []ConnectionState
 	SAs                   []SAState
 	Now                   time.Time
 	Revoked               map[zone.ZonePath]bool
@@ -450,6 +451,9 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 				inst.ActualState = LinkStateUp
 				inst.Endpoint = sa.Endpoint
 				result.add(ReconcileActionAdopt, &spec, &inst, "driver state already exists")
+			} else if hasMatchingConnection(in.Connections, spec) {
+				inst.ActualState = LinkStateDegraded
+				result.add(ReconcileActionRepair, &spec, &inst, "loaded connection has no established sa")
 			} else {
 				inst.ActualState = LinkStateConfiguring
 				result.add(ReconcileActionCreate, &spec, &inst, "missing instance")
@@ -646,9 +650,21 @@ func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLin
 		inst = syncInstanceDesiredRuntime(inst, spec)
 		inst.ActualState = LinkStateUp
 		inst.DesiredSpecHash = TransportLinkSpecHash(spec)
-		inst.InitiatorRole = InitiatorRoleConverged
-		inst.TakeoverPhase = TakeoverPhaseIdle
-		inst.TakeoverUntil = 0
+		if sa.InitiatorKnown && sa.Initiator {
+			inst.InitiatorRole = InitiatorRoleSecondaryTakeover
+			inst.TakeoverPhase = TakeoverPhaseActive
+			if prepareStandby || inst.TakeoverStartedAt == 0 {
+				inst.TakeoverStartedAt = now.Unix()
+			}
+			if prepareStandby || inst.TakeoverUntil == 0 {
+				inst.TakeoverUntil = now.Add(TakeoverLeaseDuration(policy)).Unix()
+			}
+		} else {
+			inst.InitiatorRole = InitiatorRoleConverged
+			inst.TakeoverPhase = TakeoverPhaseIdle
+			inst.TakeoverStartedAt = 0
+			inst.TakeoverUntil = 0
+		}
 		inst.LastTakeoverError = ""
 		inst.SAAbsentSince = 0
 		inst.SAAbsentCount = 0
@@ -1335,6 +1351,8 @@ func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDrive
 			return ApplyPlan{}, fmt.Errorf("%s action requires spec", action.Action)
 		}
 		if action.Instance != nil && action.Instance.IKEName != "" && action.Instance.IKEName != action.Spec.TransportID {
+			// Keep the established SA and XFRM data plane, but unload the old
+			// config so inbound negotiation selects the staged generation.
 			_ = ipsec.UnloadConnection(ctx, action.Instance.IKEName)
 		}
 		return ApplyStagedConnection(ctx, ipsec, xfrm, *action.Spec, netns)
@@ -1451,6 +1469,69 @@ func findMatchingSA(states []SAState, spec TransportLinkSpec) SAState {
 		}
 	}
 	return SAState{}
+}
+
+func hasMatchingConnection(states []ConnectionState, spec TransportLinkSpec) bool {
+	for _, state := range states {
+		if state.Name == spec.TransportID &&
+			state.LocalIdentity == string(spec.LocalZone) &&
+			state.RemoteIdentity == string(spec.PeerZone) {
+			return true
+		}
+	}
+	return false
+}
+
+// RecoverObservedLinkInstance reconstructs an in-memory instance only when an
+// allowed generation has its exact XFRM resource and either its loaded
+// connection or an established SA. The caller derives generations from the
+// current verified port record.
+func RecoverObservedLinkInstance(spec TransportLinkSpec, group LinkGroupSpec, generations []uint64, connections []ConnectionState, sas []SAState, links []XFRMLinkState, now time.Time) (LinkInstance, bool) {
+	desiredGeneration := contactGeneration(spec)
+	seen := map[uint64]bool{desiredGeneration: true}
+	for _, generation := range generations {
+		if seen[generation] {
+			continue
+		}
+		seen[generation] = true
+		candidate := rotateSpecForRoleWithGroup(spec, generation, spec.InitiatorRole, group)
+		if !hasMatchingXFRMLink(links, candidate, group.Normalized().NetNS) {
+			continue
+		}
+		state := findMatchingSA(sas, candidate)
+		if state.Established {
+			instance := NewLinkInstance(candidate, LinkStateUp, now)
+			instance.RemoteGeneration = generation
+			instance.Endpoint = state.Endpoint
+			return instance, true
+		}
+		if hasMatchingConnection(connections, candidate) {
+			instance := NewLinkInstance(candidate, LinkStateConnecting, now)
+			instance.RemoteGeneration = generation
+			return instance, true
+		}
+	}
+	return LinkInstance{}, false
+}
+
+func hasMatchingXFRMLink(states []XFRMLinkState, spec TransportLinkSpec, netns NetNSSpec) bool {
+	wantNetNS := netns.Normalized()
+	for _, state := range states {
+		if !state.NamespaceExists || !state.InterfaceExists ||
+			!sameNetNS(state.NetNS, wantNetNS) ||
+			state.InterfaceName != spec.InterfaceName || state.XFRMIfID != spec.XFRMIfID {
+			continue
+		}
+		if !spec.LocalTunnelAddr.IsValid() {
+			return true
+		}
+		for _, address := range state.Addresses {
+			if address.Addr() == spec.LocalTunnelAddr {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func findInstanceSA(states []SAState, inst LinkInstance) SAState {

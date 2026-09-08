@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/netip"
+	"reflect"
 	"testing"
 	"time"
 
@@ -9,6 +10,31 @@ import (
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
+
+func TestLocalIPsecPortGenerationsIncludesValidPrevious(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	verified, _, _, _ := buildTestABVerifiedStates(t)
+	local := verified.Network.Zones[verified.ManagedZone]
+	addTestIPsecRecords(t, local, verified.ManagedZone, now, ipsec.RoleBoth)
+	local.Records[ipsec.RecordKeyPorts] = unsignedIPsecRecord(t, verified.ManagedZone, ipsec.RecordKeyPorts, ipsec.RecordTypePorts, ipsec.PortRecord{
+		Version: 1,
+		Mode:    ipsec.PortModeFixed,
+		Current: &ipsec.PortSelection{
+			Generation: 2,
+			IKE:        ipsec.PortBinding{Advertised: ipsec.DefaultIKEPort},
+			NATT:       ipsec.PortBinding{Advertised: ipsec.DefaultNATTPort},
+			ValidUntil: now.Add(time.Hour).Unix(),
+		},
+		Previous: []ipsec.PortSelection{
+			{Generation: 1, IKE: ipsec.PortBinding{Advertised: ipsec.DefaultIKEPort}, NATT: ipsec.PortBinding{Advertised: ipsec.DefaultNATTPort}, ValidUntil: now.Add(time.Minute).Unix()},
+			{Generation: 3, IKE: ipsec.PortBinding{Advertised: ipsec.DefaultIKEPort}, NATT: ipsec.PortBinding{Advertised: ipsec.DefaultNATTPort}, ValidUntil: now.Add(-time.Minute).Unix()},
+		},
+		UpdatedAt: now.Unix(),
+	})
+	if got, want := ipsecPortGenerations(verified, verified.ManagedZone, now), []uint64{2, 1}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("local generations = %v, want %v", got, want)
+	}
+}
 
 func TestXFRMLinkStateMatchesCandidateRequiresLocalTunnelAddress(t *testing.T) {
 	spec := ipsec.TransportLinkSpec{

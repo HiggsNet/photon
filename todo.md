@@ -84,9 +84,9 @@ Daemon
 - [ ] 完全删除持久化 `LinkInstances`，不新增 `LinkJournal` / `IPsecTransitions` checkpoint；`IPsecTransportKey` 和 `EndpointACLs` 继续由 Linux state 持久化。
   - [x] 补全 StrongSwan loaded connection、SA 和配置 namespace 的全局 XFRM inventory；同一 namespace 的 link/address 只读取一次，第一阶段只 Observe、不自动删除。
   - [ ] 从 VerifiedState current/previous generation、配置和确定性命名直接计算可保留资源；不新增 `AllowedRuntime`、journal、capability wrapper 或第二套 owner/token。
-  - [ ] 按保守策略恢复 restart rotation/takeover：current/previous 双链路先保留，previous-only 先建 current，startup grace/absence delay 重新开始。
+  - [x] 按保守策略恢复 restart rotation/takeover：reconcile 工作集启动时为空；current/previous 从 verified generation 加 connection/SA/XFRM 观察恢复，previous-only 保留旧链路并准备 current，takeover deadline 与 backoff 不从磁盘恢复。
   - [ ] orphan cleanup 后置接入：StrongSwan connection 必须匹配可推导的完整 ID；XFRM interface 必须同时位于配置 namespace、类型为 xfrm，并匹配可推导的 name 与 `if_id`；普通 reconcile 不按前缀批量删除。
-  - [ ] 将在线 link 数据放进无 DB/线程的 `LinuxObservation`；`pkg/transport/ipsec.LinkInstance` 仅作为 daemon 内存工作对象。
+  - [x] 将在线 link 数据放进无 DB/线程的 `LinuxObservation`；reconcile、health、routing/firewall、control/Observer 均读取该在线快照，`pkg/transport/ipsec.LinkInstance` 仅作为 daemon 内存工作对象。
   - [ ] 删除 current/legacy RuntimeState 中 `LinkInstances`、`IPsecReconcile` 及其 clone、迁移、commit 和诊断依赖；旧 JSON 字段直接丢弃，不新增 schema、bucket 或 checkpoint。
   - [ ] 用 crash/restart 测试覆盖 create、rotation 各阶段、current-only、previous-only、loaded-no-SA、takeover、revoke/config removal 和 orphan cleanup；未被测试证明的恢复规则不标完成。
 - [ ] 将 `RoutingReconcile`、`FirewallReconcile`、BIRD status/PID/socket 可用性改为启动后重新 Observe；确定性路径、resource ID 和 policy hash 不重复落盘。

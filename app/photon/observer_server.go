@@ -118,17 +118,16 @@ func observerIDsPayload(key string, ids []string) map[string]any {
 	return map[string]any{key: ids}
 }
 
-// observerLinkIDsPayload returns {link_ids: [...]} from Linux runtime state.
+// observerLinkIDsPayload returns {link_ids: [...]} from the live observation.
 func (d *Daemon) observerLinkIDsPayload() any {
-	if d == nil || d.StateStore == nil {
+	if d == nil {
 		return nil
 	}
-	d.StateStore.mu.RLock()
-	ids := make([]string, 0, len(d.StateStore.runtime.LinkInstances))
-	for id := range d.StateStore.runtime.LinkInstances {
+	links, _ := d.linuxObservation.ipsecSnapshot()
+	ids := make([]string, 0, len(links))
+	for id := range links {
 		ids = append(ids, id)
 	}
-	d.StateStore.mu.RUnlock()
 	if len(ids) == 0 {
 		return nil
 	}
@@ -242,9 +241,11 @@ func (p *observerProvider) Links(linkFilter string) (any, error) {
 		return inspecthttp.LinksResponse{Instances: []inspecthttp.LinkJSON{}}, nil
 	}
 	health := d.healthStatusResponse()
+	observedLinks, reconcile := d.linuxObservation.ipsecSnapshot()
 	d.StateStore.mu.RLock()
-	build := buildStoredLinkInspection(observerRuntime(d), d.StateStore.runtime.LinkInstances, d.StateStore.runtime.IPsecReconcile, d.StateStore.runtime.BirdInstances, health)
+	bird := photonstate.CloneBirdInstances(d.StateStore.runtime.BirdInstances)
 	d.StateStore.mu.RUnlock()
+	build := buildStoredLinkInspection(observerRuntime(d), linkInstancesFromIPsec(observedLinks), reconcile, bird, health)
 	view := build.Inspection
 	// Single link detail
 	if linkFilter != "" {
@@ -270,18 +271,13 @@ func healthLinksWithContext(d *Daemon, links []healthLinkJSON) ([]inspecthttp.He
 	if d == nil || d.StateStore == nil {
 		return inspecthttp.BuildHealthContext(input), nil
 	}
-	d.StateStore.mu.RLock()
-	if d.StateStore.runtime == nil {
-		d.StateStore.mu.RUnlock()
-		return inspecthttp.BuildHealthContext(input), nil
-	}
+	observedLinks, reconcile := d.linuxObservation.ipsecSnapshot()
 	desiredByID := map[string]desiredLinkState{}
-	if d.StateStore.runtime.IPsecReconcile != nil {
-		desiredByID = desiredByInstanceID(d.StateStore.runtime.IPsecReconcile.Desired)
+	if reconcile != nil {
+		desiredByID = desiredByInstanceID(reconcile.Desired)
 	}
-	input.Instances = inspectHealthInstances(d.StateStore.runtime.LinkInstances)
+	input.Instances = inspectHealthInstances(linkInstancesFromIPsec(observedLinks))
 	input.Desired = inspectHealthDesired(desiredByID)
-	d.StateStore.mu.RUnlock()
 	input.Unknown = func(instanceID string) any {
 		return healthLinkJSON{InstanceID: instanceID, State: "unknown"}
 	}

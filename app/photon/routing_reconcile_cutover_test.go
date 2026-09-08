@@ -66,6 +66,7 @@ func TestReconcileRoutingFeedsBirdObservationToRotateCutoverGate(t *testing.T) {
 		Neighbors: []bird.BirdNeighbor{{Interface: "phx-new", Metric: 96}},
 	}}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	setTestIPsecObservation(service, runtime)
 	service.health = &healthDriver{Manager: manager}
 	installTestBirdDrivers(service, &fakeBirdProcessManager{running: false}, func(socketPath string, timeout time.Duration) birdClient {
 		return client

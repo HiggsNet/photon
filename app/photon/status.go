@@ -68,23 +68,22 @@ func daemonStatusView(d *Daemon) inspect.DaemonStatusView {
 	view := store.common.ReadView()
 	store.mu.RLock()
 	meta := store.metaLocked()
-	linkInstances := 0
+	linkInstances, ipsecReconcile := d.linuxObservation.ipsecSnapshot()
 	desiredLinks := 0
 	lastLinkError := ""
 	lastRoutingError := ""
 	ipsecLastRunUnix := int64(0)
 	routingLastRunUnix := int64(0)
 	if store.runtime != nil {
-		linkInstances = len(store.runtime.LinkInstances)
-		if store.runtime.IPsecReconcile != nil {
-			desiredLinks = store.runtime.IPsecReconcile.DesiredLinks
-			lastLinkError = store.runtime.IPsecReconcile.LastError
-			ipsecLastRunUnix = store.runtime.IPsecReconcile.LastRunUnix
-		}
 		if store.runtime.RoutingReconcile != nil {
 			lastRoutingError = store.runtime.RoutingReconcile.LastError
 			routingLastRunUnix = store.runtime.RoutingReconcile.LastRunUnix
 		}
+	}
+	if ipsecReconcile != nil {
+		desiredLinks = ipsecReconcile.DesiredLinks
+		lastLinkError = ipsecReconcile.LastError
+		ipsecLastRunUnix = ipsecReconcile.LastRunUnix
 	}
 	store.mu.RUnlock()
 	store.writeMu.Unlock()
@@ -124,7 +123,7 @@ func daemonStatusView(d *Daemon) inspect.DaemonStatusView {
 		ReconcileProgress:  meta.ReconcileProgress,
 		KnownZones:         knownZones,
 		KnownPeers:         knownPeers,
-		LinkInstances:      linkInstances,
+		LinkInstances:      len(linkInstances),
 		DesiredLinks:       desiredLinks,
 		LastLinkError:      lastLinkError,
 		LastRoutingError:   lastRoutingError,

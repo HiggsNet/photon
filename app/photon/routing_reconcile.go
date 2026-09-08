@@ -42,6 +42,7 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 	if common.State == nil || runtime == nil {
 		return nil
 	}
+	runtime = d.runtimeWithObservation(runtime)
 	rev := uint64(common.Revision)
 	verified := common.State
 	baseBird := photonstate.CloneBirdInstances(runtime.BirdInstances)
@@ -89,6 +90,7 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 	// transaction. Refresh both detached owners only in that uncommon case.
 	if autoAnnounceChanged {
 		common, runtime = d.StateStore.readCommonAndRuntime()
+		runtime = d.runtimeWithObservation(runtime)
 		if common.State == nil || runtime == nil {
 			return firstErr
 		}
@@ -543,6 +545,7 @@ func (d *Daemon) birdDumpForControl(ctx context.Context, netnsName string, view 
 	var runtime *linuxRuntimeState
 	if d.StateStore != nil {
 		_, runtime = d.StateStore.readCommonAndRuntime()
+		runtime = d.runtimeWithObservation(runtime)
 	}
 	for _, inst := range d.App.Config.Routing.Instances {
 		if !inst.Enabled || inst.Mode == ipsec.RoutingModeDisabled {

@@ -2,10 +2,126 @@ package ipsec
 
 import (
 	"context"
-	"github.com/HiggsNet/photon/pkg/core/zone"
+	"net/netip"
 	"testing"
 	"time"
+
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
+
+func TestReconcileRepairsLoadedConnectionWithoutSA(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	spec := TransportLinkSpec{
+		LocalZone: "node-a.catofes.", PeerZone: "node-b.catofes.", OverlayID: "main",
+		Provider: ProviderStrongSwan, LinkID: "link-a", TransportID: "ipsec-a", InitiatorRole: InitiatorRolePrimary,
+	}
+	result := ReconcileLinkInstances(ReconcileInputs{
+		Desired:     []TransportLinkSpec{spec},
+		Connections: []ConnectionState{{Name: spec.TransportID, LocalIdentity: string(spec.LocalZone), RemoteIdentity: string(spec.PeerZone)}},
+		Now:         now,
+	})
+	if len(result.Actions) != 1 || result.Actions[0].Action != ReconcileActionRepair || result.Actions[0].Reason != "loaded connection has no established sa" {
+		t.Fatalf("actions = %+v, want repair of loaded connection", result.Actions)
+	}
+
+	result = ReconcileLinkInstances(ReconcileInputs{
+		Desired:     []TransportLinkSpec{spec},
+		Connections: []ConnectionState{{Name: spec.TransportID, RemoteIdentity: "other.catofes."}},
+		Now:         now,
+	})
+	if len(result.Actions) != 1 || result.Actions[0].Action != ReconcileActionCreate {
+		t.Fatalf("identity-mismatched actions = %+v, want create", result.Actions)
+	}
+
+	result = ReconcileLinkInstances(ReconcileInputs{
+		Desired:     []TransportLinkSpec{spec},
+		Connections: []ConnectionState{{Name: spec.TransportID}},
+		Now:         now,
+	})
+	if len(result.Actions) != 1 || result.Actions[0].Action != ReconcileActionCreate {
+		t.Fatalf("identity-missing actions = %+v, want create", result.Actions)
+	}
+}
+
+func TestReconcileRecoversPreviousGenerationBeforeRotating(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	group := LinkGroupSpec{ID: "main"}
+	linkID := StableLinkID("node-a.catofes.", "node-b.catofes.", group.ID, DefaultPathKey)
+	desired := TransportLinkSpec{
+		LocalZone: "node-a.catofes.", PeerZone: "node-b.catofes.", OverlayID: group.ID,
+		Provider: ProviderStrongSwan, LinkID: linkID, PathKey: DefaultPathKey,
+		Generation: 2, InitiatorRole: InitiatorRolePrimary,
+		ContactPoints: []ContactPoint{
+			{Address: "198.51.100.20", Generation: 2, Current: true, IKEPort: 500, NATTPort: 4500},
+			{Address: "198.51.100.20", Generation: 1, IKEPort: 500, NATTPort: 4501},
+		},
+	}
+	var err error
+	desired, err = RuntimeSpecForPortGeneration(desired, group, 2)
+	if err != nil {
+		t.Fatalf("RuntimeSpecForPortGeneration(current): %v", err)
+	}
+	previous, err := RuntimeSpecForPortGeneration(desired, group, 1)
+	if err != nil {
+		t.Fatalf("RuntimeSpecForPortGeneration(previous): %v", err)
+	}
+	previous.ContactPoints = desired.ContactPoints[1:]
+	previousSA := SAState{
+		Name: previous.TransportID, ChildSA: ChildSAName(previous), XFRMIfID: previous.XFRMIfID,
+		LocalIdentity: string(desired.LocalZone), RemoteIdentity: string(desired.PeerZone),
+		RemoteEndpoint: "198.51.100.20:4501", Endpoint: "198.51.100.20:4501", Established: true,
+	}
+	previousLink := XFRMLinkState{
+		NetNS: NetNSSpec{Kind: NetNSName, Name: DefaultNetNSName}, NamespaceExists: true, InterfaceExists: true,
+		InterfaceName: previous.InterfaceName, XFRMIfID: previous.XFRMIfID,
+		Addresses: []netip.Prefix{netip.PrefixFrom(previous.LocalTunnelAddr, 64)},
+	}
+
+	recovered, ok := RecoverObservedLinkInstance(desired, group, []uint64{2, 1}, nil, []SAState{previousSA}, []XFRMLinkState{previousLink}, now)
+	if !ok {
+		t.Fatal("previous generation was not recovered")
+	}
+	if recovered.RemoteGeneration != 1 || recovered.IKEName != previous.TransportID {
+		t.Fatalf("recovered instance = %+v, want generation 1 runtime", recovered)
+	}
+
+	if _, ok := RecoverObservedLinkInstance(desired, group, []uint64{1}, nil, []SAState{previousSA}, nil, now); ok {
+		t.Fatal("previous generation recovered without matching xfrm")
+	}
+	loaded := ConnectionState{Name: previous.TransportID, LocalIdentity: string(previous.LocalZone), RemoteIdentity: string(previous.PeerZone)}
+	connecting, ok := RecoverObservedLinkInstance(desired, group, []uint64{2, 1}, []ConnectionState{loaded}, nil, []XFRMLinkState{previousLink}, now)
+	if !ok || connecting.ActualState != LinkStateConnecting || connecting.RemoteGeneration != 1 {
+		t.Fatalf("loaded previous generation = (%+v, %v), want connecting generation 1", connecting, ok)
+	}
+	loaded.RemoteIdentity = "other.catofes."
+	if _, ok := RecoverObservedLinkInstance(desired, group, []uint64{2, 1}, []ConnectionState{loaded}, nil, []XFRMLinkState{previousLink}, now); ok {
+		t.Fatal("previous generation recovered from mismatched connection identity")
+	}
+
+	rotating := ReconcileLinkInstances(ReconcileInputs{
+		Desired: []TransportLinkSpec{desired}, Instances: map[string]LinkInstance{recovered.ID: recovered}, SAs: []SAState{previousSA}, Now: now.Add(time.Second),
+		GroupSpecs: map[string]LinkGroupSpec{group.ID: group},
+	})
+	if len(rotating.Actions) != 1 || rotating.Actions[0].Action != ReconcileActionPrepareRotate {
+		t.Fatalf("post-recovery actions = %+v, want prepare rotate", rotating.Actions)
+	}
+
+	standbyDesired := desired
+	standbyDesired.InitiatorRole = InitiatorRoleSecondaryStandby
+	standbySA := previousSA
+	standbyRecovered, ok := RecoverObservedLinkInstance(standbyDesired, group, []uint64{2, 1}, nil, []SAState{standbySA}, []XFRMLinkState{previousLink}, now)
+	if !ok {
+		t.Fatal("standby previous generation was not recovered")
+	}
+	standbyRotating := ReconcileLinkInstances(ReconcileInputs{
+		Desired: []TransportLinkSpec{standbyDesired}, Instances: map[string]LinkInstance{standbyRecovered.ID: standbyRecovered}, SAs: []SAState{standbySA}, Now: now.Add(time.Second),
+		Roles:      map[string]string{LinkInstanceID(standbyDesired): InitiatorRoleSecondaryStandby},
+		GroupSpecs: map[string]LinkGroupSpec{group.ID: group},
+	})
+	if len(standbyRotating.Actions) != 1 || standbyRotating.Actions[0].Action != ReconcileActionPrepareRotate || len(standbyRotating.Actions[0].Spec.ContactPoints) != 0 {
+		t.Fatalf("standby post-recovery actions = %+v, want responder-only prepare rotate", standbyRotating.Actions)
+	}
+}
 
 func TestReconcilePrepareRotateOnGenerationChange(t *testing.T) {
 	now := time.Unix(1717171717, 0)

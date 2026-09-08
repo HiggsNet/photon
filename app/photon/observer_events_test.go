@@ -24,6 +24,7 @@ func TestObserverIDsPayloadSortsAndOmitsEmpty(t *testing.T) {
 func TestObserverLinkIDsPayload(t *testing.T) {
 	runtime := &linuxRuntimeState{LinkInstances: map[string]linkInstanceState{"link-b": {}, "link-a": {}}}
 	d := &Daemon{StateStore: newTestDaemonStateStore(nil, nil, runtime)}
+	d.linuxObservation.replaceIPsec(linkInstancesToIPsec(runtime.LinkInstances), nil)
 	payload, ok := d.observerLinkIDsPayload().(map[string]any)
 	if !ok {
 		t.Fatal("observerLinkIDsPayload should return a map payload")

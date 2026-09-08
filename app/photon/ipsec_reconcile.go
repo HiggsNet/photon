@@ -65,7 +65,10 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		d.recordIPsecReconcileError(rev, now.Unix(), err)
 		return fmt.Errorf("list ipsec sas: %w", err)
 	}
-	instances := linkInstancesToIPsec(runtime.LinkInstances)
+	// Link instances are daemon working memory, not restart input. A fresh
+	// process starts empty and reconstructs usable current/previous generations
+	// from the connection, SA and XFRM observations below.
+	instances, _ := d.linuxObservation.ipsecSnapshot()
 	forceUpdates, err := localAnnounceDNSForceUpdates(ctx, d.App.Config.IPsec, plan.Desired, instances, sas, dnsResolver)
 	if err != nil {
 		d.logWarn("ipsec", "local_announce_dns_check_failed", map[string]any{"error": err.Error()})
@@ -85,14 +88,34 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		return fmt.Errorf("inspect xfrm links: %w", err)
 	}
 	markMissingXFRMLinkInstances(instances, missingXFRMLinks, now)
+	var xfrmLinks []ipsec.XFRMLinkState
+	if xfrmObservations != nil {
+		xfrmLinks = xfrmObservations.Interfaces
+	}
+	groupSpecs := groupSpecMap(groups)
+	for _, spec := range plan.Desired {
+		id := ipsec.LinkInstanceID(spec)
+		if _, exists := instances[id]; exists {
+			continue
+		}
+		generationZone := verified.ManagedZone
+		if ipsec.IsActiveInitiatorRole(spec.InitiatorRole) {
+			generationZone = spec.PeerZone
+		}
+		generations := ipsecPortGenerations(verified, generationZone, now)
+		if instance, ok := ipsec.RecoverObservedLinkInstance(spec, groupSpecs[spec.OverlayID], generations, connections, sas, xfrmLinks, now); ok {
+			instances[id] = instance
+		}
+	}
 	result := ipsec.ReconcileLinkInstances(ipsec.ReconcileInputs{
 		Desired:               plan.Desired,
 		Instances:             instances,
+		Connections:           connections,
 		SAs:                   sas,
 		Now:                   now,
-		Revoked:               revokedLinkPeers(verified.Network, runtime.LinkInstances, common.Gossip, now),
+		Revoked:               revokedLinkPeers(verified.Network, linkInstancesFromIPsec(instances), common.Gossip, now),
 		Roles:                 plan.Roles,
-		GroupSpecs:            groupSpecMap(groups),
+		GroupSpecs:            groupSpecs,
 		GroupBackoff:          groupBackoffMap(groups),
 		GroupRotateRetention:  groupRotateRetentionMap(groups),
 		RotateActivationReady: d.ipsecRotateActivationReady(),
@@ -387,6 +410,12 @@ func (d *Daemon) commitIPsecReconcileResult(rev uint64, runtime *linuxRuntimeSta
 	summary.Committed = true
 	nextInstances := linkInstancesFromIPsec(instances)
 	if ipsecReconcileResultEqual(runtime.LinkInstances, runtime.IPsecReconcile, nextInstances, summary) {
+		if d.StateStore.Meta().Revision != rev {
+			d.ipsecDirty = true
+			d.publishStateStoreRuntimeFlags()
+			return nil
+		}
+		d.linuxObservation.replaceIPsec(instances, summary)
 		return nil
 	}
 	currentRev, committed, err := d.StateStore.commitIPsecIfRevision(rev, runtime.IPsecTransportKey, nextInstances, summary)
@@ -402,6 +431,7 @@ func (d *Daemon) commitIPsecReconcileResult(rev uint64, runtime *linuxRuntimeSta
 		})
 		return nil
 	}
+	d.linuxObservation.replaceIPsec(instances, summary)
 	return nil
 }
 
@@ -470,7 +500,8 @@ func (d *Daemon) recordIPsecReconcileError(rev uint64, unix int64, err error) {
 		})
 		return
 	}
-	reconcile := photonstate.CloneIPsecReconcileState(runtime.IPsecReconcile)
+	links, observedReconcile := d.linuxObservation.ipsecSnapshot()
+	reconcile := photonstate.CloneIPsecReconcileState(observedReconcile)
 	if reconcile == nil {
 		reconcile = &ipsecReconcileState{}
 	}
@@ -479,10 +510,11 @@ func (d *Daemon) recordIPsecReconcileError(rev uint64, unix int64, err error) {
 	reconcile.Committed = true
 	reconcile.Stale = false
 	reconcile.LastError = err.Error()
-	if ipsecReconcileResultEqual(runtime.LinkInstances, runtime.IPsecReconcile, runtime.LinkInstances, reconcile) {
+	if ipsecReconcileSummaryEqual(observedReconcile, reconcile) {
 		return
 	}
-	currentRev, committed, commitErr := d.StateStore.commitIPsecIfRevision(rev, runtime.IPsecTransportKey, runtime.LinkInstances, reconcile)
+	linkStates := linkInstancesFromIPsec(links)
+	currentRev, committed, commitErr := d.StateStore.commitIPsecIfRevision(rev, runtime.IPsecTransportKey, linkStates, reconcile)
 	if commitErr != nil {
 		d.logWarn("ipsec", "save_reconcile_error_failed", map[string]any{"error": commitErr})
 		return
@@ -497,6 +529,7 @@ func (d *Daemon) recordIPsecReconcileError(rev uint64, unix int64, err error) {
 		})
 		return
 	}
+	d.linuxObservation.replaceIPsec(links, reconcile)
 }
 
 // buildIPsecContactPointQuality builds a per-peer, per-contact-point quality
@@ -950,6 +983,22 @@ func groupSpecMap(groups []ipsec.LinkGroupSpec) map[string]ipsec.LinkGroupSpec {
 		out[group.ID] = group.Normalized()
 	}
 	return out
+}
+
+func ipsecPortGenerations(verified *corestate.VerifiedState, node zone.ZonePath, now time.Time) []uint64 {
+	if verified == nil || verified.Network == nil || !node.Valid() {
+		return nil
+	}
+	records, err := ipsec.ExtractNodeRecords(verified.Network, node, now)
+	if err != nil {
+		return nil
+	}
+	ports := ipsec.PortAdvertisements(records.Ports, now)
+	generations := make([]uint64, 0, len(ports))
+	for _, port := range ports {
+		generations = append(generations, port.Generation)
+	}
+	return generations
 }
 
 func groupBackoffMap(groups []ipsec.LinkGroupSpec) map[string]ipsec.BackoffPolicy {

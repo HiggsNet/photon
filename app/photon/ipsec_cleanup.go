@@ -104,6 +104,7 @@ func (d *Daemon) handleIPsecCleanupEvent(ctx context.Context, includeOrphans boo
 	if common.State == nil || runtimeCandidate == nil {
 		return 0, 0, errors.New("daemon state is not loaded")
 	}
+	runtimeCandidate = d.runtimeWithObservation(runtimeCandidate)
 	platformDriver := d.linuxDriver
 	if len(runtimeCandidate.LinkInstances) > 0 || includeOrphans {
 		if platformDriver == nil {
@@ -143,6 +144,7 @@ func (d *Daemon) handleIPsecCleanupEvent(ctx context.Context, includeOrphans boo
 	} else if !committed {
 		return cleaned, orphans, errDaemonStateRevisionStale
 	}
+	d.linuxObservation.replaceIPsec(linkInstancesToIPsec(runtimeCandidate.LinkInstances), runtimeCandidate.IPsecReconcile)
 	d.notifyStateChanged()
 	return cleaned, orphans, nil
 }

@@ -264,6 +264,11 @@ func inspectXFRMLink(ctx context.Context, inspector transportipsec.XFRMLinkInspe
 		if state, ok := observed.links[xfrmObservationKey(spec)]; ok {
 			return state, nil
 		}
+		for _, state := range observed.Interfaces {
+			if state.NetNS.Target() == spec.NetNS && state.InterfaceName == spec.InterfaceName && state.XFRMIfID == spec.XFRMIfID {
+				return state, nil
+			}
+		}
 	}
 	return inspector.InspectLink(ctx, spec)
 }

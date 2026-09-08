@@ -388,7 +388,7 @@ func TestReconcileTakeoverAdoptsExistingSA(t *testing.T) {
 	result := ReconcileLinkInstances(ReconcileInputs{
 		Desired:      []TransportLinkSpec{spec},
 		Instances:    map[string]LinkInstance{inst.ID: inst},
-		SAs:          []SAState{{Name: spec.TransportID, Established: true, Endpoint: "198.51.100.10:500"}},
+		SAs:          []SAState{{Name: spec.TransportID, Established: true, InitiatorKnown: true, Endpoint: "198.51.100.10:500"}},
 		Now:          now,
 		Roles:        plan.Roles,
 		GroupBackoff: map[string]BackoffPolicy{group.ID: group.Reconcile.Backoff},
@@ -399,6 +399,27 @@ func TestReconcileTakeoverAdoptsExistingSA(t *testing.T) {
 	inst = result.Instances[LinkInstanceID(spec)]
 	if inst.ActualState != LinkStateUp || inst.InitiatorRole != InitiatorRoleConverged || inst.Endpoint != "198.51.100.10:500" {
 		t.Fatalf("instance = %+v", inst)
+	}
+
+	localTakeover := NewLinkInstance(spec, LinkStateDown, now)
+	localTakeover.InitiatorRole = InitiatorRoleSecondaryStandby
+	localTakeover.TakeoverStartedAt = now.Add(-time.Hour).Unix()
+	localTakeover.TakeoverUntil = now.Add(-time.Minute).Unix()
+	result = ReconcileLinkInstances(ReconcileInputs{
+		Desired:        []TransportLinkSpec{spec},
+		Instances:      map[string]LinkInstance{localTakeover.ID: localTakeover},
+		SAs:            []SAState{{Name: spec.TransportID, Established: true, Initiator: true, InitiatorKnown: true, Endpoint: "198.51.100.10:500"}},
+		Now:            now,
+		Roles:          plan.Roles,
+		GroupBackoff:   map[string]BackoffPolicy{group.ID: group.Reconcile.Backoff},
+		PrepareStandby: true,
+	})
+	if len(result.Actions) != 1 || result.Actions[0].Action != ReconcileActionAdopt {
+		t.Fatalf("expected local takeover adopt, got %+v", result.Actions)
+	}
+	localTakeover = result.Instances[LinkInstanceID(spec)]
+	if localTakeover.InitiatorRole != InitiatorRoleSecondaryTakeover || localTakeover.TakeoverPhase != TakeoverPhaseActive || localTakeover.TakeoverStartedAt != now.Unix() || localTakeover.TakeoverUntil <= now.Unix() {
+		t.Fatalf("local takeover instance = %+v", localTakeover)
 	}
 }
 
