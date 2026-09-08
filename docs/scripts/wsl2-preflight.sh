@@ -7,7 +7,7 @@
 # WSL2 backend. Run inside the WSL2 distribution, as root or with
 # CAP_NET_ADMIN:
 #
-#   sudo make wsl2-preflight
+#   sudo docs/scripts/wsl2-preflight.sh
 set -euo pipefail
 
 vici_socket="${PHOTON_VICI_SOCKET:-/run/charon.vici}"
