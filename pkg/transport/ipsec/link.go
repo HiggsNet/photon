@@ -78,14 +78,14 @@ type LinkGroupSpec struct {
 	AllowedAddressFamilies []string
 	// XFRMBackend selects the local data-plane device model for this group's
 	// links (see XFRMBackend*). Empty selects XFRMBackendInterface.
-	XFRMBackend        XFRMBackend
-	MaxPeers           int
-	MaxLinksPerPeer    int
-	TunnelAddressPool  netip.Prefix
-	TunnelAddressSpec  TunnelAddressSpec
-	Reconcile          ReconcilePolicy
-	ConnectRules       []string
-	DenyRules          []string
+	XFRMBackend       XFRMBackend
+	MaxPeers          int
+	MaxLinksPerPeer   int
+	TunnelAddressPool netip.Prefix
+	TunnelAddressSpec TunnelAddressSpec
+	Reconcile         ReconcilePolicy
+	ConnectRules      []string
+	DenyRules         []string
 }
 
 type TransportLinkSpec struct {
