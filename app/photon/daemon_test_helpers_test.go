@@ -189,6 +189,14 @@ func setTestIPsecObservation(d *Daemon, runtime *linuxRuntimeState) {
 	d.linuxObservation.replaceIPsec(linkInstancesToIPsec(runtime.LinkInstances), runtime.IPsecReconcile)
 }
 
+func readTestDaemonOwners(d *Daemon) (corestate.View, *linuxRuntimeState) {
+	if d == nil || d.StateStore == nil {
+		return corestate.View{}, nil
+	}
+	common, runtime := d.StateStore.readCommonAndRuntime()
+	return common, d.runtimeWithObservation(runtime)
+}
+
 func buildSignedRecordAt(network *zone.NetworkState, signer ed25519.PrivateKey, path zone.ZonePath, key string, value []byte, recordType string, now time.Time) (*zone.Record, error) {
 	if network == nil {
 		return nil, fmt.Errorf("network is nil")
@@ -1008,8 +1016,8 @@ func waitDaemonRunGossipStrongSwanUp(ctx context.Context, t *testing.T, serviceA
 	var commonA, commonB corestate.View
 	var runtimeA, runtimeB *linuxRuntimeState
 	for {
-		commonA, runtimeA = serviceA.StateStore.readCommonAndRuntime()
-		commonB, runtimeB = serviceB.StateStore.readCommonAndRuntime()
+		commonA, runtimeA = readTestDaemonOwners(serviceA)
+		commonB, runtimeB = readTestDaemonOwners(serviceB)
 		if daemonRunGossipStrongSwanReady(commonA.State, runtimeA, groupA) && daemonRunGossipStrongSwanReady(commonB.State, runtimeB, groupB) {
 			return commonA, runtimeA, commonB, runtimeB
 		}

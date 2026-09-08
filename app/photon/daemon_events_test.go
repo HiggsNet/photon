@@ -588,7 +588,7 @@ func TestPrepareStartupStateDoesNotPersistDerivedAdmission(t *testing.T) {
 	if changed {
 		t.Fatal("prepareStartupState changed = true for derived admission-only state")
 	}
-	common, _ := service.StateStore.readCommonAndRuntime()
+	common, _ := readTestDaemonOwners(service)
 	rev := uint64(common.Revision)
 	if rev != beforeRev {
 		t.Fatalf("verified revision = %d, want runtime-only startup to keep %d", rev, beforeRev)

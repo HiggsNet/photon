@@ -117,7 +117,7 @@ func TestDaemonStateGCApplyPersistsPlan(t *testing.T) {
 	if len(applied.OrphanBirdInstances) != 1 || applied.OrphanBirdInstances[0] != "default" {
 		t.Fatalf("applied plan = %#v, want default orphan", applied)
 	}
-	_, reloaded := service.StateStore.readCommonAndRuntime()
+	_, reloaded := readTestDaemonOwners(service)
 	if _, ok := reloaded.BirdInstances["default"]; ok {
 		t.Fatalf("stale default BIRD state remained: %#v", reloaded.BirdInstances)
 	}

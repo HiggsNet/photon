@@ -194,7 +194,7 @@ func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 
 	service.notifyStateChanged()
 
-	_, latest := service.StateStore.readCommonAndRuntime()
+	_, latest := readTestDaemonOwners(service)
 	if len(latest.LinkInstances) != 1 {
 		t.Fatalf("link instances len = %d, want 1", len(latest.LinkInstances))
 	}
@@ -211,7 +211,7 @@ func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 	}
 
 	service.notifyStateChanged()
-	_, reloaded := service.StateStore.readCommonAndRuntime()
+	_, reloaded := readTestDaemonOwners(service)
 	if len(reloaded.LinkInstances) != 1 {
 		t.Fatalf("second link instances len = %d, want 1", len(reloaded.LinkInstances))
 	}
@@ -367,7 +367,7 @@ func TestDaemonIPsecReconcileDiscardsResultWhenRevisionChanged(t *testing.T) {
 	if !service.ipsecDirty {
 		t.Fatal("ipsecDirty = false, want stale reconcile to be retried")
 	}
-	common, runtime := service.StateStore.readCommonAndRuntime()
+	common, runtime := readTestDaemonOwners(service)
 	rev := uint64(common.Revision)
 	if rev != baseRev+1 {
 		t.Fatalf("state revision = %d, want only external update at %d", rev, baseRev+1)
@@ -474,7 +474,7 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	service.notifyStateChanged()
 
-	common, latest := service.StateStore.readCommonAndRuntime()
+	common, latest := readTestDaemonOwners(service)
 	var inst linkInstanceState
 	for _, v := range latest.LinkInstances {
 		inst = v
@@ -499,7 +499,7 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 	service.linuxObservation.replaceIPsec(linkInstancesToIPsec(latest.LinkInstances), latest.IPsecReconcile)
 	service.notifyStateChanged()
 
-	_, rotated := service.StateStore.readCommonAndRuntime()
+	_, rotated := readTestDaemonOwners(service)
 	for _, v := range rotated.LinkInstances {
 		inst = v
 	}
@@ -577,7 +577,7 @@ func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 	if len(driver.Connections) != 1 {
 		t.Fatalf("connections = %d, want one coalesced apply", len(driver.Connections))
 	}
-	common, latest := service.StateStore.readCommonAndRuntime()
+	common, latest := readTestDaemonOwners(service)
 	if common.State.Network.Zones["node-b.catofes."].Records["coalesce-a"] == nil || common.State.Network.Zones["node-b.catofes."].Records["coalesce-b"] == nil {
 		t.Fatalf("queued record puts were not both persisted")
 	}

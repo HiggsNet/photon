@@ -77,8 +77,6 @@ func migrateLegacyRuntimeStateTx(tx *bolt.Tx, trustedRoot ed25519.PublicKey) (le
 		SyncPeers:         meta.SyncPeers,
 		PeerCleanups:      meta.PeerCleanups,
 		IPsecTransportKey: meta.IPsecTransportKey,
-		LinkInstances:     meta.LinkInstances,
-		IPsecReconcile:    meta.IPsecReconcile,
 		RoutingReconcile:  meta.RoutingReconcile,
 		FirewallReconcile: meta.FirewallReconcile,
 		EndpointACLs:      meta.EndpointACLs,
@@ -111,8 +109,6 @@ func linuxRuntimeStateFromLegacy(state *stateFile) *linuxRuntimeState {
 	return &linuxRuntimeState{
 		PeerCleanups:      state.PeerCleanups,
 		IPsecTransportKey: state.IPsecTransportKey,
-		LinkInstances:     state.LinkInstances,
-		IPsecReconcile:    state.IPsecReconcile,
 		RoutingReconcile:  state.RoutingReconcile,
 		FirewallReconcile: state.FirewallReconcile,
 		EndpointACLs:      state.EndpointACLs,

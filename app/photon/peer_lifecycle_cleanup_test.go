@@ -96,14 +96,14 @@ func TestPeerLifecycleCleanupTearsDownAndSuccessfulSyncRestoresLink(t *testing.T
 		t.Fatalf("seed peer checkpoint: %v", err)
 	}
 	service.notifyStateChanged()
-	_, initial := service.StateStore.readCommonAndRuntime()
+	_, initial := readTestDaemonOwners(service)
 	if len(initial.LinkInstances) != 1 {
 		t.Fatalf("initial links = %+v, want one", initial.LinkInstances)
 	}
 
 	now = now.Add(config.PeerLifecycle.CleanupAfter + time.Second)
 	service.notifyStateChanged()
-	common, cleaned := service.StateStore.readCommonAndRuntime()
+	common, cleaned := readTestDaemonOwners(service)
 	if len(cleaned.LinkInstances) != 0 || cleaned.IPsecReconcile.DesiredLinks != 0 {
 		t.Fatalf("cleaned links = %+v desired=%d", cleaned.LinkInstances, cleaned.IPsecReconcile.DesiredLinks)
 	}
@@ -119,7 +119,7 @@ func TestPeerLifecycleCleanupTearsDownAndSuccessfulSyncRestoresLink(t *testing.T
 		t.Fatalf("record successful sync: %v", err)
 	}
 	service.notifyStateChanged()
-	_, recovered := service.StateStore.readCommonAndRuntime()
+	_, recovered := readTestDaemonOwners(service)
 	if _, ok := recovered.PeerCleanups["node-b.catofes."]; ok {
 		t.Fatal("successful sync did not clear lifecycle suppression")
 	}

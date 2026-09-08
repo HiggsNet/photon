@@ -123,7 +123,7 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 	}
 
 	// Read the generated config and verify upstream interface + static route support.
-	_, latest := service.StateStore.readCommonAndRuntime()
+	_, latest := readTestDaemonOwners(service)
 	birdState := latest.BirdInstances["photontesth2"]
 	if birdState == nil {
 		t.Fatal("BirdInstances[photontesth2] is nil")

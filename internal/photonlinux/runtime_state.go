@@ -7,12 +7,15 @@ import photonstate "github.com/HiggsNet/photon/internal/state"
 type RuntimeState struct {
 	PeerCleanups      map[string]photonstate.PeerLifecycleCleanupState `json:"peer_cleanups,omitempty"`
 	IPsecTransportKey *photonstate.IPsecTransportKeyState              `json:"ipsec_transport_key,omitempty"`
-	LinkInstances     map[string]photonstate.LinkInstanceState         `json:"link_instances,omitempty"`
-	IPsecReconcile    *photonstate.IPsecReconcileState                 `json:"ipsec_reconcile,omitempty"`
-	RoutingReconcile  *photonstate.RoutingReconcileState               `json:"routing_reconcile,omitempty"`
-	FirewallReconcile *photonstate.FirewallReconcileState              `json:"firewall_reconcile,omitempty"`
-	EndpointACLs      map[string]photonstate.EndpointACL               `json:"endpoint_acls,omitempty"`
-	BirdInstances     map[string]*photonstate.BirdInstanceState        `json:"bird_instances,omitempty"`
+	// LinkInstances and IPsecReconcile are temporary in-process projection
+	// slots for callers being moved to LinuxObservation. They are never
+	// decoded, cloned or persisted.
+	LinkInstances     map[string]photonstate.LinkInstanceState  `json:"-"`
+	IPsecReconcile    *photonstate.IPsecReconcileState          `json:"-"`
+	RoutingReconcile  *photonstate.RoutingReconcileState        `json:"routing_reconcile,omitempty"`
+	FirewallReconcile *photonstate.FirewallReconcileState       `json:"firewall_reconcile,omitempty"`
+	EndpointACLs      map[string]photonstate.EndpointACL        `json:"endpoint_acls,omitempty"`
+	BirdInstances     map[string]*photonstate.BirdInstanceState `json:"bird_instances,omitempty"`
 }
 
 // CloneRuntimeState returns a detached controller candidate suitable for
@@ -24,8 +27,6 @@ func CloneRuntimeState(runtime *RuntimeState) *RuntimeState {
 	return &RuntimeState{
 		PeerCleanups:      photonstate.ClonePeerLifecycleCleanups(runtime.PeerCleanups),
 		IPsecTransportKey: photonstate.CloneIPsecTransportKeyState(runtime.IPsecTransportKey),
-		LinkInstances:     photonstate.CloneLinkInstances(runtime.LinkInstances),
-		IPsecReconcile:    photonstate.CloneIPsecReconcileState(runtime.IPsecReconcile),
 		RoutingReconcile:  photonstate.CloneRoutingReconcileState(runtime.RoutingReconcile),
 		FirewallReconcile: photonstate.CloneFirewallReconcileState(runtime.FirewallReconcile),
 		EndpointACLs:      photonstate.CloneEndpointACLs(runtime.EndpointACLs),

@@ -91,7 +91,7 @@ func TestDaemonBIRDRoutingRootSmoke(t *testing.T) {
 
 	// Verify BIRD is running.
 	if !processManager.IsRunning(ctx) {
-		_, latest := service.StateStore.readCommonAndRuntime()
+		_, latest := readTestDaemonOwners(service)
 		inst := latest.BirdInstances[nsName]
 		if inst == nil {
 			t.Fatal("BIRD process is not running after reconcileRouting; instance state is missing")
@@ -109,7 +109,7 @@ func TestDaemonBIRDRoutingRootSmoke(t *testing.T) {
 	sockPath := filepath.Join(dataDir, "netns-"+nsName, "bird.ctl")
 	if _, err := os.Stat(sockPath); err != nil {
 		// The socket path may be derived differently; find it in state.
-		_, latest := service.StateStore.readCommonAndRuntime()
+		_, latest := readTestDaemonOwners(service)
 		if birdState := latest.BirdInstances[nsName]; birdState != nil {
 			sockPath = birdState.ControlSocket
 		}
@@ -196,7 +196,7 @@ func TestDaemonBIRDAdoptRestartRootSmoke(t *testing.T) {
 		t.Fatal("BIRD process is not running after initial reconcile")
 	}
 
-	_, latest := service1.StateStore.readCommonAndRuntime()
+	_, latest := readTestDaemonOwners(service1)
 	birdState := latest.BirdInstances[nsName]
 	if birdState == nil {
 		t.Fatalf("BirdInstances[%s] is nil", nsName)
@@ -210,7 +210,7 @@ func TestDaemonBIRDAdoptRestartRootSmoke(t *testing.T) {
 		t.Fatal("BIRD stopped on non-force daemon shutdown; default shutdown_policy should persist")
 	}
 
-	common, restartedRuntime := service1.StateStore.readCommonAndRuntime()
+	common, restartedRuntime := readTestDaemonOwners(service1)
 	service2 := newTestDaemonFromOwners(rt, common.State, common.Gossip, restartedRuntime, syncConfig, time.Second)
 	processManager2 := bird.NewExecProcessManager("")
 	installTestBirdDrivers(service2, processManager2, func(socketPath string, timeout time.Duration) birdClient {
@@ -365,7 +365,7 @@ func TestDaemonHealthBIRDCutoverGateRootSmoke(t *testing.T) {
 		health:     &healthDriver{Manager: manager},
 		StateStore: stateStore,
 	}
-	_, runtime := service.StateStore.readCommonAndRuntime()
+	_, runtime := readTestDaemonOwners(service)
 	service.recordBirdHealthObservationUnavailableForLinks(runtime.LinkInstances, runtime.IPsecReconcile, nsA, []string{"main"})
 	if ready := service.ipsecRotateCutoverReady()["link-1"]; ready {
 		t.Fatal("cutover should be blocked while BIRD observation is unavailable")
@@ -590,7 +590,7 @@ func TestDaemonBIRDUpstreamRootSmoke(t *testing.T) {
 	}
 
 	// Read generated config and verify upstream interface block.
-	_, latest := service.StateStore.readCommonAndRuntime()
+	_, latest := readTestDaemonOwners(service)
 	birdState := latest.BirdInstances[nsName]
 	if birdState == nil {
 		t.Fatalf("BirdInstances[%s] is nil", nsName)

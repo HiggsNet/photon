@@ -44,7 +44,7 @@ func TestDaemonReconcileUsesSystemXFRMDriverSmoke(t *testing.T) {
 	installTestIPsecDrivers(service, &observedIPsecDriver{}, ipsec.NewSystemXFRMDriver(group.NetNS))
 	service.recoverIPsecLinksOnStart(ctx)
 
-	_, latest := service.StateStore.readCommonAndRuntime()
+	_, latest := readTestDaemonOwners(service)
 	if latest.IPsecReconcile == nil || latest.IPsecReconcile.LastError != "" {
 		t.Fatalf("ipsec reconcile = %+v, want successful system xfrm apply", latest.IPsecReconcile)
 	}
@@ -67,7 +67,7 @@ func TestDaemonReconcileUsesSystemXFRMDriverSmoke(t *testing.T) {
 
 	service.App.Config.IPsec.LinkGroups = nil
 	service.recoverIPsecLinksOnStart(ctx)
-	_, removed := service.StateStore.readCommonAndRuntime()
+	_, removed := readTestDaemonOwners(service)
 	if removed.IPsecReconcile == nil || removed.IPsecReconcile.LastError != "" {
 		t.Fatalf("teardown reconcile = %+v, want successful system xfrm teardown", removed.IPsecReconcile)
 	}
@@ -207,8 +207,8 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 
 	serviceB.recoverIPsecLinksOnStart(ctx)
 	serviceA.recoverIPsecLinksOnStart(ctx)
-	commonA, latestA := serviceA.StateStore.readCommonAndRuntime()
-	commonB, latestB := serviceB.StateStore.readCommonAndRuntime()
+	commonA, latestA := readTestDaemonOwners(serviceA)
+	commonB, latestB := readTestDaemonOwners(serviceB)
 	specA := daemonSystemDesiredSpec(t, commonA.State, latestA, groupA, now)
 	specB := daemonSystemDesiredSpec(t, commonB.State, latestB, groupB, now)
 	if err := waitDaemonTestSA(ctx, clientA, specA.TransportID); err != nil {
@@ -220,8 +220,8 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 
 	serviceA.recoverIPsecLinksOnStart(ctx)
 	serviceB.recoverIPsecLinksOnStart(ctx)
-	_, latestA = serviceA.StateStore.readCommonAndRuntime()
-	_, latestB = serviceB.StateStore.readCommonAndRuntime()
+	_, latestA = readTestDaemonOwners(serviceA)
+	_, latestB = readTestDaemonOwners(serviceB)
 	assertDaemonSystemLinkUp(t, latestA, specA)
 	assertDaemonSystemLinkUp(t, latestB, specB)
 
@@ -230,11 +230,11 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 	pingTunnelAddr(t, ctx, nsA, specA.PeerTunnelAddr, specA.InterfaceName)
 	pingTunnelAddr(t, ctx, nsB, specB.PeerTunnelAddr, specB.InterfaceName)
 
-	restartedCommonA, restartedA := serviceA.StateStore.readCommonAndRuntime()
+	restartedCommonA, restartedA := readTestDaemonOwners(serviceA)
 	restartServiceA := newTestDaemonFromOwners(rtA, restartedCommonA.State, restartedCommonA.Gossip, restartedA, configA, time.Second)
 	installTestIPsecDrivers(restartServiceA, &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}, daemonTestXFRMDriver(groupA.NetNS, nsA))
 	restartServiceA.recoverIPsecLinksOnStart(ctx)
-	recoveredCommonA, recoveredA := restartServiceA.StateStore.readCommonAndRuntime()
+	recoveredCommonA, recoveredA := readTestDaemonOwners(restartServiceA)
 	assertDaemonSystemLinkUp(t, recoveredA, specA)
 	if recoveredA.IPsecReconcile == nil || len(recoveredA.IPsecReconcile.Actions) != 1 {
 		t.Fatalf("restart reconcile = %+v, want one recovery observation action", recoveredA.IPsecReconcile)
@@ -266,7 +266,7 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 	restartServiceA = newTestDaemonFromOwners(rtA, recoveredCommonA.State, recoveredCommonA.Gossip, recoveredA, configA, time.Second)
 	installTestIPsecDrivers(restartServiceA, &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}, daemonTestXFRMDriver(groupA.NetNS, nsA))
 	restartServiceA.recoverIPsecLinksOnStart(ctx)
-	_, revokedA := restartServiceA.StateStore.readCommonAndRuntime()
+	_, revokedA := readTestDaemonOwners(restartServiceA)
 	if len(revokedA.LinkInstances) != 0 {
 		t.Fatalf("node-a link instances after revoke = %+v, want none", revokedA.LinkInstances)
 	}
@@ -419,8 +419,8 @@ func TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke(t *testing.T) {
 
 	serviceB.recoverIPsecLinksOnStart(ctx)
 	serviceA.recoverIPsecLinksOnStart(ctx)
-	commonA, latestA := serviceA.StateStore.readCommonAndRuntime()
-	commonB, latestB := serviceB.StateStore.readCommonAndRuntime()
+	commonA, latestA := readTestDaemonOwners(serviceA)
+	commonB, latestB := readTestDaemonOwners(serviceB)
 	specA := daemonSystemDesiredSpec(t, commonA.State, latestA, groupA, now)
 	specB := daemonSystemDesiredSpec(t, commonB.State, latestB, groupB, now)
 	if err := waitDaemonTestSA(ctx, clientA, specA.TransportID); err != nil {
@@ -432,8 +432,8 @@ func TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke(t *testing.T) {
 
 	serviceA.recoverIPsecLinksOnStart(ctx)
 	serviceB.recoverIPsecLinksOnStart(ctx)
-	_, latestA = serviceA.StateStore.readCommonAndRuntime()
-	_, latestB = serviceB.StateStore.readCommonAndRuntime()
+	_, latestA = readTestDaemonOwners(serviceA)
+	_, latestB = readTestDaemonOwners(serviceB)
 	assertDaemonSystemLinkUp(t, latestA, specA)
 	assertDaemonSystemLinkUp(t, latestB, specB)
 
@@ -576,8 +576,8 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 
 	serviceB.recoverIPsecLinksOnStart(ctx)
 	serviceA.recoverIPsecLinksOnStart(ctx)
-	commonA, latestA := serviceA.StateStore.readCommonAndRuntime()
-	commonB, latestB := serviceB.StateStore.readCommonAndRuntime()
+	commonA, latestA := readTestDaemonOwners(serviceA)
+	commonB, latestB := readTestDaemonOwners(serviceB)
 	specA := daemonSystemDesiredSpec(t, commonA.State, latestA, groupA, now)
 	specB := daemonSystemDesiredSpec(t, commonB.State, latestB, groupB, now)
 	if err := waitDaemonTestSA(ctx, clientA, specA.TransportID); err != nil {
@@ -589,8 +589,8 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 
 	serviceA.recoverIPsecLinksOnStart(ctx)
 	serviceB.recoverIPsecLinksOnStart(ctx)
-	_, latestA = serviceA.StateStore.readCommonAndRuntime()
-	_, latestB = serviceB.StateStore.readCommonAndRuntime()
+	_, latestA = readTestDaemonOwners(serviceA)
+	_, latestB = readTestDaemonOwners(serviceB)
 	assertDaemonSystemLinkUp(t, latestA, specA)
 	assertDaemonSystemLinkUp(t, latestB, specB)
 	addTunnelRoute(t, ctx, nsA, specA)
@@ -612,8 +612,8 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 	installTestIPsecDrivers(serviceB, rotationDriverB, daemonTestXFRMDriver(groupB.NetNS, nsB))
 	serviceB.recoverIPsecLinksOnStart(ctx)
 	serviceA.recoverIPsecLinksOnStart(ctx)
-	_, preparedA := serviceA.StateStore.readCommonAndRuntime()
-	_, preparedB := serviceB.StateStore.readCommonAndRuntime()
+	_, preparedA := readTestDaemonOwners(serviceA)
+	_, preparedB := readTestDaemonOwners(serviceB)
 	instA := preparedA.LinkInstances[ipsec.LinkInstanceID(specA)]
 	if instA.RotatePhase != ipsec.RotatePhaseTestingNew || instA.StagedGeneration != 2 {
 		t.Fatalf("prepared rotate instance A = %+v, want testing_new generation 2", instA)
@@ -655,8 +655,8 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 	serviceB = newTestDaemonFromOwners(rtB, commonB.State, commonB.Gossip, preparedB, configB, time.Second)
 	installTestIPsecDrivers(serviceB, rotationDriverB, daemonTestXFRMDriver(groupB.NetNS, nsB))
 	serviceB.recoverIPsecLinksOnStart(ctx)
-	_, committedA := serviceA.StateStore.readCommonAndRuntime()
-	_, committedB := serviceB.StateStore.readCommonAndRuntime()
+	_, committedA := readTestDaemonOwners(serviceA)
+	_, committedB := readTestDaemonOwners(serviceB)
 	rotatedSpecA := daemonSystemDesiredSpec(t, commonA.State, committedA, groupA, now.Add(time.Minute))
 	rotatedSpecB := daemonSystemDesiredSpec(t, commonB.State, committedB, groupB, now.Add(time.Minute))
 	// After commit the active XFRM interface and IKE name are the staged ones;
@@ -902,8 +902,8 @@ func TestDaemonDryRunABIPsecSmokeCoversBringupAndSAObservation(t *testing.T) {
 	serviceA.notifyStateChanged()
 	serviceB.notifyStateChanged()
 
-	commonA, latestA := serviceA.StateStore.readCommonAndRuntime()
-	commonB, latestB := serviceB.StateStore.readCommonAndRuntime()
+	commonA, latestA := readTestDaemonOwners(serviceA)
+	commonB, latestB := readTestDaemonOwners(serviceB)
 	specA := singleDesiredSpec(t, commonA.State.ManagedZone, latestA)
 	specB := singleDesiredSpec(t, commonB.State.ManagedZone, latestB)
 	assertDryRunApply(t, driverA, specA, group.NetNS)
@@ -924,8 +924,8 @@ func TestDaemonDryRunABIPsecSmokeCoversBringupAndSAObservation(t *testing.T) {
 	serviceA.notifyStateChanged()
 	serviceB.notifyStateChanged()
 
-	_, latestA = serviceA.StateStore.readCommonAndRuntime()
-	_, latestB = serviceB.StateStore.readCommonAndRuntime()
+	_, latestA = readTestDaemonOwners(serviceA)
+	_, latestB = readTestDaemonOwners(serviceB)
 	assertSingleLinkUpFromSA(t, latestA, specA, driverA.sas[0])
 	assertSingleLinkUpFromSA(t, latestB, specB, driverB.sas[0])
 	var out bytes.Buffer
@@ -1051,8 +1051,8 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 		t.Fatalf("reconcile node-b ipsec links: %v", err)
 	}
 
-	commonA, latestA := serviceA.StateStore.readCommonAndRuntime()
-	commonB, latestB := serviceB.StateStore.readCommonAndRuntime()
+	commonA, latestA := readTestDaemonOwners(serviceA)
+	commonB, latestB := readTestDaemonOwners(serviceB)
 	assertGossipedIPsecRecords(t, commonA.State.Network, "node-b.catofes.")
 	assertGossipedIPsecRecords(t, commonB.State.Network, "node-a.catofes.")
 	specA := singleDesiredSpec(t, commonA.State.ManagedZone, latestA)

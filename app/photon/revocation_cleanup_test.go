@@ -372,7 +372,7 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 	service.notifyStateChanged()
 
 	// Now revoke node-b.catofes.
-	common, current := service.StateStore.readCommonAndRuntime()
+	common, current := readTestDaemonOwners(service)
 	parent := common.State.Network.Zones["catofes."]
 	delegation := parent.Delegations["node-b.catofes."]
 	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
@@ -388,7 +388,7 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 	service.notifyStateChanged()
 
 	// Verify peer cache was cleared after notifyStateChanged.
-	common, current = service.StateStore.readCommonAndRuntime()
+	common, current = readTestDaemonOwners(service)
 	peer := common.Gossip.Peers["node-b.catofes."]
 	if peer.DiscoveredEndpoint != "" {
 		t.Fatalf("discovered addr should be cleared: %s", peer.DiscoveredEndpoint)
@@ -459,7 +459,7 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 	})
 
 	service.notifyStateChanged()
-	common, current := service.StateStore.readCommonAndRuntime()
+	common, current := readTestDaemonOwners(service)
 	if len(current.LinkInstances) != 1 {
 		t.Fatalf("initial link instances = %d, want 1", len(current.LinkInstances))
 	}
@@ -518,7 +518,7 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 		t.Fatalf("revoked node-b route missing from firewall audit set: %v", revokedFirewall.Prefixes.RevokedV4)
 	}
 
-	common, current = service.StateStore.readCommonAndRuntime()
+	common, current = readTestDaemonOwners(service)
 	if len(current.LinkInstances) != 0 {
 		t.Fatalf("link instances should be empty after revocation, got %d", len(current.LinkInstances))
 	}

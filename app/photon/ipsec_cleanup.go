@@ -134,14 +134,7 @@ func (d *Daemon) handleIPsecCleanupEvent(ctx context.Context, includeOrphans boo
 			return cleaned, orphans, err
 		}
 	}
-	if _, committed, err := d.StateStore.commitIPsecIfRevision(
-		uint64(common.Revision),
-		runtimeCandidate.IPsecTransportKey,
-		runtimeCandidate.LinkInstances,
-		runtimeCandidate.IPsecReconcile,
-	); err != nil {
-		return cleaned, orphans, err
-	} else if !committed {
+	if d.StateStore.Meta().Revision != uint64(common.Revision) {
 		return cleaned, orphans, errDaemonStateRevisionStale
 	}
 	d.linuxObservation.replaceIPsec(linkInstancesToIPsec(runtimeCandidate.LinkInstances), runtimeCandidate.IPsecReconcile)
