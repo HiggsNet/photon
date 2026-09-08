@@ -1,0 +1,40 @@
+# Photon WSL2 client configuration.
+#
+# Copy this file and replace {{...}} placeholders.
+# See docs/wsl2-quickstart.md for the full deployment flow.
+
+data_dir: {{DATA_DIR}}
+state_path: {{STATE_PATH}}
+trusted_root_public_key: {{TRUSTED_ROOT_PUBLIC_KEY}}
+
+gossip:
+  peer_id: {{CLIENT_ZONE}}
+  listen_addr: "[::]:33434"
+  bootstrap:
+    - id: {{GATEWAY_ZONE}}
+      addr: {{GATEWAY_IP}}:33434
+
+netns:
+  default:
+    kind: host
+
+ipsec:
+  role: out
+  driver: strongswan
+  xfrm_backend: policy
+  vici_socket: {{VICI_SOCKET_PATH}}
+  fixed_ike_port: {{CHARON_PORT}}
+  fixed_natt_port: {{CHARON_NATT_PORT}}
+
+overlays:
+  - id: {{OVERLAY_ID}}
+    connect:
+      - "strongswan://*"
+    tunnel_address:
+      mode: derived-pool
+      family: ipv4
+      pool: {{TUNNEL_POOL}}
+
+log:
+  mode: stderr
+  level: info

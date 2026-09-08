@@ -1,0 +1,14 @@
+[Unit]
+Description=Photon WSL2 client (charon + daemon)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart={{INSTALL_DIR}}/start-wsl2.sh
+ExecStop={{INSTALL_DIR}}/stop-wsl2.sh
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target
