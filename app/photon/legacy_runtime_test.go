@@ -61,7 +61,8 @@ func (d *DaemonService) completeSyncSession(session *SyncSession, networkChanged
 }
 
 func xfrmLinkStateMatchesCandidate(state ipsec.XFRMLinkState, spec ipsec.TransportLinkSpec) bool {
-	matches, _ := xfrmLinkStateMatchReason(state, spec)
+	d := &DaemonService{}
+	matches, _ := d.xfrmLinkStateMatchReason(state, spec)
 	return matches
 }
 

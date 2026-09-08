@@ -383,7 +383,7 @@ func (d *DaemonService) maintainExistingXFRMInterfaces(ctx context.Context, xfrm
 		if err != nil {
 			return fmt.Errorf("inspect xfrm interface %q: %w", candidate.InterfaceName, err)
 		}
-		matches, reason := xfrmLinkStateMatchReason(state, candidate)
+		matches, reason := d.xfrmLinkStateMatchReason(state, candidate)
 		d.logDebug("ipsec", "xfrm_runtime_observed", xfrmLinkObservationLogFields("runtime_ensure", id, "active", candidate, state, matches, reason))
 		if !state.NamespaceExists || !state.InterfaceExists {
 			d.logDebug("ipsec", "xfrm_maintenance_skip_missing", map[string]any{
@@ -725,7 +725,7 @@ func (d *DaemonService) filterSAsWithMissingRuntimeLinks(ctx context.Context, in
 			if err != nil {
 				return nil, nil, err
 			}
-			matches, reason := xfrmLinkStateMatchReason(state, candidate)
+			matches, reason := d.xfrmLinkStateMatchReason(state, candidate)
 			d.logDebug("ipsec", "xfrm_runtime_observed", xfrmLinkObservationLogFields("pre_reconcile_filter", id, xfrmCandidateRuntime(spec, candidate, instances[id]), candidate, state, matches, reason))
 			if matches {
 				found = true
@@ -759,17 +759,19 @@ func (d *DaemonService) filterSAsWithMissingRuntimeLinks(ctx context.Context, in
 	return filtered, missing, nil
 }
 
-func xfrmLinkStateMatchReason(state ipsec.XFRMLinkState, spec ipsec.TransportLinkSpec) (bool, string) {
+func (d *DaemonService) xfrmLinkStateMatchReason(state ipsec.XFRMLinkState, spec ipsec.TransportLinkSpec) (bool, string) {
 	if !state.NamespaceExists || !state.InterfaceExists {
 		if !state.NamespaceExists {
 			return false, "missing_namespace"
 		}
 		return false, "missing_interface"
 	}
-	if state.FlagsKnown && (!state.InterfaceUp || !state.Multicast) {
-		if !state.InterfaceUp {
-			return false, "interface_down"
-		}
+	if state.FlagsKnown && !state.InterfaceUp {
+		return false, "interface_down"
+	}
+	// The policy backend uses lo, which doesn't carry the MULTICAST flag,
+	// so only the XFRM interface backend treats it as required.
+	if state.FlagsKnown && !state.Multicast && !d.policyXFRMBackend() {
 		return false, "missing_multicast"
 	}
 	if state.IPv6AddrGenModeKnown && !state.IPv6AddrGenDisabled {
@@ -790,6 +792,16 @@ func xfrmLinkStateMatchReason(state ipsec.XFRMLinkState, spec ipsec.TransportLin
 		}
 	}
 	return false, "missing_address"
+}
+
+// policyXFRMBackend reports whether the daemon-side link matching must apply
+// the policy-device relaxations (no multicast flag on lo, accumulated
+// addresses on the shared device).
+func (d *DaemonService) policyXFRMBackend() bool {
+	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
+		return false
+	}
+	return d.Sync.App.Config.IPsec.XFRMBackend == string(ipsec.XFRMBackendPolicy)
 }
 
 func xfrmLinkObservationLogFields(phase, instanceID, runtime string, spec ipsec.TransportLinkSpec, state ipsec.XFRMLinkState, matches bool, reason string) map[string]any {

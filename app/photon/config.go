@@ -166,6 +166,9 @@ type ipsecConfig struct {
 	LinkGroups                []ipsec.LinkGroupSpec
 	Role                      string
 	Driver                    string
+	XFRMBackend               string
+	FixedIKEPort              uint16
+	FixedNATTPort             uint16
 	VICISocket                string
 	PortMode                  string
 	PortRange                 ipsec.PortRange
@@ -181,6 +184,9 @@ type ipsecConfigYAML struct {
 	Role                      string           `yaml:"role"`
 	DeprecatedAccept          string           `yaml:"accept"`
 	Driver                    string           `yaml:"driver"`
+	XFRMBackend               string           `yaml:"xfrm_backend"`
+	FixedIKEPort              uint16           `yaml:"fixed_ike_port"`
+	FixedNATTPort             uint16           `yaml:"fixed_natt_port"`
 	VICISocket                string           `yaml:"vici_socket"`
 	PortMode                  string           `yaml:"port_mode"`
 	PortRange                 ipsec.PortRange  `yaml:"port_range"`
@@ -349,6 +355,9 @@ func normalizeAppConfig(config *appConfig) {
 	}
 	if config.IPsec.Driver == "" {
 		config.IPsec.Driver = ipsecDriverStrongSwan
+	}
+	if config.IPsec.XFRMBackend == "" {
+		config.IPsec.XFRMBackend = string(ipsec.XFRMBackendInterface)
 	}
 	if config.IPsec.PortMode == "" {
 		config.IPsec.PortMode = ipsec.PortModeFixed
@@ -522,6 +531,17 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 		}
 		config.IPsec.Driver = driver
 	}
+	if file.IPsec.XFRMBackend != "" {
+		backend, err := ipsec.NormalizeXFRMBackend(file.IPsec.XFRMBackend)
+		if err != nil {
+			return err
+		}
+		config.IPsec.XFRMBackend = string(backend)
+	}
+	if file.IPsec.FixedIKEPort != 0 || file.IPsec.FixedNATTPort != 0 {
+		config.IPsec.FixedIKEPort = file.IPsec.FixedIKEPort
+		config.IPsec.FixedNATTPort = file.IPsec.FixedNATTPort
+	}
 	if file.IPsec.Role != "" {
 		role := strings.ToLower(strings.TrimSpace(file.IPsec.Role))
 		switch role {
@@ -595,6 +615,15 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 	if err != nil {
 		return err
 	}
+	// netns.default is the default for EVERY netns consumer, including the
+	// IPsec driver; without this the driver always fell back to the built-in
+	// named netns "photon" regardless of netns.default.kind.
+	if file.Netns != nil && file.Netns.Default != nil {
+		if spec, ok := config.Netns.Names["default"]; ok {
+			config.Overlay.DefaultNetNS = spec
+			config.IPsec.DefaultNetNS = spec
+		}
+	}
 	// Parse routing.instances[], if any.
 	if file.Routing != nil {
 		config.Routing, err = parseRoutingConfigInstances(file.Routing.Instances, config.Netns, config.DataDir)
@@ -614,6 +643,13 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 		groups, err := parseOverlayConfigs(file.Overlays, config.Netns, config.Overlay.DefaultNetNS)
 		if err != nil {
 			return err
+		}
+		if backend, err := ipsec.NormalizeXFRMBackend(config.IPsec.XFRMBackend); err != nil {
+			return err
+		} else if backend != ipsec.XFRMBackendInterface {
+			for i := range groups {
+				groups[i].XFRMBackend = backend
+			}
 		}
 		config.IPsec.LinkGroups = groups
 	}
