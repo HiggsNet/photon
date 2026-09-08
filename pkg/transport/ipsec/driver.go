@@ -107,6 +107,13 @@ type XFRMExtraAddressAssigner interface {
 	AssignExtraAddress(context.Context, TransportLinkSpec, string) error
 }
 
+// XFRMPeerRouteInstaller is an optional capability for XFRM drivers that
+// install a kernel route for the peer's tunnel address. Without this route,
+// the kernel cannot forward traffic to the peer through the tunnel.
+type XFRMPeerRouteInstaller interface {
+	EnsurePeerRoute(context.Context, TransportLinkSpec) error
+}
+
 type XFRMLinkState struct {
 	NetNS                    NetNSSpec
 	NamespaceExists          bool
@@ -184,6 +191,11 @@ type StrongSwanDriver struct {
 	LogConfig        func(event string, fields map[string]any)
 	OperationTimeout time.Duration
 	InitiateAsync    bool
+	// XFRMBackend selects how CHILD SAs bind to the local data-plane device.
+	// The empty value selects the historical XFRM interface binding (if_id);
+	// XFRMBackendPolicy omits if_id bindings so charon installs pure xfrm
+	// policies without requiring a virtual device.
+	XFRMBackend XFRMBackend
 	// InitiateTimeout is sent to charon in the VICI request.  It bounds the
 	// blocking controller callback inside charon; a Go context timeout alone
 	// only disconnects the client and does not release charon's worker.
@@ -308,6 +320,14 @@ func ApplyTransportLink(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriver,
 	if spec.LocalTunnelAddr.IsValid() {
 		if err := xfrm.AssignAddress(ctx, spec, tunnelAddressPrefix(spec.LocalTunnelAddr)); err != nil {
 			return plan, fmt.Errorf("assign address: %w", err)
+		}
+	}
+	// Install a kernel route for the peer's tunnel address so the kernel can
+	// forward traffic to the peer through the tunnel. Without this route,
+	// the tunnel is up but traffic has no path to reach the peer.
+	if installer, ok := xfrm.(XFRMPeerRouteInstaller); ok {
+		if err := installer.EnsurePeerRoute(ctx, spec); err != nil {
+			return plan, fmt.Errorf("ensure peer route: %w", err)
 		}
 	}
 	return plan, nil

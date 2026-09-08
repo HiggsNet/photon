@@ -323,6 +323,7 @@ func applyRuntimeGeneration(spec *TransportLinkSpec, group LinkGroupSpec, linkIn
 		spec.XFRMIfID = StableXFRMIfID(spec.LocalZone, spec.PeerZone, spec.TransportID)
 	}
 	spec.InterfaceName = StableInterfaceName(spec.XFRMIfID)
+	applyPolicyDeviceOverride(spec, group)
 	localAddr, peerAddr, err := group.DeriveTunnelAddressesForLink(spec.LocalZone, spec.PeerZone, spec.LinkID, spec.PathKey, spec.AddressEpoch, linkIndex)
 	if err != nil {
 		return err
@@ -350,6 +351,7 @@ func RuntimeSpecForPortGeneration(base TransportLinkSpec, group LinkGroupSpec, g
 		spec.XFRMIfID = StableXFRMIfID(spec.LocalZone, spec.PeerZone, spec.TransportID)
 	}
 	spec.InterfaceName = StableInterfaceName(spec.XFRMIfID)
+	applyPolicyDeviceOverride(&spec, group)
 	if group.ID == "" {
 		return spec, nil
 	}
@@ -368,6 +370,16 @@ func RuntimeSpecForPortGeneration(base TransportLinkSpec, group LinkGroupSpec, g
 
 func canLoadResponder(localRole string) bool {
 	return localRole == RoleIn || localRole == RoleBoth
+}
+
+// applyPolicyDeviceOverride routes policy-backend links through the loopback
+// device: there is no virtual device, and the tunnel address lives on lo.
+// Group must be normalized (or carry an explicit backend); unnormalized empty
+// backend selects the interface behavior.
+func applyPolicyDeviceOverride(spec *TransportLinkSpec, group LinkGroupSpec) {
+	if group.XFRMBackend == XFRMBackendPolicy {
+		spec.InterfaceName = "lo"
+	}
 }
 
 func localRoleFromState(ns *zone.NetworkState, local zone.ZonePath, now time.Time) string {

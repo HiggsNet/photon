@@ -279,7 +279,9 @@ func (d SystemXFRMDriver) EnsureObservedInterfaces(ctx context.Context, observed
 					return err
 				}
 			}
-			if !state.FlagsKnown || !state.Multicast {
+			// Policy mode routes through lo, which has no MULTICAST flag;
+			// repairing it would churn every reconcile cycle.
+			if !d.policyBackend() && (!state.FlagsKnown || !state.Multicast) {
 				if err := d.enableMulticast(ctx, netns, item.Spec.InterfaceName); err != nil {
 					return err
 				}

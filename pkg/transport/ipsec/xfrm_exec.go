@@ -20,6 +20,9 @@ type SystemXFRMDriver struct {
 	IPPath       string
 	SysctlPath   string
 	TruePath     string
+	// Backend selects how per-link devices are materialized and how CHILD
+	// SAs bind to them. Zero selects XFRMBackendInterface.
+	Backend XFRMBackend
 }
 
 func NewSystemXFRMDriver(defaultNetNS NetNSSpec) SystemXFRMDriver {
@@ -80,6 +83,13 @@ func (d SystemXFRMDriver) EnsureInterface(ctx context.Context, spec TransportLin
 	}
 	if err := d.EnsureNamespace(ctx, netns); err != nil {
 		return err
+	}
+	if d.policyBackend() {
+		// Policy-based xfrm: no virtual device needed. charon installs xfrm
+		// policies via VICI. The local tunnel address is assigned to lo via
+		// AssignAddress. Install a route for the peer tunnel address so the
+		// kernel sends matching packets through the xfrm framework.
+		return d.ensurePolicyRoute(ctx, netns, spec)
 	}
 	if d.linkExists(ctx, netns, spec.InterfaceName) {
 		if err := d.disableIPv6AddrGen(ctx, netns, spec.InterfaceName); err != nil {
@@ -171,7 +181,7 @@ func (d SystemXFRMDriver) FilterSAsWithMissingLinks(ctx context.Context, desired
 		if err != nil {
 			return nil, nil, err
 		}
-		if xfrmLinkStateMatchesSpec(state, spec) {
+		if d.linkStateMatchesSpec(state, spec) {
 			continue
 		}
 		missing[LinkInstanceID(spec)] = spec
@@ -207,11 +217,18 @@ func (d SystemXFRMDriver) inspectInterfaceAddresses(ctx context.Context, netns N
 	return prefixes, nil
 }
 
-func xfrmLinkStateMatchesSpec(state XFRMLinkState, spec TransportLinkSpec) bool {
+// linkStateMatchesSpec reports whether an observed link satisfies its spec.
+// XFRM interfaces must be up and multicast-enabled. The policy backend uses
+// the loopback device (lo), which never carries the MULTICAST flag, so only
+// UP is required there.
+func (d SystemXFRMDriver) linkStateMatchesSpec(state XFRMLinkState, spec TransportLinkSpec) bool {
 	if !state.NamespaceExists || !state.InterfaceExists {
 		return false
 	}
-	if state.FlagsKnown && (!state.InterfaceUp || !state.Multicast) {
+	if state.FlagsKnown && !state.InterfaceUp {
+		return false
+	}
+	if !d.policyBackend() && state.FlagsKnown && !state.Multicast {
 		return false
 	}
 	if !spec.LocalTunnelAddr.IsValid() {
@@ -235,6 +252,11 @@ func saMatchesAnyMissingLink(sa SAState, missing map[string]TransportLinkSpec) b
 }
 
 func (d SystemXFRMDriver) DeleteInterface(ctx context.Context, name string) error {
+	if d.policyBackend() {
+		// Policy mode has no per-link device to delete; the tunnel address
+		// on lo is reclaimed by address pruning in AssignAddress.
+		return nil
+	}
 	if name == "" {
 		return errors.New("interface name is required")
 	}
@@ -259,10 +281,15 @@ func (d SystemXFRMDriver) AssignAddress(ctx context.Context, spec TransportLinkS
 	if err != nil {
 		return err
 	}
-	if err := d.pruneInterfaceAddresses(ctx, netns, spec.InterfaceName, address); err != nil {
-		return err
+	// In policy mode the address goes on lo, which accumulates one address
+	// per link; pruning would strip sibling links' tunnel addresses.
+	if !d.policyBackend() {
+		if err := d.pruneInterfaceAddresses(ctx, netns, spec.InterfaceName, address); err != nil {
+			return err
+		}
+		return d.runInNetNS(ctx, netns, "addr", "replace", address, "dev", spec.InterfaceName)
 	}
-	return d.runInNetNS(ctx, netns, "addr", "replace", address, "dev", spec.InterfaceName)
+	return d.runInNetNS(ctx, netns, "addr", "replace", address, "dev", "lo")
 }
 
 func (d SystemXFRMDriver) AssignExtraAddress(ctx context.Context, spec TransportLinkSpec, address string) error {
