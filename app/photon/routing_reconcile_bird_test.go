@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
-	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -77,8 +76,8 @@ func TestReconcileRoutingBacksOffAfterManagedBirdCrash(t *testing.T) {
 	if pm.started {
 		t.Fatalf("managed BIRD should not restart while crash backoff is active")
 	}
-	_, latest := service.StateStore.readCommonAndRuntime()
-	inst := latest.BirdInstances["photontesth2"]
+	latest := service.linuxObservation.routingSnapshot()
+	inst := latest.Instances["photontesth2"]
 	if inst == nil {
 		t.Fatalf("missing bird instance state")
 	}
@@ -113,7 +112,7 @@ func TestReconcileRoutingRestartsManagedBirdAfterCrashBackoff(t *testing.T) {
 	}}
 	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
-	runtime.BirdInstances = map[string]*BirdInstanceState{
+	initialBird := map[string]*bird.InstanceObservation{
 		"photontesth2": {
 			NetNSName:        "photontesth2",
 			State:            birdInstanceStateDegraded,
@@ -131,6 +130,7 @@ func TestReconcileRoutingRestartsManagedBirdAfterCrashBackoff(t *testing.T) {
 
 	pm := &fakeBirdProcessManager{running: false}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service.linuxObservation.replaceRouting(&routingObservation{Instances: initialBird})
 	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return &fakeBirdClient{}
 	})
@@ -144,8 +144,8 @@ func TestReconcileRoutingRestartsManagedBirdAfterCrashBackoff(t *testing.T) {
 	if pm.startSpec.Owner.RouteTableToken == "" || pm.startSpec.Owner.RuleToken == "" {
 		t.Fatalf("start spec owner tokens are incomplete: %+v", pm.startSpec.Owner)
 	}
-	_, latest := service.StateStore.readCommonAndRuntime()
-	inst := latest.BirdInstances["photontesth2"]
+	latest := service.linuxObservation.routingSnapshot()
+	inst := latest.Instances["photontesth2"]
 	if inst == nil || inst.State != birdInstanceStateRunning {
 		t.Fatalf("bird instance = %+v, want running", inst)
 	}
@@ -182,16 +182,14 @@ func TestReconcileRoutingClearsStaleBackoffForRunningBird(t *testing.T) {
 		t.Fatalf("initial reconcileRouting: %v", err)
 	}
 
-	if _, _, err := updateTestRuntime(service.StateStore, func(runtime *linuxRuntimeState) {
-		inst := runtime.BirdInstances["photontesth2"]
-		inst.State = birdInstanceStateDegraded
-		inst.LastError = "bird restart backoff active until 1970-01-01T01:06:41Z"
-		inst.FailureCount = 1
-		inst.BackoffUntilUnix = now.Add(-time.Second).Unix()
-		inst.LastExit = "pid 1234: signal: killed"
-	}); err != nil {
-		t.Fatalf("seed stale BIRD state: %v", err)
-	}
+	observed := service.linuxObservation.routingSnapshot()
+	inst := observed.Instances["photontesth2"]
+	inst.State = birdInstanceStateDegraded
+	inst.LastError = "bird restart backoff active until 1970-01-01T01:06:41Z"
+	inst.FailureCount = 1
+	inst.BackoffUntilUnix = now.Add(-time.Second).Unix()
+	inst.LastExit = "pid 1234: signal: killed"
+	service.linuxObservation.replaceRouting(observed)
 	pm.running = true
 	pm.started = false
 	client.configureCalls = 0
@@ -199,8 +197,8 @@ func TestReconcileRoutingClearsStaleBackoffForRunningBird(t *testing.T) {
 	if err := service.reconcileRouting(context.Background()); err != nil {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
-	_, latest := service.StateStore.readCommonAndRuntime()
-	inst := latest.BirdInstances["photontesth2"]
+	latest := service.linuxObservation.routingSnapshot()
+	inst = latest.Instances["photontesth2"]
 	if inst == nil || inst.State != birdInstanceStateRunning || inst.LastError != "" {
 		t.Fatalf("bird instance = %+v, want running with no error", inst)
 	}
@@ -385,9 +383,9 @@ func TestFlushRoutingReconcileCoalesces(t *testing.T) {
 		t.Fatalf("routingDirty should be cleared after flush")
 	}
 
-	_, latest := service.StateStore.readCommonAndRuntime()
-	if len(latest.BirdInstances) != 1 {
-		t.Fatalf("BirdInstances len = %d, want 1", len(latest.BirdInstances))
+	latest := service.linuxObservation.routingSnapshot()
+	if len(latest.Instances) != 1 {
+		t.Fatalf("BirdInstances len = %d, want 1", len(latest.Instances))
 	}
 
 	beforeNoopRev := service.StateStore.Meta().Revision
@@ -399,30 +397,35 @@ func TestFlushRoutingReconcileCoalesces(t *testing.T) {
 	if afterNoopRev := service.StateStore.Meta().Revision; afterNoopRev != beforeNoopRev {
 		t.Fatalf("no-op routing reconcile advanced revision: before=%d after=%d", beforeNoopRev, afterNoopRev)
 	}
-	if got := service.routingLastRunUnix.Load(); got != now.Unix() {
-		t.Fatalf("runtime routing last run = %d, want %d", got, now.Unix())
+	if observation := service.linuxObservation.routingSnapshot(); observation == nil || observation.LastRunUnix != now.Unix() {
+		t.Fatalf("runtime routing observation = %+v, want last run %d", observation, now.Unix())
 	}
 }
 
-func TestCommitRoutingReconcileResultSkipsTimestampOnlyChange(t *testing.T) {
+func TestRoutingObservationDoesNotAdvancePersistentRevision(t *testing.T) {
 	verified := &corestate.VerifiedState{}
-	runtime := &linuxRuntimeState{
-		BirdInstances: map[string]*BirdInstanceState{
-			"mesh": {NetNSName: "mesh", State: birdInstanceStateRunning},
-		},
-		RoutingReconcile: &routingReconcileState{LastRunUnix: 10},
-	}
+	runtime := &linuxRuntimeState{}
 	service := &Daemon{StateStore: newTestDaemonStateStore(verified, nil, runtime)}
-	common, workspace := service.StateStore.readCommonAndRuntime()
+	common, _ := service.StateStore.readCommonAndRuntime()
 	rev := uint64(common.Revision)
-	baseBird := photonstate.CloneBirdInstances(workspace.BirdInstances)
-	baseReconcile := photonstate.CloneRoutingReconcileState(workspace.RoutingReconcile)
-	workspace.RoutingReconcile.LastRunUnix = 20
-
-	if err := service.commitRoutingReconcileResult(rev, baseBird, baseReconcile, workspace.BirdInstances, workspace.RoutingReconcile); err != nil {
-		t.Fatalf("commitRoutingReconcileResult: %v", err)
+	observation := &routingObservation{
+		Instances: map[string]*bird.InstanceObservation{
+			"mesh": {NetNSName: "mesh", Overlays: []string{"main"}, State: birdInstanceStateRunning},
+		},
+		LastRunUnix: 20,
 	}
+	service.publishRoutingObservation(rev, observation)
+	observation.Instances["mesh"].State = birdInstanceStateError
+	observation.Instances["mesh"].Overlays[0] = "changed"
 	if got := service.StateStore.Meta().Revision; got != rev {
-		t.Fatalf("timestamp-only result advanced revision: got %d want %d", got, rev)
+		t.Fatalf("routing observation advanced revision: got %d want %d", got, rev)
+	}
+	got := service.linuxObservation.routingSnapshot()
+	if got == nil || got.LastRunUnix != 20 || got.Instances["mesh"] == nil || got.Instances["mesh"].State != birdInstanceStateRunning || got.Instances["mesh"].Overlays[0] != "main" {
+		t.Fatalf("routing observation = %+v", got)
+	}
+	got.Instances["mesh"].State = birdInstanceStateError
+	if latest := service.linuxObservation.routingSnapshot(); latest.Instances["mesh"].State != birdInstanceStateRunning {
+		t.Fatalf("routing snapshot shares mutable instance: %+v", latest)
 	}
 }

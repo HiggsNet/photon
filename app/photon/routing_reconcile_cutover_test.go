@@ -62,7 +62,7 @@ func TestReconcileRoutingFeedsBirdObservationToRotateCutoverGate(t *testing.T) {
 		t.Fatalf("health probes dispatched = %d, want 1", dispatched)
 	}
 
-	client := &fakeBirdClient{status: &bird.BirdObservedState{
+	client := &fakeBirdClient{status: &bird.BirdObservation{
 		Neighbors: []bird.BirdNeighbor{{Interface: "phx-new", Metric: 96}},
 	}}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
@@ -79,7 +79,7 @@ func TestReconcileRoutingFeedsBirdObservationToRotateCutoverGate(t *testing.T) {
 		t.Fatalf("cutover should stay blocked until BIRD has a staged route")
 	}
 
-	client.status = &bird.BirdObservedState{
+	client.status = &bird.BirdObservation{
 		Neighbors: []bird.BirdNeighbor{{Interface: "phx-new", Metric: 96, Routes: 1}},
 	}
 	if err := service.reconcileRouting(context.Background()); err != nil {
@@ -99,7 +99,7 @@ func TestReconcileRoutingFeedsBirdObservationToRotateCutoverGate(t *testing.T) {
 }
 
 func TestBirdObservationAcceptsUnselectedBabelRouteOnStagedInterface(t *testing.T) {
-	observed := &bird.BirdObservedState{
+	observed := &bird.BirdObservation{
 		Neighbors: []bird.BirdNeighbor{{Interface: "phx-new", Metric: 128}},
 		Routes: []bird.BirdRoute{{
 			Iface:    "phx-new",

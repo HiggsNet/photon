@@ -64,7 +64,7 @@ func (f *fakeBirdProcessManager) LastExit() *bird.ProcessExit {
 
 type fakeBirdClient struct {
 	statusErr          error
-	status             *bird.BirdObservedState
+	status             *bird.BirdObservation
 	configureErr       error
 	statusCalled       bool
 	configureCalls     int
@@ -76,12 +76,12 @@ type fakeBirdClient struct {
 	rawCommands        []string
 }
 
-func (f *fakeBirdClient) Status(ctx context.Context) (*bird.BirdObservedState, error) {
+func (f *fakeBirdClient) Status(ctx context.Context) (*bird.BirdObservation, error) {
 	f.statusCalled = true
 	if f.status != nil {
 		return f.status, f.statusErr
 	}
-	return &bird.BirdObservedState{}, f.statusErr
+	return &bird.BirdObservation{}, f.statusErr
 }
 
 func (f *fakeBirdClient) Configure(ctx context.Context, path string) error {

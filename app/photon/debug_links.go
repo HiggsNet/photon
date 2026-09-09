@@ -6,6 +6,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
 )
 
 func debugLinks(filter string) error {
@@ -40,7 +41,7 @@ func showLinks(filter string, verbose bool) error {
 	return fmt.Errorf("daemon control socket unavailable; link runtime state requires a running daemon")
 }
 
-func debugLinkRoutingState(rt *AppContext, birdInstances map[string]*BirdInstanceState, groupID string) (state, neighborCount, bestRouteCount string) {
+func debugLinkRoutingState(rt *AppContext, birdInstances map[string]*bird.InstanceObservation, groupID string) (state, neighborCount, bestRouteCount string) {
 	state = "-"
 	neighborCount = "-"
 	bestRouteCount = "-"

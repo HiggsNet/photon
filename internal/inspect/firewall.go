@@ -1,6 +1,6 @@
 package inspect
 
-import photonstate "github.com/HiggsNet/photon/internal/state"
+import "github.com/HiggsNet/photon/pkg/firewall"
 
 const FirewallModeManaged = "managed"
 
@@ -12,7 +12,7 @@ type FirewallDebugView struct {
 
 type FirewallDebugInput struct {
 	Instances []FirewallInstanceInput
-	Reconcile *photonstate.FirewallReconcileState
+	Reconcile *firewall.FirewallObservation
 }
 
 type FirewallInstanceInput struct {
@@ -146,7 +146,7 @@ func BuildFirewallDebug(input FirewallDebugInput) FirewallDebugView {
 	return view
 }
 
-func firewallReconcileInstance(reconcile *photonstate.FirewallReconcileState, id string) (*photonstate.FirewallReconcileInstance, bool) {
+func firewallReconcileInstance(reconcile *firewall.FirewallObservation, id string) (*firewall.FirewallInstanceObservation, bool) {
 	if reconcile == nil || reconcile.Instances == nil {
 		return nil, false
 	}

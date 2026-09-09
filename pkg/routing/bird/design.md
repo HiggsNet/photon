@@ -242,14 +242,14 @@ type FilterBlock struct {
 
 ## Observed state
 
-`BirdObservedState` is the result of parsing `birdc` text output into
+`BirdObservation` is the result of parsing `birdc` text output into
 structured Go values. Fields may be partially populated when parsing of a
 specific command fails; the client records parse warnings in the returned
 error or in an internal parse log.
 
 ```go
-// BirdObservedState is the parsed output of birdc status/commands.
-type BirdObservedState struct {
+// BirdObservation is the parsed output of birdc status/commands.
+type BirdObservation struct {
     Status     BirdStatus
     Protocols  []BirdProtocol
     Routes     []BirdRoute
@@ -335,7 +335,7 @@ peers; `exportSet` is the set of local prefixes it should announce.
 type Client interface {
     // Status returns a snapshot of BIRD status, protocols, routes,
     // interfaces and neighbors.
-    Status(ctx context.Context) (*BirdObservedState, error)
+    Status(ctx context.Context) (*BirdObservation, error)
 
     // Configure performs a full "birdc configure" using the file at path.
     Configure(ctx context.Context, path string) error

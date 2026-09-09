@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -26,6 +25,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/HiggsNet/photon/pkg/routing"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
@@ -49,7 +49,6 @@ type Daemon struct {
 	ipsecTakeoverNotBefore time.Time
 	routingDirty           bool
 	routingForceReload     bool
-	routingLastRunUnix     atomic.Int64
 	firewallDirty          bool
 	daemonTimers           *corehost.Scheduler
 	daemonTimerEvents      chan corehost.Event
@@ -95,7 +94,6 @@ const (
 	daemonEventReloadConfig          daemonEventType = "reload_config"
 	daemonEventRoutingReload         daemonEventType = "routing_reload"
 	daemonEventIPsecCleanup          daemonEventType = "ipsec_cleanup"
-	daemonEventStateGC               daemonEventType = "state_gc"
 	daemonEventIPsecPortRotate       daemonEventType = "ipsec_port_rotate"
 	daemonEventIPsecLifecycle        daemonEventType = "ipsec_lifecycle"
 	daemonEventEndpointACLApply      daemonEventType = "endpoint_acl_apply"
@@ -147,7 +145,6 @@ type daemonEventResult struct {
 	Revocations    int
 	NetworkChanged bool
 	Purge          *purgePlan
-	StateGC        *stateGCPlan
 	Error          error
 }
 
@@ -159,7 +156,6 @@ func newDaemonWithStore(rt *AppContext, stateStore *DaemonStateStore, config *go
 	if rt != nil {
 		socketPath = controlSocketPath(rt.Config)
 	}
-	_, runtime := stateStore.readCommonAndRuntime()
 	spoolConfig := healthspool.Config{}
 	if rt != nil && rt.Config != nil {
 		spoolConfig = rt.Config.Health.spoolConfig()
@@ -187,9 +183,6 @@ func newDaemonWithStore(rt *AppContext, stateStore *DaemonStateStore, config *go
 	d.ipsecDNSResolver = ipsec.NewDNSFamilyHoldDownResolver(net.DefaultResolver, ipsec.DNSFamilyHoldDownOptions{
 		Now: d.now,
 	})
-	if runtime != nil && runtime.RoutingReconcile != nil {
-		d.routingLastRunUnix.Store(runtime.RoutingReconcile.LastRunUnix)
-	}
 	d.ipsecTakeoverNotBefore = d.now().Add(2 * time.Minute)
 	d.gossipDriver = gossipDriver
 	d.objectPullExecutor = newDaemonObjectPullExecutor(d)
@@ -625,7 +618,12 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 	case "status_view":
 		common, runtime := d.StateStore.readCommonAndRuntime()
 		links, reconcile := d.linuxObservation.ipsecSnapshot()
-		writeCanonicalView(conn, statusViewFromOwners(d.App, common, runtime, links, reconcile, d.healthStatusResponse(), true))
+		routingObserved := d.linuxObservation.routingSnapshot()
+		var birdInstances map[string]*bird.InstanceObservation
+		if routingObserved != nil {
+			birdInstances = routingObserved.Instances
+		}
+		writeCanonicalView(conn, statusViewFromOwners(d.App, common, runtime, links, reconcile, birdInstances, d.healthStatusResponse(), true))
 	case "record_put":
 		if err := validateControlRecordPut(request); err != nil {
 			writeControlResponse(conn, controlError(err))
@@ -970,17 +968,6 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		writeControlResponse(conn, controlResponse{OK: true, CleanedLinks: result.CleanedLinks, CleanedOrphans: result.CleanedOrphans, Message: "ipsec links cleaned"})
-	case "state_gc":
-		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventStateGC, Apply: request.Apply})
-		if result.Error != nil {
-			writeControlResponse(conn, controlError(result.Error))
-			return
-		}
-		message := "state GC preview"
-		if request.Apply {
-			message = "state GC applied"
-		}
-		writeControlResponse(conn, controlResponse{OK: true, StateGC: result.StateGC, Message: message})
 	case "ipsec_rotate_port":
 		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventIPsecPortRotate})
 		if result.Error != nil {
@@ -996,13 +983,14 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		writeControlResponse(conn, controlResponse{OK: true, Message: "shutdown scheduled"})
 	case "babel_view":
-		d.StateStore.mu.RLock()
+		routingReconcile := d.linuxObservation.routingSnapshot()
 		lastRoutingError := ""
-		if d.StateStore.runtime.RoutingReconcile != nil {
-			lastRoutingError = d.StateStore.runtime.RoutingReconcile.LastError
+		var birdInstances map[string]*bird.InstanceObservation
+		if routingReconcile != nil {
+			lastRoutingError = routingReconcile.LastError
+			birdInstances = routingReconcile.Instances
 		}
-		view := buildBabelDebugView(d.App, d.StateStore.runtime.BirdInstances, lastRoutingError)
-		d.StateStore.mu.RUnlock()
+		view := buildBabelDebugView(d.App, birdInstances, lastRoutingError)
 		writeCanonicalView(conn, view)
 	case "bird_dump":
 		dump, err := d.birdDumpForControl(ctx, request.NetNS, birdDebugView(request.BirdView))
@@ -1016,12 +1004,11 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		if d.App != nil && d.App.Config != nil {
 			routingInstances = append([]RoutingInstance(nil), d.App.Config.Routing.Instances...)
 		}
-		d.StateStore.writeMu.Lock()
 		view := d.StateStore.common.ReadView()
-		d.StateStore.mu.RLock()
-		birdInstances := photonstate.CloneBirdInstances(d.StateStore.runtime.BirdInstances)
-		d.StateStore.mu.RUnlock()
-		d.StateStore.writeMu.Unlock()
+		var birdInstances map[string]*bird.InstanceObservation
+		if routingObserved := d.linuxObservation.routingSnapshot(); routingObserved != nil {
+			birdInstances = routingObserved.Instances
+		}
 		if view.State == nil || view.State.Network == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
@@ -1047,9 +1034,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		diagnosis := diagnoseAutoJoinAdmission(view.State, view.Gossip, bootstrap, d.now())
 		writeCanonicalView(conn, diagnosis)
 	case "firewall_view":
-		d.StateStore.mu.RLock()
-		fwSnapshot := photonstate.CloneFirewallReconcileState(d.StateStore.runtime.FirewallReconcile)
-		d.StateStore.mu.RUnlock()
+		fwSnapshot := d.linuxObservation.firewallSnapshot()
 		instances := []FirewallInstanceConfig(nil)
 		var appCfg *appConfig
 		if d.App != nil && d.App.Config != nil {
@@ -1061,10 +1046,11 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 	case "links_view":
 		health := d.healthStatusResponse()
 		links, reconcile := d.linuxObservation.ipsecSnapshot()
-		d.StateStore.mu.RLock()
-		bird := photonstate.CloneBirdInstances(d.StateStore.runtime.BirdInstances)
-		d.StateStore.mu.RUnlock()
-		view := buildStoredLinkInspection(observerRuntime(d), links, reconcile, bird, health)
+		var birdInstances map[string]*bird.InstanceObservation
+		if routingObserved := d.linuxObservation.routingSnapshot(); routingObserved != nil {
+			birdInstances = routingObserved.Instances
+		}
+		view := buildStoredLinkInspection(observerRuntime(d), links, reconcile, birdInstances, health)
 		if d.linuxDriver != nil && d.App != nil && d.App.Config != nil && d.App.Config.IPsec.Driver != ipsecDriverDryRun {
 			sas, err := d.linuxDriver.ListIPsecSAs(ctx)
 			if err != nil {
@@ -1275,9 +1261,6 @@ func (d *Daemon) handleEvent(event daemonEvent) (daemonEventResult, bool, bool) 
 			d.ipsecDirty = true
 		}
 		return daemonEventResult{CleanedLinks: cleaned, CleanedOrphans: orphans, Error: err}, false, false
-	case daemonEventStateGC:
-		plan, err := d.handleStateGCEvent(event.Apply)
-		return daemonEventResult{StateGC: plan, Error: err}, false, false
 	case daemonEventIPsecPortRotate:
 		result, err := d.handleIPsecPortRotateEvent()
 		return daemonEventResult{PortRotate: result, Error: err}, err == nil, false

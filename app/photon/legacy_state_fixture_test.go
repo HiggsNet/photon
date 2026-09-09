@@ -25,10 +25,7 @@ func stateMetaFromState(state *stateFile) stateMeta {
 		SyncPeers:         state.SyncPeers,
 		PeerCleanups:      state.PeerCleanups,
 		IPsecTransportKey: state.IPsecTransportKey,
-		RoutingReconcile:  state.RoutingReconcile,
-		FirewallReconcile: state.FirewallReconcile,
 		EndpointACLs:      state.EndpointACLs,
-		BirdInstances:     state.BirdInstances,
 	}
 }
 
@@ -61,9 +58,6 @@ func loadLegacyStateAt(path string) (*stateFile, error) {
 		SyncPeers:         meta.SyncPeers,
 		PeerCleanups:      meta.PeerCleanups,
 		IPsecTransportKey: meta.IPsecTransportKey,
-		RoutingReconcile:  meta.RoutingReconcile,
-		FirewallReconcile: meta.FirewallReconcile,
 		EndpointACLs:      meta.EndpointACLs,
-		BirdInstances:     meta.BirdInstances,
 	}, nil
 }

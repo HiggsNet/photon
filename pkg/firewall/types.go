@@ -337,8 +337,10 @@ type FirewallApplyResult struct {
 	Errors     []string
 }
 
-// FirewallInstanceReconcileState is persisted in daemon state for diagnostics.
-type FirewallInstanceReconcileState struct {
+// FirewallInstanceObservation summarizes one instance's latest reconcile.
+// It is safe to discard on daemon restart.
+type FirewallInstanceObservation struct {
+	Backend      string `json:"backend,omitempty"`
 	Generation   uint64 `json:"generation,omitempty"`
 	LastRunUnix  int64  `json:"last_run_unix,omitempty"`
 	LastError    string `json:"last_error,omitempty"`
@@ -346,8 +348,10 @@ type FirewallInstanceReconcileState struct {
 	OwnedObjects int    `json:"owned_objects,omitempty"`
 }
 
-// FirewallReconcileSnapshot is persisted for debug/restart recovery.
-type FirewallReconcileSnapshot struct {
-	Backend   string                                     `json:"backend,omitempty"`
-	Instances map[string]*FirewallInstanceReconcileState `json:"instances,omitempty"`
+// FirewallObservation is the process-local result of the latest reconcile.
+type FirewallObservation struct {
+	Backend     string                                  `json:"backend,omitempty"`
+	Instances   map[string]*FirewallInstanceObservation `json:"instances,omitempty"`
+	LastRunUnix int64                                   `json:"last_run_unix,omitempty"`
+	LastError   string                                  `json:"last_error,omitempty"`
 }

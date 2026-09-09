@@ -91,8 +91,8 @@ func TestDaemonBIRDRoutingRootSmoke(t *testing.T) {
 
 	// Verify BIRD is running.
 	if !processManager.IsRunning(ctx) {
-		_, latest := service.StateStore.readCommonAndRuntime()
-		inst := latest.BirdInstances[nsName]
+		latest := service.linuxObservation.routingSnapshot()
+		inst := latest.Instances[nsName]
 		if inst == nil {
 			t.Fatal("BIRD process is not running after reconcileRouting; instance state is missing")
 		}
@@ -109,8 +109,8 @@ func TestDaemonBIRDRoutingRootSmoke(t *testing.T) {
 	sockPath := filepath.Join(dataDir, "netns-"+nsName, "bird.ctl")
 	if _, err := os.Stat(sockPath); err != nil {
 		// The socket path may be derived differently; find it in state.
-		_, latest := service.StateStore.readCommonAndRuntime()
-		if birdState := latest.BirdInstances[nsName]; birdState != nil {
+		latest := service.linuxObservation.routingSnapshot()
+		if birdState := latest.Instances[nsName]; birdState != nil {
 			sockPath = birdState.ControlSocket
 		}
 		if _, err := os.Stat(sockPath); err != nil {
@@ -196,8 +196,8 @@ func TestDaemonBIRDAdoptRestartRootSmoke(t *testing.T) {
 		t.Fatal("BIRD process is not running after initial reconcile")
 	}
 
-	_, latest := service1.StateStore.readCommonAndRuntime()
-	birdState := latest.BirdInstances[nsName]
+	latest := service1.linuxObservation.routingSnapshot()
+	birdState := latest.Instances[nsName]
 	if birdState == nil {
 		t.Fatalf("BirdInstances[%s] is nil", nsName)
 	}
@@ -590,8 +590,8 @@ func TestDaemonBIRDUpstreamRootSmoke(t *testing.T) {
 	}
 
 	// Read generated config and verify upstream interface block.
-	_, latest := service.StateStore.readCommonAndRuntime()
-	birdState := latest.BirdInstances[nsName]
+	latest := service.linuxObservation.routingSnapshot()
+	birdState := latest.Instances[nsName]
 	if birdState == nil {
 		t.Fatalf("BirdInstances[%s] is nil", nsName)
 	}
@@ -626,8 +626,8 @@ type realBirdClient struct {
 	timeout    time.Duration
 }
 
-func (c *realBirdClient) Status(ctx context.Context) (*bird.BirdObservedState, error) {
-	return &bird.BirdObservedState{}, nil
+func (c *realBirdClient) Status(ctx context.Context) (*bird.BirdObservation, error) {
+	return &bird.BirdObservation{}, nil
 }
 
 func (c *realBirdClient) Configure(ctx context.Context, _ string) error {
@@ -683,7 +683,7 @@ func healthSmokeBirdSpec(nsName, tmpDir, iface string, routerID uint32) bird.Bir
 	return spec
 }
 
-func waitForHealthSmokeBirdRoute(t *testing.T, ctx context.Context, socketPath, prefix, iface string) *bird.BirdObservedState {
+func waitForHealthSmokeBirdRoute(t *testing.T, ctx context.Context, socketPath, prefix, iface string) *bird.BirdObservation {
 	t.Helper()
 	var last string
 	for range 40 {
@@ -691,7 +691,7 @@ func waitForHealthSmokeBirdRoute(t *testing.T, ctx context.Context, socketPath, 
 		last = string(out)
 		if err == nil && strings.Contains(last, prefix) && strings.Contains(last, iface) {
 			parsedPrefix := netip.MustParsePrefix(prefix)
-			return &bird.BirdObservedState{
+			return &bird.BirdObservation{
 				Routes: []bird.BirdRoute{{
 					Prefix:   parsedPrefix,
 					Protocol: "babel1",

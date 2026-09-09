@@ -63,8 +63,8 @@ func TestLegacyRuntimeStateMigrationIsAtomicAndIdempotent(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if strings.Contains(string(payload), "identity_key_path") {
-			t.Fatalf("legacy identity path survived Linux state migration: %s", payload)
+		if strings.Contains(string(payload), "identity_key_path") || strings.Contains(string(payload), "routing_reconcile") || strings.Contains(string(payload), "firewall_reconcile") || strings.Contains(string(payload), "bird_instances") {
+			t.Fatalf("legacy derived state survived Linux state migration: %s", payload)
 		}
 		if meta := tx.Bucket(bucketLegacyMeta); meta != nil && meta.Get([]byte(cliMetaKey)) != nil {
 			t.Fatal("legacy cli_state survived migration")

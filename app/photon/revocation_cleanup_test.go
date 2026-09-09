@@ -471,7 +471,7 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 	if !prefixIn(initialFirewall.Prefixes.MeshAuthorizedV4, "10.1.0.0/24") {
 		t.Fatalf("initial firewall authorized prefixes = %v, want node-b route", initialFirewall.Prefixes.MeshAuthorizedV4)
 	}
-	initialBirdCfg := readBirdConfigForNetns(t, currentRuntime, "photontesth2")
+	initialBirdCfg := readBirdConfigForNetns(t, service.linuxObservation.routingSnapshot(), "photontesth2")
 	if !strings.Contains(initialBirdCfg, "10.1.0.0/24") {
 		t.Fatalf("initial BIRD config missing transit export for node-b route:\n%s", initialBirdCfg)
 	}
@@ -534,7 +534,7 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 		t.Fatalf("revoked peer cache not cleaned: %+v", peer)
 	}
 
-	revokedBirdCfg := readBirdConfigForNetns(t, currentRuntime, "photontesth2")
+	revokedBirdCfg := readBirdConfigForNetns(t, service.linuxObservation.routingSnapshot(), "photontesth2")
 	if strings.Contains(revokedBirdCfg, "10.1.0.0/24") {
 		t.Fatalf("BIRD config still exports revoked node-b route:\n%s", revokedBirdCfg)
 	}
@@ -553,12 +553,12 @@ func prefixIn(prefixes []netip.Prefix, want string) bool {
 	return slices.Contains(prefixes, prefix)
 }
 
-func readBirdConfigForNetns(t *testing.T, runtime *linuxRuntimeState, netns string) string {
+func readBirdConfigForNetns(t *testing.T, observation *routingObservation, netns string) string {
 	t.Helper()
-	if runtime == nil || runtime.BirdInstances == nil || runtime.BirdInstances[netns] == nil {
+	if observation == nil || observation.Instances == nil || observation.Instances[netns] == nil {
 		t.Fatalf("missing BIRD instance for netns %s", netns)
 	}
-	path := runtime.BirdInstances[netns].ConfigPath
+	path := observation.Instances[netns].ConfigPath
 	if path == "" {
 		t.Fatalf("empty BIRD config path for netns %s", netns)
 	}

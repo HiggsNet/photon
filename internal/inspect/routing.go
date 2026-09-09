@@ -1,6 +1,6 @@
 package inspect
 
-import photonstate "github.com/HiggsNet/photon/internal/state"
+import "github.com/HiggsNet/photon/pkg/routing/bird"
 
 const (
 	RoutingModeManaged           = "managed"
@@ -87,7 +87,7 @@ type BabelDebugView struct {
 type BabelDebugInput struct {
 	LastReconcileError string
 	Instances          []BabelInstanceInput
-	RuntimeStates      map[string]*photonstate.BirdInstanceState
+	RuntimeStates      map[string]*bird.InstanceObservation
 }
 
 type BabelInstanceInput struct {

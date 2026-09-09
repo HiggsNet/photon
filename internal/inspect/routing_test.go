@@ -3,7 +3,7 @@ package inspect
 import (
 	"testing"
 
-	photonstate "github.com/HiggsNet/photon/internal/state"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
 )
 
 func TestBuildBabelDebug(t *testing.T) {
@@ -28,7 +28,7 @@ func TestBuildBabelDebug(t *testing.T) {
 				Enabled:    false,
 			},
 		},
-		RuntimeStates: map[string]*photonstate.BirdInstanceState{
+		RuntimeStates: map[string]*bird.InstanceObservation{
 			"photontesth2": {
 				RouterID:       12345,
 				ControlSocket:  "/run/photon/bird/bird-main.ctl",
@@ -71,7 +71,7 @@ func TestBuildBabelDebugCopiesRuntimeSlices(t *testing.T) {
 	overlays := []string{"main"}
 	view := BuildBabelDebug(BabelDebugInput{
 		Instances: []BabelInstanceInput{{NetNS: "n", InstanceID: "main", Enabled: true}},
-		RuntimeStates: map[string]*photonstate.BirdInstanceState{
+		RuntimeStates: map[string]*bird.InstanceObservation{
 			"n": {Overlays: overlays},
 		},
 	})

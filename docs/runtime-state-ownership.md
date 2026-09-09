@@ -123,11 +123,11 @@ Daemon 可以直接持有一个无独立锁/线程的 `LinuxObservation` 或 `Wi
 | `IPsecTransportKey` | 保留；当前由本机随机生成，gossip 只发布公钥，没有第二个私钥 owner，跨重启保持 transport identity 需要它 |
 | `IPsecPortRecord` | 已删除；本机 verified `ipsec/ports` record 已包含 mode、range、generation、更新时间和 previous grace，自动/手动轮换均直接以它为恢复输入，不存在独立 staged generation |
 | `EndpointACLs` | 保留；它由 control API 显式创建，是非 gossip 的本机平台 intent，配置和操作系统规则都不是其完整真相源，产品语义要求跨重启继续生效 |
-| `LinkInstances` | 拆出最小 rotation/takeover/ownership journal；实际状态、计数和错误进 Observation |
-| `IPsecReconcile` | `ActualSAs`、actions、LastRun、LastError 等移到 Observation；derived desired 不落盘 |
-| `RoutingReconcile` | 移到 Observation |
-| `FirewallReconcile` | 当前实际状态和诊断移到 Observation；可重建 policy hash/generation 不落盘 |
-| `BirdInstances` | desired 从配置/可信状态推导；PID/socket/status 重新 Observe；仅保留不可推导 journal |
+| `LinkInstances` | 已从 LinuxState 删除；current/previous generation 从 VerifiedState 与 StrongSwan/XFRM observation 恢复 |
+| `IPsecReconcile` | 已从 LinuxState 删除；`ActualSAs`、actions、LastRun、LastError 与 derived desired 只进 Observation |
+| `RoutingReconcile` | 已从 LinuxState 删除；只进 Observation |
+| `FirewallReconcile` | 已从 LinuxState 删除；实际状态、诊断与可重建 policy hash/generation 只进 Observation |
+| `BirdInstances` | 已从 LinuxState 删除；desired/路径/RouterID/owner 重新推导，PID/socket/status/exit/backoff 进程内 Observe |
 | `PeerCleanups` | 只保留确有安全 grace/cleanup 恢复意义的字段，其余从 GossipCheckpoint/VerifiedState 推导 |
 | `Admission` | 已从 LinuxState 删除；它是由 VerifiedState 与 GossipCheckpoint 即时生成的 inspect diagnosis，不是持久 state。旧 schema 字段解码时直接丢弃 |
 

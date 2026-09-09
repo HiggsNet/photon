@@ -86,7 +86,7 @@ pkg/*
 1. `pkg/*` 继续放稳定领域模型和底层能力，例如 zone、gossip、routing authorization、firewall planner、health manager、transport/ipsec provider。
 2. `internal/*` 放 Photon 应用层模块：它可以组合 `pkg/*`，但不应该依赖 CLI 框架、stdout、环境变量散读或 `main` 包未导出类型。
 3. `app/photon` 保留 executable glue：命令注册、配置入口、daemon assembly、需要访问未导出状态的临时 adapter。
-4. `internal/state` 只放跨包共享的运行时快照 DTO，例如 peer/link/BIRD/firewall reconcile state；它不是 `stateFile` 持久化层，也不拥有锁、bbolt 读写、workspace 或 commit 逻辑。
+4. `internal/state` 只放确有跨包共享需求的数据 DTO；IPsec、BIRD 和 firewall 在线 observation 已回归各自领域/daemon 边界，不再为共享方便复制一层 `state` 类型。
 5. 所有写路径仍通过 daemon commit 流程：`DaemonStateStore.BeginUpdate` / workspace 变更 / `Commit` 或 control command service 的 single-writer 路径；readmodel/inspect 不执行写操作，也不读取未提交 workspace。
 6. 每次迁移都要先定义输入/输出结构，避免把 `stateFile` 原样搬进 internal 后形成新的大泥团。
 

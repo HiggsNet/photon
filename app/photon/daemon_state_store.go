@@ -206,17 +206,9 @@ func (s *DaemonStateStore) commitRuntimeIfRevision(sourceRevision uint64, mutate
 	return sourceRevision, true, nil
 }
 
-func (s *DaemonStateStore) commitRoutingIfRevision(revision uint64, birdInstances map[string]*BirdInstanceState, reconcile *routingReconcileState) (uint64, bool, error) {
-	return s.commitRuntimeIfRevision(revision, func(runtime *linuxRuntimeState) {
-		runtime.BirdInstances = photonstate.CloneBirdInstances(birdInstances)
-		runtime.RoutingReconcile = photonstate.CloneRoutingReconcileState(reconcile)
-	})
-}
-
-func (s *DaemonStateStore) commitFirewallIfRevision(revision uint64, endpointACLs map[string]endpointACL, reconcile *firewallReconcileState) (uint64, bool, error) {
+func (s *DaemonStateStore) commitEndpointACLsIfRevision(revision uint64, endpointACLs map[string]endpointACL) (uint64, bool, error) {
 	return s.commitRuntimeIfRevision(revision, func(runtime *linuxRuntimeState) {
 		runtime.EndpointACLs = photonstate.CloneEndpointACLs(endpointACLs)
-		runtime.FirewallReconcile = photonstate.CloneFirewallReconcileState(reconcile)
 	})
 }
 

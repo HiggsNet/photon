@@ -4,11 +4,12 @@ import (
 	"sort"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
 )
 
 // buildStoredLinkInspection projects the daemon-owned Linux runtime result.
 // Read paths do not run the IPsec planner or platform drivers again.
-func buildStoredLinkInspection(rt *AppContext, instances map[string]linkInstanceState, reconcile *ipsecObservationSummary, bird map[string]*BirdInstanceState, health []healthLinkJSON) inspect.LinksDebugView {
+func buildStoredLinkInspection(rt *AppContext, instances map[string]linkInstanceState, reconcile *ipsecObservationSummary, birdInstances map[string]*bird.InstanceObservation, health []healthLinkJSON) inspect.LinksDebugView {
 	input := inspect.LinkInput{Health: inspectLinkHealth(health)}
 	if reconcile != nil {
 		input.LastRunUnix = reconcile.LastRunUnix
@@ -23,7 +24,7 @@ func buildStoredLinkInspection(rt *AppContext, instances map[string]linkInstance
 	input.Instances = make([]inspect.LinkInstance, 0, len(ids))
 	for _, id := range ids {
 		inst := instances[id]
-		birdState, birdNeighbors, birdBestRoutes := debugLinkRoutingState(rt, bird, inst.GroupID)
+		birdState, birdNeighbors, birdBestRoutes := debugLinkRoutingState(rt, birdInstances, inst.GroupID)
 		input.Instances = append(input.Instances, inspect.BuildLinkInstanceFromRuntime(inst, inspect.LinkRouting{
 			BirdState: birdState, BirdNeighbors: birdNeighbors, BirdBestRoutes: birdBestRoutes,
 		}))

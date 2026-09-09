@@ -3,10 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"time"
 
-	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/firewall"
@@ -59,22 +57,17 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 	}
 
 	now := d.now()
-	summary := photonstate.CloneFirewallReconcileState(runtime.FirewallReconcile)
-	if summary == nil {
-		summary = &firewallReconcileState{}
+	summary := &firewall.FirewallObservation{
+		Instances:   make(map[string]*firewall.FirewallInstanceObservation),
+		LastRunUnix: now.Unix(),
 	}
-	summary.LastRunUnix = now.Unix()
 
 	// Build authorized route set for prefix inputs.
 	ars, err := routing.BuildAuthorizedRouteSet(common.State.Network, now)
 	if err != nil {
 		summary.LastError = err.Error()
-		_ = d.commitFirewallReconcileResult(rev, runtime.EndpointACLs, summary)
+		d.publishFirewallObservation(rev, summary)
 		return fmt.Errorf("firewall build authorized route set: %w", err)
-	}
-
-	if summary.Instances == nil {
-		summary.Instances = make(map[string]*firewallInstanceReconcileStateEntry)
 	}
 
 	var firstErr error
@@ -160,79 +153,37 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 		summary.LastError = ""
 	}
 
-	if err := d.commitFirewallReconcileResult(rev, runtime.EndpointACLs, summary); err != nil {
-		return fmt.Errorf("save firewall reconcile state: %w", err)
-	}
+	d.publishFirewallObservation(rev, summary)
 	return firstErr
 }
 
-func getOrCreateFirewallEntry(state *firewallReconcileState, id string) *firewallInstanceReconcileStateEntry {
+func getOrCreateFirewallEntry(state *firewall.FirewallObservation, id string) *firewall.FirewallInstanceObservation {
 	if state.Instances == nil {
-		state.Instances = make(map[string]*firewallInstanceReconcileStateEntry)
+		state.Instances = make(map[string]*firewall.FirewallInstanceObservation)
 	}
 	entry := state.Instances[id]
 	if entry == nil {
-		entry = &firewallInstanceReconcileStateEntry{}
+		entry = &firewall.FirewallInstanceObservation{}
 		state.Instances[id] = entry
 	}
 	return entry
 }
 
-func (d *Daemon) commitFirewallReconcileResult(rev uint64, endpointACLs map[string]endpointACL, summary *firewallReconcileState) error {
+func (d *Daemon) publishFirewallObservation(rev uint64, summary *firewall.FirewallObservation) {
 	if d == nil || d.StateStore == nil || summary == nil {
-		return nil
+		return
 	}
-	common, runtime := d.StateStore.readCommonAndRuntime()
-	if common.State == nil || runtime == nil || uint64(common.Revision) != rev {
-		d.firewallDirty = true
-		d.publishStateStoreRuntimeFlags()
-		d.logWarn("firewall", "stale_reconcile_result", map[string]any{
-			"source_revision":  rev,
-			"current_revision": common.Revision,
-		})
-		return nil
-	}
-	if firewallReconcileResultEqual(runtime.EndpointACLs, runtime.FirewallReconcile, endpointACLs, summary) {
-		return nil
-	}
-	currentRev, committed, err := d.StateStore.commitFirewallIfRevision(rev, endpointACLs, summary)
-	if err != nil {
-		return err
-	}
-	if !committed {
+	currentRev := d.StateStore.Meta().Revision
+	if currentRev != rev {
 		d.firewallDirty = true
 		d.publishStateStoreRuntimeFlags()
 		d.logWarn("firewall", "stale_reconcile_result", map[string]any{
 			"source_revision":  rev,
 			"current_revision": currentRev,
 		})
-		return nil
+		return
 	}
-	return nil
-}
-
-func firewallReconcileResultEqual(baseACLs map[string]endpointACL, base *firewallReconcileState, nextACLs map[string]endpointACL, next *firewallReconcileState) bool {
-	if !reflect.DeepEqual(baseACLs, nextACLs) {
-		return false
-	}
-	if base == nil || next == nil {
-		return base == nil && next == nil
-	}
-	base = photonstate.CloneFirewallReconcileState(base)
-	next = photonstate.CloneFirewallReconcileState(next)
-	base.LastRunUnix = 0
-	next.LastRunUnix = 0
-	for _, entry := range base.Instances {
-		if entry != nil {
-			entry.LastRunUnix = 0
-		}
-	}
-	for _, entry := range next.Instances {
-		if entry != nil {
-			entry.LastRunUnix = 0
-		}
-	}
-	return reflect.DeepEqual(base, next)
+	d.linuxObservation.replaceFirewall(summary)
 }
 
 func firewallOwnerScope(spec firewall.FirewallInstanceSpec) string {

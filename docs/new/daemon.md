@@ -517,23 +517,23 @@ Daemon 作为编排器，各子模块通过清晰的接口与 daemon 集成：
 - **输入**：detached VerifiedState、最小 LinuxState、本地配置和 LinuxDriver observation
 - **输出**：StrongSwan IKE child SA、XFRM interface、network namespace 内接口；只有不可重建的最小 journal 才写 LinuxState
 - **集成点**：Daemon 编排 reconcile，`internal/photonlinux.LinuxDriver` 直接执行 SA/XFRM observe、apply 和 cleanup；实际 SA、动作和错误进入内存 Observation
-- **状态范围**：LinkInstances、IPsecReconcile 仅存在于本机 state file，不进入 gossip
+- **状态范围**：Link instance 与 reconcile 结果只存在于 daemon 内存 `LinuxObservation`，不进入 state file 或 gossip
 
 **XFRM 维护短路**：在 `maintainExistingXFRMInterfaces` 中，如果 observed 状态与期望状态已经匹配，则跳过 `EnsureInterface`/`AssignAddress` 等冗余命令，只保留诊断地址分配。这减少了 reconcile 周期中对已有接口的无意义重写。
 
 ### 7.3 Routing
 
 - **输入**：`StateStore.Snapshot()` 中的 route announcement / authorization 记录
-- **输出**：BIRD 配置文件、Babel 邻居发现、路由导入/导出 filter；结果通过 `StateStore.CommitIfRevision()` 写回
+- **输出**：BIRD 配置文件、Babel 邻居发现、路由导入/导出 filter；在线结果发布到 `LinuxObservation`
 - **集成点**：`reconcileRouting(ctx)` 在 routing_reconcile.go 中，构建 `AuthorizedRouteSet`，生成 BIRD 配置并 reconfigure
-- **状态范围**：BirdInstances、RoutingReconcile 仅存在于本机 state file
+- **状态范围**：BIRD instance、status、exit 和 backoff 只存在于 daemon 内存 `LinuxObservation`，重启后重新推导/观察
 
 ### 7.4 Firewall
 
 - **输入**：`StateStore.Snapshot()` 中的授权路由，本地 firewall 配置
 - **输出**：nftables/iptables 规则（netns ingress、host ingress、redirect grace）；结果通过 `StateStore.CommitIfRevision()` 写回
 - **集成点**：`reconcileFirewall(ctx)` 通过 `firewall.BuildDesiredState()` → driver.Apply()
-- **状态范围**：FirewallReconcile 仅存在于本机 state file
+- **状态范围**：Firewall reconcile 结果只存在于 daemon 内存 `LinuxObservation`；`EndpointACLs` 作为用户配置持久化
 
 ### 7.5 Health
 

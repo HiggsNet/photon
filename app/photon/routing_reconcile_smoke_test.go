@@ -51,11 +51,11 @@ func TestRoutingDryRunSmoke(t *testing.T) {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
 
-	_, latest := service.StateStore.readCommonAndRuntime()
-	if len(latest.BirdInstances) != 1 {
-		t.Fatalf("BirdInstances len = %d, want 1", len(latest.BirdInstances))
+	latest := service.linuxObservation.routingSnapshot()
+	if len(latest.Instances) != 1 {
+		t.Fatalf("BirdInstances len = %d, want 1", len(latest.Instances))
 	}
-	inst := latest.BirdInstances["photontesth2"]
+	inst := latest.Instances["photontesth2"]
 	if inst == nil {
 		t.Fatalf("missing bird instance state for netns photontesth2")
 	}
@@ -96,8 +96,8 @@ func TestRoutingDryRunSmoke(t *testing.T) {
 	}
 
 	// The reconcile run itself should not have recorded any error.
-	if latest.RoutingReconcile != nil && latest.RoutingReconcile.LastError != "" {
-		t.Errorf("unexpected routing reconcile error: %s", latest.RoutingReconcile.LastError)
+	if observation := service.linuxObservation.routingSnapshot(); observation != nil && observation.LastError != "" {
+		t.Errorf("unexpected routing reconcile error: %s", observation.LastError)
 	}
 }
 
@@ -149,8 +149,8 @@ func TestIPAMRoutingSmoke(t *testing.T) {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
 
-	_, latest := service.StateStore.readCommonAndRuntime()
-	inst := latest.BirdInstances["photontesth2"]
+	latest := service.linuxObservation.routingSnapshot()
+	inst := latest.Instances["photontesth2"]
 	if inst == nil || inst.ConfigPath == "" {
 		t.Fatalf("missing bird instance state or config path")
 	}
@@ -226,8 +226,8 @@ func TestAutoAnnounceAssignedIPsRoutingSmoke(t *testing.T) {
 	}
 
 	// Verify the BIRD export filter includes the auto-announced prefix.
-	_, latest := service.StateStore.readCommonAndRuntime()
-	inst := latest.BirdInstances["photontesth2"]
+	latest := service.linuxObservation.routingSnapshot()
+	inst := latest.Instances["photontesth2"]
 	if inst == nil || inst.ConfigPath == "" {
 		t.Fatalf("missing bird instance state or config path")
 	}
@@ -318,8 +318,8 @@ func TestRoutingDryRunSmokeRevokeAssignment(t *testing.T) {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
 
-	_, latest := service.StateStore.readCommonAndRuntime()
-	inst := latest.BirdInstances["photontesth2"]
+	latest := service.linuxObservation.routingSnapshot()
+	inst := latest.Instances["photontesth2"]
 	if inst == nil || inst.ConfigPath == "" {
 		t.Fatalf("missing bird instance state or config path")
 	}

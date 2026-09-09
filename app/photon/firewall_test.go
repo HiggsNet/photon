@@ -12,59 +12,36 @@ import (
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/internal/observer"
-	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/firewall"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
-func TestFirewallReconcileResultEqualityIgnoresRunTimestamps(t *testing.T) {
-	base := &firewallReconcileState{
-		Backend:     firewall.BackendNFT,
-		LastRunUnix: 100,
-		Instances: map[string]*firewallInstanceReconcileStateEntry{
-			"overlay": {
-				Backend:      firewall.BackendNFT,
-				Generation:   3,
-				LastRunUnix:  100,
-				PolicyHash:   "policy-v1",
-				OwnedObjects: 8,
-			},
-		},
-	}
-	next := photonstate.CloneFirewallReconcileState(base)
-	next.LastRunUnix = 200
-	next.Instances["overlay"].LastRunUnix = 200
-	if !firewallReconcileResultEqual(nil, base, nil, next) {
-		t.Fatal("timestamp-only firewall result should be equivalent")
-	}
-	next.Instances["overlay"].PolicyHash = "policy-v2"
-	if firewallReconcileResultEqual(nil, base, nil, next) {
-		t.Fatal("policy change should not be equivalent")
-	}
-}
-
-func TestCommitFirewallReconcileResultSkipsTimestampOnlyResult(t *testing.T) {
+func TestFirewallObservationDoesNotAdvancePersistentRevision(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	runtime.FirewallReconcile = &firewallReconcileState{
+	summary := &firewall.FirewallObservation{
 		Backend:     firewall.BackendNone,
-		LastRunUnix: 100,
-		Instances: map[string]*firewallInstanceReconcileStateEntry{
-			"overlay": {Backend: firewall.BackendNone, Generation: 1, LastRunUnix: 100, PolicyHash: "same"},
+		LastRunUnix: 200,
+		Instances: map[string]*firewall.FirewallInstanceObservation{
+			"overlay": {Backend: firewall.BackendNone, Generation: 1, LastRunUnix: 200, PolicyHash: "same"},
 		},
 	}
 	rt := &AppContext{Config: defaultAppConfig()}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	rev := service.StateStore.Meta().Revision
-	next := photonstate.CloneFirewallReconcileState(runtime.FirewallReconcile)
-	next.LastRunUnix = 200
-	next.Instances["overlay"].LastRunUnix = 200
-	if err := service.commitFirewallReconcileResult(rev, runtime.EndpointACLs, next); err != nil {
-		t.Fatalf("commitFirewallReconcileResult: %v", err)
-	}
+	service.publishFirewallObservation(rev, summary)
 	if got := service.StateStore.Meta().Revision; got != rev {
-		t.Fatalf("timestamp-only result revision = %d, want unchanged %d", got, rev)
+		t.Fatalf("firewall observation revision = %d, want unchanged %d", got, rev)
+	}
+	got := service.linuxObservation.firewallSnapshot()
+	if got == nil || got.LastRunUnix != 200 || got.Instances["overlay"].PolicyHash != "same" {
+		t.Fatalf("firewall observation = %+v", got)
+	}
+	summary.Instances["overlay"].PolicyHash = "mutated-input"
+	got.Instances["overlay"].PolicyHash = "mutated-snapshot"
+	if latest := service.linuxObservation.firewallSnapshot(); latest.Instances["overlay"].PolicyHash != "same" {
+		t.Fatalf("firewall observation shares mutable entries: %+v", latest)
 	}
 }
 
@@ -914,13 +891,13 @@ func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
 	if !service.firewallDirty {
 		t.Fatal("firewallDirty = false, want stale firewall summary commit to schedule another reconcile")
 	}
-	common, runtime := service.StateStore.readCommonAndRuntime()
+	common, _ := service.StateStore.readCommonAndRuntime()
 	rev := uint64(common.Revision)
 	if rev != baseRev+1 {
 		t.Fatalf("state revision = %d, want only external update at %d", rev, baseRev+1)
 	}
-	if runtime.FirewallReconcile != nil {
-		t.Fatalf("firewall reconcile summary = %+v, want stale summary discarded", runtime.FirewallReconcile)
+	if observation := service.linuxObservation.firewallSnapshot(); observation != nil {
+		t.Fatalf("firewall observation = %+v, want stale summary discarded", observation)
 	}
 }
 
@@ -959,11 +936,11 @@ func TestFirewallReconcileDirtyIntervalAndRecover(t *testing.T) {
 	if service.firewallDirty {
 		t.Fatal("recoverFirewallOnStart should flush and clear firewallDirty")
 	}
-	_, currentRuntime := service.StateStore.readCommonAndRuntime()
-	if currentRuntime.FirewallReconcile == nil || currentRuntime.FirewallReconcile.Instances["photontesth2"] == nil {
-		t.Fatalf("firewall reconcile state missing after recover: %+v", currentRuntime.FirewallReconcile)
+	observation := service.linuxObservation.firewallSnapshot()
+	if observation == nil || observation.Instances["photontesth2"] == nil {
+		t.Fatalf("firewall observation missing after recover: %+v", observation)
 	}
-	entry := currentRuntime.FirewallReconcile.Instances["photontesth2"]
+	entry := observation.Instances["photontesth2"]
 	if entry.PolicyHash == "" || entry.OwnedObjects == 0 || entry.LastRunUnix != 7000 {
 		t.Fatalf("firewall reconcile entry = %+v, want hash/objects/last run", entry)
 	}
@@ -978,9 +955,9 @@ func TestBuildFirewallDebugView(t *testing.T) {
 			}},
 		{ID: "host", NetNS: "host", IsHost: true, Enabled: true, Mode: firewall.ModeManaged, HostPorts: firewall.HostPortConfig{IKE: true, NATT: true}, RedirectGrace: firewall.RedirectGrace{Enabled: true}},
 	}
-	snapshot := &firewallReconcileState{
+	snapshot := &firewall.FirewallObservation{
 		Backend: "dry-run",
-		Instances: map[string]*firewallInstanceReconcileStateEntry{
+		Instances: map[string]*firewall.FirewallInstanceObservation{
 			"photontesth2": {Backend: firewall.BackendNFT, Generation: 5, OwnedObjects: 10, PolicyHash: "abc123"},
 		},
 	}

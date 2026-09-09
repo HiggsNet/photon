@@ -517,17 +517,17 @@ Firewall reconcile 在 `app/photon/firewall_reconcile.go` 中实现，触发时�
    f. driver.ListOwned 读取当前 owned 对象
    g. driver.Plan 计算 diff
    h. driver.Apply 应用
-   i. 记录 generation、policy_hash、owned_objects 到 reconcile state
-5. commitFirewallReconcileResult 持久化结果
+   i. 记录 generation、policy_hash、owned_objects 到在线 observation
+5. 发布本轮 observation，供 debug/status 读取
 ```
 
-### 6.3 状态持久化
+### 6.3 在线观察
 
-每个 instance 的 reconcile 结果持久化到 state：
+每个 instance 的 reconcile 结果只保留在 daemon 进程内：
 
 ```go
-// internal/state/firewall.go
-type FirewallReconcileInstance struct {
+// pkg/firewall/types.go
+type FirewallInstanceObservation struct {
 	Backend      string `json:"backend,omitempty"`
     Generation   uint64 `json:"generation,omitempty"`
     LastRunUnix  int64  `json:"last_run_unix,omitempty"`
@@ -537,13 +537,15 @@ type FirewallReconcileInstance struct {
 }
 ```
 
+`FirewallObservation` 在进程重启后为空，由下一轮 reconcile 重建。它不参与下一轮 plan/apply；driver 仍在每轮从系统重新读取 Photon-owned 对象。`EndpointACLs` 是用户配置，仍持久化。
+
 > **注意**：当前 `Generation` 在 `NFTDriver` / `IPTablesDriver` / `DryRunDriver` 中均返回固定值 `1`，未实现真正的 generation 递增。
 
 ### 6.4 失败语义
 
 `reconcileFirewall` 按 instance 隔离失败，单个实例出错不影响其他实例：
 
-- `BuildDesiredState` / `Plan` / `Apply` 任一步失败：错误记录到该实例的 `LastError`，继续处理下一个实例；全部实例处理完后，首个错误写入 `summary.LastError` 并持久化，可由 `photon debug firewall` 查看。
+- `BuildDesiredState` / `Plan` / `Apply` 任一步失败：错误记录到该实例的 `LastError`，继续处理下一个实例；全部实例处理完后，首个错误写入 `summary.LastError` 并发布到在线 observation，可由 `photon debug firewall` 查看。
 - nft driver 使用单次 batch 事务，任一命令失败时整批不提交，旧 ruleset 保持不变。
 - iptables driver 的 staging 阶段遇错立即停止并删除未激活链，旧 generation 保持生效；所有 staging chain 完成后才进入切换阶段。iptables 与 ip6tables 以及不同 table 之间没有跨后端的统一内核事务，因此切换阶段若失败会补偿删除此前已激活的新 jump 并保留旧 generation；若补偿命令本身也失败，错误会记录到 reconcile 状态，下一轮继续收敛。
 - backend 不可用（nft 缺失且 `iptables` / `ip6tables` 之一缺失）：daemon 记录 `no_backend_available` 或 `backend_unavailable` warning，并在该 instance 的 `LastError` 中保留失败；不会退化为 dry-run 成功。系统上已有的旧规则保持不动。

@@ -197,7 +197,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `share.go` | base64 JSON 和文件 I/O | `internal/photoncli/encoding`；不是 state codec |
 | `state.go` | 旧 schema DTO、Linux state aliases 与当前 app 配置类型 | 原 `Runtime` 已改名 `AppContext`，只承载 config/state-path/clock；`stateFile/stateMeta` 只供单向旧库迁移和 legacy db dump，current platform state 类型由 `internal/photonlinux.RuntimeState` 暂时拥有并等待字段收缩 |
 | `state_clone.go` | 已删除 | 各 Linux DTO clone 统一归 `internal/state`，供 app planner 与 `photonlinux.RuntimeState` 共用；不在迁移后保留两套深拷贝实现 |
-| `state_gc.go` | 孤儿 BIRD runtime GC | Linux routing controller；CLI 仅触发 platform action |
+| `state_gc.go` | 已删除 | 原功能只删持久化 BIRD 诊断表，不管理进程或内核资源；`BirdInstances` 转为在线 observation 后不再有 GC 目标 |
 | `status.go` | status CLI | inspect read model + photoncli |
 | `sync.go` | Linux UDP open、endpoint publish、transport config 和 CLI | `SyncRuntime`、Daemon 重复 GossipConfig/transport/deps 已删除；协议配置与 transport/address book 由 GossipDriver 持有，短生命周期 `gossipStartupConfig` 只负责 composition 输入，endpoint/log 直接读取 AppConfig；剩余 Linux UDP open 后续进入 LinuxDriver，CLI 进 photoncli |
 | `verify.go` | chain 验证 CLI | 验证留 crypto/state；CLI 进 photoncli |
@@ -208,7 +208,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 
 1. **删除剩余旧 direct writer**：record、IPAM、route、service 和 delegation issue/grant/revoke 的 `--direct`
    已统一为打开唯一 BoltStore/common Store 后调用同一个 typed intent；旧手工签名、授权校验和聚合 state mutation
-   已删除。fresh join accept 现在会在同一 Bolt 事务中直接建立 common 与 Linux runtime bucket；`state_gc --direct` 也只提交 Linux runtime owner，不再保存聚合状态。
+   已删除。fresh join accept 现在会在同一 Bolt 事务中直接建立 common 与 Linux runtime bucket；原 `state_gc --direct` 随唯一的持久化 BIRD 诊断表一起删除。
 2. **迁移公共 GossipDriver**：依次拆 `daemon_sync.go`、`daemon_object_chunk.go`、`daemon_discovery.go`、`objectpull.go`、`sync.go` 和 `daemon.go` 的 event loop。
 3. **收拢 Linux runtime**：先把 IPsec、routing、firewall 的真实平台动作和共享 netns 执行上下文迁入同一个 Linux composition root；内部仍可按领域分模块。等 Windows/Android 出现真实同构调用点后，再从 consumer 侧提取最小平台接口，不预建成套 controllers。
 4. **删除聚合 stateFile**：在线与普通测试迁移已完成；production `stateFile` 只剩旧 schema 单向 migration decoder，legacy test helper 只负责写入退役 schema。`DaemonStateStore` 现只协调 common commit 与 Linux runtime completion 的顺序，不再提供 aggregate snapshot。
@@ -258,9 +258,11 @@ app 中剩余的是配置装配、把 committed Linux link output 交给 manager
 
 GossipDriver 公共 gossip 闭环、aggregate 清理和 current Linux codec 迁移已完成。旧 schema decoder 仍留在 app migration
 边界，不能随 current codec 一起误搬成在线兼容层。这里的 codec owner 完成不等于 live state 边界完成：当前
-`photonlinux.RuntimeState` 仍混合 durable input、operation journal、derived reconcile summary 和 live observation。
+`photonlinux.RuntimeState` 已删除 routing/firewall reconcile summary 与 BIRD instance 数据，仍需继续审计 durable input 与 operation journal。
 `IdentityKeyPath` 已从 current RuntimeState、clone 和 codec 中删除，启动不再为配置路径补写一次 Linux state；配置路径移动时只要密钥身份不变即可，启动与 reload 都以配置 key 的公钥匹配 VerifiedState 为准。旧 `stateFile/stateMeta` 仍解码该字段以读取旧库，但迁移投影明确丢弃，不形成 current schema 的第二真相源。
 持久化 `Admission` 也已删除：pending/adopted、reason/detail 与 join request 直接从 VerifiedState 推导，最近 bootstrap sync 从 GossipCheckpoint 中对应 peer 的 `LastSyncUnix` 推导。原有 pending 时间、adopted 时间和 error 字段没有生产写入者，不为它们新增公共 owner、bucket 或 schema migration；旧 JSON 字段由 current/legacy decoder 忽略。
+持久化 `RoutingReconcile` 与 `BirdInstances` 均已删除：LastRun/LastError、BIRD status/exit/backoff 只进入 daemon 内的 `LinuxObservation`，进程重启后由下一次 reconcile 重建；路径、RouterID、owner 和 config hash 从配置与 VerifiedState 重新推导。旧 aggregate/current JSON 字段直接丢弃。
+持久化 `FirewallReconcile` 同样已删除：backend、generation、policy hash、owned object count 与 LastRun/LastError 只用于展示，统一进入 `LinuxObservation`；实际 reconcile 每次仍从系统 owned objects 重新观察，不消费旧 summary。`EndpointACLs` 是用户配置，继续由 Linux state 持久化。
 
 目标所有权与命名统一见 [`runtime-state-ownership.md`](runtime-state-ownership.md)：当前 `Daemon` 是唯一顶层
 `Daemon`，`host.GossipDriver` 是公共 `GossipDriver`，`photonlinux.LinuxDriver` 是具体 Linux 平台实现，`state.Store` 是公共
@@ -274,16 +276,16 @@ peer cleanup commit 壳已删除，剩余 typed commit 要在 LinuxState 字段�
 
 ### 5.3 推荐顺序的当前进度
 
-1. direct writer：已完成；record/IPAM/route/service/delegation、fresh join bootstrap 与 Linux state GC 均写入各自 owner，不再通过聚合 `stateFile` 落盘。
+1. direct writer：已完成；record/IPAM/route/service/delegation 与 fresh join bootstrap 均写入各自 owner，不再通过聚合 `stateFile` 落盘；无持久化目标的 Linux state GC 已删除。
 2. 公共 GossipDriver：只保留协议 receive/timer、object-pull、discovery 和 gossip observability；IPsec/routing/firewall/health
    周期调度已回到 Daemon 自己的 scheduler/queue，health completion 也由 Daemon event loop 直接消费。GossipDriver 已直接持有
    common Store 和同一个 gossip Transport，不再经 `DaemonStateStore` 或 daemon I/O adapter 转发。
 3. Linux driver：IPsec/XFRM、firewall、upstream routing、BIRD 和 health probe 实际执行均已下沉；执行侧主体完成。
    current `RuntimeState`、detached clone、bbolt codec 和 revision-guarded commit 已归 `internal/photonlinux`；app 旧库迁移只负责
    `stateFile/stateMeta` 解码及一次性字段投影。平台包不自行打开数据库，仍使用 composition root 传入的唯一 BoltStore/transaction。
-   `IdentityKeyPath` 已从 current schema 删除并回归配置 owner；`Admission` 已作为纯派生诊断从 current/legacy schema 删除；其余 RuntimeState 仍过宽，需按 durable intent/journal 与 live observation 再拆；不能把单字段收缩或 codec 迁移误报为状态模型完成。
-4. 聚合 `stateFile`：在线和普通测试迁移已经完成；fresh join 与 state GC 已退出聚合写入；在线 IPsec cleanup、revoked purge、Endpoint ACL、
-   state GC、reconcile completion 以及 Firewall/IPsec 主 planner 已直接读取 common/Linux 两个 owner，不再构造完整 Snapshot。
+   `IdentityKeyPath` 已从 current schema 删除并回归配置 owner；`Admission`、`RoutingReconcile`、`FirewallReconcile` 与 `BirdInstances` 已作为纯派生/在线诊断从 current schema 删除，旧迁移投影直接丢弃；其余 RuntimeState 仍需继续审计 `PeerCleanups`，不能把分批字段收缩或 codec 迁移误报为状态模型完成。
+4. 聚合 `stateFile`：在线和普通测试迁移已经完成；fresh join 已退出聚合写入；在线 IPsec cleanup、revoked purge、Endpoint ACL、
+   reconcile completion 以及 Firewall/IPsec 主 planner 已直接读取 common/Linux 两个 owner，不再构造完整 Snapshot。
    本机 endpoint/IPsec/routing protocol publish 也已直接使用两个 owner，routing 主 reconcile planner 同样完成切换。
    在线 control/debug、配置 reload、手动端口轮换和 hook/composition 也已切走，production `currentState()` 已删除。
    CLI 查询已按来源收口：verified/common 允许离线读取；gossip checkpoint 离线时明确标为 last-known；links/firewall/BIRD/health/ping/

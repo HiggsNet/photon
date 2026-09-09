@@ -78,7 +78,7 @@ func filterFirewallDebugInstances(instances []FirewallInstanceConfig, netns stri
 	return filtered
 }
 
-func buildFirewallDebugView(config *appConfig, instances []FirewallInstanceConfig, snapshot *firewallReconcileState) inspect.FirewallDebugView {
+func buildFirewallDebugView(config *appConfig, instances []FirewallInstanceConfig, snapshot *firewall.FirewallObservation) inspect.FirewallDebugView {
 	input := inspect.FirewallDebugInput{
 		Instances: make([]inspect.FirewallInstanceInput, 0, len(instances)),
 		Reconcile: snapshot,

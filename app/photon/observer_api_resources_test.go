@@ -21,6 +21,7 @@ import (
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
@@ -484,11 +485,11 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 				RemoteIdentity: "node-b.catofes.",
 			}},
 		}
-		runtime.BirdInstances = map[string]*BirdInstanceState{
-			"phx-blue": {State: "running"},
-		}
 	})
 	setTestIPsecObservation(srv.daemon, observationLinks, observationReconcile)
+	srv.daemon.linuxObservation.replaceRouting(&routingObservation{Instances: map[string]*bird.InstanceObservation{
+		"phx-blue": {State: "running"},
+	}})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/links", nil)
 	rr := httptest.NewRecorder()

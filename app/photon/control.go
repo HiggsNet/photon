@@ -65,7 +65,6 @@ type controlResponse struct {
 	Revocations    int                     `json:"revocations,omitempty"`
 	NetworkChanged bool                    `json:"network_changed,omitempty"`
 	PurgePlan      *purgePlan              `json:"purge_plan,omitempty"`
-	StateGC        *stateGCPlan            `json:"state_gc,omitempty"`
 }
 
 // controlViewResponse is the transport envelope for read-only queries. View
@@ -235,22 +234,7 @@ func admissionStatusViaControl(rt *AppContext) (inspect.AdmissionDiagnosis, bool
 	return readCanonicalViewViaControl[inspect.AdmissionDiagnosis](rt, controlRequest{Method: "admission_status"})
 }
 
-func stateGCViaControl(rt *AppContext, apply bool) (*controlResponse, bool, error) {
-	if rt != nil && rt.DisableControl {
-		return nil, false, nil
-	}
-	path := controlSocketPath(rt.Config)
-	response, err := sendControlRequest(path, controlRequest{Method: "state_gc", Apply: apply})
-	if err != nil && isControlSocketUnavailable(err) {
-		if !apply {
-			return nil, false, nil
-		}
-		return nil, true, fmt.Errorf("daemon control socket unavailable; use --direct for an explicit offline write: %w", err)
-	}
-	return response, true, err
-}
-
-func (d *Daemon) birdRoutesForControl(ctx context.Context, dump *inspect.RoutesResponse, instances []RoutingInstance, birdStates map[string]*BirdInstanceState) []inspect.BirdRoutesView {
+func (d *Daemon) birdRoutesForControl(ctx context.Context, dump *inspect.RoutesResponse, instances []RoutingInstance, birdStates map[string]*bird.InstanceObservation) []inspect.BirdRoutesView {
 	if d == nil || dump == nil {
 		return nil
 	}

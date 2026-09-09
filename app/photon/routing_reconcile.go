@@ -38,37 +38,42 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 	if d == nil || d.App == nil || d.App.Config == nil {
 		return nil
 	}
-	common, runtime := d.StateStore.readCommonAndRuntime()
-	if common.State == nil || runtime == nil {
+	common, _ := d.StateStore.readCommonAndRuntime()
+	if common.State == nil {
 		return nil
 	}
 	links, ipsecReconcile := d.linuxObservation.ipsecSnapshot()
 	rev := uint64(common.Revision)
 	verified := common.State
-	baseBird := photonstate.CloneBirdInstances(runtime.BirdInstances)
-	baseReconcile := photonstate.CloneRoutingReconcileState(runtime.RoutingReconcile)
+	routingObserved := d.linuxObservation.routingSnapshot()
 	config := d.App.Config
 	routingInstances := config.Routing.Instances
 	if len(routingInstances) == 0 {
+		d.linuxObservation.replaceRouting(nil)
 		return nil
 	}
 	if verified.ManagedZone.IsRoot() || !verified.ManagedZone.Valid() {
+		d.linuxObservation.replaceRouting(nil)
 		return nil
+	}
+	birdInstances := make(map[string]*bird.InstanceObservation, len(routingInstances))
+	if routingObserved != nil {
+		for _, configured := range routingInstances {
+			if previous := routingObserved.Instances[configured.NetNS]; previous != nil {
+				birdInstances[configured.NetNS] = previous
+			}
+		}
 	}
 	forceReload := d.routingForceReload
 	d.routingForceReload = false
 
 	now := d.now()
-	d.routingLastRunUnix.Store(now.Unix())
-	if runtime.RoutingReconcile == nil {
-		runtime.RoutingReconcile = &routingReconcileState{}
-	}
-	runtime.RoutingReconcile.LastRunUnix = now.Unix()
+	summary := &routingObservation{Instances: birdInstances, LastRunUnix: now.Unix()}
 
 	ars, err := routing.BuildAuthorizedRouteSet(verified.Network, now)
 	if err != nil {
-		runtime.RoutingReconcile.LastError = err.Error()
-		_ = d.commitRoutingReconcileResult(rev, baseBird, baseReconcile, runtime.BirdInstances, runtime.RoutingReconcile)
+		summary.LastError = err.Error()
+		d.publishRoutingObservation(rev, summary)
 		return fmt.Errorf("build authorized route set: %w", err)
 	}
 
@@ -89,46 +94,32 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 	// Auto-announce changes verified Network through its own common-state
 	// transaction. Refresh both detached owners only in that uncommon case.
 	if autoAnnounceChanged {
-		common, runtime = d.StateStore.readCommonAndRuntime()
-		if common.State == nil || runtime == nil {
+		common, _ = d.StateStore.readCommonAndRuntime()
+		if common.State == nil {
 			return firstErr
 		}
 		rev = uint64(common.Revision)
 		verified = common.State
-		baseBird = photonstate.CloneBirdInstances(runtime.BirdInstances)
-		baseReconcile = photonstate.CloneRoutingReconcileState(runtime.RoutingReconcile)
-		if runtime.RoutingReconcile == nil {
-			runtime.RoutingReconcile = &routingReconcileState{}
-		}
-		runtime.RoutingReconcile.LastRunUnix = now.Unix()
 		ars, err = routing.BuildAuthorizedRouteSet(verified.Network, now)
 		if err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("rebuild authorized route set after auto-announce: %w", err)
 		}
 	}
 
-	if runtime.BirdInstances == nil {
-		runtime.BirdInstances = make(map[string]*BirdInstanceState)
-	}
-
 	// Build per-netns overlay groups for interface pattern merging.
 	overlayByNetns := groupOverlaysByNetns(config.IPsec.LinkGroups, config.Overlay.DefaultNetNS)
 
 	for _, inst := range routingInstances {
-		if err := d.reconcileRoutingForInstance(ctx, verified, runtime, links, ipsecReconcile, inst, ars, dataDir, overlayByNetns, config, now, forceReload); err != nil && firstErr == nil {
+		if err := d.reconcileRoutingForInstance(ctx, verified, birdInstances, links, ipsecReconcile, inst, ars, dataDir, overlayByNetns, config, now, forceReload); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
 
 	if firstErr != nil {
-		runtime.RoutingReconcile.LastError = firstErr.Error()
-	} else {
-		runtime.RoutingReconcile.LastError = ""
+		summary.LastError = firstErr.Error()
 	}
 
-	if err := d.commitRoutingReconcileResult(rev, baseBird, baseReconcile, runtime.BirdInstances, runtime.RoutingReconcile); err != nil {
-		return fmt.Errorf("save routing reconcile state: %w", err)
-	}
+	d.publishRoutingObservation(rev, summary)
 	return firstErr
 }
 
@@ -158,95 +149,29 @@ func groupOverlaysByNetns(groups []ipsec.LinkGroupSpec, defaultNetNS ipsec.NetNS
 	return out
 }
 
-func (d *Daemon) commitRoutingReconcileResult(rev uint64, baseBird map[string]*BirdInstanceState, baseReconcile *routingReconcileState, nextBird map[string]*BirdInstanceState, nextReconcile *routingReconcileState) error {
-	if d == nil || d.StateStore == nil {
-		return nil
+func (d *Daemon) publishRoutingObservation(rev uint64, summary *routingObservation) {
+	if d == nil || d.StateStore == nil || summary == nil {
+		return
 	}
-	if routingReconcileResultEqual(baseBird, baseReconcile, nextBird, nextReconcile) {
-		return nil
-	}
-	currentRev, committed, err := d.StateStore.commitRoutingIfRevision(rev, nextBird, nextReconcile)
-	if err != nil {
-		return err
-	}
-	if !committed {
+	currentRev := d.StateStore.Meta().Revision
+	if currentRev != rev {
 		d.routingDirty = true
 		d.publishStateStoreRuntimeFlags()
 		d.logWarn("routing", "stale_reconcile_result", map[string]any{
 			"source_revision":  rev,
 			"current_revision": currentRev,
-			"changed_netns":    changedBirdInstanceNetNS(baseBird, nextBird),
 		})
-		return nil
+		return
 	}
-	return nil
+	d.linuxObservation.replaceRouting(summary)
 }
 
-func routingReconcileResultEqual(baseBird map[string]*BirdInstanceState, baseReconcile *routingReconcileState, nextBird map[string]*BirdInstanceState, nextReconcile *routingReconcileState) bool {
-	if len(changedBirdInstanceNetNS(baseBird, nextBird)) != 0 {
-		return false
-	}
-	if baseReconcile == nil || nextReconcile == nil {
-		return baseReconcile == nil && nextReconcile == nil
-	}
-	// LastRunUnix is runtime observability, not durable configuration. A
-	// timestamp-only reconcile must not advance the state revision or fsync.
-	return baseReconcile.LastError == nextReconcile.LastError
-}
-
-func changedBirdInstanceNetNS(base, next map[string]*BirdInstanceState) []string {
-	seen := make(map[string]bool, len(base)+len(next))
-	var out []string
-	for netns, baseInst := range base {
-		seen[netns] = true
-		nextInst := next[netns]
-		if !birdInstanceStatesEqual(baseInst, nextInst) {
-			out = append(out, netns)
-		}
-	}
-	for netns := range next {
-		if !seen[netns] {
-			out = append(out, netns)
-		}
-	}
-	return out
-}
-
-func birdInstanceStatesEqual(a, b *BirdInstanceState) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	if len(a.Overlays) != len(b.Overlays) {
-		return false
-	}
-	if a.NetNSName != b.NetNSName ||
-		a.ConfigPath != b.ConfigPath ||
-		a.ControlSocket != b.ControlSocket ||
-		a.PIDFile != b.PIDFile ||
-		a.RouterID != b.RouterID ||
-		a.Owner != b.Owner ||
-		a.LastConfigHash != b.LastConfigHash ||
-		a.LastError != b.LastError ||
-		a.LastExit != b.LastExit ||
-		a.FailureCount != b.FailureCount ||
-		a.BackoffUntilUnix != b.BackoffUntilUnix ||
-		a.State != b.State {
-		return false
-	}
-	for i := range a.Overlays {
-		if a.Overlays[i] != b.Overlays[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *corestate.VerifiedState, runtime *linuxRuntimeState, links map[string]linkInstanceState, reconcile *ipsecObservationSummary, inst RoutingInstance, ars *routing.AuthorizedRouteSet, dataDir string, overlayByNetns map[string]*netnsOverlayGroup, config *appConfig, now time.Time, forceReload bool) error {
+func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *corestate.VerifiedState, birdInstances map[string]*bird.InstanceObservation, links map[string]linkInstanceState, reconcile *ipsecObservationSummary, inst RoutingInstance, ars *routing.AuthorizedRouteSet, dataDir string, overlayByNetns map[string]*netnsOverlayGroup, config *appConfig, now time.Time, forceReload bool) error {
 	netnsName := inst.NetNS
-	instState := runtime.BirdInstances[netnsName]
+	instState := birdInstances[netnsName]
 	if instState == nil {
-		instState = &BirdInstanceState{NetNSName: netnsName}
-		runtime.BirdInstances[netnsName] = instState
+		instState = &bird.InstanceObservation{NetNSName: netnsName}
+		birdInstances[netnsName] = instState
 	}
 
 	// Record which overlays share this instance.
@@ -437,10 +362,10 @@ func (d *Daemon) observeBirdForHealth(ctx context.Context, instances map[string]
 }
 
 func (d *Daemon) recordBirdHealthObservationUnavailableForLinks(instances map[string]linkInstanceState, reconcile *ipsecObservationSummary, netnsName string, overlays []string) {
-	d.recordBirdHealthObservationForLinks(instances, reconcile, netnsName, overlays, &bird.BirdObservedState{})
+	d.recordBirdHealthObservationForLinks(instances, reconcile, netnsName, overlays, &bird.BirdObservation{})
 }
 
-func (d *Daemon) recordBirdHealthObservationForLinks(instances map[string]linkInstanceState, reconcile *ipsecObservationSummary, netnsName string, overlays []string, observed *bird.BirdObservedState) {
+func (d *Daemon) recordBirdHealthObservationForLinks(instances map[string]linkInstanceState, reconcile *ipsecObservationSummary, netnsName string, overlays []string, observed *bird.BirdObservation) {
 	if d == nil || d.health == nil || d.health.Manager == nil || observed == nil {
 		return
 	}
@@ -464,7 +389,7 @@ func linkOutputBelongsToBirdInstance(link photonstate.LinkOutput, netnsName stri
 	return slices.Contains(overlays, link.GroupID)
 }
 
-func birdObservationForInterface(instanceID, probeID, iface string, observed *bird.BirdObservedState) health.BabelObservation {
+func birdObservationForInterface(instanceID, probeID, iface string, observed *bird.BirdObservation) health.BabelObservation {
 	obs := health.BabelObservation{InstanceID: instanceID, ProbeID: probeID}
 	if iface == "" || observed == nil {
 		return obs

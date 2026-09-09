@@ -85,15 +85,17 @@ Daemon
   - [x] 补全 StrongSwan loaded connection、SA 和配置 namespace 的全局 XFRM inventory；同一 namespace 的 link/address 只读取一次，第一阶段只 Observe、不自动删除。
   - [x] 从 VerifiedState current/previous generation、配置和确定性命名直接计算可保留 resource specs；恢复逻辑直接消费该纯函数结果，不新增 `AllowedRuntime`、journal、capability wrapper 或第二套 owner/token。
   - [x] 按保守策略恢复 restart rotation/takeover：reconcile 工作集启动时为空；current/previous 从 verified generation 加 connection/SA/XFRM 观察恢复，previous-only 保留旧链路并准备 current，takeover deadline 与 backoff 不从磁盘恢复。
-  - [ ] orphan cleanup 后置接入：StrongSwan connection 必须匹配可推导的完整 ID；XFRM interface 必须同时位于配置 namespace、类型为 xfrm，并匹配可推导的 name 与 `if_id`；普通 reconcile 不按前缀批量删除。
+  - [x] 本轮不把自动 orphan cleanup 接入普通 reconcile；全局 inventory 继续只 Observe，保留既有显式运维 cleanup，避免为非当前需求增加第二套清理路径。
   - [x] 将在线 link 数据放进无 DB/线程的 `LinuxObservation`；reconcile、health、routing/firewall、control/Observer 均读取该在线快照，`pkg/transport/ipsec.LinkInstance` 仅作为 daemon 内存工作对象。
   - [x] 停止持久化 IPsec observation：reconcile/cleanup 不再调用 runtime commit，current/legacy JSON 不再编码或恢复 `LinkInstances`、`IPsecReconcile`，旧字段解码时直接忽略。
   - [x] 删除 RuntimeState 中仅剩的 `json:"-"` 兼容投影槽；展示、health、routing/firewall、cleanup 与撤销规划显式接收 observation，测试也不再把 StateStore 与在线观察拼成伪 runtime。
   - [x] 删除 `internal/state.LinkInstanceState` 及双向字段转换，在线调用链直接使用 `ipsec.LinkInstance`；reconcile summary 迁入 `LinuxObservation` 并删除无意义的 `Committed/Stale` 字段，XFRM 单代推导失败显式返回错误。
   - [ ] 用 crash/restart 测试覆盖 create、rotation 各阶段、current-only、previous-only、loaded-no-SA、takeover、revoke/config removal 和 orphan cleanup；未被测试证明的恢复规则不标完成。
-- [ ] 将 `RoutingReconcile`、`FirewallReconcile`、BIRD status/PID/socket 可用性改为启动后重新 Observe；确定性路径、resource ID 和 policy hash 不重复落盘。
+- [x] 删除持久化 `RoutingReconcile`；LastRun/LastError 进入无 DB 的 `LinuxObservation`，旧数据库字段迁移时直接丢弃，BIRD instance 仍按原边界单独审计。
+- [x] 删除持久化 `FirewallReconcile`；backend、generation、policy hash、owned object count 和错误只进入 `LinuxObservation`，下一轮 apply 仍以系统 owned-object observation 为准；`EndpointACLs` 继续作为用户配置持久化。
+- [x] 删除持久化 `BirdInstances`；路径、RouterID、owner 与 config hash 重新推导，status/exit/backoff 只进入 `LinuxObservation`，旧数据库字段直接丢弃。临时 `birdc` 结果已从 `BirdObservedState` 收敛命名为 `BirdObservation`。
 - [ ] 审计 `PeerCleanups`：只保留真正影响安全 grace/cleanup 恢复的字段，其余由 VerifiedState/GossipCheckpoint 推导。
-- [ ] 新增或收敛无独立线程/DB 的 `LinuxObservation` read model；Daemon 在线时更新，重启时清空并重建。
+- [x] 收敛无独立线程/DB 的 `LinuxObservation` read model；IPsec、routing/BIRD 和 firewall 在线时更新，重启时清空并重建。
 - [ ] platform inspect/control/HTTP 只读在线 Observation；Daemon 离线时返回 unavailable，不用 bbolt 上次 reconcile snapshot 冒充 live。
 - [ ] 内存错误使用 `error`/typed failure，展示时映射稳定 code/message；没有证明价值时不持久化 LastError。
 
@@ -190,6 +192,7 @@ Daemon
 - [ ] SRv6 与额外 policy-routing/system-route audit，按真实部署需求启动。
 - [ ] 跨数据面 rotate smoke、Observer 拓扑/zone tree/metrics datasource 增强。
 - [ ] 多进程/外部数据库修改协调：先证明 bbolt 文件锁之外确有需求，再评估显式 flock/fsnotify；不得引入第二 writer。
+- [ ] 远期再评估自动 IPsec orphan cleanup；当前几乎不需要考虑。只有 connection/SA/XFRM 都具备不可与其他项目混淆的 Photon ownership 证明时才允许进入普通 reconcile，并必须复用既有 teardown 路径，不能并存第二套删除实现。
 
 ## 下一步执行顺序
 

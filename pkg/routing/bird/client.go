@@ -17,7 +17,7 @@ import (
 type Client interface {
 	// Status returns a snapshot of BIRD status, protocols, routes,
 	// interfaces and neighbors.
-	Status(ctx context.Context) (*BirdObservedState, error)
+	Status(ctx context.Context) (*BirdObservation, error)
 
 	// Configure performs a full "birdc configure" using the file at path.
 	Configure(ctx context.Context, path string) error
@@ -64,17 +64,17 @@ func NewClientWithRouteTables(socketPath string, timeout time.Duration, routeTab
 }
 
 // Status returns a snapshot of BIRD status, protocols, routes, interfaces and neighbors.
-func (c *birdcClient) Status(ctx context.Context) (*BirdObservedState, error) {
-	state := &BirdObservedState{
+func (c *birdcClient) Status(ctx context.Context) (*BirdObservation, error) {
+	state := &BirdObservation{
 		FetchedAt: time.Now(),
 	}
 
 	commands := []struct {
 		name  string
 		cmd   string
-		parse func(string, *BirdObservedState)
+		parse func(string, *BirdObservation)
 	}{
-		{"status", "show status", func(out string, s *BirdObservedState) {
+		{"status", "show status", func(out string, s *BirdObservation) {
 			status, err := parseStatus(out)
 			if err != nil {
 				s.Warnings = append(s.Warnings, fmt.Sprintf("parse status: %v", err))
@@ -83,13 +83,13 @@ func (c *birdcClient) Status(ctx context.Context) (*BirdObservedState, error) {
 			}
 			s.Status = status
 		}},
-		{"protocols", "show protocols all", func(out string, s *BirdObservedState) {
+		{"protocols", "show protocols all", func(out string, s *BirdObservation) {
 			s.Protocols = parseProtocols(out)
 		}},
-		{"interfaces", "show interfaces", func(out string, s *BirdObservedState) {
+		{"interfaces", "show interfaces", func(out string, s *BirdObservation) {
 			s.Interfaces = parseInterfaces(out)
 		}},
-		{"neighbors", "show babel neighbors", func(out string, s *BirdObservedState) {
+		{"neighbors", "show babel neighbors", func(out string, s *BirdObservation) {
 			s.Neighbors = parseBabelNeighbors(out)
 		}},
 	}

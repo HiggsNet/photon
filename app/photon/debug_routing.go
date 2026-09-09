@@ -13,6 +13,7 @@ import (
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	"github.com/HiggsNet/photon/internal/photonlinux/linkstate"
 	"github.com/HiggsNet/photon/pkg/routing"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/urfave/cli/v3"
 )
 
@@ -298,7 +299,7 @@ func debugBabelWithRuntime(rt *AppContext, w io.Writer) error {
 	return fmt.Errorf("daemon control socket unavailable; BIRD runtime state requires a running daemon")
 }
 
-func buildBabelDebugView(rt *AppContext, instances map[string]*BirdInstanceState, lastRoutingError string) inspect.BabelDebugView {
+func buildBabelDebugView(rt *AppContext, instances map[string]*bird.InstanceObservation, lastRoutingError string) inspect.BabelDebugView {
 	routingInstances := []RoutingInstance{}
 	if rt != nil && rt.Config != nil {
 		routingInstances = rt.Config.Routing.Instances

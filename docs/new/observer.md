@@ -199,7 +199,7 @@ type Provider interface {
 ### 4.6 Routes / Bird
 
 - `Routes`：`routing.BuildAuthorizedRouteSet(state.Network, now)` 现算授权路由集，再经 `RoutesFromAuthorizedSet(state.ManagedZone, ars)` 输出；不读 BIRD 的实际 RIB。
-- `Bird`：直接返回快照中的 `state.BirdInstances`（克隆）与 `RoutingReconcile.LastError`；实例数据由 routing reconcile 周期性采集（见 [routing.md](routing.md)）。
+- `Bird`：直接返回 daemon `LinuxObservation` 中的 BIRD instance 快照与最近 routing error；实例数据由 routing reconcile 周期性重建（见 [routing.md](routing.md)）。
 
 ---
 
@@ -323,7 +323,7 @@ observer 当前只读。若后续需要支持 Web 控制，建议按以下阶段
 
 ### 10.2 BIRD 深度集成计划
 
-当前 `/api/v1/bird` 只返回 `BirdInstances` 中已有的字段。后续可解析 `birdc` 输出，新增：
+当前 `/api/v1/bird` 只返回 routing observation 中已有的字段。后续可扩展 `birdc` 输出，新增：
 
 - `/api/v1/bird/protocols`
 - `/api/v1/bird/neighbors`

@@ -119,8 +119,9 @@ func TestPersistedComposedDaemonStateStoreCommitsRuntimeThroughOwnedHandle(t *te
 		t.Fatalf("newPersistedDaemonStateStore: %v", err)
 	}
 	before := startup.Common.ReadView()
-	if _, committed, err := composed.commitRoutingIfRevision(uint64(before.Revision), nil, &routingReconcileState{LastError: "persisted"}); err != nil || !committed {
-		t.Fatalf("commitRoutingIfRevision = committed %v err %v", committed, err)
+	acls := map[string]endpointACL{"api": {Name: "api"}}
+	if _, committed, err := composed.commitEndpointACLsIfRevision(uint64(before.Revision), acls); err != nil || !committed {
+		t.Fatalf("commitEndpointACLsIfRevision = committed %v err %v", committed, err)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -138,8 +139,8 @@ func TestPersistedComposedDaemonStateStoreCommitsRuntimeThroughOwnedHandle(t *te
 	if restored.Common.ReadView().Revision != before.Revision {
 		t.Fatalf("runtime commit advanced verified revision: before=%d after=%d", before.Revision, restored.Common.ReadView().Revision)
 	}
-	if restored.Runtime.RoutingReconcile == nil || restored.Runtime.RoutingReconcile.LastError != "persisted" {
-		t.Fatalf("restored routing runtime = %+v", restored.Runtime.RoutingReconcile)
+	if restored.Runtime.EndpointACLs["api"].Name != "api" {
+		t.Fatalf("restored endpoint ACL runtime = %+v", restored.Runtime.EndpointACLs)
 	}
 }
 

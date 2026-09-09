@@ -3,7 +3,7 @@ package inspect
 import (
 	"testing"
 
-	photonstate "github.com/HiggsNet/photon/internal/state"
+	"github.com/HiggsNet/photon/pkg/firewall"
 )
 
 func TestBuildFirewallDebugView(t *testing.T) {
@@ -32,9 +32,9 @@ func TestBuildFirewallDebugView(t *testing.T) {
 				RedirectGrace: true,
 			},
 		},
-		Reconcile: &photonstate.FirewallReconcileState{
+		Reconcile: &firewall.FirewallObservation{
 			Backend: "dry-run",
-			Instances: map[string]*photonstate.FirewallReconcileInstance{
+			Instances: map[string]*firewall.FirewallInstanceObservation{
 				"photontesth2": {Backend: "nft", Generation: 5, OwnedObjects: 10, PolicyHash: "abc123"},
 			},
 		},

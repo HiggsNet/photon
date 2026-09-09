@@ -307,8 +307,8 @@ type FilterBlock struct {
 	Body string // raw BIRD filter text, including surrounding braces
 }
 
-// BirdObservedState is the parsed output of birdc status/commands.
-type BirdObservedState struct {
+// BirdObservation is the parsed output of birdc status/commands.
+type BirdObservation struct {
 	Status     BirdStatus
 	Protocols  []BirdProtocol
 	Routes     []BirdRoute
@@ -318,6 +318,24 @@ type BirdObservedState struct {
 	FetchedAt time.Time
 	Stale     bool     // true if the snapshot timed out or used cached data
 	Warnings  []string // non-fatal parse warnings
+}
+
+// InstanceObservation summarizes one configured BIRD instance for daemon
+// diagnostics and restart backoff. It is safe to discard on daemon restart.
+type InstanceObservation struct {
+	NetNSName        string            `json:"netns_name"`
+	Overlays         []string          `json:"overlays,omitempty"`
+	ConfigPath       string            `json:"config_path"`
+	ControlSocket    string            `json:"control_socket"`
+	PIDFile          string            `json:"pid_file"`
+	RouterID         uint32            `json:"router_id"`
+	Owner            BirdResourceOwner `json:"owner,omitempty"`
+	LastConfigHash   string            `json:"last_config_hash"`
+	LastError        string            `json:"last_error"`
+	LastExit         string            `json:"last_exit,omitempty"`
+	FailureCount     int               `json:"failure_count,omitempty"`
+	BackoffUntilUnix int64             `json:"backoff_until_unix,omitempty"`
+	State            string            `json:"state"`
 }
 
 // BirdStatus is the parsed output of "show status".

@@ -221,7 +221,7 @@ func (d *Daemon) handleEndpointACLApplyEvent(acl endpointACL) (bool, error) {
 		runtime.EndpointACLs = make(map[string]endpointACL)
 	}
 	runtime.EndpointACLs[validated.Name] = validated
-	if err := d.commitEndpointACLMutation(uint64(common.Revision), runtime.EndpointACLs, runtime.FirewallReconcile); err != nil {
+	if err := d.commitEndpointACLMutation(uint64(common.Revision), runtime.EndpointACLs); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -240,7 +240,7 @@ func (d *Daemon) handleEndpointACLRemoveEvent(name string) (bool, error) {
 		return false, nil
 	}
 	delete(runtime.EndpointACLs, name)
-	if err := d.commitEndpointACLMutation(uint64(common.Revision), runtime.EndpointACLs, runtime.FirewallReconcile); err != nil {
+	if err := d.commitEndpointACLMutation(uint64(common.Revision), runtime.EndpointACLs); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -255,11 +255,11 @@ func endpointACLEqual(left, right endpointACL) bool {
 		slices.Equal(left.Selectors, right.Selectors)
 }
 
-func (d *Daemon) commitEndpointACLMutation(rev uint64, acls map[string]endpointACL, reconcile *firewallReconcileState) error {
+func (d *Daemon) commitEndpointACLMutation(rev uint64, acls map[string]endpointACL) error {
 	if d == nil || d.StateStore == nil {
 		return errors.New("daemon service is not initialized")
 	}
-	if _, committed, err := d.StateStore.commitFirewallIfRevision(rev, acls, reconcile); err != nil {
+	if _, committed, err := d.StateStore.commitEndpointACLsIfRevision(rev, acls); err != nil {
 		return err
 	} else if !committed {
 		return errDaemonStateRevisionStale

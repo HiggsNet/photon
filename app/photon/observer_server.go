@@ -15,11 +15,11 @@ import (
 	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
 	"github.com/HiggsNet/photon/internal/observability/healthspool"
 	"github.com/HiggsNet/photon/internal/observer"
-	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/core/observability"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/routing"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
 )
 
 type observerServer struct {
@@ -239,10 +239,11 @@ func (p *observerProvider) Links(linkFilter string) (any, error) {
 	}
 	health := d.healthStatusResponse()
 	observedLinks, reconcile := d.linuxObservation.ipsecSnapshot()
-	d.StateStore.mu.RLock()
-	bird := photonstate.CloneBirdInstances(d.StateStore.runtime.BirdInstances)
-	d.StateStore.mu.RUnlock()
-	build := buildStoredLinkInspection(observerRuntime(d), observedLinks, reconcile, bird, health)
+	var birdInstances map[string]*bird.InstanceObservation
+	if routingObserved := d.linuxObservation.routingSnapshot(); routingObserved != nil {
+		birdInstances = routingObserved.Instances
+	}
+	build := buildStoredLinkInspection(observerRuntime(d), observedLinks, reconcile, birdInstances, health)
 	view := build.Inspection
 	// Single link detail
 	if linkFilter != "" {
@@ -466,13 +467,13 @@ func (p *observerProvider) Bird() (any, error) {
 	if d == nil || d.StateStore == nil {
 		return inspecthttp.BirdResponse{Instances: map[string]any{}}, nil
 	}
-	d.StateStore.mu.RLock()
-	instances := photonstate.CloneBirdInstances(d.StateStore.runtime.BirdInstances)
+	routingReconcile := d.linuxObservation.routingSnapshot()
 	lastRoutingError := ""
-	if d.StateStore.runtime.RoutingReconcile != nil {
-		lastRoutingError = d.StateStore.runtime.RoutingReconcile.LastError
+	var instances map[string]*bird.InstanceObservation
+	if routingReconcile != nil {
+		lastRoutingError = routingReconcile.LastError
+		instances = routingReconcile.Instances
 	}
-	d.StateStore.mu.RUnlock()
 	return inspecthttp.BirdResponse{
 		Instances:        instances,
 		LastRoutingError: lastRoutingError,

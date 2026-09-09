@@ -100,29 +100,29 @@ func TestComposedDaemonStateStoreRuntimeCommitOrderingNoopAndStale(t *testing.T)
 	commits := 0
 	store.commitRuntime = func(revision corestate.VerifiedRevision, candidate *linuxRuntimeState) error {
 		commits++
-		if revision != 0 || candidate.RoutingReconcile == nil || candidate.RoutingReconcile.LastError != "planned" {
-			t.Fatalf("runtime commit candidate = revision %d, state %+v", revision, candidate.RoutingReconcile)
+		if revision != 0 || candidate.EndpointACLs["api"].Name != "api" {
+			t.Fatalf("runtime commit candidate = revision %d, state %+v", revision, candidate.EndpointACLs)
 		}
 		store.mu.RLock()
-		published := photonstate.CloneRoutingReconcileState(store.runtime.RoutingReconcile)
+		published := photonstate.CloneEndpointACLs(store.runtime.EndpointACLs)
 		store.mu.RUnlock()
-		if published != nil {
+		if _, exists := published["api"]; exists {
 			t.Fatal("runtime view published before persistence callback")
 		}
 		return nil
 	}
-	reconcile := &routingReconcileState{LastError: "planned"}
-	if revision, committed, err := store.commitRoutingIfRevision(0, nil, reconcile); err != nil || !committed || revision != 0 {
-		t.Fatalf("routing runtime commit = revision %d committed %v err %v", revision, committed, err)
+	acls := map[string]endpointACL{"api": {Name: "api"}}
+	if revision, committed, err := store.commitEndpointACLsIfRevision(0, acls); err != nil || !committed || revision != 0 {
+		t.Fatalf("endpoint ACL runtime commit = revision %d committed %v err %v", revision, committed, err)
 	}
 	_, after := store.readCommonAndRuntime()
-	if after.RoutingReconcile == nil || after.RoutingReconcile.LastError != "planned" || store.Meta().Revision != 0 {
-		t.Fatalf("published runtime/meta = %+v/%+v", after.RoutingReconcile, store.Meta())
+	if after.EndpointACLs["api"].Name != "api" || store.Meta().Revision != 0 {
+		t.Fatalf("published runtime/meta = %+v/%+v", after.EndpointACLs, store.Meta())
 	}
-	if _, committed, err := store.commitRoutingIfRevision(0, nil, reconcile); err != nil || committed {
+	if _, committed, err := store.commitEndpointACLsIfRevision(0, acls); err != nil || committed {
 		t.Fatalf("runtime no-op = committed %v err %v", committed, err)
 	}
-	if _, committed, err := store.commitRoutingIfRevision(1, nil, &routingReconcileState{LastError: "stale"}); err != nil || committed {
+	if _, committed, err := store.commitEndpointACLsIfRevision(1, map[string]endpointACL{"stale": {Name: "stale"}}); err != nil || committed {
 		t.Fatalf("stale runtime commit = committed %v err %v", committed, err)
 	}
 	if commits != 1 {
@@ -134,7 +134,7 @@ func TestComposedDaemonStateStoreRuntimePersistenceFailureDoesNotPublish(t *test
 	store, _ := newDaemonStateStoreTestFixture(t, nil)
 	wantErr := errors.New("runtime persist failed")
 	store.commitRuntime = func(corestate.VerifiedRevision, *linuxRuntimeState) error { return wantErr }
-	_, committed, err := store.commitFirewallIfRevision(0, map[string]endpointACL{"blocked": {Name: "blocked"}}, nil)
+	_, committed, err := store.commitEndpointACLsIfRevision(0, map[string]endpointACL{"blocked": {Name: "blocked"}})
 	if !errors.Is(err, wantErr) || committed {
 		t.Fatalf("runtime failure = committed %v err %v", committed, err)
 	}

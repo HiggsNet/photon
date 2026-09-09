@@ -29,7 +29,7 @@ type UpstreamRouteManager interface {
 }
 
 type BirdClient interface {
-	Status(context.Context) (*bird.BirdObservedState, error)
+	Status(context.Context) (*bird.BirdObservation, error)
 	Configure(context.Context, string) error
 	Raw(context.Context, string) (string, error)
 }
@@ -92,7 +92,7 @@ func (r *LinuxDriver) ConfigureBird(ctx context.Context, socketPath, configPath 
 	return r.birdClient(socketPath, nil).Configure(ctx, configPath)
 }
 
-func (r *LinuxDriver) ObserveBird(ctx context.Context, socketPath string, routeTables ...string) (*bird.BirdObservedState, error) {
+func (r *LinuxDriver) ObserveBird(ctx context.Context, socketPath string, routeTables ...string) (*bird.BirdObservation, error) {
 	if r == nil {
 		return nil, fmt.Errorf("linux BIRD driver is not configured")
 	}

@@ -4,15 +4,27 @@ import (
 	"maps"
 	"sync"
 
+	"github.com/HiggsNet/photon/pkg/firewall"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 // linuxObservation is the daemon's live platform view. It has no persistence
 // or worker of its own and is empty again after a process restart.
 type linuxObservation struct {
-	mu             sync.RWMutex
-	ipsecLinks     map[string]ipsec.LinkInstance
-	ipsecReconcile *ipsecObservationSummary
+	mu                sync.RWMutex
+	ipsecLinks        map[string]ipsec.LinkInstance
+	ipsecReconcile    *ipsecObservationSummary
+	routingReconcile  *routingObservation
+	firewallReconcile *firewall.FirewallObservation
+}
+
+// routingObservation is online diagnostic state. It is rebuilt after
+// every daemon start and is never persisted in the Linux runtime state.
+type routingObservation struct {
+	Instances   map[string]*bird.InstanceObservation
+	LastRunUnix int64
+	LastError   string
 }
 
 // ipsecObservationSummary is the daemon's online summary of the latest observed
@@ -61,4 +73,86 @@ func (o *linuxObservation) replaceIPsec(links map[string]ipsec.LinkInstance, rec
 	o.ipsecLinks = maps.Clone(links)
 	o.ipsecReconcile = cloneIPsecObservationSummary(reconcile)
 	o.mu.Unlock()
+}
+
+func (o *linuxObservation) routingSnapshot() *routingObservation {
+	if o == nil {
+		return nil
+	}
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	if o.routingReconcile == nil {
+		return nil
+	}
+	return cloneRoutingObservation(o.routingReconcile)
+}
+
+func (o *linuxObservation) replaceRouting(reconcile *routingObservation) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if reconcile == nil {
+		o.routingReconcile = nil
+		return
+	}
+	o.routingReconcile = cloneRoutingObservation(reconcile)
+}
+
+func cloneRoutingObservation(in *routingObservation) *routingObservation {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	if in.Instances != nil {
+		out.Instances = make(map[string]*bird.InstanceObservation, len(in.Instances))
+		for netns, instance := range in.Instances {
+			if instance == nil {
+				out.Instances[netns] = nil
+				continue
+			}
+			copyInstance := *instance
+			copyInstance.Overlays = append([]string(nil), instance.Overlays...)
+			out.Instances[netns] = &copyInstance
+		}
+	}
+	return &out
+}
+
+func (o *linuxObservation) firewallSnapshot() *firewall.FirewallObservation {
+	if o == nil {
+		return nil
+	}
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	return cloneFirewallObservation(o.firewallReconcile)
+}
+
+func (o *linuxObservation) replaceFirewall(reconcile *firewall.FirewallObservation) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	o.firewallReconcile = cloneFirewallObservation(reconcile)
+	o.mu.Unlock()
+}
+
+func cloneFirewallObservation(in *firewall.FirewallObservation) *firewall.FirewallObservation {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	if in.Instances != nil {
+		out.Instances = make(map[string]*firewall.FirewallInstanceObservation, len(in.Instances))
+		for id, entry := range in.Instances {
+			if entry == nil {
+				out.Instances[id] = nil
+				continue
+			}
+			copyEntry := *entry
+			out.Instances[id] = &copyEntry
+		}
+	}
+	return &out
 }

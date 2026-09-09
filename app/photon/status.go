@@ -6,6 +6,7 @@ import (
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
 )
 
 func showStatus() error {
@@ -22,10 +23,10 @@ func showStatus() error {
 	if err != nil {
 		return err
 	}
-	return inspecttext.WriteStatus(os.Stdout, statusViewFromOwners(rt, common, runtime, nil, nil, nil, false))
+	return inspecttext.WriteStatus(os.Stdout, statusViewFromOwners(rt, common, runtime, nil, nil, nil, nil, false))
 }
 
-func statusViewFromOwners(rt *AppContext, common corestate.View, runtime *linuxRuntimeState, links map[string]linkInstanceState, reconcile *ipsecObservationSummary, health []healthLinkJSON, daemonOnline bool) inspect.StatusView {
+func statusViewFromOwners(rt *AppContext, common corestate.View, runtime *linuxRuntimeState, links map[string]linkInstanceState, reconcile *ipsecObservationSummary, birdInstances map[string]*bird.InstanceObservation, health []healthLinkJSON, daemonOnline bool) inspect.StatusView {
 	if common.State == nil || runtime == nil {
 		return inspect.BuildStatus(inspect.StatusInput{DaemonOnline: daemonOnline})
 	}
@@ -44,7 +45,7 @@ func statusViewFromOwners(rt *AppContext, common corestate.View, runtime *linuxR
 	if daemonOnline {
 		input.GossipSource = "runtime"
 		input.PlatformSource = "runtime"
-		input.Links = buildStoredLinkInspection(rt, links, reconcile, runtime.BirdInstances, health).Inspection
+		input.Links = buildStoredLinkInspection(rt, links, reconcile, birdInstances, health).Inspection
 	}
 	cfg := inspect.PeerLifecycleConfig{}
 	hasOverlay := false
@@ -69,16 +70,15 @@ func daemonStatusView(d *Daemon) inspect.DaemonStatusView {
 	store.mu.RLock()
 	meta := store.metaLocked()
 	linkInstances, ipsecReconcile := d.linuxObservation.ipsecSnapshot()
+	routingReconcile := d.linuxObservation.routingSnapshot()
 	desiredLinks := 0
 	lastLinkError := ""
 	lastRoutingError := ""
 	ipsecLastRunUnix := int64(0)
 	routingLastRunUnix := int64(0)
-	if store.runtime != nil {
-		if store.runtime.RoutingReconcile != nil {
-			lastRoutingError = store.runtime.RoutingReconcile.LastError
-			routingLastRunUnix = store.runtime.RoutingReconcile.LastRunUnix
-		}
+	if routingReconcile != nil {
+		lastRoutingError = routingReconcile.LastError
+		routingLastRunUnix = routingReconcile.LastRunUnix
 	}
 	if ipsecReconcile != nil {
 		desiredLinks = ipsecReconcile.DesiredLinks
@@ -103,9 +103,6 @@ func daemonStatusView(d *Daemon) inspect.DaemonStatusView {
 				lastSyncUnix = peer.LastSyncUnix
 			}
 		}
-	}
-	if lastRun := d.routingLastRunUnix.Load(); lastRun != 0 {
-		routingLastRunUnix = lastRun
 	}
 	peerID := ""
 	listenAddr := ""

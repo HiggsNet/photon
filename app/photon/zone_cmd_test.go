@@ -132,10 +132,13 @@ func TestHumanCommandsUsePlaneOrientedShowViews(t *testing.T) {
 	}
 
 	advanced := commandByName(root.Commands, "advanced")
-	for _, name := range []string{"sync", "recovery", "gc"} {
+	for _, name := range []string{"sync", "recovery"} {
 		if commandByName(advanced.Commands, name) == nil {
 			t.Errorf("advanced command does not expose %s", name)
 		}
+	}
+	if commandByName(advanced.Commands, "gc") != nil {
+		t.Error("advanced command still exposes obsolete BIRD diagnostic-state gc")
 	}
 
 	firewall := commandByName(root.Commands, "firewall")

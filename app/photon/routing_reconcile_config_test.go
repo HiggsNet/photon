@@ -41,11 +41,11 @@ func TestReconcileRoutingGeneratesConfig(t *testing.T) {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
 
-	_, latest := service.StateStore.readCommonAndRuntime()
-	if len(latest.BirdInstances) != 1 {
-		t.Fatalf("BirdInstances len = %d, want 1", len(latest.BirdInstances))
+	latest := service.linuxObservation.routingSnapshot()
+	if len(latest.Instances) != 1 {
+		t.Fatalf("BirdInstances len = %d, want 1", len(latest.Instances))
 	}
-	inst := latest.BirdInstances["photontesth2"]
+	inst := latest.Instances["photontesth2"]
 	if inst == nil {
 		t.Fatalf("missing bird instance state for netns photontesth2")
 	}
@@ -266,12 +266,8 @@ func TestReconcileRoutingStaleRevisionDoesNotCommitBirdInstance(t *testing.T) {
 	if !meta.Dirty.Routing {
 		t.Fatal("state store routing dirty flag = false, want retry visible to readers")
 	}
-	_, currentRuntime := service.StateStore.readCommonAndRuntime()
-	if len(currentRuntime.BirdInstances) != 0 {
-		t.Fatalf("bird instances = %+v, want stale result discarded", currentRuntime.BirdInstances)
-	}
-	if currentRuntime.RoutingReconcile != nil {
-		t.Fatalf("routing reconcile = %+v, want stale summary discarded", currentRuntime.RoutingReconcile)
+	if observation := service.linuxObservation.routingSnapshot(); observation != nil {
+		t.Fatalf("routing observation = %+v, want stale summary discarded", observation)
 	}
 	logOutput := logs.String()
 	if !strings.Contains(logOutput, "event=stale_reconcile_result") ||
@@ -316,8 +312,8 @@ func TestReconcileRoutingExternalModeOnlyStatus(t *testing.T) {
 		t.Fatalf("external mode should call client.Status")
 	}
 
-	_, latest := service.StateStore.readCommonAndRuntime()
-	inst := latest.BirdInstances["photontesth2"]
+	latest := service.linuxObservation.routingSnapshot()
+	inst := latest.Instances["photontesth2"]
 	if inst == nil || inst.State != birdInstanceStateRunning {
 		t.Fatalf("external instance state = %+v, want running", inst)
 	}
@@ -346,9 +342,8 @@ func TestReconcileRoutingSkipsWhenDisabled(t *testing.T) {
 		t.Fatalf("reconcileRouting: %v", err)
 	}
 
-	_, latest := service.StateStore.readCommonAndRuntime()
-	if len(latest.BirdInstances) != 0 {
-		t.Fatalf("BirdInstances len = %d, want 0", len(latest.BirdInstances))
+	if latest := service.linuxObservation.routingSnapshot(); latest != nil {
+		t.Fatalf("routing observation = %+v, want nil when routing is disabled", latest)
 	}
 }
 
