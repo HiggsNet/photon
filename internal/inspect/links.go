@@ -1,10 +1,12 @@
 package inspect
 
 import (
+	"net/netip"
 	"sort"
 	"strings"
 
 	photonstate "github.com/HiggsNet/photon/internal/state"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 type LinkInput struct {
@@ -124,8 +126,15 @@ type LinkInstance struct {
 	Routing               LinkRouting
 }
 
-// LinkOwner is a read-only alias of the shared runtime owner state.
-type LinkOwner = photonstate.LinkOwnerState
+// LinkOwner is the inspect/JSON projection of an IPsec resource owner.
+type LinkOwner struct {
+	Manager     string `json:"manager,omitempty"`
+	GroupID     string `json:"group_id,omitempty"`
+	InstanceID  string `json:"instance_id,omitempty"`
+	LinkID      string `json:"link_id,omitempty"`
+	TransportID string `json:"transport_id,omitempty"`
+	Token       string `json:"token,omitempty"`
+}
 
 type DesiredLink struct {
 	InstanceID      string `json:"instance_id,omitempty"`
@@ -212,10 +221,10 @@ type LinkSkip struct {
 	Detail  string `json:"detail,omitempty"`
 }
 
-// BuildLinkInstanceFromRuntime builds an inspect view of a link instance from
-// the shared runtime state. Routing is supplied separately because it is
+// BuildLinkInstanceFromRuntime builds an inspect view of an observed IPsec
+// link. Routing is supplied separately because it is
 // derived from the BIRD runtime snapshot.
-func BuildLinkInstanceFromRuntime(inst photonstate.LinkInstanceState, routing LinkRouting) LinkInstance {
+func BuildLinkInstanceFromRuntime(inst ipsec.LinkInstance, routing LinkRouting) LinkInstance {
 	return LinkInstance{
 		ID:                    inst.ID,
 		GroupID:               inst.GroupID,
@@ -228,8 +237,8 @@ func BuildLinkInstanceFromRuntime(inst photonstate.LinkInstanceState, routing Li
 		ActualState:           inst.ActualState,
 		InterfaceName:         inst.InterfaceName,
 		XFRMIfID:              inst.XFRMIfID,
-		LocalTunnelAddr:       inst.LocalTunnelAddr,
-		PeerTunnelAddr:        inst.PeerTunnelAddr,
+		LocalTunnelAddr:       formatObservedAddr(inst.LocalTunnelAddr),
+		PeerTunnelAddr:        formatObservedAddr(inst.PeerTunnelAddr),
 		IKEName:               inst.IKEName,
 		ChildSAName:           inst.ChildSAName,
 		Endpoint:              inst.Endpoint,
@@ -240,26 +249,36 @@ func BuildLinkInstanceFromRuntime(inst photonstate.LinkInstanceState, routing Li
 		StagedChildSAName:     inst.StagedChildSAName,
 		StagedInterfaceName:   inst.StagedInterfaceName,
 		StagedXFRMIfID:        inst.StagedXFRMIfID,
-		StagedLocalTunnelAddr: inst.StagedLocalTunnelAddr,
-		StagedPeerTunnelAddr:  inst.StagedPeerTunnelAddr,
+		StagedLocalTunnelAddr: formatObservedAddr(inst.StagedLocalTunnelAddr),
+		StagedPeerTunnelAddr:  formatObservedAddr(inst.StagedPeerTunnelAddr),
 		RotateDeadline:        inst.RotateDeadline,
 		LastError:             inst.LastError,
 		FailureCount:          inst.FailureCount,
 		BackoffUntil:          inst.BackoffUntil,
 		LastTransition:        inst.LastTransition,
-		Owner:                 LinkOwner(inst.Owner),
-		InitiatorRole:         inst.InitiatorRole,
-		TakeoverPhase:         inst.TakeoverPhase,
-		TakeoverStartedAt:     inst.TakeoverStartedAt,
-		TakeoverUntil:         inst.TakeoverUntil,
-		LastTakeoverError:     inst.LastTakeoverError,
-		ObservedInitiator:     inst.ObservedInitiator,
-		Routing:               routing,
+		Owner: LinkOwner{
+			Manager: inst.Owner.Manager, GroupID: inst.Owner.GroupID,
+			InstanceID: inst.Owner.InstanceID, LinkID: inst.Owner.LinkID,
+			TransportID: inst.Owner.TransportID, Token: inst.Owner.Token,
+		},
+		InitiatorRole:     inst.InitiatorRole,
+		TakeoverPhase:     inst.TakeoverPhase,
+		TakeoverStartedAt: inst.TakeoverStartedAt,
+		TakeoverUntil:     inst.TakeoverUntil,
+		LastTakeoverError: inst.LastTakeoverError,
+		ObservedInitiator: inst.ObservedInitiator,
+		Routing:           routing,
 	}
 }
 
-// BuildDesiredLinkFromRuntime builds an inspect view of a desired link from the
-// shared runtime state.
+func formatObservedAddr(addr netip.Addr) string {
+	if !addr.IsValid() {
+		return ""
+	}
+	return addr.String()
+}
+
+// BuildDesiredLinkFromRuntime builds an inspect view of a desired link.
 func BuildDesiredLinkFromRuntime(item photonstate.DesiredLinkState) DesiredLink {
 	return DesiredLink{
 		InstanceID:      item.InstanceID,
@@ -277,8 +296,7 @@ func BuildDesiredLinkFromRuntime(item photonstate.DesiredLinkState) DesiredLink 
 	}
 }
 
-// BuildLinkActionFromRuntime builds an inspect view of a reconcile action from
-// the shared runtime state.
+// BuildLinkActionFromRuntime builds an inspect view of a reconcile action.
 func BuildLinkActionFromRuntime(item photonstate.LinkActionState) LinkAction {
 	return LinkAction{
 		Action:     item.Action,
@@ -290,8 +308,7 @@ func BuildLinkActionFromRuntime(item photonstate.LinkActionState) LinkAction {
 	}
 }
 
-// BuildLinkSkipFromRuntime builds an inspect view of a skipped peer from the
-// shared runtime state.
+// BuildLinkSkipFromRuntime builds an inspect view of a skipped peer.
 func BuildLinkSkipFromRuntime(item photonstate.LinkSkipState) LinkSkip {
 	return LinkSkip{
 		GroupID: item.GroupID,

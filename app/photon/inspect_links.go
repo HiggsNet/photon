@@ -8,7 +8,7 @@ import (
 
 // buildStoredLinkInspection projects the daemon-owned Linux runtime result.
 // Read paths do not run the IPsec planner or platform drivers again.
-func buildStoredLinkInspection(rt *AppContext, instances map[string]linkInstanceState, reconcile *ipsecReconcileState, bird map[string]*BirdInstanceState, health []healthLinkJSON) inspect.LinksDebugView {
+func buildStoredLinkInspection(rt *AppContext, instances map[string]linkInstanceState, reconcile *ipsecObservationSummary, bird map[string]*BirdInstanceState, health []healthLinkJSON) inspect.LinksDebugView {
 	input := inspect.LinkInput{Health: inspectLinkHealth(health)}
 	if reconcile != nil {
 		input.LastRunUnix = reconcile.LastRunUnix
@@ -39,7 +39,7 @@ func buildStoredLinkInspection(rt *AppContext, instances map[string]linkInstance
 	return view
 }
 
-func lastReconcileDesiredLinks(reconcile *ipsecReconcileState) int {
+func lastReconcileDesiredLinks(reconcile *ipsecObservationSummary) int {
 	if reconcile == nil {
 		return 0
 	}

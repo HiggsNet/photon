@@ -13,7 +13,7 @@ import (
 // buildLinkOutputs projects provider-owned runtime state into the common
 // Babel-facing consumer contract. It deliberately carries no owner, SA name,
 // action, rotate phase, or other lifecycle input.
-func buildLinkOutputs(instances map[string]linkInstanceState, reconcile *ipsecReconcileState) []photonstate.LinkOutput {
+func buildLinkOutputs(instances map[string]linkInstanceState, reconcile *ipsecObservationSummary) []photonstate.LinkOutput {
 	desired := make(map[string][]desiredLinkState)
 	if reconcile != nil {
 		for _, item := range reconcile.Desired {
@@ -35,11 +35,11 @@ func buildLinkOutputs(instances map[string]linkInstanceState, reconcile *ipsecRe
 			}
 			if inst.StagedInterfaceName != "" {
 				// During rotate the current runtime must be projected only from its
-				// persisted observation. The desired addresses may already describe
+				// live observation. The desired addresses may already describe
 				// the staged generation and must not be guessed onto the old link.
 				base.InterfaceName = inst.InterfaceName
-				base.LocalAddr = parseScopedAddr(inst.LocalTunnelAddr)
-				base.PeerAddr = parseScopedAddr(inst.PeerTunnelAddr)
+				base.LocalAddr = inst.LocalTunnelAddr
+				base.PeerAddr = inst.PeerTunnelAddr
 				base.Readiness.Interface = interfaceReadiness(base.InterfaceName, base.State)
 			}
 			out = append(out, base)
@@ -49,8 +49,8 @@ func buildLinkOutputs(instances map[string]linkInstanceState, reconcile *ipsecRe
 			staged := base
 			staged.ID = runtimeLinkOutputID(firstNonEmpty(inst.LinkID, inst.ID, want.LinkID, want.InstanceID), photonstate.LinkRuntimeStaged)
 			staged.InterfaceName = inst.StagedInterfaceName
-			staged.LocalAddr = parseScopedAddr(inst.StagedLocalTunnelAddr)
-			staged.PeerAddr = parseScopedAddr(inst.StagedPeerTunnelAddr)
+			staged.LocalAddr = inst.StagedLocalTunnelAddr
+			staged.PeerAddr = inst.StagedPeerTunnelAddr
 			staged.Generation = inst.StagedGeneration
 			staged.RuntimeRole = photonstate.LinkRuntimeStaged
 			staged.Endpoint = ""
@@ -78,9 +78,15 @@ func newIPsecLinkOutput(inst linkInstanceState, desired desiredLinkState) photon
 		provider = ipsec.ProviderStrongSwan
 	}
 	iface := firstNonEmpty(inst.InterfaceName, desired.InterfaceName)
-	local := parseScopedAddr(firstNonEmpty(inst.LocalTunnelAddr, desired.LocalTunnelAddr))
-	peer := parseScopedAddr(firstNonEmpty(inst.PeerTunnelAddr, desired.PeerTunnelAddr))
-	netns := firstNonEmpty(scopedNetNS(inst.LocalTunnelAddr), scopedNetNS(inst.PeerTunnelAddr), scopedNetNS(desired.LocalTunnelAddr), scopedNetNS(desired.PeerTunnelAddr))
+	local := inst.LocalTunnelAddr
+	if !local.IsValid() {
+		local = parseScopedAddr(desired.LocalTunnelAddr)
+	}
+	peer := inst.PeerTunnelAddr
+	if !peer.IsValid() {
+		peer = parseScopedAddr(desired.PeerTunnelAddr)
+	}
+	netns := firstNonEmpty(scopedNetNS(desired.LocalTunnelAddr), scopedNetNS(desired.PeerTunnelAddr))
 	return photonstate.LinkOutput{
 		ID:             id,
 		GroupID:        firstNonEmpty(inst.GroupID, desired.GroupID),

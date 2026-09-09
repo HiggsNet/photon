@@ -89,6 +89,7 @@ Daemon
   - [x] 将在线 link 数据放进无 DB/线程的 `LinuxObservation`；reconcile、health、routing/firewall、control/Observer 均读取该在线快照，`pkg/transport/ipsec.LinkInstance` 仅作为 daemon 内存工作对象。
   - [x] 停止持久化 IPsec observation：reconcile/cleanup 不再调用 runtime commit，current/legacy JSON 不再编码或恢复 `LinkInstances`、`IPsecReconcile`，旧字段解码时直接忽略。
   - [x] 删除 RuntimeState 中仅剩的 `json:"-"` 兼容投影槽；展示、health、routing/firewall、cleanup 与撤销规划显式接收 observation，测试也不再把 StateStore 与在线观察拼成伪 runtime。
+  - [x] 删除 `internal/state.LinkInstanceState` 及双向字段转换，在线调用链直接使用 `ipsec.LinkInstance`；reconcile summary 迁入 `LinuxObservation` 并删除无意义的 `Committed/Stale` 字段，XFRM 单代推导失败显式返回错误。
   - [ ] 用 crash/restart 测试覆盖 create、rotation 各阶段、current-only、previous-only、loaded-no-SA、takeover、revoke/config removal 和 orphan cleanup；未被测试证明的恢复规则不标完成。
 - [ ] 将 `RoutingReconcile`、`FirewallReconcile`、BIRD status/PID/socket 可用性改为启动后重新 Observe；确定性路径、resource ID 和 policy hash 不重复落盘。
 - [ ] 审计 `PeerCleanups`：只保留真正影响安全 grace/cleanup 恢复的字段，其余由 VerifiedState/GossipCheckpoint 推导。

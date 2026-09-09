@@ -42,7 +42,7 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 	if common.State == nil || runtime == nil {
 		return nil
 	}
-	links, ipsecReconcile := d.ipsecStateSnapshot()
+	links, ipsecReconcile := d.linuxObservation.ipsecSnapshot()
 	rev := uint64(common.Revision)
 	verified := common.State
 	baseBird := photonstate.CloneBirdInstances(runtime.BirdInstances)
@@ -241,7 +241,7 @@ func birdInstanceStatesEqual(a, b *BirdInstanceState) bool {
 	return true
 }
 
-func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *corestate.VerifiedState, runtime *linuxRuntimeState, links map[string]linkInstanceState, reconcile *ipsecReconcileState, inst RoutingInstance, ars *routing.AuthorizedRouteSet, dataDir string, overlayByNetns map[string]*netnsOverlayGroup, config *appConfig, now time.Time, forceReload bool) error {
+func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *corestate.VerifiedState, runtime *linuxRuntimeState, links map[string]linkInstanceState, reconcile *ipsecObservationSummary, inst RoutingInstance, ars *routing.AuthorizedRouteSet, dataDir string, overlayByNetns map[string]*netnsOverlayGroup, config *appConfig, now time.Time, forceReload bool) error {
 	netnsName := inst.NetNS
 	instState := runtime.BirdInstances[netnsName]
 	if instState == nil {
@@ -422,7 +422,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 	return nil
 }
 
-func (d *Daemon) observeBirdForHealth(ctx context.Context, instances map[string]linkInstanceState, reconcile *ipsecReconcileState, netnsName string, overlays []string, socketPath string) {
+func (d *Daemon) observeBirdForHealth(ctx context.Context, instances map[string]linkInstanceState, reconcile *ipsecObservationSummary, netnsName string, overlays []string, socketPath string) {
 	if d == nil || d.health == nil || d.health.Manager == nil || socketPath == "" {
 		return
 	}
@@ -436,11 +436,11 @@ func (d *Daemon) observeBirdForHealth(ctx context.Context, instances map[string]
 	d.recordBirdHealthObservationForLinks(instances, reconcile, netnsName, overlays, observed)
 }
 
-func (d *Daemon) recordBirdHealthObservationUnavailableForLinks(instances map[string]linkInstanceState, reconcile *ipsecReconcileState, netnsName string, overlays []string) {
+func (d *Daemon) recordBirdHealthObservationUnavailableForLinks(instances map[string]linkInstanceState, reconcile *ipsecObservationSummary, netnsName string, overlays []string) {
 	d.recordBirdHealthObservationForLinks(instances, reconcile, netnsName, overlays, &bird.BirdObservedState{})
 }
 
-func (d *Daemon) recordBirdHealthObservationForLinks(instances map[string]linkInstanceState, reconcile *ipsecReconcileState, netnsName string, overlays []string, observed *bird.BirdObservedState) {
+func (d *Daemon) recordBirdHealthObservationForLinks(instances map[string]linkInstanceState, reconcile *ipsecObservationSummary, netnsName string, overlays []string, observed *bird.BirdObservedState) {
 	if d == nil || d.health == nil || d.health.Manager == nil || observed == nil {
 		return
 	}
@@ -541,7 +541,7 @@ func (d *Daemon) birdDumpForControl(ctx context.Context, netnsName string, view 
 	if err != nil {
 		return nil, err
 	}
-	links, reconcile := d.ipsecStateSnapshot()
+	links, reconcile := d.linuxObservation.ipsecSnapshot()
 	for _, inst := range d.App.Config.Routing.Instances {
 		if !inst.Enabled || inst.Mode == ipsec.RoutingModeDisabled {
 			continue
@@ -656,7 +656,7 @@ func buildBirdInstanceSpecForNetns(inst RoutingInstance, routerID uint32, _ stri
 	return spec
 }
 
-func birdRotateInterfacePolicies(instances map[string]linkInstanceState, reconcile *ipsecReconcileState, netnsName string, overlays []string, routingInst RoutingInstance) []bird.BabelInterfacePolicy {
+func birdRotateInterfacePolicies(instances map[string]linkInstanceState, reconcile *ipsecObservationSummary, netnsName string, overlays []string, routingInst RoutingInstance) []bird.BabelInterfacePolicy {
 	metrics := make(map[string]uint)
 	for _, link := range buildLinkOutputs(instances, reconcile) {
 		if link.InterfaceName == "" || !linkOutputBelongsToBirdInstance(link, netnsName, overlays) {

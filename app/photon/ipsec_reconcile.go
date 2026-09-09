@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/routing"
@@ -81,7 +80,11 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		"connections":  len(connections),
 		"sas":          len(sas),
 	})
-	xfrmObservations := platformDriver.ObserveXFRMLinks(ctx, plan.Desired, instances, groups)
+	xfrmObservations, err := platformDriver.ObserveXFRMLinks(ctx, plan.Desired, instances, groups)
+	if err != nil {
+		d.recordIPsecReconcileError(rev, now.Unix(), err)
+		return err
+	}
 	sas, missingXFRMLinks, err := platformDriver.FilterSAsWithMissingXFRMLinks(ctx, plan.Desired, instances, sas, xfrmObservations)
 	if err != nil {
 		d.recordIPsecReconcileError(rev, now.Unix(), err)
@@ -118,7 +121,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		Connections:           connections,
 		SAs:                   sas,
 		Now:                   now,
-		Revoked:               revokedLinkPeers(verified.Network, linkInstancesFromIPsec(instances), common.Gossip, now),
+		Revoked:               revokedLinkPeers(verified.Network, instances, common.Gossip, now),
 		Roles:                 plan.Roles,
 		GroupSpecs:            groupSpecs,
 		GroupBackoff:          groupBackoffMap(groups),
@@ -151,7 +154,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 			netns := netnsForAction(action, groups)
 			if _, err := platformDriver.ApplyIPsecAction(ctx, action, netns); err != nil {
 				markIPsecActionFailed(result.Instances, action, groupBackoffPolicy(action, groups), now, err)
-				if saveErr := d.commitIPsecReconcileResult(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
+				if saveErr := d.publishIPsecObservation(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
 					return fmt.Errorf("save failed ipsec reconcile state after apply error %q: %w", err.Error(), saveErr)
 				}
 				return err
@@ -159,7 +162,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 			if shouldAssignIPsecDiagnosticAddresses(action) {
 				if err := platformDriver.AssignDiagnosticAddresses(ctx, *action.Spec, diagnosticPrefixes); err != nil {
 					markIPsecActionFailed(result.Instances, action, groupBackoffPolicy(action, groups), now, err)
-					if saveErr := d.commitIPsecReconcileResult(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
+					if saveErr := d.publishIPsecObservation(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
 						return fmt.Errorf("save failed ipsec reconcile state after diagnostic address error %q: %w", err.Error(), saveErr)
 					}
 					return err
@@ -169,12 +172,12 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		}
 	}
 	if err := platformDriver.MaintainXFRMInterfaces(ctx, plan.Desired, result.Instances, result.Actions, groups, diagnosticPrefixes, xfrmObservations); err != nil {
-		if saveErr := d.commitIPsecReconcileResult(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
+		if saveErr := d.publishIPsecObservation(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
 			return fmt.Errorf("save failed ipsec reconcile state after xfrm maintenance error %q: %w", err.Error(), saveErr)
 		}
 		return err
 	}
-	if err := d.commitIPsecReconcileResult(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, ""); err != nil {
+	if err := d.publishIPsecObservation(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, ""); err != nil {
 		return fmt.Errorf("save ipsec reconcile state: %w", err)
 	}
 	return nil
@@ -411,12 +414,11 @@ func markMissingXFRMLinkInstances(instances map[string]ipsec.LinkInstance, missi
 	}
 }
 
-func (d *Daemon) commitIPsecReconcileResult(rev uint64, unix int64, instances map[string]ipsec.LinkInstance, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError string) error {
+func (d *Daemon) publishIPsecObservation(rev uint64, unix int64, instances map[string]ipsec.LinkInstance, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError string) error {
 	if d == nil || d.StateStore == nil {
 		return nil
 	}
 	summary := summarizeIPsecReconcile(rev, unix, desired, sas, actions, skips, lastError)
-	summary.Committed = true
 	observedLinks, observedReconcile := d.linuxObservation.ipsecSnapshot()
 	if reflect.DeepEqual(observedLinks, instances) && ipsecReconcileSummaryEqual(observedReconcile, summary) {
 		return nil
@@ -435,12 +437,12 @@ func (d *Daemon) commitIPsecReconcileResult(rev uint64, unix int64, instances ma
 	return nil
 }
 
-func ipsecReconcileSummaryEqual(base, next *ipsecReconcileState) bool {
+func ipsecReconcileSummaryEqual(base, next *ipsecObservationSummary) bool {
 	if base == nil || next == nil {
 		return base == nil && next == nil
 	}
-	base = photonstate.CloneIPsecReconcileState(base)
-	next = photonstate.CloneIPsecReconcileState(next)
+	base = cloneIPsecObservationSummary(base)
+	next = cloneIPsecObservationSummary(next)
 	normalizeIPsecReconcileForComparison(base)
 	normalizeIPsecReconcileForComparison(next)
 	return reflect.DeepEqual(base, next)
@@ -449,7 +451,7 @@ func ipsecReconcileSummaryEqual(base, next *ipsecReconcileState) bool {
 // normalizeIPsecReconcileForComparison removes values sampled only for live
 // diagnostics. Link lifecycle/backoff/owner state is compared separately in
 // the in-memory observation.
-func normalizeIPsecReconcileForComparison(summary *ipsecReconcileState) {
+func normalizeIPsecReconcileForComparison(summary *ipsecObservationSummary) {
 	if summary == nil {
 		return
 	}
@@ -494,14 +496,12 @@ func (d *Daemon) recordIPsecReconcileError(rev uint64, unix int64, err error) {
 		return
 	}
 	links, observedReconcile := d.linuxObservation.ipsecSnapshot()
-	reconcile := photonstate.CloneIPsecReconcileState(observedReconcile)
+	reconcile := cloneIPsecObservationSummary(observedReconcile)
 	if reconcile == nil {
-		reconcile = &ipsecReconcileState{}
+		reconcile = &ipsecObservationSummary{}
 	}
 	reconcile.LastRunUnix = unix
 	reconcile.SourceRevision = rev
-	reconcile.Committed = true
-	reconcile.Stale = false
 	reconcile.LastError = err.Error()
 	if ipsecReconcileSummaryEqual(observedReconcile, reconcile) {
 		return
@@ -590,8 +590,8 @@ func contactDialPort(binding ipsec.PortBinding) uint16 {
 	return binding.Advertised
 }
 
-func summarizeIPsecReconcile(sourceRev uint64, unix int64, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError string) *ipsecReconcileState {
-	state := &ipsecReconcileState{
+func summarizeIPsecReconcile(sourceRev uint64, unix int64, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError string) *ipsecObservationSummary {
+	state := &ipsecObservationSummary{
 		LastRunUnix:    unix,
 		SourceRevision: sourceRev,
 		DesiredLinks:   len(desired),
@@ -672,137 +672,6 @@ func summarizeContactEndpoint(points []ipsec.ContactPoint) string {
 		return points[0].Address
 	}
 	return points[0].Host
-}
-
-func linkInstancesToIPsec(in map[string]linkInstanceState) map[string]ipsec.LinkInstance {
-	out := make(map[string]ipsec.LinkInstance, len(in))
-	for id, inst := range in {
-		out[id] = ipsec.LinkInstance{
-			ID:                    inst.ID,
-			GroupID:               inst.GroupID,
-			PeerZone:              inst.PeerZone,
-			TransportKind:         inst.TransportKind,
-			LinkID:                inst.LinkID,
-			PathKey:               inst.PathKey,
-			TransportID:           inst.TransportID,
-			DesiredSpecHash:       inst.DesiredSpecHash,
-			ActualState:           inst.ActualState,
-			InterfaceName:         inst.InterfaceName,
-			XFRMIfID:              inst.XFRMIfID,
-			LocalTunnelAddr:       parseStateAddr(inst.LocalTunnelAddr),
-			PeerTunnelAddr:        parseStateAddr(inst.PeerTunnelAddr),
-			IKEName:               inst.IKEName,
-			ChildSAName:           inst.ChildSAName,
-			Endpoint:              inst.Endpoint,
-			RemoteGeneration:      inst.RemoteGeneration,
-			StagedGeneration:      inst.StagedGeneration,
-			RotatePhase:           inst.RotatePhase,
-			StagedIKEName:         inst.StagedIKEName,
-			StagedChildSAName:     inst.StagedChildSAName,
-			StagedInterfaceName:   inst.StagedInterfaceName,
-			StagedXFRMIfID:        inst.StagedXFRMIfID,
-			StagedLocalTunnelAddr: parseStateAddr(inst.StagedLocalTunnelAddr),
-			StagedPeerTunnelAddr:  parseStateAddr(inst.StagedPeerTunnelAddr),
-			RotateDeadline:        inst.RotateDeadline,
-			LastError:             inst.LastError,
-			FailureCount:          inst.FailureCount,
-			BackoffUntil:          inst.BackoffUntil,
-			LastTransition:        inst.LastTransition,
-			Owner: ipsec.ResourceOwner{
-				Manager:     inst.Owner.Manager,
-				GroupID:     inst.Owner.GroupID,
-				InstanceID:  inst.Owner.InstanceID,
-				LinkID:      inst.Owner.LinkID,
-				TransportID: inst.Owner.TransportID,
-				Token:       inst.Owner.Token,
-			},
-			InitiatorRole:     inst.InitiatorRole,
-			TakeoverPhase:     inst.TakeoverPhase,
-			TakeoverStartedAt: inst.TakeoverStartedAt,
-			TakeoverUntil:     inst.TakeoverUntil,
-			LastTakeoverError: inst.LastTakeoverError,
-			ObservedInitiator: inst.ObservedInitiator,
-			SAAbsentSince:     inst.SAAbsentSince,
-			SAAbsentCount:     inst.SAAbsentCount,
-		}
-	}
-	return out
-}
-
-func linkInstancesFromIPsec(in map[string]ipsec.LinkInstance) map[string]linkInstanceState {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]linkInstanceState, len(in))
-	for id, inst := range in {
-		out[id] = linkInstanceState{
-			ID:                    inst.ID,
-			GroupID:               inst.GroupID,
-			PeerZone:              inst.PeerZone,
-			TransportKind:         inst.TransportKind,
-			LinkID:                inst.LinkID,
-			PathKey:               inst.PathKey,
-			TransportID:           inst.TransportID,
-			DesiredSpecHash:       inst.DesiredSpecHash,
-			ActualState:           inst.ActualState,
-			InterfaceName:         inst.InterfaceName,
-			XFRMIfID:              inst.XFRMIfID,
-			LocalTunnelAddr:       formatStateAddr(inst.LocalTunnelAddr),
-			PeerTunnelAddr:        formatStateAddr(inst.PeerTunnelAddr),
-			IKEName:               inst.IKEName,
-			ChildSAName:           inst.ChildSAName,
-			Endpoint:              inst.Endpoint,
-			RemoteGeneration:      inst.RemoteGeneration,
-			StagedGeneration:      inst.StagedGeneration,
-			RotatePhase:           inst.RotatePhase,
-			StagedIKEName:         inst.StagedIKEName,
-			StagedChildSAName:     inst.StagedChildSAName,
-			StagedInterfaceName:   inst.StagedInterfaceName,
-			StagedXFRMIfID:        inst.StagedXFRMIfID,
-			StagedLocalTunnelAddr: formatStateAddr(inst.StagedLocalTunnelAddr),
-			StagedPeerTunnelAddr:  formatStateAddr(inst.StagedPeerTunnelAddr),
-			RotateDeadline:        inst.RotateDeadline,
-			LastError:             inst.LastError,
-			FailureCount:          inst.FailureCount,
-			BackoffUntil:          inst.BackoffUntil,
-			LastTransition:        inst.LastTransition,
-			Owner: linkOwnerState{
-				Manager:     inst.Owner.Manager,
-				GroupID:     inst.Owner.GroupID,
-				InstanceID:  inst.Owner.InstanceID,
-				LinkID:      inst.Owner.LinkID,
-				TransportID: inst.Owner.TransportID,
-				Token:       inst.Owner.Token,
-			},
-			InitiatorRole:     inst.InitiatorRole,
-			TakeoverPhase:     inst.TakeoverPhase,
-			TakeoverStartedAt: inst.TakeoverStartedAt,
-			TakeoverUntil:     inst.TakeoverUntil,
-			LastTakeoverError: inst.LastTakeoverError,
-			ObservedInitiator: inst.ObservedInitiator,
-			SAAbsentSince:     inst.SAAbsentSince,
-			SAAbsentCount:     inst.SAAbsentCount,
-		}
-	}
-	return out
-}
-
-func parseStateAddr(s string) netip.Addr {
-	if s == "" {
-		return netip.Addr{}
-	}
-	addr, err := netip.ParseAddr(stripScope(s))
-	if err != nil {
-		return netip.Addr{}
-	}
-	return addr
-}
-
-func formatStateAddr(addr netip.Addr) string {
-	if !addr.IsValid() {
-		return ""
-	}
-	return addr.String()
 }
 
 func revokedLinkPeers(network *zone.NetworkState, instances map[string]linkInstanceState, checkpoint *corestate.GossipCheckpoint, now time.Time) map[zone.ZonePath]bool {

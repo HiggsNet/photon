@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
-	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
@@ -80,7 +79,10 @@ func TestXFRMReconcileReusesHealthyBatchObservation(t *testing.T) {
 	platformDriver := newTestLinuxDriver(driver, driver)
 	instances := map[string]ipsec.LinkInstance{inst.ID: inst}
 
-	observed := platformDriver.ObserveXFRMLinks(context.Background(), []ipsec.TransportLinkSpec{spec}, instances, nil)
+	observed, err := platformDriver.ObserveXFRMLinks(context.Background(), []ipsec.TransportLinkSpec{spec}, instances, nil)
+	if err != nil {
+		t.Fatalf("ObserveXFRMLinks: %v", err)
+	}
 	if observed == nil || driver.batchCalls != 1 {
 		t.Fatalf("batch observation = %v, calls = %d", observed, driver.batchCalls)
 	}
@@ -104,7 +106,10 @@ func TestXFRMReconcileFallsBackWhenBatchObservationFails(t *testing.T) {
 	platformDriver := newTestLinuxDriver(driver, driver)
 	instances := map[string]ipsec.LinkInstance{inst.ID: inst}
 
-	observed := platformDriver.ObserveXFRMLinks(context.Background(), []ipsec.TransportLinkSpec{spec}, instances, nil)
+	observed, err := platformDriver.ObserveXFRMLinks(context.Background(), []ipsec.TransportLinkSpec{spec}, instances, nil)
+	if err != nil {
+		t.Fatalf("ObserveXFRMLinks: %v", err)
+	}
 	if observed != nil {
 		t.Fatal("failed batch observation should return nil for fail-closed fallback")
 	}
@@ -116,18 +121,49 @@ func TestXFRMReconcileFallsBackWhenBatchObservationFails(t *testing.T) {
 	}
 }
 
+func TestXFRMObservationReportsRuntimeDerivationError(t *testing.T) {
+	group := ipsec.LinkGroupSpec{
+		ID: "main",
+		TunnelAddressSpec: ipsec.TunnelAddressSpec{
+			Mode:   ipsec.TunnelAddressDerivedPool,
+			Family: ipsec.FamilyIPv6,
+		},
+	}
+	spec := ipsec.TransportLinkSpec{
+		LocalZone: "node-a.catofes.", PeerZone: "node-b.catofes.",
+		OverlayID: group.ID, Provider: ipsec.ProviderStrongSwan,
+		LinkID: "link-a", Generation: 2,
+	}
+	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, time.Unix(4000, 0))
+	inst.RemoteGeneration = 1
+	inst.InterfaceName = "phx-old"
+	inst.XFRMIfID = 42
+	driver := &batchObservedIPsecDriver{}
+	platformDriver := newTestLinuxDriver(driver, driver)
+
+	observed, err := platformDriver.ObserveXFRMLinks(
+		context.Background(), []ipsec.TransportLinkSpec{spec},
+		map[string]ipsec.LinkInstance{inst.ID: inst}, []ipsec.LinkGroupSpec{group},
+	)
+	if err == nil {
+		t.Fatal("ObserveXFRMLinks error = nil, want runtime derivation error")
+	}
+	if observed != nil || driver.batchCalls != 0 {
+		t.Fatalf("observation = %v, batch calls = %d, want fail before platform inspection", observed, driver.batchCalls)
+	}
+}
+
 func TestIPsecReconcileSummaryEqualityIgnoresLiveObservations(t *testing.T) {
-	base := &ipsecReconcileState{
+	base := &ipsecObservationSummary{
 		LastRunUnix:    100,
 		SourceRevision: 7,
-		Committed:      true,
 		DesiredLinks:   1,
 		ActualSAs: []linkSAState{
 			{Name: "z", UniqueID: 2, IKEState: "ESTABLISHED", IKEAgeSeconds: 10, InboundBytes: 100},
 			{Name: "a", UniqueID: 1, IKEState: "ESTABLISHED", ChildAgeSeconds: 20, InboundPackets: 4},
 		},
 	}
-	next := photonstate.CloneIPsecReconcileState(base)
+	next := cloneIPsecObservationSummary(base)
 	next.LastRunUnix = 200
 	next.SourceRevision = 12
 	next.ActualSAs[0].IKEAgeSeconds = 110
@@ -498,7 +534,7 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 		UpdatedAt: now.Unix(),
 	})
 	service = newTestDaemonFromOwners(rt, common.State, common.Gossip, persistedRuntime, config, time.Second)
-	service.linuxObservation.replaceIPsec(linkInstancesToIPsec(latestLinks), latestReconcile)
+	service.linuxObservation.replaceIPsec(latestLinks, latestReconcile)
 	service.notifyStateChanged()
 
 	rotatedLinks, rotatedReconcile := readTestIPsecObservation(service)

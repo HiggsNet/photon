@@ -4,7 +4,6 @@ import (
 	"maps"
 	"sync"
 
-	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
@@ -13,10 +12,35 @@ import (
 type linuxObservation struct {
 	mu             sync.RWMutex
 	ipsecLinks     map[string]ipsec.LinkInstance
-	ipsecReconcile *ipsecReconcileState
+	ipsecReconcile *ipsecObservationSummary
 }
 
-func (o *linuxObservation) ipsecSnapshot() (map[string]ipsec.LinkInstance, *ipsecReconcileState) {
+// ipsecObservationSummary is the daemon's online summary of the latest observed
+// IPsec reconcile. It is process-local and is never written to StateStore.
+type ipsecObservationSummary struct {
+	LastRunUnix    int64
+	SourceRevision uint64
+	DesiredLinks   int
+	Desired        []desiredLinkState
+	ActualSAs      []linkSAState
+	Actions        []linkActionState
+	Skipped        []linkSkipState
+	LastError      string
+}
+
+func cloneIPsecObservationSummary(in *ipsecObservationSummary) *ipsecObservationSummary {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	out.Desired = append([]desiredLinkState(nil), in.Desired...)
+	out.ActualSAs = append([]linkSAState(nil), in.ActualSAs...)
+	out.Actions = append([]linkActionState(nil), in.Actions...)
+	out.Skipped = append([]linkSkipState(nil), in.Skipped...)
+	return &out
+}
+
+func (o *linuxObservation) ipsecSnapshot() (map[string]ipsec.LinkInstance, *ipsecObservationSummary) {
 	if o == nil {
 		return make(map[string]ipsec.LinkInstance), nil
 	}
@@ -26,20 +50,15 @@ func (o *linuxObservation) ipsecSnapshot() (map[string]ipsec.LinkInstance, *ipse
 	if links == nil {
 		links = make(map[string]ipsec.LinkInstance)
 	}
-	return links, photonstate.CloneIPsecReconcileState(o.ipsecReconcile)
+	return links, cloneIPsecObservationSummary(o.ipsecReconcile)
 }
 
-func (o *linuxObservation) replaceIPsec(links map[string]ipsec.LinkInstance, reconcile *ipsecReconcileState) {
+func (o *linuxObservation) replaceIPsec(links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary) {
 	if o == nil {
 		return
 	}
 	o.mu.Lock()
 	o.ipsecLinks = maps.Clone(links)
-	o.ipsecReconcile = photonstate.CloneIPsecReconcileState(reconcile)
+	o.ipsecReconcile = cloneIPsecObservationSummary(reconcile)
 	o.mu.Unlock()
-}
-
-func (d *Daemon) ipsecStateSnapshot() (map[string]linkInstanceState, *ipsecReconcileState) {
-	links, reconcile := d.linuxObservation.ipsecSnapshot()
-	return linkInstancesFromIPsec(links), reconcile
 }

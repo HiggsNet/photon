@@ -445,7 +445,7 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 		},
 	}
 	var observationLinks map[string]linkInstanceState
-	var observationReconcile *ipsecReconcileState
+	var observationReconcile *ipsecObservationSummary
 	updateTestObserverOwners(srv, func(_ *corestate.VerifiedState, _ *corestate.GossipCheckpoint, runtime *linuxRuntimeState) {
 		observationLinks = map[string]linkInstanceState{
 			"link-1": {
@@ -461,7 +461,7 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 				InitiatorRole:   "primary",
 			},
 		}
-		observationReconcile = &ipsecReconcileState{
+		observationReconcile = &ipsecObservationSummary{
 			LastRunUnix:  123,
 			DesiredLinks: 1,
 			Desired: []desiredLinkState{{
@@ -526,7 +526,7 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 func TestObserverHealthAPIIncludesLinkContextWithoutSamples(t *testing.T) {
 	srv := newTestObserverServer()
 	var observationLinks map[string]linkInstanceState
-	var observationReconcile *ipsecReconcileState
+	var observationReconcile *ipsecObservationSummary
 	updateTestObserverOwners(srv, func(_ *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *linuxRuntimeState) {
 		observationLinks = map[string]linkInstanceState{
 			"link-1": {
@@ -538,7 +538,7 @@ func TestObserverHealthAPIIncludesLinkContextWithoutSamples(t *testing.T) {
 				Endpoint:      "198.51.100.10:4500",
 			},
 		}
-		observationReconcile = &ipsecReconcileState{
+		observationReconcile = &ipsecObservationSummary{
 			Desired: []desiredLinkState{{
 				InstanceID:      "link-1",
 				GroupID:         "blue",

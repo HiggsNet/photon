@@ -348,7 +348,7 @@ func TestDaemonControlLinksStatusUsesReconcileSnapshot(t *testing.T) {
 			Endpoint:      "198.51.100.2:4500",
 		},
 	}
-	observationReconcile := &ipsecReconcileState{
+	observationReconcile := &ipsecObservationSummary{
 		LastRunUnix:  1234,
 		DesiredLinks: 1,
 		Desired: []desiredLinkState{{
@@ -405,7 +405,7 @@ func TestDaemonControlReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T)
 			ActualState: "up",
 		},
 	}
-	observationReconcile := &ipsecReconcileState{
+	observationReconcile := &ipsecObservationSummary{
 		LastRunUnix:  1234,
 		DesiredLinks: 1,
 		Desired: []desiredLinkState{{

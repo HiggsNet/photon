@@ -59,7 +59,7 @@ func showPeers(filter string, verbose bool) error {
 	return inspecttext.WriteGossipPeers(os.Stdout, inspect.BuildGossipPeerDebugViews(common, gossipPeersOptions(config, nil, rt.Now())), filter, verbose)
 }
 
-func buildPeerLifecycleDebugView(rt *AppContext, common corestate.View, runtime *linuxRuntimeState, links map[string]linkInstanceState, reconcile *ipsecReconcileState) inspect.PeerLifecycleDebugView {
+func buildPeerLifecycleDebugView(rt *AppContext, common corestate.View, runtime *linuxRuntimeState, links map[string]linkInstanceState, reconcile *ipsecObservationSummary) inspect.PeerLifecycleDebugView {
 	if common.State == nil || common.State.Network == nil || runtime == nil {
 		return inspect.PeerLifecycleDebugView{}
 	}

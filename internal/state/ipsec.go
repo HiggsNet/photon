@@ -16,20 +16,6 @@ type IPsecTransportKeyState struct {
 	UpdatedAt   int64  `json:"updated_at,omitempty"`
 }
 
-// IPsecReconcileState captures the last IPsec reconcile run and its outputs.
-type IPsecReconcileState struct {
-	LastRunUnix    int64              `json:"last_run_unix,omitempty"`
-	SourceRevision uint64             `json:"source_revision,omitempty"`
-	Committed      bool               `json:"committed,omitempty"`
-	Stale          bool               `json:"stale,omitempty"`
-	DesiredLinks   int                `json:"desired_links,omitempty"`
-	Desired        []DesiredLinkState `json:"desired,omitempty"`
-	ActualSAs      []LinkSAState      `json:"actual_sas,omitempty"`
-	Actions        []LinkActionState  `json:"actions,omitempty"`
-	Skipped        []LinkSkipState    `json:"skipped,omitempty"`
-	LastError      string             `json:"last_error,omitempty"`
-}
-
 // DesiredLinkState is a planned desired link from the IPsec reconcile/planner.
 type DesiredLinkState struct {
 	InstanceID      string        `json:"instance_id,omitempty"`

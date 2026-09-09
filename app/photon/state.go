@@ -10,6 +10,7 @@ import (
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 const cliMetaKey = "cli_state"
@@ -53,10 +54,9 @@ type routingReconcileState = photonstate.RoutingReconcileState
 
 type ipsecTransportKeyState = photonstate.IPsecTransportKeyState
 
-type linkInstanceState = photonstate.LinkInstanceState
-type linkOwnerState = photonstate.LinkOwnerState
+type linkInstanceState = ipsec.LinkInstance
+type linkOwnerState = ipsec.ResourceOwner
 
-type ipsecReconcileState = photonstate.IPsecReconcileState
 type desiredLinkState = photonstate.DesiredLinkState
 type linkSAState = photonstate.LinkSAState
 type linkActionState = photonstate.LinkActionState

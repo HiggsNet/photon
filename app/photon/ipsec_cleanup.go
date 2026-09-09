@@ -66,7 +66,7 @@ func (d *Daemon) handleIPsecCleanupEvent(ctx context.Context, includeOrphans boo
 	if common.State == nil || runtime == nil {
 		return 0, 0, errors.New("daemon state is not loaded")
 	}
-	links, reconcile := d.ipsecStateSnapshot()
+	links, reconcile := d.linuxObservation.ipsecSnapshot()
 	platformDriver := d.linuxDriver
 	if len(links) > 0 || includeOrphans {
 		if platformDriver == nil {
@@ -98,7 +98,7 @@ func (d *Daemon) handleIPsecCleanupEvent(ctx context.Context, includeOrphans boo
 	if d.StateStore.Meta().Revision != uint64(common.Revision) {
 		return cleaned, orphans, errDaemonStateRevisionStale
 	}
-	d.linuxObservation.replaceIPsec(linkInstancesToIPsec(links), reconcile)
+	d.linuxObservation.replaceIPsec(links, reconcile)
 	d.notifyStateChanged()
 	return cleaned, orphans, nil
 }
@@ -131,17 +131,16 @@ func newLinuxDriverForIPsecCleanup(config *appConfig) (*photonlinux.LinuxDriver,
 }
 
 func cleanupIPsecLinkInstanceSet(ctx context.Context, linkInstances map[string]linkInstanceState, ids []string, platformDriver *photonlinux.LinuxDriver) (map[string]linkInstanceState, int, error) {
-	instances := linkInstancesToIPsec(linkInstances)
-	remaining, cleaned, err := platformDriver.CleanupIPsecLinks(ctx, instances, ids)
+	remaining, cleaned, err := platformDriver.CleanupIPsecLinks(ctx, linkInstances, ids)
 	if err != nil {
 		return nil, cleaned, err
 	}
-	return linkInstancesFromIPsec(remaining), cleaned, nil
+	return remaining, cleaned, nil
 }
 
 func managedIPsecConnectionNamesFromLinks(links map[string]linkInstanceState) map[string]bool {
 	out := make(map[string]bool)
-	for _, inst := range linkInstancesToIPsec(links) {
+	for _, inst := range links {
 		for _, name := range []string{inst.TransportID, inst.IKEName, inst.StagedIKEName} {
 			if name != "" {
 				out[name] = true
@@ -151,9 +150,9 @@ func managedIPsecConnectionNamesFromLinks(links map[string]linkInstanceState) ma
 	return out
 }
 
-func markIPsecCleanupReconcile(reconcile *ipsecReconcileState, now time.Time) *ipsecReconcileState {
+func markIPsecCleanupReconcile(reconcile *ipsecObservationSummary, now time.Time) *ipsecObservationSummary {
 	if reconcile == nil {
-		reconcile = &ipsecReconcileState{}
+		reconcile = &ipsecObservationSummary{}
 	}
 	reconcile.LastRunUnix = now.Unix()
 	reconcile.DesiredLinks = 0

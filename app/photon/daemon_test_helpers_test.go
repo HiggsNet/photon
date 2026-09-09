@@ -182,18 +182,18 @@ func newTestDaemonStateStore(verified *corestate.VerifiedState, checkpoint *core
 	return store
 }
 
-func setTestIPsecObservation(d *Daemon, links map[string]linkInstanceState, reconcile *ipsecReconcileState) {
+func setTestIPsecObservation(d *Daemon, links map[string]linkInstanceState, reconcile *ipsecObservationSummary) {
 	if d == nil {
 		return
 	}
-	d.linuxObservation.replaceIPsec(linkInstancesToIPsec(links), reconcile)
+	d.linuxObservation.replaceIPsec(links, reconcile)
 }
 
-func readTestIPsecObservation(d *Daemon) (map[string]linkInstanceState, *ipsecReconcileState) {
+func readTestIPsecObservation(d *Daemon) (map[string]linkInstanceState, *ipsecObservationSummary) {
 	if d == nil {
 		return nil, nil
 	}
-	return d.ipsecStateSnapshot()
+	return d.linuxObservation.ipsecSnapshot()
 }
 
 func buildSignedRecordAt(network *zone.NetworkState, signer ed25519.PrivateKey, path zone.ZonePath, key string, value []byte, recordType string, now time.Time) (*zone.Record, error) {
@@ -373,7 +373,7 @@ func testIPsecLinkGroup() ipsec.LinkGroupSpec {
 	}
 }
 
-func singleDesiredSpec(t *testing.T, managedZone zone.ZonePath, reconcile *ipsecReconcileState) ipsec.TransportLinkSpec {
+func singleDesiredSpec(t *testing.T, managedZone zone.ZonePath, reconcile *ipsecObservationSummary) ipsec.TransportLinkSpec {
 	t.Helper()
 	if reconcile == nil || len(reconcile.Desired) != 1 {
 		t.Fatalf("desired snapshot = %+v, want one desired link", reconcile)
@@ -617,7 +617,7 @@ func assertGossipedIPsecRecords(t *testing.T, network *zone.NetworkState, peer z
 	}
 }
 
-func assertSingleLinkUpFromSA(t *testing.T, links map[string]linkInstanceState, reconcile *ipsecReconcileState, spec ipsec.TransportLinkSpec, sa ipsec.SAState) {
+func assertSingleLinkUpFromSA(t *testing.T, links map[string]linkInstanceState, reconcile *ipsecObservationSummary, spec ipsec.TransportLinkSpec, sa ipsec.SAState) {
 	t.Helper()
 	if reconcile == nil || len(reconcile.Actions) != 1 || reconcile.Actions[0].Action != ipsec.ReconcileActionAdopt {
 		t.Fatalf("reconcile = %+v, want adopt", reconcile)
@@ -953,7 +953,7 @@ func updateDaemonTestPortRecord(t *testing.T, zs *zone.ZoneState, peer zone.Zone
 	})
 }
 
-func assertDaemonSystemLinkUp(t *testing.T, links map[string]linkInstanceState, reconcile *ipsecReconcileState, spec ipsec.TransportLinkSpec) {
+func assertDaemonSystemLinkUp(t *testing.T, links map[string]linkInstanceState, reconcile *ipsecObservationSummary, spec ipsec.TransportLinkSpec) {
 	t.Helper()
 	inst := links[ipsec.LinkInstanceID(spec)]
 	if inst.ActualState != ipsec.LinkStateUp {
@@ -1010,12 +1010,12 @@ func freeDaemonTestUDPAddr(t *testing.T) string {
 	return addr
 }
 
-func waitDaemonRunGossipStrongSwanUp(ctx context.Context, t *testing.T, serviceA, serviceB *Daemon, groupA, groupB ipsec.LinkGroupSpec) (corestate.View, map[string]linkInstanceState, *ipsecReconcileState, corestate.View, map[string]linkInstanceState, *ipsecReconcileState) {
+func waitDaemonRunGossipStrongSwanUp(ctx context.Context, t *testing.T, serviceA, serviceB *Daemon, groupA, groupB ipsec.LinkGroupSpec) (corestate.View, map[string]linkInstanceState, *ipsecObservationSummary, corestate.View, map[string]linkInstanceState, *ipsecObservationSummary) {
 	t.Helper()
 	var commonA, commonB corestate.View
 	var runtimeA, runtimeB *linuxRuntimeState
 	var observationALinks, observationBLinks map[string]linkInstanceState
-	var observationAReconcile, observationBReconcile *ipsecReconcileState
+	var observationAReconcile, observationBReconcile *ipsecObservationSummary
 	for {
 		commonA, runtimeA = serviceA.StateStore.readCommonAndRuntime()
 		commonB, runtimeB = serviceB.StateStore.readCommonAndRuntime()
@@ -1051,7 +1051,7 @@ func newDaemonTestStrongSwanDriver(t *testing.T, viciSocket string, client ipsec
 	}
 }
 
-func daemonRunGossipStrongSwanReady(verified *corestate.VerifiedState, key *ipsecTransportKeyState, links map[string]linkInstanceState, reconcile *ipsecReconcileState, group ipsec.LinkGroupSpec) bool {
+func daemonRunGossipStrongSwanReady(verified *corestate.VerifiedState, key *ipsecTransportKeyState, links map[string]linkInstanceState, reconcile *ipsecObservationSummary, group ipsec.LinkGroupSpec) bool {
 	if verified == nil || reconcile == nil || len(reconcile.ActualSAs) == 0 || len(links) == 0 {
 		return false
 	}

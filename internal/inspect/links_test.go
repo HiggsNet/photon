@@ -1,6 +1,27 @@
 package inspect
 
-import "testing"
+import (
+	"net/netip"
+	"testing"
+
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
+)
+
+func TestBuildLinkInstanceFromRuntimeOmitsInvalidAddresses(t *testing.T) {
+	got := BuildLinkInstanceFromRuntime(ipsec.LinkInstance{}, LinkRouting{})
+	if got.LocalTunnelAddr != "" || got.PeerTunnelAddr != "" ||
+		got.StagedLocalTunnelAddr != "" || got.StagedPeerTunnelAddr != "" {
+		t.Fatalf("invalid addresses = %q/%q staged %q/%q, want empty", got.LocalTunnelAddr, got.PeerTunnelAddr, got.StagedLocalTunnelAddr, got.StagedPeerTunnelAddr)
+	}
+
+	got = BuildLinkInstanceFromRuntime(ipsec.LinkInstance{
+		LocalTunnelAddr: netip.MustParseAddr("fd00::1"),
+		PeerTunnelAddr:  netip.MustParseAddr("fd00::2"),
+	}, LinkRouting{})
+	if got.LocalTunnelAddr != "fd00::1" || got.PeerTunnelAddr != "fd00::2" {
+		t.Fatalf("valid addresses = %q/%q", got.LocalTunnelAddr, got.PeerTunnelAddr)
+	}
+}
 
 func TestBuildLinksPrefersPlannedDesiredOverLastSnapshot(t *testing.T) {
 	got := BuildLinks(LinkInput{

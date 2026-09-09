@@ -25,7 +25,7 @@ func showStatus() error {
 	return inspecttext.WriteStatus(os.Stdout, statusViewFromOwners(rt, common, runtime, nil, nil, nil, false))
 }
 
-func statusViewFromOwners(rt *AppContext, common corestate.View, runtime *linuxRuntimeState, links map[string]linkInstanceState, reconcile *ipsecReconcileState, health []healthLinkJSON, daemonOnline bool) inspect.StatusView {
+func statusViewFromOwners(rt *AppContext, common corestate.View, runtime *linuxRuntimeState, links map[string]linkInstanceState, reconcile *ipsecObservationSummary, health []healthLinkJSON, daemonOnline bool) inspect.StatusView {
 	if common.State == nil || runtime == nil {
 		return inspect.BuildStatus(inspect.StatusInput{DaemonOnline: daemonOnline})
 	}

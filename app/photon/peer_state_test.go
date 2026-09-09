@@ -20,7 +20,7 @@ type peerStateTestOwners struct {
 	checkpoint           *corestate.GossipCheckpoint
 	runtime              *linuxRuntimeState
 	observationLinks     map[string]linkInstanceState
-	observationReconcile *ipsecReconcileState
+	observationReconcile *ipsecObservationSummary
 }
 
 func buildPeerStateTestOwners(t *testing.T) (*peerStateTestOwners, ed25519.PrivateKey, ed25519.PrivateKey, ed25519.PrivateKey) {

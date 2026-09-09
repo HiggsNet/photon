@@ -121,16 +121,16 @@ func TestBirdRotateInterfacePoliciesPromoteStagedAndDrainOld(t *testing.T) {
 			GroupID:               "main",
 			ActualState:           "up",
 			InterfaceName:         "phx-old",
-			LocalTunnelAddr:       "fe80::1%phx-old netns=photon",
-			PeerTunnelAddr:        "fe80::2%phx-old netns=photon",
+			LocalTunnelAddr:       netip.MustParseAddr("fe80::1"),
+			PeerTunnelAddr:        netip.MustParseAddr("fe80::2"),
 			StagedGeneration:      2,
 			RotatePhase:           ipsec.RotatePhaseDualRunning,
 			StagedInterfaceName:   "phx-new",
-			StagedLocalTunnelAddr: "fe80::3%phx-new netns=photon",
-			StagedPeerTunnelAddr:  "fe80::4%phx-new netns=photon",
+			StagedLocalTunnelAddr: netip.MustParseAddr("fe80::3"),
+			StagedPeerTunnelAddr:  netip.MustParseAddr("fe80::4"),
 		},
 	}
-	var observationReconcile *ipsecReconcileState
+	var observationReconcile *ipsecObservationSummary
 	routingInst := RoutingInstance{MetricBase: 100, MetricStaged: 200, MetricDraining: 500}
 
 	wantPolicies := func(phase string, want map[string]uint) {

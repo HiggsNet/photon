@@ -23,11 +23,11 @@ type xfrmMaintenanceItem struct {
 	reason    string
 }
 
-func (r *LinuxDriver) ObserveXFRMLinks(ctx context.Context, desired []transportipsec.TransportLinkSpec, instances map[string]transportipsec.LinkInstance, groups []transportipsec.LinkGroupSpec) *XFRMObservations {
+func (r *LinuxDriver) ObserveXFRMLinks(ctx context.Context, desired []transportipsec.TransportLinkSpec, instances map[string]transportipsec.LinkInstance, groups []transportipsec.LinkGroupSpec) (*XFRMObservations, error) {
 	driver := r.xfrmDriver
 	inspector, ok := driver.(transportipsec.XFRMLinkBatchInspector)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	seen := make(map[string]struct{})
 	specs := make([]transportipsec.TransportLinkSpec, 0, len(desired)*2)
@@ -46,7 +46,11 @@ func (r *LinuxDriver) ObserveXFRMLinks(ctx context.Context, desired []transporti
 			appendSpec(candidate)
 		}
 		if found && shouldMaintainXFRMInstance(instance) {
-			appendSpec(xfrmMaintenanceSpec(spec, instance, groups))
+			candidate, err := xfrmMaintenanceSpec(spec, instance, groups)
+			if err != nil {
+				return nil, fmt.Errorf("derive xfrm observation runtime for %q: %w", id, err)
+			}
+			appendSpec(candidate)
 		}
 	}
 	namespaces := make([]transportipsec.NetNSSpec, 0, len(groups))
@@ -56,18 +60,18 @@ func (r *LinuxDriver) ObserveXFRMLinks(ctx context.Context, desired []transporti
 	states, inventory, err := inspector.InspectLinks(ctx, specs, namespaces)
 	if err != nil {
 		logWarn(r.logger, "xfrm_batch_observe_fallback", map[string]any{"candidates": len(specs), "error": err.Error()})
-		return nil
+		return nil, nil
 	}
 	if len(states) != len(specs) {
 		logWarn(r.logger, "xfrm_batch_observe_fallback", map[string]any{"candidates": len(specs), "observed": len(states), "error": "batch result length mismatch"})
-		return nil
+		return nil, nil
 	}
 	observed := &XFRMObservations{links: make(map[string]transportipsec.XFRMLinkState, len(specs)), Interfaces: inventory}
 	for index, spec := range specs {
 		observed.links[xfrmObservationKey(spec)] = states[index]
 	}
 	logDebug(r.logger, "xfrm_batch_observed", map[string]any{"candidates": len(specs), "inventory": len(inventory)})
-	return observed
+	return observed, nil
 }
 
 func (r *LinuxDriver) FilterSAsWithMissingXFRMLinks(ctx context.Context, desired []transportipsec.TransportLinkSpec, instances map[string]transportipsec.LinkInstance, sas []transportipsec.SAState, observed *XFRMObservations) ([]transportipsec.SAState, map[string]transportipsec.TransportLinkSpec, error) {
@@ -122,7 +126,10 @@ func (r *LinuxDriver) MaintainXFRMInterfaces(ctx context.Context, desired []tran
 		if !found || !shouldMaintainXFRMInstance(instance) {
 			continue
 		}
-		candidate := xfrmMaintenanceSpec(spec, instance, groups)
+		candidate, err := xfrmMaintenanceSpec(spec, instance, groups)
+		if err != nil {
+			return fmt.Errorf("derive xfrm maintenance runtime for %q: %w", id, err)
+		}
 		state, err := inspectXFRMLink(ctx, inspector, observed, candidate)
 		if err != nil {
 			return fmt.Errorf("inspect xfrm interface %q: %w", candidate.InterfaceName, err)
@@ -378,27 +385,26 @@ func shouldMaintainXFRMInstance(instance transportipsec.LinkInstance) bool {
 	}
 }
 
-func xfrmMaintenanceSpec(spec transportipsec.TransportLinkSpec, instance transportipsec.LinkInstance, groups []transportipsec.LinkGroupSpec) transportipsec.TransportLinkSpec {
-	out := runtimeSpecForInstanceGeneration(spec, instance, groups)
+func xfrmMaintenanceSpec(spec transportipsec.TransportLinkSpec, instance transportipsec.LinkInstance, groups []transportipsec.LinkGroupSpec) (transportipsec.TransportLinkSpec, error) {
+	out, err := runtimeSpecForInstanceGeneration(spec, instance, groups)
+	if err != nil {
+		return transportipsec.TransportLinkSpec{}, err
+	}
 	if instance.InterfaceName != "" {
 		out.InterfaceName = instance.InterfaceName
 	}
 	if instance.XFRMIfID != 0 {
 		out.XFRMIfID = instance.XFRMIfID
 	}
-	return out
+	return out, nil
 }
 
-func runtimeSpecForInstanceGeneration(spec transportipsec.TransportLinkSpec, instance transportipsec.LinkInstance, groups []transportipsec.LinkGroupSpec) transportipsec.TransportLinkSpec {
+func runtimeSpecForInstanceGeneration(spec transportipsec.TransportLinkSpec, instance transportipsec.LinkInstance, groups []transportipsec.LinkGroupSpec) (transportipsec.TransportLinkSpec, error) {
 	generation := instance.RemoteGeneration
 	if generation == 0 {
 		generation = spec.Generation
 	}
-	out, err := transportipsec.RuntimeSpecForPortGeneration(spec, linkGroupForSpec(spec, groups), generation)
-	if err != nil {
-		return spec
-	}
-	return out
+	return transportipsec.RuntimeSpecForPortGeneration(spec, linkGroupForSpec(spec, groups), generation)
 }
 
 func linkGroupForSpec(spec transportipsec.TransportLinkSpec, groups []transportipsec.LinkGroupSpec) transportipsec.LinkGroupSpec {

@@ -91,7 +91,7 @@ func birdDebugCommands(view birdDebugView) ([]string, error) {
 	}
 }
 
-func enrichBirdDumpInstance(item *inspect.BirdDumpInstance, instances map[string]linkInstanceState, reconcile *ipsecReconcileState) {
+func enrichBirdDumpInstance(item *inspect.BirdDumpInstance, instances map[string]linkInstanceState, reconcile *ipsecObservationSummary) {
 	if item == nil {
 		return
 	}
@@ -113,7 +113,7 @@ func enrichBirdDumpInstance(item *inspect.BirdDumpInstance, instances map[string
 	}
 }
 
-func birdInterfaceContexts(instances map[string]linkInstanceState, reconcile *ipsecReconcileState, netnsName string) map[string]inspect.BirdInterfaceContext {
+func birdInterfaceContexts(instances map[string]linkInstanceState, reconcile *ipsecObservationSummary, netnsName string) map[string]inspect.BirdInterfaceContext {
 	contexts := map[string]inspect.BirdInterfaceContext{}
 	for _, output := range buildLinkOutputs(instances, reconcile) {
 		if output.InterfaceName == "" || (output.NetNS != "" && netnsName != "" && output.NetNS != netnsName) {

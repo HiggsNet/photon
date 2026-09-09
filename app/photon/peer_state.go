@@ -9,7 +9,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
-func peerLifecycleInput(network *zone.NetworkState, checkpoint *corestate.GossipCheckpoint, cleanups map[string]peerLifecycleCleanupState, links map[string]linkInstanceState, reconcile *ipsecReconcileState, peerID string, peerZone zone.ZonePath, now time.Time, cfg inspect.PeerLifecycleConfig, hasOverlayConfig bool) inspect.PeerLifecycleInput {
+func peerLifecycleInput(network *zone.NetworkState, checkpoint *corestate.GossipCheckpoint, cleanups map[string]peerLifecycleCleanupState, links map[string]linkInstanceState, reconcile *ipsecObservationSummary, peerID string, peerZone zone.ZonePath, now time.Time, cfg inspect.PeerLifecycleConfig, hasOverlayConfig bool) inspect.PeerLifecycleInput {
 	input := inspect.PeerLifecycleInput{
 		PeerID:           peerID,
 		PeerZone:         peerZone,
@@ -71,7 +71,7 @@ func peerLifecycleInput(network *zone.NetworkState, checkpoint *corestate.Gossip
 // derivePeerStatuses computes status for all known peers from the common
 // checkpoint plus Linux link/cleanup observations. The result is sorted by
 // peer id for stable output.
-func derivePeerStatuses(managedZone zone.ZonePath, network *zone.NetworkState, checkpoint *corestate.GossipCheckpoint, cleanups map[string]peerLifecycleCleanupState, links map[string]linkInstanceState, reconcile *ipsecReconcileState, now time.Time, cfg inspect.PeerLifecycleConfig, hasOverlayConfig bool) []inspect.PeerStatusInfo {
+func derivePeerStatuses(managedZone zone.ZonePath, network *zone.NetworkState, checkpoint *corestate.GossipCheckpoint, cleanups map[string]peerLifecycleCleanupState, links map[string]linkInstanceState, reconcile *ipsecObservationSummary, now time.Time, cfg inspect.PeerLifecycleConfig, hasOverlayConfig bool) []inspect.PeerStatusInfo {
 	seen := make(map[string]bool)
 	var out []inspect.PeerStatusInfo
 

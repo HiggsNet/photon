@@ -24,22 +24,6 @@ func CloneIPsecTransportKeyState(in *IPsecTransportKeyState) *IPsecTransportKeyS
 	return &out
 }
 
-func CloneLinkInstances(in map[string]LinkInstanceState) map[string]LinkInstanceState {
-	return maps.Clone(in)
-}
-
-func CloneIPsecReconcileState(in *IPsecReconcileState) *IPsecReconcileState {
-	if in == nil {
-		return nil
-	}
-	out := *in
-	out.Desired = cloneSlice(in.Desired)
-	out.ActualSAs = cloneSlice(in.ActualSAs)
-	out.Actions = cloneSlice(in.Actions)
-	out.Skipped = cloneSlice(in.Skipped)
-	return &out
-}
-
 func CloneEndpointACLs(in map[string]EndpointACL) map[string]EndpointACL {
 	if in == nil {
 		return nil

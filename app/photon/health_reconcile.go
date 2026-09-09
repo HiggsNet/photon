@@ -70,7 +70,7 @@ func (d *Daemon) reconcileHealth(ctx context.Context) int {
 		localZone = view.State.ManagedZone.String()
 	}
 	links, reconcile := d.linuxObservation.ipsecSnapshot()
-	targets := linkstate.HealthTargets(buildLinkOutputs(linkInstancesFromIPsec(links), reconcile), localZone)
+	targets := linkstate.HealthTargets(buildLinkOutputs(links, reconcile), localZone)
 	now := d.now()
 	d.health.SetTargets(targets, now)
 	return d.tickHealth(ctx, now)
@@ -182,7 +182,7 @@ func showHealth(sortBy string, verbose bool) error {
 	return inspecttext.WriteHealth(os.Stdout, view, sortBy, verbose)
 }
 
-func healthViewFromOwners(common corestate.View, links map[string]linkInstanceState, reconcile *ipsecReconcileState, live []healthLinkJSON) inspect.HealthDebugView {
+func healthViewFromOwners(common corestate.View, links map[string]linkInstanceState, reconcile *ipsecObservationSummary, live []healthLinkJSON) inspect.HealthDebugView {
 	view := inspect.HealthDebugView{Live: inspectHealthLiveLinks(live)}
 	if common.State == nil {
 		return view

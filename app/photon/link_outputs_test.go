@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/netip"
 	"testing"
 
 	photonstate "github.com/HiggsNet/photon/internal/state"
@@ -19,8 +20,8 @@ func TestLinkOutputsProjectIPsecRuntimeWithoutLifecycleState(t *testing.T) {
 			PathKey:          "family:ipv6",
 			ActualState:      "up",
 			InterfaceName:    "phx0",
-			LocalTunnelAddr:  "fe80::1%phx0 netns=photon",
-			PeerTunnelAddr:   "fe80::2%phx0 netns=photon",
+			LocalTunnelAddr:  netip.MustParseAddr("fe80::1"),
+			PeerTunnelAddr:   netip.MustParseAddr("fe80::2"),
 			RemoteGeneration: 3,
 			Endpoint:         "198.51.100.2:4500",
 			LastTransition:   123,
@@ -28,7 +29,10 @@ func TestLinkOutputsProjectIPsecRuntimeWithoutLifecycleState(t *testing.T) {
 		},
 	}
 
-	got := buildLinkOutputs(links, nil)
+	got := buildLinkOutputs(links, &ipsecObservationSummary{Desired: []desiredLinkState{{
+		InstanceID: "instance-a", LocalTunnelAddr: "fe80::1%phx0 netns=photon",
+		PeerTunnelAddr: "fe80::2%phx0 netns=photon",
+	}}})
 	if len(got) != 1 {
 		t.Fatalf("outputs = %d, want 1", len(got))
 	}
@@ -54,14 +58,14 @@ func TestLinkOutputsProjectStagedRuntimeSeparately(t *testing.T) {
 			GroupID:               "blue",
 			ActualState:           "up",
 			InterfaceName:         "phx-old",
-			LocalTunnelAddr:       "fe80::1%phx-old netns=photon",
-			PeerTunnelAddr:        "fe80::2%phx-old netns=photon",
+			LocalTunnelAddr:       netip.MustParseAddr("fe80::1"),
+			PeerTunnelAddr:        netip.MustParseAddr("fe80::2"),
 			RemoteGeneration:      1,
 			StagedGeneration:      2,
 			RotatePhase:           "testing_new",
 			StagedInterfaceName:   "phx-new",
-			StagedLocalTunnelAddr: "fe80::3%phx-new netns=photon",
-			StagedPeerTunnelAddr:  "fe80::4%phx-new netns=photon",
+			StagedLocalTunnelAddr: netip.MustParseAddr("fe80::3"),
+			StagedPeerTunnelAddr:  netip.MustParseAddr("fe80::4"),
 			StagedIKEName:         "provider-private-runtime-name",
 			StagedChildSAName:     "provider-private-child-name",
 		},

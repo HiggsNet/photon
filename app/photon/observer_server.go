@@ -228,10 +228,7 @@ func (d *Daemon) peerObservabilitySnapshots() map[string]observability.PeerDiagn
 	if d == nil || d.gossipDriver == nil || d.gossipDriver.Observability == nil {
 		return nil
 	}
-	now := time.Now()
-	if d != nil {
-		now = d.now()
-	}
+	now := d.now()
 	return d.gossipDriver.Observability.Snapshots(now)
 }
 
@@ -245,7 +242,7 @@ func (p *observerProvider) Links(linkFilter string) (any, error) {
 	d.StateStore.mu.RLock()
 	bird := photonstate.CloneBirdInstances(d.StateStore.runtime.BirdInstances)
 	d.StateStore.mu.RUnlock()
-	build := buildStoredLinkInspection(observerRuntime(d), linkInstancesFromIPsec(observedLinks), reconcile, bird, health)
+	build := buildStoredLinkInspection(observerRuntime(d), observedLinks, reconcile, bird, health)
 	view := build.Inspection
 	// Single link detail
 	if linkFilter != "" {
@@ -276,7 +273,7 @@ func healthLinksWithContext(d *Daemon, links []healthLinkJSON) ([]inspecthttp.He
 	if reconcile != nil {
 		desiredByID = desiredByInstanceID(reconcile.Desired)
 	}
-	input.Instances = inspectHealthInstances(linkInstancesFromIPsec(observedLinks))
+	input.Instances = inspectHealthInstances(observedLinks)
 	input.Desired = inspectHealthDesired(desiredByID)
 	input.Unknown = func(instanceID string) any {
 		return healthLinkJSON{InstanceID: instanceID, State: "unknown"}

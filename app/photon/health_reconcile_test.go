@@ -18,7 +18,7 @@ func TestHealthTargetsParseScopedNetNS(t *testing.T) {
 	links := map[string]linkInstanceState{
 		"link-1": {ActualState: "up"},
 	}
-	reconcile := &ipsecReconcileState{
+	reconcile := &ipsecObservationSummary{
 		Desired: []desiredLinkState{{
 			InstanceID:      "link-1",
 			GroupID:         "blue",
@@ -51,16 +51,16 @@ func TestHealthTargetsUseRotatedRuntimeInterface(t *testing.T) {
 		"link-1": {
 			ActualState:           "up",
 			InterfaceName:         "phx-old",
-			LocalTunnelAddr:       "fe80::10",
-			PeerTunnelAddr:        "fe80::20",
+			LocalTunnelAddr:       netip.MustParseAddr("fe80::10"),
+			PeerTunnelAddr:        netip.MustParseAddr("fe80::20"),
 			StagedGeneration:      2,
 			RotatePhase:           "testing_new",
 			StagedInterfaceName:   "phx-new",
-			StagedLocalTunnelAddr: "fe80::11",
-			StagedPeerTunnelAddr:  "fe80::21",
+			StagedLocalTunnelAddr: netip.MustParseAddr("fe80::11"),
+			StagedPeerTunnelAddr:  netip.MustParseAddr("fe80::21"),
 		},
 	}
-	reconcile := &ipsecReconcileState{
+	reconcile := &ipsecObservationSummary{
 		Desired: []desiredLinkState{{
 			InstanceID:      "link-1",
 			GroupID:         "blue",
@@ -108,7 +108,7 @@ func TestHealthTargetsUseObservedDesiredTunnelAddressesForActive(t *testing.T) {
 			RemoteGeneration: 1,
 		},
 	}
-	reconcile := &ipsecReconcileState{
+	reconcile := &ipsecObservationSummary{
 		Desired: []desiredLinkState{{
 			InstanceID:      "link-1",
 			GroupID:         group.ID,
@@ -161,7 +161,7 @@ func TestHealthTargetsSkipRotateProbeWithoutObservedRuntimeTunnelAddresses(t *te
 			StagedInterfaceName: "phx-new",
 		},
 	}
-	reconcile := &ipsecReconcileState{
+	reconcile := &ipsecObservationSummary{
 		Desired: []desiredLinkState{{
 			InstanceID:      linkID,
 			GroupID:         group.ID,

@@ -624,7 +624,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		writeCanonicalView(conn, rootPublicKey)
 	case "status_view":
 		common, runtime := d.StateStore.readCommonAndRuntime()
-		links, reconcile := d.ipsecStateSnapshot()
+		links, reconcile := d.linuxObservation.ipsecSnapshot()
 		writeCanonicalView(conn, statusViewFromOwners(d.App, common, runtime, links, reconcile, d.healthStatusResponse(), true))
 	case "record_put":
 		if err := validateControlRecordPut(request); err != nil {
@@ -771,7 +771,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
 		}
-		links, reconcile := d.ipsecStateSnapshot()
+		links, reconcile := d.linuxObservation.ipsecSnapshot()
 		targets := linkstate.HealthTargets(buildLinkOutputs(links, reconcile), string(common.State.ManagedZone))
 		writeCanonicalView(conn, inspectHealthProbeTargets(targets))
 	case "sync_view":
@@ -1064,7 +1064,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		d.StateStore.mu.RLock()
 		bird := photonstate.CloneBirdInstances(d.StateStore.runtime.BirdInstances)
 		d.StateStore.mu.RUnlock()
-		view := buildStoredLinkInspection(observerRuntime(d), linkInstancesFromIPsec(links), reconcile, bird, health)
+		view := buildStoredLinkInspection(observerRuntime(d), links, reconcile, bird, health)
 		if d.linuxDriver != nil && d.App != nil && d.App.Config != nil && d.App.Config.IPsec.Driver != ipsecDriverDryRun {
 			sas, err := d.linuxDriver.ListIPsecSAs(ctx)
 			if err != nil {
@@ -1080,13 +1080,13 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		links, reconcile := d.ipsecStateSnapshot()
+		links, reconcile := d.linuxObservation.ipsecSnapshot()
 		writeCanonicalView(conn, buildPeerLifecycleDebugView(d.App, common, runtime, links, reconcile))
 	case "gossip_peers_view":
 		writeCanonicalView(conn, d.gossipPeerSnapshotForControl())
 	case "revocation_view":
 		observedLinks, _ := d.linuxObservation.ipsecSnapshot()
-		linkStates := linkInstancesFromIPsec(observedLinks)
+		linkStates := observedLinks
 		d.StateStore.writeMu.Lock()
 		view := d.StateStore.common.ReadView()
 		d.StateStore.mu.RLock()
@@ -1107,7 +1107,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		writeCanonicalView(conn, impacts)
 	case "health_status":
 		common, _ := d.StateStore.readCommonAndRuntime()
-		links, reconcile := d.ipsecStateSnapshot()
+		links, reconcile := d.linuxObservation.ipsecSnapshot()
 		writeCanonicalView(conn, healthViewFromOwners(common, links, reconcile, d.healthStatusResponse()))
 	default:
 		writeControlResponse(conn, controlError(fmt.Errorf("unknown control method: %s", request.Method)))
@@ -1488,7 +1488,7 @@ func (d *Daemon) handleRecoveryPurgeRevokedEvent(ctx context.Context, target zon
 	if common.State == nil || runtime == nil {
 		return nil, errors.New("daemon state is not loaded")
 	}
-	links, reconcile := d.ipsecStateSnapshot()
+	links, reconcile := d.linuxObservation.ipsecSnapshot()
 	plan := mergePurgePlan(commonPlan, links)
 	if !apply {
 		return plan, nil
@@ -1519,7 +1519,7 @@ func (d *Daemon) handleRecoveryPurgeRevokedEvent(ctx context.Context, target zon
 	return plan, nil
 }
 
-func (d *Daemon) cleanupPurgePlanIPsecLinks(ctx context.Context, links map[string]linkInstanceState, reconcile *ipsecReconcileState, plan *purgePlan) error {
+func (d *Daemon) cleanupPurgePlanIPsecLinks(ctx context.Context, links map[string]linkInstanceState, reconcile *ipsecObservationSummary, plan *purgePlan) error {
 	if plan == nil || len(plan.LinkInstances) == 0 {
 		return nil
 	}
@@ -1532,7 +1532,7 @@ func (d *Daemon) cleanupPurgePlanIPsecLinks(ctx context.Context, links map[strin
 	}
 	remaining, _, err := cleanupIPsecLinkInstanceSet(ctx, links, plan.LinkInstances, platformDriver)
 	if err == nil {
-		d.linuxObservation.replaceIPsec(linkInstancesToIPsec(remaining), markIPsecCleanupReconcile(reconcile, d.now()))
+		d.linuxObservation.replaceIPsec(remaining, markIPsecCleanupReconcile(reconcile, d.now()))
 	}
 	return err
 }

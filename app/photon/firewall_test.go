@@ -679,13 +679,13 @@ func TestBuildFirewallPolicyInputScopesInterfacesByNetNS(t *testing.T) {
 			ID:              "a",
 			ActualState:     "up",
 			InterfaceName:   "phx11111111",
-			LocalTunnelAddr: "fe80::1%phx11111111 netns=photon",
+			LocalTunnelAddr: netip.MustParseAddr("fe80::1"),
 		},
 		"b": {
 			ID:              "b",
 			ActualState:     "up",
 			InterfaceName:   "phx22222222",
-			LocalTunnelAddr: "fe80::2%phx22222222 netns=h3",
+			LocalTunnelAddr: netip.MustParseAddr("fe80::2"),
 		},
 	}
 	config := defaultAppConfig()
@@ -705,7 +705,10 @@ func TestBuildFirewallPolicyInputScopesInterfacesByNetNS(t *testing.T) {
 		verified,
 		runtime,
 		links,
-		nil,
+		&ipsecObservationSummary{Desired: []desiredLinkState{
+			{InstanceID: "a", LocalTunnelAddr: "fe80::1%phx11111111 netns=photon"},
+			{InstanceID: "b", LocalTunnelAddr: "fe80::2%phx22222222 netns=h3"},
+		}},
 		config,
 		time.Now(),
 	)

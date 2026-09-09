@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/netip"
 	"testing"
 
 	"github.com/HiggsNet/photon/internal/photonlinux/linkstate"
@@ -19,16 +20,16 @@ func pingDebugTargets(t *testing.T) []health.ProbeTarget {
 		"link-c": {
 			ActualState:           "up",
 			InterfaceName:         "phx-old",
-			LocalTunnelAddr:       "fd00::1",
-			PeerTunnelAddr:        "fd00::2",
+			LocalTunnelAddr:       netip.MustParseAddr("fd00::1"),
+			PeerTunnelAddr:        netip.MustParseAddr("fd00::2"),
 			StagedGeneration:      2,
 			RotatePhase:           "testing_new",
 			StagedInterfaceName:   "phx-new",
-			StagedLocalTunnelAddr: "fd00::3",
-			StagedPeerTunnelAddr:  "fd00::4",
+			StagedLocalTunnelAddr: netip.MustParseAddr("fd00::3"),
+			StagedPeerTunnelAddr:  netip.MustParseAddr("fd00::4"),
 		},
 	}
-	reconcile := &ipsecReconcileState{
+	reconcile := &ipsecObservationSummary{
 		Desired: []desiredLinkState{
 			{InstanceID: "link-b", GroupID: "g", PeerZone: zone.ZonePath("node-b."), LocalTunnelAddr: "10.0.0.1", PeerTunnelAddr: "10.0.0.2"},
 			{InstanceID: "link-b", GroupID: "g", PeerZone: zone.ZonePath("node-b."), LocalTunnelAddr: "fd00::1", PeerTunnelAddr: "fd00::2"},

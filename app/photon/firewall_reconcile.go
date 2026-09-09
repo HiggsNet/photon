@@ -47,7 +47,7 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 	if common.State == nil || runtime == nil {
 		return nil
 	}
-	links, ipsecReconcile := d.ipsecStateSnapshot()
+	links, ipsecReconcile := d.linuxObservation.ipsecSnapshot()
 	rev := uint64(common.Revision)
 	config := d.App.Config
 	instances := firewallInstancesEnabled(config)
@@ -243,7 +243,7 @@ func firewallOwnerScope(spec firewall.FirewallInstanceSpec) string {
 }
 
 // buildFirewallPolicyInput assembles the verified derived state for the planner.
-func buildFirewallPolicyInput(spec firewall.FirewallInstanceSpec, ars *routing.AuthorizedRouteSet, verified *corestate.VerifiedState, runtime *linuxRuntimeState, links map[string]linkInstanceState, reconcile *ipsecReconcileState, config *appConfig, now time.Time) firewall.FirewallPolicyInput {
+func buildFirewallPolicyInput(spec firewall.FirewallInstanceSpec, ars *routing.AuthorizedRouteSet, verified *corestate.VerifiedState, runtime *linuxRuntimeState, links map[string]linkInstanceState, reconcile *ipsecObservationSummary, config *appConfig, now time.Time) firewall.FirewallPolicyInput {
 	input := firewall.FirewallPolicyInput{}
 	if ars == nil || verified == nil || runtime == nil {
 		return input

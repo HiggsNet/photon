@@ -403,7 +403,7 @@ func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
 	service = newTestDaemonFromOwners(rt, common.State, common.Gossip, persistedRuntime, config, time.Second)
-	service.linuxObservation.replaceIPsec(linkInstancesToIPsec(latestLinks), latestReconcile)
+	service.linuxObservation.replaceIPsec(latestLinks, latestReconcile)
 	installTestIPsecDrivers(service, driver, driver)
 	service.notifyStateChanged()
 
@@ -439,7 +439,7 @@ func TestCleanupIPsecLinkInstancesTearsDownManagedLinks(t *testing.T) {
 		XFRMIfID:      5100,
 	}
 	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, now)
-	links := linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
+	links := map[string]ipsec.LinkInstance{inst.ID: inst}
 	driver := &ipsec.DryRunDriver{}
 
 	platformDriver := newTestLinuxDriver(driver, driver)
@@ -477,7 +477,7 @@ func TestRecoveryPurgeRevokedApplyCleansIPsecLinksBeforeDeletingState(t *testing
 		XFRMIfID:      5101,
 	}
 	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, now)
-	observationLinks := linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
+	observationLinks := map[string]ipsec.LinkInstance{inst.ID: inst}
 	checkpoint.Peers = map[string]corestate.PeerCheckpoint{"node-b.catofes.": {}}
 	rt := &AppContext{
 		Config:    defaultAppConfig(),
@@ -554,7 +554,7 @@ func TestCleanupIPsecOrphanConnectionsOnlyRemovesUnreferencedPhotonConnections(t
 		XFRMIfID:      5111,
 	}
 	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, now)
-	links := linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
+	links := map[string]ipsec.LinkInstance{inst.ID: inst}
 	driver := &ipsec.DryRunDriver{
 		LoadedConnections: []ipsec.ConnectionState{
 			{Name: "ipsec-managed"},
@@ -596,7 +596,7 @@ func TestDaemonIPsecCleanupEventTearsDownManagedLinks(t *testing.T) {
 	}
 	spec := plan.Desired[0]
 	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, now)
-	observationLinks := linkInstancesFromIPsec(map[string]ipsec.LinkInstance{inst.ID: inst})
+	observationLinks := map[string]ipsec.LinkInstance{inst.ID: inst}
 	rt := &AppContext{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),
