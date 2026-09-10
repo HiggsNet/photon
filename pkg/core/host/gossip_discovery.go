@@ -24,7 +24,7 @@ const (
 
 // GossipDiscoveryInput is the detached common/driver input used to rebuild
 // the in-memory peer address book. Suppressed peers remain dialable but do not
-// regain a checkpoint until their platform cleanup marker is cleared.
+// refresh discovery-derived checkpoint fields until the suppression clears.
 type GossipDiscoveryInput struct {
 	LocalPeerID    string
 	ManagedZone    zone.ZonePath
@@ -49,8 +49,8 @@ type GossipDiscoveryConfig struct {
 
 // GossipDiscoveryInput returns one detached discovery view built from the
 // GossipDriver's committed common Store. suppressed is the only platform-owned
-// overlay: it represents peers whose Linux/Windows resource cleanup is still
-// in progress and is never persisted as gossip protocol state.
+// overlay: it represents peers temporarily excluded by platform lifecycle
+// policy and is never persisted as gossip protocol state.
 func (driver *GossipDriver) GossipDiscoveryInput(suppressed map[string]bool) GossipDiscoveryInput {
 	input := GossipDiscoveryInput{Suppressed: cloneSuppressedPeers(suppressed)}
 	if driver == nil {

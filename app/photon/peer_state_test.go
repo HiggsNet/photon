@@ -18,7 +18,6 @@ import (
 type peerStateTestOwners struct {
 	verified             *corestate.VerifiedState
 	checkpoint           *corestate.GossipCheckpoint
-	runtime              *linuxRuntimeState
 	observationLinks     map[string]linkInstanceState
 	observationReconcile *ipsecObservationSummary
 }
@@ -107,7 +106,6 @@ func buildPeerStateTestOwners(t *testing.T) (*peerStateTestOwners, ed25519.Priva
 			IdentityPrivateKey: nodeAPriv,
 		},
 		checkpoint:       &corestate.GossipCheckpoint{Peers: make(map[string]corestate.PeerCheckpoint)},
-		runtime:          &linuxRuntimeState{PeerCleanups: make(map[string]peerLifecycleCleanupState)},
 		observationLinks: make(map[string]linkInstanceState),
 	}
 	return owners, catofesPriv, nodeAPriv, nodeBPriv
@@ -139,8 +137,7 @@ func addRevocationToParent(t *testing.T, network *zone.NetworkState, parentZone,
 
 func peerStatusForTest(owners *peerStateTestOwners, peerID string, peerZone zone.ZonePath, now time.Time, cfg inspect.PeerLifecycleConfig) inspect.PeerStatusInfo {
 	return inspect.BuildPeerLifecycleStatus(peerLifecycleInput(
-		owners.verified.Network, owners.checkpoint, owners.runtime.PeerCleanups,
-		owners.observationLinks, owners.observationReconcile,
+		owners.verified.Network, owners.checkpoint, owners.observationLinks, owners.observationReconcile,
 		peerID, peerZone, now, cfg, false,
 	))
 }
@@ -444,7 +441,7 @@ func TestDerivePeerStatusesAllPeers(t *testing.T) {
 		LastSyncUnix: now.Add(-1 * time.Minute).Unix(),
 	}
 
-	peers := derivePeerStatuses(state.verified.ManagedZone, state.verified.Network, state.checkpoint, state.runtime.PeerCleanups, state.observationLinks, state.observationReconcile, now, cfg, false)
+	peers := derivePeerStatuses(state.verified.ManagedZone, state.verified.Network, state.checkpoint, state.observationLinks, state.observationReconcile, now, cfg, false)
 	if len(peers) == 0 {
 		t.Fatalf("expected at least 1 peer, got 0")
 	}

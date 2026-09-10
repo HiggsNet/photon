@@ -128,7 +128,7 @@ Daemon 可以直接持有一个无独立锁/线程的 `LinuxObservation` 或 `Wi
 | `RoutingReconcile` | 已从 LinuxState 删除；只进 Observation |
 | `FirewallReconcile` | 已从 LinuxState 删除；实际状态、诊断与可重建 policy hash/generation 只进 Observation |
 | `BirdInstances` | 已从 LinuxState 删除；desired/路径/RouterID/owner 重新推导，PID/socket/status/exit/backoff 进程内 Observe |
-| `PeerCleanups` | 只保留确有安全 grace/cleanup 恢复意义的字段，其余从 GossipCheckpoint/VerifiedState 推导 |
+| `PeerCleanups` | 已删除；离线抑制从 GossipCheckpoint 最后活动时间与 `cleanup_after` 推导，吊销抑制从 VerifiedState 推导，不保存第二份 cleanup tombstone |
 | `Admission` | 已从 LinuxState 删除；它是由 VerifiedState 与 GossipCheckpoint 即时生成的 inspect diagnosis，不是持久 state。旧 schema 字段解码时直接丢弃 |
 
 在该审计完成前，不把现有整个 `RuntimeState` 搬进 `LinuxDriver`，也不以 current codec 已迁入 `internal/photonlinux` 为理由宣布状态边界完成。

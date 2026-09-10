@@ -56,14 +56,14 @@ func TestLegacyRuntimeStateMigrationIsAtomicAndIdempotent(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if !found || runtime.PeerCleanups["peer.catofes."].Reason != "expired" {
+		if !found {
 			t.Fatalf("linux runtime state = %+v", runtime)
 		}
 		payload, err := json.Marshal(runtime)
 		if err != nil {
 			return err
 		}
-		if strings.Contains(string(payload), "identity_key_path") || strings.Contains(string(payload), "routing_reconcile") || strings.Contains(string(payload), "firewall_reconcile") || strings.Contains(string(payload), "bird_instances") {
+		if strings.Contains(string(payload), "identity_key_path") || strings.Contains(string(payload), "routing_reconcile") || strings.Contains(string(payload), "firewall_reconcile") || strings.Contains(string(payload), "bird_instances") || strings.Contains(string(payload), "peer_cleanups") {
 			t.Fatalf("legacy derived state survived Linux state migration: %s", payload)
 		}
 		if meta := tx.Bucket(bucketLegacyMeta); meta != nil && meta.Get([]byte(cliMetaKey)) != nil {
@@ -186,9 +186,6 @@ func legacyRuntimeMigrationFixture(t *testing.T) (*stateFile, ed25519.PublicKey)
 		Network:         network,
 		SyncPeers: map[string]syncPeerState{
 			"peer.catofes.": {BackoffUntilUnix: 20, LastError: "diagnostic-only"},
-		},
-		PeerCleanups: map[string]peerLifecycleCleanupState{
-			"peer.catofes.": {CleanupUnix: 30, Reason: "expired"},
 		},
 	}, rootPublic
 }

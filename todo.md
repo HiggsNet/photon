@@ -94,9 +94,9 @@ Daemon
 - [x] 删除持久化 `RoutingReconcile`；LastRun/LastError 进入无 DB 的 `LinuxObservation`，旧数据库字段迁移时直接丢弃，BIRD instance 仍按原边界单独审计。
 - [x] 删除持久化 `FirewallReconcile`；backend、generation、policy hash、owned object count 和错误只进入 `LinuxObservation`，下一轮 apply 仍以系统 owned-object observation 为准；`EndpointACLs` 继续作为用户配置持久化。
 - [x] 删除持久化 `BirdInstances`；路径、RouterID、owner 与 config hash 重新推导，status/exit/backoff 只进入 `LinuxObservation`，旧数据库字段直接丢弃。临时 `birdc` 结果已从 `BirdObservedState` 收敛命名为 `BirdObservation`。
-- [ ] 审计 `PeerCleanups`：只保留真正影响安全 grace/cleanup 恢复的字段，其余由 VerifiedState/GossipCheckpoint 推导。
+- [x] 删除持久化 `PeerCleanups`：离线抑制直接由保留的 GossipCheckpoint 最后活动时间与 `cleanup_after` 推导，吊销抑制直接由 VerifiedState 推导；成功同步刷新 checkpoint 后自然恢复，不保留第二份 cleanup tombstone。
 - [x] 收敛无独立线程/DB 的 `LinuxObservation` read model；IPsec、routing/BIRD 和 firewall 在线时更新，重启时清空并重建。
-- [ ] platform inspect/control/HTTP 只读在线 Observation；Daemon 离线时返回 unavailable，不用 bbolt 上次 reconcile snapshot 冒充 live。
+- [x] platform inspect/control/HTTP 只读在线 Observation；Daemon 离线时 platform source 返回 unavailable，不用 bbolt 上次 reconcile snapshot 冒充 live；status/peer lifecycle 的纯投影也不再要求 LinuxState 作为无关组合参数。
 - [ ] 内存错误使用 `error`/typed failure，展示时映射稳定 code/message；没有证明价值时不持久化 LastError。
 
 ### A4. 删除 DaemonStateStore

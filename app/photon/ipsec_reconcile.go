@@ -40,7 +40,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 			Now:                 now,
 			DNSResolver:         dnsResolver,
 			ContactPointQuality: d.buildIPsecContactPointQuality(verified, now),
-			ExcludedPeers:       peerLifecycleExcludedPeers(runtime.PeerCleanups, common.Gossip, now, d.App.Config.PeerLifecycle),
+			ExcludedPeers:       peerLifecycleExcludedPeers(common.Gossip, now, d.App.Config.PeerLifecycle),
 		})
 		if err != nil {
 			d.recordIPsecReconcileError(rev, now.Unix(), err)

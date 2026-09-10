@@ -334,10 +334,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	routingReconcileInterval := d.routingReconcileInterval()
 	firewallReconcileInterval := d.firewallReconcileInterval()
 	d.updateDiscoveredPeers()
-	// Apply persisted lifecycle policy before startup recovery so stale signed
-	// records cannot recreate links that already exceeded cleanup_after.
+	// Clear revoked gossip runtime hints before startup recovery. Offline peer
+	// suppression is derived directly from the retained gossip checkpoint.
 	d.flushRevocationCleanup()
-	d.flushPeerLifecycleCleanup()
 	d.logDebug("daemon", "startup_recovery_begin", nil)
 	d.logDebug("daemon", "startup_recovery_layer_begin", map[string]any{"layer": "ipsec"})
 	d.recoverIPsecLinksOnStart(ctx)
@@ -467,10 +466,6 @@ func (d *Daemon) Run(ctx context.Context) error {
 						return err
 					}
 				case daemonTimerSync:
-					if d.flushPeerLifecycleCleanup() {
-						d.updateDiscoveredPeers()
-						d.notifyStateChanged()
-					}
 					result, _, _ := d.handleEvent(daemonEvent{Type: daemonEventSyncTimer, ForceSync: forceSync, Context: ctx})
 					if result.Error != nil {
 						d.logDebug("sync", "timer_completed_with_error", map[string]any{"error": result.Error})
@@ -616,14 +611,14 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		writeCanonicalView(conn, rootPublicKey)
 	case "status_view":
-		common, runtime := d.StateStore.readCommonAndRuntime()
+		common, _ := d.StateStore.readCommonAndRuntime()
 		links, reconcile := d.linuxObservation.ipsecSnapshot()
 		routingObserved := d.linuxObservation.routingSnapshot()
 		var birdInstances map[string]*bird.InstanceObservation
 		if routingObserved != nil {
 			birdInstances = routingObserved.Instances
 		}
-		writeCanonicalView(conn, statusViewFromOwners(d.App, common, runtime, links, reconcile, birdInstances, d.healthStatusResponse(), true))
+		writeCanonicalView(conn, statusViewFromOwners(d.App, common, links, reconcile, birdInstances, d.healthStatusResponse(), true))
 	case "record_put":
 		if err := validateControlRecordPut(request); err != nil {
 			writeControlResponse(conn, controlError(err))
@@ -1061,13 +1056,13 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		writeCanonicalView(conn, view)
 	case "peer_lifecycle_view":
-		common, runtime := d.StateStore.readCommonAndRuntime()
-		if common.State == nil || runtime == nil {
+		common, _ := d.StateStore.readCommonAndRuntime()
+		if common.State == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
 		links, reconcile := d.linuxObservation.ipsecSnapshot()
-		writeCanonicalView(conn, buildPeerLifecycleDebugView(d.App, common, runtime, links, reconcile))
+		writeCanonicalView(conn, buildPeerLifecycleDebugView(d.App, common, links, reconcile))
 	case "gossip_peers_view":
 		writeCanonicalView(conn, d.gossipPeerSnapshotForControl())
 	case "revocation_view":
@@ -1302,8 +1297,8 @@ func (d *Daemon) handleReloadConfigEvent() error {
 	if d.ControlSocketPath != "" && socketPath != d.ControlSocketPath {
 		return fmt.Errorf("reload would change control socket path from %s to %s; restart daemon to switch control socket", d.ControlSocketPath, socketPath)
 	}
-	common, runtime := d.StateStore.readCommonAndRuntime()
-	if common.State == nil || runtime == nil {
+	common, _ := d.StateStore.readCommonAndRuntime()
+	if common.State == nil {
 		return errors.New("daemon state is not initialized")
 	}
 	if err := validateConfiguredIdentityState(common.State, config); err != nil {
@@ -1467,8 +1462,8 @@ func (d *Daemon) handleRecoveryPurgeRevokedEvent(ctx context.Context, target zon
 	if err != nil {
 		return nil, err
 	}
-	common, runtime := d.StateStore.readCommonAndRuntime()
-	if common.State == nil || runtime == nil {
+	common, _ := d.StateStore.readCommonAndRuntime()
+	if common.State == nil {
 		return nil, errors.New("daemon state is not loaded")
 	}
 	links, reconcile := d.linuxObservation.ipsecSnapshot()
@@ -1477,13 +1472,6 @@ func (d *Daemon) handleRecoveryPurgeRevokedEvent(ctx context.Context, target zon
 		return plan, nil
 	}
 	if err := d.cleanupPurgePlanIPsecLinks(ctx, links, reconcile, plan); err != nil {
-		return nil, err
-	}
-	if _, _, err := d.StateStore.commitRuntimeIfRevision(uint64(common.Revision), func(candidate *linuxRuntimeState) {
-		for _, peerID := range plan.SyncPeers {
-			delete(candidate.PeerCleanups, peerID)
-		}
-	}); err != nil {
 		return nil, err
 	}
 	result, err := d.StateStore.PurgeCommon(ctx, now, target)
@@ -1707,9 +1695,6 @@ func (d *Daemon) notifyStateChanged() {
 	// firewall/routing/IPsec flush so that allow sets and desired links are
 	// computed without revoked entries.
 	d.flushRevocationCleanup()
-	// Long-offline peers use a separate persisted local marker: their cache is
-	// removed here and IPsec planning excludes them until a successful sync.
-	d.flushPeerLifecycleCleanup()
 	// Gossip-only commands construct the common host driver without a Linux
 	// platform driver. Their committed state is still valid, but platform
 	// reconciliation belongs to the full daemon that owns those drivers.
@@ -1763,8 +1748,7 @@ func (d *Daemon) noteReconcileFlush(layer string) {
 // whose zone is currently revoked. This implements Phase 6.5.5 gossip peer
 // cache cleanup: revoked peers must not maintain discovered endpoints,
 // observed paths, backoff or object-pull candidates. The entry itself is
-// retained with a "revoked" marker for diagnostics; it is removed via the
-// normal offline cleanup policy after the cleanup_after retention window.
+// retained with a "revoked" failure for diagnostics until explicit purge.
 func (d *Daemon) flushRevocationCleanup() {
 	if d == nil || d.StateStore == nil {
 		return
@@ -1781,32 +1765,26 @@ func (d *Daemon) flushRevocationCleanup() {
 	if len(revokedZones) == 0 {
 		return
 	}
-	needsStateCleanup := false
+	patches := make(map[string]corestate.PeerCheckpointPatch)
 	if view.Gossip != nil {
 		for peerID, peer := range view.Gossip.Peers {
 			if revokedZones[zone.ZonePath(peerID)] && peerNeedsRevocationCleanup(peer) {
-				needsStateCleanup = true
-				break
+				patches[peerID] = corestate.PeerCheckpointPatch{
+					DiscoveredEndpoint: corestate.PatchField[string]{Set: true}, DiscoveredAtUnix: corestate.PatchField[int64]{Set: true},
+					ObservedEndpoint: corestate.PatchField[string]{Set: true}, ObservedFirstUnix: corestate.PatchField[int64]{Set: true},
+					ObservedLastUnix: corestate.PatchField[int64]{Set: true}, ObservedSyncUnix: corestate.PatchField[int64]{Set: true},
+					ObservedUntilUnix: corestate.PatchField[int64]{Set: true}, ObservedFailures: corestate.PatchField[int]{Set: true},
+					ObservedGrace:    corestate.PatchField[[]corestate.ObservedGraceEndpoint]{Set: true},
+					BackoffUntilUnix: corestate.PatchField[int64]{Set: true}, FailureCount: corestate.PatchField[int]{Set: true},
+					LastFailure: corestate.PatchField[*corestate.PeerFailure]{Set: true, Value: &corestate.PeerFailure{
+						Code: corestate.PeerFailureLegacy, Message: "zone revoked", AtUnix: now.Unix(),
+					}},
+				}
 			}
 		}
 	}
 	d.noteReconcileFlush("revocation_cleanup")
-	if needsStateCleanup {
-		patches := make(map[string]corestate.PeerCheckpointPatch)
-		for path := range revokedZones {
-			peerID := path.String()
-			patches[peerID] = corestate.PeerCheckpointPatch{
-				DiscoveredEndpoint: corestate.PatchField[string]{Set: true}, DiscoveredAtUnix: corestate.PatchField[int64]{Set: true},
-				ObservedEndpoint: corestate.PatchField[string]{Set: true}, ObservedFirstUnix: corestate.PatchField[int64]{Set: true},
-				ObservedLastUnix: corestate.PatchField[int64]{Set: true}, ObservedSyncUnix: corestate.PatchField[int64]{Set: true},
-				ObservedUntilUnix: corestate.PatchField[int64]{Set: true}, ObservedFailures: corestate.PatchField[int]{Set: true},
-				ObservedGrace:    corestate.PatchField[[]corestate.ObservedGraceEndpoint]{Set: true},
-				BackoffUntilUnix: corestate.PatchField[int64]{Set: true}, FailureCount: corestate.PatchField[int]{Set: true},
-				LastFailure: corestate.PatchField[*corestate.PeerFailure]{Set: true, Value: &corestate.PeerFailure{
-					Code: corestate.PeerFailureLegacy, Message: "zone revoked", AtUnix: d.now().Unix(),
-				}},
-			}
-		}
+	if len(patches) > 0 {
 		if _, err := d.StateStore.common.UpdatePeerCheckpoints(context.Background(), patches); err != nil {
 			d.logWarn("sync", "revocation_cleanup_commit_failed", map[string]any{"error": err})
 			return

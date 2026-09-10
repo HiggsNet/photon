@@ -408,10 +408,10 @@ peer_lifecycle:
 
 - `stale_after`：超过这个时间未同步/未观测到 peer 后，本机把它标记为 `stale`，用于 status/debug 投影；在到达 `cleanup_after` 前仍保留已有 SA。
 - `offline_after`：超过这个时间后，本机把 peer 标记为 `offline`，用于 status/debug 投影；实际资源清理由 `cleanup_after` 触发。
-- `cleanup_after`：peer 从最后一次成功同步/观测起超过该时间后，本机删除其 `SyncPeers` cache，拆除 Photon-owned IPsec SA/XFRM interface，并让 routing/firewall 随本地链路状态收敛。daemon 会保留一个仅本机持久化的 cleanup marker，阻止尚未过期的旧 Zone records 立即重建链路；之后一次成功 gossip sync 会自动解除 marker。
+- `cleanup_after`：peer 从最后一次成功同步/观测起超过该时间后，本机拆除 Photon-owned IPsec SA/XFRM interface，并让 routing/firewall 随本地链路状态收敛。用于判断的 Gossip checkpoint 会保留，daemon 直接以其最后活动时间抑制旧 Zone records 重建链路；之后一次成功 gossip sync 刷新该时间后自然恢复，不另存 cleanup marker。
 - `keep_sa_while_stale`：兼容现有配置的策略字段；当前执行面在 `cleanup_after` 前始终保留已有 SA，默认值为 `true`。
 
-约束是 `stale_after < offline_after < cleanup_after`。检查在 daemon 启动、状态更新以及周期 sync timer 上执行。被撤销的 peer 会立即走 deny-first 数据面清理；其 `SyncPeers` 诊断条目从本机首次处理撤销起保留一个 `cleanup_after` 窗口，随后自动删除。revocation tombstone 本身是 signed state，会继续通过 gossip 同步和保留用于验证/审计。
+约束是 `stale_after < offline_after < cleanup_after`。检查在 daemon 启动、状态更新以及周期 sync timer 上执行。被撤销的 peer 会立即走 deny-first 数据面清理；其 checkpoint 中的运行提示会被清空并标记 revoked，直到显式 purge 删除。revocation tombstone 本身是 signed state，会继续通过 gossip 同步和保留用于验证/审计。
 
 ## 常见配置边界
 

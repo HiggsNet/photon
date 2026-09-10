@@ -258,7 +258,7 @@ app 中剩余的是配置装配、把 committed Linux link output 交给 manager
 
 GossipDriver 公共 gossip 闭环、aggregate 清理和 current Linux codec 迁移已完成。旧 schema decoder 仍留在 app migration
 边界，不能随 current codec 一起误搬成在线兼容层。这里的 codec owner 完成不等于 live state 边界完成：当前
-`photonlinux.RuntimeState` 已删除 routing/firewall reconcile summary 与 BIRD instance 数据，仍需继续审计 durable input 与 operation journal。
+`photonlinux.RuntimeState` 已删除 routing/firewall reconcile summary、BIRD instance 数据与 `PeerCleanups`，现在只保留无法从其他 owner 恢复的 IPsec transport 私钥和显式本机 Endpoint ACL。
 `IdentityKeyPath` 已从 current RuntimeState、clone 和 codec 中删除，启动不再为配置路径补写一次 Linux state；配置路径移动时只要密钥身份不变即可，启动与 reload 都以配置 key 的公钥匹配 VerifiedState 为准。旧 `stateFile/stateMeta` 仍解码该字段以读取旧库，但迁移投影明确丢弃，不形成 current schema 的第二真相源。
 持久化 `Admission` 也已删除：pending/adopted、reason/detail 与 join request 直接从 VerifiedState 推导，最近 bootstrap sync 从 GossipCheckpoint 中对应 peer 的 `LastSyncUnix` 推导。原有 pending 时间、adopted 时间和 error 字段没有生产写入者，不为它们新增公共 owner、bucket 或 schema migration；旧 JSON 字段由 current/legacy decoder 忽略。
 持久化 `RoutingReconcile` 与 `BirdInstances` 均已删除：LastRun/LastError、BIRD status/exit/backoff 只进入 daemon 内的 `LinuxObservation`，进程重启后由下一次 reconcile 重建；路径、RouterID、owner 和 config hash 从配置与 VerifiedState 重新推导。旧 aggregate/current JSON 字段直接丢弃。
@@ -283,7 +283,7 @@ peer cleanup commit 壳已删除，剩余 typed commit 要在 LinuxState 字段�
 3. Linux driver：IPsec/XFRM、firewall、upstream routing、BIRD 和 health probe 实际执行均已下沉；执行侧主体完成。
    current `RuntimeState`、detached clone、bbolt codec 和 revision-guarded commit 已归 `internal/photonlinux`；app 旧库迁移只负责
    `stateFile/stateMeta` 解码及一次性字段投影。平台包不自行打开数据库，仍使用 composition root 传入的唯一 BoltStore/transaction。
-   `IdentityKeyPath` 已从 current schema 删除并回归配置 owner；`Admission`、`RoutingReconcile`、`FirewallReconcile` 与 `BirdInstances` 已作为纯派生/在线诊断从 current schema 删除，旧迁移投影直接丢弃；其余 RuntimeState 仍需继续审计 `PeerCleanups`，不能把分批字段收缩或 codec 迁移误报为状态模型完成。
+   `IdentityKeyPath` 已从 current schema 删除并回归配置 owner；`Admission`、`RoutingReconcile`、`FirewallReconcile`、`BirdInstances` 与 `PeerCleanups` 已作为纯派生/在线诊断从 current schema 删除，旧迁移投影直接丢弃。当前 RuntimeState 只剩 IPsec transport 私钥与显式本机 Endpoint ACL；类型改名仍随顶层 owner 拆分完成，不能把 codec 迁移误报为状态模型全部完成。
 4. 聚合 `stateFile`：在线和普通测试迁移已经完成；fresh join 已退出聚合写入；在线 IPsec cleanup、revoked purge、Endpoint ACL、
    reconcile completion 以及 Firewall/IPsec 主 planner 已直接读取 common/Linux 两个 owner，不再构造完整 Snapshot。
    本机 endpoint/IPsec/routing protocol publish 也已直接使用两个 owner，routing 主 reconcile planner 同样完成切换。

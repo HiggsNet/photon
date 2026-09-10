@@ -11,21 +11,16 @@ import (
 
 func TestCloneRuntimeStateDeepCopiesMutableFields(t *testing.T) {
 	original := &RuntimeState{
-		PeerCleanups: map[string]photonstate.PeerLifecycleCleanupState{
-			"peer-a": {LastActiveUnix: 10, CleanupUnix: 20, Reason: "offline"},
-		},
 		IPsecTransportKey: &photonstate.IPsecTransportKeyState{PublicKey: []byte("public"), PrivateKey: []byte("private")},
 		EndpointACLs:      map[string]photonstate.EndpointACL{"api": {Selectors: []string{"zone:catofes."}}},
 	}
 
 	cloned := CloneRuntimeState(original)
-	cloned.PeerCleanups["peer-a"] = photonstate.PeerLifecycleCleanupState{Reason: "changed"}
 	cloned.IPsecTransportKey.PublicKey[0] = 'P'
 	cloned.IPsecTransportKey.PrivateKey[0] = 'S'
 	cloned.EndpointACLs["api"].Selectors[0] = "zone:changed."
 
-	if original.PeerCleanups["peer-a"].Reason != "offline" ||
-		string(original.IPsecTransportKey.PublicKey) != "public" ||
+	if string(original.IPsecTransportKey.PublicKey) != "public" ||
 		string(original.IPsecTransportKey.PrivateKey) != "private" {
 		t.Fatalf("top-level runtime fields share mutable state: %#v", original)
 	}
@@ -36,11 +31,10 @@ func TestCloneRuntimeStateDeepCopiesMutableFields(t *testing.T) {
 
 func TestCloneRuntimeStatePreservesNilAndEmptyShape(t *testing.T) {
 	original := &RuntimeState{
-		PeerCleanups: map[string]photonstate.PeerLifecycleCleanupState{},
 		EndpointACLs: map[string]photonstate.EndpointACL{"empty": {Selectors: []string{}}},
 	}
 	cloned := CloneRuntimeState(original)
-	if cloned.PeerCleanups == nil || cloned.EndpointACLs == nil ||
+	if cloned.EndpointACLs == nil ||
 		cloned.EndpointACLs["empty"].Selectors == nil {
 		t.Fatalf("nil/empty shape changed: %#v", cloned)
 	}
@@ -51,7 +45,7 @@ func TestCloneRuntimeStatePreservesNilAndEmptyShape(t *testing.T) {
 
 func TestRuntimeStateSchemaGuard(t *testing.T) {
 	want := []string{
-		"PeerCleanups", "IPsecTransportKey", "EndpointACLs",
+		"IPsecTransportKey", "EndpointACLs",
 	}
 	typ := reflect.TypeOf(RuntimeState{})
 	if typ.NumField() != len(want) {
@@ -66,14 +60,14 @@ func TestRuntimeStateSchemaGuard(t *testing.T) {
 
 func TestRuntimeStateJSONDropsLegacyDerivedFields(t *testing.T) {
 	var state RuntimeState
-	if err := json.Unmarshal([]byte(`{"identity_key_path":"/old/key.json","admission":{"pending":true},"ipsec_port_record":{"generation":7},"link_instances":{"link-a":{"id":"link-a"}},"ipsec_reconcile":{"desired_links":1},"routing_reconcile":{"last_error":"old"},"firewall_reconcile":{"last_error":"old"},"bird_instances":{"mesh":{"state":"running"}},"endpoint_acls":{"api":{"name":"api"}}}`), &state); err != nil {
+	if err := json.Unmarshal([]byte(`{"identity_key_path":"/old/key.json","admission":{"pending":true},"ipsec_port_record":{"generation":7},"link_instances":{"link-a":{"id":"link-a"}},"ipsec_reconcile":{"desired_links":1},"routing_reconcile":{"last_error":"old"},"firewall_reconcile":{"last_error":"old"},"bird_instances":{"mesh":{"state":"running"}},"peer_cleanups":{"peer":{"reason":"offline"}},"endpoint_acls":{"api":{"name":"api"}}}`), &state); err != nil {
 		t.Fatalf("decode old payload: %v", err)
 	}
 	payload, err := json.Marshal(&state)
 	if err != nil {
 		t.Fatalf("encode current payload: %v", err)
 	}
-	if strings.Contains(string(payload), "identity_key_path") || strings.Contains(string(payload), "admission") || strings.Contains(string(payload), "ipsec_port_record") || strings.Contains(string(payload), "link_instances") || strings.Contains(string(payload), "ipsec_reconcile") || strings.Contains(string(payload), "routing_reconcile") || strings.Contains(string(payload), "firewall_reconcile") || strings.Contains(string(payload), "bird_instances") || state.EndpointACLs["api"].Name != "api" {
+	if strings.Contains(string(payload), "identity_key_path") || strings.Contains(string(payload), "admission") || strings.Contains(string(payload), "ipsec_port_record") || strings.Contains(string(payload), "link_instances") || strings.Contains(string(payload), "ipsec_reconcile") || strings.Contains(string(payload), "routing_reconcile") || strings.Contains(string(payload), "firewall_reconcile") || strings.Contains(string(payload), "bird_instances") || strings.Contains(string(payload), "peer_cleanups") || state.EndpointACLs["api"].Name != "api" {
 		t.Fatalf("current state retained legacy derived fields or lost durable fields: %s", payload)
 	}
 }

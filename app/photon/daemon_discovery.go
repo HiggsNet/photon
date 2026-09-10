@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 
-	photonstate "github.com/HiggsNet/photon/internal/state"
+	"github.com/HiggsNet/photon/internal/inspect"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 )
 
@@ -56,18 +56,15 @@ func (d *Daemon) currentGossipSuppressions() map[string]bool {
 	if d == nil || d.StateStore == nil {
 		return nil
 	}
-	d.StateStore.mu.RLock()
-	cleanups := photonstate.ClonePeerLifecycleCleanups(d.StateStore.runtime.PeerCleanups)
-	d.StateStore.mu.RUnlock()
-	return peerCleanupSuppressions(cleanups)
-}
-
-func peerCleanupSuppressions(cleanups map[string]peerLifecycleCleanupState) map[string]bool {
-	suppressed := make(map[string]bool, len(cleanups))
-	for peerID := range cleanups {
-		suppressed[peerID] = true
+	view := d.StateStore.common.ReadView()
+	if view.State == nil {
+		return nil
 	}
-	return suppressed
+	cfg := inspect.PeerLifecycleConfig{}
+	if d.App != nil && d.App.Config != nil {
+		cfg = d.App.Config.PeerLifecycle
+	}
+	return peerLifecycleSuppressions(view.State.Network, view.Gossip, d.now(), cfg)
 }
 
 func gossipDriverConfig(config *gossipStartupConfig, app *appConfig, logger *appLogger) corehost.GossipDriverConfig {

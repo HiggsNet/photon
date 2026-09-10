@@ -151,6 +151,18 @@ func collectAllRevokedZones(network *zone.NetworkState, now time.Time) map[zone.
 			out[z] = true
 		}
 	}
+	// A purge may remove the revoked ZoneState while retaining its signed
+	// revocation in the parent. Include those direct tombstone paths too.
+	for _, parent := range network.Zones {
+		if parent == nil {
+			continue
+		}
+		for path := range parent.Revocations {
+			if network.IsZoneRevoked(path, now) {
+				out[path] = true
+			}
+		}
+	}
 	return out
 }
 

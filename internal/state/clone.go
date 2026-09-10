@@ -1,11 +1,5 @@
 package state
 
-import "maps"
-
-func ClonePeerLifecycleCleanups(in map[string]PeerLifecycleCleanupState) map[string]PeerLifecycleCleanupState {
-	return maps.Clone(in)
-}
-
 func CloneIPsecTransportKeyState(in *IPsecTransportKeyState) *IPsecTransportKeyState {
 	if in == nil {
 		return nil

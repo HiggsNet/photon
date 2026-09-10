@@ -22,20 +22,18 @@ type stateFile struct {
 	ZonePrivateKey    ed25519.PrivateKey `json:"zone_private_key"`
 	Network           *zone.NetworkState `json:"network"`
 	SyncPeers         map[string]syncPeerState
-	PeerCleanups      map[string]peerLifecycleCleanupState
 	IPsecTransportKey *ipsecTransportKeyState
 	EndpointACLs      map[string]endpointACL
 }
 
 type stateMeta struct {
-	ManagedZone       zone.ZonePath                        `json:"managed_zone"`
-	IdentityKeyPath   string                               `json:"identity_key_path,omitempty"`
-	RootPrivateKey    ed25519.PrivateKey                   `json:"root_private_key"`
-	ZonePrivateKey    ed25519.PrivateKey                   `json:"zone_private_key"`
-	SyncPeers         map[string]syncPeerState             `json:"sync_peers,omitempty"`
-	PeerCleanups      map[string]peerLifecycleCleanupState `json:"peer_cleanups,omitempty"`
-	IPsecTransportKey *ipsecTransportKeyState              `json:"ipsec_transport_key,omitempty"`
-	EndpointACLs      map[string]endpointACL               `json:"endpoint_acls,omitempty"`
+	ManagedZone       zone.ZonePath            `json:"managed_zone"`
+	IdentityKeyPath   string                   `json:"identity_key_path,omitempty"`
+	RootPrivateKey    ed25519.PrivateKey       `json:"root_private_key"`
+	ZonePrivateKey    ed25519.PrivateKey       `json:"zone_private_key"`
+	SyncPeers         map[string]syncPeerState `json:"sync_peers,omitempty"`
+	IPsecTransportKey *ipsecTransportKeyState  `json:"ipsec_transport_key,omitempty"`
+	EndpointACLs      map[string]endpointACL   `json:"endpoint_acls,omitempty"`
 }
 
 type endpointACL = photonstate.EndpointACL
@@ -54,7 +52,6 @@ type syncPeerState = photonstate.PeerRuntimeState
 type observedGraceAddrState = photonstate.PeerObservedGraceAddrState
 type rejectedDigestState = photonstate.PeerRejectedDigest
 
-type peerLifecycleCleanupState = photonstate.PeerLifecycleCleanupState
 type linuxRuntimeState = photonlinux.RuntimeState
 
 type gossipStartupConfig struct {

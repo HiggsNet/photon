@@ -40,26 +40,24 @@ type PeerLifecycleDebugConfig struct {
 }
 
 type PeerLifecycleInput struct {
-	PeerID                 string
-	PeerZone               zone.ZonePath
-	StateAvailable         bool
-	PeerZoneKnown          bool
-	ZoneRevoked            bool
-	HasIPsecConfig         bool
-	HasOverlayConfig       bool
-	PeerHasIPsecRecords    bool
-	PolicyDeniedReason     string
-	PolicyDeniedDetail     string
-	LastSyncUnix           int64
-	ObservedLastSeenUnix   int64
-	UpLinks                int
-	ActualLinks            int
-	DesiredLinks           int
-	LastTransitionUnix     int64
-	LifecycleCleanupUnix   int64
-	LifecycleCleanupReason string
-	Now                    time.Time
-	Config                 PeerLifecycleConfig
+	PeerID               string
+	PeerZone             zone.ZonePath
+	StateAvailable       bool
+	PeerZoneKnown        bool
+	ZoneRevoked          bool
+	HasIPsecConfig       bool
+	HasOverlayConfig     bool
+	PeerHasIPsecRecords  bool
+	PolicyDeniedReason   string
+	PolicyDeniedDetail   string
+	LastSyncUnix         int64
+	ObservedLastSeenUnix int64
+	UpLinks              int
+	ActualLinks          int
+	DesiredLinks         int
+	LastTransitionUnix   int64
+	Now                  time.Time
+	Config               PeerLifecycleConfig
 }
 
 func DefaultPeerLifecycleConfig() PeerLifecycleConfig {
@@ -124,13 +122,6 @@ func BuildPeerLifecycleStatus(input PeerLifecycleInput) PeerStatusInfo {
 	if input.ZoneRevoked {
 		info.State = PeerStateRevoked
 		info.Reason = "zone_revoked"
-		return info
-	}
-	if input.LifecycleCleanupReason == "cleanup_after_exceeded" {
-		info.State = PeerStateOffline
-		info.Reason = "cleanup_after_exceeded"
-		info.OfflineSinceUnix = input.LastSyncUnix
-		info.NextCleanupUnix = input.LifecycleCleanupUnix
 		return info
 	}
 	if !input.PeerZoneKnown {

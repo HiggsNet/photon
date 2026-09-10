@@ -288,7 +288,8 @@ func recoveryPullZones(ctx context.Context, paths []zone.ZonePath, peerID string
 			return ctx.Err()
 		default:
 		}
-		input := gossipDriver.GossipDiscoveryInput(peerCleanupSuppressions(startup.Runtime.PeerCleanups))
+		current := startup.Common.ReadView()
+		input := gossipDriver.GossipDiscoveryInput(peerLifecycleSuppressions(current.State.Network, current.Gossip, rt.Now(), rt.Config.PeerLifecycle))
 		pullCtx, cancel := context.WithDeadline(ctx, deadline)
 		completion := pullExecutor.PullFrom(pullCtx, input, gossip.StartObjectPullAction{PeerID: peerID, Zone: path})
 		cancel()
@@ -364,14 +365,6 @@ func recoveryPurgeRevoked(ctx context.Context, apply bool, target zone.ZonePath,
 	// resources that no longer belong to the verified keep set.
 	plan := mergePurgePlan(commonPlan, nil)
 	if apply {
-		view := startup.Common.ReadView()
-		runtimeCandidate := photonlinux.CloneRuntimeState(startup.Runtime)
-		for _, peerID := range plan.SyncPeers {
-			delete(runtimeCandidate.PeerCleanups, peerID)
-		}
-		if err := photonlinux.CommitRuntimeState(boltStore, view.Revision, runtimeCandidate); err != nil {
-			return err
-		}
 		if _, err := startup.Common.PurgeRevoked(ctx, now, target); err != nil {
 			return err
 		}
