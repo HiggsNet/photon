@@ -136,7 +136,7 @@ type PeerLifecycleInput struct {
 }
 ```
 
-internal 模块吃 input，输出 view/decision。`app/photon` adapter 负责从 `DaemonStateStore.Snapshot()`、离线 DB snapshot 或 control socket response 拷贝 committed state；health、BIRD、actual SA、reconcile progress 等 live 诊断作为单独 source 汇入 input。adapter 不应把未提交 workspace 或 `stateFile` 锁本身传入 internal。
+internal 模块吃 input，输出 view/decision。`app/photon` adapter 负责从 common `StateStore.ReadView()`、离线 DB snapshot 或 control socket response 拷贝 committed state；health、BIRD、actual SA 等 live 诊断作为单独 source 汇入 input。adapter 不应把未提交 workspace 或 `stateFile` 锁本身传入 internal。
 
 ### 4.2 写侧和读侧分开
 

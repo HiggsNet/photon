@@ -101,10 +101,13 @@ Daemon
 
 ### A4. 删除 DaemonStateStore
 
-- [x] common Store 已由 GossipDriver 直接使用；生产 aggregate Snapshot、重复 revision metadata 和单调用方 Bird GC/purge/peer-cleanup commit wrapper 已删除。
+- [x] common Store 已由 GossipDriver 与 Daemon 直接使用；生产 aggregate Snapshot、重复 revision metadata、common mutation forwarding API 和单调用方 Bird GC/purge/peer-cleanup commit wrapper 已删除。
+- [x] 删除从无生产写入者、Observer 永远只输出空对象的 `ReconcileProgress` 假状态；不为无效诊断新增 owner。
+- [x] 删除误称同 revision 的 `readCommonAndRuntime()` aggregate read；调用方分别读取 common view 与 Linux state snapshot，不再为 common-only 查询 clone Linux state 或占用 `writeMu`。
+- [x] 删除 `DaemonStateStore.Meta()` 及其中不可靠的 `Dirty` 副本；verified revision 直接读取 common owner，在线 reconcile 状态由各层 Observation 展示。
 - [ ] Daemon 直接持有 StateStore、LinuxState、LinuxObservation、LinuxDriver 和 BoltStore 的引用/生命周期。
 - [ ] 把剩余 routing/IPsec/firewall typed candidate commit 移到 Daemon 的平台 state mutation 边界；保留真正的多字段原子替换，不保留 forwarding Store。
-- [ ] 将 common mutation、真实 platform state completion 和 security barrier 都串回 Daemon owner，删除 `DaemonStateStore.writeMu`、coherent aggregate read 和 commit callback 包装；不得把 wakeup/notification 泛化成 completion bus。
+- [ ] 将真实 platform state completion 和 security barrier 串回 Daemon owner，删除 `DaemonStateStore.writeMu` 和 commit callback 包装；不得把 wakeup/notification 泛化成 completion bus。
 - [ ] 删除 `daemon_state_store.go`、app 内 Linux state alias，以及仅测试迁移 coordinator 的 fixture。
 - [ ] 旧 `stateFile/stateMeta` 只留启动单向 migration decoder 和 legacy DB dump；停止支持该 schema 时整组删除，不形成在线兼容层。
 

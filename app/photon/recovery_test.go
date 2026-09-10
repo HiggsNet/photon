@@ -41,7 +41,7 @@ func TestRecoveryImportNoopDoesNotCommitOrNotify(t *testing.T) {
 	}
 	notifications := 0
 	service.Hooks.OnStateChanged = func() { notifications++ }
-	beforeRevision := service.StateStore.Meta().Revision
+	beforeRevision := uint64(service.StateStore.common.VerifiedRevision())
 	result, _, err := service.handleRecoveryImportZoneEvent(snapshot)
 	if err != nil {
 		t.Fatalf("handleRecoveryImportZoneEvent(no-op): %v", err)
@@ -49,7 +49,7 @@ func TestRecoveryImportNoopDoesNotCommitOrNotify(t *testing.T) {
 	if result.NetworkChanged {
 		t.Fatalf("identical recovery snapshot result = %+v, want no network change", result)
 	}
-	if revision := service.StateStore.Meta().Revision; revision != beforeRevision {
+	if revision := uint64(service.StateStore.common.VerifiedRevision()); revision != beforeRevision {
 		t.Fatalf("no-op recovery revision = %d, want unchanged %d", revision, beforeRevision)
 	}
 	if notifications != 0 {

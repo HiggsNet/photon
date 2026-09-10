@@ -140,15 +140,14 @@ daemonRun()
 3. **启动恢复**：
 
 ```
-// 1. transport 只用启动时的 committed snapshot 完成初始化
-initial, _ := d.StateStore.Snapshot()
-d.Sync.openTransport(initial)
+// 1. GossipDriver 直接持有 common StateStore owner
+d.gossipDriver = corehost.NewGossipDriver(..., d.StateStore.common, ...)
 
-// 2. 本机 endpoint/IPsec/routing 记录在一个 StateStore workspace 中发布
+// 2. 本机 endpoint/IPsec/routing 记录通过 typed common mutation 发布
 d.prepareStartupState()
 d.updateDiscoveredPeers()
 
-// 3. 数据面从 StateStore snapshot 恢复
+// 3. 数据面从 detached common view、LinuxState 和重新 observation 恢复
 d.recoverIPsecLinksOnStart(ctx)
 d.recoverRoutingOnStart(ctx)
 d.recoverFirewallOnStart(ctx)
@@ -523,15 +522,15 @@ Daemon 作为编排器，各子模块通过清晰的接口与 daemon 集成：
 
 ### 7.3 Routing
 
-- **输入**：`StateStore.Snapshot()` 中的 route announcement / authorization 记录
+- **输入**：common `StateStore.ReadView()` 中的 route announcement / authorization 记录
 - **输出**：BIRD 配置文件、Babel 邻居发现、路由导入/导出 filter；在线结果发布到 `LinuxObservation`
 - **集成点**：`reconcileRouting(ctx)` 在 routing_reconcile.go 中，构建 `AuthorizedRouteSet`，生成 BIRD 配置并 reconfigure
 - **状态范围**：BIRD instance、status、exit 和 backoff 只存在于 daemon 内存 `LinuxObservation`，重启后重新推导/观察
 
 ### 7.4 Firewall
 
-- **输入**：`StateStore.Snapshot()` 中的授权路由，本地 firewall 配置
-- **输出**：nftables/iptables 规则（netns ingress、host ingress、redirect grace）；结果通过 `StateStore.CommitIfRevision()` 写回
+- **输入**：common `StateStore.ReadView()` 中的授权路由、本地 firewall 配置
+- **输出**：nftables/iptables 规则（netns ingress、host ingress、redirect grace）；在线结果写入 `LinuxObservation`
 - **集成点**：`reconcileFirewall(ctx)` 通过 `firewall.BuildDesiredState()` → driver.Apply()
 - **状态范围**：Firewall reconcile 结果只存在于 daemon 内存 `LinuxObservation`；`EndpointACLs` 作为用户配置持久化
 
@@ -544,7 +543,7 @@ Daemon 作为编排器，各子模块通过清晰的接口与 daemon 集成：
 
 ### 7.6 Observer
 
-- **输入**：`StateStore.Snapshot()` / `StateStore.Meta()` 提供的 committed snapshot
+- **输入**：common `StateStore.ReadView()` 与 daemon 内存中的 `LinuxObservation`
 - **输出**：HTTP API（/api/v1/...）、SSE 事件推送
-- **集成点**：`newObserverServer()` 在启动时创建，`observerProvider` 从 `StateStore` 读取数据。状态变化时 daemon 通过 `d.observerHub` 广播 SSE 事件
+- **集成点**：`newObserverServer()` 在启动时创建，`observerProvider` 从各自 owner 读取 common state 与在线 observation。状态变化时 daemon 通过 `d.observerHub` 广播 SSE 事件
 - **状态范围**：observer 是纯只读的，不修改任何状态

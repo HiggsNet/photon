@@ -426,7 +426,7 @@ func TestDaemonControlReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T)
 		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
 	setTestIPsecObservation(service, observationLinks, observationReconcile)
-	committedRev := service.StateStore.Meta().Revision
+	committedRev := uint64(service.StateStore.common.VerifiedRevision())
 
 	observationLinks["link-uncommitted"] = linkInstanceState{ID: "link-uncommitted"}
 	observationReconcile.DesiredLinks = 99

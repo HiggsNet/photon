@@ -58,17 +58,14 @@ func statusViewFromOwners(rt *AppContext, common corestate.View, links map[strin
 }
 
 // daemonStatusView is the single operational-status projection shared by the
-// local control transport and Observer HTTP. It reads the two state owners
-// once and returns a detached canonical inspect DTO.
+// local control transport and Observer HTTP. It combines a common view with
+// current Linux observations and returns a detached canonical inspect DTO.
 func daemonStatusView(d *Daemon) inspect.DaemonStatusView {
 	if d == nil || d.StateStore == nil || d.StateStore.common == nil {
 		return inspect.DaemonStatusView{DaemonOnline: false}
 	}
 	store := d.StateStore
-	store.writeMu.Lock()
 	view := store.common.ReadView()
-	store.mu.RLock()
-	meta := store.metaLocked()
 	linkInstances, ipsecReconcile := d.linuxObservation.ipsecSnapshot()
 	routingReconcile := d.linuxObservation.routingSnapshot()
 	desiredLinks := 0
@@ -85,8 +82,6 @@ func daemonStatusView(d *Daemon) inspect.DaemonStatusView {
 		lastLinkError = ipsecReconcile.LastError
 		ipsecLastRunUnix = ipsecReconcile.LastRunUnix
 	}
-	store.mu.RUnlock()
-	store.writeMu.Unlock()
 	if view.State == nil {
 		return inspect.DaemonStatusView{DaemonOnline: false}
 	}
@@ -116,8 +111,6 @@ func daemonStatusView(d *Daemon) inspect.DaemonStatusView {
 		ListenAddr:         listenAddr,
 		DaemonOnline:       true,
 		StateRevision:      uint64(view.Revision),
-		Dirty:              meta.Dirty,
-		ReconcileProgress:  meta.ReconcileProgress,
 		KnownZones:         knownZones,
 		KnownPeers:         knownPeers,
 		LinkInstances:      len(linkInstances),

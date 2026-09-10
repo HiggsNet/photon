@@ -134,7 +134,8 @@ func rotateIPsecPortDirect(rt *AppContext) (*manualPortRotateResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	common, runtime := store.readCommonAndRuntime()
+	common := store.common.ReadView()
+	runtime := store.readLinuxState()
 	if common.State == nil || runtime == nil {
 		return nil, fmt.Errorf("state owners are not initialized")
 	}

@@ -155,7 +155,7 @@ func TestEmptyFirewallAndRoutingFlushDoNotRepublishLegacyState(t *testing.T) {
 	service := newTestDaemonFromOwners(
 		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
-	beforeRevision := service.StateStore.Meta().Revision
+	beforeRevision := uint64(service.StateStore.common.VerifiedRevision())
 
 	service.firewallDirty = true
 	flushed, err := service.flushFirewallReconcileResult(context.Background())
@@ -175,7 +175,7 @@ func TestEmptyFirewallAndRoutingFlushDoNotRepublishLegacyState(t *testing.T) {
 		t.Fatal("routing reconcile was not flushed")
 	}
 
-	if revision := service.StateStore.Meta().Revision; revision != beforeRevision {
+	if revision := uint64(service.StateStore.common.VerifiedRevision()); revision != beforeRevision {
 		t.Fatalf("empty reconciles changed revision from %d to %d", beforeRevision, revision)
 	}
 }

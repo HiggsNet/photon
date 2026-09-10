@@ -10,37 +10,16 @@ import (
 	"github.com/HiggsNet/photon/internal/photonlinux"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
-	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 var errDaemonStateRevisionStale = corestate.ErrVerifiedRevisionStale
 
-type daemonDirtyFlags struct {
-	IPsec    bool `json:"ipsec,omitempty"`
-	Routing  bool `json:"routing,omitempty"`
-	Firewall bool `json:"firewall,omitempty"`
-}
-
-type daemonReconcileStatus struct {
-	IPsec    bool `json:"ipsec,omitempty"`
-	Routing  bool `json:"routing,omitempty"`
-	Firewall bool `json:"firewall,omitempty"`
-}
-
-type daemonStateStoreMeta struct {
-	Revision          uint64
-	Dirty             daemonDirtyFlags
-	ReconcileProgress daemonReconcileStatus
-}
-
 type DaemonStateStore struct {
-	writeMu           sync.Mutex
-	mu                sync.RWMutex
-	common            *corestate.Store
-	runtime           *linuxRuntimeState
-	commitRuntime     func(corestate.VerifiedRevision, *linuxRuntimeState) error
-	dirty             daemonDirtyFlags
-	reconcileProgress daemonReconcileStatus
+	writeMu       sync.Mutex
+	mu            sync.RWMutex
+	common        *corestate.Store
+	runtime       *linuxRuntimeState
+	commitRuntime func(corestate.VerifiedRevision, *linuxRuntimeState) error
 }
 
 type protocolPublishResult struct {
@@ -67,72 +46,6 @@ func newDaemonStateStore(common *corestate.Store, runtime *linuxRuntimeState, co
 		commitRuntime: commitRuntime,
 	}
 	return store, nil
-}
-
-// ApplyCommonLocalIntent validates, signs and persists through the common
-// owner while sharing the ordering lock used by Linux runtime completions.
-func (s *DaemonStateStore) ApplyCommonLocalIntent(ctx context.Context, intent corestate.LocalIntent, dryRun bool, now time.Time) (corestate.LocalIntentResult, error) {
-	if s == nil || s.common == nil {
-		return corestate.LocalIntentResult{}, errors.New("daemon common state store is not initialized")
-	}
-	if dryRun {
-		return s.common.PreviewLocalIntent(intent, now)
-	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	return s.common.ApplyLocalIntent(ctx, intent, now)
-}
-
-func (s *DaemonStateStore) ApplyCommonLocalIntents(ctx context.Context, intents []corestate.LocalIntent, now time.Time) (corestate.LocalIntentBatchResult, error) {
-	if s == nil || s.common == nil {
-		return corestate.LocalIntentBatchResult{}, errors.New("daemon common state store is not initialized")
-	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	return s.common.ApplyLocalIntents(ctx, intents, now)
-}
-
-func (s *DaemonStateStore) InstallCommonIdentity(ctx context.Context, install corestate.IdentityInstall, now time.Time) (corestate.CommitResult, error) {
-	if s == nil || s.common == nil {
-		return corestate.CommitResult{}, errors.New("daemon common state store is not initialized")
-	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	return s.common.InstallIdentity(ctx, install, now)
-}
-
-func (s *DaemonStateStore) RefreshCommonManagedAuthority(ctx context.Context, now time.Time) (corestate.CommitResult, corestate.ManagedAuthorityResult, error) {
-	if s == nil || s.common == nil {
-		return corestate.CommitResult{}, corestate.ManagedAuthorityResult{}, errors.New("daemon common state store is not initialized")
-	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	return s.common.RefreshManagedAuthority(ctx, now)
-}
-
-func (s *DaemonStateStore) ImportCommonRecovery(ctx context.Context, input corestate.RecoveryImport, now time.Time) (corestate.RecoveryImportResult, error) {
-	if s == nil || s.common == nil {
-		return corestate.RecoveryImportResult{}, errors.New("daemon common state store is not initialized")
-	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	return s.common.ImportRecoverySnapshot(ctx, input, now)
-}
-
-func (s *DaemonStateStore) PlanCommonPurge(now time.Time, target zone.ZonePath) (corestate.PurgeRevokedPlan, error) {
-	if s == nil || s.common == nil {
-		return corestate.PurgeRevokedPlan{}, errors.New("daemon common state store is not initialized")
-	}
-	return s.common.PlanPurgeRevoked(now, target)
-}
-
-func (s *DaemonStateStore) PurgeCommon(ctx context.Context, now time.Time, target zone.ZonePath) (corestate.PurgeRevokedResult, error) {
-	if s == nil || s.common == nil {
-		return corestate.PurgeRevokedResult{}, errors.New("daemon common state store is not initialized")
-	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	return s.common.PurgeRevoked(ctx, now, target)
 }
 
 // publishLocalProtocols commits private/platform runtime before publishing
@@ -212,55 +125,12 @@ func (s *DaemonStateStore) commitEndpointACLsIfRevision(revision uint64, endpoin
 	})
 }
 
-// readCommonAndRuntime returns detached snapshots of the two actual state
-// owners at one serialized revision.
-func (s *DaemonStateStore) readCommonAndRuntime() (corestate.View, *linuxRuntimeState) {
-	if s == nil || s.common == nil {
-		return corestate.View{}, nil
+func (s *DaemonStateStore) readLinuxState() *linuxRuntimeState {
+	if s == nil {
+		return nil
 	}
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	common := s.common.ReadView()
 	s.mu.RLock()
 	runtime := photonlinux.CloneRuntimeState(s.runtime)
 	s.mu.RUnlock()
-	return common, runtime
-}
-
-func (s *DaemonStateStore) metaLocked() daemonStateStoreMeta {
-	return daemonStateStoreMeta{
-		Dirty:             s.dirty,
-		ReconcileProgress: s.reconcileProgress,
-	}
-}
-
-func (s *DaemonStateStore) Meta() daemonStateStoreMeta {
-	if s == nil {
-		return daemonStateStoreMeta{}
-	}
-	s.mu.RLock()
-	meta := s.metaLocked()
-	s.mu.RUnlock()
-	if s.common != nil {
-		meta.Revision = uint64(s.common.VerifiedRevision())
-	}
-	return meta
-}
-
-func (s *DaemonStateStore) SetDirty(flags daemonDirtyFlags) {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.dirty = flags
-}
-
-func (s *DaemonStateStore) SetReconcileProgress(status daemonReconcileStatus) {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.reconcileProgress = status
+	return runtime
 }

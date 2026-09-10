@@ -90,11 +90,11 @@ func TestAutoAnnounceAssignedIPsSkipsExisting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
 	}
-	beforeRev := service.StateStore.Meta().Revision
+	beforeRev := uint64(service.StateStore.common.VerifiedRevision())
 	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
 	}
-	if afterRev := service.StateStore.Meta().Revision; afterRev != beforeRev {
+	if afterRev := uint64(service.StateStore.common.VerifiedRevision()); afterRev != beforeRev {
 		t.Fatalf("no-op auto announce advanced revision: before=%d after=%d", beforeRev, afterRev)
 	}
 

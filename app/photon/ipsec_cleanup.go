@@ -62,7 +62,8 @@ func (d *Daemon) handleIPsecCleanupEvent(ctx context.Context, includeOrphans boo
 	if d == nil || d.StateStore == nil || d.App == nil {
 		return 0, 0, errors.New("daemon service is not initialized")
 	}
-	common, runtime := d.StateStore.readCommonAndRuntime()
+	common := d.StateStore.common.ReadView()
+	runtime := d.StateStore.readLinuxState()
 	if common.State == nil || runtime == nil {
 		return 0, 0, errors.New("daemon state is not loaded")
 	}
@@ -95,7 +96,7 @@ func (d *Daemon) handleIPsecCleanupEvent(ctx context.Context, includeOrphans boo
 			return cleaned, orphans, err
 		}
 	}
-	if d.StateStore.Meta().Revision != uint64(common.Revision) {
+	if uint64(d.StateStore.common.VerifiedRevision()) != uint64(common.Revision) {
 		return cleaned, orphans, errDaemonStateRevisionStale
 	}
 	d.linuxObservation.replaceIPsec(links, reconcile)

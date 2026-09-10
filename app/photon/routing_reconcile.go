@@ -38,7 +38,7 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 	if d == nil || d.App == nil || d.App.Config == nil {
 		return nil
 	}
-	common, _ := d.StateStore.readCommonAndRuntime()
+	common := d.StateStore.common.ReadView()
 	if common.State == nil {
 		return nil
 	}
@@ -92,9 +92,9 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 	}
 
 	// Auto-announce changes verified Network through its own common-state
-	// transaction. Refresh both detached owners only in that uncommon case.
+	// transaction. Refresh the common view only in that uncommon case.
 	if autoAnnounceChanged {
-		common, _ = d.StateStore.readCommonAndRuntime()
+		common = d.StateStore.common.ReadView()
 		if common.State == nil {
 			return firstErr
 		}
@@ -153,10 +153,9 @@ func (d *Daemon) publishRoutingObservation(rev uint64, summary *routingObservati
 	if d == nil || d.StateStore == nil || summary == nil {
 		return
 	}
-	currentRev := d.StateStore.Meta().Revision
+	currentRev := uint64(d.StateStore.common.VerifiedRevision())
 	if currentRev != rev {
 		d.routingDirty = true
-		d.publishStateStoreRuntimeFlags()
 		d.logWarn("routing", "stale_reconcile_result", map[string]any{
 			"source_revision":  rev,
 			"current_revision": currentRev,
@@ -986,7 +985,7 @@ func (d *Daemon) autoAnnounceAssignedIPsResult(ars *routing.AuthorizedRouteSet) 
 	for _, prefix := range plan.withdraw {
 		intents = append(intents, corestate.WithdrawRouteIntent{Zone: managedZone, Prefix: prefix.Masked().String(), Controller: routing.RouteControllerAuto})
 	}
-	result, err := d.StateStore.ApplyCommonLocalIntents(context.Background(), intents, d.now())
+	result, err := d.StateStore.common.ApplyLocalIntents(context.Background(), intents, d.now())
 	if err != nil {
 		return false, err
 	}

@@ -58,7 +58,7 @@ func TestObserverReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T) {
 	if srv == nil {
 		t.Fatal("observer server is nil")
 	}
-	committedRev := service.StateStore.Meta().Revision
+	committedRev := uint64(service.StateStore.common.VerifiedRevision())
 
 	observationLinks["link-uncommitted"] = linkInstanceState{ID: "link-uncommitted"}
 	observationReconcile.DesiredLinks = 99

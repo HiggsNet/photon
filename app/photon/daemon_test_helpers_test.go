@@ -247,9 +247,9 @@ func advanceTestVerifiedRevision(store *DaemonStateStore, now time.Time) (uint64
 			break
 		}
 	}
-	result, err := store.ApplyCommonLocalIntent(context.Background(), corestate.PutRecordIntent{
+	result, err := store.common.ApplyLocalIntent(context.Background(), corestate.PutRecordIntent{
 		Zone: path, Key: fmt.Sprintf("tests/revision/%d", now.UnixNano()), Type: "application/vnd.photon.test-revision.v1", Value: []byte("1"),
-	}, false, now)
+	}, now)
 	return uint64(result.Changes.VerifiedRevision), err
 }
 
@@ -1017,8 +1017,10 @@ func waitDaemonRunGossipStrongSwanUp(ctx context.Context, t *testing.T, serviceA
 	var observationALinks, observationBLinks map[string]linkInstanceState
 	var observationAReconcile, observationBReconcile *ipsecObservationSummary
 	for {
-		commonA, runtimeA = serviceA.StateStore.readCommonAndRuntime()
-		commonB, runtimeB = serviceB.StateStore.readCommonAndRuntime()
+		commonA = serviceA.StateStore.common.ReadView()
+		runtimeA = serviceA.StateStore.readLinuxState()
+		commonB = serviceB.StateStore.common.ReadView()
+		runtimeB = serviceB.StateStore.readLinuxState()
 		observationALinks, observationAReconcile = readTestIPsecObservation(serviceA)
 		observationBLinks, observationBReconcile = readTestIPsecObservation(serviceB)
 		if daemonRunGossipStrongSwanReady(commonA.State, runtimeA.IPsecTransportKey, observationALinks, observationAReconcile, groupA) && daemonRunGossipStrongSwanReady(commonB.State, runtimeB.IPsecTransportKey, observationBLinks, observationBReconcile, groupB) {

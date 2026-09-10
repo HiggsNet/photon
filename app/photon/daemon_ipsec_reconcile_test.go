@@ -189,21 +189,21 @@ func TestRecordIPsecReconcileErrorDeduplicatesRepeatedError(t *testing.T) {
 		Clock:     func() time.Time { return now },
 	}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-	firstRev := service.StateStore.Meta().Revision
+	firstRev := uint64(service.StateStore.common.VerifiedRevision())
 	service.recordIPsecReconcileError(firstRev, now.Unix(), errors.New("vici unavailable"))
-	committedRev := service.StateStore.Meta().Revision
+	committedRev := uint64(service.StateStore.common.VerifiedRevision())
 	if committedRev != firstRev {
 		t.Fatalf("first error verified revision = %d, want %d", committedRev, firstRev)
 	}
 
 	now = now.Add(time.Minute)
 	service.recordIPsecReconcileError(committedRev, now.Unix(), errors.New("vici unavailable"))
-	if got := service.StateStore.Meta().Revision; got != committedRev {
+	if got := uint64(service.StateStore.common.VerifiedRevision()); got != committedRev {
 		t.Fatalf("repeated identical error revision = %d, want unchanged %d", got, committedRev)
 	}
 
 	service.recordIPsecReconcileError(committedRev, now.Unix(), errors.New("vici timeout"))
-	if got := service.StateStore.Meta().Revision; got != committedRev {
+	if got := uint64(service.StateStore.common.VerifiedRevision()); got != committedRev {
 		t.Fatalf("changed runtime error verified revision = %d, want %d", got, committedRev)
 	}
 }
@@ -388,7 +388,7 @@ func TestDaemonIPsecReconcileDiscardsResultWhenRevisionChanged(t *testing.T) {
 		Clock:     func() time.Time { return now },
 	}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-	baseRev := service.StateStore.Meta().Revision
+	baseRev := uint64(service.StateStore.common.VerifiedRevision())
 	driver := &staleCommitIPsecDriver{}
 	driver.onLoadConnection = func(ipsec.TransportLinkSpec) {
 		if _, err := advanceTestVerifiedRevision(service.StateStore, now.Add(time.Nanosecond)); err != nil {
@@ -403,7 +403,7 @@ func TestDaemonIPsecReconcileDiscardsResultWhenRevisionChanged(t *testing.T) {
 	if !service.ipsecDirty {
 		t.Fatal("ipsecDirty = false, want stale reconcile to be retried")
 	}
-	common, runtime := service.StateStore.readCommonAndRuntime()
+	common := service.StateStore.common.ReadView()
 	observationLinks, observationReconcile := readTestIPsecObservation(service)
 	rev := uint64(common.Revision)
 	if rev != baseRev+1 {
@@ -451,7 +451,7 @@ func TestLongIPsecReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 		t.Fatal("ipsec reconcile did not enter blocking LoadConnection")
 	}
 
-	committedRev := service.StateStore.Meta().Revision
+	committedRev := uint64(service.StateStore.common.VerifiedRevision())
 	statusDone := make(chan controlViewResponse[inspect.DaemonStatusView], 1)
 	go func() {
 		statusDone <- controlViewRequestViaPipe[inspect.DaemonStatusView](t, service, controlRequest{Method: "daemon_status_view"})
@@ -511,7 +511,8 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	service.notifyStateChanged()
 
-	common, persistedRuntime := service.StateStore.readCommonAndRuntime()
+	common := service.StateStore.common.ReadView()
+	persistedRuntime := service.StateStore.readLinuxState()
 	latestLinks, latestReconcile := readTestIPsecObservation(service)
 	var inst linkInstanceState
 	for _, v := range latestLinks {
@@ -615,7 +616,7 @@ func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 	if len(driver.Connections) != 1 {
 		t.Fatalf("connections = %d, want one coalesced apply", len(driver.Connections))
 	}
-	common, _ := service.StateStore.readCommonAndRuntime()
+	common := service.StateStore.common.ReadView()
 	_, latestReconcile := readTestIPsecObservation(service)
 	if common.State.Network.Zones["node-b.catofes."].Records["coalesce-a"] == nil || common.State.Network.Zones["node-b.catofes."].Records["coalesce-b"] == nil {
 		t.Fatalf("queued record puts were not both persisted")

@@ -21,7 +21,8 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 	if d == nil || d.App == nil || d.App.Config == nil {
 		return nil
 	}
-	common, runtime := d.StateStore.readCommonAndRuntime()
+	common := d.StateStore.common.ReadView()
+	runtime := d.StateStore.readLinuxState()
 	if common.State == nil || runtime == nil {
 		return nil
 	}
@@ -423,10 +424,9 @@ func (d *Daemon) publishIPsecObservation(rev uint64, unix int64, instances map[s
 	if reflect.DeepEqual(observedLinks, instances) && ipsecReconcileSummaryEqual(observedReconcile, summary) {
 		return nil
 	}
-	currentRev := d.StateStore.Meta().Revision
+	currentRev := uint64(d.StateStore.common.VerifiedRevision())
 	if currentRev != rev {
 		d.ipsecDirty = true
-		d.publishStateStoreRuntimeFlags()
 		d.logWarn("ipsec", "stale_reconcile_result", map[string]any{
 			"source_revision":  rev,
 			"current_revision": currentRev,
@@ -484,10 +484,9 @@ func (d *Daemon) recordIPsecReconcileError(rev uint64, unix int64, err error) {
 	if d == nil || d.StateStore == nil || err == nil {
 		return
 	}
-	currentRev := d.StateStore.Meta().Revision
+	currentRev := uint64(d.StateStore.common.VerifiedRevision())
 	if currentRev != rev {
 		d.ipsecDirty = true
-		d.publishStateStoreRuntimeFlags()
 		d.logWarn("ipsec", "stale_reconcile_error", map[string]any{
 			"source_revision":  rev,
 			"current_revision": currentRev,

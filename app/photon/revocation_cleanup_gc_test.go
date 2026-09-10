@@ -52,7 +52,7 @@ func TestDaemonPurgeDryRunMergesCommonAndLinuxRuntimePlan(t *testing.T) {
 		!slices.Equal(plan.SyncPeers, []string{"leaf.node-b.catofes.", "node-b.catofes."}) {
 		t.Fatalf("merged purge plan = %+v", plan)
 	}
-	common, _ := service.StateStore.readCommonAndRuntime()
+	common := service.StateStore.common.ReadView()
 	currentLinks, _ := readTestIPsecObservation(service)
 	if common.State.Network.Zones["node-b.catofes."] == nil || currentLinks["link-b"].ID == "" {
 		t.Fatal("dry-run mutated common or Linux runtime state")

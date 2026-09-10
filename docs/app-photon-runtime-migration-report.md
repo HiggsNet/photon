@@ -266,7 +266,7 @@ GossipDriver 公共 gossip 闭环、aggregate 清理和 current Linux codec 迁�
 
 目标所有权与命名统一见 [`runtime-state-ownership.md`](runtime-state-ownership.md)：当前 `Daemon` 是唯一顶层
 `Daemon`，`host.GossipDriver` 是公共 `GossipDriver`，`photonlinux.LinuxDriver` 是具体 Linux 平台实现，`state.Store` 是公共
-`StateStore`。`DaemonStateStore` 仍是迁移期 common/Linux 顺序协调器，最终必须删除；不能把它描述为长期 Repository，
+`StateStore`。Daemon 的普通 common mutation 已直接调用该 owner，`DaemonStateStore` 不再包装这些写入；误称同 revision 的 common/Linux aggregate read 也已拆成各 owner 的独立 snapshot。它目前只剩 Linux state snapshot、revision guard 与发布顺序的迁移期协调，最终必须删除，不能把它描述为长期 Repository，
 也不能通过把同一把 mutex/commit callback 整体搬进 LinuxDriver 来假装完成。单调用方的 Bird GC、revoked purge 和
 peer cleanup commit 壳已删除，剩余 typed commit 要在 LinuxState 字段收缩和 Daemon owner 切换时一起消除。
 

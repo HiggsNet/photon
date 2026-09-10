@@ -192,7 +192,8 @@ func (d *Daemon) handleEndpointACLApplyEvent(acl endpointACL) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	common, runtime := d.StateStore.readCommonAndRuntime()
+	common := d.StateStore.common.ReadView()
+	runtime := d.StateStore.readLinuxState()
 	if common.State == nil || common.State.Network == nil || runtime == nil {
 		return false, errors.New("daemon state is not loaded")
 	}
@@ -232,7 +233,8 @@ func (d *Daemon) handleEndpointACLRemoveEvent(name string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	common, runtime := d.StateStore.readCommonAndRuntime()
+	common := d.StateStore.common.ReadView()
+	runtime := d.StateStore.readLinuxState()
 	if common.State == nil || runtime == nil {
 		return false, errors.New("daemon state is not loaded")
 	}

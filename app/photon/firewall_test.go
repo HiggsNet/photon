@@ -29,9 +29,9 @@ func TestFirewallObservationDoesNotAdvancePersistentRevision(t *testing.T) {
 	}
 	rt := &AppContext{Config: defaultAppConfig()}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-	rev := service.StateStore.Meta().Revision
+	rev := uint64(service.StateStore.common.VerifiedRevision())
 	service.publishFirewallObservation(rev, summary)
-	if got := service.StateStore.Meta().Revision; got != rev {
+	if got := uint64(service.StateStore.common.VerifiedRevision()); got != rev {
 		t.Fatalf("firewall observation revision = %d, want unchanged %d", got, rev)
 	}
 	got := service.linuxObservation.firewallSnapshot()
@@ -808,7 +808,7 @@ func TestLongFirewallReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 		t.Fatal("firewall reconcile did not enter blocking apply")
 	}
 
-	committedRev := service.StateStore.Meta().Revision
+	committedRev := uint64(service.StateStore.common.VerifiedRevision())
 	statusDone := make(chan controlViewResponse[inspect.DaemonStatusView], 1)
 	go func() {
 		statusDone <- controlViewRequestViaPipe[inspect.DaemonStatusView](t, service, controlRequest{Method: "daemon_status_view"})
@@ -875,7 +875,7 @@ func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
 		Clock:  func() time.Time { return time.Unix(7010, 0) },
 	}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-	baseRev := service.StateStore.Meta().Revision
+	baseRev := uint64(service.StateStore.common.VerifiedRevision())
 	driver := &captureFirewallOwnerDriver{}
 	driver.onApply = func() {
 		if _, err := advanceTestVerifiedRevision(service.StateStore, time.Unix(7010, 1)); err != nil {
@@ -891,7 +891,7 @@ func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
 	if !service.firewallDirty {
 		t.Fatal("firewallDirty = false, want stale firewall summary commit to schedule another reconcile")
 	}
-	common, _ := service.StateStore.readCommonAndRuntime()
+	common := service.StateStore.common.ReadView()
 	rev := uint64(common.Revision)
 	if rev != baseRev+1 {
 		t.Fatalf("state revision = %d, want only external update at %d", rev, baseRev+1)

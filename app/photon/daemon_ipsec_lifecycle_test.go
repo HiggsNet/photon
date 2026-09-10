@@ -385,7 +385,8 @@ func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
 	installTestIPsecDrivers(service, driver, driver)
 
 	service.notifyStateChanged()
-	common, persistedRuntime := service.StateStore.readCommonAndRuntime()
+	common := service.StateStore.common.ReadView()
+	persistedRuntime := service.StateStore.readLinuxState()
 	latestLinks, latestReconcile := readTestIPsecObservation(service)
 	spec := singleDesiredSpec(t, common.State.ManagedZone, latestReconcile)
 	if len(latestLinks) != 1 {
@@ -505,7 +506,7 @@ func TestRecoveryPurgeRevokedApplyCleansIPsecLinksBeforeDeletingState(t *testing
 	if len(driver.DeletedIFs) != 1 || driver.DeletedIFs[0] != spec.InterfaceName {
 		t.Fatalf("deleted interfaces = %+v, want %s", driver.DeletedIFs, spec.InterfaceName)
 	}
-	common, _ := service.StateStore.readCommonAndRuntime()
+	common := service.StateStore.common.ReadView()
 	latestLinks, latestReconcile := readTestIPsecObservation(service)
 	if common.State.Network.Zones["node-b.catofes."] != nil {
 		t.Fatalf("revoked zone still present after purge")

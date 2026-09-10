@@ -97,7 +97,7 @@ func TestEndpointACLApplyNoopDoesNotCommitOrNotify(t *testing.T) {
 	driver := &captureFirewallOwnerDriver{}
 	driver.Backend = firewall.BackendNFT
 	installTestFirewallDriver(service, driver)
-	beforeRevision := service.StateStore.Meta().Revision
+	beforeRevision := uint64(service.StateStore.common.VerifiedRevision())
 	notifications := 0
 	service.Hooks.OnStateChanged = func() { notifications++ }
 
@@ -112,7 +112,7 @@ func TestEndpointACLApplyNoopDoesNotCommitOrNotify(t *testing.T) {
 	if result.StateCommitted {
 		t.Fatal("no-op apply reported a committed state change")
 	}
-	if got := service.StateStore.Meta().Revision; got != beforeRevision {
+	if got := uint64(service.StateStore.common.VerifiedRevision()); got != beforeRevision {
 		t.Fatalf("no-op apply revision = %d, want %d", got, beforeRevision)
 	}
 	if notifications != 0 || service.ipsecDirty || service.routingDirty || service.firewallDirty {
@@ -126,7 +126,7 @@ func TestEndpointACLRemoveMissingIsNoop(t *testing.T) {
 	service := newTestDaemonFromOwners(
 		&AppContext{Config: defaultAppConfig()}, verified, nil, runtime, &gossipStartupConfig{}, time.Second,
 	)
-	beforeRevision := service.StateStore.Meta().Revision
+	beforeRevision := uint64(service.StateStore.common.VerifiedRevision())
 	notifications := 0
 	service.Hooks.OnStateChanged = func() { notifications++ }
 
@@ -137,7 +137,7 @@ func TestEndpointACLRemoveMissingIsNoop(t *testing.T) {
 	if result.StateCommitted {
 		t.Fatal("no-op remove reported a committed state change")
 	}
-	if got := service.StateStore.Meta().Revision; got != beforeRevision {
+	if got := uint64(service.StateStore.common.VerifiedRevision()); got != beforeRevision {
 		t.Fatalf("no-op remove revision = %d, want %d", got, beforeRevision)
 	}
 	if notifications != 0 || service.ipsecDirty || service.routingDirty || service.firewallDirty {

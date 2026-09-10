@@ -87,7 +87,8 @@ func TestPublishIPsecRecordsSignsStableLocalCapability(t *testing.T) {
 	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols: %v", err)
 	}
-	common, runtime := service.StateStore.readCommonAndRuntime()
+	common := service.StateStore.common.ReadView()
+	persistedRuntime := service.StateStore.readLinuxState()
 	zs := common.State.Network.Zones[common.State.ManagedZone]
 	for _, key := range []string{ipsec.RecordKeyProfile, ipsec.RecordKeyAddresses, ipsec.RecordKeyPorts, ipsec.RecordKeyTransportKey, ipsec.OverlayIntentRecordKey("main")} {
 		if zs.Records[key] == nil {
@@ -97,8 +98,8 @@ func TestPublishIPsecRecordsSignsStableLocalCapability(t *testing.T) {
 			t.Fatalf("%s version = %d, want 1", key, zs.Records[key].Version)
 		}
 	}
-	if runtime.IPsecTransportKey == nil || len(runtime.IPsecTransportKey.PrivateKey) == 0 {
-		t.Fatalf("transport key state = %+v, want persisted private key", runtime.IPsecTransportKey)
+	if persistedRuntime.IPsecTransportKey == nil || len(persistedRuntime.IPsecTransportKey.PrivateKey) == 0 {
+		t.Fatalf("transport key state = %+v, want persisted private key", persistedRuntime.IPsecTransportKey)
 	}
 	profile, err := ipsec.ParseProfileRecord(zs.Records[ipsec.RecordKeyProfile])
 	if err != nil {
@@ -143,18 +144,18 @@ func TestPublishIPsecRecordsSignsStableLocalCapability(t *testing.T) {
 	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols(second): %v", err)
 	}
-	againView, _ := service.StateStore.readCommonAndRuntime()
+	againView := service.StateStore.common.ReadView()
 	again := againView.State.Network.Zones[againView.State.ManagedZone].Records[ipsec.RecordKeyProfile]
 	if again.Version != 1 {
 		t.Fatalf("second profile version = %d, want unchanged 1; first=%s second=%s", again.Version, zs.Records[ipsec.RecordKeyProfile].Value, again.Value)
 	}
 	closeStore()
-	_, persistedRuntime, err := loadOfflineOwnerViews(rt)
+	_, diskRuntime, err := loadOfflineOwnerViews(rt)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}
-	if persistedRuntime.IPsecTransportKey == nil || len(persistedRuntime.IPsecTransportKey.PrivateKey) == 0 {
-		t.Fatalf("persisted transport key state = %+v, want private key", persistedRuntime.IPsecTransportKey)
+	if diskRuntime.IPsecTransportKey == nil || len(diskRuntime.IPsecTransportKey.PrivateKey) == 0 {
+		t.Fatalf("persisted transport key state = %+v, want private key", diskRuntime.IPsecTransportKey)
 	}
 }
 
@@ -303,7 +304,7 @@ func TestPublishIPsecRecordsRotatesPortGenerationByInterval(t *testing.T) {
 	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols: %v", err)
 	}
-	common, runtime := service.StateStore.readCommonAndRuntime()
+	common := service.StateStore.common.ReadView()
 	first, err := ipsec.ParsePortRecord(common.State.Network.Zones[common.State.ManagedZone].Records[ipsec.RecordKeyPorts])
 	if err != nil {
 		t.Fatalf("ParsePortRecord: %v", err)
@@ -367,7 +368,7 @@ func TestPublishIPsecRecordsRotatesFromVerifiedPortRecord(t *testing.T) {
 	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols(first): %v", err)
 	}
-	firstView, _ := service.StateStore.readCommonAndRuntime()
+	firstView := service.StateStore.common.ReadView()
 	first, err := ipsec.ParsePortRecord(firstView.State.Network.Zones[firstView.State.ManagedZone].Records[ipsec.RecordKeyPorts])
 	if err != nil {
 		t.Fatalf("ParsePortRecord(first): %v", err)
@@ -376,7 +377,7 @@ func TestPublishIPsecRecordsRotatesFromVerifiedPortRecord(t *testing.T) {
 	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols(second): %v", err)
 	}
-	rotatedView, _ := service.StateStore.readCommonAndRuntime()
+	rotatedView := service.StateStore.common.ReadView()
 	rotated, err := ipsec.ParsePortRecord(rotatedView.State.Network.Zones[rotatedView.State.ManagedZone].Records[ipsec.RecordKeyPorts])
 	if err != nil {
 		t.Fatalf("ParsePortRecord(rotated): %v", err)

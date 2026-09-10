@@ -231,7 +231,7 @@ func TestReconcileRoutingStaleRevisionDoesNotCommitBirdInstance(t *testing.T) {
 	var logs strings.Builder
 	service.Log = &appLogger{level: logLevelDebug, out: &logs, now: func() time.Time { return now }}
 
-	initialRev := service.StateStore.Meta().Revision
+	initialRev := uint64(service.StateStore.common.VerifiedRevision())
 	done := make(chan error, 1)
 	go func() {
 		done <- service.reconcileRouting(context.Background())
@@ -259,12 +259,8 @@ func TestReconcileRoutingStaleRevisionDoesNotCommitBirdInstance(t *testing.T) {
 	if !service.routingDirty {
 		t.Fatal("routingDirty = false, want stale reconcile to be retried")
 	}
-	meta := service.StateStore.Meta()
-	if meta.Revision != newerRev {
-		t.Fatalf("stale reconcile advanced revision: got %d want %d", meta.Revision, newerRev)
-	}
-	if !meta.Dirty.Routing {
-		t.Fatal("state store routing dirty flag = false, want retry visible to readers")
+	if revision := uint64(service.StateStore.common.VerifiedRevision()); revision != newerRev {
+		t.Fatalf("stale reconcile advanced revision: got %d want %d", revision, newerRev)
 	}
 	if observation := service.linuxObservation.routingSnapshot(); observation != nil {
 		t.Fatalf("routing observation = %+v, want stale summary discarded", observation)

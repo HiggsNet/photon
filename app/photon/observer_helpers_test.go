@@ -31,13 +31,12 @@ func updateTestObserverOwners(srv *observerServer, fn func(*corestate.VerifiedSt
 	if srv == nil || srv.daemon == nil || srv.daemon.StateStore == nil || fn == nil {
 		return
 	}
-	common, runtime := srv.daemon.StateStore.readCommonAndRuntime()
+	common := srv.daemon.StateStore.common.ReadView()
+	runtime := srv.daemon.StateStore.readLinuxState()
 	fn(common.State, common.Gossip, runtime)
 	store := corestate.NewStoreWithCheckpoint(common.State, common.Gossip, nil)
-	srv.daemon.StateStore.writeMu.Lock()
 	srv.daemon.StateStore.common = store
 	srv.daemon.StateStore.runtime = runtime
-	srv.daemon.StateStore.writeMu.Unlock()
 	srv.daemon.gossipDriver = corehost.NewGossipDriver(corehost.NewClock(nil), corehost.DefaultEventBuffer, store, corehost.GossipDriverConfig{})
 }
 

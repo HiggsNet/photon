@@ -62,8 +62,6 @@ type DaemonStatusView struct {
 	ListenAddr        string `json:"listen_addr,omitempty"`
 	DaemonOnline      bool   `json:"daemon_online"`
 	StateRevision     uint64 `json:"state_revision"`
-	Dirty             any    `json:"dirty,omitempty"`
-	ReconcileProgress any    `json:"reconcile_progress,omitempty"`
 	KnownZones        int    `json:"known_zones,omitempty"`
 	KnownPeers        int    `json:"known_peers,omitempty"`
 	LinkInstances     int    `json:"link_instances,omitempty"`
@@ -80,8 +78,6 @@ type DaemonStatusInput struct {
 	ListenAddr         string
 	DaemonOnline       bool
 	StateRevision      uint64
-	Dirty              any
-	ReconcileProgress  any
 	KnownZones         int
 	KnownPeers         int
 	LinkInstances      int
@@ -100,8 +96,6 @@ func BuildDaemonStatus(input DaemonStatusInput) DaemonStatusView {
 		ListenAddr:        input.ListenAddr,
 		DaemonOnline:      input.DaemonOnline,
 		StateRevision:     input.StateRevision,
-		Dirty:             input.Dirty,
-		ReconcileProgress: input.ReconcileProgress,
 		KnownZones:        input.KnownZones,
 		KnownPeers:        input.KnownPeers,
 		LinkInstances:     input.LinkInstances,

@@ -543,7 +543,7 @@ func TestDaemonEndpointTimerNoChangeSkipsFlushAndSync(t *testing.T) {
 	service.Hooks.OnReconcileFlush = func(layer string) {
 		flushed = append(flushed, layer)
 	}
-	beforeRev := service.StateStore.Meta().Revision
+	beforeRev := uint64(service.StateStore.common.VerifiedRevision())
 
 	// Second publish at the same timestamp: nothing changed, so it should not
 	// trigger a sync, layer flush, or state-store revision bump.
@@ -560,7 +560,7 @@ func TestDaemonEndpointTimerNoChangeSkipsFlushAndSync(t *testing.T) {
 	if len(flushed) != 0 {
 		t.Fatalf("layer flushes on no-op endpoint timer: %v", flushed)
 	}
-	if afterRev := service.StateStore.Meta().Revision; afterRev != beforeRev {
+	if afterRev := uint64(service.StateStore.common.VerifiedRevision()); afterRev != beforeRev {
 		t.Fatalf("state store revision changed on no-op endpoint timer: before=%d after=%d", beforeRev, afterRev)
 	}
 }
@@ -579,7 +579,7 @@ func TestPrepareStartupStateDoesNotPersistDerivedAdmission(t *testing.T) {
 	service := newTestDaemonFromOwners(
 		rt, verified, &corestate.GossipCheckpoint{}, runtime, config, time.Second,
 	)
-	beforeRev := service.StateStore.Meta().Revision
+	beforeRev := uint64(service.StateStore.common.VerifiedRevision())
 
 	changed, err := service.prepareStartupState()
 	if err != nil {
@@ -588,7 +588,7 @@ func TestPrepareStartupStateDoesNotPersistDerivedAdmission(t *testing.T) {
 	if changed {
 		t.Fatal("prepareStartupState changed = true for derived admission-only state")
 	}
-	common, _ := service.StateStore.readCommonAndRuntime()
+	common := service.StateStore.common.ReadView()
 	rev := uint64(common.Revision)
 	if rev != beforeRev {
 		t.Fatalf("verified revision = %d, want runtime-only startup to keep %d", rev, beforeRev)
@@ -600,7 +600,7 @@ func TestPrepareStartupStateDoesNotPersistDerivedAdmission(t *testing.T) {
 	if changed {
 		t.Fatal("prepareStartupState(second) changed = true, want no-op")
 	}
-	if got := service.StateStore.Meta().Revision; got != rev {
+	if got := uint64(service.StateStore.common.VerifiedRevision()); got != rev {
 		t.Fatalf("state revision after no-op = %d, want %d", got, rev)
 	}
 }

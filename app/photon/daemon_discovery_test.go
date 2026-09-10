@@ -53,9 +53,9 @@ func TestDaemonUpdateDiscoveredPeersCommitsThenRepairsTransportWithoutNoopRevisi
 	transport := &gossip.Transport{}
 	setTestGossipTransport(t, service, transport)
 
-	before := service.StateStore.Meta().Revision
+	before := uint64(service.StateStore.common.VerifiedRevision())
 	service.updateDiscoveredPeers()
-	after := service.StateStore.Meta().Revision
+	after := uint64(service.StateStore.common.VerifiedRevision())
 	if after != before {
 		t.Fatalf("discovery changed verified revision: before=%d after=%d", before, after)
 	}
@@ -67,7 +67,7 @@ func TestDaemonUpdateDiscoveredPeersCommitsThenRepairsTransportWithoutNoopRevisi
 	}
 	transport.RemovePeerAddrs("node-b.catofes.")
 	service.updateDiscoveredPeers()
-	if got := service.StateStore.Meta().Revision; got != after {
+	if got := uint64(service.StateStore.common.VerifiedRevision()); got != after {
 		t.Fatalf("no-op discovery changed revision: before=%d after=%d", after, got)
 	}
 	if addr := transport.PeerAddr("node-b.catofes."); addr == nil || addr.String() != "203.0.113.10:33434" {

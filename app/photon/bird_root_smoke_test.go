@@ -210,7 +210,8 @@ func TestDaemonBIRDAdoptRestartRootSmoke(t *testing.T) {
 		t.Fatal("BIRD stopped on non-force daemon shutdown; default shutdown_policy should persist")
 	}
 
-	common, restartedRuntime := service1.StateStore.readCommonAndRuntime()
+	common := service1.StateStore.common.ReadView()
+	restartedRuntime := service1.StateStore.readLinuxState()
 	service2 := newTestDaemonFromOwners(rt, common.State, common.Gossip, restartedRuntime, syncConfig, time.Second)
 	processManager2 := bird.NewExecProcessManager("")
 	installTestBirdDrivers(service2, processManager2, func(socketPath string, timeout time.Duration) birdClient {

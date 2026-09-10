@@ -250,7 +250,7 @@ func TestLongBirdReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 		t.Fatal("routing reconcile did not enter blocking BIRD start")
 	}
 
-	committedRev := service.StateStore.Meta().Revision
+	committedRev := uint64(service.StateStore.common.VerifiedRevision())
 	statusDone := make(chan controlViewResponse[inspect.DaemonStatusView], 1)
 	go func() {
 		statusDone <- controlViewRequestViaPipe[inspect.DaemonStatusView](t, service, controlRequest{Method: "daemon_status_view"})
@@ -388,13 +388,13 @@ func TestFlushRoutingReconcileCoalesces(t *testing.T) {
 		t.Fatalf("BirdInstances len = %d, want 1", len(latest.Instances))
 	}
 
-	beforeNoopRev := service.StateStore.Meta().Revision
+	beforeNoopRev := uint64(service.StateStore.common.VerifiedRevision())
 	now = now.Add(defaultRoutingReconcileInterval)
 	service.routingDirty = true
 	if !service.flushRoutingReconcile(context.Background()) {
 		t.Fatal("second routing reconcile was not flushed")
 	}
-	if afterNoopRev := service.StateStore.Meta().Revision; afterNoopRev != beforeNoopRev {
+	if afterNoopRev := uint64(service.StateStore.common.VerifiedRevision()); afterNoopRev != beforeNoopRev {
 		t.Fatalf("no-op routing reconcile advanced revision: before=%d after=%d", beforeNoopRev, afterNoopRev)
 	}
 	if observation := service.linuxObservation.routingSnapshot(); observation == nil || observation.LastRunUnix != now.Unix() {
@@ -406,7 +406,7 @@ func TestRoutingObservationDoesNotAdvancePersistentRevision(t *testing.T) {
 	verified := &corestate.VerifiedState{}
 	runtime := &linuxRuntimeState{}
 	service := &Daemon{StateStore: newTestDaemonStateStore(verified, nil, runtime)}
-	common, _ := service.StateStore.readCommonAndRuntime()
+	common := service.StateStore.common.ReadView()
 	rev := uint64(common.Revision)
 	observation := &routingObservation{
 		Instances: map[string]*bird.InstanceObservation{
@@ -417,7 +417,7 @@ func TestRoutingObservationDoesNotAdvancePersistentRevision(t *testing.T) {
 	service.publishRoutingObservation(rev, observation)
 	observation.Instances["mesh"].State = birdInstanceStateError
 	observation.Instances["mesh"].Overlays[0] = "changed"
-	if got := service.StateStore.Meta().Revision; got != rev {
+	if got := uint64(service.StateStore.common.VerifiedRevision()); got != rev {
 		t.Fatalf("routing observation advanced revision: got %d want %d", got, rev)
 	}
 	got := service.linuxObservation.routingSnapshot()

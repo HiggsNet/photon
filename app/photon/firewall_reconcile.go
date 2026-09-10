@@ -41,7 +41,8 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 	if d == nil || d.App == nil || d.App.Config == nil {
 		return nil
 	}
-	common, runtime := d.StateStore.readCommonAndRuntime()
+	common := d.StateStore.common.ReadView()
+	runtime := d.StateStore.readLinuxState()
 	if common.State == nil || runtime == nil {
 		return nil
 	}
@@ -173,10 +174,9 @@ func (d *Daemon) publishFirewallObservation(rev uint64, summary *firewall.Firewa
 	if d == nil || d.StateStore == nil || summary == nil {
 		return
 	}
-	currentRev := d.StateStore.Meta().Revision
+	currentRev := uint64(d.StateStore.common.VerifiedRevision())
 	if currentRev != rev {
 		d.firewallDirty = true
-		d.publishStateStoreRuntimeFlags()
 		d.logWarn("firewall", "stale_reconcile_result", map[string]any{
 			"source_revision":  rev,
 			"current_revision": currentRev,
