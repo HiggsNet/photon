@@ -357,8 +357,11 @@ func recoveryPurgeRevoked(ctx context.Context, apply bool, target zone.ZonePath,
 	if err != nil {
 		return err
 	}
-	// Offline state has no IPsec observation. The next daemon reconcile cleans
-	// resources that no longer belong to the verified keep set.
+	// Offline state has no IPsec observation, so neither this command nor the
+	// next daemon reconcile guesses platform ownership for removed desired
+	// links. Operators can use cleanup-ipsec --orphans to remove unreferenced
+	// Photon-named StrongSwan connections; XFRM deletion still requires a
+	// complete observed LinkInstance owner.
 	plan := mergePurgePlan(commonPlan, nil)
 	if apply {
 		if _, err := state.Common.PurgeRevoked(ctx, now, target); err != nil {

@@ -163,6 +163,112 @@ func TestReconcileRecoversPreviousGenerationBeforeRotating(t *testing.T) {
 	}
 }
 
+func TestReconcileRestartRecoversDualGenerationFromObservation(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	group := LinkGroupSpec{ID: "main", Reconcile: ReconcilePolicy{RotateRetentionSeconds: 30}}
+	linkID := StableLinkID("node-a.catofes.", "node-b.catofes.", group.ID, DefaultPathKey)
+	desired := TransportLinkSpec{
+		LocalZone: "node-a.catofes.", PeerZone: "node-b.catofes.", OverlayID: group.ID,
+		Provider: ProviderStrongSwan, LinkID: linkID, PathKey: DefaultPathKey,
+		Generation: 2, InitiatorRole: InitiatorRolePrimary,
+		ContactPoints: []ContactPoint{
+			{Address: "198.51.100.20", Generation: 2, Current: true, IKEPort: 500, NATTPort: 4500},
+			{Address: "198.51.100.20", Generation: 1, IKEPort: 500, NATTPort: 4501},
+		},
+	}
+	current, err := RuntimeSpecForPortGeneration(desired, group, 2)
+	if err != nil {
+		t.Fatalf("RuntimeSpecForPortGeneration(current): %v", err)
+	}
+	previous, err := RuntimeSpecForPortGeneration(desired, group, 1)
+	if err != nil {
+		t.Fatalf("RuntimeSpecForPortGeneration(previous): %v", err)
+	}
+	currentSA := SAState{Name: current.TransportID, ChildSA: ChildSAName(current), XFRMIfID: current.XFRMIfID, Established: true}
+	previousSA := SAState{Name: previous.TransportID, ChildSA: ChildSAName(previous), XFRMIfID: previous.XFRMIfID, Established: true}
+	currentLink := XFRMLinkState{
+		NetNS: group.Normalized().NetNS, NamespaceExists: true, InterfaceExists: true,
+		InterfaceName: current.InterfaceName, XFRMIfID: current.XFRMIfID,
+		Addresses: []netip.Prefix{netip.PrefixFrom(current.LocalTunnelAddr, current.LocalTunnelAddr.BitLen())},
+	}
+	previousLink := XFRMLinkState{
+		NetNS: group.Normalized().NetNS, NamespaceExists: true, InterfaceExists: true,
+		InterfaceName: previous.InterfaceName, XFRMIfID: previous.XFRMIfID,
+		Addresses: []netip.Prefix{netip.PrefixFrom(previous.LocalTunnelAddr, previous.LocalTunnelAddr.BitLen())},
+	}
+
+	recovered, ok, err := RecoverObservedLinkInstance(
+		desired, group, []uint64{2, 1}, nil,
+		[]SAState{currentSA, previousSA}, []XFRMLinkState{currentLink, previousLink}, now,
+	)
+	if err != nil {
+		t.Fatalf("RecoverObservedLinkInstance: %v", err)
+	}
+	if !ok {
+		t.Fatal("dual-generation runtime was not recovered")
+	}
+	if recovered.RemoteGeneration != 1 || recovered.IKEName != previous.TransportID {
+		t.Fatalf("active runtime = %+v, want previous generation", recovered)
+	}
+	if recovered.StagedGeneration != 2 || recovered.StagedIKEName != current.TransportID || recovered.RotatePhase != RotatePhaseTestingNew {
+		t.Fatalf("staged runtime = %+v, want current generation reconstructed", recovered)
+	}
+
+	result := ReconcileLinkInstances(ReconcileInputs{
+		Desired:              []TransportLinkSpec{desired},
+		Instances:            map[string]LinkInstance{recovered.ID: recovered},
+		SAs:                  []SAState{currentSA, previousSA},
+		Now:                  now,
+		GroupSpecs:           map[string]LinkGroupSpec{group.ID: group},
+		GroupRotateRetention: map[string]int{group.ID: 30},
+	})
+	if len(result.Actions) != 1 || result.Actions[0].Action != ReconcileActionNoop || result.Actions[0].Reason != "rotate retention active" {
+		t.Fatalf("restart actions = %+v, want restarted rotation retention", result.Actions)
+	}
+	retained := result.Instances[recovered.ID]
+	if retained.RemoteGeneration != 1 || retained.StagedGeneration != 2 || retained.RotatePhase != RotatePhaseDualRunning || retained.RotateDeadline <= now.Unix() {
+		t.Fatalf("retained runtime = %+v, want bounded dual-running rotation", retained)
+	}
+}
+
+func TestRecoverObservedDualGenerationLoadedCurrentRestartsDeadline(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	group := LinkGroupSpec{ID: "main"}
+	desired := TransportLinkSpec{
+		LocalZone: "node-a.catofes.", PeerZone: "node-b.catofes.", OverlayID: group.ID,
+		Provider: ProviderStrongSwan, LinkID: "link-a", Generation: 2, InitiatorRole: InitiatorRolePrimary,
+		ContactPoints: []ContactPoint{
+			{Address: "198.51.100.20", Generation: 2, Current: true},
+			{Address: "198.51.100.20", Generation: 1},
+		},
+	}
+	current, err := RuntimeSpecForPortGeneration(desired, group, 2)
+	if err != nil {
+		t.Fatalf("RuntimeSpecForPortGeneration(current): %v", err)
+	}
+	previous, err := RuntimeSpecForPortGeneration(desired, group, 1)
+	if err != nil {
+		t.Fatalf("RuntimeSpecForPortGeneration(previous): %v", err)
+	}
+	connections := []ConnectionState{{Name: current.TransportID, LocalIdentity: string(current.LocalZone), RemoteIdentity: string(current.PeerZone)}}
+	previousSA := SAState{Name: previous.TransportID, ChildSA: ChildSAName(previous), XFRMIfID: previous.XFRMIfID, Established: true}
+	links := []XFRMLinkState{
+		{NetNS: group.Normalized().NetNS, NamespaceExists: true, InterfaceExists: true, InterfaceName: current.InterfaceName, XFRMIfID: current.XFRMIfID, Addresses: []netip.Prefix{netip.PrefixFrom(current.LocalTunnelAddr, current.LocalTunnelAddr.BitLen())}},
+		{NetNS: group.Normalized().NetNS, NamespaceExists: true, InterfaceExists: true, InterfaceName: previous.InterfaceName, XFRMIfID: previous.XFRMIfID, Addresses: []netip.Prefix{netip.PrefixFrom(previous.LocalTunnelAddr, previous.LocalTunnelAddr.BitLen())}},
+	}
+
+	recovered, ok, err := RecoverObservedLinkInstance(desired, group, []uint64{2, 1}, connections, []SAState{previousSA}, links, now)
+	if err != nil || !ok {
+		t.Fatalf("RecoverObservedLinkInstance = (%+v, %v, %v)", recovered, ok, err)
+	}
+	if recovered.RemoteGeneration != 1 || recovered.StagedGeneration != 2 || recovered.RotatePhase != RotatePhaseTestingNew {
+		t.Fatalf("recovered runtime = %+v, want previous active and current staged", recovered)
+	}
+	if recovered.RotateDeadline != now.Add(rotateTimeout()).Unix() {
+		t.Fatalf("rotate deadline = %d, want fresh bounded deadline %d", recovered.RotateDeadline, now.Add(rotateTimeout()).Unix())
+	}
+}
+
 func TestReconcilePrepareRotateOnGenerationChange(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()

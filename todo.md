@@ -90,7 +90,10 @@ Daemon
   - [x] 停止持久化 IPsec observation：reconcile/cleanup 不再调用 runtime commit，current/legacy JSON 不再编码或恢复 `LinkInstances`、`IPsecReconcile`，旧字段解码时直接忽略。
   - [x] 删除 RuntimeState 中仅剩的 `json:"-"` 兼容投影槽；展示、health、routing/firewall、cleanup 与撤销规划显式接收 observation，测试也不再把 State 与在线观察拼成伪 runtime。
   - [x] 删除 `internal/state.LinkInstanceState` 及双向字段转换，在线调用链直接使用 `ipsec.LinkInstance`；reconcile summary 迁入 `LinuxObservation` 并删除无意义的 `Committed/Stale` 字段，XFRM 单代推导失败显式返回错误。
-  - [ ] 用 crash/restart 测试覆盖 create、rotation 各阶段、current-only、previous-only、loaded-no-SA、takeover、revoke/config removal 和 orphan cleanup；未被测试证明的恢复规则不标完成。
+  - [x] 用 crash/restart 测试覆盖 create、rotation 各阶段、current-only、previous-only、loaded-no-SA、takeover、revoke/config removal 和 orphan cleanup；未被测试证明的恢复规则不标完成。
+    - [x] 覆盖空 runtime create、current-only、previous-only、loaded-no-SA，以及 current+previous 双代存活；双代启动从真实 connection/SA/XFRM inventory 重建 previous active + current staged，并重新开始有界 retention/prepare deadline。
+    - [x] 覆盖 rotation prepare/rollback 后 current loaded-no-SA 的有界重试、current 已建立但 previous cleanup 未完成的启动收口，以及 secondary takeover 从 SA initiator 观察恢复 fresh lease 且不恢复旧 backoff/deadline。
+    - [x] 覆盖 revoke/config removal 后启动不从空 Observation 猜测 owner 或自动删除；显式 orphan cleanup 只终止/卸载未引用的 Photon connection，保留外部 connection，且不删除缺少完整 ownership proof 的 XFRM interface。
 - [x] 删除持久化 `RoutingReconcile`；LastRun/LastError 进入无 DB 的 `LinuxObservation`，旧数据库字段迁移时直接丢弃，BIRD instance 仍按原边界单独审计。
 - [x] 删除持久化 `FirewallReconcile`；backend、generation、policy hash、owned object count 和错误只进入 `LinuxObservation`，下一轮 apply 仍以系统 owned-object observation 为准；`EndpointACLs` 继续作为用户配置持久化。
 - [x] 删除持久化 `BirdInstances`；路径、RouterID、owner 与 config hash 重新推导，status/exit/backoff 只进入 `LinuxObservation`，旧数据库字段直接丢弃。临时 `birdc` 结果已从 `BirdObservedState` 收敛命名为 `BirdObservation`。

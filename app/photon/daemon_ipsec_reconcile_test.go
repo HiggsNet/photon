@@ -21,6 +21,7 @@ type batchObservedIPsecDriver struct {
 	batchCalls         int
 	inspectCalls       int
 	observedEnsureCall int
+	inventory          []ipsec.XFRMLinkState
 }
 
 func (d *batchObservedIPsecDriver) InspectLinks(_ context.Context, specs []ipsec.TransportLinkSpec, _ []ipsec.NetNSSpec) ([]ipsec.XFRMLinkState, []ipsec.XFRMLinkState, error) {
@@ -32,7 +33,9 @@ func (d *batchObservedIPsecDriver) InspectLinks(_ context.Context, specs []ipsec
 	for i, spec := range specs {
 		states[i] = healthyObservedXFRMState(spec)
 	}
-	return states, states, nil
+	inventory := append([]ipsec.XFRMLinkState(nil), states...)
+	inventory = append(inventory, d.inventory...)
+	return states, inventory, nil
 }
 
 func (d *batchObservedIPsecDriver) InspectLink(ctx context.Context, spec ipsec.TransportLinkSpec) (ipsec.XFRMLinkState, error) {

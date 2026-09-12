@@ -283,6 +283,7 @@ GossipDriver 公共 gossip 闭环、aggregate 清理和 current Linux codec 迁�
    current `LinuxState`、detached clone、bbolt codec 和 revision-guarded commit 已归 `internal/photonlinux`；app 旧库迁移只负责
    `stateFile/stateMeta` 解码及一次性字段投影。平台包不自行打开数据库，仍使用 composition root 传入的唯一 BoltStore/transaction。
    `IdentityKeyPath` 已从 current schema 删除并回归配置 owner；`Admission`、`RoutingReconcile`、`FirewallReconcile`、`BirdInstances` 与 `PeerCleanups` 已作为纯派生/在线诊断从 current schema 删除，旧迁移投影直接丢弃。当前 LinuxState 只剩 IPsec transport 私钥与显式本机 Endpoint ACL；不再保留 RuntimeState alias 或同构 DTO。
+   IPsec crash/restart 已补真实双代观察恢复：当 verified current/previous 对应的 connection/SA/XFRM 同时存活时，启动重建 previous active + current staged，重新开始有界 retention；若 current 只有 loaded connection 则重新开始 prepare deadline。这样旧代仍由 rotation owner 明确收口，不因直接 adopt current 而变成失联资源。current-only、previous-only、loaded-no-SA 与空 runtime create 保持独立回归覆盖；current 已建立但 previous cleanup 未完成时会重新进入正常 `commit_rotate` teardown。secondary takeover 只从 SA initiator 事实恢复，并从启动时建立 fresh lease，不恢复旧 backoff/deadline。撤销或配置删除后，空 Observation 不足以证明完整资源 owner，启动不会按名称猜测并自动删除；显式 orphan cleanup 只终止/卸载未引用的 Photon connection，保留外部 connection，且不删除缺少完整 ownership proof 的 XFRM interface。
 4. 聚合 `stateFile`：在线和普通测试迁移已经完成；fresh join 已退出聚合写入；在线 IPsec cleanup、revoked purge、Endpoint ACL、
    reconcile completion 以及 Firewall/IPsec 主 planner 已直接读取 common/Linux 两个 owner，不再构造完整 Snapshot。
    本机 endpoint/IPsec/routing protocol publish 也已直接使用两个 owner，routing 主 reconcile planner 同样完成切换。

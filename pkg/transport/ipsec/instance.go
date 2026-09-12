@@ -1455,9 +1455,17 @@ func hasMatchingConnection(states []ConnectionState, spec TransportLinkSpec) boo
 // RecoverObservedLinkInstance reconstructs an in-memory instance only when an
 // allowed generation has its exact XFRM resource and either its loaded
 // connection or an established SA. The caller derives generations from the
-// current verified port record.
+// current verified port record in current-first order. When both current and
+// previous are observed, the result retains previous as active and current as
+// staged so ordinary rotation reconciliation owns and retires both resources.
 func RecoverObservedLinkInstance(spec TransportLinkSpec, group LinkGroupSpec, generations []uint64, connections []ConnectionState, sas []SAState, links []XFRMLinkState, now time.Time) (LinkInstance, bool, error) {
 	seen := make(map[uint64]bool, len(generations))
+	type observedRuntime struct {
+		spec        TransportLinkSpec
+		instance    LinkInstance
+		established bool
+	}
+	observed := make([]observedRuntime, 0, 2)
 	for _, generation := range generations {
 		runtimeGeneration := runtimeGenerationForPortGeneration(generation)
 		if seen[runtimeGeneration] {
@@ -1476,15 +1484,50 @@ func RecoverObservedLinkInstance(spec TransportLinkSpec, group LinkGroupSpec, ge
 			instance := NewLinkInstance(candidate, LinkStateUp, now)
 			instance.RemoteGeneration = candidate.Generation
 			instance.Endpoint = state.Endpoint
-			return instance, true, nil
+			observed = append(observed, observedRuntime{spec: candidate, instance: instance, established: true})
+			continue
 		}
 		if hasMatchingConnection(connections, candidate) {
 			instance := NewLinkInstance(candidate, LinkStateConnecting, now)
 			instance.RemoteGeneration = candidate.Generation
-			return instance, true, nil
+			observed = append(observed, observedRuntime{spec: candidate, instance: instance})
 		}
 	}
-	return LinkInstance{}, false, nil
+	if len(observed) == 0 {
+		return LinkInstance{}, false, nil
+	}
+	if len(observed) == 1 {
+		return observed[0].instance, true, nil
+	}
+	if observed[0].spec.Generation != contactGeneration(spec) {
+		// Current is absent. Keep the newest observed previous generation as
+		// active and let ordinary reconciliation prepare current.
+		return observed[0].instance, true, nil
+	}
+
+	// Port generations are ordered current-first. When both current and
+	// previous resources survive a crash, retain previous as the active side
+	// and reconstruct current as staged. This gives the ordinary rotation
+	// reconciler ownership of both generations so it can restart retention and
+	// cleanly retire previous, instead of adopting current and orphaning the
+	// older connection/XFRM interface.
+	staged := observed[0]
+	active := observed[1].instance
+	active.StagedGeneration = staged.spec.Generation
+	active.StagedIKEName = staged.spec.TransportID
+	active.StagedChildSAName = ChildSAName(staged.spec)
+	active.StagedInterfaceName = staged.spec.InterfaceName
+	active.StagedXFRMIfID = staged.spec.XFRMIfID
+	active.StagedLocalTunnelAddr = staged.spec.LocalTunnelAddr
+	active.StagedPeerTunnelAddr = staged.spec.PeerTunnelAddr
+	active.RotatePhase = RotatePhaseTestingNew
+	if !staged.established {
+		// A loaded current connection without an SA is an in-flight prepare.
+		// Restart its bounded deadline from startup; no stale deadline or
+		// backoff is recovered from disk.
+		active.RotateDeadline = now.Add(rotateTimeout()).Unix()
+	}
+	return active, true, nil
 }
 
 func hasMatchingXFRMLink(states []XFRMLinkState, spec TransportLinkSpec, netns NetNSSpec) bool {
