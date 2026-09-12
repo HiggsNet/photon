@@ -81,8 +81,8 @@ func debugLinkRoutingState(rt *AppContext, birdInstances map[string]*bird.Instan
 	return
 }
 
-func desiredByInstanceID(items []photonstate.DesiredLinkState) map[string]photonstate.DesiredLinkState {
-	out := map[string]photonstate.DesiredLinkState{}
+func desiredByInstanceID(items []photonstate.DesiredLinkObservation) map[string]photonstate.DesiredLinkObservation {
+	out := map[string]photonstate.DesiredLinkObservation{}
 	for _, item := range items {
 		if item.InstanceID != "" {
 			out[item.InstanceID] = item

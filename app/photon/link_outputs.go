@@ -14,7 +14,7 @@ import (
 // Babel-facing consumer contract. It deliberately carries no owner, SA name,
 // action, rotate phase, or other lifecycle input.
 func buildLinkOutputs(instances map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary) []photonstate.LinkOutput {
-	desired := make(map[string][]photonstate.DesiredLinkState)
+	desired := make(map[string][]photonstate.DesiredLinkObservation)
 	if reconcile != nil {
 		for _, item := range reconcile.Desired {
 			desired[item.InstanceID] = append(desired[item.InstanceID], item)
@@ -26,7 +26,7 @@ func buildLinkOutputs(instances map[string]ipsec.LinkInstance, reconcile *ipsecO
 		inst := instances[id]
 		wants := desired[id]
 		if len(wants) == 0 {
-			wants = []photonstate.DesiredLinkState{{}}
+			wants = []photonstate.DesiredLinkObservation{{}}
 		}
 		for i, want := range wants {
 			base := newIPsecLinkOutput(inst, want)
@@ -71,7 +71,7 @@ func firstNonEmptyZone(values ...zone.ZonePath) zone.ZonePath {
 	return ""
 }
 
-func newIPsecLinkOutput(inst ipsec.LinkInstance, desired photonstate.DesiredLinkState) photonstate.LinkOutput {
+func newIPsecLinkOutput(inst ipsec.LinkInstance, desired photonstate.DesiredLinkObservation) photonstate.LinkOutput {
 	id := firstNonEmpty(inst.LinkID, desired.LinkID, inst.ID, desired.InstanceID)
 	provider := inst.TransportKind
 	if provider == "" {

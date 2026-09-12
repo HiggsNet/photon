@@ -16,8 +16,8 @@ type IPsecTransportKeyState struct {
 	UpdatedAt   int64  `json:"updated_at,omitempty"`
 }
 
-// DesiredLinkState is a planned desired link from the IPsec reconcile/planner.
-type DesiredLinkState struct {
+// DesiredLinkObservation is the secret-free projection of a planned IPsec link.
+type DesiredLinkObservation struct {
 	InstanceID      string        `json:"instance_id,omitempty"`
 	GroupID         string        `json:"group_id,omitempty"`
 	PeerZone        zone.ZonePath `json:"peer_zone,omitempty"`
@@ -32,8 +32,8 @@ type DesiredLinkState struct {
 	PeerTunnelAddr  string        `json:"peer_tunnel_addr,omitempty"`
 }
 
-// LinkSAState is a stored StrongSwan SA snapshot.
-type LinkSAState struct {
+// LinkSAObservation is the secret-free projection of a StrongSwan SA.
+type LinkSAObservation struct {
 	Name            string `json:"name,omitempty"`
 	UniqueID        uint64 `json:"unique_id,omitempty"`
 	Initiator       bool   `json:"initiator,omitempty"`
@@ -58,8 +58,8 @@ type LinkSAState struct {
 	Established     bool   `json:"established,omitempty"`
 }
 
-// LinkActionState records a reconcile action.
-type LinkActionState struct {
+// LinkActionObservation is the secret-free projection of a reconcile action.
+type LinkActionObservation struct {
 	Action     string        `json:"action"`
 	InstanceID string        `json:"instance_id,omitempty"`
 	GroupID    string        `json:"group_id,omitempty"`
@@ -68,8 +68,8 @@ type LinkActionState struct {
 	SAUniqueID uint64        `json:"sa_unique_id,omitempty"`
 }
 
-// LinkSkipState records a peer skipped by reconcile.
-type LinkSkipState struct {
+// LinkSkipObservation records a peer skipped by reconcile.
+type LinkSkipObservation struct {
 	GroupID string        `json:"group_id,omitempty"`
 	Peer    zone.ZonePath `json:"peer,omitempty"`
 	Reason  string        `json:"reason,omitempty"`

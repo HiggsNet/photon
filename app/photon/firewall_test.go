@@ -681,7 +681,7 @@ func TestBuildFirewallPolicyInputScopesInterfacesByNetNS(t *testing.T) {
 		verified,
 		runtime,
 		links,
-		&ipsecObservationSummary{Desired: []photonstate.DesiredLinkState{
+		&ipsecObservationSummary{Desired: []photonstate.DesiredLinkObservation{
 			{InstanceID: "a", LocalTunnelAddr: "fe80::1%phx11111111 netns=photon"},
 			{InstanceID: "b", LocalTunnelAddr: "fe80::2%phx22222222 netns=h3"},
 		}},

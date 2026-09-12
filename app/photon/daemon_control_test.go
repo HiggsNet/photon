@@ -346,7 +346,7 @@ func TestDaemonControlLinksStatusUsesReconcileSnapshot(t *testing.T) {
 	observationReconcile := &ipsecObservationSummary{
 		LastRunUnix:  1234,
 		DesiredLinks: 1,
-		Desired: []photonstate.DesiredLinkState{{
+		Desired: []photonstate.DesiredLinkObservation{{
 			InstanceID:      "link-1",
 			GroupID:         "main",
 			PeerZone:        "node-b.catofes.",
@@ -359,7 +359,7 @@ func TestDaemonControlLinksStatusUsesReconcileSnapshot(t *testing.T) {
 			LocalTunnelAddr: "fd00::1%phxabc123",
 			PeerTunnelAddr:  "fd00::2%phxabc123",
 		}},
-		ActualSAs: []photonstate.LinkSAState{{
+		ActualSAs: []photonstate.LinkSAObservation{{
 			Name:           "runtime-r3",
 			ChildSA:        "runtime-r3-child",
 			RemoteEndpoint: "203.0.113.9:33403",
@@ -403,7 +403,7 @@ func TestDaemonControlReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T)
 	observationReconcile := &ipsecObservationSummary{
 		LastRunUnix:  1234,
 		DesiredLinks: 1,
-		Desired: []photonstate.DesiredLinkState{{
+		Desired: []photonstate.DesiredLinkObservation{{
 			InstanceID: "link-committed",
 			GroupID:    "main",
 			PeerZone:   "node-b.catofes.",

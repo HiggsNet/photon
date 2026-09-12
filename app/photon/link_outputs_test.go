@@ -29,7 +29,7 @@ func TestLinkOutputsProjectIPsecRuntimeWithoutLifecycleState(t *testing.T) {
 		},
 	}
 
-	got := buildLinkOutputs(links, &ipsecObservationSummary{Desired: []photonstate.DesiredLinkState{{
+	got := buildLinkOutputs(links, &ipsecObservationSummary{Desired: []photonstate.DesiredLinkObservation{{
 		InstanceID: "instance-a", LocalTunnelAddr: "fe80::1%phx0 netns=photon",
 		PeerTunnelAddr: "fe80::2%phx0 netns=photon",
 	}}})

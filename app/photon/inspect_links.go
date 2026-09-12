@@ -3,8 +3,6 @@ package main
 import (
 	"sort"
 
-	photonstate "github.com/HiggsNet/photon/internal/state"
-
 	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -18,10 +16,10 @@ func buildStoredLinkInspection(rt *AppContext, instances map[string]ipsec.LinkIn
 		input.LastRunUnix = reconcile.LastRunUnix
 		input.DesiredLinks = reconcile.DesiredLinks
 		input.LastFailure = reconcile.LastFailure
-		input.LastDesired = inspectDesiredLinks(reconcile.Desired)
-		input.ActualSAs = inspectLinkSAs(reconcile.ActualSAs)
-		input.Actions = inspectLinkActions(reconcile.Actions)
-		input.Skipped = inspectLinkSkips(reconcile.Skipped)
+		input.LastDesired = reconcile.Desired
+		input.ActualSAs = reconcile.ActualSAs
+		input.Actions = reconcile.Actions
+		input.Skipped = reconcile.Skipped
 	}
 	ids := sortedLinkInstanceIDs(instances)
 	input.Instances = make([]inspect.LinkInstance, 0, len(ids))
@@ -38,7 +36,7 @@ func buildStoredLinkInspection(rt *AppContext, instances map[string]ipsec.LinkIn
 		LastDesiredLinks: lastDesired, DesiredPlanSource: "last_reconcile",
 	}
 	if reconcile != nil {
-		view.StoredSAs = inspectLinkSAs(reconcile.ActualSAs)
+		view.StoredSAs = reconcile.ActualSAs
 	}
 	return view
 }
@@ -60,36 +58,4 @@ func sortedLinkInstanceIDs(instances map[string]ipsec.LinkInstance) []string {
 	}
 	sort.Strings(ids)
 	return ids
-}
-
-func inspectDesiredLinks(items []photonstate.DesiredLinkState) []inspect.DesiredLink {
-	out := make([]inspect.DesiredLink, 0, len(items))
-	for _, item := range items {
-		out = append(out, inspect.BuildDesiredLinkFromRuntime(item))
-	}
-	return out
-}
-
-func inspectLinkSAs(items []photonstate.LinkSAState) []inspect.LinkSA {
-	out := make([]inspect.LinkSA, 0, len(items))
-	for _, item := range items {
-		out = append(out, inspect.LinkSA(item))
-	}
-	return out
-}
-
-func inspectLinkActions(items []photonstate.LinkActionState) []inspect.LinkAction {
-	out := make([]inspect.LinkAction, 0, len(items))
-	for _, item := range items {
-		out = append(out, inspect.BuildLinkActionFromRuntime(item))
-	}
-	return out
-}
-
-func inspectLinkSkips(items []photonstate.LinkSkipState) []inspect.LinkSkip {
-	out := make([]inspect.LinkSkip, 0, len(items))
-	for _, item := range items {
-		out = append(out, inspect.BuildLinkSkipFromRuntime(item))
-	}
-	return out
 }

@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"net/netip"
 	"reflect"
 	"testing"
@@ -10,6 +13,41 @@ import (
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
+
+func TestSummarizeIPsecReconcileDropsPrivateMaterialAndSpecPointers(t *testing.T) {
+	privateKey := []byte("observation-private-key-sentinel")
+	spec := ipsec.TransportLinkSpec{
+		PeerZone:                 "node-b.catofes.",
+		OverlayID:                "main",
+		LinkID:                   "link-b",
+		TransportID:              "ipsec-main-b",
+		LocalPrivateKey:          privateKey,
+		LocalPrivateKeyAlgorithm: "private-algorithm-sentinel",
+	}
+	summary := summarizeIPsecReconcile(7, 1000, []ipsec.TransportLinkSpec{spec}, nil, []ipsec.ReconcileAction{{
+		Action: "create",
+		Spec:   &spec,
+	}}, nil, nil)
+
+	payload, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatalf("marshal observation summary: %v", err)
+	}
+	for _, forbidden := range [][]byte{
+		[]byte(base64.StdEncoding.EncodeToString(privateKey)),
+		[]byte(spec.LocalPrivateKeyAlgorithm),
+	} {
+		if bytes.Contains(payload, forbidden) {
+			t.Fatalf("observation contains private transport material: %s", payload)
+		}
+	}
+	if len(summary.Desired) != 1 || summary.Desired[0].PeerZone != spec.PeerZone {
+		t.Fatalf("desired observation = %#v", summary.Desired)
+	}
+	if len(summary.Actions) != 1 || summary.Actions[0].InstanceID != ipsec.LinkInstanceID(spec) {
+		t.Fatalf("action observation = %#v", summary.Actions)
+	}
+}
 
 func TestLocalIPsecPortGenerationsIncludesValidPrevious(t *testing.T) {
 	now := time.Unix(1717171717, 0)

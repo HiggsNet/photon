@@ -20,7 +20,7 @@ func TestHealthTargetsParseScopedNetNS(t *testing.T) {
 		"link-1": {ActualState: "up"},
 	}
 	reconcile := &ipsecObservationSummary{
-		Desired: []photonstate.DesiredLinkState{{
+		Desired: []photonstate.DesiredLinkObservation{{
 			InstanceID:      "link-1",
 			GroupID:         "blue",
 			PeerZone:        zone.ZonePath("node-b.catofes."),
@@ -62,7 +62,7 @@ func TestHealthTargetsUseRotatedRuntimeInterface(t *testing.T) {
 		},
 	}
 	reconcile := &ipsecObservationSummary{
-		Desired: []photonstate.DesiredLinkState{{
+		Desired: []photonstate.DesiredLinkObservation{{
 			InstanceID:      "link-1",
 			GroupID:         "blue",
 			PeerZone:        zone.ZonePath("node-b.catofes."),
@@ -110,7 +110,7 @@ func TestHealthTargetsUseObservedDesiredTunnelAddressesForActive(t *testing.T) {
 		},
 	}
 	reconcile := &ipsecObservationSummary{
-		Desired: []photonstate.DesiredLinkState{{
+		Desired: []photonstate.DesiredLinkObservation{{
 			InstanceID:      "link-1",
 			GroupID:         group.ID,
 			PeerZone:        peer,
@@ -163,7 +163,7 @@ func TestHealthTargetsSkipRotateProbeWithoutObservedRuntimeTunnelAddresses(t *te
 		},
 	}
 	reconcile := &ipsecObservationSummary{
-		Desired: []photonstate.DesiredLinkState{{
+		Desired: []photonstate.DesiredLinkObservation{{
 			InstanceID:      linkID,
 			GroupID:         group.ID,
 			PeerZone:        peer,

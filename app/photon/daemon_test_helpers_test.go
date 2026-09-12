@@ -608,7 +608,7 @@ func assertSingleLinkUpFromSA(t *testing.T, links map[string]ipsec.LinkInstance,
 	}
 }
 
-func hasDebugSkip(skips []photonstate.LinkSkipState, peer zone.ZonePath, reason string) bool {
+func hasDebugSkip(skips []photonstate.LinkSkipObservation, peer zone.ZonePath, reason string) bool {
 	for _, skip := range skips {
 		if skip.Peer == peer && skip.Reason == reason {
 			return true

@@ -163,7 +163,7 @@ func TestIPsecReconcileSummaryEqualityIgnoresLiveObservations(t *testing.T) {
 		LastRunUnix:    100,
 		SourceRevision: 7,
 		DesiredLinks:   1,
-		ActualSAs: []photonstate.LinkSAState{
+		ActualSAs: []photonstate.LinkSAObservation{
 			{Name: "z", UniqueID: 2, IKEState: "ESTABLISHED", IKEAgeSeconds: 10, InboundBytes: 100},
 			{Name: "a", UniqueID: 1, IKEState: "ESTABLISHED", ChildAgeSeconds: 20, InboundPackets: 4},
 		},

@@ -269,7 +269,7 @@ func observerRuntime(d *Daemon) *AppContext {
 
 func healthLinksWithContext(view inspect.HealthView, observedLinks map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary) []inspecthttp.HealthContextItem {
 	input := inspecthttp.HealthContextInput{View: view}
-	desiredByID := map[string]photonstate.DesiredLinkState{}
+	desiredByID := map[string]photonstate.DesiredLinkObservation{}
 	if reconcile != nil {
 		desiredByID = desiredByInstanceID(reconcile.Desired)
 	}
@@ -294,7 +294,7 @@ func inspectHealthInstances(instances map[string]ipsec.LinkInstance) map[string]
 	return out
 }
 
-func inspectHealthDesired(desiredByID map[string]photonstate.DesiredLinkState) map[string]inspecthttp.HealthDesiredContextInput {
+func inspectHealthDesired(desiredByID map[string]photonstate.DesiredLinkObservation) map[string]inspecthttp.HealthDesiredContextInput {
 	out := make(map[string]inspecthttp.HealthDesiredContextInput, len(desiredByID))
 	for id, desired := range desiredByID {
 		out[id] = inspecthttp.HealthDesiredContextInput{

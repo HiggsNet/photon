@@ -8,8 +8,6 @@ import (
 	"os"
 	"time"
 
-	photonstate "github.com/HiggsNet/photon/internal/state"
-
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
@@ -83,34 +81,6 @@ func writeDebugRotateFromView(w io.Writer, view inspect.LinksDebugView, filter s
 		StoredSAs: view.StoredSAs, LiveSAs: view.LiveSAs, LiveSAError: view.LiveSAError,
 	})
 	return inspecttext.WriteRotateDebug(w, rotate)
-}
-
-func linkSAStatesFromIPsecSAs(sas []ipsec.SAState) []photonstate.LinkSAState {
-	out := make([]photonstate.LinkSAState, 0, len(sas))
-	for _, sa := range sas {
-		out = append(out, photonstate.LinkSAState{
-			Name:            sa.Name,
-			IKEAgeSeconds:   sa.IKEAgeSeconds,
-			ChildAgeSeconds: sa.ChildAgeSeconds,
-			InboundBytes:    sa.InboundBytes,
-			InboundPackets:  sa.InboundPackets,
-			InboundIdleSecs: sa.InboundIdleSecs,
-			InboundKnown:    sa.InboundKnown,
-			Peer:            sa.Peer,
-			ChildSA:         sa.ChildSA,
-			IKEState:        sa.IKEState,
-			ChildState:      sa.ChildState,
-			XFRMIfID:        sa.XFRMIfID,
-			ReqID:           sa.ReqID,
-			LocalIdentity:   sa.LocalIdentity,
-			RemoteIdentity:  sa.RemoteIdentity,
-			LocalEndpoint:   sa.LocalEndpoint,
-			RemoteEndpoint:  sa.RemoteEndpoint,
-			Endpoint:        sa.Endpoint,
-			Established:     sa.Established,
-		})
-	}
-	return out
 }
 
 func printManualPortRotateResult(mode string, result *manualPortRotateResult) {

@@ -32,7 +32,7 @@ func pingDebugTargets(t *testing.T) []health.ProbeTarget {
 		},
 	}
 	reconcile := &ipsecObservationSummary{
-		Desired: []photonstate.DesiredLinkState{
+		Desired: []photonstate.DesiredLinkObservation{
 			{InstanceID: "link-b", GroupID: "g", PeerZone: zone.ZonePath("node-b."), LocalTunnelAddr: "10.0.0.1", PeerTunnelAddr: "10.0.0.2"},
 			{InstanceID: "link-b", GroupID: "g", PeerZone: zone.ZonePath("node-b."), LocalTunnelAddr: "fd00::1", PeerTunnelAddr: "fd00::2"},
 			{InstanceID: "link-c", GroupID: "g", PeerZone: zone.ZonePath("node-c."), LocalTunnelAddr: "fd00::1", PeerTunnelAddr: "fd00::2"},

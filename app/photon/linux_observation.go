@@ -35,10 +35,10 @@ type ipsecObservationSummary struct {
 	LastRunUnix    int64
 	SourceRevision uint64
 	DesiredLinks   int
-	Desired        []photonstate.DesiredLinkState
-	ActualSAs      []photonstate.LinkSAState
-	Actions        []photonstate.LinkActionState
-	Skipped        []photonstate.LinkSkipState
+	Desired        []photonstate.DesiredLinkObservation
+	ActualSAs      []photonstate.LinkSAObservation
+	Actions        []photonstate.LinkActionObservation
+	Skipped        []photonstate.LinkSkipObservation
 	LastFailure    error
 }
 
@@ -47,10 +47,10 @@ func cloneIPsecObservationSummary(in *ipsecObservationSummary) *ipsecObservation
 		return nil
 	}
 	out := *in
-	out.Desired = append([]photonstate.DesiredLinkState(nil), in.Desired...)
-	out.ActualSAs = append([]photonstate.LinkSAState(nil), in.ActualSAs...)
-	out.Actions = append([]photonstate.LinkActionState(nil), in.Actions...)
-	out.Skipped = append([]photonstate.LinkSkipState(nil), in.Skipped...)
+	out.Desired = append([]photonstate.DesiredLinkObservation(nil), in.Desired...)
+	out.ActualSAs = append([]photonstate.LinkSAObservation(nil), in.ActualSAs...)
+	out.Actions = append([]photonstate.LinkActionObservation(nil), in.Actions...)
+	out.Skipped = append([]photonstate.LinkSkipObservation(nil), in.Skipped...)
 	return &out
 }
 

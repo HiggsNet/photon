@@ -136,23 +136,8 @@ type LinkOwner struct {
 	Token       string `json:"token,omitempty"`
 }
 
-type DesiredLink struct {
-	InstanceID      string `json:"instance_id,omitempty"`
-	GroupID         string `json:"group_id,omitempty"`
-	PeerZone        string `json:"peer_zone,omitempty"`
-	LinkID          string `json:"link_id,omitempty"`
-	PathKey         string `json:"path_key,omitempty"`
-	TransportID     string `json:"transport_id,omitempty"`
-	DesiredSpecHash string `json:"desired_spec_hash,omitempty"`
-	InterfaceName   string `json:"interface_name,omitempty"`
-	XFRMIfID        uint32 `json:"xfrm_if_id,omitempty"`
-	Endpoint        string `json:"endpoint,omitempty"`
-	LocalTunnelAddr string `json:"local_tunnel_addr,omitempty"`
-	PeerTunnelAddr  string `json:"peer_tunnel_addr,omitempty"`
-}
-
-// LinkSA is a read-only alias of the shared runtime SA state.
-type LinkSA = photonstate.LinkSAState
+type DesiredLink = photonstate.DesiredLinkObservation
+type LinkSA = photonstate.LinkSAObservation
 
 type LinkRouting struct {
 	BirdState      string `json:"bird_state,omitempty"`
@@ -182,21 +167,8 @@ type LinkTakeover struct {
 	LastFailure       *FailureView `json:"last_failure,omitempty"`
 }
 
-type LinkAction struct {
-	Action     string `json:"action"`
-	InstanceID string `json:"instance_id,omitempty"`
-	GroupID    string `json:"group_id,omitempty"`
-	PeerZone   string `json:"peer_zone,omitempty"`
-	Reason     string `json:"reason,omitempty"`
-	SAUniqueID uint64 `json:"sa_unique_id,omitempty"`
-}
-
-type LinkSkip struct {
-	GroupID string `json:"group_id,omitempty"`
-	Peer    string `json:"peer,omitempty"`
-	Reason  string `json:"reason,omitempty"`
-	Detail  string `json:"detail,omitempty"`
-}
+type LinkAction = photonstate.LinkActionObservation
+type LinkSkip = photonstate.LinkSkipObservation
 
 // BuildLinkInstanceFromRuntime builds an inspect view of an observed IPsec
 // link. Routing is supplied separately because it is
@@ -255,46 +227,6 @@ func formatObservedAddr(addr netip.Addr) string {
 	return addr.String()
 }
 
-// BuildDesiredLinkFromRuntime builds an inspect view of a desired link.
-func BuildDesiredLinkFromRuntime(item photonstate.DesiredLinkState) DesiredLink {
-	return DesiredLink{
-		InstanceID:      item.InstanceID,
-		GroupID:         item.GroupID,
-		PeerZone:        string(item.PeerZone),
-		LinkID:          item.LinkID,
-		PathKey:         item.PathKey,
-		TransportID:     item.TransportID,
-		DesiredSpecHash: item.DesiredSpecHash,
-		InterfaceName:   item.InterfaceName,
-		XFRMIfID:        item.XFRMIfID,
-		Endpoint:        item.Endpoint,
-		LocalTunnelAddr: item.LocalTunnelAddr,
-		PeerTunnelAddr:  item.PeerTunnelAddr,
-	}
-}
-
-// BuildLinkActionFromRuntime builds an inspect view of a reconcile action.
-func BuildLinkActionFromRuntime(item photonstate.LinkActionState) LinkAction {
-	return LinkAction{
-		Action:     item.Action,
-		InstanceID: item.InstanceID,
-		GroupID:    item.GroupID,
-		PeerZone:   string(item.PeerZone),
-		Reason:     item.Reason,
-		SAUniqueID: item.SAUniqueID,
-	}
-}
-
-// BuildLinkSkipFromRuntime builds an inspect view of a skipped peer.
-func BuildLinkSkipFromRuntime(item photonstate.LinkSkipState) LinkSkip {
-	return LinkSkip{
-		GroupID: item.GroupID,
-		Peer:    string(item.Peer),
-		Reason:  item.Reason,
-		Detail:  item.Detail,
-	}
-}
-
 func FilterLinkViews(links []LinkView, filter string) []LinkView {
 	filter = strings.ToLower(strings.TrimSpace(filter))
 	if filter == "" {
@@ -316,7 +248,7 @@ func FilterLinkActions(actions []LinkAction, filter string) []LinkAction {
 	}
 	out := make([]LinkAction, 0, len(actions))
 	for _, action := range actions {
-		if stringMatchesFilter(filter, action.InstanceID, action.GroupID, action.PeerZone, action.Action, action.Reason) {
+		if stringMatchesFilter(filter, action.InstanceID, action.GroupID, string(action.PeerZone), action.Action, action.Reason) {
 			out = append(out, action)
 		}
 	}
@@ -330,7 +262,7 @@ func FilterLinkSkips(skips []LinkSkip, filter string) []LinkSkip {
 	}
 	out := make([]LinkSkip, 0, len(skips))
 	for _, skip := range skips {
-		if stringMatchesFilter(filter, skip.GroupID, skip.Peer, skip.Reason, skip.Detail) {
+		if stringMatchesFilter(filter, skip.GroupID, string(skip.Peer), skip.Reason, skip.Detail) {
 			out = append(out, skip)
 		}
 	}
@@ -360,7 +292,7 @@ func linkMatchesFilter(link LinkView, filter string) bool {
 	if link.Desired != nil {
 		values = append(values,
 			link.Desired.InstanceID,
-			link.Desired.PeerZone,
+			string(link.Desired.PeerZone),
 			link.Desired.GroupID,
 			link.Desired.LinkID,
 			link.Desired.PathKey,
@@ -549,7 +481,7 @@ func missingLinkFromDesired(desired DesiredLink) LinkView {
 	desiredCopy := desired
 	return LinkView{
 		ID:              desired.InstanceID,
-		PeerZone:        desired.PeerZone,
+		PeerZone:        string(desired.PeerZone),
 		GroupID:         desired.GroupID,
 		LinkID:          desired.LinkID,
 		PathKey:         desired.PathKey,

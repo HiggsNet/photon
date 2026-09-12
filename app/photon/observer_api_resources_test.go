@@ -469,7 +469,7 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 		observationReconcile = &ipsecObservationSummary{
 			LastRunUnix:  123,
 			DesiredLinks: 1,
-			Desired: []photonstate.DesiredLinkState{{
+			Desired: []photonstate.DesiredLinkObservation{{
 				InstanceID:      "link-1",
 				GroupID:         "blue",
 				PeerZone:        "node-b.catofes.",
@@ -480,7 +480,7 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 				LocalTunnelAddr: "fd00::1%phx0",
 				PeerTunnelAddr:  "fd00::2%phx0",
 			}},
-			ActualSAs: []photonstate.LinkSAState{{
+			ActualSAs: []photonstate.LinkSAObservation{{
 				Name:           "link-1",
 				ChildSA:        "child-link-1",
 				Established:    true,
@@ -544,7 +544,7 @@ func TestObserverHealthAPIIncludesLinkContextWithoutSamples(t *testing.T) {
 			},
 		}
 		observationReconcile = &ipsecObservationSummary{
-			Desired: []photonstate.DesiredLinkState{{
+			Desired: []photonstate.DesiredLinkObservation{{
 				InstanceID:      "link-1",
 				GroupID:         "blue",
 				PeerZone:        "node-b.catofes.",

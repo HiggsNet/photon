@@ -628,7 +628,7 @@ func summarizeIPsecReconcile(sourceRev uint64, unix int64, desired []ipsec.Trans
 		LastFailure:    lastError,
 	}
 	for _, spec := range desired {
-		state.Desired = append(state.Desired, photonstate.DesiredLinkState{
+		state.Desired = append(state.Desired, photonstate.DesiredLinkObservation{
 			InstanceID:      ipsec.LinkInstanceID(spec),
 			GroupID:         spec.OverlayID,
 			PeerZone:        spec.PeerZone,
@@ -643,8 +643,36 @@ func summarizeIPsecReconcile(sourceRev uint64, unix int64, desired []ipsec.Trans
 			PeerTunnelAddr:  ipsec.FormatScopedTunnelAddress(spec.PeerTunnelAddr, spec.InterfaceName, spec.NetNS),
 		})
 	}
+	state.ActualSAs = projectIPsecSAs(sas)
+	for _, action := range actions {
+		item := photonstate.LinkActionObservation{Action: action.Action, Reason: action.Reason, SAUniqueID: action.SAUniqueID}
+		if action.Instance != nil {
+			item.InstanceID = action.Instance.ID
+			item.GroupID = action.Instance.GroupID
+			item.PeerZone = action.Instance.PeerZone
+		}
+		if action.Spec != nil {
+			item.InstanceID = ipsec.LinkInstanceID(*action.Spec)
+			item.GroupID = action.Spec.OverlayID
+			item.PeerZone = action.Spec.PeerZone
+		}
+		state.Actions = append(state.Actions, item)
+	}
+	for _, skip := range skips {
+		state.Skipped = append(state.Skipped, photonstate.LinkSkipObservation{
+			GroupID: skip.GroupID,
+			Peer:    skip.Peer,
+			Reason:  skip.Reason,
+			Detail:  skip.Detail,
+		})
+	}
+	return state
+}
+
+func projectIPsecSAs(sas []ipsec.SAState) []photonstate.LinkSAObservation {
+	out := make([]photonstate.LinkSAObservation, 0, len(sas))
 	for _, sa := range sas {
-		state.ActualSAs = append(state.ActualSAs, photonstate.LinkSAState{
+		out = append(out, photonstate.LinkSAObservation{
 			Name:            sa.Name,
 			UniqueID:        sa.UniqueID,
 			Initiator:       sa.Initiator,
@@ -669,29 +697,7 @@ func summarizeIPsecReconcile(sourceRev uint64, unix int64, desired []ipsec.Trans
 			Established:     sa.Established,
 		})
 	}
-	for _, action := range actions {
-		item := photonstate.LinkActionState{Action: action.Action, Reason: action.Reason, SAUniqueID: action.SAUniqueID}
-		if action.Instance != nil {
-			item.InstanceID = action.Instance.ID
-			item.GroupID = action.Instance.GroupID
-			item.PeerZone = action.Instance.PeerZone
-		}
-		if action.Spec != nil {
-			item.InstanceID = ipsec.LinkInstanceID(*action.Spec)
-			item.GroupID = action.Spec.OverlayID
-			item.PeerZone = action.Spec.PeerZone
-		}
-		state.Actions = append(state.Actions, item)
-	}
-	for _, skip := range skips {
-		state.Skipped = append(state.Skipped, photonstate.LinkSkipState{
-			GroupID: skip.GroupID,
-			Peer:    skip.Peer,
-			Reason:  skip.Reason,
-			Detail:  skip.Detail,
-		})
-	}
-	return state
+	return out
 }
 
 func summarizeContactEndpoint(points []ipsec.ContactPoint) string {
