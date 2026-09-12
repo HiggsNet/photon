@@ -26,22 +26,22 @@ const (
 // ProbeTarget describes the target of a health probe for a single link
 // generation. It is derived from LinkInstance and TransportLinkSpec.
 type ProbeTarget struct {
-	ProbeID         string
-	InstanceID      string
-	GroupID         string
-	PeerZone        string
-	LocalZone       string
-	Overlay         string
-	NetNS           string
-	InterfaceName   string
-	UnderlayFamily  string
-	LocalTunnelAddr netip.Addr
-	PeerTunnelAddr  netip.Addr
-	Generation      uint64
-	ProbeRole       string
-	Role            string
-	State           string // LinkInstance state (connecting/up/degraded/...)
-	Staged          bool
+	ProbeID         string     `json:"probe_id,omitempty"`
+	InstanceID      string     `json:"instance_id"`
+	GroupID         string     `json:"group_id,omitempty"`
+	PeerZone        string     `json:"peer_zone,omitempty"`
+	LocalZone       string     `json:"local_zone,omitempty"`
+	Overlay         string     `json:"overlay,omitempty"`
+	NetNS           string     `json:"netns,omitempty"`
+	InterfaceName   string     `json:"interface_name,omitempty"`
+	UnderlayFamily  string     `json:"underlay_family,omitempty"`
+	LocalTunnelAddr netip.Addr `json:"local_tunnel_addr,omitempty,omitzero"`
+	PeerTunnelAddr  netip.Addr `json:"peer_tunnel_addr,omitempty,omitzero"`
+	Generation      uint64     `json:"generation,omitempty"`
+	ProbeRole       string     `json:"probe_role,omitempty"`
+	Role            string     `json:"role,omitempty"`
+	State           string     `json:"state,omitempty"` // LinkInstance state (connecting/up/degraded/...)
+	Staged          bool       `json:"staged,omitempty"`
 }
 
 // ShouldProbe reports whether this target is in a probeable link state.

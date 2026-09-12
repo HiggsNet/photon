@@ -1,10 +1,12 @@
 package text
 
 import (
+	"net/netip"
 	"strings"
 	"testing"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/pkg/health"
 )
 
 func TestWriteHealthNoTargets(t *testing.T) {
@@ -19,15 +21,15 @@ func TestWriteHealthNoTargets(t *testing.T) {
 
 func TestWriteHealthVerboseSortsTargetsAndShowsSampleState(t *testing.T) {
 	view := inspect.HealthView{
-		Targets: []inspect.HealthTarget{
+		Targets: []health.ProbeTarget{
 			{
 				ProbeID:         "link-b#staged",
 				InstanceID:      "link-b",
 				PeerZone:        "node-b.catofes.",
 				Overlay:         "blue",
 				InterfaceName:   "phx-b",
-				LocalTunnelAddr: "fd00::1",
-				PeerTunnelAddr:  "fd00::2",
+				LocalTunnelAddr: netip.MustParseAddr("fd00::1"),
+				PeerTunnelAddr:  netip.MustParseAddr("fd00::2"),
 				ProbeRole:       "staged",
 				State:           "up",
 				Staged:          true,
@@ -38,8 +40,8 @@ func TestWriteHealthVerboseSortsTargetsAndShowsSampleState(t *testing.T) {
 				PeerZone:        "node-a.catofes.",
 				Overlay:         "blue",
 				InterfaceName:   "phx-a",
-				LocalTunnelAddr: "fd00::3",
-				PeerTunnelAddr:  "fd00::4",
+				LocalTunnelAddr: netip.MustParseAddr("fd00::3"),
+				PeerTunnelAddr:  netip.MustParseAddr("fd00::4"),
 				State:           "up",
 			},
 		},
@@ -97,7 +99,7 @@ func TestWriteHealthVerboseSortsTargetsAndShowsSampleState(t *testing.T) {
 
 func TestWriteHealthConciseHidesDiagnosticColumns(t *testing.T) {
 	view := inspect.HealthView{
-		Targets: []inspect.HealthTarget{{
+		Targets: []health.ProbeTarget{{
 			ProbeID: "probe-secret", InstanceID: "link-secret", PeerZone: "node-b.",
 			ProbeRole: "active", UnderlayFamily: "ipv6", InterfaceName: "phx0",
 		}},

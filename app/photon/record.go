@@ -3,17 +3,11 @@ package main
 import (
 	"fmt"
 	"os"
-	"slices"
-	"strings"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
-	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
-	"github.com/HiggsNet/photon/pkg/routing"
-	photonservice "github.com/HiggsNet/photon/pkg/service"
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 type recordMutationResult struct {
@@ -21,40 +15,6 @@ type recordMutationResult struct {
 	Key     string
 	Version uint64
 	DryRun  bool
-}
-
-func validateGenericRecordPut(key, recordType string) error {
-	reservedPrefixes := []string{
-		routing.RecordKeyPrefixIPAMPools,
-		routing.RecordKeyPrefixIPAMAssignments,
-		routing.RecordKeyPrefixRoutes,
-		photonservice.RecordKeyPrefix,
-		"routing/",
-		"ipsec/",
-		gossip.EndpointRecordKeyPrefix,
-	}
-	for _, prefix := range reservedPrefixes {
-		if strings.HasPrefix(key, prefix) {
-			return fmt.Errorf("record_put key %q is daemon-owned; use its typed control method", key)
-		}
-	}
-	reservedTypes := []string{
-		routing.RecordTypeIPAMPool,
-		routing.RecordTypeIPAMAssignment,
-		routing.RecordTypeRouteAnnouncement,
-		routing.RecordTypeRoutingNetns,
-		photonservice.RecordTypeSOCKS5,
-		ipsec.RecordTypeProfile,
-		ipsec.RecordTypeAddresses,
-		ipsec.RecordTypePorts,
-		ipsec.RecordTypeTransportKey,
-		ipsec.RecordTypeOverlayIntent,
-		"sync.endpoint",
-	}
-	if slices.Contains(reservedTypes, recordType) {
-		return fmt.Errorf("record_put type %q is daemon-owned; use its typed control method", recordType)
-	}
-	return nil
 }
 
 func putRecord(path zone.ZonePath, key string, value []byte, recordType string, direct bool) error {
@@ -77,9 +37,6 @@ func putRecord(path zone.ZonePath, key string, value []byte, recordType string, 
 }
 
 func putRecordDirect(rt *AppContext, path zone.ZonePath, key string, value []byte, recordType string) error {
-	if err := validateGenericRecordPut(key, recordType); err != nil {
-		return err
-	}
 	result, err := applyOfflineCommonIntent(rt, corestate.PutRecordIntent{
 		Zone: path, Key: key, Type: recordType, Value: append([]byte(nil), value...),
 	}, false)

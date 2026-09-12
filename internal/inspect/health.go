@@ -1,6 +1,10 @@
 package inspect
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/HiggsNet/photon/pkg/health"
+)
 
 const (
 	HealthSortPeer = "peer"
@@ -12,27 +16,8 @@ const (
 // current in-memory observations and may be absent for a target that has not
 // completed a probe yet.
 type HealthView struct {
-	Targets []HealthTarget `json:"targets"`
-	Samples []HealthSample `json:"samples"`
-}
-
-type HealthTarget struct {
-	ProbeID         string `json:"probe_id,omitempty"`
-	InstanceID      string `json:"instance_id"`
-	GroupID         string `json:"group_id,omitempty"`
-	PeerZone        string `json:"peer_zone,omitempty"`
-	LocalZone       string `json:"local_zone,omitempty"`
-	Overlay         string `json:"overlay,omitempty"`
-	NetNS           string `json:"netns,omitempty"`
-	InterfaceName   string `json:"interface_name,omitempty"`
-	UnderlayFamily  string `json:"underlay_family,omitempty"`
-	LocalTunnelAddr string `json:"local_tunnel_addr,omitempty"`
-	PeerTunnelAddr  string `json:"peer_tunnel_addr,omitempty"`
-	Generation      uint64 `json:"generation,omitempty"`
-	ProbeRole       string `json:"probe_role,omitempty"`
-	Role            string `json:"role,omitempty"`
-	State           string `json:"state,omitempty"`
-	Staged          bool   `json:"staged,omitempty"`
+	Targets []health.ProbeTarget `json:"targets"`
+	Samples []HealthSample       `json:"samples"`
 }
 
 type HealthSample struct {
@@ -60,7 +45,7 @@ type HealthSample struct {
 
 func BuildHealthView(view HealthView, sortBy string) HealthView {
 	out := view
-	out.Targets = append([]HealthTarget(nil), view.Targets...)
+	out.Targets = append([]health.ProbeTarget(nil), view.Targets...)
 	out.Samples = append([]HealthSample(nil), view.Samples...)
 	samplesByProbe := make(map[string]HealthSample, len(out.Samples))
 	for _, sample := range out.Samples {
@@ -96,7 +81,7 @@ func BuildHealthView(view HealthView, sortBy string) HealthView {
 	return out
 }
 
-func healthTargetProbeID(target HealthTarget) string {
+func healthTargetProbeID(target health.ProbeTarget) string {
 	if target.ProbeID != "" {
 		return target.ProbeID
 	}

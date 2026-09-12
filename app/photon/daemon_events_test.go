@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
-	"github.com/HiggsNet/photon/internal/photonlinux"
 	"net"
 	"path/filepath"
 	"strings"
@@ -12,12 +11,38 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
+
+func TestCommonMutationAffectsRouting(t *testing.T) {
+	tests := []struct {
+		name   string
+		intent corestate.LocalIntent
+		want   bool
+	}{
+		{name: "put pool", intent: corestate.PutIPAMPoolIntent{}, want: true},
+		{name: "revoke pool", intent: corestate.RevokeIPAMPoolIntent{}, want: true},
+		{name: "put assignment", intent: corestate.PutIPAMAssignmentIntent{}, want: true},
+		{name: "revoke assignment", intent: corestate.RevokeIPAMAssignmentIntent{}, want: true},
+		{name: "announce route", intent: corestate.AnnounceRouteIntent{}, want: true},
+		{name: "withdraw route", intent: corestate.WithdrawRouteIntent{}, want: true},
+		{name: "record", intent: corestate.PutRecordIntent{}},
+		{name: "service", intent: corestate.PublishSOCKS5Intent{}},
+		{name: "nil"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := commonMutationAffectsRouting(test.intent); got != test.want {
+				t.Fatalf("commonMutationAffectsRouting() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
 
 func TestDaemonRecordPutEventSerializesWrite(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
@@ -29,8 +54,8 @@ func TestDaemonRecordPutEventSerializesWrite(t *testing.T) {
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
 	result, syncNow, shutdown := service.handleEvent(daemonEvent{
-		Type: daemonEventRecordPut,
-		RecordPut: &daemonRecordPut{
+		Type: daemonEventCommonMutation,
+		CommonIntent: corestate.PutRecordIntent{
 			Zone:  zone.ZonePath("node-b.catofes."),
 			Key:   "identity",
 			Value: []byte("node-b"),
@@ -63,8 +88,8 @@ func TestDaemonEventLoopDispatchesRecordPut(t *testing.T) {
 
 	reply := make(chan daemonEventResult, 1)
 	service.Events <- daemonEvent{
-		Type: daemonEventRecordPut,
-		RecordPut: &daemonRecordPut{
+		Type: daemonEventCommonMutation,
+		CommonIntent: corestate.PutRecordIntent{
 			Zone:  zone.ZonePath("node-b.catofes."),
 			Key:   "event-loop-record",
 			Value: []byte("store"),
@@ -187,8 +212,8 @@ func TestDaemonConcurrentRecordPutEventsAreSerialized(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			result := service.enqueueEvent(ctx, daemonEvent{
-				Type: daemonEventRecordPut,
-				RecordPut: &daemonRecordPut{
+				Type: daemonEventCommonMutation,
+				CommonIntent: corestate.PutRecordIntent{
 					Zone:  zone.ZonePath("node-b.catofes."),
 					Key:   "identity",
 					Value: []byte{byte('a' + i)},
@@ -247,8 +272,8 @@ func TestDaemonRecordPutKeepsCommittedStateAuthoritativeOverExternalDiskWrite(t 
 	replacePersistedCommonForTest(t, rt, external.State)
 
 	result, _, _ := service.handleEvent(daemonEvent{
-		Type: daemonEventRecordPut,
-		RecordPut: &daemonRecordPut{
+		Type: daemonEventCommonMutation,
+		CommonIntent: corestate.PutRecordIntent{
 			Zone:  zone.ZonePath("node-b.catofes."),
 			Key:   "daemon",
 			Value: []byte("new"),
@@ -459,8 +484,8 @@ func TestDaemonConcurrentAdminAndRecordEventsPreserveState(t *testing.T) {
 	}
 	events := []daemonEvent{
 		{
-			Type: daemonEventRecordPut,
-			RecordPut: &daemonRecordPut{
+			Type: daemonEventCommonMutation,
+			CommonIntent: corestate.PutRecordIntent{
 				Zone:  "catofes.",
 				Key:   "admin-note",
 				Value: []byte("kept"),

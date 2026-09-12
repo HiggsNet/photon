@@ -11,6 +11,7 @@ import (
 	photonstate "github.com/HiggsNet/photon/internal/state"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
@@ -598,8 +599,8 @@ func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 	installTestIPsecDrivers(service, driver, driver)
 
 	service.Events <- daemonEvent{
-		Type: daemonEventRecordPut,
-		RecordPut: &daemonRecordPut{
+		Type: daemonEventCommonMutation,
+		CommonIntent: corestate.PutRecordIntent{
 			Zone:  "node-b.catofes.",
 			Key:   "coalesce-a",
 			Value: []byte("a"),
@@ -607,8 +608,8 @@ func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 		},
 	}
 	service.Events <- daemonEvent{
-		Type: daemonEventRecordPut,
-		RecordPut: &daemonRecordPut{
+		Type: daemonEventCommonMutation,
+		CommonIntent: corestate.PutRecordIntent{
 			Zone:  "node-b.catofes.",
 			Key:   "coalesce-b",
 			Value: []byte("b"),

@@ -61,7 +61,7 @@ func WriteHealth(w io.Writer, view inspect.HealthView, sortBy string, verbose bo
 			firstNonEmpty(t.ProbeRole, "active"),
 			dash(t.UnderlayFamily),
 			dash(t.InterfaceName),
-			formatHealthTunnel(t.LocalTunnelAddr, t.PeerTunnelAddr),
+			formatHealthTunnel(inspect.FormatAddr(t.LocalTunnelAddr), inspect.FormatAddr(t.PeerTunnelAddr)),
 			dash(t.State),
 			healthSampleState(sample, hasSample),
 			dash(sample.ProbeType),

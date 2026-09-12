@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -24,11 +25,11 @@ func TestDaemonIPAMMutationUsesCommittedAuthorityNotDifferentDiskState(t *testin
 	service := newTestDaemonFromOwners(rt, committed.State, committed.Gossip, runtime, rt.Config, time.Second)
 	beforeRevision := uint64(service.State.Common.VerifiedRevision())
 	result, syncNow, _ := service.handleEvent(daemonEvent{
-		Type: daemonEventIPAMMutation,
-		IPAM: &ipamMutationRequest{
+		Type: daemonEventCommonMutation,
+		CommonIntent: commonIPAMIntentForTest(t, ipamMutationRequest{
 			Operation: ipamOperationAssignmentCreate,
 			Zone:      managed, Prefix: "10.0.1.0/24", Target: managed,
-		},
+		}),
 	})
 	if result.Error == nil || !strings.Contains(result.Error.Error(), "ipam_assignment_pool_mismatch") {
 		t.Fatalf("IPAM mutation error = %v, want daemon committed pool mismatch", result.Error)
@@ -68,11 +69,11 @@ func TestDaemonIPAMMutationPersistsCommittedDecisionWhenDiskIsOlder(t *testing.T
 
 	service := newTestDaemonFromOwners(rt, committed.State, committed.Gossip, runtime, rt.Config, time.Second)
 	result, _, _ := service.handleEvent(daemonEvent{
-		Type: daemonEventIPAMMutation,
-		IPAM: &ipamMutationRequest{
+		Type: daemonEventCommonMutation,
+		CommonIntent: commonIPAMIntentForTest(t, ipamMutationRequest{
 			Operation: ipamOperationAssignmentCreate,
 			Zone:      managed, Prefix: "10.0.1.0/24", Target: managed,
-		},
+		}),
 	})
 	if result.Error != nil {
 		t.Fatalf("IPAM mutation rejected committed authority: %v", result.Error)
@@ -118,8 +119,8 @@ func TestDaemonRouteMutationRejectsUsingCommittedActiveStateNotDisk(t *testing.T
 	service := newTestDaemonFromOwners(rt, state, view.Gossip, runtime, rt.Config, time.Second)
 	beforeRevision := uint64(service.State.Common.VerifiedRevision())
 	result, _, _ := service.handleEvent(daemonEvent{
-		Type:  daemonEventRouteMutation,
-		Route: &routeMutationRequest{Zone: managed, Prefix: "10.0.4.0/24", Active: false},
+		Type:         daemonEventCommonMutation,
+		CommonIntent: commonRouteIntent(routeMutationRequest{Zone: managed, Prefix: "10.0.4.0/24", Active: false}),
 	})
 	if result.Error == nil || !strings.Contains(result.Error.Error(), "already withdrawn") {
 		t.Fatalf("route mutation error = %v, want committed already-withdrawn rejection", result.Error)
@@ -157,9 +158,8 @@ func TestDaemonMutationRejectsUsingCommittedAssignmentsNotDisk(t *testing.T) {
 	service := newTestDaemonFromOwners(rt, committed.State, committed.Gossip, runtime, rt.Config, time.Second)
 	beforeRevision := uint64(service.State.Common.VerifiedRevision())
 	result, _, _ := service.handleEvent(daemonEvent{
-		Type: daemonEventServiceMutation,
-		Service: &serviceMutationRequest{
-			Operation: serviceOperationPublish,
+		Type: daemonEventCommonMutation,
+		CommonIntent: corestate.PublishSOCKS5Intent{
 			Endpoints: []photonservice.SOCKS5Endpoint{{Region: "test", Address: "10.0.5.10", Port: 1080}},
 		},
 	})
@@ -189,11 +189,12 @@ func TestDaemonTypedDryRunDoesNotCommit(t *testing.T) {
 	service := newTestDaemonFromOwners(rt, view.State, view.Gossip, runtime, rt.Config, time.Second)
 	before := uint64(service.State.Common.VerifiedRevision())
 	result, syncNow, _ := service.handleEvent(daemonEvent{
-		Type: daemonEventIPAMMutation,
-		IPAM: &ipamMutationRequest{
+		Type: daemonEventCommonMutation,
+		CommonIntent: commonIPAMIntentForTest(t, ipamMutationRequest{
 			Operation: ipamOperationAssignmentCreate,
-			Zone:      managed, Prefix: "10.0.2.0/24", Target: managed, DryRun: true,
-		},
+			Zone:      managed, Prefix: "10.0.2.0/24", Target: managed,
+		}),
+		DryRun: true,
 	})
 	if result.Error != nil {
 		t.Fatalf("dry-run mutation: %v", result.Error)
@@ -224,7 +225,7 @@ func TestExplicitDirectAndDaemonIPAMUseSameDomainValidation(t *testing.T) {
 	}
 	_, directErr := applyAuthoritativeVerifiedTestIntent(view.State, commonIPAMIntentForTest(t, request), rt.Now())
 	service := newTestDaemonFromOwners(rt, view.State, view.Gossip, runtime, rt.Config, time.Second)
-	result, _, _ := service.handleEvent(daemonEvent{Type: daemonEventIPAMMutation, IPAM: &request})
+	result, _, _ := service.handleEvent(daemonEvent{Type: daemonEventCommonMutation, CommonIntent: commonIPAMIntentForTest(t, request)})
 	if directErr == nil || result.Error == nil {
 		t.Fatalf("validation results direct=%v daemon=%v, want both rejected", directErr, result.Error)
 	}
@@ -338,21 +339,21 @@ func TestTypedIPAMControlMethodCommitsDaemonValidatedRequest(t *testing.T) {
 	}
 }
 
-func TestDaemonRawRecordPutRejectsReservedNamespaceWithoutRevision(t *testing.T) {
+func TestDaemonCommonMutationRejectsReservedRecordWithoutRevision(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	service := newTestDaemonFromOwners(
 		&AppContext{Config: defaultAppConfig(), Clock: time.Now}, verified, checkpoint, runtime, config, time.Second,
 	)
 	before := uint64(service.State.Common.VerifiedRevision())
 	result, syncNow, _ := service.handleEvent(daemonEvent{
-		Type: daemonEventRecordPut,
-		RecordPut: &daemonRecordPut{
+		Type: daemonEventCommonMutation,
+		CommonIntent: corestate.PutRecordIntent{
 			Zone: zone.ZonePath("node-b.catofes."),
 			Key:  routing.RecordKeyPrefixRoutes + "10.0.0.0_24",
 			Type: "application.fake",
 		},
 	})
-	if result.Error == nil || !strings.Contains(result.Error.Error(), "daemon-owned") {
+	if !errors.Is(result.Error, corestate.ErrReservedRecordIntent) {
 		t.Fatalf("reserved record_put error = %v", result.Error)
 	}
 	if syncNow {

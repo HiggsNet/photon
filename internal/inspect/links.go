@@ -186,8 +186,8 @@ func BuildLinkInstanceFromRuntime(inst ipsec.LinkInstance, routing LinkRouting) 
 		ActualState:           inst.ActualState,
 		InterfaceName:         inst.InterfaceName,
 		XFRMIfID:              inst.XFRMIfID,
-		LocalTunnelAddr:       formatObservedAddr(inst.LocalTunnelAddr),
-		PeerTunnelAddr:        formatObservedAddr(inst.PeerTunnelAddr),
+		LocalTunnelAddr:       FormatAddr(inst.LocalTunnelAddr),
+		PeerTunnelAddr:        FormatAddr(inst.PeerTunnelAddr),
 		IKEName:               inst.IKEName,
 		ChildSAName:           inst.ChildSAName,
 		Endpoint:              inst.Endpoint,
@@ -198,8 +198,8 @@ func BuildLinkInstanceFromRuntime(inst ipsec.LinkInstance, routing LinkRouting) 
 		StagedChildSAName:     inst.StagedChildSAName,
 		StagedInterfaceName:   inst.StagedInterfaceName,
 		StagedXFRMIfID:        inst.StagedXFRMIfID,
-		StagedLocalTunnelAddr: formatObservedAddr(inst.StagedLocalTunnelAddr),
-		StagedPeerTunnelAddr:  formatObservedAddr(inst.StagedPeerTunnelAddr),
+		StagedLocalTunnelAddr: FormatAddr(inst.StagedLocalTunnelAddr),
+		StagedPeerTunnelAddr:  FormatAddr(inst.StagedPeerTunnelAddr),
 		RotateDeadline:        inst.RotateDeadline,
 		LastFailure:           inst.LastFailure,
 		FailureCount:          inst.FailureCount,
@@ -220,7 +220,8 @@ func BuildLinkInstanceFromRuntime(inst ipsec.LinkInstance, routing LinkRouting) 
 	}
 }
 
-func formatObservedAddr(addr netip.Addr) string {
+// FormatAddr renders an invalid address as an empty presentation value.
+func FormatAddr(addr netip.Addr) string {
 	if !addr.IsValid() {
 		return ""
 	}

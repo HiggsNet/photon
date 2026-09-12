@@ -127,6 +127,8 @@ Daemon
   - [x] BIRD raw debug 的命令选择移入 `pkg/routing/bird`，neighbors/routes/entries、filter definition 解析、LinkOutput 接口上下文与 canonical dump enrichment 移入 `internal/inspect`；app 只负责在线执行、配置文件读取和传入 provider-neutral link outputs，测试跟随 owner 迁移。
   - [x] `debug routes` 与 `debug route` 共用同一个 canonical routes loader；在线只读 control view，离线只读 common owner，不重复维护两份 fallback builder。
   - [x] IPsec desired/SA/action/skip 只在 reconcile 边界做一次脱敏并保存为 canonical `*Observation`；inspect 直接 alias，删除第二套同字段 struct、逐字段 builder、app 批量 converter 与重复 SA copier，同时以测试锁定私钥/spec 指针不得进入 observation。
+  - [x] health view、`ping_targets` control 与 `debug ping` 直接共用安全的 `health.ProbeTarget`；删除 `inspect.HealthTarget`、正向 builder 和 CLI 反向地址 parser，JSON 保持 snake_case schema，零地址不再序列化为 Go 的 `invalid IP` 哨兵字符串。
+  - [x] record/IPAM/route/service 在 control 或 direct 边界直接生成 `corestate.LocalIntent`；Daemon 单 writer 队列只保留一个 `common_mutation` 事件及 `dryRun`，删除四套事件 payload、`daemonRecordPut` 以及 app 侧重复的 reserved-record 校验表，路由立即刷新由 intent 类型判定。
 - [ ] CLI/control/HTTP 共用 canonical inspect DTO；CLI 不再从 HTTP DTO 反向转换，也不直接调用平台 Driver。
 - [ ] verified/common 允许离线读；GossipCheckpoint 离线必须标记 `last-known`；platform Observation 只允许在线读。
 - [ ] CLI 壳稳定后再迁入 `internal/photoncli`，不为了减少 `app/photon` 文件数先搬目录。

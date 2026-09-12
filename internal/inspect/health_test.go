@@ -1,10 +1,14 @@
 package inspect
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/HiggsNet/photon/pkg/health"
+)
 
 func TestBuildHealthViewSortsTargets(t *testing.T) {
 	view := BuildHealthView(HealthView{
-		Targets: []HealthTarget{
+		Targets: []health.ProbeTarget{
 			{InstanceID: "b", ProbeRole: "staged", ProbeID: "b-staged"},
 			{InstanceID: "a", ProbeRole: "active", ProbeID: "a-active"},
 			{InstanceID: "b", ProbeRole: "active", ProbeID: "b-active"},
@@ -21,7 +25,7 @@ func TestBuildHealthViewSortsTargets(t *testing.T) {
 
 func TestBuildHealthViewSortsByPeerOrRTT(t *testing.T) {
 	view := HealthView{
-		Targets: []HealthTarget{
+		Targets: []health.ProbeTarget{
 			{ProbeID: "slow", InstanceID: "link-a", PeerZone: "node-a."},
 			{ProbeID: "missing", InstanceID: "link-c", PeerZone: "node-c."},
 			{ProbeID: "fast", InstanceID: "link-b", PeerZone: "node-b."},
@@ -43,7 +47,7 @@ func TestBuildHealthViewSortsByPeerOrRTT(t *testing.T) {
 }
 
 func TestBuildHealthViewPeerSortMatchesLinksZoneOrdering(t *testing.T) {
-	view := BuildHealthView(HealthView{Targets: []HealthTarget{
+	view := BuildHealthView(HealthView{Targets: []health.ProbeTarget{
 		{ProbeID: "child", InstanceID: "c", PeerZone: "node-a.example."},
 		{ProbeID: "parent", InstanceID: "p", PeerZone: "example."},
 		{ProbeID: "last", InstanceID: "z", PeerZone: "node-z.example."},

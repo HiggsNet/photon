@@ -78,10 +78,7 @@ const (
 	daemonTimerRouting                               = "routing_reconcile"
 	daemonTimerFirewall                              = "firewall_reconcile"
 	daemonTimerHealth                                = "health_probe"
-	daemonEventRecordPut             daemonEventType = "record_put"
-	daemonEventIPAMMutation          daemonEventType = "ipam_mutate"
-	daemonEventRouteMutation         daemonEventType = "route_mutate"
-	daemonEventServiceMutation       daemonEventType = "service_mutate"
+	daemonEventCommonMutation        daemonEventType = "common_mutation"
 	daemonEventDelegateIssue         daemonEventType = "delegate_issue"
 	daemonEventDelegateRevoke        daemonEventType = "delegate_revoke"
 	daemonEventDelegateGrant         daemonEventType = "delegate_grant"
@@ -102,33 +99,24 @@ const (
 )
 
 type daemonEvent struct {
-	Type        daemonEventType
-	RecordPut   *daemonRecordPut
-	JoinRequest *joinRequest
-	JoinBundle  *joinBundle
-	PrivateKey  *privateKeyFile
-	Permissions []zone.Permission
-	Snapshot    *corestate.ZoneSnapshot
-	Zone        zone.ZonePath
-	Reason      string
-	Key         string
-	Apply       bool
-	Orphans     bool
-	VICIEvent   ipsec.VICIEvent
-	ForceSync   bool
-	EndpointACL *photonstate.EndpointACL
-	IPAM        *ipamMutationRequest
-	Route       *routeMutationRequest
-	Service     *serviceMutationRequest
-	Context     context.Context
-	Reply       chan daemonEventResult
-}
-
-type daemonRecordPut struct {
-	Zone  zone.ZonePath
-	Key   string
-	Value []byte
-	Type  string
+	Type         daemonEventType
+	CommonIntent corestate.LocalIntent
+	DryRun       bool
+	JoinRequest  *joinRequest
+	JoinBundle   *joinBundle
+	PrivateKey   *privateKeyFile
+	Permissions  []zone.Permission
+	Snapshot     *corestate.ZoneSnapshot
+	Zone         zone.ZonePath
+	Reason       string
+	Key          string
+	Apply        bool
+	Orphans      bool
+	VICIEvent    ipsec.VICIEvent
+	ForceSync    bool
+	EndpointACL  *photonstate.EndpointACL
+	Context      context.Context
+	Reply        chan daemonEventResult
 }
 
 type daemonEventResult struct {
@@ -637,12 +625,10 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		result := d.enqueueEvent(ctx, daemonEvent{
-			Type: daemonEventRecordPut,
-			RecordPut: &daemonRecordPut{
-				Zone:  zone.ZonePath(request.Zone),
-				Key:   request.Key,
-				Value: parseControlRecordValue(request),
-				Type:  request.Type,
+			Type: daemonEventCommonMutation,
+			CommonIntent: corestate.PutRecordIntent{
+				Zone: zone.ZonePath(request.Zone), Key: request.Key, Type: request.Type,
+				Value: append([]byte(nil), parseControlRecordValue(request)...),
 			},
 		})
 		if result.Error != nil {
@@ -655,7 +641,12 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("ipam_mutate requires ipam request")))
 			return
 		}
-		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventIPAMMutation, IPAM: request.IPAM})
+		intent, err := commonIPAMIntent(*request.IPAM)
+		if err != nil {
+			writeControlResponse(conn, controlError(err))
+			return
+		}
+		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventCommonMutation, CommonIntent: intent, DryRun: request.IPAM.DryRun})
 		if result.Error != nil {
 			writeControlResponse(conn, controlError(result.Error))
 			return
@@ -666,7 +657,9 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("route_mutate requires route request")))
 			return
 		}
-		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventRouteMutation, Route: request.Route})
+		result := d.enqueueEvent(ctx, daemonEvent{
+			Type: daemonEventCommonMutation, CommonIntent: commonRouteIntent(*request.Route), DryRun: request.Route.DryRun,
+		})
 		if result.Error != nil {
 			writeControlResponse(conn, controlError(result.Error))
 			return
@@ -677,7 +670,12 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("service_mutate requires service request")))
 			return
 		}
-		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventServiceMutation, Service: request.Service})
+		intent, err := commonServiceIntent(*request.Service)
+		if err != nil {
+			writeControlResponse(conn, controlError(err))
+			return
+		}
+		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventCommonMutation, CommonIntent: intent, DryRun: request.Service.DryRun})
 		if result.Error != nil {
 			writeControlResponse(conn, controlError(result.Error))
 			return
@@ -778,7 +776,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		links, reconcile := d.linuxObservation.ipsecSnapshot()
 		targets := linkstate.HealthTargets(buildLinkOutputs(links, reconcile), string(common.State.ManagedZone))
-		writeCanonicalView(conn, inspectHealthProbeTargets(targets))
+		writeCanonicalView(conn, targets)
 	case "sync_view":
 		common := d.State.Common.ReadView()
 		if common.State == nil {
@@ -1139,8 +1137,7 @@ func (d *Daemon) processEvents(ctx context.Context) (syncNow bool, shutdown bool
 			if event.Type == daemonEventIPsecCleanup && result.Error == nil {
 				ipsecFlushed = d.flushIPsecReconcile(ctx) || ipsecFlushed
 			}
-			routingMutationCommitted := (event.Type == daemonEventIPAMMutation && event.IPAM != nil && !event.IPAM.DryRun) ||
-				(event.Type == daemonEventRouteMutation && event.Route != nil && !event.Route.DryRun)
+			routingMutationCommitted := event.Type == daemonEventCommonMutation && !event.DryRun && commonMutationAffectsRouting(event.CommonIntent)
 			if routingMutationCommitted && result.Error == nil {
 				flushed, err := d.flushRoutingReconcileResult(ctx)
 				routingFlushed = flushed || routingFlushed
@@ -1171,34 +1168,11 @@ func (d *Daemon) processEvents(ctx context.Context) (syncNow bool, shutdown bool
 
 func (d *Daemon) handleEvent(event daemonEvent) (daemonEventResult, bool, bool) {
 	switch event.Type {
-	case daemonEventRecordPut:
-		version, err := d.handleRecordPutEvent(event.RecordPut)
-		return daemonEventResult{Version: version, Error: err}, err == nil, false
-	case daemonEventIPAMMutation:
-		if event.IPAM == nil {
-			return daemonEventResult{Error: errors.New("ipam mutation event is nil")}, false, false
+	case daemonEventCommonMutation:
+		if event.CommonIntent == nil {
+			return daemonEventResult{Error: errors.New("common mutation intent is nil")}, false, false
 		}
-		intent, err := commonIPAMIntent(*event.IPAM)
-		if err != nil {
-			return daemonEventResult{Error: err}, false, false
-		}
-		result, err := d.handleCommonRecordMutationEvent(intent, event.IPAM.DryRun)
-		return daemonEventResult{Version: recordMutationVersion(result), Error: err}, err == nil && result != nil && !result.DryRun, false
-	case daemonEventRouteMutation:
-		if event.Route == nil {
-			return daemonEventResult{Error: errors.New("route mutation event is nil")}, false, false
-		}
-		result, err := d.handleCommonRecordMutationEvent(commonRouteIntent(*event.Route), event.Route.DryRun)
-		return daemonEventResult{Version: recordMutationVersion(result), Error: err}, err == nil && result != nil && !result.DryRun, false
-	case daemonEventServiceMutation:
-		if event.Service == nil {
-			return daemonEventResult{Error: errors.New("service mutation event is nil")}, false, false
-		}
-		intent, err := commonServiceIntent(*event.Service)
-		if err != nil {
-			return daemonEventResult{Error: err}, false, false
-		}
-		result, err := d.handleCommonRecordMutationEvent(intent, event.Service.DryRun)
+		result, err := d.handleCommonRecordMutationEvent(event.CommonIntent, event.DryRun)
 		return daemonEventResult{Version: recordMutationVersion(result), Error: err}, err == nil && result != nil && !result.DryRun, false
 	case daemonEventDelegateIssue:
 		result, err := d.handleDelegateIssueEvent(event.JoinRequest, event.Permissions)
@@ -1614,22 +1588,6 @@ func (d *Daemon) publishLocalProtocols() (bool, error) {
 	return changed, nil
 }
 
-func (d *Daemon) handleRecordPutEvent(event *daemonRecordPut) (uint64, error) {
-	if event == nil {
-		return 0, errors.New("record_put event is nil")
-	}
-	if err := validateGenericRecordPut(event.Key, event.Type); err != nil {
-		return 0, err
-	}
-	if d.State == nil {
-		return 0, errors.New("daemon service is not initialized")
-	}
-	result, err := d.handleCommonRecordMutationEvent(corestate.PutRecordIntent{
-		Zone: event.Zone, Key: event.Key, Type: event.Type, Value: append([]byte(nil), event.Value...),
-	}, false)
-	return recordMutationVersion(result), err
-}
-
 func (d *Daemon) handleCommonRecordMutationEvent(intent corestate.LocalIntent, dryRun bool) (*recordMutationResult, error) {
 	if d == nil || d.State == nil {
 		return nil, errors.New("daemon service is not initialized")
@@ -1655,6 +1613,20 @@ func (d *Daemon) handleCommonRecordMutationEvent(intent corestate.LocalIntent, d
 		d.notifyStateChanged()
 	}
 	return out, nil
+}
+
+func commonMutationAffectsRouting(intent corestate.LocalIntent) bool {
+	switch intent.(type) {
+	case corestate.PutIPAMPoolIntent,
+		corestate.RevokeIPAMPoolIntent,
+		corestate.PutIPAMAssignmentIntent,
+		corestate.RevokeIPAMAssignmentIntent,
+		corestate.AnnounceRouteIntent,
+		corestate.WithdrawRouteIntent:
+		return true
+	default:
+		return false
+	}
 }
 
 func recordMutationVersion(result *recordMutationResult) uint64 {

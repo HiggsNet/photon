@@ -468,7 +468,7 @@ func validateControlRecordPut(request controlRequest) error {
 	if request.Type == "" {
 		return fmt.Errorf("record_put requires type")
 	}
-	return validateGenericRecordPut(request.Key, request.Type)
+	return nil
 }
 
 func validateControlRecordGet(request controlRequest) error {

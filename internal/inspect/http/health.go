@@ -4,6 +4,7 @@ import (
 	"sort"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/pkg/health"
 )
 
 type HealthResponse struct {
@@ -57,7 +58,7 @@ type HealthDesiredContextInput struct {
 }
 
 func BuildHealthContext(input HealthContextInput) []HealthContextItem {
-	targetsByProbe := make(map[string]inspect.HealthTarget, len(input.View.Targets))
+	targetsByProbe := make(map[string]health.ProbeTarget, len(input.View.Targets))
 	for _, target := range input.View.Targets {
 		targetsByProbe[healthProbeID(target.ProbeID, target.InstanceID)] = target
 	}
@@ -94,7 +95,7 @@ func BuildHealthContext(input HealthContextInput) []HealthContextItem {
 	sort.Strings(ids)
 	for _, id := range ids {
 		sample := inspect.HealthSample{InstanceID: id, State: "unknown"}
-		out = append(out, buildHealthContextItem(sample, inspect.HealthTarget{}, input.Instances[id], input.Desired[id]))
+		out = append(out, buildHealthContextItem(sample, health.ProbeTarget{}, input.Instances[id], input.Desired[id]))
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Health.InstanceID != out[j].Health.InstanceID {
@@ -105,14 +106,14 @@ func BuildHealthContext(input HealthContextInput) []HealthContextItem {
 	return out
 }
 
-func buildHealthContextItem(sample inspect.HealthSample, target inspect.HealthTarget, inst HealthInstanceContextInput, desired HealthDesiredContextInput) HealthContextItem {
+func buildHealthContextItem(sample inspect.HealthSample, target health.ProbeTarget, inst HealthInstanceContextInput, desired HealthDesiredContextInput) HealthContextItem {
 	item := HealthContextItem{
 		Health:          sample,
 		GroupID:         target.GroupID,
 		InterfaceName:   firstNonEmpty(sample.InterfaceName, target.InterfaceName),
 		ActualState:     target.State,
-		LocalTunnelAddr: target.LocalTunnelAddr,
-		PeerTunnelAddr:  target.PeerTunnelAddr,
+		LocalTunnelAddr: inspect.FormatAddr(target.LocalTunnelAddr),
+		PeerTunnelAddr:  inspect.FormatAddr(target.PeerTunnelAddr),
 	}
 	if target.PeerZone != "" {
 		item.PeerZone = target.PeerZone

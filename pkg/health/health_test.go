@@ -2,6 +2,7 @@ package health
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/netip"
 	"strings"
@@ -9,6 +10,36 @@ import (
 	"testing"
 	"time"
 )
+
+func TestProbeTargetJSONRoundTrip(t *testing.T) {
+	target := ProbeTarget{
+		ProbeID: "link-a#staged", InstanceID: "link-a", PeerZone: "node-a.example.",
+		LocalTunnelAddr: netip.MustParseAddr("fd00::1"), PeerTunnelAddr: netip.MustParseAddr("fd00::2"),
+		ProbeRole: "staged", Staged: true,
+	}
+	payload, err := json.Marshal(target)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(payload), `"local_tunnel_addr":"fd00::1"`) || strings.Contains(string(payload), "LocalTunnelAddr") {
+		t.Fatalf("wire target = %s", payload)
+	}
+	var decoded ProbeTarget
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.LocalTunnelAddr != target.LocalTunnelAddr || decoded.PeerTunnelAddr != target.PeerTunnelAddr || decoded.ProbeRole != target.ProbeRole {
+		t.Fatalf("decoded target = %#v", decoded)
+	}
+
+	empty, err := json.Marshal(ProbeTarget{InstanceID: "link-empty"})
+	if err != nil {
+		t.Fatalf("Marshal empty target: %v", err)
+	}
+	if strings.Contains(string(empty), "tunnel_addr") {
+		t.Fatalf("empty target exposes zero addresses: %s", empty)
+	}
+}
 
 func TestRollingWindowBasic(t *testing.T) {
 	w := NewRollingWindow(5)

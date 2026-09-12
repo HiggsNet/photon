@@ -17,6 +17,7 @@ import (
 	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	bolt "go.etcd.io/bbolt"
 )
@@ -158,7 +159,7 @@ func TestDaemonControlCommonReadViews(t *testing.T) {
 	if !endpoints.OK {
 		t.Fatalf("endpoints_view response = %#v", endpoints)
 	}
-	pingTargets := controlViewRequestViaPipe[[]inspect.HealthTarget](t, service, controlRequest{Method: "ping_targets"})
+	pingTargets := controlViewRequestViaPipe[[]health.ProbeTarget](t, service, controlRequest{Method: "ping_targets"})
 	if !pingTargets.OK {
 		t.Fatalf("ping_targets response = %#v", pingTargets)
 	}

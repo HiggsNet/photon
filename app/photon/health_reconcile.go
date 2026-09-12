@@ -188,31 +188,6 @@ func healthViewFromOwners(common corestate.View, links map[string]ipsec.LinkInst
 	if common.State == nil {
 		return view
 	}
-	view.Targets = inspectHealthProbeTargets(linkstate.HealthTargets(buildLinkOutputs(links, reconcile), string(common.State.ManagedZone)))
+	view.Targets = linkstate.HealthTargets(buildLinkOutputs(links, reconcile), string(common.State.ManagedZone))
 	return view
-}
-
-func inspectHealthProbeTargets(targets []health.ProbeTarget) []inspect.HealthTarget {
-	out := make([]inspect.HealthTarget, 0, len(targets))
-	for _, target := range targets {
-		out = append(out, inspect.HealthTarget{
-			ProbeID:         target.ProbeID,
-			InstanceID:      target.InstanceID,
-			GroupID:         target.GroupID,
-			PeerZone:        target.PeerZone,
-			LocalZone:       target.LocalZone,
-			Overlay:         target.Overlay,
-			NetNS:           target.NetNS,
-			InterfaceName:   target.InterfaceName,
-			UnderlayFamily:  target.UnderlayFamily,
-			LocalTunnelAddr: target.LocalTunnelAddr.String(),
-			PeerTunnelAddr:  target.PeerTunnelAddr.String(),
-			Generation:      target.Generation,
-			ProbeRole:       target.ProbeRole,
-			Role:            target.Role,
-			State:           target.State,
-			Staged:          target.Staged,
-		})
-	}
-	return out
 }

@@ -108,7 +108,7 @@ VerifiedState + LinuxState + 操作系统现状
 
 这是 Daemon 单 writer 队列里的内部联合体。事件队列本身有价值：它让控制命令、timer、VICI wakeup 和状态变化按一个明确顺序执行。联合体已膨胀到 20 多种 event 和大量互斥字段，容易构造出 `Type` 与 payload 不匹配的无效状态。
 
-不要用几十个新 interface/command class 替换它。更直接的减法是：在 control 边界先把 IPAM/route/service/record 转成 `corestate.LocalIntent`，让一个 common-mutation 事件携带 `LocalIntent + dryRun`；平台专用事件继续保留自己的明确字段。
+没有用几十个新 interface/command class 替换它。IPAM/route/service/record 现在已在 control 边界转成与 direct 路径相同的 `corestate.LocalIntent`，一个 `common_mutation` 事件只携带 `LocalIntent + dryRun`；原四种事件 payload 和 `daemonRecordPut` 已删除，平台专用事件继续保留自己的明确字段。
 
 ### join、recovery 和 mutation DTO
 
@@ -175,14 +175,14 @@ VerifiedState + LinuxState + 操作系统现状
 ### 9. `daemon.go`
 
 - 做什么：启动/关闭所有组件，运行顶层 select 循环，接 control 请求，排序 mutation，安排 timer，触发 IPsec/routing/firewall/health reconcile，并处理 reload、shutdown、join、recovery 等命令。
-- 主要构成：`Daemon`、`DaemonHooks`、`daemonEventType`、`daemonEvent`、`daemonRecordPut`、`daemonEventResult`。
-- 审核：Daemon 作为唯一生命周期和 mutation 编排者完全必要；2173 行文件本身过载。优先把 control method dispatch/response mapping 移回 control adapter，再收缩 common mutation event；完整的启动、关闭和安全顺序仍应留在 Daemon，不能拆成互相不知道顺序的 controller。
+- 主要构成：`Daemon`、`DaemonHooks`、`daemonEventType`、`daemonEvent`、`daemonEventResult`。
+- 审核：Daemon 作为唯一生命周期和 mutation 编排者完全必要；文件本身仍过载。record/IPAM/route/service 已收敛为一个携带 `LocalIntent` 的 common mutation event，接下来优先把 control method dispatch/response mapping 移回 control adapter；完整的启动、关闭和安全顺序仍应留在 Daemon，不能拆成互相不知道顺序的 controller。
 
 ### 10. `daemon_common_intent.go`
 
 - 做什么：把 IPAM、route、service control 请求转换成 `corestate.LocalIntent`。
 - 主要构成：没有 struct；三个很薄的 converter。
-- 审核：语义转换本身必要，但单独长期存在的迁移 adapter 价值有限。更理想是 control/direct 两个入口都尽早生成同一种 intent，然后复用一个提交路径；完成后此文件可以删除或并入边界 owner。
+- 审核：control 与 direct 两个入口现在都尽早生成同一种 intent，并复用 Store 提交语义；三个 converter 各有两个真实生产消费者，不是单调用方 wrapper。等 wire DTO 下沉到 control owner 时随边界一起移动，不额外再套 adapter。
 
 ### 11. `daemon_gossip.go`
 
@@ -253,8 +253,8 @@ VerifiedState + LinuxState + 操作系统现状
 ### 22. `debug_ping.go`
 
 - 做什么：从在线 daemon 取健康探测目标，按用户参数选择地址，然后调用 Linux health prober 执行 ping。
-- 主要构成：没有 struct；`healthTargetsFromInspect` 把 inspect DTO 反向转回 `health.ProbeTarget`。
-- 审核：ping 功能必要，但这是一处明确的“展示 DTO 反向变执行 DTO”。建议 control 返回专用、可执行但不含 Driver 的 probe target wire schema，或让 canonical target 成为共享类型，删除反向 parser。
+- 主要构成：没有 struct；直接从 control 解码共享的 `health.ProbeTarget` 并交给 Linux health prober。
+- 审核：ping 功能必要；原有“`inspect.HealthTarget` 展示 DTO 反向解析成执行 DTO”的路径已删除。`ProbeTarget` 本身不含 Driver 或敏感材料，现由 health view、control 和 CLI 直接共用，文本/HTTP 只在最终展示边界格式化地址。
 
 ### 23. `debug_revoke_impact.go`
 
@@ -574,8 +574,8 @@ VerifiedState + LinuxState + 操作系统现状
 
 1. [已完成] `DesiredLinkObservation`、`LinkSAObservation`、`LinkActionObservation`、`LinkSkipObservation` 成为唯一 secret-free live DTO；inspect 使用 alias，删除二次逐字段 builder 和 app converter。
 2. [已完成] reconcile 与 debug rotate 共用 SA 投影，避免两份字段列表漂移；保留 `ipsec.SAState -> LinkSAObservation` 这一道稳定 JSON/脱离 Driver 的边界。
-3. `inspect.HealthTarget -> health.ProbeTarget`：这是展示 DTO 反向变执行输入，方向不理想。应让 control 返回共享的安全 probe target，或把命令执行放到 daemon 端。
-4. `controlRequest.IPAM/Route/Service -> daemonEvent 对应字段 -> LocalIntent`：可在 control/direct 边界提前变成 intent，合并成一个 common mutation event。
+3. [已完成] health view、`ping_targets` control 和 `debug ping` 直接共用 `health.ProbeTarget`；删除 `inspect.HealthTarget`、正向 builder 与 CLI 反向地址 parser，稳定 JSON schema 由目标 owner 自己定义。
+4. [已完成] record/IPAM/route/service 已在 control/direct 边界生成 `LocalIntent`，合并成一个 `common_mutation` event；删除四种专用事件 payload、`daemonRecordPut` 和 app 侧重复的 reserved-record 校验表，保留真实 wire DTO 与 Store 中唯一的 typed 校验。
 
 ### 5.3 不建议做的“优化”
 
