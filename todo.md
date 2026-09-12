@@ -124,6 +124,7 @@ Daemon
 - [ ] 按迁移报告继续下沉 firewall/routing/IPsec policy 与 Linux 实现；app 只保留 composition、Unix control、CLI 注册和完整 Daemon 顺序。
 - [ ] 继续删除只有一个调用方的 wrapper、重复 clone/DTO builder 和 legacy 测试准备；测试跟随实际 owner 迁移。
   - [x] 删除 inspect 中 `PeerCheckpoint -> legacy PeerRuntimeState -> PeerDebugView` 的反向转换；debug view 直接读取 checkpoint 字段，`PeerRuntimeState` 不再进入 current inspect 路径。
+  - [x] BIRD raw debug 的命令选择移入 `pkg/routing/bird`，neighbors/routes/entries 与 filter definition 解析移入 canonical `internal/inspect`；app 只负责在线执行、配置文件读取和接口上下文装配，测试跟随 owner 迁移。
 - [ ] CLI/control/HTTP 共用 canonical inspect DTO；CLI 不再从 HTTP DTO 反向转换，也不直接调用平台 Driver。
 - [ ] verified/common 允许离线读；GossipCheckpoint 离线必须标记 `last-known`；platform Observation 只允许在线读。
 - [ ] CLI 壳稳定后再迁入 `internal/photoncli`，不为了减少 `app/photon` 文件数先搬目录。

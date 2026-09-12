@@ -8,7 +8,6 @@ import (
 	"net/netip"
 	"os"
 	"sort"
-	"strings"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
@@ -51,16 +50,7 @@ func debugRoutingReloadWithRuntime(rt *AppContext, w io.Writer) error {
 	return nil
 }
 
-type birdDebugView string
-
-const (
-	birdDebugStatus    birdDebugView = "status"
-	birdDebugInterface birdDebugView = "interface"
-	birdDebugFilter    birdDebugView = "filter"
-	birdDebugRoute     birdDebugView = "route"
-)
-
-func debugBird(_ context.Context, netnsName string, view birdDebugView) error {
+func debugBird(_ context.Context, netnsName string, view bird.DebugView) error {
 	rt, err := NewAppContext()
 	if err != nil {
 		return err
@@ -68,7 +58,7 @@ func debugBird(_ context.Context, netnsName string, view birdDebugView) error {
 	return debugBirdWithRuntime(rt, netnsName, view, os.Stdout)
 }
 
-func debugBirdWithRuntime(rt *AppContext, netnsName string, view birdDebugView, w io.Writer) error {
+func debugBirdWithRuntime(rt *AppContext, netnsName string, view bird.DebugView, w io.Writer) error {
 	dump, ok, err := readCanonicalViewViaControl[inspect.BirdDumpResponse](rt, controlRequest{Method: "bird_dump", NetNS: netnsName, BirdView: string(view)})
 	if err != nil {
 		return err
@@ -76,22 +66,7 @@ func debugBirdWithRuntime(rt *AppContext, netnsName string, view birdDebugView, 
 	if !ok {
 		return fmt.Errorf("daemon control socket unavailable; BIRD live query requires a running daemon")
 	}
-	return writeDebugBirdDump(w, &dump)
-}
-
-func birdDebugCommands(view birdDebugView) ([]string, error) {
-	switch view {
-	case birdDebugStatus:
-		return []string{"show status", "show protocols all", "show babel neighbors", "show babel routes", "show babel entries"}, nil
-	case birdDebugInterface:
-		return []string{"show interfaces"}, nil
-	case birdDebugFilter:
-		return []string{"show symbols filter"}, nil
-	case birdDebugRoute:
-		return []string{"show route table all where source = RTS_BABEL all", "show babel routes"}, nil
-	default:
-		return nil, fmt.Errorf("unsupported bird debug view %q", view)
-	}
+	return inspecttext.WriteBirdDump(w, &dump)
 }
 
 func enrichBirdDumpInstance(item *inspect.BirdDumpInstance, instances map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary) {
@@ -106,13 +81,13 @@ func enrichBirdDumpInstance(item *inspect.BirdDumpInstance, instances map[string
 	sort.Slice(item.Interfaces, func(i, j int) bool { return item.Interfaces[i].Name < item.Interfaces[j].Name })
 
 	if raw, ok := item.Raw["show babel neighbors"]; ok {
-		item.Neighbors = parseBirdBabelNeighbors(raw, contexts)
+		item.Neighbors = inspect.ParseBirdBabelNeighbors(raw, contexts)
 	}
 	if raw, ok := item.Raw["show babel routes"]; ok {
-		item.BabelRoutes = parseBirdBabelRoutes(raw, contexts)
+		item.BabelRoutes = inspect.ParseBirdBabelRoutes(raw, contexts)
 	}
 	if raw, ok := item.Raw["show babel entries"]; ok {
-		item.BabelEntries = parseBirdBabelEntries(raw, item.BabelRoutes, contexts)
+		item.BabelEntries = inspect.ParseBirdBabelEntries(raw, item.BabelRoutes, contexts)
 	}
 }
 
@@ -133,118 +108,6 @@ func birdInterfaceContexts(instances map[string]ipsec.LinkInstance, reconcile *i
 	return contexts
 }
 
-func parseBirdBabelNeighbors(raw string, contexts map[string]inspect.BirdInterfaceContext) []inspect.BirdBabelNeighbor {
-	var out []inspect.BirdBabelNeighbor
-	protocol := ""
-	inTable := false
-	for line := range strings.SplitSeq(raw, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		if strings.HasSuffix(trimmed, ":") && len(strings.Fields(trimmed)) == 1 {
-			protocol = strings.TrimSuffix(trimmed, ":")
-			inTable = false
-			continue
-		}
-		fields := strings.Fields(trimmed)
-		if len(fields) >= 3 && fields[0] == "IP" && fields[1] == "address" {
-			inTable = true
-			continue
-		}
-		if !inTable || len(fields) < 8 {
-			continue
-		}
-		context := contexts[fields[1]]
-		out = append(out, inspect.BirdBabelNeighbor{
-			Protocol: protocol, Address: fields[0], Interface: fields[1], Zone: context.Zone, Family: context.Family,
-			Metric: fields[2], Routes: fields[3], Hellos: fields[4], Expires: fields[5], Auth: fields[6], RTT: fields[7],
-		})
-		// Some BIRD versions render the RTT unit as a separate final token;
-		// the value itself is always the penultimate or final numeric field.
-		out[len(out)-1].RTT = fields[len(fields)-1]
-	}
-	return out
-}
-
-func parseBirdBabelRoutes(raw string, contexts map[string]inspect.BirdInterfaceContext) []inspect.BirdBabelRoute {
-	var out []inspect.BirdBabelRoute
-	protocol := ""
-	inTable := false
-	for line := range strings.SplitSeq(raw, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		if strings.HasSuffix(trimmed, ":") && len(strings.Fields(trimmed)) == 1 {
-			protocol = strings.TrimSuffix(trimmed, ":")
-			inTable = false
-			continue
-		}
-		fields := strings.Fields(trimmed)
-		if len(fields) >= 2 && fields[0] == "Prefix" && fields[1] == "Nexthop" {
-			inTable = true
-			continue
-		}
-		if !inTable || len(fields) < 6 {
-			continue
-		}
-		flag := ""
-		seqIndex := 4
-		if fields[4] == "*" || fields[4] == "+" {
-			flag = fields[4]
-			seqIndex = 5
-		}
-		if len(fields) <= seqIndex+1 {
-			continue
-		}
-		context := contexts[fields[2]]
-		out = append(out, inspect.BirdBabelRoute{
-			Protocol: protocol, Prefix: fields[0], Nexthop: fields[1], Interface: fields[2], Zone: context.Zone,
-			Family: context.Family, Metric: fields[3], Flag: flag, Seqno: fields[seqIndex], Expires: fields[seqIndex+1],
-		})
-	}
-	return out
-}
-
-func parseBirdBabelEntries(raw string, routes []inspect.BirdBabelRoute, contexts map[string]inspect.BirdInterfaceContext) []inspect.BirdBabelEntry {
-	selected := map[string]inspect.BirdBabelRoute{}
-	for _, route := range routes {
-		if route.Flag == "*" {
-			selected[route.Protocol+"\x00"+route.Prefix] = route
-		}
-	}
-	var out []inspect.BirdBabelEntry
-	protocol := ""
-	inTable := false
-	for line := range strings.SplitSeq(raw, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		if strings.HasSuffix(trimmed, ":") && len(strings.Fields(trimmed)) == 1 {
-			protocol = strings.TrimSuffix(trimmed, ":")
-			inTable = false
-			continue
-		}
-		fields := strings.Fields(trimmed)
-		if len(fields) >= 2 && fields[0] == "Prefix" && fields[1] == "Router" {
-			inTable = true
-			continue
-		}
-		if !inTable || len(fields) < 6 {
-			continue
-		}
-		route := selected[protocol+"\x00"+fields[0]]
-		context := contexts[route.Interface]
-		out = append(out, inspect.BirdBabelEntry{
-			Protocol: protocol, Prefix: fields[0], RouterID: fields[1], Metric: fields[2], Seqno: fields[3],
-			Routes: fields[4], Sources: fields[5], Interface: route.Interface, Zone: context.Zone, Family: context.Family,
-		})
-	}
-	return out
-}
-
 func addBirdFilterDefinitions(item *inspect.BirdDumpInstance, configPath string) {
 	if item == nil {
 		return
@@ -259,35 +122,7 @@ func addBirdFilterDefinitions(item *inspect.BirdDumpInstance, configPath string)
 		item.FilterFailure = inspect.BuildFailure(inspect.FailureCodeBirdFilter, err)
 		return
 	}
-	item.FilterDefinitions = extractBirdFilterDefinitions(string(config))
-}
-
-func extractBirdFilterDefinitions(config string) string {
-	var definitions strings.Builder
-	inFilter := false
-	depth := 0
-	for line := range strings.SplitSeq(config, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if !inFilter {
-			if !strings.HasPrefix(trimmed, "filter ") || !strings.HasSuffix(trimmed, "{") {
-				continue
-			}
-			inFilter = true
-		}
-		if definitions.Len() > 0 {
-			definitions.WriteByte('\n')
-		}
-		definitions.WriteString(line)
-		depth += strings.Count(line, "{") - strings.Count(line, "}")
-		if inFilter && depth == 0 {
-			inFilter = false
-		}
-	}
-	return strings.TrimSpace(definitions.String())
-}
-
-func writeDebugBirdDump(w io.Writer, dump *inspect.BirdDumpResponse) error {
-	return inspecttext.WriteBirdDump(w, dump)
+	item.FilterDefinitions = inspect.ExtractBirdFilterDefinitions(string(config))
 }
 
 func debugBabelWithRuntime(rt *AppContext, w io.Writer) error {

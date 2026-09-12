@@ -37,6 +37,30 @@ const sampleShowRoutes = `Table master4:
 0000 
 `
 
+func TestDebugCommands(t *testing.T) {
+	tests := []struct {
+		view DebugView
+		want []string
+	}{
+		{view: DebugStatus, want: []string{"show status", "show protocols all", "show babel neighbors", "show babel routes", "show babel entries"}},
+		{view: DebugInterface, want: []string{"show interfaces"}},
+		{view: DebugFilter, want: []string{"show symbols filter"}},
+		{view: DebugRoute, want: []string{"show route table all where source = RTS_BABEL all", "show babel routes"}},
+	}
+	for _, test := range tests {
+		got, err := DebugCommands(test.view)
+		if err != nil {
+			t.Fatalf("DebugCommands(%q): %v", test.view, err)
+		}
+		if strings.Join(got, "\n") != strings.Join(test.want, "\n") {
+			t.Errorf("DebugCommands(%q) = %#v, want %#v", test.view, got, test.want)
+		}
+	}
+	if _, err := DebugCommands("invalid"); err == nil {
+		t.Fatal("DebugCommands(invalid) error = nil")
+	}
+}
+
 const sampleShowInterfaces = `1001-lo up (index=1)
 1004-	MultiAccess AdminUp LinkUp Loopback Ignored MTU=65536
 1003-	127.0.0.1/8 (Preferred, scope host)

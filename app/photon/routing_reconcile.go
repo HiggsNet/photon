@@ -457,12 +457,12 @@ func (d *Daemon) stopManagedBirdInstances(ctx context.Context, force bool) error
 	return firstErr
 }
 
-func (d *Daemon) birdDumpForControl(ctx context.Context, netnsName string, view birdDebugView) (*inspect.BirdDumpResponse, error) {
+func (d *Daemon) birdDumpForControl(ctx context.Context, netnsName string, view bird.DebugView) (*inspect.BirdDumpResponse, error) {
 	response := &inspect.BirdDumpResponse{Instances: map[string]inspect.BirdDumpInstance{}}
 	if d == nil || d.App == nil || d.App.Config == nil {
 		return response, nil
 	}
-	commands, err := birdDebugCommands(view)
+	commands, err := bird.DebugCommands(view)
 	if err != nil {
 		return nil, err
 	}
@@ -480,7 +480,7 @@ func (d *Daemon) birdDumpForControl(ctx context.Context, netnsName string, view 
 			ControlSocket: inst.ControlSocket,
 			Raw:           map[string]string{},
 		}
-		if view == birdDebugFilter {
+		if view == bird.DebugFilter {
 			addBirdFilterDefinitions(&item, inst.ConfigFile)
 		}
 		if inst.ControlSocket == "" {

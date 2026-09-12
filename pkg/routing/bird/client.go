@@ -44,6 +44,30 @@ type birdcClient struct {
 	routeTables []string
 }
 
+type DebugView string
+
+const (
+	DebugStatus    DebugView = "status"
+	DebugInterface DebugView = "interface"
+	DebugFilter    DebugView = "filter"
+	DebugRoute     DebugView = "route"
+)
+
+func DebugCommands(view DebugView) ([]string, error) {
+	switch view {
+	case DebugStatus:
+		return []string{"show status", "show protocols all", "show babel neighbors", "show babel routes", "show babel entries"}, nil
+	case DebugInterface:
+		return []string{"show interfaces"}, nil
+	case DebugFilter:
+		return []string{"show symbols filter"}, nil
+	case DebugRoute:
+		return []string{"show route table all where source = RTS_BABEL all", "show babel routes"}, nil
+	default:
+		return nil, fmt.Errorf("unsupported bird debug view %q", view)
+	}
+}
+
 // NewClient creates a new birdc client connected to socketPath.
 func NewClient(socketPath string, timeout time.Duration) Client {
 	return NewClientWithRouteTables(socketPath, timeout, nil)

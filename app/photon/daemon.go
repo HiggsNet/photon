@@ -999,7 +999,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		view := buildBabelDebugView(d.App, birdInstances, lastRoutingFailure)
 		writeCanonicalView(conn, view)
 	case "bird_dump":
-		dump, err := d.birdDumpForControl(ctx, request.NetNS, birdDebugView(request.BirdView))
+		dump, err := d.birdDumpForControl(ctx, request.NetNS, bird.DebugView(request.BirdView))
 		if err != nil {
 			writeControlResponse(conn, controlError(err))
 			return

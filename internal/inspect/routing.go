@@ -1,6 +1,8 @@
 package inspect
 
 import (
+	"strings"
+
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 )
 
@@ -79,6 +81,142 @@ type BirdBabelEntry struct {
 	Interface string `json:"selected_interface,omitempty"`
 	Zone      string `json:"zone,omitempty"`
 	Family    string `json:"family,omitempty"`
+}
+
+func ParseBirdBabelNeighbors(raw string, contexts map[string]BirdInterfaceContext) []BirdBabelNeighbor {
+	var out []BirdBabelNeighbor
+	protocol := ""
+	inTable := false
+	for line := range strings.SplitSeq(raw, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasSuffix(trimmed, ":") && len(strings.Fields(trimmed)) == 1 {
+			protocol = strings.TrimSuffix(trimmed, ":")
+			inTable = false
+			continue
+		}
+		fields := strings.Fields(trimmed)
+		if len(fields) >= 3 && fields[0] == "IP" && fields[1] == "address" {
+			inTable = true
+			continue
+		}
+		if !inTable || len(fields) < 8 {
+			continue
+		}
+		context := contexts[fields[1]]
+		out = append(out, BirdBabelNeighbor{
+			Protocol: protocol, Address: fields[0], Interface: fields[1], Zone: context.Zone, Family: context.Family,
+			Metric: fields[2], Routes: fields[3], Hellos: fields[4], Expires: fields[5], Auth: fields[6], RTT: fields[7],
+		})
+		// Some BIRD versions render the RTT unit as a separate final token;
+		// the value itself is always the penultimate or final numeric field.
+		out[len(out)-1].RTT = fields[len(fields)-1]
+	}
+	return out
+}
+
+func ParseBirdBabelRoutes(raw string, contexts map[string]BirdInterfaceContext) []BirdBabelRoute {
+	var out []BirdBabelRoute
+	protocol := ""
+	inTable := false
+	for line := range strings.SplitSeq(raw, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasSuffix(trimmed, ":") && len(strings.Fields(trimmed)) == 1 {
+			protocol = strings.TrimSuffix(trimmed, ":")
+			inTable = false
+			continue
+		}
+		fields := strings.Fields(trimmed)
+		if len(fields) >= 2 && fields[0] == "Prefix" && fields[1] == "Nexthop" {
+			inTable = true
+			continue
+		}
+		if !inTable || len(fields) < 6 {
+			continue
+		}
+		flag := ""
+		seqIndex := 4
+		if fields[4] == "*" || fields[4] == "+" {
+			flag = fields[4]
+			seqIndex = 5
+		}
+		if len(fields) <= seqIndex+1 {
+			continue
+		}
+		context := contexts[fields[2]]
+		out = append(out, BirdBabelRoute{
+			Protocol: protocol, Prefix: fields[0], Nexthop: fields[1], Interface: fields[2], Zone: context.Zone,
+			Family: context.Family, Metric: fields[3], Flag: flag, Seqno: fields[seqIndex], Expires: fields[seqIndex+1],
+		})
+	}
+	return out
+}
+
+func ParseBirdBabelEntries(raw string, routes []BirdBabelRoute, contexts map[string]BirdInterfaceContext) []BirdBabelEntry {
+	selected := map[string]BirdBabelRoute{}
+	for _, route := range routes {
+		if route.Flag == "*" {
+			selected[route.Protocol+"\x00"+route.Prefix] = route
+		}
+	}
+	var out []BirdBabelEntry
+	protocol := ""
+	inTable := false
+	for line := range strings.SplitSeq(raw, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasSuffix(trimmed, ":") && len(strings.Fields(trimmed)) == 1 {
+			protocol = strings.TrimSuffix(trimmed, ":")
+			inTable = false
+			continue
+		}
+		fields := strings.Fields(trimmed)
+		if len(fields) >= 2 && fields[0] == "Prefix" && fields[1] == "Router" {
+			inTable = true
+			continue
+		}
+		if !inTable || len(fields) < 6 {
+			continue
+		}
+		route := selected[protocol+"\x00"+fields[0]]
+		context := contexts[route.Interface]
+		out = append(out, BirdBabelEntry{
+			Protocol: protocol, Prefix: fields[0], RouterID: fields[1], Metric: fields[2], Seqno: fields[3],
+			Routes: fields[4], Sources: fields[5], Interface: route.Interface, Zone: context.Zone, Family: context.Family,
+		})
+	}
+	return out
+}
+
+func ExtractBirdFilterDefinitions(config string) string {
+	var definitions strings.Builder
+	inFilter := false
+	depth := 0
+	for line := range strings.SplitSeq(config, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !inFilter {
+			if !strings.HasPrefix(trimmed, "filter ") || !strings.HasSuffix(trimmed, "{") {
+				continue
+			}
+			inFilter = true
+		}
+		if definitions.Len() > 0 {
+			definitions.WriteByte('\n')
+		}
+		definitions.WriteString(line)
+		depth += strings.Count(line, "{") - strings.Count(line, "}")
+		if inFilter && depth == 0 {
+			inFilter = false
+		}
+	}
+	return strings.TrimSpace(definitions.String())
 }
 
 type BabelDebugView struct {

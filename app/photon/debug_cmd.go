@@ -6,6 +6,7 @@ import (
 
 	pingdebug "github.com/HiggsNet/photon/internal/ping"
 	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/urfave/cli/v3"
 )
 
@@ -301,13 +302,13 @@ func debugRoutingBirdCommands() []*cli.Command {
 	type birdCommand struct {
 		name  string
 		usage string
-		view  birdDebugView
+		view  bird.DebugView
 	}
 	specs := []birdCommand{
-		{name: "status", usage: "Show live BIRD status, protocols, Babel neighbors, routes, and entries", view: birdDebugStatus},
-		{name: "interface", usage: "Show interfaces visible to BIRD", view: birdDebugInterface},
-		{name: "filter", usage: "Show active filter symbols and generated filter definitions", view: birdDebugFilter},
-		{name: "route", usage: "Show routes learned by the Babel protocol", view: birdDebugRoute},
+		{name: "status", usage: "Show live BIRD status, protocols, Babel neighbors, routes, and entries", view: bird.DebugStatus},
+		{name: "interface", usage: "Show interfaces visible to BIRD", view: bird.DebugInterface},
+		{name: "filter", usage: "Show active filter symbols and generated filter definitions", view: bird.DebugFilter},
+		{name: "route", usage: "Show routes learned by the Babel protocol", view: bird.DebugRoute},
 	}
 	commands := make([]*cli.Command, 0, len(specs))
 	for _, spec := range specs {
