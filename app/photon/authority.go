@@ -109,13 +109,12 @@ func grantDelegationPermissionsDirect(rt *AppContext, path zone.ZonePath, permis
 	if len(permissions) == 0 {
 		return nil, errors.New("at least one permission is required")
 	}
-	boltStore, startup, err := openLinuxDaemonState(rt)
+	state, err := openState(rt)
 	if err != nil {
 		return nil, err
 	}
-	defer boltStore.Close()
-	defer startup.Common.Close()
-	view := startup.Common.ReadView()
+	defer state.Close()
+	view := state.Common.ReadView()
 	zs := view.State.Network.Zones[path]
 	if zs == nil || zs.Authority == nil {
 		return nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
@@ -133,13 +132,13 @@ func grantDelegationPermissionsDirect(rt *AppContext, path zone.ZonePath, permis
 	} else {
 		intent = corestate.PutDelegationIntent{Parent: path.Parent(), Authority: authority}
 	}
-	if _, err := startup.Common.ApplyLocalIntent(context.Background(), intent, rt.Now()); err != nil {
+	if _, err := state.Common.ApplyLocalIntent(context.Background(), intent, rt.Now()); err != nil {
 		return nil, err
 	}
 	if path.IsRoot() {
 		return nil, nil
 	}
-	return joinBundleFromNetwork(startup.Common.ReadView().State.Network, path, rt.Now())
+	return joinBundleFromNetwork(state.Common.ReadView().State.Network, path, rt.Now())
 }
 
 func grantPermissionsToAuthority(authority *zone.ZoneAuthority, permissions []zone.Permission) {

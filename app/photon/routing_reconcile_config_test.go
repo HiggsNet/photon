@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	"strings"
 	"testing"
 	"time"
@@ -231,7 +232,7 @@ func TestReconcileRoutingStaleRevisionDoesNotCommitBirdInstance(t *testing.T) {
 	var logs strings.Builder
 	service.Log = &appLogger{level: logLevelDebug, out: &logs, now: func() time.Time { return now }}
 
-	initialRev := uint64(service.StateStore.common.VerifiedRevision())
+	initialRev := uint64(service.State.Common.VerifiedRevision())
 	done := make(chan error, 1)
 	go func() {
 		done <- service.reconcileRouting(context.Background())
@@ -243,7 +244,7 @@ func TestReconcileRoutingStaleRevisionDoesNotCommitBirdInstance(t *testing.T) {
 		t.Fatal("routing reconcile did not enter blocking BIRD start")
 	}
 
-	newerRev, err := advanceTestVerifiedRevision(service.StateStore, now.Add(time.Nanosecond))
+	newerRev, err := advanceTestVerifiedRevision(service.State.Common, now.Add(time.Nanosecond))
 	if err != nil {
 		close(pm.unblock)
 		t.Fatalf("advance state revision during routing apply: %v", err)
@@ -259,7 +260,7 @@ func TestReconcileRoutingStaleRevisionDoesNotCommitBirdInstance(t *testing.T) {
 	if !service.routingDirty {
 		t.Fatal("routingDirty = false, want stale reconcile to be retried")
 	}
-	if revision := uint64(service.StateStore.common.VerifiedRevision()); revision != newerRev {
+	if revision := uint64(service.State.Common.VerifiedRevision()); revision != newerRev {
 		t.Fatalf("stale reconcile advanced revision: got %d want %d", revision, newerRev)
 	}
 	if observation := service.linuxObservation.routingSnapshot(); observation != nil {
@@ -349,7 +350,7 @@ func TestRoutingReconcileInterval(t *testing.T) {
 		{ID: "a", NetNS: "photontesth2", Enabled: true, Mode: ipsec.RoutingModeManaged},
 	}}
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: appConfig}, nil, nil, &linuxRuntimeState{}, &gossipStartupConfig{}, time.Second,
+		&AppContext{Config: appConfig}, nil, nil, &photonlinux.LinuxState{}, appConfig, time.Second,
 	)
 	if got := service.routingReconcileInterval(); got != 30*time.Second {
 		t.Fatalf("routingReconcileInterval = %s, want 30s", got)
@@ -362,7 +363,7 @@ func TestRoutingReconcileIntervalZeroWhenDisabled(t *testing.T) {
 		{ID: "a", NetNS: "photontesth2", Enabled: false, Mode: ipsec.RoutingModeManaged},
 	}}
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: appConfig}, nil, nil, &linuxRuntimeState{}, &gossipStartupConfig{}, time.Second,
+		&AppContext{Config: appConfig}, nil, nil, &photonlinux.LinuxState{}, appConfig, time.Second,
 	)
 	if got := service.routingReconcileInterval(); got != 0 {
 		t.Fatalf("routingReconcileInterval = %s, want 0", got)

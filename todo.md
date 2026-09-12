@@ -17,7 +17,7 @@
 Daemon
 ├── event loop / daemon scheduler
 ├── GossipDriver
-├── StateStore               current: pkg/core/state.Store
+├── State               current: pkg/core/state.Store
 │   ├── VerifiedState
 │   └── GossipCheckpoint
 ├── LinuxDriver/WindowsDriver
@@ -30,7 +30,7 @@ Daemon
 
 - `Daemon` 是唯一产品生命周期和平台 mutation 编排者；Linux 当前由 `Daemon.Run` 承担。
 - 以前的 `CommonRuntime` 就是当前 GossipDriver 的概念名，不是额外层；后续统一称 `GossipDriver`。
-- `StateStore` 不是 GossipStore：VerifiedState 是公共权威事实，GossipCheckpoint 才是 gossip 可丢失恢复提示。
+- `State` 不是 GossipStore：VerifiedState 是公共权威事实，GossipCheckpoint 才是 gossip 可丢失恢复提示。
 - LinuxDriver/WindowsDriver 是具体平台实现，不预建统一 `PlatformDriver`、`PlatformCapabilities` 或成套 controller interface。
 - LinuxState/WindowsState 只保存无法重建的本地 intent/secret 和非幂等操作最小 journal；当前实际系统状态进入纯内存 Observation。
 - composition root 创建唯一 BoltStore；Store、Driver 和平台 codec 不自行按路径打开数据库。
@@ -69,15 +69,15 @@ Daemon
 - [x] 调用图审计确认 GossipDriver 只拥有 gossip Engine、UDP/TCP transport、object-pull、session/chunk/address book、协议 timer 和 gossip observability；不再接收平台 timer/completion。
 - [x] 删除 Daemon 保存的第二份 gossip transport 和测试专用 transport deps；transport/address book 只由当前 GossipDriver 持有。
 - [x] 删除 `Daemon.GossipConfig`；协议 limits/discovery/peer identity 由 GossipDriver 持有可替换的 detached config，app 侧 endpoint/log/展示配置从 AppContext 按需派生，不增加 app 级 wrapper。
-- [x] `syncConfigFile` 已缩减并改名为 `gossipStartupConfig`，只作为 composition root 创建 GossipDriver/transport 的短生命周期输入；日志和本机 endpoint 发布策略直接读取 AppConfig。
+- [x] 删除由 `syncConfigFile` 缩减而来的 `gossipStartupConfig` 中间 DTO；composition root 从 AppConfig 与 verified identity 直接生成 detached GossipDriver/transport config，日志和本机 endpoint 发布策略直接读取 AppConfig。
 - [x] IPsec/routing/firewall/health timer 已迁入 Daemon 自己的 scheduler/queue；健康完成直接由 Daemon event loop 消费，不再包装成 GossipDriver completion。
 - [x] 审计平台异步路径：IPsec/routing/firewall 的 apply 与 typed state commit 当前在 Daemon 调用链同步完成；VICI lifecycle 只是 reconcile wakeup，health update 只是 observation 通知。没有遗留的 platform state completion，不新增 envelope/channel；安全 deny-first 保持原路径。
 - [x] 调用图审计确认只有一个 gossip ingress/event queue 和一个 Engine action ordering 实现；Linux/Windows 只注入 transport/I/O capability，不复制协议 executor。
 - [x] 收紧现有 shutdown/backpressure，未新增队列：GossipDriver 的外部投递在读锁内完成，Stop 取得写锁后拒绝新投递并等待自有 goroutine；Daemon 用同一子 context 取消并等待 VICI watcher 与 health worker 后才关闭 LinuxDriver，`Run` 返回后 composition root 才关闭 BoltStore。纯 lifecycle/health 通知无需 drain。
 
-### A3. 将 RuntimeState 拆成 State 与 Observation
+### A3. 将平台持久状态与 Observation 分开
 
-- [ ] 把 `internal/photonlinux.RuntimeState` 改名/收缩为 `LinuxState`，逐字段给出“保留、推导、迁移、删除”的测试证据。
+- [x] 将仅含持久数据的 `internal/photonlinux.RuntimeState` 收缩并改名为 `LinuxState`；类型、clone、codec 和文件名不再使用 runtime，数据库 bucket 名仅为兼容旧数据保持不变。
 - [x] `IdentityKeyPath` 已回到配置/应用上下文：current Linux state 不再保存或回填路径，启动/reload 校验配置 key 与 VerifiedState 身份一致，旧 schema 路径迁移时丢弃。
 - [x] 删除持久化 `Admission`：pending/adopted、reason/detail 和 join request 由 VerifiedState 即时推导，最近 bootstrap sync 从 GossipCheckpoint 推导；旧 schema 字段直接丢弃，不新增 owner、bucket 或 revision。
 - [x] 审计 `IPsecTransportKey`、`IPsecPortRecord` 和 Endpoint ACL：保留无其他私钥来源的 transport key 与显式本机 ACL；删除可由 VerifiedState 本机签名 `ipsec/ports` record 完整恢复的 `IPsecPortRecord` 缓存。
@@ -88,7 +88,7 @@ Daemon
   - [x] 本轮不把自动 orphan cleanup 接入普通 reconcile；全局 inventory 继续只 Observe，保留既有显式运维 cleanup，避免为非当前需求增加第二套清理路径。
   - [x] 将在线 link 数据放进无 DB/线程的 `LinuxObservation`；reconcile、health、routing/firewall、control/Observer 均读取该在线快照，`pkg/transport/ipsec.LinkInstance` 仅作为 daemon 内存工作对象。
   - [x] 停止持久化 IPsec observation：reconcile/cleanup 不再调用 runtime commit，current/legacy JSON 不再编码或恢复 `LinkInstances`、`IPsecReconcile`，旧字段解码时直接忽略。
-  - [x] 删除 RuntimeState 中仅剩的 `json:"-"` 兼容投影槽；展示、health、routing/firewall、cleanup 与撤销规划显式接收 observation，测试也不再把 StateStore 与在线观察拼成伪 runtime。
+  - [x] 删除 RuntimeState 中仅剩的 `json:"-"` 兼容投影槽；展示、health、routing/firewall、cleanup 与撤销规划显式接收 observation，测试也不再把 State 与在线观察拼成伪 runtime。
   - [x] 删除 `internal/state.LinkInstanceState` 及双向字段转换，在线调用链直接使用 `ipsec.LinkInstance`；reconcile summary 迁入 `LinuxObservation` 并删除无意义的 `Committed/Stale` 字段，XFRM 单代推导失败显式返回错误。
   - [ ] 用 crash/restart 测试覆盖 create、rotation 各阶段、current-only、previous-only、loaded-no-SA、takeover、revoke/config removal 和 orphan cleanup；未被测试证明的恢复规则不标完成。
 - [x] 删除持久化 `RoutingReconcile`；LastRun/LastError 进入无 DB 的 `LinuxObservation`，旧数据库字段迁移时直接丢弃，BIRD instance 仍按原边界单独审计。
@@ -105,10 +105,11 @@ Daemon
 - [x] 删除从无生产写入者、Observer 永远只输出空对象的 `ReconcileProgress` 假状态；不为无效诊断新增 owner。
 - [x] 删除误称同 revision 的 `readCommonAndRuntime()` aggregate read；调用方分别读取 common view 与 Linux state snapshot，不再为 common-only 查询 clone Linux state 或占用 `writeMu`。
 - [x] 删除 `DaemonStateStore.Meta()` 及其中不可靠的 `Dirty` 副本；verified revision 直接读取 common owner，在线 reconcile 状态由各层 Observation 展示。
-- [ ] Daemon 直接持有 StateStore、LinuxState、LinuxObservation、LinuxDriver 和 BoltStore 的引用/生命周期。
-- [ ] 把剩余 routing/IPsec/firewall typed candidate commit 移到 Daemon 的平台 state mutation 边界；保留真正的多字段原子替换，不保留 forwarding Store。
-- [ ] 将真实 platform state completion 和 security barrier 串回 Daemon owner，删除 `DaemonStateStore.writeMu` 和 commit callback 包装；不得把 wakeup/notification 泛化成 completion bus。
-- [ ] 删除 `daemon_state_store.go`、app 内 Linux state alias，以及仅测试迁移 coordinator 的 fixture。
+- [x] 建立唯一的具体 `app/photon.State`：内部封装唯一 StateDB、公共 `Common` 与 LinuxState 的锁/持久化；Daemon 只持有该 State，不再平铺数据库、LinuxState 和锁。
+- [x] State 只提供 LinuxState 的 typed mutation；common mutation 直接进入其 `Common`，不恢复 aggregate snapshot、Meta/Dirty 或 forwarding API。
+- [x] 将 protocol publish 与 Endpoint ACL 的真实 platform completion 串回 State；verified revision 与同一 bbolt 事务拒绝 stale completion，私有 transport key 在引用它的公共 record 发布前持久化。
+- [x] 删除 `daemon_state_store.go` 和仅测试迁移 coordinator 的 fixture。
+- [x] 删除 app 内 `linuxRuntimeState` alias，生产调用直接使用 `photonlinux.LinuxState`；不得再引入第二个 LinuxState DTO。
 - [ ] 旧 `stateFile/stateMeta` 只留启动单向 migration decoder 和 legacy DB dump；停止支持该 schema 时整组删除，不形成在线兼容层。
 
 ### A5. app/photon 与查询边界继续清理
@@ -140,7 +141,7 @@ Daemon
 
 ### B2. Windows composition 与公共 gossip
 
-- [ ] Windows service composition 创建一个 Daemon、一个 GossipDriver、一个 StateStore、一个 WindowsDriver、一个 WindowsState 和一个 BoltStore。
+- [ ] Windows service composition 创建一个 Daemon、一个 GossipDriver、一个 State、一个 WindowsDriver、一个 WindowsState 和一个 BoltStore。
 - [ ] 接入真实 Windows UDP adapter：bind/read/write/rebind/close 有界且可取消；GossipDriver 继续唯一拥有 receive/object-pull/protocol event ordering。
 - [ ] 从 verified records 生成 gateway candidates，校验 identity/key、address/port、overlay、route authorization 和撤销状态。
 - [ ] 私钥沿用管理员负责的本地安全模型，可直接存同一 bbolt；不增加本地加密/解密层。
@@ -199,8 +200,8 @@ Daemon
 
 ## 下一步执行顺序
 
-1. 完成 A1-A3：统一命名，移出非 gossip 调度，给当前 RuntimeState 每个字段分类。
-2. 完成 A4：Daemon 直接持有两个 state owner 和唯一 BoltStore，删除 DaemonStateStore。
+1. 完成 A1-A3：统一命名，移出非 gossip 调度，给原 RuntimeState 每个字段分类并收缩为 LinuxState。
+2. 完成 A4：由一个具体 State 管理唯一 StateDB 和 typed state partitions，Daemon 不再平铺锁、状态值与数据库。
 3. 完成 A5-A6：继续清理 app/test/CLI，并补显式 reload。
 4. 实现 B2 的 Windows composition 与真实 UDP gossip vertical slice。
 5. 依次推进 IKE/ESP、Babel/SADR、Wintun、SCM/named-pipe 和完整验收。

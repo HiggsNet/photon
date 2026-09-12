@@ -111,7 +111,7 @@ func TestGossipDriversConvergeCommonStateAndReloadWithoutClientRuntime(t *testin
 
 type memoryHostNode struct {
 	runtime   *corehost.GossipDriver
-	storeRoot *StateStore
+	storeRoot *State
 	store     *corestate.Store
 	transport *gossip.Transport
 	ctx       context.Context
@@ -123,7 +123,7 @@ type memoryHostNode struct {
 	err   error
 }
 
-func newMemoryHostNode(state *StateStore, transport *gossip.Transport) *memoryHostNode {
+func newMemoryHostNode(state *State, transport *gossip.Transport) *memoryHostNode {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &memoryHostNode{
 		runtime: corehost.NewGossipDriver(corehost.NewClock(nil), corehost.DefaultEventBuffer, state.Store(), corehost.GossipDriverConfig{
@@ -318,9 +318,9 @@ func newWindowsGossipFixture(t *testing.T) windowsGossipFixture {
 	return fixture
 }
 
-func (fixture windowsGossipFixture) openState(t *testing.T, path string, managed zone.ZonePath) *StateStore {
+func (fixture windowsGossipFixture) openState(t *testing.T, path string, managed zone.ZonePath) *State {
 	t.Helper()
-	state, err := OpenStateStore(path, managed, fixture.rootPublic, time.Second)
+	state, err := OpenState(path, managed, fixture.rootPublic, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

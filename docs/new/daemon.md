@@ -17,9 +17,9 @@ Photon daemon 是长期运行的控制循环。它把所有子系统——gossip
    - 3.3 [Async Object Pull](#33-async-object-pull)
 4. [单 Writer 模式与状态管理](#4-单-writer-模式与状态管理)
    - 4.1 [核心原则](#41-核心原则)
-   - 4.2 [DaemonStateStore](#42-daemonstatestore)
+   - 4.2 [当前状态 owner](#42-当前状态-owner)
    - 4.3 [写路径](#43-写路径)
-   - 4.4 [Reconcile 与 StateStore](#44-reconcile-与-statestore)
+   - 4.4 [Reconcile 与 State](#44-reconcile-与-statestore)
    - 4.5 [状态文件](#45-状态文件)
    - 4.6 [状态变化通知](#46-状态变化通知)
    - 4.7 [状态变更边界](#47-状态变更边界)
@@ -86,7 +86,7 @@ Daemon 是 Photon 中唯一长期运行的系统进程。它不在每次 CLI 调
 | `App` | `*AppContext` | config、state path、clock 等应用上下文；不是产品 Runtime |
 | `gossipDriver` | `*corehost.GossipDriver` | 持有 detached gossip 协议配置、transport/address book 和协议执行闭环；Daemon 不再重复保存 GossipConfig/transport |
 | `gossipTransport` | `*gossip.Transport` | 当前 gossip UDP transport |
-| `StateStore` | `*DaemonStateStore` | 迁移期 common/Linux 顺序协调器，最终删除 |
+| `State` | `*State` | 唯一进程内持久状态边界；内部管理 StateDB、Common 与 LinuxState |
 | `Events` | `chan daemonEvent` | 统一事件入口（64 buffer） |
 | `Interval` | `time.Duration` | 出站 sync 周期（默认 60s） |
 | `ControlSocketPath` | `string` | Unix domain socket 路径 |
@@ -140,12 +140,12 @@ daemonRun()
 3. **启动恢复**：
 
 ```
-// 1. GossipDriver 直接持有 common StateStore owner
-d.gossipDriver = corehost.NewGossipDriver(..., d.StateStore.common, ...)
+// 1. GossipDriver 直接持有 common State owner
+d.gossipDriver = corehost.NewGossipDriver(..., d.State, ...)
 
 // 2. 本机 endpoint/IPsec/routing 记录通过 typed common mutation 发布
 d.prepareStartupState()
-d.updateDiscoveredPeers()
+d.refreshGossipDiscovery()
 
 // 3. 数据面从 detached common view、LinuxState 和重新 observation 恢复
 d.recoverIPsecLinksOnStart(ctx)
@@ -253,17 +253,17 @@ Daemon 是在线进程唯一的平台 mutation 编排者。CLI admin 操作（�
 
 ### 4.2 当前状态 owner
 
-Daemon 当前组合三个真实 owner：
+Daemon 当前只组合一个具体 `State`；其内部边界为：
 
-- `pkg/core/state.Store`：VerifiedState 与 loss-tolerant GossipCheckpoint；
-- `internal/photonlinux.RuntimeState`：待收缩的 Linux 本地持久 state；
-- 唯一 `state.BoltStore`：同一进程的 bbolt handle 和事务边界。
+- `Common`（`pkg/core/state.Store`）：VerifiedState 与 loss-tolerant GossipCheckpoint；
+- `LinuxState`（`internal/photonlinux.LinuxState`）：IPsec transport 私钥与显式本机 Endpoint ACL；
+- `StateDB`（实现为唯一 `state.BoltStore`）：同一进程的 bbolt handle 和事务边界。
 
-`DaemonStateStore` 只在迁移期为 common mutation 与 Linux completion 提供顺序锁、detached read 和 candidate commit，已经不拥有聚合 `stateFile` 快照。终态由 Daemon 直接持有 StateStore、LinuxState、LinuxObservation、LinuxDriver 和 BoltStore，然后删除该协调器。完整边界见 [`runtime-state-ownership.md`](../runtime-state-ownership.md)。
+旧 `DaemonStateStore` 的 aggregate snapshot/forwarding API 已删除。新的 `State` 不伪装成 common Store：common 调用显式进入 `State.Common`，LinuxState 只通过 typed mutation 在 verified revision 护栏下持久化。Daemon 仍直接持有在线 `LinuxObservation` 与 `LinuxDriver`。完整边界见 [`runtime-state-ownership.md`](../runtime-state-ownership.md)。
 
 ### 4.3 写路径
 
-本地 admin intent 和 GossipDriver 接受的远端 verified state 进入公共 StateStore；平台 reconcile completion 只更新 LinuxState。两者都必须先由唯一 BoltStore 持久化，再发布对应内存状态。耗时 Observe/Plan/Apply 可在状态锁外执行，但 completion 要回到 Daemon owner；磁盘中的上次平台结果不能冒充当前 observation。
+本地 admin intent 和 GossipDriver 接受的远端 verified state 进入公共 State；平台 reconcile completion 只更新 LinuxState。两者都必须先由唯一 BoltStore 持久化，再发布对应内存状态。耗时 Observe/Plan/Apply 可在状态锁外执行，但 completion 要回到 Daemon owner；磁盘中的上次平台结果不能冒充当前 observation。
 
 ### 4.4 Reconcile 与 Observation
 
@@ -505,7 +505,7 @@ Daemon 作为编排器，各子模块通过清晰的接口与 daemon 集成：
 ### 7.1 Gossip Sync
 
 - **输入**：UDP 包（从 transport.Receive() 接收）、定时器事件、object pull 结果
-- **输出**：GossipDriver 直接调用公共 StateStore 的 remote batch/checkpoint API，并通过同一 transport 发送协议响应
+- **输出**：GossipDriver 直接调用公共 State 的 remote batch/checkpoint API，并通过同一 transport 发送协议响应
 - **集成点**：`pkg/core/host.GossipDriver` 是当前 GossipDriver，拥有 Engine、协议 queue/scheduler、transport、object-pull、chunk/session runtime 和 gossip observability；Daemon 只消费其事件并接收需要触发平台 reconcile 的终态结果
 - **状态范围**：verified signed facts 进入 VerifiedState；retry/backoff/observed endpoint 等 restart hint 进入 GossipCheckpoint；session/chunk/address book 等只在内存
 
@@ -522,14 +522,14 @@ Daemon 作为编排器，各子模块通过清晰的接口与 daemon 集成：
 
 ### 7.3 Routing
 
-- **输入**：common `StateStore.ReadView()` 中的 route announcement / authorization 记录
+- **输入**：common `State.ReadView()` 中的 route announcement / authorization 记录
 - **输出**：BIRD 配置文件、Babel 邻居发现、路由导入/导出 filter；在线结果发布到 `LinuxObservation`
 - **集成点**：`reconcileRouting(ctx)` 在 routing_reconcile.go 中，构建 `AuthorizedRouteSet`，生成 BIRD 配置并 reconfigure
 - **状态范围**：BIRD instance、status、exit 和 backoff 只存在于 daemon 内存 `LinuxObservation`，重启后重新推导/观察
 
 ### 7.4 Firewall
 
-- **输入**：common `StateStore.ReadView()` 中的授权路由、本地 firewall 配置
+- **输入**：common `State.ReadView()` 中的授权路由、本地 firewall 配置
 - **输出**：nftables/iptables 规则（netns ingress、host ingress、redirect grace）；在线结果写入 `LinuxObservation`
 - **集成点**：`reconcileFirewall(ctx)` 通过 `firewall.BuildDesiredState()` → driver.Apply()
 - **状态范围**：Firewall reconcile 结果只存在于 daemon 内存 `LinuxObservation`；`EndpointACLs` 作为用户配置持久化
@@ -543,7 +543,7 @@ Daemon 作为编排器，各子模块通过清晰的接口与 daemon 集成：
 
 ### 7.6 Observer
 
-- **输入**：common `StateStore.ReadView()` 与 daemon 内存中的 `LinuxObservation`
+- **输入**：common `State.ReadView()` 与 daemon 内存中的 `LinuxObservation`
 - **输出**：HTTP API（/api/v1/...）、SSE 事件推送
 - **集成点**：`newObserverServer()` 在启动时创建，`observerProvider` 从各自 owner 读取 common state 与在线 observation。状态变化时 daemon 通过 `d.observerHub` 广播 SSE 事件
 - **状态范围**：observer 是纯只读的，不修改任何状态

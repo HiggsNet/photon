@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/ed25519"
 	"errors"
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
@@ -11,7 +12,7 @@ import (
 	"time"
 )
 
-func buildTestDaemonOwners(t testing.TB) (*corestate.VerifiedState, *corestate.GossipCheckpoint, *linuxRuntimeState, *gossipStartupConfig) {
+func buildTestDaemonOwners(t testing.TB) (*corestate.VerifiedState, *corestate.GossipCheckpoint, *photonlinux.LinuxState, *appConfig) {
 	t.Helper()
 
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
@@ -101,11 +102,10 @@ func buildTestDaemonOwners(t testing.TB) (*corestate.VerifiedState, *corestate.G
 		Network:            ns,
 		IdentityPrivateKey: nodeBPriv,
 	}
-	config := &gossipStartupConfig{
-		PeerID:     "node-a.catofes.",
-		ListenAddr: "127.0.0.1:0",
-	}
-	return verified, &corestate.GossipCheckpoint{}, &linuxRuntimeState{}, config
+	config := defaultAppConfig()
+	config.PeerID = "node-a.catofes."
+	config.ListenAddr = "127.0.0.1:0"
+	return verified, &corestate.GossipCheckpoint{}, &photonlinux.LinuxState{}, config
 }
 
 func skipRestrictedSocket(t *testing.T, err error) {

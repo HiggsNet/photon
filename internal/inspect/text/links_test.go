@@ -39,7 +39,7 @@ func TestWriteLinksDebugFiltersAndPrintsRuntimeFields(t *testing.T) {
 					RemoteEndpoint: "198.51.100.10:4500",
 					ReqID:          55,
 				},
-				Health: &inspect.LinkHealth{
+				Health: &inspect.HealthSample{
 					ProbeID:       "link-1",
 					InstanceID:    "link-1",
 					State:         "degraded",
@@ -108,7 +108,7 @@ func TestWriteLinksUsesTransportSummaryAndVerboseTables(t *testing.T) {
 				Endpoint: "[2001:db8::1]:4500", InterfaceName: "phx1", XFRMIfID: 1,
 				LocalTunnelAddr: "fd42::1", PeerTunnelAddr: "fd42::2",
 				ActualSA: &inspect.LinkSA{ChildSA: "child-a", Established: true},
-				Health:   &inspect.LinkHealth{State: "healthy"},
+				Health:   &inspect.HealthSample{State: "healthy"},
 				Rotation: inspect.LinkRotation{Phase: "stable"},
 				Routing:  inspect.LinkRouting{BirdState: "running"},
 				Owner:    inspect.LinkOwner{Manager: "ipsec"},

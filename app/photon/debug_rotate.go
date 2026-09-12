@@ -8,6 +8,8 @@ import (
 	"os"
 	"time"
 
+	photonstate "github.com/HiggsNet/photon/internal/state"
+
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
@@ -79,10 +81,10 @@ func writeDebugRotateFromView(w io.Writer, view inspect.LinksDebugView, filter s
 	return inspecttext.WriteRotateDebug(w, rotate)
 }
 
-func linkSAStatesFromIPsecSAs(sas []ipsec.SAState) []linkSAState {
-	out := make([]linkSAState, 0, len(sas))
+func linkSAStatesFromIPsecSAs(sas []ipsec.SAState) []photonstate.LinkSAState {
+	out := make([]photonstate.LinkSAState, 0, len(sas))
 	for _, sa := range sas {
-		out = append(out, linkSAState{
+		out = append(out, photonstate.LinkSAState{
 			Name:            sa.Name,
 			IKEAgeSeconds:   sa.IKEAgeSeconds,
 			ChildAgeSeconds: sa.ChildAgeSeconds,
@@ -124,21 +126,16 @@ func printManualPortRotateResult(mode string, result *manualPortRotateResult) {
 }
 
 func rotateIPsecPortDirect(rt *AppContext) (*manualPortRotateResult, error) {
-	boltStore, startup, err := openLinuxDaemonState(rt)
+	state, err := openState(rt)
 	if err != nil {
 		return nil, err
 	}
-	defer boltStore.Close()
-	defer startup.Common.Close()
-	store, err := newPersistedDaemonStateStore(startup.Common, startup.Runtime, boltStore)
-	if err != nil {
-		return nil, err
-	}
-	common := store.common.ReadView()
-	runtime := store.readLinuxState()
-	if common.State == nil || runtime == nil {
+	defer state.Close()
+	common := state.Common.ReadView()
+	if common.State == nil {
 		return nil, fmt.Errorf("state owners are not initialized")
 	}
+	daemon := &Daemon{State: state}
 	record, result, err := planLocalIPsecPortRotation(rt.Config, common.State, rt.Now())
 	if err != nil {
 		return nil, err
@@ -147,13 +144,13 @@ func rotateIPsecPortDirect(rt *AppContext) (*manualPortRotateResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	committed, err := store.publishLocalProtocols(context.Background(), uint64(common.Revision), []corestate.LocalIntent{
+	committed, err := daemon.commitLocalProtocols(context.Background(), uint64(common.Revision), []corestate.LocalIntent{
 		corestate.PutProtocolRecordIntent{Kind: corestate.ProtocolRecordIPsec, Zone: common.State.ManagedZone, Key: ipsec.RecordKeyPorts, Type: ipsec.RecordTypePorts, Value: value},
-	}, runtime, rt.Now())
+	}, nil, rt.Now())
 	if err != nil {
 		return nil, err
 	}
-	if !committed.RuntimeCommitted && !committed.Common.Committed {
+	if !committed.LinuxStateCommitted && !committed.Common.Committed {
 		return nil, fmt.Errorf("manual port rotate produced unchanged state")
 	}
 	return result, nil

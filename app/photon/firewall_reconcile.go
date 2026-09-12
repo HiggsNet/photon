@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/firewall"
@@ -41,8 +42,8 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 	if d == nil || d.App == nil || d.App.Config == nil {
 		return nil
 	}
-	common := d.StateStore.common.ReadView()
-	runtime := d.StateStore.readLinuxState()
+	common := d.State.Common.ReadView()
+	runtime := d.State.ReadLinux()
 	if common.State == nil || runtime == nil {
 		return nil
 	}
@@ -171,10 +172,10 @@ func getOrCreateFirewallEntry(state *firewall.FirewallObservation, id string) *f
 }
 
 func (d *Daemon) publishFirewallObservation(rev uint64, summary *firewall.FirewallObservation) {
-	if d == nil || d.StateStore == nil || summary == nil {
+	if d == nil || d.State == nil || summary == nil {
 		return
 	}
-	currentRev := uint64(d.StateStore.common.VerifiedRevision())
+	currentRev := uint64(d.State.Common.VerifiedRevision())
 	if currentRev != rev {
 		d.firewallDirty = true
 		d.logWarn("firewall", "stale_reconcile_result", map[string]any{
@@ -194,7 +195,7 @@ func firewallOwnerScope(spec firewall.FirewallInstanceSpec) string {
 }
 
 // buildFirewallPolicyInput assembles the verified derived state for the planner.
-func buildFirewallPolicyInput(spec firewall.FirewallInstanceSpec, ars *routing.AuthorizedRouteSet, verified *corestate.VerifiedState, runtime *linuxRuntimeState, links map[string]linkInstanceState, reconcile *ipsecObservationSummary, config *appConfig, now time.Time) firewall.FirewallPolicyInput {
+func buildFirewallPolicyInput(spec firewall.FirewallInstanceSpec, ars *routing.AuthorizedRouteSet, verified *corestate.VerifiedState, runtime *photonlinux.LinuxState, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, config *appConfig, now time.Time) firewall.FirewallPolicyInput {
 	input := firewall.FirewallPolicyInput{}
 	if ars == nil || verified == nil || runtime == nil {
 		return input

@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 
+	photonstate "github.com/HiggsNet/photon/internal/state"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/firewall"
 	"github.com/HiggsNet/photon/pkg/routing"
 	photonservice "github.com/HiggsNet/photon/pkg/service"
@@ -26,7 +28,7 @@ func applyEndpointACL(name, destination, scope, protocol string, port uint16, se
 	if err != nil {
 		return err
 	}
-	acl, err := validateEndpointACL(endpointACL{Name: name, Destination: destination, Scope: scope, Protocol: protocol, Port: port, Selectors: selectors})
+	acl, err := validateEndpointACL(photonstate.EndpointACL{Name: name, Destination: destination, Scope: scope, Protocol: protocol, Port: port, Selectors: selectors})
 	if err != nil {
 		return err
 	}
@@ -70,16 +72,16 @@ func listEndpointACLs() error {
 	return encoder.Encode(acls)
 }
 
-func validateEndpointACL(acl endpointACL) (endpointACL, error) {
+func validateEndpointACL(acl photonstate.EndpointACL) (photonstate.EndpointACL, error) {
 	acl.Name = strings.TrimSpace(acl.Name)
 	acl.Scope = strings.ToLower(strings.TrimSpace(acl.Scope))
 	acl.Protocol = strings.ToLower(strings.TrimSpace(acl.Protocol))
 	if _, err := photonservice.NormalizeID(acl.Name); err != nil {
-		return endpointACL{}, fmt.Errorf("endpoint ACL name: %w", err)
+		return photonstate.EndpointACL{}, fmt.Errorf("endpoint ACL name: %w", err)
 	}
 	address, err := netip.ParseAddr(acl.Destination)
 	if err != nil {
-		return endpointACL{}, fmt.Errorf("endpoint ACL destination: %w", err)
+		return photonstate.EndpointACL{}, fmt.Errorf("endpoint ACL destination: %w", err)
 	}
 	acl.Destination = address.Unmap().String()
 	if acl.Scope == "" {
@@ -88,27 +90,27 @@ func validateEndpointACL(acl endpointACL) (endpointACL, error) {
 	switch acl.Scope {
 	case endpointACLScopeIP:
 		if acl.Protocol != "" || acl.Port != 0 {
-			return endpointACL{}, errors.New("IP-scope endpoint ACL must not specify protocol or port")
+			return photonstate.EndpointACL{}, errors.New("IP-scope endpoint ACL must not specify protocol or port")
 		}
 	case endpointACLScopePort:
 		if acl.Protocol != firewall.ProtoTCP && acl.Protocol != firewall.ProtoUDP {
-			return endpointACL{}, errors.New("port-scope endpoint ACL protocol must be tcp or udp")
+			return photonstate.EndpointACL{}, errors.New("port-scope endpoint ACL protocol must be tcp or udp")
 		}
 		if acl.Port == 0 {
-			return endpointACL{}, errors.New("port-scope endpoint ACL port is required")
+			return photonstate.EndpointACL{}, errors.New("port-scope endpoint ACL port is required")
 		}
 	default:
-		return endpointACL{}, errors.New("endpoint ACL scope must be ip or port")
+		return photonstate.EndpointACL{}, errors.New("endpoint ACL scope must be ip or port")
 	}
 	if len(acl.Selectors) == 0 {
-		return endpointACL{}, errors.New("endpoint ACL requires at least one selector; omit the ACL for an unrestricted endpoint")
+		return photonstate.EndpointACL{}, errors.New("endpoint ACL requires at least one selector; omit the ACL for an unrestricted endpoint")
 	}
 	seen := map[string]bool{}
 	selectors := make([]string, 0, len(acl.Selectors))
 	for _, raw := range acl.Selectors {
 		selector, err := photonservice.ParseZoneSelector(raw)
 		if err != nil {
-			return endpointACL{}, err
+			return photonstate.EndpointACL{}, err
 		}
 		value := selector.String()
 		if !seen[value] {
@@ -121,7 +123,7 @@ func validateEndpointACL(acl endpointACL) (endpointACL, error) {
 	return acl, nil
 }
 
-func resolveEndpointServices(acls map[string]endpointACL, ars *routing.AuthorizedRouteSet) ([]firewall.EndpointService, error) {
+func resolveEndpointServices(acls map[string]photonstate.EndpointACL, ars *routing.AuthorizedRouteSet) ([]firewall.EndpointService, error) {
 	if len(acls) == 0 {
 		return nil, nil
 	}
@@ -187,13 +189,13 @@ func canonicalEndpointPrefixes(prefixes []netip.Prefix) []netip.Prefix {
 	return out
 }
 
-func (d *Daemon) handleEndpointACLApplyEvent(acl endpointACL) (bool, error) {
+func (d *Daemon) handleEndpointACLApplyEvent(acl photonstate.EndpointACL) (bool, error) {
 	validated, err := validateEndpointACL(acl)
 	if err != nil {
 		return false, err
 	}
-	common := d.StateStore.common.ReadView()
-	runtime := d.StateStore.readLinuxState()
+	common := d.State.Common.ReadView()
+	runtime := d.State.ReadLinux()
 	if common.State == nil || common.State.Network == nil || runtime == nil {
 		return false, errors.New("daemon state is not loaded")
 	}
@@ -219,7 +221,7 @@ func (d *Daemon) handleEndpointACLApplyEvent(acl endpointACL) (bool, error) {
 		return false, fmt.Errorf("endpoint ACL destination %s is outside the managed Zone's active assignments", destination)
 	}
 	if runtime.EndpointACLs == nil {
-		runtime.EndpointACLs = make(map[string]endpointACL)
+		runtime.EndpointACLs = make(map[string]photonstate.EndpointACL)
 	}
 	runtime.EndpointACLs[validated.Name] = validated
 	if err := d.commitEndpointACLMutation(uint64(common.Revision), runtime.EndpointACLs); err != nil {
@@ -233,8 +235,8 @@ func (d *Daemon) handleEndpointACLRemoveEvent(name string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	common := d.StateStore.common.ReadView()
-	runtime := d.StateStore.readLinuxState()
+	common := d.State.Common.ReadView()
+	runtime := d.State.ReadLinux()
 	if common.State == nil || runtime == nil {
 		return false, errors.New("daemon state is not loaded")
 	}
@@ -248,7 +250,7 @@ func (d *Daemon) handleEndpointACLRemoveEvent(name string) (bool, error) {
 	return true, nil
 }
 
-func endpointACLEqual(left, right endpointACL) bool {
+func endpointACLEqual(left, right photonstate.EndpointACL) bool {
 	return left.Name == right.Name &&
 		left.Destination == right.Destination &&
 		left.Scope == right.Scope &&
@@ -257,17 +259,17 @@ func endpointACLEqual(left, right endpointACL) bool {
 		slices.Equal(left.Selectors, right.Selectors)
 }
 
-func (d *Daemon) commitEndpointACLMutation(rev uint64, acls map[string]endpointACL) error {
-	if d == nil || d.StateStore == nil {
+func (d *Daemon) commitEndpointACLMutation(rev uint64, acls map[string]photonstate.EndpointACL) error {
+	if d == nil || d.State == nil {
 		return errors.New("daemon service is not initialized")
 	}
-	if _, committed, err := d.StateStore.commitEndpointACLsIfRevision(rev, acls); err != nil {
+	if committed, err := d.State.ReplaceEndpointACLsIfRevision(corestate.VerifiedRevision(rev), acls); err != nil {
 		return err
 	} else if !committed {
-		return errDaemonStateRevisionStale
+		return errStateRevisionStale
 	}
 	if d.gossipDriver != nil && d.gossipDriver.Transport() != nil {
-		d.updateDiscoveredPeers()
+		d.refreshGossipDiscovery()
 	}
 	d.notifyStateChanged()
 	return nil

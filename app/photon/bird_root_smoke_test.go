@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
+
 	"github.com/HiggsNet/photon/internal/photonlinux/healthprobe"
 	"github.com/HiggsNet/photon/internal/photonlinux/linkstate"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
@@ -210,8 +212,8 @@ func TestDaemonBIRDAdoptRestartRootSmoke(t *testing.T) {
 		t.Fatal("BIRD stopped on non-force daemon shutdown; default shutdown_policy should persist")
 	}
 
-	common := service1.StateStore.common.ReadView()
-	restartedRuntime := service1.StateStore.readLinuxState()
+	common := service1.State.Common.ReadView()
+	restartedRuntime := service1.State.ReadLinux()
 	service2 := newTestDaemonFromOwners(rt, common.State, common.Gossip, restartedRuntime, syncConfig, time.Second)
 	processManager2 := bird.NewExecProcessManager("")
 	installTestBirdDrivers(service2, processManager2, func(socketPath string, timeout time.Duration) birdClient {
@@ -350,8 +352,8 @@ func TestDaemonHealthBIRDCutoverGateRootSmoke(t *testing.T) {
 	}
 	healthSmokePacketLossRates(t, ctx, nsA, nsB, vethA)
 
-	initialRuntime := &linuxRuntimeState{}
-	links := map[string]linkInstanceState{
+	initialRuntime := &photonlinux.LinuxState{}
+	links := map[string]ipsec.LinkInstance{
 		"link-1": {
 			ID:                  "link-1",
 			GroupID:             "main",
@@ -359,13 +361,9 @@ func TestDaemonHealthBIRDCutoverGateRootSmoke(t *testing.T) {
 			StagedInterfaceName: vethA,
 		},
 	}
-	stateStore, err := newDaemonStateStore(corestate.NewStore(&corestate.VerifiedState{}, nil), initialRuntime, nil)
-	if err != nil {
-		t.Fatalf("newDaemonStateStore: %v", err)
-	}
 	service := &Daemon{
-		health:     &healthDriver{Manager: manager},
-		StateStore: stateStore,
+		health: &healthDriver{Manager: manager},
+		State:  newState(nil, corestate.NewStore(&corestate.VerifiedState{}, nil), initialRuntime),
 	}
 	service.recordBirdHealthObservationUnavailableForLinks(links, nil, nsA, []string{"main"})
 	if ready := service.ipsecRotateCutoverReady()["link-1"]; ready {

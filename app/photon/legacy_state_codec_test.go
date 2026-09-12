@@ -7,7 +7,7 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-func TestSaveStateCommitsMetaAndNetworkInOneTransaction(t *testing.T) {
+func TestLegacyStateFixtureCommitsMetaAndNetworkAtomically(t *testing.T) {
 	verified, _, _, _ := buildTestDaemonOwners(t)
 	initial := &stateFile{
 		ManagedZone:    verified.ManagedZone,

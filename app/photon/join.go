@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	"os"
 	"slices"
 
@@ -132,13 +133,12 @@ func issueDelegationDirect(rt *AppContext, request *joinRequest, permissions []z
 	if err := validateJoinRequest(request); err != nil {
 		return nil, err
 	}
-	boltStore, startup, err := openLinuxDaemonState(rt)
+	state, err := openState(rt)
 	if err != nil {
 		return nil, err
 	}
-	defer boltStore.Close()
-	defer startup.Common.Close()
-	view := startup.Common.ReadView()
+	defer state.Close()
+	view := state.Common.ReadView()
 	parent := request.Zone.Parent()
 	parentState := view.State.Network.Zones[parent]
 	if parentState == nil || parentState.Authority == nil {
@@ -159,12 +159,12 @@ func issueDelegationDirect(rt *AppContext, request *joinRequest, permissions []z
 			Capabilities: delegationCapabilities(permissions),
 		}},
 	}
-	if _, err := startup.Common.ApplyLocalIntent(context.Background(), corestate.PutDelegationIntent{
+	if _, err := state.Common.ApplyLocalIntent(context.Background(), corestate.PutDelegationIntent{
 		Parent: parent, Authority: authority,
 	}, rt.Now()); err != nil {
 		return nil, err
 	}
-	bundle, err := joinBundleFromNetwork(startup.Common.ReadView().State.Network, request.Zone, rt.Now())
+	bundle, err := joinBundleFromNetwork(state.Common.ReadView().State.Network, request.Zone, rt.Now())
 	if err != nil {
 		return nil, err
 	}
@@ -208,13 +208,12 @@ func revokeDelegationDirect(rt *AppContext, path zone.ZonePath, reason string) e
 	if !path.Valid() || path == zone.RootZone {
 		return fmt.Errorf("invalid revoke zone: %s", path)
 	}
-	boltStore, startup, err := openLinuxDaemonState(rt)
+	state, err := openState(rt)
 	if err != nil {
 		return err
 	}
-	defer boltStore.Close()
-	defer startup.Common.Close()
-	_, err = startup.Common.ApplyLocalIntent(context.Background(), corestate.RevokeDelegationIntent{
+	defer state.Close()
+	_, err = state.Common.ApplyLocalIntent(context.Background(), corestate.RevokeDelegationIntent{
 		Parent: path.Parent(), Child: path, Reason: reason,
 	}, rt.Now())
 	return err
@@ -272,16 +271,18 @@ func acceptJoinBundleInState(rt *AppContext, bundle *joinBundle, key *privateKey
 	if err != nil {
 		return nil, err
 	}
-	defer boltStore.Close()
-	startup, found, err := loadAndRestoreLinuxState(boltStore, rt.Config.TrustedRootPublicKey)
+	state, found, err := restoreState(boltStore, rt.Config.TrustedRootPublicKey)
 	if err != nil {
+		_ = boltStore.Close()
 		return nil, err
 	}
 	if !found {
 		if key == nil {
+			_ = boltStore.Close()
 			return nil, errors.New("join accept requires key.json because no existing state is available")
 		}
 		if err := validatePrivateKeyFile(key); err != nil {
+			_ = boltStore.Close()
 			return nil, err
 		}
 		initial := corestate.NewStore(nil, nil)
@@ -289,23 +290,27 @@ func acceptJoinBundleInState(rt *AppContext, bundle *joinBundle, key *privateKey
 			ManagedZone: bundle.Zone, Network: bundle.Network,
 			TrustedRootPublicKey: bundle.RootPublicKey, IdentityPrivateKey: key.PrivateKey,
 		}, rt.Now()); err != nil {
+			_ = boltStore.Close()
 			return nil, err
 		}
 		view := initial.ReadView()
-		if err := initializeLinuxState(boltStore, &corestate.CommitCandidate{Verified: view.State, Gossip: view.Gossip}, view.Revision, &linuxRuntimeState{}); err != nil {
+		if err := initializeStateDB(boltStore, &corestate.CommitCandidate{Verified: view.State, Gossip: view.Gossip}, view.Revision, &photonlinux.LinuxState{}); err != nil {
+			_ = boltStore.Close()
 			return nil, err
 		}
-		startup, found, err = loadAndRestoreLinuxState(boltStore, rt.Config.TrustedRootPublicKey)
+		state, found, err = restoreState(boltStore, rt.Config.TrustedRootPublicKey)
 		if err != nil {
+			_ = boltStore.Close()
 			return nil, err
 		}
 		if !found {
+			_ = boltStore.Close()
 			return nil, errors.New("initialized join state could not be restored")
 		}
 	}
-	defer startup.Common.Close()
+	defer state.Close()
 	if key == nil {
-		view := startup.Common.ReadView()
+		view := state.Common.ReadView()
 		key, err = joinAcceptKeyFromIdentity(view.State, bundle.Zone)
 		if err != nil {
 			return nil, err
@@ -314,7 +319,7 @@ func acceptJoinBundleInState(rt *AppContext, bundle *joinBundle, key *privateKey
 	if err := validatePrivateKeyFile(key); err != nil {
 		return nil, err
 	}
-	if _, err := startup.Common.InstallIdentity(context.Background(), corestate.IdentityInstall{
+	if _, err := state.Common.InstallIdentity(context.Background(), corestate.IdentityInstall{
 		ManagedZone: bundle.Zone, Network: bundle.Network,
 		TrustedRootPublicKey: bundle.RootPublicKey, IdentityPrivateKey: key.PrivateKey,
 	}, rt.Now()); err != nil {

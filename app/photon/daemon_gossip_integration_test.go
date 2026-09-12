@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	"testing"
 	"time"
 
@@ -34,9 +35,9 @@ func TestDaemonObjectChunkCompletionNotifiesPlatformOnce(t *testing.T) {
 	delete(targetVerified.Network.Zones, zone.ZonePath("node-b.catofes."))
 	now := time.Unix(2230, 0)
 	rt := &AppContext{Clock: func() time.Time { return now }}
-	config := &gossipStartupConfig{PeerID: "node-a.catofes.", ListenAddr: "127.0.0.1:0"}
+	config := &appConfig{PeerID: "node-a.catofes.", ListenAddr: "127.0.0.1:0"}
 	service := newTestDaemonFromOwners(
-		rt, &targetVerified, &corestate.GossipCheckpoint{}, &linuxRuntimeState{}, config, defaultDaemonInterval,
+		rt, &targetVerified, &corestate.GossipCheckpoint{}, &photonlinux.LinuxState{}, config, defaultDaemonInterval,
 	)
 	peerID := "node-b.catofes."
 	session := gossip.NewSyncSession(peerID)
@@ -46,7 +47,7 @@ func TestDaemonObjectChunkCompletionNotifiesPlatformOnce(t *testing.T) {
 	service.gossipDriver.Gossip.SetSession(peerID, session)
 	notifications := 0
 	service.Hooks.OnStateChanged = func() { notifications++ }
-	beforeRevision := service.StateStore.common.VerifiedRevision()
+	beforeRevision := service.State.Common.VerifiedRevision()
 
 	chunkSize := len(data) / 2
 	if chunkSize == 0 {
@@ -87,7 +88,7 @@ drainEvents:
 	if targetVerified.Network.Zones["catofes."] != nil {
 		t.Fatal("common Store mutated the detached verified input")
 	}
-	committed := service.StateStore.common.ReadView()
+	committed := service.State.Common.ReadView()
 	if committed.Revision <= beforeRevision || committed.State.Network.Zones["catofes."] == nil {
 		t.Fatalf("common owner did not publish chunk snapshot: revision %d -> %d", beforeRevision, committed.Revision)
 	}

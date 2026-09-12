@@ -87,7 +87,7 @@ pkg/*
 2. `internal/*` 放 Photon 应用层模块：它可以组合 `pkg/*`，但不应该依赖 CLI 框架、stdout、环境变量散读或 `main` 包未导出类型。
 3. `app/photon` 保留 executable glue：命令注册、配置入口、daemon assembly、需要访问未导出状态的临时 adapter。
 4. `internal/state` 只放确有跨包共享需求的数据 DTO；IPsec、BIRD 和 firewall 在线 observation 已回归各自领域/daemon 边界，不再为共享方便复制一层 `state` 类型。
-5. 所有写路径仍通过 daemon commit 流程：`DaemonStateStore.BeginUpdate` / workspace 变更 / `Commit` 或 control command service 的 single-writer 路径；readmodel/inspect 不执行写操作，也不读取未提交 workspace。
+5. 所有写路径仍通过 typed owner：common mutation 进入 `core/state.Store`，LinuxState completion 回到 Daemon 并经唯一 BoltStore 持久化；readmodel/inspect 不执行写操作，也不读取未发布 candidate。
 6. 每次迁移都要先定义输入/输出结构，避免把 `stateFile` 原样搬进 internal 后形成新的大泥团。
 
 ---
@@ -114,7 +114,7 @@ pkg/*
 | Sync runtime | `app/photon/sync.go`, `sync_session.go`, `daemon_sync.go` | 只有 sync status view/text 和 peer debug runtime view 已下沉；FSM、packet demux、object pull、timer、state apply adapter 仍在 app。暂未创建 `internal/syncapp`。 |
 | Control API | `app/photon/control.go` | control socket 和 DTO/client helper 仍在 app；Phase 7.10 可逐步抽 `internal/controlapi`，但 daemon handler registration 留 app。 |
 | Config parsing | `app/photon/config.go`, `*_config.go` | 仍在 app；只有等 subsystem 接口稳定后再考虑 focused parser 包。暂未创建 `internal/config`。 |
-| App state / commit | `app/photon/state.go`, `daemon_state_store.go` | 持久化、锁、workspace、commit 和 clone 仍在 app；不要把 `internal/state` 误认为完整 app state 层。 |
+| App state / commit | `app/photon/state.go`, `state_bolt.go`, `legacy_state.go` | 一个具体 State 管理唯一 StateDB、Common 与 LinuxState；Daemon 不直接持有锁或数据库，旧 schema 单独留在 legacy 文件中，不要把 `internal/state` 误认为完整 app state 层。 |
 
 后续新包名应由实际迁移切口驱动，而不是按旧设计表格预先占坑。优先继续保持：纯 readmodel/view 进 `internal/inspect`，共享 runtime DTO 进 `internal/state`，写侧 adapter 和 daemon commit 留 `app/photon`。
 
@@ -136,7 +136,7 @@ type PeerLifecycleInput struct {
 }
 ```
 
-internal 模块吃 input，输出 view/decision。`app/photon` adapter 负责从 common `StateStore.ReadView()`、离线 DB snapshot 或 control socket response 拷贝 committed state；health、BIRD、actual SA 等 live 诊断作为单独 source 汇入 input。adapter 不应把未提交 workspace 或 `stateFile` 锁本身传入 internal。
+internal 模块吃 input，输出 view/decision。`app/photon` adapter 负责从 common `State.ReadView()`、离线 DB snapshot 或 control socket response 拷贝 committed state；health、BIRD、actual SA 等 live 诊断作为单独 source 汇入 input。adapter 不应把未提交 workspace 或 `stateFile` 锁本身传入 internal。
 
 ### 4.2 写侧和读侧分开
 
@@ -219,7 +219,7 @@ CLI text、HTTP JSON、control response 都不应该各自判断 `revoked/stale/
 
 当前状态：
 
-- 已完成：committed snapshot / `DaemonStateStore` 读写分离已在 app 内完成；部分 runtime DTO 已移动到 `internal/state`。
+- 已完成：旧 `DaemonStateStore` aggregate API 已删除；新的具体 State 只管理唯一 StateDB 和 typed partitions，Common 与 LinuxState 使用独立 detached read 和各自 revision/transaction commit。
 - 未完成：`stateFile`、bbolt 持久化、clone、workspace/commit、control socket DTO/client helper、config parsing/assembly 仍在 app。
 
 ### 5.6 剩余 app/photon 大文件清单
@@ -232,7 +232,7 @@ CLI text、HTTP JSON、control response 都不应该各自判断 `revoked/stale/
 - Firewall：`firewall_reconcile.go`
 - Health：`health_reconcile.go`、`health_spool.go`
 - Lifecycle/security：`peer_state.go`、`revocation_cleanup.go`、`admission_diagnostics.go`
-- Control/config/state：`control.go`、`config.go`、`state.go`、`daemon_state_store.go`
+- Control/config/state：`control.go`、`config.go`、`context.go`、`state.go`、`state_bolt.go`、`legacy_state.go`
 
 建议顺序仍然是：先抽纯 input/view/decision，再抽不触碰 daemon lifecycle 的 planner/helper，最后才移动持久化、commit、driver lifecycle 或 privileged apply。
 

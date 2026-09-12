@@ -8,6 +8,7 @@ import (
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func addRevocationTombstoneForTest(t *testing.T, network *zone.NetworkState, child, parent zone.ZonePath) {
@@ -30,7 +31,7 @@ func TestDaemonPurgeDryRunMergesCommonAndLinuxRuntimePlan(t *testing.T) {
 	now := time.Unix(123, 0)
 	verified.Network.Zones["leaf.node-b.catofes."] = zone.NewZoneState("leaf.node-b.catofes.", nil)
 	addRevocationTombstoneForTest(t, verified.Network, "node-b.catofes.", "catofes.")
-	observationLinks := map[string]linkInstanceState{
+	observationLinks := map[string]ipsec.LinkInstance{
 		"link-b":     {ID: "link-b", PeerZone: "node-b.catofes."},
 		"link-leaf":  {ID: "link-leaf", PeerZone: "leaf.node-b.catofes."},
 		"link-other": {ID: "link-other", PeerZone: "node-c.catofes."},
@@ -52,9 +53,9 @@ func TestDaemonPurgeDryRunMergesCommonAndLinuxRuntimePlan(t *testing.T) {
 		!slices.Equal(plan.SyncPeers, []string{"leaf.node-b.catofes.", "node-b.catofes."}) {
 		t.Fatalf("merged purge plan = %+v", plan)
 	}
-	common := service.StateStore.common.ReadView()
+	common := service.State.Common.ReadView()
 	currentLinks, _ := readTestIPsecObservation(service)
 	if common.State.Network.Zones["node-b.catofes."] == nil || currentLinks["link-b"].ID == "" {
-		t.Fatal("dry-run mutated common or Linux runtime state")
+		t.Fatal("dry-run mutated Common or LinuxState")
 	}
 }

@@ -192,7 +192,7 @@ type Provider interface {
 
 ### 4.5 Health
 
-- 列表：`d.healthStatusResponse()`（health.Manager 快照）经 `inspecthttp.BuildHealthContext` 与 `state.LinkInstances`、IPsec desired state 做 join；每条输出 `HealthContextItem{health, instance, desired, peer_zone, group_id, interface_name, endpoint, actual_state, local_tunnel_addr, peer_tunnel_addr}`，按 `(instance_id, probe_role)` 排序。只有实例没有健康数据的 link 以 `state: "unknown"` 补齐。
+- 列表：daemon 将 health.Manager 样本和当前探测目标投影为统一的 `inspect.HealthView`，再由 `inspecthttp.BuildHealthContext` 与在线 link instance、IPsec desired state 做展示层 join；每条输出 `HealthContextItem{health, instance, desired, peer_zone, group_id, interface_name, endpoint, actual_state, local_tunnel_addr, peer_tunnel_addr}`，按 `(instance_id, probe_role)` 排序。只有实例没有健康样本的 link 以 `state: "unknown"` 补齐。
 - 响应同时携带 `datasource` 信息（见第 7 节），前端据此决定是否展示历史曲线。
 - 单 link：`link_id` 可匹配 `instance_id` 或 `probe_id`（含 `#old` / `#staged` 后缀形式），未命中 404。
 

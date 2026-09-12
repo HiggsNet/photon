@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/observer"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func TestObserverStatusAPI(t *testing.T) {
@@ -39,7 +40,7 @@ func TestObserverStatusAPI(t *testing.T) {
 
 func TestObserverReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	observationLinks := map[string]linkInstanceState{
+	observationLinks := map[string]ipsec.LinkInstance{
 		"link-committed": {
 			ID:          "link-committed",
 			GroupID:     "main",
@@ -58,9 +59,9 @@ func TestObserverReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T) {
 	if srv == nil {
 		t.Fatal("observer server is nil")
 	}
-	committedRev := uint64(service.StateStore.common.VerifiedRevision())
+	committedRev := uint64(service.State.Common.VerifiedRevision())
 
-	observationLinks["link-uncommitted"] = linkInstanceState{ID: "link-uncommitted"}
+	observationLinks["link-uncommitted"] = ipsec.LinkInstance{ID: "link-uncommitted"}
 	observationReconcile.DesiredLinks = 99
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)

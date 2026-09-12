@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -648,7 +649,7 @@ func buildIPAMTestRuntimeWithNetwork(t *testing.T, ipamCap bool, mutate func(*zo
 	rt := &AppContext{Config: config, StatePath: config.StatePath, Clock: func() time.Time { return time.Unix(1000, 0) }, DisableControl: true}
 	seedPartitionedStateDB(t, rt.StatePath, &corestate.VerifiedState{
 		ManagedZone: managed, Network: ns, IdentityPrivateKey: zonePriv,
-	}, &corestate.GossipCheckpoint{}, &linuxRuntimeState{})
+	}, &corestate.GossipCheckpoint{}, &photonlinux.LinuxState{})
 	return rt, managed
 }
 

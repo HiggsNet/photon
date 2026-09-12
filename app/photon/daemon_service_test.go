@@ -15,12 +15,12 @@ import (
 
 func TestNewDaemonDefaultsInterval(t *testing.T) {
 	service := newTestDaemonFromOwners(
-		&AppContext{}, &corestate.VerifiedState{}, nil, &linuxRuntimeState{}, &gossipStartupConfig{}, 0,
+		&AppContext{}, &corestate.VerifiedState{}, nil, &photonlinux.LinuxState{}, &appConfig{}, 0,
 	)
 	if service.Interval != defaultDaemonInterval {
 		t.Fatalf("default interval = %s, want %s", service.Interval, defaultDaemonInterval)
 	}
-	if service.App == nil || service.currentGossipConfig() == nil {
+	if service.App == nil || service.gossipDriver == nil {
 		t.Fatal("daemon app or gossip config is nil")
 	}
 }
@@ -38,7 +38,7 @@ func TestConfiguredStrongSwanLinuxDriverWithoutLinkGroupsUsesDryRunObservation(t
 
 func TestDaemonReplacesAndClosesSingleLinuxDriver(t *testing.T) {
 	service := newTestDaemonFromOwners(
-		&AppContext{}, &corestate.VerifiedState{}, nil, &linuxRuntimeState{}, &gossipStartupConfig{}, time.Second,
+		&AppContext{}, &corestate.VerifiedState{}, nil, &photonlinux.LinuxState{}, &appConfig{}, time.Second,
 	)
 	firstClosed := 0
 	firstDriver := &ipsec.DryRunDriver{}
@@ -92,8 +92,8 @@ func TestDaemonStateChangedHook(t *testing.T) {
 		&AppContext{},
 		&corestate.VerifiedState{ManagedZone: "node-a.catofes."},
 		nil,
-		&linuxRuntimeState{},
-		&gossipStartupConfig{},
+		&photonlinux.LinuxState{},
+		&appConfig{},
 		time.Second,
 	)
 	var called bool
@@ -155,7 +155,7 @@ func TestEmptyFirewallAndRoutingFlushDoNotRepublishLegacyState(t *testing.T) {
 	service := newTestDaemonFromOwners(
 		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
-	beforeRevision := uint64(service.StateStore.common.VerifiedRevision())
+	beforeRevision := uint64(service.State.Common.VerifiedRevision())
 
 	service.firewallDirty = true
 	flushed, err := service.flushFirewallReconcileResult(context.Background())
@@ -175,7 +175,7 @@ func TestEmptyFirewallAndRoutingFlushDoNotRepublishLegacyState(t *testing.T) {
 		t.Fatal("routing reconcile was not flushed")
 	}
 
-	if revision := uint64(service.StateStore.common.VerifiedRevision()); revision != beforeRevision {
+	if revision := uint64(service.State.Common.VerifiedRevision()); revision != beforeRevision {
 		t.Fatalf("empty reconciles changed revision from %d to %d", beforeRevision, revision)
 	}
 }
@@ -257,7 +257,7 @@ func TestDaemonReloadConfigReconcilesIPsecLinkGroups(t *testing.T) {
 	if latestReconcile == nil || len(latestReconcile.Actions) != 1 || latestReconcile.Actions[0].Action != ipsec.ReconcileActionCreate {
 		t.Fatalf("ipsec reconcile after reload = %+v, want create", latestReconcile)
 	}
-	if current := service.currentGossipConfig(); len(service.App.Config.IPsec.LinkGroups) != 1 || current.PeerID != config.PeerID {
+	if current := service.gossipDriver.GossipConfig(); len(service.App.Config.IPsec.LinkGroups) != 1 || current.PeerID != config.PeerID {
 		t.Fatalf("daemon config was not refreshed: app=%+v sync=%+v", service.App.Config.IPsec.LinkGroups, current)
 	}
 }

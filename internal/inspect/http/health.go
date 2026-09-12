@@ -1,6 +1,10 @@
 package http
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/HiggsNet/photon/internal/inspect"
+)
 
 type HealthResponse struct {
 	Datasource any                 `json:"datasource"`
@@ -14,33 +18,22 @@ type HealthSeriesResponse struct {
 }
 
 type HealthContextItem struct {
-	Health          any    `json:"health"`
-	Instance        any    `json:"instance,omitempty"`
-	Desired         any    `json:"desired,omitempty"`
-	PeerZone        any    `json:"peer_zone,omitempty"`
-	GroupID         string `json:"group_id,omitempty"`
-	InterfaceName   string `json:"interface_name,omitempty"`
-	Endpoint        string `json:"endpoint,omitempty"`
-	ActualState     string `json:"actual_state,omitempty"`
-	LocalTunnelAddr string `json:"local_tunnel_addr,omitempty"`
-	PeerTunnelAddr  string `json:"peer_tunnel_addr,omitempty"`
-	SortInstanceID  string `json:"-"`
-	SortProbeRole   string `json:"-"`
+	Health          inspect.HealthSample `json:"health"`
+	Instance        any                  `json:"instance,omitempty"`
+	Desired         any                  `json:"desired,omitempty"`
+	PeerZone        any                  `json:"peer_zone,omitempty"`
+	GroupID         string               `json:"group_id,omitempty"`
+	InterfaceName   string               `json:"interface_name,omitempty"`
+	Endpoint        string               `json:"endpoint,omitempty"`
+	ActualState     string               `json:"actual_state,omitempty"`
+	LocalTunnelAddr string               `json:"local_tunnel_addr,omitempty"`
+	PeerTunnelAddr  string               `json:"peer_tunnel_addr,omitempty"`
 }
 
 type HealthContextInput struct {
-	HealthLinks []HealthLinkContextInput
-	Instances   map[string]HealthInstanceContextInput
-	Desired     map[string]HealthDesiredContextInput
-	Unknown     func(instanceID string) any
-}
-
-type HealthLinkContextInput struct {
-	InstanceID    string
-	ProbeID       string
-	ProbeRole     string
-	InterfaceName string
-	Health        any
+	View      inspect.HealthView
+	Instances map[string]HealthInstanceContextInput
+	Desired   map[string]HealthDesiredContextInput
 }
 
 type HealthInstanceContextInput struct {
@@ -64,61 +57,71 @@ type HealthDesiredContextInput struct {
 }
 
 func BuildHealthContext(input HealthContextInput) []HealthContextItem {
-	healthBaseIDs := map[string]bool{}
-	out := make([]HealthContextItem, 0, len(input.HealthLinks)+len(input.Instances))
-	for _, health := range input.HealthLinks {
-		if health.InstanceID == "" {
+	targetsByProbe := make(map[string]inspect.HealthTarget, len(input.View.Targets))
+	for _, target := range input.View.Targets {
+		targetsByProbe[healthProbeID(target.ProbeID, target.InstanceID)] = target
+	}
+	coveredProbes := make(map[string]bool, len(input.View.Samples))
+	coveredInstances := make(map[string]bool, len(input.View.Samples)+len(input.View.Targets))
+	out := make([]HealthContextItem, 0, len(input.View.Samples)+len(input.View.Targets)+len(input.Instances))
+	for _, sample := range input.View.Samples {
+		if sample.InstanceID == "" {
 			continue
 		}
-		healthBaseIDs[health.InstanceID] = true
-		out = append(out, buildHealthContextItem(health, input.Instances[health.InstanceID], input.Desired[health.InstanceID]))
+		probeID := healthProbeID(sample.ProbeID, sample.InstanceID)
+		coveredProbes[probeID] = true
+		coveredInstances[sample.InstanceID] = true
+		out = append(out, buildHealthContextItem(sample, targetsByProbe[probeID], input.Instances[sample.InstanceID], input.Desired[sample.InstanceID]))
+	}
+	for _, target := range input.View.Targets {
+		probeID := healthProbeID(target.ProbeID, target.InstanceID)
+		if target.InstanceID == "" || coveredProbes[probeID] {
+			continue
+		}
+		coveredInstances[target.InstanceID] = true
+		sample := inspect.HealthSample{
+			ProbeID: target.ProbeID, InstanceID: target.InstanceID,
+			ProbeRole: target.ProbeRole, InterfaceName: target.InterfaceName, State: "unknown",
+		}
+		out = append(out, buildHealthContextItem(sample, target, input.Instances[target.InstanceID], input.Desired[target.InstanceID]))
 	}
 	ids := make([]string, 0, len(input.Instances))
 	for id := range input.Instances {
-		if !healthBaseIDs[id] {
+		if !coveredInstances[id] {
 			ids = append(ids, id)
 		}
 	}
 	sort.Strings(ids)
 	for _, id := range ids {
-		rawHealth := any(map[string]any{
-			"instance_id": id,
-			"state":       "unknown",
-		})
-		if input.Unknown != nil {
-			rawHealth = input.Unknown(id)
-		}
-		health := HealthLinkContextInput{
-			InstanceID: id,
-			Health:     rawHealth,
-		}
-		out = append(out, buildHealthContextItem(health, input.Instances[id], input.Desired[id]))
+		sample := inspect.HealthSample{InstanceID: id, State: "unknown"}
+		out = append(out, buildHealthContextItem(sample, inspect.HealthTarget{}, input.Instances[id], input.Desired[id]))
 	}
 	sort.SliceStable(out, func(i, j int) bool {
-		hi := inputHealthSortKey(out[i])
-		hj := inputHealthSortKey(out[j])
-		if hi.instanceID != hj.instanceID {
-			return hi.instanceID < hj.instanceID
+		if out[i].Health.InstanceID != out[j].Health.InstanceID {
+			return out[i].Health.InstanceID < out[j].Health.InstanceID
 		}
-		return hi.probeRole < hj.probeRole
+		return out[i].Health.ProbeRole < out[j].Health.ProbeRole
 	})
 	return out
 }
 
-func buildHealthContextItem(health HealthLinkContextInput, inst HealthInstanceContextInput, desired HealthDesiredContextInput) HealthContextItem {
+func buildHealthContextItem(sample inspect.HealthSample, target inspect.HealthTarget, inst HealthInstanceContextInput, desired HealthDesiredContextInput) HealthContextItem {
 	item := HealthContextItem{
-		Health:         health.Health,
-		SortInstanceID: health.InstanceID,
-		SortProbeRole:  health.ProbeRole,
+		Health:          sample,
+		GroupID:         target.GroupID,
+		InterfaceName:   firstNonEmpty(sample.InterfaceName, target.InterfaceName),
+		ActualState:     target.State,
+		LocalTunnelAddr: target.LocalTunnelAddr,
+		PeerTunnelAddr:  target.PeerTunnelAddr,
 	}
-	if item.Health == nil {
-		item.Health = map[string]any{"instance_id": health.InstanceID}
+	if target.PeerZone != "" {
+		item.PeerZone = target.PeerZone
 	}
 	if inst.ID != "" {
 		item.Instance = inst.Instance
 		item.PeerZone = inst.PeerZone
 		item.GroupID = inst.GroupID
-		item.InterfaceName = firstNonEmpty(health.InterfaceName, inst.InterfaceName)
+		item.InterfaceName = firstNonEmpty(sample.InterfaceName, target.InterfaceName, inst.InterfaceName)
 		item.Endpoint = inst.Endpoint
 		item.ActualState = inst.ActualState
 	}
@@ -131,41 +134,22 @@ func buildHealthContextItem(health HealthLinkContextInput, inst HealthInstanceCo
 			item.GroupID = desired.GroupID
 		}
 		if item.InterfaceName == "" {
-			item.InterfaceName = firstNonEmpty(health.InterfaceName, desired.InterfaceName)
+			item.InterfaceName = firstNonEmpty(sample.InterfaceName, desired.InterfaceName)
 		}
 		item.LocalTunnelAddr = desired.LocalTunnelAddr
 		item.PeerTunnelAddr = desired.PeerTunnelAddr
 	}
-	if item.InterfaceName == "" && health.InterfaceName != "" {
-		item.InterfaceName = health.InterfaceName
+	if item.InterfaceName == "" && sample.InterfaceName != "" {
+		item.InterfaceName = sample.InterfaceName
 	}
 	return item
 }
 
-type healthSortKey struct {
-	instanceID string
-	probeRole  string
-}
-
-func inputHealthSortKey(item HealthContextItem) healthSortKey {
-	if item.SortInstanceID != "" || item.SortProbeRole != "" {
-		return healthSortKey{instanceID: item.SortInstanceID, probeRole: item.SortProbeRole}
+func healthProbeID(probeID, instanceID string) string {
+	if probeID != "" {
+		return probeID
 	}
-	if link, ok := item.Health.(HealthLinkContextInput); ok {
-		return healthSortKey{instanceID: link.InstanceID, probeRole: link.ProbeRole}
-	}
-	if link, ok := item.Health.(interface {
-		HealthContextSortKey() (string, string)
-	}); ok {
-		instanceID, probeRole := link.HealthContextSortKey()
-		return healthSortKey{instanceID: instanceID, probeRole: probeRole}
-	}
-	if m, ok := item.Health.(map[string]any); ok {
-		instanceID, _ := m["instance_id"].(string)
-		probeRole, _ := m["probe_role"].(string)
-		return healthSortKey{instanceID: instanceID, probeRole: probeRole}
-	}
-	return healthSortKey{}
+	return instanceID
 }
 
 func firstNonEmpty(values ...string) string {

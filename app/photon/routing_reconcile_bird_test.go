@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	"strings"
 	"testing"
 	"time"
@@ -250,7 +251,7 @@ func TestLongBirdReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 		t.Fatal("routing reconcile did not enter blocking BIRD start")
 	}
 
-	committedRev := uint64(service.StateStore.common.VerifiedRevision())
+	committedRev := uint64(service.State.Common.VerifiedRevision())
 	statusDone := make(chan controlViewResponse[inspect.DaemonStatusView], 1)
 	go func() {
 		statusDone <- controlViewRequestViaPipe[inspect.DaemonStatusView](t, service, controlRequest{Method: "daemon_status_view"})
@@ -309,7 +310,7 @@ func TestStopManagedBirdInstancesHonorsShutdownPolicy(t *testing.T) {
 	externalPM := &fakeBirdProcessManager{running: true}
 	stopPM := &fakeBirdProcessManager{running: true}
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: appConfig}, nil, nil, &linuxRuntimeState{}, &gossipStartupConfig{}, time.Second,
+		&AppContext{Config: appConfig}, nil, nil, &photonlinux.LinuxState{}, appConfig, time.Second,
 	)
 	installTestLinuxDrivers(service, testLinuxDrivers{birdProcesses: map[string]bird.ProcessManager{
 		"photontesth2": persistPM,
@@ -388,13 +389,13 @@ func TestFlushRoutingReconcileCoalesces(t *testing.T) {
 		t.Fatalf("BirdInstances len = %d, want 1", len(latest.Instances))
 	}
 
-	beforeNoopRev := uint64(service.StateStore.common.VerifiedRevision())
+	beforeNoopRev := uint64(service.State.Common.VerifiedRevision())
 	now = now.Add(defaultRoutingReconcileInterval)
 	service.routingDirty = true
 	if !service.flushRoutingReconcile(context.Background()) {
 		t.Fatal("second routing reconcile was not flushed")
 	}
-	if afterNoopRev := uint64(service.StateStore.common.VerifiedRevision()); afterNoopRev != beforeNoopRev {
+	if afterNoopRev := uint64(service.State.Common.VerifiedRevision()); afterNoopRev != beforeNoopRev {
 		t.Fatalf("no-op routing reconcile advanced revision: before=%d after=%d", beforeNoopRev, afterNoopRev)
 	}
 	if observation := service.linuxObservation.routingSnapshot(); observation == nil || observation.LastRunUnix != now.Unix() {
@@ -404,9 +405,9 @@ func TestFlushRoutingReconcileCoalesces(t *testing.T) {
 
 func TestRoutingObservationDoesNotAdvancePersistentRevision(t *testing.T) {
 	verified := &corestate.VerifiedState{}
-	runtime := &linuxRuntimeState{}
-	service := &Daemon{StateStore: newTestDaemonStateStore(verified, nil, runtime)}
-	common := service.StateStore.common.ReadView()
+	runtime := &photonlinux.LinuxState{}
+	service := &Daemon{State: newState(nil, corestate.NewStore(verified, nil), runtime)}
+	common := service.State.Common.ReadView()
 	rev := uint64(common.Revision)
 	observation := &routingObservation{
 		Instances: map[string]*bird.InstanceObservation{
@@ -417,7 +418,7 @@ func TestRoutingObservationDoesNotAdvancePersistentRevision(t *testing.T) {
 	service.publishRoutingObservation(rev, observation)
 	observation.Instances["mesh"].State = birdInstanceStateError
 	observation.Instances["mesh"].Overlays[0] = "changed"
-	if got := uint64(service.StateStore.common.VerifiedRevision()); got != rev {
+	if got := uint64(service.State.Common.VerifiedRevision()); got != rev {
 		t.Fatalf("routing observation advanced revision: got %d want %d", got, rev)
 	}
 	got := service.linuxObservation.routingSnapshot()

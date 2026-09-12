@@ -3,13 +3,14 @@ package main
 import (
 	"crypto/ed25519"
 	"fmt"
+	"github.com/HiggsNet/photon/internal/photonlinux"
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
-func initRootState() error {
+func runRootInit() error {
 	rt, err := NewAppContext()
 	if err != nil {
 		return err
@@ -21,7 +22,7 @@ func initRootState() error {
 		fmt.Printf("root public key: %s\n", formatPublicKey(rootPub))
 		return nil
 	}
-	rootPub, err := initRootStateInRuntime(rt)
+	rootPub, err := initializeRootState(rt)
 	if err != nil {
 		return err
 	}
@@ -30,7 +31,7 @@ func initRootState() error {
 	return nil
 }
 
-func initRootStateInRuntime(rt *AppContext) (ed25519.PublicKey, error) {
+func initializeRootState(rt *AppContext) (ed25519.PublicKey, error) {
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		return nil, err
@@ -57,7 +58,7 @@ func initRootStateInRuntime(rt *AppContext) (ed25519.PublicKey, error) {
 		TrustedRootPublicKey: append(ed25519.PublicKey(nil), rootPub...),
 		RootPrivateKey:       append(ed25519.PrivateKey(nil), rootPriv...),
 	}}
-	if err := initializeLinuxState(store, candidate, 0, &linuxRuntimeState{}); err != nil {
+	if err := initializeStateDB(store, candidate, 0, &photonlinux.LinuxState{}); err != nil {
 		return nil, err
 	}
 	return rootPub, nil

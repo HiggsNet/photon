@@ -14,10 +14,10 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
-// StateStore owns the one persistent BoltStore handle and the common Store
+// State owns the one persistent BoltStore handle and the common Store
 // restored for the Windows composition root. It does not define a Windows-only
 // snapshot, revision or bbolt schema.
-type StateStore struct {
+type State struct {
 	mu     sync.RWMutex
 	bolt   *corestate.BoltStore
 	common *corestate.Store
@@ -26,10 +26,10 @@ type StateStore struct {
 	err    error
 }
 
-// OpenStateStore opens an existing common-state database and restores its exact
+// OpenState opens an existing common-state database and restores its exact
 // persisted VerifiedRevision. Linux legacy migration deliberately does not
 // live here; a Windows database must already use the common schema.
-func OpenStateStore(path string, managed zone.ZonePath, trustedRoot ed25519.PublicKey, lockTimeout time.Duration) (*StateStore, error) {
+func OpenState(path string, managed zone.ZonePath, trustedRoot ed25519.PublicKey, lockTimeout time.Duration) (*State, error) {
 	if !managed.Valid() || managed.IsRoot() {
 		return nil, errors.New("managed zone must be a valid non-root Photon zone")
 	}
@@ -73,12 +73,12 @@ func OpenStateStore(path string, managed zone.ZonePath, trustedRoot ed25519.Publ
 		_ = boltStore.Close()
 		return nil, fmt.Errorf("restore Photon common state %s: %w", path, err)
 	}
-	return &StateStore{bolt: boltStore, common: common}, nil
+	return &State{bolt: boltStore, common: common}, nil
 }
 
 // Store returns the shared in-memory verified Store. Callers must not close it;
-// StateStore owns the combined common/Bolt lifecycle.
-func (source *StateStore) Store() *corestate.Store {
+// State owns the combined common/Bolt lifecycle.
+func (source *State) Store() *corestate.Store {
 	if source == nil {
 		return nil
 	}
@@ -90,7 +90,7 @@ func (source *StateStore) Store() *corestate.Store {
 	return source.common
 }
 
-func (source *StateStore) ReadView(ctx context.Context) (corestate.View, error) {
+func (source *State) ReadView(ctx context.Context) (corestate.View, error) {
 	if source == nil {
 		return corestate.View{}, corestate.ErrVerifiedStoreClosed
 	}
@@ -108,7 +108,7 @@ func (source *StateStore) ReadView(ctx context.Context) (corestate.View, error) 
 	return source.common.ReadView(), nil
 }
 
-func (source *StateStore) Close() error {
+func (source *State) Close() error {
 	if source == nil {
 		return nil
 	}

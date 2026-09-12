@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	photonstate "github.com/HiggsNet/photon/internal/state"
+
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/routing"
@@ -21,8 +23,8 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 	if d == nil || d.App == nil || d.App.Config == nil {
 		return nil
 	}
-	common := d.StateStore.common.ReadView()
-	runtime := d.StateStore.readLinuxState()
+	common := d.State.Common.ReadView()
+	runtime := d.State.ReadLinux()
 	if common.State == nil || runtime == nil {
 		return nil
 	}
@@ -416,7 +418,7 @@ func markMissingXFRMLinkInstances(instances map[string]ipsec.LinkInstance, missi
 }
 
 func (d *Daemon) publishIPsecObservation(rev uint64, unix int64, instances map[string]ipsec.LinkInstance, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError string) error {
-	if d == nil || d.StateStore == nil {
+	if d == nil || d.State == nil {
 		return nil
 	}
 	summary := summarizeIPsecReconcile(rev, unix, desired, sas, actions, skips, lastError)
@@ -424,7 +426,7 @@ func (d *Daemon) publishIPsecObservation(rev uint64, unix int64, instances map[s
 	if reflect.DeepEqual(observedLinks, instances) && ipsecReconcileSummaryEqual(observedReconcile, summary) {
 		return nil
 	}
-	currentRev := uint64(d.StateStore.common.VerifiedRevision())
+	currentRev := uint64(d.State.Common.VerifiedRevision())
 	if currentRev != rev {
 		d.ipsecDirty = true
 		d.logWarn("ipsec", "stale_reconcile_result", map[string]any{
@@ -481,10 +483,10 @@ func normalizeIPsecReconcileForComparison(summary *ipsecObservationSummary) {
 }
 
 func (d *Daemon) recordIPsecReconcileError(rev uint64, unix int64, err error) {
-	if d == nil || d.StateStore == nil || err == nil {
+	if d == nil || d.State == nil || err == nil {
 		return
 	}
-	currentRev := uint64(d.StateStore.common.VerifiedRevision())
+	currentRev := uint64(d.State.Common.VerifiedRevision())
 	if currentRev != rev {
 		d.ipsecDirty = true
 		d.logWarn("ipsec", "stale_reconcile_error", map[string]any{
@@ -597,7 +599,7 @@ func summarizeIPsecReconcile(sourceRev uint64, unix int64, desired []ipsec.Trans
 		LastError:      lastError,
 	}
 	for _, spec := range desired {
-		state.Desired = append(state.Desired, desiredLinkState{
+		state.Desired = append(state.Desired, photonstate.DesiredLinkState{
 			InstanceID:      ipsec.LinkInstanceID(spec),
 			GroupID:         spec.OverlayID,
 			PeerZone:        spec.PeerZone,
@@ -613,7 +615,7 @@ func summarizeIPsecReconcile(sourceRev uint64, unix int64, desired []ipsec.Trans
 		})
 	}
 	for _, sa := range sas {
-		state.ActualSAs = append(state.ActualSAs, linkSAState{
+		state.ActualSAs = append(state.ActualSAs, photonstate.LinkSAState{
 			Name:            sa.Name,
 			UniqueID:        sa.UniqueID,
 			Initiator:       sa.Initiator,
@@ -639,7 +641,7 @@ func summarizeIPsecReconcile(sourceRev uint64, unix int64, desired []ipsec.Trans
 		})
 	}
 	for _, action := range actions {
-		item := linkActionState{Action: action.Action, Reason: action.Reason, SAUniqueID: action.SAUniqueID}
+		item := photonstate.LinkActionState{Action: action.Action, Reason: action.Reason, SAUniqueID: action.SAUniqueID}
 		if action.Instance != nil {
 			item.InstanceID = action.Instance.ID
 			item.GroupID = action.Instance.GroupID
@@ -653,7 +655,7 @@ func summarizeIPsecReconcile(sourceRev uint64, unix int64, desired []ipsec.Trans
 		state.Actions = append(state.Actions, item)
 	}
 	for _, skip := range skips {
-		state.Skipped = append(state.Skipped, linkSkipState{
+		state.Skipped = append(state.Skipped, photonstate.LinkSkipState{
 			GroupID: skip.GroupID,
 			Peer:    skip.Peer,
 			Reason:  skip.Reason,
@@ -673,14 +675,14 @@ func summarizeContactEndpoint(points []ipsec.ContactPoint) string {
 	return points[0].Host
 }
 
-func revokedLinkPeers(network *zone.NetworkState, instances map[string]linkInstanceState, checkpoint *corestate.GossipCheckpoint, now time.Time) map[zone.ZonePath]bool {
+func revokedLinkPeers(network *zone.NetworkState, instances map[string]ipsec.LinkInstance, checkpoint *corestate.GossipCheckpoint, now time.Time) map[zone.ZonePath]bool {
 	// Phase 6.4.5: use the comprehensive revoked peer zone collector that
 	// covers both LinkInstances and gossip checkpoint peers, so that revocation is detected
 	// even for peers that don't have an active link instance yet.
 	return collectRevokedPeerZones(network, instances, checkpoint, now)
 }
 
-func injectIPsecKeyMaterial(verified *corestate.VerifiedState, localKey *ipsecTransportKeyState, desired []ipsec.TransportLinkSpec) []ipsec.TransportLinkSpec {
+func injectIPsecKeyMaterial(verified *corestate.VerifiedState, localKey *photonstate.IPsecTransportKeyState, desired []ipsec.TransportLinkSpec) []ipsec.TransportLinkSpec {
 	if verified == nil {
 		return desired
 	}

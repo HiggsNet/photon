@@ -87,7 +87,7 @@ type BabelDebugView struct {
 type BabelDebugInput struct {
 	LastReconcileError string
 	Instances          []BabelInstanceInput
-	RuntimeStates      map[string]*bird.InstanceObservation
+	LinuxStates        map[string]*bird.InstanceObservation
 }
 
 type BabelInstanceInput struct {
@@ -138,7 +138,7 @@ func BuildBabelDebug(input BabelDebugInput) BabelDebugView {
 			view.Instances = append(view.Instances, instView)
 			continue
 		}
-		runtime, ok := input.RuntimeStates[inst.NetNS]
+		runtime, ok := input.LinuxStates[inst.NetNS]
 		if ok && runtime != nil {
 			instView.HasState = true
 			instView.RouterID = runtime.RouterID

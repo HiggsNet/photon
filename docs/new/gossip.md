@@ -801,7 +801,7 @@ Scheduler 使用 `(namespace, owner, key, generation)` 标识 timer，以一个 
 ```
 SyncSession 完成 + state changed
   → completeSyncSession()
-    → updateDiscoveredPeers()
+    → refreshGossipDiscovery()
     → notifyStateChanged()
       → flushRevocationCleanup()
       → mark ipsecDirty, routingDirty, firewallDirty

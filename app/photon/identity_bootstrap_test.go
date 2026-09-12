@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
@@ -29,7 +30,7 @@ gossip:
 	}
 }
 
-func TestOpenLinuxDaemonStateAutoJoinCreatesPendingBootstrapState(t *testing.T) {
+func TestOpenStateAutoJoinCreatesPendingBootstrapState(t *testing.T) {
 	dir := t.TempDir()
 	keyPath, pub := writeTestPrivateKey(t, dir, "node-b")
 	rootPub, _, err := ed25519.GenerateKey(nil)
@@ -44,11 +45,11 @@ func TestOpenLinuxDaemonStateAutoJoinCreatesPendingBootstrapState(t *testing.T) 
 	config.Bootstrap = []syncConfigPeer{{ID: "catofes.", Addr: "127.0.0.1:33434"}}
 	rt := &AppContext{Config: config, StatePath: config.StatePath, Clock: func() time.Time { return time.Unix(1000, 0) }}
 
-	store, startup, err := openLinuxDaemonState(rt)
+	opened, err := openState(rt)
 	if err != nil {
-		t.Fatalf("openLinuxDaemonState: %v", err)
+		t.Fatalf("openState: %v", err)
 	}
-	state := startup.Common.ReadView().State
+	state := opened.Common.ReadView().State
 	if state.ManagedZone != "node-b.catofes." || !autoJoinPendingVerified(state) {
 		t.Fatalf("state = zone:%s pending:%v", state.ManagedZone, autoJoinPendingVerified(state))
 	}
@@ -60,22 +61,20 @@ func TestOpenLinuxDaemonStateAutoJoinCreatesPendingBootstrapState(t *testing.T) 
 		t.Fatalf("trusted root authority missing: %+v", root)
 	}
 
-	startup.Common.Close()
-	if err := store.Close(); err != nil {
-		t.Fatalf("Close BoltStore: %v", err)
+	if err := opened.Close(); err != nil {
+		t.Fatalf("Close State: %v", err)
 	}
 
-	reopenedStore, reopened, err := openLinuxDaemonState(rt)
+	reopened, err := openState(rt)
 	if err != nil {
-		t.Fatalf("openLinuxDaemonState(reopened): %v", err)
+		t.Fatalf("openState(reopened): %v", err)
 	}
-	reopened.Common.Close()
-	if err := reopenedStore.Close(); err != nil {
-		t.Fatalf("Close reopened BoltStore: %v", err)
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("Close reopened State: %v", err)
 	}
 }
 
-func TestOpenLinuxDaemonStateAutoJoinWithoutBootstrapReportsActionableError(t *testing.T) {
+func TestOpenStateAutoJoinWithoutBootstrapReportsActionableError(t *testing.T) {
 	dir := t.TempDir()
 	keyPath, _ := writeTestPrivateKey(t, dir, "node-b")
 	rootPub, _, err := ed25519.GenerateKey(nil)
@@ -89,13 +88,13 @@ func TestOpenLinuxDaemonStateAutoJoinWithoutBootstrapReportsActionableError(t *t
 	config.TrustedRootPublicKey = rootPub
 	rt := &AppContext{Config: config, StatePath: config.StatePath}
 
-	_, _, err = openLinuxDaemonState(rt)
+	_, err = openState(rt)
 	if err == nil {
-		t.Fatal("openLinuxDaemonState accepted auto-join config without gossip.bootstrap")
+		t.Fatal("openState accepted auto-join config without gossip.bootstrap")
 	}
 	for _, want := range []string{"cannot initialize empty state for auto-join", "gossip.bootstrap", "at least one peer is required"} {
 		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("openLinuxDaemonState error = %q, want substring %q", err, want)
+			t.Fatalf("openState error = %q, want substring %q", err, want)
 		}
 	}
 }
@@ -137,7 +136,7 @@ func TestValidateAutoJoinBootstrapConfigReportsSpecificMissingFields(t *testing.
 	}
 }
 
-func TestOpenLinuxDaemonStateRejectsConfiguredIdentityMismatch(t *testing.T) {
+func TestOpenStateRejectsConfiguredIdentityMismatch(t *testing.T) {
 	dir := t.TempDir()
 	verified, keyPath := buildIdentityVerifiedState(t, dir, "node-b.catofes.")
 	config := defaultAppConfig()
@@ -145,16 +144,16 @@ func TestOpenLinuxDaemonStateRejectsConfiguredIdentityMismatch(t *testing.T) {
 	config.ManagedZone = "node-b.catofes."
 	config.Identity.KeyPath = keyPath
 	rt := &AppContext{Config: config, StatePath: config.StatePath}
-	seedPartitionedStateDB(t, rt.StatePath, verified, &corestate.GossipCheckpoint{}, &linuxRuntimeState{})
+	seedPartitionedStateDB(t, rt.StatePath, verified, &corestate.GossipCheckpoint{}, &photonlinux.LinuxState{})
 
 	otherKeyPath, _ := writeTestPrivateKey(t, dir, "other")
 	config.Identity.KeyPath = otherKeyPath
-	if _, _, err := openLinuxDaemonState(rt); err == nil || !strings.Contains(err.Error(), "public key does not match persisted identity private key") {
-		t.Fatalf("openLinuxDaemonState mismatch error = %v", err)
+	if _, err := openState(rt); err == nil || !strings.Contains(err.Error(), "public key does not match persisted identity private key") {
+		t.Fatalf("openState mismatch error = %v", err)
 	}
 }
 
-func TestOpenLinuxDaemonStateRejectsConfiguredManagedZoneMismatch(t *testing.T) {
+func TestOpenStateRejectsConfiguredManagedZoneMismatch(t *testing.T) {
 	dir := t.TempDir()
 	verified, keyPath := buildIdentityVerifiedState(t, dir, "node-b.catofes.")
 	config := defaultAppConfig()
@@ -162,13 +161,13 @@ func TestOpenLinuxDaemonStateRejectsConfiguredManagedZoneMismatch(t *testing.T) 
 	config.ManagedZone = "node-a.catofes."
 	config.Identity.KeyPath = keyPath
 	rt := &AppContext{Config: config, StatePath: config.StatePath}
-	seedPartitionedStateDB(t, rt.StatePath, verified, &corestate.GossipCheckpoint{}, &linuxRuntimeState{})
-	if _, _, err := openLinuxDaemonState(rt); err == nil || !strings.Contains(err.Error(), "does not match persisted managed zone") {
-		t.Fatalf("openLinuxDaemonState managed_zone mismatch error = %v", err)
+	seedPartitionedStateDB(t, rt.StatePath, verified, &corestate.GossipCheckpoint{}, &photonlinux.LinuxState{})
+	if _, err := openState(rt); err == nil || !strings.Contains(err.Error(), "does not match persisted managed zone") {
+		t.Fatalf("openState managed_zone mismatch error = %v", err)
 	}
 }
 
-func TestOpenLinuxDaemonStateAllowsConfiguredIdentityPathMove(t *testing.T) {
+func TestOpenStateAllowsConfiguredIdentityPathMove(t *testing.T) {
 	dir := t.TempDir()
 	verified, keyPath := buildIdentityVerifiedState(t, dir, "node-b.catofes.")
 	config := defaultAppConfig()
@@ -176,34 +175,31 @@ func TestOpenLinuxDaemonStateAllowsConfiguredIdentityPathMove(t *testing.T) {
 	config.ManagedZone = "node-b.catofes."
 	config.Identity.KeyPath = keyPath
 	rt := &AppContext{Config: config, StatePath: config.StatePath}
-	seedPartitionedStateDB(t, rt.StatePath, verified, &corestate.GossipCheckpoint{}, &linuxRuntimeState{})
+	seedPartitionedStateDB(t, rt.StatePath, verified, &corestate.GossipCheckpoint{}, &photonlinux.LinuxState{})
 
-	store, startup, err := openLinuxDaemonState(rt)
+	opened, err := openState(rt)
 	if err != nil {
-		t.Fatalf("openLinuxDaemonState: %v", err)
+		t.Fatalf("openState: %v", err)
 	}
-	startup.Common.Close()
-	if err := store.Close(); err != nil {
-		t.Fatalf("Close BoltStore: %v", err)
+	if err := opened.Close(); err != nil {
+		t.Fatalf("Close State: %v", err)
 	}
 
-	reopenedStore, reopened, err := openLinuxDaemonState(rt)
+	reopened, err := openState(rt)
 	if err != nil {
-		t.Fatalf("openLinuxDaemonState(reopened): %v", err)
+		t.Fatalf("openState(reopened): %v", err)
 	}
-	reopened.Common.Close()
-	if err := reopenedStore.Close(); err != nil {
-		t.Fatalf("Close reopened BoltStore: %v", err)
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("Close reopened State: %v", err)
 	}
 
 	config.Identity.KeyPath = copyTestPrivateKey(t, keyPath, filepath.Join(dir, "moved.key.json"))
-	movedStore, moved, err := openLinuxDaemonState(rt)
+	moved, err := openState(rt)
 	if err != nil {
-		t.Fatalf("openLinuxDaemonState moved key: %v", err)
+		t.Fatalf("openState moved key: %v", err)
 	}
-	moved.Common.Close()
-	if err := movedStore.Close(); err != nil {
-		t.Fatalf("Close moved-path BoltStore: %v", err)
+	if err := moved.Close(); err != nil {
+		t.Fatalf("Close moved-path State: %v", err)
 	}
 }
 
@@ -226,10 +222,9 @@ func TestDaemonReloadAllowsPathMoveAndRejectsIdentityChange(t *testing.T) {
 	appConfig.StatePath = statePath
 	appConfig.ManagedZone = "node-b.catofes."
 	appConfig.Identity.KeyPath = keyPath
-	runtime := &linuxRuntimeState{}
+	runtime := &photonlinux.LinuxState{}
 	rt := &AppContext{Config: appConfig, StatePath: statePath}
-	config := gossipStartupConfigFromAppConfig(appConfig, verified)
-	service := newTestDaemonFromOwners(rt, verified, nil, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, verified, nil, runtime, appConfig, time.Second)
 
 	writeIdentityConfig(t, configPath, dataDir, "node-b.catofes.", movedKeyPath)
 	result, syncNow, shutdown := service.handleEvent(daemonEvent{Type: daemonEventReloadConfig})
@@ -259,7 +254,7 @@ func TestDaemonReloadAllowsPathMoveAndRejectsIdentityChange(t *testing.T) {
 	}
 }
 
-func buildPendingAutoJoinOwners(t *testing.T, dir string, managed zone.ZonePath, matchingDelegation bool) (*corestate.VerifiedState, *linuxRuntimeState, string) {
+func buildPendingAutoJoinOwners(t *testing.T, dir string, managed zone.ZonePath, matchingDelegation bool) (*corestate.VerifiedState, *photonlinux.LinuxState, string) {
 	t.Helper()
 	keyPath, pub := writeTestPrivateKey(t, dir, "identity")
 	if !matchingDelegation {
@@ -338,7 +333,7 @@ func buildPendingAutoJoinOwners(t *testing.T, dir string, managed zone.ZonePath,
 		ManagedZone:        managed,
 		IdentityPrivateKey: key.PrivateKey,
 		Network:            ns,
-	}, &linuxRuntimeState{}, keyPath
+	}, &photonlinux.LinuxState{}, keyPath
 }
 
 func buildIdentityVerifiedState(t *testing.T, dir string, managed zone.ZonePath) (*corestate.VerifiedState, string) {

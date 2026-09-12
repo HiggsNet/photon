@@ -137,13 +137,12 @@ func recoveryExportZone(path zone.ZonePath, outPath string) error {
 	if err != nil {
 		return err
 	}
-	boltStore, startup, err := openLinuxDaemonState(rt)
+	state, err := openState(rt)
 	if err != nil {
 		return err
 	}
-	defer boltStore.Close()
-	defer startup.Common.Close()
-	view := startup.Common.ReadView()
+	defer state.Close()
+	view := state.Common.ReadView()
 	if view.State == nil {
 		return errors.New("common state is not initialized")
 	}
@@ -185,20 +184,18 @@ func recoveryImportZone(input string, direct bool) error {
 	if !direct {
 		logControlFallback("recovery_import_zone")
 	}
-	boltStore, startup, err := openLinuxDaemonState(rt)
+	state, err := openState(rt)
 	if err != nil {
 		return err
 	}
-	defer boltStore.Close()
-	defer startup.Common.Close()
-	view := startup.Common.ReadView()
+	defer state.Close()
+	view := state.Common.ReadView()
 	if view.State == nil {
 		return errors.New("common state is not initialized")
 	}
-	config := gossipStartupConfigFromAppConfig(rt.Config, view.State)
-	limits := syncLimits(config)
+	limits := syncLimits(rt.Config)
 	limits.MaxBytes = 8 << 20
-	imported, err := startup.Common.ImportRecoverySnapshot(context.Background(), corestate.RecoveryImport{
+	imported, err := state.Common.ImportRecoverySnapshot(context.Background(), corestate.RecoveryImport{
 		Snapshot: &snapshot,
 		Limits:   limits,
 	}, rt.Now())
@@ -208,7 +205,7 @@ func recoveryImportZone(input string, direct bool) error {
 	if imported.Apply == nil {
 		return errors.New("recovery import returned no result")
 	}
-	view = startup.Common.ReadView()
+	view = state.Common.ReadView()
 	revocations := 0
 	if view.State != nil && view.State.Network != nil {
 		if zs := view.State.Network.Zones[imported.Apply.Zone]; zs != nil {
@@ -258,20 +255,20 @@ func recoveryPullZones(ctx context.Context, paths []zone.ZonePath, peerID string
 	if err != nil {
 		return err
 	}
-	boltStore, startup, err := openLinuxDaemonState(rt)
+	state, err := openState(rt)
 	if err != nil {
 		return err
 	}
-	defer boltStore.Close()
-	defer startup.Common.Close()
-	view := startup.Common.ReadView()
+	defer state.Close()
+	view := state.Common.ReadView()
 	if view.State == nil {
 		return errors.New("common state is not initialized")
 	}
-	config := gossipStartupConfigFromAppConfig(rt.Config, view.State)
-	limits := syncLimits(config)
+	limits := syncLimits(rt.Config)
 	limits.MaxBytes = 8 << 20
-	gossipDriver := corehost.NewGossipDriver(corehost.NewClock(rt.Now), corehost.DefaultEventBuffer, startup.Common, gossipDriverConfig(config, rt.Config, newAppLogger(rt.Config)))
+	driverConfig := gossipDriverConfig(rt.Config, view.State, newAppLogger(rt.Config))
+	driverConfig.Limits = limits
+	gossipDriver := corehost.NewGossipDriver(corehost.NewClock(rt.Now), corehost.DefaultEventBuffer, state.Common, driverConfig)
 	defer gossipDriver.Stop()
 
 	deadline := time.Now().Add(timeout)
@@ -288,7 +285,7 @@ func recoveryPullZones(ctx context.Context, paths []zone.ZonePath, peerID string
 			return ctx.Err()
 		default:
 		}
-		current := startup.Common.ReadView()
+		current := state.Common.ReadView()
 		input := gossipDriver.GossipDiscoveryInput(peerLifecycleSuppressions(current.State.Network, current.Gossip, rt.Now(), rt.Config.PeerLifecycle))
 		pullCtx, cancel := context.WithDeadline(ctx, deadline)
 		completion := pullExecutor.PullFrom(pullCtx, input, gossip.StartObjectPullAction{PeerID: peerID, Zone: path})
@@ -296,7 +293,7 @@ func recoveryPullZones(ctx context.Context, paths []zone.ZonePath, peerID string
 		if completion.Err != nil {
 			return fmt.Errorf("recover %s from %s: %w", path, peerID, completion.Err)
 		}
-		imported, err := startup.Common.ImportRecoverySnapshot(ctx, corestate.RecoveryImport{Snapshot: completion.Snapshot, Limits: limits}, rt.Now())
+		imported, err := state.Common.ImportRecoverySnapshot(ctx, corestate.RecoveryImport{Snapshot: completion.Snapshot, Limits: limits}, rt.Now())
 		if err != nil {
 			return fmt.Errorf("recover %s from %s: %w", path, peerID, err)
 		}
@@ -305,7 +302,7 @@ func recoveryPullZones(ctx context.Context, paths []zone.ZonePath, peerID string
 		}
 		results = append(results, imported.Apply)
 	}
-	view = startup.Common.ReadView()
+	view = state.Common.ReadView()
 	for _, result := range results {
 		revocations := 0
 		if view.State != nil && view.State.Network != nil {
@@ -350,14 +347,13 @@ func recoveryPurgeRevoked(ctx context.Context, apply bool, target zone.ZonePath,
 			logControlFallback("recovery_purge_revoked")
 		}
 	}
-	boltStore, startup, err := openLinuxDaemonState(rt)
+	state, err := openState(rt)
 	if err != nil {
 		return err
 	}
-	defer boltStore.Close()
-	defer startup.Common.Close()
+	defer state.Close()
 	now := rt.Now()
-	commonPlan, err := startup.Common.PlanPurgeRevoked(now, target)
+	commonPlan, err := state.Common.PlanPurgeRevoked(now, target)
 	if err != nil {
 		return err
 	}
@@ -365,7 +361,7 @@ func recoveryPurgeRevoked(ctx context.Context, apply bool, target zone.ZonePath,
 	// resources that no longer belong to the verified keep set.
 	plan := mergePurgePlan(commonPlan, nil)
 	if apply {
-		if _, err := startup.Common.PurgeRevoked(ctx, now, target); err != nil {
+		if _, err := state.Common.PurgeRevoked(ctx, now, target); err != nil {
 			return err
 		}
 	}

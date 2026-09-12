@@ -10,7 +10,7 @@ import (
 )
 
 func TestLinkOutputsProjectIPsecRuntimeWithoutLifecycleState(t *testing.T) {
-	links := map[string]linkInstanceState{
+	links := map[string]ipsec.LinkInstance{
 		"instance-a": {
 			ID:               "instance-a",
 			LinkID:           "link-a",
@@ -25,11 +25,11 @@ func TestLinkOutputsProjectIPsecRuntimeWithoutLifecycleState(t *testing.T) {
 			RemoteGeneration: 3,
 			Endpoint:         "198.51.100.2:4500",
 			LastTransition:   123,
-			Owner:            linkOwnerState{Token: "must-not-leak"},
+			Owner:            ipsec.ResourceOwner{Token: "must-not-leak"},
 		},
 	}
 
-	got := buildLinkOutputs(links, &ipsecObservationSummary{Desired: []desiredLinkState{{
+	got := buildLinkOutputs(links, &ipsecObservationSummary{Desired: []photonstate.DesiredLinkState{{
 		InstanceID: "instance-a", LocalTunnelAddr: "fe80::1%phx0 netns=photon",
 		PeerTunnelAddr: "fe80::2%phx0 netns=photon",
 	}}})
@@ -52,7 +52,7 @@ func TestLinkOutputsProjectIPsecRuntimeWithoutLifecycleState(t *testing.T) {
 }
 
 func TestLinkOutputsProjectStagedRuntimeSeparately(t *testing.T) {
-	links := map[string]linkInstanceState{
+	links := map[string]ipsec.LinkInstance{
 		"link-a": {
 			ID:                    "link-a",
 			GroupID:               "blue",

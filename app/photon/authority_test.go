@@ -15,8 +15,8 @@ func TestRootInitHasAllAuthorityPermissions(t *testing.T) {
 	writeConfig(t, configPath, filepath.Join(dir, "root"))
 	t.Setenv("PHOTON_CONFIG", configPath)
 
-	if err := initRootState(); err != nil {
-		t.Fatalf("initRootState: %v", err)
+	if err := runRootInit(); err != nil {
+		t.Fatalf("runRootInit: %v", err)
 	}
 	state, err := loadConfiguredVerifiedState()
 	if err != nil {
@@ -41,8 +41,8 @@ func TestDelegateGrantReissuesChildDelegation(t *testing.T) {
 
 	writeConfig(t, adminConfig, filepath.Join(dir, "admin"))
 	t.Setenv("PHOTON_CONFIG", adminConfig)
-	if err := initRootState(); err != nil {
-		t.Fatalf("initRootState(admin): %v", err)
+	if err := runRootInit(); err != nil {
+		t.Fatalf("runRootInit(admin): %v", err)
 	}
 
 	writeConfig(t, catofesConfig, filepath.Join(dir, "catofes"))

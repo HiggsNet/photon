@@ -1,162 +1,89 @@
 package main
 
 import (
-	"crypto/ed25519"
-	"encoding/hex"
-	"time"
+	"errors"
+	"reflect"
+	"sync"
 
 	"github.com/HiggsNet/photon/internal/photonlinux"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
-	"github.com/HiggsNet/photon/pkg/core/zone"
-	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
-const cliMetaKey = "cli_state"
-
-type stateFile struct {
-	ManagedZone       zone.ZonePath      `json:"managed_zone"`
-	IdentityKeyPath   string             `json:"identity_key_path,omitempty"`
-	RootPrivateKey    ed25519.PrivateKey `json:"root_private_key"`
-	ZonePrivateKey    ed25519.PrivateKey `json:"zone_private_key"`
-	Network           *zone.NetworkState `json:"network"`
-	SyncPeers         map[string]syncPeerState
-	IPsecTransportKey *ipsecTransportKeyState
-	EndpointACLs      map[string]endpointACL
+// State is the process-local persistent state owner. It owns the single
+// bbolt handle and keeps common and Linux state as separate typed partitions.
+type State struct {
+	db         *corestate.BoltStore
+	Common     *corestate.Store
+	linuxMu    sync.RWMutex
+	linuxState *photonlinux.LinuxState
 }
 
-type stateMeta struct {
-	ManagedZone       zone.ZonePath            `json:"managed_zone"`
-	IdentityKeyPath   string                   `json:"identity_key_path,omitempty"`
-	RootPrivateKey    ed25519.PrivateKey       `json:"root_private_key"`
-	ZonePrivateKey    ed25519.PrivateKey       `json:"zone_private_key"`
-	SyncPeers         map[string]syncPeerState `json:"sync_peers,omitempty"`
-	IPsecTransportKey *ipsecTransportKeyState  `json:"ipsec_transport_key,omitempty"`
-	EndpointACLs      map[string]endpointACL   `json:"endpoint_acls,omitempty"`
-}
-
-type endpointACL = photonstate.EndpointACL
-
-type ipsecTransportKeyState = photonstate.IPsecTransportKeyState
-
-type linkInstanceState = ipsec.LinkInstance
-type linkOwnerState = ipsec.ResourceOwner
-
-type desiredLinkState = photonstate.DesiredLinkState
-type linkSAState = photonstate.LinkSAState
-type linkActionState = photonstate.LinkActionState
-type linkSkipState = photonstate.LinkSkipState
-
-type syncPeerState = photonstate.PeerRuntimeState
-type observedGraceAddrState = photonstate.PeerObservedGraceAddrState
-type rejectedDigestState = photonstate.PeerRejectedDigest
-
-type linuxRuntimeState = photonlinux.RuntimeState
-
-type gossipStartupConfig struct {
-	PeerID          string           `json:"peer_id"`
-	ListenAddr      string           `json:"listen_addr"`
-	Bootstrap       []syncConfigPeer `json:"bootstrap"`
-	MaxMessageBytes int              `json:"max_message_bytes"`
-	MaxSyncZones    int              `json:"max_sync_zones"`
-	MaxSyncRecords  int              `json:"max_sync_records"`
-}
-
-type syncConfigPeer struct {
-	ID   string `json:"id" yaml:"id"`
-	Addr string `json:"addr" yaml:"addr"`
-}
-
-type AppContext struct {
-	Config         *appConfig
-	StatePath      string
-	Clock          func() time.Time
-	DisableControl bool
-}
-
-func NewAppContext() (*AppContext, error) {
-	config, err := loadAppConfig()
-	if err != nil {
-		return nil, err
+func newState(db *corestate.BoltStore, common *corestate.Store, linuxState *photonlinux.LinuxState) *State {
+	return &State{
+		db:         db,
+		Common:     common,
+		linuxState: photonlinux.CloneLinuxState(linuxState),
 	}
-	path := config.StatePath
-	if override := statePathOverride(); override != "" {
-		path = override
-	}
-	return &AppContext{
-		Config:    config,
-		StatePath: path,
-		Clock:     time.Now,
-	}, nil
 }
 
-func (rt *AppContext) Now() time.Time {
-	if rt != nil && rt.Clock != nil {
-		return rt.Clock()
+func (state *State) Close() error {
+	if state == nil {
+		return nil
 	}
-	return time.Now()
+	if state.Common != nil {
+		state.Common.Close()
+	}
+	if state.db != nil {
+		return state.db.Close()
+	}
+	return nil
 }
 
-func equalPublicKey(a, b ed25519.PublicKey) bool {
-	if len(a) != len(b) {
-		return false
+func (state *State) ReadLinux() *photonlinux.LinuxState {
+	if state == nil {
+		return nil
 	}
-	var out byte
-	for i := range a {
-		out |= a[i] ^ b[i]
-	}
-	return out == 0
+	state.linuxMu.RLock()
+	linux := photonlinux.CloneLinuxState(state.linuxState)
+	state.linuxMu.RUnlock()
+	return linux
 }
 
-func configureValidation(ns *zone.NetworkState) {
-	ns.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
+func (state *State) ReplaceIPsecTransportKeyIfRevision(sourceRevision corestate.VerifiedRevision, key *photonstate.IPsecTransportKeyState) (bool, error) {
+	return state.updateLinuxStateIfRevision(sourceRevision, func(candidate *photonlinux.LinuxState) {
+		candidate.IPsecTransportKey = photonstate.CloneIPsecTransportKeyState(key)
+	})
 }
 
-func normalizeState(ns *zone.NetworkState) {
-	if ns.Zones == nil {
-		ns.Zones = make(map[zone.ZonePath]*zone.ZoneState)
+func (state *State) ReplaceEndpointACLsIfRevision(sourceRevision corestate.VerifiedRevision, endpointACLs map[string]photonstate.EndpointACL) (bool, error) {
+	return state.updateLinuxStateIfRevision(sourceRevision, func(candidate *photonlinux.LinuxState) {
+		candidate.EndpointACLs = photonstate.CloneEndpointACLs(endpointACLs)
+	})
+}
+
+func (state *State) updateLinuxStateIfRevision(sourceRevision corestate.VerifiedRevision, update func(*photonlinux.LinuxState)) (bool, error) {
+	if state == nil || state.Common == nil {
+		return false, errors.New("state is not initialized")
 	}
-	for path, zs := range ns.Zones {
-		if zs.Path == "" {
-			zs.Path = path
-		}
-		if zs.Delegations == nil {
-			zs.Delegations = make(map[zone.ZonePath]*zone.Delegation)
-		}
-		if zs.Revocations == nil {
-			zs.Revocations = make(map[zone.ZonePath]*zone.DelegationRevocation)
-		}
-		if zs.Records == nil {
-			zs.Records = make(map[string]*zone.Record)
-		}
-		if zs.RecordHistory == nil {
-			zs.RecordHistory = make(map[string][]*zone.Record)
+	if update == nil {
+		return false, errors.New("linux state update is nil")
+	}
+	state.linuxMu.Lock()
+	defer state.linuxMu.Unlock()
+	if state.Common.VerifiedRevision() != sourceRevision {
+		return false, corestate.ErrVerifiedRevisionStale
+	}
+	candidate := photonlinux.CloneLinuxState(state.linuxState)
+	update(candidate)
+	if reflect.DeepEqual(state.linuxState, candidate) {
+		return false, nil
+	}
+	if state.db != nil {
+		if err := photonlinux.CommitLinuxState(state.db, sourceRevision, candidate); err != nil {
+			return false, err
 		}
 	}
-}
-
-func defaultPeerID(verified *corestate.VerifiedState) string {
-	if verified == nil {
-		return "local"
-	}
-	if verified.ManagedZone != "" && verified.ManagedZone != zone.RootZone {
-		return string(verified.ManagedZone)
-	}
-	if len(verified.IdentityPrivateKey) == 0 {
-		return "local"
-	}
-	pub := verified.IdentityPrivateKey.Public().(ed25519.PublicKey)
-	return hex.EncodeToString(photoncrypto.KeyID(pub))[:16]
-}
-
-func timeNow() time.Time {
-	return time.Now()
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
+	state.linuxState = candidate
+	return true, nil
 }

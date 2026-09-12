@@ -9,13 +9,13 @@ import (
 	photonstate "github.com/HiggsNet/photon/internal/state"
 )
 
-func TestCloneRuntimeStateDeepCopiesMutableFields(t *testing.T) {
-	original := &RuntimeState{
+func TestCloneLinuxStateDeepCopiesMutableFields(t *testing.T) {
+	original := &LinuxState{
 		IPsecTransportKey: &photonstate.IPsecTransportKeyState{PublicKey: []byte("public"), PrivateKey: []byte("private")},
 		EndpointACLs:      map[string]photonstate.EndpointACL{"api": {Selectors: []string{"zone:catofes."}}},
 	}
 
-	cloned := CloneRuntimeState(original)
+	cloned := CloneLinuxState(original)
 	cloned.IPsecTransportKey.PublicKey[0] = 'P'
 	cloned.IPsecTransportKey.PrivateKey[0] = 'S'
 	cloned.EndpointACLs["api"].Selectors[0] = "zone:changed."
@@ -29,37 +29,37 @@ func TestCloneRuntimeStateDeepCopiesMutableFields(t *testing.T) {
 	}
 }
 
-func TestCloneRuntimeStatePreservesNilAndEmptyShape(t *testing.T) {
-	original := &RuntimeState{
+func TestCloneLinuxStatePreservesNilAndEmptyShape(t *testing.T) {
+	original := &LinuxState{
 		EndpointACLs: map[string]photonstate.EndpointACL{"empty": {Selectors: []string{}}},
 	}
-	cloned := CloneRuntimeState(original)
+	cloned := CloneLinuxState(original)
 	if cloned.EndpointACLs == nil ||
 		cloned.EndpointACLs["empty"].Selectors == nil {
 		t.Fatalf("nil/empty shape changed: %#v", cloned)
 	}
-	if got := CloneRuntimeState(nil); got == nil || !reflect.DeepEqual(got, &RuntimeState{}) {
+	if got := CloneLinuxState(nil); got == nil || !reflect.DeepEqual(got, &LinuxState{}) {
 		t.Fatalf("nil runtime clone = %#v, want empty runtime", got)
 	}
 }
 
-func TestRuntimeStateSchemaGuard(t *testing.T) {
+func TestLinuxStateJSONSchemaGuard(t *testing.T) {
 	want := []string{
 		"IPsecTransportKey", "EndpointACLs",
 	}
-	typ := reflect.TypeOf(RuntimeState{})
+	typ := reflect.TypeOf(LinuxState{})
 	if typ.NumField() != len(want) {
-		t.Fatalf("RuntimeState field count = %d, want %d (%v)", typ.NumField(), len(want), want)
+		t.Fatalf("LinuxState field count = %d, want %d (%v)", typ.NumField(), len(want), want)
 	}
 	for index, name := range want {
 		if got := typ.Field(index).Name; got != name {
-			t.Fatalf("RuntimeState field %d = %s, want %s", index, got, name)
+			t.Fatalf("LinuxState field %d = %s, want %s", index, got, name)
 		}
 	}
 }
 
-func TestRuntimeStateJSONDropsLegacyDerivedFields(t *testing.T) {
-	var state RuntimeState
+func TestLinuxStateJSONDropsLegacyDerivedFields(t *testing.T) {
+	var state LinuxState
 	if err := json.Unmarshal([]byte(`{"identity_key_path":"/old/key.json","admission":{"pending":true},"ipsec_port_record":{"generation":7},"link_instances":{"link-a":{"id":"link-a"}},"ipsec_reconcile":{"desired_links":1},"routing_reconcile":{"last_error":"old"},"firewall_reconcile":{"last_error":"old"},"bird_instances":{"mesh":{"state":"running"}},"peer_cleanups":{"peer":{"reason":"offline"}},"endpoint_acls":{"api":{"name":"api"}}}`), &state); err != nil {
 		t.Fatalf("decode old payload: %v", err)
 	}

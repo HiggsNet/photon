@@ -8,6 +8,7 @@ import (
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 // debugPeers implements `photon debug peers`: it prints the derived lifecycle
@@ -55,11 +56,11 @@ func showPeers(filter string, verbose bool) error {
 		return nil
 	}
 	fmt.Fprintln(os.Stdout, "source: checkpoint (daemon offline; last-known gossip runtime)")
-	config := gossipStartupConfigFromAppConfig(rt.Config, common.State)
+	config := gossipDriverConfig(rt.Config, common.State, nil)
 	return inspecttext.WriteGossipPeers(os.Stdout, inspect.BuildGossipPeerDebugViews(common, gossipPeersOptions(config, nil, rt.Now())), filter, verbose)
 }
 
-func buildPeerLifecycleDebugView(rt *AppContext, common corestate.View, links map[string]linkInstanceState, reconcile *ipsecObservationSummary) inspect.PeerLifecycleDebugView {
+func buildPeerLifecycleDebugView(rt *AppContext, common corestate.View, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary) inspect.PeerLifecycleDebugView {
 	if common.State == nil || common.State.Network == nil {
 		return inspect.PeerLifecycleDebugView{}
 	}
@@ -75,12 +76,12 @@ func buildPeerLifecycleDebugView(rt *AppContext, common corestate.View, links ma
 }
 
 func (d *Daemon) gossipPeerSnapshotForControl() []inspect.PeerDebugView {
-	if d == nil || d.StateStore == nil || d.StateStore.common == nil {
+	if d == nil || d.State == nil {
 		return nil
 	}
-	view := d.StateStore.common.ReadView()
+	view := d.State.Common.ReadView()
 	if view.State == nil {
 		return nil
 	}
-	return inspect.BuildGossipPeerDebugViews(view, gossipPeersOptions(d.currentGossipConfig(), d.peerObservabilitySnapshots(), d.now()))
+	return inspect.BuildGossipPeerDebugViews(view, gossipPeersOptions(d.gossipDriver.GossipConfig(), d.peerObservabilitySnapshots(), d.now()))
 }

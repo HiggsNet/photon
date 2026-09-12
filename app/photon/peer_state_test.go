@@ -10,6 +10,7 @@ import (
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 // buildPeerStateTestOwners creates typed common/checkpoint/Linux owners for peer lifecycle
@@ -18,7 +19,7 @@ import (
 type peerStateTestOwners struct {
 	verified             *corestate.VerifiedState
 	checkpoint           *corestate.GossipCheckpoint
-	observationLinks     map[string]linkInstanceState
+	observationLinks     map[string]ipsec.LinkInstance
 	observationReconcile *ipsecObservationSummary
 }
 
@@ -106,7 +107,7 @@ func buildPeerStateTestOwners(t *testing.T) (*peerStateTestOwners, ed25519.Priva
 			IdentityPrivateKey: nodeAPriv,
 		},
 		checkpoint:       &corestate.GossipCheckpoint{Peers: make(map[string]corestate.PeerCheckpoint)},
-		observationLinks: make(map[string]linkInstanceState),
+		observationLinks: make(map[string]ipsec.LinkInstance),
 	}
 	return owners, catofesPriv, nodeAPriv, nodeBPriv
 }
@@ -172,7 +173,7 @@ func TestDerivePeerStatusActiveWithUpLink(t *testing.T) {
 	cfg := inspect.DefaultPeerLifecycleConfig()
 
 	// Add a LinkInstance for node-b that is up.
-	state.observationLinks["link-node-b"] = linkInstanceState{
+	state.observationLinks["link-node-b"] = ipsec.LinkInstance{
 		ID:             "link-node-b",
 		PeerZone:       "node-b.catofes.",
 		ActualState:    "up",
@@ -197,7 +198,7 @@ func TestDerivePeerStatusConnectingWithNonUpLink(t *testing.T) {
 	cfg := inspect.DefaultPeerLifecycleConfig()
 
 	// Add a LinkInstance for node-b that is connecting (not up).
-	state.observationLinks["link-node-b"] = linkInstanceState{
+	state.observationLinks["link-node-b"] = ipsec.LinkInstance{
 		ID:             "link-node-b",
 		PeerZone:       "node-b.catofes.",
 		ActualState:    "connecting",
@@ -280,7 +281,7 @@ func TestDerivePeerStatusCleanupAfterOverridesStaleLinkState(t *testing.T) {
 	state.checkpoint.Peers["node-b.catofes."] = corestate.PeerCheckpoint{
 		LastSyncUnix: now.Add(-cfg.CleanupAfter - time.Minute).Unix(),
 	}
-	state.observationLinks["stale-link"] = linkInstanceState{
+	state.observationLinks["stale-link"] = ipsec.LinkInstance{
 		ID:          "stale-link",
 		PeerZone:    "node-b.catofes.",
 		ActualState: "connecting",
@@ -317,7 +318,7 @@ func TestCollectRevokedPeerZones(t *testing.T) {
 	}
 
 	// Add a LinkInstance for node-b.
-	state.observationLinks["link-node-b"] = linkInstanceState{
+	state.observationLinks["link-node-b"] = ipsec.LinkInstance{
 		PeerZone: "node-b.catofes.",
 	}
 	// Add node-b to SyncPeers.

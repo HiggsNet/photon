@@ -15,11 +15,14 @@ import (
 	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
 	"github.com/HiggsNet/photon/internal/observability/healthspool"
 	"github.com/HiggsNet/photon/internal/observer"
+	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/core/observability"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 type observerServer struct {
@@ -137,10 +140,10 @@ func (d *Daemon) observerLinkIDsPayload() any {
 // observerPeerIDsPayload returns {peer_ids: [...]} from the common gossip
 // checkpoint.
 func (d *Daemon) observerPeerIDsPayload() any {
-	if d == nil || d.StateStore == nil || d.StateStore.common == nil {
+	if d == nil || d.State == nil {
 		return nil
 	}
-	view := d.StateStore.common.ReadView()
+	view := d.State.Common.ReadView()
 	if view.Gossip == nil {
 		return nil
 	}
@@ -182,12 +185,12 @@ func (p *observerProvider) Status() (any, error) {
 
 func (p *observerProvider) Zones(zoneFilter string) (any, error) {
 	d := p.daemon
-	if d == nil || d.StateStore == nil || d.StateStore.common == nil {
+	if d == nil || d.State == nil {
 		return inspect.ZonesView{Zones: []inspect.ZoneSummaryView{}}, nil
 	}
 	now := d.now()
 	zp := zone.ZonePath(zoneFilter)
-	view := d.StateStore.common.ReadView()
+	view := d.State.Common.ReadView()
 	if view.State == nil || view.State.Network == nil {
 		return inspect.ZonesView{Zones: []inspect.ZoneSummaryView{}}, nil
 	}
@@ -203,16 +206,16 @@ func (p *observerProvider) Zones(zoneFilter string) (any, error) {
 
 func (p *observerProvider) Peers(peerFilter string) (any, error) {
 	d := p.daemon
-	if d == nil || d.StateStore == nil || d.StateStore.common == nil {
+	if d == nil || d.State == nil {
 		return inspect.PeersView{Peers: []inspect.PeerView{}}, nil
 	}
-	view := d.StateStore.common.ReadView()
+	view := d.State.Common.ReadView()
 	if view.State == nil {
 		return inspect.PeersView{Peers: []inspect.PeerView{}}, nil
 	}
 	now := d.now()
 	observabilitySnapshots := d.peerObservabilitySnapshots()
-	peers := inspect.BuildGossipPeersView(view, gossipPeersOptions(d.currentGossipConfig(), observabilitySnapshots, now))
+	peers := inspect.BuildGossipPeersView(view, gossipPeersOptions(d.gossipDriver.GossipConfig(), observabilitySnapshots, now))
 	if peerFilter != "" {
 		for _, peer := range peers.Peers {
 			if peer.PeerID == peerFilter {
@@ -234,10 +237,10 @@ func (d *Daemon) peerObservabilitySnapshots() map[string]observability.PeerDiagn
 
 func (p *observerProvider) Links(linkFilter string) (any, error) {
 	d := p.daemon
-	if d == nil || d.StateStore == nil {
+	if d == nil || d.State == nil {
 		return inspecthttp.LinksResponse{Instances: []inspecthttp.LinkJSON{}}, nil
 	}
-	health := d.healthStatusResponse()
+	health := d.healthSamples()
 	observedLinks, reconcile := d.linuxObservation.ipsecSnapshot()
 	var birdInstances map[string]*bird.InstanceObservation
 	if routingObserved := d.linuxObservation.routingSnapshot(); routingObserved != nil {
@@ -264,39 +267,18 @@ func observerRuntime(d *Daemon) *AppContext {
 	return d.App
 }
 
-func healthLinksWithContext(d *Daemon, links []healthLinkJSON) ([]inspecthttp.HealthContextItem, error) {
-	input := inspecthttp.HealthContextInput{HealthLinks: inspectHealthLinks(links)}
-	if d == nil || d.StateStore == nil {
-		return inspecthttp.BuildHealthContext(input), nil
-	}
-	observedLinks, reconcile := d.linuxObservation.ipsecSnapshot()
-	desiredByID := map[string]desiredLinkState{}
+func healthLinksWithContext(view inspect.HealthView, observedLinks map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary) []inspecthttp.HealthContextItem {
+	input := inspecthttp.HealthContextInput{View: view}
+	desiredByID := map[string]photonstate.DesiredLinkState{}
 	if reconcile != nil {
 		desiredByID = desiredByInstanceID(reconcile.Desired)
 	}
 	input.Instances = inspectHealthInstances(observedLinks)
 	input.Desired = inspectHealthDesired(desiredByID)
-	input.Unknown = func(instanceID string) any {
-		return healthLinkJSON{InstanceID: instanceID, State: "unknown"}
-	}
-	return inspecthttp.BuildHealthContext(input), nil
+	return inspecthttp.BuildHealthContext(input)
 }
 
-func inspectHealthLinks(links []healthLinkJSON) []inspecthttp.HealthLinkContextInput {
-	out := make([]inspecthttp.HealthLinkContextInput, 0, len(links))
-	for _, health := range links {
-		out = append(out, inspecthttp.HealthLinkContextInput{
-			InstanceID:    health.InstanceID,
-			ProbeID:       health.ProbeID,
-			ProbeRole:     health.ProbeRole,
-			InterfaceName: health.InterfaceName,
-			Health:        health,
-		})
-	}
-	return out
-}
-
-func inspectHealthInstances(instances map[string]linkInstanceState) map[string]inspecthttp.HealthInstanceContextInput {
+func inspectHealthInstances(instances map[string]ipsec.LinkInstance) map[string]inspecthttp.HealthInstanceContextInput {
 	out := make(map[string]inspecthttp.HealthInstanceContextInput, len(instances))
 	for id, inst := range instances {
 		out[id] = inspecthttp.HealthInstanceContextInput{
@@ -312,7 +294,7 @@ func inspectHealthInstances(instances map[string]linkInstanceState) map[string]i
 	return out
 }
 
-func inspectHealthDesired(desiredByID map[string]desiredLinkState) map[string]inspecthttp.HealthDesiredContextInput {
+func inspectHealthDesired(desiredByID map[string]photonstate.DesiredLinkState) map[string]inspecthttp.HealthDesiredContextInput {
 	out := make(map[string]inspecthttp.HealthDesiredContextInput, len(desiredByID))
 	for id, desired := range desiredByID {
 		out[id] = inspecthttp.HealthDesiredContextInput{
@@ -330,15 +312,19 @@ func inspectHealthDesired(desiredByID map[string]desiredLinkState) map[string]in
 
 func (p *observerProvider) Health(linkFilter string) (any, error) {
 	d := p.daemon
-	links := d.healthStatusResponse()
-	contextualLinks, err := healthLinksWithContext(d, links)
-	if err != nil {
-		return nil, err
+	var common corestate.View
+	var observedLinks map[string]ipsec.LinkInstance
+	var reconcile *ipsecObservationSummary
+	if d != nil && d.State != nil {
+		common = d.State.Common.ReadView()
+		observedLinks, reconcile = d.linuxObservation.ipsecSnapshot()
 	}
+	view := healthViewFromOwners(common, observedLinks, reconcile, d.healthSamples())
+	contextualLinks := healthLinksWithContext(view, observedLinks, reconcile)
 	// Single link health detail
 	if linkFilter != "" {
 		for _, item := range contextualLinks {
-			if h, ok := item.Health.(healthLinkJSON); ok && (h.InstanceID == linkFilter || h.ProbeID == linkFilter) {
+			if item.Health.InstanceID == linkFilter || item.Health.ProbeID == linkFilter {
 				return item, nil
 			}
 		}
@@ -448,10 +434,10 @@ func parseOptionalDuration(raw string, fallback time.Duration, name string) (tim
 
 func (p *observerProvider) Routes() (any, error) {
 	d := p.daemon
-	if d == nil || d.StateStore == nil || d.StateStore.common == nil {
+	if d == nil || d.State == nil {
 		return &inspecthttp.RoutesResponse{}, nil
 	}
-	view := d.StateStore.common.ReadView()
+	view := d.State.Common.ReadView()
 	if view.State == nil || view.State.Network == nil {
 		return &inspecthttp.RoutesResponse{}, nil
 	}
@@ -464,7 +450,7 @@ func (p *observerProvider) Routes() (any, error) {
 
 func (p *observerProvider) Bird() (any, error) {
 	d := p.daemon
-	if d == nil || d.StateStore == nil {
+	if d == nil || d.State == nil {
 		return inspecthttp.BirdResponse{Instances: map[string]any{}}, nil
 	}
 	routingReconcile := d.linuxObservation.routingSnapshot()

@@ -5,6 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
+	photonstate "github.com/HiggsNet/photon/internal/state"
+
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/firewall"
@@ -16,7 +19,7 @@ func TestResolveEndpointServicesTracksAuthorizedZoneRoutes(t *testing.T) {
 		"node-a.catofes.": {netip.MustParsePrefix("fd10:1::/64"): {}},
 		"node-b.other.":   {netip.MustParsePrefix("10.2.0.0/24"): {}},
 	}}
-	services, err := resolveEndpointServices(map[string]endpointACL{
+	services, err := resolveEndpointServices(map[string]photonstate.EndpointACL{
 		"socks5": {Name: "socks5", Destination: "fd42::20", Protocol: "tcp", Port: 3128, Selectors: []string{"*.catofes."}},
 	}, ars)
 	if err != nil {
@@ -28,7 +31,7 @@ func TestResolveEndpointServicesTracksAuthorizedZoneRoutes(t *testing.T) {
 }
 
 func TestResolveEndpointServicesEmptyMatchIsFailClosedInput(t *testing.T) {
-	services, err := resolveEndpointServices(map[string]endpointACL{
+	services, err := resolveEndpointServices(map[string]photonstate.EndpointACL{
 		"socks5": {Name: "socks5", Destination: "fd42::20", Protocol: "tcp", Port: 3128, Selectors: []string{"missing.catofes."}},
 	}, &routing.AuthorizedRouteSet{Announced: map[zone.ZonePath]map[netip.Prefix]*routing.RouteEntry{}})
 	if err != nil {
@@ -40,7 +43,7 @@ func TestResolveEndpointServicesEmptyMatchIsFailClosedInput(t *testing.T) {
 }
 
 func TestResolveEndpointServicesIPScope(t *testing.T) {
-	services, err := resolveEndpointServices(map[string]endpointACL{
+	services, err := resolveEndpointServices(map[string]photonstate.EndpointACL{
 		"socks5": {
 			Name: "socks5", Destination: "fd42::20", Scope: endpointACLScopeIP,
 			Selectors: []string{"*.catofes."},
@@ -57,14 +60,14 @@ func TestResolveEndpointServicesIPScope(t *testing.T) {
 }
 
 func TestValidateEndpointACLScopes(t *testing.T) {
-	legacy, err := validateEndpointACL(endpointACL{
+	legacy, err := validateEndpointACL(photonstate.EndpointACL{
 		Name: "legacy", Destination: "fd42::20", Protocol: "tcp", Port: 3128,
 		Selectors: []string{"*.catofes."},
 	})
 	if err != nil || legacy.Scope != endpointACLScopePort {
 		t.Fatalf("legacy ACL = %+v, %v", legacy, err)
 	}
-	if _, err := validateEndpointACL(endpointACL{
+	if _, err := validateEndpointACL(photonstate.EndpointACL{
 		Name: "bad", Destination: "fd42::20", Scope: endpointACLScopeIP, Protocol: "udp",
 		Selectors: []string{"*.catofes."},
 	}); err == nil {
@@ -73,7 +76,7 @@ func TestValidateEndpointACLScopes(t *testing.T) {
 }
 
 func TestEndpointACLApplyNoopDoesNotCommitOrNotify(t *testing.T) {
-	acl := endpointACL{
+	acl := photonstate.EndpointACL{
 		Name: "socks5-main", Destination: "fd42::20", Scope: endpointACLScopeIP,
 		Selectors: []string{"*.catofes.", "node-a.catofes."},
 	}
@@ -81,8 +84,8 @@ func TestEndpointACLApplyNoopDoesNotCommitOrNotify(t *testing.T) {
 		ManagedZone: "node-a.catofes.",
 		Network:     zone.NewNetworkState(),
 	}
-	runtime := &linuxRuntimeState{
-		EndpointACLs: map[string]endpointACL{
+	runtime := &photonlinux.LinuxState{
+		EndpointACLs: map[string]photonstate.EndpointACL{
 			acl.Name: acl,
 		},
 	}
@@ -92,12 +95,12 @@ func TestEndpointACLApplyNoopDoesNotCommitOrNotify(t *testing.T) {
 		Mode: firewall.ModeManaged, Backend: firewall.BackendAuto,
 	}}
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: appConfig}, verified, nil, runtime, &gossipStartupConfig{}, time.Second,
+		&AppContext{Config: appConfig}, verified, nil, runtime, appConfig, time.Second,
 	)
 	driver := &captureFirewallOwnerDriver{}
 	driver.Backend = firewall.BackendNFT
 	installTestFirewallDriver(service, driver)
-	beforeRevision := uint64(service.StateStore.common.VerifiedRevision())
+	beforeRevision := uint64(service.State.Common.VerifiedRevision())
 	notifications := 0
 	service.Hooks.OnStateChanged = func() { notifications++ }
 
@@ -112,7 +115,7 @@ func TestEndpointACLApplyNoopDoesNotCommitOrNotify(t *testing.T) {
 	if result.StateCommitted {
 		t.Fatal("no-op apply reported a committed state change")
 	}
-	if got := uint64(service.StateStore.common.VerifiedRevision()); got != beforeRevision {
+	if got := uint64(service.State.Common.VerifiedRevision()); got != beforeRevision {
 		t.Fatalf("no-op apply revision = %d, want %d", got, beforeRevision)
 	}
 	if notifications != 0 || service.ipsecDirty || service.routingDirty || service.firewallDirty {
@@ -122,11 +125,11 @@ func TestEndpointACLApplyNoopDoesNotCommitOrNotify(t *testing.T) {
 
 func TestEndpointACLRemoveMissingIsNoop(t *testing.T) {
 	verified := &corestate.VerifiedState{ManagedZone: "node-a.catofes.", Network: zone.NewNetworkState()}
-	runtime := &linuxRuntimeState{EndpointACLs: map[string]endpointACL{}}
+	runtime := &photonlinux.LinuxState{EndpointACLs: map[string]photonstate.EndpointACL{}}
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: defaultAppConfig()}, verified, nil, runtime, &gossipStartupConfig{}, time.Second,
+		&AppContext{Config: defaultAppConfig()}, verified, nil, runtime, nil, time.Second,
 	)
-	beforeRevision := uint64(service.StateStore.common.VerifiedRevision())
+	beforeRevision := uint64(service.State.Common.VerifiedRevision())
 	notifications := 0
 	service.Hooks.OnStateChanged = func() { notifications++ }
 
@@ -137,7 +140,7 @@ func TestEndpointACLRemoveMissingIsNoop(t *testing.T) {
 	if result.StateCommitted {
 		t.Fatal("no-op remove reported a committed state change")
 	}
-	if got := uint64(service.StateStore.common.VerifiedRevision()); got != beforeRevision {
+	if got := uint64(service.State.Common.VerifiedRevision()); got != beforeRevision {
 		t.Fatalf("no-op remove revision = %d, want %d", got, beforeRevision)
 	}
 	if notifications != 0 || service.ipsecDirty || service.routingDirty || service.firewallDirty {

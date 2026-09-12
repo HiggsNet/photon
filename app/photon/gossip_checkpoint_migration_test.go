@@ -6,21 +6,23 @@ import (
 	"errors"
 	"testing"
 
+	photonstate "github.com/HiggsNet/photon/internal/state"
+
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 func TestProjectLegacyGossipCheckpointKeepsOnlyBehaviorHints(t *testing.T) {
 	root := []byte("root")
-	checkpoint, report := projectLegacyGossipCheckpoint(map[string]syncPeerState{
+	checkpoint, report := projectLegacyGossipCheckpoint(map[string]photonstate.PeerRuntimeState{
 		"peer-a.catofes.": {
 			LastSyncUnix: 10, LastAttemptUnix: 11, BackoffUntilUnix: 20, FailureCount: 2,
 			LastRelayUnix: 12, LastRelayCatalogRootHex: "catalog",
 			DiscoveredAddr: "192.0.2.1:4242", DiscoveredAtUnix: 14,
 			ObservedAddr: "198.51.100.1:4242", ObservedFirstSeenUnix: 15, ObservedLastSeenUnix: 16,
 			ObservedLastSyncUnix: 17, ObservedUntilUnix: 30, ObservedFailureCount: 1,
-			ObservedGraceAddrs: []observedGraceAddrState{{Addr: "198.51.100.2:4242", UntilUnix: 25}},
-			RejectedDigests: map[string]rejectedDigestState{"zone:bad.catofes.": {
+			ObservedGraceAddrs: []photonstate.PeerObservedGraceAddrState{{Addr: "198.51.100.2:4242", UntilUnix: 25}},
+			RejectedDigests: map[string]photonstate.PeerRejectedDigest{"zone:bad.catofes.": {
 				Zone: "bad.catofes.", Object: "zone", RootHashHex: hex.EncodeToString(root),
 				Reason: "invalid_snapshot", RejectedAtUnix: 18, UntilUnix: 28,
 			}},
@@ -47,10 +49,10 @@ func TestProjectLegacyGossipCheckpointKeepsOnlyBehaviorHints(t *testing.T) {
 }
 
 func TestProjectLegacyGossipCheckpointKeepsFailureAndDropsMalformedHints(t *testing.T) {
-	checkpoint, report := projectLegacyGossipCheckpoint(map[string]syncPeerState{
+	checkpoint, report := projectLegacyGossipCheckpoint(map[string]photonstate.PeerRuntimeState{
 		"diagnostic.catofes.": {LastError: "only diagnostic"},
 		"invalid":             {BackoffUntilUnix: 10},
-		"peer.catofes.": {RejectedDigests: map[string]rejectedDigestState{
+		"peer.catofes.": {RejectedDigests: map[string]photonstate.PeerRejectedDigest{
 			"bad-root": {Zone: "bad.catofes.", Object: "zone", RootHashHex: "not-hex"},
 			"record":   {Zone: "bad.catofes.", Object: "record", Key: "identity", RootHashHex: "00"},
 		}},

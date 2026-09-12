@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
@@ -10,12 +11,52 @@ import (
 	"time"
 	"unicode/utf8"
 
+	photonstate "github.com/HiggsNet/photon/internal/state"
+
 	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/urfave/cli/v3"
 	bolt "go.etcd.io/bbolt"
 )
 
-func dbDump(filter string) error {
+func cmdDB() *cli.Command {
+	return &cli.Command{
+		Name:  "db",
+		Usage: "Low-level database inspection commands",
+		Commands: []*cli.Command{
+			{
+				Name:      "dump",
+				Usage:     "Dump all database buckets and keys",
+				UsageText: "photon debug db dump [zone]",
+				Description: "Print every bucket and key in the state database.\n" +
+					"If a zone is provided, only that zone bucket is shown (plus meta).",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() > 1 {
+						return cli.Exit("usage: photon debug db dump [zone]", 1)
+					}
+					filter := ""
+					if cmd.Args().Len() > 0 {
+						filter = cmd.Args().First()
+					}
+					return debugDBDump(filter)
+				},
+			},
+			{
+				Name:        "stats",
+				Usage:       "Show database bucket statistics",
+				Description: "Print the number of keys and total size per bucket.",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.Args().Len() != 0 {
+						return cli.Exit("usage: photon debug db stats", 1)
+					}
+					return debugDBStats()
+				},
+			},
+		},
+	}
+}
+
+func debugDBDump(filter string) error {
 	path, err := configuredStatePath()
 	if err != nil {
 		return err
@@ -63,7 +104,7 @@ func dbDump(filter string) error {
 	})
 }
 
-func dbStats() error {
+func debugDBStats() error {
 	path, err := configuredStatePath()
 	if err != nil {
 		return err
@@ -337,7 +378,7 @@ func dumpRecord(mapKey string, record *zone.Record, indent string) {
 	)
 }
 
-func dumpSyncPeers(peers map[string]syncPeerState) {
+func dumpSyncPeers(peers map[string]photonstate.PeerRuntimeState) {
 	if len(peers) == 0 {
 		fmt.Printf("  sync_peers: 0\n")
 		return

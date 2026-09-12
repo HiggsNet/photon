@@ -12,6 +12,10 @@ import (
 	"testing"
 	"time"
 
+	photonstate "github.com/HiggsNet/photon/internal/state"
+
+	"github.com/HiggsNet/photon/internal/photonlinux"
+
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	"github.com/HiggsNet/photon/internal/observability/healthspool"
@@ -31,7 +35,7 @@ func TestZoneOwnerFixtureKeepsControlCLIAndHTTPMeaningAligned(t *testing.T) {
 	ns.Zones["node-a.catofes."] = zone.NewZoneState("node-a.catofes.", nil)
 	ns.Zones["node-a.catofes."].Records["site/name"] = &zone.Record{Key: "site/name"}
 	ns.Zones["branch.node-a.catofes."] = zone.NewZoneState("branch.node-a.catofes.", nil)
-	updateTestObserverOwners(srv, func(verified *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *linuxRuntimeState) {
+	updateTestObserverOwners(srv, func(verified *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *photonlinux.LinuxState) {
 		verified.ManagedZone = "node-a.catofes."
 		verified.Network = ns
 	})
@@ -72,7 +76,7 @@ func TestZoneOwnerFixtureKeepsControlCLIAndHTTPMeaningAligned(t *testing.T) {
 
 func TestObserverHandlerRoutesPeerDetail(t *testing.T) {
 	srv := newTestObserverServer()
-	updateTestObserverOwners(srv, func(_ *corestate.VerifiedState, checkpoint *corestate.GossipCheckpoint, _ *linuxRuntimeState) {
+	updateTestObserverOwners(srv, func(_ *corestate.VerifiedState, checkpoint *corestate.GossipCheckpoint, _ *photonlinux.LinuxState) {
 		checkpoint.Peers["peer-a.catofes."] = corestate.PeerCheckpoint{
 			LastSyncUnix: 123,
 			FailureCount: 2,
@@ -171,7 +175,7 @@ func TestObserverZoneDetailIncludesRecordsAuthorityAndHistory(t *testing.T) {
 	zs := zone.NewZoneState("node-a.catofes.", authority)
 	zs.Records["identity"] = active
 	zs.RecordHistory["identity"] = []*zone.Record{old}
-	updateTestObserverOwners(srv, func(verified *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *linuxRuntimeState) {
+	updateTestObserverOwners(srv, func(verified *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *photonlinux.LinuxState) {
 		verified.Network = &zone.NetworkState{Zones: map[zone.ZonePath]*zone.ZoneState{
 			"node-a.catofes.": zs,
 		}}
@@ -260,7 +264,7 @@ func TestObserverPeersAPIIncludesEndpointAndDiagnosticsDetails(t *testing.T) {
 		t.Fatalf("SignRecord(endpoint): %v", err)
 	}
 	zs.Records[gossip.EndpointRecordKeyUDP] = endpointRecord
-	updateTestObserverOwners(srv, func(verified *corestate.VerifiedState, checkpoint *corestate.GossipCheckpoint, _ *linuxRuntimeState) {
+	updateTestObserverOwners(srv, func(verified *corestate.VerifiedState, checkpoint *corestate.GossipCheckpoint, _ *photonlinux.LinuxState) {
 		verified.Network = zone.NewNetworkState()
 		verified.Network.Zones["node-b.catofes."] = zs
 		checkpoint.Peers["node-b.catofes."] = corestate.PeerCheckpoint{
@@ -339,7 +343,7 @@ func TestObserverPeersAPIExcludesLocalPeerID(t *testing.T) {
 		{ID: "node-a.catofes.", Addr: "127.0.0.1:33434"},
 		{ID: "node-b.catofes.", Addr: "127.0.0.1:33435"},
 	}
-	updateTestObserverOwners(srv, func(verified *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *linuxRuntimeState) {
+	updateTestObserverOwners(srv, func(verified *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *photonlinux.LinuxState) {
 		verified.ManagedZone = "node-a.catofes."
 		verified.Network = zone.NewNetworkState()
 		addObserverEndpointZone(t, verified.Network, "node-a.catofes.", "127.0.0.1", 33434, now)
@@ -379,7 +383,7 @@ func TestObserverPeersAPISortsByZonePath(t *testing.T) {
 	now := time.Unix(1000, 0)
 	srv.daemon.App.Clock = func() time.Time { return now }
 	srv.daemon.App.Config.PeerID = "node-a.catofes."
-	updateTestObserverOwners(srv, func(verified *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *linuxRuntimeState) {
+	updateTestObserverOwners(srv, func(verified *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *photonlinux.LinuxState) {
 		verified.ManagedZone = "node-a.catofes."
 		verified.Network = zone.NewNetworkState()
 		addObserverEndpointZone(t, verified.Network, "zeta.other.", "127.0.0.1", 33439, now)
@@ -445,10 +449,10 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 			}},
 		},
 	}
-	var observationLinks map[string]linkInstanceState
+	var observationLinks map[string]ipsec.LinkInstance
 	var observationReconcile *ipsecObservationSummary
-	updateTestObserverOwners(srv, func(_ *corestate.VerifiedState, _ *corestate.GossipCheckpoint, runtime *linuxRuntimeState) {
-		observationLinks = map[string]linkInstanceState{
+	updateTestObserverOwners(srv, func(_ *corestate.VerifiedState, _ *corestate.GossipCheckpoint, runtime *photonlinux.LinuxState) {
+		observationLinks = map[string]ipsec.LinkInstance{
 			"link-1": {
 				ID:              "link-1",
 				GroupID:         "blue",
@@ -465,7 +469,7 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 		observationReconcile = &ipsecObservationSummary{
 			LastRunUnix:  123,
 			DesiredLinks: 1,
-			Desired: []desiredLinkState{{
+			Desired: []photonstate.DesiredLinkState{{
 				InstanceID:      "link-1",
 				GroupID:         "blue",
 				PeerZone:        "node-b.catofes.",
@@ -476,7 +480,7 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 				LocalTunnelAddr: "fd00::1%phx0",
 				PeerTunnelAddr:  "fd00::2%phx0",
 			}},
-			ActualSAs: []linkSAState{{
+			ActualSAs: []photonstate.LinkSAState{{
 				Name:           "link-1",
 				ChildSA:        "child-link-1",
 				Established:    true,
@@ -526,10 +530,10 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 
 func TestObserverHealthAPIIncludesLinkContextWithoutSamples(t *testing.T) {
 	srv := newTestObserverServer()
-	var observationLinks map[string]linkInstanceState
+	var observationLinks map[string]ipsec.LinkInstance
 	var observationReconcile *ipsecObservationSummary
-	updateTestObserverOwners(srv, func(_ *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *linuxRuntimeState) {
-		observationLinks = map[string]linkInstanceState{
+	updateTestObserverOwners(srv, func(_ *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *photonlinux.LinuxState) {
+		observationLinks = map[string]ipsec.LinkInstance{
 			"link-1": {
 				ID:            "link-1",
 				GroupID:       "blue",
@@ -540,7 +544,7 @@ func TestObserverHealthAPIIncludesLinkContextWithoutSamples(t *testing.T) {
 			},
 		}
 		observationReconcile = &ipsecObservationSummary{
-			Desired: []desiredLinkState{{
+			Desired: []photonstate.DesiredLinkState{{
 				InstanceID:      "link-1",
 				GroupID:         "blue",
 				PeerZone:        "node-b.catofes.",
@@ -587,7 +591,7 @@ func TestObserverHealthSeriesReadsLocalSpool(t *testing.T) {
 	srv.daemon.health = &healthDriver{spool: healthspool.New(cfg.spoolConfig())}
 	now := time.Unix(3000, 0)
 	srv.daemon.App.Clock = func() time.Time { return now }
-	if err := srv.daemon.health.spool.Append(now, healthSpoolSamples([]healthLinkJSON{{
+	if err := srv.daemon.health.spool.Append(now, healthSpoolSamples([]inspect.HealthSample{{
 		InstanceID: "link-1",
 		State:      "healthy",
 		ProbeType:  "icmp",

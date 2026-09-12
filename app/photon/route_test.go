@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	"net/netip"
 	"path/filepath"
 	"reflect"
@@ -487,7 +488,7 @@ func buildRouteTestRuntimeWithNetwork(t *testing.T, writeCap bool, mutate func(*
 	rt := &AppContext{Config: config, StatePath: config.StatePath, Clock: func() time.Time { return time.Unix(1000, 0) }, DisableControl: true}
 	seedPartitionedStateDB(t, rt.StatePath, &corestate.VerifiedState{
 		ManagedZone: managed, Network: ns, IdentityPrivateKey: zonePriv,
-	}, &corestate.GossipCheckpoint{}, &linuxRuntimeState{})
+	}, &corestate.GossipCheckpoint{}, &photonlinux.LinuxState{})
 	return rt, managed
 }
 

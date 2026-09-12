@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	"testing"
 	"time"
 
@@ -51,9 +52,9 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 	rtA := &AppContext{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
 	rtB := &AppContext{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
 
-	serviceA := newTestDaemonFromOwners(rtA, verifiedA, nil, &linuxRuntimeState{}, configA, time.Second)
+	serviceA := newTestDaemonFromOwners(rtA, verifiedA, nil, &photonlinux.LinuxState{}, configA, time.Second)
 	setTestGossipTransport(t, serviceA, transportA)
-	serviceB := newTestDaemonFromOwners(rtB, verifiedB, nil, &linuxRuntimeState{}, configB, time.Second)
+	serviceB := newTestDaemonFromOwners(rtB, verifiedB, nil, &photonlinux.LinuxState{}, configB, time.Second)
 	setTestGossipTransport(t, serviceB, transportB)
 	clock := newFakeClock(now)
 	serviceA.EnableEventLoopSync(clock)
@@ -94,8 +95,8 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 	if serviceA.gossipDriver.Gossip.Session(configB.PeerID) != nil || serviceB.gossipDriver.Gossip.Session(configA.PeerID) != nil {
 		t.Fatal("completed two-node sync retained an active session")
 	}
-	latestA := serviceA.StateStore.common.ReadView()
-	latestB := serviceB.StateStore.common.ReadView()
+	latestA := serviceA.State.Common.ReadView()
+	latestB := serviceB.State.Common.ReadView()
 	if latestA.State.Network.Zones["node-b.catofes."] == nil || latestA.State.Network.Zones["node-b.catofes."].Records["event-loop-test"] == nil {
 		t.Fatal("record from B did not appear on A")
 	}

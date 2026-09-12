@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	photonstate "github.com/HiggsNet/photon/internal/state"
+
 	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -158,7 +160,7 @@ func TestIPsecReconcileSummaryEqualityIgnoresLiveObservations(t *testing.T) {
 		LastRunUnix:    100,
 		SourceRevision: 7,
 		DesiredLinks:   1,
-		ActualSAs: []linkSAState{
+		ActualSAs: []photonstate.LinkSAState{
 			{Name: "z", UniqueID: 2, IKEState: "ESTABLISHED", IKEAgeSeconds: 10, InboundBytes: 100},
 			{Name: "a", UniqueID: 1, IKEState: "ESTABLISHED", ChildAgeSeconds: 20, InboundPackets: 4},
 		},
@@ -189,21 +191,21 @@ func TestRecordIPsecReconcileErrorDeduplicatesRepeatedError(t *testing.T) {
 		Clock:     func() time.Time { return now },
 	}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-	firstRev := uint64(service.StateStore.common.VerifiedRevision())
+	firstRev := uint64(service.State.Common.VerifiedRevision())
 	service.recordIPsecReconcileError(firstRev, now.Unix(), errors.New("vici unavailable"))
-	committedRev := uint64(service.StateStore.common.VerifiedRevision())
+	committedRev := uint64(service.State.Common.VerifiedRevision())
 	if committedRev != firstRev {
 		t.Fatalf("first error verified revision = %d, want %d", committedRev, firstRev)
 	}
 
 	now = now.Add(time.Minute)
 	service.recordIPsecReconcileError(committedRev, now.Unix(), errors.New("vici unavailable"))
-	if got := uint64(service.StateStore.common.VerifiedRevision()); got != committedRev {
+	if got := uint64(service.State.Common.VerifiedRevision()); got != committedRev {
 		t.Fatalf("repeated identical error revision = %d, want unchanged %d", got, committedRev)
 	}
 
 	service.recordIPsecReconcileError(committedRev, now.Unix(), errors.New("vici timeout"))
-	if got := uint64(service.StateStore.common.VerifiedRevision()); got != committedRev {
+	if got := uint64(service.State.Common.VerifiedRevision()); got != committedRev {
 		t.Fatalf("changed runtime error verified revision = %d, want %d", got, committedRev)
 	}
 }
@@ -388,10 +390,10 @@ func TestDaemonIPsecReconcileDiscardsResultWhenRevisionChanged(t *testing.T) {
 		Clock:     func() time.Time { return now },
 	}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-	baseRev := uint64(service.StateStore.common.VerifiedRevision())
+	baseRev := uint64(service.State.Common.VerifiedRevision())
 	driver := &staleCommitIPsecDriver{}
 	driver.onLoadConnection = func(ipsec.TransportLinkSpec) {
-		if _, err := advanceTestVerifiedRevision(service.StateStore, now.Add(time.Nanosecond)); err != nil {
+		if _, err := advanceTestVerifiedRevision(service.State.Common, now.Add(time.Nanosecond)); err != nil {
 			t.Fatalf("advance state revision during apply: %v", err)
 		}
 	}
@@ -403,7 +405,7 @@ func TestDaemonIPsecReconcileDiscardsResultWhenRevisionChanged(t *testing.T) {
 	if !service.ipsecDirty {
 		t.Fatal("ipsecDirty = false, want stale reconcile to be retried")
 	}
-	common := service.StateStore.common.ReadView()
+	common := service.State.Common.ReadView()
 	observationLinks, observationReconcile := readTestIPsecObservation(service)
 	rev := uint64(common.Revision)
 	if rev != baseRev+1 {
@@ -451,7 +453,7 @@ func TestLongIPsecReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 		t.Fatal("ipsec reconcile did not enter blocking LoadConnection")
 	}
 
-	committedRev := uint64(service.StateStore.common.VerifiedRevision())
+	committedRev := uint64(service.State.Common.VerifiedRevision())
 	statusDone := make(chan controlViewResponse[inspect.DaemonStatusView], 1)
 	go func() {
 		statusDone <- controlViewRequestViaPipe[inspect.DaemonStatusView](t, service, controlRequest{Method: "daemon_status_view"})
@@ -511,10 +513,10 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	service.notifyStateChanged()
 
-	common := service.StateStore.common.ReadView()
-	persistedRuntime := service.StateStore.readLinuxState()
+	common := service.State.Common.ReadView()
+	persistedRuntime := service.State.ReadLinux()
 	latestLinks, latestReconcile := readTestIPsecObservation(service)
-	var inst linkInstanceState
+	var inst ipsec.LinkInstance
 	for _, v := range latestLinks {
 		inst = v
 	}
@@ -616,7 +618,7 @@ func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 	if len(driver.Connections) != 1 {
 		t.Fatalf("connections = %d, want one coalesced apply", len(driver.Connections))
 	}
-	common := service.StateStore.common.ReadView()
+	common := service.State.Common.ReadView()
 	_, latestReconcile := readTestIPsecObservation(service)
 	if common.State.Network.Zones["node-b.catofes."].Records["coalesce-a"] == nil || common.State.Network.Zones["node-b.catofes."].Records["coalesce-b"] == nil {
 		t.Fatalf("queued record puts were not both persisted")

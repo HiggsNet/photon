@@ -61,7 +61,7 @@ func TestComputeRevocationImpactBasic(t *testing.T) {
 	now := time.Unix(4140, 0)
 
 	// Set up a link instance to node-b.catofes.
-	links := map[string]linkInstanceState{
+	links := map[string]ipsec.LinkInstance{
 		"link-to-node-b": {
 			ID:          "link-to-node-b",
 			PeerZone:    "node-b.catofes.",
@@ -128,7 +128,7 @@ func TestComputeRevocationImpactSubtree(t *testing.T) {
 		RecordHistory: make(map[string][]*zone.Record),
 	}
 	// Also set up link instance and sync peer for the leaf.
-	links := map[string]linkInstanceState{
+	links := map[string]ipsec.LinkInstance{
 		"link-to-leaf": {
 			ID:          "link-to-leaf",
 			PeerZone:    leafZone,
@@ -219,7 +219,7 @@ func TestDaemonFlushRevocationCleanup(t *testing.T) {
 	service.flushRevocationCleanup()
 
 	// Verify peer cache is cleared.
-	view := service.StateStore.common.ReadView()
+	view := service.State.Common.ReadView()
 	peer := view.Gossip.Peers["node-b.catofes."]
 	if peer.DiscoveredEndpoint != "" || peer.ObservedEndpoint != "" {
 		t.Fatalf("peer cache not cleared: discovered=%s observed=%s", peer.DiscoveredEndpoint, peer.ObservedEndpoint)
@@ -235,11 +235,11 @@ func TestDaemonFlushRevocationCleanupWithoutRevocationsDoesNotCommit(t *testing.
 		Config: defaultAppConfig(),
 	}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-	before := uint64(service.StateStore.common.VerifiedRevision())
+	before := uint64(service.State.Common.VerifiedRevision())
 
 	service.flushRevocationCleanup()
 
-	if after := uint64(service.StateStore.common.VerifiedRevision()); after != before {
+	if after := uint64(service.State.Common.VerifiedRevision()); after != before {
 		t.Fatalf("state revision after no-op cleanup = %d, want %d", after, before)
 	}
 }
@@ -264,11 +264,11 @@ func TestDaemonFlushRevocationCleanupAlreadyCleanDoesNotCommit(t *testing.T) {
 	service.gossipDriver.Observability.Update("node-b.catofes.", now, func(peer *observability.PeerDiagnostics) {
 		peer.DatagramStats = &observability.PeerDatagramStats{ChunkFallbacks: 1}
 	})
-	before := uint64(service.StateStore.common.VerifiedRevision())
+	before := uint64(service.State.Common.VerifiedRevision())
 
 	service.flushRevocationCleanup()
 
-	if after := uint64(service.StateStore.common.VerifiedRevision()); after != before {
+	if after := uint64(service.State.Common.VerifiedRevision()); after != before {
 		t.Fatalf("state revision after already-clean cleanup = %d, want %d", after, before)
 	}
 	if _, ok := service.gossipDriver.Observability.Snapshot("node-b.catofes.", now); ok {
@@ -372,8 +372,8 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 	service.notifyStateChanged()
 
 	// Now revoke node-b.catofes.
-	common := service.StateStore.common.ReadView()
-	currentRuntime := service.StateStore.readLinuxState()
+	common := service.State.Common.ReadView()
+	currentRuntime := service.State.ReadLinux()
 	currentLinks, currentReconcile := readTestIPsecObservation(service)
 	parent := common.State.Network.Zones["catofes."]
 	delegation := parent.Delegations["node-b.catofes."]
@@ -391,7 +391,7 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 	service.notifyStateChanged()
 
 	// Verify peer cache was cleared after notifyStateChanged.
-	common = service.StateStore.common.ReadView()
+	common = service.State.Common.ReadView()
 	currentLinks, currentReconcile = readTestIPsecObservation(service)
 	peer := common.Gossip.Peers["node-b.catofes."]
 	if peer.DiscoveredEndpoint != "" {
@@ -463,8 +463,8 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 	})
 
 	service.notifyStateChanged()
-	common := service.StateStore.common.ReadView()
-	currentRuntime := service.StateStore.readLinuxState()
+	common := service.State.Common.ReadView()
+	currentRuntime := service.State.ReadLinux()
 	currentLinks, currentReconcile := readTestIPsecObservation(service)
 	if len(currentLinks) != 1 {
 		t.Fatalf("initial link instances = %d, want 1", len(currentLinks))
@@ -524,8 +524,8 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 		t.Fatalf("revoked node-b route missing from firewall audit set: %v", revokedFirewall.Prefixes.RevokedV4)
 	}
 
-	common = service.StateStore.common.ReadView()
-	currentRuntime = service.StateStore.readLinuxState()
+	common = service.State.Common.ReadView()
+	currentRuntime = service.State.ReadLinux()
 	currentLinks, currentReconcile = readTestIPsecObservation(service)
 	if len(currentLinks) != 0 {
 		t.Fatalf("link instances should be empty after revocation, got %d", len(currentLinks))
@@ -589,7 +589,7 @@ func TestConfiguredBootstrapPeerRevoked(t *testing.T) {
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
 
-	config := &gossipStartupConfig{
+	config := &appConfig{
 		Bootstrap: []syncConfigPeer{
 			{ID: "node-b.catofes.", Addr: "192.0.2.1:33434"},
 		},

@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
+	photonstate "github.com/HiggsNet/photon/internal/state"
+
 	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/internal/observer"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
@@ -29,9 +32,9 @@ func TestFirewallObservationDoesNotAdvancePersistentRevision(t *testing.T) {
 	}
 	rt := &AppContext{Config: defaultAppConfig()}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-	rev := uint64(service.StateStore.common.VerifiedRevision())
+	rev := uint64(service.State.Common.VerifiedRevision())
 	service.publishFirewallObservation(rev, summary)
-	if got := uint64(service.StateStore.common.VerifiedRevision()); got != rev {
+	if got := uint64(service.State.Common.VerifiedRevision()); got != rev {
 		t.Fatalf("firewall observation revision = %d, want unchanged %d", got, rev)
 	}
 	got := service.linuxObservation.firewallSnapshot()
@@ -551,13 +554,9 @@ func TestFirewallInstanceSpecFromConfig(t *testing.T) {
 }
 
 func TestReconcileFirewall_NoInstances(t *testing.T) {
-	store, err := newDaemonStateStore(corestate.NewStore(&corestate.VerifiedState{}, nil), &linuxRuntimeState{}, nil)
-	if err != nil {
-		t.Fatalf("newDaemonStateStore: %v", err)
-	}
 	d := &Daemon{
-		StateStore: store,
-		App:        &AppContext{Config: &appConfig{}},
+		State: newState(nil, corestate.NewStore(&corestate.VerifiedState{}, nil), &photonlinux.LinuxState{}),
+		App:   &AppContext{Config: &appConfig{}},
 	}
 	if err := d.reconcileFirewall(context.Background()); err != nil {
 		t.Fatalf("reconcileFirewall with no instances: %v", err)
@@ -636,7 +635,7 @@ func TestBuildFirewallPolicyInputIncludesLocalSharedAssignment(t *testing.T) {
 		firewall.FirewallInstanceSpec{ID: "photon", NetNS: "photon"},
 		ars,
 		&corestate.VerifiedState{ManagedZone: "node-b.catofes."},
-		&linuxRuntimeState{},
+		&photonlinux.LinuxState{},
 		nil,
 		nil,
 		defaultAppConfig(),
@@ -650,8 +649,8 @@ func TestBuildFirewallPolicyInputIncludesLocalSharedAssignment(t *testing.T) {
 
 func TestBuildFirewallPolicyInputScopesInterfacesByNetNS(t *testing.T) {
 	verified := &corestate.VerifiedState{ManagedZone: "node-a.catofes."}
-	runtime := &linuxRuntimeState{}
-	links := map[string]linkInstanceState{
+	runtime := &photonlinux.LinuxState{}
+	links := map[string]ipsec.LinkInstance{
 		"a": {
 			ID:              "a",
 			ActualState:     "up",
@@ -682,7 +681,7 @@ func TestBuildFirewallPolicyInputScopesInterfacesByNetNS(t *testing.T) {
 		verified,
 		runtime,
 		links,
-		&ipsecObservationSummary{Desired: []desiredLinkState{
+		&ipsecObservationSummary{Desired: []photonstate.DesiredLinkState{
 			{InstanceID: "a", LocalTunnelAddr: "fe80::1%phx11111111 netns=photon"},
 			{InstanceID: "b", LocalTunnelAddr: "fe80::2%phx22222222 netns=h3"},
 		}},
@@ -808,7 +807,7 @@ func TestLongFirewallReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 		t.Fatal("firewall reconcile did not enter blocking apply")
 	}
 
-	committedRev := uint64(service.StateStore.common.VerifiedRevision())
+	committedRev := uint64(service.State.Common.VerifiedRevision())
 	statusDone := make(chan controlViewResponse[inspect.DaemonStatusView], 1)
 	go func() {
 		statusDone <- controlViewRequestViaPipe[inspect.DaemonStatusView](t, service, controlRequest{Method: "daemon_status_view"})
@@ -875,10 +874,10 @@ func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
 		Clock:  func() time.Time { return time.Unix(7010, 0) },
 	}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-	baseRev := uint64(service.StateStore.common.VerifiedRevision())
+	baseRev := uint64(service.State.Common.VerifiedRevision())
 	driver := &captureFirewallOwnerDriver{}
 	driver.onApply = func() {
-		if _, err := advanceTestVerifiedRevision(service.StateStore, time.Unix(7010, 1)); err != nil {
+		if _, err := advanceTestVerifiedRevision(service.State.Common, time.Unix(7010, 1)); err != nil {
 			t.Fatalf("advance state revision during firewall apply: %v", err)
 		}
 		driver.onApply = nil
@@ -891,7 +890,7 @@ func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
 	if !service.firewallDirty {
 		t.Fatal("firewallDirty = false, want stale firewall summary commit to schedule another reconcile")
 	}
-	common := service.StateStore.common.ReadView()
+	common := service.State.Common.ReadView()
 	rev := uint64(common.Revision)
 	if rev != baseRev+1 {
 		t.Fatalf("state revision = %d, want only external update at %d", rev, baseRev+1)

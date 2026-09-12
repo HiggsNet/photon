@@ -3,16 +3,18 @@ package main
 import (
 	"bytes"
 	"context"
-	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
-	"github.com/HiggsNet/photon/pkg/core/gossip"
-	"github.com/HiggsNet/photon/pkg/core/zone"
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
+	"github.com/HiggsNet/photon/internal/photonlinux"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func TestDaemonReconcileUsesSystemXFRMDriverSmoke(t *testing.T) {
@@ -51,7 +53,7 @@ func TestDaemonReconcileUsesSystemXFRMDriverSmoke(t *testing.T) {
 	if len(latestLinks) != 1 {
 		t.Fatalf("link instances = %+v, want one system-applied link", latestLinks)
 	}
-	var inst linkInstanceState
+	var inst ipsec.LinkInstance
 	for _, item := range latestLinks {
 		inst = item
 	}
@@ -170,7 +172,7 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 
 	now := time.Unix(4140, 0)
 	verifiedA, configA, verifiedB, configB := buildTestABVerifiedStates(t)
-	runtimeA, runtimeB := &linuxRuntimeState{}, &linuxRuntimeState{}
+	runtimeA, runtimeB := &photonlinux.LinuxState{}, &photonlinux.LinuxState{}
 	keyA, recordA := daemonTestTransportKey(t, now)
 	keyB, recordB := daemonTestTransportKey(t, now)
 	runtimeA.IPsecTransportKey = keyA
@@ -207,10 +209,10 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 
 	serviceB.recoverIPsecLinksOnStart(ctx)
 	serviceA.recoverIPsecLinksOnStart(ctx)
-	commonA := serviceA.StateStore.common.ReadView()
-	persistedA := serviceA.StateStore.readLinuxState()
-	commonB := serviceB.StateStore.common.ReadView()
-	persistedB := serviceB.StateStore.readLinuxState()
+	commonA := serviceA.State.Common.ReadView()
+	persistedA := serviceA.State.ReadLinux()
+	commonB := serviceB.State.Common.ReadView()
+	persistedB := serviceB.State.ReadLinux()
 	specA := daemonSystemDesiredSpec(t, commonA.State, persistedA.IPsecTransportKey, groupA, now)
 	specB := daemonSystemDesiredSpec(t, commonB.State, persistedB.IPsecTransportKey, groupB, now)
 	if err := waitDaemonTestSA(ctx, clientA, specA.TransportID); err != nil {
@@ -232,13 +234,13 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 	pingTunnelAddr(t, ctx, nsA, specA.PeerTunnelAddr, specA.InterfaceName)
 	pingTunnelAddr(t, ctx, nsB, specB.PeerTunnelAddr, specB.InterfaceName)
 
-	restartedCommonA := serviceA.StateStore.common.ReadView()
-	restartedA := serviceA.StateStore.readLinuxState()
+	restartedCommonA := serviceA.State.Common.ReadView()
+	restartedA := serviceA.State.ReadLinux()
 	restartServiceA := newTestDaemonFromOwners(rtA, restartedCommonA.State, restartedCommonA.Gossip, restartedA, configA, time.Second)
 	installTestIPsecDrivers(restartServiceA, &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}, daemonTestXFRMDriver(groupA.NetNS, nsA))
 	restartServiceA.recoverIPsecLinksOnStart(ctx)
-	recoveredCommonA := restartServiceA.StateStore.common.ReadView()
-	recoveredRuntimeA := restartServiceA.StateStore.readLinuxState()
+	recoveredCommonA := restartServiceA.State.Common.ReadView()
+	recoveredRuntimeA := restartServiceA.State.ReadLinux()
 	recoveredALinks, recoveredAReconcile := readTestIPsecObservation(restartServiceA)
 	assertDaemonSystemLinkUp(t, recoveredALinks, recoveredAReconcile, specA)
 	if recoveredAReconcile == nil || len(recoveredAReconcile.Actions) != 1 {
@@ -383,7 +385,7 @@ func TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke(t *testing.T) {
 
 	now := time.Unix(4140, 0)
 	verifiedA, configA, verifiedB, configB := buildTestABVerifiedStates(t)
-	runtimeA, runtimeB := &linuxRuntimeState{}, &linuxRuntimeState{}
+	runtimeA, runtimeB := &photonlinux.LinuxState{}, &photonlinux.LinuxState{}
 	keyA, recordA := daemonTestTransportKey(t, now)
 	keyB, recordB := daemonTestTransportKey(t, now)
 	runtimeA.IPsecTransportKey = keyA
@@ -424,11 +426,11 @@ func TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke(t *testing.T) {
 
 	serviceB.recoverIPsecLinksOnStart(ctx)
 	serviceA.recoverIPsecLinksOnStart(ctx)
-	commonA := serviceA.StateStore.common.ReadView()
-	persistedA := serviceA.StateStore.readLinuxState()
+	commonA := serviceA.State.Common.ReadView()
+	persistedA := serviceA.State.ReadLinux()
 	latestALinks, latestAReconcile := readTestIPsecObservation(serviceA)
-	commonB := serviceB.StateStore.common.ReadView()
-	persistedB := serviceB.StateStore.readLinuxState()
+	commonB := serviceB.State.Common.ReadView()
+	persistedB := serviceB.State.ReadLinux()
 	latestBLinks, latestBReconcile := readTestIPsecObservation(serviceB)
 	specA := daemonSystemDesiredSpec(t, commonA.State, persistedA.IPsecTransportKey, groupA, now)
 	specB := daemonSystemDesiredSpec(t, commonB.State, persistedB.IPsecTransportKey, groupB, now)
@@ -550,7 +552,7 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 
 	now := time.Unix(4140, 0)
 	verifiedA, configA, verifiedB, configB := buildTestABVerifiedStates(t)
-	runtimeA, runtimeB := &linuxRuntimeState{}, &linuxRuntimeState{}
+	runtimeA, runtimeB := &photonlinux.LinuxState{}, &photonlinux.LinuxState{}
 	keyA, recordA := daemonTestTransportKey(t, now)
 	keyB, recordB := daemonTestTransportKey(t, now)
 	runtimeA.IPsecTransportKey = keyA
@@ -585,11 +587,11 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 
 	serviceB.recoverIPsecLinksOnStart(ctx)
 	serviceA.recoverIPsecLinksOnStart(ctx)
-	commonA := serviceA.StateStore.common.ReadView()
-	persistedA := serviceA.StateStore.readLinuxState()
+	commonA := serviceA.State.Common.ReadView()
+	persistedA := serviceA.State.ReadLinux()
 	latestALinks, latestAReconcile := readTestIPsecObservation(serviceA)
-	commonB := serviceB.StateStore.common.ReadView()
-	persistedB := serviceB.StateStore.readLinuxState()
+	commonB := serviceB.State.Common.ReadView()
+	persistedB := serviceB.State.ReadLinux()
 	latestBLinks, latestBReconcile := readTestIPsecObservation(serviceB)
 	specA := daemonSystemDesiredSpec(t, commonA.State, persistedA.IPsecTransportKey, groupA, now)
 	specB := daemonSystemDesiredSpec(t, commonB.State, persistedB.IPsecTransportKey, groupB, now)
@@ -803,7 +805,7 @@ func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
 	defer clientB.Close()
 
 	verifiedA, configA, verifiedB, configB := buildTestABVerifiedStates(t)
-	runtimeA, runtimeB := &linuxRuntimeState{}, &linuxRuntimeState{}
+	runtimeA, runtimeB := &photonlinux.LinuxState{}, &photonlinux.LinuxState{}
 	now := time.Now()
 	keyA, _ := daemonTestTransportKey(t, now)
 	keyB, _ := daemonTestTransportKey(t, now)
@@ -858,8 +860,8 @@ func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
 	}()
 
 	commonA, latestALinks, latestAReconcile, commonB, latestBLinks, latestBReconcile := waitDaemonRunGossipStrongSwanUp(ctx, t, serviceA, serviceB, groupA, groupB)
-	persistedA := serviceA.StateStore.readLinuxState()
-	persistedB := serviceB.StateStore.readLinuxState()
+	persistedA := serviceA.State.ReadLinux()
+	persistedB := serviceB.State.ReadLinux()
 	specA := daemonSystemDesiredSpec(t, commonA.State, persistedA.IPsecTransportKey, groupA, time.Now())
 	specB := daemonSystemDesiredSpec(t, commonB.State, persistedB.IPsecTransportKey, groupB, time.Now())
 	assertGossipedIPsecRecords(t, commonA.State.Network, "node-b.catofes.")
@@ -908,16 +910,16 @@ func TestDaemonDryRunABIPsecSmokeCoversBringupAndSAObservation(t *testing.T) {
 	}
 	driverB := &observedIPsecDriver{}
 	serviceB := newTestDaemonFromOwners(
-		rtB, &verifiedB, checkpointA, &linuxRuntimeState{}, &configB, time.Second,
+		rtB, &verifiedB, checkpointA, &photonlinux.LinuxState{}, &configB, time.Second,
 	)
 	installTestIPsecDrivers(serviceB, driverB, driverB)
 
 	serviceA.notifyStateChanged()
 	serviceB.notifyStateChanged()
 
-	commonA := serviceA.StateStore.common.ReadView()
+	commonA := serviceA.State.Common.ReadView()
 	latestALinks, latestAReconcile := readTestIPsecObservation(serviceA)
-	commonB := serviceB.StateStore.common.ReadView()
+	commonB := serviceB.State.Common.ReadView()
 	latestBLinks, latestBReconcile := readTestIPsecObservation(serviceB)
 	specA := singleDesiredSpec(t, commonA.State.ManagedZone, latestAReconcile)
 	specB := singleDesiredSpec(t, commonB.State.ManagedZone, latestBReconcile)
@@ -965,7 +967,7 @@ func TestDaemonDryRunABIPsecSmokeCoversBringupAndSAObservation(t *testing.T) {
 
 func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 	verifiedA, configA, verifiedB, configB := buildTestABVerifiedStates(t)
-	runtimeA, runtimeB := &linuxRuntimeState{}, &linuxRuntimeState{}
+	runtimeA, runtimeB := &photonlinux.LinuxState{}, &photonlinux.LinuxState{}
 	group := testIPsecLinkGroup()
 
 	transportA, err := listenTestGossipTransport(configA.ListenAddr, gossip.Config{
@@ -1066,9 +1068,9 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 		t.Fatalf("reconcile node-b ipsec links: %v", err)
 	}
 
-	commonA := serviceA.StateStore.common.ReadView()
+	commonA := serviceA.State.Common.ReadView()
 	_, latestAReconcile := readTestIPsecObservation(serviceA)
-	commonB := serviceB.StateStore.common.ReadView()
+	commonB := serviceB.State.Common.ReadView()
 	_, latestBReconcile := readTestIPsecObservation(serviceB)
 	assertGossipedIPsecRecords(t, commonA.State.Network, "node-b.catofes.")
 	assertGossipedIPsecRecords(t, commonB.State.Network, "node-a.catofes.")

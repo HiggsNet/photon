@@ -13,8 +13,8 @@ import (
 // buildLinkOutputs projects provider-owned runtime state into the common
 // Babel-facing consumer contract. It deliberately carries no owner, SA name,
 // action, rotate phase, or other lifecycle input.
-func buildLinkOutputs(instances map[string]linkInstanceState, reconcile *ipsecObservationSummary) []photonstate.LinkOutput {
-	desired := make(map[string][]desiredLinkState)
+func buildLinkOutputs(instances map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary) []photonstate.LinkOutput {
+	desired := make(map[string][]photonstate.DesiredLinkState)
 	if reconcile != nil {
 		for _, item := range reconcile.Desired {
 			desired[item.InstanceID] = append(desired[item.InstanceID], item)
@@ -26,7 +26,7 @@ func buildLinkOutputs(instances map[string]linkInstanceState, reconcile *ipsecOb
 		inst := instances[id]
 		wants := desired[id]
 		if len(wants) == 0 {
-			wants = []desiredLinkState{{}}
+			wants = []photonstate.DesiredLinkState{{}}
 		}
 		for i, want := range wants {
 			base := newIPsecLinkOutput(inst, want)
@@ -71,7 +71,7 @@ func firstNonEmptyZone(values ...zone.ZonePath) zone.ZonePath {
 	return ""
 }
 
-func newIPsecLinkOutput(inst linkInstanceState, desired desiredLinkState) photonstate.LinkOutput {
+func newIPsecLinkOutput(inst ipsec.LinkInstance, desired photonstate.DesiredLinkState) photonstate.LinkOutput {
 	id := firstNonEmpty(inst.LinkID, desired.LinkID, inst.ID, desired.InstanceID)
 	provider := inst.TransportKind
 	if provider == "" {

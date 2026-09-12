@@ -22,11 +22,11 @@ type legacyStateMigrationReport struct {
 	Gossip legacyGossipCheckpointReport
 }
 
-// migrateLegacyRuntimeStateTx atomically replaces the legacy _meta/cli_state
+// migrateLegacyLinuxStateTx atomically replaces the legacy _meta/cli_state
 // plus zone:* representation with the common state buckets and one Linux
 // runtime bucket. The caller owns tx and decides commit/rollback. This remains
 // detached from the online loader until the single-writer cutover.
-func migrateLegacyRuntimeStateTx(tx *bolt.Tx, trustedRoot ed25519.PublicKey) (legacyStateMigrationReport, bool, error) {
+func migrateLegacyLinuxStateTx(tx *bolt.Tx, trustedRoot ed25519.PublicKey) (legacyStateMigrationReport, bool, error) {
 	var report legacyStateMigrationReport
 	if tx == nil || !tx.Writable() {
 		return report, false, errors.New("legacy state migration requires a writable bbolt transaction")
@@ -47,14 +47,14 @@ func migrateLegacyRuntimeStateTx(tx *bolt.Tx, trustedRoot ed25519.PublicKey) (le
 		if legacyMetadataPresent || legacyNetworkPresent {
 			return report, false, errLegacyStateConflict
 		}
-		if _, found, err := photonlinux.LoadRuntimeStateTx(tx); err != nil {
+		if _, found, err := photonlinux.LoadLinuxStateTx(tx); err != nil {
 			return report, false, err
 		} else if !found {
-			return report, false, fmt.Errorf("%w: runtime bucket is missing", photonlinux.ErrRuntimeStateCorrupt)
+			return report, false, fmt.Errorf("%w: runtime bucket is missing", photonlinux.ErrLinuxStateCorrupt)
 		}
 		return report, false, nil
 	}
-	if tx.Bucket([]byte(photonlinux.RuntimeStateBucketName)) != nil {
+	if tx.Bucket([]byte(photonlinux.LinuxStateBucketName)) != nil {
 		return report, false, errLegacyStateConflict
 	}
 	if !legacyMetadataPresent && !legacyNetworkPresent {
@@ -86,7 +86,7 @@ func migrateLegacyRuntimeStateTx(tx *bolt.Tx, trustedRoot ed25519.PublicKey) (le
 	if _, err := corestate.CommitBoltState(tx, candidate, corestate.ChangeSet{}); err != nil {
 		return report, false, err
 	}
-	if _, err := photonlinux.SaveRuntimeStateTx(tx, linuxRuntimeStateFromLegacy(legacy)); err != nil {
+	if _, err := photonlinux.SaveLinuxStateTx(tx, linuxStateFromLegacy(legacy)); err != nil {
 		return report, false, err
 	}
 	if _, err := zone.DeleteNetworkTx(tx); err != nil {
@@ -98,11 +98,11 @@ func migrateLegacyRuntimeStateTx(tx *bolt.Tx, trustedRoot ed25519.PublicKey) (le
 	return report, true, nil
 }
 
-func linuxRuntimeStateFromLegacy(state *stateFile) *linuxRuntimeState {
+func linuxStateFromLegacy(state *stateFile) *photonlinux.LinuxState {
 	if state == nil {
-		return &linuxRuntimeState{}
+		return &photonlinux.LinuxState{}
 	}
-	return &linuxRuntimeState{
+	return &photonlinux.LinuxState{
 		IPsecTransportKey: state.IPsecTransportKey,
 		EndpointACLs:      state.EndpointACLs,
 	}

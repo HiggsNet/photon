@@ -14,6 +14,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/controlapi"
 	"github.com/HiggsNet/photon/internal/inspect"
+	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
@@ -23,30 +24,30 @@ import (
 const controlSocketName = "photon.sock"
 
 type controlRequest struct {
-	Method      string                  `json:"method"`
-	Zone        string                  `json:"zone,omitempty"`
-	Key         string                  `json:"key,omitempty"`
-	Value       []byte                  `json:"value,omitempty"`
-	ValueText   string                  `json:"value_text,omitempty"`
-	Type        string                  `json:"type,omitempty"`
-	History     int                     `json:"history,omitempty"`
-	Reason      string                  `json:"reason,omitempty"`
-	JoinRequest *joinRequest            `json:"join_request,omitempty"`
-	JoinBundle  *joinBundle             `json:"join_bundle,omitempty"`
-	PrivateKey  *privateKeyFile         `json:"private_key,omitempty"`
-	Permissions []zone.Permission       `json:"permissions,omitempty"`
-	Snapshot    *corestate.ZoneSnapshot `json:"snapshot,omitempty"`
-	Apply       bool                    `json:"apply,omitempty"`
-	IncludeAll  bool                    `json:"include_all,omitempty"`
-	Verbose     bool                    `json:"verbose,omitempty"`
-	Orphans     bool                    `json:"orphans,omitempty"`
-	NetNS       string                  `json:"netns,omitempty"`
-	Host        bool                    `json:"host,omitempty"`
-	BirdView    string                  `json:"bird_view,omitempty"`
-	EndpointACL *endpointACL            `json:"endpoint_acl,omitempty"`
-	IPAM        *ipamMutationRequest    `json:"ipam,omitempty"`
-	Route       *routeMutationRequest   `json:"route,omitempty"`
-	Service     *serviceMutationRequest `json:"service,omitempty"`
+	Method      string                   `json:"method"`
+	Zone        string                   `json:"zone,omitempty"`
+	Key         string                   `json:"key,omitempty"`
+	Value       []byte                   `json:"value,omitempty"`
+	ValueText   string                   `json:"value_text,omitempty"`
+	Type        string                   `json:"type,omitempty"`
+	History     int                      `json:"history,omitempty"`
+	Reason      string                   `json:"reason,omitempty"`
+	JoinRequest *joinRequest             `json:"join_request,omitempty"`
+	JoinBundle  *joinBundle              `json:"join_bundle,omitempty"`
+	PrivateKey  *privateKeyFile          `json:"private_key,omitempty"`
+	Permissions []zone.Permission        `json:"permissions,omitempty"`
+	Snapshot    *corestate.ZoneSnapshot  `json:"snapshot,omitempty"`
+	Apply       bool                     `json:"apply,omitempty"`
+	IncludeAll  bool                     `json:"include_all,omitempty"`
+	Verbose     bool                     `json:"verbose,omitempty"`
+	Orphans     bool                     `json:"orphans,omitempty"`
+	NetNS       string                   `json:"netns,omitempty"`
+	Host        bool                     `json:"host,omitempty"`
+	BirdView    string                   `json:"bird_view,omitempty"`
+	EndpointACL *photonstate.EndpointACL `json:"endpoint_acl,omitempty"`
+	IPAM        *ipamMutationRequest     `json:"ipam,omitempty"`
+	Route       *routeMutationRequest    `json:"route,omitempty"`
+	Service     *serviceMutationRequest  `json:"service,omitempty"`
 }
 
 type controlResponse struct {
@@ -74,82 +75,6 @@ type controlViewResponse[T any] struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
 	View  T      `json:"view,omitempty"`
-}
-
-// healthLinkJSON is the JSON representation of health.LinkHealth for the
-// control API. It keeps time.Duration fields as millisecond integers for
-// compact serialization.
-type healthLinkJSON struct {
-	ProbeID         string `json:"probe_id,omitempty"`
-	InstanceID      string `json:"instance_id"`
-	ProbeRole       string `json:"probe_role,omitempty"`
-	InterfaceName   string `json:"interface_name,omitempty"`
-	State           string `json:"state"`
-	ProbeType       string `json:"probe_type"`
-	Sent            int    `json:"sent"`
-	Received        int    `json:"received"`
-	Lost            int    `json:"lost"`
-	LossRatio       int    `json:"loss_ratio_pct"`
-	LastRTTMs       int64  `json:"last_rtt_ms"`
-	EWMARTTMs       int64  `json:"ewma_rtt_ms"`
-	P50RTTMs        int64  `json:"p50_rtt_ms"`
-	P95RTTMs        int64  `json:"p95_rtt_ms"`
-	P99RTTMs        int64  `json:"p99_rtt_ms"`
-	JitterMs        int64  `json:"jitter_ms"`
-	ConsecutiveFail int    `json:"consecutive_fail"`
-	LastError       string `json:"last_error,omitempty"`
-	NextProbeUnix   int64  `json:"next_probe_unix,omitempty"`
-	CutoverBlocking bool   `json:"cutover_blocking,omitempty"`
-}
-
-func healthLinkJSONFromHealth(h healthLinkHealthView) healthLinkJSON {
-	return healthLinkJSON{
-		ProbeID:         h.ProbeID,
-		InstanceID:      h.InstanceID,
-		ProbeRole:       h.ProbeRole,
-		InterfaceName:   h.InterfaceName,
-		State:           h.State,
-		ProbeType:       h.ProbeType,
-		Sent:            h.Sent,
-		Received:        h.Received,
-		Lost:            h.Lost,
-		LossRatio:       int(h.LossRatio * 100),
-		LastRTTMs:       h.LastRTT.Milliseconds(),
-		EWMARTTMs:       h.EWMARTT.Milliseconds(),
-		P50RTTMs:        h.P50RTT.Milliseconds(),
-		P95RTTMs:        h.P95RTT.Milliseconds(),
-		P99RTTMs:        h.P99RTT.Milliseconds(),
-		JitterMs:        h.Jitter.Milliseconds(),
-		ConsecutiveFail: h.ConsecutiveFail,
-		LastError:       h.LastError,
-		NextProbeUnix:   h.NextProbeUnix,
-		CutoverBlocking: h.CutoverBlocking,
-	}
-}
-
-// healthLinkHealthView is a local view type used to convert health.LinkHealth
-// without importing pkg/health in control.go (kept for layered imports).
-type healthLinkHealthView struct {
-	ProbeID         string
-	InstanceID      string
-	ProbeRole       string
-	InterfaceName   string
-	State           string
-	ProbeType       string
-	Sent            int
-	Received        int
-	Lost            int
-	LossRatio       float64
-	LastRTT         time.Duration
-	EWMARTT         time.Duration
-	P50RTT          time.Duration
-	P95RTT          time.Duration
-	P99RTT          time.Duration
-	Jitter          time.Duration
-	ConsecutiveFail int
-	LastError       string
-	NextProbeUnix   int64
-	CutoverBlocking bool
 }
 
 func controlSocketPath(config *appConfig) string {
@@ -485,7 +410,7 @@ func sendAdminControlRequest(rt *AppContext, request controlRequest) (*controlRe
 	return response, true, nil
 }
 
-func endpointACLApplyViaControl(rt *AppContext, acl endpointACL) (bool, error) {
+func endpointACLApplyViaControl(rt *AppContext, acl photonstate.EndpointACL) (bool, error) {
 	_, ok, err := sendAdminControlRequest(rt, controlRequest{Method: "endpoint_acl_apply", EndpointACL: &acl})
 	return ok, err
 }
@@ -495,8 +420,8 @@ func endpointACLRemoveViaControl(rt *AppContext, name string) (bool, error) {
 	return ok, err
 }
 
-func endpointACLListViaControl(rt *AppContext) ([]endpointACL, bool, error) {
-	return readCanonicalViewViaControl[[]endpointACL](rt, controlRequest{Method: "endpoint_acl_list"})
+func endpointACLListViaControl(rt *AppContext) ([]photonstate.EndpointACL, bool, error) {
+	return readCanonicalViewViaControl[[]photonstate.EndpointACL](rt, controlRequest{Method: "endpoint_acl_list"})
 }
 
 func isControlSocketUnavailable(err error) bool {

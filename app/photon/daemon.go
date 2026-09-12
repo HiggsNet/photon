@@ -35,7 +35,7 @@ type Daemon struct {
 	ControlSocketPath      string
 	Events                 chan daemonEvent
 	Hooks                  DaemonHooks
-	StateStore             *DaemonStateStore
+	State                  *State
 	linuxDriver            *photonlinux.LinuxDriver
 	ipsecDNSResolver       ipsec.DNSResolver
 	health                 *healthDriver
@@ -116,7 +116,7 @@ type daemonEvent struct {
 	Orphans     bool
 	VICIEvent   ipsec.VICIEvent
 	ForceSync   bool
-	EndpointACL *endpointACL
+	EndpointACL *photonstate.EndpointACL
 	IPAM        *ipamMutationRequest
 	Route       *routeMutationRequest
 	Service     *serviceMutationRequest
@@ -148,7 +148,7 @@ type daemonEventResult struct {
 	Error          error
 }
 
-func newDaemonWithStore(rt *AppContext, stateStore *DaemonStateStore, config *gossipStartupConfig, interval time.Duration) *Daemon {
+func newDaemon(rt *AppContext, state *State, interval time.Duration) *Daemon {
 	if interval <= 0 {
 		interval = defaultDaemonInterval
 	}
@@ -169,7 +169,15 @@ func newDaemonWithStore(rt *AppContext, stateStore *DaemonStateStore, config *go
 		loggerConfig = rt.Config
 	}
 	logger := newAppLogger(loggerConfig)
-	gossipDriver := corehost.NewGossipDriver(corehost.NewClock(clock), corehost.DefaultEventBuffer, stateStore.common, gossipDriverConfig(config, loggerConfig, logger))
+	var commonState *corestate.Store
+	if state != nil {
+		commonState = state.Common
+	}
+	var verified *corestate.VerifiedState
+	if commonState != nil {
+		verified = commonState.ReadView().State
+	}
+	gossipDriver := corehost.NewGossipDriver(corehost.NewClock(clock), corehost.DefaultEventBuffer, commonState, gossipDriverConfig(loggerConfig, verified, logger))
 	d := &Daemon{
 		App:               rt,
 		Interval:          interval,
@@ -177,7 +185,7 @@ func newDaemonWithStore(rt *AppContext, stateStore *DaemonStateStore, config *go
 		Events:            make(chan daemonEvent, 64),
 		Log:               logger,
 		LogLimiter:        newRepeatedLogLimiter(30 * time.Second),
-		StateStore:        stateStore,
+		State:             state,
 		health:            &healthDriver{spool: healthspool.New(spoolConfig)},
 	}
 	d.ipsecDNSResolver = ipsec.NewDNSFamilyHoldDownResolver(net.DefaultResolver, ipsec.DNSFamilyHoldDownOptions{
@@ -189,26 +197,30 @@ func newDaemonWithStore(rt *AppContext, stateStore *DaemonStateStore, config *go
 	return d
 }
 
-func openDaemon(rt *AppContext, interval time.Duration) (*Daemon, *corestate.BoltStore, error) {
+func openDaemon(rt *AppContext, interval time.Duration) (*Daemon, error) {
 	if rt == nil {
-		return nil, nil, errors.New("daemon runtime is nil")
+		return nil, errors.New("daemon runtime is nil")
 	}
-	boltStore, startup, err := openLinuxDaemonState(rt)
+	state, err := openState(rt)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	stateStore, err := newPersistedDaemonStateStore(startup.Common, startup.Runtime, boltStore)
-	if err != nil {
-		_ = boltStore.Close()
-		return nil, nil, err
-	}
-	common := startup.Common.ReadView()
+	common := state.Common.ReadView()
 	if common.State == nil {
-		_ = boltStore.Close()
-		return nil, nil, errors.New("daemon common state is not initialized")
+		_ = state.Close()
+		return nil, errors.New("daemon common state is not initialized")
 	}
-	config := gossipStartupConfigFromAppConfig(rt.Config, common.State)
-	return newDaemonWithStore(rt, stateStore, config, interval), boltStore, nil
+	return newDaemon(rt, state, interval), nil
+}
+
+func (d *Daemon) Close() error {
+	if d == nil {
+		return nil
+	}
+	if d.State != nil {
+		return d.State.Close()
+	}
+	return nil
 }
 
 // configureHealthManager initializes the health probe manager from app config.
@@ -237,10 +249,10 @@ func (d *Daemon) configureHealthManager() {
 }
 
 func (d *Daemon) Run(ctx context.Context) error {
-	if d == nil || d.StateStore == nil || d.currentGossipConfig() == nil {
+	if d == nil || d.State == nil || d.gossipDriver == nil {
 		return errors.New("daemon service is not initialized")
 	}
-	if initial := d.StateStore.common.ReadView(); initial.State == nil {
+	if initial := d.State.Common.ReadView(); initial.State == nil {
 		return errors.New("daemon committed state is not initialized")
 	}
 	if d.linuxDriver == nil {
@@ -270,7 +282,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	d.updateDiscoveredPeers()
+	d.refreshGossipDiscovery()
 	err = d.gossipDriver.StartGossipTransport(ctx, transport, func(err error) {
 		d.logWarn("transport", "receive_failed", map[string]any{"error": err})
 	})
@@ -312,7 +324,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}
 	}()
 	startFields := map[string]any{
-		"peer_id":  d.currentGossipConfig().PeerID,
+		"peer_id":  d.gossipDriver.GossipConfig().PeerID,
 		"addr":     transport.LocalAddr(),
 		"interval": d.Interval,
 	}
@@ -327,13 +339,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.logWarn("daemon", "startup_publish_failed", map[string]any{"error": err})
 	}
 	d.logDebug("daemon", "startup_publish_done", nil)
-	logAutoJoinPending(d.Log, d.StateStore.common.ReadView().State)
+	logAutoJoinPending(d.Log, d.State.Common.ReadView().State)
 
 	startupNow := d.now()
 	ipsecReconcileInterval := d.ipsecReconcileInterval()
 	routingReconcileInterval := d.routingReconcileInterval()
 	firewallReconcileInterval := d.firewallReconcileInterval()
-	d.updateDiscoveredPeers()
+	d.refreshGossipDiscovery()
 	// Clear revoked gossip runtime hints before startup recovery. Offline peer
 	// suppression is derived directly from the retained gossip checkpoint.
 	d.flushRevocationCleanup()
@@ -598,7 +610,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 	case "daemon_status_view":
 		writeCanonicalView(conn, daemonStatusView(d))
 	case "root_public_key":
-		common := d.StateStore.common.ReadView()
+		common := d.State.Common.ReadView()
 		var rootPublicKey ed25519.PublicKey
 		if common.State != nil && common.State.Network != nil {
 			if root := common.State.Network.Zones[zone.RootZone]; root != nil && root.Authority != nil && len(root.Authority.Keys) > 0 {
@@ -611,14 +623,14 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		writeCanonicalView(conn, rootPublicKey)
 	case "status_view":
-		common := d.StateStore.common.ReadView()
+		common := d.State.Common.ReadView()
 		links, reconcile := d.linuxObservation.ipsecSnapshot()
 		routingObserved := d.linuxObservation.routingSnapshot()
 		var birdInstances map[string]*bird.InstanceObservation
 		if routingObserved != nil {
 			birdInstances = routingObserved.Instances
 		}
-		writeCanonicalView(conn, statusViewFromOwners(d.App, common, links, reconcile, birdInstances, d.healthStatusResponse(), true))
+		writeCanonicalView(conn, statusViewFromOwners(d.App, common, links, reconcile, birdInstances, d.healthSamples(), true))
 	case "record_put":
 		if err := validateControlRecordPut(request); err != nil {
 			writeControlResponse(conn, controlError(err))
@@ -676,7 +688,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(err))
 			return
 		}
-		view := d.StateStore.common.ReadView()
+		view := d.State.Common.ReadView()
 		var network *zone.NetworkState
 		if view.State != nil {
 			network = view.State.Network
@@ -688,7 +700,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		writeCanonicalView(conn, record)
 	case "records_view":
-		view := d.StateStore.common.ReadView()
+		view := d.State.Common.ReadView()
 		var network *zone.NetworkState
 		if view.State != nil {
 			network = view.State.Network
@@ -700,14 +712,14 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		writeCanonicalView(conn, records)
 	case "zones_view":
-		view := d.StateStore.common.ReadView()
+		view := d.State.Common.ReadView()
 		if view.State == nil || view.State.Network == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
 		}
 		writeCanonicalView(conn, buildZoneDetails(view.State.Network, d.now()))
 	case "services_view":
-		view := d.StateStore.common.ReadView()
+		view := d.State.Common.ReadView()
 		if view.State == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
@@ -715,7 +727,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		services := inspect.BuildServiceInspection(view.State, d.now())
 		writeCanonicalView(conn, services)
 	case "route_view":
-		view := d.StateStore.common.ReadView()
+		view := d.State.Common.ReadView()
 		if view.State == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
@@ -727,7 +739,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		writeCanonicalView(conn, *report)
 	case "ipam_assignments_view":
-		view := d.StateStore.common.ReadView()
+		view := d.State.Common.ReadView()
 		rows, err := buildIPAMAssignmentRows(view.State, d.now(), zone.ZonePath(request.Zone))
 		if err != nil {
 			writeControlResponse(conn, controlError(err))
@@ -735,7 +747,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		writeCanonicalView(conn, rows)
 	case "ipam_mine_view":
-		view := d.StateStore.common.ReadView()
+		view := d.State.Common.ReadView()
 		report, err := buildIPAMMineReportFromState(view.State, d.now())
 		if err != nil {
 			writeControlResponse(conn, controlError(err))
@@ -743,7 +755,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		writeCanonicalView(conn, *report)
 	case "ipam_get_view":
-		view := d.StateStore.common.ReadView()
+		view := d.State.Common.ReadView()
 		report, err := buildIPAMGetReportFromState(view.State, d.now(), request.ValueText)
 		if err != nil {
 			writeControlResponse(conn, controlError(err))
@@ -751,7 +763,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		writeCanonicalView(conn, *report)
 	case "endpoints_view":
-		view := d.StateStore.common.ReadView()
+		view := d.State.Common.ReadView()
 		if view.State == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
@@ -759,7 +771,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		endpoints := inspect.BuildEndpointDebug(view.State, d.now())
 		writeCanonicalView(conn, endpoints)
 	case "ping_targets":
-		common := d.StateStore.common.ReadView()
+		common := d.State.Common.ReadView()
 		if common.State == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
@@ -768,27 +780,27 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		targets := linkstate.HealthTargets(buildLinkOutputs(links, reconcile), string(common.State.ManagedZone))
 		writeCanonicalView(conn, inspectHealthProbeTargets(targets))
 	case "sync_view":
-		common := d.StateStore.common.ReadView()
+		common := d.State.Common.ReadView()
 		if common.State == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
 		}
-		view := inspect.BuildSyncStatus(common, syncStatusOptions(d.currentGossipConfig(), d.now(), request.Verbose))
+		view := inspect.BuildSyncStatus(common, syncStatusOptions(d.App.Config.ListenAddr, d.gossipDriver.GossipConfig(), d.now(), request.Verbose))
 		writeCanonicalView(conn, view)
 	case "peer_debug":
-		common := d.StateStore.common.ReadView()
+		common := d.State.Common.ReadView()
 		if common.State == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
 		}
-		view, ok := inspect.BuildGossipPeerDebugView(common, gossipPeersOptions(d.currentGossipConfig(), d.peerObservabilitySnapshots(), d.now()), request.Zone)
+		view, ok := inspect.BuildGossipPeerDebugView(common, gossipPeersOptions(d.gossipDriver.GossipConfig(), d.peerObservabilitySnapshots(), d.now()), request.Zone)
 		if !ok {
 			writeControlResponse(conn, controlError(fmt.Errorf("%w: %s", zone.ErrZoneNotFound, request.Zone)))
 			return
 		}
 		writeCanonicalView(conn, view)
 	case "zone_debug":
-		common := d.StateStore.common.ReadView()
+		common := d.State.Common.ReadView()
 		if common.State == nil || common.State.Network == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
@@ -802,7 +814,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		writeCanonicalView(conn, inspection)
 	case "verify_chain":
-		view := d.StateStore.common.ReadView()
+		view := d.State.Common.ReadView()
 		if view.State == nil || view.State.Network == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
@@ -832,8 +844,8 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		writeControlResponse(conn, controlResponse{OK: true, Message: "endpoint ACL removed"})
 	case "endpoint_acl_list":
-		runtime := d.StateStore.readLinuxState()
-		acls := make([]endpointACL, 0, len(runtime.EndpointACLs))
+		runtime := d.State.ReadLinux()
+		acls := make([]photonstate.EndpointACL, 0, len(runtime.EndpointACLs))
 		for _, acl := range runtime.EndpointACLs {
 			acl.Selectors = append([]string(nil), acl.Selectors...)
 			acls = append(acls, acl)
@@ -998,7 +1010,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		if d.App != nil && d.App.Config != nil {
 			routingInstances = append([]RoutingInstance(nil), d.App.Config.Routing.Instances...)
 		}
-		view := d.StateStore.common.ReadView()
+		view := d.State.Common.ReadView()
 		var birdInstances map[string]*bird.InstanceObservation
 		if routingObserved := d.linuxObservation.routingSnapshot(); routingObserved != nil {
 			birdInstances = routingObserved.Instances
@@ -1016,7 +1028,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		routesDump.BIRD = d.birdRoutesForControl(ctx, routesDump, routingInstances, birdInstances)
 		writeCanonicalView(conn, *routesDump)
 	case "admission_status":
-		view := d.StateStore.common.ReadView()
+		view := d.State.Common.ReadView()
 		if view.State == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
@@ -1038,7 +1050,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		instances = filterFirewallDebugInstances(instances, request.NetNS, request.Host)
 		writeCanonicalView(conn, buildFirewallDebugView(appCfg, instances, fwSnapshot))
 	case "links_view":
-		health := d.healthStatusResponse()
+		health := d.healthSamples()
 		links, reconcile := d.linuxObservation.ipsecSnapshot()
 		var birdInstances map[string]*bird.InstanceObservation
 		if routingObserved := d.linuxObservation.routingSnapshot(); routingObserved != nil {
@@ -1055,7 +1067,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		writeCanonicalView(conn, view)
 	case "peer_lifecycle_view":
-		common := d.StateStore.common.ReadView()
+		common := d.State.Common.ReadView()
 		if common.State == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
@@ -1067,7 +1079,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 	case "revocation_view":
 		observedLinks, _ := d.linuxObservation.ipsecSnapshot()
 		linkStates := observedLinks
-		view := d.StateStore.common.ReadView()
+		view := d.State.Common.ReadView()
 		if view.State == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
@@ -1076,13 +1088,13 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		if request.Zone != "" {
 			impacts = []inspect.RevocationImpact{ComputeRevocationImpact(view.State.Network, linkStates, view.Gossip, zone.ZonePath(request.Zone), d.now())}
 		} else {
-			impacts = AllRevocationImpact(view.State.Network, linkStates, view.Gossip, d.currentGossipConfig(), d.now())
+			impacts = AllRevocationImpact(view.State.Network, linkStates, view.Gossip, d.App.Config, d.now())
 		}
 		writeCanonicalView(conn, impacts)
 	case "health_status":
-		common := d.StateStore.common.ReadView()
+		common := d.State.Common.ReadView()
 		links, reconcile := d.linuxObservation.ipsecSnapshot()
-		writeCanonicalView(conn, healthViewFromOwners(common, links, reconcile, d.healthStatusResponse()))
+		writeCanonicalView(conn, healthViewFromOwners(common, links, reconcile, d.healthSamples()))
 	default:
 		writeControlResponse(conn, controlError(fmt.Errorf("unknown control method: %s", request.Method)))
 	}
@@ -1290,14 +1302,13 @@ func (d *Daemon) handleReloadConfigEvent() error {
 	if d.ControlSocketPath != "" && socketPath != d.ControlSocketPath {
 		return fmt.Errorf("reload would change control socket path from %s to %s; restart daemon to switch control socket", d.ControlSocketPath, socketPath)
 	}
-	common := d.StateStore.common.ReadView()
+	common := d.State.Common.ReadView()
 	if common.State == nil {
 		return errors.New("daemon state is not initialized")
 	}
 	if err := validateConfiguredIdentityState(common.State, config); err != nil {
 		return err
 	}
-	syncConfig := gossipStartupConfigFromAppConfig(config, common.State)
 	nextLogger := newAppLogger(config)
 	linuxDriver, err := newConfiguredLinuxDriver(config.IPsec, config.Netns.Names, nextLogger)
 	if err != nil {
@@ -1305,7 +1316,7 @@ func (d *Daemon) handleReloadConfigEvent() error {
 	}
 	d.App.Config = config
 	d.App.StatePath = statePath
-	if err := d.gossipDriver.ReplaceGossipConfig(gossipDriverConfig(syncConfig, config, nextLogger)); err != nil {
+	if err := d.gossipDriver.ReplaceGossipConfig(gossipDriverConfig(config, common.State, nextLogger)); err != nil {
 		_ = linuxDriver.Close()
 		return err
 	}
@@ -1315,7 +1326,7 @@ func (d *Daemon) handleReloadConfigEvent() error {
 	d.Log = nextLogger
 	d.ControlSocketPath = socketPath
 	if d.gossipDriver != nil && d.gossipDriver.Transport() != nil {
-		d.updateDiscoveredPeers()
+		d.refreshGossipDiscovery()
 	}
 	d.notifyStateChanged()
 	d.recoverRoutingOnStart(context.Background())
@@ -1326,7 +1337,7 @@ func (d *Daemon) handleDelegateIssueEvent(request *joinRequest, permissions []zo
 	if err := validateJoinRequest(request); err != nil {
 		return nil, err
 	}
-	view := d.StateStore.common.ReadView()
+	view := d.State.Common.ReadView()
 	parent := request.Zone.Parent()
 	parentState := view.State.Network.Zones[parent]
 	if parentState == nil || parentState.Authority == nil {
@@ -1338,18 +1349,18 @@ func (d *Daemon) handleDelegateIssueEvent(request *joinRequest, permissions []zo
 	}
 	authority := &zone.ZoneAuthority{Zone: request.Zone, Epoch: epoch, Threshold: photoncrypto.SupportedThreshold,
 		Keys: []zone.AuthorizedKey{{Key: append([]byte(nil), request.PublicKey...), Capabilities: delegationCapabilities(permissions)}}}
-	result, err := d.StateStore.common.ApplyLocalIntent(context.Background(), corestate.PutDelegationIntent{
+	result, err := d.State.Common.ApplyLocalIntent(context.Background(), corestate.PutDelegationIntent{
 		Parent: parent, Authority: authority,
 	}, d.now())
 	if err != nil {
 		return nil, err
 	}
-	bundle, err := joinBundleFromNetwork(d.StateStore.common.ReadView().State.Network, request.Zone, d.now())
+	bundle, err := joinBundleFromNetwork(d.State.Common.ReadView().State.Network, request.Zone, d.now())
 	if err != nil {
 		return nil, err
 	}
 	if result.Committed {
-		d.updateDiscoveredPeers()
+		d.refreshGossipDiscovery()
 		d.notifyStateChanged()
 	}
 	return &delegationIssueResult{Zone: request.Zone, Bundle: bundle}, nil
@@ -1359,7 +1370,7 @@ func (d *Daemon) handleDelegateGrantEvent(path zone.ZonePath, permissions []zone
 	if !path.Valid() || len(permissions) == 0 {
 		return nil, errors.New("valid delegated zone and at least one permission are required")
 	}
-	view := d.StateStore.common.ReadView()
+	view := d.State.Common.ReadView()
 	if view.State == nil || view.State.Network == nil || view.State.Network.Zones[path] == nil || view.State.Network.Zones[path].Authority == nil {
 		return nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
 	}
@@ -1372,18 +1383,18 @@ func (d *Daemon) handleDelegateGrantEvent(path zone.ZonePath, permissions []zone
 	} else {
 		intent = corestate.PutDelegationIntent{Parent: path.Parent(), Authority: authority}
 	}
-	result, err := d.StateStore.common.ApplyLocalIntent(context.Background(), intent, d.now())
+	result, err := d.State.Common.ApplyLocalIntent(context.Background(), intent, d.now())
 	if err != nil {
 		return nil, err
 	}
 	if result.Committed {
-		d.updateDiscoveredPeers()
+		d.refreshGossipDiscovery()
 		d.notifyStateChanged()
 	}
 	if path.IsRoot() {
 		return nil, nil
 	}
-	return joinBundleFromNetwork(d.StateStore.common.ReadView().State.Network, path, d.now())
+	return joinBundleFromNetwork(d.State.Common.ReadView().State.Network, path, d.now())
 }
 
 func joinBundleFromNetwork(network *zone.NetworkState, path zone.ZonePath, now time.Time) (*joinBundle, error) {
@@ -1406,20 +1417,20 @@ func joinBundleFromNetwork(network *zone.NetworkState, path zone.ZonePath, now t
 }
 
 func (d *Daemon) handleRecoveryImportZoneEvent(snapshot *corestate.ZoneSnapshot) (*corestate.ApplyResult, int, error) {
-	result, err := d.StateStore.common.ImportRecoverySnapshot(context.Background(), corestate.RecoveryImport{
+	result, err := d.State.Common.ImportRecoverySnapshot(context.Background(), corestate.RecoveryImport{
 		Snapshot: snapshot,
-		Limits:   syncLimits(d.currentGossipConfig()),
+		Limits:   d.gossipDriver.GossipConfig().Limits,
 	}, d.now())
 	if err != nil {
 		return nil, 0, err
 	}
 	if result.Committed {
-		d.updateDiscoveredPeers()
+		d.refreshGossipDiscovery()
 		d.notifyStateChanged()
 	}
 	revocations := 0
 	if result.Apply != nil {
-		if current := d.StateStore.common.ReadView(); current.State != nil && current.State.Network != nil {
+		if current := d.State.Common.ReadView(); current.State != nil && current.State.Network != nil {
 			if zs := current.State.Network.Zones[result.Apply.Zone]; zs != nil {
 				revocations = len(zs.Revocations)
 			}
@@ -1429,14 +1440,14 @@ func (d *Daemon) handleRecoveryImportZoneEvent(snapshot *corestate.ZoneSnapshot)
 }
 
 func (d *Daemon) handleDelegateRevokeEvent(path zone.ZonePath, reason string) error {
-	result, err := d.StateStore.common.ApplyLocalIntent(context.Background(), corestate.RevokeDelegationIntent{
+	result, err := d.State.Common.ApplyLocalIntent(context.Background(), corestate.RevokeDelegationIntent{
 		Parent: path.Parent(), Child: path, Reason: reason,
 	}, d.now())
 	if err != nil {
 		return err
 	}
 	if result.Committed {
-		d.updateDiscoveredPeers()
+		d.refreshGossipDiscovery()
 		d.notifyStateChanged()
 	}
 	return nil
@@ -1447,15 +1458,15 @@ func (d *Daemon) handleDelegateRevokeEvent(path zone.ZonePath, reason string) er
 // executes the deletions, persists, and notifies subsystems so the running node
 // reconciles (e.g. tears down orphaned IPsec for removed link instances).
 func (d *Daemon) handleRecoveryPurgeRevokedEvent(ctx context.Context, target zone.ZonePath, apply bool) (*purgePlan, error) {
-	if d.StateStore == nil {
+	if d.State == nil {
 		return nil, errors.New("daemon service is not initialized")
 	}
 	now := d.now()
-	commonPlan, err := d.StateStore.common.PlanPurgeRevoked(now, target)
+	commonPlan, err := d.State.Common.PlanPurgeRevoked(now, target)
 	if err != nil {
 		return nil, err
 	}
-	common := d.StateStore.common.ReadView()
+	common := d.State.Common.ReadView()
 	if common.State == nil {
 		return nil, errors.New("daemon state is not loaded")
 	}
@@ -1467,7 +1478,7 @@ func (d *Daemon) handleRecoveryPurgeRevokedEvent(ctx context.Context, target zon
 	if err := d.cleanupPurgePlanIPsecLinks(ctx, links, reconcile, plan); err != nil {
 		return nil, err
 	}
-	result, err := d.StateStore.common.PurgeRevoked(ctx, now, target)
+	result, err := d.State.Common.PurgeRevoked(ctx, now, target)
 	if err != nil {
 		return nil, err
 	}
@@ -1475,7 +1486,7 @@ func (d *Daemon) handleRecoveryPurgeRevokedEvent(ctx context.Context, target zon
 		d.gossipDriver.Observability.Delete(peerID)
 	}
 	if d.gossipDriver != nil && d.gossipDriver.Transport() != nil {
-		d.updateDiscoveredPeers()
+		d.refreshGossipDiscovery()
 	}
 	if result.Committed || len(plan.LinkInstances) > 0 {
 		d.notifyStateChanged()
@@ -1483,7 +1494,7 @@ func (d *Daemon) handleRecoveryPurgeRevokedEvent(ctx context.Context, target zon
 	return plan, nil
 }
 
-func (d *Daemon) cleanupPurgePlanIPsecLinks(ctx context.Context, links map[string]linkInstanceState, reconcile *ipsecObservationSummary, plan *purgePlan) error {
+func (d *Daemon) cleanupPurgePlanIPsecLinks(ctx context.Context, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, plan *purgePlan) error {
 	if plan == nil || len(plan.LinkInstances) == 0 {
 		return nil
 	}
@@ -1502,7 +1513,7 @@ func (d *Daemon) cleanupPurgePlanIPsecLinks(ctx context.Context, links map[strin
 }
 
 func (d *Daemon) handleJoinAcceptEvent(bundle *joinBundle, key *privateKeyFile) (*joinAcceptResult, error) {
-	if d == nil || d.App == nil || d.StateStore == nil {
+	if d == nil || d.App == nil || d.State == nil {
 		return nil, errors.New("daemon service is not initialized")
 	}
 	if bundle == nil || bundle.Version != 1 || bundle.Network == nil {
@@ -1510,7 +1521,7 @@ func (d *Daemon) handleJoinAcceptEvent(bundle *joinBundle, key *privateKeyFile) 
 	}
 	if key == nil {
 		var err error
-		key, err = joinAcceptKeyFromIdentity(d.StateStore.common.ReadView().State, bundle.Zone)
+		key, err = joinAcceptKeyFromIdentity(d.State.Common.ReadView().State, bundle.Zone)
 		if err != nil {
 			return nil, err
 		}
@@ -1518,7 +1529,7 @@ func (d *Daemon) handleJoinAcceptEvent(bundle *joinBundle, key *privateKeyFile) 
 	if err := validatePrivateKeyFile(key); err != nil {
 		return nil, err
 	}
-	commit, err := d.StateStore.common.InstallIdentity(context.Background(), corestate.IdentityInstall{
+	commit, err := d.State.Common.InstallIdentity(context.Background(), corestate.IdentityInstall{
 		ManagedZone: bundle.Zone, Network: bundle.Network,
 		TrustedRootPublicKey: bundle.RootPublicKey, IdentityPrivateKey: key.PrivateKey,
 	}, d.now())
@@ -1526,7 +1537,7 @@ func (d *Daemon) handleJoinAcceptEvent(bundle *joinBundle, key *privateKeyFile) 
 		return nil, err
 	}
 	if commit.Committed && d.gossipDriver != nil && d.gossipDriver.Transport() != nil {
-		d.updateDiscoveredPeers()
+		d.refreshGossipDiscovery()
 	}
 	if commit.Committed {
 		d.notifyStateChanged()
@@ -1545,12 +1556,12 @@ func (d *Daemon) handleEndpointTimerEvent() (bool, error) {
 }
 
 func (d *Daemon) prepareStartupState() (bool, error) {
-	commit, authority, err := d.StateStore.common.RefreshManagedAuthority(context.Background(), d.now())
+	commit, authority, err := d.State.Common.RefreshManagedAuthority(context.Background(), d.now())
 	if err != nil {
 		return false, err
 	}
 	if authority.Adopted || authority.Refreshed {
-		view := d.StateStore.common.ReadView()
+		view := d.State.Common.ReadView()
 		if view.State != nil {
 			d.logInfo("authority", "managed_zone_refreshed", map[string]any{"zone": view.State.ManagedZone})
 		}
@@ -1560,11 +1571,11 @@ func (d *Daemon) prepareStartupState() (bool, error) {
 }
 
 func (d *Daemon) publishLocalProtocols() (bool, error) {
-	if d == nil || d.StateStore == nil {
+	if d == nil || d.State == nil {
 		return false, errors.New("daemon service is not initialized")
 	}
-	common := d.StateStore.common.ReadView()
-	runtime := d.StateStore.readLinuxState()
+	common := d.State.Common.ReadView()
+	runtime := d.State.ReadLinux()
 	if common.State == nil || common.State.Network == nil || runtime == nil {
 		return false, errors.New("daemon state network is nil")
 	}
@@ -1582,9 +1593,6 @@ func (d *Daemon) publishLocalProtocols() (bool, error) {
 		return false, fmt.Errorf("plan IPsec records: %w", err)
 	}
 	intents = append(intents, ipsecPlan.Intents...)
-	if ipsecPlan.TransportKey != nil {
-		runtime.IPsecTransportKey = photonstate.CloneIPsecTransportKeyState(ipsecPlan.TransportKey)
-	}
 	routingIntent, err := d.routingNetnsProtocolIntent(common.State)
 	if err != nil {
 		return false, fmt.Errorf("plan routing record: %w", err)
@@ -1592,14 +1600,14 @@ func (d *Daemon) publishLocalProtocols() (bool, error) {
 	if routingIntent != nil {
 		intents = append(intents, *routingIntent)
 	}
-	result, err := d.StateStore.publishLocalProtocols(context.Background(), revision, intents, runtime, d.now())
+	result, err := d.commitLocalProtocols(context.Background(), revision, intents, ipsecPlan.TransportKey, d.now())
 	if err != nil {
 		return false, err
 	}
-	changed := result.RuntimeCommitted || result.Common.Committed
+	changed := result.LinuxStateCommitted || result.Common.Committed
 	if changed {
 		if d.gossipDriver != nil && d.gossipDriver.Transport() != nil {
-			d.updateDiscoveredPeers()
+			d.refreshGossipDiscovery()
 		}
 		d.notifyStateChanged()
 	}
@@ -1613,7 +1621,7 @@ func (d *Daemon) handleRecordPutEvent(event *daemonRecordPut) (uint64, error) {
 	if err := validateGenericRecordPut(event.Key, event.Type); err != nil {
 		return 0, err
 	}
-	if d.StateStore == nil {
+	if d.State == nil {
 		return 0, errors.New("daemon service is not initialized")
 	}
 	result, err := d.handleCommonRecordMutationEvent(corestate.PutRecordIntent{
@@ -1623,15 +1631,15 @@ func (d *Daemon) handleRecordPutEvent(event *daemonRecordPut) (uint64, error) {
 }
 
 func (d *Daemon) handleCommonRecordMutationEvent(intent corestate.LocalIntent, dryRun bool) (*recordMutationResult, error) {
-	if d == nil || d.StateStore == nil {
+	if d == nil || d.State == nil {
 		return nil, errors.New("daemon service is not initialized")
 	}
 	var result corestate.LocalIntentResult
 	var err error
 	if dryRun {
-		result, err = d.StateStore.common.PreviewLocalIntent(intent, d.now())
+		result, err = d.State.Common.PreviewLocalIntent(intent, d.now())
 	} else {
-		result, err = d.StateStore.common.ApplyLocalIntent(context.Background(), intent, d.now())
+		result, err = d.State.Common.ApplyLocalIntent(context.Background(), intent, d.now())
 	}
 	if err != nil {
 		return nil, err
@@ -1642,7 +1650,7 @@ func (d *Daemon) handleCommonRecordMutationEvent(intent corestate.LocalIntent, d
 	}
 	if result.Committed {
 		if d.gossipDriver != nil && d.gossipDriver.Transport() != nil {
-			d.updateDiscoveredPeers()
+			d.refreshGossipDiscovery()
 		}
 		d.notifyStateChanged()
 	}
@@ -1657,8 +1665,8 @@ func recordMutationVersion(result *recordMutationResult) uint64 {
 }
 
 func (d *Daemon) handleIPsecPortRotateEvent() (*manualPortRotateResult, error) {
-	common := d.StateStore.common.ReadView()
-	runtime := d.StateStore.readLinuxState()
+	common := d.State.Common.ReadView()
+	runtime := d.State.ReadLinux()
 	if common.State == nil || runtime == nil {
 		return nil, errors.New("daemon state is not initialized")
 	}
@@ -1671,13 +1679,13 @@ func (d *Daemon) handleIPsecPortRotateEvent() (*manualPortRotateResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	committed, err := d.StateStore.publishLocalProtocols(context.Background(), revision, []corestate.LocalIntent{
+	committed, err := d.commitLocalProtocols(context.Background(), revision, []corestate.LocalIntent{
 		corestate.PutProtocolRecordIntent{Kind: corestate.ProtocolRecordIPsec, Zone: common.State.ManagedZone, Key: ipsec.RecordKeyPorts, Type: ipsec.RecordTypePorts, Value: value},
-	}, runtime, d.now())
+	}, nil, d.now())
 	if err != nil {
 		return nil, err
 	}
-	if committed.RuntimeCommitted || committed.Common.Committed {
+	if committed.LinuxStateCommitted || committed.Common.Committed {
 		d.notifyStateChanged()
 	}
 	return result, nil
@@ -1738,14 +1746,14 @@ func (d *Daemon) noteReconcileFlush(layer string) {
 // observed paths, backoff or object-pull candidates. The entry itself is
 // retained with a "revoked" failure for diagnostics until explicit purge.
 func (d *Daemon) flushRevocationCleanup() {
-	if d == nil || d.StateStore == nil {
+	if d == nil || d.State == nil {
 		return
 	}
 	// This function is called after every sync-state update. Most calls have no
 	// revocations, so check the immutable committed state first and avoid the
 	// copy-on-write transaction (which deep-copies the whole state through JSON).
 	now := d.now()
-	view := d.StateStore.common.ReadView()
+	view := d.State.Common.ReadView()
 	if view.State == nil {
 		return
 	}
@@ -1773,7 +1781,7 @@ func (d *Daemon) flushRevocationCleanup() {
 	}
 	d.noteReconcileFlush("revocation_cleanup")
 	if len(patches) > 0 {
-		if _, err := d.StateStore.common.UpdatePeerCheckpoints(context.Background(), patches); err != nil {
+		if _, err := d.State.Common.UpdatePeerCheckpoints(context.Background(), patches); err != nil {
 			d.logWarn("sync", "revocation_cleanup_commit_failed", map[string]any{"error": err})
 			return
 		}
@@ -2021,11 +2029,11 @@ func daemonRun(ctx context.Context, interval time.Duration) error {
 	if err != nil {
 		return err
 	}
-	service, boltStore, err := openDaemon(rt, interval)
+	service, err := openDaemon(rt, interval)
 	if err != nil {
 		return err
 	}
-	defer boltStore.Close()
+	defer service.Close()
 	return service.Run(ctx)
 }
 

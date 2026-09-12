@@ -8,7 +8,7 @@ import (
 	"github.com/HiggsNet/photon/internal/inspect"
 )
 
-func WriteHealth(w io.Writer, view inspect.HealthDebugView, sortBy string, verbose bool) error {
+func WriteHealth(w io.Writer, view inspect.HealthView, sortBy string, verbose bool) error {
 	view = inspect.BuildHealthView(view, sortBy)
 	if w == nil {
 		return nil
@@ -21,26 +21,26 @@ func WriteHealth(w io.Writer, view inspect.HealthDebugView, sortBy string, verbo
 	}
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	out := newLineWriter(table)
-	liveByProbe := make(map[string]inspect.HealthLiveView, len(view.Live))
-	for _, live := range view.Live {
-		key := firstNonEmpty(live.ProbeID, live.InstanceID)
-		liveByProbe[key] = live
+	samplesByProbe := make(map[string]inspect.HealthSample, len(view.Samples))
+	for _, sample := range view.Samples {
+		key := firstNonEmpty(sample.ProbeID, sample.InstanceID)
+		samplesByProbe[key] = sample
 	}
 	out.Linef("Link health (%d links):", len(targets))
 	if !verbose {
 		rows := [][]string{{"PEER", "ROLE", "FAMILY", "HEALTH", "LOSS", "RTT", "JITTER", "CUTOVER"}}
 		for _, t := range targets {
 			probeID := firstNonEmpty(t.ProbeID, t.InstanceID)
-			live, hasLive := liveByProbe[probeID]
+			sample, hasSample := samplesByProbe[probeID]
 			rows = append(rows, []string{
 				dash(t.PeerZone),
 				firstNonEmpty(t.ProbeRole, "active"),
 				dash(t.UnderlayFamily),
-				healthLiveState(live, hasLive),
-				healthLoss(live, hasLive),
-				healthPrimaryRTT(live, hasLive),
-				healthMillis(live.JitterMs, hasLive),
-				healthCutover(live, hasLive, t.Staged || t.ProbeRole == "staged"),
+				healthSampleState(sample, hasSample),
+				healthLoss(sample, hasSample),
+				healthPrimaryRTT(sample, hasSample),
+				healthMillis(sample.JitterMs, hasSample),
+				healthCutover(sample, hasSample, t.Staged || t.ProbeRole == "staged"),
 			})
 		}
 		writeAlignedRows(out, rows, 0)
@@ -52,7 +52,7 @@ func WriteHealth(w io.Writer, view inspect.HealthDebugView, sortBy string, verbo
 	rows := [][]string{{"LINK", "PROBE ID", "PEER", "OVERLAY", "ROLE", "FAMILY", "INTERFACE", "LOCAL->PEER", "LINK STATE", "HEALTH", "PROBE", "PACKETS", "LOSS", "RTT (LAST/EWMA/P50/P95/P99)", "JITTER", "FAILS", "CUTOVER", "ERROR"}}
 	for _, t := range targets {
 		probeID := firstNonEmpty(t.ProbeID, t.InstanceID)
-		live, hasLive := liveByProbe[probeID]
+		sample, hasSample := samplesByProbe[probeID]
 		rows = append(rows, []string{
 			t.InstanceID,
 			probeID,
@@ -63,15 +63,15 @@ func WriteHealth(w io.Writer, view inspect.HealthDebugView, sortBy string, verbo
 			dash(t.InterfaceName),
 			formatHealthTunnel(t.LocalTunnelAddr, t.PeerTunnelAddr),
 			dash(t.State),
-			healthLiveState(live, hasLive),
-			dash(live.ProbeType),
-			healthPackets(live, hasLive),
-			healthLoss(live, hasLive),
-			healthRTT(live, hasLive),
-			healthMillis(live.JitterMs, hasLive),
-			healthFailures(live, hasLive),
-			healthCutover(live, hasLive, t.Staged || t.ProbeRole == "staged"),
-			escapeTableCell(dash(live.LastError)),
+			healthSampleState(sample, hasSample),
+			dash(sample.ProbeType),
+			healthPackets(sample, hasSample),
+			healthLoss(sample, hasSample),
+			healthRTT(sample, hasSample),
+			healthMillis(sample.JitterMs, hasSample),
+			healthFailures(sample, hasSample),
+			healthCutover(sample, hasSample, t.Staged || t.ProbeRole == "staged"),
+			escapeTableCell(dash(sample.LastError)),
 		})
 	}
 	writeAlignedRows(out, rows, 2)
@@ -81,12 +81,6 @@ func WriteHealth(w io.Writer, view inspect.HealthDebugView, sortBy string, verbo
 	return table.Flush()
 }
 
-// WriteHealthDebug preserves the detailed diagnostic rendering for callers
-// that explicitly request the legacy debug view.
-func WriteHealthDebug(w io.Writer, view inspect.HealthDebugView) error {
-	return WriteHealth(w, view, inspect.HealthSortPeer, true)
-}
-
 func formatHealthTunnel(local, peer string) string {
 	if local == "" && peer == "" {
 		return "-"
@@ -94,43 +88,43 @@ func formatHealthTunnel(local, peer string) string {
 	return dash(local) + "->" + dash(peer)
 }
 
-func healthLiveState(live inspect.HealthLiveView, ok bool) string {
+func healthSampleState(sample inspect.HealthSample, ok bool) string {
 	if !ok {
 		return "-"
 	}
-	return dash(live.State)
+	return dash(sample.State)
 }
 
-func healthPackets(live inspect.HealthLiveView, ok bool) string {
-	if !ok || live.Sent == 0 {
+func healthPackets(sample inspect.HealthSample, ok bool) string {
+	if !ok || sample.Sent == 0 {
 		return "-"
 	}
-	return fmt.Sprintf("%d/%d/%d", live.Sent, live.Received, live.Lost)
+	return fmt.Sprintf("%d/%d/%d", sample.Sent, sample.Received, sample.Lost)
 }
 
-func healthLoss(live inspect.HealthLiveView, ok bool) string {
-	if !ok || live.Sent == 0 {
+func healthLoss(sample inspect.HealthSample, ok bool) string {
+	if !ok || sample.Sent == 0 {
 		return "-"
 	}
-	return fmt.Sprintf("%d%%", live.LossRatio)
+	return fmt.Sprintf("%d%%", sample.LossRatio)
 }
 
-func healthRTT(live inspect.HealthLiveView, ok bool) string {
-	if !ok || (live.LastRTTMs == 0 && live.EWMARTTMs == 0 && live.P95RTTMs == 0) {
+func healthRTT(sample inspect.HealthSample, ok bool) string {
+	if !ok || (sample.LastRTTMs == 0 && sample.EWMARTTMs == 0 && sample.P95RTTMs == 0) {
 		return "-"
 	}
-	return fmt.Sprintf("%d/%d/%d/%d/%dms", live.LastRTTMs, live.EWMARTTMs, live.P50RTTMs, live.P95RTTMs, live.P99RTTMs)
+	return fmt.Sprintf("%d/%d/%d/%d/%dms", sample.LastRTTMs, sample.EWMARTTMs, sample.P50RTTMs, sample.P95RTTMs, sample.P99RTTMs)
 }
 
-func healthPrimaryRTT(live inspect.HealthLiveView, ok bool) string {
+func healthPrimaryRTT(sample inspect.HealthSample, ok bool) string {
 	if !ok {
 		return "-"
 	}
-	if live.EWMARTTMs > 0 {
-		return fmt.Sprintf("%dms", live.EWMARTTMs)
+	if sample.EWMARTTMs > 0 {
+		return fmt.Sprintf("%dms", sample.EWMARTTMs)
 	}
-	if live.LastRTTMs > 0 {
-		return fmt.Sprintf("%dms", live.LastRTTMs)
+	if sample.LastRTTMs > 0 {
+		return fmt.Sprintf("%dms", sample.LastRTTMs)
 	}
 	return "-"
 }
@@ -142,18 +136,18 @@ func healthMillis(value int64, ok bool) string {
 	return fmt.Sprintf("%dms", value)
 }
 
-func healthFailures(live inspect.HealthLiveView, ok bool) string {
+func healthFailures(sample inspect.HealthSample, ok bool) string {
 	if !ok {
 		return "-"
 	}
-	return fmt.Sprintf("%d", live.ConsecutiveFail)
+	return fmt.Sprintf("%d", sample.ConsecutiveFail)
 }
 
-func healthCutover(live inspect.HealthLiveView, ok, staged bool) string {
+func healthCutover(sample inspect.HealthSample, ok, staged bool) string {
 	if !ok {
 		return "-"
 	}
-	if live.CutoverBlocking {
+	if sample.CutoverBlocking {
 		return "blocked"
 	}
 	if staged {

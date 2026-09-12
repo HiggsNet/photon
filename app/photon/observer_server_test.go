@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	"net"
 	"net/http"
 	"testing"
@@ -32,7 +33,7 @@ func TestObserverStartObserverServerEnabledServesHTTP(t *testing.T) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	_ = ln.Close()
 	d := &Daemon{
-		StateStore: newTestDaemonStateStore(&corestate.VerifiedState{}, &corestate.GossipCheckpoint{}, &linuxRuntimeState{}),
+		State: newState(nil, corestate.NewStoreWithCheckpoint(&corestate.VerifiedState{}, &corestate.GossipCheckpoint{}, nil), &photonlinux.LinuxState{}),
 		App: &AppContext{Config: &appConfig{PeerID: "test-node", ListenAddr: "127.0.0.1:33434", Observer: observerConfig{
 			Enabled:  true,
 			BindAddr: "127.0.0.1",

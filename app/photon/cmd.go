@@ -293,7 +293,7 @@ func cmdRoot() *cli.Command {
 					if cmd.Args().Len() != 0 {
 						return cli.Exit("usage: photon gossip root init", 1)
 					}
-					return initRootState()
+					return runRootInit()
 				},
 			},
 			{
@@ -843,43 +843,6 @@ func cmdSync() *cli.Command {
 						return cli.Exit("usage: photon advanced sync once <peer-id>", 1)
 					}
 					return syncOnce(cmd.Args().First())
-				},
-			},
-		},
-	}
-}
-
-func cmdDB() *cli.Command {
-	return &cli.Command{
-		Name:  "db",
-		Usage: "Low-level database inspection commands",
-		Commands: []*cli.Command{
-			{
-				Name:      "dump",
-				Usage:     "Dump all database buckets and keys",
-				UsageText: "photon debug db dump [zone]",
-				Description: "Print every bucket and key in the state database.\n" +
-					"If a zone is provided, only that zone bucket is shown (plus meta).",
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					if cmd.Args().Len() > 1 {
-						return cli.Exit("usage: photon debug db dump [zone]", 1)
-					}
-					filter := ""
-					if cmd.Args().Len() > 0 {
-						filter = cmd.Args().First()
-					}
-					return dbDump(filter)
-				},
-			},
-			{
-				Name:        "stats",
-				Usage:       "Show database bucket statistics",
-				Description: "Print the number of keys and total size per bucket.",
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					if cmd.Args().Len() != 0 {
-						return cli.Exit("usage: photon debug db stats", 1)
-					}
-					return dbStats()
 				},
 			},
 		},

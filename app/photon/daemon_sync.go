@@ -41,7 +41,7 @@ func newDaemonObjectPullExecutor(d *Daemon) *corehost.GossipObjectPullExecutor {
 	return corehost.NewGossipObjectPullExecutor(corehost.GossipObjectPullExecutorConfig{
 		Client: photonlinux.GossipObjectPullClient{},
 		Discovery: func() corehost.GossipDiscoveryInput {
-			return d.gossipDriver.GossipDiscoveryInput(d.currentGossipSuppressions())
+			return d.gossipDriver.GossipDiscoveryInput(d.gossipSuppressions())
 		},
 		Now: d.now,
 	})
@@ -80,7 +80,8 @@ func (d *Daemon) EnableEventLoopSync(clock corehost.Clock) {
 		}
 	}
 	if d.gossipDriver == nil {
-		d.gossipDriver = corehost.NewGossipDriver(clock, corehost.DefaultEventBuffer, d.StateStore.common, gossipDriverConfig(d.currentGossipConfig(), d.App.Config, d.Log))
+		view := d.State.Common.ReadView()
+		d.gossipDriver = corehost.NewGossipDriver(clock, corehost.DefaultEventBuffer, d.State.Common, gossipDriverConfig(d.App.Config, view.State, d.Log))
 		return
 	}
 	d.gossipDriver.ResetScheduler(clock)
@@ -91,7 +92,7 @@ func (d *Daemon) handleSyncTimerEvent(ctx context.Context, force bool) error {
 		return nil
 	}
 	now := d.now()
-	input := d.gossipDriver.GossipDiscoveryInput(d.currentGossipSuppressions())
+	input := d.gossipDriver.GossipDiscoveryInput(d.gossipSuppressions())
 	peers := corehost.GossipOutboundPeers(input, now)
 	if len(peers) == 0 {
 		return nil
@@ -134,13 +135,13 @@ func (d *Daemon) processPacketEvent(packet *gossip.Packet, ctx context.Context) 
 	if packet == nil || packet.Message == nil {
 		return errors.New("packet event is nil")
 	}
-	_, err := d.gossipDriver.HandleGossipHostEvent(ctx, corehost.GossipPacketReceived{Packet: packet}, d.now(), d.currentGossipSuppressions())
+	_, err := d.gossipDriver.HandleGossipHostEvent(ctx, corehost.GossipPacketReceived{Packet: packet}, d.now(), d.gossipSuppressions())
 	return err
 }
 
 func (d *Daemon) handleSyncEvent(ctx context.Context, event gossip.SyncEvent) bool {
 	eventNow := d.now()
-	hostResult, err := d.gossipDriver.HandleGossipHostEvent(ctx, corehost.GossipEvent{Value: event}, eventNow, d.currentGossipSuppressions())
+	hostResult, err := d.gossipDriver.HandleGossipHostEvent(ctx, corehost.GossipEvent{Value: event}, eventNow, d.gossipSuppressions())
 	if err != nil {
 		return false
 	}
@@ -149,7 +150,7 @@ func (d *Daemon) handleSyncEvent(ctx context.Context, event gossip.SyncEvent) bo
 
 func (d *Daemon) handleGossipDriverEvent(ctx context.Context, hostEvent corehost.Event) (corehost.GossipHostEventResult, error) {
 	now := d.now()
-	result, err := d.gossipDriver.HandleGossipHostEvent(ctx, hostEvent, now, d.currentGossipSuppressions())
+	result, err := d.gossipDriver.HandleGossipHostEvent(ctx, hostEvent, now, d.gossipSuppressions())
 	if result.Session.PeerID != "" && err == nil {
 		d.observeSyncEventResult(result.Session)
 	}
@@ -170,7 +171,7 @@ func (d *Daemon) observeSyncEventResult(result corehost.GossipEventResult) bool 
 		}
 		if result.NetworkChanged {
 			if transport != nil {
-				d.updateDiscoveredPeers()
+				d.refreshGossipDiscovery()
 			}
 			d.notifyStateChanged()
 		}

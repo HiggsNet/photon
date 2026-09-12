@@ -5,14 +5,6 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
-	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
-	"github.com/HiggsNet/photon/pkg/core/gossip"
-	corestate "github.com/HiggsNet/photon/pkg/core/state"
-	"github.com/HiggsNet/photon/pkg/core/zone"
-	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
-	"github.com/HiggsNet/photon/pkg/firewall"
-	"github.com/HiggsNet/photon/pkg/routing/bird"
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"net"
 	"net/netip"
 	"os"
@@ -23,6 +15,17 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	photonstate "github.com/HiggsNet/photon/internal/state"
+
+	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
+	"github.com/HiggsNet/photon/pkg/firewall"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 type birdClient = photonlinux.BirdClient
@@ -45,12 +48,22 @@ func newTestDaemonFromOwners(
 	rt *AppContext,
 	verified *corestate.VerifiedState,
 	checkpoint *corestate.GossipCheckpoint,
-	runtime *linuxRuntimeState,
-	config *gossipStartupConfig,
+	runtime *photonlinux.LinuxState,
+	config *appConfig,
 	interval time.Duration,
 ) *Daemon {
 	if rt != nil && rt.Config == nil {
-		rt.Config = testAppConfigFromGossipStartup(config)
+		rt.Config = config
+		if rt.Config == nil {
+			rt.Config = defaultAppConfig()
+		}
+	} else if rt != nil && config != nil && rt.Config != config {
+		rt.Config.PeerID = config.PeerID
+		rt.Config.ListenAddr = config.ListenAddr
+		rt.Config.Bootstrap = append([]syncConfigPeer(nil), config.Bootstrap...)
+		rt.Config.MaxMessageBytes = config.MaxMessageBytes
+		rt.Config.MaxSyncZones = config.MaxSyncZones
+		rt.Config.MaxSyncRecords = config.MaxSyncRecords
 	}
 	if verified == nil {
 		verified = &corestate.VerifiedState{}
@@ -61,11 +74,7 @@ func newTestDaemonFromOwners(
 		verified = &copyVerified
 	}
 	common := corestate.NewStoreWithCheckpoint(verified, checkpoint, nil)
-	store, err := newDaemonStateStore(common, runtime, nil)
-	if err != nil {
-		panic(err)
-	}
-	service := newDaemonWithStore(rt, store, config, interval)
+	service := newDaemon(rt, newState(nil, common, runtime), interval)
 	peerIDs := []string{"peer-a", "root-admin", "bootstrap.catofes."}
 	if verified.Network != nil {
 		for path := range verified.Network.Zones {
@@ -101,20 +110,6 @@ func newTestDaemonFromOwners(
 	dryRun := &ipsec.DryRunDriver{}
 	installTestIPsecDrivers(service, dryRun, dryRun)
 	return service
-}
-
-func testAppConfigFromGossipStartup(source *gossipStartupConfig) *appConfig {
-	target := defaultAppConfig()
-	if source == nil {
-		return target
-	}
-	target.PeerID = source.PeerID
-	target.ListenAddr = source.ListenAddr
-	target.Bootstrap = append([]syncConfigPeer(nil), source.Bootstrap...)
-	target.MaxMessageBytes = source.MaxMessageBytes
-	target.MaxSyncZones = source.MaxSyncZones
-	target.MaxSyncRecords = source.MaxSyncRecords
-	return target
 }
 
 func installTestIPsecDrivers(service *Daemon, ipsecDriver ipsec.IPsecDriver, xfrmDriver ipsec.XFRMDriver) {
@@ -170,26 +165,14 @@ func newTestLinuxDriverWithOptions(options photonlinux.LinuxDriverOptions) *phot
 	return driver
 }
 
-func newTestDaemonStateStore(verified *corestate.VerifiedState, checkpoint *corestate.GossipCheckpoint, runtime *linuxRuntimeState) *DaemonStateStore {
-	if verified == nil {
-		verified = &corestate.VerifiedState{}
-	}
-	common := corestate.NewStoreWithCheckpoint(verified, checkpoint, nil)
-	store, err := newDaemonStateStore(common, runtime, nil)
-	if err != nil {
-		panic(err)
-	}
-	return store
-}
-
-func setTestIPsecObservation(d *Daemon, links map[string]linkInstanceState, reconcile *ipsecObservationSummary) {
+func setTestIPsecObservation(d *Daemon, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary) {
 	if d == nil {
 		return
 	}
 	d.linuxObservation.replaceIPsec(links, reconcile)
 }
 
-func readTestIPsecObservation(d *Daemon) (map[string]linkInstanceState, *ipsecObservationSummary) {
+func readTestIPsecObservation(d *Daemon) (map[string]ipsec.LinkInstance, *ipsecObservationSummary) {
 	if d == nil {
 		return nil, nil
 	}
@@ -227,16 +210,8 @@ func authorityHasPrivateKey(authority *zone.ZoneAuthority, priv ed25519.PrivateK
 	return authorityHasKey(authority, priv.Public().(ed25519.PublicKey))
 }
 
-func updateTestRuntime(store *DaemonStateStore, fn func(*linuxRuntimeState)) (uint64, bool, error) {
-	if store == nil {
-		return 0, false, fmt.Errorf("store is nil")
-	}
-	revision := uint64(store.common.VerifiedRevision())
-	return store.commitRuntimeIfRevision(revision, fn)
-}
-
-func advanceTestVerifiedRevision(store *DaemonStateStore, now time.Time) (uint64, error) {
-	view := store.common.ReadView()
+func advanceTestVerifiedRevision(store *corestate.Store, now time.Time) (uint64, error) {
+	view := store.ReadView()
 	if view.State == nil {
 		return 0, fmt.Errorf("state is nil")
 	}
@@ -247,7 +222,7 @@ func advanceTestVerifiedRevision(store *DaemonStateStore, now time.Time) (uint64
 			break
 		}
 	}
-	result, err := store.common.ApplyLocalIntent(context.Background(), corestate.PutRecordIntent{
+	result, err := store.ApplyLocalIntent(context.Background(), corestate.PutRecordIntent{
 		Zone: path, Key: fmt.Sprintf("tests/revision/%d", now.UnixNano()), Type: "application/vnd.photon.test-revision.v1", Value: []byte("1"),
 	}, now)
 	return uint64(result.Changes.VerifiedRevision), err
@@ -480,7 +455,7 @@ func observedSAForSpec(spec ipsec.TransportLinkSpec, localEndpoint, remoteEndpoi
 	}
 }
 
-func buildTestABVerifiedStates(t *testing.T) (*corestate.VerifiedState, *gossipStartupConfig, *corestate.VerifiedState, *gossipStartupConfig) {
+func buildTestABVerifiedStates(t *testing.T) (*corestate.VerifiedState, *appConfig, *corestate.VerifiedState, *appConfig) {
 	t.Helper()
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -561,8 +536,10 @@ func buildTestABVerifiedStates(t *testing.T) (*corestate.VerifiedState, *gossipS
 		Network:            buildNetwork("node-b.catofes."),
 		IdentityPrivateKey: nodeBPriv,
 	}
-	configA := &gossipStartupConfig{PeerID: "node-a.catofes.", ListenAddr: "127.0.0.1:0"}
-	configB := &gossipStartupConfig{PeerID: "node-b.catofes.", ListenAddr: "127.0.0.1:0"}
+	configA := defaultAppConfig()
+	configA.PeerID, configA.ListenAddr = "node-a.catofes.", "127.0.0.1:0"
+	configB := defaultAppConfig()
+	configB.PeerID, configB.ListenAddr = "node-b.catofes.", "127.0.0.1:0"
 	return verifiedA, configA, verifiedB, configB
 }
 
@@ -617,7 +594,7 @@ func assertGossipedIPsecRecords(t *testing.T, network *zone.NetworkState, peer z
 	}
 }
 
-func assertSingleLinkUpFromSA(t *testing.T, links map[string]linkInstanceState, reconcile *ipsecObservationSummary, spec ipsec.TransportLinkSpec, sa ipsec.SAState) {
+func assertSingleLinkUpFromSA(t *testing.T, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, spec ipsec.TransportLinkSpec, sa ipsec.SAState) {
 	t.Helper()
 	if reconcile == nil || len(reconcile.Actions) != 1 || reconcile.Actions[0].Action != ipsec.ReconcileActionAdopt {
 		t.Fatalf("reconcile = %+v, want adopt", reconcile)
@@ -631,7 +608,7 @@ func assertSingleLinkUpFromSA(t *testing.T, links map[string]linkInstanceState, 
 	}
 }
 
-func hasDebugSkip(skips []linkSkipState, peer zone.ZonePath, reason string) bool {
+func hasDebugSkip(skips []photonstate.LinkSkipState, peer zone.ZonePath, reason string) bool {
 	for _, skip := range skips {
 		if skip.Peer == peer && skip.Reason == reason {
 			return true
@@ -841,13 +818,13 @@ func daemonTestString(v any) string {
 	}
 }
 
-func daemonTestTransportKey(t *testing.T, now time.Time) (*ipsecTransportKeyState, *ipsec.TransportKeyRecord) {
+func daemonTestTransportKey(t *testing.T, now time.Time) (*photonstate.IPsecTransportKeyState, *ipsec.TransportKeyRecord) {
 	t.Helper()
 	key, record, err := ipsec.GenerateTransportKeyRecord(ipsec.AlgorithmECDSAP256, now, 0)
 	if err != nil {
 		t.Fatalf("GenerateTransportKeyRecord: %v", err)
 	}
-	return &ipsecTransportKeyState{
+	return &photonstate.IPsecTransportKeyState{
 		Kind:        key.Kind,
 		Algorithm:   key.Algorithm,
 		PublicKey:   append([]byte(nil), key.PublicKey...),
@@ -953,7 +930,7 @@ func updateDaemonTestPortRecord(t *testing.T, zs *zone.ZoneState, peer zone.Zone
 	})
 }
 
-func assertDaemonSystemLinkUp(t *testing.T, links map[string]linkInstanceState, reconcile *ipsecObservationSummary, spec ipsec.TransportLinkSpec) {
+func assertDaemonSystemLinkUp(t *testing.T, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, spec ipsec.TransportLinkSpec) {
 	t.Helper()
 	inst := links[ipsec.LinkInstanceID(spec)]
 	if inst.ActualState != ipsec.LinkStateUp {
@@ -984,7 +961,7 @@ func assertDaemonSystemLinkUp(t *testing.T, links map[string]linkInstanceState, 
 	t.Fatalf("actual SAs = %+v, want established SA for %s", reconcile.ActualSAs, spec.TransportID)
 }
 
-func daemonSystemDesiredSpec(t *testing.T, verified *corestate.VerifiedState, key *ipsecTransportKeyState, group ipsec.LinkGroupSpec, now time.Time) ipsec.TransportLinkSpec {
+func daemonSystemDesiredSpec(t *testing.T, verified *corestate.VerifiedState, key *photonstate.IPsecTransportKeyState, group ipsec.LinkGroupSpec, now time.Time) ipsec.TransportLinkSpec {
 	t.Helper()
 	plan, err := ipsec.PlanTransportLinks(context.Background(), verified.Network, verified.ManagedZone, []ipsec.LinkGroupSpec{group}, ipsec.LinkPlannerOptions{Now: now})
 	if err != nil {
@@ -1010,17 +987,17 @@ func freeDaemonTestUDPAddr(t *testing.T) string {
 	return addr
 }
 
-func waitDaemonRunGossipStrongSwanUp(ctx context.Context, t *testing.T, serviceA, serviceB *Daemon, groupA, groupB ipsec.LinkGroupSpec) (corestate.View, map[string]linkInstanceState, *ipsecObservationSummary, corestate.View, map[string]linkInstanceState, *ipsecObservationSummary) {
+func waitDaemonRunGossipStrongSwanUp(ctx context.Context, t *testing.T, serviceA, serviceB *Daemon, groupA, groupB ipsec.LinkGroupSpec) (corestate.View, map[string]ipsec.LinkInstance, *ipsecObservationSummary, corestate.View, map[string]ipsec.LinkInstance, *ipsecObservationSummary) {
 	t.Helper()
 	var commonA, commonB corestate.View
-	var runtimeA, runtimeB *linuxRuntimeState
-	var observationALinks, observationBLinks map[string]linkInstanceState
+	var runtimeA, runtimeB *photonlinux.LinuxState
+	var observationALinks, observationBLinks map[string]ipsec.LinkInstance
 	var observationAReconcile, observationBReconcile *ipsecObservationSummary
 	for {
-		commonA = serviceA.StateStore.common.ReadView()
-		runtimeA = serviceA.StateStore.readLinuxState()
-		commonB = serviceB.StateStore.common.ReadView()
-		runtimeB = serviceB.StateStore.readLinuxState()
+		commonA = serviceA.State.Common.ReadView()
+		runtimeA = serviceA.State.ReadLinux()
+		commonB = serviceB.State.Common.ReadView()
+		runtimeB = serviceB.State.ReadLinux()
 		observationALinks, observationAReconcile = readTestIPsecObservation(serviceA)
 		observationBLinks, observationBReconcile = readTestIPsecObservation(serviceB)
 		if daemonRunGossipStrongSwanReady(commonA.State, runtimeA.IPsecTransportKey, observationALinks, observationAReconcile, groupA) && daemonRunGossipStrongSwanReady(commonB.State, runtimeB.IPsecTransportKey, observationBLinks, observationBReconcile, groupB) {
@@ -1053,7 +1030,7 @@ func newDaemonTestStrongSwanDriver(t *testing.T, viciSocket string, client ipsec
 	}
 }
 
-func daemonRunGossipStrongSwanReady(verified *corestate.VerifiedState, key *ipsecTransportKeyState, links map[string]linkInstanceState, reconcile *ipsecObservationSummary, group ipsec.LinkGroupSpec) bool {
+func daemonRunGossipStrongSwanReady(verified *corestate.VerifiedState, key *photonstate.IPsecTransportKeyState, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, group ipsec.LinkGroupSpec) bool {
 	if verified == nil || reconcile == nil || len(reconcile.ActualSAs) == 0 || len(links) == 0 {
 		return false
 	}

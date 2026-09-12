@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sort"
 
+	photonstate "github.com/HiggsNet/photon/internal/state"
+
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -62,7 +64,7 @@ func projectLegacyCommonState(state *stateFile, trustedRoot ed25519.PublicKey) (
 // projectLegacyGossipCheckpoint is used only by the one-way schema migration.
 // Only restart hints and the most recent typed failure survive. Session state
 // and pure counters are intentionally omitted.
-func projectLegacyGossipCheckpoint(peers map[string]syncPeerState) (*corestate.GossipCheckpoint, legacyGossipCheckpointReport) {
+func projectLegacyGossipCheckpoint(peers map[string]photonstate.PeerRuntimeState) (*corestate.GossipCheckpoint, legacyGossipCheckpointReport) {
 	checkpoint := &corestate.GossipCheckpoint{Peers: make(map[string]corestate.PeerCheckpoint)}
 	var report legacyGossipCheckpointReport
 	peerIDs := make([]string, 0, len(peers))
@@ -116,7 +118,7 @@ func projectLegacyGossipCheckpoint(peers map[string]syncPeerState) (*corestate.G
 	return checkpoint, report
 }
 
-func projectLegacyRejectedObjects(rejected map[string]rejectedDigestState, report legacyGossipCheckpointReport) (map[zone.ZonePath]corestate.RejectedObject, legacyGossipCheckpointReport) {
+func projectLegacyRejectedObjects(rejected map[string]photonstate.PeerRejectedDigest, report legacyGossipCheckpointReport) (map[zone.ZonePath]corestate.RejectedObject, legacyGossipCheckpointReport) {
 	out := make(map[zone.ZonePath]corestate.RejectedObject)
 	keys := make([]string, 0, len(rejected))
 	for key := range rejected {

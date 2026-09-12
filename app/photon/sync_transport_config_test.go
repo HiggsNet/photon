@@ -9,7 +9,8 @@ import (
 )
 
 func TestDaemonGossipTransportConfigUsesInjectedDeps(t *testing.T) {
-	_, _, _, config := buildTestDaemonOwners(t)
+	verified, _, _, appConfig := buildTestDaemonOwners(t)
+	config := gossipDriverConfig(appConfig, verified, nil)
 	knownAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 10001}
 	replay := gossip.NewReplayWindow(time.Minute)
 	quotas := gossip.NewPeerQuotas(gossip.QuotaConfig{ByteRate: 1, ByteBurst: 1, ObjectRate: 1, ObjectBurst: 1})
@@ -45,7 +46,7 @@ func TestDaemonGossipTransportConfigUsesInjectedDeps(t *testing.T) {
 }
 
 func TestDefaultSyncTransportDeps(t *testing.T) {
-	config := &gossipStartupConfig{
+	appConfig := &appConfig{
 		PeerID:          "node-a.catofes.",
 		ListenAddr:      "127.0.0.1:0",
 		MaxMessageBytes: 4096,
@@ -55,6 +56,7 @@ func TestDefaultSyncTransportDeps(t *testing.T) {
 		}},
 	}
 
+	config := gossipDriverConfig(appConfig, nil, nil)
 	deps := defaultSyncTransportDeps(config, nil)
 	if deps.Replay == nil {
 		t.Fatalf("Replay is nil")

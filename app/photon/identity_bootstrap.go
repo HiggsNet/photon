@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,17 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
+
+func equalPublicKey(a, b ed25519.PublicKey) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	var out byte
+	for i := range a {
+		out |= a[i] ^ b[i]
+	}
+	return out == 0
+}
 
 func writeConfiguredPendingBootstrap(path string, config *appConfig) error {
 	if err := validateAutoJoinBootstrapConfig(config); err != nil {
@@ -53,7 +65,7 @@ func writeConfiguredPendingBootstrap(path string, config *appConfig) error {
 		},
 		Gossip: &corestate.GossipCheckpoint{},
 	}
-	if err := initializeLinuxState(store, candidate, 0, &linuxRuntimeState{}); err != nil {
+	if err := initializeStateDB(store, candidate, 0, &photonlinux.LinuxState{}); err != nil {
 		_ = store.Close()
 		return err
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -58,52 +57,10 @@ func recoveryCleanupIPsecDirect(ctx context.Context, rt *AppContext, includeOrph
 	return 0, orphans, err
 }
 
-func (d *Daemon) handleIPsecCleanupEvent(ctx context.Context, includeOrphans bool) (int, int, error) {
-	if d == nil || d.StateStore == nil || d.App == nil {
-		return 0, 0, errors.New("daemon service is not initialized")
-	}
-	common := d.StateStore.common.ReadView()
-	runtime := d.StateStore.readLinuxState()
-	if common.State == nil || runtime == nil {
-		return 0, 0, errors.New("daemon state is not loaded")
-	}
-	links, reconcile := d.linuxObservation.ipsecSnapshot()
-	platformDriver := d.linuxDriver
-	if len(links) > 0 || includeOrphans {
-		if platformDriver == nil {
-			return 0, 0, errors.New("linux driver is not initialized")
-		}
-	}
-
-	cleaned := 0
-	orphans := 0
-	now := d.now()
-	var err error
-	if len(links) > 0 {
-		ids := make([]string, 0, len(links))
-		for id := range links {
-			ids = append(ids, id)
-		}
-		links, cleaned, err = cleanupIPsecLinkInstanceSet(ctx, links, ids, platformDriver)
-		if err != nil {
-			return cleaned, orphans, err
-		}
-	}
-	reconcile = markIPsecCleanupReconcile(reconcile, now)
-	if includeOrphans {
-		orphans, err = platformDriver.CleanupIPsecOrphans(ctx, managedIPsecConnectionNamesFromLinks(links))
-		if err != nil {
-			return cleaned, orphans, err
-		}
-	}
-	if uint64(d.StateStore.common.VerifiedRevision()) != uint64(common.Revision) {
-		return cleaned, orphans, errDaemonStateRevisionStale
-	}
-	d.linuxObservation.replaceIPsec(links, reconcile)
-	d.notifyStateChanged()
-	return cleaned, orphans, nil
-}
-
+// newLinuxDriverForIPsecCleanup assembles a one-shot platform driver for the
+// explicit offline recovery path. Unlike the daemon driver factory, it must
+// connect to StrongSwan even when no link groups are currently configured so
+// that stale Photon-named connections can still be removed.
 func newLinuxDriverForIPsecCleanup(config *appConfig) (*photonlinux.LinuxDriver, error) {
 	if config == nil {
 		return nil, errors.New("config is nil")
@@ -129,38 +86,4 @@ func newLinuxDriverForIPsecCleanup(config *appConfig) (*photonlinux.LinuxDriver,
 	default:
 		return nil, fmt.Errorf("unsupported ipsec driver %q", driver)
 	}
-}
-
-func cleanupIPsecLinkInstanceSet(ctx context.Context, linkInstances map[string]linkInstanceState, ids []string, platformDriver *photonlinux.LinuxDriver) (map[string]linkInstanceState, int, error) {
-	remaining, cleaned, err := platformDriver.CleanupIPsecLinks(ctx, linkInstances, ids)
-	if err != nil {
-		return nil, cleaned, err
-	}
-	return remaining, cleaned, nil
-}
-
-func managedIPsecConnectionNamesFromLinks(links map[string]linkInstanceState) map[string]bool {
-	out := make(map[string]bool)
-	for _, inst := range links {
-		for _, name := range []string{inst.TransportID, inst.IKEName, inst.StagedIKEName} {
-			if name != "" {
-				out[name] = true
-			}
-		}
-	}
-	return out
-}
-
-func markIPsecCleanupReconcile(reconcile *ipsecObservationSummary, now time.Time) *ipsecObservationSummary {
-	if reconcile == nil {
-		reconcile = &ipsecObservationSummary{}
-	}
-	reconcile.LastRunUnix = now.Unix()
-	reconcile.DesiredLinks = 0
-	reconcile.LastError = ""
-	reconcile.Desired = nil
-	reconcile.Actions = nil
-	reconcile.ActualSAs = nil
-	reconcile.Skipped = nil
-	return reconcile
 }

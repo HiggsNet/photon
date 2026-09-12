@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -26,8 +27,8 @@ func TestJoinFlow(t *testing.T) {
 
 	writeConfig(t, adminConfig, filepath.Join(dir, "admin"))
 	t.Setenv("PHOTON_CONFIG", adminConfig)
-	if err := initRootState(); err != nil {
-		t.Fatalf("initRootState(admin): %v", err)
+	if err := runRootInit(); err != nil {
+		t.Fatalf("runRootInit(admin): %v", err)
 	}
 
 	writeConfig(t, catofesConfig, filepath.Join(dir, "catofes"))
@@ -84,7 +85,7 @@ func TestJoinFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot(node-b): %v", err)
 	}
-	nextNetwork, _, err := corestate.ApplySnapshot(siblingBundle.Network, nodeBSnapshot, timeNow(), corestate.DefaultSyncLimits())
+	nextNetwork, _, err := corestate.ApplySnapshot(siblingBundle.Network, nodeBSnapshot, time.Now(), corestate.DefaultSyncLimits())
 	if err != nil {
 		t.Fatalf("ApplySnapshot(node-b into node-a bundle): %v", err)
 	}
@@ -120,8 +121,8 @@ func TestJoinFlowAcceptsBase64PayloadArgs(t *testing.T) {
 
 	writeConfig(t, adminConfig, filepath.Join(dir, "admin"))
 	t.Setenv("PHOTON_CONFIG", adminConfig)
-	if err := initRootState(); err != nil {
-		t.Fatalf("initRootState(admin): %v", err)
+	if err := runRootInit(); err != nil {
+		t.Fatalf("runRootInit(admin): %v", err)
 	}
 
 	writeConfig(t, nodeConfig, filepath.Join(dir, "node-b"))

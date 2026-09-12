@@ -29,7 +29,7 @@ func TestReconcileRoutingFeedsBirdObservationToRotateCutoverGate(t *testing.T) {
 	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
-	observationLinks := map[string]linkInstanceState{
+	observationLinks := map[string]ipsec.LinkInstance{
 		"link-1": {
 			ID:                  "link-1",
 			GroupID:             "main",
@@ -115,7 +115,7 @@ func TestBirdObservationAcceptsUnselectedBabelRouteOnStagedInterface(t *testing.
 }
 
 func TestBirdRotateInterfacePoliciesPromoteStagedAndDrainOld(t *testing.T) {
-	observationLinks := map[string]linkInstanceState{
+	observationLinks := map[string]ipsec.LinkInstance{
 		"link-1": {
 			ID:                    "link-1",
 			GroupID:               "main",

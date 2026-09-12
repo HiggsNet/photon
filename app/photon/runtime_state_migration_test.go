@@ -9,16 +9,18 @@ import (
 	"strings"
 	"testing"
 
+	photonstate "github.com/HiggsNet/photon/internal/state"
+
 	"github.com/HiggsNet/photon/internal/photonlinux"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	bolt "go.etcd.io/bbolt"
 )
 
-func TestLegacyRuntimeStateMigrationIsAtomicAndIdempotent(t *testing.T) {
+func TestLegacyLinuxStateMigrationIsAtomicAndIdempotent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "photon.db")
 	state, trustedRoot := legacyRuntimeMigrationFixture(t)
-	seedLegacyRuntimeState(t, path, state)
+	seedLegacyLinuxState(t, path, state)
 
 	db, err := bolt.Open(path, 0o600, nil)
 	if err != nil {
@@ -29,13 +31,13 @@ func TestLegacyRuntimeStateMigrationIsAtomicAndIdempotent(t *testing.T) {
 	if err := db.Update(func(tx *bolt.Tx) error {
 		var migrated bool
 		var err error
-		report, migrated, err = migrateLegacyRuntimeStateTx(tx, trustedRoot)
+		report, migrated, err = migrateLegacyLinuxStateTx(tx, trustedRoot)
 		if err == nil && !migrated {
 			t.Fatal("legacy state was not migrated")
 		}
 		return err
 	}); err != nil {
-		t.Fatalf("migrateLegacyRuntimeStateTx: %v", err)
+		t.Fatalf("migrateLegacyLinuxStateTx: %v", err)
 	}
 	if report.Gossip.PeersMigrated != 1 {
 		t.Fatalf("migration report = %+v", report)
@@ -52,14 +54,14 @@ func TestLegacyRuntimeStateMigrationIsAtomicAndIdempotent(t *testing.T) {
 		if !reflect.DeepEqual(candidate.Verified.TrustedRootPublicKey, trustedRoot) || candidate.Gossip.Peers["peer.catofes."].BackoffUntilUnix != 20 {
 			t.Fatalf("common state projection = %+v", candidate)
 		}
-		runtime, found, err := photonlinux.LoadRuntimeStateTx(tx)
+		linuxState, found, err := photonlinux.LoadLinuxStateTx(tx)
 		if err != nil {
 			return err
 		}
 		if !found {
-			t.Fatalf("linux runtime state = %+v", runtime)
+			t.Fatalf("LinuxState = %+v", linuxState)
 		}
-		payload, err := json.Marshal(runtime)
+		payload, err := json.Marshal(linuxState)
 		if err != nil {
 			return err
 		}
@@ -82,7 +84,7 @@ func TestLegacyRuntimeStateMigrationIsAtomicAndIdempotent(t *testing.T) {
 	}
 
 	if err := db.Update(func(tx *bolt.Tx) error {
-		_, migrated, err := migrateLegacyRuntimeStateTx(tx, trustedRoot)
+		_, migrated, err := migrateLegacyLinuxStateTx(tx, trustedRoot)
 		if err == nil && migrated {
 			t.Fatal("second migration reported a change")
 		}
@@ -92,10 +94,10 @@ func TestLegacyRuntimeStateMigrationIsAtomicAndIdempotent(t *testing.T) {
 	}
 }
 
-func TestLegacyRuntimeStateMigrationFailureRollsBack(t *testing.T) {
+func TestLegacyLinuxStateMigrationFailureRollsBack(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "photon.db")
 	state, trustedRoot := legacyRuntimeMigrationFixture(t)
-	seedLegacyRuntimeState(t, path, state)
+	seedLegacyLinuxState(t, path, state)
 	db, err := bolt.Open(path, 0o600, nil)
 	if err != nil {
 		t.Fatalf("bolt.Open: %v", err)
@@ -107,7 +109,7 @@ func TestLegacyRuntimeStateMigrationFailureRollsBack(t *testing.T) {
 		t.Fatalf("corrupt legacy fixture: %v", err)
 	}
 	if err := db.Update(func(tx *bolt.Tx) error {
-		_, _, err := migrateLegacyRuntimeStateTx(tx, trustedRoot)
+		_, _, err := migrateLegacyLinuxStateTx(tx, trustedRoot)
 		return err
 	}); err == nil {
 		t.Fatal("malformed legacy metadata unexpectedly migrated")
@@ -117,7 +119,7 @@ func TestLegacyRuntimeStateMigrationFailureRollsBack(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if found || tx.Bucket([]byte(photonlinux.RuntimeStateBucketName)) != nil {
+		if found || tx.Bucket([]byte(photonlinux.LinuxStateBucketName)) != nil {
 			t.Fatal("failed migration retained new buckets")
 		}
 		legacyNetwork, err := zone.LoadNetworkTx(tx)
@@ -133,17 +135,17 @@ func TestLegacyRuntimeStateMigrationFailureRollsBack(t *testing.T) {
 	}
 }
 
-func TestLegacyRuntimeStateMigrationRejectsCoexistingRepresentations(t *testing.T) {
+func TestLegacyLinuxStateMigrationRejectsCoexistingRepresentations(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "photon.db")
 	state, trustedRoot := legacyRuntimeMigrationFixture(t)
-	seedLegacyRuntimeState(t, path, state)
+	seedLegacyLinuxState(t, path, state)
 	db, err := bolt.Open(path, 0o600, nil)
 	if err != nil {
 		t.Fatalf("bolt.Open: %v", err)
 	}
 	defer db.Close()
 	if err := db.Update(func(tx *bolt.Tx) error {
-		_, _, err := migrateLegacyRuntimeStateTx(tx, trustedRoot)
+		_, _, err := migrateLegacyLinuxStateTx(tx, trustedRoot)
 		return err
 	}); err != nil {
 		t.Fatalf("initial migration: %v", err)
@@ -162,7 +164,7 @@ func TestLegacyRuntimeStateMigrationRejectsCoexistingRepresentations(t *testing.
 		t.Fatalf("create conflicting fixture: %v", err)
 	}
 	if err := db.Update(func(tx *bolt.Tx) error {
-		_, _, err := migrateLegacyRuntimeStateTx(tx, trustedRoot)
+		_, _, err := migrateLegacyLinuxStateTx(tx, trustedRoot)
 		return err
 	}); !errors.Is(err, errLegacyStateConflict) {
 		t.Fatalf("coexisting representations error = %v, want errLegacyStateConflict", err)
@@ -184,13 +186,13 @@ func legacyRuntimeMigrationFixture(t *testing.T) (*stateFile, ed25519.PublicKey)
 		IdentityKeyPath: "/etc/photon/identity.key",
 		RootPrivateKey:  rootPrivate,
 		Network:         network,
-		SyncPeers: map[string]syncPeerState{
+		SyncPeers: map[string]photonstate.PeerRuntimeState{
 			"peer.catofes.": {BackoffUntilUnix: 20, LastError: "diagnostic-only"},
 		},
 	}, rootPublic
 }
 
-func seedLegacyRuntimeState(t *testing.T, path string, state *stateFile) {
+func seedLegacyLinuxState(t *testing.T, path string, state *stateFile) {
 	t.Helper()
 	store, err := zone.OpenBoltStore(path, 0o600)
 	if err != nil {

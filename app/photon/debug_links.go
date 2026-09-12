@@ -6,6 +6,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
+	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 )
 
@@ -76,8 +77,8 @@ func debugLinkRoutingState(rt *AppContext, birdInstances map[string]*bird.Instan
 	return
 }
 
-func desiredByInstanceID(items []desiredLinkState) map[string]desiredLinkState {
-	out := map[string]desiredLinkState{}
+func desiredByInstanceID(items []photonstate.DesiredLinkState) map[string]photonstate.DesiredLinkState {
+	out := map[string]photonstate.DesiredLinkState{}
 	for _, item := range items {
 		if item.InstanceID != "" {
 			out[item.InstanceID] = item

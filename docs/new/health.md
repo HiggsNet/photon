@@ -484,8 +484,8 @@ daemon 不在运行或 health 未启用时，仍会显示从本地 state 重建�
 
 ### 9.2 photon debug links 与 control API
 
-- `links_status` control 方法把 `healthStatusResponse()` 并入 link inspection，`photon debug links` 与 `/api/v1/links` 因此带 per-link health summary。
-- `health_status` control 方法返回全量 `healthLinkJSON`（时间字段为毫秒整数，loss 为百分比整数）。
+- `links_view` control 方法把 canonical `inspect.HealthSample` 并入 link inspection，`photon debug links` 与 `/api/v1/links` 因此带 per-link health summary。
+- `health_status` control 方法返回 canonical `inspect.HealthView`，其中 `Targets` 保留应探测目标，`Samples` 保留当前内存观测；时间字段为毫秒整数，loss 为百分比整数。
 
 ### 9.3 Observer
 

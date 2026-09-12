@@ -7,6 +7,7 @@ import (
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func showStatus() error {
@@ -26,7 +27,7 @@ func showStatus() error {
 	return inspecttext.WriteStatus(os.Stdout, statusViewFromOwners(rt, common, nil, nil, nil, nil, false))
 }
 
-func statusViewFromOwners(rt *AppContext, common corestate.View, links map[string]linkInstanceState, reconcile *ipsecObservationSummary, birdInstances map[string]*bird.InstanceObservation, health []healthLinkJSON, daemonOnline bool) inspect.StatusView {
+func statusViewFromOwners(rt *AppContext, common corestate.View, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, birdInstances map[string]*bird.InstanceObservation, health []inspect.HealthSample, daemonOnline bool) inspect.StatusView {
 	if common.State == nil {
 		return inspect.BuildStatus(inspect.StatusInput{DaemonOnline: daemonOnline})
 	}
@@ -61,11 +62,11 @@ func statusViewFromOwners(rt *AppContext, common corestate.View, links map[strin
 // local control transport and Observer HTTP. It combines a common view with
 // current Linux observations and returns a detached canonical inspect DTO.
 func daemonStatusView(d *Daemon) inspect.DaemonStatusView {
-	if d == nil || d.StateStore == nil || d.StateStore.common == nil {
+	if d == nil || d.State == nil {
 		return inspect.DaemonStatusView{DaemonOnline: false}
 	}
-	store := d.StateStore
-	view := store.common.ReadView()
+	store := d.State
+	view := store.Common.ReadView()
 	linkInstances, ipsecReconcile := d.linuxObservation.ipsecSnapshot()
 	routingReconcile := d.linuxObservation.routingSnapshot()
 	desiredLinks := 0
@@ -101,9 +102,11 @@ func daemonStatusView(d *Daemon) inspect.DaemonStatusView {
 	}
 	peerID := ""
 	listenAddr := ""
-	if config := d.currentGossipConfig(); config != nil {
-		peerID = config.PeerID
-		listenAddr = config.ListenAddr
+	if d != nil && d.gossipDriver != nil {
+		peerID = d.gossipDriver.GossipConfig().PeerID
+	}
+	if d != nil && d.App != nil && d.App.Config != nil {
+		listenAddr = d.App.Config.ListenAddr
 	}
 	return inspect.BuildDaemonStatus(inspect.DaemonStatusInput{
 		PeerID:             peerID,

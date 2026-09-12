@@ -72,7 +72,7 @@ func TestPeerLifecycleSuppressionTearsDownAndSuccessfulSyncRestoresLink(t *testi
 	}}
 	rt := &AppContext{Config: config, Clock: func() time.Time { return now }}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
-	if _, err := service.StateStore.common.UpdatePeerCheckpoint(context.Background(), "node-b.catofes.", corestate.PeerCheckpointPatch{
+	if _, err := service.State.Common.UpdatePeerCheckpoint(context.Background(), "node-b.catofes.", corestate.PeerCheckpointPatch{
 		LastSyncUnix: corestate.PatchField[int64]{Set: true, Value: now.Unix()},
 	}); err != nil {
 		t.Fatalf("seed peer checkpoint: %v", err)
@@ -85,7 +85,7 @@ func TestPeerLifecycleSuppressionTearsDownAndSuccessfulSyncRestoresLink(t *testi
 
 	now = now.Add(config.PeerLifecycle.CleanupAfter + time.Second)
 	service.notifyStateChanged()
-	common := service.StateStore.common.ReadView()
+	common := service.State.Common.ReadView()
 	cleanedLinks, cleanedReconcile := readTestIPsecObservation(service)
 	if len(cleanedLinks) != 0 || cleanedReconcile.DesiredLinks != 0 {
 		t.Fatalf("cleaned links = %+v desired=%d", cleanedLinks, cleanedReconcile.DesiredLinks)
@@ -93,7 +93,7 @@ func TestPeerLifecycleSuppressionTearsDownAndSuccessfulSyncRestoresLink(t *testi
 	if _, ok := common.Gossip.Peers["node-b.catofes."]; !ok {
 		t.Fatal("offline checkpoint was removed instead of retained as the suppression source")
 	}
-	if _, err := service.StateStore.common.UpdatePeerCheckpoint(context.Background(), "node-b.catofes.", corestate.PeerCheckpointPatch{
+	if _, err := service.State.Common.UpdatePeerCheckpoint(context.Background(), "node-b.catofes.", corestate.PeerCheckpointPatch{
 		LastSyncUnix: corestate.PatchField[int64]{Set: true, Value: now.Unix()},
 	}); err != nil {
 		t.Fatalf("record successful sync: %v", err)

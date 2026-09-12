@@ -7,19 +7,19 @@ import (
 	"github.com/HiggsNet/photon/internal/inspect"
 )
 
-func TestWriteHealthDebugNoTargets(t *testing.T) {
+func TestWriteHealthNoTargets(t *testing.T) {
 	var buf strings.Builder
-	if err := WriteHealthDebug(&buf, inspect.HealthDebugView{}); err != nil {
-		t.Fatalf("WriteHealthDebug: %v", err)
+	if err := WriteHealth(&buf, inspect.HealthView{}, inspect.HealthSortPeer, true); err != nil {
+		t.Fatalf("WriteHealth: %v", err)
 	}
 	if got := buf.String(); got != "No link instances to probe.\n" {
 		t.Fatalf("output = %q", got)
 	}
 }
 
-func TestWriteHealthDebugSortsTargetsAndShowsLiveState(t *testing.T) {
-	view := inspect.HealthDebugView{
-		Targets: []inspect.HealthProbeTargetView{
+func TestWriteHealthVerboseSortsTargetsAndShowsSampleState(t *testing.T) {
+	view := inspect.HealthView{
+		Targets: []inspect.HealthTarget{
 			{
 				ProbeID:         "link-b#staged",
 				InstanceID:      "link-b",
@@ -43,7 +43,7 @@ func TestWriteHealthDebugSortsTargetsAndShowsLiveState(t *testing.T) {
 				State:           "up",
 			},
 		},
-		Live: []inspect.HealthLiveView{{
+		Samples: []inspect.HealthSample{{
 			ProbeID:         "link-b#staged",
 			InstanceID:      "link-b",
 			ProbeRole:       "staged",
@@ -66,8 +66,8 @@ func TestWriteHealthDebugSortsTargetsAndShowsLiveState(t *testing.T) {
 	}
 
 	var buf strings.Builder
-	if err := WriteHealthDebug(&buf, view); err != nil {
-		t.Fatalf("WriteHealthDebug: %v", err)
+	if err := WriteHealth(&buf, view, inspect.HealthSortPeer, true); err != nil {
+		t.Fatalf("WriteHealth: %v", err)
 	}
 	out := buf.String()
 	if strings.Index(out, "link-b") > strings.Index(out, "link-a") {
@@ -96,12 +96,12 @@ func TestWriteHealthDebugSortsTargetsAndShowsLiveState(t *testing.T) {
 }
 
 func TestWriteHealthConciseHidesDiagnosticColumns(t *testing.T) {
-	view := inspect.HealthDebugView{
-		Targets: []inspect.HealthProbeTargetView{{
+	view := inspect.HealthView{
+		Targets: []inspect.HealthTarget{{
 			ProbeID: "probe-secret", InstanceID: "link-secret", PeerZone: "node-b.",
 			ProbeRole: "active", UnderlayFamily: "ipv6", InterfaceName: "phx0",
 		}},
-		Live: []inspect.HealthLiveView{{
+		Samples: []inspect.HealthSample{{
 			ProbeID: "probe-secret", State: "healthy", Sent: 10, Received: 9,
 			LossRatio: 10, EWMARTTMs: 12, JitterMs: 2, LastError: "hidden error",
 		}},

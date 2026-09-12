@@ -41,7 +41,7 @@ func TestRecoveryImportNoopDoesNotCommitOrNotify(t *testing.T) {
 	}
 	notifications := 0
 	service.Hooks.OnStateChanged = func() { notifications++ }
-	beforeRevision := uint64(service.StateStore.common.VerifiedRevision())
+	beforeRevision := uint64(service.State.Common.VerifiedRevision())
 	result, _, err := service.handleRecoveryImportZoneEvent(snapshot)
 	if err != nil {
 		t.Fatalf("handleRecoveryImportZoneEvent(no-op): %v", err)
@@ -49,7 +49,7 @@ func TestRecoveryImportNoopDoesNotCommitOrNotify(t *testing.T) {
 	if result.NetworkChanged {
 		t.Fatalf("identical recovery snapshot result = %+v, want no network change", result)
 	}
-	if revision := uint64(service.StateStore.common.VerifiedRevision()); revision != beforeRevision {
+	if revision := uint64(service.State.Common.VerifiedRevision()); revision != beforeRevision {
 		t.Fatalf("no-op recovery revision = %d, want unchanged %d", revision, beforeRevision)
 	}
 	if notifications != 0 {
@@ -68,8 +68,8 @@ func TestRecoveryExportImportOfflineRootIPAMRecords(t *testing.T) {
 
 	writeConfig(t, adminConfig, filepath.Join(dir, "admin"))
 	t.Setenv("PHOTON_CONFIG", adminConfig)
-	if err := initRootState(); err != nil {
-		t.Fatalf("initRootState(admin): %v", err)
+	if err := runRootInit(); err != nil {
+		t.Fatalf("runRootInit(admin): %v", err)
 	}
 
 	writeConfig(t, catofesConfig, filepath.Join(dir, "catofes"))
@@ -102,13 +102,12 @@ func TestRecoveryExportImportOfflineRootIPAMRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAppContext(catofes): %v", err)
 	}
-	boltStore, startup, err := openLinuxDaemonState(rt)
+	state, err := openState(rt)
 	if err != nil {
-		t.Fatalf("openLinuxDaemonState(catofes): %v", err)
+		t.Fatalf("openState(catofes): %v", err)
 	}
-	defer boltStore.Close()
-	defer startup.Common.Close()
-	view := startup.Common.ReadView()
+	defer state.Close()
+	view := state.Common.ReadView()
 	key, err := routing.NormalizeIPAMPoolKey("2a0d:2905::/32")
 	if err != nil {
 		t.Fatalf("NormalizeIPAMPoolKey: %v", err)
@@ -128,8 +127,8 @@ func TestRecoveryImportZoneEventAppliesToDaemonState(t *testing.T) {
 
 	writeConfig(t, adminConfig, filepath.Join(dir, "admin"))
 	t.Setenv("PHOTON_CONFIG", adminConfig)
-	if err := initRootState(); err != nil {
-		t.Fatalf("initRootState(admin): %v", err)
+	if err := runRootInit(); err != nil {
+		t.Fatalf("runRootInit(admin): %v", err)
 	}
 
 	writeConfig(t, catofesConfig, filepath.Join(dir, "catofes"))
@@ -168,8 +167,7 @@ func TestRecoveryImportZoneEventAppliesToDaemonState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews(catofes): %v", err)
 	}
-	config := gossipStartupConfigFromAppConfig(rt.Config, state.State)
-	service := newTestDaemonFromOwners(rt, state.State, state.Gossip, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(rt, state.State, state.Gossip, runtime, rt.Config, time.Second)
 
 	result, _, _ := service.handleEvent(daemonEvent{
 		Type:     daemonEventRecoveryImportZone,
@@ -179,7 +177,7 @@ func TestRecoveryImportZoneEventAppliesToDaemonState(t *testing.T) {
 		t.Fatalf("handle recovery import event: %v", result.Error)
 	}
 
-	reloaded := service.StateStore.common.ReadView()
+	reloaded := service.State.Common.ReadView()
 	key, err := routing.NormalizeIPAMPoolKey("2a0d:2905::/32")
 	if err != nil {
 		t.Fatalf("NormalizeIPAMPoolKey: %v", err)

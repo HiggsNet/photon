@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	"net"
 	"path/filepath"
 	"strings"
@@ -45,7 +46,7 @@ func TestDaemonRecordPutEventSerializesWrite(t *testing.T) {
 	if result.Version != 1 {
 		t.Fatalf("version = %d, want 1", result.Version)
 	}
-	latest := service.StateStore.common.ReadView()
+	latest := service.State.Common.ReadView()
 	if latest.State.Network.Zones["node-b.catofes."].Records["identity"] == nil {
 		t.Fatalf("record was not persisted")
 	}
@@ -76,7 +77,7 @@ func TestDaemonEventLoopDispatchesRecordPut(t *testing.T) {
 		t.Fatalf("processEvents(record_put): %v", result.Error)
 	}
 
-	current := service.StateStore.common.ReadView()
+	current := service.State.Common.ReadView()
 	if got := current.State.Network.Zones["node-b.catofes."].Records["event-loop-record"]; got == nil {
 		t.Fatal("common owner missing event-loop record")
 	}
@@ -100,7 +101,7 @@ func TestDaemonEndpointTimerPublishesToCommonOwner(t *testing.T) {
 	if _, err := service.handleEndpointTimerEvent(); err != nil {
 		t.Fatalf("handleEndpointTimerEvent: %v", err)
 	}
-	current := service.StateStore.common.ReadView()
+	current := service.State.Common.ReadView()
 	if got := current.State.Network.Zones[verified.ManagedZone].Records[gossip.EndpointRecordKeyUDP]; got == nil {
 		t.Fatal("common owner missing endpoint record")
 	}
@@ -127,7 +128,7 @@ func TestDaemonIPsecPortRotateEventTriggersDataPlaneReconcile(t *testing.T) {
 	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols: %v", err)
 	}
-	published := service.StateStore.common.ReadView()
+	published := service.State.Common.ReadView()
 	first, err := ipsec.ParsePortRecord(published.State.Network.Zones[published.State.ManagedZone].Records[ipsec.RecordKeyPorts])
 	if err != nil {
 		t.Fatalf("ParsePortRecord(first): %v", err)
@@ -153,7 +154,7 @@ func TestDaemonIPsecPortRotateEventTriggersDataPlaneReconcile(t *testing.T) {
 	if driver.listCalls != 1 {
 		t.Fatalf("ListSAs calls = %d, want 1", driver.listCalls)
 	}
-	rotatedState := service.StateStore.common.ReadView()
+	rotatedState := service.State.Common.ReadView()
 	rotated, err := ipsec.ParsePortRecord(rotatedState.State.Network.Zones[rotatedState.State.ManagedZone].Records[ipsec.RecordKeyPorts])
 	if err != nil {
 		t.Fatalf("ParsePortRecord(rotated): %v", err)
@@ -204,7 +205,7 @@ func TestDaemonConcurrentRecordPutEventsAreSerialized(t *testing.T) {
 			t.Fatalf("record_put event failed: %v", err)
 		}
 	}
-	latest := service.StateStore.common.ReadView()
+	latest := service.State.Common.ReadView()
 	record := latest.State.Network.Zones["node-b.catofes."].Records["identity"]
 	if record == nil {
 		t.Fatal("identity record missing")
@@ -257,7 +258,7 @@ func TestDaemonRecordPutKeepsCommittedStateAuthoritativeOverExternalDiskWrite(t 
 	if result.Error != nil {
 		t.Fatalf("handleEvent(record_put): %v", result.Error)
 	}
-	latest := service.StateStore.common.ReadView()
+	latest := service.State.Common.ReadView()
 	records := latest.State.Network.Zones["node-b.catofes."].Records
 	if records["external"] != nil {
 		t.Fatalf("out-of-band disk record replaced daemon committed authority")
@@ -285,15 +286,15 @@ func TestDaemonAdminEventsIssueAcceptAndRevoke(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "root.db"),
 		Clock:     func() time.Time { return now },
 	}
-	if _, err := initRootStateInRuntime(rootRT); err != nil {
-		t.Fatalf("initRootStateInRuntime: %v", err)
+	if _, err := initializeRootState(rootRT); err != nil {
+		t.Fatalf("initializeRootState: %v", err)
 	}
 	rootState, rootRuntime, err := loadOfflineOwnerViews(rootRT)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews(root): %v", err)
 	}
 	service := newTestDaemonFromOwners(rootRT, rootState.State, rootState.Gossip, rootRuntime,
-		&gossipStartupConfig{PeerID: "node-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
+		&appConfig{PeerID: "node-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
 
 	catofesPub, catofesPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -313,8 +314,8 @@ func TestDaemonAdminEventsIssueAcceptAndRevoke(t *testing.T) {
 
 	catofesKey := &privateKeyFile{Type: "photon.ed25519.private.v1", PublicKey: catofesPub, PrivateKey: catofesPriv}
 	service = newTestDaemonFromOwners(rootRT, &corestate.VerifiedState{Network: zone.NewNetworkState()},
-		&corestate.GossipCheckpoint{}, &linuxRuntimeState{},
-		&gossipStartupConfig{PeerID: "catofes.", ListenAddr: "127.0.0.1:0"}, time.Second)
+		&corestate.GossipCheckpoint{}, &photonlinux.LinuxState{},
+		&appConfig{PeerID: "catofes.", ListenAddr: "127.0.0.1:0"}, time.Second)
 	result, syncNow, shutdown = service.handleEvent(daemonEvent{
 		Type:       daemonEventJoinAccept,
 		JoinBundle: result.JoinBundle,
@@ -354,7 +355,7 @@ func TestDaemonAdminEventsIssueAcceptAndRevoke(t *testing.T) {
 	if !syncNow || shutdown {
 		t.Fatalf("delegate_revoke syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
 	}
-	latest := service.StateStore.common.ReadView()
+	latest := service.State.Common.ReadView()
 	parent := latest.State.Network.Zones[zone.ZonePath("catofes.")]
 	if parent == nil || parent.Revocations["node-b.catofes."] == nil {
 		t.Fatalf("node-b revocation was not persisted")
@@ -371,18 +372,15 @@ func TestDaemonDelegateIssuePersistsThroughOwnerStore(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "root.db"),
 		Clock:     func() time.Time { return now },
 	}
-	if _, err := initRootStateInRuntime(rt); err != nil {
-		t.Fatalf("initRootStateInRuntime: %v", err)
+	if _, err := initializeRootState(rt); err != nil {
+		t.Fatalf("initializeRootState: %v", err)
 	}
-	boltStore, startup, err := openLinuxDaemonState(rt)
+	state, err := openState(rt)
 	if err != nil {
-		t.Fatalf("openLinuxDaemonState(root): %v", err)
+		t.Fatalf("openState(root): %v", err)
 	}
-	stateStore, err := newPersistedDaemonStateStore(startup.Common, startup.Runtime, boltStore)
-	if err != nil {
-		t.Fatalf("newPersistedDaemonStateStore: %v", err)
-	}
-	service := newDaemonWithStore(rt, stateStore, &gossipStartupConfig{PeerID: "node-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
+	rt.Config = &appConfig{PeerID: "node-admin", ListenAddr: "127.0.0.1:0"}
+	service := newDaemon(rt, state, time.Second)
 	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
@@ -395,20 +393,18 @@ func TestDaemonDelegateIssuePersistsThroughOwnerStore(t *testing.T) {
 	if result == nil || result.Bundle == nil || result.Bundle.Zone != "catofes." {
 		t.Fatalf("delegate issue result = %#v", result)
 	}
-	if got := startup.Common.ReadView().State.Network.Zones[zone.RootZone].Delegations["catofes."]; got == nil {
+	if got := state.Common.ReadView().State.Network.Zones[zone.RootZone].Delegations["catofes."]; got == nil {
 		t.Fatal("common owner missing catofes delegation")
 	}
-	startup.Common.Close()
-	if err := boltStore.Close(); err != nil {
-		t.Fatalf("close BoltStore: %v", err)
+	if err := state.Close(); err != nil {
+		t.Fatalf("close State: %v", err)
 	}
 
-	reopenedStore, reopened, err := openLinuxDaemonState(rt)
+	reopened, err := openState(rt)
 	if err != nil {
 		t.Fatalf("reopen Linux daemon state: %v", err)
 	}
-	defer reopened.Common.Close()
-	defer reopenedStore.Close()
+	defer reopened.Close()
 	if got := reopened.Common.ReadView().State.Network.Zones[zone.RootZone].Delegations["catofes."]; got == nil {
 		t.Fatal("reopened common owner missing persisted catofes delegation")
 	}
@@ -421,15 +417,15 @@ func TestDaemonConcurrentAdminAndRecordEventsPreserveState(t *testing.T) {
 		StatePath: filepath.Join(t.TempDir(), "catofes.db"),
 		Clock:     func() time.Time { return now },
 	}
-	if _, err := initRootStateInRuntime(rt); err != nil {
-		t.Fatalf("initRootStateInRuntime: %v", err)
+	if _, err := initializeRootState(rt); err != nil {
+		t.Fatalf("initializeRootState: %v", err)
 	}
 	state, runtime, err := loadOfflineOwnerViews(rt)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews(root): %v", err)
 	}
 	service := newTestDaemonFromOwners(rt, state.State, state.Gossip, runtime,
-		&gossipStartupConfig{PeerID: "zone-catofes-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
+		&appConfig{PeerID: "zone-catofes-admin", ListenAddr: "127.0.0.1:0"}, time.Second)
 
 	catofesPub, catofesPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -440,8 +436,8 @@ func TestDaemonConcurrentAdminAndRecordEventsPreserveState(t *testing.T) {
 		t.Fatalf("handleDelegateIssueEvent(catofes): %v", err)
 	}
 	service = newTestDaemonFromOwners(rt, &corestate.VerifiedState{Network: zone.NewNetworkState()},
-		&corestate.GossipCheckpoint{}, &linuxRuntimeState{},
-		&gossipStartupConfig{PeerID: "catofes.", ListenAddr: "127.0.0.1:0"}, time.Second)
+		&corestate.GossipCheckpoint{}, &photonlinux.LinuxState{},
+		&appConfig{PeerID: "catofes.", ListenAddr: "127.0.0.1:0"}, time.Second)
 	if _, err := service.handleJoinAcceptEvent(catofesIssue.Bundle, &privateKeyFile{Type: "photon.ed25519.private.v1", PublicKey: catofesPub, PrivateKey: catofesPriv}); err != nil {
 		t.Fatalf("handleJoinAcceptEvent(catofes): %v", err)
 	}
@@ -498,7 +494,7 @@ func TestDaemonConcurrentAdminAndRecordEventsPreserveState(t *testing.T) {
 		}
 	}
 
-	latest := service.StateStore.common.ReadView()
+	latest := service.State.Common.ReadView()
 	catofes := latest.State.Network.Zones[zone.ZonePath("catofes.")]
 	if catofes.Records["admin-note"] == nil {
 		t.Fatalf("record_put result missing after concurrent admin events")
@@ -543,7 +539,7 @@ func TestDaemonEndpointTimerNoChangeSkipsFlushAndSync(t *testing.T) {
 	service.Hooks.OnReconcileFlush = func(layer string) {
 		flushed = append(flushed, layer)
 	}
-	beforeRev := uint64(service.StateStore.common.VerifiedRevision())
+	beforeRev := uint64(service.State.Common.VerifiedRevision())
 
 	// Second publish at the same timestamp: nothing changed, so it should not
 	// trigger a sync, layer flush, or state-store revision bump.
@@ -560,8 +556,8 @@ func TestDaemonEndpointTimerNoChangeSkipsFlushAndSync(t *testing.T) {
 	if len(flushed) != 0 {
 		t.Fatalf("layer flushes on no-op endpoint timer: %v", flushed)
 	}
-	if afterRev := uint64(service.StateStore.common.VerifiedRevision()); afterRev != beforeRev {
-		t.Fatalf("state store revision changed on no-op endpoint timer: before=%d after=%d", beforeRev, afterRev)
+	if afterRev := uint64(service.State.Common.VerifiedRevision()); afterRev != beforeRev {
+		t.Fatalf("state revision changed on no-op endpoint timer: before=%d after=%d", beforeRev, afterRev)
 	}
 }
 
@@ -575,11 +571,11 @@ func TestPrepareStartupStateDoesNotPersistDerivedAdmission(t *testing.T) {
 		Clock:     func() time.Time { return now },
 	}
 	rt.Config.PublishEndpoints = false
-	config := &gossipStartupConfig{PeerID: "node-b.catofes.", ListenAddr: "127.0.0.1:0"}
+	config := &appConfig{PeerID: "node-b.catofes.", ListenAddr: "127.0.0.1:0"}
 	service := newTestDaemonFromOwners(
 		rt, verified, &corestate.GossipCheckpoint{}, runtime, config, time.Second,
 	)
-	beforeRev := uint64(service.StateStore.common.VerifiedRevision())
+	beforeRev := uint64(service.State.Common.VerifiedRevision())
 
 	changed, err := service.prepareStartupState()
 	if err != nil {
@@ -588,7 +584,7 @@ func TestPrepareStartupStateDoesNotPersistDerivedAdmission(t *testing.T) {
 	if changed {
 		t.Fatal("prepareStartupState changed = true for derived admission-only state")
 	}
-	common := service.StateStore.common.ReadView()
+	common := service.State.Common.ReadView()
 	rev := uint64(common.Revision)
 	if rev != beforeRev {
 		t.Fatalf("verified revision = %d, want runtime-only startup to keep %d", rev, beforeRev)
@@ -600,7 +596,7 @@ func TestPrepareStartupStateDoesNotPersistDerivedAdmission(t *testing.T) {
 	if changed {
 		t.Fatal("prepareStartupState(second) changed = true, want no-op")
 	}
-	if got := uint64(service.StateStore.common.VerifiedRevision()); got != rev {
+	if got := uint64(service.State.Common.VerifiedRevision()); got != rev {
 		t.Fatalf("state revision after no-op = %d, want %d", got, rev)
 	}
 }
@@ -627,7 +623,7 @@ func TestDaemonEndpointTimerRefreshDueStillTriggersSync(t *testing.T) {
 	if _, err := service.handleEndpointTimerEvent(); err != nil {
 		t.Fatalf("first handleEndpointTimerEvent: %v", err)
 	}
-	firstView := service.StateStore.common.ReadView()
+	firstView := service.State.Common.ReadView()
 	first := firstView.State.Network.Zones[verified.ManagedZone].Records[gossip.EndpointRecordKeyUDP]
 	if first == nil {
 		t.Fatal("first endpoint record missing")
@@ -659,7 +655,7 @@ func TestDaemonEndpointTimerRefreshDueStillTriggersSync(t *testing.T) {
 	if !syncNow {
 		t.Fatalf("syncNow = false, want true after refresh interval")
 	}
-	thirdView := service.StateStore.common.ReadView()
+	thirdView := service.State.Common.ReadView()
 	third := thirdView.State.Network.Zones[verified.ManagedZone].Records[gossip.EndpointRecordKeyUDP]
 	if third.Version != first.Version+1 {
 		t.Fatalf("third version = %d, want %d (refreshed)", third.Version, first.Version+1)

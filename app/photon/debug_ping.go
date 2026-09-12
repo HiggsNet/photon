@@ -22,7 +22,7 @@ func debugPing(ctx context.Context, peerZone zone.ZonePath, opts pingdebug.Optio
 	if err != nil {
 		return err
 	}
-	controlTargets, online, err := readCanonicalViewViaControl[[]inspect.HealthProbeTargetView](rt, controlRequest{Method: "ping_targets"})
+	controlTargets, online, err := readCanonicalViewViaControl[[]inspect.HealthTarget](rt, controlRequest{Method: "ping_targets"})
 	if err != nil {
 		return err
 	}
@@ -48,7 +48,7 @@ func debugPing(ctx context.Context, peerZone zone.ZonePath, opts pingdebug.Optio
 	return inspecttext.WritePingDebug(os.Stdout, view)
 }
 
-func healthTargetsFromInspect(targets []inspect.HealthProbeTargetView) ([]health.ProbeTarget, error) {
+func healthTargetsFromInspect(targets []inspect.HealthTarget) ([]health.ProbeTarget, error) {
 	out := make([]health.ProbeTarget, 0, len(targets))
 	for _, target := range targets {
 		local, err := parseOptionalAddr(target.LocalTunnelAddr)

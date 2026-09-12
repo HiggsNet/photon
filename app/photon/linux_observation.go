@@ -4,6 +4,8 @@ import (
 	"maps"
 	"sync"
 
+	photonstate "github.com/HiggsNet/photon/internal/state"
+
 	"github.com/HiggsNet/photon/pkg/firewall"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -20,7 +22,7 @@ type linuxObservation struct {
 }
 
 // routingObservation is online diagnostic state. It is rebuilt after
-// every daemon start and is never persisted in the Linux runtime state.
+// every daemon start and is never persisted in LinuxState.
 type routingObservation struct {
 	Instances   map[string]*bird.InstanceObservation
 	LastRunUnix int64
@@ -28,15 +30,15 @@ type routingObservation struct {
 }
 
 // ipsecObservationSummary is the daemon's online summary of the latest observed
-// IPsec reconcile. It is process-local and is never written to StateStore.
+// IPsec reconcile. It is process-local and is never written to State.
 type ipsecObservationSummary struct {
 	LastRunUnix    int64
 	SourceRevision uint64
 	DesiredLinks   int
-	Desired        []desiredLinkState
-	ActualSAs      []linkSAState
-	Actions        []linkActionState
-	Skipped        []linkSkipState
+	Desired        []photonstate.DesiredLinkState
+	ActualSAs      []photonstate.LinkSAState
+	Actions        []photonstate.LinkActionState
+	Skipped        []photonstate.LinkSkipState
 	LastError      string
 }
 
@@ -45,10 +47,10 @@ func cloneIPsecObservationSummary(in *ipsecObservationSummary) *ipsecObservation
 		return nil
 	}
 	out := *in
-	out.Desired = append([]desiredLinkState(nil), in.Desired...)
-	out.ActualSAs = append([]linkSAState(nil), in.ActualSAs...)
-	out.Actions = append([]linkActionState(nil), in.Actions...)
-	out.Skipped = append([]linkSkipState(nil), in.Skipped...)
+	out.Desired = append([]photonstate.DesiredLinkState(nil), in.Desired...)
+	out.ActualSAs = append([]photonstate.LinkSAState(nil), in.ActualSAs...)
+	out.Actions = append([]photonstate.LinkActionState(nil), in.Actions...)
+	out.Skipped = append([]photonstate.LinkSkipState(nil), in.Skipped...)
 	return &out
 }
 

@@ -126,7 +126,7 @@ func BuildPeerView(id, configuredAddr string, endpoints []PeerEndpointView, stat
 }
 
 func BuildPeerViewFromCheckpoint(id, configuredAddr string, endpoints []PeerEndpointView, checkpoint corestate.PeerCheckpoint, diagnostics observability.PeerDiagnostics) PeerView {
-	return BuildPeerView(id, configuredAddr, endpoints, peerRuntimeStateFromCheckpoint(checkpoint), diagnostics)
+	return BuildPeerView(id, configuredAddr, endpoints, peerLinuxStateFromCheckpoint(checkpoint), diagnostics)
 }
 
 func BuildPeerRuntimeView(state photonstate.PeerRuntimeState, diagnostics observability.PeerDiagnostics) PeerRuntimeView {
@@ -343,13 +343,13 @@ func buildPeerDebugFromCheckpoint(peerID, source, configuredAddr, resolvedAddr s
 		Source:           source,
 		ConfiguredAddr:   configuredAddr,
 		ResolvedAddr:     resolvedAddr,
-		PeerRuntimeState: peerRuntimeStateFromCheckpoint(checkpoint),
+		PeerRuntimeState: peerLinuxStateFromCheckpoint(checkpoint),
 		Diagnostics:      diagnostics,
 		Now:              now,
 	})
 }
 
-func peerRuntimeStateFromCheckpoint(checkpoint corestate.PeerCheckpoint) photonstate.PeerRuntimeState {
+func peerLinuxStateFromCheckpoint(checkpoint corestate.PeerCheckpoint) photonstate.PeerRuntimeState {
 	state := photonstate.PeerRuntimeState{
 		LastSyncUnix: checkpoint.LastSyncUnix, LastAttemptUnix: checkpoint.LastAttemptUnix,
 		BackoffUntilUnix: checkpoint.BackoffUntilUnix, LastRelayUnix: checkpoint.LastRelayUnix,

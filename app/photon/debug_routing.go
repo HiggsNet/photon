@@ -14,6 +14,7 @@ import (
 	"github.com/HiggsNet/photon/internal/photonlinux/linkstate"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"github.com/urfave/cli/v3"
 )
 
@@ -92,7 +93,7 @@ func birdDebugCommands(view birdDebugView) ([]string, error) {
 	}
 }
 
-func enrichBirdDumpInstance(item *inspect.BirdDumpInstance, instances map[string]linkInstanceState, reconcile *ipsecObservationSummary) {
+func enrichBirdDumpInstance(item *inspect.BirdDumpInstance, instances map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary) {
 	if item == nil {
 		return
 	}
@@ -114,7 +115,7 @@ func enrichBirdDumpInstance(item *inspect.BirdDumpInstance, instances map[string
 	}
 }
 
-func birdInterfaceContexts(instances map[string]linkInstanceState, reconcile *ipsecObservationSummary, netnsName string) map[string]inspect.BirdInterfaceContext {
+func birdInterfaceContexts(instances map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, netnsName string) map[string]inspect.BirdInterfaceContext {
 	contexts := map[string]inspect.BirdInterfaceContext{}
 	for _, output := range buildLinkOutputs(instances, reconcile) {
 		if output.InterfaceName == "" || (output.NetNS != "" && netnsName != "" && output.NetNS != netnsName) {
@@ -309,7 +310,7 @@ func buildBabelDebugView(rt *AppContext, instances map[string]*bird.InstanceObse
 		return inspect.BuildBabelDebug(input)
 	}
 	input.LastReconcileError = lastRoutingError
-	input.RuntimeStates = instances
+	input.LinuxStates = instances
 	for _, inst := range routingInstances {
 		input.Instances = append(input.Instances, inspect.BabelInstanceInput{
 			NetNS:          inst.NetNS,

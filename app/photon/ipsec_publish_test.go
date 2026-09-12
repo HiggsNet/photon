@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -21,8 +22,8 @@ func newPersistedIPsecPublishTestService(
 	rt *AppContext,
 	verified *corestate.VerifiedState,
 	checkpoint *corestate.GossipCheckpoint,
-	runtime *linuxRuntimeState,
-	config *gossipStartupConfig,
+	runtime *photonlinux.LinuxState,
+	config *appConfig,
 ) (*Daemon, func()) {
 	t.Helper()
 	// These tests isolate IPsec protocol publication. Endpoint publication is
@@ -37,31 +38,32 @@ func newPersistedIPsecPublishTestService(
 		Verified: verified,
 		Gossip:   checkpoint,
 	}
-	if err := initializeLinuxState(store, candidate, 0, runtime); err != nil {
+	if err := initializeStateDB(store, candidate, 0, runtime); err != nil {
 		_ = store.Close()
-		t.Fatalf("initializeLinuxState: %v", err)
+		t.Fatalf("initializeStateDB: %v", err)
 	}
-	startup, found, err := loadAndRestoreLinuxState(store, rt.Config.TrustedRootPublicKey)
+	state, found, err := restoreState(store, rt.Config.TrustedRootPublicKey)
 	if err != nil || !found {
 		_ = store.Close()
-		t.Fatalf("loadAndRestoreLinuxState = found %v err %v", found, err)
+		t.Fatalf("restoreState = found %v err %v", found, err)
 	}
-	stateStore, err := newPersistedDaemonStateStore(startup.Common, startup.Runtime, store)
-	if err != nil {
-		startup.Common.Close()
-		_ = store.Close()
-		t.Fatalf("newPersistedDaemonStateStore: %v", err)
+	if rt != nil && config != nil {
+		rt.Config.PeerID = config.PeerID
+		rt.Config.ListenAddr = config.ListenAddr
+		rt.Config.Bootstrap = append([]syncConfigPeer(nil), config.Bootstrap...)
+		rt.Config.MaxMessageBytes = config.MaxMessageBytes
+		rt.Config.MaxSyncZones = config.MaxSyncZones
+		rt.Config.MaxSyncRecords = config.MaxSyncRecords
 	}
-	service := newDaemonWithStore(rt, stateStore, config, time.Second)
+	service := newDaemon(rt, state, time.Second)
 	// These tests call the publisher directly and do not run the daemon event
 	// loop. Stop its unused scheduler so tests can advance the fake clock safely.
 	service.gossipDriver.Stop()
 	var once sync.Once
 	closeStore := func() {
 		once.Do(func() {
-			service.StateStore.common.Close()
-			if err := store.Close(); err != nil {
-				t.Errorf("close persisted IPsec publish store: %v", err)
+			if err := service.State.Close(); err != nil {
+				t.Errorf("close persisted IPsec publish State: %v", err)
 			}
 		})
 	}
@@ -87,8 +89,8 @@ func TestPublishIPsecRecordsSignsStableLocalCapability(t *testing.T) {
 	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols: %v", err)
 	}
-	common := service.StateStore.common.ReadView()
-	persistedRuntime := service.StateStore.readLinuxState()
+	common := service.State.Common.ReadView()
+	persistedRuntime := service.State.ReadLinux()
 	zs := common.State.Network.Zones[common.State.ManagedZone]
 	for _, key := range []string{ipsec.RecordKeyProfile, ipsec.RecordKeyAddresses, ipsec.RecordKeyPorts, ipsec.RecordKeyTransportKey, ipsec.OverlayIntentRecordKey("main")} {
 		if zs.Records[key] == nil {
@@ -144,7 +146,7 @@ func TestPublishIPsecRecordsSignsStableLocalCapability(t *testing.T) {
 	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols(second): %v", err)
 	}
-	againView := service.StateStore.common.ReadView()
+	againView := service.State.Common.ReadView()
 	again := againView.State.Network.Zones[againView.State.ManagedZone].Records[ipsec.RecordKeyProfile]
 	if again.Version != 1 {
 		t.Fatalf("second profile version = %d, want unchanged 1; first=%s second=%s", again.Version, zs.Records[ipsec.RecordKeyProfile].Value, again.Value)
@@ -199,7 +201,7 @@ func TestPublishIPsecRecordsMigratesDeprecatedAcceptProfileToRole(t *testing.T) 
 	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols: %v", err)
 	}
-	common := service.StateStore.common.ReadView()
+	common := service.State.Common.ReadView()
 	record := common.State.Network.Zones[common.State.ManagedZone].Records[ipsec.RecordKeyProfile]
 	profile, err := ipsec.ParseProfileRecord(record)
 	if err != nil {
@@ -267,7 +269,7 @@ func TestDaemonEndpointTimerPublishesRoleProfileFromReloadedState(t *testing.T) 
 	if !syncNow || shutdown {
 		t.Fatalf("syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
 	}
-	latest := service.StateStore.common.ReadView()
+	latest := service.State.Common.ReadView()
 	record := latest.State.Network.Zones[latest.State.ManagedZone].Records[ipsec.RecordKeyProfile]
 	if record.Version != oldRecord.Version+1 {
 		t.Fatalf("profile version = %d, want %d", record.Version, oldRecord.Version+1)
@@ -304,7 +306,7 @@ func TestPublishIPsecRecordsRotatesPortGenerationByInterval(t *testing.T) {
 	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols: %v", err)
 	}
-	common := service.StateStore.common.ReadView()
+	common := service.State.Common.ReadView()
 	first, err := ipsec.ParsePortRecord(common.State.Network.Zones[common.State.ManagedZone].Records[ipsec.RecordKeyPorts])
 	if err != nil {
 		t.Fatalf("ParsePortRecord: %v", err)
@@ -317,7 +319,7 @@ func TestPublishIPsecRecordsRotatesPortGenerationByInterval(t *testing.T) {
 		if _, err := service.publishLocalProtocols(); err != nil {
 			t.Fatalf("publishLocalProtocols(refresh %d): %v", i, err)
 		}
-		refreshedView := service.StateStore.common.ReadView()
+		refreshedView := service.State.Common.ReadView()
 		refreshed, err := ipsec.ParsePortRecord(refreshedView.State.Network.Zones[refreshedView.State.ManagedZone].Records[ipsec.RecordKeyPorts])
 		if err != nil {
 			t.Fatalf("ParsePortRecord(refresh %d): %v", i, err)
@@ -334,7 +336,7 @@ func TestPublishIPsecRecordsRotatesPortGenerationByInterval(t *testing.T) {
 	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols(third): %v", err)
 	}
-	thirdView := service.StateStore.common.ReadView()
+	thirdView := service.State.Common.ReadView()
 	third, err := ipsec.ParsePortRecord(thirdView.State.Network.Zones[thirdView.State.ManagedZone].Records[ipsec.RecordKeyPorts])
 	if err != nil {
 		t.Fatalf("ParsePortRecord(third): %v", err)
@@ -368,7 +370,7 @@ func TestPublishIPsecRecordsRotatesFromVerifiedPortRecord(t *testing.T) {
 	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols(first): %v", err)
 	}
-	firstView := service.StateStore.common.ReadView()
+	firstView := service.State.Common.ReadView()
 	first, err := ipsec.ParsePortRecord(firstView.State.Network.Zones[firstView.State.ManagedZone].Records[ipsec.RecordKeyPorts])
 	if err != nil {
 		t.Fatalf("ParsePortRecord(first): %v", err)
@@ -377,7 +379,7 @@ func TestPublishIPsecRecordsRotatesFromVerifiedPortRecord(t *testing.T) {
 	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols(second): %v", err)
 	}
-	rotatedView := service.StateStore.common.ReadView()
+	rotatedView := service.State.Common.ReadView()
 	rotated, err := ipsec.ParsePortRecord(rotatedView.State.Network.Zones[rotatedView.State.ManagedZone].Records[ipsec.RecordKeyPorts])
 	if err != nil {
 		t.Fatalf("ParsePortRecord(rotated): %v", err)
@@ -409,7 +411,7 @@ func TestDirectIPsecPortRotateAdvancesAndPersistsRangeGeneration(t *testing.T) {
 	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols(first): %v", err)
 	}
-	firstView := service.StateStore.common.ReadView()
+	firstView := service.State.Common.ReadView()
 	first, err := ipsec.ParsePortRecord(firstView.State.Network.Zones[firstView.State.ManagedZone].Records[ipsec.RecordKeyPorts])
 	if err != nil {
 		t.Fatalf("ParsePortRecord(first): %v", err)
@@ -474,7 +476,7 @@ func TestPublishIPsecRecordsSkipsWithoutLinkGroups(t *testing.T) {
 	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols: %v", err)
 	}
-	common := service.StateStore.common.ReadView()
+	common := service.State.Common.ReadView()
 	zs := common.State.Network.Zones[common.State.ManagedZone]
 	if zs == nil {
 		t.Fatalf("zone %s missing", common.State.ManagedZone)
@@ -737,7 +739,7 @@ func TestPublishIPsecOverlayIntentStableWhenUnchanged(t *testing.T) {
 		t.Fatalf("publishLocalProtocols: %v", err)
 	}
 	key := ipsec.OverlayIntentRecordKey("main")
-	firstView := service.StateStore.common.ReadView()
+	firstView := service.State.Common.ReadView()
 	first := firstView.State.Network.Zones[firstView.State.ManagedZone].Records[key]
 	if first == nil {
 		t.Fatalf("overlay intent record missing")
@@ -751,7 +753,7 @@ func TestPublishIPsecOverlayIntentStableWhenUnchanged(t *testing.T) {
 	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols(second): %v", err)
 	}
-	secondView := service.StateStore.common.ReadView()
+	secondView := service.State.Common.ReadView()
 	second := secondView.State.Network.Zones[secondView.State.ManagedZone].Records[key]
 	if second == nil {
 		t.Fatalf("overlay intent record missing after re-publish")
@@ -772,7 +774,7 @@ func TestPublishIPsecOverlayIntentStableWhenUnchanged(t *testing.T) {
 	if _, err := service.publishLocalProtocols(); err != nil {
 		t.Fatalf("publishLocalProtocols(third): %v", err)
 	}
-	thirdView := service.StateStore.common.ReadView()
+	thirdView := service.State.Common.ReadView()
 	third := thirdView.State.Network.Zones[thirdView.State.ManagedZone].Records[key]
 	if third == nil {
 		t.Fatalf("overlay intent record missing after config change")

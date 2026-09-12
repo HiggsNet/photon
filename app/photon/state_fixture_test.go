@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
@@ -29,19 +30,19 @@ func seedPartitionedStateDB(
 	path string,
 	verified *corestate.VerifiedState,
 	checkpoint *corestate.GossipCheckpoint,
-	runtimeState *linuxRuntimeState,
+	linuxState *photonlinux.LinuxState,
 ) {
 	t.Helper()
 	store, err := corestate.OpenBoltStore(path, 0o600, daemonBoltLockTimeout)
 	if err != nil {
 		t.Fatalf("OpenBoltStore: %v", err)
 	}
-	if err := initializeLinuxState(store, &corestate.CommitCandidate{
+	if err := initializeStateDB(store, &corestate.CommitCandidate{
 		Verified: verified,
 		Gossip:   checkpoint,
-	}, 0, runtimeState); err != nil {
+	}, 0, linuxState); err != nil {
 		_ = store.Close()
-		t.Fatalf("initializeLinuxState: %v", err)
+		t.Fatalf("initializeStateDB: %v", err)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close BoltStore: %v", err)

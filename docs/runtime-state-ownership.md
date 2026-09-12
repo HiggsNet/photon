@@ -16,22 +16,24 @@ Daemon
 │   ├── protocol timer
 │   ├── session/chunk/address-book runtime
 │   └── gossip observability
-├── StateStore
-│   ├── VerifiedState
-│   └── GossipCheckpoint
+├── State
+│   ├── StateDB (唯一 bbolt handle)
+│   ├── Common
+│   │   ├── VerifiedState
+│   │   └── GossipCheckpoint
+│   └── platform partition（Linux 当前为 LinuxState；Windows 暂无额外字段）
 ├── LinuxDriver / WindowsDriver
-├── LinuxState / WindowsState
 ├── LinuxObservation / WindowsObservation
-└── BoltStore
+└── other daemon-owned online subsystems
 ```
 
-`Daemon` 是唯一产品生命周期和平台 mutation 编排者。子组件可以拥有接收 channel、bounded worker 和协议 timer，但不得再形成持有 Daemon、StateStore、平台 Driver 与 BoltStore 的第二个产品 Runtime。
+`Daemon` 是唯一产品生命周期和平台 mutation 编排者。子组件可以拥有接收 channel、bounded worker 和协议 timer，但不得再形成持有 Daemon、State、平台 Driver 与 BoltStore 的第二个产品 Runtime。
 
 Daemon 和 GossipDriver 各自拥有队列：GossipDriver 的队列只排序 packet、协议 timer、object-pull 等 gossip 事件；Daemon 的 queue/scheduler 处理 IPsec、routing、firewall、health 等平台工作。健康探测完成信号直接回到 Daemon event loop，不通过 GossipDriver 包装或转发。
 
 Health 与 observer 都是 Daemon 管理生命周期的可选子系统，不是所有平台必须具备的公共能力。Linux 可安装 healthDriver（manager、spool、运行标志和 Linux prober），Android 可以完全不创建它；同理 HTTP observer 只在需要的平台 composition 中启动。Gossip transport/address book 只由 GossipDriver 持有，Daemon 不保存第二份 transport 指针。
 
-`gossipStartupConfig` 不是另一个配置 owner，只是 composition root 从 AppConfig 与 verified identity 生成的短生命周期构造输入；GossipDriver 创建后持有 detached protocol config。日志、reflector 和本机 endpoint 发布策略属于 app/platform composition，不复制进该输入。
+`AppConfig` 是 app/platform 配置的唯一 owner。composition root 直接结合 AppConfig 与 verified identity 生成 detached `GossipDriverConfig` 和 transport config；GossipDriver 创建后只持有自己的协议配置快照。日志、reflector 和本机 endpoint 发布策略继续属于 app/platform composition。
 
 ## 2. 名称与当前实现
 
@@ -39,42 +41,48 @@ Health 与 observer 都是 Daemon 管理生命周期的可选子系统，不是�
 |---|---|---|
 | `Daemon` | `app/photon.Daemon` | 已直接收敛为顶层 owner；`Daemon.Run` 是当前主事件循环 |
 | `GossipDriver` | `pkg/core/host.GossipDriver` | 已直接改名；保留公共 gossip 闭环，逐步移出非 gossip 的 controller timer/completion |
-| `StateStore` | `pkg/core/state.Store` | 保留；它是公共可信状态 owner，不是 Gossip 专属 Store |
+| `State` | `app/photon.State` | 唯一进程内持久状态边界；组合 StateDB、Common 与平台 state partition，不转发 common API |
+| `Common` | `pkg/core/state.Store` | 公共可信状态 owner，不是 Gossip 专属 Store |
 | `LinuxDriver` | `internal/photonlinux.LinuxDriver` | 已直接改名并保持具体 Linux API；不预建统一 `PlatformDriver` 接口 |
-| `LinuxState` | `internal/photonlinux.RuntimeState` | 缩减并改名；它只是持久数据，不是运行对象 |
+| `LinuxState` | `internal/photonlinux.LinuxState` | 仅含不能重建且需要跨重启保留的平台数据，不是运行对象 |
 | `WindowsDriver` | `internal/photonwindows` 后续真实平台实现 | 只按真实调用点增加 API，不要求与 Linux 方法对称 |
 | `WindowsState` | Windows 平台持久分区 | 只在有真实跨重启数据时增加字段 |
-| `BoltStore` | `pkg/core/state.BoltStore` | 每进程唯一 bbolt handle/事务/关闭边界 |
+| `StateDB` | `pkg/core/state.BoltStore` | State 内部每进程唯一的 bbolt handle/事务/关闭边界；实现类型名保留 BoltStore |
 | 已删除 | `app/photon.SyncRuntime` | Daemon 直接持有 AppContext；GossipDriver 持有 detached 协议配置和唯一 transport/address book |
 | `AppContext` | 原 `app/photon.Runtime` | 已改名；只承载 CLI/config/state-path/clock，不是产品 Runtime |
-| 删除 | `app/photon.DaemonStateStore` | 迁移期 common/Linux 顺序协调器，不属于终态 |
+| 已删除 | `app/photon.DaemonStateStore` | 已由职责明确且不提供 aggregate API 的 `app/photon.State` 取代 |
 
 以前文档中的 `CommonRuntime` 只是“Linux/Windows 共用的 gossip 执行闭环”的概念名，当前实现就是 `pkg/core/host.GossipDriver`。它不是额外组件，也不是顶层 Daemon。后续文档统一使用 `GossipDriver`；“common”只描述代码可跨平台复用，不再作为一个 Runtime 名称。
 
-## 3. StateStore
+## 3. State
 
-`StateStore` 是公共可信状态的内存 owner，通过 commit callback 使用唯一 `BoltStore` 持久化：
+顶层 `app/photon.State` 管理唯一 StateDB 和不同语义的 typed partition。公共分区 `Common` 由 `pkg/core/state.Store` 实现；State 不转发它的读写 API：
 
 ```text
-StateStore
-├── VerifiedState
+State
+├── StateDB
+├── Common
+│  ├── VerifiedState
 │   ├── trusted root / root pin
 │   ├── managed zone / authority / delegation
 │   ├── verified Network
 │   ├── identity 与公共本机 intent
 │   └── VerifiedRevision
-└── GossipCheckpoint
+│  └── GossipCheckpoint
     ├── retry/backoff
     ├── observed endpoint 与 grace
     ├── relay/session 恢复提示
-    └── rejected object/digest
+│      └── rejected object/digest
+└── LinuxState（仅 Linux composition）
+   ├── IPsec transport private key
+   └── explicit local Endpoint ACLs
 ```
 
-`VerifiedState` 是不可随意丢失的权威事实。`GossipCheckpoint` 只保存 gossip 的 loss-tolerant restart hint；损坏时可报告并丢弃，然后重新发现和同步。Gossip 只是 StateStore 的一个使用者，因此不得把整个 Store 改名为 `GossipStore`。
+`VerifiedState` 是不可随意丢失的权威事实。`GossipCheckpoint` 只保存 gossip 的 loss-tolerant restart hint；损坏时可报告并丢弃，然后重新发现和同步。Gossip 只是 Common 的一个使用者，因此不得把整个 State 改名为 `GossipStore`。
 
 ## 4. LinuxState / WindowsState
 
-平台 State 与 StateStore 是并列的逻辑分区，共用同一个 BoltStore；它不是另一个带线程、DB handle 或生命周期的 Store。`Daemon` 持有当前内存值，平台 codec 只在 composition root 提供的事务中读写。
+平台 State 是 State 内的独立 typed partition，与 Common 共用同一个 StateDB；它不是第二个 Store，也不自行持有 DB handle 或生命周期。平台 codec 只在 State 提供的事务中读写。
 
 平台 State 只允许保存两类数据：
 
@@ -115,7 +123,7 @@ Daemon 可以直接持有一个无独立锁/线程的 `LinuxObservation` 或 `Wi
 
 ## 6. 当前 LinuxState 的收缩清单
 
-当前 `RuntimeState` 混合了 durable input、operation journal、derived state 和 observation，需要逐字段审计：
+旧 `RuntimeState` 曾混合 durable input、operation journal、derived state 和 observation；审计后的 `LinuxState` 仅保留以下持久数据：
 
 | 当前字段 | 目标处理 |
 |---|---|
@@ -131,7 +139,7 @@ Daemon 可以直接持有一个无独立锁/线程的 `LinuxObservation` 或 `Wi
 | `PeerCleanups` | 已删除；离线抑制从 GossipCheckpoint 最后活动时间与 `cleanup_after` 推导，吊销抑制从 VerifiedState 推导，不保存第二份 cleanup tombstone |
 | `Admission` | 已从 LinuxState 删除；它是由 VerifiedState 与 GossipCheckpoint 即时生成的 inspect diagnosis，不是持久 state。旧 schema 字段解码时直接丢弃 |
 
-在该审计完成前，不把现有整个 `RuntimeState` 搬进 `LinuxDriver`，也不以 current codec 已迁入 `internal/photonlinux` 为理由宣布状态边界完成。
+审计已经完成：旧 `RuntimeState` 没有整体搬进 `LinuxDriver`，current codec 只编码上述两个明确的 LinuxState 字段；未来新增持久字段仍需逐项证明不可重建且确有跨重启价值。
 
 ## 7. 持久化与写入边界
 
@@ -139,14 +147,13 @@ Daemon 可以直接持有一个无独立锁/线程的 `LinuxObservation` 或 `Wi
 唯一 BoltStore
 ├── common/verified
 ├── common/gossip-checkpoint
-├── linux/state
-└── windows/state
+└── linux/state（仅 Linux 当前需要平台持久分区）
 ```
 
-- composition root 打开并关闭唯一 BoltStore；StateStore 和平台 state codec 不自行按路径打开数据库。
+- composition root 打开唯一 BoltStore 并交给 State；State 统一关闭，typed partition 与 codec 不自行按路径打开数据库。
 - Daemon event loop 串行发布内存 mutation；耗时 Observe/Plan/Apply 可锁外执行，completion 必须回到 owner 后再提交。
 - 持久化成功后才能发布对应内存状态。
-- `DaemonStateStore` 只在迁移期提供 common/Linux 顺序锁、组合读取和 commit forwarding。所有调用改用 Daemon 持有的 typed owner 后删除，不保留为终态 Repository/Store。
+- Daemon 只组合一个 State；common 调用显式进入 `State.Common`，Linux completion 通过 typed mutation 按 source verified revision 提交，不再暴露数据库或完整 LinuxState replacement。
 
 ## 8. 迁移原则
 

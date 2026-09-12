@@ -21,8 +21,8 @@ func TestDaemonIPAMMutationUsesCommittedAuthorityNotDifferentDiskState(t *testin
 	parent := managed.Parent()
 	removeIPAMPoolForTest(committed.State.Network, parent, "10.0.0.0/16")
 
-	service := newTestDaemonFromOwners(rt, committed.State, committed.Gossip, runtime, gossipStartupConfigFromAppConfig(rt.Config, committed.State), time.Second)
-	beforeRevision := uint64(service.StateStore.common.VerifiedRevision())
+	service := newTestDaemonFromOwners(rt, committed.State, committed.Gossip, runtime, rt.Config, time.Second)
+	beforeRevision := uint64(service.State.Common.VerifiedRevision())
 	result, syncNow, _ := service.handleEvent(daemonEvent{
 		Type: daemonEventIPAMMutation,
 		IPAM: &ipamMutationRequest{
@@ -36,11 +36,11 @@ func TestDaemonIPAMMutationUsesCommittedAuthorityNotDifferentDiskState(t *testin
 	if syncNow {
 		t.Fatal("rejected mutation requested sync")
 	}
-	if got := uint64(service.StateStore.common.VerifiedRevision()); got != beforeRevision {
+	if got := uint64(service.State.Common.VerifiedRevision()); got != beforeRevision {
 		t.Fatalf("revision changed on rejection: before=%d after=%d", beforeRevision, got)
 	}
 	key, _ := routing.NormalizeIPAMAssignmentKey("10.0.1.0/24")
-	after := service.StateStore.common.ReadView()
+	after := service.State.Common.ReadView()
 	if after.State.Network.Zones[managed].Records[key] != nil {
 		t.Fatal("rejected assignment entered committed state")
 	}
@@ -66,7 +66,7 @@ func TestDaemonIPAMMutationPersistsCommittedDecisionWhenDiskIsOlder(t *testing.T
 	removeIPAMPoolForTest(olderDisk.State.Network, managed.Parent(), "10.0.0.0/16")
 	replacePersistedCommonForTest(t, rt, olderDisk.State)
 
-	service := newTestDaemonFromOwners(rt, committed.State, committed.Gossip, runtime, gossipStartupConfigFromAppConfig(rt.Config, committed.State), time.Second)
+	service := newTestDaemonFromOwners(rt, committed.State, committed.Gossip, runtime, rt.Config, time.Second)
 	result, _, _ := service.handleEvent(daemonEvent{
 		Type: daemonEventIPAMMutation,
 		IPAM: &ipamMutationRequest{
@@ -81,7 +81,7 @@ func TestDaemonIPAMMutationPersistsCommittedDecisionWhenDiskIsOlder(t *testing.T
 		t.Fatalf("version = %d, want 1", result.Version)
 	}
 	key, _ := routing.NormalizeIPAMAssignmentKey("10.0.1.0/24")
-	committedAfter := service.StateStore.common.ReadView()
+	committedAfter := service.State.Common.ReadView()
 	if committedAfter.State.Network.Zones[managed].Records[key] == nil {
 		t.Fatal("accepted assignment was not published by the common store")
 	}
@@ -115,8 +115,8 @@ func TestDaemonRouteMutationRejectsUsingCommittedActiveStateNotDisk(t *testing.T
 	}
 	replacePersistedCommonForTest(t, rt, activeDisk)
 
-	service := newTestDaemonFromOwners(rt, state, view.Gossip, runtime, gossipStartupConfigFromAppConfig(rt.Config, state), time.Second)
-	beforeRevision := uint64(service.StateStore.common.VerifiedRevision())
+	service := newTestDaemonFromOwners(rt, state, view.Gossip, runtime, rt.Config, time.Second)
+	beforeRevision := uint64(service.State.Common.VerifiedRevision())
 	result, _, _ := service.handleEvent(daemonEvent{
 		Type:  daemonEventRouteMutation,
 		Route: &routeMutationRequest{Zone: managed, Prefix: "10.0.4.0/24", Active: false},
@@ -124,7 +124,7 @@ func TestDaemonRouteMutationRejectsUsingCommittedActiveStateNotDisk(t *testing.T
 	if result.Error == nil || !strings.Contains(result.Error.Error(), "already withdrawn") {
 		t.Fatalf("route mutation error = %v, want committed already-withdrawn rejection", result.Error)
 	}
-	afterRevision := uint64(service.StateStore.common.VerifiedRevision())
+	afterRevision := uint64(service.State.Common.VerifiedRevision())
 	if afterRevision != beforeRevision || service.ipsecDirty || service.routingDirty || service.firewallDirty {
 		t.Fatalf("rejected route changed daemon state: revision %d -> %d dirty=%v/%v/%v", beforeRevision, afterRevision, service.ipsecDirty, service.routingDirty, service.firewallDirty)
 	}
@@ -154,8 +154,8 @@ func TestDaemonMutationRejectsUsingCommittedAssignmentsNotDisk(t *testing.T) {
 	}
 	replacePersistedCommonForTest(t, rt, disk)
 
-	service := newTestDaemonFromOwners(rt, committed.State, committed.Gossip, runtime, gossipStartupConfigFromAppConfig(rt.Config, committed.State), time.Second)
-	beforeRevision := uint64(service.StateStore.common.VerifiedRevision())
+	service := newTestDaemonFromOwners(rt, committed.State, committed.Gossip, runtime, rt.Config, time.Second)
+	beforeRevision := uint64(service.State.Common.VerifiedRevision())
 	result, _, _ := service.handleEvent(daemonEvent{
 		Type: daemonEventServiceMutation,
 		Service: &serviceMutationRequest{
@@ -166,7 +166,7 @@ func TestDaemonMutationRejectsUsingCommittedAssignmentsNotDisk(t *testing.T) {
 	if result.Error == nil || !strings.Contains(result.Error.Error(), "service_address_unauthorized") {
 		t.Fatalf("service mutation error = %v, want committed assignment rejection", result.Error)
 	}
-	afterRevision := uint64(service.StateStore.common.VerifiedRevision())
+	afterRevision := uint64(service.State.Common.VerifiedRevision())
 	if afterRevision != beforeRevision || service.ipsecDirty || service.routingDirty || service.firewallDirty {
 		t.Fatalf("rejected service changed daemon state: revision %d -> %d dirty=%v/%v/%v", beforeRevision, afterRevision, service.ipsecDirty, service.routingDirty, service.firewallDirty)
 	}
@@ -186,8 +186,8 @@ func TestDaemonTypedDryRunDoesNotCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}
-	service := newTestDaemonFromOwners(rt, view.State, view.Gossip, runtime, gossipStartupConfigFromAppConfig(rt.Config, view.State), time.Second)
-	before := uint64(service.StateStore.common.VerifiedRevision())
+	service := newTestDaemonFromOwners(rt, view.State, view.Gossip, runtime, rt.Config, time.Second)
+	before := uint64(service.State.Common.VerifiedRevision())
 	result, syncNow, _ := service.handleEvent(daemonEvent{
 		Type: daemonEventIPAMMutation,
 		IPAM: &ipamMutationRequest{
@@ -201,11 +201,11 @@ func TestDaemonTypedDryRunDoesNotCommit(t *testing.T) {
 	if syncNow {
 		t.Fatal("dry-run requested sync")
 	}
-	if got := uint64(service.StateStore.common.VerifiedRevision()); got != before {
+	if got := uint64(service.State.Common.VerifiedRevision()); got != before {
 		t.Fatalf("dry-run revision changed: before=%d after=%d", before, got)
 	}
 	key, _ := routing.NormalizeIPAMAssignmentKey("10.0.2.0/24")
-	after := service.StateStore.common.ReadView()
+	after := service.State.Common.ReadView()
 	if after.State.Network.Zones[managed].Records[key] != nil {
 		t.Fatal("dry-run record entered committed state")
 	}
@@ -223,7 +223,7 @@ func TestExplicitDirectAndDaemonIPAMUseSameDomainValidation(t *testing.T) {
 		Zone:      managed, Prefix: "10.0.3.0/24", Target: zone.ZonePath(managed),
 	}
 	_, directErr := applyAuthoritativeVerifiedTestIntent(view.State, commonIPAMIntentForTest(t, request), rt.Now())
-	service := newTestDaemonFromOwners(rt, view.State, view.Gossip, runtime, gossipStartupConfigFromAppConfig(rt.Config, view.State), time.Second)
+	service := newTestDaemonFromOwners(rt, view.State, view.Gossip, runtime, rt.Config, time.Second)
 	result, _, _ := service.handleEvent(daemonEvent{Type: daemonEventIPAMMutation, IPAM: &request})
 	if directErr == nil || result.Error == nil {
 		t.Fatalf("validation results direct=%v daemon=%v, want both rejected", directErr, result.Error)
@@ -317,7 +317,7 @@ func TestTypedIPAMControlMethodCommitsDaemonValidatedRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}
-	service := newTestDaemonFromOwners(rt, view.State, view.Gossip, runtime, gossipStartupConfigFromAppConfig(rt.Config, view.State), time.Second)
+	service := newTestDaemonFromOwners(rt, view.State, view.Gossip, runtime, rt.Config, time.Second)
 	ctx := t.Context()
 	go pumpDaemonEvents(ctx, service)
 
@@ -332,7 +332,7 @@ func TestTypedIPAMControlMethodCommitsDaemonValidatedRequest(t *testing.T) {
 		t.Fatalf("ipam_mutate response = %+v", response)
 	}
 	key, _ := routing.NormalizeIPAMAssignmentKey("10.0.8.0/24")
-	committed := service.StateStore.common.ReadView()
+	committed := service.State.Common.ReadView()
 	if committed.State.Network.Zones[managed].Records[key] == nil {
 		t.Fatal("typed control mutation did not enter committed state")
 	}
@@ -343,7 +343,7 @@ func TestDaemonRawRecordPutRejectsReservedNamespaceWithoutRevision(t *testing.T)
 	service := newTestDaemonFromOwners(
 		&AppContext{Config: defaultAppConfig(), Clock: time.Now}, verified, checkpoint, runtime, config, time.Second,
 	)
-	before := uint64(service.StateStore.common.VerifiedRevision())
+	before := uint64(service.State.Common.VerifiedRevision())
 	result, syncNow, _ := service.handleEvent(daemonEvent{
 		Type: daemonEventRecordPut,
 		RecordPut: &daemonRecordPut{
@@ -358,7 +358,7 @@ func TestDaemonRawRecordPutRejectsReservedNamespaceWithoutRevision(t *testing.T)
 	if syncNow {
 		t.Fatal("rejected raw record requested sync")
 	}
-	if got := uint64(service.StateStore.common.VerifiedRevision()); got != before {
+	if got := uint64(service.State.Common.VerifiedRevision()); got != before {
 		t.Fatalf("revision changed on reserved raw record: before=%d after=%d", before, got)
 	}
 }

@@ -6,8 +6,10 @@ import (
 
 	"github.com/HiggsNet/photon/internal/photonlinux/linkstate"
 	pingdebug "github.com/HiggsNet/photon/internal/ping"
+	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/health"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 // pingDebugTargets builds the health targets for a fixture state with a
@@ -15,7 +17,7 @@ import (
 func pingDebugTargets(t *testing.T) []health.ProbeTarget {
 	t.Helper()
 	managedZone := zone.ZonePath("local.")
-	links := map[string]linkInstanceState{
+	links := map[string]ipsec.LinkInstance{
 		"link-b": {ActualState: "up"},
 		"link-c": {
 			ActualState:           "up",
@@ -30,7 +32,7 @@ func pingDebugTargets(t *testing.T) []health.ProbeTarget {
 		},
 	}
 	reconcile := &ipsecObservationSummary{
-		Desired: []desiredLinkState{
+		Desired: []photonstate.DesiredLinkState{
 			{InstanceID: "link-b", GroupID: "g", PeerZone: zone.ZonePath("node-b."), LocalTunnelAddr: "10.0.0.1", PeerTunnelAddr: "10.0.0.2"},
 			{InstanceID: "link-b", GroupID: "g", PeerZone: zone.ZonePath("node-b."), LocalTunnelAddr: "fd00::1", PeerTunnelAddr: "fd00::2"},
 			{InstanceID: "link-c", GroupID: "g", PeerZone: zone.ZonePath("node-c."), LocalTunnelAddr: "fd00::1", PeerTunnelAddr: "fd00::2"},

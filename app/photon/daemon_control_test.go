@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	photonstate "github.com/HiggsNet/photon/internal/state"
+
 	"github.com/HiggsNet/photon/internal/controlapi"
 	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
@@ -74,29 +76,23 @@ func TestDaemonControlStatus(t *testing.T) {
 func TestCanonicalZoneQueryUsesControlWhileBoltOwnedAndMatchesOffline(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "photon.db")
 	legacy, trustedRoot := legacyRuntimeMigrationFixture(t)
-	seedLegacyRuntimeState(t, path, legacy)
+	seedLegacyLinuxState(t, path, legacy)
 	config := defaultAppConfig()
 	config.StatePath = path
 	config.TrustedRootPublicKey = append([]byte(nil), trustedRoot...)
 	rt := &AppContext{Config: config, StatePath: path, Clock: func() time.Time { return time.Unix(1000, 0) }}
 
-	boltStore, startup, err := openLinuxDaemonState(rt)
+	state, err := openState(rt)
 	if err != nil {
-		t.Fatalf("openLinuxDaemonState: %v", err)
+		t.Fatalf("openState: %v", err)
 	}
 	storeOpen := true
 	t.Cleanup(func() {
 		if storeOpen {
-			startup.Common.Close()
-			_ = boltStore.Close()
+			_ = state.Close()
 		}
 	})
-	stateStore, err := newPersistedDaemonStateStore(startup.Common, startup.Runtime, boltStore)
-	if err != nil {
-		t.Fatalf("newPersistedDaemonStateStore: %v", err)
-	}
-	syncConfig := gossipStartupConfigFromAppConfig(config, startup.Common.ReadView().State)
-	service := newDaemonWithStore(rt, stateStore, syncConfig, time.Second)
+	service := newDaemon(rt, state, time.Second)
 	installTestIPsecDrivers(service, &ipsec.DryRunDriver{}, &ipsec.DryRunDriver{})
 	service.ControlSocketPath = filepath.Join(t.TempDir(), "photon.sock")
 	t.Setenv("PHOTON_CONTROL_SOCKET", service.ControlSocketPath)
@@ -117,9 +113,8 @@ func TestCanonicalZoneQueryUsesControlWhileBoltOwnedAndMatchesOffline(t *testing
 	}
 
 	stop()
-	startup.Common.Close()
-	if err := boltStore.Close(); err != nil {
-		t.Fatalf("close daemon BoltStore: %v", err)
+	if err := state.Close(); err != nil {
+		t.Fatalf("close daemon State: %v", err)
 	}
 	storeOpen = false
 	common, _, err := loadOfflineOwnerViews(rt)
@@ -163,7 +158,7 @@ func TestDaemonControlCommonReadViews(t *testing.T) {
 	if !endpoints.OK {
 		t.Fatalf("endpoints_view response = %#v", endpoints)
 	}
-	pingTargets := controlViewRequestViaPipe[[]inspect.HealthProbeTargetView](t, service, controlRequest{Method: "ping_targets"})
+	pingTargets := controlViewRequestViaPipe[[]inspect.HealthTarget](t, service, controlRequest{Method: "ping_targets"})
 	if !pingTargets.OK {
 		t.Fatalf("ping_targets response = %#v", pingTargets)
 	}
@@ -183,7 +178,7 @@ func TestDaemonControlCommonReadViews(t *testing.T) {
 	if !admission.OK {
 		t.Fatalf("admission_status response = %#v", admission)
 	}
-	endpointACLs := controlViewRequestViaPipe[[]endpointACL](t, service, controlRequest{Method: "endpoint_acl_list"})
+	endpointACLs := controlViewRequestViaPipe[[]photonstate.EndpointACL](t, service, controlRequest{Method: "endpoint_acl_list"})
 	if !endpointACLs.OK {
 		t.Fatalf("endpoint_acl_list response = %#v", endpointACLs)
 	}
@@ -195,7 +190,7 @@ func TestDaemonControlCommonReadViews(t *testing.T) {
 	if !gossipPeers.OK {
 		t.Fatalf("gossip_peers_view response = %#v", gossipPeers)
 	}
-	healthView := controlViewRequestViaPipe[inspect.HealthDebugView](t, service, controlRequest{Method: "health_status"})
+	healthView := controlViewRequestViaPipe[inspect.HealthView](t, service, controlRequest{Method: "health_status"})
 	if !healthView.OK {
 		t.Fatalf("health_status response = %#v", healthView)
 	}
@@ -332,7 +327,7 @@ func TestDaemonControlBirdDump(t *testing.T) {
 
 func TestDaemonControlLinksStatusUsesReconcileSnapshot(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	observationLinks := map[string]linkInstanceState{
+	observationLinks := map[string]ipsec.LinkInstance{
 		"link-1": {
 			ID:            "link-1",
 			GroupID:       "main",
@@ -351,7 +346,7 @@ func TestDaemonControlLinksStatusUsesReconcileSnapshot(t *testing.T) {
 	observationReconcile := &ipsecObservationSummary{
 		LastRunUnix:  1234,
 		DesiredLinks: 1,
-		Desired: []desiredLinkState{{
+		Desired: []photonstate.DesiredLinkState{{
 			InstanceID:      "link-1",
 			GroupID:         "main",
 			PeerZone:        "node-b.catofes.",
@@ -364,7 +359,7 @@ func TestDaemonControlLinksStatusUsesReconcileSnapshot(t *testing.T) {
 			LocalTunnelAddr: "fd00::1%phxabc123",
 			PeerTunnelAddr:  "fd00::2%phxabc123",
 		}},
-		ActualSAs: []linkSAState{{
+		ActualSAs: []photonstate.LinkSAState{{
 			Name:           "runtime-r3",
 			ChildSA:        "runtime-r3-child",
 			RemoteEndpoint: "203.0.113.9:33403",
@@ -397,7 +392,7 @@ func TestDaemonControlLinksStatusUsesReconcileSnapshot(t *testing.T) {
 
 func TestDaemonControlReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	observationLinks := map[string]linkInstanceState{
+	observationLinks := map[string]ipsec.LinkInstance{
 		"link-committed": {
 			ID:          "link-committed",
 			GroupID:     "main",
@@ -408,7 +403,7 @@ func TestDaemonControlReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T)
 	observationReconcile := &ipsecObservationSummary{
 		LastRunUnix:  1234,
 		DesiredLinks: 1,
-		Desired: []desiredLinkState{{
+		Desired: []photonstate.DesiredLinkState{{
 			InstanceID: "link-committed",
 			GroupID:    "main",
 			PeerZone:   "node-b.catofes.",
@@ -426,9 +421,9 @@ func TestDaemonControlReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T)
 		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
 	setTestIPsecObservation(service, observationLinks, observationReconcile)
-	committedRev := uint64(service.StateStore.common.VerifiedRevision())
+	committedRev := uint64(service.State.Common.VerifiedRevision())
 
-	observationLinks["link-uncommitted"] = linkInstanceState{ID: "link-uncommitted"}
+	observationLinks["link-uncommitted"] = ipsec.LinkInstance{ID: "link-uncommitted"}
 	observationReconcile.DesiredLinks = 99
 
 	status := controlViewRequestViaPipe[inspect.DaemonStatusView](t, service, controlRequest{Method: "daemon_status_view"})
@@ -471,7 +466,7 @@ func TestDaemonPacketEventUpdatesCheckpointOwner(t *testing.T) {
 		t.Fatalf("packet event error: %v", err)
 	}
 
-	peer := service.StateStore.common.ReadView().Gossip.Peers["node-b.catofes."]
+	peer := service.State.Common.ReadView().Gossip.Peers["node-b.catofes."]
 	if peer.ObservedEndpoint != "198.51.100.9:33434" {
 		t.Fatalf("observed endpoint = %q, want packet source", peer.ObservedEndpoint)
 	}

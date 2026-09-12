@@ -15,11 +15,11 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-func TestOpenStateStoreRestoresCommonRevisionAndDetachedView(t *testing.T) {
+func TestOpenStateRestoresCommonRevisionAndDetachedView(t *testing.T) {
 	path, network, rootPublic, identityPrivate := saveCommonState(t, 7)
-	source, err := OpenStateStore(path, "node-a.catofes.", rootPublic, time.Second)
+	source, err := OpenState(path, "node-a.catofes.", rootPublic, time.Second)
 	if err != nil {
-		t.Fatalf("OpenStateStore: %v", err)
+		t.Fatalf("OpenState: %v", err)
 	}
 	defer source.Close()
 	first, err := source.ReadView(context.Background())
@@ -43,21 +43,21 @@ func TestOpenStateStoreRestoresCommonRevisionAndDetachedView(t *testing.T) {
 	}
 }
 
-func TestOpenStateStoreRejectsConfigTrustMismatch(t *testing.T) {
+func TestOpenStateRejectsConfigTrustMismatch(t *testing.T) {
 	path, _, rootPublic, _ := saveCommonState(t, 3)
-	if _, err := OpenStateStore(path, "other.catofes.", rootPublic, time.Second); err == nil || !strings.Contains(err.Error(), "managed zone mismatch") {
+	if _, err := OpenState(path, "other.catofes.", rootPublic, time.Second); err == nil || !strings.Contains(err.Error(), "managed zone mismatch") {
 		t.Fatalf("managed-zone error = %v", err)
 	}
 	wrongPublic, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := OpenStateStore(path, "node-a.catofes.", wrongPublic, time.Second); err == nil || !strings.Contains(err.Error(), "does not match") {
+	if _, err := OpenState(path, "node-a.catofes.", wrongPublic, time.Second); err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("root-pin error = %v", err)
 	}
 }
 
-func TestOpenStateStoreRejectsLegacyZoneDatabase(t *testing.T) {
+func TestOpenStateRejectsLegacyZoneDatabase(t *testing.T) {
 	network, rootPublic, _ := signedNetwork(t)
 	path := filepath.Join(t.TempDir(), "legacy.db")
 	legacy, err := zone.OpenBoltStore(path, 0o600)
@@ -70,14 +70,14 @@ func TestOpenStateStoreRejectsLegacyZoneDatabase(t *testing.T) {
 	if err := legacy.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := OpenStateStore(path, "node-a.catofes.", rootPublic, time.Second); err == nil || !strings.Contains(err.Error(), "common schema is absent") {
+	if _, err := OpenState(path, "node-a.catofes.", rootPublic, time.Second); err == nil || !strings.Contains(err.Error(), "common schema is absent") {
 		t.Fatalf("legacy database error = %v", err)
 	}
 }
 
-func TestOpenStateStoreOwnsExclusiveBoltHandle(t *testing.T) {
+func TestOpenStateOwnsExclusiveBoltHandle(t *testing.T) {
 	path, _, rootPublic, _ := saveCommonState(t, 2)
-	source, err := OpenStateStore(path, "node-a.catofes.", rootPublic, time.Second)
+	source, err := OpenState(path, "node-a.catofes.", rootPublic, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestOpenStateStoreOwnsExclusiveBoltHandle(t *testing.T) {
 	if _, err := source.ReadView(context.Background()); !errors.Is(err, corestate.ErrVerifiedStoreClosed) {
 		t.Fatalf("read after close error = %v", err)
 	}
-	reopened, err := OpenStateStore(path, "node-a.catofes.", rootPublic, time.Second)
+	reopened, err := OpenState(path, "node-a.catofes.", rootPublic, time.Second)
 	if err != nil {
 		t.Fatalf("reopen after close: %v", err)
 	}

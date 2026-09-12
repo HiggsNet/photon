@@ -47,7 +47,7 @@ func TestBuildLinksPrefersPlannedDesiredOverLastSnapshot(t *testing.T) {
 			Name:        "link-a",
 			Established: true,
 		}},
-		Health: []LinkHealth{{
+		Health: []HealthSample{{
 			InstanceID: "link-a",
 			State:      "healthy",
 		}},

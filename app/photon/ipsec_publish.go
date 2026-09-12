@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
@@ -22,10 +23,10 @@ import (
 
 type localIPsecPublishPlan struct {
 	Intents      []corestate.LocalIntent
-	TransportKey *ipsecTransportKeyState
+	TransportKey *photonstate.IPsecTransportKeyState
 }
 
-func (d *Daemon) ipsecProtocolPlan(verified *corestate.VerifiedState, runtime *linuxRuntimeState) (localIPsecPublishPlan, error) {
+func (d *Daemon) ipsecProtocolPlan(verified *corestate.VerifiedState, runtime *photonlinux.LinuxState) (localIPsecPublishPlan, error) {
 	var plan localIPsecPublishPlan
 	if d == nil || verified == nil || verified.Network == nil || runtime == nil || d.App == nil || d.App.Config == nil {
 		if d != nil {
@@ -111,11 +112,11 @@ func (d *Daemon) ipsecProtocolPlan(verified *corestate.VerifiedState, runtime *l
 	return plan, nil
 }
 
-func sameIPsecPublishRuntime(runtime *linuxRuntimeState, plan localIPsecPublishPlan) bool {
+func sameIPsecPublishRuntime(runtime *photonlinux.LinuxState, plan localIPsecPublishPlan) bool {
 	return runtime != nil && ipsecTransportKeyStateEqual(runtime.IPsecTransportKey, plan.TransportKey)
 }
 
-func ipsecTransportKeyStateEqual(a, b *ipsecTransportKeyState) bool {
+func ipsecTransportKeyStateEqual(a, b *photonstate.IPsecTransportKeyState) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
 	}
@@ -175,11 +176,11 @@ type localIPsecRecord struct {
 	value      any
 }
 
-func ensureIPsecTransportKey(runtime *linuxRuntimeState, identityPrivateKey ed25519.PrivateKey, now time.Time) (*ipsecTransportKeyState, *ipsec.TransportKeyRecord, error) {
-	if runtime == nil {
-		return nil, nil, fmt.Errorf("linux runtime state is nil")
+func ensureIPsecTransportKey(linuxState *photonlinux.LinuxState, identityPrivateKey ed25519.PrivateKey, now time.Time) (*photonstate.IPsecTransportKeyState, *ipsec.TransportKeyRecord, error) {
+	if linuxState == nil {
+		return nil, nil, fmt.Errorf("LinuxState is nil")
 	}
-	if key := runtime.IPsecTransportKey; key != nil && len(key.PublicKey) > 0 && len(key.PrivateKey) > 0 {
+	if key := linuxState.IPsecTransportKey; key != nil && len(key.PublicKey) > 0 && len(key.PrivateKey) > 0 {
 		record := buildTransportKeyRecord(key)
 		return key, record, nil
 	}
@@ -187,7 +188,7 @@ func ensureIPsecTransportKey(runtime *linuxRuntimeState, identityPrivateKey ed25
 	if err != nil {
 		return nil, nil, err
 	}
-	return &ipsecTransportKeyState{
+	return &photonstate.IPsecTransportKeyState{
 		Kind:        generated.Kind,
 		Algorithm:   generated.Algorithm,
 		PublicKey:   append([]byte(nil), generated.PublicKey...),
@@ -199,7 +200,7 @@ func ensureIPsecTransportKey(runtime *linuxRuntimeState, identityPrivateKey ed25
 	}, record, nil
 }
 
-func buildTransportKeyRecord(key *ipsecTransportKeyState) *ipsec.TransportKeyRecord {
+func buildTransportKeyRecord(key *photonstate.IPsecTransportKeyState) *ipsec.TransportKeyRecord {
 	record := &ipsec.TransportKeyRecord{
 		Version:     1,
 		Kind:        key.Kind,

@@ -14,6 +14,7 @@ import (
 	"github.com/HiggsNet/photon/internal/photonlinux/linkstate"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/health"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"github.com/urfave/cli/v3"
 )
 
@@ -64,7 +65,7 @@ func (d *Daemon) reconcileHealth(ctx context.Context) int {
 	if d == nil || d.health == nil || d.health.Manager == nil {
 		return 0
 	}
-	view := d.StateStore.common.ReadView()
+	view := d.State.Common.ReadView()
 	localZone := ""
 	if view.State != nil {
 		localZone = view.State.ManagedZone.String()
@@ -98,14 +99,14 @@ func (d *Daemon) handleHealthUpdate(now time.Time) {
 		return
 	}
 	if d.health.spool != nil {
-		if err := d.health.spool.Append(now, healthSpoolSamples(d.healthStatusResponse())); err != nil && !errors.Is(err, healthspool.ErrNotConfigured) {
+		if err := d.health.spool.Append(now, healthSpoolSamples(d.healthSamples())); err != nil && !errors.Is(err, healthspool.ErrNotConfigured) {
 			d.logWarn("health", "spool_write_failed", map[string]any{"error": err})
 		}
 	}
 	d.notifyObserver("health_updated", d.observerHealthLinkIDsPayload())
 }
 
-func healthSpoolSamples(links []healthLinkJSON) []healthspool.Sample {
+func healthSpoolSamples(links []inspect.HealthSample) []healthspool.Sample {
 	samples := make([]healthspool.Sample, 0, len(links))
 	for _, link := range links {
 		samples = append(samples, healthspool.Sample{
@@ -126,16 +127,17 @@ func healthSpoolSamples(links []healthLinkJSON) []healthspool.Sample {
 	return samples
 }
 
-// healthStatusResponse builds the control API response for `health_status`.
-func (d *Daemon) healthStatusResponse() []healthLinkJSON {
+// healthSamples projects the health manager's in-memory observations into the
+// canonical inspect model shared by every presentation transport.
+func (d *Daemon) healthSamples() []inspect.HealthSample {
 	if d == nil || d.health == nil || d.health.Manager == nil {
 		return nil
 	}
 	now := d.now()
 	snapshot := d.health.Snapshot(now)
-	out := make([]healthLinkJSON, 0, len(snapshot))
+	out := make([]inspect.HealthSample, 0, len(snapshot))
 	for _, h := range snapshot {
-		view := healthLinkHealthView{
+		out = append(out, inspect.HealthSample{
 			ProbeID:         h.ProbeID,
 			InstanceID:      h.InstanceID,
 			ProbeRole:       h.ProbeRole,
@@ -145,19 +147,18 @@ func (d *Daemon) healthStatusResponse() []healthLinkJSON {
 			Sent:            h.Sent,
 			Received:        h.Received,
 			Lost:            h.Lost,
-			LossRatio:       h.LossRatio,
-			LastRTT:         h.LastRTT,
-			EWMARTT:         h.EWMARTT,
-			P50RTT:          h.P50RTT,
-			P95RTT:          h.P95RTT,
-			P99RTT:          h.P99RTT,
-			Jitter:          h.Jitter,
+			LossRatio:       int(h.LossRatio * 100),
+			LastRTTMs:       h.LastRTT.Milliseconds(),
+			EWMARTTMs:       h.EWMARTT.Milliseconds(),
+			P50RTTMs:        h.P50RTT.Milliseconds(),
+			P95RTTMs:        h.P95RTT.Milliseconds(),
+			P99RTTMs:        h.P99RTT.Milliseconds(),
+			JitterMs:        h.Jitter.Milliseconds(),
 			ConsecutiveFail: h.ConsecutiveFail,
 			LastError:       h.LastError,
 			NextProbeUnix:   h.NextProbeAt.Unix(),
 			CutoverBlocking: h.CutoverBlocking,
-		}
-		out = append(out, healthLinkJSONFromHealth(view))
+		})
 	}
 	return out
 }
@@ -172,7 +173,7 @@ func showHealth(sortBy string, verbose bool) error {
 	if err != nil {
 		return err
 	}
-	view, online, err := readCanonicalViewViaControl[inspect.HealthDebugView](rt, controlRequest{Method: "health_status"})
+	view, online, err := readCanonicalViewViaControl[inspect.HealthView](rt, controlRequest{Method: "health_status"})
 	if err != nil {
 		return err
 	}
@@ -182,8 +183,8 @@ func showHealth(sortBy string, verbose bool) error {
 	return inspecttext.WriteHealth(os.Stdout, view, sortBy, verbose)
 }
 
-func healthViewFromOwners(common corestate.View, links map[string]linkInstanceState, reconcile *ipsecObservationSummary, live []healthLinkJSON) inspect.HealthDebugView {
-	view := inspect.HealthDebugView{Live: inspectHealthLiveLinks(live)}
+func healthViewFromOwners(common corestate.View, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, samples []inspect.HealthSample) inspect.HealthView {
+	view := inspect.HealthView{Samples: append([]inspect.HealthSample(nil), samples...)}
 	if common.State == nil {
 		return view
 	}
@@ -191,10 +192,10 @@ func healthViewFromOwners(common corestate.View, links map[string]linkInstanceSt
 	return view
 }
 
-func inspectHealthProbeTargets(targets []health.ProbeTarget) []inspect.HealthProbeTargetView {
-	out := make([]inspect.HealthProbeTargetView, 0, len(targets))
+func inspectHealthProbeTargets(targets []health.ProbeTarget) []inspect.HealthTarget {
+	out := make([]inspect.HealthTarget, 0, len(targets))
 	for _, target := range targets {
-		out = append(out, inspect.HealthProbeTargetView{
+		out = append(out, inspect.HealthTarget{
 			ProbeID:         target.ProbeID,
 			InstanceID:      target.InstanceID,
 			GroupID:         target.GroupID,
@@ -211,33 +212,6 @@ func inspectHealthProbeTargets(targets []health.ProbeTarget) []inspect.HealthPro
 			Role:            target.Role,
 			State:           target.State,
 			Staged:          target.Staged,
-		})
-	}
-	return out
-}
-
-func inspectHealthLiveLinks(links []healthLinkJSON) []inspect.HealthLiveView {
-	out := make([]inspect.HealthLiveView, 0, len(links))
-	for _, link := range links {
-		out = append(out, inspect.HealthLiveView{
-			ProbeID:         link.ProbeID,
-			InstanceID:      link.InstanceID,
-			ProbeRole:       link.ProbeRole,
-			State:           link.State,
-			ProbeType:       link.ProbeType,
-			Sent:            link.Sent,
-			Received:        link.Received,
-			Lost:            link.Lost,
-			LossRatio:       link.LossRatio,
-			LastRTTMs:       link.LastRTTMs,
-			EWMARTTMs:       link.EWMARTTMs,
-			P50RTTMs:        link.P50RTTMs,
-			P95RTTMs:        link.P95RTTMs,
-			P99RTTMs:        link.P99RTTMs,
-			JitterMs:        link.JitterMs,
-			ConsecutiveFail: link.ConsecutiveFail,
-			LastError:       link.LastError,
-			CutoverBlocking: link.CutoverBlocking,
 		})
 	}
 	return out

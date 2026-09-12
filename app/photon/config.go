@@ -17,6 +17,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"gopkg.in/yaml.v3"
@@ -64,6 +65,11 @@ type appConfig struct {
 	PeerLifecycle        inspect.PeerLifecycleConfig
 	Health               healthConfig
 	Observer             observerConfig
+}
+
+type syncConfigPeer struct {
+	ID   string `json:"id" yaml:"id"`
+	Addr string `json:"addr" yaml:"addr"`
 }
 
 type configYAML struct {
@@ -1088,22 +1094,27 @@ func statePathOverride() string {
 	return os.Getenv("PHOTON_STATE")
 }
 
-func gossipStartupConfigFromAppConfig(config *appConfig, verified *corestate.VerifiedState) *gossipStartupConfig {
-	peerID := config.PeerID
-	if peerID == "" {
-		peerID = defaultPeerID(verified)
+func configuredPeerID(config *appConfig, verified *corestate.VerifiedState) string {
+	if config != nil && config.PeerID != "" {
+		return config.PeerID
 	}
-	return &gossipStartupConfig{
-		PeerID:          peerID,
-		ListenAddr:      config.ListenAddr,
-		Bootstrap:       config.Bootstrap,
-		MaxMessageBytes: config.MaxMessageBytes,
-		MaxSyncZones:    config.MaxSyncZones,
-		MaxSyncRecords:  config.MaxSyncRecords,
+	if verified == nil {
+		return "local"
 	}
+	if verified.ManagedZone != "" && verified.ManagedZone != zone.RootZone {
+		return string(verified.ManagedZone)
+	}
+	if len(verified.IdentityPrivateKey) == 0 {
+		return "local"
+	}
+	pub := verified.IdentityPrivateKey.Public().(ed25519.PublicKey)
+	return hex.EncodeToString(photoncrypto.KeyID(pub))[:16]
 }
 
-func configuredKnownPeers(config *gossipStartupConfig) map[string]*net.UDPAddr {
+func configuredKnownPeers(config *appConfig) map[string]*net.UDPAddr {
+	if config == nil {
+		return nil
+	}
 	peers := make(map[string]*net.UDPAddr, len(config.Bootstrap))
 	for _, peer := range config.Bootstrap {
 		if peer.ID == "" || peer.Addr == "" {

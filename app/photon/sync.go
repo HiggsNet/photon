@@ -31,9 +31,9 @@ type SyncTransportDeps struct {
 	Log        func(gossip.Event)
 }
 
-func defaultSyncTransportDeps(config *gossipStartupConfig, loggerConfig *appConfig) *SyncTransportDeps {
+func defaultSyncTransportDeps(config corehost.GossipDriverConfig, loggerConfig *appConfig) *SyncTransportDeps {
 	return &SyncTransportDeps{
-		KnownPeers: configuredKnownPeers(config),
+		KnownPeers: config.Discovery.Bootstrap,
 		Replay:     gossip.NewReplayWindow(0),
 		Quotas:     gossip.NewPeerQuotas(gossip.QuotaConfig{}),
 		Log:        syncDebugLogger(loggerConfig),
@@ -65,16 +65,16 @@ func syncStatus(verbose bool) error {
 	if common.State == nil {
 		return errors.New("common state is not initialized")
 	}
-	config := gossipStartupConfigFromAppConfig(rt.Config, common.State)
-	return inspecttext.WriteSyncStatus(os.Stdout, inspect.BuildSyncStatus(common, syncStatusOptions(config, rt.Now(), verbose)))
+	config := gossipDriverConfig(rt.Config, common.State, nil)
+	return inspecttext.WriteSyncStatus(os.Stdout, inspect.BuildSyncStatus(common, syncStatusOptions(rt.Config.ListenAddr, config, rt.Now(), verbose)))
 }
 
-func syncStatusOptions(config *gossipStartupConfig, now time.Time, verbose bool) inspect.SyncStatusOptions {
+func syncStatusOptions(listenAddr string, config corehost.GossipDriverConfig, now time.Time, verbose bool) inspect.SyncStatusOptions {
 	peers := gossipPeersOptions(config, nil, now)
 	options := inspect.SyncStatusOptions{
-		PeerID: config.PeerID, ListenAddr: config.ListenAddr,
-		MaxDatagramBytes: config.MaxMessageBytes, MaxSyncZones: config.MaxSyncZones,
-		MaxSyncRecords: config.MaxSyncRecords, Bootstrap: peers.Bootstrap, Now: now, Verbose: verbose,
+		PeerID: config.PeerID, ListenAddr: listenAddr,
+		MaxDatagramBytes: config.Limits.MaxBytes, MaxSyncZones: config.Limits.MaxZones,
+		MaxSyncRecords: config.Limits.MaxRecords, Bootstrap: peers.Bootstrap, Now: now, Verbose: verbose,
 	}
 	return options
 }
@@ -84,18 +84,18 @@ func syncServe(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	service, boltStore, err := openDaemon(rt, defaultDaemonInterval)
+	service, err := openDaemon(rt, defaultDaemonInterval)
 	if err != nil {
 		return err
 	}
-	defer boltStore.Close()
-	config := service.currentGossipConfig()
+	defer service.Close()
+	config := service.gossipDriver.GossipConfig()
 	logger := newAppLogger(rt.Config)
 	transport, err := service.openGossipTransport()
 	if err != nil {
 		return err
 	}
-	service.updateDiscoveredPeers()
+	service.refreshGossipDiscovery()
 	err = service.gossipDriver.StartGossipTransport(ctx, transport, func(err error) {
 		logger.Warn("transport", "receive_failed", map[string]any{"error": err})
 	})
@@ -133,16 +133,16 @@ func syncOnce(peerID string) error {
 	if err != nil {
 		return err
 	}
-	service, boltStore, err := openDaemon(rt, defaultDaemonInterval)
+	service, err := openDaemon(rt, defaultDaemonInterval)
 	if err != nil {
 		return err
 	}
-	defer boltStore.Close()
+	defer service.Close()
 	transport, err := service.openGossipTransport()
 	if err != nil {
 		return err
 	}
-	service.updateDiscoveredPeers()
+	service.refreshGossipDiscovery()
 	logger := service.Log
 	ctx, cancel := context.WithTimeout(context.Background(), defaultSyncRoundTimeout)
 	defer cancel()
@@ -240,12 +240,12 @@ func (e *syncPendingZonesError) PendingZones() []string {
 }
 
 func (d *Daemon) openGossipTransport() (*gossip.Transport, error) {
-	config := d.currentGossipConfig()
-	if config == nil {
+	if d == nil || d.App == nil || d.App.Config == nil || d.gossipDriver == nil {
 		return nil, errors.New("gossip configuration is not initialized")
 	}
+	config := d.gossipDriver.GossipConfig()
 	deps := defaultSyncTransportDeps(config, d.App.Config)
-	listenAddr := config.ListenAddr
+	listenAddr := d.App.Config.ListenAddr
 	if listenAddr == "" {
 		listenAddr = fmt.Sprintf(":%d", gossip.DefaultPort)
 	}
@@ -265,11 +265,11 @@ func (d *Daemon) openGossipTransport() (*gossip.Transport, error) {
 	return transport, nil
 }
 
-func gossipTransportConfig(config *gossipStartupConfig, deps *SyncTransportDeps, clock func() time.Time) gossip.Config {
+func gossipTransportConfig(config corehost.GossipDriverConfig, deps *SyncTransportDeps, clock func() time.Time) gossip.Config {
 	return gossip.Config{
 		PeerID:          config.PeerID,
 		KnownPeers:      deps.KnownPeers,
-		MaxMessageBytes: config.MaxMessageBytes,
+		MaxMessageBytes: config.Limits.MaxBytes,
 		Replay:          deps.Replay,
 		Quotas:          deps.Quotas,
 		Clock:           clock,
@@ -381,7 +381,7 @@ func isLoopbackIP(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func syncLimits(config *gossipStartupConfig) corestate.SyncLimits {
+func syncLimits(config *appConfig) corestate.SyncLimits {
 	limits := corestate.DefaultSyncLimits()
 	if config == nil {
 		return limits

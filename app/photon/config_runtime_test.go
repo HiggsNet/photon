@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestRuntimeStatePathOverride(t *testing.T) {
+func TestLinuxStatePathOverride(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")
 	configDataDir := filepath.Join(dir, "config-data")
@@ -41,11 +41,11 @@ func TestRuntimeSyncConfigDerivesLimitsAndDefaults(t *testing.T) {
 		t.Fatalf("NewAppContext: %v", err)
 	}
 	verified, _, _, _ := buildTestDaemonOwners(t)
-	config := gossipStartupConfigFromAppConfig(rt.Config, verified)
-	if config.PeerID != string(verified.ManagedZone) {
-		t.Fatalf("PeerID = %q, want managed zone default %q", config.PeerID, verified.ManagedZone)
+	peerID := configuredPeerID(rt.Config, verified)
+	if peerID != string(verified.ManagedZone) {
+		t.Fatalf("PeerID = %q, want managed zone default %q", peerID, verified.ManagedZone)
 	}
-	limits := syncLimits(config)
+	limits := syncLimits(rt.Config)
 	if limits.MaxBytes != 4096 || limits.MaxZones != 8 || limits.MaxRecords != 64 {
 		t.Fatalf("limits = %#v, want 4096/8/64", limits)
 	}

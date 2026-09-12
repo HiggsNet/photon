@@ -3,13 +3,15 @@ package http
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/HiggsNet/photon/internal/inspect"
 )
 
 func TestHealthResponsePreservesObserverSchema(t *testing.T) {
 	got := HealthResponse{
 		Datasource: map[string]any{"kind": "local_spool"},
 		Links: []HealthContextItem{{
-			Health:          map[string]any{"instance_id": "link-1", "state": "unknown"},
+			Health:          inspect.HealthSample{InstanceID: "link-1", State: "unknown"},
 			PeerZone:        "node-b.catofes.",
 			GroupID:         "blue",
 			InterfaceName:   "phx0",
@@ -55,12 +57,9 @@ func TestHealthSeriesResponsePreservesObserverSchema(t *testing.T) {
 
 func TestBuildHealthContextMergesRuntimeContextAndMissingLinks(t *testing.T) {
 	got := BuildHealthContext(HealthContextInput{
-		HealthLinks: []HealthLinkContextInput{{
-			InstanceID:    "link-b",
-			ProbeRole:     "staged",
-			InterfaceName: "health-if",
-			Health:        map[string]any{"instance_id": "link-b", "probe_role": "staged", "state": "healthy"},
-		}},
+		View: inspect.HealthView{Samples: []inspect.HealthSample{{
+			InstanceID: "link-b", ProbeRole: "staged", InterfaceName: "health-if", State: "healthy",
+		}}},
 		Instances: map[string]HealthInstanceContextInput{
 			"link-a": {
 				ID:            "link-a",
@@ -103,14 +102,13 @@ func TestBuildHealthContextMergesRuntimeContextAndMissingLinks(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("context len = %d, want 2: %#v", len(got), got)
 	}
-	if got[0].SortInstanceID != "link-a" || got[0].PeerZone != "node-a.catofes." || got[0].InterfaceName != "phx-a" {
+	if got[0].Health.InstanceID != "link-a" || got[0].PeerZone != "node-a.catofes." || got[0].InterfaceName != "phx-a" {
 		t.Fatalf("missing-link context = %#v", got[0])
 	}
-	health, ok := got[0].Health.(map[string]any)
-	if !ok || health["state"] != "unknown" {
+	if got[0].Health.State != "unknown" {
 		t.Fatalf("missing-link health = %#v, want unknown map", got[0].Health)
 	}
-	if got[1].SortInstanceID != "link-b" || got[1].SortProbeRole != "staged" {
+	if got[1].Health.InstanceID != "link-b" || got[1].Health.ProbeRole != "staged" {
 		t.Fatalf("existing health sort keys = %#v", got[1])
 	}
 	if got[1].InterfaceName != "health-if" {
@@ -121,20 +119,16 @@ func TestBuildHealthContextMergesRuntimeContextAndMissingLinks(t *testing.T) {
 	}
 }
 
-func TestBuildHealthContextUsesUnknownHealthFactory(t *testing.T) {
+func TestBuildHealthContextUsesCanonicalUnknownSample(t *testing.T) {
 	got := BuildHealthContext(HealthContextInput{
 		Instances: map[string]HealthInstanceContextInput{
 			"link-a": {ID: "link-a"},
-		},
-		Unknown: func(instanceID string) any {
-			return map[string]any{"instance_id": instanceID, "state": "custom_unknown"}
 		},
 	})
 	if len(got) != 1 {
 		t.Fatalf("context len = %d, want 1", len(got))
 	}
-	health := got[0].Health.(map[string]any)
-	if health["state"] != "custom_unknown" {
-		t.Fatalf("health = %#v, want custom unknown", health)
+	if got[0].Health.InstanceID != "link-a" || got[0].Health.State != "unknown" {
+		t.Fatalf("health = %#v, want canonical unknown sample", got[0].Health)
 	}
 }

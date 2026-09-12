@@ -7,9 +7,10 @@ import (
 	"github.com/HiggsNet/photon/internal/inspect"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
-func peerLifecycleInput(network *zone.NetworkState, checkpoint *corestate.GossipCheckpoint, links map[string]linkInstanceState, reconcile *ipsecObservationSummary, peerID string, peerZone zone.ZonePath, now time.Time, cfg inspect.PeerLifecycleConfig, hasOverlayConfig bool) inspect.PeerLifecycleInput {
+func peerLifecycleInput(network *zone.NetworkState, checkpoint *corestate.GossipCheckpoint, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, peerID string, peerZone zone.ZonePath, now time.Time, cfg inspect.PeerLifecycleConfig, hasOverlayConfig bool) inspect.PeerLifecycleInput {
 	input := inspect.PeerLifecycleInput{
 		PeerID:           peerID,
 		PeerZone:         peerZone,
@@ -64,7 +65,7 @@ func peerLifecycleInput(network *zone.NetworkState, checkpoint *corestate.Gossip
 // derivePeerStatuses computes status for all known peers from the common
 // checkpoint plus Linux link observations. The result is sorted by peer id
 // for stable output.
-func derivePeerStatuses(managedZone zone.ZonePath, network *zone.NetworkState, checkpoint *corestate.GossipCheckpoint, links map[string]linkInstanceState, reconcile *ipsecObservationSummary, now time.Time, cfg inspect.PeerLifecycleConfig, hasOverlayConfig bool) []inspect.PeerStatusInfo {
+func derivePeerStatuses(managedZone zone.ZonePath, network *zone.NetworkState, checkpoint *corestate.GossipCheckpoint, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, now time.Time, cfg inspect.PeerLifecycleConfig, hasOverlayConfig bool) []inspect.PeerStatusInfo {
 	seen := make(map[string]bool)
 	var out []inspect.PeerStatusInfo
 
@@ -131,7 +132,7 @@ func hasPeerIPsecRecords(zs *zone.ZoneState) bool {
 // collectRevokedPeerZones returns the set of peer zones that are currently
 // revoked, expanded from LinkInstances and gossip checkpoint peers. This is used to feed
 // the revoked set into IPsec/routing/firewall reconcile.
-func collectRevokedPeerZones(network *zone.NetworkState, instances map[string]linkInstanceState, checkpoint *corestate.GossipCheckpoint, now time.Time) map[zone.ZonePath]bool {
+func collectRevokedPeerZones(network *zone.NetworkState, instances map[string]ipsec.LinkInstance, checkpoint *corestate.GossipCheckpoint, now time.Time) map[zone.ZonePath]bool {
 	out := make(map[zone.ZonePath]bool)
 	if network == nil {
 		return out

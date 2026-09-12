@@ -28,7 +28,7 @@ func TestBuildBabelDebug(t *testing.T) {
 				Enabled:    false,
 			},
 		},
-		RuntimeStates: map[string]*bird.InstanceObservation{
+		LinuxStates: map[string]*bird.InstanceObservation{
 			"photontesth2": {
 				RouterID:       12345,
 				ControlSocket:  "/run/photon/bird/bird-main.ctl",
@@ -71,7 +71,7 @@ func TestBuildBabelDebugCopiesRuntimeSlices(t *testing.T) {
 	overlays := []string{"main"}
 	view := BuildBabelDebug(BabelDebugInput{
 		Instances: []BabelInstanceInput{{NetNS: "n", InstanceID: "main", Enabled: true}},
-		RuntimeStates: map[string]*bird.InstanceObservation{
+		LinuxStates: map[string]*bird.InstanceObservation{
 			"n": {Overlays: overlays},
 		},
 	})

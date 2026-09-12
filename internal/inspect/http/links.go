@@ -13,30 +13,30 @@ type LinksResponse struct {
 }
 
 type LinkJSON struct {
-	ID              string               `json:"id"`
-	PeerZone        string               `json:"peer_zone"`
-	GroupID         string               `json:"group_id,omitempty"`
-	TransportKind   string               `json:"transport_kind,omitempty"`
-	TransportID     string               `json:"transport_id,omitempty"`
-	IKEName         string               `json:"ike_name,omitempty"`
-	State           string               `json:"state,omitempty"`
-	ActualState     string               `json:"actual_state,omitempty"`
-	Endpoint        string               `json:"endpoint,omitempty"`
-	InterfaceName   string               `json:"interface_name,omitempty"`
-	XFRMIfID        uint32               `json:"xfrm_if_id,omitempty"`
-	DesiredSpecHash string               `json:"desired_spec_hash,omitempty"`
-	Desired         *inspect.DesiredLink `json:"desired,omitempty"`
-	ActualSA        *inspect.LinkSA      `json:"actual_sa,omitempty"`
-	Health          *inspect.LinkHealth  `json:"health,omitempty"`
-	Routing         inspect.LinkRouting  `json:"routing"`
-	Rotation        inspect.LinkRotation `json:"rotation"`
-	Takeover        inspect.LinkTakeover `json:"takeover"`
-	Owner           inspect.LinkOwner    `json:"owner,omitempty"`
-	FailureCount    int                  `json:"failure_count,omitempty"`
-	BackoffUntil    int64                `json:"backoff_until,omitempty"`
-	LastTransition  int64                `json:"last_transition,omitempty"`
-	LastError       string               `json:"last_error,omitempty"`
-	Raw             inspect.LinkView     `json:"raw"`
+	ID              string                `json:"id"`
+	PeerZone        string                `json:"peer_zone"`
+	GroupID         string                `json:"group_id,omitempty"`
+	TransportKind   string                `json:"transport_kind,omitempty"`
+	TransportID     string                `json:"transport_id,omitempty"`
+	IKEName         string                `json:"ike_name,omitempty"`
+	State           string                `json:"state,omitempty"`
+	ActualState     string                `json:"actual_state,omitempty"`
+	Endpoint        string                `json:"endpoint,omitempty"`
+	InterfaceName   string                `json:"interface_name,omitempty"`
+	XFRMIfID        uint32                `json:"xfrm_if_id,omitempty"`
+	DesiredSpecHash string                `json:"desired_spec_hash,omitempty"`
+	Desired         *inspect.DesiredLink  `json:"desired,omitempty"`
+	ActualSA        *inspect.LinkSA       `json:"actual_sa,omitempty"`
+	Health          *inspect.HealthSample `json:"health,omitempty"`
+	Routing         inspect.LinkRouting   `json:"routing"`
+	Rotation        inspect.LinkRotation  `json:"rotation"`
+	Takeover        inspect.LinkTakeover  `json:"takeover"`
+	Owner           inspect.LinkOwner     `json:"owner,omitempty"`
+	FailureCount    int                   `json:"failure_count,omitempty"`
+	BackoffUntil    int64                 `json:"backoff_until,omitempty"`
+	LastTransition  int64                 `json:"last_transition,omitempty"`
+	LastError       string                `json:"last_error,omitempty"`
+	Raw             inspect.LinkView      `json:"raw"`
 }
 
 func LinksFromInspection(view inspect.LinkInspection) LinksResponse {

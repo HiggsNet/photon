@@ -8,6 +8,7 @@ import (
 	"github.com/HiggsNet/photon/internal/inspect"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 // ComputeRevocationImpact computes the full impact of a revocation on the
@@ -20,7 +21,7 @@ import (
 //   - Gossip checkpoint entries whose peer ID maps to a revoked zone
 //   - Bootstrap peers that are configured but now revoked
 //   - IPAM prefixes assigned to revoked zones (from route authorization errors)
-func ComputeRevocationImpact(network *zone.NetworkState, links map[string]linkInstanceState, checkpoint *corestate.GossipCheckpoint, revokedZone zone.ZonePath, now time.Time) inspect.RevocationImpact {
+func ComputeRevocationImpact(network *zone.NetworkState, links map[string]ipsec.LinkInstance, checkpoint *corestate.GossipCheckpoint, revokedZone zone.ZonePath, now time.Time) inspect.RevocationImpact {
 	impact := inspect.RevocationImpact{
 		RevokedZone: revokedZone,
 		Layers:      make(map[string]*inspect.RevocationLayerStatus),
@@ -107,7 +108,7 @@ func computeRevokedSubtree(ns *zone.NetworkState, revokedZone zone.ZonePath, _ t
 
 // isConfiguredBootstrapPeerWithConfig checks if a peer ID appears in the
 // bootstrap config. This is the config-aware version called by the daemon.
-func isConfiguredBootstrapPeerWithConfig(config *gossipStartupConfig, peerID string) bool {
+func isConfiguredBootstrapPeerWithConfig(config *appConfig, peerID string) bool {
 	if config == nil {
 		return false
 	}
@@ -183,7 +184,7 @@ type purgePlan struct {
 	ManagedZoneSkipped []zone.ZonePath `json:"managed_zone_skipped,omitempty"`
 }
 
-func mergePurgePlan(common corestate.PurgeRevokedPlan, links map[string]linkInstanceState) *purgePlan {
+func mergePurgePlan(common corestate.PurgeRevokedPlan, links map[string]ipsec.LinkInstance) *purgePlan {
 	plan := &purgePlan{
 		Zones:              append([]zone.ZonePath(nil), common.Zones...),
 		SyncPeers:          append([]string(nil), common.CheckpointPeers...),
@@ -204,7 +205,7 @@ func mergePurgePlan(common corestate.PurgeRevokedPlan, links map[string]linkInst
 
 // AllRevocationImpact computes impact for all currently-revoked zones and
 // returns a combined result for debug/diagnostic output.
-func AllRevocationImpact(network *zone.NetworkState, links map[string]linkInstanceState, checkpoint *corestate.GossipCheckpoint, config *gossipStartupConfig, now time.Time) []inspect.RevocationImpact {
+func AllRevocationImpact(network *zone.NetworkState, links map[string]ipsec.LinkInstance, checkpoint *corestate.GossipCheckpoint, config *appConfig, now time.Time) []inspect.RevocationImpact {
 	if network == nil {
 		return nil
 	}

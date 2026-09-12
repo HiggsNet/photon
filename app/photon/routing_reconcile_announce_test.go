@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"net/netip"
 	"testing"
@@ -11,7 +12,7 @@ func TestAutoAnnounceAssignedIPsDisabled(t *testing.T) {
 	state, rt := buildAutoAnnounceTestState(t, "node-a.catofes.", []string{"10.0.0.0/24"}, nil)
 	rt.Config.IPAM.AutoAnnounceAssignedIPs = false
 
-	service := newTestDaemonFromOwners(rt, state, nil, &linuxRuntimeState{}, &gossipStartupConfig{}, time.Second)
+	service := newTestDaemonFromOwners(rt, state, nil, &photonlinux.LinuxState{}, nil, time.Second)
 	ars, err := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
 	if err != nil {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
@@ -19,7 +20,7 @@ func TestAutoAnnounceAssignedIPsDisabled(t *testing.T) {
 	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
 	}
-	view := service.StateStore.common.ReadView()
+	view := service.State.Common.ReadView()
 	if len(view.State.Network.Zones["node-a.catofes."].Records) != 0 {
 		t.Fatalf("expected no announcements when disabled, got %d", len(view.State.Network.Zones["node-a.catofes."].Records))
 	}
@@ -28,7 +29,7 @@ func TestAutoAnnounceAssignedIPsDisabled(t *testing.T) {
 func TestAutoAnnounceAssignedIPsPublishesNew(t *testing.T) {
 	state, rt := buildAutoAnnounceTestState(t, "node-a.catofes.", []string{"10.0.0.0/24"}, nil)
 
-	service := newTestDaemonFromOwners(rt, state, nil, &linuxRuntimeState{}, &gossipStartupConfig{}, time.Second)
+	service := newTestDaemonFromOwners(rt, state, nil, &photonlinux.LinuxState{}, nil, time.Second)
 	ars, err := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
 	if err != nil {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
@@ -38,7 +39,7 @@ func TestAutoAnnounceAssignedIPsPublishesNew(t *testing.T) {
 	}
 
 	key, _ := routing.NormalizeRouteAnnouncementKey("10.0.0.0/24")
-	view := service.StateStore.common.ReadView()
+	view := service.State.Common.ReadView()
 	rec := view.State.Network.Zones["node-a.catofes."].Records[key]
 	if rec == nil {
 		t.Fatalf("expected announcement record for %s", key)
@@ -58,7 +59,7 @@ func TestAutoAnnounceAssignedIPsPublishesNew(t *testing.T) {
 func TestAutoAnnounceAssignedIPsWithdrawsStale(t *testing.T) {
 	state, rt := buildAutoAnnounceTestState(t, "node-a.catofes.", nil, map[string]bool{"10.0.0.0/24": true})
 
-	service := newTestDaemonFromOwners(rt, state, nil, &linuxRuntimeState{}, &gossipStartupConfig{}, time.Second)
+	service := newTestDaemonFromOwners(rt, state, nil, &photonlinux.LinuxState{}, nil, time.Second)
 	ars, err := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
 	if err != nil {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
@@ -68,7 +69,7 @@ func TestAutoAnnounceAssignedIPsWithdrawsStale(t *testing.T) {
 	}
 
 	key, _ := routing.NormalizeRouteAnnouncementKey("10.0.0.0/24")
-	view := service.StateStore.common.ReadView()
+	view := service.State.Common.ReadView()
 	rec := view.State.Network.Zones["node-a.catofes."].Records[key]
 	if rec == nil {
 		t.Fatalf("expected withdrawal record for %s", key)
@@ -85,21 +86,21 @@ func TestAutoAnnounceAssignedIPsWithdrawsStale(t *testing.T) {
 func TestAutoAnnounceAssignedIPsSkipsExisting(t *testing.T) {
 	state, rt := buildAutoAnnounceTestState(t, "node-a.catofes.", []string{"10.0.0.0/24"}, map[string]bool{"10.0.0.0/24": true})
 
-	service := newTestDaemonFromOwners(rt, state, nil, &linuxRuntimeState{}, &gossipStartupConfig{}, time.Second)
+	service := newTestDaemonFromOwners(rt, state, nil, &photonlinux.LinuxState{}, nil, time.Second)
 	ars, err := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
 	if err != nil {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
 	}
-	beforeRev := uint64(service.StateStore.common.VerifiedRevision())
+	beforeRev := uint64(service.State.Common.VerifiedRevision())
 	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
 	}
-	if afterRev := uint64(service.StateStore.common.VerifiedRevision()); afterRev != beforeRev {
+	if afterRev := uint64(service.State.Common.VerifiedRevision()); afterRev != beforeRev {
 		t.Fatalf("no-op auto announce advanced revision: before=%d after=%d", beforeRev, afterRev)
 	}
 
 	key, _ := routing.NormalizeRouteAnnouncementKey("10.0.0.0/24")
-	view := service.StateStore.common.ReadView()
+	view := service.State.Common.ReadView()
 	rec := view.State.Network.Zones["node-a.catofes."].Records[key]
 	if rec == nil {
 		t.Fatalf("expected announcement record for %s", key)
@@ -112,7 +113,7 @@ func TestAutoAnnounceAssignedIPsSkipsExisting(t *testing.T) {
 func TestAutoAnnounceAssignedIPsSkipsInvalidAssignment(t *testing.T) {
 	state, rt := buildAutoAnnounceTestState(t, "node-a.catofes.", []string{"192.168.0.0/24"}, nil)
 
-	service := newTestDaemonFromOwners(rt, state, nil, &linuxRuntimeState{}, &gossipStartupConfig{}, time.Second)
+	service := newTestDaemonFromOwners(rt, state, nil, &photonlinux.LinuxState{}, nil, time.Second)
 	ars, err := routing.BuildAuthorizedRouteSet(state.Network, rt.Now())
 	if err != nil {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
@@ -125,7 +126,7 @@ func TestAutoAnnounceAssignedIPsSkipsInvalidAssignment(t *testing.T) {
 	}
 
 	key, _ := routing.NormalizeRouteAnnouncementKey("192.168.0.0/24")
-	view := service.StateStore.common.ReadView()
+	view := service.State.Common.ReadView()
 	if view.State.Network.Zones["node-a.catofes."].Records[key] != nil {
 		t.Fatalf("expected no announcement for invalid assignment")
 	}
@@ -133,7 +134,7 @@ func TestAutoAnnounceAssignedIPsSkipsInvalidAssignment(t *testing.T) {
 
 func TestAutoAnnounceAssignedIPsUsesAllAssignments(t *testing.T) {
 	state, rt := buildAutoAnnounceTestState(t, "node-a.catofes.", []string{"10.0.0.0/24"}, nil)
-	service := newTestDaemonFromOwners(rt, state, nil, &linuxRuntimeState{}, &gossipStartupConfig{}, time.Second)
+	service := newTestDaemonFromOwners(rt, state, nil, &photonlinux.LinuxState{}, nil, time.Second)
 	prefix := netip.MustParsePrefix("10.0.0.0/24")
 	ars := &routing.AuthorizedRouteSet{
 		Assignments: map[netip.Prefix]*routing.AssignmentEntry{
@@ -153,7 +154,7 @@ func TestAutoAnnounceAssignedIPsUsesAllAssignments(t *testing.T) {
 		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
 	}
 	key, _ := routing.NormalizeRouteAnnouncementKey("10.0.0.0/24")
-	view := service.StateStore.common.ReadView()
+	view := service.State.Common.ReadView()
 	rec := view.State.Network.Zones["node-a.catofes."].Records[key]
 	if rec == nil {
 		t.Fatalf("expected announcement from local AllAssignments entry")
@@ -171,7 +172,7 @@ func TestAutoAnnounceSelectorsSeparatePersistentAndExplicitSharedRoutes(t *testi
 	state, rt := buildAutoAnnounceTestState(t, "node-a.catofes.", []string{"10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"}, map[string]bool{"10.0.3.0/24": true})
 	rt.Config.IPAM.AutoAnnounceAssignedIPs = false
 	rt.Config.IPAM.Announce = []string{"non-shared", "tag:edge.c"}
-	service := newTestDaemonFromOwners(rt, state, nil, &linuxRuntimeState{}, &gossipStartupConfig{}, time.Second)
+	service := newTestDaemonFromOwners(rt, state, nil, &photonlinux.LinuxState{}, nil, time.Second)
 	ars := &routing.AuthorizedRouteSet{AllAssignments: []*routing.AssignmentEntry{
 		{Prefix: netip.MustParsePrefix("10.0.1.0/24"), AssignedTo: "node-a.catofes."},
 		{Prefix: netip.MustParsePrefix("10.0.2.0/24"), AssignedTo: "node-a.catofes.", Shared: true, Tag: "edge.c"},
@@ -181,7 +182,7 @@ func TestAutoAnnounceSelectorsSeparatePersistentAndExplicitSharedRoutes(t *testi
 	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
 	}
-	view := service.StateStore.common.ReadView()
+	view := service.State.Common.ReadView()
 	for _, prefix := range []string{"10.0.1.0/24", "10.0.2.0/24"} {
 		key, _ := routing.NormalizeRouteAnnouncementKey(prefix)
 		ann, err := routing.ParseRouteAnnouncementRecord(view.State.Network.Zones["node-a.catofes."].Records[key])
@@ -199,7 +200,7 @@ func TestAutoAnnounceSelectorsSeparatePersistentAndExplicitSharedRoutes(t *testi
 	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs after config change: %v", err)
 	}
-	view = service.StateStore.common.ReadView()
+	view = service.State.Common.ReadView()
 	edgeKey, _ := routing.NormalizeRouteAnnouncementKey("10.0.2.0/24")
 	edgeAnn, _ := routing.ParseRouteAnnouncementRecord(view.State.Network.Zones["node-a.catofes."].Records[edgeKey])
 	serviceAnn, _ = routing.ParseRouteAnnouncementRecord(view.State.Network.Zones["node-a.catofes."].Records[serviceKey])
@@ -214,7 +215,7 @@ func TestAutoAnnounceSelectorsSeparatePersistentAndExplicitSharedRoutes(t *testi
 	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs after removing all selectors: %v", err)
 	}
-	view = service.StateStore.common.ReadView()
+	view = service.State.Common.ReadView()
 	localKey, _ := routing.NormalizeRouteAnnouncementKey("10.0.1.0/24")
 	localAnn, _ := routing.ParseRouteAnnouncementRecord(view.State.Network.Zones["node-a.catofes."].Records[localKey])
 	serviceAnn, _ = routing.ParseRouteAnnouncementRecord(view.State.Network.Zones["node-a.catofes."].Records[serviceKey])

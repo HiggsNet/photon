@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/photonlinux/linkstate"
+	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -15,11 +16,11 @@ import (
 
 func TestHealthTargetsParseScopedNetNS(t *testing.T) {
 	managedZone := zone.ZonePath("node-a.catofes.")
-	links := map[string]linkInstanceState{
+	links := map[string]ipsec.LinkInstance{
 		"link-1": {ActualState: "up"},
 	}
 	reconcile := &ipsecObservationSummary{
-		Desired: []desiredLinkState{{
+		Desired: []photonstate.DesiredLinkState{{
 			InstanceID:      "link-1",
 			GroupID:         "blue",
 			PeerZone:        zone.ZonePath("node-b.catofes."),
@@ -47,7 +48,7 @@ func TestHealthTargetsParseScopedNetNS(t *testing.T) {
 
 func TestHealthTargetsUseRotatedRuntimeInterface(t *testing.T) {
 	managedZone := zone.ZonePath("node-a.catofes.")
-	links := map[string]linkInstanceState{
+	links := map[string]ipsec.LinkInstance{
 		"link-1": {
 			ActualState:           "up",
 			InterfaceName:         "phx-old",
@@ -61,7 +62,7 @@ func TestHealthTargetsUseRotatedRuntimeInterface(t *testing.T) {
 		},
 	}
 	reconcile := &ipsecObservationSummary{
-		Desired: []desiredLinkState{{
+		Desired: []photonstate.DesiredLinkState{{
 			InstanceID:      "link-1",
 			GroupID:         "blue",
 			PeerZone:        zone.ZonePath("node-b.catofes."),
@@ -100,7 +101,7 @@ func TestHealthTargetsUseObservedDesiredTunnelAddressesForActive(t *testing.T) {
 	local := zone.ZonePath("less.catofes.")
 	peer := zone.ZonePath("more.catofes.")
 	group := ipsec.LinkGroupSpec{ID: "blue"}.Normalized()
-	links := map[string]linkInstanceState{
+	links := map[string]ipsec.LinkInstance{
 		"link-1": {
 			ID:               "link-1",
 			ActualState:      "up",
@@ -109,7 +110,7 @@ func TestHealthTargetsUseObservedDesiredTunnelAddressesForActive(t *testing.T) {
 		},
 	}
 	reconcile := &ipsecObservationSummary{
-		Desired: []desiredLinkState{{
+		Desired: []photonstate.DesiredLinkState{{
 			InstanceID:      "link-1",
 			GroupID:         group.ID,
 			PeerZone:        peer,
@@ -150,7 +151,7 @@ func TestHealthTargetsSkipRotateProbeWithoutObservedRuntimeTunnelAddresses(t *te
 	if err != nil {
 		t.Fatalf("derive staged tunnel addresses: %v", err)
 	}
-	links := map[string]linkInstanceState{
+	links := map[string]ipsec.LinkInstance{
 		linkID: {
 			ID:                  linkID,
 			ActualState:         "up",
@@ -162,7 +163,7 @@ func TestHealthTargetsSkipRotateProbeWithoutObservedRuntimeTunnelAddresses(t *te
 		},
 	}
 	reconcile := &ipsecObservationSummary{
-		Desired: []desiredLinkState{{
+		Desired: []photonstate.DesiredLinkState{{
 			InstanceID:      linkID,
 			GroupID:         group.ID,
 			PeerZone:        peer,
@@ -243,7 +244,7 @@ func TestHealthStatusAndMetricsUsePacketCounts(t *testing.T) {
 		App:    &AppContext{Config: &appConfig{Health: cfg}, Clock: func() time.Time { return now.Add(time.Second) }},
 		health: &healthDriver{Manager: manager},
 	}
-	links := d.healthStatusResponse()
+	links := d.healthSamples()
 	if len(links) != 1 || links[0].Sent != 3 || links[0].Received != 2 || links[0].Lost != 1 || links[0].LossRatio != 33 || links[0].State != health.HealthStateDegraded {
 		t.Fatalf("health status = %+v, want degraded with packet counts 3/2/1 and 33%% loss", links)
 	}

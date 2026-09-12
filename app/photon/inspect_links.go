@@ -3,14 +3,17 @@ package main
 import (
 	"sort"
 
+	photonstate "github.com/HiggsNet/photon/internal/state"
+
 	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 // buildStoredLinkInspection projects the daemon-owned Linux runtime result.
 // Read paths do not run the IPsec planner or platform drivers again.
-func buildStoredLinkInspection(rt *AppContext, instances map[string]linkInstanceState, reconcile *ipsecObservationSummary, birdInstances map[string]*bird.InstanceObservation, health []healthLinkJSON) inspect.LinksDebugView {
-	input := inspect.LinkInput{Health: inspectLinkHealth(health)}
+func buildStoredLinkInspection(rt *AppContext, instances map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, birdInstances map[string]*bird.InstanceObservation, health []inspect.HealthSample) inspect.LinksDebugView {
+	input := inspect.LinkInput{Health: append([]inspect.HealthSample(nil), health...)}
 	if reconcile != nil {
 		input.LastRunUnix = reconcile.LastRunUnix
 		input.DesiredLinks = reconcile.DesiredLinks
@@ -50,7 +53,7 @@ func lastReconcileDesiredLinks(reconcile *ipsecObservationSummary) int {
 	return reconcile.DesiredLinks
 }
 
-func sortedLinkInstanceIDs(instances map[string]linkInstanceState) []string {
+func sortedLinkInstanceIDs(instances map[string]ipsec.LinkInstance) []string {
 	ids := make([]string, 0, len(instances))
 	for id := range instances {
 		ids = append(ids, id)
@@ -59,7 +62,7 @@ func sortedLinkInstanceIDs(instances map[string]linkInstanceState) []string {
 	return ids
 }
 
-func inspectDesiredLinks(items []desiredLinkState) []inspect.DesiredLink {
+func inspectDesiredLinks(items []photonstate.DesiredLinkState) []inspect.DesiredLink {
 	out := make([]inspect.DesiredLink, 0, len(items))
 	for _, item := range items {
 		out = append(out, inspect.BuildDesiredLinkFromRuntime(item))
@@ -67,7 +70,7 @@ func inspectDesiredLinks(items []desiredLinkState) []inspect.DesiredLink {
 	return out
 }
 
-func inspectLinkSAs(items []linkSAState) []inspect.LinkSA {
+func inspectLinkSAs(items []photonstate.LinkSAState) []inspect.LinkSA {
 	out := make([]inspect.LinkSA, 0, len(items))
 	for _, item := range items {
 		out = append(out, inspect.LinkSA(item))
@@ -75,36 +78,7 @@ func inspectLinkSAs(items []linkSAState) []inspect.LinkSA {
 	return out
 }
 
-func inspectLinkHealth(items []healthLinkJSON) []inspect.LinkHealth {
-	out := make([]inspect.LinkHealth, 0, len(items))
-	for _, item := range items {
-		out = append(out, inspect.LinkHealth{
-			ProbeID:         item.ProbeID,
-			InstanceID:      item.InstanceID,
-			ProbeRole:       item.ProbeRole,
-			InterfaceName:   item.InterfaceName,
-			State:           item.State,
-			ProbeType:       item.ProbeType,
-			Sent:            item.Sent,
-			Received:        item.Received,
-			Lost:            item.Lost,
-			LossRatio:       item.LossRatio,
-			LastRTTMs:       item.LastRTTMs,
-			EWMARTTMs:       item.EWMARTTMs,
-			P50RTTMs:        item.P50RTTMs,
-			P95RTTMs:        item.P95RTTMs,
-			P99RTTMs:        item.P99RTTMs,
-			JitterMs:        item.JitterMs,
-			ConsecutiveFail: item.ConsecutiveFail,
-			LastError:       item.LastError,
-			NextProbeUnix:   item.NextProbeUnix,
-			CutoverBlocking: item.CutoverBlocking,
-		})
-	}
-	return out
-}
-
-func inspectLinkActions(items []linkActionState) []inspect.LinkAction {
+func inspectLinkActions(items []photonstate.LinkActionState) []inspect.LinkAction {
 	out := make([]inspect.LinkAction, 0, len(items))
 	for _, item := range items {
 		out = append(out, inspect.BuildLinkActionFromRuntime(item))
@@ -112,7 +86,7 @@ func inspectLinkActions(items []linkActionState) []inspect.LinkAction {
 	return out
 }
 
-func inspectLinkSkips(items []linkSkipState) []inspect.LinkSkip {
+func inspectLinkSkips(items []photonstate.LinkSkipState) []inspect.LinkSkip {
 	out := make([]inspect.LinkSkip, 0, len(items))
 	for _, item := range items {
 		out = append(out, inspect.BuildLinkSkipFromRuntime(item))
