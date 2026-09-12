@@ -26,14 +26,14 @@ func WriteBirdDump(w io.Writer, dump *inspect.BirdDumpResponse) error {
 		out.Linef("  instance_id: %s", dash(inst.InstanceID))
 		out.Linef("  control_socket: %s", dash(inst.ControlSocket))
 		out.LineIf(inst.ConfigPath != "", "  config_path: %s", inst.ConfigPath)
-		out.LineIf(inst.FilterError != "", "  filter_error: %s", inst.FilterError)
+		out.LineIf(inst.FilterFailure != nil, "  filter_failure: %s", failureDisplay(inst.FilterFailure))
 		if inst.FilterDefinitions != "" {
 			out.Linef("  filter_definitions:")
 			for line := range strings.SplitSeq(inst.FilterDefinitions, "\n") {
 				out.Linef("    %s", line)
 			}
 		}
-		out.LineIf(inst.Error != "", "  error: %s", inst.Error)
+		out.LineIf(inst.Failure != nil, "  failure: %s", failureDisplay(inst.Failure))
 		commands := make([]string, 0, len(inst.Raw))
 		for cmd := range inst.Raw {
 			commands = append(commands, cmd)
@@ -166,7 +166,7 @@ func WriteBabelDebug(w io.Writer, view inspect.BabelDebugView) error {
 		return out.Err()
 	}
 	if failure := view.LastReconcileFailure; failure != nil {
-		out.Linef("last_reconcile_failure: code=%s message=%s", failure.Code, failure.Message)
+		out.Linef("last_reconcile_failure: %s", failureDisplay(failure))
 	}
 	for _, inst := range view.Instances {
 		out.Linef("netns %s", inst.NetNS)
@@ -185,7 +185,7 @@ func WriteBabelDebug(w io.Writer, view inspect.BabelDebugView) error {
 			out.Linef("  last_config_hash: %s", dash(shortTextHash(inst.LastConfigHash)))
 			out.LineIf(len(inst.Overlays) > 0, "  overlays: %s", strings.Join(inst.Overlays, ", "))
 			out.Linef("  state: %s", defaultText(inst.State, "pending"))
-			out.Linef("  last_error: %s", dash(inst.LastError))
+			out.Linef("  last_failure: %s", failureDisplay(inst.LastFailure))
 			continue
 		}
 		out.Linef("  router_id: -")
@@ -194,7 +194,7 @@ func WriteBabelDebug(w io.Writer, view inspect.BabelDebugView) error {
 		out.Linef("  pid_file: -")
 		out.Linef("  last_config_hash: -")
 		out.Linef("  state: pending")
-		out.Linef("  last_error: -")
+		out.Linef("  last_failure: -")
 	}
 	return out.Err()
 }

@@ -84,7 +84,7 @@ func (p *RawICMProber) Type() string { return ProbeTypeICMP }
 
 func (p *RawICMProber) Probe(ctx context.Context, target ProbeTarget, cfg ProbeConfig) ProbeResult {
 	if !target.PeerTunnelAddr.IsValid() {
-		return ProbeResult{InstanceID: target.InstanceID, Error: "peer address missing"}
+		return ProbeResult{InstanceID: target.InstanceID, Err: errors.New("peer address missing")}
 	}
 	worker, err := p.worker(target.NetNS)
 	if err != nil {
@@ -119,7 +119,7 @@ func (p *RawICMProber) Probe(ctx context.Context, target ProbeTarget, cfg ProbeC
 		Success:    result.err == nil && received > sent-received,
 	}
 	if result.err != nil {
-		probeResult.Error = result.err.Error()
+		probeResult.Err = result.err
 	}
 	return probeResult
 }
@@ -131,7 +131,7 @@ func (p *RawICMProber) fallbackOrError(ctx context.Context, target ProbeTarget, 
 		}
 		return p.fallback.Probe(ctx, target, cfg)
 	}
-	return ProbeResult{InstanceID: target.InstanceID, Error: rawErr.Error()}
+	return ProbeResult{InstanceID: target.InstanceID, Err: rawErr}
 }
 
 func (p *RawICMProber) worker(netns string) (rawICMPWorker, error) {

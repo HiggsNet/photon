@@ -29,10 +29,10 @@ type RevocationImpact struct {
 
 // RevocationLayerStatus tracks the cleanup status for a single subsystem.
 type RevocationLayerStatus struct {
-	Status   string `json:"status"`           // pending, removed, not_found, owner_conflict, error
-	Error    string `json:"error,omitempty"`  // populated when Status == "error"
-	Reason   string `json:"reason,omitempty"` // human-readable detail
-	UnixTime int64  `json:"unix_time,omitempty"`
+	Status   string       `json:"status"`            // pending, removed, not_found, owner_conflict, error
+	Failure  *FailureView `json:"failure,omitempty"` // populated when Status == "error"
+	Reason   string       `json:"reason,omitempty"`  // human-readable detail
+	UnixTime int64        `json:"unix_time,omitempty"`
 }
 
 const (

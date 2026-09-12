@@ -36,7 +36,7 @@ func TestWritePingDebugOutput(t *testing.T) {
 				Interface:    "phx-new",
 				LocalTunnel:  "fd00::1",
 				PeerTunnel:   "fd00::2",
-				Error:        "100% packet loss",
+				Failure:      &inspect.FailureView{Code: inspect.FailureCodeHealthProbe, Message: "100% packet loss"},
 			},
 		},
 	}
@@ -54,7 +54,7 @@ func TestWritePingDebugOutput(t *testing.T) {
 		"interface: phx0  netns: photontesth2",
 		"result: ok rtt=2.3ms",
 		"role=staged underlay=ipv6 tunnel=ipv6",
-		`result: fail error="100% packet loss"`,
+		"result: fail code=health_probe_failed message=100% packet loss",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("output missing %q:\n%s", want, got)

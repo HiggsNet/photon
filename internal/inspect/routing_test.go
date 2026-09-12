@@ -38,6 +38,7 @@ func TestBuildBabelDebug(t *testing.T) {
 				LastConfigHash: "deadbeef",
 				Overlays:       []string{"main"},
 				State:          "running",
+				LastFailure:    errors.New("bird restart failed"),
 			},
 		},
 	})
@@ -54,6 +55,9 @@ func TestBuildBabelDebug(t *testing.T) {
 	}
 	if !main.HasState || main.RouterID != 12345 || main.State != "running" {
 		t.Fatalf("main runtime state = %+v", main)
+	}
+	if main.LastFailure == nil || main.LastFailure.Code != FailureCodeBirdInstance || main.LastFailure.Message != "bird restart failed" {
+		t.Fatalf("main failure = %+v", main.LastFailure)
 	}
 	if len(main.Overlays) != 1 || main.Overlays[0] != "main" {
 		t.Fatalf("main overlays = %#v", main.Overlays)

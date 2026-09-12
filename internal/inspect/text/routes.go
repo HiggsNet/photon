@@ -42,7 +42,7 @@ func WriteRoutesDebug(w io.Writer, dump *inspect.RoutesResponse) error {
 		out.Linef("netns %s", inst.NetNS)
 		out.Linef("  instance_id: %s", dash(inst.InstanceID))
 		out.LineIf(inst.State != "", "  state: %s", inst.State)
-		out.LineIf(inst.Error != "", "  error: %s", inst.Error)
+		out.LineIf(inst.Failure != nil, "  failure: %s", failureDisplay(inst.Failure))
 		out.Linef("  routes: %d", len(inst.Routes))
 		for _, route := range inst.Routes {
 			out.Printf("    %s selected=%t authorized=%t import_allowed=%t",

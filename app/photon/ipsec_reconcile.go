@@ -4,9 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/netip"
-	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -411,7 +412,7 @@ func markMissingXFRMLinkInstances(instances map[string]ipsec.LinkInstance, missi
 			continue
 		}
 		inst.ActualState = ipsec.LinkStateDegraded
-		inst.LastError = "xfrm namespace or interface missing"
+		inst.LastFailure = errors.New("xfrm namespace or interface missing")
 		inst.LastTransition = now.Unix()
 		instances[id] = inst
 	}
@@ -423,7 +424,7 @@ func (d *Daemon) publishIPsecObservation(rev uint64, unix int64, instances map[s
 	}
 	summary := summarizeIPsecReconcile(rev, unix, desired, sas, actions, skips, lastError)
 	observedLinks, observedReconcile := d.linuxObservation.ipsecSnapshot()
-	if reflect.DeepEqual(observedLinks, instances) && ipsecReconcileSummaryEqual(observedReconcile, summary) {
+	if ipsecLinkInstancesEqual(observedLinks, instances) && ipsecReconcileSummaryEqual(observedReconcile, summary) {
 		return nil
 	}
 	currentRev := uint64(d.State.Common.VerifiedRevision())
@@ -447,7 +448,35 @@ func ipsecReconcileSummaryEqual(base, next *ipsecObservationSummary) bool {
 	next = cloneIPsecObservationSummary(next)
 	normalizeIPsecReconcileForComparison(base)
 	normalizeIPsecReconcileForComparison(next)
-	return reflect.DeepEqual(base, next)
+	return base.DesiredLinks == next.DesiredLinks &&
+		slices.Equal(base.Desired, next.Desired) &&
+		slices.Equal(base.ActualSAs, next.ActualSAs) &&
+		slices.Equal(base.Actions, next.Actions) &&
+		slices.Equal(base.Skipped, next.Skipped) &&
+		diagnosticErrorsEqual(base.LastFailure, next.LastFailure)
+}
+
+func ipsecLinkInstancesEqual(base, next map[string]ipsec.LinkInstance) bool {
+	return maps.EqualFunc(base, next, ipsecLinkInstanceEqual)
+}
+
+func ipsecLinkInstanceEqual(base, next ipsec.LinkInstance) bool {
+	if !diagnosticErrorsEqual(base.LastFailure, next.LastFailure) ||
+		!diagnosticErrorsEqual(base.LastTakeoverFailure, next.LastTakeoverFailure) {
+		return false
+	}
+	base.LastFailure = nil
+	base.LastTakeoverFailure = nil
+	next.LastFailure = nil
+	next.LastTakeoverFailure = nil
+	return base == next
+}
+
+func diagnosticErrorsEqual(base, next error) bool {
+	if base == nil || next == nil {
+		return base == nil && next == nil
+	}
+	return base.Error() == next.Error()
 }
 
 // normalizeIPsecReconcileForComparison removes values sampled only for live
@@ -744,14 +773,14 @@ func markIPsecActionFailed(instances map[string]ipsec.LinkInstance, action ipsec
 	inst = ipsec.MarkLinkApplyFailure(inst, policy, now, err)
 	switch action.Action {
 	case ipsec.ReconcileActionPrepareRotate, ipsec.ReconcileActionCommitRotate, ipsec.ReconcileActionRollbackRotate, ipsec.ReconcileActionCleanupRotate:
-		if inst.RotatePhase != "" {
-			inst.LastError = "rotate " + inst.RotatePhase + ": " + inst.LastError
+		if inst.RotatePhase != "" && inst.LastFailure != nil {
+			inst.LastFailure = fmt.Errorf("rotate %s: %w", inst.RotatePhase, inst.LastFailure)
 		}
 	}
 	if inst.InitiatorRole == ipsec.InitiatorRoleSecondaryTakeover {
 		inst.TakeoverPhase = ipsec.TakeoverPhaseCooldown
 		inst.TakeoverUntil = now.Add(ipsec.TakeoverCooldownDuration(policy)).Unix()
-		inst.LastTakeoverError = inst.LastError
+		inst.LastTakeoverFailure = inst.LastFailure
 	}
 	instances[id] = inst
 }

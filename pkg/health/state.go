@@ -36,7 +36,7 @@ func NewStateMachine(cfg HysteresisConfig) *StateMachine {
 // Evaluate applies a window snapshot and returns the new health state and a
 // failure reason (if the state is degraded/down/probe_error). now is the
 // evaluation time (usually the probe time).
-func (m *StateMachine) Evaluate(instanceID string, snap WindowSnapshot, lastError string, now time.Time) (state string, reason string) {
+func (m *StateMachine) Evaluate(instanceID string, snap WindowSnapshot, lastFailure error, now time.Time) (state string, reason string) {
 	prev := m.state[instanceID]
 	if prev == "" {
 		prev = HealthStateUnknown
@@ -52,28 +52,28 @@ func (m *StateMachine) Evaluate(instanceID string, snap WindowSnapshot, lastErro
 	}
 	if observations == 0 {
 		state, reason = HealthStateUnknown, ""
-	} else if lastError != "" && (prev == HealthStateProbeError || snap.ConsecutiveFails >= m.cfg.FailThresholdConsecutive) {
+	} else if lastFailure != nil && (prev == HealthStateProbeError || snap.ConsecutiveFails >= m.cfg.FailThresholdConsecutive) {
 		// probe_error is sticky: it represents repeated failures to execute a
 		// useful probe (permission/netns/interface missing). Recovery requires
 		// consecutive successes.
-		state, reason = HealthStateProbeError, classifyFailReason(lastError, snap)
+		state, reason = HealthStateProbeError, classifyFailReason(lastFailure, snap)
 	} else if snap.ConsecutiveFails >= m.cfg.FailThresholdConsecutive {
-		state, reason = HealthStateDown, classifyFailReason(lastError, snap)
+		state, reason = HealthStateDown, classifyFailReason(lastFailure, snap)
 	} else if snap.Sent == 0 {
 		// The probe ran but could not send packets. Before the repeated-error
 		// threshold this is degraded, matching the old one-sample error behavior.
-		state, reason = HealthStateDegraded, classifyFailReason(lastError, snap)
+		state, reason = HealthStateDegraded, classifyFailReason(lastFailure, snap)
 	} else if snap.LossRatio >= m.cfg.DownLossThreshold {
 		// A cold window makes the first failed sample look like 100% loss. Do
 		// not call the link down until at least the configured failure evidence
 		// has accumulated.
 		if observations >= m.cfg.FailThresholdConsecutive {
-			state, reason = HealthStateDown, classifyFailReason(lastError, snap)
+			state, reason = HealthStateDown, classifyFailReason(lastFailure, snap)
 		} else {
-			state, reason = HealthStateDegraded, classifyFailReason(lastError, snap)
+			state, reason = HealthStateDegraded, classifyFailReason(lastFailure, snap)
 		}
 	} else if snap.LossRatio >= m.cfg.LossThreshold {
-		state, reason = HealthStateDegraded, classifyFailReason(lastError, snap)
+		state, reason = HealthStateDegraded, classifyFailReason(lastFailure, snap)
 	} else {
 		state, reason = HealthStateHealthy, ""
 	}
@@ -117,7 +117,11 @@ func (m *StateMachine) Reset(instanceID string) {
 }
 
 // classifyFailReason maps a raw error into a stable reason category.
-func classifyFailReason(raw string, snap WindowSnapshot) string {
+func classifyFailReason(failure error, snap WindowSnapshot) string {
+	raw := ""
+	if failure != nil {
+		raw = failure.Error()
+	}
 	switch {
 	case contains(raw, "permission"):
 		return "permission_denied"

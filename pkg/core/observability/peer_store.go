@@ -56,7 +56,7 @@ type PeerObjectPullStats struct {
 	Failures               int64  `json:"failures,omitempty"`
 	LargeObjectUnreachable int64  `json:"large_object_unreachable,omitempty"`
 	LastUnix               int64  `json:"last_unix,omitempty"`
-	LastError              string `json:"last_error,omitempty"`
+	LastFailure            error  `json:"-"`
 	LastObject             string `json:"last_object,omitempty"`
 	LastZone               string `json:"last_zone,omitempty"`
 	LastKey                string `json:"last_key,omitempty"`

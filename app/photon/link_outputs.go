@@ -102,7 +102,6 @@ func newIPsecLinkOutput(inst ipsec.LinkInstance, desired photonstate.DesiredLink
 		State:          inst.ActualState,
 		Readiness:      baseLinkReadiness(inst.ActualState, iface),
 		Endpoint:       firstNonEmpty(inst.Endpoint, desired.Endpoint),
-		LastError:      inst.LastError,
 		LastTransition: inst.LastTransition,
 	}
 }

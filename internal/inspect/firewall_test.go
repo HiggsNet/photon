@@ -37,7 +37,7 @@ func TestBuildFirewallDebugView(t *testing.T) {
 			Backend:     "dry-run",
 			LastFailure: errors.New("nft unavailable"),
 			Instances: map[string]*firewall.FirewallInstanceObservation{
-				"photontesth2": {Backend: "nft", Generation: 5, OwnedObjects: 10, PolicyHash: "abc123"},
+				"photontesth2": {Backend: "nft", Generation: 5, OwnedObjects: 10, PolicyHash: "abc123", LastFailure: errors.New("apply failed")},
 			},
 		},
 	})
@@ -52,6 +52,9 @@ func TestBuildFirewallDebugView(t *testing.T) {
 	}
 	if got := view.Instances[0]; got.ID != "photontesth2" || got.Generation != 5 || got.OwnedObjects != 10 || got.PolicyHash != "abc123" {
 		t.Fatalf("first instance = %+v, want reconcile fields", got)
+	}
+	if got := view.Instances[0].LastFailure; got == nil || got.Code != FailureCodeFirewallInstance || got.Message != "apply failed" {
+		t.Fatalf("instance failure = %+v", got)
 	}
 	if got := view.Instances[0]; got.ResolvedBackend != "nft" || len(got.InlineHooks) != 2 || got.InlineHooks[0].State != "active" || got.InlineHooks[1].State != "inactive" {
 		t.Fatalf("inline hooks = %+v, resolved backend %q", got.InlineHooks, got.ResolvedBackend)

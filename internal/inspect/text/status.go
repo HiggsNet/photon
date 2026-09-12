@@ -54,7 +54,7 @@ func writeRunningStatus(out *lineWriter, view inspect.StatusView) {
 	out.Linef("  states: %s", formatStatusCounts(view.Links.States))
 	out.Linef("  health: %s", formatStatusCounts(view.Links.Health))
 	if failure := view.Links.LastFailure; failure != nil {
-		out.Linef("  last_failure: code=%s message=%s", failure.Code, failure.Message)
+		out.Linef("  last_failure: %s", failureDisplay(failure))
 	}
 }
 

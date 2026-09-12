@@ -2,6 +2,7 @@ package ping
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"sort"
 	"sync"
@@ -92,7 +93,7 @@ func Run(ctx context.Context, prober health.Prober, targets []health.ProbeTarget
 	for i, target := range targets {
 		go func() {
 			defer wg.Done()
-			result := health.ProbeResult{InstanceID: target.InstanceID, Error: "no prober configured"}
+			result := health.ProbeResult{InstanceID: target.InstanceID, Err: errors.New("no prober configured")}
 			if prober != nil {
 				result = prober.Probe(ctx, target, cfg)
 			}
@@ -127,7 +128,7 @@ func BuildDebugView(peerZone string, outcomes []Outcome, availableZones []string
 			PeerTunnel:   outcome.Target.PeerTunnelAddr.String(),
 			Success:      outcome.Result.Success,
 			RTT:          outcome.Result.RTT,
-			Error:        outcome.Result.Error,
+			Failure:      inspect.BuildFailure(inspect.FailureCodeHealthProbe, outcome.Result.Err),
 		})
 	}
 	return inspect.BuildPingDebugView(view)

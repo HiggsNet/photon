@@ -31,7 +31,7 @@ type PingTargetView struct {
 	PeerTunnel   string
 	Success      bool
 	RTT          time.Duration
-	Error        string
+	Failure      *FailureView
 }
 
 func BuildPingDebugView(view PingDebugView) PingDebugView {

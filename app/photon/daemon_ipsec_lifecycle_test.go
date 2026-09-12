@@ -487,7 +487,7 @@ func TestDaemonStartupRecoversSecondaryTakeoverFromObservation(t *testing.T) {
 	if inst.TakeoverStartedAt != now.Unix() || inst.TakeoverUntil <= now.Unix() {
 		t.Fatalf("takeover lease = started:%d until:%d, want fresh bounded lease", inst.TakeoverStartedAt, inst.TakeoverUntil)
 	}
-	if inst.BackoffUntil != 0 || inst.FailureCount != 0 || inst.LastTakeoverError != "" {
+	if inst.BackoffUntil != 0 || inst.FailureCount != 0 || inst.LastTakeoverFailure != nil {
 		t.Fatalf("takeover recovered stale retry state: %+v", inst)
 	}
 	if reconcile == nil || len(reconcile.Actions) != 1 || reconcile.Actions[0].Action != ipsec.ReconcileActionAdopt {

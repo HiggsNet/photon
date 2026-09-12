@@ -2,6 +2,7 @@ package health
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"sort"
 	"sync"
@@ -26,7 +27,7 @@ type Manager struct {
 	windows     map[string]*RollingWindow
 	states      *StateMachine
 	targets     map[string]ProbeTarget
-	lastError   map[string]string
+	lastFailure map[string]error
 	lastReason  map[string]string
 	nextProbe   map[string]time.Time
 	errorsTotal map[string]int
@@ -66,7 +67,7 @@ func NewManager(cfg ProbeConfig, hyst HysteresisConfig, prober Prober) *Manager 
 		windows:     map[string]*RollingWindow{},
 		states:      NewStateMachine(hyst),
 		targets:     map[string]ProbeTarget{},
-		lastError:   map[string]string{},
+		lastFailure: map[string]error{},
 		lastReason:  map[string]string{},
 		nextProbe:   map[string]time.Time{},
 		errorsTotal: map[string]int{},
@@ -99,7 +100,7 @@ func (m *Manager) SetTargets(targets []ProbeTarget, now time.Time) {
 			delete(m.targets, id)
 			delete(m.windows, id)
 			delete(m.nextProbe, id)
-			delete(m.lastError, id)
+			delete(m.lastFailure, id)
 			delete(m.lastReason, id)
 			delete(m.errorsTotal, id)
 			delete(m.babelObs, id)
@@ -132,7 +133,7 @@ func (m *Manager) RemoveTarget(instanceID string) {
 	delete(m.targets, instanceID)
 	delete(m.windows, instanceID)
 	delete(m.nextProbe, instanceID)
-	delete(m.lastError, instanceID)
+	delete(m.lastFailure, instanceID)
 	delete(m.lastReason, instanceID)
 	delete(m.errorsTotal, instanceID)
 	delete(m.babelObs, instanceID)
@@ -267,7 +268,7 @@ func (m *Manager) runAsyncProbe(job probeDispatch) ProbeResult {
 	case <-probeCtx.Done():
 		return ProbeResult{
 			InstanceID: job.target.InstanceID,
-			Error:      "probe deadline exceeded: " + probeCtx.Err().Error(),
+			Err:        fmt.Errorf("probe deadline exceeded: %w", probeCtx.Err()),
 		}
 	}
 }
@@ -366,13 +367,13 @@ func (m *Manager) applyResult(instanceID string, result ProbeResult, now time.Ti
 	if _, ok := m.targets[instanceID]; !ok {
 		return
 	}
-	if result.Error != "" {
+	if result.Err != nil {
 		m.errorsTotal[instanceID]++
-		m.lastError[instanceID] = result.Error
+		m.lastFailure[instanceID] = result.Err
 	} else {
-		delete(m.lastError, instanceID)
+		delete(m.lastFailure, instanceID)
 	}
-	_, reason := m.states.Evaluate(instanceID, snap, m.lastError[instanceID], now)
+	_, reason := m.states.Evaluate(instanceID, snap, m.lastFailure[instanceID], now)
 	if reason == "" {
 		delete(m.lastReason, instanceID)
 	} else {
@@ -425,7 +426,7 @@ func (m *Manager) Snapshot(now time.Time) []LinkHealth {
 			Jitter:          snap.Jitter,
 			ConsecutiveFail: snap.ConsecutiveFails,
 			LastSuccess:     snap.LastSuccess,
-			LastError:       m.lastError[id],
+			LastFailure:     m.lastFailure[id],
 			LastReason:      m.lastReason[id],
 			NextProbeAt:     next,
 			CutoverBlocking: t.Staged && m.cutoverBlockingLocked(id),
@@ -488,7 +489,7 @@ func (m *Manager) HealthFor(instanceID string, now time.Time) (LinkHealth, bool)
 		Jitter:          snap.Jitter,
 		ConsecutiveFail: snap.ConsecutiveFails,
 		LastSuccess:     snap.LastSuccess,
-		LastError:       m.lastError[instanceID],
+		LastFailure:     m.lastFailure[instanceID],
 		LastReason:      m.lastReason[instanceID],
 		NextProbeAt:     m.nextProbe[instanceID],
 		CutoverBlocking: t.Staged && m.cutoverBlockingLocked(instanceID),

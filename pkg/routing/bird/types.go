@@ -165,8 +165,8 @@ type BirdResourceOwner struct {
 
 // ProcessExit records a managed BIRD process exit observed by waitpid/Wait.
 type ProcessExit struct {
-	PID   int    `json:"pid,omitempty"`
-	Error string `json:"error,omitempty"`
+	PID     int
+	Failure error
 }
 
 // UpstreamSpec configures a veth-based Babel peering with the main network.
@@ -331,7 +331,7 @@ type InstanceObservation struct {
 	RouterID         uint32            `json:"router_id"`
 	Owner            BirdResourceOwner `json:"owner,omitempty"`
 	LastConfigHash   string            `json:"last_config_hash"`
-	LastError        string            `json:"last_error"`
+	LastFailure      error             `json:"-"`
 	LastExit         string            `json:"last_exit,omitempty"`
 	FailureCount     int               `json:"failure_count,omitempty"`
 	BackoffUntilUnix int64             `json:"backoff_until_unix,omitempty"`

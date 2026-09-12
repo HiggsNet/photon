@@ -136,7 +136,7 @@ func TestReconcileLinkInstancesHonorsApplyBackoff(t *testing.T) {
 	}
 	inst := NewLinkInstance(spec, LinkStateUp, now)
 	inst = MarkLinkApplyFailure(inst, BackoffPolicy{InitialSeconds: 2, MaxSeconds: 8}, now, errors.New("load connection: vici unavailable"))
-	if inst.FailureCount != 1 || inst.BackoffUntil != now.Add(2*time.Second).Unix() || inst.LastError == "" {
+	if inst.FailureCount != 1 || inst.BackoffUntil != now.Add(2*time.Second).Unix() || inst.LastFailure == nil || inst.LastFailure.Error() != "load connection: vici unavailable" {
 		t.Fatalf("failed instance = %+v", inst)
 	}
 	inst = MarkLinkApplyFailure(inst, BackoffPolicy{InitialSeconds: 2, MaxSeconds: 8}, now.Add(time.Second), errors.New("load connection: vici unavailable"))
@@ -162,7 +162,7 @@ func TestReconcileLinkInstancesHonorsApplyBackoff(t *testing.T) {
 		t.Fatalf("after backoff actions = %+v", afterBackoff.Actions)
 	}
 	cleared := MarkLinkApplySuccess(inst, now.Add(6*time.Second))
-	if cleared.FailureCount != 0 || cleared.BackoffUntil != 0 || cleared.LastError != "" {
+	if cleared.FailureCount != 0 || cleared.BackoffUntil != 0 || cleared.LastFailure != nil {
 		t.Fatalf("cleared instance = %+v", cleared)
 	}
 }
@@ -306,7 +306,7 @@ func TestReconcileLinkInstancesEstablishedSAWinsOverBackoff(t *testing.T) {
 		t.Fatalf("recovered actions = %+v", recovered.Actions)
 	}
 	got := recovered.Instances[inst.ID]
-	if got.ActualState != LinkStateUp || got.FailureCount != 0 || got.BackoffUntil != 0 || got.LastError != "" {
+	if got.ActualState != LinkStateUp || got.FailureCount != 0 || got.BackoffUntil != 0 || got.LastFailure != nil {
 		t.Fatalf("recovered instance = %+v, want up with cleared backoff", got)
 	}
 }

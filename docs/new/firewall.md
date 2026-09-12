@@ -528,12 +528,12 @@ Firewall reconcile 在 `app/photon/firewall_reconcile.go` 中实现，触发时�
 ```go
 // pkg/firewall/types.go
 type FirewallInstanceObservation struct {
-	Backend      string `json:"backend,omitempty"`
-    Generation   uint64 `json:"generation,omitempty"`
-    LastRunUnix  int64  `json:"last_run_unix,omitempty"`
-    LastError    string `json:"last_error,omitempty"`
-    PolicyHash   string `json:"policy_hash,omitempty"`
-    OwnedObjects int    `json:"owned_objects,omitempty"`
+	Backend      string
+    Generation   uint64
+    LastRunUnix  int64
+    LastFailure  error
+    PolicyHash   string
+    OwnedObjects int
 }
 ```
 
@@ -545,10 +545,10 @@ type FirewallInstanceObservation struct {
 
 `reconcileFirewall` 按 instance 隔离失败，单个实例出错不影响其他实例：
 
-- `BuildDesiredState` / `Plan` / `Apply` 任一步失败：错误记录到该实例的 `LastError`，继续处理下一个实例；全部实例处理完后，首个错误写入 `summary.LastError` 并发布到在线 observation，可由 `photon debug firewall` 查看。
+- `BuildDesiredState` / `Plan` / `Apply` 任一步失败：原始 `error` 记录到该实例的 `LastFailure`，继续处理下一个实例；全部实例处理完后，首个错误写入 summary 的 `LastFailure` 并发布到在线 observation，可由 `photon debug firewall` 查看。
 - nft driver 使用单次 batch 事务，任一命令失败时整批不提交，旧 ruleset 保持不变。
 - iptables driver 的 staging 阶段遇错立即停止并删除未激活链，旧 generation 保持生效；所有 staging chain 完成后才进入切换阶段。iptables 与 ip6tables 以及不同 table 之间没有跨后端的统一内核事务，因此切换阶段若失败会补偿删除此前已激活的新 jump 并保留旧 generation；若补偿命令本身也失败，错误会记录到 reconcile 状态，下一轮继续收敛。
-- backend 不可用（nft 缺失且 `iptables` / `ip6tables` 之一缺失）：daemon 记录 `no_backend_available` 或 `backend_unavailable` warning，并在该 instance 的 `LastError` 中保留失败；不会退化为 dry-run 成功。系统上已有的旧规则保持不动。
+- backend 不可用（nft 缺失且 `iptables` / `ip6tables` 之一缺失）：daemon 记录 `no_backend_available` 或 `backend_unavailable` warning，并在该 instance 的 `LastFailure` 中保留失败；不会退化为 dry-run 成功。系统上已有的旧规则保持不动。
 - 撤销（revocation）不走特殊通道：Zone record 变化经 `notifyStateChanged` 触发 flush，deny-first 由 planner 的 `buildPrefixSets` 在生成期望状态时保证（见 4.2）。
 
 ---
@@ -603,7 +603,7 @@ photon debug preflight
 | `peer_authorized_v4/v6` set | 按 peer 分组的前缀集合 | 未实现 | 无按 peer 分组 | 暂不实现 |
 | Assignment 白名单二次校验 | planner 独立校验允许进入规则的 assignment | `AssignmentPrefixes` 已组装但仍未使用；前缀规则依赖 `AuthorizedRouteSet` 派生结果 | 缺少 planner 层独立的 assignment 防御性复核 | 暂不实现 |
 | Backend 探测粒度 | 检测 netlink API、`CAP_NET_ADMIN`、目标 netns、host NAT hook、ipset 及 IPv4/IPv6 CLI | 已检查 `iptables`、`ip6tables` 与 `ipset` 必须同时存在；仍主要只检查 host PATH，`CAP_NET_ADMIN` 仅以 `nft list tables` 近似且不参与 backend 选择，daemon 也未调用 driver `Preflight` | 避免单栈或缺少 set 支持的半套策略；权限、`xt_set` 或目标 netns 不可用仍可能在 staging apply 才失败 | CLI 检查已完成；内核能力与目标 netns 探测暂不实现 |
-| Backend 不可用时的失败策略 | 显式 backend 不可用应 fail closed 或阻止启动 | 无可用 backend 的 instance 不会转交 DryRunDriver；会记录 `LastError` 并输出结构化 `no_backend_available` / `backend_unavailable` warning | daemon 继续运行，但不会把未下发规则伪装为成功 | 已完成 warning 与 fail-closed per-instance reconcile |
+| Backend 不可用时的失败策略 | 显式 backend 不可用应 fail closed 或阻止启动 | 无可用 backend 的 instance 不会转交 DryRunDriver；会记录 `LastFailure` 并输出结构化 `no_backend_available` / `backend_unavailable` warning | daemon 继续运行，但不会把未下发规则伪装为成功 | 已完成 warning 与 fail-closed per-instance reconcile |
 | netlink API | nftables 优先使用 netlink | 实际使用 `nft` CLI | 实现方式不同 | 暂不实现 |
 | 无变更 reconcile | `policy_hash` 未变化时 no-op | `PlanDiff` 只比较对象名；nft 每次 apply 原子整表替换，iptables 每次 apply 重建并切换同 hash 的另一个 `a`/`b` 槽位 | 无业务变更也会产生内核写入；nft 有短暂事务切换成本，iptables builtin jump 会经历一次 generation 切换 | 问题不大 暂时保留 |
 | Generation 递增 | 每次成功 apply 递增并可追踪历史 | iptables 物理 chain 已带 desired hash 和 `a`/`b` staging 槽，但 NFT/IPTables/DryRun driver 对外仍返回 `Generation: 1` | 持久化/debug 状态无法按 generation 区分历史，也不能表达实际槽位 | 问题不大 暂时保留 |
@@ -619,7 +619,7 @@ photon debug preflight
 
 ### 8.1 使用建议
 
-- 生产环境可显式配置 `backend: nft` 或 `backend: iptables` 来固定选择，但“显式”不等于 backend 可用时强制失败；仍应检查 `photon debug firewall` 的 `resolved_backend` / `LastError` 和 daemon warning，避免实际落入 dry-run。
+- 生产环境可显式配置 `backend: nft` 或 `backend: iptables` 来固定选择，但“显式”不等于 backend 可用时强制失败；仍应检查 `photon debug firewall` 的 `resolved_backend` / `last_failure` 和 daemon warning，避免实际落入 dry-run。
 - `mode: external` 可用于将 instance 交给外部管理器：Photon 不会再修改它；切换前已有的 Photon-owned 规则仍需由管理员确认并清理。
 - host 实例在 `ipsec.port_mode=range` 时默认启用 redirect grace；若使用固定端口，可关闭 `redirect_grace`。
 - daemon 升级、停止、禁用实例或切换 backend 后，建议手动检查并清理残留的 Photon-owned table/chain（`nft list tables`、`iptables -S`、`ip6tables -S`）。

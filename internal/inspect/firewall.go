@@ -64,7 +64,7 @@ type FirewallInstanceView struct {
 	Generation      uint64
 	OwnedObjects    int
 	PolicyHash      string
-	LastError       string
+	LastFailure     *FailureView
 }
 
 type FirewallLocalServiceView struct {
@@ -128,7 +128,7 @@ func BuildFirewallDebug(input FirewallDebugInput) FirewallDebugView {
 			instView.Generation = snapshot.Generation
 			instView.OwnedObjects = snapshot.OwnedObjects
 			instView.PolicyHash = snapshot.PolicyHash
-			instView.LastError = snapshot.LastError
+			instView.LastFailure = BuildFailure(FailureCodeFirewallInstance, snapshot.LastFailure)
 		}
 		for i := range instView.InlineHooks {
 			hook := &instView.InlineHooks[i]

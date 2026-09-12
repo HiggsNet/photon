@@ -100,9 +100,11 @@ Daemon
 - [x] 删除持久化 `PeerCleanups`：离线抑制直接由保留的 GossipCheckpoint 最后活动时间与 `cleanup_after` 推导，吊销抑制直接由 VerifiedState 推导；成功同步刷新 checkpoint 后自然恢复，不保留第二份 cleanup tombstone。
 - [x] 收敛无独立线程/DB 的 `LinuxObservation` read model；IPsec、routing/BIRD 和 firewall 在线时更新，重启时清空并重建。
 - [x] platform inspect/control/HTTP 只读在线 Observation；Daemon 离线时 platform source 返回 unavailable，不用 bbolt 上次 reconcile snapshot 冒充 live；status/peer lifecycle 的纯投影也不再要求 LinuxState 作为无关组合参数。
-- [ ] 内存错误使用 `error`/typed failure，展示时映射稳定 code/message；没有证明价值时不持久化 LastError。
+- [x] 内存错误使用 `error`/typed failure，展示时映射稳定 code/message；没有证明价值时不持久化 LastError。
   - [x] IPsec、routing 与 firewall 顶层 reconcile summary 使用 process-local `error`；canonical inspect、control 与 HTTP 只投影一个含稳定 code/message 的 `FailureView`，删除并行的顶层 `LastError` 字符串，不把 failure 写入 LinuxState。
-  - [ ] 收敛 IPsec link/takeover、BIRD instance 与 firewall instance 的状态机错误；保留独立 backoff/deadline 字段，不用 message 驱动行为。
+  - [x] 收敛 IPsec link/takeover、BIRD instance 与 firewall instance 的状态机错误；删除 provider-neutral `LinkOutput.LastError`，保留独立 backoff/deadline/failure count 字段，不用 message 驱动行为。
+  - [x] health probe 与 object-pull 在线 diagnostics 保留 process-local `error`，canonical health/ping/peer/sync inspect 统一投影 `FailureView`；持久化 `PeerFailure` 直接携带协议 code/message/time，不再绕经 legacy `LastError`。Contact quality 中生产从未赋值的错误字符串字段已直接删除，排序只使用计数/backoff；legacy decoder 的 `LastError` 只在单向迁移和旧库 dump 中读取。
+  - [x] BIRD process exit 改存 `error`，service/BIRD dump/revocation inspect 改用现有 `FailureView`；删除无人消费且重复返回错误的 `FirewallApplyResult.Errors`。剩余 `Error string` 仅限 gossip wire/log event 与 control/HTTP response 等显式序列化边界。
 
 ### A4. 删除 DaemonStateStore
 
@@ -115,12 +117,13 @@ Daemon
 - [x] 将 protocol publish 与 Endpoint ACL 的真实 platform completion 串回 State；verified revision 与同一 bbolt 事务拒绝 stale completion，私有 transport key 在引用它的公共 record 发布前持久化。
 - [x] 删除 `daemon_state_store.go` 和仅测试迁移 coordinator 的 fixture。
 - [x] 删除 app 内 `linuxRuntimeState` alias，生产调用直接使用 `photonlinux.LinuxState`；不得再引入第二个 LinuxState DTO。
-- [ ] 旧 `stateFile/stateMeta` 只留启动单向 migration decoder 和 legacy DB dump；停止支持该 schema 时整组删除，不形成在线兼容层。
+- [x] 旧 `stateFile/stateMeta` 只留启动单向 migration decoder 和 legacy DB dump；停止支持该 schema 时整组删除，不形成在线兼容层。
 
 ### A5. app/photon 与查询边界继续清理
 
 - [ ] 按迁移报告继续下沉 firewall/routing/IPsec policy 与 Linux 实现；app 只保留 composition、Unix control、CLI 注册和完整 Daemon 顺序。
 - [ ] 继续删除只有一个调用方的 wrapper、重复 clone/DTO builder 和 legacy 测试准备；测试跟随实际 owner 迁移。
+  - [x] 删除 inspect 中 `PeerCheckpoint -> legacy PeerRuntimeState -> PeerDebugView` 的反向转换；debug view 直接读取 checkpoint 字段，`PeerRuntimeState` 不再进入 current inspect 路径。
 - [ ] CLI/control/HTTP 共用 canonical inspect DTO；CLI 不再从 HTTP DTO 反向转换，也不直接调用平台 Driver。
 - [ ] verified/common 允许离线读；GossipCheckpoint 离线必须标记 `last-known`；platform Observation 只允许在线读。
 - [ ] CLI 壳稳定后再迁入 `internal/photoncli`，不为了减少 `app/photon` 文件数先搬目录。

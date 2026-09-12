@@ -156,7 +156,7 @@ func runFirewallBackendRootSmoke(t *testing.T, ctx context.Context, nsName, back
 	}
 	result, err := driver.Apply(ctx, plan, desired)
 	if err != nil {
-		t.Fatalf("Apply overlay failed after %d applied/%d failed: %v\nerrors: %s", result.Applied, result.Failed, err, strings.Join(result.Errors, "\n"))
+		t.Fatalf("Apply overlay failed after %d applied/%d failed: %v", result.Applied, result.Failed, err)
 	}
 	assertFirewallBackendState(t, ctx, nsName, backend, ownerPrefix, spec.NetNS, append([]string{"10.42.0.1", "10.43.0.0/24"}, inlineWant...), []string{"10.99.0.0/24"})
 
@@ -175,7 +175,7 @@ func runFirewallBackendRootSmoke(t *testing.T, ctx context.Context, nsName, back
 	}
 	result, err = driver.Apply(ctx, plan, revokedDesired)
 	if err != nil {
-		t.Fatalf("Apply revoked overlay failed after %d applied/%d failed: %v\nerrors: %s", result.Applied, result.Failed, err, strings.Join(result.Errors, "\n"))
+		t.Fatalf("Apply revoked overlay failed after %d applied/%d failed: %v", result.Applied, result.Failed, err)
 	}
 	assertFirewallBackendState(t, ctx, nsName, backend, revokedSpec.OwnerPrefix, revokedSpec.NetNS, []string{"10.42.0.1"}, []string{"10.43.0.0/24", "10.99.0.0/24"})
 
@@ -224,7 +224,7 @@ func runFirewallBackendRootSmoke(t *testing.T, ctx context.Context, nsName, back
 	}
 	hostResult, err := driver.Apply(ctx, hostPlan, hostDesired)
 	if err != nil {
-		t.Fatalf("Apply host failed after %d applied/%d failed: %v\nerrors: %s", hostResult.Applied, hostResult.Failed, err, strings.Join(hostResult.Errors, "\n"))
+		t.Fatalf("Apply host failed after %d applied/%d failed: %v", hostResult.Applied, hostResult.Failed, err)
 	}
 	assertFirewallBackendState(t, ctx, nsName, backend, hostOwnerPrefix, "host", append([]string{"1500", "14500"}, hostInlineWant...), nil)
 }

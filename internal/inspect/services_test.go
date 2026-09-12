@@ -46,7 +46,7 @@ func TestBuildServiceInspectionReportsInvalidServiceRecord(t *testing.T) {
 	}
 
 	view := BuildServiceInspection(&corestate.VerifiedState{Network: network, ManagedZone: owner}, time.Time{})
-	if len(view.Services) != 1 || view.Services[0].Status != "invalid" || view.Services[0].Error == "" {
+	if len(view.Services) != 1 || view.Services[0].Status != "invalid" || view.Services[0].Failure == nil || view.Services[0].Failure.Code != FailureCodeServiceRecord {
 		t.Fatalf("invalid service view = %+v", view.Services)
 	}
 }

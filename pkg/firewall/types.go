@@ -334,7 +334,6 @@ type FirewallApplyResult struct {
 	Generation uint64
 	Applied    int
 	Failed     int
-	Errors     []string
 }
 
 // FirewallInstanceObservation summarizes one instance's latest reconcile.
@@ -343,7 +342,7 @@ type FirewallInstanceObservation struct {
 	Backend      string `json:"backend,omitempty"`
 	Generation   uint64 `json:"generation,omitempty"`
 	LastRunUnix  int64  `json:"last_run_unix,omitempty"`
-	LastError    string `json:"last_error,omitempty"`
+	LastFailure  error  `json:"-"`
 	PolicyHash   string `json:"policy_hash,omitempty"`
 	OwnedObjects int    `json:"owned_objects,omitempty"`
 }

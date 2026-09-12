@@ -58,7 +58,7 @@ func writeRotateLink(out *lineWriter, item inspect.RotateDebugLink) {
 	out.Linef("    port_generation select/runtime/staged: %s", item.PortGenerationSummary)
 	out.Linef("    port local/remote/runtime/staged: %s", item.PortSummary)
 	out.Linef("    deadline: %s", formatRotateUnixTime(link.Rotation.RotateDeadline))
-	out.Linef("    last_error: %s", dash(link.LastError))
+	out.Linef("    last_failure: %s", failureDisplay(link.LastFailure))
 	writeRotateRuntime(out, "current", item.Current)
 	if item.HasStaged {
 		writeRotateRuntime(out, "staged", item.Staged)

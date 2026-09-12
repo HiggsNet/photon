@@ -56,13 +56,13 @@ type SyncVerbosePeerView struct {
 }
 
 type SyncPeerSummaryView struct {
-	PeerID     string
-	Addr       string
-	Status     string
-	LastSync   string
-	KnownZones int
-	LastError  string
-	NextRetry  string
+	PeerID      string
+	Addr        string
+	Status      string
+	LastSync    string
+	KnownZones  int
+	LastFailure *FailureView
+	NextRetry   string
 }
 
 type SyncZoneSummaryView struct {
@@ -137,17 +137,10 @@ func BuildSyncStatus(common corestate.View, options SyncStatusOptions) SyncStatu
 	for _, peer := range options.Bootstrap {
 		checkpoint := syncPeerCheckpoint(common.Gossip, peer.PeerID)
 		peerDebug := buildPeerDebugFromCheckpoint(peer.PeerID, "", peer.Addr, "", checkpoint, observability.PeerDiagnostics{}, options.Now)
-		lastError := ""
-		if checkpoint.LastFailure != nil {
-			lastError = checkpoint.LastFailure.Error()
-		}
-		if lastError == "" {
-			lastError = "-"
-		}
 		view.Peers = append(view.Peers, SyncPeerSummaryView{
 			PeerID: peer.PeerID, Addr: peer.Addr, Status: peerDebug.Status,
 			LastSync: peerDebug.LastSuccess, KnownZones: len(digests),
-			LastError: lastError, NextRetry: peerDebug.NextRetry,
+			LastFailure: peerFailureView(checkpoint.LastFailure), NextRetry: peerDebug.NextRetry,
 		})
 	}
 	if network != nil {

@@ -59,7 +59,7 @@ func TestWriteHealthVerboseSortsTargetsAndShowsSampleState(t *testing.T) {
 			P95RTTMs:        40,
 			P99RTTMs:        45,
 			JitterMs:        5,
-			LastError:       "timeout",
+			LastFailure:     &inspect.FailureView{Code: inspect.FailureCodeHealthProbe, Message: "timeout"},
 			ConsecutiveFail: 2,
 			CutoverBlocking: true,
 		}},
@@ -87,7 +87,7 @@ func TestWriteHealthVerboseSortsTargetsAndShowsSampleState(t *testing.T) {
 		"25%",
 		"30/25/20/40/45ms",
 		"5ms",
-		"blocked  timeout",
+		"blocked  code=health_probe_failed message=timeout",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected %q in output:\n%s", want, out)
@@ -103,7 +103,7 @@ func TestWriteHealthConciseHidesDiagnosticColumns(t *testing.T) {
 		}},
 		Samples: []inspect.HealthSample{{
 			ProbeID: "probe-secret", State: "healthy", Sent: 10, Received: 9,
-			LossRatio: 10, EWMARTTMs: 12, JitterMs: 2, LastError: "hidden error",
+			LossRatio: 10, EWMARTTMs: 12, JitterMs: 2, LastFailure: &inspect.FailureView{Code: inspect.FailureCodeHealthProbe, Message: "hidden error"},
 		}},
 	}
 	var buf strings.Builder

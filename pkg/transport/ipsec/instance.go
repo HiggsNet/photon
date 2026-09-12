@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net"
@@ -84,21 +85,21 @@ type LinkInstance struct {
 	StagedLocalTunnelAddr netip.Addr
 	StagedPeerTunnelAddr  netip.Addr
 	RotateDeadline        int64
-	LastError             string
+	LastFailure           error
 	FailureCount          int
 	BackoffUntil          int64
 	LastTransition        int64
 	Owner                 ResourceOwner
 
 	// Bidirectional takeover state (Phase 4.5).
-	InitiatorRole     string
-	TakeoverPhase     string
-	TakeoverStartedAt int64
-	TakeoverUntil     int64
-	LastTakeoverError string
-	ObservedInitiator string
-	SAAbsentSince     int64
-	SAAbsentCount     int
+	InitiatorRole       string
+	TakeoverPhase       string
+	TakeoverStartedAt   int64
+	TakeoverUntil       int64
+	LastTakeoverFailure error
+	ObservedInitiator   string
+	SAAbsentSince       int64
+	SAAbsentCount       int
 }
 
 type ResourceOwner struct {
@@ -249,7 +250,6 @@ func TransportLinkSpecHash(spec TransportLinkSpec) string {
 		cp.Successes = 0
 		cp.Failures = 0
 		cp.BackoffUntil = time.Time{}
-		cp.LastError = ""
 		cp.RankReason = ""
 	}
 	data, err := json.Marshal(spec)
@@ -441,7 +441,7 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			inst := NewLinkInstance(spec, LinkStateConfiguring, now)
 			inst.FailureCount = existing.FailureCount
 			inst.BackoffUntil = existing.BackoffUntil
-			inst.LastError = existing.LastError
+			inst.LastFailure = existing.LastFailure
 			result.Instances[id] = inst
 			result.add(ReconcileActionUpdate, &spec, &inst, reason)
 			continue
@@ -455,7 +455,7 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			inst := NewLinkInstance(spec, LinkStateConfiguring, now)
 			inst.FailureCount = existing.FailureCount
 			inst.BackoffUntil = existing.BackoffUntil
-			inst.LastError = existing.LastError
+			inst.LastFailure = existing.LastFailure
 			result.Instances[id] = inst
 			result.add(ReconcileActionUpdate, &spec, &inst, "desired spec changed")
 			if existing.IKEName != "" && existing.IKEName != spec.TransportID {
@@ -477,7 +477,7 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			inst := NewLinkInstance(spec, LinkStateConfiguring, now)
 			inst.FailureCount = existing.FailureCount
 			inst.BackoffUntil = existing.BackoffUntil
-			inst.LastError = existing.LastError
+			inst.LastFailure = existing.LastFailure
 			result.Instances[id] = inst
 			result.add(ReconcileActionUpdate, &spec, &inst, "driver identity mismatch")
 			continue
@@ -490,7 +490,7 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			inst := NewLinkInstance(spec, LinkStateConfiguring, now)
 			inst.FailureCount = existing.FailureCount
 			inst.BackoffUntil = existing.BackoffUntil
-			inst.LastError = existing.LastError
+			inst.LastFailure = existing.LastFailure
 			result.Instances[id] = inst
 			result.add(ReconcileActionUpdate, &spec, &inst, "driver endpoint mismatch")
 			continue
@@ -501,7 +501,7 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			inst.ActualState = LinkStateUp
 			inst.FailureCount = 0
 			inst.BackoffUntil = 0
-			inst.LastError = ""
+			inst.LastFailure = nil
 			inst.LastTransition = now.Unix()
 			result.Instances[id] = inst
 			result.add(ReconcileActionAdopt, &spec, &inst, "driver state recovered")
@@ -622,7 +622,7 @@ func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLin
 			inst.TakeoverStartedAt = 0
 			inst.TakeoverUntil = 0
 		}
-		inst.LastTakeoverError = ""
+		inst.LastTakeoverFailure = nil
 		inst.SAAbsentSince = 0
 		inst.SAAbsentCount = 0
 		inst.LastTransition = now.Unix()
@@ -667,11 +667,11 @@ func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLin
 		if (inst.ActualState == LinkStateConfiguring || inst.ActualState == LinkStateConnecting) &&
 			now.After(time.Unix(inst.TakeoverStartedAt, 0).Add(lease)) {
 			inst.ActualState = LinkStateError
-			inst.LastError = "secondary takeover timed out waiting for SA"
+			inst.LastFailure = errors.New("secondary takeover timed out waiting for SA")
 			inst.LastTransition = now.Unix()
 			inst.TakeoverPhase = TakeoverPhaseCooldown
 			inst.TakeoverUntil = now.Add(TakeoverCooldownDuration(policy)).Unix()
-			inst.LastTakeoverError = inst.LastError
+			inst.LastTakeoverFailure = inst.LastFailure
 			r.Instances[id] = inst
 			r.add(ReconcileActionRepair, &spec, &inst, "secondary_takeover_timeout")
 			return
@@ -728,7 +728,7 @@ func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLin
 	inst.TakeoverPhase = TakeoverPhaseActive
 	inst.TakeoverStartedAt = now.Unix()
 	inst.TakeoverUntil = now.Add(TakeoverLeaseDuration(policy)).Unix()
-	inst.LastError = ""
+	inst.LastFailure = nil
 	inst.LastTransition = now.Unix()
 	inst.ActualState = LinkStateConfiguring
 	inst.DesiredSpecHash = TransportLinkSpecHash(spec)
@@ -848,7 +848,7 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 			inst.RotateDeadline = 0
 			inst.FailureCount = 0
 			inst.BackoffUntil = 0
-			inst.LastError = ""
+			inst.LastFailure = nil
 			inst.LastTransition = now.Unix()
 			r.Instances[id] = inst
 			if oldSAWasStaged {
@@ -876,7 +876,7 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 			inst.StagedPeerTunnelAddr = netip.Addr{}
 			inst.RotatePhase = RotatePhaseRollback
 			inst.RotateDeadline = 0
-			inst.LastError = "staged sa not established by deadline"
+			inst.LastFailure = errors.New("staged sa not established by deadline")
 			inst.FailureCount++
 			inst.BackoffUntil = now.Add(nextLinkBackoff(BackoffPolicy{}, inst.FailureCount)).Unix()
 			inst.LastTransition = now.Unix()
@@ -972,7 +972,7 @@ func MarkLinkApplyFailure(inst LinkInstance, policy BackoffPolicy, now time.Time
 	inst.LastTransition = now.Unix()
 	inst.ActualState = LinkStateError
 	if err != nil {
-		inst.LastError = err.Error()
+		inst.LastFailure = err
 	}
 	return inst
 }
@@ -983,7 +983,7 @@ func MarkLinkApplySuccess(inst LinkInstance, now time.Time) LinkInstance {
 	}
 	inst.FailureCount = 0
 	inst.BackoffUntil = 0
-	inst.LastError = ""
+	inst.LastFailure = nil
 	inst.LastTransition = now.Unix()
 	return inst
 }

@@ -21,13 +21,13 @@ type BirdDumpInstance struct {
 	ControlSocket     string                 `json:"control_socket"`
 	ConfigPath        string                 `json:"config_path,omitempty"`
 	FilterDefinitions string                 `json:"filter_definitions,omitempty"`
-	FilterError       string                 `json:"filter_error,omitempty"`
+	FilterFailure     *FailureView           `json:"filter_failure,omitempty"`
 	Raw               map[string]string      `json:"raw,omitempty"`
 	Interfaces        []BirdInterfaceContext `json:"interfaces,omitempty"`
 	Neighbors         []BirdBabelNeighbor    `json:"neighbors,omitempty"`
 	BabelRoutes       []BirdBabelRoute       `json:"babel_routes,omitempty"`
 	BabelEntries      []BirdBabelEntry       `json:"babel_entries,omitempty"`
-	Error             string                 `json:"error,omitempty"`
+	Failure           *FailureView           `json:"failure,omitempty"`
 }
 
 // BirdInterfaceContext connects BIRD's kernel-facing interface name to the
@@ -113,7 +113,7 @@ type BabelInstanceView struct {
 	LastConfigHash string
 	Overlays       []string
 	State          string
-	LastError      string
+	LastFailure    *FailureView
 	HasState       bool
 }
 
@@ -150,7 +150,7 @@ func BuildBabelDebug(input BabelDebugInput) BabelDebugView {
 			instView.LastConfigHash = runtime.LastConfigHash
 			instView.Overlays = append([]string(nil), runtime.Overlays...)
 			instView.State = runtime.State
-			instView.LastError = runtime.LastError
+			instView.LastFailure = BuildFailure(FailureCodeBirdInstance, runtime.LastFailure)
 		}
 		view.Instances = append(view.Instances, instView)
 	}

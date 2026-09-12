@@ -24,6 +24,25 @@ func TestBuildLinkInstanceFromRuntimeOmitsInvalidAddresses(t *testing.T) {
 	}
 }
 
+func TestBuildLinksMapsInstanceFailures(t *testing.T) {
+	instance := BuildLinkInstanceFromRuntime(ipsec.LinkInstance{
+		ID:                  "link-a",
+		LastFailure:         errors.New("vici unavailable"),
+		LastTakeoverFailure: errors.New("takeover timed out"),
+	}, LinkRouting{})
+	view := BuildLinks(LinkInput{Instances: []LinkInstance{instance}})
+	if len(view.Links) != 1 {
+		t.Fatalf("links = %d, want 1", len(view.Links))
+	}
+	link := view.Links[0]
+	if link.LastFailure == nil || link.LastFailure.Code != FailureCodeIPsecLink || link.LastFailure.Message != "vici unavailable" {
+		t.Fatalf("link failure = %+v", link.LastFailure)
+	}
+	if link.Takeover.LastFailure == nil || link.Takeover.LastFailure.Code != FailureCodeIPsecTakeover || link.Takeover.LastFailure.Message != "takeover timed out" {
+		t.Fatalf("takeover failure = %+v", link.Takeover.LastFailure)
+	}
+}
+
 func TestBuildLinksPrefersPlannedDesiredOverLastSnapshot(t *testing.T) {
 	got := BuildLinks(LinkInput{
 		LastFailure: errors.New("vici unavailable"),

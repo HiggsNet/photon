@@ -28,7 +28,7 @@ func WriteServices(w io.Writer, view inspect.ServiceInspection, filter string, i
 			string(service.Owner),
 			service.Status,
 			service.RecordKey,
-			service.Error,
+			failureDisplay(service.Failure),
 		}
 		for _, endpoint := range service.Endpoints {
 			searchable = append(searchable, endpoint.Region, endpoint.Address, fmt.Sprint(endpoint.Port))
@@ -49,7 +49,7 @@ func WriteServices(w io.Writer, view inspect.ServiceInspection, filter string, i
 	out.Linef("endpoints: %d", endpointCount)
 	rows := make([][]string, 0, endpointCount+1)
 	if verbose {
-		rows = append(rows, []string{"SERVICE", "TYPE", "OWNER", "SCOPE", "REGION", "ENDPOINT", "STATUS", "VERSION", "UPDATED", "RECORD", "ERROR"})
+		rows = append(rows, []string{"SERVICE", "TYPE", "OWNER", "SCOPE", "REGION", "ENDPOINT", "STATUS", "VERSION", "UPDATED", "RECORD", "FAILURE"})
 	} else {
 		rows = append(rows, []string{"SERVICE", "TYPE", "OWNER", "SCOPE", "REGION", "ENDPOINT", "STATUS"})
 	}
@@ -79,7 +79,7 @@ func WriteServices(w io.Writer, view inspect.ServiceInspection, filter string, i
 					fmt.Sprint(service.Version),
 					formatUnixTime(service.UpdatedUnix),
 					dash(service.RecordKey),
-					escapeTableCell(dash(service.Error)),
+					escapeTableCell(failureDisplay(service.Failure)),
 				})
 			} else {
 				rows = append(rows, []string{

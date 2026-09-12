@@ -28,13 +28,13 @@ func WriteSyncStatus(w io.Writer, view inspect.SyncStatusView) error {
 		writeSyncVerbose(out, view)
 	}
 	for _, peer := range view.Peers {
-		out.Linef("peer %s addr=%s status=%s last_sync=%s known_zones=%d last_error=%s next_retry=%s",
+		out.Linef("peer %s addr=%s status=%s last_sync=%s known_zones=%d last_failure=%s next_retry=%s",
 			peer.PeerID,
 			peer.Addr,
 			peer.Status,
 			peer.LastSync,
 			peer.KnownZones,
-			dash(peer.LastError),
+			failureDisplay(peer.LastFailure),
 			peer.NextRetry,
 		)
 	}
@@ -56,13 +56,13 @@ func writeSyncVerbose(out *lineWriter, view inspect.SyncStatusView) {
 	out.Linef("bootstrap_peers: %d", view.BootstrapPeers)
 	out.Linef("discovered_peers: %d", view.DiscoveredPeers)
 	for _, peer := range view.Bootstrap {
-		out.Linef("bootstrap peer=%s configured_addr=%s resolved_addr=%s status=%s last_success=%s last_error=%s next_retry=%s",
+		out.Linef("bootstrap peer=%s configured_addr=%s resolved_addr=%s status=%s last_success=%s last_failure=%s next_retry=%s",
 			peer.PeerID,
 			peer.ConfiguredAddr,
 			peer.ResolvedAddr,
 			peer.Status,
 			peer.LastSuccess,
-			dash(peer.LastError),
+			failureDisplay(peer.LastFailure),
 			peer.NextRetry,
 		)
 		writeSyncPeerDetail(out, peer)
@@ -176,7 +176,7 @@ func writeObjectPullStatsLine(out *lineWriter, peerID string, stats inspect.Peer
 	if last == "" || last == "never" {
 		last = "-"
 	}
-	out.Linef("object_pull peer=%s attempts=%d successes=%d failures=%d large_object_unreachable=%d last=%s object=%s zone=%s key=%s bytes=%d source_peer=%s unreachable=%t last_error=%s",
+	out.Linef("object_pull peer=%s attempts=%d successes=%d failures=%d large_object_unreachable=%d last=%s object=%s zone=%s key=%s bytes=%d source_peer=%s unreachable=%t last_failure=%s",
 		peerID,
 		stats.Attempts,
 		stats.Successes,
@@ -189,6 +189,6 @@ func writeObjectPullStatsLine(out *lineWriter, peerID string, stats inspect.Peer
 		stats.LastBytes,
 		dash(stats.LastSourcePeer),
 		stats.LastUnreachable,
-		dash(stats.LastError),
+		failureDisplay(stats.LastFailure),
 	)
 }

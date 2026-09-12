@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -91,7 +92,7 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 		if err != nil {
 			entry := getOrCreateFirewallEntry(summary, instCfg.ID)
 			entry.LastRunUnix = now.Unix()
-			entry.LastError = err.Error()
+			entry.LastFailure = err
 			if firstErr == nil {
 				firstErr = fmt.Errorf("firewall instance %s: %w", instCfg.ID, err)
 			}
@@ -102,7 +103,7 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 		if resolveErr != nil {
 			entry := getOrCreateFirewallEntry(summary, instCfg.ID)
 			entry.LastRunUnix = now.Unix()
-			entry.LastError = resolveErr.Error()
+			entry.LastFailure = resolveErr
 			if firstErr == nil {
 				firstErr = resolveErr
 			}
@@ -119,7 +120,7 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 			entry := getOrCreateFirewallEntry(summary, instCfg.ID)
 			entry.LastRunUnix = now.Unix()
 			entry.Backend = firewall.BackendNone
-			entry.LastError = message
+			entry.LastFailure = errors.New(message)
 			if firstErr == nil {
 				firstErr = fmt.Errorf("firewall instance %s: %s", instCfg.ID, message)
 			}
@@ -139,14 +140,14 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 		entry.PolicyHash = firewall.DesiredStateHash(desired)
 		entry.OwnedObjects = len(firewall.DesiredObjects(desired))
 		if err != nil {
-			entry.LastError = err.Error()
+			entry.LastFailure = err
 			if firstErr == nil {
 				firstErr = fmt.Errorf("firewall apply %s: %w", instCfg.ID, err)
 			}
 			continue
 		}
 		entry.Generation = result.Generation
-		entry.LastError = ""
+		entry.LastFailure = nil
 	}
 
 	if firstErr != nil {

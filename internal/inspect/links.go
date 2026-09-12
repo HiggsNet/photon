@@ -81,7 +81,7 @@ type LinkView struct {
 	FailureCount    int
 	BackoffUntil    int64
 	LastTransition  int64
-	LastError       string
+	LastFailure     *FailureView
 	Missing         bool
 }
 
@@ -112,7 +112,7 @@ type LinkInstance struct {
 	StagedLocalTunnelAddr string
 	StagedPeerTunnelAddr  string
 	RotateDeadline        int64
-	LastError             string
+	LastFailure           error
 	FailureCount          int
 	BackoffUntil          int64
 	LastTransition        int64
@@ -121,7 +121,7 @@ type LinkInstance struct {
 	TakeoverPhase         string
 	TakeoverStartedAt     int64
 	TakeoverUntil         int64
-	LastTakeoverError     string
+	LastTakeoverFailure   error
 	ObservedInitiator     string
 	Routing               LinkRouting
 }
@@ -174,12 +174,12 @@ type LinkRotation struct {
 }
 
 type LinkTakeover struct {
-	InitiatorRole     string `json:"initiator_role,omitempty"`
-	Phase             string `json:"phase,omitempty"`
-	StartedAt         int64  `json:"started_at,omitempty"`
-	Until             int64  `json:"until,omitempty"`
-	ObservedInitiator string `json:"observed_initiator,omitempty"`
-	LastError         string `json:"last_error,omitempty"`
+	InitiatorRole     string       `json:"initiator_role,omitempty"`
+	Phase             string       `json:"phase,omitempty"`
+	StartedAt         int64        `json:"started_at,omitempty"`
+	Until             int64        `json:"until,omitempty"`
+	ObservedInitiator string       `json:"observed_initiator,omitempty"`
+	LastFailure       *FailureView `json:"last_failure,omitempty"`
 }
 
 type LinkAction struct {
@@ -229,7 +229,7 @@ func BuildLinkInstanceFromRuntime(inst ipsec.LinkInstance, routing LinkRouting) 
 		StagedLocalTunnelAddr: formatObservedAddr(inst.StagedLocalTunnelAddr),
 		StagedPeerTunnelAddr:  formatObservedAddr(inst.StagedPeerTunnelAddr),
 		RotateDeadline:        inst.RotateDeadline,
-		LastError:             inst.LastError,
+		LastFailure:           inst.LastFailure,
 		FailureCount:          inst.FailureCount,
 		BackoffUntil:          inst.BackoffUntil,
 		LastTransition:        inst.LastTransition,
@@ -238,13 +238,13 @@ func BuildLinkInstanceFromRuntime(inst ipsec.LinkInstance, routing LinkRouting) 
 			InstanceID: inst.Owner.InstanceID, LinkID: inst.Owner.LinkID,
 			TransportID: inst.Owner.TransportID, Token: inst.Owner.Token,
 		},
-		InitiatorRole:     inst.InitiatorRole,
-		TakeoverPhase:     inst.TakeoverPhase,
-		TakeoverStartedAt: inst.TakeoverStartedAt,
-		TakeoverUntil:     inst.TakeoverUntil,
-		LastTakeoverError: inst.LastTakeoverError,
-		ObservedInitiator: inst.ObservedInitiator,
-		Routing:           routing,
+		InitiatorRole:       inst.InitiatorRole,
+		TakeoverPhase:       inst.TakeoverPhase,
+		TakeoverStartedAt:   inst.TakeoverStartedAt,
+		TakeoverUntil:       inst.TakeoverUntil,
+		LastTakeoverFailure: inst.LastTakeoverFailure,
+		ObservedInitiator:   inst.ObservedInitiator,
+		Routing:             routing,
 	}
 }
 
@@ -522,13 +522,13 @@ func linkFromInstance(inst LinkInstance, desired DesiredLink, hasDesired bool, s
 			StartedAt:         inst.TakeoverStartedAt,
 			Until:             inst.TakeoverUntil,
 			ObservedInitiator: inst.ObservedInitiator,
-			LastError:         inst.LastTakeoverError,
+			LastFailure:       BuildFailure(FailureCodeIPsecTakeover, inst.LastTakeoverFailure),
 		},
 		Owner:          inst.Owner,
 		FailureCount:   inst.FailureCount,
 		BackoffUntil:   inst.BackoffUntil,
 		LastTransition: inst.LastTransition,
-		LastError:      inst.LastError,
+		LastFailure:    BuildFailure(FailureCodeIPsecLink, inst.LastFailure),
 	}
 }
 

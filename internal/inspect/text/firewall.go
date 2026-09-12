@@ -25,7 +25,7 @@ func WriteFirewall(w io.Writer, view inspect.FirewallDebugView, filter string, v
 			instance.Mode,
 			instance.Backend,
 			instance.ResolvedBackend,
-			instance.LastError,
+			failureMessage(instance.LastFailure),
 			instance.DefaultPolicy,
 			strings.Join(instance.AllowFilters, " "),
 			strings.Join(instance.DenyFilters, " "),
@@ -83,7 +83,7 @@ func WriteFirewall(w io.Writer, view inspect.FirewallDebugView, filter string, v
 		}
 	}
 	if failure := view.LastFailure; failure != nil {
-		out.Linef("last_failure: code=%s message=%s", failure.Code, failure.Message)
+		out.Linef("last_failure: %s", failureDisplay(failure))
 	}
 	if err := out.Err(); err != nil {
 		return err
@@ -110,7 +110,9 @@ func WriteFirewall(w io.Writer, view inspect.FirewallDebugView, filter string, v
 			detail.Linef("  host_ports: ike=%t natt=%t redirect_grace=%t", instance.HostIKE, instance.HostNATT, instance.RedirectGrace)
 		}
 		detail.Linef("  owner_prefix: %s", dash(instance.OwnerPrefix))
-		detail.LineIf(instance.LastError != "", "  last_error: %s", instance.LastError)
+		if failure := instance.LastFailure; failure != nil {
+			detail.Linef("  last_failure: %s", failureDisplay(failure))
+		}
 	}
 	return detail.Err()
 }
@@ -132,7 +134,7 @@ func joinedOrDash(values []string) string {
 
 func firewallInstanceStatus(instance inspect.FirewallInstanceView) string {
 	switch {
-	case instance.LastError != "":
+	case instance.LastFailure != nil:
 		return "error"
 	case instance.Mode == "disabled":
 		return "disabled"
@@ -151,7 +153,7 @@ func WriteDebugFirewall(w io.Writer, view inspect.FirewallDebugView) error {
 	}
 	out.LineIf(view.Backend != "", "backend: %s", view.Backend)
 	if failure := view.LastFailure; failure != nil {
-		out.Linef("last_reconcile_failure: code=%s message=%s", failure.Code, failure.Message)
+		out.Linef("last_reconcile_failure: %s", failureDisplay(failure))
 	}
 	for _, inst := range view.Instances {
 		out.Linef("instance %s", inst.ID)
@@ -187,7 +189,9 @@ func WriteDebugFirewall(w io.Writer, view inspect.FirewallDebugView) error {
 		out.LineIf(inst.Generation != 0, "  generation: %d", inst.Generation)
 		out.LineIf(inst.OwnedObjects != 0, "  owned_objects: %d", inst.OwnedObjects)
 		out.LineIf(inst.PolicyHash != "", "  policy_hash: %s", inst.PolicyHash)
-		out.LineIf(inst.LastError != "", "  last_error: %s", inst.LastError)
+		if failure := inst.LastFailure; failure != nil {
+			out.Linef("  last_failure: %s", failureDisplay(failure))
+		}
 	}
 	return out.Err()
 }

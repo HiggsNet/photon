@@ -16,7 +16,7 @@ func TestWriteGossipPeersUsesGossipRuntimeFields(t *testing.T) {
 		},
 		{
 			PeerID: "node-b.catofes.", Source: "discovered", ResolvedAddr: "198.51.100.20:33434",
-			Status: "backoff", LastSuccess: "never", NextRetry: "2023-11-14T22:14:20Z", LastError: "ping timeout",
+			Status: "backoff", LastSuccess: "never", NextRetry: "2023-11-14T22:14:20Z", LastFailure: &inspect.FailureView{Code: "timeout", Message: "ping timeout"},
 			ObservedAddr: "198.51.100.21:33434", ObservedStatus: "active", LastUpdateSource: "pong",
 		},
 	}
@@ -25,7 +25,7 @@ func TestWriteGossipPeersUsesGossipRuntimeFields(t *testing.T) {
 	if err := WriteGossipPeers(&summary, peers, "", false); err != nil {
 		t.Fatalf("WriteGossipPeers summary: %v", err)
 	}
-	for _, want := range []string{"PEER", "SOURCE", "ENDPOINT", "STATUS", "LAST_SYNC", "NEXT_RETRY", "LAST_ERROR", "192.0.2.10:33434", "ping timeout"} {
+	for _, want := range []string{"PEER", "SOURCE", "ENDPOINT", "STATUS", "LAST_SYNC", "NEXT_RETRY", "LAST_FAILURE", "192.0.2.10:33434", "ping timeout"} {
 		if !strings.Contains(summary.String(), want) {
 			t.Fatalf("summary missing %q:\n%s", want, summary.String())
 		}

@@ -215,13 +215,13 @@ func (driver *GossipDriver) observeObjectPullResult(result GossipObjectPullCompl
 		stats.LastUnreachable = result.Unreachable
 		if result.Err != nil {
 			stats.Failures++
-			stats.LastError = result.Err.Error()
+			stats.LastFailure = result.Err
 			if result.Unreachable {
 				stats.LargeObjectUnreachable++
 			}
 			return
 		}
 		stats.Successes++
-		stats.LastError = ""
+		stats.LastFailure = nil
 	})
 }

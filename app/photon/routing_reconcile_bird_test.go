@@ -2,12 +2,13 @@ package main
 
 import (
 	"context"
-	"github.com/HiggsNet/photon/internal/photonlinux"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -65,7 +66,7 @@ func TestReconcileRoutingBacksOffAfterManagedBirdCrash(t *testing.T) {
 		Clock:  func() time.Time { return now },
 	}
 
-	pm := &fakeBirdProcessManager{running: false, lastExit: &bird.ProcessExit{PID: 1234, Error: "signal: killed"}}
+	pm := &fakeBirdProcessManager{running: false, lastExit: &bird.ProcessExit{PID: 1234, Failure: errors.New("signal: killed")}}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
 		return &fakeBirdClient{}
@@ -119,7 +120,7 @@ func TestReconcileRoutingRestartsManagedBirdAfterCrashBackoff(t *testing.T) {
 			State:            birdInstanceStateDegraded,
 			FailureCount:     1,
 			BackoffUntilUnix: now.Add(-time.Second).Unix(),
-			LastError:        "bird restart backoff active",
+			LastFailure:      errors.New("bird restart backoff active"),
 			LastExit:         "pid 1234: signal: killed",
 		},
 	}
@@ -186,7 +187,7 @@ func TestReconcileRoutingClearsStaleBackoffForRunningBird(t *testing.T) {
 	observed := service.linuxObservation.routingSnapshot()
 	inst := observed.Instances["photontesth2"]
 	inst.State = birdInstanceStateDegraded
-	inst.LastError = "bird restart backoff active until 1970-01-01T01:06:41Z"
+	inst.LastFailure = errors.New("bird restart backoff active until 1970-01-01T01:06:41Z")
 	inst.FailureCount = 1
 	inst.BackoffUntilUnix = now.Add(-time.Second).Unix()
 	inst.LastExit = "pid 1234: signal: killed"
@@ -200,7 +201,7 @@ func TestReconcileRoutingClearsStaleBackoffForRunningBird(t *testing.T) {
 	}
 	latest := service.linuxObservation.routingSnapshot()
 	inst = latest.Instances["photontesth2"]
-	if inst == nil || inst.State != birdInstanceStateRunning || inst.LastError != "" {
+	if inst == nil || inst.State != birdInstanceStateRunning || inst.LastFailure != nil {
 		t.Fatalf("bird instance = %+v, want running with no error", inst)
 	}
 	if inst.FailureCount != 0 || inst.BackoffUntilUnix != 0 || inst.LastExit != "" {

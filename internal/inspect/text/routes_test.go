@@ -1,10 +1,12 @@
 package text
 
 import (
+	"errors"
 	"net/netip"
 	"strings"
 	"testing"
 
+	"github.com/HiggsNet/photon/internal/inspect"
 	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 )
@@ -26,6 +28,7 @@ func TestWriteRoutesDebugShowsBirdAuthorizedCrossView(t *testing.T) {
 		NetNS:      "photontesth2",
 		InstanceID: "main",
 		State:      "running",
+		Failure:    inspect.BuildFailure(inspect.FailureCodeBirdQuery, errors.New("bird query timed out")),
 		Routes: inspecthttp.BuildBirdRouteViews(dump, []bird.BirdRoute{
 			{
 				Prefix:   netip.MustParsePrefix("10.1.0.0/24"),
@@ -54,6 +57,7 @@ func TestWriteRoutesDebugShowsBirdAuthorizedCrossView(t *testing.T) {
 		"route_source: gossip_announcements_and_ipam_authorization",
 		"bird_cross_view: 1 instances",
 		"netns photontesth2",
+		"failure: code=bird_query_failed message=bird query timed out",
 		"10.1.0.0/24 selected=true authorized=true import_allowed=true zones=node-b.catofes. protocol=babel1 iface=phx-node-b metric=96",
 		"10.2.0.0/24 selected=true authorized=false import_allowed=false protocol=babel1 iface=phx-node-c metric=128",
 	} {

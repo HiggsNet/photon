@@ -2,6 +2,7 @@ package firewall
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -94,7 +95,6 @@ func (d *NFTDriver) Apply(ctx context.Context, plan FirewallPlan, desired *Firew
 	path, err := writeNFTBatch(script)
 	if err != nil {
 		result.Failed = 1
-		result.Errors = []string{err.Error()}
 		return result, fmt.Errorf("prepare nft transaction: %w", err)
 	}
 	defer os.Remove(path)
@@ -106,9 +106,8 @@ func (d *NFTDriver) Apply(ctx context.Context, plan FirewallPlan, desired *Firew
 			message += ": " + detail
 		}
 		result.Failed = 1
-		result.Errors = []string{message}
 		result.Generation = 1
-		return result, fmt.Errorf("nft apply transaction failed")
+		return result, errors.New(message)
 	}
 	result.Applied = len(commands)
 	result.Generation = 1

@@ -60,7 +60,7 @@ func TestRoutingDryRunSmoke(t *testing.T) {
 		t.Fatalf("missing bird instance state for netns photontesth2")
 	}
 	if inst.State == birdInstanceStateError {
-		t.Fatalf("bird instance state is error: %s", inst.LastError)
+		t.Fatalf("bird instance state is error: %v", inst.LastFailure)
 	}
 	if inst.ConfigPath == "" {
 		t.Fatalf("ConfigPath is empty")

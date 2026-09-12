@@ -155,7 +155,7 @@ func (d *Daemon) healthSamples() []inspect.HealthSample {
 			P99RTTMs:        h.P99RTT.Milliseconds(),
 			JitterMs:        h.Jitter.Milliseconds(),
 			ConsecutiveFail: h.ConsecutiveFail,
-			LastError:       h.LastError,
+			LastFailure:     inspect.BuildFailure(inspect.FailureCodeHealthProbe, h.LastFailure),
 			NextProbeUnix:   h.NextProbeAt.Unix(),
 			CutoverBlocking: h.CutoverBlocking,
 		})

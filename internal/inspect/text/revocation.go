@@ -66,7 +66,7 @@ func writeRevocationImpactDetail(out *lineWriter, imp inspect.RevocationImpact) 
 			out.Linef("    %s:", layer)
 			out.Linef("      status: %s", status.Status)
 			out.LineIf(status.Reason != "", "      reason: %s", status.Reason)
-			out.LineIf(status.Error != "", "      error: %s", status.Error)
+			out.LineIf(status.Failure != nil, "      failure: %s", failureDisplay(status.Failure))
 			out.LineIf(status.UnixTime != 0, "      time: %s", time.Unix(status.UnixTime, 0).UTC().Format(time.RFC3339))
 		}
 	}

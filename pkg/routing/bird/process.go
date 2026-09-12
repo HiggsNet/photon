@@ -153,7 +153,7 @@ func (pm *ExecProcessManager) Start(ctx context.Context, spec BirdInstanceSpec) 
 	}
 	if !pm.IsRunning(ctx) {
 		if exit := pm.LastExit(); exit != nil {
-			return fmt.Errorf("bird exited during startup: pid %d: %s", exit.PID, exit.Error)
+			return fmt.Errorf("bird exited during startup: pid %d: %w", exit.PID, exit.Failure)
 		}
 		return errors.New("bird exited during startup")
 	}
@@ -272,7 +272,7 @@ func (pm *ExecProcessManager) recordExitIfCurrent(pid int, err error) {
 		return
 	}
 	pm.pid = 0
-	pm.exit = &ProcessExit{PID: pid, Error: exitErrorString(err)}
+	pm.exit = &ProcessExit{PID: pid, Failure: exitFailure(err)}
 }
 
 func (pm *ExecProcessManager) reapManagedProcessLocked() {
@@ -289,24 +289,24 @@ func (pm *ExecProcessManager) reapManagedProcessLocked() {
 		return
 	}
 	pm.pid = 0
-	pm.exit = &ProcessExit{PID: pid, Error: waitStatusString(status)}
+	pm.exit = &ProcessExit{PID: pid, Failure: waitStatusFailure(status)}
 }
 
-func exitErrorString(err error) string {
+func exitFailure(err error) error {
 	if err == nil {
-		return "exited"
+		return errors.New("exited")
 	}
-	return err.Error()
+	return err
 }
 
-func waitStatusString(status syscall.WaitStatus) string {
+func waitStatusFailure(status syscall.WaitStatus) error {
 	switch {
 	case status.Exited():
-		return fmt.Sprintf("exit status %d", status.ExitStatus())
+		return fmt.Errorf("exit status %d", status.ExitStatus())
 	case status.Signaled():
-		return fmt.Sprintf("signal: %s", status.Signal())
+		return fmt.Errorf("signal: %s", status.Signal())
 	default:
-		return "exited"
+		return errors.New("exited")
 	}
 }
 

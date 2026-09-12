@@ -2,6 +2,7 @@ package healthprobe
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -50,7 +51,7 @@ func (p *ICMProber) Type() string { return ProbeTypeICMP }
 // Probe sends a burst of ICMP echo requests and aggregates the result.
 func (p *ICMProber) Probe(ctx context.Context, target ProbeTarget, cfg ProbeConfig) ProbeResult {
 	if !target.PeerTunnelAddr.IsValid() {
-		return ProbeResult{InstanceID: target.InstanceID, Error: "peer address missing"}
+		return ProbeResult{InstanceID: target.InstanceID, Err: errors.New("peer address missing")}
 	}
 	burst := cfg.Burst
 	if burst <= 0 {
@@ -58,7 +59,7 @@ func (p *ICMProber) Probe(ctx context.Context, target ProbeTarget, cfg ProbeConf
 	}
 	received, lastRTT, err := p.pingBurstExec(ctx, target, cfg.Timeout, burst)
 	if err != nil {
-		return ProbeResult{InstanceID: target.InstanceID, Error: err.Error()}
+		return ProbeResult{InstanceID: target.InstanceID, Err: err}
 	}
 	if received < 0 {
 		received = 0

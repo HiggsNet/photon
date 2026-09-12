@@ -25,7 +25,7 @@ func TestRawICMProberUsesWorkerAndPreservesBurstMajority(t *testing.T) {
 	}
 	target := ProbeTarget{InstanceID: "link-a", NetNS: "mesh-a", PeerTunnelAddr: netip.MustParseAddr("192.0.2.2")}
 	got := p.Probe(context.Background(), target, ProbeConfig{Burst: 3})
-	if !got.Success || got.RTT != 4*time.Millisecond || got.Error != "" {
+	if !got.Success || got.RTT != 4*time.Millisecond || got.Err != nil {
 		t.Fatalf("probe result = %+v, want successful majority result", got)
 	}
 	if worker.calls != 1 {
@@ -49,7 +49,7 @@ func TestRawICMProberReportsPacketCountsForEveryBurstOutcome(t *testing.T) {
 				PeerTunnelAddr: netip.MustParseAddr("192.0.2.2"),
 			}, ProbeConfig{Burst: 3})
 			wantSuccess := received >= 2
-			if got.Error != "" || got.Sent != 3 || got.Received != received || got.Lost != 3-received || got.Success != wantSuccess {
+			if got.Err != nil || got.Sent != 3 || got.Received != received || got.Lost != 3-received || got.Success != wantSuccess {
 				t.Fatalf("probe result = %+v, want sent/received/lost=3/%d/%d success=%t", got, received, 3-received, wantSuccess)
 			}
 			if received == 0 && got.RTT != 0 {
@@ -69,8 +69,8 @@ func TestRawICMProberUnansweredBurstIsReachabilityFailure(t *testing.T) {
 	if got.Success {
 		t.Fatal("probe success = true, want false for an unanswered burst")
 	}
-	if got.Error != "" {
-		t.Fatalf("probe error = %q, want ordinary packet loss to be a valid observation", got.Error)
+	if got.Err != nil {
+		t.Fatalf("probe error = %v, want ordinary packet loss to be a valid observation", got.Err)
 	}
 }
 
@@ -98,8 +98,8 @@ func TestRawICMProberFallsBackOnlyForUnavailableRawFailure(t *testing.T) {
 	worker.result = rawProbeResult{err: errors.New("network is unreachable")}
 	reportedErr = nil
 	got := p.Probe(context.Background(), target, ProbeConfig{})
-	if got.Error != "network is unreachable" {
-		t.Fatalf("network error = %q, want raw packet error", got.Error)
+	if got.Err == nil || got.Err.Error() != "network is unreachable" {
+		t.Fatalf("network error = %v, want raw packet error", got.Err)
 	}
 	if fallback.calls != 1 {
 		t.Fatalf("fallback calls after packet error = %d, want 1", fallback.calls)

@@ -2,8 +2,18 @@ package inspect
 
 const (
 	FailureCodeIPsecReconcile    = "ipsec_reconcile_failed"
+	FailureCodeIPsecLink         = "ipsec_link_failed"
+	FailureCodeIPsecTakeover     = "ipsec_takeover_failed"
 	FailureCodeRoutingReconcile  = "routing_reconcile_failed"
+	FailureCodeBirdInstance      = "bird_instance_failed"
+	FailureCodeBirdQuery         = "bird_query_failed"
 	FailureCodeFirewallReconcile = "firewall_reconcile_failed"
+	FailureCodeFirewallInstance  = "firewall_instance_failed"
+	FailureCodeHealthProbe       = "health_probe_failed"
+	FailureCodeGossipObjectPull  = "gossip_object_pull_failed"
+	FailureCodeBirdFilter        = "bird_filter_failed"
+	FailureCodeServiceRecord     = "service_record_invalid"
+	FailureCodeRevocationCleanup = "revocation_cleanup_failed"
 )
 
 // FailureView is the canonical inspect representation of a process-local

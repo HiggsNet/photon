@@ -54,7 +54,7 @@ func TestWritePeerDebug(t *testing.T) {
 			LastBytes:       4096,
 			LastSourcePeer:  "node-b.catofes.",
 			LastUnreachable: true,
-			LastError:       "no TCP address",
+			LastFailure:     &inspect.FailureView{Code: inspect.FailureCodeGossipObjectPull, Message: "no TCP address"},
 		},
 	}
 	var buf strings.Builder
@@ -71,7 +71,7 @@ func TestWritePeerDebug(t *testing.T) {
 		"datagram_too_large_dropped: 2",
 		"datagram_last_too_large: 2023-11-14T22:13:20Z direction=send object=record zone=node-b.catofes. key=bigdata bytes=1800 limit=1200",
 		"object_pull_attempts: 3",
-		"object_pull_last: 2023-11-14T22:13:20Z object=record zone=node-b.catofes. key=bigdata bytes=4096 source_peer=node-b.catofes. unreachable=true error=no TCP address",
+		"object_pull_last: 2023-11-14T22:13:20Z object=record zone=node-b.catofes. key=bigdata bytes=4096 source_peer=node-b.catofes. unreachable=true failure=code=gossip_object_pull_failed message=no TCP address",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("output missing %q:\n%s", want, output)

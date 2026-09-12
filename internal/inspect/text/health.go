@@ -71,7 +71,7 @@ func WriteHealth(w io.Writer, view inspect.HealthView, sortBy string, verbose bo
 			healthMillis(sample.JitterMs, hasSample),
 			healthFailures(sample, hasSample),
 			healthCutover(sample, hasSample, t.Staged || t.ProbeRole == "staged"),
-			escapeTableCell(dash(sample.LastError)),
+			escapeTableCell(failureDisplay(sample.LastFailure)),
 		})
 	}
 	writeAlignedRows(out, rows, 2)

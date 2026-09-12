@@ -26,7 +26,6 @@ type LinkOutput struct {
 	State          string        `json:"state,omitempty"`
 	Readiness      LinkReadiness `json:"readiness,omitempty"`
 	Endpoint       string        `json:"endpoint,omitempty"`
-	LastError      string        `json:"last_error,omitempty"`
 	LastTransition int64         `json:"last_transition,omitempty"`
 }
 

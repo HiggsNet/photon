@@ -36,26 +36,26 @@ type HealthTarget struct {
 }
 
 type HealthSample struct {
-	ProbeID         string `json:"probe_id,omitempty"`
-	InstanceID      string `json:"instance_id"`
-	ProbeRole       string `json:"probe_role,omitempty"`
-	InterfaceName   string `json:"interface_name,omitempty"`
-	State           string `json:"state"`
-	ProbeType       string `json:"probe_type"`
-	Sent            int    `json:"sent"`
-	Received        int    `json:"received"`
-	Lost            int    `json:"lost"`
-	LossRatio       int    `json:"loss_ratio_pct"`
-	LastRTTMs       int64  `json:"last_rtt_ms"`
-	EWMARTTMs       int64  `json:"ewma_rtt_ms"`
-	P50RTTMs        int64  `json:"p50_rtt_ms"`
-	P95RTTMs        int64  `json:"p95_rtt_ms"`
-	P99RTTMs        int64  `json:"p99_rtt_ms"`
-	JitterMs        int64  `json:"jitter_ms"`
-	ConsecutiveFail int    `json:"consecutive_fail"`
-	LastError       string `json:"last_error,omitempty"`
-	NextProbeUnix   int64  `json:"next_probe_unix,omitempty"`
-	CutoverBlocking bool   `json:"cutover_blocking,omitempty"`
+	ProbeID         string       `json:"probe_id,omitempty"`
+	InstanceID      string       `json:"instance_id"`
+	ProbeRole       string       `json:"probe_role,omitempty"`
+	InterfaceName   string       `json:"interface_name,omitempty"`
+	State           string       `json:"state"`
+	ProbeType       string       `json:"probe_type"`
+	Sent            int          `json:"sent"`
+	Received        int          `json:"received"`
+	Lost            int          `json:"lost"`
+	LossRatio       int          `json:"loss_ratio_pct"`
+	LastRTTMs       int64        `json:"last_rtt_ms"`
+	EWMARTTMs       int64        `json:"ewma_rtt_ms"`
+	P50RTTMs        int64        `json:"p50_rtt_ms"`
+	P95RTTMs        int64        `json:"p95_rtt_ms"`
+	P99RTTMs        int64        `json:"p99_rtt_ms"`
+	JitterMs        int64        `json:"jitter_ms"`
+	ConsecutiveFail int          `json:"consecutive_fail"`
+	LastFailure     *FailureView `json:"last_failure,omitempty"`
+	NextProbeUnix   int64        `json:"next_probe_unix,omitempty"`
+	CutoverBlocking bool         `json:"cutover_blocking,omitempty"`
 }
 
 func BuildHealthView(view HealthView, sortBy string) HealthView {

@@ -35,7 +35,7 @@ type LinkJSON struct {
 	FailureCount    int                   `json:"failure_count,omitempty"`
 	BackoffUntil    int64                 `json:"backoff_until,omitempty"`
 	LastTransition  int64                 `json:"last_transition,omitempty"`
-	LastError       string                `json:"last_error,omitempty"`
+	LastFailure     *inspect.FailureView  `json:"last_failure,omitempty"`
 	Raw             inspect.LinkView      `json:"raw"`
 }
 
@@ -79,7 +79,7 @@ func LinkFromInspect(link inspect.LinkView) LinkJSON {
 		FailureCount:    link.FailureCount,
 		BackoffUntil:    link.BackoffUntil,
 		LastTransition:  link.LastTransition,
-		LastError:       link.LastError,
+		LastFailure:     link.LastFailure,
 		Raw:             link,
 	}
 }

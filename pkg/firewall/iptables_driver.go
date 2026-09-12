@@ -143,9 +143,8 @@ func (d *IPTablesDriver) Apply(ctx context.Context, plan FirewallPlan, desired *
 	cleanupErrs = append(cleanupErrs, legacyErrs...)
 	if len(cleanupErrs) > 0 {
 		result.Failed += len(cleanupErrs)
-		result.Errors = cleanupErrs
 		result.Generation = 1
-		return result, fmt.Errorf("iptables apply cleanup had %d errors", len(cleanupErrs))
+		return result, fmt.Errorf("iptables apply cleanup had %d errors: %s", len(cleanupErrs), strings.Join(cleanupErrs, "; "))
 	}
 	result.Generation = 1
 	return result, nil
@@ -180,7 +179,6 @@ type iptablesSetSpec struct {
 
 func iptablesApplyFailure(result FirewallApplyResult, message string) (FirewallApplyResult, error) {
 	result.Failed++
-	result.Errors = append(result.Errors, message)
 	result.Generation = 1
 	return result, fmt.Errorf("iptables apply failed: %s", message)
 }

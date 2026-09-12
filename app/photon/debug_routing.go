@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/netip"
@@ -250,12 +251,12 @@ func addBirdFilterDefinitions(item *inspect.BirdDumpInstance, configPath string)
 	}
 	item.ConfigPath = configPath
 	if configPath == "" {
-		item.FilterError = "config file is not configured"
+		item.FilterFailure = inspect.BuildFailure(inspect.FailureCodeBirdFilter, errors.New("config file is not configured"))
 		return
 	}
 	config, err := os.ReadFile(configPath)
 	if err != nil {
-		item.FilterError = err.Error()
+		item.FilterFailure = inspect.BuildFailure(inspect.FailureCodeBirdFilter, err)
 		return
 	}
 	item.FilterDefinitions = extractBirdFilterDefinitions(string(config))

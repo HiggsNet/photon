@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"path/filepath"
@@ -206,7 +207,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 		}
 		if err := d.linuxDriver.EnsureRoutingVeth(ctx, vspec); err != nil {
 			instState.State = birdInstanceStateError
-			instState.LastError = fmt.Sprintf("ensure veth: %s", err)
+			instState.LastFailure = fmt.Errorf("ensure veth: %w", err)
 			return fmt.Errorf("ensure upstream veth for netns %q: %w", netnsName, err)
 		}
 	}
@@ -230,7 +231,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 		}
 		if err := d.linuxDriver.EnsureUpstreamRoutes(ctx, rspec); err != nil {
 			instState.State = birdInstanceStateError
-			instState.LastError = fmt.Sprintf("ensure upstream routes: %s", err)
+			instState.LastFailure = fmt.Errorf("ensure upstream routes: %w", err)
 			return fmt.Errorf("ensure upstream routes for netns %q: %w", netnsName, err)
 		}
 	}
@@ -246,7 +247,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 	configBytes, err := bird.DefaultConfigGenerator{}.Generate(spec, importSet, exportSet)
 	if err != nil {
 		instState.State = birdInstanceStateError
-		instState.LastError = err.Error()
+		instState.LastFailure = err
 		return fmt.Errorf("generate bird config for netns %q: %w", netnsName, err)
 	}
 
@@ -259,7 +260,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 	}
 	if mode == bird.BirdModeDisabled {
 		instState.State = birdInstanceStatePending
-		instState.LastError = ""
+		instState.LastFailure = nil
 		return nil
 	}
 
@@ -268,7 +269,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 		if configChanged {
 			if err := d.linuxDriver.WriteBirdConfig(spec.ConfigPath, configBytes); err != nil {
 				instState.State = birdInstanceStateError
-				instState.LastError = err.Error()
+				instState.LastFailure = err
 				return fmt.Errorf("write bird config for netns %q: %w", netnsName, err)
 			}
 		}
@@ -279,18 +280,18 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 			instState.FailureCount++
 			instState.BackoffUntilUnix = now.Add(routingCrashBackoff(instState.FailureCount)).Unix()
 			instState.State = birdInstanceStateDegraded
-			instState.LastError = fmt.Sprintf("bird process exited: %s", instState.LastExit)
+			instState.LastFailure = fmt.Errorf("bird process exited: %s", instState.LastExit)
 			running = false
 		}
 		if !running && instState.BackoffUntilUnix > now.Unix() {
 			instState.State = birdInstanceStateDegraded
-			instState.LastError = fmt.Sprintf("bird restart backoff active until %s", time.Unix(instState.BackoffUntilUnix, 0).Format(time.RFC3339))
+			instState.LastFailure = fmt.Errorf("bird restart backoff active until %s", time.Unix(instState.BackoffUntilUnix, 0).Format(time.RFC3339))
 			return nil
 		}
 		if !running {
 			if err := d.linuxDriver.StartBird(ctx, spec); err != nil {
 				instState.State = birdInstanceStateError
-				instState.LastError = err.Error()
+				instState.LastFailure = err
 				if !isDryRunMissingBirdError(err) {
 					return fmt.Errorf("start bird for netns %q: %w", netnsName, err)
 				}
@@ -303,7 +304,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 		} else if configChanged {
 			if err := d.linuxDriver.ConfigureBird(ctx, spec.ControlSocketPath, spec.ConfigPath); err != nil {
 				instState.State = birdInstanceStateDegraded
-				instState.LastError = err.Error()
+				instState.LastFailure = err
 				if !isDryRunConnectError(err) {
 					return fmt.Errorf("configure bird for netns %q: %w", netnsName, err)
 				}
@@ -325,7 +326,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 		observed, err := d.linuxDriver.ObserveBird(ctx, spec.ControlSocketPath, bird.InternalRouteTableNames(netnsName)...)
 		if err != nil {
 			instState.State = birdInstanceStateError
-			instState.LastError = err.Error()
+			instState.LastFailure = err
 			d.recordBirdHealthObservationUnavailableForLinks(links, reconcile, netnsName, instState.Overlays)
 			if !isDryRunConnectError(err) {
 				return fmt.Errorf("bird status for netns %q: %w", netnsName, err)
@@ -341,7 +342,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 		instState.State = birdInstanceStatePending
 	}
 	if instState.State == birdInstanceStateRunning {
-		instState.LastError = ""
+		instState.LastFailure = nil
 	}
 	return nil
 }
@@ -483,15 +484,15 @@ func (d *Daemon) birdDumpForControl(ctx context.Context, netnsName string, view 
 			addBirdFilterDefinitions(&item, inst.ConfigFile)
 		}
 		if inst.ControlSocket == "" {
-			item.Error = "control socket is not configured"
+			item.Failure = inspect.BuildFailure(inspect.FailureCodeBirdQuery, errors.New("control socket is not configured"))
 			response.Instances[inst.NetNS] = item
 			continue
 		}
 		for _, cmd := range commands {
 			out, err := d.linuxDriver.RawBird(ctx, inst.ControlSocket, cmd)
 			if err != nil {
-				if item.Error == "" {
-					item.Error = err.Error()
+				if item.Failure == nil {
+					item.Failure = inspect.BuildFailure(inspect.FailureCodeBirdQuery, err)
 				}
 				item.Raw[cmd] = out
 				continue
@@ -913,13 +914,16 @@ func formatBirdProcessExit(exit *bird.ProcessExit) string {
 	if exit == nil {
 		return ""
 	}
-	if exit.PID > 0 && exit.Error != "" {
-		return fmt.Sprintf("pid %d: %s", exit.PID, exit.Error)
+	if exit.PID > 0 && exit.Failure != nil {
+		return fmt.Sprintf("pid %d: %s", exit.PID, exit.Failure)
 	}
 	if exit.PID > 0 {
 		return fmt.Sprintf("pid %d", exit.PID)
 	}
-	return exit.Error
+	if exit.Failure != nil {
+		return exit.Failure.Error()
+	}
+	return ""
 }
 
 func rootTrustHash(ns *zone.NetworkState) []byte {

@@ -320,7 +320,7 @@ type LinkInstance struct {
     FailureCount    int
     BackoffUntil    int64
     LastTransition  int64
-    LastError       string
+    LastFailure     error
     Owner           ResourceOwner
     // rotate 相关
     RotatePhase           string   // idle / preparing / testing_new / dual_running / cutover / rollback / cleanup
@@ -595,7 +595,7 @@ photon debug links
 | `takeover_startup_grace` | daemon 刚启动，2min 保护期内禁止 secondary takeover |
 | `takeover_delay_active` | secondary 在 takeover delay 冷却期内，等待超时后再接管 |
 | link 卡在 `connecting` 超过 3 分钟 | VICI socket 不可达、IKE 协商失败、NAT-T 端口不通、远端 charon 未运行 |
-| link 反复在 connecting/error 间翻转 | 检查 `LinkInstance` 中的 last_error 和 backoff；可能是 endpoint/ports 不可达 |
+| link 反复在 connecting/error 间翻转 | 检查 `LinkInstance` 展示中的 last_failure 和 backoff；可能是 endpoint/ports 不可达 |
 | XFRM interface 有 TX dropped | XFRM state/policy 在 host，interface 在 overlay netns——确认 host-born 路径正确 |
 | revocation 后 SA 被反复拉起 | owner token 不匹配、残留 `LinkInstance` 未清理、或 teardown 没有成功删除 connection |
 | `dual_running` 不进入 `draining` | staged interface 尚未通过健康探测，或尚未形成 Babel neighbor |

@@ -205,7 +205,6 @@ type ContactPoint struct {
 	Successes    int
 	Failures     int
 	BackoffUntil time.Time
-	LastError    string
 	RankReason   string
 }
 
@@ -217,7 +216,6 @@ type ContactPointQuality struct {
 	Successes    int
 	Failures     int
 	BackoffUntil time.Time
-	LastError    string
 }
 
 type AddressCandidateOptions struct {
@@ -904,7 +902,6 @@ func annotateContactPoints(points []ContactPoint, opts AddressCandidateOptions) 
 				points[i].Successes = quality.Successes
 				points[i].Failures = quality.Failures
 				points[i].BackoffUntil = quality.BackoffUntil
-				points[i].LastError = quality.LastError
 			}
 		}
 		points[i].RankReason = contactRankReason(points[i], opts.Now)
@@ -956,9 +953,6 @@ func contactRankReason(point ContactPoint, now time.Time) string {
 	}
 	if point.Successes > 0 {
 		parts = append(parts, fmt.Sprintf("successes=%d", point.Successes))
-	}
-	if point.LastError != "" {
-		parts = append(parts, "last_error="+point.LastError)
 	}
 	return strings.Join(parts, ",")
 }

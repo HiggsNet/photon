@@ -212,11 +212,11 @@ func TestConfigureHealthManagerUsesRealProber(t *testing.T) {
 	if len(snapshot) != 1 {
 		t.Fatalf("snapshot links = %d, want 1", len(snapshot))
 	}
-	if strings.Contains(snapshot[0].LastError, "no prober configured") {
-		t.Fatalf("health manager used nop prober: last_error=%q", snapshot[0].LastError)
+	if failure := snapshot[0].LastFailure; failure != nil && strings.Contains(failure.Error(), "no prober configured") {
+		t.Fatalf("health manager used nop prober: last_failure=%v", failure)
 	}
-	if snapshot[0].LastError != "peer address missing" {
-		t.Fatalf("last_error = %q, want peer address missing", snapshot[0].LastError)
+	if failure := snapshot[0].LastFailure; failure == nil || failure.Error() != "peer address missing" {
+		t.Fatalf("last_failure = %v, want peer address missing", failure)
 	}
 }
 

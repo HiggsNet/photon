@@ -47,8 +47,8 @@ func formatPingResult(target inspect.PingTargetView) string {
 		}
 		return "ok"
 	}
-	if target.Error != "" {
-		return fmt.Sprintf("fail error=%q", target.Error)
+	if target.Failure != nil {
+		return fmt.Sprintf("fail %s", failureDisplay(target.Failure))
 	}
 	return "fail"
 }

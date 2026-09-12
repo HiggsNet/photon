@@ -2,6 +2,7 @@ package ping
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"sync/atomic"
 	"testing"
@@ -20,7 +21,7 @@ func (f *fakeProber) Probe(_ context.Context, target health.ProbeTarget, _ healt
 	if result, ok := f.byProbeID[target.ProbeID]; ok {
 		return result
 	}
-	return health.ProbeResult{InstanceID: target.InstanceID, Error: "no fake result"}
+	return health.ProbeResult{InstanceID: target.InstanceID, Err: errors.New("no fake result")}
 }
 
 func (*fakeProber) Type() string { return health.ProbeTypeICMP }
@@ -94,7 +95,7 @@ func TestRunUsesProber(t *testing.T) {
 	}
 	fake := &fakeProber{byProbeID: map[string]health.ProbeResult{
 		"t1": {Success: true, RTT: 2 * time.Millisecond},
-		"t2": {Error: "100% packet loss"},
+		"t2": {Err: errors.New("100% packet loss")},
 	}}
 	outcomes := Run(context.Background(), fake, targets, health.ProbeConfig{})
 	if len(outcomes) != 2 {
@@ -106,7 +107,7 @@ func TestRunUsesProber(t *testing.T) {
 	if outcomes[0].Family != "ipv4" || !outcomes[0].Result.Success {
 		t.Fatalf("outcome[0] = %+v, want ipv4 success", outcomes[0])
 	}
-	if outcomes[1].Family != "ipv6" || outcomes[1].Result.Success || outcomes[1].Result.Error == "" {
+	if outcomes[1].Family != "ipv6" || outcomes[1].Result.Success || outcomes[1].Result.Err == nil {
 		t.Fatalf("outcome[1] = %+v, want ipv6 failure with error", outcomes[1])
 	}
 }

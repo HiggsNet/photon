@@ -59,7 +59,6 @@ func TestTransportLinkSpecHashIgnoresRuntimeQuality(t *testing.T) {
 			Successes:    5,
 			Failures:     2,
 			BackoffUntil: now.Add(time.Minute),
-			LastError:    "timeout",
 			RankReason:   "recent success",
 		}},
 	}
@@ -68,7 +67,6 @@ func TestTransportLinkSpecHashIgnoresRuntimeQuality(t *testing.T) {
 	spec.ContactPoints[0].Successes = 10
 	spec.ContactPoints[0].Failures = 0
 	spec.ContactPoints[0].BackoffUntil = now.Add(2 * time.Minute)
-	spec.ContactPoints[0].LastError = ""
 	spec.ContactPoints[0].RankReason = "best"
 	if got := TransportLinkSpecHash(spec); got != base {
 		t.Fatalf("hash changed after quality updates: %q != %q", got, base)

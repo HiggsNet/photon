@@ -28,7 +28,7 @@ func TestICMProberScopedLinkLocalUsesPortablePing(t *testing.T) {
 		Burst:   1,
 	})
 	if !result.Success {
-		t.Fatalf("probe success = false, error=%q", result.Error)
+		t.Fatalf("probe success = false, error=%v", result.Err)
 	}
 	if runner.name != "ip" {
 		t.Fatalf("command name = %q, want ip", runner.name)
@@ -71,8 +71,8 @@ func TestICMProberIncludesPingOutputInError(t *testing.T) {
 	if result.Success {
 		t.Fatal("probe success = true, want false")
 	}
-	if !strings.Contains(result.Error, "Network is unreachable") {
-		t.Fatalf("probe error = %q, want ping output", result.Error)
+	if result.Err == nil || !strings.Contains(result.Err.Error(), "Network is unreachable") {
+		t.Fatalf("probe error = %v, want ping output", result.Err)
 	}
 }
 
@@ -101,7 +101,7 @@ func TestICMProberRetriesScopedLinkLocalWithoutSourceOnBindInvalid(t *testing.T)
 		Burst:   1,
 	})
 	if !result.Success {
-		t.Fatalf("probe success = false, error=%q", result.Error)
+		t.Fatalf("probe success = false, error=%v", result.Err)
 	}
 	want := [][]string{
 		{
@@ -139,7 +139,7 @@ func TestICMProberRunsBurstInOneProcess(t *testing.T) {
 
 	result := prober.Probe(context.Background(), target, ProbeConfig{Timeout: time.Second, Burst: 3})
 	if !result.Success {
-		t.Fatalf("probe success = false, error=%q", result.Error)
+		t.Fatalf("probe success = false, error=%v", result.Err)
 	}
 	if result.RTT != 3750*time.Microsecond {
 		t.Fatalf("probe RTT = %s, want 3.75ms", result.RTT)
@@ -164,8 +164,8 @@ func TestICMProberUnansweredBurstIsReachabilityFailure(t *testing.T) {
 	if result.Success {
 		t.Fatal("probe success = true, want false for an unanswered burst")
 	}
-	if result.Error != "" {
-		t.Fatalf("probe error = %q, want ordinary packet loss to be a valid observation", result.Error)
+	if result.Err != nil {
+		t.Fatalf("probe error = %v, want ordinary packet loss to be a valid observation", result.Err)
 	}
 }
 
@@ -183,8 +183,8 @@ func TestICMProberBurstRequiresMajorityOfReplies(t *testing.T) {
 	if result.Success {
 		t.Fatal("probe success = true, want false for one reply in a three-packet burst")
 	}
-	if result.Error != "" {
-		t.Fatalf("probe error = %q, want partial loss without a command error", result.Error)
+	if result.Err != nil {
+		t.Fatalf("probe error = %v, want partial loss without a command error", result.Err)
 	}
 }
 
@@ -216,7 +216,7 @@ func TestICMProberReportsPacketCountsForEveryBurstOutcome(t *testing.T) {
 				InstanceID:     "link-1",
 				PeerTunnelAddr: netip.MustParseAddr("192.0.2.2"),
 			}, ProbeConfig{Timeout: time.Second, Burst: 3})
-			if result.Error != "" || result.Sent != 3 || result.Received != tt.received || result.Lost != 3-tt.received || result.Success != tt.success {
+			if result.Err != nil || result.Sent != 3 || result.Received != tt.received || result.Lost != 3-tt.received || result.Success != tt.success {
 				t.Fatalf("probe result = %+v, want sent/received/lost=3/%d/%d success=%t", result, tt.received, 3-tt.received, tt.success)
 			}
 			if tt.received == 0 && result.RTT != 0 {

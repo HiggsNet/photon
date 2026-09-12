@@ -237,7 +237,6 @@ func TestContactPointSelectionFallsBackFromBackoffCurrentPort(t *testing.T) {
 			currentKey: {
 				Failures:     3,
 				BackoffUntil: now.Add(time.Minute),
-				LastError:    "dial_timeout",
 			},
 		},
 	})
@@ -252,7 +251,7 @@ func TestContactPointSelectionFallsBackFromBackoffCurrentPort(t *testing.T) {
 		t.Fatalf("selected = %+v, want previous grace port", selected[0])
 	}
 	current := points[1]
-	if current.LastError != "dial_timeout" || current.Failures != 3 || current.RankReason == "" {
+	if current.Failures != 3 || current.RankReason == "" {
 		t.Fatalf("current quality not annotated: %+v", current)
 	}
 }

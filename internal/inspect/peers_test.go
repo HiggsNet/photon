@@ -2,11 +2,11 @@ package inspect
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
-	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	"github.com/HiggsNet/photon/pkg/core/observability"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
@@ -191,21 +191,19 @@ func TestBuildEndpointDebugHandlesMissingVerifiedState(t *testing.T) {
 func TestBuildPeerDebugFormatsRuntimeDiagnostics(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	got := BuildPeerDebug(PeerDebugInput{
-		PeerID:         "node-b.catofes.",
-		Source:         "bootstrap",
-		ConfiguredAddr: "127.0.0.1:9999",
-		ResolvedAddr:   "127.0.0.1:2000",
-		PeerRuntimeState: photonstate.PeerRuntimeState{
-			LastSyncUnix:         now.Add(-time.Minute).Unix(),
-			BackoffUntilUnix:     now.Add(30 * time.Second).Unix(),
-			DiscoveredAddr:       "127.0.0.1:2000",
-			ObservedAddr:         "127.0.0.1:3000",
-			ObservedUntilUnix:    now.Add(time.Hour).Unix(),
-			ObservedLastSeenUnix: now.Unix(),
-			ObservedLastSyncUnix: now.Add(-time.Minute).Unix(),
-			ObservedFailureCount: 2,
-			LastRelayUnix:        now.Add(-2 * time.Minute).Unix(),
-		},
+		PeerID:               "node-b.catofes.",
+		Source:               "bootstrap",
+		ConfiguredAddr:       "127.0.0.1:9999",
+		ResolvedAddr:         "127.0.0.1:2000",
+		LastSyncUnix:         now.Add(-time.Minute).Unix(),
+		BackoffUntilUnix:     now.Add(30 * time.Second).Unix(),
+		DiscoveredAddr:       "127.0.0.1:2000",
+		ObservedAddr:         "127.0.0.1:3000",
+		ObservedUntilUnix:    now.Add(time.Hour).Unix(),
+		ObservedLastSeenUnix: now.Unix(),
+		ObservedLastSyncUnix: now.Add(-time.Minute).Unix(),
+		ObservedFailureCount: 2,
+		LastRelayUnix:        now.Add(-2 * time.Minute).Unix(),
 		Diagnostics: observability.PeerDiagnostics{
 			ObservedSource:        "PING",
 			LastUpdateSource:      "node-c.catofes.",
@@ -256,9 +254,10 @@ func TestBuildPeerRuntimeDiagnosticViewsFormatTimestamps(t *testing.T) {
 	}
 
 	objectPull := BuildPeerObjectPullStats(&observability.PeerObjectPullStats{
-		LastUnix: now.Unix(),
+		LastUnix:    now.Unix(),
+		LastFailure: errors.New("object unavailable"),
 	})
-	if objectPull.Last != "2023-11-14T22:13:20Z" {
+	if objectPull.Last != "2023-11-14T22:13:20Z" || objectPull.LastFailure == nil || objectPull.LastFailure.Code != FailureCodeGossipObjectPull {
 		t.Fatalf("object pull timestamp = %+v", objectPull)
 	}
 }

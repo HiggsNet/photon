@@ -22,7 +22,7 @@ func WriteLinks(w io.Writer, inspection inspect.LinkInspection, filter string, v
 		len(inspect.FilterLinkSkips(inspection.Skipped, filter)),
 	)
 	if failure := inspection.Summary.LastFailure; failure != nil {
-		out.Linef("last_failure: code=%s message=%s", failure.Code, escapeTableCell(failure.Message))
+		out.Linef("last_failure: %s", escapeTableCell(failureDisplay(failure)))
 	}
 	rows := make([][]string, 0, len(links)+1)
 	if verbose {
@@ -47,7 +47,7 @@ func WriteLinks(w io.Writer, inspection inspect.LinkInspection, filter string, v
 				dash(link.Rotation.Phase),
 				dash(link.Routing.BirdState),
 				dash(link.Owner.Manager),
-				escapeTableCell(link.LastError),
+				escapeTableCell(failureMessage(link.LastFailure)),
 			})
 		} else {
 			rows = append(rows, []string{
@@ -97,8 +97,8 @@ func linkHealthSummary(link inspect.LinkView) string {
 	if link.Health == nil {
 		return "-"
 	}
-	if link.Health.LastError != "" {
-		return defaultText(link.Health.State, "error") + ":" + escapeTableCell(link.Health.LastError)
+	if link.Health.LastFailure != nil {
+		return defaultText(link.Health.State, "error") + ":" + escapeTableCell(failureDisplay(link.Health.LastFailure))
 	}
 	return defaultText(link.Health.State, "-")
 }
@@ -116,11 +116,7 @@ func WriteLinksDebug(w io.Writer, view inspect.LinksDebugView) error {
 	out.LineIf(view.ReplanIgnored, "planned_desired_status: ignored_partial last_reconcile_desired=%d", view.LastDesiredLinks)
 	out.Linef("desired_source: %s", dash(view.DesiredPlanSource))
 	out.Linef("actual_sas: %d", inspection.Summary.ActualSAs)
-	if failure := inspection.Summary.LastFailure; failure != nil {
-		out.Linef("last_failure: code=%s message=%s", failure.Code, failure.Message)
-	} else {
-		out.Linef("last_failure: -")
-	}
+	out.Linef("last_failure: %s", failureDisplay(inspection.Summary.LastFailure))
 	out.Linef("link_instances: %d", inspection.Summary.LinkInstances)
 	if strings.TrimSpace(view.Filter) != "" {
 		out.Linef("filter: %s", view.Filter)
@@ -207,8 +203,8 @@ func writeDebugLinkInstance(out *lineWriter, link inspect.LinkView, spec *ipsec.
 	out.Linef("    owner: %s", dash(link.Owner.Manager))
 	out.Linef("    failures: %d", link.FailureCount)
 	out.Linef("    backoff_until: %s", formatUnixTime(link.BackoffUntil))
-	out.Linef("    last_error: %s", dash(link.LastError))
-	out.Linef("    takeover_error: %s", dash(link.Takeover.LastError))
+	out.Linef("    last_failure: %s", failureDisplay(link.LastFailure))
+	out.Linef("    takeover_failure: %s", failureDisplay(link.Takeover.LastFailure))
 	out.Linef("  health:")
 	if link.Health == nil {
 		out.Linef("    state: unavailable")
@@ -222,7 +218,7 @@ func writeDebugLinkInstance(out *lineWriter, link inspect.LinkView, spec *ipsec.
 		out.Linef("    loss: %d%%", health.LossRatio)
 		out.Linef("    rtt last/ewma: %dms/%dms", health.LastRTTMs, health.EWMARTTMs)
 		out.Linef("    consecutive_fail: %d", health.ConsecutiveFail)
-		out.Linef("    last_error: %s", dash(health.LastError))
+		out.Linef("    last_failure: %s", failureDisplay(health.LastFailure))
 		out.Linef("    next_probe: %s", formatUnixTime(health.NextProbeUnix))
 		out.Linef("    cutover_blocking: %t", health.CutoverBlocking)
 	}
@@ -258,7 +254,7 @@ func writeDebugMissingLink(out *lineWriter, link inspect.LinkView, spec *ipsec.T
 	out.Linef("    owner: -")
 	out.Linef("    failures: 0")
 	out.Linef("    backoff_until: -")
-	out.Linef("    last_error: -")
+	out.Linef("    last_failure: -")
 	out.Linef("  routing:")
 	out.Linef("    bird_state: %s", link.Routing.BirdState)
 	out.Linef("    bird_neighbors: %s", link.Routing.BirdNeighbors)

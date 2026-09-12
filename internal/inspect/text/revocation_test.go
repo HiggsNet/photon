@@ -33,7 +33,7 @@ func TestWriteRevocationImpactsOutput(t *testing.T) {
 				inspect.RevocationLayerIPsec:    {Status: inspect.RevocationStatusRemoved, Reason: "teardown complete", UnixTime: time.Unix(5000, 0).Unix()},
 				inspect.RevocationLayerRouting:  {Status: inspect.RevocationStatusRemoved},
 				inspect.RevocationLayerFirewall: {Status: inspect.RevocationStatusRemoved},
-				inspect.RevocationLayerGossip:   {Status: inspect.RevocationStatusError, Error: "cache busy"},
+				inspect.RevocationLayerGossip:   {Status: inspect.RevocationStatusError, Failure: &inspect.FailureView{Code: inspect.FailureCodeRevocationCleanup, Message: "cache busy"}},
 			},
 		},
 	}
@@ -57,7 +57,7 @@ func TestWriteRevocationImpactsOutput(t *testing.T) {
 		"ipsec_xfrm:",
 		"reason: teardown complete",
 		"time: 1970-01-01T01:23:20Z",
-		"error: cache busy",
+		"failure: code=revocation_cleanup_failed message=cache busy",
 	}
 	for _, want := range required {
 		if !strings.Contains(output, want) {

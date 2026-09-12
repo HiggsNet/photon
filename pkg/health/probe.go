@@ -2,6 +2,7 @@ package health
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"time"
 )
@@ -19,7 +20,7 @@ type ProbeResult struct {
 	// failure hysteresis. Packet loss and link state thresholds use the counts
 	// above, not this aggregate bit.
 	Success bool
-	Error   string // raw error string, NOT used as a metrics label
+	Err     error // raw execution failure, NOT used as a metrics label
 }
 
 func normalizeProbeResult(result ProbeResult) ProbeResult {
@@ -35,7 +36,7 @@ func normalizeProbeResult(result ProbeResult) ProbeResult {
 	if result.Sent == 0 && result.Received == 0 && result.Lost == 0 {
 		// Preserve source compatibility for simple/third-party probers that only
 		// populated Success. Execution errors genuinely sent no known packets.
-		if result.Error == "" {
+		if result.Err == nil {
 			result.Sent = 1
 			if result.Success {
 				result.Received = 1
@@ -52,7 +53,7 @@ func normalizeProbeResult(result ProbeResult) ProbeResult {
 		}
 		result.Lost = result.Sent - result.Received
 	}
-	result.Success = result.Error == "" && result.Received > result.Lost
+	result.Success = result.Err == nil && result.Received > result.Lost
 	if result.Received == 0 {
 		result.RTT = 0
 	}
@@ -79,7 +80,7 @@ type ProbeRunner interface {
 type nopProber struct{}
 
 func (nopProber) Probe(ctx context.Context, target ProbeTarget, cfg ProbeConfig) ProbeResult {
-	return ProbeResult{InstanceID: target.InstanceID, Error: "no prober configured"}
+	return ProbeResult{InstanceID: target.InstanceID, Err: errors.New("no prober configured")}
 }
 
 func (nopProber) Type() string { return ProbeTypeICMP }

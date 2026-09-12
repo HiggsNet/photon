@@ -176,23 +176,21 @@ func (d *Daemon) birdRoutesForControl(ctx context.Context, dump *inspect.RoutesR
 		socketPath := inst.ControlSocket
 		if state != nil {
 			view.State = state.State
-			if state.LastError != "" {
-				view.Error = state.LastError
-			}
+			view.Failure = inspect.BuildFailure(inspect.FailureCodeBirdInstance, state.LastFailure)
 			if state.ControlSocket != "" {
 				socketPath = state.ControlSocket
 			}
 		}
 		if socketPath == "" {
-			if view.Error == "" {
-				view.Error = "control socket not configured"
+			if view.Failure == nil {
+				view.Failure = inspect.BuildFailure(inspect.FailureCodeBirdQuery, errors.New("control socket not configured"))
 			}
 			views = append(views, view)
 			continue
 		}
 		observed, err := d.linuxDriver.ObserveBird(ctx, socketPath, bird.InternalRouteTableNames(inst.NetNS)...)
 		if err != nil {
-			view.Error = err.Error()
+			view.Failure = inspect.BuildFailure(inspect.FailureCodeBirdQuery, err)
 			views = append(views, view)
 			continue
 		}

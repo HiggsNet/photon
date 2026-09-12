@@ -439,7 +439,6 @@ func TestPlanTransportLinksUsesContactPointQualityForPortFallback(t *testing.T) 
 				currentKey: {
 					Failures:     2,
 					BackoffUntil: now.Add(time.Minute),
-					LastError:    "ike_timeout",
 				},
 			},
 		},
@@ -454,7 +453,7 @@ func TestPlanTransportLinksUsesContactPointQualityForPortFallback(t *testing.T) 
 	if point.Current || point.IKEPort != 1500 {
 		t.Fatalf("first contact point = %+v, want previous grace port", point)
 	}
-	if plan.Desired[0].ContactPoints[1].LastError != "ike_timeout" {
+	if plan.Desired[0].ContactPoints[1].Failures != 2 {
 		t.Fatalf("current point quality missing: %+v", plan.Desired[0].ContactPoints)
 	}
 }

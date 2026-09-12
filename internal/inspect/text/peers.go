@@ -19,7 +19,7 @@ func WriteGossipPeers(w io.Writer, peers []inspect.PeerDebugView, filter string,
 			peer.ConfiguredAddr,
 			peer.ResolvedAddr,
 			peer.Status,
-			peer.LastError,
+			failureDisplay(peer.LastFailure),
 			peer.KnownEndpoint,
 			peer.DiscoveredAddr,
 			peer.ObservedAddr,
@@ -53,7 +53,7 @@ func WriteGossipPeers(w io.Writer, peers []inspect.PeerDebugView, filter string,
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	out := newLineWriter(table)
 	out.Linef("peers: %s", filteredCount(len(matching), len(peers), filter))
-	rows := [][]string{{"PEER", "SOURCE", "ENDPOINT", "STATUS", "LAST_SYNC", "NEXT_RETRY", "LAST_ERROR"}}
+	rows := [][]string{{"PEER", "SOURCE", "ENDPOINT", "STATUS", "LAST_SYNC", "NEXT_RETRY", "LAST_FAILURE"}}
 	for _, peer := range matching {
 		rows = append(rows, []string{
 			peer.PeerID,
@@ -62,7 +62,7 @@ func WriteGossipPeers(w io.Writer, peers []inspect.PeerDebugView, filter string,
 			dash(peer.Status),
 			dash(peer.LastSuccess),
 			dash(peer.NextRetry),
-			escapeTableCell(dash(peer.LastError)),
+			escapeTableCell(failureDisplay(peer.LastFailure)),
 		})
 	}
 	writeAlignedRows(out, rows, 0)

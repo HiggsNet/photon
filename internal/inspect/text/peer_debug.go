@@ -14,7 +14,7 @@ func WritePeerDebug(w io.Writer, view inspect.PeerDebugView) error {
 	out.Linef("resolved_addr: %s", dash(view.ResolvedAddr))
 	out.Linef("status: %s", view.Status)
 	out.Linef("last_success: %s", view.LastSuccess)
-	out.Linef("last_error: %s", dash(view.LastError))
+	out.Linef("last_failure: %s", failureDisplay(view.LastFailure))
 	out.Linef("backoff: %s", dash(view.Backoff))
 	out.Linef("next_retry: %s", dash(view.NextRetry))
 	out.Linef("known_endpoint: %s", dash(view.KnownEndpoint))
@@ -85,7 +85,7 @@ func writePeerDebugObjectPullStats(out *lineWriter, stats inspect.PeerObjectPull
 		out.Linef("object_pull_last: -")
 		return
 	}
-	out.Linef("object_pull_last: %s object=%s zone=%s key=%s bytes=%d source_peer=%s unreachable=%t error=%s",
+	out.Linef("object_pull_last: %s object=%s zone=%s key=%s bytes=%d source_peer=%s unreachable=%t failure=%s",
 		stats.Last,
 		dash(stats.LastObject),
 		dash(stats.LastZone),
@@ -93,6 +93,6 @@ func writePeerDebugObjectPullStats(out *lineWriter, stats inspect.PeerObjectPull
 		stats.LastBytes,
 		dash(stats.LastSourcePeer),
 		stats.LastUnreachable,
-		dash(stats.LastError),
+		failureDisplay(stats.LastFailure),
 	)
 }

@@ -6,6 +6,8 @@ import (
 	"io"
 	"strings"
 	"time"
+
+	"github.com/HiggsNet/photon/internal/inspect"
 )
 
 type lineWriter struct {
@@ -63,6 +65,23 @@ func defaultText(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func failureMessage(failure *inspect.FailureView) string {
+	if failure == nil {
+		return ""
+	}
+	return failure.Message
+}
+
+func failureDisplay(failure *inspect.FailureView) string {
+	if failure == nil {
+		return "-"
+	}
+	if failure.Message == "" {
+		return "code=" + failure.Code
+	}
+	return fmt.Sprintf("code=%s message=%s", failure.Code, failure.Message)
 }
 
 func WriteJSON(w io.Writer, value any) error {

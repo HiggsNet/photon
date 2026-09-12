@@ -26,7 +26,7 @@ type ServiceView struct {
 	Version     uint64
 	UpdatedUnix int64
 	RecordKey   string
-	Error       string
+	Failure     *FailureView
 }
 
 type ServiceEndpointView struct {
@@ -81,7 +81,7 @@ func BuildServiceInspection(state *corestate.VerifiedState, now time.Time) Servi
 			value, err := photonservice.ParseSOCKS5Record(record)
 			if err != nil {
 				serviceView.Status = "invalid"
-				serviceView.Error = err.Error()
+				serviceView.Failure = BuildFailure(FailureCodeServiceRecord, err)
 				view.Services = append(view.Services, serviceView)
 				continue
 			}

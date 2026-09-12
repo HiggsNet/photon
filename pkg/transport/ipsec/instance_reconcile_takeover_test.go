@@ -2,10 +2,12 @@ package ipsec
 
 import (
 	"context"
-	"github.com/HiggsNet/photon/pkg/core/zone"
+	"errors"
 	"net/netip"
 	"testing"
 	"time"
+
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 func TestReconcileMatchesSameRuntimeSAByPathFamily(t *testing.T) {
@@ -164,7 +166,7 @@ func TestReconcileSecondaryStandbyRepairsMissingDriverStateWithoutTakeover(t *te
 	inst := NewLinkInstance(spec, LinkStateDown, now.Add(-time.Minute))
 	inst.InitiatorRole = InitiatorRoleSecondaryStandby
 	inst.ActualState = LinkStateDegraded
-	inst.LastError = "xfrm namespace or interface missing"
+	inst.LastFailure = errors.New("xfrm namespace or interface missing")
 
 	result := ReconcileLinkInstances(ReconcileInputs{
 		Desired:      []TransportLinkSpec{spec},
@@ -350,7 +352,7 @@ func TestReconcileSecondaryTakeoverCooldownPreventsRetry(t *testing.T) {
 	// Simulate apply failure: cooldown is set by the daemon, but we can set it directly.
 	inst.ActualState = LinkStateError
 	inst.FailureCount = 1
-	inst.LastError = "ike timeout"
+	inst.LastFailure = errors.New("ike timeout")
 	inst.TakeoverPhase = TakeoverPhaseCooldown
 	inst.TakeoverUntil = base.Add(3 * time.Minute).Unix()
 

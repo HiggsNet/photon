@@ -60,7 +60,7 @@ type BirdRoutesView struct {
 	NetNS      string          `json:"netns"`
 	InstanceID string          `json:"instance_id,omitempty"`
 	State      string          `json:"state,omitempty"`
-	Error      string          `json:"error,omitempty"`
+	Failure    *FailureView    `json:"failure,omitempty"`
 	Routes     []BirdRouteView `json:"routes,omitempty"`
 }
 

@@ -354,7 +354,7 @@ RTT 聚合规则固定为：每个 burst 记录最后一个成功回复的 RTT�
 
 ### 6.3 失败原因分类
 
-`classifyFailReason` 把原始错误串映射为稳定的 reason 类别（可作 metrics label）：
+`classifyFailReason` 把 process-local `error` 的诊断消息映射为稳定的 reason 类别（可作 metrics label）：
 
 | reason | 触发条件 |
 |---|---|
@@ -362,10 +362,10 @@ RTT 聚合规则固定为：每个 burst 记录最后一个成功回复的 RTT�
 | `netns_interface_missing` | 错误含 "netns"/"interface"/"missing" |
 | `peer_address_missing` | 错误含 "address" |
 | `firewall_denied` | 错误含 "firewall" |
-| `probe_timeout` | 无错误串但窗口内全丢 |
+| `probe_timeout` | 无执行错误但窗口内全丢 |
 | `probe_failure` | 其他 |
 
-状态机还会产生恢复过渡 reason `recovering`（见 6.2）。原始探测错误保留在 `LastError`；稳定分类和过渡 reason 写入 `LastReason` 与 metrics `reason` label，避免把动态错误串作为 label。
+状态机还会产生恢复过渡 reason `recovering`（见 6.2）。原始探测失败在 manager/snapshot 中保留为 process-local `error`；canonical inspect 才映射为 `FailureView{code:"health_probe_failed",message}`。稳定分类和过渡 reason 写入 `LastReason` 与 metrics `reason` label，动态消息不作为 label，也不持久化。
 
 ---
 

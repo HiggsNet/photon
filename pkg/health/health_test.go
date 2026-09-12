@@ -2,6 +2,7 @@ package health
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"strings"
 	"sync"
@@ -110,14 +111,14 @@ func TestStateMachineHealthyToDegraded(t *testing.T) {
 	now := time.Now()
 	// Start healthy.
 	for range 5 {
-		m.Evaluate("link1", WindowSnapshot{Sent: 5, Received: 5, Lost: 0}, "", now)
+		m.Evaluate("link1", WindowSnapshot{Sent: 5, Received: 5, Lost: 0}, nil, now)
 	}
 	if state := m.State("link1"); state != HealthStateHealthy {
 		t.Fatalf("state = %s, want healthy", state)
 	}
 	// Inject consecutive failures.
 	for i := range 3 {
-		m.Evaluate("link1", WindowSnapshot{Sent: 5, Received: 0, Lost: 5, LossRatio: 1.0, ConsecutiveFails: i + 1}, "", now)
+		m.Evaluate("link1", WindowSnapshot{Sent: 5, Received: 0, Lost: 5, LossRatio: 1.0, ConsecutiveFails: i + 1}, nil, now)
 	}
 	if state := m.State("link1"); state != HealthStateDown {
 		t.Fatalf("state = %s, want down after consecutive failures", state)
@@ -139,7 +140,7 @@ func TestStateMachineUnknownOnlyBeforeFirstObservation(t *testing.T) {
 	}
 	state, _ := m.Evaluate("link1", WindowSnapshot{
 		Sent: 1, Lost: 1, LossRatio: 1, ConsecutiveFails: 1,
-	}, "", now)
+	}, nil, now)
 	if state != HealthStateDegraded {
 		t.Fatalf("state after first failed observation = %s, want degraded", state)
 	}
@@ -155,7 +156,7 @@ func TestStateMachineLowLossIsHealthy(t *testing.T) {
 	m := NewStateMachine(cfg)
 	state, _ := m.Evaluate("link1", WindowSnapshot{
 		Sent: 20, Received: 19, Lost: 1, LossRatio: 0.05,
-	}, "", time.Now())
+	}, nil, time.Now())
 	if state != HealthStateHealthy {
 		t.Fatalf("state with loss below threshold = %s, want healthy", state)
 	}
@@ -184,7 +185,7 @@ func TestStateMachineUsesPacketLossWithoutChangingBurstColdStart(t *testing.T) {
 			var state string
 			for burst := range 3 {
 				window.RecordProbe(time.Now(), ProbeResult{Sent: 10, Received: tt.received})
-				state, _ = machine.Evaluate("link1", window.Snapshot(), "", time.Now())
+				state, _ = machine.Evaluate("link1", window.Snapshot(), nil, time.Now())
 				if tt.want == HealthStateDown && burst < 2 && state == HealthStateDown {
 					t.Fatalf("state after burst %d = down; cold-start gate must remain burst-based", burst+1)
 				}
@@ -200,8 +201,8 @@ func TestStateMachineExecutionErrorsRemainBurstBased(t *testing.T) {
 	m := NewStateMachine(DefaultHysteresisConfig())
 	w := NewRollingWindow(20)
 	for burst := range 3 {
-		w.RecordProbe(time.Now(), ProbeResult{Error: "permission denied"})
-		state, reason := m.Evaluate("link1", w.Snapshot(), "permission denied", time.Now())
+		w.RecordProbe(time.Now(), ProbeResult{Err: errors.New("permission denied")})
+		state, reason := m.Evaluate("link1", w.Snapshot(), errors.New("permission denied"), time.Now())
 		want := HealthStateDegraded
 		if burst == 2 {
 			want = HealthStateProbeError
@@ -232,7 +233,7 @@ func TestStateMachineColdStartFailuresConvergeToDown(t *testing.T) {
 			Lost:             failures,
 			LossRatio:        1,
 			ConsecutiveFails: failures,
-		}, "", now)
+		}, nil, now)
 		want := HealthStateDegraded
 		if failures == 3 {
 			want = HealthStateDown
@@ -252,7 +253,7 @@ func TestStateMachineEstablishedLinkGoesDownAtConsecutiveFailureThreshold(t *tes
 	}
 	m := NewStateMachine(cfg)
 	now := time.Now()
-	m.Evaluate("link1", WindowSnapshot{Sent: 20, Received: 20}, "", now)
+	m.Evaluate("link1", WindowSnapshot{Sent: 20, Received: 20}, nil, now)
 
 	for failures := 1; failures <= 3; failures++ {
 		state, _ := m.Evaluate("link1", WindowSnapshot{
@@ -261,7 +262,7 @@ func TestStateMachineEstablishedLinkGoesDownAtConsecutiveFailureThreshold(t *tes
 			Lost:             failures,
 			LossRatio:        float64(failures) / 20,
 			ConsecutiveFails: failures,
-		}, "", now)
+		}, nil, now)
 		want := HealthStateHealthy
 		if failures == 3 {
 			want = HealthStateDown
@@ -283,19 +284,19 @@ func TestStateMachineHysteresisRecovery(t *testing.T) {
 	now := time.Now()
 	// Force into degraded state.
 	for i := range 3 {
-		m.Evaluate("link1", WindowSnapshot{Sent: 5, Received: 0, Lost: 5, LossRatio: 1.0, ConsecutiveFails: i + 1}, "", now)
+		m.Evaluate("link1", WindowSnapshot{Sent: 5, Received: 0, Lost: 5, LossRatio: 1.0, ConsecutiveFails: i + 1}, nil, now)
 	}
 	if state := m.State("link1"); state != HealthStateDown {
 		t.Fatalf("state = %s, want down", state)
 	}
 	// One success should not immediately recover (hysteresis).
-	m.Evaluate("link1", WindowSnapshot{Sent: 1, Received: 1, Lost: 0}, "", now)
+	m.Evaluate("link1", WindowSnapshot{Sent: 1, Received: 1, Lost: 0}, nil, now)
 	if state := m.State("link1"); state == HealthStateHealthy {
 		t.Fatalf("state = %s, should not be healthy after single success (hysteresis)", state)
 	}
 	// After enough consecutive successes, recover.
 	for range 4 {
-		m.Evaluate("link1", WindowSnapshot{Sent: 1, Received: 1, Lost: 0}, "", now)
+		m.Evaluate("link1", WindowSnapshot{Sent: 1, Received: 1, Lost: 0}, nil, now)
 	}
 	if state := m.State("link1"); state != HealthStateHealthy {
 		t.Fatalf("state = %s, want healthy after recovery window", state)
@@ -343,10 +344,10 @@ func TestManagerKeepsRawErrorSeparateFromStateReason(t *testing.T) {
 	now := time.Now()
 	m.UpsertTarget(ProbeTarget{InstanceID: "link1", State: "up"}, now)
 
-	m.applyResult("link1", ProbeResult{Error: "netns interface missing: phx0"}, now)
+	m.applyResult("link1", ProbeResult{Err: errors.New("netns interface missing: phx0")}, now)
 	snapshot := m.Snapshot(now)
-	if got := snapshot[0].LastError; got != "netns interface missing: phx0" {
-		t.Fatalf("last error = %q, want raw probe error", got)
+	if got := snapshot[0].LastFailure; got == nil || got.Error() != "netns interface missing: phx0" {
+		t.Fatalf("last failure = %v, want raw probe failure", got)
 	}
 	if got := snapshot[0].LastReason; got != "netns_interface_missing" {
 		t.Fatalf("last reason = %q, want stable reason", got)
@@ -354,8 +355,8 @@ func TestManagerKeepsRawErrorSeparateFromStateReason(t *testing.T) {
 
 	m.applyResult("link1", ProbeResult{}, now.Add(time.Second))
 	snapshot = m.Snapshot(now)
-	if got := snapshot[0].LastError; got != "" {
-		t.Fatalf("last error after ordinary packet loss = %q, want empty", got)
+	if got := snapshot[0].LastFailure; got != nil {
+		t.Fatalf("last failure after ordinary packet loss = %v, want nil", got)
 	}
 	if got := snapshot[0].LastReason; got != "probe_timeout" {
 		t.Fatalf("last reason after ordinary packet loss = %q, want probe_timeout", got)
@@ -486,8 +487,8 @@ func TestManagerAsyncProbeHardDeadlineReleasesWorker(t *testing.T) {
 	}
 	close(prober.release)
 	snapshot := m.Snapshot(time.Now())
-	if !strings.Contains(snapshot[0].LastError, "probe deadline exceeded") {
-		t.Fatalf("last error = %q, want hard deadline error", snapshot[0].LastError)
+	if failure := snapshot[0].LastFailure; failure == nil || !strings.Contains(failure.Error(), "probe deadline exceeded") {
+		t.Fatalf("last failure = %v, want hard deadline failure", failure)
 	}
 }
 
