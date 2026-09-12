@@ -305,8 +305,10 @@ GossipDriver 公共 gossip 闭环、aggregate 清理和 current Linux codec 迁�
    且 control、CLI presenter、Observer HTTP 对同一 owner fixture 的 Zone path/count/revoked 语义一致。
    routes canonical DTO 已从 HTTP 包迁到 `internal/inspect`，HTTP 只保留稳定 schema alias；zones/peers/status 的排序、来源判定和
    聚合投影也已归入 `internal/inspect`。links 的 REST 契约需要同时保留扁平兼容字段与 `raw` canonical view，因此只保留薄 HTTP adapter，
-   不在 HTTP 层重新推导 desired/runtime 状态。BIRD raw debug 的命令选择已归 `pkg/routing/bird`，neighbors/routes/entries 和
-   filter definition 解析也已从 executable wrapper 移入 `internal/inspect`；app 只保留在线执行、配置文件读取及 link/interface 上下文装配。
+   不在 HTTP 层重新推导 desired/runtime 状态。BIRD raw debug 的命令选择已归 `pkg/routing/bird`，neighbors/routes/entries、
+   filter definition 解析、LinkOutput 接口上下文和 canonical dump enrichment 也已从 executable wrapper 移入 `internal/inspect`；app 只保留在线执行、配置文件读取及传入 provider-neutral link outputs。
+   `debug routes` 与单前缀 `debug route` 也已合并重复的 control/offline fallback：两者共用同一个 canonical routes loader，在线读取 daemon control，离线只从 common owner 构建授权路由视图。
+   IPsec desired/SA/action/skip 在 reconcile 边界投影为不含私钥和 spec 指针的 canonical `internal/state` observation；`internal/inspect` 直接 alias 这四组 live DTO，已删除第二套同字段 struct、逐字段 builder、app 批量 converter 和 debug rotate 的重复 SA copier。Observation clone 仍保留并发隔离，`LinkOutput` 仍作为 routing/firewall/health 的窄消费契约。
    `debug rotate --direct` 已改用正式 typed intent/runtime commit。production 已无 aggregate `Snapshot()`、clone、loader 或 writer；
    `stateFile/stateMeta` 只承担旧 schema 单向读取和 legacy db dump，明确随旧数据库支持周期删除。Daemon 不再缓存第二份
    common revision 或不完整的 `SnapshotTime`，status revision 直接来自 common Store。
