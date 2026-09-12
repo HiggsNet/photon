@@ -21,7 +21,9 @@ func WriteLinks(w io.Writer, inspection inspect.LinkInspection, filter string, v
 		len(inspect.FilterLinkActions(inspection.Actions, filter)),
 		len(inspect.FilterLinkSkips(inspection.Skipped, filter)),
 	)
-	out.LineIf(inspection.Summary.LastError != "", "last_error: %s", escapeTableCell(inspection.Summary.LastError))
+	if failure := inspection.Summary.LastFailure; failure != nil {
+		out.Linef("last_failure: code=%s message=%s", failure.Code, escapeTableCell(failure.Message))
+	}
 	rows := make([][]string, 0, len(links)+1)
 	if verbose {
 		rows = append(rows, []string{"LINK", "PEER", "GROUP", "PATH", "TRANSPORT", "STATE", "ENDPOINT", "INTERFACE", "TUNNEL", "SA", "HEALTH", "ROTATION", "ROUTING", "OWNER", "ERROR"})
@@ -114,7 +116,11 @@ func WriteLinksDebug(w io.Writer, view inspect.LinksDebugView) error {
 	out.LineIf(view.ReplanIgnored, "planned_desired_status: ignored_partial last_reconcile_desired=%d", view.LastDesiredLinks)
 	out.Linef("desired_source: %s", dash(view.DesiredPlanSource))
 	out.Linef("actual_sas: %d", inspection.Summary.ActualSAs)
-	out.Linef("last_error: %s", dash(inspection.Summary.LastError))
+	if failure := inspection.Summary.LastFailure; failure != nil {
+		out.Linef("last_failure: code=%s message=%s", failure.Code, failure.Message)
+	} else {
+		out.Linef("last_failure: -")
+	}
 	out.Linef("link_instances: %d", inspection.Summary.LinkInstances)
 	if strings.TrimSpace(view.Filter) != "" {
 		out.Linef("filter: %s", view.Filter)

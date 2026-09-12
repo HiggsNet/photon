@@ -26,7 +26,7 @@ type linuxObservation struct {
 type routingObservation struct {
 	Instances   map[string]*bird.InstanceObservation
 	LastRunUnix int64
-	LastError   string
+	LastFailure error
 }
 
 // ipsecObservationSummary is the daemon's online summary of the latest observed
@@ -39,7 +39,7 @@ type ipsecObservationSummary struct {
 	ActualSAs      []photonstate.LinkSAState
 	Actions        []photonstate.LinkActionState
 	Skipped        []photonstate.LinkSkipState
-	LastError      string
+	LastFailure    error
 }
 
 func cloneIPsecObservationSummary(in *ipsecObservationSummary) *ipsecObservationSummary {

@@ -19,7 +19,7 @@ type LinkInput struct {
 	Skipped        []LinkSkip
 	LastRunUnix    int64
 	DesiredLinks   int
-	LastError      string
+	LastFailure    error
 }
 
 type LinkInspection struct {
@@ -47,7 +47,7 @@ type LinkSummary struct {
 	PlannedDesired    int
 	ActualSAs         int
 	LinkInstances     int
-	LastError         string
+	LastFailure       *FailureView
 	DesiredPlanError  string
 	HasPlannedDesired bool
 	HasMissingPlanned bool
@@ -448,7 +448,7 @@ func BuildLinks(input LinkInput) LinkInspection {
 			PlannedDesired:    len(plannedDesired),
 			ActualSAs:         len(input.ActualSAs),
 			LinkInstances:     len(ids),
-			LastError:         input.LastError,
+			LastFailure:       BuildFailure(FailureCodeIPsecReconcile, input.LastFailure),
 			HasPlannedDesired: len(plannedDesired) > 0,
 			HasMissingPlanned: len(ids) == 0 && len(plannedDesired) > 0,
 		},

@@ -353,5 +353,5 @@ type FirewallObservation struct {
 	Backend     string                                  `json:"backend,omitempty"`
 	Instances   map[string]*FirewallInstanceObservation `json:"instances,omitempty"`
 	LastRunUnix int64                                   `json:"last_run_unix,omitempty"`
-	LastError   string                                  `json:"last_error,omitempty"`
+	LastFailure error                                   `json:"-"`
 }

@@ -60,10 +60,14 @@ func debugRotate(ctx context.Context, filter string) error {
 	if view, ok, err := readCanonicalViewViaControl[inspect.LinksDebugView](rt, controlRequest{Method: "links_view"}); err != nil {
 		return err
 	} else if ok {
-		fmt.Printf("daemon: online link_instances=%d desired_links=%d last_link_error=%s\n",
+		lastFailure := "-"
+		if failure := view.Inspection.Summary.LastFailure; failure != nil {
+			lastFailure = fmt.Sprintf("code=%s message=%s", failure.Code, failure.Message)
+		}
+		fmt.Printf("daemon: online link_instances=%d desired_links=%d last_link_failure=%s\n",
 			view.Inspection.Summary.LinkInstances,
 			view.Inspection.Summary.DesiredLinks,
-			dash(view.Inspection.Summary.LastError),
+			lastFailure,
 		)
 		return writeDebugRotateFromView(os.Stdout, view, filter)
 	}

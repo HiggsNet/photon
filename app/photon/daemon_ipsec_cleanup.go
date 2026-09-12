@@ -81,7 +81,7 @@ func markIPsecCleanupReconcile(reconcile *ipsecObservationSummary, now time.Time
 	}
 	reconcile.LastRunUnix = now.Unix()
 	reconcile.DesiredLinks = 0
-	reconcile.LastError = ""
+	reconcile.LastFailure = nil
 	reconcile.Desired = nil
 	reconcile.Actions = nil
 	reconcile.ActualSAs = nil

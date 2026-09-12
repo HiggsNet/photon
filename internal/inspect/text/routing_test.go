@@ -54,7 +54,7 @@ func TestWriteBirdDump(t *testing.T) {
 
 func TestWriteBabelDebug(t *testing.T) {
 	view := inspect.BabelDebugView{
-		LastReconcileError: "reload failed",
+		LastReconcileFailure: &inspect.FailureView{Code: inspect.FailureCodeRoutingReconcile, Message: "reload failed"},
 		Instances: []inspect.BabelInstanceView{
 			{
 				NetNS:          "photontesth2",
@@ -85,7 +85,7 @@ func TestWriteBabelDebug(t *testing.T) {
 	}
 	output := buf.String()
 	for _, want := range []string{
-		"last_reconcile_error: reload failed",
+		"last_reconcile_failure: code=routing_reconcile_failed message=reload failed",
 		"netns photontesth2",
 		"shutdown_policy: persist",
 		"router_id: 12345",

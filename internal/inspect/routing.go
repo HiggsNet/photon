@@ -1,6 +1,8 @@
 package inspect
 
-import "github.com/HiggsNet/photon/pkg/routing/bird"
+import (
+	"github.com/HiggsNet/photon/pkg/routing/bird"
+)
 
 const (
 	RoutingModeManaged           = "managed"
@@ -80,14 +82,14 @@ type BirdBabelEntry struct {
 }
 
 type BabelDebugView struct {
-	LastReconcileError string
-	Instances          []BabelInstanceView
+	LastReconcileFailure *FailureView
+	Instances            []BabelInstanceView
 }
 
 type BabelDebugInput struct {
-	LastReconcileError string
-	Instances          []BabelInstanceInput
-	LinuxStates        map[string]*bird.InstanceObservation
+	LastReconcileFailure error
+	Instances            []BabelInstanceInput
+	LinuxStates          map[string]*bird.InstanceObservation
 }
 
 type BabelInstanceInput struct {
@@ -116,7 +118,7 @@ type BabelInstanceView struct {
 }
 
 func BuildBabelDebug(input BabelDebugInput) BabelDebugView {
-	view := BabelDebugView{LastReconcileError: input.LastReconcileError}
+	view := BabelDebugView{LastReconcileFailure: BuildFailure(FailureCodeRoutingReconcile, input.LastReconcileFailure)}
 	for _, inst := range input.Instances {
 		mode := inst.Mode
 		if mode == "" {

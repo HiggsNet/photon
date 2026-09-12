@@ -13,7 +13,7 @@ func TestLinksFromInspectionPreservesObserverSchema(t *testing.T) {
 			LastRunUnix:  123,
 			DesiredLinks: 1,
 			ActualSAs:    1,
-			LastError:    "boom",
+			LastFailure:  &inspect.FailureView{Code: inspect.FailureCodeIPsecReconcile, Message: "boom"},
 		},
 		Actions: []inspect.LinkAction{{Action: "adopt", InstanceID: "link-1"}},
 		Skipped: []inspect.LinkSkip{{GroupID: "blue", Reason: "missing_peer"}},
@@ -46,6 +46,9 @@ func TestLinksFromInspectionPreservesObserverSchema(t *testing.T) {
 	}
 	if decoded["last_run_unix"] != float64(123) || decoded["desired_links"] != float64(1) {
 		t.Fatalf("summary fields missing: %#v", decoded)
+	}
+	if decoded["last_failure"].(map[string]any)["code"] != inspect.FailureCodeIPsecReconcile || decoded["last_failure"].(map[string]any)["message"] != "boom" {
+		t.Fatalf("summary failure missing: %#v", decoded)
 	}
 	instances := decoded["instances"].([]any)
 	link := instances[0].(map[string]any)

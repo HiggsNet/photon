@@ -1,6 +1,7 @@
 package inspect
 
 import (
+	"errors"
 	"net/netip"
 	"testing"
 
@@ -25,6 +26,7 @@ func TestBuildLinkInstanceFromRuntimeOmitsInvalidAddresses(t *testing.T) {
 
 func TestBuildLinksPrefersPlannedDesiredOverLastSnapshot(t *testing.T) {
 	got := BuildLinks(LinkInput{
+		LastFailure: errors.New("vici unavailable"),
 		Instances: []LinkInstance{{
 			ID:          "link-a",
 			PeerZone:    "node-b.example.",
@@ -55,6 +57,9 @@ func TestBuildLinksPrefersPlannedDesiredOverLastSnapshot(t *testing.T) {
 
 	if got.Summary.PlannedDesired != 1 || got.Summary.LinkInstances != 1 || got.Summary.ActualSAs != 1 {
 		t.Fatalf("summary = %+v", got.Summary)
+	}
+	if got.Summary.LastFailure == nil || got.Summary.LastFailure.Code != FailureCodeIPsecReconcile || got.Summary.LastFailure.Message != "vici unavailable" {
+		t.Fatalf("summary failure = %+v", got.Summary)
 	}
 	if len(got.Links) != 1 {
 		t.Fatalf("links = %d, want 1", len(got.Links))

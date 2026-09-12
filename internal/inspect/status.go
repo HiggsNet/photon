@@ -34,12 +34,12 @@ type StatusPeerSummary struct {
 }
 
 type StatusLinkSummary struct {
-	Desired   int
-	Total     int
-	Up        int
-	States    []StatusCount
-	Health    []StatusCount
-	LastError string
+	Desired     int
+	Total       int
+	Up          int
+	States      []StatusCount
+	Health      []StatusCount
+	LastFailure *FailureView
 }
 
 type StatusView struct {
@@ -57,19 +57,19 @@ type StatusView struct {
 // DaemonStatusView is the canonical operational status read model used by the
 // Observer API. It is distinct from StatusView, the human CLI summary.
 type DaemonStatusView struct {
-	PeerID            string `json:"peer_id,omitempty"`
-	ManagedZone       string `json:"managed_zone,omitempty"`
-	ListenAddr        string `json:"listen_addr,omitempty"`
-	DaemonOnline      bool   `json:"daemon_online"`
-	StateRevision     uint64 `json:"state_revision"`
-	KnownZones        int    `json:"known_zones,omitempty"`
-	KnownPeers        int    `json:"known_peers,omitempty"`
-	LinkInstances     int    `json:"link_instances,omitempty"`
-	DesiredLinks      int    `json:"desired_links,omitempty"`
-	LastLinkError     string `json:"last_link_error,omitempty"`
-	LastRoutingError  string `json:"last_routing_error,omitempty"`
-	LastSyncUnix      int64  `json:"last_sync_unix,omitempty"`
-	LastReconcileUnix int64  `json:"last_reconcile_unix,omitempty"`
+	PeerID             string       `json:"peer_id,omitempty"`
+	ManagedZone        string       `json:"managed_zone,omitempty"`
+	ListenAddr         string       `json:"listen_addr,omitempty"`
+	DaemonOnline       bool         `json:"daemon_online"`
+	StateRevision      uint64       `json:"state_revision"`
+	KnownZones         int          `json:"known_zones,omitempty"`
+	KnownPeers         int          `json:"known_peers,omitempty"`
+	LinkInstances      int          `json:"link_instances,omitempty"`
+	DesiredLinks       int          `json:"desired_links,omitempty"`
+	LastLinkFailure    *FailureView `json:"last_link_failure,omitempty"`
+	LastRoutingFailure *FailureView `json:"last_routing_failure,omitempty"`
+	LastSyncUnix       int64        `json:"last_sync_unix,omitempty"`
+	LastReconcileUnix  int64        `json:"last_reconcile_unix,omitempty"`
 }
 
 type DaemonStatusInput struct {
@@ -82,8 +82,8 @@ type DaemonStatusInput struct {
 	KnownPeers         int
 	LinkInstances      int
 	DesiredLinks       int
-	LastLinkError      string
-	LastRoutingError   string
+	LastLinkFailure    error
+	LastRoutingFailure error
 	LastSyncUnix       int64
 	IPsecLastRunUnix   int64
 	RoutingLastRunUnix int64
@@ -91,19 +91,19 @@ type DaemonStatusInput struct {
 
 func BuildDaemonStatus(input DaemonStatusInput) DaemonStatusView {
 	return DaemonStatusView{
-		PeerID:            input.PeerID,
-		ManagedZone:       input.ManagedZone,
-		ListenAddr:        input.ListenAddr,
-		DaemonOnline:      input.DaemonOnline,
-		StateRevision:     input.StateRevision,
-		KnownZones:        input.KnownZones,
-		KnownPeers:        input.KnownPeers,
-		LinkInstances:     input.LinkInstances,
-		DesiredLinks:      input.DesiredLinks,
-		LastLinkError:     input.LastLinkError,
-		LastRoutingError:  input.LastRoutingError,
-		LastSyncUnix:      input.LastSyncUnix,
-		LastReconcileUnix: max(input.RoutingLastRunUnix, input.IPsecLastRunUnix),
+		PeerID:             input.PeerID,
+		ManagedZone:        input.ManagedZone,
+		ListenAddr:         input.ListenAddr,
+		DaemonOnline:       input.DaemonOnline,
+		StateRevision:      input.StateRevision,
+		KnownZones:         input.KnownZones,
+		KnownPeers:         input.KnownPeers,
+		LinkInstances:      input.LinkInstances,
+		DesiredLinks:       input.DesiredLinks,
+		LastLinkFailure:    BuildFailure(FailureCodeIPsecReconcile, input.LastLinkFailure),
+		LastRoutingFailure: BuildFailure(FailureCodeRoutingReconcile, input.LastRoutingFailure),
+		LastSyncUnix:       input.LastSyncUnix,
+		LastReconcileUnix:  max(input.RoutingLastRunUnix, input.IPsecLastRunUnix),
 	}
 }
 
@@ -141,7 +141,7 @@ func BuildStatus(input StatusInput) StatusView {
 	healthStates := make(map[string]int)
 	view.Links.Desired = input.Links.Summary.DesiredLinks
 	view.Links.Total = input.Links.Summary.LinkInstances
-	view.Links.LastError = input.Links.Summary.LastError
+	view.Links.LastFailure = input.Links.Summary.LastFailure
 	for _, link := range input.Links.Links {
 		state := statusName(link.State)
 		linkStates[state]++

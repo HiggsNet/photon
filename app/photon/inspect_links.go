@@ -17,7 +17,7 @@ func buildStoredLinkInspection(rt *AppContext, instances map[string]ipsec.LinkIn
 	if reconcile != nil {
 		input.LastRunUnix = reconcile.LastRunUnix
 		input.DesiredLinks = reconcile.DesiredLinks
-		input.LastError = reconcile.LastError
+		input.LastFailure = reconcile.LastFailure
 		input.LastDesired = inspectDesiredLinks(reconcile.Desired)
 		input.ActualSAs = inspectLinkSAs(reconcile.ActualSAs)
 		input.Actions = inspectLinkActions(reconcile.Actions)

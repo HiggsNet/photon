@@ -47,7 +47,7 @@ func TestDaemonReconcileUsesSystemXFRMDriverSmoke(t *testing.T) {
 	service.recoverIPsecLinksOnStart(ctx)
 
 	latestLinks, latestReconcile := readTestIPsecObservation(service)
-	if latestReconcile == nil || latestReconcile.LastError != "" {
+	if latestReconcile == nil || latestReconcile.LastFailure != nil {
 		t.Fatalf("ipsec reconcile = %+v, want successful system xfrm apply", latestReconcile)
 	}
 	if len(latestLinks) != 1 {
@@ -70,7 +70,7 @@ func TestDaemonReconcileUsesSystemXFRMDriverSmoke(t *testing.T) {
 	service.App.Config.IPsec.LinkGroups = nil
 	service.recoverIPsecLinksOnStart(ctx)
 	removedLinks, removedReconcile := readTestIPsecObservation(service)
-	if removedReconcile == nil || removedReconcile.LastError != "" {
+	if removedReconcile == nil || removedReconcile.LastFailure != nil {
 		t.Fatalf("teardown reconcile = %+v, want successful system xfrm teardown", removedReconcile)
 	}
 	if len(removedLinks) != 0 {

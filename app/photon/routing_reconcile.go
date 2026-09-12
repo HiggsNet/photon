@@ -72,7 +72,7 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 
 	ars, err := routing.BuildAuthorizedRouteSet(verified.Network, now)
 	if err != nil {
-		summary.LastError = err.Error()
+		summary.LastFailure = err
 		d.publishRoutingObservation(rev, summary)
 		return fmt.Errorf("build authorized route set: %w", err)
 	}
@@ -116,7 +116,7 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 	}
 
 	if firstErr != nil {
-		summary.LastError = firstErr.Error()
+		summary.LastFailure = firstErr
 	}
 
 	d.publishRoutingObservation(rev, summary)

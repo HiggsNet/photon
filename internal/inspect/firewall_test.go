@@ -1,6 +1,7 @@
 package inspect
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/HiggsNet/photon/pkg/firewall"
@@ -33,7 +34,8 @@ func TestBuildFirewallDebugView(t *testing.T) {
 			},
 		},
 		Reconcile: &firewall.FirewallObservation{
-			Backend: "dry-run",
+			Backend:     "dry-run",
+			LastFailure: errors.New("nft unavailable"),
 			Instances: map[string]*firewall.FirewallInstanceObservation{
 				"photontesth2": {Backend: "nft", Generation: 5, OwnedObjects: 10, PolicyHash: "abc123"},
 			},
@@ -41,6 +43,9 @@ func TestBuildFirewallDebugView(t *testing.T) {
 	})
 	if view.Backend != "dry-run" {
 		t.Fatalf("backend = %q, want dry-run", view.Backend)
+	}
+	if view.LastFailure == nil || view.LastFailure.Code != FailureCodeFirewallReconcile || view.LastFailure.Message != "nft unavailable" {
+		t.Fatalf("failure = %+v", view.LastFailure)
 	}
 	if len(view.Instances) != 2 {
 		t.Fatalf("instances = %d, want 2", len(view.Instances))

@@ -70,17 +70,17 @@ func daemonStatusView(d *Daemon) inspect.DaemonStatusView {
 	linkInstances, ipsecReconcile := d.linuxObservation.ipsecSnapshot()
 	routingReconcile := d.linuxObservation.routingSnapshot()
 	desiredLinks := 0
-	lastLinkError := ""
-	lastRoutingError := ""
+	var lastLinkFailure error
+	var lastRoutingFailure error
 	ipsecLastRunUnix := int64(0)
 	routingLastRunUnix := int64(0)
 	if routingReconcile != nil {
-		lastRoutingError = routingReconcile.LastError
+		lastRoutingFailure = routingReconcile.LastFailure
 		routingLastRunUnix = routingReconcile.LastRunUnix
 	}
 	if ipsecReconcile != nil {
 		desiredLinks = ipsecReconcile.DesiredLinks
-		lastLinkError = ipsecReconcile.LastError
+		lastLinkFailure = ipsecReconcile.LastFailure
 		ipsecLastRunUnix = ipsecReconcile.LastRunUnix
 	}
 	if view.State == nil {
@@ -102,10 +102,10 @@ func daemonStatusView(d *Daemon) inspect.DaemonStatusView {
 	}
 	peerID := ""
 	listenAddr := ""
-	if d != nil && d.gossipDriver != nil {
+	if d.gossipDriver != nil {
 		peerID = d.gossipDriver.GossipConfig().PeerID
 	}
-	if d != nil && d.App != nil && d.App.Config != nil {
+	if d.App != nil && d.App.Config != nil {
 		listenAddr = d.App.Config.ListenAddr
 	}
 	return inspect.BuildDaemonStatus(inspect.DaemonStatusInput{
@@ -118,8 +118,8 @@ func daemonStatusView(d *Daemon) inspect.DaemonStatusView {
 		KnownPeers:         knownPeers,
 		LinkInstances:      len(linkInstances),
 		DesiredLinks:       desiredLinks,
-		LastLinkError:      lastLinkError,
-		LastRoutingError:   lastRoutingError,
+		LastLinkFailure:    lastLinkFailure,
+		LastRoutingFailure: lastRoutingFailure,
 		LastSyncUnix:       lastSyncUnix,
 		IPsecLastRunUnix:   ipsecLastRunUnix,
 		RoutingLastRunUnix: routingLastRunUnix,

@@ -201,15 +201,23 @@ func TestRecordIPsecReconcileErrorDeduplicatesRepeatedError(t *testing.T) {
 		t.Fatalf("first error verified revision = %d, want %d", committedRev, firstRev)
 	}
 
-	now = now.Add(time.Minute)
-	service.recordIPsecReconcileError(committedRev, now.Unix(), errors.New("vici unavailable"))
+	later := now.Add(time.Minute)
+	service.recordIPsecReconcileError(committedRev, later.Unix(), errors.New("vici unavailable"))
 	if got := uint64(service.State.Common.VerifiedRevision()); got != committedRev {
 		t.Fatalf("repeated identical error revision = %d, want unchanged %d", got, committedRev)
 	}
 
-	service.recordIPsecReconcileError(committedRev, now.Unix(), errors.New("vici timeout"))
+	service.recordIPsecReconcileError(committedRev, later.Unix(), errors.New("vici timeout"))
 	if got := uint64(service.State.Common.VerifiedRevision()); got != committedRev {
 		t.Fatalf("changed runtime error verified revision = %d, want %d", got, committedRev)
+	}
+	_, observation := service.linuxObservation.ipsecSnapshot()
+	if observation == nil || observation.LastFailure == nil || observation.LastFailure.Error() != "vici timeout" {
+		t.Fatalf("ipsec failure = %+v", observation)
+	}
+	inspection := buildStoredLinkInspection(service.App, nil, observation, nil, nil)
+	if inspection.Inspection.Summary.LastFailure == nil || inspection.Inspection.Summary.LastFailure.Code != inspect.FailureCodeIPsecReconcile || inspection.Inspection.Summary.LastFailure.Message != "vici timeout" {
+		t.Fatalf("inspect failure = %+v", inspection.Inspection.Summary.LastFailure)
 	}
 }
 

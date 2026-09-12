@@ -9,7 +9,7 @@ type LinksResponse struct {
 	ActualSAs    int                  `json:"actual_sas,omitempty"`
 	Actions      []inspect.LinkAction `json:"actions,omitempty"`
 	Skipped      []inspect.LinkSkip   `json:"skipped,omitempty"`
-	LastError    string               `json:"last_error,omitempty"`
+	LastFailure  *inspect.FailureView `json:"last_failure,omitempty"`
 }
 
 type LinkJSON struct {
@@ -51,7 +51,7 @@ func LinksFromInspection(view inspect.LinkInspection) LinksResponse {
 		ActualSAs:    view.Summary.ActualSAs,
 		Actions:      view.Actions,
 		Skipped:      view.Skipped,
-		LastError:    view.Summary.LastError,
+		LastFailure:  view.Summary.LastFailure,
 	}
 }
 

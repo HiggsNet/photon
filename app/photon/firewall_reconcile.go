@@ -67,7 +67,7 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 	// Build authorized route set for prefix inputs.
 	ars, err := routing.BuildAuthorizedRouteSet(common.State.Network, now)
 	if err != nil {
-		summary.LastError = err.Error()
+		summary.LastFailure = err
 		d.publishFirewallObservation(rev, summary)
 		return fmt.Errorf("firewall build authorized route set: %w", err)
 	}
@@ -150,9 +150,9 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 	}
 
 	if firstErr != nil {
-		summary.LastError = firstErr.Error()
+		summary.LastFailure = firstErr
 	} else {
-		summary.LastError = ""
+		summary.LastFailure = nil
 	}
 
 	d.publishFirewallObservation(rev, summary)

@@ -5,9 +5,9 @@ import "github.com/HiggsNet/photon/pkg/firewall"
 const FirewallModeManaged = "managed"
 
 type FirewallDebugView struct {
-	Backend   string
-	LastError string
-	Instances []FirewallInstanceView
+	Backend     string
+	LastFailure *FailureView
+	Instances   []FirewallInstanceView
 }
 
 type FirewallDebugInput struct {
@@ -84,7 +84,7 @@ func BuildFirewallDebug(input FirewallDebugInput) FirewallDebugView {
 	view := FirewallDebugView{}
 	if input.Reconcile != nil {
 		view.Backend = input.Reconcile.Backend
-		view.LastError = input.Reconcile.LastError
+		view.LastFailure = BuildFailure(FailureCodeFirewallReconcile, input.Reconcile.LastFailure)
 	}
 	if len(input.Instances) == 0 {
 		return view

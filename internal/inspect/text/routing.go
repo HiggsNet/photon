@@ -165,7 +165,9 @@ func WriteBabelDebug(w io.Writer, view inspect.BabelDebugView) error {
 		out.Linef("routing: not configured")
 		return out.Err()
 	}
-	out.LineIf(view.LastReconcileError != "", "last_reconcile_error: %s", view.LastReconcileError)
+	if failure := view.LastReconcileFailure; failure != nil {
+		out.Linef("last_reconcile_failure: code=%s message=%s", failure.Code, failure.Message)
+	}
 	for _, inst := range view.Instances {
 		out.Linef("netns %s", inst.NetNS)
 		out.Linef("  instance_id: %s", inst.InstanceID)

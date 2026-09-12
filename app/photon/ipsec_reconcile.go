@@ -157,7 +157,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 			netns := netnsForAction(action, groups)
 			if _, err := platformDriver.ApplyIPsecAction(ctx, action, netns); err != nil {
 				markIPsecActionFailed(result.Instances, action, groupBackoffPolicy(action, groups), now, err)
-				if saveErr := d.publishIPsecObservation(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
+				if saveErr := d.publishIPsecObservation(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err); saveErr != nil {
 					return fmt.Errorf("save failed ipsec reconcile state after apply error %q: %w", err.Error(), saveErr)
 				}
 				return err
@@ -165,7 +165,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 			if shouldAssignIPsecDiagnosticAddresses(action) {
 				if err := platformDriver.AssignDiagnosticAddresses(ctx, *action.Spec, diagnosticPrefixes); err != nil {
 					markIPsecActionFailed(result.Instances, action, groupBackoffPolicy(action, groups), now, err)
-					if saveErr := d.publishIPsecObservation(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
+					if saveErr := d.publishIPsecObservation(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err); saveErr != nil {
 						return fmt.Errorf("save failed ipsec reconcile state after diagnostic address error %q: %w", err.Error(), saveErr)
 					}
 					return err
@@ -175,12 +175,12 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		}
 	}
 	if err := platformDriver.MaintainXFRMInterfaces(ctx, plan.Desired, result.Instances, result.Actions, groups, diagnosticPrefixes, xfrmObservations); err != nil {
-		if saveErr := d.publishIPsecObservation(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err.Error()); saveErr != nil {
+		if saveErr := d.publishIPsecObservation(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err); saveErr != nil {
 			return fmt.Errorf("save failed ipsec reconcile state after xfrm maintenance error %q: %w", err.Error(), saveErr)
 		}
 		return err
 	}
-	if err := d.publishIPsecObservation(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, ""); err != nil {
+	if err := d.publishIPsecObservation(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, nil); err != nil {
 		return fmt.Errorf("save ipsec reconcile state: %w", err)
 	}
 	return nil
@@ -417,7 +417,7 @@ func markMissingXFRMLinkInstances(instances map[string]ipsec.LinkInstance, missi
 	}
 }
 
-func (d *Daemon) publishIPsecObservation(rev uint64, unix int64, instances map[string]ipsec.LinkInstance, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError string) error {
+func (d *Daemon) publishIPsecObservation(rev uint64, unix int64, instances map[string]ipsec.LinkInstance, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError error) error {
 	if d == nil || d.State == nil {
 		return nil
 	}
@@ -503,7 +503,7 @@ func (d *Daemon) recordIPsecReconcileError(rev uint64, unix int64, err error) {
 	}
 	reconcile.LastRunUnix = unix
 	reconcile.SourceRevision = rev
-	reconcile.LastError = err.Error()
+	reconcile.LastFailure = err
 	if ipsecReconcileSummaryEqual(observedReconcile, reconcile) {
 		return
 	}
@@ -591,12 +591,12 @@ func contactDialPort(binding ipsec.PortBinding) uint16 {
 	return binding.Advertised
 }
 
-func summarizeIPsecReconcile(sourceRev uint64, unix int64, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError string) *ipsecObservationSummary {
+func summarizeIPsecReconcile(sourceRev uint64, unix int64, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError error) *ipsecObservationSummary {
 	state := &ipsecObservationSummary{
 		LastRunUnix:    unix,
 		SourceRevision: sourceRev,
 		DesiredLinks:   len(desired),
-		LastError:      lastError,
+		LastFailure:    lastError,
 	}
 	for _, spec := range desired {
 		state.Desired = append(state.Desired, photonstate.DesiredLinkState{

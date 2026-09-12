@@ -990,13 +990,13 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		writeControlResponse(conn, controlResponse{OK: true, Message: "shutdown scheduled"})
 	case "babel_view":
 		routingReconcile := d.linuxObservation.routingSnapshot()
-		lastRoutingError := ""
+		var lastRoutingFailure error
 		var birdInstances map[string]*bird.InstanceObservation
 		if routingReconcile != nil {
-			lastRoutingError = routingReconcile.LastError
+			lastRoutingFailure = routingReconcile.LastFailure
 			birdInstances = routingReconcile.Instances
 		}
-		view := buildBabelDebugView(d.App, birdInstances, lastRoutingError)
+		view := buildBabelDebugView(d.App, birdInstances, lastRoutingFailure)
 		writeCanonicalView(conn, view)
 	case "bird_dump":
 		dump, err := d.birdDumpForControl(ctx, request.NetNS, birdDebugView(request.BirdView))

@@ -454,14 +454,14 @@ func (p *observerProvider) Bird() (any, error) {
 		return inspecthttp.BirdResponse{Instances: map[string]any{}}, nil
 	}
 	routingReconcile := d.linuxObservation.routingSnapshot()
-	lastRoutingError := ""
+	var lastRoutingFailure *inspect.FailureView
 	var instances map[string]*bird.InstanceObservation
 	if routingReconcile != nil {
-		lastRoutingError = routingReconcile.LastError
+		lastRoutingFailure = inspect.BuildFailure(inspect.FailureCodeRoutingReconcile, routingReconcile.LastFailure)
 		instances = routingReconcile.Instances
 	}
 	return inspecthttp.BirdResponse{
-		Instances:        instances,
-		LastRoutingError: lastRoutingError,
+		Instances:          instances,
+		LastRoutingFailure: lastRoutingFailure,
 	}, nil
 }

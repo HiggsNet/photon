@@ -1,6 +1,7 @@
 package inspect
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/HiggsNet/photon/pkg/routing/bird"
@@ -8,7 +9,7 @@ import (
 
 func TestBuildBabelDebug(t *testing.T) {
 	view := BuildBabelDebug(BabelDebugInput{
-		LastReconcileError: "reload failed",
+		LastReconcileFailure: errors.New("reload failed"),
 		Instances: []BabelInstanceInput{
 			{
 				NetNS:      "photontesth2",
@@ -41,8 +42,8 @@ func TestBuildBabelDebug(t *testing.T) {
 		},
 	})
 
-	if view.LastReconcileError != "reload failed" {
-		t.Fatalf("last reconcile error = %q", view.LastReconcileError)
+	if view.LastReconcileFailure == nil || view.LastReconcileFailure.Code != FailureCodeRoutingReconcile || view.LastReconcileFailure.Message != "reload failed" {
+		t.Fatalf("last reconcile failure = %+v", view.LastReconcileFailure)
 	}
 	if len(view.Instances) != 3 {
 		t.Fatalf("instances = %d, want 3", len(view.Instances))

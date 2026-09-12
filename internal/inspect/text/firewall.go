@@ -40,7 +40,7 @@ func WriteFirewall(w io.Writer, view inspect.FirewallDebugView, filter string, v
 
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	out := newLineWriter(table)
-	if view.LastError != "" {
+	if view.LastFailure != nil {
 		out.Println("firewall: error")
 	} else {
 		out.Println("firewall: active")
@@ -82,7 +82,9 @@ func WriteFirewall(w io.Writer, view inspect.FirewallDebugView, filter string, v
 			)
 		}
 	}
-	out.LineIf(view.LastError != "", "last_error: %s", view.LastError)
+	if failure := view.LastFailure; failure != nil {
+		out.Linef("last_failure: code=%s message=%s", failure.Code, failure.Message)
+	}
 	if err := out.Err(); err != nil {
 		return err
 	}
@@ -148,7 +150,9 @@ func WriteDebugFirewall(w io.Writer, view inspect.FirewallDebugView) error {
 		return out.Err()
 	}
 	out.LineIf(view.Backend != "", "backend: %s", view.Backend)
-	out.LineIf(view.LastError != "", "last_reconcile_error: %s", view.LastError)
+	if failure := view.LastFailure; failure != nil {
+		out.Linef("last_reconcile_failure: code=%s message=%s", failure.Code, failure.Message)
+	}
 	for _, inst := range view.Instances {
 		out.Linef("instance %s", inst.ID)
 		out.Linef("  scope: %s", inst.Scope)

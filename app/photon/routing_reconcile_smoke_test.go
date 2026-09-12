@@ -96,8 +96,8 @@ func TestRoutingDryRunSmoke(t *testing.T) {
 	}
 
 	// The reconcile run itself should not have recorded any error.
-	if observation := service.linuxObservation.routingSnapshot(); observation != nil && observation.LastError != "" {
-		t.Errorf("unexpected routing reconcile error: %s", observation.LastError)
+	if observation := service.linuxObservation.routingSnapshot(); observation != nil && observation.LastFailure != nil {
+		t.Errorf("unexpected routing reconcile failure: %s", observation.LastFailure)
 	}
 }
 

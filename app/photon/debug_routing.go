@@ -300,7 +300,7 @@ func debugBabelWithRuntime(rt *AppContext, w io.Writer) error {
 	return fmt.Errorf("daemon control socket unavailable; BIRD runtime state requires a running daemon")
 }
 
-func buildBabelDebugView(rt *AppContext, instances map[string]*bird.InstanceObservation, lastRoutingError string) inspect.BabelDebugView {
+func buildBabelDebugView(rt *AppContext, instances map[string]*bird.InstanceObservation, lastRoutingFailure error) inspect.BabelDebugView {
 	routingInstances := []RoutingInstance{}
 	if rt != nil && rt.Config != nil {
 		routingInstances = rt.Config.Routing.Instances
@@ -309,7 +309,7 @@ func buildBabelDebugView(rt *AppContext, instances map[string]*bird.InstanceObse
 	if len(routingInstances) == 0 {
 		return inspect.BuildBabelDebug(input)
 	}
-	input.LastReconcileError = lastRoutingError
+	input.LastReconcileFailure = lastRoutingFailure
 	input.LinuxStates = instances
 	for _, inst := range routingInstances {
 		input.Instances = append(input.Instances, inspect.BabelInstanceInput{

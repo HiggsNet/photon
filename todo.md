@@ -101,6 +101,8 @@ Daemon
 - [x] 收敛无独立线程/DB 的 `LinuxObservation` read model；IPsec、routing/BIRD 和 firewall 在线时更新，重启时清空并重建。
 - [x] platform inspect/control/HTTP 只读在线 Observation；Daemon 离线时 platform source 返回 unavailable，不用 bbolt 上次 reconcile snapshot 冒充 live；status/peer lifecycle 的纯投影也不再要求 LinuxState 作为无关组合参数。
 - [ ] 内存错误使用 `error`/typed failure，展示时映射稳定 code/message；没有证明价值时不持久化 LastError。
+  - [x] IPsec、routing 与 firewall 顶层 reconcile summary 使用 process-local `error`；canonical inspect、control 与 HTTP 只投影一个含稳定 code/message 的 `FailureView`，删除并行的顶层 `LastError` 字符串，不把 failure 写入 LinuxState。
+  - [ ] 收敛 IPsec link/takeover、BIRD instance 与 firewall instance 的状态机错误；保留独立 backoff/deadline 字段，不用 message 驱动行为。
 
 ### A4. 删除 DaemonStateStore
 
