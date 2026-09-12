@@ -6,7 +6,6 @@ import (
 
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/health"
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 // HealthTargets derives probe policy inputs from provider-neutral link
@@ -32,7 +31,7 @@ func HealthTargets(outputs []photonstate.LinkOutput, localZone string) []health.
 			Overlay:         output.GroupID,
 			NetNS:           output.NetNS,
 			InterfaceName:   output.InterfaceName,
-			UnderlayFamily:  UnderlayFamily(output.PathKey),
+			UnderlayFamily:  photonstate.LinkPathFamily(output.PathKey),
 			Generation:      output.Generation,
 			ProbeRole:       probeRole,
 			State:           output.State,
@@ -50,15 +49,6 @@ func HealthTargets(outputs []photonstate.LinkOutput, localZone string) []health.
 		targets = append(targets, target)
 	}
 	return targets
-}
-
-// UnderlayFamily returns the IP family encoded in a link path key.
-func UnderlayFamily(pathKey string) string {
-	family, ok := strings.CutPrefix(pathKey, "family:")
-	if !ok || (family != ipsec.FamilyIPv4 && family != ipsec.FamilyIPv6) {
-		return ""
-	}
-	return family
 }
 
 // ProbeID identifies an active, old, or staged probe for one logical link.

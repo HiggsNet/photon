@@ -2,6 +2,7 @@ package state
 
 import (
 	"net/netip"
+	"strings"
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
@@ -45,3 +46,12 @@ const (
 	LinkReadyReady    = "ready"
 	LinkReadyNotReady = "not_ready"
 )
+
+// LinkPathFamily returns the IP family encoded in a link path key.
+func LinkPathFamily(pathKey string) string {
+	family, ok := strings.CutPrefix(pathKey, "family:")
+	if !ok || (family != "ipv4" && family != "ipv6") {
+		return ""
+	}
+	return family
+}

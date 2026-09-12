@@ -1,8 +1,10 @@
 package inspect
 
 import (
+	"sort"
 	"strings"
 
+	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 )
 
@@ -41,6 +43,23 @@ type BirdInterfaceContext struct {
 	Family      string `json:"family,omitempty"`
 	LinkID      string `json:"link_id,omitempty"`
 	RuntimeRole string `json:"runtime_role,omitempty"`
+}
+
+func BuildBirdInterfaceContexts(outputs []photonstate.LinkOutput, netnsName string) map[string]BirdInterfaceContext {
+	contexts := make(map[string]BirdInterfaceContext)
+	for _, output := range outputs {
+		if output.InterfaceName == "" || (output.NetNS != "" && netnsName != "" && output.NetNS != netnsName) {
+			continue
+		}
+		contexts[output.InterfaceName] = BirdInterfaceContext{
+			Name:        output.InterfaceName,
+			Zone:        string(output.PeerZone),
+			Family:      photonstate.LinkPathFamily(output.PathKey),
+			LinkID:      output.ID,
+			RuntimeRole: output.RuntimeRole,
+		}
+	}
+	return contexts
 }
 
 type BirdBabelNeighbor struct {
@@ -193,6 +212,26 @@ func ParseBirdBabelEntries(raw string, routes []BirdBabelRoute, contexts map[str
 		})
 	}
 	return out
+}
+
+func EnrichBirdDumpInstance(item *BirdDumpInstance, contexts map[string]BirdInterfaceContext) {
+	if item == nil {
+		return
+	}
+	item.Interfaces = make([]BirdInterfaceContext, 0, len(contexts))
+	for _, context := range contexts {
+		item.Interfaces = append(item.Interfaces, context)
+	}
+	sort.Slice(item.Interfaces, func(i, j int) bool { return item.Interfaces[i].Name < item.Interfaces[j].Name })
+	if raw, ok := item.Raw["show babel neighbors"]; ok {
+		item.Neighbors = ParseBirdBabelNeighbors(raw, contexts)
+	}
+	if raw, ok := item.Raw["show babel routes"]; ok {
+		item.BabelRoutes = ParseBirdBabelRoutes(raw, contexts)
+	}
+	if raw, ok := item.Raw["show babel entries"]; ok {
+		item.BabelEntries = ParseBirdBabelEntries(raw, item.BabelRoutes, contexts)
+	}
 }
 
 func ExtractBirdFilterDefinitions(config string) string {

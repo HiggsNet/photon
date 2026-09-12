@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	photonstate "github.com/HiggsNet/photon/internal/state"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 )
 
@@ -88,32 +90,37 @@ func TestBuildBabelDebugCopiesRuntimeSlices(t *testing.T) {
 	}
 }
 
-func TestParseBirdBabelDetailAddsPhotonInterfaceContext(t *testing.T) {
-	contexts := map[string]BirdInterfaceContext{
-		"phx31d438dd": {Name: "phx31d438dd", Zone: "node-b.catofes.", Family: "ipv6", LinkID: "link-b"},
-	}
-	neighbors := ParseBirdBabelNeighbors(`photon_babel_photon:
+func TestEnrichBirdDumpInstanceAddsPhotonInterfaceContext(t *testing.T) {
+	contexts := BuildBirdInterfaceContexts([]photonstate.LinkOutput{{
+		ID: "link-b", PeerZone: zone.ZonePath("node-b.catofes."), PathKey: "family:ipv6",
+		NetNS: "photon", InterfaceName: "phx31d438dd", RuntimeRole: photonstate.LinkRuntimeActive,
+	}}, "photon")
+	item := &BirdDumpInstance{Raw: map[string]string{
+		"show babel neighbors": `photon_babel_photon:
 IP address                Interface  Metric Routes Hellos Expires Auth  RTT (ms)
 fe80::93db:7db6:82ab:e22b phx31d438dd    100      1     16   5.640 No       3.280
-`, contexts)
-	if len(neighbors) != 1 || neighbors[0].Zone != "node-b.catofes." || neighbors[0].Family != "ipv6" || neighbors[0].RTT != "3.280" {
-		t.Fatalf("neighbors = %#v", neighbors)
-	}
-
-	routes := ParseBirdBabelRoutes(`photon_babel_photon:
+`,
+		"show babel routes": `photon_babel_photon:
 Prefix                   Nexthop                   Interface Metric F Seqno Expires
 2a0d:2905:1:3::/64       fe80::93db:7db6:82ab:e22b phx31d438dd   100 *   459  12.803
-`, contexts)
-	if len(routes) != 1 || routes[0].Flag != "*" || routes[0].Seqno != "459" || routes[0].Zone != "node-b.catofes." {
-		t.Fatalf("routes = %#v", routes)
-	}
-
-	entries := ParseBirdBabelEntries(`photon_babel_photon:
+`,
+		"show babel entries": `photon_babel_photon:
 Prefix                   Router ID               Metric Seqno  Routes Sources
 2a0d:2905:1:3::/64       00:00:00:00:56:35:60:b7    100   459      13       1
-`, routes, contexts)
-	if len(entries) != 1 || entries[0].Interface != "phx31d438dd" || entries[0].Zone != "node-b.catofes." || entries[0].Sources != "1" {
-		t.Fatalf("entries = %#v", entries)
+`,
+	}}
+	EnrichBirdDumpInstance(item, contexts)
+	if len(item.Interfaces) != 1 || item.Interfaces[0].Name != "phx31d438dd" {
+		t.Fatalf("interfaces = %#v", item.Interfaces)
+	}
+	if len(item.Neighbors) != 1 || item.Neighbors[0].Zone != "node-b.catofes." || item.Neighbors[0].Family != "ipv6" || item.Neighbors[0].RTT != "3.280" {
+		t.Fatalf("neighbors = %#v", item.Neighbors)
+	}
+	if len(item.BabelRoutes) != 1 || item.BabelRoutes[0].Flag != "*" || item.BabelRoutes[0].Seqno != "459" || item.BabelRoutes[0].Zone != "node-b.catofes." {
+		t.Fatalf("routes = %#v", item.BabelRoutes)
+	}
+	if len(item.BabelEntries) != 1 || item.BabelEntries[0].Interface != "phx31d438dd" || item.BabelEntries[0].Zone != "node-b.catofes." || item.BabelEntries[0].Sources != "1" {
+		t.Fatalf("entries = %#v", item.BabelEntries)
 	}
 }
 

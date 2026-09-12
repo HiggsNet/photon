@@ -7,14 +7,11 @@ import (
 	"io"
 	"net/netip"
 	"os"
-	"sort"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
-	"github.com/HiggsNet/photon/internal/photonlinux/linkstate"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"github.com/urfave/cli/v3"
 )
 
@@ -67,45 +64,6 @@ func debugBirdWithRuntime(rt *AppContext, netnsName string, view bird.DebugView,
 		return fmt.Errorf("daemon control socket unavailable; BIRD live query requires a running daemon")
 	}
 	return inspecttext.WriteBirdDump(w, &dump)
-}
-
-func enrichBirdDumpInstance(item *inspect.BirdDumpInstance, instances map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary) {
-	if item == nil {
-		return
-	}
-	contexts := birdInterfaceContexts(instances, reconcile, item.NetNS)
-	item.Interfaces = make([]inspect.BirdInterfaceContext, 0, len(contexts))
-	for _, context := range contexts {
-		item.Interfaces = append(item.Interfaces, context)
-	}
-	sort.Slice(item.Interfaces, func(i, j int) bool { return item.Interfaces[i].Name < item.Interfaces[j].Name })
-
-	if raw, ok := item.Raw["show babel neighbors"]; ok {
-		item.Neighbors = inspect.ParseBirdBabelNeighbors(raw, contexts)
-	}
-	if raw, ok := item.Raw["show babel routes"]; ok {
-		item.BabelRoutes = inspect.ParseBirdBabelRoutes(raw, contexts)
-	}
-	if raw, ok := item.Raw["show babel entries"]; ok {
-		item.BabelEntries = inspect.ParseBirdBabelEntries(raw, item.BabelRoutes, contexts)
-	}
-}
-
-func birdInterfaceContexts(instances map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, netnsName string) map[string]inspect.BirdInterfaceContext {
-	contexts := map[string]inspect.BirdInterfaceContext{}
-	for _, output := range buildLinkOutputs(instances, reconcile) {
-		if output.InterfaceName == "" || (output.NetNS != "" && netnsName != "" && output.NetNS != netnsName) {
-			continue
-		}
-		contexts[output.InterfaceName] = inspect.BirdInterfaceContext{
-			Name:        output.InterfaceName,
-			Zone:        string(output.PeerZone),
-			Family:      linkstate.UnderlayFamily(output.PathKey),
-			LinkID:      output.ID,
-			RuntimeRole: output.RuntimeRole,
-		}
-	}
-	return contexts
 }
 
 func addBirdFilterDefinitions(item *inspect.BirdDumpInstance, configPath string) {
@@ -168,27 +126,9 @@ func debugRoutes(_ context.Context, _ *cli.Command) error {
 }
 
 func debugRoutesWithRuntime(rt *AppContext, w io.Writer) error {
-	view, ok, err := readCanonicalViewViaControl[inspect.RoutesResponse](rt, controlRequest{Method: "routes_view"})
+	dump, err := loadRoutesView(rt)
 	if err != nil {
 		return err
-	}
-	var dump *inspect.RoutesResponse
-	if ok {
-		dump = &view
-	} else {
-		common, _, err := loadOfflineOwnerViews(rt)
-		if err != nil {
-			return err
-		}
-		if common.State == nil {
-			return fmt.Errorf("common state is not initialized")
-		}
-		configureValidation(common.State.Network)
-		ars, err := routing.BuildAuthorizedRouteSet(common.State.Network, rt.Now())
-		if err != nil {
-			return err
-		}
-		dump = inspect.RoutesFromAuthorizedSet(common.State.ManagedZone, ars)
 	}
 	return inspecttext.WriteRoutesDebug(w, dump)
 }
@@ -210,29 +150,34 @@ func debugRouteWithRuntime(rt *AppContext, prefixArg string, w io.Writer) error 
 	if err != nil {
 		return err
 	}
-	view, ok, err := readCanonicalViewViaControl[inspect.RoutesResponse](rt, controlRequest{Method: "routes_view"})
+	dump, err := loadRoutesView(rt)
 	if err != nil {
 		return err
 	}
-	var dump *inspect.RoutesResponse
-	if ok {
-		dump = &view
-	} else {
-		common, _, err := loadOfflineOwnerViews(rt)
-		if err != nil {
-			return err
-		}
-		if common.State == nil {
-			return fmt.Errorf("common state is not initialized")
-		}
-		configureValidation(common.State.Network)
-		ars, err := routing.BuildAuthorizedRouteSet(common.State.Network, rt.Now())
-		if err != nil {
-			return err
-		}
-		dump = inspect.RoutesFromAuthorizedSet(common.State.ManagedZone, ars)
-	}
 	return inspecttext.WriteRouteDebug(w, prefix, dump)
+}
+
+func loadRoutesView(rt *AppContext) (*inspect.RoutesResponse, error) {
+	view, ok, err := readCanonicalViewViaControl[inspect.RoutesResponse](rt, controlRequest{Method: "routes_view"})
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		return &view, nil
+	}
+	common, _, err := loadOfflineOwnerViews(rt)
+	if err != nil {
+		return nil, err
+	}
+	if common.State == nil {
+		return nil, fmt.Errorf("common state is not initialized")
+	}
+	configureValidation(common.State.Network)
+	ars, err := routing.BuildAuthorizedRouteSet(common.State.Network, rt.Now())
+	if err != nil {
+		return nil, err
+	}
+	return inspect.RoutesFromAuthorizedSet(common.State.ManagedZone, ars), nil
 }
 
 // routingNetnsForOverlay returns the netns name for a given overlay group ID.

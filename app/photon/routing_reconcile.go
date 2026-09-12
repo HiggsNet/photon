@@ -467,6 +467,7 @@ func (d *Daemon) birdDumpForControl(ctx context.Context, netnsName string, view 
 		return nil, err
 	}
 	links, reconcile := d.linuxObservation.ipsecSnapshot()
+	linkOutputs := buildLinkOutputs(links, reconcile)
 	for _, inst := range d.App.Config.Routing.Instances {
 		if !inst.Enabled || inst.Mode == ipsec.RoutingModeDisabled {
 			continue
@@ -499,7 +500,7 @@ func (d *Daemon) birdDumpForControl(ctx context.Context, netnsName string, view 
 			}
 			item.Raw[cmd] = out
 		}
-		enrichBirdDumpInstance(&item, links, reconcile)
+		inspect.EnrichBirdDumpInstance(&item, inspect.BuildBirdInterfaceContexts(linkOutputs, item.NetNS))
 		response.Instances[inst.NetNS] = item
 	}
 	return response, nil
