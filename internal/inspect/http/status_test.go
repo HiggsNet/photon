@@ -1,4 +1,4 @@
-package http
+package http_test
 
 import (
 	"encoding/json"
@@ -9,7 +9,7 @@ import (
 )
 
 func TestStatusResponsePreservesObserverSchema(t *testing.T) {
-	got := StatusResponse{
+	got := inspect.DaemonStatusView{
 		PeerID:             "node-a.catofes.",
 		ManagedZone:        "node-a.catofes.",
 		ListenAddr:         "127.0.0.1:33434",

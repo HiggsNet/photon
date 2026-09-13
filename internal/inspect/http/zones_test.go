@@ -1,4 +1,4 @@
-package http
+package http_test
 
 import (
 	"crypto/ed25519"

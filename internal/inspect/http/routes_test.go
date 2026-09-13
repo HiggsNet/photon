@@ -1,10 +1,11 @@
-package http
+package http_test
 
 import (
 	"encoding/json"
 	"net/netip"
 	"testing"
 
+	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
@@ -48,7 +49,7 @@ func TestRoutesFromAuthorizedSetPreservesObserverSchema(t *testing.T) {
 		}},
 	}
 
-	resp := RoutesFromAuthorizedSet(managed, ars)
+	resp := inspect.RoutesFromAuthorizedSet(managed, ars)
 	if resp.LocalZone != managed {
 		t.Fatalf("local zone = %s, want %s", resp.LocalZone, managed)
 	}
@@ -107,7 +108,7 @@ func TestRoutesFromAuthorizedSetUsesAllIPAMAssignments(t *testing.T) {
 		},
 	}
 
-	resp := RoutesFromAuthorizedSet(managed, ars)
+	resp := inspect.RoutesFromAuthorizedSet(managed, ars)
 	if len(resp.Assignments) != 1 {
 		t.Fatalf("legacy assignments len = %d, want representative map entry", len(resp.Assignments))
 	}
@@ -130,7 +131,7 @@ func TestRoutesFromAuthorizedSetGroupsSharedAuthorizedRoutes(t *testing.T) {
 		"node-c.catofes.": {netip.MustParsePrefix("10.0.8.0/24"): {}},
 	}}
 
-	resp := RoutesFromAuthorizedSet("node-a.catofes.", ars)
+	resp := inspect.RoutesFromAuthorizedSet("node-a.catofes.", ars)
 	want := []string{"node-a.catofes.", "node-b.catofes."}
 	got := resp.SharedAuthorized[prefix.String()]
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
@@ -142,17 +143,17 @@ func TestRoutesFromAuthorizedSetGroupsSharedAuthorizedRoutes(t *testing.T) {
 }
 
 func TestBuildBirdRouteViewsAnnotatesAuthorizedAndImportAllowed(t *testing.T) {
-	dump := &RoutesResponse{
+	dump := &inspect.RoutesResponse{
 		Authorized: map[string][]string{
 			"node-a.catofes.": {"10.0.0.0/24"},
 			"node-b.catofes.": {"10.0.0.0/24"},
 		},
-		Assignments: map[string]RouteAssignment{
+		Assignments: map[string]inspect.RouteAssignment{
 			"10.0.0.0/16": {Source: "catofes.", AssignedTo: "node-a.catofes."},
 		},
 	}
 
-	views := BuildBirdRouteViews(dump, []bird.BirdRoute{
+	views := inspect.BuildBirdRouteViews(dump, []bird.BirdRoute{
 		{
 			Prefix:   netip.MustParsePrefix("10.0.2.0/24"),
 			Protocol: "babel",

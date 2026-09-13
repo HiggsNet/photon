@@ -1,4 +1,4 @@
-package http
+package http_test
 
 import (
 	"encoding/json"
@@ -33,7 +33,7 @@ func TestPeersResponsePreservesObserverSchema(t *testing.T) {
 			ObjectPullStats:       &observability.PeerObjectPullStats{Failures: 1, LastFailure: errors.New("TCP unavailable")},
 		},
 	)
-	got := PeersResponse{Peers: []PeerJSON{peerView}}
+	got := inspect.PeersView{Peers: []inspect.PeerView{peerView}}
 	data, err := json.Marshal(got)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
@@ -66,7 +66,7 @@ func TestPeersResponsePreservesObserverSchema(t *testing.T) {
 
 func TestPeersResponseKeepsZeroValueSchemaFields(t *testing.T) {
 	peerView := inspect.BuildPeerViewFromCheckpoint("node-b.catofes.", "", nil, corestate.PeerCheckpoint{}, observability.PeerDiagnostics{})
-	got := PeersResponse{Peers: []PeerJSON{peerView}}
+	got := inspect.PeersView{Peers: []inspect.PeerView{peerView}}
 	data, err := json.Marshal(got)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)

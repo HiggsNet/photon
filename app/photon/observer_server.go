@@ -435,17 +435,17 @@ func parseOptionalDuration(raw string, fallback time.Duration, name string) (tim
 func (p *observerProvider) Routes() (any, error) {
 	d := p.daemon
 	if d == nil || d.State == nil {
-		return &inspecthttp.RoutesResponse{}, nil
+		return &inspect.RoutesResponse{}, nil
 	}
 	view := d.State.Common.ReadView()
 	if view.State == nil || view.State.Network == nil {
-		return &inspecthttp.RoutesResponse{}, nil
+		return &inspect.RoutesResponse{}, nil
 	}
 	ars, err := routing.BuildAuthorizedRouteSet(view.State.Network, d.now())
 	if err != nil {
-		return &inspecthttp.RoutesResponse{}, nil
+		return &inspect.RoutesResponse{}, nil
 	}
-	return inspecthttp.RoutesFromAuthorizedSet(view.State.ManagedZone, ars), nil
+	return inspect.RoutesFromAuthorizedSet(view.State.ManagedZone, ars), nil
 }
 
 func (p *observerProvider) Bird() (any, error) {

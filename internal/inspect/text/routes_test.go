@@ -7,29 +7,28 @@ import (
 	"testing"
 
 	"github.com/HiggsNet/photon/internal/inspect"
-	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 )
 
 func TestWriteRoutesDebugShowsBirdAuthorizedCrossView(t *testing.T) {
-	dump := &inspecthttp.RoutesResponse{
+	dump := &inspect.RoutesResponse{
 		LocalZone: "node-a.catofes.",
 		ExportSet: []string{"10.0.0.0/24"},
 		Authorized: map[string][]string{
 			"node-a.catofes.": {"10.0.0.0/24"},
 			"node-b.catofes.": {"10.1.0.0/24"},
 		},
-		Assignments: map[string]inspecthttp.RouteAssignment{
+		Assignments: map[string]inspect.RouteAssignment{
 			"10.0.0.0/16": {Source: "catofes.", AssignedTo: "node-a.catofes."},
 			"10.1.0.0/16": {Source: "catofes.", AssignedTo: "node-b.catofes."},
 		},
 	}
-	dump.BIRD = []inspecthttp.BirdRoutesView{{
+	dump.BIRD = []inspect.BirdRoutesView{{
 		NetNS:      "photontesth2",
 		InstanceID: "main",
 		State:      "running",
 		Failure:    inspect.BuildFailure(inspect.FailureCodeBirdQuery, errors.New("bird query timed out")),
-		Routes: inspecthttp.BuildBirdRouteViews(dump, []bird.BirdRoute{
+		Routes: inspect.BuildBirdRouteViews(dump, []bird.BirdRoute{
 			{
 				Prefix:   netip.MustParsePrefix("10.1.0.0/24"),
 				Protocol: "babel1",
@@ -68,19 +67,19 @@ func TestWriteRoutesDebugShowsBirdAuthorizedCrossView(t *testing.T) {
 }
 
 func TestWriteRouteDebugShowsPrefixExplanationAndBirdMatch(t *testing.T) {
-	dump := &inspecthttp.RoutesResponse{
+	dump := &inspect.RoutesResponse{
 		LocalZone: "node-a.catofes.",
 		ExportSet: []string{"10.1.0.0/24"},
 		Authorized: map[string][]string{
 			"node-b.catofes.": {"10.1.0.0/24"},
 		},
-		Assignments: map[string]inspecthttp.RouteAssignment{
+		Assignments: map[string]inspect.RouteAssignment{
 			"10.1.0.0/16": {Source: "catofes.", AssignedTo: "node-b.catofes."},
 		},
-		BIRD: []inspecthttp.BirdRoutesView{{
+		BIRD: []inspect.BirdRoutesView{{
 			NetNS:      "photontesth2",
 			InstanceID: "main",
-			Routes: []inspecthttp.BirdRouteView{{
+			Routes: []inspect.BirdRouteView{{
 				Prefix:        "10.1.0.0/24",
 				Protocol:      "babel1",
 				Iface:         "phx-node-b",
