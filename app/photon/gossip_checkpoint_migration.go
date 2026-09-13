@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
@@ -21,6 +22,8 @@ var errLegacyCommonStateInvalid = errors.New("legacy common state is invalid")
 type legacyGossipCheckpointReport struct {
 	PeersMigrated    int
 	PeersDropped     int
+	CleanupsMigrated int
+	CleanupsDropped  int
 	RejectedMigrated int
 	RejectedDropped  int
 }
@@ -34,6 +37,7 @@ func projectLegacyCommonState(state *stateFile, trustedRoot ed25519.PublicKey) (
 	}
 	network := zone.CloneNetworkState(state.Network)
 	checkpoint, report := projectLegacyGossipCheckpoint(state.SyncPeers)
+	report, _ = projectLegacyPeerCleanups(checkpoint, state.PeerCleanups, report)
 	candidate := &corestate.CommitCandidate{
 		Verified: &corestate.VerifiedState{
 			ManagedZone:          state.ManagedZone,
@@ -59,6 +63,46 @@ func projectLegacyCommonState(state *stateFile, trustedRoot ed25519.PublicKey) (
 	}
 	configureValidation(candidate.Verified.Network)
 	return candidate, report, nil
+}
+
+// projectLegacyPeerCleanups converts the retired Linux/offline marker into the
+// historical checkpoint evidence used by the current lifecycle policy. The old
+// marker retained only the latest activity time, not whether it came from a
+// sync or an observation, so it is represented as last-observed activity rather
+// than fabricating a successful sync at migration time.
+func projectLegacyPeerCleanups(checkpoint *corestate.GossipCheckpoint, cleanups map[string]photonlinux.LegacyPeerCleanupState, report legacyGossipCheckpointReport) (legacyGossipCheckpointReport, bool) {
+	if checkpoint == nil {
+		return report, false
+	}
+	if checkpoint.Peers == nil {
+		checkpoint.Peers = make(map[string]corestate.PeerCheckpoint)
+	}
+	peerIDs := make([]string, 0, len(cleanups))
+	for peerID := range cleanups {
+		peerIDs = append(peerIDs, peerID)
+	}
+	sort.Strings(peerIDs)
+	changed := false
+	for _, peerID := range peerIDs {
+		cleanup := cleanups[peerID]
+		path := zone.ZonePath(peerID)
+		if !path.Valid() || path == zone.RootZone || cleanup.Reason != peerCleanupReasonOffline || cleanup.LastActiveUnix <= 0 || cleanup.CleanupUnix <= 0 {
+			report.CleanupsDropped++
+			continue
+		}
+		peer := checkpoint.Peers[peerID]
+		if peer.LastSyncUnix > cleanup.LastActiveUnix {
+			report.CleanupsDropped++
+			continue
+		}
+		if peer.ObservedLastSeenUnix != cleanup.LastActiveUnix {
+			peer.ObservedLastSeenUnix = cleanup.LastActiveUnix
+			checkpoint.Peers[peerID] = peer
+			changed = true
+		}
+		report.CleanupsMigrated++
+	}
+	return report, changed
 }
 
 // projectLegacyGossipCheckpoint is used only by the one-way schema migration.

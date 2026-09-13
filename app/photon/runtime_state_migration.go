@@ -22,16 +22,17 @@ type legacyStateMigrationReport struct {
 	Gossip legacyGossipCheckpointReport
 }
 
-// migrateLegacyLinuxStateTx atomically replaces the legacy _meta/cli_state
-// plus zone:* representation with the common state buckets and one Linux
-// runtime bucket. The caller owns tx and decides commit/rollback. This remains
-// detached from the online loader until the single-writer cutover.
+// migrateLegacyLinuxStateTx atomically handles both supported one-way upgrades:
+// it moves a retired cleanup marker from an already partitioned Linux payload
+// into GossipCheckpoint, or replaces the older _meta/cli_state plus zone:*
+// representation with the common and Linux buckets. The caller owns tx and
+// decides commit/rollback.
 func migrateLegacyLinuxStateTx(tx *bolt.Tx, trustedRoot ed25519.PublicKey) (legacyStateMigrationReport, bool, error) {
 	var report legacyStateMigrationReport
 	if tx == nil || !tx.Writable() {
 		return report, false, errors.New("legacy state migration requires a writable bbolt transaction")
 	}
-	_, _, _, commonFound, err := corestate.LoadBoltState(tx)
+	candidate, revision, _, commonFound, err := corestate.LoadBoltState(tx)
 	if err != nil {
 		return report, false, err
 	}
@@ -47,12 +48,30 @@ func migrateLegacyLinuxStateTx(tx *bolt.Tx, trustedRoot ed25519.PublicKey) (lega
 		if legacyMetadataPresent || legacyNetworkPresent {
 			return report, false, errLegacyStateConflict
 		}
-		if _, found, err := photonlinux.LoadLinuxStateTx(tx); err != nil {
+		linuxState, peerCleanups, found, err := photonlinux.LoadLinuxStateForMigrationTx(tx)
+		if err != nil {
 			return report, false, err
-		} else if !found {
+		}
+		if !found {
 			return report, false, fmt.Errorf("%w: runtime bucket is missing", photonlinux.ErrLinuxStateCorrupt)
 		}
-		return report, false, nil
+		if peerCleanups == nil {
+			return report, false, nil
+		}
+		var checkpointChanged bool
+		report.Gossip, checkpointChanged = projectLegacyPeerCleanups(candidate.Gossip, peerCleanups, report.Gossip)
+		commonChanged := false
+		if checkpointChanged {
+			commonChanged, err = corestate.CommitBoltState(tx, candidate, corestate.ChangeSet{
+				VerifiedRevision:        revision,
+				GossipCheckpointChanged: true,
+			})
+			if err != nil {
+				return report, false, err
+			}
+		}
+		linuxChanged, err := photonlinux.SaveLinuxStateTx(tx, linuxState)
+		return report, commonChanged || linuxChanged, err
 	}
 	if tx.Bucket([]byte(photonlinux.LinuxStateBucketName)) != nil {
 		return report, false, errLegacyStateConflict
@@ -75,6 +94,7 @@ func migrateLegacyLinuxStateTx(tx *bolt.Tx, trustedRoot ed25519.PublicKey) (lega
 		ZonePrivateKey:    meta.ZonePrivateKey,
 		Network:           legacyNetwork,
 		SyncPeers:         meta.SyncPeers,
+		PeerCleanups:      meta.PeerCleanups,
 		IPsecTransportKey: meta.IPsecTransportKey,
 		EndpointACLs:      meta.EndpointACLs,
 	}

@@ -4,11 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"net"
 	"net/netip"
-	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -422,11 +419,6 @@ func (d *Daemon) publishIPsecObservation(rev uint64, unix int64, instances map[s
 	if d == nil || d.State == nil {
 		return nil
 	}
-	summary := summarizeIPsecReconcile(rev, unix, desired, sas, actions, skips, lastError)
-	observedLinks, observedReconcile := d.linuxObservation.ipsecSnapshot()
-	if ipsecLinkInstancesEqual(observedLinks, instances) && ipsecReconcileSummaryEqual(observedReconcile, summary) {
-		return nil
-	}
 	currentRev := uint64(d.State.Common.VerifiedRevision())
 	if currentRev != rev {
 		d.ipsecDirty = true
@@ -436,79 +428,9 @@ func (d *Daemon) publishIPsecObservation(rev uint64, unix int64, instances map[s
 		})
 		return nil
 	}
+	summary := summarizeIPsecReconcile(rev, unix, desired, sas, actions, skips, lastError)
 	d.linuxObservation.replaceIPsec(instances, summary)
 	return nil
-}
-
-func ipsecReconcileSummaryEqual(base, next *ipsecObservationSummary) bool {
-	if base == nil || next == nil {
-		return base == nil && next == nil
-	}
-	base = cloneIPsecObservationSummary(base)
-	next = cloneIPsecObservationSummary(next)
-	normalizeIPsecReconcileForComparison(base)
-	normalizeIPsecReconcileForComparison(next)
-	return base.DesiredLinks == next.DesiredLinks &&
-		slices.Equal(base.Desired, next.Desired) &&
-		slices.Equal(base.ActualSAs, next.ActualSAs) &&
-		slices.Equal(base.Actions, next.Actions) &&
-		slices.Equal(base.Skipped, next.Skipped) &&
-		diagnosticErrorsEqual(base.LastFailure, next.LastFailure)
-}
-
-func ipsecLinkInstancesEqual(base, next map[string]ipsec.LinkInstance) bool {
-	return maps.EqualFunc(base, next, ipsecLinkInstanceEqual)
-}
-
-func ipsecLinkInstanceEqual(base, next ipsec.LinkInstance) bool {
-	if !diagnosticErrorsEqual(base.LastFailure, next.LastFailure) ||
-		!diagnosticErrorsEqual(base.LastTakeoverFailure, next.LastTakeoverFailure) {
-		return false
-	}
-	base.LastFailure = nil
-	base.LastTakeoverFailure = nil
-	next.LastFailure = nil
-	next.LastTakeoverFailure = nil
-	return base == next
-}
-
-func diagnosticErrorsEqual(base, next error) bool {
-	if base == nil || next == nil {
-		return base == nil && next == nil
-	}
-	return base.Error() == next.Error()
-}
-
-// normalizeIPsecReconcileForComparison removes values sampled only for live
-// diagnostics. Link lifecycle/backoff/owner state is compared separately in
-// the in-memory observation.
-func normalizeIPsecReconcileForComparison(summary *ipsecObservationSummary) {
-	if summary == nil {
-		return
-	}
-	summary.LastRunUnix = 0
-	summary.SourceRevision = 0
-	for i := range summary.ActualSAs {
-		sa := &summary.ActualSAs[i]
-		sa.IKEAgeSeconds = 0
-		sa.ChildAgeSeconds = 0
-		sa.InboundBytes = 0
-		sa.InboundPackets = 0
-		sa.InboundIdleSecs = 0
-	}
-	sort.Slice(summary.ActualSAs, func(i, j int) bool {
-		a, b := summary.ActualSAs[i], summary.ActualSAs[j]
-		if a.Name != b.Name {
-			return a.Name < b.Name
-		}
-		if a.UniqueID != b.UniqueID {
-			return a.UniqueID < b.UniqueID
-		}
-		if a.ChildSA != b.ChildSA {
-			return a.ChildSA < b.ChildSA
-		}
-		return a.ReqID < b.ReqID
-	})
 }
 
 func (d *Daemon) recordIPsecReconcileError(rev uint64, unix int64, err error) {
@@ -533,9 +455,6 @@ func (d *Daemon) recordIPsecReconcileError(rev uint64, unix int64, err error) {
 	reconcile.LastRunUnix = unix
 	reconcile.SourceRevision = rev
 	reconcile.LastFailure = err
-	if ipsecReconcileSummaryEqual(observedReconcile, reconcile) {
-		return
-	}
 	d.linuxObservation.replaceIPsec(links, reconcile)
 }
 

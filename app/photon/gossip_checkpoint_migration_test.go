@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
@@ -45,6 +46,36 @@ func TestProjectLegacyGossipCheckpointKeepsOnlyBehaviorHints(t *testing.T) {
 	rejected := peer.RejectedObjects["bad.catofes."]
 	if string(rejected.RootHash) != "root" || rejected.UntilUnix != 28 {
 		t.Fatalf("rejected = %+v", rejected)
+	}
+}
+
+func TestProjectLegacyPeerCleanupsPreservesSuppressionWithoutOverwritingNewerSync(t *testing.T) {
+	checkpoint := &corestate.GossipCheckpoint{Peers: map[string]corestate.PeerCheckpoint{
+		"stale.catofes.": {LastSyncUnix: 5, ObservedLastSeenUnix: 30},
+		"fresh.catofes.": {LastSyncUnix: 20},
+	}}
+	cleanups := map[string]photonlinux.LegacyPeerCleanupState{
+		"cleaned.catofes.": {LastActiveUnix: 10, CleanupUnix: 15, Reason: peerCleanupReasonOffline},
+		"stale.catofes.":   {LastActiveUnix: 10, CleanupUnix: 15, Reason: peerCleanupReasonOffline},
+		"fresh.catofes.":   {LastActiveUnix: 10, CleanupUnix: 15, Reason: peerCleanupReasonOffline},
+		"revoked.catofes.": {LastActiveUnix: 10, CleanupUnix: 15, Reason: "zone_revoked"},
+		"invalid":          {LastActiveUnix: 10, CleanupUnix: 15, Reason: peerCleanupReasonOffline},
+	}
+	report, changed := projectLegacyPeerCleanups(checkpoint, cleanups, legacyGossipCheckpointReport{})
+	if !changed || report.CleanupsMigrated != 2 || report.CleanupsDropped != 3 {
+		t.Fatalf("projection = changed %v report %+v", changed, report)
+	}
+	if got := checkpoint.Peers["cleaned.catofes."]; got.LastSyncUnix != 0 || got.ObservedLastSeenUnix != 10 {
+		t.Fatalf("new cleanup checkpoint = %+v", got)
+	}
+	if got := checkpoint.Peers["stale.catofes."]; got.LastSyncUnix != 5 || got.ObservedLastSeenUnix != 10 {
+		t.Fatalf("stale cleanup checkpoint = %+v", got)
+	}
+	if got := checkpoint.Peers["fresh.catofes."]; got.LastSyncUnix != 20 || got.ObservedLastSeenUnix != 0 {
+		t.Fatalf("newer successful sync was overwritten: %+v", got)
+	}
+	if _, changed := projectLegacyPeerCleanups(checkpoint, cleanups, legacyGossipCheckpointReport{}); changed {
+		t.Fatal("identical cleanup projection was not idempotent")
 	}
 }
 

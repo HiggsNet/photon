@@ -48,7 +48,7 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 	verified := common.State
 	routingObserved := d.linuxObservation.routingSnapshot()
 	config := d.App.Config
-	routingInstances := config.Routing.Instances
+	routingInstances := routingInstancesEnabled(config)
 	if len(routingInstances) == 0 {
 		d.linuxObservation.replaceRouting(nil)
 		return nil
@@ -167,6 +167,14 @@ func (d *Daemon) publishRoutingObservation(rev uint64, summary *routingObservati
 }
 
 func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *corestate.VerifiedState, birdInstances map[string]*bird.InstanceObservation, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, inst RoutingInstance, ars *routing.AuthorizedRouteSet, dataDir string, overlayByNetns map[string]*netnsOverlayGroup, config *appConfig, now time.Time, forceReload bool) error {
+	// Keep the single-instance entry point safe for dirty flushes, explicit
+	// reloads, tests, and future callers that do not pass the filtered list.
+	// Disabling an instance stops reconciliation; it intentionally does not
+	// tear down resources created while the instance was enabled.
+	if !routingInstanceEnabled(inst) {
+		return nil
+	}
+
 	netnsName := inst.NetNS
 	instState := birdInstances[netnsName]
 	if instState == nil {
@@ -257,11 +265,6 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 	mode := bird.BirdMode(inst.Mode)
 	if mode == "" {
 		mode = bird.BirdModeManaged
-	}
-	if mode == bird.BirdModeDisabled {
-		instState.State = birdInstanceStatePending
-		instState.LastFailure = nil
-		return nil
 	}
 
 	switch mode {
@@ -660,11 +663,15 @@ func routingInstancesEnabled(config *appConfig) []RoutingInstance {
 	}
 	var out []RoutingInstance
 	for _, inst := range config.Routing.Instances {
-		if inst.Enabled && inst.Mode != ipsec.RoutingModeDisabled {
+		if routingInstanceEnabled(inst) {
 			out = append(out, inst)
 		}
 	}
 	return out
+}
+
+func routingInstanceEnabled(inst RoutingInstance) bool {
+	return inst.Enabled && inst.Mode != ipsec.RoutingModeDisabled
 }
 
 // buildRoutingExportSet computes the BIRD export set using the forwarding policy

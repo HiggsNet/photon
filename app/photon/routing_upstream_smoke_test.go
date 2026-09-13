@@ -12,6 +12,7 @@ import (
 	"time"
 
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
@@ -160,6 +161,192 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 	}
 	if !strings.Contains(cfgStr, "if net ~ [ ::/0 ] then reject;") {
 		t.Errorf("BIRD config missing IPv6 default route rejection\n%s", cfgStr)
+	}
+}
+
+func TestRoutingDisabledInstanceSkipsPlatformEffects(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+		mode    string
+	}{
+		{name: "enabled_false", enabled: false, mode: ipsec.RoutingModeManaged},
+		{name: "mode_disabled", enabled: true, mode: ipsec.RoutingModeDisabled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newRoutingDisabledFixture(t, tc.enabled, tc.mode, false)
+			fixture.service.routingDirty = true
+			flushed, err := fixture.service.flushRoutingReconcileResult(context.Background())
+			if err != nil {
+				t.Fatalf("flush routing reconcile: %v", err)
+			}
+			if !flushed {
+				t.Fatal("dirty routing reconcile was not flushed")
+			}
+			fixture.assertDisabledUntouched(t)
+			if observed := fixture.service.linuxObservation.routingSnapshot(); observed != nil {
+				t.Fatalf("routing observation = %+v, want nil with no enabled instances", observed)
+			}
+		})
+	}
+}
+
+func TestRoutingMixedInstancesSkipDisabledPlatformEffects(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+		mode    string
+	}{
+		{name: "enabled_false", enabled: false, mode: ipsec.RoutingModeManaged},
+		{name: "mode_disabled", enabled: true, mode: ipsec.RoutingModeDisabled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newRoutingDisabledFixture(t, tc.enabled, tc.mode, true)
+			fixture.service.routingDirty = true
+			flushed, err := fixture.service.flushRoutingReconcileResult(context.Background())
+			if err != nil {
+				t.Fatalf("flush routing reconcile: %v", err)
+			}
+			if !flushed {
+				t.Fatal("dirty routing reconcile was not flushed")
+			}
+			fixture.assertDisabledUntouched(t)
+			if !fixture.enabledBird.started {
+				t.Fatal("enabled BIRD instance was not started")
+			}
+			observed := fixture.service.linuxObservation.routingSnapshot()
+			if observed == nil || len(observed.Instances) != 1 || observed.Instances["photontesth2"] == nil {
+				t.Fatalf("routing observation = %+v, want only enabled instance", observed)
+			}
+		})
+	}
+}
+
+func TestRoutingSingleInstanceEntrySkipsDisabledPlatformEffects(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+		mode    string
+	}{
+		{name: "enabled_false", enabled: false, mode: ipsec.RoutingModeManaged},
+		{name: "mode_disabled", enabled: true, mode: ipsec.RoutingModeDisabled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newRoutingDisabledFixture(t, tc.enabled, tc.mode, false)
+			ars, err := routing.BuildAuthorizedRouteSet(fixture.verified.Network, fixture.now)
+			if err != nil {
+				t.Fatalf("build authorized route set: %v", err)
+			}
+			err = fixture.service.reconcileRoutingForInstance(
+				context.Background(), fixture.verified, map[string]*bird.InstanceObservation{}, nil, nil,
+				fixture.disabled, ars, fixture.service.App.Config.DataDir,
+				groupOverlaysByNetns(fixture.service.App.Config.IPsec.LinkGroups, fixture.service.App.Config.Overlay.DefaultNetNS),
+				fixture.service.App.Config, fixture.now, false,
+			)
+			if err != nil {
+				t.Fatalf("reconcile disabled instance: %v", err)
+			}
+			fixture.assertDisabledUntouched(t)
+		})
+	}
+}
+
+type routingDisabledFixture struct {
+	service            *Daemon
+	verified           *corestate.VerifiedState
+	disabled           RoutingInstance
+	disabledConfigPath string
+	veth               *fakeVethManager
+	routes             *fakeUpstreamRouteManager
+	disabledBird       *fakeBirdProcessManager
+	enabledBird        *fakeBirdProcessManager
+	now                time.Time
+}
+
+func newRoutingDisabledFixture(t *testing.T, enabled bool, mode string, includeEnabled bool) routingDisabledFixture {
+	t.Helper()
+	verified, checkpoint, runtime, syncConfig := buildTestRoutingOwners(t)
+	now := time.Unix(4000, 0)
+	appConfig := defaultAppConfig()
+	appConfig.DataDir = t.TempDir()
+	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{
+		"photontesth2":        {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true},
+		"photontest-disabled": {Kind: ipsec.NetNSName, Name: "photontest-disabled", Create: true},
+	}}
+
+	instances := []routingInstanceYAML{{
+		ID:      "disabled",
+		NetNS:   "photontest-disabled",
+		Enabled: boolPtr(enabled),
+		Mode:    mode,
+		Upstream: &upstreamConfigYAML{
+			Enabled:    boolPtr(true),
+			CreateVeth: boolPtr(true),
+		},
+	}}
+	if includeEnabled {
+		instances = append([]routingInstanceYAML{{
+			ID: "enabled", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged,
+		}}, instances...)
+	}
+	parsed, err := parseRoutingConfigInstances(instances, appConfig.Netns, appConfig.DataDir)
+	if err != nil {
+		t.Fatalf("parse routing instances: %v", err)
+	}
+	appConfig.Routing = parsed
+
+	var disabled RoutingInstance
+	for _, inst := range parsed.Instances {
+		if inst.ID == "disabled" {
+			disabled = inst
+			break
+		}
+	}
+	if disabled.ID == "" {
+		t.Fatal("disabled routing fixture is missing")
+	}
+
+	rt := &AppContext{Config: appConfig, Clock: func() time.Time { return now }}
+	veth := &fakeVethManager{}
+	routes := &fakeUpstreamRouteManager{}
+	disabledProcess := &fakeBirdProcessManager{}
+	enabledProcess := &fakeBirdProcessManager{}
+	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
+	installTestLinuxDrivers(service, testLinuxDrivers{
+		veth:           veth,
+		upstreamRoutes: routes,
+		birdProcesses: map[string]bird.ProcessManager{
+			"photontest-disabled": disabledProcess,
+			"photontesth2":        enabledProcess,
+		},
+		birdClientFactory: func(string, time.Duration) birdClient {
+			return &fakeBirdClient{}
+		},
+	})
+
+	return routingDisabledFixture{
+		service:            service,
+		verified:           verified,
+		disabled:           disabled,
+		disabledConfigPath: disabled.ConfigFile,
+		veth:               veth,
+		routes:             routes,
+		disabledBird:       disabledProcess,
+		enabledBird:        enabledProcess,
+		now:                now,
+	}
+}
+
+func (f routingDisabledFixture) assertDisabledUntouched(t *testing.T) {
+	t.Helper()
+	if f.veth.ensureCalled || f.veth.deleteCalled || f.routes.ensureCalled {
+		t.Fatalf("disabled platform calls: ensure_veth=%v delete_veth=%v ensure_routes=%v", f.veth.ensureCalled, f.veth.deleteCalled, f.routes.ensureCalled)
+	}
+	if f.disabledBird.started || f.disabledBird.stopped {
+		t.Fatalf("disabled BIRD process calls: started=%v stopped=%v", f.disabledBird.started, f.disabledBird.stopped)
+	}
+	if _, err := os.Stat(f.disabledConfigPath); !os.IsNotExist(err) {
+		t.Fatalf("disabled BIRD config path stat error = %v, want not exist", err)
 	}
 }
 

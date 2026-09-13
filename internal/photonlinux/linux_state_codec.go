@@ -24,32 +24,63 @@ var (
 	ErrLinuxStateSourceRevisionMismatch = errors.New("linux state source verified revision does not match current state")
 )
 
+// LegacyPeerCleanupState is decoded only while upgrading databases written by
+// versions that removed an offline peer checkpoint after persisting a Linux
+// cleanup marker. Current LinuxState never owns or writes this state.
+type LegacyPeerCleanupState struct {
+	LastActiveUnix int64  `json:"last_active_unix,omitempty"`
+	CleanupUnix    int64  `json:"cleanup_unix"`
+	Reason         string `json:"reason"`
+}
+
 // LoadLinuxStateTx reads the Linux partition from a platform-owned Bolt
 // transaction. Missing state is distinct from malformed state.
 func LoadLinuxStateTx(tx *bolt.Tx) (*LinuxState, bool, error) {
+	state, _, found, err := loadLinuxStatePayloadTx(tx)
+	return state, found, err
+}
+
+// LoadLinuxStateForMigrationTx also exposes the retired peer cleanup field so
+// the process startup transaction can move its history into GossipCheckpoint
+// before rewriting the current Linux payload.
+func LoadLinuxStateForMigrationTx(tx *bolt.Tx) (*LinuxState, map[string]LegacyPeerCleanupState, bool, error) {
+	state, payload, found, err := loadLinuxStatePayloadTx(tx)
+	if err != nil || !found {
+		return state, nil, found, err
+	}
+	var legacy struct {
+		PeerCleanups map[string]LegacyPeerCleanupState `json:"peer_cleanups,omitempty"`
+	}
+	if err := json.Unmarshal(payload, &legacy); err != nil {
+		return nil, nil, true, fmt.Errorf("%w: %v", ErrLinuxStateCorrupt, err)
+	}
+	return state, legacy.PeerCleanups, true, nil
+}
+
+func loadLinuxStatePayloadTx(tx *bolt.Tx) (*LinuxState, []byte, bool, error) {
 	if tx == nil {
-		return nil, false, errors.New("linux state load transaction is nil")
+		return nil, nil, false, errors.New("linux state load transaction is nil")
 	}
 	bucket := tx.Bucket(linuxStateBucket)
 	if bucket == nil {
-		return nil, false, nil
+		return nil, nil, false, nil
 	}
 	version := bucket.Get(linuxStateSchemaKey)
 	if len(version) != 8 || binary.BigEndian.Uint64(version) != linuxStateSchemaVersion {
-		return nil, true, fmt.Errorf("%w: unsupported schema", ErrLinuxStateCorrupt)
+		return nil, nil, true, fmt.Errorf("%w: unsupported schema", ErrLinuxStateCorrupt)
 	}
 	payload := bucket.Get(linuxStatePayloadKey)
 	if payload == nil {
-		return nil, true, fmt.Errorf("%w: payload is missing", ErrLinuxStateCorrupt)
+		return nil, nil, true, fmt.Errorf("%w: payload is missing", ErrLinuxStateCorrupt)
 	}
 	if bytes.Equal(bytes.TrimSpace(payload), []byte("null")) {
-		return nil, true, fmt.Errorf("%w: payload is null", ErrLinuxStateCorrupt)
+		return nil, nil, true, fmt.Errorf("%w: payload is null", ErrLinuxStateCorrupt)
 	}
 	var state LinuxState
 	if err := json.Unmarshal(payload, &state); err != nil {
-		return nil, true, fmt.Errorf("%w: %v", ErrLinuxStateCorrupt, err)
+		return nil, nil, true, fmt.Errorf("%w: %v", ErrLinuxStateCorrupt, err)
 	}
-	return &state, true, nil
+	return &state, payload, true, nil
 }
 
 // SaveLinuxStateTx writes a byte-level no-op-aware Linux partition through

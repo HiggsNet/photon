@@ -8,8 +8,6 @@ import (
 	"testing"
 	"time"
 
-	photonstate "github.com/HiggsNet/photon/internal/state"
-
 	"github.com/HiggsNet/photon/internal/inspect"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -159,34 +157,54 @@ func TestXFRMObservationReportsRuntimeDerivationError(t *testing.T) {
 	}
 }
 
-func TestIPsecReconcileSummaryEqualityIgnoresLiveObservations(t *testing.T) {
-	base := &ipsecObservationSummary{
-		LastRunUnix:    100,
-		SourceRevision: 7,
-		DesiredLinks:   1,
-		ActualSAs: []photonstate.LinkSAObservation{
-			{Name: "z", UniqueID: 2, IKEState: "ESTABLISHED", IKEAgeSeconds: 10, InboundBytes: 100},
-			{Name: "a", UniqueID: 1, IKEState: "ESTABLISHED", ChildAgeSeconds: 20, InboundPackets: 4},
-		},
+func TestPublishIPsecObservationRefreshesLiveSACounters(t *testing.T) {
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	service := newTestDaemonFromOwners(
+		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+	)
+	rev := uint64(service.State.Common.VerifiedRevision())
+	instances := map[string]ipsec.LinkInstance{
+		"link-a": {ID: "link-a", IKEName: "ike-a", ActualState: ipsec.LinkStateUp},
 	}
-	next := cloneIPsecObservationSummary(base)
-	next.LastRunUnix = 200
-	next.SourceRevision = 12
-	next.ActualSAs[0].IKEAgeSeconds = 110
-	next.ActualSAs[0].InboundBytes = 1000
-	next.ActualSAs[1].ChildAgeSeconds = 120
-	next.ActualSAs[1].InboundPackets = 40
-	next.ActualSAs[0], next.ActualSAs[1] = next.ActualSAs[1], next.ActualSAs[0]
-	if !ipsecReconcileSummaryEqual(base, next) {
-		t.Fatal("live timestamp/counter/order changes should be equivalent")
+	first := ipsec.SAState{
+		Name: "ike-a", IKEState: "ESTABLISHED", Established: true,
+		IKEAgeSeconds: 10, ChildAgeSeconds: 8,
+		InboundBytes: 100, InboundPackets: 4, InboundIdleSecs: 3, InboundKnown: true,
 	}
-	next.ActualSAs[0].IKEState = "DOWN"
-	if ipsecReconcileSummaryEqual(base, next) {
-		t.Fatal("stable SA state change should not be equivalent")
+	if err := service.publishIPsecObservation(rev, 100, instances, nil, []ipsec.SAState{first}, nil, nil, nil); err != nil {
+		t.Fatalf("publish first IPsec observation: %v", err)
+	}
+
+	second := first
+	second.IKEAgeSeconds = 70
+	second.ChildAgeSeconds = 68
+	second.InboundBytes = 1000
+	second.InboundPackets = 40
+	second.InboundIdleSecs = 1
+	if err := service.publishIPsecObservation(rev, 160, instances, nil, []ipsec.SAState{second}, nil, nil, nil); err != nil {
+		t.Fatalf("publish second IPsec observation: %v", err)
+	}
+
+	response := controlViewRequestViaPipe[inspect.LinksDebugView](t, service, controlRequest{Method: "links_view"})
+	if !response.OK {
+		t.Fatalf("links_view response = %#v", response)
+	}
+	if response.View.Inspection.Summary.LastRunUnix != 160 {
+		t.Fatalf("links_view last run = %d, want 160", response.View.Inspection.Summary.LastRunUnix)
+	}
+	links := response.View.Inspection.Links
+	if len(links) != 1 || links[0].ActualSA == nil {
+		t.Fatalf("links_view links = %+v, want one link with an SA", links)
+	}
+	got := links[0].ActualSA
+	if got.IKEAgeSeconds != second.IKEAgeSeconds || got.ChildAgeSeconds != second.ChildAgeSeconds ||
+		got.InboundBytes != second.InboundBytes || got.InboundPackets != second.InboundPackets ||
+		got.InboundIdleSecs != second.InboundIdleSecs {
+		t.Fatalf("links_view SA = %+v, want latest counters from %+v", got, second)
 	}
 }
 
-func TestRecordIPsecReconcileErrorDeduplicatesRepeatedError(t *testing.T) {
+func TestRecordIPsecReconcileErrorRefreshesRepeatedObservation(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(3990, 0)
 	rt := &AppContext{
@@ -207,6 +225,10 @@ func TestRecordIPsecReconcileErrorDeduplicatesRepeatedError(t *testing.T) {
 	if got := uint64(service.State.Common.VerifiedRevision()); got != committedRev {
 		t.Fatalf("repeated identical error revision = %d, want unchanged %d", got, committedRev)
 	}
+	_, repeated := service.linuxObservation.ipsecSnapshot()
+	if repeated == nil || repeated.LastRunUnix != later.Unix() || repeated.SourceRevision != committedRev || repeated.LastFailure == nil || repeated.LastFailure.Error() != "vici unavailable" {
+		t.Fatalf("repeated IPsec failure observation = %+v, want refreshed timestamp and unchanged failure", repeated)
+	}
 
 	service.recordIPsecReconcileError(committedRev, later.Unix(), errors.New("vici timeout"))
 	if got := uint64(service.State.Common.VerifiedRevision()); got != committedRev {
@@ -219,6 +241,40 @@ func TestRecordIPsecReconcileErrorDeduplicatesRepeatedError(t *testing.T) {
 	inspection := buildStoredLinkInspection(service.App, nil, observation, nil, nil)
 	if inspection.Inspection.Summary.LastFailure == nil || inspection.Inspection.Summary.LastFailure.Code != inspect.FailureCodeIPsecReconcile || inspection.Inspection.Summary.LastFailure.Message != "vici timeout" {
 		t.Fatalf("inspect failure = %+v", inspection.Inspection.Summary.LastFailure)
+	}
+}
+
+func TestPublishIPsecObservationRejectsEquivalentStaleResult(t *testing.T) {
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	now := time.Unix(4040, 0)
+	service := newTestDaemonFromOwners(
+		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+	)
+	rev := uint64(service.State.Common.VerifiedRevision())
+	instances := map[string]ipsec.LinkInstance{
+		"link-a": {ID: "link-a", IKEName: "ike-a", ActualState: ipsec.LinkStateUp},
+	}
+	sa := ipsec.SAState{Name: "ike-a", IKEState: "ESTABLISHED", Established: true, InboundPackets: 4, InboundKnown: true}
+	if err := service.publishIPsecObservation(rev, now.Unix(), instances, nil, []ipsec.SAState{sa}, nil, nil, nil); err != nil {
+		t.Fatalf("publish initial IPsec observation: %v", err)
+	}
+	if _, err := advanceTestVerifiedRevision(service.State.Common, now.Add(time.Nanosecond)); err != nil {
+		t.Fatalf("advance state revision: %v", err)
+	}
+	service.ipsecDirty = false
+
+	staleSA := sa
+	staleSA.InboundPackets++
+	if err := service.publishIPsecObservation(rev, now.Add(time.Minute).Unix(), instances, nil, []ipsec.SAState{staleSA}, nil, nil, nil); err != nil {
+		t.Fatalf("publish stale IPsec observation: %v", err)
+	}
+	if !service.ipsecDirty {
+		t.Fatal("ipsecDirty = false, want stale equivalent observation to be retried")
+	}
+	_, observation := service.linuxObservation.ipsecSnapshot()
+	if observation == nil || observation.LastRunUnix != now.Unix() || observation.SourceRevision != rev ||
+		len(observation.ActualSAs) != 1 || observation.ActualSAs[0].InboundPackets != sa.InboundPackets {
+		t.Fatalf("IPsec observation = %+v, want initial snapshot preserved", observation)
 	}
 }
 

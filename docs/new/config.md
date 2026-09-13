@@ -277,7 +277,7 @@ routing:
 - `routing.instances[].netns` 引用顶层 `netns`；省略时使用 `netns.default`。
 - `provider` 当前只支持 `bird`。
 - `mode` 可为 `managed`、`external`、`disabled`。
-- `disabled`：设为 `true` 时保留配置块但停止 reconcile。
+- `enabled: false`（或 `disabled: true`）以及 `mode: disabled` 都会保留配置块但停止该实例的 reconcile；Photon 不会为它生成配置、创建 veth、安装上联路由或触碰 BIRD 进程。切换为禁用时也不会自动清理此前创建的 BIRD、veth、地址和路由，需要运维方按需清理。
 - `shutdown_policy` 可为 `persist` 或 `stop`，默认 `persist`。`managed` BIRD 由 Photon 启动和配置，但默认不会随 Photon daemon 退出而停止；daemon 重启后通过 pid/control socket adopt 现有 BIRD，减少 Babel 邻居和路由静默期。只有显式设置 `stop` 时，daemon 优雅退出才会停止该 BIRD 实例。
 - `table`：BIRD 主路由表名。
 - `metric_base` / `metric_staged` / `metric_draining`：Babel 路由 metric 基值，默认 `100` / `1200` / `2400`，分别用于正常、staged rotate、draining 状态。默认间距大于最大 RTT penalty，避免低延迟的旧 tunnel 反转轮换优先级。

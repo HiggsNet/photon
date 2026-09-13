@@ -21,8 +21,9 @@ const (
 	// Photon only connects via the control socket to configure and observe.
 	BirdModeExternal BirdMode = "external"
 
-	// BirdModeDisabled disables routing for the overlay. No config is
-	// generated and no process is touched.
+	// BirdModeDisabled disables routing for the overlay. No config, veth,
+	// upstream route, or process is touched. Resources created while the
+	// instance was enabled are left intact.
 	BirdModeDisabled BirdMode = "disabled"
 )
 

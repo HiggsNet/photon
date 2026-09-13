@@ -23,6 +23,7 @@ func stateMetaFromState(state *stateFile) stateMeta {
 		RootPrivateKey:    state.RootPrivateKey,
 		ZonePrivateKey:    state.ZonePrivateKey,
 		SyncPeers:         state.SyncPeers,
+		PeerCleanups:      state.PeerCleanups,
 		IPsecTransportKey: state.IPsecTransportKey,
 		EndpointACLs:      state.EndpointACLs,
 	}
@@ -55,6 +56,7 @@ func loadLegacyStateAt(path string) (*stateFile, error) {
 		ZonePrivateKey:    meta.ZonePrivateKey,
 		Network:           network,
 		SyncPeers:         meta.SyncPeers,
+		PeerCleanups:      meta.PeerCleanups,
 		IPsecTransportKey: meta.IPsecTransportKey,
 		EndpointACLs:      meta.EndpointACLs,
 	}, nil

@@ -287,6 +287,7 @@ node-a.pek.catofes.
 - `netns` 决定它在哪个 namespace 内运行；
 - `provider` 当前只支持 `bird`；
 - `mode` 可为 `managed`（Photon 启停配置）、`external`（只观测已有 BIRD）或 `disabled`；
+- `enabled: false`（或 `disabled: true`）与 `mode: disabled` 都会在任何系统操作前跳过该实例；禁用不会自动停止或删除此前由该实例创建的 BIRD、veth、地址和路由；
 - `shutdown_policy` 默认 `persist`：daemon 退出不停止 BIRD，重启后通过 pid/control socket adopt；
 - `table` 指定 BIRD 主表名；
 - `interface_pattern` 匹配 XFRM tunnel 接口，默认 `phx*`。
@@ -307,9 +308,9 @@ Router-ID = uint32(first-4-bytes(hash(localZone, rootTrust, netnsName)))
 
 1. 从 committed snapshot 建立 `AuthorizedRouteSet`。
 2. 按 `ipam.announce` 选择器维护本节点自动 announcement；有变更时重读 snapshot。
-3. 为每个 routing instance 计算 Router-ID、接口 pattern、static route 和 import/export set。
+3. 过滤未启用或 `mode: disabled` 的实例，再为其余 routing instance 计算 Router-ID、接口 pattern、static route 和 import/export set。
 4. 可选地确保 upstream veth 与 external 路由存在。
-5. 生成配置，并按 `managed` / `external` / `disabled` 模式管理或观测 BIRD。
+5. 生成配置，并按 `managed` / `external` 模式管理或观测 BIRD。
 6. 将 BIRD process、协议、邻居和路由观测提交回本机 state，供 health 和 observer 使用。
 
 ### 5.3 三个前缀集合

@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/ed25519"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -19,16 +20,18 @@ type stateFile struct {
 	ZonePrivateKey    ed25519.PrivateKey `json:"zone_private_key"`
 	Network           *zone.NetworkState `json:"network"`
 	SyncPeers         map[string]photonstate.PeerRuntimeState
+	PeerCleanups      map[string]photonlinux.LegacyPeerCleanupState
 	IPsecTransportKey *photonstate.IPsecTransportKeyState
 	EndpointACLs      map[string]photonstate.EndpointACL
 }
 
 type stateMeta struct {
-	ManagedZone       zone.ZonePath                           `json:"managed_zone"`
-	IdentityKeyPath   string                                  `json:"identity_key_path,omitempty"`
-	RootPrivateKey    ed25519.PrivateKey                      `json:"root_private_key"`
-	ZonePrivateKey    ed25519.PrivateKey                      `json:"zone_private_key"`
-	SyncPeers         map[string]photonstate.PeerRuntimeState `json:"sync_peers,omitempty"`
-	IPsecTransportKey *photonstate.IPsecTransportKeyState     `json:"ipsec_transport_key,omitempty"`
-	EndpointACLs      map[string]photonstate.EndpointACL      `json:"endpoint_acls,omitempty"`
+	ManagedZone       zone.ZonePath                                 `json:"managed_zone"`
+	IdentityKeyPath   string                                        `json:"identity_key_path,omitempty"`
+	RootPrivateKey    ed25519.PrivateKey                            `json:"root_private_key"`
+	ZonePrivateKey    ed25519.PrivateKey                            `json:"zone_private_key"`
+	SyncPeers         map[string]photonstate.PeerRuntimeState       `json:"sync_peers,omitempty"`
+	PeerCleanups      map[string]photonlinux.LegacyPeerCleanupState `json:"peer_cleanups,omitempty"`
+	IPsecTransportKey *photonstate.IPsecTransportKeyState           `json:"ipsec_transport_key,omitempty"`
+	EndpointACLs      map[string]photonstate.EndpointACL            `json:"endpoint_acls,omitempty"`
 }
