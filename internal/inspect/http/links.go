@@ -31,12 +31,10 @@ type LinkJSON struct {
 	Routing         inspect.LinkRouting   `json:"routing"`
 	Rotation        inspect.LinkRotation  `json:"rotation"`
 	Takeover        inspect.LinkTakeover  `json:"takeover"`
-	Owner           inspect.LinkOwner     `json:"owner,omitempty"`
 	FailureCount    int                   `json:"failure_count,omitempty"`
 	BackoffUntil    int64                 `json:"backoff_until,omitempty"`
 	LastTransition  int64                 `json:"last_transition,omitempty"`
 	LastFailure     *inspect.FailureView  `json:"last_failure,omitempty"`
-	Raw             inspect.LinkView      `json:"raw"`
 }
 
 func LinksFromInspection(view inspect.LinkInspection) LinksResponse {
@@ -75,11 +73,9 @@ func LinkFromInspect(link inspect.LinkView) LinkJSON {
 		Routing:         link.Routing,
 		Rotation:        link.Rotation,
 		Takeover:        link.Takeover,
-		Owner:           link.Owner,
 		FailureCount:    link.FailureCount,
 		BackoffUntil:    link.BackoffUntil,
 		LastTransition:  link.LastTransition,
 		LastFailure:     link.LastFailure,
-		Raw:             link,
 	}
 }

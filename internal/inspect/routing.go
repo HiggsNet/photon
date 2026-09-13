@@ -259,8 +259,8 @@ func ExtractBirdFilterDefinitions(config string) string {
 }
 
 type BabelDebugView struct {
-	LastReconcileFailure *FailureView
-	Instances            []BabelInstanceView
+	LastReconcileFailure *FailureView        `json:"last_routing_failure,omitempty"`
+	Instances            []BabelInstanceView `json:"instances"`
 }
 
 type BabelDebugInput struct {
@@ -278,24 +278,27 @@ type BabelInstanceInput struct {
 }
 
 type BabelInstanceView struct {
-	NetNS          string
-	InstanceID     string
-	Mode           string
-	ShutdownPolicy string
-	Enabled        bool
-	RouterID       uint32
-	ControlSocket  string
-	ConfigPath     string
-	PIDFile        string
-	LastConfigHash string
-	Overlays       []string
-	State          string
-	LastFailure    *FailureView
-	HasState       bool
+	NetNS          string       `json:"netns_name"`
+	InstanceID     string       `json:"instance_id"`
+	Mode           string       `json:"mode"`
+	ShutdownPolicy string       `json:"shutdown_policy,omitempty"`
+	Enabled        bool         `json:"enabled"`
+	RouterID       uint32       `json:"router_id,omitempty"`
+	ControlSocket  string       `json:"control_socket,omitempty"`
+	ConfigPath     string       `json:"config_path,omitempty"`
+	PIDFile        string       `json:"pid_file,omitempty"`
+	LastConfigHash string       `json:"last_config_hash,omitempty"`
+	Overlays       []string     `json:"overlays,omitempty"`
+	State          string       `json:"state,omitempty"`
+	LastFailure    *FailureView `json:"last_failure,omitempty"`
+	HasState       bool         `json:"has_state"`
 }
 
 func BuildBabelDebug(input BabelDebugInput) BabelDebugView {
-	view := BabelDebugView{LastReconcileFailure: BuildFailure(FailureCodeRoutingReconcile, input.LastReconcileFailure)}
+	view := BabelDebugView{
+		LastReconcileFailure: BuildFailure(FailureCodeRoutingReconcile, input.LastReconcileFailure),
+		Instances:            make([]BabelInstanceView, 0, len(input.Instances)),
+	}
 	for _, inst := range input.Instances {
 		mode := inst.Mode
 		if mode == "" {

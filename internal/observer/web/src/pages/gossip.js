@@ -31,9 +31,14 @@ function kvFromObject(obj) {
     ]);
 }
 
+function failureMessage(value) {
+	return value && (value.message || value.code) || '';
+}
+
 function diagnostics(peer) {
-    const rows = [];
-    if (peer.last_error) rows.push(['Last Error', `<code>${esc(peer.last_error)}</code>`]);
+	const rows = [];
+	const lastFailure = failureMessage(peer.last_failure);
+	if (lastFailure) rows.push(['Last Error', `<code>${esc(lastFailure)}</code>`]);
     if (peer.last_update_source) rows.push(['Update Source', esc(peer.last_update_source)]);
     if (peer.last_relay_suppression) rows.push(['Relay Suppression', esc(peer.last_relay_suppression)]);
     if (peer.observed_failure_count) rows.push(['Observed Failures', esc(peer.observed_failure_count)]);
@@ -110,11 +115,12 @@ export function render(container, route) {
     if (!entry) { container.innerHTML = header + loading(); return; }
     if (entry.error && !entry.data) { container.innerHTML = header + errorMsg(`Failed to load peers: ${entry.error.message}`); return; }
     const filter = (route.filter || '').toLowerCase();
-    const peers = (entry.data.peers || []).filter(p =>
+	const peers = (entry.data.peers || []).filter(p =>
         !filter || (p.peer_id || '').toLowerCase().includes(filter) || (p.source || '').toLowerCase().includes(filter));
-    const cards = peers.map(p => {
-        const status = p.last_error ? 'error' : (p.failure_count ? 'degraded' : 'up');
-        const err = p.last_error ? ` · <span class="peer-err">${esc(p.last_error)}</span>` : '';
+	const cards = peers.map(p => {
+		const lastFailure = failureMessage(p.last_failure);
+		const status = lastFailure ? 'error' : (p.failure_count ? 'degraded' : 'up');
+		const err = lastFailure ? ` · <span class="peer-err">${esc(lastFailure)}</span>` : '';
         return `<div class="peer-item${route.selected === p.peer_id ? ' selected' : ''}" data-peer="${esc(p.peer_id)}">
             ${dot(status)}
             <span class="peer-id">${esc(p.peer_id)}</span>

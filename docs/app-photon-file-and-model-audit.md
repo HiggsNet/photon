@@ -576,8 +576,13 @@ VerifiedState + LinuxState + 操作系统现状
 2. [已完成] reconcile 与 debug rotate 共用 SA 投影，避免两份字段列表漂移；保留 `ipsec.SAState -> LinkSAObservation` 这一道稳定 JSON/脱离 Driver 的边界。
 3. [已完成] health view、`ping_targets` control 和 `debug ping` 直接共用 `health.ProbeTarget`；删除 `inspect.HealthTarget`、正向 builder 与 CLI 反向地址 parser，稳定 JSON schema 由目标 owner 自己定义。
 4. [已完成] record/IPAM/route/service 已在 control/direct 边界生成 `LocalIntent`，合并成一个 `common_mutation` event；删除四种专用事件 payload、`daemonRecordPut` 和 app 侧重复的 reserved-record 校验表，保留真实 wire DTO 与 Store 中唯一的 typed 校验。
-5. [已完成] routes/peers/status/zones 的 Observer 返回值直接使用 canonical `internal/inspect` DTO；删除 `internal/inspect/http` 中只换名字的 type alias 和函数变量转发，保留 HTTP 特有的 links/health/BIRD schema。
+5. [已完成] routes/peers/status/zones/BIRD 的 Observer 返回值直接使用 canonical `internal/inspect` DTO；删除 `internal/inspect/http` 中只换名字的 type alias、函数变量转发和薄 BIRD response 壳，保留 HTTP 特有的 links/health schema。
 6. [已完成] Health HTTP context 的 desired link 直接使用已脱敏的 `inspect.DesiredLink`；删除重复的 `HealthDesiredContextInput`、app converter 和两个无约束 `any` 字段，实例 runtime context 暂按独立选择边界保留。
+7. [已完成] Health HTTP response 不再携带无人消费的原始 `ipsec.LinkInstance`；实例选择边界只投影页面需要的 peer/group/interface/endpoint/state，避免暴露 owner token、内部错误与状态机细节。
+8. [已完成] Links HTTP response 删除重复的 `raw LinkView` 和前端无人消费的 owner 对象；canonical inspect 删除 `LinkOwner` 换壳，只保留 CLI 实际展示的 owner manager，owner token 不再进入查询模型。
+9. [已完成] Health HTTP schema 的固定字段使用现有具体类型，不再声明为 `any`；BIRD HTTP 直接使用带稳定 JSON tags 的 `BabelDebugView`，页面消费 canonical instance/reconcile `FailureView`，runtime owner/token 不进入响应。
+10. [已完成] Observer Health 唯一 join 点直接建立实例与 desired 索引；删除三个仅调用一次、没有策略职责的 runtime/map 转发 helper。
+11. [已完成] Observer 前端不再读取已删除的 legacy `last_error`，也不再兼容 Health 裸 sample/嵌套 sample；status、peer、health、takeover 与 routing 统一使用 canonical `FailureView`，Health 统一读取 `HealthContextItem.health`。
 
 ### 5.3 不建议做的“优化”
 

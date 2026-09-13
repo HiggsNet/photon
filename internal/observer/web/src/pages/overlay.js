@@ -36,7 +36,7 @@ function detailPanel(li) {
     const state = li.state || li.actual_state || '';
     const iface = li.interface_name || desired.interface_name || '-';
     const ifId = li.xfrm_if_id || desired.xfrm_if_id || '-';
-    const healthID = (li.health && (li.health.instance_id || (li.health.health || {}).instance_id)) || '';
+	const healthID = (li.health && li.health.instance_id) || '';
     return `<section class="detail-panel">
         <h2>${esc(li.id || '-')}</h2>
         ${kvTable([
@@ -62,8 +62,8 @@ function detailPanel(li) {
             <section>
                 <h3>StrongSwan</h3>
                 ${kvTable([
-                    ['IKE', `<code>${esc((li.raw && li.raw.ike_name) || sa.name || '-')}</code>`],
-                    ['Child SA', `<code>${esc((li.raw && li.raw.child_sa_name) || sa.child_sa || '-')}</code>`],
+                    ['IKE', `<code>${esc(li.ike_name || sa.name || '-')}</code>`],
+                    ['Child SA', `<code>${esc(sa.child_sa || '-')}</code>`],
                     ['SA State', stateBadge(sa.established ? 'established' : (sa.child_state || sa.ike_state || '-'))],
                     ['ReqID', esc(sa.reqid || '-')],
                     ['Observed if_id', esc(sa.xfrm_if_id || '-')],
@@ -100,7 +100,7 @@ function detailPanel(li) {
                     ['Phase', esc(takeover.phase || '-')],
                     ['Until', relTime(takeover.until)],
                     ['Observed Initiator', `<code>${esc(takeover.observed_initiator || '-')}</code>`],
-                    ['Last Error', `<code>${esc(takeover.last_error || '-')}</code>`],
+					['Last Error', `<code>${esc((takeover.last_failure || {}).message || '-')}</code>`],
                 ])}
             </section>
         </div>
@@ -162,7 +162,7 @@ export function render(container, route) {
             ['Last Run', relTime(data.last_run_unix)],
             ['Desired Links', esc(data.desired_links || 0)],
             ['Actual SAs', esc(data.actual_sas || 0)],
-            ['Last Error', `<code>${esc(data.last_error || '-')}</code>`],
+			['Last Error', `<code>${esc((data.last_failure || {}).message || '-')}</code>`],
         ])}
         <details class="record-details"><summary>Actions (${(data.actions || []).length})</summary>${actionTable(data.actions)}</details>
         <details class="record-details"><summary>Skipped (${(data.skipped || []).length})</summary>${skippedTable(data.skipped)}</details>`;

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -464,6 +465,7 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 				DesiredSpecHash: "abcdef0123456789",
 				ChildSAName:     "child-link-1",
 				InitiatorRole:   "primary",
+				Owner:           ipsec.ResourceOwner{Manager: "photon", Token: "must-not-leak"},
 			},
 		}
 		observationReconcile = &ipsecObservationSummary{
@@ -526,6 +528,12 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 	if routing["bird_state"] != "running" {
 		t.Fatalf("bird_state = %v, want running", routing["bird_state"])
 	}
+	if _, ok := link["raw"]; ok {
+		t.Fatalf("links API exposes raw inspect view: %#v", link)
+	}
+	if _, ok := link["owner"]; ok {
+		t.Fatalf("links API exposes runtime owner: %#v", link)
+	}
 }
 
 func TestObserverHealthAPIIncludesLinkContextWithoutSamples(t *testing.T) {
@@ -574,6 +582,9 @@ func TestObserverHealthAPIIncludesLinkContextWithoutSamples(t *testing.T) {
 	item := links[0].(map[string]any)
 	if item["peer_zone"] != "node-b.catofes." || item["peer_tunnel_addr"] != "fd00::2%phx0" {
 		t.Fatalf("health context = %#v, want peer and tunnel context", item)
+	}
+	if _, ok := item["instance"]; ok {
+		t.Fatalf("health context exposes raw runtime instance: %#v", item)
 	}
 	health := item["health"].(map[string]any)
 	if health["state"] != "unknown" {
@@ -640,10 +651,45 @@ func TestObserverRoutesAPI(t *testing.T) {
 
 func TestObserverBirdAPI(t *testing.T) {
 	srv := newTestObserverServer()
+	srv.daemon.App.Config.Routing.Instances = []RoutingInstance{{ID: "main", NetNS: "phx-main", Enabled: true}}
+	srv.daemon.linuxObservation.replaceRouting(&routingObservation{
+		Instances: map[string]*bird.InstanceObservation{
+			"phx-main": {
+				NetNSName:   "phx-main",
+				RouterID:    42,
+				State:       "error",
+				LastFailure: errors.New("bird failed"),
+				Owner:       bird.BirdResourceOwner{Token: "must-not-leak"},
+			},
+		},
+		LastFailure: errors.New("routing failed"),
+	})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/bird", nil)
 	rr := httptest.NewRecorder()
 	srv.handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
-		t.Errorf("status code = %d, want %d", rr.Code, http.StatusOK)
+		t.Fatalf("status code = %d, want %d", rr.Code, http.StatusOK)
+	}
+	var resp observer.APIResponse
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	data := resp.Data.(map[string]any)
+	instances := data["instances"].([]any)
+	if len(instances) != 1 {
+		t.Fatalf("instances = %#v, want one canonical BIRD view", instances)
+	}
+	instance := instances[0].(map[string]any)
+	if instance["instance_id"] != "main" || instance["netns_name"] != "phx-main" || instance["router_id"] != float64(42) {
+		t.Fatalf("BIRD instance = %#v", instance)
+	}
+	if failure := instance["last_failure"].(map[string]any); failure["code"] != inspect.FailureCodeBirdInstance || failure["message"] != "bird failed" {
+		t.Fatalf("BIRD failure = %#v", failure)
+	}
+	if _, ok := instance["owner"]; ok {
+		t.Fatalf("BIRD instance exposes runtime owner: %#v", instance)
+	}
+	if failure := data["last_routing_failure"].(map[string]any); failure["code"] != inspect.FailureCodeRoutingReconcile || failure["message"] != "routing failed" {
+		t.Fatalf("routing failure = %#v", failure)
 	}
 }

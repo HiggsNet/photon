@@ -99,11 +99,10 @@ func buildBabelDebugView(rt *AppContext, instances map[string]*bird.InstanceObse
 	if rt != nil && rt.Config != nil {
 		routingInstances = rt.Config.Routing.Instances
 	}
-	input := inspect.BabelDebugInput{}
+	input := inspect.BabelDebugInput{LastReconcileFailure: lastRoutingFailure}
 	if len(routingInstances) == 0 {
 		return inspect.BuildBabelDebug(input)
 	}
-	input.LastReconcileFailure = lastRoutingFailure
 	input.LinuxStates = instances
 	for _, inst := range routingInstances {
 		input.Instances = append(input.Instances, inspect.BabelInstanceInput{

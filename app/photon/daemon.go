@@ -1054,7 +1054,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		if routingObserved := d.linuxObservation.routingSnapshot(); routingObserved != nil {
 			birdInstances = routingObserved.Instances
 		}
-		view := buildStoredLinkInspection(observerRuntime(d), links, reconcile, birdInstances, health)
+		view := buildStoredLinkInspection(d.App, links, reconcile, birdInstances, health)
 		if d.linuxDriver != nil && d.App != nil && d.App.Config != nil && d.App.Config.IPsec.Driver != ipsecDriverDryRun {
 			sas, err := d.linuxDriver.ListIPsecSAs(ctx)
 			if err != nil {

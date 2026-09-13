@@ -21,13 +21,14 @@ function collectIssues(status, links, healthLinks, zones) {
             });
         }
     }
-    for (const item of healthLinks) {
-        const h = item.health || item;
-        if (h.state && h.state !== 'healthy') {
+	for (const item of healthLinks) {
+		const h = item.health || {};
+		const failure = h.last_failure || {};
+		if (h.state && h.state !== 'healthy') {
             issues.push({
                 tone: h.state === 'down' ? 'err' : 'warn',
                 target: h.instance_id || 'link',
-                summary: `health ${h.state}${h.last_error ? ` — ${h.last_error}` : ''}`,
+				summary: `health ${h.state}${failure.message ? ` — ${failure.message}` : ''}`,
                 href: `#/health/${encodeURIComponent(h.instance_id || '')}`,
             });
         }
@@ -40,11 +41,11 @@ function collectIssues(status, links, healthLinks, zones) {
             issues.push({ tone: 'err', target: z.path, summary: 'zone revoked', href: `#/zones/${encodeURIComponent(z.path)}` });
         }
     }
-    if (status.last_link_error) {
-        issues.push({ tone: 'err', target: 'reconcile', summary: status.last_link_error, href: '#/overlay' });
-    }
-    if (status.last_routing_error) {
-        issues.push({ tone: 'err', target: 'routing', summary: status.last_routing_error, href: '#/bird' });
+	if (status.last_link_failure) {
+		issues.push({ tone: 'err', target: 'reconcile', summary: status.last_link_failure.message || status.last_link_failure.code, href: '#/overlay' });
+	}
+	if (status.last_routing_failure) {
+		issues.push({ tone: 'err', target: 'routing', summary: status.last_routing_failure.message || status.last_routing_failure.code, href: '#/bird' });
     }
     return issues.slice(0, 10);
 }

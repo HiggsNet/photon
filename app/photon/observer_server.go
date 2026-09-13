@@ -15,7 +15,6 @@ import (
 	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
 	"github.com/HiggsNet/photon/internal/observability/healthspool"
 	"github.com/HiggsNet/photon/internal/observer"
-	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/core/observability"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -246,7 +245,7 @@ func (p *observerProvider) Links(linkFilter string) (any, error) {
 	if routingObserved := d.linuxObservation.routingSnapshot(); routingObserved != nil {
 		birdInstances = routingObserved.Instances
 	}
-	build := buildStoredLinkInspection(observerRuntime(d), observedLinks, reconcile, birdInstances, health)
+	build := buildStoredLinkInspection(d.App, observedLinks, reconcile, birdInstances, health)
 	view := build.Inspection
 	// Single link detail
 	if linkFilter != "" {
@@ -260,38 +259,30 @@ func (p *observerProvider) Links(linkFilter string) (any, error) {
 	return inspecthttp.LinksFromInspection(view), nil
 }
 
-func observerRuntime(d *Daemon) *AppContext {
-	if d == nil {
-		return nil
-	}
-	return d.App
-}
-
 func healthLinksWithContext(view inspect.HealthView, observedLinks map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary) []inspecthttp.HealthContextItem {
-	input := inspecthttp.HealthContextInput{View: view}
-	desiredByID := map[string]photonstate.DesiredLinkObservation{}
-	if reconcile != nil {
-		desiredByID = desiredByInstanceID(reconcile.Desired)
+	input := inspecthttp.HealthContextInput{
+		View:      view,
+		Instances: make(map[string]inspecthttp.HealthInstanceContextInput, len(observedLinks)),
+		Desired:   make(map[string]inspect.DesiredLink),
 	}
-	input.Instances = inspectHealthInstances(observedLinks)
-	input.Desired = desiredByID
-	return inspecthttp.BuildHealthContext(input)
-}
-
-func inspectHealthInstances(instances map[string]ipsec.LinkInstance) map[string]inspecthttp.HealthInstanceContextInput {
-	out := make(map[string]inspecthttp.HealthInstanceContextInput, len(instances))
-	for id, inst := range instances {
-		out[id] = inspecthttp.HealthInstanceContextInput{
+	for id, inst := range observedLinks {
+		input.Instances[id] = inspecthttp.HealthInstanceContextInput{
 			ID:            inst.ID,
 			PeerZone:      string(inst.PeerZone),
 			GroupID:       inst.GroupID,
 			InterfaceName: inst.InterfaceName,
 			Endpoint:      inst.Endpoint,
 			ActualState:   inst.ActualState,
-			Instance:      inst,
 		}
 	}
-	return out
+	if reconcile != nil {
+		for _, desired := range reconcile.Desired {
+			if desired.InstanceID != "" {
+				input.Desired[desired.InstanceID] = desired
+			}
+		}
+	}
+	return inspecthttp.BuildHealthContext(input)
 }
 
 func (p *observerProvider) Health(linkFilter string) (any, error) {
@@ -435,17 +426,14 @@ func (p *observerProvider) Routes() (any, error) {
 func (p *observerProvider) Bird() (any, error) {
 	d := p.daemon
 	if d == nil || d.State == nil {
-		return inspecthttp.BirdResponse{Instances: map[string]any{}}, nil
+		return inspect.BuildBabelDebug(inspect.BabelDebugInput{}), nil
 	}
 	routingReconcile := d.linuxObservation.routingSnapshot()
-	var lastRoutingFailure *inspect.FailureView
+	var lastRoutingFailure error
 	var instances map[string]*bird.InstanceObservation
 	if routingReconcile != nil {
-		lastRoutingFailure = inspect.BuildFailure(inspect.FailureCodeRoutingReconcile, routingReconcile.LastFailure)
+		lastRoutingFailure = routingReconcile.LastFailure
 		instances = routingReconcile.Instances
 	}
-	return inspecthttp.BirdResponse{
-		Instances:          instances,
-		LastRoutingFailure: lastRoutingFailure,
-	}, nil
+	return buildBabelDebugView(d.App, instances, lastRoutingFailure), nil
 }

@@ -311,8 +311,12 @@ GossipDriver 公共 gossip 闭环、aggregate 清理和 current Linux codec 迁�
    IPsec desired/SA/action/skip 在 reconcile 边界投影为不含私钥和 spec 指针的 canonical `internal/state` observation；`internal/inspect` 直接 alias 这四组 live DTO，已删除第二套同字段 struct、逐字段 builder、app 批量 converter 和 debug rotate 的重复 SA copier。Observation clone 仍保留并发隔离，`LinkOutput` 仍作为 routing/firewall/health 的窄消费契约。
    health canonical view、`ping_targets` control 与 `debug ping` 也已直接共用现有的安全 `health.ProbeTarget`，不再先转成字符串型 `inspect.HealthTarget` 再由 CLI 解析回执行类型。`ProbeTarget` 自有稳定 snake_case JSON tags；零地址在 JSON 中省略而不是暴露 Go 的 `invalid IP` 哨兵字符串，文本与 HTTP 只在最终展示边界格式化 `netip.Addr`。
    record/IPAM/route/service 的在线请求也已在 control 边界直接转成与 `--direct` 相同的 `corestate.LocalIntent`；Daemon 单 writer 队列只携带一个 `common_mutation + LocalIntent + dryRun`，原四种事件 payload、`daemonRecordPut` 和 app 侧重复的 reserved-record 校验表已删除，IPAM/route 成功提交后的同步路由刷新改由 intent 类型判定。
-   Observer routes/peers/status/zones 已直接使用 canonical `internal/inspect` DTO；`internal/inspect/http` 中仅换名字的 type alias 与函数变量转发已删除，HTTP package 只保留 links/health/BIRD 的独立 wire shape 及 schema contract tests。
-   Health HTTP context 对 desired link 也不再建立第二套逐字段 wrapper：它直接接收已脱敏的 canonical `inspect.DesiredLink`，response 的 `Desired` 与 `PeerZone` 使用明确类型；实例 context 仍保留其独立的 runtime 选择边界。
+   Observer routes/peers/status/zones/BIRD 已直接使用 canonical `internal/inspect` DTO；`internal/inspect/http` 中仅换名字的 type alias、函数变量转发与薄 BIRD response 壳已删除，HTTP package 只保留 links/health 的独立 wire shape 及 schema contract tests。
+   Health HTTP context 对 desired link 也不再建立第二套逐字段 wrapper：它直接接收已脱敏的 canonical `inspect.DesiredLink`，response 的 `Desired` 与 `PeerZone` 使用明确类型；实例 context 仍保留其独立的 runtime 选择边界，但 response 已删除前端无人消费的原始 `ipsec.LinkInstance`，只输出页面实际需要的选择字段，避免暴露 owner token、内部错误和状态机细节。
+   Links HTTP response 也已删除重复的 `raw LinkView` 与前端无人消费的 owner 对象；canonical inspect 不再建立包含 owner token 等校验字段的 `LinkOwner`，只保留文本诊断实际展示的 owner manager。
+   Health datasource/series 的固定 HTTP 字段也已改用现有具体类型；BIRD endpoint 直接返回带稳定 JSON tags 的 canonical `BabelDebugView`，runtime resource owner/token 明确不进入响应，页面消费 instance/reconcile `FailureView`。
+   Observer Health join 直接建立短生命周期的 instance/desired 索引；原 `observerRuntime`、`inspectHealthInstances` 与 `desiredByInstanceID` 三个单调用转发 helper 已删除。
+   Observer 页面残留的 `last_error` 读取与 Health 裸 sample/嵌套 sample fallback 也已删除；status、peer、health、takeover 与 routing 错误统一消费 canonical `last_failure {code,message}`，Health 统一读取 `HealthContextItem.health`，不再依赖兼容字段。
    `debug rotate --direct` 已改用正式 typed intent/runtime commit。production 已无 aggregate `Snapshot()`、clone、loader 或 writer；
    `stateFile/stateMeta` 只承担旧 schema 单向读取和 legacy db dump，明确随旧数据库支持周期删除。Daemon 不再缓存第二份
    common revision 或不完整的 `SnapshotTime`，status revision 直接来自 common Store。

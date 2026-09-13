@@ -329,7 +329,7 @@ type InstanceObservation struct {
 	ControlSocket    string            `json:"control_socket"`
 	PIDFile          string            `json:"pid_file"`
 	RouterID         uint32            `json:"router_id"`
-	Owner            BirdResourceOwner `json:"owner,omitempty"`
+	Owner            BirdResourceOwner `json:"-"`
 	LastConfigHash   string            `json:"last_config_hash"`
 	LastFailure      error             `json:"-"`
 	LastExit         string            `json:"last_exit,omitempty"`

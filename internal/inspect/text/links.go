@@ -46,7 +46,7 @@ func WriteLinks(w io.Writer, inspection inspect.LinkInspection, filter string, v
 				linkHealthSummary(link),
 				dash(link.Rotation.Phase),
 				dash(link.Routing.BirdState),
-				dash(link.Owner.Manager),
+				dash(link.OwnerManager),
 				escapeTableCell(failureMessage(link.LastFailure)),
 			})
 		} else {
@@ -200,7 +200,7 @@ func writeDebugLinkInstance(out *lineWriter, link inspect.LinkView, spec *ipsec.
 	out.Linef("    until: %s", formatUnixTime(link.Takeover.Until))
 	out.Linef("    observed_initiator: %s", dash(link.Takeover.ObservedInitiator))
 	out.Linef("  lifecycle:")
-	out.Linef("    owner: %s", dash(link.Owner.Manager))
+	out.Linef("    owner: %s", dash(link.OwnerManager))
 	out.Linef("    failures: %d", link.FailureCount)
 	out.Linef("    backoff_until: %s", formatUnixTime(link.BackoffUntil))
 	out.Linef("    last_failure: %s", failureDisplay(link.LastFailure))

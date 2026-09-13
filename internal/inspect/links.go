@@ -77,7 +77,7 @@ type LinkView struct {
 	Routing         LinkRouting
 	Rotation        LinkRotation
 	Takeover        LinkTakeover
-	Owner           LinkOwner
+	OwnerManager    string
 	FailureCount    int
 	BackoffUntil    int64
 	LastTransition  int64
@@ -116,7 +116,7 @@ type LinkInstance struct {
 	FailureCount          int
 	BackoffUntil          int64
 	LastTransition        int64
-	Owner                 LinkOwner
+	OwnerManager          string
 	InitiatorRole         string
 	TakeoverPhase         string
 	TakeoverStartedAt     int64
@@ -124,16 +124,6 @@ type LinkInstance struct {
 	LastTakeoverFailure   error
 	ObservedInitiator     string
 	Routing               LinkRouting
-}
-
-// LinkOwner is the inspect/JSON projection of an IPsec resource owner.
-type LinkOwner struct {
-	Manager     string `json:"manager,omitempty"`
-	GroupID     string `json:"group_id,omitempty"`
-	InstanceID  string `json:"instance_id,omitempty"`
-	LinkID      string `json:"link_id,omitempty"`
-	TransportID string `json:"transport_id,omitempty"`
-	Token       string `json:"token,omitempty"`
 }
 
 type DesiredLink = photonstate.DesiredLinkObservation
@@ -205,18 +195,14 @@ func BuildLinkInstanceFromRuntime(inst ipsec.LinkInstance, routing LinkRouting) 
 		FailureCount:          inst.FailureCount,
 		BackoffUntil:          inst.BackoffUntil,
 		LastTransition:        inst.LastTransition,
-		Owner: LinkOwner{
-			Manager: inst.Owner.Manager, GroupID: inst.Owner.GroupID,
-			InstanceID: inst.Owner.InstanceID, LinkID: inst.Owner.LinkID,
-			TransportID: inst.Owner.TransportID, Token: inst.Owner.Token,
-		},
-		InitiatorRole:       inst.InitiatorRole,
-		TakeoverPhase:       inst.TakeoverPhase,
-		TakeoverStartedAt:   inst.TakeoverStartedAt,
-		TakeoverUntil:       inst.TakeoverUntil,
-		LastTakeoverFailure: inst.LastTakeoverFailure,
-		ObservedInitiator:   inst.ObservedInitiator,
-		Routing:             routing,
+		OwnerManager:          inst.Owner.Manager,
+		InitiatorRole:         inst.InitiatorRole,
+		TakeoverPhase:         inst.TakeoverPhase,
+		TakeoverStartedAt:     inst.TakeoverStartedAt,
+		TakeoverUntil:         inst.TakeoverUntil,
+		LastTakeoverFailure:   inst.LastTakeoverFailure,
+		ObservedInitiator:     inst.ObservedInitiator,
+		Routing:               routing,
 	}
 }
 
@@ -457,7 +443,7 @@ func linkFromInstance(inst LinkInstance, desired DesiredLink, hasDesired bool, s
 			ObservedInitiator: inst.ObservedInitiator,
 			LastFailure:       BuildFailure(FailureCodeIPsecTakeover, inst.LastTakeoverFailure),
 		},
-		Owner:          inst.Owner,
+		OwnerManager:   inst.OwnerManager,
 		FailureCount:   inst.FailureCount,
 		BackoffUntil:   inst.BackoffUntil,
 		LastTransition: inst.LastTransition,

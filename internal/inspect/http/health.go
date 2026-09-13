@@ -4,23 +4,23 @@ import (
 	"sort"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/internal/observability/healthspool"
 	"github.com/HiggsNet/photon/pkg/health"
 )
 
 type HealthResponse struct {
-	Datasource any                 `json:"datasource"`
+	Datasource map[string]any      `json:"datasource"`
 	Links      []HealthContextItem `json:"links"`
 }
 
 type HealthSeriesResponse struct {
-	Datasource any    `json:"datasource"`
-	LinkID     string `json:"link_id"`
-	Series     any    `json:"series"`
+	Datasource map[string]any           `json:"datasource"`
+	LinkID     string                   `json:"link_id"`
+	Series     healthspool.SeriesResult `json:"series"`
 }
 
 type HealthContextItem struct {
 	Health          inspect.HealthSample `json:"health"`
-	Instance        any                  `json:"instance,omitempty"`
 	Desired         *inspect.DesiredLink `json:"desired,omitempty"`
 	PeerZone        string               `json:"peer_zone,omitempty"`
 	GroupID         string               `json:"group_id,omitempty"`
@@ -44,7 +44,6 @@ type HealthInstanceContextInput struct {
 	InterfaceName string
 	Endpoint      string
 	ActualState   string
-	Instance      any
 }
 
 func BuildHealthContext(input HealthContextInput) []HealthContextItem {
@@ -109,7 +108,6 @@ func buildHealthContextItem(sample inspect.HealthSample, target health.ProbeTarg
 		item.PeerZone = target.PeerZone
 	}
 	if inst.ID != "" {
-		item.Instance = inst.Instance
 		item.PeerZone = inst.PeerZone
 		item.GroupID = inst.GroupID
 		item.InterfaceName = firstNonEmpty(sample.InterfaceName, target.InterfaceName, inst.InterfaceName)

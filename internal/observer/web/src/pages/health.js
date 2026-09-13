@@ -27,7 +27,7 @@ onItemInvalidate((type, payload) => {
     ids.forEach(id => sparkCache.delete(id));
 });
 
-function healthValue(item) { return item ? (item.health || item) : null; }
+function healthValue(item) { return item && item.health; }
 
 function severityOf(h) {
     if (!h) return '';
@@ -64,7 +64,8 @@ function linkRow(item, selected, showRole) {
 function detailPanel(item, datasource) {
     if (!item) return emptyState('Select a link to inspect probe state and history');
     const h = healthValue(item) || {};
-    const desired = item.desired || {};
+	const desired = item.desired || {};
+	const lastFailure = h.last_failure || {};
     const history = datasource && datasource.configured
         ? historyPanel(h.instance_id)
         : '<div class="muted">No local health history datasource configured.</div>';
@@ -78,7 +79,7 @@ function detailPanel(item, datasource) {
         ['Consecutive Failures', esc(h.consecutive_fail || 0)],
         ['Cutover Blocking', h.cutover_blocking ? 'Yes' : 'No'],
         ['Next Probe', relTime(h.next_probe_unix)],
-        ['Last Error', `<code>${esc(h.last_error || '-')}</code>`],
+		['Last Error', `<code>${esc(lastFailure.message || '-')}</code>`],
     ]);
     const latency = kvTable([
         ['Last RTT', ms(h.last_rtt_ms)], ['EWMA RTT', ms(h.ewma_rtt_ms)],

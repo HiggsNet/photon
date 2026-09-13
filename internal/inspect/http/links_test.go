@@ -55,7 +55,10 @@ func TestLinksFromInspectionPreservesObserverSchema(t *testing.T) {
 	if link["peer_zone"] != "node-b.catofes." || link["ike_name"] != "ipsec-link-1-r13" || link["xfrm_if_id"] != float64(42) {
 		t.Fatalf("link fields missing: %#v", link)
 	}
-	if link["raw"] == nil {
-		t.Fatalf("raw link view omitted: %#v", link)
+	if _, ok := link["raw"]; ok {
+		t.Fatalf("raw link view exposed: %#v", link)
+	}
+	if _, ok := link["owner"]; ok {
+		t.Fatalf("runtime owner exposed: %#v", link)
 	}
 }

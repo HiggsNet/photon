@@ -161,7 +161,7 @@ type Provider interface {
 | `GET /api/v1/health/{link_id}` | `Health(linkID)` | 单 link 健康（按 instanceID 或 probeID 匹配） | `HealthContextItem` |
 | `GET /api/v1/health/{link_id}/series` | `HealthSeries` | 本地 spool 聚合时序 | `HealthSeriesResponse` |
 | `GET /api/v1/routes` | `Routes` | 授权路由集 | `RoutesResponse` |
-| `GET /api/v1/bird` | `Bird` | BIRD 实例观测 + 最近路由错误 | `BirdResponse` |
+| `GET /api/v1/bird` | `Bird` | BIRD 实例观测 + 最近路由错误 | `inspect.BabelDebugView` |
 | `GET /api/v1/events` | —（Hub） | SSE 事件流 | `text/event-stream` |
 | `GET /api/v1/events/recent` | —（Hub） | 事件回放缓冲（见 5.4） | `{"events": [...]}` |
 
@@ -188,18 +188,19 @@ type Provider interface {
 ### 4.4 Links
 
 - 数据由 `buildLinkInspectionFromReconcile(runtime, state, healthStatus)` 现算，输入为 IPsec reconcile 的 desired/actual 视图叠加快照中的健康状态。
+- `LinkJSON` 只输出页面和 API 诊断字段，不再附带重复的 `raw LinkView` 或运行时 owner/token；页面的 IKE 名称直接读取顶层 `ike_name`。
 - 单 link 按 `LinkJSON.ID` 精确匹配，未命中 404 `link not found`。
 
 ### 4.5 Health
 
-- 列表：daemon 将 health.Manager 样本和当前探测目标投影为统一的 `inspect.HealthView`，再由 `inspecthttp.BuildHealthContext` 与在线 link instance、IPsec desired state 做展示层 join；每条输出 `HealthContextItem{health, instance, desired, peer_zone, group_id, interface_name, endpoint, actual_state, local_tunnel_addr, peer_tunnel_addr}`，按 `(instance_id, probe_role)` 排序。只有实例没有健康样本的 link 以 `state: "unknown"` 补齐。
+- 列表：daemon 将 health.Manager 样本和当前探测目标投影为统一的 `inspect.HealthView`，再由 `inspecthttp.BuildHealthContext` 与在线 link instance、IPsec desired state 做展示层 join；每条输出 `HealthContextItem{health, desired, peer_zone, group_id, interface_name, endpoint, actual_state, local_tunnel_addr, peer_tunnel_addr}`，按 `(instance_id, probe_role)` 排序。只有实例没有健康样本的 link 以 `state: "unknown"` 补齐；原始 `ipsec.LinkInstance` 不进入 HTTP response。
 - 响应同时携带 `datasource` 信息（见第 7 节），前端据此决定是否展示历史曲线。
 - 单 link：`link_id` 可匹配 `instance_id` 或 `probe_id`（含 `#old` / `#staged` 后缀形式），未命中 404。
 
 ### 4.6 Routes / Bird
 
 - `Routes`：`routing.BuildAuthorizedRouteSet(state.Network, now)` 现算授权路由集，再经 `RoutesFromAuthorizedSet(state.ManagedZone, ars)` 输出；不读 BIRD 的实际 RIB。
-- `Bird`：直接返回 daemon `LinuxObservation` 中的 BIRD instance 快照与最近 routing error；实例数据由 routing reconcile 周期性重建（见 [routing.md](routing.md)）。
+- `Bird`：使用与 `babel_view` control/CLI 相同的 canonical `inspect.BabelDebugView`，把当前配置与 daemon `LinuxObservation` 的 BIRD instance 快照合并；runtime resource owner/token 不进入该 view（见 [routing.md](routing.md)）。
 
 ---
 

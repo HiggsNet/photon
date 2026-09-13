@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/internal/observability/healthspool"
 )
 
 func TestHealthResponsePreservesObserverSchema(t *testing.T) {
@@ -34,13 +35,16 @@ func TestHealthResponsePreservesObserverSchema(t *testing.T) {
 	if item["peer_zone"] != "node-b.catofes." || item["health"] == nil {
 		t.Fatalf("health context fields missing: %#v", item)
 	}
+	if _, ok := item["instance"]; ok {
+		t.Fatalf("health context exposes raw runtime instance: %#v", item)
+	}
 }
 
 func TestHealthSeriesResponsePreservesObserverSchema(t *testing.T) {
 	got := HealthSeriesResponse{
 		Datasource: map[string]any{"kind": "local_spool"},
 		LinkID:     "link-1",
-		Series:     map[string]any{"metric": "rtt"},
+		Series:     healthspool.SeriesResult{Metric: "rtt"},
 	}
 	data, err := json.Marshal(got)
 	if err != nil {
@@ -68,7 +72,6 @@ func TestBuildHealthContextMergesRuntimeContextAndMissingLinks(t *testing.T) {
 				InterfaceName: "phx-a",
 				Endpoint:      "198.51.100.10:4500",
 				ActualState:   "up",
-				Instance:      map[string]any{"id": "link-a"},
 			},
 			"link-b": {
 				ID:            "link-b",
@@ -77,7 +80,6 @@ func TestBuildHealthContextMergesRuntimeContextAndMissingLinks(t *testing.T) {
 				InterfaceName: "phx-b",
 				Endpoint:      "198.51.100.11:4500",
 				ActualState:   "up",
-				Instance:      map[string]any{"id": "link-b"},
 			},
 		},
 		Desired: map[string]inspect.DesiredLink{
