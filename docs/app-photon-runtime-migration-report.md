@@ -312,6 +312,7 @@ GossipDriver 公共 gossip 闭环、aggregate 清理和 current Linux codec 迁�
    health canonical view、`ping_targets` control 与 `debug ping` 也已直接共用现有的安全 `health.ProbeTarget`，不再先转成字符串型 `inspect.HealthTarget` 再由 CLI 解析回执行类型。`ProbeTarget` 自有稳定 snake_case JSON tags；零地址在 JSON 中省略而不是暴露 Go 的 `invalid IP` 哨兵字符串，文本与 HTTP 只在最终展示边界格式化 `netip.Addr`。
    record/IPAM/route/service 的在线请求也已在 control 边界直接转成与 `--direct` 相同的 `corestate.LocalIntent`；Daemon 单 writer 队列只携带一个 `common_mutation + LocalIntent + dryRun`，原四种事件 payload、`daemonRecordPut` 和 app 侧重复的 reserved-record 校验表已删除，IPAM/route 成功提交后的同步路由刷新改由 intent 类型判定。
    Observer routes/peers/status/zones 已直接使用 canonical `internal/inspect` DTO；`internal/inspect/http` 中仅换名字的 type alias 与函数变量转发已删除，HTTP package 只保留 links/health/BIRD 的独立 wire shape 及 schema contract tests。
+   Health HTTP context 对 desired link 也不再建立第二套逐字段 wrapper：它直接接收已脱敏的 canonical `inspect.DesiredLink`，response 的 `Desired` 与 `PeerZone` 使用明确类型；实例 context 仍保留其独立的 runtime 选择边界。
    `debug rotate --direct` 已改用正式 typed intent/runtime commit。production 已无 aggregate `Snapshot()`、clone、loader 或 writer；
    `stateFile/stateMeta` 只承担旧 schema 单向读取和 legacy db dump，明确随旧数据库支持周期删除。Daemon 不再缓存第二份
    common revision 或不完整的 `SnapshotTime`，status revision 直接来自 common Store。

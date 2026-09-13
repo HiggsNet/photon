@@ -21,8 +21,8 @@ type HealthSeriesResponse struct {
 type HealthContextItem struct {
 	Health          inspect.HealthSample `json:"health"`
 	Instance        any                  `json:"instance,omitempty"`
-	Desired         any                  `json:"desired,omitempty"`
-	PeerZone        any                  `json:"peer_zone,omitempty"`
+	Desired         *inspect.DesiredLink `json:"desired,omitempty"`
+	PeerZone        string               `json:"peer_zone,omitempty"`
 	GroupID         string               `json:"group_id,omitempty"`
 	InterfaceName   string               `json:"interface_name,omitempty"`
 	Endpoint        string               `json:"endpoint,omitempty"`
@@ -34,27 +34,17 @@ type HealthContextItem struct {
 type HealthContextInput struct {
 	View      inspect.HealthView
 	Instances map[string]HealthInstanceContextInput
-	Desired   map[string]HealthDesiredContextInput
+	Desired   map[string]inspect.DesiredLink
 }
 
 type HealthInstanceContextInput struct {
 	ID            string
-	PeerZone      any
+	PeerZone      string
 	GroupID       string
 	InterfaceName string
 	Endpoint      string
 	ActualState   string
 	Instance      any
-}
-
-type HealthDesiredContextInput struct {
-	InstanceID      string
-	PeerZone        any
-	GroupID         string
-	InterfaceName   string
-	LocalTunnelAddr string
-	PeerTunnelAddr  string
-	Desired         any
 }
 
 func BuildHealthContext(input HealthContextInput) []HealthContextItem {
@@ -106,7 +96,7 @@ func BuildHealthContext(input HealthContextInput) []HealthContextItem {
 	return out
 }
 
-func buildHealthContextItem(sample inspect.HealthSample, target health.ProbeTarget, inst HealthInstanceContextInput, desired HealthDesiredContextInput) HealthContextItem {
+func buildHealthContextItem(sample inspect.HealthSample, target health.ProbeTarget, inst HealthInstanceContextInput, desired inspect.DesiredLink) HealthContextItem {
 	item := HealthContextItem{
 		Health:          sample,
 		GroupID:         target.GroupID,
@@ -127,9 +117,9 @@ func buildHealthContextItem(sample inspect.HealthSample, target health.ProbeTarg
 		item.ActualState = inst.ActualState
 	}
 	if desired.InstanceID != "" {
-		item.Desired = desired.Desired
-		if item.PeerZone == nil {
-			item.PeerZone = desired.PeerZone
+		item.Desired = &desired
+		if item.PeerZone == "" {
+			item.PeerZone = string(desired.PeerZone)
 		}
 		if item.GroupID == "" {
 			item.GroupID = desired.GroupID

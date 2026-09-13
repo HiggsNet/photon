@@ -577,6 +577,7 @@ VerifiedState + LinuxState + 操作系统现状
 3. [已完成] health view、`ping_targets` control 和 `debug ping` 直接共用 `health.ProbeTarget`；删除 `inspect.HealthTarget`、正向 builder 与 CLI 反向地址 parser，稳定 JSON schema 由目标 owner 自己定义。
 4. [已完成] record/IPAM/route/service 已在 control/direct 边界生成 `LocalIntent`，合并成一个 `common_mutation` event；删除四种专用事件 payload、`daemonRecordPut` 和 app 侧重复的 reserved-record 校验表，保留真实 wire DTO 与 Store 中唯一的 typed 校验。
 5. [已完成] routes/peers/status/zones 的 Observer 返回值直接使用 canonical `internal/inspect` DTO；删除 `internal/inspect/http` 中只换名字的 type alias 和函数变量转发，保留 HTTP 特有的 links/health/BIRD schema。
+6. [已完成] Health HTTP context 的 desired link 直接使用已脱敏的 `inspect.DesiredLink`；删除重复的 `HealthDesiredContextInput`、app converter 和两个无约束 `any` 字段，实例 runtime context 暂按独立选择边界保留。
 
 ### 5.3 不建议做的“优化”
 

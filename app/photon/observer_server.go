@@ -274,7 +274,7 @@ func healthLinksWithContext(view inspect.HealthView, observedLinks map[string]ip
 		desiredByID = desiredByInstanceID(reconcile.Desired)
 	}
 	input.Instances = inspectHealthInstances(observedLinks)
-	input.Desired = inspectHealthDesired(desiredByID)
+	input.Desired = desiredByID
 	return inspecthttp.BuildHealthContext(input)
 }
 
@@ -283,28 +283,12 @@ func inspectHealthInstances(instances map[string]ipsec.LinkInstance) map[string]
 	for id, inst := range instances {
 		out[id] = inspecthttp.HealthInstanceContextInput{
 			ID:            inst.ID,
-			PeerZone:      inst.PeerZone,
+			PeerZone:      string(inst.PeerZone),
 			GroupID:       inst.GroupID,
 			InterfaceName: inst.InterfaceName,
 			Endpoint:      inst.Endpoint,
 			ActualState:   inst.ActualState,
 			Instance:      inst,
-		}
-	}
-	return out
-}
-
-func inspectHealthDesired(desiredByID map[string]photonstate.DesiredLinkObservation) map[string]inspecthttp.HealthDesiredContextInput {
-	out := make(map[string]inspecthttp.HealthDesiredContextInput, len(desiredByID))
-	for id, desired := range desiredByID {
-		out[id] = inspecthttp.HealthDesiredContextInput{
-			InstanceID:      desired.InstanceID,
-			PeerZone:        desired.PeerZone,
-			GroupID:         desired.GroupID,
-			InterfaceName:   desired.InterfaceName,
-			LocalTunnelAddr: desired.LocalTunnelAddr,
-			PeerTunnelAddr:  desired.PeerTunnelAddr,
-			Desired:         desired,
 		}
 	}
 	return out

@@ -80,7 +80,7 @@ func TestBuildHealthContextMergesRuntimeContextAndMissingLinks(t *testing.T) {
 				Instance:      map[string]any{"id": "link-b"},
 			},
 		},
-		Desired: map[string]HealthDesiredContextInput{
+		Desired: map[string]inspect.DesiredLink{
 			"link-a": {
 				InstanceID:      "link-a",
 				PeerZone:        "node-a.catofes.",
@@ -88,13 +88,11 @@ func TestBuildHealthContextMergesRuntimeContextAndMissingLinks(t *testing.T) {
 				InterfaceName:   "desired-a",
 				LocalTunnelAddr: "fd00::1",
 				PeerTunnelAddr:  "fd00::2",
-				Desired:         map[string]any{"instance_id": "link-a"},
 			},
 			"link-b": {
 				InstanceID:      "link-b",
 				LocalTunnelAddr: "fd00::3",
 				PeerTunnelAddr:  "fd00::4",
-				Desired:         map[string]any{"instance_id": "link-b"},
 			},
 		},
 	})
