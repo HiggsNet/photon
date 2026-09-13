@@ -583,6 +583,7 @@ VerifiedState + LinuxState + 操作系统现状
 9. [已完成] Health HTTP schema 的固定字段使用现有具体类型，不再声明为 `any`；BIRD HTTP 直接使用带稳定 JSON tags 的 `BabelDebugView`，页面消费 canonical instance/reconcile `FailureView`，runtime owner/token 不进入响应。
 10. [已完成] Observer Health 唯一 join 点直接建立实例与 desired 索引；删除三个仅调用一次、没有策略职责的 runtime/map 转发 helper。
 11. [已完成] Observer 前端不再读取已删除的 legacy `last_error`，也不再兼容 Health 裸 sample/嵌套 sample；status、peer、health、takeover 与 routing 统一使用 canonical `FailureView`，Health 统一读取 `HealthContextItem.health`。
+12. [已完成] Health runtime context 直接复用已经脱离 Driver/token 的 `inspect.LinkInstance`；删除重复的 `HealthInstanceContextInput` 和六字段逐项投影。
 
 ### 5.3 不建议做的“优化”
 

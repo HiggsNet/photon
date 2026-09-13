@@ -317,6 +317,7 @@ GossipDriver 公共 gossip 闭环、aggregate 清理和 current Linux codec 迁�
    Health datasource/series 的固定 HTTP 字段也已改用现有具体类型；BIRD endpoint 直接返回带稳定 JSON tags 的 canonical `BabelDebugView`，runtime resource owner/token 明确不进入响应，页面消费 instance/reconcile `FailureView`。
    Observer Health join 直接建立短生命周期的 instance/desired 索引；原 `observerRuntime`、`inspectHealthInstances` 与 `desiredByInstanceID` 三个单调用转发 helper 已删除。
    Observer 页面残留的 `last_error` 读取与 Health 裸 sample/嵌套 sample fallback 也已删除；status、peer、health、takeover 与 routing 错误统一消费 canonical `last_failure {code,message}`，Health 统一读取 `HealthContextItem.health`，不再依赖兼容字段。
+   Health runtime context 也已直接复用 secret-free `inspect.LinkInstance`，不再维护 `HealthInstanceContextInput` 与另一份六字段逐项投影。
    `debug rotate --direct` 已改用正式 typed intent/runtime commit。production 已无 aggregate `Snapshot()`、clone、loader 或 writer；
    `stateFile/stateMeta` 只承担旧 schema 单向读取和 legacy db dump，明确随旧数据库支持周期删除。Daemon 不再缓存第二份
    common revision 或不完整的 `SnapshotTime`，status revision 直接来自 common Store。

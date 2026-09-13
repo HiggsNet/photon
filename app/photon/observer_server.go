@@ -262,18 +262,11 @@ func (p *observerProvider) Links(linkFilter string) (any, error) {
 func healthLinksWithContext(view inspect.HealthView, observedLinks map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary) []inspecthttp.HealthContextItem {
 	input := inspecthttp.HealthContextInput{
 		View:      view,
-		Instances: make(map[string]inspecthttp.HealthInstanceContextInput, len(observedLinks)),
+		Instances: make(map[string]inspect.LinkInstance, len(observedLinks)),
 		Desired:   make(map[string]inspect.DesiredLink),
 	}
 	for id, inst := range observedLinks {
-		input.Instances[id] = inspecthttp.HealthInstanceContextInput{
-			ID:            inst.ID,
-			PeerZone:      string(inst.PeerZone),
-			GroupID:       inst.GroupID,
-			InterfaceName: inst.InterfaceName,
-			Endpoint:      inst.Endpoint,
-			ActualState:   inst.ActualState,
-		}
+		input.Instances[id] = inspect.BuildLinkInstanceFromRuntime(inst, inspect.LinkRouting{})
 	}
 	if reconcile != nil {
 		for _, desired := range reconcile.Desired {

@@ -136,6 +136,7 @@ Daemon
   - [x] Health HTTP schema 删除剩余无约束 `any`；BIRD HTTP 直接复用 `inspect.BabelDebugView` 并删除 `BirdResponse`，runtime resource owner/token 不再进入响应。
   - [x] 删除 Observer 中仅转发一次的 `observerRuntime`、`desiredByInstanceID` 和 `inspectHealthInstances`；Health 唯一 join 点直接建立短生命周期索引。
   - [x] Observer 页面删除旧 `last_error` 字段读取和 Health 裸 sample/嵌套 sample 双形态 fallback，统一消费 canonical `last_failure {code,message}` 与 `HealthContextItem.health`。
+  - [x] Health runtime context 直接复用 secret-free `inspect.LinkInstance`；删除第二套 `HealthInstanceContextInput` 及其六字段投影。
 - [ ] CLI/control/HTTP 共用 canonical inspect DTO；CLI 不再从 HTTP DTO 反向转换，也不直接调用平台 Driver。
 - [ ] verified/common 允许离线读；GossipCheckpoint 离线必须标记 `last-known`；platform Observation 只允许在线读。
 - [ ] CLI 壳稳定后再迁入 `internal/photoncli`，不为了减少 `app/photon` 文件数先搬目录。

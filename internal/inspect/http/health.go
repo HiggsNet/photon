@@ -33,17 +33,8 @@ type HealthContextItem struct {
 
 type HealthContextInput struct {
 	View      inspect.HealthView
-	Instances map[string]HealthInstanceContextInput
+	Instances map[string]inspect.LinkInstance
 	Desired   map[string]inspect.DesiredLink
-}
-
-type HealthInstanceContextInput struct {
-	ID            string
-	PeerZone      string
-	GroupID       string
-	InterfaceName string
-	Endpoint      string
-	ActualState   string
 }
 
 func BuildHealthContext(input HealthContextInput) []HealthContextItem {
@@ -95,7 +86,7 @@ func BuildHealthContext(input HealthContextInput) []HealthContextItem {
 	return out
 }
 
-func buildHealthContextItem(sample inspect.HealthSample, target health.ProbeTarget, inst HealthInstanceContextInput, desired inspect.DesiredLink) HealthContextItem {
+func buildHealthContextItem(sample inspect.HealthSample, target health.ProbeTarget, inst inspect.LinkInstance, desired inspect.DesiredLink) HealthContextItem {
 	item := HealthContextItem{
 		Health:          sample,
 		GroupID:         target.GroupID,

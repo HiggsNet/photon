@@ -64,7 +64,7 @@ func TestBuildHealthContextMergesRuntimeContextAndMissingLinks(t *testing.T) {
 		View: inspect.HealthView{Samples: []inspect.HealthSample{{
 			InstanceID: "link-b", ProbeRole: "staged", InterfaceName: "health-if", State: "healthy",
 		}}},
-		Instances: map[string]HealthInstanceContextInput{
+		Instances: map[string]inspect.LinkInstance{
 			"link-a": {
 				ID:            "link-a",
 				PeerZone:      "node-a.catofes.",
@@ -121,7 +121,7 @@ func TestBuildHealthContextMergesRuntimeContextAndMissingLinks(t *testing.T) {
 
 func TestBuildHealthContextUsesCanonicalUnknownSample(t *testing.T) {
 	got := BuildHealthContext(HealthContextInput{
-		Instances: map[string]HealthInstanceContextInput{
+		Instances: map[string]inspect.LinkInstance{
 			"link-a": {ID: "link-a"},
 		},
 	})
