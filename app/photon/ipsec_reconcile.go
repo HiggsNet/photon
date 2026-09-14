@@ -769,9 +769,8 @@ func (d *DaemonService) xfrmLinkStateMatchReason(state ipsec.XFRMLinkState, spec
 	if state.FlagsKnown && !state.InterfaceUp {
 		return false, "interface_down"
 	}
-	// The policy backend uses lo, which doesn't carry the MULTICAST flag,
-	// so only the XFRM interface backend treats it as required.
-	if state.FlagsKnown && !state.Multicast && !d.policyXFRMBackend() {
+	// Shared attachments (policy backend on lo) never carry MULTICAST.
+	if state.FlagsKnown && !state.Multicast && !state.SharedAttachment {
 		return false, "missing_multicast"
 	}
 	if state.IPv6AddrGenModeKnown && !state.IPv6AddrGenDisabled {
@@ -792,16 +791,6 @@ func (d *DaemonService) xfrmLinkStateMatchReason(state ipsec.XFRMLinkState, spec
 		}
 	}
 	return false, "missing_address"
-}
-
-// policyXFRMBackend reports whether the daemon-side link matching must apply
-// the policy-device relaxations (no multicast flag on lo, accumulated
-// addresses on the shared device).
-func (d *DaemonService) policyXFRMBackend() bool {
-	if d == nil || d.Sync == nil || d.Sync.App == nil || d.Sync.App.Config == nil {
-		return false
-	}
-	return d.Sync.App.Config.IPsec.XFRMBackend == string(ipsec.XFRMBackendPolicy)
 }
 
 func xfrmLinkObservationLogFields(phase, instanceID, runtime string, spec ipsec.TransportLinkSpec, state ipsec.XFRMLinkState, matches bool, reason string) map[string]any {

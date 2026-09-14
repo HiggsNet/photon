@@ -2,6 +2,18 @@
 
 设计文档见 [docs/design.md](docs/design.md)。本文件只保留可执行任务。
 
+## 当前执行：xfrm policy 收口到 XFRMDriver
+
+目标：policy 不再把 `lo` 泄漏进 spec/instance；附着点（地址、路由、inspect）收进 XFRMDriver。Create/Adopt/Repair/Staged 走同一条 Ensure。daemon 不再读 `xfrm_backend`。决策见 `docs/wsl2-action-plan-tmp.md`。
+
+- [x] planner/rotate 保持 InterfaceName=`phx*`；owner 能校验
+- [x] policy Ensure 装 underlay 路由并返回错误；Assign 落 lo 不剪枝；Delete 不删 lo
+- [x] Inspect/匹配看 lo（SharedAttachment），不要求 MULTICAST；删除 daemon `policyXFRMBackend()`
+- [x] Adopt 走 Ensure；删除 `XFRMPeerRouteInstaller`（Staged 已走 EnsureInterface）
+- [x] 更新 `docs/wsl2-xfrm-backend.md`；duplicate_gc 去掉 VTI 注释
+- [x] `go test ./pkg/transport/ipsec` 绿灯；`app/photon` Linux 编译通过（本机 Windows 无法跑 daemon 测试）
+- [x] 第 3 步：firewall 叙事解绑（planner 注释 + `docs/new/firewall.md` §4.3；规则未改）
+
 ## 已完成里程碑归档
 
 完整历史清单已拆到 [docs/roadmap-archive.md](docs/roadmap-archive.md)，主 TODO 只保留当前执行队列和后续计划。

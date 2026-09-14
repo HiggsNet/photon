@@ -420,3 +420,47 @@ func TestApplyReconcileActionPrepareRotateResponderDoesNotInitiate(t *testing.T)
 		t.Fatalf("responder initiated = %+v, want none", ipsecDrv.Initiated)
 	}
 }
+
+func TestApplyReconcileActionAdoptEnsuresAttachmentWithoutInitiating(t *testing.T) {
+	spec := TransportLinkSpec{
+		LocalZone:       "node-a.catofes.",
+		PeerZone:        "node-b.catofes.",
+		OverlayID:       "ipsec-main",
+		Provider:        ProviderStrongSwan,
+		TransportID:     "ipsec-main-ab",
+		InterfaceName:   "phx1",
+		XFRMIfID:        77,
+		LocalTunnelAddr: netip.MustParseAddr("10.99.0.1"),
+		PeerTunnelAddr:  netip.MustParseAddr("10.99.0.2"),
+		ContactPoints: []ContactPoint{{
+			Address:  "198.51.100.20",
+			Family:   FamilyIPv4,
+			IKEPort:  DefaultIKEPort,
+			NATTPort: DefaultNATTPort,
+		}},
+	}
+	ipsecDrv := &DryRunDriver{}
+	xfrmDrv := &DryRunDriver{}
+	plan, err := ApplyReconcileAction(context.Background(), ipsecDrv, xfrmDrv, ReconcileAction{
+		Action: ReconcileActionAdopt,
+		Spec:   &spec,
+	}, NetNSSpec{Kind: NetNSHost})
+	if err != nil {
+		t.Fatalf("ApplyReconcileAction: %v", err)
+	}
+	if len(ipsecDrv.Connections) != 0 || len(ipsecDrv.Initiated) != 0 {
+		t.Fatalf("adopt should not load or initiate, connections=%+v initiated=%+v", ipsecDrv.Connections, ipsecDrv.Initiated)
+	}
+	if len(xfrmDrv.Interfaces) != 1 || xfrmDrv.Interfaces[0].InterfaceName != spec.InterfaceName {
+		t.Fatalf("adopt should EnsureInterface, interfaces=%+v", xfrmDrv.Interfaces)
+	}
+	hasEnsure := false
+	for _, op := range plan.Operations {
+		if op.Action == "ensure_interface" {
+			hasEnsure = true
+		}
+	}
+	if !hasEnsure {
+		t.Fatalf("adopt plan missing ensure_interface: %+v", plan.Operations)
+	}
+}

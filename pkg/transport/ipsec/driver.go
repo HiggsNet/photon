@@ -107,13 +107,6 @@ type XFRMExtraAddressAssigner interface {
 	AssignExtraAddress(context.Context, TransportLinkSpec, string) error
 }
 
-// XFRMPeerRouteInstaller is an optional capability for XFRM drivers that
-// install a kernel route for the peer's tunnel address. Without this route,
-// the kernel cannot forward traffic to the peer through the tunnel.
-type XFRMPeerRouteInstaller interface {
-	EnsurePeerRoute(context.Context, TransportLinkSpec) error
-}
-
 type XFRMLinkState struct {
 	NetNS                    NetNSSpec
 	NamespaceExists          bool
@@ -128,6 +121,10 @@ type XFRMLinkState struct {
 	InterfaceForwardingKnown bool
 	InterfaceForwarding      bool
 	Addresses                []netip.Prefix
+	// SharedAttachment is true when the local L3 attachment is a shared
+	// device (loopback for the policy backend) rather than a per-link
+	// XFRM interface. Matching then requires UP, not MULTICAST.
+	SharedAttachment bool
 }
 
 type XFRMLinkInspector interface {
@@ -320,14 +317,6 @@ func ApplyTransportLink(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriver,
 	if spec.LocalTunnelAddr.IsValid() {
 		if err := xfrm.AssignAddress(ctx, spec, tunnelAddressPrefix(spec.LocalTunnelAddr)); err != nil {
 			return plan, fmt.Errorf("assign address: %w", err)
-		}
-	}
-	// Install a kernel route for the peer's tunnel address so the kernel can
-	// forward traffic to the peer through the tunnel. Without this route,
-	// the tunnel is up but traffic has no path to reach the peer.
-	if installer, ok := xfrm.(XFRMPeerRouteInstaller); ok {
-		if err := installer.EnsurePeerRoute(ctx, spec); err != nil {
-			return plan, fmt.Errorf("ensure peer route: %w", err)
 		}
 	}
 	return plan, nil

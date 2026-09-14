@@ -79,8 +79,8 @@ func duplicateSACandidates(spec TransportLinkSpec, sas []SAState) []SAState {
 		if !sa.Established || sa.Name != spec.TransportID || !duplicateChildSAMatch(sa.ChildSA, child) {
 			continue
 		}
-		// VTI-mode SAs never carry an if_id (they bind via marks), so only
-		// reject an SA whose non-zero if_id disagrees with the spec.
+		// Policy-backend SAs have no if_id (bound by traffic selectors).
+		// Only reject an SA whose non-zero if_id disagrees with the spec.
 		if spec.XFRMIfID != 0 && sa.XFRMIfID != 0 && sa.XFRMIfID != spec.XFRMIfID {
 			continue
 		}

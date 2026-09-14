@@ -178,10 +178,11 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 		}
 	}
 
-	// 0. xfrm-decapsulated traffic from mesh-authorized sources may have
-	// invalid conntrack state (the gateway didn't see the outbound direction).
-	// Accept it before the invalid drop rule. Without this, TCP/UDP from
-	// policy-based xfrm clients is silently dropped.
+	// 0. xfrm-decapsulated overlay input from mesh-authorized sources may
+	// carry ct state invalid: the gateway often never saw the outbound
+	// direction (asymmetric tunnel). Accept it before the generic invalid
+	// drop. This is overlay INPUT semantics, not an xfrm_backend or WSL2
+	// switch; FORWARD already has a scoped transit equivalent.
 	if len(prefixes.MeshAuthorizedV4) > 0 || len(prefixes.MeshAuthorizedV6) > 0 {
 		allMesh := append(append([]netip.Prefix{}, prefixes.MeshAuthorizedV4...), prefixes.MeshAuthorizedV6...)
 		addRule(ChainInput, Rule{

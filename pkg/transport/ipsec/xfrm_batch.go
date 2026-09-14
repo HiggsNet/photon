@@ -147,9 +147,10 @@ func (d SystemXFRMDriver) inspectLinksInNamespace(ctx context.Context, netns Net
 	interfaceNames := make([]string, 0, len(specs))
 	seenInterfaces := make(map[string]bool, len(specs))
 	for _, spec := range specs {
-		if _, exists := linksByName[spec.InterfaceName]; exists && !seenInterfaces[spec.InterfaceName] {
-			seenInterfaces[spec.InterfaceName] = true
-			interfaceNames = append(interfaceNames, spec.InterfaceName)
+		observed := d.observedInterfaceName(spec.InterfaceName)
+		if _, exists := linksByName[observed]; exists && !seenInterfaces[observed] {
+			seenInterfaces[observed] = true
+			interfaceNames = append(interfaceNames, observed)
 		}
 	}
 	sort.Strings(interfaceNames)
@@ -166,8 +167,10 @@ func (d SystemXFRMDriver) inspectLinksInNamespace(ctx context.Context, netns Net
 			NamespaceForwardingKnown: true,
 			NamespaceForwarding:      namespaceForwarding,
 		}
-		link, exists := linksByName[spec.InterfaceName]
+		observed := d.observedInterfaceName(spec.InterfaceName)
+		link, exists := linksByName[observed]
 		state.InterfaceExists = exists
+		state.SharedAttachment = d.policyBackend()
 		if exists {
 			state.FlagsKnown = link.Flags != nil
 			for _, flag := range link.Flags {
@@ -181,8 +184,8 @@ func (d SystemXFRMDriver) inspectLinksInNamespace(ctx context.Context, netns Net
 			state.IPv6AddrGenModeKnown = link.IPv6AddrGenMode != ""
 			state.IPv6AddrGenDisabled = link.IPv6AddrGenMode == "none"
 			state.InterfaceForwardingKnown = true
-			state.InterfaceForwarding = interfaceForwarding[spec.InterfaceName]
-			state.Addresses = append([]netip.Prefix(nil), addressesByName[spec.InterfaceName]...)
+			state.InterfaceForwarding = interfaceForwarding[observed]
+			state.Addresses = append([]netip.Prefix(nil), addressesByName[observed]...)
 		}
 		states[i] = state
 	}
@@ -274,14 +277,15 @@ func (d SystemXFRMDriver) EnsureObservedInterfaces(ctx context.Context, observed
 				}
 				continue
 			}
+			if state.SharedAttachment {
+				continue
+			}
 			if !state.IPv6AddrGenModeKnown || !state.IPv6AddrGenDisabled {
 				if err := d.disableIPv6AddrGen(ctx, netns, item.Spec.InterfaceName); err != nil {
 					return err
 				}
 			}
-			// Policy mode routes through lo, which has no MULTICAST flag;
-			// repairing it would churn every reconcile cycle.
-			if !d.policyBackend() && (!state.FlagsKnown || !state.Multicast) {
+			if !state.FlagsKnown || !state.Multicast {
 				if err := d.enableMulticast(ctx, netns, item.Spec.InterfaceName); err != nil {
 					return err
 				}

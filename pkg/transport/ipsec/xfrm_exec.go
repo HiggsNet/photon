@@ -85,10 +85,9 @@ func (d SystemXFRMDriver) EnsureInterface(ctx context.Context, spec TransportLin
 		return err
 	}
 	if d.policyBackend() {
-		// Policy-based xfrm: no virtual device needed. charon installs xfrm
-		// policies via VICI. The local tunnel address is assigned to lo via
-		// AssignAddress. Install a route for the peer tunnel address so the
-		// kernel sends matching packets through the xfrm framework.
+		// Policy-based xfrm: no virtual device. The tunnel address is
+		// assigned to lo via AssignAddress. Peer routing is an Ensure
+		// invariant so Adopt/Repair/Staged pick it up without a side interface.
 		return d.ensurePolicyRoute(ctx, netns, spec)
 	}
 	if d.linkExists(ctx, netns, spec.InterfaceName) {
@@ -125,7 +124,22 @@ func (d SystemXFRMDriver) EnsureInterface(ctx context.Context, spec TransportLin
 			return err
 		}
 	}
-	return d.enableInterfaceForwarding(ctx, netns, spec.InterfaceName)
+	if err := d.enableInterfaceForwarding(ctx, netns, spec.InterfaceName); err != nil {
+		return err
+	}
+	return d.ensureInterfacePeerRoute(ctx, netns, spec)
+}
+
+func (d SystemXFRMDriver) ensureInterfacePeerRoute(ctx context.Context, netns NetNSSpec, spec TransportLinkSpec) error {
+	if !spec.PeerTunnelAddr.IsValid() || spec.InterfaceName == "" {
+		return nil
+	}
+	bits := 32
+	if spec.PeerTunnelAddr.Is6() {
+		bits = 128
+	}
+	prefix := netip.PrefixFrom(spec.PeerTunnelAddr, bits)
+	return d.runInNetNS(ctx, netns, "route", "replace", prefix.String(), "dev", spec.InterfaceName)
 }
 
 func (d SystemXFRMDriver) InspectLink(ctx context.Context, spec TransportLinkSpec) (XFRMLinkState, error) {
@@ -154,7 +168,8 @@ func (d SystemXFRMDriver) InspectLink(ctx context.Context, spec TransportLinkSpe
 	if !state.NamespaceExists {
 		return state, nil
 	}
-	link, err := d.inspectInterfaceLink(ctx, netns, spec.InterfaceName)
+	observedName := d.observedInterfaceName(spec.InterfaceName)
+	link, err := d.inspectInterfaceLink(ctx, netns, observedName)
 	if err != nil {
 		return XFRMLinkState{}, err
 	}
@@ -162,13 +177,21 @@ func (d SystemXFRMDriver) InspectLink(ctx context.Context, spec TransportLinkSpe
 	state.FlagsKnown = link.flagsKnown
 	state.InterfaceUp = link.up
 	state.Multicast = link.multicast
+	state.SharedAttachment = d.policyBackend()
 	if state.InterfaceExists {
-		state.Addresses, err = d.inspectInterfaceAddresses(ctx, netns, spec.InterfaceName)
+		state.Addresses, err = d.inspectInterfaceAddresses(ctx, netns, observedName)
 		if err != nil {
 			return XFRMLinkState{}, err
 		}
 	}
 	return state, nil
+}
+
+func (d SystemXFRMDriver) observedInterfaceName(name string) string {
+	if d.policyBackend() {
+		return "lo"
+	}
+	return name
 }
 
 func (d SystemXFRMDriver) FilterSAsWithMissingLinks(ctx context.Context, desired []TransportLinkSpec, sas []SAState) ([]SAState, map[string]TransportLinkSpec, error) {
@@ -228,7 +251,7 @@ func (d SystemXFRMDriver) linkStateMatchesSpec(state XFRMLinkState, spec Transpo
 	if state.FlagsKnown && !state.InterfaceUp {
 		return false
 	}
-	if !d.policyBackend() && state.FlagsKnown && !state.Multicast {
+	if !state.SharedAttachment && state.FlagsKnown && !state.Multicast {
 		return false
 	}
 	if !spec.LocalTunnelAddr.IsValid() {

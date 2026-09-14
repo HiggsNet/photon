@@ -920,3 +920,49 @@ func TestPlanTransportLinksDryRunDNSRefreshUpdatesContactPoint(t *testing.T) {
 		t.Fatalf("DNS refresh changed stable link identity: %+v vs %+v", first.Desired[0], second.Desired[0])
 	}
 }
+
+func TestPlanTransportLinksKeepsPhotonInterfaceNameForPolicyBackend(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
+		ID: "b-public", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	group := LinkGroupSpec{
+		ID:                "ipsec-main",
+		XFRMBackend:       XFRMBackendPolicy,
+		TunnelAddressPool: netip.MustParsePrefix("10.44.0.0/29"),
+	}
+	setOverlayIntentTunnelAddress(t, ns, "node-b.catofes.", group.normalizedTunnelAddress(), now)
+	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	if len(plan.Desired) != 1 {
+		t.Fatalf("desired len = %d, skips = %+v", len(plan.Desired), plan.Skipped)
+	}
+	spec := plan.Desired[0]
+	wantIF := StableInterfaceName(spec.XFRMIfID)
+	if spec.InterfaceName != wantIF {
+		t.Fatalf("policy InterfaceName = %q, want photon resource name %q", spec.InterfaceName, wantIF)
+	}
+	inst := NewLinkInstance(spec, LinkStateUp, now)
+	if err := inst.Owner.Validate(inst); err != nil {
+		t.Fatalf("policy instance owner should validate with phx name: %v (if=%q)", err, inst.InterfaceName)
+	}
+	rotated := RuntimeSpecForPortGenerationMust(t, spec, group, 2)
+	if rotated.InterfaceName != StableInterfaceName(rotated.XFRMIfID) {
+		t.Fatalf("rotated policy InterfaceName = %q, want %q", rotated.InterfaceName, StableInterfaceName(rotated.XFRMIfID))
+	}
+}
+
+func RuntimeSpecForPortGenerationMust(t *testing.T, base TransportLinkSpec, group LinkGroupSpec, generation uint64) TransportLinkSpec {
+	t.Helper()
+	spec, err := RuntimeSpecForPortGeneration(base, group, generation)
+	if err != nil {
+		t.Fatalf("RuntimeSpecForPortGeneration: %v", err)
+	}
+	return spec
+}

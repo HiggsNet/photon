@@ -14,16 +14,15 @@ Photon 原生数据面使用 XFRM interface（`phx*` 设备，child SA 以 `if_i
 
 ## 2. policy 后端如何工作
 
-无虚拟设备，三个要素：
+无虚拟设备，三个要素，全部收在 `XFRMDriver` 内部（调用方看到的仍是 `phx*` 资源名）：
 
-1. **隧道地址挂 lo**。planner 把 link 的 `InterfaceName` 覆盖为 `lo`
-   （`applyPolicyDeviceOverride`），`AssignAddress` 将隧道地址加到 lo；
-   地址随链接累积、不剪枝（lo 是共享设备）。
+1. **隧道地址挂 lo**。`AssignAddress` 把地址加到 lo，随链接累积、不剪枝。
+   `TransportLinkSpec.InterfaceName` 仍是 `phx<id>`，供 owner / rotate / 诊断使用。
 2. **child SA 摘除 if_id 绑定**（`applyPolicyChildSA`）。charon 依据流量选择器
    安装 xfrm 策略与状态，出向包进入 xfrm 框架只由路由决策驱动。
-3. **对端路由**（`EnsurePeerRoute`）。内核需要知道"到对端隧道地址走哪个出口"：
-   policy 后端沿 underlay 路由发现出口（先 `ip route get <对端underlay>`，
-   失败回退默认路由），为 `peerTunnelAddr/32` 安装 `src=本端隧道地址` 的路由。
+3. **对端路由**是 `EnsureInterface` 的不变量。policy 沿 underlay 发现出口
+   （先 `ip route get <对端underlay>`，失败回退默认路由），为 `peerTunnelAddr/32`
+   安装 `src=本端隧道地址` 的路由。Create / Adopt / Repair / Staged 都走 Ensure，
    缺失该路由时隧道能建立但流量无路径——这是最常见的部署故障点。
 
 配套约束：
@@ -31,6 +30,8 @@ Photon 原生数据面使用 XFRM interface（`phx*` 设备，child SA 以 `if_i
 - charon 必须 `process_route = no`。否则 charon 对已路由子网安装 bypass 策略，
   mesh 流量绕过隧道直连，表现为"隧道 up 但不通"。
 - charon 的 xfrm 策略安装在 photon 的 netns 内（`netns.default.kind: host` 时即宿主）。
+- gateway overlay INPUT 需要放行解封装后 ct=invalid 的 mesh 源（规则已在
+  firewall planner，与 `xfrm_backend` 无关；见 `docs/new/firewall.md` §4.3）。
 
 ## 3. 为什么不是 VTI（含 shared VTI）
 

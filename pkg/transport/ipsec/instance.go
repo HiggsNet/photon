@@ -1475,7 +1475,23 @@ func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDrive
 			return plan, fmt.Errorf("terminate duplicate SA #%d: %w", action.SAUniqueID, err)
 		}
 		return plan, nil
-	case ReconcileActionAdopt, ReconcileActionNoop:
+	case ReconcileActionAdopt:
+		if action.Spec == nil {
+			return ApplyPlan{}, nil
+		}
+		plan := ApplyPlan{}
+		plan.add("ensure_interface", action.Spec.InterfaceName, fmt.Sprintf("if_id=%d netns=%s", action.Spec.XFRMIfID, action.Spec.NetNS))
+		if err := xfrm.EnsureInterface(ctx, *action.Spec); err != nil {
+			return plan, fmt.Errorf("ensure interface: %w", err)
+		}
+		if action.Spec.LocalTunnelAddr.IsValid() {
+			plan.add("assign_address", action.Spec.InterfaceName, FormatScopedTunnelAddress(action.Spec.LocalTunnelAddr, action.Spec.InterfaceName, action.Spec.NetNS))
+			if err := xfrm.AssignAddress(ctx, *action.Spec, tunnelAddressPrefix(action.Spec.LocalTunnelAddr)); err != nil {
+				return plan, fmt.Errorf("assign address: %w", err)
+			}
+		}
+		return plan, nil
+	case ReconcileActionNoop:
 		return ApplyPlan{}, nil
 	default:
 		return ApplyPlan{}, fmt.Errorf("unsupported reconcile action %q", action.Action)

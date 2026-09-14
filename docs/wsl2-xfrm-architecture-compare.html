@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>XFRM policy 后端：现有架构 vs 推荐架构</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --bg-elev: #1a2332;
+      --bg-card: #151d28;
+      --line: #2a3545;
+      --text: #e7ecf3;
+      --muted: #8b9bb4;
+      --now: #e8a54b;
+      --now-dim: rgba(232, 165, 75, 0.16);
+      --now-line: #c4842e;
+      --rec: #5ec4a0;
+      --rec-dim: rgba(94, 196, 160, 0.14);
+      --rec-line: #3a9a7a;
+      --leak: #e06c75;
+      --leak-dim: rgba(224, 108, 117, 0.18);
+      --ok: #7dcea0;
+      --warn: #f0c674;
+      --info: #7aa2f7;
+      --mono: "IBM Plex Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+      --sans: "IBM Plex Sans", "Noto Sans SC", "Segoe UI", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: var(--sans); }
+    body { min-height: 100vh; }
+    a { color: var(--info); }
+    header {
+      padding: 20px 24px 12px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, #18202c 0%, var(--bg) 100%);
+      position: sticky; top: 0; z-index: 5;
+    }
+    h1 { font-size: 18px; font-weight: 650; margin: 0 0 6px; letter-spacing: 0.01em; }
+    .lede { color: var(--muted); font-size: 13px; line-height: 1.55; max-width: 920px; }
+    .toolbar {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+      margin-top: 14px;
+    }
+    .seg {
+      display: inline-flex; background: var(--bg-elev); border: 1px solid var(--line);
+      border-radius: 8px; overflow: hidden;
+    }
+    .seg button {
+      appearance: none; border: 0; background: transparent; color: var(--muted);
+      padding: 7px 12px; font: 12.5px/1 var(--sans); cursor: pointer;
+    }
+    .seg button[aria-pressed="true"] {
+      background: #243044; color: var(--text); font-weight: 600;
+    }
+    .hint { font-size: 12px; color: var(--muted); }
+    main { padding: 18px 20px 48px; }
+    .grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start;
+    }
+    @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
+    .col { min-width: 0; }
+    .col-head {
+      display: flex; align-items: baseline; justify-content: space-between;
+      margin-bottom: 10px; padding: 0 2px;
+    }
+    .badge {
+      font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+      padding: 3px 8px; border-radius: 999px; border: 1px solid;
+    }
+    .badge.now { color: var(--now); border-color: var(--now-line); background: var(--now-dim); }
+    .badge.rec { color: var(--rec); border-color: var(--rec-line); background: var(--rec-dim); }
+    .col h2 { font-size: 15px; margin: 0; }
+    .stage {
+      background: var(--bg-card); border: 1px solid var(--line); border-radius: 12px;
+      padding: 14px 12px 12px; overflow: auto;
+    }
+    svg.arch { width: 100%; height: auto; display: block; font-family: var(--sans); }
+    .node { cursor: pointer; }
+    .node rect, .node path.box { transition: filter .15s, stroke-width .15s; }
+    .node:hover rect, .node:focus-visible rect,
+    .node:hover path.box, .node:focus-visible path.box { filter: brightness(1.18); }
+    .node:focus { outline: none; }
+    .muted-node { opacity: 0.55; }
+    .callout {
+      margin-top: 12px; border: 1px solid var(--line); border-radius: 10px;
+      background: #121924; padding: 12px 14px; min-height: 148px;
+    }
+    .callout h3 { margin: 0 0 6px; font-size: 13.5px; }
+    .callout p, .callout li { font-size: 13px; line-height: 1.55; color: var(--text); }
+    .callout p { margin: 0 0 8px; color: var(--muted); }
+    .callout ul { margin: 0; padding-left: 18px; }
+    .callout code, .mono { font-family: var(--mono); font-size: 12px; }
+    .tag {
+      display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: .06em;
+      text-transform: uppercase; padding: 2px 6px; border-radius: 4px; margin-right: 6px;
+      vertical-align: 1px;
+    }
+    .tag.leak { background: var(--leak-dim); color: var(--leak); }
+    .tag.hide { background: var(--rec-dim); color: var(--rec); }
+    .tag.keep { background: rgba(122,162,247,.16); color: var(--info); }
+    .legend {
+      display: flex; flex-wrap: wrap; gap: 12px 18px; margin: 8px 0 16px;
+      font-size: 12px; color: var(--muted);
+    }
+    .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px;
+      margin-right: 6px; vertical-align: -2px; border: 1px solid rgba(255,255,255,.12); }
+    section.more { margin-top: 22px; }
+    section.more h2 { font-size: 14px; margin: 0 0 10px; }
+    table.diff {
+      width: 100%; border-collapse: collapse; font-size: 13px;
+      background: var(--bg-card); border: 1px solid var(--line); border-radius: 10px;
+      overflow: hidden;
+    }
+    table.diff th, table.diff td {
+      text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line);
+      vertical-align: top; line-height: 1.45;
+    }
+    table.diff th { font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+      color: var(--muted); font-weight: 650; background: #121924; }
+    table.diff tr:last-child td { border-bottom: 0; }
+    table.diff tr[data-row] { cursor: pointer; }
+    table.diff tr[data-row]:hover td { background: #1b2533; }
+    table.diff tr.active td { background: #223044; }
+    .path { font-family: var(--mono); font-size: 11.5px; color: var(--info); }
+    footer { color: var(--muted); font-size: 12px; padding: 8px 4px 0; }
+    .flow {
+      display: none; margin-top: 16px; background: var(--bg-card);
+      border: 1px solid var(--line); border-radius: 12px; padding: 16px;
+    }
+    .flow.visible { display: block; }
+    pre.tree {
+      margin: 0; font-family: var(--mono); font-size: 12px; line-height: 1.45;
+      color: var(--text); overflow: auto; white-space: pre;
+    }
+    .k-leak { color: var(--leak); }
+    .k-hide { color: var(--rec); }
+    .k-dim { color: var(--muted); }
+    .tabs-note { font-size: 12.5px; color: var(--muted); margin: 0 0 10px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>XFRM policy 后端：现有架构 vs 推荐架构</h1>
+    <p class="lede">
+      方向没问题：<code>interface | policy</code> 是真变异。问题是 seam 放错了——
+      现在用 <code>xfrm_backend</code> flag 贯穿 8 层，推荐把它收进既有的
+      <code>XFRMDriver</code> adapter。点模块看泄漏点，或切到调用树 / 对照表。
+    </p>
+    <div class="toolbar">
+      <div class="seg" role="tablist" aria-label="视图">
+        <button type="button" id="tab-arch" aria-pressed="true">架构对照</button>
+        <button type="button" id="tab-flow">调用树</button>
+        <button type="button" id="tab-table">差异表</button>
+      </div>
+      <span class="hint">点击色块查看该层知道什么、不该知道什么</span>
+    </div>
+  </header>
+
+  <main>
+    <div class="legend">
+      <span><i class="sw" style="background:#3d4f6a"></i>共享、不该变</span>
+      <span><i class="sw" style="background:#8a5a20"></i>现有：flag 泄漏</span>
+      <span><i class="sw" style="background:#1f6b52"></i>推荐：收进 adapter</span>
+      <span><i class="sw" style="background:#6b3038"></i>症状 / 裂缝</span>
+      <span><i class="sw" style="background:#2a3a55"></i>构造期一次选择</span>
+    </div>
+
+    <div id="view-arch" class="grid">
+      <div class="col">
+        <div class="col-head">
+          <h2>现在：flag 贯穿全栈</h2>
+          <span class="badge now">as shipped</span>
+        </div>
+        <div class="stage">
+          <svg class="arch" viewBox="0 0 420 560" role="img" aria-label="现有架构">
+            <defs>
+              <filter id="glow-now" x="-20%" y="-20%" width="140%" height="140%">
+                <feDropShadow dx="0" dy="0" stdDeviation="2.2" flood-color="#e8a54b" flood-opacity=".45"/>
+              </filter>
+            </defs>
+            <!-- shared -->
+            <g class="node muted-node" data-id="ike" tabindex="0">
+              <rect x="40" y="16" width="340" height="44" rx="8" fill="#243044" stroke="#3d4f6a"/>
+              <text x="210" y="34" text-anchor="middle" fill="#c5d0e0" font-size="13" font-weight="650">IKEv2 / charon / VICI</text>
+              <text x="210" y="50" text-anchor="middle" fill="#8b9bb4" font-size="10">信令面不变 · 两端仍可混部</text>
+            </g>
+            <line x1="210" y1="60" x2="210" y2="78" stroke="#3d4f6a"/>
+
+            <g class="node" data-id="yaml" tabindex="0">
+              <rect x="40" y="78" width="340" height="44" rx="8" fill="#8a5a20" stroke="#e8a54b" filter="url(#glow-now)"/>
+              <text x="210" y="96" text-anchor="middle" fill="#ffe9c4" font-size="13" font-weight="650">config.yaml</text>
+              <text x="210" y="112" text-anchor="middle" fill="#f3d7a5" font-size="10">xfrm_backend: policy  +  netns.kind: host</text>
+            </g>
+            <line x1="210" y1="122" x2="210" y2="140" stroke="#c4842e"/>
+
+            <!-- fan-out -->
+            <text x="210" y="154" text-anchor="middle" fill="#e8a54b" font-size="10" font-weight="700">同一字符串复制到 ↓</text>
+
+            <g class="node" data-id="group" tabindex="0">
+              <rect x="16" y="166" width="188" height="52" rx="8" fill="#8a5a20" stroke="#e8a54b"/>
+              <text x="110" y="186" text-anchor="middle" fill="#ffe9c4" font-size="12" font-weight="650">LinkGroupSpec</text>
+              <text x="110" y="204" text-anchor="middle" fill="#f3d7a5" font-size="10">XFRMBackend → InterfaceName="lo"</text>
+            </g>
+            <g class="node" data-id="sswan" tabindex="0">
+              <rect x="216" y="166" width="188" height="52" rx="8" fill="#8a5a20" stroke="#e8a54b"/>
+              <text x="310" y="186" text-anchor="middle" fill="#ffe9c4" font-size="12" font-weight="650">StrongSwanDriver</text>
+              <text x="310" y="204" text-anchor="middle" fill="#f3d7a5" font-size="10">load-conn 时删 if_id</text>
+            </g>
+            <g class="node" data-id="xfrm" tabindex="0">
+              <rect x="16" y="232" width="188" height="52" rx="8" fill="#8a5a20" stroke="#e8a54b"/>
+              <text x="110" y="252" text-anchor="middle" fill="#ffe9c4" font-size="12" font-weight="650">SystemXFRMDriver</text>
+              <text x="110" y="270" text-anchor="middle" fill="#f3d7a5" font-size="10">Backend 字段 · if policy {…}</text>
+            </g>
+            <g class="node" data-id="daemon" tabindex="0">
+              <rect x="216" y="232" width="188" height="52" rx="8" fill="#8a5a20" stroke="#e8a54b"/>
+              <text x="310" y="252" text-anchor="middle" fill="#ffe9c4" font-size="12" font-weight="650">DaemonService</text>
+              <text x="310" y="270" text-anchor="middle" fill="#f3d7a5" font-size="10">policyXFRMBackend() 再读 config</text>
+            </g>
+
+            <line x1="110" y1="218" x2="110" y2="232" stroke="#c4842e"/>
+            <line x1="310" y1="218" x2="310" y2="232" stroke="#c4842e"/>
+            <line x1="110" y1="284" x2="110" y2="300" stroke="#c4842e"/>
+            <line x1="310" y1="284" x2="310" y2="300" stroke="#c4842e"/>
+
+            <!-- symptoms -->
+            <g class="node" data-id="owner" tabindex="0">
+              <rect x="16" y="300" width="188" height="46" rx="8" fill="#6b3038" stroke="#e06c75"/>
+              <text x="110" y="320" text-anchor="middle" fill="#ffd0d4" font-size="12" font-weight="650">Owner.Validate</text>
+              <text x="110" y="336" text-anchor="middle" fill="#f5b4b9" font-size="10">lo 不以 phx 开头 → teardown 拒</text>
+            </g>
+            <g class="node" data-id="route" tabindex="0">
+              <rect x="216" y="300" width="188" height="46" rx="8" fill="#6b3038" stroke="#e06c75"/>
+              <text x="310" y="320" text-anchor="middle" fill="#ffd0d4" font-size="12" font-weight="650">XFRMPeerRouteInstaller</text>
+              <text x="310" y="336" text-anchor="middle" fill="#f5b4b9" font-size="10">Create 才装 · Adopt/staged 漏</text>
+            </g>
+            <g class="node" data-id="fw" tabindex="0">
+              <rect x="16" y="360" width="188" height="46" rx="8" fill="#6b3038" stroke="#e06c75"/>
+              <text x="110" y="380" text-anchor="middle" fill="#ffd0d4" font-size="12" font-weight="650">firewall overlay INPUT</text>
+              <text x="110" y="396" text-anchor="middle" fill="#f5b4b9" font-size="10">invalid accept 绑进 WSL2 提交</text>
+            </g>
+            <g class="node" data-id="bird" tabindex="0">
+              <rect x="216" y="360" width="188" height="46" rx="8" fill="#6b3038" stroke="#e06c75"/>
+              <text x="310" y="380" text-anchor="middle" fill="#ffd0d4" font-size="12" font-weight="650">BIRD / rotateSpec</text>
+              <text x="310" y="396" text-anchor="middle" fill="#f5b4b9" font-size="10">仍认 phx* · rotate 打回设备名</text>
+            </g>
+
+            <line x1="110" y1="346" x2="110" y2="360" stroke="#e06c75"/>
+            <line x1="310" y1="346" x2="310" y2="360" stroke="#e06c75"/>
+            <line x1="210" y1="406" x2="210" y2="424" stroke="#3d4f6a"/>
+
+            <g class="node muted-node" data-id="kernel" tabindex="0">
+              <rect x="40" y="424" width="340" height="52" rx="8" fill="#243044" stroke="#3d4f6a"/>
+              <text x="210" y="444" text-anchor="middle" fill="#c5d0e0" font-size="13" font-weight="650">内核数据面</text>
+              <text x="210" y="462" text-anchor="middle" fill="#8b9bb4" font-size="10">lo 地址 + xfrm policy/state + underlay 路由</text>
+            </g>
+            <text x="210" y="500" text-anchor="middle" fill="#8b9bb4" font-size="11">调用方必须知道：lo · 无 multicast · 不剪枝 · 无 if_id · 要装路由</text>
+            <text x="210" y="518" text-anchor="middle" fill="#e06c75" font-size="11">浅模块：接口几乎等于实现</text>
+          </svg>
+        </div>
+        <div class="callout" id="now-detail">
+          <h3><span class="tag leak">泄漏</span>点一个色块</h3>
+          <p>现有实现把「有没有虚拟设备」当成配置旋钮，从 YAML 一路传到 daemon / owner / 路由。每个方块都知道 policy 的细节。</p>
+        </div>
+      </div>
+
+      <div class="col">
+        <div class="col-head">
+          <h2>推荐：一个 adapter，构造期选择</h2>
+          <span class="badge rec">proposed</span>
+        </div>
+        <div class="stage">
+          <svg class="arch" viewBox="0 0 420 560" role="img" aria-label="推荐架构">
+            <g class="node muted-node" data-id="ike" tabindex="0">
+              <rect x="40" y="16" width="340" height="44" rx="8" fill="#243044" stroke="#3d4f6a"/>
+              <text x="210" y="34" text-anchor="middle" fill="#c5d0e0" font-size="13" font-weight="650">IKEv2 / charon / VICI</text>
+              <text x="210" y="50" text-anchor="middle" fill="#8b9bb4" font-size="10">仍然共享 · 不出现 xfrm_backend</text>
+            </g>
+            <line x1="210" y1="60" x2="210" y2="78" stroke="#3d4f6a"/>
+
+            <g class="node" data-id="yaml-rec" tabindex="0">
+              <rect x="40" y="78" width="340" height="44" rx="8" fill="#2a3a55" stroke="#7aa2f7"/>
+              <text x="210" y="96" text-anchor="middle" fill="#d7e4ff" font-size="13" font-weight="650">config.yaml（只在构造期读一次）</text>
+              <text x="210" y="112" text-anchor="middle" fill="#9db4dc" font-size="10">xfrm_backend 选择 adapter · netns 正交</text>
+            </g>
+            <line x1="210" y1="122" x2="210" y2="148" stroke="#7aa2f7"/>
+
+            <g class="node" data-id="factory" tabindex="0">
+              <rect x="70" y="148" width="280" height="40" rx="8" fill="#2a3a55" stroke="#7aa2f7"/>
+              <text x="210" y="173" text-anchor="middle" fill="#d7e4ff" font-size="13" font-weight="650">newXFRMDriverForBackend()  →  XFRMDriver</text>
+            </g>
+
+            <!-- two adapters -->
+            <line x1="140" y1="188" x2="140" y2="210" stroke="#5ec4a0"/>
+            <line x1="280" y1="188" x2="280" y2="210" stroke="#5ec4a0"/>
+            <g class="node" data-id="if-ad" tabindex="0">
+              <rect x="28" y="210" width="168" height="70" rx="8" fill="#1f6b52" stroke="#5ec4a0"/>
+              <text x="112" y="232" text-anchor="middle" fill="#d6fff0" font-size="12" font-weight="650">InterfaceXFRM</text>
+              <text x="112" y="250" text-anchor="middle" fill="#b6ead8" font-size="10">phx* + if_id</text>
+              <text x="112" y="266" text-anchor="middle" fill="#b6ead8" font-size="10">地址在设备 · 路由 dev phx*</text>
+            </g>
+            <g class="node" data-id="pol-ad" tabindex="0">
+              <rect x="224" y="210" width="168" height="70" rx="8" fill="#1f6b52" stroke="#5ec4a0"/>
+              <text x="308" y="232" text-anchor="middle" fill="#d6fff0" font-size="12" font-weight="650">PolicyXFRM</text>
+              <text x="308" y="250" text-anchor="middle" fill="#b6ead8" font-size="10">无设备 · 地址挂 lo</text>
+              <text x="308" y="266" text-anchor="middle" fill="#b6ead8" font-size="10">Ensure 内装 underlay 路由</text>
+            </g>
+
+            <text x="210" y="300" text-anchor="middle" fill="#5ec4a0" font-size="10" font-weight="700">同一接口 · 调用方不再分支</text>
+            <line x1="112" y1="280" x2="210" y2="314" stroke="#5ec4a0"/>
+            <line x1="308" y1="280" x2="210" y2="314" stroke="#5ec4a0"/>
+
+            <g class="node" data-id="iface" tabindex="0">
+              <rect x="50" y="314" width="320" height="64" rx="8" fill="#1f6b52" stroke="#5ec4a0"/>
+              <text x="210" y="336" text-anchor="middle" fill="#d6fff0" font-size="13" font-weight="650">XFRMDriver 接口</text>
+              <text x="210" y="354" text-anchor="middle" fill="#b6ead8" font-size="11">EnsureInterface / AssignAddress / InspectLink / DeleteInterface</text>
+              <text x="210" y="370" text-anchor="middle" fill="#b6ead8" font-size="10">语义：给这条 link 一个本地 L3 附着点</text>
+            </g>
+
+            <line x1="210" y1="378" x2="210" y2="396" stroke="#3d4f6a"/>
+
+            <g class="node muted-node" data-id="callers" tabindex="0">
+              <rect x="16" y="396" width="388" height="52" rx="8" fill="#243044" stroke="#3d4f6a"/>
+              <text x="210" y="416" text-anchor="middle" fill="#c5d0e0" font-size="12" font-weight="650">planner · instance · daemon · owner · BIRD</text>
+              <text x="210" y="434" text-anchor="middle" fill="#8b9bb4" font-size="10">InterfaceName 仍是 phx&lt;id&gt; 资源名 · 不知道 lo / multicast / if_id</text>
+            </g>
+
+            <line x1="210" y1="448" x2="210" y2="466" stroke="#3d4f6a"/>
+            <g class="node muted-node" data-id="kernel" tabindex="0">
+              <rect x="40" y="466" width="340" height="44" rx="8" fill="#243044" stroke="#3d4f6a"/>
+              <text x="210" y="492" text-anchor="middle" fill="#c5d0e0" font-size="13" font-weight="650">内核数据面（只被选中的 adapter 碰到）</text>
+            </g>
+            <text x="210" y="530" text-anchor="middle" fill="#5ec4a0" font-size="11">深模块：大量行为藏在小接口后面 · 修一次，Create/Adopt/rotate 全带上</text>
+          </svg>
+        </div>
+        <div class="callout" id="rec-detail">
+          <h3><span class="tag hide">隐藏</span>点一个色块</h3>
+          <p>两个 adapter 共用 <code>XFRMDriver</code>。lo、剪枝、路由、multicast 都是 PolicyXFRM 的实现细节。删除 PolicyXFRM 后，interface 路径应完全复原。</p>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-flow" class="flow">
+      <p class="tabs-note">同一条 Create → 数据面 路径。红色是现有多知的层；绿色是推荐后知识收口的位置。</p>
+      <div class="grid">
+        <div>
+          <h2 style="font-size:14px;margin:0 0 8px">现在</h2>
+          <pre class="tree">ApplyTransportLink
+  xfrm.EnsureNamespace
+  ipsec.LoadConnection
+    StrongSwanDriver.buildLoadConnMessage
+      <span class="k-leak">if XFRMBackend==policy: delete if_id</span>
+  xfrm.EnsureInterface
+    <span class="k-leak">if policyBackend(): ensurePolicyRoute; return</span>
+    addXFRMInterface(phx*)          <span class="k-dim"># interface only</span>
+  xfrm.AssignAddress
+    <span class="k-leak">if policy: addr replace dev lo  (不剪枝)</span>
+    else prune + replace dev phx*
+  <span class="k-leak">xfrm.(XFRMPeerRouteInstaller)     # 再装一次路由</span>
+    EnsurePeerRoute
+      <span class="k-leak">if policy: DefaultNetNS + swallow err</span>
+
+ReconcileActionAdopt
+  <span class="k-leak">return nil                       # 不走 Ensure → 路由缺失</span>
+
+Daemon.xfrmLinkStateMatchReason
+  <span class="k-leak">if !policyXFRMBackend() &amp;&amp; !Multicast: fail</span>
+  <span class="k-dim"># 与 SystemXFRMDriver.linkStateMatchesSpec 重复</span></pre>
+        </div>
+        <div>
+          <h2 style="font-size:14px;margin:0 0 8px">推荐</h2>
+          <pre class="tree">ApplyTransportLink                  <span class="k-dim"># 不再 type-assert 路由接口</span>
+  xfrm.EnsureNamespace
+  ipsec.LoadConnection
+    <span class="k-hide">driver 构造时已决定是否剥 if_id</span>
+  xfrm.EnsureInterface              <span class="k-hide"># 附着点不变量含路由</span>
+    InterfaceXFRM: add phx* + multicast
+    PolicyXFRM:    noop device + lo route
+  xfrm.AssignAddress
+    InterfaceXFRM: prune + replace on phx*
+    PolicyXFRM:    accumulate on lo
+
+ReconcileActionAdopt / Repair / Staged
+  <span class="k-hide">同样走 EnsureInterface</span>
+  <span class="k-dim"># Adopt 不再是“什么都不做”</span>
+
+Daemon.xfrmLinkStateMatchReason
+  <span class="k-hide">委托 xfrm.InspectLink 的匹配结果</span>
+  <span class="k-dim"># daemon 不再读 xfrm_backend</span></pre>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-table" class="flow">
+      <p class="tabs-note">点一行，两侧详情会同步。这不是新抽象清单，是「知识该停在哪一层」。</p>
+      <table class="diff">
+        <thead>
+          <tr>
+            <th style="width:18%">层</th>
+            <th>现在知道的</th>
+            <th>推荐知道的</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr data-row="yaml">
+            <td>YAML / 构造</td>
+            <td><code>xfrm_backend</code> 渗入 group、两个 driver、daemon</td>
+            <td>只在 factory 出现一次，选出 adapter</td>
+          </tr>
+          <tr data-row="spec">
+            <td>TransportLinkSpec</td>
+            <td><code>InterfaceName = "lo"</code> 冒充设备</td>
+            <td>仍是 <code>phx&lt;id&gt;</code> 资源名；附着点由 adapter 解释</td>
+          </tr>
+          <tr data-row="xfrm">
+            <td>XFRMDriver</td>
+            <td>一个类型 + <code>Backend</code> flag，处处 <code>if policy</code></td>
+            <td>两个 adapter，运行期零分支</td>
+          </tr>
+          <tr data-row="route">
+            <td>对端路由</td>
+            <td>optional 接口；Create 双调；Adopt 漏；错误被丢掉</td>
+            <td>EnsureInterface 的不变量；所有 apply 路径自然带上</td>
+          </tr>
+          <tr data-row="daemon">
+            <td>Daemon 匹配</td>
+            <td><code>policyXFRMBackend()</code> 放宽 multicast</td>
+            <td>只消费 InspectLink；不读 backend</td>
+          </tr>
+          <tr data-row="owner">
+            <td>Owner / teardown</td>
+            <td>名字必须 <code>phx*</code> → <code>lo</code> 实例拆不掉</td>
+            <td>实例名从未变成 lo，校验不用改语义</td>
+          </tr>
+          <tr data-row="fw">
+            <td>Firewall</td>
+            <td>WSL2 提交里给所有 overlay INPUT 加 invalid accept</td>
+            <td>按「解封装后 ct invalid」的流量语义留下，与 backend 解绑</td>
+          </tr>
+          <tr data-row="bird">
+            <td>BIRD / rotate</td>
+            <td>认 <code>phx*</code>；rotateSpec 无条件打回设备名</td>
+            <td>调用方继续看资源名；adapter 自己处理无设备</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <section class="more">
+      <h2>推进顺序（先补裂缝，再搬知识）</h2>
+      <ol style="margin:0;padding-left:20px;color:var(--muted);font-size:13px;line-height:1.6">
+        <li><strong style="color:var(--text)">Owner 名不要变成 lo</strong> — 现在就能修的正确性洞，卡住 teardown/cleanup。</li>
+        <li><strong style="color:var(--text)">路由和 lo 地址累积收进 Ensure/Inspect</strong> — 删掉 <code>XFRMPeerRouteInstaller</code> 和 daemon multicast 特例。</li>
+        <li><strong style="color:var(--text)">firewall invalid-accept 按流量语义留下</strong> — 文档从 WSL2 挪到防火墙，不做成 backend 开关。</li>
+        <li><strong style="color:var(--text)">再拆 SystemXFRMDriver 为两个 adapter</strong> — 那时 <code>xfrm_backend</code> 只在构造函数出现一次。</li>
+      </ol>
+    </section>
+    <footer>
+      源码锚点：<span class="path">pkg/transport/ipsec/{xfrm_policy.go,xfrm_exec.go,driver.go,planner.go,instance.go:304}</span>
+      · <span class="path">app/photon/{config.go,daemon.go,ipsec_reconcile.go}</span>
+      · <span class="path">pkg/firewall/planner.go:181</span>
+    </footer>
+  </main>
+
+  <script>
+    const details = {
+      ike: {
+        now: { title: "信令面（保持）", tag: "keep", tagText: "共享",
+          body: "IKEv2 / charon / VICI 两端共用。policy 不改协商，所以能跟 interface 后端的真实 gateway 混部。这是正确的不变量，推荐架构也不动这里。" },
+        rec: { title: "信令面（保持）", tag: "keep", tagText: "共享",
+          body: "仍然共享。Child SA 要不要 if_id 是 StrongSwan driver 在构造时决定的实现细节，不上升到 YAML 之后的每一层。" }
+      },
+      yaml: {
+        now: { title: "config.yaml 泄漏源", tag: "leak", tagText: "泄漏",
+          body: "xfrm_backend 被写入 ipsecConfig、每个 LinkGroupSpec、StrongSwanDriver、SystemXFRMDriver，daemon 再读一遍。netns.kind: host 和 policy 写在一起只是 PoC 方便，两者其实正交。" },
+        rec: null
+      },
+      "yaml-rec": {
+        now: null,
+        rec: { title: "构造期一次选择", tag: "keep", tagText: "入口",
+          body: "YAML 只在 newXFRMDriverForBackend / StrongSwanDriver 构造时出现。运行期对象不再携带字符串开关。netns 选择与数据面选择分开配置。" }
+      },
+      group: {
+        now: { title: "planner 把 lo 写进 spec", tag: "leak", tagText: "泄漏",
+          body: "applyPolicyDeviceOverride 把 InterfaceName 改成 lo。这条 spec 随后进入 LinkInstance、owner token、rotate、BIRD 接口模式。共享 loopback 被伪装成 per-link 设备，是后续裂缝的根。" },
+        rec: null
+      },
+      sswan: {
+        now: { title: "VICI 报文在 load 时打补丁", tag: "leak", tagText: "可内收",
+          body: "applyPolicyChildSA 删 if_id_in/out 是合理的内部动作——VICI 属于 StrongSwanDriver。不该再让 LinkGroupSpec 和 daemon 传同一份 backend。" },
+        rec: null
+      },
+      xfrm: {
+        now: { title: "一个 driver + flag，不是两个 adapter", tag: "leak", tagText: "浅模块",
+          body: "EnsureInterface / AssignAddress / DeleteInterface / InspectLink / batch 全是 if policyBackend()。删除 Backend 字段，复杂度不会消失，会散回这些调用点——变异是真的，但 seam 是浅的。" },
+        rec: null
+      },
+      daemon: {
+        now: { title: "daemon 穿过了 XFRM 接口", tag: "leak", tagText: "泄漏",
+          body: "policyXFRMBackend() 再读 config，放宽 lo 无 MULTICAST。匹配逻辑与 SystemXFRMDriver.linkStateMatchesSpec 重复。测试助手甚至 new 一个空 DaemonService 来调它。" },
+        rec: null
+      },
+      owner: {
+        now: { title: "Owner 校验拒绝 lo", tag: "leak", tagText: "正确性",
+          body: "ResourceOwner.Validate 要求 InterfaceName 以 phx 开头。policy 实例名是 lo 时，undesired teardown 变成 unmanaged retained，cleanup 直接报错。PoC ping 看不到，生命周期会踩。" },
+        rec: null
+      },
+      route: {
+        now: { title: "假 seam：optional 路由接口", tag: "leak", tagText: "漏路径",
+          body: "只有 SystemXFRMDriver 实现 XFRMPeerRouteInstaller。ApplyTransportLink 用 type assert 再装一次（Ensure 里已经装过）。Adopt 和 ApplyStagedConnection 不走它。ensurePolicyRoute 还吞掉 ip route replace 的错误。" },
+        rec: null
+      },
+      fw: {
+        now: { title: "防火墙规则绑错叙事", tag: "leak", tagText: "错层",
+          body: "xfrm mesh invalid accept 写进所有 overlay INPUT，与 xfrm_backend 无关。它修的是 gateway 侧 conntrack（解封装后 ct invalid），interface 后端也可能需要。应留规则、换叙事，不要做成 WSL2 开关。" },
+        rec: null
+      },
+      bird: {
+        now: { title: "路由面仍假设 phx*", tag: "leak", tagText: "未爆",
+          body: "BIRD generator 默认 interface \"phx*\"。rotateSpec 无条件 StableInterfaceName，不走 applyPolicyDeviceOverride。WSL2 客户端 role:out 且不跑 Babel，所以 PoC 没事；policy 一旦用到需要 overlay 路由的节点就会裂。" },
+        rec: null
+      },
+      kernel: {
+        now: { title: "真正变化的只在这里", tag: "keep", tagText: "数据面",
+          body: "policy：隧道地址挂 lo，charon 按 TS 装 xfrm policy/state，对端 /32 沿 underlay 出口走。interface：phx* + if_id。调用方不需要把这套差异学一遍。" },
+        rec: { title: "只有选中的 adapter 碰内核", tag: "hide", tagText: "隐藏",
+          body: "调用方请求「附着点」。PolicyXFRM 自己决定 lo 和 underlay 路由；InterfaceXFRM 自己决定 phx*。内核细节不再出现在 planner/daemon。" }
+      },
+      factory: {
+        now: null,
+        rec: { title: "真 seam 的位置", tag: "hide", tagText: "seam",
+          body: "两个 adapter 才构成真 seam。factory 是唯一知道 xfrm_backend 这个词的地方。One adapter = 假想 seam；这里已经有两种真实行为，值得单独类型，而不是 flag。" }
+      },
+      "if-ad": {
+        now: null,
+        rec: { title: "InterfaceXFRM（历史默认）", tag: "hide", tagText: "adapter",
+          body: "创建 phx*、绑定 if_id、剪枝地址、路由 dev phx*、要求 UP+MULTICAST。删除 PolicyXFRM 后这条路径应完全复原——deletion test。" }
+      },
+      "pol-ad": {
+        now: null,
+        rec: { title: "PolicyXFRM（无设备）", tag: "hide", tagText: "adapter",
+          body: "不创建设备；Ensure 把地址落到 lo 且不剪枝；Inspect 看 lo 上有没有这条地址，不要求 MULTICAST；Delete 是 no-op（不删 lo）；路由在 Ensure 内安装且返回错误。测试面就是这些不变量。" }
+      },
+      iface: {
+        now: null,
+        rec: { title: "加深后的 XFRMDriver", tag: "hide", tagText: "接口",
+          body: "语义从「确保这个名叫 InterfaceName 的 netdevice」改为「给这条 link 一个本地 L3 附着点」。Ensure 幂等，含路由。调用方和测试走同一条缝，不必再 mock backend 字符串。" }
+      },
+      callers: {
+        now: null,
+        rec: { title: "上层恢复无知", tag: "keep", tagText: "调用方",
+          body: "planner 不再 override 成 lo。owner 继续校验 phx 前缀。daemon 不再读 xfrm_backend。BIRD 继续按资源名生成；若某天 policy 节点要跑 Babel，那是 adapter 另开的路由策略，不是把 lo 伪装成设备。" }
+      }
+    };
+
+    const nowEl = document.getElementById("now-detail");
+    const recEl = document.getElementById("rec-detail");
+
+    function renderCard(el, side, rec) {
+      if (!rec) return;
+      const tagClass = rec.tag === "leak" ? "leak" : rec.tag === "hide" ? "hide" : "keep";
+      el.innerHTML = `<h3><span class="tag ${tagClass}">${rec.tagText}</span>${rec.title}</h3><p>${rec.body}</p>`;
+    }
+
+    function activate(id) {
+      document.querySelectorAll(".node").forEach(n => {
+        const on = n.getAttribute("data-id") === id;
+        n.setAttribute("aria-pressed", on ? "true" : "false");
+        const box = n.querySelector("rect");
+        if (box) box.setAttribute("stroke-width", on ? "2.4" : "1");
+      });
+      const d = details[id];
+      if (!d) return;
+      if (d.now) renderCard(nowEl, "now", d.now);
+      if (d.rec) renderCard(recEl, "rec", d.rec);
+      if (d.now && !d.rec) {
+        recEl.innerHTML = `<h3><span class="tag hide">对应收口</span>这一层在推荐架构里不再出现分支</h3><p>知识停在 PolicyXFRM / InterfaceXFRM 内部。调用方只看到 XFRMDriver 的附着点语义。</p>`;
+      }
+      if (d.rec && !d.now) {
+        nowEl.innerHTML = `<h3><span class="tag leak">现状缺口</span>这一层现在不存在</h3><p>现有代码把同一类型当成两种后端用。推荐侧多出来的是真正的 adapter 边界，不是新配置项。</p>`;
+      }
+    }
+
+    document.querySelectorAll(".node").forEach(n => {
+      n.addEventListener("click", () => activate(n.getAttribute("data-id")));
+      n.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          activate(n.getAttribute("data-id"));
+        }
+      });
+    });
+
+    const views = {
+      arch: document.getElementById("view-arch"),
+      flow: document.getElementById("view-flow"),
+      table: document.getElementById("view-table"),
+    };
+    const tabs = {
+      arch: document.getElementById("tab-arch"),
+      flow: document.getElementById("tab-flow"),
+      table: document.getElementById("tab-table"),
+    };
+    function show(name) {
+      views.arch.style.display = name === "arch" ? "grid" : "none";
+      views.flow.classList.toggle("visible", name === "flow");
+      views.table.classList.toggle("visible", name === "table");
+      Object.entries(tabs).forEach(([k, btn]) => btn.setAttribute("aria-pressed", k === name ? "true" : "false"));
+    }
+    tabs.arch.addEventListener("click", () => show("arch"));
+    tabs.flow.addEventListener("click", () => show("flow"));
+    tabs.table.addEventListener("click", () => show("table"));
+
+    const rowDetails = {
+      yaml: "yaml",
+      spec: "group",
+      xfrm: "xfrm",
+      route: "route",
+      daemon: "daemon",
+      owner: "owner",
+      fw: "fw",
+      bird: "bird",
+    };
+    document.querySelectorAll("tr[data-row]").forEach(tr => {
+      tr.addEventListener("click", () => {
+        document.querySelectorAll("tr[data-row]").forEach(x => x.classList.remove("active"));
+        tr.classList.add("active");
+        const id = rowDetails[tr.getAttribute("data-row")];
+        show("arch");
+        activate(id);
+        document.getElementById("view-arch").scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
+  </script>
+</body>
+</html>

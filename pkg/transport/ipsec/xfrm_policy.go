@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"net/netip"
 	"strings"
 )
 
@@ -76,32 +75,8 @@ func (d SystemXFRMDriver) ensurePolicyRoute(ctx context.Context, netns NetNSSpec
 	if dev == "" {
 		return fmt.Errorf("cannot determine outer interface for policy route (link %s)", spec.LinkID)
 	}
-	_ = d.runInNetNS(ctx, netns, "-4", "route", "replace",
+	return d.runInNetNS(ctx, netns, "-4", "route", "replace",
 		spec.PeerTunnelAddr.String()+"/32", "dev", dev, "src", spec.LocalTunnelAddr.String())
-	return nil
-}
-
-// EnsurePeerRoute installs a kernel route for the peer's tunnel address. With
-// the interface backend the route points at the link's XFRM interface; with
-// the policy backend it follows the underlay route toward the peer.
-func (d SystemXFRMDriver) EnsurePeerRoute(ctx context.Context, spec TransportLinkSpec) error {
-	if !spec.PeerTunnelAddr.IsValid() || spec.InterfaceName == "" {
-		return nil
-	}
-	if d.policyBackend() {
-		return d.ensurePolicyRoute(ctx, d.DefaultNetNS, spec)
-	}
-	netns, err := d.specNetNS(spec)
-	if err != nil {
-		return err
-	}
-	bits := 32
-	if spec.PeerTunnelAddr.Is6() {
-		bits = 128
-	}
-	prefix := netip.PrefixFrom(spec.PeerTunnelAddr, bits)
-	return d.runInNetNS(ctx, netns, "route", "replace",
-		prefix.String(), "dev", spec.InterfaceName)
 }
 
 // parseRouteDev extracts the "dev <name>" field from `ip route` output.
