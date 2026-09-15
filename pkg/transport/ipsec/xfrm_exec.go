@@ -326,7 +326,11 @@ func (d SystemXFRMDriver) AssignExtraAddress(ctx context.Context, spec Transport
 	if err != nil {
 		return err
 	}
-	return d.runInNetNS(ctx, netns, "addr", "replace", address, "dev", spec.InterfaceName)
+	dev := spec.InterfaceName
+	if d.policyBackend() {
+		dev = "lo"
+	}
+	return d.runInNetNS(ctx, netns, "addr", "replace", address, "dev", dev)
 }
 
 func (d SystemXFRMDriver) pruneInterfaceAddresses(ctx context.Context, netns NetNSSpec, name, target string) error {
