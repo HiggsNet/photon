@@ -371,3 +371,75 @@ func TestPolicyEnsureObservedInterfacesReinstallsPeerRoute(t *testing.T) {
 		t.Fatalf("shared EnsureObservedInterfaces must reinstall peer route, commands=%v", commandStrings(commands))
 	}
 }
+
+func TestPolicyReclaimAttachmentRemovesLoopbackAddressAndPeerRoute(t *testing.T) {
+	var commands []recordedCommand
+	driver := SystemXFRMDriver{
+		Backend:      XFRMBackendPolicy,
+		DefaultNetNS: NetNSSpec{Kind: NetNSHost},
+		IPPath:       "ip",
+		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			commands = append(commands, recordedCommand{name: name, args: append([]string(nil), args...)})
+			return nil, nil
+		},
+	}
+	spec := TransportLinkSpec{
+		InterfaceName:   "phx2a",
+		XFRMIfID:        42,
+		LocalTunnelAddr: netip.MustParseAddr("10.99.0.1"),
+		PeerTunnelAddr:  netip.MustParseAddr("10.99.0.2"),
+	}
+	if err := driver.ReclaimAttachment(context.Background(), spec); err != nil {
+		t.Fatalf("ReclaimAttachment: %v", err)
+	}
+	got := commandStrings(commands)
+	for _, cmd := range got {
+		if strings.Contains(cmd, "link delete") {
+			t.Fatalf("reclaim deleted a device: %v", got)
+		}
+	}
+	wantAddr := "ip addr del 10.99.0.1/32 dev lo"
+	wantRoute := "ip -4 route del 10.99.0.2/32"
+	hasAddr, hasRoute := false, false
+	for _, cmd := range got {
+		if cmd == wantAddr {
+			hasAddr = true
+		}
+		if cmd == wantRoute {
+			hasRoute = true
+		}
+	}
+	if !hasAddr || !hasRoute {
+		t.Fatalf("reclaim missing addr/route delete (addr=%v route=%v) in %v", hasAddr, hasRoute, got)
+	}
+}
+
+func TestTeardownTransportLinkReclaimsPolicyAttachment(t *testing.T) {
+	xfrm := &recordingReclaimDriver{}
+	ipsecDrv := &DryRunDriver{}
+	spec := TransportLinkSpec{
+		LocalZone:       "a.zone",
+		PeerZone:        "b.zone",
+		TransportID:     "ipsec-abc",
+		InterfaceName:   "phx2a",
+		XFRMIfID:        42,
+		LocalTunnelAddr: netip.MustParseAddr("10.99.0.1"),
+		PeerTunnelAddr:  netip.MustParseAddr("10.99.0.2"),
+	}
+	if _, err := TeardownTransportLink(context.Background(), ipsecDrv, xfrm, spec); err != nil {
+		t.Fatalf("TeardownTransportLink: %v", err)
+	}
+	if len(xfrm.reclaimed) != 1 || xfrm.reclaimed[0].LocalTunnelAddr != spec.LocalTunnelAddr {
+		t.Fatalf("teardown reclaim = %+v, want spec attachment", xfrm.reclaimed)
+	}
+}
+
+type recordingReclaimDriver struct {
+	DryRunDriver
+	reclaimed []TransportLinkSpec
+}
+
+func (d *recordingReclaimDriver) ReclaimAttachment(_ context.Context, spec TransportLinkSpec) error {
+	d.reclaimed = append(d.reclaimed, spec)
+	return nil
+}

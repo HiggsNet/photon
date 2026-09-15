@@ -107,6 +107,12 @@ type XFRMExtraAddressAssigner interface {
 	AssignExtraAddress(context.Context, TransportLinkSpec, string) error
 }
 
+// XFRMAttachmentReclaimer removes per-link L3 state that is not a dedicated
+// device (policy backend: lo address and underlay peer route).
+type XFRMAttachmentReclaimer interface {
+	ReclaimAttachment(context.Context, TransportLinkSpec) error
+}
+
 type XFRMLinkState struct {
 	NetNS                    NetNSSpec
 	NamespaceExists          bool
@@ -378,6 +384,12 @@ func TeardownTransportLink(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriv
 	}
 	if err := xfrm.DeleteInterface(ctx, spec.InterfaceName); err != nil {
 		return plan, fmt.Errorf("delete interface: %w", err)
+	}
+	if reclaimer, ok := xfrm.(XFRMAttachmentReclaimer); ok {
+		plan.add("reclaim_attachment", spec.InterfaceName, FormatScopedTunnelAddress(spec.LocalTunnelAddr, spec.InterfaceName, spec.NetNS))
+		if err := reclaimer.ReclaimAttachment(ctx, spec); err != nil {
+			return plan, fmt.Errorf("reclaim attachment: %w", err)
+		}
 	}
 	return plan, nil
 }

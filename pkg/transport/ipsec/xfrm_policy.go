@@ -91,6 +91,47 @@ func (d SystemXFRMDriver) ensurePolicyRoute(ctx context.Context, netns NetNSSpec
 		prefix.String(), "dev", dev, "src", spec.LocalTunnelAddr.String())
 }
 
+// ReclaimAttachment removes the policy-backend lo address and underlay peer
+// route. Missing objects are treated as already gone. The loopback device
+// itself is never deleted.
+func (d SystemXFRMDriver) ReclaimAttachment(ctx context.Context, spec TransportLinkSpec) error {
+	if !d.policyBackend() {
+		return nil
+	}
+	netns, err := d.specNetNS(spec)
+	if err != nil {
+		return err
+	}
+	if spec.LocalTunnelAddr.IsValid() {
+		addr := tunnelAddressPrefix(spec.LocalTunnelAddr)
+		if err := d.runInNetNS(ctx, netns, "addr", "del", addr, "dev", "lo"); err != nil && !isMissingAddrOrRoute(err) {
+			return err
+		}
+	}
+	if spec.PeerTunnelAddr.IsValid() {
+		family, bits := "-4", 32
+		if spec.PeerTunnelAddr.Is6() {
+			family, bits = "-6", 128
+		}
+		prefix := netip.PrefixFrom(spec.PeerTunnelAddr, bits)
+		if err := d.runInNetNS(ctx, netns, family, "route", "del", prefix.String()); err != nil && !isMissingAddrOrRoute(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+func isMissingAddrOrRoute(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "cannot find") ||
+		strings.Contains(msg, "no such") ||
+		strings.Contains(msg, "not found") ||
+		strings.Contains(msg, "no route")
+}
+
 // parseRouteDev extracts the "dev <name>" field from `ip route` output.
 func parseRouteDev(out string) string {
 	fields := strings.Fields(out)

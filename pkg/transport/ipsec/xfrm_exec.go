@@ -276,8 +276,8 @@ func saMatchesAnyMissingLink(sa SAState, missing map[string]TransportLinkSpec) b
 
 func (d SystemXFRMDriver) DeleteInterface(ctx context.Context, name string) error {
 	if d.policyBackend() {
-		// Policy mode has no per-link device to delete; the tunnel address
-		// on lo is reclaimed by address pruning in AssignAddress.
+		// No per-link device. Address and peer route are removed by
+		// ReclaimAttachment when the caller has a full spec.
 		return nil
 	}
 	if name == "" {

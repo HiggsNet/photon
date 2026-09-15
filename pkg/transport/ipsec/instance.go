@@ -1426,10 +1426,12 @@ func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDrive
 			return ApplyPlan{}, fmt.Errorf("refuse unmanaged teardown: %w", err)
 		}
 		connSpec := TransportLinkSpec{
-			PeerZone:      action.Instance.PeerZone,
-			TransportID:   action.Instance.IKEName,
-			InterfaceName: action.Instance.InterfaceName,
-			XFRMIfID:      action.Instance.XFRMIfID,
+			PeerZone:        action.Instance.PeerZone,
+			TransportID:     action.Instance.IKEName,
+			InterfaceName:   action.Instance.InterfaceName,
+			XFRMIfID:        action.Instance.XFRMIfID,
+			LocalTunnelAddr: action.Instance.LocalTunnelAddr,
+			PeerTunnelAddr:  action.Instance.PeerTunnelAddr,
 		}
 		if _, err := TeardownConnectionOnly(ctx, ipsec, connSpec); err != nil {
 			return ApplyPlan{}, err
@@ -1459,6 +1461,11 @@ func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDrive
 		}
 		if err := xfrm.DeleteInterface(ctx, action.Instance.InterfaceName); err != nil {
 			return ApplyPlan{}, fmt.Errorf("delete interface: %w", err)
+		}
+		if reclaimer, ok := xfrm.(XFRMAttachmentReclaimer); ok {
+			if err := reclaimer.ReclaimAttachment(ctx, connSpec); err != nil {
+				return ApplyPlan{}, fmt.Errorf("reclaim attachment: %w", err)
+			}
 		}
 		return ApplyPlan{}, nil
 	case ReconcileActionCleanupDuplicateSA:
