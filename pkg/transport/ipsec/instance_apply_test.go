@@ -464,3 +464,42 @@ func TestApplyReconcileActionAdoptEnsuresAttachmentWithoutInitiating(t *testing.
 		t.Fatalf("adopt plan missing ensure_interface: %+v", plan.Operations)
 	}
 }
+
+func TestApplyReconcileActionInstanceTeardownReclaimsStagedAttachmentInNetNS(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	spec := TransportLinkSpec{
+		LocalZone:       "node-a.catofes.",
+		PeerZone:        "node-b.catofes.",
+		OverlayID:       "ipsec-main",
+		Provider:        ProviderStrongSwan,
+		TransportID:     "ipsec-abcd12",
+		InterfaceName:   "phx1",
+		XFRMIfID:        77,
+		LocalTunnelAddr: netip.MustParseAddr("10.99.0.1"),
+		PeerTunnelAddr:  netip.MustParseAddr("10.99.0.2"),
+		NetNS:           "photon",
+	}
+	inst := NewLinkInstance(spec, LinkStateUp, now)
+	inst.StagedIKEName = "ipsec-abcd12-r2"
+	inst.StagedInterfaceName = "phx2"
+	inst.StagedXFRMIfID = 88
+	inst.StagedLocalTunnelAddr = netip.MustParseAddr("10.99.0.3")
+	inst.StagedPeerTunnelAddr = netip.MustParseAddr("10.99.0.4")
+	xfrm := &recordingReclaimDriver{}
+	ipsecDrv := &DryRunDriver{}
+	if _, err := ApplyReconcileAction(context.Background(), ipsecDrv, xfrm, ReconcileAction{
+		Action:   ReconcileActionTeardown,
+		Instance: &inst,
+	}, NetNSSpec{Kind: NetNSName, Name: "photon"}); err != nil {
+		t.Fatalf("ApplyReconcileAction: %v", err)
+	}
+	if len(xfrm.reclaimed) != 2 {
+		t.Fatalf("reclaimed = %+v, want active + staged", xfrm.reclaimed)
+	}
+	if xfrm.reclaimed[0].LocalTunnelAddr != spec.LocalTunnelAddr || xfrm.reclaimed[0].NetNS != "photon" {
+		t.Fatalf("active reclaim = %+v, want netns photon and active addrs", xfrm.reclaimed[0])
+	}
+	if xfrm.reclaimed[1].LocalTunnelAddr != inst.StagedLocalTunnelAddr || xfrm.reclaimed[1].PeerTunnelAddr != inst.StagedPeerTunnelAddr {
+		t.Fatalf("staged reclaim = %+v, want staged tunnel addrs", xfrm.reclaimed[1])
+	}
+}

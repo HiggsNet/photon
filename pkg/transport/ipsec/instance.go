@@ -1432,16 +1432,22 @@ func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDrive
 			XFRMIfID:        action.Instance.XFRMIfID,
 			LocalTunnelAddr: action.Instance.LocalTunnelAddr,
 			PeerTunnelAddr:  action.Instance.PeerTunnelAddr,
+			NetNS:           netns.Target(),
 		}
 		if _, err := TeardownConnectionOnly(ctx, ipsec, connSpec); err != nil {
 			return ApplyPlan{}, err
 		}
-		if action.Instance.StagedIKEName != "" {
-			stagedSpec := TransportLinkSpec{
-				PeerZone:      action.Instance.PeerZone,
-				TransportID:   action.Instance.StagedIKEName,
-				InterfaceName: firstNonEmptyString(action.Instance.StagedInterfaceName, action.Instance.InterfaceName),
-				XFRMIfID:      firstNonZeroUint32(action.Instance.StagedXFRMIfID, action.Instance.XFRMIfID),
+		var stagedSpec TransportLinkSpec
+		hasStaged := action.Instance.StagedIKEName != ""
+		if hasStaged {
+			stagedSpec = TransportLinkSpec{
+				PeerZone:        action.Instance.PeerZone,
+				TransportID:     action.Instance.StagedIKEName,
+				InterfaceName:   firstNonEmptyString(action.Instance.StagedInterfaceName, action.Instance.InterfaceName),
+				XFRMIfID:        firstNonZeroUint32(action.Instance.StagedXFRMIfID, action.Instance.XFRMIfID),
+				LocalTunnelAddr: action.Instance.StagedLocalTunnelAddr,
+				PeerTunnelAddr:  action.Instance.StagedPeerTunnelAddr,
+				NetNS:           netns.Target(),
 			}
 			if _, err := TeardownConnectionOnly(ctx, ipsec, stagedSpec); err != nil {
 				return ApplyPlan{}, err
@@ -1465,6 +1471,11 @@ func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDrive
 		if reclaimer, ok := xfrm.(XFRMAttachmentReclaimer); ok {
 			if err := reclaimer.ReclaimAttachment(ctx, connSpec); err != nil {
 				return ApplyPlan{}, fmt.Errorf("reclaim attachment: %w", err)
+			}
+			if hasStaged {
+				if err := reclaimer.ReclaimAttachment(ctx, stagedSpec); err != nil {
+					return ApplyPlan{}, fmt.Errorf("reclaim staged attachment: %w", err)
+				}
 			}
 		}
 		return ApplyPlan{}, nil
