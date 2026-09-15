@@ -2,9 +2,6 @@ package main
 
 import (
 	"context"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -177,117 +174,6 @@ func TestEmptyFirewallAndRoutingFlushDoNotRepublishLegacyState(t *testing.T) {
 
 	if revision := uint64(service.State.Common.VerifiedRevision()); revision != beforeRevision {
 		t.Fatalf("empty reconciles changed revision from %d to %d", beforeRevision, revision)
-	}
-}
-
-func TestDaemonReloadConfigReconcilesIPsecLinkGroups(t *testing.T) {
-	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	now := time.Unix(4200, 0)
-	addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
-	dir := t.TempDir()
-	dataDir := filepath.Join(dir, "data")
-	statePath := filepath.Join(dataDir, "photon.db")
-	configPath := filepath.Join(dir, "config.yaml")
-	t.Setenv("PHOTON_CONFIG", configPath)
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		t.Fatalf("MkdirAll(dataDir): %v", err)
-	}
-	if err := os.WriteFile(configPath, []byte("data_dir: "+dataDir+"\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile(initial config): %v", err)
-	}
-	appConfig := defaultAppConfig()
-	appConfig.DataDir = dataDir
-	appConfig.StatePath = statePath
-	rt := &AppContext{
-		Config:    appConfig,
-		StatePath: statePath,
-		Clock:     func() time.Time { return now },
-	}
-	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-
-	reply := make(chan daemonEventResult, 1)
-	service.Events <- daemonEvent{Type: daemonEventReloadConfig, Reply: reply}
-	syncNow, shutdown, _, _, _ := service.processEvents(context.Background())
-	result := <-reply
-	if result.Error != nil {
-		t.Fatalf("processEvents(reload initial): %v", result.Error)
-	}
-	if !syncNow || shutdown {
-		t.Fatalf("initial reload syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
-	}
-	latestLinks, latestReconcile := readTestIPsecObservation(service)
-	if len(latestLinks) != 0 {
-		t.Fatalf("initial link instances = %+v, want none", latestLinks)
-	}
-
-	reloadedConfig := strings.Join([]string{
-		"data_dir: " + dataDir,
-		"ipsec:",
-		"  driver: dry-run",
-		"overlays:",
-		"  - id: main",
-		"    provider: strongswan",
-		"    netns:",
-		"      name: photontesth2",
-		"      create: true",
-		"    default_path_mode: family-redundant",
-		"    address_source_order: [manual-address]",
-		"    connect:",
-		"      - strongswan://*.catofes.?role=in",
-		"",
-	}, "\n")
-	if err := os.WriteFile(configPath, []byte(reloadedConfig), 0o600); err != nil {
-		t.Fatalf("WriteFile(reloaded config): %v", err)
-	}
-
-	reply = make(chan daemonEventResult, 1)
-	service.Events <- daemonEvent{Type: daemonEventReloadConfig, Reply: reply}
-	syncNow, shutdown, _, _, _ = service.processEvents(context.Background())
-	result = <-reply
-	if result.Error != nil {
-		t.Fatalf("processEvents(reload overlay): %v", result.Error)
-	}
-	if !syncNow || shutdown {
-		t.Fatalf("overlay reload syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
-	}
-	latestLinks, latestReconcile = readTestIPsecObservation(service)
-	if len(latestLinks) != 1 {
-		t.Fatalf("link instances after reload = %d, want 1", len(latestLinks))
-	}
-	if latestReconcile == nil || len(latestReconcile.Actions) != 1 || latestReconcile.Actions[0].Action != ipsec.ReconcileActionCreate {
-		t.Fatalf("ipsec reconcile after reload = %+v, want create", latestReconcile)
-	}
-	if current := service.gossipDriver.GossipConfig(); len(service.App.Config.IPsec.LinkGroups) != 1 || current.PeerID != config.PeerID {
-		t.Fatalf("daemon config was not refreshed: app=%+v sync=%+v", service.App.Config.IPsec.LinkGroups, current)
-	}
-}
-
-func TestDaemonReloadConfigRejectsStatePathSwitch(t *testing.T) {
-	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.yaml")
-	dataDir := filepath.Join(dir, "data")
-	otherDir := filepath.Join(dir, "other")
-	t.Setenv("PHOTON_CONFIG", configPath)
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		t.Fatalf("MkdirAll(dataDir): %v", err)
-	}
-	if err := os.WriteFile(configPath, []byte("data_dir: "+otherDir+"\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile(config): %v", err)
-	}
-	rt := &AppContext{
-		Config:    defaultAppConfig(),
-		StatePath: filepath.Join(dataDir, "photon.db"),
-		Clock:     func() time.Time { return time.Unix(4300, 0) },
-	}
-	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-
-	result, syncNow, shutdown := service.handleEvent(daemonEvent{Type: daemonEventReloadConfig})
-	if result.Error == nil || !strings.Contains(result.Error.Error(), "restart daemon to switch state") {
-		t.Fatalf("reload error = %v, want state path switch rejection", result.Error)
-	}
-	if syncNow || shutdown {
-		t.Fatalf("syncNow/shutdown = %v/%v, want false/false", syncNow, shutdown)
 	}
 }
 

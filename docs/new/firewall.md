@@ -500,7 +500,6 @@ Firewall reconcile 在 `app/photon/firewall_reconcile.go` 中实现，触发时�
 - `notifyStateChanged`（网络状态、Zone record、endpoint ACL 等变化）触发 flush。
 - `processEvents` 每次事件 drain 后也会 `flushFirewallReconcile`。
 - `endpoint_acl_apply` / `endpoint_acl_remove` 事件单独强制 flush。
-- `reload_config` 重新加载配置后触发。
 
 ### 6.2 reconcileFirewall 主流程
 

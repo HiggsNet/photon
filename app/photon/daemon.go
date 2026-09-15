@@ -90,7 +90,6 @@ const (
 	daemonEventSyncTimer             daemonEventType = "timer_sync"
 	daemonEventEndpointTimer         daemonEventType = "timer_endpoint_publish"
 	daemonEventSyncTrigger           daemonEventType = "sync_trigger"
-	daemonEventReloadConfig          daemonEventType = "reload_config"
 	daemonEventRoutingReload         daemonEventType = "routing_reload"
 	daemonEventIPsecCleanup          daemonEventType = "ipsec_cleanup"
 	daemonEventIPsecPortRotate       daemonEventType = "ipsec_port_rotate"
@@ -969,13 +968,6 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		writeControlResponse(conn, controlResponse{OK: true, Message: "sync scheduled"})
-	case "reload":
-		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventReloadConfig})
-		if result.Error != nil {
-			writeControlResponse(conn, controlError(result.Error))
-			return
-		}
-		writeControlResponse(conn, controlResponse{OK: true, Message: "config reloaded"})
 	case "routing_reload":
 		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventRoutingReload})
 		if result.Error != nil {
@@ -1239,9 +1231,6 @@ func (d *Daemon) handleEvent(event daemonEvent) (daemonEventResult, bool, bool) 
 		return daemonEventResult{Error: err}, changed, false
 	case daemonEventSyncTrigger:
 		return daemonEventResult{}, true, false
-	case daemonEventReloadConfig:
-		err := d.handleReloadConfigEvent()
-		return daemonEventResult{Error: err}, err == nil, false
 	case daemonEventRoutingReload:
 		d.routingForceReload = true
 		d.routingDirty = true
@@ -1273,56 +1262,6 @@ func (d *Daemon) handleEvent(event daemonEvent) (daemonEventResult, bool, bool) 
 	default:
 		return daemonEventResult{Error: fmt.Errorf("unknown daemon event: %s", event.Type)}, false, false
 	}
-}
-
-func (d *Daemon) handleReloadConfigEvent() error {
-	if d == nil || d.App == nil {
-		return errors.New("daemon service is not initialized")
-	}
-	config, err := loadAppConfig()
-	if err != nil {
-		return err
-	}
-	statePath := config.StatePath
-	if override := statePathOverride(); override != "" {
-		statePath = override
-	}
-	if d.App.StatePath != "" && statePath != d.App.StatePath {
-		return fmt.Errorf("reload would change state path from %s to %s; restart daemon to switch state", d.App.StatePath, statePath)
-	}
-	socketPath := controlSocketPath(config)
-	if d.ControlSocketPath != "" && socketPath != d.ControlSocketPath {
-		return fmt.Errorf("reload would change control socket path from %s to %s; restart daemon to switch control socket", d.ControlSocketPath, socketPath)
-	}
-	common := d.State.Common.ReadView()
-	if common.State == nil {
-		return errors.New("daemon state is not initialized")
-	}
-	if err := validateConfiguredIdentityState(common.State, config); err != nil {
-		return err
-	}
-	nextLogger := newAppLogger(config)
-	linuxDriver, err := newConfiguredLinuxDriver(config.IPsec, config.Netns.Names, nextLogger)
-	if err != nil {
-		return err
-	}
-	d.App.Config = config
-	d.App.StatePath = statePath
-	if err := d.gossipDriver.ReplaceGossipConfig(gossipDriverConfig(config, common.State, nextLogger)); err != nil {
-		_ = linuxDriver.Close()
-		return err
-	}
-	if err := d.installLinuxDriver(linuxDriver); err != nil {
-		return err
-	}
-	d.Log = nextLogger
-	d.ControlSocketPath = socketPath
-	if d.gossipDriver != nil && d.gossipDriver.Transport() != nil {
-		d.refreshGossipDiscovery()
-	}
-	d.notifyStateChanged()
-	d.recoverRoutingOnStart(context.Background())
-	return nil
 }
 
 func (d *Daemon) handleDelegateIssueEvent(request *joinRequest, permissions []zone.Permission) (*delegationIssueResult, error) {

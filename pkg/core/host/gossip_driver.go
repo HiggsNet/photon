@@ -121,21 +121,6 @@ func (driver *GossipDriver) GossipConfig() GossipDriverConfig {
 	return cloneGossipDriverConfig(driver.gossipConfig)
 }
 
-// ReplaceGossipConfig atomically replaces protocol/discovery configuration
-// during a daemon-controlled reload.
-func (driver *GossipDriver) ReplaceGossipConfig(config GossipDriverConfig) error {
-	if driver == nil {
-		return ErrGossipDriverStopped
-	}
-	driver.mu.Lock()
-	defer driver.mu.Unlock()
-	if driver.stopped {
-		return ErrGossipDriverStopped
-	}
-	driver.gossipConfig = cloneGossipDriverConfig(config)
-	return nil
-}
-
 // PostGossip enqueues an external protocol event without blocking. Producers
 // receive explicit backpressure; scheduler delivery uses its own blocking,
 // shutdown-aware path so timeouts are never silently dropped.

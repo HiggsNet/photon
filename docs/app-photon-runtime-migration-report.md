@@ -259,7 +259,7 @@ app 中剩余的是配置装配、把 committed Linux link output 交给 manager
 GossipDriver 公共 gossip 闭环、aggregate 清理和 current Linux codec 迁移已完成。旧 schema decoder 仍留在 app migration
 边界，不能随 current codec 一起误搬成在线兼容层。这里的 codec owner 完成不等于 live state 边界完成：当前
 `photonlinux.LinuxState` 已删除 routing/firewall reconcile summary、BIRD instance 数据与 `PeerCleanups`，现在只保留无法从其他 owner 恢复的 IPsec transport 私钥和显式本机 Endpoint ACL。升级旧库时，启动事务会把有效的离线 `PeerCleanups` marker 单向投影为 GossipCheckpoint 的最后观察时间，并在已有更新成功同步时丢弃过期 marker；随后重写 Linux payload 删除旧字段。current schema 不再读写第二份 cleanup tombstone。
-`IdentityKeyPath` 已从 current LinuxState、clone 和 codec 中删除，启动不再为配置路径补写一次 Linux state；配置路径移动时只要密钥身份不变即可，启动与 reload 都以配置 key 的公钥匹配 VerifiedState 为准。旧 `stateFile/stateMeta` 仍解码该字段以读取旧库，但迁移投影明确丢弃，不形成 current schema 的第二真相源。
+`IdentityKeyPath` 已从 current LinuxState、clone 和 codec 中删除，启动不再为配置路径补写一次 Linux state；配置路径移动时只要密钥身份不变即可，启动以配置 key 的公钥匹配 VerifiedState 为准。旧 `stateFile/stateMeta` 仍解码该字段以读取旧库，但迁移投影明确丢弃，不形成 current schema 的第二真相源。
 持久化 `Admission` 也已删除：pending/adopted、reason/detail 与 join request 直接从 VerifiedState 推导，最近 bootstrap sync 从 GossipCheckpoint 中对应 peer 的 `LastSyncUnix` 推导。原有 pending 时间、adopted 时间和 error 字段没有生产写入者，不为它们新增公共 owner、bucket 或 schema migration；旧 JSON 字段由 current/legacy decoder 忽略。
 持久化 `RoutingReconcile` 与 `BirdInstances` 均已删除：LastRun/LastError、BIRD status/exit/backoff 只进入 daemon 内的 `LinuxObservation`，进程重启后由下一次 reconcile 重建；路径、RouterID、owner 和 config hash 从配置与 VerifiedState 重新推导。旧 aggregate/current JSON 字段直接丢弃。
 持久化 `FirewallReconcile` 同样已删除：backend、generation、policy hash、owned object count 与 LastRun/LastError 只用于展示，统一进入 `LinuxObservation`；实际 reconcile 每次仍从系统 owned objects 重新观察，不消费旧 summary。`EndpointACLs` 是用户配置，继续由 Linux state 持久化。
@@ -291,7 +291,7 @@ GossipDriver 公共 gossip 闭环、aggregate 清理和 current Linux codec 迁�
 4. 聚合 `stateFile`：在线和普通测试迁移已经完成；fresh join 已退出聚合写入；在线 IPsec cleanup、revoked purge、Endpoint ACL、
    reconcile completion 以及 Firewall/IPsec 主 planner 已直接读取 common/Linux 两个 owner，不再构造完整 Snapshot。
    本机 endpoint/IPsec/routing protocol publish 也已直接使用两个 owner，routing 主 reconcile planner 同样完成切换。
-   在线 control/debug、配置 reload、手动端口轮换和 hook/composition 也已切走，production `currentState()` 已删除。
+   在线 control/debug、手动端口轮换和 hook/composition 也已切走，production `currentState()` 已删除。随后删除了不完整的配置热重载链：`config.yaml` 只在进程启动时读取，配置变更通过完整 restart 应用，不再局部替换 LinuxDriver/gossip config 而遗留旧 watcher、health worker、Observer 或 transport。
    CLI 查询已按来源收口：verified/common 允许离线读取；gossip checkpoint 离线时明确标为 last-known；links/firewall/BIRD/health/ping/
    peer lifecycle 等 platform runtime 查询要求在线 daemon，不再从 bbolt reconcile snapshot 冒充 live，也不由 CLI 直接调用 platform driver。
    read model 随后开始收敛为 typed canonical view envelope：zone/service/route/IPAM/endpoint、records/sync/peer/zone debug、

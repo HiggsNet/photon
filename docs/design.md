@@ -646,9 +646,9 @@ netns 属于本机 overlay data-plane 配置，不进入 gossip。`config.yaml` 
 
 daemon 已接入这条 reconcile 链路：
 - state 变化后，从 active state + overlay 配置生成 desired links，查询 IPsec driver `ListSAs`，读取/保存本地 `LinkInstance`，并记录最近 action/skip 摘要。
-- 启动进入主循环前，会主动执行一次 IPsec reconcile，用 active state、本地 `LinkGroupSpec`、已持久化 `LinkInstance` 和 driver SA 快照恢复 link state，而不是等待下一次 record/reload 事件。
-- `reload` control event 会重新读取本地 `config.yaml`，刷新 `overlays:`、`connect/deny`、`netns.*`、`routing.instances:*`、`ipsec.driver` / `ipsec.vici_socket`、sync/log 配置并触发 reconcile；如果 reload 会改变当前 state DB 路径或 control socket 路径，则拒绝并要求重启。
-- daemon drain event 队列时会合并多次 state change，同一轮 record/admin/remote apply 或 config reload 只触发一次 IPsec `ListSAs` + reconcile/apply，避免同一个 peer/group 被短时间重复加载。
+- 启动进入主循环前，会主动执行一次 IPsec reconcile，用 active state、本地 `LinkGroupSpec`、已持久化 `LinkInstance` 和 driver SA 快照恢复 link state，而不是等待下一次 record 事件。
+- `config.yaml` 只在 daemon 启动时读取；配置变更通过 restart 完整重建 transport、watcher、Observer、health 与平台 Driver，不提供局部热替换。
+- daemon drain event 队列时会合并多次 state change，同一轮 record/admin/remote apply 只触发一次 IPsec `ListSAs` + reconcile/apply，避免同一个 peer/group 被短时间重复加载。
 - daemon sync tick 后也会做一次 IPsec observe/reconcile，用 driver `ListSAs` 把已由 StrongSwan 建立的 `connecting` link 推进到 `up`；默认频率跟随 daemon interval，root smoke 可用更短 interval 加速验证。
 
 `LinkInstance` 是这条链路的持久化锚点，保存 desired spec hash、实际状态、XFRM `if_id`、IKE/CHILD_SA 名称、endpoint、owner、failure count、backoff 和最近错误。provider apply 成功后 create/update/repair 会把实例推进到 `connecting`，表示配置已经应用、正在等待 IKE_SA/CHILD_SA；只有后续 `ListSAs` 观测到匹配 SA 时才进入 `up`。apply 失败会写入 failure/backoff，backoff 未到期时 reconcile 不重复 apply，到期后 error/degraded link 再进入 repair。teardown 成功后 daemon 会删除本地持久化实例，因此 link group 删除、record 过期或 peer 不再可信不会留下 `removing` 状态并在下一轮重复清理。

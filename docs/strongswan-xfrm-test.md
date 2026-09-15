@@ -177,8 +177,8 @@ ipsec:
   vici_socket: /run/charon.vici
 ```
 
-此时 daemon 启动或 `reload` 会创建真实 `GoviciClient` 和 `SystemXFRMDriver`；
-如果 VICI socket 不可连接，启动/reload 会直接失败，避免运行到一半才发现
+此时 daemon 启动会创建真实 `GoviciClient` 和 `SystemXFRMDriver`；
+如果 VICI socket 不可连接，启动会直接失败，避免运行到一半才发现
 StrongSwan 控制面不可用。
 
 配置了 `overlays:` / link group 的 daemon 会自动发布本节点 signed `ipsec/*`

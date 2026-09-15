@@ -78,7 +78,7 @@ Daemon
 ### A3. 将平台持久状态与 Observation 分开
 
 - [x] 将仅含持久数据的 `internal/photonlinux.RuntimeState` 收缩并改名为 `LinuxState`；类型、clone、codec 和文件名不再使用 runtime，数据库 bucket 名仅为兼容旧数据保持不变。
-- [x] `IdentityKeyPath` 已回到配置/应用上下文：current Linux state 不再保存或回填路径，启动/reload 校验配置 key 与 VerifiedState 身份一致，旧 schema 路径迁移时丢弃。
+- [x] `IdentityKeyPath` 已回到配置/应用上下文：current Linux state 不再保存或回填路径，启动时校验配置 key 与 VerifiedState 身份一致，旧 schema 路径迁移时丢弃。
 - [x] 删除持久化 `Admission`：pending/adopted、reason/detail 和 join request 由 VerifiedState 即时推导，最近 bootstrap sync 从 GossipCheckpoint 推导；旧 schema 字段直接丢弃，不新增 owner、bucket 或 revision。
 - [x] 审计 `IPsecTransportKey`、`IPsecPortRecord` 和 Endpoint ACL：保留无其他私钥来源的 transport key 与显式本机 ACL；删除可由 VerifiedState 本机签名 `ipsec/ports` record 完整恢复的 `IPsecPortRecord` 缓存。
 - [x] 完全删除持久化 `LinkInstances`，不新增 `LinkJournal` / `IPsecTransitions` checkpoint；`IPsecTransportKey` 和 `EndpointACLs` 继续由 Linux state 持久化。
@@ -143,11 +143,11 @@ Daemon
 - [ ] CLI 壳稳定后再迁入 `internal/photoncli`，不为了减少 `app/photon` 文件数先搬目录。
 - [ ] 每一批迁移更新 runtime migration report，并执行相关单测、race（适用时）、Windows cross build、`make check` 和 `git diff --check`。
 
-### A6. 显式配置重载
+### A6. 配置生命周期
 
-- [ ] 不监听或轮询 `config.yaml`；实现 `photon daemon reload`，经 control API 串行 parse/validate/replace。
-- [ ] Linux systemd 可选提供 `ExecReload`；Windows 使用 named-pipe control，不依赖 Unix signal。
-- [ ] reload 失败保持旧 config/Driver/State；成功时按依赖顺序替换资源并关闭旧 Driver。
+- [x] `config.yaml` 只在进程启动时读取，不监听、不轮询，也不提供运行时热重载；配置变更统一重启 daemon。
+- [x] 删除不完整的 `reload` control/event/handler、专用测试及单用途 `GossipDriver.ReplaceGossipConfig`；避免只替换部分 Driver/manager 而遗漏 watcher、Observer、transport 等长期资源。
+- [x] 保留 `routing_reload` 作为明确的运行态路由操作；它不重新读取 `config.yaml`。
 
 ## B. Photon Windows 当前主线
 

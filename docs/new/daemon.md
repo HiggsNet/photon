@@ -109,7 +109,7 @@ Daemon 是 Photon 中唯一长期运行的系统进程。它不在每次 CLI 调
 - `join_accept` — 节点加入；`root_init` 只保留 daemon 侧拒绝入口，用来提示停止 daemon 后执行 direct/recovery 初始化
 - `packet` — 收到 UDP gossip 包
 - `timer_sync` / `timer_endpoint_publish` — 定时 sync 和端点发布
-- `sync_trigger` / `reload_config` — 手动触发
+- `sync_trigger` / `routing_reload` — 手动触发
 - `ipsec_cleanup` / `ipsec_port_rotate` / `ipsec_lifecycle` — IPsec 生命周期
 - `shutdown` — 优雅退出
 
@@ -347,7 +347,7 @@ CLI 通过 `sendControlRequest()` 与 daemon 通信。daemon 在线时，写操�
 
 状态写入类命令和恢复类命令支持显式 `--direct`，跳过 control socket 直接写本地 DB。使用 direct 时调用者需自行保证没有 daemon 在管理同一状态文件或 IPsec/XFRM 对象；direct 只持久化 signed record，不会触发 routing reconcile。
 
-控制方法覆盖状态读写、delegation 管理、节点加入、恢复操作、runtime 触发（`sync_trigger`/`reload`/`routing_reload`/`shutdown`）以及各类诊断接口。完整列表见 `app/photon/daemon.go` 中 `handleControlConn` 的 switch。
+控制方法覆盖状态读写、delegation 管理、节点加入、恢复操作、runtime 触发（`sync_trigger`/`routing_reload`/`shutdown`）以及各类诊断接口。`config.yaml` 只在进程启动时读取，修改后需要重启 daemon。完整列表见 `app/photon/daemon.go` 中 `handleControlConn` 的 switch。
 
 ### 5.1 systemd 运行约定
 

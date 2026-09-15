@@ -17,7 +17,7 @@ var (
 
 // BindGossipTransport installs the common UDP transport used by GossipDriver for
 // send, reply routing and its rebuildable peer address book. Composition may
-// replace it before the receive loop starts, for example after config reload.
+// replace an unstarted fixture transport before the receive loop begins.
 func (driver *GossipDriver) BindGossipTransport(transport *gossip.Transport) error {
 	if driver == nil {
 		return ErrGossipDriverStopped

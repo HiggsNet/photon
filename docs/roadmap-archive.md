@@ -9,6 +9,7 @@
 - Linux verified/runtime aggregate 已拆开：公共 `state.Store/BoltStore` 拥有 verified/checkpoint，current Linux state type/clone/codec/commit 已进入 `internal/photonlinux`；`stateFile/stateMeta` 只留旧库单向迁移和 legacy dump。
 - Linux 实际执行已逐步下沉：IPsec/XFRM、firewall、BIRD/upstream、health probe 和 cleanup 使用唯一 `internal/photonlinux.LinuxDriver` 实例；旧 app driver 字段、重复 adapter、单调用方 commit wrapper 和大量 legacy 测试 fixture 已删除。
 - canonical inspect DTO 已成为 control/CLI/HTTP 的公共展示边界；platform runtime 查询要求在线 Daemon，离线只允许 verified/common 与明确标记的 gossip last-known checkpoint。
+- 早期阶段实现过 `config.yaml` control 热重载；当前已因长期资源只能被部分替换而删除，配置改动统一通过 daemon restart 应用。下文 reload 条目仅保留历史实施记录。
 - 本阶段曾把 `CommonRuntime`、`GossipDriver`、Linux Runtime 和 Daemon coordinator 混称为 Runtime。2026-09 的所有权复核已纠正：目标术语和剩余删除条件见 `docs/runtime-state-ownership.md`，当前执行队列见 `todo.md`。
 
 精确提交级实施记录继续由 Git 历史和 `docs/app-photon-runtime-migration-report.md` 保存，不再把逐文件完成日志复制回主 TODO。

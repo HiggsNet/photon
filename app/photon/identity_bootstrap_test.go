@@ -203,57 +203,6 @@ func TestOpenStateAllowsConfiguredIdentityPathMove(t *testing.T) {
 	}
 }
 
-func TestDaemonReloadAllowsPathMoveAndRejectsIdentityChange(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "config.yaml")
-	verified, keyPath := buildIdentityVerifiedState(t, dir, "node-b.catofes.")
-	movedKeyPath := copyTestPrivateKey(t, keyPath, filepath.Join(dir, "copy.key.json"))
-	otherKeyPath, _ := writeTestPrivateKey(t, dir, "other")
-	dataDir := filepath.Join(dir, "data")
-	statePath := filepath.Join(dataDir, "photon.db")
-	t.Setenv("PHOTON_CONFIG", configPath)
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	writeIdentityConfig(t, configPath, dataDir, "node-b.catofes.", keyPath)
-
-	appConfig := defaultAppConfig()
-	appConfig.DataDir = dataDir
-	appConfig.StatePath = statePath
-	appConfig.ManagedZone = "node-b.catofes."
-	appConfig.Identity.KeyPath = keyPath
-	runtime := &photonlinux.LinuxState{}
-	rt := &AppContext{Config: appConfig, StatePath: statePath}
-	service := newTestDaemonFromOwners(rt, verified, nil, runtime, appConfig, time.Second)
-
-	writeIdentityConfig(t, configPath, dataDir, "node-b.catofes.", movedKeyPath)
-	result, syncNow, shutdown := service.handleEvent(daemonEvent{Type: daemonEventReloadConfig})
-	if result.Error != nil {
-		t.Fatalf("reload moved identity key: %v", result.Error)
-	}
-	if !syncNow || shutdown {
-		t.Fatalf("moved-key reload syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
-	}
-
-	writeIdentityConfig(t, configPath, dataDir, "node-b.catofes.", otherKeyPath)
-	result, syncNow, shutdown = service.handleEvent(daemonEvent{Type: daemonEventReloadConfig})
-	if result.Error == nil || !strings.Contains(result.Error.Error(), "identity.key_path") {
-		t.Fatalf("reload error = %v, want identity.key_path rejection", result.Error)
-	}
-	if syncNow || shutdown {
-		t.Fatalf("syncNow/shutdown = %v/%v, want false/false", syncNow, shutdown)
-	}
-
-	writeIdentityConfig(t, configPath, dataDir, "node-b.catofes.", keyPath)
-	result, syncNow, shutdown = service.handleEvent(daemonEvent{Type: daemonEventReloadConfig})
-	if result.Error != nil {
-		t.Fatalf("reload matching identity: %v", result.Error)
-	}
-	if !syncNow || shutdown {
-		t.Fatalf("matching reload syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
-	}
-}
-
 func buildPendingAutoJoinOwners(t *testing.T, dir string, managed zone.ZonePath, matchingDelegation bool) (*corestate.VerifiedState, *photonlinux.LinuxState, string) {
 	t.Helper()
 	keyPath, pub := writeTestPrivateKey(t, dir, "identity")
