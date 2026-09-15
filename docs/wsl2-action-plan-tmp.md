@@ -36,7 +36,7 @@ shared 后端从未实网验证。
 ## 历史遗留（重建后仍有效）
 
 - **IPv4 IPAM pool**：需 root zone 运营者向 slapaper 委派 IPv4 前缀，ARS/firewall 才能覆盖 IPv4 隧道地址。
-- **Adopt 路径**：已收进 `EnsureInterface`；Adopt/Repair/Staged 走同一条 Ensure（2026-04-06 收口）。
+- **Adopt 路径**：daemon 已 apply Adopt（`2c2406c`）；EnsureObserved 对 shared attachment 重装路由（`e5fd240`）。
 - **DPD/rekey/撤销**：长稳实网验证未做。
 - **IPv6 mesh**：被平台阻塞（NAT 无 v6 underlay；Mirrored xfrm 不通），非配置问题。
 - **charon bypass policy**：`process_route=no` 实验确认有效，生产 charon 配置需默认化。
