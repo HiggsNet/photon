@@ -102,7 +102,7 @@ func (d SystemXFRMDriver) ReclaimAttachment(ctx context.Context, spec TransportL
 	if err != nil {
 		return err
 	}
-	if spec.LocalTunnelAddr.IsValid() {
+	if spec.LocalTunnelAddr.IsValid() && !spec.LocalTunnelAddr.IsLoopback() {
 		addr := tunnelAddressPrefix(spec.LocalTunnelAddr)
 		if err := d.runInNetNS(ctx, netns, "addr", "del", addr, "dev", "lo"); err != nil && !isMissingAddrOrRoute(err) {
 			return err
@@ -129,7 +129,9 @@ func isMissingAddrOrRoute(err error) bool {
 	return strings.Contains(msg, "cannot find") ||
 		strings.Contains(msg, "no such") ||
 		strings.Contains(msg, "not found") ||
-		strings.Contains(msg, "no route")
+		strings.Contains(msg, "no route") ||
+		strings.Contains(msg, "cannot assign requested address") ||
+		strings.Contains(msg, "no such process")
 }
 
 // parseRouteDev extracts the "dev <name>" field from `ip route` output.

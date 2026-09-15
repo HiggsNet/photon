@@ -414,6 +414,44 @@ func TestPolicyReclaimAttachmentRemovesLoopbackAddressAndPeerRoute(t *testing.T)
 	}
 }
 
+func TestPolicyReclaimAttachmentTreatsMissingAddrAsSuccess(t *testing.T) {
+	var commands []recordedCommand
+	driver := SystemXFRMDriver{
+		Backend:      XFRMBackendPolicy,
+		DefaultNetNS: NetNSSpec{Kind: NetNSHost},
+		IPPath:       "ip",
+		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			commands = append(commands, recordedCommand{name: name, args: append([]string(nil), args...)})
+			joined := strings.Join(args, " ")
+			if strings.Contains(joined, "addr del") {
+				return []byte("RTNETLINK answers: Cannot assign requested address\n"), errors.New("exit status 2")
+			}
+			if strings.Contains(joined, "route del") {
+				return []byte("RTNETLINK answers: No such process\n"), errors.New("exit status 2")
+			}
+			return nil, nil
+		},
+	}
+	spec := TransportLinkSpec{
+		InterfaceName:   "phx2a",
+		XFRMIfID:        42,
+		LocalTunnelAddr: netip.MustParseAddr("10.99.0.1"),
+		PeerTunnelAddr:  netip.MustParseAddr("10.99.0.2"),
+	}
+	if err := driver.ReclaimAttachment(context.Background(), spec); err != nil {
+		t.Fatalf("ReclaimAttachment of missing addr/route: %v", err)
+	}
+	hasRoute := false
+	for _, cmd := range commandStrings(commands) {
+		if cmd == "ip -4 route del 10.99.0.2/32" {
+			hasRoute = true
+		}
+	}
+	if !hasRoute {
+		t.Fatalf("missing-addr reclaim must still attempt route del, commands=%v", commandStrings(commands))
+	}
+}
+
 func TestTeardownTransportLinkReclaimsPolicyAttachment(t *testing.T) {
 	xfrm := &recordingReclaimDriver{}
 	ipsecDrv := &DryRunDriver{}
