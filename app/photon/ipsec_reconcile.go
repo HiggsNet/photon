@@ -98,8 +98,8 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 				})
 			}
 		case ipsec.ReconcileActionCreate, ipsec.ReconcileActionUpdate, ipsec.ReconcileActionRepair, ipsec.ReconcileActionPrepareStandby,
-			ipsec.ReconcileActionTeardown, ipsec.ReconcileActionPrepareRotate, ipsec.ReconcileActionInitiateRotate, ipsec.ReconcileActionCommitRotate,
-			ipsec.ReconcileActionRollbackRotate, ipsec.ReconcileActionCleanupRotate:
+			ipsec.ReconcileActionAdopt, ipsec.ReconcileActionTeardown, ipsec.ReconcileActionPrepareRotate, ipsec.ReconcileActionInitiateRotate,
+			ipsec.ReconcileActionCommitRotate, ipsec.ReconcileActionRollbackRotate, ipsec.ReconcileActionCleanupRotate:
 			netns := netnsForAction(action, groups)
 			if _, err := ipsec.ApplyReconcileAction(ctx, ipsecDriver, xfrmDriver, action, netns); err != nil {
 				markIPsecActionFailed(result.Instances, action, groupBackoffPolicy(action, groups), now, err)
@@ -569,6 +569,7 @@ func ipsecActionAppliesXFRM(action string) bool {
 		ipsec.ReconcileActionUpdate,
 		ipsec.ReconcileActionRepair,
 		ipsec.ReconcileActionPrepareStandby,
+		ipsec.ReconcileActionAdopt,
 		ipsec.ReconcileActionTeardown,
 		ipsec.ReconcileActionPrepareRotate,
 		ipsec.ReconcileActionCommitRotate,
