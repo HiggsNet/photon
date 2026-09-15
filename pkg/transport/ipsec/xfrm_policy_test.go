@@ -372,6 +372,68 @@ func TestPolicyEnsureObservedInterfacesReinstallsPeerRoute(t *testing.T) {
 	}
 }
 
+func TestPolicyEnsureObservedInterfacesContinuesAfterOneRouteFailure(t *testing.T) {
+	var commands []recordedCommand
+	driver := SystemXFRMDriver{
+		Backend:      XFRMBackendPolicy,
+		DefaultNetNS: NetNSSpec{Kind: NetNSHost},
+		IPPath:       "ip",
+		SysctlPath:   "sysctl",
+		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			commands = append(commands, recordedCommand{name: name, args: append([]string(nil), args...)})
+			joined := strings.Join(args, " ")
+			if strings.Contains(joined, "route get 203.0.113.10") {
+				return nil, errors.New("network unreachable")
+			}
+			if strings.Contains(joined, "route show default") && strings.Contains(joined, "-4") {
+				return nil, errors.New("network unreachable")
+			}
+			if strings.Contains(joined, "route get 203.0.113.20") {
+				return []byte("203.0.113.20 dev eth0\n"), nil
+			}
+			return nil, nil
+		},
+	}
+	shared := XFRMLinkState{
+		NetNS:                    NetNSSpec{Kind: NetNSHost},
+		NamespaceExists:          true,
+		InterfaceExists:          true,
+		FlagsKnown:               true,
+		InterfaceUp:              true,
+		SharedAttachment:         true,
+		NamespaceForwardingKnown: true,
+		NamespaceForwarding:      true,
+	}
+	a := TransportLinkSpec{
+		LinkID: "a", InterfaceName: "phxa", XFRMIfID: 1,
+		LocalTunnelAddr: netip.MustParseAddr("10.99.0.1"),
+		PeerTunnelAddr:  netip.MustParseAddr("10.99.0.2"),
+		ContactPoints:   []ContactPoint{{Address: "203.0.113.10"}},
+	}
+	b := TransportLinkSpec{
+		LinkID: "b", InterfaceName: "phxb", XFRMIfID: 2,
+		LocalTunnelAddr: netip.MustParseAddr("10.99.0.3"),
+		PeerTunnelAddr:  netip.MustParseAddr("10.99.0.4"),
+		ContactPoints:   []ContactPoint{{Address: "203.0.113.20"}},
+	}
+	err := driver.EnsureObservedInterfaces(context.Background(), []XFRMObservedInterface{
+		{Spec: a, State: shared},
+		{Spec: b, State: shared},
+	})
+	if err == nil {
+		t.Fatal("want error from first shared ensure, got nil")
+	}
+	foundB := false
+	for _, cmd := range commandStrings(commands) {
+		if cmd == "ip -4 route replace 10.99.0.4/32 dev eth0 src 10.99.0.3" {
+			foundB = true
+		}
+	}
+	if !foundB {
+		t.Fatalf("second shared link must still be ensured after first failure, commands=%v err=%v", commandStrings(commands), err)
+	}
+}
+
 func TestPolicyReclaimAttachmentRemovesLoopbackAddressAndPeerRoute(t *testing.T) {
 	var commands []recordedCommand
 	driver := SystemXFRMDriver{

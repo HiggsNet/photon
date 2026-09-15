@@ -3,6 +3,7 @@ package ipsec
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"sort"
@@ -255,6 +256,7 @@ func (d SystemXFRMDriver) EnsureObservedInterfaces(ctx context.Context, observed
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	var sharedErrs []error
 	for _, key := range keys {
 		items := groups[key]
 		if len(items) == 0 {
@@ -280,8 +282,9 @@ func (d SystemXFRMDriver) EnsureObservedInterfaces(ctx context.Context, observed
 			if state.SharedAttachment {
 				// lo is always present; re-run Ensure so the underlay peer
 				// route is restored if it drifted. Do not touch lo flags.
+				// A probe/replace failure on one link must not skip the rest.
 				if err := d.EnsureInterface(ctx, item.Spec); err != nil {
-					return err
+					sharedErrs = append(sharedErrs, fmt.Errorf("link %s: %w", item.Spec.LinkID, err))
 				}
 				continue
 			}
@@ -307,7 +310,7 @@ func (d SystemXFRMDriver) EnsureObservedInterfaces(ctx context.Context, observed
 			}
 		}
 	}
-	return nil
+	return errors.Join(sharedErrs...)
 }
 
 func xfrmBatchNetNSKey(netns NetNSSpec) string {
