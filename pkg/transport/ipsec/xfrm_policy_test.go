@@ -271,3 +271,56 @@ func TestPolicyInspectLinkObservesLoopbackAttachment(t *testing.T) {
 		t.Fatalf("policy attachment should match without MULTICAST: %+v", state)
 	}
 }
+
+func TestPolicyEnsureObservedInterfacesReinstallsPeerRoute(t *testing.T) {
+	var commands []recordedCommand
+	driver := SystemXFRMDriver{
+		Backend:      XFRMBackendPolicy,
+		DefaultNetNS: NetNSSpec{Kind: NetNSHost},
+		IPPath:       "ip",
+		SysctlPath:   "sysctl",
+		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			commands = append(commands, recordedCommand{name: name, args: append([]string(nil), args...)})
+			joined := strings.Join(args, " ")
+			if strings.Contains(joined, "route get") {
+				return []byte("203.0.113.10 dev eth0\n"), nil
+			}
+			return nil, nil
+		},
+	}
+	spec := TransportLinkSpec{
+		LinkID:          "link-policy",
+		InterfaceName:   "phx2a",
+		XFRMIfID:        42,
+		LocalTunnelAddr: netip.MustParseAddr("10.99.0.1"),
+		PeerTunnelAddr:  netip.MustParseAddr("10.99.0.2"),
+		ContactPoints:   []ContactPoint{{Address: "203.0.113.10"}},
+	}
+	state := XFRMLinkState{
+		NetNS:                    NetNSSpec{Kind: NetNSHost},
+		NamespaceExists:          true,
+		InterfaceExists:          true,
+		FlagsKnown:               true,
+		InterfaceUp:              true,
+		SharedAttachment:         true,
+		NamespaceForwardingKnown: true,
+		NamespaceForwarding:      true,
+		Addresses:                []netip.Prefix{netip.MustParsePrefix("10.99.0.1/32")},
+	}
+	if err := driver.EnsureObservedInterfaces(context.Background(), []XFRMObservedInterface{{Spec: spec, State: state}}); err != nil {
+		t.Fatalf("EnsureObservedInterfaces: %v", err)
+	}
+	wantRoute := "ip -4 route replace 10.99.0.2/32 dev eth0 src 10.99.0.1"
+	found := false
+	for _, cmd := range commandStrings(commands) {
+		if cmd == wantRoute {
+			found = true
+		}
+		if strings.Contains(cmd, "link add") || strings.Contains(cmd, "multicast") {
+			t.Fatalf("shared ensure mutated the loopback device: %v", commandStrings(commands))
+		}
+	}
+	if !found {
+		t.Fatalf("shared EnsureObservedInterfaces must reinstall peer route, commands=%v", commandStrings(commands))
+	}
+}

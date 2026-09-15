@@ -278,6 +278,11 @@ func (d SystemXFRMDriver) EnsureObservedInterfaces(ctx context.Context, observed
 				continue
 			}
 			if state.SharedAttachment {
+				// lo is always present; re-run Ensure so the underlay peer
+				// route is restored if it drifted. Do not touch lo flags.
+				if err := d.EnsureInterface(ctx, item.Spec); err != nil {
+					return err
+				}
 				continue
 			}
 			if !state.IPv6AddrGenModeKnown || !state.IPv6AddrGenDisabled {

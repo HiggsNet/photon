@@ -410,7 +410,9 @@ func (d *DaemonService) maintainExistingXFRMInterfaces(ctx context.Context, xfrm
 
 	var repairs []ipsec.XFRMObservedInterface
 	for _, item := range items {
-		if !item.matches {
+		// Shared attachments hide peer-route drift (lo always "exists").
+		// Re-Ensure is idempotent and restores the underlay /32|/128.
+		if !item.matches || item.state.SharedAttachment {
 			repairs = append(repairs, ipsec.XFRMObservedInterface{Spec: item.candidate, State: item.state})
 		}
 	}
@@ -770,17 +772,18 @@ func (d *DaemonService) xfrmLinkStateMatchReason(state ipsec.XFRMLinkState, spec
 	if state.FlagsKnown && !state.InterfaceUp {
 		return false, "interface_down"
 	}
-	// Shared attachments (policy backend on lo) never carry MULTICAST.
+	// Shared attachments (policy backend on lo) never carry MULTICAST,
+	// and lo's addrgen/forwarding flags are not part of the attachment.
 	if state.FlagsKnown && !state.Multicast && !state.SharedAttachment {
 		return false, "missing_multicast"
 	}
-	if state.IPv6AddrGenModeKnown && !state.IPv6AddrGenDisabled {
+	if !state.SharedAttachment && state.IPv6AddrGenModeKnown && !state.IPv6AddrGenDisabled {
 		return false, "ipv6_addrgen_enabled"
 	}
 	if state.NamespaceForwardingKnown && !state.NamespaceForwarding {
 		return false, "namespace_forwarding_disabled"
 	}
-	if state.InterfaceForwardingKnown && !state.InterfaceForwarding {
+	if !state.SharedAttachment && state.InterfaceForwardingKnown && !state.InterfaceForwarding {
 		return false, "interface_forwarding_disabled"
 	}
 	if !spec.LocalTunnelAddr.IsValid() {
