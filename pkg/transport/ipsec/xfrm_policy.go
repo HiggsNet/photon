@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"strings"
 )
 
@@ -48,26 +49,36 @@ func (d SystemXFRMDriver) ensurePolicyRoute(ctx context.Context, netns NetNSSpec
 	if !spec.LocalTunnelAddr.IsValid() || !spec.PeerTunnelAddr.IsValid() {
 		return nil
 	}
+	family, bits := "-4", 32
+	want6 := spec.PeerTunnelAddr.Is6()
+	if want6 {
+		family, bits = "-6", 128
+	}
 	// Discover the outer interface by looking up the route to the peer's
-	// underlay contact address. The first numeric contact point is used.
+	// underlay contact address of the same family.
 	var peerUnderlay string
 	for _, point := range spec.ContactPoints {
 		addr := strings.TrimSpace(point.Address)
-		if net.ParseIP(addr) != nil {
-			peerUnderlay = addr
-			break
+		ip := net.ParseIP(addr)
+		if ip == nil {
+			continue
 		}
+		is6 := ip.To4() == nil
+		if is6 != want6 {
+			continue
+		}
+		peerUnderlay = addr
+		break
 	}
 	dev := ""
 	if peerUnderlay != "" {
-		out, err := d.outputInNetNS(ctx, netns, "-4", "route", "get", peerUnderlay)
+		out, err := d.outputInNetNS(ctx, netns, family, "route", "get", peerUnderlay)
 		if err == nil {
 			dev = parseRouteDev(string(out))
 		}
 	}
 	if dev == "" {
-		// Fall back to the interface that has the default route.
-		out, err := d.outputInNetNS(ctx, netns, "-4", "route", "show", "default")
+		out, err := d.outputInNetNS(ctx, netns, family, "route", "show", "default")
 		if err == nil {
 			dev = parseRouteDev(string(out))
 		}
@@ -75,8 +86,9 @@ func (d SystemXFRMDriver) ensurePolicyRoute(ctx context.Context, netns NetNSSpec
 	if dev == "" {
 		return fmt.Errorf("cannot determine outer interface for policy route (link %s)", spec.LinkID)
 	}
-	return d.runInNetNS(ctx, netns, "-4", "route", "replace",
-		spec.PeerTunnelAddr.String()+"/32", "dev", dev, "src", spec.LocalTunnelAddr.String())
+	prefix := netip.PrefixFrom(spec.PeerTunnelAddr, bits)
+	return d.runInNetNS(ctx, netns, family, "route", "replace",
+		prefix.String(), "dev", dev, "src", spec.LocalTunnelAddr.String())
 }
 
 // parseRouteDev extracts the "dev <name>" field from `ip route` output.

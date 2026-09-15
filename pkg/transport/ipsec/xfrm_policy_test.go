@@ -272,6 +272,53 @@ func TestPolicyInspectLinkObservesLoopbackAttachment(t *testing.T) {
 	}
 }
 
+func TestPolicyEnsureInterfaceInstallsIPv6UnderlayRoute(t *testing.T) {
+	var commands []recordedCommand
+	driver := SystemXFRMDriver{
+		Backend:      XFRMBackendPolicy,
+		DefaultNetNS: NetNSSpec{Kind: NetNSHost},
+		IPPath:       "ip",
+		SysctlPath:   "sysctl",
+		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			commands = append(commands, recordedCommand{name: name, args: append([]string(nil), args...)})
+			joined := strings.Join(args, " ")
+			if strings.Contains(joined, "route get 2001:db8::10") {
+				return []byte("2001:db8::10 from :: dev eth0\n"), nil
+			}
+			return nil, nil
+		},
+	}
+	spec := TransportLinkSpec{
+		LinkID:          "link-policy6",
+		InterfaceName:   "phx2a",
+		XFRMIfID:        42,
+		LocalTunnelAddr: netip.MustParseAddr("fd00:99::1"),
+		PeerTunnelAddr:  netip.MustParseAddr("fd00:99::2"),
+		ContactPoints:   []ContactPoint{{Address: "2001:db8::10"}},
+	}
+	if err := driver.EnsureInterface(context.Background(), spec); err != nil {
+		t.Fatalf("EnsureInterface: %v", err)
+	}
+	got := commandStrings(commands)
+	wantGet := "ip -6 route get 2001:db8::10"
+	wantReplace := "ip -6 route replace fd00:99::2/128 dev eth0 src fd00:99::1"
+	hasGet, hasReplace := false, false
+	for _, cmd := range got {
+		if cmd == wantGet {
+			hasGet = true
+		}
+		if cmd == wantReplace {
+			hasReplace = true
+		}
+		if strings.Contains(cmd, "-4 route") {
+			t.Fatalf("IPv6 policy route used IPv4 ip route: %v", got)
+		}
+	}
+	if !hasGet || !hasReplace {
+		t.Fatalf("IPv6 policy route missing get/replace (get=%v replace=%v) in %v", hasGet, hasReplace, got)
+	}
+}
+
 func TestPolicyEnsureObservedInterfacesReinstallsPeerRoute(t *testing.T) {
 	var commands []recordedCommand
 	driver := SystemXFRMDriver{
