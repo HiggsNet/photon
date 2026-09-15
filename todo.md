@@ -138,8 +138,9 @@ Daemon
   - [x] Observer 页面删除旧 `last_error` 字段读取和 Health 裸 sample/嵌套 sample 双形态 fallback，统一消费 canonical `last_failure {code,message}` 与 `HealthContextItem.health`。
   - [x] Health runtime context 直接复用 secret-free `inspect.LinkInstance`；删除第二套 `HealthInstanceContextInput` 及其六字段投影。
   - [x] `debug ping` 的目标选择与探测执行移入 daemon，control 直接返回 canonical `inspect.PingDebugView`；删除 CLI 对 Linux health prober 的直接调用和中间 `ping_targets` 查询，并保留长探测的 context 取消语义。
-- [ ] CLI/control/HTTP 共用 canonical inspect DTO；CLI 不再从 HTTP DTO 反向转换，也不直接调用平台 Driver。
-- [ ] verified/common 允许离线读；GossipCheckpoint 离线必须标记 `last-known`；platform Observation 只允许在线读。
+  - [x] routes/peers/status/zones 的 canonical JSON schema 测试迁回 `internal/inspect`；`internal/inspect/http` 只保留仍有独立 HTTP wire shape 的 links/health 代码与测试。
+- [x] CLI/control 共用 canonical inspect DTO，HTTP 只保留 links/health 的真实 wire shape；在线 CLI 不从 HTTP DTO 反向转换，也不直接调用平台 Driver。显式 offline recovery/direct 仍按其职责临时创建 Driver。
+- [x] verified/common 允许离线读；GossipCheckpoint 离线统一标记 `last-known`；platform Observation 只允许在线读，不从 bbolt 或 CLI Driver 冒充实时状态。
 - [ ] CLI 壳稳定后再迁入 `internal/photoncli`，不为了减少 `app/photon` 文件数先搬目录。
 - [ ] 每一批迁移更新 runtime migration report，并执行相关单测、race（适用时）、Windows cross build、`make check` 和 `git diff --check`。
 

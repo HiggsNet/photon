@@ -1,4 +1,4 @@
-package http_test
+package inspect_test
 
 import (
 	"crypto/ed25519"

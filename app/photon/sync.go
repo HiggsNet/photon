@@ -65,6 +65,7 @@ func syncStatus(verbose bool) error {
 	if common.State == nil {
 		return errors.New("common state is not initialized")
 	}
+	fmt.Fprintln(os.Stdout, "source: checkpoint (daemon offline; last-known gossip runtime)")
 	config := gossipDriverConfig(rt.Config, common.State, nil)
 	return inspecttext.WriteSyncStatus(os.Stdout, inspect.BuildSyncStatus(common, syncStatusOptions(rt.Config.ListenAddr, config, rt.Now(), verbose)))
 }

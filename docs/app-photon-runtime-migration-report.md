@@ -292,7 +292,7 @@ GossipDriver 公共 gossip 闭环、aggregate 清理和 current Linux codec 迁�
    reconcile completion 以及 Firewall/IPsec 主 planner 已直接读取 common/Linux 两个 owner，不再构造完整 Snapshot。
    本机 endpoint/IPsec/routing protocol publish 也已直接使用两个 owner，routing 主 reconcile planner 同样完成切换。
    在线 control/debug、手动端口轮换和 hook/composition 也已切走，production `currentState()` 已删除。随后删除了不完整的配置热重载链：`config.yaml` 只在进程启动时读取，配置变更通过完整 restart 应用，不再局部替换 LinuxDriver/gossip config 而遗留旧 watcher、health worker、Observer 或 transport。
-   CLI 查询已按来源收口：verified/common 允许离线读取；gossip checkpoint 离线时明确标为 last-known；links/firewall/BIRD/health/ping/
+   CLI 查询已按来源收口：verified/common 允许离线读取；status/peer/peers/sync/admission 使用 gossip checkpoint 的离线路径统一明确标为 checkpoint/last-known；links/firewall/BIRD/health/ping/
    peer lifecycle 等 platform runtime 查询要求在线 daemon，不再从 bbolt reconcile snapshot 冒充 live，也不由 CLI 直接调用 platform driver。
    read model 随后开始收敛为 typed canonical view envelope：zone/service/route/IPAM/endpoint、records/sync/peer/zone debug、
    status/peer lifecycle/gossip peers/health 均由 daemon 或离线 owner 调用同一查询函数生成最终 inspect DTO，CLI 只负责呈现；
@@ -302,15 +302,14 @@ GossipDriver 公共 gossip 闭环、aggregate 清理和 current Linux codec 迁�
    `verify_chain` 同样返回 typed bool view，只读 control 已不再借用 mutation response；
    E2k 最终边界测试确认在线 daemon 独占 Bolt handle 时 CLI 只经 control 读取，关闭 daemon 后 offline owner 生成相同 canonical Zone DTO，
    且 control、CLI presenter、Observer HTTP 对同一 owner fixture 的 Zone path/count/revoked 语义一致。
-   routes canonical DTO 已从 HTTP 包迁到 `internal/inspect`，HTTP 只保留稳定 schema alias；zones/peers/status 的排序、来源判定和
-   聚合投影也已归入 `internal/inspect`。links 的 REST 契约需要同时保留扁平兼容字段与 `raw` canonical view，因此只保留薄 HTTP adapter，
-   不在 HTTP 层重新推导 desired/runtime 状态。BIRD raw debug 的命令选择已归 `pkg/routing/bird`，neighbors/routes/entries、
+   routes canonical DTO 已从 HTTP 包迁到 `internal/inspect`，Observer 直接返回该模型；zones/peers/status 的排序、来源判定和
+   聚合投影也已归入 `internal/inspect`。links 只保留前端实际消费的扁平 REST schema，不再附带 `raw` canonical view，也不在 HTTP 层重新推导 desired/runtime 状态。BIRD raw debug 的命令选择已归 `pkg/routing/bird`，neighbors/routes/entries、
    filter definition 解析、LinkOutput 接口上下文和 canonical dump enrichment 也已从 executable wrapper 移入 `internal/inspect`；app 只保留在线执行、配置文件读取及传入 provider-neutral link outputs。
    `debug routes` 与单前缀 `debug route` 也已合并重复的 control/offline fallback：两者共用同一个 canonical routes loader，在线读取 daemon control，离线只从 common owner 构建授权路由视图。
    IPsec desired/SA/action/skip 在 reconcile 边界投影为不含私钥和 spec 指针的 canonical `internal/state` observation；`internal/inspect` 直接 alias 这四组 live DTO，已删除第二套同字段 struct、逐字段 builder、app 批量 converter 和 debug rotate 的重复 SA copier。Observation clone 仍保留并发隔离，`LinkOutput` 仍作为 routing/firewall/health 的窄消费契约。
    health canonical view 与 daemon 内的 `debug ping` 执行链直接共用现有的安全 `health.ProbeTarget`，不再先转成字符串型 `inspect.HealthTarget` 再解析回执行类型。随后中间 `ping_targets` control 也已删除：daemon 使用自己持有的 Linux health prober 完成目标选择与探测，直接返回带稳定 snake_case JSON schema 的 canonical `inspect.PingDebugView`；CLI 只传选项并渲染结果，不再创建平台 prober。长探测使用 context-aware control transport，不受普通只读请求 10 秒 deadline 限制，并仍可由 CLI context 取消。
    record/IPAM/route/service 的在线请求也已在 control 边界直接转成与 `--direct` 相同的 `corestate.LocalIntent`；Daemon 单 writer 队列只携带一个 `common_mutation + LocalIntent + dryRun`，原四种事件 payload、`daemonRecordPut` 和 app 侧重复的 reserved-record 校验表已删除，IPAM/route 成功提交后的同步路由刷新改由 intent 类型判定。
-   Observer routes/peers/status/zones/BIRD 已直接使用 canonical `internal/inspect` DTO；`internal/inspect/http` 中仅换名字的 type alias、函数变量转发与薄 BIRD response 壳已删除，HTTP package 只保留 links/health 的独立 wire shape 及 schema contract tests。
+   Observer routes/peers/status/zones/BIRD 已直接使用 canonical `internal/inspect` DTO；`internal/inspect/http` 中仅换名字的 type alias、函数变量转发与薄 BIRD response 壳已删除，对应 canonical JSON schema tests 也已迁回真实 owner；HTTP package 只保留 links/health 的独立 wire shape 及其 contract tests。
    Health HTTP context 对 desired link 也不再建立第二套逐字段 wrapper：它直接接收已脱敏的 canonical `inspect.DesiredLink`，response 的 `Desired` 与 `PeerZone` 使用明确类型；实例 context 仍保留其独立的 runtime 选择边界，但 response 已删除前端无人消费的原始 `ipsec.LinkInstance`，只输出页面实际需要的选择字段，避免暴露 owner token、内部错误和状态机细节。
    Links HTTP response 也已删除重复的 `raw LinkView` 与前端无人消费的 owner 对象；canonical inspect 不再建立包含 owner token 等校验字段的 `LinkOwner`，只保留文本诊断实际展示的 owner manager。
    Health datasource/series 的固定 HTTP 字段也已改用现有具体类型；BIRD endpoint 直接返回带稳定 JSON tags 的 canonical `BabelDebugView`，runtime resource owner/token 明确不进入响应，页面消费 instance/reconcile `FailureView`。

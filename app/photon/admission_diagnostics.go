@@ -141,6 +141,7 @@ func debugAdmission() error {
 	if common.State == nil {
 		return fmt.Errorf("common state owner is not initialized")
 	}
+	fmt.Fprintln(os.Stdout, "source: checkpoint (daemon offline; last-known gossip runtime)")
 	diagnosis := diagnoseAutoJoinAdmission(common.State, common.Gossip, rt.Config.Bootstrap, rt.Now())
 	return inspecttext.WriteAdmissionDiagnosis(os.Stdout, diagnosis)
 }

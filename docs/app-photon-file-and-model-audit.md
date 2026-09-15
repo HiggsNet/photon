@@ -585,6 +585,8 @@ VerifiedState + LinuxState + 操作系统现状
 11. [已完成] Observer 前端不再读取已删除的 legacy `last_error`，也不再兼容 Health 裸 sample/嵌套 sample；status、peer、health、takeover 与 routing 统一使用 canonical `FailureView`，Health 统一读取 `HealthContextItem.health`。
 12. [已完成] Health runtime context 直接复用已经脱离 Driver/token 的 `inspect.LinkInstance`；删除重复的 `HealthInstanceContextInput` 和六字段逐项投影。
 13. [已完成] 删除中间 `ping_targets` control 与 CLI 对 Linux ICMP prober 的直接调用；daemon 以自己持有的 health prober 执行诊断并返回 canonical `inspect.PingDebugView`，普通 control 的 10 秒边界不再截断自定义长探测。
+14. [已完成] routes/peers/status/zones 的 schema tests 已随 canonical DTO 从 `internal/inspect/http` 迁回 `internal/inspect`；HTTP 目录只保留 links/health 独立 wire shape 的实现与测试。
+15. [已完成] 离线 status/peer/peers/sync/admission 对 GossipCheckpoint 统一标记为 checkpoint/last-known；links/firewall/BIRD/health/ping/peer lifecycle 等 platform observation 只允许在线读取。
 
 ### 5.3 不建议做的“优化”
 
