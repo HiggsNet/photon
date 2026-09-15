@@ -10,10 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"syscall"
 	"time"
 
-	"github.com/HiggsNet/photon/internal/controlapi"
 	"github.com/HiggsNet/photon/internal/inspect"
+	pingdebug "github.com/HiggsNet/photon/internal/ping"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -21,7 +22,11 @@ import (
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
-const controlSocketName = "photon.sock"
+const (
+	controlSocketName      = "photon.sock"
+	controlDialTimeout     = time.Second
+	controlRequestDeadline = 10 * time.Second
+)
 
 type controlRequest struct {
 	Method      string                   `json:"method"`
@@ -48,6 +53,7 @@ type controlRequest struct {
 	IPAM        *ipamMutationRequest     `json:"ipam,omitempty"`
 	Route       *routeMutationRequest    `json:"route,omitempty"`
 	Service     *serviceMutationRequest  `json:"service,omitempty"`
+	Ping        *pingdebug.Options       `json:"ping,omitempty"`
 }
 
 type controlResponse struct {
@@ -99,8 +105,10 @@ func dataDirControlSocketPath(config *appConfig) string {
 }
 
 func sendControlRequest(path string, request controlRequest) (*controlResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), controlRequestDeadline)
+	defer cancel()
 	var response controlResponse
-	if err := controlapi.Send(path, request, &response); err != nil {
+	if err := exchangeControl(ctx, path, request, &response); err != nil {
 		return nil, err
 	}
 	if !response.OK {
@@ -112,33 +120,66 @@ func sendControlRequest(path string, request controlRequest) (*controlResponse, 
 	return &response, nil
 }
 
-func daemonStatusViaControl(rt *AppContext) (inspect.DaemonStatusView, bool, error) {
-	return readCanonicalViewViaControl[inspect.DaemonStatusView](rt, controlRequest{Method: "daemon_status_view"})
-}
-
-func rootPublicKeyViaControl(rt *AppContext) (ed25519.PublicKey, bool, error) {
-	return readCanonicalViewViaControl[ed25519.PublicKey](rt, controlRequest{Method: "root_public_key"})
-}
-
 func readCanonicalViewViaControl[T any](rt *AppContext, request controlRequest) (T, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), controlRequestDeadline)
+	defer cancel()
+	return readCanonicalViewViaControlContext[T](ctx, rt, request)
+}
+
+func readCanonicalViewViaControlContext[T any](ctx context.Context, rt *AppContext, request controlRequest) (T, bool, error) {
 	var zero T
 	if rt == nil || rt.DisableControl {
 		return zero, false, nil
 	}
 	var response controlViewResponse[T]
-	if err := controlapi.Send(controlSocketPath(rt.Config), request, &response); err != nil {
+	if err := exchangeControl(ctx, controlSocketPath(rt.Config), request, &response); err != nil {
 		if isControlSocketUnavailable(err) {
 			return zero, false, nil
 		}
 		return zero, true, err
 	}
+	return canonicalControlView(response)
+}
+
+func canonicalControlView[T any](response controlViewResponse[T]) (T, bool, error) {
 	if !response.OK {
 		if response.Error == "" {
 			response.Error = "daemon control query failed"
 		}
+		var zero T
 		return zero, true, errors.New(response.Error)
 	}
 	return response.View, true, nil
+}
+
+// exchangeControl performs one JSON request/response exchange with the local
+// daemon. The wire DTOs, transport and fallback policy stay together at the
+// executable control boundary until another real client needs a typed API.
+func exchangeControl(ctx context.Context, path string, request, response any) error {
+	dialer := net.Dialer{Timeout: controlDialTimeout}
+	conn, err := dialer.DialContext(ctx, "unix", path)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
+	stopCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopCancel()
+	if err := json.NewEncoder(conn).Encode(request); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return err
+	}
+	if err := json.NewDecoder(conn).Decode(response); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return err
+	}
+	return nil
 }
 
 func verifyChainViaControl(rt *AppContext, path zone.ZonePath) (bool, error) {
@@ -427,7 +468,7 @@ func isControlSocketUnavailable(err error) bool {
 	// to enter an offline/direct fallback. Timeouts, permission failures and
 	// connection resets may all come from a live but unhealthy daemon; treating
 	// them as absence risks concurrent direct DB writes beside the single writer.
-	return controlapi.IsUnavailable(err)
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED)
 }
 
 func writeControlResponse(conn net.Conn, response any) {

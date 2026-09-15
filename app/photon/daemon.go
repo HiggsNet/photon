@@ -19,11 +19,13 @@ import (
 	"github.com/HiggsNet/photon/internal/observer"
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/internal/photonlinux/linkstate"
+	pingdebug "github.com/HiggsNet/photon/internal/ping"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
+	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -768,7 +770,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		endpoints := inspect.BuildEndpointDebug(view.State, d.now())
 		writeCanonicalView(conn, endpoints)
-	case "ping_targets":
+	case "ping_view":
 		common := d.State.Common.ReadView()
 		if common.State == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
@@ -776,7 +778,23 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		links, reconcile := d.linuxObservation.ipsecSnapshot()
 		targets := linkstate.HealthTargets(buildLinkOutputs(links, reconcile), string(common.State.ManagedZone))
-		writeCanonicalView(conn, targets)
+		opts := pingdebug.Options{}
+		if request.Ping != nil {
+			opts = *request.Ping
+		}
+		if d.App != nil && d.App.Config != nil {
+			opts.FallbackCount = d.App.Config.Health.Burst
+			opts.FallbackTimeout = d.App.Config.Health.Timeout
+		}
+		resolved := pingdebug.ResolveOptions(opts)
+		selected := pingdebug.SelectTargetsResolved(targets, request.Zone, resolved)
+		var prober health.Prober
+		if d.linuxDriver != nil {
+			prober = d.linuxDriver.HealthProber()
+		}
+		outcomes := pingdebug.Run(ctx, prober, selected, resolved.ProbeConfig())
+		view := pingdebug.BuildDebugView(request.Zone, outcomes, pingdebug.DistinctPeerZones(targets), resolved.Count, resolved.Timeout)
+		writeCanonicalView(conn, view)
 	case "sync_view":
 		common := d.State.Common.ReadView()
 		if common.State == nil {

@@ -18,12 +18,12 @@ const (
 )
 
 type Options struct {
-	Count           int
-	Timeout         time.Duration
-	FallbackCount   int
-	FallbackTimeout time.Duration
-	Family          string
-	Role            string
+	Count           int           `json:"count,omitempty"`
+	Timeout         time.Duration `json:"timeout,omitempty"`
+	FallbackCount   int           `json:"fallback_count,omitempty"`
+	FallbackTimeout time.Duration `json:"fallback_timeout,omitempty"`
+	Family          string        `json:"family,omitempty"`
+	Role            string        `json:"role,omitempty"`
 }
 
 type ResolvedOptions struct {

@@ -8,7 +8,7 @@
 
 | 层 | 所有权 |
 |---|---|
-| `app/photon` | Linux Daemon、唯一顶层事件循环、executable 入口、CLI 注册和依赖装配 |
+| `app/photon` | Linux Daemon、唯一顶层事件循环、executable 入口、Unix control 协议/client/server、CLI 注册和依赖装配 |
 | `pkg/core/host` | 公共 GossipDriver：协议事件队列、gossip scheduler/action、transport、object-pull 和协议 worker completion |
 | `pkg/core/gossip` | wire codec、同步 FSM/session、chunk、object-pull 协议和 endpoint discovery |
 | `pkg/core/state` | verified state、`GossipCheckpoint`、typed intent、签名验证和公共事务 |
@@ -16,7 +16,6 @@
 | `internal/photonlinux` | LinuxDriver、LinuxState codec，以及 Linux IPsec、routing、firewall、health 的具体实现 |
 | `internal/observability` | 可丢失的实时统计和诊断 |
 | `internal/inspect` | 只读 view；不拥有 mutable store |
-| `internal/controlapi` | 平台无关 Command/Response DTO；Unix socket/named pipe 是平台 adapter |
 | `internal/photoncli` | CLI 参数、文件导入导出、输出和显式离线调用 |
 | `internal/photonlinux/migration` | 旧 Linux 数据库单向升级；不提供反向映射或兼容写入 |
 
@@ -114,9 +113,9 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `state_bolt.go` | 组合 Common 与 LinuxState 的启动加载 | 启动已优先读取新 schema，仅未初始化时进入旧 bootstrap/migration；唯一 StateDB 随后交给具体 State 管理 |
 | `cmd.go` | Linux CLI 命令树 | 留 `app/photon` 但缩成注册；handler 进 `internal/photoncli` |
 | `config.go` | 混合解析 gossip、identity 和全部 Linux subsystem | 顶层 YAML 进 `internal/photonlinux/config`；公共参数转换为 host/gossip config；各 Linux 配置归各 controller |
-| `control.go` | 私有 DTO、Unix socket client、命令 wrapper 和部分 view | DTO 进 `internal/controlapi`；Unix transport 进 `internal/photonlinux/control`；CLI/view 分别进 photoncli/inspect |
+| `control.go` | 私有 DTO、Unix socket client、命令 wrapper 和部分 view | 保留 executable control 边界；只有出现第二个真实 client 时才整体抽 typed protocol/client，不再单独下沉 transport helper；CLI/view 分别进 photoncli/inspect |
 | `cpu_profile.go` | daemon CPU profile 生命周期 | `internal/runtimeprofile` 或薄 app helper；不属于状态层 |
-| `daemon.go` | event loop、控制服务、admin mutation、publisher、controller 生命周期 | sync/endpoint/IPsec/routing/firewall/health 周期 deadline 由 Daemon 自己的 Scheduler/queue 管理；record/IPAM/route/service 已共用一个携带 `LocalIntent` 的 mutation event；Unix control 和 Linux controller 继续下沉，最终只留 composition root |
+| `daemon.go` | event loop、控制服务、admin mutation、publisher、controller 生命周期 | sync/endpoint/IPsec/routing/firewall/health 周期 deadline 由 Daemon 自己的 Scheduler/queue 管理；record/IPAM/route/service 已共用一个携带 `LocalIntent` 的 mutation event；control server 留在 executable 集成边界，Linux controller 继续下沉 |
 | `daemon_common_intent.go` | control/direct DTO 到公共 intent 的共享转换 | 每个 converter 有 online 与 direct 两个真实消费者；wire DTO 下沉时随 control 边界移动，不新增 adapter |
 | `daemon_gossip.go` | Daemon 到 GossipDriver 的配置适配、lifecycle suppression 与 discovery 刷新触发 | 规划、checkpoint patch、persist-before-publish 和地址簿更新已进 GossipDriver；地址簿是可重建的公共 transport runtime state。 |
 | `daemon_object_chunk.go` | 已删除 | chunk assembly、repair deadline、snapshot decode/root check、reject checkpoint 和 completion 回投已归 GossipDriver；剩余 sent-chunk/NACK repair 随 F0e3b 从 `sync.go` 收口 |
@@ -309,7 +308,7 @@ GossipDriver 公共 gossip 闭环、aggregate 清理和 current Linux codec 迁�
    filter definition 解析、LinkOutput 接口上下文和 canonical dump enrichment 也已从 executable wrapper 移入 `internal/inspect`；app 只保留在线执行、配置文件读取及传入 provider-neutral link outputs。
    `debug routes` 与单前缀 `debug route` 也已合并重复的 control/offline fallback：两者共用同一个 canonical routes loader，在线读取 daemon control，离线只从 common owner 构建授权路由视图。
    IPsec desired/SA/action/skip 在 reconcile 边界投影为不含私钥和 spec 指针的 canonical `internal/state` observation；`internal/inspect` 直接 alias 这四组 live DTO，已删除第二套同字段 struct、逐字段 builder、app 批量 converter 和 debug rotate 的重复 SA copier。Observation clone 仍保留并发隔离，`LinkOutput` 仍作为 routing/firewall/health 的窄消费契约。
-   health canonical view、`ping_targets` control 与 `debug ping` 也已直接共用现有的安全 `health.ProbeTarget`，不再先转成字符串型 `inspect.HealthTarget` 再由 CLI 解析回执行类型。`ProbeTarget` 自有稳定 snake_case JSON tags；零地址在 JSON 中省略而不是暴露 Go 的 `invalid IP` 哨兵字符串，文本与 HTTP 只在最终展示边界格式化 `netip.Addr`。
+   health canonical view 与 daemon 内的 `debug ping` 执行链直接共用现有的安全 `health.ProbeTarget`，不再先转成字符串型 `inspect.HealthTarget` 再解析回执行类型。随后中间 `ping_targets` control 也已删除：daemon 使用自己持有的 Linux health prober 完成目标选择与探测，直接返回带稳定 snake_case JSON schema 的 canonical `inspect.PingDebugView`；CLI 只传选项并渲染结果，不再创建平台 prober。长探测使用 context-aware control transport，不受普通只读请求 10 秒 deadline 限制，并仍可由 CLI context 取消。
    record/IPAM/route/service 的在线请求也已在 control 边界直接转成与 `--direct` 相同的 `corestate.LocalIntent`；Daemon 单 writer 队列只携带一个 `common_mutation + LocalIntent + dryRun`，原四种事件 payload、`daemonRecordPut` 和 app 侧重复的 reserved-record 校验表已删除，IPAM/route 成功提交后的同步路由刷新改由 intent 类型判定。
    Observer routes/peers/status/zones/BIRD 已直接使用 canonical `internal/inspect` DTO；`internal/inspect/http` 中仅换名字的 type alias、函数变量转发与薄 BIRD response 壳已删除，HTTP package 只保留 links/health 的独立 wire shape 及 schema contract tests。
    Health HTTP context 对 desired link 也不再建立第二套逐字段 wrapper：它直接接收已脱敏的 canonical `inspect.DesiredLink`，response 的 `Desired` 与 `PeerZone` 使用明确类型；实例 context 仍保留其独立的 runtime 选择边界，但 response 已删除前端无人消费的原始 `ipsec.LinkInstance`，只输出页面实际需要的选择字段，避免暴露 owner token、内部错误和状态机细节。

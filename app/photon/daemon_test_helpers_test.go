@@ -24,6 +24,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/HiggsNet/photon/pkg/firewall"
+	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
@@ -39,6 +40,7 @@ type testLinuxDrivers struct {
 	birdProcess       bird.ProcessManager
 	birdProcesses     map[string]bird.ProcessManager
 	birdClientFactory func(string, time.Duration) photonlinux.BirdClient
+	healthProber      health.Prober
 }
 
 // newTestDaemonFromOwners is the normal fixture for tests of current
@@ -145,6 +147,7 @@ func installTestLinuxDrivers(service *Daemon, drivers testLinuxDrivers) {
 		BirdProcess:       drivers.birdProcess,
 		BirdProcesses:     drivers.birdProcesses,
 		BirdClientFactory: drivers.birdClientFactory,
+		HealthProber:      drivers.healthProber,
 	})); err != nil {
 		panic(err)
 	}

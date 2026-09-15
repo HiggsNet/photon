@@ -203,7 +203,7 @@ func cmdDebug() *cli.Command {
 				UsageText: "photon debug ping <zone> [--count N] [--timeout D] [--family ipv4|ipv6] [--role active|old|staged]",
 				Description: "Send ICMP echo requests to the peer tunnel address of every IPsec link instance " +
 					"matching the peer zone, across IPv4/IPv6 underlay paths and across both the old and new SA during a rotate. " +
-					"Runs in the CLI process (requires root/CAP_NET_RAW and netns access).",
+					"Runs in the daemon that owns the required raw-socket and network-namespace access.",
 				Flags: []cli.Flag{
 					&cli.IntFlag{Name: "count", Aliases: []string{"c"}, Usage: "ICMP requests per target (default 4, or health.burst)"},
 					&cli.DurationFlag{Name: "timeout", Usage: "Per-request timeout (default 1s, or health.timeout)"},

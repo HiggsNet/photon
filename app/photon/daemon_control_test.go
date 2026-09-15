@@ -13,14 +13,27 @@ import (
 
 	photonstate "github.com/HiggsNet/photon/internal/state"
 
-	"github.com/HiggsNet/photon/internal/controlapi"
 	"github.com/HiggsNet/photon/internal/inspect"
+	pingdebug "github.com/HiggsNet/photon/internal/ping"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	bolt "go.etcd.io/bbolt"
 )
+
+type controlPingProber struct {
+	target health.ProbeTarget
+	config health.ProbeConfig
+}
+
+func (p *controlPingProber) Probe(_ context.Context, target health.ProbeTarget, config health.ProbeConfig) health.ProbeResult {
+	p.target = target
+	p.config = config
+	return health.ProbeResult{InstanceID: target.InstanceID, Success: true, RTT: time.Millisecond}
+}
+
+func (*controlPingProber) Type() string { return health.ProbeTypeICMP }
 
 func TestDaemonControlErrorResponses(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
@@ -66,7 +79,9 @@ func TestDaemonControlStatus(t *testing.T) {
 	defer stop()
 
 	var response controlViewResponse[inspect.DaemonStatusView]
-	if err := controlapi.Send(service.ControlSocketPath, controlRequest{Method: "daemon_status_view"}, &response); err != nil {
+	requestCtx, cancel := context.WithTimeout(ctx, controlRequestDeadline)
+	defer cancel()
+	if err := exchangeControl(requestCtx, service.ControlSocketPath, controlRequest{Method: "daemon_status_view"}, &response); err != nil {
 		t.Fatalf("daemon_status_view: %v", err)
 	}
 	if !response.OK || response.View.PeerID != config.PeerID || !response.View.DaemonOnline {
@@ -134,6 +149,15 @@ func TestDaemonControlCommonReadViews(t *testing.T) {
 	service := newTestDaemonFromOwners(
 		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
+	prober := &controlPingProber{}
+	dryRun := &ipsec.DryRunDriver{}
+	installTestLinuxDrivers(service, testLinuxDrivers{ipsec: dryRun, xfrm: dryRun, healthProber: prober})
+	setTestIPsecObservation(service, map[string]ipsec.LinkInstance{
+		"link-b": {ActualState: "up"},
+	}, &ipsecObservationSummary{Desired: []photonstate.DesiredLinkObservation{{
+		InstanceID: "link-b", GroupID: "group-b", PeerZone: "node-b.catofes.",
+		LocalTunnelAddr: "10.0.0.1", PeerTunnelAddr: "10.0.0.2",
+	}}})
 
 	records := controlViewRequestViaPipe[inspect.RecordsDebugView](t, service, controlRequest{Method: "records_view", Zone: "node-b.catofes."})
 	if !records.OK {
@@ -159,9 +183,13 @@ func TestDaemonControlCommonReadViews(t *testing.T) {
 	if !endpoints.OK {
 		t.Fatalf("endpoints_view response = %#v", endpoints)
 	}
-	pingTargets := controlViewRequestViaPipe[[]health.ProbeTarget](t, service, controlRequest{Method: "ping_targets"})
-	if !pingTargets.OK {
-		t.Fatalf("ping_targets response = %#v", pingTargets)
+	pingOptions := pingdebug.Options{Count: 2, Timeout: 20 * time.Millisecond}
+	pingView := controlViewRequestViaPipe[inspect.PingDebugView](t, service, controlRequest{Method: "ping_view", Zone: "node-b.catofes.", Ping: &pingOptions})
+	if !pingView.OK || pingView.View.Zone != "node-b.catofes." || len(pingView.View.Targets) != 1 || !pingView.View.Targets[0].Success {
+		t.Fatalf("ping_view response = %#v", pingView)
+	}
+	if prober.target.InstanceID != "link-b" || prober.config.Burst != 2 || prober.config.Timeout != 20*time.Millisecond {
+		t.Fatalf("daemon prober call target=%#v config=%#v", prober.target, prober.config)
 	}
 	statusView := controlViewRequestViaPipe[inspect.StatusView](t, service, controlRequest{Method: "status_view"})
 	if !statusView.OK || !statusView.View.DaemonOnline {

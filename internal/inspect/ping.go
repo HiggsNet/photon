@@ -6,32 +6,32 @@ import (
 )
 
 type PingDebugView struct {
-	Zone           string
-	Targets        []PingTargetView
-	Instances      []PingInstanceView
-	AvailableZones []string
-	Count          int
-	Timeout        time.Duration
+	Zone           string             `json:"zone"`
+	Targets        []PingTargetView   `json:"targets,omitempty"`
+	Instances      []PingInstanceView `json:"instances,omitempty"`
+	AvailableZones []string           `json:"available_zones,omitempty"`
+	Count          int                `json:"count"`
+	Timeout        time.Duration      `json:"timeout"`
 }
 
 type PingInstanceView struct {
-	InstanceID string
-	Rows       []PingTargetView
+	InstanceID string           `json:"instance_id"`
+	Rows       []PingTargetView `json:"rows,omitempty"`
 }
 
 type PingTargetView struct {
-	InstanceID   string
-	ProbeID      string
-	Role         string
-	Family       string
-	TunnelFamily string
-	Interface    string
-	NetNS        string
-	LocalTunnel  string
-	PeerTunnel   string
-	Success      bool
-	RTT          time.Duration
-	Failure      *FailureView
+	InstanceID   string        `json:"instance_id"`
+	ProbeID      string        `json:"probe_id,omitempty"`
+	Role         string        `json:"role"`
+	Family       string        `json:"family"`
+	TunnelFamily string        `json:"tunnel_family"`
+	Interface    string        `json:"interface,omitempty"`
+	NetNS        string        `json:"netns,omitempty"`
+	LocalTunnel  string        `json:"local_tunnel,omitempty"`
+	PeerTunnel   string        `json:"peer_tunnel,omitempty"`
+	Success      bool          `json:"success"`
+	RTT          time.Duration `json:"rtt"`
+	Failure      *FailureView  `json:"failure,omitempty"`
 }
 
 func BuildPingDebugView(view PingDebugView) PingDebugView {

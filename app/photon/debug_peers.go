@@ -19,7 +19,7 @@ func debugPeers(_ context.Context) error {
 	if err != nil {
 		return err
 	}
-	if status, ok, err := daemonStatusViaControl(rt); err != nil {
+	if status, ok, err := readCanonicalViewViaControl[inspect.DaemonStatusView](rt, controlRequest{Method: "daemon_status_view"}); err != nil {
 		return err
 	} else if ok {
 		fmt.Printf("daemon: online peer_id=%s link_instances=%d desired_links=%d\n",

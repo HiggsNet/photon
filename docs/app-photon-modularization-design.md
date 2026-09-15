@@ -112,7 +112,7 @@ pkg/*
 | Firewall app layer | `internal/inspect/firewall.go` + `app/photon/firewall_reconcile.go` | debug view/presenter 和 reconcile snapshot DTO 已下沉； privileged apply、driver construction 和 policy input adapter 仍在 app。暂未创建 `internal/firewallapp`。 |
 | IPsec app layer | `internal/inspect/links.go`, `internal/inspect/rotate.go` + `app/photon/ipsec_*.go` | links/rotate readmodel 已下沉； publish/reconcile/cleanup/provider lifecycle 基本仍在 app。暂未创建 `internal/ipsecapp`。 |
 | Sync runtime | `app/photon/sync.go`, `sync_session.go`, `daemon_sync.go` | 只有 sync status view/text 和 peer debug runtime view 已下沉；FSM、packet demux、object pull、timer、state apply adapter 仍在 app。暂未创建 `internal/syncapp`。 |
-| Control API | `app/photon/control.go` | control socket 和 DTO/client helper 仍在 app；Phase 7.10 可逐步抽 `internal/controlapi`，但 daemon handler registration 留 app。 |
+| Control API | `app/photon/control.go` | control socket、wire DTO、client helper 和 fallback policy 留在 executable 边界；只有出现第二个真实 client 时才整体抽 typed API。 |
 | Config parsing | `app/photon/config.go`, `*_config.go` | 仍在 app；只有等 subsystem 接口稳定后再考虑 focused parser 包。暂未创建 `internal/config`。 |
 | App state / commit | `app/photon/state.go`, `state_bolt.go`, `legacy_state.go` | 一个具体 State 管理唯一 StateDB、Common 与 LinuxState；Daemon 不直接持有锁或数据库，旧 schema 单独留在 legacy 文件中，不要把 `internal/state` 误认为完整 app state 层。 |
 
@@ -213,7 +213,7 @@ CLI text、HTTP JSON、control response 都不应该各自判断 `revoked/stale/
 
 这是最后处理的核心边界：
 
-1. 先把 control DTO/client helper 下沉到 `internal/controlapi`。
+1. control DTO/client helper 暂留 `app/photon`；只有出现第二个真实 client 时才整体抽 typed protocol/client，不单独建立 transport helper 包。
 2. 把 per-subsystem config parser 移到对应 internal module，顶层 `appConfig` 只做组合。
 3. 评估是否将 `stateFile` 类型移到专门 app state 包。当前 `internal/state` 不是这个包；它只承接运行时 DTO。这一步影响面最大，必须等上面模块已经通过 input/view 降耦合后再做。
 

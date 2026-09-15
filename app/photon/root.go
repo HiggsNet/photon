@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 
@@ -12,7 +13,7 @@ func rootPubkey() error {
 	if err != nil {
 		return err
 	}
-	if publicKey, ok, err := rootPublicKeyViaControl(rt); err != nil {
+	if publicKey, ok, err := readCanonicalViewViaControl[ed25519.PublicKey](rt, controlRequest{Method: "root_public_key"}); err != nil {
 		return err
 	} else if ok {
 		if len(publicKey) == 0 {
