@@ -15,6 +15,17 @@ const (
 	RoutingShutdownPolicyPersist = "persist"
 )
 
+// KernelRouteDump is one address-family view of a routing instance's Linux
+// kernel FIB. Rows stay flat so control and CLI do not need parallel wrappers.
+type KernelRouteDump struct {
+	NetNS      string       `json:"netns"`
+	InstanceID string       `json:"instance_id"`
+	Namespace  string       `json:"namespace"`
+	Family     string       `json:"family"`
+	Raw        string       `json:"raw,omitempty"`
+	Failure    *FailureView `json:"failure,omitempty"`
+}
+
 type BirdDumpResponse struct {
 	Instances map[string]BirdDumpInstance `json:"instances"`
 }

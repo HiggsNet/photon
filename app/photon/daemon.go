@@ -1013,6 +1013,15 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		writeCanonicalView(conn, *dump)
+	case "kernel_routes_view":
+		queryCtx, cancel := context.WithTimeout(ctx, controlConnDeadline)
+		view, err := d.kernelRoutesView(queryCtx, request.NetNS, request.Family)
+		cancel()
+		if err != nil {
+			writeControlResponse(conn, controlError(err))
+			return
+		}
+		writeCanonicalView(conn, view)
 	case "routes_view":
 		var routingInstances []RoutingInstance
 		if d.App != nil && d.App.Config != nil {

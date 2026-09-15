@@ -139,7 +139,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `debug_revoke_impact.go` | revocation 影响展示 | 公共 purge plan 来自 state，平台影响由 controller 补充，view 进 inspect |
 | `debug_rotate.go` | IPsec port rotate 和诊断 | plan 进 IPsec publisher/controller；runtime mutation 进 Linux IPsec；展示进 inspect |
 | `debug_routing.go` | BIRD/Babel/routes 查询和解析 | Linux BIRD adapter 进 routing controller；view/text 进 inspect |
-| `debug_routing_ip.go` | netns 中执行 Linux `ip route` | `internal/photonlinux/routing` diagnostics |
+| `debug_routing_ip.go` | daemon control 查询与 canonical 文本渲染 | 已完成：netns 解析及 Linux `ip route` 执行归 `internal/photonlinux/routing`，CLI 不再直连平台 |
 | `debug_zone_records.go` | zone/record 展示 | Store read API + `internal/inspect`/text |
 | `diagnostics.go` | gossip event 到日志 | 稳定事件名留 gossip；logger adapter 进 host/internal logging |
 

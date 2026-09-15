@@ -41,6 +41,7 @@ type testLinuxDrivers struct {
 	birdProcesses     map[string]bird.ProcessManager
 	birdClientFactory func(string, time.Duration) photonlinux.BirdClient
 	healthProber      health.Prober
+	kernelRouteRunner func(context.Context, string, ...string) ([]byte, error)
 }
 
 // newTestDaemonFromOwners is the normal fixture for tests of current
@@ -148,6 +149,7 @@ func installTestLinuxDrivers(service *Daemon, drivers testLinuxDrivers) {
 		BirdProcesses:     drivers.birdProcesses,
 		BirdClientFactory: drivers.birdClientFactory,
 		HealthProber:      drivers.healthProber,
+		KernelRouteRunner: drivers.kernelRouteRunner,
 	})); err != nil {
 		panic(err)
 	}

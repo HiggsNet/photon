@@ -276,9 +276,9 @@ VerifiedState + LinuxState + 操作系统现状
 
 ### 26. `debug_routing_ip.go`
 
-- 做什么：根据 netns 配置生成 `ip -4/-6 route` 命令，在 host/name/path namespace 中执行并格式化原始输出。
-- 主要构成：`routingIPCommandRunner` 函数类型，便于测试替换命令执行。
-- 审核：真实 Linux 诊断能力必要，但属于 Linux routing adapter，不应永久留在通用 executable 层。可以下沉 `internal/photonlinux/routing`，CLI 只传参数。
+- 做什么：向 daemon 请求指定 netns/family 的 kernel FIB，并格式化 canonical raw rows。
+- 主要构成：无本地 DTO；直接消费 `inspect.KernelRouteDump`。
+- 审核：CLI 已不再解析 netns 或执行 Linux 命令；daemon 通过 `LinuxDriver.KernelRoutes` 查询，host/name/path 的 `ip`/`nsenter` 选择归 `internal/photonlinux/routing` 所有。
 
 ### 27. `debug_zone_records.go`
 

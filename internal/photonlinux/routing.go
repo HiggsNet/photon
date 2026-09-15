@@ -106,6 +106,83 @@ func (r *LinuxDriver) RawBird(ctx context.Context, socketPath, command string) (
 	return r.birdClient(socketPath, nil).Raw(ctx, command)
 }
 
+// KernelRoutes reads the live Linux FIB for one configured namespace and
+// address family. Namespace resolution and command execution remain inside the
+// Linux adapter rather than leaking into the CLI.
+func (r *LinuxDriver) KernelRoutes(ctx context.Context, netns, family string) (string, string, error) {
+	if r == nil {
+		return "", "", fmt.Errorf("linux routing driver is not configured")
+	}
+	spec, ok := r.networkNamespace(netns)
+	if !ok {
+		return "", "", fmt.Errorf("namespace configuration not found")
+	}
+	name, args, err := kernelRouteCommand(spec, family)
+	if err != nil {
+		return namespaceLabel(spec), "", err
+	}
+	runner := r.kernelRouteRunner
+	if runner == nil {
+		runner = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			return exec.CommandContext(ctx, name, args...).CombinedOutput()
+		}
+	}
+	output, err := runner(ctx, name, args...)
+	return namespaceLabel(spec), string(output), err
+}
+
+func (r *LinuxDriver) networkNamespace(name string) (transportipsec.NetNSSpec, bool) {
+	if spec, ok := r.networkNamespaces[name]; ok {
+		return spec.Normalized(), true
+	}
+	for _, spec := range r.networkNamespaces {
+		normalized := spec.Normalized()
+		target := normalized.Target()
+		if target == "" {
+			target = transportipsec.NetNSHost
+		}
+		if target == name {
+			return normalized, true
+		}
+	}
+	return transportipsec.NetNSSpec{}, false
+}
+
+func kernelRouteCommand(spec transportipsec.NetNSSpec, family string) (string, []string, error) {
+	familyFlag := "-4"
+	if family == "ipv6" {
+		familyFlag = "-6"
+	} else if family != "ipv4" {
+		return "", nil, fmt.Errorf("unsupported address family %q", family)
+	}
+	spec = spec.Normalized()
+	routeArgs := []string{familyFlag, "route", "show"}
+	switch spec.Kind {
+	case transportipsec.NetNSHost:
+		return "ip", routeArgs, nil
+	case transportipsec.NetNSName:
+		return "ip", append([]string{"netns", "exec", spec.Name, "ip"}, routeArgs...), nil
+	case transportipsec.NetNSPath:
+		return "nsenter", append([]string{"--net=" + spec.Path, "ip"}, routeArgs...), nil
+	default:
+		return "", nil, fmt.Errorf("unsupported netns kind %q", spec.Kind)
+	}
+}
+
+func namespaceLabel(spec transportipsec.NetNSSpec) string {
+	spec = spec.Normalized()
+	switch spec.Kind {
+	case transportipsec.NetNSHost:
+		return "host"
+	case transportipsec.NetNSName:
+		return "name:" + spec.Name
+	case transportipsec.NetNSPath:
+		return "path:" + spec.Path
+	default:
+		return spec.Kind
+	}
+}
+
 func (r *LinuxDriver) birdProcessManager(netns string) bird.ProcessManager {
 	if r == nil {
 		return nil

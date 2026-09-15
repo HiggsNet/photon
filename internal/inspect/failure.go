@@ -7,6 +7,7 @@ const (
 	FailureCodeRoutingReconcile  = "routing_reconcile_failed"
 	FailureCodeBirdInstance      = "bird_instance_failed"
 	FailureCodeBirdQuery         = "bird_query_failed"
+	FailureCodeKernelRouteQuery  = "kernel_route_query_failed"
 	FailureCodeFirewallReconcile = "firewall_reconcile_failed"
 	FailureCodeFirewallInstance  = "firewall_instance_failed"
 	FailureCodeHealthProbe       = "health_probe_failed"

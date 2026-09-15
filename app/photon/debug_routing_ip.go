@@ -6,48 +6,45 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"sort"
 	"strings"
 
+	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
-
-type routingIPCommandRunner func(context.Context, string, ...string) ([]byte, error)
 
 func debugRoutingIPRoute(ctx context.Context, netnsName, family string) error {
 	rt, err := NewAppContext()
 	if err != nil {
 		return err
 	}
-	return debugRoutingIPRouteWithRuntime(ctx, rt, os.Stdout, netnsName, family, runRoutingIPCommand)
-}
-
-func runRoutingIPCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
-}
-
-func debugRoutingIPRouteWithRuntime(
-	ctx context.Context,
-	rt *AppContext,
-	w io.Writer,
-	netnsName string,
-	family string,
-	runner routingIPCommandRunner,
-) error {
-	if rt == nil || rt.Config == nil {
-		return errors.New("routing configuration is unavailable")
-	}
-	families, err := routingIPFamilies(family)
+	view, online, err := readCanonicalViewViaControlContext[[]inspect.KernelRouteDump](ctx, rt, controlRequest{
+		Method: "kernel_routes_view",
+		NetNS:  netnsName,
+		Family: family,
+	})
 	if err != nil {
 		return err
 	}
-	if runner == nil {
-		runner = runRoutingIPCommand
+	if !online {
+		return errors.New("daemon control socket unavailable; kernel FIB requires a running daemon")
 	}
+	return writeKernelRoutes(os.Stdout, view)
+}
 
-	instances := make([]RoutingInstance, 0, len(rt.Config.Routing.Instances))
-	for _, inst := range rt.Config.Routing.Instances {
+func (d *Daemon) kernelRoutesView(ctx context.Context, netnsName, family string) ([]inspect.KernelRouteDump, error) {
+	if d == nil || d.App == nil || d.App.Config == nil {
+		return nil, errors.New("routing configuration is unavailable")
+	}
+	if d.linuxDriver == nil {
+		return nil, errors.New("linux routing driver is not configured")
+	}
+	families, err := routingIPFamilies(family)
+	if err != nil {
+		return nil, err
+	}
+	instances := make([]RoutingInstance, 0, len(d.App.Config.Routing.Instances))
+	for _, inst := range d.App.Config.Routing.Instances {
 		if !inst.Enabled || inst.Mode == ipsec.RoutingModeDisabled {
 			continue
 		}
@@ -62,41 +59,22 @@ func debugRoutingIPRouteWithRuntime(
 		}
 		return instances[i].ID < instances[j].ID
 	})
-	if len(instances) == 0 {
-		if netnsName != "" {
-			return fmt.Errorf("routing netns or instance %q not found", netnsName)
-		}
-		fmt.Fprintln(w, "kernel_routes: no enabled routing instances")
-		return nil
+	if len(instances) == 0 && netnsName != "" {
+		return nil, fmt.Errorf("routing netns or instance %q not found", netnsName)
 	}
 
-	var runErrors []error
+	view := make([]inspect.KernelRouteDump, 0, len(instances)*len(families))
 	for _, inst := range instances {
-		spec, ok := routingIPNetNSSpec(rt.Config.Netns, inst.NetNS)
-		if !ok {
-			runErrors = append(runErrors, fmt.Errorf("netns %q: namespace configuration not found", inst.NetNS))
-			continue
-		}
-		fmt.Fprintf(w, "netns %s\n", inst.NetNS)
-		fmt.Fprintf(w, "  instance_id: %s\n", inst.ID)
-		fmt.Fprintf(w, "  namespace: %s\n", routingIPNamespaceLabel(spec))
 		for _, routeFamily := range families {
-			fmt.Fprintf(w, "  %s:\n", routeFamily)
-			name, args, err := routingIPRouteCommand(spec, routeFamily)
-			if err != nil {
-				fmt.Fprintf(w, "    error: %s\n", err)
-				runErrors = append(runErrors, fmt.Errorf("netns %q %s: %w", inst.NetNS, routeFamily, err))
-				continue
-			}
-			output, runErr := runner(ctx, name, args...)
-			writeIndentedRoutingIPOutput(w, output)
-			if runErr != nil {
-				fmt.Fprintf(w, "    error: %s\n", runErr)
-				runErrors = append(runErrors, fmt.Errorf("netns %q %s: %w", inst.NetNS, routeFamily, runErr))
-			}
+			namespace, raw, queryErr := d.linuxDriver.KernelRoutes(ctx, inst.NetNS, routeFamily)
+			view = append(view, inspect.KernelRouteDump{
+				NetNS: inst.NetNS, InstanceID: inst.ID, Namespace: namespace,
+				Family: routeFamily, Raw: raw,
+				Failure: inspect.BuildFailure(inspect.FailureCodeKernelRouteQuery, queryErr),
+			})
 		}
 	}
-	return errors.Join(runErrors...)
+	return view, nil
 }
 
 func routingIPFamilies(family string) ([]string, error) {
@@ -112,50 +90,29 @@ func routingIPFamilies(family string) ([]string, error) {
 	}
 }
 
-func routingIPNetNSSpec(config netnsConfig, netnsName string) (ipsec.NetNSSpec, bool) {
-	if spec, ok := config.Names[netnsName]; ok {
-		return spec.Normalized(), true
+func writeKernelRoutes(w io.Writer, view []inspect.KernelRouteDump) error {
+	if len(view) == 0 {
+		fmt.Fprintln(w, "kernel_routes: no enabled routing instances")
+		return nil
 	}
-	for _, spec := range config.Names {
-		if routingNetNSTarget(spec) == netnsName {
-			return spec.Normalized(), true
+	var failures []error
+	lastInstance := ""
+	for _, row := range view {
+		instance := row.NetNS + "\x00" + row.InstanceID
+		if instance != lastInstance {
+			fmt.Fprintf(w, "netns %s\n", row.NetNS)
+			fmt.Fprintf(w, "  instance_id: %s\n", row.InstanceID)
+			fmt.Fprintf(w, "  namespace: %s\n", row.Namespace)
+			lastInstance = instance
+		}
+		fmt.Fprintf(w, "  %s:\n", row.Family)
+		writeIndentedRoutingIPOutput(w, []byte(row.Raw))
+		if row.Failure != nil {
+			fmt.Fprintf(w, "    error: %s\n", row.Failure.Message)
+			failures = append(failures, fmt.Errorf("netns %q %s: %s", row.NetNS, row.Family, row.Failure.Message))
 		}
 	}
-	return ipsec.NetNSSpec{}, false
-}
-
-func routingIPRouteCommand(spec ipsec.NetNSSpec, family string) (string, []string, error) {
-	familyFlag := "-4"
-	if family == "ipv6" {
-		familyFlag = "-6"
-	}
-	spec = spec.Normalized()
-	routeArgs := []string{familyFlag, "route", "show"}
-	switch spec.Kind {
-	case ipsec.NetNSHost:
-		return "ip", routeArgs, nil
-	case ipsec.NetNSName:
-		args := []string{"netns", "exec", spec.Name, "ip"}
-		return "ip", append(args, routeArgs...), nil
-	case ipsec.NetNSPath:
-		return "nsenter", append([]string{"--net=" + spec.Path, "ip"}, routeArgs...), nil
-	default:
-		return "", nil, fmt.Errorf("unsupported netns kind %q", spec.Kind)
-	}
-}
-
-func routingIPNamespaceLabel(spec ipsec.NetNSSpec) string {
-	spec = spec.Normalized()
-	switch spec.Kind {
-	case ipsec.NetNSHost:
-		return "host"
-	case ipsec.NetNSName:
-		return "name:" + spec.Name
-	case ipsec.NetNSPath:
-		return "path:" + spec.Path
-	default:
-		return spec.Kind
-	}
+	return errors.Join(failures...)
 }
 
 func writeIndentedRoutingIPOutput(w io.Writer, output []byte) {

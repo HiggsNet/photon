@@ -33,6 +33,7 @@ type LinuxDriver struct {
 	healthProber      health.Prober
 	healthFallbackMu  sync.Mutex
 	healthFallback    map[string]healthFallbackLogState
+	kernelRouteRunner func(context.Context, string, ...string) ([]byte, error)
 	close             func() error
 	logger            Logger
 	closeOnce         sync.Once
@@ -55,6 +56,7 @@ type LinuxDriverOptions struct {
 	BirdProcesses     map[string]bird.ProcessManager
 	BirdClientFactory func(string, time.Duration) BirdClient
 	HealthProber      health.Prober
+	KernelRouteRunner func(context.Context, string, ...string) ([]byte, error)
 	Close             func() error
 	Logger            Logger
 }
@@ -85,6 +87,7 @@ func NewLinuxDriver(options LinuxDriverOptions) (*LinuxDriver, error) {
 		birdProcesses:     cloneBirdProcesses(options.BirdProcesses),
 		birdClientFactory: options.BirdClientFactory,
 		healthProber:      options.HealthProber,
+		kernelRouteRunner: options.KernelRouteRunner,
 		close:             options.Close,
 		logger:            options.Logger,
 	}

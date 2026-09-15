@@ -2,57 +2,15 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"strings"
 	"testing"
 
+	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
-func TestRoutingIPRouteCommandScopesNamespace(t *testing.T) {
-	tests := []struct {
-		name     string
-		spec     ipsec.NetNSSpec
-		family   string
-		wantName string
-		wantArgs string
-	}{
-		{
-			name:     "host",
-			spec:     ipsec.NetNSSpec{Kind: ipsec.NetNSHost},
-			family:   "ipv4",
-			wantName: "ip",
-			wantArgs: "-4 route show",
-		},
-		{
-			name:     "named",
-			spec:     ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "mesh"},
-			family:   "ipv6",
-			wantName: "ip",
-			wantArgs: "netns exec mesh ip -6 route show",
-		},
-		{
-			name:     "path",
-			spec:     ipsec.NetNSSpec{Kind: ipsec.NetNSPath, Path: "/run/netns/mesh"},
-			family:   "ipv4",
-			wantName: "nsenter",
-			wantArgs: "--net=/run/netns/mesh ip -4 route show",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			name, args, err := routingIPRouteCommand(tt.spec, tt.family)
-			if err != nil {
-				t.Fatalf("routingIPRouteCommand: %v", err)
-			}
-			if name != tt.wantName || strings.Join(args, " ") != tt.wantArgs {
-				t.Fatalf("command = %s %s, want %s %s", name, strings.Join(args, " "), tt.wantName, tt.wantArgs)
-			}
-		})
-	}
-}
-
-func TestDebugRoutingIPRouteShowsKernelFIBByFamily(t *testing.T) {
+func TestKernelRoutesViewShowsKernelFIBByFamily(t *testing.T) {
 	config := defaultAppConfig()
 	config.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{
 		"mesh": {Kind: ipsec.NetNSName, Name: "mesh"},
@@ -60,37 +18,40 @@ func TestDebugRoutingIPRouteShowsKernelFIBByFamily(t *testing.T) {
 	config.Routing = routingConfig{Instances: []RoutingInstance{
 		{ID: "main", NetNS: "mesh", Enabled: true, Mode: ipsec.RoutingModeManaged},
 	}}
-	rt := &AppContext{Config: config}
-
 	var commands []string
-	runner := func(_ context.Context, name string, args ...string) ([]byte, error) {
-		command := name + " " + strings.Join(args, " ")
-		commands = append(commands, command)
-		switch {
-		case strings.Contains(command, " -4 route show"):
-			return []byte("10.42.0.0/24 proto bird metric 32\n"), nil
-		case strings.Contains(command, " -6 route show"):
-			return []byte("fd42::/64 proto bird metric 32\n"), nil
-		default:
-			return nil, fmt.Errorf("unexpected command %q", command)
-		}
-	}
+	driver := newTestLinuxDriverWithOptions(photonlinux.LinuxDriverOptions{
+		IPsecDriver:       &ipsec.DryRunDriver{},
+		XFRMDriver:        &ipsec.DryRunDriver{},
+		NetworkNamespaces: config.Netns.Names,
+		KernelRouteRunner: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			command := name + " " + strings.Join(args, " ")
+			commands = append(commands, command)
+			switch {
+			case strings.Contains(command, " -4 route show"):
+				return []byte("10.42.0.0/24 proto bird metric 32\n"), nil
+			case strings.Contains(command, " -6 route show"):
+				return []byte("fd42::/64 proto bird metric 32\n"), nil
+			default:
+				return nil, errors.New("unexpected command")
+			}
+		},
+	})
+	d := &Daemon{App: &AppContext{Config: config}, linuxDriver: driver}
 
-	var output strings.Builder
-	if err := debugRoutingIPRouteWithRuntime(context.Background(), rt, &output, "main", "all", runner); err != nil {
-		t.Fatalf("debugRoutingIPRouteWithRuntime: %v", err)
+	view, err := d.kernelRoutesView(context.Background(), "main", "all")
+	if err != nil {
+		t.Fatalf("kernelRoutesView: %v", err)
 	}
 	if len(commands) != 2 {
 		t.Fatalf("commands = %#v, want IPv4 and IPv6", commands)
 	}
+	var output strings.Builder
+	if err := writeKernelRoutes(&output, view); err != nil {
+		t.Fatalf("writeKernelRoutes: %v", err)
+	}
 	for _, want := range []string{
-		"netns mesh",
-		"instance_id: main",
-		"namespace: name:mesh",
-		"ipv4:",
-		"10.42.0.0/24 proto bird metric 32",
-		"ipv6:",
-		"fd42::/64 proto bird metric 32",
+		"netns mesh", "instance_id: main", "namespace: name:mesh", "ipv4:",
+		"10.42.0.0/24 proto bird metric 32", "ipv6:", "fd42::/64 proto bird metric 32",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("output missing %q:\n%s", want, output.String())

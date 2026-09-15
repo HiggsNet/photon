@@ -49,6 +49,7 @@ type controlRequest struct {
 	NetNS       string                   `json:"netns,omitempty"`
 	Host        bool                     `json:"host,omitempty"`
 	BirdView    string                   `json:"bird_view,omitempty"`
+	Family      string                   `json:"family,omitempty"`
 	EndpointACL *photonstate.EndpointACL `json:"endpoint_acl,omitempty"`
 	IPAM        *ipamMutationRequest     `json:"ipam,omitempty"`
 	Route       *routeMutationRequest    `json:"route,omitempty"`
