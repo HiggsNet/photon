@@ -5,20 +5,16 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/HiggsNet/photon/internal/photonlinux"
-	photonstate "github.com/HiggsNet/photon/internal/state"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/internal/observer"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/firewall"
-	"github.com/HiggsNet/photon/pkg/routing"
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func TestFirewallObservationDoesNotAdvancePersistentRevision(t *testing.T) {
@@ -96,7 +92,7 @@ firewall:
 	if inst.LocalServices[0].Port != 8080 {
 		t.Errorf("service port = %d, want 8080", inst.LocalServices[0].Port)
 	}
-	policy := netnsForwardingPolicy(config, inst.NetNS)
+	policy := config.Netns.ForwardingPolicy(inst.NetNS)
 	if policy.Transit {
 		t.Error("transit should be false")
 	}
@@ -520,139 +516,6 @@ func TestReconcileFirewall_NoInstances(t *testing.T) {
 	}
 	if err := d.reconcileFirewall(context.Background()); err != nil {
 		t.Fatalf("reconcileFirewall with no instances: %v", err)
-	}
-}
-
-func TestBuildFirewallPolicyInputHostRedirectGracePorts(t *testing.T) {
-	verified, _, runtime, _ := buildTestDaemonOwners(t)
-	now := time.Unix(6000, 0)
-	verified.ManagedZone = "node-b.catofes."
-	verified.Network.Zones[verified.ManagedZone].Records[ipsec.RecordKeyPorts] = unsignedIPsecRecord(t, verified.ManagedZone, ipsec.RecordKeyPorts, ipsec.RecordTypePorts, ipsec.PortRecord{
-		Version: 1,
-		Mode:    ipsec.PortModeFixed,
-		Current: &ipsec.PortSelection{
-			Generation: 3,
-			IKE:        ipsec.PortBinding{Local: 1500, Advertised: 1500},
-			NATT:       ipsec.PortBinding{Local: 14500, Advertised: 14500},
-		},
-		Previous: []ipsec.PortSelection{
-			{
-				Generation: 2,
-				IKE:        ipsec.PortBinding{Local: 1400, Advertised: 1400},
-				NATT:       ipsec.PortBinding{Local: 14400, Advertised: 14400},
-				ValidUntil: now.Add(time.Minute).Unix(),
-			},
-			{
-				Generation: 1,
-				IKE:        ipsec.PortBinding{Local: 1300, Advertised: 1300},
-				NATT:       ipsec.PortBinding{Local: 14300, Advertised: 14300},
-				ValidUntil: now.Add(-time.Second).Unix(),
-			},
-		},
-		UpdatedAt: now.Unix(),
-	})
-	input := buildFirewallPolicyInput(
-		firewall.FirewallInstanceSpec{ID: "host", IsHost: true},
-		&routing.AuthorizedRouteSet{},
-		verified,
-		runtime,
-		nil,
-		nil,
-		defaultAppConfig(),
-		now,
-	)
-	if len(input.AdvertisedCurrentIKEPorts) != 1 || input.AdvertisedCurrentIKEPorts[0] != 1500 {
-		t.Fatalf("current IKE ports = %v, want [1500]", input.AdvertisedCurrentIKEPorts)
-	}
-	if len(input.AdvertisedCurrentNATTPorts) != 1 || input.AdvertisedCurrentNATTPorts[0] != 14500 {
-		t.Fatalf("current NAT-T ports = %v, want [14500]", input.AdvertisedCurrentNATTPorts)
-	}
-	if len(input.AdvertisedPreviousIKEPorts) != 1 || input.AdvertisedPreviousIKEPorts[0] != 1400 {
-		t.Fatalf("previous IKE ports = %v, want [1400]", input.AdvertisedPreviousIKEPorts)
-	}
-	if len(input.AdvertisedPreviousNATTPorts) != 1 || input.AdvertisedPreviousNATTPorts[0] != 14400 {
-		t.Fatalf("previous NAT-T ports = %v, want [14400]", input.AdvertisedPreviousNATTPorts)
-	}
-}
-
-func TestBuildFirewallPolicyInputIncludesLocalSharedAssignment(t *testing.T) {
-	prefix := netip.MustParsePrefix("2a0d:2905::/96")
-	ars := &routing.AuthorizedRouteSet{
-		Assignments: map[netip.Prefix]*routing.AssignmentEntry{
-			prefix: {
-				Prefix:     prefix,
-				AssignedTo: "node-a.catofes.",
-				Shared:     true,
-			},
-		},
-		AllAssignments: []*routing.AssignmentEntry{
-			{Prefix: prefix, AssignedTo: "node-a.catofes.", Shared: true},
-			{Prefix: prefix, AssignedTo: "node-b.catofes.", Shared: true},
-		},
-	}
-
-	input := buildFirewallPolicyInput(
-		firewall.FirewallInstanceSpec{ID: "photon", NetNS: "photon"},
-		ars,
-		&corestate.VerifiedState{ManagedZone: "node-b.catofes."},
-		&photonlinux.LinuxState{},
-		nil,
-		nil,
-		defaultAppConfig(),
-		time.Now(),
-	)
-
-	if len(input.LocalAssigned) != 1 || input.LocalAssigned[0] != prefix {
-		t.Fatalf("local assigned = %v, want shared prefix %s", input.LocalAssigned, prefix)
-	}
-}
-
-func TestBuildFirewallPolicyInputScopesInterfacesByNetNS(t *testing.T) {
-	verified := &corestate.VerifiedState{ManagedZone: "node-a.catofes."}
-	runtime := &photonlinux.LinuxState{}
-	links := map[string]ipsec.LinkInstance{
-		"a": {
-			ID:              "a",
-			ActualState:     "up",
-			InterfaceName:   "phx11111111",
-			LocalTunnelAddr: netip.MustParseAddr("fe80::1"),
-		},
-		"b": {
-			ID:              "b",
-			ActualState:     "up",
-			InterfaceName:   "phx22222222",
-			LocalTunnelAddr: netip.MustParseAddr("fe80::2"),
-		},
-	}
-	config := defaultAppConfig()
-	config.Netns.Names = map[string]ipsec.NetNSSpec{
-		"default": {Kind: ipsec.NetNSName, Name: "photon"},
-		"photon":  {Kind: ipsec.NetNSName, Name: "photon"},
-		"h3":      {Kind: ipsec.NetNSName, Name: "h3"},
-	}
-	config.Routing.Instances = []RoutingInstance{
-		{ID: "photon", NetNS: "photon", Enabled: true, Upstream: &UpstreamConfig{Enabled: true, MeshInterface: "phv2host"}},
-		{ID: "h3", NetNS: "h3", Enabled: true, Upstream: &UpstreamConfig{Enabled: true, MeshInterface: "phv3host"}},
-	}
-
-	input := buildFirewallPolicyInput(
-		firewall.FirewallInstanceSpec{ID: "photon", NetNS: "default"},
-		&routing.AuthorizedRouteSet{},
-		verified,
-		runtime,
-		links,
-		&ipsecObservationSummary{Desired: []photonstate.DesiredLinkObservation{
-			{InstanceID: "a", LocalTunnelAddr: "fe80::1%phx11111111 netns=photon"},
-			{InstanceID: "b", LocalTunnelAddr: "fe80::2%phx22222222 netns=h3"},
-		}},
-		config,
-		time.Now(),
-	)
-	if len(input.LiveInterfaces) != 1 || input.LiveInterfaces[0] != "phx11111111" {
-		t.Fatalf("live interfaces = %v, want photon interface only", input.LiveInterfaces)
-	}
-	if len(input.UpstreamInterfaces) != 1 || input.UpstreamInterfaces[0] != "phv2host" {
-		t.Fatalf("upstream interfaces = %v, want routing-owned photon interface only", input.UpstreamInterfaces)
 	}
 }
 

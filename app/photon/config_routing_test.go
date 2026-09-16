@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
@@ -277,7 +278,7 @@ routing:
 func TestParseRoutingInstanceShortensLongDefaultControlSocket(t *testing.T) {
 	dataDir := t.TempDir()
 	netnsName := "photon-bird-adopt-1785506688595201909"
-	netns := netnsConfig{Names: map[string]ipsec.NetNSSpec{
+	netns := photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{
 		"default": {Kind: ipsec.NetNSName, Name: netnsName},
 	}}
 	instance, err := parseRoutingInstance(routingInstanceYAML{ID: "main"}, netns, dataDir)
@@ -309,7 +310,7 @@ func TestParseRoutingInstanceShortensLongDefaultControlSocket(t *testing.T) {
 }
 
 func TestParseRoutingInstanceUsesRuntimeSocketWhenDataDirIsTooLong(t *testing.T) {
-	netns := netnsConfig{Names: map[string]ipsec.NetNSSpec{
+	netns := photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{
 		"default": {Kind: ipsec.NetNSName, Name: "photon-test"},
 	}}
 	longDataDir := filepath.Join("/tmp", strings.Repeat("d", bird.MaxControlSocketPathBytes))
@@ -330,7 +331,7 @@ func TestParseRoutingInstanceUsesRuntimeSocketWhenDataDirIsTooLong(t *testing.T)
 }
 
 func TestParseRoutingInstanceRejectsExplicitOverlongControlSocket(t *testing.T) {
-	netns := netnsConfig{Names: map[string]ipsec.NetNSSpec{
+	netns := photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{
 		"default": {Kind: ipsec.NetNSName, Name: "photon-test"},
 	}}
 	tooLong := "/" + strings.Repeat("x", bird.MaxControlSocketPathBytes) + ".ctl"

@@ -10,6 +10,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/urfave/cli/v3"
@@ -95,7 +96,7 @@ func debugBabelWithRuntime(rt *AppContext, w io.Writer) error {
 }
 
 func buildBabelDebugView(rt *AppContext, instances map[string]*bird.InstanceObservation, lastRoutingFailure error) inspect.BabelDebugView {
-	routingInstances := []RoutingInstance{}
+	routingInstances := []photonlinux.RoutingInstance{}
 	if rt != nil && rt.Config != nil {
 		routingInstances = rt.Config.Routing.Instances
 	}

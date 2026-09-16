@@ -9,106 +9,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/HiggsNet/photon/pkg/firewall"
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
-// netnsConfig holds the set of named network namespaces the node declares.
-type netnsConfig struct {
-	// Names maps netns name → spec. The name is used as the stable key
-	// referenced by overlays and routing instances.
-	Names map[string]ipsec.NetNSSpec
-	// Forwarding holds the single routing/firewall forwarding policy owned by
-	// each network namespace. Alias keys (notably "default" and its target)
-	// point at the same value.
-	Forwarding map[string]firewall.ForwardingPolicy
-	// Default is the preferred default reference key.
-	Default string
-}
-
-// netnsConfigYAML is the raw YAML model for the top-level `netns:` section.
-type netnsConfigYAML struct {
-	// Default is the optional default netns, equivalent to a named entry.
-	Default *netnsSpecYAML `yaml:"default"`
-	// Entries is a map of named netns definitions, declared alongside default.
-	Entries map[string]netnsSpecYAML `yaml:",inline"`
-}
-
-type netnsSpecYAML struct {
-	Kind       string          `yaml:"kind"`
-	Name       string          `yaml:"name"`
-	Path       string          `yaml:"path"`
-	Create     *bool           `yaml:"create"`
-	Forwarding *forwardingYAML `yaml:"forwarding"`
-}
-
-// netNSSpec applies netns-specific YAML defaults. A declared named netns is
-// Photon-owned by default; create: false opts into reusing an existing one.
-func (raw netnsSpecYAML) netNSSpec() ipsec.NetNSSpec {
-	spec := ipsec.NetNSSpec{
-		Kind: raw.Kind,
-		Name: raw.Name,
-		Path: raw.Path,
-	}
-	if raw.Create != nil {
-		spec.Create = *raw.Create
-	}
-	spec = spec.Normalized()
-	if raw.Create == nil && spec.Kind == ipsec.NetNSName {
-		spec.Create = true
-	}
-	return spec
-}
-
 // routingConfig holds top-level routing instance definitions.
 type routingConfig struct {
-	Instances []RoutingInstance
-}
-
-// RoutingInstance is a per-netns BIRD instance configuration.
-type RoutingInstance struct {
-	ID             string
-	NetNS          string // references a netns name from netnsConfig
-	Enabled        bool
-	Protocol       string
-	Mode           string
-	ShutdownPolicy string
-	ControlSocket  string
-	PIDFile        string
-	ConfigFile     string
-	TableID        string
-	MetricBase     uint
-	MetricStaged   uint
-	MetricDraining uint
-	RTTCost        uint
-	RTTMin         time.Duration
-	RTTMax         time.Duration
-	RTTDecay       uint
-	HelloInterval  time.Duration
-	UpdateInterval time.Duration
-	ECMP           bool
-	ECMPLimit      uint
-	InterfacePat   string
-	RouterIDLabel  string   // required for path netns
-	Overlays       []string // overlays that share this instance (auto-derived)
-	Upstream       *UpstreamConfig
-}
-
-// UpstreamConfig holds optional veth upstream configuration that connects
-// the mesh netns to the main network (init netns or another ns).
-type UpstreamConfig struct {
-	Enabled                bool
-	Mode                   string // static or external
-	CreateVeth             bool   // if true, Photon creates and maintains the veth pair
-	InstallSourceAddresses bool   // install non-shared local assignment source identities on the external endpoint
-	MeshInterface          string // routing instance netns side of the veth pair
-	MeshIPv4LL             string // optional IPv4 link-local for the mesh side
-	MeshIPv6LL             string // optional IPv6 link-local for the mesh side
-	ExternalInterface      string // host/upstream netns side of the veth pair
-	ExternalNetns          string // empty = init/main host netns
-	ExternalIPv4LL         string // optional IPv4 link-local for the external side
-	ExternalIPv6LL         string // optional IPv6 link-local for the external side
+	Instances []photonlinux.RoutingInstance
 }
 
 // routingInstancesYAML is the raw YAML model for the top-level `routing:` section.
@@ -177,72 +85,9 @@ const (
 	defaultExternalVeth   = "phv2mesh"
 )
 
-// parseNetnsConfig parses the top-level `netns:` section into netnsConfig.
-func parseNetnsConfig(yamlCfg *netnsConfigYAML, fallback ipsec.NetNSSpec) (netnsConfig, error) {
-	cfg := netnsConfig{Names: make(map[string]ipsec.NetNSSpec), Forwarding: make(map[string]firewall.ForwardingPolicy)}
-	if yamlCfg == nil {
-		n := fallback.Normalized()
-		addNetnsSpec(&cfg, "default", n)
-		return cfg, nil
-	}
-	if yamlCfg.Default != nil {
-		n := yamlCfg.Default.netNSSpec()
-		if err := n.Validate(); err != nil {
-			return cfg, fmt.Errorf("netns.default: %w", err)
-		}
-		addNetnsSpec(&cfg, "default", n)
-		if err := addNetnsForwarding(&cfg, "default", n, yamlCfg.Default.Forwarding); err != nil {
-			return cfg, fmt.Errorf("netns.default: %w", err)
-		}
-	}
-	for name, entry := range yamlCfg.Entries {
-		n := entry.netNSSpec()
-		if err := n.Validate(); err != nil {
-			return cfg, fmt.Errorf("netns.%s: %w", name, err)
-		}
-		if name == "" {
-			name = n.Target()
-		}
-		cfg.Names[name] = n
-		if err := addNetnsForwarding(&cfg, name, n, entry.Forwarding); err != nil {
-			return cfg, fmt.Errorf("netns.%s: %w", name, err)
-		}
-		if name == "default" && cfg.Default == "" {
-			cfg.Default = name
-		}
-	}
-	if len(cfg.Names) == 0 {
-		n := fallback.Normalized()
-		addNetnsSpec(&cfg, "default", n)
-	}
-	if cfg.Default == "" {
-		cfg.Default = "default"
-	}
-	return cfg, nil
-}
-
-func addNetnsSpec(cfg *netnsConfig, name string, spec ipsec.NetNSSpec) {
-	if cfg.Names == nil {
-		cfg.Names = make(map[string]ipsec.NetNSSpec)
-	}
-	if name == "" {
-		name = spec.Target()
-	}
-	if name == "" {
-		name = ipsec.NetNSHost
-	}
-	cfg.Names[name] = spec
-	if name == "default" {
-		cfg.Default = name
-		if target := spec.Target(); target != "" {
-			cfg.Names[target] = spec
-		}
-	}
-}
-
 // parseRoutingConfigInstances parses `routing.instances[]` into routingConfig.
-func parseRoutingConfigInstances(yamlInstances []routingInstanceYAML, netnsCfg netnsConfig, dataDir string) (routingConfig, error) {
-	var instances []RoutingInstance
+func parseRoutingConfigInstances(yamlInstances []routingInstanceYAML, netnsCfg photonlinux.NetNSConfig, dataDir string) (routingConfig, error) {
+	var instances []photonlinux.RoutingInstance
 	for i, yi := range yamlInstances {
 		inst, err := parseRoutingInstance(yi, netnsCfg, dataDir)
 		if err != nil {
@@ -253,26 +98,26 @@ func parseRoutingConfigInstances(yamlInstances []routingInstanceYAML, netnsCfg n
 	return routingConfig{Instances: instances}, nil
 }
 
-func parseRoutingInstance(yi routingInstanceYAML, netnsCfg netnsConfig, dataDir string) (RoutingInstance, error) {
+func parseRoutingInstance(yi routingInstanceYAML, netnsCfg photonlinux.NetNSConfig, dataDir string) (photonlinux.RoutingInstance, error) {
 	if yi.ID == "" {
-		return RoutingInstance{}, fmt.Errorf("id is required")
+		return photonlinux.RoutingInstance{}, fmt.Errorf("id is required")
 	}
 	if yi.NetNS == "" {
 		yi.NetNS = "default"
 	}
 	spec, ok := netnsCfg.Names[yi.NetNS]
 	if !ok {
-		return RoutingInstance{}, fmt.Errorf("netns %q not found in netns section", yi.NetNS)
+		return photonlinux.RoutingInstance{}, fmt.Errorf("netns %q not found in netns section", yi.NetNS)
 	}
 	netnsName := routingNetNSTarget(spec)
 	// path netns requires router_id_label
 	if spec.Kind == ipsec.NetNSPath && yi.RouterIDLabel == "" {
-		return RoutingInstance{}, fmt.Errorf("router_id_label is required when netns uses path mode")
+		return photonlinux.RoutingInstance{}, fmt.Errorf("router_id_label is required when netns uses path mode")
 	}
 
 	enabled, err := enabledFromPresence("routing.instances[].enabled", "routing.instances[].disabled", true, yi.Enabled, yi.Disabled)
 	if err != nil {
-		return RoutingInstance{}, err
+		return photonlinux.RoutingInstance{}, err
 	}
 
 	mode := yi.Mode
@@ -280,18 +125,18 @@ func parseRoutingInstance(yi routingInstanceYAML, netnsCfg netnsConfig, dataDir 
 		mode = ipsec.RoutingModeManaged
 	}
 	if !oneOfRoutingMode(mode) {
-		return RoutingInstance{}, fmt.Errorf("unsupported routing mode %q", mode)
+		return photonlinux.RoutingInstance{}, fmt.Errorf("unsupported routing mode %q", mode)
 	}
 	shutdownPolicy := normalizedRoutingShutdownPolicy(strings.TrimSpace(yi.ShutdownPolicy))
 	if !oneOfRoutingShutdownPolicy(shutdownPolicy) {
-		return RoutingInstance{}, fmt.Errorf("unsupported shutdown_policy %q", shutdownPolicy)
+		return photonlinux.RoutingInstance{}, fmt.Errorf("unsupported shutdown_policy %q", shutdownPolicy)
 	}
 	provider := yi.Provider
 	if provider == "" {
 		provider = "bird"
 	}
 	if provider != "bird" {
-		return RoutingInstance{}, fmt.Errorf("unsupported routing provider %q", provider)
+		return photonlinux.RoutingInstance{}, fmt.Errorf("unsupported routing provider %q", provider)
 	}
 	tableID := yi.TableID
 	if tableID == "" {
@@ -314,33 +159,33 @@ func parseRoutingInstance(yi routingInstanceYAML, netnsCfg netnsConfig, dataDir 
 		rttCost = bird.DefaultBabelRTTCost
 	}
 	if rttCost >= 65535 {
-		return RoutingInstance{}, fmt.Errorf("rtt_cost must be less than 65535")
+		return photonlinux.RoutingInstance{}, fmt.Errorf("rtt_cost must be less than 65535")
 	}
 	rttMin, err := parseRoutingBabelDuration(yi.RTTMin, bird.DefaultBabelRTTMin, "rtt_min")
 	if err != nil {
-		return RoutingInstance{}, err
+		return photonlinux.RoutingInstance{}, err
 	}
 	rttMax, err := parseRoutingBabelDuration(yi.RTTMax, bird.DefaultBabelRTTMax, "rtt_max")
 	if err != nil {
-		return RoutingInstance{}, err
+		return photonlinux.RoutingInstance{}, err
 	}
 	if rttMax <= rttMin {
-		return RoutingInstance{}, fmt.Errorf("rtt_max must be greater than rtt_min")
+		return photonlinux.RoutingInstance{}, fmt.Errorf("rtt_max must be greater than rtt_min")
 	}
 	rttDecay := yi.RTTDecay
 	if rttDecay == 0 {
 		rttDecay = bird.DefaultBabelRTTDecay
 	}
 	if rttDecay > 256 {
-		return RoutingInstance{}, fmt.Errorf("rtt_decay must be between 1 and 256")
+		return photonlinux.RoutingInstance{}, fmt.Errorf("rtt_decay must be between 1 and 256")
 	}
 	helloInterval, err := parseRoutingBabelDuration(yi.HelloInterval, bird.DefaultBabelHelloInterval, "hello_interval")
 	if err != nil {
-		return RoutingInstance{}, err
+		return photonlinux.RoutingInstance{}, err
 	}
 	updateInterval, err := parseRoutingBabelDuration(yi.UpdateInterval, bird.DefaultBabelUpdateInterval, "update_interval")
 	if err != nil {
-		return RoutingInstance{}, err
+		return photonlinux.RoutingInstance{}, err
 	}
 	ecmp := true
 	if yi.ECMP != nil {
@@ -360,10 +205,10 @@ func parseRoutingInstance(yi routingInstanceYAML, netnsCfg netnsConfig, dataDir 
 	if controlSocket == "" {
 		controlSocket, err = defaultBirdControlSocketPath(configDir, netnsName)
 		if err != nil {
-			return RoutingInstance{}, err
+			return photonlinux.RoutingInstance{}, err
 		}
 	} else if err := validateBirdControlSocketPath(controlSocket); err != nil {
-		return RoutingInstance{}, err
+		return photonlinux.RoutingInstance{}, err
 	}
 	pidFile := yi.PIDFile
 	if pidFile == "" {
@@ -376,10 +221,10 @@ func parseRoutingInstance(yi routingInstanceYAML, netnsCfg netnsConfig, dataDir 
 
 	upstream, err := parseUpstreamConfig(yi.Upstream)
 	if err != nil {
-		return RoutingInstance{}, fmt.Errorf("upstream: %w", err)
+		return photonlinux.RoutingInstance{}, fmt.Errorf("upstream: %w", err)
 	}
 
-	return RoutingInstance{
+	return photonlinux.RoutingInstance{
 		ID:             yi.ID,
 		NetNS:          netnsName,
 		Enabled:        enabled,
@@ -456,7 +301,7 @@ func routingNetNSTarget(spec ipsec.NetNSSpec) string {
 	return ipsec.NetNSHost
 }
 
-func parseUpstreamConfig(yu *upstreamConfigYAML) (*UpstreamConfig, error) {
+func parseUpstreamConfig(yu *upstreamConfigYAML) (*photonlinux.UpstreamConfig, error) {
 	if yu == nil {
 		return nil, nil
 	}
@@ -465,10 +310,10 @@ func parseUpstreamConfig(yu *upstreamConfigYAML) (*UpstreamConfig, error) {
 		return nil, err
 	}
 	if !enabled {
-		return &UpstreamConfig{Enabled: false}, nil
+		return &photonlinux.UpstreamConfig{Enabled: false}, nil
 	}
 
-	uc := &UpstreamConfig{
+	uc := &photonlinux.UpstreamConfig{
 		Enabled:           true,
 		Mode:              normalizedUpstreamMode(strings.TrimSpace(yu.Mode)),
 		CreateVeth:        true,
@@ -602,7 +447,7 @@ func routingNetnsNames(cfg routingConfig) []string {
 
 // netnsRouterIDLabel returns the stable label used for StableRouterID derivation.
 // For host netns → "host"; for named netns → the name; for path netns → router_id_label.
-func netnsRouterIDLabel(netnsName string, netnsCfg netnsConfig, inst RoutingInstance) string {
+func netnsRouterIDLabel(netnsName string, netnsCfg photonlinux.NetNSConfig, inst photonlinux.RoutingInstance) string {
 	if inst.RouterIDLabel != "" {
 		return inst.RouterIDLabel
 	}

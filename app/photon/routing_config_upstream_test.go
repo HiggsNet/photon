@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"gopkg.in/yaml.v3"
 )
@@ -29,7 +30,7 @@ instances:
 		t.Fatalf("yaml unmarshal: %v", err)
 	}
 
-	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{
+	netnsCfg := photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{
 		"photontesth2": {Kind: "name", Name: "photontesth2", Create: true},
 	}}
 	cfg, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp")
@@ -92,7 +93,7 @@ instances:
 		t.Fatalf("yaml unmarshal: %v", err)
 	}
 
-	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{
+	netnsCfg := photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{
 		"photontesth2": {Kind: "name", Name: "photontesth2", Create: true},
 	}}
 	cfg, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp")
@@ -121,7 +122,7 @@ instances:
 		t.Fatalf("yaml unmarshal: %v", err)
 	}
 
-	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{
+	netnsCfg := photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{
 		"photontesth2": {Kind: "name", Name: "photontesth2", Create: true},
 	}}
 	cfg, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp")
@@ -146,7 +147,7 @@ instances:
 		t.Fatalf("yaml unmarshal: %v", err)
 	}
 
-	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{
+	netnsCfg := photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{
 		"photontesth2": {Kind: "name", Name: "photontesth2", Create: true},
 	}}
 	if _, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp"); err == nil {
@@ -167,7 +168,7 @@ instances:
 		t.Fatalf("yaml unmarshal: %v", err)
 	}
 
-	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{
+	netnsCfg := photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{
 		"photontesth2": {Kind: "name", Name: "photontesth2", Create: true},
 	}}
 	cfg, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp")
@@ -194,7 +195,7 @@ instances:
 		t.Fatalf("yaml unmarshal: %v", err)
 	}
 
-	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{
+	netnsCfg := photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{
 		"photontesth2": {Kind: "name", Name: "photontesth2", Create: true},
 	}}
 	cfg, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp")
@@ -219,7 +220,7 @@ instances:
 		t.Fatalf("yaml unmarshal: %v", err)
 	}
 
-	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{
+	netnsCfg := photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{
 		"photontesth2": {Kind: "name", Name: "photontesth2", Create: true},
 	}}
 	cfg, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp")
@@ -269,7 +270,7 @@ instances:
 		t.Fatalf("yaml unmarshal: %v", err)
 	}
 
-	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{
+	netnsCfg := photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{
 		"photontesth2": {Kind: "name", Name: "photontesth2", Create: true},
 	}}
 	cfg, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp")
@@ -299,7 +300,7 @@ instances:
 		t.Fatalf("yaml unmarshal: %v", err)
 	}
 
-	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{
+	netnsCfg := photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{
 		"photontesth2": {Kind: "name", Name: "photontesth2", Create: true},
 	}}
 	_, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp")
@@ -322,7 +323,7 @@ instances:
 		t.Fatalf("yaml unmarshal: %v", err)
 	}
 
-	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{
+	netnsCfg := photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{
 		"photontesth2": {Kind: "name", Name: "photontesth2", Create: true},
 	}}
 	_, err := parseRoutingConfigInstances(yamlCfg.Instances, netnsCfg, "/tmp")

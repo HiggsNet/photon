@@ -52,7 +52,7 @@ func TestDaemonBIRDRoutingRootSmoke(t *testing.T) {
 
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = dataDir
-	appConfig.Netns = netnsConfig{
+	appConfig.Netns = photonlinux.NetNSConfig{
 		Names: map[string]ipsec.NetNSSpec{
 			nsName: {Kind: ipsec.NetNSName, Name: nsName, Create: false},
 		},
@@ -159,7 +159,7 @@ func TestDaemonBIRDAdoptRestartRootSmoke(t *testing.T) {
 	verified, checkpoint, runtime, syncConfig, _ := buildDryRunSmokeOwners(t)
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = dataDir
-	appConfig.Netns = netnsConfig{
+	appConfig.Netns = photonlinux.NetNSConfig{
 		Names: map[string]ipsec.NetNSSpec{
 			nsName: {Kind: ipsec.NetNSName, Name: nsName, Create: false},
 		},
@@ -539,7 +539,7 @@ func TestDaemonBIRDUpstreamRootSmoke(t *testing.T) {
 
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = dataDir
-	appConfig.Netns = netnsConfig{
+	appConfig.Netns = photonlinux.NetNSConfig{
 		Names: map[string]ipsec.NetNSSpec{
 			nsName: {Kind: ipsec.NetNSName, Name: nsName, Create: false},
 		},

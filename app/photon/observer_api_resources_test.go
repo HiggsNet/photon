@@ -444,7 +444,7 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 			}},
 		},
 		Routing: routingConfig{
-			Instances: []RoutingInstance{{
+			Instances: []photonlinux.RoutingInstance{{
 				Enabled: true,
 				NetNS:   "phx-blue",
 			}},
@@ -657,7 +657,7 @@ func TestObserverRoutesAPI(t *testing.T) {
 
 func TestObserverBirdAPI(t *testing.T) {
 	srv := newTestObserverServer()
-	srv.daemon.App.Config.Routing.Instances = []RoutingInstance{{ID: "main", NetNS: "phx-main", Enabled: true}}
+	srv.daemon.App.Config.Routing.Instances = []photonlinux.RoutingInstance{{ID: "main", NetNS: "phx-main", Enabled: true}}
 	srv.daemon.linuxObservation.replaceRouting(&routingObservation{
 		Instances: map[string]*bird.InstanceObservation{
 			"phx-main": {

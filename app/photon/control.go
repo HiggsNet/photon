@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	pingdebug "github.com/HiggsNet/photon/internal/ping"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
@@ -203,7 +204,7 @@ func admissionStatusViaControl(rt *AppContext) (inspect.AdmissionDiagnosis, bool
 	return readCanonicalViewViaControl[inspect.AdmissionDiagnosis](rt, controlRequest{Method: "admission_status"})
 }
 
-func (d *Daemon) birdRoutesForControl(ctx context.Context, dump *inspect.RoutesResponse, instances []RoutingInstance, birdStates map[string]*bird.InstanceObservation) []inspect.BirdRoutesView {
+func (d *Daemon) birdRoutesForControl(ctx context.Context, dump *inspect.RoutesResponse, instances []photonlinux.RoutingInstance, birdStates map[string]*bird.InstanceObservation) []inspect.BirdRoutesView {
 	if d == nil || dump == nil {
 		return nil
 	}

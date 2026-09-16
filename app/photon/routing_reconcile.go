@@ -18,6 +18,7 @@ import (
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/firewall"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
@@ -165,7 +166,7 @@ func (d *Daemon) publishRoutingObservation(rev uint64, summary *routingObservati
 	d.linuxObservation.replaceRouting(summary)
 }
 
-func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *corestate.VerifiedState, birdInstances map[string]*bird.InstanceObservation, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, inst RoutingInstance, ars *routing.AuthorizedRouteSet, dataDir string, overlayByNetns map[string]*netnsOverlayGroup, config *appConfig, now time.Time, forceReload bool) error {
+func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *corestate.VerifiedState, birdInstances map[string]*bird.InstanceObservation, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, inst photonlinux.RoutingInstance, ars *routing.AuthorizedRouteSet, dataDir string, overlayByNetns map[string]*netnsOverlayGroup, config *appConfig, now time.Time, forceReload bool) error {
 	// Keep the single-instance entry point safe for dirty flushes, explicit
 	// reloads, tests, and future callers that do not pass the filtered list.
 	// Disabling an instance stops reconciliation; it intentionally does not
@@ -508,7 +509,7 @@ func (d *Daemon) birdDumpForControl(ctx context.Context, netnsName string, view 
 	return response, nil
 }
 
-func buildBirdInstanceSpecForNetns(inst RoutingInstance, routerID uint32, _ string, ng *netnsOverlayGroup, netnsCfg netnsConfig, ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath) bird.BirdInstanceSpec {
+func buildBirdInstanceSpecForNetns(inst photonlinux.RoutingInstance, routerID uint32, _ string, ng *netnsOverlayGroup, netnsCfg photonlinux.NetNSConfig, ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath) bird.BirdInstanceSpec {
 	netnsSpec := ipsec.NetNSSpec{}
 	if s, ok := netnsCfg.Names[inst.NetNS]; ok {
 		netnsSpec = s
@@ -566,7 +567,7 @@ func buildBirdInstanceSpecForNetns(inst RoutingInstance, routerID uint32, _ stri
 
 	// Build static routes for local assigned prefixes.
 	if ars != nil && managedZone.Valid() && upstreamStaticRoutesEnabled(inst.Upstream) {
-		for _, prefix := range localAssignedPrefixes(ars, managedZone) {
+		for _, prefix := range routing.LocalAssignedPrefixes(ars, managedZone, true) {
 			via := ""
 			var nextHop netip.Addr
 			if inst.Upstream != nil && inst.Upstream.Enabled && inst.Upstream.Mode == upstreamModeStatic {
@@ -584,7 +585,7 @@ func buildBirdInstanceSpecForNetns(inst RoutingInstance, routerID uint32, _ stri
 	return spec
 }
 
-func birdRotateInterfacePolicies(instances map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, netnsName string, overlays []string, routingInst RoutingInstance) []bird.BabelInterfacePolicy {
+func birdRotateInterfacePolicies(instances map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, netnsName string, overlays []string, routingInst photonlinux.RoutingInstance) []bird.BabelInterfacePolicy {
 	metrics := make(map[string]uint)
 	for _, link := range buildLinkOutputs(instances, reconcile) {
 		if link.InterfaceName == "" || !linkOutputBelongsToBirdInstance(link, netnsName, overlays) {
@@ -634,7 +635,7 @@ func linkInstanceByLinkID(instances map[string]ipsec.LinkInstance, id string) (i
 	return ipsec.LinkInstance{}, false
 }
 
-func upstreamPeerNextHop(prefix netip.Prefix, upstream *UpstreamConfig) netip.Addr {
+func upstreamPeerNextHop(prefix netip.Prefix, upstream *photonlinux.UpstreamConfig) netip.Addr {
 	if upstream == nil {
 		return netip.Addr{}
 	}
@@ -649,18 +650,18 @@ func upstreamPeerNextHop(prefix netip.Prefix, upstream *UpstreamConfig) netip.Ad
 	return parsed.Addr()
 }
 
-func upstreamStaticRoutesEnabled(upstream *UpstreamConfig) bool {
+func upstreamStaticRoutesEnabled(upstream *photonlinux.UpstreamConfig) bool {
 	if upstream == nil || !upstream.Enabled {
 		return true
 	}
 	return upstream.Mode == upstreamModeStatic
 }
 
-func routingInstancesEnabled(config *appConfig) []RoutingInstance {
+func routingInstancesEnabled(config *appConfig) []photonlinux.RoutingInstance {
 	if config == nil {
 		return nil
 	}
-	var out []RoutingInstance
+	var out []photonlinux.RoutingInstance
 	for _, inst := range config.Routing.Instances {
 		if routingInstanceEnabled(inst) {
 			out = append(out, inst)
@@ -669,7 +670,7 @@ func routingInstancesEnabled(config *appConfig) []RoutingInstance {
 	return out
 }
 
-func routingInstanceEnabled(inst RoutingInstance) bool {
+func routingInstanceEnabled(inst photonlinux.RoutingInstance) bool {
 	return inst.Enabled && inst.Mode != ipsec.RoutingModeDisabled
 }
 
@@ -679,7 +680,10 @@ func routingInstanceEnabled(inst RoutingInstance) bool {
 // authorized prefixes filtered by the shared allow/deny lists.
 func buildRoutingExportSet(ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath, config *appConfig, netnsName string) []netip.Prefix {
 	localExport := authorizedPrefixes(ars, []zone.ZonePath{managedZone})
-	policy := netnsForwardingPolicy(config, netnsName)
+	if config == nil {
+		return localExport
+	}
+	policy := config.Netns.ForwardingPolicy(netnsName)
 	if !policy.Transit {
 		// Non-transit or no policy: only export local assigned prefixes.
 		return localExport
@@ -689,7 +693,7 @@ func buildRoutingExportSet(ars *routing.AuthorizedRouteSet, managedZone zone.Zon
 	if len(policy.AllowPrefixes) == 0 && len(policy.DenyPrefixes) == 0 {
 		return allAuthorized
 	}
-	return filterAuthorizedByPolicy(allAuthorized, policy)
+	return firewall.FilterAuthorizedByPolicy(allAuthorized, policy)
 }
 
 func authorizedPrefixes(ars *routing.AuthorizedRouteSet, zones []zone.ZonePath) []netip.Prefix {
@@ -708,44 +712,6 @@ func authorizedPrefixes(ars *routing.AuthorizedRouteSet, zones []zone.ZonePath) 
 			out = append(out, prefix)
 		}
 	}
-	return out
-}
-
-func localAssignedPrefixes(ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath) []netip.Prefix {
-	return localAssignedPrefixesMatching(ars, managedZone, nil)
-}
-
-func localNonSharedAssignedPrefixes(ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath) []netip.Prefix {
-	return localAssignedPrefixesMatching(ars, managedZone, func(entry *routing.AssignmentEntry) bool {
-		return !entry.Shared
-	})
-}
-
-func localAssignedPrefixesMatching(ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath, match func(*routing.AssignmentEntry) bool) []netip.Prefix {
-	if ars == nil || !managedZone.Valid() {
-		return nil
-	}
-	outSet := make(map[netip.Prefix]struct{})
-	if len(ars.AllAssignments) > 0 {
-		for _, entry := range ars.AllAssignments {
-			if entry == nil || entry.AssignedTo != managedZone || (match != nil && !match(entry)) {
-				continue
-			}
-			outSet[entry.Prefix] = struct{}{}
-		}
-	} else {
-		for prefix, entry := range ars.Assignments {
-			if entry == nil || entry.AssignedTo != managedZone || (match != nil && !match(entry)) {
-				continue
-			}
-			outSet[prefix] = struct{}{}
-		}
-	}
-	out := make([]netip.Prefix, 0, len(outSet))
-	for prefix := range outSet {
-		out = append(out, prefix)
-	}
-	sort.Slice(out, func(i, j int) bool { return netipPrefixLess(out[i], out[j]) })
 	return out
 }
 
@@ -801,7 +767,7 @@ func assignmentMatchesAnnounceSelectors(entry *routing.AssignmentEntry, selector
 
 func externalUpstreamRoutePrefixes(ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath) []netip.Prefix {
 	authorized := authorizedPrefixes(ars, nil)
-	localAssigned := localAssignedPrefixes(ars, managedZone)
+	localAssigned := routing.LocalAssignedPrefixes(ars, managedZone, true)
 	if len(authorized) == 0 {
 		return nil
 	}
@@ -825,7 +791,7 @@ func externalUpstreamSourcePrefixes(ars *routing.AuthorizedRouteSet, managedZone
 	// Source identities belong to the node itself. Shared/anycast prefixes are
 	// served behind the upstream veth and must remain routes, not addresses on
 	// the veth endpoint itself.
-	localAssigned := localNonSharedAssignedPrefixes(ars, managedZone)
+	localAssigned := routing.LocalAssignedPrefixes(ars, managedZone, false)
 	out := make([]netip.Prefix, 0, len(localAssigned))
 	seen := make(map[netip.Prefix]struct{}, len(localAssigned))
 	for _, prefix := range localAssigned {
@@ -877,21 +843,7 @@ func netipPrefixLess(a, b netip.Prefix) bool {
 	return a.Bits() < b.Bits()
 }
 
-// assignmentPrefixes returns all IPAM assignment prefixes from the authorized
-// route set. These prefixes are still used by firewall/IPAM consumers; BIRD
-// import/export filters use authorized route announcements instead.
-func assignmentPrefixes(ars *routing.AuthorizedRouteSet) []netip.Prefix {
-	if ars == nil {
-		return nil
-	}
-	out := make([]netip.Prefix, 0, len(ars.Assignments))
-	for prefix := range ars.Assignments {
-		out = append(out, prefix)
-	}
-	return out
-}
-
-func birdOwnerForInstance(inst RoutingInstance, netnsName string) bird.BirdResourceOwner {
+func birdOwnerForInstance(inst photonlinux.RoutingInstance, netnsName string) bird.BirdResourceOwner {
 	owner := bird.BirdResourceOwner{
 		Manager:    "photon",
 		InstanceID: inst.ID,

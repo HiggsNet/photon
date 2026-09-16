@@ -34,7 +34,7 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "photontesth2", Create: true},
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
-	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
+	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 
 	upstreamYAML := []routingInstanceYAML{{
 		ID:           "main",
@@ -254,7 +254,7 @@ func TestRoutingSingleInstanceEntrySkipsDisabledPlatformEffects(t *testing.T) {
 type routingDisabledFixture struct {
 	service            *Daemon
 	verified           *corestate.VerifiedState
-	disabled           RoutingInstance
+	disabled           photonlinux.RoutingInstance
 	disabledConfigPath string
 	veth               *fakeVethManager
 	routes             *fakeUpstreamRouteManager
@@ -269,7 +269,7 @@ func newRoutingDisabledFixture(t *testing.T, enabled bool, mode string, includeE
 	now := time.Unix(4000, 0)
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()
-	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{
+	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{
 		"photontesth2":        {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true},
 		"photontest-disabled": {Kind: ipsec.NetNSName, Name: "photontest-disabled", Create: true},
 	}}
@@ -295,7 +295,7 @@ func newRoutingDisabledFixture(t *testing.T, enabled bool, mode string, includeE
 	}
 	appConfig.Routing = parsed
 
-	var disabled RoutingInstance
+	var disabled photonlinux.RoutingInstance
 	for _, inst := range parsed.Instances {
 		if inst.ID == "disabled" {
 			disabled = inst
@@ -422,7 +422,7 @@ func TestUpstreamRoutingWithIPAMAssignment(t *testing.T) {
 	}
 
 	dataDir := t.TempDir()
-	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
+	netnsCfg := photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 
 	// Build the BirdInstanceSpec via parseRoutingConfigInstances for proper path derivation.
 	yamlInstances := []routingInstanceYAML{{
@@ -506,7 +506,7 @@ func TestExternalUpstreamCanInstallSourceAddressesWithoutStaticRoutes(t *testing
 		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "photontesth2", Create: true},
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
-	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{
+	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{
 		"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true},
 	}}
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{
@@ -559,7 +559,7 @@ func TestBuildBirdInstanceSpecExternalUpstreamHasNoStaticRoutes(t *testing.T) {
 	}
 
 	dataDir := t.TempDir()
-	netnsCfg := netnsConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
+	netnsCfg := photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 	yamlInstances := []routingInstanceYAML{{
 		ID:           "main",
 		NetNS:        "photontesth2",

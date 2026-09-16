@@ -434,7 +434,7 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
-	appConfig.Netns = netnsConfig{
+	appConfig.Netns = photonlinux.NetNSConfig{
 		Names:      map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}},
 		Forwarding: map[string]firewall.ForwardingPolicy{"photontesth2": {Transit: true}},
 	}

@@ -75,3 +75,15 @@ func filterTransitPrefixes(v4, v6 []netip.Prefix, policy ForwardingPolicy) []net
 	}
 	return filtered
 }
+
+// FilterAuthorizedByPolicy applies a namespace forwarding policy to the
+// authorized route set consumed by BIRD export generation.
+func FilterAuthorizedByPolicy(prefixes []netip.Prefix, policy ForwardingPolicy) []netip.Prefix {
+	var out []netip.Prefix
+	for _, prefix := range prefixes {
+		if IsTransitPrefixAllowed(policy, prefix) {
+			out = append(out, prefix)
+		}
+	}
+	return out
+}

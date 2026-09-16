@@ -938,3 +938,21 @@ func TestAnycastRouteAnnouncementOverlapValid(t *testing.T) {
 		t.Fatalf("expected sh.catofes. announcement to be authorized")
 	}
 }
+
+func TestLocalAssignedPrefixesUsesAllAssignments(t *testing.T) {
+	prefix := netip.MustParsePrefix("10.0.0.0/24")
+	ars := &AuthorizedRouteSet{
+		Assignments: map[netip.Prefix]*AssignmentEntry{
+			prefix: {Prefix: prefix, Source: "catofes.", AssignedTo: "node-b.catofes."},
+		},
+		AllAssignments: []*AssignmentEntry{
+			{Prefix: prefix, Source: "catofes.", AssignedTo: "node-b.catofes."},
+			{Prefix: prefix, Source: "catofes.", AssignedTo: "node-a.catofes."},
+		},
+	}
+
+	got := LocalAssignedPrefixes(ars, "node-a.catofes.", true)
+	if len(got) != 1 || got[0] != prefix {
+		t.Fatalf("LocalAssignedPrefixes = %+v, want [%s]", got, prefix)
+	}
+}

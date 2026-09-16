@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
@@ -43,7 +44,7 @@ func (d *Daemon) kernelRoutesView(ctx context.Context, netnsName, family string)
 	if err != nil {
 		return nil, err
 	}
-	instances := make([]RoutingInstance, 0, len(d.App.Config.Routing.Instances))
+	instances := make([]photonlinux.RoutingInstance, 0, len(d.App.Config.Routing.Instances))
 	for _, inst := range d.App.Config.Routing.Instances {
 		if !inst.Enabled || inst.Mode == ipsec.RoutingModeDisabled {
 			continue

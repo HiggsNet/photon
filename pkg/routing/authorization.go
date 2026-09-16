@@ -614,3 +614,34 @@ func mustParsePrefix(s string) netip.Prefix {
 	}
 	return p.Masked()
 }
+
+// LocalAssignedPrefixes returns this zone's assigned prefixes, optionally including shared assignments.
+func LocalAssignedPrefixes(ars *AuthorizedRouteSet, managedZone zone.ZonePath, includeShared bool) []netip.Prefix {
+	if ars == nil || !managedZone.Valid() {
+		return nil
+	}
+	outSet := make(map[netip.Prefix]struct{})
+	if len(ars.AllAssignments) > 0 {
+		for _, entry := range ars.AllAssignments {
+			if entry == nil || entry.AssignedTo != managedZone || (!includeShared && entry.Shared) {
+				continue
+			}
+			outSet[entry.Prefix] = struct{}{}
+		}
+	} else {
+		for prefix, entry := range ars.Assignments {
+			if entry == nil || entry.AssignedTo != managedZone || (!includeShared && entry.Shared) {
+				continue
+			}
+			outSet[prefix] = struct{}{}
+		}
+	}
+	out := make([]netip.Prefix, 0, len(outSet))
+	for prefix := range outSet {
+		out = append(out, prefix)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Addr().Less(out[j].Addr()) || (out[i].Addr() == out[j].Addr() && out[i].Bits() < out[j].Bits())
+	})
+	return out
+}

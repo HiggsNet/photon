@@ -155,8 +155,8 @@ operations           当前为空；rotation/takeover 从真实系统 Observatio
 |---|---|---|
 | `endpoint_acl.go` | ACL CLI、验证、resolve 和 firewall runtime mutation | Linux firewall model/controller；CLI/control 留 adapter；属于 platform desired runtime |
 | `firewall_config.go` | 已迁至 `internal/photonlinux/firewall_config.go` | Linux owner 持有 YAML/effective config、managed 实例筛选与 spec 构造；app 直接传 namespace specs 和 IPsec port mode，旧类型/helper 已删除 |
-| `firewall_reconcile.go` | firewall plan/apply/observation 顺序 | YAML/effective config 与 policy input builder 下沉；Daemon 保留 owner/revision/逐实例 apply/Observation，实际执行复用 `LinuxDriver.ApplyFirewall`，不新增 PlatformController facade |
-| `forwarding_config.go` | Linux forwarding policy | Linux firewall/routing config |
+| `firewall_reconcile.go` | firewall plan/apply/observation 顺序 | YAML/effective config 与 policy input builder 已下沉 Linux owner；Daemon 读取 owner、构建 LinkOutput、检查 revision 并逐实例调用 Driver/发布 Observation，私有 LinuxState 不再进入纯策略 builder |
+| `forwarding_config.go` | 已删除 | namespace forwarding 解析和 lookup 已归 Linux routing config；前缀过滤归现有 pkg/firewall，app 不保留 helper/alias |
 | `gossip_checkpoint_migration.go` | 旧 SyncPeers 到 GossipCheckpoint | `internal/photonlinux/migration`；仅由旧数据库单向迁移调用，不属于在线兼容层；只有明确停止支持旧 schema 时才删除 |
 | `health_config.go` | probe/hysteresis/metrics 配置 | 通用类型留 `pkg/health`；Linux YAML 进 Linux health config |
 | `health_reconcile.go` | health manager 装配、target 组合、快照发布和 CLI 展示壳 | manager/状态机留 `pkg/health`；`LinkOutput -> ProbeTarget` 与 probe ID/rotate role 是 health 专属组合规则；raw ICMP、setns、exec fallback 在 `internal/photonlinux/healthprobe`；tick/completion 已进入 Daemon scheduler/event loop |
@@ -198,7 +198,7 @@ operations           当前为空；rotation/takeover 从真实系统 Observatio
 | `route.go` | route CLI、旧 direct mutation、报告 | mutation进 state intent；授权计算留 routing；报告进 inspect；CLI 进 photoncli |
 | `network_state.go` | 为 NetworkState 安装验证函数并规范化 current state | 最终靠近 `pkg/core/state`/zone 构造边界；避免 app 调用方依赖“记得先 configure”的隐性前置条件 |
 | `protocol_publish.go` | 私有 transport key 先落盘、公共 protocol record 后发布 | 保留关键顺序与 verified revision guard；纯 record 构造继续靠近 transport/state publisher owner |
-| `routing_config.go` | netns/BIRD/Babel/upstream config | `internal/photonlinux/routing/config` |
+| `routing_config.go` | BIRD/Babel/upstream YAML 解析与默认值 | namespace parser/forwarding 与 RoutingInstance/UpstreamConfig 有效类型已归 internal/photonlinux/routing_config.go；其余解析及 spec/export/announce 策略继续按窄切片下沉 |
 | `routing_reconcile.go` | BIRD/netns/veth/upstream、health、auto announce | 配置与纯 spec/export/announce policy 下沉；Daemon 保留多实例/health/intent/shutdown 顺序，Linux 执行复用现有 LinuxDriver，不新增 routing controller facade |
 | `routing_upstream_routes.go` | Linux `ip` 安装 upstream 地址/路由 | `internal/photonlinux/routing` driver |
 | `runtime_state_migration.go` | 旧 `stateFile/stateMeta` 单向 decoder | current LinuxState/type/clone/codec/commit 已归 `internal/photonlinux`；本文件只保留旧 schema 拆分与原子迁移，停止支持旧库时删除 |
@@ -345,7 +345,7 @@ test-only production helper。
 核心 Runtime/State/Observation 和 canonical inspect 迁移已经闭环，后续只保留以下明确切片：
 
 1. 已完成：删除 `EnableEventLoopSync`、`processPacketEvent`、`SyncTransportDeps` 与 endpoint collector 全局测试接缝；
-2. firewall：YAML/effective config、managed 实例筛选和 spec 构造已下沉；继续迁移 forwarding policy 与 policy input builder，app 保留 reconcile 顺序；
+2. 已完成：firewall YAML/effective config、managed 实例筛选、spec 构造、forwarding policy 和 policy input builder 已下沉；app 保留 reconcile 顺序；
 3. routing/BIRD：下沉 netns/BIRD/upstream 配置与纯 spec/export/announce policy，复用既有 LinuxDriver 执行；
 4. IPsec：下沉 protocol record 纯构造、reconcile 纯 helper 与安全 live projection，保留私钥先落盘和 rotation/apply
    的 Daemon 顺序；
@@ -374,3 +374,20 @@ git diff --check 通过。未运行特权数据面 smoke。forwarding policy 和
 
 配置包收口复核：已删除临时 configutil 包，撤回 routing/health/Observer 的关联改动；
 app/photon 与 internal/photonlinux 的配置及 firewall instance 定向测试重新执行通过，git diff --check 通过。
+
+A5 firewall 纯策略切片（2026-09-16）：生产代码新增 487 行、删除 499 行，净减 12 行（含移动文件）。
+namespace YAML/parser、forwarding policy 的别名解析和 routing/upstream 有效类型归 internal/photonlinux/routing_config.go；
+app 的旧 netns/实例类型和 forwarding_config.go 删除。没有新增包、接口、队列或兼容 alias。
+Daemon → photonlinux.BuildFirewallPolicyInput 只传 verified view、授权路由集、已有 LinkOutput、namespace 配置和 routing 实例；
+原 LinuxState、IPsec LinkInstance map 与 reconcile 工作对象不进入纯策略。host redirect grace 与 namespace 接口筛选随 builder 迁移。
+共享分配前缀查询归 pkg/routing，BIRD 的 forwarding 前缀过滤归现有 pkg/firewall；删除单消费者 assignmentPrefixes helper、
+无消费的 revokedSet、重复切片拷贝及等价错误分支。Daemon 的 owner 读取、revision 校验、Driver apply、Observation 发布与关闭顺序保留。
+端口宽限期、共享前缀、namespace 隔离单测随 owner 迁移；app 保留 YAML 集成、reconcile/ACL/revocation 测试。
+定向测试与 fresh make check（fmt、vet、全量 Go 测试、Linux build、Windows amd64 cross build）通过，git diff --check 通过。
+未执行特权数据面 smoke。routing/BIRD YAML/spec/export/announce 和 IPsec 其余纯构造仍是 TODO 未完成项。
+
+前缀查询后续收口：三个 helper 合并为 LocalAssignedPrefixes(ars, managedZone, includeShared)，
+上游源地址调用传 false，其余消费者传 true，删除回调和两个旧入口。forwarding_config_test.go 已删除，
+其中三个 app YAML 集成测试并入 config_netns_test.go；测试仍覆盖 namespace policy 装配、别名及错误配置层级。
+本次定向前缀、上游源地址、firewall policy 与 namespace/forwarding 配置测试通过，git diff --check 通过。
+提交前复核：函数合并与测试文件整理后的最终工作树再次通过 make check（fmt、vet、全量 Go 测试、Linux/Windows 构建）及 git diff --check。

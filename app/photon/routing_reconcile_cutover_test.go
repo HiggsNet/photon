@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -25,7 +26,7 @@ func TestReconcileRoutingFeedsBirdObservationToRotateCutoverGate(t *testing.T) {
 		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "photontesth2", Create: true},
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
-	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
+	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
 	observationLinks := map[string]ipsec.LinkInstance{
@@ -130,7 +131,7 @@ func TestBirdRotateInterfacePoliciesPromoteStagedAndDrainOld(t *testing.T) {
 		},
 	}
 	var observationReconcile *ipsecObservationSummary
-	routingInst := RoutingInstance{MetricBase: 100, MetricStaged: 200, MetricDraining: 500}
+	routingInst := photonlinux.RoutingInstance{MetricBase: 100, MetricStaged: 200, MetricDraining: 500}
 
 	wantPolicies := func(phase string, want map[string]uint) {
 		t.Helper()

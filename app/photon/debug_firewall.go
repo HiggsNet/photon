@@ -85,7 +85,10 @@ func buildFirewallDebugView(config *appConfig, instances []photonlinux.FirewallI
 		Reconcile: snapshot,
 	}
 	for _, inst := range instances {
-		policy := netnsForwardingPolicy(config, inst.NetNS)
+		var policy firewall.ForwardingPolicy
+		if config != nil {
+			policy = config.Netns.ForwardingPolicy(inst.NetNS)
+		}
 		scope := inst.NetNS
 		if inst.IsHost {
 			scope = "host"

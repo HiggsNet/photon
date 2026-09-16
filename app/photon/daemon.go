@@ -1036,9 +1036,9 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		writeCanonicalView(conn, view)
 	case "routes_view":
-		var routingInstances []RoutingInstance
+		var routingInstances []photonlinux.RoutingInstance
 		if d.App != nil && d.App.Config != nil {
-			routingInstances = append([]RoutingInstance(nil), d.App.Config.Routing.Instances...)
+			routingInstances = append([]photonlinux.RoutingInstance(nil), d.App.Config.Routing.Instances...)
 		}
 		view := d.State.Common.ReadView()
 		var birdInstances map[string]*bird.InstanceObservation

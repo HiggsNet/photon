@@ -12,10 +12,10 @@ import (
 
 func TestKernelRoutesViewShowsKernelFIBByFamily(t *testing.T) {
 	config := defaultAppConfig()
-	config.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{
+	config.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{
 		"mesh": {Kind: ipsec.NetNSName, Name: "mesh"},
 	}}
-	config.Routing = routingConfig{Instances: []RoutingInstance{
+	config.Routing = routingConfig{Instances: []photonlinux.RoutingInstance{
 		{ID: "main", NetNS: "mesh", Enabled: true, Mode: ipsec.RoutingModeManaged},
 	}}
 	var commands []string

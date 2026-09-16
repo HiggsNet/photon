@@ -49,10 +49,10 @@ netns:
 			t.Fatalf("netns.%s = %+v, want kind=name create=%t", name, spec, wantCreate)
 		}
 	}
-	if policy := netnsForwardingPolicy(config, "default"); policy.Transit {
+	if policy := config.Netns.ForwardingPolicy("default"); policy.Transit {
 		t.Fatalf("default forwarding policy = %+v, want non-transit", policy)
 	}
-	if policy := netnsForwardingPolicy(config, "forwarded"); !policy.Transit {
+	if policy := config.Netns.ForwardingPolicy("forwarded"); !policy.Transit {
 		t.Fatalf("forwarded forwarding policy = %+v, want transit", policy)
 	}
 }
@@ -100,5 +100,62 @@ netns:
 	}
 	if spec, ok := config.Netns.Names["edge"]; !ok || spec.Name != "edge" || !spec.Create {
 		t.Fatalf("netns.edge = %+v, ok=%t", spec, ok)
+	}
+}
+
+func TestParseConfigYAMLNetNSForwarding(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+netns:
+  default:
+    kind: name
+    name: photontesth2
+    create: true
+    forwarding:
+      allow_prefixes:
+        - 10.42.0.0/16
+      deny_prefixes:
+        - 10.42.99.0/24
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	for _, key := range []string{"default", "photontesth2"} {
+		policy := config.Netns.Forwarding[key]
+		if !policy.Transit || len(policy.AllowPrefixes) != 1 || len(policy.DenyPrefixes) != 1 {
+			t.Fatalf("Netns.Forwarding[%q] = %+v", key, policy)
+		}
+	}
+}
+
+func TestParseConfigYAMLRejectsFirewallForwarding(t *testing.T) {
+	config := defaultAppConfig()
+	err := parseConfigYAML(`
+firewall:
+  instances:
+    - id: mesh
+      forwarding:
+        transit: true
+`, config)
+	if err == nil {
+		t.Fatal("parseConfigYAML should reject forwarding under firewall instance")
+	}
+}
+
+func TestParseConfigYAMLNamedNetNSForwardingUsesTargetAlias(t *testing.T) {
+	config := defaultAppConfig()
+	if err := parseConfigYAML(`
+netns:
+  edge:
+    kind: name
+    name: physical-edge
+    create: true
+    forwarding:
+      transit: true
+`, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	if !config.Netns.ForwardingPolicy("edge").Transit || !config.Netns.ForwardingPolicy("physical-edge").Transit {
+		t.Fatal("named netns policy should be available by config key and resolved target")
 	}
 }

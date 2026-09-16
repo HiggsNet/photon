@@ -227,24 +227,6 @@ func TestAutoAnnounceSelectorsSeparatePersistentAndExplicitSharedRoutes(t *testi
 	}
 }
 
-func TestLocalAssignedPrefixesUsesAllAssignments(t *testing.T) {
-	prefix := netip.MustParsePrefix("10.0.0.0/24")
-	ars := &routing.AuthorizedRouteSet{
-		Assignments: map[netip.Prefix]*routing.AssignmentEntry{
-			prefix: {Prefix: prefix, Source: "catofes.", AssignedTo: "node-b.catofes."},
-		},
-		AllAssignments: []*routing.AssignmentEntry{
-			{Prefix: prefix, Source: "catofes.", AssignedTo: "node-b.catofes."},
-			{Prefix: prefix, Source: "catofes.", AssignedTo: "node-a.catofes."},
-		},
-	}
-
-	got := localAssignedPrefixes(ars, "node-a.catofes.")
-	if len(got) != 1 || got[0] != prefix {
-		t.Fatalf("localAssignedPrefixes = %+v, want [%s]", got, prefix)
-	}
-}
-
 func TestExternalUpstreamSourcePrefixesExcludeSharedAssignments(t *testing.T) {
 	local := netip.MustParsePrefix("2a0d:2905:1:7::/64")
 	shared := netip.MustParsePrefix("2a0d:2905::/96")

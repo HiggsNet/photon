@@ -60,7 +60,7 @@ type appConfig struct {
 	Overlay              overlayConfig
 	IPsec                ipsecConfig
 	IPAM                 ipamConfig
-	Netns                netnsConfig
+	Netns                photonlinux.NetNSConfig
 	Routing              routingConfig
 	Firewall             photonlinux.FirewallConfig
 	PeerLifecycle        inspect.PeerLifecycleConfig
@@ -87,7 +87,7 @@ type configYAML struct {
 	Overlay       overlayDefaultsYAML             `yaml:"overlay"`
 	IPsec         ipsecConfigYAML                 `yaml:"ipsec"`
 	IPAM          ipamConfigYAML                  `yaml:"ipam"`
-	Netns         *netnsConfigYAML                `yaml:"netns"`
+	Netns         *photonlinux.NetNSConfigYAML    `yaml:"netns"`
 	Routing       *routingInstancesYAML           `yaml:"routing"`
 	Firewall      *photonlinux.FirewallConfigYAML `yaml:"firewall"`
 	PeerLifecycle *peerLifecycleYAML              `yaml:"peer_lifecycle"`
@@ -599,7 +599,7 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 	}
 	config.IPsec.DefaultNetNS = config.Overlay.DefaultNetNS
 	var err error
-	config.Netns, err = parseNetnsConfig(file.Netns, config.Overlay.DefaultNetNS)
+	config.Netns, err = photonlinux.ParseNetNSConfig(file.Netns, config.Overlay.DefaultNetNS)
 	if err != nil {
 		return err
 	}
@@ -811,7 +811,7 @@ func parseTunnelAddressConfig(cfg tunnelAddressConfigYAML) (ipsec.TunnelAddressS
 	}, nil
 }
 
-func parseOverlayConfigs(overlays []overlayGroupConfigYAML, netnsCfg netnsConfig, defaultNetNS ipsec.NetNSSpec) ([]ipsec.LinkGroupSpec, error) {
+func parseOverlayConfigs(overlays []overlayGroupConfigYAML, netnsCfg photonlinux.NetNSConfig, defaultNetNS ipsec.NetNSSpec) ([]ipsec.LinkGroupSpec, error) {
 	groups := make([]ipsec.LinkGroupSpec, 0, len(overlays))
 	for i, overlay := range overlays {
 		group, err := parseOverlayConfig(overlay, netnsCfg, defaultNetNS)
@@ -823,7 +823,7 @@ func parseOverlayConfigs(overlays []overlayGroupConfigYAML, netnsCfg netnsConfig
 	return groups, nil
 }
 
-func parseOverlayConfig(overlay overlayGroupConfigYAML, netnsCfg netnsConfig, defaultNetNS ipsec.NetNSSpec) (ipsec.LinkGroupSpec, error) {
+func parseOverlayConfig(overlay overlayGroupConfigYAML, netnsCfg photonlinux.NetNSConfig, defaultNetNS ipsec.NetNSSpec) (ipsec.LinkGroupSpec, error) {
 	netns, err := resolveNetNSRef(overlay.NetNS, netnsCfg, defaultNetNS)
 	if err != nil {
 		return ipsec.LinkGroupSpec{}, fmt.Errorf("netns: %w", err)
@@ -909,7 +909,7 @@ func parseOverlayConfig(overlay overlayGroupConfigYAML, netnsCfg netnsConfig, de
 	return group.Normalized(), nil
 }
 
-func resolveNetNSRef(ref netnsRefYAML, netnsCfg netnsConfig, fallback ipsec.NetNSSpec) (ipsec.NetNSSpec, error) {
+func resolveNetNSRef(ref netnsRefYAML, netnsCfg photonlinux.NetNSConfig, fallback ipsec.NetNSSpec) (ipsec.NetNSSpec, error) {
 	if ref.Ref != "" {
 		spec, ok := netnsCfg.Names[ref.Ref]
 		if !ok {

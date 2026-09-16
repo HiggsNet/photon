@@ -15,6 +15,7 @@ import (
 	photonstate "github.com/HiggsNet/photon/internal/state"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	pingdebug "github.com/HiggsNet/photon/internal/ping"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
@@ -422,7 +423,7 @@ func TestDaemonControlBirdDump(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestRoutingOwners(t)
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()
-	appConfig.Netns = netnsConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
+	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{
 		ID:            "main",
 		NetNS:         "photontesth2",
