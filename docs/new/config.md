@@ -353,8 +353,6 @@ health:
     enabled: false
     local_spool_path: /var/lib/photon/health-spool
     local_spool_max_age: 6h
-    remote_write_url: http://victoriametrics:8428/api/v1/write
-    remote_write_queue_capacity: 1024
 ```
 
 字段说明：
@@ -368,7 +366,7 @@ health:
 - `metrics.enabled`：显式设为 `true` 才启用本地 health metrics spool 和 remote write；默认关闭。`metrics.disabled: true` 也可显式关闭。
 - `metrics.local_spool_path`：本地历史样本路径，Observer 的 health series API 从这里读取。
 - `metrics.local_spool_max_age`：本地样本保留时长。
-- `metrics.remote_write_url` / `remote_write_queue_capacity`：可选的远程 metrics 推送 endpoint 和队列容量。
+- `metrics.remote_write_url` / `remote_write_queue_capacity`：尚未实现，配置这两个字段会报错；请删除。
 
 Health 结果用于本机 debug、observer、metrics 和 rotate/cutover gate。当前第一版不会把 health 直接写入 gossip active state。
 
@@ -379,14 +377,13 @@ Health 结果用于本机 debug、observer、metrics 和 rotate/cutover gate。�
 ```yaml
 observer:
   listen: 127.0.0.1:8080
-  ui_path: ""
   event_buffer_seconds: 0
 ```
 
 字段说明：
 
 - `listen`：HTTP 监听地址，默认 `127.0.0.1:8080`。
-- `ui_path`：自定义 UI 静态文件路径；为空时使用内置 UI。
+- `ui_path`：尚未实现，配置此字段会报错；请删除，使用根路径内置 UI。
 - `event_buffer_seconds`：SSE 事件回放缓冲的保留时长（秒），供 `GET /api/v1/events/recent` 与 UI Events 页使用；`0` 表示关闭缓冲（不保留历史事件）。
 - `disabled`：设为 `true` 时关闭 observer。
 

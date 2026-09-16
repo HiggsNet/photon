@@ -75,10 +75,10 @@ func debugRotate(ctx context.Context, filter string) error {
 func writeDebugRotateFromView(w io.Writer, view inspect.LinksDebugView, filter string) error {
 	rotate := inspect.BuildRotateDebug(inspect.RotateDebugInput{
 		Inspection:       view.Inspection,
-		ReplannedDesired: view.ReplannedDesired, ReplanIgnored: view.ReplanIgnored,
+		LastDesiredCount: view.LastDesiredCount, ReplanIgnored: view.ReplanIgnored,
 		LastDesiredLinks: view.LastDesiredLinks, DesiredPlanSource: view.DesiredPlanSource,
 		Filter: filter, StoredLabel: "daemon_sas", LiveLabel: "live_sas",
-		StoredSAs: view.StoredSAs, LiveSAs: view.LiveSAs, LiveSAError: view.LiveSAError,
+		ReconcileSAs: view.ReconcileSAs, LiveSAs: view.LiveSAs, LiveSAError: view.LiveSAError,
 	})
 	return inspecttext.WriteRotateDebug(w, rotate)
 }
@@ -109,7 +109,6 @@ func rotateIPsecPortDirect(rt *AppContext) (*manualPortRotateResult, error) {
 	if common.State == nil {
 		return nil, fmt.Errorf("state owners are not initialized")
 	}
-	daemon := &Daemon{State: state}
 	record, result, err := planLocalIPsecPortRotation(rt.Config, common.State, rt.Now())
 	if err != nil {
 		return nil, err
@@ -118,7 +117,7 @@ func rotateIPsecPortDirect(rt *AppContext) (*manualPortRotateResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	committed, err := daemon.commitLocalProtocols(context.Background(), uint64(common.Revision), []corestate.LocalIntent{
+	committed, err := commitLocalProtocols(context.Background(), state, uint64(common.Revision), []corestate.LocalIntent{
 		corestate.PutProtocolRecordIntent{Kind: corestate.ProtocolRecordIPsec, Zone: common.State.ManagedZone, Key: ipsec.RecordKeyPorts, Type: ipsec.RecordTypePorts, Value: value},
 	}, nil, rt.Now())
 	if err != nil {

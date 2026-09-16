@@ -20,7 +20,7 @@ func WriteRotateDebug(w io.Writer, view inspect.RotateDebugView) error {
 		out.Linef("filter: %s", view.Filter)
 		out.Linef("matched_links: %d", len(view.Links))
 	}
-	out.Linef("%s: %d", view.StoredLabel, view.StoredSACount)
+	out.Linef("%s: %d", view.StoredLabel, view.ReconcileSACount)
 	out.Linef("%s: %d", view.LiveLabel, view.LiveSACount)
 	out.LineIf(view.LiveSAError != "", "live_sa_error: %s", view.LiveSAError)
 	for _, link := range view.Links {
@@ -66,7 +66,7 @@ func writeRotateLink(out *lineWriter, item inspect.RotateDebugLink) {
 		out.Linef("  staged:")
 		out.Linef("    state: absent")
 	}
-	writeRotateSAs(out, "stored_matching_sas", item.StoredMatchingSAs)
+	writeRotateSAs(out, "reconcile_matching_sas", item.ReconcileMatchingSAs)
 	writeRotateSAs(out, "live_matching_sas", item.LiveMatchingSAs)
 }
 

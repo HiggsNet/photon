@@ -26,6 +26,8 @@ const (
 	controlSocketName      = "photon.sock"
 	controlDialTimeout     = time.Second
 	controlRequestDeadline = 10 * time.Second
+	// Bound the whole diagnostic, regardless of target count or probe options.
+	controlPingMaxDuration = 5 * time.Minute
 )
 
 type controlRequest struct {
@@ -342,7 +344,7 @@ func rotateIPsecPortViaControl(rt *AppContext) (*manualPortRotateResult, bool, e
 }
 
 func issueDelegationViaControl(rt *AppContext, request *joinRequest, permissions []zone.Permission) (*joinBundle, bool, error) {
-	response, ok, err := sendAdminControlRequest(rt, controlRequest{
+	response, ok, err := sendMutationControlRequest(rt, controlRequest{
 		Method:      "delegate_issue",
 		JoinRequest: request,
 		Permissions: permissions,
@@ -357,7 +359,7 @@ func issueDelegationViaControl(rt *AppContext, request *joinRequest, permissions
 }
 
 func grantDelegationPermissionsViaControl(rt *AppContext, path zone.ZonePath, permissions []zone.Permission) (*joinBundle, bool, error) {
-	response, ok, err := sendAdminControlRequest(rt, controlRequest{
+	response, ok, err := sendMutationControlRequest(rt, controlRequest{
 		Method:      "delegate_grant",
 		Zone:        path.String(),
 		Permissions: permissions,
@@ -369,7 +371,7 @@ func grantDelegationPermissionsViaControl(rt *AppContext, path zone.ZonePath, pe
 }
 
 func importRecoveryZoneViaControl(rt *AppContext, snapshot *corestate.ZoneSnapshot) (*corestate.ApplyResult, int, bool, error) {
-	response, ok, err := sendAdminControlRequest(rt, controlRequest{
+	response, ok, err := sendMutationControlRequest(rt, controlRequest{
 		Method:   "recovery_import_zone",
 		Snapshot: snapshot,
 	})
@@ -385,7 +387,7 @@ func importRecoveryZoneViaControl(rt *AppContext, snapshot *corestate.ZoneSnapsh
 }
 
 func revokeDelegationViaControl(rt *AppContext, path zone.ZonePath, reason string) (bool, error) {
-	_, ok, err := sendAdminControlRequest(rt, controlRequest{
+	_, ok, err := sendMutationControlRequest(rt, controlRequest{
 		Method: "delegate_revoke",
 		Zone:   path.String(),
 		Reason: reason,
@@ -394,7 +396,7 @@ func revokeDelegationViaControl(rt *AppContext, path zone.ZonePath, reason strin
 }
 
 func purgeRevokedViaControl(rt *AppContext, apply bool, target zone.ZonePath) (*purgePlan, bool, error) {
-	response, ok, err := sendAdminControlRequest(rt, controlRequest{
+	response, ok, err := sendMutationControlRequest(rt, controlRequest{
 		Method: "recovery_purge_revoked",
 		Zone:   target.String(),
 		Apply:  apply,
@@ -406,7 +408,7 @@ func purgeRevokedViaControl(rt *AppContext, apply bool, target zone.ZonePath) (*
 }
 
 func acceptJoinBundleViaControl(rt *AppContext, bundle *joinBundle, key *privateKeyFile) (bool, error) {
-	_, ok, err := sendAdminControlRequest(rt, controlRequest{
+	_, ok, err := sendMutationControlRequest(rt, controlRequest{
 		Method:     "join_accept",
 		JoinBundle: bundle,
 		PrivateKey: key,
@@ -432,31 +434,13 @@ func initRootViaControl(rt *AppContext) (ed25519.PublicKey, bool, error) {
 	return response.RootPublicKey, true, nil
 }
 
-func sendAdminControlRequest(rt *AppContext, request controlRequest) (*controlResponse, bool, error) {
-	if rt != nil && rt.DisableControl {
-		return nil, false, nil
-	}
-	socketPath := controlSocketPath(nil)
-	if rt != nil {
-		socketPath = controlSocketPath(rt.Config)
-	}
-	response, err := sendControlRequest(socketPath, request)
-	if err != nil {
-		if isControlSocketUnavailable(err) {
-			return nil, true, fmt.Errorf("daemon control socket unavailable; use --direct for an explicit offline write: %w", err)
-		}
-		return nil, true, err
-	}
-	return response, true, nil
-}
-
 func endpointACLApplyViaControl(rt *AppContext, acl photonstate.EndpointACL) (bool, error) {
-	_, ok, err := sendAdminControlRequest(rt, controlRequest{Method: "endpoint_acl_apply", EndpointACL: &acl})
+	_, ok, err := sendMutationControlRequest(rt, controlRequest{Method: "endpoint_acl_apply", EndpointACL: &acl})
 	return ok, err
 }
 
 func endpointACLRemoveViaControl(rt *AppContext, name string) (bool, error) {
-	_, ok, err := sendAdminControlRequest(rt, controlRequest{Method: "endpoint_acl_remove", Key: name})
+	_, ok, err := sendMutationControlRequest(rt, controlRequest{Method: "endpoint_acl_remove", Key: name})
 	return ok, err
 }
 

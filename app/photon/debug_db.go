@@ -5,7 +5,9 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"sort"
 	"strings"
 	"time"
@@ -56,12 +58,20 @@ func cmdDB() *cli.Command {
 	}
 }
 
+func openDebugDB(path string) (*bolt.DB, error) {
+	db, err := bolt.Open(path, 0o600, &bolt.Options{ReadOnly: true, Timeout: daemonBoltLockTimeout})
+	if errors.Is(err, bolt.ErrTimeout) {
+		return nil, fmt.Errorf("database is locked; stop daemon or inspect a database copy: %w", err)
+	}
+	return db, err
+}
+
 func debugDBDump(filter string) error {
 	path, err := configuredStatePath()
 	if err != nil {
 		return err
 	}
-	db, err := bolt.Open(path, 0o600, &bolt.Options{ReadOnly: true})
+	db, err := openDebugDB(path)
 	if err != nil {
 		return err
 	}
@@ -69,39 +79,59 @@ func debugDBDump(filter string) error {
 
 	fmt.Printf("database: %s\n", path)
 	return db.View(func(tx *bolt.Tx) error {
-		if meta := tx.Bucket([]byte("_meta")); meta != nil {
-			if err := dumpMetaBucket(meta); err != nil {
-				return err
-			}
-		}
+		return dumpDBTx(tx, filter)
+	})
+}
 
-		zones := make([]string, 0)
-		err := tx.ForEach(func(name []byte, b *bolt.Bucket) error {
-			bucketName := string(name)
-			if after, ok := strings.CutPrefix(bucketName, "zone:"); ok {
-				zoneName := after
-				if filter == "" || filter == zoneName {
-					zones = append(zones, zoneName)
-				}
-				return nil
-			}
-			if bucketName != "_meta" && filter == "" {
-				fmt.Printf("\nbucket %s\n", bucketName)
-				return dumpRawBucket(b, "  ")
-			}
-			return nil
-		})
+func dumpDBTx(tx *bolt.Tx, filter string) error {
+	if filter != "" && tx.Bucket([]byte("photon:common-state")) != nil {
+		candidate, revision, report, _, err := corestate.LoadBoltState(tx)
 		if err != nil {
 			return err
 		}
-		inspect.SortZoneStrings(zones)
-		for _, zoneName := range zones {
-			if err := dumpZoneBucket(zone.ZonePath(zoneName), tx.Bucket([]byte("zone:"+zoneName))); err != nil {
-				return err
+		fmt.Printf("common: revision=%d gossip_checkpoint_discarded=%t\n", revision, report.GossipCheckpointDiscarded)
+		zs := candidate.Verified.Network.Zones[zone.ZonePath(filter)]
+		if zs == nil {
+			return fmt.Errorf("%w: %s", zone.ErrZoneNotFound, filter)
+		}
+		data, err := json.Marshal(zs)
+		if err != nil {
+			return err
+		}
+		return dumpRawNamed("zone "+filter, data, "")
+	}
+	if meta := tx.Bucket([]byte("_meta")); meta != nil {
+		if err := dumpMetaBucket(meta); err != nil {
+			return err
+		}
+	}
+
+	zones := make([]string, 0)
+	err := tx.ForEach(func(name []byte, b *bolt.Bucket) error {
+		bucketName := string(name)
+		if after, ok := strings.CutPrefix(bucketName, "zone:"); ok {
+			zoneName := after
+			if filter == "" || filter == zoneName {
+				zones = append(zones, zoneName)
 			}
+			return nil
+		}
+		if bucketName != "_meta" && filter == "" {
+			fmt.Printf("\nbucket %s\n", bucketName)
+			return dumpRawBucket(b, "  ")
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	inspect.SortZoneStrings(zones)
+	for _, zoneName := range zones {
+		if err := dumpZoneBucket(zone.ZonePath(zoneName), tx.Bucket([]byte("zone:"+zoneName))); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func debugDBStats() error {
@@ -109,7 +139,7 @@ func debugDBStats() error {
 	if err != nil {
 		return err
 	}
-	db, err := bolt.Open(path, 0o600, &bolt.Options{ReadOnly: true})
+	db, err := openDebugDB(path)
 	if err != nil {
 		return err
 	}
@@ -123,12 +153,21 @@ func debugDBStats() error {
 			bucketName := string(name)
 			bucketKeys := 0
 			var bucketSize int64
-			b.ForEach(func(k, v []byte) error {
-				totalKeys++
-				bucketKeys++
-				bucketSize += int64(len(k)) + int64(len(v))
-				return nil
-			})
+			var count func(*bolt.Bucket) error
+			count = func(bucket *bolt.Bucket) error {
+				return bucket.ForEach(func(k, v []byte) error {
+					if v == nil {
+						return count(bucket.Bucket(k))
+					}
+					totalKeys++
+					bucketKeys++
+					bucketSize += int64(len(k) + len(v))
+					return nil
+				})
+			}
+			if err := count(b); err != nil {
+				return err
+			}
 			totalSize += bucketSize
 			fmt.Printf("bucket %-20s keys=%4d size=%8d bytes\n", bucketName+":", bucketKeys, bucketSize)
 			return nil
@@ -156,7 +195,7 @@ func dumpMetaBucket(bucket *bolt.Bucket) error {
 			if err := json.Unmarshal(v, &meta); err != nil {
 				return dumpRawEntry(k, v, "  ")
 			}
-			fmt.Printf("  managed_zone: %s\n", valueOrDash(meta.ManagedZone.String()))
+			fmt.Printf("  managed_zone: %s\n", dash(meta.ManagedZone.String()))
 			fmt.Printf("  root_private_key: %s\n", present(len(meta.RootPrivateKey) == ed25519.PrivateKeySize))
 			fmt.Printf("  zone_private_key: %s\n", present(len(meta.ZonePrivateKey) == ed25519.PrivateKeySize))
 			dumpSyncPeers(meta.SyncPeers)
@@ -269,7 +308,7 @@ func dumpRevocations(data []byte) error {
 			key,
 			revocation.ParentZone,
 			revocation.RevokedAuthorityEpoch,
-			valueOrDash(revocation.Reason),
+			dash(revocation.Reason),
 			formatUnix(revocation.RevokedAt),
 			shortKey(revocation.SignedBy),
 			shortBytes(revocation.Signature),
@@ -323,7 +362,7 @@ func dumpAuthorizedKeys(keys []zone.AuthorizedKey, indent string) {
 			fmt.Printf("%s  valid: %s..%s\n", indent, formatUnix(key.NotBefore), formatUnix(key.NotAfter))
 		}
 		for _, capability := range key.Capabilities {
-			prefix := valueOrDash(capability.KeyPrefix)
+			prefix := dash(capability.KeyPrefix)
 			fmt.Printf("%s  capability: permissions=%s key_prefix=%s\n", indent, permissions(capability.Permissions), prefix)
 		}
 	}
@@ -364,7 +403,7 @@ func dumpRecord(mapKey string, record *zone.Record, indent string) {
 		indent,
 		label,
 		record.Zone,
-		valueOrDash(record.Type),
+		dash(record.Type),
 		record.Version,
 		shortKey(record.SignedBy),
 		formatUnix(record.Timestamp),
@@ -395,13 +434,17 @@ func dumpSyncPeers(peers map[string]photonstate.PeerRuntimeState) {
 		if peer.LastSyncUnix != 0 {
 			lastSync = formatUnix(peer.LastSyncUnix)
 		}
-		lastError := valueOrDash(peer.LastError)
+		lastError := dash(peer.LastError)
 		fmt.Printf("    %s: last_sync=%s last_error=%s\n", key, lastSync, lastError)
 	}
 }
 
 func dumpRawBucket(bucket *bolt.Bucket, indent string) error {
 	return bucket.ForEach(func(k, v []byte) error {
+		if v == nil {
+			fmt.Printf("%s bucket %s\n", indent, k)
+			return dumpRawBucket(bucket.Bucket(k), indent+"  ")
+		}
 		return dumpRawEntry(k, v, indent)
 	})
 }
@@ -527,13 +570,6 @@ func formatUnix(value int64) string {
 		return "-"
 	}
 	return time.Unix(value, 0).UTC().Format(time.RFC3339)
-}
-
-func valueOrDash(value string) string {
-	if value == "" {
-		return "-"
-	}
-	return value
 }
 
 func present(ok bool) string {

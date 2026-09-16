@@ -24,10 +24,9 @@ type healthConfig struct {
 	DownLossThreshold  float64
 	RecoverConsecutive int
 	MetricsEnabled     bool
-	RemoteWriteURL     string
-	RemoteWriteQueue   int
-	LocalSpoolPath     string
-	LocalSpoolMaxAge   time.Duration
+
+	LocalSpoolPath   string
+	LocalSpoolMaxAge time.Duration
 }
 
 func (c healthConfig) spoolConfig() healthspool.Config {
@@ -56,12 +55,12 @@ type healthConfigYAML struct {
 }
 
 type healthMetricsYAML struct {
-	Enabled          *bool  `yaml:"enabled"`
-	Disabled         *bool  `yaml:"disabled"`
-	RemoteWriteURL   string `yaml:"remote_write_url"`
-	RemoteWriteQueue *int   `yaml:"remote_write_queue_capacity"`
-	LocalSpoolPath   string `yaml:"local_spool_path"`
-	LocalSpoolMaxAge string `yaml:"local_spool_max_age"`
+	Enabled          *bool   `yaml:"enabled"`
+	Disabled         *bool   `yaml:"disabled"`
+	RemoteWriteURL   *string `yaml:"remote_write_url"`
+	RemoteWriteQueue *int    `yaml:"remote_write_queue_capacity"`
+	LocalSpoolPath   string  `yaml:"local_spool_path"`
+	LocalSpoolMaxAge string  `yaml:"local_spool_max_age"`
 }
 
 func defaultHealthConfig() healthConfig {
@@ -80,7 +79,6 @@ func defaultHealthConfig() healthConfig {
 		DownLossThreshold:  h.DownLossThreshold,
 		RecoverConsecutive: h.RecoverConsecutive,
 		MetricsEnabled:     false,
-		RemoteWriteQueue:   1024,
 		LocalSpoolMaxAge:   6 * time.Hour,
 	}
 }
@@ -178,14 +176,8 @@ func parseHealthConfig(y *healthConfigYAML) (healthConfig, error) {
 			return healthConfig{}, err
 		}
 		out.MetricsEnabled = metricsEnabled
-		if y.Metrics.RemoteWriteURL != "" {
-			out.RemoteWriteURL = y.Metrics.RemoteWriteURL
-		}
-		if y.Metrics.RemoteWriteQueue != nil {
-			if *y.Metrics.RemoteWriteQueue <= 0 {
-				return healthConfig{}, fmt.Errorf("health.metrics.remote_write_queue_capacity must be positive")
-			}
-			out.RemoteWriteQueue = *y.Metrics.RemoteWriteQueue
+		if y.Metrics.RemoteWriteURL != nil || y.Metrics.RemoteWriteQueue != nil {
+			return healthConfig{}, fmt.Errorf("health.metrics.remote_write_url and remote_write_queue_capacity are not supported; remove these settings")
 		}
 		if y.Metrics.LocalSpoolPath != "" {
 			out.LocalSpoolPath = y.Metrics.LocalSpoolPath

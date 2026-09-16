@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"os"
@@ -25,6 +26,106 @@ import (
 type controlPingProber struct {
 	target health.ProbeTarget
 	config health.ProbeConfig
+}
+
+type blockingControlPingProber struct {
+	started chan context.Context
+	stopped chan error
+}
+
+func (p *blockingControlPingProber) Probe(ctx context.Context, target health.ProbeTarget, _ health.ProbeConfig) health.ProbeResult {
+	p.started <- ctx
+	<-ctx.Done()
+	p.stopped <- ctx.Err()
+	return health.ProbeResult{InstanceID: target.InstanceID, Err: ctx.Err()}
+}
+func (*blockingControlPingProber) Type() string { return health.ProbeTypeICMP }
+
+func TestDaemonControlPingCancellation(t *testing.T) {
+	for _, mode := range []string{"client_cancel", "disconnect", "daemon_cancel"} {
+		t.Run(mode, func(t *testing.T) {
+			verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+			service := newTestDaemonFromOwners(&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second)
+			prober := &blockingControlPingProber{started: make(chan context.Context, 1), stopped: make(chan error, 1)}
+			dryRun := &ipsec.DryRunDriver{}
+			installTestLinuxDrivers(service, testLinuxDrivers{ipsec: dryRun, xfrm: dryRun, healthProber: prober})
+			setTestIPsecObservation(service, map[string]ipsec.LinkInstance{"link-b": {ActualState: "up"}}, &ipsecObservationSummary{Desired: []photonstate.DesiredLinkObservation{{InstanceID: "link-b", PeerZone: "node-b.catofes.", LocalTunnelAddr: "10.0.0.1", PeerTunnelAddr: "10.0.0.2"}}})
+			daemonCtx, cancelDaemon := context.WithCancel(t.Context())
+			defer cancelDaemon()
+			service.ControlSocketPath = filepath.Join(t.TempDir(), "photon.sock")
+			stop, err := service.startControlServer(daemonCtx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stop()
+			request := controlRequest{Method: "ping_view", Zone: "node-b.catofes.", Ping: &pingdebug.Options{Count: 1000, Timeout: time.Minute}}
+			clientCtx, cancelClient := context.WithCancel(t.Context())
+			defer cancelClient()
+			clientDone := make(chan error, 1)
+			var conn net.Conn
+			if mode == "disconnect" {
+				conn, err = net.Dial("unix", service.ControlSocketPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer conn.Close()
+				if err := json.NewEncoder(conn).Encode(request); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				go func() {
+					var response controlResponse
+					clientDone <- exchangeControl(clientCtx, service.ControlSocketPath, request, &response)
+				}()
+			}
+			select {
+			case ctx := <-prober.started:
+				deadline, ok := ctx.Deadline()
+				if !ok || time.Until(deadline) > controlPingMaxDuration {
+					t.Fatal("missing server execution limit")
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("probe did not start")
+			}
+			switch mode {
+			case "disconnect":
+				_ = conn.Close()
+			case "client_cancel":
+				cancelClient()
+			case "daemon_cancel":
+				cancelDaemon()
+			}
+			select {
+			case err := <-prober.stopped:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("probe error = %v", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("probe did not receive cancellation")
+			}
+			if mode != "disconnect" {
+				select {
+				case err := <-clientDone:
+					if mode == "client_cancel" && !errors.Is(err, context.Canceled) {
+						t.Fatalf("client error = %v", err)
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("client did not finish")
+				}
+			}
+			if mode != "daemon_cancel" {
+				if daemonCtx.Err() != nil {
+					t.Fatalf("daemon canceled: %v", daemonCtx.Err())
+				}
+				ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+				defer cancel()
+				var response controlViewResponse[inspect.DaemonStatusView]
+				if err := exchangeControl(ctx, service.ControlSocketPath, controlRequest{Method: "daemon_status_view"}, &response); err != nil || !response.OK || !response.View.DaemonOnline {
+					t.Fatalf("daemon no longer serves requests: %+v, %v", response, err)
+				}
+			}
+		})
+	}
 }
 
 func (p *controlPingProber) Probe(_ context.Context, target health.ProbeTarget, config health.ProbeConfig) health.ProbeResult {
@@ -404,11 +505,11 @@ func TestDaemonControlLinksStatusUsesReconcileSnapshot(t *testing.T) {
 	if !response.OK {
 		t.Fatalf("links_view response = %#v", response)
 	}
-	if response.View.DesiredPlanSource != "last_reconcile" || response.View.ReplannedDesired != 1 {
-		t.Fatalf("links_view source/count = %q/%d, want last_reconcile/1", response.View.DesiredPlanSource, response.View.ReplannedDesired)
+	if response.View.DesiredPlanSource != "last_reconcile" || response.View.LastDesiredCount != 1 {
+		t.Fatalf("links_view source/count = %q/%d, want last_reconcile/1", response.View.DesiredPlanSource, response.View.LastDesiredCount)
 	}
-	if len(response.View.StoredSAs) != 1 {
-		t.Fatalf("links_view stored_sas = %d, want 1", len(response.View.StoredSAs))
+	if len(response.View.ReconcileSAs) != 1 {
+		t.Fatalf("links_view stored_sas = %d, want 1", len(response.View.ReconcileSAs))
 	}
 	links := response.View.Inspection.Links
 	if len(links) != 1 || links[0].Desired == nil {
@@ -467,7 +568,7 @@ func TestDaemonControlReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T)
 	if !links.OK {
 		t.Fatalf("links_view response = %#v", links)
 	}
-	if links.View.ReplannedDesired != 1 {
+	if links.View.LastDesiredCount != 1 {
 		t.Fatalf("links_view = %#v, want desired=1", links)
 	}
 

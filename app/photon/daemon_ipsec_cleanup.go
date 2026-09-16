@@ -5,7 +5,6 @@ import (
 	"errors"
 	"time"
 
-	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
@@ -35,7 +34,7 @@ func (d *Daemon) handleIPsecCleanupEvent(ctx context.Context, includeOrphans boo
 		for id := range links {
 			ids = append(ids, id)
 		}
-		links, cleaned, err = cleanupIPsecLinkInstanceSet(ctx, links, ids, platformDriver)
+		links, cleaned, err = platformDriver.CleanupIPsecLinks(ctx, links, ids)
 		if err != nil {
 			return cleaned, orphans, err
 		}
@@ -53,14 +52,6 @@ func (d *Daemon) handleIPsecCleanupEvent(ctx context.Context, includeOrphans boo
 	d.linuxObservation.replaceIPsec(links, reconcile)
 	d.notifyStateChanged()
 	return cleaned, orphans, nil
-}
-
-func cleanupIPsecLinkInstanceSet(ctx context.Context, linkInstances map[string]ipsec.LinkInstance, ids []string, platformDriver *photonlinux.LinuxDriver) (map[string]ipsec.LinkInstance, int, error) {
-	remaining, cleaned, err := platformDriver.CleanupIPsecLinks(ctx, linkInstances, ids)
-	if err != nil {
-		return nil, cleaned, err
-	}
-	return remaining, cleaned, nil
 }
 
 func managedIPsecConnectionNamesFromLinks(links map[string]ipsec.LinkInstance) map[string]bool {

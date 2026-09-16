@@ -580,8 +580,14 @@ func TestObserverHealthAPIIncludesLinkContextWithoutSamples(t *testing.T) {
 		t.Fatalf("health links = %d, want 1", len(links))
 	}
 	item := links[0].(map[string]any)
-	if item["peer_zone"] != "node-b.catofes." || item["peer_tunnel_addr"] != "fd00::2%phx0" {
+	if item["peer_zone"] != "node-b.catofes." || item["peer_tunnel_addr"] != "fd00::2" || item["local_tunnel_addr"] != "fd00::1" || item["interface_name"] != "phx0" {
 		t.Fatalf("health context = %#v, want peer and tunnel context", item)
+	}
+	// Probe targets carry normalized addresses; retain the original desired
+	// representation separately instead of overwriting the probe addresses.
+	desired := item["desired"].(map[string]any)
+	if desired["peer_tunnel_addr"] != "fd00::2%phx0" || desired["local_tunnel_addr"] != "fd00::1%phx0" {
+		t.Fatalf("desired context = %#v", desired)
 	}
 	if _, ok := item["instance"]; ok {
 		t.Fatalf("health context exposes raw runtime instance: %#v", item)

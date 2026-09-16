@@ -112,7 +112,7 @@ func WriteLinksDebug(w io.Writer, view inspect.LinksDebugView) error {
 	out.LineIf(inspection.DesiredPlanError != "", "desired_plan_error: %s", inspection.DesiredPlanError)
 	out.Linef("last_run: %s", formatUnixTime(inspection.LastRunUnix))
 	out.Linef("desired_links: %d", inspection.DesiredLinks)
-	out.Linef("planned_desired_links: %d", view.ReplannedDesired)
+	out.Linef("planned_desired_links: %d", view.LastDesiredCount)
 	out.LineIf(view.ReplanIgnored, "planned_desired_status: ignored_partial last_reconcile_desired=%d", view.LastDesiredLinks)
 	out.Linef("desired_source: %s", dash(view.DesiredPlanSource))
 	out.Linef("actual_sas: %d", inspection.ActualSAs)

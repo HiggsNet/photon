@@ -680,7 +680,7 @@ func TestCleanupIPsecLinkInstancesTearsDownManagedLinks(t *testing.T) {
 	driver := &ipsec.DryRunDriver{}
 
 	platformDriver := newTestLinuxDriver(driver, driver)
-	remaining, cleaned, err := cleanupIPsecLinkInstanceSet(context.Background(), links, []string{inst.ID}, platformDriver)
+	remaining, cleaned, err := platformDriver.CleanupIPsecLinks(context.Background(), links, []string{inst.ID})
 	if err != nil {
 		t.Fatalf("cleanupLinuxDriverIPsecLinks: %v", err)
 	}

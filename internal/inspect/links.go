@@ -39,10 +39,10 @@ type LinkInspection struct {
 
 type LinksDebugView struct {
 	Inspection        LinkInspection
-	StoredSAs         []LinkSA
+	ReconcileSAs      []LinkSA
 	LiveSAs           []LinkSA
 	LiveSAError       string
-	ReplannedDesired  int
+	LastDesiredCount  int
 	ReplanIgnored     bool
 	LastDesiredLinks  int
 	DesiredPlanSource string

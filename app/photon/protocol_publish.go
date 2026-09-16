@@ -18,23 +18,23 @@ type protocolPublishResult struct {
 
 // commitLocalProtocols persists a private transport key before publishing
 // public protocol records that may reference it.
-func (d *Daemon) commitLocalProtocols(ctx context.Context, sourceRevision uint64, intents []corestate.LocalIntent, transportKey *photonstate.IPsecTransportKeyState, now time.Time) (protocolPublishResult, error) {
+func commitLocalProtocols(ctx context.Context, state *State, sourceRevision uint64, intents []corestate.LocalIntent, transportKey *photonstate.IPsecTransportKeyState, now time.Time) (protocolPublishResult, error) {
 	var out protocolPublishResult
-	if d == nil || d.State == nil || d.State.Common == nil {
+	if state == nil || state.Common == nil {
 		return out, errors.New("state is not initialized")
 	}
-	if uint64(d.State.Common.VerifiedRevision()) != sourceRevision {
+	if uint64(state.Common.VerifiedRevision()) != sourceRevision {
 		return out, errStateRevisionStale
 	}
 	if transportKey != nil {
-		committed, err := d.State.ReplaceIPsecTransportKeyIfRevision(corestate.VerifiedRevision(sourceRevision), transportKey)
+		committed, err := state.ReplaceIPsecTransportKeyIfRevision(corestate.VerifiedRevision(sourceRevision), transportKey)
 		if err != nil {
 			return out, err
 		}
 		out.LinuxStateCommitted = committed
 	}
 	if len(intents) > 0 {
-		result, err := d.State.Common.ApplyLocalIntentsAtRevision(ctx, intents, now, corestate.VerifiedRevision(sourceRevision))
+		result, err := state.Common.ApplyLocalIntentsAtRevision(ctx, intents, now, corestate.VerifiedRevision(sourceRevision))
 		if err != nil {
 			return out, err
 		}

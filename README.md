@@ -118,3 +118,5 @@ make check    # 格式化、vet、测试、CGO_ENABLED=0 构建
 - 同步是最终一致性；复杂 NAT、长期网络分区场景仍需要更完整的 relay/discovery 能力。
 - IPsec、BIRD/Babel、firewall 的真实后端依赖 Linux 权限与系统服务；`make check` 不覆盖这些，需要显式 privileged smoke。
 - Observer 是只读、无内置认证的本机面板；远程访问请走 SSH tunnel 或带认证的反向代理。
+
+近期配置、诊断与 API 兼容性变化见 [操作与兼容性说明](docs/operator-compatibility.md)。

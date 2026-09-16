@@ -2,10 +2,62 @@ package inspect
 
 import (
 	"encoding/json"
+	"net/netip"
 	"testing"
 
 	"github.com/HiggsNet/photon/pkg/health"
 )
+
+func TestBuildHealthViewPreservesProbeAddresses(t *testing.T) {
+	for _, emptyDesired := range []bool{false, true} {
+		for _, sampled := range []bool{false, true} {
+			desired := DesiredLink{InstanceID: "link", InterfaceName: "staged-if"}
+			if !emptyDesired {
+				desired.LocalTunnelAddr, desired.PeerTunnelAddr = "fd00::3", "fd00::4"
+			}
+			targets := []health.ProbeTarget{
+				{InstanceID: "link", ProbeID: "link#old", ProbeRole: "old", InterfaceName: "old-if", LocalTunnelAddr: netip.MustParseAddr("fd00::1"), PeerTunnelAddr: netip.MustParseAddr("fd00::2")},
+				{InstanceID: "link", ProbeID: "link#staged", ProbeRole: "staged", InterfaceName: "staged-if", LocalTunnelAddr: netip.MustParseAddr("fd00::3"), PeerTunnelAddr: netip.MustParseAddr("fd00::4")},
+			}
+			input := HealthInput{Targets: targets, Desired: map[string]DesiredLink{"link": desired}, Instances: map[string]LinkInstance{"link": {ID: "link", InterfaceName: "staged-if"}}}
+			if sampled {
+				for _, target := range targets {
+					input.Samples = append(input.Samples, HealthSample{InstanceID: target.InstanceID, ProbeID: target.ProbeID, ProbeRole: target.ProbeRole, InterfaceName: target.InterfaceName})
+				}
+			}
+			view := BuildHealthView(input)
+			if len(view.Links) != 2 {
+				t.Fatalf("links = %+v", view.Links)
+			}
+			for i, link := range view.Links {
+				target := targets[i]
+				if link.InterfaceName != target.InterfaceName || link.LocalTunnelAddr != target.LocalTunnelAddr.String() || link.PeerTunnelAddr != target.PeerTunnelAddr.String() {
+					t.Fatalf("emptyDesired=%v sampled=%v: target=%+v link=%+v", emptyDesired, sampled, target, link)
+				}
+				if link.Desired == nil || link.Desired.LocalTunnelAddr != desired.LocalTunnelAddr || link.Desired.PeerTunnelAddr != desired.PeerTunnelAddr {
+					t.Fatalf("desired not preserved: %+v", link.Desired)
+				}
+			}
+		}
+	}
+}
+
+func TestBuildHealthViewFillsOnlyMissingProbeAddresses(t *testing.T) {
+	for _, localMissing := range []bool{false, true} {
+		target := health.ProbeTarget{InstanceID: "link"}
+		wantLocal, wantPeer := "fd00::1", "fd00::4"
+		if localMissing {
+			target.PeerTunnelAddr = netip.MustParseAddr("fd00::2")
+			wantLocal, wantPeer = "fd00::3", "fd00::2"
+		} else {
+			target.LocalTunnelAddr = netip.MustParseAddr("fd00::1")
+		}
+		view := BuildHealthView(HealthInput{Targets: []health.ProbeTarget{target}, Desired: map[string]DesiredLink{"link": {InstanceID: "link", LocalTunnelAddr: "fd00::3", PeerTunnelAddr: "fd00::4"}}})
+		if link := view.Links[0]; link.LocalTunnelAddr != wantLocal || link.PeerTunnelAddr != wantPeer {
+			t.Fatalf("link = %+v", link)
+		}
+	}
+}
 
 func TestBuildHealthViewSortsLinks(t *testing.T) {
 	view := SortHealthView(BuildHealthView(HealthInput{

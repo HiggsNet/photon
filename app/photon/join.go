@@ -139,8 +139,29 @@ func issueDelegationDirect(rt *AppContext, request *joinRequest, permissions []z
 	}
 	defer state.Close()
 	view := state.Common.ReadView()
+	intent, err := planDelegationIssue(view.State.Network, request, permissions)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := state.Common.ApplyLocalIntent(context.Background(), intent, rt.Now()); err != nil {
+		return nil, err
+	}
+	bundle, err := joinBundleFromNetwork(state.Common.ReadView().State.Network, request.Zone, rt.Now())
+	if err != nil {
+		return nil, err
+	}
+	return &delegationIssueResult{Zone: request.Zone, Bundle: bundle}, nil
+}
+
+func planDelegationIssue(network *zone.NetworkState, request *joinRequest, permissions []zone.Permission) (corestate.LocalIntent, error) {
+	if err := validateJoinRequest(request); err != nil {
+		return nil, err
+	}
+	if network == nil {
+		return nil, errors.New("network state is nil")
+	}
 	parent := request.Zone.Parent()
-	parentState := view.State.Network.Zones[parent]
+	parentState := network.Zones[parent]
 	if parentState == nil || parentState.Authority == nil {
 		return nil, fmt.Errorf("%w: parent %s", zone.ErrZoneNotFound, parent)
 	}
@@ -155,20 +176,11 @@ func issueDelegationDirect(rt *AppContext, request *joinRequest, permissions []z
 		Epoch:     authorityEpoch,
 		Threshold: photoncrypto.SupportedThreshold,
 		Keys: []zone.AuthorizedKey{{
-			Key:          request.PublicKey,
+			Key:          append([]byte(nil), request.PublicKey...),
 			Capabilities: delegationCapabilities(permissions),
 		}},
 	}
-	if _, err := state.Common.ApplyLocalIntent(context.Background(), corestate.PutDelegationIntent{
-		Parent: parent, Authority: authority,
-	}, rt.Now()); err != nil {
-		return nil, err
-	}
-	bundle, err := joinBundleFromNetwork(state.Common.ReadView().State.Network, request.Zone, rt.Now())
-	if err != nil {
-		return nil, err
-	}
-	return &delegationIssueResult{Zone: request.Zone, Bundle: bundle}, nil
+	return corestate.PutDelegationIntent{Parent: parent, Authority: authority}, nil
 }
 
 func delegationCapabilities(permissions []zone.Permission) []zone.Capability {

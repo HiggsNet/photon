@@ -175,7 +175,7 @@ health:
 | `metrics.enabled` / `metrics.disabled` | bool | 默认关闭，需显式 `enabled: true` | metrics 开关 |
 | `metrics.local_spool_path` | string | `""` | 本地 JSONL spool 目录；为空则 spool 关闭 |
 | `metrics.local_spool_max_age` | duration | `6h` | spool 样本保留时长 |
-| `metrics.remote_write_url` | string | `""` | 已解析但**无消费者**（见第 10 节） |
+| `metrics.remote_write_url` | string | `""` | 不支持，配置时拒绝 |
 | `metrics.remote_write_queue_capacity` | int | `1024` | 同上 |
 
 丢包率字段在 YAML 中是字符串形式（如 `"0.2"`），由 `parseFloatRatio` 解析并校验范围。
@@ -462,7 +462,7 @@ Observer 启用且 `health.metrics.enabled: true` 时，`GET /metrics` 以 OpenM
 
 ### 8.4 remote write
 
-`remote_write_url` / `remote_write_queue_capacity` 只被解析进配置，代码中没有任何消费者。需要集中式 TSDB（设计推荐 VictoriaMetrics single-node）时，当前只能自行桥接 spool 或 observer API。
+`remote_write_url` / `remote_write_queue_capacity` 尚未实现，配置时会明确报错，必须删除这些字段。需要集中式 TSDB（设计推荐 VictoriaMetrics single-node）时，当前只能自行桥接 spool 或 observer API。
 
 ---
 

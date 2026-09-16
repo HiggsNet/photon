@@ -32,11 +32,11 @@ func buildStoredLinkInspection(rt *AppContext, instances map[string]ipsec.LinkIn
 	}
 	lastDesired := lastReconcileDesiredLinks(reconcile)
 	view := inspect.LinksDebugView{
-		Inspection: inspect.BuildLinks(input), ReplannedDesired: lastDesired,
+		Inspection: inspect.BuildLinks(input), LastDesiredCount: lastDesired,
 		LastDesiredLinks: lastDesired, DesiredPlanSource: "last_reconcile",
 	}
 	if reconcile != nil {
-		view.StoredSAs = reconcile.ActualSAs
+		view.ReconcileSAs = reconcile.ActualSAs
 	}
 	return view
 }

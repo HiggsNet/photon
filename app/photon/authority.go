@@ -115,7 +115,27 @@ func grantDelegationPermissionsDirect(rt *AppContext, path zone.ZonePath, permis
 	}
 	defer state.Close()
 	view := state.Common.ReadView()
-	zs := view.State.Network.Zones[path]
+	intent, err := planDelegationGrant(view.State.Network, path, permissions)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := state.Common.ApplyLocalIntent(context.Background(), intent, rt.Now()); err != nil {
+		return nil, err
+	}
+	if path.IsRoot() {
+		return nil, nil
+	}
+	return joinBundleFromNetwork(state.Common.ReadView().State.Network, path, rt.Now())
+}
+
+func planDelegationGrant(network *zone.NetworkState, path zone.ZonePath, permissions []zone.Permission) (corestate.LocalIntent, error) {
+	if !path.Valid() || len(permissions) == 0 {
+		return nil, errors.New("valid delegated zone and at least one permission are required")
+	}
+	if network == nil {
+		return nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
+	}
+	zs := network.Zones[path]
 	if zs == nil || zs.Authority == nil {
 		return nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
 	}
@@ -132,13 +152,7 @@ func grantDelegationPermissionsDirect(rt *AppContext, path zone.ZonePath, permis
 	} else {
 		intent = corestate.PutDelegationIntent{Parent: path.Parent(), Authority: authority}
 	}
-	if _, err := state.Common.ApplyLocalIntent(context.Background(), intent, rt.Now()); err != nil {
-		return nil, err
-	}
-	if path.IsRoot() {
-		return nil, nil
-	}
-	return joinBundleFromNetwork(state.Common.ReadView().State.Network, path, rt.Now())
+	return intent, nil
 }
 
 func grantPermissionsToAuthority(authority *zone.ZoneAuthority, permissions []zone.Permission) {

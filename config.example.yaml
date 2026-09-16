@@ -371,11 +371,8 @@ firewall:
 #     local_spool_path: .photon/health-spool
 #     local_spool_max_age: 6h
 #     # Optional future push integration.
-#     remote_write_url: http://victoriametrics:8428/api/v1/write
-#     remote_write_queue_capacity: 1024
 
 # observer:
 #   disabled: true
 #   listen: 127.0.0.1:8080
-#   ui_path: ""
 #   event_buffer_seconds: 0

@@ -182,8 +182,10 @@ func buildHealthLinkView(sample HealthSample, target health.ProbeTarget, inst Li
 		if item.InterfaceName == "" {
 			item.InterfaceName = firstNonEmpty(sample.InterfaceName, desired.InterfaceName)
 		}
-		item.LocalTunnelAddr = desired.LocalTunnelAddr
-		item.PeerTunnelAddr = desired.PeerTunnelAddr
+		// Desired is shared by all generations of an instance; the concrete
+		// probe target identifies the addresses this row actually checks.
+		item.LocalTunnelAddr = firstNonEmpty(item.LocalTunnelAddr, desired.LocalTunnelAddr)
+		item.PeerTunnelAddr = firstNonEmpty(item.PeerTunnelAddr, desired.PeerTunnelAddr)
 	}
 	return item
 }

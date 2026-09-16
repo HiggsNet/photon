@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"net"
 	"os"
@@ -769,6 +770,15 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		endpoints := inspect.BuildEndpointDebug(view.State, d.now())
 		writeCanonicalView(conn, endpoints)
 	case "ping_view":
+		// One request per connection: EOF means the caller is no longer
+		// waiting. Only this diagnostic follows disconnect cancellation;
+		// submitted mutations retain the daemon context.
+		pingCtx, cancelPing := context.WithTimeout(ctx, controlPingMaxDuration)
+		defer cancelPing()
+		go func() {
+			_, _ = io.Copy(io.Discard, conn)
+			cancelPing()
+		}()
 		common := d.State.Common.ReadView()
 		if common.State == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
@@ -790,7 +800,11 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		if d.linuxDriver != nil {
 			prober = d.linuxDriver.HealthProber()
 		}
-		outcomes := pingdebug.Run(ctx, prober, selected, resolved.ProbeConfig())
+		outcomes := pingdebug.Run(pingCtx, prober, selected, resolved.ProbeConfig())
+		if err := pingCtx.Err(); err != nil {
+			writeControlResponse(conn, controlError(err))
+			return
+		}
 		view := pingdebug.BuildDebugView(request.Zone, outcomes, pingdebug.DistinctPeerZones(targets), resolved.Count, resolved.Timeout)
 		writeCanonicalView(conn, view)
 	case "sync_view":
@@ -1277,20 +1291,11 @@ func (d *Daemon) handleDelegateIssueEvent(request *joinRequest, permissions []zo
 		return nil, err
 	}
 	view := d.State.Common.ReadView()
-	parent := request.Zone.Parent()
-	parentState := view.State.Network.Zones[parent]
-	if parentState == nil || parentState.Authority == nil {
-		return nil, fmt.Errorf("%w: parent %s", zone.ErrZoneNotFound, parent)
+	intent, err := planDelegationIssue(view.State.Network, request, permissions)
+	if err != nil {
+		return nil, err
 	}
-	epoch := uint64(1)
-	if revoked := parentState.Revocations[request.Zone]; revoked != nil && revoked.RevokedAuthorityEpoch >= epoch {
-		epoch = revoked.RevokedAuthorityEpoch + 1
-	}
-	authority := &zone.ZoneAuthority{Zone: request.Zone, Epoch: epoch, Threshold: photoncrypto.SupportedThreshold,
-		Keys: []zone.AuthorizedKey{{Key: append([]byte(nil), request.PublicKey...), Capabilities: delegationCapabilities(permissions)}}}
-	result, err := d.State.Common.ApplyLocalIntent(context.Background(), corestate.PutDelegationIntent{
-		Parent: parent, Authority: authority,
-	}, d.now())
+	result, err := d.State.Common.ApplyLocalIntent(context.Background(), intent, d.now())
 	if err != nil {
 		return nil, err
 	}
@@ -1310,17 +1315,9 @@ func (d *Daemon) handleDelegateGrantEvent(path zone.ZonePath, permissions []zone
 		return nil, errors.New("valid delegated zone and at least one permission are required")
 	}
 	view := d.State.Common.ReadView()
-	if view.State == nil || view.State.Network == nil || view.State.Network.Zones[path] == nil || view.State.Network.Zones[path].Authority == nil {
-		return nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
-	}
-	authority := cloneAuthorityForJoinBundle(view.State.Network.Zones[path].Authority)
-	grantPermissionsToAuthority(authority, permissions)
-	authority.Epoch++
-	var intent corestate.LocalIntent
-	if path.IsRoot() {
-		intent = corestate.UpdateRootAuthorityIntent{Authority: authority}
-	} else {
-		intent = corestate.PutDelegationIntent{Parent: path.Parent(), Authority: authority}
+	intent, err := planDelegationGrant(view.State.Network, path, permissions)
+	if err != nil {
+		return nil, err
 	}
 	result, err := d.State.Common.ApplyLocalIntent(context.Background(), intent, d.now())
 	if err != nil {
@@ -1444,7 +1441,7 @@ func (d *Daemon) cleanupPurgePlanIPsecLinks(ctx context.Context, links map[strin
 	if platformDriver == nil {
 		return errors.New("linux driver is not initialized")
 	}
-	remaining, _, err := cleanupIPsecLinkInstanceSet(ctx, links, plan.LinkInstances, platformDriver)
+	remaining, _, err := platformDriver.CleanupIPsecLinks(ctx, links, plan.LinkInstances)
 	if err == nil {
 		d.linuxObservation.replaceIPsec(remaining, markIPsecCleanupReconcile(reconcile, d.now()))
 	}
@@ -1539,7 +1536,7 @@ func (d *Daemon) publishLocalProtocols() (bool, error) {
 	if routingIntent != nil {
 		intents = append(intents, *routingIntent)
 	}
-	result, err := d.commitLocalProtocols(context.Background(), revision, intents, ipsecPlan.TransportKey, d.now())
+	result, err := commitLocalProtocols(context.Background(), d.State, revision, intents, ipsecPlan.TransportKey, d.now())
 	if err != nil {
 		return false, err
 	}
@@ -1616,7 +1613,7 @@ func (d *Daemon) handleIPsecPortRotateEvent() (*manualPortRotateResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	committed, err := d.commitLocalProtocols(context.Background(), revision, []corestate.LocalIntent{
+	committed, err := commitLocalProtocols(context.Background(), d.State, revision, []corestate.LocalIntent{
 		corestate.PutProtocolRecordIntent{Kind: corestate.ProtocolRecordIPsec, Zone: common.State.ManagedZone, Key: ipsec.RecordKeyPorts, Type: ipsec.RecordTypePorts, Value: value},
 	}, nil, d.now())
 	if err != nil {

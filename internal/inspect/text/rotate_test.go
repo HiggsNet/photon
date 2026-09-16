@@ -16,7 +16,7 @@ func TestWriteRotateDebug(t *testing.T) {
 		Filter:            "node-b",
 		StoredLabel:       "stored_sas",
 		LiveLabel:         "live_sas",
-		StoredSACount:     1,
+		ReconcileSACount:  1,
 		LiveSACount:       1,
 		Links: []inspect.RotateDebugLink{{
 			Link: inspect.LinkView{
@@ -50,7 +50,7 @@ func TestWriteRotateDebug(t *testing.T) {
 				ChildSAName: "ipsec-staged-child",
 			},
 			HasStaged: true,
-			StoredMatchingSAs: []inspect.LinkSA{{
+			ReconcileMatchingSAs: []inspect.LinkSA{{
 				Name:           "ipsec-current",
 				ChildSA:        "ipsec-current-child",
 				XFRMIfID:       100,
@@ -74,7 +74,7 @@ func TestWriteRotateDebug(t *testing.T) {
 		"port_generation select/runtime/staged: 2/1/2",
 		"port local/remote/runtime/staged: 4500/30002/30002/30003",
 		"interface: phx1(100)",
-		"stored_matching_sas: 1",
+		"reconcile_matching_sas: 1",
 		"name=ipsec-current child=ipsec-current-child state=established if_id=100 reqid=200",
 	} {
 		if !strings.Contains(output, want) {

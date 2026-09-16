@@ -60,7 +60,7 @@ func TestWriteLinksDebugFiltersAndPrintsRuntimeFields(t *testing.T) {
 				Reason:     "duplicate runtime SA stable for 2m",
 			}},
 		},
-		ReplannedDesired:  1,
+		LastDesiredCount:  1,
 		DesiredPlanSource: "live",
 		Filter:            "node-b",
 	}

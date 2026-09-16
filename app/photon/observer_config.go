@@ -15,20 +15,20 @@ import (
 // observer section is absent; a present observer section enables it unless
 // observer.disabled: true (or legacy observer.enabled: false) is set.
 type observerConfig struct {
-	Enabled            bool
-	BindAddr           string
-	Port               int
-	UIPath             string
+	Enabled  bool
+	BindAddr string
+	Port     int
+
 	EventBufferSeconds int
 }
 
 // observerConfigYAML is the YAML representation of observerConfig.
 type observerConfigYAML struct {
-	Enabled            *bool  `yaml:"enabled"`
-	Disabled           *bool  `yaml:"disabled"`
-	Listen             string `yaml:"listen"`
-	UIPath             string `yaml:"ui_path"`
-	EventBufferSeconds *int   `yaml:"event_buffer_seconds"`
+	Enabled            *bool   `yaml:"enabled"`
+	Disabled           *bool   `yaml:"disabled"`
+	Listen             string  `yaml:"listen"`
+	UIPath             *string `yaml:"ui_path"`
+	EventBufferSeconds *int    `yaml:"event_buffer_seconds"`
 }
 
 const (
@@ -41,7 +41,6 @@ func defaultObserverConfig() observerConfig {
 		Enabled:            false,
 		BindAddr:           defaultObserverBindAddr,
 		Port:               defaultObserverPort,
-		UIPath:             "",
 		EventBufferSeconds: 0,
 	}
 }
@@ -72,12 +71,8 @@ func parseObserverConfig(y *observerConfigYAML) (observerConfig, error) {
 		out.BindAddr = host
 		out.Port = port
 	}
-	if y.UIPath != "" {
-		uiPath := strings.TrimSpace(y.UIPath)
-		if uiPath != "" && !strings.HasPrefix(uiPath, "/") {
-			uiPath = "/" + uiPath
-		}
-		out.UIPath = uiPath
+	if y.UIPath != nil {
+		return observerConfig{}, fmt.Errorf("observer.ui_path is not supported; remove it to use the embedded UI at /")
 	}
 	if y.EventBufferSeconds != nil {
 		if *y.EventBufferSeconds < 0 {

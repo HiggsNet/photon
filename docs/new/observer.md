@@ -76,7 +76,6 @@ observer 的配置段为 `observer.*`（YAML），解析逻辑在 `app/photon/ob
 # observer:
 #   disabled: true
 #   listen: 127.0.0.1:8080
-#   ui_path: ""
 #   event_buffer_seconds: 0
 ```
 
@@ -84,10 +83,10 @@ observer 的配置段为 `observer.*`（YAML），解析逻辑在 `app/photon/ob
 |---|---|---|---|
 | `enabled` / `disabled` | bool | 段缺失 = 禁用 | 段存在即启用，除非 `disabled: true`（或旧写法 `enabled: false`）；二者冲突时报错（`enabledFromPresence`） |
 | `listen` | `host:port` | `127.0.0.1:8080` | 监听地址；host 不能为空，port 须在 1–65535 |
-| `ui_path` | string | `""` | **已解析但未使用**（见第 9 节） |
+| `ui_path` | string | `""` | 不支持，配置时拒绝 |
 | `event_buffer_seconds` | int ≥ 0 | `0` | 事件回放缓冲保留时长；`0` 关闭缓冲（见 5.4） |
 
-解析结果 `observerConfig{Enabled, BindAddr, Port, UIPath, EventBufferSeconds}` 在 `startObserverServer` 中被映射为 `observer.Config{Enabled, BindAddr, Port, EventBufferSeconds}`（`internal/observer/server.go`）。
+解析结果 `observerConfig{Enabled, BindAddr, Port, EventBufferSeconds}` 在 `startObserverServer` 中被映射为 `observer.Config{Enabled, BindAddr, Port, EventBufferSeconds}`（`internal/observer/server.go`）。
 
 行为要点：
 
@@ -295,7 +294,7 @@ series 端点的数据完全来自 health 子系统的本地 JSONL spool（产�
 
 | 项 | 现状 |
 |---|---|
-| `observer.ui_path` | 已解析、归一化（补前导 `/`），但 server 始终从根路径提供内嵌 UI，该值无任何消费方 |
+| `observer.ui_path` | 不支持，配置时明确报错；server 从根路径提供内嵌 UI |
 | `observer.event_buffer_seconds` | 已实现：hub 回放缓冲按时间窗保留（1024 条硬上限），`GET /api/v1/events/recent` 提供回放（见 5.4） |
 | SSE 续传 | 未实现 `Last-Event-ID`；断线期间的事件不重发，依赖前端轮询兜底 |
 | 设计中的部分端点 | `/api/v1/link-groups`、`/api/v1/zones/{zone}/records|delegations|revocations` 未实现（`/zones/{x}/records` 会被当作 zone filter 而 404） |

@@ -1096,3 +1096,12 @@
 - shared assignment 支持稳定 tag；同 tag/地址族对应同一 prefix，成员按 owner 独立存储，并支持精确 revoke。
 - `ipam.announce` 支持 `non-shared` / `tag:<tag>` selector；服务生命周期控制 Anycast announcement。
 - publish 可由 `network: region` 同时发布本地和多个 Anycast endpoint；shared endpoint 宣告 assignment prefix 而非 host route。
+
+## 2026-09-16 配置与管理路径收口
+
+- 无消费者的 remote-write/UIPath 仅保留 YAML 拒绝入口，删除运行时配置槽和示例；没有开发远程指标系统。
+- 删除 `sendAdminControlRequest`，全部管理 mutation 共用现有发送函数与 `exchangeControl`；在线与离线授权共用 `planDelegationIssue` / `planDelegationGrant`，各自保留 I/O、daemon 通知和安全处理。
+- `commitLocalProtocols` 直接接收 State，删除离线临时 Daemon；保持私钥先保存、再发布公共记录和部分成功结果。
+- DB dump 递归读取嵌套 bucket，当前布局支持 zone 筛选，stats 统计叶子键，读取锁等待有界。删除 IPsec cleanup 转发和重复空值显示函数，诊断名称明确最近 reconcile 来源。
+- 本次检查时工作区生产 Go 代码共增加 213 行、删除 191 行（包含并行 ping 取消/Health 地址修正）；净增长来自 DB 新布局读取、锁等待及诊断生命周期处理，未增加通信包或 owner。新增回归覆盖无效配置、授权 Epoch/源状态隔离、DB 锁和当前布局；`make check`（含 Linux/Windows 构建）与 `git diff --check` 通过。
+- 用户可见行为见 [操作与兼容性说明](operator-compatibility.md)。

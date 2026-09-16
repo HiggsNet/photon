@@ -29,7 +29,7 @@ type RotateDebugView struct {
 	Filter            string
 	StoredLabel       string
 	LiveLabel         string
-	StoredSACount     int
+	ReconcileSACount  int
 	LiveSACount       int
 	LiveSAError       string
 	Links             []RotateDebugLink
@@ -38,14 +38,14 @@ type RotateDebugView struct {
 type RotateDebugInput struct {
 	Inspection        LinkInspection
 	PlannedSpecs      map[string]ipsec.TransportLinkSpec
-	ReplannedDesired  int
+	LastDesiredCount  int
 	ReplanIgnored     bool
 	LastDesiredLinks  int
 	DesiredPlanSource string
 	Filter            string
 	StoredLabel       string
 	LiveLabel         string
-	StoredSAs         []LinkSA
+	ReconcileSAs      []LinkSA
 	LiveSAs           []LinkSA
 	LiveSAError       string
 }
@@ -57,7 +57,7 @@ type RotateDebugLink struct {
 	Current               RotateRuntimeView
 	Staged                RotateRuntimeView
 	HasStaged             bool
-	StoredMatchingSAs     []LinkSA
+	ReconcileMatchingSAs  []LinkSA
 	LiveMatchingSAs       []LinkSA
 }
 
@@ -79,18 +79,18 @@ func BuildRotateDebug(input RotateDebugInput) RotateDebugView {
 	view := RotateDebugView{
 		LastRunUnix:       input.Inspection.LastRunUnix,
 		LinkInstances:     input.Inspection.LinkInstances,
-		PlannedDesired:    input.ReplannedDesired,
+		PlannedDesired:    input.LastDesiredCount,
 		ReplanIgnored:     input.ReplanIgnored,
 		LastDesiredLinks:  input.LastDesiredLinks,
 		DesiredPlanSource: input.DesiredPlanSource,
 		Filter:            strings.TrimSpace(input.Filter),
 		StoredLabel:       input.StoredLabel,
 		LiveLabel:         input.LiveLabel,
-		StoredSACount:     len(input.StoredSAs),
+		ReconcileSACount:  len(input.ReconcileSAs),
 		LiveSACount:       len(input.LiveSAs),
 		LiveSAError:       input.LiveSAError,
 	}
-	allSAs := append(append([]LinkSA(nil), input.StoredSAs...), input.LiveSAs...)
+	allSAs := append(append([]LinkSA(nil), input.ReconcileSAs...), input.LiveSAs...)
 	for _, link := range links {
 		spec, hasSpec := input.PlannedSpecs[link.ID]
 		var specPtr *ipsec.TransportLinkSpec
@@ -105,7 +105,7 @@ func BuildRotateDebug(input RotateDebugInput) RotateDebugView {
 			Current:               RotateRuntimeCurrent(link, specPtr),
 			Staged:                staged,
 			HasStaged:             !RotateRuntimeEmpty(staged),
-			StoredMatchingSAs:     MatchingRotateSAs(link, input.StoredSAs),
+			ReconcileMatchingSAs:  MatchingRotateSAs(link, input.ReconcileSAs),
 			LiveMatchingSAs:       MatchingRotateSAs(link, input.LiveSAs),
 		})
 	}
