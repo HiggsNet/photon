@@ -153,7 +153,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | `forwarding_config.go` | Linux forwarding policy | Linux firewall/routing config |
 | `gossip_checkpoint_migration.go` | 旧 SyncPeers 到 GossipCheckpoint | `internal/photonlinux/migration`；仅由旧数据库单向迁移调用，不属于在线兼容层；只有明确停止支持旧 schema 时才删除 |
 | `health_config.go` | probe/hysteresis/metrics 配置 | 通用类型留 `pkg/health`；Linux YAML 进 Linux health config |
-| `health_reconcile.go` | health manager 装配、快照发布和 CLI 展示壳 | manager/状态机留 `pkg/health`；raw ICMP、setns、exec fallback 在 `internal/photonlinux/healthprobe`；tick/completion 已进入 Daemon scheduler/event loop；`LinkOutput -> ProbeTarget` 规则已进 `internal/photonlinux/linkstate` |
+| `health_reconcile.go` | health manager 装配、target 组合、快照发布和 CLI 展示壳 | manager/状态机留 `pkg/health`；`LinkOutput -> ProbeTarget` 与 probe ID/rotate role 是 health 专属组合规则；raw ICMP、setns、exec fallback 在 `internal/photonlinux/healthprobe`；tick/completion 已进入 Daemon scheduler/event loop |
 | `health_spool.go` | JSONL health 历史和查询 | 已整体迁入 `internal/observability/healthspool` 并删除 app 文件；不属于 state/checkpoint |
 | `identity_bootstrap.go` | identity key/config、pending auto-join bootstrap 和 refresh | 空库直接初始化 current common/Linux partitions：common 保存 trusted root、identity key 与 authority-less managed-zone placeholder，runtime 保存 canonical key path；不再写临时 legacy schema，正式 root pin/private-key/managed-zone entry 校验不放宽 |
 | `init.go` | root 初始化 | 已直接原子初始化 common/Linux buckets，不再写 legacy aggregate schema；文件/CLI 壳后续进 photoncli |
@@ -170,7 +170,7 @@ operations           极少数确实无法改造成幂等/可观察操作的 jou
 | 文件 | 当前作用 | 最终位置 / 层 |
 |---|---|---|
 | `keygen.go` | Ed25519 key 文件生成 | `internal/photoncli/keygen`，底层复用 crypto |
-| `link_outputs.go` | Linux link runtime 到 health/routing output | `internal/photonlinux/linkstate` 或 IPsec controller 输出 DTO |
+| `link_outputs.go` | Linux link runtime 到 health/routing output | IPsec controller 直接输出 provider-neutral DTO |
 | `linux_state_view.go` | 已删除 | gossip checkpoint 的生产调用方已直接读取公共 typed owner；Linux runtime clone 并入 `state_clone.go`，旧 peer read model 只留在 legacy migration 测试 fixture |
 | `logging.go` | app logger 实现 | host 定义 Logger interface；Linux 实现进 internal logging |
 | `main.go` | executable 入口 | 永久留 `app/photon`，只负责装配/退出码 |
@@ -239,7 +239,7 @@ Linux prober，只把平台实现交给公共 `health.Manager`。没有保留旧
 
 `health_reconcile.go` 的 runtime 边界现已收口：
 
-1. Linux link output 到 `ProbeTarget` 的组合已进入 `internal/photonlinux/linkstate`；
+1. `LinkOutput` 到 `ProbeTarget` 的组合与 probe ID/rotate role 规则已并入 `health_reconcile.go`，不再伪装成 Linux link state；
 2. `health.Manager` 的一秒异步 tick 与 completion 唤醒已进入 Daemon scheduler/event loop；
 3. spool 已进入 `internal/observability/healthspool`，Observer/control 使用 canonical inspect DTO。
 
@@ -309,12 +309,11 @@ GossipDriver 公共 gossip 闭环、aggregate 清理和 current Linux codec 迁�
    IPsec desired/SA/action/skip 在 reconcile 边界投影为不含私钥和 spec 指针的 canonical `internal/state` observation；`internal/inspect` 直接 alias 这四组 live DTO，已删除第二套同字段 struct、逐字段 builder、app 批量 converter 和 debug rotate 的重复 SA copier。Observation clone 仍保留并发隔离，`LinkOutput` 仍作为 routing/firewall/health 的窄消费契约。
    health canonical view 与 daemon 内的 `debug ping` 执行链直接共用现有的安全 `health.ProbeTarget`，不再先转成字符串型 `inspect.HealthTarget` 再解析回执行类型。随后中间 `ping_targets` control 也已删除：daemon 使用自己持有的 Linux health prober 完成目标选择与探测，直接返回带稳定 snake_case JSON schema 的 canonical `inspect.PingDebugView`；CLI 只传选项并渲染结果，不再创建平台 prober。长探测使用 context-aware control transport，不受普通只读请求 10 秒 deadline 限制，并仍可由 CLI context 取消。
    record/IPAM/route/service 的在线请求也已在 control 边界直接转成与 `--direct` 相同的 `corestate.LocalIntent`；Daemon 单 writer 队列只携带一个 `common_mutation + LocalIntent + dryRun`，原四种事件 payload、`daemonRecordPut` 和 app 侧重复的 reserved-record 校验表已删除，IPAM/route 成功提交后的同步路由刷新改由 intent 类型判定。
-   Observer routes/peers/status/zones/BIRD 已直接使用 canonical `internal/inspect` DTO；`internal/inspect/http` 中仅换名字的 type alias、函数变量转发与薄 BIRD response 壳已删除，对应 canonical JSON schema tests 也已迁回真实 owner；HTTP package 只保留 links/health 的独立 wire shape 及其 contract tests。
-   Health HTTP context 对 desired link 也不再建立第二套逐字段 wrapper：它直接接收已脱敏的 canonical `inspect.DesiredLink`，response 的 `Desired` 与 `PeerZone` 使用明确类型；实例 context 仍保留其独立的 runtime 选择边界，但 response 已删除前端无人消费的原始 `ipsec.LinkInstance`，只输出页面实际需要的选择字段，避免暴露 owner token、内部错误和状态机细节。
-   Links HTTP response 也已删除重复的 `raw LinkView` 与前端无人消费的 owner 对象；canonical inspect 不再建立包含 owner token 等校验字段的 `LinkOwner`，只保留文本诊断实际展示的 owner manager。
+   Observer routes/peers/status/zones/BIRD/links/health 均直接使用 canonical `internal/inspect` DTO；`LinkInspection` 自身采用现有扁平 REST schema 和稳定 JSON tags，不再复制 `LinksResponse/LinkJSON`。Health 的 target/sample/instance/desired 合并移入 `internal/inspect.BuildHealthView`，control、文本与 Observer 共用最终 `HealthView`；canonical JSON schema tests 也已迁回真实 owner，`internal/inspect/http` 已整组删除。
+   Health view 只接收已脱敏的 canonical `inspect.LinkInstance/DesiredLink`，输出页面与 CLI 所需的 link/probe context，避免携带 owner token、内部错误和状态机对象。Links canonical inspect 同样只保留安全的 owner manager；owner token 在进入查询模型前已经删除。
    Health datasource/series 的固定 HTTP 字段也已改用现有具体类型；BIRD endpoint 直接返回带稳定 JSON tags 的 canonical `BabelDebugView`，runtime resource owner/token 明确不进入响应，页面消费 instance/reconcile `FailureView`。
-   Observer Health join 直接建立短生命周期的 instance/desired 索引；原 `observerRuntime`、`inspectHealthInstances` 与 `desiredByInstanceID` 三个单调用转发 helper 已删除。
-   Observer 页面残留的 `last_error` 读取与 Health 裸 sample/嵌套 sample fallback 也已删除；status、peer、health、takeover 与 routing 错误统一消费 canonical `last_failure {code,message}`，Health 统一读取 `HealthContextItem.health`，不再依赖兼容字段。
+   Health join 在 canonical builder 内直接建立短生命周期的 target/instance/desired 索引；原 Observer 单调用转发 helper 和 HTTP 二次 builder 均已删除。
+   Observer 页面残留的 `last_error` 读取与 Health 裸 sample/嵌套 sample fallback 也已删除；status、peer、health、takeover 与 routing 错误统一消费 canonical `last_failure {code,message}`，Health 统一读取 `HealthLinkView.health`，不再依赖兼容字段。
    Health runtime context 也已直接复用 secret-free `inspect.LinkInstance`，不再维护 `HealthInstanceContextInput` 与另一份六字段逐项投影。
    `debug rotate --direct` 已改用正式 typed intent/runtime commit。production 已无 aggregate `Snapshot()`、clone、loader 或 writer；
    `stateFile/stateMeta` 只承担旧 schema 单向读取和 legacy db dump，明确随旧数据库支持周期删除。Daemon 不再缓存第二份

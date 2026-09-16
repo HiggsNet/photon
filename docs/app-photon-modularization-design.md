@@ -36,7 +36,7 @@
 
 - `internal/observer` 已承接 HTTP routing、SSE、static web、API envelope 和通用 handler 测试；`app/photon/observer_server.go` 保留 daemon provider、health spool/runtime 投影和启动接线。
 - `internal/inspect` 已承接 links、zones/records、peers/endpoints、peer lifecycle、routes/BIRD、health、revocation、firewall、admission、rotate、ping、sync status 等只读 view/reason/builder。
-- `internal/inspect/http` 已承接 observer 专用 DTO/builder，避免 HTTP schema 直接绑 app 私有 state 或原始 runtime struct。
+- Observer JSON 直接序列化 canonical `internal/inspect` DTO；只有 datasource/series 之类的 transport envelope 留在 `app/photon/observer_server.go`，不再建立 HTTP 专用 read model 包。
 - `internal/inspect/text` 已承接 CLI debug/sync/status 文本 presenter 和 focused output 测试；`app/photon/debug_*.go` 主要保留参数解析、control socket/live/offline source 选择和 presenter 调用。
 - `internal/state` 已承接 peer runtime、link runtime、BIRD/firewall reconcile 等跨 app/inspect 共享的只读 snapshot 类型；app 层通过 alias 表达 state ownership。
 - 明确不新增 `internal/debug` 包：debug 是 CLI 命令面，可复用读模型属于 `internal/inspect`，文本输出属于 `internal/inspect/text`。
@@ -63,9 +63,9 @@ app/photon
   - live adapters: inspect_links.go, inspect_peers.go, observer_server.go, debug_*.go
         |
         v
-internal/inspect (+ internal/inspect/http, internal/inspect/text)
+internal/inspect (+ internal/inspect/text)
   - shared read-model / view builders / reason code
-  - HTTP JSON presenter / DTO builders
+  - stable JSON schema shared by control and Observer
   - CLI text presenter
         |
         v
@@ -100,15 +100,15 @@ pkg/*
 |------|--------------|---------------------|
 | Observer HTTP | `internal/observer` | 已承接 HTTP routing、SSE、static、API envelope 和通用 handler 测试；`app/photon` 保留 daemon provider、health spool/runtime adapter 和启动接线。 |
 | Inspect / diagnostics | `internal/inspect` | 已成为核心共享读模型层，横切 observer、CLI debug、control status；新增诊断输出应优先补 inspect view。 |
-| HTTP JSON presenter | `internal/inspect/http` | 已承接 observer DTO/builder；HTTP schema 不应直接绑定 app 私有 state 或原始 runtime struct。 |
+| HTTP JSON presenter | `internal/observer` + `app/photon/observer_server.go` | handler 直接编码 canonical inspect DTO；app 只保留 datasource/series transport envelope，不再复制资源 read model。 |
 | CLI text presenter | `internal/inspect/text` | 已承接 debug/sync/status 文本输出；text 包只做 writer/formatter，不定义跨包业务 view。 |
 | Runtime state DTO | `internal/state` | 只放 `PeerRuntimeState`、link runtime、BIRD/firewall reconcile 等共享 DTO；不是 `stateFile`、锁、bbolt、workspace 或 commit 层。 |
 | Debug ping executor | `internal/ping` | 已作为小型执行模块独立；app 层保留 CLI wiring 和 state/config -> target adapter。 |
 | Peer lifecycle | `internal/inspect/peer_lifecycle.go` + `app/photon/peer_state.go` | 状态推导/view 已在 inspect；cleanup 决策、flush 顺序和 state adapter 仍在 app。暂未创建 `internal/peerstate` / `internal/lifecycle`。 |
 | Revocation impact / cleanup | `internal/inspect/revocation.go` + `app/photon/revocation_cleanup.go` | revocation view/status 已在 inspect；实际 cleanup、layer flush 和 daemon 顺序仍在 app。暂未创建 `internal/revocation`。 |
 | Admission diagnostics | `internal/inspect/admission.go` + `app/photon/admission_diagnostics.go` | reason/view/text 已下沉；auto-join state/key/delegation 检查、join request 编码和 admission state 更新仍在 app。暂未创建 `internal/admission`。 |
-| Health app layer | `internal/inspect/health_debug.go`, `internal/inspect/http/health.go` + `app/photon/health_reconcile.go` | view/presenter/context 已下沉；probe manager、spool append/query adapter 和 reconcile lifecycle 仍在 app。暂未创建 `internal/healthapp`。 |
-| Routing/BIRD app layer | `internal/inspect/routing.go`, `internal/inspect/http/routes.go` + `app/photon/routing_reconcile.go` | route/BIRD readmodel 和 presenter 已下沉；BIRD process/client lifecycle、config render/apply 和 reconcile timer 仍在 app。暂未创建 `internal/routingapp`。 |
+| Health app layer | `internal/inspect/health.go`, `internal/inspect/text/health.go` + `app/photon/health_reconcile.go` | target/sample/instance/desired 一次组合成 canonical `HealthView`；probe manager、spool adapter 和 reconcile lifecycle 仍在 app。暂未创建 `internal/healthapp`。 |
+| Routing/BIRD app layer | `internal/inspect/routing.go` + `app/photon/routing_reconcile.go` | route/BIRD readmodel 和 presenter 已下沉；BIRD process/client lifecycle、config render/apply 和 reconcile timer 仍在 app。暂未创建 `internal/routingapp`。 |
 | Firewall app layer | `internal/inspect/firewall.go` + `app/photon/firewall_reconcile.go` | debug view/presenter 和 reconcile snapshot DTO 已下沉； privileged apply、driver construction 和 policy input adapter 仍在 app。暂未创建 `internal/firewallapp`。 |
 | IPsec app layer | `internal/inspect/links.go`, `internal/inspect/rotate.go` + `app/photon/ipsec_*.go` | links/rotate readmodel 已下沉； publish/reconcile/cleanup/provider lifecycle 基本仍在 app。暂未创建 `internal/ipsecapp`。 |
 | Sync runtime | `app/photon/sync.go`, `sync_session.go`, `daemon_sync.go` | 只有 sync status view/text 和 peer debug runtime view 已下沉；FSM、packet demux、object pull、timer、state apply adapter 仍在 app。暂未创建 `internal/syncapp`。 |
@@ -161,13 +161,13 @@ CLI text、HTTP JSON、control response 都不应该各自判断 `revoked/stale/
 
 优先级高，因为它横跨 observer、debug、control status，同时风险较低：
 
-1. 建立 `internal/inspect`、`internal/inspect/http`、`internal/inspect/text` 骨架；`internal/inspect/source` 延后到 source/fallback 瘦身阶段。
+1. 建立 `internal/inspect`、`internal/inspect/text` 读模型与文本输出边界；曾用于过渡的 `internal/inspect/http` 已在 canonical JSON schema 收口后删除，`internal/inspect/source` 继续延后。
 2. 先抽 links：`debug links` 与 `/api/v1/links` 重合最高；links input 优先使用最近一次 committed reconcile snapshot，只有离线/显式 dry-run 才重新 plan desired。
 3. 再抽 peer/endpoints：`debug peer`、`sync status --verbose`、`debug peers`、`/api/v1/peers` 共用 endpoint merge 和 lifecycle reason。
 4. 再抽 zone/records/admission/revocation。
 5. 最后抽 routes/BIRD/firewall/health 的 view 和 presenter。
 
-**当前状态：已完成第一阶段。** 后续新增 observer/debug/control status 输出时，默认先补 `internal/inspect` view，再补 `internal/inspect/text` 或 `internal/inspect/http` presenter；不要在 `app/photon` 重新手写状态推理或 DTO 组装。
+**当前状态：已完成第一阶段。** 后续新增 observer/debug/control status 输出时，默认先补 `internal/inspect` view；CLI 文本再补 `internal/inspect/text` presenter，Observer 直接编码同一 view。不要在 `app/photon` 重新手写状态推理或 DTO 组装。
 
 ### 5.2 Peer lifecycle + revocation（部分完成）
 

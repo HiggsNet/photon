@@ -44,8 +44,9 @@ func TestWriteStatusRunningShowsPeerAndLinkSummary(t *testing.T) {
 			{State: inspect.PeerStateOffline},
 		},
 		Links: inspect.LinkInspection{
-			Summary: inspect.LinkSummary{DesiredLinks: 2, LinkInstances: 1},
-			Links:   []inspect.LinkView{{State: "up", Health: &inspect.HealthSample{State: "healthy"}}},
+			DesiredLinks:  2,
+			LinkInstances: 1,
+			Links:         []inspect.LinkView{{State: "up", Health: &inspect.HealthSample{State: "healthy"}}},
 		},
 	})
 	if err := WriteStatus(&buf, view); err != nil {

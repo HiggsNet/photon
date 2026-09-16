@@ -9,38 +9,32 @@ import (
 )
 
 func WriteHealth(w io.Writer, view inspect.HealthView, sortBy string, verbose bool) error {
-	view = inspect.BuildHealthView(view, sortBy)
+	view = inspect.SortHealthView(view, sortBy)
 	if w == nil {
 		return nil
 	}
-	targets := view.Targets
-	if len(targets) == 0 {
+	if len(view.Links) == 0 {
 		out := newLineWriter(w)
 		out.Println("No link instances to probe.")
 		return out.Err()
 	}
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	out := newLineWriter(table)
-	samplesByProbe := make(map[string]inspect.HealthSample, len(view.Samples))
-	for _, sample := range view.Samples {
-		key := firstNonEmpty(sample.ProbeID, sample.InstanceID)
-		samplesByProbe[key] = sample
-	}
-	out.Linef("Link health (%d links):", len(targets))
+	out.Linef("Link health (%d links):", len(view.Links))
 	if !verbose {
 		rows := [][]string{{"PEER", "ROLE", "FAMILY", "HEALTH", "LOSS", "RTT", "JITTER", "CUTOVER"}}
-		for _, t := range targets {
-			probeID := firstNonEmpty(t.ProbeID, t.InstanceID)
-			sample, hasSample := samplesByProbe[probeID]
+		for _, link := range view.Links {
+			sample := link.Health
+			hasSample := link.Observed
 			rows = append(rows, []string{
-				dash(t.PeerZone),
-				firstNonEmpty(t.ProbeRole, "active"),
-				dash(t.UnderlayFamily),
+				dash(link.PeerZone),
+				firstNonEmpty(sample.ProbeRole, "active"),
+				dash(link.UnderlayFamily),
 				healthSampleState(sample, hasSample),
 				healthLoss(sample, hasSample),
 				healthPrimaryRTT(sample, hasSample),
 				healthMillis(sample.JitterMs, hasSample),
-				healthCutover(sample, hasSample, t.Staged || t.ProbeRole == "staged"),
+				healthCutover(sample, hasSample, link.Staged),
 			})
 		}
 		writeAlignedRows(out, rows, 0)
@@ -50,19 +44,19 @@ func WriteHealth(w io.Writer, view inspect.HealthView, sortBy string, verbose bo
 		return table.Flush()
 	}
 	rows := [][]string{{"LINK", "PROBE ID", "PEER", "OVERLAY", "ROLE", "FAMILY", "INTERFACE", "LOCAL->PEER", "LINK STATE", "HEALTH", "PROBE", "PACKETS", "LOSS", "RTT (LAST/EWMA/P50/P95/P99)", "JITTER", "FAILS", "CUTOVER", "ERROR"}}
-	for _, t := range targets {
-		probeID := firstNonEmpty(t.ProbeID, t.InstanceID)
-		sample, hasSample := samplesByProbe[probeID]
+	for _, link := range view.Links {
+		sample := link.Health
+		hasSample := link.Observed
 		rows = append(rows, []string{
-			t.InstanceID,
-			probeID,
-			dash(t.PeerZone),
-			dash(t.Overlay),
-			firstNonEmpty(t.ProbeRole, "active"),
-			dash(t.UnderlayFamily),
-			dash(t.InterfaceName),
-			formatHealthTunnel(inspect.FormatAddr(t.LocalTunnelAddr), inspect.FormatAddr(t.PeerTunnelAddr)),
-			dash(t.State),
+			sample.InstanceID,
+			firstNonEmpty(sample.ProbeID, sample.InstanceID),
+			dash(link.PeerZone),
+			dash(link.Overlay),
+			firstNonEmpty(sample.ProbeRole, "active"),
+			dash(link.UnderlayFamily),
+			dash(link.InterfaceName),
+			formatHealthTunnel(link.LocalTunnelAddr, link.PeerTunnelAddr),
+			dash(link.ActualState),
 			healthSampleState(sample, hasSample),
 			dash(sample.ProbeType),
 			healthPackets(sample, hasSample),
@@ -70,7 +64,7 @@ func WriteHealth(w io.Writer, view inspect.HealthView, sortBy string, verbose bo
 			healthRTT(sample, hasSample),
 			healthMillis(sample.JitterMs, hasSample),
 			healthFailures(sample, hasSample),
-			healthCutover(sample, hasSample, t.Staged || t.ProbeRole == "staged"),
+			healthCutover(sample, hasSample, link.Staged),
 			escapeTableCell(failureDisplay(sample.LastFailure)),
 		})
 	}

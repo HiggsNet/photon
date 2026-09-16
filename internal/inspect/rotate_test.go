@@ -10,7 +10,8 @@ import (
 func TestBuildRotateDebugBuildsRuntimeAndMatchingSAs(t *testing.T) {
 	view := BuildRotateDebug(RotateDebugInput{
 		Inspection: LinkInspection{
-			Summary: LinkSummary{LastRunUnix: 1700000000, LinkInstances: 2},
+			LastRunUnix:   1700000000,
+			LinkInstances: 2,
 			Links: []LinkView{
 				{ID: "link-a", PeerZone: "node-a.catofes."},
 				{

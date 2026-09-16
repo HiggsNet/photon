@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/HiggsNet/photon/internal/photonlinux/linkstate"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -50,7 +49,7 @@ func TestReconcileRoutingFeedsBirdObservationToRotateCutoverGate(t *testing.T) {
 		successfulHealthProber{},
 	)
 	manager.UpsertTarget(health.ProbeTarget{
-		ProbeID:        linkstate.ProbeID("link-1", "staged"),
+		ProbeID:        healthProbeID("link-1", "staged"),
 		InstanceID:     "link-1",
 		ProbeRole:      "staged",
 		InterfaceName:  "phx-new",

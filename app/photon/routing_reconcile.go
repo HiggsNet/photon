@@ -15,7 +15,6 @@ import (
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
-	"github.com/HiggsNet/photon/internal/photonlinux/linkstate"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -377,7 +376,7 @@ func (d *Daemon) recordBirdHealthObservationForLinks(instances map[string]ipsec.
 			continue
 		}
 		instanceID := strings.TrimSuffix(link.ID, "#staged")
-		obs := birdObservationForInterface(instanceID, linkstate.ProbeID(instanceID, "staged"), link.InterfaceName, observed)
+		obs := birdObservationForInterface(instanceID, healthProbeID(instanceID, "staged"), link.InterfaceName, observed)
 		d.health.SetBabelObservation(obs)
 	}
 }

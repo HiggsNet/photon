@@ -20,7 +20,7 @@ func TestWriteHealthNoTargets(t *testing.T) {
 }
 
 func TestWriteHealthVerboseSortsTargetsAndShowsSampleState(t *testing.T) {
-	view := inspect.HealthView{
+	view := inspect.BuildHealthView(inspect.HealthInput{
 		Targets: []health.ProbeTarget{
 			{
 				ProbeID:         "link-b#staged",
@@ -65,7 +65,7 @@ func TestWriteHealthVerboseSortsTargetsAndShowsSampleState(t *testing.T) {
 			ConsecutiveFail: 2,
 			CutoverBlocking: true,
 		}},
-	}
+	})
 
 	var buf strings.Builder
 	if err := WriteHealth(&buf, view, inspect.HealthSortPeer, true); err != nil {
@@ -98,16 +98,16 @@ func TestWriteHealthVerboseSortsTargetsAndShowsSampleState(t *testing.T) {
 }
 
 func TestWriteHealthConciseHidesDiagnosticColumns(t *testing.T) {
-	view := inspect.HealthView{
+	view := inspect.BuildHealthView(inspect.HealthInput{
 		Targets: []health.ProbeTarget{{
 			ProbeID: "probe-secret", InstanceID: "link-secret", PeerZone: "node-b.",
 			ProbeRole: "active", UnderlayFamily: "ipv6", InterfaceName: "phx0",
 		}},
 		Samples: []inspect.HealthSample{{
-			ProbeID: "probe-secret", State: "healthy", Sent: 10, Received: 9,
+			ProbeID: "probe-secret", InstanceID: "link-secret", State: "healthy", Sent: 10, Received: 9,
 			LossRatio: 10, EWMARTTMs: 12, JitterMs: 2, LastFailure: &inspect.FailureView{Code: inspect.FailureCodeHealthProbe, Message: "hidden error"},
 		}},
-	}
+	})
 	var buf strings.Builder
 	if err := WriteHealth(&buf, view, inspect.HealthSortPeer, false); err != nil {
 		t.Fatalf("WriteHealth: %v", err)

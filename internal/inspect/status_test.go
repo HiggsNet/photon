@@ -26,7 +26,8 @@ func TestBuildStatusSummarizesRunningPeersAndLinks(t *testing.T) {
 			{State: PeerStateOffline, LastSyncUnix: 50},
 		},
 		Links: LinkInspection{
-			Summary: LinkSummary{DesiredLinks: 3, LinkInstances: 2},
+			DesiredLinks:  3,
+			LinkInstances: 2,
 			Links: []LinkView{
 				{State: "up", Health: &HealthSample{State: "healthy"}},
 				{State: "connecting", Health: &HealthSample{State: "degraded"}},

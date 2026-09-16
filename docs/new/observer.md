@@ -148,26 +148,26 @@ type Provider interface {
 
 ### 4.1 端点总览
 
-| 端点 | Provider 方法 | 数据内容 | 响应类型（`internal/inspect/http`） |
+| 端点 | Provider 方法 | 数据内容 | 响应类型 |
 |---|---|---|---|
-| `GET /api/v1/status` | `Status` | daemon 全局摘要 | `StatusResponse` |
-| `GET /api/v1/zones` | `Zones("")` | Zone 树摘要列表 | `ZonesResponse` |
+| `GET /api/v1/status` | `Status` | daemon 全局摘要 | `inspect.DaemonStatusView` |
+| `GET /api/v1/zones` | `Zones("")` | Zone 树摘要列表 | `inspect.ZonesView` |
 | `GET /api/v1/zones/{zone}` | `Zones(zone)` | 单 Zone 详情（含 history）；根 zone `.` 无法作为路径段（ServeMux 会重定向），用 `GET /api/v1/zones?zone=.` | `inspect.BuildZoneDetail` 输出 |
-| `GET /api/v1/peers` | `Peers("")` | 全部 peer 同步状态 | `PeersResponse` |
-| `GET /api/v1/peers/{peer_id}` | `Peers(peerID)` | 单 peer 详情 | `PeerJSON` |
-| `GET /api/v1/links` | `Links("")` | link 实例与 reconcile 状态 | `LinksResponse` |
-| `GET /api/v1/links/{link_id}` | `Links(linkID)` | 单 link 详情 | `LinkJSON` |
-| `GET /api/v1/health` | `Health("")` | 全 link 健康 + 上下文 | `HealthResponse` |
-| `GET /api/v1/health/{link_id}` | `Health(linkID)` | 单 link 健康（按 instanceID 或 probeID 匹配） | `HealthContextItem` |
-| `GET /api/v1/health/{link_id}/series` | `HealthSeries` | 本地 spool 聚合时序 | `HealthSeriesResponse` |
-| `GET /api/v1/routes` | `Routes` | 授权路由集 | `RoutesResponse` |
+| `GET /api/v1/peers` | `Peers("")` | 全部 peer 同步状态 | `inspect.PeersView` |
+| `GET /api/v1/peers/{peer_id}` | `Peers(peerID)` | 单 peer 详情 | `inspect.PeerView` |
+| `GET /api/v1/links` | `Links("")` | link 实例与 reconcile 状态 | `inspect.LinkInspection` |
+| `GET /api/v1/links/{link_id}` | `Links(linkID)` | 单 link 详情 | `inspect.LinkView` |
+| `GET /api/v1/health` | `Health("")` | 全 link 健康 + 上下文 | datasource envelope + `inspect.HealthView` |
+| `GET /api/v1/health/{link_id}` | `Health(linkID)` | 单 link 健康（按 instanceID 或 probeID 匹配） | `inspect.HealthLinkView` |
+| `GET /api/v1/health/{link_id}/series` | `HealthSeries` | 本地 spool 聚合时序 | Observer series envelope |
+| `GET /api/v1/routes` | `Routes` | 授权路由集 | `inspect.RoutesResponse` |
 | `GET /api/v1/bird` | `Bird` | BIRD 实例观测 + 最近路由错误 | `inspect.BabelDebugView` |
 | `GET /api/v1/events` | —（Hub） | SSE 事件流 | `text/event-stream` |
 | `GET /api/v1/events/recent` | —（Hub） | 事件回放缓冲（见 5.4） | `{"events": [...]}` |
 
 ### 4.2 全局状态 `/api/v1/status`
 
-`StatusResponse`（`internal/inspect/http/status.go`）字段：
+`inspect.DaemonStatusView` 字段：
 
 | 字段 | 含义 |
 |---|---|
@@ -187,13 +187,13 @@ type Provider interface {
 
 ### 4.4 Links
 
-- 数据由 `buildLinkInspectionFromReconcile(runtime, state, healthStatus)` 现算，输入为 IPsec reconcile 的 desired/actual 视图叠加快照中的健康状态。
-- `LinkJSON` 只输出页面和 API 诊断字段，不再附带重复的 `raw LinkView` 或运行时 owner/token；页面的 IKE 名称直接读取顶层 `ike_name`。
-- 单 link 按 `LinkJSON.ID` 精确匹配，未命中 404 `link not found`。
+- 数据由 `buildStoredLinkInspection` 从 daemon 的 IPsec/BIRD/health observation 构造 canonical `inspect.LinkInspection`；该模型自身使用扁平 REST schema，不再经过 `LinksResponse/LinkJSON` 二次复制。
+- `inspect.LinkView` 只包含已经脱敏的查询字段；owner token 在进入 inspect 前已经删除，页面的 IKE 名称直接读取顶层 `ike_name`。
+- 单 link 按 `inspect.LinkView.ID` 精确匹配，未命中 404 `link not found`。
 
 ### 4.5 Health
 
-- 列表：daemon 将 health.Manager 样本和当前探测目标投影为统一的 `inspect.HealthView`，再由 `inspecthttp.BuildHealthContext` 与在线 link instance、IPsec desired state 做展示层 join；每条输出 `HealthContextItem{health, desired, peer_zone, group_id, interface_name, endpoint, actual_state, local_tunnel_addr, peer_tunnel_addr}`，按 `(instance_id, probe_role)` 排序。只有实例没有健康样本的 link 以 `state: "unknown"` 补齐；原始 `ipsec.LinkInstance` 不进入 HTTP response。
+- 列表：daemon 把 health.Manager 样本、探测目标、已脱敏 link instance 和 IPsec desired state 一次传给 `inspect.BuildHealthView`；control、CLI 文本与 Observer 共用最终 `HealthView`。每条 `HealthLinkView` 按 probe 区分 rotation 状态，并按 `(instance_id, probe_role, probe_id)` 排序；没有样本的 link 以 `state: "unknown"` 补齐，原始 `ipsec.LinkInstance` 不进入查询模型。
 - 响应同时携带 `datasource` 信息（见第 7 节），前端据此决定是否展示历史曲线。
 - 单 link：`link_id` 可匹配 `instance_id` 或 `probe_id`（含 `#old` / `#staged` 后缀形式），未命中 404。
 

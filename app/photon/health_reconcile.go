@@ -11,7 +11,7 @@ import (
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	"github.com/HiggsNet/photon/internal/observability/healthspool"
-	"github.com/HiggsNet/photon/internal/photonlinux/linkstate"
+	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -35,6 +35,66 @@ type healthDriver struct {
 	spool         *healthspool.Store
 	driverManaged bool
 	asyncRunning  bool
+}
+
+// healthTargets derives health probe inputs from provider-neutral link
+// outputs. Linux-specific probe execution remains owned by photonlinux.
+func healthTargets(outputs []photonstate.LinkOutput, localZone string) []health.ProbeTarget {
+	targets := make([]health.ProbeTarget, 0, len(outputs))
+	for _, output := range outputs {
+		if !output.LocalAddr.IsValid() || !output.PeerAddr.IsValid() {
+			continue
+		}
+		probeRole := output.RuntimeRole
+		if output.RuntimeRole == photonstate.LinkRuntimeActive {
+			probeRole = "active"
+			if hasStagedHealthOutput(outputs, output.ID) {
+				probeRole = "old"
+			}
+		}
+		target := health.ProbeTarget{
+			InstanceID:      output.ID,
+			GroupID:         output.GroupID,
+			PeerZone:        string(output.PeerZone),
+			LocalZone:       localZone,
+			Overlay:         output.GroupID,
+			NetNS:           output.NetNS,
+			InterfaceName:   output.InterfaceName,
+			UnderlayFamily:  photonstate.LinkPathFamily(output.PathKey),
+			Generation:      output.Generation,
+			ProbeRole:       probeRole,
+			State:           output.State,
+			LocalTunnelAddr: output.LocalAddr,
+			PeerTunnelAddr:  output.PeerAddr,
+		}
+		if probeRole != "active" {
+			target.ProbeID = healthProbeID(output.ID, probeRole)
+		}
+		if output.RuntimeRole == photonstate.LinkRuntimeStaged {
+			target.InstanceID = strings.TrimSuffix(output.ID, "#"+photonstate.LinkRuntimeStaged)
+			target.ProbeID = healthProbeID(target.InstanceID, "staged")
+			target.Staged = true
+		}
+		targets = append(targets, target)
+	}
+	return targets
+}
+
+// healthProbeID identifies an active, old, or staged probe for one logical link.
+func healthProbeID(instanceID, role string) string {
+	if role == "" || role == "active" {
+		return instanceID
+	}
+	return instanceID + "#" + role
+}
+
+func hasStagedHealthOutput(outputs []photonstate.LinkOutput, linkID string) bool {
+	for _, output := range outputs {
+		if output.ID == healthProbeID(linkID, photonstate.LinkRuntimeStaged) {
+			return true
+		}
+	}
+	return false
 }
 
 // stripScope removes the %iface and netns=... suffixes from a scoped tunnel
@@ -71,7 +131,7 @@ func (d *Daemon) reconcileHealth(ctx context.Context) int {
 		localZone = view.State.ManagedZone.String()
 	}
 	links, reconcile := d.linuxObservation.ipsecSnapshot()
-	targets := linkstate.HealthTargets(buildLinkOutputs(links, reconcile), localZone)
+	targets := healthTargets(buildLinkOutputs(links, reconcile), localZone)
 	now := d.now()
 	d.health.SetTargets(targets, now)
 	return d.tickHealth(ctx, now)
@@ -184,10 +244,23 @@ func showHealth(sortBy string, verbose bool) error {
 }
 
 func healthViewFromOwners(common corestate.View, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, samples []inspect.HealthSample) inspect.HealthView {
-	view := inspect.HealthView{Samples: append([]inspect.HealthSample(nil), samples...)}
-	if common.State == nil {
-		return view
+	input := inspect.HealthInput{
+		Samples:   append([]inspect.HealthSample(nil), samples...),
+		Instances: make(map[string]inspect.LinkInstance, len(links)),
+		Desired:   make(map[string]inspect.DesiredLink),
 	}
-	view.Targets = linkstate.HealthTargets(buildLinkOutputs(links, reconcile), string(common.State.ManagedZone))
-	return view
+	for id, link := range links {
+		input.Instances[id] = inspect.BuildLinkInstanceFromRuntime(link, inspect.LinkRouting{})
+	}
+	if reconcile != nil {
+		for _, desired := range reconcile.Desired {
+			if desired.InstanceID != "" {
+				input.Desired[desired.InstanceID] = desired
+			}
+		}
+	}
+	if common.State != nil {
+		input.Targets = healthTargets(buildLinkOutputs(links, reconcile), string(common.State.ManagedZone))
+	}
+	return inspect.BuildHealthView(input)
 }

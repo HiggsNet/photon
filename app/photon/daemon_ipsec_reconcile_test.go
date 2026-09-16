@@ -189,8 +189,8 @@ func TestPublishIPsecObservationRefreshesLiveSACounters(t *testing.T) {
 	if !response.OK {
 		t.Fatalf("links_view response = %#v", response)
 	}
-	if response.View.Inspection.Summary.LastRunUnix != 160 {
-		t.Fatalf("links_view last run = %d, want 160", response.View.Inspection.Summary.LastRunUnix)
+	if response.View.Inspection.LastRunUnix != 160 {
+		t.Fatalf("links_view last run = %d, want 160", response.View.Inspection.LastRunUnix)
 	}
 	links := response.View.Inspection.Links
 	if len(links) != 1 || links[0].ActualSA == nil {
@@ -239,8 +239,8 @@ func TestRecordIPsecReconcileErrorRefreshesRepeatedObservation(t *testing.T) {
 		t.Fatalf("ipsec failure = %+v", observation)
 	}
 	inspection := buildStoredLinkInspection(service.App, nil, observation, nil, nil)
-	if inspection.Inspection.Summary.LastFailure == nil || inspection.Inspection.Summary.LastFailure.Code != inspect.FailureCodeIPsecReconcile || inspection.Inspection.Summary.LastFailure.Message != "vici timeout" {
-		t.Fatalf("inspect failure = %+v", inspection.Inspection.Summary.LastFailure)
+	if inspection.Inspection.LastFailure == nil || inspection.Inspection.LastFailure.Code != inspect.FailureCodeIPsecReconcile || inspection.Inspection.LastFailure.Message != "vici timeout" {
+		t.Fatalf("inspect failure = %+v", inspection.Inspection.LastFailure)
 	}
 }
 

@@ -139,9 +139,9 @@ func BuildStatus(input StatusInput) StatusView {
 
 	linkStates := make(map[string]int)
 	healthStates := make(map[string]int)
-	view.Links.Desired = input.Links.Summary.DesiredLinks
-	view.Links.Total = input.Links.Summary.LinkInstances
-	view.Links.LastFailure = input.Links.Summary.LastFailure
+	view.Links.Desired = input.Links.DesiredLinks
+	view.Links.Total = input.Links.LinkInstances
+	view.Links.LastFailure = input.Links.LastFailure
 	for _, link := range input.Links.Links {
 		state := statusName(link.State)
 		linkStates[state]++

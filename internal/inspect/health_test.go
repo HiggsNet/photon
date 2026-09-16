@@ -1,62 +1,143 @@
 package inspect
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/HiggsNet/photon/pkg/health"
 )
 
-func TestBuildHealthViewSortsTargets(t *testing.T) {
-	view := BuildHealthView(HealthView{
+func TestBuildHealthViewSortsLinks(t *testing.T) {
+	view := SortHealthView(BuildHealthView(HealthInput{
 		Targets: []health.ProbeTarget{
 			{InstanceID: "b", ProbeRole: "staged", ProbeID: "b-staged"},
 			{InstanceID: "a", ProbeRole: "active", ProbeID: "a-active"},
 			{InstanceID: "b", ProbeRole: "active", ProbeID: "b-active"},
 		},
-	}, HealthSortPeer)
+	}), HealthSortPeer)
 
-	if got := view.Targets; len(got) != 3 ||
-		got[0].ProbeID != "a-active" ||
-		got[1].ProbeID != "b-active" ||
-		got[2].ProbeID != "b-staged" {
-		t.Fatalf("targets = %+v, want sorted by instance and role", got)
+	if got := view.Links; len(got) != 3 ||
+		got[0].Health.ProbeID != "a-active" ||
+		got[1].Health.ProbeID != "b-active" ||
+		got[2].Health.ProbeID != "b-staged" {
+		t.Fatalf("links = %+v, want sorted by instance and role", got)
 	}
 }
 
-func TestBuildHealthViewSortsByPeerOrRTT(t *testing.T) {
-	view := HealthView{
+func TestSortHealthViewByPeerOrRTT(t *testing.T) {
+	view := BuildHealthView(HealthInput{
 		Targets: []health.ProbeTarget{
 			{ProbeID: "slow", InstanceID: "link-a", PeerZone: "node-a."},
 			{ProbeID: "missing", InstanceID: "link-c", PeerZone: "node-c."},
 			{ProbeID: "fast", InstanceID: "link-b", PeerZone: "node-b."},
 		},
 		Samples: []HealthSample{
-			{ProbeID: "slow", EWMARTTMs: 80},
-			{ProbeID: "fast", EWMARTTMs: 10},
+			{ProbeID: "slow", InstanceID: "link-a", EWMARTTMs: 80},
+			{ProbeID: "fast", InstanceID: "link-b", EWMARTTMs: 10},
 		},
-	}
+	})
 
-	byPeer := BuildHealthView(view, HealthSortPeer)
-	if byPeer.Targets[0].ProbeID != "missing" || byPeer.Targets[1].ProbeID != "fast" || byPeer.Targets[2].ProbeID != "slow" {
-		t.Fatalf("peer sort = %+v", byPeer.Targets)
+	byPeer := SortHealthView(view, HealthSortPeer)
+	if byPeer.Links[0].Health.ProbeID != "missing" || byPeer.Links[1].Health.ProbeID != "fast" || byPeer.Links[2].Health.ProbeID != "slow" {
+		t.Fatalf("peer sort = %+v", byPeer.Links)
 	}
-	byRTT := BuildHealthView(view, HealthSortRTT)
-	if byRTT.Targets[0].ProbeID != "fast" || byRTT.Targets[1].ProbeID != "slow" || byRTT.Targets[2].ProbeID != "missing" {
-		t.Fatalf("rtt sort = %+v", byRTT.Targets)
+	byRTT := SortHealthView(view, HealthSortRTT)
+	if byRTT.Links[0].Health.ProbeID != "fast" || byRTT.Links[1].Health.ProbeID != "slow" || byRTT.Links[2].Health.ProbeID != "missing" {
+		t.Fatalf("rtt sort = %+v", byRTT.Links)
 	}
 }
 
-func TestBuildHealthViewPeerSortMatchesLinksZoneOrdering(t *testing.T) {
-	view := BuildHealthView(HealthView{Targets: []health.ProbeTarget{
+func TestSortHealthViewPeerMatchesLinksZoneOrdering(t *testing.T) {
+	view := SortHealthView(BuildHealthView(HealthInput{Targets: []health.ProbeTarget{
 		{ProbeID: "child", InstanceID: "c", PeerZone: "node-a.example."},
 		{ProbeID: "parent", InstanceID: "p", PeerZone: "example."},
 		{ProbeID: "last", InstanceID: "z", PeerZone: "node-z.example."},
-	}}, HealthSortPeer)
+	}}), HealthSortPeer)
 
 	want := []string{"last", "child", "parent"}
 	for i, probeID := range want {
-		if view.Targets[i].ProbeID != probeID {
-			t.Fatalf("targets[%d] = %q, want %q; targets=%+v", i, view.Targets[i].ProbeID, probeID, view.Targets)
+		if view.Links[i].Health.ProbeID != probeID {
+			t.Fatalf("links[%d] = %q, want %q; links=%+v", i, view.Links[i].Health.ProbeID, probeID, view.Links)
 		}
+	}
+}
+
+func TestBuildHealthViewMergesRuntimeContextAndMissingLinks(t *testing.T) {
+	got := BuildHealthView(HealthInput{
+		Samples: []HealthSample{{
+			InstanceID: "link-b", ProbeRole: "staged", InterfaceName: "health-if", State: "healthy",
+		}},
+		Instances: map[string]LinkInstance{
+			"link-a": {
+				ID: "link-a", PeerZone: "node-a.catofes.", GroupID: "blue",
+				InterfaceName: "phx-a", Endpoint: "198.51.100.10:4500", ActualState: "up",
+			},
+			"link-b": {
+				ID: "link-b", PeerZone: "node-b.catofes.", GroupID: "blue",
+				InterfaceName: "phx-b", Endpoint: "198.51.100.11:4500", ActualState: "up",
+			},
+		},
+		Desired: map[string]DesiredLink{
+			"link-a": {
+				InstanceID: "link-a", PeerZone: "node-a.catofes.", GroupID: "blue",
+				InterfaceName: "desired-a", LocalTunnelAddr: "fd00::1", PeerTunnelAddr: "fd00::2",
+			},
+			"link-b": {
+				InstanceID: "link-b", LocalTunnelAddr: "fd00::3", PeerTunnelAddr: "fd00::4",
+			},
+		},
+	})
+
+	if len(got.Links) != 2 {
+		t.Fatalf("links len = %d, want 2: %#v", len(got.Links), got.Links)
+	}
+	if got.Links[0].Health.InstanceID != "link-a" || got.Links[0].PeerZone != "node-a.catofes." || got.Links[0].InterfaceName != "phx-a" {
+		t.Fatalf("missing-link view = %#v", got.Links[0])
+	}
+	if got.Links[0].Health.State != "unknown" || got.Links[0].Observed {
+		t.Fatalf("missing-link health = %#v, want unobserved unknown", got.Links[0])
+	}
+	if got.Links[1].Health.InstanceID != "link-b" || got.Links[1].Health.ProbeRole != "staged" || !got.Links[1].Observed {
+		t.Fatalf("existing health sort keys = %#v", got.Links[1])
+	}
+	if got.Links[1].InterfaceName != "health-if" {
+		t.Fatalf("interface = %q, want health interface override", got.Links[1].InterfaceName)
+	}
+	if got.Links[1].LocalTunnelAddr != "fd00::3" || got.Links[1].PeerTunnelAddr != "fd00::4" {
+		t.Fatalf("desired tunnel context missing: %#v", got.Links[1])
+	}
+}
+
+func TestBuildHealthViewUsesCanonicalUnknownSample(t *testing.T) {
+	got := BuildHealthView(HealthInput{Instances: map[string]LinkInstance{
+		"link-a": {ID: "link-a"},
+	}})
+	if len(got.Links) != 1 {
+		t.Fatalf("links len = %d, want 1", len(got.Links))
+	}
+	if got.Links[0].Health.InstanceID != "link-a" || got.Links[0].Health.State != "unknown" {
+		t.Fatalf("health = %#v, want canonical unknown sample", got.Links[0].Health)
+	}
+}
+
+func TestHealthViewPreservesObserverSchemaWithoutRuntimeInstance(t *testing.T) {
+	got := HealthView{Links: []HealthLinkView{{
+		Health:   HealthSample{InstanceID: "link-1", State: "unknown"},
+		PeerZone: "node-b.catofes.", GroupID: "blue", InterfaceName: "phx0",
+	}}}
+	data, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	item := decoded["links"].([]any)[0].(map[string]any)
+	if item["peer_zone"] != "node-b.catofes." || item["health"] == nil {
+		t.Fatalf("health fields missing: %#v", item)
+	}
+	if _, ok := item["instance"]; ok {
+		t.Fatalf("raw runtime instance exposed: %#v", item)
 	}
 }

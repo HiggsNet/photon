@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
-	inspecthttp "github.com/HiggsNet/photon/internal/inspect/http"
 	"github.com/HiggsNet/photon/internal/observability/healthspool"
 	"github.com/HiggsNet/photon/internal/observer"
 	"github.com/HiggsNet/photon/pkg/core/observability"
@@ -34,6 +33,17 @@ type observerServer struct {
 
 type observerProvider struct {
 	daemon *Daemon
+}
+
+type observerHealthResponse struct {
+	Datasource map[string]any `json:"datasource"`
+	inspect.HealthView
+}
+
+type observerHealthSeriesResponse struct {
+	Datasource map[string]any           `json:"datasource"`
+	LinkID     string                   `json:"link_id"`
+	Series     healthspool.SeriesResult `json:"series"`
 }
 
 // newObserverServer creates a new read-only HTTP observer from the daemon
@@ -237,7 +247,7 @@ func (d *Daemon) peerObservabilitySnapshots() map[string]observability.PeerDiagn
 func (p *observerProvider) Links(linkFilter string) (any, error) {
 	d := p.daemon
 	if d == nil || d.State == nil {
-		return inspecthttp.LinksResponse{Instances: []inspecthttp.LinkJSON{}}, nil
+		return inspect.LinkInspection{Links: []inspect.LinkView{}}, nil
 	}
 	health := d.healthSamples()
 	observedLinks, reconcile := d.linuxObservation.ipsecSnapshot()
@@ -251,31 +261,12 @@ func (p *observerProvider) Links(linkFilter string) (any, error) {
 	if linkFilter != "" {
 		for _, link := range view.Links {
 			if link.ID == linkFilter {
-				return inspecthttp.LinkFromInspect(link), nil
+				return link, nil
 			}
 		}
 		return nil, observer.Errorf(http.StatusNotFound, "link not found")
 	}
-	return inspecthttp.LinksFromInspection(view), nil
-}
-
-func healthLinksWithContext(view inspect.HealthView, observedLinks map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary) []inspecthttp.HealthContextItem {
-	input := inspecthttp.HealthContextInput{
-		View:      view,
-		Instances: make(map[string]inspect.LinkInstance, len(observedLinks)),
-		Desired:   make(map[string]inspect.DesiredLink),
-	}
-	for id, inst := range observedLinks {
-		input.Instances[id] = inspect.BuildLinkInstanceFromRuntime(inst, inspect.LinkRouting{})
-	}
-	if reconcile != nil {
-		for _, desired := range reconcile.Desired {
-			if desired.InstanceID != "" {
-				input.Desired[desired.InstanceID] = desired
-			}
-		}
-	}
-	return inspecthttp.BuildHealthContext(input)
+	return view, nil
 }
 
 func (p *observerProvider) Health(linkFilter string) (any, error) {
@@ -288,19 +279,18 @@ func (p *observerProvider) Health(linkFilter string) (any, error) {
 		observedLinks, reconcile = d.linuxObservation.ipsecSnapshot()
 	}
 	view := healthViewFromOwners(common, observedLinks, reconcile, d.healthSamples())
-	contextualLinks := healthLinksWithContext(view, observedLinks, reconcile)
 	// Single link health detail
 	if linkFilter != "" {
-		for _, item := range contextualLinks {
+		for _, item := range view.Links {
 			if item.Health.InstanceID == linkFilter || item.Health.ProbeID == linkFilter {
 				return item, nil
 			}
 		}
 		return nil, observer.Errorf(http.StatusNotFound, "health data not found for link %s", linkFilter)
 	}
-	return inspecthttp.HealthResponse{
+	return observerHealthResponse{
 		Datasource: daemonHealthDatasource(d),
-		Links:      contextualLinks,
+		HealthView: view,
 	}, nil
 }
 
@@ -358,7 +348,7 @@ func (p *observerProvider) HealthSeries(linkID string, query map[string]string) 
 	if err != nil {
 		return nil, observer.APIError{StatusCode: http.StatusBadRequest, Err: err}
 	}
-	return inspecthttp.HealthSeriesResponse{
+	return observerHealthSeriesResponse{
 		Datasource: p.daemon.health.spool.Config().Datasource(),
 		LinkID:     linkID,
 		Series:     result,

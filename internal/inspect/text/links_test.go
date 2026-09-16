@@ -10,12 +10,10 @@ import (
 func TestWriteLinksDebugFiltersAndPrintsRuntimeFields(t *testing.T) {
 	view := inspect.LinksDebugView{
 		Inspection: inspect.LinkInspection{
-			Summary: inspect.LinkSummary{
-				LastRunUnix:   1700000000,
-				DesiredLinks:  1,
-				ActualSAs:     1,
-				LinkInstances: 1,
-			},
+			LastRunUnix:   1700000000,
+			DesiredLinks:  1,
+			ActualSAs:     1,
+			LinkInstances: 1,
 			Links: []inspect.LinkView{{
 				ID:              "link-1",
 				PeerZone:        "node-b.catofes.",
@@ -100,7 +98,8 @@ func TestWriteLinksDebugFiltersAndPrintsRuntimeFields(t *testing.T) {
 
 func TestWriteLinksUsesTransportSummaryAndVerboseTables(t *testing.T) {
 	inspection := inspect.LinkInspection{
-		Summary: inspect.LinkSummary{DesiredLinks: 2, ActualSAs: 1},
+		DesiredLinks: 2,
+		ActualSAs:    1,
 		Links: []inspect.LinkView{
 			{
 				ID: "link-a", PeerZone: "node-a.catofes.", GroupID: "mesh",
@@ -166,8 +165,8 @@ func TestWriteLinksDebugShowsActiveRuntimeTunnel(t *testing.T) {
 
 	if err := WriteLinksDebug(&out, inspect.LinksDebugView{
 		Inspection: inspect.LinkInspection{
-			Summary: inspect.LinkSummary{LinkInstances: 1},
-			Links:   []inspect.LinkView{link},
+			LinkInstances: 1,
+			Links:         []inspect.LinkView{link},
 		},
 	}); err != nil {
 		t.Fatalf("WriteLinksDebug: %v", err)

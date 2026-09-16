@@ -129,18 +129,19 @@ Daemon
   - [x] IPsec desired/SA/action/skip 只在 reconcile 边界做一次脱敏并保存为 canonical `*Observation`；inspect 直接 alias，删除第二套同字段 struct、逐字段 builder、app 批量 converter 与重复 SA copier，同时以测试锁定私钥/spec 指针不得进入 observation。
   - [x] health view 与 daemon 内的 `debug ping` 执行链直接共用安全的 `health.ProbeTarget`；删除 `inspect.HealthTarget`、正向 builder 和 CLI 反向地址 parser，JSON 保持 snake_case schema，零地址不再序列化为 Go 的 `invalid IP` 哨兵字符串。
   - [x] record/IPAM/route/service 在 control 或 direct 边界直接生成 `corestate.LocalIntent`；Daemon 单 writer 队列只保留一个 `common_mutation` 事件及 `dryRun`，删除四套事件 payload、`daemonRecordPut` 以及 app 侧重复的 reserved-record 校验表，路由立即刷新由 intent 类型判定。
-  - [x] 删除 `internal/inspect/http` 中 routes/peers/status/zones/BIRD 的纯 type alias 或薄 response 壳；Observer 直接使用 canonical `internal/inspect` DTO，HTTP 目录只保留确有独立 wire shape 的 links/health。
-  - [x] Health HTTP context 直接接收已脱敏的 canonical `inspect.DesiredLink`；删除 `HealthDesiredContextInput` 与 app 逐字段 converter，并把 response 中的 `Desired`/`PeerZone` 从 `any` 收紧为明确类型。
-  - [x] Health HTTP response 删除前端无人消费的原始 `ipsec.LinkInstance`；只保留页面实际使用的实例上下文字段，避免连同 owner token、内部错误和状态机字段一起暴露。
-  - [x] Links HTTP response 删除重复的 `raw LinkView` 与无人消费的 owner 对象；canonical inspect 只保留 CLI 实际展示的 owner manager，不再投影 owner token 等运行时校验字段。
+  - [x] 删除 `internal/inspect/http` 中 routes/peers/status/zones/BIRD 的纯 type alias 或薄 response 壳；Observer 直接使用 canonical `internal/inspect` DTO，随后继续收口 links/health。
+  - [x] Health canonical context 直接接收已脱敏的 `inspect.DesiredLink`；删除 `HealthDesiredContextInput` 与 app 逐字段 converter，并把 `Desired`/`PeerZone` 从 `any` 收紧为明确类型。
+  - [x] Health canonical response 删除前端无人消费的原始 `ipsec.LinkInstance`；只保留页面和 CLI 使用的实例上下文字段，避免连同 owner token、内部错误和状态机字段一起暴露。
+  - [x] Links 查询模型删除重复的 `raw LinkView` 与无人消费的 owner 对象；canonical inspect 只保留 CLI 实际展示的 owner manager，不再投影 owner token 等运行时校验字段。
   - [x] Health HTTP schema 删除剩余无约束 `any`；BIRD HTTP 直接复用 `inspect.BabelDebugView` 并删除 `BirdResponse`，runtime resource owner/token 不再进入响应。
-  - [x] 删除 Observer 中仅转发一次的 `observerRuntime`、`desiredByInstanceID` 和 `inspectHealthInstances`；Health 唯一 join 点直接建立短生命周期索引。
-  - [x] Observer 页面删除旧 `last_error` 字段读取和 Health 裸 sample/嵌套 sample 双形态 fallback，统一消费 canonical `last_failure {code,message}` 与 `HealthContextItem.health`。
-  - [x] Health runtime context 直接复用 secret-free `inspect.LinkInstance`；删除第二套 `HealthInstanceContextInput` 及其六字段投影。
+  - [x] 删除 Observer 中仅转发一次的 `observerRuntime`、`desiredByInstanceID` 和 `inspectHealthInstances`；Health 唯一 join 点最终归入 `internal/inspect` 并直接建立短生命周期索引。
+  - [x] Observer 页面删除旧 `last_error` 字段读取和 Health 裸 sample/嵌套 sample 双形态 fallback，统一消费 canonical `last_failure {code,message}` 与 `HealthLinkView.health`。
+  - [x] Health canonical context 直接复用 secret-free `inspect.LinkInstance`；删除第二套 `HealthInstanceContextInput` 及其六字段投影。
   - [x] `debug ping` 的目标选择与探测执行移入 daemon，control 直接返回 canonical `inspect.PingDebugView`；删除 CLI 对 Linux health prober 的直接调用和中间 `ping_targets` 查询，并保留长探测的 context 取消语义。
-  - [x] routes/peers/status/zones 的 canonical JSON schema 测试迁回 `internal/inspect`；`internal/inspect/http` 只保留仍有独立 HTTP wire shape 的 links/health 代码与测试。
+  - [x] routes/peers/status/zones 的 canonical JSON schema 测试迁回 `internal/inspect`。
+  - [x] 将 Links 顶层 summary 直接展开到 canonical `LinkInspection` 并补齐稳定 JSON tags；Health 在 `internal/inspect.BuildHealthView` 一次合并 target/sample/instance/desired，control、文本与 Observer 共用最终 `HealthView`。HTTP 只在 Observer 边界保留 datasource/series envelope，`internal/inspect/http` 已整组删除。
   - [x] `debug routing ip route` 改为 daemon-only 在线查询：CLI 只传 netns/family 并渲染单层 `inspect.KernelRouteDump`；netns 解析及 `ip`/`nsenter` 执行下沉 `internal/photonlinux`，删除 CLI 直连 Linux 命令和本地 runner。
-- [x] CLI/control 共用 canonical inspect DTO，HTTP 只保留 links/health 的真实 wire shape；在线 CLI 不从 HTTP DTO 反向转换，也不直接调用平台 Driver。显式 offline recovery/direct 仍按其职责临时创建 Driver。
+- [x] CLI/control/HTTP 共用 canonical inspect DTO；在线 CLI 不从 HTTP DTO 反向转换，也不直接调用平台 Driver。显式 offline recovery/direct 仍按其职责临时创建 Driver。
 - [x] verified/common 允许离线读；GossipCheckpoint 离线统一标记 `last-known`；platform Observation 只允许在线读，不从 bbolt 或 CLI Driver 冒充实时状态。
 - [ ] CLI 壳稳定后再迁入 `internal/photoncli`，不为了减少 `app/photon` 文件数先搬目录。
 - [ ] 每一批迁移更新 runtime migration report，并执行相关单测、race（适用时）、Windows cross build、`make check` 和 `git diff --check`。

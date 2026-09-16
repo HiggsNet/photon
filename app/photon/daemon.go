@@ -18,7 +18,6 @@ import (
 	"github.com/HiggsNet/photon/internal/observability/healthspool"
 	"github.com/HiggsNet/photon/internal/observer"
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
-	"github.com/HiggsNet/photon/internal/photonlinux/linkstate"
 	pingdebug "github.com/HiggsNet/photon/internal/ping"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
@@ -776,7 +775,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		links, reconcile := d.linuxObservation.ipsecSnapshot()
-		targets := linkstate.HealthTargets(buildLinkOutputs(links, reconcile), string(common.State.ManagedZone))
+		targets := healthTargets(buildLinkOutputs(links, reconcile), string(common.State.ManagedZone))
 		opts := pingdebug.Options{}
 		if request.Ping != nil {
 			opts = *request.Ping

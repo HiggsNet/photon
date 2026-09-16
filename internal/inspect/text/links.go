@@ -16,12 +16,12 @@ func WriteLinks(w io.Writer, inspection inspect.LinkInspection, filter string, v
 	out := newLineWriter(table)
 	out.Linef("links: %s", filteredCount(len(links), len(inspection.Links), filter))
 	out.Linef("desired: %d  actual_sas: %d  actions: %d  skipped: %d",
-		inspection.Summary.DesiredLinks,
-		inspection.Summary.ActualSAs,
+		inspection.DesiredLinks,
+		inspection.ActualSAs,
 		len(inspect.FilterLinkActions(inspection.Actions, filter)),
 		len(inspect.FilterLinkSkips(inspection.Skipped, filter)),
 	)
-	if failure := inspection.Summary.LastFailure; failure != nil {
+	if failure := inspection.LastFailure; failure != nil {
 		out.Linef("last_failure: %s", escapeTableCell(failureDisplay(failure)))
 	}
 	rows := make([][]string, 0, len(links)+1)
@@ -109,15 +109,15 @@ func WriteLinksDebug(w io.Writer, view inspect.LinksDebugView) error {
 	inspection.Links = inspect.FilterLinkViews(inspection.Links, view.Filter)
 	inspection.Actions = inspect.FilterLinkActions(inspection.Actions, view.Filter)
 	inspection.Skipped = inspect.FilterLinkSkips(inspection.Skipped, view.Filter)
-	out.LineIf(inspection.Summary.DesiredPlanError != "", "desired_plan_error: %s", inspection.Summary.DesiredPlanError)
-	out.Linef("last_run: %s", formatUnixTime(inspection.Summary.LastRunUnix))
-	out.Linef("desired_links: %d", inspection.Summary.DesiredLinks)
+	out.LineIf(inspection.DesiredPlanError != "", "desired_plan_error: %s", inspection.DesiredPlanError)
+	out.Linef("last_run: %s", formatUnixTime(inspection.LastRunUnix))
+	out.Linef("desired_links: %d", inspection.DesiredLinks)
 	out.Linef("planned_desired_links: %d", view.ReplannedDesired)
 	out.LineIf(view.ReplanIgnored, "planned_desired_status: ignored_partial last_reconcile_desired=%d", view.LastDesiredLinks)
 	out.Linef("desired_source: %s", dash(view.DesiredPlanSource))
-	out.Linef("actual_sas: %d", inspection.Summary.ActualSAs)
-	out.Linef("last_failure: %s", failureDisplay(inspection.Summary.LastFailure))
-	out.Linef("link_instances: %d", inspection.Summary.LinkInstances)
+	out.Linef("actual_sas: %d", inspection.ActualSAs)
+	out.Linef("last_failure: %s", failureDisplay(inspection.LastFailure))
+	out.Linef("link_instances: %d", inspection.LinkInstances)
 	if strings.TrimSpace(view.Filter) != "" {
 		out.Linef("filter: %s", view.Filter)
 		out.Linef("matched_links: %d", len(inspection.Links))

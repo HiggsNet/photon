@@ -4,7 +4,6 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/HiggsNet/photon/internal/photonlinux/linkstate"
 	pingdebug "github.com/HiggsNet/photon/internal/ping"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -38,7 +37,7 @@ func pingDebugTargets(t *testing.T) []health.ProbeTarget {
 			{InstanceID: "link-c", GroupID: "g", PeerZone: zone.ZonePath("node-c."), LocalTunnelAddr: "fd00::1", PeerTunnelAddr: "fd00::2"},
 		},
 	}
-	return linkstate.HealthTargets(buildLinkOutputs(links, reconcile), string(managedZone))
+	return healthTargets(buildLinkOutputs(links, reconcile), string(managedZone))
 }
 
 func TestPingDebugTargetsIncludeActiveOldAndStagedRoles(t *testing.T) {

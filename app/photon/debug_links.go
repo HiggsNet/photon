@@ -18,12 +18,12 @@ func debugLinks(filter string) error {
 		return err
 	} else if ok {
 		lastFailure := "-"
-		if failure := view.Inspection.Summary.LastFailure; failure != nil {
+		if failure := view.Inspection.LastFailure; failure != nil {
 			lastFailure = fmt.Sprintf("code=%s message=%s", failure.Code, failure.Message)
 		}
 		fmt.Printf("daemon: online link_instances=%d desired_links=%d last_link_failure=%s\n",
-			view.Inspection.Summary.LinkInstances,
-			view.Inspection.Summary.DesiredLinks,
+			view.Inspection.LinkInstances,
+			view.Inspection.DesiredLinks,
 			lastFailure,
 		)
 		view.Filter = filter

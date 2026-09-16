@@ -77,8 +77,8 @@ type RotateRuntimeView struct {
 func BuildRotateDebug(input RotateDebugInput) RotateDebugView {
 	links := FilterLinkViews(input.Inspection.Links, input.Filter)
 	view := RotateDebugView{
-		LastRunUnix:       input.Inspection.Summary.LastRunUnix,
-		LinkInstances:     input.Inspection.Summary.LinkInstances,
+		LastRunUnix:       input.Inspection.LastRunUnix,
+		LinkInstances:     input.Inspection.LinkInstances,
 		PlannedDesired:    input.ReplannedDesired,
 		ReplanIgnored:     input.ReplanIgnored,
 		LastDesiredLinks:  input.LastDesiredLinks,

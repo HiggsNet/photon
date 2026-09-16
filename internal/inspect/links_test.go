@@ -1,12 +1,51 @@
 package inspect
 
 import (
+	"encoding/json"
 	"errors"
 	"net/netip"
 	"testing"
 
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
+
+func TestLinkInspectionPreservesObserverSchema(t *testing.T) {
+	got := LinkInspection{
+		LastRunUnix:  123,
+		DesiredLinks: 1,
+		ActualSAs:    1,
+		LastFailure:  &FailureView{Code: FailureCodeIPsecReconcile, Message: "boom"},
+		Actions:      []LinkAction{{Action: "adopt", InstanceID: "link-1"}},
+		Skipped:      []LinkSkip{{GroupID: "blue", Reason: "missing_peer"}},
+		Links: []LinkView{{
+			ID: "link-1", PeerZone: "node-b.catofes.", GroupID: "blue",
+			IKEName: "ipsec-link-1-r13", State: "up", ActualState: "up",
+			InterfaceName: "phx0", XFRMIfID: 42, OwnerManager: "ipsec",
+			Routing: LinkRouting{BirdState: "running"},
+		}},
+	}
+	data, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded["last_run_unix"] != float64(123) || decoded["desired_links"] != float64(1) {
+		t.Fatalf("summary fields missing: %#v", decoded)
+	}
+	link := decoded["instances"].([]any)[0].(map[string]any)
+	if link["peer_zone"] != "node-b.catofes." || link["ike_name"] != "ipsec-link-1-r13" || link["xfrm_if_id"] != float64(42) {
+		t.Fatalf("link fields missing: %#v", link)
+	}
+	if link["owner_manager"] != "ipsec" {
+		t.Fatalf("safe owner manager missing: %#v", link)
+	}
+	if _, ok := link["owner"]; ok {
+		t.Fatalf("runtime owner exposed: %#v", link)
+	}
+}
 
 func TestBuildLinkInstanceFromRuntimeOmitsInvalidAddresses(t *testing.T) {
 	got := BuildLinkInstanceFromRuntime(ipsec.LinkInstance{}, LinkRouting{})
@@ -74,11 +113,11 @@ func TestBuildLinksPrefersPlannedDesiredOverLastSnapshot(t *testing.T) {
 		}},
 	})
 
-	if got.Summary.PlannedDesired != 1 || got.Summary.LinkInstances != 1 || got.Summary.ActualSAs != 1 {
-		t.Fatalf("summary = %+v", got.Summary)
+	if got.PlannedDesired != 1 || got.LinkInstances != 1 || got.ActualSAs != 1 {
+		t.Fatalf("inspection = %+v", got)
 	}
-	if got.Summary.LastFailure == nil || got.Summary.LastFailure.Code != FailureCodeIPsecReconcile || got.Summary.LastFailure.Message != "vici unavailable" {
-		t.Fatalf("summary failure = %+v", got.Summary)
+	if got.LastFailure == nil || got.LastFailure.Code != FailureCodeIPsecReconcile || got.LastFailure.Message != "vici unavailable" {
+		t.Fatalf("inspection failure = %+v", got.LastFailure)
 	}
 	if len(got.Links) != 1 {
 		t.Fatalf("links = %d, want 1", len(got.Links))
@@ -109,8 +148,8 @@ func TestBuildLinksShowsMissingPlannedLinksWhenNoInstancesExist(t *testing.T) {
 		}},
 	})
 
-	if !got.Summary.HasMissingPlanned {
-		t.Fatalf("summary = %+v, want missing planned marker", got.Summary)
+	if !got.HasMissingPlanned {
+		t.Fatalf("inspection = %+v, want missing planned marker", got)
 	}
 	if len(got.Links) != 1 {
 		t.Fatalf("links = %d, want 1", len(got.Links))

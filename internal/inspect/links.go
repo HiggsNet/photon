@@ -23,10 +23,18 @@ type LinkInput struct {
 }
 
 type LinkInspection struct {
-	Summary LinkSummary
-	Links   []LinkView
-	Actions []LinkAction
-	Skipped []LinkSkip
+	Links             []LinkView   `json:"instances"`
+	LastRunUnix       int64        `json:"last_run_unix,omitempty"`
+	DesiredLinks      int          `json:"desired_links,omitempty"`
+	PlannedDesired    int          `json:"planned_desired,omitempty"`
+	ActualSAs         int          `json:"actual_sas,omitempty"`
+	LinkInstances     int          `json:"link_instances,omitempty"`
+	LastFailure       *FailureView `json:"last_failure,omitempty"`
+	DesiredPlanError  string       `json:"desired_plan_error,omitempty"`
+	HasPlannedDesired bool         `json:"has_planned_desired,omitempty"`
+	HasMissingPlanned bool         `json:"has_missing_planned,omitempty"`
+	Actions           []LinkAction `json:"actions,omitempty"`
+	Skipped           []LinkSkip   `json:"skipped,omitempty"`
 }
 
 type LinksDebugView struct {
@@ -41,48 +49,36 @@ type LinksDebugView struct {
 	Filter            string
 }
 
-type LinkSummary struct {
-	LastRunUnix       int64
-	DesiredLinks      int
-	PlannedDesired    int
-	ActualSAs         int
-	LinkInstances     int
-	LastFailure       *FailureView
-	DesiredPlanError  string
-	HasPlannedDesired bool
-	HasMissingPlanned bool
-}
-
 type LinkView struct {
-	ID              string
-	PeerZone        string
-	GroupID         string
-	TransportKind   string
-	LinkID          string
-	PathKey         string
-	TransportID     string
-	IKEName         string
-	State           string
-	ActualState     string
-	Endpoint        string
-	InterfaceName   string
-	XFRMIfID        uint32
-	LocalTunnelAddr string
-	PeerTunnelAddr  string
-	ChildSAName     string
-	DesiredSpecHash string
-	Desired         *DesiredLink
-	ActualSA        *LinkSA
-	Health          *HealthSample
-	Routing         LinkRouting
-	Rotation        LinkRotation
-	Takeover        LinkTakeover
-	OwnerManager    string
-	FailureCount    int
-	BackoffUntil    int64
-	LastTransition  int64
-	LastFailure     *FailureView
-	Missing         bool
+	ID              string        `json:"id"`
+	PeerZone        string        `json:"peer_zone"`
+	GroupID         string        `json:"group_id,omitempty"`
+	TransportKind   string        `json:"transport_kind,omitempty"`
+	LinkID          string        `json:"link_id,omitempty"`
+	PathKey         string        `json:"path_key,omitempty"`
+	TransportID     string        `json:"transport_id,omitempty"`
+	IKEName         string        `json:"ike_name,omitempty"`
+	State           string        `json:"state,omitempty"`
+	ActualState     string        `json:"actual_state,omitempty"`
+	Endpoint        string        `json:"endpoint,omitempty"`
+	InterfaceName   string        `json:"interface_name,omitempty"`
+	XFRMIfID        uint32        `json:"xfrm_if_id,omitempty"`
+	LocalTunnelAddr string        `json:"local_tunnel_addr,omitempty"`
+	PeerTunnelAddr  string        `json:"peer_tunnel_addr,omitempty"`
+	ChildSAName     string        `json:"child_sa_name,omitempty"`
+	DesiredSpecHash string        `json:"desired_spec_hash,omitempty"`
+	Desired         *DesiredLink  `json:"desired,omitempty"`
+	ActualSA        *LinkSA       `json:"actual_sa,omitempty"`
+	Health          *HealthSample `json:"health,omitempty"`
+	Routing         LinkRouting   `json:"routing"`
+	Rotation        LinkRotation  `json:"rotation"`
+	Takeover        LinkTakeover  `json:"takeover"`
+	OwnerManager    string        `json:"owner_manager,omitempty"`
+	FailureCount    int           `json:"failure_count,omitempty"`
+	BackoffUntil    int64         `json:"backoff_until,omitempty"`
+	LastTransition  int64         `json:"last_transition,omitempty"`
+	LastFailure     *FailureView  `json:"last_failure,omitempty"`
+	Missing         bool          `json:"missing,omitempty"`
 }
 
 type LinkInstance struct {
@@ -361,19 +357,17 @@ func BuildLinks(input LinkInput) LinkInspection {
 	})
 
 	return LinkInspection{
-		Summary: LinkSummary{
-			LastRunUnix:       input.LastRunUnix,
-			DesiredLinks:      input.DesiredLinks,
-			PlannedDesired:    len(plannedDesired),
-			ActualSAs:         len(input.ActualSAs),
-			LinkInstances:     len(ids),
-			LastFailure:       BuildFailure(FailureCodeIPsecReconcile, input.LastFailure),
-			HasPlannedDesired: len(plannedDesired) > 0,
-			HasMissingPlanned: len(ids) == 0 && len(plannedDesired) > 0,
-		},
-		Links:   links,
-		Actions: append([]LinkAction(nil), input.Actions...),
-		Skipped: append([]LinkSkip(nil), input.Skipped...),
+		Links:             links,
+		LastRunUnix:       input.LastRunUnix,
+		DesiredLinks:      input.DesiredLinks,
+		PlannedDesired:    len(plannedDesired),
+		ActualSAs:         len(input.ActualSAs),
+		LinkInstances:     len(ids),
+		LastFailure:       BuildFailure(FailureCodeIPsecReconcile, input.LastFailure),
+		HasPlannedDesired: len(plannedDesired) > 0,
+		HasMissingPlanned: len(ids) == 0 && len(plannedDesired) > 0,
+		Actions:           append([]LinkAction(nil), input.Actions...),
+		Skipped:           append([]LinkSkip(nil), input.Skipped...),
 	}
 }
 
