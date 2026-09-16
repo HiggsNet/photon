@@ -1105,3 +1105,7 @@
 - DB dump 递归读取嵌套 bucket，当前布局支持 zone 筛选，stats 统计叶子键，读取锁等待有界。删除 IPsec cleanup 转发和重复空值显示函数，诊断名称明确最近 reconcile 来源。
 - 本次检查时工作区生产 Go 代码共增加 213 行、删除 191 行（包含并行 ping 取消/Health 地址修正）；净增长来自 DB 新布局读取、锁等待及诊断生命周期处理，未增加通信包或 owner。新增回归覆盖无效配置、授权 Epoch/源状态隔离、DB 锁和当前布局；`make check`（含 Linux/Windows 构建）与 `git diff --check` 通过。
 - 用户可见行为见 [操作与兼容性说明](operator-compatibility.md)。
+
+## 2026-09-16 删除旧 DB 专用展示
+
+`debug_db.go` 删除 `_meta` / `zone:*` 分支及只服务旧布局的解码、排序和格式化函数；无筛选 dump 统一递归显示原始 bucket，zone 筛选只读当前 VerifiedState。启动迁移及 legacy DTO 保留。生产代码增加 11 行、删除 418 行，净减 407 行；未新增 owner 或包。现有 DB 当前布局/锁超时回归、迁移测试和 Linux/Windows 构建随 `make check` 通过，`git diff --check` 通过。

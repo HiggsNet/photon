@@ -103,7 +103,7 @@ Daemon
 - [x] 内存错误使用 `error`/typed failure，展示时映射稳定 code/message；没有证明价值时不持久化 LastError。
   - [x] IPsec、routing 与 firewall 顶层 reconcile summary 使用 process-local `error`；canonical inspect、control 与 HTTP 只投影一个含稳定 code/message 的 `FailureView`，删除并行的顶层 `LastError` 字符串，不把 failure 写入 LinuxState。
   - [x] 收敛 IPsec link/takeover、BIRD instance 与 firewall instance 的状态机错误；删除 provider-neutral `LinkOutput.LastError`，保留独立 backoff/deadline/failure count 字段，不用 message 驱动行为。
-  - [x] health probe 与 object-pull 在线 diagnostics 保留 process-local `error`，canonical health/ping/peer/sync inspect 统一投影 `FailureView`；持久化 `PeerFailure` 直接携带协议 code/message/time，不再绕经 legacy `LastError`。Contact quality 中生产从未赋值的错误字符串字段已直接删除，排序只使用计数/backoff；legacy decoder 的 `LastError` 只在单向迁移和旧库 dump 中读取。
+  - [x] health probe 与 object-pull 在线 diagnostics 保留 process-local `error`，canonical health/ping/peer/sync inspect 统一投影 `FailureView`；持久化 `PeerFailure` 直接携带协议 code/message/time，不再绕经 legacy `LastError`。Contact quality 中生产从未赋值的错误字符串字段已直接删除，排序只使用计数/backoff；legacy decoder 的 `LastError` 只在单向迁移中读取。
   - [x] BIRD process exit 改存 `error`，service/BIRD dump/revocation inspect 改用现有 `FailureView`；删除无人消费且重复返回错误的 `FirewallApplyResult.Errors`。剩余 `Error string` 仅限 gossip wire/log event 与 control/HTTP response 等显式序列化边界。
 
 ### A4. 删除 DaemonStateStore
@@ -117,7 +117,7 @@ Daemon
 - [x] 将 protocol publish 与 Endpoint ACL 的真实 platform completion 串回 State；verified revision 与同一 bbolt 事务拒绝 stale completion，私有 transport key 在引用它的公共 record 发布前持久化。
 - [x] 删除 `daemon_state_store.go` 和仅测试迁移 coordinator 的 fixture。
 - [x] 删除 app 内 `linuxRuntimeState` alias，生产调用直接使用 `photonlinux.LinuxState`；不得再引入第二个 LinuxState DTO。
-- [x] 旧 `stateFile/stateMeta` 只留启动单向 migration decoder 和 legacy DB dump；停止支持该 schema 时整组删除，不形成在线兼容层。
+- [x] 旧 `stateFile/stateMeta` 只留启动单向 migration decoder；legacy DB 专用 dump 已删除；停止支持该 schema 时整组删除，不形成在线兼容层。
 
 ### A5. app/photon 与查询边界继续清理
 
@@ -150,7 +150,7 @@ Daemon
   - [x] `debug routing ip route` 改为 daemon-only 在线查询：CLI 只传 netns/family 并渲染单层 `inspect.KernelRouteDump`；netns 解析及 `ip`/`nsenter` 执行下沉 `internal/photonlinux`，删除 CLI 直连 Linux 命令和本地 runner。
 - [x] CLI/control/HTTP 共用 canonical inspect DTO；在线 CLI 不从 HTTP DTO 反向转换，也不直接调用平台 Driver。显式 offline recovery/direct 仍按其职责临时创建 Driver。
 - [x] verified/common 允许离线读；GossipCheckpoint 离线统一标记 `last-known`；platform Observation 只允许在线读，不从 bbolt 或 CLI Driver 冒充实时状态。
-- [ ] 冻结旧 aggregate schema 的直接升级截止版本；兼容期只保留单向 migration/legacy dump，到期同批删除 `legacy_state.go`、两组 migration、legacy peer DTO、legacy dump 和对应 fixtures/tests。
+- [ ] 冻结旧 aggregate schema 的直接升级截止版本；兼容期只保留单向 migration，到期同批删除 `legacy_state.go`、两组 migration、legacy peer DTO 和对应 fixtures/tests。
 - [ ] CLI 壳稳定后再迁入 `internal/photoncli`，不为了减少 `app/photon` 文件数先搬目录。
 
 本节每批迁移的完成条件继续遵守前述护栏：同步更新 runtime migration report，记录删除的旧 owner/入口和生产代码增删，执行相关单测、race（适用时）、Windows cross build、`make check` 与 `git diff --check`。这是持续验收规则，不作为一次性 checkbox。

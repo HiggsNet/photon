@@ -132,7 +132,7 @@ operations           当前为空；rotation/takeover 从真实系统 Observatio
 
 | 文件 | 当前作用 | 最终位置 / 层 |
 |---|---|---|
-| `debug_db.go` | 离线 dump 公共、旧和 Linux state bucket | 公共 dump 进 `internal/stateinspect`；Linux dump 进 `internal/photonlinux/inspect`；CLI 进 photoncli |
+| `debug_db.go` | 离线递归 dump 原始 bucket；zone 筛选只读取当前 VerifiedState | 公共 dump 进 `internal/stateinspect`；Linux dump 进 `internal/photonlinux/inspect`；CLI 进 photoncli |
 | `debug_cmd.go` | debug 命令注册 | app 或 `internal/photoncli`，只注册命令 |
 | `debug_endpoints.go` | signed endpoint 展示 | 采集只在协议发布路径执行；inspect 直接从 verified `sync/endpoint/*` record 投影实际发布结果，查询和离线读取均不重新探测；CLI wrapper 后续进 photoncli |
 | `debug_firewall.go` | firewall 实时诊断 | observe 进 Linux firewall；view 进 inspect；CLI 进 photoncli |
@@ -205,7 +205,7 @@ operations           当前为空；rotation/takeover 从真实系统 Observatio
 | `service.go` | SOCKS5 CLI、旧 direct record mutation | intent 留 state/service；CLI 进 photoncli；展示进 inspect；旧 apply 删除 |
 | `share.go` | base64 JSON 和文件 I/O | `internal/photoncli/encoding`；不是 state codec |
 | `state.go` / `state_bolt.go` | 当前 State owner 与启动持久化边界 | State 持有唯一 DB、Common 与 LinuxState；启动恢复直接构造完整 State，不向调用方暴露裸分区再二次组装 |
-| `context.go` / `legacy_state.go` | 当前应用上下文与旧 schema DTO | `AppContext` 只承载 config/state-path/clock/control 选择；`stateFile/stateMeta` 只供单向旧库迁移和 legacy db dump |
+| `context.go` / `legacy_state.go` | 当前应用上下文与旧 schema DTO | `AppContext` 只承载 config/state-path/clock/control 选择；`stateFile/stateMeta` 只供单向旧库迁移 |
 | `state_clone.go` | 已删除 | 各 Linux DTO clone 统一归 `internal/state`，供 app planner 与 `photonlinux.LinuxState` 共用；不在迁移后保留两套深拷贝实现 |
 | `state_gc.go` | 已删除 | 原功能只删持久化 BIRD 诊断表，不管理进程或内核资源；`BirdInstances` 转为在线 observation 后不再有 GC 目标 |
 | `status.go` | status CLI | inspect read model + photoncli |
@@ -240,8 +240,7 @@ process/client、upstream veth/route、kernel route 查询和 Linux health probe
 spec/policy builder 和安全 projection，同时让 app 继续负责 owner 读取、revision guard、Driver 调用、Observation
 发布和 shutdown 顺序。
 
-旧数据库只剩 `gossip_checkpoint_migration.go`、`runtime_state_migration.go`、`legacy_state.go`、legacy peer DTO
-及 `debug_db.go` 的 legacy dump。它们不属于 current 在线模型，但尚未绑定直接升级截止版本，不能无限期作为
+旧数据库只剩 `gossip_checkpoint_migration.go`、`runtime_state_migration.go`、`legacy_state.go`、legacy peer DTO。`debug_db.go` 的 legacy 专用 dump 已删除，通用原始 bucket 读取不解码旧模型。它们不属于 current 在线模型，但尚未绑定直接升级截止版本，不能无限期作为
 “备用 loader”保留。
 
 本轮同时确认仍有测试专用入口留在生产文件：`Daemon.EnableEventLoopSync` 与 `Daemon.processPacketEvent` 没有生产
@@ -305,9 +304,9 @@ test-only production helper。
    IPsec crash/restart 已补真实双代观察恢复：当 verified current/previous 对应的 connection/SA/XFRM 同时存活时，启动重建 previous active + current staged，重新开始有界 retention；若 current 只有 loaded connection 则重新开始 prepare deadline。这样旧代仍由 rotation owner 明确收口，不因直接 adopt current 而变成失联资源。current-only、previous-only、loaded-no-SA 与空 runtime create 保持独立回归覆盖；current 已建立但 previous cleanup 未完成时会重新进入正常 `commit_rotate` teardown。secondary takeover 只从 SA initiator 事实恢复，并从启动时建立 fresh lease，不恢复旧 backoff/deadline。撤销或配置删除后，空 Observation 不足以证明完整资源 owner，启动不会按名称猜测并自动删除；显式 orphan cleanup 只终止/卸载未引用的 Photon connection，保留外部 connection，且不删除缺少完整 ownership proof 的 XFRM interface。
    IPsec、routing 与 firewall 的顶层 reconcile 错误不再在 Observation 内提前压成 `LastError string`，而是直接保存 process-local `error`；canonical inspect/control/HTTP 边界只投影一个 `FailureView{code,message}`，删除并行的顶层 error/code 字段。稳定 code 为 `ipsec_reconcile_failed`、`routing_reconcile_failed`、`firewall_reconcile_failed`；failure 仍随进程丢失，不进入 LinuxState。
    实例级 IPsec link/takeover、BIRD 与 firewall observation 也已改为 process-local `error`，展示时分别映射 `ipsec_link_failed`、`ipsec_takeover_failed`、`bird_instance_failed`、`firewall_instance_failed`。状态机仍只依赖 failure count、backoff、deadline、phase 等结构化字段；provider-neutral `LinkOutput` 中无人消费的 `LastError` 已删除。BIRD 即时查询失败单独映射为 `bird_query_failed`，不回写 instance observation。
-   health probe result/manager/snapshot 与 gossip object-pull diagnostics 同样只在进程内保留 `error`，到 health/ping/peer/sync inspect 边界分别映射 `health_probe_failed`、`gossip_object_pull_failed`。持久化 GossipCheckpoint 继续使用已有 `PeerFailure{code,message,at_unix}`，展示直接投影，不再转换成 legacy peer `LastError`；contact quality 从未有生产错误文本来源，对应两个字符串字段和 rank reason 拼接已删除，只保留 successes/failures/backoff。legacy peer `LastError` 仅供旧 schema 单向迁移和 dump。
+   health probe result/manager/snapshot 与 gossip object-pull diagnostics 同样只在进程内保留 `error`，到 health/ping/peer/sync inspect 边界分别映射 `health_probe_failed`、`gossip_object_pull_failed`。持久化 GossipCheckpoint 继续使用已有 `PeerFailure{code,message,at_unix}`，展示直接投影，不再转换成 legacy peer `LastError`；contact quality 从未有生产错误文本来源，对应两个字符串字段和 rank reason 拼接已删除，只保留 successes/failures/backoff。legacy peer `LastError` 仅供旧 schema 单向迁移。
    最后一轮删除了重复承载返回错误的 `FirewallApplyResult.Errors`，BIRD process exit 保留原始 `error`；service record、BIRD dump/filter 与 revocation cleanup 展示复用 `FailureView`。仍为 string 的 error 只存在于 gossip wire/log event、control response 和 Observer HTTP response 等明确序列化边界。
-   `stateFile/stateMeta` 的生产引用已只剩启动时的单向旧 schema migration 和显式 legacy DB dump；current peer inspect 也不再把 `PeerCheckpoint` 反向转换成 legacy `PeerRuntimeState`，debug/HTTP view 直接读取 checkpoint。
+   `stateFile/stateMeta` 的生产引用已只剩启动时的单向旧 schema migration ；current peer inspect 也不再把 `PeerCheckpoint` 反向转换成 legacy `PeerRuntimeState`，debug/HTTP view 直接读取 checkpoint。
 4. 聚合 `stateFile`：在线和普通测试迁移已经完成；fresh join 已退出聚合写入；在线 IPsec cleanup、revoked purge、Endpoint ACL、
    reconcile completion 以及 Firewall/IPsec 主 planner 已直接读取 common/Linux 两个 owner，不再构造完整 Snapshot。
    本机 endpoint/IPsec/routing protocol publish 也已直接使用两个 owner，routing 主 reconcile planner 同样完成切换。
@@ -336,7 +335,7 @@ test-only production helper。
    Observer 页面残留的 `last_error` 读取与 Health 裸 sample/嵌套 sample fallback 也已删除；status、peer、health、takeover 与 routing 错误统一消费 canonical `last_failure {code,message}`，Health 统一读取 `HealthLinkView.health`，不再依赖兼容字段。
    Health runtime context 也已直接复用 secret-free `inspect.LinkInstance`，不再维护 `HealthInstanceContextInput` 与另一份六字段逐项投影。
    `debug rotate --direct` 已改用正式 typed intent/runtime commit。production 已无 aggregate `Snapshot()`、clone、loader 或 writer；
-   `stateFile/stateMeta` 只承担旧 schema 单向读取和 legacy db dump，明确随旧数据库支持周期删除。Daemon 不再缓存第二份
+   `stateFile/stateMeta` 只承担旧 schema 单向读取，明确随旧数据库支持周期删除。Daemon 不再缓存第二份
    common revision 或不完整的 `SnapshotTime`，status revision 直接来自 common Store。
 5. CLI/展示：尚未系统迁移；只在 owner 拆分时同步迁走实现级代码和测试，不先做目录搬家。
 
@@ -350,7 +349,7 @@ test-only production helper。
 3. routing/BIRD：下沉 netns/BIRD/upstream 配置与纯 spec/export/announce policy，复用既有 LinuxDriver 执行；
 4. IPsec：下沉 protocol record 纯构造、reconcile 纯 helper 与安全 live projection，保留私钥先落盘和 rotation/apply
    的 Daemon 顺序；
-5. 冻结 legacy schema 的直接升级截止版本，到期同批删除 decoder、legacy dump、DTO 与 fixtures；
+5. 冻结 legacy schema 的直接升级截止版本，到期同批删除 decoder、DTO 与 fixtures；
 6. CLI 壳只随真实 owner 迁移进入 `internal/photoncli`，不单独做目录搬家。
 
 本次复核在 HEAD `3603972c9806` 上执行 fresh `make check`：fmt、vet、全量 Go 测试、Linux build 和 Windows amd64
