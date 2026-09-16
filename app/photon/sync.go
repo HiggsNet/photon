@@ -22,24 +22,6 @@ import (
 const defaultSyncRoundTimeout = 5 * time.Second
 const syncOnceResponderQuiet = 500 * time.Millisecond
 
-var collectSyncLocalEndpoints = gossip.CollectLocalEndpointsWithReflectors
-
-type SyncTransportDeps struct {
-	KnownPeers map[string]*net.UDPAddr
-	Replay     *gossip.ReplayWindow
-	Quotas     *gossip.PeerQuotas
-	Log        func(gossip.Event)
-}
-
-func defaultSyncTransportDeps(config corehost.GossipDriverConfig, loggerConfig *appConfig) *SyncTransportDeps {
-	return &SyncTransportDeps{
-		KnownPeers: config.Discovery.Bootstrap,
-		Replay:     gossip.NewReplayWindow(0),
-		Quotas:     gossip.NewPeerQuotas(gossip.QuotaConfig{}),
-		Log:        syncDebugLogger(loggerConfig),
-	}
-}
-
 func (d *Daemon) now() time.Time {
 	if d != nil && d.App != nil {
 		return d.App.Now()
@@ -245,7 +227,6 @@ func (d *Daemon) openGossipTransport() (*gossip.Transport, error) {
 		return nil, errors.New("gossip configuration is not initialized")
 	}
 	config := d.gossipDriver.GossipConfig()
-	deps := defaultSyncTransportDeps(config, d.App.Config)
 	listenAddr := d.App.Config.ListenAddr
 	if listenAddr == "" {
 		listenAddr = fmt.Sprintf(":%d", gossip.DefaultPort)
@@ -254,7 +235,7 @@ func (d *Daemon) openGossipTransport() (*gossip.Transport, error) {
 	if err != nil {
 		return nil, err
 	}
-	transport, err := gossip.NewTransport(gossipTransportConfig(config, deps, d.now), datagram)
+	transport, err := gossip.NewTransport(gossipTransportConfig(config, d.App.Config, d.now), datagram)
 	if err != nil {
 		_ = datagram.Close()
 		return nil, err
@@ -266,15 +247,15 @@ func (d *Daemon) openGossipTransport() (*gossip.Transport, error) {
 	return transport, nil
 }
 
-func gossipTransportConfig(config corehost.GossipDriverConfig, deps *SyncTransportDeps, clock func() time.Time) gossip.Config {
+func gossipTransportConfig(config corehost.GossipDriverConfig, loggerConfig *appConfig, clock func() time.Time) gossip.Config {
 	return gossip.Config{
 		PeerID:          config.PeerID,
-		KnownPeers:      deps.KnownPeers,
+		KnownPeers:      config.Discovery.Bootstrap,
 		MaxMessageBytes: config.Limits.MaxBytes,
-		Replay:          deps.Replay,
-		Quotas:          deps.Quotas,
+		Replay:          gossip.NewReplayWindow(0),
+		Quotas:          gossip.NewPeerQuotas(gossip.QuotaConfig{}),
 		Clock:           clock,
-		Log:             deps.Log,
+		Log:             syncDebugLogger(loggerConfig),
 	}
 }
 
@@ -308,7 +289,7 @@ func (d *Daemon) endpointProtocolIntent(verified *corestate.VerifiedState) (*cor
 	}
 	port := listenPortFromAddr(config.ListenAddr)
 	advertiseAddrs, reflectors := filterEndpointDiscoveryInputs(config, port)
-	endpoints, reflectorErr := collectSyncLocalEndpoints(port, advertiseAddrs, reflectors, config.ReflectorTimeout, config.FilterPrivateIPv4)
+	endpoints, reflectorErr := gossip.CollectLocalEndpointsWithReflectors(port, advertiseAddrs, reflectors, config.ReflectorTimeout, config.FilterPrivateIPv4)
 	if reflectorErr != nil && len(gossip.ResolvePublicIPReflectors(reflectors)) > 0 {
 		d.logWarn("endpoint", "reflector_failed", map[string]any{"error": reflectorErr})
 	}

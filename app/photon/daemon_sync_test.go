@@ -57,8 +57,8 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 	serviceB := newTestDaemonFromOwners(rtB, verifiedB, nil, &photonlinux.LinuxState{}, configB, time.Second)
 	setTestGossipTransport(t, serviceB, transportB)
 	clock := newFakeClock(now)
-	serviceA.EnableEventLoopSync(clock)
-	serviceB.EnableEventLoopSync(clock)
+	serviceA.gossipDriver.ResetScheduler(clock)
+	serviceB.gossipDriver.ResetScheduler(clock)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

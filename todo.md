@@ -126,9 +126,9 @@ Daemon
   - [ ] routing/BIRD：把 netns/BIRD/upstream 配置、纯 spec/export/announce policy 归到 routing/Linux owner；已下沉的 BIRD、veth、upstream route 与 kernel route 执行不再反向搬回 app。
   - [ ] IPsec：把 transport/address/port/overlay record 纯构造、reconcile 纯 helper 和安全 live projection 靠近 `pkg/transport/ipsec`、state publisher 或 inspect owner；app 保留私钥先落盘、公共 record 后发布以及完整 rotation/apply 顺序。
   - [x] health：probe target/rotate role 组合属于 app health reconcile，raw ICMP、`setns` 和 exec fallback 属于 `internal/photonlinux/healthprobe`；当前边界无需为目录对称继续搬迁。
-- [ ] 删除本轮审计确认的测试专用生产入口和单用途测试接缝，不为此新增通用 interface/manager。
-  - [ ] 删除或改成 test-only helper 的 `Daemon.EnableEventLoopSync` 与 `Daemon.processPacketEvent`；两者当前没有生产调用方。
-  - [ ] 收缩 `SyncTransportDeps` 和可全局替换的 `collectSyncLocalEndpoints` 测试接缝；直接复用现有 GossipDriver/transport config owner。
+- [x] 删除本轮审计确认的测试专用生产入口和单用途测试接缝，不为此新增通用 interface/manager。
+  - [x] 删除无生产调用方的 `Daemon.EnableEventLoopSync` 与 `Daemon.processPacketEvent`；测试直接使用 GossipDriver scheduler 与正式 Daemon gossip event 入口。
+  - [x] 删除 `SyncTransportDeps`、默认 deps builder 和可全局替换的 `collectSyncLocalEndpoints`；transport config 直接读取 GossipDriver config，endpoint 测试通过显式 advertise 配置调用真实 collector。
 - [x] 查询模型、重复 clone/DTO builder 与 online/offline source 边界已完成本轮收口：
   - [x] 删除 inspect 中 `PeerCheckpoint -> legacy PeerRuntimeState -> PeerDebugView` 的反向转换；debug view 直接读取 checkpoint 字段，`PeerRuntimeState` 不再进入 current inspect 路径。
   - [x] BIRD raw debug 的命令选择移入 `pkg/routing/bird`，neighbors/routes/entries、filter definition 解析、LinkOutput 接口上下文与 canonical dump enrichment 移入 `internal/inspect`；app 只负责在线执行、配置文件读取和传入 provider-neutral link outputs，测试跟随 owner 迁移。

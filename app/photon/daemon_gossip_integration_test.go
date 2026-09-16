@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
@@ -66,9 +67,9 @@ func TestDaemonObjectChunkCompletionNotifiesPlatformOnce(t *testing.T) {
 		},
 	}
 	for _, chunk := range []*gossip.ObjectChunk{chunks[1], chunks[0]} {
-		if err := service.processPacketEvent(&gossip.Packet{Message: &gossip.Message{
+		if _, err := service.handleGossipDriverEvent(context.Background(), corehost.GossipPacketReceived{Packet: &gossip.Packet{Message: &gossip.Message{
 			Type: gossip.MessageObjectChunk, PeerID: peerID, ObjectChunk: chunk,
-		}}, context.Background()); err != nil {
+		}}}); err != nil {
 			t.Fatalf("handleObjectChunk: %v", err)
 		}
 	}

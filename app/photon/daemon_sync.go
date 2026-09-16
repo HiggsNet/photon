@@ -12,7 +12,6 @@ import (
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
-// EnableEventLoopSync configures the event-loop gossip.SyncSession clock. The
 // objectPullTCPAddr derives the TCP object-pull address from a gossip UDP
 // endpoint. TCP and UDP intentionally share the numeric port.
 func objectPullTCPAddr(udpAddr string) string {
@@ -69,24 +68,6 @@ func startObjectPullServer(ctx context.Context, d *Daemon) error {
 	return nil
 }
 
-// event-loop sync path is the only daemon sync path; this helper remains for
-// tests that need a fake clock.
-func (d *Daemon) EnableEventLoopSync(clock corehost.Clock) {
-	if clock == nil {
-		if d.App != nil && d.App.Clock != nil {
-			clock = corehost.NewClock(d.App.Clock)
-		} else {
-			clock = corehost.NewClock(nil)
-		}
-	}
-	if d.gossipDriver == nil {
-		view := d.State.Common.ReadView()
-		d.gossipDriver = corehost.NewGossipDriver(clock, corehost.DefaultEventBuffer, d.State.Common, gossipDriverConfig(d.App.Config, view.State, d.Log))
-		return
-	}
-	d.gossipDriver.ResetScheduler(clock)
-}
-
 func (d *Daemon) handleSyncTimerEvent(ctx context.Context, force bool) error {
 	if d == nil {
 		return nil
@@ -129,14 +110,6 @@ func (d *Daemon) handleSyncTimerEvent(ctx context.Context, force bool) error {
 		d.handleSyncEvent(ctx, event)
 	}
 	return nil
-}
-
-func (d *Daemon) processPacketEvent(packet *gossip.Packet, ctx context.Context) error {
-	if packet == nil || packet.Message == nil {
-		return errors.New("packet event is nil")
-	}
-	_, err := d.gossipDriver.HandleGossipHostEvent(ctx, corehost.GossipPacketReceived{Packet: packet}, d.now(), d.gossipSuppressions())
-	return err
 }
 
 func (d *Daemon) handleSyncEvent(ctx context.Context, event gossip.SyncEvent) bool {

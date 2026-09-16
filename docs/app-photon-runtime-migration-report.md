@@ -126,7 +126,7 @@ operations           当前为空；rotation/takeover 从真实系统 Observatio
 | `daemon_object_chunk.go` | 已删除 | chunk assembly、repair deadline、snapshot decode/root check、reject checkpoint 和 completion 回投已归 GossipDriver；剩余 sent-chunk/NACK repair 随 F0e3b 从 `sync.go` 收口 |
 | `daemon_runtime_commit.go` | 已删除 | 原函数只做 nil guard 和单次转发；调用方现直接进入 typed Linux runtime commit，后续整体迁入 platform owner |
 | `daemon_state_store.go` | 已删除 | 旧 aggregate/forwarding Store 不再存在；`state.go` 用一个具体 State 管理唯一 StateDB 与 typed partitions，protocol publish 只负责编排私钥先于公共 record 持久化 |
-| `daemon_sync.go` | GossipDriver 终态结果、object-pull listener 与 Daemon wakeup 接线 | gossip packet/session FSM、发送、checkpoint、relay 和 observability 已在 GossipDriver 闭环；仍需删除只被测试调用的 `EnableEventLoopSync` / `processPacketEvent`，不恢复协议 controller adapter |
+| `daemon_sync.go` | GossipDriver 终态结果、object-pull listener 与 Daemon wakeup 接线 | gossip packet/session FSM、发送、checkpoint、relay 和 observability 已在 GossipDriver 闭环；已删除只被测试调用的 `EnableEventLoopSync` / `processPacketEvent`，测试改走现有 scheduler / Daemon event 入口，不恢复协议 controller adapter |
 
 ### 3.2 DB、debug 和 diagnostics
 
@@ -209,7 +209,7 @@ operations           当前为空；rotation/takeover 从真实系统 Observatio
 | `state_clone.go` | 已删除 | 各 Linux DTO clone 统一归 `internal/state`，供 app planner 与 `photonlinux.LinuxState` 共用；不在迁移后保留两套深拷贝实现 |
 | `state_gc.go` | 已删除 | 原功能只删持久化 BIRD 诊断表，不管理进程或内核资源；`BirdInstances` 转为在线 observation 后不再有 GC 目标 |
 | `status.go` | status CLI | inspect read model + photoncli |
-| `sync.go` | Linux UDP open、endpoint publish、transport config 和 CLI | `SyncRuntime`、Daemon 重复 GossipConfig/transport/deps 与 `gossipStartupConfig` 中间 DTO 已删除；composition root 从 AppConfig/verified identity 直接生成 detached GossipDriver/transport config，endpoint/log 直接读取 AppConfig；剩余 Linux UDP open 后续进入 LinuxDriver，CLI 进 photoncli |
+| `sync.go` | Linux UDP open、endpoint publish、transport config 和 CLI | `SyncRuntime`、Daemon 重复 GossipConfig/transport/deps 与 `gossipStartupConfig` 中间 DTO 已删除；composition root 从 AppConfig/verified identity 直接生成 detached GossipDriver/transport config，endpoint/log 直接读取 AppConfig；测试专用 SyncTransportDeps/default builder 与全局 endpoint collector 替换点已删除；剩余 Linux UDP open 后续进入 LinuxDriver，CLI 进 photoncli |
 | `verify.go` | chain 验证 CLI | 验证留 crypto/state；CLI 进 photoncli |
 | `version.go` | build info | `internal/buildinfo` 供 Linux/Windows 复用 |
 | `zone.go` | zone/record 列表 CLI | Store read API + inspect/text + photoncli |
@@ -243,9 +243,10 @@ spec/policy builder 和安全 projection，同时让 app 继续负责 owner 读�
 旧数据库只剩 `gossip_checkpoint_migration.go`、`runtime_state_migration.go`、`legacy_state.go`、legacy peer DTO。`debug_db.go` 的 legacy 专用 dump 已删除，通用原始 bucket 读取不解码旧模型。它们不属于 current 在线模型，但尚未绑定直接升级截止版本，不能无限期作为
 “备用 loader”保留。
 
-本轮同时确认仍有测试专用入口留在生产文件：`Daemon.EnableEventLoopSync` 与 `Daemon.processPacketEvent` 没有生产
-调用方；`SyncTransportDeps` 和可全局替换的 `collectSyncLocalEndpoints` 主要承担测试注入。它们应作为独立纯减法
-切片清理，不为此新增通用 interface、manager 或第二套 runtime。
+本轮已删除没有生产调用方的 `Daemon.EnableEventLoopSync` 与 `Daemon.processPacketEvent`，测试直接复用
+GossipDriver.ResetScheduler 和正式 Daemon.handleGossipDriverEvent。另删除 `SyncTransportDeps`、默认 deps builder
+与全局 `collectSyncLocalEndpoints` 替换点：transport config 直接从 GossipDriver config 组装，endpoint 测试使用
+显式 advertise 配置调用真实 collector。不新增 interface、manager、wrapper 或 runtime；生产代码新增 7 行、删除 53 行，净减 46 行。
 
 ### 5.1 E2g 后还留在 app 的原因
 
@@ -343,8 +344,7 @@ test-only production helper。
 
 核心 Runtime/State/Observation 和 canonical inspect 迁移已经闭环，后续只保留以下明确切片：
 
-1. 删除 `EnableEventLoopSync`、`processPacketEvent` 等 test-only production helper，收缩 `SyncTransportDeps` 与
-   endpoint collector 的全局测试接缝；
+1. 已完成：删除 `EnableEventLoopSync`、`processPacketEvent`、`SyncTransportDeps` 与 endpoint collector 全局测试接缝；
 2. firewall：下沉 YAML/effective config、forwarding policy 与 policy input builder，app 保留 reconcile 顺序；
 3. routing/BIRD：下沉 netns/BIRD/upstream 配置与纯 spec/export/announce policy，复用既有 LinuxDriver 执行；
 4. IPsec：下沉 protocol record 纯构造、reconcile 纯 helper 与安全 live projection，保留私钥先落盘和 rotation/apply
@@ -354,3 +354,9 @@ test-only production helper。
 
 本次复核在 HEAD `3603972c9806` 上执行 fresh `make check`：fmt、vet、全量 Go 测试、Linux build 和 Windows amd64
 cross build 均通过；`git diff --check` 通过，复核开始时工作树干净。没有为本次只读审计额外运行 race 或特权 smoke。
+
+A5 测试接缝清理验证（2026-09-16）：fresh `make check` 通过 fmt、vet、全量 Go 测试、Linux build
+和 Windows amd64 cross build；`git diff --check` 通过。首次沙箱执行因本地 UDP socket 权限失败，
+完整检查在允许本地 socket 的环境执行。endpoint no-op fixture 显式关闭 IPsec gossip 地址引用，
+避免真实接口采集引起下一轮 IPsec 地址补发；仍覆盖重复发布不写盘、不触发同步。
+未运行特权数据面 smoke；本切片不改变生产协议、平台 apply 或关闭顺序。

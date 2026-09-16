@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
-	"net"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -541,12 +540,12 @@ func TestDaemonEndpointTimerNoChangeSkipsFlushAndSync(t *testing.T) {
 	appConfig := defaultAppConfig()
 	appConfig.ListenAddr = config.ListenAddr
 	appConfig.AdvertiseAddrs = []string{"198.51.100.20:4242"}
+	appConfig.EndpointDiscovery = "advertise_only"
+	appConfig.Reflectors = nil
+	// Keep IPsec addresses explicit so newly collected interface candidates
+	// do not cause a follow-up IPsec address publish.
+	appConfig.IPsec.AnnounceGossipEndpoints = false
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
-	oldCollect := collectSyncLocalEndpoints
-	collectSyncLocalEndpoints = func(port uint16, _ []string, _ []string, _ time.Duration, _ bool) ([]gossip.LocalEndpoint, error) {
-		return []gossip.LocalEndpoint{{IP: net.ParseIP("198.51.100.20"), Port: port, Scope: "global", Source: gossip.SourceAdvertise}}, nil
-	}
-	t.Cleanup(func() { collectSyncLocalEndpoints = oldCollect })
 	rt := &AppContext{
 		Config:    appConfig,
 		StatePath: filepath.Join(t.TempDir(), "photon.db"),

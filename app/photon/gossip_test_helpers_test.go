@@ -10,6 +10,7 @@ import (
 
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 )
 
 type testGossipDatagram struct {
@@ -108,7 +109,7 @@ func pumpEventLoopSync(ctx context.Context, services []*Daemon, transports []*go
 		for index, transport := range transports {
 			packet, err := receiveWithContext(ctx, transport, time.Now().Add(10*time.Millisecond))
 			if err == nil {
-				services[index].processPacketEvent(packet, ctx)
+				_, _ = services[index].handleGossipDriverEvent(ctx, corehost.GossipPacketReceived{Packet: packet})
 				processed = true
 			}
 		}

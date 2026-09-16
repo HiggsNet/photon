@@ -17,6 +17,7 @@ import (
 	"github.com/HiggsNet/photon/internal/inspect"
 	pingdebug "github.com/HiggsNet/photon/internal/ping"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -592,7 +593,7 @@ func TestDaemonPacketEventUpdatesCheckpointOwner(t *testing.T) {
 		},
 	}
 
-	if err := service.processPacketEvent(packet, context.Background()); err != nil {
+	if _, err := service.handleGossipDriverEvent(context.Background(), corehost.GossipPacketReceived{Packet: packet}); err != nil {
 		t.Fatalf("packet event error: %v", err)
 	}
 
