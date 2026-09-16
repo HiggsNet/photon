@@ -1,8 +1,8 @@
 # `app/photon` 非测试文件与数据模型审计
 
-> 审计时间：2026-09-12
-> 审计范围：`app/photon` 目录下全部 72 个非测试 `.go` 文件，共约 1.87 万行生产代码。
-> 审计基线：`windows` 分支当前工作树（HEAD `7ac417cfba0f`，包含审计时尚未提交的本地修改）。
+> 初次审计：2026-09-12；复核更新：2026-09-16
+> 当前范围：`app/photon` 目录下全部 72 个非测试 `.go` 文件，共 18451 行生产代码。
+> 当前基线：`windows` 分支 HEAD `3603972c9806`；复核开始时工作树干净。
 > 本文把问题中的“DTU”按“DTO（只负责在层与层之间传数据的结构体）”理解。
 
 ## 1. 先说结论
@@ -28,8 +28,9 @@
 
    `TransportLinkSpec` 和 `ReconcileAction` 可能携带私钥或带私钥的 spec 指针，因此第一次“脱敏投影”继续保留；inspect 不再维护第二套同字段 struct 和逐字段 builder。原先 debug rotate 独立 SA copier 漏掉的 `UniqueID`、`Initiator`、`InitiatorKnown` 也已随共享投影修复。
 4. 剩余复制是按 link/SA 数量线性复制 detached observation，用于 Daemon 写与 control/HTTP 并发读取之间的隔离；相对于 VICI、BIRD、netlink、nftables 和磁盘事务通常很小。没有 benchmark 或 profile 证据前，不应为了省这点内存改成共享可变对象或无锁结构。
-5. `controlRequest -> daemonEvent -> corestate.LocalIntent` 也偏长。control wire DTO 必须存在，Daemon 串行排序也必须存在；但 IPAM、route、service、record 各自的 request 再塞进一个 20 多种事件共用的“大联合体”，然后才转成 `LocalIntent`，中间层可以继续收缩。
-6. 最明确的临时冗余是 legacy schema：`stateFile`、`stateMeta`、`PeerRuntimeState` 及两组 migration 文件只为旧数据库单向升级存在。它们现在有理由保留，但必须绑定明确的兼容截止版本；否则会永久成为第二套“假现行模型”。
+5. `controlRequest -> daemonEvent -> corestate.LocalIntent` 的重复层已经完成收缩：record/IPAM/route/service 在边界直接形成 typed intent，Daemon 只保留一个 `common_mutation` 排序入口。剩余事件是平台操作、timer 或 lifecycle wakeup，不应为了表面统一继续套 envelope。
+6. 当前最明确的测试冗余是生产文件中的 test-only seam：`Daemon.EnableEventLoopSync` 与 `Daemon.processPacketEvent` 没有生产调用方；`SyncTransportDeps` 和可全局替换的 endpoint collector 主要服务测试注入。应直接删除或改为 test-only helper，不新建通用 runtime/interface。
+7. 最明确的临时模型冗余是 legacy schema：`stateFile`、`stateMeta`、`PeerRuntimeState` 及两组 migration 文件只为旧数据库单向升级存在。它们现在有理由保留，但必须绑定明确的兼容截止版本；否则会永久成为第二套“假现行模型”。
 
 ## 2. 用人话看整个目录
 
@@ -98,7 +99,9 @@ VerifiedState + LinuxState + 操作系统现状
 
 `*YAML` 表示“用户写了什么”，大量 `*bool`、字符串 duration 和别名字段用来区分“没写”“写 false”“旧字段名”；`appConfig` 表示“解析、默认化、校验以后程序真正采用什么”。这次转换是配置边界，不是无意义内存搬运。
 
-真正的问题是所有子系统配置都堆在 `config.go` 和 app package。等各子系统接口稳定后，应把 firewall/routing/IPsec/health 的 YAML 与 effective config 下沉到实际 owner；不要再造第三套总配置 DTO。
+真正的问题是所有子系统配置都堆在 `config.go` 和 app package。当前 Linux 执行边界已经稳定，可以按 firewall、
+routing/BIRD、IPsec 的窄切口把 focused YAML 与 effective config 下沉到实际 owner；顶层文件读取/组合仍留 app，
+不要再造第三套总配置 DTO。
 
 ### `controlRequest`、`controlResponse`、`controlViewResponse[T]`
 
@@ -174,7 +177,7 @@ VerifiedState + LinuxState + 操作系统现状
 
 ### 9. `daemon.go`
 
-- 做什么：启动/关闭所有组件，运行顶层 select 循环，接 control 请求，排序 mutation，安排 timer，触发 IPsec/routing/firewall/health reconcile，并处理 reload、shutdown、join、recovery 等命令。
+- 做什么：启动/关闭所有组件，运行顶层 select 循环，接 control 请求，排序 mutation，安排 timer，触发 IPsec/routing/firewall/health reconcile，并处理显式 routing reload、shutdown、join、recovery 等命令。`config.yaml` 热重载链已经删除。
 - 主要构成：`Daemon`、`DaemonHooks`、`daemonEventType`、`daemonEvent`、`daemonEventResult`。
 - 审核：Daemon 作为唯一生命周期和 mutation 编排者完全必要；文件本身仍过载。record/IPAM/route/service 已收敛为一个携带 `LocalIntent` 的 common mutation event，接下来优先把 control method dispatch/response mapping 移回 control adapter；完整的启动、关闭和安全顺序仍应留在 Daemon，不能拆成互相不知道顺序的 controller。
 
@@ -200,7 +203,7 @@ VerifiedState + LinuxState + 操作系统现状
 
 - 做什么：连接 Daemon 与 `GossipDriver`，提供 object-pull server/executor，处理 sync timer、packet 和 host event 的最终结果。
 - 主要构成：没有自定义 struct；主要是 adapter 方法。
-- 审核：跨组件接线必要。gossip FSM、transport 排序和 checkpoint 更新应继续由 GossipDriver 自闭环；本文件不应重新长出协议实现。
+- 审核：跨组件接线必要。gossip FSM、transport 排序和 checkpoint 更新应继续由 GossipDriver 自闭环；本文件不应重新长出协议实现。`EnableEventLoopSync` 与 `processPacketEvent` 当前只有测试调用，是明确可删除或迁入 `_test.go` 的生产入口。
 
 ### 14. `debug_cmd.go`
 
@@ -235,8 +238,8 @@ VerifiedState + LinuxState + 操作系统现状
 ### 19. `debug_links.go`
 
 - 做什么：要求在线 daemon，读取 links canonical view，输出简表或详细 debug，并把 overlay 映射到 BIRD 状态。
-- 主要构成：没有自定义 struct；`desiredByInstanceID` 为 observer 健康上下文建立索引。
-- 审核：在线限制正确，不能用磁盘 snapshot 冒充 link 实况。BIRD/desired 上下文 builder 仍是 DTO 拼装，可继续归 `internal/inspect`。
+- 主要构成：没有自定义 struct；CLI 只请求并渲染 canonical `LinksDebugView`，BIRD 上下文由共享 source builder 生成。
+- 审核：在线限制正确，不能用磁盘 snapshot 冒充 link 实况。原 `desiredByInstanceID` 和 Observer 二次 builder 已删除；当前 CLI 壳可随 `internal/photoncli` 的真实 owner 迁移再移动。
 
 ### 20. `debug_peer.go`
 
@@ -252,9 +255,9 @@ VerifiedState + LinuxState + 操作系统现状
 
 ### 22. `debug_ping.go`
 
-- 做什么：从在线 daemon 取健康探测目标，按用户参数选择地址，然后调用 Linux health prober 执行 ping。
-- 主要构成：没有 struct；直接从 control 解码共享的 `health.ProbeTarget` 并交给 Linux health prober。
-- 审核：ping 功能必要；原有“`inspect.HealthTarget` 展示 DTO 反向解析成执行 DTO”的路径已删除。`ProbeTarget` 本身不含 Driver 或敏感材料，现由 health view、control 和 CLI 直接共用，文本/HTTP 只在最终展示边界格式化地址。
+- 做什么：向在线 daemon 发送目标选择和探测参数，接收并渲染 canonical `inspect.PingDebugView`。
+- 主要构成：没有 struct；CLI 不再接触 `health.Prober`、Linux Driver 或中间 `ping_targets` DTO。
+- 审核：ping 功能必要；目标选择和 Linux 探测执行已归 daemon，长请求沿 control context 取消。当前文件是纯 CLI adapter，后续随 CLI 壳移动即可。
 
 ### 23. `debug_revoke_impact.go`
 
@@ -428,19 +431,19 @@ VerifiedState + LinuxState + 操作系统现状
 
 - 做什么：启动 HTTP/SSE observer，把 State、linuxObservation、health spool、BIRD 等 owner 数据组装成 status/zones/peers/links/health/routes 页面和 metrics。
 - 主要构成：`observerServer`、`observerProvider`。
-- 审核：server lifecycle 和 provider 必要。467 行 provider 与 control dispatch 有重复取数/组 view 逻辑；两者应调用同一 canonical source builder，而不是各自产生 HTTP DTO。不要让 observer 直接变成第二个 state owner。
+- 审核：server lifecycle 和 provider 必要。资源 endpoint 已直接返回 canonical `internal/inspect` DTO，Links/Health 也复用同一 source builder；只剩 datasource/series transport envelope 和 owner 取数 adapter。不要让 observer 变成第二个 state owner。
 
 ### 52. `peer_lifecycle_cleanup.go`
 
 - 做什么：从 gossip checkpoint 的最后活动时间判断 peer 是否 stale/offline/需要 cleanup，并生成 suppression 集合。
 - 主要构成：没有 struct，都是纯 policy 函数。
-- 审核：策略必要，但不依赖 app lifecycle，适合下沉 host/inspect policy。不要重新持久化 `PeerCleanups` tombstone；现在从 checkpoint 推导更简单。
+- 审核：策略必要。suppression 是 Daemon 将产品 lifecycle policy 交给 GossipDriver 的编排输入，可以留在 app；endpoint ordering、checkpoint persist-before-publish 和地址簿 mutation 继续由 host owner 完成。不要重新持久化 `PeerCleanups` tombstone。
 
 ### 53. `peer_state.go`
 
 - 做什么：把 Network、checkpoint、IPsec links 和 observation 拼成 peer lifecycle input/status，并收集 revoked peer。
 - 主要构成：没有本地 struct，使用 `inspect.PeerLifecycleInput`。
-- 审核：功能必要，属于 read model/policy adapter。可以继续下沉，尤其避免 app 再维护与 inspect 重复的 peer status 结构。
+- 审核：功能必要，属于 owner source adapter；状态解释已经在 inspect，app 只收集 Network/checkpoint/live links。除非出现第二个真实 source owner，不为减少文件数再建 `peerstate` facade。
 
 ### 54. `protocol_publish.go`
 
@@ -536,7 +539,7 @@ VerifiedState + LinuxState + 操作系统现状
 
 - 做什么：实现 `sync status/serve/once` 命令的 composition，建立 gossip transport config，计算 endpoint publish intent、bootstrap 地址和同步 limits。
 - 主要构成：`SyncTransportDeps`、`syncPendingZonesError`。
-- 审核：单次/常驻同步入口必要。协议 FSM 已下沉 GossipDriver，这是正确边界；`SyncTransportDeps` 只在本文件使用，主要服务测试注入，后续可直接用 GossipDriver config builder 收缩，但无需急删。
+- 审核：单次/常驻同步入口必要，协议 FSM 已下沉 GossipDriver。`SyncTransportDeps` 只在本文件使用，主要服务测试注入；本轮已把它和可全局替换的 endpoint collector 列为明确减法项，应直接复用现有 GossipDriver/transport config owner，不新增测试 facade。
 
 ### 70. `verify.go`
 
@@ -597,32 +600,38 @@ VerifiedState + LinuxState + 操作系统现状
 - 不要为减少文件数把 72 个文件机械合并成几个巨型文件；
 - 不要先引入通用 Repository、Manager、EventEnvelope 或 ObservationStore 再开始迁移。
 
-## 6. 建议的减法顺序
+## 6. 2026-09-16 复核后的减法顺序
 
-### 第一优先级：收缩 live DTO 链
+前三轮优先项已经完成：IPsec live DTO 只保留一次必要的脱敏投影；record/IPAM/route/service 已共用 typed
+`LocalIntent`；control、Observer 与 CLI 已复用 canonical inspect source/view。后续不再把这些完成项继续写成
+“下一步”。
 
-在不改变持久 schema 的前提下，先统一 `DesiredLink/LinkSA/LinkAction/LinkSkip` 的 canonical live 类型，删除 `inspect_links.go` 中的重复 builder 和 `debug_rotate.go` 中重复 SA copier。保留一次明确的脱敏步骤，并补测试证明 observation 不含 transport private key。
+### 第一优先级：删除 test-only production seam
 
-这是最贴近“数据在内存里转来转去是否有意义”的改动：收益主要是减少字段漂移和代码量，性能收益只是附带结果。
+这是当前最小、最确定的纯减法切片：
 
-### 第二优先级：缩小 Daemon 内部联合事件
+- 删除或迁入 `_test.go` 的 `Daemon.EnableEventLoopSync` 与 `Daemon.processPacketEvent`；
+- 收缩 `SyncTransportDeps`，直接生成现有 `gossip.Config`；
+- 去掉可全局替换的 `collectSyncLocalEndpoints` 测试变量，改用已有 owner 的窄测试入口；
+- 测试继续覆盖 event-loop fake clock、packet path 与 endpoint publish，但不要求生产包保留测试 API。
 
-保留 Daemon 单 writer 队列，但让 record/IPAM/route/service 在边界处尽早成为 `corestate.LocalIntent`，删除 `daemonRecordPut` 和三个重复 payload 分支。不要改成大量 command class 或多层 dispatcher。
+### 第二优先级：下沉 firewall 配置与纯 policy
 
-### 第三优先级：让 control 与 observer 共用 source builder
+移动 YAML/effective config、forwarding policy 和 `FirewallPolicyInput` 组装；保留 `reconcileFirewall` 中的 Common/Linux
+owner 读取、revision、逐实例 apply、Observation 发布和 recover/flush 顺序。现有 `LinuxDriver.ApplyFirewall` 已拥有
+实际 backend Observe/Plan/Apply，不再增加 `FirewallController` facade。
 
-`daemon.go` 的 control switch 和 `observer_server.go` 都在读取同一组 owners。把“从 owners 得到 canonical inspect view”做成直接函数调用；control/HTTP 只负责 transport 和错误映射。这样减少的是真实重复逻辑，而不是换目录。
+### 第三优先级：下沉 routing/BIRD 配置与纯 plan
 
-### 第四优先级：继续下沉 Linux policy/实现
+移动 netns/BIRD/upstream 配置、BIRD spec、export/announce prefix policy 和可独立测试的纯函数。BIRD process/client、
+veth、upstream route 与 kernel route 查询已经在 LinuxDriver；app 继续保留多实例循环、health gate、公共 intent 发布
+和 shutdown policy 顺序。
 
-按窄切口处理：
+### 第四优先级：收紧 IPsec publish/reconcile helper
 
-1. routing/BIRD raw query、parser、policy；
-2. firewall config/policy/apply；
-3. IPsec plan/observe/apply 与 live summary；
-4. health target/lifecycle adapter。
-
-每次迁移都直接删除旧 helper/forwarder，app 只保留 composition、Unix control、CLI 注册和完整 Daemon 顺序。
+把 transport/address/port/overlay record 纯构造、reconcile 纯 helper 与安全 live projection 靠近
+`pkg/transport/ipsec`、state publisher 或 inspect owner。Daemon 必须继续保证私钥先落盘、公共 record 后发布，并保留
+rotation、revision guard、apply 和 Observation 的完整顺序；不要把整个文件原样搬成新的 `IPsecController`。
 
 ### 第五优先级：给 legacy schema 定退场版本
 
@@ -635,12 +644,20 @@ VerifiedState + LinuxState + 操作系统现状
 - `debug_db.go` 中仅服务旧 schema 的 dump；
 - 对应 legacy fixtures/tests。
 
-这会是最干净、风险也最容易界定的一次结构性减法。
+CLI 壳只随以上真实 owner 迁移进入 `internal/photoncli`，不单独为了减少 72 个文件而搬目录。
 
 ## 7. 最终评价
 
-当前设计已经纠正了最危险的过度设计：没有第二个 Runtime、没有 aggregate State snapshot、没有把 Linux 在线观察继续持久化、没有为 Windows 预造统一平台接口。`LinuxState` 只剩两个真正需要跨重启的字段，这部分不是冗余。
+当前设计已经完成最关键的迁移：没有第二个 Runtime、没有 aggregate State snapshot、没有把 Linux 在线观察继续
+持久化、没有重复 inspect HTTP DTO，也没有为 Windows 预造统一平台接口。`LinuxState` 只剩两个真正需要跨重启的
+字段，canonical read model 与 online/offline source 规则均已闭环。
 
-仍然存在的过度设计主要集中在“展示前的多层近同构 DTO”和“一个 fat control/event 联合体不断加字段”；仍然存在的结构问题则是大量 Linux policy 与 CLI/presenter 还留在 `app/photon`。建议做减法时优先删除 builder、forwarder 和中间 payload，不要仅靠搬文件或新建抽象层制造“看上去模块化”。
+剩余结构问题现在很明确：子系统配置与纯 policy 仍集中在 executable package；少量 test-only seam 留在生产文件；
+legacy schema 没有退场版本；CLI 尚未随 owner 系统迁移。它们都可以按窄切口做减法，不需要新 Repository、通用
+controller、ObservationStore 或跨平台 facade。
 
-如果只选一个下一步，应该先收缩 IPsec live DTO 链：它范围可控、不碰数据库 schema、不改变 Daemon 安全顺序，而且最直接解决本次提出的“内存模型来回转换”问题。
+如果只选一个代码切片，先删除 test-only production helper；如果选择一个子系统切片，先做 firewall config/policy，
+因为实际 Linux apply 已经下沉，边界最清楚且不触碰持久 schema。之后再做 routing/BIRD，最后处理风险更高的 IPsec。
+
+本次复核在 HEAD `3603972c9806` 上执行 fresh `make check`：fmt、vet、全量 Go 测试、Linux build 与 Windows amd64
+cross build 均通过；`git diff --check` 通过。没有为这次文档审计额外运行 race 或特权 smoke。

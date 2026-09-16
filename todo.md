@@ -121,8 +121,15 @@ Daemon
 
 ### A5. app/photon 与查询边界继续清理
 
-- [ ] 按迁移报告继续下沉 firewall/routing/IPsec policy 与 Linux 实现；app 只保留 composition、Unix control、CLI 注册和完整 Daemon 顺序。
-- [ ] 继续删除只有一个调用方的 wrapper、重复 clone/DTO builder 和 legacy 测试准备；测试跟随实际 owner 迁移。
+- [ ] 按窄切口继续下沉仍留在 `app/photon` 的 Linux 子系统配置与纯策略；实际 Daemon 读取 owner、revision guard、调用 Driver、发布 Observation 和 shutdown 顺序继续留在 app。
+  - [ ] firewall：把 YAML/effective config、forwarding policy 和 `FirewallPolicyInput` 组装归到明确的 Linux firewall/routing owner；`reconcileFirewall` 只保留 Daemon 顺序，不再新增 controller facade。
+  - [ ] routing/BIRD：把 netns/BIRD/upstream 配置、纯 spec/export/announce policy 归到 routing/Linux owner；已下沉的 BIRD、veth、upstream route 与 kernel route 执行不再反向搬回 app。
+  - [ ] IPsec：把 transport/address/port/overlay record 纯构造、reconcile 纯 helper 和安全 live projection 靠近 `pkg/transport/ipsec`、state publisher 或 inspect owner；app 保留私钥先落盘、公共 record 后发布以及完整 rotation/apply 顺序。
+  - [x] health：probe target/rotate role 组合属于 app health reconcile，raw ICMP、`setns` 和 exec fallback 属于 `internal/photonlinux/healthprobe`；当前边界无需为目录对称继续搬迁。
+- [ ] 删除本轮审计确认的测试专用生产入口和单用途测试接缝，不为此新增通用 interface/manager。
+  - [ ] 删除或改成 test-only helper 的 `Daemon.EnableEventLoopSync` 与 `Daemon.processPacketEvent`；两者当前没有生产调用方。
+  - [ ] 收缩 `SyncTransportDeps` 和可全局替换的 `collectSyncLocalEndpoints` 测试接缝；直接复用现有 GossipDriver/transport config owner。
+- [x] 查询模型、重复 clone/DTO builder 与 online/offline source 边界已完成本轮收口：
   - [x] 删除 inspect 中 `PeerCheckpoint -> legacy PeerRuntimeState -> PeerDebugView` 的反向转换；debug view 直接读取 checkpoint 字段，`PeerRuntimeState` 不再进入 current inspect 路径。
   - [x] BIRD raw debug 的命令选择移入 `pkg/routing/bird`，neighbors/routes/entries、filter definition 解析、LinkOutput 接口上下文与 canonical dump enrichment 移入 `internal/inspect`；app 只负责在线执行、配置文件读取和传入 provider-neutral link outputs，测试跟随 owner 迁移。
   - [x] `debug routes` 与 `debug route` 共用同一个 canonical routes loader；在线只读 control view，离线只读 common owner，不重复维护两份 fallback builder。
@@ -143,8 +150,12 @@ Daemon
   - [x] `debug routing ip route` 改为 daemon-only 在线查询：CLI 只传 netns/family 并渲染单层 `inspect.KernelRouteDump`；netns 解析及 `ip`/`nsenter` 执行下沉 `internal/photonlinux`，删除 CLI 直连 Linux 命令和本地 runner。
 - [x] CLI/control/HTTP 共用 canonical inspect DTO；在线 CLI 不从 HTTP DTO 反向转换，也不直接调用平台 Driver。显式 offline recovery/direct 仍按其职责临时创建 Driver。
 - [x] verified/common 允许离线读；GossipCheckpoint 离线统一标记 `last-known`；platform Observation 只允许在线读，不从 bbolt 或 CLI Driver 冒充实时状态。
+- [ ] 冻结旧 aggregate schema 的直接升级截止版本；兼容期只保留单向 migration/legacy dump，到期同批删除 `legacy_state.go`、两组 migration、legacy peer DTO、legacy dump 和对应 fixtures/tests。
 - [ ] CLI 壳稳定后再迁入 `internal/photoncli`，不为了减少 `app/photon` 文件数先搬目录。
-- [ ] 每一批迁移更新 runtime migration report，并执行相关单测、race（适用时）、Windows cross build、`make check` 和 `git diff --check`。
+
+本节每批迁移的完成条件继续遵守前述护栏：同步更新 runtime migration report，记录删除的旧 owner/入口和生产代码增删，执行相关单测、race（适用时）、Windows cross build、`make check` 与 `git diff --check`。这是持续验收规则，不作为一次性 checkbox。
+
+2026-09-16 复核基线：HEAD `3603972c9806`，`app/photon` 有 72 个非测试 Go 文件、18451 行生产代码；核心 Runtime/State/Observation 迁移已闭环。本轮 fresh `make check`（含全量测试、Linux build、Windows amd64 cross build）与 `git diff --check` 通过，复核开始时工作树干净。
 
 ### A6. 配置生命周期
 
@@ -225,8 +236,8 @@ Daemon
 
 ## 下一步执行顺序
 
-1. 完成 A1-A3：统一命名，移出非 gossip 调度，给原 RuntimeState 每个字段分类并收缩为 LinuxState。
-2. 完成 A4：由一个具体 State 管理唯一 StateDB 和 typed state partitions，Daemon 不再平铺锁、状态值与数据库。
-3. 完成 A5-A6：继续清理 app/test/CLI，并补显式 reload。
-4. 实现 B2 的 Windows composition 与真实 UDP gossip vertical slice。
-5. 依次推进 IKE/ESP、Babel/SADR、Wintun、SCM/named-pipe 和完整验收。
+1. 先删除 A5 已确认的 test-only production helper，并收缩 sync transport 测试接缝；这是最小、纯减法切片。
+2. 依次按 firewall、routing/BIRD、IPsec 的窄边界下沉配置与纯策略；每批直接删除旧 helper，不搬走 Daemon 安全顺序。
+3. 冻结 legacy schema 直接升级截止版本；未到期前保持单向 migration，达到截止时整组删除兼容模型和 fixtures。
+4. CLI 壳只随上述 owner 迁移逐步进入 `internal/photoncli`，不单独进行目录搬家。
+5. Windows 先完成 B1 v1 契约，再实现 B2 composition 与真实 UDP gossip vertical slice；之后依次推进 IKE/ESP、Babel/SADR、Wintun、SCM/named-pipe 和完整验收。

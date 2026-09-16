@@ -4,7 +4,11 @@
 > [`app-photon-runtime-migration-report.md`](app-photon-runtime-migration-report.md)。本文前半部分保留
 > Phase 6.7.7 的历史落地记录；后续迁移以新报告和 Photon Windows 设计中的 GossipDriver 边界为准。
 
-> **文档状态**：Phase 6.7.7 第一阶段已落地；本文继续作为后续模块化约束和演进记录。
+> **2026-09-16 复核说明**：本文各“当前状态”表格与旧文件名是历史快照，不再作为待办来源。当前 72 文件
+> 清单、已完成边界和可执行余项以 [`app-photon-file-and-model-audit.md`](app-photon-file-and-model-audit.md)、
+> [`app-photon-runtime-migration-report.md`](app-photon-runtime-migration-report.md) 和 [`../todo.md`](../todo.md) 为准。
+>
+> **文档状态**：Phase 6.7.7 第一阶段已落地；本文只保留历史设计动机和仍适用的模块化约束。
 > **目标**：将 `app/photon` 从单一巨大 `main` 包逐步拆成清晰的应用模块。`app/photon` 最终只保留 executable wiring、CLI 命令注册、配置装配和少量 daemon live adapter；health、routing、revocation、peer lifecycle、observer、debug/inspect、firewall、IPsec reconcile、sync runtime 等可复用或相对独立的应用逻辑应下沉到 internal/package 模块中。
 
 ---
