@@ -1,4 +1,4 @@
-package main
+package photonlinux
 
 import (
 	"fmt"
@@ -10,8 +10,8 @@ import (
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
-// firewallConfig holds top-level firewall instance definitions.
-type firewallConfig struct {
+// FirewallConfig holds top-level firewall instance definitions.
+type FirewallConfig struct {
 	Instances []FirewallInstanceConfig
 }
 
@@ -45,8 +45,8 @@ type FirewallInstanceConfig struct {
 	NativeHooks firewall.NativeHooks
 }
 
-// firewallConfigYAML is the raw YAML model for the top-level `firewall:` section.
-type firewallConfigYAML struct {
+// FirewallConfigYAML is the raw YAML model for the top-level `firewall:` section.
+type FirewallConfigYAML struct {
 	Instances []firewallInstanceYAML `yaml:"instances"`
 }
 
@@ -114,22 +114,22 @@ type iptablesHooksYAML struct {
 	IPv6 *inlineHooksYAML `yaml:"ipv6"`
 }
 
-func parseFirewallConfig(yamlCfg *firewallConfigYAML, netnsCfg netnsConfig, ipsecCfg ipsecConfig, _ string) (firewallConfig, error) {
-	cfg := firewallConfig{}
+func ParseFirewallConfig(yamlCfg *FirewallConfigYAML, namespaces map[string]ipsec.NetNSSpec, portMode string) (FirewallConfig, error) {
+	cfg := FirewallConfig{}
 	if yamlCfg == nil {
 		return cfg, nil
 	}
 	for i, yi := range yamlCfg.Instances {
-		inst, err := parseFirewallInstance(yi, netnsCfg, ipsecCfg)
+		inst, err := parseFirewallInstance(yi, namespaces, portMode)
 		if err != nil {
-			return firewallConfig{}, fmt.Errorf("firewall.instances[%d]: %w", i, err)
+			return FirewallConfig{}, fmt.Errorf("firewall.instances[%d]: %w", i, err)
 		}
 		cfg.Instances = append(cfg.Instances, inst)
 	}
 	return cfg, nil
 }
 
-func parseFirewallInstance(yi firewallInstanceYAML, netnsCfg netnsConfig, ipsecCfg ipsecConfig) (FirewallInstanceConfig, error) {
+func parseFirewallInstance(yi firewallInstanceYAML, namespaces map[string]ipsec.NetNSSpec, portMode string) (FirewallInstanceConfig, error) {
 	if yi.ID == "" {
 		return FirewallInstanceConfig{}, fmt.Errorf("id is required")
 	}
@@ -147,12 +147,12 @@ func parseFirewallInstance(yi firewallInstanceYAML, netnsCfg netnsConfig, ipsecC
 	if isHost {
 		yi.NetNS = "host"
 	} else {
-		if _, ok := netnsCfg.Names[yi.NetNS]; !ok {
+		if _, ok := namespaces[yi.NetNS]; !ok {
 			return FirewallInstanceConfig{}, fmt.Errorf("netns %q not found in netns section", yi.NetNS)
 		}
 	}
 
-	enabled, err := enabledFromPresence("firewall.instances[].enabled", "firewall.instances[].disabled", true, yi.Enabled, yi.Disabled)
+	enabled, err := firewallEnabled("firewall.instances[]", yi.Enabled, yi.Disabled)
 	if err != nil {
 		return FirewallInstanceConfig{}, err
 	}
@@ -197,7 +197,7 @@ func parseFirewallInstance(yi firewallInstanceYAML, netnsCfg netnsConfig, ipsecC
 	}
 
 	hostPorts := firewall.HostPortConfig{}
-	rangeMode := isHost && ipsecCfg.PortMode == ipsec.PortModeRange
+	rangeMode := isHost && portMode == ipsec.PortModeRange
 	if rangeMode {
 		hostPorts.IKE = true
 		hostPorts.NATT = true
@@ -216,7 +216,7 @@ func parseFirewallInstance(yi firewallInstanceYAML, netnsCfg netnsConfig, ipsecC
 		redirectGrace.Enabled = true
 	}
 	if yi.RedirectGrace != nil {
-		enabled, err := enabledFromPresence("firewall.instances[].redirect_grace.enabled", "firewall.instances[].redirect_grace.disabled", true, yi.RedirectGrace.Enabled, yi.RedirectGrace.Disabled)
+		enabled, err := firewallEnabled("firewall.instances[].redirect_grace", yi.RedirectGrace.Enabled, yi.RedirectGrace.Disabled)
 		if err != nil {
 			return FirewallInstanceConfig{}, err
 		}
@@ -329,21 +329,6 @@ func parseLocalServices(items []localServiceYAML) ([]firewall.LocalService, erro
 	return out, nil
 }
 
-func parsePrefixList(items []string) ([]netip.Prefix, error) {
-	if len(items) == 0 {
-		return nil, nil
-	}
-	var out []netip.Prefix
-	for _, s := range items {
-		p, err := netip.ParsePrefix(s)
-		if err != nil {
-			return nil, fmt.Errorf("invalid prefix %q: %w", s, err)
-		}
-		out = append(out, p.Masked())
-	}
-	return out, nil
-}
-
 // parseFirewallListenAddrs parses a list of listen addresses for host firewall
 // rules. Plain IPs are accepted; host:port forms have their host portion
 // extracted for use as a destination address match.
@@ -383,15 +368,10 @@ func oneOfFirewallBackend(backend string) bool {
 	return false
 }
 
-// firewallInstancesEnabled returns enabled instances Photon is allowed to
-// manage. External instances are visible through debug output but deliberately
-// excluded from reconcile and endpoint ACL enforcement.
-func firewallInstancesEnabled(config *appConfig) []FirewallInstanceConfig {
-	if config == nil {
-		return nil
-	}
+// ManagedInstances returns enabled instances Photon may manage.
+func (config FirewallConfig) ManagedInstances() []FirewallInstanceConfig {
 	var out []FirewallInstanceConfig
-	for _, inst := range config.Firewall.Instances {
+	for _, inst := range config.Instances {
 		if inst.Enabled && inst.Mode == firewall.ModeManaged {
 			out = append(out, inst)
 		}
@@ -399,9 +379,8 @@ func firewallInstancesEnabled(config *appConfig) []FirewallInstanceConfig {
 	return out
 }
 
-// firewallInstanceSpecFromConfig converts a FirewallInstanceConfig into a
-// firewall.FirewallInstanceSpec ready for the planner.
-func firewallInstanceSpecFromConfig(inst FirewallInstanceConfig, listenAddrs []netip.Addr, charonIKEPort, charonNATTPort uint16) firewall.FirewallInstanceSpec {
+// Spec returns the planner input with stable local charon ports.
+func (inst FirewallInstanceConfig) Spec() firewall.FirewallInstanceSpec {
 	return firewall.FirewallInstanceSpec{
 		ID:                inst.ID,
 		NetNS:             inst.NetNS,
@@ -416,12 +395,20 @@ func firewallInstanceSpecFromConfig(inst FirewallInstanceConfig, listenAddrs []n
 		HostPorts:         inst.HostPorts,
 		RedirectGrace:     inst.RedirectGrace,
 		Priorities:        inst.Priorities,
-		ListenAddrs:       listenAddrs,
-		CharonIKEPort:     charonIKEPort,
-		CharonNATTPort:    charonNATTPort,
+		ListenAddrs:       inst.ListenAddrs,
+		CharonIKEPort:     500,
+		CharonNATTPort:    4500,
 		NativeHooks:       inst.NativeHooks,
 	}
 }
 
-// ensure ipsec import is used (for NetNSSpec constants if needed in future).
-var _ = ipsec.NetNSHost
+// Firewall blocks are enabled when present unless explicitly disabled.
+func firewallEnabled(path string, enabled, disabled *bool) (bool, error) {
+	if enabled != nil && disabled != nil && *enabled == *disabled {
+		return false, fmt.Errorf("%s.enabled conflicts with %s.disabled", path, path)
+	}
+	if disabled != nil {
+		return !*disabled, nil
+	}
+	return enabled == nil || *enabled, nil
+}

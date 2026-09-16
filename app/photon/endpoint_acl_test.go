@@ -90,7 +90,7 @@ func TestEndpointACLApplyNoopDoesNotCommitOrNotify(t *testing.T) {
 		},
 	}
 	appConfig := defaultAppConfig()
-	appConfig.Firewall.Instances = []FirewallInstanceConfig{{
+	appConfig.Firewall.Instances = []photonlinux.FirewallInstanceConfig{{
 		ID: "host", NetNS: "host", IsHost: true, Enabled: true,
 		Mode: firewall.ModeManaged, Backend: firewall.BackendAuto,
 	}}

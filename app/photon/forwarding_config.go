@@ -86,3 +86,18 @@ func filterAuthorizedByPolicy(prefixes []netip.Prefix, policy firewall.Forwardin
 	}
 	return out
 }
+
+func parsePrefixList(items []string) ([]netip.Prefix, error) {
+	if len(items) == 0 {
+		return nil, nil
+	}
+	var out []netip.Prefix
+	for _, s := range items {
+		p, err := netip.ParsePrefix(s)
+		if err != nil {
+			return nil, fmt.Errorf("invalid prefix %q: %w", s, err)
+		}
+		out = append(out, p.Masked())
+	}
+	return out, nil
+}

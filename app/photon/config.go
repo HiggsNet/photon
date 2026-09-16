@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -61,7 +62,7 @@ type appConfig struct {
 	IPAM                 ipamConfig
 	Netns                netnsConfig
 	Routing              routingConfig
-	Firewall             firewallConfig
+	Firewall             photonlinux.FirewallConfig
 	PeerLifecycle        inspect.PeerLifecycleConfig
 	Health               healthConfig
 	Observer             observerConfig
@@ -83,17 +84,17 @@ type configYAML struct {
 
 	Log logConfigYAML `yaml:"log"`
 
-	Overlay       overlayDefaultsYAML      `yaml:"overlay"`
-	IPsec         ipsecConfigYAML          `yaml:"ipsec"`
-	IPAM          ipamConfigYAML           `yaml:"ipam"`
-	Netns         *netnsConfigYAML         `yaml:"netns"`
-	Routing       *routingInstancesYAML    `yaml:"routing"`
-	Firewall      *firewallConfigYAML      `yaml:"firewall"`
-	PeerLifecycle *peerLifecycleYAML       `yaml:"peer_lifecycle"`
-	Health        *healthConfigYAML        `yaml:"health"`
-	Observer      *observerConfigYAML      `yaml:"observer"`
-	Overlays      []overlayGroupConfigYAML `yaml:"overlays"`
-	Gossip        gossipConfigYAML         `yaml:"gossip"`
+	Overlay       overlayDefaultsYAML             `yaml:"overlay"`
+	IPsec         ipsecConfigYAML                 `yaml:"ipsec"`
+	IPAM          ipamConfigYAML                  `yaml:"ipam"`
+	Netns         *netnsConfigYAML                `yaml:"netns"`
+	Routing       *routingInstancesYAML           `yaml:"routing"`
+	Firewall      *photonlinux.FirewallConfigYAML `yaml:"firewall"`
+	PeerLifecycle *peerLifecycleYAML              `yaml:"peer_lifecycle"`
+	Health        *healthConfigYAML               `yaml:"health"`
+	Observer      *observerConfigYAML             `yaml:"observer"`
+	Overlays      []overlayGroupConfigYAML        `yaml:"overlays"`
+	Gossip        gossipConfigYAML                `yaml:"gossip"`
 }
 
 // peerLifecycleYAML is the YAML representation of PeerLifecycleConfig.
@@ -612,7 +613,7 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 	// Parse firewall.instances[], if any.
 	if file.Firewall != nil {
 		var err error
-		config.Firewall, err = parseFirewallConfig(file.Firewall, config.Netns, config.IPsec, config.DataDir)
+		config.Firewall, err = photonlinux.ParseFirewallConfig(file.Firewall, config.Netns.Names, config.IPsec.PortMode)
 		if err != nil {
 			return err
 		}

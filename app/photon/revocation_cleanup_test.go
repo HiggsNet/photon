@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/observability"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -438,7 +439,7 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 		Forwarding: map[string]firewall.ForwardingPolicy{"photontesth2": {Transit: true}},
 	}
 	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
-	appConfig.Firewall.Instances = []FirewallInstanceConfig{{
+	appConfig.Firewall.Instances = []photonlinux.FirewallInstanceConfig{{
 		ID:                "photontesth2",
 		NetNS:             "photontesth2",
 		Enabled:           true,

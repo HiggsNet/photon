@@ -16,13 +16,8 @@ import (
 
 const defaultFirewallReconcileInterval = 30 * time.Second
 
-const (
-	defaultCharonIKEPort  uint16 = 500
-	defaultCharonNATTPort uint16 = 4500
-)
-
 func (d *Daemon) firewallReconcileInterval() time.Duration {
-	if d == nil || d.App == nil || d.App.Config == nil || len(firewallInstancesEnabled(d.App.Config)) == 0 {
+	if d == nil || d.App == nil || d.App.Config == nil || len(d.App.Config.Firewall.ManagedInstances()) == 0 {
 		return 0
 	}
 	return defaultFirewallReconcileInterval
@@ -51,7 +46,7 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 	links, ipsecReconcile := d.linuxObservation.ipsecSnapshot()
 	rev := uint64(common.Revision)
 	config := d.App.Config
-	instances := firewallInstancesEnabled(config)
+	instances := config.Firewall.ManagedInstances()
 	if len(instances) == 0 {
 		return nil
 	}
@@ -75,8 +70,7 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 
 	var firstErr error
 	for _, instCfg := range instances {
-		listenAddrs := instCfg.ListenAddrs
-		spec := firewallInstanceSpecFromConfig(instCfg, listenAddrs, defaultCharonIKEPort, defaultCharonNATTPort)
+		spec := instCfg.Spec()
 		if spec.IsHost {
 			endpointServices, endpointErr := resolveEndpointServices(runtime.EndpointACLs, ars)
 			if endpointErr != nil {

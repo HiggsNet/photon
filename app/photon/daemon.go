@@ -1071,7 +1071,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		writeCanonicalView(conn, diagnosis)
 	case "firewall_view":
 		fwSnapshot := d.linuxObservation.firewallSnapshot()
-		instances := []FirewallInstanceConfig(nil)
+		instances := []photonlinux.FirewallInstanceConfig(nil)
 		var appCfg *appConfig
 		if d.App != nil && d.App.Config != nil {
 			appCfg = d.App.Config

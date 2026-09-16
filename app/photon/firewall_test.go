@@ -513,46 +513,6 @@ firewall:
 	}
 }
 
-func TestFirewallInstancesEnabled(t *testing.T) {
-	config := &appConfig{
-		Firewall: firewallConfig{
-			Instances: []FirewallInstanceConfig{
-				{ID: "a", Enabled: true, Mode: firewall.ModeManaged},
-				{ID: "b", Enabled: false, Mode: firewall.ModeManaged},
-				{ID: "c", Enabled: true, Mode: firewall.ModeDisabled},
-				{ID: "d", Enabled: true, Mode: firewall.ModeExternal},
-			},
-		},
-	}
-	enabled := firewallInstancesEnabled(config)
-	if len(enabled) != 1 {
-		t.Fatalf("expected 1 enabled, got %d", len(enabled))
-	}
-	if enabled[0].ID != "a" {
-		t.Errorf("expected instance a, got %s", enabled[0].ID)
-	}
-}
-
-func TestFirewallInstanceSpecFromConfig(t *testing.T) {
-	inst := FirewallInstanceConfig{
-		ID: "photontesth2", NetNS: "photontesth2", IsHost: false,
-		Enabled: true, Mode: firewall.ModeManaged,
-		Backend: firewall.BackendNFT, DefaultPolicy: firewall.DefaultPolicyDrop,
-		OwnerPrefix: "photon", XFRMTunnelPattern: "phx*",
-		LocalServices: []firewall.LocalService{{Proto: "tcp", Port: 443}},
-	}
-	spec := firewallInstanceSpecFromConfig(inst, nil, 500, 4500)
-	if spec.ID != "photontesth2" {
-		t.Errorf("ID = %s", spec.ID)
-	}
-	if spec.CharonIKEPort != 500 {
-		t.Errorf("IKEPort = %d", spec.CharonIKEPort)
-	}
-	if len(spec.LocalServices) != 1 {
-		t.Errorf("local services = %d", len(spec.LocalServices))
-	}
-}
-
 func TestReconcileFirewall_NoInstances(t *testing.T) {
 	d := &Daemon{
 		State: newState(nil, corestate.NewStore(&corestate.VerifiedState{}, nil), &photonlinux.LinuxState{}),
@@ -733,7 +693,7 @@ func (d *blockingFirewallDriver) Apply(ctx context.Context, plan firewall.Firewa
 func TestReconcileFirewallUsesScopeForOwnedObjects(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	appConfig := defaultAppConfig()
-	appConfig.Firewall.Instances = []FirewallInstanceConfig{
+	appConfig.Firewall.Instances = []photonlinux.FirewallInstanceConfig{
 		{
 			ID:            "photon",
 			NetNS:         "default",
@@ -777,7 +737,7 @@ func TestLongFirewallReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	appConfig := defaultAppConfig()
 	appConfig.Observer.Enabled = true
-	appConfig.Firewall.Instances = []FirewallInstanceConfig{{
+	appConfig.Firewall.Instances = []photonlinux.FirewallInstanceConfig{{
 		ID:            "photontesth2",
 		NetNS:         "photontesth2",
 		Enabled:       true,
@@ -861,7 +821,7 @@ func TestLongFirewallReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	appConfig := defaultAppConfig()
-	appConfig.Firewall.Instances = []FirewallInstanceConfig{{
+	appConfig.Firewall.Instances = []photonlinux.FirewallInstanceConfig{{
 		ID:            "photontesth2",
 		NetNS:         "photontesth2",
 		Enabled:       true,
@@ -903,7 +863,7 @@ func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
 func TestFirewallReconcileDirtyIntervalAndRecover(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	appConfig := defaultAppConfig()
-	appConfig.Firewall.Instances = []FirewallInstanceConfig{{
+	appConfig.Firewall.Instances = []photonlinux.FirewallInstanceConfig{{
 		ID:            "photontesth2",
 		NetNS:         "photontesth2",
 		Enabled:       true,
@@ -946,7 +906,7 @@ func TestFirewallReconcileDirtyIntervalAndRecover(t *testing.T) {
 }
 
 func TestBuildFirewallDebugView(t *testing.T) {
-	instances := []FirewallInstanceConfig{
+	instances := []photonlinux.FirewallInstanceConfig{
 		{ID: "photontesth2", NetNS: "photontesth2", IsHost: false, Enabled: true, Mode: firewall.ModeManaged, Backend: firewall.BackendAuto, DefaultPolicy: firewall.DefaultPolicyDrop,
 			NativeHooks: firewall.NativeHooks{
 				NFT:      firewall.InlineHookRules{PreInput: []string{"counter"}},
@@ -979,7 +939,7 @@ func TestBuildFirewallDebugView(t *testing.T) {
 }
 
 func TestFilterFirewallDebugInstances(t *testing.T) {
-	instances := []FirewallInstanceConfig{
+	instances := []photonlinux.FirewallInstanceConfig{
 		{ID: "overlay", NetNS: "photon"},
 		{ID: "host-ipsec", NetNS: "host", IsHost: true},
 	}

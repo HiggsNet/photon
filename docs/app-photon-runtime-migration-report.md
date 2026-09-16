@@ -154,7 +154,7 @@ operations           当前为空；rotation/takeover 从真实系统 Observatio
 | 文件 | 当前作用 | 最终位置 / 层 |
 |---|---|---|
 | `endpoint_acl.go` | ACL CLI、验证、resolve 和 firewall runtime mutation | Linux firewall model/controller；CLI/control 留 adapter；属于 platform desired runtime |
-| `firewall_config.go` | nftables/iptables/netns/hook 配置 | `internal/photonlinux/firewall/config` |
+| `firewall_config.go` | 已迁至 `internal/photonlinux/firewall_config.go` | Linux owner 持有 YAML/effective config、managed 实例筛选与 spec 构造；app 直接传 namespace specs 和 IPsec port mode，旧类型/helper 已删除 |
 | `firewall_reconcile.go` | firewall plan/apply/observation 顺序 | YAML/effective config 与 policy input builder 下沉；Daemon 保留 owner/revision/逐实例 apply/Observation，实际执行复用 `LinuxDriver.ApplyFirewall`，不新增 PlatformController facade |
 | `forwarding_config.go` | Linux forwarding policy | Linux firewall/routing config |
 | `gossip_checkpoint_migration.go` | 旧 SyncPeers 到 GossipCheckpoint | `internal/photonlinux/migration`；仅由旧数据库单向迁移调用，不属于在线兼容层；只有明确停止支持旧 schema 时才删除 |
@@ -345,7 +345,7 @@ test-only production helper。
 核心 Runtime/State/Observation 和 canonical inspect 迁移已经闭环，后续只保留以下明确切片：
 
 1. 已完成：删除 `EnableEventLoopSync`、`processPacketEvent`、`SyncTransportDeps` 与 endpoint collector 全局测试接缝；
-2. firewall：下沉 YAML/effective config、forwarding policy 与 policy input builder，app 保留 reconcile 顺序；
+2. firewall：YAML/effective config、managed 实例筛选和 spec 构造已下沉；继续迁移 forwarding policy 与 policy input builder，app 保留 reconcile 顺序；
 3. routing/BIRD：下沉 netns/BIRD/upstream 配置与纯 spec/export/announce policy，复用既有 LinuxDriver 执行；
 4. IPsec：下沉 protocol record 纯构造、reconcile 纯 helper 与安全 live projection，保留私钥先落盘和 rotation/apply
    的 Daemon 顺序；
@@ -360,3 +360,17 @@ A5 测试接缝清理验证（2026-09-16）：fresh `make check` 通过 fmt、ve
 完整检查在允许本地 socket 的环境执行。endpoint no-op fixture 显式关闭 IPsec gossip 地址引用，
 避免真实接口采集引起下一轮 IPsec 地址补发；仍覆盖重复发布不写盘、不触发同步。
 未运行特权数据面 smoke；本切片不改变生产协议、平台 apply 或关闭顺序。
+
+A5 firewall 配置切片（2026-09-16）：生产代码新增 452 行、删除 454 行，净减 2 行（含移动文件）。
+调用链为 app YAML 装配 → photonlinux.ParseFirewallConfig → FirewallConfig.ManagedInstances / FirewallInstanceConfig.Spec；
+reconcile、Endpoint ACL enforcement 和 debug 均直接消费同一配置，不保留 app alias 或 forwarding wrapper。
+解析只接收现有 namespace spec map 和 port mode，不再传完整 app netns/IPsec 配置或未使用的 dataDir；
+稳定 charon 端口和 ListenAddrs 由 spec builder 直接提供。app 原有 enabled/disabled helper 保留在 config.go；
+firewall 的 present-default-true 校验就地放在 firewall_config.go，不为简单布尔规则新增共享包。
+prefix parser 留归其唯一 forwarding 消费者。
+实例筛选/spec 单测已迁入 Linux owner；app 保留 YAML 集成、reconcile、ACL 与 revocation 测试。
+定向配置测试与 fresh make check（fmt、vet、全量 Go 测试、Linux build、Windows amd64 cross build）通过，
+git diff --check 通过。未运行特权数据面 smoke。forwarding policy 和 policy input builder 尚未迁完，TODO 保持未勾选。
+
+配置包收口复核：已删除临时 configutil 包，撤回 routing/health/Observer 的关联改动；
+app/photon 与 internal/photonlinux 的配置及 firewall instance 定向测试重新执行通过，git diff --check 通过。

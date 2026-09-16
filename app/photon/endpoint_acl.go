@@ -279,7 +279,7 @@ func (d *Daemon) hasEnforcingHostFirewall() bool {
 	if d == nil || d.App == nil || d.App.Config == nil {
 		return false
 	}
-	for _, instance := range firewallInstancesEnabled(d.App.Config) {
+	for _, instance := range d.App.Config.Firewall.ManagedInstances() {
 		if instance.IsHost && instance.Mode == firewall.ModeManaged && instance.Backend != firewall.BackendNone {
 			backend, _, err := d.linuxDriver.ResolveFirewallBackend(context.Background(), firewall.FirewallInstanceSpec{
 				ID: instance.ID, Backend: instance.Backend, NativeHooks: instance.NativeHooks,
