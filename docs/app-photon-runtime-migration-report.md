@@ -418,3 +418,9 @@ Routing 配置测试归属整理（2026-09-17）：从 app/config_routing_test.g
 
 Firewall/namespace 测试归属整理（2026-09-17）：11 组 firewall 字段、hooks、priority、host、监听地址和 mode/backend/冲突校验直接调用 Linux ParseFirewallConfig；overlay 测试拆分，app 只检查 namespace forwarding 的装配。5 组 namespace 默认值、具名项、forwarding 别名和非法 host 配置测试归 ParseNetNSConfig。app 保留 IPsec port mode 联动、默认 namespace、未知引用和严格 YAML 拒绝，forwarding/default_netns/mode/backend/host 拒绝断言核对具体错误。原有效断言保留，未新增生产代码。定向测试通过。
 本次测试归属整理后的 make check（fmt、vet、全量 Go 测试、Linux/Windows 构建）与 git diff --check 通过；未执行特权数据面 smoke。
+
+A5 路由前缀策略下沉（2026-09-17）：AuthorizedPrefixes 与 AutoAnnounceAssignedPrefixes 归 pkg/routing/prefixes.go，后者只接收全量开关和 selectors，不依赖 app ipamConfig。BIRD export 及 upstream route/source prefix 选择归 internal/photonlinux/routing_prefixes.go；export 直接接收已有 ForwardingPolicy，零值维持非 transit 语义。删除 app 原 helper 与单调用开关 wrapper。
+共享分配源地址单测跟随 owner 迁移；新增 selector/旧 assignment 布局回退、transit allow/deny、上游排除本地子网并保留聚合和去重远端路由的策略单测。原发布、撤回、显式宣告保留、IPsec 和 BIRD reconcile 集成测试继续覆盖 app 调用链。未新增包或接口。动态 BIRD spec、轮换接口策略与自动宣告计划仍待下沉；本切片不改变提交和 Driver 执行顺序。
+本切片 make check（fmt、vet、全量 Go 测试、Linux/Windows 构建）与 git diff --check 通过；未执行特权数据面 smoke。
+前缀 helper 收口：删除 routing_prefixes.go 中 firstUsablePrefixAddress、prefixWithinAny、prefixWithin、netipPrefixLess 四个 helper；源地址选择及包含判断就地表达，排序复用同包 routing.go 的 prefixLess。保留地址族、前缀长度、地址边界与去重语义，未新增通用工具包。相关上游前缀与导出策略定向测试通过。
+helper 收口后的 make check（fmt、vet、全量 Go 测试、Linux/Windows 构建）及 git diff --check 通过。

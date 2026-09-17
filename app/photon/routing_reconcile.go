@@ -17,7 +17,6 @@ import (
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
-	"github.com/HiggsNet/photon/pkg/firewall"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
@@ -205,11 +204,11 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 		(inst.Upstream.Mode == photonlinux.UpstreamModeStatic || inst.Upstream.InstallSourceAddresses) {
 		var routePrefixes []netip.Prefix
 		if inst.Upstream.Mode == photonlinux.UpstreamModeStatic {
-			routePrefixes = externalUpstreamRoutePrefixes(ars, verified.ManagedZone)
+			routePrefixes = photonlinux.ExternalUpstreamRoutePrefixes(ars, verified.ManagedZone)
 		}
 		var sourcePrefixes []netip.Prefix
 		if inst.Upstream.InstallSourceAddresses {
-			sourcePrefixes = externalUpstreamSourcePrefixes(ars, verified.ManagedZone)
+			sourcePrefixes = photonlinux.ExternalUpstreamSourcePrefixes(ars, verified.ManagedZone)
 		}
 		rspec := photonlinux.UpstreamRouteSpec{
 			NetNS:          inst.Upstream.Veth.PeerNetns,
@@ -226,13 +225,13 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 		}
 	}
 
-	importSet := authorizedPrefixes(ars, nil)
+	importSet := routing.AuthorizedPrefixes(ars, nil)
 	// Phase 6.3.4: BIRD export set must use the same forwarding policy as the
 	// firewall. A non-transit node only exports its own local assigned prefixes;
 	// a transit node exports authorized prefixes filtered by the forwarding
 	// policy allow/deny lists. Both BIRD and firewall consume the same policy
 	// so they never disagree on which transit paths are allowed.
-	exportSet := buildRoutingExportSet(ars, verified.ManagedZone, config, netnsName)
+	exportSet := photonlinux.BuildRoutingExportSet(ars, verified.ManagedZone, config.Netns.ForwardingPolicy(netnsName))
 
 	configBytes, err := bird.DefaultConfigGenerator{}.Generate(spec, importSet, exportSet)
 	if err != nil {
@@ -611,175 +610,6 @@ func routingInstanceEnabled(inst photonlinux.RoutingInstance) bool {
 	return inst.Enabled && inst.Bird.Mode != ipsec.RoutingModeDisabled
 }
 
-// buildRoutingExportSet computes the BIRD export set using the forwarding policy
-// shared with the firewall planner (Phase 6.3.4). An absent or non-transit
-// namespace policy exports only local assigned prefixes; transit=true exports
-// authorized prefixes filtered by the shared allow/deny lists.
-func buildRoutingExportSet(ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath, config *appConfig, netnsName string) []netip.Prefix {
-	localExport := authorizedPrefixes(ars, []zone.ZonePath{managedZone})
-	if config == nil {
-		return localExport
-	}
-	policy := config.Netns.ForwardingPolicy(netnsName)
-	if !policy.Transit {
-		// Non-transit or no policy: only export local assigned prefixes.
-		return localExport
-	}
-	// Transit: export all authorized prefixes filtered by the policy.
-	allAuthorized := authorizedPrefixes(ars, nil)
-	if len(policy.AllowPrefixes) == 0 && len(policy.DenyPrefixes) == 0 {
-		return allAuthorized
-	}
-	return firewall.FilterAuthorizedByPolicy(allAuthorized, policy)
-}
-
-func authorizedPrefixes(ars *routing.AuthorizedRouteSet, zones []zone.ZonePath) []netip.Prefix {
-	if ars == nil {
-		return nil
-	}
-	var out []netip.Prefix
-	for source, prefixes := range ars.Announced {
-		if len(zones) > 0 {
-			found := slices.Contains(zones, source)
-			if !found {
-				continue
-			}
-		}
-		for prefix := range prefixes {
-			out = append(out, prefix)
-		}
-	}
-	return out
-}
-
-func ipamAutoAnnounceEnabled(config ipamConfig) bool {
-	return config.AutoAnnounceAssignedIPs || len(config.Announce) > 0
-}
-
-func autoAnnounceAssignedPrefixes(ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath, config ipamConfig) []netip.Prefix {
-	if ars == nil || !managedZone.Valid() || !ipamAutoAnnounceEnabled(config) {
-		return nil
-	}
-	entries := ars.AllAssignments
-	if len(entries) == 0 {
-		entries = make([]*routing.AssignmentEntry, 0, len(ars.Assignments))
-		for _, entry := range ars.Assignments {
-			entries = append(entries, entry)
-		}
-	}
-	selected := make(map[netip.Prefix]struct{})
-	for _, entry := range entries {
-		if entry == nil || entry.AssignedTo != managedZone {
-			continue
-		}
-		if config.AutoAnnounceAssignedIPs || assignmentMatchesAnnounceSelectors(entry, config.Announce) {
-			selected[entry.Prefix] = struct{}{}
-		}
-	}
-	out := make([]netip.Prefix, 0, len(selected))
-	for prefix := range selected {
-		out = append(out, prefix)
-	}
-	sort.Slice(out, func(i, j int) bool { return netipPrefixLess(out[i], out[j]) })
-	return out
-}
-
-func assignmentMatchesAnnounceSelectors(entry *routing.AssignmentEntry, selectors []string) bool {
-	for _, selector := range selectors {
-		switch {
-		case selector == "all":
-			return true
-		case selector == "non-shared" && !entry.Shared:
-			return true
-		case selector == "shared" && entry.Shared:
-			return true
-		case strings.HasPrefix(selector, "tag:") && entry.Tag == strings.TrimPrefix(selector, "tag:"):
-			return true
-		case strings.HasPrefix(selector, "assignment:") && entry.Prefix.String() == strings.TrimPrefix(selector, "assignment:"):
-			return true
-		}
-	}
-	return false
-}
-
-func externalUpstreamRoutePrefixes(ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath) []netip.Prefix {
-	authorized := authorizedPrefixes(ars, nil)
-	localAssigned := routing.LocalAssignedPrefixes(ars, managedZone, true)
-	if len(authorized) == 0 {
-		return nil
-	}
-	out := make([]netip.Prefix, 0, len(authorized))
-	seen := make(map[netip.Prefix]struct{}, len(authorized))
-	for _, prefix := range authorized {
-		if prefixWithinAny(prefix, localAssigned) {
-			continue
-		}
-		if _, ok := seen[prefix]; ok {
-			continue
-		}
-		seen[prefix] = struct{}{}
-		out = append(out, prefix)
-	}
-	sort.Slice(out, func(i, j int) bool { return netipPrefixLess(out[i], out[j]) })
-	return out
-}
-
-func externalUpstreamSourcePrefixes(ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath) []netip.Prefix {
-	// Source identities belong to the node itself. Shared/anycast prefixes are
-	// served behind the upstream veth and must remain routes, not addresses on
-	// the veth endpoint itself.
-	localAssigned := routing.LocalAssignedPrefixes(ars, managedZone, false)
-	out := make([]netip.Prefix, 0, len(localAssigned))
-	seen := make(map[netip.Prefix]struct{}, len(localAssigned))
-	for _, prefix := range localAssigned {
-		source := firstUsablePrefixAddress(prefix)
-		if _, ok := seen[source]; ok {
-			continue
-		}
-		seen[source] = struct{}{}
-		out = append(out, source)
-	}
-	sort.Slice(out, func(i, j int) bool { return netipPrefixLess(out[i], out[j]) })
-	return out
-}
-
-func firstUsablePrefixAddress(prefix netip.Prefix) netip.Prefix {
-	addr := prefix.Addr()
-	if prefix.Bits() < addr.BitLen() {
-		next := addr.Next()
-		if next.IsValid() && prefix.Contains(next) {
-			addr = next
-		}
-	}
-	return netip.PrefixFrom(addr, prefix.Bits())
-}
-
-func prefixWithinAny(prefix netip.Prefix, candidates []netip.Prefix) bool {
-	for _, candidate := range candidates {
-		if prefixWithin(prefix, candidate) {
-			return true
-		}
-	}
-	return false
-}
-
-func prefixWithin(prefix, parent netip.Prefix) bool {
-	if prefix.Addr().Is4() != parent.Addr().Is4() {
-		return false
-	}
-	return prefix.Bits() >= parent.Bits() && parent.Contains(prefix.Addr())
-}
-
-func netipPrefixLess(a, b netip.Prefix) bool {
-	if a.Addr().Less(b.Addr()) {
-		return true
-	}
-	if b.Addr().Less(a.Addr()) {
-		return false
-	}
-	return a.Bits() < b.Bits()
-}
-
 func birdOwnerForInstance(inst photonlinux.RoutingInstance, netnsName string) bird.BirdResourceOwner {
 	owner := bird.BirdResourceOwner{
 		Manager:    "photon",
@@ -920,7 +750,7 @@ func autoAnnounceAssignedIPsPlan(network *zone.NetworkState, managedZone zone.Zo
 	}
 
 	desired := make(map[netip.Prefix]struct{})
-	for _, prefix := range autoAnnounceAssignedPrefixes(ars, managedZone, config) {
+	for _, prefix := range routing.AutoAnnounceAssignedPrefixes(ars, managedZone, config.AutoAnnounceAssignedIPs, config.Announce) {
 		desired[prefix] = struct{}{}
 	}
 

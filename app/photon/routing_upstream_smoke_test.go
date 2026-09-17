@@ -473,8 +473,8 @@ func TestUpstreamRoutingWithIPAMAssignment(t *testing.T) {
 	}
 
 	// Generate BIRD config and verify the static route is rendered.
-	importSet := authorizedPrefixes(ars, nil)
-	exportSet := authorizedPrefixes(ars, []zone.ZonePath{"node-a.catofes."})
+	importSet := routing.AuthorizedPrefixes(ars, nil)
+	exportSet := routing.AuthorizedPrefixes(ars, []zone.ZonePath{"node-a.catofes."})
 	cfgBytes, err := bird.DefaultConfigGenerator{}.Generate(spec, importSet, exportSet)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)

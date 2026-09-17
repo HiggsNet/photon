@@ -325,7 +325,7 @@ func (d *Daemon) localIPv6DiagnosticPrefixes(verified *corestate.VerifiedState, 
 	if d == nil || d.App == nil || d.App.Config == nil || verified == nil || verified.Network == nil {
 		return nil
 	}
-	if !ipamAutoAnnounceEnabled(d.App.Config.IPAM) {
+	if !d.App.Config.IPAM.AutoAnnounceAssignedIPs && len(d.App.Config.IPAM.Announce) == 0 {
 		return nil
 	}
 	ars, err := routing.BuildAuthorizedRouteSet(verified.Network, now)
@@ -333,7 +333,7 @@ func (d *Daemon) localIPv6DiagnosticPrefixes(verified *corestate.VerifiedState, 
 		d.logWarn("ipsec", "diagnostic_prefixes_unavailable", map[string]any{"error": err.Error()})
 		return nil
 	}
-	prefixes := autoAnnounceAssignedPrefixes(ars, verified.ManagedZone, d.App.Config.IPAM)
+	prefixes := routing.AutoAnnounceAssignedPrefixes(ars, verified.ManagedZone, d.App.Config.IPAM.AutoAnnounceAssignedIPs, d.App.Config.IPAM.Announce)
 	out := prefixes[:0]
 	for _, prefix := range prefixes {
 		if prefix.Addr().Is6() && prefix.Bits() == 64 {

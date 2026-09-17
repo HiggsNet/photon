@@ -132,7 +132,8 @@ Daemon
     - [x] RoutingInstance 内含 BirdInstanceSpec、UpstreamConfig 内含 VethSpec，删除重复执行字段及逐字段转换；解析阶段保留已解析 namespace，reconcile/shutdown 按值补齐动态输入。
     - [x] routing 字段映射、默认值、shutdown/Babel 校验与 enabled/disabled 测试归 Linux 解析器；app 仅保留未知字段拒绝、namespace/data_dir 与 upstream 默认 namespace 装配测试。
     - [x] firewall/namespace 字段、默认值与校验测试归 Linux 解析器；app 保留跨配置联动和严格 YAML 边界，拒绝测试核对具体错误。
-    - [ ] 继续下沉 BIRD 动态 spec/export/announce 纯组装。
+    - [x] 授权宣告查询和自动宣告 assignment 筛选归 pkg/routing；BIRD export 与上游路由/源地址选择归 internal/photonlinux，直接接收 forwarding policy，不依赖 appConfig。解析后发布/撤回、revision guard 与 Driver 顺序仍归 app。
+    - [ ] 继续下沉 BIRD 动态 spec、轮换接口策略及自动宣告计划组装。
   - [ ] IPsec：把 transport/address/port/overlay record 纯构造、reconcile 纯 helper 和安全 live projection 靠近 `pkg/transport/ipsec`、state publisher 或 inspect owner；app 保留私钥先落盘、公共 record 后发布以及完整 rotation/apply 顺序。
   - [x] health：probe target/rotate role 组合属于 app health reconcile，raw ICMP、`setns` 和 exec fallback 属于 `internal/photonlinux/healthprobe`；当前边界无需为目录对称继续搬迁。
 - [x] 删除本轮审计确认的测试专用生产入口和单用途测试接缝，不为此新增通用 interface/manager。
