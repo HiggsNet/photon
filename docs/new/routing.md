@@ -157,7 +157,7 @@ record 模型不支持显式删除。撤回使用同一 key 的更高版本，�
 }
 ```
 
-这条记录由 daemon 自动发布，列出本节点 `routing.instances[]` 实际使用的 netns 名称。其他节点可用它把 Babel Router-ID 反推回 `(zone, netns)`，用于控制面交叉审计。不要手工写入或修改。
+这条记录由 daemon 自动发布，列出本节点 `routing.instances[]` 实际使用的 netns 名称。该记录为未来 Router-ID 到 `(zone, netns)` 的控制面交叉审计保留，目前尚未实现来源约束；本地 Router-ID 直接从配置与身份材料派生，不读取这条记录。不要手工写入或修改。
 
 ---
 
@@ -342,10 +342,10 @@ Import filter 不验证“这个 Babel 邻居正是 announcement 的 owner”。
 | Export filter | 诚实节点只发布本节点 `AuthorizedRouteSet` 中的前缀 | ✅ |
 | 全局 import filter | 拒绝未授权前缀范围与 default route、bogon | ✅ |
 | Zone 签名链 | 保证 IPAM / announcement record 真实性 | ✅ |
-| 控制面交叉审计 | daemon 定期从 `birdc show route all` 读取路由，通过 Router-ID + `routing/netns` 反推 zone，验证前缀权限 | ✅ |
+| 控制面交叉审计（尚未实现） | 计划通过 Router-ID + `routing/netns` 映射 zone 并验证来源权限，目前仅保留协议发布 | 设计兼容 |
 | BIRD per-peer / Router-ID filter | 当前 BIRD 2.x filter 语言未暴露 `babel_router_id`，实时来源验证不可行 | — |
 
-直接 per-peer import filter 不可行的根本原因是 Babel 的距离向量传播：A 从 B 学到 C 的路由时，B 只是转发者，filter 若按 B 的权限拒绝就会破坏全网可达性。因此 Phase 5.7 之后的安全模型保持为：BIRD 负责边界过滤，Photon daemon 负责来源审计。
+直接 per-peer import filter 不可行的根本原因是 Babel 的距离向量传播：A 从 B 学到 C 的路由时，B 只是转发者，filter 若按 B 的权限拒绝就会破坏全网可达性。因此 Phase 5.7 之后的安全模型保持为：BIRD 负责边界过滤，Photon daemon 的来源审计留待后续实现。
 
 ---
 

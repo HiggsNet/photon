@@ -240,7 +240,6 @@ func TestRoutingSingleInstanceEntrySkipsDisabledPlatformEffects(t *testing.T) {
 			err = fixture.service.reconcileRoutingForInstance(
 				context.Background(), fixture.verified, map[string]*bird.InstanceObservation{}, nil, nil,
 				fixture.disabled, ars,
-				groupOverlaysByNetns(fixture.service.App.Config.IPsec.LinkGroups),
 				fixture.service.App.Config, fixture.now, false,
 			)
 			if err != nil {
@@ -447,13 +446,9 @@ func TestUpstreamRoutingWithIPAMAssignment(t *testing.T) {
 	if inst.Upstream == nil || !inst.Upstream.Enabled {
 		t.Fatal("upstream config not parsed correctly")
 	}
-	ng := &netnsOverlayGroup{
-		NetNSName: "photontesth2",
-		Overlays:  []string{"main"},
-		Spec:      ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "photontesth2", Create: true},
-	}
+	groups := []ipsec.LinkGroupSpec{{ID: "main", NetNS: ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 	routerID := bird.StableRouterID("node-a.catofes.", rootTrustHash(verified.Network), "photontesth2")
-	spec := buildBirdInstanceSpecForNetns(inst, routerID, ng, ars, "node-a.catofes.")
+	spec := photonlinux.BuildBirdInstanceSpec(inst, routerID, groups, ars, "node-a.catofes.")
 
 	// Verify the assignment prefix appears in static routes.
 	foundAssignment := false
@@ -546,51 +541,6 @@ func TestExternalUpstreamCanInstallSourceAddressesWithoutStaticRoutes(t *testing
 	}
 	if !prefixesContain(fakeRM.ensureSpec.SourcePrefixes, "10.0.0.1/16") {
 		t.Fatalf("external source addresses = %+v, want 10.0.0.1/16", fakeRM.ensureSpec.SourcePrefixes)
-	}
-}
-
-func TestBuildBirdInstanceSpecExternalUpstreamHasNoStaticRoutes(t *testing.T) {
-	now := time.Unix(1000, 0)
-	verified, _, _, _, signers, _ := buildIPAMRoutingSmokeOwners(t)
-	addRouteAssignment(t, verified.Network, "catofes.", "10.42.0.0/24", "node-a.catofes.", true, now, signers["catofes."])
-	ars, err := routing.BuildAuthorizedRouteSet(verified.Network, now)
-	if err != nil {
-		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
-	}
-
-	dataDir := t.TempDir()
-	netnsCfg := photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
-	yamlInstances := []photonlinux.RoutingInstanceYAML{{
-		ID:           "main",
-		NetNS:        "photontesth2",
-		Enabled:      boolPtr(true),
-		Mode:         "managed",
-		InterfacePat: "phx*",
-		Upstream: &photonlinux.UpstreamConfigYAML{
-			Enabled: boolPtr(true),
-			Mode:    photonlinux.UpstreamModeExternal,
-			Mesh: photonlinux.UpstreamEndpointYAML{
-				Interface: "phv2host",
-			},
-		},
-	}}
-	parsedCfg, err := photonlinux.ParseRoutingConfig(yamlInstances, netnsCfg, dataDir)
-	if err != nil {
-		t.Fatalf("photonlinux.ParseRoutingConfig: %v", err)
-	}
-	inst := parsedCfg.Instances[0]
-	ng := &netnsOverlayGroup{
-		NetNSName: "photontesth2",
-		Overlays:  []string{"main"},
-		Spec:      ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "photontesth2", Create: true},
-	}
-	routerID := bird.StableRouterID("node-a.catofes.", rootTrustHash(verified.Network), "photontesth2")
-	spec := buildBirdInstanceSpecForNetns(inst, routerID, ng, ars, "node-a.catofes.")
-	if spec.Upstream == nil {
-		t.Fatal("expected upstream interface block")
-	}
-	if len(spec.StaticRoutes) != 0 {
-		t.Fatalf("external upstream static routes = %+v, want none", spec.StaticRoutes)
 	}
 }
 

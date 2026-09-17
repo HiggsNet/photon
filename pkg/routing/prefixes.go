@@ -80,3 +80,63 @@ func assignmentMatchesAnnounceSelectors(entry *AssignmentEntry, selectors []stri
 	}
 	return false
 }
+
+// AutoAnnounceChanges compares selected assignments with local announcements.
+// Selector mode withdraws only auto-owned records; announceAll retains legacy ownership.
+// The caller owns signing and committing the returned changes.
+func AutoAnnounceChanges(network *zone.NetworkState, managedZone zone.ZonePath, ars *AuthorizedRouteSet, announceAll bool, selectors []string) (announce, withdraw []netip.Prefix) {
+	if network == nil {
+		return nil, nil
+	}
+	if managedZone.IsRoot() || !managedZone.Valid() {
+		return nil, nil
+	}
+
+	desired := make(map[netip.Prefix]struct{})
+	for _, prefix := range AutoAnnounceAssignedPrefixes(ars, managedZone, announceAll, selectors) {
+		desired[prefix] = struct{}{}
+	}
+
+	localAnnounced := make(map[netip.Prefix]*RouteAnnouncementRecord)
+	zs := network.Zones[managedZone]
+	if zs != nil {
+		for key, rec := range zs.Records {
+			if !strings.HasPrefix(key, RecordKeyPrefixRoutes) {
+				continue
+			}
+			ann, err := ParseRouteAnnouncementRecord(rec)
+			if err != nil {
+				continue
+			}
+			p, err := netip.ParsePrefix(ann.Prefix)
+			if err != nil {
+				continue
+			}
+			localAnnounced[p] = ann
+		}
+	}
+
+	for prefix := range desired {
+		if ann, ok := localAnnounced[prefix]; ok && ann.Active {
+			continue
+		}
+		announce = append(announce, prefix)
+	}
+
+	for prefix, ann := range localAnnounced {
+		if !ann.Active {
+			continue
+		}
+		if _, ok := desired[prefix]; ok {
+			continue
+		}
+		// Legacy true retains the old ownership model and reconciles every local
+		// announcement. Selector mode only withdraws records it created, leaving
+		// service/operator-controlled shared prefixes untouched.
+		if !announceAll && ann.Controller != RouteControllerAuto {
+			continue
+		}
+		withdraw = append(withdraw, prefix)
+	}
+	return announce, withdraw
+}

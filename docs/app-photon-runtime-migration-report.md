@@ -199,7 +199,7 @@ operations           当前为空；rotation/takeover 从真实系统 Observatio
 | `network_state.go` | 为 NetworkState 安装验证函数并规范化 current state | 最终靠近 `pkg/core/state`/zone 构造边界；避免 app 调用方依赖“记得先 configure”的隐性前置条件 |
 | `protocol_publish.go` | 私有 transport key 先落盘、公共 protocol record 后发布 | 保留关键顺序与 verified revision guard；纯 record 构造继续靠近 transport/state publisher owner |
 | `routing_config.go`（已删除） | BIRD/Babel/upstream YAML 解析与默认值 | 全部配置类型、解析和校验已归 internal/photonlinux/routing_config.go；三个 app namespace helper 已删除或归入 Linux 配置；spec/export/announce 继续下沉 |
-| `routing_reconcile.go` | BIRD/netns/veth/upstream、health、auto announce | 配置与纯 spec/export/announce policy 下沉；Daemon 保留多实例/health/intent/shutdown 顺序，Linux 执行复用现有 LinuxDriver，不新增 routing controller facade |
+| `routing_reconcile.go` | BIRD/netns/veth/upstream、health、auto announce | 配置与纯 spec/export/announce、轮换 metric 策略已归 routing/Linux owner；Daemon 保留多实例/health/intent/shutdown 顺序，Linux 执行复用现有 LinuxDriver |
 | `routing_upstream_routes.go` | Linux `ip` 安装 upstream 地址/路由 | `internal/photonlinux/routing` driver |
 | `runtime_state_migration.go` | 旧 `stateFile/stateMeta` 单向 decoder | current LinuxState/type/clone/codec/commit 已归 `internal/photonlinux`；本文件只保留旧 schema 拆分与原子迁移，停止支持旧库时删除 |
 | `service.go` | SOCKS5 CLI、旧 direct record mutation | intent 留 state/service；CLI 进 photoncli；展示进 inspect；旧 apply 删除 |
@@ -346,7 +346,7 @@ test-only production helper。
 
 1. 已完成：删除 `EnableEventLoopSync`、`processPacketEvent`、`SyncTransportDeps` 与 endpoint collector 全局测试接缝；
 2. 已完成：firewall YAML/effective config、managed 实例筛选、spec 构造、forwarding policy 和 policy input builder 已下沉；app 保留 reconcile 顺序；
-3. routing/BIRD：下沉 netns/BIRD/upstream 配置与纯 spec/export/announce policy，复用既有 LinuxDriver 执行；
+3. 已完成：routing/BIRD 的 netns/BIRD/upstream 配置与纯 spec/export/announce、轮换 metric 策略已归 routing/Linux owner，复用既有 LinuxDriver 执行；
 4. IPsec：下沉 protocol record 纯构造、reconcile 纯 helper 与安全 live projection，保留私钥先落盘和 rotation/apply
    的 Daemon 顺序；
 5. 冻结 legacy schema 的直接升级截止版本，到期同批删除 decoder、DTO 与 fixtures；
@@ -424,3 +424,45 @@ A5 路由前缀策略下沉（2026-09-17）：AuthorizedPrefixes 与 AutoAnnounc
 本切片 make check（fmt、vet、全量 Go 测试、Linux/Windows 构建）与 git diff --check 通过；未执行特权数据面 smoke。
 前缀 helper 收口：删除 routing_prefixes.go 中 firstUsablePrefixAddress、prefixWithinAny、prefixWithin、netipPrefixLess 四个 helper；源地址选择及包含判断就地表达，排序复用同包 routing.go 的 prefixLess。保留地址族、前缀长度、地址边界与去重语义，未新增通用工具包。相关上游前缀与导出策略定向测试通过。
 helper 收口后的 make check（fmt、vet、全量 Go 测试、Linux/Windows 构建）及 git diff --check 通过。
+
+A5 自动宣告计划下沉（2026-09-17）：比较当前宣告与已选 assignment 的纯逻辑归现有 pkg/routing/prefixes.go 的 AutoAnnounceChanges，显式接收全量开关和 selectors，返回 announce/withdraw 两组前缀。删除 app autoAnnounceAssignedIPsPlan、autoAnnouncePlan、changed 方法、永远为空的 error 返回链和重复 managed zone 判断；未新增包、接口或转发入口。
+调用链为 Daemon 读取 Common view -> routing.AutoAnnounceChanges -> Common.ApplyLocalIntents -> 日志与通知；签名、原子提交和产品生命周期继续归既有 owner。selector 模式只撤回 auto-owned 宣告，旧全量模式继续管理所有本机宣告；规划不修改 NetworkState。
+生产代码新增 67 行、删除 80 行，净减 13 行；app routing_reconcile.go 净减 73 行。纯策略回归测试归 pkg/routing，既有 app 发布/撤回/重复发布与 selector 集成测试保留。make check（fmt、vet、全量 Go 测试、Linux 构建及 Windows amd64 cross build）与 git diff --check 通过；未执行特权数据面 smoke。BIRD 动态 spec 与轮换接口策略仍待后续切片。
+
+A5 BIRD 动态 spec 下沉（2026-09-17）：BuildBirdInstanceSpec 归现有 internal/photonlinux/routing_spec.go，组合 RoutingInstance、router ID、link groups 与 AuthorizedRouteSet。按 namespace 直接选择 overlays，保留首个匹配 group 的 namespace spec；无 overlay 时保留解析后的 namespace。删除 app netnsOverlayGroup、groupOverlaysByNetns、buildBirdInstanceSpecForNetns、upstreamPeerNextHop、upstreamStaticRoutesEnabled 及 reconcile 的中转 map 参数。
+Daemon 继续读取 owner、推导 Router ID、生成轮换接口策略，并按原顺序执行 veth/upstream/BIRD 与发布 Observation。上游 static/external/disabled、IPv4/IPv6 next hop 和 shared assignment 路由语义不变。namespace 无 overlay 与 external upstream 的纯构造测试迁回 Linux owner，新增多 overlay/跨 namespace、双栈静态下一跳和配置不被写回的覆盖；app 保留真实 reconcile/生成配置/平台调用集成测试。
+本切片生产代码净减 27 行；连同上一轮自动宣告未提交改动，生产代码新增 136 行、删除 176 行，累计净减 40 行。make check（fmt、vet、全量 Go 测试、Linux build、Windows amd64 cross build）与 git diff --check 通过；未执行特权数据面 smoke。轮换接口策略仍待下沉，未新增 package、controller 或转发入口。
+
+A5 BIRD 轮换策略下沉（2026-09-17）：BirdRotateInterfacePolicies 归现有 internal/photonlinux/routing_spec.go，直接接收 IPsec LinkInstance、现有 LinkOutput 与 BirdInstanceSpec，不依赖 app observation summary 或 AppConfig。LinkOutputBelongsToBirdInstance 由轮换策略和 app 健康观察两个真实消费者共用；删除 app 同名旧函数、birdRotateInterfacePolicies 与单用途 linkInstanceByLinkID，不新增状态、DTO 或 owner。接口策略直接排序最终结果，删除中间接口名称切片。
+纯 metric 单测随实现迁回 Linux owner；补充 namespace/overlay 排除、缺失实例与非轮换实例、LinkID/ID 回退、共享接口取最大 metric 和输入顺序不影响输出的回归测试。app 继续以集成测试覆盖 BIRD 观察到 health cutover gate 的调用链。该切片生产代码净行数持平；累计未提交生产代码新增 200 行、删除 240 行，净减 40 行。make check（含全量测试、Linux 与 Windows amd64 构建）和 git diff --check 通过，未执行特权数据面 smoke。A5 routing/BIRD 配置与纯策略项已完成，后续转向 IPsec 窄边界迁移。
+
+### routing_reconcile.go 函数复核（2026-09-17）
+
+本轮沿用工作区已有的 spec/export/announce 策略下沉，逐个核对余下函数及调用方：
+
+| 函数 | 结论与依据 |
+| --- | --- |
+| reconcileRouting | 保留 Daemon；读取一致快照、auto-announce 后刷新版本、调度实例并发布结果。 |
+| publishRoutingObservation | 保留；版本过期时拒绝发布并重新标脏，是必要的状态边界。 |
+| reconcileRoutingForInstance | 保留编排；spec 来自 photonlinux，文本来自 bird.Generate，Driver 执行 I/O；应用层负责执行顺序、失败状态、hash、强制重载与 health 通知。没有为 Generate 再加转发包装。 |
+| observeBirdForHealth | 保留；Daemon 持有 health 生命周期并限定观测超时。 |
+| recordBirdHealthObservationUnavailableForLinks | 删除纯转发包装；调用方直接发布空观测，保留使 cutover 失效的行为。 |
+| recordBirdHealthObservationForLinks | 保留；读取 app LinkOutput、选择 staged 链路并写入 Daemon health。 |
+| birdObservationForInterface | 下沉 photonlinux.BirdObservationForInterface；是 BIRD 到 health 的无状态适配，不应让通用 BIRD 包反向依赖健康策略。纯单测一起迁移。 |
+| birdRouteIsBabel | 删除单用途函数，判定内联到上述转换。 |
+| stopManagedBirdInstances | 保留；关闭策略与强制停止由 Daemon 生命周期决定。 |
+| birdDumpForControl | 保留；control 请求聚合 Driver 原始输出与 inspect DTO，属于应用层诊断入口。 |
+| routingInstancesEnabled | 保留；reconcile 与 daemon 周期调度两个调用方共用过滤结果。 |
+| routingInstanceEnabled | 保留；批量过滤与单实例入口共用禁用判定，避免直接入口漏掉安全检查。 |
+| birdOwnerForInstance | 下沉为 RoutingInstance.BirdOwner；启动/停止共用同一资源身份构造，删除可与实例 namespace 不一致的额外参数。 |
+| routingCrashBackoff | 保留；属于 Daemon 重试时序，不是 BIRD 配置语法。 |
+| formatBirdProcessExit | 保留；为 app 运行观测生成失败描述，无需新增导出接口。 |
+| rootTrustHash | 保留；提取 Photon Network 根身份并用于稳定 router ID，通用 BIRD 包只接收身份字节。 |
+| isDryRunMissingBirdError / isDryRunConnectError | 暂保留行为；命名有误导，实际仅按错误文本分类，没有检查 dry-run 开关。是否收紧错误传播应另做行为变更及回归，不混入本轮移动。 |
+| autoAnnounceAssignedIPsResult | 保留；纯决策已归 routing.AutoAnnounceChanges，这里负责事务、日志和变更通知。 |
+| routingNetnsProtocolIntent | 保留；发布 namespace 信息，供未来 Router-ID 来源审计使用。当前没有业务读取方，但属于明确保留的协议设计。本地 Router-ID 从 Zone、trusted root 和 namespace/显式标签直接派生，不读取该记录；来源约束尚未实现。 |
+| bytesEqual | 删除，使用标准库 bytes.Equal。 |
+
+测试文件改为 routing_reconcile_apply_test.go：保留授权前缀进入实际生成文件、启动/重载、版本拒绝、external/disabled 和调度行为；删除与 bird/generator_test.go 重复的接口模板、RTT/interval 文本断言及重复 namespace 赋值。生成器语法单测继续由 BIRD 包负责，app cutover 集成测试继续覆盖观测失效阻止切换。
+
+本轮验证：首次全量测试受沙箱 Unix/UDP socket 权限限制；在允许本地 socket 的环境重跑 make check 全部通过（fmt、vet、全量测试、Linux 构建、Windows amd64 交叉构建），git diff --check 通过。未执行特权数据面 smoke，未提交或发布。

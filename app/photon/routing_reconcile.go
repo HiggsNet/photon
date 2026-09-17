@@ -1,23 +1,20 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
-	"slices"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
-	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
-	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -97,11 +94,8 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 		}
 	}
 
-	// Build per-netns overlay groups for interface pattern merging.
-	overlayByNetns := groupOverlaysByNetns(config.IPsec.LinkGroups)
-
 	for _, inst := range routingInstances {
-		if err := d.reconcileRoutingForInstance(ctx, verified, birdInstances, links, ipsecReconcile, inst, ars, overlayByNetns, config, now, forceReload); err != nil && firstErr == nil {
+		if err := d.reconcileRoutingForInstance(ctx, verified, birdInstances, links, ipsecReconcile, inst, ars, config, now, forceReload); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -112,28 +106,6 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 
 	d.publishRoutingObservation(rev, summary)
 	return firstErr
-}
-
-// netnsOverlayGroup holds the overlays sharing a single netns/BIRD instance.
-type netnsOverlayGroup struct {
-	NetNSName string
-	Overlays  []string
-	Spec      ipsec.NetNSSpec
-}
-
-func groupOverlaysByNetns(groups []ipsec.LinkGroupSpec) map[string]*netnsOverlayGroup {
-	out := make(map[string]*netnsOverlayGroup)
-	for _, group := range groups {
-		netnsName := photonlinux.NetNSTarget(group.NetNS)
-		ng, ok := out[netnsName]
-		if !ok {
-			ng = &netnsOverlayGroup{NetNSName: netnsName}
-			ng.Spec = group.NetNS.Normalized()
-			out[netnsName] = ng
-		}
-		ng.Overlays = append(ng.Overlays, group.ID)
-	}
-	return out
 }
 
 func (d *Daemon) publishRoutingObservation(rev uint64, summary *routingObservation) {
@@ -152,7 +124,7 @@ func (d *Daemon) publishRoutingObservation(rev uint64, summary *routingObservati
 	d.linuxObservation.replaceRouting(summary)
 }
 
-func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *corestate.VerifiedState, birdInstances map[string]*bird.InstanceObservation, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, inst photonlinux.RoutingInstance, ars *routing.AuthorizedRouteSet, overlayByNetns map[string]*netnsOverlayGroup, config *appConfig, now time.Time, forceReload bool) error {
+func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *corestate.VerifiedState, birdInstances map[string]*bird.InstanceObservation, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, inst photonlinux.RoutingInstance, ars *routing.AuthorizedRouteSet, config *appConfig, now time.Time, forceReload bool) error {
 	// Keep the single-instance entry point safe for dirty flushes, explicit
 	// reloads, tests, and future callers that do not pass the filtered list.
 	// Disabling an instance stops reconciliation; it intentionally does not
@@ -168,13 +140,6 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 		birdInstances[netnsName] = instState
 	}
 
-	// Record which overlays share this instance.
-	overlays := []string{}
-	if ng, ok := overlayByNetns[netnsName]; ok {
-		overlays = ng.Overlays
-	}
-	instState.Overlays = overlays
-
 	routerIDLabel := inst.RouterIDLabel
 	if routerIDLabel == "" {
 		routerIDLabel = inst.Bird.NetNSName
@@ -182,12 +147,13 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 	routerID := bird.StableRouterID(verified.ManagedZone, rootTrustHash(verified.Network), routerIDLabel)
 	instState.RouterID = routerID
 
-	spec := buildBirdInstanceSpecForNetns(inst, routerID, overlayByNetns[netnsName], ars, verified.ManagedZone)
-	spec.InterfacePolicies = birdRotateInterfacePolicies(links, reconcile, netnsName, overlays, inst)
+	spec := photonlinux.BuildBirdInstanceSpec(inst, routerID, config.IPsec.LinkGroups, ars, verified.ManagedZone)
+	instState.Overlays = spec.Overlays
+	spec.InterfacePolicies = photonlinux.BirdRotateInterfacePolicies(links, buildLinkOutputs(links, reconcile), spec)
 	instState.ConfigPath = spec.ConfigPath
 	instState.ControlSocket = spec.ControlSocketPath
 	instState.PIDFile = spec.PIDFilePath
-	instState.Owner = birdOwnerForInstance(inst, netnsName)
+	instState.Owner = inst.BirdOwner()
 	spec.Owner = instState.Owner
 
 	// Ensure veth pair for upstream if configured and create_veth is true.
@@ -311,7 +277,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 		if err != nil {
 			instState.State = birdInstanceStateError
 			instState.LastFailure = err
-			d.recordBirdHealthObservationUnavailableForLinks(links, reconcile, netnsName, instState.Overlays)
+			d.recordBirdHealthObservationForLinks(links, reconcile, netnsName, instState.Overlays, &bird.BirdObservation{})
 			if !isDryRunConnectError(err) {
 				return fmt.Errorf("bird status for netns %q: %w", netnsName, err)
 			}
@@ -339,14 +305,10 @@ func (d *Daemon) observeBirdForHealth(ctx context.Context, instances map[string]
 	defer cancel()
 	observed, err := d.linuxDriver.ObserveBird(observeCtx, socketPath, bird.InternalRouteTableNames(netnsName)...)
 	if err != nil {
-		d.recordBirdHealthObservationUnavailableForLinks(instances, reconcile, netnsName, overlays)
+		d.recordBirdHealthObservationForLinks(instances, reconcile, netnsName, overlays, &bird.BirdObservation{})
 		return
 	}
 	d.recordBirdHealthObservationForLinks(instances, reconcile, netnsName, overlays, observed)
-}
-
-func (d *Daemon) recordBirdHealthObservationUnavailableForLinks(instances map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, netnsName string, overlays []string) {
-	d.recordBirdHealthObservationForLinks(instances, reconcile, netnsName, overlays, &bird.BirdObservation{})
 }
 
 func (d *Daemon) recordBirdHealthObservationForLinks(instances map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, netnsName string, overlays []string, observed *bird.BirdObservation) {
@@ -354,56 +316,13 @@ func (d *Daemon) recordBirdHealthObservationForLinks(instances map[string]ipsec.
 		return
 	}
 	for _, link := range buildLinkOutputs(instances, reconcile) {
-		if link.RuntimeRole != "staged" || link.InterfaceName == "" || !linkOutputBelongsToBirdInstance(link, netnsName, overlays) {
+		if link.RuntimeRole != "staged" || link.InterfaceName == "" || !photonlinux.LinkOutputBelongsToBirdInstance(link, netnsName, overlays) {
 			continue
 		}
 		instanceID := strings.TrimSuffix(link.ID, "#staged")
-		obs := birdObservationForInterface(instanceID, healthProbeID(instanceID, "staged"), link.InterfaceName, observed)
+		obs := photonlinux.BirdObservationForInterface(instanceID, healthProbeID(instanceID, "staged"), link.InterfaceName, observed)
 		d.health.SetBabelObservation(obs)
 	}
-}
-
-func linkOutputBelongsToBirdInstance(link photonstate.LinkOutput, netnsName string, overlays []string) bool {
-	if link.NetNS != "" && link.NetNS != netnsName {
-		return false
-	}
-	if len(overlays) == 0 {
-		return true
-	}
-	return slices.Contains(overlays, link.GroupID)
-}
-
-func birdObservationForInterface(instanceID, probeID, iface string, observed *bird.BirdObservation) health.BabelObservation {
-	obs := health.BabelObservation{InstanceID: instanceID, ProbeID: probeID}
-	if iface == "" || observed == nil {
-		return obs
-	}
-	for _, n := range observed.Neighbors {
-		if n.Interface != iface {
-			continue
-		}
-		obs.Neighbor = true
-		if n.Routes > 0 {
-			obs.Route = true
-		}
-		if n.Metric > 0 && (obs.Metric == 0 || int(n.Metric) < obs.Metric) {
-			obs.Metric = int(n.Metric)
-		}
-	}
-	for _, r := range observed.Routes {
-		if r.Iface == iface && birdRouteIsBabel(r) {
-			obs.Route = true
-			if r.Metric > 0 && (obs.Metric == 0 || int(r.Metric) < obs.Metric) {
-				obs.Metric = int(r.Metric)
-			}
-		}
-	}
-	return obs
-}
-
-func birdRouteIsBabel(route bird.BirdRoute) bool {
-	return strings.Contains(strings.ToLower(route.Protocol), "babel") ||
-		strings.Contains(strings.ToLower(route.Source), "babel")
 }
 
 func (d *Daemon) stopManagedBirdInstances(ctx context.Context, force bool) error {
@@ -426,7 +345,7 @@ func (d *Daemon) stopManagedBirdInstances(ctx context.Context, force bool) error
 		if spec.Mode == "" {
 			spec.Mode = bird.BirdModeManaged
 		}
-		spec.Owner = birdOwnerForInstance(inst, inst.Bird.NetNSName)
+		spec.Owner = inst.BirdOwner()
 		if err := d.linuxDriver.StopBird(ctx, spec); err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("stop bird for netns %q: %w", inst.Bird.NetNSName, err)
 		}
@@ -483,116 +402,6 @@ func (d *Daemon) birdDumpForControl(ctx context.Context, netnsName string, view 
 	return response, nil
 }
 
-func buildBirdInstanceSpecForNetns(inst photonlinux.RoutingInstance, routerID uint32, ng *netnsOverlayGroup, ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath) bird.BirdInstanceSpec {
-	spec := inst.Bird
-	spec.RouterID = routerID
-	if ng != nil {
-		spec.Overlays = ng.Overlays
-		spec.NetNS = bird.NetNSSpec{Kind: ng.Spec.Kind, Name: ng.Spec.Name, Path: ng.Spec.Path, Create: ng.Spec.Create}
-	}
-	if spec.Mode == "" {
-		spec.Mode = bird.BirdModeManaged
-	}
-
-	// Wire upstream config into BIRD spec.
-	if inst.Upstream != nil && inst.Upstream.Enabled {
-		spec.Upstream = &bird.UpstreamSpec{
-			Interface: inst.Upstream.Veth.MeshInterface,
-		}
-	}
-
-	// Build static routes for local assigned prefixes.
-	if ars != nil && managedZone.Valid() && upstreamStaticRoutesEnabled(inst.Upstream) {
-		for _, prefix := range routing.LocalAssignedPrefixes(ars, managedZone, true) {
-			via := ""
-			var nextHop netip.Addr
-			if inst.Upstream != nil && inst.Upstream.Enabled && inst.Upstream.Mode == photonlinux.UpstreamModeStatic {
-				via = inst.Upstream.Veth.MeshInterface
-				nextHop = upstreamPeerNextHop(prefix, inst.Upstream)
-			}
-			spec.StaticRoutes = append(spec.StaticRoutes, bird.StaticRouteSpec{
-				Prefix:  prefix,
-				Via:     via,
-				NextHop: nextHop,
-			})
-		}
-	}
-
-	return spec
-}
-
-func birdRotateInterfacePolicies(instances map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, netnsName string, overlays []string, routingInst photonlinux.RoutingInstance) []bird.BabelInterfacePolicy {
-	metrics := make(map[string]uint)
-	for _, link := range buildLinkOutputs(instances, reconcile) {
-		if link.InterfaceName == "" || !linkOutputBelongsToBirdInstance(link, netnsName, overlays) {
-			continue
-		}
-		instanceID := strings.TrimSuffix(link.ID, "#"+photonstate.LinkRuntimeStaged)
-		instance, ok := linkInstanceByLinkID(instances, instanceID)
-		if !ok || instance.StagedInterfaceName == "" {
-			continue
-		}
-		metric := routingInst.Bird.MetricBase
-		if link.RuntimeRole == photonstate.LinkRuntimeStaged {
-			metric = routingInst.Bird.MetricStaged
-		}
-		if instance.RotatePhase == ipsec.RotatePhaseDraining {
-			if link.RuntimeRole == photonstate.LinkRuntimeStaged {
-				metric = routingInst.Bird.MetricBase
-			} else {
-				metric = routingInst.Bird.MetricDraining
-			}
-		}
-		if previous := metrics[link.InterfaceName]; metric > previous {
-			metrics[link.InterfaceName] = metric
-		}
-	}
-	interfaces := make([]string, 0, len(metrics))
-	for iface := range metrics {
-		interfaces = append(interfaces, iface)
-	}
-	sort.Strings(interfaces)
-	policies := make([]bird.BabelInterfacePolicy, 0, len(interfaces))
-	for _, iface := range interfaces {
-		policies = append(policies, bird.BabelInterfacePolicy{InterfaceName: iface, Metric: metrics[iface]})
-	}
-	return policies
-}
-
-func linkInstanceByLinkID(instances map[string]ipsec.LinkInstance, id string) (ipsec.LinkInstance, bool) {
-	if instance, ok := instances[id]; ok {
-		return instance, true
-	}
-	for _, instance := range instances {
-		if firstNonEmpty(instance.LinkID, instance.ID) == id {
-			return instance, true
-		}
-	}
-	return ipsec.LinkInstance{}, false
-}
-
-func upstreamPeerNextHop(prefix netip.Prefix, upstream *photonlinux.UpstreamConfig) netip.Addr {
-	if upstream == nil {
-		return netip.Addr{}
-	}
-	value := upstream.Veth.PeerIPv6LL
-	if prefix.Addr().Is4() {
-		value = upstream.Veth.PeerIPv4LL
-	}
-	parsed, err := netip.ParsePrefix(value)
-	if err != nil {
-		return netip.Addr{}
-	}
-	return parsed.Addr()
-}
-
-func upstreamStaticRoutesEnabled(upstream *photonlinux.UpstreamConfig) bool {
-	if upstream == nil || !upstream.Enabled {
-		return true
-	}
-	return upstream.Mode == photonlinux.UpstreamModeStatic
-}
-
 func routingInstancesEnabled(config *appConfig) []photonlinux.RoutingInstance {
 	if config == nil {
 		return nil
@@ -608,21 +417,6 @@ func routingInstancesEnabled(config *appConfig) []photonlinux.RoutingInstance {
 
 func routingInstanceEnabled(inst photonlinux.RoutingInstance) bool {
 	return inst.Enabled && inst.Bird.Mode != ipsec.RoutingModeDisabled
-}
-
-func birdOwnerForInstance(inst photonlinux.RoutingInstance, netnsName string) bird.BirdResourceOwner {
-	owner := bird.BirdResourceOwner{
-		Manager:    "photon",
-		InstanceID: inst.ID,
-		NetNSName:  netnsName,
-	}
-	owner.Token = bird.OwnerToken(owner.InstanceID, owner.NetNSName)
-	owner.ControlSocketToken = bird.ResourceToken(owner, "control_socket")
-	owner.PIDFileToken = bird.ResourceToken(owner, "pid_file")
-	owner.ConfigFileToken = bird.ResourceToken(owner, "config_file")
-	owner.RouteTableToken = bird.ResourceToken(owner, "route_table")
-	owner.RuleToken = bird.ResourceToken(owner, "rule")
-	return owner
 }
 
 func routingCrashBackoff(failureCount int) time.Duration {
@@ -696,23 +490,17 @@ func (d *Daemon) autoAnnounceAssignedIPsResult(ars *routing.AuthorizedRouteSet) 
 	if view.State == nil {
 		return false, nil
 	}
-	plan, planErr := autoAnnounceAssignedIPsPlan(view.State.Network, view.State.ManagedZone, ars, d.App.Config.IPAM)
-	if planErr != nil {
-		return false, planErr
-	}
-	if !plan.changed() {
+	announce, withdraw := routing.AutoAnnounceChanges(view.State.Network, view.State.ManagedZone, ars, d.App.Config.IPAM.AutoAnnounceAssignedIPs, d.App.Config.IPAM.Announce)
+	if len(announce) == 0 && len(withdraw) == 0 {
 		return false, nil
 	}
 
 	managedZone := view.State.ManagedZone
-	if !managedZone.Valid() || managedZone.IsRoot() {
-		return false, nil
-	}
-	intents := make([]corestate.LocalIntent, 0, len(plan.announce)+len(plan.withdraw))
-	for _, prefix := range plan.announce {
+	intents := make([]corestate.LocalIntent, 0, len(announce)+len(withdraw))
+	for _, prefix := range announce {
 		intents = append(intents, corestate.AnnounceRouteIntent{Zone: managedZone, Prefix: prefix.Masked().String(), Controller: routing.RouteControllerAuto})
 	}
-	for _, prefix := range plan.withdraw {
+	for _, prefix := range withdraw {
 		intents = append(intents, corestate.WithdrawRouteIntent{Zone: managedZone, Prefix: prefix.Masked().String(), Controller: routing.RouteControllerAuto})
 	}
 	result, err := d.State.Common.ApplyLocalIntents(context.Background(), intents, d.now())
@@ -722,83 +510,18 @@ func (d *Daemon) autoAnnounceAssignedIPsResult(ars *routing.AuthorizedRouteSet) 
 	if !result.Committed {
 		return false, nil
 	}
-	for _, prefix := range plan.announce {
+	for _, prefix := range announce {
 		d.logInfo("routing", "auto_announce_assigned_ip", map[string]any{"zone": managedZone, "prefix": prefix.String()})
 	}
-	for _, prefix := range plan.withdraw {
+	for _, prefix := range withdraw {
 		d.logInfo("routing", "auto_withdraw_assigned_ip", map[string]any{"zone": managedZone, "prefix": prefix.String()})
 	}
 	d.notifyStateChanged()
 	return true, nil
 }
 
-type autoAnnouncePlan struct {
-	announce []netip.Prefix
-	withdraw []netip.Prefix
-}
-
-func (p autoAnnouncePlan) changed() bool {
-	return len(p.announce) > 0 || len(p.withdraw) > 0
-}
-
-func autoAnnounceAssignedIPsPlan(network *zone.NetworkState, managedZone zone.ZonePath, ars *routing.AuthorizedRouteSet, config ipamConfig) (autoAnnouncePlan, error) {
-	if network == nil {
-		return autoAnnouncePlan{}, nil
-	}
-	if managedZone.IsRoot() || !managedZone.Valid() {
-		return autoAnnouncePlan{}, nil
-	}
-
-	desired := make(map[netip.Prefix]struct{})
-	for _, prefix := range routing.AutoAnnounceAssignedPrefixes(ars, managedZone, config.AutoAnnounceAssignedIPs, config.Announce) {
-		desired[prefix] = struct{}{}
-	}
-
-	localAnnounced := make(map[netip.Prefix]*routing.RouteAnnouncementRecord)
-	zs := network.Zones[managedZone]
-	if zs != nil {
-		for key, rec := range zs.Records {
-			if !strings.HasPrefix(key, routing.RecordKeyPrefixRoutes) {
-				continue
-			}
-			ann, err := routing.ParseRouteAnnouncementRecord(rec)
-			if err != nil {
-				continue
-			}
-			p, err := netip.ParsePrefix(ann.Prefix)
-			if err != nil {
-				continue
-			}
-			localAnnounced[p] = ann
-		}
-	}
-
-	var plan autoAnnouncePlan
-	for prefix := range desired {
-		if ann, ok := localAnnounced[prefix]; ok && ann.Active {
-			continue
-		}
-		plan.announce = append(plan.announce, prefix)
-	}
-
-	for prefix, ann := range localAnnounced {
-		if !ann.Active {
-			continue
-		}
-		if _, ok := desired[prefix]; ok {
-			continue
-		}
-		// Legacy true retains the old ownership model and reconciles every local
-		// announcement. Selector mode only withdraws records it created, leaving
-		// service/operator-controlled shared prefixes untouched.
-		if !config.AutoAnnounceAssignedIPs && ann.Controller != routing.RouteControllerAuto {
-			continue
-		}
-		plan.withdraw = append(plan.withdraw, prefix)
-	}
-	return plan, nil
-}
-
+// routingNetnsProtocolIntent advertises namespaces for future Router-ID origin audits.
+// Local Router-ID derivation uses configuration directly; origin enforcement is not implemented.
 func (d *Daemon) routingNetnsProtocolIntent(verified *corestate.VerifiedState) (*corestate.PutProtocolRecordIntent, error) {
 	if d == nil || verified == nil || verified.Network == nil || d.App == nil || d.App.Config == nil {
 		return nil, nil
@@ -820,7 +543,7 @@ func (d *Daemon) routingNetnsProtocolIntent(verified *corestate.VerifiedState) (
 		return nil, fmt.Errorf("marshal routing/netns record: %w", err)
 	}
 	if zs := verified.Network.Zones[verified.ManagedZone]; zs != nil {
-		if current := zs.Records[routing.RecordKeyRoutingNetns]; current != nil && bytesEqual(current.Value, value) {
+		if current := zs.Records[routing.RecordKeyRoutingNetns]; current != nil && bytes.Equal(current.Value, value) {
 			return nil, nil
 		}
 	}
@@ -828,16 +551,4 @@ func (d *Daemon) routingNetnsProtocolIntent(verified *corestate.VerifiedState) (
 		Kind: corestate.ProtocolRecordRoutingNetns, Zone: verified.ManagedZone,
 		Key: routing.RecordKeyRoutingNetns, Type: routing.RecordTypeRoutingNetns, Value: value,
 	}, nil
-}
-
-func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

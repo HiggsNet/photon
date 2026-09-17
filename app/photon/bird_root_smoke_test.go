@@ -364,7 +364,7 @@ func TestDaemonHealthBIRDCutoverGateRootSmoke(t *testing.T) {
 		health: &healthDriver{Manager: manager},
 		State:  newState(nil, corestate.NewStore(&corestate.VerifiedState{}, nil), initialRuntime),
 	}
-	service.recordBirdHealthObservationUnavailableForLinks(links, nil, nsA, []string{"main"})
+	service.recordBirdHealthObservationForLinks(links, nil, nsA, []string{"main"}, &bird.BirdObservation{})
 	if ready := service.ipsecRotateCutoverReady()["link-1"]; ready {
 		t.Fatal("cutover should be blocked while BIRD observation is unavailable")
 	}

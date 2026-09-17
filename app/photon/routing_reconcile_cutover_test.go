@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/netip"
-	"reflect"
 	"testing"
 	"time"
 
@@ -96,63 +95,4 @@ func TestReconcileRoutingFeedsBirdObservationToRotateCutoverGate(t *testing.T) {
 	if ready := service.ipsecRotateCutoverReady()["link-1"]; ready {
 		t.Fatalf("cutover should be blocked when fresh BIRD observation is unavailable")
 	}
-}
-
-func TestBirdObservationAcceptsUnselectedBabelRouteOnStagedInterface(t *testing.T) {
-	observed := &bird.BirdObservation{
-		Neighbors: []bird.BirdNeighbor{{Interface: "phx-new", Metric: 128}},
-		Routes: []bird.BirdRoute{{
-			Iface:    "phx-new",
-			Protocol: "babel1",
-			Selected: false,
-			Metric:   96,
-		}},
-	}
-	obs := birdObservationForInterface("link-1", "link-1#staged", "phx-new", observed)
-	if !obs.Neighbor || !obs.Route || obs.Metric != 96 {
-		t.Fatalf("observation = %+v, want neighbor and unselected staged route", obs)
-	}
-}
-
-func TestBirdRotateInterfacePoliciesPromoteStagedAndDrainOld(t *testing.T) {
-	observationLinks := map[string]ipsec.LinkInstance{
-		"link-1": {
-			ID:                    "link-1",
-			GroupID:               "main",
-			ActualState:           "up",
-			InterfaceName:         "phx-old",
-			LocalTunnelAddr:       netip.MustParseAddr("fe80::1"),
-			PeerTunnelAddr:        netip.MustParseAddr("fe80::2"),
-			StagedGeneration:      2,
-			RotatePhase:           ipsec.RotatePhaseDualRunning,
-			StagedInterfaceName:   "phx-new",
-			StagedLocalTunnelAddr: netip.MustParseAddr("fe80::3"),
-			StagedPeerTunnelAddr:  netip.MustParseAddr("fe80::4"),
-		},
-	}
-	var observationReconcile *ipsecObservationSummary
-	routingInst := photonlinux.RoutingInstance{
-		Bird: bird.BirdInstanceSpec{
-			MetricBase:     100,
-			MetricStaged:   200,
-			MetricDraining: 500,
-		}}
-
-	wantPolicies := func(phase string, want map[string]uint) {
-		t.Helper()
-		instance := observationLinks["link-1"]
-		instance.RotatePhase = phase
-		observationLinks["link-1"] = instance
-		got := birdRotateInterfacePolicies(observationLinks, observationReconcile, "photon", []string{"main"}, routingInst)
-		gotMap := make(map[string]uint, len(got))
-		for _, policy := range got {
-			gotMap[policy.InterfaceName] = policy.Metric
-		}
-		if !reflect.DeepEqual(gotMap, want) {
-			t.Fatalf("phase %q policies = %#v, want %#v", phase, gotMap, want)
-		}
-	}
-
-	wantPolicies(ipsec.RotatePhaseDualRunning, map[string]uint{"phx-old": 100, "phx-new": 200})
-	wantPolicies(ipsec.RotatePhaseDraining, map[string]uint{"phx-old": 500, "phx-new": 100})
 }

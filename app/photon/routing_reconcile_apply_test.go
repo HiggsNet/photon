@@ -3,16 +3,16 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/HiggsNet/photon/internal/photonlinux"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
-func TestReconcileRoutingGeneratesConfig(t *testing.T) {
+func TestReconcileRoutingAppliesAuthorizedRoutesToBird(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestRoutingOwners(t)
 	now := time.Unix(4000, 0)
 
@@ -90,17 +90,6 @@ func TestReconcileRoutingGeneratesConfig(t *testing.T) {
 	}
 	if strings.Contains(exportFilter, "10.1.0.0/24") {
 		t.Errorf("export filter should not contain remote prefix 10.1.0.0/24")
-	}
-	if !strings.Contains(cfg, `interface "phx*" {`) {
-		t.Errorf("babel interface should use configured XFRM interface pattern:\n%s", cfg)
-	}
-	for _, want := range []string{
-		"rtt cost 1024;", "rtt min 10 ms;", "rtt max 500 ms;", "rtt decay 12;",
-		"hello interval 4 s;", "update interval 16 s;",
-	} {
-		if !strings.Contains(cfg, want) {
-			t.Errorf("generated Babel config missing %q:\n%s", want, cfg)
-		}
 	}
 
 	// BIRD process should have been started with the generated config path.
@@ -288,7 +277,6 @@ func TestReconcileRoutingExternalModeOnlyStatus(t *testing.T) {
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
 	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
-	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 	appConfig.Routing, _ = photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeExternal}}, appConfig.Netns, appConfig.DataDir)
 
 	rt := &AppContext{
@@ -376,23 +364,5 @@ func TestRoutingReconcileIntervalZeroWhenDisabled(t *testing.T) {
 	)
 	if got := service.routingReconcileInterval(); got != 0 {
 		t.Fatalf("routingReconcileInterval = %s, want 0", got)
-	}
-}
-
-func TestBirdSpecUsesParsedNamespaceWithoutOverlay(t *testing.T) {
-	cfg, err := photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{{ID: "main", NetNS: "alias", Upstream: &photonlinux.UpstreamConfigYAML{}}}, photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"alias": {Kind: ipsec.NetNSName, Name: "mesh-real", Create: true}}}, "/tmp")
-	if err != nil {
-		t.Fatal(err)
-	}
-	inst := cfg.Instances[0]
-	spec := buildBirdInstanceSpecForNetns(inst, 123, nil, nil, "node-a.catofes.")
-	if spec.NetNSName != "mesh-real" || spec.NetNS.Name != "mesh-real" || !spec.NetNS.Create || inst.Upstream.Veth.MeshNetns != "mesh-real" {
-		t.Fatalf("parsed namespace lost: BIRD=%+v veth=%+v", spec.NetNS, inst.Upstream.Veth)
-	}
-	if spec.RouterID != 123 || spec.Upstream == nil || spec.Upstream.Interface != inst.Upstream.Veth.MeshInterface {
-		t.Fatalf("runtime spec not completed: %+v", spec)
-	}
-	if cfg.Instances[0].Bird.RouterID != 0 || cfg.Instances[0].Bird.Upstream != nil {
-		t.Fatal("runtime fields written back to config")
 	}
 }

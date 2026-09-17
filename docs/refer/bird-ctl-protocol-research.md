@@ -274,7 +274,7 @@ eth0       fe80::2             256
 
 相关代码：
 
-- `app/photon/routing_reconcile.go:birdObservationForInterface()`
+- `internal/photonlinux/routing_health.go:BirdObservationForInterface()`
 - `pkg/health/manager.go:cutoverBlockingLocked()`
 
 逻辑：只有 staged 链路的 `Neighbor == true && Route == true` 时，才允许 IPsec 切换。
@@ -285,7 +285,7 @@ eth0       fe80::2             256
   - 由于 `Source` 基本不会被填入，实际只看 `Protocol`。
   - Babel 路由的 `Protocol` 是 `photon_babel_<netns>`，含 `babel`，因此能匹配。
   - 但如果某条 Babel 路由是 on-link 且使用 `dev <iface>`，Photon 解析不到 `Iface`，该路由会被忽略，可能导致 `Route` 误判为 false。
-- `Interfaces` 未被健康检查直接依赖，但 `birdObservationForInterface()` 的参数 `iface` 来自链路状态而非 BIRD 接口表。
+- `Interfaces` 未被健康检查直接依赖，但 `BirdObservationForInterface()` 的参数 `iface` 来自链路状态而非 BIRD 接口表。
 
 **风险**：在特定场景（on-link Babel 路由、或路由通过 `dev` 而非 `via` 表达）下，健康检查可能错误地认为没有可用路由，从而阻塞切换。
 
