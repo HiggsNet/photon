@@ -18,6 +18,11 @@ import (
 var (
 	ErrZoneSnapshotTooLarge = errors.New("zone snapshot exceeds quota")
 	ErrUntrustedZone        = errors.New("zone is not under a trusted root")
+	ErrStaleAuthority       = errors.New("stale zone authority epoch")
+	ErrAuthorityConflict    = errors.New("zone authority conflicts at the same epoch")
+	ErrRootAuthorityChange  = errors.New("root authority is immutable")
+	ErrStaleDelegation      = errors.New("stale delegation authority epoch")
+	ErrDelegationConflict   = errors.New("delegation conflicts at the same authority epoch")
 )
 
 const DefaultSnapshotMaxBytes = 1200
@@ -105,6 +110,17 @@ func RecordSnapshotFor(ns *zone.NetworkState, path zone.ZonePath, key string, ve
 // NetworkState and may publish it atomically; on failure no candidate is
 // returned.
 func ApplySnapshot(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time, limits SyncLimits) (*zone.NetworkState, *ApplyResult, error) {
+	return applySnapshot(ns, snapshot, now, limits, false)
+}
+
+// ApplyRecoverySnapshot applies an explicitly selected recovery snapshot after
+// normal cryptographic verification, but permits it to replace a conflicting
+// non-root authority/delegation version. The root authority remains immutable.
+func ApplyRecoverySnapshot(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time, limits SyncLimits) (*zone.NetworkState, *ApplyResult, error) {
+	return applySnapshot(ns, snapshot, now, limits, true)
+}
+
+func applySnapshot(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time, limits SyncLimits, allowAuthorityReset bool) (*zone.NetworkState, *ApplyResult, error) {
 	if ns == nil {
 		return nil, nil, errors.New("network state is nil")
 	}
@@ -138,11 +154,21 @@ func ApplySnapshot(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time,
 	if err := photoncrypto.VerifyChain(candidate, snapshot.Zone, now); err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", ErrUntrustedZone, err)
 	}
+	if beforeZone != nil && (snapshot.Zone == zone.RootZone || !allowAuthorityReset) {
+		if err := validateAuthorityTransition(snapshot.Zone, beforeZone.Authority, snapshot.Authority); err != nil {
+			return nil, nil, err
+		}
+	}
 
 	zs := candidate.Zones[snapshot.Zone]
 	for child, delegation := range zs.Delegations {
 		if err := photoncrypto.VerifyDelegation(delegation, zs.Authority, snapshot.Zone, now); err != nil {
 			return nil, nil, fmt.Errorf("verify delegation %s: %w", child, err)
+		}
+		if beforeZone != nil && !allowAuthorityReset {
+			if err := validateDelegationTransition(child, beforeZone.Delegations[child], delegation); err != nil {
+				return nil, nil, err
+			}
 		}
 	}
 	for child, revocation := range zs.Revocations {
@@ -206,6 +232,41 @@ func ApplySnapshot(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time,
 		NetworkChanged:   rootChanged || authorityChanged,
 	}
 	return candidate, result, nil
+}
+
+func validateAuthorityTransition(path zone.ZonePath, current, incoming *zone.ZoneAuthority) error {
+	if current == nil || incoming == nil {
+		return nil
+	}
+	if incoming.Epoch < current.Epoch {
+		return fmt.Errorf("%w for %s: current=%d incoming=%d", ErrStaleAuthority, path, current.Epoch, incoming.Epoch)
+	}
+	currentHash := photoncrypto.AuthorityHash(current)
+	incomingHash := photoncrypto.AuthorityHash(incoming)
+	if path == zone.RootZone && !bytes.Equal(currentHash, incomingHash) {
+		return fmt.Errorf("%w: current_epoch=%d incoming_epoch=%d current=%x incoming=%x", ErrRootAuthorityChange, current.Epoch, incoming.Epoch, currentHash, incomingHash)
+	}
+	if incoming.Epoch == current.Epoch {
+		if !bytes.Equal(currentHash, incomingHash) {
+			return fmt.Errorf("%w for %s: epoch=%d current=%x incoming=%x", ErrAuthorityConflict, path, current.Epoch, currentHash, incomingHash)
+		}
+		return nil
+	}
+	return nil
+}
+
+func validateDelegationTransition(child zone.ZonePath, current, incoming *zone.Delegation) error {
+	if current == nil || incoming == nil {
+		return nil
+	}
+	if incoming.AuthorityEpoch < current.AuthorityEpoch {
+		return fmt.Errorf("%w for %s: current=%d incoming=%d", ErrStaleDelegation, child, current.AuthorityEpoch, incoming.AuthorityEpoch)
+	}
+	if incoming.AuthorityEpoch == current.AuthorityEpoch &&
+		(!bytes.Equal(current.AuthorityHash, incoming.AuthorityHash) || !bytes.Equal(current.Signature, incoming.Signature)) {
+		return fmt.Errorf("%w for %s: epoch=%d", ErrDelegationConflict, child, current.AuthorityEpoch)
+	}
+	return nil
 }
 
 func checkSnapshotLimits(snapshot *ZoneSnapshot, limits SyncLimits) error {

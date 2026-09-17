@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"github.com/HiggsNet/photon/internal/photonlinux"
 	"os"
 	"slices"
+	"time"
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -42,6 +44,8 @@ type joinAcceptResult struct {
 	Zone          zone.ZonePath
 	RootPublicKey ed25519.PublicKey
 }
+
+var errDelegationAlreadyExists = errors.New("delegation already exists")
 
 func createJoinRequest(path zone.ZonePath, keyPath string, outPath string) error {
 	if !path.Valid() || path == zone.RootZone {
@@ -139,7 +143,7 @@ func issueDelegationDirect(rt *AppContext, request *joinRequest, permissions []z
 	}
 	defer state.Close()
 	view := state.Common.ReadView()
-	intent, err := planDelegationIssue(view.State.Network, request, permissions)
+	intent, err := planDelegationIssue(view.State.Network, request, permissions, rt.Now())
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +157,7 @@ func issueDelegationDirect(rt *AppContext, request *joinRequest, permissions []z
 	return &delegationIssueResult{Zone: request.Zone, Bundle: bundle}, nil
 }
 
-func planDelegationIssue(network *zone.NetworkState, request *joinRequest, permissions []zone.Permission) (corestate.LocalIntent, error) {
+func planDelegationIssue(network *zone.NetworkState, request *joinRequest, permissions []zone.Permission, now time.Time) (corestate.LocalIntent, error) {
 	if err := validateJoinRequest(request); err != nil {
 		return nil, err
 	}
@@ -164,6 +168,9 @@ func planDelegationIssue(network *zone.NetworkState, request *joinRequest, permi
 	parentState := network.Zones[parent]
 	if parentState == nil || parentState.Authority == nil {
 		return nil, fmt.Errorf("%w: parent %s", zone.ErrZoneNotFound, parent)
+	}
+	if network.ActiveRevocation(request.Zone, now) == nil && (parentState.Delegations[request.Zone] != nil || network.Zones[request.Zone] != nil) {
+		return nil, fmt.Errorf("%w for %s; use gossip delegate grant to add permissions", errDelegationAlreadyExists, request.Zone)
 	}
 	authorityEpoch := uint64(1)
 	if parentState.Revocations != nil {
@@ -278,6 +285,12 @@ func acceptJoinBundleInState(rt *AppContext, bundle *joinBundle, key *privateKey
 	}
 	if bundle.Network == nil {
 		return nil, errors.New("join bundle network is nil")
+	}
+	if trusted := rt.Config.TrustedRootPublicKey; len(trusted) != 0 && !bytes.Equal(trusted, bundle.RootPublicKey) {
+		return nil, errors.New("join bundle root does not match trusted_root_public_key")
+	}
+	if err := photoncrypto.VerifyPinnedRoot(bundle.Network, bundle.RootPublicKey); err != nil {
+		return nil, fmt.Errorf("join bundle root authority: %w", err)
 	}
 	boltStore, err := corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
 	if err != nil {

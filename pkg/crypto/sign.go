@@ -347,6 +347,11 @@ func findAuthorizedKey(a *zone.ZoneAuthority, signedBy ed25519.PublicKey, requir
 		if candidate.NotAfter != 0 && now.Unix() > candidate.NotAfter {
 			return nil, errors.New("authorized key expired")
 		}
+		// The root key is the configured network trust anchor and implicitly has
+		// every permission. Capabilities only constrain delegated authorities.
+		if a.Zone == zone.RootZone {
+			return candidate, nil
+		}
 		if hasCapability(candidate.Capabilities, required, typed, key) {
 			return candidate, nil
 		}

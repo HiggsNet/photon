@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"sort"
 
 	"github.com/HiggsNet/photon/internal/photonlinux"
@@ -48,6 +49,7 @@ func projectLegacyCommonState(state *stateFile, trustedRoot ed25519.PublicKey) (
 		},
 		Gossip: checkpoint,
 	}
+	photoncrypto.RepairLegacyRootAuthority(candidate.Verified.Network, candidate.Verified.TrustedRootPublicKey)
 	if err := corestate.ValidateStateRoot(candidate.Verified); err != nil {
 		return nil, legacyGossipCheckpointReport{}, fmt.Errorf("%w: %w", errLegacyCommonStateInvalid, err)
 	}
@@ -57,6 +59,7 @@ func projectLegacyCommonState(state *stateFile, trustedRoot ed25519.PublicKey) (
 			return nil, legacyGossipCheckpointReport{}, fmt.Errorf("%w: %w: legacy trusted root pin is unavailable", errLegacyCommonStateInvalid, corestate.ErrInvalidStateRoot)
 		}
 		candidate.Verified.TrustedRootPublicKey = append(ed25519.PublicKey(nil), root.Authority.Keys[0].Key...)
+		photoncrypto.RepairLegacyRootAuthority(network, candidate.Verified.TrustedRootPublicKey)
 		if err := corestate.ValidateStateRoot(candidate.Verified); err != nil {
 			return nil, legacyGossipCheckpointReport{}, fmt.Errorf("%w: %w", errLegacyCommonStateInvalid, err)
 		}

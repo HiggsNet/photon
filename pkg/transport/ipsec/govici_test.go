@@ -479,6 +479,108 @@ func TestReconnectingVICIClientRetriesStreamingAfterBrokenPipe(t *testing.T) {
 	}
 }
 
+func TestReconnectingVICIClientInvalidatesStreamingSessionAfterDeadline(t *testing.T) {
+	closed := 0
+	factoryCalls := 0
+	client, err := NewReconnectingVICIClient(func() (VICIClient, func() error, error) {
+		factoryCalls++
+		if factoryCalls == 1 {
+			return &scriptedVICIClient{streamErr: context.DeadlineExceeded}, func() error {
+				closed++
+				return nil
+			}, nil
+		}
+		return &scriptedVICIClient{streamOut: []map[string]any{{"ipsec-main-ab": map[string]any{"state": "ESTABLISHED"}}}}, func() error {
+			closed++
+			return nil
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("NewReconnectingVICIClient: %v", err)
+	}
+
+	if _, err := client.CallStreaming(context.Background(), "list-sas", "list-sa", nil); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first CallStreaming error = %v, want deadline exceeded", err)
+	}
+	if factoryCalls != 1 {
+		t.Fatalf("factory calls after timeout = %d, want lazy reconnect", factoryCalls)
+	}
+	if closed != 1 {
+		t.Fatalf("closed after timeout = %d, want stale session closed", closed)
+	}
+
+	events, err := client.CallStreaming(context.Background(), "list-sas", "list-sa", nil)
+	if err != nil {
+		t.Fatalf("second CallStreaming: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %+v, want one event from fresh session", events)
+	}
+	if factoryCalls != 2 {
+		t.Fatalf("factory calls = %d, want fresh session on next call", factoryCalls)
+	}
+}
+
+func TestReconnectingVICIClientUsesDedicatedLifecycleSession(t *testing.T) {
+	commandSession := &fakeGoviciSession{}
+	eventSession := &fakeGoviciSession{}
+	factoryCalls := 0
+	commandClosed := 0
+	eventClosed := 0
+	client, err := NewReconnectingVICIClient(func() (VICIClient, func() error, error) {
+		factoryCalls++
+		switch factoryCalls {
+		case 1:
+			return &GoviciClient{Session: commandSession}, func() error {
+				commandClosed++
+				return nil
+			}, nil
+		case 2:
+			return &GoviciClient{Session: eventSession}, func() error {
+				eventClosed++
+				return nil
+			}, nil
+		default:
+			return nil, nil, fmt.Errorf("unexpected factory call %d", factoryCalls)
+		}
+	})
+	if err != nil {
+		t.Fatalf("NewReconnectingVICIClient: %v", err)
+	}
+
+	_, stop, err := client.SubscribeEvents(context.Background(), "child-updown", "ike-updown")
+	if err != nil {
+		t.Fatalf("SubscribeEvents: %v", err)
+	}
+	if !reflect.DeepEqual(eventSession.subscribed, []string{"child-updown", "ike-updown"}) {
+		t.Fatalf("event session subscriptions = %+v", eventSession.subscribed)
+	}
+	if len(commandSession.subscribed) != 0 {
+		t.Fatalf("command session unexpectedly subscribed to events: %+v", commandSession.subscribed)
+	}
+	if _, err := client.CallStreaming(context.Background(), "list-sas", "list-sa", nil); err != nil {
+		t.Fatalf("CallStreaming: %v", err)
+	}
+	if commandSession.streamCmd != "list-sas" {
+		t.Fatalf("command session stream command = %q, want list-sas", commandSession.streamCmd)
+	}
+
+	stop()
+	stop()
+	if eventClosed != 1 {
+		t.Fatalf("event session closed = %d, want once", eventClosed)
+	}
+	if commandClosed != 0 {
+		t.Fatalf("command session closed with subscription = %d", commandClosed)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if commandClosed != 1 {
+		t.Fatalf("command session closed = %d, want once", commandClosed)
+	}
+}
+
 func TestReconnectingVICIClientRecoversAfterReconnectDialFailure(t *testing.T) {
 	closed := 0
 	factoryCalls := 0

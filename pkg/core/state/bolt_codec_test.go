@@ -1,8 +1,12 @@
 package state
 
 import (
+	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"errors"
+	"fmt"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"path/filepath"
 	"testing"
 
@@ -290,4 +294,76 @@ func putUint64Raw(bucket *bolt.Bucket, key []byte, value uint64) error {
 	data[6] = byte(value >> 8)
 	data[7] = byte(value)
 	return bucket.Put(key, data[:])
+}
+
+func TestLoadBoltStateRepairsOnlyLegacyRootCapabilities(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, extraKey := range []bool{false, true} {
+		t.Run(fmt.Sprintf("extra_key_%t", extraKey), func(t *testing.T) {
+			db := openCommonBoltTestDB(t)
+			candidate := commonBoltTestCandidate(1)
+			candidate.Verified.TrustedRootPublicKey = pub
+			candidate.Verified.Network.Zones[zone.RootZone].Authority = photoncrypto.ConfiguredRootAuthority(pub)
+			commitCommonBoltTestState(t, db, candidate, 1)
+			if err := db.Update(func(tx *bolt.Tx) error {
+				bucket := tx.Bucket(bucketCommonState).Bucket(bucketVerified)
+				var persisted persistedVerifiedState
+				if err := json.Unmarshal(bucket.Get(keyPayload), &persisted); err != nil {
+					return err
+				}
+				a := persisted.Network.Zones[zone.RootZone].Authority
+				a.Keys[0].Capabilities = []zone.Capability{{Permissions: []zone.Permission{zone.PermWrite}}}
+				if extraKey {
+					a.Keys = append(a.Keys, a.Keys[0])
+				}
+				data, err := json.Marshal(persisted)
+				if err != nil {
+					return err
+				}
+				return bucket.Put(keyPayload, data)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.View(func(tx *bolt.Tx) error {
+				loaded, revision, _, found, err := LoadBoltState(tx)
+				if extraKey {
+					if !errors.Is(err, ErrBoltStateCorrupt) {
+						t.Fatalf("extra root key error = %v", err)
+					}
+					return nil
+				}
+				if err != nil {
+					return err
+				}
+				if !found || revision != 1 {
+					t.Fatalf("found/revision = %v/%d", found, revision)
+				}
+				if err := photoncrypto.VerifyPinnedRoot(loaded.Verified.Network, pub); err != nil {
+					return err
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if !extraKey {
+				store := &BoltStore{db: db}
+				loaded, revision, report, found, err := store.LoadCommon()
+				if err != nil || !found || !report.RootAuthorityRepaired || revision != 2 {
+					t.Fatalf("startup repair: revision=%d report=%+v err=%v", revision, report, err)
+				}
+				loaded.Gossip.Peers["peer-a"] = PeerCheckpoint{FailureCount: 3}
+				if err := store.CommitCommon(context.Background(), loaded, ChangeSet{VerifiedRevision: revision, GossipCheckpointChanged: true}); err != nil {
+					t.Fatalf("checkpoint after repair: %v", err)
+				}
+				_, againRevision, againReport, _, err := store.LoadCommon()
+				if err != nil || againRevision != 2 || againReport.RootAuthorityRepaired {
+					t.Fatalf("reload: revision=%d report=%+v err=%v", againRevision, againReport, err)
+				}
+			}
+
+		})
+	}
 }

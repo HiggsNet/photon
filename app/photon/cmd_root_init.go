@@ -4,10 +4,10 @@ import (
 	"crypto/ed25519"
 	"fmt"
 	"github.com/HiggsNet/photon/internal/photonlinux"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
-	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
 func runRootInit() error {
@@ -36,15 +36,7 @@ func initializeRootState(rt *AppContext) (ed25519.PublicKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	rootAuthority := &zone.ZoneAuthority{
-		Zone:      zone.RootZone,
-		Epoch:     1,
-		Threshold: photoncrypto.SupportedThreshold,
-		Keys: []zone.AuthorizedKey{{
-			Key:          rootPub,
-			Capabilities: defaultRootCapabilities(),
-		}},
-	}
+	rootAuthority := photoncrypto.ConfiguredRootAuthority(rootPub)
 	ns := zone.NewNetworkState()
 	ns.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, rootAuthority)
 	store, err := corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)

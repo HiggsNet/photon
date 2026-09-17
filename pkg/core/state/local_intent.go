@@ -130,6 +130,8 @@ type RevokeDelegationIntent struct {
 
 func (RevokeDelegationIntent) isLocalIntent() {}
 
+// UpdateRootAuthorityIntent is retained for callers to receive ErrRootAuthorityChange.
+// Root authority changes are no longer supported.
 type UpdateRootAuthorityIntent struct {
 	Authority *zone.ZoneAuthority
 }
@@ -339,7 +341,7 @@ func applyLocalIntentCandidate(candidate *VerifiedState, gossipCandidate *Gossip
 			metadataChanged = cleanupRevokedPeerCheckpoint(gossipCandidate, typed.Child)
 		}
 	case UpdateRootAuthorityIntent:
-		out.Authority, changed, err = applyUpdateRootAuthorityIntent(candidate, typed, now)
+		err = ErrRootAuthorityChange
 	default:
 		err = fmt.Errorf("unsupported local intent %T", intent)
 	}
@@ -385,44 +387,6 @@ func applyPutProtocolRecordIntent(state *VerifiedState, intent PutProtocolRecord
 	return applyPutRecordIntent(state, PutRecordIntent{
 		Zone: intent.Zone, Key: intent.Key, Type: intent.Type, Value: intent.Value,
 	}, now)
-}
-
-func applyUpdateRootAuthorityIntent(state *VerifiedState, intent UpdateRootAuthorityIntent, now time.Time) (*zone.ZoneAuthority, zone.ZonePath, error) {
-	if state == nil || state.Network == nil || intent.Authority == nil || intent.Authority.Zone != zone.RootZone {
-		return nil, "", zone.ErrInvalidZonePath
-	}
-	root := state.Network.Zones[zone.RootZone]
-	if root == nil || root.Authority == nil {
-		return nil, "", fmt.Errorf("%w: %s", zone.ErrZoneNotFound, zone.RootZone)
-	}
-	nextHash := photoncrypto.AuthorityHash(intent.Authority)
-	currentHash := photoncrypto.AuthorityHash(root.Authority)
-	switch {
-	case intent.Authority.Epoch < root.Authority.Epoch:
-		return nil, "", ErrAuthorityEpochStale
-	case intent.Authority.Epoch == root.Authority.Epoch && !bytes.Equal(nextHash, currentHash):
-		return nil, "", ErrAuthorityEpochConflict
-	case intent.Authority.Epoch == root.Authority.Epoch:
-		return cloneAuthority(root.Authority), "", nil
-	}
-	privateKey, err := localSigningKey(state, zone.RootZone)
-	if err != nil {
-		return nil, "", err
-	}
-	if !authorityHasPublicKey(intent.Authority, privateKey.Public().(ed25519.PublicKey)) {
-		return nil, "", errors.New("updated root authority does not contain the local root key")
-	}
-	state.Network = zone.CloneNetworkStateForZone(state.Network, zone.RootZone)
-	state.Network.Zones[zone.RootZone].Authority = cloneAuthority(intent.Authority)
-	if len(state.TrustedRootPublicKey) != 0 {
-		if err := photoncrypto.VerifyPinnedRoot(state.Network, state.TrustedRootPublicKey); err != nil {
-			return nil, "", err
-		}
-	}
-	if err := photoncrypto.VerifyChain(state.Network, zone.RootZone, now); err != nil {
-		return nil, "", err
-	}
-	return cloneAuthority(intent.Authority), zone.RootZone, nil
 }
 
 func applyPutRecordIntent(state *VerifiedState, intent PutRecordIntent, now time.Time) (*zone.Record, zone.ZonePath, error) {

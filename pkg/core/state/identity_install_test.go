@@ -182,6 +182,7 @@ func identityInstallFixture(t *testing.T) (IdentityInstall, ed25519.PrivateKey) 
 	if root == nil || root.Authority == nil || len(root.Authority.Keys) == 0 {
 		t.Fatal("fixture root authority is missing")
 	}
+	root.Authority = photoncrypto.ConfiguredRootAuthority(root.Authority.Keys[0].Key)
 	return IdentityInstall{
 		ManagedZone:          "node-a.catofes.",
 		Network:              network,

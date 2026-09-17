@@ -1292,7 +1292,7 @@ func (d *Daemon) handleDelegateIssueEvent(request *joinRequest, permissions []zo
 		return nil, err
 	}
 	view := d.State.Common.ReadView()
-	intent, err := planDelegationIssue(view.State.Network, request, permissions)
+	intent, err := planDelegationIssue(view.State.Network, request, permissions, d.now())
 	if err != nil {
 		return nil, err
 	}

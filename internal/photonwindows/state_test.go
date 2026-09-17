@@ -144,7 +144,7 @@ func signedNetwork(t *testing.T) (*zone.NetworkState, ed25519.PublicKey, ed25519
 		t.Fatal(err)
 	}
 	permissions := []zone.Capability{{Permissions: []zone.Permission{zone.PermWrite, zone.PermDelegate, zone.PermAllocateIP}}}
-	rootAuthority := &zone.ZoneAuthority{Zone: zone.RootZone, Epoch: 1, Threshold: 1, Keys: []zone.AuthorizedKey{{Key: rootPublic, Capabilities: permissions}}}
+	rootAuthority := photoncrypto.ConfiguredRootAuthority(rootPublic)
 	parentAuthority := zone.ZoneAuthority{Zone: "catofes.", Epoch: 1, Threshold: 1, Keys: []zone.AuthorizedKey{{Key: identityPublic, Capabilities: permissions}}}
 	managedAuthority := zone.ZoneAuthority{Zone: "node-a.catofes.", Epoch: 1, Threshold: 1, Keys: []zone.AuthorizedKey{{Key: identityPublic, Capabilities: permissions}}}
 	parentDelegation := &zone.Delegation{ZoneName: "catofes.", Authority: parentAuthority}

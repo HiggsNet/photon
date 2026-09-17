@@ -277,7 +277,7 @@ func newWindowsGossipFixture(t *testing.T) windowsGossipFixture {
 	authority := func(path zone.ZonePath, key ed25519.PublicKey) *zone.ZoneAuthority {
 		return &zone.ZoneAuthority{Zone: path, Epoch: 1, Threshold: 1, Keys: []zone.AuthorizedKey{{Key: key, Capabilities: capabilities}}}
 	}
-	rootAuthority := authority(zone.RootZone, rootPublic)
+	rootAuthority := photoncrypto.ConfiguredRootAuthority(rootPublic)
 	parentAuthority := authority("catofes.", parentPublic)
 	leftAuthority := authority("node-a.catofes.", leftPublic)
 	rightAuthority := authority("node-b.catofes.", rightPublic)

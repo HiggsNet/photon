@@ -150,7 +150,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 				})
 			}
 		case ipsec.ReconcileActionCreate, ipsec.ReconcileActionUpdate, ipsec.ReconcileActionRepair, ipsec.ReconcileActionPrepareStandby,
-			ipsec.ReconcileActionTeardown, ipsec.ReconcileActionPrepareRotate, ipsec.ReconcileActionCommitRotate,
+			ipsec.ReconcileActionTeardown, ipsec.ReconcileActionPrepareRotate, ipsec.ReconcileActionInitiateRotate, ipsec.ReconcileActionCommitRotate,
 			ipsec.ReconcileActionRollbackRotate, ipsec.ReconcileActionCleanupRotate:
 			netns := netnsForAction(action, groups)
 			if _, err := platformDriver.ApplyIPsecAction(ctx, action, netns); err != nil {
@@ -388,6 +388,8 @@ func ipsecReconcileActionLogFields(action ipsec.ReconcileAction) map[string]any 
 		fields["staged_generation"] = action.Instance.StagedGeneration
 		fields["rotate_phase"] = action.Instance.RotatePhase
 		fields["rotate_deadline"] = action.Instance.RotateDeadline
+		fields["staged_attempt_count"] = action.Instance.StagedAttemptCount
+		fields["staged_next_attempt"] = action.Instance.StagedNextAttempt
 		fields["ike_name"] = action.Instance.IKEName
 		fields["staged_ike"] = action.Instance.StagedIKEName
 		fields["interface"] = action.Instance.InterfaceName
@@ -697,7 +699,7 @@ func markIPsecActionFailed(instances map[string]ipsec.LinkInstance, action ipsec
 	}
 	inst = ipsec.MarkLinkApplyFailure(inst, policy, now, err)
 	switch action.Action {
-	case ipsec.ReconcileActionPrepareRotate, ipsec.ReconcileActionCommitRotate, ipsec.ReconcileActionRollbackRotate, ipsec.ReconcileActionCleanupRotate:
+	case ipsec.ReconcileActionPrepareRotate, ipsec.ReconcileActionInitiateRotate, ipsec.ReconcileActionCommitRotate, ipsec.ReconcileActionRollbackRotate, ipsec.ReconcileActionCleanupRotate:
 		if inst.RotatePhase != "" && inst.LastFailure != nil {
 			inst.LastFailure = fmt.Errorf("rotate %s: %w", inst.RotatePhase, inst.LastFailure)
 		}
@@ -723,9 +725,14 @@ func markIPsecActionSucceeded(instances map[string]ipsec.LinkInstance, action ip
 	if !ok {
 		return
 	}
-	inst = ipsec.MarkLinkApplySuccess(inst, now)
+	// A successful rollback means the staged resources were cleaned up, not
+	// that the failed rotation recovered. Preserve the failure/backoff recorded
+	// by the planner so the same generation is not prepared again immediately.
+	if action.Action != ipsec.ReconcileActionRollbackRotate {
+		inst = ipsec.MarkLinkApplySuccess(inst, now)
+	}
 	switch action.Action {
-	case ipsec.ReconcileActionCreate, ipsec.ReconcileActionUpdate, ipsec.ReconcileActionRepair, ipsec.ReconcileActionPrepareStandby, ipsec.ReconcileActionPrepareRotate:
+	case ipsec.ReconcileActionCreate, ipsec.ReconcileActionUpdate, ipsec.ReconcileActionRepair, ipsec.ReconcileActionPrepareStandby, ipsec.ReconcileActionPrepareRotate, ipsec.ReconcileActionInitiateRotate:
 		if inst.InitiatorRole == ipsec.InitiatorRoleSecondaryStandby ||
 			(action.Spec != nil && action.Spec.InitiatorRole == ipsec.InitiatorRoleSecondaryStandby) {
 			inst.ActualState = ipsec.LinkStateDown
@@ -753,6 +760,8 @@ func markIPsecActionSucceeded(instances map[string]ipsec.LinkInstance, action ip
 		inst.StagedPeerTunnelAddr = netip.Addr{}
 		inst.RotatePhase = ipsec.RotatePhaseIdle
 		inst.RotateDeadline = 0
+		inst.StagedAttemptCount = 0
+		inst.StagedNextAttempt = 0
 		inst.LastTransition = now.Unix()
 	case ipsec.ReconcileActionCleanupRotate:
 		inst.StagedGeneration = 0
@@ -764,6 +773,8 @@ func markIPsecActionSucceeded(instances map[string]ipsec.LinkInstance, action ip
 		inst.StagedPeerTunnelAddr = netip.Addr{}
 		inst.RotatePhase = ipsec.RotatePhaseIdle
 		inst.RotateDeadline = 0
+		inst.StagedAttemptCount = 0
+		inst.StagedNextAttempt = 0
 	}
 	instances[id] = inst
 }

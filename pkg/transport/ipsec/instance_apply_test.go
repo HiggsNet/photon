@@ -96,6 +96,37 @@ func TestApplyReconcileActionPrepareRotateKeepsOldSA(t *testing.T) {
 	}
 }
 
+func TestApplyReconcileActionInitiateRotateOnlyRetriesChild(t *testing.T) {
+	spec := TransportLinkSpec{
+		LocalZone:     "node-a.catofes.",
+		PeerZone:      "node-b.catofes.",
+		OverlayID:     "ipsec-main",
+		Provider:      ProviderStrongSwan,
+		TransportID:   "ipsec-main-ab-r2",
+		InterfaceName: "phx2",
+		XFRMIfID:      78,
+		InitiatorRole: InitiatorRolePrimary,
+	}
+	ipsecDrv := &DryRunDriver{}
+	xfrmDrv := &DryRunDriver{}
+	plan, err := ApplyReconcileAction(context.Background(), ipsecDrv, xfrmDrv, ReconcileAction{
+		Action: ReconcileActionInitiateRotate,
+		Spec:   &spec,
+	}, NetNSSpec{})
+	if err != nil {
+		t.Fatalf("ApplyReconcileAction: %v", err)
+	}
+	if len(ipsecDrv.Initiated) != 1 || ipsecDrv.Initiated[0] != ChildSAName(spec) {
+		t.Fatalf("initiated = %+v, want only staged child %q", ipsecDrv.Initiated, ChildSAName(spec))
+	}
+	if len(ipsecDrv.Connections) != 0 || len(ipsecDrv.Unloaded) != 0 || len(xfrmDrv.Interfaces) != 0 {
+		t.Fatalf("retry reapplied resources: connections=%+v unloaded=%+v interfaces=%+v", ipsecDrv.Connections, ipsecDrv.Unloaded, xfrmDrv.Interfaces)
+	}
+	if len(plan.Operations) != 1 || plan.Operations[0].Action != "initiate_child" {
+		t.Fatalf("plan operations = %+v", plan.Operations)
+	}
+}
+
 func TestApplyReconcileActionPrepareResponderRotateKeepsOldSA(t *testing.T) {
 	spec := TransportLinkSpec{
 		LocalZone:     "node-b.catofes.",

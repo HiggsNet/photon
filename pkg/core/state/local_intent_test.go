@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"slices"
 	"testing"
 	"time"
@@ -264,49 +265,20 @@ func TestStoreApplyLocalIntentPersistenceFailureDoesNotPublish(t *testing.T) {
 	}
 }
 
-func TestStoreApplyLocalRootAuthorityUpdatePreservesPinAndContent(t *testing.T) {
-	now := time.Unix(1000, 0)
-	rootPublic, rootPrivate, err := ed25519.GenerateKey(nil)
+func TestStoreRejectsLocalRootAuthorityUpdate(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
-		t.Fatalf("GenerateKey(root): %v", err)
+		t.Fatal(err)
 	}
-	rootAuthority := &zone.ZoneAuthority{Zone: zone.RootZone, Epoch: 1, Threshold: 1, Keys: []zone.AuthorizedKey{{
-		Key: rootPublic, Capabilities: []zone.Capability{{Permissions: []zone.Permission{zone.PermDelegate}}},
-	}}}
-	network := zone.NewNetworkState()
-	network.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, rootAuthority)
-	network.Zones[zone.RootZone].RecordHistory["audit"] = []*zone.Record{{Zone: zone.RootZone, Key: "audit", Version: 1}}
-	store := NewStore(&VerifiedState{
-		ManagedZone: zone.RootZone, Network: network, RootPrivateKey: rootPrivate, TrustedRootPublicKey: rootPublic,
-	}, nil)
-
-	next := cloneAuthority(rootAuthority)
-	next.Epoch = 2
-	next.Keys[0].Capabilities[0].Permissions = []zone.Permission{zone.PermDelegate, zone.PermWrite}
-	result, err := store.ApplyLocalIntent(context.Background(), UpdateRootAuthorityIntent{Authority: next}, now)
-	if err != nil {
-		t.Fatalf("UpdateRootAuthority: %v", err)
+	ns := zone.NewNetworkState()
+	ns.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, photoncrypto.ConfiguredRootAuthority(pub))
+	store := NewStore(&VerifiedState{ManagedZone: zone.RootZone, Network: ns, TrustedRootPublicKey: pub, RootPrivateKey: priv}, nil)
+	next := cloneAuthority(ns.Zones[zone.RootZone].Authority)
+	next.Epoch++
+	if _, err := store.ApplyLocalIntent(context.Background(), UpdateRootAuthorityIntent{Authority: next}, time.Now()); err == nil {
+		t.Fatal("root update accepted")
 	}
-	if result.Authority == nil || result.Authority.Epoch != 2 || !slices.Equal(result.Changes.ChangedZones, []zone.ZonePath{zone.RootZone}) {
-		t.Fatalf("root authority result = %+v", result)
-	}
-	view := store.ReadView()
-	root := view.State.Network.Zones[zone.RootZone]
-	if root.Authority.Epoch != 2 || len(root.RecordHistory["audit"]) != 1 || !bytes.Equal(view.State.TrustedRootPublicKey, rootPublic) {
-		t.Fatalf("updated root/pin/content = %+v/%x/%+v", root.Authority, view.State.TrustedRootPublicKey, root.RecordHistory)
-	}
-
-	otherPublic, _, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatalf("GenerateKey(other): %v", err)
-	}
-	invalid := cloneAuthority(next)
-	invalid.Epoch = 3
-	invalid.Keys[0].Key = otherPublic
-	if _, err := store.ApplyLocalIntent(context.Background(), UpdateRootAuthorityIntent{Authority: invalid}, now.Add(time.Second)); err == nil {
-		t.Fatal("root authority update removing the local pinned key succeeded")
-	}
-	if got := store.ReadView(); got.Revision != 1 || got.State.Network.Zones[zone.RootZone].Authority.Epoch != 2 {
-		t.Fatalf("failed root update changed state: revision=%d authority=%+v", got.Revision, got.State.Network.Zones[zone.RootZone].Authority)
+	if got := store.ReadView(); got.Revision != 0 || got.State.Network.Zones[zone.RootZone].Authority.Epoch != 1 {
+		t.Fatal("rejected update changed root")
 	}
 }

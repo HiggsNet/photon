@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"crypto/ed25519"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,7 +11,45 @@ import (
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
+
+func TestIssueDelegationRejectsExistingActiveZone(t *testing.T) {
+	dir := t.TempDir()
+	adminConfig := filepath.Join(dir, "admin.yaml")
+	writeConfig(t, adminConfig, filepath.Join(dir, "admin"))
+	t.Setenv("PHOTON_CONFIG", adminConfig)
+	if err := runRootInit(); err != nil {
+		t.Fatalf("runRootInit: %v", err)
+	}
+	rt, err := NewAppContext()
+	if err != nil {
+		t.Fatalf("NewAppContext: %v", err)
+	}
+	publicKey, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	request := &joinRequest{Version: 1, Zone: "child.", PublicKey: publicKey}
+	if _, err := issueDelegationDirect(rt, request, nil); err != nil {
+		t.Fatalf("issueDelegationInState(first): %v", err)
+	}
+	state, err := loadConfiguredVerifiedState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := photoncrypto.AuthorityHash(state.Network.Zones["child."].Authority)
+	if _, err := issueDelegationDirect(rt, request, []zone.Permission{zone.PermAllocateIP}); !errors.Is(err, errDelegationAlreadyExists) {
+		t.Fatalf("issueDelegationInState(second) = %v, want errDelegationAlreadyExists", err)
+	}
+	state, err = loadConfiguredVerifiedState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after := photoncrypto.AuthorityHash(state.Network.Zones["child."].Authority); !bytes.Equal(after, before) {
+		t.Fatalf("duplicate issue changed authority: before=%x after=%x", before, after)
+	}
+}
 
 func TestJoinFlow(t *testing.T) {
 	dir := t.TempDir()

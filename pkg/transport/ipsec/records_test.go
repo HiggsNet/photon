@@ -937,8 +937,8 @@ func TestBuildStrongSwanConnectionRestrictsInboundFamilyPath(t *testing.T) {
 		pathKey string
 		want    string
 	}{
-		{"family:ipv4", "%any4"},
-		{"family:ipv6", "%any6"},
+		{"family:ipv4", "0.0.0.0/0"},
+		{"family:ipv6", "::/0"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.pathKey, func(t *testing.T) {

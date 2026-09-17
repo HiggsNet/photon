@@ -28,17 +28,7 @@ func buildTestDaemonOwners(t testing.TB) (*corestate.VerifiedState, *corestate.G
 		t.Fatalf("GenerateKey(node-b): %v", err)
 	}
 
-	rootAuthority := &zone.ZoneAuthority{
-		Zone:      zone.RootZone,
-		Epoch:     1,
-		Threshold: 1,
-		Keys: []zone.AuthorizedKey{{
-			Key: rootPub,
-			Capabilities: []zone.Capability{{
-				Permissions: []zone.Permission{zone.PermDelegate},
-			}},
-		}},
-	}
+	rootAuthority := photoncrypto.ConfiguredRootAuthority(rootPub)
 	catofesAuthority := &zone.ZoneAuthority{
 		Zone:      "catofes.",
 		Epoch:     1,

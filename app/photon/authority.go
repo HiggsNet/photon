@@ -11,18 +11,6 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
-func allAuthorityPermissions() []zone.Permission {
-	return []zone.Permission{
-		zone.PermWrite,
-		zone.PermDelegate,
-		zone.PermAllocateIP,
-	}
-}
-
-func defaultRootCapabilities() []zone.Capability {
-	return []zone.Capability{{Permissions: allAuthorityPermissions()}}
-}
-
 func defaultDelegationCapabilities() []zone.Capability {
 	return []zone.Capability{{Permissions: []zone.Permission{zone.PermWrite, zone.PermDelegate}}}
 }
@@ -106,6 +94,9 @@ func grantDelegationPermissionsDirect(rt *AppContext, path zone.ZonePath, permis
 	if !path.Valid() {
 		return nil, fmt.Errorf("invalid delegated zone: %s", path)
 	}
+	if path == zone.RootZone {
+		return nil, errors.New("root authority is immutable and its key is implicitly privileged")
+	}
 	if len(permissions) == 0 {
 		return nil, errors.New("at least one permission is required")
 	}
@@ -122,13 +113,13 @@ func grantDelegationPermissionsDirect(rt *AppContext, path zone.ZonePath, permis
 	if _, err := state.Common.ApplyLocalIntent(context.Background(), intent, rt.Now()); err != nil {
 		return nil, err
 	}
-	if path.IsRoot() {
-		return nil, nil
-	}
 	return joinBundleFromNetwork(state.Common.ReadView().State.Network, path, rt.Now())
 }
 
 func planDelegationGrant(network *zone.NetworkState, path zone.ZonePath, permissions []zone.Permission) (corestate.LocalIntent, error) {
+	if path.IsRoot() {
+		return nil, errors.New("root authority is immutable and its key is implicitly privileged")
+	}
 	if !path.Valid() || len(permissions) == 0 {
 		return nil, errors.New("valid delegated zone and at least one permission are required")
 	}
@@ -146,13 +137,7 @@ func planDelegationGrant(network *zone.NetworkState, path zone.ZonePath, permiss
 	grantPermissionsToAuthority(authority, permissions)
 	authority.Epoch++
 
-	var intent corestate.LocalIntent
-	if path.IsRoot() {
-		intent = corestate.UpdateRootAuthorityIntent{Authority: authority}
-	} else {
-		intent = corestate.PutDelegationIntent{Parent: path.Parent(), Authority: authority}
-	}
-	return intent, nil
+	return corestate.PutDelegationIntent{Parent: path.Parent(), Authority: authority}, nil
 }
 
 func grantPermissionsToAuthority(authority *zone.ZoneAuthority, permissions []zone.Permission) {

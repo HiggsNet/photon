@@ -17,6 +17,7 @@ import (
 	"github.com/HiggsNet/photon/internal/photonlinux"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	bolt "go.etcd.io/bbolt"
 )
@@ -329,5 +330,70 @@ func seedLegacyLinuxState(t *testing.T, path string, state *stateFile) {
 	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("close legacy store: %v", err)
+	}
+}
+
+func TestPartitionedRootRepairPersistsOnce(t *testing.T) {
+	verified, checkpoint, linux, _ := buildTestRoutingOwners(t)
+	verified.TrustedRootPublicKey = append(ed25519.PublicKey(nil), verified.Network.Zones[zone.RootZone].Authority.Keys[0].Key...)
+	verified.Network.Zones[zone.RootZone].Authority = photoncrypto.ConfiguredRootAuthority(verified.TrustedRootPublicKey)
+	path := filepath.Join(t.TempDir(), "state.db")
+	seedPartitionedStateDB(t, path, verified, checkpoint, linux)
+	db, err := bolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var before corestate.VerifiedRevision
+	if err := db.Update(func(tx *bolt.Tx) error {
+		_, revision, _, _, err := corestate.LoadBoltState(tx)
+		if err != nil {
+			return err
+		}
+		before = revision
+		bucket := tx.Bucket([]byte("photon:common-state")).Bucket([]byte("verified"))
+		var payload map[string]json.RawMessage
+		if err := json.Unmarshal(bucket.Get([]byte("payload")), &payload); err != nil {
+			return err
+		}
+		var network zone.NetworkState
+		if err := json.Unmarshal(payload["network"], &network); err != nil {
+			return err
+		}
+		network.Zones[zone.RootZone].Authority.Keys[0].Capabilities = []zone.Capability{{Permissions: []zone.Permission{zone.PermWrite}}}
+		payload["network"], err = json.Marshal(&network)
+		if err != nil {
+			return err
+		}
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		return bucket.Put([]byte("payload"), data)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for pass := 0; pass < 2; pass++ {
+		if err := db.Update(func(tx *bolt.Tx) error {
+			_, changed, err := migrateLegacyLinuxStateTx(tx, verified.TrustedRootPublicKey)
+			if err != nil {
+				return err
+			}
+			if changed != (pass == 0) {
+				t.Fatalf("pass %d changed=%v", pass, changed)
+			}
+			candidate, revision, report, _, err := corestate.LoadBoltState(tx)
+			if err != nil {
+				return err
+			}
+			if revision != before+1 || report.RootAuthorityRepaired {
+				t.Fatalf("revision=%d report=%+v", revision, report)
+			}
+			candidate.Gossip.Peers = nil
+			_, err = corestate.CommitBoltState(tx, candidate, corestate.ChangeSet{VerifiedRevision: revision, GossipCheckpointChanged: true})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

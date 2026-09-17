@@ -661,7 +661,7 @@ func (d *StrongSwanDriver) LoadPrivateKey(ctx context.Context, id string, key []
 	}
 	oldFingerprint := d.privateKeyBindings[id]
 	if oldFingerprint == fingerprint {
-		return nil
+		return d.ensurePrivateKeyLoadedLocked(ctx, fingerprint, key, algorithm)
 	}
 	if err := d.acquirePrivateKeyLocked(ctx, fingerprint, key, algorithm); err != nil {
 		return err
@@ -704,12 +704,84 @@ func (d *StrongSwanDriver) UnloadPrivateKey(ctx context.Context, id string) erro
 
 func (d *StrongSwanDriver) acquirePrivateKeyLocked(ctx context.Context, fingerprint string, key []byte, algorithm string) error {
 	if ref := d.privateKeys[fingerprint]; ref != nil {
+		if err := d.ensurePrivateKeyLoadedLocked(ctx, fingerprint, key, algorithm); err != nil {
+			return err
+		}
 		ref.refs++
 		return nil
 	}
-	pemBytes, err := PEMEncodePrivateKey(key)
+	keyID, err := d.loadPrivateKeyLocked(ctx, key, algorithm)
 	if err != nil {
 		return err
+	}
+	d.privateKeys[fingerprint] = &strongSwanPrivateKeyRef{
+		keyID: keyID,
+		refs:  1,
+	}
+	return nil
+}
+
+// ensurePrivateKeyLoadedLocked verifies that charon still has the key tracked
+// by the driver's in-process reference cache.  Dynamic VICI credentials are
+// lost when charon restarts even though the long-running Photon process keeps
+// its cache, so a missing key must be loaded again before rebuilding a
+// connection.  d.privateKeyMu must be held by the caller.
+func (d *StrongSwanDriver) ensurePrivateKeyLoadedLocked(ctx context.Context, fingerprint string, key []byte, algorithm string) error {
+	ref := d.privateKeys[fingerprint]
+	if ref == nil {
+		keyID, err := d.loadPrivateKeyLocked(ctx, key, algorithm)
+		if err != nil {
+			return err
+		}
+		d.privateKeys[fingerprint] = &strongSwanPrivateKeyRef{keyID: keyID, refs: 1}
+		return nil
+	}
+	loaded, err := d.privateKeyLoadedLocked(ctx, ref.keyID)
+	if err != nil {
+		return fmt.Errorf("verify private key %q in strongswan: %w", ref.keyID, err)
+	}
+	if loaded {
+		return nil
+	}
+	keyID, err := d.loadPrivateKeyLocked(ctx, key, algorithm)
+	if err != nil {
+		return fmt.Errorf("reload missing private key %q in strongswan: %w", ref.keyID, err)
+	}
+	ref.keyID = keyID
+	return nil
+}
+
+func (d *StrongSwanDriver) privateKeyLoadedLocked(ctx context.Context, keyID string) (bool, error) {
+	if keyID == "" {
+		return false, nil
+	}
+	callCtx, cancel := d.viciContext(ctx)
+	defer cancel()
+	resp, err := d.VICI.Call(callCtx, "get-keys", nil)
+	if err != nil {
+		return false, err
+	}
+	switch keys := resp["keys"].(type) {
+	case []string:
+		for _, loadedID := range keys {
+			if loadedID == keyID {
+				return true, nil
+			}
+		}
+	case []any:
+		for _, loadedID := range keys {
+			if stringValue(loadedID) == keyID {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func (d *StrongSwanDriver) loadPrivateKeyLocked(ctx context.Context, key []byte, algorithm string) (string, error) {
+	pemBytes, err := PEMEncodePrivateKey(key)
+	if err != nil {
+		return "", err
 	}
 	callCtx, cancel := d.viciContext(ctx)
 	defer cancel()
@@ -718,13 +790,9 @@ func (d *StrongSwanDriver) acquirePrivateKeyLocked(ctx context.Context, fingerpr
 		"data": string(pemBytes),
 	})
 	if err != nil {
-		return err
+		return "", err
 	}
-	d.privateKeys[fingerprint] = &strongSwanPrivateKeyRef{
-		keyID: stringValue(resp["id"]),
-		refs:  1,
-	}
-	return nil
+	return stringValue(resp["id"]), nil
 }
 
 func (d *StrongSwanDriver) releasePrivateKeyLocked(ctx context.Context, fingerprint string) error {

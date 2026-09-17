@@ -50,6 +50,33 @@ func TestSignAndVerifyRecord(t *testing.T) {
 	}
 }
 
+func TestRootKeyHasImplicitPermissionsWithoutCapabilities(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	authority := &zone.ZoneAuthority{
+		Zone:      zone.RootZone,
+		Epoch:     1,
+		Threshold: 1,
+		Keys:      []zone.AuthorizedKey{{Key: pub}},
+	}
+	record := &zone.Record{
+		Zone:      zone.RootZone,
+		Key:       "ipam/pools/10.0.0.0_8",
+		Type:      "ipam.pool",
+		Value:     []byte("pool"),
+		Version:   1,
+		Timestamp: 123,
+	}
+	if err := SignRecord(record, priv); err != nil {
+		t.Fatalf("SignRecord: %v", err)
+	}
+	if err := VerifyRecord(record, authority, time.Unix(123, 0)); err != nil {
+		t.Fatalf("VerifyRecord(root implicit permission): %v", err)
+	}
+}
+
 func TestVerifyRecordRejectsPrePhotonDomainSignature(t *testing.T) {
 	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {

@@ -52,7 +52,7 @@ func TestDelegationPlansPreserveSource(t *testing.T) {
 	network.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, &zone.ZoneAuthority{Zone: zone.RootZone, Epoch: 3, Keys: []zone.AuthorizedKey{{Key: pub}}})
 	child := zone.ZonePath("child.")
 	network.Zones[zone.RootZone].Revocations[child] = &zone.DelegationRevocation{RevokedAuthorityEpoch: 7}
-	intent, err := planDelegationIssue(network, &joinRequest{Version: 1, Zone: child, PublicKey: pub}, nil)
+	intent, err := planDelegationIssue(network, &joinRequest{Version: 1, Zone: child, PublicKey: pub}, nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,11 +60,12 @@ func TestDelegationPlansPreserveSource(t *testing.T) {
 	if issue.Authority.Epoch != 8 {
 		t.Fatalf("epoch = %d", issue.Authority.Epoch)
 	}
-	grant, err := planDelegationGrant(network, zone.RootZone, []zone.Permission{zone.PermAllocateIP})
+	network.Zones[child] = zone.NewZoneState(child, issue.Authority)
+	grant, err := planDelegationGrant(network, child, []zone.Permission{zone.PermAllocateIP})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if grant.(corestate.UpdateRootAuthorityIntent).Authority.Epoch != 4 || network.Zones[zone.RootZone].Authority.Epoch != 3 || len(network.Zones[zone.RootZone].Authority.Keys[0].Capabilities) != 0 {
+	if grant.(corestate.PutDelegationIntent).Authority.Epoch != 9 || network.Zones[zone.RootZone].Authority.Epoch != 3 || len(network.Zones[zone.RootZone].Authority.Keys[0].Capabilities) != 0 {
 		t.Fatal("grant mutated source or used wrong epoch")
 	}
 }

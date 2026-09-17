@@ -806,3 +806,36 @@ func TestMarkIPsecActionSucceededKeepsSecondaryStandbyDownAfterUpdate(t *testing
 		t.Fatalf("state = %q, want down for standby update", got.ActualState)
 	}
 }
+
+func TestMarkIPsecRollbackSucceededPreservesRotationBackoff(t *testing.T) {
+	now := time.Unix(5103, 0)
+	spec := ipsec.TransportLinkSpec{
+		LocalZone:     "node-a.catofes.",
+		PeerZone:      "node-b.catofes.",
+		OverlayID:     "main",
+		TransportID:   "ipsec-rotate",
+		InterfaceName: "phx-rotate",
+		XFRMIfID:      5103,
+	}
+	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateError, now)
+	inst.StagedGeneration = 2
+	inst.RotatePhase = ipsec.RotatePhaseRollback
+	inst.FailureCount = 2
+	inst.BackoffUntil = now.Add(10 * time.Second).Unix()
+	inst.LastFailure = errors.New("staged sa not established by deadline")
+	instances := map[string]ipsec.LinkInstance{inst.ID: inst}
+
+	markIPsecActionSucceeded(instances, ipsec.ReconcileAction{
+		Action:   ipsec.ReconcileActionRollbackRotate,
+		Spec:     &spec,
+		Instance: &inst,
+	}, now)
+
+	got := instances[inst.ID]
+	if got.FailureCount != inst.FailureCount || got.BackoffUntil != inst.BackoffUntil || got.LastFailure != inst.LastFailure {
+		t.Fatalf("rollback cleared failure backoff: %+v", got)
+	}
+	if got.StagedGeneration != 0 || got.RotatePhase != ipsec.RotatePhaseIdle {
+		t.Fatalf("rollback did not clear staged runtime: %+v", got)
+	}
+}

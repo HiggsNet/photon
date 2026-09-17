@@ -32,7 +32,7 @@ func migrateLegacyLinuxStateTx(tx *bolt.Tx, trustedRoot ed25519.PublicKey) (lega
 	if tx == nil || !tx.Writable() {
 		return report, false, errors.New("legacy state migration requires a writable bbolt transaction")
 	}
-	candidate, revision, _, commonFound, err := corestate.LoadBoltState(tx)
+	candidate, revision, loadReport, commonFound, err := corestate.LoadBoltState(tx)
 	if err != nil {
 		return report, false, err
 	}
@@ -55,16 +55,21 @@ func migrateLegacyLinuxStateTx(tx *bolt.Tx, trustedRoot ed25519.PublicKey) (lega
 		if !found {
 			return report, false, fmt.Errorf("%w: runtime bucket is missing", photonlinux.ErrLinuxStateCorrupt)
 		}
-		if peerCleanups == nil {
+		if peerCleanups == nil && !loadReport.RootAuthorityRepaired {
 			return report, false, nil
 		}
 		var checkpointChanged bool
 		report.Gossip, checkpointChanged = projectLegacyPeerCleanups(candidate.Gossip, peerCleanups, report.Gossip)
 		commonChanged := false
-		if checkpointChanged {
+		if checkpointChanged || loadReport.RootAuthorityRepaired {
+			if loadReport.RootAuthorityRepaired {
+				revision++
+			}
 			commonChanged, err = corestate.CommitBoltState(tx, candidate, corestate.ChangeSet{
 				VerifiedRevision:        revision,
-				GossipCheckpointChanged: true,
+				GossipCheckpointChanged: checkpointChanged,
+				NetworkChanged:          loadReport.RootAuthorityRepaired,
+				SecurityPriority:        loadReport.RootAuthorityRepaired,
 			})
 			if err != nil {
 				return report, false, err

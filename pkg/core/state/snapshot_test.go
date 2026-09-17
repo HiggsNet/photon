@@ -2,6 +2,7 @@ package state
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
@@ -420,6 +421,7 @@ func TestApplyChildSnapshotUsesParentProof(t *testing.T) {
 func TestRevocationTombstoneQuarantinesChildZone(t *testing.T) {
 	now := time.Unix(1000, 0)
 	source, rootPriv, _ := testNetworkWithKeys(t)
+	target := cloneNetworkState(source)
 	source.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
 
 	delegation := source.Zones[zone.RootZone].Delegations["catofes."]
@@ -441,7 +443,6 @@ func TestRevocationTombstoneQuarantinesChildZone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot(root): %v", err)
 	}
-	target, _ := testNetwork(t)
 	result, err := applySnapshotForTest(target, snapshot, now, DefaultSyncLimits())
 	if err != nil {
 		t.Fatalf("ApplySnapshot(root): %v", err)
@@ -652,4 +653,181 @@ func signedRecord(t *testing.T, priv ed25519.PrivateKey, path zone.ZonePath, key
 		t.Fatalf("SignRecord: %v", err)
 	}
 	return record
+}
+
+func TestApplySnapshotRejectsAuthorityRollbackAndSameEpochFork(t *testing.T) {
+	now := time.Unix(1000, 0)
+	base, _ := testNetwork(t)
+
+	t.Run("same epoch fork", func(t *testing.T) {
+		source := cloneNetworkState(base)
+		source.Zones[zone.RootZone].Authority.Keys[0].Capabilities[0].Permissions = append(
+			source.Zones[zone.RootZone].Authority.Keys[0].Capabilities[0].Permissions,
+			zone.PermAllocateIP,
+		)
+		snapshot, err := Snapshot(source, zone.RootZone)
+		if err != nil {
+			t.Fatalf("Snapshot: %v", err)
+		}
+		target := cloneNetworkState(base)
+		before := captureNetworkState(t, target)
+		if _, err := applySnapshotForTest(target, snapshot, now, DefaultSyncLimits()); !errors.Is(err, ErrRootAuthorityChange) {
+			t.Fatalf("ApplySnapshot = %v, want ErrRootAuthorityChange", err)
+		}
+		assertNetworkStateUnchanged(t, target, before)
+	})
+
+	t.Run("older epoch", func(t *testing.T) {
+		source := cloneNetworkState(base)
+		snapshot, err := Snapshot(source, zone.RootZone)
+		if err != nil {
+			t.Fatalf("Snapshot: %v", err)
+		}
+		target := cloneNetworkState(base)
+		target.Zones[zone.RootZone].Authority.Epoch = 2
+		before := captureNetworkState(t, target)
+		if _, err := applySnapshotForTest(target, snapshot, now, DefaultSyncLimits()); !errors.Is(err, ErrStaleAuthority) {
+			t.Fatalf("ApplySnapshot = %v, want ErrStaleAuthority", err)
+		}
+		assertNetworkStateUnchanged(t, target, before)
+	})
+}
+
+func TestApplySnapshotRejectsHigherRootAuthorityWithoutExplicitRecovery(t *testing.T) {
+	now := time.Unix(1000, 0)
+	source, _ := testNetwork(t)
+	source.Zones[zone.RootZone].Authority.Epoch = 2
+	source.Zones[zone.RootZone].Authority.Keys[0].Capabilities[0].Permissions = append(
+		source.Zones[zone.RootZone].Authority.Keys[0].Capabilities[0].Permissions,
+		zone.PermAllocateIP,
+	)
+	snapshot, err := Snapshot(source, zone.RootZone)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	target, _ := testNetwork(t)
+	// Use the same trust lineage while retaining the target's older authority.
+	target.Zones[zone.RootZone] = cloneNetworkState(source).Zones[zone.RootZone]
+	target.Zones[zone.RootZone].Authority.Epoch = 1
+	target.Zones[zone.RootZone].Authority.Keys[0].Capabilities[0].Permissions = []zone.Permission{zone.PermDelegate, zone.PermWrite}
+
+	before := captureNetworkState(t, target)
+	if _, err := applySnapshotForTest(target, snapshot, now, DefaultSyncLimits()); !errors.Is(err, ErrRootAuthorityChange) {
+		t.Fatalf("ApplySnapshot = %v, want ErrRootAuthorityChange", err)
+	}
+	assertNetworkStateUnchanged(t, target, before)
+}
+
+func TestApplySnapshotRejectsHigherRootAuthorityWithoutKeyContinuity(t *testing.T) {
+	now := time.Unix(1000, 0)
+	target, _ := testNetwork(t)
+	source := cloneNetworkState(target)
+	newPublicKey, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	source.Zones[zone.RootZone].Authority.Epoch = 2
+	source.Zones[zone.RootZone].Authority.Keys[0].Key = newPublicKey
+	snapshot, err := Snapshot(source, zone.RootZone)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	before := captureNetworkState(t, target)
+	if _, err := applySnapshotForTest(target, snapshot, now, DefaultSyncLimits()); !errors.Is(err, ErrRootAuthorityChange) {
+		t.Fatalf("ApplySnapshot = %v, want ErrRootAuthorityChange", err)
+	}
+	assertNetworkStateUnchanged(t, target, before)
+}
+
+func TestApplySnapshotRejectsSameEpochChildAuthorityFork(t *testing.T) {
+	now := time.Unix(1000, 0)
+	target, rootPrivateKey, _ := testNetworkWithKeys(t)
+	source := cloneNetworkState(target)
+	forkedAuthority := cloneAuthority(source.Zones["catofes."].Authority)
+	forkedAuthority.Keys[0].Capabilities[0].Permissions = append(
+		forkedAuthority.Keys[0].Capabilities[0].Permissions,
+		zone.PermAllocateIP,
+	)
+	source.Zones["catofes."].Authority = forkedAuthority
+	forkedDelegation := &zone.Delegation{
+		ZoneName:  "catofes.",
+		Scope:     zone.DelegationScopeDirectChild,
+		Authority: *cloneAuthority(forkedAuthority),
+	}
+	if err := photoncrypto.SignDelegation(forkedDelegation, zone.RootZone, rootPrivateKey); err != nil {
+		t.Fatalf("SignDelegation: %v", err)
+	}
+	// Model the parent delegation arriving before the child snapshot. The
+	// incoming child is trusted by the parent, but must not replace a different
+	// local authority at the same epoch.
+	target.Zones[zone.RootZone].Delegations["catofes."] = forkedDelegation
+	snapshot, err := Snapshot(source, "catofes.")
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	before := captureNetworkState(t, target)
+	if _, err := applySnapshotForTest(target, snapshot, now, DefaultSyncLimits()); !errors.Is(err, ErrAuthorityConflict) {
+		t.Fatalf("ApplySnapshot = %v, want ErrAuthorityConflict", err)
+	}
+	assertNetworkStateUnchanged(t, target, before)
+	store := NewStore(&VerifiedState{ManagedZone: zone.RootZone, Network: target}, nil)
+	result, err := store.ImportRecoverySnapshot(context.Background(), RecoveryImport{Snapshot: snapshot}, now)
+	if err != nil {
+		t.Fatalf("explicit recovery: %v", err)
+	}
+	if !result.Committed || !bytes.Equal(photoncrypto.AuthorityHash(store.ReadView().State.Network.Zones["catofes."].Authority), photoncrypto.AuthorityHash(forkedAuthority)) {
+		t.Fatal("recovery did not install selected child authority")
+	}
+	assertNetworkStateUnchanged(t, target, before)
+}
+
+func TestApplySnapshotRejectsSameEpochDelegationFork(t *testing.T) {
+	now := time.Unix(1000, 0)
+	target, rootPrivateKey, _ := testNetworkWithKeys(t)
+	source := cloneNetworkState(target)
+	newPublicKey, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	forkedAuthority := cloneAuthority(source.Zones["catofes."].Authority)
+	forkedAuthority.Keys[0].Key = newPublicKey
+	forked := &zone.Delegation{
+		ZoneName:  "catofes.",
+		Scope:     zone.DelegationScopeDirectChild,
+		Authority: *forkedAuthority,
+	}
+	if err := photoncrypto.SignDelegation(forked, zone.RootZone, rootPrivateKey); err != nil {
+		t.Fatalf("SignDelegation: %v", err)
+	}
+	source.Zones[zone.RootZone].Delegations["catofes."] = forked
+	snapshot, err := Snapshot(source, zone.RootZone)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	before := captureNetworkState(t, target)
+	if _, err := applySnapshotForTest(target, snapshot, now, DefaultSyncLimits()); !errors.Is(err, ErrDelegationConflict) {
+		t.Fatalf("ApplySnapshot = %v, want ErrDelegationConflict", err)
+	}
+	assertNetworkStateUnchanged(t, target, before)
+}
+
+func TestApplySnapshotRejectsDelegationRollback(t *testing.T) {
+	now := time.Unix(1000, 0)
+	source, rootPrivateKey, _ := testNetworkWithKeys(t)
+	snapshot, err := Snapshot(source, zone.RootZone)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	target := cloneNetworkState(source)
+	newer := cloneDelegation(target.Zones[zone.RootZone].Delegations["catofes."])
+	newer.Authority.Epoch = 2
+	if err := photoncrypto.SignDelegation(newer, zone.RootZone, rootPrivateKey); err != nil {
+		t.Fatalf("SignDelegation: %v", err)
+	}
+	target.Zones[zone.RootZone].Delegations["catofes."] = newer
+	before := captureNetworkState(t, target)
+	if _, err := applySnapshotForTest(target, snapshot, now, DefaultSyncLimits()); !errors.Is(err, ErrStaleDelegation) {
+		t.Fatalf("ApplySnapshot = %v, want ErrStaleDelegation", err)
+	}
+	assertNetworkStateUnchanged(t, target, before)
 }

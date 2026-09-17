@@ -364,6 +364,76 @@ func TestPlanTransportLinksKeepsInboundResponderDesired(t *testing.T) {
 	}
 }
 
+func TestPlanTransportLinksKeepsResponderForOutboundPeerWithoutAddresses(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", RoleBoth, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	addIPsecNode(t, ns, "node-b.catofes.", RoleOut, nil, now)
+	ns.Zones["node-b.catofes."].Records[RecordKeyProfile] = record(t, "node-b.catofes.", RecordKeyProfile, RecordTypeProfile, ProfileRecord{
+		Version:                 1,
+		Enabled:                 true,
+		Provider:                ProviderStrongSwan,
+		IKEIdentity:             "node-b.catofes.",
+		TransportKeyFingerprint: "fp-node-b.catofes.",
+		Role:                    RoleOut,
+		AddressFamilies:         []string{FamilyIPv4},
+		PathModes:               []string{PathModeFamilyRedundant},
+		NAT: NATProfile{
+			Hint:             NATHintBehindNAT,
+			InboundReachable: NATReachableFalse,
+		},
+		UpdatedAt: now.Unix(),
+	})
+
+	responderGroup := LinkGroupSpec{
+		ID:           "ipsec-main",
+		ConnectRules: []string{"strongswan://node-b.catofes.?role=out&family=ipv4"},
+	}
+	responderPlan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{responderGroup}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks(responder): %v", err)
+	}
+	if len(responderPlan.Desired) != 1 {
+		t.Fatalf("responder desired = %+v skips=%+v, want one passive link", responderPlan.Desired, responderPlan.Skipped)
+	}
+	responder := responderPlan.Desired[0]
+	if responder.InitiatorRole != "" || len(responder.ContactPoints) != 0 || responder.PathKey != "family:ipv4" {
+		t.Fatalf("responder spec = %+v, want passive IPv4 link without contacts", responder)
+	}
+
+	initiatorGroup := LinkGroupSpec{ID: "ipsec-main"}
+	initiatorPlan, err := PlanTransportLinks(context.Background(), ns, "node-b.catofes.", []LinkGroupSpec{initiatorGroup}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks(initiator): %v", err)
+	}
+	if len(initiatorPlan.Desired) != 1 {
+		t.Fatalf("initiator desired = %+v skips=%+v, want one active link", initiatorPlan.Desired, initiatorPlan.Skipped)
+	}
+	initiator := initiatorPlan.Desired[0]
+	if initiator.InitiatorRole != InitiatorRolePrimary || len(initiator.ContactPoints) != 1 || initiator.PathKey != responder.PathKey || initiator.LinkID != responder.LinkID {
+		t.Fatalf("initiator spec = %+v, responder spec = %+v, want symmetric active/passive link", initiator, responder)
+	}
+}
+
+func TestPlanTransportLinksRejectsActivePeerWithoutAddresses(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, "node-a.catofes.", RoleOut, []AddressAdvertisement{{
+		ID: "a-public", Source: SourceManualAddress, Address: "198.51.100.10", Priority: 100, TTLSeconds: 300,
+	}}, now)
+	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, nil, now)
+
+	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{{ID: "ipsec-main"}}, LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatalf("PlanTransportLinks: %v", err)
+	}
+	if len(plan.Desired) != 0 || !hasSkip(plan.Skipped, "node-b.catofes.", SkipUnsupportedFamily) {
+		t.Fatalf("plan = %+v, want active peer without addresses skipped as %s", plan, SkipUnsupportedFamily)
+	}
+}
+
 func TestPlanTransportLinksSkipsRevokedPeerAndMissingContactPoint(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()

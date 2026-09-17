@@ -163,14 +163,14 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 	if !oneOf(group.DefaultPathMode, records.Profile.PathModes...) {
 		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipUnsupportedPathMode, Detail: group.DefaultPathMode}, linkIndex, nil
 	}
-	if !familiesOverlap(records.Profile.AddressFamilies, recordFamilies(records.Addresses)) {
-		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipUnsupportedFamily}, linkIndex, nil
-	}
 	localRole := localRoleFromState(ns, local, now)
 	remoteRole := records.Profile.Role
 	role := InitiatorRoleForPeer(local, peer, localRole, remoteRole)
 	if role == "" && !canLoadResponder(localRole) {
 		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipRoleMismatch, Detail: fmt.Sprintf("local=%s remote=%s", localRole, remoteRole)}, linkIndex, nil
+	}
+	if role != "" && !familiesOverlap(records.Profile.AddressFamilies, recordFamilies(records.Addresses)) {
+		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipUnsupportedFamily}, linkIndex, nil
 	}
 
 	var contacts []ContactPoint
@@ -462,6 +462,17 @@ func responderPathFamilies(records *NodeRecords, allowedSources, allowedFamilies
 	if records == nil || records.Addresses == nil {
 		return nil
 	}
+	if records.Profile != nil && records.Profile.Role == RoleOut && len(records.Addresses.Addresses) == 0 {
+		var out []string
+		for _, family := range records.Profile.AddressFamilies {
+			if len(allowedFamilies) > 0 && !oneOf(family, allowedFamilies...) {
+				continue
+			}
+			out = append(out, family)
+		}
+		sort.Strings(out)
+		return out
+	}
 	allowed := map[string]bool{}
 	for _, source := range allowedSources {
 		allowed[source] = true
@@ -545,7 +556,7 @@ func meshRuleMatchesPeer(rule MeshPolicyRule, peer zone.ZonePath, records *NodeR
 		if records == nil || records.Profile == nil || !oneOf(rule.Family, records.Profile.AddressFamilies...) {
 			return false
 		}
-		if records.Addresses == nil || !oneOf(rule.Family, recordFamilies(records.Addresses)...) {
+		if records.Profile.Role != RoleOut && (records.Addresses == nil || !oneOf(rule.Family, recordFamilies(records.Addresses)...)) {
 			return false
 		}
 	}

@@ -52,7 +52,7 @@ func (store *Store) ImportRecoverySnapshot(ctx context.Context, input RecoveryIm
 	if err := validateRecoveryRootSnapshot(current, input.Snapshot); err != nil {
 		return out, err
 	}
-	nextNetwork, applied, err := ApplySnapshot(current.Network, input.Snapshot, now, input.Limits)
+	nextNetwork, applied, err := ApplyRecoverySnapshot(current.Network, input.Snapshot, now, input.Limits)
 	if err != nil {
 		return out, err
 	}

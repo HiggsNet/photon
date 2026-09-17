@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"os"
 	"path/filepath"
@@ -59,6 +60,12 @@ func TestOpenStateAutoJoinCreatesPendingBootstrapState(t *testing.T) {
 	root := state.Network.Zones[zone.RootZone]
 	if root == nil || root.Authority == nil || !authorityHasKey(root.Authority, rootPub) {
 		t.Fatalf("trusted root authority missing: %+v", root)
+	}
+	if got, want := photoncrypto.AuthorityHash(root.Authority), photoncrypto.AuthorityHash(photoncrypto.ConfiguredRootAuthority(rootPub)); !bytes.Equal(got, want) {
+		t.Fatalf("auto-join root authority is not canonical: got=%x want=%x", got, want)
+	}
+	if len(root.Authority.Keys) != 1 || len(root.Authority.Keys[0].Capabilities) != 0 {
+		t.Fatalf("auto-join root authority should not encode capabilities: %+v", root.Authority)
 	}
 
 	if err := opened.Close(); err != nil {

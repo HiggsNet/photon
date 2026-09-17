@@ -112,6 +112,12 @@ func (c *ReconnectingVICIClient) Call(ctx context.Context, cmd string, in map[st
 		return nil, err
 	}
 	out, err := client.Call(ctx, cmd, in)
+	if isVICIContextError(err) {
+		// A timed out/cancelled VICI exchange may leave the framed stream out of
+		// sync.  Do not hand that session to the next reconcile operation.
+		c.invalidate(client)
+		return out, err
+	}
 	if !isVICIReconnectError(err) {
 		return out, err
 	}
@@ -128,6 +134,12 @@ func (c *ReconnectingVICIClient) CallStreaming(ctx context.Context, cmd string, 
 		return nil, err
 	}
 	out, err := client.CallStreaming(ctx, cmd, event, in)
+	if isVICIContextError(err) {
+		// Streaming responses are especially unsafe to reuse after cancellation:
+		// unread list-* events can be mistaken for the next command's response.
+		c.invalidate(client)
+		return out, err
+	}
 	if !isVICIReconnectError(err) {
 		return out, err
 	}
@@ -139,27 +151,52 @@ func (c *ReconnectingVICIClient) CallStreaming(ctx context.Context, cmd string, 
 }
 
 func (c *ReconnectingVICIClient) SubscribeEvents(ctx context.Context, events ...string) (<-chan VICIEvent, func(), error) {
-	client, err := c.current()
+	if c == nil {
+		return nil, nil, errMissingGoviciSession()
+	}
+	c.mu.Lock()
+	factory := c.factory
+	closed := c.closed
+	c.mu.Unlock()
+	if closed {
+		return nil, nil, net.ErrClosed
+	}
+	if factory == nil {
+		return nil, nil, errMissingGoviciSession()
+	}
+
+	// Event subscriptions are long-lived and can receive bursts during mass SA
+	// rekeys.  Keep them on a dedicated VICI session so event backpressure can
+	// never block list-sas or configuration commands on the shared session.
+	client, closeFn, err := factory()
 	if err != nil {
 		return nil, nil, err
 	}
 	subscriber, ok := client.(VICIEventClient)
 	if !ok {
+		if closeFn != nil {
+			_ = closeFn()
+		}
 		return nil, nil, fmt.Errorf("vici client does not support event subscription")
 	}
 	out, stop, err := subscriber.SubscribeEvents(ctx, events...)
-	if !isVICIReconnectError(err) {
-		return out, stop, err
+	if err != nil {
+		if closeFn != nil {
+			_ = closeFn()
+		}
+		return nil, nil, err
 	}
-	client, reconnectErr := c.reconnect(client)
-	if reconnectErr != nil {
-		return nil, nil, fmt.Errorf("%w; reconnect vici: %v", err, reconnectErr)
-	}
-	subscriber, ok = client.(VICIEventClient)
-	if !ok {
-		return nil, nil, fmt.Errorf("vici client does not support event subscription")
-	}
-	return subscriber.SubscribeEvents(ctx, events...)
+	var stopOnce sync.Once
+	return out, func() {
+		stopOnce.Do(func() {
+			if stop != nil {
+				stop()
+			}
+			if closeFn != nil {
+				_ = closeFn()
+			}
+		})
+	}, nil
 }
 
 func (c *ReconnectingVICIClient) Close() error {
@@ -229,6 +266,24 @@ func (c *ReconnectingVICIClient) reconnect(stale VICIClient) (VICIClient, error)
 	c.client = client
 	c.closeFn = closeFn
 	return client, nil
+}
+
+func (c *ReconnectingVICIClient) invalidate(stale VICIClient) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	if c.closed || c.client != stale {
+		c.mu.Unlock()
+		return
+	}
+	closeFn := c.closeFn
+	c.client = nil
+	c.closeFn = nil
+	c.mu.Unlock()
+	if closeFn != nil {
+		_ = closeFn()
+	}
 }
 
 func (c *GoviciClient) SubscribeEvents(ctx context.Context, events ...string) (<-chan VICIEvent, func(), error) {
@@ -305,6 +360,10 @@ func isVICIReconnectError(err error) bool {
 		}
 	}
 	return false
+}
+
+func isVICIContextError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func goviciMarshal(in map[string]any) (*vici.Message, error) {

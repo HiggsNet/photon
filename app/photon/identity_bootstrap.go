@@ -33,17 +33,7 @@ func writeConfiguredPendingBootstrap(path string, config *appConfig) error {
 	if err != nil {
 		return err
 	}
-	rootAuthority := &zone.ZoneAuthority{
-		Zone:      zone.RootZone,
-		Epoch:     1,
-		Threshold: photoncrypto.SupportedThreshold,
-		Keys: []zone.AuthorizedKey{{
-			Key: append(ed25519.PublicKey(nil), config.TrustedRootPublicKey...),
-			Capabilities: []zone.Capability{{
-				Permissions: []zone.Permission{zone.PermDelegate, zone.PermWrite},
-			}},
-		}},
-	}
+	rootAuthority := photoncrypto.ConfiguredRootAuthority(config.TrustedRootPublicKey)
 	ns := zone.NewNetworkState()
 	ns.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, rootAuthority)
 	// Pending auto-join has a stable local identity but no verified managed

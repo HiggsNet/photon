@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	bolt "go.etcd.io/bbolt"
 )
 
@@ -36,6 +37,7 @@ var (
 // discarded without weakening trust or eventual convergence.
 type BoltLoadReport struct {
 	GossipCheckpointDiscarded bool
+	RootAuthorityRepaired     bool
 }
 
 type persistedVerifiedState struct {
@@ -78,6 +80,7 @@ func LoadBoltState(tx *bolt.Tx) (candidate *CommitCandidate, revision VerifiedRe
 		RootPrivateKey:       append([]byte(nil), persisted.RootPrivateKey...),
 		IdentityPrivateKey:   append([]byte(nil), persisted.IdentityPrivateKey...),
 	}
+	report.RootAuthorityRepaired = photoncrypto.RepairLegacyRootAuthority(verified.Network, verified.TrustedRootPublicKey)
 	if err := ValidateStateRoot(verified); err != nil {
 		return nil, 0, report, true, fmt.Errorf("%w: verified payload: %v", ErrBoltStateCorrupt, err)
 	}

@@ -212,9 +212,12 @@ func strongSwanRemoteAddress(spec TransportLinkSpec, point ContactPoint, hasPoin
 	if !hasPoint {
 		switch pathKeyFamily(spec.PathKey) {
 		case FamilyIPv4:
-			return "%any4", nil
+			// Older strongSwan releases only recognize %any.  Use an explicit
+			// family-specific subnet so responder matching does not attempt to
+			// resolve %any4 as a DNS name on every IKE request.
+			return "0.0.0.0/0", nil
 		case FamilyIPv6:
-			return "%any6", nil
+			return "::/0", nil
 		}
 		return "%any", nil
 	}

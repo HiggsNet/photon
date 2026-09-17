@@ -59,16 +59,20 @@ func (store *BoltStore) View(read func(*bolt.Tx) error) error {
 	return store.db.View(read)
 }
 
-// LoadCommon reads the common logical partitions through the owned handle.
+// LoadCommon loads common state and atomically persists any startup root repair.
 func (store *BoltStore) LoadCommon() (*CommitCandidate, VerifiedRevision, BoltLoadReport, bool, error) {
 	var candidate *CommitCandidate
 	var revision VerifiedRevision
 	var report BoltLoadReport
 	found := false
-	err := store.View(func(tx *bolt.Tx) error {
+	err := store.Update(func(tx *bolt.Tx) (bool, error) {
 		var err error
 		candidate, revision, report, found, err = LoadBoltState(tx)
-		return err
+		if err != nil || !found || !report.RootAuthorityRepaired {
+			return false, err
+		}
+		revision++
+		return CommitBoltState(tx, candidate, ChangeSet{VerifiedRevision: revision, NetworkChanged: true, SecurityPriority: true})
 	})
 	return candidate, revision, report, found, err
 }
