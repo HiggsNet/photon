@@ -107,9 +107,9 @@ func buildBabelDebugView(rt *AppContext, instances map[string]*bird.InstanceObse
 	input.LinuxStates = instances
 	for _, inst := range routingInstances {
 		input.Instances = append(input.Instances, inspect.BabelInstanceInput{
-			NetNS:          inst.NetNS,
+			NetNS:          inst.Bird.NetNSName,
 			InstanceID:     inst.ID,
-			Mode:           inst.Mode,
+			Mode:           string(inst.Bird.Mode),
 			ShutdownPolicy: inst.ShutdownPolicy,
 			Enabled:        inst.Enabled,
 		})
@@ -189,7 +189,7 @@ func routingNetnsForOverlay(rt *AppContext, overlayID string) string {
 	// Find the overlay group, resolve its netns name.
 	for _, group := range rt.Config.IPsec.LinkGroups {
 		if group.ID == overlayID {
-			return resolveOverlayNetNSName(group, rt.Config.Overlay.DefaultNetNS)
+			return photonlinux.NetNSTarget(group.NetNS)
 		}
 	}
 	return ""

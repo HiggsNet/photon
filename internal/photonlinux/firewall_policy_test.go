@@ -11,6 +11,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/firewall"
 	"github.com/HiggsNet/photon/pkg/routing"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
@@ -114,8 +115,20 @@ func TestBuildFirewallPolicyInputScopesInterfacesByNetNS(t *testing.T) {
 		"h3":      {Kind: ipsec.NetNSName, Name: "h3"},
 	}}
 	instances := []RoutingInstance{
-		{ID: "photon", NetNS: "photon", Enabled: true, Upstream: &UpstreamConfig{Enabled: true, MeshInterface: "phv2host"}},
-		{ID: "h3", NetNS: "h3", Enabled: true, Upstream: &UpstreamConfig{Enabled: true, MeshInterface: "phv3host"}},
+		{ID: "photon", Enabled: true, Upstream: &UpstreamConfig{Enabled: true,
+			Veth: bird.VethSpec{
+				MeshInterface: "phv2host",
+			}},
+			Bird: bird.BirdInstanceSpec{
+				NetNSName: "photon",
+			}},
+		{ID: "h3", Enabled: true, Upstream: &UpstreamConfig{Enabled: true,
+			Veth: bird.VethSpec{
+				MeshInterface: "phv3host",
+			}},
+			Bird: bird.BirdInstanceSpec{
+				NetNSName: "h3",
+			}},
 	}
 
 	input := BuildFirewallPolicyInput(

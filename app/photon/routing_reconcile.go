@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
-	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -60,8 +59,8 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 	birdInstances := make(map[string]*bird.InstanceObservation, len(routingInstances))
 	if routingObserved != nil {
 		for _, configured := range routingInstances {
-			if previous := routingObserved.Instances[configured.NetNS]; previous != nil {
-				birdInstances[configured.NetNS] = previous
+			if previous := routingObserved.Instances[configured.Bird.NetNSName]; previous != nil {
+				birdInstances[configured.Bird.NetNSName] = previous
 			}
 		}
 	}
@@ -76,14 +75,6 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 		summary.LastFailure = err
 		d.publishRoutingObservation(rev, summary)
 		return fmt.Errorf("build authorized route set: %w", err)
-	}
-
-	dataDir := config.DataDir
-	if dataDir == "" {
-		dataDir = "."
-	}
-	if abs, err := filepath.Abs(dataDir); err == nil {
-		dataDir = abs
 	}
 
 	var firstErr error
@@ -108,10 +99,10 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 	}
 
 	// Build per-netns overlay groups for interface pattern merging.
-	overlayByNetns := groupOverlaysByNetns(config.IPsec.LinkGroups, config.Overlay.DefaultNetNS)
+	overlayByNetns := groupOverlaysByNetns(config.IPsec.LinkGroups)
 
 	for _, inst := range routingInstances {
-		if err := d.reconcileRoutingForInstance(ctx, verified, birdInstances, links, ipsecReconcile, inst, ars, dataDir, overlayByNetns, config, now, forceReload); err != nil && firstErr == nil {
+		if err := d.reconcileRoutingForInstance(ctx, verified, birdInstances, links, ipsecReconcile, inst, ars, overlayByNetns, config, now, forceReload); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -131,18 +122,14 @@ type netnsOverlayGroup struct {
 	Spec      ipsec.NetNSSpec
 }
 
-func groupOverlaysByNetns(groups []ipsec.LinkGroupSpec, defaultNetNS ipsec.NetNSSpec) map[string]*netnsOverlayGroup {
+func groupOverlaysByNetns(groups []ipsec.LinkGroupSpec) map[string]*netnsOverlayGroup {
 	out := make(map[string]*netnsOverlayGroup)
 	for _, group := range groups {
-		netnsName := resolveOverlayNetNSName(group, defaultNetNS)
+		netnsName := photonlinux.NetNSTarget(group.NetNS)
 		ng, ok := out[netnsName]
 		if !ok {
 			ng = &netnsOverlayGroup{NetNSName: netnsName}
-			netns := group.NetNS.Normalized()
-			if netns.Kind == "" || (netns.Kind == ipsec.NetNSName && netns.Name == "") {
-				netns = defaultNetNS.Normalized()
-			}
-			ng.Spec = netns
+			ng.Spec = group.NetNS.Normalized()
 			out[netnsName] = ng
 		}
 		ng.Overlays = append(ng.Overlays, group.ID)
@@ -166,7 +153,7 @@ func (d *Daemon) publishRoutingObservation(rev uint64, summary *routingObservati
 	d.linuxObservation.replaceRouting(summary)
 }
 
-func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *corestate.VerifiedState, birdInstances map[string]*bird.InstanceObservation, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, inst photonlinux.RoutingInstance, ars *routing.AuthorizedRouteSet, dataDir string, overlayByNetns map[string]*netnsOverlayGroup, config *appConfig, now time.Time, forceReload bool) error {
+func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *corestate.VerifiedState, birdInstances map[string]*bird.InstanceObservation, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, inst photonlinux.RoutingInstance, ars *routing.AuthorizedRouteSet, overlayByNetns map[string]*netnsOverlayGroup, config *appConfig, now time.Time, forceReload bool) error {
 	// Keep the single-instance entry point safe for dirty flushes, explicit
 	// reloads, tests, and future callers that do not pass the filtered list.
 	// Disabling an instance stops reconciliation; it intentionally does not
@@ -175,7 +162,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 		return nil
 	}
 
-	netnsName := inst.NetNS
+	netnsName := inst.Bird.NetNSName
 	instState := birdInstances[netnsName]
 	if instState == nil {
 		instState = &bird.InstanceObservation{NetNSName: netnsName}
@@ -189,11 +176,14 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 	}
 	instState.Overlays = overlays
 
-	routerIDLabel := netnsRouterIDLabel(netnsName, config.Netns, inst)
+	routerIDLabel := inst.RouterIDLabel
+	if routerIDLabel == "" {
+		routerIDLabel = inst.Bird.NetNSName
+	}
 	routerID := bird.StableRouterID(verified.ManagedZone, rootTrustHash(verified.Network), routerIDLabel)
 	instState.RouterID = routerID
 
-	spec := buildBirdInstanceSpecForNetns(inst, routerID, dataDir, overlayByNetns[netnsName], config.Netns, ars, verified.ManagedZone)
+	spec := buildBirdInstanceSpecForNetns(inst, routerID, overlayByNetns[netnsName], ars, verified.ManagedZone)
 	spec.InterfacePolicies = birdRotateInterfacePolicies(links, reconcile, netnsName, overlays, inst)
 	instState.ConfigPath = spec.ConfigPath
 	instState.ControlSocket = spec.ControlSocketPath
@@ -203,16 +193,8 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 
 	// Ensure veth pair for upstream if configured and create_veth is true.
 	if inst.Upstream != nil && inst.Upstream.Enabled && inst.Upstream.CreateVeth {
-		vspec := bird.VethSpec{
-			MeshInterface: inst.Upstream.MeshInterface,
-			PeerInterface: inst.Upstream.ExternalInterface,
-			MeshNetns:     netnsName,
-			PeerNetns:     inst.Upstream.ExternalNetns,
-			MeshIPv4LL:    inst.Upstream.MeshIPv4LL,
-			MeshIPv6LL:    inst.Upstream.MeshIPv6LL,
-			PeerIPv4LL:    inst.Upstream.ExternalIPv4LL,
-			PeerIPv6LL:    inst.Upstream.ExternalIPv6LL,
-		}
+		vspec := inst.Upstream.Veth
+		vspec.MeshNetns = netnsName
 		if err := d.linuxDriver.EnsureRoutingVeth(ctx, vspec); err != nil {
 			instState.State = birdInstanceStateError
 			instState.LastFailure = fmt.Errorf("ensure veth: %w", err)
@@ -220,9 +202,9 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 		}
 	}
 	if inst.Upstream != nil && inst.Upstream.Enabled &&
-		(inst.Upstream.Mode == upstreamModeStatic || inst.Upstream.InstallSourceAddresses) {
+		(inst.Upstream.Mode == photonlinux.UpstreamModeStatic || inst.Upstream.InstallSourceAddresses) {
 		var routePrefixes []netip.Prefix
-		if inst.Upstream.Mode == upstreamModeStatic {
+		if inst.Upstream.Mode == photonlinux.UpstreamModeStatic {
 			routePrefixes = externalUpstreamRoutePrefixes(ars, verified.ManagedZone)
 		}
 		var sourcePrefixes []netip.Prefix
@@ -230,12 +212,12 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 			sourcePrefixes = externalUpstreamSourcePrefixes(ars, verified.ManagedZone)
 		}
 		rspec := photonlinux.UpstreamRouteSpec{
-			NetNS:          inst.Upstream.ExternalNetns,
-			Interface:      inst.Upstream.ExternalInterface,
+			NetNS:          inst.Upstream.Veth.PeerNetns,
+			Interface:      inst.Upstream.Veth.PeerInterface,
 			Prefixes:       routePrefixes,
 			SourcePrefixes: sourcePrefixes,
-			MeshIPv4LL:     inst.Upstream.MeshIPv4LL,
-			MeshIPv6LL:     inst.Upstream.MeshIPv6LL,
+			MeshIPv4LL:     inst.Upstream.Veth.MeshIPv4LL,
+			MeshIPv6LL:     inst.Upstream.Veth.MeshIPv6LL,
 		}
 		if err := d.linuxDriver.EnsureUpstreamRoutes(ctx, rspec); err != nil {
 			instState.State = birdInstanceStateError
@@ -262,7 +244,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 	configHash := fmt.Sprintf("%x", sha256.Sum256(configBytes))
 	configChanged := forceReload || instState.LastConfigHash == "" || instState.LastConfigHash != configHash
 
-	mode := bird.BirdMode(inst.Mode)
+	mode := inst.Bird.Mode
 	if mode == "" {
 		mode = bird.BirdModeManaged
 	}
@@ -435,26 +417,19 @@ func (d *Daemon) stopManagedBirdInstances(ctx context.Context, force bool) error
 
 	var firstErr error
 	for _, inst := range d.App.Config.Routing.Instances {
-		if !inst.Enabled || inst.Mode == ipsec.RoutingModeDisabled || inst.Mode == ipsec.RoutingModeExternal {
+		if !inst.Enabled || inst.Bird.Mode == ipsec.RoutingModeDisabled || inst.Bird.Mode == ipsec.RoutingModeExternal {
 			continue
 		}
-		if !force && normalizedRoutingShutdownPolicy(inst.ShutdownPolicy) != routingShutdownPolicyStop {
+		if !force && inst.ShutdownPolicy != photonlinux.RoutingShutdownPolicyStop {
 			continue
 		}
-		mode := bird.BirdMode(inst.Mode)
-		if mode == "" {
-			mode = bird.BirdModeManaged
+		spec := inst.Bird
+		if spec.Mode == "" {
+			spec.Mode = bird.BirdModeManaged
 		}
-		spec := bird.BirdInstanceSpec{
-			NetNSName:         inst.NetNS,
-			ControlSocketPath: inst.ControlSocket,
-			PIDFilePath:       inst.PIDFile,
-			ConfigPath:        inst.ConfigFile,
-			Mode:              mode,
-			Owner:             birdOwnerForInstance(inst, inst.NetNS),
-		}
+		spec.Owner = birdOwnerForInstance(inst, inst.Bird.NetNSName)
 		if err := d.linuxDriver.StopBird(ctx, spec); err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("stop bird for netns %q: %w", inst.NetNS, err)
+			firstErr = fmt.Errorf("stop bird for netns %q: %w", inst.Bird.NetNSName, err)
 		}
 	}
 	return firstErr
@@ -472,28 +447,28 @@ func (d *Daemon) birdDumpForControl(ctx context.Context, netnsName string, view 
 	links, reconcile := d.linuxObservation.ipsecSnapshot()
 	linkOutputs := buildLinkOutputs(links, reconcile)
 	for _, inst := range d.App.Config.Routing.Instances {
-		if !inst.Enabled || inst.Mode == ipsec.RoutingModeDisabled {
+		if !inst.Enabled || inst.Bird.Mode == ipsec.RoutingModeDisabled {
 			continue
 		}
-		if netnsName != "" && inst.NetNS != netnsName && inst.ID != netnsName {
+		if netnsName != "" && inst.Bird.NetNSName != netnsName && inst.ID != netnsName {
 			continue
 		}
 		item := inspect.BirdDumpInstance{
-			NetNS:         inst.NetNS,
+			NetNS:         inst.Bird.NetNSName,
 			InstanceID:    inst.ID,
-			ControlSocket: inst.ControlSocket,
+			ControlSocket: inst.Bird.ControlSocketPath,
 			Raw:           map[string]string{},
 		}
 		if view == bird.DebugFilter {
-			addBirdFilterDefinitions(&item, inst.ConfigFile)
+			addBirdFilterDefinitions(&item, inst.Bird.ConfigPath)
 		}
-		if inst.ControlSocket == "" {
+		if inst.Bird.ControlSocketPath == "" {
 			item.Failure = inspect.BuildFailure(inspect.FailureCodeBirdQuery, errors.New("control socket is not configured"))
-			response.Instances[inst.NetNS] = item
+			response.Instances[inst.Bird.NetNSName] = item
 			continue
 		}
 		for _, cmd := range commands {
-			out, err := d.linuxDriver.RawBird(ctx, inst.ControlSocket, cmd)
+			out, err := d.linuxDriver.RawBird(ctx, inst.Bird.ControlSocketPath, cmd)
 			if err != nil {
 				if item.Failure == nil {
 					item.Failure = inspect.BuildFailure(inspect.FailureCodeBirdQuery, err)
@@ -504,64 +479,26 @@ func (d *Daemon) birdDumpForControl(ctx context.Context, netnsName string, view 
 			item.Raw[cmd] = out
 		}
 		inspect.EnrichBirdDumpInstance(&item, inspect.BuildBirdInterfaceContexts(linkOutputs, item.NetNS))
-		response.Instances[inst.NetNS] = item
+		response.Instances[inst.Bird.NetNSName] = item
 	}
 	return response, nil
 }
 
-func buildBirdInstanceSpecForNetns(inst photonlinux.RoutingInstance, routerID uint32, _ string, ng *netnsOverlayGroup, netnsCfg photonlinux.NetNSConfig, ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath) bird.BirdInstanceSpec {
-	netnsSpec := ipsec.NetNSSpec{}
-	if s, ok := netnsCfg.Names[inst.NetNS]; ok {
-		netnsSpec = s
-	}
+func buildBirdInstanceSpecForNetns(inst photonlinux.RoutingInstance, routerID uint32, ng *netnsOverlayGroup, ars *routing.AuthorizedRouteSet, managedZone zone.ZonePath) bird.BirdInstanceSpec {
+	spec := inst.Bird
+	spec.RouterID = routerID
 	if ng != nil {
-		netnsSpec = ng.Spec
+		spec.Overlays = ng.Overlays
+		spec.NetNS = bird.NetNSSpec{Kind: ng.Spec.Kind, Name: ng.Spec.Name, Path: ng.Spec.Path, Create: ng.Spec.Create}
 	}
-
-	overlays := []string{}
-	if ng != nil {
-		overlays = ng.Overlays
-	}
-	// Build interface patterns: merge the instance default + any overlay-specific patterns.
-	// Currently all overlays use "phx*" by default, so the instance pattern suffices.
-	interfacePatterns := []string{}
-	if inst.InterfacePat != "" {
-		interfacePatterns = append(interfacePatterns, inst.InterfacePat)
-	}
-
-	mode := bird.BirdMode(inst.Mode)
-	if mode == "" {
-		mode = bird.BirdModeManaged
-	}
-
-	spec := bird.BirdInstanceSpec{
-		RouterID:            routerID,
-		NetNSName:           inst.NetNS,
-		Overlays:            overlays,
-		NetNS:               bird.NetNSSpec{Kind: netnsSpec.Kind, Name: netnsSpec.Name, Path: netnsSpec.Path, Create: netnsSpec.Create},
-		ControlSocketPath:   inst.ControlSocket,
-		PIDFilePath:         inst.PIDFile,
-		ConfigPath:          inst.ConfigFile,
-		TableID:             inst.TableID,
-		MetricBase:          inst.MetricBase,
-		MetricStaged:        inst.MetricStaged,
-		MetricDraining:      inst.MetricDraining,
-		BabelRTTCost:        inst.RTTCost,
-		BabelRTTMin:         inst.RTTMin,
-		BabelRTTMax:         inst.RTTMax,
-		BabelRTTDecay:       inst.RTTDecay,
-		BabelHelloInterval:  inst.HelloInterval,
-		BabelUpdateInterval: inst.UpdateInterval,
-		InterfacePatterns:   interfacePatterns,
-		Mode:                mode,
-		ECMP:                inst.ECMP,
-		ECMPLimit:           inst.ECMPLimit,
+	if spec.Mode == "" {
+		spec.Mode = bird.BirdModeManaged
 	}
 
 	// Wire upstream config into BIRD spec.
 	if inst.Upstream != nil && inst.Upstream.Enabled {
 		spec.Upstream = &bird.UpstreamSpec{
-			Interface: inst.Upstream.MeshInterface,
+			Interface: inst.Upstream.Veth.MeshInterface,
 		}
 	}
 
@@ -570,8 +507,8 @@ func buildBirdInstanceSpecForNetns(inst photonlinux.RoutingInstance, routerID ui
 		for _, prefix := range routing.LocalAssignedPrefixes(ars, managedZone, true) {
 			via := ""
 			var nextHop netip.Addr
-			if inst.Upstream != nil && inst.Upstream.Enabled && inst.Upstream.Mode == upstreamModeStatic {
-				via = inst.Upstream.MeshInterface
+			if inst.Upstream != nil && inst.Upstream.Enabled && inst.Upstream.Mode == photonlinux.UpstreamModeStatic {
+				via = inst.Upstream.Veth.MeshInterface
 				nextHop = upstreamPeerNextHop(prefix, inst.Upstream)
 			}
 			spec.StaticRoutes = append(spec.StaticRoutes, bird.StaticRouteSpec{
@@ -596,15 +533,15 @@ func birdRotateInterfacePolicies(instances map[string]ipsec.LinkInstance, reconc
 		if !ok || instance.StagedInterfaceName == "" {
 			continue
 		}
-		metric := routingInst.MetricBase
+		metric := routingInst.Bird.MetricBase
 		if link.RuntimeRole == photonstate.LinkRuntimeStaged {
-			metric = routingInst.MetricStaged
+			metric = routingInst.Bird.MetricStaged
 		}
 		if instance.RotatePhase == ipsec.RotatePhaseDraining {
 			if link.RuntimeRole == photonstate.LinkRuntimeStaged {
-				metric = routingInst.MetricBase
+				metric = routingInst.Bird.MetricBase
 			} else {
-				metric = routingInst.MetricDraining
+				metric = routingInst.Bird.MetricDraining
 			}
 		}
 		if previous := metrics[link.InterfaceName]; metric > previous {
@@ -639,9 +576,9 @@ func upstreamPeerNextHop(prefix netip.Prefix, upstream *photonlinux.UpstreamConf
 	if upstream == nil {
 		return netip.Addr{}
 	}
-	value := upstream.ExternalIPv6LL
+	value := upstream.Veth.PeerIPv6LL
 	if prefix.Addr().Is4() {
-		value = upstream.ExternalIPv4LL
+		value = upstream.Veth.PeerIPv4LL
 	}
 	parsed, err := netip.ParsePrefix(value)
 	if err != nil {
@@ -654,7 +591,7 @@ func upstreamStaticRoutesEnabled(upstream *photonlinux.UpstreamConfig) bool {
 	if upstream == nil || !upstream.Enabled {
 		return true
 	}
-	return upstream.Mode == upstreamModeStatic
+	return upstream.Mode == photonlinux.UpstreamModeStatic
 }
 
 func routingInstancesEnabled(config *appConfig) []photonlinux.RoutingInstance {
@@ -671,7 +608,7 @@ func routingInstancesEnabled(config *appConfig) []photonlinux.RoutingInstance {
 }
 
 func routingInstanceEnabled(inst photonlinux.RoutingInstance) bool {
-	return inst.Enabled && inst.Mode != ipsec.RoutingModeDisabled
+	return inst.Enabled && inst.Bird.Mode != ipsec.RoutingModeDisabled
 }
 
 // buildRoutingExportSet computes the BIRD export set using the forwarding policy
@@ -1043,7 +980,7 @@ func (d *Daemon) routingNetnsProtocolIntent(verified *corestate.VerifiedState) (
 	if len(config.Routing.Instances) == 0 {
 		return nil, nil
 	}
-	netnsNames := routingNetnsNames(config.Routing)
+	netnsNames := config.Routing.NetNSNames()
 	if len(netnsNames) == 0 {
 		return nil, nil
 	}

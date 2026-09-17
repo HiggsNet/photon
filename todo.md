@@ -123,10 +123,16 @@ Daemon
 
 - [ ] 按窄切口继续下沉仍留在 `app/photon` 的 Linux 子系统配置与纯策略；实际 Daemon 读取 owner、revision guard、调用 Driver、发布 Observation 和 shutdown 顺序继续留在 app。
   - [x] firewall：YAML/effective config、forwarding policy 和 `FirewallPolicyInput` 组装已归 Linux firewall/routing owner；`reconcileFirewall` 保留 Daemon owner 读取、revision guard、Driver apply 与 Observation 发布，不新增 controller facade。
-    - [x] YAML/effective config、managed 实例筛选与 spec 构造已归 `internal/photonlinux/firewall_config.go`；删除 app 旧定义与无用参数，实例单测随 owner 迁移，配置集成测试留在 app。
+    - [x] YAML 解析与 managed 实例筛选已归 `internal/photonlinux/firewall_config.go`；解析直接生成 `firewall.FirewallInstanceSpec`，删除重复 `FirewallInstanceConfig` 和 `Spec()` 转换，配置集成测试留在 app。
     - [x] namespace YAML/有效配置和 forwarding policy 已归 `internal/photonlinux/routing_config.go`；firewall policy builder 直接消费 namespace 配置、routing 实例和现有 `LinkOutput`，删除 app builder 和无用 LinuxState 参数。
   - [ ] routing/BIRD：把 netns/BIRD/upstream 配置、纯 spec/export/announce policy 归到 routing/Linux owner；已下沉的 BIRD、veth、upstream route 与 kernel route 执行不再反向搬回 app。
-    - [x] namespace parser、forwarding policy 与 RoutingInstance/UpstreamConfig 有效类型已迁入 Linux owner，app 直接使用，无 alias；BIRD/upstream YAML 解析与 spec/export/announce 组装仍待后续切片。
+    - [x] namespace parser、forwarding policy 与 RoutingInstance/UpstreamConfig 有效类型已迁入 Linux owner，app 直接使用，无 alias。
+    - [x] BIRD/upstream YAML、默认值与校验迁入现有 Linux owner，删除 app/routing_config.go；解析单测随 owner 迁移，app 保留总配置集成测试。
+    - [x] 删除三个 app namespace helper；统一已解析 spec 的 runtime target，namespace 列举归 RoutingConfig，Router ID 直接使用显式标签或实例有效 NetNS，删除不可达 fallback。
+    - [x] RoutingInstance 内含 BirdInstanceSpec、UpstreamConfig 内含 VethSpec，删除重复执行字段及逐字段转换；解析阶段保留已解析 namespace，reconcile/shutdown 按值补齐动态输入。
+    - [x] routing 字段映射、默认值、shutdown/Babel 校验与 enabled/disabled 测试归 Linux 解析器；app 仅保留未知字段拒绝、namespace/data_dir 与 upstream 默认 namespace 装配测试。
+    - [x] firewall/namespace 字段、默认值与校验测试归 Linux 解析器；app 保留跨配置联动和严格 YAML 边界，拒绝测试核对具体错误。
+    - [ ] 继续下沉 BIRD 动态 spec/export/announce 纯组装。
   - [ ] IPsec：把 transport/address/port/overlay record 纯构造、reconcile 纯 helper 和安全 live projection 靠近 `pkg/transport/ipsec`、state publisher 或 inspect owner；app 保留私钥先落盘、公共 record 后发布以及完整 rotation/apply 顺序。
   - [x] health：probe target/rotate role 组合属于 app health reconcile，raw ICMP、`setns` 和 exec fallback 属于 `internal/photonlinux/healthprobe`；当前边界无需为目录对称继续搬迁。
 - [x] 删除本轮审计确认的测试专用生产入口和单用途测试接缝，不为此新增通用 interface/manager。

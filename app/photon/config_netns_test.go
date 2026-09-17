@@ -1,8 +1,10 @@
 package main
 
 import (
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
+	"strings"
 	"testing"
+
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func TestParseConfigYAMLNetNSDefault(t *testing.T) {
@@ -27,36 +29,6 @@ netns:
 	}
 }
 
-func TestParseConfigYAMLNetNSDefaultsAndCreateOverride(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-netns:
-  default:
-    name: photontesth2
-  existing:
-    name: existing
-    create: false
-  forwarded:
-    name: forwarded
-    forwarding: {}
-`
-	if err := parseConfigYAML(input, config); err != nil {
-		t.Fatalf("parseConfigYAML: %v", err)
-	}
-	for name, wantCreate := range map[string]bool{"default": true, "existing": false} {
-		spec := config.Netns.Names[name]
-		if spec.Kind != ipsec.NetNSName || spec.Create != wantCreate {
-			t.Fatalf("netns.%s = %+v, want kind=name create=%t", name, spec, wantCreate)
-		}
-	}
-	if policy := config.Netns.ForwardingPolicy("default"); policy.Transit {
-		t.Fatalf("default forwarding policy = %+v, want non-transit", policy)
-	}
-	if policy := config.Netns.ForwardingPolicy("forwarded"); !policy.Transit {
-		t.Fatalf("forwarded forwarding policy = %+v, want transit", policy)
-	}
-}
-
 func TestParseConfigYAMLRejectsLegacyDefaultNetNS(t *testing.T) {
 	for _, input := range []string{`
 ipsec:
@@ -72,58 +44,8 @@ overlay:
     create: true
 `} {
 		config := defaultAppConfig()
-		if err := parseConfigYAML(input, config); err == nil {
-			t.Fatalf("parseConfigYAML should reject legacy default_netns: %s", input)
-		}
-	}
-}
-
-func TestParseConfigYAMLNetNSNamedSiblings(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-netns:
-  default:
-    kind: name
-    name: photontesth2
-    create: true
-  edge:
-    kind: name
-    name: edge
-    create: true
-`
-	if err := parseConfigYAML(input, config); err != nil {
-		t.Fatalf("parseConfigYAML: %v", err)
-	}
-	normalizeAppConfig(config)
-	if spec, ok := config.Netns.Names["default"]; !ok || spec.Name != "photontesth2" || !spec.Create {
-		t.Fatalf("netns.default = %+v, ok=%t", spec, ok)
-	}
-	if spec, ok := config.Netns.Names["edge"]; !ok || spec.Name != "edge" || !spec.Create {
-		t.Fatalf("netns.edge = %+v, ok=%t", spec, ok)
-	}
-}
-
-func TestParseConfigYAMLNetNSForwarding(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-netns:
-  default:
-    kind: name
-    name: photontesth2
-    create: true
-    forwarding:
-      allow_prefixes:
-        - 10.42.0.0/16
-      deny_prefixes:
-        - 10.42.99.0/24
-`
-	if err := parseConfigYAML(input, config); err != nil {
-		t.Fatalf("parseConfigYAML: %v", err)
-	}
-	for _, key := range []string{"default", "photontesth2"} {
-		policy := config.Netns.Forwarding[key]
-		if !policy.Transit || len(policy.AllowPrefixes) != 1 || len(policy.DenyPrefixes) != 1 {
-			t.Fatalf("Netns.Forwarding[%q] = %+v", key, policy)
+		if err := parseConfigYAML(input, config); err == nil || !strings.Contains(err.Error(), "field default_netns not found") {
+			t.Fatalf("expected unknown default_netns field error, got %v for %s", err, input)
 		}
 	}
 }
@@ -137,25 +59,7 @@ firewall:
       forwarding:
         transit: true
 `, config)
-	if err == nil {
-		t.Fatal("parseConfigYAML should reject forwarding under firewall instance")
-	}
-}
-
-func TestParseConfigYAMLNamedNetNSForwardingUsesTargetAlias(t *testing.T) {
-	config := defaultAppConfig()
-	if err := parseConfigYAML(`
-netns:
-  edge:
-    kind: name
-    name: physical-edge
-    create: true
-    forwarding:
-      transit: true
-`, config); err != nil {
-		t.Fatalf("parseConfigYAML: %v", err)
-	}
-	if !config.Netns.ForwardingPolicy("edge").Transit || !config.Netns.ForwardingPolicy("physical-edge").Transit {
-		t.Fatal("named netns policy should be available by config key and resolved target")
+	if err == nil || !strings.Contains(err.Error(), "field forwarding not found") {
+		t.Fatalf("expected unknown forwarding field error, got %v", err)
 	}
 }

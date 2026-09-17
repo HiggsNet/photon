@@ -12,37 +12,7 @@ import (
 
 // FirewallConfig holds top-level firewall instance definitions.
 type FirewallConfig struct {
-	Instances []FirewallInstanceConfig
-}
-
-// FirewallInstanceConfig is a per-netns (or host) firewall instance configuration.
-type FirewallInstanceConfig struct {
-	ID            string
-	NetNS         string // netns name, or "host"
-	IsHost        bool
-	Enabled       bool
-	Mode          string // managed | external | disabled
-	Backend       string // auto | nft | iptables | none
-	DefaultPolicy string // drop | accept
-	OwnerPrefix   string
-
-	XFRMTunnelPattern string
-
-	LocalServices []firewall.LocalService
-
-	HostPorts     firewall.HostPortConfig
-	RedirectGrace firewall.RedirectGrace
-	Priorities    firewall.ChainPriorities
-
-	// ListenAddrs are the local addresses used to scope host ingress and
-	// DNAT/redirect rules to a destination address. Set this when the host is
-	// behind a gateway that DNATs a public address to a private address before
-	// packets reach the local firewall: rules must match the post-DNAT (local)
-	// destination address. If empty, no destination binding is applied and rules
-	// match any local address.
-	ListenAddrs []netip.Addr
-
-	NativeHooks firewall.NativeHooks
+	Instances []firewall.FirewallInstanceSpec
 }
 
 // FirewallConfigYAML is the raw YAML model for the top-level `firewall:` section.
@@ -129,9 +99,9 @@ func ParseFirewallConfig(yamlCfg *FirewallConfigYAML, namespaces map[string]ipse
 	return cfg, nil
 }
 
-func parseFirewallInstance(yi firewallInstanceYAML, namespaces map[string]ipsec.NetNSSpec, portMode string) (FirewallInstanceConfig, error) {
+func parseFirewallInstance(yi firewallInstanceYAML, namespaces map[string]ipsec.NetNSSpec, portMode string) (firewall.FirewallInstanceSpec, error) {
 	if yi.ID == "" {
-		return FirewallInstanceConfig{}, fmt.Errorf("id is required")
+		return firewall.FirewallInstanceSpec{}, fmt.Errorf("id is required")
 	}
 
 	isHost := false
@@ -139,7 +109,7 @@ func parseFirewallInstance(yi firewallInstanceYAML, namespaces map[string]ipsec.
 		isHost = *yi.Host
 	}
 	if isHost && yi.NetNS != "" {
-		return FirewallInstanceConfig{}, fmt.Errorf("host: true conflicts with netns %q; choose either host: true or netns", yi.NetNS)
+		return firewall.FirewallInstanceSpec{}, fmt.Errorf("host: true conflicts with netns %q; choose either host: true or netns", yi.NetNS)
 	}
 	if yi.NetNS == "" && !isHost {
 		yi.NetNS = "default"
@@ -148,13 +118,13 @@ func parseFirewallInstance(yi firewallInstanceYAML, namespaces map[string]ipsec.
 		yi.NetNS = "host"
 	} else {
 		if _, ok := namespaces[yi.NetNS]; !ok {
-			return FirewallInstanceConfig{}, fmt.Errorf("netns %q not found in netns section", yi.NetNS)
+			return firewall.FirewallInstanceSpec{}, fmt.Errorf("netns %q not found in netns section", yi.NetNS)
 		}
 	}
 
-	enabled, err := firewallEnabled("firewall.instances[]", yi.Enabled, yi.Disabled)
+	enabled, err := configEnabled("firewall.instances[]", yi.Enabled, yi.Disabled)
 	if err != nil {
-		return FirewallInstanceConfig{}, err
+		return firewall.FirewallInstanceSpec{}, err
 	}
 
 	mode := yi.Mode
@@ -162,7 +132,7 @@ func parseFirewallInstance(yi firewallInstanceYAML, namespaces map[string]ipsec.
 		mode = firewall.ModeManaged
 	}
 	if !oneOfFirewallMode(mode) {
-		return FirewallInstanceConfig{}, fmt.Errorf("unsupported firewall mode %q", mode)
+		return firewall.FirewallInstanceSpec{}, fmt.Errorf("unsupported firewall mode %q", mode)
 	}
 
 	backend := yi.Backend
@@ -170,7 +140,7 @@ func parseFirewallInstance(yi firewallInstanceYAML, namespaces map[string]ipsec.
 		backend = firewall.BackendAuto
 	}
 	if !oneOfFirewallBackend(backend) {
-		return FirewallInstanceConfig{}, fmt.Errorf("unsupported firewall backend %q", backend)
+		return firewall.FirewallInstanceSpec{}, fmt.Errorf("unsupported firewall backend %q", backend)
 	}
 
 	defaultPolicy := yi.DefaultPolicy
@@ -178,7 +148,7 @@ func parseFirewallInstance(yi firewallInstanceYAML, namespaces map[string]ipsec.
 		defaultPolicy = firewall.DefaultPolicyDrop
 	}
 	if defaultPolicy != firewall.DefaultPolicyDrop && defaultPolicy != firewall.DefaultPolicyAccept {
-		return FirewallInstanceConfig{}, fmt.Errorf("invalid default_policy %q", defaultPolicy)
+		return firewall.FirewallInstanceSpec{}, fmt.Errorf("invalid default_policy %q", defaultPolicy)
 	}
 
 	ownerPrefix := yi.OwnerPrefix
@@ -193,7 +163,7 @@ func parseFirewallInstance(yi firewallInstanceYAML, namespaces map[string]ipsec.
 
 	localServices, err := parseLocalServices(yi.LocalServices)
 	if err != nil {
-		return FirewallInstanceConfig{}, fmt.Errorf("local_services: %w", err)
+		return firewall.FirewallInstanceSpec{}, fmt.Errorf("local_services: %w", err)
 	}
 
 	hostPorts := firewall.HostPortConfig{}
@@ -216,20 +186,20 @@ func parseFirewallInstance(yi firewallInstanceYAML, namespaces map[string]ipsec.
 		redirectGrace.Enabled = true
 	}
 	if yi.RedirectGrace != nil {
-		enabled, err := firewallEnabled("firewall.instances[].redirect_grace", yi.RedirectGrace.Enabled, yi.RedirectGrace.Disabled)
+		enabled, err := configEnabled("firewall.instances[].redirect_grace", yi.RedirectGrace.Enabled, yi.RedirectGrace.Disabled)
 		if err != nil {
-			return FirewallInstanceConfig{}, err
+			return firewall.FirewallInstanceSpec{}, err
 		}
 		redirectGrace.Enabled = enabled
 	}
 
 	listenAddrs, err := parseFirewallListenAddrs(yi.ListenAddrs)
 	if err != nil {
-		return FirewallInstanceConfig{}, fmt.Errorf("listen_addrs: %w", err)
+		return firewall.FirewallInstanceSpec{}, fmt.Errorf("listen_addrs: %w", err)
 	}
 	priorities, err := parseFirewallPriorities(yi.Priority)
 	if err != nil {
-		return FirewallInstanceConfig{}, fmt.Errorf("priority: %w", err)
+		return firewall.FirewallInstanceSpec{}, fmt.Errorf("priority: %w", err)
 	}
 
 	nativeHooks := firewall.NativeHooks{}
@@ -245,10 +215,10 @@ func parseFirewallInstance(yi firewallInstanceYAML, namespaces map[string]ipsec.
 		}
 	}
 	if err := firewall.ValidateNativeHooks(nativeHooks); err != nil {
-		return FirewallInstanceConfig{}, fmt.Errorf("inline hooks: %w", err)
+		return firewall.FirewallInstanceSpec{}, fmt.Errorf("inline hooks: %w", err)
 	}
 
-	return FirewallInstanceConfig{
+	return firewall.FirewallInstanceSpec{
 		ID:                yi.ID,
 		NetNS:             yi.NetNS,
 		IsHost:            isHost,
@@ -264,6 +234,8 @@ func parseFirewallInstance(yi firewallInstanceYAML, namespaces map[string]ipsec.
 		Priorities:        priorities,
 		ListenAddrs:       listenAddrs,
 		NativeHooks:       nativeHooks,
+		CharonIKEPort:     500,
+		CharonNATTPort:    4500,
 	}, nil
 }
 
@@ -369,8 +341,8 @@ func oneOfFirewallBackend(backend string) bool {
 }
 
 // ManagedInstances returns enabled instances Photon may manage.
-func (config FirewallConfig) ManagedInstances() []FirewallInstanceConfig {
-	var out []FirewallInstanceConfig
+func (config FirewallConfig) ManagedInstances() []firewall.FirewallInstanceSpec {
+	var out []firewall.FirewallInstanceSpec
 	for _, inst := range config.Instances {
 		if inst.Enabled && inst.Mode == firewall.ModeManaged {
 			out = append(out, inst)
@@ -379,31 +351,8 @@ func (config FirewallConfig) ManagedInstances() []FirewallInstanceConfig {
 	return out
 }
 
-// Spec returns the planner input with stable local charon ports.
-func (inst FirewallInstanceConfig) Spec() firewall.FirewallInstanceSpec {
-	return firewall.FirewallInstanceSpec{
-		ID:                inst.ID,
-		NetNS:             inst.NetNS,
-		IsHost:            inst.IsHost,
-		Enabled:           inst.Enabled,
-		Mode:              inst.Mode,
-		Backend:           inst.Backend,
-		DefaultPolicy:     inst.DefaultPolicy,
-		OwnerPrefix:       inst.OwnerPrefix,
-		XFRMTunnelPattern: inst.XFRMTunnelPattern,
-		LocalServices:     inst.LocalServices,
-		HostPorts:         inst.HostPorts,
-		RedirectGrace:     inst.RedirectGrace,
-		Priorities:        inst.Priorities,
-		ListenAddrs:       inst.ListenAddrs,
-		CharonIKEPort:     500,
-		CharonNATTPort:    4500,
-		NativeHooks:       inst.NativeHooks,
-	}
-}
-
-// Firewall blocks are enabled when present unless explicitly disabled.
-func firewallEnabled(path string, enabled, disabled *bool) (bool, error) {
+// Declared config blocks are enabled unless explicitly disabled.
+func configEnabled(path string, enabled, disabled *bool) (bool, error) {
 	if enabled != nil && disabled != nil && *enabled == *disabled {
 		return false, fmt.Errorf("%s.enabled conflicts with %s.disabled", path, path)
 	}

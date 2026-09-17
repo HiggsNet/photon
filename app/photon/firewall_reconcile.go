@@ -65,8 +65,7 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 	}
 
 	var firstErr error
-	for _, instCfg := range instances {
-		spec := instCfg.Spec()
+	for _, spec := range instances {
 		if spec.IsHost {
 			endpointServices, endpointErr := resolveEndpointServices(runtime.EndpointACLs, ars)
 			if endpointErr != nil {
@@ -80,18 +79,18 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 		input := photonlinux.BuildFirewallPolicyInput(spec, ars, common.State, buildLinkOutputs(links, ipsecReconcile), config.Netns, config.Routing.Instances, now)
 		desired, err := firewall.BuildDesiredState(spec, input)
 		if err != nil {
-			entry := getOrCreateFirewallEntry(summary, instCfg.ID)
+			entry := getOrCreateFirewallEntry(summary, spec.ID)
 			entry.LastRunUnix = now.Unix()
 			entry.LastFailure = err
 			if firstErr == nil {
-				firstErr = fmt.Errorf("firewall instance %s: %w", instCfg.ID, err)
+				firstErr = fmt.Errorf("firewall instance %s: %w", spec.ID, err)
 			}
 			continue
 		}
 		resolvedBackend, preflight, resolveErr := d.linuxDriver.ResolveFirewallBackend(ctx, spec)
 		summary.Backend = preflight.Backend
 		if resolveErr != nil {
-			entry := getOrCreateFirewallEntry(summary, instCfg.ID)
+			entry := getOrCreateFirewallEntry(summary, spec.ID)
 			entry.LastRunUnix = now.Unix()
 			entry.LastFailure = resolveErr
 			if firstErr == nil {
@@ -99,20 +98,20 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 			}
 			continue
 		}
-		if resolvedBackend == firewall.BackendNone && instCfg.Backend != firewall.BackendNone {
+		if resolvedBackend == firewall.BackendNone && spec.Backend != firewall.BackendNone {
 			message := "configured firewall backend is unavailable; rules were not applied"
 			d.logWarn("firewall", "backend_unavailable", map[string]any{
-				"instance": instCfg.ID, "configured_backend": instCfg.Backend,
+				"instance": spec.ID, "configured_backend": spec.Backend,
 				"nft": preflight.NFTNetlink, "iptables": preflight.Iptables,
 				"ip6tables": preflight.IptablesV6, "ipset": preflight.IPSet,
 				"message": message,
 			})
-			entry := getOrCreateFirewallEntry(summary, instCfg.ID)
+			entry := getOrCreateFirewallEntry(summary, spec.ID)
 			entry.LastRunUnix = now.Unix()
 			entry.Backend = firewall.BackendNone
 			entry.LastFailure = errors.New(message)
 			if firstErr == nil {
-				firstErr = fmt.Errorf("firewall instance %s: %s", instCfg.ID, message)
+				firstErr = fmt.Errorf("firewall instance %s: %s", spec.ID, message)
 			}
 			continue
 		}
@@ -120,11 +119,11 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 		owner := firewall.Owner{
 			Manager:     "photon",
 			InstanceID:  firewallOwnerScope(spec),
-			OwnerPrefix: instCfg.OwnerPrefix,
+			OwnerPrefix: spec.OwnerPrefix,
 			Token:       firewall.OwnerToken(spec),
 		}
 		result, err := d.linuxDriver.ApplyFirewall(ctx, spec, resolvedBackend, owner, desired)
-		entry := getOrCreateFirewallEntry(summary, instCfg.ID)
+		entry := getOrCreateFirewallEntry(summary, spec.ID)
 		entry.LastRunUnix = now.Unix()
 		entry.Backend = resolvedBackend
 		entry.PolicyHash = firewall.DesiredStateHash(desired)
@@ -132,7 +131,7 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 		if err != nil {
 			entry.LastFailure = err
 			if firstErr == nil {
-				firstErr = fmt.Errorf("firewall apply %s: %w", instCfg.ID, err)
+				firstErr = fmt.Errorf("firewall apply %s: %w", spec.ID, err)
 			}
 			continue
 		}

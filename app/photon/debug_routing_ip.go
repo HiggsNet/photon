@@ -46,17 +46,17 @@ func (d *Daemon) kernelRoutesView(ctx context.Context, netnsName, family string)
 	}
 	instances := make([]photonlinux.RoutingInstance, 0, len(d.App.Config.Routing.Instances))
 	for _, inst := range d.App.Config.Routing.Instances {
-		if !inst.Enabled || inst.Mode == ipsec.RoutingModeDisabled {
+		if !inst.Enabled || inst.Bird.Mode == ipsec.RoutingModeDisabled {
 			continue
 		}
-		if netnsName != "" && inst.NetNS != netnsName && inst.ID != netnsName {
+		if netnsName != "" && inst.Bird.NetNSName != netnsName && inst.ID != netnsName {
 			continue
 		}
 		instances = append(instances, inst)
 	}
 	sort.Slice(instances, func(i, j int) bool {
-		if instances[i].NetNS != instances[j].NetNS {
-			return instances[i].NetNS < instances[j].NetNS
+		if instances[i].Bird.NetNSName != instances[j].Bird.NetNSName {
+			return instances[i].Bird.NetNSName < instances[j].Bird.NetNSName
 		}
 		return instances[i].ID < instances[j].ID
 	})
@@ -67,9 +67,9 @@ func (d *Daemon) kernelRoutesView(ctx context.Context, netnsName, family string)
 	view := make([]inspect.KernelRouteDump, 0, len(instances)*len(families))
 	for _, inst := range instances {
 		for _, routeFamily := range families {
-			namespace, raw, queryErr := d.linuxDriver.KernelRoutes(ctx, inst.NetNS, routeFamily)
+			namespace, raw, queryErr := d.linuxDriver.KernelRoutes(ctx, inst.Bird.NetNSName, routeFamily)
 			view = append(view, inspect.KernelRouteDump{
-				NetNS: inst.NetNS, InstanceID: inst.ID, Namespace: namespace,
+				NetNS: inst.Bird.NetNSName, InstanceID: inst.ID, Namespace: namespace,
 				Family: routeFamily, Raw: raw,
 				Failure: inspect.BuildFailure(inspect.FailureCodeKernelRouteQuery, queryErr),
 			})

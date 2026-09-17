@@ -60,7 +60,7 @@ func debugLinkRoutingState(rt *AppContext, birdInstances map[string]*bird.Instan
 	}
 	hasRoutingInstance := false
 	for _, inst := range rt.Config.Routing.Instances {
-		if inst.NetNS == netnsName && inst.Enabled {
+		if inst.Bird.NetNSName == netnsName && inst.Enabled {
 			hasRoutingInstance = true
 			break
 		}

@@ -424,7 +424,7 @@ func TestDaemonControlBirdDump(t *testing.T) {
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()
 	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
-	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{
+	appConfig.Routing, _ = photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{{
 		ID:            "main",
 		NetNS:         "photontesth2",
 		Enabled:       boolPtr(true),

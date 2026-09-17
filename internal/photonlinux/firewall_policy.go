@@ -52,11 +52,11 @@ func BuildFirewallPolicyInput(spec firewall.FirewallInstanceSpec, ars *routing.A
 	// namespace. This keeps routing as the sole authority for veth names.
 	for _, inst := range instances {
 		if inst.Enabled &&
-			namespaces.runtimeTarget(inst.NetNS) == runtimeNetNS &&
+			namespaces.runtimeTarget(inst.Bird.NetNSName) == runtimeNetNS &&
 			inst.Upstream != nil &&
 			inst.Upstream.Enabled &&
-			inst.Upstream.MeshInterface != "" {
-			input.UpstreamInterfaces = append(input.UpstreamInterfaces, inst.Upstream.MeshInterface)
+			inst.Upstream.Veth.MeshInterface != "" {
+			input.UpstreamInterfaces = append(input.UpstreamInterfaces, inst.Upstream.Veth.MeshInterface)
 		}
 	}
 

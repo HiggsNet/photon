@@ -59,7 +59,7 @@ func TestReconcileRoutingBacksOffAfterManagedBirdCrash(t *testing.T) {
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
 	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
-	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+	appConfig.Routing, _ = photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
 	rt := &AppContext{
 		Config: appConfig,
@@ -113,7 +113,7 @@ func TestReconcileRoutingRestartsManagedBirdAfterCrashBackoff(t *testing.T) {
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
 	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
-	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+	appConfig.Routing, _ = photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 	initialBird := map[string]*bird.InstanceObservation{
 		"photontesth2": {
 			NetNSName:        "photontesth2",
@@ -169,7 +169,7 @@ func TestReconcileRoutingClearsStaleBackoffForRunningBird(t *testing.T) {
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
 	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
-	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+	appConfig.Routing, _ = photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
 	rt := &AppContext{
 		Config: appConfig,
@@ -225,7 +225,7 @@ func TestLongBirdReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
 	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
-	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+	appConfig.Routing, _ = photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
 	rt := &AppContext{
 		Config: appConfig,
@@ -298,13 +298,13 @@ func TestStopManagedBirdInstancesHonorsShutdownPolicy(t *testing.T) {
 		"photontesth4": {Kind: ipsec.NetNSName, Name: "photontesth4", Create: true},
 	}}
 	var err error
-	appConfig.Routing, err = parseRoutingConfigInstances([]routingInstanceYAML{
+	appConfig.Routing, err = photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{
 		{ID: "managed-persist", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged},
 		{ID: "external", NetNS: "photontesth3", Enabled: boolPtr(true), Mode: ipsec.RoutingModeExternal},
-		{ID: "managed-stop", NetNS: "photontesth4", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged, ShutdownPolicy: routingShutdownPolicyStop},
+		{ID: "managed-stop", NetNS: "photontesth4", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged, ShutdownPolicy: photonlinux.RoutingShutdownPolicyStop},
 	}, appConfig.Netns, appConfig.DataDir)
 	if err != nil {
-		t.Fatalf("parseRoutingConfigInstances: %v", err)
+		t.Fatalf("photonlinux.ParseRoutingConfig: %v", err)
 	}
 
 	persistPM := &fakeBirdProcessManager{running: true}
@@ -361,7 +361,7 @@ func TestFlushRoutingReconcileCoalesces(t *testing.T) {
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
 	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
-	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+	appConfig.Routing, _ = photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
 	rt := &AppContext{
 		Config: appConfig,

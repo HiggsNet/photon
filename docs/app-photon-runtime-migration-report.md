@@ -198,7 +198,7 @@ operations           当前为空；rotation/takeover 从真实系统 Observatio
 | `route.go` | route CLI、旧 direct mutation、报告 | mutation进 state intent；授权计算留 routing；报告进 inspect；CLI 进 photoncli |
 | `network_state.go` | 为 NetworkState 安装验证函数并规范化 current state | 最终靠近 `pkg/core/state`/zone 构造边界；避免 app 调用方依赖“记得先 configure”的隐性前置条件 |
 | `protocol_publish.go` | 私有 transport key 先落盘、公共 protocol record 后发布 | 保留关键顺序与 verified revision guard；纯 record 构造继续靠近 transport/state publisher owner |
-| `routing_config.go` | BIRD/Babel/upstream YAML 解析与默认值 | namespace parser/forwarding 与 RoutingInstance/UpstreamConfig 有效类型已归 internal/photonlinux/routing_config.go；其余解析及 spec/export/announce 策略继续按窄切片下沉 |
+| `routing_config.go`（已删除） | BIRD/Babel/upstream YAML 解析与默认值 | 全部配置类型、解析和校验已归 internal/photonlinux/routing_config.go；三个 app namespace helper 已删除或归入 Linux 配置；spec/export/announce 继续下沉 |
 | `routing_reconcile.go` | BIRD/netns/veth/upstream、health、auto announce | 配置与纯 spec/export/announce policy 下沉；Daemon 保留多实例/health/intent/shutdown 顺序，Linux 执行复用现有 LinuxDriver，不新增 routing controller facade |
 | `routing_upstream_routes.go` | Linux `ip` 安装 upstream 地址/路由 | `internal/photonlinux/routing` driver |
 | `runtime_state_migration.go` | 旧 `stateFile/stateMeta` 单向 decoder | current LinuxState/type/clone/codec/commit 已归 `internal/photonlinux`；本文件只保留旧 schema 拆分与原子迁移，停止支持旧库时删除 |
@@ -391,3 +391,30 @@ Daemon → photonlinux.BuildFirewallPolicyInput 只传 verified view、授权路
 其中三个 app YAML 集成测试并入 config_netns_test.go；测试仍覆盖 namespace policy 装配、别名及错误配置层级。
 本次定向前缀、上游源地址、firewall policy 与 namespace/forwarding 配置测试通过，git diff --check 通过。
 提交前复核：函数合并与测试文件整理后的最终工作树再次通过 make check（fmt、vet、全量 Go 测试、Linux/Windows 构建）及 git diff --check。
+
+A5 routing 配置切片（2026-09-16）：BIRD/upstream YAML、RoutingConfig、解析、默认值与校验归现有 internal/photonlinux，删除 app/photon/routing_config.go。
+app config.go 直接调用 ParseRoutingConfig，不保留转发 wrapper 或 alias。enabled/disabled 沿用 Linux 层原有私有 helper，扩为同包配置共用，没有新增包。
+删除重复 namespace target helper、两个默认字符串 wrapper 和无用 strings 占位；shutdown 直接判断 stop，空值仍保持 persist 行为。
+upstream 解析及长 Unix socket 路径单测迁入 Linux owner；app 保留严格 YAML 装配、默认 namespace 与 reconcile 集成测试。
+尚未下沉的 overlay namespace、router ID 与 namespace 列举暂归其 app reconcile 消费处，后续与 BIRD spec/export/announce 纯策略一起处理；Daemon 执行顺序不变。
+本切片生产代码新增 451 行、删除 476 行，净减 25 行。make check（fmt、vet、全量 Go 测试、Linux build、Windows amd64 cross build）通过，git diff --check 通过；未执行特权数据面 smoke。
+
+namespace 收口复核（2026-09-17）：删除 resolveOverlayNetNSName、routingNetnsNames、netnsRouterIDLabel。
+overlay 直接消费配置解析完成的 NetNSSpec，通过 Linux NetNSTarget 与 routing/firewall/driver 共用 host/name/path 到运行时 key 的转换；删除 Normalized 后不可达的默认回退及参数。
+RoutingConfig.NetNSNames 收集、排序、去重有效实例 namespace；Router ID 使用显式标签或已解析的实例 NetNS，不再次查询可能发生别名碰撞的配置 map。
+本轮完整未提交生产差异新增 435 行、删除 499 行，净减 64 行；routing_reconcile.go 相比提交前净减 1 行。新增 host、named alias、path 配置与 overlay target 一致性测试，覆盖 path 必须提供稳定标签。
+收口后的 make check（fmt、vet、全量 Go 测试、Linux/Windows 构建）与 git diff --check 通过；未运行特权数据面 smoke。
+
+Firewall Spec 收口（2026-09-17）：YAML 解析直接返回 pkg/firewall.FirewallInstanceSpec，并填入稳定 charon 500/4500 端口。删除重复 FirewallInstanceConfig 及逐字段 Spec() 转换；managed 筛选、debug、Daemon 与测试直接消费同一类型。reconcile 按值遍历 spec，仅在局部副本赋入动态 EndpointServices，不写回配置。原转换测试改为解析测试，覆盖端口、服务和监听地址。
+Spec 收口后的 make check（fmt、vet、全量 Go 测试及 Linux/Windows 构建）与 git diff --check 通过；未执行特权数据面 smoke。
+
+Routing Spec 组合收口（2026-09-17）：RoutingInstance 仅保留实例管理字段和 BirdInstanceSpec/UpstreamConfig；UpstreamConfig 仅保留开关与策略，并持有 VethSpec。删除 BIRD 路径、metric、Babel、ECMP 和 veth 接口/地址的重复字段，解析直接填写现有执行类型。
+reconcile 与 shutdown 按值使用基础 BIRD spec，补入 RouterID、Owner、静态路由与接口策略；veth 直接使用配置中的 spec。删除旧逐字段搬运和无效 dataDir 推导及传参。
+BIRD namespace spec 在解析时保留，修复命名别名且无 overlay 时重新按目标查配置 map 会丢失 namespace 的问题；测试覆盖真实 namespace、veth namespace 一致，以及动态 RouterID/Upstream 不写回配置。BIRD 动态 spec/export/announce 下沉仍待后续切片。
+组合收口后的 make check（fmt、vet、全量 Go 测试、Linux/Windows 构建）与 git diff --check 通过；未执行特权数据面 smoke。
+
+Routing 配置测试归属整理（2026-09-17）：从 app/config_routing_test.go 迁走 6 组字段映射、默认值、shutdown policy、Babel 参数、禁用和开关冲突测试，改为直接解码 RoutingConfigYAML 并调用 Linux ParseRoutingConfig，原详细断言保留。app 仅保留 3 组总配置边界测试：未知旧字段拒绝、namespace/data_dir 装配、upstream 默认 namespace 衔接；删除其中与 Linux 单测重复的 veth 默认参数断言。定向测试通过。
+测试整理后的 make check（fmt、vet、全量 Go 测试、Linux/Windows 构建）与 git diff --check 通过；未执行特权数据面 smoke。
+
+Firewall/namespace 测试归属整理（2026-09-17）：11 组 firewall 字段、hooks、priority、host、监听地址和 mode/backend/冲突校验直接调用 Linux ParseFirewallConfig；overlay 测试拆分，app 只检查 namespace forwarding 的装配。5 组 namespace 默认值、具名项、forwarding 别名和非法 host 配置测试归 ParseNetNSConfig。app 保留 IPsec port mode 联动、默认 namespace、未知引用和严格 YAML 拒绝，forwarding/default_netns/mode/backend/host 拒绝断言核对具体错误。原有效断言保留，未新增生产代码。定向测试通过。
+本次测试归属整理后的 make check（fmt、vet、全量 Go 测试、Linux/Windows 构建）与 git diff --check 通过；未执行特权数据面 smoke。

@@ -137,10 +137,7 @@ func (r *LinuxDriver) networkNamespace(name string) (transportipsec.NetNSSpec, b
 	}
 	for _, spec := range r.networkNamespaces {
 		normalized := spec.Normalized()
-		target := normalized.Target()
-		if target == "" {
-			target = transportipsec.NetNSHost
-		}
+		target := NetNSTarget(normalized)
 		if target == name {
 			return normalized, true
 		}

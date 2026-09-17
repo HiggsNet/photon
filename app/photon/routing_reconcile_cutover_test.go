@@ -27,7 +27,7 @@ func TestReconcileRoutingFeedsBirdObservationToRotateCutoverGate(t *testing.T) {
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
 	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
-	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+	appConfig.Routing, _ = photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
 	observationLinks := map[string]ipsec.LinkInstance{
 		"link-1": {
@@ -131,7 +131,12 @@ func TestBirdRotateInterfacePoliciesPromoteStagedAndDrainOld(t *testing.T) {
 		},
 	}
 	var observationReconcile *ipsecObservationSummary
-	routingInst := photonlinux.RoutingInstance{MetricBase: 100, MetricStaged: 200, MetricDraining: 500}
+	routingInst := photonlinux.RoutingInstance{
+		Bird: bird.BirdInstanceSpec{
+			MetricBase:     100,
+			MetricStaged:   200,
+			MetricDraining: 500,
+		}}
 
 	wantPolicies := func(phase string, want map[string]uint) {
 		t.Helper()

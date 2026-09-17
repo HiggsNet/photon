@@ -25,6 +25,7 @@ import (
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
+	"github.com/HiggsNet/photon/pkg/firewall"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
@@ -1071,7 +1072,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		writeCanonicalView(conn, diagnosis)
 	case "firewall_view":
 		fwSnapshot := d.linuxObservation.firewallSnapshot()
-		instances := []photonlinux.FirewallInstanceConfig(nil)
+		instances := []firewall.FirewallInstanceSpec(nil)
 		var appCfg *appConfig
 		if d.App != nil && d.App.Config != nil {
 			appCfg = d.App.Config

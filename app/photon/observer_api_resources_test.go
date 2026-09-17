@@ -443,10 +443,12 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 				NetNS: ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "phx-blue"},
 			}},
 		},
-		Routing: routingConfig{
+		Routing: photonlinux.RoutingConfig{
 			Instances: []photonlinux.RoutingInstance{{
 				Enabled: true,
-				NetNS:   "phx-blue",
+				Bird: bird.BirdInstanceSpec{
+					NetNSName: "phx-blue",
+				},
 			}},
 		},
 	}
@@ -657,7 +659,10 @@ func TestObserverRoutesAPI(t *testing.T) {
 
 func TestObserverBirdAPI(t *testing.T) {
 	srv := newTestObserverServer()
-	srv.daemon.App.Config.Routing.Instances = []photonlinux.RoutingInstance{{ID: "main", NetNS: "phx-main", Enabled: true}}
+	srv.daemon.App.Config.Routing.Instances = []photonlinux.RoutingInstance{{ID: "main", Enabled: true,
+		Bird: bird.BirdInstanceSpec{
+			NetNSName: "phx-main",
+		}}}
 	srv.daemon.linuxObservation.replaceRouting(&routingObservation{
 		Instances: map[string]*bird.InstanceObservation{
 			"phx-main": {

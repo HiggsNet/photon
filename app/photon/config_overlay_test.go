@@ -168,16 +168,3 @@ overlays:
 		t.Fatalf("parseConfigYAML should reject invalid overlay rule")
 	}
 }
-
-func TestParseConfigYAMLRejectsInvalidNetNSDefault(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-netns:
-  default:
-    kind: host
-    create: true
-`
-	if err := parseConfigYAML(input, config); err == nil {
-		t.Fatalf("parseConfigYAML should reject host netns create")
-	}
-}

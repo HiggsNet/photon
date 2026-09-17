@@ -210,15 +210,15 @@ func (d *Daemon) birdRoutesForControl(ctx context.Context, dump *inspect.RoutesR
 	}
 	views := make([]inspect.BirdRoutesView, 0, len(instances))
 	for _, inst := range instances {
-		if !inst.Enabled || inst.Mode == ipsec.RoutingModeDisabled {
+		if !inst.Enabled || inst.Bird.Mode == ipsec.RoutingModeDisabled {
 			continue
 		}
-		state := birdStates[inst.NetNS]
+		state := birdStates[inst.Bird.NetNSName]
 		view := inspect.BirdRoutesView{
-			NetNS:      inst.NetNS,
+			NetNS:      inst.Bird.NetNSName,
 			InstanceID: inst.ID,
 		}
-		socketPath := inst.ControlSocket
+		socketPath := inst.Bird.ControlSocketPath
 		if state != nil {
 			view.State = state.State
 			view.Failure = inspect.BuildFailure(inspect.FailureCodeBirdInstance, state.LastFailure)
@@ -233,7 +233,7 @@ func (d *Daemon) birdRoutesForControl(ctx context.Context, dump *inspect.RoutesR
 			views = append(views, view)
 			continue
 		}
-		observed, err := d.linuxDriver.ObserveBird(ctx, socketPath, bird.InternalRouteTableNames(inst.NetNS)...)
+		observed, err := d.linuxDriver.ObserveBird(ctx, socketPath, bird.InternalRouteTableNames(inst.Bird.NetNSName)...)
 		if err != nil {
 			view.Failure = inspect.BuildFailure(inspect.FailureCodeBirdQuery, err)
 			views = append(views, view)

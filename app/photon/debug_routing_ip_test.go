@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
+	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
@@ -15,8 +16,12 @@ func TestKernelRoutesViewShowsKernelFIBByFamily(t *testing.T) {
 	config.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{
 		"mesh": {Kind: ipsec.NetNSName, Name: "mesh"},
 	}}
-	config.Routing = routingConfig{Instances: []photonlinux.RoutingInstance{
-		{ID: "main", NetNS: "mesh", Enabled: true, Mode: ipsec.RoutingModeManaged},
+	config.Routing = photonlinux.RoutingConfig{Instances: []photonlinux.RoutingInstance{
+		{ID: "main", Enabled: true,
+			Bird: bird.BirdInstanceSpec{
+				NetNSName: "mesh",
+				Mode:      bird.BirdMode(ipsec.RoutingModeManaged),
+			}},
 	}}
 	var commands []string
 	driver := newTestLinuxDriverWithOptions(photonlinux.LinuxDriverOptions{

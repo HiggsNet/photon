@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
@@ -24,7 +25,7 @@ func TestReconcileRoutingGeneratesConfig(t *testing.T) {
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
 	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
-	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+	appConfig.Routing, _ = photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
 	rt := &AppContext{
 		Config: appConfig,
@@ -121,7 +122,7 @@ func TestReconcileRoutingConfigChangeUsesFullBirdConfigure(t *testing.T) {
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
 	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
-	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+	appConfig.Routing, _ = photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
 	rt := &AppContext{
 		Config: appConfig,
@@ -165,7 +166,7 @@ func TestReconcileRoutingForceReloadUsesFullBirdConfigureWhenHashUnchanged(t *te
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
 	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
-	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+	appConfig.Routing, _ = photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
 	rt := &AppContext{
 		Config: appConfig,
@@ -214,7 +215,7 @@ func TestReconcileRoutingStaleRevisionDoesNotCommitBirdInstance(t *testing.T) {
 		DefaultPathMode: ipsec.PathModeFamilyRedundant,
 	}}
 	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
-	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
+	appConfig.Routing, _ = photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
 	rt := &AppContext{
 		Config: appConfig,
@@ -288,7 +289,7 @@ func TestReconcileRoutingExternalModeOnlyStatus(t *testing.T) {
 	}}
 	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
-	appConfig.Routing, _ = parseRoutingConfigInstances([]routingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeExternal}}, appConfig.Netns, appConfig.DataDir)
+	appConfig.Routing, _ = photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeExternal}}, appConfig.Netns, appConfig.DataDir)
 
 	rt := &AppContext{
 		Config: appConfig,
@@ -346,8 +347,12 @@ func TestReconcileRoutingSkipsWhenDisabled(t *testing.T) {
 
 func TestRoutingReconcileInterval(t *testing.T) {
 	appConfig := defaultAppConfig()
-	appConfig.Routing = routingConfig{Instances: []photonlinux.RoutingInstance{
-		{ID: "a", NetNS: "photontesth2", Enabled: true, Mode: ipsec.RoutingModeManaged},
+	appConfig.Routing = photonlinux.RoutingConfig{Instances: []photonlinux.RoutingInstance{
+		{ID: "a", Enabled: true,
+			Bird: bird.BirdInstanceSpec{
+				NetNSName: "photontesth2",
+				Mode:      bird.BirdMode(ipsec.RoutingModeManaged),
+			}},
 	}}
 	service := newTestDaemonFromOwners(
 		&AppContext{Config: appConfig}, nil, nil, &photonlinux.LinuxState{}, appConfig, time.Second,
@@ -359,13 +364,35 @@ func TestRoutingReconcileInterval(t *testing.T) {
 
 func TestRoutingReconcileIntervalZeroWhenDisabled(t *testing.T) {
 	appConfig := defaultAppConfig()
-	appConfig.Routing = routingConfig{Instances: []photonlinux.RoutingInstance{
-		{ID: "a", NetNS: "photontesth2", Enabled: false, Mode: ipsec.RoutingModeManaged},
+	appConfig.Routing = photonlinux.RoutingConfig{Instances: []photonlinux.RoutingInstance{
+		{ID: "a", Enabled: false,
+			Bird: bird.BirdInstanceSpec{
+				NetNSName: "photontesth2",
+				Mode:      bird.BirdMode(ipsec.RoutingModeManaged),
+			}},
 	}}
 	service := newTestDaemonFromOwners(
 		&AppContext{Config: appConfig}, nil, nil, &photonlinux.LinuxState{}, appConfig, time.Second,
 	)
 	if got := service.routingReconcileInterval(); got != 0 {
 		t.Fatalf("routingReconcileInterval = %s, want 0", got)
+	}
+}
+
+func TestBirdSpecUsesParsedNamespaceWithoutOverlay(t *testing.T) {
+	cfg, err := photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{{ID: "main", NetNS: "alias", Upstream: &photonlinux.UpstreamConfigYAML{}}}, photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"alias": {Kind: ipsec.NetNSName, Name: "mesh-real", Create: true}}}, "/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst := cfg.Instances[0]
+	spec := buildBirdInstanceSpecForNetns(inst, 123, nil, nil, "node-a.catofes.")
+	if spec.NetNSName != "mesh-real" || spec.NetNS.Name != "mesh-real" || !spec.NetNS.Create || inst.Upstream.Veth.MeshNetns != "mesh-real" {
+		t.Fatalf("parsed namespace lost: BIRD=%+v veth=%+v", spec.NetNS, inst.Upstream.Veth)
+	}
+	if spec.RouterID != 123 || spec.Upstream == nil || spec.Upstream.Interface != inst.Upstream.Veth.MeshInterface {
+		t.Fatalf("runtime spec not completed: %+v", spec)
+	}
+	if cfg.Instances[0].Bird.RouterID != 0 || cfg.Instances[0].Bird.Upstream != nil {
+		t.Fatal("runtime fields written back to config")
 	}
 }

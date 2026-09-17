@@ -10,7 +10,6 @@ import (
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
-	"github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/firewall"
 	"github.com/urfave/cli/v3"
 )
@@ -62,11 +61,11 @@ func firewallViewWithRuntime(rt *AppContext, netns string, hostOnly bool) (inspe
 	return inspect.FirewallDebugView{}, fmt.Errorf("daemon control socket unavailable; firewall runtime state requires a running daemon")
 }
 
-func filterFirewallDebugInstances(instances []photonlinux.FirewallInstanceConfig, netns string, hostOnly bool) []photonlinux.FirewallInstanceConfig {
+func filterFirewallDebugInstances(instances []firewall.FirewallInstanceSpec, netns string, hostOnly bool) []firewall.FirewallInstanceSpec {
 	if netns == "" && !hostOnly {
 		return instances
 	}
-	filtered := make([]photonlinux.FirewallInstanceConfig, 0, len(instances))
+	filtered := make([]firewall.FirewallInstanceSpec, 0, len(instances))
 	for _, inst := range instances {
 		if hostOnly && !inst.IsHost {
 			continue
@@ -79,7 +78,7 @@ func filterFirewallDebugInstances(instances []photonlinux.FirewallInstanceConfig
 	return filtered
 }
 
-func buildFirewallDebugView(config *appConfig, instances []photonlinux.FirewallInstanceConfig, snapshot *firewall.FirewallObservation) inspect.FirewallDebugView {
+func buildFirewallDebugView(config *appConfig, instances []firewall.FirewallInstanceSpec, snapshot *firewall.FirewallObservation) inspect.FirewallDebugView {
 	input := inspect.FirewallDebugInput{
 		Instances: make([]inspect.FirewallInstanceInput, 0, len(instances)),
 		Reconcile: snapshot,

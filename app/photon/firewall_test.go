@@ -60,15 +60,6 @@ firewall:
   instances:
     - id: photontesth2
       netns: photontesth2
-      mode: managed
-      backend: auto
-      default_policy: drop
-      xfrm_tunnel_pattern: "phx*"
-      local_services:
-        - proto: tcp
-          port: 8080
-          sources:
-            - 10.42.0.0/16
 `
 	if err := parseConfigYAML(input, config); err != nil {
 		t.Fatalf("parseConfigYAML: %v", err)
@@ -77,107 +68,12 @@ firewall:
 		t.Fatalf("expected 1 firewall instance, got %d", len(config.Firewall.Instances))
 	}
 	inst := config.Firewall.Instances[0]
-	if inst.ID != "photontesth2" {
-		t.Errorf("ID = %s, want photontesth2", inst.ID)
-	}
-	if inst.Mode != firewall.ModeManaged {
-		t.Errorf("Mode = %s, want managed", inst.Mode)
-	}
-	if inst.DefaultPolicy != firewall.DefaultPolicyDrop {
-		t.Errorf("DefaultPolicy = %s, want drop", inst.DefaultPolicy)
-	}
-	if len(inst.LocalServices) != 1 {
-		t.Fatalf("expected 1 local service, got %d", len(inst.LocalServices))
-	}
-	if inst.LocalServices[0].Port != 8080 {
-		t.Errorf("service port = %d, want 8080", inst.LocalServices[0].Port)
-	}
 	policy := config.Netns.ForwardingPolicy(inst.NetNS)
 	if policy.Transit {
 		t.Error("transit should be false")
 	}
 	if len(policy.AllowPrefixes) != 1 {
 		t.Errorf("allow_prefixes len = %d, want 1", len(policy.AllowPrefixes))
-	}
-}
-
-func TestParseConfigYAMLFirewallInlineHooks(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-netns:
-  default:
-    kind: name
-    name: photon
-firewall:
-  instances:
-    - id: photon
-      backend: auto
-      nft_hooks:
-        pre_input:
-          - 'tcp dport 22 accept'
-      iptables_hooks:
-        ipv4:
-          pre_input:
-            - '-s 10.20.0.0/16 -j ACCEPT'
-            - '-s 10.30.0.0/16 -j ACCEPT'
-        ipv6:
-          pre_input:
-            - '-s 2001:db8::/32 -j ACCEPT'
-`
-	if err := parseConfigYAML(input, config); err != nil {
-		t.Fatalf("parseConfigYAML: %v", err)
-	}
-	got := config.Firewall.Instances[0].NativeHooks
-	if len(got.NFT.PreInput) != 1 || len(got.IPTables.IPv4.PreInput) != 2 || len(got.IPTables.IPv6.PreInput) != 1 {
-		t.Fatalf("parsed inline hooks = %+v", got)
-	}
-}
-
-func TestParseConfigYAMLFirewallPriorities(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-netns:
-  default:
-    kind: name
-    name: photon
-firewall:
-  instances:
-    - id: photon
-      priority:
-        filter: "filter - 1"
-        prerouting: "dstnat - 2"
-        postrouting: "srcnat + 3"
-`
-	if err := parseConfigYAML(input, config); err != nil {
-		t.Fatalf("parseConfigYAML: %v", err)
-	}
-	priorities := config.Firewall.Instances[0].Priorities
-	if got := priorities.Filter.String(); got != "filter - 1" {
-		t.Fatalf("filter priority = %q", got)
-	}
-	if got := priorities.Prerouting.String(); got != "dstnat - 2" {
-		t.Fatalf("prerouting priority = %q", got)
-	}
-	if got := priorities.Postrouting.String(); got != "srcnat + 3" {
-		t.Fatalf("postrouting priority = %q", got)
-	}
-}
-
-func TestParseConfigYAMLFirewallPrioritiesRejectInvalidBase(t *testing.T) {
-	config := defaultAppConfig()
-	err := parseConfigYAML(`
-netns:
-  default:
-    kind: name
-    name: photon
-firewall:
-  instances:
-    - id: photon
-      priority:
-        prerouting: "raw - 1"
-`, config)
-	if err == nil || !strings.Contains(err.Error(), `priority: prerouting: must use "dstnat"`) {
-		t.Fatalf("parseConfigYAML error = %v", err)
 	}
 }
 
@@ -248,44 +144,6 @@ firewall:
 	}
 }
 
-func TestParseConfigYAMLFirewallHost(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-firewall:
-  instances:
-    - id: host-ipsec
-      host: true
-      mode: managed
-      backend: nft
-      host_ports:
-        ike: true
-        natt: true
-      redirect_grace: {}
-`
-	if err := parseConfigYAML(input, config); err != nil {
-		t.Fatalf("parseConfigYAML: %v", err)
-	}
-	if len(config.Firewall.Instances) != 1 {
-		t.Fatalf("expected 1 firewall instance, got %d", len(config.Firewall.Instances))
-	}
-	inst := config.Firewall.Instances[0]
-	if !inst.IsHost {
-		t.Error("expected IsHost=true")
-	}
-	if inst.NetNS != "host" {
-		t.Errorf("NetNS = %s, want host", inst.NetNS)
-	}
-	if !inst.HostPorts.IKE {
-		t.Error("IKE should be true")
-	}
-	if !inst.HostPorts.NATT {
-		t.Error("NATT should be true")
-	}
-	if !inst.RedirectGrace.Enabled {
-		t.Error("redirect grace should be enabled")
-	}
-}
-
 func TestParseConfigYAMLFirewallHostDefaultsForIPsecRange(t *testing.T) {
 	config := defaultAppConfig()
 	input := `
@@ -344,140 +202,6 @@ firewall:
 	}
 }
 
-func TestParseConfigYAMLFirewallHostListenAddrs(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-firewall:
-  instances:
-    - id: host-ipsec
-      host: true
-      listen_addrs:
-        - 172.17.16.168
-        - "[2408:400a:101:3801:6cbd:8fb4:ae31:750a]:4500"
-`
-	if err := parseConfigYAML(input, config); err != nil {
-		t.Fatalf("parseConfigYAML: %v", err)
-	}
-	if len(config.Firewall.Instances) != 1 {
-		t.Fatalf("expected 1 firewall instance, got %d", len(config.Firewall.Instances))
-	}
-	inst := config.Firewall.Instances[0]
-	if len(inst.ListenAddrs) != 2 {
-		t.Fatalf("expected 2 listen addrs, got %d: %+v", len(inst.ListenAddrs), inst.ListenAddrs)
-	}
-	if inst.ListenAddrs[0].String() != "172.17.16.168" {
-		t.Errorf("listen addr[0] = %s, want 172.17.16.168", inst.ListenAddrs[0])
-	}
-	if inst.ListenAddrs[1].String() != "2408:400a:101:3801:6cbd:8fb4:ae31:750a" {
-		t.Errorf("listen addr[1] = %s, want 2408:400a:101:3801:6cbd:8fb4:ae31:750a", inst.ListenAddrs[1])
-	}
-}
-
-func TestParseConfigYAMLFirewallHostListenAddrsInvalid(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-firewall:
-  instances:
-    - id: host-ipsec
-      host: true
-      listen_addrs:
-        - not-an-address
-`
-	err := parseConfigYAML(input, config)
-	if err == nil {
-		t.Fatal("expected error for invalid listen_addrs")
-	}
-	if !strings.Contains(err.Error(), "listen_addrs") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestParseConfigYAMLFirewallDisabled(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-netns:
-  default:
-    kind: name
-    name: photontesth2
-    create: true
-firewall:
-  instances:
-    - id: photontesth2
-      netns: photontesth2
-      disabled: true
-`
-	if err := parseConfigYAML(input, config); err != nil {
-		t.Fatalf("parseConfigYAML: %v", err)
-	}
-	if len(config.Firewall.Instances) != 1 {
-		t.Fatalf("expected 1 firewall instance, got %d", len(config.Firewall.Instances))
-	}
-	if config.Firewall.Instances[0].Enabled {
-		t.Fatal("firewall instance should be disabled")
-	}
-}
-
-func TestParseConfigYAMLFirewallRejectsHostNetnsConflict(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-netns:
-  default:
-    kind: name
-    name: photontesth2
-    create: true
-firewall:
-  instances:
-    - id: ambiguous
-      host: true
-      netns: photontesth2
-`
-	err := parseConfigYAML(input, config)
-	if err == nil {
-		t.Fatal("expected error for host/netns conflict")
-	}
-	if !strings.Contains(err.Error(), "host: true conflicts with netns") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestParseConfigYAMLFirewallInvalidMode(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-netns:
-  default:
-    kind: name
-    name: photontesth2
-    create: true
-firewall:
-  instances:
-    - id: photontesth2
-      netns: photontesth2
-      mode: bogus
-`
-	if err := parseConfigYAML(input, config); err == nil {
-		t.Error("expected error for invalid mode")
-	}
-}
-
-func TestParseConfigYAMLFirewallInvalidBackend(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-netns:
-  default:
-    kind: name
-    name: photontesth2
-    create: true
-firewall:
-  instances:
-    - id: photontesth2
-      netns: photontesth2
-      backend: bogus
-`
-	if err := parseConfigYAML(input, config); err == nil {
-		t.Error("expected error for invalid backend")
-	}
-}
-
 func TestParseConfigYAMLFirewallUnknownNetns(t *testing.T) {
 	config := defaultAppConfig()
 	input := `
@@ -486,8 +210,8 @@ firewall:
     - id: photontesth2
       netns: nonexistent
 `
-	if err := parseConfigYAML(input, config); err == nil {
-		t.Error("expected error for unknown netns")
+	if err := parseConfigYAML(input, config); err == nil || !strings.Contains(err.Error(), `netns "nonexistent" not found`) {
+		t.Errorf("expected unknown netns error, got %v", err)
 	}
 }
 
@@ -556,7 +280,7 @@ func (d *blockingFirewallDriver) Apply(ctx context.Context, plan firewall.Firewa
 func TestReconcileFirewallUsesScopeForOwnedObjects(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	appConfig := defaultAppConfig()
-	appConfig.Firewall.Instances = []photonlinux.FirewallInstanceConfig{
+	appConfig.Firewall.Instances = []firewall.FirewallInstanceSpec{
 		{
 			ID:            "photon",
 			NetNS:         "default",
@@ -600,7 +324,7 @@ func TestLongFirewallReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	appConfig := defaultAppConfig()
 	appConfig.Observer.Enabled = true
-	appConfig.Firewall.Instances = []photonlinux.FirewallInstanceConfig{{
+	appConfig.Firewall.Instances = []firewall.FirewallInstanceSpec{{
 		ID:            "photontesth2",
 		NetNS:         "photontesth2",
 		Enabled:       true,
@@ -684,7 +408,7 @@ func TestLongFirewallReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	appConfig := defaultAppConfig()
-	appConfig.Firewall.Instances = []photonlinux.FirewallInstanceConfig{{
+	appConfig.Firewall.Instances = []firewall.FirewallInstanceSpec{{
 		ID:            "photontesth2",
 		NetNS:         "photontesth2",
 		Enabled:       true,
@@ -726,7 +450,7 @@ func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
 func TestFirewallReconcileDirtyIntervalAndRecover(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	appConfig := defaultAppConfig()
-	appConfig.Firewall.Instances = []photonlinux.FirewallInstanceConfig{{
+	appConfig.Firewall.Instances = []firewall.FirewallInstanceSpec{{
 		ID:            "photontesth2",
 		NetNS:         "photontesth2",
 		Enabled:       true,
@@ -769,7 +493,7 @@ func TestFirewallReconcileDirtyIntervalAndRecover(t *testing.T) {
 }
 
 func TestBuildFirewallDebugView(t *testing.T) {
-	instances := []photonlinux.FirewallInstanceConfig{
+	instances := []firewall.FirewallInstanceSpec{
 		{ID: "photontesth2", NetNS: "photontesth2", IsHost: false, Enabled: true, Mode: firewall.ModeManaged, Backend: firewall.BackendAuto, DefaultPolicy: firewall.DefaultPolicyDrop,
 			NativeHooks: firewall.NativeHooks{
 				NFT:      firewall.InlineHookRules{PreInput: []string{"counter"}},
@@ -802,7 +526,7 @@ func TestBuildFirewallDebugView(t *testing.T) {
 }
 
 func TestFilterFirewallDebugInstances(t *testing.T) {
-	instances := []photonlinux.FirewallInstanceConfig{
+	instances := []firewall.FirewallInstanceSpec{
 		{ID: "overlay", NetNS: "photon"},
 		{ID: "host-ipsec", NetNS: "host", IsHost: true},
 	}

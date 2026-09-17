@@ -58,14 +58,14 @@ func TestDaemonBIRDRoutingRootSmoke(t *testing.T) {
 		},
 	}
 	// Parse routing instance config with managed mode targeting the real netns.
-	routingYAML := []routingInstanceYAML{{
+	routingYAML := []photonlinux.RoutingInstanceYAML{{
 		ID:           "main",
 		NetNS:        nsName,
 		Enabled:      boolPtr(true),
 		Mode:         ipsec.RoutingModeManaged,
 		InterfacePat: "phx*",
 	}}
-	appConfig.Routing, _ = parseRoutingConfigInstances(routingYAML, appConfig.Netns, dataDir)
+	appConfig.Routing, _ = photonlinux.ParseRoutingConfig(routingYAML, appConfig.Netns, dataDir)
 	if len(appConfig.Routing.Instances) == 0 {
 		t.Fatal("routing instances empty after parse")
 	}
@@ -164,14 +164,14 @@ func TestDaemonBIRDAdoptRestartRootSmoke(t *testing.T) {
 			nsName: {Kind: ipsec.NetNSName, Name: nsName, Create: false},
 		},
 	}
-	routingYAML := []routingInstanceYAML{{
+	routingYAML := []photonlinux.RoutingInstanceYAML{{
 		ID:           "main",
 		NetNS:        nsName,
 		Enabled:      boolPtr(true),
 		Mode:         ipsec.RoutingModeManaged,
 		InterfacePat: "phx*",
 	}}
-	appConfig.Routing, _ = parseRoutingConfigInstances(routingYAML, appConfig.Netns, dataDir)
+	appConfig.Routing, _ = photonlinux.ParseRoutingConfig(routingYAML, appConfig.Netns, dataDir)
 	if len(appConfig.Routing.Instances) == 0 {
 		t.Fatal("routing instances empty after parse")
 	}
@@ -544,25 +544,25 @@ func TestDaemonBIRDUpstreamRootSmoke(t *testing.T) {
 			nsName: {Kind: ipsec.NetNSName, Name: nsName, Create: false},
 		},
 	}
-	routingYAML := []routingInstanceYAML{{
+	routingYAML := []photonlinux.RoutingInstanceYAML{{
 		ID:           "main",
 		NetNS:        nsName,
 		Enabled:      boolPtr(true),
 		Mode:         ipsec.RoutingModeManaged,
 		InterfacePat: "phx*",
-		Upstream: &upstreamConfigYAML{
+		Upstream: &photonlinux.UpstreamConfigYAML{
 			Enabled:    boolPtr(true),
 			CreateVeth: boolPtr(false), // already created manually
-			Mesh: upstreamEndpointYAML{
+			Mesh: photonlinux.UpstreamEndpointYAML{
 				Interface: upstreamIface,
 				IPv4LL:    "169.254.0.2/30",
 			},
-			External: upstreamEndpointYAML{
+			External: photonlinux.UpstreamEndpointYAML{
 				Interface: peerIface,
 			},
 		},
 	}}
-	appConfig.Routing, _ = parseRoutingConfigInstances(routingYAML, appConfig.Netns, dataDir)
+	appConfig.Routing, _ = photonlinux.ParseRoutingConfig(routingYAML, appConfig.Netns, dataDir)
 	if len(appConfig.Routing.Instances) == 0 {
 		t.Fatal("routing instances empty after parse")
 	}

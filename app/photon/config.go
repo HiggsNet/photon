@@ -61,7 +61,7 @@ type appConfig struct {
 	IPsec                ipsecConfig
 	IPAM                 ipamConfig
 	Netns                photonlinux.NetNSConfig
-	Routing              routingConfig
+	Routing              photonlinux.RoutingConfig
 	Firewall             photonlinux.FirewallConfig
 	PeerLifecycle        inspect.PeerLifecycleConfig
 	Health               healthConfig
@@ -88,7 +88,7 @@ type configYAML struct {
 	IPsec         ipsecConfigYAML                 `yaml:"ipsec"`
 	IPAM          ipamConfigYAML                  `yaml:"ipam"`
 	Netns         *photonlinux.NetNSConfigYAML    `yaml:"netns"`
-	Routing       *routingInstancesYAML           `yaml:"routing"`
+	Routing       *photonlinux.RoutingConfigYAML  `yaml:"routing"`
 	Firewall      *photonlinux.FirewallConfigYAML `yaml:"firewall"`
 	PeerLifecycle *peerLifecycleYAML              `yaml:"peer_lifecycle"`
 	Health        *healthConfigYAML               `yaml:"health"`
@@ -605,7 +605,7 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 	}
 	// Parse routing.instances[], if any.
 	if file.Routing != nil {
-		config.Routing, err = parseRoutingConfigInstances(file.Routing.Instances, config.Netns, config.DataDir)
+		config.Routing, err = photonlinux.ParseRoutingConfig(file.Routing.Instances, config.Netns, config.DataDir)
 		if err != nil {
 			return err
 		}
