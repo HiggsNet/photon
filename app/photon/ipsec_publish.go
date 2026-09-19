@@ -164,8 +164,8 @@ func ensureIPsecTransportKey(linuxState *photonlinux.LinuxState, identityPrivate
 	return &photonstate.IPsecTransportKeyState{
 		Kind:        generated.Kind,
 		Algorithm:   generated.Algorithm,
-		PublicKey:   append([]byte(nil), generated.PublicKey...),
-		PrivateKey:  append([]byte(nil), generated.PrivateKey...),
+		PublicKey:   generated.PublicKey,
+		PrivateKey:  generated.PrivateKey,
 		Fingerprint: record.Fingerprint,
 		NotBefore:   record.NotBefore,
 		NotAfter:    record.NotAfter,

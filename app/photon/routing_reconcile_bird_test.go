@@ -350,7 +350,7 @@ func TestStopManagedBirdInstancesHonorsShutdownPolicy(t *testing.T) {
 
 func TestFlushRoutingReconcileCoalesces(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestRoutingOwners(t)
-	now := time.Unix(4000, 0)
+	clock := newFakeClock(time.Unix(4000, 0))
 
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()
@@ -365,7 +365,7 @@ func TestFlushRoutingReconcileCoalesces(t *testing.T) {
 
 	rt := &AppContext{
 		Config: appConfig,
-		Clock:  func() time.Time { return now },
+		Clock:  clock.Now,
 	}
 
 	pm := &fakeBirdProcessManager{running: false}
@@ -391,7 +391,8 @@ func TestFlushRoutingReconcileCoalesces(t *testing.T) {
 	}
 
 	beforeNoopRev := uint64(service.State.Common.VerifiedRevision())
-	now = now.Add(defaultRoutingReconcileInterval)
+	clock.Advance(defaultRoutingReconcileInterval)
+	now := clock.Now()
 	service.routingDirty = true
 	if !service.flushRoutingReconcile(context.Background()) {
 		t.Fatal("second routing reconcile was not flushed")

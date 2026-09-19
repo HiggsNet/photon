@@ -1088,7 +1088,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			birdInstances = routingObserved.Instances
 		}
 		view := buildStoredLinkInspection(d.App, links, reconcile, birdInstances, health)
-		if d.linuxDriver != nil && d.App != nil && d.App.Config != nil && d.App.Config.IPsec.Driver != ipsecDriverDryRun {
+		if d.linuxDriver != nil && d.App != nil && d.App.Config != nil && d.App.Config.IPsec.Driver != photonlinux.IPsecDriverDryRun {
 			sas, err := d.linuxDriver.ListIPsecSAs(ctx)
 			if err != nil {
 				view.LiveSAError = err.Error()
@@ -1770,7 +1770,7 @@ func (d *Daemon) routingReconcileInterval() time.Duration {
 	if d == nil || d.App == nil || d.App.Config == nil {
 		return 0
 	}
-	instances := routingInstancesEnabled(d.App.Config)
+	instances := d.App.Config.Routing.EnabledInstances()
 	if len(instances) == 0 {
 		return 0
 	}
@@ -1976,69 +1976,11 @@ func (d *Daemon) configureLinuxDriverFromConfig() error {
 	if d == nil || d.App == nil || d.App.Config == nil {
 		return nil
 	}
-	driver, err := newConfiguredLinuxDriver(d.App.Config.IPsec, d.App.Config.Netns.Names, d.Log)
+	driver, err := photonlinux.NewDaemonDriver(d.App.Config.IPsec, d.App.Config.Netns.Names, d.Log)
 	if err != nil {
 		return err
 	}
 	return d.installLinuxDriver(driver)
-}
-
-func newConfiguredLinuxDriver(config ipsecConfig, networkNamespaces map[string]ipsec.NetNSSpec, logger photonlinux.Logger) (*photonlinux.LinuxDriver, error) {
-	var logConfig func(event string, fields map[string]any)
-	if logger != nil {
-		logConfig = func(event string, fields map[string]any) {
-			logger.Debug("ipsec", event, fields)
-		}
-	}
-	driverName := config.Driver
-	if driverName == "" {
-		driverName = ipsecDriverStrongSwan
-	}
-	switch driverName {
-	case ipsecDriverDryRun:
-		dryRun := &ipsec.DryRunDriver{}
-		return photonlinux.NewLinuxDriver(photonlinux.LinuxDriverOptions{
-			IPsecDriver:       dryRun,
-			XFRMDriver:        dryRun,
-			NetworkNamespaces: networkNamespaces,
-			Logger:            logger,
-		})
-	case ipsecDriverStrongSwan:
-		if len(config.LinkGroups) == 0 {
-			dryRun := &ipsec.DryRunDriver{}
-			return photonlinux.NewLinuxDriver(photonlinux.LinuxDriverOptions{
-				IPsecDriver:       dryRun,
-				XFRMDriver:        dryRun,
-				NetworkNamespaces: networkNamespaces,
-				Logger:            logger,
-			})
-		}
-		client, err := ipsec.NewReconnectingGoviciClient(config.VICISocket)
-		if err != nil {
-			return nil, fmt.Errorf("initialize strongswan vici client: %w", err)
-		}
-		initiateClientFactory := func() (ipsec.VICIClient, func() error, error) {
-			client, err := ipsec.NewGoviciClient(config.VICISocket)
-			if err != nil {
-				return nil, nil, err
-			}
-			return client, client.Close, nil
-		}
-		return photonlinux.NewLinuxDriver(photonlinux.LinuxDriverOptions{
-			IPsecDriver: &ipsec.StrongSwanDriver{
-				VICI:                  client,
-				LogConfig:             logConfig,
-				InitiateAsync:         true,
-				InitiateClientFactory: initiateClientFactory,
-			},
-			XFRMDriver:        ipsec.NewSystemXFRMDriver(config.DefaultNetNS),
-			NetworkNamespaces: networkNamespaces,
-			Close:             client.Close,
-			Logger:            logger,
-		})
-	default:
-		return nil, fmt.Errorf("unsupported ipsec driver %q", driverName)
-	}
 }
 
 func (d *Daemon) installLinuxDriver(driver *photonlinux.LinuxDriver) error {

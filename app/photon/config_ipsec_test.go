@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
@@ -19,19 +20,8 @@ ipsec:
 		t.Fatalf("parseConfigYAML: %v", err)
 	}
 	normalizeAppConfig(config)
-	if config.IPsec.Driver != ipsecDriverStrongSwan || config.IPsec.VICISocket != "/tmp/charon.vici" {
+	if config.IPsec.Driver != photonlinux.IPsecDriverStrongSwan || config.IPsec.VICISocket != "/tmp/charon.vici" {
 		t.Fatalf("IPsec driver config = %+v", config.IPsec)
-	}
-}
-
-func TestParseConfigYAMLRejectsInvalidIPsecDriver(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-ipsec:
-  driver: magic
-`
-	if err := parseConfigYAML(input, config); err == nil {
-		t.Fatalf("parseConfigYAML should reject invalid ipsec.driver")
 	}
 }
 
@@ -85,6 +75,13 @@ func TestParseConfigYAMLIPsecAnnounceGossipEndpointsDefaultsToTrue(t *testing.T)
 	if !config.IPsec.AnnounceGossipEndpoints {
 		t.Fatalf("AnnounceGossipEndpoints = false, want true")
 	}
+	if err := parseConfigYAML("ipsec:\n  announce_gossip_endpoints: false\n  announce_dns_reconnect_after: 0s\n", config); err != nil {
+		t.Fatal(err)
+	}
+	normalizeAppConfig(config)
+	if config.IPsec.AnnounceGossipEndpoints || config.IPsec.AnnounceDNSReconnectAfter != 0 {
+		t.Fatalf("explicit false/zero lost during normalization: %+v", config.IPsec)
+	}
 }
 
 func TestParseConfigYAMLIPsecRole(t *testing.T) {
@@ -99,28 +96,6 @@ ipsec:
 	normalizeAppConfig(config)
 	if config.IPsec.Role != ipsec.RoleBoth {
 		t.Fatalf("IPsec.Role = %q, want both", config.IPsec.Role)
-	}
-}
-
-func TestParseConfigYAMLIPsecRoleInvalid(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-ipsec:
-  role: invalid
-`
-	if err := parseConfigYAML(input, config); err == nil {
-		t.Fatalf("expected error for invalid ipsec.role")
-	}
-}
-
-func TestParseConfigYAMLIPsecRejectsDeprecatedAccept(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-ipsec:
-  accept: inbound
-`
-	if err := parseConfigYAML(input, config); err == nil {
-		t.Fatalf("expected error for deprecated ipsec.accept")
 	}
 }
 
@@ -184,48 +159,5 @@ func TestParseConfigYAMLPortGraceCoversRotateRetention(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
-	}
-}
-
-func TestParseConfigYAMLRejectsInvalidPortMode(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-ipsec:
-  port_mode: dynamic
-`
-	if err := parseConfigYAML(input, config); err == nil {
-		t.Fatalf("parseConfigYAML should reject invalid port_mode")
-	}
-}
-
-func TestParseConfigYAMLRejectsInvalidPortRange(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-ipsec:
-  port_mode: range
-  port_range:
-    from: 40000
-    to: 30000
-`
-	if err := parseConfigYAML(input, config); err == nil {
-		t.Fatalf("parseConfigYAML should reject invalid port_range")
-	}
-}
-
-func TestParseConfigYAMLRejectsPortRangeWithoutTwoPairs(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-ipsec:
-  port_mode: range
-  port_range:
-    from: 30000
-    to: 30002
-`
-	err := parseConfigYAML(input, config)
-	if err == nil {
-		t.Fatalf("parseConfigYAML should reject a port_range without two complete pairs")
-	}
-	if !strings.Contains(err.Error(), "two IKE/NAT-T port pairs") {
-		t.Fatalf("error = %v", err)
 	}
 }

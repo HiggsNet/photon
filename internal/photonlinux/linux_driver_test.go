@@ -2,6 +2,7 @@ package photonlinux
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/HiggsNet/photon/pkg/health"
@@ -121,5 +122,41 @@ func TestNewLinuxDriverRequiresExplicitDrivers(t *testing.T) {
 	}
 	if _, err := NewLinuxDriver(LinuxDriverOptions{IPsecDriver: driver}); err == nil {
 		t.Fatal("missing XFRM driver was accepted")
+	}
+}
+
+func TestConfiguredAndCleanupDriversKeepDifferentVICIRequirements(t *testing.T) {
+	config := IPsecConfig{VICISocket: filepath.Join(t.TempDir(), "missing.vici")}
+	// A disabled daemon data plane must not require StrongSwan to be running.
+	driver, err := NewDaemonDriver(config, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sas, err := driver.ListIPsecSAs(context.Background())
+	if err != nil || len(sas) != 0 {
+		t.Fatalf("ListIPsecSAs = (%v, %v), want empty dry-run observation", sas, err)
+	}
+	_ = driver.Close()
+	// Recovery must still connect with no overlays, or stale resources survive silently.
+	if driver, err := NewIPsecCleanupDriver(config); err == nil {
+		_ = driver.Close()
+		t.Fatal("cleanup skipped VICI with no overlays")
+	}
+	config.LinkGroups = []transportipsec.LinkGroupSpec{{ID: "main"}}
+	if driver, err := NewDaemonDriver(config, nil, nil); err == nil {
+		_ = driver.Close()
+		t.Fatal("configured data plane skipped VICI")
+	}
+	config.Driver = IPsecDriverDryRun
+	driver, err = NewIPsecCleanupDriver(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = driver.Close()
+	config.Driver = "invalid"
+	config.LinkGroups = nil
+	if driver, err := NewDaemonDriver(config, nil, nil); err == nil {
+		_ = driver.Close()
+		t.Fatal("empty overlays concealed invalid driver")
 	}
 }

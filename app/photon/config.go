@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,10 +24,9 @@ import (
 )
 
 const (
-	defaultConfigPath             = "/etc/photon/config.yaml"
-	defaultDataDir                = "/etc/photon"
-	defaultStateFile              = "photon.db"
-	defaultIPsecPortPreviousGrace = 2 * time.Hour
+	defaultConfigPath = "/etc/photon/config.yaml"
+	defaultDataDir    = "/etc/photon"
+	defaultStateFile  = "photon.db"
 )
 
 type appConfig struct {
@@ -57,7 +55,7 @@ type appConfig struct {
 	EndpointSourceOrder  []string
 	FilterPrivateIPv4    bool
 	Overlay              overlayConfig
-	IPsec                ipsecConfig
+	IPsec                photonlinux.IPsecConfig
 	IPAM                 ipamConfig
 	Netns                photonlinux.NetNSConfig
 	Routing              photonlinux.RoutingConfig
@@ -84,7 +82,7 @@ type configYAML struct {
 	Log logConfigYAML `yaml:"log"`
 
 	Overlay       overlayDefaultsYAML             `yaml:"overlay"`
-	IPsec         ipsecConfigYAML                 `yaml:"ipsec"`
+	IPsec         photonlinux.IPsecConfigYAML     `yaml:"ipsec"`
 	IPAM          ipamConfigYAML                  `yaml:"ipam"`
 	Netns         *photonlinux.NetNSConfigYAML    `yaml:"netns"`
 	Routing       *photonlinux.RoutingConfigYAML  `yaml:"routing"`
@@ -92,7 +90,7 @@ type configYAML struct {
 	PeerLifecycle *peerLifecycleYAML              `yaml:"peer_lifecycle"`
 	Health        *healthConfigYAML               `yaml:"health"`
 	Observer      *observerConfigYAML             `yaml:"observer"`
-	Overlays      []overlayGroupConfigYAML        `yaml:"overlays"`
+	Overlays      []photonlinux.OverlayConfigYAML `yaml:"overlays"`
 	Gossip        gossipConfigYAML                `yaml:"gossip"`
 }
 
@@ -168,37 +166,6 @@ type overlayConfig struct {
 
 type overlayDefaultsYAML struct{}
 
-type ipsecConfig struct {
-	DefaultNetNS              ipsec.NetNSSpec
-	LinkGroups                []ipsec.LinkGroupSpec
-	Role                      string
-	Driver                    string
-	VICISocket                string
-	PortMode                  string
-	PortRange                 ipsec.PortRange
-	PortRotateInterval        time.Duration
-	PortPreviousGrace         time.Duration
-	AnnounceAddrs             []string
-	AnnounceDNS               []string
-	AnnounceDNSReconnectAfter time.Duration
-	AnnounceGossipEndpoints   bool
-}
-
-type ipsecConfigYAML struct {
-	Role                      string           `yaml:"role"`
-	DeprecatedAccept          string           `yaml:"accept"`
-	Driver                    string           `yaml:"driver"`
-	VICISocket                string           `yaml:"vici_socket"`
-	PortMode                  string           `yaml:"port_mode"`
-	PortRange                 ipsec.PortRange  `yaml:"port_range"`
-	PortRotateInterval        string           `yaml:"port_rotate_interval"`
-	PortPreviousGrace         string           `yaml:"port_previous_grace"`
-	AnnounceAddrs             configStringList `yaml:"announce_addrs"`
-	AnnounceDNS               configStringList `yaml:"announce_dns"`
-	AnnounceDNSReconnectAfter string           `yaml:"announce_dns_reconnect_after"`
-	AnnounceGossipEndpoints   *bool            `yaml:"announce_gossip_endpoints"`
-}
-
 type ipamConfig struct {
 	AutoAnnounceAssignedIPs bool
 	Announce                []string
@@ -207,58 +174,6 @@ type ipamConfig struct {
 type ipamConfigYAML struct {
 	AutoAnnounceAssignedIPs *bool            `yaml:"auto_announce_assigned_ips"`
 	Announce                configStringList `yaml:"announce"`
-}
-
-type overlayGroupConfigYAML struct {
-	ID                 string                              `yaml:"id"`
-	Name               string                              `yaml:"name"`
-	Provider           string                              `yaml:"provider"`
-	NetNS              netnsRefYAML                        `yaml:"netns"`
-	DefaultPathMode    string                              `yaml:"default_path_mode"`
-	Direction          string                              `yaml:"direction"`
-	AddressSourceOrder configStringList                    `yaml:"address_source_order"`
-	MaxPeers           *int                                `yaml:"max_peers"`
-	MaxLinksPerPeer    *int                                `yaml:"max_links_per_peer"`
-	TunnelAddressPool  string                              `yaml:"tunnel_address_pool"`
-	TunnelAddress      photonlinux.TunnelAddressConfigYAML `yaml:"tunnel_address"`
-	Reconcile          overlayReconcileYAML                `yaml:"reconcile"`
-	Connect            configStringList                    `yaml:"connect"`
-	Deny               configStringList                    `yaml:"deny"`
-}
-
-type overlayReconcileYAML struct {
-	Interval        string             `yaml:"interval"`
-	RotateRetention string             `yaml:"rotate_retention"`
-	Backoff         overlayBackoffYAML `yaml:"backoff"`
-}
-
-type overlayBackoffYAML struct {
-	Initial string `yaml:"initial"`
-	Max     string `yaml:"max"`
-}
-
-type netnsRefYAML struct {
-	Ref        string
-	Spec       ipsec.NetNSSpec
-	InlineSpec bool
-}
-
-func (n *netnsRefYAML) UnmarshalYAML(node *yaml.Node) error {
-	switch node.Kind {
-	case yaml.ScalarNode:
-		n.Ref = strings.TrimSpace(node.Value)
-		return nil
-	case yaml.MappingNode:
-		var spec ipsec.NetNSSpec
-		if err := node.Decode(&spec); err != nil {
-			return err
-		}
-		n.Spec = spec
-		n.InlineSpec = true
-		return nil
-	default:
-		return fmt.Errorf("netns must be a reference string or netns spec object")
-	}
 }
 
 func loadAppConfig() (*appConfig, error) {
@@ -297,16 +212,7 @@ func defaultAppConfig() *appConfig {
 		Overlay: overlayConfig{
 			DefaultNetNS: ipsec.NetNSSpec{}.Normalized(),
 		},
-		IPsec: ipsecConfig{
-			DefaultNetNS:              ipsec.NetNSSpec{}.Normalized(),
-			Role:                      ipsec.RoleBoth,
-			Driver:                    ipsecDriverStrongSwan,
-			PortMode:                  ipsec.PortModeFixed,
-			PortRotateInterval:        0,
-			PortPreviousGrace:         defaultIPsecPortPreviousGrace,
-			AnnounceGossipEndpoints:   true,
-			AnnounceDNSReconnectAfter: 5 * time.Minute,
-		},
+		IPsec: photonlinux.DefaultIPsecConfig(),
 		IPAM: ipamConfig{
 			AutoAnnounceAssignedIPs: false,
 		},
@@ -345,18 +251,7 @@ func normalizeAppConfig(config *appConfig) {
 	}
 	config.Overlay.DefaultNetNS = config.Overlay.DefaultNetNS.Normalized()
 	config.IPsec.DefaultNetNS = config.Overlay.DefaultNetNS
-	if config.IPsec.Role == "" {
-		config.IPsec.Role = ipsec.RoleBoth
-	}
-	if config.IPsec.Driver == "" {
-		config.IPsec.Driver = ipsecDriverStrongSwan
-	}
-	if config.IPsec.PortMode == "" {
-		config.IPsec.PortMode = ipsec.PortModeFixed
-	}
-	if config.IPsec.PortPreviousGrace <= 0 {
-		config.IPsec.PortPreviousGrace = defaultIPsecPortPreviousGrace
-	}
+	config.IPsec.Normalize()
 	if config.EndpointTTL <= 0 {
 		config.EndpointTTL = gossip.DefaultEndpointTTL
 	}
@@ -516,79 +411,8 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 		}
 	}
 	config.Reflectors = gossip.ResolvePublicIPReflectors(config.Reflectors)
-	if file.IPsec.Driver != "" {
-		driver, err := parseIPsecDriver(file.IPsec.Driver)
-		if err != nil {
-			return err
-		}
-		config.IPsec.Driver = driver
-	}
-	if file.IPsec.Role != "" {
-		role := strings.ToLower(strings.TrimSpace(file.IPsec.Role))
-		switch role {
-		case ipsec.RoleOut, ipsec.RoleIn, ipsec.RoleBoth:
-			config.IPsec.Role = role
-		default:
-			return fmt.Errorf("invalid ipsec.role %q", file.IPsec.Role)
-		}
-	}
-	if file.IPsec.DeprecatedAccept != "" {
-		return fmt.Errorf("ipsec.accept is deprecated; use ipsec.role")
-	}
-	if file.IPsec.VICISocket != "" {
-		config.IPsec.VICISocket = file.IPsec.VICISocket
-	}
-	if file.IPsec.PortMode != "" {
-		mode := strings.ToLower(strings.TrimSpace(file.IPsec.PortMode))
-		if !ipsec.ValidPortMode(mode) {
-			return fmt.Errorf("invalid ipsec.port_mode %q", file.IPsec.PortMode)
-		}
-		config.IPsec.PortMode = mode
-	}
-	if config.IPsec.PortMode == ipsec.PortModeRange {
-		if file.IPsec.PortRange.From == 0 || file.IPsec.PortRange.To == 0 || file.IPsec.PortRange.From > file.IPsec.PortRange.To {
-			return fmt.Errorf("invalid ipsec.port_range %d-%d", file.IPsec.PortRange.From, file.IPsec.PortRange.To)
-		}
-		if uint32(file.IPsec.PortRange.To)-uint32(file.IPsec.PortRange.From)+1 < 4 {
-			return fmt.Errorf("ipsec.port_range %d-%d must contain at least two IKE/NAT-T port pairs", file.IPsec.PortRange.From, file.IPsec.PortRange.To)
-		}
-		config.IPsec.PortRange = file.IPsec.PortRange
-	}
-	if file.IPsec.PortRotateInterval != "" {
-		d, err := parseConfigDuration(file.IPsec.PortRotateInterval, "ipsec.port_rotate_interval")
-		if err != nil {
-			return err
-		}
-		config.IPsec.PortRotateInterval = d
-	}
-	if file.IPsec.PortPreviousGrace != "" {
-		d, err := parseConfigDuration(file.IPsec.PortPreviousGrace, "ipsec.port_previous_grace")
-		if err != nil {
-			return err
-		}
-		config.IPsec.PortPreviousGrace = d
-	}
-	for _, raw := range file.IPsec.AnnounceAddrs {
-		candidate := strings.TrimSpace(raw)
-		addr, err := netip.ParseAddr(candidate)
-		if err != nil {
-			return fmt.Errorf("invalid ipsec.announce_addrs entry %q: expected an IP address without a port", raw)
-		}
-		config.IPsec.AnnounceAddrs = append(config.IPsec.AnnounceAddrs, addr.String())
-	}
-	config.IPsec.AnnounceDNS = append(config.IPsec.AnnounceDNS, file.IPsec.AnnounceDNS...)
-	if file.IPsec.AnnounceDNSReconnectAfter != "" {
-		d, err := parseConfigDuration(file.IPsec.AnnounceDNSReconnectAfter, "ipsec.announce_dns_reconnect_after")
-		if err != nil {
-			return err
-		}
-		if d < 0 {
-			return fmt.Errorf("ipsec.announce_dns_reconnect_after must not be negative")
-		}
-		config.IPsec.AnnounceDNSReconnectAfter = d
-	}
-	if file.IPsec.AnnounceGossipEndpoints != nil {
-		config.IPsec.AnnounceGossipEndpoints = *file.IPsec.AnnounceGossipEndpoints
+	if err := file.IPsec.Apply(&config.IPsec); err != nil {
+		return err
 	}
 	config.IPsec.DefaultNetNS = config.Overlay.DefaultNetNS
 	var err error
@@ -612,7 +436,7 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 		}
 	}
 	if len(file.Overlays) > 0 {
-		groups, err := parseOverlayConfigs(file.Overlays, config.Netns, config.Overlay.DefaultNetNS)
+		groups, err := photonlinux.ParseOverlayConfigs(file.Overlays, config.Netns, config.Overlay.DefaultNetNS)
 		if err != nil {
 			return err
 		}
@@ -718,149 +542,6 @@ func parsePeerLifecycleConfig(y *peerLifecycleYAML) (inspect.PeerLifecycleConfig
 	return out, nil
 }
 
-const (
-	ipsecDriverDryRun     = "dry-run"
-	ipsecDriverStrongSwan = "strongswan"
-)
-
-func parseIPsecDriver(value string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", ipsecDriverDryRun:
-		return ipsecDriverDryRun, nil
-	case ipsecDriverStrongSwan, "system", "vici":
-		return ipsecDriverStrongSwan, nil
-	default:
-		return "", fmt.Errorf("invalid ipsec.driver %q: expected dry-run or strongswan", value)
-	}
-}
-
-func parseOverlayConfigs(overlays []overlayGroupConfigYAML, netnsCfg photonlinux.NetNSConfig, defaultNetNS ipsec.NetNSSpec) ([]ipsec.LinkGroupSpec, error) {
-	groups := make([]ipsec.LinkGroupSpec, 0, len(overlays))
-	for i, overlay := range overlays {
-		group, err := parseOverlayConfig(overlay, netnsCfg, defaultNetNS)
-		if err != nil {
-			return nil, fmt.Errorf("overlays[%d]: %w", i, err)
-		}
-		groups = append(groups, group)
-	}
-	return groups, nil
-}
-
-func parseOverlayConfig(overlay overlayGroupConfigYAML, netnsCfg photonlinux.NetNSConfig, defaultNetNS ipsec.NetNSSpec) (ipsec.LinkGroupSpec, error) {
-	netns, err := resolveNetNSRef(overlay.NetNS, netnsCfg, defaultNetNS)
-	if err != nil {
-		return ipsec.LinkGroupSpec{}, fmt.Errorf("netns: %w", err)
-	}
-	if overlay.Direction != "" {
-		return ipsec.LinkGroupSpec{}, fmt.Errorf("overlays[].direction is deprecated; use ipsec.role instead")
-	}
-	group := ipsec.LinkGroupSpec{
-		ID:                 overlay.ID,
-		Name:               overlay.Name,
-		Provider:           overlay.Provider,
-		NetNS:              netns,
-		DefaultPathMode:    overlay.DefaultPathMode,
-		AddressSourceOrder: append([]string(nil), overlay.AddressSourceOrder...),
-		ConnectRules:       append([]string(nil), overlay.Connect...),
-		DenyRules:          append([]string(nil), overlay.Deny...),
-	}
-	if group.ID == "" {
-		group.ID = group.Name
-	}
-	if overlay.MaxPeers != nil {
-		group.MaxPeers = *overlay.MaxPeers
-	}
-	if overlay.MaxLinksPerPeer != nil {
-		group.MaxLinksPerPeer = *overlay.MaxLinksPerPeer
-	}
-	legacyPoolSet := overlay.TunnelAddressPool != ""
-	newBlockSet := overlay.TunnelAddress.Mode != "" || overlay.TunnelAddress.Family != "" || overlay.TunnelAddress.Pool != ""
-	if legacyPoolSet && newBlockSet {
-		return ipsec.LinkGroupSpec{}, fmt.Errorf("cannot mix tunnel_address_pool with tunnel_address")
-	}
-	if legacyPoolSet {
-		prefix, err := netip.ParsePrefix(overlay.TunnelAddressPool)
-		if err != nil {
-			return ipsec.LinkGroupSpec{}, fmt.Errorf("invalid tunnel_address_pool %q: %w", overlay.TunnelAddressPool, err)
-		}
-		group.TunnelAddressPool = prefix
-	}
-	if newBlockSet {
-		spec, err := overlay.TunnelAddress.Parse()
-		if err != nil {
-			return ipsec.LinkGroupSpec{}, err
-		}
-		group.TunnelAddressSpec = spec
-	}
-	if overlay.Reconcile.Interval != "" {
-		d, err := parseConfigDuration(overlay.Reconcile.Interval, "reconcile.interval")
-		if err != nil {
-			return ipsec.LinkGroupSpec{}, err
-		}
-		group.Reconcile.IntervalSeconds = durationSeconds(d)
-	}
-	if overlay.Reconcile.RotateRetention != "" {
-		d, err := parseConfigDuration(overlay.Reconcile.RotateRetention, "reconcile.rotate_retention")
-		if err != nil {
-			return ipsec.LinkGroupSpec{}, err
-		}
-		group.Reconcile.RotateRetentionSeconds = durationSeconds(d)
-	}
-	if overlay.Reconcile.Backoff.Initial != "" {
-		d, err := parseConfigDuration(overlay.Reconcile.Backoff.Initial, "reconcile.backoff.initial")
-		if err != nil {
-			return ipsec.LinkGroupSpec{}, err
-		}
-		group.Reconcile.Backoff.InitialSeconds = durationSeconds(d)
-	}
-	if overlay.Reconcile.Backoff.Max != "" {
-		d, err := parseConfigDuration(overlay.Reconcile.Backoff.Max, "reconcile.backoff.max")
-		if err != nil {
-			return ipsec.LinkGroupSpec{}, err
-		}
-		group.Reconcile.Backoff.MaxSeconds = durationSeconds(d)
-	}
-	if err := group.Validate(); err != nil {
-		return ipsec.LinkGroupSpec{}, err
-	}
-	if _, err := ipsec.ParseMeshPolicyRules(group.ConnectRules); err != nil {
-		return ipsec.LinkGroupSpec{}, fmt.Errorf("connect: %w", err)
-	}
-	if _, err := ipsec.ParseMeshPolicyRules(group.DenyRules); err != nil {
-		return ipsec.LinkGroupSpec{}, fmt.Errorf("deny: %w", err)
-	}
-	return group.Normalized(), nil
-}
-
-func resolveNetNSRef(ref netnsRefYAML, netnsCfg photonlinux.NetNSConfig, fallback ipsec.NetNSSpec) (ipsec.NetNSSpec, error) {
-	if ref.Ref != "" {
-		spec, ok := netnsCfg.Names[ref.Ref]
-		if !ok {
-			return ipsec.NetNSSpec{}, fmt.Errorf("unknown netns %q", ref.Ref)
-		}
-		return spec, nil
-	}
-	if ref.InlineSpec {
-		spec := ref.Spec.Normalized()
-		if err := spec.Validate(); err != nil {
-			return ipsec.NetNSSpec{}, err
-		}
-		return spec, nil
-	}
-	key := netnsCfg.Default
-	if key == "" {
-		key = "default"
-	}
-	if spec, ok := netnsCfg.Names[key]; ok {
-		return spec, nil
-	}
-	spec := fallback.Normalized()
-	if err := spec.Validate(); err != nil {
-		return ipsec.NetNSSpec{}, err
-	}
-	return spec, nil
-}
-
 func (list *configStringList) UnmarshalYAML(node *yaml.Node) error {
 	if node.Kind == yaml.SequenceNode {
 		var values []string
@@ -956,13 +637,6 @@ func normalizeEndpointSourceOrder(order []string) []string {
 		return []string{"advertise", "bootstrap", "reflector", "interface"}
 	}
 	return out
-}
-
-func durationSeconds(d time.Duration) int {
-	if d <= 0 {
-		return 0
-	}
-	return int(d.Round(time.Second) / time.Second)
 }
 
 func decodePublicKey(value string) (ed25519.PublicKey, error) {

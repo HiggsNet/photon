@@ -437,7 +437,7 @@ func TestObserverLinksAPIEmpty(t *testing.T) {
 func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 	srv := newTestObserverServer()
 	srv.daemon.App.Config = &appConfig{
-		IPsec: ipsecConfig{
+		IPsec: photonlinux.IPsecConfig{
 			LinkGroups: []ipsec.LinkGroupSpec{{
 				ID:    "blue",
 				NetNS: ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "phx-blue"},

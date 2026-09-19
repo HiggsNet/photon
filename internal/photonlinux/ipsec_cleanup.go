@@ -74,3 +74,31 @@ func (r *LinuxDriver) CleanupIPsecOrphans(ctx context.Context, keep map[string]b
 	}
 	return cleaned, nil
 }
+
+// NewIPsecCleanupDriver assembles a one-shot platform driver for the
+// explicit offline recovery path. Unlike the daemon driver factory, it must
+// connect to StrongSwan even when no link groups are currently configured so
+// that stale Photon-named connections can still be removed.
+func NewIPsecCleanupDriver(config IPsecConfig) (*LinuxDriver, error) {
+	driver := config.Driver
+	if driver == "" {
+		driver = IPsecDriverStrongSwan
+	}
+	switch driver {
+	case IPsecDriverDryRun:
+		dryRun := &transportipsec.DryRunDriver{}
+		return NewLinuxDriver(LinuxDriverOptions{IPsecDriver: dryRun, XFRMDriver: dryRun})
+	case IPsecDriverStrongSwan:
+		client, err := transportipsec.NewGoviciClient(config.VICISocket)
+		if err != nil {
+			return nil, fmt.Errorf("initialize strongswan vici client: %w", err)
+		}
+		return NewLinuxDriver(LinuxDriverOptions{
+			IPsecDriver: &transportipsec.StrongSwanDriver{VICI: client},
+			XFRMDriver:  transportipsec.NewSystemXFRMDriver(config.DefaultNetNS),
+			Close:       client.Close,
+		})
+	default:
+		return nil, fmt.Errorf("unsupported ipsec driver %q", driver)
+	}
+}

@@ -552,3 +552,41 @@ overlay 的 tunnel_address YAML 类型、模式/地址族/地址池解析，以�
 参数单测随解析器迁移，app 保留 YAML 接线、旧地址池兼容、新旧格式互斥及跨配置窗口检查。补充 family 推导、缺失 pool、默认轮换保留期和窗口相等边界；本切片测试净减 23 行。todo 下一步改为尚未完成的 IPsec 顶层配置与 overlay 组合解析，避免重复安排已完成的 test-only helper 清理。
 
 验证：定向配置测试、make check（含 Linux/Windows 构建）、git diff --check 通过。未运行特权数据面 smoke；本轮与前几轮改动仍在工作区，未提交、推送或部署。
+
+### Overlay 组合配置解析下沉（2026-09-19，e5089b6 之后）
+
+前一批 IPsec 状态机、发布流程和隧道配置校验已本地提交为 e5089b6。继续将 overlay YAML、namespace 引用解析、旧地址池兼容、connect/deny 规则与 reconcile 时间参数解析迁入 internal/photonlinux/overlay_config.go，app 仅传入已解析 namespace 和默认值、接收 LinkGroupSpec；删除 app 旧类型和解析器，无转发 wrapper。
+
+app 与 health 保留原有包内列表和时间解析；overlay 的列表解码留在本配置文件内，时间解析直接使用标准库并保留字段错误信息。具体配置仍按所属模块拆分，不为这两个小工具建立独立共享包。四段重复时间参数处理合并为一处有序循环，保持错误顺序、秒数取整和默认值行为。六项解析/兼容测试随 owner 迁移，app 保留总配置装配和 namespace 引用集成检查，没有新增测试用例。
+
+验证：定向配置测试、make check（Go 测试、Linux 构建、Windows amd64 交叉构建）、git diff --check 通过。特权数据面 smoke 未运行；此后续切片尚未提交，未推送、发布或部署。todo 保留 IPsec 顶层配置与默认值审计为下一项。
+
+
+### IPsec 顶层配置与默认值下沉（2026-09-19）
+
+IPsecConfig、IPsecConfigYAML、driver 常量、默认构造、归一化与 YAML 参数校验归现有 internal/photonlinux/ipsec_config.go。app 直接使用有效类型并调用 YAML.Apply，不保留旧类型 alias 或转发函数。默认构造复用 Normalize；公告开关和 DNS 重连时间只在初始构造设置默认值，显式 false/zero 经过归一化后仍保留。namespace/overlay 装配顺序、Driver 创建与恢复清理 I/O 继续留在原调用处。
+
+Linux 配置的列表解码在本模块内部复用，duration helper 仅供 IPsec 字段校验使用；没有恢复独立 configyaml 包。六项参数拒绝测试迁为 Linux 配置表格测试并检查错误字段；app 保留 YAML 输入、跨配置窗口校验，增强原公告默认值用例验证显式 false/zero。
+
+验证：定向配置测试、make check（含 Linux/Windows 构建）和 git diff --check 通过。未运行特权数据面 smoke；改动尚未提交、推送或部署。剩余 Driver 创建/恢复清理与 reconcile 边界复核列入 Todo。
+
+
+### A5 Linux 子系统职责复核收口（2026-09-19）
+
+本批连续处理 Driver 装配、诊断地址执行、恢复记录查询、routing/firewall 重复处理及测试归属：
+
+- NewConfiguredLinuxDriver 移入现有 linux_driver.go，NewIPsecCleanupDriver 移入现有 ipsec_cleanup.go。删除 app 两个 factory，合并 daemon 两段相同 dry-run 构造；daemon 无 overlay 可以不连 VICI，显式离线 orphan 清理即使无 overlay 也必须连接。app 保留安装/替换/关闭与显式 --direct 控制。
+- LinuxDriver.ApplyIPsecAction 在传输动作成功后为相应动作分配诊断地址；接口失败不进入地址分配，地址失败作为同一动作错误返回 Daemon。删除 shouldAssignIPsecDiagnosticAddresses 和 AssignDiagnosticAddresses 转发入口；诊断地址工具改为包内函数。
+- 同一 reconcile 的恢复循环按节点复用端口代数解析，缓存不跨 verified 快照或下一轮；新生成密钥直接交给状态对象，发布计划仍复制密钥快照，commitLocalProtocols 的私钥先持久化、公共 intent 后提交及 revision guard 不变。
+- 路由启用实例筛选归 RoutingConfig.EnabledInstances，删除 app 两个 helper；firewall 链路视图移出实例循环，观测条目初始化合并为一次，删除 getOrCreateFirewallEntry 和 firewallOwnerScope。
+- 原 Driver 无 overlay 测试、四项诊断地址测试和两项 XFRM 匹配测试迁回 Linux owner。新增两项回归分别验证 VICI 连接要求和动作/地址失败顺序。race 暴露原路由 coalescing 测试的可变时钟竞争，改用仓库已有 fakeClock，未增加生产锁。
+
+剩余 app 代码按调用链核对：ipsecProtocolPlan/localIPsecRecords 负责读取配置和 verified records、组装本次待提交 intent；ensureIPsecTransportKey 决定复用或生成不可重建私钥；reconcileIPsecLinks 负责快照、Driver 观察/执行顺序和错误提交；DNS resolver 与 health readiness 绑定 Daemon 生命周期；localIPv6DiagnosticPrefixes 读取授权/IPAM；summary、日志和 group/record 适配属于本次协调的边界，未再建立 controller 或公共工具包。routing/firewall 仍保留授权读取、Driver I/O、revision 检查和观测发布。
+
+A5 的 Linux 子系统配置与纯策略项标记完成；旧 aggregate schema 兼容截止和 CLI 拆分仍独立保留，未把整个 A5 宣称全部结束。
+
+验证：IPsec/Driver/XFRM、routing/firewall 定向回归通过；make check 与相关路径 race 通过。race 首次受临时模块缓存缺失 unix/race.go 影响，切换现存完整模块缓存后定位并修复上述测试竞争。特权真实数据面 smoke 未运行。改动尚未提交、推送或部署。
+
+规模记录：相对本地提交 e5089b6，当前全部未提交 Go 改动（包含前几轮 overlay/IPsec 配置迁移及未跟踪新文件）为生产代码 +528/-509，净增 19 行；测试 +388/-338，净增 50 行。配置归属迁移和局部重复删除不等于全仓净减行数；本轮不新增包。最终完整 make check、相关路径 race 与 git diff --check 均通过。
+
+提交前复核：daemon 装配入口改名 NewDaemonDriver；tunnelAddressConfigYAML 及 parse 收窄为包内接口；合并无 overlay 构造器测试，把空 SA 观测断言并入 VICI 要求差异测试。上述两处冗余已处理，最终 make check 与 git diff --check 通过。前述行数为复核前快照。

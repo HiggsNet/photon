@@ -22,17 +22,6 @@ func TestNewDaemonDefaultsInterval(t *testing.T) {
 	}
 }
 
-func TestConfiguredStrongSwanLinuxDriverWithoutLinkGroupsUsesDryRunObservation(t *testing.T) {
-	driver, err := newConfiguredLinuxDriver(ipsecConfig{Driver: ipsecDriverStrongSwan}, nil, nil)
-	if err != nil {
-		t.Fatalf("newConfiguredLinuxDriver: %v", err)
-	}
-	sas, err := driver.ListIPsecSAs(context.Background())
-	if err != nil || len(sas) != 0 {
-		t.Fatalf("ListIPsecSAs = (%v, %v), want empty dry-run observation", sas, err)
-	}
-}
-
 func TestDaemonReplacesAndClosesSingleLinuxDriver(t *testing.T) {
 	service := newTestDaemonFromOwners(
 		&AppContext{}, &corestate.VerifiedState{}, nil, &photonlinux.LinuxState{}, &appConfig{}, time.Second,

@@ -4,11 +4,13 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"errors"
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/HiggsNet/photon/internal/photonlinux"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func TestParseConfigYAML(t *testing.T) {
@@ -114,7 +116,7 @@ func TestConfigDefaultsForListenAndPrivateIPv4Filter(t *testing.T) {
 	if !config.FilterPrivateIPv4 {
 		t.Fatal("FilterPrivateIPv4 = false, want true")
 	}
-	if config.IPsec.Driver != ipsecDriverStrongSwan {
+	if config.IPsec.Driver != photonlinux.IPsecDriverStrongSwan {
 		t.Fatalf("IPsec.Driver = %q, want strongswan", config.IPsec.Driver)
 	}
 }

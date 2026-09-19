@@ -196,10 +196,6 @@ func (r *LinuxDriver) MaintainXFRMInterfaces(ctx context.Context, desired []tran
 	return nil
 }
 
-func (r *LinuxDriver) AssignDiagnosticAddresses(ctx context.Context, spec transportipsec.TransportLinkSpec, prefixes []netip.Prefix) error {
-	return r.assignDiagnosticAddresses(ctx, spec, prefixes, nil)
-}
-
 func (r *LinuxDriver) assignDiagnosticAddresses(ctx context.Context, spec transportipsec.TransportLinkSpec, prefixes []netip.Prefix, observed *transportipsec.XFRMLinkState) error {
 	if len(prefixes) == 0 {
 		return nil
@@ -208,12 +204,12 @@ func (r *LinuxDriver) assignDiagnosticAddresses(ctx context.Context, spec transp
 	if !ok {
 		return nil
 	}
-	suffix, ok := IPsecDiagnosticSuffix(spec)
+	suffix, ok := ipsecDiagnosticSuffix(spec)
 	if !ok {
 		return nil
 	}
 	for _, prefix := range prefixes {
-		address, ok := DiagnosticAddressForPrefix(prefix, suffix)
+		address, ok := diagnosticAddressForPrefix(prefix, suffix)
 		if !ok || observed != nil && xfrmStateHasAddress(*observed, address) {
 			continue
 		}
@@ -311,7 +307,7 @@ func XFRMLinkStateMatchReason(state transportipsec.XFRMLinkState, spec transport
 	return false, "missing_address"
 }
 
-func IPsecDiagnosticSuffix(spec transportipsec.TransportLinkSpec) (uint16, bool) {
+func ipsecDiagnosticSuffix(spec transportipsec.TransportLinkSpec) (uint16, bool) {
 	pathKey := strings.ToLower(spec.PathKey)
 	switch {
 	case strings.Contains(pathKey, "ipv4"):
@@ -328,7 +324,7 @@ func IPsecDiagnosticSuffix(spec transportipsec.TransportLinkSpec) (uint16, bool)
 	return 0, false
 }
 
-func DiagnosticAddressForPrefix(prefix netip.Prefix, suffix uint16) (netip.Addr, bool) {
+func diagnosticAddressForPrefix(prefix netip.Prefix, suffix uint16) (netip.Addr, bool) {
 	prefix = prefix.Masked()
 	if !prefix.Addr().Is6() || prefix.Bits() != 64 {
 		return netip.Addr{}, false

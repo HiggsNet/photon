@@ -3,6 +3,8 @@ package photonlinux
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -125,8 +127,18 @@ func (r *LinuxDriver) ListIPsecConnections(ctx context.Context) ([]transportipse
 	return r.ipsecDriver.ListConnections(ctx)
 }
 
-func (r *LinuxDriver) ApplyIPsecAction(ctx context.Context, action transportipsec.ReconcileAction, netns transportipsec.NetNSSpec) (transportipsec.ApplyPlan, error) {
-	return transportipsec.ApplyReconcileAction(ctx, r.ipsecDriver, r.xfrmDriver, action, netns)
+// ApplyIPsecAction applies the transport action before assigning diagnostic addresses.
+// A failure in either step is returned as the result of the same action.
+func (r *LinuxDriver) ApplyIPsecAction(ctx context.Context, action transportipsec.ReconcileAction, netns transportipsec.NetNSSpec, diagnosticPrefixes []netip.Prefix) (transportipsec.ApplyPlan, error) {
+	plan, err := transportipsec.ApplyReconcileAction(ctx, r.ipsecDriver, r.xfrmDriver, action, netns)
+	if err != nil || action.Spec == nil {
+		return plan, err
+	}
+	switch action.Action {
+	case transportipsec.ReconcileActionCreate, transportipsec.ReconcileActionUpdate, transportipsec.ReconcileActionRepair, transportipsec.ReconcileActionPrepareStandby, transportipsec.ReconcileActionPrepareRotate:
+		err = r.assignDiagnosticAddresses(ctx, *action.Spec, diagnosticPrefixes, nil)
+	}
+	return plan, err
 }
 
 type ipsecLifecycleSubscriber interface {
@@ -157,4 +169,53 @@ func (r *LinuxDriver) Close() error {
 		}
 	})
 	return r.closeErr
+}
+
+// NewDaemonDriver assembles the long-lived platform dependencies for a daemon.
+func NewDaemonDriver(config IPsecConfig, networkNamespaces map[string]transportipsec.NetNSSpec, logger Logger) (*LinuxDriver, error) {
+	var logConfig func(event string, fields map[string]any)
+	if logger != nil {
+		logConfig = func(event string, fields map[string]any) {
+			logger.Debug("ipsec", event, fields)
+		}
+	}
+	driverName := config.Driver
+	if driverName == "" {
+		driverName = IPsecDriverStrongSwan
+	}
+	switch driverName {
+	case IPsecDriverDryRun, IPsecDriverStrongSwan:
+	default:
+		return nil, fmt.Errorf("unsupported ipsec driver %q", driverName)
+	}
+	if driverName == IPsecDriverDryRun || len(config.LinkGroups) == 0 {
+		dryRun := &transportipsec.DryRunDriver{}
+		return NewLinuxDriver(LinuxDriverOptions{
+			IPsecDriver: dryRun, XFRMDriver: dryRun,
+			NetworkNamespaces: networkNamespaces, Logger: logger,
+		})
+	}
+	client, err := transportipsec.NewReconnectingGoviciClient(config.VICISocket)
+	if err != nil {
+		return nil, fmt.Errorf("initialize strongswan vici client: %w", err)
+	}
+	initiateClientFactory := func() (transportipsec.VICIClient, func() error, error) {
+		client, err := transportipsec.NewGoviciClient(config.VICISocket)
+		if err != nil {
+			return nil, nil, err
+		}
+		return client, client.Close, nil
+	}
+	return NewLinuxDriver(LinuxDriverOptions{
+		IPsecDriver: &transportipsec.StrongSwanDriver{
+			VICI:                  client,
+			LogConfig:             logConfig,
+			InitiateAsync:         true,
+			InitiateClientFactory: initiateClientFactory,
+		},
+		XFRMDriver:        transportipsec.NewSystemXFRMDriver(config.DefaultNetNS),
+		NetworkNamespaces: networkNamespaces,
+		Close:             client.Close,
+		Logger:            logger,
+	})
 }

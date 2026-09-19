@@ -65,18 +65,6 @@ overlays:
 	}
 }
 
-func TestParseConfigYAMLOverlayDirectionDeprecated(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-overlays:
-  - name: ipsec-main
-    direction: outbound
-`
-	if err := parseConfigYAML(input, config); err == nil {
-		t.Fatalf("expected error for deprecated overlays[].direction")
-	}
-}
-
 func TestParseConfigYAMLOverlayUsesDefaultNetNSReference(t *testing.T) {
 	config := defaultAppConfig()
 	input := `
@@ -99,27 +87,6 @@ overlays:
 	}
 }
 
-func TestParseConfigYAMLOverlayAcceptsLegacyInlineNetNS(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-overlays:
-  - name: ipsec-main
-    provider: strongswan
-    netns:
-      kind: name
-      name: legacytesth2
-      create: true
-`
-	if err := parseConfigYAML(input, config); err != nil {
-		t.Fatalf("parseConfigYAML: %v", err)
-	}
-	normalizeAppConfig(config)
-	group := config.IPsec.LinkGroups[0]
-	if group.NetNS.Kind != ipsec.NetNSName || group.NetNS.Name != "legacytesth2" || !group.NetNS.Create {
-		t.Fatalf("group netns = %+v, want inline legacytesth2", group.NetNS)
-	}
-}
-
 func TestParseConfigYAMLOverlayRejectsUnknownNetNSReference(t *testing.T) {
 	config := defaultAppConfig()
 	input := `
@@ -139,32 +106,5 @@ overlays:
 	}
 	if !strings.Contains(err.Error(), `unknown netns "missing"`) {
 		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestParseConfigYAMLRejectsInvalidOverlay(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-overlays:
-  - name: broken
-    provider: strongswan
-    tunnel_address_pool: not-a-prefix
-`
-	if err := parseConfigYAML(input, config); err == nil {
-		t.Fatalf("parseConfigYAML should reject invalid overlay tunnel pool")
-	}
-}
-
-func TestParseConfigYAMLRejectsInvalidOverlayRule(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-overlays:
-  - name: ipsec-main
-    provider: strongswan
-    connect:
-      - "strongswan://*.catofes.?source=magic"
-`
-	if err := parseConfigYAML(input, config); err == nil {
-		t.Fatalf("parseConfigYAML should reject invalid overlay rule")
 	}
 }

@@ -114,6 +114,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		groupBackoff[group.ID] = group.Reconcile.Backoff
 		groupRetention[group.ID] = normalized.Reconcile.RotateRetentionSeconds
 	}
+	portGenerations := make(map[zone.ZonePath][]uint64)
 	for _, spec := range plan.Desired {
 		id := ipsec.LinkInstanceID(spec)
 		if _, exists := instances[id]; exists {
@@ -123,7 +124,11 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		if ipsec.IsActiveInitiatorRole(spec.InitiatorRole) {
 			generationZone = spec.PeerZone
 		}
-		generations := ipsecPortGenerations(verified, generationZone, now)
+		generations, cached := portGenerations[generationZone]
+		if !cached {
+			generations = ipsecPortGenerations(verified, generationZone, now)
+			portGenerations[generationZone] = generations
+		}
 		instance, ok, err := ipsec.RecoverObservedLinkInstance(spec, groupSpecs[spec.OverlayID], generations, connections, sas, xfrmLinks, now)
 		if err != nil {
 			d.recordIPsecReconcileError(rev, now.Unix(), err)
@@ -160,7 +165,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		d.logDebug("ipsec", "reconcile_action", ipsecReconcileActionLogFields(action))
 		switch action.Action {
 		case ipsec.ReconcileActionCleanupDuplicateSA:
-			if _, err := platformDriver.ApplyIPsecAction(ctx, action, ipsec.NetNSSpec{}); err != nil {
+			if _, err := platformDriver.ApplyIPsecAction(ctx, action, ipsec.NetNSSpec{}, nil); err != nil {
 				d.logWarn("ipsec", "duplicate_sa_gc_failed", map[string]any{
 					"sa_unique_id": action.SAUniqueID,
 					"error":        err,
@@ -170,10 +175,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 			ipsec.ReconcileActionTeardown, ipsec.ReconcileActionPrepareRotate, ipsec.ReconcileActionInitiateRotate, ipsec.ReconcileActionCommitRotate,
 			ipsec.ReconcileActionRollbackRotate, ipsec.ReconcileActionCleanupRotate:
 			group := groupForAction(action, groups)
-			_, err := platformDriver.ApplyIPsecAction(ctx, action, group.NetNS)
-			if err == nil && shouldAssignIPsecDiagnosticAddresses(action) {
-				err = platformDriver.AssignDiagnosticAddresses(ctx, *action.Spec, diagnosticPrefixes)
-			}
+			_, err := platformDriver.ApplyIPsecAction(ctx, action, group.NetNS, diagnosticPrefixes)
 			ipsec.RecordActionResult(result.Instances, action, group.Reconcile.Backoff, now, err)
 			if err != nil {
 				d.publishIPsecObservation(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err)
@@ -202,18 +204,6 @@ func (d *Daemon) ipsecReconcileDNSResolver() ipsec.DNSResolver {
 		d.ipsecDNSResolver = resolver
 	}
 	return resolver
-}
-
-func shouldAssignIPsecDiagnosticAddresses(action ipsec.ReconcileAction) bool {
-	if action.Spec == nil {
-		return false
-	}
-	switch action.Action {
-	case ipsec.ReconcileActionCreate, ipsec.ReconcileActionUpdate, ipsec.ReconcileActionRepair, ipsec.ReconcileActionPrepareStandby, ipsec.ReconcileActionPrepareRotate:
-		return true
-	default:
-		return false
-	}
 }
 
 func (d *Daemon) localIPv6DiagnosticPrefixes(verified *corestate.VerifiedState, now time.Time) []netip.Prefix {

@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func recoveryCleanupIPsec(ctx context.Context, includeOrphans, direct bool) error {
@@ -48,42 +47,14 @@ func recoveryCleanupIPsecDirect(ctx context.Context, rt *AppContext, includeOrph
 	if !includeOrphans {
 		return 0, 0, nil
 	}
-	platformDriver, err := newLinuxDriverForIPsecCleanup(rt.Config)
+	if rt.Config == nil {
+		return 0, 0, errors.New("config is nil")
+	}
+	platformDriver, err := photonlinux.NewIPsecCleanupDriver(rt.Config.IPsec)
 	if err != nil {
 		return 0, 0, err
 	}
 	defer func() { _ = platformDriver.Close() }()
 	orphans, err := platformDriver.CleanupIPsecOrphans(ctx, nil)
 	return 0, orphans, err
-}
-
-// newLinuxDriverForIPsecCleanup assembles a one-shot platform driver for the
-// explicit offline recovery path. Unlike the daemon driver factory, it must
-// connect to StrongSwan even when no link groups are currently configured so
-// that stale Photon-named connections can still be removed.
-func newLinuxDriverForIPsecCleanup(config *appConfig) (*photonlinux.LinuxDriver, error) {
-	if config == nil {
-		return nil, errors.New("config is nil")
-	}
-	driver := config.IPsec.Driver
-	if driver == "" {
-		driver = ipsecDriverStrongSwan
-	}
-	switch driver {
-	case ipsecDriverDryRun:
-		dryRun := &ipsec.DryRunDriver{}
-		return photonlinux.NewLinuxDriver(photonlinux.LinuxDriverOptions{IPsecDriver: dryRun, XFRMDriver: dryRun})
-	case ipsecDriverStrongSwan:
-		client, err := ipsec.NewGoviciClient(config.IPsec.VICISocket)
-		if err != nil {
-			return nil, fmt.Errorf("initialize strongswan vici client: %w", err)
-		}
-		return photonlinux.NewLinuxDriver(photonlinux.LinuxDriverOptions{
-			IPsecDriver: &ipsec.StrongSwanDriver{VICI: client},
-			XFRMDriver:  ipsec.NewSystemXFRMDriver(config.IPsec.DefaultNetNS),
-			Close:       client.Close,
-		})
-	default:
-		return nil, fmt.Errorf("unsupported ipsec driver %q", driver)
-	}
 }

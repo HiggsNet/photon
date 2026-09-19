@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
@@ -71,51 +70,6 @@ func TestLocalIPsecPortGenerationsIncludesValidPrevious(t *testing.T) {
 	})
 	if got, want := ipsecPortGenerations(verified, verified.ManagedZone, now), []uint64{2, 1}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("local generations = %v, want %v", got, want)
-	}
-}
-
-func TestXFRMLinkStateMatchesCandidateRequiresLocalTunnelAddress(t *testing.T) {
-	spec := ipsec.TransportLinkSpec{
-		InterfaceName:   "phx1",
-		LocalTunnelAddr: netip.MustParseAddr("fe80::1234"),
-	}
-	state := ipsec.XFRMLinkState{
-		NamespaceExists: true,
-		InterfaceExists: true,
-		Addresses:       []netip.Prefix{netip.MustParsePrefix("fe80::9999/64")},
-	}
-	if matches, _ := photonlinux.XFRMLinkStateMatchReason(state, spec); matches {
-		t.Fatalf("candidate matched with wrong interface address")
-	}
-	state.Addresses = []netip.Prefix{netip.MustParsePrefix("fe80::1234/64")}
-	if matches, _ := photonlinux.XFRMLinkStateMatchReason(state, spec); !matches {
-		t.Fatalf("candidate did not match expected interface address")
-	}
-}
-
-func TestXFRMLinkStateMatchesCandidateRequiresKnownInterfaceFlags(t *testing.T) {
-	spec := ipsec.TransportLinkSpec{
-		InterfaceName:   "phx1",
-		LocalTunnelAddr: netip.MustParseAddr("fe80::1234"),
-	}
-	state := ipsec.XFRMLinkState{
-		NamespaceExists: true,
-		InterfaceExists: true,
-		FlagsKnown:      true,
-		InterfaceUp:     true,
-		Multicast:       false,
-		Addresses:       []netip.Prefix{netip.MustParsePrefix("fe80::1234/64")},
-	}
-	if matches, _ := photonlinux.XFRMLinkStateMatchReason(state, spec); matches {
-		t.Fatalf("candidate matched without multicast enabled")
-	}
-	state.Multicast = true
-	if matches, _ := photonlinux.XFRMLinkStateMatchReason(state, spec); !matches {
-		t.Fatalf("candidate did not match with expected flags and address")
-	}
-	state.InterfaceUp = false
-	if matches, _ := photonlinux.XFRMLinkStateMatchReason(state, spec); matches {
-		t.Fatalf("candidate matched while interface was not up")
 	}
 }
 

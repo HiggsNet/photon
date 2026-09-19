@@ -121,7 +121,7 @@ Daemon
 
 ### A5. app/photon 与查询边界继续清理
 
-- [ ] 按窄切口继续下沉仍留在 `app/photon` 的 Linux 子系统配置与纯策略；实际 Daemon 读取 owner、revision guard、调用 Driver、发布 Observation 和 shutdown 顺序继续留在 app。
+- [x] 按窄切口下沉 `app/photon` 的 Linux 子系统配置与纯策略，本轮职责复核完成；实际 Daemon 读取 owner、revision guard、调用 Driver、发布 Observation 和 shutdown 顺序继续留在 app。
   - [x] firewall：YAML/effective config、forwarding policy 和 `FirewallPolicyInput` 组装已归 Linux firewall/routing owner；`reconcileFirewall` 保留 Daemon owner 读取、revision guard、Driver apply 与 Observation 发布，不新增 controller facade。
     - [x] YAML 解析与 managed 实例筛选已归 `internal/photonlinux/firewall_config.go`；解析直接生成 `firewall.FirewallInstanceSpec`，删除重复 `FirewallInstanceConfig` 和 `Spec()` 转换，配置集成测试留在 app。
     - [x] namespace YAML/有效配置和 forwarding policy 已归 `internal/photonlinux/routing_config.go`；firewall policy builder 直接消费 namespace 配置、routing 实例和现有 `LinkOutput`，删除 app builder 和无用 LinuxState 参数。
@@ -137,7 +137,7 @@ Daemon
     - [x] BIRD 动态 spec 与上游静态路由组装归 internal/photonlinux.BuildBirdInstanceSpec；直接从 link groups 选择 namespace 对应 overlays，删除 app 分组类型/map、builder 与单用途 upstream helper，纯构造测试随 owner 迁移。
     - [x] BIRD 轮换接口 metric 策略归 internal/photonlinux，直接消费现有 LinkOutput、IPsec LinkInstance 与 BIRD spec；namespace/overlay 匹配由策略与健康观察共用，删除 app 旧实现及单用途实例查找 helper。
     - [x] BIRD owner 构造与健康观测转换归 Linux owner；apply 测试改名并删除重复生成器断言，逐函数复核保留 Daemon 安全顺序。routing/netns 协议发布按未来 Router-ID 来源审计设计保留。
-  - [ ] IPsec：把 transport/address/port/overlay record 纯构造、reconcile 纯 helper 和安全 live projection 靠近 `pkg/transport/ipsec`、state publisher 或 inspect owner；app 保留私钥先落盘、公共 record 后发布以及完整 rotation/apply 顺序。
+  - [x] IPsec：把 transport/address/port/overlay record 纯构造、reconcile 纯 helper 和安全 live projection 靠近 `pkg/transport/ipsec`、state publisher 或 inspect owner；app 保留私钥先落盘、公共 record 后发布以及完整 rotation/apply 顺序。
     - [x] 自动端口发布的 generation、interval、range 匹配与旧记录复用策略归 pkg/transport/ipsec.PlanPortPublication；删除 app 的四个纯 helper，保留 verified record 读取、私钥持久化及公共协议记录提交顺序。
     - [x] Profile 构造、声明地址族/path mode 汇总和保守 NAT hint 归 pkg/transport/ipsec；保留 IPv4 fallback 与未知入站可达性，不与 peer contact-family 策略混同。
     - [x] OverlayIntent 构造及未变化时间戳复用归 pkg/transport/ipsec；app 只传本 zone 已有记录并组装发布项，删除独立 lookup、内容比较与 path-key helper。
@@ -152,7 +152,14 @@ Daemon
     - [x] 发布规划日志改为 publish_planned，删除仅为日志服务的完整密钥比较与重复记录遍历；zone 公钥提取并回唯一调用处，实际私钥持久化/公共提交语义不变。
     - [x] 合并 IPsec 状态机五处 staged 资源/重试字段清理及重复 cutover 等待分支；phase、失败退避和 transition time 仍由原场景决定，增强原回滚测试，无新增测试用例。
     - [x] overlay tunnel_address YAML 类型、地址族/地址池校验与端口宽限期检查归 internal/photonlinux；删除 Normalized 后重复的一小时默认值，迁移参数单测，保留 app YAML/兼容/跨配置集成测试。
-    - [ ] 继续审计 IPsec 顶层配置和 overlay 组合解析；共享 YAML 字符串列表与 duration 解析仍由 app 使用，避免为下沉复制另一套解析规则。
+    - [x] overlay YAML、namespace 引用、规则与时间参数解析归 internal/photonlinux；列表解码留在各自配置模块内部，时间解析直接使用标准库，删除 app 的 overlay 旧实现与四段重复时间处理，六项原有解析测试随 owner 迁移。
+    - [x] IPsec 顶层 YAML、有效配置、driver 常量、默认值及参数校验归现有 internal/photonlinux/ipsec_config.go；app 直接使用，不留 alias。默认构造复用 Normalize，保留显式 false/zero；六项拒绝测试迁为下层表格测试。
+    - [x] Driver 创建与显式离线清理装配归现有 LinuxDriver/cleanup owner，删除 app 两个 factory；保留 daemon 无 overlay 不连 VICI、离线清理必须连接的差异，合并重复 dry-run 构造。
+    - [x] 动作执行后的诊断地址分配归 LinuxDriver.ApplyIPsecAction；删除 app 判断和独立地址转发入口，错误仍交 Daemon 记录退避和发布观测。平台测试随 owner 迁移，补齐接口失败/地址失败顺序回归。
+    - [x] 同轮恢复按节点复用端口代数解析，删除新生成密钥的二次字节复制；保留发布计划密钥快照和私钥先落盘的提交顺序。
+    - [x] 逐函数复核 app 剩余职责：快照/授权读取、DNS/health 生命周期、调度、动作顺序、日志、revision guard 与 Observation 发布保留，局部 group/record 适配不另建 owner。
+  - [x] 联动复核 routing/firewall：启用实例筛选归 RoutingConfig，删除 app 两个 helper；firewall 每轮只转换一次链路视图、每实例只建立一次观测条目，删除重复分支和单用途 owner-scope helper。
+  - [x] race 检查发现路由 coalescing 测试时钟与后台 scheduler 并发读写，复用已有加锁 fakeClock 修复；生产调度顺序不变。
   - [x] health：probe target/rotate role 组合属于 app health reconcile，raw ICMP、`setns` 和 exec fallback 属于 `internal/photonlinux/healthprobe`；当前边界无需为目录对称继续搬迁。
 - [x] 删除本轮审计确认的测试专用生产入口和单用途测试接缝，不为此新增通用 interface/manager。
   - [x] 删除无生产调用方的 `Daemon.EnableEventLoopSync` 与 `Daemon.processPacketEvent`；测试直接使用 GossipDriver scheduler 与正式 Daemon gossip event 入口。
@@ -264,8 +271,8 @@ Daemon
 
 ## 下一步执行顺序
 
-1. A5 的 test-only production helper 与 sync transport 测试接缝已清理；接下来审计 IPsec 顶层配置和 overlay 组合解析，避免复制共享 YAML 解析规则。
-2. 完成剩余 IPsec 配置边界后，复核 app reconcile 中保留的 owner 读取、Driver I/O、revision guard 与 Observation 发布；据真实调用链收口 A5，不为减少文件数搬迁。
+1. A5 本轮 Linux 配置、纯策略与 Driver 边界已收口；后续维护保留 app 的 owner 读取、调度、revision guard 和提交顺序，不继续为了文件数搬迁。
+2. 审计旧 aggregate schema 的现存迁移入口、fixtures 与版本承诺，再确定直接升级截止版本；截止前保留单向兼容。
 3. 冻结 legacy schema 直接升级截止版本；未到期前保持单向 migration，达到截止时整组删除兼容模型和 fixtures。
 4. CLI 壳只随上述 owner 迁移逐步进入 `internal/photoncli`，不单独进行目录搬家。
 5. Windows 先完成 B1 v1 契约，再实现 B2 composition 与真实 UDP gossip vertical slice；之后依次推进 IKE/ESP、Babel/SADR、Wintun、SCM/named-pipe 和完整验收。

@@ -641,3 +641,14 @@ func (config RoutingConfig) NetNSNames() []string {
 	slices.Sort(names)
 	return slices.Compact(names)
 }
+
+// EnabledInstances returns configured routing instances that participate in reconciliation.
+func (config RoutingConfig) EnabledInstances() []RoutingInstance {
+	var out []RoutingInstance
+	for _, inst := range config.Instances {
+		if inst.Enabled && inst.Bird.Mode != ipsec.RoutingModeDisabled {
+			out = append(out, inst)
+		}
+	}
+	return out
+}

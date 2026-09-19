@@ -43,7 +43,7 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 	verified := common.State
 	routingObserved := d.linuxObservation.routingSnapshot()
 	config := d.App.Config
-	routingInstances := routingInstancesEnabled(config)
+	routingInstances := config.Routing.EnabledInstances()
 	if len(routingInstances) == 0 {
 		d.linuxObservation.replaceRouting(nil)
 		return nil
@@ -129,7 +129,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 	// reloads, tests, and future callers that do not pass the filtered list.
 	// Disabling an instance stops reconciliation; it intentionally does not
 	// tear down resources created while the instance was enabled.
-	if !routingInstanceEnabled(inst) {
+	if !inst.Enabled || inst.Bird.Mode == ipsec.RoutingModeDisabled {
 		return nil
 	}
 
@@ -400,23 +400,6 @@ func (d *Daemon) birdDumpForControl(ctx context.Context, netnsName string, view 
 		response.Instances[inst.Bird.NetNSName] = item
 	}
 	return response, nil
-}
-
-func routingInstancesEnabled(config *appConfig) []photonlinux.RoutingInstance {
-	if config == nil {
-		return nil
-	}
-	var out []photonlinux.RoutingInstance
-	for _, inst := range config.Routing.Instances {
-		if routingInstanceEnabled(inst) {
-			out = append(out, inst)
-		}
-	}
-	return out
-}
-
-func routingInstanceEnabled(inst photonlinux.RoutingInstance) bool {
-	return inst.Enabled && inst.Bird.Mode != ipsec.RoutingModeDisabled
 }
 
 func routingCrashBackoff(failureCount int) time.Duration {
