@@ -138,6 +138,11 @@ Daemon
     - [x] BIRD 轮换接口 metric 策略归 internal/photonlinux，直接消费现有 LinkOutput、IPsec LinkInstance 与 BIRD spec；namespace/overlay 匹配由策略与健康观察共用，删除 app 旧实现及单用途实例查找 helper。
     - [x] BIRD owner 构造与健康观测转换归 Linux owner；apply 测试改名并删除重复生成器断言，逐函数复核保留 Daemon 安全顺序。routing/netns 协议发布按未来 Router-ID 来源审计设计保留。
   - [ ] IPsec：把 transport/address/port/overlay record 纯构造、reconcile 纯 helper 和安全 live projection 靠近 `pkg/transport/ipsec`、state publisher 或 inspect owner；app 保留私钥先落盘、公共 record 后发布以及完整 rotation/apply 顺序。
+    - [x] 自动端口发布的 generation、interval、range 匹配与旧记录复用策略归 pkg/transport/ipsec.PlanPortPublication；删除 app 的四个纯 helper，保留 verified record 读取、私钥持久化及公共协议记录提交顺序。
+    - [x] Profile 构造、声明地址族/path mode 汇总和保守 NAT hint 归 pkg/transport/ipsec；保留 IPv4 fallback 与未知入站可达性，不与 peer contact-family 策略混同。
+    - [x] OverlayIntent 构造及未变化时间戳复用归 pkg/transport/ipsec；app 只传本 zone 已有记录并组装发布项，删除独立 lookup、内容比较与 path-key helper。
+    - [x] 持久化 transport key 到公开协议记录的投影归 internal/photonlinux；去掉 base64 单用途包装与 publish runtime 转发比较，私钥生成/落盘/公共发布顺序不变。
+    - [x] IPsec 地址声明的优先级、去重、gossip TTL/grace/source 转换和 listen fallback 归 internal/photonlinux.BuildIPsecAddressRecord；app 保留 verified endpoint 读取，不把 Gossip record 适配引入通用 IPsec 包。删除无消费者的端口解析返回值。
   - [x] health：probe target/rotate role 组合属于 app health reconcile，raw ICMP、`setns` 和 exec fallback 属于 `internal/photonlinux/healthprobe`；当前边界无需为目录对称继续搬迁。
 - [x] 删除本轮审计确认的测试专用生产入口和单用途测试接缝，不为此新增通用 interface/manager。
   - [x] 删除无生产调用方的 `Daemon.EnableEventLoopSync` 与 `Daemon.processPacketEvent`；测试直接使用 GossipDriver scheduler 与正式 Daemon gossip event 入口。

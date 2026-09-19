@@ -174,3 +174,92 @@ func TestPlanPortRecordRejectsTinyRange(t *testing.T) {
 		t.Fatalf("PlanPortRecord should reject a range without two complete port pairs")
 	}
 }
+
+// Publication must preserve timestamps until rotation is due, so periodic
+// reconciliation does not continually republish unchanged protocol records.
+func TestPlanPortPublicationRotationBoundary(t *testing.T) {
+	start := time.Unix(5000, 0)
+	r := &PortRange{From: 30000, To: 30099}
+	previous, err := PlanPortRecord(PortPlanOptions{Mode: PortModeRange, Range: r, Generation: 4, Now: start})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name             string
+		offset, interval time.Duration
+		generation       uint64
+	}{
+		{"before", time.Hour - time.Nanosecond, time.Hour, 4},
+		{"exact boundary", time.Hour, time.Hour, 4},
+		{"after", time.Hour + time.Nanosecond, time.Hour, 5},
+		{"disabled", 2 * time.Hour, 0, 4},
+		{"long gap advances once", 24 * time.Hour, time.Hour, 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := start.Add(tc.offset)
+			got, err := PlanPortPublication(PortModeRange, r, tc.interval, time.Hour, previous, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Current.Generation != tc.generation {
+				t.Fatalf("generation = %d, want %d", got.Current.Generation, tc.generation)
+			}
+			if tc.generation == 4 {
+				if got != previous || got.UpdatedAt != start.Unix() {
+					t.Fatal("unchanged record was replaced")
+				}
+			} else {
+				if got.UpdatedAt != now.Unix() || len(got.Previous) != 1 || got.Previous[0].Generation != 4 || got.Previous[0].ValidUntil != now.Add(time.Hour).Unix() {
+					t.Fatalf("rotation lost timestamp or grace: %+v", got)
+				}
+				if got.Current.IKE.Advertised == previous.Current.IKE.Advertised {
+					t.Fatal("rotation reused old port pair")
+				}
+			}
+			if previous.Current.Generation != 4 || previous.UpdatedAt != start.Unix() || len(previous.Previous) != 0 {
+				t.Fatal("mutated previous record")
+			}
+		})
+	}
+	withoutTimestamp := *previous
+	withoutTimestamp.UpdatedAt = 0
+	got, err := PlanPortPublication(PortModeRange, r, time.Hour, time.Hour, &withoutTimestamp, start)
+	if err != nil || got.Current.Generation != 5 {
+		t.Fatalf("missing timestamp: record=%+v err=%v", got, err)
+	}
+}
+
+func TestPlanPortPublicationConfigurationChanges(t *testing.T) {
+	now := time.Unix(5000, 0)
+	r := &PortRange{From: 30000, To: 30099}
+	first, err := PlanPortPublication(PortModeRange, r, time.Hour, time.Hour, nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Current.Generation != 1 || first.Current.IKE.Local != DefaultIKEPort || first.Current.NATT.Local != DefaultNATTPort {
+		t.Fatalf("initial record: %+v", first)
+	}
+	changedRange := &PortRange{From: 31000, To: 31099}
+	changed, err := PlanPortPublication(PortModeRange, changedRange, time.Hour, time.Hour, first, now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed == first || changed.Current.Generation != 1 || changed.Current.IKE.Advertised != 31000 {
+		t.Fatalf("range change ignored: %+v", changed)
+	}
+	fixed, err := PlanPortPublication("", changedRange, time.Hour, time.Hour, changed, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fixed.Mode != PortModeFixed || fixed.Range != nil || fixed.Current.IKE.Advertised != DefaultIKEPort {
+		t.Fatalf("fixed mode: %+v", fixed)
+	}
+	// Fixed mode ignores the configured range and automatic rotation interval.
+	reused, err := PlanPortPublication(PortModeFixed, r, time.Hour, time.Hour, fixed, now.Add(24*time.Hour))
+	if err != nil || reused != fixed {
+		t.Fatalf("fixed record replaced: %+v %v", reused, err)
+	}
+	if _, err := PlanPortPublication(PortModeRange, nil, time.Hour, time.Hour, nil, now); err == nil {
+		t.Fatal("missing range accepted")
+	}
+}

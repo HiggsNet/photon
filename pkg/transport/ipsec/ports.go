@@ -24,6 +24,37 @@ type PortPlanOptions struct {
 	Now           time.Time
 }
 
+// PlanPortPublication reuses an unchanged published record or plans its next
+// automatic port generation. It does not mutate previous or persist the result.
+// Explicit/manual rotation uses PlanPortRecord with a caller-selected generation.
+func PlanPortPublication(mode string, portRange *PortRange, rotateInterval, previousGrace time.Duration, previous *PortRecord, now time.Time) (*PortRecord, error) {
+	if mode == "" {
+		mode = PortModeFixed
+	}
+	generation := uint64(1)
+	if mode == PortModeRange && previous != nil && previous.Current != nil {
+		generation = previous.Current.Generation
+		if rotateInterval > 0 && (previous.UpdatedAt == 0 || now.After(time.Unix(previous.UpdatedAt, 0).Add(rotateInterval))) {
+			generation++
+		}
+	}
+	if previous != nil && previous.Current != nil && previous.Current.Generation == generation {
+		previousMode := previous.Mode
+		if previousMode == "" {
+			previousMode = PortModeFixed
+		}
+		sameRange := previous.Range == nil && portRange == nil ||
+			previous.Range != nil && portRange != nil && *previous.Range == *portRange
+		if previousMode == mode && (mode != PortModeRange || sameRange) {
+			return previous, nil
+		}
+	}
+	return PlanPortRecord(PortPlanOptions{
+		Mode: mode, Range: portRange, Generation: generation,
+		Previous: previous, PreviousGrace: previousGrace, Now: now,
+	})
+}
+
 func PlanPortRecord(opts PortPlanOptions) (*PortRecord, error) {
 	now := opts.Now
 	if now.IsZero() {

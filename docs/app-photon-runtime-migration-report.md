@@ -466,3 +466,35 @@ A5 BIRD 轮换策略下沉（2026-09-17）：BirdRotateInterfacePolicies 归现�
 测试文件改为 routing_reconcile_apply_test.go：保留授权前缀进入实际生成文件、启动/重载、版本拒绝、external/disabled 和调度行为；删除与 bird/generator_test.go 重复的接口模板、RTT/interval 文本断言及重复 namespace 赋值。生成器语法单测继续由 BIRD 包负责，app cutover 集成测试继续覆盖观测失效阻止切换。
 
 本轮验证：首次全量测试受沙箱 Unix/UDP socket 权限限制；在允许本地 socket 的环境重跑 make check 全部通过（fmt、vet、全量测试、Linux 构建、Windows amd64 交叉构建），git diff --check 通过。未执行特权数据面 smoke，未提交或发布。
+
+### IPsec 自动端口发布策略下沉（2026-09-19）
+
+调用链为 Daemon.publishLocalProtocols → ipsecProtocolPlan → localIPsecRecords → ipsec.PlanPortPublication → 按需 PlanPortRecord。app 继续读取当前 verified 的端口记录，协议层接收 mode/range、轮换间隔、宽限时间、旧记录与显式时钟，决定复用还是生成下一代。复用不刷新 UpdatedAt，固定模式不自动轮换；range 模式严格超过间隔才轮换，长时间停机也只前进一代。手工轮换继续通过原 PlanPortRecord 指定代数。
+
+删除 app 的 localIPsecPortRecord、nextPortGeneration、portRecordMatchesConfig、ipsecPortRangesEqual；没有新增配置 DTO、facade 或状态 owner。已有私钥落盘、revision guard、公共 record 发布和 data-plane apply 顺序不变。生产代码新增 32 行、删除 73 行，净减 41 行。
+
+协议层新增边界测试覆盖轮换前/恰好到期/到期后、禁用轮换、长时间间隔、缺失时间戳、range 变化、切换固定模式、无效 range、旧记录不被修改及 previous grace；app 保留发布与持久化集成测试。IPsec 地址、transport key、overlay 构造和其余 reconcile helper 仍待后续独立切片。
+
+验证：定向端口策略与 app 发布/手工轮换测试通过；make check（fmt、vet、全量测试、Linux 构建、Windows amd64 交叉构建）和 git diff --check 通过。未运行特权数据面 smoke；本切片尚未提交、推送或部署。
+
+### IPsec profile、overlay 和公钥投影下沉（2026-09-19）
+
+本轮继续完成三个独立纯构造边界：
+
+- pkg/transport/ipsec.BuildProfileRecord 组合本地 Zone、transport fingerprint、role、groups 和 AddressRecord。PublicationFamilies 保留声明侧顺序、去重和 IPv4 fallback，显式与 planner 的 peer contact-family 选择区分；后者对 singular/plural 优先级、空集合和 IPv4-mapped IPv6 有不同语义，不强行合并。NAT public hint 不被当作入站可达证明。
+- BuildOverlayIntentRecords 接收 groups、声明 families、本 Zone 原有记录 map 和时钟；保留无效 group 跳过、exhaustive/family-redundant path keys，以及内容相同保留 UpdatedAt。app 保留 verified snapshot 读取和协议 intent 提交；删除 localIPsecOverlayIntentRecords、existingOverlayIntentRecord、overlayIntentContentEqual、localOverlayIntentPathKeys，两个单用途纯 helper 直接并入 builder。
+- internal/photonlinux.PublicTransportKeyRecord 负责持久化 key 的公开投影及旧记录缺省值，不读取/修改 PrivateKey。删除 app buildTransportKeyRecord、ipsecPublicKeyString 和 sameIPsecPublishRuntime 转发包装。ensureIPsecTransportKey、事务 revision guard 和私钥先持久化仍归原应用/State 路径。
+
+纯测试覆盖 dual-family DNS、去重和 fallback、path mode 去重、保守 NAT、overlay timestamp 稳定/变化、错误旧记录恢复、输入不可变，以及公钥投影缺省元数据和私钥隔离。app 保留签名、持久化、DNS families、endpoint lease 刷新和 overlay 重复发布等集成测试。IPsec 大项仍未完成：地址宣告/gossip endpoint 适配和其余 reconcile/live projection 留待后续。
+
+本轮定向测试及 make check（fmt、vet、全量 Go 测试、Linux 构建、Windows amd64 交叉构建）全部通过，git diff --check 通过。连同上一轮端口策略，当前未提交生产代码新增 204 行、删除 275 行，净减 71 行；其中本轮净减 30 行。未执行特权数据面 smoke，未提交、推送或部署。
+
+### IPsec 地址宣告下沉（2026-09-19）
+
+localIPsecAddressRecord 现在只读取配置、从本 Zone verified record 解码可选 gossip.EndpointRecord，再调用 internal/photonlinux.BuildIPsecAddressRecord。Linux 平台适配层组合 IPsec 专用手工地址、兼容 advertise 地址、手工 DNS、gossip endpoint 与 listen fallback；未新增配置 DTO 或状态 owner，也未把 gossip 适配塞进通用 IPsec 协议包。
+
+保留来源顺序、priority、ID、地址去重和 scope/source 映射；gossip endpoint 超过 TTL+grace 才丢弃，缺省 TTL 回退不变；LastObserved 不进入 IPsec 声明，所以续租不触发重复发布。splitAdvertiseAddress 的端口返回值原本无人使用，改为仅解析 host 的内部函数。app 删除 ipsecFamily/ipsecReachability 等纯地址 helper，现有发布、DNS 和 endpoint 集成测试继续覆盖真实配置读取。
+
+新增纯测试覆盖手工地址优先及跨来源去重、DNS 去重、精确过期边界、默认 TTL、过期/无效地址排除、scope/source 分类、续租内容稳定、输入不变，以及 IPv4/IPv6/wildcard/hostname listen fallback。既有地址 ID 生成规则保持不变，本轮不混入语义调整。IPsec 大项仍留 reconcile helper 和安全 live projection 待审核。
+
+验证：地址纯测试、app IPsec 发布/地址集成测试、make check（fmt、vet、全量测试、Linux 与 Windows amd64 构建）及 git diff --check 全部通过。累计未提交生产代码净减仍为 71 行，本切片生产代码总行数持平。未运行特权数据面 smoke，未提交、推送或部署。
