@@ -498,3 +498,17 @@ localIPsecAddressRecord 现在只读取配置、从本 Zone verified record 解�
 新增纯测试覆盖手工地址优先及跨来源去重、DNS 去重、精确过期边界、默认 TTL、过期/无效地址排除、scope/source 分类、续租内容稳定、输入不变，以及 IPv4/IPv6/wildcard/hostname listen fallback。既有地址 ID 生成规则保持不变，本轮不混入语义调整。IPsec 大项仍留 reconcile helper 和安全 live projection 待审核。
 
 验证：地址纯测试、app IPsec 发布/地址集成测试、make check（fmt、vet、全量测试、Linux 与 Windows amd64 构建）及 git diff --check 全部通过。累计未提交生产代码净减仍为 71 行，本切片生产代码总行数持平。未运行特权数据面 smoke，未提交、推送或部署。
+
+### IPsec 安全观测与旧逻辑删减（2026-09-19）
+
+发布策略已提交为 434ef9c。后续将 desired/action/SA 的字段白名单投影归 internal/photonlinux，app 仍拥有 summary、版本校验及发布；在线 SA 诊断复用同一投影。删除单用途 endpoint/撤销查询 helper，group 的 spec/backoff/retention 改为一次遍历，action 共用一次原始 group 查询，rollback/cleanup 合并 staged 清理并保留各自失败和时间戳语义。当前生产代码新增 116 行、删除 145 行，净减 29 行。测试保留 app 私钥隔离集成检查，并补充投影脱离输入引用、spec 身份优先、空地址和计数刷新验证。
+
+验证：make check 与 git diff --check 通过。新增测试按现有 FormatScopedTunnelAddress 的缺失地址占位符 `-` 校正预期，生产格式未改变。未运行特权数据面 smoke，本轮续作未提交。
+
+测试去重：删除 app 的独立 DNS 声明、endpoint 续租稳定、manual/endpoint 去重三个重叠用例；DNS 保留 profile/overlay 联动验证，续租与去重保留 Linux builder 测试，手工配置传递保留 app 检查并覆盖 advertise 重复地址。新增纯测试删去与发布集成测试重叠的 unchanged overlay 时间戳、profile 简单字段及端口初始默认值断言；保留 family 改变、错误旧记录、NAT 保守判断和轮换边界。此次测试净减 118 行，make check 与 git diff --check 通过，尚未提交。
+
+### 本机 DNS 重连策略（2026-09-19）
+
+LocalAnnounceDNSForceUpdates 归 pkg/transport/ipsec，直接接收域名、空闲阈值和现有 desired/instance/SA/resolver。删除 app 重复 resolver interface，单用途 SA 查找和空闲判断并入策略；保留 family/scope、入站计数、initiator 和解析错误保护。Daemon 仍负责 resolver 生命周期和错误日志。原两个测试迁到协议包并复用已有 fake，只新增部分 DNS 解析失败不重连的断言，未复制两套测试。
+
+本切片生产代码净减 4 行、测试净减 2 行。make check（含全量测试和 Linux/Windows 构建）及 git diff --check 通过；未运行特权数据面 smoke，续作尚未提交。

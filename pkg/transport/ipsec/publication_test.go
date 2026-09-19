@@ -2,7 +2,6 @@ package ipsec
 
 import (
 	"encoding/json"
-	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -20,9 +19,6 @@ func TestProfilePublicationFamiliesAndConservativeNAT(t *testing.T) {
 	if !slices.Equal(profile.AddressFamilies, []string{FamilyIPv6, FamilyIPv4}) || !slices.Equal(profile.PathModes, []string{PathModeFamilyRedundant, PathModeExhaustive}) {
 		t.Fatalf("families or path modes: %+v", profile)
 	}
-	if profile.Role != RoleBoth || profile.IKEIdentity != "node.example." || profile.TransportKeyFingerprint != "fingerprint" || !profile.Enabled {
-		t.Fatalf("profile identity/defaults: %+v", profile)
-	}
 	if profile.NAT.Hint != NATHintPublic || profile.NAT.InboundReachable != NATReachableUnknown {
 		t.Fatalf("public address must not prove inbound reachability: %+v", profile.NAT)
 	}
@@ -36,7 +32,7 @@ func TestProfilePublicationFamiliesAndConservativeNAT(t *testing.T) {
 	}
 }
 
-func TestOverlayPublicationPreservesTimestampAndInput(t *testing.T) {
+func TestOverlayPublicationFamilyChangesAndInvalidRecords(t *testing.T) {
 	start := time.Unix(5000, 0)
 	groups := []LinkGroupSpec{{ID: "main"}, {ID: "all", DefaultPathMode: PathModeExhaustive}, {ID: "invalid", Provider: "invalid"}}
 	families := []string{FamilyIPv4, FamilyIPv6}
@@ -55,10 +51,6 @@ func TestOverlayPublicationPreservesTimestampAndInput(t *testing.T) {
 	}
 	before, _ := json.Marshal(existing)
 	now := start.Add(time.Hour)
-	repeated := BuildOverlayIntentRecords(groups, families, existing, now)
-	if !reflect.DeepEqual(first, repeated) {
-		t.Fatalf("unchanged declarations republished: %+v", repeated)
-	}
 	changed := BuildOverlayIntentRecords(groups, []string{FamilyIPv4}, existing, now)
 	if changed[0].UpdatedAt != now.Unix() || changed[1].UpdatedAt != start.Unix() {
 		t.Fatalf("change timestamps: %+v", changed)

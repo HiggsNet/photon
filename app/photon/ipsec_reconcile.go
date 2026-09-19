@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
-	"strings"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
@@ -69,7 +69,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 	// process starts empty and reconstructs usable current/previous generations
 	// from the connection, SA and XFRM observations below.
 	instances, _ := d.linuxObservation.ipsecSnapshot()
-	forceUpdates, err := localAnnounceDNSForceUpdates(ctx, d.App.Config.IPsec, plan.Desired, instances, sas, dnsResolver)
+	forceUpdates, err := ipsec.LocalAnnounceDNSForceUpdates(ctx, d.App.Config.IPsec.AnnounceDNS, d.App.Config.IPsec.AnnounceDNSReconnectAfter, plan.Desired, instances, sas, dnsResolver)
 	if err != nil {
 		d.logWarn("ipsec", "local_announce_dns_check_failed", map[string]any{"error": err.Error()})
 	}
@@ -96,7 +96,15 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 	if xfrmObservations != nil {
 		xfrmLinks = xfrmObservations.Interfaces
 	}
-	groupSpecs := groupSpecMap(groups)
+	groupSpecs := make(map[string]ipsec.LinkGroupSpec, len(groups))
+	groupBackoff := make(map[string]ipsec.BackoffPolicy, len(groups))
+	groupRetention := make(map[string]int, len(groups))
+	for _, group := range groups {
+		normalized := group.Normalized()
+		groupSpecs[group.ID] = normalized
+		groupBackoff[group.ID] = group.Reconcile.Backoff
+		groupRetention[group.ID] = normalized.Reconcile.RotateRetentionSeconds
+	}
 	for _, spec := range plan.Desired {
 		id := ipsec.LinkInstanceID(spec)
 		if _, exists := instances[id]; exists {
@@ -122,11 +130,11 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		Connections:           connections,
 		SAs:                   sas,
 		Now:                   now,
-		Revoked:               revokedLinkPeers(verified.Network, instances, common.Gossip, now),
+		Revoked:               collectRevokedPeerZones(verified.Network, instances, common.Gossip, now),
 		Roles:                 plan.Roles,
 		GroupSpecs:            groupSpecs,
-		GroupBackoff:          groupBackoffMap(groups),
-		GroupRotateRetention:  groupRotateRetentionMap(groups),
+		GroupBackoff:          groupBackoff,
+		GroupRotateRetention:  groupRetention,
 		RotateActivationReady: d.ipsecRotateActivationReady(),
 		RotateCutoverReady:    d.ipsecRotateCutoverReady(),
 		PrepareStandby:        d.ipsecPrepareStandby,
@@ -152,9 +160,9 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		case ipsec.ReconcileActionCreate, ipsec.ReconcileActionUpdate, ipsec.ReconcileActionRepair, ipsec.ReconcileActionPrepareStandby,
 			ipsec.ReconcileActionTeardown, ipsec.ReconcileActionPrepareRotate, ipsec.ReconcileActionInitiateRotate, ipsec.ReconcileActionCommitRotate,
 			ipsec.ReconcileActionRollbackRotate, ipsec.ReconcileActionCleanupRotate:
-			netns := netnsForAction(action, groups)
-			if _, err := platformDriver.ApplyIPsecAction(ctx, action, netns); err != nil {
-				markIPsecActionFailed(result.Instances, action, groupBackoffPolicy(action, groups), now, err)
+			group := groupForAction(action, groups)
+			if _, err := platformDriver.ApplyIPsecAction(ctx, action, group.NetNS); err != nil {
+				markIPsecActionFailed(result.Instances, action, group.Reconcile.Backoff, now, err)
 				if saveErr := d.publishIPsecObservation(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err); saveErr != nil {
 					return fmt.Errorf("save failed ipsec reconcile state after apply error %q: %w", err.Error(), saveErr)
 				}
@@ -162,7 +170,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 			}
 			if shouldAssignIPsecDiagnosticAddresses(action) {
 				if err := platformDriver.AssignDiagnosticAddresses(ctx, *action.Spec, diagnosticPrefixes); err != nil {
-					markIPsecActionFailed(result.Instances, action, groupBackoffPolicy(action, groups), now, err)
+					markIPsecActionFailed(result.Instances, action, group.Reconcile.Backoff, now, err)
 					if saveErr := d.publishIPsecObservation(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err); saveErr != nil {
 						return fmt.Errorf("save failed ipsec reconcile state after diagnostic address error %q: %w", err.Error(), saveErr)
 					}
@@ -197,116 +205,6 @@ func (d *Daemon) ipsecReconcileDNSResolver() ipsec.DNSResolver {
 		d.ipsecDNSResolver = resolver
 	}
 	return resolver
-}
-
-type ipLookupResolver interface {
-	LookupIPAddr(context.Context, string) ([]net.IPAddr, error)
-}
-
-// localAnnounceDNSForceUpdates detects the asymmetric case where this node is
-// the initiator and its own advertised DNS address moved while StrongSwan still
-// reports the old SA as established. It uses the live SA endpoint and traffic
-// counters instead of persisting a second DNS snapshot.
-func localAnnounceDNSForceUpdates(ctx context.Context, config ipsecConfig, desired []ipsec.TransportLinkSpec, instances map[string]ipsec.LinkInstance, sas []ipsec.SAState, resolver ipLookupResolver) (map[string]string, error) {
-	if len(config.AnnounceDNS) == 0 || config.AnnounceDNSReconnectAfter <= 0 || resolver == nil {
-		return nil, nil
-	}
-	resolved := make(map[netip.Addr]struct{})
-	for _, host := range config.AnnounceDNS {
-		addresses, err := resolver.LookupIPAddr(ctx, host)
-		if err != nil {
-			// A partial answer set is unsafe: the current SA may correspond to
-			// the name that failed, so force no reconnect this round.
-			return nil, fmt.Errorf("resolve local announce DNS %q: %w", host, err)
-		}
-		for _, address := range addresses {
-			if address.IP == nil {
-				continue
-			}
-			if addr, ok := netip.AddrFromSlice(address.IP); ok {
-				resolved[addr.Unmap()] = struct{}{}
-			}
-		}
-	}
-	if len(resolved) == 0 {
-		return nil, nil
-	}
-
-	threshold := uint64(config.AnnounceDNSReconnectAfter / time.Second)
-	updates := make(map[string]string)
-	for _, spec := range desired {
-		if !ipsec.IsActiveInitiatorRole(spec.InitiatorRole) {
-			continue
-		}
-		id := ipsec.LinkInstanceID(spec)
-		instance, ok := instances[id]
-		if !ok {
-			continue
-		}
-		sa := localDNSInstanceSA(sas, instance)
-		if !sa.Established || !sa.InitiatorKnown || !sa.Initiator || !sa.InboundKnown || !saInboundIdleFor(sa, threshold) {
-			continue
-		}
-		localAddr, ok := endpointAddr(sa.LocalEndpoint)
-		if !ok {
-			continue
-		}
-		if _, present := resolved[localAddr]; present {
-			continue
-		}
-		compatible := false
-		for address := range resolved {
-			if address.Is4() == localAddr.Is4() && addressScope(address) == addressScope(localAddr) {
-				compatible = true
-				break
-			}
-		}
-		if compatible {
-			updates[id] = "local announce DNS changed after inbound idle"
-		}
-	}
-	if len(updates) == 0 {
-		return nil, nil
-	}
-	return updates, nil
-}
-
-func localDNSInstanceSA(sas []ipsec.SAState, instance ipsec.LinkInstance) ipsec.SAState {
-	for _, sa := range sas {
-		if sa.Name == instance.IKEName || sa.ChildSA == instance.ChildSAName || (instance.XFRMIfID != 0 && sa.XFRMIfID == instance.XFRMIfID) {
-			return sa
-		}
-	}
-	return ipsec.SAState{}
-}
-
-func saInboundIdleFor(sa ipsec.SAState, threshold uint64) bool {
-	if threshold == 0 {
-		return false
-	}
-	if sa.InboundPackets == 0 {
-		return max(sa.ChildAgeSeconds, sa.IKEAgeSeconds) >= threshold
-	}
-	return sa.InboundIdleSecs >= threshold
-}
-
-func endpointAddr(endpoint string) (netip.Addr, bool) {
-	host, _, err := net.SplitHostPort(endpoint)
-	if err != nil {
-		host = strings.Trim(endpoint, "[]")
-	}
-	addr, err := netip.ParseAddr(host)
-	if err != nil || addr.IsUnspecified() || addr.IsLoopback() || addr.IsLinkLocalUnicast() {
-		return netip.Addr{}, false
-	}
-	return addr.Unmap(), true
-}
-
-func addressScope(addr netip.Addr) string {
-	if addr.IsPrivate() || netip.MustParsePrefix("100.64.0.0/10").Contains(addr) {
-		return "private"
-	}
-	return "public"
 }
 
 func shouldAssignIPsecDiagnosticAddresses(action ipsec.ReconcileAction) bool {
@@ -548,37 +446,9 @@ func summarizeIPsecReconcile(sourceRev uint64, unix int64, desired []ipsec.Trans
 		DesiredLinks:   len(desired),
 		LastFailure:    lastError,
 	}
-	for _, spec := range desired {
-		state.Desired = append(state.Desired, photonstate.DesiredLinkObservation{
-			InstanceID:      ipsec.LinkInstanceID(spec),
-			GroupID:         spec.OverlayID,
-			PeerZone:        spec.PeerZone,
-			LinkID:          spec.LinkID,
-			PathKey:         spec.PathKey,
-			TransportID:     spec.TransportID,
-			DesiredSpecHash: ipsec.TransportLinkSpecHash(spec),
-			InterfaceName:   spec.InterfaceName,
-			XFRMIfID:        spec.XFRMIfID,
-			Endpoint:        summarizeContactEndpoint(spec.ContactPoints),
-			LocalTunnelAddr: ipsec.FormatScopedTunnelAddress(spec.LocalTunnelAddr, spec.InterfaceName, spec.NetNS),
-			PeerTunnelAddr:  ipsec.FormatScopedTunnelAddress(spec.PeerTunnelAddr, spec.InterfaceName, spec.NetNS),
-		})
-	}
-	state.ActualSAs = projectIPsecSAs(sas)
-	for _, action := range actions {
-		item := photonstate.LinkActionObservation{Action: action.Action, Reason: action.Reason, SAUniqueID: action.SAUniqueID}
-		if action.Instance != nil {
-			item.InstanceID = action.Instance.ID
-			item.GroupID = action.Instance.GroupID
-			item.PeerZone = action.Instance.PeerZone
-		}
-		if action.Spec != nil {
-			item.InstanceID = ipsec.LinkInstanceID(*action.Spec)
-			item.GroupID = action.Spec.OverlayID
-			item.PeerZone = action.Spec.PeerZone
-		}
-		state.Actions = append(state.Actions, item)
-	}
+	state.Desired = photonlinux.ProjectIPsecDesired(desired)
+	state.ActualSAs = photonlinux.ProjectIPsecSAs(sas)
+	state.Actions = photonlinux.ProjectIPsecActions(actions)
 	for _, skip := range skips {
 		state.Skipped = append(state.Skipped, photonstate.LinkSkipObservation{
 			GroupID: skip.GroupID,
@@ -588,54 +458,6 @@ func summarizeIPsecReconcile(sourceRev uint64, unix int64, desired []ipsec.Trans
 		})
 	}
 	return state
-}
-
-func projectIPsecSAs(sas []ipsec.SAState) []photonstate.LinkSAObservation {
-	out := make([]photonstate.LinkSAObservation, 0, len(sas))
-	for _, sa := range sas {
-		out = append(out, photonstate.LinkSAObservation{
-			Name:            sa.Name,
-			UniqueID:        sa.UniqueID,
-			Initiator:       sa.Initiator,
-			InitiatorKnown:  sa.InitiatorKnown,
-			IKEAgeSeconds:   sa.IKEAgeSeconds,
-			ChildAgeSeconds: sa.ChildAgeSeconds,
-			InboundBytes:    sa.InboundBytes,
-			InboundPackets:  sa.InboundPackets,
-			InboundIdleSecs: sa.InboundIdleSecs,
-			InboundKnown:    sa.InboundKnown,
-			Peer:            sa.Peer,
-			ChildSA:         sa.ChildSA,
-			IKEState:        sa.IKEState,
-			ChildState:      sa.ChildState,
-			XFRMIfID:        sa.XFRMIfID,
-			ReqID:           sa.ReqID,
-			LocalIdentity:   sa.LocalIdentity,
-			RemoteIdentity:  sa.RemoteIdentity,
-			LocalEndpoint:   sa.LocalEndpoint,
-			RemoteEndpoint:  sa.RemoteEndpoint,
-			Endpoint:        sa.Endpoint,
-			Established:     sa.Established,
-		})
-	}
-	return out
-}
-
-func summarizeContactEndpoint(points []ipsec.ContactPoint) string {
-	if len(points) == 0 {
-		return ""
-	}
-	if points[0].Address != "" {
-		return points[0].Address
-	}
-	return points[0].Host
-}
-
-func revokedLinkPeers(network *zone.NetworkState, instances map[string]ipsec.LinkInstance, checkpoint *corestate.GossipCheckpoint, now time.Time) map[zone.ZonePath]bool {
-	// Phase 6.4.5: use the comprehensive revoked peer zone collector that
-	// covers both LinkInstances and gossip checkpoint peers, so that revocation is detected
-	// even for peers that don't have an active link instance yet.
-	return collectRevokedPeerZones(network, instances, checkpoint, now)
 }
 
 func injectIPsecKeyMaterial(verified *corestate.VerifiedState, localKey *photonstate.IPsecTransportKeyState, desired []ipsec.TransportLinkSpec) []ipsec.TransportLinkSpec {
@@ -667,7 +489,7 @@ func injectIPsecKeyMaterial(verified *corestate.VerifiedState, localKey *photons
 	return out
 }
 
-func netnsForAction(action ipsec.ReconcileAction, groups []ipsec.LinkGroupSpec) ipsec.NetNSSpec {
+func groupForAction(action ipsec.ReconcileAction, groups []ipsec.LinkGroupSpec) ipsec.LinkGroupSpec {
 	groupID := ""
 	if action.Spec != nil {
 		groupID = action.Spec.OverlayID
@@ -676,10 +498,10 @@ func netnsForAction(action ipsec.ReconcileAction, groups []ipsec.LinkGroupSpec) 
 	}
 	for _, group := range groups {
 		if group.ID == groupID {
-			return group.NetNS
+			return group
 		}
 	}
-	return ipsec.NetNSSpec{}
+	return ipsec.LinkGroupSpec{}
 }
 
 func markIPsecActionFailed(instances map[string]ipsec.LinkInstance, action ipsec.ReconcileAction, policy ipsec.BackoffPolicy, now time.Time, err error) {
@@ -749,21 +571,11 @@ func markIPsecActionSucceeded(instances map[string]ipsec.LinkInstance, action ip
 		inst.ActualState = ipsec.LinkStateUp
 		inst.RotatePhase = ipsec.RotatePhaseIdle
 		inst.LastTransition = now.Unix()
-	case ipsec.ReconcileActionRollbackRotate:
-		inst.ActualState = ipsec.LinkStateConnecting
-		inst.StagedGeneration = 0
-		inst.StagedIKEName = ""
-		inst.StagedChildSAName = ""
-		inst.StagedInterfaceName = ""
-		inst.StagedXFRMIfID = 0
-		inst.StagedLocalTunnelAddr = netip.Addr{}
-		inst.StagedPeerTunnelAddr = netip.Addr{}
-		inst.RotatePhase = ipsec.RotatePhaseIdle
-		inst.RotateDeadline = 0
-		inst.StagedAttemptCount = 0
-		inst.StagedNextAttempt = 0
-		inst.LastTransition = now.Unix()
-	case ipsec.ReconcileActionCleanupRotate:
+	case ipsec.ReconcileActionRollbackRotate, ipsec.ReconcileActionCleanupRotate:
+		if action.Action == ipsec.ReconcileActionRollbackRotate {
+			inst.ActualState = ipsec.LinkStateConnecting
+			inst.LastTransition = now.Unix()
+		}
 		inst.StagedGeneration = 0
 		inst.StagedIKEName = ""
 		inst.StagedChildSAName = ""
@@ -789,14 +601,6 @@ func actionInstanceID(action ipsec.ReconcileAction) string {
 	return ""
 }
 
-func groupSpecMap(groups []ipsec.LinkGroupSpec) map[string]ipsec.LinkGroupSpec {
-	out := make(map[string]ipsec.LinkGroupSpec, len(groups))
-	for _, group := range groups {
-		out[group.ID] = group.Normalized()
-	}
-	return out
-}
-
 func ipsecPortGenerations(verified *corestate.VerifiedState, node zone.ZonePath, now time.Time) []uint64 {
 	if verified == nil || verified.Network == nil || !node.Valid() {
 		return nil
@@ -811,35 +615,4 @@ func ipsecPortGenerations(verified *corestate.VerifiedState, node zone.ZonePath,
 		generations = append(generations, port.Generation)
 	}
 	return generations
-}
-
-func groupBackoffMap(groups []ipsec.LinkGroupSpec) map[string]ipsec.BackoffPolicy {
-	out := make(map[string]ipsec.BackoffPolicy, len(groups))
-	for _, group := range groups {
-		out[group.ID] = group.Reconcile.Backoff
-	}
-	return out
-}
-
-func groupRotateRetentionMap(groups []ipsec.LinkGroupSpec) map[string]int {
-	out := make(map[string]int, len(groups))
-	for _, group := range groups {
-		out[group.ID] = group.Normalized().Reconcile.RotateRetentionSeconds
-	}
-	return out
-}
-
-func groupBackoffPolicy(action ipsec.ReconcileAction, groups []ipsec.LinkGroupSpec) ipsec.BackoffPolicy {
-	groupID := ""
-	if action.Spec != nil {
-		groupID = action.Spec.OverlayID
-	} else if action.Instance != nil {
-		groupID = action.Instance.GroupID
-	}
-	for _, group := range groups {
-		if group.ID == groupID {
-			return group.Reconcile.Backoff
-		}
-	}
-	return ipsec.BackoffPolicy{}
 }

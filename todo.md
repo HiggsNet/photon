@@ -143,6 +143,8 @@ Daemon
     - [x] OverlayIntent 构造及未变化时间戳复用归 pkg/transport/ipsec；app 只传本 zone 已有记录并组装发布项，删除独立 lookup、内容比较与 path-key helper。
     - [x] 持久化 transport key 到公开协议记录的投影归 internal/photonlinux；去掉 base64 单用途包装与 publish runtime 转发比较，私钥生成/落盘/公共发布顺序不变。
     - [x] IPsec 地址声明的优先级、去重、gossip TTL/grace/source 转换和 listen fallback 归 internal/photonlinux.BuildIPsecAddressRecord；app 保留 verified endpoint 读取，不把 Gossip record 适配引入通用 IPsec 包。删除无消费者的端口解析返回值。
+    - [x] desired/action/SA 安全投影归 Linux owner，reconcile 和在线诊断复用；Daemon 保留 summary、revision guard 和发布。合并 group 配置三次遍历、action 两次 group 查询及 rollback/cleanup 重复清理，删除撤销查询转发。
+    - [x] 本机 DNS 地址漂移/入站空闲重连策略归 pkg/transport/ipsec，复用 DNSResolver；app 保留 resolver 生命周期、错误日志和 reconcile 顺序。原两项测试随迁移，删除重复 resolver fake，补充部分解析失败不重连检查。
   - [x] health：probe target/rotate role 组合属于 app health reconcile，raw ICMP、`setns` 和 exec fallback 属于 `internal/photonlinux/healthprobe`；当前边界无需为目录对称继续搬迁。
 - [x] 删除本轮审计确认的测试专用生产入口和单用途测试接缝，不为此新增通用 interface/manager。
   - [x] 删除无生产调用方的 `Daemon.EnableEventLoopSync` 与 `Daemon.processPacketEvent`；测试直接使用 GossipDriver scheduler 与正式 Daemon gossip event 入口。

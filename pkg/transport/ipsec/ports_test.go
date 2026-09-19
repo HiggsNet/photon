@@ -236,9 +236,6 @@ func TestPlanPortPublicationConfigurationChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Current.Generation != 1 || first.Current.IKE.Local != DefaultIKEPort || first.Current.NATT.Local != DefaultNATTPort {
-		t.Fatalf("initial record: %+v", first)
-	}
 	changedRange := &PortRange{From: 31000, To: 31099}
 	changed, err := PlanPortPublication(PortModeRange, changedRange, time.Hour, time.Hour, first, now.Add(time.Minute))
 	if err != nil {

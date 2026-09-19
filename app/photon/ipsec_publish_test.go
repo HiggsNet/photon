@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/netip"
 	"path/filepath"
@@ -489,6 +488,7 @@ func TestPublishIPsecRecordsSkipsWithoutLinkGroups(t *testing.T) {
 func TestLocalIPsecAddressRecordAnnounceAddrs(t *testing.T) {
 	config := defaultAppConfig()
 	config.IPsec.AnnounceAddrs = []string{"203.0.113.5", "2001:db8::5"}
+	config.AdvertiseAddrs = []string{"203.0.113.5:33434"}
 	config.ListenAddr = "0.0.0.0:4500"
 
 	record := localIPsecAddressRecord(config, nil, time.Now())
@@ -505,27 +505,6 @@ func TestLocalIPsecAddressRecordAnnounceAddrs(t *testing.T) {
 	}
 	if record.Addresses[1].Address != "2001:db8::5" {
 		t.Fatalf("second address = %q, want 2001:db8::5", record.Addresses[1].Address)
-	}
-}
-
-func TestLocalIPsecAddressRecordAnnounceDNS(t *testing.T) {
-	config := defaultAppConfig()
-	config.IPsec.AnnounceDNS = []string{"vpn.example.com"}
-	config.ListenAddr = "0.0.0.0:4500"
-
-	record := localIPsecAddressRecord(config, nil, time.Now())
-	if len(record.Addresses) != 1 {
-		t.Fatalf("got %d addresses, want 1: %+v", len(record.Addresses), record.Addresses)
-	}
-	ad := record.Addresses[0]
-	if ad.Source != ipsec.SourceManualDNS {
-		t.Fatalf("source = %q, want manual-dns", ad.Source)
-	}
-	if ad.Host != "vpn.example.com" {
-		t.Fatalf("host = %q, want vpn.example.com", ad.Host)
-	}
-	if len(ad.Families) != 2 || ad.Families[0] != ipsec.FamilyIPv4 || ad.Families[1] != ipsec.FamilyIPv6 {
-		t.Fatalf("families = %v, want [ipv4 ipv6]", ad.Families)
 	}
 }
 
@@ -631,92 +610,6 @@ func TestLocalIPsecAddressRecordFollowsGossipEndpoints(t *testing.T) {
 		if ad.TTLSeconds != 0 || ad.LastObserved != 0 {
 			t.Fatalf("ipsec address %s carried endpoint lease fields: ttl=%d last_observed=%d", ad.ID, ad.TTLSeconds, ad.LastObserved)
 		}
-	}
-}
-
-func TestLocalIPsecAddressRecordStableWhenGossipRefreshes(t *testing.T) {
-	verified, _, _, _ := buildTestDaemonOwners(t)
-	verified.ManagedZone = "node-b.catofes."
-	now := time.Unix(5000, 0)
-
-	er := gossip.EndpointRecord{
-		Endpoints: []gossip.EndpointEntry{
-			{Address: "203.0.113.10", Port: 33434, Source: "advertise", Scope: "advertise", Priority: 100, LastObserved: now.Unix()},
-			{Address: "198.51.100.20", Port: 33434, Source: "reflector", Scope: "global", Priority: 50, LastObserved: now.Unix()},
-		},
-		TTL:       int64(time.Hour / time.Second),
-		UpdatedAt: now.Unix(),
-	}
-	data, _ := json.Marshal(er)
-	verified.Network.Zones[verified.ManagedZone].Records[gossip.EndpointRecordKeyUDP] = &zone.Record{
-		Zone:      verified.ManagedZone,
-		Key:       gossip.EndpointRecordKeyUDP,
-		Type:      "sync.endpoint",
-		Value:     data,
-		Timestamp: now.Unix(),
-	}
-
-	config := defaultAppConfig()
-	config.ListenAddr = "0.0.0.0:33434"
-
-	record1 := localIPsecAddressRecord(config, verified, now)
-	first, _ := json.Marshal(record1)
-
-	// Simulate gossip endpoint record being refreshed 5 minutes later with the
-	// same addresses but newer LastObserved/UpdatedAt timestamps.
-	later := now.Add(5 * time.Minute)
-	er.UpdatedAt = later.Unix()
-	for i := range er.Endpoints {
-		er.Endpoints[i].LastObserved = later.Unix()
-	}
-	data, _ = json.Marshal(er)
-	verified.Network.Zones[verified.ManagedZone].Records[gossip.EndpointRecordKeyUDP].Value = data
-	verified.Network.Zones[verified.ManagedZone].Records[gossip.EndpointRecordKeyUDP].Timestamp = later.Unix()
-
-	record2 := localIPsecAddressRecord(config, verified, later)
-	second, _ := json.Marshal(record2)
-
-	if !bytes.Equal(first, second) {
-		t.Fatalf("ipsec address record changed after gossip refresh:\nfirst:  %s\nsecond: %s", first, second)
-	}
-}
-
-func TestLocalIPsecAddressRecordDedupsManualAndEndpoint(t *testing.T) {
-	verified, _, _, _ := buildTestDaemonOwners(t)
-	verified.ManagedZone = "node-b.catofes."
-	now := time.Unix(5000, 0)
-
-	config := defaultAppConfig()
-	config.AdvertiseAddrs = []string{"203.0.113.10:33434"}
-	config.IPsec.AnnounceAddrs = []string{"203.0.113.10"}
-	config.ListenAddr = "0.0.0.0:33434"
-
-	er := gossip.EndpointRecord{
-		Endpoints: []gossip.EndpointEntry{
-			{Address: "203.0.113.10", Port: 33434, Source: "advertise", Scope: "advertise", Priority: 100, LastObserved: now.Unix()},
-			{Address: "198.51.100.20", Port: 33434, Source: "reflector", Scope: "global", Priority: 50, LastObserved: now.Unix()},
-		},
-		TTL:       int64(time.Hour / time.Second),
-		UpdatedAt: now.Unix(),
-	}
-	data, _ := json.Marshal(er)
-	verified.Network.Zones[verified.ManagedZone].Records[gossip.EndpointRecordKeyUDP] = &zone.Record{
-		Zone:      verified.ManagedZone,
-		Key:       gossip.EndpointRecordKeyUDP,
-		Type:      "sync.endpoint",
-		Value:     data,
-		Timestamp: now.Unix(),
-	}
-
-	record := localIPsecAddressRecord(config, verified, now)
-	if len(record.Addresses) != 2 {
-		t.Fatalf("got %d addresses, want 2: %+v", len(record.Addresses), record.Addresses)
-	}
-	if record.Addresses[0].Address != "203.0.113.10" || record.Addresses[0].Source != ipsec.SourceManualAddress {
-		t.Fatalf("first address unexpected: %+v", record.Addresses[0])
-	}
-	if record.Addresses[1].Address != "198.51.100.20" || record.Addresses[1].Source != ipsec.SourceReflector {
-		t.Fatalf("second address unexpected: %+v", record.Addresses[1])
 	}
 }
 

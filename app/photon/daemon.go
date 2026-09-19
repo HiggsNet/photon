@@ -1093,7 +1093,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			if err != nil {
 				view.LiveSAError = err.Error()
 			} else {
-				view.LiveSAs = projectIPsecSAs(sas)
+				view.LiveSAs = photonlinux.ProjectIPsecSAs(sas)
 			}
 		}
 		writeCanonicalView(conn, view)
