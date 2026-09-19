@@ -145,6 +145,14 @@ Daemon
     - [x] IPsec 地址声明的优先级、去重、gossip TTL/grace/source 转换和 listen fallback 归 internal/photonlinux.BuildIPsecAddressRecord；app 保留 verified endpoint 读取，不把 Gossip record 适配引入通用 IPsec 包。删除无消费者的端口解析返回值。
     - [x] desired/action/SA 安全投影归 Linux owner，reconcile 和在线诊断复用；Daemon 保留 summary、revision guard 和发布。合并 group 配置三次遍历、action 两次 group 查询及 rollback/cleanup 重复清理，删除撤销查询转发。
     - [x] 本机 DNS 地址漂移/入站空闲重连策略归 pkg/transport/ipsec，复用 DNSResolver；app 保留 resolver 生命周期、错误日志和 reconcile 顺序。原两项测试随迁移，删除重复 resolver fake，补充部分解析失败不重连检查。
+    - [x] action 执行结果的失败退避、standby/takeover 和轮换状态更新归 ipsec.RecordActionResult；成功/失败共用实例选择，Daemon 保留 Driver 执行、错误处理与观测发布顺序。原状态机测试随实现迁移。
+    - [x] gossip AddrQuality 到 IPsec contact 的按地址/端口代数匹配归 Linux 适配层；统一 PortBinding.DialPort，删除 app 重复端口 helper。原单点匹配测试替换为实际 quality map 验证，不重复保留。
+    - [x] 删除 publishIPsecObservation 恒 nil 的 error 返回和四处不可达错误包装，合并 action/诊断地址失败处理；错误快照直接使用已 detached 的 ipsecSnapshot，去掉重复 clone，保留 revision guard。
+    - [x] 密钥填充归 Linux 适配层，仅接收 NetworkState/持久化 transport key/desired；本地私钥逐 spec 复制，peer 公钥使用解码新缓冲区，删除二次复制。单用途 missing-XFRM 状态标记并回唯一调用处。
+    - [x] 发布规划日志改为 publish_planned，删除仅为日志服务的完整密钥比较与重复记录遍历；zone 公钥提取并回唯一调用处，实际私钥持久化/公共提交语义不变。
+    - [x] 合并 IPsec 状态机五处 staged 资源/重试字段清理及重复 cutover 等待分支；phase、失败退避和 transition time 仍由原场景决定，增强原回滚测试，无新增测试用例。
+    - [x] overlay tunnel_address YAML 类型、地址族/地址池校验与端口宽限期检查归 internal/photonlinux；删除 Normalized 后重复的一小时默认值，迁移参数单测，保留 app YAML/兼容/跨配置集成测试。
+    - [ ] 继续审计 IPsec 顶层配置和 overlay 组合解析；共享 YAML 字符串列表与 duration 解析仍由 app 使用，避免为下沉复制另一套解析规则。
   - [x] health：probe target/rotate role 组合属于 app health reconcile，raw ICMP、`setns` 和 exec fallback 属于 `internal/photonlinux/healthprobe`；当前边界无需为目录对称继续搬迁。
 - [x] 删除本轮审计确认的测试专用生产入口和单用途测试接缝，不为此新增通用 interface/manager。
   - [x] 删除无生产调用方的 `Daemon.EnableEventLoopSync` 与 `Daemon.processPacketEvent`；测试直接使用 GossipDriver scheduler 与正式 Daemon gossip event 入口。
@@ -256,8 +264,8 @@ Daemon
 
 ## 下一步执行顺序
 
-1. 先删除 A5 已确认的 test-only production helper，并收缩 sync transport 测试接缝；这是最小、纯减法切片。
-2. 依次按 firewall、routing/BIRD、IPsec 的窄边界下沉配置与纯策略；每批直接删除旧 helper，不搬走 Daemon 安全顺序。
+1. A5 的 test-only production helper 与 sync transport 测试接缝已清理；接下来审计 IPsec 顶层配置和 overlay 组合解析，避免复制共享 YAML 解析规则。
+2. 完成剩余 IPsec 配置边界后，复核 app reconcile 中保留的 owner 读取、Driver I/O、revision guard 与 Observation 发布；据真实调用链收口 A5，不为减少文件数搬迁。
 3. 冻结 legacy schema 直接升级截止版本；未到期前保持单向 migration，达到截止时整组删除兼容模型和 fixtures。
 4. CLI 壳只随上述 owner 迁移逐步进入 `internal/photoncli`，不单独进行目录搬家。
 5. Windows 先完成 B1 v1 契约，再实现 B2 composition 与真实 UDP gossip vertical slice；之后依次推进 IKE/ESP、Babel/SADR、Wintun、SCM/named-pipe 和完整验收。

@@ -65,6 +65,9 @@ func (d *Daemon) ipsecProtocolPlan(verified *corestate.VerifiedState, runtime *p
 		return plan, err
 	}
 	for _, item := range records {
+		if port, ok := item.value.(*ipsec.PortRecord); ok {
+			d.logDebug("ipsec", "port_publish_decision", ipsecPortPublishLogFields(config, existingIPsecPortRecord(verified), port, now))
+		}
 		value, err := json.Marshal(item.value)
 		if err != nil {
 			return localIPsecPublishPlan{}, err
@@ -83,36 +86,12 @@ func (d *Daemon) ipsecProtocolPlan(verified *corestate.VerifiedState, runtime *p
 			"updated":      true,
 		})
 	}
-	for _, item := range records {
-		if item.key != ipsec.RecordKeyPorts {
-			continue
-		}
-		var portRecord *ipsec.PortRecord
-		switch v := item.value.(type) {
-		case ipsec.PortRecord:
-			portRecord = &v
-		case *ipsec.PortRecord:
-			portRecord = v
-		default:
-			continue
-		}
-		d.logDebug("ipsec", "port_publish_decision", ipsecPortPublishLogFields(config, existingIPsecPortRecord(verified), portRecord, now))
-	}
-	if len(plan.Intents) > 0 || !ipsecTransportKeyStateEqual(runtime.IPsecTransportKey, plan.TransportKey) {
-		d.logDebug("ipsec", "publish_saved", map[string]any{"managed_zone": verified.ManagedZone, "records": len(records)})
-		return plan, nil
-	}
-	d.logDebug("ipsec", "publish_unchanged", map[string]any{"managed_zone": verified.ManagedZone, "records": len(records)})
+	d.logDebug("ipsec", "publish_planned", map[string]any{
+		"managed_zone":   verified.ManagedZone,
+		"records":        len(records),
+		"record_updates": len(plan.Intents),
+	})
 	return plan, nil
-}
-
-func ipsecTransportKeyStateEqual(a, b *photonstate.IPsecTransportKeyState) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	return a.Kind == b.Kind && a.Algorithm == b.Algorithm && bytes.Equal(a.PublicKey, b.PublicKey) &&
-		bytes.Equal(a.PrivateKey, b.PrivateKey) && a.Fingerprint == b.Fingerprint && a.NotBefore == b.NotBefore &&
-		a.NotAfter == b.NotAfter && a.UpdatedAt == b.UpdatedAt
 }
 
 func ipsecPortPublishLogFields(config *appConfig, previous *ipsec.PortRecord, record *ipsec.PortRecord, now time.Time) map[string]any {
@@ -174,7 +153,11 @@ func ensureIPsecTransportKey(linuxState *photonlinux.LinuxState, identityPrivate
 		record := photonlinux.PublicTransportKeyRecord(key)
 		return key, record, nil
 	}
-	generated, record, err := ipsec.GenerateTransportKeyRecord(ipsec.AlgorithmEd25519, now, 0, zonePublicKey(identityPrivateKey)...)
+	var forbiddenPublicKeys [][]byte
+	if len(identityPrivateKey) == ed25519.PrivateKeySize {
+		forbiddenPublicKeys = [][]byte{identityPrivateKey.Public().(ed25519.PublicKey)}
+	}
+	generated, record, err := ipsec.GenerateTransportKeyRecord(ipsec.AlgorithmEd25519, now, 0, forbiddenPublicKeys...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -188,14 +171,6 @@ func ensureIPsecTransportKey(linuxState *photonlinux.LinuxState, identityPrivate
 		NotAfter:    record.NotAfter,
 		UpdatedAt:   record.UpdatedAt,
 	}, record, nil
-}
-
-func zonePublicKey(identityPrivateKey ed25519.PrivateKey) [][]byte {
-	if len(identityPrivateKey) != ed25519.PrivateKeySize {
-		return nil
-	}
-	pub := identityPrivateKey.Public().(ed25519.PublicKey)
-	return [][]byte{append([]byte(nil), pub...)}
 }
 
 func localIPsecRecords(config *appConfig, verified *corestate.VerifiedState, key *ipsec.TransportKeyRecord, now time.Time) ([]localIPsecRecord, error) {

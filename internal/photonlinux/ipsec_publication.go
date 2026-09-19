@@ -3,6 +3,8 @@ package photonlinux
 import (
 	"encoding/base64"
 
+	"github.com/HiggsNet/photon/pkg/core/zone"
+
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
@@ -32,4 +34,31 @@ func PublicTransportKeyRecord(key *photonstate.IPsecTransportKeyState) *ipsec.Tr
 	}
 	record.PublicKey = base64.StdEncoding.EncodeToString(key.PublicKey)
 	return record
+}
+
+// InjectIPsecKeyMaterial attaches copied local key material and decoded peer public keys.
+func InjectIPsecKeyMaterial(network *zone.NetworkState, localKey *photonstate.IPsecTransportKeyState, desired []ipsec.TransportLinkSpec) []ipsec.TransportLinkSpec {
+	out := make([]ipsec.TransportLinkSpec, len(desired))
+	for i, spec := range desired {
+		if localKey != nil && len(localKey.PrivateKey) > 0 {
+			spec.LocalPrivateKey = append([]byte(nil), localKey.PrivateKey...)
+			spec.LocalPrivateKeyAlgorithm = localKey.Algorithm
+		}
+		if network != nil {
+			peerZone := network.Zones[spec.PeerZone]
+			if peerZone == nil {
+				out[i] = spec
+				continue
+			}
+			if record := peerZone.Records[ipsec.RecordKeyTransportKey]; record != nil {
+				if keyRecord, err := ipsec.ParseTransportKeyRecord(record); err == nil {
+					if pub, err := ipsec.DecodeTransportPublicKey(*keyRecord); err == nil {
+						spec.PeerPublicKey = pub
+					}
+				}
+			}
+		}
+		out[i] = spec
+	}
+	return out
 }

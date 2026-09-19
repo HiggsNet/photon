@@ -160,22 +160,30 @@ func TestDefaultIPsecPortPreviousGraceIsLongerThanRotateRetention(t *testing.T) 
 	}
 }
 
-func TestParseConfigYAMLRejectsPortGraceShorterThanRotateRetention(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-ipsec:
-  port_previous_grace: 10m
-overlays:
-  - name: ipsec-main
-    reconcile:
-      rotate_retention: 1h
-`
-	err := parseConfigYAML(input, config)
-	if err == nil {
-		t.Fatalf("parseConfigYAML unexpectedly succeeded")
-	}
-	if !strings.Contains(err.Error(), "ipsec.port_previous_grace") {
-		t.Fatalf("error = %v", err)
+func TestParseConfigYAMLPortGraceCoversRotateRetention(t *testing.T) {
+	for _, tc := range []struct {
+		name, grace, retention string
+		wantError              bool
+	}{
+		{"explicit retention too long", "10m", "1h", true},
+		{"default retention too long", "10m", "", true},
+		{"equal to default retention", "1h", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config := defaultAppConfig()
+			input := "ipsec:\n  port_previous_grace: " + tc.grace + "\noverlays:\n  - name: ipsec-main\n"
+			if tc.retention != "" {
+				input += "    reconcile:\n      rotate_retention: " + tc.retention + "\n"
+			}
+			err := parseConfigYAML(input, config)
+			if tc.wantError {
+				if err == nil || !strings.Contains(err.Error(), "ipsec.port_previous_grace") {
+					t.Fatalf("parseConfigYAML: %v, want port grace error", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

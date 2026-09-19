@@ -707,8 +707,8 @@ func ResolveContactPoints(ctx context.Context, addresses *AddressRecord, ports *
 				Priority:     address.Priority,
 				Generation:   port.Generation,
 				Current:      port.Current,
-				IKEPort:      dialPort(port.IKE),
-				NATTPort:     dialPort(port.NATT),
+				IKEPort:      port.IKE.DialPort(),
+				NATTPort:     port.NATT.DialPort(),
 				ObservedPort: port.Observed,
 			})
 		}
@@ -852,7 +852,8 @@ func portAdvertisement(selection PortSelection, current bool) PortAdvertisement 
 	return out
 }
 
-func dialPort(binding PortBinding) uint16 {
+// DialPort prefers the observed endpoint port over its advertised value.
+func (binding PortBinding) DialPort() uint16 {
 	if binding.Observed != 0 {
 		return binding.Observed
 	}

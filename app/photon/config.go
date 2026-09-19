@@ -25,11 +25,10 @@ import (
 )
 
 const (
-	defaultConfigPath              = "/etc/photon/config.yaml"
-	defaultDataDir                 = "/etc/photon"
-	defaultStateFile               = "photon.db"
-	defaultIPsecPortPreviousGrace  = 2 * time.Hour
-	defaultIPsecRotateRetentionSec = 3600
+	defaultConfigPath             = "/etc/photon/config.yaml"
+	defaultDataDir                = "/etc/photon"
+	defaultStateFile              = "photon.db"
+	defaultIPsecPortPreviousGrace = 2 * time.Hour
 )
 
 type appConfig struct {
@@ -210,27 +209,21 @@ type ipamConfigYAML struct {
 	Announce                configStringList `yaml:"announce"`
 }
 
-type tunnelAddressConfigYAML struct {
-	Mode   string `yaml:"mode"`
-	Family string `yaml:"family"`
-	Pool   string `yaml:"pool"`
-}
-
 type overlayGroupConfigYAML struct {
-	ID                 string                  `yaml:"id"`
-	Name               string                  `yaml:"name"`
-	Provider           string                  `yaml:"provider"`
-	NetNS              netnsRefYAML            `yaml:"netns"`
-	DefaultPathMode    string                  `yaml:"default_path_mode"`
-	Direction          string                  `yaml:"direction"`
-	AddressSourceOrder configStringList        `yaml:"address_source_order"`
-	MaxPeers           *int                    `yaml:"max_peers"`
-	MaxLinksPerPeer    *int                    `yaml:"max_links_per_peer"`
-	TunnelAddressPool  string                  `yaml:"tunnel_address_pool"`
-	TunnelAddress      tunnelAddressConfigYAML `yaml:"tunnel_address"`
-	Reconcile          overlayReconcileYAML    `yaml:"reconcile"`
-	Connect            configStringList        `yaml:"connect"`
-	Deny               configStringList        `yaml:"deny"`
+	ID                 string                              `yaml:"id"`
+	Name               string                              `yaml:"name"`
+	Provider           string                              `yaml:"provider"`
+	NetNS              netnsRefYAML                        `yaml:"netns"`
+	DefaultPathMode    string                              `yaml:"default_path_mode"`
+	Direction          string                              `yaml:"direction"`
+	AddressSourceOrder configStringList                    `yaml:"address_source_order"`
+	MaxPeers           *int                                `yaml:"max_peers"`
+	MaxLinksPerPeer    *int                                `yaml:"max_links_per_peer"`
+	TunnelAddressPool  string                              `yaml:"tunnel_address_pool"`
+	TunnelAddress      photonlinux.TunnelAddressConfigYAML `yaml:"tunnel_address"`
+	Reconcile          overlayReconcileYAML                `yaml:"reconcile"`
+	Connect            configStringList                    `yaml:"connect"`
+	Deny               configStringList                    `yaml:"deny"`
 }
 
 type overlayReconcileYAML struct {
@@ -625,7 +618,7 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 		}
 		config.IPsec.LinkGroups = groups
 	}
-	if err := validateRotateWindows(config); err != nil {
+	if err := photonlinux.ValidateIPsecRotateWindows(config.IPsec.LinkGroups, config.IPsec.PortPreviousGrace); err != nil {
 		return err
 	}
 	if file.IPAM.AutoAnnounceAssignedIPs != nil {
@@ -725,23 +718,6 @@ func parsePeerLifecycleConfig(y *peerLifecycleYAML) (inspect.PeerLifecycleConfig
 	return out, nil
 }
 
-func validateRotateWindows(config *appConfig) error {
-	maxRetention := time.Duration(0)
-	for _, group := range config.IPsec.LinkGroups {
-		retention := group.Normalized().Reconcile.RotateRetentionSeconds
-		if retention == 0 {
-			retention = defaultIPsecRotateRetentionSec
-		}
-		if d := time.Duration(retention) * time.Second; d > maxRetention {
-			maxRetention = d
-		}
-	}
-	if maxRetention > 0 && config.IPsec.PortPreviousGrace < maxRetention {
-		return fmt.Errorf("ipsec.port_previous_grace %s must be at least overlays[].reconcile.rotate_retention %s", config.IPsec.PortPreviousGrace, maxRetention)
-	}
-	return nil
-}
-
 const (
 	ipsecDriverDryRun     = "dry-run"
 	ipsecDriverStrongSwan = "strongswan"
@@ -756,59 +732,6 @@ func parseIPsecDriver(value string) (string, error) {
 	default:
 		return "", fmt.Errorf("invalid ipsec.driver %q: expected dry-run or strongswan", value)
 	}
-}
-
-func parseTunnelAddressConfig(cfg tunnelAddressConfigYAML) (ipsec.TunnelAddressSpec, error) {
-	mode := ipsec.TunnelAddressMode(strings.ToLower(strings.TrimSpace(cfg.Mode)))
-	switch mode {
-	case "", ipsec.TunnelAddressDerivedLinkLocal, ipsec.TunnelAddressDerivedPool, ipsec.TunnelAddressSequentialPool, ipsec.TunnelAddressDisabled:
-		// ok
-	default:
-		return ipsec.TunnelAddressSpec{}, fmt.Errorf("invalid tunnel_address.mode %q", cfg.Mode)
-	}
-	family := strings.ToLower(strings.TrimSpace(cfg.Family))
-	switch family {
-	case "", ipsec.FamilyIPv4, ipsec.FamilyIPv6:
-		// ok
-	default:
-		return ipsec.TunnelAddressSpec{}, fmt.Errorf("invalid tunnel_address.family %q", cfg.Family)
-	}
-	var prefix netip.Prefix
-	if cfg.Pool != "" {
-		var err error
-		prefix, err = netip.ParsePrefix(cfg.Pool)
-		if err != nil {
-			return ipsec.TunnelAddressSpec{}, fmt.Errorf("invalid tunnel_address.pool %q: %w", cfg.Pool, err)
-		}
-		if family == "" {
-			if prefix.Addr().Is4() {
-				family = ipsec.FamilyIPv4
-			} else {
-				family = ipsec.FamilyIPv6
-			}
-		}
-		if prefix.Addr().Is4() && family != ipsec.FamilyIPv4 {
-			return ipsec.TunnelAddressSpec{}, fmt.Errorf("tunnel_address.family %q does not match pool %q", cfg.Family, cfg.Pool)
-		}
-		if prefix.Addr().Is6() && family != ipsec.FamilyIPv6 {
-			return ipsec.TunnelAddressSpec{}, fmt.Errorf("tunnel_address.family %q does not match pool %q", cfg.Family, cfg.Pool)
-		}
-	}
-	if mode == "" {
-		if family == ipsec.FamilyIPv4 {
-			mode = ipsec.TunnelAddressDisabled
-		} else {
-			mode = ipsec.TunnelAddressDerivedLinkLocal
-		}
-	}
-	if (mode == ipsec.TunnelAddressDerivedPool || mode == ipsec.TunnelAddressSequentialPool) && !prefix.IsValid() {
-		return ipsec.TunnelAddressSpec{}, fmt.Errorf("tunnel_address.mode %q requires a pool", mode)
-	}
-	return ipsec.TunnelAddressSpec{
-		Mode:   mode,
-		Family: family,
-		Pool:   prefix,
-	}, nil
 }
 
 func parseOverlayConfigs(overlays []overlayGroupConfigYAML, netnsCfg photonlinux.NetNSConfig, defaultNetNS ipsec.NetNSSpec) ([]ipsec.LinkGroupSpec, error) {
@@ -863,7 +786,7 @@ func parseOverlayConfig(overlay overlayGroupConfigYAML, netnsCfg photonlinux.Net
 		group.TunnelAddressPool = prefix
 	}
 	if newBlockSet {
-		spec, err := parseTunnelAddressConfig(overlay.TunnelAddress)
+		spec, err := overlay.TunnelAddress.Parse()
 		if err != nil {
 			return ipsec.LinkGroupSpec{}, err
 		}

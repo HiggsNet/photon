@@ -235,3 +235,41 @@ func ipsecReachability(addr string) string {
 	}
 	return ipsec.ReachabilityPublic
 }
+
+// BuildIPsecContactQuality maps gossip dial outcomes only to matching IPsec port generations.
+func BuildIPsecContactQuality(states map[string]gossip.AddrQuality, addresses *ipsec.AddressRecord, ports []ipsec.PortAdvertisement) map[string]ipsec.ContactPointQuality {
+	if addresses == nil {
+		return nil
+	}
+	out := make(map[string]ipsec.ContactPointQuality)
+	for addrStr, st := range states {
+		udpAddr, err := net.ResolveUDPAddr("udp", addrStr)
+		if err != nil {
+			continue
+		}
+		ip := udpAddr.IP.String()
+		for _, ad := range addresses.Addresses {
+			if ad.Address != ip {
+				continue
+			}
+			for _, port := range ports {
+				if udpAddr.Port <= 0 || (udpAddr.Port != int(port.IKE.DialPort()) && udpAddr.Port != int(port.NATT.DialPort())) {
+					continue
+				}
+				key := ipsec.ContactPoint{
+					AddressID:  ad.ID,
+					Address:    ad.Address,
+					Generation: port.Generation,
+					IKEPort:    port.IKE.DialPort(),
+					NATTPort:   port.NATT.DialPort(),
+				}.Key()
+				out[key] = ipsec.ContactPointQuality{
+					Successes:    st.SuccessCount,
+					Failures:     st.FailureCount,
+					BackoffUntil: st.BackoffUntil,
+				}
+			}
+		}
+	}
+	return out
+}

@@ -119,31 +119,6 @@ func TestXFRMLinkStateMatchesCandidateRequiresKnownInterfaceFlags(t *testing.T) 
 	}
 }
 
-func TestIPsecQualityAddrPortMatchesOnlySamePortGeneration(t *testing.T) {
-	current := ipsec.PortAdvertisement{
-		Generation: 3,
-		IKE:        ipsec.PortBinding{Advertised: 30004},
-		NATT:       ipsec.PortBinding{Advertised: 33403},
-		Current:    true,
-	}
-	previous := ipsec.PortAdvertisement{
-		Generation: 1,
-		IKE:        ipsec.PortBinding{Advertised: 500},
-		NATT:       ipsec.PortBinding{Advertised: 4500},
-		Current:    false,
-	}
-
-	if !ipsecQualityAddrPortMatches(33403, current) {
-		t.Fatalf("current NAT-T port did not match current generation")
-	}
-	if ipsecQualityAddrPortMatches(33403, previous) {
-		t.Fatalf("current NAT-T port matched previous generation")
-	}
-	if ipsecQualityAddrPortMatches(0, current) {
-		t.Fatalf("zero port matched IPsec contact quality")
-	}
-}
-
 func TestDaemonIPsecRotateCutoverReadyUsesHealthManager(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	manager := health.NewManager(health.DefaultProbeConfig(), health.DefaultHysteresisConfig(), nil)

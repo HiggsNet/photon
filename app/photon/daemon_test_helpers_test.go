@@ -975,7 +975,7 @@ func daemonSystemDesiredSpec(t *testing.T, verified *corestate.VerifiedState, ke
 	if len(plan.Desired) != 1 {
 		t.Fatalf("desired for %s = %+v, skips=%+v, want one", verified.ManagedZone, plan.Desired, plan.Skipped)
 	}
-	return injectIPsecKeyMaterial(verified, key, plan.Desired)[0]
+	return photonlinux.InjectIPsecKeyMaterial(verified.Network, key, plan.Desired)[0]
 }
 
 func freeDaemonTestUDPAddr(t *testing.T) string {
@@ -1053,7 +1053,7 @@ func daemonRunGossipStrongSwanReady(verified *corestate.VerifiedState, key *phot
 	if err != nil || len(plan.Desired) != 1 {
 		return false
 	}
-	spec := injectIPsecKeyMaterial(verified, key, plan.Desired)[0]
+	spec := photonlinux.InjectIPsecKeyMaterial(verified.Network, key, plan.Desired)[0]
 	inst, ok := links[ipsec.LinkInstanceID(spec)]
 	return ok && inst.ActualState == ipsec.LinkStateUp
 }

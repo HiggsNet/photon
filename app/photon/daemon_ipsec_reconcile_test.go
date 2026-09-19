@@ -171,9 +171,7 @@ func TestPublishIPsecObservationRefreshesLiveSACounters(t *testing.T) {
 		IKEAgeSeconds: 10, ChildAgeSeconds: 8,
 		InboundBytes: 100, InboundPackets: 4, InboundIdleSecs: 3, InboundKnown: true,
 	}
-	if err := service.publishIPsecObservation(rev, 100, instances, nil, []ipsec.SAState{first}, nil, nil, nil); err != nil {
-		t.Fatalf("publish first IPsec observation: %v", err)
-	}
+	service.publishIPsecObservation(rev, 100, instances, nil, []ipsec.SAState{first}, nil, nil, nil)
 
 	second := first
 	second.IKEAgeSeconds = 70
@@ -181,9 +179,7 @@ func TestPublishIPsecObservationRefreshesLiveSACounters(t *testing.T) {
 	second.InboundBytes = 1000
 	second.InboundPackets = 40
 	second.InboundIdleSecs = 1
-	if err := service.publishIPsecObservation(rev, 160, instances, nil, []ipsec.SAState{second}, nil, nil, nil); err != nil {
-		t.Fatalf("publish second IPsec observation: %v", err)
-	}
+	service.publishIPsecObservation(rev, 160, instances, nil, []ipsec.SAState{second}, nil, nil, nil)
 
 	response := controlViewRequestViaPipe[inspect.LinksDebugView](t, service, controlRequest{Method: "links_view"})
 	if !response.OK {
@@ -255,9 +251,7 @@ func TestPublishIPsecObservationRejectsEquivalentStaleResult(t *testing.T) {
 		"link-a": {ID: "link-a", IKEName: "ike-a", ActualState: ipsec.LinkStateUp},
 	}
 	sa := ipsec.SAState{Name: "ike-a", IKEState: "ESTABLISHED", Established: true, InboundPackets: 4, InboundKnown: true}
-	if err := service.publishIPsecObservation(rev, now.Unix(), instances, nil, []ipsec.SAState{sa}, nil, nil, nil); err != nil {
-		t.Fatalf("publish initial IPsec observation: %v", err)
-	}
+	service.publishIPsecObservation(rev, now.Unix(), instances, nil, []ipsec.SAState{sa}, nil, nil, nil)
 	if _, err := advanceTestVerifiedRevision(service.State.Common, now.Add(time.Nanosecond)); err != nil {
 		t.Fatalf("advance state revision: %v", err)
 	}
@@ -265,9 +259,7 @@ func TestPublishIPsecObservationRejectsEquivalentStaleResult(t *testing.T) {
 
 	staleSA := sa
 	staleSA.InboundPackets++
-	if err := service.publishIPsecObservation(rev, now.Add(time.Minute).Unix(), instances, nil, []ipsec.SAState{staleSA}, nil, nil, nil); err != nil {
-		t.Fatalf("publish stale IPsec observation: %v", err)
-	}
+	service.publishIPsecObservation(rev, now.Add(time.Minute).Unix(), instances, nil, []ipsec.SAState{staleSA}, nil, nil, nil)
 	if !service.ipsecDirty {
 		t.Fatal("ipsecDirty = false, want stale equivalent observation to be retried")
 	}
@@ -778,64 +770,5 @@ func TestNextIPsecReconcileTime(t *testing.T) {
 	}
 	if next := nextIPsecReconcileTime(now, 30*time.Second); !next.Equal(now.Add(30 * time.Second)) {
 		t.Fatalf("next = %s, want %s", next, now.Add(30*time.Second))
-	}
-}
-
-func TestMarkIPsecActionSucceededKeepsSecondaryStandbyDownAfterUpdate(t *testing.T) {
-	now := time.Unix(5102, 0)
-	spec := ipsec.TransportLinkSpec{
-		LocalZone:     "node-b.catofes.",
-		PeerZone:      "node-a.catofes.",
-		OverlayID:     "main",
-		TransportID:   "ipsec-standby",
-		InterfaceName: "phx-standby",
-		XFRMIfID:      5102,
-	}
-	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateDegraded, now)
-	inst.InitiatorRole = ipsec.InitiatorRoleSecondaryStandby
-	instances := map[string]ipsec.LinkInstance{inst.ID: inst}
-
-	markIPsecActionSucceeded(instances, ipsec.ReconcileAction{
-		Action:   ipsec.ReconcileActionUpdate,
-		Spec:     &spec,
-		Instance: &inst,
-	}, now.Add(time.Second))
-
-	got := instances[inst.ID]
-	if got.ActualState != ipsec.LinkStateDown {
-		t.Fatalf("state = %q, want down for standby update", got.ActualState)
-	}
-}
-
-func TestMarkIPsecRollbackSucceededPreservesRotationBackoff(t *testing.T) {
-	now := time.Unix(5103, 0)
-	spec := ipsec.TransportLinkSpec{
-		LocalZone:     "node-a.catofes.",
-		PeerZone:      "node-b.catofes.",
-		OverlayID:     "main",
-		TransportID:   "ipsec-rotate",
-		InterfaceName: "phx-rotate",
-		XFRMIfID:      5103,
-	}
-	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateError, now)
-	inst.StagedGeneration = 2
-	inst.RotatePhase = ipsec.RotatePhaseRollback
-	inst.FailureCount = 2
-	inst.BackoffUntil = now.Add(10 * time.Second).Unix()
-	inst.LastFailure = errors.New("staged sa not established by deadline")
-	instances := map[string]ipsec.LinkInstance{inst.ID: inst}
-
-	markIPsecActionSucceeded(instances, ipsec.ReconcileAction{
-		Action:   ipsec.ReconcileActionRollbackRotate,
-		Spec:     &spec,
-		Instance: &inst,
-	}, now)
-
-	got := instances[inst.ID]
-	if got.FailureCount != inst.FailureCount || got.BackoffUntil != inst.BackoffUntil || got.LastFailure != inst.LastFailure {
-		t.Fatalf("rollback cleared failure backoff: %+v", got)
-	}
-	if got.StagedGeneration != 0 || got.RotatePhase != ipsec.RotatePhaseIdle {
-		t.Fatalf("rollback did not clear staged runtime: %+v", got)
 	}
 }

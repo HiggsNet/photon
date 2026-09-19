@@ -83,3 +83,34 @@ func TestIPsecAddressPublicationFallbackAndDefaultTTL(t *testing.T) {
 		t.Fatalf("default TTL or source mapping: %+v", got)
 	}
 }
+
+func TestIPsecContactQualityMatchesDialPortGeneration(t *testing.T) {
+	addresses := &ipsec.AddressRecord{Addresses: []ipsec.AddressAdvertisement{{ID: "public", Address: "192.0.2.1"}}}
+	ports := []ipsec.PortAdvertisement{
+		{Generation: 3, IKE: ipsec.PortBinding{Advertised: 30004}, NATT: ipsec.PortBinding{Advertised: 33403, Observed: 40000}},
+		{Generation: 1, IKE: ipsec.PortBinding{Advertised: 500}, NATT: ipsec.PortBinding{Advertised: 4500}},
+	}
+	quality := gossip.AddrQuality{SuccessCount: 2, FailureCount: 3, BackoffUntil: time.Unix(5000, 0)}
+	for _, tc := range []struct {
+		endpoint string
+		matches  bool
+	}{
+		{"192.0.2.1:40000", true}, {"192.0.2.1:30004", true},
+		{"192.0.2.1:33403", false}, {"192.0.2.1:0", false}, {"192.0.2.2:40000", false},
+	} {
+		t.Run(tc.endpoint, func(t *testing.T) {
+			got := BuildIPsecContactQuality(map[string]gossip.AddrQuality{tc.endpoint: quality}, addresses, ports)
+			if !tc.matches {
+				if len(got) != 0 {
+					t.Fatalf("unmatched endpoint leaked quality: %v", got)
+				}
+				return
+			}
+			key := (ipsec.ContactPoint{AddressID: "public", Address: "192.0.2.1", Generation: 3, IKEPort: 30004, NATTPort: 40000}).Key()
+			want := ipsec.ContactPointQuality{Successes: 2, Failures: 3, BackoffUntil: quality.BackoffUntil}
+			if len(got) != 1 || got[key] != want {
+				t.Fatalf("quality assigned to wrong generation/contact: %v", got)
+			}
+		})
+	}
+}

@@ -512,3 +512,43 @@ localIPsecAddressRecord 现在只读取配置、从本 Zone verified record 解�
 LocalAnnounceDNSForceUpdates 归 pkg/transport/ipsec，直接接收域名、空闲阈值和现有 desired/instance/SA/resolver。删除 app 重复 resolver interface，单用途 SA 查找和空闲判断并入策略；保留 family/scope、入站计数、initiator 和解析错误保护。Daemon 仍负责 resolver 生命周期和错误日志。原两个测试迁到协议包并复用已有 fake，只新增部分 DNS 解析失败不重连的断言，未复制两套测试。
 
 本切片生产代码净减 4 行、测试净减 2 行。make check（含全量测试和 Linux/Windows 构建）及 git diff --check 通过；未运行特权数据面 smoke，续作尚未提交。
+
+### IPsec action 结果状态更新（2026-09-19）
+
+上一批观测/DNS/测试去重已提交为 115d0d5。继续把 app 的 markIPsecActionFailed/markIPsecActionSucceeded 合并进现有 IPsec 状态机的 RecordActionResult，共用实例查找；ReconcileAction.InstanceID 同时用于结果处理和 app 日志。Driver 执行、diagnostic address 失败处理、revision guard 与观测发布仍留 Daemon。保留 rollback 的既有失败退避、standby down、takeover cooldown 和成功 teardown 删除语义。原两个纯状态测试迁入协议包，仅补失败 teardown 的保留/重试检查，app 集成测试不复制。
+
+验证：make check 与 git diff --check 通过，未运行特权数据面 smoke。生产代码净减 1 行；测试迁移后因新增 teardown 检查及独立文件头净增 24 行。本轮续作未提交、推送或部署。
+
+### IPsec contact 质量适配（2026-09-19）
+
+统一协议 contact 解析与 gossip 质量匹配中的 observed/advertised 端口选择为 PortBinding.DialPort；删除 app contactDialPort 和 ipsecQualityAddrPortMatches。BuildIPsecContactQuality 归现有 Linux 地址适配文件，接收已读取的 gossip AddrQuality、地址和有效端口代数；Daemon 保留 transport/state 读取、peer 过滤和有效 record 提取。原端口布尔匹配测试替换为实际 quality map 检查，覆盖 observed 优先、advertised 回退、旧声明端口拒绝、零端口和跨地址排除，同时验证成功/失败/退避数据传递和 generation 隔离。
+
+本切片生产代码净减 4 行，测试替换后净增 6 行；make check 和 git diff --check 通过。未运行特权数据面 smoke；连同 action 结果迁移仍未提交。
+
+### IPsec reconcile 执行流减法（2026-09-19）
+
+成组完成五项：publishIPsecObservation 改为无返回值，删除四处恒不可达的保存失败包装；action apply 与诊断地址失败共用一次 RecordActionResult/观测发布/错误返回；recordIPsecReconcileError 直接使用 ipsecSnapshot 已复制的 summary；单用途 missing-XFRM 状态循环回到调用处；密钥填充下沉 Linux 适配层并删除 peer 公钥解码后的二次复制。本地私钥逐 spec 复制保留，app 仍控制 persisted key 读取、Driver I/O、revision guard 和结果发布顺序。
+
+现有 SA 计数刷新、过期版本拒绝和 daemon 回归继续验证执行流；新增一项密钥隔离测试检查 planner 输入、持久化私钥及不同 spec 不共享注入的私钥缓冲区，并检查 peer 缺失/非法记录。未新增状态 owner、配置 DTO 或转发层。
+
+验证：现有 IPsec 应用测试、密钥隔离测试及 make check 全部通过，git diff --check 通过。本切片生产代码净减 21 行；连同 action/quality 未提交改动累计生产代码净减 26 行。测试复用原有观测/版本回归，删除无意义 error 断言，仅新增密钥隔离检查。未运行特权数据面 smoke，未提交、推送或部署。
+
+### IPsec 发布规划去冗余（2026-09-19）
+
+规划阶段的 publish_saved/publish_unchanged 改为 publish_planned，输出 record_updates 数量，不再把尚未提交的计划说成已保存。删除只为选择日志分支而存在的完整 transport key 比较；端口决策日志并入已有 record 遍历，删除第二次遍历及没有实际调用来源的值类型分支。zonePublicKey 并回密钥生成处，仍把身份公钥作为 forbidden key，私钥落盘和协议提交链不变。复用现有发布、密钥与持久化回归，无新增测试。
+
+验证：定向回归、make check 和 git diff --check 通过；本切片生产代码净减 25 行，测试无增量。未运行特权数据面 smoke，未提交或发布。
+
+### 轮换状态清理去重（2026-09-19）
+
+五处 staged 字段清理统一为包内 LinkInstance.clearStaged，调用方明确选择 idle/rollback/dual-running，原有失败退避、transition time 和旧 SA 清理动作不变。两段相同 route_cutover_pending 分支合并条件。复用现有轮换场景测试，仅增强原回滚用例对 staged 资源、deadline 和重试字段的检查，不新增测试用例。
+
+验证：轮换定向测试、make check、git diff --check 通过。本切片生产代码净减 42 行；未运行特权数据面 smoke，尚未提交。
+
+### IPsec 隧道地址配置与轮换窗口校验（2026-09-19）
+
+overlay 的 tunnel_address YAML 类型、模式/地址族/地址池解析，以及端口宽限期覆盖 overlay 轮换保留期的校验迁入 internal/photonlinux/ipsec_config.go。app 直接调用新 owner，删除旧解析器和轮换校验 helper；LinkGroupSpec.Normalized 已补齐一小时保留期，因此删除 app 的重复默认值与不可达兜底。配置字段、错误文本和兼容行为保持原样。
+
+参数单测随解析器迁移，app 保留 YAML 接线、旧地址池兼容、新旧格式互斥及跨配置窗口检查。补充 family 推导、缺失 pool、默认轮换保留期和窗口相等边界；本切片测试净减 23 行。todo 下一步改为尚未完成的 IPsec 顶层配置与 overlay 组合解析，避免重复安排已完成的 test-only helper 清理。
+
+验证：定向配置测试、make check（含 Linux/Windows 构建）、git diff --check 通过。未运行特权数据面 smoke；本轮与前几轮改动仍在工作区，未提交、推送或部署。

@@ -47,7 +47,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 			d.recordIPsecReconcileError(rev, now.Unix(), err)
 			return err
 		}
-		plan.Desired = injectIPsecKeyMaterial(verified, runtime.IPsecTransportKey, plan.Desired)
+		plan.Desired = photonlinux.InjectIPsecKeyMaterial(verified.Network, runtime.IPsecTransportKey, plan.Desired)
 	}
 	if d.linuxDriver == nil {
 		err := errors.New("linux driver is not configured")
@@ -91,7 +91,16 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		d.recordIPsecReconcileError(rev, now.Unix(), err)
 		return fmt.Errorf("inspect xfrm links: %w", err)
 	}
-	markMissingXFRMLinkInstances(instances, missingXFRMLinks, now)
+	for id := range missingXFRMLinks {
+		inst, ok := instances[id]
+		if !ok {
+			continue
+		}
+		inst.ActualState = ipsec.LinkStateDegraded
+		inst.LastFailure = errors.New("xfrm namespace or interface missing")
+		inst.LastTransition = now.Unix()
+		instances[id] = inst
+	}
 	var xfrmLinks []ipsec.XFRMLinkState
 	if xfrmObservations != nil {
 		xfrmLinks = xfrmObservations.Interfaces
@@ -161,34 +170,22 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 			ipsec.ReconcileActionTeardown, ipsec.ReconcileActionPrepareRotate, ipsec.ReconcileActionInitiateRotate, ipsec.ReconcileActionCommitRotate,
 			ipsec.ReconcileActionRollbackRotate, ipsec.ReconcileActionCleanupRotate:
 			group := groupForAction(action, groups)
-			if _, err := platformDriver.ApplyIPsecAction(ctx, action, group.NetNS); err != nil {
-				markIPsecActionFailed(result.Instances, action, group.Reconcile.Backoff, now, err)
-				if saveErr := d.publishIPsecObservation(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err); saveErr != nil {
-					return fmt.Errorf("save failed ipsec reconcile state after apply error %q: %w", err.Error(), saveErr)
-				}
+			_, err := platformDriver.ApplyIPsecAction(ctx, action, group.NetNS)
+			if err == nil && shouldAssignIPsecDiagnosticAddresses(action) {
+				err = platformDriver.AssignDiagnosticAddresses(ctx, *action.Spec, diagnosticPrefixes)
+			}
+			ipsec.RecordActionResult(result.Instances, action, group.Reconcile.Backoff, now, err)
+			if err != nil {
+				d.publishIPsecObservation(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err)
 				return err
 			}
-			if shouldAssignIPsecDiagnosticAddresses(action) {
-				if err := platformDriver.AssignDiagnosticAddresses(ctx, *action.Spec, diagnosticPrefixes); err != nil {
-					markIPsecActionFailed(result.Instances, action, group.Reconcile.Backoff, now, err)
-					if saveErr := d.publishIPsecObservation(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err); saveErr != nil {
-						return fmt.Errorf("save failed ipsec reconcile state after diagnostic address error %q: %w", err.Error(), saveErr)
-					}
-					return err
-				}
-			}
-			markIPsecActionSucceeded(result.Instances, action, now)
 		}
 	}
 	if err := platformDriver.MaintainXFRMInterfaces(ctx, plan.Desired, result.Instances, result.Actions, groups, diagnosticPrefixes, xfrmObservations); err != nil {
-		if saveErr := d.publishIPsecObservation(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err); saveErr != nil {
-			return fmt.Errorf("save failed ipsec reconcile state after xfrm maintenance error %q: %w", err.Error(), saveErr)
-		}
+		d.publishIPsecObservation(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err)
 		return err
 	}
-	if err := d.publishIPsecObservation(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, nil); err != nil {
-		return fmt.Errorf("save ipsec reconcile state: %w", err)
-	}
+	d.publishIPsecObservation(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, nil)
 	return nil
 }
 
@@ -260,7 +257,7 @@ func ipsecReconcileActionLogFields(action ipsec.ReconcileAction) map[string]any 
 		"action": action.Action,
 		"reason": action.Reason,
 	}
-	if id := actionInstanceID(action); id != "" {
+	if id := action.InstanceID(); id != "" {
 		fields["instance_id"] = id
 	}
 	if action.Spec != nil {
@@ -299,25 +296,9 @@ func ipsecReconcileActionLogFields(action ipsec.ReconcileAction) map[string]any 
 	return fields
 }
 
-func markMissingXFRMLinkInstances(instances map[string]ipsec.LinkInstance, missing map[string]ipsec.TransportLinkSpec, now time.Time) {
-	if len(missing) == 0 {
-		return
-	}
-	for id := range missing {
-		inst, ok := instances[id]
-		if !ok {
-			continue
-		}
-		inst.ActualState = ipsec.LinkStateDegraded
-		inst.LastFailure = errors.New("xfrm namespace or interface missing")
-		inst.LastTransition = now.Unix()
-		instances[id] = inst
-	}
-}
-
-func (d *Daemon) publishIPsecObservation(rev uint64, unix int64, instances map[string]ipsec.LinkInstance, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError error) error {
+func (d *Daemon) publishIPsecObservation(rev uint64, unix int64, instances map[string]ipsec.LinkInstance, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError error) {
 	if d == nil || d.State == nil {
-		return nil
+		return
 	}
 	currentRev := uint64(d.State.Common.VerifiedRevision())
 	if currentRev != rev {
@@ -326,11 +307,10 @@ func (d *Daemon) publishIPsecObservation(rev uint64, unix int64, instances map[s
 			"source_revision":  rev,
 			"current_revision": currentRev,
 		})
-		return nil
+		return
 	}
 	summary := summarizeIPsecReconcile(rev, unix, desired, sas, actions, skips, lastError)
 	d.linuxObservation.replaceIPsec(instances, summary)
-	return nil
 }
 
 func (d *Daemon) recordIPsecReconcileError(rev uint64, unix int64, err error) {
@@ -347,8 +327,7 @@ func (d *Daemon) recordIPsecReconcileError(rev uint64, unix int64, err error) {
 		})
 		return
 	}
-	links, observedReconcile := d.linuxObservation.ipsecSnapshot()
-	reconcile := cloneIPsecObservationSummary(observedReconcile)
+	links, reconcile := d.linuxObservation.ipsecSnapshot()
 	if reconcile == nil {
 		reconcile = &ipsecObservationSummary{}
 	}
@@ -388,55 +367,12 @@ func (d *Daemon) buildIPsecContactPointQuality(verified *corestate.VerifiedState
 			continue
 		}
 
-		inner := make(map[string]ipsec.ContactPointQuality)
-		for addrStr, st := range states {
-			udpAddr, err := net.ResolveUDPAddr("udp", addrStr)
-			if err != nil {
-				continue
-			}
-			ip := udpAddr.IP.String()
-			for _, ad := range records.Addresses.Addresses {
-				if ad.Address != ip {
-					continue
-				}
-				for _, port := range portAds {
-					if !ipsecQualityAddrPortMatches(udpAddr.Port, port) {
-						continue
-					}
-					key := ipsec.ContactPoint{
-						AddressID:  ad.ID,
-						Address:    ad.Address,
-						Generation: port.Generation,
-						IKEPort:    contactDialPort(port.IKE),
-						NATTPort:   contactDialPort(port.NATT),
-					}.Key()
-					inner[key] = ipsec.ContactPointQuality{
-						Successes:    st.SuccessCount,
-						Failures:     st.FailureCount,
-						BackoffUntil: st.BackoffUntil,
-					}
-				}
-			}
-		}
+		inner := photonlinux.BuildIPsecContactQuality(states, records.Addresses, portAds)
 		if len(inner) > 0 {
 			out[peerPath] = inner
 		}
 	}
 	return out
-}
-
-func ipsecQualityAddrPortMatches(addrPort int, port ipsec.PortAdvertisement) bool {
-	if addrPort <= 0 {
-		return false
-	}
-	return addrPort == int(contactDialPort(port.IKE)) || addrPort == int(contactDialPort(port.NATT))
-}
-
-func contactDialPort(binding ipsec.PortBinding) uint16 {
-	if binding.Observed != 0 {
-		return binding.Observed
-	}
-	return binding.Advertised
 }
 
 func summarizeIPsecReconcile(sourceRev uint64, unix int64, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError error) *ipsecObservationSummary {
@@ -460,35 +396,6 @@ func summarizeIPsecReconcile(sourceRev uint64, unix int64, desired []ipsec.Trans
 	return state
 }
 
-func injectIPsecKeyMaterial(verified *corestate.VerifiedState, localKey *photonstate.IPsecTransportKeyState, desired []ipsec.TransportLinkSpec) []ipsec.TransportLinkSpec {
-	if verified == nil {
-		return desired
-	}
-	out := make([]ipsec.TransportLinkSpec, len(desired))
-	for i, spec := range desired {
-		if localKey != nil && len(localKey.PrivateKey) > 0 {
-			spec.LocalPrivateKey = append([]byte(nil), localKey.PrivateKey...)
-			spec.LocalPrivateKeyAlgorithm = localKey.Algorithm
-		}
-		if verified.Network != nil {
-			peerZone := verified.Network.Zones[spec.PeerZone]
-			if peerZone == nil {
-				out[i] = spec
-				continue
-			}
-			if record := peerZone.Records[ipsec.RecordKeyTransportKey]; record != nil {
-				if keyRecord, err := ipsec.ParseTransportKeyRecord(record); err == nil {
-					if pub, err := ipsec.DecodeTransportPublicKey(*keyRecord); err == nil {
-						spec.PeerPublicKey = append([]byte(nil), pub...)
-					}
-				}
-			}
-		}
-		out[i] = spec
-	}
-	return out
-}
-
 func groupForAction(action ipsec.ReconcileAction, groups []ipsec.LinkGroupSpec) ipsec.LinkGroupSpec {
 	groupID := ""
 	if action.Spec != nil {
@@ -502,103 +409,6 @@ func groupForAction(action ipsec.ReconcileAction, groups []ipsec.LinkGroupSpec) 
 		}
 	}
 	return ipsec.LinkGroupSpec{}
-}
-
-func markIPsecActionFailed(instances map[string]ipsec.LinkInstance, action ipsec.ReconcileAction, policy ipsec.BackoffPolicy, now time.Time, err error) {
-	id := actionInstanceID(action)
-	if id == "" {
-		return
-	}
-	inst, ok := instances[id]
-	if !ok {
-		if action.Instance != nil {
-			inst = *action.Instance
-		} else if action.Spec != nil {
-			inst = ipsec.NewLinkInstance(*action.Spec, ipsec.LinkStateError, now)
-		} else {
-			return
-		}
-	}
-	inst = ipsec.MarkLinkApplyFailure(inst, policy, now, err)
-	switch action.Action {
-	case ipsec.ReconcileActionPrepareRotate, ipsec.ReconcileActionInitiateRotate, ipsec.ReconcileActionCommitRotate, ipsec.ReconcileActionRollbackRotate, ipsec.ReconcileActionCleanupRotate:
-		if inst.RotatePhase != "" && inst.LastFailure != nil {
-			inst.LastFailure = fmt.Errorf("rotate %s: %w", inst.RotatePhase, inst.LastFailure)
-		}
-	}
-	if inst.InitiatorRole == ipsec.InitiatorRoleSecondaryTakeover {
-		inst.TakeoverPhase = ipsec.TakeoverPhaseCooldown
-		inst.TakeoverUntil = now.Add(ipsec.TakeoverCooldownDuration(policy)).Unix()
-		inst.LastTakeoverFailure = inst.LastFailure
-	}
-	instances[id] = inst
-}
-
-func markIPsecActionSucceeded(instances map[string]ipsec.LinkInstance, action ipsec.ReconcileAction, now time.Time) {
-	id := actionInstanceID(action)
-	if id == "" {
-		return
-	}
-	if action.Action == ipsec.ReconcileActionTeardown {
-		delete(instances, id)
-		return
-	}
-	inst, ok := instances[id]
-	if !ok {
-		return
-	}
-	// A successful rollback means the staged resources were cleaned up, not
-	// that the failed rotation recovered. Preserve the failure/backoff recorded
-	// by the planner so the same generation is not prepared again immediately.
-	if action.Action != ipsec.ReconcileActionRollbackRotate {
-		inst = ipsec.MarkLinkApplySuccess(inst, now)
-	}
-	switch action.Action {
-	case ipsec.ReconcileActionCreate, ipsec.ReconcileActionUpdate, ipsec.ReconcileActionRepair, ipsec.ReconcileActionPrepareStandby, ipsec.ReconcileActionPrepareRotate, ipsec.ReconcileActionInitiateRotate:
-		if inst.InitiatorRole == ipsec.InitiatorRoleSecondaryStandby ||
-			(action.Spec != nil && action.Spec.InitiatorRole == ipsec.InitiatorRoleSecondaryStandby) {
-			inst.ActualState = ipsec.LinkStateDown
-		} else {
-			inst.ActualState = ipsec.LinkStateConnecting
-		}
-		inst.LastTransition = now.Unix()
-		if inst.StagedGeneration != 0 {
-			inst.RotatePhase = ipsec.RotatePhaseTestingNew
-		}
-	case ipsec.ReconcileActionCommitRotate:
-		// The staged SA was already established before commit; after tearing
-		// down the old connection the link is up and rotation is complete.
-		inst.ActualState = ipsec.LinkStateUp
-		inst.RotatePhase = ipsec.RotatePhaseIdle
-		inst.LastTransition = now.Unix()
-	case ipsec.ReconcileActionRollbackRotate, ipsec.ReconcileActionCleanupRotate:
-		if action.Action == ipsec.ReconcileActionRollbackRotate {
-			inst.ActualState = ipsec.LinkStateConnecting
-			inst.LastTransition = now.Unix()
-		}
-		inst.StagedGeneration = 0
-		inst.StagedIKEName = ""
-		inst.StagedChildSAName = ""
-		inst.StagedInterfaceName = ""
-		inst.StagedXFRMIfID = 0
-		inst.StagedLocalTunnelAddr = netip.Addr{}
-		inst.StagedPeerTunnelAddr = netip.Addr{}
-		inst.RotatePhase = ipsec.RotatePhaseIdle
-		inst.RotateDeadline = 0
-		inst.StagedAttemptCount = 0
-		inst.StagedNextAttempt = 0
-	}
-	instances[id] = inst
-}
-
-func actionInstanceID(action ipsec.ReconcileAction) string {
-	if action.Instance != nil && action.Instance.ID != "" {
-		return action.Instance.ID
-	}
-	if action.Spec != nil {
-		return ipsec.LinkInstanceID(*action.Spec)
-	}
-	return ""
 }
 
 func ipsecPortGenerations(verified *corestate.VerifiedState, node zone.ZonePath, now time.Time) []uint64 {
