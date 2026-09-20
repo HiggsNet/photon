@@ -6,17 +6,18 @@ import (
 	"testing"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
 )
 
 func TestWriteStatusAutoJoinShowsStageAndRequest(t *testing.T) {
 	var buf bytes.Buffer
 	view := inspect.BuildStatus(inspect.StatusInput{
 		DaemonOnline: true,
-		Admission: inspect.AdmissionDiagnosis{
+		Admission: gossip.AdmissionDiagnosis{
 			Pending:        true,
 			ManagedZone:    "node-b.example.",
 			ParentZone:     "example.",
-			Reason:         inspect.AdmissionReasonMissingDelegation,
+			Reason:         gossip.AdmissionReasonMissingDelegation,
 			JoinRequestB64: "encoded-request",
 		},
 	})

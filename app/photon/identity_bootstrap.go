@@ -1,29 +1,21 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"errors"
 	"fmt"
-	"github.com/HiggsNet/photon/internal/photonlinux"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/share"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
-
-func equalPublicKey(a, b ed25519.PublicKey) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	var out byte
-	for i := range a {
-		out |= a[i] ^ b[i]
-	}
-	return out == 0
-}
 
 func writeConfiguredPendingBootstrap(path string, config *appConfig) error {
 	if err := validateAutoJoinBootstrapConfig(config); err != nil {
@@ -38,7 +30,7 @@ func writeConfiguredPendingBootstrap(path string, config *appConfig) error {
 	ns.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, rootAuthority)
 	// Pending auto-join has a stable local identity but no verified managed
 	// authority yet. Keep an explicit authority-less zone placeholder so the
-	// common root remains structurally valid while autoJoinPendingVerified still
+	// common root remains structurally valid while gossip.AutoJoinPending still
 	// reports that synchronization/adoption is required.
 	ns.Zones[config.ManagedZone] = zone.NewZoneState(config.ManagedZone, nil)
 	configureValidation(ns)
@@ -124,11 +116,11 @@ func validateConfiguredIdentityState(verified *corestate.VerifiedState, config *
 	if len(verified.IdentityPrivateKey) != ed25519.PrivateKeySize {
 		return errors.New("persisted identity private key is missing or invalid")
 	}
-	if !equalPublicKey(verified.IdentityPrivateKey.Public().(ed25519.PublicKey), key.PublicKey) {
+	if !bytes.Equal(verified.IdentityPrivateKey.Public().(ed25519.PublicKey), key.PublicKey) {
 		return errors.New("identity.key_path public key does not match persisted identity private key; identity is immutable, use a new data_dir/state_path to create a different node")
 	}
 	if verified.Network != nil {
-		if zs := verified.Network.Zones[verified.ManagedZone]; zs != nil && zs.Authority != nil && !authorityHasKey(zs.Authority, key.PublicKey) {
+		if zs := verified.Network.Zones[verified.ManagedZone]; zs != nil && zs.Authority != nil && !zs.Authority.HasPublicKey(key.PublicKey) {
 			return fmt.Errorf("identity.key_path public key does not match managed zone authority for %s; identity is immutable, use a new data_dir/state_path to create a different node", verified.ManagedZone)
 		}
 	}
@@ -147,7 +139,7 @@ func canonicalIdentityKeyPath(path string) (string, error) {
 	return abs, nil
 }
 
-func configuredJoinRequest(config *appConfig) (*joinRequest, error) {
+func configuredJoinRequest(config *appConfig) (*gossip.JoinRequest, error) {
 	if config == nil || config.ManagedZone == "" {
 		return nil, errors.New("managed_zone is required")
 	}
@@ -155,15 +147,7 @@ func configuredJoinRequest(config *appConfig) (*joinRequest, error) {
 	if err != nil {
 		return nil, err
 	}
-	request := &joinRequest{
-		Version:   1,
-		Zone:      config.ManagedZone,
-		PublicKey: key.PublicKey,
-	}
-	if err := validateJoinRequest(request); err != nil {
-		return nil, err
-	}
-	return request, nil
+	return gossip.NewJoinRequest(config.ManagedZone, key.PublicKey)
 }
 
 func writeJoinRequestFromConfig(outPath string) error {
@@ -176,7 +160,7 @@ func writeJoinRequestFromConfig(outPath string) error {
 		return err
 	}
 	if outPath == "" {
-		text, err := encodeBase64JSON(request)
+		text, err := share.EncodeBase64JSON(request)
 		if err != nil {
 			return err
 		}
@@ -190,37 +174,17 @@ func writeJoinRequestFromConfig(outPath string) error {
 	return nil
 }
 
-func autoJoinPendingVerified(state *corestate.VerifiedState) bool {
-	if state == nil || state.Network == nil || state.ManagedZone == "" || state.ManagedZone == zone.RootZone {
-		return false
-	}
-	zs := state.Network.Zones[state.ManagedZone]
-	if zs == nil || zs.Authority == nil {
-		return true
-	}
-	if len(state.IdentityPrivateKey) != ed25519.PrivateKeySize {
-		return true
-	}
-	pub := state.IdentityPrivateKey.Public().(ed25519.PublicKey)
-	return !authorityHasKey(zs.Authority, pub)
-}
-
-func logAutoJoinPending(logger *appLogger, state *corestate.VerifiedState) {
-	if !autoJoinPendingVerified(state) || len(state.IdentityPrivateKey) != ed25519.PrivateKeySize {
-		return
-	}
-	pub := state.IdentityPrivateKey.Public().(ed25519.PublicKey)
-	request, err := encodeBase64JSON(&joinRequest{Version: 1, Zone: state.ManagedZone, PublicKey: pub})
-	if err != nil {
+func logAutoJoinPending(logger *appLogger, diagnosis gossip.AdmissionDiagnosis) {
+	if !diagnosis.Pending || diagnosis.JoinRequestB64 == "" {
 		return
 	}
 	if logger == nil {
-		fmt.Fprintf(os.Stderr, "auto_join pending zone=%s join_request=%s hint=%q\n", state.ManagedZone, request, "photon gossip join request --from-config")
+		fmt.Fprintf(os.Stderr, "auto_join pending zone=%s join_request=%s hint=%q\n", diagnosis.ManagedZone, diagnosis.JoinRequestB64, "photon gossip join request --from-config")
 		return
 	}
 	logger.Info("auto_join", "pending", map[string]any{
-		"zone":         state.ManagedZone,
-		"join_request": request,
+		"zone":         diagnosis.ManagedZone,
+		"join_request": diagnosis.JoinRequestB64,
 		"hint":         "photon gossip join request --from-config",
 	})
 }

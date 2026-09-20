@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	bolt "go.etcd.io/bbolt"
 	"net"
 	"os"
 	"path/filepath"
@@ -12,17 +13,15 @@ import (
 	"testing"
 	"time"
 
-	photonstate "github.com/HiggsNet/photon/internal/state"
-
 	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/internal/photonlinux"
 	pingdebug "github.com/HiggsNet/photon/internal/ping"
+	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
-	bolt "go.etcd.io/bbolt"
 )
 
 type controlPingProber struct {
@@ -306,7 +305,7 @@ func TestDaemonControlCommonReadViews(t *testing.T) {
 	if !rootPublicKey.OK || len(rootPublicKey.View) == 0 {
 		t.Fatalf("root_public_key response = %#v", rootPublicKey)
 	}
-	admission := controlViewRequestViaPipe[inspect.AdmissionDiagnosis](t, service, controlRequest{Method: "admission_status"})
+	admission := controlViewRequestViaPipe[gossip.AdmissionDiagnosis](t, service, controlRequest{Method: "admission_status"})
 	if !admission.OK {
 		t.Fatalf("admission_status response = %#v", admission)
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/HiggsNet/photon/internal/photonlinux"
 	pingdebug "github.com/HiggsNet/photon/internal/ping"
 	photonstate "github.com/HiggsNet/photon/internal/state"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
@@ -40,7 +41,7 @@ type controlRequest struct {
 	Type        string                   `json:"type,omitempty"`
 	History     int                      `json:"history,omitempty"`
 	Reason      string                   `json:"reason,omitempty"`
-	JoinRequest *joinRequest             `json:"join_request,omitempty"`
+	JoinRequest *gossip.JoinRequest      `json:"join_request,omitempty"`
 	JoinBundle  *joinBundle              `json:"join_bundle,omitempty"`
 	PrivateKey  *privateKeyFile          `json:"private_key,omitempty"`
 	Permissions []zone.Permission        `json:"permissions,omitempty"`
@@ -200,8 +201,8 @@ func routingReloadViaControl(rt *AppContext) (*controlResponse, bool, error) {
 	return response, true, err
 }
 
-func admissionStatusViaControl(rt *AppContext) (inspect.AdmissionDiagnosis, bool, error) {
-	return readCanonicalViewViaControl[inspect.AdmissionDiagnosis](rt, controlRequest{Method: "admission_status"})
+func admissionStatusViaControl(rt *AppContext) (gossip.AdmissionDiagnosis, bool, error) {
+	return readCanonicalViewViaControl[gossip.AdmissionDiagnosis](rt, controlRequest{Method: "admission_status"})
 }
 
 func (d *Daemon) birdRoutesForControl(ctx context.Context, dump *inspect.RoutesResponse, instances []photonlinux.RoutingInstance, birdStates map[string]*bird.InstanceObservation) []inspect.BirdRoutesView {
@@ -344,7 +345,7 @@ func rotateIPsecPortViaControl(rt *AppContext) (*manualPortRotateResult, bool, e
 	return response.PortRotate, true, nil
 }
 
-func issueDelegationViaControl(rt *AppContext, request *joinRequest, permissions []zone.Permission) (*joinBundle, bool, error) {
+func issueDelegationViaControl(rt *AppContext, request *gossip.JoinRequest, permissions []zone.Permission) (*joinBundle, bool, error) {
 	response, ok, err := sendMutationControlRequest(rt, controlRequest{
 		Method:      "delegate_issue",
 		JoinRequest: request,
@@ -512,7 +513,7 @@ func validateControlDelegateIssue(request controlRequest) error {
 	if request.JoinRequest == nil {
 		return errors.New("delegate_issue requires join_request")
 	}
-	return validateJoinRequest(request.JoinRequest)
+	return gossip.ValidateJoinRequest(request.JoinRequest)
 }
 
 func validateControlDelegateGrant(request controlRequest) error {

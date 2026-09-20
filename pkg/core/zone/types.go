@@ -1,6 +1,7 @@
 package zone
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"net"
 	"net/netip"
@@ -94,6 +95,19 @@ type ZoneAuthority struct {
 	Epoch     uint64
 	Keys      []AuthorizedKey
 	Threshold uint8
+}
+
+// HasPublicKey reports key membership only; it does not check capabilities or validity periods.
+func (authority *ZoneAuthority) HasPublicKey(publicKey []byte) bool {
+	if authority == nil {
+		return false
+	}
+	for _, key := range authority.Keys {
+		if bytes.Equal(key.Key, publicKey) {
+			return true
+		}
+	}
+	return false
 }
 
 type Delegation struct {

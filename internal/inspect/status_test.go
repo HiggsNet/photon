@@ -1,12 +1,16 @@
 package inspect
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/HiggsNet/photon/pkg/core/gossip"
+)
 
 func TestBuildStatusAutoJoinStageAndRequest(t *testing.T) {
-	view := BuildStatus(StatusInput{Admission: AdmissionDiagnosis{
+	view := BuildStatus(StatusInput{Admission: gossip.AdmissionDiagnosis{
 		Pending:        true,
 		ManagedZone:    "node-b.example.",
-		Reason:         AdmissionReasonMissingDelegation,
+		Reason:         gossip.AdmissionReasonMissingDelegation,
 		JoinRequestB64: "request",
 	}})
 	if view.Mode != StatusModeAutoJoin || view.AutoJoinStage != "awaiting_delegation" {
@@ -44,13 +48,13 @@ func TestBuildStatusSummarizesRunningPeersAndLinks(t *testing.T) {
 
 func TestAutoJoinStage(t *testing.T) {
 	tests := map[string]string{
-		AdmissionReasonMissingZoneKey:         "preparing_identity",
-		AdmissionReasonNoBootstrapSync:        "syncing_parent",
-		AdmissionReasonMissingParentZone:      "syncing_parent",
-		AdmissionReasonMissingDelegation:      "awaiting_delegation",
-		AdmissionReasonDelegationKeyMismatch:  "delegation_invalid",
-		AdmissionReasonVerifyDelegationFailed: "delegation_invalid",
-		AdmissionReasonWaitingForAdoption:     "adopting",
+		gossip.AdmissionReasonMissingZoneKey:         "preparing_identity",
+		gossip.AdmissionReasonNoBootstrapSync:        "syncing_parent",
+		gossip.AdmissionReasonMissingParentZone:      "syncing_parent",
+		gossip.AdmissionReasonMissingDelegation:      "awaiting_delegation",
+		gossip.AdmissionReasonDelegationKeyMismatch:  "delegation_invalid",
+		gossip.AdmissionReasonVerifyDelegationFailed: "delegation_invalid",
+		gossip.AdmissionReasonWaitingForAdoption:     "adopting",
 	}
 	for reason, want := range tests {
 		if got := AutoJoinStage(reason); got != want {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/photonlinux"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
@@ -51,14 +52,14 @@ func TestOpenStateAutoJoinCreatesPendingBootstrapState(t *testing.T) {
 		t.Fatalf("openState: %v", err)
 	}
 	state := opened.Common.ReadView().State
-	if state.ManagedZone != "node-b.catofes." || !autoJoinPendingVerified(state) {
-		t.Fatalf("state = zone:%s pending:%v", state.ManagedZone, autoJoinPendingVerified(state))
+	if state.ManagedZone != "node-b.catofes." || !gossip.AutoJoinPending(state) {
+		t.Fatalf("state = zone:%s pending:%v", state.ManagedZone, gossip.AutoJoinPending(state))
 	}
-	if !equalPublicKey(state.IdentityPrivateKey.Public().(ed25519.PublicKey), pub) {
+	if !bytes.Equal(state.IdentityPrivateKey.Public().(ed25519.PublicKey), pub) {
 		t.Fatalf("IdentityPrivateKey public mismatch")
 	}
 	root := state.Network.Zones[zone.RootZone]
-	if root == nil || root.Authority == nil || !authorityHasKey(root.Authority, rootPub) {
+	if root == nil || root.Authority == nil || !root.Authority.HasPublicKey(rootPub) {
 		t.Fatalf("trusted root authority missing: %+v", root)
 	}
 	if got, want := photoncrypto.AuthorityHash(root.Authority), photoncrypto.AuthorityHash(photoncrypto.ConfiguredRootAuthority(rootPub)); !bytes.Equal(got, want) {

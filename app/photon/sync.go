@@ -276,7 +276,7 @@ func (d *Daemon) endpointProtocolIntent(verified *corestate.VerifiedState) (*cor
 	if d != nil && d.App != nil && d.App.Config != nil {
 		config = d.App.Config
 	}
-	if verified == nil || verified.Network == nil || verified.ManagedZone == zone.RootZone || len(verified.IdentityPrivateKey) == 0 || autoJoinPendingVerified(verified) {
+	if verified == nil || verified.Network == nil || verified.ManagedZone == zone.RootZone || len(verified.IdentityPrivateKey) == 0 || gossip.AutoJoinPending(verified) {
 		return nil, nil
 	}
 	if config == nil {

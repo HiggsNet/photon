@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/hex"
 	"errors"
@@ -48,7 +49,7 @@ gossip:
 	if len(config.Bootstrap) != 1 || config.Bootstrap[0].ID != "node-b" || config.Bootstrap[0].Addr != "127.0.0.1:33435" {
 		t.Fatalf("Bootstrap = %#v", config.Bootstrap)
 	}
-	if !equalPublicKey(config.TrustedRootPublicKey, pub) {
+	if !bytes.Equal(config.TrustedRootPublicKey, pub) {
 		t.Fatalf("TrustedRootPublicKey mismatch")
 	}
 	if config.MaxMessageBytes != 32768 || config.MaxSyncZones != 8 || config.MaxSyncRecords != 512 {

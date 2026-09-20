@@ -11,6 +11,7 @@ import (
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
+	"github.com/HiggsNet/photon/pkg/core/share"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/urfave/cli/v3"
@@ -151,7 +152,7 @@ func recoveryExportZone(path zone.ZonePath, outPath string) error {
 		return err
 	}
 	if outPath == "" {
-		text, err := encodeBase64JSON(snapshot)
+		text, err := share.EncodeBase64JSON(snapshot)
 		if err != nil {
 			return err
 		}

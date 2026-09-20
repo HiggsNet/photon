@@ -5,15 +5,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
 )
 
 func TestWriteAdmissionDiagnosis(t *testing.T) {
-	d := inspect.AdmissionDiagnosis{
+	d := gossip.AdmissionDiagnosis{
 		Pending:               true,
 		ManagedZone:           "node-b.catofes.",
 		ParentZone:            "catofes.",
-		Reason:                inspect.AdmissionReasonMissingDelegation,
+		Reason:                gossip.AdmissionReasonMissingDelegation,
 		ReasonDetail:          "parent zone has no delegation",
 		JoinRequestB64:        "eyJqb2luIjoidGVzdCJ9",
 		HasZonePrivateKey:     true,

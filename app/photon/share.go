@@ -6,48 +6,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
+
+	"github.com/HiggsNet/photon/pkg/core/share"
 )
 
 func formatPublicKey(pub ed25519.PublicKey) string {
 	return base64.StdEncoding.EncodeToString(pub)
 }
 
-func encodeBase64JSON(value any) (string, error) {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(data), nil
-}
-
-func decodeBase64JSON(text string, out any) error {
-	trimmed := strings.TrimSpace(text)
-	var decodeErr error
-	for _, encoding := range []*base64.Encoding{
-		base64.RawURLEncoding,
-		base64.URLEncoding,
-		base64.RawStdEncoding,
-		base64.StdEncoding,
-	} {
-		data, err := encoding.DecodeString(trimmed)
-		if err != nil {
-			if decodeErr == nil {
-				decodeErr = err
-			}
-			continue
-		}
-		if err := json.Unmarshal(data, out); err != nil {
-			return err
-		}
-		return nil
-	}
-	return decodeErr
-}
-
 func readBase64JSONOrJSON(input string, out any) error {
 	if data, err := os.ReadFile(input); err == nil {
-		if err := decodeBase64JSON(string(data), out); err == nil {
+		if err := share.DecodeBase64JSON(string(data), out); err == nil {
 			return nil
 		}
 		if err := json.Unmarshal(data, out); err != nil {
@@ -55,14 +24,14 @@ func readBase64JSONOrJSON(input string, out any) error {
 		}
 		return nil
 	}
-	if err := decodeBase64JSON(input, out); err != nil {
+	if err := share.DecodeBase64JSON(input, out); err != nil {
 		return fmt.Errorf("decode base64 JSON payload: %w", err)
 	}
 	return nil
 }
 
 func writeBase64JSONFile(path string, mode os.FileMode, value any) error {
-	text, err := encodeBase64JSON(value)
+	text, err := share.EncodeBase64JSON(value)
 	if err != nil {
 		return err
 	}

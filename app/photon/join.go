@@ -6,11 +6,13 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
-	"github.com/HiggsNet/photon/internal/photonlinux"
 	"os"
 	"slices"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/share"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
@@ -20,12 +22,6 @@ type privateKeyFile struct {
 	Type       string             `json:"type"`
 	PublicKey  ed25519.PublicKey  `json:"public_key"`
 	PrivateKey ed25519.PrivateKey `json:"private_key"`
-}
-
-type joinRequest struct {
-	Version   uint8             `json:"version"`
-	Zone      zone.ZonePath     `json:"zone"`
-	PublicKey ed25519.PublicKey `json:"public_key"`
 }
 
 type joinBundle struct {
@@ -55,20 +51,19 @@ func createJoinRequest(path zone.ZonePath, keyPath string, outPath string) error
 	if err != nil {
 		return err
 	}
-	request := joinRequest{
-		Version:   1,
-		Zone:      path,
-		PublicKey: key.PublicKey,
+	request, err := gossip.NewJoinRequest(path, key.PublicKey)
+	if err != nil {
+		return err
 	}
 	if outPath == "" {
-		text, err := encodeBase64JSON(&request)
+		text, err := share.EncodeBase64JSON(request)
 		if err != nil {
 			return err
 		}
 		fmt.Printf("%s\n", text)
 		return nil
 	}
-	if err := writeBase64JSONFile(outPath, 0o644, &request); err != nil {
+	if err := writeBase64JSONFile(outPath, 0o644, request); err != nil {
 		return err
 	}
 	fmt.Printf("wrote join request: %s\n", outPath)
@@ -81,11 +76,11 @@ func issueDelegation(requestInput string, outPath string, permissions []zone.Per
 		return err
 	}
 	rt.DisableControl = direct
-	var request joinRequest
+	var request gossip.JoinRequest
 	if err := readBase64JSONOrJSON(requestInput, &request); err != nil {
 		return err
 	}
-	if err := validateJoinRequest(&request); err != nil {
+	if err := gossip.ValidateJoinRequest(&request); err != nil {
 		return err
 	}
 	bundle, controlled, err := issueDelegationViaControl(rt, &request, permissions)
@@ -95,7 +90,7 @@ func issueDelegation(requestInput string, outPath string, permissions []zone.Per
 	if controlled {
 		if outPath == "" {
 			fmt.Fprintf(os.Stderr, "issued delegation for %s via daemon\n", request.Zone)
-			text, err := encodeBase64JSON(bundle)
+			text, err := share.EncodeBase64JSON(bundle)
 			if err != nil {
 				return err
 			}
@@ -118,7 +113,7 @@ func issueDelegation(requestInput string, outPath string, permissions []zone.Per
 	}
 	if outPath == "" {
 		fmt.Fprintf(os.Stderr, "issued delegation for %s\n", request.Zone)
-		text, err := encodeBase64JSON(result.Bundle)
+		text, err := share.EncodeBase64JSON(result.Bundle)
 		if err != nil {
 			return err
 		}
@@ -133,8 +128,8 @@ func issueDelegation(requestInput string, outPath string, permissions []zone.Per
 	return nil
 }
 
-func issueDelegationDirect(rt *AppContext, request *joinRequest, permissions []zone.Permission) (*delegationIssueResult, error) {
-	if err := validateJoinRequest(request); err != nil {
+func issueDelegationDirect(rt *AppContext, request *gossip.JoinRequest, permissions []zone.Permission) (*delegationIssueResult, error) {
+	if err := gossip.ValidateJoinRequest(request); err != nil {
 		return nil, err
 	}
 	state, err := openState(rt)
@@ -157,8 +152,8 @@ func issueDelegationDirect(rt *AppContext, request *joinRequest, permissions []z
 	return &delegationIssueResult{Zone: request.Zone, Bundle: bundle}, nil
 }
 
-func planDelegationIssue(network *zone.NetworkState, request *joinRequest, permissions []zone.Permission, now time.Time) (corestate.LocalIntent, error) {
-	if err := validateJoinRequest(request); err != nil {
+func planDelegationIssue(network *zone.NetworkState, request *gossip.JoinRequest, permissions []zone.Permission, now time.Time) (corestate.LocalIntent, error) {
+	if err := gossip.ValidateJoinRequest(request); err != nil {
 		return nil, err
 	}
 	if network == nil {
@@ -386,15 +381,6 @@ func rootPublicKey(ns *zone.NetworkState) (ed25519.PublicKey, error) {
 	return root.Authority.Keys[0].Key, nil
 }
 
-func authorityHasKey(authority *zone.ZoneAuthority, pub ed25519.PublicKey) bool {
-	for _, key := range authority.Keys {
-		if equalPublicKey(key.Key, pub) {
-			return true
-		}
-	}
-	return false
-}
-
 func readPrivateKeyFile(path string) (*privateKeyFile, error) {
 	var key privateKeyFile
 	if err := readJSONFile(path, &key); err != nil {
@@ -417,24 +403,8 @@ func validatePrivateKeyFile(key *privateKeyFile) error {
 		return errors.New("invalid ed25519 key file")
 	}
 	derived := key.PrivateKey.Public().(ed25519.PublicKey)
-	if !equalPublicKey(derived, key.PublicKey) {
+	if !bytes.Equal(derived, key.PublicKey) {
 		return errors.New("private key does not match public key")
-	}
-	return nil
-}
-
-func validateJoinRequest(request *joinRequest) error {
-	if request == nil {
-		return errors.New("join request is nil")
-	}
-	if request.Version != 1 {
-		return fmt.Errorf("unsupported join request version: %d", request.Version)
-	}
-	if !request.Zone.Valid() || request.Zone == zone.RootZone {
-		return fmt.Errorf("invalid join zone: %s", request.Zone)
-	}
-	if len(request.PublicKey) != ed25519.PublicKeySize {
-		return errors.New("join request public key is invalid")
 	}
 	return nil
 }

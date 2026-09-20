@@ -16,9 +16,8 @@ import (
 	"testing"
 	"time"
 
-	photonstate "github.com/HiggsNet/photon/internal/state"
-
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
+	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -212,7 +211,7 @@ func authorityHasPrivateKey(authority *zone.ZoneAuthority, priv ed25519.PrivateK
 	if authority == nil || len(priv) != ed25519.PrivateKeySize {
 		return false
 	}
-	return authorityHasKey(authority, priv.Public().(ed25519.PublicKey))
+	return authority.HasPublicKey(priv.Public().(ed25519.PublicKey))
 }
 
 func advanceTestVerifiedRevision(store *corestate.Store, now time.Time) (uint64, error) {

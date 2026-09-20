@@ -539,7 +539,7 @@ func localSigningKey(state *VerifiedState, path zone.ZonePath) (ed25519.PrivateK
 		return nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
 	}
 	for _, privateKey := range []ed25519.PrivateKey{state.RootPrivateKey, state.IdentityPrivateKey} {
-		if len(privateKey) == ed25519.PrivateKeySize && authorityHasPublicKey(zoneState.Authority, privateKey.Public().(ed25519.PublicKey)) {
+		if len(privateKey) == ed25519.PrivateKeySize && zoneState.Authority.HasPublicKey(privateKey.Public().(ed25519.PublicKey)) {
 			return append(ed25519.PrivateKey(nil), privateKey...), nil
 		}
 	}

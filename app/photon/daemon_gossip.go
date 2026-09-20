@@ -40,17 +40,13 @@ func gossipDriverConfig(app *appConfig, verified *corestate.VerifiedState, logge
 	if app == nil {
 		return corehost.GossipDriverConfig{}
 	}
-	bootstrapPeers := make([]string, 0, len(app.Bootstrap))
-	for _, peer := range app.Bootstrap {
-		bootstrapPeers = append(bootstrapPeers, peer.ID)
-	}
 	driverConfig := corehost.GossipDriverConfig{
 		PeerID: configuredPeerID(app, verified),
 		Limits: syncLimits(app),
 		Log:    gossipDriverLogger(logger),
 		Discovery: corehost.GossipDiscoveryConfig{
 			Bootstrap:      configuredKnownPeers(app),
-			BootstrapPeers: bootstrapPeers,
+			BootstrapPeers: bootstrapPeerIDs(app.Bootstrap),
 			EndpointGrace:  app.EndpointGrace,
 			SourceOrder:    append([]string(nil), app.EndpointSourceOrder...),
 		},

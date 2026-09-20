@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/share"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
@@ -30,7 +32,7 @@ func TestIssueDelegationRejectsExistingActiveZone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
-	request := &joinRequest{Version: 1, Zone: "child.", PublicKey: publicKey}
+	request := &gossip.JoinRequest{Version: 1, Zone: "child.", PublicKey: publicKey}
 	if _, err := issueDelegationDirect(rt, request, nil); err != nil {
 		t.Fatalf("issueDelegationInState(first): %v", err)
 	}
@@ -175,7 +177,7 @@ func TestJoinFlowAcceptsBase64PayloadArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readPrivateKeyFile: %v", err)
 	}
-	requestText, err := encodeBase64JSON(&joinRequest{
+	requestText, err := share.EncodeBase64JSON(&gossip.JoinRequest{
 		Version:   1,
 		Zone:      "node-b.",
 		PublicKey: key.PublicKey,
@@ -189,7 +191,7 @@ func TestJoinFlowAcceptsBase64PayloadArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAppContext(admin): %v", err)
 	}
-	var request joinRequest
+	var request gossip.JoinRequest
 	if err := readBase64JSONOrJSON(requestText, &request); err != nil {
 		t.Fatalf("read request payload: %v", err)
 	}
@@ -197,7 +199,7 @@ func TestJoinFlowAcceptsBase64PayloadArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("issueDelegationDirect: %v", err)
 	}
-	bundleText, err := encodeBase64JSON(result.Bundle)
+	bundleText, err := share.EncodeBase64JSON(result.Bundle)
 	if err != nil {
 		t.Fatalf("encode bundle: %v", err)
 	}

@@ -21,6 +21,7 @@ import (
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	pingdebug "github.com/HiggsNet/photon/internal/ping"
 	photonstate "github.com/HiggsNet/photon/internal/state"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -104,7 +105,7 @@ type daemonEvent struct {
 	Type         daemonEventType
 	CommonIntent corestate.LocalIntent
 	DryRun       bool
-	JoinRequest  *joinRequest
+	JoinRequest  *gossip.JoinRequest
 	JoinBundle   *joinBundle
 	PrivateKey   *privateKeyFile
 	Permissions  []zone.Permission
@@ -329,7 +330,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.logWarn("daemon", "startup_publish_failed", map[string]any{"error": err})
 	}
 	d.logDebug("daemon", "startup_publish_done", nil)
-	logAutoJoinPending(d.Log, d.State.Common.ReadView().State)
+	logAutoJoinPending(d.Log, d.gossipDriver.AdmissionDiagnosis(d.now()))
 
 	startupNow := d.now()
 	ipsecReconcileInterval := d.ipsecReconcileInterval()
@@ -1064,11 +1065,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state not loaded")))
 			return
 		}
-		var bootstrap []syncConfigPeer
-		if d.App != nil && d.App.Config != nil {
-			bootstrap = d.App.Config.Bootstrap
-		}
-		diagnosis := diagnoseAutoJoinAdmission(view.State, view.Gossip, bootstrap, d.now())
+		diagnosis := d.gossipDriver.AdmissionDiagnosis(d.now())
 		writeCanonicalView(conn, diagnosis)
 	case "firewall_view":
 		fwSnapshot := d.linuxObservation.firewallSnapshot()
@@ -1287,8 +1284,8 @@ func (d *Daemon) handleEvent(event daemonEvent) (daemonEventResult, bool, bool) 
 	}
 }
 
-func (d *Daemon) handleDelegateIssueEvent(request *joinRequest, permissions []zone.Permission) (*delegationIssueResult, error) {
-	if err := validateJoinRequest(request); err != nil {
+func (d *Daemon) handleDelegateIssueEvent(request *gossip.JoinRequest, permissions []zone.Permission) (*delegationIssueResult, error) {
+	if err := gossip.ValidateJoinRequest(request); err != nil {
 		return nil, err
 	}
 	view := d.State.Common.ReadView()

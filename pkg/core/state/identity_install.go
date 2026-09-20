@@ -134,7 +134,7 @@ func validateInstalledIdentity(state *VerifiedState, now time.Time) error {
 	}
 	managed := state.Network.Zones[state.ManagedZone]
 	identityPublic := state.IdentityPrivateKey.Public().(ed25519.PublicKey)
-	if managed == nil || !authorityHasPublicKey(managed.Authority, identityPublic) {
+	if managed == nil || !managed.Authority.HasPublicKey(identityPublic) {
 		return errors.New("identity private key is not authorized by the managed zone")
 	}
 	if err := photoncrypto.VerifyChain(state.Network, state.ManagedZone, now); err != nil {

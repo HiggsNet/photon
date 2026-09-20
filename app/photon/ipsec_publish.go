@@ -41,7 +41,7 @@ func (d *Daemon) ipsecProtocolPlan(verified *corestate.VerifiedState, runtime *p
 		d.logDebug("ipsec", "publish_skipped", map[string]any{"reason": "missing_zone_private_key", "managed_zone": verified.ManagedZone})
 		return plan, nil
 	}
-	if autoJoinPendingVerified(verified) {
+	if gossip.AutoJoinPending(verified) {
 		d.logDebug("ipsec", "publish_skipped", map[string]any{"reason": "auto_join_pending", "managed_zone": verified.ManagedZone})
 		return plan, nil
 	}

@@ -3,14 +3,16 @@ package main
 import (
 	"crypto/ed25519"
 	"errors"
-	corestate "github.com/HiggsNet/photon/pkg/core/state"
-	"github.com/HiggsNet/photon/pkg/core/zone"
 	bolt "go.etcd.io/bbolt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 func TestUnsupportedConfigurationRejected(t *testing.T) {
@@ -52,7 +54,7 @@ func TestDelegationPlansPreserveSource(t *testing.T) {
 	network.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, &zone.ZoneAuthority{Zone: zone.RootZone, Epoch: 3, Keys: []zone.AuthorizedKey{{Key: pub}}})
 	child := zone.ZonePath("child.")
 	network.Zones[zone.RootZone].Revocations[child] = &zone.DelegationRevocation{RevokedAuthorityEpoch: 7}
-	intent, err := planDelegationIssue(network, &joinRequest{Version: 1, Zone: child, PublicKey: pub}, nil, time.Now())
+	intent, err := planDelegationIssue(network, &gossip.JoinRequest{Version: 1, Zone: child, PublicKey: pub}, nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

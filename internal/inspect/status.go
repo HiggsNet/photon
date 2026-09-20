@@ -3,6 +3,7 @@ package inspect
 import (
 	"sort"
 
+	"github.com/HiggsNet/photon/pkg/core/gossip"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
@@ -17,7 +18,7 @@ type StatusInput struct {
 	GossipSource   string
 	PlatformSource string
 	ManagedZone    zone.ZonePath
-	Admission      AdmissionDiagnosis
+	Admission      gossip.AdmissionDiagnosis
 	Peers          []PeerStatusInfo
 	Links          LinkInspection
 }
@@ -49,7 +50,7 @@ type StatusView struct {
 	ManagedZone    zone.ZonePath
 	Mode           string
 	AutoJoinStage  string
-	Admission      AdmissionDiagnosis
+	Admission      gossip.AdmissionDiagnosis
 	Peers          StatusPeerSummary
 	Links          StatusLinkSummary
 }
@@ -159,15 +160,15 @@ func BuildStatus(input StatusInput) StatusView {
 
 func AutoJoinStage(reason string) string {
 	switch reason {
-	case AdmissionReasonMissingZoneKey:
+	case gossip.AdmissionReasonMissingZoneKey:
 		return "preparing_identity"
-	case AdmissionReasonNoBootstrapSync, AdmissionReasonMissingParentZone:
+	case gossip.AdmissionReasonNoBootstrapSync, gossip.AdmissionReasonMissingParentZone:
 		return "syncing_parent"
-	case AdmissionReasonMissingDelegation:
+	case gossip.AdmissionReasonMissingDelegation:
 		return "awaiting_delegation"
-	case AdmissionReasonDelegationKeyMismatch, AdmissionReasonVerifyDelegationFailed:
+	case gossip.AdmissionReasonDelegationKeyMismatch, gossip.AdmissionReasonVerifyDelegationFailed:
 		return "delegation_invalid"
-	case AdmissionReasonWaitingForAdoption:
+	case gossip.AdmissionReasonWaitingForAdoption:
 		return "adopting"
 	default:
 		return "pending"

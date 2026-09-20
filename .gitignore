@@ -11,4 +11,4 @@ app/photon/.photon.db
 .codex
 .agents
 .tmp
-share
+/share

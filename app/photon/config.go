@@ -709,6 +709,15 @@ func configuredPeerID(config *appConfig, verified *corestate.VerifiedState) stri
 	return hex.EncodeToString(photoncrypto.KeyID(pub))[:16]
 }
 
+// bootstrapPeerIDs projects configured identities without resolving endpoints.
+func bootstrapPeerIDs(peers []syncConfigPeer) []string {
+	ids := make([]string, 0, len(peers))
+	for _, peer := range peers {
+		ids = append(ids, peer.ID)
+	}
+	return ids
+}
+
 func configuredKnownPeers(config *appConfig) map[string]*net.UDPAddr {
 	if config == nil {
 		return nil

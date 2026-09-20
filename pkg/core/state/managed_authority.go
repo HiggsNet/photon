@@ -102,7 +102,7 @@ func ReconcileManagedAuthority(network *zone.NetworkState, managed zone.ZonePath
 	}
 	current := network.Zones[managed]
 	if current == nil || current.Authority == nil {
-		if len(identityPublicKey) != ed25519.PublicKeySize || !authorityHasPublicKey(&delegation.Authority, identityPublicKey) {
+		if len(identityPublicKey) != ed25519.PublicKeySize || !delegation.Authority.HasPublicKey(identityPublicKey) {
 			return network, result, nil
 		}
 		candidate := zone.CloneNetworkStateForZone(network, managed)
@@ -132,7 +132,7 @@ func ReconcileManagedAuthority(network *zone.NetworkState, managed zone.ZonePath
 	if len(identityPublicKey) != ed25519.PublicKeySize {
 		return network, result, errors.New("managed zone authority refresh requires a local identity public key")
 	}
-	if !authorityHasPublicKey(&delegation.Authority, identityPublicKey) {
+	if !delegation.Authority.HasPublicKey(identityPublicKey) {
 		return network, result, errors.New("managed zone authority refresh does not authorize the local identity key")
 	}
 
@@ -146,18 +146,6 @@ func ReconcileManagedAuthority(network *zone.NetworkState, managed zone.ZonePath
 	}
 	result.Refreshed = true
 	return candidate, result, nil
-}
-
-func authorityHasPublicKey(authority *zone.ZoneAuthority, publicKey []byte) bool {
-	if authority == nil {
-		return false
-	}
-	for _, key := range authority.Keys {
-		if bytes.Equal(key.Key, publicKey) {
-			return true
-		}
-	}
-	return false
 }
 
 func replaceManagedParentProof(existing []*zone.Delegation, managed zone.ZonePath, delegation *zone.Delegation) []*zone.Delegation {

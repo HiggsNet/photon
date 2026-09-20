@@ -77,12 +77,7 @@ func gossipEndpointIdentityReady(verified *corestate.VerifiedState) bool {
 		return false
 	}
 	public := verified.IdentityPrivateKey.Public().(ed25519.PublicKey)
-	for _, key := range zoneState.Authority.Keys {
-		if bytes.Equal(key.Key, public) {
-			return true
-		}
-	}
-	return false
+	return zoneState.Authority.HasPublicKey(public)
 }
 
 func gossipEndpointRefreshDue(previous *gossip.EndpointRecord, now time.Time, refresh time.Duration) bool {

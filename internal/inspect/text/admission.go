@@ -3,10 +3,10 @@ package text
 import (
 	"io"
 
-	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
 )
 
-func WriteAdmissionDiagnosis(w io.Writer, d inspect.AdmissionDiagnosis) error {
+func WriteAdmissionDiagnosis(w io.Writer, d gossip.AdmissionDiagnosis) error {
 	out := newLineWriter(w)
 	out.Linef("managed_zone: %s", d.ManagedZone)
 	out.Linef("parent_zone: %s", d.ParentZone)
