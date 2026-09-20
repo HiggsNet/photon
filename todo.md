@@ -185,7 +185,10 @@ Daemon
   - [x] `debug routing ip route` 改为 daemon-only 在线查询：CLI 只传 netns/family 并渲染单层 `inspect.KernelRouteDump`；netns 解析及 `ip`/`nsenter` 执行下沉 `internal/photonlinux`，删除 CLI 直连 Linux 命令和本地 runner。
 - [x] CLI/control/HTTP 共用 canonical inspect DTO；在线 CLI 不从 HTTP DTO 反向转换，也不直接调用平台 Driver。显式 offline recovery/direct 仍按其职责临时创建 Driver。
 - [x] verified/common 允许离线读；GossipCheckpoint 离线统一标记 `last-known`；platform Observation 只允许在线读，不从 bbolt 或 CLI Driver 冒充实时状态。
-- [ ] 冻结旧 aggregate schema 的直接升级截止版本；兼容期只保留单向 migration，到期同批删除 `legacy_state.go`、两组 migration、legacy peer DTO 和对应 fixtures/tests。
+- [x] 审计旧 schema 的实际入口与删除范围：daemon/offline 统一经 openState/restoreState 在一个写事务中迁移；区分 aggregate 升级、partitioned cleanup 标记搬迁和 root authority 修复。删除只验证 fixture 的旧格式读写测试及专用 helper，移除无人消费的 IdentityKeyPath 字段；真实迁移测试继续输入该历史字段并验证丢弃。
+- [x] 删除生产 stateFile 重复 aggregate 模型及双向字段中转，迁移直接消费 stateMeta/network；旧 peer 模型改为 app 私有 legacyPeerState。删除两处独立 peer 遍历前的排序，拒绝记录冲突选择所需排序保留。internal/state 中地址/拒绝记录 DTO 仍由在线 inspect 使用，不列入整组删除范围。
+- [x] cleanup 迁移复用生命周期最后活动时间规则，旧标记不得覆盖更新的同步或观测；现有投影与数据库迁移测试验证保留活动、避免误抑制及重开后持久化。
+- [ ] 冻结旧 aggregate schema 的直接升级截止版本；兼容期只保留单向 migration；到期删除 aggregate decoder、app 私有 legacyPeerState 与对应 fixtures/tests；保留在线 inspect 使用的地址/拒绝记录 DTO。partitioned cleanup 搬迁和 root authority 修复须分别核定，不能跟随 aggregate 截止整文件删除。
 - [ ] CLI 壳稳定后再迁入 `internal/photoncli`，不为了减少 `app/photon` 文件数先搬目录。
 
 本节每批迁移的完成条件继续遵守前述护栏：同步更新 runtime migration report，记录删除的旧 owner/入口和生产代码增删，执行相关单测、race（适用时）、Windows cross build、`make check` 与 `git diff --check`。这是持续验收规则，不作为一次性 checkbox。
@@ -204,11 +207,13 @@ Daemon
 
 ### B1. 冻结 v1 契约
 
-- [ ] 支持矩阵先固定 Windows 11 amd64；Windows 10、arm64 在首个 vertical slice 后按真实 CI/设备验证扩展。
+- [x] 支持矩阵先固定 Windows 11 amd64；Windows 10、arm64 在首个 vertical slice 后按真实 CI/设备验证扩展。
 - [ ] 固定首版算法集与 StrongSwan profile：Ed25519 raw public-key auth、X25519、AES-GCM-16，明确禁止项和协商失败行为。
-- [ ] v1 保持 outbound-only leaf、一个 active gateway、split tunnel；不做 transit、IKE responder、full tunnel、DNS/NRPT、GUI 或自动更新。
-- [ ] 冻结 route-origin 验证：Babel route 安装前必须匹配 Photon verified authorization，撤销/授权收紧 fail closed。
-- [ ] 定义 revocation、network change、service stop 和 crash recovery SLO。
+- [x] v1 保持 outbound-only leaf、一个 active gateway、split tunnel；不做 transit、IKE responder、full tunnel、DNS/NRPT、GUI 或自动更新。
+- [x] 冻结 route-origin 验证：Babel route 安装前必须匹配 Photon verified authorization，撤销/授权收紧 fail closed。
+- [x] 定义 revocation、network change、service stop 和 crash recovery SLO。
+
+B1 契约见 [Windows 设计](docs/photon-windows/design.md) §1.1、§3.1、§5.1。上述勾选仅表示范围与验收条件已定义，平台实现和真实运行验收仍在 B2–B6；算法与 StrongSwan profile 尚未冻结，B1 未整体完成。
 
 ### B2. Windows composition 与公共 gossip
 
@@ -272,7 +277,7 @@ Daemon
 ## 下一步执行顺序
 
 1. A5 本轮 Linux 配置、纯策略与 Driver 边界已收口；后续维护保留 app 的 owner 读取、调度、revision guard 和提交顺序，不继续为了文件数搬迁。
-2. 审计旧 aggregate schema 的现存迁移入口、fixtures 与版本承诺，再确定直接升级截止版本；截止前保留单向兼容。
-3. 冻结 legacy schema 直接升级截止版本；未到期前保持单向 migration，达到截止时整组删除兼容模型和 fixtures。
+2. 旧 aggregate schema 的入口、fixtures 与版本承诺审计已完成；仓库目前未声明直接升级截止版本，现有兼容继续保留。
+3. 发布计划确定截止版本后，按独立范围退出 aggregate decoder、partitioned cleanup 迁移和 root 修复；不能按文件名一次删除。
 4. CLI 壳只随上述 owner 迁移逐步进入 `internal/photoncli`，不单独进行目录搬家。
 5. Windows 先完成 B1 v1 契约，再实现 B2 composition 与真实 UDP gossip vertical slice；之后依次推进 IKE/ESP、Babel/SADR、Wintun、SCM/named-pipe 和完整验收。

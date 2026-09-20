@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
-	photonstate "github.com/HiggsNet/photon/internal/state"
 
 	"github.com/HiggsNet/photon/internal/photonlinux"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
@@ -107,14 +106,23 @@ func TestPartitionedLinuxStateMigratesOfflineCleanupIntoCheckpoint(t *testing.T)
 	verified := owners.verified
 	now := time.Unix(500_000, 0)
 	peerID := zone.ZonePath("node-b.catofes.")
+	recentPeerID := zone.ZonePath("recent.catofes.")
+	recentPeer := corestate.PeerCheckpoint{LastSyncUnix: now.Add(-10 * time.Second).Unix(), ObservedLastSeenUnix: now.Unix()}
 	addTestIPsecRecords(t, verified.Network.Zones[peerID], peerID, now, ipsec.RoleIn)
 
 	path := filepath.Join(t.TempDir(), "photon.db")
-	seedPartitionedStateDB(t, path, verified, &corestate.GossipCheckpoint{}, &photonlinux.LinuxState{})
+	seedPartitionedStateDB(t, path, verified, &corestate.GossipCheckpoint{Peers: map[string]corestate.PeerCheckpoint{
+		recentPeerID.String(): recentPeer,
+	}}, &photonlinux.LinuxState{})
 	legacyPayload, err := json.Marshal(struct {
 		PeerCleanups map[string]photonlinux.LegacyPeerCleanupState `json:"peer_cleanups"`
 	}{PeerCleanups: map[string]photonlinux.LegacyPeerCleanupState{
 		peerID.String(): {
+			LastActiveUnix: now.Add(-4 * time.Second).Unix(),
+			CleanupUnix:    now.Unix(),
+			Reason:         peerCleanupReasonOffline,
+		},
+		recentPeerID.String(): {
 			LastActiveUnix: now.Add(-4 * time.Second).Unix(),
 			CleanupUnix:    now.Unix(),
 			Reason:         peerCleanupReasonOffline,
@@ -157,6 +165,9 @@ func TestPartitionedLinuxStateMigratesOfflineCleanupIntoCheckpoint(t *testing.T)
 		t.Fatalf("migrated peer checkpoint = %+v", peer)
 	}
 	excluded := peerLifecycleExcludedPeers(view.Gossip, now, cfg)
+	if got := view.Gossip.Peers[recentPeerID.String()]; !reflect.DeepEqual(got, recentPeer) || excluded[recentPeerID] != "" {
+		t.Fatalf("recent peer changed or excluded: checkpoint %+v exclusions %+v", got, excluded)
+	}
 	if excluded[peerID] != peerCleanupReasonOffline {
 		t.Fatalf("migrated exclusion = %+v", excluded)
 	}
@@ -207,6 +218,13 @@ func TestPartitionedLinuxStateMigratesOfflineCleanupIntoCheckpoint(t *testing.T)
 		t.Fatalf("idempotent partitioned migration: %v", err)
 	}
 	if err := db.View(func(tx *bolt.Tx) error {
+		candidate, _, _, found, err := corestate.LoadBoltState(tx)
+		if err != nil || !found {
+			t.Fatalf("load migrated checkpoint: found %v err %v", found, err)
+		}
+		if got := candidate.Gossip.Peers[recentPeerID.String()]; !reflect.DeepEqual(got, recentPeer) {
+			t.Fatalf("persisted recent activity changed: %+v", got)
+		}
 		payload := tx.Bucket([]byte(photonlinux.LinuxStateBucketName)).Get([]byte("payload"))
 		if strings.Contains(string(payload), "peer_cleanups") {
 			t.Fatalf("legacy cleanup field survived one-time migration: %s", payload)
@@ -278,7 +296,7 @@ func TestLegacyLinuxStateMigrationRejectsCoexistingRepresentations(t *testing.T)
 		if err != nil {
 			return err
 		}
-		data, err := json.Marshal(stateMetaFromState(state))
+		data, err := json.Marshal(state.stateMeta)
 		if err != nil {
 			return err
 		}
@@ -294,7 +312,7 @@ func TestLegacyLinuxStateMigrationRejectsCoexistingRepresentations(t *testing.T)
 	}
 }
 
-func legacyRuntimeMigrationFixture(t *testing.T) (*stateFile, ed25519.PublicKey) {
+func legacyRuntimeMigrationFixture(t *testing.T) (*legacyStateFixture, ed25519.PublicKey) {
 	t.Helper()
 	rootPublic, rootPrivate, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -304,27 +322,32 @@ func legacyRuntimeMigrationFixture(t *testing.T) (*stateFile, ed25519.PublicKey)
 	network.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, &zone.ZoneAuthority{
 		Zone: zone.RootZone, Epoch: 1, Threshold: 1, Keys: []zone.AuthorizedKey{{Key: rootPublic}},
 	})
-	return &stateFile{
-		ManagedZone:     zone.RootZone,
-		IdentityKeyPath: "/etc/photon/identity.key",
-		RootPrivateKey:  rootPrivate,
-		Network:         network,
-		SyncPeers: map[string]photonstate.PeerRuntimeState{
-			"peer.catofes.": {BackoffUntilUnix: 20, LastError: "diagnostic-only"},
-		},
-		PeerCleanups: map[string]photonlinux.LegacyPeerCleanupState{
-			"cleaned.catofes.": {LastActiveUnix: 10, CleanupUnix: 30, Reason: peerCleanupReasonOffline},
+	return &legacyStateFixture{
+		Network: network,
+		stateMeta: stateMeta{
+			ManagedZone:    zone.RootZone,
+			RootPrivateKey: rootPrivate,
+			SyncPeers: map[string]legacyPeerState{
+				"peer.catofes.": {BackoffUntilUnix: 20, LastError: "diagnostic-only"},
+			},
+			PeerCleanups: map[string]photonlinux.LegacyPeerCleanupState{
+				"cleaned.catofes.": {LastActiveUnix: 10, CleanupUnix: 30, Reason: peerCleanupReasonOffline},
+			},
 		},
 	}, rootPublic
 }
 
-func seedLegacyLinuxState(t *testing.T, path string, state *stateFile) {
+func seedLegacyLinuxState(t *testing.T, path string, state *legacyStateFixture) {
 	t.Helper()
 	store, err := zone.OpenBoltStore(path, 0o600)
 	if err != nil {
 		t.Fatalf("OpenBoltStore: %v", err)
 	}
-	if err := store.SaveNetworkAndMetaJSON(cliMetaKey, stateMetaFromState(state), state.Network); err != nil {
+	meta := struct {
+		stateMeta
+		IdentityKeyPath string `json:"identity_key_path"`
+	}{stateMeta: state.stateMeta, IdentityKeyPath: "/etc/photon/identity.key"}
+	if err := store.SaveNetworkAndMetaJSON(cliMetaKey, meta, state.Network); err != nil {
 		_ = store.Close()
 		t.Fatalf("seed legacy state: %v", err)
 	}
@@ -396,4 +419,10 @@ func TestPartitionedRootRepairPersistsOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+}
+
+// legacyStateFixture combines the two retired database inputs only for migration tests.
+type legacyStateFixture struct {
+	stateMeta
+	Network *zone.NetworkState
 }

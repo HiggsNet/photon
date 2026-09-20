@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
-
-	photonstate "github.com/HiggsNet/photon/internal/state"
 )
 
 func TestLegacyPeerDiagnosticsAreIgnored(t *testing.T) {
@@ -25,13 +23,13 @@ func TestLegacyPeerDiagnosticsAreIgnored(t *testing.T) {
 		t.Fatalf("Unmarshal legacy state: %v", err)
 	}
 	peer := meta.SyncPeers["peer-a.catofes."]
-	if !reflect.DeepEqual(peer, photonstate.PeerRuntimeState{}) {
+	if !reflect.DeepEqual(peer, legacyPeerState{}) {
 		t.Fatalf("legacy diagnostics leaked into runtime state: %#v", peer)
 	}
 }
 
 func TestLegacyStateMetaCannotPersistPeerDiagnostics(t *testing.T) {
-	meta := stateMeta{SyncPeers: map[string]photonstate.PeerRuntimeState{
+	meta := stateMeta{SyncPeers: map[string]legacyPeerState{
 		"peer-a.catofes.": {LastSyncUnix: 42},
 	}}
 	data, err := json.Marshal(meta)

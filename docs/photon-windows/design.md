@@ -2,7 +2,7 @@
 
 > 状态：实现中  
 > 首个目标：Windows 11 amd64 prototype  
-> 对应任务：[todo.md Phase 10](../../todo.md#phase-10-photon-windows当前新主线)
+> 对应任务：[todo.md B](../../todo.md#b-photon-windows-当前主线)
 
 ## 1. 产品边界
 
@@ -19,7 +19,28 @@ XFRM、BIRD 或 network namespace。
 - 内嵌 Babel leaf 和用户态 source-specific route table；
 - Wintun 承接 Windows TCP/IP stack 的 L3 packet；
 - split tunnel，只向 Windows 安装稳定 Photon aggregate route；
-- 不做 transit、IKE responder、lite-to-lite、full tunnel、GUI 或 auto-update。
+- 不做 transit、IKE responder、lite-to-lite、full tunnel、DNS/NRPT、GUI 或 auto-update。
+
+### 1.1 v1 支持与验收矩阵
+
+首版支持目标固定为 Windows 11 amd64。Windows 10、Windows Server、arm64 和模拟运行均不进入
+首版支持承诺，须在第一个真实 vertical slice 后分别补齐 CI 与设备验收才能扩展。此处是产品范围，
+不是已通过兼容测试的声明；当前 Linux 上的测试和 Windows 交叉编译只证明公共逻辑与编译边界。
+
+| 环境 | 当前验证用途 | 发布前必须补齐 |
+| --- | --- | --- |
+| Linux 开发主机 | config、State、公共 gossip 与 memory convergence 测试；Windows amd64 交叉编译 | 不替代 Windows 运行验收 |
+| Windows 11 amd64 VM | 首版运行验收目标 | 真实 UDP、Wintun、IP Helper、SCM、停止/重启/崩溃恢复 |
+| Photon Linux gateway | 协议互通目标 | StrongSwan IKE/ESP、BIRD Babel、撤销后停止转发 |
+
+多个 `gateway.allowed_zones` 表示候选集合，不表示多个同时转发的 gateway。切换时先停止旧 gateway
+承载业务，再启用新 gateway；同一 gateway 的 rekey overlap 不视为第二个 active gateway。
+`overlay.split_routes` 只限制本机接入隧道的地址范围，不授予 route origin 权限。
+DNS/NRPT、默认路由和系统代理不由本产品修改。服务启动后配置保持不变，修改配置通过重启应用。
+
+算法契约仍待 B1 的 StrongSwan profile 单独冻结。Ed25519 raw public-key auth、X25519、AES-GCM-16
+是目标集合，不代表 IKE PRF、AES key length、ID 编码和 CHILD rekey proposal 已完成互通验收。
+算法与 profile 契约冻结前不进入 B2 实现；真实互通验收仍属于 B3。
 
 Photon Android 是后续独立产品。两个产品可以复用 portable core，但 Windows Service、
 Wintun、IP Helper、named pipe 和 Event Log 不进入 Android 依赖图。
@@ -68,12 +89,28 @@ Photon Windows 继续消费 Photon 的可信事实层：
 静态 gateway address 只能作为 bootstrap hint。IKE responder identity 必须匹配已验证的
 transport record，Babel route 必须在写入 SADR table 前通过 `AuthorizedRouteSet`。
 
-首版尚需完成 Babel 64-bit Router ID 到 verified Zone 的端到端 origin binding。在该绑定
-完成前，prototype 只连接一个显式选择的可信 gateway；它能阻止未授权 prefix，却不能完全
-阻止这个已认证 gateway 冒充另一个已授权 route origin。因此该阶段必须标记为
-experimental，不能作为 production security boundary 发布。
+### 3.1 route-origin 安装契约
 
-### 3.1 本机私钥模型
+v1 的路由准入须同时满足以下条件，缺失任何一项都不得安装或继续使用：
+
+1. 接收路由的 SA 属于当前 active gateway；gateway 的 identity、transport key、overlay 和撤销状态
+   均由当前 verified records 确认，bootstrap hint 和配置 allowlist 不能替代验证。
+2. Babel 64-bit Router ID 必须无歧义地绑定到 verified origin Zone。绑定缺失、冲突或失效时拒绝该路由；
+   不能把 next-hop gateway 自动当作 origin，也不能因为某个 Zone 授权了同一 prefix 就放行。
+3. 使用当前 verified snapshot 与当前时间构建 `routing.BuildAuthorizedRouteSet`，匹配
+   `Announced[origin][prefix]` 的有效授权，并限制在配置 split aggregate 内。SADR 的 source prefix
+   同样须通过明确授权规则；规则未实现时拒绝带 source constraint 的路由，不静默丢弃该约束。
+4. 安装前检查规划所用 `VerifiedRevision` 仍为当前值；异步完成过期时丢弃并重新规划。
+   record 到期也须触发重新校验，不能只等待 revision 变化。
+
+撤销或授权收紧时先使 packet lookup 中的旧授权不可用，再异步清理路由和 SA；失败不能恢复旧授权。
+Windows aggregate route 只把流量送入 Wintun，不能绕过用户态逐路由授权。
+
+以上是安装与撤销的验收契约。Router ID 派生、碰撞处理及端到端 binding 的 wire 方案仍须在 B4 实现
+并验证；仅从身份稳定派生 Router ID 不能证明收到的 origin 声明可信。在绑定完成前，prototype
+只能作为显式选择单个可信 gateway 的 experimental 实验，不能作为 production security boundary 发布。
+
+### 3.2 本机私钥模型
 
 Photon Windows 沿用 Photon Linux 的管理员责任模型。root、Zone identity 和 transport 的
 Ed25519/private key material 可以作为普通原始字节直接保存在同一个
@@ -88,7 +125,7 @@ Zone snapshot；这是防止意外远程泄漏，不是把进程内 Store 当作
 sign/verify。Windows 与 Linux 不维护两套 signer/key-store adapter，也不为硬件不可导出密钥改变
 state transaction 语义。未来若需要平台加固，只能作为兼容相同持久化和签名语义的可选扩展。
 
-### 3.2 Verified state 与 Gossip runtime 边界
+### 3.3 Verified state 与 Gossip runtime 边界
 
 `VerifiedState` 只保存会影响信任结论的事实：managed Zone、已验证 Network、完整 Ed25519
 `trusted_root_public_key` pin 以及本机
@@ -121,15 +158,14 @@ root-key rotation，因此在线 Store/codec 拒绝修改 pin，远端 root snap
 
 Linux 旧 `_meta/cli_state` 与 `zone:*` 迁移也只接收唯一 `state.BoltStore` 提供的事务：同一事务写完公共
 state bucket 和 `photon:linux-runtime` bucket 后删除旧表示，失败整体回滚，新旧表示同时存在则拒绝启动。
-迁移是单向的旧数据库升级，不提供新 bucket 到旧 `stateFile/SyncPeers` 的反向 view、双写或字段别名。迁移函数
-在整体切换在线 writer 前保持未接线状态，不能让旧保存路径与新 bucket 同时写入。
+迁移已接入 Linux 启动和离线打开数据库的入口，是单向旧数据库升级，不提供新 bucket 到旧 aggregate
+的反向 view、双写或字段别名。Windows 不接受 Linux 旧布局，也不复制 Linux 迁移入口。
 
 公共 `state.BoltStore` 是唯一持久化 owner，统一持有 bbolt handle、事务顺序和关闭生命周期。Linux 只提供
 自己的 bucket codec 与事务组合函数，不再定义平台专属的持久化 Store。首次加载在同一事务内
 迁移并读取完整 aggregate，公共状态与 Linux runtime 写入均复用该 handle。字节完全相同的提交回滚为空操作；
 公共状态校验或提交失败会连同同事务的平台 payload 一起
-回滚。第二个进程/handle 必须在有界超时后因文件锁冲突失败，Close 错误必须返回给生命周期 owner。E 阶段会
-整体替换现有 Linux loader/writer，替换完成前两套路径不会同时在线。
+回滚。第二个进程/handle 必须在有界超时后因文件锁冲突失败，Close 错误必须返回给生命周期 owner。Linux loader/writer 已完成切换，不保留第二套在线写入路径。
 
 Metadata-only 写入不产生新的版本域：Gossip checkpoint 仍通过同一 BoltStore 保存，但保持当前
 `VerifiedRevision`；Linux controller completion 只更新平台 runtime bucket，提交时将其开始计算时读取的
@@ -257,6 +293,26 @@ Windows service/composition 只有在配置、State、GossipDriver 和当前实�
 
 Windows address/route 的 ownership 和回滚属于 `internal/photonwindows`，不由 GossipDriver 或 portable packet
 engine 猜测。service crash 后下一次启动只能 adopt 带匹配 owner/generation 的资源。
+
+### 5.1 v1 生命周期验收目标
+
+以下时限是待实现和测量的 v1 验收目标，不是当前性能数据。测试使用本机单调时钟，记录触发事件、
+停止旧流量、资源收口和最终状态；不把公网传播、DNS 响应或远端可达时间计入本机处理时限。
+
+| 事件与计时起点 | 先执行的安全动作 | 本机完成目标 |
+| --- | --- | --- |
+| 撤销/授权收紧：本机接受新的 verified revision；到期：本机授权期限到达 | 从该授权失效点起，后续 packet lookup 不得继续选中旧路由；在途发送须在最终提交前重新检查 | 1 秒内完成用户态 route/SA 失效处理，5 秒内完成相关 owned OS 资源清理 |
+| 网络变化：收到 Windows 网络通知 | 使旧 socket/路径 generation 失效，过期 completion 不得重新启用旧路径 | 1 秒内开始重新观察与 rebind；单次本机 I/O 取消和关闭 5 秒内结束 |
+| service stop：SCM stop 或 console cancellation 到达 composition | 停止接收新业务 packet，按本节顺序关闭资源，不启动新的重连 | 10 秒内完成正常关闭；超时报告 failed，列出未释放的 owned 资源，不报告 stopped 成功 |
+| crash recovery：下一次进程启动进入 composition | 在重新验证可信状态、ownership 和新 SA 前保持数据面关闭；不恢复旧 SA sequence/replay window | 30 秒内完成本机资源检查与 adopt/清理，进入可连接的 disconnected 状态或明确 failed；不以远端连通作为期限前提 |
+
+网络持续不可达时按配置 backoff 重试，并维持 disconnected；上述期限不承诺 VPN 建立时间。
+进程崩溃到下一次启动的延迟由 SCM/管理员控制，不计入 recovery 时限。无法证明归属的 OS 资源
+不得删除；出现冲突则失败退出并报告具体对象。资源清理超时不能重新开放已失效的授权。
+
+验收至少包括：可持续发包时注入撤销、无 revision 变化的 record 到期、断网/换网时保留过期 completion、
+阻塞 I/O 时停止、部分初始化失败、强制结束后重启，以及同时存在外部同类资源。必须观察真实发包
+与 OS 资源结果；fake clock 和 memory 测试仅验证顺序与超时分支。B2/B4/B5/B6 分别实现并验收这些条件。
 
 ## 6. 当前首个切口
 

@@ -92,18 +92,7 @@ func migrateLegacyLinuxStateTx(tx *bolt.Tx, trustedRoot ed25519.PublicKey) (lega
 	if err := json.Unmarshal(legacyMeta.Get([]byte(cliMetaKey)), &meta); err != nil {
 		return report, false, fmt.Errorf("decode legacy %s: %w", cliMetaKey, err)
 	}
-	legacy := &stateFile{
-		ManagedZone:       meta.ManagedZone,
-		IdentityKeyPath:   meta.IdentityKeyPath,
-		RootPrivateKey:    meta.RootPrivateKey,
-		ZonePrivateKey:    meta.ZonePrivateKey,
-		Network:           legacyNetwork,
-		SyncPeers:         meta.SyncPeers,
-		PeerCleanups:      meta.PeerCleanups,
-		IPsecTransportKey: meta.IPsecTransportKey,
-		EndpointACLs:      meta.EndpointACLs,
-	}
-	candidate, gossipReport, err := projectLegacyCommonState(legacy, trustedRoot)
+	candidate, gossipReport, err := projectLegacyCommonState(&meta, legacyNetwork, trustedRoot)
 	if err != nil {
 		return report, false, err
 	}
@@ -111,7 +100,10 @@ func migrateLegacyLinuxStateTx(tx *bolt.Tx, trustedRoot ed25519.PublicKey) (lega
 	if _, err := corestate.CommitBoltState(tx, candidate, corestate.ChangeSet{}); err != nil {
 		return report, false, err
 	}
-	if _, err := photonlinux.SaveLinuxStateTx(tx, linuxStateFromLegacy(legacy)); err != nil {
+	if _, err := photonlinux.SaveLinuxStateTx(tx, &photonlinux.LinuxState{
+		IPsecTransportKey: meta.IPsecTransportKey,
+		EndpointACLs:      meta.EndpointACLs,
+	}); err != nil {
 		return report, false, err
 	}
 	if _, err := zone.DeleteNetworkTx(tx); err != nil {
@@ -121,14 +113,4 @@ func migrateLegacyLinuxStateTx(tx *bolt.Tx, trustedRoot ed25519.PublicKey) (lega
 		return report, false, err
 	}
 	return report, true, nil
-}
-
-func linuxStateFromLegacy(state *stateFile) *photonlinux.LinuxState {
-	if state == nil {
-		return &photonlinux.LinuxState{}
-	}
-	return &photonlinux.LinuxState{
-		IPsecTransportKey: state.IPsecTransportKey,
-		EndpointACLs:      state.EndpointACLs,
-	}
 }

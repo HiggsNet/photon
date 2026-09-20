@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"sort"
 
 	"github.com/HiggsNet/photon/internal/photonlinux"
@@ -14,6 +13,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
 var errLegacyCommonStateInvalid = errors.New("legacy common state is invalid")
@@ -32,20 +32,20 @@ type legacyGossipCheckpointReport struct {
 // projectLegacyCommonState is used only inside the one-way old-database
 // migration. Platform controller fields are intentionally unreachable from
 // the returned candidate; no online compatibility adapter exposes this API.
-func projectLegacyCommonState(state *stateFile, trustedRoot ed25519.PublicKey) (*corestate.CommitCandidate, legacyGossipCheckpointReport, error) {
-	if state == nil {
+func projectLegacyCommonState(meta *stateMeta, legacyNetwork *zone.NetworkState, trustedRoot ed25519.PublicKey) (*corestate.CommitCandidate, legacyGossipCheckpointReport, error) {
+	if meta == nil {
 		return nil, legacyGossipCheckpointReport{}, fmt.Errorf("%w: %w", errLegacyCommonStateInvalid, corestate.ValidateStateRoot(nil))
 	}
-	network := zone.CloneNetworkState(state.Network)
-	checkpoint, report := projectLegacyGossipCheckpoint(state.SyncPeers)
-	report, _ = projectLegacyPeerCleanups(checkpoint, state.PeerCleanups, report)
+	network := zone.CloneNetworkState(legacyNetwork)
+	checkpoint, report := projectLegacyGossipCheckpoint(meta.SyncPeers)
+	report, _ = projectLegacyPeerCleanups(checkpoint, meta.PeerCleanups, report)
 	candidate := &corestate.CommitCandidate{
 		Verified: &corestate.VerifiedState{
-			ManagedZone:          state.ManagedZone,
+			ManagedZone:          meta.ManagedZone,
 			Network:              network,
 			TrustedRootPublicKey: append(ed25519.PublicKey(nil), trustedRoot...),
-			RootPrivateKey:       append(ed25519.PrivateKey(nil), state.RootPrivateKey...),
-			IdentityPrivateKey:   append(ed25519.PrivateKey(nil), state.ZonePrivateKey...),
+			RootPrivateKey:       append(ed25519.PrivateKey(nil), meta.RootPrivateKey...),
+			IdentityPrivateKey:   append(ed25519.PrivateKey(nil), meta.ZonePrivateKey...),
 		},
 		Gossip: checkpoint,
 	}
@@ -80,21 +80,15 @@ func projectLegacyPeerCleanups(checkpoint *corestate.GossipCheckpoint, cleanups 
 	if checkpoint.Peers == nil {
 		checkpoint.Peers = make(map[string]corestate.PeerCheckpoint)
 	}
-	peerIDs := make([]string, 0, len(cleanups))
-	for peerID := range cleanups {
-		peerIDs = append(peerIDs, peerID)
-	}
-	sort.Strings(peerIDs)
 	changed := false
-	for _, peerID := range peerIDs {
-		cleanup := cleanups[peerID]
+	for peerID, cleanup := range cleanups {
 		path := zone.ZonePath(peerID)
 		if !path.Valid() || path == zone.RootZone || cleanup.Reason != peerCleanupReasonOffline || cleanup.LastActiveUnix <= 0 || cleanup.CleanupUnix <= 0 {
 			report.CleanupsDropped++
 			continue
 		}
 		peer := checkpoint.Peers[peerID]
-		if peer.LastSyncUnix > cleanup.LastActiveUnix {
+		if peerLifecycleLastActiveUnix(peer) > cleanup.LastActiveUnix {
 			report.CleanupsDropped++
 			continue
 		}
@@ -111,21 +105,15 @@ func projectLegacyPeerCleanups(checkpoint *corestate.GossipCheckpoint, cleanups 
 // projectLegacyGossipCheckpoint is used only by the one-way schema migration.
 // Only restart hints and the most recent typed failure survive. Session state
 // and pure counters are intentionally omitted.
-func projectLegacyGossipCheckpoint(peers map[string]photonstate.PeerRuntimeState) (*corestate.GossipCheckpoint, legacyGossipCheckpointReport) {
+func projectLegacyGossipCheckpoint(peers map[string]legacyPeerState) (*corestate.GossipCheckpoint, legacyGossipCheckpointReport) {
 	checkpoint := &corestate.GossipCheckpoint{Peers: make(map[string]corestate.PeerCheckpoint)}
 	var report legacyGossipCheckpointReport
-	peerIDs := make([]string, 0, len(peers))
-	for peerID := range peers {
-		peerIDs = append(peerIDs, peerID)
-	}
-	sort.Strings(peerIDs)
-	for _, peerID := range peerIDs {
+	for peerID, legacy := range peers {
 		path := zone.ZonePath(peerID)
 		if !path.Valid() || path == zone.RootZone {
 			report.PeersDropped++
 			continue
 		}
-		legacy := peers[peerID]
 		peer := corestate.PeerCheckpoint{
 			LastSyncUnix:            legacy.LastSyncUnix,
 			LastAttemptUnix:         legacy.LastAttemptUnix,

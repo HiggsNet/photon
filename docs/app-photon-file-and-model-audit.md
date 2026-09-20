@@ -503,7 +503,7 @@ routing/BIRD、IPsec 的窄切口把 focused YAML 与 effective config 下沉到
 
 - 做什么：在一个 bbolt 写事务里检测旧 schema、投影 Common/Linux 新分区、删除旧 bucket，并拒绝新旧 schema 同时存在。
 - 主要构成：`legacyStateMigrationReport`。
-- 审核：兼容期必要，原子迁移和冲突拒绝都正确。停止支持旧 DB 后应整文件删除，而不是保留成“备用 loader”。
+- 审核：兼容期必要，原子迁移和冲突拒绝都正确。停止支持旧 aggregate DB 后删除其专用分支；本文件还承担 partitioned cleanup 搬迁和 root authority 修复，须各自满足退场条件，不能整文件删除。
 
 ### 64. `service.go`
 
@@ -638,9 +638,9 @@ rotation、revision guard、apply 和 Observation 的完整顺序；不要把整
 确定“从哪个旧版本直接升级仍受支持”，到期同批删除：
 
 - `legacy_state.go`；
-- `runtime_state_migration.go`；
-- `gossip_checkpoint_migration.go`；
-- `internal/state/peer.go` 的 legacy peer DTO；
+- `runtime_state_migration.go` 的 aggregate 专用分支（partitioned cleanup 搬迁与 root 修复另行核定）；
+- `gossip_checkpoint_migration.go` 的旧 peer 投影（cleanup 投影须等 partitioned 兼容也退出）；
+- app/legacy_state.go 的私有 legacyPeerState；internal/state/peer.go 剩余地址/拒绝记录 DTO 被在线 inspect 使用，不能随迁移删除；
 - `debug_db.go` 中仅服务旧 schema 的 dump；
 - 对应 legacy fixtures/tests。
 
@@ -661,3 +661,7 @@ controller、ObservationStore 或跨平台 facade。
 
 本次复核在 HEAD `3603972c9806` 上执行 fresh `make check`：fmt、vet、全量 Go 测试、Linux build 与 Windows amd64
 cross build 均通过；`git diff --check` 通过。没有为这次文档审计额外运行 race 或特权 smoke。
+
+2026-09-19 补充复核：上述历史文件清单不等于整文件删除清单。启动升级还处理已分区状态的 cleanup 标记与 root 修复，当前职责及兼容范围以 operator-compatibility.md 的数据库迁移节为准。仅供 fixture 自测的 legacy_state_codec_test.go/legacy_state_fixture_test.go 已移除，必要 fixture 构造并入实际迁移测试。
+
+2026-09-20 补充：生产 stateFile 与 metadata 中转已删除，迁移直接接收 stateMeta 和旧 network；PeerRuntimeState 已改为 app 私有 legacyPeerState。历史清单中的 internal/state/peer.go 不可整文件删除，其剩余两个 DTO 仍属于当前 inspect 响应。

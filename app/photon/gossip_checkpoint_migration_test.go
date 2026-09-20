@@ -15,7 +15,7 @@ import (
 
 func TestProjectLegacyGossipCheckpointKeepsOnlyBehaviorHints(t *testing.T) {
 	root := []byte("root")
-	checkpoint, report := projectLegacyGossipCheckpoint(map[string]photonstate.PeerRuntimeState{
+	checkpoint, report := projectLegacyGossipCheckpoint(map[string]legacyPeerState{
 		"peer-a.catofes.": {
 			LastSyncUnix: 10, LastAttemptUnix: 11, BackoffUntilUnix: 20, FailureCount: 2,
 			LastRelayUnix: 12, LastRelayCatalogRootHex: "catalog",
@@ -49,7 +49,7 @@ func TestProjectLegacyGossipCheckpointKeepsOnlyBehaviorHints(t *testing.T) {
 	}
 }
 
-func TestProjectLegacyPeerCleanupsPreservesSuppressionWithoutOverwritingNewerSync(t *testing.T) {
+func TestProjectLegacyPeerCleanupsPreservesSuppressionWithoutOverwritingNewerActivity(t *testing.T) {
 	checkpoint := &corestate.GossipCheckpoint{Peers: map[string]corestate.PeerCheckpoint{
 		"stale.catofes.": {LastSyncUnix: 5, ObservedLastSeenUnix: 30},
 		"fresh.catofes.": {LastSyncUnix: 20},
@@ -62,14 +62,14 @@ func TestProjectLegacyPeerCleanupsPreservesSuppressionWithoutOverwritingNewerSyn
 		"invalid":          {LastActiveUnix: 10, CleanupUnix: 15, Reason: peerCleanupReasonOffline},
 	}
 	report, changed := projectLegacyPeerCleanups(checkpoint, cleanups, legacyGossipCheckpointReport{})
-	if !changed || report.CleanupsMigrated != 2 || report.CleanupsDropped != 3 {
+	if !changed || report.CleanupsMigrated != 1 || report.CleanupsDropped != 4 {
 		t.Fatalf("projection = changed %v report %+v", changed, report)
 	}
 	if got := checkpoint.Peers["cleaned.catofes."]; got.LastSyncUnix != 0 || got.ObservedLastSeenUnix != 10 {
 		t.Fatalf("new cleanup checkpoint = %+v", got)
 	}
-	if got := checkpoint.Peers["stale.catofes."]; got.LastSyncUnix != 5 || got.ObservedLastSeenUnix != 10 {
-		t.Fatalf("stale cleanup checkpoint = %+v", got)
+	if got := checkpoint.Peers["stale.catofes."]; got.LastSyncUnix != 5 || got.ObservedLastSeenUnix != 30 {
+		t.Fatalf("newer observation was overwritten: %+v", got)
 	}
 	if got := checkpoint.Peers["fresh.catofes."]; got.LastSyncUnix != 20 || got.ObservedLastSeenUnix != 0 {
 		t.Fatalf("newer successful sync was overwritten: %+v", got)
@@ -80,7 +80,7 @@ func TestProjectLegacyPeerCleanupsPreservesSuppressionWithoutOverwritingNewerSyn
 }
 
 func TestProjectLegacyGossipCheckpointKeepsFailureAndDropsMalformedHints(t *testing.T) {
-	checkpoint, report := projectLegacyGossipCheckpoint(map[string]photonstate.PeerRuntimeState{
+	checkpoint, report := projectLegacyGossipCheckpoint(map[string]legacyPeerState{
 		"diagnostic.catofes.": {LastError: "only diagnostic"},
 		"invalid":             {BackoffUntilUnix: 10},
 		"peer.catofes.": {RejectedDigests: map[string]photonstate.PeerRejectedDigest{
@@ -99,28 +99,33 @@ func TestProjectLegacyGossipCheckpointKeepsFailureAndDropsMalformedHints(t *test
 func TestProjectLegacyCommonStateRejectsMalformedRequiredFields(t *testing.T) {
 	tests := []struct {
 		name  string
-		state *stateFile
+		state *legacyStateFixture
 	}{
 		{name: "nil state"},
-		{name: "missing network", state: &stateFile{ManagedZone: zone.RootZone}},
-		{name: "missing managed zone", state: &stateFile{ManagedZone: "node.catofes.", Network: zone.NewNetworkState()}},
+		{name: "missing network", state: &legacyStateFixture{stateMeta: stateMeta{ManagedZone: zone.RootZone}}},
+		{name: "missing managed zone", state: &legacyStateFixture{stateMeta: stateMeta{ManagedZone: "node.catofes."}, Network: zone.NewNetworkState()}},
 		{name: "bad root key", state: legacyProjectionFixture([]byte("short"), nil)},
 		{name: "bad identity key", state: legacyProjectionFixture(nil, []byte("short"))},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if _, _, err := projectLegacyCommonState(test.state, nil); !errors.Is(err, errLegacyCommonStateInvalid) || !errors.Is(err, corestate.ErrInvalidStateRoot) {
+			var meta *stateMeta
+			var network *zone.NetworkState
+			if test.state != nil {
+				meta, network = &test.state.stateMeta, test.state.Network
+			}
+			if _, _, err := projectLegacyCommonState(meta, network, nil); !errors.Is(err, errLegacyCommonStateInvalid) || !errors.Is(err, corestate.ErrInvalidStateRoot) {
 				t.Fatalf("error = %v, want errLegacyCommonStateInvalid", err)
 			}
 		})
 	}
 }
 
-func legacyProjectionFixture(rootPrivate, identityPrivate []byte) *stateFile {
+func legacyProjectionFixture(rootPrivate, identityPrivate []byte) *legacyStateFixture {
 	network := zone.NewNetworkState()
 	network.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, &zone.ZoneAuthority{Zone: zone.RootZone})
-	return &stateFile{
-		ManagedZone: zone.RootZone, Network: network,
+	return &legacyStateFixture{Network: network, stateMeta: stateMeta{
+		ManagedZone:    zone.RootZone,
 		RootPrivateKey: append(ed25519.PrivateKey(nil), rootPrivate...), ZonePrivateKey: append(ed25519.PrivateKey(nil), identityPrivate...),
-	}
+	}}
 }

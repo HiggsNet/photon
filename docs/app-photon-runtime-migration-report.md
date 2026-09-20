@@ -590,3 +590,41 @@ A5 的 Linux 子系统配置与纯策略项标记完成；旧 aggregate schema �
 规模记录：相对本地提交 e5089b6，当前全部未提交 Go 改动（包含前几轮 overlay/IPsec 配置迁移及未跟踪新文件）为生产代码 +528/-509，净增 19 行；测试 +388/-338，净增 50 行。配置归属迁移和局部重复删除不等于全仓净减行数；本轮不新增包。最终完整 make check、相关路径 race 与 git diff --check 均通过。
 
 提交前复核：daemon 装配入口改名 NewDaemonDriver；tunnelAddressConfigYAML 及 parse 收窄为包内接口；合并无 overlay 构造器测试，把空 SA 观测断言并入 VICI 要求差异测试。上述两处冗余已处理，最终 make check 与 git diff --check 通过。前述行数为复核前快照。
+
+
+### 旧 schema 迁移审计与测试减法（8da3fe0 之后）
+
+前一批配置/Driver/协调重构已提交为 8da3fe0。继续审计确认：restoreState 在同一 bbolt 更新事务调用迁移并加载，aggregate 旧布局升级、partitioned cleanup 标记搬迁、root authority 修复是三个不同的保留范围。现行版本号不是兼容截止承诺，尚未指定截止版本；修正旧审计中“到期整文件删除”的建议，避免误删仍需使用的修复路径。
+
+删除只检验测试 helper 原子写入的 TestLegacyStateFixtureCommitsMetaAndNetworkAtomically，连同其独占 saveStateAt/loadLegacyStateAt/stateDBTxID，删除两个测试文件；仍被真实迁移测试使用的 stateMetaFromState 并入该测试文件。生产旧模型不再读取/搬运无人消费的 IdentityKeyPath，真实旧库 fixture 仍显式写入 identity_key_path 并通过现有迁移测试验证其被忽略。linuxStateFromLegacy 并回唯一非 nil 调用方，私钥/ACL 迁移行为不变。
+
+本后续切片 Go 代码净减 115 行：生产净减 10 行，测试净减 105 行。保留原子性、幂等性、失败回滚、新旧共存拒绝、cleanup 搬迁和 root 修复回归。尚未提交或发布。
+
+验证：旧格式/分区迁移定向测试、完整 make check（含 Linux 构建和 Windows 交叉构建）、git diff --check 均通过；未执行真实旧部署升级或特权数据面 smoke。
+
+
+### 旧模型边界继续收缩（2026-09-20）
+
+删除生产 stateFile：旧 metadata 解码后直接与 legacyNetwork 交给 projectLegacyCommonState，取消 stateMeta -> stateFile 的逐字段中转；fixture 仅在测试中组合 metadata/network，删除反向转换 helper。旧 peer 总模型只被迁移消费，因此从 internal/state 收回 app/legacy_state.go，改为私有 legacyPeerState；共享地址宽限期/拒绝记录 DTO 仍被在线 inspect 使用，保持原 JSON 响应并纠正整文件删除建议。
+
+两处 peer/cleanup 投影均按唯一 peer ID 独立写入 map，不依赖遍历顺序，删除临时 key slice 与排序。拒绝记录可能多条映射同一个 zone，保留其稳定排序和同时间戳选择行为。没有增加新包、转换层或测试用例。
+
+相对 8da3fe0，累计未提交生产 Go 代码净减 44 行，测试净减 110 行，共净减 154 行；本次相对上一轮另减生产 34 行、测试 5 行。原有旧库升级/幂等/回滚/冲突拒绝、partitioned cleanup、root 修复和 inspect 测试继续通过。完整 make check（含 Linux/Windows 构建）及 git diff --check 通过。旧库支持和当前查询 schema 均保留；尚未提交、推送或部署。
+
+### cleanup 迁移保留较新活动（2026-09-20）
+
+继续审计发现旧 cleanup 投影只保护较新的成功同步，却会用较旧 LastActiveUnix 覆盖较新的 ObservedLastSeenUnix。现有生命周期策略取两者最大值，因此该覆盖会使近期仍有活动的 peer 在升级后错误进入离线抑制。投影改为复用 peerLifecycleLastActiveUnix，统一活动时间判定，保留旧记录已过时的 dropped 统计。
+
+纠正原投影测试中允许观测时间倒退的断言；扩展现有 partitioned 数据库迁移测试，验证较新观测不变、不被抑制、重开数据库后仍持久保留。修复前两个测试均失败，修复后定向测试与完整 make check（含 Linux/Windows 构建）通过。没有新增测试函数或生产抽象。
+
+相对 8da3fe0，累计未提交生产 Go 代码净减 44 行、测试净减 91 行，合计净减 135 行。尚未提交、推送或部署；未执行真实部署升级。
+
+### Windows B1 范围与验收契约（2026-09-20）
+
+Linux 收口之后按 Todo 转入 Windows B1。在既有 Windows design 文档定义 Windows 11 amd64 支持目标、候选 gateway 与唯一 active gateway 的关系、split route 不授予 origin 权限，以及明确排除 DNS/NRPT 等首版外能力。路由安装契约要求 gateway 验证、Router ID/origin binding、当前 AuthorizedRouteSet、split 范围和 revision/time 校验同时成立；绑定 wire 方案与实现仍由 B4 完成，不把稳定 Router ID 派生误当作认证。
+
+定义撤销、network change、stop、crash recovery 的本机计时起点、关闭旧流量顺序、验收目标和失败状态；目标数值尚未在 Windows 测量。Todo 勾选四项契约定义，算法/StrongSwan profile 仍未完成，B2–B6 实现及运行验收未勾选。修正设计文档中 Linux 迁移未接线、loader/writer 尚待切换的旧叙述及 Todo 链接。
+
+本次仅修改文档，不增加生产代码、测试函数或包；累计未提交 Go 代码行数仍为生产净减 44 行、测试净减 91 行。Windows config/State/gossip、CLI 和 routing 测试通过，git diff --check 通过。前一轮完整 make check 仍对应当前未改变的 Go 代码；本轮未重新运行完整构建或 Windows VM 验收。尚未提交、推送或部署。
+
+提交前汇总复核（2026-09-20）：本批包含旧模型精简、cleanup 活动时间回归修复与 Windows B1 文档契约。重新执行完整 make check（fmt、vet、全量测试、Linux 构建与 Windows amd64 交叉构建）、迁移与旧字段处理相关定向 race 测试及 git diff --check，均通过。make check 在允许本地 socket 的环境完成；race 使用完整的默认模块缓存，避开临时缓存缺失 race.go 的问题。未执行真实旧部署升级、特权数据面 smoke 或 Windows VM 验收；本次仅本地提交，不推送、打 tag、发布或部署。
