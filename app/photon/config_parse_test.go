@@ -22,20 +22,7 @@ func TestParseConfigYAML(t *testing.T) {
 	config := defaultAppConfig()
 	input := `
 data_dir: /tmp/photon-a
-trusted_root_public_key: ` + hex.EncodeToString(pub) + `
-gossip:
-  peer_id: node-a
-  listen_addr: 0.0.0.0:33434
-  max_datagram_bytes: 32768
-  max_sync_zones: 8
-  max_sync_records: 512
-  endpoint_grace: 2m
-  reflector_timeout: 1500ms
-  publish_endpoints: false
-  bootstrap:
-    - id: node-b
-      addr: 127.0.0.1:33435
-`
+trusted_root_public_key: ` + hex.EncodeToString(pub)
 	if err := parseConfigYAML(input, config); err != nil {
 		t.Fatalf("parseConfigYAML: %v", err)
 	}
@@ -43,26 +30,8 @@ gossip:
 	if config.StatePath != "/tmp/photon-a/photon.db" {
 		t.Fatalf("StatePath = %q, want /tmp/photon-a/photon.db", config.StatePath)
 	}
-	if config.PeerID != "node-a" || config.ListenAddr != "0.0.0.0:33434" {
-		t.Fatalf("peer/listen = %q/%q", config.PeerID, config.ListenAddr)
-	}
-	if len(config.Bootstrap) != 1 || config.Bootstrap[0].ID != "node-b" || config.Bootstrap[0].Addr != "127.0.0.1:33435" {
-		t.Fatalf("Bootstrap = %#v", config.Bootstrap)
-	}
 	if !bytes.Equal(config.TrustedRootPublicKey, pub) {
 		t.Fatalf("TrustedRootPublicKey mismatch")
-	}
-	if config.MaxMessageBytes != 32768 || config.MaxSyncZones != 8 || config.MaxSyncRecords != 512 {
-		t.Fatalf("sync limits = %d/%d/%d", config.MaxMessageBytes, config.MaxSyncZones, config.MaxSyncRecords)
-	}
-	if config.EndpointGrace.String() != "2m0s" {
-		t.Fatalf("EndpointGrace = %s, want 2m0s", config.EndpointGrace)
-	}
-	if config.ReflectorTimeout.String() != "1.5s" {
-		t.Fatalf("ReflectorTimeout = %s, want 1.5s", config.ReflectorTimeout)
-	}
-	if config.PublishEndpoints {
-		t.Fatalf("PublishEndpoints = true, want false")
 	}
 	if config.IPsec.DefaultNetNS.Name != ipsec.DefaultNetNSName || !config.IPsec.DefaultNetNS.Create {
 		t.Fatalf("IPsec.DefaultNetNS = %+v", config.IPsec.DefaultNetNS)
@@ -122,47 +91,63 @@ func TestConfigDefaultsForListenAndPrivateIPv4Filter(t *testing.T) {
 	}
 }
 
-func TestParseConfigYAMLCanDisablePrivateIPv4Filter(t *testing.T) {
-	config := defaultAppConfig()
-	if err := parseConfigYAML("gossip:\n  filter_private_ipv4: false\n", config); err != nil {
-		t.Fatalf("parseConfigYAML: %v", err)
-	}
-	if config.FilterPrivateIPv4 {
-		t.Fatal("FilterPrivateIPv4 = true, want false")
-	}
-}
-
-func TestParseConfigYAMLLists(t *testing.T) {
-	config := defaultAppConfig()
-	input := `
-gossip:
-  advertise_addrs:
-    - 127.0.0.1:33434
-    - 10.0.0.2:33434
-  reflectors:
-    - 198.51.100.10:33434
-    - 198.51.100.11:33434
-  bootstrap:
-    - id: node-b
-      addr: 127.0.0.1:33435
-`
-	if err := parseConfigYAML(input, config); err != nil {
-		t.Fatalf("parseConfigYAML: %v", err)
-	}
-	if got := strings.Join(config.AdvertiseAddrs, ","); got != "127.0.0.1:33434,10.0.0.2:33434" {
-		t.Fatalf("AdvertiseAddrs = %q", got)
-	}
-	if got := strings.Join(config.Reflectors, ","); got != "198.51.100.10:33434,198.51.100.11:33434" {
-		t.Fatalf("Reflectors = %q", got)
-	}
-	if len(config.Bootstrap) != 1 || config.Bootstrap[0].ID != "node-b" {
-		t.Fatalf("Bootstrap = %#v", config.Bootstrap)
-	}
-}
-
 func TestParseConfigYAMLRejectsUnknownFields(t *testing.T) {
 	config := defaultAppConfig()
 	if err := parseConfigYAML("unknown: true\n", config); err == nil {
 		t.Fatalf("parseConfigYAML should reject unknown config fields")
+	}
+}
+
+func TestParseConfigYAMLRejectsLegacyDefaultNetNS(t *testing.T) {
+	for _, input := range []string{`
+ipsec:
+  default_netns:
+    kind: name
+    name: legacytesth2
+    create: true
+`, `
+overlay:
+  default_netns:
+    kind: name
+    name: legacytesth2
+    create: true
+`} {
+		config := defaultAppConfig()
+		if err := parseConfigYAML(input, config); err == nil || !strings.Contains(err.Error(), "field default_netns not found") {
+			t.Fatalf("expected unknown default_netns field error, got %v for %s", err, input)
+		}
+	}
+}
+
+func TestParseConfigYAMLRejectsFirewallForwarding(t *testing.T) {
+	config := defaultAppConfig()
+	err := parseConfigYAML(`
+firewall:
+  instances:
+    - id: mesh
+      forwarding:
+        transit: true
+`, config)
+	if err == nil || !strings.Contains(err.Error(), "field forwarding not found") {
+		t.Fatalf("expected unknown forwarding field error, got %v", err)
+	}
+}
+
+func TestParseConfigYAMLRoutingInstancesRejectsLegacyProtocolAlias(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+netns:
+  default:
+    kind: name
+    name: photontesth2
+    create: true
+routing:
+  instances:
+    - id: main
+      netns: photontesth2
+      protocol: bird
+`
+	if err := parseConfigYAML(input, config); err == nil {
+		t.Fatal("parseConfigYAML should reject routing.instances[].protocol")
 	}
 }

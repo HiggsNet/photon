@@ -1,10 +1,11 @@
 package main
 
 import (
-	"github.com/HiggsNet/photon/pkg/core/gossip"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/HiggsNet/photon/pkg/core/gossip"
 )
 
 func TestParseConfigYAMLGossipSection(t *testing.T) {
@@ -134,5 +135,83 @@ func TestParseConfigYAMLRejectsExplicitZeroLimits(t *testing.T) {
 		if err := parseConfigYAML(input, config); err == nil {
 			t.Fatalf("parseConfigYAML(%q) should reject explicit zero", input)
 		}
+	}
+}
+
+func TestParseConfigYAMLEndpointDiscovery(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+gossip:
+  endpoint_discovery: loopback_only
+  endpoint_source_order:
+    - bootstrap
+    - advertise
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	normalizeAppConfig(config)
+	if config.EndpointDiscovery != "loopback_only" {
+		t.Fatalf("EndpointDiscovery = %q, want loopback_only", config.EndpointDiscovery)
+	}
+	if len(config.EndpointSourceOrder) != 2 || config.EndpointSourceOrder[0] != "bootstrap" || config.EndpointSourceOrder[1] != "advertise" {
+		t.Fatalf("EndpointSourceOrder = %v, want [bootstrap advertise]", config.EndpointSourceOrder)
+	}
+}
+
+func TestParseConfigYAMLInvalidEndpointSourceOrderIgnored(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+gossip:
+  endpoint_source_order:
+    - bootstrap
+    - unknown
+    - advertise
+    - bootstrap
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	normalizeAppConfig(config)
+	if len(config.EndpointSourceOrder) != 2 || config.EndpointSourceOrder[0] != "bootstrap" || config.EndpointSourceOrder[1] != "advertise" {
+		t.Fatalf("EndpointSourceOrder = %v, want [bootstrap advertise]", config.EndpointSourceOrder)
+	}
+}
+
+func TestParseConfigYAMLCanDisablePrivateIPv4Filter(t *testing.T) {
+	config := defaultAppConfig()
+	if err := parseConfigYAML("gossip:\n  filter_private_ipv4: false\n", config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	if config.FilterPrivateIPv4 {
+		t.Fatal("FilterPrivateIPv4 = true, want false")
+	}
+}
+
+func TestParseConfigYAMLLists(t *testing.T) {
+	config := defaultAppConfig()
+	input := `
+gossip:
+  advertise_addrs:
+    - 127.0.0.1:33434
+    - 10.0.0.2:33434
+  reflectors:
+    - 198.51.100.10:33434
+    - 198.51.100.11:33434
+  bootstrap:
+    - id: node-b
+      addr: 127.0.0.1:33435
+`
+	if err := parseConfigYAML(input, config); err != nil {
+		t.Fatalf("parseConfigYAML: %v", err)
+	}
+	if got := strings.Join(config.AdvertiseAddrs, ","); got != "127.0.0.1:33434,10.0.0.2:33434" {
+		t.Fatalf("AdvertiseAddrs = %q", got)
+	}
+	if got := strings.Join(config.Reflectors, ","); got != "198.51.100.10:33434,198.51.100.11:33434" {
+		t.Fatalf("Reflectors = %q", got)
+	}
+	if len(config.Bootstrap) != 1 || config.Bootstrap[0].ID != "node-b" {
+		t.Fatalf("Bootstrap = %#v", config.Bootstrap)
 	}
 }

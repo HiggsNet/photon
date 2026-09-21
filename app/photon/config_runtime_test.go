@@ -1,7 +1,9 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -10,7 +12,7 @@ func TestLinuxStatePathOverride(t *testing.T) {
 	configPath := filepath.Join(dir, "config.yaml")
 	configDataDir := filepath.Join(dir, "config-data")
 	overridePath := filepath.Join(dir, "override", "state.db")
-	writeRuntimeConfig(t, configPath, configDataDir, nil, nil)
+	writeRuntimeConfig(t, configPath, configDataDir, nil)
 	t.Setenv("PHOTON_CONFIG", configPath)
 	t.Setenv("PHOTON_STATE", overridePath)
 
@@ -23,16 +25,13 @@ func TestLinuxStatePathOverride(t *testing.T) {
 	}
 }
 
-func TestRuntimeSyncConfigDerivesLimitsAndDefaults(t *testing.T) {
+func TestRuntimeSyncConfigDerivesLimitsAndPeerID(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")
-	writeRuntimeConfig(t, configPath, filepath.Join(dir, "data"), nil, map[string]string{
+	writeRuntimeConfig(t, configPath, filepath.Join(dir, "data"), map[string]string{
 		"max_datagram_bytes": "4096",
 		"max_sync_zones":     "8",
 		"max_sync_records":   "64",
-		"log.level":          "debug",
-		"log.mode":           "stderr+file",
-		"log.file":           filepath.Join(dir, "photon.log"),
 	})
 	t.Setenv("PHOTON_CONFIG", configPath)
 
@@ -49,6 +48,22 @@ func TestRuntimeSyncConfigDerivesLimitsAndDefaults(t *testing.T) {
 	if limits.MaxBytes != 4096 || limits.MaxZones != 8 || limits.MaxRecords != 64 {
 		t.Fatalf("limits = %#v, want 4096/8/64", limits)
 	}
+}
+
+func TestRuntimeLogConfigAndEnvironmentOverride(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	writeRuntimeConfig(t, configPath, filepath.Join(dir, "data"), map[string]string{
+		"log.level": "debug",
+		"log.mode":  "stderr+file",
+		"log.file":  filepath.Join(dir, "photon.log"),
+	})
+	t.Setenv("PHOTON_CONFIG", configPath)
+	t.Setenv("PHOTON_LOG_LEVEL", "")
+	rt, err := NewAppContext()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !debugLogEnabled(rt.Config) {
 		t.Fatalf("config log.level=debug should enable debug logs")
 	}
@@ -63,5 +78,33 @@ func TestRuntimeSyncConfigDerivesLimitsAndDefaults(t *testing.T) {
 	rt.Config.LogLevel = "info"
 	if !debugLogEnabled(rt.Config) {
 		t.Fatalf("PHOTON_LOG_LEVEL=debug should enable debug logs")
+	}
+}
+
+func writeRuntimeConfig(t *testing.T, path string, dataDir string, extra map[string]string) {
+	t.Helper()
+	var lines []string
+	lines = append(lines, "data_dir: "+dataDir)
+	lines = append(lines, "gossip:")
+	lines = append(lines, "  listen_addr: 127.0.0.1:0")
+	for _, key := range []string{"max_datagram_bytes", "max_sync_zones", "max_sync_records"} {
+		if value := extra[key]; value != "" {
+			lines = append(lines, "  "+key+": "+value)
+		}
+	}
+	if value := extra["log.level"]; value != "" || extra["log.mode"] != "" {
+		lines = append(lines, "log:")
+		if mode := extra["log.mode"]; mode != "" {
+			lines = append(lines, "  mode: "+mode)
+			if file := extra["log.file"]; file != "" {
+				lines = append(lines, "  file: "+file)
+			}
+		}
+		if value != "" {
+			lines = append(lines, "  level: "+value)
+		}
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(config): %v", err)
 	}
 }
