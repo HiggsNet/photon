@@ -19,7 +19,7 @@ import (
 )
 
 func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
-	if d == nil || d.Config == nil {
+	if d.Config == nil {
 		return nil
 	}
 	common := d.State.Common.ReadView()
@@ -193,22 +193,16 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 }
 
 func (d *Daemon) ipsecReconcileDNSResolver() ipsec.DNSResolver {
-	if d != nil && d.ipsecDNSResolver != nil {
+	if d.ipsecDNSResolver != nil {
 		return d.ipsecDNSResolver
 	}
-	now := time.Now
-	if d != nil {
-		now = d.now
-	}
-	resolver := ipsec.NewDNSFamilyHoldDownResolver(net.DefaultResolver, ipsec.DNSFamilyHoldDownOptions{Now: now})
-	if d != nil {
-		d.ipsecDNSResolver = resolver
-	}
+	resolver := ipsec.NewDNSFamilyHoldDownResolver(net.DefaultResolver, ipsec.DNSFamilyHoldDownOptions{Now: d.now})
+	d.ipsecDNSResolver = resolver
 	return resolver
 }
 
 func (d *Daemon) localIPv6DiagnosticPrefixes(verified *corestate.VerifiedState, now time.Time) []netip.Prefix {
-	if d == nil || d.Config == nil || verified == nil || verified.Network == nil {
+	if d.Config == nil || verified == nil || verified.Network == nil {
 		return nil
 	}
 	if !d.Config.IPAM.AutoAnnounceAssignedIPs && len(d.Config.IPAM.Announce) == 0 {
@@ -230,14 +224,14 @@ func (d *Daemon) localIPv6DiagnosticPrefixes(verified *corestate.VerifiedState, 
 }
 
 func (d *Daemon) ipsecRotateCutoverReady() map[string]bool {
-	if d == nil || d.health == nil || d.health.Manager == nil {
+	if d.health == nil || d.health.Manager == nil {
 		return nil
 	}
 	return d.health.RotateCutoverReadiness()
 }
 
 func (d *Daemon) ipsecRotateActivationReady() map[string]bool {
-	if d == nil || d.health == nil || d.health.Manager == nil {
+	if d.health == nil || d.health.Manager == nil {
 		return nil
 	}
 	return d.health.RotateActivationReadiness()
@@ -288,7 +282,7 @@ func ipsecReconcileActionLogFields(action ipsec.ReconcileAction) map[string]any 
 }
 
 func (d *Daemon) publishIPsecObservation(rev uint64, unix int64, instances map[string]ipsec.LinkInstance, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError error) {
-	if d == nil || d.State == nil {
+	if d.State == nil {
 		return
 	}
 	currentRev := uint64(d.State.Common.VerifiedRevision())
@@ -305,7 +299,7 @@ func (d *Daemon) publishIPsecObservation(rev uint64, unix int64, instances map[s
 }
 
 func (d *Daemon) recordIPsecReconcileError(rev uint64, unix int64, err error) {
-	if d == nil || d.State == nil || err == nil {
+	if d.State == nil || err == nil {
 		return
 	}
 	currentRev := uint64(d.State.Common.VerifiedRevision())
@@ -333,7 +327,7 @@ func (d *Daemon) recordIPsecReconcileError(rev uint64, unix int64, err error) {
 // IPsec planner deprioritize addresses that are currently in backoff or have
 // recent failures, matching the gossip transport's own dialing preferences.
 func (d *Daemon) buildIPsecContactPointQuality(verified *corestate.VerifiedState, now time.Time) map[zone.ZonePath]map[string]ipsec.ContactPointQuality {
-	if d == nil || d.gossipDriver == nil || d.gossipDriver.Transport() == nil || verified == nil || verified.Network == nil {
+	if d.gossipDriver == nil || d.gossipDriver.Transport() == nil || verified == nil || verified.Network == nil {
 		return nil
 	}
 	transport := d.gossipDriver.Transport()

@@ -14,7 +14,7 @@ import (
 const defaultFirewallReconcileInterval = 30 * time.Second
 
 func (d *Daemon) firewallReconcileInterval() time.Duration {
-	if d == nil || d.Config == nil || len(d.Config.Firewall.ManagedInstances()) == 0 {
+	if d.Config == nil || len(d.Config.Firewall.ManagedInstances()) == 0 {
 		return 0
 	}
 	return defaultFirewallReconcileInterval
@@ -24,7 +24,7 @@ func (d *Daemon) firewallReconcileInterval() time.Duration {
 // It computes the desired state from verified active state + local config,
 // diffs against observed owned objects, and applies the plan via the driver.
 func (d *Daemon) reconcileFirewall(ctx context.Context) error {
-	if d == nil || d.Config == nil {
+	if d.Config == nil {
 		return nil
 	}
 	common := d.State.Common.ReadView()
@@ -142,7 +142,7 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 }
 
 func (d *Daemon) publishFirewallObservation(rev uint64, summary *firewall.FirewallObservation) {
-	if d == nil || d.State == nil || summary == nil {
+	if d.State == nil || summary == nil {
 		return
 	}
 	currentRev := uint64(d.State.Common.VerifiedRevision())
@@ -169,7 +169,7 @@ func (d *Daemon) flushFirewallReconcile(ctx context.Context) bool {
 // flushFirewallReconcileResult is used by security-sensitive control writes
 // that must not report success before the new policy reaches the backend.
 func (d *Daemon) flushFirewallReconcileResult(ctx context.Context) (bool, error) {
-	if d == nil || !d.firewallDirty {
+	if !d.firewallDirty {
 		return false, nil
 	}
 	d.firewallDirty = false
@@ -182,9 +182,6 @@ func (d *Daemon) flushFirewallReconcileResult(ctx context.Context) (bool, error)
 
 // recoverFirewallOnStart triggers an initial firewall reconcile at daemon start.
 func (d *Daemon) recoverFirewallOnStart(ctx context.Context) {
-	if d == nil {
-		return
-	}
 	d.firewallDirty = true
 	d.flushFirewallReconcile(ctx)
 }

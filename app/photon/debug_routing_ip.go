@@ -34,7 +34,7 @@ func debugRoutingIPRoute(ctx context.Context, netnsName, family string) error {
 }
 
 func (d *Daemon) kernelRoutesView(ctx context.Context, netnsName, family string) ([]inspect.KernelRouteDump, error) {
-	if d == nil || d.Config == nil {
+	if d.Config == nil {
 		return nil, errors.New("routing configuration is unavailable")
 	}
 	if d.linuxDriver == nil {

@@ -125,7 +125,10 @@ func (driver *GossipDriver) GossipConfig() GossipDriverConfig {
 // receive explicit backpressure; scheduler delivery uses its own blocking,
 // shutdown-aware path so timeouts are never silently dropped.
 func (driver *GossipDriver) PostGossip(event gossip.SyncEvent) error {
-	if driver == nil || event == nil {
+	if driver == nil {
+		return ErrGossipDriverStopped
+	}
+	if event == nil {
 		return nil
 	}
 	driver.mu.RLock()

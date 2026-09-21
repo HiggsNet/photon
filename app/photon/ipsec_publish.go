@@ -22,10 +22,8 @@ type localIPsecPublishPlan struct {
 
 func (d *Daemon) ipsecProtocolPlan(verified *corestate.VerifiedState, runtime *photonlinux.LinuxState) (localIPsecPublishPlan, error) {
 	var plan localIPsecPublishPlan
-	if d == nil || verified == nil || verified.Network == nil || runtime == nil || d.Config == nil {
-		if d != nil {
-			d.logDebug("ipsec", "publish_skipped", map[string]any{"reason": "runtime_incomplete"})
-		}
+	if verified == nil || verified.Network == nil || runtime == nil || d.Config == nil {
+		d.logDebug("ipsec", "publish_skipped", map[string]any{"reason": "runtime_incomplete"})
 		return plan, nil
 	}
 	config := d.Config

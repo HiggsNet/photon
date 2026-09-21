@@ -260,7 +260,7 @@ func endpointACLEqual(left, right photonstate.EndpointACL) bool {
 }
 
 func (d *Daemon) commitEndpointACLMutation(rev uint64, acls map[string]photonstate.EndpointACL) error {
-	if d == nil || d.State == nil {
+	if d.State == nil {
 		return errors.New("daemon service is not initialized")
 	}
 	if committed, err := d.State.ReplaceEndpointACLsIfRevision(corestate.VerifiedRevision(rev), acls); err != nil {
@@ -274,7 +274,7 @@ func (d *Daemon) commitEndpointACLMutation(rev uint64, acls map[string]photonsta
 }
 
 func (d *Daemon) hasEnforcingHostFirewall() bool {
-	if d == nil || d.Config == nil {
+	if d.Config == nil {
 		return false
 	}
 	for _, instance := range d.Config.Firewall.ManagedInstances() {

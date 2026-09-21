@@ -74,7 +74,7 @@ func newObserverServer(d *Daemon, cfg observerConfig) *observerServer {
 // startObserverServer starts the HTTP observer if enabled. It returns a
 // cleanup function that gracefully shuts down the server.
 func (d *Daemon) startObserverServer(_ context.Context) (func(), error) {
-	if d == nil || d.Config == nil {
+	if d.Config == nil {
 		return func() {}, nil
 	}
 	cfg := d.Config.Observer
@@ -113,7 +113,7 @@ func (d *Daemon) startObserverServer(_ context.Context) (func(), error) {
 // notifyObserver broadcasts an SSE event to all subscribers. Safe to call
 // even when the observer is disabled (no-op if hub is nil).
 func (d *Daemon) notifyObserver(eventType string, payload any) {
-	if d == nil || d.observerHub == nil {
+	if d.observerHub == nil {
 		return
 	}
 	d.observerHub.Broadcast(observer.Event{Type: eventType, Payload: payload})
@@ -132,9 +132,6 @@ func observerIDsPayload(key string, ids []string) map[string]any {
 
 // observerLinkIDsPayload returns {link_ids: [...]} from the live observation.
 func (d *Daemon) observerLinkIDsPayload() any {
-	if d == nil {
-		return nil
-	}
 	links, _ := d.linuxObservation.ipsecSnapshot()
 	ids := make([]string, 0, len(links))
 	for id := range links {
@@ -149,7 +146,7 @@ func (d *Daemon) observerLinkIDsPayload() any {
 // observerPeerIDsPayload returns {peer_ids: [...]} from the common gossip
 // checkpoint.
 func (d *Daemon) observerPeerIDsPayload() any {
-	if d == nil || d.State == nil {
+	if d.State == nil {
 		return nil
 	}
 	view := d.State.Common.ReadView()
@@ -169,7 +166,7 @@ func (d *Daemon) observerPeerIDsPayload() any {
 // observerHealthLinkIDsPayload returns {link_ids: [...]} derived from the
 // health manager's current target snapshot.
 func (d *Daemon) observerHealthLinkIDsPayload() any {
-	if d == nil || d.health == nil || d.health.Manager == nil {
+	if d.health == nil || d.health.Manager == nil {
 		return nil
 	}
 	snapshot := d.health.Snapshot(d.now())
@@ -237,7 +234,7 @@ func (p *observerProvider) Peers(peerFilter string) (any, error) {
 }
 
 func (d *Daemon) peerObservabilitySnapshots() map[string]observability.PeerDiagnostics {
-	if d == nil || d.gossipDriver == nil || d.gossipDriver.Observability == nil {
+	if d.gossipDriver == nil || d.gossipDriver.Observability == nil {
 		return nil
 	}
 	now := d.now()

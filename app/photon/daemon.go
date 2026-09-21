@@ -21,6 +21,8 @@ import (
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
+// Daemon owns the running service. Internal methods require a non-nil receiver;
+// optional subsystems may remain unconfigured. Run validates startup state.
 type Daemon struct {
 	Config                 *appConfig
 	clock                  func() time.Time
@@ -171,7 +173,7 @@ func newDaemon(config *appConfig, state *State, interval time.Duration, clock fu
 }
 
 func (d *Daemon) now() time.Time {
-	if d != nil && d.clock != nil {
+	if d.clock != nil {
 		return d.clock()
 	}
 	return time.Now()
@@ -207,11 +209,11 @@ func (d *Daemon) Close() error {
 // When probing is disabled (the default), the optional subsystem has no
 // Manager and therefore creates no scheduler, goroutine or platform probe.
 func (d *Daemon) configureHealthManager() {
-	if d != nil && d.health != nil {
+	if d.health != nil {
 		d.health.Manager = nil
 		d.health.driverManaged = false
 	}
-	if d == nil || d.Config == nil {
+	if d.Config == nil {
 		return
 	}
 	cfg := d.Config.Health
@@ -808,7 +810,7 @@ func (d *Daemon) cleanupPurgePlanIPsecLinks(ctx context.Context, links map[strin
 	if plan == nil || len(plan.LinkInstances) == 0 {
 		return nil
 	}
-	if d == nil || d.Config == nil {
+	if d.Config == nil {
 		return errors.New("daemon service is not initialized")
 	}
 	platformDriver := d.linuxDriver
@@ -823,7 +825,7 @@ func (d *Daemon) cleanupPurgePlanIPsecLinks(ctx context.Context, links map[strin
 }
 
 func (d *Daemon) handleJoinAcceptEvent(bundle *joinBundle, key *privateKeyFile) (*joinAcceptResult, error) {
-	if d == nil || d.Config == nil || d.State == nil {
+	if d.Config == nil || d.State == nil {
 		return nil, errors.New("daemon service is not initialized")
 	}
 	if bundle == nil || bundle.Version != 1 || bundle.Network == nil {
@@ -879,7 +881,7 @@ func (d *Daemon) prepareStartupState() (bool, error) {
 }
 
 func (d *Daemon) publishLocalProtocols() (bool, error) {
-	if d == nil || d.State == nil {
+	if d.State == nil {
 		return false, errors.New("daemon service is not initialized")
 	}
 	common := d.State.Common.ReadView()
@@ -921,7 +923,7 @@ func (d *Daemon) publishLocalProtocols() (bool, error) {
 }
 
 func (d *Daemon) handleCommonRecordMutationEvent(intent corestate.LocalIntent, dryRun bool) (*recordMutationResult, error) {
-	if d == nil || d.State == nil {
+	if d.State == nil {
 		return nil, errors.New("daemon service is not initialized")
 	}
 	var result corestate.LocalIntentResult
@@ -1003,7 +1005,7 @@ func (d *Daemon) notifyStateChanged() {
 }
 
 func (d *Daemon) noteReconcileFlush(layer string) {
-	if d != nil && d.Hooks.OnReconcileFlush != nil {
+	if d.Hooks.OnReconcileFlush != nil {
 		d.Hooks.OnReconcileFlush(layer)
 	}
 }
@@ -1014,7 +1016,7 @@ func (d *Daemon) noteReconcileFlush(layer string) {
 // observed paths, backoff or object-pull candidates. The entry itself is
 // retained with a "revoked" failure for diagnostics until explicit purge.
 func (d *Daemon) flushRevocationCleanup() {
-	if d == nil || d.State == nil {
+	if d.State == nil {
 		return
 	}
 	// This function is called after every sync-state update. Most calls have no
@@ -1062,9 +1064,6 @@ func (d *Daemon) flushRevocationCleanup() {
 }
 
 func (d *Daemon) recoverIPsecLinksOnStart(ctx context.Context) {
-	if d == nil {
-		return
-	}
 	d.ipsecPrepareStandby = true
 	defer func() { d.ipsecPrepareStandby = false }()
 	d.ipsecDirty = true
@@ -1072,9 +1071,6 @@ func (d *Daemon) recoverIPsecLinksOnStart(ctx context.Context) {
 }
 
 func (d *Daemon) recoverRoutingOnStart(ctx context.Context) {
-	if d == nil {
-		return
-	}
 	d.routingDirty = true
 	d.flushRoutingReconcile(ctx)
 }
@@ -1088,7 +1084,7 @@ func (d *Daemon) flushRoutingReconcile(ctx context.Context) bool {
 }
 
 func (d *Daemon) flushRoutingReconcileResult(ctx context.Context) (bool, error) {
-	if d == nil || !d.routingDirty {
+	if !d.routingDirty {
 		return false, nil
 	}
 	d.routingDirty = false
@@ -1100,7 +1096,7 @@ func (d *Daemon) flushRoutingReconcileResult(ctx context.Context) (bool, error) 
 }
 
 func (d *Daemon) routingReconcileInterval() time.Duration {
-	if d == nil || d.Config == nil {
+	if d.Config == nil {
 		return 0
 	}
 	instances := d.Config.Routing.EnabledInstances()
@@ -1128,7 +1124,7 @@ func boundedReconcileContext(ctx context.Context) (context.Context, context.Canc
 }
 
 func (d *Daemon) flushIPsecReconcile(ctx context.Context) bool {
-	if d == nil || !d.ipsecDirty {
+	if !d.ipsecDirty {
 		return false
 	}
 	d.ipsecDirty = false
@@ -1146,7 +1142,7 @@ func (d *Daemon) flushIPsecReconcile(ctx context.Context) bool {
 }
 
 func (d *Daemon) startIPsecLifecycleEventWatcher(ctx context.Context) func() {
-	if d == nil || d.linuxDriver == nil {
+	if d.linuxDriver == nil {
 		return func() {}
 	}
 	watchCtx, cancel := context.WithCancel(ctx)
@@ -1260,7 +1256,7 @@ func (d *Daemon) handleIPsecLifecycleEvent(ev ipsec.VICIEvent) {
 }
 
 func (d *Daemon) ipsecReconcileInterval() time.Duration {
-	if d == nil || d.Config == nil {
+	if d.Config == nil {
 		return 0
 	}
 	groups := d.Config.IPsec.LinkGroups
@@ -1299,7 +1295,7 @@ func daemonRun(ctx context.Context, interval time.Duration) error {
 }
 
 func (d *Daemon) configureLinuxDriverFromConfig() error {
-	if d == nil || d.Config == nil {
+	if d.Config == nil {
 		return nil
 	}
 	driver, err := photonlinux.NewDaemonDriver(d.Config.IPsec, d.Config.Netns.Names, d.Log)
@@ -1339,31 +1335,31 @@ func (d *Daemon) closeLinuxDriver() error {
 }
 
 func (d *Daemon) logDebug(component, event string, fields map[string]any) {
-	if d != nil && d.Log != nil {
+	if d.Log != nil {
 		d.Log.Debug(component, event, fields)
 	}
 }
 
 func (d *Daemon) logInfo(component, event string, fields map[string]any) {
-	if d != nil && d.Log != nil {
+	if d.Log != nil {
 		d.Log.Info(component, event, fields)
 	}
 }
 
 func (d *Daemon) logWarn(component, event string, fields map[string]any) {
-	if d != nil && d.Log != nil {
+	if d.Log != nil {
 		d.Log.Warn(component, event, fields)
 	}
 }
 
 func (d *Daemon) logError(component, event string, fields map[string]any) {
-	if d != nil && d.Log != nil {
+	if d.Log != nil {
 		d.Log.Error(component, event, fields)
 	}
 }
 
 func (d *Daemon) scheduleDaemonTimer(key string, deadline time.Time) error {
-	if d == nil || d.daemonTimers == nil {
+	if d.daemonTimers == nil {
 		return corehost.ErrSchedulerStopped
 	}
 	id := corehost.TimerID{Namespace: daemonRuntimeNamespace, Owner: daemonTimerOwner, Key: key}

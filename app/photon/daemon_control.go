@@ -105,7 +105,7 @@ func (d *Daemon) serveControl(ctx context.Context, listener net.Listener, done c
 }
 
 func (d *Daemon) birdRoutesForControl(ctx context.Context, dump *inspect.RoutesResponse, instances []photonlinux.RoutingInstance, birdStates map[string]*bird.InstanceObservation) []inspect.BirdRoutesView {
-	if d == nil || dump == nil {
+	if dump == nil {
 		return nil
 	}
 	views := make([]inspect.BirdRoutesView, 0, len(instances))

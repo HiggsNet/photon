@@ -20,7 +20,7 @@ func newLineWriter(w io.Writer) *lineWriter {
 }
 
 func (l *lineWriter) Printf(format string, args ...any) {
-	if l == nil || l.err != nil {
+	if l.err != nil {
 		return
 	}
 	_, l.err = fmt.Fprintf(l.w, format, args...)
@@ -43,7 +43,7 @@ func (l *lineWriter) LineIf(cond bool, format string, args ...any) {
 }
 
 func (l *lineWriter) Println(args ...any) {
-	if l == nil || l.err != nil {
+	if l.err != nil {
 		return
 	}
 	_, l.err = fmt.Fprintln(l.w, args...)
@@ -54,9 +54,6 @@ func (l *lineWriter) Blank() {
 }
 
 func (l *lineWriter) Err() error {
-	if l == nil {
-		return nil
-	}
 	return l.err
 }
 

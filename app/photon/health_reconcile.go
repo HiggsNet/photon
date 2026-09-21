@@ -122,7 +122,7 @@ func scopedNetNS(s string) string {
 // In a running daemon, the independent health scheduler picks up due probes;
 // the synchronous fallback supports one-shot callers and tests.
 func (d *Daemon) reconcileHealth(ctx context.Context) int {
-	if d == nil || d.health == nil || d.health.Manager == nil {
+	if d.health == nil || d.health.Manager == nil {
 		return 0
 	}
 	view := d.State.Common.ReadView()
@@ -141,7 +141,7 @@ func (d *Daemon) reconcileHealth(ctx context.Context) int {
 // separate from reconcileHealth lets the daemon honor health.interval even
 // when IPsec reconciliation is infrequent.
 func (d *Daemon) tickHealth(ctx context.Context, now time.Time) int {
-	if d == nil || d.health == nil || d.health.Manager == nil {
+	if d.health == nil || d.health.Manager == nil {
 		return 0
 	}
 	if d.health.asyncRunning {
@@ -155,7 +155,7 @@ func (d *Daemon) tickHealth(ctx context.Context, now time.Time) int {
 }
 
 func (d *Daemon) handleHealthUpdate(now time.Time) {
-	if d == nil || d.health == nil || d.health.Manager == nil {
+	if d.health == nil || d.health.Manager == nil {
 		return
 	}
 	if d.health.spool != nil {
@@ -190,7 +190,7 @@ func healthSpoolSamples(links []inspect.HealthSample) []healthspool.Sample {
 // healthSamples projects the health manager's in-memory observations into the
 // canonical inspect model shared by every presentation transport.
 func (d *Daemon) healthSamples() []inspect.HealthSample {
-	if d == nil || d.health == nil || d.health.Manager == nil {
+	if d.health == nil || d.health.Manager == nil {
 		return nil
 	}
 	now := d.now()

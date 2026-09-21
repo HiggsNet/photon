@@ -31,7 +31,7 @@ const (
 )
 
 func (d *Daemon) reconcileRouting(ctx context.Context) error {
-	if d == nil || d.Config == nil {
+	if d.Config == nil {
 		return nil
 	}
 	common := d.State.Common.ReadView()
@@ -109,7 +109,7 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 }
 
 func (d *Daemon) publishRoutingObservation(rev uint64, summary *routingObservation) {
-	if d == nil || d.State == nil || summary == nil {
+	if d.State == nil || summary == nil {
 		return
 	}
 	currentRev := uint64(d.State.Common.VerifiedRevision())
@@ -298,7 +298,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 }
 
 func (d *Daemon) observeBirdForHealth(ctx context.Context, instances map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, netnsName string, overlays []string, socketPath string) {
-	if d == nil || d.health == nil || d.health.Manager == nil || socketPath == "" {
+	if d.health == nil || d.health.Manager == nil || socketPath == "" {
 		return
 	}
 	observeCtx, cancel := context.WithTimeout(ctx, birdHealthObservationTimeout)
@@ -312,7 +312,7 @@ func (d *Daemon) observeBirdForHealth(ctx context.Context, instances map[string]
 }
 
 func (d *Daemon) recordBirdHealthObservationForLinks(instances map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, netnsName string, overlays []string, observed *bird.BirdObservation) {
-	if d == nil || d.health == nil || d.health.Manager == nil || observed == nil {
+	if d.health == nil || d.health.Manager == nil || observed == nil {
 		return
 	}
 	for _, link := range buildLinkOutputs(instances, reconcile) {
@@ -326,7 +326,7 @@ func (d *Daemon) recordBirdHealthObservationForLinks(instances map[string]ipsec.
 }
 
 func (d *Daemon) stopManagedBirdInstances(ctx context.Context, force bool) error {
-	if d == nil || d.Config == nil {
+	if d.Config == nil {
 		return nil
 	}
 	if ctx == nil {
@@ -355,7 +355,7 @@ func (d *Daemon) stopManagedBirdInstances(ctx context.Context, force bool) error
 
 func (d *Daemon) birdDumpForControl(ctx context.Context, netnsName string, view bird.DebugView) (*inspect.BirdDumpResponse, error) {
 	response := &inspect.BirdDumpResponse{Instances: map[string]inspect.BirdDumpInstance{}}
-	if d == nil || d.Config == nil {
+	if d.Config == nil {
 		return response, nil
 	}
 	commands, err := bird.DebugCommands(view)
@@ -465,7 +465,7 @@ func isDryRunConnectError(err error) bool {
 // store so routing reconcile can run BIRD work from a refreshed committed
 // snapshot.
 func (d *Daemon) autoAnnounceAssignedIPsResult(ars *routing.AuthorizedRouteSet) (bool, error) {
-	if d == nil || d.Config == nil || d.State == nil {
+	if d.Config == nil || d.State == nil {
 		return false, nil
 	}
 
@@ -506,7 +506,7 @@ func (d *Daemon) autoAnnounceAssignedIPsResult(ars *routing.AuthorizedRouteSet) 
 // routingNetnsProtocolIntent advertises namespaces for future Router-ID origin audits.
 // Local Router-ID derivation uses configuration directly; origin enforcement is not implemented.
 func (d *Daemon) routingNetnsProtocolIntent(verified *corestate.VerifiedState) (*corestate.PutProtocolRecordIntent, error) {
-	if d == nil || verified == nil || verified.Network == nil || d.Config == nil {
+	if verified == nil || verified.Network == nil || d.Config == nil {
 		return nil, nil
 	}
 	config := d.Config

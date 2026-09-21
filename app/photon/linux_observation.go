@@ -55,9 +55,6 @@ func cloneIPsecObservationSummary(in *ipsecObservationSummary) *ipsecObservation
 }
 
 func (o *linuxObservation) ipsecSnapshot() (map[string]ipsec.LinkInstance, *ipsecObservationSummary) {
-	if o == nil {
-		return make(map[string]ipsec.LinkInstance), nil
-	}
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 	links := maps.Clone(o.ipsecLinks)
@@ -68,9 +65,6 @@ func (o *linuxObservation) ipsecSnapshot() (map[string]ipsec.LinkInstance, *ipse
 }
 
 func (o *linuxObservation) replaceIPsec(links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary) {
-	if o == nil {
-		return
-	}
 	o.mu.Lock()
 	o.ipsecLinks = maps.Clone(links)
 	o.ipsecReconcile = cloneIPsecObservationSummary(reconcile)
@@ -78,9 +72,6 @@ func (o *linuxObservation) replaceIPsec(links map[string]ipsec.LinkInstance, rec
 }
 
 func (o *linuxObservation) routingSnapshot() *routingObservation {
-	if o == nil {
-		return nil
-	}
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 	if o.routingReconcile == nil {
@@ -90,9 +81,6 @@ func (o *linuxObservation) routingSnapshot() *routingObservation {
 }
 
 func (o *linuxObservation) replaceRouting(reconcile *routingObservation) {
-	if o == nil {
-		return
-	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if reconcile == nil {
@@ -123,18 +111,12 @@ func cloneRoutingObservation(in *routingObservation) *routingObservation {
 }
 
 func (o *linuxObservation) firewallSnapshot() *firewall.FirewallObservation {
-	if o == nil {
-		return nil
-	}
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 	return cloneFirewallObservation(o.firewallReconcile)
 }
 
 func (o *linuxObservation) replaceFirewall(reconcile *firewall.FirewallObservation) {
-	if o == nil {
-		return
-	}
 	o.mu.Lock()
 	o.firewallReconcile = cloneFirewallObservation(reconcile)
 	o.mu.Unlock()

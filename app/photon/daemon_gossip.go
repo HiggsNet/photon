@@ -15,7 +15,7 @@ import (
 // selection, endpoint ordering, checkpoint patches and address-book updates
 // are common runtime responsibilities.
 func (d *Daemon) refreshGossipDiscovery() {
-	if d == nil || d.State == nil || d.gossipDriver == nil || d.gossipDriver.Transport() == nil {
+	if d.State == nil || d.gossipDriver == nil || d.gossipDriver.Transport() == nil {
 		return
 	}
 	if err := d.gossipDriver.RefreshGossipDiscovery(context.Background(), d.gossipSuppressions(), d.now(), d.gossipDriver.Transport()); err != nil {
@@ -24,7 +24,7 @@ func (d *Daemon) refreshGossipDiscovery() {
 }
 
 func (d *Daemon) gossipSuppressions() map[string]bool {
-	if d == nil || d.State == nil {
+	if d.State == nil {
 		return nil
 	}
 	view := d.State.Common.ReadView()
@@ -105,9 +105,6 @@ func startObjectPullServer(ctx context.Context, d *Daemon) error {
 }
 
 func (d *Daemon) handleSyncTimerEvent(ctx context.Context, force bool) error {
-	if d == nil {
-		return nil
-	}
 	changed, err := d.gossipDriver.SyncGossipPeers(ctx, d.now(), d.gossipSuppressions(), force)
 	if changed {
 		d.refreshGossipDiscovery()

@@ -218,7 +218,7 @@ func (e *syncPendingZonesError) PendingZones() []string {
 }
 
 func (d *Daemon) openGossipTransport() (*gossip.Transport, error) {
-	if d == nil || d.Config == nil || d.gossipDriver == nil {
+	if d.Config == nil || d.gossipDriver == nil {
 		return nil, errors.New("gossip configuration is not initialized")
 	}
 	config := d.gossipDriver.GossipConfig()
@@ -267,10 +267,7 @@ func listenPortFromAddr(addr string) uint16 {
 }
 
 func (d *Daemon) endpointProtocolIntent(verified *corestate.VerifiedState) (*corestate.PutProtocolRecordIntent, error) {
-	var config *appConfig
-	if d != nil && d.Config != nil {
-		config = d.Config
-	}
+	config := d.Config
 	if verified == nil || verified.Network == nil || verified.ManagedZone == zone.RootZone || len(verified.IdentityPrivateKey) == 0 || gossip.AutoJoinPending(verified) {
 		return nil, nil
 	}

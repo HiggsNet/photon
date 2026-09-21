@@ -241,6 +241,20 @@ func TestSchedulerStopAndValidation(t *testing.T) {
 	}
 }
 
+func TestPostGossipRejectsUnavailableDriver(t *testing.T) {
+	event := &gossip.SyncTimerEvent{PeerID: "peer-a"}
+	var absent *GossipDriver
+	stopped := NewGossipDriver(nil, 1, nil, GossipDriverConfig{})
+	stopped.Stop()
+	for name, driver := range map[string]*GossipDriver{"nil": absent, "stopped": stopped} {
+		t.Run(name, func(t *testing.T) {
+			if err := driver.PostGossip(event); !errors.Is(err, ErrGossipDriverStopped) {
+				t.Fatalf("PostGossip error = %v, want %v", err, ErrGossipDriverStopped)
+			}
+		})
+	}
+}
+
 func TestGossipDriverOwnsQueueSchedulerAndPureGossipEngine(t *testing.T) {
 	clock := newFakeClock(time.Unix(1000, 0))
 	driver := NewGossipDriver(clock, 1, nil, GossipDriverConfig{})

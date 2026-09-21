@@ -77,7 +77,7 @@ func buildPeerLifecycleDebugView(config *appConfig, common corestate.View, links
 }
 
 func (d *Daemon) gossipPeerSnapshotForControl() []inspect.PeerDebugView {
-	if d == nil || d.State == nil {
+	if d.State == nil {
 		return nil
 	}
 	view := d.State.Common.ReadView()
