@@ -294,7 +294,7 @@ func (d *Daemon) publishIPsecObservation(rev uint64, unix int64, instances map[s
 		})
 		return
 	}
-	summary := summarizeIPsecReconcile(rev, unix, desired, sas, actions, skips, lastError)
+	summary := summarizeIPsecReconcile(unix, desired, sas, actions, skips, lastError)
 	d.linuxObservation.replaceIPsec(instances, summary)
 }
 
@@ -317,7 +317,6 @@ func (d *Daemon) recordIPsecReconcileError(rev uint64, unix int64, err error) {
 		reconcile = &ipsecObservationSummary{}
 	}
 	reconcile.LastRunUnix = unix
-	reconcile.SourceRevision = rev
 	reconcile.LastFailure = err
 	d.linuxObservation.replaceIPsec(links, reconcile)
 }
@@ -360,12 +359,10 @@ func (d *Daemon) buildIPsecContactPointQuality(verified *corestate.VerifiedState
 	return out
 }
 
-func summarizeIPsecReconcile(sourceRev uint64, unix int64, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError error) *ipsecObservationSummary {
+func summarizeIPsecReconcile(unix int64, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError error) *ipsecObservationSummary {
 	state := &ipsecObservationSummary{
-		LastRunUnix:    unix,
-		SourceRevision: sourceRev,
-		DesiredLinks:   len(desired),
-		LastFailure:    lastError,
+		LastRunUnix: unix,
+		LastFailure: lastError,
 	}
 	state.Desired = photonlinux.ProjectIPsecDesired(desired)
 	state.ActualSAs = photonlinux.ProjectIPsecSAs(sas)

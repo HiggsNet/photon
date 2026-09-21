@@ -92,8 +92,8 @@ func TestPeerLifecycleSuppressionTearsDownAndSuccessfulSyncRestoresLink(t *testi
 	service.processEvents(context.Background(), nil)
 	common := service.State.Common.ReadView()
 	cleanedLinks, cleanedReconcile := readTestIPsecObservation(service)
-	if len(cleanedLinks) != 0 || cleanedReconcile.DesiredLinks != 0 {
-		t.Fatalf("cleaned links = %+v desired=%d", cleanedLinks, cleanedReconcile.DesiredLinks)
+	if len(cleanedLinks) != 0 || len(cleanedReconcile.Desired) != 0 {
+		t.Fatalf("cleaned links = %+v desired=%d", cleanedLinks, len(cleanedReconcile.Desired))
 	}
 	if _, ok := common.Gossip.Peers["node-b.catofes."]; !ok {
 		t.Fatal("offline checkpoint was removed instead of retained as the suppression source")
@@ -106,7 +106,7 @@ func TestPeerLifecycleSuppressionTearsDownAndSuccessfulSyncRestoresLink(t *testi
 	service.notifyStateChanged()
 	service.processEvents(context.Background(), nil)
 	recoveredLinks, recoveredReconcile := readTestIPsecObservation(service)
-	if len(recoveredLinks) != 1 || recoveredReconcile.DesiredLinks != 1 {
-		t.Fatalf("recovered links = %+v desired=%d", recoveredLinks, recoveredReconcile.DesiredLinks)
+	if len(recoveredLinks) != 1 || len(recoveredReconcile.Desired) != 1 {
+		t.Fatalf("recovered links = %+v desired=%d", recoveredLinks, len(recoveredReconcile.Desired))
 	}
 }

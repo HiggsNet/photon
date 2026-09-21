@@ -335,7 +335,7 @@ func TestDaemonDelegateIssuePersistsThroughOwnerStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handleDelegateIssueEvent: %v", err)
 	}
-	if result == nil || result.Bundle == nil || result.Bundle.Zone != "catofes." {
+	if result == nil || result.Zone != "catofes." {
 		t.Fatalf("delegate issue result = %#v", result)
 	}
 	if got := state.Common.ReadView().State.Network.Zones[zone.RootZone].Delegations["catofes."]; got == nil {
@@ -381,7 +381,7 @@ func TestDaemonConcurrentAdminAndRecordEventsPreserveState(t *testing.T) {
 	service = newTestDaemonFromOwners(rt, &corestate.VerifiedState{Network: zone.NewNetworkState()},
 		&corestate.GossipCheckpoint{}, &photonlinux.LinuxState{},
 		&appConfig{PeerID: "catofes.", ListenAddr: "127.0.0.1:0"}, time.Second)
-	if _, err := service.handleJoinAcceptEvent(catofesIssue.Bundle, &privateKeyFile{Type: "photon.ed25519.private.v1", PublicKey: catofesPub, PrivateKey: catofesPriv}); err != nil {
+	if _, err := service.handleJoinAcceptEvent(catofesIssue, &privateKeyFile{Type: "photon.ed25519.private.v1", PublicKey: catofesPub, PrivateKey: catofesPriv}); err != nil {
 		t.Fatalf("handleJoinAcceptEvent(catofes): %v", err)
 	}
 

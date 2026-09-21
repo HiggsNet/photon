@@ -301,7 +301,7 @@ func TestDerivePeerStatusNeverSeen(t *testing.T) {
 	// No SyncPeers entry for node-b, no LinkInstance, no desired link.
 	info := peerStatusForTest(state, "node-b.catofes.", "node-b.catofes.", now, cfg)
 	// Without IPsec config, this should be eligible (no_overlay_config) since
-	// the state alone has no IPsecReconcile.DesiredLinks.
+	// the state alone has no observed desired IPsec links.
 	if info.State != inspect.PeerStateEligible && info.State != inspect.PeerStateOffline {
 		t.Fatalf("state = %s, want eligible or offline", info.State)
 	}

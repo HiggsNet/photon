@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/observer"
+	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
@@ -48,7 +49,7 @@ func TestObserverReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T) {
 			ActualState: "up",
 		},
 	}
-	observationReconcile := &ipsecObservationSummary{DesiredLinks: 1}
+	observationReconcile := &ipsecObservationSummary{Desired: []photonstate.DesiredLinkObservation{{InstanceID: "link-committed"}}}
 	appConfig := defaultAppConfig()
 	appConfig.Observer.Enabled = true
 	service := newTestDaemonFromOwners(
@@ -62,7 +63,7 @@ func TestObserverReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T) {
 	committedRev := uint64(service.State.Common.VerifiedRevision())
 
 	observationLinks["link-uncommitted"] = ipsec.LinkInstance{ID: "link-uncommitted"}
-	observationReconcile.DesiredLinks = 99
+	observationReconcile.Desired = make([]photonstate.DesiredLinkObservation, 99)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
 	rr := httptest.NewRecorder()

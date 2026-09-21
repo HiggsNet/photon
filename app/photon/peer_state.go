@@ -25,7 +25,7 @@ func peerLifecycleInput(network *zone.NetworkState, checkpoint *corestate.Gossip
 	}
 	input.LastSyncUnix = ps.LastSyncUnix
 	input.ObservedLastSeenUnix = ps.ObservedLastSeenUnix
-	input.HasIPsecConfig = reconcile != nil && reconcile.DesiredLinks > 0
+	input.HasIPsecConfig = reconcile != nil && len(reconcile.Desired) > 0
 	if network != nil {
 		input.PeerZoneKnown = network.Zones[peerZone] != nil
 		input.ZoneRevoked = network.IsZoneRevoked(peerZone, now)

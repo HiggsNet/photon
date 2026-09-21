@@ -31,11 +31,6 @@ type joinBundle struct {
 	Network       *zone.NetworkState `json:"network"`
 }
 
-type delegationIssueResult struct {
-	Zone   zone.ZonePath
-	Bundle *joinBundle
-}
-
 type joinAcceptResult struct {
 	Zone          zone.ZonePath
 	RootPublicKey ed25519.PublicKey
@@ -87,48 +82,37 @@ func issueDelegation(requestInput string, outPath string, permissions []zone.Per
 	if err != nil {
 		return err
 	}
+	via := ""
 	if controlled {
-		if outPath == "" {
-			fmt.Fprintf(os.Stderr, "issued delegation for %s via daemon\n", request.Zone)
-			text, err := share.EncodeBase64JSON(bundle)
-			if err != nil {
-				return err
-			}
-			fmt.Printf("%s\n", text)
-			return nil
+		via = " via daemon"
+	} else {
+		if !direct {
+			logControlFallback("delegate_issue")
 		}
-		fmt.Printf("issued delegation for %s via daemon\n", request.Zone)
-		if err := writeBase64JSONFile(outPath, 0o644, bundle); err != nil {
+		bundle, err = issueDelegationDirect(config, &request, permissions, time.Now())
+		if err != nil {
 			return err
 		}
-		fmt.Printf("wrote join bundle: %s\n", outPath)
-		return nil
 	}
-	if !direct {
-		logControlFallback("delegate_issue")
-	}
-	result, err := issueDelegationDirect(config, &request, permissions, time.Now())
-	if err != nil {
-		return err
-	}
+
 	if outPath == "" {
-		fmt.Fprintf(os.Stderr, "issued delegation for %s\n", request.Zone)
-		text, err := share.EncodeBase64JSON(result.Bundle)
+		fmt.Fprintf(os.Stderr, "issued delegation for %s%s\n", request.Zone, via)
+		text, err := share.EncodeBase64JSON(bundle)
 		if err != nil {
 			return err
 		}
 		fmt.Printf("%s\n", text)
 		return nil
 	}
-	fmt.Printf("issued delegation for %s\n", request.Zone)
-	if err := writeBase64JSONFile(outPath, 0o644, result.Bundle); err != nil {
+	fmt.Printf("issued delegation for %s%s\n", request.Zone, via)
+	if err := writeBase64JSONFile(outPath, 0o644, bundle); err != nil {
 		return err
 	}
 	fmt.Printf("wrote join bundle: %s\n", outPath)
 	return nil
 }
 
-func issueDelegationDirect(config *appConfig, request *gossip.JoinRequest, permissions []zone.Permission, now time.Time) (*delegationIssueResult, error) {
+func issueDelegationDirect(config *appConfig, request *gossip.JoinRequest, permissions []zone.Permission, now time.Time) (*joinBundle, error) {
 	if err := gossip.ValidateJoinRequest(request); err != nil {
 		return nil, err
 	}
@@ -145,11 +129,7 @@ func issueDelegationDirect(config *appConfig, request *gossip.JoinRequest, permi
 	if _, err := state.Common.ApplyLocalIntent(context.Background(), intent, now); err != nil {
 		return nil, err
 	}
-	bundle, err := joinBundleFromNetwork(state.Common.ReadView().State.Network, request.Zone, now)
-	if err != nil {
-		return nil, err
-	}
-	return &delegationIssueResult{Zone: request.Zone, Bundle: bundle}, nil
+	return joinBundleFromNetwork(state.Common.ReadView().State.Network, request.Zone, now)
 }
 
 func planDelegationIssue(network *zone.NetworkState, request *gossip.JoinRequest, permissions []zone.Permission, now time.Time) (corestate.LocalIntent, error) {
@@ -292,45 +272,25 @@ func acceptJoinBundleInState(config *appConfig, bundle *joinBundle, key *private
 		return nil, err
 	}
 	state, found, err := restoreState(boltStore, config.TrustedRootPublicKey)
+	defer func() {
+		if state != nil {
+			_ = state.Close()
+		} else {
+			_ = boltStore.Close()
+		}
+	}()
 	if err != nil {
-		_ = boltStore.Close()
 		return nil, err
 	}
-	if !found {
-		if key == nil {
-			_ = boltStore.Close()
-			return nil, errors.New("join accept requires key.json because no existing state is available")
-		}
-		if err := validatePrivateKeyFile(key); err != nil {
-			_ = boltStore.Close()
-			return nil, err
-		}
-		initial := corestate.NewStore(nil, nil)
-		if _, err := initial.InstallIdentity(context.Background(), corestate.IdentityInstall{
-			ManagedZone: bundle.Zone, Network: bundle.Network,
-			TrustedRootPublicKey: bundle.RootPublicKey, IdentityPrivateKey: key.PrivateKey,
-		}, now); err != nil {
-			_ = boltStore.Close()
-			return nil, err
-		}
-		view := initial.ReadView()
-		if err := initializeStateDB(boltStore, &corestate.CommitCandidate{Verified: view.State, Gossip: view.Gossip}, view.Revision, &photonlinux.LinuxState{}); err != nil {
-			_ = boltStore.Close()
-			return nil, err
-		}
-		state, found, err = restoreState(boltStore, config.TrustedRootPublicKey)
-		if err != nil {
-			_ = boltStore.Close()
-			return nil, err
-		}
-		if !found {
-			_ = boltStore.Close()
-			return nil, errors.New("initialized join state could not be restored")
-		}
+	var common *corestate.Store
+	if found {
+		common = state.Common
+	} else {
+		common = corestate.NewStore(nil, nil)
+		defer common.Close()
 	}
-	defer state.Close()
 	if key == nil {
-		view := state.Common.ReadView()
+		view := common.ReadView()
 		key, err = joinAcceptKeyFromIdentity(view.State, bundle.Zone)
 		if err != nil {
 			return nil, err
@@ -339,11 +299,17 @@ func acceptJoinBundleInState(config *appConfig, bundle *joinBundle, key *private
 	if err := validatePrivateKeyFile(key); err != nil {
 		return nil, err
 	}
-	if _, err := state.Common.InstallIdentity(context.Background(), corestate.IdentityInstall{
+	if _, err := common.InstallIdentity(context.Background(), corestate.IdentityInstall{
 		ManagedZone: bundle.Zone, Network: bundle.Network,
 		TrustedRootPublicKey: bundle.RootPublicKey, IdentityPrivateKey: key.PrivateKey,
 	}, now); err != nil {
 		return nil, err
+	}
+	if !found {
+		view := common.ReadView()
+		if err := initializeStateDB(boltStore, &corestate.CommitCandidate{Verified: view.State, Gossip: view.Gossip}, view.Revision, &photonlinux.LinuxState{}); err != nil {
+			return nil, err
+		}
 	}
 	return &joinAcceptResult{Zone: bundle.Zone, RootPublicKey: append([]byte(nil), bundle.RootPublicKey...)}, nil
 }

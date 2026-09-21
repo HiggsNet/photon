@@ -64,14 +64,8 @@ func openState(config *appConfig) (*State, error) {
 		// The bootstrap writer initializes the current common/Linux partitions with
 		// an authority-less managed-zone placeholder; no temporary legacy schema is
 		// created for a new node.
-		if err := store.Close(); err != nil {
-			return nil, err
-		}
-		if err := writeConfiguredPendingBootstrap(config.StatePath, config); err != nil {
-			return nil, err
-		}
-		store, err = corestate.OpenBoltStore(config.StatePath, 0o600, daemonBoltLockTimeout)
-		if err != nil {
+		if err := writeConfiguredPendingBootstrap(store, config); err != nil {
+			_ = store.Close()
 			return nil, err
 		}
 		state, found, err = restoreState(store, config.TrustedRootPublicKey)

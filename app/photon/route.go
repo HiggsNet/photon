@@ -194,7 +194,7 @@ func sortRouteShowRows(rows []inspect.RouteShowRow) {
 	sort.Slice(rows, func(i, j int) bool {
 		a := rows[i]
 		b := rows[j]
-		if cmp := comparePrefixStrings(a.Prefix, b.Prefix); cmp != 0 {
+		if cmp := inspect.ComparePrefixStrings(a.Prefix, b.Prefix); cmp != 0 {
 			return cmp < 0
 		}
 		if a.Zone != b.Zone {
@@ -261,7 +261,7 @@ func printRouteShowReport(w io.Writer, report *inspect.RouteShowReport, includeA
 	}
 
 	sort.SliceStable(sharedRows, func(i, j int) bool {
-		if cmp := comparePrefixStrings(sharedRows[i].Prefix, sharedRows[j].Prefix); cmp != 0 {
+		if cmp := inspect.ComparePrefixStrings(sharedRows[i].Prefix, sharedRows[j].Prefix); cmp != 0 {
 			return cmp < 0
 		}
 		if sharedRows[i].Zone != sharedRows[j].Zone {

@@ -1,9 +1,11 @@
 package inspect
 
 import (
+	"cmp"
 	"net/netip"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/routing"
@@ -86,7 +88,7 @@ func RoutesFromAuthorizedSet(managedZone zone.ZonePath, ars *routing.AuthorizedR
 	for p := range ars.Announced[managedZone] {
 		exportSet = append(exportSet, p.String())
 	}
-	sortPrefixStrings(exportSet)
+	slices.SortFunc(exportSet, ComparePrefixStrings)
 
 	authorized := make(map[string][]string, len(ars.Announced))
 	authorizedRoutes := make([]AuthorizedRoute, 0)
@@ -106,11 +108,11 @@ func RoutesFromAuthorizedSet(managedZone zone.ZonePath, ars *routing.AuthorizedR
 				sharedAuthorized[prefix] = append(sharedAuthorized[prefix], string(z))
 			}
 		}
-		sortPrefixStrings(ps)
+		slices.SortFunc(ps, ComparePrefixStrings)
 		authorized[string(z)] = ps
 	}
 	sort.Slice(authorizedRoutes, func(i, j int) bool {
-		if cmp := comparePrefixStrings(authorizedRoutes[i].Prefix, authorizedRoutes[j].Prefix); cmp != 0 {
+		if cmp := ComparePrefixStrings(authorizedRoutes[i].Prefix, authorizedRoutes[j].Prefix); cmp != 0 {
 			return cmp < 0
 		}
 		return ZonePathLess(authorizedRoutes[i].Zone, authorizedRoutes[j].Zone)
@@ -139,7 +141,7 @@ func RoutesFromAuthorizedSet(managedZone zone.ZonePath, ars *routing.AuthorizedR
 		})
 	}
 	sort.Slice(ipamPools, func(i, j int) bool {
-		if cmp := comparePrefixStrings(ipamPools[i].Prefix, ipamPools[j].Prefix); cmp != 0 {
+		if cmp := ComparePrefixStrings(ipamPools[i].Prefix, ipamPools[j].Prefix); cmp != 0 {
 			return cmp < 0
 		}
 		if ipamPools[i].Source != ipamPools[j].Source {
@@ -177,7 +179,7 @@ func RoutesFromAuthorizedSet(managedZone zone.ZonePath, ars *routing.AuthorizedR
 		}
 	}
 	sort.Slice(ipamAssignments, func(i, j int) bool {
-		if cmp := comparePrefixStrings(ipamAssignments[i].Prefix, ipamAssignments[j].Prefix); cmp != 0 {
+		if cmp := ComparePrefixStrings(ipamAssignments[i].Prefix, ipamAssignments[j].Prefix); cmp != 0 {
 			return cmp < 0
 		}
 		if ipamAssignments[i].AssignedTo != ipamAssignments[j].AssignedTo {
@@ -203,7 +205,7 @@ func RoutesFromAuthorizedSet(managedZone zone.ZonePath, ars *routing.AuthorizedR
 		})
 	}
 	sort.Slice(errors, func(i, j int) bool {
-		if cmp := comparePrefixStrings(errors[i].Prefix, errors[j].Prefix); cmp != 0 {
+		if cmp := ComparePrefixStrings(errors[i].Prefix, errors[j].Prefix); cmp != 0 {
 			return cmp < 0
 		}
 		return ZonePathLess(errors[i].Zone, errors[j].Zone)
@@ -245,8 +247,8 @@ func BuildBirdRouteViews(dump *RoutesResponse, routes []bird.BirdRoute) []BirdRo
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].Prefix != out[j].Prefix {
-			return comparePrefixStrings(out[i].Prefix, out[j].Prefix) < 0
+		if c := ComparePrefixStrings(out[i].Prefix, out[j].Prefix); c != 0 {
+			return c < 0
 		}
 		if out[i].Selected != out[j].Selected {
 			return out[i].Selected
@@ -297,35 +299,20 @@ func addrString(addr netip.Addr) string {
 	return addr.String()
 }
 
-func sortPrefixStrings(prefixes []string) {
-	sort.Slice(prefixes, func(i, j int) bool {
-		return comparePrefixStrings(prefixes[i], prefixes[j]) < 0
-	})
-}
-
-func comparePrefixStrings(a, b string) int {
+// ComparePrefixStrings orders CIDRs by network address, then prefix length.
+// Invalid strings sort before valid prefixes and lexically among themselves.
+func ComparePrefixStrings(a, b string) int {
 	ap, aerr := netip.ParsePrefix(a)
 	bp, berr := netip.ParsePrefix(b)
-	if aerr != nil || berr != nil {
-		if a < b {
-			return -1
-		}
-		if a > b {
-			return 1
-		}
-		return 0
+	if aerr != nil && berr != nil {
+		return strings.Compare(a, b)
 	}
-	if ap.Addr().Less(bp.Addr()) {
+	if aerr != nil {
 		return -1
 	}
-	if bp.Addr().Less(ap.Addr()) {
+	if berr != nil {
 		return 1
 	}
-	if ap.Bits() < bp.Bits() {
-		return -1
-	}
-	if ap.Bits() > bp.Bits() {
-		return 1
-	}
-	return 0
+	ap, bp = ap.Masked(), bp.Masked()
+	return cmp.Or(ap.Addr().Compare(bp.Addr()), cmp.Compare(ap.Bits(), bp.Bits()))
 }

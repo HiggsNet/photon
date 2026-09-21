@@ -32,14 +32,12 @@ type routingObservation struct {
 // ipsecObservationSummary is the daemon's online summary of the latest observed
 // IPsec reconcile. It is process-local and is never written to State.
 type ipsecObservationSummary struct {
-	LastRunUnix    int64
-	SourceRevision uint64
-	DesiredLinks   int
-	Desired        []photonstate.DesiredLinkObservation
-	ActualSAs      []photonstate.LinkSAObservation
-	Actions        []photonstate.LinkActionObservation
-	Skipped        []photonstate.LinkSkipObservation
-	LastFailure    error
+	LastRunUnix int64
+	Desired     []photonstate.DesiredLinkObservation
+	ActualSAs   []photonstate.LinkSAObservation
+	Actions     []photonstate.LinkActionObservation
+	Skipped     []photonstate.LinkSkipObservation
+	LastFailure error
 }
 
 func cloneIPsecObservationSummary(in *ipsecObservationSummary) *ipsecObservationSummary {
@@ -74,19 +72,12 @@ func (o *linuxObservation) replaceIPsec(links map[string]ipsec.LinkInstance, rec
 func (o *linuxObservation) routingSnapshot() *routingObservation {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
-	if o.routingReconcile == nil {
-		return nil
-	}
 	return cloneRoutingObservation(o.routingReconcile)
 }
 
 func (o *linuxObservation) replaceRouting(reconcile *routingObservation) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if reconcile == nil {
-		o.routingReconcile = nil
-		return
-	}
 	o.routingReconcile = cloneRoutingObservation(reconcile)
 }
 

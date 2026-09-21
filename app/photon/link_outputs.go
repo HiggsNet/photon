@@ -7,7 +7,6 @@ import (
 	"strconv"
 
 	photonstate "github.com/HiggsNet/photon/internal/state"
-	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
@@ -48,7 +47,7 @@ func buildLinkOutputs(instances map[string]ipsec.LinkInstance, reconcile *ipsecO
 				continue
 			}
 			staged := base
-			staged.ID = runtimeLinkOutputID(cmp.Or(inst.LinkID, inst.ID, want.LinkID, want.InstanceID), photonstate.LinkRuntimeStaged)
+			staged.ID = cmp.Or(inst.LinkID, inst.ID, want.LinkID, want.InstanceID) + "#" + photonstate.LinkRuntimeStaged
 			staged.InterfaceName = inst.StagedInterfaceName
 			staged.LocalAddr = inst.StagedLocalTunnelAddr
 			staged.PeerAddr = inst.StagedPeerTunnelAddr
@@ -63,21 +62,8 @@ func buildLinkOutputs(instances map[string]ipsec.LinkInstance, reconcile *ipsecO
 	return out
 }
 
-func firstNonEmptyZone(values ...zone.ZonePath) zone.ZonePath {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
 func newIPsecLinkOutput(inst ipsec.LinkInstance, desired photonstate.DesiredLinkObservation) photonstate.LinkOutput {
 	id := cmp.Or(inst.LinkID, desired.LinkID, inst.ID, desired.InstanceID)
-	provider := inst.TransportKind
-	if provider == "" {
-		provider = ipsec.ProviderStrongSwan
-	}
 	iface := cmp.Or(inst.InterfaceName, desired.InterfaceName)
 	local := inst.LocalTunnelAddr
 	if !local.IsValid() {
@@ -91,8 +77,8 @@ func newIPsecLinkOutput(inst ipsec.LinkInstance, desired photonstate.DesiredLink
 	return photonstate.LinkOutput{
 		ID:             id,
 		GroupID:        cmp.Or(inst.GroupID, desired.GroupID),
-		PeerZone:       firstNonEmptyZone(inst.PeerZone, desired.PeerZone),
-		Provider:       provider,
+		PeerZone:       cmp.Or(inst.PeerZone, desired.PeerZone),
+		Provider:       cmp.Or(inst.TransportKind, ipsec.ProviderStrongSwan),
 		PathKey:        cmp.Or(inst.PathKey, desired.PathKey),
 		NetNS:          netns,
 		InterfaceName:  iface,
@@ -110,13 +96,6 @@ func newIPsecLinkOutput(inst ipsec.LinkInstance, desired photonstate.DesiredLink
 func parseScopedAddr(value string) netip.Addr {
 	addr, _ := netip.ParseAddr(stripScope(value))
 	return addr
-}
-
-func runtimeLinkOutputID(linkID, role string) string {
-	if role == "" || role == photonstate.LinkRuntimeActive {
-		return linkID
-	}
-	return linkID + "#" + role
 }
 
 func baseLinkReadiness(state, iface string) photonstate.LinkReadiness {

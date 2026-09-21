@@ -471,8 +471,7 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 			},
 		}
 		observationReconcile = &ipsecObservationSummary{
-			LastRunUnix:  123,
-			DesiredLinks: 1,
+			LastRunUnix: 123,
 			Desired: []photonstate.DesiredLinkObservation{{
 				InstanceID:      "link-1",
 				GroupID:         "blue",

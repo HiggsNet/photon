@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"io"
 	"net/netip"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -371,7 +373,7 @@ func buildIPAMAssignmentRows(state *corestate.VerifiedState, now time.Time, filt
 
 func sortIPAMAssignmentRows(rows []inspect.IPAMAssignmentRow) {
 	sort.Slice(rows, func(i, j int) bool {
-		if cmp := comparePrefixStrings(rows[i].Prefix, rows[j].Prefix); cmp != 0 {
+		if cmp := inspect.ComparePrefixStrings(rows[i].Prefix, rows[j].Prefix); cmp != 0 {
 			return cmp < 0
 		}
 		if rows[i].AssignedTo != rows[j].AssignedTo {
@@ -521,10 +523,10 @@ func buildIPAMMineReportFromState(state *corestate.VerifiedState, now time.Time)
 		})
 	}
 	sort.Slice(report.Assignments, func(i, j int) bool {
-		return comparePrefixStrings(report.Assignments[i].Prefix, report.Assignments[j].Prefix) < 0
+		return inspect.ComparePrefixStrings(report.Assignments[i].Prefix, report.Assignments[j].Prefix) < 0
 	})
 	sort.Slice(report.Pools, func(i, j int) bool {
-		if cmp := comparePrefixStrings(report.Pools[i].Prefix, report.Pools[j].Prefix); cmp != 0 {
+		if cmp := inspect.ComparePrefixStrings(report.Pools[i].Prefix, report.Pools[j].Prefix); cmp != 0 {
 			return cmp < 0
 		}
 		if report.Pools[i].Source != report.Pools[j].Source {
@@ -604,10 +606,20 @@ func buildIPAMGetReportFromState(state *corestate.VerifiedState, now time.Time, 
 		Routes:      []inspect.IPAMGetRouteRow{},
 		Diagnostics: []inspect.IPAMGetDiagnosticRow{},
 	}
+	var pools []*routing.PoolEntry
 	for _, pool := range ars.AllPools {
-		if !containsIPAMQuery(pool.Prefix, prefix) {
-			continue
+		if pool.Prefix.Bits() <= prefix.Bits() && pool.Prefix.Overlaps(prefix) {
+			pools = append(pools, pool)
 		}
+	}
+	slices.SortFunc(pools, func(a, b *routing.PoolEntry) int {
+		return cmp.Or(
+			cmp.Compare(a.Prefix.Bits(), b.Prefix.Bits()),
+			cmp.Compare(a.Source, b.Source),
+			cmp.Compare(a.DelegatedTo, b.DelegatedTo),
+		)
+	})
+	for _, pool := range pools {
 		report.PoolChain = append(report.PoolChain, inspect.IPAMGetPoolRow{
 			Prefix:      pool.Prefix.String(),
 			Source:      string(pool.Source),
@@ -615,23 +627,12 @@ func buildIPAMGetReportFromState(state *corestate.VerifiedState, now time.Time, 
 			Relation:    ipamGetPoolRelation(pool),
 		})
 	}
-	sort.Slice(report.PoolChain, func(i, j int) bool {
-		pi := netip.MustParsePrefix(report.PoolChain[i].Prefix)
-		pj := netip.MustParsePrefix(report.PoolChain[j].Prefix)
-		if pi.Bits() != pj.Bits() {
-			return pi.Bits() < pj.Bits()
-		}
-		if report.PoolChain[i].Source != report.PoolChain[j].Source {
-			return report.PoolChain[i].Source < report.PoolChain[j].Source
-		}
-		return report.PoolChain[i].DelegatedTo < report.PoolChain[j].DelegatedTo
-	})
 	if len(report.PoolChain) > 0 {
 		best := report.PoolChain[len(report.PoolChain)-1]
 		report.BestPool = &best
 	}
 	for _, assignment := range ars.AllAssignments {
-		if !prefixesRelatedForIPAMQuery(prefix, assignment.Prefix) {
+		if !prefix.Overlaps(assignment.Prefix) {
 			continue
 		}
 		report.Assignments = append(report.Assignments, inspect.IPAMGetAssignmentRow{
@@ -643,7 +644,7 @@ func buildIPAMGetReportFromState(state *corestate.VerifiedState, now time.Time, 
 		})
 	}
 	sort.Slice(report.Assignments, func(i, j int) bool {
-		return comparePrefixStrings(report.Assignments[i].Prefix, report.Assignments[j].Prefix) < 0
+		return inspect.ComparePrefixStrings(report.Assignments[i].Prefix, report.Assignments[j].Prefix) < 0
 	})
 	if len(report.Assignments) == 1 && !report.Assignments[0].Shared {
 		assignedTo := report.Assignments[0].AssignedTo
@@ -651,14 +652,14 @@ func buildIPAMGetReportFromState(state *corestate.VerifiedState, now time.Time, 
 	}
 	for source, routes := range ars.Announced {
 		for p := range routes {
-			if !prefixesRelatedForIPAMQuery(prefix, p) {
+			if !prefix.Overlaps(p) {
 				continue
 			}
 			report.Routes = append(report.Routes, inspect.IPAMGetRouteRow{Prefix: p.String(), Source: string(source)})
 		}
 	}
 	sort.Slice(report.Routes, func(i, j int) bool {
-		if cmp := comparePrefixStrings(report.Routes[i].Prefix, report.Routes[j].Prefix); cmp != 0 {
+		if cmp := inspect.ComparePrefixStrings(report.Routes[i].Prefix, report.Routes[j].Prefix); cmp != 0 {
 			return cmp < 0
 		}
 		return report.Routes[i].Source < report.Routes[j].Source
@@ -667,7 +668,7 @@ func buildIPAMGetReportFromState(state *corestate.VerifiedState, now time.Time, 
 		if !strings.HasPrefix(authErr.Code, "ipam_") {
 			continue
 		}
-		if authErr.Prefix.IsValid() && !prefixesRelatedForIPAMQuery(prefix, authErr.Prefix) {
+		if authErr.Prefix.IsValid() && !prefix.Overlaps(authErr.Prefix) {
 			continue
 		}
 		report.Diagnostics = append(report.Diagnostics, inspect.IPAMGetDiagnosticRow{Code: authErr.Code, Detail: authErr.Detail})
@@ -692,10 +693,7 @@ func normalizeIPAMGetQuery(query string) (netip.Prefix, error) {
 	if err != nil {
 		return netip.Prefix{}, fmt.Errorf("invalid address or prefix %q: %w", query, err)
 	}
-	if addr.Is4() {
-		return netip.PrefixFrom(addr, 32), nil
-	}
-	return netip.PrefixFrom(addr, 128), nil
+	return netip.PrefixFrom(addr, addr.BitLen()), nil
 }
 
 func ipamGetPoolRelation(pool *routing.PoolEntry) string {
@@ -703,21 +701,6 @@ func ipamGetPoolRelation(pool *routing.PoolEntry) string {
 		return "owner"
 	}
 	return "delegated"
-}
-
-func containsIPAMQuery(pool, query netip.Prefix) bool {
-	return containsPrefixLocal(pool, query)
-}
-
-func prefixesRelatedForIPAMQuery(query, candidate netip.Prefix) bool {
-	return containsPrefixLocal(query, candidate) || containsPrefixLocal(candidate, query)
-}
-
-func containsPrefixLocal(outer, inner netip.Prefix) bool {
-	if outer.Bits() > inner.Bits() {
-		return false
-	}
-	return outer.Contains(inner.Masked().Addr())
 }
 
 func writeIPAMGetReport(w io.Writer, report *inspect.IPAMGetReport) error {
@@ -783,27 +766,4 @@ func ipamAssignmentMode(shared bool) string {
 		return "shared"
 	}
 	return "exclusive"
-}
-
-func comparePrefixStrings(a, b string) int {
-	pa, errA := netip.ParsePrefix(a)
-	pb, errB := netip.ParsePrefix(b)
-	if errA != nil || errB != nil {
-		return strings.Compare(a, b)
-	}
-	pa = pa.Masked()
-	pb = pb.Masked()
-	if pa.Addr().Less(pb.Addr()) {
-		return -1
-	}
-	if pb.Addr().Less(pa.Addr()) {
-		return 1
-	}
-	if pa.Bits() < pb.Bits() {
-		return -1
-	}
-	if pa.Bits() > pb.Bits() {
-		return 1
-	}
-	return 0
 }

@@ -81,7 +81,7 @@ func daemonStatusView(d *Daemon) inspect.DaemonStatusView {
 		routingLastRunUnix = routingReconcile.LastRunUnix
 	}
 	if ipsecReconcile != nil {
-		desiredLinks = ipsecReconcile.DesiredLinks
+		desiredLinks = len(ipsecReconcile.Desired)
 		lastLinkFailure = ipsecReconcile.LastFailure
 		ipsecLastRunUnix = ipsecReconcile.LastRunUnix
 	}

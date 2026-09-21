@@ -17,11 +17,11 @@ import (
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
-func writeConfiguredPendingBootstrap(path string, config *appConfig) error {
+func writeConfiguredPendingBootstrap(store *corestate.BoltStore, config *appConfig) error {
 	if err := validateAutoJoinBootstrapConfig(config); err != nil {
 		return err
 	}
-	key, _, err := configuredIdentityKey(config)
+	key, err := configuredIdentityKey(config)
 	if err != nil {
 		return err
 	}
@@ -34,10 +34,6 @@ func writeConfiguredPendingBootstrap(path string, config *appConfig) error {
 	// reports that synchronization/adoption is required.
 	ns.Zones[config.ManagedZone] = zone.NewZoneState(config.ManagedZone, nil)
 	configureValidation(ns)
-	store, err := corestate.OpenBoltStore(path, 0o600, daemonBoltLockTimeout)
-	if err != nil {
-		return err
-	}
 	candidate := &corestate.CommitCandidate{
 		Verified: &corestate.VerifiedState{
 			ManagedZone:          config.ManagedZone,
@@ -47,11 +43,7 @@ func writeConfiguredPendingBootstrap(path string, config *appConfig) error {
 		},
 		Gossip: &corestate.GossipCheckpoint{},
 	}
-	if err := initializeStateDB(store, candidate, 0, &photonlinux.LinuxState{}); err != nil {
-		_ = store.Close()
-		return err
-	}
-	return store.Close()
+	return initializeStateDB(store, candidate, 0, &photonlinux.LinuxState{})
 }
 
 func validateAutoJoinBootstrapConfig(config *appConfig) error {
@@ -77,19 +69,15 @@ func validateAutoJoinBootstrapConfig(config *appConfig) error {
 	return nil
 }
 
-func configuredIdentityKey(config *appConfig) (*privateKeyFile, string, error) {
+func configuredIdentityKey(config *appConfig) (*privateKeyFile, error) {
 	if config == nil || config.Identity.KeyPath == "" {
-		return nil, "", errors.New("identity.key_path is required")
+		return nil, errors.New("identity.key_path is required")
 	}
-	keyPath, err := canonicalIdentityKeyPath(config.Identity.KeyPath)
+	keyPath, err := filepath.Abs(config.Identity.KeyPath)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	key, err := readPrivateKeyFile(keyPath)
-	if err != nil {
-		return nil, "", err
-	}
-	return key, keyPath, nil
+	return readPrivateKeyFile(keyPath)
 }
 
 // validateConfiguredIdentityState checks that immutable identity settings still
@@ -109,7 +97,7 @@ func validateConfiguredIdentityState(verified *corestate.VerifiedState, config *
 	if config.Identity.KeyPath == "" {
 		return nil
 	}
-	key, _, err := configuredIdentityKey(config)
+	key, err := configuredIdentityKey(config)
 	if err != nil {
 		return err
 	}
@@ -127,23 +115,11 @@ func validateConfiguredIdentityState(verified *corestate.VerifiedState, config *
 	return nil
 }
 
-func canonicalIdentityKeyPath(path string) (string, error) {
-	if path == "" {
-		return "", nil
-	}
-	clean := filepath.Clean(path)
-	abs, err := filepath.Abs(clean)
-	if err != nil {
-		return "", err
-	}
-	return abs, nil
-}
-
 func configuredJoinRequest(config *appConfig) (*gossip.JoinRequest, error) {
 	if config == nil || config.ManagedZone == "" {
 		return nil, errors.New("managed_zone is required")
 	}
-	key, _, err := configuredIdentityKey(config)
+	key, err := configuredIdentityKey(config)
 	if err != nil {
 		return nil, err
 	}

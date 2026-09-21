@@ -14,7 +14,7 @@ func buildStoredLinkInspection(config *appConfig, instances map[string]ipsec.Lin
 	input := inspect.LinkInput{Health: append([]inspect.HealthSample(nil), health...)}
 	if reconcile != nil {
 		input.LastRunUnix = reconcile.LastRunUnix
-		input.DesiredLinks = reconcile.DesiredLinks
+		input.DesiredLinks = len(reconcile.Desired)
 		input.LastFailure = reconcile.LastFailure
 		input.LastDesired = reconcile.Desired
 		input.ActualSAs = reconcile.ActualSAs
@@ -45,10 +45,7 @@ func lastReconcileDesiredLinks(reconcile *ipsecObservationSummary) int {
 	if reconcile == nil {
 		return 0
 	}
-	if len(reconcile.Desired) > 0 {
-		return len(reconcile.Desired)
-	}
-	return reconcile.DesiredLinks
+	return len(reconcile.Desired)
 }
 
 func sortedLinkInstanceIDs(instances map[string]ipsec.LinkInstance) []string {

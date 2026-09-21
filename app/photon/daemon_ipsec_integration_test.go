@@ -123,10 +123,10 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 	}
 	assertDryRunApply(t, driverA, specA, group.NetNS)
 	assertDryRunApply(t, driverB, specB, group.NetNS)
-	if latestAReconcile == nil || latestAReconcile.DesiredLinks != 1 || len(latestAReconcile.Actions) == 0 {
+	if latestAReconcile == nil || len(latestAReconcile.Desired) != 1 || len(latestAReconcile.Actions) == 0 {
 		t.Fatalf("node-a reconcile = %+v, want desired link and action", latestAReconcile)
 	}
-	if latestBReconcile == nil || latestBReconcile.DesiredLinks != 1 || len(latestBReconcile.Actions) == 0 {
+	if latestBReconcile == nil || len(latestBReconcile.Desired) != 1 || len(latestBReconcile.Actions) == 0 {
 		t.Fatalf("node-b reconcile = %+v, want desired link and action", latestBReconcile)
 	}
 }

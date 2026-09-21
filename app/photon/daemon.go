@@ -601,7 +601,7 @@ func (d *Daemon) handleEvent(event daemonEvent) (daemonEventResult, bool, bool) 
 		if err != nil {
 			return daemonEventResult{Error: err}, false, false
 		}
-		return daemonEventResult{Zone: result.Zone, JoinBundle: result.Bundle}, true, false
+		return daemonEventResult{Zone: result.Zone, JoinBundle: result}, true, false
 	case daemonEventDelegateGrant:
 		bundle, err := d.handleDelegateGrantEvent(event.Zone, event.Permissions)
 		if err != nil {
@@ -676,20 +676,17 @@ func (d *Daemon) handleEvent(event daemonEvent) (daemonEventResult, bool, bool) 
 	}
 }
 
-func (d *Daemon) handleDelegateIssueEvent(request *gossip.JoinRequest, permissions []zone.Permission) (*delegationIssueResult, error) {
+func (d *Daemon) handleDelegateIssueEvent(request *gossip.JoinRequest, permissions []zone.Permission) (*joinBundle, error) {
 	if err := gossip.ValidateJoinRequest(request); err != nil {
 		return nil, err
 	}
+	now := d.now()
 	view := d.State.Common.ReadView()
-	intent, err := planDelegationIssue(view.State.Network, request, permissions, d.now())
+	intent, err := planDelegationIssue(view.State.Network, request, permissions, now)
 	if err != nil {
 		return nil, err
 	}
-	result, err := d.State.Common.ApplyLocalIntent(context.Background(), intent, d.now())
-	if err != nil {
-		return nil, err
-	}
-	bundle, err := joinBundleFromNetwork(d.State.Common.ReadView().State.Network, request.Zone, d.now())
+	result, err := d.State.Common.ApplyLocalIntent(context.Background(), intent, now)
 	if err != nil {
 		return nil, err
 	}
@@ -697,7 +694,7 @@ func (d *Daemon) handleDelegateIssueEvent(request *gossip.JoinRequest, permissio
 		d.refreshGossipDiscovery()
 		d.notifyStateChanged()
 	}
-	return &delegationIssueResult{Zone: request.Zone, Bundle: bundle}, nil
+	return joinBundleFromNetwork(d.State.Common.ReadView().State.Network, request.Zone, now)
 }
 
 func (d *Daemon) handleDelegateGrantEvent(path zone.ZonePath, permissions []zone.Permission) (*joinBundle, error) {

@@ -466,7 +466,7 @@ func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
 	service.notifyStateChanged()
 	service.processEvents(context.Background(), nil)
 	stableLinks, stableReconcile := readTestIPsecObservation(service)
-	if len(stableLinks) != 0 || len(stableReconcile.Actions) != 0 || stableReconcile.DesiredLinks != 0 {
+	if len(stableLinks) != 0 || len(stableReconcile.Actions) != 0 || len(stableReconcile.Desired) != 0 {
 		t.Fatalf("stable revoked reconcile = %+v instances=%+v, want no recreate", stableReconcile, stableLinks)
 	}
 }
@@ -514,7 +514,7 @@ func TestDaemonRestartRequiresExplicitOrphanCleanupAfterDesiredLinkRemoval(t *te
 			service.recoverIPsecLinksOnStart(context.Background())
 
 			links, reconcile := readTestIPsecObservation(service)
-			if len(links) != 0 || reconcile == nil || reconcile.DesiredLinks != 0 || len(reconcile.Actions) != 0 {
+			if len(links) != 0 || reconcile == nil || len(reconcile.Desired) != 0 || len(reconcile.Actions) != 0 {
 				t.Fatalf("startup reconcile = %+v links=%+v, want no adopted or automatic orphan cleanup", reconcile, links)
 			}
 			if len(driver.Terminated) != 0 || len(driver.Unloaded) != 0 {

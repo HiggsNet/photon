@@ -199,7 +199,7 @@ func TestJoinFlowAcceptsBase64PayloadArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("issueDelegationDirect: %v", err)
 	}
-	bundleText, err := share.EncodeBase64JSON(result.Bundle)
+	bundleText, err := share.EncodeBase64JSON(result)
 	if err != nil {
 		t.Fatalf("encode bundle: %v", err)
 	}
@@ -221,6 +221,69 @@ func TestValidatePrivateKeyFileRejectsPrePhotonType(t *testing.T) {
 	key := &privateKeyFile{Type: "higgs.ed25519.private.v1"}
 	if err := validatePrivateKeyFile(key); err == nil || err.Error() != "unsupported key file type" {
 		t.Fatalf("validatePrivateKeyFile(pre-Photon type) = %v, want unsupported key file type", err)
+	}
+}
+
+func TestJoinAcceptFailureLeavesStateUninitializedAndRetryable(t *testing.T) {
+	now := time.Now()
+	admin := testConfigWithStatePath(defaultAppConfig(), filepath.Join(t.TempDir(), "admin.db"))
+	if _, err := initializeRootState(admin); err != nil {
+		t.Fatal(err)
+	}
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := &privateKeyFile{Type: "photon.ed25519.private.v1", PublicKey: pub, PrivateKey: priv}
+	bundle, err := issueDelegationDirect(admin, &gossip.JoinRequest{Version: 1, Zone: "child.", PublicKey: pub}, nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherPub, otherPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		key  *privateKeyFile
+	}{
+		{name: "missing key"},
+		{name: "invalid key", key: &privateKeyFile{Type: "invalid"}},
+		{name: "unauthorized key", key: &privateKeyFile{Type: key.Type, PublicKey: otherPub, PrivateKey: otherPriv}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config := testConfigWithStatePath(defaultAppConfig(), filepath.Join(t.TempDir(), "node.db"))
+			if _, err := acceptJoinBundleInState(config, bundle, tc.key, now); err == nil {
+				t.Fatal("invalid initial join succeeded")
+			}
+			db, err := corestate.OpenBoltStore(config.StatePath, 0o600, daemonBoltLockTimeout)
+			if err != nil {
+				t.Fatalf("failed join retained database lock: %v", err)
+			}
+			state, found, restoreErr := restoreState(db, nil)
+			if state != nil {
+				_ = state.Close()
+			} else {
+				_ = db.Close()
+			}
+			if restoreErr != nil || found {
+				t.Fatalf("failed join left initialized or corrupt state: found=%v err=%v", found, restoreErr)
+			}
+			if _, err := acceptJoinBundleInState(config, bundle, key, now); err != nil {
+				t.Fatalf("retry with valid key: %v", err)
+			}
+			if _, err := acceptJoinBundleInState(config, bundle, nil, now); err != nil {
+				t.Fatalf("repeat join using persisted identity: %v", err)
+			}
+			joined, err := openState(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer joined.Close()
+			if view := joined.Common.ReadView(); view.State.ManagedZone != bundle.Zone || view.Revision != 1 {
+				t.Fatalf("repeat join changed initial identity: zone=%s revision=%d", view.State.ManagedZone, view.Revision)
+			}
+		})
 	}
 }
 

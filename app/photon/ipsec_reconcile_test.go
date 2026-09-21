@@ -23,7 +23,7 @@ func TestSummarizeIPsecReconcileDropsPrivateMaterialAndSpecPointers(t *testing.T
 		LocalPrivateKey:          privateKey,
 		LocalPrivateKeyAlgorithm: "private-algorithm-sentinel",
 	}
-	summary := summarizeIPsecReconcile(7, 1000, []ipsec.TransportLinkSpec{spec}, nil, []ipsec.ReconcileAction{{
+	summary := summarizeIPsecReconcile(1000, []ipsec.TransportLinkSpec{spec}, nil, []ipsec.ReconcileAction{{
 		Action: "create",
 		Spec:   &spec,
 	}}, nil, nil)

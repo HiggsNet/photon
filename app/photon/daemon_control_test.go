@@ -474,8 +474,7 @@ func TestDaemonControlLinksStatusUsesReconcileSnapshot(t *testing.T) {
 		},
 	}
 	observationReconcile := &ipsecObservationSummary{
-		LastRunUnix:  1234,
-		DesiredLinks: 1,
+		LastRunUnix: 1234,
 		Desired: []photonstate.DesiredLinkObservation{{
 			InstanceID:      "link-1",
 			GroupID:         "main",
@@ -531,8 +530,7 @@ func TestDaemonControlReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T)
 		},
 	}
 	observationReconcile := &ipsecObservationSummary{
-		LastRunUnix:  1234,
-		DesiredLinks: 1,
+		LastRunUnix: 1234,
 		Desired: []photonstate.DesiredLinkObservation{{
 			InstanceID: "link-committed",
 			GroupID:    "main",
@@ -554,7 +552,7 @@ func TestDaemonControlReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T)
 	committedRev := uint64(service.State.Common.VerifiedRevision())
 
 	observationLinks["link-uncommitted"] = ipsec.LinkInstance{ID: "link-uncommitted"}
-	observationReconcile.DesiredLinks = 99
+	observationReconcile.Desired = make([]photonstate.DesiredLinkObservation, 99)
 
 	status := controlViewRequestViaPipe[inspect.DaemonStatusView](t, service, controlRequest{Method: "daemon_status_view"})
 	if !status.OK {

@@ -76,7 +76,7 @@ func TestRecordIPsecReconcileErrorRefreshesRepeatedObservation(t *testing.T) {
 		t.Fatalf("repeated identical error revision = %d, want unchanged %d", got, committedRev)
 	}
 	_, repeated := service.linuxObservation.ipsecSnapshot()
-	if repeated == nil || repeated.LastRunUnix != later.Unix() || repeated.SourceRevision != committedRev || repeated.LastFailure == nil || repeated.LastFailure.Error() != "vici unavailable" {
+	if repeated == nil || repeated.LastRunUnix != later.Unix() || repeated.LastFailure == nil || repeated.LastFailure.Error() != "vici unavailable" {
 		t.Fatalf("repeated IPsec failure observation = %+v, want refreshed timestamp and unchanged failure", repeated)
 	}
 
@@ -118,7 +118,7 @@ func TestPublishIPsecObservationRejectsEquivalentStaleResult(t *testing.T) {
 		t.Fatal("ipsecDirty = false, want stale equivalent observation to be retried")
 	}
 	_, observation := service.linuxObservation.ipsecSnapshot()
-	if observation == nil || observation.LastRunUnix != now.Unix() || observation.SourceRevision != rev ||
+	if observation == nil || observation.LastRunUnix != now.Unix() ||
 		len(observation.ActualSAs) != 1 || observation.ActualSAs[0].InboundPackets != sa.InboundPackets {
 		t.Fatalf("IPsec observation = %+v, want initial snapshot preserved", observation)
 	}
@@ -149,7 +149,7 @@ func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 	if len(latestLinks) != 1 {
 		t.Fatalf("link instances len = %d, want 1", len(latestLinks))
 	}
-	if latestReconcile == nil || latestReconcile.DesiredLinks != 1 {
+	if latestReconcile == nil || len(latestReconcile.Desired) != 1 {
 		t.Fatalf("ipsec reconcile = %+v, want one desired link", latestReconcile)
 	}
 	if len(latestReconcile.Actions) != 1 || latestReconcile.Actions[0].Action != ipsec.ReconcileActionCreate {
