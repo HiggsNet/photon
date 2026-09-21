@@ -172,7 +172,7 @@ func TestDebugBabelRequiresOnlineDaemon(t *testing.T) {
 	}
 
 	var buf strings.Builder
-	if err := debugBabelWithConfig(rt.Config, &buf, rt.Direct); err == nil || !strings.Contains(err.Error(), "requires a running daemon") {
+	if err := debugBabelWithConfig(rt.Config, &buf); err == nil || !strings.Contains(err.Error(), "requires a running daemon") {
 		t.Fatalf("debugBabelWithConfig error = %v", err)
 	}
 }

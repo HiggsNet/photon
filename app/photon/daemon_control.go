@@ -442,7 +442,6 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		runtime := d.State.ReadLinux()
 		acls := make([]photonstate.EndpointACL, 0, len(runtime.EndpointACLs))
 		for _, acl := range runtime.EndpointACLs {
-			acl.Selectors = append([]string(nil), acl.Selectors...)
 			acls = append(acls, acl)
 		}
 		sort.Slice(acls, func(i, j int) bool { return acls[i].Name < acls[j].Name })
@@ -650,7 +649,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			birdInstances = routingObserved.Instances
 		}
 		view := buildStoredLinkInspection(d.Config, links, reconcile, birdInstances, health)
-		if d.linuxDriver != nil && d.Config != nil && d.Config.IPsec.Driver != photonlinux.IPsecDriverDryRun {
+		if request.LiveSAs && d.linuxDriver != nil && d.Config != nil && d.Config.IPsec.Driver != photonlinux.IPsecDriverDryRun {
 			sas, err := d.linuxDriver.ListIPsecSAs(ctx)
 			if err != nil {
 				view.LiveSAError = err.Error()

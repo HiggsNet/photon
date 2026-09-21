@@ -22,7 +22,7 @@ func debugBabel(_ context.Context, _ *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	return debugBabelWithConfig(config, os.Stdout, false)
+	return debugBabelWithConfig(config, os.Stdout)
 }
 
 func debugRoutingReload(_ context.Context, _ *cli.Command) error {
@@ -54,11 +54,11 @@ func debugBird(_ context.Context, netnsName string, view bird.DebugView) error {
 	if err != nil {
 		return err
 	}
-	return debugBirdWithConfig(config, netnsName, view, os.Stdout, false)
+	return debugBirdWithConfig(config, netnsName, view, os.Stdout)
 }
 
-func debugBirdWithConfig(config *appConfig, netnsName string, view bird.DebugView, w io.Writer, direct bool) error {
-	dump, ok, err := readCanonicalViewViaControl[inspect.BirdDumpResponse](config, controlRequest{Method: "bird_dump", NetNS: netnsName, BirdView: string(view)}, direct)
+func debugBirdWithConfig(config *appConfig, netnsName string, view bird.DebugView, w io.Writer) error {
+	dump, ok, err := readCanonicalViewViaControl[inspect.BirdDumpResponse](config, controlRequest{Method: "bird_dump", NetNS: netnsName, BirdView: string(view)}, false)
 	if err != nil {
 		return err
 	}
@@ -85,8 +85,8 @@ func addBirdFilterDefinitions(item *inspect.BirdDumpInstance, configPath string)
 	item.FilterDefinitions = inspect.ExtractBirdFilterDefinitions(string(config))
 }
 
-func debugBabelWithConfig(config *appConfig, w io.Writer, direct bool) error {
-	view, ok, err := readCanonicalViewViaControl[inspect.BabelDebugView](config, controlRequest{Method: "babel_view"}, direct)
+func debugBabelWithConfig(config *appConfig, w io.Writer) error {
+	view, ok, err := readCanonicalViewViaControl[inspect.BabelDebugView](config, controlRequest{Method: "babel_view"}, false)
 	if err != nil {
 		return err
 	}

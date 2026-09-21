@@ -98,25 +98,14 @@ func TestWritePeerLifecycleDebugSummaryAndSeverity(t *testing.T) {
 		t.Fatalf("WritePeerLifecycleDebug: %v", err)
 	}
 	out := buf.String()
+	out = strings.Join(strings.Fields(out), " ")
 	for _, want := range []string{
-		"peer lifecycle config: stale_after=15m0s offline_after=12h0m0s cleanup_after=48h0m0s keep_sa_while_stale=true",
 		"summary: offline=1, revoked=1",
-		"peer_id: node-b.catofes.",
-		"  zone: node-b.catofes.",
-		"  state: revoked",
-		"  reason: zone_revoked",
-		"  detail: revoked by catofes.",
-		"  last_seen: 2023-11-14T22:13:20Z",
-		"  last_sync: 2023-11-14T22:13:21Z",
-		"  last_reconcile: 2023-11-14T22:13:22Z",
-		"  desired_links: 1",
-		"  actual_links: 1",
-		"  up_links: 0",
-		"  severity: critical (revoked)",
-		"peer_id: node-c.catofes.",
-		"  offline_since: 2023-11-14T22:13:30Z",
-		"  next_cleanup: 2023-11-14T22:13:40Z",
-		"  severity: warning (cleanup due)",
+		"PEER ZONE STATE LINKS desired/actual/up SEVERITY REASON DETAIL",
+		"node-b.catofes. node-b.catofes. revoked 1/1/0 critical (revoked) zone_revoked revoked by catofes.",
+		"node-c.catofes. node-c.catofes. offline 0/0/0 warning (cleanup due) cleanup_after_exceeded",
+		"node-b.catofes. 2023-11-14T22:13:20Z 2023-11-14T22:13:21Z 2023-11-14T22:13:22Z",
+		"2023-11-14T22:13:30Z 2023-11-14T22:13:40Z",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected %q in output:\n%s", want, out)

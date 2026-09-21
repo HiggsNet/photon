@@ -35,17 +35,14 @@ func (d *DryRunDriver) Preflight(ctx context.Context, spec FirewallInstanceSpec)
 	}, nil
 }
 
-func (d *DryRunDriver) Plan(ctx context.Context, desired *FirewallDesiredState, observed FirewallObservedState) (FirewallPlan, error) {
+func (d *DryRunDriver) Apply(ctx context.Context, desired *FirewallDesiredState) (FirewallApplyResult, error) {
 	if desired == nil {
-		return FirewallPlan{}, fmt.Errorf("desired state is nil")
+		return FirewallApplyResult{}, fmt.Errorf("desired state is nil")
 	}
-	return PlanDiff(desired.Instance.ID, desired, observed), nil
-}
-
-func (d *DryRunDriver) Apply(ctx context.Context, plan FirewallPlan, desired *FirewallDesiredState) (FirewallApplyResult, error) {
-	if desired != nil && (desired.Instance.Mode == ModeExternal || desired.Instance.Mode == ModeDisabled) {
+	if desired.Instance.Mode == ModeExternal || desired.Instance.Mode == ModeDisabled {
 		return FirewallApplyResult{}, nil
 	}
+	plan := PlanDiff(desired.Instance.ID, desired, FirewallObservedState{Objects: d.OwnedObjects})
 	d.Applied = append(d.Applied, plan)
 	result := FirewallApplyResult{
 		Generation: 1,
@@ -60,23 +57,10 @@ func (d *DryRunDriver) Apply(ctx context.Context, plan FirewallPlan, desired *Fi
 			// adopt is a noop for apply
 		}
 	}
-	if desired != nil {
-		hash := DesiredStateHash(desired)
-		_ = hash
-		result.Generation = 1
-	}
 	return result, nil
 }
 
-func (d *DryRunDriver) ListOwned(ctx context.Context, owner Owner) (FirewallObservedState, error) {
-	return FirewallObservedState{Objects: d.OwnedObjects}, nil
-}
-
-func (d *DryRunDriver) DeleteStale(ctx context.Context, refs []FirewallObjectRef) error {
-	return nil
-}
-
-// CompiledApplyRecords returns the recorded apply plans for test assertions.
+// RecordedPlans returns the recorded apply plans for test assertions.
 func (d *DryRunDriver) RecordedPlans() []FirewallPlan {
 	return d.Applied
 }

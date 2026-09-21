@@ -12,7 +12,8 @@ import (
 
 // fakeCommandRunner captures all commands executed by a driver for assertions.
 type fakeCommandRunner struct {
-	commands []executedCommand
+	nftListOutput string
+	commands      []executedCommand
 	// failOnNew lists chain names whose `-N` creation should fail, simulating
 	// an already-existing chain.
 	failOnNew      map[string]bool
@@ -54,9 +55,9 @@ func (f *fakeCommandRunner) run(ctx context.Context, name string, args ...string
 	if name == "ipset" {
 		return f.runIPSet(args)
 	}
-	// Simulate `nft list tables` returning empty (no owned objects).
+	// Return the simulated nft listing.
 	if len(args) >= 1 && args[0] == "list" {
-		return []byte(""), nil
+		return []byte(f.nftListOutput), nil
 	}
 	return []byte(""), nil
 }
@@ -308,18 +309,17 @@ func TestNFTDriver_ApplyOverlay(t *testing.T) {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
 	// Empty observed state -> all objects are create.
-	plan := PlanDiff("photontesth2", desired, FirewallObservedState{})
-	result, err := d.Apply(context.Background(), plan, desired)
+	result, err := d.Apply(context.Background(), desired)
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if result.Applied == 0 {
 		t.Error("expected non-zero applied count")
 	}
-	if len(runner.commands) != 1 {
-		t.Fatalf("commands = %v, want one atomic nft transaction", runner.commands)
+	if len(runner.commands) != 2 {
+		t.Fatalf("commands = %v, want one observation and one atomic nft transaction", runner.commands)
 	}
-	batch := commandText(runner.commands[0])
+	batch := commandText(runner.commands[1])
 	if !strings.Contains(batch, "add table inet photon_photontesth2") {
 		t.Errorf("expected table creation in nft batch:\n%s", batch)
 	}
@@ -340,7 +340,7 @@ func TestNFTDriver_ExternalDoesNotApply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	if _, err := (&NFTDriver{Command: runner.run}).Apply(context.Background(), FirewallPlan{}, desired); err != nil {
+	if _, err := (&NFTDriver{Command: runner.run}).Apply(context.Background(), desired); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if len(runner.commands) != 0 {
@@ -368,8 +368,7 @@ func TestNFTDriver_ApplyHostWithNATRedirect(t *testing.T) {
 	if len(desired.NatRedirects) != 3 {
 		t.Fatalf("expected 3 NAT redirect rules, got %d", len(desired.NatRedirects))
 	}
-	plan := PlanDiff("host", desired, FirewallObservedState{})
-	result, err := d.Apply(context.Background(), plan, desired)
+	result, err := d.Apply(context.Background(), desired)
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -415,10 +414,10 @@ func TestNFTDriver_RendersConfiguredPriorities(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	if _, err := (&NFTDriver{Command: runner.run}).Apply(context.Background(), PlanDiff("host", desired, FirewallObservedState{}), desired); err != nil {
+	if _, err := (&NFTDriver{Command: runner.run}).Apply(context.Background(), desired); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	batch := commandText(runner.commands[0])
+	batch := commandText(runner.commands[1])
 	for _, want := range []string{"priority filter - 1", "priority dstnat - 2", "priority srcnat + 3"} {
 		if !strings.Contains(batch, want) {
 			t.Fatalf("nft batch missing %q:\n%s", want, batch)
@@ -442,8 +441,7 @@ func TestNFTDriver_ApplyHostWithNATSourceRewrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	plan := PlanDiff("host", desired, FirewallObservedState{})
-	if _, err := d.Apply(context.Background(), plan, desired); err != nil {
+	if _, err := d.Apply(context.Background(), desired); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	foundPostrouting := false
@@ -469,7 +467,7 @@ func TestNFTDriver_ApplyRebuildsObservedTable(t *testing.T) {
 	runner := &fakeCommandRunner{}
 	d := &NFTDriver{Command: runner.run}
 	spec := FirewallInstanceSpec{
-		ID: "host-ipsec", NetNS: "host", IsHost: true, Enabled: true, Mode: ModeManaged,
+		ID: "host-ipsec", IsHost: true, Enabled: true, Mode: ModeManaged,
 		OwnerPrefix: "photon",
 		HostPorts:   HostPortConfig{IKE: true, NATT: true},
 	}
@@ -477,17 +475,17 @@ func TestNFTDriver_ApplyRebuildsObservedTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	plan := PlanDiff("host-ipsec", desired, FirewallObservedState{Objects: []FirewallObjectRef{
-		{Kind: "table", Family: "inet", Name: "photon_host"},
-		{Kind: "chain", Family: "inet", Name: "photon_host_input"},
-	}})
-	if _, err := d.Apply(context.Background(), plan, desired); err != nil {
+	runner.nftListOutput = "table inet photon_host {\n chain photon_host_input {\n }\n}\n"
+	if _, err := d.Apply(context.Background(), desired); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if len(runner.commands) != 1 {
-		t.Fatalf("commands = %v, want one atomic nft transaction", runner.commands)
+	if len(runner.commands) != 2 {
+		t.Fatalf("commands = %v, want one observation and one atomic nft transaction", runner.commands)
 	}
-	batch := runner.commands[0].input
+	if got := commandText(runner.commands[0]); got != "list table inet photon_host" {
+		t.Fatalf("observed scope = %q, want host table rather than display ID", got)
+	}
+	batch := runner.commands[1].input
 	if !strings.HasPrefix(batch, "delete table inet photon_host\n") {
 		t.Fatalf("batch = %q, want table delete first", batch)
 	}
@@ -506,15 +504,15 @@ func TestNFTDriver_ApplyTransactionFailureReportsNoAppliedCommands(t *testing.T)
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	result, err := d.Apply(context.Background(), PlanDiff(desired.Instance.ID, desired, FirewallObservedState{}), desired)
+	result, err := d.Apply(context.Background(), desired)
 	if err == nil {
 		t.Fatal("Apply succeeded despite rejected nft transaction")
 	}
 	if result.Applied != 0 || result.Failed != 1 {
 		t.Fatalf("result = %+v, want zero applied and one failed transaction", result)
 	}
-	if len(runner.commands) != 1 {
-		t.Fatalf("commands = %v, want exactly one transaction attempt", runner.commands)
+	if len(runner.commands) != 2 {
+		t.Fatalf("commands = %v, want one observation and one transaction attempt", runner.commands)
 	}
 }
 
@@ -569,36 +567,6 @@ func TestNFTDriver_NetNSExecution(t *testing.T) {
 	}
 }
 
-func TestNFTDriver_DeleteStale(t *testing.T) {
-	runner := &fakeCommandRunner{}
-	d := &NFTDriver{Command: runner.run}
-	refs := []FirewallObjectRef{
-		{Kind: "chain", Family: "inet", Name: "photon_photontesth2_stale"},
-		{Kind: "table", Family: "inet", Name: "photon_old"},
-	}
-	if err := d.DeleteStale(context.Background(), refs); err != nil {
-		t.Fatalf("DeleteStale: %v", err)
-	}
-	foundDeleteChain := false
-	foundDeleteTable := false
-	for _, cmd := range runner.commands {
-		if len(cmd.args) >= 1 && cmd.args[0] == "delete" {
-			if len(cmd.args) >= 2 && cmd.args[1] == "chain" {
-				foundDeleteChain = true
-			}
-			if len(cmd.args) >= 2 && cmd.args[1] == "table" {
-				foundDeleteTable = true
-			}
-		}
-	}
-	if !foundDeleteChain {
-		t.Error("missing delete chain command")
-	}
-	if !foundDeleteTable {
-		t.Error("missing delete table command")
-	}
-}
-
 func TestRenderNFTRuleCtState(t *testing.T) {
 	invalid := renderNFTRule(Rule{Action: ActionDrop, CtStates: []string{CtStateInvalid}, Comment: "invalid drop"})
 	if !strings.Contains(invalid, "ct state invalid drop") {
@@ -637,7 +605,7 @@ func TestNFTDriverInlineHooksAreRenderedInPlannerOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	if _, err := driver.Apply(context.Background(), PlanDiff("photon", desired, FirewallObservedState{}), desired); err != nil {
+	if _, err := driver.Apply(context.Background(), desired); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	var batch string

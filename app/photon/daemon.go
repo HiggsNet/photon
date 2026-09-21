@@ -339,7 +339,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.recoverRoutingOnStart(ctx)
 	d.logDebug("daemon", "startup_recovery_layer_done", map[string]any{"layer": "routing"})
 	d.logDebug("daemon", "startup_recovery_layer_begin", map[string]any{"layer": "firewall"})
-	d.recoverFirewallOnStart(ctx)
+	d.firewallDirty = true
+	d.flushFirewallReconcile(ctx)
 	d.logDebug("daemon", "startup_recovery_layer_done", map[string]any{"layer": "firewall"})
 	d.logDebug("daemon", "startup_recovery_done", nil)
 	if err := d.scheduleDaemonTimer(daemonTimerEndpoint, startupNow); err != nil {

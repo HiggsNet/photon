@@ -8,6 +8,8 @@
 - 禁用路由会停止新的 reconcile，不自动拆除之前创建的资源。需要拆除时须显式执行相应运维操作，不能把 disabled 当作资源清理。
 - `debug db dump` 使用通用递归原始 bucket 展示，已删除 `_meta` / `zone:*` 旧布局专用解码；指定 zone 时解码当前 VerifiedState 并只输出该 zone；旧布局不再支持 zone 筛选，启动升级迁移仍保留。`stats` 递归统计叶子键及键值逻辑字节数（不是磁盘分配量）。读取锁等待约一秒后报错；daemon 持有数据库时应停止 daemon 或使用一致的数据库副本。
 - Links/rotate 内部诊断字段 `StoredSAs` 改为 `ReconcileSAs`、`ReplannedDesired` 改为 `LastDesiredCount`：它们来自最近一次 reconcile 的内存观察，不是 DB 持久值或当前重新规划的结果。控制接口直接消费这些诊断字段的客户端也须更新。
+- `debug links` 的链路详情、action/skip，`debug rotate` 的 current/staged 与 SA 对照，以及 `debug peers` 的生命周期与时间信息使用分组表格。原先解析缩进键值文本的脚本需要调整。普通 links 查询只读取 daemon 最近一次观察；`debug rotate` 通过 `links_view` 的 `live_sas: true` 显式补充实时 SA，实时查询失败仍展示缓存及错误。
+- Link routing DTO 和 Observer 已删除始终为占位值的 `bird_neighbors`、`bird_best_routes`，保留 `bird_state`；实际 BIRD 邻居和路由请使用 `debug routing bird` 子命令。诊断不再接受未使用的 planned spec 输入，不根据缺失的计划数据重建 StrongSwan 配置。
 
 ## 数据库单向迁移范围
 

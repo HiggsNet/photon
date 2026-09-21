@@ -73,14 +73,7 @@ func (d *IPTablesDriver) Preflight(ctx context.Context, spec FirewallInstanceSpe
 	return pf, nil
 }
 
-func (d *IPTablesDriver) Plan(ctx context.Context, desired *FirewallDesiredState, observed FirewallObservedState) (FirewallPlan, error) {
-	if desired == nil {
-		return FirewallPlan{}, fmt.Errorf("desired state is nil")
-	}
-	return PlanDiff(desired.Instance.ID, desired, observed), nil
-}
-
-func (d *IPTablesDriver) Apply(ctx context.Context, plan FirewallPlan, desired *FirewallDesiredState) (FirewallApplyResult, error) {
+func (d *IPTablesDriver) Apply(ctx context.Context, desired *FirewallDesiredState) (FirewallApplyResult, error) {
 	result := FirewallApplyResult{}
 	if desired == nil {
 		return result, fmt.Errorf("desired state is nil")
@@ -88,7 +81,6 @@ func (d *IPTablesDriver) Apply(ctx context.Context, plan FirewallPlan, desired *
 	if desired.Instance.Mode == ModeExternal || desired.Instance.Mode == ModeDisabled {
 		return result, nil
 	}
-	_ = plan // generation-chain apply converges from the live kernel state.
 
 	marker := iptablesOwnerMarker(desired)
 	tableName := iptablesTableName(desired)
@@ -696,70 +688,6 @@ func (d *IPTablesDriver) ListOwned(ctx context.Context, owner Owner) (FirewallOb
 		state.Objects = append([]FirewallObjectRef{{Kind: "table", Family: "inet", Name: tableName}}, state.Objects...)
 	}
 	return state, nil
-}
-
-func (d *IPTablesDriver) DeleteStale(ctx context.Context, refs []FirewallObjectRef) error {
-	wanted := make(map[string]map[string]bool)
-	for _, ref := range refs {
-		tableName, ok := iptablesObjectTableName(ref)
-		if !ok {
-			continue
-		}
-		if wanted[tableName] == nil {
-			wanted[tableName] = make(map[string]bool)
-		}
-		wanted[tableName][objKey(ref)] = true
-	}
-	var errs []string
-	for tableName, keys := range wanted {
-		for _, binary := range []string{"iptables", "ip6tables"} {
-			for _, table := range []string{"", "nat"} {
-				out, err := d.run(ctx, binary, iptablesArgs(table, "-S")...)
-				if err != nil {
-					errs = append(errs, fmt.Sprintf("%s list %s table: %v", binary, iptablesTableLabel(table), err))
-					continue
-				}
-				for _, chain := range parseManagedIPTablesActualChains(string(out), tableName, table) {
-					ref, _, ok := managedIPTablesChainIdentity(tableName, table, chain.name)
-					if !ok {
-						continue
-					}
-					if !keys[objKey(ref)] && !keys[objKey(FirewallObjectRef{Kind: ref.Kind, Family: "inet", Name: chain.name})] {
-						continue
-					}
-					for _, args := range matchingIPTablesJumpDeletes(string(out), chain.builtin, chain.name) {
-						if _, err := d.run(ctx, binary, iptablesArgs(table, args...)...); err != nil {
-							errs = append(errs, fmt.Sprintf("%s remove jump to %s: %v", binary, chain.name, err))
-						}
-					}
-					if _, err := d.run(ctx, binary, iptablesArgs(table, "-F", chain.name)...); err != nil {
-						errs = append(errs, fmt.Sprintf("%s flush %s: %v", binary, chain.name, err))
-						continue
-					}
-					if _, err := d.run(ctx, binary, iptablesArgs(table, "-X", chain.name)...); err != nil {
-						errs = append(errs, fmt.Sprintf("%s delete %s: %v", binary, chain.name, err))
-					}
-				}
-			}
-		}
-		_, setErrs := d.cleanupOrphanIPSets(ctx, tableName)
-		errs = append(errs, setErrs...)
-	}
-	if len(errs) > 0 {
-		return fmt.Errorf("iptables stale cleanup: %s", strings.Join(errs, "; "))
-	}
-	return nil
-}
-
-func iptablesObjectTableName(ref FirewallObjectRef) (string, bool) {
-	suffixes := []string{"_prerouting", "_postrouting", "_forward", "_output", "_input"}
-	lower := strings.ToLower(ref.Name)
-	for _, suffix := range suffixes {
-		if strings.HasSuffix(lower, suffix) {
-			return ref.Name[:len(ref.Name)-len(suffix)], true
-		}
-	}
-	return "", false
 }
 
 func matchingIPTablesJumpDeletes(output, builtin, target string) [][]string {

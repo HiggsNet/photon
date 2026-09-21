@@ -26,9 +26,7 @@ func TestWriteLinksDebugFiltersAndPrintsRuntimeFields(t *testing.T) {
 				PeerTunnelAddr:  "fe80::2%phx123",
 				DesiredSpecHash: "abcdef1234567890",
 				Routing: inspect.LinkRouting{
-					BirdState:      "running",
-					BirdNeighbors:  "2",
-					BirdBestRoutes: "4",
+					BirdState: "running",
 				},
 				ActualSA: &inspect.LinkSA{
 					ChildSA:        "child-a",
@@ -68,7 +66,7 @@ func TestWriteLinksDebugFiltersAndPrintsRuntimeFields(t *testing.T) {
 	if err := WriteLinksDebug(&buf, view); err != nil {
 		t.Fatalf("WriteLinksDebug: %v", err)
 	}
-	output := buf.String()
+	output := strings.Join(strings.Fields(buf.String()), " ")
 	for _, want := range []string{
 		"last_run: 2023-11-14T22:13:20Z",
 		"desired_links: 1",
@@ -77,18 +75,17 @@ func TestWriteLinksDebugFiltersAndPrintsRuntimeFields(t *testing.T) {
 		"filter: node-b",
 		"matched_links: 1",
 		"link link-1",
-		"peer: node-b.catofes.",
-		"interface: phx123(123)",
-		"sa_state: established",
-		"reqid: 55",
-		"lifecycle:",
-		"health:",
-		"state: degraded",
-		"sent/received/lost: 6/2/4",
-		"loss: 66%",
-		"bird_state: running",
-		"action=cleanup_duplicate_sa",
-		"sa_unique_id=335",
+		"peer node-b.catofes.",
+		"interface phx123(123)",
+		"sa_state established",
+		"reqid 55",
+		"lifecycle",
+		"health",
+		"state degraded",
+		"sent/received/lost 6/2/4",
+		"loss 66%",
+		"bird_state running",
+		"cleanup_duplicate_sa link-1 main node-b.catofes. 335 duplicate runtime SA stable for 2m",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("output missing %q:\n%s", want, output)
@@ -171,13 +168,13 @@ func TestWriteLinksDebugShowsActiveRuntimeTunnel(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("WriteLinksDebug: %v", err)
 	}
-	output := out.String()
+	output := strings.Join(strings.Fields(out.String()), " ")
 	for _, want := range []string{
-		"    runtime_id: ipsec-f46fb3d71fe8-r13",
-		"    endpoint: 123.57.143.66:30002",
-		"    interface: phx1be3f390(467923856)",
-		"    local_tunnel: fe80::old-local%phx1be3f390 netns=photontesth2",
-		"    peer_tunnel: fe80::old-peer%phx1be3f390 netns=photontesth2",
+		"runtime_id ipsec-f46fb3d71fe8-r13",
+		"endpoint 123.57.143.66:30002",
+		"interface phx1be3f390(467923856)",
+		"local_tunnel fe80::old-local%phx1be3f390 netns=photontesth2",
+		"peer_tunnel fe80::old-peer%phx1be3f390 netns=photontesth2",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("debug links output missing %q:\n%s", want, output)
@@ -185,5 +182,37 @@ func TestWriteLinksDebugShowsActiveRuntimeTunnel(t *testing.T) {
 	}
 	if strings.Contains(output, "fe80::new-local%phx28e3c6e5") || strings.Contains(output, "fe80::new-peer%phx28e3c6e5") {
 		t.Fatalf("debug links planner mixed desired tunnel into active runtime block:\n%s", output)
+	}
+}
+
+func TestWriteLinksDebugFiltersMissingLinksAndActions(t *testing.T) {
+	var out strings.Builder
+	view := inspect.LinksDebugView{
+		Filter: "node-a",
+		Inspection: inspect.LinkInspection{
+			Links: []inspect.LinkView{
+				{ID: "missing-a", PeerZone: "node-a.catofes.", Missing: true, Desired: &inspect.DesiredLink{Endpoint: "192.0.2.1:4500", LocalTunnelAddr: "fe80::1%phx1"}},
+				{ID: "hidden-b", PeerZone: "node-b.catofes."},
+			},
+			Actions: []inspect.LinkAction{
+				{Action: "create", PeerZone: "node-a.catofes."},
+				{Action: "hidden-action", PeerZone: "node-b.catofes."},
+			},
+			Skipped: []inspect.LinkSkip{{Peer: "node-a.catofes.", Reason: "wait"}},
+		},
+	}
+	if err := WriteLinksDebug(&out, view); err != nil {
+		t.Fatal(err)
+	}
+	output := strings.Join(strings.Fields(out.String()), " ")
+	for _, want := range []string{"matched_links: 1", "link state missing", "planner endpoint 192.0.2.1:4500", "planner local_tunnel fe80::1%phx1", "ACTION INSTANCE GROUP PEER SA_ID REASON", "GROUP PEER REASON DETAIL"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("missing %q in %s", want, output)
+		}
+	}
+	for _, unwanted := range []string{"hidden-b", "hidden-action", "node-b", "load_conn", "bird_neighbors", "bird_best_routes"} {
+		if strings.Contains(output, unwanted) {
+			t.Fatalf("unexpected %q in %s", unwanted, output)
+		}
 	}
 }

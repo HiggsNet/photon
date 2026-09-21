@@ -51,22 +51,15 @@ func debugRotatePort(direct bool) error {
 }
 
 func debugRotate(ctx context.Context, filter string) error {
+	ctx, cancel := context.WithTimeout(ctx, controlRequestDeadline)
+	defer cancel()
 	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	if view, ok, err := readCanonicalViewViaControl[inspect.LinksDebugView](config, controlRequest{Method: "links_view"}, false); err != nil {
+	if view, ok, err := readCanonicalViewViaControlContext[inspect.LinksDebugView](ctx, config, controlRequest{Method: "links_view", LiveSAs: true}, false); err != nil {
 		return err
 	} else if ok {
-		lastFailure := "-"
-		if failure := view.Inspection.LastFailure; failure != nil {
-			lastFailure = fmt.Sprintf("code=%s message=%s", failure.Code, failure.Message)
-		}
-		fmt.Printf("daemon: online link_instances=%d desired_links=%d last_link_failure=%s\n",
-			view.Inspection.LinkInstances,
-			view.Inspection.DesiredLinks,
-			lastFailure,
-		)
 		return writeDebugRotateFromView(os.Stdout, view, filter)
 	}
 	return fmt.Errorf("daemon control socket unavailable; IPsec rotation runtime state requires a running daemon")

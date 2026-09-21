@@ -56,21 +56,17 @@ Firewall 跟随 netns 隔离边界：一个 netns 对应一个 firewall instance
 
 ### 2.1 Owner
 
-Photon 所有防火墙对象通过 `Owner` 标记，以便与管理员规则区分：
+`Owner` 指定观测防火墙对象时的命名范围；后端按表名、chain 名及规则 comment 区分 Photon 和管理员对象：
 
 ```go
 // pkg/firewall/types.go
 type Owner struct {
-    Manager     string // 始终为 "photon"
-    InstanceID  string // host 为 "host"，overlay 为实际 netns 名
+    InstanceID  string // host 为 "host"，overlay 为配置中的 netns 标识
     OwnerPrefix string // 默认 "photon"
-    Generation  uint64 // desired-state generation
-    Token       string // prefix + scope + id 的 sha256 前 12 位
 }
 ```
 
 - 命名前缀决定 table/chain/set 名称。overlay 实例默认表名为 `photon_<netns>`，如 `photon_h2`；host 实例为 `photon_host`。
-- `Token` 由 `OwnerToken(spec)` 生成，用于稳定识别同一实例的历史对象。
 
 ### 2.2 Instance
 
@@ -419,10 +415,7 @@ WireGuard 的 previous port redirect 也已预留字段，但依赖 Phase 7 Wire
 // pkg/firewall/driver.go
 type FirewallDriver interface {
     Preflight(ctx context.Context, spec FirewallInstanceSpec) (FirewallPreflight, error)
-    Plan(ctx context.Context, desired *FirewallDesiredState, observed FirewallObservedState) (FirewallPlan, error)
-    Apply(ctx context.Context, plan FirewallPlan, desired *FirewallDesiredState) (FirewallApplyResult, error)
-    ListOwned(ctx context.Context, owner Owner) (FirewallObservedState, error)
-    DeleteStale(ctx context.Context, refs []FirewallObjectRef) error
+    Apply(ctx context.Context, desired *FirewallDesiredState) (FirewallApplyResult, error)
 }
 ```
 
@@ -434,7 +427,7 @@ overlay 实例的 driver 会把所有命令用 `ip netns exec <netns>` 包装后
 - 所有对象放在 `inet` family 的表 `<owner_prefix>_<scope>` 中。
 - overlay 创建 `input`、`forward`、`output` chain；host 额外创建 `prerouting`、`postrouting`。
 - Mesh 前缀使用 `set`，命名如 `photon_h2_mesh_v4`、`photon_h2_mesh_v6`，带 `flags interval`。
-- `Apply` 把 delete/recreate、set、chain 与 rule 渲染到同一个 batch 文件，通过单次 `nft -f` 事务提交；任一语句失败时内核拒绝整批变更，旧 table 继续生效。
+- `Apply` 内部调用 `ListOwned` 和纯函数 `PlanDiff`，再把 delete/recreate、set、chain 与 rule 渲染到同一个 batch 文件，通过单次 `nft -f` 事务提交；任一语句失败时内核拒绝整批变更，旧 table 继续生效。
 - 支持 `nft_hooks` 原生 inline rule，并与 managed rules 一起进入同一个 batch 事务。
 
 ### 5.3 iptables 后端（`IPTablesDriver`）
@@ -486,6 +479,8 @@ func PlanDiff(instanceID string, desired *FirewallDesiredState, observed Firewal
 - desired 中有、observed 中也有 → `adopt`
 - observed 中有、desired 中无 → `delete`（stale）
 
+`PlanDiff` 由 NFT 和 DryRun 的 `Apply` 内部使用；iptables 直接从内核状态执行 generation 切换，不预先计算该 diff。具体 NFT/iptables 类型仍提供 `ListOwned`，但它不是统一驱动接口的要求。
+
 这个 diff 只比较对象引用（kind/family/name），不比较 rule/set 内容；当前 driver 的 `Apply` 也不会因为 `policy_hash` 未变化而跳过。因此 nft 每次 apply 都会整表替换，iptables 每次 apply 都会准备并切换另一个 `a`/`b` 槽位。
 
 ---
@@ -496,27 +491,25 @@ func PlanDiff(instanceID string, desired *FirewallDesiredState, observed Firewal
 
 Firewall reconcile 在 `app/photon/firewall_reconcile.go` 中实现，触发时机见 [daemon.md](daemon.md)：
 
-- daemon 启动时 `recoverFirewallOnStart` 设置 `firewallDirty=true` 并 flush。
-- `notifyStateChanged`（网络状态、Zone record、endpoint ACL 等变化）触发 flush。
+- daemon 启动时设置 `firewallDirty=true` 并 flush。
+- `notifyStateChanged`（网络状态、Zone record 等变化）标记 firewall dirty。
 - `processEvents` 每次事件 drain 后也会 `flushFirewallReconcile`。
-- `endpoint_acl_apply` / `endpoint_acl_remove` 事件单独强制 flush。
+- `endpoint_acl_apply` / `endpoint_acl_remove` 提交后仅标记 firewall dirty 并通知状态订阅方，事件处理单独强制 flush，不触发 Gossip discovery、IPsec 或 routing 刷新。
 
 ### 6.2 reconcileFirewall 主流程
 
 ```text
 1. 获取当前 committed snapshot 与 config
 2. 调用 routing.BuildAuthorizedRouteSet 生成授权路由集
-3. PreflightProbe 探测 backend
-4. 对每个 enabled instance：
-   a. firewallInstanceSpecFromConfig 生成 spec
+3. 获取 ManagedInstances
+4. 对每个 enabled managed instance：
+   a. 读取实例 spec
    b. host 实例：resolveEndpointServices 解析 EndpointACL
-   c. buildFirewallPolicyInput 组装 planner 输入
+   c. photonlinux.BuildFirewallPolicyInput 组装 planner 输入
    d. firewall.BuildDesiredState 生成期望状态
-   e. 选择 driver（nft / iptables / dry-run）
-   f. driver.ListOwned 读取当前 owned 对象
-   g. driver.Plan 计算 diff
-   h. driver.Apply 应用
-   i. 记录 generation、policy_hash、owned_objects 到在线 observation
+   e. 探测并选择 backend（nft / iptables / 显式 none）
+   f. driver.Apply 按后端自身的观测和清理流程应用 desired state
+   g. 记录 generation、policy_hash、owned_objects 到在线 observation
 5. 发布本轮 observation，供 debug/status 读取
 ```
 
@@ -544,7 +537,7 @@ type FirewallInstanceObservation struct {
 
 `reconcileFirewall` 按 instance 隔离失败，单个实例出错不影响其他实例：
 
-- `BuildDesiredState` / `Plan` / `Apply` 任一步失败：原始 `error` 记录到该实例的 `LastFailure`，继续处理下一个实例；全部实例处理完后，首个错误写入 summary 的 `LastFailure` 并发布到在线 observation，可由 `photon debug firewall` 查看。
+- `BuildDesiredState` / backend 选择 / `Apply` 任一步失败：原始 `error` 记录到该实例的 `LastFailure`，继续处理下一个实例；全部实例处理完后，首个错误写入 summary 的 `LastFailure` 并发布到在线 observation，可由 `photon debug firewall` 查看。
 - nft driver 使用单次 batch 事务，任一命令失败时整批不提交，旧 ruleset 保持不变。
 - iptables driver 的 staging 阶段遇错立即停止并删除未激活链，旧 generation 保持生效；所有 staging chain 完成后才进入切换阶段。iptables 与 ip6tables 以及不同 table 之间没有跨后端的统一内核事务，因此切换阶段若失败会补偿删除此前已激活的新 jump 并保留旧 generation；若补偿命令本身也失败，错误会记录到 reconcile 状态，下一轮继续收敛。
 - backend 不可用（nft 缺失且 `iptables` / `ip6tables` 之一缺失）：daemon 记录 `no_backend_available` 或 `backend_unavailable` warning，并在该 instance 的 `LastFailure` 中保留失败；不会退化为 dry-run 成功。系统上已有的旧规则保持不动。
@@ -606,7 +599,7 @@ photon debug preflight
 | netlink API | nftables 优先使用 netlink | 实际使用 `nft` CLI | 实现方式不同 | 暂不实现 |
 | 无变更 reconcile | `policy_hash` 未变化时 no-op | `PlanDiff` 只比较对象名；nft 每次 apply 原子整表替换，iptables 每次 apply 重建并切换同 hash 的另一个 `a`/`b` 槽位 | 无业务变更也会产生内核写入；nft 有短暂事务切换成本，iptables builtin jump 会经历一次 generation 切换 | 问题不大 暂时保留 |
 | Generation 递增 | 每次成功 apply 递增并可追踪历史 | iptables 物理 chain 已带 desired hash 和 `a`/`b` staging 槽，但 NFT/IPTables/DryRun driver 对外仍返回 `Generation: 1` | 持久化/debug 状态无法按 generation 区分历史，也不能表达实际槽位 | 问题不大 暂时保留 |
-| 生命周期与跨 backend 清理 | shutdown、禁用/删除实例、scope/prefix/backend 变化时回滚旧 owned rules | daemon 不调用 `DeleteStale`；只对当前启用实例、当前 scope 和当前 backend 做 reconcile。禁用/删除实例、退出、改变 owner/scope 或切换 backend 不会遍历并清理旧 backend 对象 | 旧 nft table 或 iptables chain/jump 可能长期残留，并与新策略同时生效 | 问题不大 暂时保留 |
+| 生命周期与跨 backend 清理 | shutdown、禁用/删除实例、scope/prefix/backend 变化时回滚旧 owned rules | 只对当前启用实例、当前 scope 和当前 backend 做 reconcile。禁用/删除实例、退出、改变 owner/scope 或切换 backend 不会遍历并清理旧 backend 对象 | 旧 nft table 或 iptables chain/jump 可能长期残留，并与新策略同时生效 | 问题不大 暂时保留 |
 | 周期 reconcile timer | 设计建议有周期 timer | `defaultFirewallReconcileInterval`（30s）通过 Daemon Scheduler 调度 | 启动恢复、事件触发和周期 safety reconcile 共用同一 single-writer 入口 | 已完成 |
 | 冲突检测 | 检测非 Photon 规则冲突 | `MergeConflicts` 直接返回 `nil` | 冲突检测未实现 | 问题不大 暂时保留 |
 | 优先级配置 | nft base-chain priority 可按 hook 阶段配置 | 已支持 `priority.filter`、`priority.prerouting`、`priority.postrouting`；默认分别是 `filter`、`dstnat`、`srcnat`，只允许对应基准加整数偏移 | 可以在不混淆 DNAT/SNAT 阶段的前提下与管理员 chain 排序 | 已完成 |

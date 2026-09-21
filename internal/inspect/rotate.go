@@ -20,6 +20,7 @@ type ManualPortRotateView struct {
 }
 
 type RotateDebugView struct {
+	LastFailure       *FailureView
 	LastRunUnix       int64
 	LinkInstances     int
 	PlannedDesired    int
@@ -37,7 +38,6 @@ type RotateDebugView struct {
 
 type RotateDebugInput struct {
 	Inspection        LinkInspection
-	PlannedSpecs      map[string]ipsec.TransportLinkSpec
 	LastDesiredCount  int
 	ReplanIgnored     bool
 	LastDesiredLinks  int
@@ -77,6 +77,7 @@ type RotateRuntimeView struct {
 func BuildRotateDebug(input RotateDebugInput) RotateDebugView {
 	links := FilterLinkViews(input.Inspection.Links, input.Filter)
 	view := RotateDebugView{
+		LastFailure:       input.Inspection.LastFailure,
 		LastRunUnix:       input.Inspection.LastRunUnix,
 		LinkInstances:     input.Inspection.LinkInstances,
 		PlannedDesired:    input.LastDesiredCount,
@@ -92,17 +93,12 @@ func BuildRotateDebug(input RotateDebugInput) RotateDebugView {
 	}
 	allSAs := append(append([]LinkSA(nil), input.ReconcileSAs...), input.LiveSAs...)
 	for _, link := range links {
-		spec, hasSpec := input.PlannedSpecs[link.ID]
-		var specPtr *ipsec.TransportLinkSpec
-		if hasSpec {
-			specPtr = &spec
-		}
-		staged := RotateRuntimeStaged(link, specPtr, allSAs)
+		staged := RotateRuntimeStaged(link, allSAs)
 		view.Links = append(view.Links, RotateDebugLink{
 			Link:                  link,
-			PortGenerationSummary: DebugPortGenerationSummary(specPtr, link.Rotation),
-			PortSummary:           DebugPortSummary(specPtr, link.Endpoint, link.Endpoint, link.Rotation.StagedGeneration),
-			Current:               RotateRuntimeCurrent(link, specPtr),
+			PortGenerationSummary: DebugPortGenerationSummary(link.Rotation),
+			PortSummary:           DebugPortSummary(link.Endpoint, link.Endpoint, staged.Endpoint),
+			Current:               RotateRuntimeCurrent(link),
 			Staged:                staged,
 			HasStaged:             !RotateRuntimeEmpty(staged),
 			ReconcileMatchingSAs:  MatchingRotateSAs(link, input.ReconcileSAs),
@@ -116,7 +112,7 @@ func RotateRuntimeEmpty(v RotateRuntimeView) bool {
 	return v.RuntimeID == "" && v.ChildSAName == "" && v.InterfaceName == "" && v.XFRMIfID == 0 && v.State == ""
 }
 
-func RotateRuntimeCurrent(link LinkView, spec *ipsec.TransportLinkSpec) RotateRuntimeView {
+func RotateRuntimeCurrent(link LinkView) RotateRuntimeView {
 	out := RotateRuntimeView{
 		State:           "expected_current",
 		Generation:      link.Rotation.RemoteGeneration,
@@ -140,23 +136,10 @@ func RotateRuntimeCurrent(link LinkView, spec *ipsec.TransportLinkSpec) RotateRu
 			out.PeerTunnelAddr = firstNonEmpty(out.PeerTunnelAddr, link.Desired.PeerTunnelAddr)
 		}
 	}
-	if spec != nil {
-		out.Generation = firstNonZeroUint64(out.Generation, spec.Generation)
-		out.Port = firstNonEmpty(out.Port, DebugRemotePort(spec, ""))
-		out.RuntimeID = firstNonEmpty(out.RuntimeID, spec.TransportID)
-		out.ChildSAName = firstNonEmpty(out.ChildSAName, ipsec.ChildSAName(*spec))
-		out.InterfaceName = firstNonEmpty(out.InterfaceName, spec.InterfaceName)
-		out.XFRMIfID = firstNonZeroUint32(out.XFRMIfID, spec.XFRMIfID)
-		out.Endpoint = firstNonEmpty(out.Endpoint, debugContactEndpoint(spec.ContactPoints))
-		if rotateRuntimeMatchesSpec(out, *spec) {
-			out.LocalTunnelAddr = firstNonEmpty(out.LocalTunnelAddr, ipsec.FormatScopedTunnelAddress(spec.LocalTunnelAddr, spec.InterfaceName, spec.NetNS))
-			out.PeerTunnelAddr = firstNonEmpty(out.PeerTunnelAddr, ipsec.FormatScopedTunnelAddress(spec.PeerTunnelAddr, spec.InterfaceName, spec.NetNS))
-		}
-	}
 	return out
 }
 
-func RotateRuntimeStaged(link LinkView, spec *ipsec.TransportLinkSpec, sas []LinkSA) RotateRuntimeView {
+func RotateRuntimeStaged(link LinkView, sas []LinkSA) RotateRuntimeView {
 	generation := link.Rotation.StagedGeneration
 	if generation == 0 {
 		return RotateRuntimeView{}
@@ -164,7 +147,6 @@ func RotateRuntimeStaged(link LinkView, spec *ipsec.TransportLinkSpec, sas []Lin
 	out := RotateRuntimeView{
 		State:           "expected_new",
 		Generation:      generation,
-		Port:            DebugStagedPort(spec, generation),
 		RuntimeID:       link.Rotation.StagedIKEName,
 		ChildSAName:     link.Rotation.StagedChildSAName,
 		InterfaceName:   link.Rotation.StagedInterfaceName,
@@ -174,10 +156,6 @@ func RotateRuntimeStaged(link LinkView, spec *ipsec.TransportLinkSpec, sas []Lin
 	}
 	linkID := link.LinkID
 	provider := ipsec.ProviderStrongSwan
-	if spec != nil {
-		linkID = firstNonEmpty(linkID, spec.LinkID)
-		provider = firstNonEmpty(spec.Provider, provider)
-	}
 	if linkID != "" {
 		out.RuntimeID = firstNonEmpty(out.RuntimeID, ipsec.RuntimeConnectionID(linkID, generation, provider))
 		out.XFRMIfID = firstNonZeroUint32(out.XFRMIfID, ipsec.RuntimeXFRMIfID(linkID, generation, provider))
@@ -244,19 +222,6 @@ func rotateRuntimeMatchesDesired(runtime RotateRuntimeView, desired DesiredLink)
 	return true
 }
 
-func rotateRuntimeMatchesSpec(runtime RotateRuntimeView, spec ipsec.TransportLinkSpec) bool {
-	if spec.InterfaceName != "" && runtime.InterfaceName != "" && spec.InterfaceName != runtime.InterfaceName {
-		return false
-	}
-	if spec.XFRMIfID != 0 && runtime.XFRMIfID != 0 && spec.XFRMIfID != runtime.XFRMIfID {
-		return false
-	}
-	if spec.TransportID != "" && runtime.RuntimeID != "" && spec.TransportID != runtime.RuntimeID {
-		return false
-	}
-	return true
-}
-
 func linkSAMatchesPathKey(link LinkView, sa LinkSA) bool {
 	family := debugPathKeyFamily(link.PathKey)
 	if family == "" {
@@ -313,21 +278,6 @@ func debugIPsecFamily(addr string) string {
 	return ipsec.FamilyIPv6
 }
 
-func debugContactEndpoint(points []ipsec.ContactPoint) string {
-	for _, point := range points {
-		host := firstNonEmpty(point.Address, point.Host)
-		port := point.NATTPort
-		if port == 0 {
-			port = point.IKEPort
-		}
-		if host == "" || port == 0 {
-			continue
-		}
-		return net.JoinHostPort(host, uint16String(port))
-	}
-	return ""
-}
-
 func nonEmptyMatches(filter string, values ...string) bool {
 	filter = strings.ToLower(strings.TrimSpace(filter))
 	if filter == "" {
@@ -339,13 +289,4 @@ func nonEmptyMatches(filter string, values ...string) bool {
 		}
 	}
 	return false
-}
-
-func firstNonZeroUint64(values ...uint64) uint64 {
-	for _, value := range values {
-		if value != 0 {
-			return value
-		}
-	}
-	return 0
 }

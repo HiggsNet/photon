@@ -242,22 +242,18 @@ func TestReconcileFirewall_NoInstances(t *testing.T) {
 	}
 }
 
-type captureFirewallOwnerDriver struct {
+type captureFirewallInstanceDriver struct {
 	firewall.DryRunDriver
-	owners  []firewall.Owner
-	onApply func()
+	instances []firewall.FirewallInstanceSpec
+	onApply   func()
 }
 
-func (d *captureFirewallOwnerDriver) ListOwned(ctx context.Context, owner firewall.Owner) (firewall.FirewallObservedState, error) {
-	d.owners = append(d.owners, owner)
-	return firewall.FirewallObservedState{}, nil
-}
-
-func (d *captureFirewallOwnerDriver) Apply(ctx context.Context, plan firewall.FirewallPlan, desired *firewall.FirewallDesiredState) (firewall.FirewallApplyResult, error) {
+func (d *captureFirewallInstanceDriver) Apply(ctx context.Context, desired *firewall.FirewallDesiredState) (firewall.FirewallApplyResult, error) {
+	d.instances = append(d.instances, desired.Instance)
 	if d.onApply != nil {
 		d.onApply()
 	}
-	return d.DryRunDriver.Apply(ctx, plan, desired)
+	return d.DryRunDriver.Apply(ctx, desired)
 }
 
 type blockingFirewallDriver struct {
@@ -266,17 +262,17 @@ type blockingFirewallDriver struct {
 	unblock chan struct{}
 }
 
-func (d *blockingFirewallDriver) Apply(ctx context.Context, plan firewall.FirewallPlan, desired *firewall.FirewallDesiredState) (firewall.FirewallApplyResult, error) {
+func (d *blockingFirewallDriver) Apply(ctx context.Context, desired *firewall.FirewallDesiredState) (firewall.FirewallApplyResult, error) {
 	close(d.started)
 	select {
 	case <-d.unblock:
 	case <-ctx.Done():
 		return firewall.FirewallApplyResult{}, ctx.Err()
 	}
-	return d.DryRunDriver.Apply(ctx, plan, desired)
+	return d.DryRunDriver.Apply(ctx, desired)
 }
 
-func TestReconcileFirewallUsesScopeForOwnedObjects(t *testing.T) {
+func TestReconcileFirewallPreservesInstanceScope(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	appConfig := defaultAppConfig()
 	appConfig.Firewall.Instances = []firewall.FirewallInstanceSpec{
@@ -299,20 +295,20 @@ func TestReconcileFirewallUsesScopeForOwnedObjects(t *testing.T) {
 		},
 	}
 	rt := &testApp{Config: appConfig, Clock: func() time.Time { return time.Unix(7000, 0) }}
-	driver := &captureFirewallOwnerDriver{}
+	driver := &captureFirewallInstanceDriver{}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestFirewallDriver(service, driver)
 	if err := service.reconcileFirewall(context.Background()); err != nil {
 		t.Fatalf("reconcileFirewall: %v", err)
 	}
-	if len(driver.owners) != 2 {
-		t.Fatalf("owners = %+v, want two instances", driver.owners)
+	if len(driver.instances) != 2 {
+		t.Fatalf("instances = %+v, want two instances", driver.instances)
 	}
-	if driver.owners[0].InstanceID != "default" {
-		t.Fatalf("overlay owner scope = %q, want default", driver.owners[0].InstanceID)
+	if driver.instances[0].NetNS != "default" {
+		t.Fatalf("overlay scope = %q, want default", driver.instances[0].NetNS)
 	}
-	if driver.owners[1].InstanceID != "host" {
-		t.Fatalf("host owner scope = %q, want host", driver.owners[1].InstanceID)
+	if driver.instances[1].NetNS != "host" {
+		t.Fatalf("host scope = %q, want host", driver.instances[1].NetNS)
 	}
 }
 
@@ -412,7 +408,7 @@ func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
 	rt := &testApp{Config: appConfig, Clock: func() time.Time { return time.Unix(7010, 0) }}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	baseRev := uint64(service.State.Common.VerifiedRevision())
-	driver := &captureFirewallOwnerDriver{}
+	driver := &captureFirewallInstanceDriver{}
 	driver.onApply = func() {
 		if _, err := advanceTestVerifiedRevision(service.State.Common, time.Unix(7010, 1)); err != nil {
 			t.Fatalf("advance state revision during firewall apply: %v", err)
@@ -458,9 +454,10 @@ func TestFirewallReconcileDirtyIntervalAndRecover(t *testing.T) {
 		t.Fatal("flushFirewallReconcile should be false when not dirty")
 	}
 
-	service.recoverFirewallOnStart(context.Background())
+	service.firewallDirty = true
+	service.flushFirewallReconcile(context.Background())
 	if service.firewallDirty {
-		t.Fatal("recoverFirewallOnStart should flush and clear firewallDirty")
+		t.Fatal("startup reconcile should flush and clear firewallDirty")
 	}
 	observation := service.linuxObservation.firewallSnapshot()
 	if observation == nil || observation.Instances["photontesth2"] == nil {

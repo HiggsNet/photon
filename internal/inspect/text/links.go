@@ -124,35 +124,31 @@ func WriteLinksDebug(w io.Writer, view inspect.LinksDebugView) error {
 	}
 	for _, link := range inspection.Links {
 		if link.Missing {
-			writeDebugMissingLink(out, link, nil)
+			writeDebugMissingLink(out, link)
 			continue
 		}
-		writeDebugLinkInstance(out, link, nil)
+		writeDebugLinkInstance(out, link)
 	}
 	out.Linef("actions: %d", len(inspection.Actions))
-	for _, action := range inspection.Actions {
-		out.Linef("- action=%s instance=%s group=%s peer=%s sa_unique_id=%s reason=%s",
-			action.Action,
-			dash(action.InstanceID),
-			dash(action.GroupID),
-			action.PeerZone,
-			formatUint64OrDash(action.SAUniqueID),
-			dash(action.Reason),
-		)
+	if len(inspection.Actions) > 0 {
+		rows := [][]string{{"ACTION", "INSTANCE", "GROUP", "PEER", "SA_ID", "REASON"}}
+		for _, action := range inspection.Actions {
+			rows = append(rows, []string{action.Action, dash(action.InstanceID), dash(action.GroupID), action.PeerZone.String(), formatUint64OrDash(action.SAUniqueID), dash(action.Reason)})
+		}
+		writeDebugTable(out, rows)
 	}
 	out.Linef("skipped: %d", len(inspection.Skipped))
-	for _, skip := range inspection.Skipped {
-		out.Linef("- group=%s peer=%s reason=%s detail=%s",
-			dash(skip.GroupID),
-			skip.Peer,
-			dash(skip.Reason),
-			dash(skip.Detail),
-		)
+	if len(inspection.Skipped) > 0 {
+		rows := [][]string{{"GROUP", "PEER", "REASON", "DETAIL"}}
+		for _, skip := range inspection.Skipped {
+			rows = append(rows, []string{dash(skip.GroupID), skip.Peer.String(), dash(skip.Reason), dash(skip.Detail)})
+		}
+		writeDebugTable(out, rows)
 	}
 	return out.Err()
 }
 
-func writeDebugLinkInstance(out *lineWriter, link inspect.LinkView, spec *ipsec.TransportLinkSpec) {
+func writeDebugLinkInstance(out *lineWriter, link inspect.LinkView) {
 	desired := inspect.DesiredLink{}
 	if link.Desired != nil {
 		desired = *link.Desired
@@ -162,150 +158,92 @@ func writeDebugLinkInstance(out *lineWriter, link inspect.LinkView, spec *ipsec.
 		sa = *link.ActualSA
 	}
 	out.Blank()
-	out.Linef("link %s", link.ID)
-	out.Linef("  peer: %s", link.PeerZone)
-	out.Linef("  group: %s", dash(link.GroupID))
-	out.Linef("  state: %s", dash(link.ActualState))
-	out.Linef("  planner:")
-	out.Linef("    link_id: %s", dash(firstNonEmpty(link.LinkID, desired.LinkID)))
-	out.Linef("    path_key: %s", dash(firstNonEmpty(link.PathKey, desired.PathKey)))
-	out.Linef("    runtime_id: %s", dash(firstNonEmpty(link.IKEName, link.TransportID, desired.TransportID)))
-	out.Linef("    desired_hash: %s", dash(shortTextHash(desired.DesiredSpecHash)))
-	out.Linef("    actual_hash: %s", dash(shortTextHash(link.DesiredSpecHash)))
-	out.Linef("    endpoint: %s", dash(link.Endpoint))
-	out.Linef("    local_tunnel: %s", dash(link.LocalTunnelAddr))
-	out.Linef("    peer_tunnel: %s", dash(link.PeerTunnelAddr))
-	out.Linef("  xfrm:")
-	out.Linef("    interface: %s", formatInterfaceWithIfID(link.InterfaceName, link.XFRMIfID))
-	out.Linef("  strongswan:")
-	out.Linef("    child_sa: %s", dash(firstNonEmpty(sa.ChildSA, link.ChildSAName, specChildSAName(spec))))
-	out.Linef("    sa_state: %s", formatSAState(sa))
-	out.Linef("    local_endpoint: %s", dash(sa.LocalEndpoint))
-	out.Linef("    remote_endpoint: %s", dash(firstNonEmpty(sa.RemoteEndpoint, sa.Endpoint)))
-	out.Linef("    local_identity: %s", dash(sa.LocalIdentity))
-	out.Linef("    remote_identity: %s", dash(sa.RemoteIdentity))
-	out.Linef("    reqid: %s", formatUint32OrDash(sa.ReqID))
-	out.Linef("    observed_interface: %s", formatDerivedInterfaceWithIfID(sa.XFRMIfID))
-	writeDebugStrongSwanConfig(out, spec)
-	out.Linef("  rotation:")
-	out.Linef("    phase: %s", dash(link.Rotation.Phase))
-	out.Linef("    port_generation select/runtime/staged: %s", inspect.DebugPortGenerationSummary(spec, link.Rotation))
-	out.Linef("    port local/remote/runtime/staged: %s", inspect.DebugPortSummary(spec, link.Endpoint, firstNonEmpty(sa.RemoteEndpoint, sa.Endpoint), link.Rotation.StagedGeneration))
-	out.Linef("    staged_ike: %s", dash(link.Rotation.StagedIKEName))
-	out.Linef("    staged_interface: %s", formatInterfaceWithIfID(link.Rotation.StagedInterfaceName, link.Rotation.StagedXFRMIfID))
-	out.Linef("    deadline: %s", formatUnixTime(link.Rotation.RotateDeadline))
-	out.Linef("  takeover:")
-	out.Linef("    initiator_role: %s", dash(link.Takeover.InitiatorRole))
-	out.Linef("    phase: %s", dash(link.Takeover.Phase))
-	out.Linef("    until: %s", formatUnixTime(link.Takeover.Until))
-	out.Linef("    observed_initiator: %s", dash(link.Takeover.ObservedInitiator))
-	out.Linef("  lifecycle:")
-	out.Linef("    owner: %s", dash(link.OwnerManager))
-	out.Linef("    failures: %d", link.FailureCount)
-	out.Linef("    backoff_until: %s", formatUnixTime(link.BackoffUntil))
-	out.Linef("    last_failure: %s", failureDisplay(link.LastFailure))
-	out.Linef("    takeover_failure: %s", failureDisplay(link.Takeover.LastFailure))
-	out.Linef("  health:")
+	out.Linef("link %s", escapeTableCell(link.ID))
+	rows := [][]string{
+		{"SECTION", "FIELD", "VALUE"},
+		{"link", "peer", link.PeerZone},
+		{"link", "group", dash(link.GroupID)},
+		{"link", "state", dash(link.ActualState)},
+		{"planner", "link_id", dash(firstNonEmpty(link.LinkID, desired.LinkID))},
+		{"planner", "path_key", dash(firstNonEmpty(link.PathKey, desired.PathKey))},
+		{"planner", "runtime_id", dash(firstNonEmpty(link.IKEName, link.TransportID, desired.TransportID))},
+		{"planner", "desired_hash", dash(shortTextHash(desired.DesiredSpecHash))},
+		{"planner", "actual_hash", dash(shortTextHash(link.DesiredSpecHash))},
+		{"planner", "endpoint", dash(link.Endpoint)},
+		{"planner", "local_tunnel", dash(link.LocalTunnelAddr)},
+		{"planner", "peer_tunnel", dash(link.PeerTunnelAddr)},
+		{"xfrm", "interface", formatInterfaceWithIfID(link.InterfaceName, link.XFRMIfID)},
+		{"strongswan", "child_sa", dash(firstNonEmpty(sa.ChildSA, link.ChildSAName))},
+		{"strongswan", "sa_state", formatSAState(sa)},
+		{"strongswan", "local_endpoint", dash(sa.LocalEndpoint)},
+		{"strongswan", "remote_endpoint", dash(firstNonEmpty(sa.RemoteEndpoint, sa.Endpoint))},
+		{"strongswan", "local_identity", dash(sa.LocalIdentity)},
+		{"strongswan", "remote_identity", dash(sa.RemoteIdentity)},
+		{"strongswan", "reqid", formatUint32OrDash(sa.ReqID)},
+		{"strongswan", "observed_interface", formatDerivedInterfaceWithIfID(sa.XFRMIfID)},
+		{"rotation", "phase", dash(link.Rotation.Phase)},
+		{"rotation", "port_generation select/runtime/staged", inspect.DebugPortGenerationSummary(link.Rotation)},
+		{"rotation", "port local/remote/runtime/staged", inspect.DebugPortSummary(link.Endpoint, firstNonEmpty(sa.RemoteEndpoint, sa.Endpoint), "")},
+		{"rotation", "staged_ike", dash(link.Rotation.StagedIKEName)},
+		{"rotation", "staged_interface", formatInterfaceWithIfID(link.Rotation.StagedInterfaceName, link.Rotation.StagedXFRMIfID)},
+		{"rotation", "deadline", formatUnixTime(link.Rotation.RotateDeadline)},
+		{"takeover", "initiator_role", dash(link.Takeover.InitiatorRole)},
+		{"takeover", "phase", dash(link.Takeover.Phase)},
+		{"takeover", "until", formatUnixTime(link.Takeover.Until)},
+		{"takeover", "observed_initiator", dash(link.Takeover.ObservedInitiator)},
+		{"lifecycle", "owner", dash(link.OwnerManager)},
+		{"lifecycle", "failures", fmt.Sprintf("%d", link.FailureCount)},
+		{"lifecycle", "backoff_until", formatUnixTime(link.BackoffUntil)},
+		{"lifecycle", "last_failure", failureDisplay(link.LastFailure)},
+		{"lifecycle", "takeover_failure", failureDisplay(link.Takeover.LastFailure)},
+	}
 	if link.Health == nil {
-		out.Linef("    state: unavailable")
+		rows = append(rows, []string{"health", "state", "unavailable"})
 	} else {
 		health := link.Health
-		out.Linef("    state: %s", dash(health.State))
-		out.Linef("    probe_id: %s", dash(firstNonEmpty(health.ProbeID, health.InstanceID)))
-		out.Linef("    role: %s", dash(firstNonEmpty(health.ProbeRole, "active")))
-		out.Linef("    probe_type: %s", dash(health.ProbeType))
-		out.Linef("    sent/received/lost: %d/%d/%d", health.Sent, health.Received, health.Lost)
-		out.Linef("    loss: %d%%", health.LossRatio)
-		out.Linef("    rtt last/ewma: %dms/%dms", health.LastRTTMs, health.EWMARTTMs)
-		out.Linef("    consecutive_fail: %d", health.ConsecutiveFail)
-		out.Linef("    last_failure: %s", failureDisplay(health.LastFailure))
-		out.Linef("    next_probe: %s", formatUnixTime(health.NextProbeUnix))
-		out.Linef("    cutover_blocking: %t", health.CutoverBlocking)
+		rows = append(rows, []string{"health", "state", dash(health.State)})
+		rows = append(rows, []string{"health", "probe_id", dash(firstNonEmpty(health.ProbeID, health.InstanceID))})
+		rows = append(rows, []string{"health", "role", dash(firstNonEmpty(health.ProbeRole, "active"))})
+		rows = append(rows, []string{"health", "probe_type", dash(health.ProbeType)})
+		rows = append(rows, []string{"health", "sent/received/lost", fmt.Sprintf("%d/%d/%d", health.Sent, health.Received, health.Lost)})
+		rows = append(rows, []string{"health", "loss", fmt.Sprintf("%d%%", health.LossRatio)})
+		rows = append(rows, []string{"health", "rtt last/ewma", fmt.Sprintf("%dms/%dms", health.LastRTTMs, health.EWMARTTMs)})
+		rows = append(rows, []string{"health", "consecutive_fail", fmt.Sprintf("%d", health.ConsecutiveFail)})
+		rows = append(rows, []string{"health", "last_failure", failureDisplay(health.LastFailure)})
+		rows = append(rows, []string{"health", "next_probe", formatUnixTime(health.NextProbeUnix)})
+		rows = append(rows, []string{"health", "cutover_blocking", fmt.Sprintf("%t", health.CutoverBlocking)})
 	}
-	out.Linef("  routing:")
-	out.Linef("    bird_state: %s", link.Routing.BirdState)
-	out.Linef("    bird_neighbors: %s", link.Routing.BirdNeighbors)
-	out.Linef("    bird_best_routes: %s", link.Routing.BirdBestRoutes)
+	rows = append(rows, []string{"routing", "bird_state", link.Routing.BirdState})
+	writeDebugTable(out, rows)
 }
 
-func writeDebugMissingLink(out *lineWriter, link inspect.LinkView, spec *ipsec.TransportLinkSpec) {
+func writeDebugMissingLink(out *lineWriter, link inspect.LinkView) {
 	desired := inspect.DesiredLink{}
 	if link.Desired != nil {
 		desired = *link.Desired
 	}
 	out.Blank()
-	out.Linef("link %s", link.ID)
-	out.Linef("  peer: %s", link.PeerZone)
-	out.Linef("  group: %s", dash(link.GroupID))
-	out.Linef("  state: missing")
-	out.Linef("  planner:")
-	out.Linef("    desired_hash: %s", dash(shortTextHash(desired.DesiredSpecHash)))
-	out.Linef("    actual_hash: -")
-	out.Linef("    endpoint: %s", dash(desired.Endpoint))
-	out.Linef("    local_tunnel: %s", dash(desired.LocalTunnelAddr))
-	out.Linef("    peer_tunnel: %s", dash(desired.PeerTunnelAddr))
-	out.Linef("  xfrm:")
-	out.Linef("    interface: %s", formatInterfaceWithIfID(link.InterfaceName, link.XFRMIfID))
-	out.Linef("  strongswan:")
-	out.Linef("    child_sa: -")
-	out.Linef("    sa_state: -")
-	writeDebugStrongSwanConfig(out, spec)
-	out.Linef("  health:")
-	out.Linef("    owner: -")
-	out.Linef("    failures: 0")
-	out.Linef("    backoff_until: -")
-	out.Linef("    last_failure: -")
-	out.Linef("  routing:")
-	out.Linef("    bird_state: %s", link.Routing.BirdState)
-	out.Linef("    bird_neighbors: %s", link.Routing.BirdNeighbors)
-	out.Linef("    bird_best_routes: %s", link.Routing.BirdBestRoutes)
-}
-
-func specChildSAName(spec *ipsec.TransportLinkSpec) string {
-	if spec == nil {
-		return ""
+	out.Linef("link %s", escapeTableCell(link.ID))
+	rows := [][]string{
+		{"SECTION", "FIELD", "VALUE"},
+		{"link", "peer", link.PeerZone},
+		{"link", "group", dash(link.GroupID)},
+		{"link", "state", "missing"},
+		{"planner", "desired_hash", dash(shortTextHash(desired.DesiredSpecHash))},
+		{"planner", "actual_hash", "-"},
+		{"planner", "endpoint", dash(desired.Endpoint)},
+		{"planner", "local_tunnel", dash(desired.LocalTunnelAddr)},
+		{"planner", "peer_tunnel", dash(desired.PeerTunnelAddr)},
+		{"xfrm", "interface", formatInterfaceWithIfID(link.InterfaceName, link.XFRMIfID)},
+		{"strongswan", "child_sa", "-"},
+		{"strongswan", "sa_state", "-"},
+		{"health", "owner", "-"},
+		{"health", "failures", "0"},
+		{"health", "backoff_until", "-"},
+		{"health", "last_failure", "-"},
+		{"routing", "bird_state", link.Routing.BirdState},
 	}
-	return ipsec.ChildSAName(*spec)
-}
-
-func writeDebugStrongSwanConfig(out *lineWriter, spec *ipsec.TransportLinkSpec) {
-	out.Linef("    config:")
-	if spec == nil {
-		out.Linef("      load_conn: -")
-		return
-	}
-	conn, err := ipsec.BuildStrongSwanConnection(*spec)
-	if err != nil {
-		out.Linef("      load_conn_error: %s", err)
-		return
-	}
-	childName := ipsec.ChildSAName(*spec)
-	local, _ := conn["local"].(map[string]any)
-	remote, _ := conn["remote"].(map[string]any)
-	children, _ := conn["children"].(map[string]any)
-	child, _ := children[childName].(map[string]any)
-	out.Linef("      connection: %s", dash(spec.TransportID))
-	out.Linef("      version: %s", dash(debugString(conn["version"])))
-	out.Linef("      local_addrs: %s", debugStringList(conn["local_addrs"]))
-	out.Linef("      remote_addrs: %s", debugStringList(conn["remote_addrs"]))
-	out.Linef("      local_port: %s", dash(debugString(conn["local_port"])))
-	out.Linef("      remote_port: %s", dash(debugString(conn["remote_port"])))
-	out.Linef("      encap: %s", dash(debugString(conn["encap"])))
-	out.Linef("      mobike: %s", dash(debugString(conn["mobike"])))
-	out.Linef("      local_auth: %s", dash(debugString(local["auth"])))
-	out.Linef("      local_id: %s", dash(debugString(local["id"])))
-	out.Linef("      remote_auth: %s", dash(debugString(remote["auth"])))
-	out.Linef("      remote_id: %s", dash(debugString(remote["id"])))
-	out.Linef("      local_key_algorithm: %s", dash(spec.LocalPrivateKeyAlgorithm))
-	out.Linef("      local_private_key: %s", presentOrDash(len(spec.LocalPrivateKey) > 0))
-	out.Linef("      peer_public_key: %s", presentOrDash(len(spec.PeerPublicKey) > 0))
-	out.Linef("      child: %s", dash(childName))
-	out.Linef("      child_mode: %s", dash(debugString(child["mode"])))
-	out.Linef("      child_start_action: %s", dash(debugString(child["start_action"])))
-	out.Linef("      child_local_ts: %s", debugStringList(child["local_ts"]))
-	out.Linef("      child_remote_ts: %s", debugStringList(child["remote_ts"]))
-	out.Linef("      child_if_id_in: %s", formatDebugChildIfID(child["if_id_in"]))
-	out.Linef("      child_if_id_out: %s", formatDebugChildIfID(child["if_id_out"]))
+	writeDebugTable(out, rows)
 }
 
 func formatInterfaceWithIfID(name string, ifID uint32) string {
@@ -326,58 +264,6 @@ func formatDerivedInterfaceWithIfID(ifID uint32) string {
 		return "-"
 	}
 	return formatInterfaceWithIfID(ipsec.StableInterfaceName(ifID), ifID)
-}
-
-func formatDebugChildIfID(value any) string {
-	s := debugString(value)
-	if s == "" {
-		return "-"
-	}
-	var id uint32
-	if _, err := fmt.Sscanf(s, "%d", &id); err == nil && id != 0 {
-		return formatDerivedInterfaceWithIfID(id)
-	}
-	return s
-}
-
-func debugString(value any) string {
-	switch v := value.(type) {
-	case nil:
-		return ""
-	case string:
-		return v
-	case fmt.Stringer:
-		return v.String()
-	default:
-		return fmt.Sprint(v)
-	}
-}
-
-func debugStringList(value any) string {
-	switch v := value.(type) {
-	case nil:
-		return "-"
-	case []string:
-		if len(v) == 0 {
-			return "-"
-		}
-		return strings.Join(v, ",")
-	case []any:
-		if len(v) == 0 {
-			return "-"
-		}
-		parts := make([]string, 0, len(v))
-		for _, item := range v {
-			parts = append(parts, debugString(item))
-		}
-		return strings.Join(parts, ",")
-	default:
-		s := debugString(value)
-		if s == "" {
-			return "-"
-		}
-		return s
-	}
 }
 
 func formatSAState(sa inspect.LinkSA) string {

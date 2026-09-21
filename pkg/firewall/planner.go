@@ -672,20 +672,6 @@ func writeNativeHooksHash(h interface{ Write([]byte) (int, error) }, hooks Nativ
 	}
 }
 
-// OwnerToken derives a stable owner token for an instance.
-func OwnerToken(spec FirewallInstanceSpec) string {
-	prefix := spec.OwnerPrefix
-	if prefix == "" {
-		prefix = "photon"
-	}
-	target := spec.NetNS
-	if spec.IsHost {
-		target = "host"
-	}
-	h := sha256.Sum256([]byte(prefix + "/" + target + "/" + spec.ID))
-	return hex.EncodeToString(h[:])[:12]
-}
-
 // DesiredObjects returns the set of owned object references for a desired state.
 // Used by Plan to compute the create/delete diff against observed state.
 func DesiredObjects(desired *FirewallDesiredState) []FirewallObjectRef {
@@ -731,6 +717,3 @@ func DesiredObjects(desired *FirewallDesiredState) []FirewallObjectRef {
 	}
 	return refs
 }
-
-// Ensure unused import doesn't break build when strings is only used conditionally.
-var _ = strings.TrimSpace

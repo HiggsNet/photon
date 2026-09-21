@@ -17,7 +17,7 @@ type eventBatchFirewallDriver struct {
 	err error
 }
 
-func (d *eventBatchFirewallDriver) Apply(context.Context, firewall.FirewallPlan, *firewall.FirewallDesiredState) (firewall.FirewallApplyResult, error) {
+func (d *eventBatchFirewallDriver) Apply(context.Context, *firewall.FirewallDesiredState) (firewall.FirewallApplyResult, error) {
 	return firewall.FirewallApplyResult{}, d.err
 }
 

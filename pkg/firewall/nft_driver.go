@@ -70,14 +70,7 @@ func (d *NFTDriver) Preflight(ctx context.Context, spec FirewallInstanceSpec) (F
 	return pf, nil
 }
 
-func (d *NFTDriver) Plan(ctx context.Context, desired *FirewallDesiredState, observed FirewallObservedState) (FirewallPlan, error) {
-	if desired == nil {
-		return FirewallPlan{}, fmt.Errorf("desired state is nil")
-	}
-	return PlanDiff(desired.Instance.ID, desired, observed), nil
-}
-
-func (d *NFTDriver) Apply(ctx context.Context, plan FirewallPlan, desired *FirewallDesiredState) (FirewallApplyResult, error) {
+func (d *NFTDriver) Apply(ctx context.Context, desired *FirewallDesiredState) (FirewallApplyResult, error) {
 	result := FirewallApplyResult{}
 	if desired == nil {
 		return result, fmt.Errorf("desired state is nil")
@@ -85,6 +78,15 @@ func (d *NFTDriver) Apply(ctx context.Context, plan FirewallPlan, desired *Firew
 	if desired.Instance.Mode == ModeExternal || desired.Instance.Mode == ModeDisabled {
 		return result, nil
 	}
+	scope := desired.Instance.NetNS
+	if desired.Instance.IsHost {
+		scope = "host"
+	}
+	observed, err := d.ListOwned(ctx, Owner{InstanceID: scope, OwnerPrefix: desired.Instance.OwnerPrefix})
+	if err != nil {
+		return result, err
+	}
+	plan := PlanDiff(desired.Instance.ID, desired, observed)
 	commands := buildNFTApplyCommands(plan, desired)
 	if len(commands) == 0 {
 		result.Generation = 1
@@ -161,24 +163,6 @@ func (d *NFTDriver) ListOwned(ctx context.Context, owner Owner) (FirewallObserve
 		return FirewallObservedState{}, nil
 	}
 	return parseNFTListOutput(string(out), tableName), nil
-}
-
-func (d *NFTDriver) DeleteStale(ctx context.Context, refs []FirewallObjectRef) error {
-	for _, ref := range refs {
-		var args []string
-		switch ref.Kind {
-		case "table":
-			args = []string{"delete", "table", ref.Family, ref.Name}
-		case "chain", "nat_redirect", "nat_source":
-			args = []string{"delete", "chain", ref.Family, ref.Name}
-		case "set":
-			args = []string{"delete", "set", ref.Family, ref.Name}
-		default:
-			continue
-		}
-		_, _ = d.run(ctx, args...)
-	}
-	return nil
 }
 
 // buildNFTApplyCommands generates sequential nft CLI commands to realize a plan.

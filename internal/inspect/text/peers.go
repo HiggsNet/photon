@@ -1,6 +1,7 @@
 package text
 
 import (
+	"fmt"
 	"io"
 	"sort"
 	"strings"
@@ -108,12 +109,16 @@ func WritePeerLifecycleDebug(w io.Writer, view inspect.PeerLifecycleDebugView) e
 		return err
 	}
 
+	rows := [][]string{{"PEER", "ZONE", "STATE", "LINKS desired/actual/up", "SEVERITY", "REASON", "DETAIL"}}
+	times := [][]string{{"PEER", "LAST_SEEN", "LAST_SYNC", "LAST_RECONCILE", "OFFLINE_SINCE", "NEXT_CLEANUP"}}
 	for _, peer := range view.Peers {
-		if err := WritePeerStatusDetail(w, peer); err != nil {
-			return err
-		}
+		rows = append(rows, []string{peer.PeerID, peer.Zone.String(), peer.State, fmt.Sprintf("%d/%d/%d", peer.DesiredLinks, peer.ActualLinks, peer.UpLinks), peerSeverity(peer), dash(peer.Reason), dash(peer.Detail)})
+		times = append(times, []string{peer.PeerID, formatUnixTime(peer.LastSeenUnix), formatUnixTime(peer.LastSyncUnix), formatUnixTime(peer.LastReconcileUnix), formatUnixTime(peer.OfflineSinceUnix), formatUnixTime(peer.NextCleanupUnix)})
 	}
-	return nil
+	writeDebugTable(out, rows)
+	out.Blank()
+	writeDebugTable(out, times)
+	return out.Err()
 }
 
 func WritePeerStatusDetail(w io.Writer, p inspect.PeerStatusInfo) error {

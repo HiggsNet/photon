@@ -409,9 +409,9 @@ type captureFirewallDriver struct {
 	desired []*firewall.FirewallDesiredState
 }
 
-func (d *captureFirewallDriver) Apply(ctx context.Context, plan firewall.FirewallPlan, desired *firewall.FirewallDesiredState) (firewall.FirewallApplyResult, error) {
+func (d *captureFirewallDriver) Apply(ctx context.Context, desired *firewall.FirewallDesiredState) (firewall.FirewallApplyResult, error) {
 	d.desired = append(d.desired, desired)
-	return d.DryRunDriver.Apply(ctx, plan, desired)
+	return d.DryRunDriver.Apply(ctx, desired)
 }
 
 // TestRevocationDenyFirstCombinedSmoke verifies the Phase 6.5 cross-layer

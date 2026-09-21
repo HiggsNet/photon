@@ -16,22 +16,9 @@ import (
 // Owner identifies Photon-owned firewall objects so reconcile can distinguish
 // them from administrator-managed rules.
 type Owner struct {
-	Manager     string // always "photon"
 	InstanceID  string // netns-level instance id, e.g. "photon" or "host"
 	OwnerPrefix string // name prefix, default "photon"
-	Generation  uint64 // desired-state generation
-	Token       string // stable owner token derived from instance/prefix
 }
-
-// InterfaceRole classifies a managed interface for chain generation.
-type InterfaceRole string
-
-const (
-	InterfaceRoleXFRMTunnel   InterfaceRole = "xfrm_tunnel"
-	InterfaceRoleUpstreamVeth InterfaceRole = "upstream_veth"
-	InterfaceRoleLoopback     InterfaceRole = "loopback"
-	InterfaceRoleUnderlay     InterfaceRole = "underlay"
-)
 
 // LocalService is an explicitly-open overlay netns service entry.
 type LocalService struct {

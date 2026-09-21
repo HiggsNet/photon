@@ -1,10 +1,7 @@
 package inspect
 
 import (
-	"net/netip"
 	"testing"
-
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func TestBuildRotateDebugBuildsRuntimeAndMatchingSAs(t *testing.T) {
@@ -37,20 +34,6 @@ func TestBuildRotateDebugBuildsRuntimeAndMatchingSAs(t *testing.T) {
 						StagedPeerTunnelAddr:  "fe80::4%phxnew",
 					},
 				},
-			},
-		},
-		PlannedSpecs: map[string]ipsec.TransportLinkSpec{
-			"link-b": {
-				Generation:    2,
-				LinkID:        "link-b",
-				TransportID:   "ipsec-current-r2",
-				InterfaceName: "phxnew",
-				XFRMIfID:      2002,
-				ContactPoints: []ipsec.ContactPoint{{
-					Address:    "198.51.100.10",
-					NATTPort:   30003,
-					Generation: 2,
-				}},
 			},
 		},
 		LastDesiredCount:  2,
@@ -87,12 +70,12 @@ func TestBuildRotateDebugBuildsRuntimeAndMatchingSAs(t *testing.T) {
 	if len(link.ReconcileMatchingSAs) != 1 || len(link.LiveMatchingSAs) != 1 {
 		t.Fatalf("matching SAs = stored=%+v live=%+v", link.ReconcileMatchingSAs, link.LiveMatchingSAs)
 	}
-	if link.PortGenerationSummary != "2/1/2" || link.PortSummary != "4500/30003/30002/30003" {
+	if link.PortGenerationSummary != "-/1/2" || link.PortSummary != "-/30002/30002/30003" {
 		t.Fatalf("ports = generation=%q summary=%q", link.PortGenerationSummary, link.PortSummary)
 	}
 }
 
-func TestRotateRuntimeCurrentPrefersActiveRuntimeOverPlannedSpec(t *testing.T) {
+func TestRotateRuntimeCurrentPrefersActiveRuntimeOverDesired(t *testing.T) {
 	link := LinkView{
 		ID:              "link-1",
 		LinkID:          "link-1",
@@ -109,18 +92,13 @@ func TestRotateRuntimeCurrentPrefersActiveRuntimeOverPlannedSpec(t *testing.T) {
 			StagedGeneration: 2,
 		},
 	}
-	spec := &ipsec.TransportLinkSpec{
-		Generation:      2,
-		TransportID:     "ipsec-f46fb3d71fe8-r2",
-		InterfaceName:   "phx28e3c6e5",
-		XFRMIfID:        686016229,
-		LocalTunnelAddr: netip.MustParseAddr("fe80::5ff8:918b:338e:35e6"),
-		PeerTunnelAddr:  netip.MustParseAddr("fe80::ec14:d563:b479:44ed"),
-		NetNS:           "photontesth2",
-		ContactPoints:   []ipsec.ContactPoint{{Address: "123.57.143.66", NATTPort: 30003, Generation: 2}},
+	link.Desired = &DesiredLink{
+		TransportID: "ipsec-f46fb3d71fe8-r2", InterfaceName: "phx28e3c6e5", XFRMIfID: 686016229,
+		LocalTunnelAddr: "fe80::new-local%phx28e3c6e5", PeerTunnelAddr: "fe80::new-peer%phx28e3c6e5",
+		Endpoint: "123.57.143.66:30003",
 	}
 
-	got := RotateRuntimeCurrent(link, spec)
+	got := RotateRuntimeCurrent(link)
 	if got.RuntimeID != link.IKEName {
 		t.Fatalf("current runtime id = %q, want active IKE name %q", got.RuntimeID, link.IKEName)
 	}
@@ -154,7 +132,7 @@ func TestRotateRuntimeStagedUsesPersistedRuntimeAndMatchingSA(t *testing.T) {
 		Established:    true,
 	}}
 
-	got := RotateRuntimeStaged(link, nil, sas)
+	got := RotateRuntimeStaged(link, sas)
 	if got.Endpoint != "123.57.143.66:30003" || got.Port != "30003" {
 		t.Fatalf("staged endpoint/port = %q/%q, want 123.57.143.66:30003/30003", got.Endpoint, got.Port)
 	}

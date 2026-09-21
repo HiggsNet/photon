@@ -10,6 +10,7 @@ import (
 func WriteRotateDebug(w io.Writer, view inspect.RotateDebugView) error {
 	out := newLineWriter(w)
 	out.Linef("last_run: %s", formatRotateUnixTime(view.LastRunUnix))
+	out.Linef("last_failure: %s", failureDisplay(view.LastFailure))
 	out.Linef("link_instances: %d", view.LinkInstances)
 	out.Linef("planned_desired_links: %d", view.PlannedDesired)
 	if view.ReplanIgnored {
@@ -59,44 +60,37 @@ func writeRotateLink(out *lineWriter, item inspect.RotateDebugLink) {
 	out.Linef("    port local/remote/runtime/staged: %s", item.PortSummary)
 	out.Linef("    deadline: %s", formatRotateUnixTime(link.Rotation.RotateDeadline))
 	out.Linef("    last_failure: %s", failureDisplay(link.LastFailure))
-	writeRotateRuntime(out, "current", item.Current)
+	rows := [][]string{{"ROLE", "STATE", "PORT", "RUNTIME", "CHILD_SA", "INTERFACE", "ENDPOINT"}}
+	rows = append(rows, rotateRuntimeRow("current", item.Current))
 	if item.HasStaged {
-		writeRotateRuntime(out, "staged", item.Staged)
+		rows = append(rows, rotateRuntimeRow("staged", item.Staged))
 	} else {
-		out.Linef("  staged:")
-		out.Linef("    state: absent")
+		rows = append(rows, []string{"staged", "absent", "-", "-", "-", "-", "-"})
 	}
+	writeDebugTable(out, rows)
+	tunnels := [][]string{{"ROLE", "LOCAL_TUNNEL", "PEER_TUNNEL"}, {"current", dash(item.Current.LocalTunnelAddr), dash(item.Current.PeerTunnelAddr)}}
+	if item.HasStaged {
+		tunnels = append(tunnels, []string{"staged", dash(item.Staged.LocalTunnelAddr), dash(item.Staged.PeerTunnelAddr)})
+	}
+	writeDebugTable(out, tunnels)
 	writeRotateSAs(out, "reconcile_matching_sas", item.ReconcileMatchingSAs)
 	writeRotateSAs(out, "live_matching_sas", item.LiveMatchingSAs)
 }
 
-func writeRotateRuntime(out *lineWriter, label string, runtime inspect.RotateRuntimeView) {
-	out.Linef("  %s:", label)
-	out.Linef("    state: %s", dash(runtime.State))
-	out.Linef("    port: %s", dash(runtime.Port))
-	out.Linef("    runtime_id: %s", dash(runtime.RuntimeID))
-	out.Linef("    child_sa: %s", dash(runtime.ChildSAName))
-	out.Linef("    interface: %s", formatInterfaceWithIfID(runtime.InterfaceName, runtime.XFRMIfID))
-	out.Linef("    endpoint: %s", dash(runtime.Endpoint))
-	out.Linef("    local_tunnel: %s", dash(runtime.LocalTunnelAddr))
-	out.Linef("    peer_tunnel: %s", dash(runtime.PeerTunnelAddr))
+func rotateRuntimeRow(role string, runtime inspect.RotateRuntimeView) []string {
+	return []string{role, dash(runtime.State), dash(runtime.Port), dash(runtime.RuntimeID), dash(runtime.ChildSAName), formatInterfaceWithIfID(runtime.InterfaceName, runtime.XFRMIfID), dash(runtime.Endpoint)}
 }
 
 func writeRotateSAs(out *lineWriter, label string, sas []inspect.LinkSA) {
 	out.Linef("  %s: %d", label, len(sas))
-	for _, sa := range sas {
-		out.Linef("    - name=%s child=%s state=%s if_id=%s reqid=%s local=%s remote=%s identities=%s/%s",
-			dash(sa.Name),
-			dash(sa.ChildSA),
-			formatSAState(sa),
-			formatUint32OrDash(sa.XFRMIfID),
-			formatUint32OrDash(sa.ReqID),
-			dash(sa.LocalEndpoint),
-			dash(firstNonEmpty(sa.RemoteEndpoint, sa.Endpoint)),
-			dash(sa.LocalIdentity),
-			dash(sa.RemoteIdentity),
-		)
+	if len(sas) == 0 {
+		return
 	}
+	rows := [][]string{{"NAME", "CHILD", "STATE", "IF_ID", "REQID", "LOCAL", "REMOTE", "LOCAL_IDENTITY", "REMOTE_IDENTITY"}}
+	for _, sa := range sas {
+		rows = append(rows, []string{dash(sa.Name), dash(sa.ChildSA), formatSAState(sa), formatUint32OrDash(sa.XFRMIfID), formatUint32OrDash(sa.ReqID), dash(sa.LocalEndpoint), dash(firstNonEmpty(sa.RemoteEndpoint, sa.Endpoint)), dash(sa.LocalIdentity), dash(sa.RemoteIdentity)})
+	}
+	writeDebugTable(out, rows)
 }
 
 func formatRotateUnixTime(unix int64) string {

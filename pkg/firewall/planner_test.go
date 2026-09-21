@@ -519,26 +519,6 @@ func TestDesiredStateHash_ChangesOnPrefixChange(t *testing.T) {
 	}
 }
 
-func TestOwnerToken_Stable(t *testing.T) {
-	spec := FirewallInstanceSpec{ID: "photontesth2", NetNS: "photontesth2", OwnerPrefix: "photon"}
-	t1 := OwnerToken(spec)
-	t2 := OwnerToken(spec)
-	if t1 != t2 {
-		t.Error("owner token not stable")
-	}
-	if t1 == "" {
-		t.Error("owner token empty")
-	}
-}
-
-func TestOwnerToken_DifferentInstances(t *testing.T) {
-	a := OwnerToken(FirewallInstanceSpec{ID: "photontesth2", NetNS: "photontesth2"})
-	b := OwnerToken(FirewallInstanceSpec{ID: "host", NetNS: "host", IsHost: true})
-	if a == b {
-		t.Error("different instances should have different owner tokens")
-	}
-}
-
 func TestDesiredObjects_Overlay(t *testing.T) {
 	spec := FirewallInstanceSpec{
 		ID: "photontesth2", NetNS: "photontesth2", Enabled: true, Mode: ModeManaged,
@@ -621,15 +601,7 @@ func TestDryRunDriver_PlanApply(t *testing.T) {
 	}
 	desired, _ := BuildDesiredState(spec, input)
 
-	observed, err := driver.ListOwned(context.Background(), Owner{})
-	if err != nil {
-		t.Fatalf("ListOwned: %v", err)
-	}
-	plan, err := driver.Plan(context.Background(), desired, observed)
-	if err != nil {
-		t.Fatalf("Plan: %v", err)
-	}
-	result, err := driver.Apply(context.Background(), plan, desired)
+	result, err := driver.Apply(context.Background(), desired)
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}

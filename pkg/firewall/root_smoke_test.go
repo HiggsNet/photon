@@ -146,15 +146,7 @@ func runFirewallBackendRootSmoke(t *testing.T, ctx context.Context, nsName, back
 
 	cleanupFirewallBackend(t, ctx, nsName, backend, ownerPrefix, spec.NetNS)
 	driver := newRootSmokeDriver(backend, nsName)
-	observed, err := driver.ListOwned(ctx, Owner{OwnerPrefix: ownerPrefix, InstanceID: spec.NetNS})
-	if err != nil {
-		t.Fatalf("ListOwned overlay: %v", err)
-	}
-	plan, err := driver.Plan(ctx, desired, observed)
-	if err != nil {
-		t.Fatalf("Plan overlay: %v", err)
-	}
-	result, err := driver.Apply(ctx, plan, desired)
+	result, err := driver.Apply(ctx, desired)
 	if err != nil {
 		t.Fatalf("Apply overlay failed after %d applied/%d failed: %v", result.Applied, result.Failed, err)
 	}
@@ -169,11 +161,7 @@ func runFirewallBackendRootSmoke(t *testing.T, ctx context.Context, nsName, back
 		t.Fatalf("BuildDesiredState revoked overlay: %v", err)
 	}
 	cleanupFirewallBackend(t, ctx, nsName, backend, revokedSpec.OwnerPrefix, revokedSpec.NetNS)
-	plan, err = driver.Plan(ctx, revokedDesired, FirewallObservedState{})
-	if err != nil {
-		t.Fatalf("Plan revoked overlay: %v", err)
-	}
-	result, err = driver.Apply(ctx, plan, revokedDesired)
+	result, err = driver.Apply(ctx, revokedDesired)
 	if err != nil {
 		t.Fatalf("Apply revoked overlay failed after %d applied/%d failed: %v", result.Applied, result.Failed, err)
 	}
@@ -214,15 +202,7 @@ func runFirewallBackendRootSmoke(t *testing.T, ctx context.Context, nsName, back
 		t.Fatalf("BuildDesiredState host: %v", err)
 	}
 	cleanupFirewallBackend(t, ctx, nsName, backend, hostOwnerPrefix, "host")
-	hostObserved, err := driver.ListOwned(ctx, Owner{OwnerPrefix: hostOwnerPrefix, InstanceID: "host"})
-	if err != nil {
-		t.Fatalf("ListOwned host: %v", err)
-	}
-	hostPlan, err := driver.Plan(ctx, hostDesired, hostObserved)
-	if err != nil {
-		t.Fatalf("Plan host: %v", err)
-	}
-	hostResult, err := driver.Apply(ctx, hostPlan, hostDesired)
+	hostResult, err := driver.Apply(ctx, hostDesired)
 	if err != nil {
 		t.Fatalf("Apply host failed after %d applied/%d failed: %v", hostResult.Applied, hostResult.Failed, err)
 	}

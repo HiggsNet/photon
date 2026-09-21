@@ -30,10 +30,10 @@ func (r *LinuxDriver) ResolveFirewallBackend(ctx context.Context, spec firewall.
 	return backend, preflight, err
 }
 
-// ApplyFirewall observes and applies one desired firewall instance through the
+// ApplyFirewall converges one desired firewall instance through the
 // selected Linux backend. Desired policy construction remains outside the
 // platform driver; all driver I/O and namespace selection are owned here.
-func (r *LinuxDriver) ApplyFirewall(ctx context.Context, spec firewall.FirewallInstanceSpec, backend string, owner firewall.Owner, desired *firewall.FirewallDesiredState) (firewall.FirewallApplyResult, error) {
+func (r *LinuxDriver) ApplyFirewall(ctx context.Context, spec firewall.FirewallInstanceSpec, backend string, desired *firewall.FirewallDesiredState) (firewall.FirewallApplyResult, error) {
 	driver, err := r.newFirewallDriver(spec, backend)
 	if err != nil {
 		return firewall.FirewallApplyResult{}, err
@@ -41,12 +41,7 @@ func (r *LinuxDriver) ApplyFirewall(ctx context.Context, spec firewall.FirewallI
 	if driver == nil {
 		driver = firewall.NewDryRunDriver()
 	}
-	observed, _ := driver.ListOwned(ctx, owner)
-	plan, err := driver.Plan(ctx, desired, observed)
-	if err != nil {
-		return firewall.FirewallApplyResult{}, err
-	}
-	return driver.Apply(ctx, plan, desired)
+	return driver.Apply(ctx, desired)
 }
 
 func (r *LinuxDriver) newFirewallDriver(spec firewall.FirewallInstanceSpec, backend string) (firewall.FirewallDriver, error) {

@@ -17,15 +17,6 @@ func debugLinks(filter string) error {
 	if view, ok, err := readCanonicalViewViaControl[inspect.LinksDebugView](config, controlRequest{Method: "links_view"}, false); err != nil {
 		return err
 	} else if ok {
-		lastFailure := "-"
-		if failure := view.Inspection.LastFailure; failure != nil {
-			lastFailure = fmt.Sprintf("code=%s message=%s", failure.Code, failure.Message)
-		}
-		fmt.Printf("daemon: online link_instances=%d desired_links=%d last_link_failure=%s\n",
-			view.Inspection.LinkInstances,
-			view.Inspection.DesiredLinks,
-			lastFailure,
-		)
 		view.Filter = filter
 		return inspecttext.WriteLinksDebug(os.Stdout, view)
 	}
@@ -45,10 +36,8 @@ func showLinks(filter string, verbose bool) error {
 	return fmt.Errorf("daemon control socket unavailable; link runtime state requires a running daemon")
 }
 
-func debugLinkRoutingState(config *appConfig, birdInstances map[string]*bird.InstanceObservation, groupID string) (state, neighborCount, bestRouteCount string) {
+func debugLinkRoutingState(config *appConfig, birdInstances map[string]*bird.InstanceObservation, groupID string) (state string) {
 	state = "-"
-	neighborCount = "-"
-	bestRouteCount = "-"
 	if config == nil || groupID == "" {
 		return
 	}

@@ -16,7 +16,8 @@ import (
 
 func TestResolveEndpointServicesTracksAuthorizedZoneRoutes(t *testing.T) {
 	ars := &routing.AuthorizedRouteSet{Announced: map[zone.ZonePath]map[netip.Prefix]*routing.RouteEntry{
-		"node-a.catofes.": {netip.MustParsePrefix("fd10:1::/64"): {}},
+		"node-a.catofes.": {netip.MustParsePrefix("fd10:1::/64"): {}, netip.MustParsePrefix("10.1.0.0/24"): {}},
+		"node-c.catofes.": {netip.MustParsePrefix("fd10:1::/64"): {}},
 		"node-b.other.":   {netip.MustParsePrefix("10.2.0.0/24"): {}},
 	}}
 	services, err := resolveEndpointServices(map[string]photonstate.EndpointACL{
@@ -97,7 +98,7 @@ func TestEndpointACLApplyNoopDoesNotCommitOrNotify(t *testing.T) {
 	service := newTestDaemonFromOwners(
 		&testApp{Config: appConfig}, verified, nil, runtime, appConfig, time.Second,
 	)
-	driver := &captureFirewallOwnerDriver{}
+	driver := &captureFirewallInstanceDriver{}
 	driver.Backend = firewall.BackendNFT
 	installTestFirewallDriver(service, driver)
 	beforeRevision := uint64(service.State.Common.VerifiedRevision())
@@ -107,6 +108,7 @@ func TestEndpointACLApplyNoopDoesNotCommitOrNotify(t *testing.T) {
 	// Validation canonicalizes selector order, so the differently ordered input
 	// must still be recognized as the same committed ACL.
 	incoming := acl
+	incoming.Name = " SOCKS5-MAIN "
 	incoming.Selectors = []string{"node-a.catofes.", "*.catofes."}
 	result, _, _ := service.handleEvent(daemonEvent{Type: daemonEventEndpointACLApply, EndpointACL: &incoming})
 	if result.Error != nil {
@@ -145,5 +147,72 @@ func TestEndpointACLRemoveMissingIsNoop(t *testing.T) {
 	}
 	if notifications != 0 || service.ipsecDirty || service.routingDirty || service.firewallDirty {
 		t.Fatalf("no-op remove side effects: notifications=%d dirty=%v/%v/%v", notifications, service.ipsecDirty, service.routingDirty, service.firewallDirty)
+	}
+}
+
+func TestEndpointACLNamesAndLocalMutation(t *testing.T) {
+	acl, err := validateEndpointACL(photonstate.EndpointACL{
+		Name: " API ", Destination: "fd42::20", Scope: endpointACLScopeIP,
+		Selectors: []string{"*.catofes."},
+	})
+	if err != nil || acl.Name != "api" {
+		t.Fatalf("normalized ACL = %+v, %v", acl, err)
+	}
+	for _, tc := range []struct {
+		name      string
+		keys      []string
+		remove    string
+		remaining string
+	}{
+		{"canonical", []string{"api"}, " API ", ""},
+		{"legacy", []string{"API"}, " API ", ""},
+		{"collision", []string{"API", "api"}, "API", "api"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			acls := map[string]photonstate.EndpointACL{}
+			for _, key := range tc.keys {
+				entry := acl
+				entry.Name = key
+				acls[key] = entry
+			}
+			config := defaultAppConfig()
+			config.Firewall.Instances = []firewall.FirewallInstanceSpec{{
+				ID: "host", NetNS: "host", IsHost: true, Enabled: true,
+				Mode: firewall.ModeManaged, Backend: firewall.BackendAuto,
+			}}
+			service := newTestDaemonFromOwners(&testApp{Config: config},
+				&corestate.VerifiedState{ManagedZone: "node-a.catofes.", Network: zone.NewNetworkState()},
+				nil, &photonlinux.LinuxState{EndpointACLs: acls}, config, time.Second)
+			driver := &captureFirewallInstanceDriver{}
+			driver.Backend = firewall.BackendNFT
+			installTestFirewallDriver(service, driver)
+			notifications := 0
+			service.Hooks.OnStateChanged = func() { notifications++ }
+			if tc.name != "canonical" {
+				committed, err := service.handleEndpointACLApplyEvent(acl)
+				if err == nil || committed || notifications != 0 || service.firewallDirty {
+					t.Fatalf("legacy collision was not rejected without side effects: %v, %v", committed, err)
+				}
+			}
+			revision := service.State.Common.VerifiedRevision()
+			committed, err := service.handleEndpointACLRemoveEvent(tc.remove)
+			if err != nil || !committed {
+				t.Fatalf("remove = %v, %v", committed, err)
+			}
+			remaining := service.State.ReadLinux().EndpointACLs
+			wantCount := 0
+			if tc.remaining != "" {
+				wantCount = 1
+				if _, ok := remaining[tc.remaining]; !ok {
+					t.Fatalf("removed wrong entry: %+v", remaining)
+				}
+			}
+			if len(remaining) != wantCount {
+				t.Fatalf("remaining ACLs = %+v", remaining)
+			}
+			if notifications != 1 || !service.firewallDirty || service.ipsecDirty || service.routingDirty || service.State.Common.VerifiedRevision() != revision {
+				t.Fatalf("unexpected local mutation side effects: notifications=%d dirty=%v/%v/%v", notifications, service.ipsecDirty, service.routingDirty, service.firewallDirty)
+			}
+		})
 	}
 }

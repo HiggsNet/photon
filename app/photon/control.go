@@ -29,6 +29,7 @@ const (
 )
 
 type controlRequest struct {
+	LiveSAs     bool                     `json:"live_sas,omitempty"`
 	Method      string                   `json:"method"`
 	Zone        string                   `json:"zone,omitempty"`
 	Key         string                   `json:"key,omitempty"`
@@ -339,20 +340,6 @@ func checkRootInitViaControl(config *appConfig) error {
 		return err
 	}
 	return errors.New("root init requires the daemon to be stopped")
-}
-
-func endpointACLApplyViaControl(config *appConfig, acl photonstate.EndpointACL, direct bool) (bool, error) {
-	_, ok, err := sendMutationControlRequest(config, controlRequest{Method: "endpoint_acl_apply", EndpointACL: &acl}, direct)
-	return ok, err
-}
-
-func endpointACLRemoveViaControl(config *appConfig, name string, direct bool) (bool, error) {
-	_, ok, err := sendMutationControlRequest(config, controlRequest{Method: "endpoint_acl_remove", Key: name}, direct)
-	return ok, err
-}
-
-func endpointACLListViaControl(config *appConfig, direct bool) ([]photonstate.EndpointACL, bool, error) {
-	return readCanonicalViewViaControl[[]photonstate.EndpointACL](config, controlRequest{Method: "endpoint_acl_list"}, direct)
 }
 
 func isControlSocketUnavailable(err error) bool {

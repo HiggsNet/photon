@@ -12,14 +12,8 @@ import (
 type FirewallDriver interface {
 	// Preflight probes backend availability without modifying the system.
 	Preflight(ctx context.Context, spec FirewallInstanceSpec) (FirewallPreflight, error)
-	// Plan computes the create/update/delete/adopt/noop diff.
-	Plan(ctx context.Context, desired *FirewallDesiredState, observed FirewallObservedState) (FirewallPlan, error)
-	// Apply executes a plan against the system. Returns generation and errors.
-	Apply(ctx context.Context, plan FirewallPlan, desired *FirewallDesiredState) (FirewallApplyResult, error)
-	// ListOwned reads currently-owned objects from the system.
-	ListOwned(ctx context.Context, owner Owner) (FirewallObservedState, error)
-	// DeleteStale removes stale owned objects.
-	DeleteStale(ctx context.Context, refs []FirewallObjectRef) error
+	// Apply observes and converges the backend to the desired state.
+	Apply(ctx context.Context, desired *FirewallDesiredState) (FirewallApplyResult, error)
 }
 
 // PlanDiff computes the diff between desired objects and observed owned objects.
@@ -211,5 +205,3 @@ func ResolveBackendForInstance(spec FirewallInstanceSpec, pf FirewallPreflight) 
 	}
 	return ResolveBackend(configured, pf), nil
 }
-
-var _ = fmt.Sprintf

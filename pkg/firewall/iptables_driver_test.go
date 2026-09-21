@@ -36,8 +36,7 @@ func TestIPTablesDriver_ApplyOverlay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	plan := PlanDiff("photontesth2", desired, FirewallObservedState{})
-	result, err := d.Apply(context.Background(), plan, desired)
+	result, err := d.Apply(context.Background(), desired)
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -79,8 +78,7 @@ func TestIPTablesDriver_UsesGenerationIPSetsForLargePrefixSets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	plan := PlanDiff("photon", desired, FirewallObservedState{})
-	if _, err := driver.Apply(context.Background(), plan, desired); err != nil {
+	if _, err := driver.Apply(context.Background(), desired); err != nil {
 		t.Fatalf("first Apply: %v", err)
 	}
 
@@ -114,7 +112,7 @@ func TestIPTablesDriver_UsesGenerationIPSetsForLargePrefixSets(t *testing.T) {
 		firstSets[name] = true
 	}
 	runner.commands = nil
-	if _, err := driver.Apply(context.Background(), plan, desired); err != nil {
+	if _, err := driver.Apply(context.Background(), desired); err != nil {
 		t.Fatalf("second Apply: %v", err)
 	}
 	if len(runner.ipsets) != 1 {
@@ -144,8 +142,7 @@ func TestIPTablesDriver_IPSetPreparationFailureKeepsActiveGeneration(t *testing.
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	plan := PlanDiff("photon", desired, FirewallObservedState{})
-	if _, err := driver.Apply(context.Background(), plan, desired); err != nil {
+	if _, err := driver.Apply(context.Background(), desired); err != nil {
 		t.Fatalf("first Apply: %v", err)
 	}
 	activeSets := make(map[string]bool, len(runner.ipsets))
@@ -154,7 +151,7 @@ func TestIPTablesDriver_IPSetPreparationFailureKeepsActiveGeneration(t *testing.
 	}
 
 	runner.failContains = "add "
-	if _, err := driver.Apply(context.Background(), plan, desired); err == nil {
+	if _, err := driver.Apply(context.Background(), desired); err == nil {
 		t.Fatal("second Apply succeeded despite injected ipset population failure")
 	}
 	if len(runner.ipsets) != len(activeSets) {
@@ -173,7 +170,7 @@ func TestIPTablesDriver_ExternalDoesNotApply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	if _, err := (&IPTablesDriver{Command: runner.run}).Apply(context.Background(), FirewallPlan{}, desired); err != nil {
+	if _, err := (&IPTablesDriver{Command: runner.run}).Apply(context.Background(), desired); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if len(runner.commands) != 0 {
@@ -198,8 +195,7 @@ func TestIPTablesDriver_ApplyHostWithNATRedirect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	plan := PlanDiff("host", desired, FirewallObservedState{})
-	_, err = d.Apply(context.Background(), plan, desired)
+	_, err = d.Apply(context.Background(), desired)
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -231,8 +227,7 @@ func TestIPTablesDriver_ApplyHostWithNATSourceRewrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	plan := PlanDiff("host", desired, FirewallObservedState{})
-	if _, err := d.Apply(context.Background(), plan, desired); err != nil {
+	if _, err := d.Apply(context.Background(), desired); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	assertCommandContains(t, runner.commands, "iptables", "-t nat -A photon_host_s_")
@@ -263,8 +258,7 @@ func TestIPTablesDriver_HostAddressFamilyCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	plan := PlanDiff("host", desired, FirewallObservedState{})
-	if _, err := d.Apply(context.Background(), plan, desired); err != nil {
+	if _, err := d.Apply(context.Background(), desired); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -292,36 +286,6 @@ func TestIPTablesDriver_ListOwned(t *testing.T) {
 	}
 	if len(state.Objects) != 0 {
 		t.Errorf("expected 0 objects from empty output, got %d", len(state.Objects))
-	}
-}
-
-func TestIPTablesDriver_DeleteStale(t *testing.T) {
-	runner := &fakeCommandRunner{existingChains: map[string]bool{
-		"iptables:filter:photon_photontesth2_input":  true,
-		"ip6tables:filter:photon_photontesth2_input": true,
-	}}
-	d := &IPTablesDriver{Command: runner.run}
-	refs := []FirewallObjectRef{
-		{Kind: "chain", Family: "inet", Name: "photon_photontesth2_input"},
-	}
-	if err := d.DeleteStale(context.Background(), refs); err != nil {
-		t.Fatalf("DeleteStale: %v", err)
-	}
-	foundFlush := false
-	foundDelete := false
-	for _, cmd := range runner.commands {
-		if len(cmd.args) >= 1 && cmd.args[0] == "-F" {
-			foundFlush = true
-		}
-		if len(cmd.args) >= 1 && cmd.args[0] == "-X" {
-			foundDelete = true
-		}
-	}
-	if !foundFlush {
-		t.Error("missing iptables -F flush command")
-	}
-	if !foundDelete {
-		t.Error("missing iptables -X delete chain command")
 	}
 }
 
@@ -525,8 +489,7 @@ func TestIPTablesDriver_CtStateCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	plan := PlanDiff("photontesth2", desired, FirewallObservedState{})
-	if _, err := d.Apply(context.Background(), plan, desired); err != nil {
+	if _, err := d.Apply(context.Background(), desired); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	// Conntrack rules install for both address families.
@@ -548,8 +511,7 @@ func TestIPTablesDriver_FamilyNeutralAndICMPCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	plan := PlanDiff("photontesth2", desired, FirewallObservedState{})
-	if _, err := d.Apply(context.Background(), plan, desired); err != nil {
+	if _, err := d.Apply(context.Background(), desired); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -616,7 +578,7 @@ func TestIPTablesDriverInlineHooksKeepFamiliesAndOrderSeparate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	if _, err := driver.Apply(context.Background(), PlanDiff("photon", desired, FirewallObservedState{}), desired); err != nil {
+	if _, err := driver.Apply(context.Background(), desired); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	first := commandIndex(runner.commands, "iptables", "-s 10.20.0.0/16")
@@ -648,7 +610,7 @@ func TestIPTablesDriverHostPreroutingInlineRuleUsesNATTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	if _, err := driver.Apply(context.Background(), PlanDiff("host", desired, FirewallObservedState{}), desired); err != nil {
+	if _, err := driver.Apply(context.Background(), desired); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	assertCommandContains(t, runner.commands, "iptables", "-t nat -A photon_host_r_")
@@ -667,8 +629,7 @@ func TestIPTablesDriver_ReconcileExistingManagedChains(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	firstPlan := PlanDiff(spec.ID, desired, FirewallObservedState{})
-	if _, err := d.Apply(context.Background(), firstPlan, desired); err != nil {
+	if _, err := d.Apply(context.Background(), desired); err != nil {
 		t.Fatalf("first Apply: %v", err)
 	}
 
@@ -681,8 +642,7 @@ func TestIPTablesDriver_ReconcileExistingManagedChains(t *testing.T) {
 	}
 
 	runner.commands = nil
-	secondPlan := PlanDiff(spec.ID, desired, observed)
-	if _, err := d.Apply(context.Background(), secondPlan, desired); err != nil {
+	if _, err := d.Apply(context.Background(), desired); err != nil {
 		t.Fatalf("second Apply: %v", err)
 	}
 
@@ -724,8 +684,7 @@ func TestIPTablesDriver_PrepareFailureKeepsActiveGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	plan := PlanDiff(spec.ID, desired, FirewallObservedState{})
-	if _, err := driver.Apply(context.Background(), plan, desired); err != nil {
+	if _, err := driver.Apply(context.Background(), desired); err != nil {
 		t.Fatalf("first Apply: %v", err)
 	}
 
@@ -735,7 +694,7 @@ func TestIPTablesDriver_PrepareFailureKeepsActiveGeneration(t *testing.T) {
 	stagingInput := iptablesGenerationChain(tableName, "i", hash, 'b')
 	runner.commands = nil
 	runner.failContains = "--ctstate ESTABLISHED,RELATED"
-	result, err := driver.Apply(context.Background(), plan, desired)
+	result, err := driver.Apply(context.Background(), desired)
 	if err == nil {
 		t.Fatal("second Apply succeeded despite injected staging failure")
 	}
@@ -770,8 +729,7 @@ func TestIPTablesDriver_ActivationFailureRollsBackOtherFamily(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	plan := PlanDiff(desired.Instance.ID, desired, FirewallObservedState{})
-	if _, err := driver.Apply(context.Background(), plan, desired); err != nil {
+	if _, err := driver.Apply(context.Background(), desired); err != nil {
 		t.Fatalf("first Apply: %v", err)
 	}
 
@@ -789,7 +747,7 @@ func TestIPTablesDriver_ActivationFailureRollsBackOtherFamily(t *testing.T) {
 		}
 		return runner.run(ctx, name, args...)
 	}
-	if _, err := driver.Apply(context.Background(), plan, desired); err == nil {
+	if _, err := driver.Apply(context.Background(), desired); err == nil {
 		t.Fatal("second Apply succeeded despite injected activation failure")
 	}
 	if !failed {
@@ -829,7 +787,7 @@ func TestIPTablesDriver_MigrationDrainsAllLegacyDuplicateJumps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildDesiredState: %v", err)
 	}
-	if _, err := driver.Apply(context.Background(), PlanDiff(desired.Instance.ID, desired, FirewallObservedState{}), desired); err != nil {
+	if _, err := driver.Apply(context.Background(), desired); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	for _, binary := range []string{"iptables", "ip6tables"} {
@@ -974,7 +932,7 @@ func TestIPTablesApplyRemovesDisabledNATChainsFromNATTable(t *testing.T) {
 		runner.seedIPTablesRule(binary, "nat", []string{"POSTROUTING", "-j", "photon_host_postrouting", "-m", "comment", "--comment", "photon-host"})
 	}
 	driver := &IPTablesDriver{Command: runner.run}
-	if _, err := driver.Apply(context.Background(), FirewallPlan{}, desired); err != nil {
+	if _, err := driver.Apply(context.Background(), desired); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	for _, want := range []string{

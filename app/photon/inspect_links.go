@@ -25,9 +25,9 @@ func buildStoredLinkInspection(config *appConfig, instances map[string]ipsec.Lin
 	input.Instances = make([]inspect.LinkInstance, 0, len(ids))
 	for _, id := range ids {
 		inst := instances[id]
-		birdState, birdNeighbors, birdBestRoutes := debugLinkRoutingState(config, birdInstances, inst.GroupID)
+		birdState := debugLinkRoutingState(config, birdInstances, inst.GroupID)
 		input.Instances = append(input.Instances, inspect.BuildLinkInstanceFromRuntime(inst, inspect.LinkRouting{
-			BirdState: birdState, BirdNeighbors: birdNeighbors, BirdBestRoutes: birdBestRoutes,
+			BirdState: birdState,
 		}))
 	}
 	lastDesired := lastReconcileDesiredLinks(reconcile)

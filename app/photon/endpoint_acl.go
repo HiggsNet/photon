@@ -32,10 +32,8 @@ func applyEndpointACL(name, destination, scope, protocol string, port uint16, se
 	if err != nil {
 		return err
 	}
-	if ok, err := endpointACLApplyViaControl(config, acl, false); err != nil {
+	if _, err := sendControlRequest(controlSocketPath(config), controlRequest{Method: "endpoint_acl_apply", EndpointACL: &acl}); err != nil {
 		return err
-	} else if !ok {
-		return errors.New("endpoint ACL changes require a running Photon daemon")
 	}
 	fmt.Printf("applied endpoint ACL %s\n", acl.Name)
 	return nil
@@ -46,10 +44,8 @@ func removeEndpointACL(name string) error {
 	if err != nil {
 		return err
 	}
-	if ok, err := endpointACLRemoveViaControl(config, name, false); err != nil {
+	if _, err := sendControlRequest(controlSocketPath(config), controlRequest{Method: "endpoint_acl_remove", Key: name}); err != nil {
 		return err
-	} else if !ok {
-		return errors.New("endpoint ACL changes require a running Photon daemon")
 	}
 	fmt.Printf("removed endpoint ACL %s\n", name)
 	return nil
@@ -60,7 +56,7 @@ func listEndpointACLs() error {
 	if err != nil {
 		return err
 	}
-	acls, ok, err := endpointACLListViaControl(config, false)
+	acls, ok, err := readCanonicalViewViaControl[[]photonstate.EndpointACL](config, controlRequest{Method: "endpoint_acl_list"}, false)
 	if err != nil {
 		return err
 	}
@@ -73,12 +69,13 @@ func listEndpointACLs() error {
 }
 
 func validateEndpointACL(acl photonstate.EndpointACL) (photonstate.EndpointACL, error) {
-	acl.Name = strings.TrimSpace(acl.Name)
 	acl.Scope = strings.ToLower(strings.TrimSpace(acl.Scope))
 	acl.Protocol = strings.ToLower(strings.TrimSpace(acl.Protocol))
-	if _, err := photonservice.NormalizeID(acl.Name); err != nil {
+	name, err := photonservice.NormalizeID(acl.Name)
+	if err != nil {
 		return photonstate.EndpointACL{}, fmt.Errorf("endpoint ACL name: %w", err)
 	}
+	acl.Name = name
 	address, err := netip.ParseAddr(acl.Destination)
 	if err != nil {
 		return photonstate.EndpointACL{}, fmt.Errorf("endpoint ACL destination: %w", err)
@@ -143,6 +140,7 @@ func resolveEndpointServices(acls map[string]photonstate.EndpointACL, ars *routi
 			selector, _ := photonservice.ParseZoneSelector(raw)
 			selectors = append(selectors, selector)
 		}
+		address, _ := netip.ParseAddr(acl.Destination)
 		var sources []netip.Prefix
 		if ars != nil {
 			for sourceZone, routes := range ars.Announced {
@@ -155,33 +153,28 @@ func resolveEndpointServices(acls map[string]photonstate.EndpointACL, ars *routi
 				}
 				if matched {
 					for prefix := range routes {
-						sources = append(sources, prefix)
+						if prefix.Addr().Is4() == address.Is4() {
+							sources = append(sources, prefix)
+						}
 					}
 				}
 			}
 		}
-		address, _ := netip.ParseAddr(acl.Destination)
-		familySources := sources[:0]
-		for _, prefix := range sources {
-			if prefix.Addr().Is4() == address.Is4() {
-				familySources = append(familySources, prefix)
-			}
-		}
 		services = append(services, firewall.EndpointService{
 			Name: acl.Name, Proto: acl.Protocol, Port: acl.Port,
-			Destination: address, Sources: canonicalEndpointPrefixes(familySources),
+			Destination: address, Sources: canonicalEndpointPrefixes(sources),
 		})
 	}
 	return services, nil
 }
 
 func canonicalEndpointPrefixes(prefixes []netip.Prefix) []netip.Prefix {
-	seen := map[string]bool{}
+	seen := map[netip.Prefix]bool{}
 	out := make([]netip.Prefix, 0, len(prefixes))
 	for _, prefix := range prefixes {
 		prefix = prefix.Masked()
-		if !seen[prefix.String()] {
-			seen[prefix.String()] = true
+		if !seen[prefix] {
+			seen[prefix] = true
 			out = append(out, prefix)
 		}
 	}
@@ -201,6 +194,12 @@ func (d *Daemon) handleEndpointACLApplyEvent(acl photonstate.EndpointACL) (bool,
 	}
 	if !d.hasEnforcingHostFirewall() {
 		return false, errors.New("endpoint ACL requires an enabled managed host firewall instance with an available nftables or iptables backend")
+	}
+	// Legacy keys can differ only in case. Do not silently merge their policies.
+	for key := range runtime.EndpointACLs {
+		if key != validated.Name && strings.EqualFold(key, validated.Name) {
+			return false, fmt.Errorf("legacy endpoint ACL %q conflicts with %q; remove it by its exact name before applying", key, validated.Name)
+		}
 	}
 	if current, ok := runtime.EndpointACLs[validated.Name]; ok && endpointACLEqual(current, validated) {
 		return false, nil
@@ -224,13 +223,14 @@ func (d *Daemon) handleEndpointACLApplyEvent(acl photonstate.EndpointACL) (bool,
 		runtime.EndpointACLs = make(map[string]photonstate.EndpointACL)
 	}
 	runtime.EndpointACLs[validated.Name] = validated
-	if err := d.commitEndpointACLMutation(uint64(common.Revision), runtime.EndpointACLs); err != nil {
+	if err := d.commitEndpointACLMutation(common.Revision, runtime.EndpointACLs); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
 func (d *Daemon) handleEndpointACLRemoveEvent(name string) (bool, error) {
+	rawName := strings.TrimSpace(name)
 	name, err := photonservice.NormalizeID(name)
 	if err != nil {
 		return false, err
@@ -240,11 +240,15 @@ func (d *Daemon) handleEndpointACLRemoveEvent(name string) (bool, error) {
 	if common.State == nil || runtime == nil {
 		return false, errors.New("daemon state is not loaded")
 	}
+	// Keep legacy mixed-case entries removable by the exact listed name.
+	if _, ok := runtime.EndpointACLs[rawName]; ok {
+		name = rawName
+	}
 	if _, ok := runtime.EndpointACLs[name]; !ok {
 		return false, nil
 	}
 	delete(runtime.EndpointACLs, name)
-	if err := d.commitEndpointACLMutation(uint64(common.Revision), runtime.EndpointACLs); err != nil {
+	if err := d.commitEndpointACLMutation(common.Revision, runtime.EndpointACLs); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -259,17 +263,20 @@ func endpointACLEqual(left, right photonstate.EndpointACL) bool {
 		slices.Equal(left.Selectors, right.Selectors)
 }
 
-func (d *Daemon) commitEndpointACLMutation(rev uint64, acls map[string]photonstate.EndpointACL) error {
+func (d *Daemon) commitEndpointACLMutation(rev corestate.VerifiedRevision, acls map[string]photonstate.EndpointACL) error {
 	if d.State == nil {
 		return errors.New("daemon service is not initialized")
 	}
-	if committed, err := d.State.ReplaceEndpointACLsIfRevision(corestate.VerifiedRevision(rev), acls); err != nil {
+	if committed, err := d.State.ReplaceEndpointACLsIfRevision(rev, acls); err != nil {
 		return err
 	} else if !committed {
 		return errStateRevisionStale
 	}
-	d.refreshGossipDiscovery()
-	d.notifyStateChanged()
+	if d.Hooks.OnStateChanged != nil {
+		d.Hooks.OnStateChanged()
+	}
+	d.notifyObserver("state_changed", nil)
+	d.firewallDirty = true
 	return nil
 }
 
@@ -278,7 +285,7 @@ func (d *Daemon) hasEnforcingHostFirewall() bool {
 		return false
 	}
 	for _, instance := range d.Config.Firewall.ManagedInstances() {
-		if instance.IsHost && instance.Mode == firewall.ModeManaged && instance.Backend != firewall.BackendNone {
+		if instance.IsHost && instance.Backend != firewall.BackendNone {
 			backend, _, err := d.linuxDriver.ResolveFirewallBackend(context.Background(), firewall.FirewallInstanceSpec{
 				ID: instance.ID, Backend: instance.Backend, NativeHooks: instance.NativeHooks,
 			})

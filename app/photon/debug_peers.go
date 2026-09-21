@@ -15,26 +15,19 @@ import (
 // debugPeers implements `photon debug peers`: it prints the derived lifecycle
 // status of every known peer, including state, reason, last sync, link counts
 // and cleanup timers. It prioritizes daemon committed state when available.
-func debugPeers(_ context.Context) error {
+func debugPeers(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, controlRequestDeadline)
+	defer cancel()
 	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	if status, ok, err := readCanonicalViewViaControl[inspect.DaemonStatusView](config, controlRequest{Method: "daemon_status_view"}, false); err != nil {
+	view, online, err := readCanonicalViewViaControlContext[inspect.PeerLifecycleDebugView](ctx, config, controlRequest{Method: "peer_lifecycle_view"}, false)
+	if err != nil {
 		return err
-	} else if ok {
-		fmt.Printf("daemon: online peer_id=%s link_instances=%d desired_links=%d\n",
-			status.PeerID,
-			status.LinkInstances,
-			status.DesiredLinks,
-		)
-		view, peersOnline, err := readCanonicalViewViaControl[inspect.PeerLifecycleDebugView](config, controlRequest{Method: "peer_lifecycle_view"}, false)
-		if err != nil {
-			return err
-		}
-		if peersOnline {
-			return inspecttext.WritePeerLifecycleDebug(os.Stdout, view)
-		}
+	}
+	if online {
+		return inspecttext.WritePeerLifecycleDebug(os.Stdout, view)
 	}
 	return fmt.Errorf("daemon control socket unavailable; peer lifecycle runtime state requires a running daemon")
 }

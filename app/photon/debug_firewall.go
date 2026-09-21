@@ -22,11 +22,11 @@ func debugFirewall(_ context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	return debugFirewallWithConfigFiltered(config, os.Stdout, cmd.String("netns"), cmd.Bool("host"), cmd.Bool("json"), false)
+	return debugFirewallWithConfigFiltered(config, os.Stdout, cmd.String("netns"), cmd.Bool("host"), cmd.Bool("json"))
 }
 
-func debugFirewallWithConfigFiltered(config *appConfig, w io.Writer, netns string, hostOnly, jsonOutput bool, direct bool) error {
-	view, err := firewallViewWithConfig(config, netns, hostOnly, direct)
+func debugFirewallWithConfigFiltered(config *appConfig, w io.Writer, netns string, hostOnly, jsonOutput bool) error {
+	view, err := firewallViewWithConfig(config, netns, hostOnly)
 	if err != nil {
 		return err
 	}
@@ -43,15 +43,15 @@ func showFirewall(filter string, verbose bool) error {
 	if err != nil {
 		return err
 	}
-	view, err := firewallViewWithConfig(config, "", false, false)
+	view, err := firewallViewWithConfig(config, "", false)
 	if err != nil {
 		return err
 	}
 	return inspecttext.WriteFirewall(os.Stdout, view, filter, verbose)
 }
 
-func firewallViewWithConfig(config *appConfig, netns string, hostOnly bool, direct bool) (inspect.FirewallDebugView, error) {
-	view, ok, err := readCanonicalViewViaControl[inspect.FirewallDebugView](config, controlRequest{Method: "firewall_view", NetNS: netns, Host: hostOnly}, direct)
+func firewallViewWithConfig(config *appConfig, netns string, hostOnly bool) (inspect.FirewallDebugView, error) {
+	view, ok, err := readCanonicalViewViaControl[inspect.FirewallDebugView](config, controlRequest{Method: "firewall_view", NetNS: netns, Host: hostOnly}, false)
 	if err != nil {
 		return inspect.FirewallDebugView{}, err
 	}

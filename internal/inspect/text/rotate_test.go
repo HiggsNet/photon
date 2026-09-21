@@ -65,7 +65,7 @@ func TestWriteRotateDebug(t *testing.T) {
 	if err := WriteRotateDebug(&buf, view); err != nil {
 		t.Fatalf("WriteRotateDebug: %v", err)
 	}
-	output := buf.String()
+	output := strings.Join(strings.Fields(buf.String()), " ")
 	for _, want := range []string{
 		"last_run: 2023-11-14T22:13:20Z",
 		"filter: node-b",
@@ -73,9 +73,9 @@ func TestWriteRotateDebug(t *testing.T) {
 		"link link-1",
 		"port_generation select/runtime/staged: 2/1/2",
 		"port local/remote/runtime/staged: 4500/30002/30002/30003",
-		"interface: phx1(100)",
+		"phx1(100)",
 		"reconcile_matching_sas: 1",
-		"name=ipsec-current child=ipsec-current-child state=established if_id=100 reqid=200",
+		"ipsec-current ipsec-current-child established 100 200",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("output missing %q:\n%s", want, output)

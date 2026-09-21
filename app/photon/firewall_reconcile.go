@@ -110,17 +110,7 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 			continue
 		}
 
-		ownerScope := spec.NetNS
-		if spec.IsHost {
-			ownerScope = "host"
-		}
-		owner := firewall.Owner{
-			Manager:     "photon",
-			InstanceID:  ownerScope,
-			OwnerPrefix: spec.OwnerPrefix,
-			Token:       firewall.OwnerToken(spec),
-		}
-		result, err := d.linuxDriver.ApplyFirewall(ctx, spec, resolvedBackend, owner, desired)
+		result, err := d.linuxDriver.ApplyFirewall(ctx, spec, resolvedBackend, desired)
 		entry.Backend = resolvedBackend
 		entry.PolicyHash = firewall.DesiredStateHash(desired)
 		entry.OwnedObjects = len(firewall.DesiredObjects(desired))
@@ -178,10 +168,4 @@ func (d *Daemon) flushFirewallReconcileResult(ctx context.Context) (bool, error)
 	defer cancel()
 	err := d.reconcileFirewall(reconcileCtx)
 	return true, err
-}
-
-// recoverFirewallOnStart triggers an initial firewall reconcile at daemon start.
-func (d *Daemon) recoverFirewallOnStart(ctx context.Context) {
-	d.firewallDirty = true
-	d.flushFirewallReconcile(ctx)
 }

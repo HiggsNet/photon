@@ -77,8 +77,6 @@ function detailPanel(li) {
                 <h3>Routing</h3>
                 ${kvTable([
                     ['BIRD State', stateBadge(routing.bird_state || '-')],
-                    ['Neighbors', esc(routing.bird_neighbors || '-')],
-                    ['Best Routes', esc(routing.bird_best_routes || '-')],
                 ])}
             </section>
             <section>

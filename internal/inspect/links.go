@@ -126,9 +126,7 @@ type DesiredLink = photonstate.DesiredLinkObservation
 type LinkSA = photonstate.LinkSAObservation
 
 type LinkRouting struct {
-	BirdState      string `json:"bird_state,omitempty"`
-	BirdNeighbors  string `json:"bird_neighbors,omitempty"`
-	BirdBestRoutes string `json:"bird_best_routes,omitempty"`
+	BirdState string `json:"bird_state,omitempty"`
 }
 
 type LinkRotation struct {
