@@ -112,7 +112,7 @@ operations           当前为空；rotation/takeover 从真实系统 Observatio
 | 文件 | 当前作用 | 最终位置 / 层 |
 |---|---|---|
 | `admission_diagnostics.go` | auto-join 诊断 | 保持纯投影：从 VerifiedState 与 GossipCheckpoint 即时生成 `internal/inspect` DTO；不再持久化 admission snapshot，CLI wrapper 后续进 `internal/photoncli` |
-| `authority.go` | 权限解析、delegate grant、旧 direct 修改 | CLI 进 `internal/photoncli`；权限合并/epoch/父子 authority 更新成为 `pkg/core/state` intent；旧 direct writer 删除 |
+| `authority.go` | CLI 权限解析、grant control/direct 接线与 bundle 输出 | 权限合并、epoch 更新和父子委派提交已归 `pkg/core/state.GrantDelegationIntent`；CLI 后续进 `internal/photoncli` |
 | `state_bolt.go` | 组合 Common 与 LinuxState 的启动加载 | 启动已优先读取新 schema，仅未初始化时进入旧 bootstrap/migration；唯一 StateDB 随后交给具体 State 管理 |
 | `cmd.go` | Linux CLI 命令树 | 留 `app/photon` 但缩成注册；handler 进 `internal/photoncli` |
 | `cmd_root_init.go` | root authority/key 初始化与 current partitions 原子建立 | CLI 文件操作后续随壳进入 photoncli；Common/Linux 两个分区必须继续在同一初始化事务内建立 |
@@ -628,3 +628,17 @@ Linux 收口之后按 Todo 转入 Windows B1。在既有 Windows design 文档�
 本次仅修改文档，不增加生产代码、测试函数或包；累计未提交 Go 代码行数仍为生产净减 44 行、测试净减 91 行。Windows config/State/gossip、CLI 和 routing 测试通过，git diff --check 通过。前一轮完整 make check 仍对应当前未改变的 Go 代码；本轮未重新运行完整构建或 Windows VM 验收。尚未提交、推送或部署。
 
 提交前汇总复核（2026-09-20）：本批包含旧模型精简、cleanup 活动时间回归修复与 Windows B1 文档契约。重新执行完整 make check（fmt、vet、全量测试、Linux 构建与 Windows amd64 交叉构建）、迁移与旧字段处理相关定向 race 测试及 git diff --check，均通过。make check 在允许本地 socket 的环境完成；race 使用完整的默认模块缓存，避开临时缓存缺失 race.go 的问题。未执行真实旧部署升级、特权数据面 smoke 或 Windows VM 验收；本次仅本地提交，不推送、打 tag、发布或部署。
+
+### delegate grant 冗余分支清理（2026-09-20）
+
+删除 planDelegationGrant 中非 nil authority 克隆后的重复 nil 检查，以及 daemon grant handler 中 planner 已覆盖的参数检查和不可达的 root 成功分支。direct 路径保留打开数据库前的参数拒绝；在线/离线继续共用 planner 和公共 State intent，daemon 继续负责提交后通知。生产代码净减 9 行，没有新增抽象或搬迁包。authority_test.go 的授权业务测试与 authoritative_mutation_test.go 的已提交状态一致性测试职责不同，均保留。
+
+完整 make check（fmt、vet、全量测试、Linux 构建和 Windows amd64 交叉构建）通过，git diff --check 通过；首次沙箱测试受本地 Unix/UDP socket 权限限制，允许 socket 后复核成功。未执行 Windows VM 或特权数据面验收；未提交、推送或部署。
+
+### grant 授权规则迁入公共 State（2026-09-21）
+
+新增现有 LocalIntent 体系中的 GrantDelegationIntent，接收目标 zone 与追加权限；在 Store 写入锁保护的当前 candidate 上复制 authority、合并首个 capability 的权限并增加 epoch，复用 applyPutDelegationIntent 签名、验证和更新父子状态。保持每次 grant 都递增 epoch（包括重复权限）、多 key 处理和现有重签发行为，不改变 issue 路径。daemon 与 direct 直接提交 intent，删除 app 的 planDelegationGrant/grantPermissionsToAuthority 和两处读快照再规划调用；direct 仍在开库前拒绝非法输入。
+
+根授权拒绝测试迁至 State；新增连续 grant、去重、父子证明一致性、旧快照隔离、失败批次与持久化失败回滚、重复授权重签发验证。app 启动 fixture 使用真实 grant intent，保留 CLI/bundle 与 daemon 已提交状态集成测试。相对上一轮 9 行清理，本次生产代码净减 7 行；这两轮涉及的生产代码累计净减 16 行，不计其他工作区 gossip 修改。
+
+验证：完整 make check（fmt、vet、全量测试、Linux 构建与 Windows amd64 交叉构建）、公共 State 授权定向 race 测试和 git diff --check 均通过。未执行 Windows VM 或特权数据面验收；未提交、推送或部署。

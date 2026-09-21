@@ -48,7 +48,7 @@ func TestDebugDBLockTimeout(t *testing.T) {
 	}
 }
 
-func TestDelegationPlansPreserveSource(t *testing.T) {
+func TestDelegationIssuePlanPreservesSource(t *testing.T) {
 	network := zone.NewNetworkState()
 	pub := make(ed25519.PublicKey, ed25519.PublicKeySize)
 	network.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, &zone.ZoneAuthority{Zone: zone.RootZone, Epoch: 3, Keys: []zone.AuthorizedKey{{Key: pub}}})
@@ -62,13 +62,8 @@ func TestDelegationPlansPreserveSource(t *testing.T) {
 	if issue.Authority.Epoch != 8 {
 		t.Fatalf("epoch = %d", issue.Authority.Epoch)
 	}
-	network.Zones[child] = zone.NewZoneState(child, issue.Authority)
-	grant, err := planDelegationGrant(network, child, []zone.Permission{zone.PermAllocateIP})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if grant.(corestate.PutDelegationIntent).Authority.Epoch != 9 || network.Zones[zone.RootZone].Authority.Epoch != 3 || len(network.Zones[zone.RootZone].Authority.Keys[0].Capabilities) != 0 {
-		t.Fatal("grant mutated source or used wrong epoch")
+	if network.Zones[child] != nil || network.Zones[zone.RootZone].Authority.Epoch != 3 || len(network.Zones[zone.RootZone].Authority.Keys[0].Capabilities) != 0 {
+		t.Fatal("issue mutated source")
 	}
 }
 

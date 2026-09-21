@@ -3,7 +3,6 @@ package main
 import (
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -26,13 +25,6 @@ func TestRootInitHasImmutableAuthorityWithoutCapabilities(t *testing.T) {
 	root := state.Network.Zones[zone.RootZone]
 	if len(root.Authority.Keys) != 1 || len(root.Authority.Keys[0].Capabilities) != 0 {
 		t.Fatalf("root authority should contain one implicitly privileged key: %+v", root.Authority)
-	}
-}
-
-func TestDelegateGrantRejectsRootAuthorityChange(t *testing.T) {
-	_, err := planDelegationGrant(nil, zone.RootZone, []zone.Permission{zone.PermAllocateIP})
-	if err == nil || !strings.Contains(err.Error(), "root authority is immutable") {
-		t.Fatalf("grant root error = %v", err)
 	}
 }
 

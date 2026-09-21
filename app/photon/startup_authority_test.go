@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"path/filepath"
 	"testing"
@@ -121,17 +122,11 @@ func buildManagedAuthorityRefreshState(t *testing.T) (*corestate.VerifiedState, 
 
 func managedAuthorityGrantSnapshot(t *testing.T, network *zone.NetworkState, managed zone.ZonePath, parentPriv ed25519.PrivateKey, permissions ...zone.Permission) *corestate.ZoneSnapshot {
 	t.Helper()
-	remote := zone.CloneNetworkState(network)
-	authority := cloneAuthorityForJoinBundle(remote.Zones[managed].Authority)
-	grantPermissionsToAuthority(authority, permissions)
-	authority.Epoch++
-	delegation := &zone.Delegation{ZoneName: managed, Scope: zone.DelegationScopeDirectChild, Authority: *authority}
-	if err := photoncrypto.SignDelegation(delegation, managed.Parent(), parentPriv); err != nil {
-		t.Fatalf("SignDelegation(grant): %v", err)
+	store := corestate.NewStore(&corestate.VerifiedState{Network: network, ManagedZone: managed.Parent(), RootPrivateKey: parentPriv, IdentityPrivateKey: parentPriv}, nil)
+	if _, err := store.ApplyLocalIntent(context.Background(), corestate.GrantDelegationIntent{Zone: managed, Permissions: permissions}, time.Unix(2000, 0)); err != nil {
+		t.Fatalf("GrantDelegation: %v", err)
 	}
-	remote.Zones[managed.Parent()].Delegations[managed] = delegation
-	remote.Zones[managed].Authority = authority
-	snapshot, err := corestate.Snapshot(remote, managed.Parent())
+	snapshot, err := corestate.Snapshot(store.ReadView().State.Network, managed.Parent())
 	if err != nil {
 		t.Fatalf("Snapshot(parent): %v", err)
 	}

@@ -118,6 +118,50 @@ func TestGossipDriverHandleGossipSessionEventRejectsMissingPeerOrSession(t *test
 	}
 }
 
+func TestGossipDriverDrainsQueuedRepliesAfterSessionCompletes(t *testing.T) {
+	now := time.Unix(100, 0)
+	driver := NewGossipDriver(newFakeClock(now), 4, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+	defer driver.Stop()
+	_, datagram := bindMemoryGossipTransport(t, driver, "peer-a")
+	driver.Gossip.NewSession("peer-a")
+	ctx := context.Background()
+	if _, err := driver.HandleGossipHostEvent(ctx, GossipEvent{Value: &gossip.SyncTimerEvent{PeerID: "peer-a"}}, now, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Both packets arrive while the session exists. The first queued reply
+	// completes it, leaving the second reply queued for a removed session.
+	for i := 0; i < 2; i++ {
+		packet := GossipPacketReceived{Packet: &gossip.Packet{Message: &gossip.Message{
+			Type: gossip.MessagePong, PeerID: "peer-a", Pong: &gossip.Pong{},
+		}}}
+		if _, err := driver.HandleGossipHostEvent(ctx, packet, now, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := driver.HandleGossipHostEvent(ctx, <-driver.Events(), now, nil)
+	if err != nil || !result.Session.Done || driver.Gossip.Session("peer-a") != nil {
+		t.Fatalf("completion = %#v, error = %v", result, err)
+	}
+	writes := datagram.writeCount()
+	result, err = driver.HandleGossipHostEvent(ctx, <-driver.Events(), now, nil)
+	if err != nil || !result.Handled || result.Session != (GossipEventResult{}) {
+		t.Fatalf("late reply = %#v, error = %v", result, err)
+	}
+	if driver.PendingEventCount() != 0 || driver.Gossip.Session("peer-a") != nil || datagram.writeCount() != writes {
+		t.Fatal("late reply produced more gossip work")
+	}
+	// Draining a stale reply must not disable the read-only responder.
+	packet := GossipPacketReceived{Packet: &gossip.Packet{Message: &gossip.Message{
+		Type: gossip.MessageFetchCatalogPage, PeerID: "peer-a", FetchCatalogPage: &gossip.FetchCatalogPage{},
+	}}}
+	if _, err := driver.HandleGossipHostEvent(ctx, packet, now, nil); err != nil {
+		t.Fatal(err)
+	}
+	if datagram.writeCount() != writes+1 {
+		t.Fatal("responder did not send a catalog page after session completion")
+	}
+}
+
 func TestGossipDriverRoundTimeoutDropsOnlyItsPeerChunkAssemblies(t *testing.T) {
 	driver := NewGossipDriver(nil, 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState("local.catofes.")}}, GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
 	defer driver.Stop()

@@ -125,6 +125,12 @@ func (driver *GossipDriver) HandleGossipHostEvent(ctx context.Context, hostEvent
 	}
 	out.Handled = true
 	result, err := driver.handleGossipSessionEvent(ctx, event, now, gossipDriverSender{transport: transport})
+	// Replies and worker completions can already be queued when an earlier
+	// event finishes and removes their session. They are stale work, not a
+	// failure of the event consumer (including the sync-once responder loop).
+	if errors.Is(err, ErrGossipSessionNotFound) {
+		return out, nil
+	}
 	if err == nil && result.Done {
 		driver.finishGossipSession(ctx, &result, now, suppressedPeers)
 	}

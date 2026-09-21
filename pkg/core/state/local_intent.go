@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -121,6 +122,15 @@ type PutDelegationIntent struct {
 }
 
 func (PutDelegationIntent) isLocalIntent() {}
+
+// GrantDelegationIntent reissues the current child authority with added permissions.
+// Each grant advances its epoch, including when all permissions already exist.
+type GrantDelegationIntent struct {
+	Zone        zone.ZonePath
+	Permissions []zone.Permission
+}
+
+func (GrantDelegationIntent) isLocalIntent() {}
 
 type RevokeDelegationIntent struct {
 	Parent zone.ZonePath
@@ -334,6 +344,11 @@ func applyLocalIntentCandidate(candidate *VerifiedState, gossipCandidate *Gossip
 		if changed != "" {
 			additionallyChanged = append(additionallyChanged, typed.Authority.Zone)
 		}
+	case GrantDelegationIntent:
+		out.Delegation, changed, err = applyGrantDelegationIntent(candidate, typed, now)
+		if changed != "" {
+			additionallyChanged = append(additionallyChanged, typed.Zone)
+		}
 	case RevokeDelegationIntent:
 		out.Revocation, changed, err = applyRevokeDelegationIntent(candidate, typed, now)
 		if err == nil {
@@ -420,6 +435,34 @@ func applyPutRecordIntent(state *VerifiedState, intent PutRecordIntent, now time
 		return nil, "", err
 	}
 	return cloneRecord(record), intent.Zone, nil
+}
+
+func applyGrantDelegationIntent(state *VerifiedState, intent GrantDelegationIntent, now time.Time) (*zone.Delegation, zone.ZonePath, error) {
+	if intent.Zone.IsRoot() {
+		return nil, "", ErrRootAuthorityChange
+	}
+	if !intent.Zone.Valid() || len(intent.Permissions) == 0 {
+		return nil, "", errors.New("valid delegated zone and at least one permission are required")
+	}
+	zs := state.Network.Zones[intent.Zone]
+	if zs == nil || zs.Authority == nil {
+		return nil, "", fmt.Errorf("%w: %s", zone.ErrZoneNotFound, intent.Zone)
+	}
+	authority := cloneAuthority(zs.Authority)
+	for i := range authority.Keys {
+		if len(authority.Keys[i].Capabilities) == 0 {
+			authority.Keys[i].Capabilities = []zone.Capability{{}}
+		}
+		capability := &authority.Keys[i].Capabilities[0]
+		for _, permission := range intent.Permissions {
+			if !slices.Contains(capability.Permissions, permission) {
+				capability.Permissions = append(capability.Permissions, permission)
+			}
+		}
+		slices.Sort(capability.Permissions)
+	}
+	authority.Epoch++
+	return applyPutDelegationIntent(state, PutDelegationIntent{Parent: intent.Zone.Parent(), Authority: authority}, now)
 }
 
 // applyPutDelegationIntent atomically updates the parent proof and the child

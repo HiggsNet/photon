@@ -105,58 +105,9 @@ func grantDelegationPermissionsDirect(rt *AppContext, path zone.ZonePath, permis
 		return nil, err
 	}
 	defer state.Close()
-	view := state.Common.ReadView()
-	intent, err := planDelegationGrant(view.State.Network, path, permissions)
-	if err != nil {
-		return nil, err
-	}
+	intent := corestate.GrantDelegationIntent{Zone: path, Permissions: permissions}
 	if _, err := state.Common.ApplyLocalIntent(context.Background(), intent, rt.Now()); err != nil {
 		return nil, err
 	}
 	return joinBundleFromNetwork(state.Common.ReadView().State.Network, path, rt.Now())
-}
-
-func planDelegationGrant(network *zone.NetworkState, path zone.ZonePath, permissions []zone.Permission) (corestate.LocalIntent, error) {
-	if path.IsRoot() {
-		return nil, errors.New("root authority is immutable and its key is implicitly privileged")
-	}
-	if !path.Valid() || len(permissions) == 0 {
-		return nil, errors.New("valid delegated zone and at least one permission are required")
-	}
-	if network == nil {
-		return nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
-	}
-	zs := network.Zones[path]
-	if zs == nil || zs.Authority == nil {
-		return nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
-	}
-	authority := cloneAuthorityForJoinBundle(zs.Authority)
-	if authority == nil {
-		return nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
-	}
-	grantPermissionsToAuthority(authority, permissions)
-	authority.Epoch++
-
-	return corestate.PutDelegationIntent{Parent: path.Parent(), Authority: authority}, nil
-}
-
-func grantPermissionsToAuthority(authority *zone.ZoneAuthority, permissions []zone.Permission) {
-	for i := range authority.Keys {
-		if len(authority.Keys[i].Capabilities) == 0 {
-			authority.Keys[i].Capabilities = []zone.Capability{{}}
-		}
-		capability := &authority.Keys[i].Capabilities[0]
-		seen := map[zone.Permission]bool{}
-		for _, existing := range capability.Permissions {
-			seen[existing] = true
-		}
-		for _, perm := range permissions {
-			if seen[perm] {
-				continue
-			}
-			capability.Permissions = append(capability.Permissions, perm)
-			seen[perm] = true
-		}
-		slices.Sort(capability.Permissions)
-	}
 }

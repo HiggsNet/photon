@@ -1309,14 +1309,7 @@ func (d *Daemon) handleDelegateIssueEvent(request *gossip.JoinRequest, permissio
 }
 
 func (d *Daemon) handleDelegateGrantEvent(path zone.ZonePath, permissions []zone.Permission) (*joinBundle, error) {
-	if !path.Valid() || len(permissions) == 0 {
-		return nil, errors.New("valid delegated zone and at least one permission are required")
-	}
-	view := d.State.Common.ReadView()
-	intent, err := planDelegationGrant(view.State.Network, path, permissions)
-	if err != nil {
-		return nil, err
-	}
+	intent := corestate.GrantDelegationIntent{Zone: path, Permissions: permissions}
 	result, err := d.State.Common.ApplyLocalIntent(context.Background(), intent, d.now())
 	if err != nil {
 		return nil, err
@@ -1324,9 +1317,6 @@ func (d *Daemon) handleDelegateGrantEvent(path zone.ZonePath, permissions []zone
 	if result.Committed {
 		d.refreshGossipDiscovery()
 		d.notifyStateChanged()
-	}
-	if path.IsRoot() {
-		return nil, nil
 	}
 	return joinBundleFromNetwork(d.State.Common.ReadView().State.Network, path, d.now())
 }

@@ -282,3 +282,80 @@ func TestStoreRejectsLocalRootAuthorityUpdate(t *testing.T) {
 		t.Fatal("rejected update changed root")
 	}
 }
+
+func TestStoreGrantDelegationUsesCurrentCandidateAndRollsBack(t *testing.T) {
+	now := time.Unix(1000, 0)
+	network, _, _, parentPrivate := managedAuthorityFixture(t, true)
+	child := zone.ZonePath("new.catofes.")
+	pub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority := &zone.ZoneAuthority{Zone: child, Epoch: 1, Threshold: 1, Keys: []zone.AuthorizedKey{{Key: pub}}}
+	commitErr := error(nil)
+	store := NewStore(&VerifiedState{Network: network, ManagedZone: "catofes.", IdentityPrivateKey: parentPrivate}, func(context.Context, *CommitCandidate, ChangeSet) error { return commitErr })
+	if _, err := store.ApplyLocalIntent(context.Background(), PutDelegationIntent{Parent: child.Parent(), Authority: authority}, now); err != nil {
+		t.Fatal(err)
+	}
+	before := store.ReadView()
+	grants := []LocalIntent{
+		GrantDelegationIntent{Zone: child, Permissions: []zone.Permission{zone.PermWrite, zone.PermWrite}},
+		GrantDelegationIntent{Zone: child, Permissions: []zone.Permission{zone.PermDelegate}},
+	}
+	result, err := store.ApplyLocalIntents(context.Background(), grants, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := store.ReadView()
+	got := after.State.Network.Zones[child].Authority
+	if got.Epoch != 3 || !slices.Equal(got.Keys[0].Capabilities[0].Permissions, []zone.Permission{zone.PermDelegate, zone.PermWrite}) {
+		t.Fatalf("sequential grant authority = %+v", got)
+	}
+	if len(result.Changes.ChangedZones) != 2 || !slices.Contains(result.Changes.ChangedZones, child) || !slices.Contains(result.Changes.ChangedZones, child.Parent()) {
+		t.Fatalf("changed zones = %v", result.Changes.ChangedZones)
+	}
+	proof := after.State.Network.Zones[child.Parent()].Delegations[child]
+	if proof.AuthorityEpoch != 3 || !bytes.Equal(photoncrypto.AuthorityHash(&proof.Authority), photoncrypto.AuthorityHash(got)) {
+		t.Fatal("parent proof and child authority diverged")
+	}
+	if err := photoncrypto.VerifyChain(after.State.Network, child, now); err != nil {
+		t.Fatal(err)
+	}
+	if before.State.Network.Zones[child].Authority.Epoch != 1 || len(authority.Keys[0].Capabilities) != 0 {
+		t.Fatal("grant mutated an earlier snapshot or input")
+	}
+	for _, tc := range []struct {
+		name   string
+		intent GrantDelegationIntent
+		want   error
+	}{
+		{"root", GrantDelegationIntent{Zone: zone.RootZone, Permissions: []zone.Permission{zone.PermWrite}}, ErrRootAuthorityChange},
+		{"missing", GrantDelegationIntent{Zone: "missing.catofes.", Permissions: []zone.Permission{zone.PermWrite}}, zone.ErrZoneNotFound},
+		{"empty", GrantDelegationIntent{Zone: child}, nil},
+		{"invalid", GrantDelegationIntent{Zone: "invalid", Permissions: []zone.Permission{zone.PermWrite}}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := store.ApplyLocalIntents(context.Background(), []LocalIntent{grants[0], tc.intent}, now)
+			if err == nil || (tc.want != nil && !errors.Is(err, tc.want)) {
+				t.Fatalf("grant error = %v, want %v", err, tc.want)
+			}
+			if store.VerifiedRevision() != result.Changes.VerifiedRevision || store.ReadView().State.Network.Zones[child].Authority.Epoch != 3 {
+				t.Fatal("failed batch published a partial grant")
+			}
+		})
+	}
+	commitErr = errors.New("commit failed")
+	if _, err := store.ApplyLocalIntent(context.Background(), grants[0], now); !errors.Is(err, commitErr) {
+		t.Fatalf("commit error = %v", err)
+	}
+	if store.VerifiedRevision() != result.Changes.VerifiedRevision || store.ReadView().State.Network.Zones[child].Authority.Epoch != 3 {
+		t.Fatal("persistence failure published grant")
+	}
+	commitErr = nil
+	if _, err := store.ApplyLocalIntent(context.Background(), grants[0], now); err != nil {
+		t.Fatal(err)
+	}
+	if store.ReadView().State.Network.Zones[child].Authority.Epoch != 4 {
+		t.Fatal("repeated permissions must still reissue the delegation")
+	}
+}
