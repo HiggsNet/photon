@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -49,20 +52,59 @@ func cmdDB() *cli.Command {
 	}
 }
 
-func openDebugDB(path string) (*bolt.DB, error) {
+func openDebugDB(path string, trustedRoot ed25519.PublicKey) (*bolt.DB, error) {
 	db, err := bolt.Open(path, 0o600, &bolt.Options{ReadOnly: true, Timeout: daemonBoltLockTimeout})
 	if errors.Is(err, bolt.ErrTimeout) {
 		return nil, fmt.Errorf("database is locked; stop daemon or inspect a database copy: %w", err)
 	}
-	return db, err
+	if err != nil {
+		return nil, err
+	}
+	if len(trustedRoot) == 0 {
+		return db, nil
+	}
+	err = db.View(func(tx *bolt.Tx) error {
+		candidate, _, _, found, err := corestate.LoadBoltState(tx)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return errors.New("root verification requires the current database layout")
+		}
+		if len(trustedRoot) != ed25519.PublicKeySize || !bytes.Equal(candidate.Verified.TrustedRootPublicKey, trustedRoot) {
+			return errors.New("trusted_root_public_key does not match persisted state")
+		}
+		return nil
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: database root verification failed: %v; continuing read-only debug inspection\n", err)
+	}
+	return db, nil
+}
+
+// An explicit database path remains usable even when configuration is broken.
+// If configuration is readable, its optional root pin still gets checked.
+func openConfiguredDebugDB() (*bolt.DB, string, error) {
+	path := os.Getenv("PHOTON_STATE")
+	config, err := loadAppConfig()
+	if err != nil && path == "" {
+		return nil, "", err
+	}
+	var trustedRoot ed25519.PublicKey
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: cannot load configuration: %v; continuing read-only debug inspection using PHOTON_STATE\n", err)
+	} else {
+		trustedRoot = config.TrustedRootPublicKey
+		if path == "" {
+			path = config.StatePath
+		}
+	}
+	db, err := openDebugDB(path, trustedRoot)
+	return db, path, err
 }
 
 func debugDBDump(filter string) error {
-	path, err := configuredStatePath()
-	if err != nil {
-		return err
-	}
-	db, err := openDebugDB(path)
+	db, path, err := openConfiguredDebugDB()
 	if err != nil {
 		return err
 	}
@@ -101,11 +143,7 @@ func dumpDBTx(tx *bolt.Tx, filter string) error {
 }
 
 func debugDBStats() error {
-	path, err := configuredStatePath()
-	if err != nil {
-		return err
-	}
-	db, err := openDebugDB(path)
+	db, _, err := openConfiguredDebugDB()
 	if err != nil {
 		return err
 	}

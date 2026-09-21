@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/hex"
@@ -19,7 +20,6 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/HiggsNet/photon/pkg/routing"
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"gopkg.in/yaml.v3"
 )
 
@@ -41,7 +41,6 @@ type appConfig struct {
 	MaxMessageBytes      int
 	MaxSyncZones         int
 	MaxSyncRecords       int
-	LogLevel             string
 	Log                  logConfig
 	AdvertiseAddrs       []string
 	Reflectors           []string
@@ -54,7 +53,6 @@ type appConfig struct {
 	EndpointDiscovery    string
 	EndpointSourceOrder  []string
 	FilterPrivateIPv4    bool
-	Overlay              overlayConfig
 	IPsec                photonlinux.IPsecConfig
 	IPAM                 ipamConfig
 	Netns                photonlinux.NetNSConfig
@@ -160,10 +158,6 @@ type logConfigYAML struct {
 	File  string `yaml:"file"`
 }
 
-type overlayConfig struct {
-	DefaultNetNS ipsec.NetNSSpec
-}
-
 type overlayDefaultsYAML struct{}
 
 type ipamConfig struct {
@@ -209,57 +203,48 @@ func defaultAppConfig() *appConfig {
 		PublishEndpoints:    true,
 		EndpointSourceOrder: []string{"advertise", "bootstrap", "reflector", "interface"},
 		FilterPrivateIPv4:   true,
-		Overlay: overlayConfig{
-			DefaultNetNS: ipsec.NetNSSpec{}.Normalized(),
-		},
-		IPsec: photonlinux.DefaultIPsecConfig(),
-		IPAM: ipamConfig{
-			AutoAnnounceAssignedIPs: false,
-		},
-		Health:   defaultHealthConfig(),
-		Observer: defaultObserverConfig(),
+		IPsec:               photonlinux.DefaultIPsecConfig(),
+		Log:                 logConfig{Mode: string(logModeStderr)},
+		Health:              defaultHealthConfig(),
+		Observer:            defaultObserverConfig(),
 	}
 }
 
+// normalizeAppConfig applies fallback policy and derives paths after YAML overrides.
+// Default values are owned by defaultAppConfig; explicit false values stay intact.
 func normalizeAppConfig(config *appConfig) {
+	defaults := defaultAppConfig()
 	if config.DataDir == "" {
-		config.DataDir = defaultDataDir
+		config.DataDir = defaults.DataDir
 	}
 	if config.StatePath == "" {
 		config.StatePath = filepath.Join(config.DataDir, defaultStateFile)
 	}
 	if config.ListenAddr == "" {
-		config.ListenAddr = fmt.Sprintf("[::]:%d", gossip.DefaultPort)
+		config.ListenAddr = defaults.ListenAddr
 	}
 	if config.MaxMessageBytes <= 0 {
-		config.MaxMessageBytes = gossip.DefaultMaxMessage
+		config.MaxMessageBytes = defaults.MaxMessageBytes
 	}
 	if config.MaxSyncZones <= 0 {
-		config.MaxSyncZones = corestate.DefaultSyncLimits().MaxZones
+		config.MaxSyncZones = defaults.MaxSyncZones
 	}
 	if config.MaxSyncRecords <= 0 {
-		config.MaxSyncRecords = corestate.DefaultSyncLimits().MaxRecords
-	}
-	if config.Log.Level == "" {
-		config.Log.Level = config.LogLevel
-	}
-	if config.LogLevel == "" {
-		config.LogLevel = config.Log.Level
+		config.MaxSyncRecords = defaults.MaxSyncRecords
 	}
 	if config.Log.Mode == "" {
-		config.Log.Mode = string(logModeStderr)
+		config.Log.Mode = defaults.Log.Mode
 	}
-	config.Overlay.DefaultNetNS = config.Overlay.DefaultNetNS.Normalized()
-	config.IPsec.DefaultNetNS = config.Overlay.DefaultNetNS
+	config.IPsec.DefaultNetNS = config.IPsec.DefaultNetNS.Normalized()
 	config.IPsec.Normalize()
 	if config.EndpointTTL <= 0 {
-		config.EndpointTTL = gossip.DefaultEndpointTTL
+		config.EndpointTTL = defaults.EndpointTTL
 	}
 	if config.EndpointRefresh <= 0 {
-		config.EndpointRefresh = gossip.DefaultEndpointRefresh
+		config.EndpointRefresh = defaults.EndpointRefresh
 	}
 	if config.EndpointGrace <= 0 {
-		config.EndpointGrace = gossip.DefaultEndpointGrace
+		config.EndpointGrace = defaults.EndpointGrace
 	}
 }
 
@@ -295,27 +280,27 @@ func yamlTopLevelKeys(input string) (map[string]bool, error) {
 	return keys, nil
 }
 
-func applyGossipConfigYAML(config *appConfig, file gossipConfigYAML, prefix string) error {
+func applyGossipConfigYAML(config *appConfig, file gossipConfigYAML) error {
 	if file.Init.ManagedZone != "" {
 		path := zone.ZonePath(strings.TrimSpace(file.Init.ManagedZone))
 		if !path.Valid() || path == zone.RootZone {
-			return fmt.Errorf("invalid %sinit.managed_zone: %s", prefix, file.Init.ManagedZone)
+			return fmt.Errorf("invalid gossip.init.managed_zone: %s", file.Init.ManagedZone)
 		}
 		config.ManagedZone = path
 	}
-	if value := firstNonEmpty(file.Init.KeyPath, file.Init.Identity.KeyPath); value != "" {
+	if value := cmp.Or(file.Init.KeyPath, file.Init.Identity.KeyPath); value != "" {
 		config.Identity.KeyPath = value
 	}
-	config.PeerID = firstNonEmpty(file.PeerID, config.PeerID)
-	config.ListenAddr = firstNonEmpty(file.ListenAddr, config.ListenAddr)
+	config.PeerID = cmp.Or(file.PeerID, config.PeerID)
+	config.ListenAddr = cmp.Or(file.ListenAddr, config.ListenAddr)
 	config.Bootstrap = append(config.Bootstrap, file.Bootstrap...)
-	if err := applyPositiveInt(&config.MaxMessageBytes, file.MaxDatagramBytes, prefix+"max_datagram_bytes"); err != nil {
+	if err := applyPositiveInt(&config.MaxMessageBytes, file.MaxDatagramBytes, "gossip.max_datagram_bytes"); err != nil {
 		return err
 	}
-	if err := applyPositiveInt(&config.MaxSyncZones, file.MaxSyncZones, prefix+"max_sync_zones"); err != nil {
+	if err := applyPositiveInt(&config.MaxSyncZones, file.MaxSyncZones, "gossip.max_sync_zones"); err != nil {
 		return err
 	}
-	if err := applyPositiveInt(&config.MaxSyncRecords, file.MaxSyncRecords, prefix+"max_sync_records"); err != nil {
+	if err := applyPositiveInt(&config.MaxSyncRecords, file.MaxSyncRecords, "gossip.max_sync_records"); err != nil {
 		return err
 	}
 	if file.AdvertiseAddr != "" {
@@ -327,35 +312,35 @@ func applyGossipConfigYAML(config *appConfig, file gossipConfigYAML, prefix stri
 	}
 	config.Reflectors = append(config.Reflectors, file.Reflectors...)
 	if file.ReflectorInterval != "" {
-		d, err := parseConfigDuration(file.ReflectorInterval, prefix+"reflector_interval")
+		d, err := parseConfigDuration(file.ReflectorInterval, "gossip.reflector_interval")
 		if err != nil {
 			return err
 		}
 		config.ReflectorInterval = d
 	}
 	if file.ReflectorTimeout != "" {
-		d, err := parseConfigDuration(file.ReflectorTimeout, prefix+"reflector_timeout")
+		d, err := parseConfigDuration(file.ReflectorTimeout, "gossip.reflector_timeout")
 		if err != nil {
 			return err
 		}
 		config.ReflectorTimeout = d
 	}
 	if file.EndpointTTL != "" {
-		d, err := parseConfigDuration(file.EndpointTTL, prefix+"endpoint_ttl")
+		d, err := parseConfigDuration(file.EndpointTTL, "gossip.endpoint_ttl")
 		if err != nil {
 			return err
 		}
 		config.EndpointTTL = d
 	}
 	if file.EndpointRefresh != "" {
-		d, err := parseConfigDuration(file.EndpointRefresh, prefix+"endpoint_refresh")
+		d, err := parseConfigDuration(file.EndpointRefresh, "gossip.endpoint_refresh")
 		if err != nil {
 			return err
 		}
 		config.EndpointRefresh = d
 	}
-	if value := firstNonEmpty(file.EndpointGrace, file.EndpointGracePeriod); value != "" {
-		d, err := parseConfigDuration(value, prefix+"endpoint_grace")
+	if value := cmp.Or(file.EndpointGrace, file.EndpointGracePeriod); value != "" {
+		d, err := parseConfigDuration(value, "gossip.endpoint_grace")
 		if err != nil {
 			return err
 		}
@@ -384,7 +369,7 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 	if file.StatePath != "" {
 		config.StatePath = file.StatePath
 	}
-	if value := firstNonEmpty(file.TrustedRootPublicKey, file.RootPublicKey, file.TrustedRootKey); value != "" {
+	if value := cmp.Or(file.TrustedRootPublicKey, file.RootPublicKey, file.TrustedRootKey); value != "" {
 		key, err := decodePublicKey(value)
 		if err != nil {
 			return err
@@ -393,7 +378,6 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 	}
 	if file.Log.Level != "" {
 		config.Log.Level = strings.ToLower(file.Log.Level)
-		config.LogLevel = config.Log.Level
 	}
 	if file.Log.Mode != "" {
 		mode := parseLogMode(file.Log.Mode)
@@ -406,7 +390,7 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 		config.Log.File = file.Log.File
 	}
 	if topLevelKeys["gossip"] {
-		if err := applyGossipConfigYAML(config, file.Gossip, "gossip."); err != nil {
+		if err := applyGossipConfigYAML(config, file.Gossip); err != nil {
 			return err
 		}
 	}
@@ -414,9 +398,8 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 	if err := file.IPsec.Apply(&config.IPsec); err != nil {
 		return err
 	}
-	config.IPsec.DefaultNetNS = config.Overlay.DefaultNetNS
 	var err error
-	config.Netns, err = photonlinux.ParseNetNSConfig(file.Netns, config.Overlay.DefaultNetNS)
+	config.Netns, err = photonlinux.ParseNetNSConfig(file.Netns, config.IPsec.DefaultNetNS)
 	if err != nil {
 		return err
 	}
@@ -436,7 +419,7 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 		}
 	}
 	if len(file.Overlays) > 0 {
-		groups, err := photonlinux.ParseOverlayConfigs(file.Overlays, config.Netns, config.Overlay.DefaultNetNS)
+		groups, err := photonlinux.ParseOverlayConfigs(file.Overlays, config.Netns, config.IPsec.DefaultNetNS)
 		if err != nil {
 			return err
 		}
@@ -492,13 +475,7 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 
 // parsePeerLifecycleConfig parses the peer_lifecycle YAML section with validation.
 func parsePeerLifecycleConfig(y *peerLifecycleYAML) (inspect.PeerLifecycleConfig, error) {
-	def := inspect.DefaultPeerLifecycleConfig()
-	out := inspect.PeerLifecycleConfig{
-		StaleAfter:       def.StaleAfter,
-		OfflineAfter:     def.OfflineAfter,
-		CleanupAfter:     def.CleanupAfter,
-		KeepSAWhileStale: def.KeepSAWhileStale,
-	}
+	out := inspect.DefaultPeerLifecycleConfig()
 	if y.StaleAfter != "" {
 		d, err := parseConfigDuration(y.StaleAfter, "peer_lifecycle.stale_after")
 		if err != nil {
@@ -593,15 +570,6 @@ func parseIPAMAnnounceSelectors(values []string) ([]string, error) {
 	return out, nil
 }
 
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
 func applyPositiveInt(target *int, value *int, name string) error {
 	if value == nil {
 		return nil
@@ -675,21 +643,6 @@ func selectedConfigPath() (string, bool) {
 		return path, true
 	}
 	return defaultConfigPath, false
-}
-
-func configuredStatePath() (string, error) {
-	if path := statePathOverride(); path != "" {
-		return path, nil
-	}
-	config, err := loadAppConfig()
-	if err != nil {
-		return "", err
-	}
-	return config.StatePath, nil
-}
-
-func statePathOverride() string {
-	return os.Getenv("PHOTON_STATE")
 }
 
 func configuredPeerID(config *appConfig, verified *corestate.VerifiedState) string {

@@ -54,12 +54,12 @@ func TestPackageTestsUseIsolatedConfigDefaults(t *testing.T) {
 		t.Fatalf("test StatePath = %q, want isolated temporary state", config.StatePath)
 	}
 
-	statePath, err := configuredStatePath()
+	rt, err := NewAppContext()
 	if err != nil {
-		t.Fatalf("configuredStatePath: %v", err)
+		t.Fatalf("NewAppContext: %v", err)
 	}
-	if statePath != config.StatePath {
-		t.Fatalf("configuredStatePath = %q, want config StatePath %q", statePath, config.StatePath)
+	if rt.StatePath != config.StatePath {
+		t.Fatalf("runtime StatePath = %q, want config StatePath %q", rt.StatePath, config.StatePath)
 	}
 
 	controlPath := controlSocketPath(config)

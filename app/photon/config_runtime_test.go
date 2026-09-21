@@ -75,7 +75,7 @@ func TestRuntimeLogConfigAndEnvironmentOverride(t *testing.T) {
 		t.Fatalf("PHOTON_LOG_LEVEL should override config log.level")
 	}
 	t.Setenv("PHOTON_LOG_LEVEL", "debug")
-	rt.Config.LogLevel = "info"
+	rt.Config.Log.Level = "info"
 	if !debugLogEnabled(rt.Config) {
 		t.Fatalf("PHOTON_LOG_LEVEL=debug should enable debug logs")
 	}

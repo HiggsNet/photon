@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -258,7 +259,7 @@ func ipsecReconcileActionLogFields(action ipsec.ReconcileAction) map[string]any 
 		fields["interface"] = action.Spec.InterfaceName
 		if len(action.Spec.ContactPoints) > 0 {
 			cp := action.Spec.ContactPoints[0]
-			fields["endpoint_address"] = firstNonEmpty(cp.Address, cp.Host)
+			fields["endpoint_address"] = cmp.Or(cp.Address, cp.Host)
 			fields["endpoint_ike_port"] = cp.IKEPort
 			fields["endpoint_natt_port"] = cp.NATTPort
 			fields["endpoint_current"] = cp.Current

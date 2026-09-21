@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"errors"
 	bolt "go.etcd.io/bbolt"
@@ -35,7 +36,7 @@ func TestDebugDBLockTimeout(t *testing.T) {
 	}
 	defer owner.Close()
 	start := time.Now()
-	db, err := openDebugDB(path)
+	db, err := openDebugDB(path, nil)
 	if db != nil {
 		db.Close()
 		t.Fatal("opened locked database")
@@ -71,7 +72,7 @@ func TestDebugDBCurrentLayout(t *testing.T) {
 	verified, checkpoint, linux, _ := buildTestRoutingOwners(t)
 	path := filepath.Join(t.TempDir(), "state.db")
 	seedPartitionedStateDB(t, path, verified, checkpoint, linux)
-	db, err := openDebugDB(path)
+	db, err := openDebugDB(path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,5 +113,76 @@ func TestDebugDBCurrentLayout(t *testing.T) {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("nested dump missing %s", want)
 		}
+	}
+}
+
+func TestDebugDBReportsConfigErrorsAndStillReadsWithoutWriting(t *testing.T) {
+	rt := &AppContext{Config: defaultAppConfig(), StatePath: filepath.Join(t.TempDir(), "state.db")}
+	root, err := initializeRootState(rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(rt.StatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrong := append(ed25519.PublicKey(nil), root...)
+	wrong[0] ^= 0xff
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	t.Setenv("PHOTON_CONFIG", configPath)
+	t.Setenv("PHOTON_STATE", rt.StatePath)
+	for _, tc := range []struct{ name, input, diagnostic string }{
+		{"wrong root", "trusted_root_public_key: " + formatPublicKey(wrong) + "\n", "does not match persisted state"},
+		{"invalid config", "unknown_field: true\n", "cannot load configuration"},
+		{"missing config", "", "cannot load configuration"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.input == "" {
+				if err := os.Remove(configPath); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(configPath, []byte(tc.input), 0600); err != nil {
+				t.Fatal(err)
+			}
+			for _, inspect := range []func() error{func() error { return debugDBDump("") }, debugDBStats} {
+				stdout, err := os.CreateTemp(t.TempDir(), "stdout")
+				if err != nil {
+					t.Fatal(err)
+				}
+				stderr, err := os.CreateTemp(t.TempDir(), "stderr")
+				if err != nil {
+					t.Fatal(err)
+				}
+				oldOut, oldErr := os.Stdout, os.Stderr
+				os.Stdout, os.Stderr = stdout, stderr
+				func() { defer func() { os.Stdout, os.Stderr = oldOut, oldErr }(); err = inspect() }()
+				stdout.Close()
+				stderr.Close()
+				if err != nil {
+					t.Fatal(err)
+				}
+				diagnostic, err := os.ReadFile(stderr.Name())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.Contains(string(diagnostic), "ERROR:") || !strings.Contains(string(diagnostic), tc.diagnostic) {
+					t.Fatalf("diagnostic = %s", diagnostic)
+				}
+				output, err := os.ReadFile(stdout.Name())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(output) == 0 {
+					t.Fatal("debug output was suppressed")
+				}
+			}
+		})
+	}
+	after, err := os.ReadFile(rt.StatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("debug inspection modified database")
 	}
 }

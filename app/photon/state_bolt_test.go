@@ -1,8 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,5 +117,45 @@ func TestStateRejectsLinuxCommitAfterDiskRevisionDiverges(t *testing.T) {
 	}
 	if _, ok := state.ReadLinux().EndpointACLs["stale"]; ok {
 		t.Fatal("rejected Linux state was published in memory")
+	}
+}
+
+func TestOpenStateChecksExplicitRootWithoutWriting(t *testing.T) {
+	rt := &AppContext{Config: defaultAppConfig(), StatePath: filepath.Join(t.TempDir(), "state.db")}
+	root, err := initializeRootState(rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(rt.StatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrong := append(ed25519.PublicKey(nil), root...)
+	wrong[0] ^= 0xff
+	rt.Config.TrustedRootPublicKey = wrong
+	state, err := openState(rt)
+	if state != nil {
+		state.Close()
+		t.Fatal("opened state with wrong trust")
+	}
+	if err == nil || !strings.Contains(err.Error(), "does not match persisted state") {
+		t.Fatalf("error = %v", err)
+	}
+	after, err := os.ReadFile(rt.StatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("rejected open changed database")
+	}
+	for _, key := range []ed25519.PublicKey{nil, root} {
+		rt.Config.TrustedRootPublicKey = key
+		state, err := openState(rt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := state.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

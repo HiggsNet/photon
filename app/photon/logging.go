@@ -44,7 +44,7 @@ func newAppLogger(config *appConfig) *appLogger {
 	level := logLevelInfo
 	raw := strings.ToLower(strings.TrimSpace(os.Getenv("PHOTON_LOG_LEVEL")))
 	if raw == "" && config != nil {
-		raw = strings.ToLower(strings.TrimSpace(config.LogLevel))
+		raw = strings.ToLower(strings.TrimSpace(config.Log.Level))
 	}
 	switch logLevel(raw) {
 	case logLevelDebug, logLevelInfo, logLevelWarn, logLevelError:

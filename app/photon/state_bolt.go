@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"errors"
@@ -122,6 +123,9 @@ func restoreState(store *corestate.BoltStore, trustedRoot ed25519.PublicKey) (*S
 			return false, err
 		}
 		candidate, revision, linuxState, found, err = loadStateTx(tx)
+		if err == nil && found && len(trustedRoot) != 0 && !bytes.Equal(candidate.Verified.TrustedRootPublicKey, trustedRoot) {
+			return false, errors.New("trusted_root_public_key does not match persisted state")
+		}
 		return migrated, err
 	})
 	if err != nil || !found {

@@ -1,6 +1,9 @@
 package main
 
-import "time"
+import (
+	"os"
+	"time"
+)
 
 type AppContext struct {
 	Config         *appConfig
@@ -15,7 +18,7 @@ func NewAppContext() (*AppContext, error) {
 		return nil, err
 	}
 	path := config.StatePath
-	if override := statePathOverride(); override != "" {
+	if override := os.Getenv("PHOTON_STATE"); override != "" {
 		path = override
 	}
 	return &AppContext{

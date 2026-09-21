@@ -36,9 +36,6 @@ trusted_root_public_key: ` + hex.EncodeToString(pub)
 	if config.IPsec.DefaultNetNS.Name != ipsec.DefaultNetNSName || !config.IPsec.DefaultNetNS.Create {
 		t.Fatalf("IPsec.DefaultNetNS = %+v", config.IPsec.DefaultNetNS)
 	}
-	if config.Overlay.DefaultNetNS.Name != ipsec.DefaultNetNSName || !config.Overlay.DefaultNetNS.Create {
-		t.Fatalf("Overlay.DefaultNetNS = %+v", config.Overlay.DefaultNetNS)
-	}
 }
 
 func TestParseConfigExampleYAML(t *testing.T) {
@@ -149,5 +146,33 @@ routing:
 `
 	if err := parseConfigYAML(input, config); err == nil {
 		t.Fatal("parseConfigYAML should reject routing.instances[].protocol")
+	}
+}
+
+func TestNormalizeConfigPreservesOverridesAndFallsBack(t *testing.T) {
+	for _, value := range []string{"0s", "-1s"} {
+		t.Run(value, func(t *testing.T) {
+			config := defaultAppConfig()
+			input := "data_dir: /tmp/photon-normalized\ngossip:\n  endpoint_ttl: " + value + "\n  endpoint_refresh: " + value + "\n  endpoint_grace: " + value + "\n  reflector_interval: 0s\n  reflector_timeout: 0s\n  publish_endpoints: false\n  filter_private_ipv4: false\n"
+			if err := parseConfigYAML(input, config); err != nil {
+				t.Fatal(err)
+			}
+			normalizeAppConfig(config)
+			defaults := defaultAppConfig()
+			if config.EndpointTTL != defaults.EndpointTTL || config.EndpointRefresh != defaults.EndpointRefresh || config.EndpointGrace != defaults.EndpointGrace {
+				t.Fatalf("endpoint fallback failed: %+v", config)
+			}
+			if config.PublishEndpoints || config.FilterPrivateIPv4 || config.ReflectorInterval != 0 || config.ReflectorTimeout != 0 {
+				t.Fatal("normalization overwrote explicit false/zero values")
+			}
+			if config.StatePath != "/tmp/photon-normalized/photon.db" {
+				t.Fatalf("derived state path = %q", config.StatePath)
+			}
+			config.StatePath = "/tmp/explicit-state.db"
+			normalizeAppConfig(config)
+			if config.StatePath != "/tmp/explicit-state.db" {
+				t.Fatal("normalization overwrote explicit state path")
+			}
+		})
 	}
 }

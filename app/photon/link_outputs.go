@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"net/netip"
 	"sort"
 	"strconv"
@@ -47,7 +48,7 @@ func buildLinkOutputs(instances map[string]ipsec.LinkInstance, reconcile *ipsecO
 				continue
 			}
 			staged := base
-			staged.ID = runtimeLinkOutputID(firstNonEmpty(inst.LinkID, inst.ID, want.LinkID, want.InstanceID), photonstate.LinkRuntimeStaged)
+			staged.ID = runtimeLinkOutputID(cmp.Or(inst.LinkID, inst.ID, want.LinkID, want.InstanceID), photonstate.LinkRuntimeStaged)
 			staged.InterfaceName = inst.StagedInterfaceName
 			staged.LocalAddr = inst.StagedLocalTunnelAddr
 			staged.PeerAddr = inst.StagedPeerTunnelAddr
@@ -72,12 +73,12 @@ func firstNonEmptyZone(values ...zone.ZonePath) zone.ZonePath {
 }
 
 func newIPsecLinkOutput(inst ipsec.LinkInstance, desired photonstate.DesiredLinkObservation) photonstate.LinkOutput {
-	id := firstNonEmpty(inst.LinkID, desired.LinkID, inst.ID, desired.InstanceID)
+	id := cmp.Or(inst.LinkID, desired.LinkID, inst.ID, desired.InstanceID)
 	provider := inst.TransportKind
 	if provider == "" {
 		provider = ipsec.ProviderStrongSwan
 	}
-	iface := firstNonEmpty(inst.InterfaceName, desired.InterfaceName)
+	iface := cmp.Or(inst.InterfaceName, desired.InterfaceName)
 	local := inst.LocalTunnelAddr
 	if !local.IsValid() {
 		local = parseScopedAddr(desired.LocalTunnelAddr)
@@ -86,13 +87,13 @@ func newIPsecLinkOutput(inst ipsec.LinkInstance, desired photonstate.DesiredLink
 	if !peer.IsValid() {
 		peer = parseScopedAddr(desired.PeerTunnelAddr)
 	}
-	netns := firstNonEmpty(scopedNetNS(desired.LocalTunnelAddr), scopedNetNS(desired.PeerTunnelAddr))
+	netns := cmp.Or(scopedNetNS(desired.LocalTunnelAddr), scopedNetNS(desired.PeerTunnelAddr))
 	return photonstate.LinkOutput{
 		ID:             id,
-		GroupID:        firstNonEmpty(inst.GroupID, desired.GroupID),
+		GroupID:        cmp.Or(inst.GroupID, desired.GroupID),
 		PeerZone:       firstNonEmptyZone(inst.PeerZone, desired.PeerZone),
 		Provider:       provider,
-		PathKey:        firstNonEmpty(inst.PathKey, desired.PathKey),
+		PathKey:        cmp.Or(inst.PathKey, desired.PathKey),
 		NetNS:          netns,
 		InterfaceName:  iface,
 		LocalAddr:      local,
@@ -101,7 +102,7 @@ func newIPsecLinkOutput(inst ipsec.LinkInstance, desired photonstate.DesiredLink
 		RuntimeRole:    photonstate.LinkRuntimeActive,
 		State:          inst.ActualState,
 		Readiness:      baseLinkReadiness(inst.ActualState, iface),
-		Endpoint:       firstNonEmpty(inst.Endpoint, desired.Endpoint),
+		Endpoint:       cmp.Or(inst.Endpoint, desired.Endpoint),
 		LastTransition: inst.LastTransition,
 	}
 }
