@@ -13,10 +13,10 @@ import (
 )
 
 func TestObserverStatusAPI(t *testing.T) {
-	srv := newTestObserverServer()
+	srv, _ := newTestObserverServer()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
 	rr := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
+	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Errorf("status code = %d, want %d", rr.Code, http.StatusOK)
 	}
@@ -67,7 +67,7 @@ func TestObserverReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/status", nil)
 	rr := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
+	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
 	}
@@ -82,7 +82,7 @@ func TestObserverReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T) {
 
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/links", nil)
 	rr = httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
+	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("links code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
 	}

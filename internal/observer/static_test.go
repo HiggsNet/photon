@@ -20,7 +20,7 @@ func (testProvider) Routes() (any, error) { return map[string]any{}, nil }
 func (testProvider) Bird() (any, error)   { return map[string]any{}, nil }
 
 func newTestServer() *Server {
-	return NewServer(testProvider{}, Config{Enabled: true, BindAddr: "127.0.0.1", Port: 8080})
+	return NewServer(testProvider{}, Config{Enabled: true})
 }
 
 func TestStaticHandler(t *testing.T) {

@@ -400,7 +400,6 @@ func minimalNetworkForJoinBundle(ns *zone.NetworkState, target zone.ZonePath) (*
 		}
 		out.Zones[path] = zs
 	}
-	normalizeState(out)
 	return out, nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/observer"
 	"github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
@@ -14,7 +15,7 @@ import (
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
-func newTestObserverServer() *observerServer {
+func newTestObserverServer() (*observer.Server, *Daemon) {
 	store := corestate.NewStoreWithCheckpoint(&corestate.VerifiedState{}, &corestate.GossipCheckpoint{}, nil)
 	d := &Daemon{
 		State: newState(nil, store, &photonlinux.LinuxState{}), Config: &appConfig{
@@ -24,19 +25,19 @@ func newTestObserverServer() *observerServer {
 	d.gossipDriver = corehost.NewGossipDriver(corehost.NewClock(nil), corehost.DefaultEventBuffer, store, gossipDriverConfig(d.Config, store.ReadView().State, nil))
 	cfg := defaultObserverConfig()
 	cfg.Enabled = true
-	return newObserverServer(d, cfg)
+	return newObserverServer(d, cfg), d
 }
 
-func updateTestObserverOwners(srv *observerServer, fn func(*corestate.VerifiedState, *corestate.GossipCheckpoint, *photonlinux.LinuxState)) {
-	if srv == nil || srv.daemon == nil || srv.daemon.State == nil || fn == nil {
+func updateTestObserverOwners(d *Daemon, fn func(*corestate.VerifiedState, *corestate.GossipCheckpoint, *photonlinux.LinuxState)) {
+	if d == nil || d.State == nil || fn == nil {
 		return
 	}
-	common := srv.daemon.State.Common.ReadView()
-	runtime := srv.daemon.State.ReadLinux()
+	common := d.State.Common.ReadView()
+	runtime := d.State.ReadLinux()
 	fn(common.State, common.Gossip, runtime)
 	store := corestate.NewStoreWithCheckpoint(common.State, common.Gossip, nil)
-	srv.daemon.State = newState(nil, store, runtime)
-	srv.daemon.gossipDriver = corehost.NewGossipDriver(corehost.NewClock(nil), corehost.DefaultEventBuffer, store, gossipDriverConfig(srv.daemon.Config, store.ReadView().State, nil))
+	d.State = newState(nil, store, runtime)
+	d.gossipDriver = corehost.NewGossipDriver(corehost.NewClock(nil), corehost.DefaultEventBuffer, store, gossipDriverConfig(d.Config, store.ReadView().State, nil))
 }
 
 func addObserverEndpointZone(t *testing.T, ns *zone.NetworkState, path zone.ZonePath, ip string, port uint16, now time.Time) {

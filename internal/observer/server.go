@@ -17,8 +17,6 @@ var webFS embed.FS
 // Config is the transport-neutral observer server configuration.
 type Config struct {
 	Enabled            bool
-	BindAddr           string
-	Port               int
 	EventBufferSeconds int
 }
 
@@ -68,7 +66,6 @@ type APIResponse struct {
 // Server is the read-only HTTP observer. It serves REST snapshot APIs, SSE
 // events, and a static UI.
 type Server struct {
-	config   Config
 	provider Provider
 	hub      *Hub
 }
@@ -79,7 +76,7 @@ func NewServer(provider Provider, cfg Config) *Server {
 	if !cfg.Enabled || provider == nil {
 		return nil
 	}
-	return &Server{config: cfg, provider: provider, hub: NewHubWithBuffer(cfg.EventBufferSeconds)}
+	return &Server{provider: provider, hub: NewHubWithBuffer(cfg.EventBufferSeconds)}
 }
 
 // Hub returns the server event hub.

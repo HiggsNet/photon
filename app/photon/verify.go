@@ -8,6 +8,10 @@ import (
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
+func configureValidation(network *zone.NetworkState) {
+	network.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
+}
+
 func verifyChain(path zone.ZonePath) error {
 	config, err := loadAppConfig()
 	if err != nil {

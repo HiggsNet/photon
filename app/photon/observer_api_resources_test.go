@@ -31,17 +31,17 @@ import (
 )
 
 func TestZoneOwnerFixtureKeepsControlCLIAndHTTPMeaningAligned(t *testing.T) {
-	srv := newTestObserverServer()
+	srv, daemon := newTestObserverServer()
 	ns := zone.NewNetworkState()
 	ns.Zones["node-a.catofes."] = zone.NewZoneState("node-a.catofes.", nil)
 	ns.Zones["node-a.catofes."].Records["site/name"] = &zone.Record{Key: "site/name"}
 	ns.Zones["branch.node-a.catofes."] = zone.NewZoneState("branch.node-a.catofes.", nil)
-	updateTestObserverOwners(srv, func(verified *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *photonlinux.LinuxState) {
+	updateTestObserverOwners(daemon, func(verified *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *photonlinux.LinuxState) {
 		verified.ManagedZone = "node-a.catofes."
 		verified.Network = ns
 	})
 
-	control := controlViewRequestViaPipe[[]inspect.ZoneDetail](t, srv.daemon, controlRequest{Method: "zones_view"})
+	control := controlViewRequestViaPipe[[]inspect.ZoneDetail](t, daemon, controlRequest{Method: "zones_view"})
 	if !control.OK || len(control.View) != 2 {
 		t.Fatalf("zones_view response = %#v", control)
 	}
@@ -52,7 +52,7 @@ func TestZoneOwnerFixtureKeepsControlCLIAndHTTPMeaningAligned(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
 	rr := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
+	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("zones status = %d, body=%s", rr.Code, rr.Body.String())
 	}
@@ -76,8 +76,8 @@ func TestZoneOwnerFixtureKeepsControlCLIAndHTTPMeaningAligned(t *testing.T) {
 }
 
 func TestObserverHandlerRoutesPeerDetail(t *testing.T) {
-	srv := newTestObserverServer()
-	updateTestObserverOwners(srv, func(_ *corestate.VerifiedState, checkpoint *corestate.GossipCheckpoint, _ *photonlinux.LinuxState) {
+	srv, daemon := newTestObserverServer()
+	updateTestObserverOwners(daemon, func(_ *corestate.VerifiedState, checkpoint *corestate.GossipCheckpoint, _ *photonlinux.LinuxState) {
 		checkpoint.Peers["peer-a.catofes."] = corestate.PeerCheckpoint{
 			LastSyncUnix: 123,
 			FailureCount: 2,
@@ -85,7 +85,7 @@ func TestObserverHandlerRoutesPeerDetail(t *testing.T) {
 	})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/peers/peer-a.catofes.", nil)
 	rr := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
+	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
 	}
@@ -108,33 +108,8 @@ func TestObserverHandlerRoutesPeerDetail(t *testing.T) {
 	}
 }
 
-func TestObserverZonesAPIEmpty(t *testing.T) {
-	srv := newTestObserverServer()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/zones", nil)
-	rr := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Errorf("status code = %d, want %d", rr.Code, http.StatusOK)
-	}
-	var resp observer.APIResponse
-	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode error: %v", err)
-	}
-	data, ok := resp.Data.(map[string]any)
-	if !ok {
-		t.Fatal("data is not a map")
-	}
-	zones, ok := data["zones"].([]any)
-	if !ok {
-		t.Fatal("zones is not a list")
-	}
-	if len(zones) != 0 {
-		t.Errorf("zones count = %d, want 0", len(zones))
-	}
-}
-
 func TestObserverZoneDetailIncludesRecordsAuthorityAndHistory(t *testing.T) {
-	srv := newTestObserverServer()
+	srv, daemon := newTestObserverServer()
 	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
@@ -176,7 +151,7 @@ func TestObserverZoneDetailIncludesRecordsAuthorityAndHistory(t *testing.T) {
 	zs := zone.NewZoneState("node-a.catofes.", authority)
 	zs.Records["identity"] = active
 	zs.RecordHistory["identity"] = []*zone.Record{old}
-	updateTestObserverOwners(srv, func(verified *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *photonlinux.LinuxState) {
+	updateTestObserverOwners(daemon, func(verified *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *photonlinux.LinuxState) {
 		verified.Network = &zone.NetworkState{Zones: map[zone.ZonePath]*zone.ZoneState{
 			"node-a.catofes.": zs,
 		}}
@@ -184,7 +159,7 @@ func TestObserverZoneDetailIncludesRecordsAuthorityAndHistory(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/zones/node-a.catofes.", nil)
 	rr := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
+	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
 	}
@@ -216,30 +191,11 @@ func TestObserverZoneDetailIncludesRecordsAuthorityAndHistory(t *testing.T) {
 	}
 }
 
-func TestObserverPeersAPIEmpty(t *testing.T) {
-	srv := newTestObserverServer()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/peers", nil)
-	rr := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Errorf("status code = %d, want %d", rr.Code, http.StatusOK)
-	}
-	var resp observer.APIResponse
-	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode error: %v", err)
-	}
-	data := resp.Data.(map[string]any)
-	peers := data["peers"].([]any)
-	if len(peers) != 0 {
-		t.Errorf("peers count = %d, want 0", len(peers))
-	}
-}
-
 func TestObserverPeersAPIIncludesEndpointAndDiagnosticsDetails(t *testing.T) {
-	srv := newTestObserverServer()
+	srv, daemon := newTestObserverServer()
 	now := time.Unix(1000, 0)
-	srv.daemon.clock = func() time.Time { return now }
-	srv.daemon.Config.Bootstrap = []syncConfigPeer{{ID: "node-b.catofes.", Addr: "192.0.2.10:33434"}}
+	daemon.clock = func() time.Time { return now }
+	daemon.Config.Bootstrap = []syncConfigPeer{{ID: "node-b.catofes.", Addr: "192.0.2.10:33434"}}
 	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
@@ -265,7 +221,7 @@ func TestObserverPeersAPIIncludesEndpointAndDiagnosticsDetails(t *testing.T) {
 		t.Fatalf("SignRecord(endpoint): %v", err)
 	}
 	zs.Records[gossip.EndpointRecordKeyUDP] = endpointRecord
-	updateTestObserverOwners(srv, func(verified *corestate.VerifiedState, checkpoint *corestate.GossipCheckpoint, _ *photonlinux.LinuxState) {
+	updateTestObserverOwners(daemon, func(verified *corestate.VerifiedState, checkpoint *corestate.GossipCheckpoint, _ *photonlinux.LinuxState) {
 		verified.Network = zone.NewNetworkState()
 		verified.Network.Zones["node-b.catofes."] = zs
 		checkpoint.Peers["node-b.catofes."] = corestate.PeerCheckpoint{
@@ -281,19 +237,19 @@ func TestObserverPeersAPIIncludesEndpointAndDiagnosticsDetails(t *testing.T) {
 			},
 		}
 	})
-	srv.daemon.gossipDriver.Observability.Update("node-b.catofes.", now, func(diagnostics *observability.PeerDiagnostics) {
+	daemon.gossipDriver.Observability.Update("node-b.catofes.", now, func(diagnostics *observability.PeerDiagnostics) {
 		diagnostics.LastUpdateSource = "announce"
 		diagnostics.LastRelaySuppression = "relay_fanout_limited"
 		diagnostics.ObservedSource = "verified_packet"
 		diagnostics.DatagramStats = &observability.PeerDatagramStats{ChunkFallbacks: 2}
 	})
-	srv.daemon.gossipDriver.Observability.Update("node-b.catofes.", now, func(diagnostics *observability.PeerDiagnostics) {
+	daemon.gossipDriver.Observability.Update("node-b.catofes.", now, func(diagnostics *observability.PeerDiagnostics) {
 		diagnostics.ObjectPullStats = &observability.PeerObjectPullStats{Attempts: 3, Successes: 2, LastUnix: now.Unix(), LastObject: "zone", LastZone: "node-b.catofes.", LastSourcePeer: "node-b.catofes."}
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/peers/node-b.catofes.", nil)
 	rr := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
+	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
 	}
@@ -336,15 +292,15 @@ func TestObserverPeersAPIIncludesEndpointAndDiagnosticsDetails(t *testing.T) {
 }
 
 func TestObserverPeersAPIExcludesLocalPeerID(t *testing.T) {
-	srv := newTestObserverServer()
+	srv, daemon := newTestObserverServer()
 	now := time.Unix(1000, 0)
-	srv.daemon.clock = func() time.Time { return now }
-	srv.daemon.Config.PeerID = "node-a.catofes."
-	srv.daemon.Config.Bootstrap = []syncConfigPeer{
+	daemon.clock = func() time.Time { return now }
+	daemon.Config.PeerID = "node-a.catofes."
+	daemon.Config.Bootstrap = []syncConfigPeer{
 		{ID: "node-a.catofes.", Addr: "127.0.0.1:33434"},
 		{ID: "node-b.catofes.", Addr: "127.0.0.1:33435"},
 	}
-	updateTestObserverOwners(srv, func(verified *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *photonlinux.LinuxState) {
+	updateTestObserverOwners(daemon, func(verified *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *photonlinux.LinuxState) {
 		verified.ManagedZone = "node-a.catofes."
 		verified.Network = zone.NewNetworkState()
 		addObserverEndpointZone(t, verified.Network, "node-a.catofes.", "127.0.0.1", 33434, now)
@@ -353,7 +309,7 @@ func TestObserverPeersAPIExcludesLocalPeerID(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/peers", nil)
 	rr := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
+	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
 	}
@@ -373,18 +329,18 @@ func TestObserverPeersAPIExcludesLocalPeerID(t *testing.T) {
 
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/peers/node-a.catofes.", nil)
 	rr = httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
+	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("self peer status code = %d, want %d; body=%s", rr.Code, http.StatusNotFound, rr.Body.String())
 	}
 }
 
 func TestObserverPeersAPISortsByZonePath(t *testing.T) {
-	srv := newTestObserverServer()
+	srv, daemon := newTestObserverServer()
 	now := time.Unix(1000, 0)
-	srv.daemon.clock = func() time.Time { return now }
-	srv.daemon.Config.PeerID = "node-a.catofes."
-	updateTestObserverOwners(srv, func(verified *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *photonlinux.LinuxState) {
+	daemon.clock = func() time.Time { return now }
+	daemon.Config.PeerID = "node-a.catofes."
+	updateTestObserverOwners(daemon, func(verified *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *photonlinux.LinuxState) {
 		verified.ManagedZone = "node-a.catofes."
 		verified.Network = zone.NewNetworkState()
 		addObserverEndpointZone(t, verified.Network, "zeta.other.", "127.0.0.1", 33439, now)
@@ -395,7 +351,7 @@ func TestObserverPeersAPISortsByZonePath(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/peers", nil)
 	rr := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
+	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
 	}
@@ -415,28 +371,9 @@ func TestObserverPeersAPISortsByZonePath(t *testing.T) {
 	}
 }
 
-func TestObserverLinksAPIEmpty(t *testing.T) {
-	srv := newTestObserverServer()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/links", nil)
-	rr := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Errorf("status code = %d, want %d", rr.Code, http.StatusOK)
-	}
-	var resp observer.APIResponse
-	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode error: %v", err)
-	}
-	data := resp.Data.(map[string]any)
-	instances := data["instances"].([]any)
-	if len(instances) != 0 {
-		t.Errorf("instances count = %d, want 0", len(instances))
-	}
-}
-
 func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
-	srv := newTestObserverServer()
-	srv.daemon.Config = &appConfig{
+	srv, daemon := newTestObserverServer()
+	daemon.Config = &appConfig{
 		IPsec: photonlinux.IPsecConfig{
 			LinkGroups: []ipsec.LinkGroupSpec{{
 				ID:    "blue",
@@ -454,7 +391,7 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 	}
 	var observationLinks map[string]ipsec.LinkInstance
 	var observationReconcile *ipsecObservationSummary
-	updateTestObserverOwners(srv, func(_ *corestate.VerifiedState, _ *corestate.GossipCheckpoint, runtime *photonlinux.LinuxState) {
+	updateTestObserverOwners(daemon, func(_ *corestate.VerifiedState, _ *corestate.GossipCheckpoint, runtime *photonlinux.LinuxState) {
 		observationLinks = map[string]ipsec.LinkInstance{
 			"link-1": {
 				ID:              "link-1",
@@ -493,14 +430,14 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 			}},
 		}
 	})
-	setTestIPsecObservation(srv.daemon, observationLinks, observationReconcile)
-	srv.daemon.linuxObservation.replaceRouting(&routingObservation{Instances: map[string]*bird.InstanceObservation{
+	setTestIPsecObservation(daemon, observationLinks, observationReconcile)
+	daemon.linuxObservation.replaceRouting(&routingObservation{Instances: map[string]*bird.InstanceObservation{
 		"phx-blue": {State: "running"},
 	}})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/links", nil)
 	rr := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
+	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
 	}
@@ -538,10 +475,10 @@ func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 }
 
 func TestObserverHealthAPIIncludesLinkContextWithoutSamples(t *testing.T) {
-	srv := newTestObserverServer()
+	srv, daemon := newTestObserverServer()
 	var observationLinks map[string]ipsec.LinkInstance
 	var observationReconcile *ipsecObservationSummary
-	updateTestObserverOwners(srv, func(_ *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *photonlinux.LinuxState) {
+	updateTestObserverOwners(daemon, func(_ *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *photonlinux.LinuxState) {
 		observationLinks = map[string]ipsec.LinkInstance{
 			"link-1": {
 				ID:            "link-1",
@@ -563,11 +500,11 @@ func TestObserverHealthAPIIncludesLinkContextWithoutSamples(t *testing.T) {
 			}},
 		}
 	})
-	setTestIPsecObservation(srv.daemon, observationLinks, observationReconcile)
+	setTestIPsecObservation(daemon, observationLinks, observationReconcile)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
 	rr := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
+	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
 	}
@@ -600,16 +537,16 @@ func TestObserverHealthAPIIncludesLinkContextWithoutSamples(t *testing.T) {
 }
 
 func TestObserverHealthSeriesReadsLocalSpool(t *testing.T) {
-	srv := newTestObserverServer()
+	srv, daemon := newTestObserverServer()
 	cfg := defaultHealthConfig()
 	cfg.Spool.Enabled = true
 	cfg.Spool.Path = t.TempDir()
 	cfg.Spool.MaxAge = time.Hour
-	srv.daemon.Config.Health = cfg
-	srv.daemon.health = &healthDriver{spool: healthspool.New(cfg.Spool)}
+	daemon.Config.Health = cfg
+	daemon.health = &healthDriver{spool: healthspool.New(cfg.Spool)}
 	now := time.Unix(3000, 0)
-	srv.daemon.clock = func() time.Time { return now }
-	if err := srv.daemon.health.spool.Append(now, healthSpoolSamples([]inspect.HealthSample{{
+	daemon.clock = func() time.Time { return now }
+	if err := daemon.health.spool.Append(now, healthSpoolSamples([]inspect.HealthSample{{
 		InstanceID: "link-1",
 		State:      "healthy",
 		ProbeType:  "icmp",
@@ -622,7 +559,7 @@ func TestObserverHealthSeriesReadsLocalSpool(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health/link-1/series?metric=rtt&range=5m&step=1m", nil)
 	rr := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
+	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d; body=%s", rr.Code, http.StatusOK, rr.Body.String())
 	}
@@ -646,23 +583,13 @@ func TestObserverHealthSeriesReadsLocalSpool(t *testing.T) {
 	}
 }
 
-func TestObserverRoutesAPI(t *testing.T) {
-	srv := newTestObserverServer()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/routes", nil)
-	rr := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK {
-		t.Errorf("status code = %d, want %d", rr.Code, http.StatusOK)
-	}
-}
-
 func TestObserverBirdAPI(t *testing.T) {
-	srv := newTestObserverServer()
-	srv.daemon.Config.Routing.Instances = []photonlinux.RoutingInstance{{ID: "main", Enabled: true,
+	srv, daemon := newTestObserverServer()
+	daemon.Config.Routing.Instances = []photonlinux.RoutingInstance{{ID: "main", Enabled: true,
 		Bird: bird.BirdInstanceSpec{
 			NetNSName: "phx-main",
 		}}}
-	srv.daemon.linuxObservation.replaceRouting(&routingObservation{
+	daemon.linuxObservation.replaceRouting(&routingObservation{
 		Instances: map[string]*bird.InstanceObservation{
 			"phx-main": {
 				NetNSName:   "phx-main",
@@ -676,7 +603,7 @@ func TestObserverBirdAPI(t *testing.T) {
 	})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/bird", nil)
 	rr := httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
+	srv.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status code = %d, want %d", rr.Code, http.StatusOK)
 	}
@@ -701,5 +628,43 @@ func TestObserverBirdAPI(t *testing.T) {
 	}
 	if failure := data["last_routing_failure"].(map[string]any); failure["code"] != inspect.FailureCodeRoutingReconcile || failure["message"] != "routing failed" {
 		t.Fatalf("routing failure = %#v", failure)
+	}
+}
+
+func TestObserverEmptyResourceAPIs(t *testing.T) {
+	for _, tc := range []struct {
+		resource string
+		listKey  string
+	}{
+		{"zones", "zones"},
+		{"peers", "peers"},
+		{"links", "instances"},
+		{"routes", ""},
+	} {
+		t.Run(tc.resource, func(t *testing.T) {
+			srv, _ := newTestObserverServer()
+			rr := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/v1/"+tc.resource, nil))
+			if rr.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+			}
+			var resp observer.APIResponse
+			if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if !resp.OK {
+				t.Fatalf("API failed: %+v", resp)
+			}
+			if tc.listKey != "" {
+				data, ok := resp.Data.(map[string]any)
+				if !ok {
+					t.Fatalf("data is not an object: %#v", resp.Data)
+				}
+				items, ok := data[tc.listKey].([]any)
+				if !ok || len(items) != 0 {
+					t.Errorf("%s = %#v, want empty array", tc.listKey, data[tc.listKey])
+				}
+			}
+		})
 	}
 }

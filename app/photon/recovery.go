@@ -90,15 +90,15 @@ func cmdRecovery() *cli.Command {
 				Name:      "cleanup-ipsec",
 				Usage:     "Tear down locally managed IPsec links",
 				UsageText: "photon advanced recovery cleanup-ipsec [--orphans] [--direct]",
-				Description: "Explicitly terminate Photon-managed StrongSwan connections and delete their XFRM interfaces.\n" +
-					"This is intended for local recovery after system networking state becomes inconsistent.",
+				Description: "Through the daemon, terminate Photon-managed StrongSwan connections and delete their owned XFRM interfaces.\n" +
+					"Offline recovery requires --direct --orphans and removes all ipsec- prefixed StrongSwan connections, including active ones; it does not delete XFRM interfaces.",
 				Flags: []cli.Flag{
-					&cli.BoolFlag{Name: "orphans", Usage: "Also terminate/unload Photon-named StrongSwan connections not referenced by local state"},
-					&cli.BoolFlag{Name: "direct", Usage: "Run cleanup in this process without contacting the daemon"},
+					&cli.BoolFlag{Name: "orphans", Usage: "Also remove unreferenced Photon-named StrongSwan connections; with --direct, remove all Photon-named connections"},
+					&cli.BoolFlag{Name: "direct", Usage: "Run offline connection cleanup without contacting the daemon (requires --orphans; leaves XFRM interfaces intact)"},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 0 {
-						return cli.Exit("usage: photon advanced recovery cleanup-ipsec [--orphans]", 1)
+						return cli.Exit("usage: photon advanced recovery cleanup-ipsec [--orphans] [--direct]", 1)
 					}
 					return recoveryCleanupIPsec(ctx, cmd.Bool("orphans"), cmd.Bool("direct"))
 				},

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
@@ -93,5 +94,61 @@ func TestDaemonIPsecRotateCutoverReadyUsesHealthManager(t *testing.T) {
 	}
 	if got := (&Daemon{}).ipsecRotateCutoverReady(); got != nil {
 		t.Fatalf("nil health readiness = %#v, want nil", got)
+	}
+}
+
+func TestCollectRevokedPeerZones(t *testing.T) {
+	state, catofesPriv, _, _ := buildPeerStateTestOwners(t)
+	now := time.Unix(2000, 0)
+
+	// Before revocation: no revoked peers.
+	revoked := collectRevokedPeerZones(state.verified.Network, state.observationLinks, state.checkpoint, now)
+	if len(revoked) != 0 {
+		t.Fatalf("expected 0 revoked zones, got %d", len(revoked))
+	}
+
+	// Add a LinkInstance for node-b.
+	state.observationLinks["link-node-b"] = ipsec.LinkInstance{
+		PeerZone: "node-b.catofes.",
+	}
+	// Add node-b to SyncPeers.
+	state.checkpoint.Peers["node-b.catofes."] = corestate.PeerCheckpoint{}
+
+	// Still no revoked zones.
+	revoked = collectRevokedPeerZones(state.verified.Network, state.observationLinks, state.checkpoint, now)
+	if len(revoked) != 0 {
+		t.Fatalf("expected 0 revoked zones before revocation, got %d", len(revoked))
+	}
+
+	// Revoke node-b.
+	addRevocationToParent(t, state.verified.Network, "catofes.", "node-b.catofes.", catofesPriv, now)
+
+	// Now node-b should be in the revoked set (from both LinkInstances and SyncPeers).
+	revoked = collectRevokedPeerZones(state.verified.Network, state.observationLinks, state.checkpoint, now)
+	if !revoked["node-b.catofes."] {
+		t.Fatalf("expected node-b.catofes. in revoked set, got %v", revoked)
+	}
+}
+
+func TestRevokedLinkPeersIncludesSyncPeers(t *testing.T) {
+	state, catofesPriv, _, _ := buildPeerStateTestOwners(t)
+	now := time.Unix(2000, 0)
+
+	// Add node-b to SyncPeers (no LinkInstance).
+	state.checkpoint.Peers["node-b.catofes."] = corestate.PeerCheckpoint{}
+
+	// Before revocation: no revoked peers.
+	revoked := collectRevokedPeerZones(state.verified.Network, state.observationLinks, state.checkpoint, now)
+	if len(revoked) != 0 {
+		t.Fatalf("expected 0 revoked, got %d", len(revoked))
+	}
+
+	// Revoke node-b.
+	addRevocationToParent(t, state.verified.Network, "catofes.", "node-b.catofes.", catofesPriv, now)
+
+	// After revocation: node-b should be in revoked set even without LinkInstance.
+	revoked = collectRevokedPeerZones(state.verified.Network, state.observationLinks, state.checkpoint, now)
+	if !revoked["node-b.catofes."] {
+		t.Fatalf("expected node-b.catofes. in revoked set from SyncPeers, got %v", revoked)
 	}
 }

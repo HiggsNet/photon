@@ -23,14 +23,6 @@ import (
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
-type observerServer struct {
-	daemon   *Daemon
-	config   observerConfig
-	provider *observerProvider
-	server   *observer.Server
-	hub      *observer.Hub
-}
-
 type observerProvider struct {
 	daemon *Daemon
 }
@@ -48,27 +40,14 @@ type observerHealthSeriesResponse struct {
 
 // newObserverServer creates a new read-only HTTP observer from the daemon
 // service and observer configuration. Returns nil if observer is disabled.
-func newObserverServer(d *Daemon, cfg observerConfig) *observerServer {
+func newObserverServer(d *Daemon, cfg observerConfig) *observer.Server {
 	if !cfg.Enabled || d == nil {
 		return nil
 	}
-	provider := &observerProvider{daemon: d}
-	server := observer.NewServer(provider, observer.Config{
+	return observer.NewServer(&observerProvider{daemon: d}, observer.Config{
 		Enabled:            cfg.Enabled,
-		BindAddr:           cfg.BindAddr,
-		Port:               cfg.Port,
 		EventBufferSeconds: cfg.EventBufferSeconds,
 	})
-	if server == nil {
-		return nil
-	}
-	return &observerServer{
-		daemon:   d,
-		config:   cfg,
-		provider: provider,
-		server:   server,
-		hub:      server.Hub(),
-	}
 }
 
 // startObserverServer starts the HTTP observer if enabled. It returns a
@@ -86,13 +65,13 @@ func (d *Daemon) startObserverServer(_ context.Context) (func(), error) {
 		return func() {}, nil
 	}
 	// Wire the observer hub so notifyObserver can broadcast events.
-	d.observerHub = srv.hub
+	d.observerHub = srv.Hub()
 	addr := cfg.listenAddr()
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("observer listen %s: %w", addr, err)
 	}
-	httpServer := observer.DefaultHTTPServer(srv.handler())
+	httpServer := observer.DefaultHTTPServer(srv.Handler())
 	go func() {
 		_ = httpServer.Serve(ln)
 	}()
@@ -122,7 +101,7 @@ func (d *Daemon) notifyObserver(eventType string, payload any) {
 // observerIDsPayload builds a lightweight {key: [sorted ids]} event payload.
 // Payloads carry ids only — never diffs or large objects. Returns nil when
 // there are no ids so the payload field is omitted entirely.
-func observerIDsPayload(key string, ids []string) map[string]any {
+func observerIDsPayload(key string, ids []string) any {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -136,9 +115,6 @@ func (d *Daemon) observerLinkIDsPayload() any {
 	ids := make([]string, 0, len(links))
 	for id := range links {
 		ids = append(ids, id)
-	}
-	if len(ids) == 0 {
-		return nil
 	}
 	return observerIDsPayload("link_ids", ids)
 }
@@ -157,9 +133,6 @@ func (d *Daemon) observerPeerIDsPayload() any {
 	for id := range view.Gossip.Peers {
 		ids = append(ids, id)
 	}
-	if len(ids) == 0 {
-		return nil
-	}
 	return observerIDsPayload("peer_ids", ids)
 }
 
@@ -177,12 +150,6 @@ func (d *Daemon) observerHealthLinkIDsPayload() any {
 		}
 	}
 	return observerIDsPayload("link_ids", ids)
-}
-
-// handler returns the HTTP handler for the observer, including REST APIs,
-// SSE events, and static UI.
-func (s *observerServer) handler() http.Handler {
-	return s.server.Handler()
 }
 
 func (p *observerProvider) Status() (any, error) {
@@ -293,14 +260,13 @@ func (p *observerProvider) Health(linkFilter string) (any, error) {
 
 func (p *observerProvider) OpenMetrics() (string, error) {
 	d := p.daemon
-	config := observerAppConfig(d)
-	if config == nil || !config.Health.Spool.Enabled {
+	if d == nil || d.Config == nil || !d.Config.Health.Spool.Enabled {
 		return "", fmt.Errorf("health metrics are not enabled")
 	}
-	if d == nil || d.health == nil || d.health.Manager == nil {
+	if d.health == nil || d.health.Manager == nil {
 		return "", fmt.Errorf("health manager is not configured")
 	}
-	links := d.health.Snapshot(observerNow(d))
+	links := d.health.Snapshot(d.now())
 	errorsTotal := make(map[string]int, len(links))
 	for _, link := range links {
 		key := link.ProbeID
@@ -317,8 +283,7 @@ func (p *observerProvider) OpenMetrics() (string, error) {
 }
 
 func (p *observerProvider) HealthSeries(linkID string, query map[string]string) (any, error) {
-	config := observerAppConfig(p.daemon)
-	if config == nil {
+	if p.daemon == nil || p.daemon.Config == nil {
 		return nil, observer.Errorf(http.StatusServiceUnavailable, "health datasource not configured")
 	}
 	rng, err := parseOptionalDuration(query["range"], time.Hour, "range")
@@ -329,7 +294,7 @@ func (p *observerProvider) HealthSeries(linkID string, query map[string]string) 
 	if err != nil {
 		return nil, observer.APIError{StatusCode: http.StatusBadRequest, Err: err}
 	}
-	if p.daemon == nil || p.daemon.health == nil || p.daemon.health.spool == nil {
+	if p.daemon.health == nil || p.daemon.health.spool == nil {
 		return nil, observer.Errorf(http.StatusServiceUnavailable, "health datasource not_configured")
 	}
 	result, err := p.daemon.health.spool.Query(linkID, healthspool.SeriesQuery{
@@ -337,7 +302,7 @@ func (p *observerProvider) HealthSeries(linkID string, query map[string]string) 
 		ProbeRole: query["probe_role"],
 		Range:     rng,
 		Step:      step,
-		Now:       observerNow(p.daemon),
+		Now:       p.daemon.now(),
 	})
 	if errors.Is(err, healthspool.ErrNotConfigured) {
 		return nil, observer.Errorf(http.StatusServiceUnavailable, "health datasource not_configured")
@@ -357,20 +322,6 @@ func daemonHealthDatasource(d *Daemon) map[string]any {
 		return healthspool.Config{}.Datasource()
 	}
 	return d.health.spool.Config().Datasource()
-}
-
-func observerAppConfig(d *Daemon) *appConfig {
-	if d == nil || d.Config == nil {
-		return nil
-	}
-	return d.Config
-}
-
-func observerNow(d *Daemon) time.Time {
-	if d != nil {
-		return d.now()
-	}
-	return time.Now()
 }
 
 func parseOptionalDuration(raw string, fallback time.Duration, name string) (time.Duration, error) {

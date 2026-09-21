@@ -1,147 +1,76 @@
 package main
 
-import (
-	"testing"
-)
+import "testing"
 
-func TestParseObserverConfigDefault(t *testing.T) {
-	cfg, err := parseObserverConfig(nil)
-	if err != nil {
-		t.Fatalf("parseObserverConfig(nil) error: %v", err)
-	}
-	if cfg.Enabled {
-		t.Error("default observer should be disabled")
-	}
-	if cfg.BindAddr != "127.0.0.1" {
-		t.Errorf("default bind_addr = %q, want 127.0.0.1", cfg.BindAddr)
-	}
-	if cfg.Port != 8080 {
-		t.Errorf("default port = %d, want 8080", cfg.Port)
-	}
-}
-
-func TestParseObserverConfigEnabled(t *testing.T) {
-	cfg, err := parseObserverConfig(&observerConfigYAML{
-		Listen: "0.0.0.0:9090",
-	})
-	if err != nil {
-		t.Fatalf("parseObserverConfig error: %v", err)
-	}
-	if !cfg.Enabled {
-		t.Error("observer should be enabled")
-	}
-	if cfg.BindAddr != "0.0.0.0" {
-		t.Errorf("bind_addr = %q, want 0.0.0.0", cfg.BindAddr)
-	}
-	if cfg.Port != 9090 {
-		t.Errorf("port = %d, want 9090", cfg.Port)
-	}
-	if cfg.isLoopbackBind() {
-		t.Error("0.0.0.0 should not be loopback")
-	}
-}
-
-func TestParseObserverConfigListen(t *testing.T) {
-	cfg, err := parseObserverConfig(&observerConfigYAML{
-		Listen: "127.0.0.1:9090",
-	})
-	if err != nil {
-		t.Fatalf("parseObserverConfig error: %v", err)
-	}
-	if !cfg.Enabled {
-		t.Error("observer should be enabled")
-	}
-	if cfg.BindAddr != "127.0.0.1" {
-		t.Errorf("bind_addr = %q, want 127.0.0.1", cfg.BindAddr)
-	}
-	if cfg.Port != 9090 {
-		t.Errorf("port = %d, want 9090", cfg.Port)
-	}
-}
-
-func TestParseObserverConfigDisabled(t *testing.T) {
+func TestParseObserverConfig(t *testing.T) {
 	disabled := true
-	cfg, err := parseObserverConfig(&observerConfigYAML{Disabled: &disabled})
-	if err != nil {
-		t.Fatalf("parseObserverConfig error: %v", err)
-	}
-	if cfg.Enabled {
-		t.Error("observer should be disabled")
-	}
-}
-
-func TestParseObserverConfigInvalidPort(t *testing.T) {
-	_, err := parseObserverConfig(&observerConfigYAML{
-		Listen: "127.0.0.1:70000",
-	})
-	if err == nil {
-		t.Error("expected error for invalid port")
-	}
-}
-
-func TestParseObserverConfigLoopbackDetection(t *testing.T) {
-	cfg := defaultObserverConfig()
-	if !cfg.isLoopbackBind() {
-		t.Error("default bind 127.0.0.1 should be loopback")
-	}
-	cfg.BindAddr = "::1"
-	if !cfg.isLoopbackBind() {
-		t.Error("::1 should be loopback")
-	}
-	cfg.BindAddr = "10.0.0.1"
-	if cfg.isLoopbackBind() {
-		t.Error("10.0.0.1 should not be loopback")
+	for _, tc := range []struct {
+		name    string
+		input   *observerConfigYAML
+		want    observerConfig
+		wantErr bool
+	}{
+		{"absent", nil, observerConfig{BindAddr: "127.0.0.1", Port: 8080}, false},
+		{"public", &observerConfigYAML{Listen: "0.0.0.0:9090"}, observerConfig{Enabled: true, BindAddr: "0.0.0.0", Port: 9090}, false},
+		{"loopback", &observerConfigYAML{Listen: "127.0.0.1:9090"}, observerConfig{Enabled: true, BindAddr: "127.0.0.1", Port: 9090}, false},
+		{"disabled", &observerConfigYAML{Disabled: &disabled}, observerConfig{BindAddr: "127.0.0.1", Port: 8080}, false},
+		{"invalid_port", &observerConfigYAML{Listen: "127.0.0.1:70000"}, observerConfig{}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseObserverConfig(tc.input)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("error = %v, want error: %v", err, tc.wantErr)
+			}
+			if !tc.wantErr && got != tc.want {
+				t.Errorf("config = %+v, want %+v", got, tc.want)
+			}
+		})
 	}
 }
 
-func TestObserverConfigListenAddr(t *testing.T) {
-	cfg := observerConfig{BindAddr: "127.0.0.1", Port: 8080}
-	if addr := cfg.listenAddr(); addr != "127.0.0.1:8080" {
-		t.Errorf("listenAddr() = %q, want 127.0.0.1:8080", addr)
+func TestObserverConfigAddress(t *testing.T) {
+	for _, tc := range []struct {
+		host     string
+		address  string
+		loopback bool
+	}{
+		{"127.0.0.1", "127.0.0.1:8080", true},
+		{"::1", "[::1]:8080", true},
+		{"10.0.0.1", "10.0.0.1:8080", false},
+		{"0.0.0.0", "0.0.0.0:8080", false},
+	} {
+		t.Run(tc.host, func(t *testing.T) {
+			cfg := observerConfig{BindAddr: tc.host, Port: 8080}
+			if got := cfg.listenAddr(); got != tc.address {
+				t.Errorf("listenAddr() = %q, want %q", got, tc.address)
+			}
+			if got := cfg.isLoopbackBind(); got != tc.loopback {
+				t.Errorf("isLoopbackBind() = %v, want %v", got, tc.loopback)
+			}
+		})
 	}
 }
 
 func TestObserverConfigFromYAML(t *testing.T) {
-	yaml := `observer:
-  listen: "127.0.0.1:8080"
-`
-	config := defaultAppConfig()
-	if err := parseConfigYAML(yaml, config); err != nil {
-		t.Fatalf("parseConfigYAML error: %v", err)
-	}
-	if !config.Observer.Enabled {
-		t.Error("observer should be enabled from YAML")
-	}
-	if config.Observer.Port != 8080 {
-		t.Errorf("port = %d, want 8080", config.Observer.Port)
-	}
-}
-
-func TestObserverConfigFromEmptyYAMLSection(t *testing.T) {
-	yaml := `observer:
-`
-	config := defaultAppConfig()
-	if err := parseConfigYAML(yaml, config); err != nil {
-		t.Fatalf("parseConfigYAML error: %v", err)
-	}
-	if !config.Observer.Enabled {
-		t.Error("empty observer section should enable observer")
-	}
-	if config.Observer.BindAddr != "127.0.0.1" {
-		t.Errorf("bind_addr = %q, want 127.0.0.1", config.Observer.BindAddr)
-	}
-	if config.Observer.Port != 8080 {
-		t.Errorf("port = %d, want 8080", config.Observer.Port)
-	}
-}
-
-func TestObserverConfigKnownFields(t *testing.T) {
-	yaml := `observer:
-  unknown_field: true
-`
-	config := defaultAppConfig()
-	err := parseConfigYAML(yaml, config)
-	if err == nil {
-		t.Error("expected error for unknown field")
+	for _, tc := range []struct {
+		name    string
+		yaml    string
+		wantErr bool
+	}{
+		{"listen", "observer:\n  listen: '127.0.0.1:8080'\n", false},
+		{"empty_section", "observer:\n", false},
+		{"unknown_field", "observer:\n  unknown_field: true\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config := defaultAppConfig()
+			err := parseConfigYAML(tc.yaml, config)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("error = %v, want error: %v", err, tc.wantErr)
+			}
+			want := observerConfig{Enabled: true, BindAddr: "127.0.0.1", Port: 8080}
+			if !tc.wantErr && config.Observer != want {
+				t.Errorf("config = %+v, want %+v", config.Observer, want)
+			}
+		})
 	}
 }

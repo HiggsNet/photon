@@ -2,12 +2,13 @@ package main
 
 import (
 	"bytes"
-	"fmt"
+	"context"
+	"errors"
 	"io"
+	"log/slog"
 	"log/syslog"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,7 +23,12 @@ const (
 	logLevelError logLevel = "error"
 )
 
+// Configuration is immutable once logging starts.
 type appLogger struct {
+	mu      sync.Mutex
+	buffer  bytes.Buffer
+	handler *slog.TextHandler
+
 	level logLevel
 	out   io.Writer
 	now   func() time.Time
@@ -87,42 +93,24 @@ func isValidLogMode(raw string) bool {
 	}
 }
 
-func logLevelRank(level logLevel) int {
+func (level logLevel) slogLevel() slog.Level {
 	switch level {
 	case logLevelDebug:
-		return 0
-	case logLevelInfo:
-		return 1
+		return slog.LevelDebug
 	case logLevelWarn:
-		return 2
+		return slog.LevelWarn
 	case logLevelError:
-		return 3
+		return slog.LevelError
 	default:
-		return logLevelRank(logLevelInfo)
+		return slog.LevelInfo
 	}
-}
-
-func (l *appLogger) enabled(level logLevel) bool {
-	if l == nil {
-		return newAppLogger(nil).enabled(level)
-	}
-	if l.level == "" {
-		l.level = logLevelInfo
-	}
-	if logLevelRank(level) < logLevelRank(l.level) {
-		return false
-	}
-	if level == logLevelDebug && l.level != logLevelDebug {
-		return false
-	}
-	return true
 }
 
 func (l *appLogger) debugEnabled() bool {
 	if l == nil {
-		return newAppLogger(nil).debugEnabled()
+		l = newAppLogger(nil)
 	}
-	return l.level == logLevelDebug
+	return slog.LevelDebug >= l.level.slogLevel()
 }
 
 func (l *appLogger) Debug(component, event string, fields map[string]any) {
@@ -152,145 +140,102 @@ func (l *appLogger) Error(component, event string, fields map[string]any) {
 	l.write(logLevelError, component, event, fields)
 }
 
+// replaceLogAttr preserves public field names and timestamp precision.
+func replaceLogAttr(groups []string, attr slog.Attr) slog.Attr {
+	if len(groups) != 0 {
+		return attr
+	}
+	switch attr.Key {
+	case slog.TimeKey:
+		return slog.String("ts", attr.Value.Time().UTC().Format(time.RFC3339Nano))
+	case slog.LevelKey:
+		return slog.String("level", strings.ToLower(attr.Value.String()))
+	case slog.MessageKey:
+		attr.Key = "component"
+	}
+	return attr
+}
+
+func reservedLogKey(key string) bool {
+	switch key {
+	case "ts", "level", "component", "event", slog.TimeKey, slog.MessageKey:
+		return true
+	default:
+		return false
+	}
+}
+
 func (l *appLogger) write(level logLevel, component, event string, fields map[string]any) {
 	if l == nil {
 		l = newAppLogger(nil)
 	}
-	if !l.enabled(level) {
+	// Filter before allocating fields or acquiring the output lock.
+	if level.slogLevel() < l.level.slogLevel() {
 		return
-	}
-	out := l.out
-	if out == nil {
-		out = os.Stderr
 	}
 	now := time.Now
 	if l.now != nil {
 		now = l.now
 	}
-	base := map[string]any{
-		"ts":        now().UTC().Format(time.RFC3339Nano),
-		"level":     level,
-		"component": component,
-		"event":     event,
-	}
-	for k, v := range fields {
-		if v != nil {
-			base[k] = v
+	record := slog.NewRecord(now(), level.slogLevel(), component, 0)
+	record.AddAttrs(slog.String("event", event))
+	keys := make([]string, 0, len(fields))
+	for key, value := range fields {
+		if value != nil && !reservedLogKey(key) {
+			keys = append(keys, key)
 		}
 	}
-	line := renderLogLine(base)
-	l.writeLine(level, line)
-}
+	sort.Strings(keys)
+	for _, key := range keys {
+		record.AddAttrs(slog.Any(key, fields[key]))
+	}
 
-func (l *appLogger) writeLine(level logLevel, line []byte) {
-	if len(line) == 0 {
-		return
+	// Protect the reusable buffer and outputs, including non-concurrent writers.
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.handler == nil {
+		l.handler = slog.NewTextHandler(&l.buffer, &slog.HandlerOptions{ReplaceAttr: replaceLogAttr})
 	}
-	if l.mode == "" {
-		l.mode = logModeStderr
+	l.buffer.Reset()
+	// bytes.Buffer.Write cannot fail. Handle does not call Enabled; filtered above.
+	_ = l.handler.Handle(context.Background(), record)
+	line := l.buffer.Bytes()
+	out := l.out
+	if out == nil {
+		out = os.Stderr
 	}
+	var sinkErr error
 	switch l.mode {
-	case logModeStderr, logModeStderrFile, logModeStderrSyslog:
-		l.writeStderrLine(line)
+	case "", logModeStderr, logModeStderrFile, logModeStderrSyslog:
+		_, sinkErr = out.Write(line)
 	}
 	switch l.mode {
 	case logModeFile, logModeStderrFile:
-		l.writeFileLine(line)
+		sinkErr = errors.Join(sinkErr, l.writeFileLine(line))
 	case logModeSyslog, logModeStderrSyslog:
-		l.writeSyslogLine(level, line)
+		sinkErr = errors.Join(sinkErr, writeSyslogLine(level, strings.TrimSuffix(string(line), "\n")))
+	}
+	if sinkErr != nil {
+		// Report directly to stderr instead of recursing into the failing sink.
+		l.buffer.Reset()
+		failure := slog.NewRecord(now(), slog.LevelError, "log", 0)
+		failure.AddAttrs(slog.String("event", "sink_failed"), slog.Any("error", sinkErr))
+		_ = l.handler.Handle(context.Background(), failure)
+		_, _ = out.Write(l.buffer.Bytes())
 	}
 }
 
-func (l *appLogger) writeStderrLine(line []byte) {
-	out := l.out
-	if out == nil {
-		out = os.Stderr
-	}
-	fmt.Fprintln(out, string(line))
-}
-
-func (l *appLogger) writeFileLine(line []byte) {
+func (l *appLogger) writeFileLine(line []byte) error {
 	if l.file == "" {
-		l.writeSinkError("log file path is empty")
-		return
+		return errors.New("log file path is empty")
 	}
+	// Open per entry so external rename-based rotation keeps working.
 	file, err := os.OpenFile(l.file, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
 	if err != nil {
-		l.writeSinkError(err.Error())
-		return
+		return err
 	}
-	_, _ = file.Write(append(line, '\n'))
-	_ = file.Close()
-}
-
-func (l *appLogger) writeSyslogLine(level logLevel, line []byte) {
-	if err := writeSyslogLine(level, string(line)); err != nil {
-		l.writeSinkError(err.Error())
-	}
-}
-
-func (l *appLogger) writeSinkError(err string) {
-	out := l.out
-	if out == nil {
-		out = os.Stderr
-	}
-	fmt.Fprintf(out, "ts=%s level=error component=log event=sink_failed error=%s\n", time.Now().UTC().Format(time.RFC3339Nano), quoteLogValue(err))
-}
-
-func renderLogLine(base map[string]any) []byte {
-	var buf bytes.Buffer
-	keys := make([]string, 0, len(base))
-	for key := range base {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	preferred := []string{"ts", "level", "component", "event", "peer_id", "message", "reason", "error"}
-	written := make(map[string]bool, len(keys))
-	first := true
-	for _, key := range preferred {
-		if _, ok := base[key]; ok {
-			first = writeLogField(&buf, first, key, base[key])
-			written[key] = true
-		}
-	}
-	for _, key := range keys {
-		if written[key] {
-			continue
-		}
-		first = writeLogField(&buf, first, key, base[key])
-	}
-	return buf.Bytes()
-}
-
-func writeLogField(out io.Writer, first bool, key string, value any) bool {
-	if !first {
-		fmt.Fprint(out, " ")
-	}
-	fmt.Fprintf(out, "%s=%s", key, quoteLogValue(value))
-	return false
-}
-
-func quoteLogValue(value any) string {
-	switch v := value.(type) {
-	case string:
-		if v == "" {
-			return `""`
-		}
-		if strings.ContainsAny(v, " \t\n\r\"=") {
-			return strconv.Quote(v)
-		}
-		return v
-	case logLevel:
-		return string(v)
-	case error:
-		return quoteLogValue(v.Error())
-	case time.Duration:
-		return v.String()
-	case fmt.Stringer:
-		return quoteLogValue(v.String())
-	default:
-		return fmt.Sprint(v)
-	}
+	_, writeErr := file.Write(line)
+	return errors.Join(writeErr, file.Close())
 }
 
 func writeSyslogLine(level logLevel, line string) error {

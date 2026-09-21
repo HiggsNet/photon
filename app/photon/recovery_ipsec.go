@@ -20,11 +20,11 @@ func recoveryCleanupIPsec(ctx context.Context, includeOrphans, direct bool) erro
 		fmt.Printf("cleaned %d ipsec link(s), %d orphan connection(s) via daemon\n", response.CleanedLinks, response.CleanedOrphans)
 		return nil
 	}
-	cleaned, orphans, err := recoveryCleanupIPsecDirect(ctx, config, includeOrphans)
+	connections, err := recoveryCleanupIPsecDirect(ctx, config, includeOrphans)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("cleaned %d ipsec link(s), %d orphan connection(s) directly\n", cleaned, orphans)
+	fmt.Printf("cleaned %d Photon-named StrongSwan connection(s) directly; XFRM interfaces were not removed\n", connections)
 	return nil
 }
 
@@ -35,26 +35,24 @@ func cleanupIPsecViaControl(config *appConfig, includeOrphans bool, direct bool)
 	path := controlSocketPath(config)
 	response, err := sendControlRequest(path, controlRequest{Method: "ipsec_cleanup", Orphans: includeOrphans})
 	if err != nil && isControlSocketUnavailable(err) {
-		return nil, true, fmt.Errorf("daemon control socket unavailable; use --direct for an explicit offline write: %w", err)
+		return nil, true, fmt.Errorf("daemon control socket unavailable; use --direct --orphans to explicitly remove all Photon-named StrongSwan connections without deleting XFRM interfaces: %w", err)
 	}
 	return response, true, err
 }
 
-func recoveryCleanupIPsecDirect(ctx context.Context, config *appConfig, includeOrphans bool) (int, int, error) {
+func recoveryCleanupIPsecDirect(ctx context.Context, config *appConfig, includeOrphans bool) (int, error) {
 	if config == nil {
-		return 0, 0, errors.New("runtime is nil")
+		return 0, errors.New("config is nil")
 	}
 	if !includeOrphans {
-		return 0, 0, nil
-	}
-	if config == nil {
-		return 0, 0, errors.New("config is nil")
+		return 0, errors.New("direct IPsec cleanup requires --orphans: offline recovery can only remove all Photon-named StrongSwan connections, not managed links or XFRM interfaces")
 	}
 	platformDriver, err := photonlinux.NewIPsecCleanupDriver(config.IPsec)
 	if err != nil {
-		return 0, 0, err
+		return 0, err
 	}
 	defer func() { _ = platformDriver.Close() }()
-	orphans, err := platformDriver.CleanupIPsecOrphans(ctx, nil)
-	return 0, orphans, err
+	// Offline recovery has no observed link owners or connection keep set.
+	// The explicit --orphans flag opts into removing every Photon-named connection.
+	return platformDriver.CleanupIPsecOrphans(ctx, nil)
 }

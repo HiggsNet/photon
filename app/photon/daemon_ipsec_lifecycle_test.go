@@ -605,26 +605,6 @@ func TestRecoveryPurgeRevokedApplyCleansIPsecLinksBeforeDeletingState(t *testing
 	}
 }
 
-func TestRecoveryCleanupIPsecDirectNoLinksDoesNotRequireVICI(t *testing.T) {
-	verified, checkpoint, runtime, _ := buildTestDaemonOwners(t)
-	verified.ManagedZone = "node-b.catofes."
-	now := time.Unix(5105, 0)
-	rt := &testApp{Config: testConfigWithStatePath(defaultAppConfig(),
-		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
-	}
-	seedPartitionedStateDB(t, rt.Config.StatePath, verified, checkpoint, runtime)
-	cleaned, orphans, err := recoveryCleanupIPsecDirect(context.Background(), rt.Config, false)
-	if err != nil {
-		t.Fatalf("recoveryCleanupIPsecDirect: %v", err)
-	}
-	if cleaned != 0 {
-		t.Fatalf("cleaned = %d, want 0", cleaned)
-	}
-	if orphans != 0 {
-		t.Fatalf("orphans = %d, want 0", orphans)
-	}
-}
-
 func TestDaemonIPsecCleanupEventTearsDownManagedLinks(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(5110, 0)

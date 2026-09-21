@@ -21,7 +21,7 @@ func (p *zoneFilterCapturingProvider) Zones(filter string) (any, error) {
 // ?zone=. query form. The query filter must reach the provider unchanged.
 func TestZonesQueryFilterReachesProvider(t *testing.T) {
 	provider := &zoneFilterCapturingProvider{}
-	srv := NewServer(provider, Config{Enabled: true, BindAddr: "127.0.0.1", Port: 8080})
+	srv := NewServer(provider, Config{Enabled: true})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/zones?zone=.", nil)
 	rr := httptest.NewRecorder()

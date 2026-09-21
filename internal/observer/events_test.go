@@ -81,8 +81,6 @@ func TestRecentEventsBufferDisabled(t *testing.T) {
 func TestRecentEventsBuffered(t *testing.T) {
 	srv := NewServer(testProvider{}, Config{
 		Enabled:            true,
-		BindAddr:           "127.0.0.1",
-		Port:               8080,
 		EventBufferSeconds: 60,
 	})
 	srv.Hub().Broadcast(Event{Type: "link_updated", Payload: map[string]any{"link_ids": []string{"link-a"}}})
@@ -117,8 +115,6 @@ func TestRecentEventsBuffered(t *testing.T) {
 func TestRecentEventsPrunedByTimeWindow(t *testing.T) {
 	srv := NewServer(testProvider{}, Config{
 		Enabled:            true,
-		BindAddr:           "127.0.0.1",
-		Port:               8080,
 		EventBufferSeconds: 30,
 	})
 	old := Event{Type: "stale", Time: 1} // far in the past: pruned on next broadcast

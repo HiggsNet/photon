@@ -364,7 +364,7 @@ func TestLongFirewallReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 	rr := httptest.NewRecorder()
 	observerDone := make(chan struct{})
 	go func() {
-		srv.handler().ServeHTTP(rr, req)
+		srv.Handler().ServeHTTP(rr, req)
 		close(observerDone)
 	}()
 	select {

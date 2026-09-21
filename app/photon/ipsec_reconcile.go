@@ -408,3 +408,27 @@ func ipsecPortGenerations(verified *corestate.VerifiedState, node zone.ZonePath,
 	}
 	return generations
 }
+
+// collectRevokedPeerZones returns the set of peer zones that are currently
+// revoked, expanded from LinkInstances and gossip checkpoint peers, for IPsec
+// reconciliation.
+func collectRevokedPeerZones(network *zone.NetworkState, instances map[string]ipsec.LinkInstance, checkpoint *corestate.GossipCheckpoint, now time.Time) map[zone.ZonePath]bool {
+	out := make(map[zone.ZonePath]bool)
+	if network == nil {
+		return out
+	}
+	for _, inst := range instances {
+		if network.IsZoneRevoked(inst.PeerZone, now) {
+			out[inst.PeerZone] = true
+		}
+	}
+	if checkpoint != nil {
+		for peerID := range checkpoint.Peers {
+			zp := zone.ZonePath(peerID)
+			if network.IsZoneRevoked(zp, now) {
+				out[zp] = true
+			}
+		}
+	}
+	return out
+}

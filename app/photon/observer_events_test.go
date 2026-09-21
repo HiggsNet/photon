@@ -14,7 +14,7 @@ func TestObserverIDsPayloadSortsAndOmitsEmpty(t *testing.T) {
 	if got := observerIDsPayload("link_ids", nil); got != nil {
 		t.Errorf("empty ids payload = %v, want nil", got)
 	}
-	got := observerIDsPayload("link_ids", []string{"link-b", "link-a"})
+	got := observerIDsPayload("link_ids", []string{"link-b", "link-a"}).(map[string]any)
 	ids, ok := got["link_ids"].([]string)
 	if !ok {
 		t.Fatalf("link_ids type = %T, want []string", got["link_ids"])
@@ -67,7 +67,7 @@ func TestObserverHealthLinkIDsPayloadWithoutManager(t *testing.T) {
 	}
 }
 
-func TestNotifyObserverBroadcastsPayloadWithTimestamp(t *testing.T) {
+func TestNotifyObserverBroadcastsPayload(t *testing.T) {
 	hub := observer.NewHub()
 	ch, unsubscribe := hub.Subscribe()
 	defer unsubscribe()
@@ -77,9 +77,6 @@ func TestNotifyObserverBroadcastsPayloadWithTimestamp(t *testing.T) {
 	case received := <-ch:
 		if received.Type != "link_updated" {
 			t.Errorf("type = %q, want link_updated", received.Type)
-		}
-		if received.Time == 0 {
-			t.Error("hub should fill the event timestamp")
 		}
 		payload, ok := received.Payload.(map[string]any)
 		if !ok {

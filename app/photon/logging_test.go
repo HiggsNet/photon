@@ -7,7 +7,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -170,5 +172,72 @@ func TestSyncErrorReasonPendingZones(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "sync once timed out with pending zones: node-b.catofes.") {
 		t.Fatalf("pending error text = %q", err.Error())
+	}
+}
+
+func TestAppLoggerReservedFieldsAndEscaping(t *testing.T) {
+	var out bytes.Buffer
+	logger := (&appLogger{}).withOutput(&out).withNow(func() time.Time { return time.Unix(100, 123) })
+	logger.Info("control", "started", map[string]any{
+		"ts": "fake", "level": "error", "component": "fake", "event": "fake",
+		"time": "fake", "msg": "fake", "nil": nil,
+		"message": "first\nsecond", "values": []string{"a b", "c"},
+	})
+	line := out.String()
+	for _, want := range []string{"ts=1970-01-01T00:01:40.000000123Z", "level=info", "component=control", "event=started", `message="first\nsecond"`, `values="[a b c]"`} {
+		if !strings.Contains(line, want) {
+			t.Errorf("line %q missing %q", line, want)
+		}
+	}
+	if strings.Contains(line, "fake") || strings.Contains(line, "nil=") || strings.Count(line, "\n") != 1 {
+		t.Fatalf("invalid structured log: %q", line)
+	}
+}
+
+func TestAppLoggerConcurrentZeroDefaults(t *testing.T) {
+	var out bytes.Buffer
+	logger := (&appLogger{}).withOutput(&out)
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			logger.Info("test", "concurrent", map[string]any{"id": id})
+		}(i)
+	}
+	wg.Wait()
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 100 {
+		t.Fatalf("got %d lines, want 100", len(lines))
+	}
+	seen := make(map[int]bool)
+	for _, line := range lines {
+		_, raw, ok := strings.Cut(line, "event=concurrent id=")
+		id, err := strconv.Atoi(raw)
+		if !ok || err != nil || seen[id] {
+			t.Fatalf("corrupt or repeated line: %q", line)
+		}
+		seen[id] = true
+	}
+	if logger.level != "" || logger.mode != "" {
+		t.Fatal("logging mutated configuration defaults")
+	}
+}
+
+func TestAppLoggerReportsFileSinkFailure(t *testing.T) {
+	for _, path := range []string{"", t.TempDir(), "/dev/full"} {
+		t.Run(path, func(t *testing.T) {
+			if path == "/dev/full" {
+				if _, err := os.Stat(path); err != nil {
+					t.Skip("/dev/full unavailable")
+				}
+			}
+			var out bytes.Buffer
+			logger := &appLogger{mode: logModeFile, file: path, out: &out}
+			logger.Info("test", "write", nil)
+			if !strings.Contains(out.String(), "level=error component=log event=sink_failed error=") {
+				t.Fatalf("missing sink failure: %q", out.String())
+			}
+		})
 	}
 }
