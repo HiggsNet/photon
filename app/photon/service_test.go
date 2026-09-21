@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -56,6 +57,23 @@ func TestServiceCLIExposesTableAndLocalViews(t *testing.T) {
 	requireCommandFlags(t, mine, "filter", "all", "verbose")
 }
 
+func TestServicePublishCLIRejectsEndpointWithExplicitPort(t *testing.T) {
+	for _, port := range []string{"1080", "3128"} {
+		t.Run(port, func(t *testing.T) {
+			root := &cli.Command{
+				Name: "photon", Commands: []*cli.Command{cmdService()},
+				ExitErrHandler: func(context.Context, *cli.Command, error) {},
+			}
+			err := root.Run(context.Background(), []string{
+				"photon", "service", "publish", "--endpoint", "cn,fd42:1::20,3128", "--port", port,
+			})
+			if err == nil || !strings.Contains(err.Error(), "--endpoint cannot be combined with --port") {
+				t.Fatalf("Run error = %v, want endpoint/port conflict", err)
+			}
+		})
+	}
+}
+
 func TestPublishAndWithdrawSOCKS5Service(t *testing.T) {
 	managed := zone.ZonePath("pek.catofes.")
 	rt, managed := buildRouteTestRuntimeWithNetwork(t, true, func(network *zone.NetworkState) {
@@ -66,7 +84,10 @@ func TestPublishAndWithdrawSOCKS5Service(t *testing.T) {
 			Version: 1, Prefix: "fd42:1::/64", AssignedTo: managed, Active: true,
 		})
 	})
-	if err := publishSOCKS5EndpointsWithConfig(rt.Config, []photonservice.SOCKS5Endpoint{{Region: "cn-east", Address: "fd42:1::20", Port: 3128}}, rt.Now(), rt.Direct); err != nil {
+	if err := submitServiceMutation(rt.Config, serviceMutationRequest{
+		Operation: serviceOperationPublish,
+		Endpoints: []photonservice.SOCKS5Endpoint{{Region: "cn-east", Address: "fd42:1::20", Port: 3128}},
+	}, rt.Now(), rt.Direct); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	common, _, err := loadOfflineOwnerViews(rt.Config)
@@ -78,7 +99,7 @@ func TestPublishAndWithdrawSOCKS5Service(t *testing.T) {
 	if err != nil || !parsed.IsActive() || record.Version != 1 {
 		t.Fatalf("published record = %#v, parsed = %#v, error = %v", record, parsed, err)
 	}
-	if err := withdrawSOCKS5ServiceWithConfig(rt.Config, rt.Now(), rt.Direct); err != nil {
+	if err := submitServiceMutation(rt.Config, serviceMutationRequest{Operation: serviceOperationWithdraw}, rt.Now(), rt.Direct); err != nil {
 		t.Fatalf("withdraw: %v", err)
 	}
 	common, _, err = loadOfflineOwnerViews(rt.Config)
@@ -94,7 +115,10 @@ func TestPublishAndWithdrawSOCKS5Service(t *testing.T) {
 
 func TestPublishSOCKS5ServiceRejectsUnownedAddress(t *testing.T) {
 	rt, _ := buildRouteTestRuntime(t)
-	if err := publishSOCKS5EndpointsWithConfig(rt.Config, []photonservice.SOCKS5Endpoint{{Region: "cn", Address: "fd42:1::20", Port: 3128}}, rt.Now(), rt.Direct); err == nil {
+	if err := submitServiceMutation(rt.Config, serviceMutationRequest{
+		Operation: serviceOperationPublish,
+		Endpoints: []photonservice.SOCKS5Endpoint{{Region: "cn", Address: "fd42:1::20", Port: 3128}},
+	}, rt.Now(), rt.Direct); err == nil {
 		t.Fatal("expected unowned address error")
 	}
 }

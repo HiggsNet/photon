@@ -65,14 +65,10 @@ func publishSOCKS5Endpoints(endpoints []photonservice.SOCKS5Endpoint, direct boo
 		return err
 	}
 
-	return publishSOCKS5EndpointsWithConfig(config, endpoints, time.Now(), direct)
-}
-
-func publishSOCKS5EndpointsWithConfig(config *appConfig, endpoints []photonservice.SOCKS5Endpoint, now time.Time, direct bool) error {
 	return submitServiceMutation(config, serviceMutationRequest{
 		Operation: serviceOperationPublish,
-		Endpoints: append([]photonservice.SOCKS5Endpoint(nil), endpoints...),
-	}, "published", now, direct)
+		Endpoints: endpoints,
+	}, time.Now(), direct)
 }
 
 func parseSOCKS5EndpointFlags(values []string, legacyRegion, legacyAddress string, legacyPort uint16) ([]photonservice.SOCKS5Endpoint, error) {
@@ -106,14 +102,19 @@ func withdrawSOCKS5Service(direct bool) error {
 		return err
 	}
 
-	return withdrawSOCKS5ServiceWithConfig(config, time.Now(), direct)
+	return submitServiceMutation(config, serviceMutationRequest{Operation: serviceOperationWithdraw}, time.Now(), direct)
 }
 
-func withdrawSOCKS5ServiceWithConfig(config *appConfig, now time.Time, direct bool) error {
-	return submitServiceMutation(config, serviceMutationRequest{Operation: serviceOperationWithdraw}, "withdrew", now, direct)
-}
-
-func submitServiceMutation(config *appConfig, request serviceMutationRequest, operation string, now time.Time, direct bool) error {
+func submitServiceMutation(config *appConfig, request serviceMutationRequest, now time.Time, direct bool) error {
+	var operation string
+	switch request.Operation {
+	case serviceOperationPublish:
+		operation = "published"
+	case serviceOperationWithdraw:
+		operation = "withdrew"
+	default:
+		return fmt.Errorf("unsupported service operation %q", request.Operation)
+	}
 	if version, ok, err := sendVersionedMutationViaControl(config, controlRequest{Method: "service_mutate", Service: &request}, direct); ok {
 		if err != nil {
 			return err

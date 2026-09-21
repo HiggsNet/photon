@@ -244,6 +244,9 @@ func cmdService() *cli.Command {
 					if cmd.Args().Len() != 0 || cmd.Uint("port") > 65535 {
 						return cli.Exit("usage: photon service publish --endpoint <region,address,port>...", 1)
 					}
+					if len(cmd.StringSlice("endpoint")) > 0 && cmd.IsSet("port") {
+						return cli.Exit("--endpoint cannot be combined with --port", 1)
+					}
 					endpoints, err := parseSOCKS5EndpointFlags(cmd.StringSlice("endpoint"), cmd.String("region"), cmd.String("address"), uint16(cmd.Uint("port")))
 					if err != nil {
 						return err
