@@ -128,5 +128,9 @@ func (driver *GossipDriver) GossipObjectPullResponse(request *gossip.ObjectPullR
 	if view.State != nil {
 		network = view.State.Network
 	}
-	return gossip.BuildObjectPullResponse(network, request, now)
+	response := gossip.BuildObjectPullResponse(network, request, now)
+	if request != nil && response != nil && response.OK && response.Snapshot != nil {
+		driver.logGossip("debug", "lookup_snapshot", "", "object_pull", nil, map[string]any{"zone": request.Zone.String(), "records": len(response.Snapshot.Records)})
+	}
+	return response
 }

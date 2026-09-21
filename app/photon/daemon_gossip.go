@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"maps"
+	"net"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
@@ -40,7 +42,7 @@ func gossipDriverConfig(app *appConfig, verified *corestate.VerifiedState, logge
 	if app == nil {
 		return corehost.GossipDriverConfig{}
 	}
-	driverConfig := corehost.GossipDriverConfig{
+	return corehost.GossipDriverConfig{
 		PeerID: configuredPeerID(app, verified),
 		Limits: syncLimits(app),
 		Log:    gossipDriverLogger(logger),
@@ -51,14 +53,13 @@ func gossipDriverConfig(app *appConfig, verified *corestate.VerifiedState, logge
 			SourceOrder:    append([]string(nil), app.EndpointSourceOrder...),
 		},
 	}
-	return driverConfig
 }
 
 func gossipDriverLogger(logger *appLogger) func(corehost.GossipDriverLog) {
+	if logger == nil {
+		return nil
+	}
 	return func(event corehost.GossipDriverLog) {
-		if logger == nil {
-			return
-		}
 		fields := make(map[string]any, len(event.Fields)+3)
 		maps.Copy(fields, event.Fields)
 		if event.PeerID != "" {
@@ -77,4 +78,50 @@ func gossipDriverLogger(logger *appLogger) func(corehost.GossipDriverLog) {
 			logger.Debug("sync", event.Event, fields)
 		}
 	}
+}
+
+// startObjectPullServer binds the platform listener and gives its lifecycle to
+// GossipDriver.
+func startObjectPullServer(ctx context.Context, d *Daemon) error {
+	if d == nil || d.gossipDriver == nil || d.gossipDriver.Transport() == nil {
+		return errors.New("object-pull server runtime is not configured")
+	}
+	udp := d.gossipDriver.Transport().LocalAddr()
+	if udp == nil {
+		return errors.New("object-pull local address is not configured")
+	}
+	// TCP object pull shares the gossip UDP address and numeric port.
+	addr := (&net.TCPAddr{IP: udp.IP, Port: udp.Port, Zone: udp.Zone}).String()
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	if err := d.gossipDriver.StartGossipObjectPullServer(ctx, listener, 0, 0); err != nil {
+		_ = listener.Close()
+		return err
+	}
+	d.logInfo("object_pull", "serve_started", map[string]any{"addr": listener.Addr()})
+	return nil
+}
+
+func (d *Daemon) handleSyncTimerEvent(ctx context.Context, force bool) error {
+	if d == nil {
+		return nil
+	}
+	changed, err := d.gossipDriver.SyncGossipPeers(ctx, d.now(), d.gossipSuppressions(), force)
+	if changed {
+		d.refreshGossipDiscovery()
+		d.notifyStateChanged()
+	}
+	return err
+}
+
+func (d *Daemon) handleGossipDriverEvent(ctx context.Context, hostEvent corehost.Event) (corehost.GossipHostEventResult, error) {
+	now := d.now()
+	result, err := d.gossipDriver.HandleGossipHostEvent(ctx, hostEvent, now, d.gossipSuppressions())
+	if err == nil && result.Session.Done && result.Session.NetworkChanged {
+		d.refreshGossipDiscovery()
+		d.notifyStateChanged()
+	}
+	return result, err
 }

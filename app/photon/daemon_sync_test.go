@@ -105,17 +105,7 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 	}
 }
 
-func TestObjectPullTCPAddrUsesGossipPort(t *testing.T) {
-	if got := objectPullTCPAddr("192.0.2.1:33434"); got != "192.0.2.1:33434" {
-		t.Fatalf("objectPullTCPAddr = %q, want 192.0.2.1:33434", got)
-	}
-	if got := objectPullTCPAddr("[2001:db8::1]:33434"); got != "[2001:db8::1]:33434" {
-		t.Fatalf("objectPullTCPAddr v6 = %q, want [2001:db8::1]:33434", got)
-	}
-}
-
-// The timer fallback remains app-specific while daemon scheduling still owns
-// the periodic bootstrap trigger around GossipDriver's bounded event queue.
+// Verify daemon scheduling reaches the driver even when its queue is full.
 func TestDaemonSyncTimerStartsWhenInternalEventQueueIsFull(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(1000, 0)

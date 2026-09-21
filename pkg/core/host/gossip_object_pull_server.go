@@ -17,16 +17,14 @@ const (
 
 var (
 	ErrGossipObjectPullListenerRequired = errors.New("gossip object-pull listener is required")
-	ErrGossipObjectPullLookupRequired   = errors.New("gossip object-pull lookup is required")
 	ErrGossipObjectPullServerStarted    = errors.New("gossip object-pull server is already started")
 )
 
 // StartGossipObjectPullServer transfers listener ownership to GossipDriver and
-// starts its only bounded object-pull accept loop.
+// starts its only bounded object-pull accept loop, serving the driver-owned Store.
 func (driver *GossipDriver) StartGossipObjectPullServer(
 	ctx context.Context,
 	listener net.Listener,
-	lookup func(*gossip.ObjectPullRequest) *gossip.ObjectPullResponse,
 	maxConnections int,
 	connectionDeadline time.Duration,
 ) error {
@@ -35,9 +33,6 @@ func (driver *GossipDriver) StartGossipObjectPullServer(
 	}
 	if listener == nil {
 		return ErrGossipObjectPullListenerRequired
-	}
-	if lookup == nil {
-		return ErrGossipObjectPullLookupRequired
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -66,14 +61,13 @@ func (driver *GossipDriver) StartGossipObjectPullServer(
 	driver.objectPullServerWG.Add(1)
 	driver.mu.Unlock()
 
-	go driver.runGossipObjectPullServer(serverCtx, listener, lookup, maxConnections, connectionDeadline)
+	go driver.runGossipObjectPullServer(serverCtx, listener, maxConnections, connectionDeadline)
 	return nil
 }
 
 func (driver *GossipDriver) runGossipObjectPullServer(
 	ctx context.Context,
 	listener net.Listener,
-	lookup func(*gossip.ObjectPullRequest) *gossip.ObjectPullResponse,
 	maxConnections int,
 	connectionDeadline time.Duration,
 ) {
@@ -107,7 +101,9 @@ func (driver *GossipDriver) runGossipObjectPullServer(
 			stopClose := context.AfterFunc(ctx, func() { _ = conn.Close() })
 			defer stopClose()
 			_ = conn.SetDeadline(time.Now().Add(connectionDeadline))
-			_ = gossip.ServeObjectPull(conn, lookup)
+			_ = gossip.ServeObjectPull(conn, func(request *gossip.ObjectPullRequest) *gossip.ObjectPullResponse {
+				return driver.GossipObjectPullResponse(request, driver.schedulerForRead().clock.Now())
+			})
 		}()
 	}
 }

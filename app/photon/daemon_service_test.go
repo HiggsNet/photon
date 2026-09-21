@@ -6,6 +6,7 @@ import (
 	"time"
 
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -187,8 +188,14 @@ func TestDaemonGossipChangeDefersPlatformWorkToEventLoop(t *testing.T) {
 	service := newTestDaemonFromOwners(&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second)
 	flushes := 0
 	service.Hooks.OnReconcileFlush = func(string) { flushes++ }
-	if !service.observeSyncEventResult(corehost.GossipEventResult{Done: true, NetworkChanged: true}) {
-		t.Fatal("Gossip change was not reported")
+	// A session may apply changes before its remaining object pulls time out.
+	// Its terminal event must still schedule platform reconciliation.
+	session := service.gossipDriver.Gossip.NewSession("peer-a")
+	session.State = gossip.SyncSessionObjectPulling
+	session.AccumulateNetworkChanged(true)
+	result, err := service.handleGossipDriverEvent(context.Background(), corehost.GossipEvent{Value: &gossip.RoundTimeoutEvent{PeerID: "peer-a"}})
+	if err != nil || !result.Session.Done || !result.Session.NetworkChanged {
+		t.Fatalf("Gossip result = %#v, error = %v", result, err)
 	}
 	if flushes != 0 {
 		t.Fatalf("Gossip callback performed %d reconciles", flushes)

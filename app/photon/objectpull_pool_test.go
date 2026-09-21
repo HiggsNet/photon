@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
-	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
@@ -36,15 +35,14 @@ func TestDaemonObjectPullWorkerPullsZone(t *testing.T) {
 		skipRestrictedSocket(t, err)
 		t.Fatalf("Listen: %v", err)
 	}
-	runtime := corehost.NewGossipDriver(corehost.NewClock(nil), corehost.DefaultEventBuffer, nil, corehost.GossipDriverConfig{})
 	server := newTestDaemonFromOwners(
 		&testApp{}, verified, checkpoint, &photonlinux.LinuxState{}, &appConfig{PeerID: "node-b.catofes."}, time.Second,
 	)
-	if err := runtime.StartGossipObjectPullServer(t.Context(), listener, server.objectPullResponse, 0, 0); err != nil {
+	if err := server.gossipDriver.StartGossipObjectPullServer(t.Context(), listener, 0, 0); err != nil {
 		_ = listener.Close()
 		t.Fatalf("StartGossipObjectPullServer: %v", err)
 	}
-	defer runtime.Stop()
+	defer server.gossipDriver.Stop()
 
 	config := &appConfig{Bootstrap: []syncConfigPeer{{ID: "node-b.catofes.", Addr: listener.Addr().String()}}}
 	service := newTestDaemonFromOwners(&testApp{}, verified, nil, &photonlinux.LinuxState{}, config, time.Second)

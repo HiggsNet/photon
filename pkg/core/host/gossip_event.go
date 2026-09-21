@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
 const DefaultGossipRelayFanout = 8
@@ -32,6 +33,38 @@ func (sender gossipDriverSender) datagramBudget() int {
 		return gossip.DefaultDatagramBudget
 	}
 	return sender.transport.MaxMessageBytes()
+}
+
+// SyncGossipPeers starts eligible periodic pulls on the event-loop goroutine.
+// The first event executes directly: a full queue must not strand an idle session.
+// The returned flag reports completed sessions requiring platform reconciliation.
+func (driver *GossipDriver) SyncGossipPeers(ctx context.Context, now time.Time, suppressedPeers map[string]bool, force bool) (bool, error) {
+	if driver == nil {
+		return false, ErrGossipDriverStopped
+	}
+	if driver.gossipTransportForRead() == nil {
+		return false, ErrGossipTransportRequired
+	}
+	input := driver.GossipDiscoveryInput(suppressedPeers)
+	summary := corestate.CatalogSummaryFor(input.Network)
+	changed := false
+	var errs []error
+	for _, peerID := range GossipOutboundPeers(input, now) {
+		if !force && GossipBackoffRemaining(input.Peers[peerID], now) > 0 {
+			continue
+		}
+		if driver.Gossip.HasActiveSession(peerID) {
+			continue
+		}
+		driver.Gossip.NewSession(peerID)
+		result, err := driver.HandleGossipHostEvent(ctx, GossipEvent{Value: &gossip.SyncTimerEvent{PeerID: peerID, LocalSummary: summary}}, now, suppressedPeers)
+		if err != nil {
+			driver.Gossip.RemoveSession(peerID)
+			errs = append(errs, err)
+		}
+		changed = changed || (result.Session.Done && result.Session.NetworkChanged)
+	}
+	return changed, errors.Join(errs...)
 }
 
 // StartGossipSession creates and queues one common gossip pull session. It is
@@ -132,6 +165,16 @@ func (driver *GossipDriver) HandleGossipHostEvent(ctx context.Context, hostEvent
 		return out, nil
 	}
 	if err == nil && result.Done {
+		// Only UDP discovery timeouts are evidence against the UDP address.
+		// A round expiring during TCP object pull must not penalize it.
+		timeout := false
+		switch event.(type) {
+		case *gossip.RoundTimeoutEvent, *gossip.CatalogPageTimeoutEvent:
+			timeout = result.OldState == gossip.SyncSessionSummarySent || result.OldState == gossip.SyncSessionCatalogDiffing
+		}
+		if timeout && result.NewState == gossip.SyncSessionFailed {
+			transport.RecordAddrFailure(result.PeerID, transport.LastSendAddr(result.PeerID))
+		}
 		driver.finishGossipSession(ctx, &result, now, suppressedPeers)
 	}
 	out.Session = result

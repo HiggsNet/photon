@@ -293,3 +293,67 @@ func TestGossipDriverSchedulerDeliversChunkRepairThroughCommonEventBridge(t *tes
 		t.Fatalf("trace = %#v, want %#v", controller.trace, want)
 	}
 }
+
+func TestGossipDriverTimeoutAddressHealth(t *testing.T) {
+	for _, state := range []gossip.SyncSessionState{gossip.SyncSessionSummarySent, gossip.SyncSessionCatalogDiffing, gossip.SyncSessionObjectPulling, gossip.SyncSessionChunkFallback} {
+		t.Run(string(state), func(t *testing.T) {
+			clock := newFakeClock(time.Unix(100, 0))
+			driver := NewGossipDriver(clock, 4, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+			defer driver.Stop()
+			transport, _ := bindMemoryGossipTransport(t, driver, "peer-a")
+			driver.Gossip.NewSession("peer-a")
+			if _, err := driver.HandleGossipHostEvent(context.Background(), GossipEvent{Value: &gossip.SyncTimerEvent{PeerID: "peer-a"}}, clock.Now(), nil); err != nil {
+				t.Fatal(err)
+			}
+			addr := transport.LastSendAddr("peer-a")
+			if addr == nil {
+				t.Fatal("initial ping did not record address")
+			}
+			driver.Gossip.Session("peer-a").State = state
+			result, err := driver.HandleGossipHostEvent(context.Background(), GossipEvent{Value: &gossip.RoundTimeoutEvent{PeerID: "peer-a"}}, clock.Now(), nil)
+			if err != nil || !result.Session.Done {
+				t.Fatalf("result = %#v, error = %v", result, err)
+			}
+			want := 0
+			if state == gossip.SyncSessionSummarySent || state == gossip.SyncSessionCatalogDiffing {
+				want = 1
+			}
+			if got := transport.AddrFailureCount("peer-a", addr); got != want {
+				t.Fatalf("failures = %d, want %d", got, want)
+			}
+		})
+	}
+}
+
+func TestGossipDriverPeriodicSyncRequiresTransport(t *testing.T) {
+	driver := NewGossipDriver(newFakeClock(time.Unix(100, 0)), 4, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipDriverConfig{})
+	defer driver.Stop()
+	if _, err := driver.SyncGossipPeers(context.Background(), time.Unix(100, 0), nil, true); !errors.Is(err, ErrGossipTransportRequired) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestGossipDriverPeriodicSyncPreservesActiveSessionsWithFullQueue(t *testing.T) {
+	now := time.Unix(100, 0)
+	driver := NewGossipDriver(newFakeClock(now), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipDriverConfig{
+		PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits(),
+		Discovery: GossipDiscoveryConfig{Bootstrap: map[string]*net.UDPAddr{"peer-a": {IP: net.ParseIP("127.0.0.1"), Port: 33434}}},
+	})
+	defer driver.Stop()
+	bindMemoryGossipTransport(t, driver, "peer-a")
+	for driver.PostGossip(&gossip.SyncTimerEvent{PeerID: "queued"}) == nil {
+	}
+	if _, err := driver.SyncGossipPeers(context.Background(), now, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	session := driver.Gossip.Session("peer-a")
+	if session == nil || session.State != gossip.SyncSessionSummarySent {
+		t.Fatalf("session = %#v", session)
+	}
+	if _, err := driver.SyncGossipPeers(context.Background(), now, nil, true); err != nil {
+		t.Fatal(err)
+	}
+	if driver.Gossip.Session("peer-a") != session {
+		t.Fatal("force replaced active session")
+	}
+}
