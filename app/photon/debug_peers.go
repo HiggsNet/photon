@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
@@ -15,11 +16,11 @@ import (
 // status of every known peer, including state, reason, last sync, link counts
 // and cleanup timers. It prioritizes daemon committed state when available.
 func debugPeers(_ context.Context) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	if status, ok, err := readCanonicalViewViaControl[inspect.DaemonStatusView](rt, controlRequest{Method: "daemon_status_view"}); err != nil {
+	if status, ok, err := readCanonicalViewViaControl[inspect.DaemonStatusView](config, controlRequest{Method: "daemon_status_view"}, false); err != nil {
 		return err
 	} else if ok {
 		fmt.Printf("daemon: online peer_id=%s link_instances=%d desired_links=%d\n",
@@ -27,7 +28,7 @@ func debugPeers(_ context.Context) error {
 			status.LinkInstances,
 			status.DesiredLinks,
 		)
-		view, peersOnline, err := readCanonicalViewViaControl[inspect.PeerLifecycleDebugView](rt, controlRequest{Method: "peer_lifecycle_view"})
+		view, peersOnline, err := readCanonicalViewViaControl[inspect.PeerLifecycleDebugView](config, controlRequest{Method: "peer_lifecycle_view"}, false)
 		if err != nil {
 			return err
 		}
@@ -39,16 +40,16 @@ func debugPeers(_ context.Context) error {
 }
 
 func showPeers(filter string, verbose bool) error {
-	rt, err := NewAppContext()
+	cfg, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	if peers, ok, err := readCanonicalViewViaControl[[]inspect.PeerDebugView](rt, controlRequest{Method: "gossip_peers_view"}); err != nil {
+	if peers, ok, err := readCanonicalViewViaControl[[]inspect.PeerDebugView](cfg, controlRequest{Method: "gossip_peers_view"}, false); err != nil {
 		return err
 	} else if ok {
 		return inspecttext.WriteGossipPeers(os.Stdout, peers, filter, verbose)
 	}
-	common, _, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(cfg)
 	if err != nil {
 		return err
 	}
@@ -56,20 +57,20 @@ func showPeers(filter string, verbose bool) error {
 		return nil
 	}
 	fmt.Fprintln(os.Stdout, "source: checkpoint (daemon offline; last-known gossip runtime)")
-	config := gossipDriverConfig(rt.Config, common.State, nil)
-	return inspecttext.WriteGossipPeers(os.Stdout, inspect.BuildGossipPeerDebugViews(common, gossipPeersOptions(config, nil, rt.Now())), filter, verbose)
+	config := gossipDriverConfig(cfg, common.State, nil)
+	return inspecttext.WriteGossipPeers(os.Stdout, inspect.BuildGossipPeerDebugViews(common, gossipPeersOptions(config, nil, time.Now())), filter, verbose)
 }
 
-func buildPeerLifecycleDebugView(rt *AppContext, common corestate.View, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary) inspect.PeerLifecycleDebugView {
+func buildPeerLifecycleDebugView(config *appConfig, common corestate.View, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, now time.Time) inspect.PeerLifecycleDebugView {
 	if common.State == nil || common.State.Network == nil {
 		return inspect.PeerLifecycleDebugView{}
 	}
-	now := rt.Now()
+
 	cfg := inspect.PeerLifecycleConfig{}
-	if rt != nil && rt.Config != nil {
-		cfg = rt.Config.PeerLifecycle
+	if config != nil {
+		cfg = config.PeerLifecycle
 	}
-	hasOverlay := rt != nil && rt.Config != nil && len(rt.Config.IPsec.LinkGroups) > 0
+	hasOverlay := config != nil && len(config.IPsec.LinkGroups) > 0
 
 	statuses := derivePeerStatuses(common.State.ManagedZone, common.State.Network, common.Gossip, links, reconcile, now, cfg, hasOverlay)
 	return inspect.BuildPeerLifecycleDebug(cfg, statuses)

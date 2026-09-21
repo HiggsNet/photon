@@ -52,7 +52,7 @@ func TestObserverReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T) {
 	appConfig := defaultAppConfig()
 	appConfig.Observer.Enabled = true
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: appConfig}, verified, checkpoint, runtime, config, time.Second,
+		&testApp{Config: appConfig}, verified, checkpoint, runtime, config, time.Second,
 	)
 	setTestIPsecObservation(service, observationLinks, observationReconcile)
 	srv := newObserverServer(service, appConfig.Observer)

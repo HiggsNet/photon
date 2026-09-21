@@ -30,8 +30,8 @@ func (d *Daemon) gossipSuppressions() map[string]bool {
 		return nil
 	}
 	cfg := inspect.PeerLifecycleConfig{}
-	if d.App != nil && d.App.Config != nil {
-		cfg = d.App.Config.PeerLifecycle
+	if d.Config != nil {
+		cfg = d.Config.PeerLifecycle
 	}
 	return peerLifecycleSuppressions(view.State.Network, view.Gossip, d.now(), cfg)
 }

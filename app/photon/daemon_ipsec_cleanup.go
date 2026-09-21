@@ -9,7 +9,7 @@ import (
 )
 
 func (d *Daemon) handleIPsecCleanupEvent(ctx context.Context, includeOrphans bool) (int, int, error) {
-	if d == nil || d.State == nil || d.App == nil {
+	if d == nil || d.State == nil || d.Config == nil {
 		return 0, 0, errors.New("daemon service is not initialized")
 	}
 	common := d.State.Common.ReadView()

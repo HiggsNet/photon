@@ -14,7 +14,7 @@ import (
 func newStateTestFixture(t *testing.T) *State {
 	t.Helper()
 	rt, _ := buildIPAMTestRuntime(t)
-	view, _, err := loadOfflineOwnerViews(rt)
+	view, _, err := loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}

@@ -15,15 +15,15 @@ import (
 )
 
 func debugRoutingIPRoute(ctx context.Context, netnsName, family string) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	view, online, err := readCanonicalViewViaControlContext[[]inspect.KernelRouteDump](ctx, rt, controlRequest{
+	view, online, err := readCanonicalViewViaControlContext[[]inspect.KernelRouteDump](ctx, config, controlRequest{
 		Method: "kernel_routes_view",
 		NetNS:  netnsName,
 		Family: family,
-	})
+	}, false)
 	if err != nil {
 		return err
 	}
@@ -34,7 +34,7 @@ func debugRoutingIPRoute(ctx context.Context, netnsName, family string) error {
 }
 
 func (d *Daemon) kernelRoutesView(ctx context.Context, netnsName, family string) ([]inspect.KernelRouteDump, error) {
-	if d == nil || d.App == nil || d.App.Config == nil {
+	if d == nil || d.Config == nil {
 		return nil, errors.New("routing configuration is unavailable")
 	}
 	if d.linuxDriver == nil {
@@ -44,8 +44,8 @@ func (d *Daemon) kernelRoutesView(ctx context.Context, netnsName, family string)
 	if err != nil {
 		return nil, err
 	}
-	instances := make([]photonlinux.RoutingInstance, 0, len(d.App.Config.Routing.Instances))
-	for _, inst := range d.App.Config.Routing.Instances {
+	instances := make([]photonlinux.RoutingInstance, 0, len(d.Config.Routing.Instances))
+	for _, inst := range d.Config.Routing.Instances {
 		if !inst.Enabled || inst.Bird.Mode == ipsec.RoutingModeDisabled {
 			continue
 		}

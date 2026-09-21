@@ -9,19 +9,15 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"sort"
 	"syscall"
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
-	"github.com/HiggsNet/photon/internal/photonlinux"
 	pingdebug "github.com/HiggsNet/photon/internal/ping"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
-	"github.com/HiggsNet/photon/pkg/routing/bird"
-	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 const (
@@ -125,33 +121,28 @@ func sendControlRequest(path string, request controlRequest) (*controlResponse, 
 	return &response, nil
 }
 
-func readCanonicalViewViaControl[T any](rt *AppContext, request controlRequest) (T, bool, error) {
+func readCanonicalViewViaControl[T any](config *appConfig, request controlRequest, direct bool) (T, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), controlRequestDeadline)
 	defer cancel()
-	return readCanonicalViewViaControlContext[T](ctx, rt, request)
+	return readCanonicalViewViaControlContext[T](ctx, config, request, direct)
 }
 
-func readCanonicalViewViaControlContext[T any](ctx context.Context, rt *AppContext, request controlRequest) (T, bool, error) {
+func readCanonicalViewViaControlContext[T any](ctx context.Context, config *appConfig, request controlRequest, direct bool) (T, bool, error) {
 	var zero T
-	if rt == nil || rt.DisableControl {
+	if config == nil || direct {
 		return zero, false, nil
 	}
 	var response controlViewResponse[T]
-	if err := exchangeControl(ctx, controlSocketPath(rt.Config), request, &response); err != nil {
+	if err := exchangeControl(ctx, controlSocketPath(config), request, &response); err != nil {
 		if isControlSocketUnavailable(err) {
 			return zero, false, nil
 		}
 		return zero, true, err
 	}
-	return canonicalControlView(response)
-}
-
-func canonicalControlView[T any](response controlViewResponse[T]) (T, bool, error) {
 	if !response.OK {
 		if response.Error == "" {
 			response.Error = "daemon control query failed"
 		}
-		var zero T
 		return zero, true, errors.New(response.Error)
 	}
 	return response.View, true, nil
@@ -187,13 +178,13 @@ func exchangeControl(ctx context.Context, path string, request, response any) er
 	return nil
 }
 
-func verifyChainViaControl(rt *AppContext, path zone.ZonePath) (bool, error) {
-	_, online, err := readCanonicalViewViaControl[bool](rt, controlRequest{Method: "verify_chain", Zone: path.String()})
+func verifyChainViaControl(config *appConfig, path zone.ZonePath, direct bool) (bool, error) {
+	_, online, err := readCanonicalViewViaControl[bool](config, controlRequest{Method: "verify_chain", Zone: path.String()}, direct)
 	return online, err
 }
 
-func routingReloadViaControl(rt *AppContext) (*controlResponse, bool, error) {
-	path := controlSocketPath(rt.Config)
+func routingReloadViaControl(config *appConfig) (*controlResponse, bool, error) {
+	path := controlSocketPath(config)
 	response, err := sendControlRequest(path, controlRequest{Method: "routing_reload"})
 	if err != nil && isControlSocketUnavailable(err) {
 		return nil, false, nil
@@ -201,111 +192,25 @@ func routingReloadViaControl(rt *AppContext) (*controlResponse, bool, error) {
 	return response, true, err
 }
 
-func admissionStatusViaControl(rt *AppContext) (gossip.AdmissionDiagnosis, bool, error) {
-	return readCanonicalViewViaControl[gossip.AdmissionDiagnosis](rt, controlRequest{Method: "admission_status"})
+func admissionStatusViaControl(config *appConfig, direct bool) (gossip.AdmissionDiagnosis, bool, error) {
+	return readCanonicalViewViaControl[gossip.AdmissionDiagnosis](config, controlRequest{Method: "admission_status"}, direct)
 }
 
-func (d *Daemon) birdRoutesForControl(ctx context.Context, dump *inspect.RoutesResponse, instances []photonlinux.RoutingInstance, birdStates map[string]*bird.InstanceObservation) []inspect.BirdRoutesView {
-	if d == nil || dump == nil {
-		return nil
-	}
-	views := make([]inspect.BirdRoutesView, 0, len(instances))
-	for _, inst := range instances {
-		if !inst.Enabled || inst.Bird.Mode == ipsec.RoutingModeDisabled {
-			continue
-		}
-		state := birdStates[inst.Bird.NetNSName]
-		view := inspect.BirdRoutesView{
-			NetNS:      inst.Bird.NetNSName,
-			InstanceID: inst.ID,
-		}
-		socketPath := inst.Bird.ControlSocketPath
-		if state != nil {
-			view.State = state.State
-			view.Failure = inspect.BuildFailure(inspect.FailureCodeBirdInstance, state.LastFailure)
-			if state.ControlSocket != "" {
-				socketPath = state.ControlSocket
-			}
-		}
-		if socketPath == "" {
-			if view.Failure == nil {
-				view.Failure = inspect.BuildFailure(inspect.FailureCodeBirdQuery, errors.New("control socket not configured"))
-			}
-			views = append(views, view)
-			continue
-		}
-		observed, err := d.linuxDriver.ObserveBird(ctx, socketPath, bird.InternalRouteTableNames(inst.Bird.NetNSName)...)
-		if err != nil {
-			view.Failure = inspect.BuildFailure(inspect.FailureCodeBirdQuery, err)
-			views = append(views, view)
-			continue
-		}
-		if observed != nil {
-			view.Routes = inspect.BuildBirdRouteViews(dump, observed.Routes)
-		}
-		views = append(views, view)
-	}
-	sort.Slice(views, func(i, j int) bool {
-		if views[i].NetNS != views[j].NetNS {
-			return views[i].NetNS < views[j].NetNS
-		}
-		return views[i].InstanceID < views[j].InstanceID
-	})
-	return views
-}
-
-func putRecordViaControl(rt *AppContext, path zone.ZonePath, key string, value []byte, recordType string) (uint64, bool, error) {
-	if rt != nil && rt.DisableControl {
-		return 0, false, nil
-	}
-	socketPath := controlSocketPath(rt.Config)
-	response, err := sendControlRequest(socketPath, controlRequest{
-		Method: "record_put",
-		Zone:   path.String(),
-		Key:    key,
-		Value:  value,
-		Type:   recordType,
-	})
-	if err != nil {
-		if isControlSocketUnavailable(err) {
-			return 0, true, fmt.Errorf("daemon control socket unavailable; use --direct for an explicit offline write: %w", err)
-		}
-		return 0, true, err
+func sendVersionedMutationViaControl(config *appConfig, request controlRequest, direct bool) (uint64, bool, error) {
+	response, controlled, err := sendMutationControlRequest(config, request, direct)
+	if err != nil || !controlled {
+		return 0, controlled, err
 	}
 	return response.Version, true, nil
 }
 
-func mutateIPAMViaControl(rt *AppContext, request ipamMutationRequest) (uint64, bool, error) {
-	response, ok, err := sendMutationControlRequest(rt, controlRequest{Method: "ipam_mutate", IPAM: &request})
-	if err != nil || !ok {
-		return 0, ok, err
-	}
-	return response.Version, true, nil
-}
-
-func mutateRouteViaControl(rt *AppContext, request routeMutationRequest) (uint64, bool, error) {
-	response, ok, err := sendMutationControlRequest(rt, controlRequest{Method: "route_mutate", Route: &request})
-	if err != nil || !ok {
-		return 0, ok, err
-	}
-	return response.Version, true, nil
-}
-
-func mutateServiceViaControl(rt *AppContext, request serviceMutationRequest) (uint64, bool, error) {
-	response, ok, err := sendMutationControlRequest(rt, controlRequest{Method: "service_mutate", Service: &request})
-	if err != nil || !ok {
-		return 0, ok, err
-	}
-	return response.Version, true, nil
-}
-
-func sendMutationControlRequest(rt *AppContext, request controlRequest) (*controlResponse, bool, error) {
-	if rt != nil && rt.DisableControl {
+func sendMutationControlRequest(config *appConfig, request controlRequest, direct bool) (*controlResponse, bool, error) {
+	if direct {
 		return nil, false, nil
 	}
 	socketPath := controlSocketPath(nil)
-	if rt != nil {
-		socketPath = controlSocketPath(rt.Config)
+	if config != nil {
+		socketPath = controlSocketPath(config)
 	}
 	response, err := sendControlRequest(socketPath, request)
 	if err != nil && isControlSocketUnavailable(err) {
@@ -314,13 +219,13 @@ func sendMutationControlRequest(rt *AppContext, request controlRequest) (*contro
 	return response, true, err
 }
 
-func getRecordViaControl(rt *AppContext, path zone.ZonePath, key string, history int) (*inspect.RecordDetailView, bool, error) {
-	record, ok, err := readCanonicalViewViaControl[*inspect.RecordDetailView](rt, controlRequest{
+func getRecordViaControl(config *appConfig, path zone.ZonePath, key string, history int, direct bool) (*inspect.RecordDetailView, bool, error) {
+	record, ok, err := readCanonicalViewViaControl[*inspect.RecordDetailView](config, controlRequest{
 		Method:  "record_get",
 		Zone:    path.String(),
 		Key:     key,
 		History: history,
-	})
+	}, direct)
 	if err != nil || !ok {
 		return nil, ok, err
 	}
@@ -330,8 +235,8 @@ func getRecordViaControl(rt *AppContext, path zone.ZonePath, key string, history
 	return record, true, nil
 }
 
-func rotateIPsecPortViaControl(rt *AppContext) (*manualPortRotateResult, bool, error) {
-	socketPath := controlSocketPath(rt.Config)
+func rotateIPsecPortViaControl(config *appConfig) (*manualPortRotateResult, bool, error) {
+	socketPath := controlSocketPath(config)
 	response, err := sendControlRequest(socketPath, controlRequest{Method: "ipsec_rotate_port"})
 	if err != nil {
 		if isControlSocketUnavailable(err) {
@@ -345,12 +250,12 @@ func rotateIPsecPortViaControl(rt *AppContext) (*manualPortRotateResult, bool, e
 	return response.PortRotate, true, nil
 }
 
-func issueDelegationViaControl(rt *AppContext, request *gossip.JoinRequest, permissions []zone.Permission) (*joinBundle, bool, error) {
-	response, ok, err := sendMutationControlRequest(rt, controlRequest{
+func issueDelegationViaControl(config *appConfig, request *gossip.JoinRequest, permissions []zone.Permission, direct bool) (*joinBundle, bool, error) {
+	response, ok, err := sendMutationControlRequest(config, controlRequest{
 		Method:      "delegate_issue",
 		JoinRequest: request,
 		Permissions: permissions,
-	})
+	}, direct)
 	if err != nil || !ok {
 		return nil, ok, err
 	}
@@ -360,23 +265,23 @@ func issueDelegationViaControl(rt *AppContext, request *gossip.JoinRequest, perm
 	return response.JoinBundle, true, nil
 }
 
-func grantDelegationPermissionsViaControl(rt *AppContext, path zone.ZonePath, permissions []zone.Permission) (*joinBundle, bool, error) {
-	response, ok, err := sendMutationControlRequest(rt, controlRequest{
+func grantDelegationPermissionsViaControl(config *appConfig, path zone.ZonePath, permissions []zone.Permission, direct bool) (*joinBundle, bool, error) {
+	response, ok, err := sendMutationControlRequest(config, controlRequest{
 		Method:      "delegate_grant",
 		Zone:        path.String(),
 		Permissions: permissions,
-	})
+	}, direct)
 	if err != nil || !ok {
 		return nil, ok, err
 	}
 	return response.JoinBundle, true, nil
 }
 
-func importRecoveryZoneViaControl(rt *AppContext, snapshot *corestate.ZoneSnapshot) (*corestate.ApplyResult, int, bool, error) {
-	response, ok, err := sendMutationControlRequest(rt, controlRequest{
+func importRecoveryZoneViaControl(config *appConfig, snapshot *corestate.ZoneSnapshot, direct bool) (*corestate.ApplyResult, int, bool, error) {
+	response, ok, err := sendMutationControlRequest(config, controlRequest{
 		Method:   "recovery_import_zone",
 		Snapshot: snapshot,
-	})
+	}, direct)
 	if err != nil || !ok {
 		return nil, 0, ok, err
 	}
@@ -388,66 +293,66 @@ func importRecoveryZoneViaControl(rt *AppContext, snapshot *corestate.ZoneSnapsh
 	}, response.Revocations, true, nil
 }
 
-func revokeDelegationViaControl(rt *AppContext, path zone.ZonePath, reason string) (bool, error) {
-	_, ok, err := sendMutationControlRequest(rt, controlRequest{
+func revokeDelegationViaControl(config *appConfig, path zone.ZonePath, reason string, direct bool) (bool, error) {
+	_, ok, err := sendMutationControlRequest(config, controlRequest{
 		Method: "delegate_revoke",
 		Zone:   path.String(),
 		Reason: reason,
-	})
+	}, direct)
 	return ok, err
 }
 
-func purgeRevokedViaControl(rt *AppContext, apply bool, target zone.ZonePath) (*purgePlan, bool, error) {
-	response, ok, err := sendMutationControlRequest(rt, controlRequest{
+func purgeRevokedViaControl(config *appConfig, apply bool, target zone.ZonePath, direct bool) (*purgePlan, bool, error) {
+	response, ok, err := sendMutationControlRequest(config, controlRequest{
 		Method: "recovery_purge_revoked",
 		Zone:   target.String(),
 		Apply:  apply,
-	})
+	}, direct)
 	if err != nil || !ok {
 		return nil, ok, err
 	}
 	return response.PurgePlan, true, nil
 }
 
-func acceptJoinBundleViaControl(rt *AppContext, bundle *joinBundle, key *privateKeyFile) (bool, error) {
-	_, ok, err := sendMutationControlRequest(rt, controlRequest{
+func acceptJoinBundleViaControl(config *appConfig, bundle *joinBundle, key *privateKeyFile, direct bool) (bool, error) {
+	_, ok, err := sendMutationControlRequest(config, controlRequest{
 		Method:     "join_accept",
 		JoinBundle: bundle,
 		PrivateKey: key,
-	})
+	}, direct)
 	return ok, err
 }
 
-func initRootViaControl(rt *AppContext) (ed25519.PublicKey, bool, error) {
+func checkRootInitViaControl(config *appConfig) error {
 	// root init is an offline bootstrap operation. Probe an existing daemon only
 	// to prevent resetting state it has already loaded; a missing socket is the
 	// normal initialization case and must not require --direct.
 	socketPath := controlSocketPath(nil)
-	if rt != nil {
-		socketPath = controlSocketPath(rt.Config)
+	if config != nil {
+		socketPath = controlSocketPath(config)
 	}
-	response, err := sendControlRequest(socketPath, controlRequest{Method: "root_init"})
+	_, err := sendControlRequest(socketPath, controlRequest{Method: "root_init"})
 	if err != nil {
 		if isControlSocketUnavailable(err) {
-			return nil, false, nil
+			return nil
 		}
-		return nil, true, err
+		return err
 	}
-	return response.RootPublicKey, true, nil
+	return errors.New("root init requires the daemon to be stopped")
 }
 
-func endpointACLApplyViaControl(rt *AppContext, acl photonstate.EndpointACL) (bool, error) {
-	_, ok, err := sendMutationControlRequest(rt, controlRequest{Method: "endpoint_acl_apply", EndpointACL: &acl})
+func endpointACLApplyViaControl(config *appConfig, acl photonstate.EndpointACL, direct bool) (bool, error) {
+	_, ok, err := sendMutationControlRequest(config, controlRequest{Method: "endpoint_acl_apply", EndpointACL: &acl}, direct)
 	return ok, err
 }
 
-func endpointACLRemoveViaControl(rt *AppContext, name string) (bool, error) {
-	_, ok, err := sendMutationControlRequest(rt, controlRequest{Method: "endpoint_acl_remove", Key: name})
+func endpointACLRemoveViaControl(config *appConfig, name string, direct bool) (bool, error) {
+	_, ok, err := sendMutationControlRequest(config, controlRequest{Method: "endpoint_acl_remove", Key: name}, direct)
 	return ok, err
 }
 
-func endpointACLListViaControl(rt *AppContext) ([]photonstate.EndpointACL, bool, error) {
-	return readCanonicalViewViaControl[[]photonstate.EndpointACL](rt, controlRequest{Method: "endpoint_acl_list"})
+func endpointACLListViaControl(config *appConfig, direct bool) ([]photonstate.EndpointACL, bool, error) {
+	return readCanonicalViewViaControl[[]photonstate.EndpointACL](config, controlRequest{Method: "endpoint_acl_list"}, direct)
 }
 
 func isControlSocketUnavailable(err error) bool {

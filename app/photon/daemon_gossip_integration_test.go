@@ -35,7 +35,7 @@ func TestDaemonObjectChunkCompletionNotifiesPlatformOnce(t *testing.T) {
 	delete(targetVerified.Network.Zones, zone.ZonePath("catofes."))
 	delete(targetVerified.Network.Zones, zone.ZonePath("node-b.catofes."))
 	now := time.Unix(2230, 0)
-	rt := &AppContext{Clock: func() time.Time { return now }}
+	rt := &testApp{Clock: func() time.Time { return now }}
 	config := &appConfig{PeerID: "node-a.catofes.", ListenAddr: "127.0.0.1:0"}
 	service := newTestDaemonFromOwners(
 		rt, &targetVerified, &corestate.GossipCheckpoint{}, &photonlinux.LinuxState{}, config, defaultDaemonInterval,

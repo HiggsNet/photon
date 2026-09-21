@@ -210,10 +210,7 @@ func TestDaemonFlushRevocationCleanup(t *testing.T) {
 	}
 
 	appConfig := defaultAppConfig()
-	rt := &AppContext{
-		Config: appConfig,
-		Clock:  func() time.Time { return now },
-	}
+	rt := &testApp{Config: appConfig, Clock: func() time.Time { return now }}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
 	// Flush revocation cleanup.
@@ -232,9 +229,7 @@ func TestDaemonFlushRevocationCleanup(t *testing.T) {
 
 func TestDaemonFlushRevocationCleanupWithoutRevocationsDoesNotCommit(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	rt := &AppContext{
-		Config: defaultAppConfig(),
-	}
+	rt := &testApp{Config: defaultAppConfig()}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	before := uint64(service.State.Common.VerifiedRevision())
 
@@ -260,7 +255,7 @@ func TestDaemonFlushRevocationCleanupAlreadyCleanDoesNotCommit(t *testing.T) {
 		RevokedAuthorityHash:  delegation.AuthorityHash,
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
-	rt := &AppContext{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
+	rt := &testApp{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	service.gossipDriver.Observability.Update("node-b.catofes.", now, func(peer *observability.PeerDiagnostics) {
 		peer.DatagramStats = &observability.PeerDatagramStats{ChunkFallbacks: 1}
@@ -293,7 +288,7 @@ func BenchmarkDaemonFlushRevocationCleanupAlreadyClean(b *testing.B) {
 		RevokedAt:             now.Add(-time.Second).Unix(),
 	}
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: defaultAppConfig(), Clock: func() time.Time { return now }},
+		&testApp{Config: defaultAppConfig(), Clock: func() time.Time { return now }},
 		verified, checkpoint, runtime, config, time.Second,
 	)
 	b.ReportAllocs()
@@ -350,10 +345,7 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 	setTestIPsecOverlayIntent(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
-	rt := &AppContext{
-		Config: appConfig,
-		Clock:  func() time.Time { return now },
-	}
+	rt := &testApp{Config: appConfig, Clock: func() time.Time { return now }}
 
 	// Set up a sync peer with observed path.
 	checkpoint.Peers = map[string]corestate.PeerCheckpoint{
@@ -449,10 +441,7 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 		XFRMTunnelPattern: "phx*",
 	}}
 
-	rt := &AppContext{
-		Config: appConfig,
-		Clock:  func() time.Time { return now },
-	}
+	rt := &testApp{Config: appConfig, Clock: func() time.Time { return now }}
 
 	ipsecDriver := &observedIPsecDriver{}
 	firewallDriver := &captureFirewallDriver{}

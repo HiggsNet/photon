@@ -24,16 +24,16 @@ func TestIssueDelegationRejectsExistingActiveZone(t *testing.T) {
 	if err := runRootInit(); err != nil {
 		t.Fatalf("runRootInit: %v", err)
 	}
-	rt, err := NewAppContext()
+	rt, err := loadAppConfig()
 	if err != nil {
-		t.Fatalf("NewAppContext: %v", err)
+		t.Fatalf("loadAppConfig: %v", err)
 	}
 	publicKey, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
 	request := &gossip.JoinRequest{Version: 1, Zone: "child.", PublicKey: publicKey}
-	if _, err := issueDelegationDirect(rt, request, nil); err != nil {
+	if _, err := issueDelegationDirect(rt, request, nil, time.Now()); err != nil {
 		t.Fatalf("issueDelegationInState(first): %v", err)
 	}
 	state, err := loadConfiguredVerifiedState()
@@ -41,7 +41,7 @@ func TestIssueDelegationRejectsExistingActiveZone(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := photoncrypto.AuthorityHash(state.Network.Zones["child."].Authority)
-	if _, err := issueDelegationDirect(rt, request, []zone.Permission{zone.PermAllocateIP}); !errors.Is(err, errDelegationAlreadyExists) {
+	if _, err := issueDelegationDirect(rt, request, []zone.Permission{zone.PermAllocateIP}, time.Now()); !errors.Is(err, errDelegationAlreadyExists) {
 		t.Fatalf("issueDelegationInState(second) = %v, want errDelegationAlreadyExists", err)
 	}
 	state, err = loadConfiguredVerifiedState()
@@ -187,15 +187,15 @@ func TestJoinFlowAcceptsBase64PayloadArgs(t *testing.T) {
 	}
 
 	t.Setenv("PHOTON_CONFIG", adminConfig)
-	rt, err := NewAppContext()
+	rt, err := loadAppConfig()
 	if err != nil {
-		t.Fatalf("NewAppContext(admin): %v", err)
+		t.Fatalf("loadAppConfig(admin): %v", err)
 	}
 	var request gossip.JoinRequest
 	if err := readBase64JSONOrJSON(requestText, &request); err != nil {
 		t.Fatalf("read request payload: %v", err)
 	}
-	result, err := issueDelegationDirect(rt, &request, nil)
+	result, err := issueDelegationDirect(rt, &request, nil, time.Now())
 	if err != nil {
 		t.Fatalf("issueDelegationDirect: %v", err)
 	}

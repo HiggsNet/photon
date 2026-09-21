@@ -41,7 +41,7 @@ func TestKernelRoutesViewShowsKernelFIBByFamily(t *testing.T) {
 			}
 		},
 	})
-	d := &Daemon{App: &AppContext{Config: config}, linuxDriver: driver}
+	d := &Daemon{Config: config, linuxDriver: driver}
 
 	view, err := d.kernelRoutesView(context.Background(), "main", "all")
 	if err != nil {

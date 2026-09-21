@@ -1,12 +1,52 @@
 package main
 
 import (
+	"encoding/json"
 	"net"
 	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 )
+
+func TestRootInitControlGuard(t *testing.T) {
+	for _, mode := range []string{"absent", "rejected", "unexpected_success"} {
+		t.Run(mode, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "control.sock")
+			t.Setenv("PHOTON_CONTROL_SOCKET", path)
+			if mode != "absent" {
+				listener, err := net.Listen("unix", path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer listener.Close()
+				go func() {
+					conn, err := listener.Accept()
+					if err != nil {
+						return
+					}
+					defer conn.Close()
+					_ = conn.SetDeadline(time.Now().Add(time.Second))
+					var request controlRequest
+					if err := json.NewDecoder(conn).Decode(&request); err != nil {
+						return
+					}
+					response := controlResponse{OK: mode == "unexpected_success"}
+					if !response.OK {
+						response.Error = "daemon has loaded state"
+					}
+					_ = json.NewEncoder(conn).Encode(response)
+				}()
+			}
+			// Even --direct must not bypass the running-daemon guard.
+			err := checkRootInitViaControl(nil)
+			if (err != nil) != (mode != "absent") {
+				t.Fatalf("checkRootInitViaControl() = %v for %s", err, mode)
+			}
+		})
+	}
+}
 
 func TestControlSocketPathDataDirScope(t *testing.T) {
 	t.Setenv("PHOTON_CONTROL_SOCKET", "")

@@ -61,6 +61,7 @@ Daemon
 - [x] 将 `DaemonService` 直接改名并收敛为唯一顶层 `Daemon`，没有在外面增加 supervisor 或兼容 alias。
 - [x] 删除 `SyncRuntime`：Daemon 直接持有 AppContext，clock/logger 使用真实 owner；gossip transport/config 随后继续归回 GossipDriver。
 - [x] 将 `app/photon.Runtime` 改名为 `AppContext`，明确它只承载 CLI/config/state-path/clock，不再冒充产品 Runtime。
+- [x] 进一步删除 `AppContext`：CLI/daemon 直接加载配置，`PHOTON_STATE` 在配置加载时生效；Daemon 持有时钟，离线操作和 control 显式接收时间/direct，持久层只接收配置。
 - [x] 将 `pkg/core/host.Runtime` 直接改名为 `GossipDriver`，同步构造器、配置、错误、调用方和文档术语，不保留兼容 alias。
 - [x] 将 `internal/photonlinux.Runtime` 直接改名为 `LinuxDriver`，同步构造器、options、Daemon owner 和测试，不增加跨平台公共接口或兼容 alias。
 

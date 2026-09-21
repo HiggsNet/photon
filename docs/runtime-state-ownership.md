@@ -48,8 +48,8 @@ Health 与 observer 都是 Daemon 管理生命周期的可选子系统，不是�
 | `WindowsDriver` | `internal/photonwindows` 后续真实平台实现 | 只按真实调用点增加 API，不要求与 Linux 方法对称 |
 | `WindowsState` | Windows 平台持久分区 | 只在有真实跨重启数据时增加字段 |
 | `StateDB` | `pkg/core/state.BoltStore` | State 内部每进程唯一的 bbolt handle/事务/关闭边界；实现类型名保留 BoltStore |
-| 已删除 | `app/photon.SyncRuntime` | Daemon 直接持有 AppContext；GossipDriver 持有 detached 协议配置和唯一 transport/address book |
-| `AppContext` | 原 `app/photon.Runtime` | 已改名；只承载 CLI/config/state-path/clock，不是产品 Runtime |
+| 已删除 | `app/photon.SyncRuntime` | Daemon 直接持有配置和时钟；GossipDriver 持有 detached 协议配置和唯一 transport/address book |
+| 已删除 | `app/photon.AppContext`（原 `Runtime`） | CLI 和 daemon 直接加载 appConfig；状态路径统一归配置，时钟归 Daemon，离线操作显式接收时间，direct 作为命令选项传递 |
 | 已删除 | `app/photon.DaemonStateStore` | 已由职责明确且不提供 aggregate API 的 `app/photon.State` 取代 |
 
 以前文档中的 `CommonRuntime` 只是“Linux/Windows 共用的 gossip 执行闭环”的概念名，当前实现就是 `pkg/core/host.GossipDriver`。它不是额外组件，也不是顶层 Daemon。后续文档统一使用 `GossipDriver`；“common”只描述代码可跨平台复用，不再作为一个 Runtime 名称。

@@ -9,18 +9,18 @@ import (
 )
 
 func recoveryCleanupIPsec(ctx context.Context, includeOrphans, direct bool) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	rt.DisableControl = direct
-	if response, ok, err := cleanupIPsecViaControl(rt, includeOrphans); err != nil {
+
+	if response, ok, err := cleanupIPsecViaControl(config, includeOrphans, direct); err != nil {
 		return err
 	} else if ok {
 		fmt.Printf("cleaned %d ipsec link(s), %d orphan connection(s) via daemon\n", response.CleanedLinks, response.CleanedOrphans)
 		return nil
 	}
-	cleaned, orphans, err := recoveryCleanupIPsecDirect(ctx, rt, includeOrphans)
+	cleaned, orphans, err := recoveryCleanupIPsecDirect(ctx, config, includeOrphans)
 	if err != nil {
 		return err
 	}
@@ -28,11 +28,11 @@ func recoveryCleanupIPsec(ctx context.Context, includeOrphans, direct bool) erro
 	return nil
 }
 
-func cleanupIPsecViaControl(rt *AppContext, includeOrphans bool) (*controlResponse, bool, error) {
-	if rt != nil && rt.DisableControl {
+func cleanupIPsecViaControl(config *appConfig, includeOrphans bool, direct bool) (*controlResponse, bool, error) {
+	if direct {
 		return nil, false, nil
 	}
-	path := controlSocketPath(rt.Config)
+	path := controlSocketPath(config)
 	response, err := sendControlRequest(path, controlRequest{Method: "ipsec_cleanup", Orphans: includeOrphans})
 	if err != nil && isControlSocketUnavailable(err) {
 		return nil, true, fmt.Errorf("daemon control socket unavailable; use --direct for an explicit offline write: %w", err)
@@ -40,17 +40,17 @@ func cleanupIPsecViaControl(rt *AppContext, includeOrphans bool) (*controlRespon
 	return response, true, err
 }
 
-func recoveryCleanupIPsecDirect(ctx context.Context, rt *AppContext, includeOrphans bool) (int, int, error) {
-	if rt == nil {
+func recoveryCleanupIPsecDirect(ctx context.Context, config *appConfig, includeOrphans bool) (int, int, error) {
+	if config == nil {
 		return 0, 0, errors.New("runtime is nil")
 	}
 	if !includeOrphans {
 		return 0, 0, nil
 	}
-	if rt.Config == nil {
+	if config == nil {
 		return 0, 0, errors.New("config is nil")
 	}
-	platformDriver, err := photonlinux.NewIPsecCleanupDriver(rt.Config.IPsec)
+	platformDriver, err := photonlinux.NewIPsecCleanupDriver(config.IPsec)
 	if err != nil {
 		return 0, 0, err
 	}

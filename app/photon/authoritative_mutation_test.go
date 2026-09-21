@@ -15,7 +15,7 @@ import (
 
 func TestDaemonIPAMMutationUsesCommittedAuthorityNotDifferentDiskState(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
-	committed, runtime, err := loadOfflineOwnerViews(rt)
+	committed, runtime, err := loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews(committed): %v", err)
 	}
@@ -45,7 +45,7 @@ func TestDaemonIPAMMutationUsesCommittedAuthorityNotDifferentDiskState(t *testin
 	if after.State.Network.Zones[managed].Records[key] != nil {
 		t.Fatal("rejected assignment entered committed state")
 	}
-	disk, _, err := loadOfflineOwnerViews(rt)
+	disk, _, err := loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews(disk): %v", err)
 	}
@@ -56,11 +56,11 @@ func TestDaemonIPAMMutationUsesCommittedAuthorityNotDifferentDiskState(t *testin
 
 func TestDaemonIPAMMutationPersistsCommittedDecisionWhenDiskIsOlder(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
-	committed, runtime, err := loadOfflineOwnerViews(rt)
+	committed, runtime, err := loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews(committed): %v", err)
 	}
-	olderDisk, _, err := loadOfflineOwnerViews(rt)
+	olderDisk, _, err := loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews(older disk): %v", err)
 	}
@@ -90,7 +90,7 @@ func TestDaemonIPAMMutationPersistsCommittedDecisionWhenDiskIsOlder(t *testing.T
 
 func TestDaemonRouteMutationRejectsUsingCommittedActiveStateNotDisk(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
-	view, runtime, err := loadOfflineOwnerViews(rt)
+	view, runtime, err := loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestDaemonRouteMutationRejectsUsingCommittedActiveStateNotDisk(t *testing.T
 		t.Fatalf("rejected route changed daemon state: revision %d -> %d dirty=%v/%v/%v", beforeRevision, afterRevision, service.ipsecDirty, service.routingDirty, service.firewallDirty)
 	}
 	key, _ := routing.NormalizeRouteAnnouncementKey("10.0.4.0/24")
-	disk, _, err := loadOfflineOwnerViews(rt)
+	disk, _, err := loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews(disk): %v", err)
 	}
@@ -142,7 +142,7 @@ func TestDaemonRouteMutationRejectsUsingCommittedActiveStateNotDisk(t *testing.T
 
 func TestDaemonMutationRejectsUsingCommittedAssignmentsNotDisk(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
-	committed, runtime, err := loadOfflineOwnerViews(rt)
+	committed, runtime, err := loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews(committed): %v", err)
 	}
@@ -171,7 +171,7 @@ func TestDaemonMutationRejectsUsingCommittedAssignmentsNotDisk(t *testing.T) {
 		t.Fatalf("rejected service changed daemon state: revision %d -> %d dirty=%v/%v/%v", beforeRevision, afterRevision, service.ipsecDirty, service.routingDirty, service.firewallDirty)
 	}
 	key, _ := photonservice.RecordKey(socks5RecordName)
-	reloaded, _, err := loadOfflineOwnerViews(rt)
+	reloaded, _, err := loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews(disk): %v", err)
 	}
@@ -182,7 +182,7 @@ func TestDaemonMutationRejectsUsingCommittedAssignmentsNotDisk(t *testing.T) {
 
 func TestDaemonTypedDryRunDoesNotCommit(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
-	view, runtime, err := loadOfflineOwnerViews(rt)
+	view, runtime, err := loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestDaemonTypedDryRunDoesNotCommit(t *testing.T) {
 
 func TestExplicitDirectAndDaemonIPAMUseSameDomainValidation(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
-	view, runtime, err := loadOfflineOwnerViews(rt)
+	view, runtime, err := loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}
@@ -270,9 +270,9 @@ func applyAuthoritativeTestIntentAs(state *corestate.VerifiedState, managedZone 
 // differ from a daemon's in-memory common owner. These tests exercise that
 // conflict boundary, so write the current common schema instead of reviving
 // the legacy aggregate buckets.
-func replacePersistedCommonForTest(t *testing.T, rt *AppContext, verified *corestate.VerifiedState) {
+func replacePersistedCommonForTest(t *testing.T, rt *testApp, verified *corestate.VerifiedState) {
 	t.Helper()
-	store, err := corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
+	store, err := corestate.OpenBoltStore(rt.Config.StatePath, 0o600, daemonBoltLockTimeout)
 	if err != nil {
 		t.Fatalf("OpenBoltStore: %v", err)
 	}
@@ -293,17 +293,17 @@ func replacePersistedCommonForTest(t *testing.T, rt *AppContext, verified *cores
 
 func TestUnavailableMutationControlFailsClosedWithoutDiskWrite(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
-	rt.DisableControl = false
-	t.Setenv("PHOTON_CONTROL_SOCKET", rt.StatePath+".missing.sock")
+	rt.Direct = false
+	t.Setenv("PHOTON_CONTROL_SOCKET", rt.Config.StatePath+".missing.sock")
 	request := ipamMutationRequest{
 		Operation: ipamOperationAssignmentCreate,
 		Zone:      managed, Prefix: "10.0.9.0/24", Target: managed,
 	}
-	if _, controlled, err := mutateIPAMViaControl(rt, request); err == nil || !controlled {
-		t.Fatalf("mutateIPAMViaControl controlled/error = %t/%v, want fail-closed control error", controlled, err)
+	if _, controlled, err := sendVersionedMutationViaControl(rt.Config, controlRequest{Method: "ipam_mutate", IPAM: &request}, rt.Direct); err == nil || !controlled {
+		t.Fatalf("sendVersionedMutationViaControl controlled/error = %t/%v, want fail-closed control error", controlled, err)
 	}
 	key, _ := routing.NormalizeIPAMAssignmentKey(request.Prefix)
-	view, _, err := loadOfflineOwnerViews(rt)
+	view, _, err := loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestUnavailableMutationControlFailsClosedWithoutDiskWrite(t *testing.T) {
 
 func TestTypedIPAMControlMethodCommitsDaemonValidatedRequest(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
-	view, runtime, err := loadOfflineOwnerViews(rt)
+	view, runtime, err := loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestTypedIPAMControlMethodCommitsDaemonValidatedRequest(t *testing.T) {
 func TestDaemonCommonMutationRejectsReservedRecordWithoutRevision(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: defaultAppConfig(), Clock: time.Now}, verified, checkpoint, runtime, config, time.Second,
+		&testApp{Config: defaultAppConfig(), Clock: time.Now}, verified, checkpoint, runtime, config, time.Second,
 	)
 	before := uint64(service.State.Common.VerifiedRevision())
 	result, syncNow, _ := service.handleEvent(daemonEvent{

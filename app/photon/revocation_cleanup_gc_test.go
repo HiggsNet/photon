@@ -40,7 +40,7 @@ func TestDaemonPurgeDryRunMergesCommonAndLinuxRuntimePlan(t *testing.T) {
 		"node-b.catofes.": {FailureCount: 1}, "leaf.node-b.catofes.": {FailureCount: 1}, "node-c.catofes.": {FailureCount: 1},
 	}
 	service := newTestDaemonFromOwners(
-		&AppContext{Clock: func() time.Time { return now }}, verified, checkpoint, runtime, config, defaultDaemonInterval,
+		&testApp{Clock: func() time.Time { return now }}, verified, checkpoint, runtime, config, defaultDaemonInterval,
 	)
 	setTestIPsecObservation(service, observationLinks, nil)
 

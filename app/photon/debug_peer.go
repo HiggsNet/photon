@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
@@ -10,17 +11,17 @@ import (
 )
 
 func debugPeer(peerID string) error {
-	rt, err := NewAppContext()
+	cfg, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	if view, ok, err := readCanonicalViewViaControl[inspect.PeerDebugView](rt, controlRequest{Method: "peer_debug", Zone: peerID}); err != nil {
+	if view, ok, err := readCanonicalViewViaControl[inspect.PeerDebugView](cfg, controlRequest{Method: "peer_debug", Zone: peerID}, false); err != nil {
 		return err
 	} else if ok {
 		fmt.Printf("daemon: online peer_id=%s\n", view.PeerID)
 		return inspecttext.WritePeerDebug(os.Stdout, view)
 	}
-	common, _, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(cfg)
 	if err != nil {
 		return err
 	}
@@ -28,8 +29,8 @@ func debugPeer(peerID string) error {
 		return fmt.Errorf("common state is not initialized")
 	}
 	fmt.Fprintln(os.Stdout, "source: checkpoint (daemon offline; last-known gossip runtime)")
-	config := gossipDriverConfig(rt.Config, common.State, nil)
-	view, ok := inspect.BuildGossipPeerDebugView(common, gossipPeersOptions(config, nil, rt.Now()), peerID)
+	config := gossipDriverConfig(cfg, common.State, nil)
+	view, ok := inspect.BuildGossipPeerDebugView(common, gossipPeersOptions(config, nil, time.Now()), peerID)
 	if !ok {
 		return fmt.Errorf("%w: %s", zone.ErrZoneNotFound, peerID)
 	}

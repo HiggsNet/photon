@@ -14,12 +14,12 @@ import (
 // configured-but-revoked peers, IPAM prefixes and per-layer cleanup status)
 // for all currently-revoked zones, or for a single zone if specified.
 func debugRevokeImpact(_ context.Context, zoneArg string) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
 
-	if impacts, ok, err := readCanonicalViewViaControl[[]inspect.RevocationImpact](rt, controlRequest{Method: "revocation_view", Zone: zoneArg}); err != nil {
+	if impacts, ok, err := readCanonicalViewViaControl[[]inspect.RevocationImpact](config, controlRequest{Method: "revocation_view", Zone: zoneArg}, false); err != nil {
 		return err
 	} else if ok {
 		return inspecttext.WriteRevocationImpacts(os.Stdout, impacts)

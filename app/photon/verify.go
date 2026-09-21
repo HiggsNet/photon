@@ -2,23 +2,24 @@ package main
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
 func verifyChain(path zone.ZonePath) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	if ok, err := verifyChainViaControl(rt, path); err != nil {
+	if ok, err := verifyChainViaControl(config, path, false); err != nil {
 		return err
 	} else if ok {
 		fmt.Printf("verified chain for %s\n", path)
 		return nil
 	}
-	common, _, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(config)
 	if err != nil {
 		return err
 	}
@@ -26,7 +27,7 @@ func verifyChain(path zone.ZonePath) error {
 		return fmt.Errorf("common state is not initialized")
 	}
 	configureValidation(common.State.Network)
-	if err := photoncrypto.VerifyChain(common.State.Network, path, rt.Now()); err != nil {
+	if err := photoncrypto.VerifyChain(common.State.Network, path, time.Now()); err != nil {
 		return err
 	}
 	fmt.Printf("verified chain for %s\n", path)

@@ -134,11 +134,11 @@ func recoveryExportZone(path zone.ZonePath, outPath string) error {
 	if !path.Valid() {
 		return zone.ErrInvalidZonePath
 	}
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	state, err := openState(rt)
+	state, err := openState(config)
 	if err != nil {
 		return err
 	}
@@ -171,12 +171,12 @@ func recoveryImportZone(input string, direct bool) error {
 	if err := readBase64JSONOrJSON(input, &snapshot); err != nil {
 		return err
 	}
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	rt.DisableControl = direct
-	if result, revocations, ok, err := importRecoveryZoneViaControl(rt, &snapshot); err != nil {
+
+	if result, revocations, ok, err := importRecoveryZoneViaControl(config, &snapshot, direct); err != nil {
 		return err
 	} else if ok {
 		printRecoveryImportResult(result, revocations, " via daemon")
@@ -185,7 +185,7 @@ func recoveryImportZone(input string, direct bool) error {
 	if !direct {
 		logControlFallback("recovery_import_zone")
 	}
-	state, err := openState(rt)
+	state, err := openState(config)
 	if err != nil {
 		return err
 	}
@@ -194,12 +194,12 @@ func recoveryImportZone(input string, direct bool) error {
 	if view.State == nil {
 		return errors.New("common state is not initialized")
 	}
-	limits := syncLimits(rt.Config)
+	limits := syncLimits(config)
 	limits.MaxBytes = 8 << 20
 	imported, err := state.Common.ImportRecoverySnapshot(context.Background(), corestate.RecoveryImport{
 		Snapshot: &snapshot,
 		Limits:   limits,
-	}, rt.Now())
+	}, time.Now())
 	if err != nil {
 		return err
 	}
@@ -252,11 +252,11 @@ func recoveryPullZones(ctx context.Context, paths []zone.ZonePath, peerID string
 	if timeout <= 0 {
 		return errors.New("recovery timeout must be positive")
 	}
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	state, err := openState(rt)
+	state, err := openState(config)
 	if err != nil {
 		return err
 	}
@@ -265,17 +265,17 @@ func recoveryPullZones(ctx context.Context, paths []zone.ZonePath, peerID string
 	if view.State == nil {
 		return errors.New("common state is not initialized")
 	}
-	limits := syncLimits(rt.Config)
+	limits := syncLimits(config)
 	limits.MaxBytes = 8 << 20
-	driverConfig := gossipDriverConfig(rt.Config, view.State, newAppLogger(rt.Config))
+	driverConfig := gossipDriverConfig(config, view.State, newAppLogger(config))
 	driverConfig.Limits = limits
-	gossipDriver := corehost.NewGossipDriver(corehost.NewClock(rt.Now), corehost.DefaultEventBuffer, state.Common, driverConfig)
+	gossipDriver := corehost.NewGossipDriver(corehost.NewClock(time.Now), corehost.DefaultEventBuffer, state.Common, driverConfig)
 	defer gossipDriver.Stop()
 
 	deadline := time.Now().Add(timeout)
 	pullExecutor := corehost.NewGossipObjectPullExecutor(corehost.GossipObjectPullExecutorConfig{
 		Client: photonlinux.GossipObjectPullClient{},
-		Now:    rt.Now,
+		Now:    time.Now,
 	})
 	results := make([]*corestate.ApplyResult, 0, len(paths))
 	// Commit each ancestor before validating its child. An interrupted chain
@@ -287,14 +287,14 @@ func recoveryPullZones(ctx context.Context, paths []zone.ZonePath, peerID string
 		default:
 		}
 		current := state.Common.ReadView()
-		input := gossipDriver.GossipDiscoveryInput(peerLifecycleSuppressions(current.State.Network, current.Gossip, rt.Now(), rt.Config.PeerLifecycle))
+		input := gossipDriver.GossipDiscoveryInput(peerLifecycleSuppressions(current.State.Network, current.Gossip, time.Now(), config.PeerLifecycle))
 		pullCtx, cancel := context.WithDeadline(ctx, deadline)
 		completion := pullExecutor.PullFrom(pullCtx, input, gossip.StartObjectPullAction{PeerID: peerID, Zone: path})
 		cancel()
 		if completion.Err != nil {
 			return fmt.Errorf("recover %s from %s: %w", path, peerID, completion.Err)
 		}
-		imported, err := state.Common.ImportRecoverySnapshot(ctx, corestate.RecoveryImport{Snapshot: completion.Snapshot, Limits: limits}, rt.Now())
+		imported, err := state.Common.ImportRecoverySnapshot(ctx, corestate.RecoveryImport{Snapshot: completion.Snapshot, Limits: limits}, time.Now())
 		if err != nil {
 			return fmt.Errorf("recover %s from %s: %w", path, peerID, err)
 		}
@@ -327,16 +327,16 @@ func recoveryChainZones(path zone.ZonePath) []zone.ZonePath {
 }
 
 func recoveryPurgeRevoked(ctx context.Context, apply bool, target zone.ZonePath, direct bool) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	rt.DisableControl = direct
+
 	// Only --apply talks to the daemon so the running node can observe the
 	// deletion and reconcile (tear down orphaned IPsec, etc.). A dry-run is a
 	// pure local computation and never reaches the daemon.
 	if apply {
-		plan, controlled, err := purgeRevokedViaControl(rt, apply, target)
+		plan, controlled, err := purgeRevokedViaControl(config, apply, target, direct)
 		if err != nil {
 			return err
 		}
@@ -348,12 +348,12 @@ func recoveryPurgeRevoked(ctx context.Context, apply bool, target zone.ZonePath,
 			logControlFallback("recovery_purge_revoked")
 		}
 	}
-	state, err := openState(rt)
+	state, err := openState(config)
 	if err != nil {
 		return err
 	}
 	defer state.Close()
-	now := rt.Now()
+	now := time.Now()
 	commonPlan, err := state.Common.PlanPurgeRevoked(now, target)
 	if err != nil {
 		return err

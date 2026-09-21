@@ -11,27 +11,23 @@ import (
 )
 
 func runRootInit() error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	if rootPub, controlled, err := initRootViaControl(rt); err != nil {
+	if err := checkRootInitViaControl(config); err != nil {
 		return err
-	} else if controlled {
-		fmt.Printf("initialized root via daemon in %s\n", rt.StatePath)
-		fmt.Printf("root public key: %s\n", formatPublicKey(rootPub))
-		return nil
 	}
-	rootPub, err := initializeRootState(rt)
+	rootPub, err := initializeRootState(config)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("initialized root in %s\n", rt.StatePath)
+	fmt.Printf("initialized root in %s\n", config.StatePath)
 	fmt.Printf("root public key: %s\n", formatPublicKey(rootPub))
 	return nil
 }
 
-func initializeRootState(rt *AppContext) (ed25519.PublicKey, error) {
+func initializeRootState(config *appConfig) (ed25519.PublicKey, error) {
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		return nil, err
@@ -39,7 +35,7 @@ func initializeRootState(rt *AppContext) (ed25519.PublicKey, error) {
 	rootAuthority := photoncrypto.ConfiguredRootAuthority(rootPub)
 	ns := zone.NewNetworkState()
 	ns.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, rootAuthority)
-	store, err := corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
+	store, err := corestate.OpenBoltStore(config.StatePath, 0o600, daemonBoltLockTimeout)
 	if err != nil {
 		return nil, err
 	}

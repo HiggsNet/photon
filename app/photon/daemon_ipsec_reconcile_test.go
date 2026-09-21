@@ -160,7 +160,7 @@ func TestXFRMObservationReportsRuntimeDerivationError(t *testing.T) {
 func TestPublishIPsecObservationRefreshesLiveSACounters(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+		&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
 	rev := uint64(service.State.Common.VerifiedRevision())
 	instances := map[string]ipsec.LinkInstance{
@@ -203,10 +203,8 @@ func TestPublishIPsecObservationRefreshesLiveSACounters(t *testing.T) {
 func TestRecordIPsecReconcileErrorRefreshesRepeatedObservation(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(3990, 0)
-	rt := &AppContext{
-		Config:    defaultAppConfig(),
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+	rt := &testApp{Config: testConfigWithStatePath(defaultAppConfig(),
+		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
 	}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	firstRev := uint64(service.State.Common.VerifiedRevision())
@@ -234,7 +232,7 @@ func TestRecordIPsecReconcileErrorRefreshesRepeatedObservation(t *testing.T) {
 	if observation == nil || observation.LastFailure == nil || observation.LastFailure.Error() != "vici timeout" {
 		t.Fatalf("ipsec failure = %+v", observation)
 	}
-	inspection := buildStoredLinkInspection(service.App, nil, observation, nil, nil)
+	inspection := buildStoredLinkInspection(service.Config, nil, observation, nil, nil)
 	if inspection.Inspection.LastFailure == nil || inspection.Inspection.LastFailure.Code != inspect.FailureCodeIPsecReconcile || inspection.Inspection.LastFailure.Message != "vici timeout" {
 		t.Fatalf("inspect failure = %+v", inspection.Inspection.LastFailure)
 	}
@@ -244,7 +242,7 @@ func TestPublishIPsecObservationRejectsEquivalentStaleResult(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(4040, 0)
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+		&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
 	rev := uint64(service.State.Common.VerifiedRevision())
 	instances := map[string]ipsec.LinkInstance{
@@ -283,10 +281,8 @@ func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
 		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
 	}}
-	rt := &AppContext{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+	rt := &testApp{Config: testConfigWithStatePath(appConfig,
+		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
 	}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
@@ -444,10 +440,8 @@ func TestDaemonIPsecReconcileDiscardsResultWhenRevisionChanged(t *testing.T) {
 	setTestIPsecOverlayIntent(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
-	rt := &AppContext{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+	rt := &testApp{Config: testConfigWithStatePath(appConfig,
+		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
 	}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	baseRev := uint64(service.State.Common.VerifiedRevision())
@@ -487,10 +481,8 @@ func TestLongIPsecReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 	setTestIPsecOverlayIntent(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
-	rt := &AppContext{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+	rt := &testApp{Config: testConfigWithStatePath(appConfig,
+		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
 	}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	started := make(chan struct{})
@@ -565,10 +557,8 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
 		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
 	}}
-	rt := &AppContext{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+	rt := &testApp{Config: testConfigWithStatePath(appConfig,
+		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
 	}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	service.notifyStateChanged()
@@ -637,10 +627,8 @@ func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
 		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
 	}}
-	rt := &AppContext{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+	rt := &testApp{Config: testConfigWithStatePath(appConfig,
+		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
 	}
 	driver := &countingIPsecDriver{}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
@@ -701,10 +689,8 @@ func TestDaemonVICILifecycleEventsOnlyTriggerCoalescedIPsecReconcile(t *testing.
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
 		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
 	}}
-	rt := &AppContext{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+	rt := &testApp{Config: testConfigWithStatePath(appConfig,
+		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
 	}
 	driver := &countingIPsecDriver{}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
@@ -734,7 +720,7 @@ func TestDaemonVICILifecycleEventsOnlyTriggerCoalescedIPsecReconcile(t *testing.
 func TestDaemonIPsecReconcileInterval(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	appConfig := defaultAppConfig()
-	service := newTestDaemonFromOwners(&AppContext{Config: appConfig}, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(&testApp{Config: appConfig}, verified, checkpoint, runtime, config, time.Second)
 	if interval := service.ipsecReconcileInterval(); interval != 0 {
 		t.Fatalf("interval without link groups = %s, want 0", interval)
 	}

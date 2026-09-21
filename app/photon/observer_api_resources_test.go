@@ -238,8 +238,8 @@ func TestObserverPeersAPIEmpty(t *testing.T) {
 func TestObserverPeersAPIIncludesEndpointAndDiagnosticsDetails(t *testing.T) {
 	srv := newTestObserverServer()
 	now := time.Unix(1000, 0)
-	srv.daemon.App.Clock = func() time.Time { return now }
-	srv.daemon.App.Config.Bootstrap = []syncConfigPeer{{ID: "node-b.catofes.", Addr: "192.0.2.10:33434"}}
+	srv.daemon.clock = func() time.Time { return now }
+	srv.daemon.Config.Bootstrap = []syncConfigPeer{{ID: "node-b.catofes.", Addr: "192.0.2.10:33434"}}
 	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
@@ -338,9 +338,9 @@ func TestObserverPeersAPIIncludesEndpointAndDiagnosticsDetails(t *testing.T) {
 func TestObserverPeersAPIExcludesLocalPeerID(t *testing.T) {
 	srv := newTestObserverServer()
 	now := time.Unix(1000, 0)
-	srv.daemon.App.Clock = func() time.Time { return now }
-	srv.daemon.App.Config.PeerID = "node-a.catofes."
-	srv.daemon.App.Config.Bootstrap = []syncConfigPeer{
+	srv.daemon.clock = func() time.Time { return now }
+	srv.daemon.Config.PeerID = "node-a.catofes."
+	srv.daemon.Config.Bootstrap = []syncConfigPeer{
 		{ID: "node-a.catofes.", Addr: "127.0.0.1:33434"},
 		{ID: "node-b.catofes.", Addr: "127.0.0.1:33435"},
 	}
@@ -382,8 +382,8 @@ func TestObserverPeersAPIExcludesLocalPeerID(t *testing.T) {
 func TestObserverPeersAPISortsByZonePath(t *testing.T) {
 	srv := newTestObserverServer()
 	now := time.Unix(1000, 0)
-	srv.daemon.App.Clock = func() time.Time { return now }
-	srv.daemon.App.Config.PeerID = "node-a.catofes."
+	srv.daemon.clock = func() time.Time { return now }
+	srv.daemon.Config.PeerID = "node-a.catofes."
 	updateTestObserverOwners(srv, func(verified *corestate.VerifiedState, _ *corestate.GossipCheckpoint, _ *photonlinux.LinuxState) {
 		verified.ManagedZone = "node-a.catofes."
 		verified.Network = zone.NewNetworkState()
@@ -436,7 +436,7 @@ func TestObserverLinksAPIEmpty(t *testing.T) {
 
 func TestObserverLinksAPIDetailIncludesDesiredSAAndRouting(t *testing.T) {
 	srv := newTestObserverServer()
-	srv.daemon.App.Config = &appConfig{
+	srv.daemon.Config = &appConfig{
 		IPsec: photonlinux.IPsecConfig{
 			LinkGroups: []ipsec.LinkGroupSpec{{
 				ID:    "blue",
@@ -606,10 +606,10 @@ func TestObserverHealthSeriesReadsLocalSpool(t *testing.T) {
 	cfg.MetricsEnabled = true
 	cfg.LocalSpoolPath = t.TempDir()
 	cfg.LocalSpoolMaxAge = time.Hour
-	srv.daemon.App.Config.Health = cfg
+	srv.daemon.Config.Health = cfg
 	srv.daemon.health = &healthDriver{spool: healthspool.New(cfg.spoolConfig())}
 	now := time.Unix(3000, 0)
-	srv.daemon.App.Clock = func() time.Time { return now }
+	srv.daemon.clock = func() time.Time { return now }
 	if err := srv.daemon.health.spool.Append(now, healthSpoolSamples([]inspect.HealthSample{{
 		InstanceID: "link-1",
 		State:      "healthy",
@@ -659,7 +659,7 @@ func TestObserverRoutesAPI(t *testing.T) {
 
 func TestObserverBirdAPI(t *testing.T) {
 	srv := newTestObserverServer()
-	srv.daemon.App.Config.Routing.Instances = []photonlinux.RoutingInstance{{ID: "main", Enabled: true,
+	srv.daemon.Config.Routing.Instances = []photonlinux.RoutingInstance{{ID: "main", Enabled: true,
 		Bird: bird.BirdInstanceSpec{
 			NetNSName: "phx-main",
 		}}}

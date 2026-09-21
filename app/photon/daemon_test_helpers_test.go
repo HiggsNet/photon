@@ -47,7 +47,7 @@ type testLinuxDrivers struct {
 // daemon behavior. New tests must construct the common and Linux owners
 // explicitly instead of passing the retired aggregate stateFile shape.
 func newTestDaemonFromOwners(
-	rt *AppContext,
+	rt *testApp,
 	verified *corestate.VerifiedState,
 	checkpoint *corestate.GossipCheckpoint,
 	runtime *photonlinux.LinuxState,
@@ -76,7 +76,7 @@ func newTestDaemonFromOwners(
 		verified = &copyVerified
 	}
 	common := corestate.NewStoreWithCheckpoint(verified, checkpoint, nil)
-	service := newDaemon(rt, newState(nil, common, runtime), interval)
+	service := newDaemon(rt.Config, newState(nil, common, runtime), interval, rt.Now)
 	peerIDs := []string{"peer-a", "root-admin", "bootstrap.catofes."}
 	if verified.Network != nil {
 		for path := range verified.Network.Zones {

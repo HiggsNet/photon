@@ -34,10 +34,7 @@ func TestDaemonReconcileUsesSystemXFRMDriverSmoke(t *testing.T) {
 	setTestIPsecOverlayIntent(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
-	rt := &AppContext{
-		Config: appConfig,
-		Clock:  func() time.Time { return now },
-	}
+	rt := &testApp{Config: appConfig, Clock: func() time.Time { return now }}
 	t.Cleanup(func() {
 		_, _ = appExecCommand(context.Background(), "ip", "netns", "delete", ns)
 	})
@@ -67,7 +64,7 @@ func TestDaemonReconcileUsesSystemXFRMDriverSmoke(t *testing.T) {
 		t.Fatalf("daemon-assigned tunnel address not visible on %s/%s: %v", ns, inst.InterfaceName, err)
 	}
 
-	service.App.Config.IPsec.LinkGroups = nil
+	service.Config.IPsec.LinkGroups = nil
 	service.recoverIPsecLinksOnStart(ctx)
 	removedLinks, removedReconcile := readTestIPsecObservation(service)
 	if removedReconcile == nil || removedReconcile.LastFailure != nil {
@@ -192,14 +189,8 @@ func TestDaemonStrongSwanReconcileBringupSmoke(t *testing.T) {
 	groupB.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsB, Create: false}
 	groupB.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}
 	groupB.Reconcile.RotateRetentionSeconds = 0
-	rtA := &AppContext{
-		Config: testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupA),
-		Clock:  func() time.Time { return now },
-	}
-	rtB := &AppContext{
-		Config: testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupB),
-		Clock:  func() time.Time { return now },
-	}
+	rtA := &testApp{Config: testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupA), Clock: func() time.Time { return now }}
+	rtB := &testApp{Config: testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupB), Clock: func() time.Time { return now }}
 	driverA := &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}
 	driverB := &ipsec.StrongSwanDriver{VICI: clientB, KeyDir: t.TempDir()}
 	serviceA := newTestDaemonFromOwners(rtA, verifiedA, nil, runtimeA, configA, time.Second)
@@ -409,14 +400,8 @@ func TestDaemonStrongSwanReconcileBringupDerivedPoolSmoke(t *testing.T) {
 	setTestIPsecOverlayIntent(t, verifiedB.Network.Zones["node-a.catofes."], "node-a.catofes.", groupA, now)
 	setTestIPsecOverlayIntent(t, verifiedB.Network.Zones["node-b.catofes."], "node-b.catofes.", groupB, now)
 
-	rtA := &AppContext{
-		Config: testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupA),
-		Clock:  func() time.Time { return now },
-	}
-	rtB := &AppContext{
-		Config: testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupB),
-		Clock:  func() time.Time { return now },
-	}
+	rtA := &testApp{Config: testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupA), Clock: func() time.Time { return now }}
+	rtB := &testApp{Config: testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupB), Clock: func() time.Time { return now }}
 	driverA := &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}
 	driverB := &ipsec.StrongSwanDriver{VICI: clientB, KeyDir: t.TempDir()}
 	serviceA := newTestDaemonFromOwners(rtA, verifiedA, nil, runtimeA, configA, time.Second)
@@ -570,14 +555,8 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 	groupB.ConnectRules = nil
 	groupB.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsB, Create: false}
 	groupB.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}
-	rtA := &AppContext{
-		Config: testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupA),
-		Clock:  func() time.Time { return now },
-	}
-	rtB := &AppContext{
-		Config: testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupB),
-		Clock:  func() time.Time { return now },
-	}
+	rtA := &testApp{Config: testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupA), Clock: func() time.Time { return now }}
+	rtB := &testApp{Config: testDaemonIPsecAppConfig(t.TempDir(), "127.0.0.1:0", groupB), Clock: func() time.Time { return now }}
 	rotationDriverA := &ipsec.StrongSwanDriver{VICI: clientA, KeyDir: t.TempDir()}
 	rotationDriverB := &ipsec.StrongSwanDriver{VICI: clientB, KeyDir: t.TempDir()}
 	serviceA := newTestDaemonFromOwners(rtA, verifiedA, nil, runtimeA, configA, time.Second)
@@ -826,16 +805,10 @@ func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
 	groupB.ConnectRules = nil
 	groupB.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsB, Create: false}
 	groupB.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}
-	rtA := &AppContext{
-		Config: testDaemonIPsecAppConfig(t.TempDir(), "192.0.2.1:4500", groupA),
-		Clock:  time.Now,
-	}
+	rtA := &testApp{Config: testDaemonIPsecAppConfig(t.TempDir(), "192.0.2.1:4500", groupA), Clock: time.Now}
 	rtA.Config.IPsec.Role = ipsec.RoleOut
 	rtA.Config.ListenAddr = gossipA
-	rtB := &AppContext{
-		Config: testDaemonIPsecAppConfig(t.TempDir(), "192.0.2.2:4500", groupB),
-		Clock:  time.Now,
-	}
+	rtB := &testApp{Config: testDaemonIPsecAppConfig(t.TempDir(), "192.0.2.2:4500", groupB), Clock: time.Now}
 	rtB.Config.IPsec.Role = ipsec.RoleIn
 	rtB.Config.ListenAddr = gossipB
 	serviceA := newTestDaemonFromOwners(rtA, verifiedA, nil, runtimeA, configA, 200*time.Millisecond)
@@ -887,10 +860,7 @@ func TestDaemonDryRunABIPsecSmokeCoversBringupAndSAObservation(t *testing.T) {
 	setTestIPsecOverlayIntent(t, verifiedA.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
 	appConfigA := defaultAppConfig()
 	appConfigA.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
-	rtA := &AppContext{
-		Config: appConfigA,
-		Clock:  func() time.Time { return now },
-	}
+	rtA := &testApp{Config: appConfigA, Clock: func() time.Time { return now }}
 	driverA := &observedIPsecDriver{}
 	serviceA := newTestDaemonFromOwners(
 		rtA, verifiedA, checkpointA, runtimeA, configA, time.Second,
@@ -904,10 +874,7 @@ func TestDaemonDryRunABIPsecSmokeCoversBringupAndSAObservation(t *testing.T) {
 	configB.PeerID = "node-b.catofes."
 	appConfigB := defaultAppConfig()
 	appConfigB.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
-	rtB := &AppContext{
-		Config: appConfigB,
-		Clock:  func() time.Time { return now },
-	}
+	rtB := &testApp{Config: appConfigB, Clock: func() time.Time { return now }}
 	driverB := &observedIPsecDriver{}
 	serviceB := newTestDaemonFromOwners(
 		rtB, &verifiedB, checkpointA, &photonlinux.LinuxState{}, &configB, time.Second,
@@ -946,7 +913,7 @@ func TestDaemonDryRunABIPsecSmokeCoversBringupAndSAObservation(t *testing.T) {
 	assertSingleLinkUpFromSA(t, latestALinks, latestAReconcile, specA, driverA.sas[0])
 	assertSingleLinkUpFromSA(t, latestBLinks, latestBReconcile, specB, driverB.sas[0])
 	var out bytes.Buffer
-	view := buildStoredLinkInspection(rtA, latestALinks, latestAReconcile, nil, nil)
+	view := buildStoredLinkInspection(rtA.Config, latestALinks, latestAReconcile, nil, nil)
 	if err := inspecttext.WriteLinksDebug(&out, view); err != nil {
 		t.Fatalf("WriteLinksDebug(node-a): %v", err)
 	}
@@ -993,15 +960,9 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 	configA.Bootstrap = []syncConfigPeer{{ID: configB.PeerID, Addr: transportB.LocalAddr().String()}}
 	configB.Bootstrap = []syncConfigPeer{{ID: configA.PeerID, Addr: transportA.LocalAddr().String()}}
 
-	rtA := &AppContext{
-		Config: testDaemonIPsecAppConfig(filepath.Join(t.TempDir(), "a"), "198.51.100.10:4500", group),
-		Clock:  time.Now,
-	}
+	rtA := &testApp{Config: testDaemonIPsecAppConfig(filepath.Join(t.TempDir(), "a"), "198.51.100.10:4500", group), Clock: time.Now}
 	rtA.Config.IPsec.Role = ipsec.RoleIn
-	rtB := &AppContext{
-		Config: testDaemonIPsecAppConfig(filepath.Join(t.TempDir(), "b"), "198.51.100.20:4500", group),
-		Clock:  time.Now,
-	}
+	rtB := &testApp{Config: testDaemonIPsecAppConfig(filepath.Join(t.TempDir(), "b"), "198.51.100.20:4500", group), Clock: time.Now}
 	rtB.Config.IPsec.Role = ipsec.RoleIn
 	driverA := &observedIPsecDriver{}
 	driverB := &observedIPsecDriver{}

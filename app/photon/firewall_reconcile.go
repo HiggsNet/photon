@@ -14,7 +14,7 @@ import (
 const defaultFirewallReconcileInterval = 30 * time.Second
 
 func (d *Daemon) firewallReconcileInterval() time.Duration {
-	if d == nil || d.App == nil || d.App.Config == nil || len(d.App.Config.Firewall.ManagedInstances()) == 0 {
+	if d == nil || d.Config == nil || len(d.Config.Firewall.ManagedInstances()) == 0 {
 		return 0
 	}
 	return defaultFirewallReconcileInterval
@@ -31,7 +31,7 @@ func nextFirewallReconcileTime(now time.Time, interval time.Duration) time.Time 
 // It computes the desired state from verified active state + local config,
 // diffs against observed owned objects, and applies the plan via the driver.
 func (d *Daemon) reconcileFirewall(ctx context.Context) error {
-	if d == nil || d.App == nil || d.App.Config == nil {
+	if d == nil || d.Config == nil {
 		return nil
 	}
 	common := d.State.Common.ReadView()
@@ -41,7 +41,7 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 	}
 	links, ipsecReconcile := d.linuxObservation.ipsecSnapshot()
 	rev := uint64(common.Revision)
-	config := d.App.Config
+	config := d.Config
 	instances := config.Firewall.ManagedInstances()
 	if len(instances) == 0 {
 		return nil

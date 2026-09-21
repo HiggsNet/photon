@@ -188,9 +188,7 @@ func TestConfigureHealthManagerUsesRealProber(t *testing.T) {
 	cfg.Jitter = 0
 	cfg.FailThreshold = 1
 
-	d := &Daemon{
-		App: &AppContext{Config: &appConfig{Health: cfg}},
-	}
+	d := &Daemon{Config: &appConfig{Health: cfg}}
 	driver := &ipsec.DryRunDriver{}
 	d.linuxDriver = newTestLinuxDriver(driver, driver)
 	t.Cleanup(func() { _ = d.closeLinuxDriver() })
@@ -239,10 +237,7 @@ func TestHealthStatusAndMetricsUsePacketCounts(t *testing.T) {
 	if got := manager.Tick(context.Background(), now.Add(time.Second)); got != 1 {
 		t.Fatalf("dispatched probes = %d, want 1", got)
 	}
-	d := &Daemon{
-		App:    &AppContext{Config: &appConfig{Health: cfg}, Clock: func() time.Time { return now.Add(time.Second) }},
-		health: &healthDriver{Manager: manager},
-	}
+	d := &Daemon{Config: &appConfig{Health: cfg}, clock: func() time.Time { return now.Add(time.Second) }, health: &healthDriver{Manager: manager}}
 	links := d.healthSamples()
 	if len(links) != 1 || links[0].Sent != 3 || links[0].Received != 2 || links[0].Lost != 1 || links[0].LossRatio != 33 || links[0].State != health.HealthStateDegraded {
 		t.Fatalf("health status = %+v, want degraded with packet counts 3/2/1 and 33%% loss", links)

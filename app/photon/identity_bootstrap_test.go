@@ -45,9 +45,9 @@ func TestOpenStateAutoJoinCreatesPendingBootstrapState(t *testing.T) {
 	config.Identity.KeyPath = keyPath
 	config.TrustedRootPublicKey = rootPub
 	config.Bootstrap = []syncConfigPeer{{ID: "catofes.", Addr: "127.0.0.1:33434"}}
-	rt := &AppContext{Config: config, StatePath: config.StatePath, Clock: func() time.Time { return time.Unix(1000, 0) }}
+	rt := &testApp{Config: config, Clock: func() time.Time { return time.Unix(1000, 0) }}
 
-	opened, err := openState(rt)
+	opened, err := openState(rt.Config)
 	if err != nil {
 		t.Fatalf("openState: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestOpenStateAutoJoinCreatesPendingBootstrapState(t *testing.T) {
 		t.Fatalf("Close State: %v", err)
 	}
 
-	reopened, err := openState(rt)
+	reopened, err := openState(rt.Config)
 	if err != nil {
 		t.Fatalf("openState(reopened): %v", err)
 	}
@@ -94,9 +94,9 @@ func TestOpenStateAutoJoinWithoutBootstrapReportsActionableError(t *testing.T) {
 	config.ManagedZone = "node-b.catofes."
 	config.Identity.KeyPath = keyPath
 	config.TrustedRootPublicKey = rootPub
-	rt := &AppContext{Config: config, StatePath: config.StatePath}
+	rt := &testApp{Config: config}
 
-	_, err = openState(rt)
+	_, err = openState(rt.Config)
 	if err == nil {
 		t.Fatal("openState accepted auto-join config without gossip.bootstrap")
 	}
@@ -151,12 +151,12 @@ func TestOpenStateRejectsConfiguredIdentityMismatch(t *testing.T) {
 	config.StatePath = filepath.Join(dir, "photon.db")
 	config.ManagedZone = "node-b.catofes."
 	config.Identity.KeyPath = keyPath
-	rt := &AppContext{Config: config, StatePath: config.StatePath}
-	seedPartitionedStateDB(t, rt.StatePath, verified, &corestate.GossipCheckpoint{}, &photonlinux.LinuxState{})
+	rt := &testApp{Config: config}
+	seedPartitionedStateDB(t, rt.Config.StatePath, verified, &corestate.GossipCheckpoint{}, &photonlinux.LinuxState{})
 
 	otherKeyPath, _ := writeTestPrivateKey(t, dir, "other")
 	config.Identity.KeyPath = otherKeyPath
-	if _, err := openState(rt); err == nil || !strings.Contains(err.Error(), "public key does not match persisted identity private key") {
+	if _, err := openState(rt.Config); err == nil || !strings.Contains(err.Error(), "public key does not match persisted identity private key") {
 		t.Fatalf("openState mismatch error = %v", err)
 	}
 }
@@ -168,9 +168,9 @@ func TestOpenStateRejectsConfiguredManagedZoneMismatch(t *testing.T) {
 	config.StatePath = filepath.Join(dir, "photon.db")
 	config.ManagedZone = "node-a.catofes."
 	config.Identity.KeyPath = keyPath
-	rt := &AppContext{Config: config, StatePath: config.StatePath}
-	seedPartitionedStateDB(t, rt.StatePath, verified, &corestate.GossipCheckpoint{}, &photonlinux.LinuxState{})
-	if _, err := openState(rt); err == nil || !strings.Contains(err.Error(), "does not match persisted managed zone") {
+	rt := &testApp{Config: config}
+	seedPartitionedStateDB(t, rt.Config.StatePath, verified, &corestate.GossipCheckpoint{}, &photonlinux.LinuxState{})
+	if _, err := openState(rt.Config); err == nil || !strings.Contains(err.Error(), "does not match persisted managed zone") {
 		t.Fatalf("openState managed_zone mismatch error = %v", err)
 	}
 }
@@ -182,10 +182,10 @@ func TestOpenStateAllowsConfiguredIdentityPathMove(t *testing.T) {
 	config.StatePath = filepath.Join(dir, "photon.db")
 	config.ManagedZone = "node-b.catofes."
 	config.Identity.KeyPath = keyPath
-	rt := &AppContext{Config: config, StatePath: config.StatePath}
-	seedPartitionedStateDB(t, rt.StatePath, verified, &corestate.GossipCheckpoint{}, &photonlinux.LinuxState{})
+	rt := &testApp{Config: config}
+	seedPartitionedStateDB(t, rt.Config.StatePath, verified, &corestate.GossipCheckpoint{}, &photonlinux.LinuxState{})
 
-	opened, err := openState(rt)
+	opened, err := openState(rt.Config)
 	if err != nil {
 		t.Fatalf("openState: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestOpenStateAllowsConfiguredIdentityPathMove(t *testing.T) {
 		t.Fatalf("Close State: %v", err)
 	}
 
-	reopened, err := openState(rt)
+	reopened, err := openState(rt.Config)
 	if err != nil {
 		t.Fatalf("openState(reopened): %v", err)
 	}
@@ -202,7 +202,7 @@ func TestOpenStateAllowsConfiguredIdentityPathMove(t *testing.T) {
 	}
 
 	config.Identity.KeyPath = copyTestPrivateKey(t, keyPath, filepath.Join(dir, "moved.key.json"))
-	moved, err := openState(rt)
+	moved, err := openState(rt.Config)
 	if err != nil {
 		t.Fatalf("openState moved key: %v", err)
 	}

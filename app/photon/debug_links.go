@@ -10,11 +10,11 @@ import (
 )
 
 func debugLinks(filter string) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	if view, ok, err := readCanonicalViewViaControl[inspect.LinksDebugView](rt, controlRequest{Method: "links_view"}); err != nil {
+	if view, ok, err := readCanonicalViewViaControl[inspect.LinksDebugView](config, controlRequest{Method: "links_view"}, false); err != nil {
 		return err
 	} else if ok {
 		lastFailure := "-"
@@ -33,11 +33,11 @@ func debugLinks(filter string) error {
 }
 
 func showLinks(filter string, verbose bool) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	if view, ok, err := readCanonicalViewViaControl[inspect.LinksDebugView](rt, controlRequest{Method: "links_view"}); err != nil {
+	if view, ok, err := readCanonicalViewViaControl[inspect.LinksDebugView](config, controlRequest{Method: "links_view"}, false); err != nil {
 		return err
 	} else if ok {
 		return inspecttext.WriteLinks(os.Stdout, view.Inspection, filter, verbose)
@@ -45,21 +45,21 @@ func showLinks(filter string, verbose bool) error {
 	return fmt.Errorf("daemon control socket unavailable; link runtime state requires a running daemon")
 }
 
-func debugLinkRoutingState(rt *AppContext, birdInstances map[string]*bird.InstanceObservation, groupID string) (state, neighborCount, bestRouteCount string) {
+func debugLinkRoutingState(config *appConfig, birdInstances map[string]*bird.InstanceObservation, groupID string) (state, neighborCount, bestRouteCount string) {
 	state = "-"
 	neighborCount = "-"
 	bestRouteCount = "-"
-	if rt == nil || rt.Config == nil || groupID == "" {
+	if config == nil || groupID == "" {
 		return
 	}
 	// In the per-netns model, routing is configured at the netns level.
 	// Map the overlay groupID to netns name and look up the BIRD instance by netns.
-	netnsName := routingNetnsForOverlay(rt, groupID)
+	netnsName := routingNetnsForOverlay(config, groupID)
 	if netnsName == "" {
 		return
 	}
 	hasRoutingInstance := false
-	for _, inst := range rt.Config.Routing.Instances {
+	for _, inst := range config.Routing.Instances {
 		if inst.Bird.NetNSName == netnsName && inst.Enabled {
 			hasRoutingInstance = true
 			break

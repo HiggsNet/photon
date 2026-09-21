@@ -9,11 +9,11 @@ import (
 )
 
 func rootPubkey() error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	if publicKey, ok, err := readCanonicalViewViaControl[ed25519.PublicKey](rt, controlRequest{Method: "root_public_key"}); err != nil {
+	if publicKey, ok, err := readCanonicalViewViaControl[ed25519.PublicKey](config, controlRequest{Method: "root_public_key"}, false); err != nil {
 		return err
 	} else if ok {
 		if len(publicKey) == 0 {
@@ -22,7 +22,7 @@ func rootPubkey() error {
 		fmt.Println(formatPublicKey(publicKey))
 		return nil
 	}
-	common, _, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(config)
 	if err != nil {
 		return err
 	}

@@ -21,11 +21,11 @@ import (
 func TestCreateAndRevokeIPAMPoolDirect(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
 
-	if err := createIPAMPoolWithRuntime(rt, managed, "10.0.0.0/16", "catofes."); err != nil {
+	if err := createIPAMPoolWithConfig(rt.Config, managed, "10.0.0.0/16", "catofes.", rt.Now(), rt.Direct); err != nil {
 		t.Fatalf("createIPAMPool failed: %v", err)
 	}
 
-	common, _, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews after create: %v", err)
 	}
@@ -57,11 +57,11 @@ func TestCreateAndRevokeIPAMPoolDirect(t *testing.T) {
 		t.Fatalf("record version = %d, want 1", rec.Version)
 	}
 
-	if err := revokeIPAMPoolWithRuntime(rt, managed, "10.0.0.0/16"); err != nil {
+	if err := revokeIPAMPoolWithConfig(rt.Config, managed, "10.0.0.0/16", rt.Now(), rt.Direct); err != nil {
 		t.Fatalf("revokeIPAMPool failed: %v", err)
 	}
 
-	common, _, err = loadOfflineOwnerViews(rt)
+	common, _, err = loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews after revoke: %v", err)
 	}
@@ -86,11 +86,11 @@ func TestCreateAndRevokeIPAMPoolDirect(t *testing.T) {
 func TestAssignAndRevokeIPAMDirect(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
 
-	if err := assignIPAMWithRuntimeTag(rt, managed, "10.0.1.0/24", "node.pek.catofes.", false, ""); err != nil {
+	if err := assignIPAMWithConfigTag(rt.Config, managed, "10.0.1.0/24", "node.pek.catofes.", false, "", rt.Now(), rt.Direct); err != nil {
 		t.Fatalf("assignIPAM failed: %v", err)
 	}
 
-	common, _, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews after assign: %v", err)
 	}
@@ -119,11 +119,11 @@ func TestAssignAndRevokeIPAMDirect(t *testing.T) {
 		t.Fatalf("assignment.AssignedTo = %q, want %q", assignment.AssignedTo, "node.pek.catofes.")
 	}
 
-	if err := revokeIPAMAssignmentWithRuntimeTo(rt, managed, "10.0.1.0/24", ""); err != nil {
+	if err := revokeIPAMAssignmentWithConfigTo(rt.Config, managed, "10.0.1.0/24", "", rt.Now(), rt.Direct); err != nil {
 		t.Fatalf("revokeIPAMAssignment failed: %v", err)
 	}
 
-	common, _, err = loadOfflineOwnerViews(rt)
+	common, _, err = loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews after revoke: %v", err)
 	}
@@ -142,11 +142,11 @@ func TestAssignAndRevokeIPAMDirect(t *testing.T) {
 func TestIPAMCanonicalizesPrefix(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
 
-	if err := createIPAMPoolWithRuntime(rt, managed, "10.0.1.1/16", "catofes."); err != nil {
+	if err := createIPAMPoolWithConfig(rt.Config, managed, "10.0.1.1/16", "catofes.", rt.Now(), rt.Direct); err != nil {
 		t.Fatalf("createIPAMPool failed: %v", err)
 	}
 
-	common, _, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestIPAMCanonicalizesPrefix(t *testing.T) {
 func TestRevokeIPAMPoolWithoutRecordFails(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
 
-	err := revokeIPAMPoolWithRuntime(rt, managed, "10.0.2.0/24")
+	err := revokeIPAMPoolWithConfig(rt.Config, managed, "10.0.2.0/24", rt.Now(), rt.Direct)
 	if err == nil {
 		t.Fatalf("revokeIPAMPool without record succeeded, want error")
 	}
@@ -182,7 +182,7 @@ func TestRevokeIPAMPoolWithoutRecordFails(t *testing.T) {
 func TestRevokeIPAMAssignmentWithoutRecordFails(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
 
-	err := revokeIPAMAssignmentWithRuntimeTo(rt, managed, "10.0.2.0/24", "")
+	err := revokeIPAMAssignmentWithConfigTo(rt.Config, managed, "10.0.2.0/24", "", rt.Now(), rt.Direct)
 	if err == nil {
 		t.Fatalf("revokeIPAMAssignment without record succeeded, want error")
 	}
@@ -193,13 +193,13 @@ func TestRevokeIPAMAssignmentWithoutRecordFails(t *testing.T) {
 
 func TestRevokeAlreadyRevokedPoolFails(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
-	if err := createIPAMPoolWithRuntime(rt, managed, "10.0.0.0/16", "catofes."); err != nil {
+	if err := createIPAMPoolWithConfig(rt.Config, managed, "10.0.0.0/16", "catofes.", rt.Now(), rt.Direct); err != nil {
 		t.Fatalf("createIPAMPool failed: %v", err)
 	}
-	if err := revokeIPAMPoolWithRuntime(rt, managed, "10.0.0.0/16"); err != nil {
+	if err := revokeIPAMPoolWithConfig(rt.Config, managed, "10.0.0.0/16", rt.Now(), rt.Direct); err != nil {
 		t.Fatalf("first revoke failed: %v", err)
 	}
-	err := revokeIPAMPoolWithRuntime(rt, managed, "10.0.0.0/16")
+	err := revokeIPAMPoolWithConfig(rt.Config, managed, "10.0.0.0/16", rt.Now(), rt.Direct)
 	if err == nil {
 		t.Fatalf("second revoke succeeded, want error")
 	}
@@ -210,13 +210,13 @@ func TestRevokeAlreadyRevokedPoolFails(t *testing.T) {
 
 func TestRevokeAlreadyRevokedAssignmentFails(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
-	if err := assignIPAMWithRuntimeTag(rt, managed, "10.0.1.0/24", "node.pek.catofes.", false, ""); err != nil {
+	if err := assignIPAMWithConfigTag(rt.Config, managed, "10.0.1.0/24", "node.pek.catofes.", false, "", rt.Now(), rt.Direct); err != nil {
 		t.Fatalf("assignIPAM failed: %v", err)
 	}
-	if err := revokeIPAMAssignmentWithRuntimeTo(rt, managed, "10.0.1.0/24", ""); err != nil {
+	if err := revokeIPAMAssignmentWithConfigTo(rt.Config, managed, "10.0.1.0/24", "", rt.Now(), rt.Direct); err != nil {
 		t.Fatalf("first revoke failed: %v", err)
 	}
-	err := revokeIPAMAssignmentWithRuntimeTo(rt, managed, "10.0.1.0/24", "")
+	err := revokeIPAMAssignmentWithConfigTo(rt.Config, managed, "10.0.1.0/24", "", rt.Now(), rt.Direct)
 	if err == nil {
 		t.Fatalf("second revoke succeeded, want error")
 	}
@@ -228,7 +228,7 @@ func TestRevokeAlreadyRevokedAssignmentFails(t *testing.T) {
 func TestIPAMMissingCapability(t *testing.T) {
 	rt, managed := buildIPAMTestRuntimeWithoutIPAMCapability(t)
 
-	err := createIPAMPoolWithRuntime(rt, managed, "10.0.0.0/16", "catofes.")
+	err := createIPAMPoolWithConfig(rt.Config, managed, "10.0.0.0/16", "catofes.", rt.Now(), rt.Direct)
 	if err == nil {
 		t.Fatalf("createIPAMPool without capability succeeded, want error")
 	}
@@ -242,9 +242,9 @@ func TestCreateIPAMPoolRejectsOwnerMismatch(t *testing.T) {
 		removeIPAMPoolForTest(network, "catofes.", "10.0.0.0/16")
 	})
 
-	err := createIPAMPoolWithRuntime(rt, managed, "10.0.1.0/24", managed)
+	err := createIPAMPoolWithConfig(rt.Config, managed, "10.0.1.0/24", managed, rt.Now(), rt.Direct)
 	if err == nil {
-		t.Fatalf("createIPAMPoolWithRuntime succeeded, want owner mismatch")
+		t.Fatalf("createIPAMPoolWithConfig succeeded, want owner mismatch")
 	}
 	if !strings.Contains(err.Error(), "ipam_pool_owner_mismatch") {
 		t.Fatalf("error = %v, want ipam_pool_owner_mismatch", err)
@@ -256,9 +256,9 @@ func TestAssignIPAMRejectsImplicitAncestorPool(t *testing.T) {
 		removeIPAMPoolForTest(network, "catofes.", "10.0.0.0/16")
 	})
 
-	err := assignIPAMWithRuntimeTag(rt, managed, "10.0.1.0/24", managed, false, "")
+	err := assignIPAMWithConfigTag(rt.Config, managed, "10.0.1.0/24", managed, false, "", rt.Now(), rt.Direct)
 	if err == nil {
-		t.Fatalf("assignIPAMWithRuntime succeeded, want pool mismatch")
+		t.Fatalf("assignIPAMWithConfig succeeded, want pool mismatch")
 	}
 	if !strings.Contains(err.Error(), "ipam_assignment_pool_mismatch") {
 		t.Fatalf("error = %v, want ipam_assignment_pool_mismatch", err)
@@ -269,15 +269,15 @@ func TestListIPAMAssignments(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
 
 	// Pool covering the assignment is required by BuildAuthorizedRouteSet.
-	if err := createIPAMPoolWithRuntime(rt, managed, "10.0.0.0/16", "catofes."); err != nil {
+	if err := createIPAMPoolWithConfig(rt.Config, managed, "10.0.0.0/16", "catofes.", rt.Now(), rt.Direct); err != nil {
 		t.Fatalf("createIPAMPool failed: %v", err)
 	}
-	if err := assignIPAMWithRuntimeTag(rt, managed, "10.0.1.0/24", "node.pek.catofes.", false, ""); err != nil {
+	if err := assignIPAMWithConfigTag(rt.Config, managed, "10.0.1.0/24", "node.pek.catofes.", false, "", rt.Now(), rt.Direct); err != nil {
 		t.Fatalf("assignIPAM failed: %v", err)
 	}
 
 	var output bytes.Buffer
-	if err := listIPAMAssignmentsWithRuntimeTo(&output, rt, ""); err != nil {
+	if err := listIPAMAssignmentsWithConfigTo(&output, rt.Config, "", rt.Now(), rt.Direct); err != nil {
 		t.Fatalf("listIPAMAssignments failed: %v", err)
 	}
 	for _, want := range []string{"assignments: 1", "PREFIX", "SOURCE", "ASSIGNED_TO", "MODE", "TAG", "10.0.1.0/24", "exclusive"} {
@@ -290,7 +290,7 @@ func TestListIPAMAssignments(t *testing.T) {
 	}
 
 	output.Reset()
-	if err := listIPAMAssignmentsWithRuntimeTo(&output, rt, "node.pek.catofes."); err != nil {
+	if err := listIPAMAssignmentsWithConfigTo(&output, rt.Config, "node.pek.catofes.", rt.Now(), rt.Direct); err != nil {
 		t.Fatalf("listIPAMAssignments with filter failed: %v", err)
 	}
 	if !strings.Contains(output.String(), "assignments: 1") {
@@ -298,7 +298,7 @@ func TestListIPAMAssignments(t *testing.T) {
 	}
 
 	output.Reset()
-	err := listIPAMAssignmentsWithRuntimeTo(&output, rt, "other.catofes.")
+	err := listIPAMAssignmentsWithConfigTo(&output, rt.Config, "other.catofes.", rt.Now(), rt.Direct)
 	if err != nil {
 		t.Fatalf("listIPAMAssignments with non-matching filter failed: %v", err)
 	}
@@ -309,11 +309,11 @@ func TestListIPAMAssignments(t *testing.T) {
 
 func TestIPAMGetExplainsPoolChainAndAssignment(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
-	if err := assignIPAMWithRuntimeTag(rt, managed, "10.0.1.0/24", "node.pek.catofes.", false, ""); err != nil {
+	if err := assignIPAMWithConfigTag(rt.Config, managed, "10.0.1.0/24", "node.pek.catofes.", false, "", rt.Now(), rt.Direct); err != nil {
 		t.Fatalf("assignIPAM failed: %v", err)
 	}
 
-	report, err := buildIPAMGetReport(rt, "10.0.1.42")
+	report, err := buildIPAMGetReport(rt.Config, "10.0.1.42", rt.Now(), rt.Direct)
 	if err != nil {
 		t.Fatalf("buildIPAMGetReport: %v", err)
 	}
@@ -343,7 +343,7 @@ func TestIPAMGetExplainsPoolChainAndAssignment(t *testing.T) {
 
 func TestIPAMGetReportsUnassignedAddress(t *testing.T) {
 	rt, _ := buildIPAMTestRuntime(t)
-	report, err := buildIPAMGetReport(rt, "10.0.9.1")
+	report, err := buildIPAMGetReport(rt.Config, "10.0.9.1", rt.Now(), rt.Direct)
 	if err != nil {
 		t.Fatalf("buildIPAMGetReport: %v", err)
 	}
@@ -354,11 +354,11 @@ func TestIPAMGetReportsUnassignedAddress(t *testing.T) {
 
 func TestIPAMGetReportsSharedAssignment(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
-	if err := assignIPAMWithRuntimeTag(rt, managed, "10.0.3.0/24", "node.pek.catofes.", true, ""); err != nil {
+	if err := assignIPAMWithConfigTag(rt.Config, managed, "10.0.3.0/24", "node.pek.catofes.", true, "", rt.Now(), rt.Direct); err != nil {
 		t.Fatalf("assignIPAM shared failed: %v", err)
 	}
 
-	report, err := buildIPAMGetReport(rt, "10.0.3.42")
+	report, err := buildIPAMGetReport(rt.Config, "10.0.3.42", rt.Now(), rt.Direct)
 	if err != nil {
 		t.Fatalf("buildIPAMGetReport: %v", err)
 	}
@@ -372,7 +372,7 @@ func TestIPAMGetReportsSharedAssignment(t *testing.T) {
 
 func TestIPAMGetReportsNoPool(t *testing.T) {
 	rt, _ := buildIPAMTestRuntime(t)
-	report, err := buildIPAMGetReport(rt, "192.0.2.1")
+	report, err := buildIPAMGetReport(rt.Config, "192.0.2.1", rt.Now(), rt.Direct)
 	if err != nil {
 		t.Fatalf("buildIPAMGetReport: %v", err)
 	}
@@ -384,17 +384,17 @@ func TestIPAMGetReportsNoPool(t *testing.T) {
 func TestBuildIPAMMineReport(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
 
-	if err := createIPAMPoolWithRuntime(rt, managed, "10.0.0.0/16", managed); err != nil {
+	if err := createIPAMPoolWithConfig(rt.Config, managed, "10.0.0.0/16", managed, rt.Now(), rt.Direct); err != nil {
 		t.Fatalf("createIPAMPool failed: %v", err)
 	}
-	if err := assignIPAMWithRuntimeTag(rt, managed, "10.0.1.0/24", managed, false, ""); err != nil {
+	if err := assignIPAMWithConfigTag(rt.Config, managed, "10.0.1.0/24", managed, false, "", rt.Now(), rt.Direct); err != nil {
 		t.Fatalf("assignIPAM failed: %v", err)
 	}
-	if err := assignIPAMWithRuntimeTag(rt, managed, "10.0.2.0/24", "node.pek.catofes.", false, ""); err != nil {
+	if err := assignIPAMWithConfigTag(rt.Config, managed, "10.0.2.0/24", "node.pek.catofes.", false, "", rt.Now(), rt.Direct); err != nil {
 		t.Fatalf("assignIPAM other failed: %v", err)
 	}
 
-	report, err := buildIPAMMineReport(rt)
+	report, err := buildIPAMMineReport(rt.Config, rt.Now(), rt.Direct)
 	if err != nil {
 		t.Fatalf("buildIPAMMineReport failed: %v", err)
 	}
@@ -444,11 +444,11 @@ func TestBuildIPAMMineReport(t *testing.T) {
 func TestSharedAssignmentRoundTrip(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
 
-	if err := assignIPAMWithRuntimeTag(rt, managed, "10.0.1.0/24", "node.pek.catofes.", true, ""); err != nil {
+	if err := assignIPAMWithConfigTag(rt.Config, managed, "10.0.1.0/24", "node.pek.catofes.", true, "", rt.Now(), rt.Direct); err != nil {
 		t.Fatalf("assignIPAM shared failed: %v", err)
 	}
 
-	common, _, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews after assign: %v", err)
 	}
@@ -470,11 +470,11 @@ func TestSharedAssignmentRoundTrip(t *testing.T) {
 	}
 
 	// Revoke and verify Shared flag is preserved in the revocation record.
-	if err := revokeIPAMAssignmentWithRuntimeTo(rt, managed, "10.0.1.0/24", ""); err != nil {
+	if err := revokeIPAMAssignmentWithConfigTo(rt.Config, managed, "10.0.1.0/24", "", rt.Now(), rt.Direct); err != nil {
 		t.Fatalf("revokeIPAMAssignment failed: %v", err)
 	}
 
-	common, _, err = loadOfflineOwnerViews(rt)
+	common, _, err = loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews after revoke: %v", err)
 	}
@@ -492,17 +492,17 @@ func TestSharedAssignmentRoundTrip(t *testing.T) {
 
 func TestSharedAssignmentTagRoundTrip(t *testing.T) {
 	rt, managed := buildIPAMTestRuntime(t)
-	if err := assignIPAMWithRuntimeTag(rt, managed, "10.0.4.0/24", managed, true, "socks5.cn"); err != nil {
-		t.Fatalf("assignIPAMWithRuntimeTag: %v", err)
+	if err := assignIPAMWithConfigTag(rt.Config, managed, "10.0.4.0/24", managed, true, "socks5.cn", rt.Now(), rt.Direct); err != nil {
+		t.Fatalf("assignIPAMWithConfigTag: %v", err)
 	}
-	report, err := buildIPAMMineReport(rt)
+	report, err := buildIPAMMineReport(rt.Config, rt.Now(), rt.Direct)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(report.Assignments) != 1 || report.Assignments[0].Tag != "socks5.cn" || !report.Assignments[0].Shared {
 		t.Fatalf("assignments = %+v", report.Assignments)
 	}
-	if err := revokeIPAMAssignmentWithRuntimeTo(rt, managed, "10.0.4.0/24", managed); err != nil {
+	if err := revokeIPAMAssignmentWithConfigTo(rt.Config, managed, "10.0.4.0/24", managed, rt.Now(), rt.Direct); err != nil {
 		t.Fatalf("revoke tagged assignment: %v", err)
 	}
 }
@@ -541,17 +541,17 @@ func ipamDiagnosticsContain(values []inspect.IPAMGetDiagnosticRow, want string) 
 	return false
 }
 
-func buildIPAMTestRuntime(t *testing.T) (*AppContext, zone.ZonePath) {
+func buildIPAMTestRuntime(t *testing.T) (*testApp, zone.ZonePath) {
 	t.Helper()
 	return buildIPAMTestRuntimeWithNetwork(t, true, nil)
 }
 
-func buildIPAMTestRuntimeWithoutIPAMCapability(t *testing.T) (*AppContext, zone.ZonePath) {
+func buildIPAMTestRuntimeWithoutIPAMCapability(t *testing.T) (*testApp, zone.ZonePath) {
 	t.Helper()
 	return buildIPAMTestRuntimeWithNetwork(t, false, nil)
 }
 
-func buildIPAMTestRuntimeWithNetwork(t *testing.T, ipamCap bool, mutate func(*zone.NetworkState)) (*AppContext, zone.ZonePath) {
+func buildIPAMTestRuntimeWithNetwork(t *testing.T, ipamCap bool, mutate func(*zone.NetworkState)) (*testApp, zone.ZonePath) {
 	t.Helper()
 	dir := t.TempDir()
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
@@ -646,8 +646,8 @@ func buildIPAMTestRuntimeWithNetwork(t *testing.T, ipamCap bool, mutate func(*zo
 	config := defaultAppConfig()
 	config.DataDir = dir
 	config.StatePath = filepath.Join(dir, "photon.db")
-	rt := &AppContext{Config: config, StatePath: config.StatePath, Clock: func() time.Time { return time.Unix(1000, 0) }, DisableControl: true}
-	seedPartitionedStateDB(t, rt.StatePath, &corestate.VerifiedState{
+	rt := &testApp{Config: config, Clock: func() time.Time { return time.Unix(1000, 0) }, Direct: true}
+	seedPartitionedStateDB(t, rt.Config.StatePath, &corestate.VerifiedState{
 		ManagedZone: managed, Network: ns, IdentityPrivateKey: zonePriv,
 	}, &corestate.GossipCheckpoint{}, &photonlinux.LinuxState{})
 	return rt, managed

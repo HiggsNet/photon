@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
@@ -11,7 +12,7 @@ import (
 )
 
 func debugZone(path zone.ZonePath, jsonOutput, includeHistory bool) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
@@ -19,7 +20,7 @@ func debugZone(path zone.ZonePath, jsonOutput, includeHistory bool) error {
 	if includeHistory {
 		history = 1
 	}
-	if view, ok, err := readCanonicalViewViaControl[inspect.ZoneInspectionView](rt, controlRequest{Method: "zone_debug", Zone: path.String(), History: history}); err != nil {
+	if view, ok, err := readCanonicalViewViaControl[inspect.ZoneInspectionView](config, controlRequest{Method: "zone_debug", Zone: path.String(), History: history}, false); err != nil {
 		return err
 	} else if ok {
 		if jsonOutput {
@@ -27,7 +28,7 @@ func debugZone(path zone.ZonePath, jsonOutput, includeHistory bool) error {
 		}
 		return inspecttext.WriteZoneDebug(os.Stdout, view)
 	}
-	common, _, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(config)
 	if err != nil {
 		return err
 	}
@@ -36,7 +37,7 @@ func debugZone(path zone.ZonePath, jsonOutput, includeHistory bool) error {
 	}
 	network := common.State.Network
 	configureValidation(network)
-	view, ok := inspect.BuildZoneInspection(network, path, rt.Now(), includeHistory)
+	view, ok := inspect.BuildZoneInspection(network, path, time.Now(), includeHistory)
 	if !ok {
 		return fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
 	}
@@ -47,16 +48,16 @@ func debugZone(path zone.ZonePath, jsonOutput, includeHistory bool) error {
 }
 
 func debugRecords(path zone.ZonePath, prefix string, values bool) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	if view, ok, err := readCanonicalViewViaControl[inspect.RecordsDebugView](rt, controlRequest{Method: "records_view", Zone: path.String(), Key: prefix}); err != nil {
+	if view, ok, err := readCanonicalViewViaControl[inspect.RecordsDebugView](config, controlRequest{Method: "records_view", Zone: path.String(), Key: prefix}, false); err != nil {
 		return err
 	} else if ok {
 		return inspecttext.WriteRecordsDebug(os.Stdout, view, values)
 	}
-	common, _, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(config)
 	if err != nil {
 		return err
 	}

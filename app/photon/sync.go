@@ -22,25 +22,18 @@ import (
 const defaultSyncRoundTimeout = 5 * time.Second
 const syncOnceResponderQuiet = 500 * time.Millisecond
 
-func (d *Daemon) now() time.Time {
-	if d != nil && d.App != nil {
-		return d.App.Now()
-	}
-	return time.Now()
-}
-
 func syncStatus(verbose bool) error {
-	rt, err := NewAppContext()
+	cfg, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	if view, ok, err := readCanonicalViewViaControl[inspect.SyncStatusView](rt, controlRequest{Method: "sync_view", Verbose: verbose}); err != nil {
+	if view, ok, err := readCanonicalViewViaControl[inspect.SyncStatusView](cfg, controlRequest{Method: "sync_view", Verbose: verbose}, false); err != nil {
 		return err
 	} else if ok {
 		fmt.Fprintf(os.Stdout, "daemon: online peer_id=%s\n", view.PeerID)
 		return inspecttext.WriteSyncStatus(os.Stdout, view)
 	}
-	common, _, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(cfg)
 	if err != nil {
 		return err
 	}
@@ -48,8 +41,8 @@ func syncStatus(verbose bool) error {
 		return errors.New("common state is not initialized")
 	}
 	fmt.Fprintln(os.Stdout, "source: checkpoint (daemon offline; last-known gossip runtime)")
-	config := gossipDriverConfig(rt.Config, common.State, nil)
-	return inspecttext.WriteSyncStatus(os.Stdout, inspect.BuildSyncStatus(common, syncStatusOptions(rt.Config.ListenAddr, config, rt.Now(), verbose)))
+	config := gossipDriverConfig(cfg, common.State, nil)
+	return inspecttext.WriteSyncStatus(os.Stdout, inspect.BuildSyncStatus(common, syncStatusOptions(cfg.ListenAddr, config, time.Now(), verbose)))
 }
 
 func syncStatusOptions(listenAddr string, config corehost.GossipDriverConfig, now time.Time, verbose bool) inspect.SyncStatusOptions {
@@ -63,17 +56,17 @@ func syncStatusOptions(listenAddr string, config corehost.GossipDriverConfig, no
 }
 
 func syncServe(ctx context.Context) error {
-	rt, err := NewAppContext()
+	cfg, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	service, err := openDaemon(rt, defaultDaemonInterval)
+	service, err := openDaemon(cfg, defaultDaemonInterval)
 	if err != nil {
 		return err
 	}
 	defer service.Close()
 	config := service.gossipDriver.GossipConfig()
-	logger := newAppLogger(rt.Config)
+	logger := newAppLogger(cfg)
 	transport, err := service.openGossipTransport()
 	if err != nil {
 		return err
@@ -112,11 +105,11 @@ func syncServe(ctx context.Context) error {
 }
 
 func syncOnce(peerID string) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	service, err := openDaemon(rt, defaultDaemonInterval)
+	service, err := openDaemon(config, defaultDaemonInterval)
 	if err != nil {
 		return err
 	}
@@ -223,11 +216,11 @@ func (e *syncPendingZonesError) PendingZones() []string {
 }
 
 func (d *Daemon) openGossipTransport() (*gossip.Transport, error) {
-	if d == nil || d.App == nil || d.App.Config == nil || d.gossipDriver == nil {
+	if d == nil || d.Config == nil || d.gossipDriver == nil {
 		return nil, errors.New("gossip configuration is not initialized")
 	}
 	config := d.gossipDriver.GossipConfig()
-	listenAddr := d.App.Config.ListenAddr
+	listenAddr := d.Config.ListenAddr
 	if listenAddr == "" {
 		listenAddr = fmt.Sprintf(":%d", gossip.DefaultPort)
 	}
@@ -235,7 +228,7 @@ func (d *Daemon) openGossipTransport() (*gossip.Transport, error) {
 	if err != nil {
 		return nil, err
 	}
-	transport, err := gossip.NewTransport(gossipTransportConfig(config, d.App.Config, d.now), datagram)
+	transport, err := gossip.NewTransport(gossipTransportConfig(config, d.Config, d.now), datagram)
 	if err != nil {
 		_ = datagram.Close()
 		return nil, err
@@ -273,8 +266,8 @@ func listenPortFromAddr(addr string) uint16 {
 
 func (d *Daemon) endpointProtocolIntent(verified *corestate.VerifiedState) (*corestate.PutProtocolRecordIntent, error) {
 	var config *appConfig
-	if d != nil && d.App != nil && d.App.Config != nil {
-		config = d.App.Config
+	if d != nil && d.Config != nil {
+		config = d.Config
 	}
 	if verified == nil || verified.Network == nil || verified.ManagedZone == zone.RootZone || len(verified.IdentityPrivateKey) == 0 || gossip.AutoJoinPending(verified) {
 		return nil, nil

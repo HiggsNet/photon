@@ -18,10 +18,8 @@ func TestEndpointProtocolIntentCollectsPlatformCandidates(t *testing.T) {
 	config.Reflectors = nil
 	now := time.Unix(1000, 0)
 
-	daemon := &Daemon{
-		App: &AppContext{Config: config, Clock: func() time.Time { return now }},
-	}
-	daemon.App.Config.EndpointTTL = time.Hour
+	daemon := &Daemon{Config: config, clock: func() time.Time { return now }}
+	daemon.Config.EndpointTTL = time.Hour
 	intent, err := daemon.endpointProtocolIntent(verified)
 	if err != nil || intent == nil {
 		t.Fatalf("endpoint intent/error = %#v/%v", intent, err)

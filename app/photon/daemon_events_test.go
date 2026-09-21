@@ -46,10 +46,7 @@ func TestCommonMutationAffectsRouting(t *testing.T) {
 func TestDaemonRecordPutEventSerializesWrite(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(2000, 0)
-	rt := &AppContext{
-		Config: defaultAppConfig(),
-		Clock:  func() time.Time { return now },
-	}
+	rt := &testApp{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
 	result, syncNow, shutdown := service.handleEvent(daemonEvent{
@@ -79,10 +76,7 @@ func TestDaemonRecordPutEventSerializesWrite(t *testing.T) {
 func TestDaemonEventLoopDispatchesRecordPut(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(2125, 0)
-	rt := &AppContext{
-		Config: defaultAppConfig(),
-		Clock:  func() time.Time { return now },
-	}
+	rt := &testApp{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
 	reply := make(chan daemonEventResult, 1)
@@ -116,10 +110,7 @@ func TestDaemonEndpointTimerPublishesToCommonOwner(t *testing.T) {
 	appConfig := defaultAppConfig()
 	appConfig.ListenAddr = config.ListenAddr
 	appConfig.AdvertiseAddrs = []string{"198.51.100.20:4242"}
-	rt := &AppContext{
-		Config: appConfig,
-		Clock:  func() time.Time { return now },
-	}
+	rt := &testApp{Config: appConfig, Clock: func() time.Time { return now }}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
 	if _, err := service.handleEndpointTimerEvent(); err != nil {
@@ -141,10 +132,8 @@ func TestDaemonIPsecPortRotateEventTriggersDataPlaneReconcile(t *testing.T) {
 	appConfig.IPsec.PortMode = ipsec.PortModeRange
 	appConfig.IPsec.PortRange = ipsec.PortRange{From: 30000, To: 30099}
 	appConfig.IPsec.PortPreviousGrace = 2 * time.Hour
-	rt := &AppContext{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+	rt := &testApp{Config: testConfigWithStatePath(appConfig,
+		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
 	}
 	driver := &countingIPsecDriver{}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
@@ -194,10 +183,8 @@ func TestDaemonIPsecPortRotateEventTriggersDataPlaneReconcile(t *testing.T) {
 func TestDaemonConcurrentRecordPutEventsAreSerialized(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(3000, 0)
-	rt := &AppContext{
-		Config:    defaultAppConfig(),
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+	rt := &testApp{Config: testConfigWithStatePath(defaultAppConfig(),
+		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
 	}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	ctx := t.Context()
@@ -247,15 +234,13 @@ func TestDaemonRecordPutKeepsCommittedStateAuthoritativeOverExternalDiskWrite(t 
 	verified.ManagedZone = "node-b.catofes."
 	config.PeerID = string(verified.ManagedZone)
 	now := time.Unix(4000, 0)
-	rt := &AppContext{
-		Config:    defaultAppConfig(),
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+	rt := &testApp{Config: testConfigWithStatePath(defaultAppConfig(),
+		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
 	}
-	seedPartitionedStateDB(t, rt.StatePath, verified, checkpoint, runtime)
+	seedPartitionedStateDB(t, rt.Config.StatePath, verified, checkpoint, runtime)
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
-	external, _, err := loadOfflineOwnerViews(rt)
+	external, _, err := loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews(external): %v", err)
 	}
@@ -305,15 +290,13 @@ func TestBuildSignedRecordReturnsErrorWithoutLocalSigner(t *testing.T) {
 
 func TestDaemonAdminEventsIssueAcceptAndRevoke(t *testing.T) {
 	now := time.Unix(6000, 0)
-	rootRT := &AppContext{
-		Config:    defaultAppConfig(),
-		StatePath: filepath.Join(t.TempDir(), "root.db"),
-		Clock:     func() time.Time { return now },
+	rootRT := &testApp{Config: testConfigWithStatePath(defaultAppConfig(),
+		filepath.Join(t.TempDir(), "root.db")), Clock: func() time.Time { return now },
 	}
-	if _, err := initializeRootState(rootRT); err != nil {
+	if _, err := initializeRootState(rootRT.Config); err != nil {
 		t.Fatalf("initializeRootState: %v", err)
 	}
-	rootState, rootRuntime, err := loadOfflineOwnerViews(rootRT)
+	rootState, rootRuntime, err := loadOfflineOwnerViews(rootRT.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews(root): %v", err)
 	}
@@ -391,20 +374,18 @@ func TestDaemonAdminEventsIssueAcceptAndRevoke(t *testing.T) {
 
 func TestDaemonDelegateIssuePersistsThroughOwnerStore(t *testing.T) {
 	now := time.Unix(6100, 0)
-	rt := &AppContext{
-		Config:    defaultAppConfig(),
-		StatePath: filepath.Join(t.TempDir(), "root.db"),
-		Clock:     func() time.Time { return now },
+	rt := &testApp{Config: testConfigWithStatePath(defaultAppConfig(),
+		filepath.Join(t.TempDir(), "root.db")), Clock: func() time.Time { return now },
 	}
-	if _, err := initializeRootState(rt); err != nil {
+	if _, err := initializeRootState(rt.Config); err != nil {
 		t.Fatalf("initializeRootState: %v", err)
 	}
-	state, err := openState(rt)
+	state, err := openState(rt.Config)
 	if err != nil {
 		t.Fatalf("openState(root): %v", err)
 	}
-	rt.Config = &appConfig{PeerID: "node-admin", ListenAddr: "127.0.0.1:0"}
-	service := newDaemon(rt, state, time.Second)
+	rt.Config = &appConfig{StatePath: rt.Config.StatePath, PeerID: "node-admin", ListenAddr: "127.0.0.1:0"}
+	service := newDaemon(rt.Config, state, time.Second, rt.Now)
 	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
@@ -424,7 +405,7 @@ func TestDaemonDelegateIssuePersistsThroughOwnerStore(t *testing.T) {
 		t.Fatalf("close State: %v", err)
 	}
 
-	reopened, err := openState(rt)
+	reopened, err := openState(rt.Config)
 	if err != nil {
 		t.Fatalf("reopen Linux daemon state: %v", err)
 	}
@@ -436,15 +417,13 @@ func TestDaemonDelegateIssuePersistsThroughOwnerStore(t *testing.T) {
 
 func TestDaemonConcurrentAdminAndRecordEventsPreserveState(t *testing.T) {
 	now := time.Unix(7000, 0)
-	rt := &AppContext{
-		Config:    defaultAppConfig(),
-		StatePath: filepath.Join(t.TempDir(), "catofes.db"),
-		Clock:     func() time.Time { return now },
+	rt := &testApp{Config: testConfigWithStatePath(defaultAppConfig(),
+		filepath.Join(t.TempDir(), "catofes.db")), Clock: func() time.Time { return now },
 	}
-	if _, err := initializeRootState(rt); err != nil {
+	if _, err := initializeRootState(rt.Config); err != nil {
 		t.Fatalf("initializeRootState: %v", err)
 	}
-	state, runtime, err := loadOfflineOwnerViews(rt)
+	state, runtime, err := loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews(root): %v", err)
 	}
@@ -546,10 +525,8 @@ func TestDaemonEndpointTimerNoChangeSkipsFlushAndSync(t *testing.T) {
 	// do not cause a follow-up IPsec address publish.
 	appConfig.IPsec.AnnounceGossipEndpoints = false
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
-	rt := &AppContext{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+	rt := &testApp{Config: testConfigWithStatePath(appConfig,
+		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
 	}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
@@ -589,10 +566,8 @@ func TestPrepareStartupStateDoesNotPersistDerivedAdmission(t *testing.T) {
 	dir := t.TempDir()
 	verified, runtime, _ := buildPendingAutoJoinOwners(t, dir, "node-b.catofes.", false)
 	now := time.Unix(7250, 0)
-	rt := &AppContext{
-		Config:    defaultAppConfig(),
-		StatePath: filepath.Join(dir, "photon.db"),
-		Clock:     func() time.Time { return now },
+	rt := &testApp{Config: testConfigWithStatePath(defaultAppConfig(),
+		filepath.Join(dir, "photon.db")), Clock: func() time.Time { return now },
 	}
 	rt.Config.PublishEndpoints = false
 	config := &appConfig{PeerID: "node-b.catofes.", ListenAddr: "127.0.0.1:0"}
@@ -636,10 +611,8 @@ func TestDaemonEndpointTimerRefreshDueStillTriggersSync(t *testing.T) {
 	appConfig.AdvertiseAddrs = []string{"198.51.100.20:4242"}
 	appConfig.EndpointRefresh = 30 * time.Minute
 	appConfig.EndpointTTL = time.Hour
-	rt := &AppContext{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+	rt := &testApp{Config: testConfigWithStatePath(appConfig,
+		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
 	}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 

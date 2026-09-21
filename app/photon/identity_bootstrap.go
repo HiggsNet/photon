@@ -151,11 +151,11 @@ func configuredJoinRequest(config *appConfig) (*gossip.JoinRequest, error) {
 }
 
 func writeJoinRequestFromConfig(outPath string) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	request, err := configuredJoinRequest(rt.Config)
+	request, err := configuredJoinRequest(config)
 	if err != nil {
 		return err
 	}

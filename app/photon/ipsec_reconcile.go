@@ -19,7 +19,7 @@ import (
 )
 
 func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
-	if d == nil || d.App == nil || d.App.Config == nil {
+	if d == nil || d.Config == nil {
 		return nil
 	}
 	common := d.State.Common.ReadView()
@@ -29,7 +29,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 	}
 	rev := uint64(common.Revision)
 	verified := common.State
-	groups := append([]ipsec.LinkGroupSpec(nil), d.App.Config.IPsec.LinkGroups...)
+	groups := append([]ipsec.LinkGroupSpec(nil), d.Config.IPsec.LinkGroups...)
 	if verified.ManagedZone.IsRoot() || !verified.ManagedZone.Valid() {
 		return nil
 	}
@@ -42,7 +42,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 			Now:                 now,
 			DNSResolver:         dnsResolver,
 			ContactPointQuality: d.buildIPsecContactPointQuality(verified, now),
-			ExcludedPeers:       peerLifecycleExcludedPeers(common.Gossip, now, d.App.Config.PeerLifecycle),
+			ExcludedPeers:       peerLifecycleExcludedPeers(common.Gossip, now, d.Config.PeerLifecycle),
 		})
 		if err != nil {
 			d.recordIPsecReconcileError(rev, now.Unix(), err)
@@ -70,7 +70,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 	// process starts empty and reconstructs usable current/previous generations
 	// from the connection, SA and XFRM observations below.
 	instances, _ := d.linuxObservation.ipsecSnapshot()
-	forceUpdates, err := ipsec.LocalAnnounceDNSForceUpdates(ctx, d.App.Config.IPsec.AnnounceDNS, d.App.Config.IPsec.AnnounceDNSReconnectAfter, plan.Desired, instances, sas, dnsResolver)
+	forceUpdates, err := ipsec.LocalAnnounceDNSForceUpdates(ctx, d.Config.IPsec.AnnounceDNS, d.Config.IPsec.AnnounceDNSReconnectAfter, plan.Desired, instances, sas, dnsResolver)
 	if err != nil {
 		d.logWarn("ipsec", "local_announce_dns_check_failed", map[string]any{"error": err.Error()})
 	}
@@ -208,10 +208,10 @@ func (d *Daemon) ipsecReconcileDNSResolver() ipsec.DNSResolver {
 }
 
 func (d *Daemon) localIPv6DiagnosticPrefixes(verified *corestate.VerifiedState, now time.Time) []netip.Prefix {
-	if d == nil || d.App == nil || d.App.Config == nil || verified == nil || verified.Network == nil {
+	if d == nil || d.Config == nil || verified == nil || verified.Network == nil {
 		return nil
 	}
-	if !d.App.Config.IPAM.AutoAnnounceAssignedIPs && len(d.App.Config.IPAM.Announce) == 0 {
+	if !d.Config.IPAM.AutoAnnounceAssignedIPs && len(d.Config.IPAM.Announce) == 0 {
 		return nil
 	}
 	ars, err := routing.BuildAuthorizedRouteSet(verified.Network, now)
@@ -219,7 +219,7 @@ func (d *Daemon) localIPv6DiagnosticPrefixes(verified *corestate.VerifiedState, 
 		d.logWarn("ipsec", "diagnostic_prefixes_unavailable", map[string]any{"error": err.Error()})
 		return nil
 	}
-	prefixes := routing.AutoAnnounceAssignedPrefixes(ars, verified.ManagedZone, d.App.Config.IPAM.AutoAnnounceAssignedIPs, d.App.Config.IPAM.Announce)
+	prefixes := routing.AutoAnnounceAssignedPrefixes(ars, verified.ManagedZone, d.Config.IPAM.AutoAnnounceAssignedIPs, d.Config.IPAM.Announce)
 	out := prefixes[:0]
 	for _, prefix := range prefixes {
 		if prefix.Addr().Is6() && prefix.Bits() == 64 {

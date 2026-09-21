@@ -16,12 +16,28 @@ func TestLinuxStatePathOverride(t *testing.T) {
 	t.Setenv("PHOTON_CONFIG", configPath)
 	t.Setenv("PHOTON_STATE", overridePath)
 
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
-		t.Fatalf("NewAppContext: %v", err)
+		t.Fatalf("loadAppConfig: %v", err)
 	}
-	if rt.StatePath != overridePath {
-		t.Fatalf("StatePath = %q, want override %q", rt.StatePath, overridePath)
+	if config.StatePath != overridePath {
+		t.Fatalf("StatePath = %q, want override %q", config.StatePath, overridePath)
+	}
+	if _, err := initializeRootState(config); err != nil {
+		t.Fatalf("initialize overridden state: %v", err)
+	}
+	state, err := openState(config)
+	if err != nil {
+		t.Fatalf("reopen overridden state: %v", err)
+	}
+	if err := state.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(overridePath); err != nil {
+		t.Fatalf("overridden state file: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(configDataDir, defaultStateFile)); !os.IsNotExist(err) {
+		t.Fatalf("default state file should not be created: %v", err)
 	}
 }
 
@@ -35,16 +51,16 @@ func TestRuntimeSyncConfigDerivesLimitsAndPeerID(t *testing.T) {
 	})
 	t.Setenv("PHOTON_CONFIG", configPath)
 
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
-		t.Fatalf("NewAppContext: %v", err)
+		t.Fatalf("loadAppConfig: %v", err)
 	}
 	verified, _, _, _ := buildTestDaemonOwners(t)
-	peerID := configuredPeerID(rt.Config, verified)
+	peerID := configuredPeerID(config, verified)
 	if peerID != string(verified.ManagedZone) {
 		t.Fatalf("PeerID = %q, want managed zone default %q", peerID, verified.ManagedZone)
 	}
-	limits := syncLimits(rt.Config)
+	limits := syncLimits(config)
 	if limits.MaxBytes != 4096 || limits.MaxZones != 8 || limits.MaxRecords != 64 {
 		t.Fatalf("limits = %#v, want 4096/8/64", limits)
 	}
@@ -60,23 +76,23 @@ func TestRuntimeLogConfigAndEnvironmentOverride(t *testing.T) {
 	})
 	t.Setenv("PHOTON_CONFIG", configPath)
 	t.Setenv("PHOTON_LOG_LEVEL", "")
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !debugLogEnabled(rt.Config) {
+	if !debugLogEnabled(config) {
 		t.Fatalf("config log.level=debug should enable debug logs")
 	}
-	if rt.Config.Log.Mode != "stderr+file" || rt.Config.Log.File != filepath.Join(dir, "photon.log") {
-		t.Fatalf("log output config = mode %q file %q, want stderr+file/%s", rt.Config.Log.Mode, rt.Config.Log.File, filepath.Join(dir, "photon.log"))
+	if config.Log.Mode != "stderr+file" || config.Log.File != filepath.Join(dir, "photon.log") {
+		t.Fatalf("log output config = mode %q file %q, want stderr+file/%s", config.Log.Mode, config.Log.File, filepath.Join(dir, "photon.log"))
 	}
 	t.Setenv("PHOTON_LOG_LEVEL", "info")
-	if debugLogEnabled(rt.Config) {
+	if debugLogEnabled(config) {
 		t.Fatalf("PHOTON_LOG_LEVEL should override config log.level")
 	}
 	t.Setenv("PHOTON_LOG_LEVEL", "debug")
-	rt.Config.Log.Level = "info"
-	if !debugLogEnabled(rt.Config) {
+	config.Log.Level = "info"
+	if !debugLogEnabled(config) {
 		t.Fatalf("PHOTON_LOG_LEVEL=debug should enable debug logs")
 	}
 }

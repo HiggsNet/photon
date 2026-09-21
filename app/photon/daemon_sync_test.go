@@ -49,8 +49,8 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 	configA.Bootstrap = []syncConfigPeer{{ID: configB.PeerID, Addr: transportB.LocalAddr().String()}}
 	configB.Bootstrap = []syncConfigPeer{{ID: configA.PeerID, Addr: transportA.LocalAddr().String()}}
 
-	rtA := &AppContext{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
-	rtB := &AppContext{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
+	rtA := &testApp{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
+	rtB := &testApp{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
 
 	serviceA := newTestDaemonFromOwners(rtA, verifiedA, nil, &photonlinux.LinuxState{}, configA, time.Second)
 	setTestGossipTransport(t, serviceA, transportA)
@@ -123,7 +123,7 @@ func TestDaemonSyncTimerStartsWhenInternalEventQueueIsFull(t *testing.T) {
 	config.Bootstrap = []syncConfigPeer{{ID: peerID, Addr: "127.0.0.1:33434"}}
 	checkpoint.Peers = map[string]corestate.PeerCheckpoint{peerID: {BackoffUntilUnix: now.Add(-time.Minute).Unix()}}
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: defaultAppConfig(), Clock: func() time.Time { return now }},
+		&testApp{Config: defaultAppConfig(), Clock: func() time.Time { return now }},
 		verified, checkpoint, runtime, config, time.Minute,
 	)
 	for {

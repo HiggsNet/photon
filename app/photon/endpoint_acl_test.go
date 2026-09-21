@@ -95,7 +95,7 @@ func TestEndpointACLApplyNoopDoesNotCommitOrNotify(t *testing.T) {
 		Mode: firewall.ModeManaged, Backend: firewall.BackendAuto,
 	}}
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: appConfig}, verified, nil, runtime, appConfig, time.Second,
+		&testApp{Config: appConfig}, verified, nil, runtime, appConfig, time.Second,
 	)
 	driver := &captureFirewallOwnerDriver{}
 	driver.Backend = firewall.BackendNFT
@@ -127,7 +127,7 @@ func TestEndpointACLRemoveMissingIsNoop(t *testing.T) {
 	verified := &corestate.VerifiedState{ManagedZone: "node-a.catofes.", Network: zone.NewNetworkState()}
 	runtime := &photonlinux.LinuxState{EndpointACLs: map[string]photonstate.EndpointACL{}}
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: defaultAppConfig()}, verified, nil, runtime, nil, time.Second,
+		&testApp{Config: defaultAppConfig()}, verified, nil, runtime, nil, time.Second,
 	)
 	beforeRevision := uint64(service.State.Common.VerifiedRevision())
 	notifications := 0

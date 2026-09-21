@@ -70,7 +70,7 @@ func TestPeerLifecycleSuppressionTearsDownAndSuccessfulSyncRestoresLink(t *testi
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
 		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
 	}}
-	rt := &AppContext{Config: config, Clock: func() time.Time { return now }}
+	rt := &testApp{Config: config, Clock: func() time.Time { return now }}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
 	if _, err := service.State.Common.UpdatePeerCheckpoint(context.Background(), "node-b.catofes.", corestate.PeerCheckpointPatch{
 		LastSyncUnix: corestate.PatchField[int64]{Set: true, Value: now.Unix()},

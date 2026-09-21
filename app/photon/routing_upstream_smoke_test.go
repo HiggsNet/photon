@@ -59,10 +59,8 @@ func TestUpstreamRoutingDryRunSmoke(t *testing.T) {
 	}}
 	appConfig.Routing, _ = photonlinux.ParseRoutingConfig(upstreamYAML, appConfig.Netns, appConfig.DataDir)
 
-	rt := &AppContext{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+	rt := &testApp{Config: testConfigWithStatePath(appConfig,
+		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
 	}
 
 	// Verify upstream config was parsed correctly.
@@ -240,7 +238,7 @@ func TestRoutingSingleInstanceEntrySkipsDisabledPlatformEffects(t *testing.T) {
 			err = fixture.service.reconcileRoutingForInstance(
 				context.Background(), fixture.verified, map[string]*bird.InstanceObservation{}, nil, nil,
 				fixture.disabled, ars,
-				fixture.service.App.Config, fixture.now, false,
+				fixture.service.Config, fixture.now, false,
 			)
 			if err != nil {
 				t.Fatalf("reconcile disabled instance: %v", err)
@@ -305,7 +303,7 @@ func newRoutingDisabledFixture(t *testing.T, enabled bool, mode string, includeE
 		t.Fatal("disabled routing fixture is missing")
 	}
 
-	rt := &AppContext{Config: appConfig, Clock: func() time.Time { return now }}
+	rt := &testApp{Config: appConfig, Clock: func() time.Time { return now }}
 	veth := &fakeVethManager{}
 	routes := &fakeUpstreamRouteManager{}
 	disabledProcess := &fakeBirdProcessManager{}
@@ -518,10 +516,8 @@ func TestExternalUpstreamCanInstallSourceAddressesWithoutStaticRoutes(t *testing
 		},
 	}}, appConfig.Netns, appConfig.DataDir)
 
-	rt := &AppContext{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+	rt := &testApp{Config: testConfigWithStatePath(appConfig,
+		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
 	}
 	fakeRM := &fakeUpstreamRouteManager{}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)

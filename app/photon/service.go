@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
@@ -15,23 +16,23 @@ import (
 const socks5RecordName = "socks5"
 
 func showServices(filter string, includeAll, localOnly, verbose bool) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	if view, ok, err := readCanonicalViewViaControl[inspect.ServiceInspection](rt, controlRequest{Method: "services_view"}); err != nil {
+	if view, ok, err := readCanonicalViewViaControl[inspect.ServiceInspection](config, controlRequest{Method: "services_view"}, false); err != nil {
 		return err
 	} else if ok {
 		return inspecttext.WriteServices(os.Stdout, view, filter, includeAll, localOnly, verbose)
 	}
-	common, _, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(config)
 	if err != nil {
 		return err
 	}
 	if common.State == nil {
 		return errors.New("common state is not initialized")
 	}
-	view := inspect.BuildServiceInspection(common.State, rt.Now())
+	view := inspect.BuildServiceInspection(common.State, time.Now())
 	return inspecttext.WriteServices(os.Stdout, view, filter, includeAll, localOnly, verbose)
 }
 
@@ -47,19 +48,19 @@ const (
 )
 
 func publishSOCKS5Endpoints(endpoints []photonservice.SOCKS5Endpoint, direct bool) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	rt.DisableControl = direct
-	return publishSOCKS5EndpointsWithRuntime(rt, endpoints)
+
+	return publishSOCKS5EndpointsWithConfig(config, endpoints, time.Now(), direct)
 }
 
-func publishSOCKS5EndpointsWithRuntime(rt *AppContext, endpoints []photonservice.SOCKS5Endpoint) error {
-	return submitServiceMutation(rt, serviceMutationRequest{
+func publishSOCKS5EndpointsWithConfig(config *appConfig, endpoints []photonservice.SOCKS5Endpoint, now time.Time, direct bool) error {
+	return submitServiceMutation(config, serviceMutationRequest{
 		Operation: serviceOperationPublish,
 		Endpoints: append([]photonservice.SOCKS5Endpoint(nil), endpoints...),
-	}, "published")
+	}, "published", now, direct)
 }
 
 func parseSOCKS5EndpointFlags(values []string, legacyRegion, legacyAddress string, legacyPort uint16) ([]photonservice.SOCKS5Endpoint, error) {
@@ -88,20 +89,20 @@ func parseSOCKS5EndpointFlags(values []string, legacyRegion, legacyAddress strin
 }
 
 func withdrawSOCKS5Service(direct bool) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	rt.DisableControl = direct
-	return withdrawSOCKS5ServiceWithRuntime(rt)
+
+	return withdrawSOCKS5ServiceWithConfig(config, time.Now(), direct)
 }
 
-func withdrawSOCKS5ServiceWithRuntime(rt *AppContext) error {
-	return submitServiceMutation(rt, serviceMutationRequest{Operation: serviceOperationWithdraw}, "withdrew")
+func withdrawSOCKS5ServiceWithConfig(config *appConfig, now time.Time, direct bool) error {
+	return submitServiceMutation(config, serviceMutationRequest{Operation: serviceOperationWithdraw}, "withdrew", now, direct)
 }
 
-func submitServiceMutation(rt *AppContext, request serviceMutationRequest, operation string) error {
-	if version, ok, err := mutateServiceViaControl(rt, request); ok {
+func submitServiceMutation(config *appConfig, request serviceMutationRequest, operation string, now time.Time, direct bool) error {
+	if version, ok, err := sendVersionedMutationViaControl(config, controlRequest{Method: "service_mutate", Service: &request}, direct); ok {
 		if err != nil {
 			return err
 		}
@@ -112,7 +113,7 @@ func submitServiceMutation(rt *AppContext, request serviceMutationRequest, opera
 	if err != nil {
 		return err
 	}
-	result, err := applyOfflineCommonIntent(rt, intent, request.DryRun)
+	result, err := applyOfflineCommonIntent(config, intent, request.DryRun, now)
 	if err != nil {
 		return err
 	}

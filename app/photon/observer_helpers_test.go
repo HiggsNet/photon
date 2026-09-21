@@ -17,12 +17,11 @@ import (
 func newTestObserverServer() *observerServer {
 	store := corestate.NewStoreWithCheckpoint(&corestate.VerifiedState{}, &corestate.GossipCheckpoint{}, nil)
 	d := &Daemon{
-		State: newState(nil, store, &photonlinux.LinuxState{}),
-		App: &AppContext{Config: &appConfig{
+		State: newState(nil, store, &photonlinux.LinuxState{}), Config: &appConfig{
 			PeerID: "test-node", ListenAddr: "127.0.0.1:33434",
-		}},
+		},
 	}
-	d.gossipDriver = corehost.NewGossipDriver(corehost.NewClock(nil), corehost.DefaultEventBuffer, store, gossipDriverConfig(d.App.Config, store.ReadView().State, nil))
+	d.gossipDriver = corehost.NewGossipDriver(corehost.NewClock(nil), corehost.DefaultEventBuffer, store, gossipDriverConfig(d.Config, store.ReadView().State, nil))
 	cfg := defaultObserverConfig()
 	cfg.Enabled = true
 	return newObserverServer(d, cfg)
@@ -37,7 +36,7 @@ func updateTestObserverOwners(srv *observerServer, fn func(*corestate.VerifiedSt
 	fn(common.State, common.Gossip, runtime)
 	store := corestate.NewStoreWithCheckpoint(common.State, common.Gossip, nil)
 	srv.daemon.State = newState(nil, store, runtime)
-	srv.daemon.gossipDriver = corehost.NewGossipDriver(corehost.NewClock(nil), corehost.DefaultEventBuffer, store, gossipDriverConfig(srv.daemon.App.Config, store.ReadView().State, nil))
+	srv.daemon.gossipDriver = corehost.NewGossipDriver(corehost.NewClock(nil), corehost.DefaultEventBuffer, store, gossipDriverConfig(srv.daemon.Config, store.ReadView().State, nil))
 }
 
 func addObserverEndpointZone(t *testing.T, ns *zone.NetworkState, path zone.ZonePath, ip string, port uint16, now time.Time) {

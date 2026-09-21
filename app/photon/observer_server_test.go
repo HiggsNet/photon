@@ -15,9 +15,7 @@ import (
 )
 
 func TestObserverStartObserverServerDisabled(t *testing.T) {
-	d := &Daemon{
-		App: &AppContext{Config: &appConfig{Observer: observerConfig{Enabled: false}}},
-	}
+	d := &Daemon{Config: &appConfig{Observer: observerConfig{Enabled: false}}}
 	stop, err := d.startObserverServer(context.TODO())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -33,12 +31,11 @@ func TestObserverStartObserverServerEnabledServesHTTP(t *testing.T) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	_ = ln.Close()
 	d := &Daemon{
-		State: newState(nil, corestate.NewStoreWithCheckpoint(&corestate.VerifiedState{}, &corestate.GossipCheckpoint{}, nil), &photonlinux.LinuxState{}),
-		App: &AppContext{Config: &appConfig{PeerID: "test-node", ListenAddr: "127.0.0.1:33434", Observer: observerConfig{
+		State: newState(nil, corestate.NewStoreWithCheckpoint(&corestate.VerifiedState{}, &corestate.GossipCheckpoint{}, nil), &photonlinux.LinuxState{}), Config: &appConfig{PeerID: "test-node", ListenAddr: "127.0.0.1:33434", Observer: observerConfig{
 			Enabled:  true,
 			BindAddr: "127.0.0.1",
 			Port:     port,
-		}}},
+		}},
 	}
 	stop, err := d.startObserverServer(context.Background())
 	if err != nil {

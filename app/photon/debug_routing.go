@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/netip"
 	"os"
+	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
@@ -17,23 +18,23 @@ import (
 )
 
 func debugBabel(_ context.Context, _ *cli.Command) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	return debugBabelWithRuntime(rt, os.Stdout)
+	return debugBabelWithConfig(config, os.Stdout, false)
 }
 
 func debugRoutingReload(_ context.Context, _ *cli.Command) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	return debugRoutingReloadWithRuntime(rt, os.Stdout)
+	return debugRoutingReloadWithConfig(config, os.Stdout)
 }
 
-func debugRoutingReloadWithRuntime(rt *AppContext, w io.Writer) error {
-	response, ok, err := routingReloadViaControl(rt)
+func debugRoutingReloadWithConfig(config *appConfig, w io.Writer) error {
+	response, ok, err := routingReloadViaControl(config)
 	if err != nil {
 		return err
 	}
@@ -49,15 +50,15 @@ func debugRoutingReloadWithRuntime(rt *AppContext, w io.Writer) error {
 }
 
 func debugBird(_ context.Context, netnsName string, view bird.DebugView) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	return debugBirdWithRuntime(rt, netnsName, view, os.Stdout)
+	return debugBirdWithConfig(config, netnsName, view, os.Stdout, false)
 }
 
-func debugBirdWithRuntime(rt *AppContext, netnsName string, view bird.DebugView, w io.Writer) error {
-	dump, ok, err := readCanonicalViewViaControl[inspect.BirdDumpResponse](rt, controlRequest{Method: "bird_dump", NetNS: netnsName, BirdView: string(view)})
+func debugBirdWithConfig(config *appConfig, netnsName string, view bird.DebugView, w io.Writer, direct bool) error {
+	dump, ok, err := readCanonicalViewViaControl[inspect.BirdDumpResponse](config, controlRequest{Method: "bird_dump", NetNS: netnsName, BirdView: string(view)}, direct)
 	if err != nil {
 		return err
 	}
@@ -84,8 +85,8 @@ func addBirdFilterDefinitions(item *inspect.BirdDumpInstance, configPath string)
 	item.FilterDefinitions = inspect.ExtractBirdFilterDefinitions(string(config))
 }
 
-func debugBabelWithRuntime(rt *AppContext, w io.Writer) error {
-	view, ok, err := readCanonicalViewViaControl[inspect.BabelDebugView](rt, controlRequest{Method: "babel_view"})
+func debugBabelWithConfig(config *appConfig, w io.Writer, direct bool) error {
+	view, ok, err := readCanonicalViewViaControl[inspect.BabelDebugView](config, controlRequest{Method: "babel_view"}, direct)
 	if err != nil {
 		return err
 	}
@@ -95,10 +96,10 @@ func debugBabelWithRuntime(rt *AppContext, w io.Writer) error {
 	return fmt.Errorf("daemon control socket unavailable; BIRD runtime state requires a running daemon")
 }
 
-func buildBabelDebugView(rt *AppContext, instances map[string]*bird.InstanceObservation, lastRoutingFailure error) inspect.BabelDebugView {
+func buildBabelDebugView(config *appConfig, instances map[string]*bird.InstanceObservation, lastRoutingFailure error) inspect.BabelDebugView {
 	routingInstances := []photonlinux.RoutingInstance{}
-	if rt != nil && rt.Config != nil {
-		routingInstances = rt.Config.Routing.Instances
+	if config != nil {
+		routingInstances = config.Routing.Instances
 	}
 	input := inspect.BabelDebugInput{LastReconcileFailure: lastRoutingFailure}
 	if len(routingInstances) == 0 {
@@ -118,15 +119,15 @@ func buildBabelDebugView(rt *AppContext, instances map[string]*bird.InstanceObse
 }
 
 func debugRoutes(_ context.Context, _ *cli.Command) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	return debugRoutesWithRuntime(rt, os.Stdout)
+	return debugRoutesWithConfig(config, os.Stdout, time.Now(), false)
 }
 
-func debugRoutesWithRuntime(rt *AppContext, w io.Writer) error {
-	dump, err := loadRoutesView(rt)
+func debugRoutesWithConfig(config *appConfig, w io.Writer, now time.Time, direct bool) error {
+	dump, err := loadRoutesView(config, now, direct)
 	if err != nil {
 		return err
 	}
@@ -134,14 +135,14 @@ func debugRoutesWithRuntime(rt *AppContext, w io.Writer) error {
 }
 
 func debugRoute(_ context.Context, cmd *cli.Command) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	return debugRouteWithRuntime(rt, cmd.Args().First(), os.Stdout)
+	return debugRouteWithConfig(config, cmd.Args().First(), os.Stdout, time.Now(), false)
 }
 
-func debugRouteWithRuntime(rt *AppContext, prefixArg string, w io.Writer) error {
+func debugRouteWithConfig(config *appConfig, prefixArg string, w io.Writer, now time.Time, direct bool) error {
 	canonical, err := routing.CanonicalizePrefix(prefixArg)
 	if err != nil {
 		return fmt.Errorf("invalid prefix %q: %w", prefixArg, err)
@@ -150,22 +151,22 @@ func debugRouteWithRuntime(rt *AppContext, prefixArg string, w io.Writer) error 
 	if err != nil {
 		return err
 	}
-	dump, err := loadRoutesView(rt)
+	dump, err := loadRoutesView(config, now, direct)
 	if err != nil {
 		return err
 	}
 	return inspecttext.WriteRouteDebug(w, prefix, dump)
 }
 
-func loadRoutesView(rt *AppContext) (*inspect.RoutesResponse, error) {
-	view, ok, err := readCanonicalViewViaControl[inspect.RoutesResponse](rt, controlRequest{Method: "routes_view"})
+func loadRoutesView(config *appConfig, now time.Time, direct bool) (*inspect.RoutesResponse, error) {
+	view, ok, err := readCanonicalViewViaControl[inspect.RoutesResponse](config, controlRequest{Method: "routes_view"}, direct)
 	if err != nil {
 		return nil, err
 	}
 	if ok {
 		return &view, nil
 	}
-	common, _, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(config)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +174,7 @@ func loadRoutesView(rt *AppContext) (*inspect.RoutesResponse, error) {
 		return nil, fmt.Errorf("common state is not initialized")
 	}
 	configureValidation(common.State.Network)
-	ars, err := routing.BuildAuthorizedRouteSet(common.State.Network, rt.Now())
+	ars, err := routing.BuildAuthorizedRouteSet(common.State.Network, now)
 	if err != nil {
 		return nil, err
 	}
@@ -182,12 +183,12 @@ func loadRoutesView(rt *AppContext) (*inspect.RoutesResponse, error) {
 
 // routingNetnsForOverlay returns the netns name for a given overlay group ID.
 // Used by debug links routing state lookup.
-func routingNetnsForOverlay(rt *AppContext, overlayID string) string {
-	if rt == nil || rt.Config == nil {
+func routingNetnsForOverlay(config *appConfig, overlayID string) string {
+	if config == nil {
 		return ""
 	}
 	// Find the overlay group, resolve its netns name.
-	for _, group := range rt.Config.IPsec.LinkGroups {
+	for _, group := range config.IPsec.LinkGroups {
 		if group.ID == overlayID {
 			return photonlinux.NetNSTarget(group.NetNS)
 		}

@@ -31,7 +31,7 @@ const (
 )
 
 func (d *Daemon) reconcileRouting(ctx context.Context) error {
-	if d == nil || d.App == nil || d.App.Config == nil {
+	if d == nil || d.Config == nil {
 		return nil
 	}
 	common := d.State.Common.ReadView()
@@ -42,7 +42,7 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 	rev := uint64(common.Revision)
 	verified := common.State
 	routingObserved := d.linuxObservation.routingSnapshot()
-	config := d.App.Config
+	config := d.Config
 	routingInstances := config.Routing.EnabledInstances()
 	if len(routingInstances) == 0 {
 		d.linuxObservation.replaceRouting(nil)
@@ -326,7 +326,7 @@ func (d *Daemon) recordBirdHealthObservationForLinks(instances map[string]ipsec.
 }
 
 func (d *Daemon) stopManagedBirdInstances(ctx context.Context, force bool) error {
-	if d == nil || d.App == nil || d.App.Config == nil {
+	if d == nil || d.Config == nil {
 		return nil
 	}
 	if ctx == nil {
@@ -334,7 +334,7 @@ func (d *Daemon) stopManagedBirdInstances(ctx context.Context, force bool) error
 	}
 
 	var firstErr error
-	for _, inst := range d.App.Config.Routing.Instances {
+	for _, inst := range d.Config.Routing.Instances {
 		if !inst.Enabled || inst.Bird.Mode == ipsec.RoutingModeDisabled || inst.Bird.Mode == ipsec.RoutingModeExternal {
 			continue
 		}
@@ -355,7 +355,7 @@ func (d *Daemon) stopManagedBirdInstances(ctx context.Context, force bool) error
 
 func (d *Daemon) birdDumpForControl(ctx context.Context, netnsName string, view bird.DebugView) (*inspect.BirdDumpResponse, error) {
 	response := &inspect.BirdDumpResponse{Instances: map[string]inspect.BirdDumpInstance{}}
-	if d == nil || d.App == nil || d.App.Config == nil {
+	if d == nil || d.Config == nil {
 		return response, nil
 	}
 	commands, err := bird.DebugCommands(view)
@@ -364,7 +364,7 @@ func (d *Daemon) birdDumpForControl(ctx context.Context, netnsName string, view 
 	}
 	links, reconcile := d.linuxObservation.ipsecSnapshot()
 	linkOutputs := buildLinkOutputs(links, reconcile)
-	for _, inst := range d.App.Config.Routing.Instances {
+	for _, inst := range d.Config.Routing.Instances {
 		if !inst.Enabled || inst.Bird.Mode == ipsec.RoutingModeDisabled {
 			continue
 		}
@@ -465,7 +465,7 @@ func isDryRunConnectError(err error) bool {
 // store so routing reconcile can run BIRD work from a refreshed committed
 // snapshot.
 func (d *Daemon) autoAnnounceAssignedIPsResult(ars *routing.AuthorizedRouteSet) (bool, error) {
-	if d == nil || d.App == nil || d.State == nil {
+	if d == nil || d.Config == nil || d.State == nil {
 		return false, nil
 	}
 
@@ -473,7 +473,7 @@ func (d *Daemon) autoAnnounceAssignedIPsResult(ars *routing.AuthorizedRouteSet) 
 	if view.State == nil {
 		return false, nil
 	}
-	announce, withdraw := routing.AutoAnnounceChanges(view.State.Network, view.State.ManagedZone, ars, d.App.Config.IPAM.AutoAnnounceAssignedIPs, d.App.Config.IPAM.Announce)
+	announce, withdraw := routing.AutoAnnounceChanges(view.State.Network, view.State.ManagedZone, ars, d.Config.IPAM.AutoAnnounceAssignedIPs, d.Config.IPAM.Announce)
 	if len(announce) == 0 && len(withdraw) == 0 {
 		return false, nil
 	}
@@ -506,10 +506,10 @@ func (d *Daemon) autoAnnounceAssignedIPsResult(ars *routing.AuthorizedRouteSet) 
 // routingNetnsProtocolIntent advertises namespaces for future Router-ID origin audits.
 // Local Router-ID derivation uses configuration directly; origin enforcement is not implemented.
 func (d *Daemon) routingNetnsProtocolIntent(verified *corestate.VerifiedState) (*corestate.PutProtocolRecordIntent, error) {
-	if d == nil || verified == nil || verified.Network == nil || d.App == nil || d.App.Config == nil {
+	if d == nil || verified == nil || verified.Network == nil || d.Config == nil {
 		return nil, nil
 	}
-	config := d.App.Config
+	config := d.Config
 	if verified.ManagedZone == zone.RootZone || !verified.ManagedZone.Valid() || len(verified.IdentityPrivateKey) == 0 {
 		return nil, nil
 	}

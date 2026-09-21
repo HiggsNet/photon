@@ -24,7 +24,7 @@ const (
 )
 
 func applyEndpointACL(name, destination, scope, protocol string, port uint16, selectors []string) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
@@ -32,7 +32,7 @@ func applyEndpointACL(name, destination, scope, protocol string, port uint16, se
 	if err != nil {
 		return err
 	}
-	if ok, err := endpointACLApplyViaControl(rt, acl); err != nil {
+	if ok, err := endpointACLApplyViaControl(config, acl, false); err != nil {
 		return err
 	} else if !ok {
 		return errors.New("endpoint ACL changes require a running Photon daemon")
@@ -42,11 +42,11 @@ func applyEndpointACL(name, destination, scope, protocol string, port uint16, se
 }
 
 func removeEndpointACL(name string) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	if ok, err := endpointACLRemoveViaControl(rt, name); err != nil {
+	if ok, err := endpointACLRemoveViaControl(config, name, false); err != nil {
 		return err
 	} else if !ok {
 		return errors.New("endpoint ACL changes require a running Photon daemon")
@@ -56,11 +56,11 @@ func removeEndpointACL(name string) error {
 }
 
 func listEndpointACLs() error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	acls, ok, err := endpointACLListViaControl(rt)
+	acls, ok, err := endpointACLListViaControl(config, false)
 	if err != nil {
 		return err
 	}
@@ -276,10 +276,10 @@ func (d *Daemon) commitEndpointACLMutation(rev uint64, acls map[string]photonsta
 }
 
 func (d *Daemon) hasEnforcingHostFirewall() bool {
-	if d == nil || d.App == nil || d.App.Config == nil {
+	if d == nil || d.Config == nil {
 		return false
 	}
-	for _, instance := range d.App.Config.Firewall.ManagedInstances() {
+	for _, instance := range d.Config.Firewall.ManagedInstances() {
 		if instance.IsHost && instance.Mode == firewall.ModeManaged && instance.Backend != firewall.BackendNone {
 			backend, _, err := d.linuxDriver.ResolveFirewallBackend(context.Background(), firewall.FirewallInstanceSpec{
 				ID: instance.ID, Backend: instance.Backend, NativeHooks: instance.NativeHooks,

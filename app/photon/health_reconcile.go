@@ -229,11 +229,11 @@ func showHealth(sortBy string, verbose bool) error {
 	if sortBy != inspect.HealthSortPeer && sortBy != inspect.HealthSortRTT {
 		return cli.Exit("--sort must be peer or rtt", 1)
 	}
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	view, online, err := readCanonicalViewViaControl[inspect.HealthView](rt, controlRequest{Method: "health_status"})
+	view, online, err := readCanonicalViewViaControl[inspect.HealthView](config, controlRequest{Method: "health_status"}, false)
 	if err != nil {
 		return err
 	}

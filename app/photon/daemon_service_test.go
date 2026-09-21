@@ -12,19 +12,19 @@ import (
 
 func TestNewDaemonDefaultsInterval(t *testing.T) {
 	service := newTestDaemonFromOwners(
-		&AppContext{}, &corestate.VerifiedState{}, nil, &photonlinux.LinuxState{}, &appConfig{}, 0,
+		&testApp{}, &corestate.VerifiedState{}, nil, &photonlinux.LinuxState{}, &appConfig{}, 0,
 	)
 	if service.Interval != defaultDaemonInterval {
 		t.Fatalf("default interval = %s, want %s", service.Interval, defaultDaemonInterval)
 	}
-	if service.App == nil || service.gossipDriver == nil {
+	if service.Config == nil || service.gossipDriver == nil {
 		t.Fatal("daemon app or gossip config is nil")
 	}
 }
 
 func TestDaemonReplacesAndClosesSingleLinuxDriver(t *testing.T) {
 	service := newTestDaemonFromOwners(
-		&AppContext{}, &corestate.VerifiedState{}, nil, &photonlinux.LinuxState{}, &appConfig{}, time.Second,
+		&testApp{}, &corestate.VerifiedState{}, nil, &photonlinux.LinuxState{}, &appConfig{}, time.Second,
 	)
 	firstClosed := 0
 	firstDriver := &ipsec.DryRunDriver{}
@@ -75,7 +75,7 @@ func TestDaemonReplacesAndClosesSingleLinuxDriver(t *testing.T) {
 
 func TestDaemonStateChangedHook(t *testing.T) {
 	service := newTestDaemonFromOwners(
-		&AppContext{},
+		&testApp{},
 		&corestate.VerifiedState{ManagedZone: "node-a.catofes."},
 		nil,
 		&photonlinux.LinuxState{},
@@ -95,7 +95,7 @@ func TestDaemonStateChangedHook(t *testing.T) {
 func TestDaemonStateChangedWithoutLinuxDriverSkipsPlatformReconcile(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+		&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
 	if err := service.closeLinuxDriver(); err != nil {
 		t.Fatalf("close Linux driver: %v", err)
@@ -118,7 +118,7 @@ func TestDaemonStateChangedWithoutLinuxDriverSkipsPlatformReconcile(t *testing.T
 func TestDaemonNotifyStateChangedDefersReconcileWhileDrainingEvents(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+		&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
 	service.drainingEvents = true
 	var flushed []string
@@ -139,7 +139,7 @@ func TestDaemonNotifyStateChangedDefersReconcileWhileDrainingEvents(t *testing.T
 func TestEmptyFirewallAndRoutingFlushDoNotRepublishLegacyState(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+		&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
 	beforeRevision := uint64(service.State.Common.VerifiedRevision())
 

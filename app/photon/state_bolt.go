@@ -13,16 +13,16 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-func applyOfflineCommonIntent(rt *AppContext, intent corestate.LocalIntent, dryRun bool) (corestate.LocalIntentResult, error) {
-	state, err := openState(rt)
+func applyOfflineCommonIntent(config *appConfig, intent corestate.LocalIntent, dryRun bool, now time.Time) (corestate.LocalIntentResult, error) {
+	state, err := openState(config)
 	if err != nil {
 		return corestate.LocalIntentResult{}, err
 	}
 	defer state.Close()
 	if dryRun {
-		return state.Common.PreviewLocalIntent(intent, rt.Now())
+		return state.Common.PreviewLocalIntent(intent, now)
 	}
-	return state.Common.ApplyLocalIntent(context.Background(), intent, rt.Now())
+	return state.Common.ApplyLocalIntent(context.Background(), intent, now)
 }
 
 // loadOfflineOwnerViews runs the same one-way schema migration as daemon
@@ -30,8 +30,8 @@ func applyOfflineCommonIntent(rt *AppContext, intent corestate.LocalIntent, dryR
 // of the two persisted owners. This is only the fallback for an unavailable
 // daemon or an explicit direct operation; online readers use command-oriented
 // control views and never contend for the daemon's Bolt handle.
-func loadOfflineOwnerViews(rt *AppContext) (corestate.View, *photonlinux.LinuxState, error) {
-	state, err := openState(rt)
+func loadOfflineOwnerViews(config *appConfig) (corestate.View, *photonlinux.LinuxState, error) {
+	state, err := openState(config)
 	if err != nil {
 		return corestate.View{}, nil, err
 	}
@@ -45,15 +45,15 @@ func loadOfflineOwnerViews(rt *AppContext) (corestate.View, *photonlinux.LinuxSt
 
 const daemonBoltLockTimeout = time.Second
 
-func openState(rt *AppContext) (*State, error) {
-	if rt == nil || rt.Config == nil || rt.StatePath == "" {
+func openState(config *appConfig) (*State, error) {
+	if config == nil || config.StatePath == "" {
 		return nil, errors.New("state path is not configured")
 	}
-	store, err := corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
+	store, err := corestate.OpenBoltStore(config.StatePath, 0o600, daemonBoltLockTimeout)
 	if err != nil {
 		return nil, err
 	}
-	state, found, err := restoreState(store, rt.Config.TrustedRootPublicKey)
+	state, found, err := restoreState(store, config.TrustedRootPublicKey)
 	if err != nil {
 		_ = store.Close()
 		return nil, err
@@ -67,14 +67,14 @@ func openState(rt *AppContext) (*State, error) {
 		if err := store.Close(); err != nil {
 			return nil, err
 		}
-		if err := writeConfiguredPendingBootstrap(rt.StatePath, rt.Config); err != nil {
+		if err := writeConfiguredPendingBootstrap(config.StatePath, config); err != nil {
 			return nil, err
 		}
-		store, err = corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
+		store, err = corestate.OpenBoltStore(config.StatePath, 0o600, daemonBoltLockTimeout)
 		if err != nil {
 			return nil, err
 		}
-		state, found, err = restoreState(store, rt.Config.TrustedRootPublicKey)
+		state, found, err = restoreState(store, config.TrustedRootPublicKey)
 		if err != nil || !found {
 			_ = store.Close()
 			if err != nil {
@@ -83,7 +83,7 @@ func openState(rt *AppContext) (*State, error) {
 			return nil, errors.New("state is not initialized")
 		}
 	}
-	if err := validateConfiguredIdentityState(state.Common.ReadView().State, rt.Config); err != nil {
+	if err := validateConfiguredIdentityState(state.Common.ReadView().State, config); err != nil {
 		_ = state.Close()
 		return nil, err
 	}

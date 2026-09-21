@@ -70,10 +70,7 @@ func TestDaemonBIRDRoutingRootSmoke(t *testing.T) {
 		t.Fatal("routing instances empty after parse")
 	}
 
-	rt := &AppContext{
-		Config: appConfig,
-		Clock:  func() time.Time { return time.Unix(123, 0) },
-	}
+	rt := &testApp{Config: appConfig, Clock: func() time.Time { return time.Unix(123, 0) }}
 
 	// Use real process manager and birdc client.
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
@@ -176,10 +173,7 @@ func TestDaemonBIRDAdoptRestartRootSmoke(t *testing.T) {
 		t.Fatal("routing instances empty after parse")
 	}
 
-	rt := &AppContext{
-		Config: appConfig,
-		Clock:  func() time.Time { return time.Unix(123, 0) },
-	}
+	rt := &testApp{Config: appConfig, Clock: func() time.Time { return time.Unix(123, 0) }}
 
 	service1 := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
 	processManager1 := bird.NewExecProcessManager("")
@@ -567,10 +561,7 @@ func TestDaemonBIRDUpstreamRootSmoke(t *testing.T) {
 		t.Fatal("routing instances empty after parse")
 	}
 
-	rt := &AppContext{
-		Config: appConfig,
-		Clock:  func() time.Time { return time.Unix(123, 0) },
-	}
+	rt := &testApp{Config: appConfig, Clock: func() time.Time { return time.Unix(123, 0) }}
 
 	// Use real process manager.
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)

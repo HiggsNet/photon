@@ -117,12 +117,12 @@ func TestDebugDBCurrentLayout(t *testing.T) {
 }
 
 func TestDebugDBReportsConfigErrorsAndStillReadsWithoutWriting(t *testing.T) {
-	rt := &AppContext{Config: defaultAppConfig(), StatePath: filepath.Join(t.TempDir(), "state.db")}
-	root, err := initializeRootState(rt)
+	rt := &testApp{Config: testConfigWithStatePath(defaultAppConfig(), filepath.Join(t.TempDir(), "state.db"))}
+	root, err := initializeRootState(rt.Config)
 	if err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.ReadFile(rt.StatePath)
+	before, err := os.ReadFile(rt.Config.StatePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestDebugDBReportsConfigErrorsAndStillReadsWithoutWriting(t *testing.T) {
 	wrong[0] ^= 0xff
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	t.Setenv("PHOTON_CONFIG", configPath)
-	t.Setenv("PHOTON_STATE", rt.StatePath)
+	t.Setenv("PHOTON_STATE", rt.Config.StatePath)
 	for _, tc := range []struct{ name, input, diagnostic string }{
 		{"wrong root", "trusted_root_public_key: " + formatPublicKey(wrong) + "\n", "does not match persisted state"},
 		{"invalid config", "unknown_field: true\n", "cannot load configuration"},
@@ -178,7 +178,7 @@ func TestDebugDBReportsConfigErrorsAndStillReadsWithoutWriting(t *testing.T) {
 			}
 		})
 	}
-	after, err := os.ReadFile(rt.StatePath)
+	after, err := os.ReadFile(rt.Config.StatePath)
 	if err != nil {
 		t.Fatal(err)
 	}

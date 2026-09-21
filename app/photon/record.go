@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
@@ -18,12 +19,14 @@ type recordMutationResult struct {
 }
 
 func putRecord(path zone.ZonePath, key string, value []byte, recordType string, direct bool) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	rt.DisableControl = direct
-	if version, ok, err := putRecordViaControl(rt, path, key, value, recordType); ok {
+
+	if version, ok, err := sendVersionedMutationViaControl(config, controlRequest{
+		Method: "record_put", Zone: path.String(), Key: key, Value: value, Type: recordType,
+	}, direct); ok {
 		if err != nil {
 			return err
 		}
@@ -33,13 +36,13 @@ func putRecord(path zone.ZonePath, key string, value []byte, recordType string, 
 	if !direct {
 		logControlFallback("record_put")
 	}
-	return putRecordDirect(rt, path, key, value, recordType)
+	return putRecordDirect(config, path, key, value, recordType, time.Now())
 }
 
-func putRecordDirect(rt *AppContext, path zone.ZonePath, key string, value []byte, recordType string) error {
-	result, err := applyOfflineCommonIntent(rt, corestate.PutRecordIntent{
+func putRecordDirect(config *appConfig, path zone.ZonePath, key string, value []byte, recordType string, now time.Time) error {
+	result, err := applyOfflineCommonIntent(config, corestate.PutRecordIntent{
 		Zone: path, Key: key, Type: recordType, Value: append([]byte(nil), value...),
-	}, false)
+	}, false, now)
 	if err != nil {
 		return err
 	}
@@ -67,25 +70,25 @@ func debugRecord(path zone.ZonePath, key string, history int) error {
 }
 
 func loadRecord(path zone.ZonePath, key string, history int) (*inspect.RecordDetailView, error) {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return nil, err
 	}
 	if history < 0 {
 		return nil, fmt.Errorf("history must be >= 0")
 	}
-	if record, ok, err := getRecordViaControl(rt, path, key, history); ok {
+	if record, ok, err := getRecordViaControl(config, path, key, history, false); ok {
 		if err != nil {
 			return nil, err
 		}
 		return record, nil
 	}
 	logControlFallback("record_get")
-	return getRecordDirect(rt, path, key, history)
+	return getRecordDirect(config, path, key, history)
 }
 
-func getRecordDirect(rt *AppContext, path zone.ZonePath, key string, history int) (*inspect.RecordDetailView, error) {
-	common, _, err := loadOfflineOwnerViews(rt)
+func getRecordDirect(config *appConfig, path zone.ZonePath, key string, history int) (*inspect.RecordDetailView, error) {
+	common, _, err := loadOfflineOwnerViews(config)
 	if err != nil {
 		return nil, err
 	}

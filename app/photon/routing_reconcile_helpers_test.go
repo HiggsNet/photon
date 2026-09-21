@@ -392,7 +392,7 @@ func buildDryRunSmokeOwners(t *testing.T) (*corestate.VerifiedState, *corestate.
 	return verified, &corestate.GossipCheckpoint{}, &photonlinux.LinuxState{}, config, signers
 }
 
-func buildIPAMRoutingSmokeOwners(t *testing.T) (*corestate.VerifiedState, *corestate.GossipCheckpoint, *photonlinux.LinuxState, *appConfig, map[zone.ZonePath]ed25519.PrivateKey, *AppContext) {
+func buildIPAMRoutingSmokeOwners(t *testing.T) (*corestate.VerifiedState, *corestate.GossipCheckpoint, *photonlinux.LinuxState, *appConfig, map[zone.ZonePath]ed25519.PrivateKey, *testApp) {
 	t.Helper()
 
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
@@ -504,10 +504,7 @@ func buildIPAMRoutingSmokeOwners(t *testing.T) (*corestate.VerifiedState, *cores
 	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 	appConfig.Routing, _ = photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{{ID: "ipsec-main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
-	rt := &AppContext{
-		Config: appConfig,
-		Clock:  func() time.Time { return time.Unix(4000, 0) },
-	}
+	rt := &testApp{Config: appConfig, Clock: func() time.Time { return time.Unix(4000, 0) }}
 
 	return verified, &corestate.GossipCheckpoint{}, &photonlinux.LinuxState{}, config, signers, rt
 }
@@ -586,7 +583,7 @@ func readFileString(path string) (string, error) {
 	return string(data), nil
 }
 
-func buildAutoAnnounceTestState(t *testing.T, managedZone zone.ZonePath, assignments []string, announcements map[string]bool) (*corestate.VerifiedState, *AppContext) {
+func buildAutoAnnounceTestState(t *testing.T, managedZone zone.ZonePath, assignments []string, announcements map[string]bool) (*corestate.VerifiedState, *testApp) {
 	t.Helper()
 	rootPub, rootPriv, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -709,9 +706,6 @@ func buildAutoAnnounceTestState(t *testing.T, managedZone zone.ZonePath, assignm
 		IdentityPrivateKey: managedPriv,
 		RootPrivateKey:     rootPriv,
 	}
-	rt := &AppContext{
-		Config: &appConfig{IPAM: ipamConfig{AutoAnnounceAssignedIPs: true}},
-		Clock:  func() time.Time { return time.Unix(1000, 0) },
-	}
+	rt := &testApp{Config: &appConfig{IPAM: ipamConfig{AutoAnnounceAssignedIPs: true}}, Clock: func() time.Time { return time.Unix(1000, 0) }}
 	return verified, rt
 }

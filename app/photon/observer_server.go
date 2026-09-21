@@ -74,10 +74,10 @@ func newObserverServer(d *Daemon, cfg observerConfig) *observerServer {
 // startObserverServer starts the HTTP observer if enabled. It returns a
 // cleanup function that gracefully shuts down the server.
 func (d *Daemon) startObserverServer(_ context.Context) (func(), error) {
-	if d == nil || d.App == nil || d.App.Config == nil {
+	if d == nil || d.Config == nil {
 		return func() {}, nil
 	}
-	cfg := d.App.Config.Observer
+	cfg := d.Config.Observer
 	if !cfg.Enabled {
 		return func() {}, nil
 	}
@@ -255,7 +255,7 @@ func (p *observerProvider) Links(linkFilter string) (any, error) {
 	if routingObserved := d.linuxObservation.routingSnapshot(); routingObserved != nil {
 		birdInstances = routingObserved.Instances
 	}
-	build := buildStoredLinkInspection(d.App, observedLinks, reconcile, birdInstances, health)
+	build := buildStoredLinkInspection(d.Config, observedLinks, reconcile, birdInstances, health)
 	view := build.Inspection
 	// Single link detail
 	if linkFilter != "" {
@@ -363,10 +363,10 @@ func daemonHealthDatasource(d *Daemon) map[string]any {
 }
 
 func observerAppConfig(d *Daemon) *appConfig {
-	if d == nil || d.App == nil {
+	if d == nil || d.Config == nil {
 		return nil
 	}
-	return d.App.Config
+	return d.Config
 }
 
 func observerNow(d *Daemon) time.Time {
@@ -418,5 +418,5 @@ func (p *observerProvider) Bird() (any, error) {
 		lastRoutingFailure = routingReconcile.LastFailure
 		instances = routingReconcile.Instances
 	}
-	return buildBabelDebugView(d.App, instances, lastRoutingFailure), nil
+	return buildBabelDebugView(d.Config, instances, lastRoutingFailure), nil
 }

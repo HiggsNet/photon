@@ -34,7 +34,8 @@ import (
 )
 
 type Daemon struct {
-	App                    *AppContext
+	Config                 *appConfig
+	clock                  func() time.Time
 	Interval               time.Duration
 	ControlSocketPath      string
 	Events                 chan daemonEvent
@@ -139,27 +140,15 @@ type daemonEventResult struct {
 	Error          error
 }
 
-func newDaemon(rt *AppContext, state *State, interval time.Duration) *Daemon {
+func newDaemon(config *appConfig, state *State, interval time.Duration, clock func() time.Time) *Daemon {
 	if interval <= 0 {
 		interval = defaultDaemonInterval
 	}
-	var socketPath string
-	if rt != nil {
-		socketPath = controlSocketPath(rt.Config)
-	}
 	spoolConfig := healthspool.Config{}
-	if rt != nil && rt.Config != nil {
-		spoolConfig = rt.Config.Health.spoolConfig()
+	if config != nil {
+		spoolConfig = config.Health.spoolConfig()
 	}
-	clock := time.Now
-	if rt != nil {
-		clock = rt.Now
-	}
-	var loggerConfig *appConfig
-	if rt != nil {
-		loggerConfig = rt.Config
-	}
-	logger := newAppLogger(loggerConfig)
+	logger := newAppLogger(config)
 	var commonState *corestate.Store
 	if state != nil {
 		commonState = state.Common
@@ -168,11 +157,11 @@ func newDaemon(rt *AppContext, state *State, interval time.Duration) *Daemon {
 	if commonState != nil {
 		verified = commonState.ReadView().State
 	}
-	gossipDriver := corehost.NewGossipDriver(corehost.NewClock(clock), corehost.DefaultEventBuffer, commonState, gossipDriverConfig(loggerConfig, verified, logger))
 	d := &Daemon{
-		App:               rt,
+		Config:            config,
+		clock:             clock,
 		Interval:          interval,
-		ControlSocketPath: socketPath,
+		ControlSocketPath: controlSocketPath(config),
 		Events:            make(chan daemonEvent, 64),
 		Log:               logger,
 		LogLimiter:        newRepeatedLogLimiter(30 * time.Second),
@@ -183,16 +172,23 @@ func newDaemon(rt *AppContext, state *State, interval time.Duration) *Daemon {
 		Now: d.now,
 	})
 	d.ipsecTakeoverNotBefore = d.now().Add(2 * time.Minute)
-	d.gossipDriver = gossipDriver
+	d.gossipDriver = corehost.NewGossipDriver(corehost.NewClock(d.now), corehost.DefaultEventBuffer, commonState, gossipDriverConfig(config, verified, logger))
 	d.objectPullExecutor = newDaemonObjectPullExecutor(d)
 	return d
 }
 
-func openDaemon(rt *AppContext, interval time.Duration) (*Daemon, error) {
-	if rt == nil {
-		return nil, errors.New("daemon runtime is nil")
+func (d *Daemon) now() time.Time {
+	if d != nil && d.clock != nil {
+		return d.clock()
 	}
-	state, err := openState(rt)
+	return time.Now()
+}
+
+func openDaemon(config *appConfig, interval time.Duration) (*Daemon, error) {
+	if config == nil {
+		return nil, errors.New("daemon config is nil")
+	}
+	state, err := openState(config)
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +197,7 @@ func openDaemon(rt *AppContext, interval time.Duration) (*Daemon, error) {
 		_ = state.Close()
 		return nil, errors.New("daemon common state is not initialized")
 	}
-	return newDaemon(rt, state, interval), nil
+	return newDaemon(config, state, interval, time.Now), nil
 }
 
 func (d *Daemon) Close() error {
@@ -222,10 +218,10 @@ func (d *Daemon) configureHealthManager() {
 		d.health.Manager = nil
 		d.health.driverManaged = false
 	}
-	if d == nil || d.App == nil || d.App.Config == nil {
+	if d == nil || d.Config == nil {
 		return
 	}
-	cfg := d.App.Config.Health
+	cfg := d.Config.Health
 	if !cfg.Enabled {
 		return
 	}
@@ -319,9 +315,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 		"addr":     transport.LocalAddr(),
 		"interval": d.Interval,
 	}
-	if d.App != nil {
+	if d.Config != nil {
 		startFields["config_path"] = configPath()
-		startFields["state_path"] = d.App.StatePath
+		startFields["state_path"] = d.Config.StatePath
 	}
 	maps.Copy(startFields, buildInfoFields())
 	d.logInfo("daemon", "started", startFields)
@@ -461,7 +457,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 							return err
 						}
 					}
-					interval := d.App.Config.ReflectorInterval
+					interval := d.Config.ReflectorInterval
 					if interval <= 0 {
 						interval = 5 * time.Minute
 					}
@@ -588,6 +584,55 @@ func (d *Daemon) serveControl(ctx context.Context, listener net.Listener, done c
 	}
 }
 
+func (d *Daemon) birdRoutesForControl(ctx context.Context, dump *inspect.RoutesResponse, instances []photonlinux.RoutingInstance, birdStates map[string]*bird.InstanceObservation) []inspect.BirdRoutesView {
+	if d == nil || dump == nil {
+		return nil
+	}
+	views := make([]inspect.BirdRoutesView, 0, len(instances))
+	for _, inst := range instances {
+		if !inst.Enabled || inst.Bird.Mode == ipsec.RoutingModeDisabled {
+			continue
+		}
+		state := birdStates[inst.Bird.NetNSName]
+		view := inspect.BirdRoutesView{
+			NetNS:      inst.Bird.NetNSName,
+			InstanceID: inst.ID,
+		}
+		socketPath := inst.Bird.ControlSocketPath
+		if state != nil {
+			view.State = state.State
+			view.Failure = inspect.BuildFailure(inspect.FailureCodeBirdInstance, state.LastFailure)
+			if state.ControlSocket != "" {
+				socketPath = state.ControlSocket
+			}
+		}
+		if socketPath == "" {
+			if view.Failure == nil {
+				view.Failure = inspect.BuildFailure(inspect.FailureCodeBirdQuery, errors.New("control socket not configured"))
+			}
+			views = append(views, view)
+			continue
+		}
+		observed, err := d.linuxDriver.ObserveBird(ctx, socketPath, bird.InternalRouteTableNames(inst.Bird.NetNSName)...)
+		if err != nil {
+			view.Failure = inspect.BuildFailure(inspect.FailureCodeBirdQuery, err)
+			views = append(views, view)
+			continue
+		}
+		if observed != nil {
+			view.Routes = inspect.BuildBirdRouteViews(dump, observed.Routes)
+		}
+		views = append(views, view)
+	}
+	sort.Slice(views, func(i, j int) bool {
+		if views[i].NetNS != views[j].NetNS {
+			return views[i].NetNS < views[j].NetNS
+		}
+		return views[i].InstanceID < views[j].InstanceID
+	})
+	return views
+}
+
 func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 	var request controlRequest
@@ -621,7 +666,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		if routingObserved != nil {
 			birdInstances = routingObserved.Instances
 		}
-		writeCanonicalView(conn, statusViewFromOwners(d.App, common, links, reconcile, birdInstances, d.healthSamples(), true))
+		writeCanonicalView(conn, statusViewFromOwners(d.Config, common, links, reconcile, birdInstances, d.healthSamples(), true, d.now()))
 	case "record_put":
 		if err := validateControlRecordPut(request); err != nil {
 			writeControlResponse(conn, controlError(err))
@@ -792,9 +837,9 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		if request.Ping != nil {
 			opts = *request.Ping
 		}
-		if d.App != nil && d.App.Config != nil {
-			opts.FallbackCount = d.App.Config.Health.Burst
-			opts.FallbackTimeout = d.App.Config.Health.Timeout
+		if d.Config != nil {
+			opts.FallbackCount = d.Config.Health.Burst
+			opts.FallbackTimeout = d.Config.Health.Timeout
 		}
 		resolved := pingdebug.ResolveOptions(opts)
 		selected := pingdebug.SelectTargetsResolved(targets, request.Zone, resolved)
@@ -815,7 +860,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
 		}
-		view := inspect.BuildSyncStatus(common, syncStatusOptions(d.App.Config.ListenAddr, d.gossipDriver.GossipConfig(), d.now(), request.Verbose))
+		view := inspect.BuildSyncStatus(common, syncStatusOptions(d.Config.ListenAddr, d.gossipDriver.GossipConfig(), d.now(), request.Verbose))
 		writeCanonicalView(conn, view)
 	case "peer_debug":
 		common := d.State.Common.ReadView()
@@ -1019,7 +1064,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			lastRoutingFailure = routingReconcile.LastFailure
 			birdInstances = routingReconcile.Instances
 		}
-		view := buildBabelDebugView(d.App, birdInstances, lastRoutingFailure)
+		view := buildBabelDebugView(d.Config, birdInstances, lastRoutingFailure)
 		writeCanonicalView(conn, view)
 	case "bird_dump":
 		dump, err := d.birdDumpForControl(ctx, request.NetNS, bird.DebugView(request.BirdView))
@@ -1039,8 +1084,8 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		writeCanonicalView(conn, view)
 	case "routes_view":
 		var routingInstances []photonlinux.RoutingInstance
-		if d.App != nil && d.App.Config != nil {
-			routingInstances = append([]photonlinux.RoutingInstance(nil), d.App.Config.Routing.Instances...)
+		if d.Config != nil {
+			routingInstances = append([]photonlinux.RoutingInstance(nil), d.Config.Routing.Instances...)
 		}
 		view := d.State.Common.ReadView()
 		var birdInstances map[string]*bird.InstanceObservation
@@ -1071,8 +1116,8 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		fwSnapshot := d.linuxObservation.firewallSnapshot()
 		instances := []firewall.FirewallInstanceSpec(nil)
 		var appCfg *appConfig
-		if d.App != nil && d.App.Config != nil {
-			appCfg = d.App.Config
+		if d.Config != nil {
+			appCfg = d.Config
 			instances = appCfg.Firewall.Instances
 		}
 		instances = filterFirewallDebugInstances(instances, request.NetNS, request.Host)
@@ -1084,8 +1129,8 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		if routingObserved := d.linuxObservation.routingSnapshot(); routingObserved != nil {
 			birdInstances = routingObserved.Instances
 		}
-		view := buildStoredLinkInspection(d.App, links, reconcile, birdInstances, health)
-		if d.linuxDriver != nil && d.App != nil && d.App.Config != nil && d.App.Config.IPsec.Driver != photonlinux.IPsecDriverDryRun {
+		view := buildStoredLinkInspection(d.Config, links, reconcile, birdInstances, health)
+		if d.linuxDriver != nil && d.Config != nil && d.Config.IPsec.Driver != photonlinux.IPsecDriverDryRun {
 			sas, err := d.linuxDriver.ListIPsecSAs(ctx)
 			if err != nil {
 				view.LiveSAError = err.Error()
@@ -1101,7 +1146,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		links, reconcile := d.linuxObservation.ipsecSnapshot()
-		writeCanonicalView(conn, buildPeerLifecycleDebugView(d.App, common, links, reconcile))
+		writeCanonicalView(conn, buildPeerLifecycleDebugView(d.Config, common, links, reconcile, d.now()))
 	case "gossip_peers_view":
 		writeCanonicalView(conn, d.gossipPeerSnapshotForControl())
 	case "revocation_view":
@@ -1116,7 +1161,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		if request.Zone != "" {
 			impacts = []inspect.RevocationImpact{ComputeRevocationImpact(view.State.Network, linkStates, view.Gossip, zone.ZonePath(request.Zone), d.now())}
 		} else {
-			impacts = AllRevocationImpact(view.State.Network, linkStates, view.Gossip, d.App.Config, d.now())
+			impacts = AllRevocationImpact(view.State.Network, linkStates, view.Gossip, d.Config, d.now())
 		}
 		writeCanonicalView(conn, impacts)
 	case "health_status":
@@ -1422,7 +1467,7 @@ func (d *Daemon) cleanupPurgePlanIPsecLinks(ctx context.Context, links map[strin
 	if plan == nil || len(plan.LinkInstances) == 0 {
 		return nil
 	}
-	if d == nil || d.App == nil {
+	if d == nil || d.Config == nil {
 		return errors.New("daemon service is not initialized")
 	}
 	platformDriver := d.linuxDriver
@@ -1437,7 +1482,7 @@ func (d *Daemon) cleanupPurgePlanIPsecLinks(ctx context.Context, links map[strin
 }
 
 func (d *Daemon) handleJoinAcceptEvent(bundle *joinBundle, key *privateKeyFile) (*joinAcceptResult, error) {
-	if d == nil || d.App == nil || d.State == nil {
+	if d == nil || d.Config == nil || d.State == nil {
 		return nil, errors.New("daemon service is not initialized")
 	}
 	if bundle == nil || bundle.Version != 1 || bundle.Network == nil {
@@ -1593,7 +1638,7 @@ func (d *Daemon) handleIPsecPortRotateEvent() (*manualPortRotateResult, error) {
 		return nil, errors.New("daemon state is not initialized")
 	}
 	revision := uint64(common.Revision)
-	record, result, err := planLocalIPsecPortRotation(d.App.Config, common.State, d.now())
+	record, result, err := planLocalIPsecPortRotation(d.Config, common.State, d.now())
 	if err != nil {
 		return nil, err
 	}
@@ -1754,10 +1799,10 @@ func (d *Daemon) flushRoutingReconcileResult(ctx context.Context) (bool, error) 
 }
 
 func (d *Daemon) routingReconcileInterval() time.Duration {
-	if d == nil || d.App == nil || d.App.Config == nil {
+	if d == nil || d.Config == nil {
 		return 0
 	}
-	instances := d.App.Config.Routing.EnabledInstances()
+	instances := d.Config.Routing.EnabledInstances()
 	if len(instances) == 0 {
 		return 0
 	}
@@ -1914,10 +1959,10 @@ func (d *Daemon) handleIPsecLifecycleEvent(ev ipsec.VICIEvent) {
 }
 
 func (d *Daemon) ipsecReconcileInterval() time.Duration {
-	if d == nil || d.App == nil || d.App.Config == nil {
+	if d == nil || d.Config == nil {
 		return 0
 	}
-	groups := d.App.Config.IPsec.LinkGroups
+	groups := d.Config.IPsec.LinkGroups
 	if len(groups) == 0 {
 		links, _ := d.linuxObservation.ipsecSnapshot()
 		hasLinkInstances := len(links) > 0
@@ -1947,11 +1992,11 @@ func nextIPsecReconcileTime(now time.Time, interval time.Duration) time.Time {
 }
 
 func daemonRun(ctx context.Context, interval time.Duration) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	service, err := openDaemon(rt, interval)
+	service, err := openDaemon(config, interval)
 	if err != nil {
 		return err
 	}
@@ -1960,10 +2005,10 @@ func daemonRun(ctx context.Context, interval time.Duration) error {
 }
 
 func (d *Daemon) configureLinuxDriverFromConfig() error {
-	if d == nil || d.App == nil || d.App.Config == nil {
+	if d == nil || d.Config == nil {
 		return nil
 	}
-	driver, err := photonlinux.NewDaemonDriver(d.App.Config.IPsec, d.App.Config.Netns.Names, d.Log)
+	driver, err := photonlinux.NewDaemonDriver(d.Config.IPsec, d.Config.Netns.Names, d.Log)
 	if err != nil {
 		return err
 	}

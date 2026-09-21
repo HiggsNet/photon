@@ -61,10 +61,7 @@ func TestReconcileRoutingBacksOffAfterManagedBirdCrash(t *testing.T) {
 	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 	appConfig.Routing, _ = photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
-	rt := &AppContext{
-		Config: appConfig,
-		Clock:  func() time.Time { return now },
-	}
+	rt := &testApp{Config: appConfig, Clock: func() time.Time { return now }}
 
 	pm := &fakeBirdProcessManager{running: false, lastExit: &bird.ProcessExit{PID: 1234, Failure: errors.New("signal: killed")}}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
@@ -125,10 +122,7 @@ func TestReconcileRoutingRestartsManagedBirdAfterCrashBackoff(t *testing.T) {
 		},
 	}
 
-	rt := &AppContext{
-		Config: appConfig,
-		Clock:  func() time.Time { return now },
-	}
+	rt := &testApp{Config: appConfig, Clock: func() time.Time { return now }}
 
 	pm := &fakeBirdProcessManager{running: false}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
@@ -171,10 +165,7 @@ func TestReconcileRoutingClearsStaleBackoffForRunningBird(t *testing.T) {
 	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 	appConfig.Routing, _ = photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
-	rt := &AppContext{
-		Config: appConfig,
-		Clock:  func() time.Time { return now },
-	}
+	rt := &testApp{Config: appConfig, Clock: func() time.Time { return now }}
 
 	pm := &fakeBirdProcessManager{running: false}
 	client := &fakeBirdClient{}
@@ -227,10 +218,7 @@ func TestLongBirdReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 	appConfig.Routing, _ = photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
-	rt := &AppContext{
-		Config: appConfig,
-		Clock:  func() time.Time { return now },
-	}
+	rt := &testApp{Config: appConfig, Clock: func() time.Time { return now }}
 
 	pm := &blockingBirdProcessManager{
 		startedCh: make(chan struct{}),
@@ -311,7 +299,7 @@ func TestStopManagedBirdInstancesHonorsShutdownPolicy(t *testing.T) {
 	externalPM := &fakeBirdProcessManager{running: true}
 	stopPM := &fakeBirdProcessManager{running: true}
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: appConfig}, nil, nil, &photonlinux.LinuxState{}, appConfig, time.Second,
+		&testApp{Config: appConfig}, nil, nil, &photonlinux.LinuxState{}, appConfig, time.Second,
 	)
 	installTestLinuxDrivers(service, testLinuxDrivers{birdProcesses: map[string]bird.ProcessManager{
 		"photontesth2": persistPM,
@@ -363,10 +351,7 @@ func TestFlushRoutingReconcileCoalesces(t *testing.T) {
 	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 	appConfig.Routing, _ = photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
-	rt := &AppContext{
-		Config: appConfig,
-		Clock:  clock.Now,
-	}
+	rt := &testApp{Config: appConfig, Clock: clock.Now}
 
 	pm := &fakeBirdProcessManager{running: false}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)

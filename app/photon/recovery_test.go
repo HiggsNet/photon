@@ -33,7 +33,7 @@ func TestRecoveryImportNoopDoesNotCommitOrNotify(t *testing.T) {
 	}
 
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: defaultAppConfig(), Clock: func() time.Time { return now }},
+		&testApp{Config: defaultAppConfig(), Clock: func() time.Time { return now }},
 		verified, checkpoint, runtime, config, defaultDaemonInterval,
 	)
 	if _, _, err := service.handleRecoveryImportZoneEvent(snapshot); err != nil {
@@ -98,9 +98,9 @@ func TestRecoveryExportImportOfflineRootIPAMRecords(t *testing.T) {
 	if err := recoveryImportZone(rootSnapshotPath, true); err != nil {
 		t.Fatalf("recoveryImportZone(root): %v", err)
 	}
-	rt, err := NewAppContext()
+	rt, err := loadAppConfig()
 	if err != nil {
-		t.Fatalf("NewAppContext(catofes): %v", err)
+		t.Fatalf("loadAppConfig(catofes): %v", err)
 	}
 	state, err := openState(rt)
 	if err != nil {
@@ -159,15 +159,15 @@ func TestRecoveryImportZoneEventAppliesToDaemonState(t *testing.T) {
 	if err := acceptJoinBundle(catofesBundlePath, catofesKeyPath, true); err != nil {
 		t.Fatalf("acceptJoinBundle(catofes): %v", err)
 	}
-	rt, err := NewAppContext()
+	rt, err := loadAppConfig()
 	if err != nil {
-		t.Fatalf("NewAppContext(catofes): %v", err)
+		t.Fatalf("loadAppConfig(catofes): %v", err)
 	}
 	state, runtime, err := loadOfflineOwnerViews(rt)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews(catofes): %v", err)
 	}
-	service := newTestDaemonFromOwners(rt, state.State, state.Gossip, runtime, rt.Config, time.Second)
+	service := newTestDaemonFromOwners(&testApp{Config: rt}, state.State, state.Gossip, runtime, rt, time.Second)
 
 	result, _, _ := service.handleEvent(daemonEvent{
 		Type:     daemonEventRecoveryImportZone,

@@ -175,16 +175,16 @@ func loadAppConfig() (*appConfig, error) {
 	path, explicit := selectedConfigPath()
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) && !explicit {
-			normalizeAppConfig(config)
-			return config, nil
+		if !errors.Is(err, os.ErrNotExist) || explicit {
+			return nil, fmt.Errorf("read config %s: %w", path, err)
 		}
-		return nil, fmt.Errorf("read config %s: %w", path, err)
-	}
-	if err := parseConfigYAML(string(data), config); err != nil {
+	} else if err := parseConfigYAML(string(data), config); err != nil {
 		return nil, err
 	}
 	normalizeAppConfig(config)
+	if override := os.Getenv("PHOTON_STATE"); override != "" {
+		config.StatePath = override
+	}
 	return config, nil
 }
 

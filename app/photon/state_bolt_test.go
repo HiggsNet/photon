@@ -19,7 +19,7 @@ import (
 
 func TestOpenStatePersistsCommonAndLinuxPartitions(t *testing.T) {
 	rt, _ := buildIPAMTestRuntime(t)
-	state, err := openState(rt)
+	state, err := openState(rt.Config)
 	if err != nil {
 		t.Fatalf("openState: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestOpenStatePersistsCommonAndLinuxPartitions(t *testing.T) {
 		t.Fatalf("Close State: %v", err)
 	}
 
-	reopened, err := openState(rt)
+	reopened, err := openState(rt.Config)
 	if err != nil {
 		t.Fatalf("reopen State: %v", err)
 	}
@@ -58,12 +58,12 @@ func TestOpenStatePersistsCommonAndLinuxPartitions(t *testing.T) {
 
 func TestOpenStateOwnsBoltLifecycle(t *testing.T) {
 	rt, _ := buildIPAMTestRuntime(t)
-	state, err := openState(rt)
+	state, err := openState(rt.Config)
 	if err != nil {
 		t.Fatalf("openState: %v", err)
 	}
 	started := time.Now()
-	competing, err := corestate.OpenBoltStore(rt.StatePath, 0o600, 25*time.Millisecond)
+	competing, err := corestate.OpenBoltStore(rt.Config.StatePath, 0o600, 25*time.Millisecond)
 	if competing != nil {
 		_ = competing.Close()
 	}
@@ -76,7 +76,7 @@ func TestOpenStateOwnsBoltLifecycle(t *testing.T) {
 	if err := state.Close(); err != nil {
 		t.Fatalf("Close State: %v", err)
 	}
-	reopened, err := openState(rt)
+	reopened, err := openState(rt.Config)
 	if err != nil {
 		t.Fatalf("reopen after Close: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestOpenStateOwnsBoltLifecycle(t *testing.T) {
 
 func TestStateRejectsLinuxCommitAfterDiskRevisionDiverges(t *testing.T) {
 	rt, _ := buildIPAMTestRuntime(t)
-	state, err := openState(rt)
+	state, err := openState(rt.Config)
 	if err != nil {
 		t.Fatalf("openState: %v", err)
 	}
@@ -121,19 +121,19 @@ func TestStateRejectsLinuxCommitAfterDiskRevisionDiverges(t *testing.T) {
 }
 
 func TestOpenStateChecksExplicitRootWithoutWriting(t *testing.T) {
-	rt := &AppContext{Config: defaultAppConfig(), StatePath: filepath.Join(t.TempDir(), "state.db")}
-	root, err := initializeRootState(rt)
+	rt := &testApp{Config: testConfigWithStatePath(defaultAppConfig(), filepath.Join(t.TempDir(), "state.db"))}
+	root, err := initializeRootState(rt.Config)
 	if err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.ReadFile(rt.StatePath)
+	before, err := os.ReadFile(rt.Config.StatePath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	wrong := append(ed25519.PublicKey(nil), root...)
 	wrong[0] ^= 0xff
 	rt.Config.TrustedRootPublicKey = wrong
-	state, err := openState(rt)
+	state, err := openState(rt.Config)
 	if state != nil {
 		state.Close()
 		t.Fatal("opened state with wrong trust")
@@ -141,7 +141,7 @@ func TestOpenStateChecksExplicitRootWithoutWriting(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "does not match persisted state") {
 		t.Fatalf("error = %v", err)
 	}
-	after, err := os.ReadFile(rt.StatePath)
+	after, err := os.ReadFile(rt.Config.StatePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestOpenStateChecksExplicitRootWithoutWriting(t *testing.T) {
 	}
 	for _, key := range []ed25519.PublicKey{nil, root} {
 		rt.Config.TrustedRootPublicKey = key
-		state, err := openState(rt)
+		state, err := openState(rt.Config)
 		if err != nil {
 			t.Fatal(err)
 		}

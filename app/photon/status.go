@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
@@ -12,50 +13,50 @@ import (
 )
 
 func showStatus() error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	if view, online, err := readCanonicalViewViaControl[inspect.StatusView](rt, controlRequest{Method: "status_view"}); err != nil {
+	if view, online, err := readCanonicalViewViaControl[inspect.StatusView](config, controlRequest{Method: "status_view"}, false); err != nil {
 		return err
 	} else if online {
 		return inspecttext.WriteStatus(os.Stdout, view)
 	}
-	common, _, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(config)
 	if err != nil {
 		return err
 	}
-	return inspecttext.WriteStatus(os.Stdout, statusViewFromOwners(rt, common, nil, nil, nil, nil, false))
+	return inspecttext.WriteStatus(os.Stdout, statusViewFromOwners(config, common, nil, nil, nil, nil, false, time.Now()))
 }
 
-func statusViewFromOwners(rt *AppContext, common corestate.View, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, birdInstances map[string]*bird.InstanceObservation, health []inspect.HealthSample, daemonOnline bool) inspect.StatusView {
+func statusViewFromOwners(config *appConfig, common corestate.View, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, birdInstances map[string]*bird.InstanceObservation, health []inspect.HealthSample, daemonOnline bool, now time.Time) inspect.StatusView {
 	if common.State == nil {
 		return inspect.BuildStatus(inspect.StatusInput{DaemonOnline: daemonOnline})
 	}
 	verified := common.State
 	var bootstrap []string
-	if rt != nil && rt.Config != nil {
-		bootstrap = bootstrapPeerIDs(rt.Config.Bootstrap)
+	if config != nil {
+		bootstrap = bootstrapPeerIDs(config.Bootstrap)
 	}
 	input := inspect.StatusInput{
 		DaemonOnline:   daemonOnline,
 		GossipSource:   "checkpoint",
 		PlatformSource: "unavailable",
 		ManagedZone:    verified.ManagedZone,
-		Admission:      gossip.DiagnoseAutoJoinAdmission(verified, common.Gossip, bootstrap, rt.Now()),
+		Admission:      gossip.DiagnoseAutoJoinAdmission(verified, common.Gossip, bootstrap, now),
 	}
 	if daemonOnline {
 		input.GossipSource = "runtime"
 		input.PlatformSource = "runtime"
-		input.Links = buildStoredLinkInspection(rt, links, reconcile, birdInstances, health).Inspection
+		input.Links = buildStoredLinkInspection(config, links, reconcile, birdInstances, health).Inspection
 	}
 	cfg := inspect.PeerLifecycleConfig{}
 	hasOverlay := false
-	if rt != nil && rt.Config != nil {
-		cfg = rt.Config.PeerLifecycle
-		hasOverlay = len(rt.Config.IPsec.LinkGroups) > 0
+	if config != nil {
+		cfg = config.PeerLifecycle
+		hasOverlay = len(config.IPsec.LinkGroups) > 0
 	}
-	input.Peers = derivePeerStatuses(verified.ManagedZone, verified.Network, common.Gossip, links, reconcile, rt.Now(), cfg, hasOverlay)
+	input.Peers = derivePeerStatuses(verified.ManagedZone, verified.Network, common.Gossip, links, reconcile, now, cfg, hasOverlay)
 	return inspect.BuildStatus(input)
 }
 
@@ -106,8 +107,8 @@ func daemonStatusView(d *Daemon) inspect.DaemonStatusView {
 	if d.gossipDriver != nil {
 		peerID = d.gossipDriver.GossipConfig().PeerID
 	}
-	if d.App != nil && d.App.Config != nil {
-		listenAddr = d.App.Config.ListenAddr
+	if d.Config != nil {
+		listenAddr = d.Config.ListenAddr
 	}
 	return inspect.BuildDaemonStatus(inspect.DaemonStatusInput{
 		PeerID:             peerID,

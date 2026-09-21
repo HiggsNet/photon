@@ -26,45 +26,45 @@ type routeMutationRequest struct {
 }
 
 func announceRoute(path zone.ZonePath, prefix string, direct bool) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	rt.DisableControl = direct
-	return mutateRouteWithRuntime(rt, path, prefix, true)
+
+	return mutateRouteWithConfig(config, path, prefix, true, time.Now(), direct)
 }
 
 func withdrawRoute(path zone.ZonePath, prefix string, direct bool) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	rt.DisableControl = direct
-	return mutateRouteWithRuntime(rt, path, prefix, false)
+
+	return mutateRouteWithConfig(config, path, prefix, false, time.Now(), direct)
 }
 
 func showRoutes(filter string, includeAll bool, verbose bool) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	report, err := buildRouteShowReport(rt, "", includeAll)
+	report, err := buildRouteShowReport(config, "", includeAll, time.Now(), false)
 	if err != nil {
 		return err
 	}
 	return printRouteShowReport(os.Stdout, report, includeAll, filter, verbose)
 }
 
-func mutateRouteWithRuntime(rt *AppContext, path zone.ZonePath, prefix string, active bool) error {
+func mutateRouteWithConfig(config *appConfig, path zone.ZonePath, prefix string, active bool, now time.Time, direct bool) error {
 	request := routeMutationRequest{Zone: path, Prefix: prefix, Active: active}
-	if version, ok, err := mutateRouteViaControl(rt, request); ok {
+	if version, ok, err := sendVersionedMutationViaControl(config, controlRequest{Method: "route_mutate", Route: &request}, direct); ok {
 		if err != nil {
 			return err
 		}
 		fmt.Printf("%s route %s version %d via daemon\n", routeOpVerb(request.Active), request.Prefix, version)
 		return nil
 	}
-	result, err := applyOfflineCommonIntent(rt, commonRouteIntent(request), request.DryRun)
+	result, err := applyOfflineCommonIntent(config, commonRouteIntent(request), request.DryRun, now)
 	if err != nil {
 		return err
 	}
@@ -75,20 +75,20 @@ func mutateRouteWithRuntime(rt *AppContext, path zone.ZonePath, prefix string, a
 	return nil
 }
 
-func buildRouteShowReport(rt *AppContext, filterZone zone.ZonePath, includeAll bool) (*inspect.RouteShowReport, error) {
-	if report, ok, err := readCanonicalViewViaControl[inspect.RouteShowReport](rt, controlRequest{Method: "route_view", Zone: filterZone.String(), IncludeAll: includeAll}); err != nil {
+func buildRouteShowReport(config *appConfig, filterZone zone.ZonePath, includeAll bool, now time.Time, direct bool) (*inspect.RouteShowReport, error) {
+	if report, ok, err := readCanonicalViewViaControl[inspect.RouteShowReport](config, controlRequest{Method: "route_view", Zone: filterZone.String(), IncludeAll: includeAll}, direct); err != nil {
 		return nil, err
 	} else if ok {
 		return &report, nil
 	}
-	common, _, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(config)
 	if err != nil {
 		return nil, err
 	}
 	if common.State == nil {
 		return nil, errors.New("common state is not initialized")
 	}
-	return buildRouteShowReportFromState(common.State, rt.Now(), filterZone, includeAll)
+	return buildRouteShowReportFromState(common.State, now, filterZone, includeAll)
 }
 
 func buildRouteShowReportFromState(verified *corestate.VerifiedState, now time.Time, filterZone zone.ZonePath, includeAll bool) (*inspect.RouteShowReport, error) {

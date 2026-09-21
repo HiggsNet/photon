@@ -12,23 +12,23 @@ import (
 )
 
 func showZones(filter string, verbose bool) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	if details, ok, err := readCanonicalViewViaControl[[]inspect.ZoneDetail](rt, controlRequest{Method: "zones_view"}); err != nil {
+	if details, ok, err := readCanonicalViewViaControl[[]inspect.ZoneDetail](config, controlRequest{Method: "zones_view"}, false); err != nil {
 		return err
 	} else if ok {
 		return writeZoneDetails(details, filter, verbose)
 	}
-	common, _, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(config)
 	if err != nil {
 		return err
 	}
 	if common.State == nil || common.State.Network == nil {
 		return inspecttext.WriteZones(os.Stdout, nil, filter, verbose)
 	}
-	return writeZoneDetails(buildZoneDetails(common.State.Network, rt.Now()), filter, verbose)
+	return writeZoneDetails(buildZoneDetails(common.State.Network, time.Now()), filter, verbose)
 }
 
 func buildZoneDetails(network *zone.NetworkState, now time.Time) []inspect.ZoneDetail {
@@ -64,16 +64,16 @@ func writeZoneDetails(details []inspect.ZoneDetail, filter string, verbose bool)
 }
 
 func showRecords(path zone.ZonePath, filter string, verbose bool) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	if view, ok, err := readCanonicalViewViaControl[inspect.RecordsDebugView](rt, controlRequest{Method: "records_view", Zone: path.String()}); err != nil {
+	if view, ok, err := readCanonicalViewViaControl[inspect.RecordsDebugView](config, controlRequest{Method: "records_view", Zone: path.String()}, false); err != nil {
 		return err
 	} else if ok {
 		return inspecttext.WriteRecords(os.Stdout, view, filter, verbose)
 	}
-	common, _, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(config)
 	if err != nil {
 		return err
 	}

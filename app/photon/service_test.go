@@ -66,10 +66,10 @@ func TestPublishAndWithdrawSOCKS5Service(t *testing.T) {
 			Version: 1, Prefix: "fd42:1::/64", AssignedTo: managed, Active: true,
 		})
 	})
-	if err := publishSOCKS5EndpointsWithRuntime(rt, []photonservice.SOCKS5Endpoint{{Region: "cn-east", Address: "fd42:1::20", Port: 3128}}); err != nil {
+	if err := publishSOCKS5EndpointsWithConfig(rt.Config, []photonservice.SOCKS5Endpoint{{Region: "cn-east", Address: "fd42:1::20", Port: 3128}}, rt.Now(), rt.Direct); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	common, _, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews after publish: %v", err)
 	}
@@ -78,10 +78,10 @@ func TestPublishAndWithdrawSOCKS5Service(t *testing.T) {
 	if err != nil || !parsed.IsActive() || record.Version != 1 {
 		t.Fatalf("published record = %#v, parsed = %#v, error = %v", record, parsed, err)
 	}
-	if err := withdrawSOCKS5ServiceWithRuntime(rt); err != nil {
+	if err := withdrawSOCKS5ServiceWithConfig(rt.Config, rt.Now(), rt.Direct); err != nil {
 		t.Fatalf("withdraw: %v", err)
 	}
-	common, _, err = loadOfflineOwnerViews(rt)
+	common, _, err = loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews after withdraw: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestPublishAndWithdrawSOCKS5Service(t *testing.T) {
 
 func TestPublishSOCKS5ServiceRejectsUnownedAddress(t *testing.T) {
 	rt, _ := buildRouteTestRuntime(t)
-	if err := publishSOCKS5EndpointsWithRuntime(rt, []photonservice.SOCKS5Endpoint{{Region: "cn", Address: "fd42:1::20", Port: 3128}}); err == nil {
+	if err := publishSOCKS5EndpointsWithConfig(rt.Config, []photonservice.SOCKS5Endpoint{{Region: "cn", Address: "fd42:1::20", Port: 3128}}, rt.Now(), rt.Direct); err == nil {
 		t.Fatal("expected unowned address error")
 	}
 }

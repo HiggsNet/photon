@@ -36,10 +36,7 @@ func TestRoutingDryRunSmoke(t *testing.T) {
 	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 	appConfig.Routing, _ = photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{{ID: "ipsec-main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
-	rt := &AppContext{
-		Config: appConfig,
-		Clock:  func() time.Time { return now },
-	}
+	rt := &testApp{Config: appConfig, Clock: func() time.Time { return now }}
 
 	pm := &fakeBirdProcessManager{running: false}
 	client := &fakeBirdClient{}
@@ -104,7 +101,7 @@ func TestRoutingDryRunSmoke(t *testing.T) {
 
 func TestIPAMRoutingSmoke(t *testing.T) {
 	verified, checkpoint, runtime, config, signers, rt := buildIPAMRoutingSmokeOwners(t)
-	rt.DisableControl = true
+	rt.Direct = true
 	now := rt.Now()
 
 	// Construct records signed by both authorities without pretending that one
@@ -181,7 +178,7 @@ func TestIPAMRoutingSmoke(t *testing.T) {
 
 func TestAutoAnnounceAssignedIPsRoutingSmoke(t *testing.T) {
 	verified, checkpoint, runtime, config, signers, rt := buildIPAMRoutingSmokeOwners(t)
-	rt.DisableControl = true
+	rt.Direct = true
 	rt.Config.IPAM.AutoAnnounceAssignedIPs = true
 	now := rt.Now()
 
@@ -304,10 +301,7 @@ func TestRoutingDryRunSmokeRevokeAssignment(t *testing.T) {
 	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
 	appConfig.Routing, _ = photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{{ID: "ipsec-main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
 
-	rt := &AppContext{
-		Config: appConfig,
-		Clock:  func() time.Time { return now.Add(time.Second) },
-	}
+	rt := &testApp{Config: appConfig, Clock: func() time.Time { return now.Add(time.Second) }}
 
 	pm := &fakeBirdProcessManager{running: false}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)

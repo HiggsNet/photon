@@ -201,71 +201,71 @@ func cmdIPAM() *cli.Command {
 }
 
 func createIPAMPool(path zone.ZonePath, prefix string, delegatedTo zone.ZonePath, direct bool) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	rt.DisableControl = direct
-	return createIPAMPoolWithRuntime(rt, path, prefix, delegatedTo)
+
+	return createIPAMPoolWithConfig(config, path, prefix, delegatedTo, time.Now(), direct)
 }
 
-func createIPAMPoolWithRuntime(rt *AppContext, path zone.ZonePath, prefix string, delegatedTo zone.ZonePath) error {
-	return submitIPAMMutation(rt, ipamMutationRequest{
+func createIPAMPoolWithConfig(config *appConfig, path zone.ZonePath, prefix string, delegatedTo zone.ZonePath, now time.Time, direct bool) error {
+	return submitIPAMMutation(config, ipamMutationRequest{
 		Operation: ipamOperationPoolCreate,
 		Zone:      path, Prefix: prefix, Target: delegatedTo,
-	}, "created")
+	}, "created", now, direct)
 }
 
 func assignIPAM(path zone.ZonePath, prefix string, assignedTo zone.ZonePath, shared bool, tag string, direct bool) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	rt.DisableControl = direct
-	return assignIPAMWithRuntimeTag(rt, path, prefix, assignedTo, shared, tag)
+
+	return assignIPAMWithConfigTag(config, path, prefix, assignedTo, shared, tag, time.Now(), direct)
 }
 
-func assignIPAMWithRuntimeTag(rt *AppContext, path zone.ZonePath, prefix string, assignedTo zone.ZonePath, shared bool, tag string) error {
-	return submitIPAMMutation(rt, ipamMutationRequest{
+func assignIPAMWithConfigTag(config *appConfig, path zone.ZonePath, prefix string, assignedTo zone.ZonePath, shared bool, tag string, now time.Time, direct bool) error {
+	return submitIPAMMutation(config, ipamMutationRequest{
 		Operation: ipamOperationAssignmentCreate,
 		Zone:      path, Prefix: prefix, Target: assignedTo, Shared: shared, Tag: tag,
-	}, "assigned")
+	}, "assigned", now, direct)
 }
 
 func revokeIPAMPool(path zone.ZonePath, prefix string, direct bool) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	rt.DisableControl = direct
-	return revokeIPAMPoolWithRuntime(rt, path, prefix)
+
+	return revokeIPAMPoolWithConfig(config, path, prefix, time.Now(), direct)
 }
 
-func revokeIPAMPoolWithRuntime(rt *AppContext, path zone.ZonePath, prefix string) error {
-	return submitIPAMMutation(rt, ipamMutationRequest{
+func revokeIPAMPoolWithConfig(config *appConfig, path zone.ZonePath, prefix string, now time.Time, direct bool) error {
+	return submitIPAMMutation(config, ipamMutationRequest{
 		Operation: ipamOperationPoolRevoke,
 		Zone:      path, Prefix: prefix,
-	}, "revoked")
+	}, "revoked", now, direct)
 }
 
 func revokeIPAMAssignmentTo(path zone.ZonePath, prefix string, assignedTo zone.ZonePath, direct bool) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	rt.DisableControl = direct
-	return revokeIPAMAssignmentWithRuntimeTo(rt, path, prefix, assignedTo)
+
+	return revokeIPAMAssignmentWithConfigTo(config, path, prefix, assignedTo, time.Now(), direct)
 }
 
-func revokeIPAMAssignmentWithRuntimeTo(rt *AppContext, path zone.ZonePath, prefix string, target zone.ZonePath) error {
-	return submitIPAMMutation(rt, ipamMutationRequest{
+func revokeIPAMAssignmentWithConfigTo(config *appConfig, path zone.ZonePath, prefix string, target zone.ZonePath, now time.Time, direct bool) error {
+	return submitIPAMMutation(config, ipamMutationRequest{
 		Operation: ipamOperationAssignmentRevoke,
 		Zone:      path, Prefix: prefix, Target: target,
-	}, "revoked")
+	}, "revoked", now, direct)
 }
 
-func submitIPAMMutation(rt *AppContext, request ipamMutationRequest, operation string) error {
-	if version, ok, err := mutateIPAMViaControl(rt, request); ok {
+func submitIPAMMutation(config *appConfig, request ipamMutationRequest, operation string, now time.Time, direct bool) error {
+	if version, ok, err := sendVersionedMutationViaControl(config, controlRequest{Method: "ipam_mutate", IPAM: &request}, direct); ok {
 		if err != nil {
 			return err
 		}
@@ -276,7 +276,7 @@ func submitIPAMMutation(rt *AppContext, request ipamMutationRequest, operation s
 	if err != nil {
 		return err
 	}
-	result, err := applyOfflineCommonIntent(rt, intent, request.DryRun)
+	result, err := applyOfflineCommonIntent(config, intent, request.DryRun, now)
 	if err != nil {
 		return err
 	}
@@ -288,31 +288,31 @@ func submitIPAMMutation(rt *AppContext, request ipamMutationRequest, operation s
 }
 
 func listIPAMAssignments(filterZone zone.ZonePath) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	return listIPAMAssignmentsWithRuntime(rt, filterZone)
+	return listIPAMAssignmentsWithConfig(config, filterZone, time.Now(), false)
 }
 
-func listIPAMAssignmentsWithRuntime(rt *AppContext, filterZone zone.ZonePath) error {
-	return listIPAMAssignmentsWithRuntimeTo(os.Stdout, rt, filterZone)
+func listIPAMAssignmentsWithConfig(config *appConfig, filterZone zone.ZonePath, now time.Time, direct bool) error {
+	return listIPAMAssignmentsWithConfigTo(os.Stdout, config, filterZone, now, direct)
 }
 
-func listIPAMAssignmentsWithRuntimeTo(w io.Writer, rt *AppContext, filterZone zone.ZonePath) error {
-	if rows, ok, err := readCanonicalViewViaControl[[]inspect.IPAMAssignmentRow](rt, controlRequest{Method: "ipam_assignments_view", Zone: filterZone.String()}); err != nil {
+func listIPAMAssignmentsWithConfigTo(w io.Writer, config *appConfig, filterZone zone.ZonePath, now time.Time, direct bool) error {
+	if rows, ok, err := readCanonicalViewViaControl[[]inspect.IPAMAssignmentRow](config, controlRequest{Method: "ipam_assignments_view", Zone: filterZone.String()}, direct); err != nil {
 		return err
 	} else if ok {
 		return writeIPAMAssignments(w, rows)
 	}
-	common, _, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(config)
 	if err != nil {
 		return err
 	}
 	if common.State == nil {
 		return fmt.Errorf("common state is not initialized")
 	}
-	rows, err := buildIPAMAssignmentRows(common.State, rt.Now(), filterZone)
+	rows, err := buildIPAMAssignmentRows(common.State, now, filterZone)
 	if err != nil {
 		return err
 	}
@@ -380,15 +380,15 @@ func writeIPAMAssignments(w io.Writer, rows []inspect.IPAMAssignmentRow) error {
 }
 
 func showLocalIPAM(jsonOut bool) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	return showLocalIPAMWithRuntime(rt, jsonOut)
+	return showLocalIPAMWithConfig(config, jsonOut, time.Now(), false)
 }
 
-func showLocalIPAMWithRuntime(rt *AppContext, jsonOut bool) error {
-	report, err := buildIPAMMineReport(rt)
+func showLocalIPAMWithConfig(config *appConfig, jsonOut bool, now time.Time, direct bool) error {
+	report, err := buildIPAMMineReport(config, now, direct)
 	if err != nil {
 		return err
 	}
@@ -436,20 +436,20 @@ func writeIPAMMineReport(w io.Writer, report *inspect.IPAMMineReport) error {
 	return table.Flush()
 }
 
-func buildIPAMMineReport(rt *AppContext) (*inspect.IPAMMineReport, error) {
-	if report, ok, err := readCanonicalViewViaControl[inspect.IPAMMineReport](rt, controlRequest{Method: "ipam_mine_view"}); err != nil {
+func buildIPAMMineReport(config *appConfig, now time.Time, direct bool) (*inspect.IPAMMineReport, error) {
+	if report, ok, err := readCanonicalViewViaControl[inspect.IPAMMineReport](config, controlRequest{Method: "ipam_mine_view"}, direct); err != nil {
 		return nil, err
 	} else if ok {
 		return &report, nil
 	}
-	common, _, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(config)
 	if err != nil {
 		return nil, err
 	}
 	if common.State == nil {
 		return nil, fmt.Errorf("common state is not initialized")
 	}
-	return buildIPAMMineReportFromState(common.State, rt.Now())
+	return buildIPAMMineReportFromState(common.State, now)
 }
 
 func buildIPAMMineReportFromState(state *corestate.VerifiedState, now time.Time) (*inspect.IPAMMineReport, error) {
@@ -526,11 +526,11 @@ func localIPAMPoolRelation(entry *routing.PoolEntry, managed zone.ZonePath) []st
 }
 
 func getIPAM(query string, jsonOut bool) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	report, err := buildIPAMGetReport(rt, query)
+	report, err := buildIPAMGetReport(config, query, time.Now(), false)
 	if err != nil {
 		return err
 	}
@@ -545,20 +545,20 @@ func getIPAM(query string, jsonOut bool) error {
 	return writeIPAMGetReport(os.Stdout, report)
 }
 
-func buildIPAMGetReport(rt *AppContext, query string) (*inspect.IPAMGetReport, error) {
-	if report, ok, err := readCanonicalViewViaControl[inspect.IPAMGetReport](rt, controlRequest{Method: "ipam_get_view", ValueText: query}); err != nil {
+func buildIPAMGetReport(config *appConfig, query string, now time.Time, direct bool) (*inspect.IPAMGetReport, error) {
+	if report, ok, err := readCanonicalViewViaControl[inspect.IPAMGetReport](config, controlRequest{Method: "ipam_get_view", ValueText: query}, direct); err != nil {
 		return nil, err
 	} else if ok {
 		return &report, nil
 	}
-	common, _, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(config)
 	if err != nil {
 		return nil, err
 	}
 	if common.State == nil {
 		return nil, fmt.Errorf("common state is not initialized")
 	}
-	return buildIPAMGetReportFromState(common.State, rt.Now(), query)
+	return buildIPAMGetReportFromState(common.State, now, query)
 }
 
 func buildIPAMGetReportFromState(state *corestate.VerifiedState, now time.Time, query string) (*inspect.IPAMGetReport, error) {

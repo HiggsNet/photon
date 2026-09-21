@@ -8,10 +8,10 @@ import (
 
 func TestLookupRecordDetail(t *testing.T) {
 	rt, managed := buildRouteTestRuntime(t)
-	if err := putRecordDirect(rt, managed, "site/name", []byte(`{"name":"pek"}`), "policy.json"); err != nil {
+	if err := putRecordDirect(rt.Config, managed, "site/name", []byte(`{"name":"pek"}`), "policy.json", rt.Now()); err != nil {
 		t.Fatalf("putRecordDirect: %v", err)
 	}
-	common, _, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}
@@ -30,13 +30,13 @@ func TestLookupRecordDetail(t *testing.T) {
 		t.Fatalf("record_history should be omitted by default: %#v", record)
 	}
 
-	if err := putRecordDirect(rt, managed, "site/name", []byte(`{"name":"pek-2"}`), "policy.json"); err != nil {
+	if err := putRecordDirect(rt.Config, managed, "site/name", []byte(`{"name":"pek-2"}`), "policy.json", rt.Now()); err != nil {
 		t.Fatalf("putRecordDirect second version: %v", err)
 	}
-	if err := putRecordDirect(rt, managed, "site/name", []byte(`{"name":"pek-3"}`), "policy.json"); err != nil {
+	if err := putRecordDirect(rt.Config, managed, "site/name", []byte(`{"name":"pek-3"}`), "policy.json", rt.Now()); err != nil {
 		t.Fatalf("putRecordDirect third version: %v", err)
 	}
-	common, _, err = loadOfflineOwnerViews(rt)
+	common, _, err = loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews after history writes: %v", err)
 	}

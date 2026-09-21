@@ -196,7 +196,7 @@ func TestAutoAnnounceSelectorsSeparatePersistentAndExplicitSharedRoutes(t *testi
 		t.Fatalf("explicit service announcement = %+v, error = %v", serviceAnn, err)
 	}
 
-	service.App.Config.IPAM.Announce = []string{"non-shared"}
+	service.Config.IPAM.Announce = []string{"non-shared"}
 	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs after config change: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestAutoAnnounceSelectorsSeparatePersistentAndExplicitSharedRoutes(t *testi
 		t.Fatalf("selector reconcile withdrew explicit service route: %+v", serviceAnn)
 	}
 
-	service.App.Config.IPAM.Announce = nil
+	service.Config.IPAM.Announce = nil
 	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs after removing all selectors: %v", err)
 	}

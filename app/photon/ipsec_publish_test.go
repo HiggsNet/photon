@@ -18,7 +18,7 @@ import (
 
 func newPersistedIPsecPublishTestService(
 	t *testing.T,
-	rt *AppContext,
+	rt *testApp,
 	verified *corestate.VerifiedState,
 	checkpoint *corestate.GossipCheckpoint,
 	runtime *photonlinux.LinuxState,
@@ -29,7 +29,7 @@ func newPersistedIPsecPublishTestService(
 	// covered separately and can legitimately add a new address family between
 	// the first and second IPsec plans.
 	rt.Config.PublishEndpoints = false
-	store, err := corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
+	store, err := corestate.OpenBoltStore(rt.Config.StatePath, 0o600, daemonBoltLockTimeout)
 	if err != nil {
 		t.Fatalf("OpenBoltStore: %v", err)
 	}
@@ -54,7 +54,7 @@ func newPersistedIPsecPublishTestService(
 		rt.Config.MaxSyncZones = config.MaxSyncZones
 		rt.Config.MaxSyncRecords = config.MaxSyncRecords
 	}
-	service := newDaemon(rt, state, time.Second)
+	service := newDaemon(rt.Config, state, time.Second, rt.Now)
 	// These tests call the publisher directly and do not run the daemon event
 	// loop. Stop its unused scheduler so tests can advance the fake clock safely.
 	service.gossipDriver.Stop()
@@ -79,10 +79,8 @@ func TestPublishIPsecRecordsSignsStableLocalCapability(t *testing.T) {
 	appConfig.ListenAddr = "198.51.100.10:4500"
 	appConfig.AdvertiseAddrs = []string{"198.51.100.10:4500"}
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
-	rt := &AppContext{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+	rt := &testApp{Config: testConfigWithStatePath(appConfig,
+		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
 	}
 	service, closeStore := newPersistedIPsecPublishTestService(t, rt, verified, checkpoint, runtime, config)
 	if _, err := service.publishLocalProtocols(); err != nil {
@@ -151,7 +149,7 @@ func TestPublishIPsecRecordsSignsStableLocalCapability(t *testing.T) {
 		t.Fatalf("second profile version = %d, want unchanged 1; first=%s second=%s", again.Version, zs.Records[ipsec.RecordKeyProfile].Value, again.Value)
 	}
 	closeStore()
-	_, diskRuntime, err := loadOfflineOwnerViews(rt)
+	_, diskRuntime, err := loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}
@@ -170,10 +168,8 @@ func TestPublishIPsecRecordsMigratesDeprecatedAcceptProfileToRole(t *testing.T) 
 	appConfig.AdvertiseAddrs = []string{"198.51.100.10:4500"}
 	appConfig.IPsec.Role = ipsec.RoleBoth
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
-	rt := &AppContext{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+	rt := &testApp{Config: testConfigWithStatePath(appConfig,
+		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
 	}
 	oldValue, err := json.Marshal(map[string]any{
 		"version":                   1,
@@ -234,10 +230,8 @@ func TestDaemonEndpointTimerPublishesRoleProfileFromReloadedState(t *testing.T) 
 	appConfig.AdvertiseAddrs = []string{"198.51.100.10:4500"}
 	appConfig.IPsec.Role = ipsec.RoleBoth
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
-	rt := &AppContext{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+	rt := &testApp{Config: testConfigWithStatePath(appConfig,
+		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
 	}
 	oldValue, err := json.Marshal(map[string]any{
 		"version":                   1,
@@ -296,10 +290,8 @@ func TestPublishIPsecRecordsRotatesPortGenerationByInterval(t *testing.T) {
 	appConfig.IPsec.PortMode = ipsec.PortModeRange
 	appConfig.IPsec.PortRange = ipsec.PortRange{From: 30000, To: 30099}
 	appConfig.IPsec.PortRotateInterval = time.Hour
-	rt := &AppContext{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+	rt := &testApp{Config: testConfigWithStatePath(appConfig,
+		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
 	}
 	service, _ := newPersistedIPsecPublishTestService(t, rt, verified, checkpoint, runtime, config)
 	if _, err := service.publishLocalProtocols(); err != nil {
@@ -360,10 +352,8 @@ func TestPublishIPsecRecordsRotatesFromVerifiedPortRecord(t *testing.T) {
 	appConfig.IPsec.PortRange = ipsec.PortRange{From: 30000, To: 30099}
 	appConfig.IPsec.PortRotateInterval = time.Hour
 	appConfig.IPsec.PortPreviousGrace = 2 * time.Hour
-	rt := &AppContext{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+	rt := &testApp{Config: testConfigWithStatePath(appConfig,
+		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
 	}
 	service, _ := newPersistedIPsecPublishTestService(t, rt, verified, checkpoint, runtime, config)
 	if _, err := service.publishLocalProtocols(); err != nil {
@@ -401,10 +391,8 @@ func TestDirectIPsecPortRotateAdvancesAndPersistsRangeGeneration(t *testing.T) {
 	appConfig.IPsec.PortMode = ipsec.PortModeRange
 	appConfig.IPsec.PortRange = ipsec.PortRange{From: 30000, To: 30099}
 	appConfig.IPsec.PortPreviousGrace = 2 * time.Hour
-	rt := &AppContext{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+	rt := &testApp{Config: testConfigWithStatePath(appConfig,
+		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
 	}
 	service, closeStore := newPersistedIPsecPublishTestService(t, rt, verified, checkpoint, runtimeOwner, config)
 	if _, err := service.publishLocalProtocols(); err != nil {
@@ -418,11 +406,11 @@ func TestDirectIPsecPortRotateAdvancesAndPersistsRangeGeneration(t *testing.T) {
 
 	closeStore()
 	rt.Clock = func() time.Time { return now.Add(time.Minute) }
-	result, err := rotateIPsecPortDirect(rt)
+	result, err := rotateIPsecPortDirect(rt.Config, rt.Now())
 	if err != nil {
 		t.Fatalf("rotateIPsecPortDirect: %v", err)
 	}
-	common, _, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}
@@ -453,11 +441,11 @@ func TestDirectIPsecPortRotateRejectsFixedMode(t *testing.T) {
 	config.PeerID = string(verified.ManagedZone)
 	appConfig := defaultAppConfig()
 	appConfig.IPsec.PortMode = ipsec.PortModeFixed
-	rt := &AppContext{Config: appConfig, StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return time.Unix(5000, 0) }}
+	rt := &testApp{Config: testConfigWithStatePath(appConfig, filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return time.Unix(5000, 0) }}
 	_, closeStore := newPersistedIPsecPublishTestService(t, rt, verified, checkpoint, runtime, config)
 	closeStore()
 
-	if _, err := rotateIPsecPortDirect(rt); err == nil {
+	if _, err := rotateIPsecPortDirect(rt.Config, rt.Now()); err == nil {
 		t.Fatalf("rotateIPsecPortDirect error = nil, want fixed mode rejection")
 	}
 }
@@ -466,10 +454,8 @@ func TestPublishIPsecRecordsSkipsWithoutLinkGroups(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	verified.ManagedZone = "node-b.catofes."
 	config.PeerID = string(verified.ManagedZone)
-	rt := &AppContext{
-		Config:    defaultAppConfig(),
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return time.Unix(5100, 0) },
+	rt := &testApp{Config: testConfigWithStatePath(defaultAppConfig(),
+		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return time.Unix(5100, 0) },
 	}
 	service, _ := newPersistedIPsecPublishTestService(t, rt, verified, checkpoint, runtime, config)
 	if _, err := service.publishLocalProtocols(); err != nil {
@@ -622,10 +608,8 @@ func TestPublishIPsecOverlayIntentStableWhenUnchanged(t *testing.T) {
 	appConfig.ListenAddr = "198.51.100.10:4500"
 	appConfig.AdvertiseAddrs = []string{"198.51.100.10:4500"}
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
-	rt := &AppContext{
-		Config:    appConfig,
-		StatePath: filepath.Join(t.TempDir(), "photon.db"),
-		Clock:     func() time.Time { return now },
+	rt := &testApp{Config: testConfigWithStatePath(appConfig,
+		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
 	}
 	service, _ := newPersistedIPsecPublishTestService(t, rt, verified, checkpoint, runtime, config)
 	if _, err := service.publishLocalProtocols(); err != nil {

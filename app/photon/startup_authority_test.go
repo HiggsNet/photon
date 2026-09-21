@@ -21,9 +21,9 @@ func TestPrepareStartupStateRefreshesCachedManagedAuthority(t *testing.T) {
 	managed := state.ManagedZone
 	snapshot := managedAuthorityGrantSnapshot(t, state.Network, managed, rootPriv, zone.PermAllocateIP)
 	state.Network.Zones[managed.Parent()].Delegations[managed] = cloneDelegationForJoinBundle(snapshot.Delegations[managed])
-	rt := &AppContext{Config: defaultAppConfig(), StatePath: filepath.Join(t.TempDir(), "photon.db"), Clock: func() time.Time { return now }}
+	rt := &testApp{Config: testConfigWithStatePath(defaultAppConfig(), filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now }}
 	rt.Config.PublishEndpoints = false
-	boltStore, err := corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
+	boltStore, err := corestate.OpenBoltStore(rt.Config.StatePath, 0o600, daemonBoltLockTimeout)
 	if err != nil {
 		t.Fatalf("OpenBoltStore: %v", err)
 	}
@@ -39,8 +39,8 @@ func TestPrepareStartupStateRefreshesCachedManagedAuthority(t *testing.T) {
 		_ = boltStore.Close()
 		t.Fatalf("restoreState = found %v err %v", found, err)
 	}
-	rt.Config = config
-	service := newDaemon(rt, owner, defaultDaemonInterval)
+	rt.Config = testConfigWithStatePath(config, rt.Config.StatePath)
+	service := newDaemon(rt.Config, owner, defaultDaemonInterval, rt.Now)
 	if changed, err := service.prepareStartupState(); err != nil {
 		t.Fatalf("prepareStartupState: %v", err)
 	} else if !changed {
@@ -60,7 +60,7 @@ func TestPrepareStartupStateRefreshesCachedManagedAuthority(t *testing.T) {
 	if err := service.State.Close(); err != nil {
 		t.Fatalf("Close State: %v", err)
 	}
-	reopened, _, err := loadOfflineOwnerViews(rt)
+	reopened, _, err := loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews(reopened): %v", err)
 	}

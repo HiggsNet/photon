@@ -97,17 +97,15 @@ func TestDebugRoutesFallbackComputesAuthorizedRouteSet(t *testing.T) {
 
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()
-	rt := &AppContext{
-		Config:         appConfig,
-		StatePath:      filepath.Join(t.TempDir(), "photon.db"),
-		Clock:          func() time.Time { return now },
-		DisableControl: true,
+	rt := &testApp{Config: testConfigWithStatePath(appConfig,
+		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
+		Direct: true,
 	}
-	seedPartitionedStateDB(t, rt.StatePath, verified, checkpoint, runtime)
+	seedPartitionedStateDB(t, rt.Config.StatePath, verified, checkpoint, runtime)
 
 	var buf strings.Builder
-	if err := debugRoutesWithRuntime(rt, &buf); err != nil {
-		t.Fatalf("debugRoutesWithRuntime: %v", err)
+	if err := debugRoutesWithConfig(rt.Config, &buf, rt.Now(), rt.Direct); err != nil {
+		t.Fatalf("debugRoutesWithConfig: %v", err)
 	}
 	out := buf.String()
 
@@ -137,17 +135,15 @@ func TestDebugRouteExplainsPrefix(t *testing.T) {
 
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()
-	rt := &AppContext{
-		Config:         appConfig,
-		StatePath:      filepath.Join(t.TempDir(), "photon.db"),
-		Clock:          func() time.Time { return now },
-		DisableControl: true,
+	rt := &testApp{Config: testConfigWithStatePath(appConfig,
+		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
+		Direct: true,
 	}
-	seedPartitionedStateDB(t, rt.StatePath, verified, checkpoint, runtime)
+	seedPartitionedStateDB(t, rt.Config.StatePath, verified, checkpoint, runtime)
 
 	var buf strings.Builder
-	if err := debugRouteWithRuntime(rt, "10.0.0.0/24", &buf); err != nil {
-		t.Fatalf("debugRouteWithRuntime: %v", err)
+	if err := debugRouteWithConfig(rt.Config, "10.0.0.0/24", &buf, rt.Now(), rt.Direct); err != nil {
+		t.Fatalf("debugRouteWithConfig: %v", err)
 	}
 	out := buf.String()
 
@@ -171,14 +167,12 @@ func TestDebugRouteExplainsPrefix(t *testing.T) {
 func TestDebugBabelRequiresOnlineDaemon(t *testing.T) {
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()
-	rt := &AppContext{
-		Config:         appConfig,
-		Clock:          func() time.Time { return time.Unix(4000, 0) },
-		DisableControl: true,
+	rt := &testApp{Config: appConfig, Clock: func() time.Time { return time.Unix(4000, 0) },
+		Direct: true,
 	}
 
 	var buf strings.Builder
-	if err := debugBabelWithRuntime(rt, &buf); err == nil || !strings.Contains(err.Error(), "requires a running daemon") {
-		t.Fatalf("debugBabelWithRuntime error = %v", err)
+	if err := debugBabelWithConfig(rt.Config, &buf, rt.Direct); err == nil || !strings.Contains(err.Error(), "requires a running daemon") {
+		t.Fatalf("debugBabelWithConfig error = %v", err)
 	}
 }

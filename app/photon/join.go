@@ -71,11 +71,11 @@ func createJoinRequest(path zone.ZonePath, keyPath string, outPath string) error
 }
 
 func issueDelegation(requestInput string, outPath string, permissions []zone.Permission, direct bool) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	rt.DisableControl = direct
+
 	var request gossip.JoinRequest
 	if err := readBase64JSONOrJSON(requestInput, &request); err != nil {
 		return err
@@ -83,7 +83,7 @@ func issueDelegation(requestInput string, outPath string, permissions []zone.Per
 	if err := gossip.ValidateJoinRequest(&request); err != nil {
 		return err
 	}
-	bundle, controlled, err := issueDelegationViaControl(rt, &request, permissions)
+	bundle, controlled, err := issueDelegationViaControl(config, &request, permissions, direct)
 	if err != nil {
 		return err
 	}
@@ -107,7 +107,7 @@ func issueDelegation(requestInput string, outPath string, permissions []zone.Per
 	if !direct {
 		logControlFallback("delegate_issue")
 	}
-	result, err := issueDelegationDirect(rt, &request, permissions)
+	result, err := issueDelegationDirect(config, &request, permissions, time.Now())
 	if err != nil {
 		return err
 	}
@@ -128,24 +128,24 @@ func issueDelegation(requestInput string, outPath string, permissions []zone.Per
 	return nil
 }
 
-func issueDelegationDirect(rt *AppContext, request *gossip.JoinRequest, permissions []zone.Permission) (*delegationIssueResult, error) {
+func issueDelegationDirect(config *appConfig, request *gossip.JoinRequest, permissions []zone.Permission, now time.Time) (*delegationIssueResult, error) {
 	if err := gossip.ValidateJoinRequest(request); err != nil {
 		return nil, err
 	}
-	state, err := openState(rt)
+	state, err := openState(config)
 	if err != nil {
 		return nil, err
 	}
 	defer state.Close()
 	view := state.Common.ReadView()
-	intent, err := planDelegationIssue(view.State.Network, request, permissions, rt.Now())
+	intent, err := planDelegationIssue(view.State.Network, request, permissions, now)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := state.Common.ApplyLocalIntent(context.Background(), intent, rt.Now()); err != nil {
+	if _, err := state.Common.ApplyLocalIntent(context.Background(), intent, now); err != nil {
 		return nil, err
 	}
-	bundle, err := joinBundleFromNetwork(state.Common.ReadView().State.Network, request.Zone, rt.Now())
+	bundle, err := joinBundleFromNetwork(state.Common.ReadView().State.Network, request.Zone, now)
 	if err != nil {
 		return nil, err
 	}
@@ -195,12 +195,12 @@ func delegationCapabilities(permissions []zone.Permission) []zone.Capability {
 }
 
 func revokeDelegation(path zone.ZonePath, reason string, direct bool) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	rt.DisableControl = direct
-	controlled, err := revokeDelegationViaControl(rt, path, reason)
+
+	controlled, err := revokeDelegationViaControl(config, path, reason, direct)
 	if err != nil {
 		return err
 	}
@@ -211,65 +211,65 @@ func revokeDelegation(path zone.ZonePath, reason string, direct bool) error {
 	if !direct {
 		logControlFallback("delegate_revoke")
 	}
-	if err := revokeDelegationDirect(rt, path, reason); err != nil {
+	if err := revokeDelegationDirect(config, path, reason, time.Now()); err != nil {
 		return err
 	}
 	fmt.Printf("revoked delegation for %s\n", path)
 	return nil
 }
 
-func revokeDelegationDirect(rt *AppContext, path zone.ZonePath, reason string) error {
+func revokeDelegationDirect(config *appConfig, path zone.ZonePath, reason string, now time.Time) error {
 	if !path.Valid() || path == zone.RootZone {
 		return fmt.Errorf("invalid revoke zone: %s", path)
 	}
-	state, err := openState(rt)
+	state, err := openState(config)
 	if err != nil {
 		return err
 	}
 	defer state.Close()
 	_, err = state.Common.ApplyLocalIntent(context.Background(), corestate.RevokeDelegationIntent{
 		Parent: path.Parent(), Child: path, Reason: reason,
-	}, rt.Now())
+	}, now)
 	return err
 }
 
 func acceptJoinBundle(bundleInput string, keyPath string, direct bool) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	rt.DisableControl = direct
+
 	var bundle joinBundle
 	if err := readBase64JSONOrJSON(bundleInput, &bundle); err != nil {
 		return err
 	}
-	key, err := optionalJoinAcceptKey(rt, keyPath)
+	key, err := optionalJoinAcceptKey(keyPath)
 	if err != nil {
 		return err
 	}
-	controlled, err := acceptJoinBundleViaControl(rt, &bundle, key)
+	controlled, err := acceptJoinBundleViaControl(config, &bundle, key, direct)
 	if err != nil {
 		return err
 	}
 	if controlled {
-		fmt.Printf("joined %s via daemon in %s\n", bundle.Zone, rt.StatePath)
+		fmt.Printf("joined %s via daemon in %s\n", bundle.Zone, config.StatePath)
 		fmt.Printf("trusted root public key: %s\n", formatPublicKey(bundle.RootPublicKey))
 		return nil
 	}
 	if !direct {
 		logControlFallback("join_accept")
 	}
-	result, err := acceptJoinBundleInState(rt, &bundle, key)
+	result, err := acceptJoinBundleInState(config, &bundle, key, time.Now())
 	if err != nil {
 		return err
 	}
-	fmt.Printf("joined %s in %s\n", result.Zone, rt.StatePath)
+	fmt.Printf("joined %s in %s\n", result.Zone, config.StatePath)
 	fmt.Printf("trusted root public key: %s\n", formatPublicKey(result.RootPublicKey))
 	return nil
 }
 
-func acceptJoinBundleInState(rt *AppContext, bundle *joinBundle, key *privateKeyFile) (*joinAcceptResult, error) {
-	if rt == nil || rt.Config == nil || rt.StatePath == "" {
+func acceptJoinBundleInState(config *appConfig, bundle *joinBundle, key *privateKeyFile, now time.Time) (*joinAcceptResult, error) {
+	if config == nil || config.StatePath == "" {
 		return nil, errors.New("runtime state path is not configured")
 	}
 	if bundle == nil {
@@ -281,17 +281,17 @@ func acceptJoinBundleInState(rt *AppContext, bundle *joinBundle, key *privateKey
 	if bundle.Network == nil {
 		return nil, errors.New("join bundle network is nil")
 	}
-	if trusted := rt.Config.TrustedRootPublicKey; len(trusted) != 0 && !bytes.Equal(trusted, bundle.RootPublicKey) {
+	if trusted := config.TrustedRootPublicKey; len(trusted) != 0 && !bytes.Equal(trusted, bundle.RootPublicKey) {
 		return nil, errors.New("join bundle root does not match trusted_root_public_key")
 	}
 	if err := photoncrypto.VerifyPinnedRoot(bundle.Network, bundle.RootPublicKey); err != nil {
 		return nil, fmt.Errorf("join bundle root authority: %w", err)
 	}
-	boltStore, err := corestate.OpenBoltStore(rt.StatePath, 0o600, daemonBoltLockTimeout)
+	boltStore, err := corestate.OpenBoltStore(config.StatePath, 0o600, daemonBoltLockTimeout)
 	if err != nil {
 		return nil, err
 	}
-	state, found, err := restoreState(boltStore, rt.Config.TrustedRootPublicKey)
+	state, found, err := restoreState(boltStore, config.TrustedRootPublicKey)
 	if err != nil {
 		_ = boltStore.Close()
 		return nil, err
@@ -309,7 +309,7 @@ func acceptJoinBundleInState(rt *AppContext, bundle *joinBundle, key *privateKey
 		if _, err := initial.InstallIdentity(context.Background(), corestate.IdentityInstall{
 			ManagedZone: bundle.Zone, Network: bundle.Network,
 			TrustedRootPublicKey: bundle.RootPublicKey, IdentityPrivateKey: key.PrivateKey,
-		}, rt.Now()); err != nil {
+		}, now); err != nil {
 			_ = boltStore.Close()
 			return nil, err
 		}
@@ -318,7 +318,7 @@ func acceptJoinBundleInState(rt *AppContext, bundle *joinBundle, key *privateKey
 			_ = boltStore.Close()
 			return nil, err
 		}
-		state, found, err = restoreState(boltStore, rt.Config.TrustedRootPublicKey)
+		state, found, err = restoreState(boltStore, config.TrustedRootPublicKey)
 		if err != nil {
 			_ = boltStore.Close()
 			return nil, err
@@ -342,13 +342,13 @@ func acceptJoinBundleInState(rt *AppContext, bundle *joinBundle, key *privateKey
 	if _, err := state.Common.InstallIdentity(context.Background(), corestate.IdentityInstall{
 		ManagedZone: bundle.Zone, Network: bundle.Network,
 		TrustedRootPublicKey: bundle.RootPublicKey, IdentityPrivateKey: key.PrivateKey,
-	}, rt.Now()); err != nil {
+	}, now); err != nil {
 		return nil, err
 	}
 	return &joinAcceptResult{Zone: bundle.Zone, RootPublicKey: append([]byte(nil), bundle.RootPublicKey...)}, nil
 }
 
-func optionalJoinAcceptKey(_ *AppContext, keyPath string) (*privateKeyFile, error) {
+func optionalJoinAcceptKey(keyPath string) (*privateKeyFile, error) {
 	if keyPath != "" {
 		return readPrivateKeyFile(keyPath)
 	}

@@ -83,7 +83,8 @@ Daemon 是 Photon 中唯一长期运行的系统进程。它不在每次 CLI 调
 
 | 字段 | 类型 | 作用 |
 |------|------|------|
-| `App` | `*AppContext` | config、state path、clock 等应用上下文；不是产品 Runtime |
+| `Config` | `*appConfig` | 加载后的有效配置；`StatePath` 已包含环境变量覆盖 |
+| `clock` | `func() time.Time` | Daemon 自己的时钟依赖，通过 `d.now` 供协议和调度使用 |
 | `gossipDriver` | `*corehost.GossipDriver` | 持有 detached gossip 协议配置、transport/address book 和协议执行闭环；Daemon 不再重复保存 GossipConfig/transport |
 | `gossipTransport` | `*gossip.Transport` | 当前 gossip UDP transport |
 | `State` | `*State` | 唯一进程内持久状态边界；内部管理 StateDB、Common 与 LinuxState |
@@ -121,10 +122,8 @@ Daemon 启动流程（[`daemonRun()`](../../app/photon/daemon.go#L1522-L1540)）
 
 ```
 daemonRun()
- ├─ NewAppContext()       加载应用配置
- ├─ rt.LoadState()        加载 BoltDB 状态文件
- ├─ openDaemon()          创建 Daemon 与唯一 BoltStore
- ├─ configureIPsecDriversFromConfig()
+ ├─ loadAppConfig()       加载配置并解析 PHOTON_STATE 覆盖
+ ├─ openDaemon(config)    通过 openState(config) 打开唯一 BoltStore，创建 Daemon
  └─ service.Run()         进入事件循环
 ```
 

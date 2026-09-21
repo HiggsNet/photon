@@ -15,15 +15,15 @@ import (
 // (current SA, plus old and new SA during a rotate) across IPv4/IPv6. Target
 // selection and probing run in the daemon that owns the Linux runtime.
 func debugPing(ctx context.Context, peerZone zone.ZonePath, opts pingdebug.Options) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	view, online, err := readCanonicalViewViaControlContext[inspect.PingDebugView](ctx, rt, controlRequest{
+	view, online, err := readCanonicalViewViaControlContext[inspect.PingDebugView](ctx, config, controlRequest{
 		Method: "ping_view",
 		Zone:   string(peerZone),
 		Ping:   &opts,
-	})
+	}, false)
 	if err != nil {
 		return err
 	}

@@ -26,7 +26,7 @@ func TestFirewallObservationDoesNotAdvancePersistentRevision(t *testing.T) {
 			"overlay": {Backend: firewall.BackendNone, Generation: 1, LastRunUnix: 200, PolicyHash: "same"},
 		},
 	}
-	rt := &AppContext{Config: defaultAppConfig()}
+	rt := &testApp{Config: defaultAppConfig()}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	rev := uint64(service.State.Common.VerifiedRevision())
 	service.publishFirewallObservation(rev, summary)
@@ -235,8 +235,7 @@ firewall:
 
 func TestReconcileFirewall_NoInstances(t *testing.T) {
 	d := &Daemon{
-		State: newState(nil, corestate.NewStore(&corestate.VerifiedState{}, nil), &photonlinux.LinuxState{}),
-		App:   &AppContext{Config: &appConfig{}},
+		State: newState(nil, corestate.NewStore(&corestate.VerifiedState{}, nil), &photonlinux.LinuxState{}), Config: &appConfig{},
 	}
 	if err := d.reconcileFirewall(context.Background()); err != nil {
 		t.Fatalf("reconcileFirewall with no instances: %v", err)
@@ -299,10 +298,7 @@ func TestReconcileFirewallUsesScopeForOwnedObjects(t *testing.T) {
 			HostPorts: firewall.HostPortConfig{IKE: true, NATT: true},
 		},
 	}
-	rt := &AppContext{
-		Config: appConfig,
-		Clock:  func() time.Time { return time.Unix(7000, 0) },
-	}
+	rt := &testApp{Config: appConfig, Clock: func() time.Time { return time.Unix(7000, 0) }}
 	driver := &captureFirewallOwnerDriver{}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestFirewallDriver(service, driver)
@@ -332,10 +328,7 @@ func TestLongFirewallReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 		Backend:       firewall.BackendNone,
 		DefaultPolicy: firewall.DefaultPolicyDrop,
 	}}
-	rt := &AppContext{
-		Config: appConfig,
-		Clock:  func() time.Time { return time.Unix(7020, 0) },
-	}
+	rt := &testApp{Config: appConfig, Clock: func() time.Time { return time.Unix(7020, 0) }}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	driver := &blockingFirewallDriver{
 		started: make(chan struct{}),
@@ -416,10 +409,7 @@ func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
 		Backend:       firewall.BackendNone,
 		DefaultPolicy: firewall.DefaultPolicyDrop,
 	}}
-	rt := &AppContext{
-		Config: appConfig,
-		Clock:  func() time.Time { return time.Unix(7010, 0) },
-	}
+	rt := &testApp{Config: appConfig, Clock: func() time.Time { return time.Unix(7010, 0) }}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	baseRev := uint64(service.State.Common.VerifiedRevision())
 	driver := &captureFirewallOwnerDriver{}
@@ -458,10 +448,7 @@ func TestFirewallReconcileDirtyIntervalAndRecover(t *testing.T) {
 		Backend:       firewall.BackendNone,
 		DefaultPolicy: firewall.DefaultPolicyDrop,
 	}}
-	rt := &AppContext{
-		Config: appConfig,
-		Clock:  func() time.Time { return time.Unix(7000, 0) },
-	}
+	rt := &testApp{Config: appConfig, Clock: func() time.Time { return time.Unix(7000, 0) }}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
 	if service.firewallReconcileInterval() != defaultFirewallReconcileInterval {

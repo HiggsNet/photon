@@ -10,7 +10,7 @@ import (
 
 // buildStoredLinkInspection projects the daemon-owned Linux runtime result.
 // Read paths do not run the IPsec planner or platform drivers again.
-func buildStoredLinkInspection(rt *AppContext, instances map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, birdInstances map[string]*bird.InstanceObservation, health []inspect.HealthSample) inspect.LinksDebugView {
+func buildStoredLinkInspection(config *appConfig, instances map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, birdInstances map[string]*bird.InstanceObservation, health []inspect.HealthSample) inspect.LinksDebugView {
 	input := inspect.LinkInput{Health: append([]inspect.HealthSample(nil), health...)}
 	if reconcile != nil {
 		input.LastRunUnix = reconcile.LastRunUnix
@@ -25,7 +25,7 @@ func buildStoredLinkInspection(rt *AppContext, instances map[string]ipsec.LinkIn
 	input.Instances = make([]inspect.LinkInstance, 0, len(ids))
 	for _, id := range ids {
 		inst := instances[id]
-		birdState, birdNeighbors, birdBestRoutes := debugLinkRoutingState(rt, birdInstances, inst.GroupID)
+		birdState, birdNeighbors, birdBestRoutes := debugLinkRoutingState(config, birdInstances, inst.GroupID)
 		input.Instances = append(input.Instances, inspect.BuildLinkInstanceFromRuntime(inst, inspect.LinkRouting{
 			BirdState: birdState, BirdNeighbors: birdNeighbors, BirdBestRoutes: birdBestRoutes,
 		}))

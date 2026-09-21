@@ -46,7 +46,7 @@ func TestDaemonControlPingCancellation(t *testing.T) {
 	for _, mode := range []string{"client_cancel", "disconnect", "daemon_cancel"} {
 		t.Run(mode, func(t *testing.T) {
 			verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-			service := newTestDaemonFromOwners(&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second)
+			service := newTestDaemonFromOwners(&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second)
 			prober := &blockingControlPingProber{started: make(chan context.Context, 1), stopped: make(chan error, 1)}
 			dryRun := &ipsec.DryRunDriver{}
 			installTestLinuxDrivers(service, testLinuxDrivers{ipsec: dryRun, xfrm: dryRun, healthProber: prober})
@@ -140,7 +140,7 @@ func (*controlPingProber) Type() string { return health.ProbeTypeICMP }
 func TestDaemonControlErrorResponses(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+		&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
 
 	response := controlRequestViaPipe(t, service, controlRequest{Method: "record_put", Zone: "node-b.catofes."})
@@ -167,7 +167,7 @@ func TestDaemonControlErrorResponses(t *testing.T) {
 func TestDaemonControlStatus(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+		&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
 	service.ControlSocketPath = filepath.Join(t.TempDir(), "photon.sock")
 	ctx := t.Context()
@@ -198,9 +198,9 @@ func TestCanonicalZoneQueryUsesControlWhileBoltOwnedAndMatchesOffline(t *testing
 	config := defaultAppConfig()
 	config.StatePath = path
 	config.TrustedRootPublicKey = append([]byte(nil), trustedRoot...)
-	rt := &AppContext{Config: config, StatePath: path, Clock: func() time.Time { return time.Unix(1000, 0) }}
+	rt := &testApp{Config: testConfigWithStatePath(config, path), Clock: func() time.Time { return time.Unix(1000, 0) }}
 
-	state, err := openState(rt)
+	state, err := openState(rt.Config)
 	if err != nil {
 		t.Fatalf("openState: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestCanonicalZoneQueryUsesControlWhileBoltOwnedAndMatchesOffline(t *testing
 			_ = state.Close()
 		}
 	})
-	service := newDaemon(rt, state, time.Second)
+	service := newDaemon(rt.Config, state, time.Second, rt.Now)
 	installTestIPsecDrivers(service, &ipsec.DryRunDriver{}, &ipsec.DryRunDriver{})
 	service.ControlSocketPath = filepath.Join(t.TempDir(), "photon.sock")
 	t.Setenv("PHOTON_CONTROL_SOCKET", service.ControlSocketPath)
@@ -225,7 +225,7 @@ func TestCanonicalZoneQueryUsesControlWhileBoltOwnedAndMatchesOffline(t *testing
 		}
 		t.Fatalf("second Bolt open error = %v, want timeout while daemon owns handle", err)
 	}
-	online, ok, err := readCanonicalViewViaControl[[]inspect.ZoneDetail](rt, controlRequest{Method: "zones_view"})
+	online, ok, err := readCanonicalViewViaControl[[]inspect.ZoneDetail](rt.Config, controlRequest{Method: "zones_view"}, rt.Direct)
 	if err != nil || !ok {
 		t.Fatalf("online zones_view = ok %v err %v", ok, err)
 	}
@@ -235,7 +235,7 @@ func TestCanonicalZoneQueryUsesControlWhileBoltOwnedAndMatchesOffline(t *testing
 		t.Fatalf("close daemon State: %v", err)
 	}
 	storeOpen = false
-	common, _, err := loadOfflineOwnerViews(rt)
+	common, _, err := loadOfflineOwnerViews(rt.Config)
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestDaemonControlCommonReadViews(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	config.Bootstrap = []syncConfigPeer{{ID: "node-b.catofes.", Addr: "127.0.0.1:43435"}}
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+		&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
 	prober := &controlPingProber{}
 	dryRun := &ipsec.DryRunDriver{}
@@ -403,7 +403,7 @@ func TestDaemonControlRoutingReload(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestRoutingOwners(t)
 	appConfig := defaultAppConfig()
 	appConfig.DataDir = t.TempDir()
-	rt := &AppContext{Config: appConfig, StatePath: filepath.Join(t.TempDir(), "photon.db")}
+	rt := &testApp{Config: testConfigWithStatePath(appConfig, filepath.Join(t.TempDir(), "photon.db"))}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	service.routingDirty = false
 	ctx := t.Context()
@@ -434,7 +434,7 @@ func TestDaemonControlBirdDump(t *testing.T) {
 	client := &fakeBirdClient{raw: map[string]string{
 		"show route table all where source = RTS_BABEL all": "Table photon_photontesth24:\n10.0.0.0/24 unicast\n",
 	}}
-	service := newTestDaemonFromOwners(&AppContext{Config: appConfig}, verified, checkpoint, runtime, config, time.Second)
+	service := newTestDaemonFromOwners(&testApp{Config: appConfig}, verified, checkpoint, runtime, config, time.Second)
 	installTestBirdDrivers(service, nil, func(socketPath string, timeout time.Duration) birdClient {
 		if socketPath != "/run/photon/bird-photontesth2.ctl" {
 			t.Fatalf("socketPath = %q, want /run/photon/bird-photontesth2.ctl", socketPath)
@@ -498,7 +498,7 @@ func TestDaemonControlLinksStatusUsesReconcileSnapshot(t *testing.T) {
 		}},
 	}
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+		&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
 	setTestIPsecObservation(service, observationLinks, observationReconcile)
 
@@ -549,7 +549,7 @@ func TestDaemonControlReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T)
 		},
 	}
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+		&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
 	setTestIPsecObservation(service, observationLinks, observationReconcile)
 	committedRev := uint64(service.State.Common.VerifiedRevision())
@@ -582,7 +582,7 @@ func TestDaemonControlReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T)
 func TestDaemonPacketEventUpdatesCheckpointOwner(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+		&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
 	packet := &gossip.Packet{
 		Addr: &net.UDPAddr{IP: net.ParseIP("198.51.100.9"), Port: 33434},
@@ -620,7 +620,7 @@ func TestDaemonControlRecordGet(t *testing.T) {
 		t.Fatalf("Put(second record): %v", err)
 	}
 	service := newTestDaemonFromOwners(
-		&AppContext{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
+		&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
 
 	response := controlViewRequestViaPipe[*inspect.RecordDetailView](t, service, controlRequest{

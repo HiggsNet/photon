@@ -38,7 +38,7 @@ func TestDaemonObjectPullWorkerPullsZone(t *testing.T) {
 	}
 	runtime := corehost.NewGossipDriver(corehost.NewClock(nil), corehost.DefaultEventBuffer, nil, corehost.GossipDriverConfig{})
 	server := newTestDaemonFromOwners(
-		&AppContext{}, verified, checkpoint, &photonlinux.LinuxState{}, &appConfig{PeerID: "node-b.catofes."}, time.Second,
+		&testApp{}, verified, checkpoint, &photonlinux.LinuxState{}, &appConfig{PeerID: "node-b.catofes."}, time.Second,
 	)
 	if err := runtime.StartGossipObjectPullServer(t.Context(), listener, server.objectPullResponse, 0, 0); err != nil {
 		_ = listener.Close()
@@ -47,7 +47,7 @@ func TestDaemonObjectPullWorkerPullsZone(t *testing.T) {
 	defer runtime.Stop()
 
 	config := &appConfig{Bootstrap: []syncConfigPeer{{ID: "node-b.catofes.", Addr: listener.Addr().String()}}}
-	service := newTestDaemonFromOwners(&AppContext{}, verified, nil, &photonlinux.LinuxState{}, config, time.Second)
+	service := newTestDaemonFromOwners(&testApp{}, verified, nil, &photonlinux.LinuxState{}, config, time.Second)
 	completion := service.objectPullExecutor.PullGossipObject(t.Context(), gossip.StartObjectPullAction{PeerID: "node-b.catofes.", Zone: "node-b.catofes."})
 	if completion.Err != nil {
 		t.Fatalf("object pull failed: %v", completion.Err)
@@ -64,7 +64,7 @@ func TestDaemonObjectPullWorkerReturnsErrorForUnreachable(t *testing.T) {
 	verified, checkpoint, runtime, _ := buildTestDaemonOwners(t)
 	config := &appConfig{Bootstrap: []syncConfigPeer{{ID: "node-b.catofes.", Addr: "127.0.0.1:1"}}}
 	service := newTestDaemonFromOwners(
-		&AppContext{}, verified, checkpoint, runtime, config, time.Second,
+		&testApp{}, verified, checkpoint, runtime, config, time.Second,
 	)
 	completion := service.objectPullExecutor.PullGossipObject(t.Context(), gossip.StartObjectPullAction{PeerID: "node-b.catofes.", Zone: "node-b.catofes."})
 	if completion.Err == nil {

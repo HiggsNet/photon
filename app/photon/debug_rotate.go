@@ -27,12 +27,12 @@ type manualPortRotateResult struct {
 }
 
 func debugRotatePort(direct bool) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
 	if !direct {
-		result, ok, err := rotateIPsecPortViaControl(rt)
+		result, ok, err := rotateIPsecPortViaControl(config)
 		if err != nil {
 			return err
 		}
@@ -42,7 +42,7 @@ func debugRotatePort(direct bool) error {
 		printManualPortRotateResult("daemon", result)
 		return nil
 	}
-	result, err := rotateIPsecPortDirect(rt)
+	result, err := rotateIPsecPortDirect(config, time.Now())
 	if err != nil {
 		return err
 	}
@@ -51,11 +51,11 @@ func debugRotatePort(direct bool) error {
 }
 
 func debugRotate(ctx context.Context, filter string) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	if view, ok, err := readCanonicalViewViaControl[inspect.LinksDebugView](rt, controlRequest{Method: "links_view"}); err != nil {
+	if view, ok, err := readCanonicalViewViaControl[inspect.LinksDebugView](config, controlRequest{Method: "links_view"}, false); err != nil {
 		return err
 	} else if ok {
 		lastFailure := "-"
@@ -99,8 +99,8 @@ func printManualPortRotateResult(mode string, result *manualPortRotateResult) {
 	})
 }
 
-func rotateIPsecPortDirect(rt *AppContext) (*manualPortRotateResult, error) {
-	state, err := openState(rt)
+func rotateIPsecPortDirect(config *appConfig, now time.Time) (*manualPortRotateResult, error) {
+	state, err := openState(config)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +109,7 @@ func rotateIPsecPortDirect(rt *AppContext) (*manualPortRotateResult, error) {
 	if common.State == nil {
 		return nil, fmt.Errorf("state owners are not initialized")
 	}
-	record, result, err := planLocalIPsecPortRotation(rt.Config, common.State, rt.Now())
+	record, result, err := planLocalIPsecPortRotation(config, common.State, now)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +119,7 @@ func rotateIPsecPortDirect(rt *AppContext) (*manualPortRotateResult, error) {
 	}
 	committed, err := commitLocalProtocols(context.Background(), state, uint64(common.Revision), []corestate.LocalIntent{
 		corestate.PutProtocolRecordIntent{Kind: corestate.ProtocolRecordIPsec, Zone: common.State.ManagedZone, Key: ipsec.RecordKeyPorts, Type: ipsec.RecordTypePorts, Value: value},
-	}, nil, rt.Now())
+	}, nil, now)
 	if err != nil {
 		return nil, err
 	}

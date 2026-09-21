@@ -72,9 +72,9 @@ VerifiedState + LinuxState + 操作系统现状
 
 顶层生命周期和写入顺序 owner。它持有 `State`、`GossipDriver`、`LinuxDriver`、health、observer、timer、事件队列和各 reconcile 的 dirty 标记。这个对象有存在必要；问题是 `daemon.go` 还混入了完整 control method dispatch 和大量业务 handler，文件已经超过 2000 行。
 
-### `AppContext`
+### `AppContext`（已删除）
 
-一次 CLI/daemon 启动所需的应用上下文，只含解析后的配置、state 路径、clock 和是否禁用 control。它不是第二个 runtime，也不拥有 goroutine、Driver 或数据库。这个小对象合理。
+原来集中传递配置、state 路径、clock 和 control 开关，但没有独立的资源或生命周期职责。现已移除：CLI 和 daemon 直接加载 `appConfig`，有效状态路径只保存在配置中，Daemon 持有时钟，离线操作显式接收时间，`direct` 作为命令选项传递。
 
 ### `State`
 
@@ -157,11 +157,10 @@ routing/BIRD、IPsec 的窄切口把 focused YAML 与 effective config 下沉到
 - 主要构成：`appConfig`；`configYAML`；gossip/identity/log/IPsec/IPAM/overlay 的 effective config 与 `*YAML`；`syncConfigPeer`；`netnsRefYAML`；若干 duration、key、endpoint parser。
 - 审核：YAML DTO 到 effective config 的转换必要，因为 omission、默认值和字符串解析不能混成一层。过重之处在于一个文件知道所有子系统；按真实 owner 下沉配置即可，不要新建第三套“统一配置模型”。
 
-### 6. `context.go`
+### 6. `context.go`（已删除）
 
-- 做什么：创建 `AppContext`，集中配置、state 路径、clock 和 control 开关。
-- 主要构成：`AppContext`。
-- 审核：必要、足够薄，不是 Runtime 的重复实现。可保留在 app。
+- 原职责：创建 `AppContext`，集中配置、state 路径、clock 和 control 开关。
+- 当前实现：配置加载归 `config.go`，daemon 组装归 `daemon.go`，各操作显式接收配置、时间和 `direct`；不再保留聚合上下文。
 
 ### 7. `control.go`
 

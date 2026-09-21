@@ -236,7 +236,7 @@ CLI text、HTTP JSON、control response 都不应该各自判断 `revoked/stale/
 - Firewall：`firewall_reconcile.go`
 - Health：`health_reconcile.go`、`health_spool.go`
 - Lifecycle/security：`peer_state.go`、`revocation_cleanup.go`、`admission_diagnostics.go`
-- Control/config/state：`control.go`、`config.go`、`context.go`、`state.go`、`state_bolt.go`、`legacy_state.go`
+- Control/config/state：`control.go`、`config.go`、`state.go`、`state_bolt.go`、`legacy_state.go`；原 `context.go` 已删除，调用方显式传递配置、时间与 direct 选项。
 
 建议顺序仍然是：先抽纯 input/view/decision，再抽不触碰 daemon lifecycle 的 planner/helper，最后才移动持久化、commit、driver lifecycle 或 privileged apply。
 

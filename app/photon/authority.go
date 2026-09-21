@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -48,12 +49,12 @@ func parseAuthorityPermission(raw string) (zone.Permission, error) {
 }
 
 func grantDelegationPermissions(path zone.ZonePath, permissions []zone.Permission, outPath string, direct bool) error {
-	rt, err := NewAppContext()
+	config, err := loadAppConfig()
 	if err != nil {
 		return err
 	}
-	rt.DisableControl = direct
-	bundle, controlled, err := grantDelegationPermissionsViaControl(rt, path, permissions)
+
+	bundle, controlled, err := grantDelegationPermissionsViaControl(config, path, permissions, direct)
 	if err != nil {
 		return err
 	}
@@ -68,7 +69,7 @@ func grantDelegationPermissions(path zone.ZonePath, permissions []zone.Permissio
 	if !direct {
 		logControlFallback("delegate_grant")
 	}
-	bundle, err = grantDelegationPermissionsDirect(rt, path, permissions)
+	bundle, err = grantDelegationPermissionsDirect(config, path, permissions, time.Now())
 	if err != nil {
 		return err
 	}
@@ -90,7 +91,7 @@ func writeDelegationGrantBundle(bundle *joinBundle, outPath string) error {
 	return nil
 }
 
-func grantDelegationPermissionsDirect(rt *AppContext, path zone.ZonePath, permissions []zone.Permission) (*joinBundle, error) {
+func grantDelegationPermissionsDirect(config *appConfig, path zone.ZonePath, permissions []zone.Permission, now time.Time) (*joinBundle, error) {
 	if !path.Valid() {
 		return nil, fmt.Errorf("invalid delegated zone: %s", path)
 	}
@@ -100,14 +101,14 @@ func grantDelegationPermissionsDirect(rt *AppContext, path zone.ZonePath, permis
 	if len(permissions) == 0 {
 		return nil, errors.New("at least one permission is required")
 	}
-	state, err := openState(rt)
+	state, err := openState(config)
 	if err != nil {
 		return nil, err
 	}
 	defer state.Close()
 	intent := corestate.GrantDelegationIntent{Zone: path, Permissions: permissions}
-	if _, err := state.Common.ApplyLocalIntent(context.Background(), intent, rt.Now()); err != nil {
+	if _, err := state.Common.ApplyLocalIntent(context.Background(), intent, now); err != nil {
 		return nil, err
 	}
-	return joinBundleFromNetwork(state.Common.ReadView().State.Network, path, rt.Now())
+	return joinBundleFromNetwork(state.Common.ReadView().State.Network, path, now)
 }
