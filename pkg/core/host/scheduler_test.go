@@ -76,15 +76,6 @@ func (timer *fakeTimer) Stop() bool {
 	return true
 }
 
-func (timer *fakeTimer) Reset(after time.Duration) bool {
-	timer.clock.mu.Lock()
-	defer timer.clock.mu.Unlock()
-	active := !timer.stopped
-	timer.stopped = false
-	timer.when = timer.clock.now.Add(after)
-	return active
-}
-
 func receiveTimer(t *testing.T, events <-chan Event) TimerFired {
 	t.Helper()
 	select {

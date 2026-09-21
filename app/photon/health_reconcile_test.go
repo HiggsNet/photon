@@ -183,10 +183,10 @@ func TestHealthTargetsSkipRotateProbeWithoutObservedRuntimeTunnelAddresses(t *te
 func TestConfigureHealthManagerUsesRealProber(t *testing.T) {
 	cfg := defaultHealthConfig()
 	cfg.Enabled = true
-	cfg.Interval = time.Nanosecond
-	cfg.Timeout = time.Nanosecond
-	cfg.Jitter = 0
-	cfg.FailThreshold = 1
+	cfg.Probe.Interval = time.Nanosecond
+	cfg.Probe.Timeout = time.Nanosecond
+	cfg.Probe.Jitter = 0
+	cfg.Hysteresis.FailThresholdConsecutive = 1
 
 	d := &Daemon{Config: &appConfig{Health: cfg}}
 	driver := &ipsec.DryRunDriver{}
@@ -220,9 +220,9 @@ func TestConfigureHealthManagerUsesRealProber(t *testing.T) {
 func TestHealthStatusAndMetricsUsePacketCounts(t *testing.T) {
 	now := time.Unix(1500, 0)
 	cfg := defaultHealthConfig()
-	cfg.MetricsEnabled = true
-	cfg.LocalSpoolPath = t.TempDir()
-	cfg.LocalSpoolMaxAge = time.Hour
+	cfg.Spool.Enabled = true
+	cfg.Spool.Path = t.TempDir()
+	cfg.Spool.MaxAge = time.Hour
 	manager := health.NewManager(health.ProbeConfig{
 		Interval:      time.Nanosecond,
 		Burst:         3,

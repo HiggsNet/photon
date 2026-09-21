@@ -50,7 +50,7 @@ func TestParseHealthConfigMetricsDisabledByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseHealthConfig: %v", err)
 	}
-	if cfg.MetricsEnabled {
+	if cfg.Spool.Enabled {
 		t.Fatal("health metrics should remain disabled without explicit enablement")
 	}
 }
@@ -61,7 +61,7 @@ func TestParseHealthConfigMetricsEnabledExplicitly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseHealthConfig: %v", err)
 	}
-	if !cfg.MetricsEnabled {
+	if !cfg.Spool.Enabled {
 		t.Fatal("health metrics should be enabled explicitly")
 	}
 }
@@ -72,7 +72,7 @@ func TestParseHealthConfigMetricsDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseHealthConfig: %v", err)
 	}
-	if cfg.MetricsEnabled {
+	if cfg.Spool.Enabled {
 		t.Fatal("health metrics should be disabled")
 	}
 }

@@ -603,11 +603,11 @@ func TestObserverHealthAPIIncludesLinkContextWithoutSamples(t *testing.T) {
 func TestObserverHealthSeriesReadsLocalSpool(t *testing.T) {
 	srv := newTestObserverServer()
 	cfg := defaultHealthConfig()
-	cfg.MetricsEnabled = true
-	cfg.LocalSpoolPath = t.TempDir()
-	cfg.LocalSpoolMaxAge = time.Hour
+	cfg.Spool.Enabled = true
+	cfg.Spool.Path = t.TempDir()
+	cfg.Spool.MaxAge = time.Hour
 	srv.daemon.Config.Health = cfg
-	srv.daemon.health = &healthDriver{spool: healthspool.New(cfg.spoolConfig())}
+	srv.daemon.health = &healthDriver{spool: healthspool.New(cfg.Spool)}
 	now := time.Unix(3000, 0)
 	srv.daemon.clock = func() time.Time { return now }
 	if err := srv.daemon.health.spool.Append(now, healthSpoolSamples([]inspect.HealthSample{{

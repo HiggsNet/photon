@@ -9,32 +9,12 @@ import (
 	"github.com/HiggsNet/photon/pkg/health"
 )
 
-// healthConfig is the application-layer configuration for link health probes
-// (Phase 6.6). It maps to the health.* YAML section.
+// healthConfig composes module configurations for the health.* YAML section.
 type healthConfig struct {
-	Enabled            bool
-	Interval           time.Duration
-	Timeout            time.Duration
-	Burst              int
-	LossWindow         int
-	Jitter             time.Duration
-	MaxConcurrent      int
-	FailThreshold      int
-	LossThreshold      float64
-	DownLossThreshold  float64
-	RecoverConsecutive int
-	MetricsEnabled     bool
-
-	LocalSpoolPath   string
-	LocalSpoolMaxAge time.Duration
-}
-
-func (c healthConfig) spoolConfig() healthspool.Config {
-	return healthspool.Config{
-		Enabled: c.MetricsEnabled,
-		Path:    c.LocalSpoolPath,
-		MaxAge:  c.LocalSpoolMaxAge,
-	}
+	Enabled    bool
+	Probe      health.ProbeConfig
+	Hysteresis health.HysteresisConfig
+	Spool      healthspool.Config
 }
 
 // healthConfigYAML is the YAML representation of healthConfig.
@@ -64,22 +44,10 @@ type healthMetricsYAML struct {
 }
 
 func defaultHealthConfig() healthConfig {
-	d := health.DefaultProbeConfig()
-	h := health.DefaultHysteresisConfig()
 	return healthConfig{
-		Enabled:            false,
-		Interval:           d.Interval,
-		Timeout:            d.Timeout,
-		Burst:              d.Burst,
-		LossWindow:         d.LossWindow,
-		Jitter:             d.Jitter,
-		MaxConcurrent:      d.MaxConcurrent,
-		FailThreshold:      h.FailThresholdConsecutive,
-		LossThreshold:      h.LossThreshold,
-		DownLossThreshold:  h.DownLossThreshold,
-		RecoverConsecutive: h.RecoverConsecutive,
-		MetricsEnabled:     false,
-		LocalSpoolMaxAge:   6 * time.Hour,
+		Probe:      health.DefaultProbeConfig(),
+		Hysteresis: health.DefaultHysteresisConfig(),
+		Spool:      healthspool.Config{MaxAge: 6 * time.Hour},
 	}
 }
 
@@ -101,7 +69,7 @@ func parseHealthConfig(y *healthConfigYAML) (healthConfig, error) {
 		if d <= 0 {
 			return healthConfig{}, fmt.Errorf("health.interval must be positive")
 		}
-		out.Interval = d
+		out.Probe.Interval = d
 	}
 	if y.Timeout != "" {
 		d, err := parseConfigDuration(y.Timeout, "health.timeout")
@@ -111,61 +79,61 @@ func parseHealthConfig(y *healthConfigYAML) (healthConfig, error) {
 		if d <= 0 {
 			return healthConfig{}, fmt.Errorf("health.timeout must be positive")
 		}
-		out.Timeout = d
+		out.Probe.Timeout = d
 	}
 	if y.Burst != nil {
 		if *y.Burst <= 0 {
 			return healthConfig{}, fmt.Errorf("health.burst must be positive")
 		}
-		out.Burst = *y.Burst
+		out.Probe.Burst = *y.Burst
 	}
 	if y.LossWindow != nil {
 		if *y.LossWindow <= 0 {
 			return healthConfig{}, fmt.Errorf("health.loss_window must be positive")
 		}
-		out.LossWindow = *y.LossWindow
+		out.Probe.LossWindow = *y.LossWindow
 	}
 	if y.Jitter != "" {
 		d, err := parseConfigDuration(y.Jitter, "health.jitter")
 		if err != nil {
 			return healthConfig{}, err
 		}
-		out.Jitter = d
+		out.Probe.Jitter = d
 	}
 	if y.MaxConcurrent != nil {
 		if *y.MaxConcurrent <= 0 {
 			return healthConfig{}, fmt.Errorf("health.max_concurrent_probes must be positive")
 		}
-		out.MaxConcurrent = *y.MaxConcurrent
+		out.Probe.MaxConcurrent = *y.MaxConcurrent
 	}
 	if y.FailThreshold != nil {
 		if *y.FailThreshold <= 0 {
 			return healthConfig{}, fmt.Errorf("health.fail_threshold_consecutive must be positive")
 		}
-		out.FailThreshold = *y.FailThreshold
+		out.Hysteresis.FailThresholdConsecutive = *y.FailThreshold
 	}
 	if y.LossThreshold != "" {
 		v, err := parseFloatRatio(y.LossThreshold, "health.loss_threshold")
 		if err != nil {
 			return healthConfig{}, err
 		}
-		out.LossThreshold = v
+		out.Hysteresis.LossThreshold = v
 	}
 	if y.DownLossThreshold != "" {
 		v, err := parseFloatRatio(y.DownLossThreshold, "health.down_loss_threshold")
 		if err != nil {
 			return healthConfig{}, err
 		}
-		out.DownLossThreshold = v
+		out.Hysteresis.DownLossThreshold = v
 	}
-	if out.DownLossThreshold < out.LossThreshold {
-		return healthConfig{}, fmt.Errorf("health.down_loss_threshold (%g) must be >= health.loss_threshold (%g)", out.DownLossThreshold, out.LossThreshold)
+	if out.Hysteresis.DownLossThreshold < out.Hysteresis.LossThreshold {
+		return healthConfig{}, fmt.Errorf("health.down_loss_threshold (%g) must be >= health.loss_threshold (%g)", out.Hysteresis.DownLossThreshold, out.Hysteresis.LossThreshold)
 	}
 	if y.RecoverConsecutive != nil {
 		if *y.RecoverConsecutive <= 0 {
 			return healthConfig{}, fmt.Errorf("health.recover_consecutive must be positive")
 		}
-		out.RecoverConsecutive = *y.RecoverConsecutive
+		out.Hysteresis.RecoverConsecutive = *y.RecoverConsecutive
 	}
 	if y.Metrics != nil {
 		// Metrics persistence is opt-in. A metrics block often only carries a
@@ -175,19 +143,19 @@ func parseHealthConfig(y *healthConfigYAML) (healthConfig, error) {
 		if err != nil {
 			return healthConfig{}, err
 		}
-		out.MetricsEnabled = metricsEnabled
+		out.Spool.Enabled = metricsEnabled
 		if y.Metrics.RemoteWriteURL != nil || y.Metrics.RemoteWriteQueue != nil {
 			return healthConfig{}, fmt.Errorf("health.metrics.remote_write_url and remote_write_queue_capacity are not supported; remove these settings")
 		}
 		if y.Metrics.LocalSpoolPath != "" {
-			out.LocalSpoolPath = y.Metrics.LocalSpoolPath
+			out.Spool.Path = y.Metrics.LocalSpoolPath
 		}
 		if y.Metrics.LocalSpoolMaxAge != "" {
 			d, err := parseConfigDuration(y.Metrics.LocalSpoolMaxAge, "health.metrics.local_spool_max_age")
 			if err != nil {
 				return healthConfig{}, err
 			}
-			out.LocalSpoolMaxAge = d
+			out.Spool.MaxAge = d
 		}
 	}
 	return out, nil
@@ -204,26 +172,4 @@ func parseFloatRatio(s string, name string) (float64, error) {
 		return 0, fmt.Errorf("%s must be between 0.0 and 1.0, got %g", name, v)
 	}
 	return v, nil
-}
-
-// healthProbeConfig converts healthConfig into the pkg/health.ProbeConfig.
-func (c healthConfig) probeConfig() health.ProbeConfig {
-	return health.ProbeConfig{
-		Interval:      c.Interval,
-		Timeout:       c.Timeout,
-		Burst:         c.Burst,
-		LossWindow:    c.LossWindow,
-		Jitter:        c.Jitter,
-		MaxConcurrent: c.MaxConcurrent,
-	}
-}
-
-// healthHysteresisConfig converts healthConfig into the pkg/health.HysteresisConfig.
-func (c healthConfig) hysteresisConfig() health.HysteresisConfig {
-	return health.HysteresisConfig{
-		FailThresholdConsecutive: c.FailThreshold,
-		LossThreshold:            c.LossThreshold,
-		DownLossThreshold:        c.DownLossThreshold,
-		RecoverConsecutive:       c.RecoverConsecutive,
-	}
 }

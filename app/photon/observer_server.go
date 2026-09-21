@@ -294,7 +294,7 @@ func (p *observerProvider) Health(linkFilter string) (any, error) {
 func (p *observerProvider) OpenMetrics() (string, error) {
 	d := p.daemon
 	config := observerAppConfig(d)
-	if config == nil || !config.Health.MetricsEnabled {
+	if config == nil || !config.Health.Spool.Enabled {
 		return "", fmt.Errorf("health metrics are not enabled")
 	}
 	if d == nil || d.health == nil || d.health.Manager == nil {

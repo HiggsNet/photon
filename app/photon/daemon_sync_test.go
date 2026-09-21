@@ -84,7 +84,9 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 	}
 
 	for {
-		pumpEventLoopSync(ctx, []*Daemon{serviceA, serviceB}, []*gossip.Transport{transportA, transportB})
+		if err := pumpEventLoopSync(ctx, []*Daemon{serviceA, serviceB}, []*gossip.Transport{transportA, transportB}); err != nil {
+			t.Fatalf("pump event loop: %v", err)
+		}
 		a := serviceA.gossipDriver.Gossip.Session(configB.PeerID)
 		b := serviceB.gossipDriver.Gossip.Session(configA.PeerID)
 		if (a == nil || a.Done()) && (b == nil || b.Done()) {

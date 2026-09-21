@@ -3,8 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
-	"strings"
+	"os"
 	"testing"
 	"time"
 
@@ -79,10 +80,10 @@ func receiveWithDeadline(transport *gossip.Transport, deadline time.Time) (*goss
 		if err == nil {
 			return packet, nil
 		}
-		if time.Now().After(deadline) {
-			return nil, errors.New("sync receive timed out")
-		}
 		if errors.Is(err, gossip.ErrUnknownPeer) || errors.Is(err, gossip.ErrAddrMismatch) || errors.Is(err, gossip.ErrMessageTooLarge) {
+			if !time.Now().Before(deadline) {
+				return nil, os.ErrDeadlineExceeded
+			}
 			continue
 		}
 		return nil, err
@@ -91,30 +92,62 @@ func receiveWithDeadline(transport *gossip.Transport, deadline time.Time) (*goss
 
 func isReceiveTimeout(err error) bool {
 	var netErr net.Error
-	return errors.As(err, &netErr) && netErr.Timeout() || strings.Contains(err.Error(), "timed out")
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
-func pumpEventLoopSync(ctx context.Context, services []*Daemon, transports []*gossip.Transport) {
+func TestGossipTestHelpersPreserveReceiveErrors(t *testing.T) {
+	transport, err := gossip.NewTransport(gossip.Config{PeerID: "local.catofes."}, &testGossipDatagram{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transport.Close()
+	if _, err := receiveWithDeadline(transport, time.Now().Add(-time.Second)); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("receive error = %v, want closed socket even after deadline", err)
+	}
+	if err := pumpEventLoopSync(t.Context(), nil, []*gossip.Transport{transport}); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("pump error = %v, want closed socket", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := pumpEventLoopSync(ctx, nil, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("pump error = %v, want context cancellation", err)
+	}
+}
+
+func pumpEventLoopSync(ctx context.Context, services []*Daemon, transports []*gossip.Transport) error {
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		processed := false
-		for _, service := range services {
+		for index, service := range services {
 			select {
 			case hostEvent := <-service.gossipDriver.Events():
-				if result, err := service.handleGossipDriverEvent(ctx, hostEvent); err == nil && result.Handled {
-					processed = true
+				if _, err := service.handleGossipDriverEvent(ctx, hostEvent); err != nil {
+					return fmt.Errorf("service %d event %T: %w", index, hostEvent, err)
 				}
+				processed = true
 			default:
 			}
 		}
 		for index, transport := range transports {
 			packet, err := receiveWithContext(ctx, transport, time.Now().Add(10*time.Millisecond))
-			if err == nil {
-				_, _ = services[index].handleGossipDriverEvent(ctx, corehost.GossipPacketReceived{Packet: packet})
-				processed = true
+			if err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				if isReceiveTimeout(err) {
+					continue
+				}
+				return fmt.Errorf("transport %d receive: %w", index, err)
 			}
+			if _, err := services[index].handleGossipDriverEvent(ctx, corehost.GossipPacketReceived{Packet: packet}); err != nil {
+				return fmt.Errorf("service %d packet: %w", index, err)
+			}
+			processed = true
 		}
 		if !processed {
-			return
+			return nil
 		}
 	}
 }

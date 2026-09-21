@@ -70,12 +70,3 @@ func (timer *fakeGossipTimer) Stop() bool {
 	timer.stopped = true
 	return active
 }
-
-func (timer *fakeGossipTimer) Reset(after time.Duration) bool {
-	timer.clock.mu.Lock()
-	defer timer.clock.mu.Unlock()
-	active := !timer.stopped
-	timer.stopped = false
-	timer.when = timer.clock.now.Add(after)
-	return active
-}

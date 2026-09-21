@@ -18,7 +18,6 @@ var (
 type EventTimer interface {
 	C() <-chan time.Time
 	Stop() bool
-	Reset(time.Duration) bool
 }
 
 // Clock makes Scheduler timing deterministic in tests.

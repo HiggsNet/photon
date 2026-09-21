@@ -358,8 +358,8 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			opts = *request.Ping
 		}
 		if d.Config != nil {
-			opts.FallbackCount = d.Config.Health.Burst
-			opts.FallbackTimeout = d.Config.Health.Timeout
+			opts.FallbackCount = d.Config.Health.Probe.Burst
+			opts.FallbackTimeout = d.Config.Health.Probe.Timeout
 		}
 		resolved := pingdebug.ResolveOptions(opts)
 		selected := pingdebug.SelectTargetsResolved(targets, request.Zone, resolved)

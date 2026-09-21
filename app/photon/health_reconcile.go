@@ -18,16 +18,6 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-// newHealthManager creates a health.Manager from app config. Returns nil when
-// health probing is disabled. The prober is injected by the daemon based on
-// capabilities.
-func newHealthManager(cfg healthConfig, prober health.Prober) *health.Manager {
-	if !cfg.Enabled {
-		return nil
-	}
-	return health.NewManager(cfg.probeConfig(), cfg.hysteresisConfig(), prober)
-}
-
 // healthDriver is the optional daemon-owned health subsystem. Platforms that
 // do not want background health probing do not install one.
 type healthDriver struct {

@@ -18,6 +18,7 @@ import (
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
+	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
@@ -135,7 +136,7 @@ func newDaemon(config *appConfig, state *State, interval time.Duration, clock fu
 	}
 	spoolConfig := healthspool.Config{}
 	if config != nil {
-		spoolConfig = config.Health.spoolConfig()
+		spoolConfig = config.Health.Spool
 	}
 	logger := newAppLogger(config)
 	var commonState *corestate.Store
@@ -226,7 +227,7 @@ func (d *Daemon) configureHealthManager() {
 	if d.health == nil {
 		d.health = &healthDriver{}
 	}
-	d.health.Manager = newHealthManager(cfg, d.linuxDriver.HealthProber())
+	d.health.Manager = health.NewManager(cfg.Probe, cfg.Hysteresis, d.linuxDriver.HealthProber())
 	d.health.driverManaged = d.health.Manager != nil
 }
 

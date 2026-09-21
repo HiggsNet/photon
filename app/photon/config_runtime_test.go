@@ -80,19 +80,19 @@ func TestRuntimeLogConfigAndEnvironmentOverride(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !debugLogEnabled(config) {
+	if syncDebugLogger(config) == nil {
 		t.Fatalf("config log.level=debug should enable debug logs")
 	}
 	if config.Log.Mode != "stderr+file" || config.Log.File != filepath.Join(dir, "photon.log") {
 		t.Fatalf("log output config = mode %q file %q, want stderr+file/%s", config.Log.Mode, config.Log.File, filepath.Join(dir, "photon.log"))
 	}
 	t.Setenv("PHOTON_LOG_LEVEL", "info")
-	if debugLogEnabled(config) {
+	if syncDebugLogger(config) != nil {
 		t.Fatalf("PHOTON_LOG_LEVEL should override config log.level")
 	}
 	t.Setenv("PHOTON_LOG_LEVEL", "debug")
 	config.Log.Level = "info"
-	if !debugLogEnabled(config) {
+	if syncDebugLogger(config) == nil {
 		t.Fatalf("PHOTON_LOG_LEVEL=debug should enable debug logs")
 	}
 }

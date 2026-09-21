@@ -7,10 +7,10 @@ import (
 )
 
 func syncDebugLogger(config *appConfig) func(gossip.Event) {
-	if !debugLogEnabled(config) {
+	logger := newAppLogger(config)
+	if !logger.debugEnabled() {
 		return nil
 	}
-	logger := newAppLogger(config)
 	return func(event gossip.Event) {
 		fields := map[string]any{
 			"direction": event.Direction, "peer_id": event.PeerID, "message_type": event.Type,
@@ -38,8 +38,4 @@ func syncDebugLogger(config *appConfig) func(gossip.Event) {
 		}
 		logger.Debug("gossip", "message", fields)
 	}
-}
-
-func debugLogEnabled(config *appConfig) bool {
-	return newAppLogger(config).debugEnabled()
 }

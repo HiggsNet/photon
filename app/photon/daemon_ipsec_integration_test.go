@@ -84,7 +84,9 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 		t.Fatalf("start sync node-a from node-b: %v", err)
 	}
 	for {
-		pumpEventLoopSync(ctx, []*Daemon{serviceA, serviceB}, []*gossip.Transport{transportA, transportB})
+		if err := pumpEventLoopSync(ctx, []*Daemon{serviceA, serviceB}, []*gossip.Transport{transportA, transportB}); err != nil {
+			t.Fatalf("pump event loop: %v", err)
+		}
 		aActive := false
 		if s := serviceA.gossipDriver.Gossip.Session(configB.PeerID); s != nil && !s.Done() {
 			aActive = true
