@@ -818,25 +818,14 @@ func cmdSync() *cli.Command {
 			{
 				Name:        "serve",
 				Usage:       "Start the gossip sync server",
-				Description: "Listen for incoming sync messages and respond to pings/pongs.",
+				Description: "Serve incoming Gossip sync and object pulls for protocol debugging.",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					return syncServe(ctx)
 				},
 			},
 			{
-				Name:        "run",
-				Usage:       "Run gossip serving and periodic outbound sync",
-				Description: "Listen for incoming sync messages while periodically syncing bootstrap peers.",
-				Flags: []cli.Flag{
-					&cli.IntFlag{Name: "interval", Value: 5, Usage: "Outbound sync interval in seconds"},
-				},
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return daemonRun(ctx, time.Duration(cmd.Int("interval"))*time.Second)
-				},
-			},
-			{
 				Name:      "once",
-				Usage:     "Run a single sync round with a peer",
+				Usage:     "Run a standalone sync round with a peer",
 				UsageText: "photon advanced sync once <peer-id>",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 1 {

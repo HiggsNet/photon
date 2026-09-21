@@ -3,10 +3,14 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"net"
+	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
@@ -121,4 +125,58 @@ func (d *Daemon) handleGossipDriverEvent(ctx context.Context, hostEvent corehost
 		d.notifyStateChanged()
 	}
 	return result, err
+}
+
+func (d *Daemon) openGossipTransport() (*gossip.Transport, error) {
+	if d.Config == nil || d.gossipDriver == nil {
+		return nil, errors.New("gossip configuration is not initialized")
+	}
+	config := d.gossipDriver.GossipConfig()
+	listenAddr := d.Config.ListenAddr
+	if listenAddr == "" {
+		listenAddr = fmt.Sprintf(":%d", gossip.DefaultPort)
+	}
+	datagram, err := photonlinux.ListenGossipDatagram(listenAddr)
+	if err != nil {
+		return nil, err
+	}
+	transport, err := gossip.NewTransport(gossipTransportConfig(config, d.Config, d.now), datagram)
+	if err != nil {
+		_ = datagram.Close()
+		return nil, err
+	}
+	if err := d.gossipDriver.BindGossipTransport(transport); err != nil {
+		_ = datagram.Close()
+		return nil, err
+	}
+	return transport, nil
+}
+
+func gossipTransportConfig(config corehost.GossipDriverConfig, loggerConfig *appConfig, clock func() time.Time) gossip.Config {
+	return gossip.Config{
+		PeerID:          config.PeerID,
+		KnownPeers:      config.Discovery.Bootstrap,
+		MaxMessageBytes: config.Limits.MaxBytes,
+		Replay:          gossip.NewReplayWindow(0),
+		Quotas:          gossip.NewPeerQuotas(gossip.QuotaConfig{}),
+		Clock:           clock,
+		Log:             syncDebugLogger(loggerConfig),
+	}
+}
+
+func syncLimits(config *appConfig) corestate.SyncLimits {
+	limits := corestate.DefaultSyncLimits()
+	if config == nil {
+		return limits
+	}
+	if config.MaxSyncZones > 0 {
+		limits.MaxZones = config.MaxSyncZones
+	}
+	if config.MaxSyncRecords > 0 {
+		limits.MaxRecords = config.MaxSyncRecords
+	}
+	if config.MaxMessageBytes > 0 {
+		limits.MaxBytes = config.MaxMessageBytes
+	}
+	return limits
 }

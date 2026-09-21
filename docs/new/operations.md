@@ -169,7 +169,7 @@ PHOTON_CONFIG=/tmp/photon-catofes/config.yaml photon advanced recovery import-zo
 
 ## 手动同步
 
-长期运行用 daemon。排障时可用手动同步命令。
+长期运行用 daemon。排障时可用手动同步命令。`serve/once` 会独立打开本地状态和监听端口，应在对应节点的 daemon 停止时使用；`once` 不会向在线 daemon 发送同步请求。
 
 查看同步状态：
 
@@ -183,16 +183,16 @@ PHOTON_CONFIG=/tmp/photon-a/config.yaml photon advanced sync status --verbose
 PHOTON_CONFIG=/tmp/photon-a/config.yaml photon advanced sync once node-b.catofes.
 ```
 
-启动兼容的被动 UDP 服务：
+启动用于协议调试的被动 Gossip 服务（UDP 同步和 TCP 对象拉取）：
 
 ```bash
 PHOTON_CONFIG=/tmp/photon-b/config.yaml photon advanced sync serve
 ```
 
-旧的常驻同步入口仍可用，但 daemon 是推荐入口：
+常驻同步统一使用 daemon（原 `advanced sync run` 入口已移除）：
 
 ```bash
-PHOTON_CONFIG=/tmp/photon-a/config.yaml photon advanced sync run --interval 5
+PHOTON_CONFIG=/tmp/photon-a/config.yaml photon daemon --interval 5
 ```
 
 `advanced sync once` 如果输出 pending zones，通常表示对端已返回摘要，但还有对象需要继续拉取；再跑一轮或交给 daemon 后台收敛。
