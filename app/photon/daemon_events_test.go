@@ -90,7 +90,7 @@ func TestDaemonEventLoopDispatchesRecordPut(t *testing.T) {
 		},
 		Reply: reply,
 	}
-	service.processEvents(context.Background())
+	service.processEvents(context.Background(), nil)
 	if result := <-reply; result.Error != nil {
 		t.Fatalf("processEvents(record_put): %v", result.Error)
 	}
@@ -150,7 +150,7 @@ func TestDaemonIPsecPortRotateEventTriggersDataPlaneReconcile(t *testing.T) {
 	reply := make(chan daemonEventResult, 1)
 	service.Events <- daemonEvent{Type: daemonEventIPsecPortRotate, Reply: reply}
 
-	syncNow, shutdown, ipsecFlushed, _, firewallFlushed := service.processEvents(context.Background())
+	syncNow, shutdown, ipsecFlushed, _, firewallFlushed := service.processEvents(context.Background(), nil)
 	if !syncNow || shutdown {
 		t.Fatalf("syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
 	}

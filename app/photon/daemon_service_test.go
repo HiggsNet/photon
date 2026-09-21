@@ -6,6 +6,7 @@ import (
 	"time"
 
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
@@ -115,12 +116,11 @@ func TestDaemonStateChangedWithoutLinuxDriverSkipsPlatformReconcile(t *testing.T
 	}
 }
 
-func TestDaemonNotifyStateChangedDefersReconcileWhileDrainingEvents(t *testing.T) {
+func TestDaemonNotifyStateChangedDefersReconcileToEventLoop(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	service := newTestDaemonFromOwners(
 		&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
-	service.drainingEvents = true
 	var flushed []string
 	service.Hooks.OnReconcileFlush = func(layer string) {
 		flushed = append(flushed, layer)
@@ -133,6 +133,13 @@ func TestDaemonNotifyStateChangedDefersReconcileWhileDrainingEvents(t *testing.T
 	}
 	if !service.ipsecDirty || !service.routingDirty || !service.firewallDirty {
 		t.Fatalf("dirty flags = ipsec:%v routing:%v firewall:%v, want all true", service.ipsecDirty, service.routingDirty, service.firewallDirty)
+	}
+	service.processEvents(context.Background(), nil)
+	if len(flushed) != 3 || flushed[0] != "firewall" || flushed[1] != "routing" || flushed[2] != "ipsec" {
+		t.Fatalf("event loop flush order = %v, want firewall/routing/ipsec", flushed)
+	}
+	if service.ipsecDirty || service.routingDirty || service.firewallDirty {
+		t.Fatal("event loop left unchanged platform state dirty")
 	}
 }
 
@@ -173,4 +180,21 @@ func TestRootCommandIncludesDaemon(t *testing.T) {
 		}
 	}
 	t.Fatal("root command does not include daemon")
+}
+
+func TestDaemonGossipChangeDefersPlatformWorkToEventLoop(t *testing.T) {
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	service := newTestDaemonFromOwners(&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second)
+	flushes := 0
+	service.Hooks.OnReconcileFlush = func(string) { flushes++ }
+	if !service.observeSyncEventResult(corehost.GossipEventResult{Done: true, NetworkChanged: true}) {
+		t.Fatal("Gossip change was not reported")
+	}
+	if flushes != 0 {
+		t.Fatalf("Gossip callback performed %d reconciles", flushes)
+	}
+	_, _, ipsecFlushed, routingFlushed, firewallFlushed := service.processEvents(context.Background(), nil)
+	if !ipsecFlushed || !routingFlushed || !firewallFlushed || flushes != 3 {
+		t.Fatalf("next batch flushes = %v/%v/%v, count %d", ipsecFlushed, routingFlushed, firewallFlushed, flushes)
+	}
 }

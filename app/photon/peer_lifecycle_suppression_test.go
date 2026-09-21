@@ -78,6 +78,7 @@ func TestPeerLifecycleSuppressionTearsDownAndSuccessfulSyncRestoresLink(t *testi
 		t.Fatalf("seed peer checkpoint: %v", err)
 	}
 	service.notifyStateChanged()
+	service.processEvents(context.Background(), nil)
 	initialLinks, _ := readTestIPsecObservation(service)
 	if len(initialLinks) != 1 {
 		t.Fatalf("initial links = %+v, want one", initialLinks)
@@ -85,6 +86,7 @@ func TestPeerLifecycleSuppressionTearsDownAndSuccessfulSyncRestoresLink(t *testi
 
 	now = now.Add(config.PeerLifecycle.CleanupAfter + time.Second)
 	service.notifyStateChanged()
+	service.processEvents(context.Background(), nil)
 	common := service.State.Common.ReadView()
 	cleanedLinks, cleanedReconcile := readTestIPsecObservation(service)
 	if len(cleanedLinks) != 0 || cleanedReconcile.DesiredLinks != 0 {
@@ -99,6 +101,7 @@ func TestPeerLifecycleSuppressionTearsDownAndSuccessfulSyncRestoresLink(t *testi
 		t.Fatalf("record successful sync: %v", err)
 	}
 	service.notifyStateChanged()
+	service.processEvents(context.Background(), nil)
 	recoveredLinks, recoveredReconcile := readTestIPsecObservation(service)
 	if len(recoveredLinks) != 1 || recoveredReconcile.DesiredLinks != 1 {
 		t.Fatalf("recovered links = %+v desired=%d", recoveredLinks, recoveredReconcile.DesiredLinks)

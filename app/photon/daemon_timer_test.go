@@ -38,10 +38,20 @@ func TestScheduleDaemonTimerCancelsDisabledFirewallInterval(t *testing.T) {
 	if err := d.scheduleDaemonTimer(daemonTimerFirewall, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.scheduleDaemonTimer(daemonTimerFirewall, nextFirewallReconcileTime(time.Now(), 0)); err != nil {
+	if err := d.scheduleDaemonTimer(daemonTimerFirewall, nextReconcileTime(time.Now(), 0)); err != nil {
 		t.Fatal(err)
 	}
 	if scheduler.Accept(corehost.TimerFired{ID: id, Generation: 1}) {
 		t.Fatal("cancelled firewall timer generation was accepted")
+	}
+}
+
+func TestNextReconcileTime(t *testing.T) {
+	now := time.Unix(4200, 0)
+	if next := nextReconcileTime(now, 0); !next.IsZero() {
+		t.Fatalf("next disabled = %s, want zero", next)
+	}
+	if next := nextReconcileTime(now, 30*time.Second); !next.Equal(now.Add(30 * time.Second)) {
+		t.Fatalf("next = %s, want %s", next, now.Add(30*time.Second))
 	}
 }

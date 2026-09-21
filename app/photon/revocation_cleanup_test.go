@@ -363,6 +363,7 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 
 	// Create the link first.
 	service.notifyStateChanged()
+	service.processEvents(context.Background(), nil)
 
 	// Now revoke node-b.catofes.
 	common := service.State.Common.ReadView()
@@ -382,6 +383,7 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 	setTestIPsecObservation(service, currentLinks, currentReconcile)
 	installTestIPsecDrivers(service, driver, driver)
 	service.notifyStateChanged()
+	service.processEvents(context.Background(), nil)
 
 	// Verify peer cache was cleared after notifyStateChanged.
 	common = service.State.Common.ReadView()
@@ -453,6 +455,7 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 	})
 
 	service.notifyStateChanged()
+	service.processEvents(context.Background(), nil)
 	common := service.State.Common.ReadView()
 	currentRuntime := service.State.ReadLinux()
 	currentLinks, currentReconcile := readTestIPsecObservation(service)
@@ -500,6 +503,7 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 	}
 	firewallDriver.desired = nil
 	service.notifyStateChanged()
+	service.processEvents(context.Background(), nil)
 
 	wantOrder := []string{"revocation_cleanup", "firewall", "routing", "ipsec", "revocation_cleanup"}
 	if !reflect.DeepEqual(order, wantOrder) {

@@ -454,13 +454,6 @@ func TestFirewallReconcileDirtyIntervalAndRecover(t *testing.T) {
 	if service.firewallReconcileInterval() != defaultFirewallReconcileInterval {
 		t.Fatalf("firewall interval = %s, want %s", service.firewallReconcileInterval(), defaultFirewallReconcileInterval)
 	}
-	base := time.Unix(7000, 0)
-	if got := nextFirewallReconcileTime(base, 5*time.Second); !got.Equal(base.Add(5 * time.Second)) {
-		t.Fatalf("nextFirewallReconcileTime = %s, want %s", got, base.Add(5*time.Second))
-	}
-	if got := nextFirewallReconcileTime(base, 0); !got.IsZero() {
-		t.Fatalf("nextFirewallReconcileTime disabled = %s, want zero", got)
-	}
 	if service.flushFirewallReconcile(context.Background()) {
 		t.Fatal("flushFirewallReconcile should be false when not dirty")
 	}

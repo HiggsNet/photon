@@ -35,6 +35,7 @@ func TestDaemonStateChangedRemovesTeardownIPsecLinks(t *testing.T) {
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
 	service.notifyStateChanged()
+	service.processEvents(context.Background(), nil)
 	latestLinks, _ := readTestIPsecObservation(service)
 	if len(latestLinks) != 1 {
 		t.Fatalf("link instances len = %d, want 1", len(latestLinks))
@@ -42,6 +43,7 @@ func TestDaemonStateChangedRemovesTeardownIPsecLinks(t *testing.T) {
 
 	service.Config.IPsec.LinkGroups = nil
 	service.notifyStateChanged()
+	service.processEvents(context.Background(), nil)
 	removedLinks, removedReconcile := readTestIPsecObservation(service)
 	if len(removedLinks) != 0 {
 		t.Fatalf("link instances after teardown = %+v, want none", removedLinks)
@@ -51,6 +53,7 @@ func TestDaemonStateChangedRemovesTeardownIPsecLinks(t *testing.T) {
 	}
 
 	service.notifyStateChanged()
+	service.processEvents(context.Background(), nil)
 	stableLinks, stableReconcile := readTestIPsecObservation(service)
 	if len(stableLinks) != 0 {
 		t.Fatalf("stable link instances = %+v, want none", stableLinks)
@@ -97,6 +100,7 @@ func TestDaemonStateChangedAdoptsObservedIPsecSA(t *testing.T) {
 	installTestIPsecDrivers(service, driver, driver)
 
 	service.notifyStateChanged()
+	service.processEvents(context.Background(), nil)
 
 	latestLinks, latestReconcile := readTestIPsecObservation(service)
 	if len(latestReconcile.Actions) != 1 || latestReconcile.Actions[0].Action != ipsec.ReconcileActionAdopt {
@@ -537,6 +541,7 @@ func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
 	installTestIPsecDrivers(service, driver, driver)
 
 	service.notifyStateChanged()
+	service.processEvents(context.Background(), nil)
 	common := service.State.Common.ReadView()
 	persistedRuntime := service.State.ReadLinux()
 	latestLinks, latestReconcile := readTestIPsecObservation(service)
@@ -559,6 +564,7 @@ func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
 	service.linuxObservation.replaceIPsec(latestLinks, latestReconcile)
 	installTestIPsecDrivers(service, driver, driver)
 	service.notifyStateChanged()
+	service.processEvents(context.Background(), nil)
 
 	revokedLinks, revokedReconcile := readTestIPsecObservation(service)
 	if len(revokedLinks) != 0 {
@@ -575,6 +581,7 @@ func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
 	}
 
 	service.notifyStateChanged()
+	service.processEvents(context.Background(), nil)
 	stableLinks, stableReconcile := readTestIPsecObservation(service)
 	if len(stableLinks) != 0 || len(stableReconcile.Actions) != 0 || stableReconcile.DesiredLinks != 0 {
 		t.Fatalf("stable revoked reconcile = %+v instances=%+v, want no recreate", stableReconcile, stableLinks)
@@ -823,7 +830,7 @@ func TestDaemonIPsecCleanupEventTearsDownManagedLinks(t *testing.T) {
 
 	reply := make(chan daemonEventResult, 1)
 	service.Events <- daemonEvent{Type: daemonEventIPsecCleanup, Reply: reply}
-	syncNow, shutdown, ipsecFlushed, _, _ := service.processEvents(context.Background())
+	syncNow, shutdown, ipsecFlushed, _, _ := service.processEvents(context.Background(), nil)
 	result := <-reply
 	if result.Error != nil {
 		t.Fatalf("processEvents(ipsec_cleanup): %v", result.Error)
@@ -864,7 +871,7 @@ func TestDaemonIPsecCleanupEventCanCleanOrphanConnections(t *testing.T) {
 
 	reply := make(chan daemonEventResult, 1)
 	service.Events <- daemonEvent{Type: daemonEventIPsecCleanup, Orphans: true, Reply: reply}
-	_, _, ipsecFlushed, _, _ := service.processEvents(context.Background())
+	_, _, ipsecFlushed, _, _ := service.processEvents(context.Background(), nil)
 	result := <-reply
 	if result.Error != nil {
 		t.Fatalf("processEvents(ipsec_cleanup --orphans): %v", result.Error)

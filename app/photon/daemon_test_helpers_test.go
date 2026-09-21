@@ -1213,7 +1213,7 @@ func pumpDaemonEvents(ctx context.Context, service *Daemon) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			service.processEvents(ctx)
+			service.processEvents(ctx, nil)
 		}
 	}
 }

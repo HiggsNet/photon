@@ -268,9 +268,7 @@ func (d *Daemon) commitEndpointACLMutation(rev uint64, acls map[string]photonsta
 	} else if !committed {
 		return errStateRevisionStale
 	}
-	if d.gossipDriver != nil && d.gossipDriver.Transport() != nil {
-		d.refreshGossipDiscovery()
-	}
+	d.refreshGossipDiscovery()
 	d.notifyStateChanged()
 	return nil
 }

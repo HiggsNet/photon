@@ -100,6 +100,7 @@ func syncServe(ctx context.Context) error {
 			return nil
 		case hostEvent := <-service.gossipDriver.Events():
 			_, _ = service.handleGossipDriverEvent(ctx, hostEvent)
+			service.flushRevocationCleanup()
 		}
 	}
 }
@@ -180,6 +181,7 @@ func syncOnce(peerID string) error {
 			if _, err := service.handleGossipDriverEvent(ctx, hostEvent); err != nil {
 				return err
 			}
+			service.flushRevocationCleanup()
 		case <-quiet:
 			return nil
 		}

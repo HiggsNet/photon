@@ -20,13 +20,6 @@ func (d *Daemon) firewallReconcileInterval() time.Duration {
 	return defaultFirewallReconcileInterval
 }
 
-func nextFirewallReconcileTime(now time.Time, interval time.Duration) time.Time {
-	if interval <= 0 {
-		return time.Time{}
-	}
-	return now.Add(interval)
-}
-
 // reconcileFirewall is the daemon single-writer firewall reconcile entry point.
 // It computes the desired state from verified active state + local config,
 // diffs against observed owned objects, and applies the plan via the driver.

@@ -287,6 +287,7 @@ func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
 	service.notifyStateChanged()
+	service.processEvents(context.Background(), nil)
 
 	latestLinks, latestReconcile := readTestIPsecObservation(service)
 	if len(latestLinks) != 1 {
@@ -305,6 +306,7 @@ func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 	}
 
 	service.notifyStateChanged()
+	service.processEvents(context.Background(), nil)
 	reloadedLinks, reloadedReconcile := readTestIPsecObservation(service)
 	if len(reloadedLinks) != 1 {
 		t.Fatalf("second link instances len = %d, want 1", len(reloadedLinks))
@@ -562,6 +564,7 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 	}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	service.notifyStateChanged()
+	service.processEvents(context.Background(), nil)
 
 	common := service.State.Common.ReadView()
 	persistedRuntime := service.State.ReadLinux()
@@ -589,6 +592,7 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 	service = newTestDaemonFromOwners(rt, common.State, common.Gossip, persistedRuntime, config, time.Second)
 	service.linuxObservation.replaceIPsec(latestLinks, latestReconcile)
 	service.notifyStateChanged()
+	service.processEvents(context.Background(), nil)
 
 	rotatedLinks, rotatedReconcile := readTestIPsecObservation(service)
 	for _, v := range rotatedLinks {
@@ -615,64 +619,73 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 }
 
 func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
-	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	now := time.Unix(4150, 0)
-	addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
-	appConfig := defaultAppConfig()
-	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
-		ID:                 "main",
-		Provider:           ipsec.ProviderStrongSwan,
-		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "photontesth2", Create: true},
-		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
-		AddressSourceOrder: []string{ipsec.SourceManualAddress},
-		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
-	}}
-	rt := &testApp{Config: testConfigWithStatePath(appConfig,
-		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
-	}
-	driver := &countingIPsecDriver{}
-	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-	installTestIPsecDrivers(service, driver, driver)
+	for _, mode := range []string{"queued", "received"} {
+		t.Run(mode, func(t *testing.T) {
+			verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+			now := time.Unix(4150, 0)
+			addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+			appConfig := defaultAppConfig()
+			appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
+				ID:                 "main",
+				Provider:           ipsec.ProviderStrongSwan,
+				NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "photontesth2", Create: true},
+				DefaultPathMode:    ipsec.PathModeFamilyRedundant,
+				AddressSourceOrder: []string{ipsec.SourceManualAddress},
+				ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
+			}}
+			rt := &testApp{Config: testConfigWithStatePath(appConfig,
+				filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
+			}
+			driver := &countingIPsecDriver{}
+			service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+			installTestIPsecDrivers(service, driver, driver)
 
-	service.Events <- daemonEvent{
-		Type: daemonEventCommonMutation,
-		CommonIntent: corestate.PutRecordIntent{
-			Zone:  "node-b.catofes.",
-			Key:   "coalesce-a",
-			Value: []byte("a"),
-			Type:  "policy.string",
-		},
-	}
-	service.Events <- daemonEvent{
-		Type: daemonEventCommonMutation,
-		CommonIntent: corestate.PutRecordIntent{
-			Zone:  "node-b.catofes.",
-			Key:   "coalesce-b",
-			Value: []byte("b"),
-			Type:  "policy.string",
-		},
-	}
+			service.Events <- daemonEvent{
+				Type: daemonEventCommonMutation,
+				CommonIntent: corestate.PutRecordIntent{
+					Zone:  "node-b.catofes.",
+					Key:   "coalesce-a",
+					Value: []byte("a"),
+					Type:  "policy.string",
+				},
+			}
+			service.Events <- daemonEvent{
+				Type: daemonEventCommonMutation,
+				CommonIntent: corestate.PutRecordIntent{
+					Zone:  "node-b.catofes.",
+					Key:   "coalesce-b",
+					Value: []byte("b"),
+					Type:  "policy.string",
+				},
+			}
 
-	syncNow, shutdown, ipsecFlushed, _, _ := service.processEvents(context.Background())
-	if !syncNow || shutdown {
-		t.Fatalf("syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
-	}
-	if !ipsecFlushed {
-		t.Fatalf("ipsecFlushed = false, want true")
-	}
-	if driver.listCalls != 1 {
-		t.Fatalf("ListSAs calls = %d, want 1", driver.listCalls)
-	}
-	if len(driver.Connections) != 1 {
-		t.Fatalf("connections = %d, want one coalesced apply", len(driver.Connections))
-	}
-	common := service.State.Common.ReadView()
-	_, latestReconcile := readTestIPsecObservation(service)
-	if common.State.Network.Zones["node-b.catofes."].Records["coalesce-a"] == nil || common.State.Network.Zones["node-b.catofes."].Records["coalesce-b"] == nil {
-		t.Fatalf("queued record puts were not both persisted")
-	}
-	if latestReconcile == nil || len(latestReconcile.Actions) != 1 || latestReconcile.Actions[0].Action != ipsec.ReconcileActionCreate {
-		t.Fatalf("ipsec reconcile = %+v, want one create", latestReconcile)
+			var first *daemonEvent
+			if mode == "received" {
+				event := <-service.Events
+				first = &event
+			}
+			syncNow, shutdown, ipsecFlushed, _, _ := service.processEvents(context.Background(), first)
+			if !syncNow || shutdown {
+				t.Fatalf("syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
+			}
+			if !ipsecFlushed {
+				t.Fatalf("ipsecFlushed = false, want true")
+			}
+			if driver.listCalls != 1 {
+				t.Fatalf("ListSAs calls = %d, want 1", driver.listCalls)
+			}
+			if len(driver.Connections) != 1 {
+				t.Fatalf("connections = %d, want one coalesced apply", len(driver.Connections))
+			}
+			common := service.State.Common.ReadView()
+			_, latestReconcile := readTestIPsecObservation(service)
+			if common.State.Network.Zones["node-b.catofes."].Records["coalesce-a"] == nil || common.State.Network.Zones["node-b.catofes."].Records["coalesce-b"] == nil {
+				t.Fatalf("queued record puts were not both persisted")
+			}
+			if latestReconcile == nil || len(latestReconcile.Actions) != 1 || latestReconcile.Actions[0].Action != ipsec.ReconcileActionCreate {
+				t.Fatalf("ipsec reconcile = %+v, want one create", latestReconcile)
+			}
+		})
 	}
 }
 
@@ -699,7 +712,7 @@ func TestDaemonVICILifecycleEventsOnlyTriggerCoalescedIPsecReconcile(t *testing.
 	service.Events <- daemonEvent{Type: daemonEventIPsecLifecycle, VICIEvent: ipsec.VICIEvent{Name: "child-updown", Connection: "ipsec-main-ab", ChildSA: "ipsec-main-ab-child", Up: true, XFRMIfID: 77}}
 	service.Events <- daemonEvent{Type: daemonEventIPsecLifecycle, VICIEvent: ipsec.VICIEvent{Name: "child-updown", Connection: "ipsec-main-ab", ChildSA: "ipsec-main-ab-child", Up: false, XFRMIfID: 77}}
 
-	syncNow, shutdown, ipsecFlushed, _, _ := service.processEvents(context.Background())
+	syncNow, shutdown, ipsecFlushed, _, _ := service.processEvents(context.Background(), nil)
 	if syncNow || shutdown {
 		t.Fatalf("syncNow/shutdown = %v/%v, want false/false", syncNow, shutdown)
 	}
@@ -746,15 +759,5 @@ func TestDaemonIPsecReconcileInterval(t *testing.T) {
 	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{slowGroup, fastGroup}
 	if interval := service.ipsecReconcileInterval(); interval != 5*time.Second {
 		t.Fatalf("minimum interval = %s, want 5s", interval)
-	}
-}
-
-func TestNextIPsecReconcileTime(t *testing.T) {
-	now := time.Unix(4200, 0)
-	if next := nextIPsecReconcileTime(now, 0); !next.IsZero() {
-		t.Fatalf("next disabled = %s, want zero", next)
-	}
-	if next := nextIPsecReconcileTime(now, 30*time.Second); !next.Equal(now.Add(30 * time.Second)) {
-		t.Fatalf("next = %s, want %s", next, now.Add(30*time.Second))
 	}
 }

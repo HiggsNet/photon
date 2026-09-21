@@ -25,6 +25,13 @@ type routeMutationRequest struct {
 	DryRun bool          `json:"dry_run,omitempty"`
 }
 
+func commonRouteIntent(request routeMutationRequest) corestate.LocalIntent {
+	if request.Active {
+		return corestate.AnnounceRouteIntent{Zone: request.Zone, Prefix: request.Prefix}
+	}
+	return corestate.WithdrawRouteIntent{Zone: request.Zone, Prefix: request.Prefix}
+}
+
 func announceRoute(path zone.ZonePath, prefix string, direct bool) error {
 	config, err := loadAppConfig()
 	if err != nil {

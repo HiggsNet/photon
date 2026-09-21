@@ -143,9 +143,7 @@ func (d *Daemon) observeSyncEventResult(result corehost.GossipEventResult) bool 
 			}
 		}
 		if result.NetworkChanged {
-			if transport != nil {
-				d.refreshGossipDiscovery()
-			}
+			d.refreshGossipDiscovery()
 			d.notifyStateChanged()
 		}
 	}

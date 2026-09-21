@@ -10,6 +10,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	photonservice "github.com/HiggsNet/photon/pkg/service"
 )
 
@@ -46,6 +47,17 @@ const (
 	serviceOperationPublish  = "publish"
 	serviceOperationWithdraw = "withdraw"
 )
+
+func commonServiceIntent(request serviceMutationRequest) (corestate.LocalIntent, error) {
+	switch request.Operation {
+	case serviceOperationPublish:
+		return corestate.PublishSOCKS5Intent{Endpoints: append([]photonservice.SOCKS5Endpoint(nil), request.Endpoints...)}, nil
+	case serviceOperationWithdraw:
+		return corestate.WithdrawSOCKS5Intent{}, nil
+	default:
+		return nil, fmt.Errorf("unsupported service operation %q", request.Operation)
+	}
+}
 
 func publishSOCKS5Endpoints(endpoints []photonservice.SOCKS5Endpoint, direct bool) error {
 	config, err := loadAppConfig()

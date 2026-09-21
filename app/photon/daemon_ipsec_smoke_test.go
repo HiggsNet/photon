@@ -882,7 +882,9 @@ func TestDaemonDryRunABIPsecSmokeCoversBringupAndSAObservation(t *testing.T) {
 	installTestIPsecDrivers(serviceB, driverB, driverB)
 
 	serviceA.notifyStateChanged()
+	serviceA.processEvents(context.Background(), nil)
 	serviceB.notifyStateChanged()
+	serviceB.processEvents(context.Background(), nil)
 
 	commonA := serviceA.State.Common.ReadView()
 	latestALinks, latestAReconcile := readTestIPsecObservation(serviceA)
@@ -906,7 +908,9 @@ func TestDaemonDryRunABIPsecSmokeCoversBringupAndSAObservation(t *testing.T) {
 	driverA.sas = []ipsec.SAState{observedSAForSpec(specA, "10.44.0.1:500", "203.0.113.10:500", 1001)}
 	driverB.sas = []ipsec.SAState{observedSAForSpec(specB, "10.44.0.2:500", "203.0.113.20:500", 1002)}
 	serviceA.notifyStateChanged()
+	serviceA.processEvents(context.Background(), nil)
 	serviceB.notifyStateChanged()
+	serviceB.processEvents(context.Background(), nil)
 
 	latestALinks, latestAReconcile = readTestIPsecObservation(serviceA)
 	latestBLinks, latestBReconcile = readTestIPsecObservation(serviceB)

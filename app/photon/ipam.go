@@ -38,6 +38,30 @@ const (
 	ipamOperationAssignmentRevoke = "assignment_revoke"
 )
 
+// commonIPAMIntent is the thin control-adapter boundary. It translates the
+// wire request into one explicit public Store intent and performs no state
+// reads or semantic validation of its own.
+func commonIPAMIntent(request ipamMutationRequest) (corestate.LocalIntent, error) {
+	switch request.Operation {
+	case ipamOperationPoolCreate:
+		return corestate.PutIPAMPoolIntent{
+			Zone: request.Zone, Prefix: request.Prefix, DelegatedTo: request.Target,
+		}, nil
+	case ipamOperationPoolRevoke:
+		return corestate.RevokeIPAMPoolIntent{Zone: request.Zone, Prefix: request.Prefix}, nil
+	case ipamOperationAssignmentCreate:
+		return corestate.PutIPAMAssignmentIntent{
+			Zone: request.Zone, Prefix: request.Prefix, AssignedTo: request.Target, Shared: request.Shared, Tag: request.Tag,
+		}, nil
+	case ipamOperationAssignmentRevoke:
+		return corestate.RevokeIPAMAssignmentIntent{
+			Zone: request.Zone, Prefix: request.Prefix, AssignedTo: request.Target,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported IPAM operation %q", request.Operation)
+	}
+}
+
 func cmdIPAM() *cli.Command {
 	return &cli.Command{
 		Name:  "ipam",
