@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/ed25519"
+	"encoding/base64"
 	"errors"
 	"fmt"
 
@@ -19,7 +20,7 @@ func rootPubkey() error {
 		if len(publicKey) == 0 {
 			return errors.New("root authority has no public key")
 		}
-		fmt.Println(formatPublicKey(publicKey))
+		fmt.Println(base64.StdEncoding.EncodeToString(publicKey))
 		return nil
 	}
 	common, _, err := loadOfflineOwnerViews(config)
@@ -33,6 +34,6 @@ func rootPubkey() error {
 	if root == nil || root.Authority == nil || len(root.Authority.Keys) == 0 {
 		return errors.New("root authority has no public key")
 	}
-	fmt.Println(formatPublicKey(root.Authority.Keys[0].Key))
+	fmt.Println(base64.StdEncoding.EncodeToString(root.Authority.Keys[0].Key))
 	return nil
 }

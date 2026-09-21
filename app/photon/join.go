@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -233,7 +234,7 @@ func acceptJoinBundle(bundleInput string, keyPath string, direct bool) error {
 	}
 	if controlled {
 		fmt.Printf("joined %s via daemon in %s\n", bundle.Zone, config.StatePath)
-		fmt.Printf("trusted root public key: %s\n", formatPublicKey(bundle.RootPublicKey))
+		fmt.Printf("trusted root public key: %s\n", base64.StdEncoding.EncodeToString(bundle.RootPublicKey))
 		return nil
 	}
 	if !direct {
@@ -244,7 +245,7 @@ func acceptJoinBundle(bundleInput string, keyPath string, direct bool) error {
 		return err
 	}
 	fmt.Printf("joined %s in %s\n", result.Zone, config.StatePath)
-	fmt.Printf("trusted root public key: %s\n", formatPublicKey(result.RootPublicKey))
+	fmt.Printf("trusted root public key: %s\n", base64.StdEncoding.EncodeToString(result.RootPublicKey))
 	return nil
 }
 

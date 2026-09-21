@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/ed25519"
+	"encoding/base64"
 	"errors"
 	bolt "go.etcd.io/bbolt"
 	"os"
@@ -132,7 +133,7 @@ func TestDebugDBReportsConfigErrorsAndStillReadsWithoutWriting(t *testing.T) {
 	t.Setenv("PHOTON_CONFIG", configPath)
 	t.Setenv("PHOTON_STATE", rt.Config.StatePath)
 	for _, tc := range []struct{ name, input, diagnostic string }{
-		{"wrong root", "trusted_root_public_key: " + formatPublicKey(wrong) + "\n", "does not match persisted state"},
+		{"wrong root", "trusted_root_public_key: " + base64.StdEncoding.EncodeToString(wrong) + "\n", "does not match persisted state"},
 		{"invalid config", "unknown_field: true\n", "cannot load configuration"},
 		{"missing config", "", "cannot load configuration"},
 	} {

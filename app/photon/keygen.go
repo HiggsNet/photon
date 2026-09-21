@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/ed25519"
+	"encoding/base64"
 	"fmt"
 )
 
@@ -19,6 +20,6 @@ func keygen(path string) error {
 		return err
 	}
 	fmt.Printf("wrote key: %s\n", path)
-	fmt.Printf("public key: %s\n", formatPublicKey(pub))
+	fmt.Printf("public key: %s\n", base64.StdEncoding.EncodeToString(pub))
 	return nil
 }

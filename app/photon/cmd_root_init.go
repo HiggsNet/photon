@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/ed25519"
+	"encoding/base64"
 	"fmt"
 	"github.com/HiggsNet/photon/internal/photonlinux"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
@@ -23,7 +24,7 @@ func runRootInit() error {
 		return err
 	}
 	fmt.Printf("initialized root in %s\n", config.StatePath)
-	fmt.Printf("root public key: %s\n", formatPublicKey(rootPub))
+	fmt.Printf("root public key: %s\n", base64.StdEncoding.EncodeToString(rootPub))
 	return nil
 }
 

@@ -1,18 +1,12 @@
 package main
 
 import (
-	"crypto/ed25519"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 
 	"github.com/HiggsNet/photon/pkg/core/share"
 )
-
-func formatPublicKey(pub ed25519.PublicKey) string {
-	return base64.StdEncoding.EncodeToString(pub)
-}
 
 func readBase64JSONOrJSON(input string, out any) error {
 	if data, err := os.ReadFile(input); err == nil {
