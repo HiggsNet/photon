@@ -298,11 +298,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
 		}
-		report, err := buildRouteShowReportFromState(view.State, d.now(), zone.ZonePath(request.Zone), request.IncludeAll)
-		if err != nil {
-			writeControlResponse(conn, controlError(err))
-			return
-		}
+		report := inspect.BuildRouteShowReport(view.State, d.now(), zone.ZonePath(request.Zone), request.IncludeAll)
 		writeCanonicalView(conn, *report)
 	case "ipam_assignments_view":
 		view := d.State.Common.ReadView()

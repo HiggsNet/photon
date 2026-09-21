@@ -6,7 +6,9 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
@@ -315,4 +317,106 @@ func ComparePrefixStrings(a, b string) int {
 	}
 	ap, bp = ap.Masked(), bp.Masked()
 	return cmp.Or(ap.Addr().Compare(bp.Addr()), cmp.Compare(ap.Bits(), bp.Bits()))
+}
+
+// BuildRouteShowReport projects announcements in prefix, zone, and record-key order.
+func BuildRouteShowReport(verified *corestate.VerifiedState, now time.Time, filterZone zone.ZonePath, includeAll bool) *RouteShowReport {
+	report := &RouteShowReport{
+		ManagedZone:   string(verified.ManagedZone),
+		Announcements: []RouteShowRow{},
+	}
+	if verified.Network == nil {
+		return report
+	}
+	ars, arsErr := routing.BuildAuthorizedRouteSet(verified.Network, now)
+
+	for path, zs := range verified.Network.Zones {
+		if filterZone != "" && path != filterZone {
+			continue
+		}
+		if zs == nil {
+			continue
+		}
+		for key, rec := range zs.Records {
+			if !strings.HasPrefix(key, routing.RecordKeyPrefixRoutes) {
+				continue
+			}
+			ann, err := routing.ParseRouteAnnouncementRecord(rec)
+			if err != nil {
+				continue
+			}
+			if !includeAll && !ann.Active {
+				continue
+			}
+			prefix := ann.Prefix
+			parsed, parseErr := netip.ParsePrefix(prefix)
+			if parseErr == nil {
+				parsed = parsed.Masked()
+				prefix = parsed.String()
+			}
+			isAuthorized, isShared := false, false
+			tag := ""
+			if arsErr == nil && ars != nil && parseErr == nil {
+				entry, ok := ars.Announced[path][parsed]
+				isAuthorized = ok
+				if entry != nil {
+					isShared = entry.SharedAssignment
+					tag = entry.AssignmentTag
+				}
+			}
+			if !isShared {
+				isShared = routeUsesSharedAssignment(ars, path, prefix)
+			}
+			report.Announcements = append(report.Announcements, RouteShowRow{
+				Zone:       string(path),
+				Prefix:     prefix,
+				Tag:        tag,
+				Shared:     isShared,
+				Active:     ann.Active,
+				Controller: ann.Controller,
+				Authorized: isAuthorized,
+				Version:    rec.Version,
+				Key:        key,
+			})
+		}
+	}
+	sortRouteShowRows(report.Announcements)
+	return report
+}
+
+func sortRouteShowRows(rows []RouteShowRow) {
+	sort.Slice(rows, func(i, j int) bool {
+		a := rows[i]
+		b := rows[j]
+		if cmp := ComparePrefixStrings(a.Prefix, b.Prefix); cmp != 0 {
+			return cmp < 0
+		}
+		if a.Zone != b.Zone {
+			return ZonePathLess(a.Zone, b.Zone)
+		}
+		return a.Key < b.Key
+	})
+}
+
+func routeUsesSharedAssignment(ars *routing.AuthorizedRouteSet, path zone.ZonePath, prefix string) bool {
+	if ars == nil {
+		return false
+	}
+	routePrefix, err := netip.ParsePrefix(prefix)
+	if err != nil {
+		return false
+	}
+	for _, ancestor := range path.Ancestors() {
+		for _, entry := range ars.AllAssignments {
+			if entry == nil || entry.Source != ancestor || entry.Prefix.Bits() > routePrefix.Bits() || !entry.Prefix.Contains(routePrefix.Masked().Addr()) {
+				continue
+			}
+			usable := routing.IsZoneAncestor(entry.AssignedTo, path) ||
+				(routing.IsZoneAncestor(path, entry.AssignedTo) && entry.Source == path)
+			if usable {
+				return entry.Shared
+			}
+		}
+	}
+	return false
 }

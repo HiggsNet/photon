@@ -1,11 +1,13 @@
 package text
 
 import (
+	"fmt"
 	"io"
 	"net/netip"
 	"slices"
 	"sort"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 )
@@ -169,4 +171,120 @@ func BirdRoutesMatchingPrefix(dump *inspect.RoutesResponse, prefix string) []Bir
 		return matches[i].Route.Iface < matches[j].Route.Iface
 	})
 	return matches
+}
+
+// WriteRouteShowReport renders a canonically sorted route announcement report.
+func WriteRouteShowReport(w io.Writer, report *inspect.RouteShowReport, includeAll bool, filter string, verbose bool) error {
+	if report == nil {
+		report = &inspect.RouteShowReport{}
+	}
+	filter = strings.ToLower(strings.TrimSpace(filter))
+	rows := make([]inspect.RouteShowRow, 0, len(report.Announcements))
+	for _, row := range report.Announcements {
+		mode := "non-shared"
+		if row.Shared {
+			mode = "shared"
+		}
+		searchable := strings.Join([]string{
+			row.Prefix,
+			row.Zone,
+			row.Tag,
+			routeShowState(row),
+			row.Controller,
+			routeShowAuthorization(row),
+			mode,
+			row.Key,
+		}, " ")
+		if filter == "" || strings.Contains(strings.ToLower(searchable), filter) {
+			rows = append(rows, row)
+		}
+	}
+
+	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	fmt.Fprintf(table, "managed_zone: %s\n", report.ManagedZone)
+	if filter == "" {
+		fmt.Fprintf(table, "announcements: %d\n", len(rows))
+	} else {
+		fmt.Fprintf(table, "announcements: %d/%d\n", len(rows), len(report.Announcements))
+	}
+	nonSharedRows := make([]inspect.RouteShowRow, 0, len(rows))
+	sharedRows := make([]inspect.RouteShowRow, 0, len(rows))
+	for _, row := range rows {
+		if row.Shared {
+			sharedRows = append(sharedRows, row)
+		} else {
+			nonSharedRows = append(nonSharedRows, row)
+		}
+	}
+
+	fmt.Fprintf(table, "non_shared_announcements: %d\n", len(nonSharedRows))
+	if err := printRouteShowRows(table, nonSharedRows, verbose, false); err != nil {
+		return err
+	}
+
+	sharedPrefixes := 0
+	lastPrefix := ""
+	for _, row := range sharedRows {
+		if row.Prefix != lastPrefix {
+			sharedPrefixes++
+			lastPrefix = row.Prefix
+		}
+	}
+	fmt.Fprintf(table, "shared_announcements: %d (%d prefixes)\n", len(sharedRows), sharedPrefixes)
+	if err := printRouteShowRows(table, sharedRows, verbose, true); err != nil {
+		return err
+	}
+	if len(rows) == 0 && !includeAll {
+		fmt.Fprintln(table, "hint: use --all to include withdrawn announcements")
+	}
+	return table.Flush()
+}
+
+func routeShowHeader(verbose bool) []string {
+	if verbose {
+		return []string{"PREFIX", "ZONE", "TAG", "STATE", "AUTHORIZATION", "CONTROLLER", "VERSION", "RECORD"}
+	}
+	return []string{"PREFIX", "ZONE", "TAG", "STATE", "AUTHORIZATION"}
+}
+
+func routeShowCells(prefix string, row inspect.RouteShowRow, verbose bool) []string {
+	controller := "explicit"
+	if row.Controller != "" {
+		controller = row.Controller
+	}
+	if verbose {
+		return []string{prefix, row.Zone, dash(row.Tag), routeShowState(row), routeShowAuthorization(row), controller, fmt.Sprint(row.Version), row.Key}
+	}
+	return []string{prefix, row.Zone, dash(row.Tag), routeShowState(row), routeShowAuthorization(row)}
+}
+
+func printRouteShowRows(w io.Writer, routeRows []inspect.RouteShowRow, verbose, groupPrefix bool) error {
+	rows := [][]string{routeShowHeader(verbose)}
+	lastPrefix := ""
+	for _, row := range routeRows {
+		prefix := row.Prefix
+		if groupPrefix {
+			if prefix == lastPrefix {
+				prefix = ""
+			} else {
+				lastPrefix = prefix
+			}
+		}
+		rows = append(rows, routeShowCells(prefix, row, verbose))
+	}
+	return WriteAlignedRows(w, rows, 1)
+}
+
+func routeShowState(row inspect.RouteShowRow) string {
+	if row.Active {
+		return "active"
+	}
+	return "withdrawn"
+}
+
+func routeShowAuthorization(row inspect.RouteShowRow) string {
+	if row.Authorized {
+		return "authorized"
+	}
+	return "unauthorized"
 }
