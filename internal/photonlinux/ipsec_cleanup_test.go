@@ -28,6 +28,9 @@ func TestCleanupLinkInstancesTearsDownOwnedResourcesAndIgnoresMissing(t *testing
 	if len(driver.Terminated) != 1 || driver.Terminated[0] != spec.TransportID {
 		t.Fatalf("terminated = %v", driver.Terminated)
 	}
+	if len(driver.Unloaded) != 1 || driver.Unloaded[0] != spec.TransportID {
+		t.Fatalf("unloaded = %v", driver.Unloaded)
+	}
 	if len(driver.DeletedIFs) != 1 || driver.DeletedIFs[0] != spec.InterfaceName {
 		t.Fatalf("deleted interfaces = %v", driver.DeletedIFs)
 	}

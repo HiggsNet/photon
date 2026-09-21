@@ -70,8 +70,10 @@ func TestPeerLifecycleSuppressionTearsDownAndSuccessfulSyncRestoresLink(t *testi
 		AddressSourceOrder: []string{ipsec.SourceManualAddress},
 		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
 	}}
-	rt := &testApp{Config: config, Clock: func() time.Time { return now }}
+	clock := newFakeClock(now)
+	rt := &testApp{Config: config, Clock: clock.Now}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
+	defer service.gossipDriver.Stop()
 	if _, err := service.State.Common.UpdatePeerCheckpoint(context.Background(), "node-b.catofes.", corestate.PeerCheckpointPatch{
 		LastSyncUnix: corestate.PatchField[int64]{Set: true, Value: now.Unix()},
 	}); err != nil {
@@ -84,7 +86,8 @@ func TestPeerLifecycleSuppressionTearsDownAndSuccessfulSyncRestoresLink(t *testi
 		t.Fatalf("initial links = %+v, want one", initialLinks)
 	}
 
-	now = now.Add(config.PeerLifecycle.CleanupAfter + time.Second)
+	clock.Advance(config.PeerLifecycle.CleanupAfter + time.Second)
+	now = clock.Now()
 	service.notifyStateChanged()
 	service.processEvents(context.Background(), nil)
 	common := service.State.Common.ReadView()

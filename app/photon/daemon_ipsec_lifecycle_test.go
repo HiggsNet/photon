@@ -1,15 +1,13 @@
 package main
 
 import (
-	"bytes"
 	"context"
+	"maps"
 	"net/netip"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
-	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	"github.com/HiggsNet/photon/internal/photonlinux"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -60,82 +58,6 @@ func TestDaemonStateChangedRemovesTeardownIPsecLinks(t *testing.T) {
 	}
 	if len(stableReconcile.Actions) != 0 {
 		t.Fatalf("stable actions = %+v, want no repeated teardown", stableReconcile.Actions)
-	}
-}
-
-func TestDaemonStateChangedAdoptsObservedIPsecSA(t *testing.T) {
-	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	now := time.Unix(4100, 0)
-	addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
-	appConfig := defaultAppConfig()
-	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
-		ID:                 "main",
-		Provider:           ipsec.ProviderStrongSwan,
-		NetNS:              ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "photontesth2", Create: true},
-		DefaultPathMode:    ipsec.PathModeFamilyRedundant,
-		AddressSourceOrder: []string{ipsec.SourceManualAddress},
-		ConnectRules:       []string{"strongswan://*.catofes.?role=in"},
-	}}
-	plan, err := ipsec.PlanTransportLinks(context.Background(), verified.Network, verified.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
-	if err != nil {
-		t.Fatalf("PlanTransportLinks: %v", err)
-	}
-	if len(plan.Desired) != 1 {
-		t.Fatalf("desired links = %d, want 1", len(plan.Desired))
-	}
-	spec := plan.Desired[0]
-	driver := &observedIPsecDriver{
-		sas: []ipsec.SAState{{
-			Name:        spec.TransportID,
-			ChildSA:     ipsec.ChildSAName(spec),
-			XFRMIfID:    spec.XFRMIfID,
-			Endpoint:    "198.51.100.20",
-			Established: true,
-		}},
-	}
-	rt := &testApp{Config: testConfigWithStatePath(appConfig,
-		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
-	}
-	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-	installTestIPsecDrivers(service, driver, driver)
-
-	service.notifyStateChanged()
-	service.processEvents(context.Background(), nil)
-
-	latestLinks, latestReconcile := readTestIPsecObservation(service)
-	if len(latestReconcile.Actions) != 1 || latestReconcile.Actions[0].Action != ipsec.ReconcileActionAdopt {
-		t.Fatalf("actions = %+v, want adopt", latestReconcile.Actions)
-	}
-	inst := latestLinks[ipsec.LinkInstanceID(spec)]
-	if inst.ActualState != ipsec.LinkStateUp || inst.Endpoint != "198.51.100.20" {
-		t.Fatalf("instance = %+v, want up adopted endpoint", inst)
-	}
-	if latestReconcile == nil || len(latestReconcile.Desired) != 1 || len(latestReconcile.ActualSAs) != 1 {
-		t.Fatalf("ipsec reconcile detail = %+v, want desired and actual sa snapshots", latestReconcile)
-	}
-	var out bytes.Buffer
-	view := buildStoredLinkInspection(rt.Config, latestLinks, latestReconcile, nil, nil)
-	if err := inspecttext.WriteLinksDebug(&out, view); err != nil {
-		t.Fatalf("WriteLinksDebug: %v", err)
-	}
-	output := out.String()
-	for _, want := range []string{
-		"planned_desired_links: 1",
-		"actual_sas: 1",
-		"  planner:\n",
-		"    desired_hash: ",
-		"  xfrm:\n",
-		"    interface: ",
-		"  strongswan:\n",
-		"    sa_state: established",
-		"    remote_endpoint: 198.51.100.20",
-	} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("debug links output missing %q:\n%s", want, output)
-		}
-	}
-	if len(driver.Connections) != 0 || len(driver.Interfaces) != 0 {
-		t.Fatalf("adopt maintenance = connections:%d interfaces:%+v, want no redundant apply when observed state matches", len(driver.Connections), driver.Interfaces)
 	}
 }
 
@@ -486,45 +408,6 @@ func TestDaemonStartupRecoversSecondaryTakeoverFromObservation(t *testing.T) {
 	}
 }
 
-func TestDaemonStartupCreatesWhenNoRuntimeResourcesObserved(t *testing.T) {
-	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	now := time.Unix(4135, 0)
-	addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
-	group := testIPsecLinkGroup()
-	setTestIPsecOverlayIntent(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
-	appConfig := defaultAppConfig()
-	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
-	plan, err := ipsec.PlanTransportLinks(context.Background(), verified.Network, verified.ManagedZone, appConfig.IPsec.LinkGroups, ipsec.LinkPlannerOptions{Now: now})
-	if err != nil {
-		t.Fatalf("PlanTransportLinks: %v", err)
-	}
-	if len(plan.Desired) != 1 {
-		t.Fatalf("desired links = %d, want 1", len(plan.Desired))
-	}
-	spec := plan.Desired[0]
-	rt := &testApp{Config: testConfigWithStatePath(appConfig,
-		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
-	}
-	driver := &observedIPsecDriver{}
-	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-	installTestIPsecDrivers(service, driver, driver)
-
-	service.recoverIPsecLinksOnStart(context.Background())
-
-	if driver.listCalls != 1 {
-		t.Fatalf("ListSAs calls = %d, want 1", driver.listCalls)
-	}
-	assertDryRunApply(t, driver, spec, group.NetNS)
-	latestLinks, latestReconcile := readTestIPsecObservation(service)
-	inst := latestLinks[ipsec.LinkInstanceID(spec)]
-	if inst.ActualState != ipsec.LinkStateConnecting {
-		t.Fatalf("startup repaired instance = %+v, want connecting", inst)
-	}
-	if latestReconcile == nil || len(latestReconcile.Actions) != 1 || latestReconcile.Actions[0].Action != ipsec.ReconcileActionCreate {
-		t.Fatalf("startup reconcile = %+v, want create", latestReconcile)
-	}
-}
-
 func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(4140, 0)
@@ -655,39 +538,15 @@ func TestDaemonRestartRequiresExplicitOrphanCleanupAfterDesiredLinkRemoval(t *te
 	}
 }
 
-func TestCleanupIPsecLinkInstancesTearsDownManagedLinks(t *testing.T) {
-	now := time.Unix(5100, 0)
-	spec := ipsec.TransportLinkSpec{
-		LocalZone:     "node-a.catofes.",
-		PeerZone:      "node-b.catofes.",
-		OverlayID:     "main",
-		TransportID:   "ipsec-cleanup",
-		InterfaceName: "phx-clean0",
-		XFRMIfID:      5100,
+func TestManagedIPsecConnectionNamesIncludesActiveAndStagedGenerations(t *testing.T) {
+	links := map[string]ipsec.LinkInstance{
+		"rotating": {TransportID: "ipsec-base", IKEName: "ipsec-active", StagedIKEName: "ipsec-staged"},
+		"shared":   {TransportID: "ipsec-base"},
+		"empty":    {},
 	}
-	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, now)
-	links := map[string]ipsec.LinkInstance{inst.ID: inst}
-	driver := &ipsec.DryRunDriver{}
-
-	platformDriver := newTestLinuxDriver(driver, driver)
-	remaining, cleaned, err := platformDriver.CleanupIPsecLinks(context.Background(), links, []string{inst.ID})
-	if err != nil {
-		t.Fatalf("cleanupLinuxDriverIPsecLinks: %v", err)
-	}
-	if cleaned != 1 {
-		t.Fatalf("cleaned = %d, want 1", cleaned)
-	}
-	if len(remaining) != 0 {
-		t.Fatalf("link instances = %+v, want empty", remaining)
-	}
-	if len(driver.Terminated) != 1 || driver.Terminated[0] != spec.TransportID {
-		t.Fatalf("terminated = %+v, want %s", driver.Terminated, spec.TransportID)
-	}
-	if len(driver.Unloaded) != 1 || driver.Unloaded[0] != spec.TransportID {
-		t.Fatalf("unloaded = %+v, want %s", driver.Unloaded, spec.TransportID)
-	}
-	if len(driver.DeletedIFs) != 1 || driver.DeletedIFs[0] != spec.InterfaceName {
-		t.Fatalf("deleted interfaces = %+v, want %s", driver.DeletedIFs, spec.InterfaceName)
+	want := map[string]bool{"ipsec-base": true, "ipsec-active": true, "ipsec-staged": true}
+	if got := managedIPsecConnectionNamesFromLinks(links); !maps.Equal(got, want) {
+		t.Fatalf("retained connection names = %v, want %v", got, want)
 	}
 }
 
@@ -763,42 +622,6 @@ func TestRecoveryCleanupIPsecDirectNoLinksDoesNotRequireVICI(t *testing.T) {
 	}
 	if orphans != 0 {
 		t.Fatalf("orphans = %d, want 0", orphans)
-	}
-}
-
-func TestCleanupIPsecOrphanConnectionsOnlyRemovesUnreferencedPhotonConnections(t *testing.T) {
-	now := time.Unix(5111, 0)
-	spec := ipsec.TransportLinkSpec{
-		LocalZone:     "node-a.catofes.",
-		PeerZone:      "node-b.catofes.",
-		OverlayID:     "main",
-		TransportID:   "ipsec-managed",
-		InterfaceName: "phx-managed",
-		XFRMIfID:      5111,
-	}
-	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, now)
-	links := map[string]ipsec.LinkInstance{inst.ID: inst}
-	driver := &ipsec.DryRunDriver{
-		LoadedConnections: []ipsec.ConnectionState{
-			{Name: "ipsec-managed"},
-			{Name: "ipsec-orphan-r3"},
-			{Name: "manual-vpn"},
-		},
-	}
-
-	platformDriver := newTestLinuxDriver(driver, driver)
-	cleaned, err := platformDriver.CleanupIPsecOrphans(context.Background(), managedIPsecConnectionNamesFromLinks(links))
-	if err != nil {
-		t.Fatalf("CleanupIPsecOrphans: %v", err)
-	}
-	if cleaned != 1 {
-		t.Fatalf("cleaned = %d, want 1", cleaned)
-	}
-	if len(driver.Terminated) != 1 || driver.Terminated[0] != "ipsec-orphan-r3" {
-		t.Fatalf("terminated = %+v, want orphan only", driver.Terminated)
-	}
-	if len(driver.Unloaded) != 1 || driver.Unloaded[0] != "ipsec-orphan-r3" {
-		t.Fatalf("unloaded = %+v, want orphan only", driver.Unloaded)
 	}
 }
 

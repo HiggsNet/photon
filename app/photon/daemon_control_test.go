@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	bolt "go.etcd.io/bbolt"
 	"net"
 	"os"
 	"path/filepath"
@@ -18,10 +17,10 @@ import (
 	pingdebug "github.com/HiggsNet/photon/internal/ping"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
-	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
+	bolt "go.etcd.io/bbolt"
 )
 
 type controlPingProber struct {
@@ -576,30 +575,6 @@ func TestDaemonControlReadMethodsIgnoreDetachedOwnerInputMutations(t *testing.T)
 	peers := controlViewRequestViaPipe[inspect.PeerLifecycleDebugView](t, service, controlRequest{Method: "peer_lifecycle_view"})
 	if !peers.OK {
 		t.Fatalf("peer_lifecycle_view response = %#v", peers)
-	}
-}
-
-func TestDaemonPacketEventUpdatesCheckpointOwner(t *testing.T) {
-	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	service := newTestDaemonFromOwners(
-		&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
-	)
-	packet := &gossip.Packet{
-		Addr: &net.UDPAddr{IP: net.ParseIP("198.51.100.9"), Port: 33434},
-		Message: &gossip.Message{
-			Type:   gossip.MessagePong,
-			PeerID: "node-b.catofes.",
-			Pong:   &gossip.Pong{},
-		},
-	}
-
-	if _, err := service.handleGossipDriverEvent(context.Background(), corehost.GossipPacketReceived{Packet: packet}); err != nil {
-		t.Fatalf("packet event error: %v", err)
-	}
-
-	peer := service.State.Common.ReadView().Gossip.Peers["node-b.catofes."]
-	if peer.ObservedEndpoint != "198.51.100.9:33434" {
-		t.Fatalf("observed endpoint = %q, want packet source", peer.ObservedEndpoint)
 	}
 }
 

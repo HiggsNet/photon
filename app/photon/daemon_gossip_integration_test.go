@@ -4,10 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
-	"github.com/HiggsNet/photon/internal/photonlinux"
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"

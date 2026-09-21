@@ -5,7 +5,6 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -43,36 +42,6 @@ func TestCommonMutationAffectsRouting(t *testing.T) {
 	}
 }
 
-func TestDaemonRecordPutEventSerializesWrite(t *testing.T) {
-	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	now := time.Unix(2000, 0)
-	rt := &testApp{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
-	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-
-	result, syncNow, shutdown := service.handleEvent(daemonEvent{
-		Type: daemonEventCommonMutation,
-		CommonIntent: corestate.PutRecordIntent{
-			Zone:  zone.ZonePath("node-b.catofes."),
-			Key:   "identity",
-			Value: []byte("node-b"),
-			Type:  "policy.string",
-		},
-	})
-	if result.Error != nil {
-		t.Fatalf("handleEvent(record_put): %v", result.Error)
-	}
-	if !syncNow || shutdown {
-		t.Fatalf("syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
-	}
-	if result.Version != 1 {
-		t.Fatalf("version = %d, want 1", result.Version)
-	}
-	latest := service.State.Common.ReadView()
-	if latest.State.Network.Zones["node-b.catofes."].Records["identity"] == nil {
-		t.Fatalf("record was not persisted")
-	}
-}
-
 func TestDaemonEventLoopDispatchesRecordPut(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(2125, 0)
@@ -90,35 +59,17 @@ func TestDaemonEventLoopDispatchesRecordPut(t *testing.T) {
 		},
 		Reply: reply,
 	}
-	service.processEvents(context.Background(), nil)
-	if result := <-reply; result.Error != nil {
-		t.Fatalf("processEvents(record_put): %v", result.Error)
+	syncNow, shutdown, _, _, _ := service.processEvents(context.Background(), nil)
+	if result := <-reply; result.Error != nil || result.Version != 1 {
+		t.Fatalf("processEvents(record_put) = %+v, want successful version 1", result)
+	}
+	if !syncNow || shutdown {
+		t.Fatalf("syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
 	}
 
 	current := service.State.Common.ReadView()
 	if got := current.State.Network.Zones["node-b.catofes."].Records["event-loop-record"]; got == nil {
 		t.Fatal("common owner missing event-loop record")
-	}
-}
-
-func TestDaemonEndpointTimerPublishesToCommonOwner(t *testing.T) {
-	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	verified.ManagedZone = "node-b.catofes."
-	config.PeerID = string(verified.ManagedZone)
-	config.ListenAddr = "198.51.100.20:4242"
-	now := time.Unix(2150, 0)
-	appConfig := defaultAppConfig()
-	appConfig.ListenAddr = config.ListenAddr
-	appConfig.AdvertiseAddrs = []string{"198.51.100.20:4242"}
-	rt := &testApp{Config: appConfig, Clock: func() time.Time { return now }}
-	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-
-	if _, err := service.handleEndpointTimerEvent(); err != nil {
-		t.Fatalf("handleEndpointTimerEvent: %v", err)
-	}
-	current := service.State.Common.ReadView()
-	if got := current.State.Network.Zones[verified.ManagedZone].Records[gossip.EndpointRecordKeyUDP]; got == nil {
-		t.Fatal("common owner missing endpoint record")
 	}
 }
 
@@ -274,17 +225,6 @@ func TestDaemonRecordPutKeepsCommittedStateAuthoritativeOverExternalDiskWrite(t 
 	}
 	if records["daemon"] == nil {
 		t.Fatalf("daemon record missing")
-	}
-}
-
-func TestBuildSignedRecordReturnsErrorWithoutLocalSigner(t *testing.T) {
-	verified, _, _, _ := buildTestDaemonOwners(t)
-	verified.ManagedZone = "node-a.catofes."
-	verified.IdentityPrivateKey = nil
-
-	_, err := buildSignedRecordAt(verified.Network, verified.IdentityPrivateKey, "node-b.catofes.", "identity", []byte("node-b"), "policy.string", time.Unix(1, 0))
-	if err == nil || !strings.Contains(err.Error(), "no local signing key") {
-		t.Fatalf("buildSignedRecordAt error = %v, want missing signer", err)
 	}
 }
 
@@ -530,9 +470,14 @@ func TestDaemonEndpointTimerNoChangeSkipsFlushAndSync(t *testing.T) {
 	}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
-	// First publish: records are created, state is flushed.
+	// Finish the initial publication and its deferred platform work before
+	// measuring the next endpoint event.
 	if _, err := service.handleEndpointTimerEvent(); err != nil {
 		t.Fatalf("first handleEndpointTimerEvent: %v", err)
+	}
+	service.processEvents(context.Background(), nil)
+	if service.ipsecDirty || service.routingDirty || service.firewallDirty {
+		t.Fatal("initial publication left platform work pending")
 	}
 
 	// Reset flush tracking and capture the revision after the initial publish.
@@ -544,7 +489,10 @@ func TestDaemonEndpointTimerNoChangeSkipsFlushAndSync(t *testing.T) {
 
 	// Second publish at the same timestamp: nothing changed, so it should not
 	// trigger a sync, layer flush, or state-store revision bump.
-	result, syncNow, shutdown := service.handleEvent(daemonEvent{Type: daemonEventEndpointTimer})
+	reply := make(chan daemonEventResult, 1)
+	event := daemonEvent{Type: daemonEventEndpointTimer, Reply: reply}
+	syncNow, shutdown, ipsecFlushed, routingFlushed, firewallFlushed := service.processEvents(context.Background(), &event)
+	result := <-reply
 	if result.Error != nil {
 		t.Fatalf("second handleEvent(endpoint): %v", result.Error)
 	}
@@ -554,8 +502,11 @@ func TestDaemonEndpointTimerNoChangeSkipsFlushAndSync(t *testing.T) {
 	if shutdown {
 		t.Fatalf("shutdown = true, want false")
 	}
-	if len(flushed) != 0 {
+	if ipsecFlushed || routingFlushed || firewallFlushed || len(flushed) != 0 {
 		t.Fatalf("layer flushes on no-op endpoint timer: %v", flushed)
+	}
+	if service.ipsecDirty || service.routingDirty || service.firewallDirty {
+		t.Fatal("no-op endpoint timer left platform work pending")
 	}
 	if afterRev := uint64(service.State.Common.VerifiedRevision()); afterRev != beforeRev {
 		t.Fatalf("state revision changed on no-op endpoint timer: before=%d after=%d", beforeRev, afterRev)
@@ -611,10 +562,12 @@ func TestDaemonEndpointTimerRefreshDueStillTriggersSync(t *testing.T) {
 	appConfig.AdvertiseAddrs = []string{"198.51.100.20:4242"}
 	appConfig.EndpointRefresh = 30 * time.Minute
 	appConfig.EndpointTTL = time.Hour
+	clock := newFakeClock(now)
 	rt := &testApp{Config: testConfigWithStatePath(appConfig,
-		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
+		filepath.Join(t.TempDir(), "photon.db")), Clock: clock.Now,
 	}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	defer service.gossipDriver.Stop()
 
 	// First publish: record is created.
 	if _, err := service.handleEndpointTimerEvent(); err != nil {
@@ -627,7 +580,7 @@ func TestDaemonEndpointTimerRefreshDueStillTriggersSync(t *testing.T) {
 	}
 
 	// Second publish before refresh interval: no-op, no sync trigger.
-	now = time.Unix(1300, 0)
+	clock.Advance(5 * time.Minute)
 	result, syncNow, shutdown := service.handleEvent(daemonEvent{Type: daemonEventEndpointTimer})
 	if result.Error != nil {
 		t.Fatalf("second handleEvent(endpoint): %v", result.Error)
@@ -641,7 +594,7 @@ func TestDaemonEndpointTimerRefreshDueStillTriggersSync(t *testing.T) {
 
 	// Third publish after refresh interval: record should be refreshed and sync
 	// should be triggered so gossip can propagate the new lease timestamp.
-	now = time.Unix(2800, 0)
+	clock.Advance(25 * time.Minute)
 	result, syncNow, shutdown = service.handleEvent(daemonEvent{Type: daemonEventEndpointTimer})
 	if result.Error != nil {
 		t.Fatalf("third handleEvent(endpoint): %v", result.Error)

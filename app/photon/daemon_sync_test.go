@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
-	"github.com/HiggsNet/photon/internal/photonlinux"
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )

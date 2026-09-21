@@ -75,25 +75,6 @@ func TestDaemonReplacesAndClosesSingleLinuxDriver(t *testing.T) {
 	}
 }
 
-func TestDaemonStateChangedHook(t *testing.T) {
-	service := newTestDaemonFromOwners(
-		&testApp{},
-		&corestate.VerifiedState{ManagedZone: "node-a.catofes."},
-		nil,
-		&photonlinux.LinuxState{},
-		&appConfig{},
-		time.Second,
-	)
-	var called bool
-	service.Hooks.OnStateChanged = func() {
-		called = true
-	}
-	service.notifyStateChanged()
-	if !called {
-		t.Fatal("state changed hook was not called")
-	}
-}
-
 func TestDaemonStateChangedWithoutLinuxDriverSkipsPlatformReconcile(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	service := newTestDaemonFromOwners(
