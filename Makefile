@@ -742,7 +742,8 @@ discovery-smoke: build
 # 3. 验证 reflector 结果进入本地 endpoint candidate 收集。
 # 4. 验证 reflector-derived endpoint 可被签名发布。
 reflector-smoke:
-	$(GO_ENV) $(GO) test -v ./pkg/core/gossip ./app/photon -run 'Test(QueryPublicIP|CollectLocalEndpointsWithReflectors|ReflectorEndpointPublishSmoke)'
+	$(GO_ENV) $(GO) test -v ./pkg/core/gossip -run '^Test(QueryPublicIP|CollectLocalEndpointsWithReflectors)'
+	$(GO_ENV) $(GO) test -v ./pkg/core/host -run '^TestPlanGossipEndpointIntentRefreshAndGrace$$'
 
 # bootstrap-join-smoke 流程：
 # 1. 准备 catofes、node-a、node-b，其中 B 只知道 bootstrap A。
@@ -1012,7 +1013,7 @@ object-pull-smoke: build
 #    多个 UDP object_chunk 发给 A。
 # 7. 断言 A 收到 bigdata，且 A 的 daemon 日志确认该 zone 经 UDP chunks apply。
 chunk-fallback-smoke: build
-	$(GO_ENV) $(GO) test ./app/photon -run 'Test(SentChunkCache|MissingChunkIndexes|ChunkAssemblyQuietNACK)'
+	$(GO_ENV) $(GO) test ./pkg/core/gossip -run '^Test(SentChunkCache|MissingChunkIndexes|ChunkAssemblyQuietNACK)'
 	@set -eu; \
 	tmp="$${TMPDIR:-/tmp}/photon-chunk-fallback-smoke"; \
 	rm -rf "$$tmp"; \

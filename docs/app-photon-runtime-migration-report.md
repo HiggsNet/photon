@@ -642,3 +642,11 @@ Linux 收口之后按 Todo 转入 Windows B1。在既有 Windows design 文档�
 根授权拒绝测试迁至 State；新增连续 grant、去重、父子证明一致性、旧快照隔离、失败批次与持久化失败回滚、重复授权重签发验证。app 启动 fixture 使用真实 grant intent，保留 CLI/bundle 与 daemon 已提交状态集成测试。相对上一轮 9 行清理，本次生产代码净减 7 行；这两轮涉及的生产代码累计净减 16 行，不计其他工作区 gossip 修改。
 
 验证：完整 make check（fmt、vet、全量测试、Linux 构建与 Windows amd64 交叉构建）、公共 State 授权定向 race 测试和 git diff --check 均通过。未执行 Windows VM 或特权数据面验收；未提交、推送或部署。
+
+### Gossip 日志与 smoke 入口收尾（2026-10-01）
+
+修正 app 的 GossipDriver 日志适配：保留 info/error 级别，不再将它们降为 debug；默认 info 配置下可观察 `zone_applied`，UDP chunk smoke 继续验证实际同步、签名链和 `via=udp_chunks` 日志。生产代码增加 4 行，仅补齐已有日志适配分支，没有新增 owner、接口或队列；回归测试覆盖 info 阈值下各级别的输出与过滤。
+
+reflector smoke 的 endpoint 签名发布验证改用 `pkg/core/host` 的 `TestPlanGossipEndpointIntentRefreshAndGrace`；chunk cache/NACK 测试改由 `pkg/core/gossip` 执行，删除指向 app 的过期测试选择器。
+
+验证：完整 `make check`（含 Linux 构建及 Windows amd64 交叉构建）、整套非 root `make smoke-all` 和 `git diff --check` 通过，smoke 日志未出现 `no tests to run`。本机 Go VCS 自动探测异常，检查时设置 `GOFLAGS=-buildvcs=false`，构建信息仍由 Makefile 注入；Windows 构建使用完整模块缓存。未执行 Windows VM 或特权数据面验收。

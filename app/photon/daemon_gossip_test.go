@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"net"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +16,30 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
+
+func TestGossipDriverLoggerPreservesLevelsAtInfoThreshold(t *testing.T) {
+	for _, level := range []string{"debug", "info", "warn", "error"} {
+		t.Run(level, func(t *testing.T) {
+			var output bytes.Buffer
+			logger := (&appLogger{}).setLevel(logLevelInfo).withOutput(&output)
+			gossipDriverLogger(logger)(corehost.GossipDriverLog{
+				Level: level, Event: "zone_applied", PeerID: "node-b.catofes.",
+				Fields: map[string]any{"via": "udp_chunks", "zone": "node-b.catofes."},
+			})
+			if level == "debug" {
+				if output.Len() != 0 {
+					t.Fatalf("debug event escaped info threshold: %s", &output)
+				}
+				return
+			}
+			for _, want := range []string{"level=" + level, "event=zone_applied", "peer_id=node-b.catofes.", "via=udp_chunks", "zone=node-b.catofes."} {
+				if !strings.Contains(output.String(), want) {
+					t.Fatalf("log %q missing %q", output.String(), want)
+				}
+			}
+		})
+	}
+}
 
 func TestDaemonDiscoveryPreservesLifecycleSuppressedCheckpoint(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)

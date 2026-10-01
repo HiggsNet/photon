@@ -76,8 +76,12 @@ func gossipDriverLogger(logger *appLogger) func(corehost.GossipDriverLog) {
 			fields["error"] = event.Err
 		}
 		switch event.Level {
+		case "error":
+			logger.Error("sync", event.Event, fields)
 		case "warn":
 			logger.Warn("sync", event.Event, fields)
+		case "info":
+			logger.Info("sync", event.Event, fields)
 		default:
 			logger.Debug("sync", event.Event, fields)
 		}
