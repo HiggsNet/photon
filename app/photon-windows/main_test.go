@@ -18,12 +18,12 @@ func TestVersionCommandUsesPhotonWindowsName(t *testing.T) {
 	}
 }
 
-func TestUnknownCommandDoesNotAdvertiseRuntimeReady(t *testing.T) {
+func TestRunRequiresExplicitConsoleAndConfig(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := run([]string{"run"}, &stdout, &stderr); code != 2 {
 		t.Fatalf("run(run) code = %d, want 2", code)
 	}
-	if !strings.Contains(stderr.String(), "not advertised as ready") {
+	if !strings.Contains(stderr.String(), "run --console --config <path>") {
 		t.Fatalf("stderr = %q", stderr.String())
 	}
 }

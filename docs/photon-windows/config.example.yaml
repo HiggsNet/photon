@@ -3,6 +3,8 @@
 schema_version: 1
 trusted_root_public_key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 managed_zone: laptop-a.catofes.
+# UDP Gossip and TCP object-pull use the same port. IPv6: '[::]:33434'.
+gossip_listen: 0.0.0.0:33434
 
 state:
   path: 'C:\ProgramData\HiggsNet\Photon Windows\photon.db'

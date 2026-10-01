@@ -47,7 +47,7 @@ PHOTON_IPSEC_XFRM_SMOKE=1 \
   GOCACHE="$go_cache" \
   GOMODCACHE="$go_mod_cache" \
   CGO_ENABLED="${CGO_ENABLED:-0}" \
-  "$go_cmd" test ./pkg/transport/ipsec -run '^TestStrongSwanDriverIKEBringupSmoke$' -count=1
+  "$go_cmd" test ./pkg/transport/ipsec -run '^TestStrongSwan(DriverIKEBringup|AlgorithmInterop)Smoke$' -count=1 -v
 
 PHOTON_IPSEC_XFRM_SMOKE=1 \
   GOCACHE="$go_cache" \

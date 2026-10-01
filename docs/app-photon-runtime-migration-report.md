@@ -650,3 +650,22 @@ Linux 收口之后按 Todo 转入 Windows B1。在既有 Windows design 文档�
 reflector smoke 的 endpoint 签名发布验证改用 `pkg/core/host` 的 `TestPlanGossipEndpointIntentRefreshAndGrace`；chunk cache/NACK 测试改由 `pkg/core/gossip` 执行，删除指向 app 的过期测试选择器。
 
 验证：完整 `make check`（含 Linux 构建及 Windows amd64 交叉构建）、整套非 root `make smoke-all` 和 `git diff --check` 通过，smoke 日志未出现 `no tests to run`。本机 Go VCS 自动探测异常，检查时设置 `GOFLAGS=-buildvcs=false`，构建信息仍由 Makefile 注入；Windows 构建使用完整模块缓存。未执行 Windows VM 或特权数据面验收。
+
+### Windows B1 Linux 算法兼容基线（2026-10-01）
+
+按用户要求先以 Linux 实际运行决定 Windows 兼容目标。SSH 10.16.255.7（less）只读查询：Photon 28472ea、StrongSwan 6.0.7，2026-10-01 10:29:56 UTC 的 36 条 IKE SA 均为 AES-CBC-128/HMAC-SHA2-256-128/PRF-HMAC-SHA2-256/ECP-256；36 条 ESP 均为 AES-GCM-16-128，其中 22 条显示 ECP-256、14 条无独立 KE。已加载的 21 项公钥为 Ed25519；没有读取私钥、修改远端配置或主动触发重建/rekey。瞬时 SA 结果不等于完整的允许 proposal 集合。
+
+撤回此前未经互通验证的 IKE GCM-only、X25519-only 和强制 CHILD PFS 方案。复用现有 bring-up fixture，新增 TestStrongSwanAlgorithmInteropSmoke：Ed25519、IPv4/IPv6 内层、双方默认/仅客户端限定 proposal 共四个场景；每场景检查 A/B 分别发起 CHILD/IKE rekey 后双方 SA ID 更新、SPI 对应及双向 ping。候选 IKE 为 aes128-sha256-prfsha256-ecp256，ESP 为 aes128gcm16-ecp256-none-noesn；网关始终使用原生成器默认配置。测试纳入现有 ipsec-xfrm-smoke，没有增加生产代码、owner 或接口。
+
+Ubuntu 24.04 的 5.9.13-2ubuntu4.24.04.5 四场景通过（2.84 秒），CHILD rekey 无独立 KE；Nix 6.0.7 四场景通过（3.05 秒），CHILD rekey 使用 P-256。每组为同版本双 StrongSwan，不是实际 Windows 或两个版本互连。容器适配复用项目已有 nsenter 方案；原 ECDSA bring-up 在 Ubuntu 也通过。以这些证据完成 B1 实现范围定义，B3 仍须 Windows 真实互通、外层双栈和负向验收；不要求 Linux 改 profile。Windows IPC TODO 删除 reload。
+
+完整 make check（含 Linux/Windows 构建）、git diff --check 与 smoke 脚本语法检查通过；本机 Go VCS 自动探测仍使用 GOFLAGS=-buildvcs=false 绕过，Windows 使用完整模块缓存。未重跑无关非 root smoke，也未运行整个特权数据面套件；上文记录的是本轮实际执行的算法互通/bring-up 项。尚未提交、发布或部署。
+
+### Windows B2 console 同步闭环（2026-10-01）
+
+新增 `photon-windows run --console --config`，从现有 common DB 恢复后，由单个
+GossipDriver 运行真实 UDP 同步与 TCP object-pull；console 直接消费公共事件，没有新增协议执行层。
+`gossip_listen` 支持 IPv4/IPv6 IP:port，Ctrl+C 结束 socket/worker 后释放唯一 State/BoltStore。
+Linux 开发机真实 IPv4/IPv6 双节点收敛、落盘重启、原地址重新绑定、启动失败清理和 TCP 取消测试
+通过 race 检查；`make check` 的全量测试、Linux 构建、Windows amd64 交叉构建通过。
+尚未提供初始身份导入、gateway 授权、自动 rebind、Wintun/IKE 或 SCM，Windows 11 真机验收仍未执行。

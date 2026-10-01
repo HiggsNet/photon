@@ -33,6 +33,7 @@ type Config struct {
 	Wintun               WintunConfig
 	Log                  LogConfig
 	Reconnect            ReconnectConfig
+	GossipListen         string
 }
 
 type StateConfig struct {
@@ -72,6 +73,7 @@ type ReconnectConfig struct {
 }
 
 type rawConfig struct {
+	GossipListen         string `yaml:"gossip_listen"`
 	SchemaVersion        int    `yaml:"schema_version"`
 	TrustedRootPublicKey string `yaml:"trusted_root_public_key"`
 	ManagedZone          string `yaml:"managed_zone"`
@@ -154,6 +156,7 @@ func normalizeConfig(raw rawConfig) (*Config, error) {
 	}
 
 	config := &Config{
+		GossipListen:         strings.TrimSpace(raw.GossipListen),
 		SchemaVersion:        raw.SchemaVersion,
 		TrustedRootPublicKey: root,
 		ManagedZone:          managed,
@@ -173,6 +176,12 @@ func normalizeConfig(raw rawConfig) (*Config, error) {
 	}
 	if config.State.Path == "" {
 		return nil, errors.New("state.path is required")
+	}
+	if config.GossipListen == "" {
+		config.GossipListen = "0.0.0.0:33434"
+	}
+	if _, err := netip.ParseAddrPort(config.GossipListen); err != nil {
+		return nil, fmt.Errorf("gossip_listen must be an IP:port: %w", err)
 	}
 	if config.Overlay.ID == "" {
 		return nil, errors.New("overlay.id is required")

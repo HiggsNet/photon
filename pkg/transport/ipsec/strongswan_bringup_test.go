@@ -20,6 +20,10 @@ import (
 // two charon instances running in separate network namespaces, creates XFRM
 // interfaces, assigns tunnel addresses, and verifies bidirectional ping.
 func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
+	runStrongSwanBringup(t, strongSwanInteropCase{algorithm: AlgorithmECDSAP256})
+}
+
+func runStrongSwanBringup(t *testing.T, variant strongSwanInteropCase) {
 	if os.Getenv("PHOTON_IPSEC_XFRM_SMOKE") != "1" {
 		t.Skip("set PHOTON_IPSEC_XFRM_SMOKE=1 to run the root/system StrongSwan smoke")
 	}
@@ -133,11 +137,11 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 	defer clientB.Close()
 
 	// Generate transport keys for both peers.
-	localPrivA, localPubA, err := generateECDSAKeyPair()
+	keyA, err := generateTransportPrivateKey(variant.algorithm)
 	if err != nil {
 		t.Fatalf("generate key A: %v", err)
 	}
-	localPrivB, localPubB, err := generateECDSAKeyPair()
+	keyB, err := generateTransportPrivateKey(variant.algorithm)
 	if err != nil {
 		t.Fatalf("generate key B: %v", err)
 	}
@@ -153,6 +157,10 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 		ID:                "main",
 		Provider:          ProviderStrongSwan,
 		TunnelAddressSpec: TunnelAddressSpec{Mode: TunnelAddressDerivedPool, Family: FamilyIPv6, Pool: netip.MustParsePrefix("fd00:4242::/64")},
+	}
+	if variant.ipv4 {
+		group.TunnelAddressSpec.Family = FamilyIPv4
+		group.TunnelAddressSpec.Pool = netip.MustParsePrefix("10.242.0.0/24")
 	}
 	addrA, addrB, err := group.DeriveTunnelAddresses("node-a.", "node-b.", 0)
 	if err != nil {
@@ -175,9 +183,9 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 		LocalTunnelAddr:          addrA,
 		PeerTunnelAddr:           addrB,
 		NetNS:                    nsA,
-		LocalPrivateKey:          localPrivA,
-		LocalPrivateKeyAlgorithm: AlgorithmECDSAP256,
-		PeerPublicKey:            localPubB,
+		LocalPrivateKey:          keyA.PrivateKey,
+		LocalPrivateKeyAlgorithm: variant.algorithm,
+		PeerPublicKey:            keyB.PublicKey,
 	}
 	specB := TransportLinkSpec{
 		LocalZone:                "node-b.",
@@ -195,9 +203,9 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 		LocalTunnelAddr:          addrB,
 		PeerTunnelAddr:           addrA,
 		NetNS:                    nsB,
-		LocalPrivateKey:          localPrivB,
-		LocalPrivateKeyAlgorithm: AlgorithmECDSAP256,
-		PeerPublicKey:            localPubA,
+		LocalPrivateKey:          keyB.PrivateKey,
+		LocalPrivateKeyAlgorithm: variant.algorithm,
+		PeerPublicKey:            keyA.PublicKey,
 	}
 	specB.ContactPoints = nil
 	specB.InitiatorRole = ""
@@ -218,6 +226,10 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 		t.Fatalf("apply transport link B: %v", err)
 	}
 
+	if variant.candidate {
+		loadInteropCandidate(t, ctx, ipsecA, specA)
+	}
+
 	if err := InitiateTransportChild(ctx, ipsecA, specA, nil); err != nil {
 		t.Fatalf("initiate child A: %v", err)
 	}
@@ -231,17 +243,24 @@ func TestStrongSwanDriverIKEBringupSmoke(t *testing.T) {
 		t.Fatalf("wait for SA on B: %v", err)
 	}
 
-	// Add host routes so tunnel ping traverses the XFRM interface.
-	runIP(t, ctx, "netns", "exec", nsA, "ip", "route", "replace", addrB.String()+"/128", "dev", ifaceA)
-	runIP(t, ctx, "netns", "exec", nsB, "ip", "route", "replace", addrA.String()+"/128", "dev", ifaceB)
-
-	if out, err := execCommand(ctx, "ip", "netns", "exec", nsA, "ping", "-6", "-c", "1", "-W", "3", addrB.String()); err != nil {
-		t.Fatalf("tunnel ping A->B failed: %v\n%s", err, string(out))
+	prefix, family := "/128", "-6"
+	if variant.ipv4 {
+		prefix, family = "/32", "-4"
 	}
-	if out, err := execCommand(ctx, "ip", "netns", "exec", nsB, "ping", "-6", "-c", "1", "-W", "3", addrA.String()); err != nil {
-		t.Fatalf("tunnel ping B->A failed: %v\n%s", err, string(out))
+	runIP(t, ctx, "netns", "exec", nsA, "ip", "route", "replace", addrB.String()+prefix, "dev", ifaceA)
+	runIP(t, ctx, "netns", "exec", nsB, "ip", "route", "replace", addrA.String()+prefix, "dev", ifaceB)
+	ping := func() {
+		t.Helper()
+		for _, target := range []struct{ ns, addr string }{{nsA, addrB.String()}, {nsB, addrA.String()}} {
+			if out, err := execCommand(ctx, "ip", "netns", "exec", target.ns, "ping", family, "-c", "1", "-W", "3", target.addr); err != nil {
+				t.Fatalf("tunnel ping from %s failed: %v\n%s", target.ns, err, out)
+			}
+		}
 	}
-
+	ping()
+	if variant.rekey {
+		verifyInteropRekeys(t, ctx, clientA, clientB, specA, specB, variant.candidate, ping)
+	}
 	t.Logf("IKE bring-up succeeded; bidirectional tunnel ping passed")
 }
 

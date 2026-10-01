@@ -209,15 +209,16 @@ Daemon
 ### B1. 冻结 v1 契约
 
 - [x] 支持矩阵先固定 Windows 11 amd64；Windows 10、arm64 在首个 vertical slice 后按真实 CI/设备验证扩展。
-- [ ] 固定首版算法集与 StrongSwan profile：Ed25519 raw public-key auth、X25519、AES-GCM-16，明确禁止项和协商失败行为。
+- [x] 以 Linux 现网和 Ubuntu 5.9.13/Nix 6.0.7 双端隔离测试确定首版集合：IKE AES-CBC-128/SHA256/PRF-SHA256/P-256、Ed25519 认证、ESP AES-GCM-16-128；CHILD KE 支持 P-256 或 none，不强制旧网关使用 PFS，见 Windows design §1.2。候选由 StrongSwan 模拟，Windows 实现仍待 B3 验收。
 - [x] v1 保持 outbound-only leaf、一个 active gateway、split tunnel；不做 transit、IKE responder、full tunnel、DNS/NRPT、GUI 或自动更新。
 - [x] 冻结 route-origin 验证：Babel route 安装前必须匹配 Photon verified authorization，撤销/授权收紧 fail closed。
 - [x] 定义 revocation、network change、service stop 和 crash recovery SLO。
 
-B1 契约见 [Windows 设计](docs/photon-windows/design.md) §1.1、§3.1、§5.1。上述勾选仅表示范围与验收条件已定义，平台实现和真实运行验收仍在 B2–B6；算法与 StrongSwan profile 尚未冻结，B1 未整体完成。
+B1 契约见 [Windows 设计](docs/photon-windows/design.md) §1.1–1.2、§3.1、§5.1。范围与算法集合已依据 Linux 实测确定；不代表 Windows 互通。Windows 适配现有 Linux，不要求 Linux 先更换 profile。
 
 ### B2. Windows composition 与公共 gossip
 
+- [x] console 最小闭环：`run --console --config` 恢复现有 common DB，共用 GossipDriver 执行真实 UDP Gossip/TCP object-pull；取消后关闭 workers/socket，再关闭 State/BoltStore。Linux 上真实 IPv4/IPv6 双节点收敛、落盘重启和启动失败清理测试覆盖；Windows 真机验收仍待完成。
 - [ ] Windows service composition 创建一个 Daemon、一个 GossipDriver、一个 State、一个 WindowsDriver、一个 WindowsState 和一个 BoltStore。
 - [ ] 接入真实 Windows UDP adapter：bind/read/write/rebind/close 有界且可取消；GossipDriver 继续唯一拥有 receive/object-pull/protocol event ordering。
 - [ ] 从 verified records 生成 gateway candidates，校验 identity/key、address/port、overlay、route authorization 和撤销状态。
@@ -230,6 +231,7 @@ B1 契约见 [Windows 设计](docs/photon-windows/design.md) §1.1、§3.1、§5
 - [ ] 先完成 `ranet-lite` port map、license/provenance 和采用/重写决策；任何实质派生保留 MIT notice。
 - [ ] 分离 IKE codec/parser 与 initiator session state machine，实现 `IKE_SA_INIT -> IKE_AUTH -> CHILD_SA`。
 - [ ] 与 Photon StrongSwan 验证 ID encoding、raw Ed25519、NAT-T、proposal、retransmit、fragmentation 和错误通知。
+- [ ] 使用现有 Linux 连接生成器验证 Windows 与实际构建的 proposal 交集，覆盖首个 CHILD、CREATE_CHILD_SA 与双方发起的 rekey；依据 design §1.2 现场基线，不以改窄 Linux profile 代替兼容实现。
 - [ ] 实现 CHILD/IKE rekey、overlap、simultaneous rekey、DPD/liveness 与网络变化重连。
 - [ ] 实现 tunnel-mode IPv4/IPv6 ESP、SPI demux、sequence、anti-replay、AEAD/padding/length 验证和 bounded crypto workers。
 - [ ] 一个共享 UDP socket 承载 IKE/ESP/gossip 所需流量；明确分流、队列、MTU 和 Windows batch-send 退化路径。
@@ -247,7 +249,7 @@ B1 契约见 [Windows 设计](docs/photon-windows/design.md) §1.1、§3.1、§5
 
 - [ ] 使用 `x/sys/windows/svc` 接入 SCM，并提供复用同一 composition 的 `run --console`。
 - [ ] 网络变化通过 Windows notification 进入 Daemon；重建 UDP/IKE/route 时保持 owner/cleanup 顺序。
-- [ ] 使用 versioned named-pipe IPC，ACL 默认管理员；首版支持 status、peers、routes、diagnostics、reload、stop。
+- [ ] 使用 versioned named-pipe IPC，ACL 默认管理员；首版支持 status、peers、routes、diagnostics、stop；配置修改通过重启应用，不提供 reload。
 - [ ] WindowsObservation 展示 Wintun、UDP、IKE/CHILD_SA、Babel 和 route 的实时状态；离线只读 verified/config，不冒充 runtime。
 - [ ] Event Log/文件日志使用稳定 event id、severity 和敏感字段脱敏；metrics 保持有界低基数。
 
@@ -281,4 +283,4 @@ B1 契约见 [Windows 设计](docs/photon-windows/design.md) §1.1、§3.1、§5
 2. 旧 aggregate schema 的入口、fixtures 与版本承诺审计已完成；仓库目前未声明直接升级截止版本，现有兼容继续保留。
 3. 发布计划确定截止版本后，按独立范围退出 aggregate decoder、partitioned cleanup 迁移和 root 修复；不能按文件名一次删除。
 4. CLI 壳只随上述 owner 迁移逐步进入 `internal/photoncli`，不单独进行目录搬家。
-5. Windows 先完成 B1 v1 契约，再实现 B2 composition 与真实 UDP gossip vertical slice；之后依次推进 IKE/ESP、Babel/SADR、Wintun、SCM/named-pipe 和完整验收。
+5. Windows B1 已按 Linux 实际构建/运行结果收口；B2 console 已接入真实 UDP/TCP Gossip 与恢复闭环，下一步补初始化/导入、gateway 授权、rebind 和 Windows 真机验收，之后依次推进 IKE/ESP、Babel/SADR、Wintun、SCM/named-pipe 和完整验收。

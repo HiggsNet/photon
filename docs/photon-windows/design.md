@@ -38,12 +38,89 @@ XFRM、BIRD 或 network namespace。
 `overlay.split_routes` 只限制本机接入隧道的地址范围，不授予 route origin 权限。
 DNS/NRPT、默认路由和系统代理不由本产品修改。服务启动后配置保持不变，修改配置通过重启应用。
 
-算法契约仍待 B1 的 StrongSwan profile 单独冻结。Ed25519 raw public-key auth、X25519、AES-GCM-16
-是目标集合，不代表 IKE PRF、AES key length、ID 编码和 CHILD rekey proposal 已完成互通验收。
-算法与 profile 契约冻结前不进入 B2 实现；真实互通验收仍属于 B3。
+首版算法实现范围依据 Linux 现网与两个实际构建的隔离互通结果确定（§1.2），
+不要求既有 Linux 节点先更换算法。B1 的范围定义已完成；Windows 实现与真实互通仍由 B3 验收。
 
 Photon Android 是后续独立产品。两个产品可以复用 portable core，但 Windows Service、
 Wintun、IP Helper、named pipe 和 Event Log 不进入 Android 依赖图。
+
+### 1.2 Linux 算法兼容基线（2026-10-01 现场与隔离验证）
+
+兼容目标是接入现有 Linux Photon 网络。必须分开记录：构建所带插件的能力、连接允许协商的
+proposal 集合、某次 IKE/CHILD_SA 实际选中的算法。三者不能互相替代，也不能把 ESP 算法
+直接当作 IKE 算法。此前提出的 IKE GCM-only、X25519-only、强制 CHILD PFS 方案已撤回。
+
+**现场证据。** 2026-10-01 10:29:56 UTC，通过 SSH 只读检查 `10.16.255.7`（less）：
+
+- Photon commit `28472ea`，dirty=false；StrongSwan daemon `6.0.7`，Linux `6.18.39`，x86_64。
+- `swanctl --list-sas` 中 36 条 IKE SA 全部为
+  `AES_CBC-128/HMAC_SHA2_256_128/PRF_HMAC_SHA2_256/ECP_256`。
+- 36 条 CHILD_SA 全部为 `TUNNEL-in-UDP`、`AES_GCM_16-128`：22 条还显示 `ECP_256`，
+  14 条没有显示独立 KE；这里是两个瞬时 SA 状态，不据此推断每条连接的完整 rekey policy。
+- `swanctl --list-certs --type pubkey` 列出 21 项 ED25519 公钥；本机和已加载 peer 使用 raw public key
+  认证。没有读取私钥材料，没有重新建链或主动触发 rekey。
+- `swanctl --list-algs` 同时列出 AES_CBC、AES_GCM_16、PRF_HMAC_SHA2_256、ECP_256 与
+  CURVE_25519。支持 X25519 不代表当前协商用了 X25519，也不单独证明任意 proposal 能互通。
+
+| 层次 | 当前观测 | Windows 兼容工作依据 |
+| --- | --- | --- |
+| IKE 加密 | AES-CBC，128 位密钥 | 首先覆盖该现网组合；不能只实现 IKE GCM |
+| IKE 完整性 | HMAC-SHA2-256，128 位截断 | 与 IKE 加密和 PRF 分开实现 |
+| IKE PRF | HMAC-SHA2-256 | 这是现网已有的密钥派生参数，不是新增线上要求 |
+| IKE KE | ECP_256，即 NIST P-256 | 不能与 X25519 混为一谈；优先覆盖现网 P-256 |
+| ESP 数据加密 | AES-GCM，128 位密钥，16 字节 tag | `16` 指 tag 字节数，`128` 指密钥位数 |
+| CHILD KE | 同时观察到 ECP_256 和无独立 KE | 首个 CHILD、独立 CREATE_CHILD_SA、双方发起 rekey 分别验证 |
+| 认证 | 已加载公钥为 Ed25519 | 与密钥交换的 P-256 是两个不同用途，不冲突 |
+
+IKE 实测组合可用 StrongSwan 名称 `aes128-sha256-prfsha256-ecp256` 表达；这是对实测结果的
+翻译，不是要求修改 Linux 配置。算法名称参见
+[StrongSwan 算法表](https://docs.strongswan.org/docs/latest/config/proposals.html)。
+
+**构建与配置边界。** Photon 的 `BuildStrongSwanConnection` / `routeBasedChildSA` 不设置
+`proposals` / `esp_proposals`，由 StrongSwan 默认 proposal 与对端共同决定结果；当前使用
+`version=2`、`auth=pubkey`、`encap=yes`、`mobike=no`、`mode=tunnel`。Go 构建产物本身不内嵌
+StrongSwan：Docker 安装 Ubuntu 24.04 的发行版包，native/NixOS 使用宿主机包。
+不能用 less 上的 6.0.7 代替 Docker/Ubuntu 构建的版本与插件验收。
+
+StrongSwan 的默认 ESP proposal 存在版本差异：6.0.2 起加入可选 KE，而旧版本默认不要求
+独立 CHILD KE。首个 IKE_AUTH CHILD 的密钥派生又不同于 CREATE_CHILD_SA；因此不能只验证
+首次连通后就强制 X25519 PFS。参见
+[默认 proposal 说明](https://docs.strongswan.org/docs/latest/config/proposals.html#_default_proposals) 和
+[CHILD 配置说明](https://docs.strongswan.org/docs/latest/swanctl/swanctlConf.html)。
+
+**隔离互通证据。** `TestStrongSwanAlgorithmInteropSmoke` 复用 Linux 连接生成器、真实双 charon、
+Ed25519 密钥和 XFRM；比较双方默认配置与仅 A 限定候选 proposal 两种情况，B 始终保留默认配置。
+每种情况分别测试 IPv4/IPv6 内层流量（外层为 IPv4），建链后由 A、B 分别发起 CHILD 和 IKE rekey，
+检查双方 SA ID 更新、收发 SPI 对应，并在每次 rekey 后执行双向隧道 ping。测试已接入现有
+`ipsec-xfrm-smoke`，没有修改生产连接生成器。
+
+| 实际测试依赖 | 4 个场景 | 首个 CHILD | 后续 CHILD rekey |
+| --- | --- | --- | --- |
+| Ubuntu 24.04 StrongSwan `5.9.13-2ubuntu4.24.04.5`，与 Dockerfile 相同的 StrongSwan 包集合 | 全通过，2.84 秒 | AES-GCM-16-128，无独立 KE | AES-GCM-16-128，无独立 KE |
+| 本机 Nix StrongSwan `6.0.7`，只读挂载到隔离容器 | 全通过，3.05 秒 | AES-GCM-16-128，无独立 KE | AES-GCM-16-128，P-256 |
+
+两组 IKE 均为 AES-CBC-128/HMAC-SHA256-128/PRF-HMAC-SHA256/P-256。
+每一行是同版本双端测试，不是 5.9 与 6.0 直接互连；候选端同样由 StrongSwan 执行，不能当作
+Windows 已实现。原有 ECDSA bring-up smoke 在 Ubuntu 上也通过。构建期间的 `/sys` 挂载限制
+使用项目现有容器 smoke 的 `nsenter` 适配解决，未修改宿主机网络或现网服务。
+
+**首版实现集合。** 以已经通过上述测试的候选集合为基线：
+
+- IKE：`aes128-sha256-prfsha256-ecp256`；认证使用 Ed25519 raw public key。
+- ESP：`aes128gcm16-ecp256-none-noesn`；首个 CHILD 按 IKE_AUTH 规则派生密钥；
+  CREATE_CHILD_SA/rekey 支持 P-256 或无独立 KE，优先 P-256，兼容旧版默认无独立 KE。
+- 不增加未经验证的替代算法或 X25519-only 限制；集合之外明确报协商失败，不临时放宽身份或算法。
+- IKEv1、PSK/EAP、证书 CA 信任回退、未验证公钥不进入首版。rekey 失败不能越过 SA 到期、
+  授权失效或序号上限继续发送；断线按已有 backoff 重试。
+
+B3 仍须以真正 Windows 实现验证相同集合、双方 rekey、外层 IPv4/IPv6、NAT 变化和错误
+proposal/身份/公钥的拒绝；本轮没有执行这些 Windows 或负向验收。任何更窄或新增的 proposal
+都须另有双向互通证据，不默认要求 Linux 改 profile。
+
+认证继续依据 verified transport-key/profile 与 Zone 身份绑定，不能仅凭 CERT 接受陌生公钥；
+Ed25519 签名与 raw public-key 编码依据 [RFC 8420](https://www.rfc-editor.org/rfc/rfc8420.html) 和
+[RFC 7670](https://www.rfc-editor.org/rfc/rfc7670.html)。具体 ID wire 编码仍须在互通测试中确认。
+本次证明一个现场样本与上述两个隔离构建的算法基线，不宣称 Windows 已兼容或覆盖全部 Linux 构建。
 
 ## 2. 数据流
 
@@ -334,3 +411,22 @@ F 阶段修正为以下顺序：
 完成上述边界纠偏后才接 Windows UDP；Wintun、IP Helper、SCM、IKE/ESP/Babel 实现分别在
 后续窄切口加入。未实现的命令不得伪造
 connected/ready 状态。
+
+### B2 console 当前实现与验证边界
+
+`photon-windows run --console --config <path>` 现在运行公共状态同步。
+`state.path` 必须指向已有的 common-schema bbolt，managed zone 和 root pin 必须与配置匹配；
+当前命令不创建 identity，也不替代后续初始化/导入入口。运行中的数据库不可同时由另一进程打开。
+`gossip_listen` 默认为 `0.0.0.0:33434`，接受 IP:port（IPv6 如 `[::]:33434`）；
+UDP Gossip 与 TCP object-pull 绑定同一个地址和端口。启动时解析 bootstrap DNS，
+选择与监听地址相同族的第一个地址；暂不支持运行中 DNS 刷新或自动 rebind，修改配置后重启。
+
+composition 只打开一个 State/BoltStore，创建一个公共 GossipDriver，直接消费其事件；
+协议、对象校验、checkpoint、重试策略继续归公共实现。TCP exchange 使用 context cancellation 和
+I/O deadline，UDP write 有 deadline，Ctrl+C 关闭 reader/worker/server 后才关闭数据库。
+`gossip_started` 日志明确记录 `tunnel_ready=false`，此阶段不创建 Wintun、IKE、路由或 SCM 服务。
+
+真实 socket 测试覆盖 IPv4/IPv6 两节点同步、TCP 对象读取、取消退出、同地址重启及磁盘恢复，
+另覆盖 TCP bind 失败释放 UDP/数据库和阻塞 TCP read 的取消。它们运行在 Linux 开发机；
+Windows amd64 交叉构建通过也不等于 Windows 11 真机验收。B2 的 gateway 授权、自动 rebind
+及平台生命周期组合尚未完成。
