@@ -233,7 +233,7 @@ B2 控制面前置已收口，可以进入 B3。这里不包含 SCM、Wintun/IP 
 
 ### B3. IKEv2 与 ESP
 
-- [ ] 先完成 `ranet-lite` port map、license/provenance 和采用/重写决策；任何实质派生保留 MIT notice。
+- [x] 完成锁定 `ranet-lite` commit 的 [port map、license/provenance 与采用/重写决策](docs/photon-windows/ranet-port-map.md)；核对实际源码和声明依赖许可证，后续任何实质派生保留 MIT notice。本轮未引入上游代码或依赖。
 - [ ] 分离 IKE codec/parser 与 initiator session state machine，实现 `IKE_SA_INIT -> IKE_AUTH -> CHILD_SA`。
 - [ ] 与 Photon StrongSwan 验证 ID encoding、raw Ed25519、NAT-T、proposal、retransmit、fragmentation 和错误通知。
 - [ ] 使用现有 Linux 连接生成器验证 Windows 与实际构建的 proposal 交集，覆盖首个 CHILD、CREATE_CHILD_SA 与双方发起的 rekey；依据 design §1.2 现场基线，不以改窄 Linux profile 代替兼容实现。

@@ -796,3 +796,18 @@ Daemon 自动重绑→对象读取额外连续 20 次通过。跨主机最终整
 B2 控制面前置收口。原 checklist 中 WindowsDriver/平台 journal 的实际实现由 B4 承接，
 SCM 由 B5 承接，不能为了凑类型新增空组件；真实 SA 与 Router ID/origin/packet 授权 gate
 仍由 B3/B4 完成。当前验证不是物理断网/睡眠恢复、SCM stop、Wintun 或隧道验收。
+
+B2 生命周期本地提交为 `f1821d1`。
+
+### B3 port map 与来源决策（2026-10-02）
+
+锁定并重新读取 ranet-lite `24a24a2ff380c9f8ceb0092d640daa32e86b5eb5` 的实际源码、
+LICENSE、go.mod/go.sum，记录 SHA-256；下载 exact modules、`go mod verify` 通过，
+核对 Windows package dependency graph。新增逐模块 port map，区分可带 MIT notice 局部移植、
+需适配重写和不采用的产品/registry/OS 接线；未复制上游实现、未修改依赖。
+
+关键兼容缺口明确落到实现清单：IKE AEAD-only 不具备 CBC 独立 integrity keys；
+CHILD rekey 明确拒绝 KE，与 Linux P-256/none 双模式不等价；ASN1_DN 身份需按 Photon
+verified profile 与 StrongSwan 实际编码验证。Go Wintun binding 的 MIT 不替代 DLL 许可核对，
+yaml 的分文件 MIT/Apache 条款不概括为全模块 MIT。B3 第一项完成，其余 IKE/ESP 实现和
+互通项保持未完成。本批仅文档，`git diff --check` 通过，未增加生产或测试代码。

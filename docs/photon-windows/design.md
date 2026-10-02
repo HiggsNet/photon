@@ -466,3 +466,7 @@ console 复用同一候选校验：启动时、Gossip 事件推进 verified revi
 路由规划先对当前网络的每个相关 zone chain/record 签名重验，再复用 `BuildAuthorizedRouteSet`，
 保留真实 origin，限制在 split aggregate 内。Selected 是待连接目标，Routes 是授权事实；
 没有 SA、Router ID/origin 绑定的结果不得安装路由。这些后续数据面条件仍归 B3/B4。
+
+B3 的实现顺序、锁定上游来源、各模块移植/重写决策和许可证材料见
+[ranet-lite port map](ranet-port-map.md)。原型 IKE 为 AEAD-only，CHILD rekey 不支持 KE，
+identity 使用 ASN1_DN；因此不能原样移植后宣称兼容当前 Linux 基线，也不以改窄 Linux profile 规避实现。
