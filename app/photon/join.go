@@ -19,18 +19,9 @@ import (
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
-type privateKeyFile struct {
-	Type       string             `json:"type"`
-	PublicKey  ed25519.PublicKey  `json:"public_key"`
-	PrivateKey ed25519.PrivateKey `json:"private_key"`
-}
+type privateKeyFile = share.PrivateKeyFile
 
-type joinBundle struct {
-	Version       uint8              `json:"version"`
-	Zone          zone.ZonePath      `json:"zone"`
-	RootPublicKey ed25519.PublicKey  `json:"root_public_key"`
-	Network       *zone.NetworkState `json:"network"`
-}
+type joinBundle = share.JoinBundle
 
 type joinAcceptResult struct {
 	Zone          zone.ZonePath
@@ -297,7 +288,7 @@ func acceptJoinBundleInState(config *appConfig, bundle *joinBundle, key *private
 			return nil, err
 		}
 	}
-	if err := validatePrivateKeyFile(key); err != nil {
+	if err := key.Validate(); err != nil {
 		return nil, err
 	}
 	if _, err := common.InstallIdentity(context.Background(), corestate.IdentityInstall{
@@ -353,27 +344,10 @@ func readPrivateKeyFile(path string) (*privateKeyFile, error) {
 	if err := readJSONFile(path, &key); err != nil {
 		return nil, err
 	}
-	if err := validatePrivateKeyFile(&key); err != nil {
+	if err := key.Validate(); err != nil {
 		return nil, err
 	}
 	return &key, nil
-}
-
-func validatePrivateKeyFile(key *privateKeyFile) error {
-	if key == nil {
-		return errors.New("private key is nil")
-	}
-	if key.Type != "photon.ed25519.private.v1" {
-		return errors.New("unsupported key file type")
-	}
-	if len(key.PrivateKey) != ed25519.PrivateKeySize || len(key.PublicKey) != ed25519.PublicKeySize {
-		return errors.New("invalid ed25519 key file")
-	}
-	derived := key.PrivateKey.Public().(ed25519.PublicKey)
-	if !bytes.Equal(derived, key.PublicKey) {
-		return errors.New("private key does not match public key")
-	}
-	return nil
 }
 
 func minimalNetworkForJoinBundle(ns *zone.NetworkState, target zone.ZonePath) (*zone.NetworkState, error) {

@@ -837,7 +837,7 @@ func (d *Daemon) handleJoinAcceptEvent(bundle *joinBundle, key *privateKeyFile) 
 			return nil, err
 		}
 	}
-	if err := validatePrivateKeyFile(key); err != nil {
+	if err := key.Validate(); err != nil {
 		return nil, err
 	}
 	commit, err := d.State.Common.InstallIdentity(context.Background(), corestate.IdentityInstall{

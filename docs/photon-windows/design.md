@@ -415,8 +415,12 @@ connected/ready 状态。
 ### B2 console 当前实现与验证边界
 
 `photon-windows run --console --config <path>` 现在运行公共状态同步。
-`state.path` 必须指向已有的 common-schema bbolt，managed zone 和 root pin 必须与配置匹配；
-当前命令不创建 identity，也不替代后续初始化/导入入口。运行中的数据库不可同时由另一进程打开。
+`state.path` 必须指向已有的 common-schema bbolt，managed zone 和 root pin 必须与配置匹配。
+首次运行可先用 `state import --config <path> --bundle <file> --key <file>` 导入 Linux 签发的
+join bundle 和 Photon Ed25519 JSON 密钥，见 [初始化步骤](native-testing.md#首次初始化)。
+导入只创建新数据库，拒绝覆盖已有文件；配置 root pin、zone、签名、有效期和密钥授权由公共身份逻辑验证。
+只接受 root-to-managed authorities/parent proofs，不将 bundle 中夹带的 records 或其他 zone 视为 verified。
+运行中的数据库不可同时由另一进程打开。尚未提供 Windows 密钥生成、自动入网或已有身份刷新命令。
 `gossip_listen` 默认为 `0.0.0.0:33434`，接受 IP:port（IPv6 如 `[::]:33434`）；
 UDP Gossip 与 TCP object-pull 绑定同一个地址和端口。启动时解析 bootstrap DNS，
 选择与监听地址相同族的第一个地址；暂不支持运行中 DNS 刷新或自动 rebind，修改配置后重启。
@@ -427,6 +431,8 @@ I/O deadline，UDP write 有 deadline，Ctrl+C 关闭 reader/worker/server 后�
 `gossip_started` 日志明确记录 `tunnel_ready=false`，此阶段不创建 Wintun、IKE、路由或 SCM 服务。
 
 真实 socket 测试覆盖 IPv4/IPv6 两节点同步、TCP 对象读取、取消退出、同地址重启及磁盘恢复，
-另覆盖 TCP bind 失败释放 UDP/数据库和阻塞 TCP read 的取消。它们运行在 Linux 开发机；
-Windows amd64 交叉构建通过也不等于 Windows 11 真机验收。B2 的 gateway 授权、自动 rebind
-及平台生命周期组合尚未完成。
+另覆盖 TCP bind 失败释放 UDP/数据库和阻塞 TCP read 的取消。2026-10-01 在 Linux 开发机和
+Windows 11 amd64 VM（OS build 26200）上通过；Windows 两节点使用同机 loopback，
+不代表跨主机 Linux/Windows 互通、进程 Ctrl+C、网络切换或隧道验收。
+可重复执行步骤见 [Windows 原生测试](native-testing.md)。B2 的 gateway 授权、
+自动 rebind 及平台生命周期组合尚未完成。

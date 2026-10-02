@@ -219,7 +219,7 @@ func TestJoinFlowAcceptsBase64PayloadArgs(t *testing.T) {
 
 func TestValidatePrivateKeyFileRejectsPrePhotonType(t *testing.T) {
 	key := &privateKeyFile{Type: "higgs.ed25519.private.v1"}
-	if err := validatePrivateKeyFile(key); err == nil || err.Error() != "unsupported key file type" {
+	if err := key.Validate(); err == nil || err.Error() != "unsupported key file type" {
 		t.Fatalf("validatePrivateKeyFile(pre-Photon type) = %v, want unsupported key file type", err)
 	}
 }

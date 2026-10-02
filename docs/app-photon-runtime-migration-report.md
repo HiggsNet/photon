@@ -669,3 +669,33 @@ GossipDriver 运行真实 UDP 同步与 TCP object-pull；console 直接消费�
 Linux 开发机真实 IPv4/IPv6 双节点收敛、落盘重启、原地址重新绑定、启动失败清理和 TCP 取消测试
 通过 race 检查；`make check` 的全量测试、Linux 构建、Windows amd64 交叉构建通过。
 尚未提供初始身份导入、gateway 授权、自动 rebind、Wintun/IKE 或 SCM，Windows 11 真机验收仍未执行。
+
+### Windows B2 原生测试（2026-10-01）
+
+将 `fcc2ba0` 的 Windows composition 与 CLI 测试交叉编译到 Windows 11 amd64 VM
+执行，两包全部通过。真实 IPv4/IPv6 loopback 双节点同步、TCP object-pull、落盘恢复、
+原地址重启、启动失败释放 UDP/数据库和取消阻塞 TCP read 均通过，收敛与恢复测试约 0.16 秒。
+增加独立测试包构建脚本和 PowerShell 执行入口，携带配置样例及源码版本，Windows 无需安装 Go。
+首次内联执行遇到 PowerShell 带点参数解析问题，脚本以引用参数解决；未修改生产 Go 代码。
+
+本轮补齐 Windows 本机运行证据，不代表跨主机互通、进程 Ctrl+C、网络变化或隧道验收。
+初始化/导入、gateway 授权、自动 rebind 仍未完成。测试不更改系统网络配置。
+
+### Windows B2 首次身份导入（2026-10-01）
+
+新增 `state import --config --bundle --key`，读取现有 Linux JSON/Base64 join bundle 和
+Photon JSON 私钥，以配置固定的 root pin/managed zone 为边界，复用公共 `InstallIdentity`
+验证授权链、签名、有效期和本地密钥授权，再创建 common bbolt；拒绝覆盖已有路径。
+入口仅接受 ancestor authorities/parent proofs，拒绝夹带 records、历史或额外 zone。
+正常失败清理本次新建文件；强制终止可能残留文件，后续导入仍不会覆盖。
+
+将 Linux 局部 `joinBundle`、`privateKeyFile` 的线格式定义迁入 `pkg/core/share`，由两个 CLI
+直接复用；删除 Linux 局部 key validator，公共方法从 seed 重建密钥，补充 private/public
+一致性检查。协议字段和合法密钥格式不变，没有新增 Windows schema、Store 或协议执行器。
+本轮生产 Go +214/-32（净增 182），测试 Go +198/-1（净增 197）。
+
+验证：完整 `make check`、Windows composition/CLI 定向 race、Linux join 回归通过。
+Windows 11 amd64 VM 上两包原生测试通过，含 JSON/Base64 CLI 导入、拒绝重复导入、
+持久化 revision/key、导入后 console 启动，以及错误 root/zone/签名/密钥/版本、过期授权和
+夹带内容的拒绝。新增三个顶层测试（总计 21 个）。`git diff --check` 通过。
+Windows 密钥生成、自动入网、已有身份刷新、gateway 授权与跨主机互通仍未实现/验收；未提交或发布。

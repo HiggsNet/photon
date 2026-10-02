@@ -448,5 +448,5 @@ func validateControlJoinAccept(request controlRequest) error {
 	if request.PrivateKey == nil {
 		return nil
 	}
-	return validatePrivateKeyFile(request.PrivateKey)
+	return request.PrivateKey.Validate()
 }

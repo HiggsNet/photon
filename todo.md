@@ -218,13 +218,14 @@ B1 契约见 [Windows 设计](docs/photon-windows/design.md) §1.1–1.2、§3.1
 
 ### B2. Windows composition 与公共 gossip
 
-- [x] console 最小闭环：`run --console --config` 恢复现有 common DB，共用 GossipDriver 执行真实 UDP Gossip/TCP object-pull；取消后关闭 workers/socket，再关闭 State/BoltStore。Linux 上真实 IPv4/IPv6 双节点收敛、落盘重启和启动失败清理测试覆盖；Windows 真机验收仍待完成。
+- [x] 首次身份导入：`state import --config --bundle --key` 接受 Linux join bundle 和现有 Photon 密钥，复用公共 InstallIdentity；匹配配置 root pin/zone，拒绝额外网络内容和覆盖已有数据库。Windows 密钥生成、自动入网和刷新不在本入口范围内。
+- [x] console 最小闭环：`run --console --config` 恢复现有 common DB，共用 GossipDriver 执行真实 UDP Gossip/TCP object-pull；取消后关闭 workers/socket，再关闭 State/BoltStore。Linux 与 Windows 11 amd64 VM 原生测试通过，覆盖同机 IPv4/IPv6 双节点收敛、落盘重启和启动失败清理；跨主机互通、进程 Ctrl+C 和网络切换仍待验收，见 [原生测试](docs/photon-windows/native-testing.md)。
 - [ ] Windows service composition 创建一个 Daemon、一个 GossipDriver、一个 State、一个 WindowsDriver、一个 WindowsState 和一个 BoltStore。
 - [ ] 接入真实 Windows UDP adapter：bind/read/write/rebind/close 有界且可取消；GossipDriver 继续唯一拥有 receive/object-pull/protocol event ordering。
 - [ ] 从 verified records 生成 gateway candidates，校验 identity/key、address/port、overlay、route authorization 和撤销状态。
 - [ ] 私钥沿用管理员负责的本地安全模型，可直接存同一 bbolt；不增加本地加密/解密层。
 - [ ] WindowsState 只按真实需求保存不可重建 secret/intent/journal；不为与 Linux 字段对称提前建 schema。
-- [ ] 完成真实 UDP 双节点 gossip、关闭重开和 state recovery 验收后，才进入用户态 packet pipeline。
+- [x] 完成真实 UDP 双节点 gossip、关闭重开和 state recovery 的 Windows 本机验收；B2 其余前置项仍须完成，才进入用户态 packet pipeline。
 
 ### B3. IKEv2 与 ESP
 
@@ -283,4 +284,4 @@ B1 契约见 [Windows 设计](docs/photon-windows/design.md) §1.1–1.2、§3.1
 2. 旧 aggregate schema 的入口、fixtures 与版本承诺审计已完成；仓库目前未声明直接升级截止版本，现有兼容继续保留。
 3. 发布计划确定截止版本后，按独立范围退出 aggregate decoder、partitioned cleanup 迁移和 root 修复；不能按文件名一次删除。
 4. CLI 壳只随上述 owner 迁移逐步进入 `internal/photoncli`，不单独进行目录搬家。
-5. Windows B1 已按 Linux 实际构建/运行结果收口；B2 console 已接入真实 UDP/TCP Gossip 与恢复闭环，下一步补初始化/导入、gateway 授权、rebind 和 Windows 真机验收，之后依次推进 IKE/ESP、Babel/SADR、Wintun、SCM/named-pipe 和完整验收。
+5. Windows B1 已按 Linux 实际构建/运行结果收口；B2 console 已接入真实 UDP/TCP Gossip 与恢复闭环，且 Windows 本机原生测试通过，并已提供首次身份导入。下一步补 gateway 授权、rebind 和跨主机验收，之后依次推进 IKE/ESP、Babel/SADR、Wintun、SCM/named-pipe 和完整验收。

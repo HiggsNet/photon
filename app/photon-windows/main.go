@@ -29,6 +29,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	switch args[0] {
+	case "state":
+		return runState(args[1:], stdout, stderr)
 	case "run":
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer cancel()
@@ -107,6 +109,7 @@ func writeUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage: photon-windows <command>")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Commands:")
+	fmt.Fprintln(w, "  state import --config <path> --bundle <file> --key <file>  Initialize a new state database")
 	fmt.Fprintln(w, "  run --console --config <path>    Restore state and run Gossip (no tunnel yet)")
 	fmt.Fprintln(w, "  config validate --config <path>  Validate configuration without starting the service")
 	fmt.Fprintln(w, "  version                          Show build information")
