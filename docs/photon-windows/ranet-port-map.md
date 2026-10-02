@@ -73,7 +73,10 @@ IKE 互通结果。尤其不能通过给 Linux 强制 GCM-only、none-only CHILD
 2. 将 notice 纳入源代码分发与随二进制交付的第三方许可证材料，不只留一个外链；复制的测试/fixture 同样登记。
 3. 更新实际采用文件清单、依赖和 checksum；本表的“计划采用”不能冒充最终实际 provenance。基于该源码改写不宣称 clean-room，也不能因改名删掉 notice。
 
-本次只新增本决策文档，没有复制上游实现，不提前创建含未采用代码的 vendor/third_party 树。
+初次决策只新增本文档。2026-10-02 实际采用三个 codec 文件，逐文件来源和改动见
+[third_party/ranet-lite/README.md](../../third_party/ranet-lite/README.md)，完整 MIT
+原文位于同目录 LICENSE。密码学、会话与测试为 Photon 新实现；未迁移上游依赖。
+Windows build 与原生测试包已包含 third_party notice；当前 Linux 产品未链接此包。
 
 以下按固定 [go.mod](https://github.com/NickCao/ranet-lite/blob/24a24a2ff380c9f8ceb0092d640daa32e86b5eb5/go.mod)
 下载 exact module 后读取其 LICENSE/NOTICE 核对。模块级许可证摘要不能覆盖文件级例外：真正引入时

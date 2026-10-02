@@ -12,7 +12,7 @@ Windows 不需要安装 Go。测试使用临时数据库和 loopback 临时端�
 bash docs/scripts/windows-native-smoke-build.sh
 ```
 
-脚本输出独立测试包路径，内含两个测试程序、公开配置样例、PowerShell 入口、
+脚本输出独立测试包路径，内含三个测试程序（composition、CLI、IKE）、第三方 notice、公开配置样例、PowerShell 入口、
 源码 commit 和工作树状态。将整个目录复制到 Windows，例如：
 
 ```sh
