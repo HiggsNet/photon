@@ -7,13 +7,17 @@ import (
 	"fmt"
 )
 
-// Initiator owns one SA_INIT exchange. Its caller owns transport, deadlines and
-// serialization. A completed exchange is still unauthenticated: no traffic or
-// route may be authorized until IKE_AUTH succeeds.
+// Initiator owns one SA_INIT followed by IKE_AUTH. Its caller owns transport,
+// deadlines and serialization. SA_INIT remains unauthenticated; no traffic or
+// route may be authorized until IKE_AUTH and the caller's current policy pass.
 type Initiator struct {
 	spi            uint64
 	nonce, request []byte
 	private        *ecdh.PrivateKey
+	init           *InitResult
+	peerEd25519    bool
+	auth           *authPending
+	authDone       bool
 }
 
 type InitResult struct {
@@ -43,6 +47,7 @@ func NewInitiator() (*Initiator, error) {
 		{Type: PayloadSA, Data: DefaultIKEProposal()},
 		{Type: PayloadKE, Data: EncodeKE(GroupP256, P256PublicKey(key))},
 		{Type: PayloadNonce, Data: i.nonce},
+		{Type: PayloadNotify, Data: []byte{0, 0, 0x40, 0x2f, 0, 5}},
 	})
 	if err != nil {
 		return nil, err
@@ -65,6 +70,7 @@ func (i *Initiator) HandleInitResponse(packet []byte) (*InitResult, error) {
 		return nil, fmt.Errorf("ike: response does not match pending SA_INIT")
 	}
 	var sa, ke, nonce []byte
+	var peerEd25519, seenHashes bool
 	for _, p := range ps {
 		switch p.Type {
 		case PayloadSA:
@@ -78,6 +84,16 @@ func (i *Initiator) HandleInitResponse(packet []byte) (*InitResult, error) {
 			n, err = DecodeNotify(p.Data)
 			if err == nil && (len(n.SPI) != 0 || n.Type < 16384 || n.Type == 16390) {
 				err = fmt.Errorf("ike: unsupported SA_INIT notification %d", n.Type)
+			}
+			if err == nil && n.Type == 16431 {
+				if seenHashes || len(n.Data) == 0 || len(n.Data)%2 != 0 {
+					err = fmt.Errorf("ike: invalid signature hash algorithms notification")
+				} else {
+					seenHashes = true
+					for j := 0; j < len(n.Data); j += 2 {
+						peerEd25519 = peerEd25519 || binary.BigEndian.Uint16(n.Data[j:]) == 5
+					}
+				}
 			}
 		case PayloadVendor:
 		default:
@@ -105,5 +121,7 @@ func (i *Initiator) HandleInitResponse(packet []byte) (*InitResult, error) {
 		return nil, err
 	}
 	i.private = nil
-	return &InitResult{ResponderSPI: h.ResponderSPI, Nonce: nonce, Keys: keys, Response: append([]byte(nil), packet...)}, nil
+	i.peerEd25519 = peerEd25519
+	i.init = &InitResult{ResponderSPI: h.ResponderSPI, Nonce: nonce, Keys: keys, Response: append([]byte(nil), packet...)}
+	return cloneInitResult(i.init), nil
 }
