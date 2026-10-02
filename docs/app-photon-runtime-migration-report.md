@@ -766,3 +766,33 @@ public key、contact。当前网络各 zone chain/相关 record 签名重验后�
 防止多端口/多候选令 contacts 膨胀。真实 SA 和 Router ID/origin 绑定仍属 B3/B4。
 本批生产 Go +180/-3，测试 Go +179/-0；没有新增授权 Store 或第二协议 executor。
 定向普通/race、整合 `make check` 与 Windows 原生 gateway 测试通过。
+
+上述在线规划本地提交为 `9202515`。
+
+### B2 Daemon、原生通知与活重绑收口（2026-10-02）
+
+`RunConsole` 使用真实 `Daemon`，一个 State/BoltStore/GossipDriver 贯穿整次运行。
+同端口 UDP/TCP adapter 可活重绑，旧 generation 的 read/accept completion 不进入新路径，
+失败时释放部分资源并重试；原有 receive/object-pull owner 不重建。已接受 TCP 对象请求
+仍由共同 driver 原有 deadline 收尾，未声称重绑会立即终止这些已接受连接。
+
+原生 Windows IP Helper interface/address/route 回调以有界 channel 通知 Daemon；
+回调 token 固定并在 CancelMibChangeNotify2 等待完成后释放，注销不在回调内执行。
+规划用一个有界 worker（3 秒预算），bootstrap DNS（最多 1 秒）与 signed gateway DNS
+不阻塞事件循环。公共 GossipDriver 增加 detached bootstrap hint 更新入口，刷新不改变
+用户配置、peer IDs 或授权。完成时验证 generation/revision，查询时再按当前时间重验。
+
+审查修复：同计划内容的新 revision 也更新运行状态；重绑后刷新 bootstrap DNS；
+计划超时仍交付已解析 bootstrap 与失败诊断；远端 UDP ICMP 错误不触发本地重绑，
+避免同步探测与重绑互相触发。原生通知 burst 下首次成功日志后仍可能紧接下一次重绑，
+测试要求 1 秒内恢复同端口对象读取，而非宣称重绑过程没有可用性空窗。
+
+本批生产 Go +591/-47（净增 544），测试 Go +632/-1（净增 631）。完整 `make check`
+通过；composition/CLI/corehost race 通过（9.669/1.053/1.200 秒），最终 UDP 错误分类
+补充 socket race ×5 通过。Windows 两包原生 41 个顶层测试通过；真实 OS 初始通知→
+Daemon 自动重绑→对象读取额外连续 20 次通过。跨主机最终整合验收通过，revision
+`11 → 12 → 12`；普通原生测试不启用跨主机 opt-in helper。
+
+B2 控制面前置收口。原 checklist 中 WindowsDriver/平台 journal 的实际实现由 B4 承接，
+SCM 由 B5 承接，不能为了凑类型新增空组件；真实 SA 与 Router ID/origin/packet 授权 gate
+仍由 B3/B4 完成。当前验证不是物理断网/睡眠恢复、SCM stop、Wintun 或隧道验收。

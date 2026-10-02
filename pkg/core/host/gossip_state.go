@@ -3,6 +3,7 @@ package host
 import (
 	"context"
 	"errors"
+	"net"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
@@ -20,9 +21,9 @@ type GossipStateStore interface {
 	UpdatePeerCheckpoints(context.Context, map[string]corestate.PeerCheckpointPatch) (corestate.CommitResult, error)
 }
 
-// GossipDriverConfig contains platform-neutral values fixed when one
-// GossipDriver is constructed. Socket addresses and platform handles do not
-// belong here.
+// GossipDriverConfig contains platform-neutral configuration. Resolved bootstrap
+// endpoints may be refreshed by the host; identities and policy remain fixed.
+// Local socket addresses and platform handles do not belong here.
 type GossipDriverConfig struct {
 	PeerID    string
 	Limits    corestate.SyncLimits
@@ -44,6 +45,22 @@ func cloneGossipDriverConfig(config GossipDriverConfig) GossipDriverConfig {
 	config.Discovery.BootstrapPeers = append([]string(nil), config.Discovery.BootstrapPeers...)
 	config.Discovery.SourceOrder = append([]string(nil), config.Discovery.SourceOrder...)
 	return config
+}
+
+// UpdateGossipBootstrap replaces resolved discovery hints after a host DNS
+// refresh. The host must subsequently RefreshGossipDiscovery on its event loop.
+// This neither authorizes peers nor changes the configured bootstrap peer IDs.
+func (driver *GossipDriver) UpdateGossipBootstrap(peers map[string]*net.UDPAddr) error {
+	if driver == nil {
+		return ErrGossipDriverStopped
+	}
+	driver.mu.Lock()
+	defer driver.mu.Unlock()
+	if driver.stopped {
+		return ErrGossipDriverStopped
+	}
+	driver.gossipConfig.Discovery.Bootstrap = cloneBootstrapPeers(peers)
+	return nil
 }
 
 func (driver *GossipDriver) logGossip(level, event, peerID, phase string, err error, fields map[string]any) {

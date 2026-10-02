@@ -220,13 +220,16 @@ B1 契约见 [Windows 设计](docs/photon-windows/design.md) §1.1–1.2、§3.1
 
 - [x] 首次身份导入：`state import --config --bundle --key` 接受 Linux join bundle 和现有 Photon 密钥，复用公共 InstallIdentity；匹配配置 root pin/zone，拒绝额外网络内容和覆盖已有数据库。Windows 密钥生成、自动入网和刷新不在本入口范围内。
 - [x] console 最小闭环：`run --console --config` 恢复现有 common DB，共用 GossipDriver 执行真实 UDP Gossip/TCP object-pull；取消后关闭 workers/socket，再关闭 State/BoltStore。Linux 与 Windows 11 amd64 VM 原生测试通过，覆盖同机 IPv4/IPv6 双节点收敛、落盘重启和启动失败清理；跨主机互通、进程 Ctrl+C 和网络切换仍待验收，见 [原生测试](docs/photon-windows/native-testing.md)。
-- [ ] Windows service composition 创建一个 Daemon、一个 GossipDriver、一个 State、一个 WindowsDriver、一个 WindowsState 和一个 BoltStore。
-- [ ] 接入真实 Windows UDP adapter：bind/read/write/rebind/close 有界且可取消；GossipDriver 继续唯一拥有 receive/object-pull/protocol event ordering。
-- [ ] 从 verified records 生成 gateway candidates，校验 identity/key、address/port、overlay、route authorization 和撤销状态。
-  - 已提供 `gateways --config` 离线传输诊断，console 在启动、Gossip revision 更新及每 5 秒复核同一候选，只记录变化。复核签名链、撤销、Ed25519 key/profile 绑定、overlay、地址/端口有效期；不解析 DNS，不授予路由权限。运行时选择、route-origin 授权和 SA 绑定仍待接入。
-- [ ] 私钥沿用管理员负责的本地安全模型，可直接存同一 bbolt；不增加本地加密/解密层。
-- [ ] WindowsState 只按真实需求保存不可重建 secret/intent/journal；不为与 Linux 字段对称提前建 schema。
+- [x] 控制面 composition 创建一个 Daemon、一个 GossipDriver、一个 State 和一个 BoltStore；console 使用同一 Daemon。原条目中的 WindowsDriver 由 B4 的实际网络资源需求引入，SCM 包装由 B5 完成，不为凑类型提前造空组件。
+- [x] 真实 Windows UDP/TCP adapter：bind/read/write/rebind/close 有界且可取消；同端口热重绑保留唯一 GossipDriver 的 receive/object-pull/protocol event ordering，失败清理并重试。原生 IP Helper 通知触发重绑；bootstrap DNS 异步刷新。
+- [x] 从 verified records 生成当前待连接 gateway plan，校验 identity/key、address/port、overlay、撤销、有效期；公共 IPAM 授权生成保留真实 origin 的 split-range 路由授权事实。单 worker DNS 预算有界，generation/revision 丢弃旧完成，查询时按当前时间重验。
+  - Selected 是待连接目标，不是 active SA；Routes 不是安装许可。B3 的真实 SA 身份绑定与 B4 的 Router ID/origin/逐 packet 授权 gate 仍保留为必须完成的任务。离线 `gateways` 不解析 DNS，在线 Daemon 解析 signed DNS。
+- [x] identity 私钥保存在同一 common bbolt，沿用管理员本地安全模型；不增加本地加密/解密层。
+- [x] WindowsState 按真实需求引入：当前唯一 secret 是 common identity，未新增对称平台 schema。B3/B4 出现 transport secret、资源 intent/journal 后再增加实际字段。
 - [x] 完成真实 UDP 双节点 gossip、关闭重开和 state recovery 的 Windows 本机验收；B2 其余前置项仍须完成，才进入用户态 packet pipeline。
+- [x] 完成 Windows/Linux 跨主机控制面验收：真实 UDP/TCP 同步，Windows 同 DB/同端口重启，去掉 bootstrap 后仍可读取恢复对象，revision 11 → 12 → 12。临时测试身份/目录/防火墙规则均清理。
+
+B2 控制面前置已收口，可以进入 B3。这里不包含 SCM、Wintun/IP Helper 路由驱动、真实 SA、route-origin 安装 gate、物理断网/睡眠恢复或完整 B6 隧道验收；原 composition 条目中的这些后续组件分别由 B3/B4/B5 的明确任务承接。
 
 ### B3. IKEv2 与 ESP
 
@@ -285,4 +288,4 @@ B1 契约见 [Windows 设计](docs/photon-windows/design.md) §1.1–1.2、§3.1
 2. 旧 aggregate schema 的入口、fixtures 与版本承诺审计已完成；仓库目前未声明直接升级截止版本，现有兼容继续保留。
 3. 发布计划确定截止版本后，按独立范围退出 aggregate decoder、partitioned cleanup 迁移和 root 修复；不能按文件名一次删除。
 4. CLI 壳只随上述 owner 迁移逐步进入 `internal/photoncli`，不单独进行目录搬家。
-5. Windows B1 已按 Linux 实际构建/运行结果收口；B2 console 已接入真实 UDP/TCP Gossip 与恢复闭环，且 Windows 本机原生测试通过，并已提供首次身份导入。下一步补 gateway 授权、rebind 和跨主机验收，之后依次推进 IKE/ESP、Babel/SADR、Wintun、SCM/named-pipe 和完整验收。
+5. Windows B1/B2 控制面前置已收口：身份导入、唯一 Daemon/State/GossipDriver、当前授权候选规划、原生通知重绑与 Windows/Linux 跨主机恢复验收已完成。下一步按 B3 的来源/许可证决策实现 IKE/ESP，随后推进 Babel/SADR、Wintun、SCM/named-pipe 和完整验收。

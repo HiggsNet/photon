@@ -422,20 +422,26 @@ join bundle 和 Photon Ed25519 JSON 密钥，见 [初始化步骤](native-testin
 只接受 root-to-managed authorities/parent proofs，不将 bundle 中夹带的 records 或其他 zone 视为 verified。
 运行中的数据库不可同时由另一进程打开。尚未提供 Windows 密钥生成、自动入网或已有身份刷新命令。
 `gossip_listen` 默认为 `0.0.0.0:33434`，接受 IP:port（IPv6 如 `[::]:33434`）；
-UDP Gossip 与 TCP object-pull 绑定同一个地址和端口。启动时解析 bootstrap DNS，
-选择与监听地址相同族的第一个地址；暂不支持运行中 DNS 刷新或自动 rebind，修改配置后重启。
+UDP Gossip 与 TCP object-pull 绑定同一个地址和端口。bootstrap DNS 选择与监听地址相同族的第一个地址；
+启动时解析，运行中由有界 worker 定时和重绑后刷新。配置本身保持不可变，修改配置后重启。
 
-composition 只打开一个 State/BoltStore，创建一个公共 GossipDriver，直接消费其事件；
+`Daemon.Run` 只打开一个 State/BoltStore，创建一个公共 GossipDriver，直接消费其事件；
 协议、对象校验、checkpoint、重试策略继续归公共实现。TCP exchange 使用 context cancellation 和
 I/O deadline，UDP write 有 deadline，Ctrl+C 关闭 reader/worker/server 后才关闭数据库。
 `gossip_started` 日志明确记录 `tunnel_ready=false`，此阶段不创建 Wintun、IKE、路由或 SCM 服务。
 
 真实 socket 测试覆盖 IPv4/IPv6 两节点同步、TCP 对象读取、取消退出、同地址重启及磁盘恢复，
-另覆盖 TCP bind 失败释放 UDP/数据库和阻塞 TCP read 的取消。2026-10-01 在 Linux 开发机和
-Windows 11 amd64 VM（OS build 26200）上通过；Windows 两节点使用同机 loopback，
-不代表跨主机 Linux/Windows 互通、进程 Ctrl+C、网络切换或隧道验收。
-可重复执行步骤见 [Windows 原生测试](native-testing.md)。B2 的 gateway 授权、
-自动 rebind 及平台生命周期组合尚未完成。
+另覆盖 TCP bind 失败释放 UDP/数据库和阻塞 TCP read 的取消。Linux 开发机和 Windows 11 amd64 VM
+（OS build 26200）已通过；2026-10-02 又完成跨主机 Linux/Windows 同步与恢复验收。
+可重复执行步骤见 [Windows 原生测试](native-testing.md)。进程 Ctrl+C、物理网络故障/睡眠、
+Wintun/IKE/路由和 SCM 仍由后续阶段验收。
+
+`Daemon.Rebind` 以及原生 IP Helper interface/address/route 通知会替换同端口 UDP/TCP listener，
+保留唯一 GossipDriver、receive/accept worker、State 和数据库。旧 socket 结果不会跨代重新发布；
+重绑失败释放部分资源，后续重试。已接受 TCP object-pull 连接由公共 driver 原有 deadline 收尾。
+注册失败不报告启动成功，停止时先取消规划和通知，再关闭协议资源及 State。
+通知回调仅投递有界事件，注销在回调外执行，遵守
+[CancelMibChangeNotify2 的线程约束](https://learn.microsoft.com/en-us/windows/win32/api/netioapi/nf-netioapi-cancelmibchangenotify2)。
 
 `photon-windows gateways --config <path>` 离线读取同一数据库，逐一诊断 `gateway.allowed_zones`。
 每次按当前时间复核 root pin、授权链、撤销、五项传输记录的签名和 owner/key、profile identity、
@@ -450,3 +456,13 @@ console 复用同一候选校验：启动时、Gossip 事件推进 verified revi
 仅候选/拒绝原因变化时输出 `gateway_candidates_changed`，附本次 revision 和评估时间；
 这仍是观察日志，不是 active gateway 选择或数据面撤销执行器。尚无 SA/路由可由该观察控制，
 后续数据面接入不得把 5 秒观察周期当作路由授权有效期或安全撤销目标。
+
+在线 `PlanGateway` 使用签名记录解析 DNS，并按 allowlist/contact 顺序选出一个待连接目标。
+唯一 worker 每轮最多 3 秒（bootstrap 部分最多 1 秒），不阻塞 Gossip event loop；新 revision、
+重绑或新一轮请求取消旧计划，完成时以 generation/revision 丢弃旧结果，再按当前时间复验。
+`Daemon.GatewayPlan` 返回 detached 且重新校验的当前结果；计划内容相同也更新 revision，
+不能把日志去重误当成状态不更新。DNS 失败保留最后可用 bootstrap hint 重试，它仍不授予信任。
+
+路由规划先对当前网络的每个相关 zone chain/record 签名重验，再复用 `BuildAuthorizedRouteSet`，
+保留真实 origin，限制在 split aggregate 内。Selected 是待连接目标，Routes 是授权事实；
+没有 SA、Router ID/origin 绑定的结果不得安装路由。这些后续数据面条件仍归 B3/B4。

@@ -83,3 +83,26 @@ bundle 文件支持 JSON 和 Base64 JSON，沿用 Linux 格式；私钥文件沿
 结果包含每个 allowlist zone 的候选 IP contacts 或拒绝原因、verified revision 和评估时间。
 仅有 bootstrap hint 或尚未同步网关记录时会显示拒绝，这不是导入失败。
 该命令不解析 DNS、不测试连通性、不建立隧道或授予路由权限。
+
+## B2 在线生命周期与跨主机验收
+
+2026-10-02 原生测试增加在线 gateway DNS/授权事实规划、过期 completion 丢弃、取消、
+IPv4/IPv6 同端口连续重绑、失败 bind 恢复、socket 故障恢复和 Windows IP Helper 通知。
+通知测试请求真实 OS 初始回调，经 Daemon event loop 触发重绑，再读取同端口对象；
+不修改 VM 管理地址。这不等于物理断网、睡眠恢复或数据面撤销验收。
+
+跨主机 rig 需要 Linux 和 Windows 互相可达的空闲 UDP/TCP 端口。Linux 防火墙须已放行该端口；
+脚本不修改 Linux 防火墙。Windows 测试账号需管理员权限，脚本创建只允许指定 Linux 来源
+和测试端口的临时规则，结束时清理。Windows 只需 OpenSSH/PowerShell，不需 Go。
+
+```sh
+PHOTON_WINDOWS_SSH=photon-test@10.16.252.11 \
+PHOTON_LINUX_IP=10.16.255.8 PHOTON_WINDOWS_IP=10.16.252.11 \
+PHOTON_CROSS_PORT=5201 bash docs/scripts/windows-cross-host-smoke.sh
+```
+
+按实际设备替换地址/端口；脚本编译当前工作树、生成隔离测试身份和数据库、上传 helper。
+Windows 初始数据库缺少 Linux 节点对象，真实 Gossip 同步后落盘，停止再同端口重启；
+禁用 bootstrap 后由 Linux 反向 TCP 读取恢复对象，最后再次打开 Windows DB 检查 revision。
+已验证 revision `11 → 12 → 12`。脚本输出日志目录，清理两端测试身份、Windows 临时规则和目录。
+这些是同一公共控制面在两种 OS 上的互通证据，不是 StrongSwan/IKE/ESP 隧道验收。

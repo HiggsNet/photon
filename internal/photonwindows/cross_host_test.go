@@ -70,6 +70,20 @@ func TestCrossHostGossip(t *testing.T) {
 			t.Fatal(err)
 		}
 		cfg := &Config{State: StateConfig{Path: filepath.Join(dir, "right.db")}, ManagedZone: "node-b.catofes.", TrustedRootPublicKey: m.Root, GossipListen: m.Windows, Gateway: GatewayConfig{BootstrapHints: []BootstrapHint{{Peer: "node-a.catofes.", Address: m.Linux}}}}
+		initial, err := OpenState(cfg.State.Path, cfg.ManagedZone, m.Root, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		initialView, err := initial.ReadView(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if initialView.Revision != 11 || initialView.State.Network.Zones["node-a.catofes."] != nil {
+			t.Fatal("fixture already contains Linux object")
+		}
+		if err = initial.Close(); err != nil {
+			t.Fatal(err)
+		}
 		_, stop := startConsole(t, cfg)
 		waitForWindowsState(t, 30*time.Second, func() bool { return probe(m.Windows) })
 		stop()
@@ -81,7 +95,7 @@ func TestCrossHostGossip(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if view.Revision <= 11 || view.State.Network.Zones["node-a.catofes."] == nil {
+		if view.Revision != initialView.Revision+1 || view.State.Network.Zones["node-a.catofes."] == nil {
 			t.Fatal("cross-host convergence not persisted")
 		}
 		if err = state.Close(); err != nil {
@@ -96,6 +110,20 @@ func TestCrossHostGossip(t *testing.T) {
 		}
 		write("restarted", nil)
 		waitFile("stop")
+		stopRestarted()
+		restored, err := OpenState(cfg.State.Path, cfg.ManagedZone, m.Root, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer restored.Close()
+		restoredView, err := restored.ReadView(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if restoredView.Revision != view.Revision {
+			t.Fatalf("restart changed revision: %d -> %d", view.Revision, restoredView.Revision)
+		}
+		t.Logf("Windows revisions: initial=%d synchronized=%d restarted=%d", initialView.Revision, view.Revision, restoredView.Revision)
 		t.Log("Windows synchronized from Linux, reopened the same DB and UDP/TCP port, and served restored state")
 	default:
 		t.Fatalf("unknown cross-host role %q", role)
