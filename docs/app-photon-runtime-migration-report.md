@@ -699,3 +699,23 @@ Windows 11 amd64 VM 上两包原生测试通过，含 JSON/Base64 CLI 导入、�
 持久化 revision/key、导入后 console 启动，以及错误 root/zone/签名/密钥/版本、过期授权和
 夹带内容的拒绝。新增三个顶层测试（总计 21 个）。`git diff --check` 通过。
 Windows 密钥生成、自动入网、已有身份刷新、gateway 授权与跨主机互通仍未实现/验收；未提交或发布。
+
+上述身份导入与 Windows 原生测试入口于 2026-10-02 本地提交为 `33e11f8`，未推送或发布。
+
+### Windows B2 gateway 离线传输诊断（2026-10-02）
+
+新增 `gateways --config`，由 Windows composition 从同一 common State 读取 detached view，
+关闭数据库后生成 allowlist 网关诊断。复用公共 VerifyChain/VerifyRecord、IPsec record parser、
+key fingerprint 和 contact resolver，校验 root pin、撤销、记录归属/签名、identity/key、
+Ed25519 有效期、inbound role、overlay/path family 和地址/端口有效期；不使用 bootstrap hints
+作为候选，不执行 DNS 查询。输出 snapshot revision、评估时间及拒绝原因。
+
+这是可检查的离线传输材料，不是连接成功或路由授权；输出固定 `tunnel_ready=false` 和
+`route_authorized=false`。没有新增协议 executor、Store 或缓存授权层。gateway runtime selection、
+route-origin/SA 绑定仍待实现，B2 gateway checkbox 保持未完成。生产 Go +179/-0，测试 Go +109/-0。
+
+完整 `make check`、composition/CLI race 和 Windows 11 amd64 两包原生测试通过。
+新增 11 个候选场景覆盖缺失记录、坏签名、错误 identity/fingerprint、过期 key/address/authority、
+错误 overlay、outbound-only 与撤销；同 revision 时间推进后拒绝过期地址。
+CLI 测试验证导入后的缺失 gateway 记录显示拒绝，并明确无 route authorization。
+`git diff --check` 通过；本节改动尚未提交，未推送或发布。

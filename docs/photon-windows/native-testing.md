@@ -73,3 +73,13 @@ bundle 文件支持 JSON 和 Base64 JSON，沿用 Linux 格式；私钥文件沿
 私钥 seed 不一致、额外 zone/record 和重复导入均被拒绝。正常错误会清理本次新建的数据库；
 若进程在写入期间被强制结束，目标可能残留，重试仍拒绝覆盖，需管理员确认后处理。
 首次导入完成不代表已建隧道；后续 Gossip 使用配置中的 bootstrap hints。
+
+停止 console 后可检查网关传输材料：
+
+```powershell
+.\photon-windows.exe gateways --config .\config.yaml
+```
+
+结果包含每个 allowlist zone 的候选 IP contacts 或拒绝原因、verified revision 和评估时间。
+仅有 bootstrap hint 或尚未同步网关记录时会显示拒绝，这不是导入失败。
+该命令不解析 DNS、不测试连通性、不建立隧道或授予路由权限。

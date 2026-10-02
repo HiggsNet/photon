@@ -223,6 +223,7 @@ B1 契约见 [Windows 设计](docs/photon-windows/design.md) §1.1–1.2、§3.1
 - [ ] Windows service composition 创建一个 Daemon、一个 GossipDriver、一个 State、一个 WindowsDriver、一个 WindowsState 和一个 BoltStore。
 - [ ] 接入真实 Windows UDP adapter：bind/read/write/rebind/close 有界且可取消；GossipDriver 继续唯一拥有 receive/object-pull/protocol event ordering。
 - [ ] 从 verified records 生成 gateway candidates，校验 identity/key、address/port、overlay、route authorization 和撤销状态。
+  - 已提供 `gateways --config` 离线传输诊断，复核签名链、撤销、Ed25519 key/profile 绑定、overlay、地址/端口有效期；不解析 DNS，不授予路由权限。运行时选择、route-origin 授权和 SA 绑定仍待接入。
 - [ ] 私钥沿用管理员负责的本地安全模型，可直接存同一 bbolt；不增加本地加密/解密层。
 - [ ] WindowsState 只按真实需求保存不可重建 secret/intent/journal；不为与 Linux 字段对称提前建 schema。
 - [x] 完成真实 UDP 双节点 gossip、关闭重开和 state recovery 的 Windows 本机验收；B2 其余前置项仍须完成，才进入用户态 packet pipeline。

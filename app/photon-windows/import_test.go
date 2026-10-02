@@ -82,6 +82,21 @@ func TestStateImportCLI(t *testing.T) {
 			if err := state.Close(); err != nil {
 				t.Fatal(err)
 			}
+			stdout.Reset()
+			if code := run([]string{"gateways", "--config", configPath}, &stdout, &stderr); code != 0 {
+				t.Fatalf("gateways exit %d: %s", code, &stderr)
+			}
+			var report struct {
+				Revision        uint64                           `json:"revision"`
+				RouteAuthorized bool                             `json:"route_authorized"`
+				Candidates      []photonwindows.GatewayCandidate `json:"candidates"`
+			}
+			if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+				t.Fatal(err)
+			}
+			if report.Revision != 1 || report.RouteAuthorized || len(report.Candidates) != 1 || report.Candidates[0].Rejected == "" {
+				t.Fatalf("unexpected gateway diagnosis: %s", &stdout)
+			}
 			if code := run(args, &stdout, &stderr); code != 1 {
 				t.Fatalf("second import exit %d", code)
 			}

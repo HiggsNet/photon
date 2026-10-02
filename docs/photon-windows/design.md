@@ -436,3 +436,11 @@ Windows 11 amd64 VM（OS build 26200）上通过；Windows 两节点使用同机
 不代表跨主机 Linux/Windows 互通、进程 Ctrl+C、网络切换或隧道验收。
 可重复执行步骤见 [Windows 原生测试](native-testing.md)。B2 的 gateway 授权、
 自动 rebind 及平台生命周期组合尚未完成。
+
+`photon-windows gateways --config <path>` 离线读取同一数据库，逐一诊断 `gateway.allowed_zones`。
+每次按当前时间复核 root pin、授权链、撤销、五项传输记录的签名和 owner/key、profile identity、
+Ed25519 key fingerprint/有效期、inbound role、overlay/path family 和有效地址/端口。
+输出 revision、评估时间、签名记录中的 IP contacts 或拒绝原因。bootstrap hints 不进入候选；
+离线命令不解析 DNS，且不能在 console 持有数据库时执行。
+这些结果仅用于检查传输材料，不创建 SA、不证明可达，也不代表 route-origin 授权；
+输出明确标记 `tunnel_ready=false` 和 `route_authorized=false`。后续运行时必须重新校验，不能缓存为授权凭据。
