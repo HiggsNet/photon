@@ -750,3 +750,19 @@ finally 清理后规则数为 0、远端测试目录数为 0，本地测试身�
 
 这证明跨 Windows/Linux 控制面互通，不是 StrongSwan/IKE/ESP 或生产网关验收。
 新增文件只包含测试和测试脚本；当前生产代码没有因此增加第二套协议路径。
+
+跨主机 rig 本地提交为 `294682c`。随后加强并复验初始/同步/重启后的数据库 revision：
+Windows 初始缺少 Linux 节点对象，revision 明确为 `11 → 12 → 12`；最终整合代码跨主机
+复验 Linux 3.09 秒、Windows 1.40 秒通过（`/tmp/photon-cross-host.DsRdwm`）。
+
+### B2 在线 gateway 与当前路由授权事实（2026-10-02）
+
+离线/在线入口复用签名校验；在线规划解析 signed DNS，提供一个确定性待连接目标及 identity、
+public key、contact。当前网络各 zone chain/相关 record 签名重验后调用公共
+`BuildAuthorizedRouteSet`，保留实际 origin 并限制 split aggregate。无 assignment、越界、
+无效签名、到期或撤销均不得进入路由事实集；传输目标存在不意味着获得路由安装权限。
+
+异步完成及查询时根据 revision/当前时间再次验证，复用本轮 DNS 结果但按 host/IP 去重，
+防止多端口/多候选令 contacts 膨胀。真实 SA 和 Router ID/origin 绑定仍属 B3/B4。
+本批生产 Go +180/-3，测试 Go +179/-0；没有新增授权 Store 或第二协议 executor。
+定向普通/race、整合 `make check` 与 Windows 原生 gateway 测试通过。

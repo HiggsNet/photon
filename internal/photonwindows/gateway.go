@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"net"
 	"net/netip"
 	"slices"
 	"time"
@@ -19,6 +20,8 @@ type GatewayCandidate struct {
 	Zone        zone.ZonePath        `json:"zone"`
 	Contacts    []ipsec.ContactPoint `json:"contacts,omitempty"`
 	Fingerprint string               `json:"fingerprint,omitempty"`
+	Identity    string               `json:"identity,omitempty"`
+	PublicKey   ed25519.PublicKey    `json:"public_key,omitempty"`
 	Rejected    string               `json:"rejected,omitempty"`
 }
 
@@ -26,21 +29,31 @@ type GatewayCandidate struct {
 // verified revision has not changed. Bootstrap hints cannot authorize contacts.
 // DNS-only addresses are left for the future online connection planner.
 func GatewayCandidates(config *Config, view corestate.View, now time.Time) []GatewayCandidate {
+	return gatewayCandidates(context.Background(), config, view, now, nil)
+}
+
+func gatewayCandidates(ctx context.Context, config *Config, view corestate.View, now time.Time, resolver ipsec.DNSResolver) []GatewayCandidate {
 	out := make([]GatewayCandidate, 0, len(config.Gateway.AllowedZones))
 	for _, peer := range config.Gateway.AllowedZones {
 		candidate := GatewayCandidate{Zone: peer}
-		contacts, fingerprint, err := gatewayContacts(config, view, peer, now)
+		contacts, fingerprint, err := gatewayContacts(ctx, config, view, peer, now, resolver)
 		if err != nil {
 			candidate.Rejected = err.Error()
 		} else {
 			candidate.Contacts, candidate.Fingerprint = contacts, fingerprint
+			zs := view.State.Network.Zones[peer]
+			profile, _ := ipsec.ParseProfileRecord(zs.Records[ipsec.RecordKeyProfile])
+			key, _ := ipsec.ParseTransportKeyRecord(zs.Records[ipsec.RecordKeyTransportKey])
+			public, _ := ipsec.DecodeTransportPublicKey(*key)
+			candidate.Identity = profile.IKEIdentity
+			candidate.PublicKey = append(ed25519.PublicKey(nil), public...)
 		}
 		out = append(out, candidate)
 	}
 	return out
 }
 
-func gatewayContacts(config *Config, view corestate.View, peer zone.ZonePath, now time.Time) ([]ipsec.ContactPoint, string, error) {
+func gatewayContacts(ctx context.Context, config *Config, view corestate.View, peer zone.ZonePath, now time.Time, resolver ipsec.DNSResolver) ([]ipsec.ContactPoint, string, error) {
 	fail := func(reason string) ([]ipsec.ContactPoint, string, error) { return nil, "", errors.New(reason) }
 	if view.State == nil || view.State.Network == nil {
 		return fail("verified state is absent")
@@ -94,7 +107,7 @@ func gatewayContacts(config *Config, view corestate.View, peer zone.ZonePath, no
 	if len(public) != ed25519.PublicKeySize || profile.TransportKeyFingerprint != key.Fingerprint {
 		return fail("profile and transport key do not match")
 	}
-	contacts, err := ipsec.ResolveContactPoints(context.Background(), records.Addresses, records.Ports, now, ipsec.AddressCandidateOptions{Now: now, AllowPrivateLocal: true})
+	contacts, err := ipsec.ResolveContactPoints(ctx, records.Addresses, records.Ports, now, ipsec.AddressCandidateOptions{Now: now, AllowPrivateLocal: true, DNSResolver: resolver})
 	if err != nil {
 		return fail(err.Error())
 	}
@@ -117,7 +130,16 @@ func gatewayContacts(config *Config, view corestate.View, peer zone.ZonePath, no
 		accepted = append(accepted, contact)
 	}
 	if len(accepted) == 0 {
+		if resolver != nil {
+			return fail("no usable signed contact")
+		}
 		return fail("no usable signed IP contact (DNS resolution is not performed offline)")
 	}
 	return accepted, key.Fingerprint, nil
+}
+
+// PlanGateway resolves signed DNS advertisements within a single bounded budget.
+// Callers must run this outside the Gossip loop and discard stale completions.
+func PlanGateway(ctx context.Context, config *Config, view corestate.View, now time.Time) GatewayPlan {
+	return planGateway(ctx, config, view, now, net.DefaultResolver)
 }
