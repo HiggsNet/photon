@@ -734,3 +734,19 @@ console 在启动、公共 GossipDriver 处理事件后 verified revision 推进
 Windows 的 Gossip 收敛后重新评估测试耗时 0.06 秒；无 revision 变化的授权到期复核
 耗时 5.01 秒。`git diff --check` 通过。运行时连接选择、route-origin 授权、rebind 和
 跨主机互通仍待完成，本次观察周期不代表安全撤销 SLA。本节改动尚未提交或发布。
+
+上述持续观察于 2026-10-02 本地提交为 `8451220`，未推送或发布。
+
+### Windows B2 跨主机控制面验收（2026-10-02）
+
+新增 opt-in `TestCrossHostGossip` 和 Linux/PowerShell test rig，使用临时独立身份/数据库，
+验证 Linux 开发机与 Windows 11 VM 的真实 UDP Gossip/TCP object-pull、磁盘落盘、
+同端口停止重启和恢复后从 Linux 读取 Windows 对象。普通测试未设置 role 时跳过。
+
+实际在 Linux `10.16.255.8` 与 Windows `10.16.252.11` 上通过：Linux PASS 2.18 秒，
+Windows PASS 0.54 秒。默认隔离端口 43344 被 Linux 入站防火墙阻挡，改用已放行且空闲的
+5201 后通过；没有修改 Linux 防火墙。Windows 临时入站规则仅允许 Linux 来源和测试端口，
+finally 清理后规则数为 0、远端测试目录数为 0，本地测试身份也已清理。
+
+这证明跨 Windows/Linux 控制面互通，不是 StrongSwan/IKE/ESP 或生产网关验收。
+新增文件只包含测试和测试脚本；当前生产代码没有因此增加第二套协议路径。
