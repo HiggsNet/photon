@@ -6,14 +6,25 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
-type consoleLog struct{ ready chan string }
+type consoleLog struct {
+	ready    chan string
+	gateways chan gatewayLog
+}
+
+type gatewayLog struct {
+	Revision   uint64             `json:"revision"`
+	Candidates []GatewayCandidate `json:"candidates"`
+}
 
 func (l consoleLog) Write(data []byte) (int, error) {
 	var record struct {
@@ -23,13 +34,23 @@ func (l consoleLog) Write(data []byte) (int, error) {
 	if json.Unmarshal(data, &record) == nil && record.Message == "gossip_started" {
 		l.ready <- record.Address
 	}
+	if record.Message == "gateway_candidates_changed" && l.gateways != nil {
+		var update gatewayLog
+		if json.Unmarshal(data, &update) == nil {
+			l.gateways <- update
+		}
+	}
 	return len(data), nil
 }
 func startConsole(t *testing.T, config *Config) (string, func()) {
 	t.Helper()
+	return startConsoleWithLogs(t, config, consoleLog{ready: make(chan string, 1)})
+}
+
+func startConsoleWithLogs(t *testing.T, config *Config, logs consoleLog) (string, func()) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	logs := consoleLog{make(chan string, 1)}
 	go func() { done <- RunConsole(ctx, config, slog.New(slog.NewJSONHandler(logs, nil))) }()
 	stopped := false
 	stop := func() {
@@ -60,6 +81,72 @@ func startConsole(t *testing.T, config *Config) (string, func()) {
 		t.Fatal("console startup timeout")
 	}
 	return "", stop
+}
+
+func TestConsoleReevaluatesGatewayAfterGossip(t *testing.T) {
+	fixture := newWindowsGossipFixture(t)
+	left, stopLeft := startConsole(t, &Config{State: StateConfig{Path: fixture.leftPath}, ManagedZone: "node-a.catofes.", TrustedRootPublicKey: fixture.rootPublic, GossipListen: "127.0.0.1:0"})
+	defer stopLeft()
+	logs := consoleLog{ready: make(chan string, 1), gateways: make(chan gatewayLog, 16)}
+	_, stopRight := startConsoleWithLogs(t, &Config{State: StateConfig{Path: fixture.rightPath}, ManagedZone: "node-b.catofes.", TrustedRootPublicKey: fixture.rootPublic, GossipListen: "127.0.0.1:0", Gateway: GatewayConfig{AllowedZones: []zone.ZonePath{"node-a.catofes."}, BootstrapHints: []BootstrapHint{{Peer: "node-a.catofes.", Address: left}}}}, logs)
+	defer stopRight()
+	var first gatewayLog
+	select {
+	case first = <-logs.gateways:
+	case <-time.After(5 * time.Second):
+		t.Fatal("missing initial gateway diagnosis")
+	}
+	if first.Revision != uint64(fixture.rightRevision) || len(first.Candidates) != 1 || first.Candidates[0].Rejected == "" {
+		t.Fatalf("initial diagnosis: %+v", first)
+	}
+	select {
+	case next := <-logs.gateways:
+		if next.Revision <= first.Revision || len(next.Candidates) != 1 || next.Candidates[0].Rejected == "" || next.Candidates[0].Rejected == first.Candidates[0].Rejected {
+			t.Fatalf("gossip did not refresh diagnosis: %+v", next)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("missing gateway diagnosis after convergence")
+	}
+}
+
+func TestConsoleReevaluatesGatewayExpiryWithoutRevisionChange(t *testing.T) {
+	network, root, private := signedNetwork(t)
+	expires := time.Now().Add(3 * time.Second)
+	proof := network.Zones["catofes."].Delegations["node-a.catofes."]
+	proof.ExpiresAt = &expires
+	if err := photoncrypto.SignDelegation(proof, "catofes.", private); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "state.db")
+	store, err := corestate.OpenBoltStore(path, 0o600, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = store.CommitCommon(t.Context(), &corestate.CommitCandidate{Verified: &corestate.VerifiedState{ManagedZone: "catofes.", TrustedRootPublicKey: root, IdentityPrivateKey: private, Network: network}}, corestate.ChangeSet{VerifiedRevision: 1, NetworkChanged: true})
+	closeErr := store.Close()
+	if err != nil || closeErr != nil {
+		t.Fatalf("persist: %v, %v", err, closeErr)
+	}
+	logs := consoleLog{ready: make(chan string, 1), gateways: make(chan gatewayLog, 16)}
+	_, stop := startConsoleWithLogs(t, &Config{State: StateConfig{Path: path}, ManagedZone: "catofes.", TrustedRootPublicKey: root, GossipListen: "127.0.0.1:0", Gateway: GatewayConfig{AllowedZones: []zone.ZonePath{"node-a.catofes."}}}, logs)
+	defer stop()
+	var first gatewayLog
+	select {
+	case first = <-logs.gateways:
+	case <-time.After(time.Second):
+		t.Fatal("missing initial diagnosis")
+	}
+	if len(first.Candidates) != 1 || first.Candidates[0].Rejected != "missing or mismatched record: ipsec/profile" {
+		t.Fatalf("initial: %+v", first)
+	}
+	select {
+	case next := <-logs.gateways:
+		if next.Revision != first.Revision || len(next.Candidates) != 1 || next.Candidates[0].Rejected == "" || next.Candidates[0].Rejected == first.Candidates[0].Rejected {
+			t.Fatalf("expiry: %+v", next)
+		}
+	case <-time.After(7 * time.Second):
+		t.Fatal("no expiry observation without revision change")
+	}
 }
 
 func TestConsoleRealGossipPersistsAndRestarts(t *testing.T) {

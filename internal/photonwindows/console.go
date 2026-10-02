@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"reflect"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
@@ -119,6 +120,18 @@ func RunConsole(ctx context.Context, config *Config, logger *slog.Logger) (err e
 		return err
 	}
 	logger.Info("gossip_started", "address", packet.LocalAddr().String(), "zone", config.ManagedZone, "tunnel_ready", false)
+	var lastGateways []GatewayCandidate
+	observeGateways := func() {
+		view := state.Store().ReadView()
+		now := time.Now()
+		candidates := GatewayCandidates(config, view, now)
+		if !reflect.DeepEqual(lastGateways, candidates) {
+			logger.Info("gateway_candidates_changed", "revision", view.Revision, "evaluated_at", now,
+				"candidates", candidates, "tunnel_ready", false, "route_authorized", false)
+			lastGateways = candidates
+		}
+	}
+	observeGateways()
 	syncPeers := func() {
 		if _, err := driver.SyncGossipPeers(ctx, time.Now(), nil, false); err != nil && ctx.Err() == nil {
 			logger.Warn("gossip_sync_failed", "error", err)
@@ -132,6 +145,7 @@ func RunConsole(ctx context.Context, config *Config, logger *slog.Logger) (err e
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
+			observeGateways()
 			if err := driver.RefreshGossipDiscovery(ctx, nil, time.Now(), transport); err != nil {
 				if ctx.Err() != nil {
 					return nil
@@ -140,8 +154,12 @@ func RunConsole(ctx context.Context, config *Config, logger *slog.Logger) (err e
 			}
 			syncPeers()
 		case event := <-driver.Events():
+			before := state.Store().VerifiedRevision()
 			if _, err := driver.HandleGossipHostEvent(ctx, event, time.Now(), nil); err != nil && !errors.Is(err, corehost.ErrGossipSessionNotFound) && ctx.Err() == nil {
 				logger.Warn("gossip_event_failed", "error", err)
+			}
+			if state.Store().VerifiedRevision() != before {
+				observeGateways()
 			}
 		}
 	}

@@ -444,3 +444,9 @@ Ed25519 key fingerprint/有效期、inbound role、overlay/path family 和有效
 离线命令不解析 DNS，且不能在 console 持有数据库时执行。
 这些结果仅用于检查传输材料，不创建 SA、不证明可达，也不代表 route-origin 授权；
 输出明确标记 `tunnel_ready=false` 和 `route_authorized=false`。后续运行时必须重新校验，不能缓存为授权凭据。
+
+console 复用同一候选校验：启动时、Gossip 事件推进 verified revision 后，以及每 5 秒执行一次。
+定时校验不依赖 revision 变化，以发现授权链、key、地址或端口的到期。
+仅候选/拒绝原因变化时输出 `gateway_candidates_changed`，附本次 revision 和评估时间；
+这仍是观察日志，不是 active gateway 选择或数据面撤销执行器。尚无 SA/路由可由该观察控制，
+后续数据面接入不得把 5 秒观察周期当作路由授权有效期或安全撤销目标。

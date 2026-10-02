@@ -719,3 +719,18 @@ route-origin/SA 绑定仍待实现，B2 gateway checkbox 保持未完成。生�
 错误 overlay、outbound-only 与撤销；同 revision 时间推进后拒绝过期地址。
 CLI 测试验证导入后的缺失 gateway 记录显示拒绝，并明确无 route authorization。
 `git diff --check` 通过；本节改动尚未提交，未推送或发布。
+
+上述离线诊断于 2026-10-02 本地提交为 `970e2d0`，未推送或发布。
+
+### Windows B2 console 持续候选观察（2026-10-02）
+
+console 在启动、公共 GossipDriver 处理事件后 verified revision 推进，以及每 5 秒，
+复用 GatewayCandidates 重新评估当前状态。只在候选或拒绝原因变化时记录
+`gateway_candidates_changed`，附 revision、评估时间和明确的无隧道/无路由授权标记。
+定时复核不依赖 revision 变化；不新增状态 owner、协议 executor 或持久化 schema。
+生产 Go +18/-0，测试 Go +89/-2。候选仍只作为观察结果，不是 active gateway/SA 授权。
+
+完整 `make check`、composition/CLI race 和 Windows 两包原生测试通过。
+Windows 的 Gossip 收敛后重新评估测试耗时 0.06 秒；无 revision 变化的授权到期复核
+耗时 5.01 秒。`git diff --check` 通过。运行时连接选择、route-origin 授权、rebind 和
+跨主机互通仍待完成，本次观察周期不代表安全撤销 SLA。本节改动尚未提交或发布。
