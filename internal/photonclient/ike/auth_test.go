@@ -58,13 +58,26 @@ func authFixture(t *testing.T) (*Initiator, AuthConfig, responderFixture, []byte
 		t.Fatal(err)
 	}
 	var idi, auth []byte
+	noTFC := false
 	for _, p := range ps {
+		if p.Type == PayloadNotify {
+			n, err := DecodeNotify(p.Data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n.Type == 16394 && n.Protocol == 0 && len(n.SPI) == 0 && len(n.Data) == 0 {
+				noTFC = true
+			}
+		}
 		if p.Type == PayloadIDi {
 			idi = p.Data
 		}
 		if p.Type == PayloadAUTH {
 			auth = p.Data
 		}
+	}
+	if !noTFC {
+		t.Fatal("request did not disable unsupported ESP TFC padding")
 	}
 	// Independently assemble signed bytes, using the actual INIT transcript.
 	octets := append(i.Request(), r.payloads[2].Data...)

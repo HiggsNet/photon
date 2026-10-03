@@ -239,7 +239,9 @@ B2 控制面前置已收口，可以进入 B3。这里不包含 SCM、Wintun/IP 
 - [ ] 与 Photon StrongSwan 验证 ID encoding、raw Ed25519、NAT-T、proposal、retransmit、fragmentation 和错误通知。
 - [ ] 使用现有 Linux 连接生成器验证 Windows 与实际构建的 proposal 交集，覆盖首个 CHILD、CREATE_CHILD_SA 与双方发起的 rekey；依据 design §1.2 现场基线，不以改窄 Linux profile 代替兼容实现。
 - [ ] 实现 CHILD/IKE rekey、overlap、simultaneous rekey、DPD/liveness 与网络变化重连。
-- [ ] 实现 tunnel-mode IPv4/IPv6 ESP、SPI demux、sequence、anti-replay、AEAD/padding/length 验证和 bounded crypto workers。
+- [x] 实现 tunnel-mode IPv4/IPv6 ESP、固定 SA SPI 校验、32 位 sequence、64 包 anti-replay、AEAD/padding/length 验证；序号耗尽拒绝，验签失败不推进窗口，独立向量、并发与 fuzz 验证。当前为大小有界的同步处理；多 SA SPI 分派和有界 crypto worker/queue 随实际共享 UDP owner 接入，仍未完成。
+- [x] 实现 NAT detection 与 UDP 4500 IKE/ESP/keepalive 分流；隔离 strongSwan 完成真实 NAT-T AUTH 与双向 IPv4/IPv6 ESP 内核 echo。详情及实际构建版本见 [ESP 验收](docs/photon-windows/esp-testing.md)；不代表真实 NAT 设备、多层 NAT 或 Windows 跨主机隧道验收。
+- [ ] 接入多 SA SPI demux、有界 crypto workers/队列及当前授权 gate；不能将上述纯协议验证当作 Daemon 数据面已可用。
 - [ ] 一个共享 UDP socket 承载 IKE/ESP/gossip 所需流量；明确分流、队列、MTU 和 Windows batch-send 退化路径。
 
 ### B4. Babel/SADR 与 Wintun

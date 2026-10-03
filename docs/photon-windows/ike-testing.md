@@ -85,6 +85,7 @@ key/salt 对比，outer 均为 IPv4 loopback。原 SA_INIT 加密拒绝测试也
 协议代码，但尚未在 Windows 与网关之间完成实际 IKE 网络握手。`encap=yes` 的
 配置覆盖也不等于 NAT-T 验收：当前未协商 NAT detection、切换 UDP 4500 或传输 ESP。
 
-尚未实现：ESP 数据包处理、Daemon 当前授权绑定、NAT-T、COOKIE retry、
-fragmentation、产品重传调度、rekey 和 liveness。
+后续 ESP packet 与 NAT-T 验收见 [ESP 测试](esp-testing.md)。
+尚未实现：Daemon 当前授权绑定、COOKIE retry、fragmentation、产品重传调度、
+rekey 和 liveness。
 本轮没有接入 Windows Daemon 或更改 Linux 连接生成器/生产网关。

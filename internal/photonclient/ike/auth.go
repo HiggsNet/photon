@@ -52,7 +52,7 @@ type authPending struct {
 
 func cloneInitResult(r *InitResult) *InitResult {
 	k := r.Keys
-	return &InitResult{ResponderSPI: r.ResponderSPI, Nonce: bytes.Clone(r.Nonce), Response: bytes.Clone(r.Response), Keys: IKEKeys{
+	return &InitResult{ResponderSPI: r.ResponderSPI, Nonce: bytes.Clone(r.Nonce), Response: bytes.Clone(r.Response), NAT: r.NAT, Keys: IKEKeys{
 		SKD: bytes.Clone(k.SKD), SKAI: bytes.Clone(k.SKAI), SKAR: bytes.Clone(k.SKAR), SKEI: bytes.Clone(k.SKEI), SKER: bytes.Clone(k.SKER), SKPI: bytes.Clone(k.SKPI), SKPR: bytes.Clone(k.SKPR),
 	}}
 }
@@ -130,7 +130,9 @@ func (i *Initiator) AuthRequest(c AuthConfig) ([]byte, error) {
 		return nil, err
 	}
 	auth := signAuth(c.PrivateKey, signedOctets(i.request, i.init.Nonce, i.init.Keys.SKPI, idi))
-	first, body, err := EncodePayloads([]Payload{{Type: PayloadIDi, Data: idi}, {Type: PayloadIDr, Data: idr}, {Type: PayloadAUTH, Data: auth}, {Type: PayloadSA, Data: sa}, {Type: PayloadTSi, Data: tsi}, {Type: PayloadTSr, Data: tsr}})
+	// The ESP receiver requires the exact inner IP length, so explicitly tell
+	// the peer not to add Traffic Flow Confidentiality padding (RFC 7296 1.3.1).
+	first, body, err := EncodePayloads([]Payload{{Type: PayloadIDi, Data: idi}, {Type: PayloadIDr, Data: idr}, {Type: PayloadAUTH, Data: auth}, {Type: PayloadSA, Data: sa}, {Type: PayloadTSi, Data: tsi}, {Type: PayloadTSr, Data: tsr}, {Type: PayloadNotify, Data: []byte{0, 0, 0x40, 0x0a}}})
 	if err != nil {
 		return nil, err
 	}

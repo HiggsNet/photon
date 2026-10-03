@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"net/netip"
 )
 
 // Initiator owns one SA_INIT followed by IKE_AUTH. Its caller owns transport,
@@ -18,6 +19,7 @@ type Initiator struct {
 	peerEd25519    bool
 	auth           *authPending
 	authDone       bool
+	local, remote  netip.AddrPort
 }
 
 type InitResult struct {
@@ -25,14 +27,28 @@ type InitResult struct {
 	Nonce        []byte
 	Keys         IKEKeys
 	Response     []byte
+	NAT          NATStatus
 }
 
 func NewInitiator() (*Initiator, error) {
+	return newInitiator(netip.AddrPort{}, netip.AddrPort{})
+}
+
+// NewInitiatorWithEndpoints enables NAT detection using the actual UDP endpoints
+// of SA_INIT. The transport owner must enforce the response's source endpoint.
+func NewInitiatorWithEndpoints(local, remote netip.AddrPort) (*Initiator, error) {
+	if !validNATEndpoint(local) || !validNATEndpoint(remote) || local.Addr().Unmap().Is4() != remote.Addr().Unmap().Is4() {
+		return nil, fmt.Errorf("ike: invalid or mixed-family NAT detection endpoints")
+	}
+	return newInitiator(local, remote)
+}
+
+func newInitiator(local, remote netip.AddrPort) (*Initiator, error) {
 	key, err := GenerateP256Key(rand.Reader)
 	if err != nil {
 		return nil, err
 	}
-	i := &Initiator{private: key, nonce: make([]byte, 32)}
+	i := &Initiator{private: key, nonce: make([]byte, 32), local: local, remote: remote}
 	var spi [8]byte
 	for i.spi == 0 {
 		if _, err := rand.Read(spi[:]); err != nil {
@@ -43,12 +59,16 @@ func NewInitiator() (*Initiator, error) {
 	if _, err := rand.Read(i.nonce); err != nil {
 		return nil, err
 	}
-	i.request, err = EncodeMessage(Header{InitiatorSPI: i.spi, ExchangeType: ExchangeSAInit, Flags: FlagInitiator}, []Payload{
+	ps := []Payload{
 		{Type: PayloadSA, Data: DefaultIKEProposal()},
 		{Type: PayloadKE, Data: EncodeKE(GroupP256, P256PublicKey(key))},
 		{Type: PayloadNonce, Data: i.nonce},
-		{Type: PayloadNotify, Data: []byte{0, 0, 0x40, 0x2f, 0, 5}},
-	})
+	}
+	if local.IsValid() {
+		ps = append(ps, natPayload(NotifyNATDetectionSource, i.spi, 0, local), natPayload(NotifyNATDetectionDestination, i.spi, 0, remote))
+	}
+	ps = append(ps, Payload{Type: PayloadNotify, Data: []byte{0, 0, 0x40, 0x2f, 0, 5}})
+	i.request, err = EncodeMessage(Header{InitiatorSPI: i.spi, ExchangeType: ExchangeSAInit, Flags: FlagInitiator}, ps)
 	if err != nil {
 		return nil, err
 	}
@@ -111,6 +131,10 @@ func (i *Initiator) HandleInitResponse(packet []byte) (*InitResult, error) {
 	if len(ke) == 0 || len(nonce) == 0 {
 		return nil, fmt.Errorf("ike: incomplete SA_INIT response")
 	}
+	nat, err := checkNAT(ps, h, i.local, i.remote)
+	if err != nil {
+		return nil, err
+	}
 	shared, err := P256SharedSecret(i.private, ke)
 	if err != nil {
 		return nil, err
@@ -122,6 +146,6 @@ func (i *Initiator) HandleInitResponse(packet []byte) (*InitResult, error) {
 	}
 	i.private = nil
 	i.peerEd25519 = peerEd25519
-	i.init = &InitResult{ResponderSPI: h.ResponderSPI, Nonce: nonce, Keys: keys, Response: append([]byte(nil), packet...)}
+	i.init = &InitResult{ResponderSPI: h.ResponderSPI, Nonce: nonce, Keys: keys, Response: append([]byte(nil), packet...), NAT: nat}
 	return cloneInitResult(i.init), nil
 }
