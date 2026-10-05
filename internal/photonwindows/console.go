@@ -147,7 +147,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		},
 	})
 	defer driver.Stop()
-	packet, err := openGossipSockets(ctx, config.GossipListen)
+	packet, err := openPacketSockets(ctx, config.GossipListen)
 	if err != nil {
 		return fmt.Errorf("listen gossip UDP: %w", err)
 	}
