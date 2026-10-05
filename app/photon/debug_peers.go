@@ -51,7 +51,9 @@ func showPeers(filter string, verbose bool) error {
 	}
 	fmt.Fprintln(os.Stdout, "source: checkpoint (daemon offline; last-known gossip runtime)")
 	config := gossipDriverConfig(cfg, common.State, nil)
-	return inspecttext.WriteGossipPeers(os.Stdout, inspect.BuildGossipPeerDebugViews(common, gossipPeersOptions(config, nil, time.Now())), filter, verbose)
+	options := gossipPeersOptions(config, nil, time.Now())
+	options.Lifecycle = cfg.PeerLifecycle
+	return inspecttext.WriteGossipPeers(os.Stdout, inspect.BuildGossipPeerDebugViews(common, options), filter, verbose)
 }
 
 func buildPeerLifecycleDebugView(config *appConfig, common corestate.View, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, now time.Time) inspect.PeerLifecycleDebugView {
@@ -77,5 +79,7 @@ func (d *Daemon) gossipPeerSnapshotForControl() []inspect.PeerDebugView {
 	if view.State == nil {
 		return nil
 	}
-	return inspect.BuildGossipPeerDebugViews(view, gossipPeersOptions(d.gossipDriver.GossipConfig(), d.peerObservabilitySnapshots(), d.now()))
+	options := gossipPeersOptions(d.gossipDriver.GossipConfig(), d.peerObservabilitySnapshots(), d.now())
+	options.Lifecycle = d.Config.PeerLifecycle
+	return inspect.BuildGossipPeerDebugViews(view, options)
 }

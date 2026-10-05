@@ -14,6 +14,9 @@ func WriteGossipPeers(w io.Writer, peers []inspect.PeerDebugView, filter string,
 	filter = strings.ToLower(strings.TrimSpace(filter))
 	matching := make([]inspect.PeerDebugView, 0, len(peers))
 	for _, peer := range peers {
+		if filter == "" && !verbose && peer.Historical {
+			continue
+		}
 		searchable := strings.Join([]string{
 			peer.PeerID,
 			peer.Source,
@@ -53,7 +56,11 @@ func WriteGossipPeers(w io.Writer, peers []inspect.PeerDebugView, filter string,
 
 	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	out := newLineWriter(table)
-	out.Linef("peers: %s", filteredCount(len(matching), len(peers), filter))
+	total := len(peers)
+	if filter == "" {
+		total = len(matching)
+	}
+	out.Linef("peers: %s", filteredCount(len(matching), total, filter))
 	rows := [][]string{{"PEER", "SOURCE", "ENDPOINT", "STATUS", "LAST_SYNC", "NEXT_RETRY", "LAST_FAILURE"}}
 	for _, peer := range matching {
 		rows = append(rows, []string{

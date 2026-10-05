@@ -22,6 +22,7 @@ type GossipPeersOptions struct {
 	Bootstrap   []PeerBootstrap
 	Diagnostics map[string]observability.PeerDiagnostics
 	Now         time.Time
+	Lifecycle   PeerLifecycleConfig
 }
 
 func BuildGossipPeerDebugViews(common corestate.View, options GossipPeersOptions) []PeerDebugView {
@@ -42,10 +43,36 @@ func BuildGossipPeerDebugView(common corestate.View, options GossipPeersOptions,
 		return PeerDebugView{}, false
 	}
 	facts := gossipPeerProjection(common, options, peerID)
-	return buildPeerDebugFromCheckpoint(
+	view := buildPeerDebugFromCheckpoint(
 		peerID, facts.source, facts.configuredAddr, facts.resolvedAddr,
 		facts.checkpoint, facts.diagnostics, options.Now,
-	), true
+	)
+	view.Historical = gossipPeerHistorical(common, options, peerID, facts.checkpoint)
+	if view.Historical {
+		view.Status = "offline"
+	}
+	return view, true
+}
+
+// Keep the checkpoint for lifecycle suppression and explicit diagnostics;
+// historical peers are omitted only by the default CLI list renderer.
+func gossipPeerHistorical(common corestate.View, options GossipPeersOptions, peerID string, peer corestate.PeerCheckpoint) bool {
+	if _, configured := gossipPeerBootstrap(options.Bootstrap, peerID); configured {
+		return false
+	}
+	lastActive := max(peer.LastSyncUnix, peer.ObservedLastSeenUnix)
+	if lastActive == 0 || options.Now.Before(time.Unix(lastActive, 0).Add(NormalizePeerLifecycleConfig(options.Lifecycle).CleanupAfter)) {
+		return false
+	}
+	if peer.ObservedEndpoint != "" && options.Now.Before(time.Unix(peer.ObservedUntilUnix, 0)) {
+		return false
+	}
+	for _, endpoint := range peer.ObservedGraceEndpoints {
+		if endpoint.Endpoint != "" && options.Now.Before(time.Unix(endpoint.UntilUnix, 0)) {
+			return false
+		}
+	}
+	return len(gossip.ExtractPeerEndpointsAt(common.State.Network, options.Now)[peerID]) == 0
 }
 
 func BuildGossipPeersView(common corestate.View, options GossipPeersOptions) PeersView {

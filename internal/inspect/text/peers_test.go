@@ -8,6 +8,32 @@ import (
 	"github.com/HiggsNet/photon/internal/inspect"
 )
 
+func TestWriteGossipPeersKeepsHistoryQueryable(t *testing.T) {
+	peers := []inspect.PeerDebugView{{PeerID: "active.catofes.", Status: "online"}, {PeerID: "old.catofes.", Status: "offline", Historical: true}}
+	for _, tc := range []struct {
+		name, filter     string
+		verbose, wantOld bool
+		count            string
+	}{
+		{"default", "", false, false, "peers: 1"},
+		{"explicit", "old.catofes.", false, true, "peers: 1/2"},
+		{"verbose", "", true, true, "peers: 2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out strings.Builder
+			if err := WriteGossipPeers(&out, peers, tc.filter, tc.verbose); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(out.String(), "old.catofes.") != tc.wantOld || !strings.Contains(out.String(), tc.count+"\n") {
+				t.Fatalf("unexpected output:\n%s", out.String())
+			}
+			if tc.verbose && !strings.Contains(out.String(), "historical: true") {
+				t.Fatal("missing historical explanation")
+			}
+		})
+	}
+}
+
 func TestWriteGossipPeersUsesGossipRuntimeFields(t *testing.T) {
 	peers := []inspect.PeerDebugView{
 		{
