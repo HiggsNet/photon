@@ -75,7 +75,7 @@ docker run --rm --network none --cap-add NET_ADMIN \
   '
 }
 if [[ "${PHOTON_IKE_FRAGMENT_ONLY:-0}" != 1 ]]; then
-  run_smoke '^TestStrongSwan(IKEAuth|Informational|ChildRekey|ChildPFS)$' 1280
+  run_smoke '^TestStrongSwan(IKEAuth|Informational|ChildRekey|ChildPFS|SimultaneousChildRekey|SimultaneousIKERekey)$' 1280
 fi
 # Force multi-fragment responses without changing production crypto profiles.
 # StrongSwan's fragmentation=force option applies only to IKEv1.
