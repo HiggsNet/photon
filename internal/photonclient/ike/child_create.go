@@ -146,7 +146,7 @@ func DeriveChildExchangeKeys(skD, shared, ni, nr []byte) (ChildKeys, error) {
 }
 
 func (i *Initiator) validateChildConfig(c ChildExchangeConfig) error {
-	if !i.authDone || i.init == nil {
+	if !i.authDone || i.init == nil || i.dormant || i.rekeyed || i.closing || i.closed || i.ikePending != nil || i.localRekey != nil || i.peerRekey != nil {
 		return fmt.Errorf("ike: CHILD exchange requires IKE_AUTH")
 	}
 	if c.DHGroup != 0 && c.DHGroup != GroupP256 {
@@ -244,6 +244,13 @@ func newChildPending(c ChildExchangeConfig) (*childPending, error) {
 func (i *Initiator) ChildRequest(c ChildExchangeConfig) ([]byte, error) {
 	if err := i.validateChildConfig(c); err != nil {
 		return nil, err
+	}
+	if c.RekeySPI != 0 {
+		for _, child := range i.children {
+			if child.predecessor == c.RekeySPI && child.localInitiated {
+				return nil, fmt.Errorf("ike: local CHILD rekey already completed")
+			}
+		}
 	}
 	p, err := newChildPending(c)
 	if err != nil {
@@ -448,6 +455,11 @@ func (i *Initiator) handleChildRequest(m *ExchangeMessage, c ChildExchangeConfig
 	if cached != nil {
 		return cached, nil, nil
 	}
+	if i.ikePending != nil || i.localRekey != nil || i.peerRekey != nil || i.dormant || i.rekeyed || i.closing {
+		n, _ := EncodeNotify(Notify{Type: NotifyTemporaryFailure})
+		reply, err := i.replyExchange(m.identity, h, []Payload{{Type: PayloadNotify, Data: n}})
+		return reply, nil, err
+	}
 	o, err := parseChildOffer(ps)
 	if err != nil {
 		return nil, nil, err
@@ -473,6 +485,15 @@ func (i *Initiator) handleChildRequest(m *ExchangeMessage, c ChildExchangeConfig
 	}
 	if err := i.validateChildConfig(c); err != nil {
 		return nil, nil, err
+	}
+	if c.RekeySPI != 0 {
+		for _, child := range i.children {
+			if child.predecessor == c.RekeySPI && !child.localInitiated {
+				n, _ := EncodeNotify(Notify{Type: NotifyTemporaryFailure})
+				reply, err := i.replyExchange(m.identity, h, []Payload{{Type: PayloadNotify, Data: n}})
+				return reply, nil, err
+			}
+		}
 	}
 	if err := i.checkPeerChildSPI(o.spi); err != nil {
 		return nil, nil, err

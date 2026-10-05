@@ -53,14 +53,25 @@ func (i *Initiator) handleIKEDelete(m *ExchangeMessage) ([]byte, *DeleteResult, 
 
 func (i *Initiator) closeIKE() *DeleteResult {
 	result := &DeleteResult{IKE: true}
+	i.exchanges.pending = nil
+	i.exchanges.pendingKind = 0
+	i.exchanges.requestFragments = nil
+	// A peer that completed its rekey may delete the old SA before seeing our
+	// simultaneous request. Stop that request and inherit into the peer's SA.
+	if i.peerRekey != nil && i.ikePending != nil {
+		i.ikePending = nil
+	}
+	if i.localRekey != nil || i.peerRekey != nil {
+		if resolution, err := i.AdoptIKERekey(); err == nil {
+			result.Successor = resolution.Surviving
+		}
+	}
 	for spi := range i.children {
 		result.Removed = append(result.Removed, spi)
 		i.forgetChild(spi)
 	}
-	i.exchanges.pending = nil
-	i.exchanges.pendingKind = 0
-	i.exchanges.requestFragments = nil
 	i.childPending = nil
+	i.ikePending = nil
 	i.deletePending = nil
 	i.ResetExchangeFragments()
 	i.closing, i.closed = false, true

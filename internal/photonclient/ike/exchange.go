@@ -32,6 +32,9 @@ func (i *Initiator) beginExchange(exchange, kind uint8, ps []Payload) ([]byte, e
 	if !i.authDone || i.init == nil || i.closing || i.closed {
 		return nil, fmt.Errorf("ike: exchange requires completed IKE_AUTH")
 	}
+	if (i.dormant || i.rekeyed) && kind != exchangeIKEDelete {
+		return nil, fmt.Errorf("ike: IKE SA not active after rekey")
+	}
 	if i.exchanges.pending != nil {
 		return nil, fmt.Errorf("ike: exchange already pending")
 	}
@@ -52,7 +55,9 @@ func (i *Initiator) sealExchange(exchange, flags uint8, id uint32, ps []Payload)
 	if err != nil {
 		return nil, err
 	}
-	return SealSK(Header{InitiatorSPI: i.spi, ResponderSPI: i.init.ResponderSPI, ExchangeType: exchange, Flags: flags, MessageID: id}, first, plain, i.init.Keys.SKEI, i.init.Keys.SKAI, rand.Reader)
+	encryption, integrity := i.sendKeys()
+	flags = flags&^FlagInitiator | i.localInitiatorFlag()
+	return SealSK(Header{InitiatorSPI: i.spi, ResponderSPI: i.init.ResponderSPI, ExchangeType: exchange, Flags: flags, MessageID: id}, first, plain, encryption, integrity, rand.Reader)
 }
 
 // PendingRequest is the original encrypted request, suitable for exact
@@ -67,10 +72,11 @@ func (i *Initiator) decodeSKExchange(packet []byte) (*ExchangeMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	if h.InitiatorSPI != i.spi || h.ResponderSPI != i.init.ResponderSPI || h.Flags&FlagInitiator != 0 {
+	if h.InitiatorSPI != i.spi || h.ResponderSPI != i.init.ResponderSPI || h.Flags&FlagInitiator == i.localInitiatorFlag() {
 		return nil, fmt.Errorf("ike: exchange does not match IKE SA")
 	}
-	first, plain, err := OpenSK(packet, i.init.Keys.SKER, i.init.Keys.SKAR)
+	encryption, integrity := i.receiveKeys()
+	first, plain, err := OpenSK(packet, encryption, integrity)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +162,7 @@ func (i *Initiator) DecodeExchange(packet []byte, now time.Time) (*ExchangeMessa
 	if !i.authDone || i.init == nil || !i.peerFragmentation {
 		return nil, fmt.Errorf("ike: post-AUTH fragmentation not negotiated")
 	}
-	if h.InitiatorSPI != i.spi || h.ResponderSPI != i.init.ResponderSPI || h.Flags&FlagInitiator != 0 || (h.ExchangeType != ExchangeInformational && h.ExchangeType != ExchangeCreateChild) {
+	if h.InitiatorSPI != i.spi || h.ResponderSPI != i.init.ResponderSPI || h.Flags&FlagInitiator == i.localInitiatorFlag() || (h.ExchangeType != ExchangeInformational && h.ExchangeType != ExchangeCreateChild) {
 		return nil, fmt.Errorf("ike: SKF does not match IKE SA")
 	}
 	cache := &i.exchanges.fragmentRequest
@@ -178,7 +184,8 @@ func (i *Initiator) DecodeExchange(packet []byte, now time.Time) (*ExchangeMessa
 		}
 		target = &replacement
 	}
-	first, plain, complete, err := target.Add(packet, h, i.init.Keys.SKER, i.init.Keys.SKAR, now)
+	encryption, integrity := i.receiveKeys()
+	first, plain, complete, err := target.Add(packet, h, encryption, integrity, now)
 	if err == nil && target != cache {
 		cache.Reset()
 		*cache = replacement
@@ -210,6 +217,7 @@ type ExchangeResult struct {
 	Child    *ChildExchangeResult
 	Deleted  *DeleteResult
 	Liveness bool
+	IKE      *IKERekeyResult
 }
 
 // HandleExchange consumes an opaque message after any required policy check.
@@ -222,7 +230,13 @@ func (i *Initiator) HandleExchange(m *ExchangeMessage, childConfig *ChildExchang
 	var err error
 	switch m.header.ExchangeType {
 	case ExchangeCreateChild:
-		if m.header.Flags&FlagResponse != 0 {
+		if m.IsIKERekey() || m.header.Flags&FlagResponse != 0 && i.exchanges.pendingKind == exchangeIKERekey {
+			if m.header.Flags&FlagResponse != 0 {
+				result.IKE, err = i.handleIKERekeyResponse(m)
+			} else {
+				result.Reply, result.IKE, err = i.handleIKERekeyRequest(m)
+			}
+		} else if m.header.Flags&FlagResponse != 0 {
 			result.Child, err = i.handleChildResponse(m)
 		} else {
 			if childConfig == nil {
@@ -274,12 +288,13 @@ func (i *Initiator) exchangePackets(packet []byte, maxPacket int, cache *[][]byt
 	if err != nil {
 		return nil, err
 	}
-	first, plain, err := OpenSK(packet, i.init.Keys.SKEI, i.init.Keys.SKAI)
+	encryption, integrity := i.sendKeys()
+	first, plain, err := OpenSK(packet, encryption, integrity)
 	if err != nil {
 		return nil, err
 	}
 	defer clear(plain)
-	packets, err := SealSKF(h, first, plain, i.init.Keys.SKEI, i.init.Keys.SKAI, maxPacket, rand.Reader)
+	packets, err := SealSKF(h, first, plain, encryption, integrity, maxPacket, rand.Reader)
 	if err != nil {
 		return nil, err
 	}
@@ -307,4 +322,46 @@ func (i *Initiator) ReplyPackets(reply []byte, maxPacket int) ([][]byte, error) 
 func (i *Initiator) ResetExchangeFragments() {
 	i.exchanges.fragmentRequest.Reset()
 	i.exchanges.fragmentResponse.Reset()
+}
+
+func (i *Initiator) localInitiatorFlag() uint8 {
+	if i.originalResponder {
+		return 0
+	}
+	return FlagInitiator
+}
+func (i *Initiator) sendKeys() ([]byte, []byte) {
+	if i.originalResponder {
+		return i.init.Keys.SKER, i.init.Keys.SKAR
+	}
+	return i.init.Keys.SKEI, i.init.Keys.SKAI
+}
+func (i *Initiator) receiveKeys() ([]byte, []byte) {
+	if i.originalResponder {
+		return i.init.Keys.SKEI, i.init.Keys.SKAI
+	}
+	return i.init.Keys.SKER, i.init.Keys.SKAR
+}
+
+// SPIs identifies the on-wire IKE SA independent of which endpoint initiated
+// its rekey. A transport can dispatch old/new overlap without accessing keys.
+func (i *Initiator) SPIs() (uint64, uint64) {
+	if i.init == nil {
+		return i.spi, 0
+	}
+	return i.spi, i.init.ResponderSPI
+}
+
+// IsIKERekey distinguishes an authenticated IKE proposal from a CHILD proposal.
+// It does not validate that proposal or consume the exchange.
+func (m *ExchangeMessage) IsIKERekey() bool {
+	if m == nil || m.header.ExchangeType != ExchangeCreateChild {
+		return false
+	}
+	for _, p := range m.payloads {
+		if p.Type == PayloadSA && len(p.Data) >= 6 {
+			return p.Data[5] == 1
+		}
+	}
+	return false
 }

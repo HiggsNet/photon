@@ -13,21 +13,25 @@ import (
 // deadlines and serialization. SA_INIT remains unauthenticated; no traffic or
 // route may be authorized until IKE_AUTH and the caller's current policy pass.
 type Initiator struct {
-	spi               uint64
-	nonce, request    []byte
-	private           *ecdh.PrivateKey
-	init              *InitResult
-	peerEd25519       bool
-	peerFragmentation bool
-	cookieRetries     uint8
-	auth              *authPending
-	authDone          bool
-	local, remote     netip.AddrPort
-	exchanges         exchangeState
-	childPending      *childPending
-	children          map[uint32]*childSA
-	deletePending     *childDeletePending
-	closing, closed   bool
+	spi                   uint64
+	nonce, request        []byte
+	private               *ecdh.PrivateKey
+	init                  *InitResult
+	peerEd25519           bool
+	peerFragmentation     bool
+	cookieRetries         uint8
+	auth                  *authPending
+	authDone              bool
+	local, remote         netip.AddrPort
+	exchanges             exchangeState
+	childPending          *childPending
+	children              map[uint32]*childSA
+	deletePending         *childDeletePending
+	closing, closed       bool
+	originalResponder     bool
+	dormant, rekeyed      bool
+	ikePending            *ikeRekeyPending
+	localRekey, peerRekey *ikeRekeyCandidate
 }
 
 type InitResult struct {
