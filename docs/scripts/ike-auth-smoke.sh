@@ -26,11 +26,21 @@ GOCACHE="${GOCACHE:-/tmp/photon-gocache}" \
   GOMODCACHE="${GOMODCACHE:-/tmp/photon-gomodcache}" \
   GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
   "${GO:-go}" test -c -o "$smoke_dir/ike.test" ./internal/photonclient/ike
+if [[ "${PHOTON_IKE_FRAGMENT_ONLY:-0}" != 1 ]]; then
+  GOCACHE="${GOCACHE:-/tmp/photon-gocache}" \
+    GOMODCACHE="${GOMODCACHE:-/tmp/photon-gomodcache}" \
+    GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+    "${GO:-go}" test -c -o "$smoke_dir/windows.test" ./internal/photonwindows
+fi
 if ! docker image inspect "$smoke_image" >/dev/null 2>&1; then
   docker build -t "$smoke_image" -f docs/scripts/ike-init-smoke.Dockerfile docs/scripts
 fi
-cat > "$smoke_dir/strongswan.conf" <<'CONF'
+run_smoke() {
+local smoke_pattern="$1"
+local fragment_size="$2"
+cat > "$smoke_dir/strongswan.conf" <<CONF
 charon {
+  fragment_size = $fragment_size
   install_routes = no
   install_virtual_ip = no
   stderr {
@@ -45,6 +55,8 @@ charon {
 CONF
 docker run --rm --network none --cap-add NET_ADMIN \
   "${docker_extra[@]}" -e "PHOTON_CHARON_BINARY=$charon_binary" \
+  -e "PHOTON_IKE_SMOKE_PATTERN=$smoke_pattern" \
+  -e "PHOTON_IKE_FRAGMENT_SIZE=$fragment_size" \
   -v "$smoke_dir:/smoke:ro" "$smoke_image" bash -euo pipefail -c '
     export STRONGSWAN_CONF=/smoke/strongswan.conf
     "$PHOTON_CHARON_BINARY" > /tmp/charon.log 2>&1 &
@@ -54,5 +66,15 @@ docker run --rm --network none --cap-add NET_ADMIN \
       if [ -S /tmp/ike-auth.vici ]; then break; fi
       sleep 0.1
     done
-    PHOTON_IKE_AUTH_SMOKE=1 /smoke/ike.test -test.run "^TestStrongSwan(IKEAuth|Informational)$" -test.v -test.count=1
+    PHOTON_IKE_AUTH_SMOKE=1 PHOTON_IKE_FRAGMENT_SMOKE=1 /smoke/ike.test -test.run "$PHOTON_IKE_SMOKE_PATTERN" -test.v -test.count=1
+    if [ "$PHOTON_IKE_FRAGMENT_SIZE" = 1280 ]; then
+      PHOTON_WINDOWS_TUNNEL_SMOKE=1 /smoke/windows.test -test.run "^TestStrongSwanWindowsTunnel$" -test.v -test.count=1
+    fi
   '
+}
+if [[ "${PHOTON_IKE_FRAGMENT_ONLY:-0}" != 1 ]]; then
+  run_smoke '^TestStrongSwan(IKEAuth|Informational|ChildRekey|ChildPFS)$' 1280
+fi
+# Force multi-fragment responses without changing production crypto profiles.
+# StrongSwan's fragmentation=force option applies only to IKEv1.
+run_smoke '^TestStrongSwanFragmentation$' 256
