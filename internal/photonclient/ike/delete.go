@@ -14,7 +14,10 @@ type childDeletePending struct {
 
 // DeleteResult lists local inbound SPIs whose entire CHILD pair can be removed
 // by the dataplane owner. A replay has nil result and never removes twice.
-type DeleteResult struct{ Removed []uint32 }
+type DeleteResult struct {
+	Removed []uint32
+	IKE     bool
+}
 
 func encodeChildDelete(spis []uint32) (Payload, error) {
 	if len(spis) == 0 || len(spis) > maxChildSAs {

@@ -26,6 +26,7 @@ type Initiator struct {
 	childPending      *childPending
 	children          map[uint32]*childSA
 	deletePending     *childDeletePending
+	closing, closed   bool
 }
 
 type InitResult struct {

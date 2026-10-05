@@ -25,10 +25,11 @@ const (
 	exchangeChild
 	exchangeDelete
 	exchangeIKERekey
+	exchangeIKEDelete
 )
 
 func (i *Initiator) beginExchange(exchange, kind uint8, ps []Payload) ([]byte, error) {
-	if !i.authDone || i.init == nil {
+	if !i.authDone || i.init == nil || i.closing || i.closed {
 		return nil, fmt.Errorf("ike: exchange requires completed IKE_AUTH")
 	}
 	if i.exchanges.pending != nil {
@@ -87,6 +88,14 @@ func (i *Initiator) openAuthenticated(m *ExchangeMessage, exchange uint8) (h Hea
 		return
 	}
 	h, ps = m.header, m.payloads
+	if i.closed {
+		if h.Flags&FlagResponse == 0 && bytes.Equal(m.identity, i.exchanges.lastRequest) {
+			cached = bytes.Clone(i.exchanges.lastReply)
+			return
+		}
+		err = fmt.Errorf("ike: IKE SA closed")
+		return
+	}
 	if h.Flags&FlagResponse != 0 {
 		if i.exchanges.pending == nil || uint64(h.MessageID) != i.exchanges.nextLocal || i.exchanges.pending[18] != exchange {
 			err = fmt.Errorf("ike: no matching pending exchange")
@@ -222,7 +231,9 @@ func (i *Initiator) HandleExchange(m *ExchangeMessage, childConfig *ChildExchang
 			result.Reply, result.Child, err = i.handleChildRequest(m, *childConfig)
 		}
 	case ExchangeInformational:
-		if len(m.payloads) == 0 && !(m.header.Flags&FlagResponse != 0 && i.exchanges.pendingKind == exchangeDelete) {
+		if isIKEDelete(m.payloads) || m.header.Flags&FlagResponse != 0 && i.exchanges.pendingKind == exchangeIKEDelete {
+			result.Reply, result.Deleted, err = i.handleIKEDelete(m)
+		} else if len(m.payloads) == 0 && !(m.header.Flags&FlagResponse != 0 && i.exchanges.pendingKind == exchangeDelete) {
 			result.Reply, err = i.handleInformational(m)
 			result.Liveness = err == nil
 		} else {
