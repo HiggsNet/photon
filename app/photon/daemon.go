@@ -1086,6 +1086,7 @@ func (d *Daemon) flushRoutingReconcileResult(ctx context.Context) (bool, error) 
 	if !d.routingDirty {
 		return false, nil
 	}
+	defer d.gossipDriver.LogSlowOperation("routing_reconcile", time.Now(), d.gossipDriver.PendingEventCount())
 	d.routingDirty = false
 	d.noteReconcileFlush("routing")
 	reconcileCtx, cancel := boundedReconcileContext(ctx)
@@ -1126,6 +1127,7 @@ func (d *Daemon) flushIPsecReconcile(ctx context.Context) bool {
 	if !d.ipsecDirty {
 		return false
 	}
+	defer d.gossipDriver.LogSlowOperation("ipsec_reconcile", time.Now(), d.gossipDriver.PendingEventCount())
 	d.ipsecDirty = false
 	d.noteReconcileFlush("ipsec")
 	reconcileCtx, cancel := boundedReconcileContext(ctx)

@@ -117,6 +117,7 @@ func (driver *GossipDriver) applyGossipSnapshots(
 	actions []gossip.ApplySnapshotAction,
 	view GossipStateView,
 ) (GossipSnapshotApplyResult, error) {
+	defer driver.LogSlowOperation("snapshot_apply", time.Now(), driver.PendingEventCount())
 	if driver == nil || driver.gossipState == nil {
 		return GossipSnapshotApplyResult{}, errors.New("gossip state store is not configured")
 	}

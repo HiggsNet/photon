@@ -39,6 +39,7 @@ func (sender gossipDriverSender) datagramBudget() int {
 // The first event executes directly: a full queue must not strand an idle session.
 // The returned flag reports completed sessions requiring platform reconciliation.
 func (driver *GossipDriver) SyncGossipPeers(ctx context.Context, now time.Time, suppressedPeers map[string]bool, force bool) (bool, error) {
+	defer driver.LogSlowOperation("sync_peers", time.Now(), driver.PendingEventCount())
 	if driver == nil {
 		return false, ErrGossipDriverStopped
 	}
@@ -131,6 +132,7 @@ type GossipHostEventResult struct {
 // gossip inbound planner or session FSM. Packet, timer and object-pull
 // completion producers therefore share one consumer on every platform.
 func (driver *GossipDriver) HandleGossipHostEvent(ctx context.Context, hostEvent Event, now time.Time, suppressedPeers map[string]bool) (GossipHostEventResult, error) {
+	defer driver.LogSlowOperation("host_event", time.Now(), driver.PendingEventCount())
 	var out GossipHostEventResult
 	if driver == nil {
 		return out, ErrGossipDriverStopped

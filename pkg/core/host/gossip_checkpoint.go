@@ -13,6 +13,7 @@ import (
 // recordGossipObservedPath persists one authenticated packet source after
 // validating it against the GossipDriver's current verified state.
 func (driver *GossipDriver) recordGossipObservedPath(ctx context.Context, peerID, endpoint string, suppressed map[string]bool, now time.Time) (bool, error) {
+	defer driver.LogSlowOperation("observed_checkpoint", time.Now(), driver.PendingEventCount())
 	if driver == nil || driver.gossipState == nil {
 		return false, ErrGossipDriverStopped
 	}
@@ -73,6 +74,7 @@ func (driver *GossipDriver) commitGossipEventCheckpoint(ctx context.Context, ses
 	if len(backoffs) == 0 && (session == nil || !session.Done()) {
 		return nil
 	}
+	defer driver.LogSlowOperation("session_checkpoint", time.Now(), driver.PendingEventCount())
 	view := driver.gossipState.ReadView()
 	peers := make(map[string]corestate.PeerCheckpoint)
 	patches := make(map[string]corestate.PeerCheckpointPatch)
