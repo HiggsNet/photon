@@ -284,3 +284,51 @@ func TestFragmentIntegrityDoesNotReplacePinnedAuth(t *testing.T) {
 		t.Fatal("rejected message retained decrypted fragments")
 	}
 }
+
+func TestSKFHeaderExtensionFlagsAreAuthenticatedAndIgnored(t *testing.T) {
+	h, ek, ak, packets := fragmentFixture(t, []byte("payload"), 180)
+	packet := packets[0]
+	packet[19] |= 0x50 // Higher-version and reserved bits do not change direction.
+	var r skfReassembly
+	if _, _, _, err := r.Add(packet, h, ek, ak, time.Unix(10, 0)); err == nil {
+		t.Fatal("header change escaped integrity")
+	}
+	copy(packet[len(packet)-skICVLen:], PRFSHA256(ak, packet[:len(packet)-skICVLen])[:skICVLen])
+	_, plain, complete, err := r.Add(packet, h, ek, ak, time.Unix(10, 0))
+	if err != nil || !complete || !bytes.Equal(plain, []byte("payload")) {
+		t.Fatal("authenticated extension flags rejected", err)
+	}
+	packet[19] |= FlagInitiator
+	copy(packet[len(packet)-skICVLen:], PRFSHA256(ak, packet[:len(packet)-skICVLen])[:skICVLen])
+	if _, _, _, err := r.Add(packet, h, ek, ak, time.Unix(10, 0)); err == nil {
+		t.Fatal("direction flag ignored")
+	}
+}
+
+func TestPostAuthSKFExtensionFlagsDoNotReplaceCache(t *testing.T) {
+	i := informationalFixture(t)
+	i.peerFragmentation = true
+	first, plain, err := EncodePayloads([]Payload{{Type: PayloadVendor, Data: bytes.Repeat([]byte{7}, 500)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := Header{InitiatorSPI: i.spi, ResponderSPI: i.init.ResponderSPI, ExchangeType: ExchangeInformational}
+	packets, err := SealSKF(h, first, plain, i.init.Keys.SKER, i.init.Keys.SKAR, 180, rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for n, p := range packets {
+		p[19] |= 0x10
+		if n%2 == 0 {
+			p[19] |= 0x40
+		}
+		copy(p[len(p)-skICVLen:], PRFSHA256(i.init.Keys.SKAR, p[:len(p)-skICVLen])[:skICVLen])
+		message, err := i.DecodeExchange(p, time.Unix(10, 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n == len(packets)-1 && (message == nil || message.Header().Flags != 0) {
+			t.Fatal("extension flags displaced partial cache")
+		}
+	}
+}

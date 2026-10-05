@@ -159,6 +159,7 @@ func (i *Initiator) DecodeExchange(packet []byte, now time.Time) (*ExchangeMessa
 	if next != PayloadSKF {
 		return i.decodeSKExchange(packet)
 	}
+	h.Flags &= FlagInitiator | FlagResponse
 	if !i.authDone || i.init == nil || !i.peerFragmentation {
 		return nil, fmt.Errorf("ike: post-AUTH fragmentation not negotiated")
 	}

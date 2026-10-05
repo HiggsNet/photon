@@ -98,6 +98,10 @@ func (r *skfReassembly) Add(packet []byte, expected Header, encryptionKey, integ
 	if err != nil {
 		return 0, nil, false, err
 	}
+	// Match direction/response semantics without rejecting reserved or higher-
+	// version flags. Integrity below still covers their original wire values.
+	h.Flags &= FlagInitiator | FlagResponse
+	expected.Flags &= FlagInitiator | FlagResponse
 	if h != expected || next != PayloadSKF || h.ExchangeType == ExchangeSAInit || len(encryptionKey) != 16 || len(integrityKey) != 32 {
 		return 0, nil, false, fmt.Errorf("ike: SKF does not match pending exchange")
 	}
