@@ -7,6 +7,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonclient/esp"
 	"github.com/HiggsNet/photon/internal/photonclient/ike"
 )
 
@@ -223,6 +224,10 @@ func (t *gatewayTunnel) activateChild(spi uint32, now time.Time) error {
 
 func (t *gatewayTunnel) observeData(result dataplaneCompletion, plan GatewayPlan, now time.Time) {
 	job := result.job
+	if job.sa != nil && job.outbound && job.sa == t.data.active && errors.Is(result.err, esp.ErrSequenceExhausted) && job.ctx.Err() == nil && t.data.current(job.generation, job.sa, plan) {
+		t.rekeyAt = now // exhausted Sender remains fail-closed until fresh CHILD
+		return
+	}
 	if t.pendingChildSPI == 0 || job.sa == nil || job.sa.spi != t.pendingChildSPI || job.outbound || result.err != nil || job.ctx.Err() != nil {
 		return
 	}

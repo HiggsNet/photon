@@ -274,26 +274,37 @@ func (i *Initiator) ChildRequest(c ChildExchangeConfig) ([]byte, error) {
 }
 
 type childOffer struct {
-	spi, rekeySPI uint32
-	group         uint16
-	nonce, ke     []byte
-	tsi, tsr      []TrafficSelector
+	spi, rekeySPI  uint32
+	group          uint16
+	nonce, ke      []byte
+	tsi, tsr       []TrafficSelector
+	proposalNumber uint8
+	keGroup        uint16
 }
 
 func parseChildOffer(ps []Payload) (childOffer, error) {
+	return parseChildPayloads(ps, false)
+}
+
+func parseChildPayloads(ps []Payload, request bool) (childOffer, error) {
 	var o childOffer
 	var sa, nonce, tsi, tsr bool
+	var saData []byte
 	var err error
 	for _, p := range ps {
 		switch p.Type {
 		case PayloadSA:
-			o.spi, o.group, err = decodeChildExchangeProposal(p.Data)
+			saData = p.Data
 			sa = true
 		case PayloadNonce:
 			o.nonce, err = DecodeNonce(p.Data)
 			nonce = true
 		case PayloadKE:
-			_, o.ke, err = DecodeKE(p.Data)
+			if request {
+				o.keGroup, o.ke, err = rawRequestKE(p.Data)
+			} else {
+				o.keGroup, o.ke, err = DecodeKE(p.Data)
+			}
 		case PayloadTSi:
 			o.tsi, err = DecodeTrafficSelectors(p.Data)
 			tsi = true
@@ -329,8 +340,20 @@ func parseChildOffer(ps []Payload) (childOffer, error) {
 			return childOffer{}, err
 		}
 	}
-	if !sa || !nonce || !tsi || !tsr || (o.group == 0) != (len(o.ke) == 0) {
+	if !sa || !nonce || !tsi || !tsr {
 		return childOffer{}, fmt.Errorf("ike: incomplete CHILD offer or mismatched KE")
+	}
+	if request {
+		o.spi, o.group, o.proposalNumber, err = selectChildOffer(saData, o.keGroup)
+	} else {
+		o.spi, o.group, err = decodeChildExchangeProposal(saData)
+		o.proposalNumber = 1
+	}
+	if err != nil {
+		return childOffer{}, err
+	}
+	if !request && (o.group == 0) != (len(o.ke) == 0) {
+		return childOffer{}, fmt.Errorf("ike: CHILD response mismatched KE")
 	}
 	return o, nil
 }
@@ -461,9 +484,13 @@ func (i *Initiator) handleChildRequest(m *ExchangeMessage, c ChildExchangeConfig
 		reply, err := i.replyExchange(m.identity, h, []Payload{{Type: PayloadNotify, Data: n}})
 		return reply, nil, err
 	}
-	o, err := parseChildOffer(ps)
+	o, err := parseChildPayloads(ps, true)
 	if err != nil {
 		return nil, nil, err
+	}
+	if o.keGroup != o.group {
+		reply, err := i.replyInvalidKE(m, h, o.group)
+		return reply, nil, err
 	}
 	if o.rekeySPI != 0 {
 		var oldLocal uint32
@@ -523,6 +550,7 @@ func (i *Initiator) handleChildRequest(m *ExchangeMessage, c ChildExchangeConfig
 	if err != nil {
 		return nil, nil, err
 	}
+	responsePS[0].Data[4] = o.proposalNumber
 	reply, err := i.replyExchange(m.identity, h, responsePS)
 	if err != nil {
 		return nil, nil, err
@@ -564,7 +592,7 @@ func (i *Initiator) InspectChildExchange(m *ExchangeMessage) (*ChildRequestOffer
 	if h.Flags&FlagResponse != 0 {
 		return nil, fmt.Errorf("ike: expected CHILD request")
 	}
-	o, err := parseChildOffer(ps)
+	o, err := parseChildPayloads(ps, true)
 	if err != nil {
 		return nil, err
 	}

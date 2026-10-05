@@ -116,21 +116,32 @@ func (i *Initiator) IKERekeyRequest() ([]byte, error) {
 }
 
 type ikeRekeyOffer struct {
-	spi       uint64
-	nonce, ke []byte
+	spi            uint64
+	nonce, ke      []byte
+	proposalNumber uint8
+	keGroup        uint16
 }
 
 func parseIKERekeyOffer(ps []Payload) (ikeRekeyOffer, error) {
+	return parseIKERekeyPayloads(ps, false)
+}
+
+func parseIKERekeyPayloads(ps []Payload, request bool) (ikeRekeyOffer, error) {
 	var o ikeRekeyOffer
+	var sa []byte
 	var err error
 	for _, p := range ps {
 		switch p.Type {
 		case PayloadSA:
-			o.spi, err = decodeIKERekeyProposal(p.Data)
+			sa = p.Data
 		case PayloadNonce:
 			o.nonce, err = DecodeNonce(p.Data)
 		case PayloadKE:
-			_, o.ke, err = DecodeKE(p.Data)
+			if request {
+				o.keGroup, o.ke, err = rawRequestKE(p.Data)
+			} else {
+				o.keGroup, o.ke, err = DecodeKE(p.Data)
+			}
 		default:
 			err = fmt.Errorf("ike: unsupported IKE rekey payload %d", p.Type)
 		}
@@ -138,8 +149,17 @@ func parseIKERekeyOffer(ps []Payload) (ikeRekeyOffer, error) {
 			return o, err
 		}
 	}
-	if o.spi == 0 || len(o.nonce) == 0 || len(o.ke) == 0 {
+	if len(sa) == 0 || len(o.nonce) == 0 || len(o.ke) == 0 {
 		return o, fmt.Errorf("ike: incomplete IKE rekey")
+	}
+	if request {
+		o.spi, o.proposalNumber, err = selectIKERekeyOffer(sa)
+	} else {
+		o.spi, err = decodeIKERekeyProposal(sa)
+		o.proposalNumber = 1
+	}
+	if err != nil {
+		return o, err
 	}
 	return o, nil
 }
@@ -224,7 +244,7 @@ func (i *Initiator) handleIKERekeyRequest(m *ExchangeMessage) ([]byte, *IKERekey
 	if cached != nil {
 		return cached, nil, nil
 	}
-	o, err := parseIKERekeyOffer(ps)
+	o, err := parseIKERekeyPayloads(ps, true)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -235,6 +255,10 @@ func (i *Initiator) handleIKERekeyRequest(m *ExchangeMessage) ([]byte, *IKERekey
 		reply, err := i.replyExchange(m.identity, h, []Payload{{Type: PayloadNotify, Data: notice}})
 		return reply, nil, err
 	}
+	if o.keGroup != GroupP256 {
+		reply, err := i.replyInvalidKE(m, h, GroupP256)
+		return reply, nil, err
+	}
 	p, err := i.newIKERekeyPending()
 	if err != nil {
 		return nil, nil, err
@@ -243,7 +267,9 @@ func (i *Initiator) handleIKERekeyRequest(m *ExchangeMessage) ([]byte, *IKERekey
 	if err != nil {
 		return nil, nil, err
 	}
-	reply, err := i.replyExchange(m.identity, h, ikeRekeyPayloads(p))
+	responsePS := ikeRekeyPayloads(p)
+	responsePS[0].Data[4] = o.proposalNumber
+	reply, err := i.replyExchange(m.identity, h, responsePS)
 	if err != nil {
 		return nil, nil, err
 	}

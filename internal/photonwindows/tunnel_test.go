@@ -8,9 +8,27 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonclient/esp"
 	"github.com/HiggsNet/photon/internal/photonclient/ike"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
+
+func TestTunnelSequenceExhaustionSchedulesFreshChild(t *testing.T) {
+	data, plan, _, _ := dataplaneFixture(t)
+	now := time.Now()
+	tunnel := gatewayTunnel{data: data, rekeyAt: now.Add(time.Minute)}
+	result := dataplaneCompletion{job: dataplaneJob{ctx: data.generationCtx, generation: data.generation, sa: data.active, outbound: true}, err: esp.ErrSequenceExhausted}
+	stale := result
+	stale.job.generation--
+	tunnel.observeData(stale, plan, now)
+	if !tunnel.rekeyAt.After(now) {
+		t.Fatal("stale error changed rekey schedule")
+	}
+	tunnel.observeData(result, plan, now)
+	if !tunnel.rekeyAt.Equal(now) {
+		t.Fatal("sequence exhaustion did not wake rekey")
+	}
+}
 
 func TestTunnelRetryAndRevocation(t *testing.T) {
 	s, err := openPacketSockets(t.Context(), "127.0.0.1:0")
