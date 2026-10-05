@@ -13,15 +13,16 @@ import (
 // deadlines and serialization. SA_INIT remains unauthenticated; no traffic or
 // route may be authorized until IKE_AUTH and the caller's current policy pass.
 type Initiator struct {
-	spi            uint64
-	nonce, request []byte
-	private        *ecdh.PrivateKey
-	init           *InitResult
-	peerEd25519    bool
-	auth           *authPending
-	authDone       bool
-	local, remote  netip.AddrPort
-	exchanges      exchangeState
+	spi               uint64
+	nonce, request    []byte
+	private           *ecdh.PrivateKey
+	init              *InitResult
+	peerEd25519       bool
+	peerFragmentation bool
+	auth              *authPending
+	authDone          bool
+	local, remote     netip.AddrPort
+	exchanges         exchangeState
 }
 
 type InitResult struct {
@@ -70,6 +71,7 @@ func newInitiator(local, remote netip.AddrPort) (*Initiator, error) {
 		ps = append(ps, natPayload(NotifyNATDetectionSource, i.spi, 0, local), natPayload(NotifyNATDetectionDestination, i.spi, 0, remote))
 	}
 	ps = append(ps, Payload{Type: PayloadNotify, Data: []byte{0, 0, 0x40, 0x2f, 0, 5}})
+	ps = append(ps, Payload{Type: PayloadNotify, Data: []byte{0, 0, 0x40, 0x2e}})
 	i.request, err = EncodeMessage(Header{InitiatorSPI: i.spi, ExchangeType: ExchangeSAInit, Flags: FlagInitiator}, ps)
 	if err != nil {
 		return nil, err
@@ -92,7 +94,7 @@ func (i *Initiator) HandleInitResponse(packet []byte) (*InitResult, error) {
 		return nil, fmt.Errorf("ike: response does not match pending SA_INIT")
 	}
 	var sa, ke, nonce []byte
-	var peerEd25519, seenHashes bool
+	var peerEd25519, seenHashes, peerFragmentation bool
 	for _, p := range ps {
 		switch p.Type {
 		case PayloadSA:
@@ -104,6 +106,13 @@ func (i *Initiator) HandleInitResponse(packet []byte) (*InitResult, error) {
 		case PayloadNotify:
 			var n Notify
 			n, err = DecodeNotify(p.Data)
+			if err == nil && n.Type == NotifyFragmentationSupported {
+				if peerFragmentation || n.Protocol != 0 || len(n.SPI) != 0 || len(n.Data) != 0 {
+					err = fmt.Errorf("ike: invalid fragmentation support notification")
+				} else {
+					peerFragmentation = true
+				}
+			}
 			if err == nil && (len(n.SPI) != 0 || n.Type < 16384 || n.Type == 16390) {
 				err = fmt.Errorf("ike: unsupported SA_INIT notification %d", n.Type)
 			}
@@ -148,6 +157,7 @@ func (i *Initiator) HandleInitResponse(packet []byte) (*InitResult, error) {
 	}
 	i.private = nil
 	i.peerEd25519 = peerEd25519
+	i.peerFragmentation = peerFragmentation
 	i.init = &InitResult{ResponderSPI: h.ResponderSPI, Nonce: nonce, Keys: keys, Response: append([]byte(nil), packet...), NAT: nat}
 	return cloneInitResult(i.init), nil
 }

@@ -45,9 +45,12 @@ type AuthResult struct {
 }
 
 type authPending struct {
-	remoteID  string
-	remoteKey ed25519.PublicKey
-	child     ChildConfig
+	remoteID   string
+	remoteKey  ed25519.PublicKey
+	child      ChildConfig
+	request    []byte
+	fragments  [][]byte
+	reassembly skfReassembly
 }
 
 func cloneInitResult(r *InitResult) *InitResult {
@@ -143,7 +146,7 @@ func (i *Initiator) AuthRequest(c AuthConfig) ([]byte, error) {
 	child := c.Child
 	child.LocalSelectors = append([]TrafficSelector(nil), child.LocalSelectors...)
 	child.RemoteSelectors = append([]TrafficSelector(nil), child.RemoteSelectors...)
-	i.auth = &authPending{remoteID: c.RemoteID, remoteKey: bytes.Clone(c.RemotePublicKey), child: child}
+	i.auth = &authPending{remoteID: c.RemoteID, remoteKey: bytes.Clone(c.RemotePublicKey), child: child, request: request}
 	return bytes.Clone(request), nil
 }
 
@@ -165,6 +168,11 @@ func (i *Initiator) HandleAuthResponse(packet []byte) (*AuthResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer clear(plain)
+	return i.handleAuthPlain(first, plain)
+}
+
+func (i *Initiator) handleAuthPlain(first uint8, plain []byte) (*AuthResult, error) {
 	ps, err := DecodePayloads(first, plain)
 	if err != nil {
 		return nil, err
@@ -230,5 +238,6 @@ func (i *Initiator) HandleAuthResponse(packet []byte) (*AuthResult, error) {
 		return nil, err
 	}
 	i.authDone = true
+	i.auth.reassembly.Reset()
 	return &AuthResult{RemoteID: i.auth.remoteID, Child: ChildResult{InitiatorSPI: i.auth.child.InitiatorSPI, ResponderSPI: spi, LocalSelectors: local, RemoteSelectors: remote, Keys: keys}}, nil
 }
