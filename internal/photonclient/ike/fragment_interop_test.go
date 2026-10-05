@@ -20,6 +20,14 @@ import (
 // A separate container sets charon.fragment_size=256 to force multiple response
 // fragments without changing Photon's production connection or crypto proposals.
 func TestStrongSwanFragmentation(t *testing.T) {
+	runStrongSwanFragmentation(t, false)
+}
+
+func TestStrongSwanCookieAndFragmentation(t *testing.T) {
+	runStrongSwanFragmentation(t, true)
+}
+
+func runStrongSwanFragmentation(t *testing.T, requireCookie bool) {
 	if os.Getenv("PHOTON_IKE_FRAGMENT_SMOKE") != "1" {
 		t.Skip("run isolated fragmentation smoke rig")
 	}
@@ -65,11 +73,31 @@ func TestStrongSwanFragmentation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
+	if requireCookie {
+		// Leave one isolated half-open SA so the configured threshold is met.
+		// The surrounding disposable container owns its eventual cleanup.
+		probe, err := NewInitiator()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := probe.HandleInitResponse(authRoundTrip(t, conn, probe.Request())); err != nil {
+			t.Fatal("prepare half-open SA:", err)
+		}
+	}
 	i, err := NewInitiator()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := i.HandleInitResponse(authRoundTrip(t, conn, i.Request())); err != nil {
+	initResponse := authRoundTrip(t, conn, i.Request())
+	if requireCookie {
+		retry, err := i.HandleInitCookie(initResponse)
+		if err != nil {
+			t.Fatal("forced COOKIE challenge:", err)
+		}
+		initResponse = authRoundTrip(t, conn, retry)
+		t.Log("StrongSwan COOKIE challenge completed with unchanged nonce, KE and initiator SPI")
+	}
+	if _, err := i.HandleInitResponse(initResponse); err != nil {
 		t.Fatal(err)
 	}
 	if !i.peerFragmentation {

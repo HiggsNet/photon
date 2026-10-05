@@ -38,9 +38,11 @@ fi
 run_smoke() {
 local smoke_pattern="$1"
 local fragment_size="$2"
+local cookie_threshold="${3:-30}"
 cat > "$smoke_dir/strongswan.conf" <<CONF
 charon {
   fragment_size = $fragment_size
+  cookie_threshold = $cookie_threshold
   install_routes = no
   install_virtual_ip = no
   stderr {
@@ -78,3 +80,4 @@ fi
 # Force multi-fragment responses without changing production crypto profiles.
 # StrongSwan's fragmentation=force option applies only to IKEv1.
 run_smoke '^TestStrongSwanFragmentation$' 256
+run_smoke '^TestStrongSwanCookieAndFragmentation$' 256 1
