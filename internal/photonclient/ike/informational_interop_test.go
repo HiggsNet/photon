@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
+	"errors"
 	"net"
 	"net/netip"
 	"os"
@@ -20,6 +21,18 @@ import (
 // TestStrongSwanInformational runs only in the isolated IKE_AUTH smoke rig.
 // It proves post-authentication liveness, including a lost-response retry.
 func TestStrongSwanInformational(t *testing.T) {
+	testStrongSwanPostAuth(t, false, false)
+}
+
+func TestStrongSwanChildRekey(t *testing.T) {
+	testStrongSwanPostAuth(t, true, false)
+}
+
+func TestStrongSwanChildPFS(t *testing.T) {
+	testStrongSwanPostAuth(t, true, true)
+}
+
+func testStrongSwanPostAuth(t *testing.T, rekey, pfs bool) {
 	if os.Getenv("PHOTON_IKE_AUTH_SMOKE") != "1" {
 		t.Skip("run docs/scripts/ike-auth-smoke.sh for isolated StrongSwan INFORMATIONAL")
 	}
@@ -64,6 +77,21 @@ func TestStrongSwanInformational(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer driver.UnloadConnection(context.Background(), name)
+	if pfs {
+		// An additional capability case; default-profile compatibility above is
+		// still tested unchanged, including authenticated no-PFS fallback.
+		msg, err := ipsec.BuildLoadConnMessage(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn := msg[name].(map[string]any)
+		child := conn["children"].(map[string]any)[ipsec.ChildSAName(spec)].(map[string]any)
+		child["esp_proposals"] = []string{"aes128gcm16-ecp256-none-noesn"}
+		response, err := vici.Call(ctx, "load-conn", msg)
+		if err != nil || response["success"] != "yes" {
+			t.Fatalf("PFS capability connection: %v", err)
+		}
+	}
 	for index, transport := range []string{"udp500", "natt4500"} {
 		t.Run(transport, func(t *testing.T) {
 			defer driver.TerminateSA(context.Background(), name)
@@ -144,8 +172,43 @@ func TestStrongSwanInformational(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := i.HandleAuthResponse(roundTrip(request)); err != nil {
+			auth, err := i.HandleAuthResponse(roundTrip(request))
+			if err != nil {
 				t.Fatal(err)
+			}
+			if rekey {
+				child := auth.Child
+				for index, dh := range []uint16{0, GroupP256} {
+					config := ChildExchangeConfig{Child: ChildConfig{InitiatorSPI: 0x12345880 + uint32(index), LocalSelectors: child.LocalSelectors, RemoteSelectors: child.RemoteSelectors}, RekeySPI: child.InitiatorSPI, DHGroup: dh}
+					request, err := i.ChildRequest(config)
+					if err != nil {
+						t.Fatal(err)
+					}
+					response := roundTrip(request)
+					if !bytes.Equal(response, roundTrip(i.PendingRequest())) {
+						t.Fatal("CHILD retransmission response changed")
+					}
+					result, err := i.HandleChildResponse(response)
+					var refusal *ChildExchangeError
+					if errors.As(err, &refusal) && refusal.Notification == 14 && dh == GroupP256 && !pfs {
+						t.Log("default profile has no separate PFS: authenticated refusal consumed; retrying approved no-KE suite")
+						config.DHGroup = 0
+						request, err = i.ChildRequest(config)
+						if err != nil {
+							t.Fatal(err)
+						}
+						result, err = i.HandleChildResponse(roundTrip(request))
+					}
+					if err != nil {
+						t.Fatalf("CHILD rekey group %d: %v", dh, err)
+					}
+					if result.RekeySPI != child.InitiatorSPI {
+						t.Fatal("wrong rekey predecessor")
+					}
+					verifyKernelChildKeys(t, result.Child)
+					child = result.Child
+				}
+				return
 			}
 			for messageID := uint32(2); messageID <= 3; messageID++ {
 				request, err := i.InformationalRequest()
