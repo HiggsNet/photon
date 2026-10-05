@@ -239,5 +239,7 @@ func (i *Initiator) handleAuthPlain(first uint8, plain []byte) (*AuthResult, err
 	}
 	i.authDone = true
 	i.auth.reassembly.Reset()
-	return &AuthResult{RemoteID: i.auth.remoteID, Child: ChildResult{InitiatorSPI: i.auth.child.InitiatorSPI, ResponderSPI: spi, LocalSelectors: local, RemoteSelectors: remote, Keys: keys}}, nil
+	result := &AuthResult{RemoteID: i.auth.remoteID, Child: ChildResult{InitiatorSPI: i.auth.child.InitiatorSPI, ResponderSPI: spi, LocalSelectors: local, RemoteSelectors: remote, Keys: keys}}
+	i.rememberChild(result.Child, 0, nil)
+	return result, nil
 }

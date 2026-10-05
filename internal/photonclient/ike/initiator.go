@@ -23,6 +23,8 @@ type Initiator struct {
 	authDone          bool
 	local, remote     netip.AddrPort
 	exchanges         exchangeState
+	childPending      *childPending
+	children          map[uint32]*childSA
 }
 
 type InitResult struct {
