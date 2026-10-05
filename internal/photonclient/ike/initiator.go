@@ -19,6 +19,7 @@ type Initiator struct {
 	init              *InitResult
 	peerEd25519       bool
 	peerFragmentation bool
+	cookieRetries     uint8
 	auth              *authPending
 	authDone          bool
 	local, remote     netip.AddrPort
