@@ -118,6 +118,17 @@ func selectChildOffer(data []byte, keGroup uint16) (uint32, uint16, uint8, error
 	if err != nil {
 		return 0, 0, 0, err
 	}
+	if keGroup != 0 {
+		anyDH := false
+		for _, p := range proposals {
+			for _, transform := range p.transforms {
+				anyDH = anyDH || transform.kind == 4 && transform.id != 0
+			}
+		}
+		if !anyDH {
+			return 0, 0, 0, fmt.Errorf("ike: KE present without any offered DH group")
+		}
+	}
 	for _, p := range proposals {
 		if p.protocol != 3 || len(p.spi) != 4 || !p.onlyKinds(1, 4, 5) || !p.has(1, 20, []byte{0x80, 14, 0, 128}) || !p.has(5, 0, nil) {
 			continue

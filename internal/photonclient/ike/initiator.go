@@ -8,9 +8,10 @@ import (
 	"net/netip"
 )
 
-// Initiator owns SA_INIT, IKE_AUTH and authenticated empty INFORMATIONAL
-// exchanges. Its caller owns transport,
-// deadlines and serialization. SA_INIT remains unauthenticated; no traffic or
+// Initiator owns one IKE session: initial authentication, liveness, CHILD/IKE
+// rekeying and deletion. A rekey successor may be the original responder of
+// its new SA. Its caller owns transport, deadlines and serialization.
+// SA_INIT remains unauthenticated; no traffic or
 // route may be authorized until IKE_AUTH and the caller's current policy pass.
 type Initiator struct {
 	spi                   uint64

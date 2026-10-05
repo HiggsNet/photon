@@ -33,6 +33,10 @@ type AuthConfig struct {
 	Child             ChildConfig
 }
 
+// ChildResult always uses local orientation despite its historical field names:
+// InitiatorSPI is local inbound, ResponderSPI is peer inbound, and Keys are
+// local-to-peer / peer-to-local. Peer-initiated CHILD and IKE rekeys preserve
+// this orientation so the dataplane never has to infer it from the IKE I bit.
 type ChildResult struct {
 	InitiatorSPI, ResponderSPI      uint32
 	LocalSelectors, RemoteSelectors []TrafficSelector

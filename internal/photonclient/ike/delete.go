@@ -175,6 +175,10 @@ func (i *Initiator) handleChildDelete(m *ExchangeMessage) ([]byte, *DeleteResult
 // SurvivingSPI remains installed; receive overlap lasts until Delete completes.
 // DeleteSPI is nonzero only for the deletion this endpoint is responsible for.
 // Pending means a simultaneous locally initiated rekey has no final response.
+// If that old CHILD was already deleted, SurvivingSPI may identify the peer's
+// completed replacement provisionally while the local exchange remains pending.
+// LocalInitiated is false for a peer-created survivor: switch outbound only
+// after authenticated traffic on it or a peer Delete of the old CHILD.
 type ChildRekeyResolution struct {
 	SurvivingSPI, RedundantSPI, DeleteSPI uint32
 	Pending                               bool

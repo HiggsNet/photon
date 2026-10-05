@@ -200,3 +200,28 @@ func TestPeerChildInvalidKECannotBypassPFSSelection(t *testing.T) {
 		t.Fatal("forged KE request changed state")
 	}
 }
+
+func TestChildNoneSelectionIgnoresOtherProposalKE(t *testing.T) {
+	// RFC 7296 3.4 exempts a selected NONE transform from INVALID_KE. A KE for
+	// another offered suite is ignored, never treated as negotiated PFS.
+	i := informationalFixture(t)
+	c := childExchangeConfig(i, 0x11223344, 0)
+	c.Child.LocalSelectors, c.Child.RemoteSelectors = c.Child.RemoteSelectors, c.Child.LocalSelectors
+	p, _ := newChildPending(c)
+	ps, _ := childPayloads(c, p.nonce, nil, false)
+	spi := binary.BigEndian.AppendUint32(nil, c.Child.InitiatorSPI)
+	unsupported := offeredProposalWire(3, 1, spi, offeredTransformWire(1, 12, 0x80, 14, 0, 128), offeredTransformWire(3, 12), offeredTransformWire(4, 14), offeredTransformWire(5, 0))
+	none, _ := EncodeChildExchangeProposal(c.Child.InitiatorSPI, 0)
+	none[4] = 2
+	ps[0].Data = joinProposalOffers(unsupported, none)
+	ps = append(ps, Payload{Type: PayloadKE, Data: EncodeKE(14, bytes.Repeat([]byte{1}, 256))})
+	reply, result, err := i.HandleChildRequest(peerChildPacket(t, i, 0, false, ps), childExchangeConfig(i, 0x55667788, 0))
+	if err != nil || result == nil || reply == nil {
+		t.Fatal("NONE incorrectly rejected another offer's KE", err)
+	}
+	for _, p := range decodeLocalPayloads(t, i, reply) {
+		if p.Type == PayloadKE {
+			t.Fatal("NONE selected but KE returned")
+		}
+	}
+}

@@ -488,7 +488,7 @@ func (i *Initiator) handleChildRequest(m *ExchangeMessage, c ChildExchangeConfig
 	if err != nil {
 		return nil, nil, err
 	}
-	if o.keGroup != o.group {
+	if o.group != 0 && o.keGroup != o.group {
 		reply, err := i.replyInvalidKE(m, h, o.group)
 		return reply, nil, err
 	}

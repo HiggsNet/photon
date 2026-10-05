@@ -12,7 +12,9 @@ const (
 
 // ChildExchangeError is an authenticated peer refusal that completed the local
 // exchange. Other errors leave it pending. TEMPORARY_FAILURE requires caller
-// backoff; RemovedSPI identifies a stale local CHILD removed by NOT_FOUND.
+// backoff. IKERekey selects the caller's IKE retry timer instead of its CHILD
+// timer. RekeySPI retains the attempted CHILD predecessor even if a peer Delete
+// already removed it; RemovedSPI names a stale CHILD removed by this refusal.
 type ChildExchangeError struct {
 	Notification uint16
 	RemovedSPI   uint32
