@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"time"
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
@@ -35,10 +36,13 @@ var windowsTransportKey = []byte("identity")
 // its signed public records through the common Store. Existing foreign records
 // are never overwritten. A crash between the two commits resumes with the same
 // private key; a stale source revision publishes nothing.
-func (source *State) EnsureLocalTransport(ctx context.Context, config *Config, now time.Time, plan GatewayPlan) (LocalTransportIdentity, error) {
+func (source *State) EnsureLocalTransport(ctx context.Context, config *Config, now time.Time, plan GatewayPlan, localEndpoint netip.AddrPort) (LocalTransportIdentity, error) {
 	var out LocalTransportIdentity
 	if source == nil || config == nil {
 		return out, errors.New("local transport: state/config absent")
+	}
+	if !localEndpoint.IsValid() || localEndpoint.Port() == 0 {
+		return out, errors.New("local transport: actual bound UDP endpoint required")
 	}
 	source.mu.RLock()
 	defer source.mu.RUnlock()
@@ -84,7 +88,7 @@ func (source *State) EnsureLocalTransport(ctx context.Context, config *Config, n
 	if !found {
 		// A Linux/imported record without its Windows-owned private key is not
 		// permission to rotate the node's transport identity on startup.
-		if local.Records[ipsec.RecordKeyTransportKey] != nil || local.Records[ipsec.RecordKeyProfile] != nil {
+		if local.Records[ipsec.RecordKeyTransportKey] != nil || local.Records[ipsec.RecordKeyProfile] != nil || local.Records[ipsec.RecordKeyAddresses] != nil || local.Records[ipsec.RecordKeyPorts] != nil {
 			return out, errors.New("local transport: existing public identity has no Windows private key; explicit migration required")
 		}
 		key, record, err := ipsec.GenerateTransportKeyRecord(ipsec.AlgorithmEd25519, now, 0, identityPublic)
@@ -120,6 +124,9 @@ func (source *State) EnsureLocalTransport(ctx context.Context, config *Config, n
 	if err := overlay.Validate(config.Overlay.ID); err != nil {
 		return out, err
 	}
+	addresses := ipsec.AddressRecord{Version: 1, Addresses: []ipsec.AddressAdvertisement{}}
+	binding := ipsec.PortBinding{Local: localEndpoint.Port(), Advertised: localEndpoint.Port()}
+	ports := ipsec.PortRecord{Version: 1, Mode: ipsec.PortModeFixed, Current: &ipsec.PortSelection{Generation: 1, IKE: binding, NATT: binding}}
 	var intents []corestate.LocalIntent
 	for _, record := range []struct {
 		key, kind string
@@ -127,6 +134,8 @@ func (source *State) EnsureLocalTransport(ctx context.Context, config *Config, n
 	}{
 		{ipsec.RecordKeyTransportKey, ipsec.RecordTypeTransportKey, disk.Record},
 		{ipsec.RecordKeyProfile, ipsec.RecordTypeProfile, profile},
+		{ipsec.RecordKeyAddresses, ipsec.RecordTypeAddresses, addresses},
+		{ipsec.RecordKeyPorts, ipsec.RecordTypePorts, ports},
 		{ipsec.OverlayIntentRecordKey(config.Overlay.ID), ipsec.RecordTypeOverlayIntent, overlay},
 	} {
 		encoded, err := json.Marshal(record.value)
@@ -136,6 +145,26 @@ func (source *State) EnsureLocalTransport(ctx context.Context, config *Config, n
 		if existing := local.Records[record.key]; existing != nil {
 			if existing.Zone != config.ManagedZone || existing.Key != record.key || existing.Type != record.kind || photoncrypto.VerifyRecord(existing, local.Authority, now) != nil {
 				return out, fmt.Errorf("local transport: invalid existing %s", record.key)
+			}
+			if record.kind == ipsec.RecordTypeAddresses {
+				previous, err := ipsec.ParseAddressRecord(existing)
+				if err != nil || len(previous.Addresses) != 0 {
+					return out, errors.New("local transport: existing address publication is not Windows outbound-only")
+				}
+				continue
+			}
+			if record.kind == ipsec.RecordTypePorts {
+				previous, err := ipsec.ParsePortRecord(existing)
+				if err != nil || !windowsSharedPortRecord(previous) {
+					return out, errors.New("local transport: existing port publication is not a Windows shared socket")
+				}
+				if previous.Current.IKE.Local == localEndpoint.Port() {
+					continue
+				}
+				// A new actual socket port replaces only our constrained fixed
+				// single-socket publication; custom/manual port records fail closed.
+				intents = append(intents, corestate.PutProtocolRecordIntent{Kind: corestate.ProtocolRecordIPsec, Zone: config.ManagedZone, Key: record.key, Type: record.kind, Value: encoded})
+				continue
 			}
 			// Existing overlays can carry user-owned policy tags or timestamp.
 			// Preserve them if their actual tunnel/path configuration matches.
@@ -202,6 +231,14 @@ func (source *State) EnsureLocalTransport(ctx context.Context, config *Config, n
 		return out, corestate.ErrVerifiedRevisionStale
 	}
 	return LocalTransportIdentity{ID: string(config.ManagedZone), PrivateKey: bytes.Clone(private)}, nil
+}
+
+func windowsSharedPortRecord(record *ipsec.PortRecord) bool {
+	if record == nil || record.Version != 1 || record.Mode != ipsec.PortModeFixed || record.Range != nil || record.Current == nil || len(record.Previous) != 0 || record.UpdatedAt != 0 {
+		return false
+	}
+	current := record.Current
+	return current.Generation == 1 && current.ValidUntil == 0 && current.IKE.Local != 0 && current.IKE.Local == current.IKE.Advertised && current.IKE.Observed == 0 && current.NATT == current.IKE
 }
 
 func validateTransportIdentity(disk transportIdentityDisk, identityPublic ed25519.PublicKey, now time.Time) (ed25519.PrivateKey, error) {

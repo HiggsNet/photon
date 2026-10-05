@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/x509"
 	"encoding/json"
+	"net"
 	"net/netip"
 	"testing"
 	"time"
@@ -46,7 +47,7 @@ func transportIdentityFixture(t *testing.T) (*State, *Config, GatewayPlan, time.
 	put(ipsec.RecordKeyProfile, ipsec.RecordTypeProfile, ipsec.ProfileRecord{Version: 1, Enabled: true, Provider: ipsec.ProviderStrongSwan, Role: ipsec.RoleIn, IKEIdentity: string(peer), TransportKeyFingerprint: key.Fingerprint, AddressFamilies: []string{ipsec.FamilyIPv4}, PathModes: []string{ipsec.PathModeFamilyRedundant}})
 	put(ipsec.RecordKeyAddresses, ipsec.RecordTypeAddresses, ipsec.AddressRecord{Version: 1, Addresses: []ipsec.AddressAdvertisement{{ID: "public", Source: ipsec.SourceManualAddress, Address: "192.0.2.10", Family: ipsec.FamilyIPv4}}})
 	put(ipsec.RecordKeyPorts, ipsec.RecordTypePorts, ipsec.PortRecord{Version: 1, Mode: ipsec.PortModeFixed, Current: &ipsec.PortSelection{Generation: 1, IKE: ipsec.PortBinding{Advertised: 500}, NATT: ipsec.PortBinding{Advertised: 4500}}})
-	put(ipsec.OverlayIntentRecordKey("main"), ipsec.RecordTypeOverlayIntent, ipsec.OverlayIntentRecord{Version: 1, OverlayID: "main", Provider: ipsec.ProviderStrongSwan, PathKeys: []string{"family:ipv4"}, TunnelAddress: ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDisabled}})
+	put(ipsec.OverlayIntentRecordKey("main"), ipsec.RecordTypeOverlayIntent, ipsec.OverlayIntentRecord{Version: 1, OverlayID: "main", Provider: ipsec.ProviderStrongSwan, PathKeys: []string{"family:ipv4"}, TunnelAddress: ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDisabled, Family: ipsec.FamilyIPv6}})
 	store, err := corestate.OpenBoltStore(path, 0o600, time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +72,7 @@ func transportIdentityFixture(t *testing.T) (*State, *Config, GatewayPlan, time.
 
 func TestLocalTransportPersistsSignsAndRestarts(t *testing.T) {
 	source, config, plan, now := transportIdentityFixture(t)
-	identity, err := source.EnsureLocalTransport(t.Context(), config, now, plan)
+	identity, err := source.EnsureLocalTransport(t.Context(), config, now, plan, netip.MustParseAddrPort("127.0.0.1:12345"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +93,7 @@ func TestLocalTransportPersistsSignsAndRestarts(t *testing.T) {
 	}
 	revision := view.Revision
 	plan = PlanGateway(t.Context(), config, view, now)
-	second, err := source.EnsureLocalTransport(t.Context(), config, now.Add(time.Second), plan)
+	second, err := source.EnsureLocalTransport(t.Context(), config, now.Add(time.Second), plan, netip.MustParseAddrPort("127.0.0.1:12345"))
 	if err != nil || !bytes.Equal(identity.PrivateKey, second.PrivateKey) || source.Store().VerifiedRevision() != revision {
 		t.Fatalf("idempotence failed: %v", err)
 	}
@@ -106,7 +107,7 @@ func TestLocalTransportPersistsSignsAndRestarts(t *testing.T) {
 	}
 	defer reopened.Close()
 	plan = PlanGateway(t.Context(), config, reopened.Store().ReadView(), now)
-	third, err := reopened.EnsureLocalTransport(t.Context(), config, now, plan)
+	third, err := reopened.EnsureLocalTransport(t.Context(), config, now, plan, netip.MustParseAddrPort("127.0.0.1:12345"))
 	if err != nil || !bytes.Equal(identity.PrivateKey, third.PrivateKey) || reopened.Store().VerifiedRevision() != revision {
 		t.Fatalf("restart changed identity: %v", err)
 	}
@@ -137,7 +138,7 @@ func TestLocalTransportResumesPrivateCommitBeforePublic(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	identity, err := reopened.EnsureLocalTransport(t.Context(), config, now, plan)
+	identity, err := reopened.EnsureLocalTransport(t.Context(), config, now, plan, netip.MustParseAddrPort("127.0.0.1:12345"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +198,7 @@ func TestLocalTransportRejectsForeignOrStaleRecords(t *testing.T) {
 				source.bolt.Close()
 			}
 			before := source.Store().VerifiedRevision()
-			if identity, err := source.EnsureLocalTransport(t.Context(), config, now, plan); err == nil || identity.PrivateKey != nil {
+			if identity, err := source.EnsureLocalTransport(t.Context(), config, now, plan, netip.MustParseAddrPort("127.0.0.1:12345")); err == nil || identity.PrivateKey != nil {
 				t.Fatal("unsafe identity accepted")
 			}
 			if source.Store().VerifiedRevision() != before {
@@ -228,7 +229,7 @@ func TestLocalTransportDerivedTunnelAndPreservedIntent(t *testing.T) {
 			put(config.ManagedZone, intent)
 			before := bytes.Clone(source.Store().ReadView().State.Network.Zones[config.ManagedZone].Records[ipsec.OverlayIntentRecordKey("main")].Value)
 			plan = PlanGateway(t.Context(), config, source.Store().ReadView(), now)
-			if _, err := source.EnsureLocalTransport(t.Context(), config, now, plan); err != nil {
+			if _, err := source.EnsureLocalTransport(t.Context(), config, now, plan, netip.MustParseAddrPort("127.0.0.1:12345")); err != nil {
 				t.Fatal(err)
 			}
 			after := source.Store().ReadView().State.Network.Zones[config.ManagedZone].Records[ipsec.OverlayIntentRecordKey("main")].Value
@@ -243,6 +244,85 @@ func TestLocalTransportDerivedTunnelAndPreservedIntent(t *testing.T) {
 			reverseRemote, reverseLocal, err := group.DeriveTunnelAddressesForLink(peer, config.ManagedZone, "", "family:ipv4", 0, 0)
 			if err != nil || local != reverseLocal || remote != reverseRemote {
 				t.Fatal("peer derivation did not mirror addresses")
+			}
+		})
+	}
+}
+
+func TestLocalTransportActualEndpointProducesLinuxResponder(t *testing.T) {
+	source, config, plan, now := transportIdentityFixture(t)
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	endpoint := conn.LocalAddr().(*net.UDPAddr).AddrPort()
+	identity, err := source.EnsureLocalTransport(t.Context(), config, now, plan, endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := source.Store().ReadView()
+	published, err := ipsec.ParsePortRecord(view.State.Network.Zones[config.ManagedZone].Records[ipsec.RecordKeyPorts])
+	if err != nil || published.Current.IKE.Local != endpoint.Port() || published.Current.NATT.Advertised != endpoint.Port() {
+		t.Fatalf("actual shared endpoint not published: %v", err)
+	}
+	peer := plan.Selected.Zone
+	groups := []ipsec.LinkGroupSpec{{ID: "main", Provider: ipsec.ProviderStrongSwan, DefaultPathMode: ipsec.PathModeFamilyRedundant, TunnelAddressSpec: ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDisabled, Family: ipsec.FamilyIPv6}}}
+	linuxPlan, err := ipsec.PlanTransportLinks(t.Context(), view.State.Network, peer, groups, ipsec.LinkPlannerOptions{Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, spec := range linuxPlan.Desired {
+		if spec.PeerZone != config.ManagedZone {
+			continue
+		}
+		if spec.InitiatorRole != "" || len(spec.ContactPoints) != 0 || spec.PathKey != "family:ipv4" {
+			t.Fatalf("Linux planned something other than inbound leaf connection: %+v", spec)
+		}
+		if spec.AuthRef != ipsec.TransportKeyFingerprint(ipsec.AlgorithmEd25519, identity.PrivateKey.Public().(ed25519.PublicKey)) {
+			t.Fatal("Linux responder referenced the wrong transport public key")
+		}
+		found = true
+	}
+	if !found {
+		t.Fatalf("Linux production planner skipped outbound Windows leaf: %+v", linuxPlan.Skipped)
+	}
+}
+
+func TestLocalTransportPortChangeAndForeignEndpointProtection(t *testing.T) {
+	for _, scenario := range []string{"new-bound-port", "custom-port", "nonempty-address"} {
+		t.Run(scenario, func(t *testing.T) {
+			source, config, plan, now := transportIdentityFixture(t)
+			if _, err := source.EnsureLocalTransport(t.Context(), config, now, plan, netip.MustParseAddrPort("127.0.0.1:12345")); err != nil {
+				t.Fatal(err)
+			}
+			view := source.Store().ReadView()
+			if scenario != "new-bound-port" {
+				key, kind := ipsec.RecordKeyPorts, ipsec.RecordTypePorts
+				var value any = ipsec.PortRecord{Version: 1, Mode: ipsec.PortModeFixed, Current: &ipsec.PortSelection{Generation: 9, IKE: ipsec.PortBinding{Advertised: 500}, NATT: ipsec.PortBinding{Advertised: 4500}}}
+				if scenario == "nonempty-address" {
+					key, kind = ipsec.RecordKeyAddresses, ipsec.RecordTypeAddresses
+					value = ipsec.AddressRecord{Version: 1, Addresses: []ipsec.AddressAdvertisement{{ID: "manual", Source: ipsec.SourceManualAddress, Address: "192.0.2.55", Family: ipsec.FamilyIPv4}}}
+				}
+				encoded, _ := json.Marshal(value)
+				if _, err := source.Store().ApplyLocalIntent(t.Context(), corestate.PutProtocolRecordIntent{Kind: corestate.ProtocolRecordIPsec, Zone: config.ManagedZone, Key: key, Type: kind, Value: encoded}, now); err != nil {
+					t.Fatal(err)
+				}
+				view = source.Store().ReadView()
+			}
+			plan = PlanGateway(t.Context(), config, view, now)
+			_, err := source.EnsureLocalTransport(t.Context(), config, now, plan, netip.MustParseAddrPort("127.0.0.1:23456"))
+			if scenario == "new-bound-port" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				ports, _ := ipsec.ParsePortRecord(source.Store().ReadView().State.Network.Zones[config.ManagedZone].Records[ipsec.RecordKeyPorts])
+				if ports.Current.IKE.Local != 23456 || ports.Current.NATT.Local != 23456 {
+					t.Fatal("actual replacement port was not published")
+				}
+			} else if err == nil || source.Store().VerifiedRevision() != view.Revision {
+				t.Fatal("user-owned endpoint publication overwritten")
 			}
 		})
 	}
