@@ -193,7 +193,7 @@ jobs:
             "${{ steps.meta.outputs.image }}:sha-${{ steps.meta.outputs.commit }}-arm64"
 
       - name: Publish latest manifest
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-')
         run: |
           docker buildx imagetools create \
             -t "${{ steps.meta.outputs.image }}:latest" \
@@ -218,6 +218,14 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
+          body: |
+            Linux amd64 / arm64 安装包及对应 SHA256 校验文件见附件。
+
+            含 `-rc.N` 的版本为预发布测试版，不更新正式版或 Docker latest。
+            Linux 新旧版本对照测试、安装和回退步骤见：
+            https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/new/linux-release-testing.md
           files: |
             dist/*.tar.gz
             dist/*.sha256

@@ -8,7 +8,8 @@ import (
 	"net/netip"
 )
 
-// Initiator owns one SA_INIT followed by IKE_AUTH. Its caller owns transport,
+// Initiator owns SA_INIT, IKE_AUTH and authenticated empty INFORMATIONAL
+// exchanges. Its caller owns transport,
 // deadlines and serialization. SA_INIT remains unauthenticated; no traffic or
 // route may be authorized until IKE_AUTH and the caller's current policy pass.
 type Initiator struct {
@@ -20,6 +21,7 @@ type Initiator struct {
 	auth           *authPending
 	authDone       bool
 	local, remote  netip.AddrPort
+	info           informationalState
 }
 
 type InitResult struct {
@@ -48,7 +50,7 @@ func newInitiator(local, remote netip.AddrPort) (*Initiator, error) {
 	if err != nil {
 		return nil, err
 	}
-	i := &Initiator{private: key, nonce: make([]byte, 32), local: local, remote: remote}
+	i := &Initiator{private: key, nonce: make([]byte, 32), local: local, remote: remote, info: informationalState{nextLocal: 2}}
 	var spi [8]byte
 	for i.spi == 0 {
 		if _, err := rand.Read(spi[:]); err != nil {

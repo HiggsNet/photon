@@ -136,7 +136,7 @@ nix-build:
 # make release-push. Neither target commits nor pushes the current branch.
 release-check:
 	@test -n "$(RELEASE_VERSION)" || { echo "VERSION is empty or missing" >&2; exit 1; }
-	@printf '%s\n' "$(RELEASE_VERSION)" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "VERSION must be MAJOR.MINOR.PATCH, got $(RELEASE_VERSION)" >&2; exit 1; }
+	@printf '%s\n' "$(RELEASE_VERSION)" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$$' || { echo "VERSION must be MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-rc.N, got $(RELEASE_VERSION)" >&2; exit 1; }
 	@git diff --check
 	@test -z "$$(git status --porcelain)" || { echo "working tree must be clean before release" >&2; git status --short >&2; exit 1; }
 	@if git rev-parse -q --verify "refs/tags/$(RELEASE_TAG)" >/dev/null; then echo "tag $(RELEASE_TAG) already exists locally" >&2; exit 1; fi

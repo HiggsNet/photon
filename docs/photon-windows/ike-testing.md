@@ -87,5 +87,40 @@ key/salt 对比，outer 均为 IPv4 loopback。原 SA_INIT 加密拒绝测试也
 
 后续 ESP packet 与 NAT-T 验收见 [ESP 测试](esp-testing.md)。
 尚未实现：Daemon 当前授权绑定、COOKIE retry、fragmentation、产品重传调度、
-rekey 和 liveness。
+rekey 和产品 liveness 调度。空 INFORMATIONAL 协议进展见下节。
+
+## 2026-10-05 空 INFORMATIONAL 存活探测
+
+`InformationalRequest()` 在 AUTH 完成后创建单个 pending 请求，
+`PendingInformationalRequest()` 返回原密文副本用于重传；
+`HandleInformational()` 验证 SPI、message ID、完整性和空 payload 后提交响应，
+或生成对端请求的响应。两个方向独立计数，本地主动请求从 2 开始，对端从 0
+开始；只缓存最后一份对端请求及响应，重复请求返回同一密文。32 位序号耗尽
+不回绕。错误报文不能消费 ID、覆盖缓存或完成 pending 请求。
+
+依据 [RFC 7296 §1.4](https://www.rfc-editor.org/rfc/rfc7296.html#section-1.4)、
+[§2.1–2.3](https://www.rfc-editor.org/rfc/rfc7296.html#section-2.1) 实现该窄范围协议。
+调用方仍负责串行调用、endpoint 校验、计时与重传预算；请求超时必须放弃该 SA，
+不能跳过未完成 ID。非空 INFORMATIONAL（包括 Delete/Notify）目前明确拒绝，
+本实现不构成完整 DPD 或 INFORMATIONAL 引擎。
+
+本轮验证：
+
+- `make check WINDOWS_GO_MOD_CACHE=/home/herbertqiao/go/pkg/mod` 通过，包括
+  全量测试、Linux 构建和 Windows amd64 交叉编译；IKE/ESP race 与 diff 检查通过。
+- `bash docs/scripts/ike-auth-smoke.sh` 同时运行 AUTH 与 INFORMATIONAL 验收。
+  Ubuntu strongSwan 5.9.13 和 Nix strongSwan 6.0.7 均通过 UDP 500 / NAT-T 4500
+  两个子用例；各完成 ID 2、3 探测，故意丢弃首响应后原密文重传，校验网关缓存响应，
+  最后由 VICI 确认 IKE/CHILD 仍建立。NAT-T 子用例实际协商 NAT-D 并使用 marker。
+- Windows 11 amd64 VM 四包原生测试通过，包含本轮双向 ID、认证失败不推进、
+  重传缓存及序号耗尽测试；外部 peer 测试继续由独立 rig 验证。
+
+本切片新增约 102 行生产 Go 代码，用于此前不存在的认证后协议交换；仍由现有
+Initiator 持有状态，没有新增 socket、goroutine、timer 或平台 owner。
+定时 DPD、失败销毁与重连、当前授权绑定、Delete、rekey，以及 Windows 到
+网关的真实隧道仍待后续完成。
+
+同轮核对 RC.2：XFRM 十六进制 ID 与 Gossip 历史节点过滤两项修补已在 Windows
+分支，patch-id 与 RC 一致；另移植预发布不覆盖 `latest`、GitHub prerelease 标记、
+`-rc.N` 校验和 Linux 测试说明。Windows 分支的 VERSION 保持原值，未发布版本。
 本轮没有接入 Windows Daemon 或更改 Linux 连接生成器/生产网关。

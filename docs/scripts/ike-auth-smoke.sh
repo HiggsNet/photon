@@ -54,5 +54,5 @@ docker run --rm --network none --cap-add NET_ADMIN \
       if [ -S /tmp/ike-auth.vici ]; then break; fi
       sleep 0.1
     done
-    PHOTON_IKE_AUTH_SMOKE=1 /smoke/ike.test -test.run "^TestStrongSwanIKEAuth$" -test.v -test.count=1
+    PHOTON_IKE_AUTH_SMOKE=1 /smoke/ike.test -test.run "^TestStrongSwan(IKEAuth|Informational)$" -test.v -test.count=1
   '
