@@ -1,4 +1,6 @@
-# IKE 基础与认证验收
+# IKE 与 Windows 隧道验收
+
+前半保留各阶段的验收边界；当前实现与 B3 最终矩阵见末尾 2026-10-06 记录。
 
 `internal/photonclient/ike` 分离报文、密码学和 SA_INIT / IKE_AUTH 状态。调用方负责
 socket、超时和串行调用；`Request()` 返回独立副本，可原样重传。错误响应不推进
@@ -124,3 +126,54 @@ Initiator 持有状态，没有新增 socket、goroutine、timer 或平台 owner
 分支，patch-id 与 RC 一致；另移植预发布不覆盖 `latest`、GitHub prerelease 标记、
 `-rc.N` 校验和 Linux 测试说明。Windows 分支的 VERSION 保持原值，未发布版本。
 本轮没有接入 Windows Daemon 或更改 Linux 连接生成器/生产网关。
+
+## 2026-10-06 B3 生命周期与实际 Windows 跨主机验收
+
+此前“未接入 Daemon / 未完成 Windows 握手”等结论是阶段记录。现在 Daemon
+使用原有 Gossip UDP owner 分流 IKE、NAT-T ESP 和 gossip；没有第二个 UDP reader。
+同一事件循环调度 INIT/AUTH、COOKIE、SKF、DPD、NAT keepalive、CHILD/IKE rekey、
+Delete、超时重传和重连。每个方向独立 message ID、单 pending 及末次响应缓存；
+重传复用原密文。IKE rekey 切换角色及密钥并转移 CHILD 所有权，ESP 序号不中断。
+
+Windows transport 私钥独立于 common identity，保存在现有 State 数据库；本机发布
+实际共享端口与签名 transport 意图。安装/交付时重新验证当前 gateway identity、
+pin、contact、TS 和本机签名 transport 意图。撤销、过期、换代及 rebind 先拒绝数据；
+无关 gossip revision 不再无条件销毁健康 SA。DNS 复用提示最多 10 秒，不由包流量续期。
+
+资源有明确上限：IKE ingress 16、ESP ingress 64、双 crypto worker、工作/完成队列
+各 64、最多 3 个 CHILD（旧 SA 与碰撞候选）、最多 2 个待清理 IKE。peer 发起 CHILD
+切换等待有效新 ESP 或旧 CHILD Delete，旧 SA overlap 最多 120 秒；失败最终销毁并重连。
+SKF 单次最多 64 片、65507 字节、30 秒，先验完整性后占用重组状态。COOKIE 最多
+3 次且不重置总握手预算。控制报文分片目标含 NAT-T marker 为 1200 字节；Windows
+逐包 WriteToUDP 为明确的 batch-send 退化路径，每次写最多 1 秒。ESP ingress 不套用
+1200 字节 gossip 截断；最终虚拟网卡 MTU/PMTU 属于 B4/B6 的整链路验收。
+
+### 可复现矩阵
+
+- `bash docs/scripts/ike-auth-smoke.sh`：Ubuntu strongSwan 5.9.13；设置
+  `PHOTON_IKE_AUTH_NIX_PACKAGE` 后同矩阵运行 Nix strongSwan 6.0.7。
+  两者均保留生产连接生成器的默认 proposal；兼容多 proposal、多 transform 和
+  INVALID_KE 重试，不通过改窄生产 profile 获得成功。另有明确标识的 P-256 CHILD
+  capability 用例，与默认无 PFS 兼容用例分开。
+- `TestStrongSwanWindowsTunnel`：outer IPv4/IPv6，两方向 CHILD rekey、旧 CHILD
+  Delete，两方向 IKE rekey/角色切换、新 key DPD，每阶段都有实际内核 XFRM IPv4
+  ICMP 回包。此前独立 ESP 矩阵继续覆盖 inner IPv4/IPv6。
+- `TestStrongSwanSimultaneousChildRekey` 与 `TestStrongSwanSimultaneousIKERekey`
+  强制交叉 pending 请求，通过 nonce 裁决冗余 SA、删除旧/冗余 SA，比较 survivor
+  XFRM key/salt 并完成新角色 message ID 0 DPD。两版本均通过；重复 Delete 的
+  丢响应重传覆盖对端候选尚未注册的时序，不能用两次顺序重协商替代碰撞证据。
+- 分片模式强制实际多片 AUTH、乱序/重复和丢响应重传；COOKIE 模式通过保留半开 SA
+  触发真实 challenge，再完成 fragmented AUTH。两版本均通过。
+- `bash docs/scripts/windows-tunnel-cross-host-smoke.sh`：真实 Windows 11 amd64
+  VM 发出共享 UDP，经测试宿主专用 DNAT 端口连接隔离 strongSwan。两版本均通过
+  AUTH/NAT-T、DPD、CHILD rekey/Delete、IKE rekey 和跨阶段的四次内核 ESP echo。
+  脚本校验清理结果，临时凭据/二进制/容器退出删除；保留日志不输出密钥。
+- 最新 B3 Windows 原生包 147 个顶层测试通过（其中 8 个 fuzz seed suites）；
+  `make check GO_MOD_CACHE=/home/herbertqiao/go/pkg/mod WINDOWS_GO_MOD_CACHE=/home/herbertqiao/go/pkg/mod`
+  通过。首次全量运行的 gossip 计时测试超时，单独复验及全量重跑均通过。
+  相关 IKE/Windows race 测试通过。
+
+真实内核 echo 验证用户态 ESP 到 Linux XFRM，不等于 Windows TCP/IP 已经经由
+Wintun 路由。当前业务 packet 缺 B4 verdict 默认拒绝，`tunnel_ready=false` 保持诚实；
+Wintun/SADR/Babel、系统路由与 SCM 仍须各自完成。没有将这些测试应用到生产网关，
+没有 push、打 tag、发布或部署。

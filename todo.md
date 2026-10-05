@@ -236,21 +236,28 @@ B2 控制面前置已收口，可以进入 B3。这里不包含 SCM、Wintun/IP 
 - [x] 完成锁定 `ranet-lite` commit 的 [port map、license/provenance 与采用/重写决策](docs/photon-windows/ranet-port-map.md)；已在三个派生 codec 文件保留来源头，并交付完整 MIT notice；没有引入上游依赖。
 - [x] 实现有界 codec/proposal、CBC/HMAC/P-256/PRF+、独立向量与 fuzz；单次 SA_INIT 与隔离 strongSwan 5.9.13 默认 proposals 实际互通，并通过加密拒绝响应证明双向 keymat，见 [验收记录](docs/photon-windows/ike-testing.md)。尚未完成认证或 CHILD，不将此结果视为隧道成功。
 - [x] 分离 IKE codec/parser 与 initiator session state machine，实现 `IKE_SA_INIT -> IKE_AUTH -> 首个 CHILD_SA`。Ed25519/FQDN 绑定预先授权的 peer pin，校验双向 TS 收窄；隔离 strongSwan 使用生产连接生成器完成真实认证及 CHILD 安装，方向 key/salt 与 XFRM 一致。此项仅协议建链，不包含 ESP 数据包、Daemon 当前授权提交和 NAT-T/rekey。
-- [ ] 与 Photon StrongSwan 验证 ID encoding、raw Ed25519、NAT-T、proposal、retransmit、fragmentation 和错误通知。
-- [ ] 使用现有 Linux 连接生成器验证 Windows 与实际构建的 proposal 交集，覆盖首个 CHILD、CREATE_CHILD_SA 与双方发起的 rekey；依据 design §1.2 现场基线，不以改窄 Linux profile 代替兼容实现。
-- [ ] 实现 CHILD/IKE rekey、overlap、simultaneous rekey、DPD/liveness 与网络变化重连。
-  - [x] AUTH 后空 INFORMATIONAL 协议：独立双向 message ID、单 pending、原密文重传、认证后提交及末次响应缓存；strongSwan 5.9.13/6.0.7 的 UDP 500 与 NAT-T 4500 互通通过，含丢响应重传。Windows 原生协议测试通过，见 [IKE 验收](docs/photon-windows/ike-testing.md)。定时 DPD、失败销毁/重连、Delete 与 rekey 仍未接入。
-- [x] 实现 tunnel-mode IPv4/IPv6 ESP、固定 SA SPI 校验、32 位 sequence、64 包 anti-replay、AEAD/padding/length 验证；序号耗尽拒绝，验签失败不推进窗口，独立向量、并发与 fuzz 验证。当前为大小有界的同步处理；多 SA SPI 分派和有界 crypto worker/queue 随实际共享 UDP owner 接入，仍未完成。
+- [x] 与 Photon StrongSwan 验证 ID encoding、raw Ed25519、NAT-T、proposal、retransmit、fragmentation 和错误通知。
+  - [x] AUTH 的 SKF 分片有界重组、乱序/重复/丢响应重传，strongSwan 5.9.13/6.0.7 均通过真实多片握手；后续交换共用已认证消息入口与序号 owner。
+- [x] 使用现有 Linux 连接生成器验证 Windows 与实际构建的 proposal 交集，覆盖首个 CHILD、CREATE_CHILD_SA 与双方发起的 rekey；依据 design §1.2 现场基线，不以改窄 Linux profile 代替兼容实现。
+  - [x] 默认无 KE 路径、认证后的 PFS 拒绝兼容、独立 P-256 capability；两方向 CHILD/IKE rekey、outer IPv4/IPv6、XFRM key/salt 及实际内核 echo 均在 strongSwan 5.9.13/6.0.7 通过。
+- [x] 实现 CHILD/IKE rekey、overlap、simultaneous rekey、DPD/liveness 与网络变化重连。
+  - [x] 统一双向 exchange owner、原密文重传、Delete、nonce 冲突裁决、IKE 角色切换；真实双版本测试强制交叉双方 pending CHILD/IKE 请求，不以顺序 rekey 替代碰撞。
+  - [x] Daemon 接入有界重传、定时 DPD、keepalive、失败销毁/重连、peer cutover、120 秒 overlap 上限；撤销、过期与 rebind 先阻断旧 generation。Windows VM 到两版本隔离 strongSwan 完成实际 AUTH/NAT-T、CHILD/IKE rekey 和四阶段内核 echo，见 [IKE 验收](docs/photon-windows/ike-testing.md)。物理睡眠/多层 NAT 产品矩阵仍归 B6。
+- [x] 实现 tunnel-mode IPv4/IPv6 ESP、固定 SA SPI 校验、32 位 sequence、64 包 anti-replay、AEAD/padding/length 验证；序号耗尽拒绝并触发 rekey，验签失败不推进窗口，独立向量、并发与 fuzz 验证。
 - [x] 实现 NAT detection 与 UDP 4500 IKE/ESP/keepalive 分流；隔离 strongSwan 完成真实 NAT-T AUTH 与双向 IPv4/IPv6 ESP 内核 echo。详情及实际构建版本见 [ESP 验收](docs/photon-windows/esp-testing.md)；不代表真实 NAT 设备、多层 NAT 或 Windows 跨主机隧道验收。
-- [ ] 接入多 SA SPI demux、有界 crypto workers/队列及当前授权 gate；不能将上述纯协议验证当作 Daemon 数据面已可用。
-- [ ] 一个共享 UDP socket 承载 IKE/ESP/gossip 所需流量；明确分流、队列、MTU 和 Windows batch-send 退化路径。
+- [x] 接入多 SA SPI demux、有界 crypto workers/队列及当前授权 gate；业务路由与 Wintun 整链路仍由 B4 验收。
+  - [x] 有界三 SA（old + simultaneous candidates）、双 crypto worker、64 项 ingress/completion 队列；generation、当前 gateway pin/contact、TS 和独立 packet policy 在提交/交付处校验，缺 B4 verdict 时默认拒绝。
+- [x] 一个共享 UDP socket 承载 IKE/ESP/gossip；IKE 队列 16、ESP 64、gossip/控制分片 1200 字节预算，ESP ingress 不截断；Windows 逐包发送、1 秒写期限，generation 隔离网络重绑前后的写入。
+
+B3 已完成上述协议、生命周期及双版本/Windows 跨主机验收；不代表 B4 系统业务隧道、B5 服务或 B6 全产品场景完成。最新证据与资源边界见 [IKE 验收](docs/photon-windows/ike-testing.md)。
 
 ### B4. Babel/SADR 与 Wintun
 
 - [ ] 实现 leaf-only Babel codec/neighbor/route selection；不转发 learned route，只 originate 本节点获授权 prefix。
 - [ ] Router ID 从稳定身份材料推导；若完全可推导则不持久化。
 - [ ] 实现 SADR lookup、ECMP/metric 切换和 route authorization gate，撤销后立即停止安装/使用非法 route。
-- [ ] Wintun 使用固定官方 API/binding，明确 DLL 来源、ring ownership、packet buffer 归还、取消与 shutdown。
+  - [x] 有界 SADR lookup、目的/源最长前缀、稳定 ECMP/metric、过期与逐 lookup 当前授权；完整 origin binding 和生产 owner 接入另验。
+- [x] Wintun 使用固定官方 API/binding，明确 DLL 来源、ring ownership、packet buffer 归还、取消与 shutdown。官方 0.14.1 AMD64 DLL 固定 SHA-256，1 MiB ring/64 队列；Windows 原生两次创建、写 ring、cancel/join、关闭后拒绝均通过，见 [来源与边界](third_party/wintun/README.md)。尚未接业务 pipeline。
 - [ ] WindowsDriver 通过 IP Helper 管理 address/route/interface metric，使用 `Observe -> Plan -> Apply -> Re-observe`，不 shell out。
 - [ ] 完成 `Wintun -> SADR -> ESP -> shared UDP` 及反向 pipeline 的 memory 与真实 interop 测试。
 
