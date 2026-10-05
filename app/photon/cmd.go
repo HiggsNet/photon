@@ -600,6 +600,8 @@ func cmdPeer() *cli.Command {
 		Aliases:   []string{"peers"},
 		Usage:     "Show gossip peer connectivity and sync state",
 		UsageText: "photon gossip peer [peer] [--filter text] [--verbose]",
+		Description: "The default list omits historical peers past cleanup_after without a usable endpoint. " +
+			"Use a peer name, --filter, --verbose, or photon debug peer to inspect them.",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "filter", Aliases: []string{"f"}, Usage: "Only show peers matching gossip id, endpoint, status, or error"},
 			&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show endpoint, retry, relay, datagram, and object-pull diagnostics"},

@@ -13,6 +13,7 @@ func WritePeerDebug(w io.Writer, view inspect.PeerDebugView) error {
 	out.Linef("configured_addr: %s", dash(view.ConfiguredAddr))
 	out.Linef("resolved_addr: %s", dash(view.ResolvedAddr))
 	out.Linef("status: %s", view.Status)
+	out.LineIf(view.Historical, "historical: true (cleanup interval elapsed; no usable endpoint)")
 	out.Linef("last_success: %s", view.LastSuccess)
 	out.Linef("last_failure: %s", failureDisplay(view.LastFailure))
 	out.Linef("backoff: %s", dash(view.Backoff))

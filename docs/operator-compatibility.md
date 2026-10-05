@@ -5,6 +5,7 @@
 - debug ping 和内核路由查看要求 daemon 在线。CLI 通过控制接口请求 daemon 执行；系统命令的权限和网络 namespace 取决于 daemon 的运行环境。
 - HealthView 已从 Targets/Samples 分列改为统一 `links` 行；Links 查询使用扁平摘要和统一 JSON 名称。Health 不再附带原始 instance，Links 不再输出 owner token。仓库前端已同步；外部客户端必须更新字段映射。
 - 离线 admission 和 sync 数据来自 checkpoint / last-known，只表示上次已知状态，不能作为实时在线结果。
+- `photon gossip peer` 默认隐藏超过 `peer_lifecycle.cleanup_after` 且没有有效 Gossip endpoint 的历史节点；配置的 bootstrap 始终保留。按名称或 `--filter` 查询、`--verbose`、`photon debug peer <peer>` 和 `photon debug peers` 仍可诊断历史节点。筛选在线和离线查询均生效，只改变列表展示，不删除 checkpoint、签名 zone 或授权；checkpoint 继续用于防止陈旧记录重建离线链路。有效端点或最近活动恢复后，节点重新进入默认列表。
 - 禁用路由会停止新的 reconcile，不自动拆除之前创建的资源。需要拆除时须显式执行相应运维操作，不能把 disabled 当作资源清理。
 - `debug db dump` 使用通用递归原始 bucket 展示，已删除 `_meta` / `zone:*` 旧布局专用解码；指定 zone 时解码当前 VerifiedState 并只输出该 zone；旧布局不再支持 zone 筛选，启动升级迁移仍保留。`stats` 递归统计叶子键及键值逻辑字节数（不是磁盘分配量）。读取锁等待约一秒后报错；daemon 持有数据库时应停止 daemon 或使用一致的数据库副本。
 - Links/rotate 内部诊断字段 `StoredSAs` 改为 `ReconcileSAs`、`ReplannedDesired` 改为 `LastDesiredCount`：它们来自最近一次 reconcile 的内存观察，不是 DB 持久值或当前重新规划的结果。控制接口直接消费这些诊断字段的客户端也须更新。

@@ -279,6 +279,7 @@ type PeerStatusInfo struct {
 }
 
 type PeerDebugView struct {
+	Historical       bool `json:",omitempty"`
 	PeerID           string
 	Source           string
 	ConfiguredAddr   string

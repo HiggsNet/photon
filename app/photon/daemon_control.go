@@ -384,7 +384,9 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
 		}
-		view, ok := inspect.BuildGossipPeerDebugView(common, gossipPeersOptions(d.gossipDriver.GossipConfig(), d.peerObservabilitySnapshots(), d.now()), request.Zone)
+		options := gossipPeersOptions(d.gossipDriver.GossipConfig(), d.peerObservabilitySnapshots(), d.now())
+		options.Lifecycle = d.Config.PeerLifecycle
+		view, ok := inspect.BuildGossipPeerDebugView(common, options, request.Zone)
 		if !ok {
 			writeControlResponse(conn, controlError(fmt.Errorf("%w: %s", zone.ErrZoneNotFound, request.Zone)))
 			return

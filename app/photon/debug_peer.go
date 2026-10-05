@@ -30,7 +30,9 @@ func debugPeer(peerID string) error {
 	}
 	fmt.Fprintln(os.Stdout, "source: checkpoint (daemon offline; last-known gossip runtime)")
 	config := gossipDriverConfig(cfg, common.State, nil)
-	view, ok := inspect.BuildGossipPeerDebugView(common, gossipPeersOptions(config, nil, time.Now()), peerID)
+	options := gossipPeersOptions(config, nil, time.Now())
+	options.Lifecycle = cfg.PeerLifecycle
+	view, ok := inspect.BuildGossipPeerDebugView(common, options, peerID)
 	if !ok {
 		return fmt.Errorf("%w: %s", zone.ErrZoneNotFound, peerID)
 	}
