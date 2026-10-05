@@ -21,7 +21,7 @@ type Initiator struct {
 	auth           *authPending
 	authDone       bool
 	local, remote  netip.AddrPort
-	info           informationalState
+	exchanges      exchangeState
 }
 
 type InitResult struct {
@@ -50,7 +50,7 @@ func newInitiator(local, remote netip.AddrPort) (*Initiator, error) {
 	if err != nil {
 		return nil, err
 	}
-	i := &Initiator{private: key, nonce: make([]byte, 32), local: local, remote: remote, info: informationalState{nextLocal: 2}}
+	i := &Initiator{private: key, nonce: make([]byte, 32), local: local, remote: remote, exchanges: exchangeState{nextLocal: 2}}
 	var spi [8]byte
 	for i.spi == 0 {
 		if _, err := rand.Read(spi[:]); err != nil {

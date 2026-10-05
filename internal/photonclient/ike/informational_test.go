@@ -111,7 +111,7 @@ func TestInformationalRejectsBeforeAuthentication(t *testing.T) {
 	if _, err := i.HandleInformational(peerInformation(t, i, 0, false, nil, nil)); err == nil {
 		t.Fatal("request accepted before AUTH")
 	}
-	if i.info.nextRemote != 0 || i.info.nextLocal != 2 || i.info.lastRequest != nil {
+	if i.exchanges.nextRemote != 0 || i.exchanges.nextLocal != 2 || i.exchanges.lastRequest != nil {
 		t.Fatal("unauthenticated session advanced")
 	}
 	var zero Initiator
@@ -160,7 +160,7 @@ func TestInformationalInvalidMessagesPreserveState(t *testing.T) {
 				if _, err := i.HandleInformational(packet); err == nil {
 					t.Fatal("invalid packet accepted")
 				}
-				if i.info.nextLocal != 2 || i.info.nextRemote != 0 || i.info.lastRequest != nil || !bytes.Equal(i.PendingInformationalRequest(), pending) {
+				if i.exchanges.nextLocal != 2 || i.exchanges.nextRemote != 0 || i.exchanges.lastRequest != nil || !bytes.Equal(i.PendingInformationalRequest(), pending) {
 					t.Fatal("invalid packet advanced state")
 				}
 				// A valid retry remains possible after rejection.
@@ -196,18 +196,18 @@ func TestInformationalReplayCacheBounded(t *testing.T) {
 	}
 	second[len(second)-1] ^= 1
 	actual, err := i.HandleInformational(second)
-	if err != nil || !bytes.Equal(actual, expected) || i.info.nextRemote != 2 {
+	if err != nil || !bytes.Equal(actual, expected) || i.exchanges.nextRemote != 2 {
 		t.Fatal("invalid replay damaged last cache")
 	}
 	clear(second)
-	if bytes.Equal(i.info.lastRequest, second) {
+	if bytes.Equal(i.exchanges.lastRequest, second) {
 		t.Fatal("caller owns cached request bytes")
 	}
 }
 
 func TestInformationalMessageIDExhaustion(t *testing.T) {
 	i := informationalFixture(t)
-	i.info.nextLocal = math.MaxUint32
+	i.exchanges.nextLocal = math.MaxUint32
 	if _, err := i.InformationalRequest(); err != nil {
 		t.Fatal(err)
 	}
@@ -217,10 +217,10 @@ func TestInformationalMessageIDExhaustion(t *testing.T) {
 	if _, err := i.InformationalRequest(); err == nil {
 		t.Fatal("local ID wrapped")
 	}
-	if i.info.nextLocal != uint64(math.MaxUint32)+1 {
+	if i.exchanges.nextLocal != uint64(math.MaxUint32)+1 {
 		t.Fatal("lost exhausted state")
 	}
-	i.info.nextRemote = math.MaxUint32
+	i.exchanges.nextRemote = math.MaxUint32
 	request := peerInformation(t, i, math.MaxUint32, false, nil, nil)
 	reply, err := i.HandleInformational(request)
 	if err != nil {
@@ -233,7 +233,7 @@ func TestInformationalMessageIDExhaustion(t *testing.T) {
 	if _, err := i.HandleInformational(peerInformation(t, i, 0, false, nil, nil)); err == nil {
 		t.Fatal("remote ID wrapped")
 	}
-	if i.info.nextRemote != uint64(math.MaxUint32)+1 {
+	if i.exchanges.nextRemote != uint64(math.MaxUint32)+1 {
 		t.Fatal("lost remote exhausted state")
 	}
 }

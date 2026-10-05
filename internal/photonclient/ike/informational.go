@@ -1,100 +1,45 @@
 package ike
 
-import (
-	"bytes"
-	"crypto/rand"
-	"fmt"
-	"math"
-)
+import "fmt"
 
 const ExchangeInformational uint8 = 37
 
-// Request counters belong to the original sender and are independent in each
-// direction. A wider counter represents exhaustion without wrapping to zero.
-type informationalState struct {
-	nextLocal, nextRemote  uint64
-	pending                []byte
-	lastRequest, lastReply []byte
-}
-
 // InformationalRequest begins one authenticated empty liveness exchange after
-// IKE_AUTH. The caller owns scheduling, deadlines and endpoint validation, and
-// must serialize all Initiator calls. A timeout requires abandoning this SA;
-// it must not free the pending slot or skip the unanswered message ID.
+// IKE_AUTH. A timeout requires abandoning this SA; it must not free the pending
+// slot or skip the unanswered message ID. Other exchange types share this slot.
 func (i *Initiator) InformationalRequest() ([]byte, error) {
-	if !i.authDone || i.init == nil {
-		return nil, fmt.Errorf("ike: INFORMATIONAL requires completed IKE_AUTH")
-	}
-	if i.info.pending != nil {
-		return nil, fmt.Errorf("ike: INFORMATIONAL already pending")
-	}
-	if i.info.nextLocal > math.MaxUint32 {
-		return nil, fmt.Errorf("ike: local message ID exhausted; replace IKE SA")
-	}
-	packet, err := SealSK(Header{InitiatorSPI: i.spi, ResponderSPI: i.init.ResponderSPI,
-		ExchangeType: ExchangeInformational, Flags: FlagInitiator, MessageID: uint32(i.info.nextLocal)},
-		0, nil, i.init.Keys.SKEI, i.init.Keys.SKAI, rand.Reader)
-	if err != nil {
-		return nil, err
-	}
-	i.info.pending = packet
-	return bytes.Clone(packet), nil
+	return i.beginExchange(ExchangeInformational, exchangeLiveness, nil)
 }
 
-// PendingInformationalRequest returns a detached copy of the original encrypted
-// request for byte-identical retransmission, or nil when no exchange is pending.
+// PendingInformationalRequest returns the original encrypted empty liveness
+// request or nil. PendingRequest also supports other post-AUTH exchange types.
 func (i *Initiator) PendingInformationalRequest() []byte {
-	return bytes.Clone(i.info.pending)
+	if i.exchanges.pendingKind != exchangeLiveness {
+		return nil
+	}
+	return i.PendingRequest()
 }
 
-// HandleInformational accepts only authenticated empty INFORMATIONAL messages.
-// A non-nil result is a reply to send (including a cached reply to a duplicate
-// request); nil with no error completes the pending local liveness exchange.
-// Delete, rekey, notifications and peer window changes are unsupported. Invalid
-// messages never consume an ID, complete a pending exchange or replace a cache.
+// HandleInformational accepts authenticated empty INFORMATIONAL messages.
+// A non-nil result is a reply to send; nil with no error completes the pending
+// local liveness exchange. Invalid messages do not mutate the session.
 func (i *Initiator) HandleInformational(packet []byte) ([]byte, error) {
-	if !i.authDone || i.init == nil {
-		return nil, fmt.Errorf("ike: INFORMATIONAL requires completed IKE_AUTH")
-	}
-	h, _, err := DecodeHeader(packet)
+	h, ps, cached, err := i.openExchange(packet, ExchangeInformational)
 	if err != nil {
 		return nil, err
 	}
-	if h.InitiatorSPI != i.spi || h.ResponderSPI != i.init.ResponderSPI || h.ExchangeType != ExchangeInformational || h.Flags&FlagInitiator != 0 {
-		return nil, fmt.Errorf("ike: INFORMATIONAL does not match IKE SA")
-	}
-	first, plain, err := OpenSK(packet, i.init.Keys.SKER, i.init.Keys.SKAR)
-	if err != nil {
-		return nil, err
-	}
-	if first != 0 || len(plain) != 0 {
+	if len(ps) != 0 {
 		return nil, fmt.Errorf("ike: nonempty INFORMATIONAL unsupported")
 	}
 	if h.Flags&FlagResponse != 0 {
-		if i.info.pending == nil || uint64(h.MessageID) != i.info.nextLocal {
-			return nil, fmt.Errorf("ike: no matching INFORMATIONAL request")
+		if i.exchanges.pendingKind != exchangeLiveness {
+			return nil, fmt.Errorf("ike: pending exchange is not liveness")
 		}
-		i.info.pending = nil
-		i.info.nextLocal++
+		i.completeExchange()
 		return nil, nil
 	}
-	// Authentication precedes duplicate handling. Only the last exact request
-	// can reuse its encrypted response; the cache is bounded to one exchange.
-	if i.info.lastRequest != nil && bytes.Equal(packet, i.info.lastRequest) {
-		return bytes.Clone(i.info.lastReply), nil
+	if cached != nil {
+		return cached, nil
 	}
-	if i.info.nextRemote > math.MaxUint32 || uint64(h.MessageID) != i.info.nextRemote {
-		return nil, fmt.Errorf("ike: unexpected responder INFORMATIONAL message ID")
-	}
-	// I is the original IKE initiator bit, including in replies to requests
-	// that the original responder originated (RFC 7296 section 3.1).
-	reply, err := SealSK(Header{InitiatorSPI: i.spi, ResponderSPI: i.init.ResponderSPI,
-		ExchangeType: ExchangeInformational, Flags: FlagInitiator | FlagResponse, MessageID: h.MessageID},
-		0, nil, i.init.Keys.SKEI, i.init.Keys.SKAI, rand.Reader)
-	if err != nil {
-		return nil, err
-	}
-	i.info.lastRequest, i.info.lastReply = bytes.Clone(packet), reply
-	i.info.nextRemote++
-	return bytes.Clone(reply), nil
+	return i.replyExchange(packet, h, nil)
 }
