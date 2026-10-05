@@ -75,6 +75,22 @@ func RevalidateGatewayPlan(config *Config, view corestate.View, plan GatewayPlan
 	if view.Revision != plan.Revision || plan.Rejected != "" {
 		return GatewayPlan{Revision: view.Revision, EvaluatedAt: now, Rejected: "gateway plan is stale or rejected"}
 	}
+	return revalidateResolvedGateway(config, view, plan, now)
+}
+
+// Established SAs can survive unrelated verified revisions. Cached DNS is only
+// a short-lived reachability hint: all signed records, chains and route facts
+// are reconstructed from the current view, then the caller compares the result
+// with the authenticated SA's pinned identity and endpoint. Packet processing
+// must never replace the original planner timestamp with this result's time.
+func revalidateActiveGateway(config *Config, view corestate.View, plan GatewayPlan, now time.Time) GatewayPlan {
+	if plan.Selected == nil || plan.Rejected != "" || now.Before(plan.EvaluatedAt) || now.Sub(plan.EvaluatedAt) > 10*time.Second {
+		return GatewayPlan{Rejected: "active gateway DNS hint expired"}
+	}
+	return revalidateResolvedGateway(config, view, plan, now)
+}
+
+func revalidateResolvedGateway(config *Config, view corestate.View, plan GatewayPlan, now time.Time) GatewayPlan {
 	resolved := gatewayResolvedHosts{}
 	seen := make(map[string]map[netip.Addr]bool)
 	for _, candidate := range plan.Candidates {

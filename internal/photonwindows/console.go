@@ -15,10 +15,11 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
 // RunConsole owns the common state and gossip resources until cancellation.
-// It restores an existing database; it does not provision identity or a tunnel.
+// It restores an existing database; initial identity admission remains explicit.
 func RunConsole(ctx context.Context, config *Config, logger *slog.Logger) error {
 	return NewDaemon(config, logger).Run(ctx)
 }
@@ -226,12 +227,78 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		planRequests <- request
 	}
 	var lastPlan GatewayPlan
+	data := newGatewayDataplane(ctx)
+	defer data.close()
+	tunnel := &gatewayTunnel{socket: packet, data: data}
+	defer tunnel.stop()
+	initialBackoff, maxBackoff := config.Reconnect.InitialBackoff, config.Reconnect.MaxBackoff
+	if initialBackoff <= 0 {
+		initialBackoff = time.Second
+	}
+	if maxBackoff < initialBackoff {
+		maxBackoff = 30 * time.Second
+	}
+	backoff := initialBackoff
+	var nextTunnel time.Time
+	freshPlan := func() GatewayPlan {
+		view, now := state.Store().ReadView(), time.Now()
+		if view.State == nil || photoncrypto.VerifyChain(view.State.Network, config.ManagedZone, now) != nil {
+			return GatewayPlan{Rejected: "local authority is absent or expired"}
+		}
+		if tunnel.phase != 0 {
+			binding, err := localTransportAuthorization(config, view, now)
+			if err != nil || binding != tunnel.localAuthorization {
+				return GatewayPlan{Rejected: "local transport authorization changed"}
+			}
+			return revalidateActiveGateway(config, view, lastPlan, now)
+		}
+		return RevalidateGatewayPlan(config, view, lastPlan, now)
+	}
+	stopTunnel := func(reason string) {
+		tunnel.stop()
+		nextTunnel = time.Now().Add(backoff)
+		backoff = min(backoff*2, maxBackoff)
+		logger.Info("tunnel_stopped", "reason", reason, "retry_at", nextTunnel, "tunnel_ready", false)
+	}
+	attemptTunnel := func() {
+		if tunnel.phase != 0 || time.Now().Before(nextTunnel) {
+			return
+		}
+		plan := freshPlan()
+		if plan.Selected == nil {
+			return
+		}
+		before := state.Store().VerifiedRevision()
+		local, err := state.EnsureLocalTransport(ctx, config, time.Now(), plan, packet.LocalAddr().AddrPort())
+		if err != nil {
+			nextTunnel = time.Now().Add(backoff)
+			backoff = min(backoff*2, maxBackoff)
+			logger.Warn("tunnel_local_identity_unavailable", "error", err)
+			return
+		}
+		defer clear(local.PrivateKey)
+		if state.Store().VerifiedRevision() != before {
+			requestPlan()
+			return
+		}
+		binding, err := localTransportAuthorization(config, state.Store().ReadView(), time.Now())
+		if err != nil {
+			stopTunnel(err.Error())
+			return
+		}
+		if err := tunnel.start(plan, local.ID, local.PrivateKey, time.Now()); err != nil {
+			stopTunnel(err.Error())
+		} else {
+			tunnel.localAuthorization = binding
+		}
+	}
 	rebindPending := false
 	rebind := func(rebindCtx context.Context) error {
 		rebindCtx, cancelRebind := context.WithCancel(rebindCtx)
 		stopCancel := context.AfterFunc(ctx, cancelRebind)
 		defer stopCancel()
 		defer cancelRebind()
+		tunnel.stop() // deny old packets before replacing the shared endpoint
 		err := packet.Rebind(rebindCtx)
 		lastPlan = GatewayPlan{}
 		rebindPending = err != nil && ctx.Err() == nil
@@ -264,12 +331,35 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	syncPeers()
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+	tunnelTicker := time.NewTicker(250 * time.Millisecond)
+	defer tunnelTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case result := <-d.plans:
 			result <- RevalidateGatewayPlan(config, state.Store().ReadView(), lastPlan, time.Now())
+		case packet := <-packet.ikePackets:
+			before := tunnel.phase
+			if err := tunnel.handle(packet, freshPlan(), time.Now()); err != nil {
+				logger.Debug("tunnel_packet_rejected", "error", err)
+			} else if before != 3 && tunnel.phase == 3 {
+				backoff = initialBackoff
+				logger.Info("tunnel_authenticated", "gateway", tunnel.plan.Selected.Zone, "tunnel_ready", false, "child_installed", true)
+			}
+		case packet := <-packet.espPackets:
+			data.submitInbound(packet.generation, freshPlan(), packet.peer, packet.packet)
+		case completion := <-data.completed:
+			// B4 must supply its current Router ID/origin/source-prefix verdict
+			// before any decrypted traffic can reach Wintun or an IP stack.
+			plan := freshPlan()
+			tunnel.observeData(completion, plan, time.Now())
+			data.accept(completion, plan, nil)
+		case <-tunnelTicker.C:
+			if err := tunnel.tick(freshPlan(), time.Now()); err != nil {
+				stopTunnel(err.Error())
+			}
+			attemptTunnel()
 		case result := <-plans:
 			if result.generation != generation || result.plan.Revision != state.Store().VerifiedRevision() {
 				continue
@@ -296,6 +386,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				logger.Info("gateway_plan_changed", "plan", result.plan, "tunnel_ready", false)
 			}
 			lastPlan = result.plan
+			attemptTunnel()
 		case request := <-d.rebind:
 			request.result <- rebind(request.ctx)
 		case <-packet.failed:
@@ -331,6 +422,9 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				logger.Warn("gossip_event_failed", "error", err)
 			}
 			if state.Store().VerifiedRevision() != before {
+				if tunnel.phase != 0 && !tunnel.current(freshPlan()) {
+					stopTunnel("verified authorization withdrawn")
+				}
 				observeGateways()
 				requestPlan()
 			}
