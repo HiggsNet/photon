@@ -2,6 +2,7 @@ package ipsec
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -18,71 +19,106 @@ type recordedCommand struct {
 }
 
 func TestSystemXFRMDriverBatchObserveHealthyInterfacesIsMutationFree(t *testing.T) {
-	var commands []recordedCommand
-	driver := SystemXFRMDriver{
-		DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "photon"},
-		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
-			commands = append(commands, recordedCommand{name: name, args: append([]string(nil), args...)})
-			switch strings.Join(args, " ") {
-			case "-j netns list":
-				return []byte(`[{"name":"photon"}]`), nil
-			case "netns exec photon ip -j -d link show":
-				return []byte(`[
-					{"ifname":"phx1","flags":["MULTICAST","UP"],"inet6_addr_gen_mode":"none","linkinfo":{"info_kind":"xfrm","info_data":{"if_id":11}}},
-					{"ifname":"phx2","flags":["MULTICAST","UP"],"inet6_addr_gen_mode":"none","linkinfo":{"info_kind":"xfrm","info_data":{"if_id":12}}},
+	for _, ids := range []struct {
+		name, first, second   string
+		wantFirst, wantSecond uint32
+	}{
+		{"numeric", "11", "12", 11, 12},
+		{"iproute2_hex", `"0x2b5d5a31"`, `"0xdfd0d07e"`, 0x2b5d5a31, 0xdfd0d07e},
+		{"mixed", `"0x2b5d5a31"`, "12", 0x2b5d5a31, 12},
+	} {
+		t.Run(ids.name, func(t *testing.T) {
+			var commands []recordedCommand
+			driver := SystemXFRMDriver{
+				DefaultNetNS: NetNSSpec{Kind: NetNSName, Name: "photon"},
+				Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
+					commands = append(commands, recordedCommand{name: name, args: append([]string(nil), args...)})
+					switch strings.Join(args, " ") {
+					case "-j netns list":
+						return []byte(`[{"name":"photon"}]`), nil
+					case "netns exec photon ip -j -d link show":
+						return []byte(fmt.Sprintf(`[
+					{"ifname":"phx1","flags":["MULTICAST","UP"],"inet6_addr_gen_mode":"none","linkinfo":{"info_kind":"xfrm","info_data":{"if_id":%s}}},
+					{"ifname":"phx2","flags":["MULTICAST","UP"],"inet6_addr_gen_mode":"none","linkinfo":{"info_kind":"xfrm","info_data":{"if_id":%s}}},
 					{"ifname":"phx-not-xfrm","linkinfo":{"info_kind":"dummy"}}
-				]`), nil
-			case "netns exec photon ip -j addr show":
-				return []byte(`[
+				]`, ids.first, ids.second)), nil
+					case "netns exec photon ip -j addr show":
+						return []byte(`[
 					{"ifname":"phx1","addr_info":[{"local":"fe80::1","prefixlen":64},{"local":"fd00::fff4","prefixlen":128}]},
 					{"ifname":"phx2","addr_info":[{"local":"fe80::2","prefixlen":64}]}
 				]`), nil
-			default:
-				if len(args) > 4 && strings.Join(args[:4], " ") == "netns exec photon sysctl" {
-					return []byte("1\n1\n1\n1\n1\n1\n1\n1\n"), nil
-				}
-				return nil, fmt.Errorf("unexpected command: %s %s", name, strings.Join(args, " "))
+					default:
+						if len(args) > 4 && strings.Join(args[:4], " ") == "netns exec photon sysctl" {
+							return []byte("1\n1\n1\n1\n1\n1\n1\n1\n"), nil
+						}
+						return nil, fmt.Errorf("unexpected command: %s %s", name, strings.Join(args, " "))
+					}
+				},
 			}
-		},
-	}
-	specs := []TransportLinkSpec{
-		{InterfaceName: "phx1", NetNS: "photon", LocalTunnelAddr: netip.MustParseAddr("fe80::1")},
-		{InterfaceName: "phx2", NetNS: "photon", LocalTunnelAddr: netip.MustParseAddr("fe80::2")},
-	}
+			specs := []TransportLinkSpec{
+				{InterfaceName: "phx1", NetNS: "photon", LocalTunnelAddr: netip.MustParseAddr("fe80::1")},
+				{InterfaceName: "phx2", NetNS: "photon", LocalTunnelAddr: netip.MustParseAddr("fe80::2")},
+			}
 
-	states, inventory, err := driver.InspectLinks(context.Background(), specs, []NetNSSpec{{Kind: NetNSName, Name: "photon"}})
-	if err != nil {
-		t.Fatalf("InspectLinks: %v", err)
-	}
-	if len(commands) != 4 {
-		t.Fatalf("batch commands = %d, want 4: %#v", len(commands), commandStrings(commands))
-	}
-	if len(states) != 2 || !states[0].InterfaceUp || !states[0].Multicast || !states[0].IPv6AddrGenDisabled || !states[0].NamespaceForwarding || !states[0].InterfaceForwarding {
-		t.Fatalf("states = %+v, want healthy observed links", states)
-	}
-	if got := states[0].Addresses; len(got) != 2 || got[1] != netip.MustParsePrefix("fd00::fff4/128") {
-		t.Fatalf("phx1 addresses = %+v", got)
-	}
-	if len(inventory) != 2 || inventory[0].InterfaceName != "phx1" || inventory[0].XFRMIfID != 11 || inventory[1].XFRMIfID != 12 {
-		t.Fatalf("inventory = %+v", inventory)
-	}
+			states, inventory, err := driver.InspectLinks(context.Background(), specs, []NetNSSpec{{Kind: NetNSName, Name: "photon"}})
+			if err != nil {
+				t.Fatalf("InspectLinks: %v", err)
+			}
+			if len(commands) != 4 {
+				t.Fatalf("batch commands = %d, want 4: %#v", len(commands), commandStrings(commands))
+			}
+			if len(states) != 2 || !states[0].InterfaceUp || !states[0].Multicast || !states[0].IPv6AddrGenDisabled || !states[0].NamespaceForwarding || !states[0].InterfaceForwarding {
+				t.Fatalf("states = %+v, want healthy observed links", states)
+			}
+			if got := states[0].Addresses; len(got) != 2 || got[1] != netip.MustParsePrefix("fd00::fff4/128") {
+				t.Fatalf("phx1 addresses = %+v", got)
+			}
+			if len(inventory) != 2 || inventory[0].InterfaceName != "phx1" || inventory[0].XFRMIfID != ids.wantFirst || inventory[1].XFRMIfID != ids.wantSecond || states[0].XFRMIfID != ids.wantFirst || states[1].XFRMIfID != ids.wantSecond {
+				t.Fatalf("inventory = %+v", inventory)
+			}
 
-	beforeEnsure := len(commands)
-	items := []XFRMObservedInterface{{Spec: specs[0], State: states[0]}, {Spec: specs[1], State: states[1]}}
-	if err := driver.EnsureObservedInterfaces(context.Background(), items); err != nil {
-		t.Fatalf("EnsureObservedInterfaces: %v", err)
-	}
-	if len(commands) != beforeEnsure {
-		t.Fatalf("healthy ensure issued mutations: %v", commandStrings(commands[beforeEnsure:]))
-	}
+			beforeEnsure := len(commands)
+			items := []XFRMObservedInterface{{Spec: specs[0], State: states[0]}, {Spec: specs[1], State: states[1]}}
+			if err := driver.EnsureObservedInterfaces(context.Background(), items); err != nil {
+				t.Fatalf("EnsureObservedInterfaces: %v", err)
+			}
+			if len(commands) != beforeEnsure {
+				t.Fatalf("healthy ensure issued mutations: %v", commandStrings(commands[beforeEnsure:]))
+			}
 
-	beforeInventory := len(commands)
-	states, inventory, err = driver.InspectLinks(context.Background(), nil, []NetNSSpec{{Kind: NetNSName, Name: "photon"}})
-	if err != nil || len(states) != 0 || len(inventory) != 2 {
-		t.Fatalf("inventory-only observation = states=%+v inventory=%+v err=%v", states, inventory, err)
+			beforeInventory := len(commands)
+			states, inventory, err = driver.InspectLinks(context.Background(), nil, []NetNSSpec{{Kind: NetNSName, Name: "photon"}})
+			if err != nil || len(states) != 0 || len(inventory) != 2 {
+				t.Fatalf("inventory-only observation = states=%+v inventory=%+v err=%v", states, inventory, err)
+			}
+			if got := len(commands) - beforeInventory; got != 3 {
+				t.Fatalf("inventory-only commands = %d, want netns/link/address reads", got)
+			}
+		})
 	}
-	if got := len(commands) - beforeInventory; got != 3 {
-		t.Fatalf("inventory-only commands = %d, want netns/link/address reads", got)
+}
+
+func TestIPJSONIfID(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  uint32
+	}{
+		{"0", 0}, {"4294967295", 0xffffffff}, {`"0xffffffff"`, 0xffffffff},
+		{`"0XFFFFFFFF"`, 0xffffffff}, {`"4294967295"`, 0xffffffff}, {`"00012"`, 12},
+	} {
+		var id ipJSONIfID
+		if err := json.Unmarshal([]byte(tc.input), &id); err != nil || uint32(id) != tc.want {
+			t.Fatalf("%s: id=%d err=%v", tc.input, id, err)
+		}
+	}
+	for _, input := range []string{`""`, `"0x"`, `"xyz"`, `"-1"`, `"+1"`, `" 12"`, `"0x1_0"`, `"0x100000000"`, `"4294967296"`, "4294967296", "-1", "1.5", "1e2", "null", "true", "{}", "[]"} {
+		id := ipJSONIfID(42)
+		if err := json.Unmarshal([]byte(input), &id); err == nil {
+			t.Fatalf("accepted invalid ID %s", input)
+		}
+		if id != 42 {
+			t.Fatalf("invalid input %s changed ID to %d", input, id)
+		}
 	}
 }
 

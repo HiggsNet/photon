@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/netip"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -22,9 +23,45 @@ type ipJSONLink struct {
 	LinkInfo        struct {
 		InfoKind string `json:"info_kind"`
 		InfoData struct {
-			IfID uint32 `json:"if_id"`
+			IfID ipJSONIfID `json:"if_id"`
 		} `json:"info_data"`
 	} `json:"linkinfo"`
+}
+
+// iproute2 emits XFRM if_id as a hexadecimal JSON string on some builds.
+// Keep numeric JSON support; reject malformed or overflowing IDs rather than
+// silently treating an unknown interface as ID zero.
+type ipJSONIfID uint32
+
+func (id *ipJSONIfID) UnmarshalJSON(data []byte) error {
+	var value uint32
+	if len(data) > 0 && data[0] == '"' {
+		var text string
+		if err := json.Unmarshal(data, &text); err != nil {
+			return err
+		}
+		base := 10
+		if strings.HasPrefix(text, "0x") || strings.HasPrefix(text, "0X") {
+			base, text = 16, text[2:]
+		}
+		if text == "" || text[0] == '+' || text[0] == '-' {
+			return fmt.Errorf("invalid XFRM if_id %q", text)
+		}
+		n, err := strconv.ParseUint(text, base, 32)
+		if err != nil {
+			return fmt.Errorf("invalid XFRM if_id: %w", err)
+		}
+		value = uint32(n)
+	} else {
+		if string(data) == "null" {
+			return fmt.Errorf("null XFRM if_id")
+		}
+		if err := json.Unmarshal(data, &value); err != nil {
+			return err
+		}
+	}
+	*id = ipJSONIfID(value)
+	return nil
 }
 
 type ipJSONAddressLink struct {
@@ -222,7 +259,7 @@ func observedXFRMLink(netns NetNSSpec, link ipJSONLink, addresses []netip.Prefix
 	state := XFRMLinkState{
 		NetNS:                netns,
 		InterfaceName:        link.IfName,
-		XFRMIfID:             link.LinkInfo.InfoData.IfID,
+		XFRMIfID:             uint32(link.LinkInfo.InfoData.IfID),
 		NamespaceExists:      true,
 		InterfaceExists:      true,
 		FlagsKnown:           link.Flags != nil,
