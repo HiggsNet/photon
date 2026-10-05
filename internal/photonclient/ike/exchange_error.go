@@ -16,9 +16,14 @@ const (
 type ChildExchangeError struct {
 	Notification uint16
 	RemovedSPI   uint32
+	RekeySPI     uint32
+	IKERekey     bool
 }
 
 func (e *ChildExchangeError) Error() string {
+	if e.IKERekey {
+		return fmt.Sprintf("ike: IKE rekey refused with notification %d", e.Notification)
+	}
 	return fmt.Sprintf("ike: CHILD exchange refused with notification %d", e.Notification)
 }
 

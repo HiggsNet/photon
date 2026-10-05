@@ -178,19 +178,26 @@ func (i *Initiator) handleChildDelete(m *ExchangeMessage) ([]byte, *DeleteResult
 type ChildRekeyResolution struct {
 	SurvivingSPI, RedundantSPI, DeleteSPI uint32
 	Pending                               bool
+	LocalInitiated                        bool
 }
 
 func (i *Initiator) ResolveChildRekey(oldLocalSPI uint32) (ChildRekeyResolution, error) {
 	r := ChildRekeyResolution{}
-	if i.childPending != nil && i.childPending.config.RekeySPI == oldLocalSPI {
-		r.Pending = true
-		return r, nil
-	}
 	var candidates []*childSA
 	for _, child := range i.children {
 		if child.predecessor == oldLocalSPI {
 			candidates = append(candidates, child)
 		}
+	}
+	if i.childPending != nil && i.childPending.config.RekeySPI == oldLocalSPI {
+		r.Pending = true
+		// The peer may complete rekeying before seeing our lost request and
+		// delete the old CHILD. Its replacement can carry traffic while our
+		// ID remains pending until the matching response (often NOT_FOUND).
+		if i.children[oldLocalSPI] == nil && len(candidates) == 1 && !candidates[0].localInitiated {
+			r.SurvivingSPI = candidates[0].result.InitiatorSPI
+		}
+		return r, nil
 	}
 	if len(candidates) == 0 || len(candidates) > 2 {
 		return r, fmt.Errorf("ike: no unique CHILD rekey resolution")
@@ -211,6 +218,7 @@ func (i *Initiator) ResolveChildRekey(oldLocalSPI uint32) (ChildRekeyResolution,
 		}
 	}
 	r.SurvivingSPI = survivor.result.InitiatorSPI
+	r.LocalInitiated = survivor.localInitiated
 	if survivor.localInitiated {
 		r.DeleteSPI = oldLocalSPI
 	}

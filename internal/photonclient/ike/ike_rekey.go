@@ -187,6 +187,7 @@ func (i *Initiator) handleIKERekeyResponse(m *ExchangeMessage) (*IKERekeyResult,
 	if refusal, err := childRefusal(ps, 0); err != nil {
 		return nil, err
 	} else if refusal != nil {
+		refusal.IKERekey = true
 		i.ikePending = nil
 		i.completeExchange()
 		return nil, refusal

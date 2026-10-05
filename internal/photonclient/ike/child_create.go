@@ -404,6 +404,7 @@ func (i *Initiator) handleChildResponse(m *ExchangeMessage) (*ChildExchangeResul
 	if refusal, err := childRefusal(ps, i.childPending.config.RekeySPI); err != nil {
 		return nil, err
 	} else if refusal != nil {
+		refusal.RekeySPI = i.childPending.config.RekeySPI
 		if refusal.Notification == NotifyChildNotFound && i.forgetChild(i.childPending.config.RekeySPI) {
 			refusal.RemovedSPI = i.childPending.config.RekeySPI
 		}
