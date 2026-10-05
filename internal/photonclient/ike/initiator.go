@@ -25,6 +25,7 @@ type Initiator struct {
 	exchanges         exchangeState
 	childPending      *childPending
 	children          map[uint32]*childSA
+	deletePending     *childDeletePending
 }
 
 type InitResult struct {

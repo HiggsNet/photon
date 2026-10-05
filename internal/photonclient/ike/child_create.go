@@ -33,9 +33,10 @@ type childPending struct {
 }
 
 type childSA struct {
-	result       ChildResult
-	predecessor  uint32
-	minimumNonce []byte
+	result         ChildResult
+	predecessor    uint32
+	minimumNonce   []byte
+	localInitiated bool
 }
 
 func cloneChild(c ChildResult) ChildResult {
@@ -181,6 +182,15 @@ func (i *Initiator) validateChildConfig(c ChildExchangeConfig) error {
 		}
 		if err := ValidateTrafficSelectorNarrowing(c.Child.RemoteSelectors, old.result.RemoteSelectors); err != nil {
 			return err
+		}
+		count := 0
+		for _, child := range i.children {
+			if child.predecessor == c.RekeySPI {
+				count++
+			}
+		}
+		if count >= 2 {
+			return fmt.Errorf("ike: simultaneous CHILD rekey overlap full")
 		}
 	}
 	return nil
@@ -376,6 +386,16 @@ func (i *Initiator) HandleChildResponse(packet []byte) (*ChildExchangeResult, er
 	if h.Flags&FlagResponse == 0 || i.exchanges.pendingKind != exchangeChild || i.childPending == nil {
 		return nil, fmt.Errorf("ike: no matching pending CHILD exchange")
 	}
+	if refusal, err := childRefusal(ps, i.childPending.config.RekeySPI); err != nil {
+		return nil, err
+	} else if refusal != nil {
+		if refusal.Notification == NotifyChildNotFound && i.forgetChild(i.childPending.config.RekeySPI) {
+			refusal.RemovedSPI = i.childPending.config.RekeySPI
+		}
+		i.childPending = nil
+		i.completeExchange()
+		return nil, refusal
+	}
 	o, err := parseChildOffer(ps)
 	if err != nil {
 		return nil, err
@@ -392,6 +412,7 @@ func (i *Initiator) HandleChildResponse(packet []byte) (*ChildExchangeResult, er
 		return nil, err
 	}
 	i.rememberChild(result, p.config.RekeySPI, minimum)
+	i.children[result.InitiatorSPI].localInitiated = true
 	i.childPending = nil
 	i.completeExchange()
 	return &ChildExchangeResult{Child: result, RekeySPI: p.config.RekeySPI}, nil
@@ -411,11 +432,30 @@ func (i *Initiator) HandleChildRequest(packet []byte, c ChildExchangeConfig) ([]
 	if cached != nil {
 		return cached, nil, nil
 	}
-	if err := i.validateChildConfig(c); err != nil {
-		return nil, nil, err
-	}
 	o, err := parseChildOffer(ps)
 	if err != nil {
+		return nil, nil, err
+	}
+	if o.rekeySPI != 0 {
+		var oldLocal uint32
+		for local, child := range i.children {
+			if child.result.ResponderSPI == o.rekeySPI {
+				oldLocal = local
+				break
+			}
+		}
+		if oldLocal == 0 {
+			n, _ := EncodeNotify(Notify{Protocol: 3, Type: NotifyChildNotFound, SPI: binary.BigEndian.AppendUint32(nil, o.rekeySPI)})
+			reply, err := i.replyExchange(packet, h, []Payload{{Type: PayloadNotify, Data: n}})
+			return reply, nil, err
+		}
+		if i.deletePending != nil && i.deletePending.pairs[oldLocal] != 0 {
+			n, _ := EncodeNotify(Notify{Type: NotifyTemporaryFailure})
+			reply, err := i.replyExchange(packet, h, []Payload{{Type: PayloadNotify, Data: n}})
+			return reply, nil, err
+		}
+	}
+	if err := i.validateChildConfig(c); err != nil {
 		return nil, nil, err
 	}
 	if err := i.checkPeerChildSPI(o.spi); err != nil {
@@ -451,4 +491,44 @@ func (i *Initiator) HandleChildRequest(packet []byte, c ChildExchangeConfig) ([]
 	}
 	i.rememberChild(result, c.RekeySPI, minimum)
 	return reply, &ChildExchangeResult{Child: result, RekeySPI: c.RekeySPI}, nil
+}
+
+// RFC 7296 2.8.1 compares octets, with a shorter prefix nonce sorting first.
+func compareRekeyNonce(a, b []byte) int { return bytes.Compare(a, b) }
+
+// ChildRequestOffer is authenticated peer input, not traffic authorization.
+// RekeySPI resolves to a known local inbound SPI, or zero for a new/unknown SA;
+// PeerRekeySPI distinguishes an unknown rekey (answered CHILD_SA_NOT_FOUND by
+// HandleChildRequest) from a new CHILD. Selectors use local orientation.
+type ChildRequestOffer struct {
+	RekeySPI, PeerRekeySPI          uint32
+	DHGroup                         uint16
+	LocalSelectors, RemoteSelectors []TrafficSelector
+}
+
+// InspectChildRequest verifies the IKE SA, integrity and current inbound window
+// without consuming it. The caller must intersect the offered selectors with
+// current authorization and allocate a fresh local SPI before answering.
+func (i *Initiator) InspectChildRequest(packet []byte) (*ChildRequestOffer, error) {
+	h, ps, _, err := i.openExchange(packet, ExchangeCreateChild)
+	if err != nil {
+		return nil, err
+	}
+	if h.Flags&FlagResponse != 0 {
+		return nil, fmt.Errorf("ike: expected CHILD request")
+	}
+	o, err := parseChildOffer(ps)
+	if err != nil {
+		return nil, err
+	}
+	result := &ChildRequestOffer{PeerRekeySPI: o.rekeySPI, DHGroup: o.group, LocalSelectors: o.tsr, RemoteSelectors: o.tsi}
+	if o.rekeySPI != 0 {
+		for local, child := range i.children {
+			if child.result.ResponderSPI == o.rekeySPI {
+				result.RekeySPI = local
+				break
+			}
+		}
+	}
+	return result, nil
 }

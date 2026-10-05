@@ -185,15 +185,15 @@ func TestChildRekeyKeepsOldAndValidatesAssociation(t *testing.T) {
 	ps, _ = childPayloads(p, pending.nonce, nil, false)
 	notify, _ := EncodeNotify(Notify{Protocol: 3, Type: NotifyRekeySA, SPI: binary.BigEndian.AppendUint32(nil, old)})
 	bad := append([]Payload{{Type: PayloadNotify, Data: notify}}, ps...)
-	if _, _, err := i.HandleChildRequest(peerChildPacket(t, i, 0, false, bad), c); err == nil {
-		t.Fatal("peer rekey accepted local inbound SPI")
+	if reply, result, err := i.HandleChildRequest(peerChildPacket(t, i, 0, false, bad), c); err != nil || result != nil || reply == nil {
+		t.Fatal("unknown peer rekey was not answered with refusal")
 	}
-	if i.exchanges.nextRemote != 0 {
-		t.Fatal("invalid rekey advanced counter")
+	if i.exchanges.nextRemote != 1 || len(i.children) != 2 {
+		t.Fatal("refusal did not consume request without creating a CHILD")
 	}
 	notify, _ = EncodeNotify(Notify{Protocol: 3, Type: NotifyRekeySA, SPI: binary.BigEndian.AppendUint32(nil, i.children[old].result.ResponderSPI)})
 	good := append([]Payload{{Type: PayloadNotify, Data: notify}}, ps...)
-	if _, _, err := i.HandleChildRequest(peerChildPacket(t, i, 0, false, good), c); err != nil {
+	if _, _, err := i.HandleChildRequest(peerChildPacket(t, i, 1, false, good), c); err != nil {
 		t.Fatal(err)
 	}
 	if i.children[old] == nil {
