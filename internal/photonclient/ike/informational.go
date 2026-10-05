@@ -24,7 +24,15 @@ func (i *Initiator) PendingInformationalRequest() []byte {
 // A non-nil result is a reply to send; nil with no error completes the pending
 // local liveness exchange. Invalid messages do not mutate the session.
 func (i *Initiator) HandleInformational(packet []byte) ([]byte, error) {
-	h, ps, cached, err := i.openExchange(packet, ExchangeInformational)
+	m, err := i.decodeSKExchange(packet)
+	if err != nil {
+		return nil, err
+	}
+	return i.handleInformational(m)
+}
+
+func (i *Initiator) handleInformational(m *ExchangeMessage) ([]byte, error) {
+	h, ps, cached, err := i.openAuthenticated(m, ExchangeInformational)
 	if err != nil {
 		return nil, err
 	}
@@ -41,5 +49,5 @@ func (i *Initiator) HandleInformational(packet []byte) ([]byte, error) {
 	if cached != nil {
 		return cached, nil
 	}
-	return i.replyExchange(packet, h, nil)
+	return i.replyExchange(m.identity, h, nil)
 }

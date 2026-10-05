@@ -92,7 +92,15 @@ func (i *Initiator) forgetChild(spi uint32) bool {
 // Unknown peer SPIs are ignored and answered with an empty response as RFC 7296
 // requires. Simultaneous Deletes omit the corresponding SPI in their response.
 func (i *Initiator) HandleChildDelete(packet []byte) ([]byte, *DeleteResult, error) {
-	h, ps, cached, err := i.openExchange(packet, ExchangeInformational)
+	m, err := i.decodeSKExchange(packet)
+	if err != nil {
+		return nil, nil, err
+	}
+	return i.handleChildDelete(m)
+}
+
+func (i *Initiator) handleChildDelete(m *ExchangeMessage) ([]byte, *DeleteResult, error) {
+	h, ps, cached, err := i.openAuthenticated(m, ExchangeInformational)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -149,7 +157,7 @@ func (i *Initiator) HandleChildDelete(packet []byte) ([]byte, *DeleteResult, err
 		}
 		responsePS = []Payload{p}
 	}
-	reply, err := i.replyExchange(packet, h, responsePS)
+	reply, err := i.replyExchange(m.identity, h, responsePS)
 	if err != nil {
 		return nil, nil, err
 	}

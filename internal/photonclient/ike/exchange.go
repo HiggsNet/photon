@@ -5,16 +5,19 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math"
+	"time"
 )
 
 // The session has one outbound window and one inbound replay cache, shared by
 // every exchange type. Counters are wider than the wire so exhaustion cannot
 // wrap. Transport, deadlines and serialization remain the caller's responsibility.
 type exchangeState struct {
-	nextLocal, nextRemote  uint64
-	pending                []byte
-	pendingKind            uint8
-	lastRequest, lastReply []byte
+	nextLocal, nextRemote             uint64
+	pending                           []byte
+	pendingKind                       uint8
+	lastRequest, lastReply            []byte
+	requestFragments, replyFragments  [][]byte
+	fragmentRequest, fragmentResponse skfReassembly
 }
 
 const (
@@ -39,6 +42,7 @@ func (i *Initiator) beginExchange(exchange, kind uint8, ps []Payload) ([]byte, e
 		return nil, err
 	}
 	i.exchanges.pending, i.exchanges.pendingKind = packet, kind
+	i.exchanges.requestFragments = nil
 	return bytes.Clone(packet), nil
 }
 
@@ -54,38 +58,42 @@ func (i *Initiator) sealExchange(exchange, flags uint8, id uint32, ps []Payload)
 // retransmission for any post-AUTH exchange; returned storage is detached.
 func (i *Initiator) PendingRequest() []byte { return bytes.Clone(i.exchanges.pending) }
 
-// openExchange authenticates before examining inner content or replay state.
-// cached is non-nil only for a byte-identical retransmitted peer request.
-func (i *Initiator) openExchange(packet []byte, exchange uint8) (h Header, ps []Payload, cached []byte, err error) {
+func (i *Initiator) decodeSKExchange(packet []byte) (*ExchangeMessage, error) {
 	if !i.authDone || i.init == nil {
-		err = fmt.Errorf("ike: exchange requires completed IKE_AUTH")
-		return
+		return nil, fmt.Errorf("ike: exchange requires completed IKE_AUTH")
 	}
-	h, _, err = DecodeHeader(packet)
+	h, _, err := DecodeHeader(packet)
 	if err != nil {
-		return
+		return nil, err
 	}
-	if h.InitiatorSPI != i.spi || h.ResponderSPI != i.init.ResponderSPI || h.ExchangeType != exchange || h.Flags&FlagInitiator != 0 {
-		err = fmt.Errorf("ike: exchange does not match IKE SA")
-		return
+	if h.InitiatorSPI != i.spi || h.ResponderSPI != i.init.ResponderSPI || h.Flags&FlagInitiator != 0 {
+		return nil, fmt.Errorf("ike: exchange does not match IKE SA")
 	}
-	var first uint8
-	var plain []byte
-	first, plain, err = OpenSK(packet, i.init.Keys.SKER, i.init.Keys.SKAR)
+	first, plain, err := OpenSK(packet, i.init.Keys.SKER, i.init.Keys.SKAR)
 	if err != nil {
-		return
+		return nil, err
 	}
-	ps, err = DecodePayloads(first, plain)
+	defer clear(plain)
+	ps, err := DecodePayloads(first, plain)
 	if err != nil {
+		return nil, err
+	}
+	return &ExchangeMessage{owner: i, header: h, payloads: ps, identity: bytes.Clone(packet)}, nil
+}
+
+func (i *Initiator) openAuthenticated(m *ExchangeMessage, exchange uint8) (h Header, ps []Payload, cached []byte, err error) {
+	if m == nil || m.owner != i || !i.authDone || m.header.ExchangeType != exchange {
+		err = fmt.Errorf("ike: message does not belong to this exchange")
 		return
 	}
+	h, ps = m.header, m.payloads
 	if h.Flags&FlagResponse != 0 {
 		if i.exchanges.pending == nil || uint64(h.MessageID) != i.exchanges.nextLocal || i.exchanges.pending[18] != exchange {
 			err = fmt.Errorf("ike: no matching pending exchange")
 		}
 		return
 	}
-	if i.exchanges.lastRequest != nil && bytes.Equal(packet, i.exchanges.lastRequest) {
+	if i.exchanges.lastRequest != nil && bytes.Equal(m.identity, i.exchanges.lastRequest) {
 		cached = bytes.Clone(i.exchanges.lastReply)
 		return
 	}
@@ -98,6 +106,8 @@ func (i *Initiator) openExchange(packet []byte, exchange uint8) (h Header, ps []
 func (i *Initiator) completeExchange() {
 	i.exchanges.pending = nil
 	i.exchanges.pendingKind = 0
+	i.exchanges.requestFragments = nil
+	i.exchanges.fragmentResponse.Reset()
 	i.exchanges.nextLocal++
 }
 
@@ -107,6 +117,183 @@ func (i *Initiator) replyExchange(packet []byte, h Header, ps []Payload) ([]byte
 		return nil, err
 	}
 	i.exchanges.lastRequest, i.exchanges.lastReply = bytes.Clone(packet), reply
+	i.exchanges.replyFragments = nil
 	i.exchanges.nextRemote++
 	return bytes.Clone(reply), nil
+}
+
+// ExchangeMessage is an authenticated complete message tied to one session.
+// Its payload storage is opaque so inspection cannot modify what is accepted.
+type ExchangeMessage struct {
+	owner    *Initiator
+	header   Header
+	payloads []Payload
+	identity []byte
+}
+
+func (m *ExchangeMessage) Header() Header { return m.header }
+
+// DecodeExchange accepts SK or negotiated SKF after AUTH. nil,nil buffers a
+// partial or repeated fragment. Completion does not consume a message ID;
+// InspectChildExchange and HandleExchange revalidate the window when used.
+func (i *Initiator) DecodeExchange(packet []byte, now time.Time) (*ExchangeMessage, error) {
+	h, next, err := DecodeHeader(packet)
+	if err != nil {
+		return nil, err
+	}
+	if next != PayloadSKF {
+		return i.decodeSKExchange(packet)
+	}
+	if !i.authDone || i.init == nil || !i.peerFragmentation {
+		return nil, fmt.Errorf("ike: post-AUTH fragmentation not negotiated")
+	}
+	if h.InitiatorSPI != i.spi || h.ResponderSPI != i.init.ResponderSPI || h.Flags&FlagInitiator != 0 || (h.ExchangeType != ExchangeInformational && h.ExchangeType != ExchangeCreateChild) {
+		return nil, fmt.Errorf("ike: SKF does not match IKE SA")
+	}
+	cache := &i.exchanges.fragmentRequest
+	if h.Flags&FlagResponse != 0 {
+		if i.exchanges.pending == nil || uint64(h.MessageID) != i.exchanges.nextLocal || i.exchanges.pending[18] != h.ExchangeType {
+			return nil, fmt.Errorf("ike: SKF has no pending exchange")
+		}
+		cache = &i.exchanges.fragmentResponse
+	} else if uint64(h.MessageID) != i.exchanges.nextRemote && !(i.exchanges.lastRequest != nil && uint64(h.MessageID)+1 == i.exchanges.nextRemote) {
+		return nil, fmt.Errorf("ike: SKF outside inbound window")
+	}
+	// A newer expected request can displace an incomplete replay of the last
+	// request, but only after its first fragment passes integrity validation.
+	target := cache
+	var replacement skfReassembly
+	if cache.total != 0 && cache.header != h {
+		if h.Flags&FlagResponse != 0 || uint64(h.MessageID) != i.exchanges.nextRemote {
+			return nil, fmt.Errorf("ike: another SKF request is pending")
+		}
+		target = &replacement
+	}
+	first, plain, complete, err := target.Add(packet, h, i.init.Keys.SKER, i.init.Keys.SKAR, now)
+	if err == nil && target != cache {
+		cache.Reset()
+		*cache = replacement
+	}
+	if err != nil || !complete {
+		return nil, err
+	}
+	defer clear(plain)
+	ps, err := DecodePayloads(first, plain)
+	if err != nil {
+		return nil, err
+	}
+	// A completed SKF retransmission may use a newer fragmentation boundary.
+	// Canonical authenticated content, not newly generated ciphertext, identifies
+	// it. SK packets retain their stricter original-wire equality behavior.
+	identity, err := h.Marshal(PayloadSKF, HeaderLen)
+	if err != nil {
+		return nil, err
+	}
+	identity = append(identity, first)
+	identity = append(identity, plain...)
+	return &ExchangeMessage{owner: i, header: h, payloads: ps, identity: identity}, nil
+}
+
+// ExchangeResult reports one completed authenticated exchange. Reply is sent
+// through ReplyPackets when a datagram budget requires negotiated fragmentation.
+type ExchangeResult struct {
+	Reply    []byte
+	Child    *ChildExchangeResult
+	Deleted  *DeleteResult
+	Liveness bool
+}
+
+// HandleExchange consumes an opaque message after any required policy check.
+// childConfig is used only for peer CHILD requests; nil never authorizes one.
+func (i *Initiator) HandleExchange(m *ExchangeMessage, childConfig *ChildExchangeConfig) (*ExchangeResult, error) {
+	if m == nil || m.owner != i {
+		return nil, fmt.Errorf("ike: message belongs to another session")
+	}
+	result := &ExchangeResult{}
+	var err error
+	switch m.header.ExchangeType {
+	case ExchangeCreateChild:
+		if m.header.Flags&FlagResponse != 0 {
+			result.Child, err = i.handleChildResponse(m)
+		} else {
+			if childConfig == nil {
+				return nil, fmt.Errorf("ike: CHILD request requires current caller authorization")
+			}
+			result.Reply, result.Child, err = i.handleChildRequest(m, *childConfig)
+		}
+	case ExchangeInformational:
+		if len(m.payloads) == 0 && !(m.header.Flags&FlagResponse != 0 && i.exchanges.pendingKind == exchangeDelete) {
+			result.Reply, err = i.handleInformational(m)
+			result.Liveness = err == nil
+		} else {
+			result.Reply, result.Deleted, err = i.handleChildDelete(m)
+		}
+	default:
+		err = fmt.Errorf("ike: unsupported authenticated exchange")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func clonePackets(packets [][]byte) [][]byte {
+	result := make([][]byte, len(packets))
+	for n, p := range packets {
+		result[n] = bytes.Clone(p)
+	}
+	return result
+}
+
+func (i *Initiator) exchangePackets(packet []byte, maxPacket int, cache *[][]byte) ([][]byte, error) {
+	if len(packet) == 0 || maxPacket < HeaderLen || maxPacket > MaxMessageSize {
+		return nil, fmt.Errorf("ike: invalid exchange datagram budget")
+	}
+	if *cache != nil {
+		return clonePackets(*cache), nil
+	}
+	if len(packet) <= maxPacket {
+		*cache = [][]byte{bytes.Clone(packet)}
+		return clonePackets(*cache), nil
+	}
+	if !i.peerFragmentation {
+		return nil, fmt.Errorf("ike: fragmentation not negotiated")
+	}
+	h, _, err := DecodeHeader(packet)
+	if err != nil {
+		return nil, err
+	}
+	first, plain, err := OpenSK(packet, i.init.Keys.SKEI, i.init.Keys.SKAI)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(plain)
+	packets, err := SealSKF(h, first, plain, i.init.Keys.SKEI, i.init.Keys.SKAI, maxPacket, rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	*cache = packets
+	return clonePackets(packets), nil
+}
+
+// PendingRequestPackets returns the single SK or original SKF packet sequence.
+// The first successful call fixes its datagram budget for all retransmissions.
+func (i *Initiator) PendingRequestPackets(maxPacket int) ([][]byte, error) {
+	return i.exchangePackets(i.exchanges.pending, maxPacket, &i.exchanges.requestFragments)
+}
+
+// ReplyPackets returns the current reply's cached SK/SKF sequence. A detached
+// reply from HandleExchange or another handler must match the current cache.
+func (i *Initiator) ReplyPackets(reply []byte, maxPacket int) ([][]byte, error) {
+	if len(reply) == 0 || !bytes.Equal(reply, i.exchanges.lastReply) {
+		return nil, fmt.Errorf("ike: reply no longer matches cache")
+	}
+	return i.exchangePackets(reply, maxPacket, &i.exchanges.replyFragments)
+}
+
+// ResetExchangeFragments discards incomplete inbound plaintext when the caller's
+// transport timer expires. It does not change request IDs or retransmission data.
+func (i *Initiator) ResetExchangeFragments() {
+	i.exchanges.fragmentRequest.Reset()
+	i.exchanges.fragmentResponse.Reset()
 }

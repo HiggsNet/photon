@@ -379,7 +379,15 @@ func finishChild(p *childPending, o childOffer, peerInitiated bool, skD []byte) 
 }
 
 func (i *Initiator) HandleChildResponse(packet []byte) (*ChildExchangeResult, error) {
-	h, ps, _, err := i.openExchange(packet, ExchangeCreateChild)
+	m, err := i.decodeSKExchange(packet)
+	if err != nil {
+		return nil, err
+	}
+	return i.handleChildResponse(m)
+}
+
+func (i *Initiator) handleChildResponse(m *ExchangeMessage) (*ChildExchangeResult, error) {
+	h, ps, _, err := i.openAuthenticated(m, ExchangeCreateChild)
 	if err != nil {
 		return nil, err
 	}
@@ -422,7 +430,15 @@ func (i *Initiator) HandleChildResponse(packet []byte) (*ChildExchangeResult, er
 // caller-authorized configuration. Duplicate requests return the original
 // encrypted response with nil result so the caller must not install twice.
 func (i *Initiator) HandleChildRequest(packet []byte, c ChildExchangeConfig) ([]byte, *ChildExchangeResult, error) {
-	h, ps, cached, err := i.openExchange(packet, ExchangeCreateChild)
+	m, err := i.decodeSKExchange(packet)
+	if err != nil {
+		return nil, nil, err
+	}
+	return i.handleChildRequest(m, c)
+}
+
+func (i *Initiator) handleChildRequest(m *ExchangeMessage, c ChildExchangeConfig) ([]byte, *ChildExchangeResult, error) {
+	h, ps, cached, err := i.openAuthenticated(m, ExchangeCreateChild)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -446,12 +462,12 @@ func (i *Initiator) HandleChildRequest(packet []byte, c ChildExchangeConfig) ([]
 		}
 		if oldLocal == 0 {
 			n, _ := EncodeNotify(Notify{Protocol: 3, Type: NotifyChildNotFound, SPI: binary.BigEndian.AppendUint32(nil, o.rekeySPI)})
-			reply, err := i.replyExchange(packet, h, []Payload{{Type: PayloadNotify, Data: n}})
+			reply, err := i.replyExchange(m.identity, h, []Payload{{Type: PayloadNotify, Data: n}})
 			return reply, nil, err
 		}
 		if i.deletePending != nil && i.deletePending.pairs[oldLocal] != 0 {
 			n, _ := EncodeNotify(Notify{Type: NotifyTemporaryFailure})
-			reply, err := i.replyExchange(packet, h, []Payload{{Type: PayloadNotify, Data: n}})
+			reply, err := i.replyExchange(m.identity, h, []Payload{{Type: PayloadNotify, Data: n}})
 			return reply, nil, err
 		}
 	}
@@ -485,7 +501,7 @@ func (i *Initiator) HandleChildRequest(packet []byte, c ChildExchangeConfig) ([]
 	if err != nil {
 		return nil, nil, err
 	}
-	reply, err := i.replyExchange(packet, h, responsePS)
+	reply, err := i.replyExchange(m.identity, h, responsePS)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -510,7 +526,16 @@ type ChildRequestOffer struct {
 // without consuming it. The caller must intersect the offered selectors with
 // current authorization and allocate a fresh local SPI before answering.
 func (i *Initiator) InspectChildRequest(packet []byte) (*ChildRequestOffer, error) {
-	h, ps, _, err := i.openExchange(packet, ExchangeCreateChild)
+	m, err := i.decodeSKExchange(packet)
+	if err != nil {
+		return nil, err
+	}
+	return i.InspectChildExchange(m)
+}
+
+// InspectChildExchange is InspectChildRequest for a complete SK or SKF message.
+func (i *Initiator) InspectChildExchange(m *ExchangeMessage) (*ChildRequestOffer, error) {
+	h, ps, _, err := i.openAuthenticated(m, ExchangeCreateChild)
 	if err != nil {
 		return nil, err
 	}
@@ -531,4 +556,14 @@ func (i *Initiator) InspectChildRequest(packet []byte) (*ChildRequestOffer, erro
 		}
 	}
 	return result, nil
+}
+
+// Child returns a detached local-oriented snapshot for the dataplane owner.
+// Protocol association and lifetime remain owned by this session.
+func (i *Initiator) Child(localSPI uint32) (ChildResult, bool) {
+	child := i.children[localSPI]
+	if child == nil {
+		return ChildResult{}, false
+	}
+	return cloneChild(child.result), true
 }
