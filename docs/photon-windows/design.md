@@ -30,7 +30,8 @@ Windows 是接入节点：Babel 只发布本节点当前获授权的本地前缀
 
 首版支持目标固定为 Windows 11 amd64。Windows 10、Windows Server、arm64 和模拟运行均不进入
 首版支持承诺，须在第一个真实 vertical slice 后分别补齐 CI 与设备验收才能扩展。此处是产品范围，
-不是已通过兼容测试的声明；当前 Linux 上的测试和 Windows 交叉编译只证明公共逻辑与编译边界。
+不是完整产品兼容测试的声明。Linux 上的测试和 Windows 交叉编译只证明公共逻辑与编译边界；
+Windows VM 的 B3/B4 原生及跨主机证据见 [IKE 验收](ike-testing.md) 和 [B4 验收](babel-testing.md)。
 
 | 环境 | 当前验证用途 | 发布前必须补齐 |
 | --- | --- | --- |
@@ -191,11 +192,16 @@ Windows aggregate route 只把流量送入 Wintun，不能绕过用户态逐路�
 
 以上是安装与撤销的验收契约。B4 已实现由 root pin、Zone 和 overlay 派生的稳定完整 64 位 ID，
 并通过签名 `routing/babel/identities` 记录绑定 origin；租约到期、撤回、跨 Zone 碰撞均拒绝。
-Linux BIRD 的完整运行时 ID 发布仍待接入，不能将其低 32 位拼装为已验证身份。
+Linux Daemon 已从指定 BIRD protocol 的当前授权本地注入证据读取完整运行时 ID，
+经公共签名事务发布、续租及撤回，不能将其低 32 位拼装为已验证身份。
 
-签名身份记录证明 Zone 对 ID 的认领，不证明 gateway 转发的每条 Babel Update 未冒用其他 origin；
-source-specific 路由的授权规则也尚未实现，当前明确拒绝。prototype 仍只适用于显式信任单个
-gateway 的 experimental 实验，不能作为抵御恶意 gateway 的端到端来源证明发布。
+source-specific 路由的 source prefix 仅收紧已授权目的路由的本机使用条件：同地址族、规范
+非零前缀，覆盖至少一个当前非共享的本机 host assignment/announcement，使用时仍须验证
+实际本机源地址；入站反向匹配原始本机目标地址。它不授予额外地址或转发权限。
+
+签名身份记录证明 Zone 对 ID 的认领，不证明 gateway 转发的每条 Babel Update 未冒用其他 origin。
+prototype 仍只适用于显式信任的 gateway，同时仅一个 active gateway；不能作为抵御恶意
+gateway 的端到端来源证明发布。
 
 ### 3.2 本机私钥模型
 
@@ -422,9 +428,10 @@ F 阶段修正为以下顺序：
 后续窄切口加入。未实现的命令不得伪造
 connected/ready 状态。
 
-### B2 console 当前实现与验证边界
+### B2 console 阶段实现与验证边界
 
-`photon-windows run --console --config <path>` 现在运行公共状态同步。
+以下记录 B2 阶段的公共状态同步实现；B3/B4 后续数据面接线见本节末尾。
+`photon-windows run --console --config <path>` 复用这一公共状态同步。
 `state.path` 必须指向已有的 common-schema bbolt，managed zone 和 root pin 必须与配置匹配。
 首次运行可先用 `state import --config <path> --bundle <file> --key <file>` 导入 Linux 签发的
 join bundle 和 Photon Ed25519 JSON 密钥，见 [初始化步骤](native-testing.md#首次初始化)。
@@ -480,3 +487,20 @@ console 复用同一候选校验：启动时、Gossip 事件推进 verified revi
 B3 的实现顺序、锁定上游来源、各模块移植/重写决策和许可证材料见
 [ranet-lite port map](ranet-port-map.md)。原型 IKE 为 AEAD-only，CHILD rekey 不支持 KE，
 identity 使用 ASN1_DN；因此不能原样移植后宣称兼容当前 Linux 基线，也不以改窄 Linux profile 规避实现。
+
+### B3/B4 console 当前数据面
+
+console 继续使用同一个 Daemon、State/BoltStore 和 GossipDriver；当前签名传输材料建立
+IKE/CHILD SA 后，协调本机 host 公告、完整 Babel 身份租约和平台设备。只配置获授权的
+非共享 /32、/128 与相应地址族的配置 split aggregate；Babel 链路地址复用 Linux 的
+`derived-link-local` 派生契约。异步配置完成须复验当前 revision/generation，DAD Preferred
+后才交付设备；旧完成结果关闭回收。
+
+真实 Wintun Read/Write、ESP completion、Babel 邻居与 SADR 选路由同一运行循环协调。
+每次业务提交及交付重新验证当前 SA、origin/精确目的前缀和本机地址；learned route 不再公告。
+只有平台地址、当前 SA、有效邻居及实际本机源可用的授权路由同时成立时，才输出
+`tunnel_ready_changed=true`。撤销、设备失败、停止和重绑撤回 pipeline，并回收设备及配置。
+
+Windows 11 VM 与真实 StrongSwan/BIRD 的双栈业务、显式重绑、签名 gossip 撤销/恢复、
+IPv6 SADR、不同 gateway 切换与资源清理已通过，具体版本、脚本和证据见 [B4 验收](babel-testing.md)。
+SCM/IPC 与完整 B6 产品矩阵继续分别验收。

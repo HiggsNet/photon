@@ -22,7 +22,7 @@ source-specific 路由的 source prefix 仅收紧本机使用条件：规范、�
 并须覆盖至少一个当前获授权且已公告的非共享本机 /32 或 /128。每次 lookup 仍验证实际
 本机地址，入站反向 lookup 以原始本机目标地址匹配该条件。远端仍须拥有精确目的前缀授权；
 source prefix 不授权额外本机地址，也不允许转发。双栈、fallback、反向匹配及排队期间
-撤销的包测试和 race 通过；真实 source-specific 跨主机互通尚未验收。
+撤销的包测试和 race 通过；真实 IPv6 SADR 跨主机互通见下文。
 
 ### 单 gateway Babel leaf
 
@@ -140,7 +140,11 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File 
 `make check` 通过，覆盖 fmt、vet、全量 Go 测试、Linux 构建与 Windows amd64 交叉编译。
 本轮日志为 `/tmp/photon-b4-runtime-check.log`。
 
-## 完整业务链路验收入口（待执行）
+完整原生验收入口、签名撤销/恢复、SADR 与双 gateway 切换合并后，最终 `make check`
+和 Windows amd64 `go vet ./internal/photonwindows` 再次通过，日志为
+`/tmp/photon-b4-native-final-check.log`。
+
+## 完整业务链路验收
 
 `docs/scripts/windows-b4-cross-host-smoke.sh` 构建实际 Windows Daemon 测试与一次性 Linux
 StrongSwan/BIRD 网关。网关使用随机临时身份、签名公共数据库与实际 BIRD 完整 ID；Windows
@@ -156,15 +160,55 @@ PHOTON_BIRD_NIX_PACKAGE=/nix/store/pxqa13ld4l0ihvz123bwhaimkn1pfjxw-bird-2.19.1 
 bash docs/scripts/windows-b4-cross-host-smoke.sh
 ```
 
-Linux/Windows 测试编译、脚本语法检查及 `--network none` 的 Linux 网关初始化通过。
-完整脚本尚未执行，不代表跨主机业务通过；初始化日志为 `/tmp/photon-b4-local.wd6IAd`。
+Windows 11 amd64 与隔离 Ubuntu StrongSwan 5.9.13 / BIRD 2.19.1 的完整基线通过，
+耗时 18.35 秒：IPv4/IPv6 实际业务往返、显式重绑后双栈恢复、稳定性探测、停止时
+adapter/地址/路由清理。两次成功创建与两次完成关闭匹配；重绑观察到 ready 立即
+false 后重新 true。Windows 可以合法复用 LUID，验收按实际设备生命周期检查重建。
+本次日志为 `/tmp/photon-windows-b4.0KkZiD/windows.log`。
+
+后续真实签名 gossip 撤销/恢复验收通过（22.44 秒）：隔离 authority 经公共签名事务
+撤销本机双栈 assignment，Windows 运行中的 object-pull 返回新签名版本和值 hash，
+证明 verified state 已收敛；随后 ready=false，保留的真实 UDP sockets 收不到回包，
+设备、地址及路由全部回收。恢复签名 assignment 后，新的设备生命周期建立，双栈
+业务与 ready 恢复；三次创建/关闭数量匹配。日志为
+`/tmp/photon-windows-b4.VaOdAU/windows.log`。测试不并发打开运行中的 Bolt 或直接改其状态。
+
+`PHOTON_WINDOWS_B4_SADR=1` 模式启用真实 IPv6 源特定路由，三个 BIRD IPv6 channel
+使用 SADR 表；目的 `fd00:7068:b4::1/128` 只由 `from fd00:7068:b4::2/128` 路由公告。
+启动检查实际 table/export 双视图，拒绝 destination-only 回退；完整 ID 继续以同实例
+精确本地 IPv4 注入证据发布。StrongSwan 5.9.13 与 6.0.7 下完整双栈业务、重绑、
+撤销/恢复和清理均通过，分别为 23.29 秒和 22.68 秒，日志为
+`/tmp/photon-windows-b4.qENEHD/` 与 `/tmp/photon-windows-b4.zsTm4S/`。
+此模式验证 IPv6 SADR，IPv4 保持普通路由；不宣称已验收原生第二源地址的拒绝场景。
+
+### 不同 gateway 的真实切换
+
+`docs/scripts/windows-b4-gateway-switch-smoke.sh` 启动两个独立容器，各自拥有 transport
+私钥、完整随机 BIRD ID、XFRM 与 kernel 回程表；只交换公开 manifest，再生成统一根信任和
+Windows 客户端状态，后端私钥不离开容器。
+
+Windows 先与 gateway A 完成双栈业务，然后 authority 通过公共签名事务及真实 gossip
+禁用 A 的 profile。测试验证运行中的新签名版本/hash，旧设备关闭、ready=false、B 认证、
+新设备创建和 ready=true；B 双栈业务及稳定性恢复，A 双栈业务持续拒绝。
+结束时检查两 backend 的进程、鲜活流量快照及既有双栈服务计数，证明 A 仍存活，
+切换由授权变更触发。原生生命周期和 owned 地址/路由清理通过。
+
+StrongSwan 5.9.13 与 6.0.7 均通过，分别为 15.31 秒和 14.61 秒，日志为
+`/tmp/photon-windows-switch.RnSd9X/` 和 `/tmp/photon-windows-switch.IEdJpp/`。
+VICI 状态是一秒采样，远端 SA 删除仍为 best-effort；该用例不替代旧 SA 密文重放和
+generation 拒绝的既有 pipeline 测试。
+
+全部脚本结束后另做只读复核：Windows 仅剩原管理网卡，上述四条测试 split aggregate
+及本轮临时目录均不存在；本机单/双网关一次性容器也无残留。临时凭据已清理，公开日志保留。
+
+首次试跑发现 fixture 漏启 XFRM multicast，已补齐与生产驱动相同的步骤；生产 Babel
+本来支持认证 ESP 内的组播控制帧，并增加错误 peer、host 注入及排队撤销回归。
+测试凭据提前十五秒签发，兼容测试机的轻微时钟偏差，生产 NotBefore 检查保持严格。
 退出清理一次性容器和凭据，保留本次日志；测试进程硬超时或机器故障后仍须确认 VM 资源状态。
 
-## 尚未完成的产品链路
+## 产品边界与下一阶段
 
-- 通过实际 Windows Wintun、ESP、Linux StrongSwan/BIRD 的同一条完整业务链路验证，
-  包括双向 IPv4/IPv6、授权撤销、gateway 切换、重绑和清理。
-- source-specific 路由的真实跨主机互通；端到端来源证明仍受上述可信单 gateway 边界限制。
+- 端到端来源证明仍受上述可信单 gateway 边界限制，不由 Router ID 签名认领替代。
 
-B4 未整体完成；B5 服务/IPC 与 B6 完整产品矩阵未纳入此次切片。console 无当前授权
-pipeline 时仍默认拒绝业务数据；运行时就绪事件不能替代完整产品验收。
+B4 当前设计范围内的接线与分层验收已完成。B5 服务/IPC 与 B6 完整产品矩阵仍待推进；
+console 无当前授权 pipeline 时仍默认拒绝业务数据，运行时就绪事件不能替代完整产品验收。
