@@ -200,7 +200,7 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 	kernelName := "photon_kern_" + suffix
 	kernelName4 := kernelName + "4"
 	kernelName6 := kernelName + "6"
-	babelName := "photon_babel_" + suffix
+	babelName := BabelProtocolName(spec.NetNSName)
 	importFilterName := "photon_import_" + suffix
 	exportFilterName := "photon_export_" + suffix
 	staticName := "photon_static_" + suffix

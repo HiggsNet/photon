@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/HiggsNet/photon/pkg/routing/bird"
 )
 
 // TestBIRDLeafInterop runs only inside windows-babel-interop-smoke.sh's isolated
@@ -149,6 +151,12 @@ func TestBIRDLeafInterop(t *testing.T) {
 	}
 	if !strings.Contains(entries, strings.Join(idParts, ":")) {
 		t.Fatalf("BIRD control ID does not match full on-wire ID %x:\n%s", observedID, entries)
+	}
+	identity, err := bird.LocalBabelIdentity(entries, "leaf_interop", []netip.Prefix{
+		netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("2001:db8:beef::/64"),
+	})
+	if err != nil || identity != fmt.Sprintf("%x", observedID) {
+		t.Fatalf("production observer did not bind local BIRD identity: %q %v", identity, err)
 	}
 	t.Log("BIRD Babel entries:\n" + entries)
 	// Explicit requests for learned destinations must produce only retractions.
