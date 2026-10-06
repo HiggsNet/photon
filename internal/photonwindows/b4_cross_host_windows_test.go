@@ -53,8 +53,9 @@ func TestWindowsB4DaemonCrossHost(t *testing.T) {
 	}
 	config.State.Path = filepath.Join(dir, "windows.db")
 	config.Wintun.AdapterName = fmt.Sprintf("PhotonB4-%d", os.Getpid())
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 180*time.Second)
 	defer cancel()
+	authority := startB4AuthorityPeer(t, ctx, &config)
 	log := &b4CrossLog{}
 	daemon := NewDaemon(&config, slog.New(slog.NewTextHandler(log, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	counters := &b4DeviceCounters{}
@@ -204,6 +205,67 @@ func TestWindowsB4DaemonCrossHost(t *testing.T) {
 	// A steady period exposes self-generated adapter notifications/rebind loops.
 	time.Sleep(2 * time.Second)
 	probe("udp4", "198.18.253.2", "198.18.253.1", "stable")
+	// Hold actual OS sockets across signed revocation. The sidecar commits to
+	// its own authority DB and uses production gossip to change this daemon;
+	// the running Windows DB remains exclusively owned by Daemon throughout.
+	type heldProbe struct {
+		socket *net.UDPConn
+		peer   netip.AddrPort
+		family string
+	}
+	var held []heldProbe
+	for _, pair := range []struct{ family, local, remote string }{{"udp4", "198.18.253.2", "198.18.253.1"}, {"udp6", "fd00:7068:b4::2", "fd00:7068:b4::1"}} {
+		socket, err := net.ListenUDP(pair.family, net.UDPAddrFromAddrPort(netip.AddrPortFrom(netip.MustParseAddr(pair.local), 0)))
+		if err != nil {
+			t.Fatal("bind revocation probe", err)
+		}
+		defer socket.Close()
+		held = append(held, heldProbe{socket, netip.AddrPortFrom(netip.MustParseAddr(pair.remote), 19096), pair.family})
+	}
+	prefixes := []string{"198.18.253.2/32", "fd00:7068:b4::2/128"}
+	authority.waitAssignments(t, ctx, prefixes, true)
+	beforeRevocation := log.text()
+	revokedDevice := counters.current()
+	opensBeforeRevocation := counters.opens.Load()
+	authority.setHostAssignments(t, ctx, prefixes, false)
+	authority.waitAssignments(t, ctx, prefixes, false)
+	waitForWindowsState(t, 10*time.Second, func() bool {
+		return revokedDevice.closed.Load() && counters.opens.Load() == counters.closes.Load() && strings.Contains(log.text()[len(beforeRevocation):], "msg=tunnel_ready_changed tunnel_ready=false")
+	})
+	for luid := range ownedLUIDs {
+		assertOwnedDeviceGone(t, config.Wintun.AdapterName, luid)
+	}
+	assertOwnedDeviceGone(t, config.Wintun.AdapterName, 0)
+	for _, held := range held {
+		if err := held.socket.SetDeadline(time.Now().Add(600 * time.Millisecond)); err != nil {
+			t.Fatal(err)
+		}
+		payload := []byte("photon-b4-must-not-pass-after-signed-revocation-" + held.family)
+		if _, err := held.socket.WriteToUDPAddrPort(payload, held.peer); err == nil {
+			buffer := make([]byte, 2048)
+			if _, _, err := held.socket.ReadFromUDPAddrPort(buffer); err == nil {
+				t.Fatal("business packet delivered after signed assignment revocation", held.family)
+			}
+		}
+	}
+	if counters.opens.Load() != opensBeforeRevocation {
+		t.Fatalf("device reopened without local host authorization: %s", counters)
+	}
+	t.Log("signed dual-stack host assignment revocation converged over gossip; ready false, business stopped, owned adapter/address/routes removed")
+	authority.setHostAssignments(t, ctx, prefixes, true)
+	authority.waitAssignments(t, ctx, prefixes, true)
+	probe("udp4", "198.18.253.2", "198.18.253.1", "authorization-restored")
+	probe("udp6", "fd00:7068:b4::2", "fd00:7068:b4::1", "authorization-restored")
+	if counters.current() == revokedDevice || counters.opens.Load() <= opensBeforeRevocation {
+		t.Fatal("restoration did not create a fresh device lifetime")
+	}
+	waitForWindowsState(t, time.Second, func() bool {
+		transition := log.text()[len(beforeRevocation):]
+		down := strings.Index(transition, "msg=tunnel_ready_changed tunnel_ready=false")
+		up := strings.Index(transition, "msg=tunnel_ready_changed tunnel_ready=true")
+		return down >= 0 && up > down
+	})
+	t.Log("signed host assignment restoration converged over gossip; fresh platform lifetime and both business families recovered")
 	cancel()
 	select {
 	case err := <-done:
@@ -221,5 +283,5 @@ func TestWindowsB4DaemonCrossHost(t *testing.T) {
 		t.Fatalf("platform device lifetime leaked: %s", counters)
 	}
 	t.Logf("real platform device diagnostics: %s", counters)
-	t.Log("full Windows daemon dual-stack business flow, explicit rebind and shutdown cleanup passed")
+	t.Log("full Windows daemon dual-stack flow, explicit rebind, signed authorization revoke/restore and shutdown cleanup passed")
 }
