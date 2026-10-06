@@ -1,10 +1,10 @@
 # Linux 重构版测试
 
-本轮旧版固定为 `v0.5.6`（master 提交 `28472ea74615`），本分支正在准备
-`v0.6.0-rc.4`，尚未打标签或发布。当前已发布候选版为 `v0.6.0-rc.3`。新版只供测试，Windows 完整隧道尚未交付。
+本轮旧版固定为 `v0.5.6`（master 提交 `28472ea74615`），新版为
+`v0.6.0-rc.4`（Checkpoint 按 peer 提交、收窄状态读取和减少哈希分配）。新版只供测试，Windows 完整隧道尚未交付。
 master 保留旧版；候选版从独立 release 分支发布，不更新 Docker `latest`。
 
-## rc.4 准备：Checkpoint 与读取性能
+## rc.4 相对 rc.3 的变化：Checkpoint 与读取性能
 
 - 纳入性能提交 `de2b6859`：纯 GossipCheckpoint 更新走独立提交回调，不再复制、编码或写入 VerifiedState；verified revision 不变。
 - 内存应用指定字段的 patch，只复制受影响的 peer；磁盘按 peer 保存小型 JSON，未变化的 peer 不重写。持久化成功后才发布内存状态。
@@ -76,15 +76,13 @@ master 保留旧版；候选版从独立 release 分支发布，不更新 Docker
 
 ## 下载和安装
 
-以下命令仍指向已发布的 RC.3；RC.4 发布前不要改用尚不存在的下载地址。
-
 使用一台专用 Linux 测试机，与仍运行旧版的节点互通。安装器支持 amd64/arm64，
 会检查运行依赖并校验下载包的 SHA256。以下命令面向普通 systemd 安装；
 NixOS、容器或自定义 unit 应沿用原部署方式，显式固定版本。
 
 ```sh
 curl -fL --retry 3 -o /tmp/photon-install-rc.sh \
-  https://raw.githubusercontent.com/HiggsNet/photon/v0.6.0-rc.3/contrib/install.sh
+  https://raw.githubusercontent.com/HiggsNet/photon/v0.6.0-rc.4/contrib/install.sh
 ```
 
 先在测试机安装旧版，完成入网并确认双向通信，作为基线：
@@ -103,10 +101,10 @@ photon version
 
 ```sh
 sudo systemctl stop photon
-sudo install -d -m 0700 /var/backups/photon-before-rc3
-sudo cp -a /etc/photon /var/backups/photon-before-rc3/etc-photon
-sudo cp -a /usr/local/bin/photon /usr/local/bin/photon-services /var/backups/photon-before-rc3/
-sudo sh /tmp/photon-install-rc.sh --version v0.6.0-rc.3 --no-service
+sudo install -d -m 0700 /var/backups/photon-before-rc4
+sudo cp -a /etc/photon /var/backups/photon-before-rc4/etc-photon
+sudo cp -a /usr/local/bin/photon /usr/local/bin/photon-services /var/backups/photon-before-rc4/
+sudo sh /tmp/photon-install-rc.sh --version v0.6.0-rc.4 --no-service
 sudo systemctl start photon
 photon version
 sudo systemctl status photon --no-pager
@@ -145,14 +143,14 @@ sudo systemctl status photon --no-pager
 
 ```sh
 sudo systemctl stop photon
-sudo mv /etc/photon /etc/photon-rc3-saved
-sudo cp -a /var/backups/photon-before-rc3/etc-photon /etc/photon
-sudo cp -a /var/backups/photon-before-rc3/photon /var/backups/photon-before-rc3/photon-services /usr/local/bin/
+sudo mv /etc/photon /etc/photon-rc4-saved
+sudo cp -a /var/backups/photon-before-rc4/etc-photon /etc/photon
+sudo cp -a /var/backups/photon-before-rc4/photon /var/backups/photon-before-rc4/photon-services /usr/local/bin/
 sudo systemctl start photon
 photon version
 ```
 
-`/etc/photon-rc3-saved` 必须尚不存在，保留新版数据供诊断。回退后再次确认真实通信，
+`/etc/photon-rc4-saved` 必须尚不存在，保留新版数据供诊断。回退后再次确认真实通信，
 必要时重启测试机清理运行中的网络状态，不只检查程序版本。
 
 ## 发布者检查
@@ -160,4 +158,4 @@ photon version
 发布前执行 `make check`、`make smoke-all`、`make install-script-check`；
 记录特权数据面测试、真实升级和长时间测试是否实际执行，不以基础检查替代它们。
 GitHub Actions 必须提供两种 Linux 架构的归档和校验文件，Release 标记为
-Pre-release，准备发布的 RC.4 Docker 镜像使用显式 `v0.6.0-rc.4` 标签，正式 `latest` 保持不变。
+Pre-release，RC.4 Docker 镜像使用显式 `v0.6.0-rc.4` 标签，正式 `latest` 保持不变。
