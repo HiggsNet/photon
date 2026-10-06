@@ -57,6 +57,8 @@ func TestWindowsB4DaemonCrossHost(t *testing.T) {
 	defer cancel()
 	log := &b4CrossLog{}
 	daemon := NewDaemon(&config, slog.New(slog.NewTextHandler(log, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	counters := &b4DeviceCounters{}
+	daemon.deviceFactory = counters.open
 	done := make(chan error, 1)
 	go func() { done <- daemon.Run(ctx) }()
 	stopped := false
@@ -64,6 +66,7 @@ func TestWindowsB4DaemonCrossHost(t *testing.T) {
 	t.Cleanup(func() {
 		defer func() {
 			if t.Failed() {
+				t.Logf("real platform device diagnostics: %s", counters)
 				t.Log(log.text())
 			}
 		}()
@@ -176,14 +179,28 @@ func TestWindowsB4DaemonCrossHost(t *testing.T) {
 	}
 	initialLUID := probe("udp4", "198.18.253.2", "198.18.253.1", "initial")
 	probe("udp6", "fd00:7068:b4::2", "fd00:7068:b4::1", "initial")
+	waitForWindowsState(t, time.Second, func() bool { return strings.Contains(log.text(), "msg=tunnel_ready_changed tunnel_ready=true") })
+	initialDevice := counters.current()
+	initialOpens := counters.opens.Load()
+	if initialDevice == nil || initialDevice.closed.Load() {
+		t.Fatal("successful initial echo has no live tracked platform device")
+	}
+	beforeRebindLog := log.text()
 	if err := daemon.Rebind(ctx); err != nil {
 		t.Fatal("explicit rebind", err)
 	}
 	reboundLUID := probe("udp4", "198.18.253.2", "198.18.253.1", "rebound")
-	if reboundLUID == initialLUID {
-		t.Fatal("explicit rebind did not replace the owned packet device")
+	if !initialDevice.closed.Load() || counters.opens.Load() <= initialOpens || counters.current() == initialDevice {
+		t.Fatalf("explicit rebind did not close the old device and open a new lifetime: %s", counters)
 	}
 	probe("udp6", "fd00:7068:b4::2", "fd00:7068:b4::1", "rebound")
+	waitForWindowsState(t, time.Second, func() bool {
+		transition := log.text()[len(beforeRebindLog):]
+		down := strings.Index(transition, "msg=tunnel_ready_changed tunnel_ready=false")
+		up := strings.Index(transition, "msg=tunnel_ready_changed tunnel_ready=true")
+		return down >= 0 && up > down && strings.Contains(transition, "msg=gossip_rebound")
+	})
+	t.Logf("rebind replaced device lifetime with ready false -> true; initial LUID=%d rebound LUID=%d (OS reuse allowed); %s", initialLUID, reboundLUID, counters)
 	// A steady period exposes self-generated adapter notifications/rebind loops.
 	time.Sleep(2 * time.Second)
 	probe("udp4", "198.18.253.2", "198.18.253.1", "stable")
@@ -200,5 +217,9 @@ func TestWindowsB4DaemonCrossHost(t *testing.T) {
 	if count := strings.Count(log.text(), "gossip_rebound"); count < 1 || count > 2 {
 		t.Fatalf("unexpected rebind count %d", count)
 	}
+	if counters.opens.Load() != counters.closes.Load() {
+		t.Fatalf("platform device lifetime leaked: %s", counters)
+	}
+	t.Logf("real platform device diagnostics: %s", counters)
 	t.Log("full Windows daemon dual-stack business flow, explicit rebind and shutdown cleanup passed")
 }
