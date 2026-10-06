@@ -1,0 +1,204 @@
+package photonwindows
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
+)
+
+type b4CrossLog struct {
+	mu sync.Mutex
+	bytes.Buffer
+}
+
+func (b *b4CrossLog) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.Write(p)
+}
+
+func (b *b4CrossLog) text() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.String()
+}
+
+// This is the actual Daemon and the Windows TCP/IP stack, not a manually pumped
+// tunnel or an allow-all packet verdict. The isolated fixture owns all trust.
+func TestWindowsB4DaemonCrossHost(t *testing.T) {
+	dir := os.Getenv("PHOTON_WINDOWS_B4_CONFIG")
+	if dir == "" {
+		t.Skip("run windows-b4-cross-host-smoke.sh on the Windows VM")
+	}
+	encoded, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config Config
+	if err := json.Unmarshal(encoded, &config); err != nil {
+		t.Fatal("invalid isolated B4 config")
+	}
+	config.State.Path = filepath.Join(dir, "windows.db")
+	config.Wintun.AdapterName = fmt.Sprintf("PhotonB4-%d", os.Getpid())
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Second)
+	defer cancel()
+	log := &b4CrossLog{}
+	daemon := NewDaemon(&config, slog.New(slog.NewTextHandler(log, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	done := make(chan error, 1)
+	go func() { done <- daemon.Run(ctx) }()
+	stopped := false
+	ownedLUIDs := make(map[uint64]bool)
+	t.Cleanup(func() {
+		defer func() {
+			if t.Failed() {
+				t.Log(log.text())
+			}
+		}()
+		// Also discover an adapter created before the first successful probe.
+		assertOwnedDeviceGone(t, config.Wintun.AdapterName, 0)
+		for luid := range ownedLUIDs {
+			assertOwnedDeviceGone(t, config.Wintun.AdapterName, luid)
+			for _, family := range []uint16{windows.AF_INET, windows.AF_INET6} {
+				row := ipHelperInterfaceRow{InterfaceLuid: luid, Family: family}
+				if getIPHelperInterface(&row) == nil {
+					t.Errorf("owned IP adapter %d family %d survived shutdown", luid, family)
+				}
+			}
+		}
+	})
+	observeOwned := func() uint64 {
+		t.Helper()
+		var interfaces *windows.MibIfTable2
+		if err := windows.GetIfTable2Ex(windows.MibIfTableNormalWithoutStatistics, &interfaces); err != nil {
+			t.Fatal(err)
+		}
+		defer windows.FreeMibTable(unsafe.Pointer(interfaces))
+		var active uint64
+		for _, row := range unsafe.Slice(&interfaces.Table[0], interfaces.NumEntries) {
+			if windows.UTF16ToString(row.Alias[:]) != config.Wintun.AdapterName {
+				continue
+			}
+			ip := ipHelperInterfaceRow{InterfaceLuid: row.InterfaceLuid, Family: windows.AF_INET}
+			if getIPHelperInterface(&ip) != nil {
+				continue // NDIS may briefly retain a deleted adapter inventory row.
+			}
+			if active != 0 && active != row.InterfaceLuid {
+				t.Fatal("multiple active adapters have the fixture's owned name")
+			}
+			active = row.InterfaceLuid
+			ownedLUIDs[active] = true
+		}
+		if active == 0 {
+			t.Fatal("successful echo has no active owned Wintun adapter")
+		}
+		var routes *windows.MibIpForwardTable2
+		if err := windows.GetIpForwardTable2(windows.AF_UNSPEC, &routes); err != nil {
+			t.Fatal(err)
+		}
+		defer windows.FreeMibTable(unsafe.Pointer(routes))
+		for _, prefix := range config.Overlay.SplitRoutes {
+			found := false
+			for _, row := range routes.Rows() {
+				if row.InterfaceLuid == active && ipHelperRoutePrefix(row) == prefix {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("owned adapter %d lacks configured split route %s", active, prefix)
+			}
+		}
+		return active
+	}
+	defer func() {
+		cancel()
+		if !stopped {
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Errorf("daemon stop: %v", err)
+				}
+			case <-time.After(15 * time.Second):
+				t.Error("daemon failed to join")
+			}
+		}
+	}()
+	probe := func(network, local, remote, phase string) uint64 {
+		t.Helper()
+		deadline := time.Now().Add(35 * time.Second)
+		var last error
+		for ctx.Err() == nil && time.Now().Before(deadline) {
+			select {
+			case err := <-done:
+				stopped = true
+				t.Fatalf("daemon exited before %s: %v", phase, err)
+			default:
+			}
+			conn, err := net.ListenUDP(network, net.UDPAddrFromAddrPort(netip.AddrPortFrom(netip.MustParseAddr(local), 0)))
+			if err == nil {
+				_ = conn.SetDeadline(time.Now().Add(600 * time.Millisecond))
+				peer := netip.AddrPortFrom(netip.MustParseAddr(remote), 19096)
+				payload := []byte("photon-b4-" + phase + "-" + network)
+				_, err = conn.WriteToUDPAddrPort(payload, peer)
+				if err == nil {
+					response := make([]byte, 2048)
+					var n int
+					var from netip.AddrPort
+					n, from, err = conn.ReadFromUDPAddrPort(response)
+					if err == nil && (from != peer || !bytes.Equal(response[:n], payload)) {
+						err = fmt.Errorf("wrong echo source or payload")
+					}
+				}
+				_ = conn.Close()
+				if err == nil {
+					active := observeOwned()
+					t.Logf("%s %s: Windows UDP -> Wintun -> Babel/SADR -> ESP -> Linux UDP and reverse passed", phase, network)
+					return active
+				}
+			}
+			last = err
+			time.Sleep(100 * time.Millisecond)
+		}
+		t.Fatalf("%s %s timed out: %v", phase, network, last)
+		return 0
+	}
+	initialLUID := probe("udp4", "198.18.253.2", "198.18.253.1", "initial")
+	probe("udp6", "fd00:7068:b4::2", "fd00:7068:b4::1", "initial")
+	if err := daemon.Rebind(ctx); err != nil {
+		t.Fatal("explicit rebind", err)
+	}
+	reboundLUID := probe("udp4", "198.18.253.2", "198.18.253.1", "rebound")
+	if reboundLUID == initialLUID {
+		t.Fatal("explicit rebind did not replace the owned packet device")
+	}
+	probe("udp6", "fd00:7068:b4::2", "fd00:7068:b4::1", "rebound")
+	// A steady period exposes self-generated adapter notifications/rebind loops.
+	time.Sleep(2 * time.Second)
+	probe("udp4", "198.18.253.2", "198.18.253.1", "stable")
+	cancel()
+	select {
+	case err := <-done:
+		stopped = true
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("daemon shutdown did not finish")
+	}
+	if count := strings.Count(log.text(), "gossip_rebound"); count < 1 || count > 2 {
+		t.Fatalf("unexpected rebind count %d", count)
+	}
+	t.Log("full Windows daemon dual-stack business flow, explicit rebind and shutdown cleanup passed")
+}
