@@ -65,9 +65,13 @@ func (t *gatewayTunnel) lookupBabelRoutes(config *Config, view corestate.View, p
 	if !t.current(current) || !t.data.current(t.generation, t.data.active, current) {
 		return nil
 	}
+	return sadr.Lookup(candidates, source, destination, now, currentBabelRouteAuthorizer(config, view, now))
+}
+
+func currentBabelRouteAuthorizer(config *Config, view corestate.View, now time.Time) func(sadr.Route) bool {
 	origins := currentBabelOrigins(config, view, now)
 	authorized := authorizedGatewayRoutes(config, view, now)
-	return sadr.Lookup(candidates, source, destination, now, func(route sadr.Route) bool {
+	return func(route sadr.Route) bool {
 		if route.Source.IsValid() {
 			return false
 		}
@@ -81,5 +85,5 @@ func (t *gatewayTunnel) lookupBabelRoutes(config *Config, view corestate.View, p
 			}
 		}
 		return false
-	})
+	}
 }
