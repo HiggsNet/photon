@@ -261,10 +261,18 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		}
 		return RevalidateGatewayPlan(config, view, lastPlan, now)
 	}
+	observeReady := func() {
+		ready := leaf.ready(config, state.Store().ReadView(), lastPlan, time.Now())
+		if ready != lastReady {
+			lastReady = ready
+			logger.Info("tunnel_ready_changed", "tunnel_ready", ready)
+		}
+	}
 	stopTunnel := func(reason string) {
 		if err := leaf.stop(); err != nil {
 			logger.Warn("leaf_cleanup_failed", "error", err)
 		}
+		observeReady()
 		tunnel.stop()
 		nextTunnel = time.Now().Add(backoff)
 		backoff = min(backoff*2, maxBackoff)
@@ -301,13 +309,6 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			if rejected != "" {
 				logger.Info("leaf_unavailable", "reason", rejected, "tunnel_ready", false)
 			}
-		}
-	}
-	observeReady := func() {
-		ready := leaf.ready(config, state.Store().ReadView(), lastPlan, time.Now())
-		if ready != lastReady {
-			lastReady = ready
-			logger.Info("tunnel_ready_changed", "tunnel_ready", ready)
 		}
 	}
 	attemptTunnel := func() {
@@ -351,6 +352,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		if err := leaf.stop(); err != nil {
 			logger.Warn("leaf_cleanup_failed", "error", err)
 		}
+		observeReady()
 		tunnel.stop() // deny old packets before replacing the shared endpoint
 		err := packet.Rebind(rebindCtx)
 		lastPlan = GatewayPlan{}
@@ -389,7 +391,9 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			err := leaf.stop()
+			observeReady()
+			return err
 		case result := <-d.plans:
 			result <- RevalidateGatewayPlan(config, state.Store().ReadView(), lastPlan, time.Now())
 		case packet := <-packet.ikePackets:
@@ -401,6 +405,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				logger.Info("tunnel_authenticated", "gateway", tunnel.plan.Selected.Zone, "tunnel_ready", false, "child_installed", true)
 				reconcileLeaf()
 			}
+			observeReady()
 		case packet := <-packet.espPackets:
 			data.submitInbound(packet.generation, freshPlan(), packet.peer, packet.packet)
 		case completion := <-data.completed:
@@ -421,6 +426,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		case devicePacket := <-leaf.packets:
 			if devicePacket.err != nil {
 				logger.Warn("leaf_read_failed", "error", errors.Join(devicePacket.err, leaf.stop()))
+				observeReady()
 				continue
 			}
 			if leaf.pipeline != nil && devicePacket.generation == tunnel.generation {
@@ -463,6 +469,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			}
 			lastPlan = result.plan
 			attemptTunnel()
+			observeReady()
 		case request := <-d.rebind:
 			request.result <- rebind(request.ctx)
 		case <-packet.failed:

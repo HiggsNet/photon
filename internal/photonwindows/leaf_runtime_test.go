@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonclient/babel"
 	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
@@ -180,5 +182,65 @@ func TestLeafRuntimeDiscardsStaleRevisionAndLateOpen(t *testing.T) {
 				t.Fatal("stale device leaked")
 			}
 		})
+	}
+}
+
+func TestLeafRuntimeReadinessRequiresUsableSourceOnActualDevice(t *testing.T) {
+	f := runtimeFixture(t)
+	device := newRuntimeDevice()
+	runtime := newLeafRuntime(func(context.Context, string, []netip.Prefix, []netip.Prefix, uint32, uint32) (ownedPacketDevice, error) {
+		return device, nil
+	})
+	t.Cleanup(func() { runtime.close() })
+	if err := runtime.reconcile(t.Context(), f.config, f.view, f.plan, f.p.tunnel, f.p.routerID, f.now); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.complete(t.Context(), f.config, f.view, f.plan, f.p.tunnel, f.p.routerID, f.now, runtimeOpenResult(t, runtime)); err != nil {
+		t.Fatal(err)
+	}
+	f.p = runtime.pipeline
+	f.learn(t)
+	// A newly authorized host is not installed on this existing device yet.
+	// Its source-specific route must not make the old device appear usable.
+	other := "10.9.0.2/32"
+	key, _ := routing.NormalizeIPAMAssignmentKey(other)
+	f.put(zone.RootZone, key, routing.RecordTypeIPAMAssignment, routing.IPAMAssignmentRecord{Version: 1, Prefix: other, AssignedTo: f.config.ManagedZone, Active: true})
+	key, _ = routing.NormalizeRouteAnnouncementKey(other)
+	f.put(f.config.ManagedZone, key, routing.RecordTypeRouteAnnouncement, routing.RouteAnnouncementRecord{Version: 1, Prefix: other, Active: true})
+	update := babel.Message{Type: babel.TLVUpdate, Prefix: netip.MustParsePrefix("10.1.2.0/24"), RouterID: f.remoteID, NextHop: f.p.peer, Seqno: 8, Metric: 10, Interval: 1600}
+	retract := update
+	retract.Metric = babel.MetricInfinity
+	update.SourcePrefix = netip.MustParsePrefix(other)
+	feed := func(messages ...babel.Message) {
+		t.Helper()
+		payload, err := babel.Encode(messages)
+		if err != nil {
+			t.Fatal(err)
+		}
+		packet, err := babel.BuildPacket(f.p.peer, f.p.local, payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !f.inbound(t, packet) {
+			t.Fatal("control rejected")
+		}
+	}
+	feed(retract, update)
+	if len(f.p.leaf.Candidates(f.now, currentBabelRouteAuthorizer(f.config, f.view, f.now))) != 1 {
+		t.Fatal("source route did not reach candidate table")
+	}
+	if runtime.ready(f.config, f.view, f.plan, f.now) {
+		t.Fatal("same family alone reported readiness without a usable device source")
+	}
+	update.SourcePrefix = netip.MustParsePrefix("10.9.0.1/32")
+	feed(update)
+	if !runtime.ready(f.config, f.view, f.plan, f.now) {
+		t.Fatal("actual authorized source route not ready")
+	}
+	if err := runtime.stop(); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.ready(f.config, f.view, f.plan, f.now) {
+		t.Fatal("readiness survived device withdrawal")
 	}
 }

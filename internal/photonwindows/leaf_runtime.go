@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonclient/sadr"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
@@ -238,7 +239,11 @@ func (r *leafRuntime) ready(config *Config, view corestate.View, plan GatewayPla
 	origins := r.pipeline.localOrigins(config, view, now)
 	for _, route := range r.pipeline.leaf.Candidates(now, currentBabelRouteAuthorizer(config, view, now)) {
 		for _, origin := range origins {
-			if origin.Prefix.Addr().BitLen() == route.Destination.Addr().BitLen() {
+			source := origin.Prefix.Addr()
+			if source.BitLen() != route.Destination.Addr().BitLen() || route.Source.IsValid() && !route.Source.Contains(source) {
+				continue
+			}
+			if len(r.pipeline.tunnel.lookupBabelRoutes(config, view, plan, view.Revision, []sadr.Route{route}, source, route.Destination.Addr(), now)) != 0 {
 				return true
 			}
 		}
