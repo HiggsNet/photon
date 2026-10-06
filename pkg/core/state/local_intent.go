@@ -41,6 +41,7 @@ const (
 	ProtocolRecordGossipEndpoint ProtocolRecordKind = "gossip_endpoint"
 	ProtocolRecordIPsec          ProtocolRecordKind = "ipsec"
 	ProtocolRecordRoutingNetns   ProtocolRecordKind = "routing_netns"
+	ProtocolRecordBabelIdentity  ProtocolRecordKind = "babel_identity"
 )
 
 // PutProtocolRecordIntent is the narrow publisher path for reserved protocol
@@ -370,6 +371,8 @@ func validateProtocolRecordIntent(intent PutProtocolRecordIntent) error {
 		valid = intent.Key == "sync/endpoint/udp" && intent.Type == "sync.endpoint"
 	case ProtocolRecordRoutingNetns:
 		valid = intent.Key == routing.RecordKeyRoutingNetns && intent.Type == routing.RecordTypeRoutingNetns
+	case ProtocolRecordBabelIdentity:
+		valid = intent.Key == routing.RecordKeyBabelIdentity && intent.Type == routing.RecordTypeBabelIdentity
 	case ProtocolRecordIPsec:
 		switch intent.Key {
 		case ipsec.RecordKeyProfile:
@@ -392,6 +395,11 @@ func validateProtocolRecordIntent(intent PutProtocolRecordIntent) error {
 }
 
 func applyPutProtocolRecordIntent(state *VerifiedState, intent PutProtocolRecordIntent, now time.Time) (*zone.Record, zone.ZonePath, error) {
+	if intent.Kind == ProtocolRecordBabelIdentity {
+		if _, err := routing.ParseBabelIdentityRecord(&zone.Record{Zone: intent.Zone, Key: intent.Key, Type: intent.Type, Value: intent.Value, Timestamp: now.Unix()}, now); err != nil {
+			return nil, "", err
+		}
+	}
 	if state != nil && state.Network != nil {
 		if zs := state.Network.Zones[intent.Zone]; zs != nil {
 			if current := zs.Records[intent.Key]; current != nil && current.Type == intent.Type && bytes.Equal(current.Value, intent.Value) {
