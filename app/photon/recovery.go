@@ -286,8 +286,8 @@ func recoveryPullZones(ctx context.Context, paths []zone.ZonePath, peerID string
 			return ctx.Err()
 		default:
 		}
-		current := state.Common.ReadView()
-		input := gossipDriver.GossipDiscoveryInput(peerLifecycleSuppressions(current.State.Network, current.Gossip, time.Now(), config.PeerLifecycle))
+		now := time.Now()
+		input := gossipDriver.GossipDiscoveryInput(peerLifecycleSuppressions(state.Common.ReadPeerActivity(now), now, config.PeerLifecycle))
 		pullCtx, cancel := context.WithDeadline(ctx, deadline)
 		completion := pullExecutor.PullFrom(pullCtx, input, gossip.StartObjectPullAction{PeerID: peerID, Zone: path})
 		cancel()

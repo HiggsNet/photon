@@ -18,7 +18,7 @@ func newStateTestFixture(t *testing.T) *State {
 	if err != nil {
 		t.Fatalf("loadOfflineOwnerViews: %v", err)
 	}
-	return newState(nil, corestate.NewStoreWithCheckpoint(view.State, view.Gossip, nil), &photonlinux.LinuxState{
+	return newState(nil, corestate.NewStoreWithCheckpoint(view.State, view.Gossip, nil, nil), &photonlinux.LinuxState{
 		EndpointACLs: map[string]photonstate.EndpointACL{"admin": {Name: "admin"}},
 	})
 }

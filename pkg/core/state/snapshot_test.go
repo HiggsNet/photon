@@ -770,7 +770,7 @@ func TestApplySnapshotRejectsSameEpochChildAuthorityFork(t *testing.T) {
 		t.Fatalf("ApplySnapshot = %v, want ErrAuthorityConflict", err)
 	}
 	assertNetworkStateUnchanged(t, target, before)
-	store := NewStore(&VerifiedState{ManagedZone: zone.RootZone, Network: target}, nil)
+	store := NewStore(&VerifiedState{ManagedZone: zone.RootZone, Network: target}, nil, nil)
 	result, err := store.ImportRecoverySnapshot(context.Background(), RecoveryImport{Snapshot: snapshot}, now)
 	if err != nil {
 		t.Fatalf("explicit recovery: %v", err)

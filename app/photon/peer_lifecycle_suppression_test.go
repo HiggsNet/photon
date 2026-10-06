@@ -23,7 +23,7 @@ func TestPeerLifecycleSuppressionDerivesFromRetainedCheckpoint(t *testing.T) {
 	if got := peerLifecycleExcludedPeers(state.checkpoint, now, cfg)[peerID]; got != peerCleanupReasonOffline {
 		t.Fatalf("excluded reason = %q", got)
 	}
-	if !peerLifecycleSuppressions(state.verified.Network, state.checkpoint, now, cfg)[peerID.String()] {
+	if !peerLifecycleSuppressions(corestate.NewStoreWithCheckpoint(state.verified, state.checkpoint, nil, nil).ReadPeerActivity(now), now, cfg)[peerID.String()] {
 		t.Fatal("offline peer is not suppressed from derived discovery updates")
 	}
 	if _, ok := state.checkpoint.Peers[peerID.String()]; !ok {
@@ -34,7 +34,7 @@ func TestPeerLifecycleSuppressionDerivesFromRetainedCheckpoint(t *testing.T) {
 	if _, ok := peerLifecycleExcludedPeers(state.checkpoint, now, cfg)[peerID]; ok {
 		t.Fatal("successful sync did not clear the derived data-plane suppression")
 	}
-	if peerLifecycleSuppressions(state.verified.Network, state.checkpoint, now, cfg)[peerID.String()] {
+	if peerLifecycleSuppressions(corestate.NewStoreWithCheckpoint(state.verified, state.checkpoint, nil, nil).ReadPeerActivity(now), now, cfg)[peerID.String()] {
 		t.Fatal("successful sync did not clear the derived discovery suppression")
 	}
 }
@@ -46,7 +46,7 @@ func TestPeerLifecycleSuppressionDerivesRevocationFromVerifiedState(t *testing.T
 	addRevocationToParent(t, state.verified.Network, "catofes.", peerID, parentKey, now)
 	delete(state.verified.Network.Zones, peerID)
 
-	if !peerLifecycleSuppressions(state.verified.Network, state.checkpoint, now, inspect.DefaultPeerLifecycleConfig())[peerID.String()] {
+	if !peerLifecycleSuppressions(corestate.NewStoreWithCheckpoint(state.verified, state.checkpoint, nil, nil).ReadPeerActivity(now), now, inspect.DefaultPeerLifecycleConfig())[peerID.String()] {
 		t.Fatal("revoked peer without ZoneState or checkpoint is not suppressed from discovery")
 	}
 }

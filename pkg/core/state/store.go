@@ -162,27 +162,28 @@ type CommitFunc func(context.Context, *CommitCandidate, ChangeSet) error
 // readers and the publication boundary; verification and persistence I/O
 // run without holding the read lock.
 type Store struct {
-	writeMu  sync.Mutex
-	mu       sync.RWMutex
-	state    *VerifiedState
-	gossip   *GossipCheckpoint
-	revision VerifiedRevision
-	commit   CommitFunc
-	closed   bool
+	writeMu           sync.Mutex
+	mu                sync.RWMutex
+	state             *VerifiedState
+	gossip            *GossipCheckpoint
+	revision          VerifiedRevision
+	commit            CommitFunc
+	commitCheckpoints CheckpointCommitFunc
+	closed            bool
 }
 
-func NewStore(initial *VerifiedState, commit CommitFunc) *Store {
-	return NewStoreWithCheckpoint(initial, nil, commit)
+func NewStore(initial *VerifiedState, commit CommitFunc, checkpointCommit CheckpointCommitFunc) *Store {
+	return NewStoreWithCheckpoint(initial, nil, commit, checkpointCommit)
 }
 
-func NewStoreWithCheckpoint(initial *VerifiedState, checkpoint *GossipCheckpoint, commit CommitFunc) *Store {
-	return &Store{state: cloneVerifiedState(initial), gossip: cloneGossipCheckpoint(checkpoint), commit: commit}
+func NewStoreWithCheckpoint(initial *VerifiedState, checkpoint *GossipCheckpoint, commit CommitFunc, checkpointCommit CheckpointCommitFunc) *Store {
+	return &Store{state: cloneVerifiedState(initial), gossip: cloneGossipCheckpoint(checkpoint), commit: commit, commitCheckpoints: checkpointCommit}
 }
 
 // RestoreStore constructs the in-memory common state from a candidate already
 // validated and loaded from persistent storage. It preserves the persisted
 // VerifiedRevision so the next Network commit advances from the disk value.
-func RestoreStore(candidate *CommitCandidate, revision VerifiedRevision, commit CommitFunc) (*Store, error) {
+func RestoreStore(candidate *CommitCandidate, revision VerifiedRevision, commit CommitFunc, checkpointCommit CheckpointCommitFunc) (*Store, error) {
 	if candidate == nil || candidate.Verified == nil {
 		return nil, fmt.Errorf("%w: persisted candidate is missing", ErrInvalidStateRoot)
 	}
@@ -190,10 +191,11 @@ func RestoreStore(candidate *CommitCandidate, revision VerifiedRevision, commit 
 		return nil, err
 	}
 	return &Store{
-		state:    cloneVerifiedState(candidate.Verified),
-		gossip:   cloneGossipCheckpoint(candidate.Gossip),
-		revision: revision,
-		commit:   commit,
+		state:             cloneVerifiedState(candidate.Verified),
+		gossip:            cloneGossipCheckpoint(candidate.Gossip),
+		revision:          revision,
+		commit:            commit,
+		commitCheckpoints: checkpointCommit,
 	}, nil
 }
 

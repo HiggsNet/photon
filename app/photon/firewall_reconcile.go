@@ -162,6 +162,7 @@ func (d *Daemon) flushFirewallReconcileResult(ctx context.Context) (bool, error)
 	if !d.firewallDirty {
 		return false, nil
 	}
+	defer d.gossipDriver.LogSlowOperation("firewall_reconcile", time.Now(), d.gossipDriver.PendingEventCount())
 	d.firewallDirty = false
 	d.noteReconcileFlush("firewall")
 	reconcileCtx, cancel := boundedReconcileContext(ctx)

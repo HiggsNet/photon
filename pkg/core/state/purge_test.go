@@ -31,7 +31,7 @@ func TestStorePurgeRevokedDeletesCommonStateAndKeepsTombstone(t *testing.T) {
 		"node-b.catofes.":      {FailureCount: 1},
 		"leaf.node-b.catofes.": {FailureCount: 2},
 		"node-c.catofes.":      {FailureCount: 3},
-	}}, sink.Commit)
+	}}, sink.Commit, sink.CommitCheckpoints)
 
 	plan, err := store.PlanPurgeRevoked(now, "node-b.catofes.")
 	if err != nil {
@@ -66,7 +66,7 @@ func TestStorePurgeRevokedRefusesManagedIdentity(t *testing.T) {
 		ChildZone: install.ManagedZone, ParentZone: "catofes.", RevokedAuthorityEpoch: 1, RevokedAt: now.Unix(),
 	}
 	delete(parent.Delegations, install.ManagedZone)
-	store := NewStore(&VerifiedState{ManagedZone: install.ManagedZone, Network: install.Network}, nil)
+	store := NewStore(&VerifiedState{ManagedZone: install.ManagedZone, Network: install.Network}, nil, nil)
 	if _, err := store.PurgeRevoked(context.Background(), now, install.ManagedZone); err == nil {
 		t.Fatal("PurgeRevoked accepted the managed identity zone")
 	}
@@ -84,7 +84,7 @@ func TestStorePurgeRevokedPersistenceFailureDoesNotPublish(t *testing.T) {
 		ChildZone: "node-b.catofes.", ParentZone: "catofes.", RevokedAt: now.Unix(),
 	}
 	wantErr := errors.New("disk unavailable")
-	store := NewStore(&VerifiedState{ManagedZone: install.ManagedZone, Network: network}, (&memoryCommitSink{err: wantErr}).Commit)
+	store := NewStore(&VerifiedState{ManagedZone: install.ManagedZone, Network: network}, (&memoryCommitSink{err: wantErr}).Commit, (&memoryCommitSink{err: wantErr}).CommitCheckpoints)
 	if _, err := store.PurgeRevoked(context.Background(), now, "node-b.catofes."); !errors.Is(err, wantErr) {
 		t.Fatalf("PurgeRevoked error = %v, want %v", err, wantErr)
 	}

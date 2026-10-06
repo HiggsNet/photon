@@ -13,6 +13,7 @@ import (
 // recordGossipObservedPath persists one authenticated packet source after
 // validating it against the GossipDriver's current verified state.
 func (driver *GossipDriver) recordGossipObservedPath(ctx context.Context, peerID, endpoint string, suppressed map[string]bool, now time.Time) (bool, error) {
+	defer driver.LogSlowOperation("observed_checkpoint", time.Now(), driver.PendingEventCount())
 	if driver == nil || driver.gossipState == nil {
 		return false, ErrGossipDriverStopped
 	}
@@ -73,14 +74,18 @@ func (driver *GossipDriver) commitGossipEventCheckpoint(ctx context.Context, ses
 	if len(backoffs) == 0 && (session == nil || !session.Done()) {
 		return nil
 	}
-	view := driver.gossipState.ReadView()
-	peers := make(map[string]corestate.PeerCheckpoint)
-	patches := make(map[string]corestate.PeerCheckpointPatch)
-	if view.Gossip != nil {
-		for peerID, checkpoint := range view.Gossip.Peers {
-			peers[peerID] = checkpoint
+	defer driver.LogSlowOperation("session_checkpoint", time.Now(), driver.PendingEventCount())
+	ids := make([]string, 0, len(backoffs)+1)
+	for _, action := range backoffs {
+		if action.PeerID != "" {
+			ids = append(ids, action.PeerID)
 		}
 	}
+	if session != nil && session.Done() && session.PeerID != "" {
+		ids = append(ids, session.PeerID)
+	}
+	peers := driver.gossipState.PeerCheckpoints(ids)
+	patches := make(map[string]corestate.PeerCheckpointPatch)
 	for _, action := range backoffs {
 		if action.PeerID == "" {
 			continue

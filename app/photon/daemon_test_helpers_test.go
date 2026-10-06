@@ -67,7 +67,7 @@ func newTestDaemonFromOwners(
 		copyVerified.TrustedRootPublicKey = append(ed25519.PublicKey(nil), rt.Config.TrustedRootPublicKey...)
 		verified = &copyVerified
 	}
-	common := corestate.NewStoreWithCheckpoint(verified, checkpoint, nil)
+	common := corestate.NewStoreWithCheckpoint(verified, checkpoint, nil, nil)
 	service := newDaemon(rt.Config, newState(nil, common, runtime), interval, rt.Now)
 	peerIDs := []string{"peer-a", "root-admin", "bootstrap.catofes."}
 	if verified.Network != nil {

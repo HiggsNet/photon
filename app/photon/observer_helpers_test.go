@@ -16,7 +16,7 @@ import (
 )
 
 func newTestObserverServer() (*observer.Server, *Daemon) {
-	store := corestate.NewStoreWithCheckpoint(&corestate.VerifiedState{}, &corestate.GossipCheckpoint{}, nil)
+	store := corestate.NewStoreWithCheckpoint(&corestate.VerifiedState{}, &corestate.GossipCheckpoint{}, nil, nil)
 	d := &Daemon{
 		State: newState(nil, store, &photonlinux.LinuxState{}), Config: &appConfig{
 			PeerID: "test-node", ListenAddr: "127.0.0.1:33434",
@@ -35,7 +35,7 @@ func updateTestObserverOwners(d *Daemon, fn func(*corestate.VerifiedState, *core
 	common := d.State.Common.ReadView()
 	runtime := d.State.ReadLinux()
 	fn(common.State, common.Gossip, runtime)
-	store := corestate.NewStoreWithCheckpoint(common.State, common.Gossip, nil)
+	store := corestate.NewStoreWithCheckpoint(common.State, common.Gossip, nil, nil)
 	d.State = newState(nil, store, runtime)
 	d.gossipDriver = corehost.NewGossipDriver(corehost.NewClock(nil), corehost.DefaultEventBuffer, store, gossipDriverConfig(d.Config, store.ReadView().State, nil))
 }

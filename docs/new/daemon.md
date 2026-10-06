@@ -264,6 +264,10 @@ Daemon 当前只组合一个具体 `State`；其内部边界为：
 
 本地 admin intent 和 GossipDriver 接受的远端 verified state 进入公共 State；平台 reconcile completion 只更新 LinuxState。两者都必须先由唯一 BoltStore 持久化，再发布对应内存状态。耗时 Observe/Plan/Apply 可在状态锁外执行，但 completion 要回到 Daemon owner；磁盘中的上次平台结果不能冒充当前 observation。
 
+纯 GossipCheckpoint 更新使用独立的 `CommitCheckpoints` 回调：只复制发生变化的 peer，应用指定字段后，先提交磁盘事务，再在短读写锁内发布内存字段；不复制、编码或写入 VerifiedState，也不推进 VerifiedRevision。涉及 verified facts 和 checkpoint 的联合修改仍使用完整候选和同一个原子事务。
+
+`ReadView()` 返回可供调用方修改的深复制快照，并不是零成本的内存指针读取。只查询 checkpoint 的协议事件使用 `PeerCheckpoints(ids)`；撤销清理使用 `RevokedPeerCheckpoints(now)`，避免复制无关 records/history。撤销查询每次按当前时间计算，不能只按 verified revision 缓存，否则未来生效的撤销会遗漏。
+
 ### 4.4 Reconcile 与 Observation
 
 IPsec、routing、firewall 使用 `Observe -> Plan -> Apply -> Re-observe`：desired 来自 VerifiedState、配置和最小 LinuxState，实际 SA/route/BIRD/firewall/health 状态只存在于在线 Daemon 的 LinuxObservation。CLI/HTTP 查询平台运行状态必须经过在线 Daemon；离线只允许读取 verified/common 与明确标记的 GossipCheckpoint last-known 数据。
@@ -271,6 +275,8 @@ IPsec、routing、firewall 使用 `Observe -> Plan -> Apply -> Re-observe`：des
 ### 4.5 持久化分区
 
 状态持久化在唯一 BoltDB 文件中：common verified、common gossip-checkpoint 与 linux/state 使用不同 bucket，但共享一个 handle。旧 `stateFile/stateMeta` 仅供旧库单向 migration 和 legacy dump；不再参与在线读写，停止支持旧 schema 时整组删除。
+
+Checkpoint 在 `gossip-checkpoint/peers` 下按 peer ID 保存小型 JSON；字段 patch 保留未指定字段，持久化仅替换变化 peer 的值。旧的整块 `payload` 在第一次写入时于同一事务迁移。若旧版回滚后再次写入 `payload`，重新升级时以它为准，清除旧 peer 索引中的残留项。common schema 和 verified 数据格式保持不变；回滚到不认识 peer bucket 的版本会丢弃这些可恢复的同步提示，从空 checkpoint 重新同步，不应将其当作无损 checkpoint 降级。
 
 ### 4.6 状态变化通知
 

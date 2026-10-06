@@ -125,7 +125,7 @@ func restoreState(store *corestate.BoltStore, trustedRoot ed25519.PublicKey) (*S
 	if err != nil || !found {
 		return nil, found, err
 	}
-	common, err := corestate.RestoreStore(candidate, revision, store.CommitCommon)
+	common, err := corestate.RestoreStore(candidate, revision, store.CommitCommon, store.CommitCheckpoints)
 	if err != nil {
 		return nil, false, err
 	}

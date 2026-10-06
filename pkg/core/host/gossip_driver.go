@@ -62,6 +62,7 @@ type GossipDriver struct {
 	events chan Event
 
 	mu                       sync.RWMutex
+	slowOperations           map[string]slowGossipOperation
 	scheduler                *Scheduler
 	objectPullCancel         context.CancelFunc
 	objectPullJobs           chan gossip.StartObjectPullAction

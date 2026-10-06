@@ -68,7 +68,7 @@ func OpenState(path string, managed zone.ZonePath, trustedRoot ed25519.PublicKey
 		_ = boltStore.Close()
 		return nil, errors.New("trusted root public key does not match persisted state")
 	}
-	common, err := corestate.RestoreStore(candidate, revision, boltStore.CommitCommon)
+	common, err := corestate.RestoreStore(candidate, revision, boltStore.CommitCommon, boltStore.CommitCheckpoints)
 	if err != nil {
 		_ = boltStore.Close()
 		return nil, fmt.Errorf("restore Photon common state %s: %w", path, err)

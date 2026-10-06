@@ -31,15 +31,12 @@ func (d *Daemon) gossipSuppressions() map[string]bool {
 	if d.State == nil {
 		return nil
 	}
-	view := d.State.Common.ReadView()
-	if view.State == nil {
-		return nil
-	}
 	cfg := inspect.PeerLifecycleConfig{}
 	if d.Config != nil {
 		cfg = d.Config.PeerLifecycle
 	}
-	return peerLifecycleSuppressions(view.State.Network, view.Gossip, d.now(), cfg)
+	now := d.now()
+	return peerLifecycleSuppressions(d.State.Common.ReadPeerActivity(now), now, cfg)
 }
 
 func gossipDriverConfig(app *appConfig, verified *corestate.VerifiedState, logger *appLogger) corehost.GossipDriverConfig {

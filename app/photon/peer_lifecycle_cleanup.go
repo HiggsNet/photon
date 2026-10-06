@@ -42,14 +42,14 @@ func peerLifecycleExcludedPeers(checkpoint *corestate.GossipCheckpoint, now time
 	return out
 }
 
-func peerLifecycleSuppressions(network *zone.NetworkState, checkpoint *corestate.GossipCheckpoint, now time.Time, cfg inspect.PeerLifecycleConfig) map[string]bool {
+func peerLifecycleSuppressions(view corestate.PeerActivityView, now time.Time, cfg inspect.PeerLifecycleConfig) map[string]bool {
 	suppressed := make(map[string]bool)
-	for path := range collectAllRevokedZones(network, now) {
+	for path := range view.RevokedZones {
 		suppressed[path.String()] = true
 	}
-	if checkpoint != nil {
-		for peerID, peer := range checkpoint.Peers {
-			if peerLifecycleCleanupDue(peer, now, cfg) {
+	if len(view.Peers) > 0 {
+		for peerID, peer := range view.Peers {
+			if peerLifecycleCleanupDue(corestate.PeerCheckpoint{LastSyncUnix: peer.LastSyncUnix, ObservedLastSeenUnix: peer.ObservedLastSeenUnix}, now, cfg) {
 				suppressed[peerID] = true
 			}
 		}

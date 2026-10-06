@@ -300,3 +300,24 @@ func TestGossipDriverExecuteGossipActionsMemoryAdaptersAreEquivalent(t *testing.
 		t.Fatalf("failure outcome = %#v", outcomes[0])
 	}
 }
+
+func (store *memoryGossipStateStore) PeerCheckpoints(ids []string) map[string]corestate.PeerCheckpoint {
+	view := store.ReadView()
+	out := make(map[string]corestate.PeerCheckpoint)
+	if view.Gossip != nil {
+		for _, id := range ids {
+			if p, ok := view.Gossip.Peers[id]; ok {
+				out[id] = p
+			}
+		}
+	}
+	return out
+}
+
+func (store *memoryGossipStateStore) ReadCatalog() *corestate.CatalogView {
+	v := store.ReadView()
+	if v.State == nil || v.State.Network == nil {
+		return nil
+	}
+	return &corestate.CatalogView{ManagedZone: v.State.ManagedZone, Digests: corestate.ZoneDigests(v.State.Network)}
+}

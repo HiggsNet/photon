@@ -59,7 +59,7 @@ func ImportState(ctx context.Context, config *Config, bundle *share.JoinBundle, 
 	}
 	// Validate the full chain, private key authorization and root pin before
 	// creating any destination file. Persistence uses the common schema only.
-	common := corestate.NewStore(nil, nil)
+	common := corestate.NewStore(nil, nil, nil)
 	defer common.Close()
 	result, err := common.InstallIdentity(ctx, corestate.IdentityInstall{
 		ManagedZone: bundle.Zone, Network: bundle.Network,

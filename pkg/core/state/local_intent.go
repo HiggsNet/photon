@@ -186,7 +186,7 @@ func (store *Store) PreviewLocalIntent(intent LocalIntent, now time.Time) (Local
 	checkpoint := cloneGossipCheckpoint(store.gossip)
 	store.mu.RUnlock()
 
-	preview := NewStoreWithCheckpoint(candidate, checkpoint, nil)
+	preview := NewStoreWithCheckpoint(candidate, checkpoint, nil, nil)
 	out, err := preview.ApplyLocalIntent(context.Background(), intent, now)
 	if err != nil {
 		return LocalIntentResult{}, err

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
-	"sort"
+	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
@@ -38,121 +38,95 @@ type PeerCheckpointPatch struct {
 	ClearRejected      []zone.ZonePath
 }
 
-// UpdatePeerCheckpoint commits a loss-tolerant checkpoint transaction. The verified
-// revision and Network pointer are unaffected; persistence callback still observes the
-// same commit-before-publish ordering as verified transactions.
+// CheckpointCommitFunc persists only affected peers before publishing them in memory.
+// A nil peer deletes its checkpoint. Values are detached; no verified data is supplied.
+type CheckpointCommitFunc func(context.Context, map[string]*PeerCheckpoint, VerifiedRevision) error
+
 func (store *Store) UpdatePeerCheckpoint(ctx context.Context, peerID string, patch PeerCheckpointPatch) (CommitResult, error) {
 	return store.UpdatePeerCheckpoints(ctx, map[string]PeerCheckpointPatch{peerID: patch})
 }
 
-// UpdatePeerCheckpoints commits one atomic loss-tolerant checkpoint batch.
-// Peer patches are applied in stable ID order and never advance the verified
-// revision.
+// UpdatePeerCheckpoints applies only specified fields, copying only affected peers.
 func (store *Store) UpdatePeerCheckpoints(ctx context.Context, patches map[string]PeerCheckpointPatch) (CommitResult, error) {
-	var out CommitResult
+	return store.changePeerCheckpoints(ctx, patches, nil)
+}
+
+func (store *Store) DeletePeerCheckpoints(ctx context.Context, peerIDs []string) (CommitResult, error) {
+	return store.changePeerCheckpoints(ctx, nil, peerIDs)
+}
+
+func (store *Store) changePeerCheckpoints(ctx context.Context, patches map[string]PeerCheckpointPatch, deleted []string) (CommitResult, error) {
 	if store == nil {
-		return out, ErrVerifiedStoreClosed
-	}
-	if len(patches) == 0 {
-		return out, nil
+		return CommitResult{}, ErrVerifiedStoreClosed
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	store.writeMu.Lock()
 	defer store.writeMu.Unlock()
-
 	store.mu.RLock()
 	if store.closed {
 		store.mu.RUnlock()
-		return out, ErrVerifiedStoreClosed
+		return CommitResult{}, ErrVerifiedStoreClosed
 	}
-	baseRevision := store.revision
-	verified := cloneVerifiedState(store.state)
-	candidate := cloneGossipCheckpoint(store.gossip)
+	revision := store.revision
+	// writeMu excludes all writers until publication. Public reads are detached.
+	peers := store.gossip.Peers
 	store.mu.RUnlock()
-	peerIDs := make([]string, 0, len(patches))
-	for peerID := range patches {
+	updates := make(map[string]*PeerCheckpoint)
+	for peerID, patch := range patches {
 		if peerID == "" {
 			return CommitResult{}, errors.New("peer id is empty")
 		}
-		peerIDs = append(peerIDs, peerID)
-	}
-	sort.Strings(peerIDs)
-	changed := false
-	for _, peerID := range peerIDs {
-		before, existed := candidate.Peers[peerID]
+		before, existed := peers[peerID]
 		after := clonePeerCheckpoint(before)
-		applyPeerCheckpointPatch(&after, patches[peerID])
+		applyPeerCheckpointPatch(&after, patch)
 		if (!existed && peerCheckpointEmpty(after)) || (existed && reflect.DeepEqual(before, after)) {
 			continue
 		}
-		candidate.Peers[peerID] = after
-		changed = true
+		updates[peerID] = &after
 	}
-	if !changed {
-		out.Changes.VerifiedRevision = baseRevision
-		return out, nil
-	}
-	changes := ChangeSet{VerifiedRevision: baseRevision, GossipCheckpointChanged: true}
-	if store.commit != nil {
-		if err := store.commit(ctx, cloneCommitCandidate(verified, candidate), changes); err != nil {
-			return CommitResult{}, err
-		}
-	}
-	store.mu.Lock()
-	store.gossip = candidate
-	store.mu.Unlock()
-	return CommitResult{Committed: true, Changes: changes}, nil
-}
-
-// DeletePeerCheckpoints removes loss-tolerant restart hints without changing
-// verified state or its revision.
-func (store *Store) DeletePeerCheckpoints(ctx context.Context, peerIDs []string) (CommitResult, error) {
-	var out CommitResult
-	if store == nil {
-		return out, ErrVerifiedStoreClosed
-	}
-	if len(peerIDs) == 0 {
-		return out, nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	store.writeMu.Lock()
-	defer store.writeMu.Unlock()
-	store.mu.RLock()
-	if store.closed {
-		store.mu.RUnlock()
-		return out, ErrVerifiedStoreClosed
-	}
-	baseRevision := store.revision
-	verified := cloneVerifiedState(store.state)
-	candidate := cloneGossipCheckpoint(store.gossip)
-	store.mu.RUnlock()
-	changed := false
-	for _, peerID := range peerIDs {
+	for _, peerID := range deleted {
 		if peerID == "" {
 			return CommitResult{}, errors.New("peer id is empty")
 		}
-		if _, ok := candidate.Peers[peerID]; ok {
-			delete(candidate.Peers, peerID)
-			changed = true
+		if _, exists := peers[peerID]; exists {
+			updates[peerID] = nil
 		}
 	}
-	if !changed {
-		out.Changes.VerifiedRevision = baseRevision
-		return out, nil
+	changes := ChangeSet{VerifiedRevision: revision}
+	if len(updates) == 0 {
+		return CommitResult{Changes: changes}, nil
 	}
-	changes := ChangeSet{VerifiedRevision: baseRevision, GossipCheckpointChanged: true}
-	if store.commit != nil {
-		if err := store.commit(ctx, cloneCommitCandidate(verified, candidate), changes); err != nil {
+	if err := ctx.Err(); err != nil {
+		return CommitResult{}, err
+	}
+	if store.commitCheckpoints != nil {
+		detached := make(map[string]*PeerCheckpoint, len(updates))
+		for id, peer := range updates {
+			if peer == nil {
+				detached[id] = nil
+			} else {
+				value := clonePeerCheckpoint(*peer)
+				detached[id] = &value
+			}
+		}
+		if err := store.commitCheckpoints(ctx, detached, revision); err != nil {
 			return CommitResult{}, err
 		}
+	} else if store.commit != nil {
+		return CommitResult{}, errors.New("checkpoint persistence callback is missing")
 	}
 	store.mu.Lock()
-	store.gossip = candidate
+	for id, peer := range updates {
+		if peer == nil {
+			delete(store.gossip.Peers, id)
+		} else {
+			store.gossip.Peers[id] = *peer
+		}
+	}
 	store.mu.Unlock()
+	changes.GossipCheckpointChanged = true
 	return CommitResult{Committed: true, Changes: changes}, nil
 }
 
@@ -231,4 +205,44 @@ func peerCheckpointEmpty(metadata PeerCheckpoint) bool {
 		metadata.RejectedObjects = nil
 	}
 	return reflect.DeepEqual(metadata, PeerCheckpoint{})
+}
+
+// RevokedPeerCheckpoints returns only revocation results and affected hints.
+// The application decides cleanup policy; no network records or keys escape.
+func (store *Store) RevokedPeerCheckpoints(now time.Time) (map[zone.ZonePath]bool, map[string]PeerCheckpoint) {
+	if store == nil {
+		return nil, nil
+	}
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	if store.state == nil {
+		return nil, nil
+	}
+	revoked := store.state.Network.RevokedZones(now)
+	var peers map[string]PeerCheckpoint
+	for id, peer := range store.gossip.Peers {
+		if revoked[zone.ZonePath(id)] {
+			if peers == nil {
+				peers = make(map[string]PeerCheckpoint)
+			}
+			peers[id] = clonePeerCheckpoint(peer)
+		}
+	}
+	return revoked, peers
+}
+
+// PeerCheckpoints returns detached hints for only the requested peers.
+func (store *Store) PeerCheckpoints(ids []string) map[string]PeerCheckpoint {
+	out := make(map[string]PeerCheckpoint, len(ids))
+	if store == nil {
+		return out
+	}
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	for _, id := range ids {
+		if peer, ok := store.gossip.Peers[id]; ok {
+			out[id] = clonePeerCheckpoint(peer)
+		}
+	}
+	return out
 }

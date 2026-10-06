@@ -64,7 +64,7 @@ func TestStoreApplyRemoteBatchRefreshesAuthorityAndRetainsLocalContents(t *testi
 		ManagedZone:        "node-a.catofes.",
 		Network:            initial,
 		IdentityPrivateKey: identityPrivate,
-	}, nil)
+	}, nil, nil)
 	result, err := store.ApplyRemoteBatch(context.Background(), "peer-a", []RemoteSnapshot{{
 		Snapshot:     snapshot,
 		ExpectedRoot: ZoneRoot(ZoneStateFromSnapshot(snapshot)),
@@ -118,7 +118,7 @@ func TestStoreApplyRemoteBatchRejectsManagedAuthorityRefreshForDifferentKey(t *t
 		t.Fatalf("Snapshot(parent): %v", err)
 	}
 
-	store := NewStore(&VerifiedState{ManagedZone: "node-a.catofes.", Network: initial, IdentityPrivateKey: identityPrivate}, nil)
+	store := NewStore(&VerifiedState{ManagedZone: "node-a.catofes.", Network: initial, IdentityPrivateKey: identityPrivate}, nil, nil)
 	result, err := store.ApplyRemoteBatch(context.Background(), "peer-a", []RemoteSnapshot{{
 		Snapshot:     snapshot,
 		ExpectedRoot: ZoneRoot(ZoneStateFromSnapshot(snapshot)),
