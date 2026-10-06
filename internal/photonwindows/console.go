@@ -27,13 +27,14 @@ func RunConsole(ctx context.Context, config *Config, logger *slog.Logger) error 
 // Daemon owns one run of the Windows composition. Rebind is serialized with
 // gossip event processing; it does not recreate state or the protocol driver.
 type Daemon struct {
-	config      *Config
-	logger      *slog.Logger
-	started     atomic.Bool
-	rebind      chan rebindRequest
-	plans       chan chan GatewayPlan
-	done        chan struct{}
-	planGateway func(context.Context, *Config, corestate.View, time.Time) GatewayPlan
+	config        *Config
+	logger        *slog.Logger
+	started       atomic.Bool
+	rebind        chan rebindRequest
+	plans         chan chan GatewayPlan
+	done          chan struct{}
+	planGateway   func(context.Context, *Config, corestate.View, time.Time) GatewayPlan
+	deviceFactory packetDeviceFactory
 }
 
 type rebindRequest struct {
@@ -42,7 +43,7 @@ type rebindRequest struct {
 }
 
 func NewDaemon(config *Config, logger *slog.Logger) *Daemon {
-	return &Daemon{config: config, logger: logger, rebind: make(chan rebindRequest), plans: make(chan chan GatewayPlan), done: make(chan struct{}), planGateway: PlanGateway}
+	return &Daemon{config: config, logger: logger, rebind: make(chan rebindRequest), plans: make(chan chan GatewayPlan), done: make(chan struct{}), planGateway: PlanGateway, deviceFactory: openConfiguredPacketDevice}
 }
 
 // GatewayPlan returns a detached, freshly revalidated connection plan. It does
@@ -231,6 +232,12 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	defer data.close()
 	tunnel := &gatewayTunnel{socket: packet, data: data}
 	defer tunnel.stop()
+	leaf := newLeafRuntime(d.deviceFactory)
+	defer func() { err = errors.Join(err, leaf.close()) }()
+	var leafID [8]byte
+	var nextLeafIntent time.Time
+	var leafRejected string
+	var lastReady bool
 	initialBackoff, maxBackoff := config.Reconnect.InitialBackoff, config.Reconnect.MaxBackoff
 	if initialBackoff <= 0 {
 		initialBackoff = time.Second
@@ -255,10 +262,53 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		return RevalidateGatewayPlan(config, view, lastPlan, now)
 	}
 	stopTunnel := func(reason string) {
+		if err := leaf.stop(); err != nil {
+			logger.Warn("leaf_cleanup_failed", "error", err)
+		}
 		tunnel.stop()
 		nextTunnel = time.Now().Add(backoff)
 		backoff = min(backoff*2, maxBackoff)
 		logger.Info("tunnel_stopped", "reason", reason, "retry_at", nextTunnel, "tunnel_ready", false)
+	}
+	reconcileLeaf := func() {
+		now := time.Now()
+		if tunnel.phase != 3 {
+			return
+		}
+		var intentErr error
+		if leafID == [8]byte{} || !now.Before(nextLeafIntent) {
+			nextLeafIntent = now.Add(5 * time.Second)
+			before := state.Store().VerifiedRevision()
+			intentErr = state.EnsureLocalLeafRoutes(ctx, config, now)
+			if intentErr == nil {
+				leafID, intentErr = state.EnsureLocalBabelIdentity(ctx, config, now)
+			}
+			if before != state.Store().VerifiedRevision() {
+				requestPlan()
+			}
+		}
+		if intentErr == nil {
+			intentErr = leaf.reconcile(ctx, config, state.Store().ReadView(), lastPlan, tunnel, leafID, now)
+		} else {
+			intentErr = errors.Join(intentErr, leaf.stop())
+		}
+		rejected := ""
+		if intentErr != nil {
+			rejected = intentErr.Error()
+		}
+		if rejected != leafRejected {
+			leafRejected = rejected
+			if rejected != "" {
+				logger.Info("leaf_unavailable", "reason", rejected, "tunnel_ready", false)
+			}
+		}
+	}
+	observeReady := func() {
+		ready := leaf.ready(config, state.Store().ReadView(), lastPlan, time.Now())
+		if ready != lastReady {
+			lastReady = ready
+			logger.Info("tunnel_ready_changed", "tunnel_ready", ready)
+		}
 	}
 	attemptTunnel := func() {
 		if tunnel.phase != 0 || time.Now().Before(nextTunnel) {
@@ -298,6 +348,9 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		stopCancel := context.AfterFunc(ctx, cancelRebind)
 		defer stopCancel()
 		defer cancelRebind()
+		if err := leaf.stop(); err != nil {
+			logger.Warn("leaf_cleanup_failed", "error", err)
+		}
 		tunnel.stop() // deny old packets before replacing the shared endpoint
 		err := packet.Rebind(rebindCtx)
 		lastPlan = GatewayPlan{}
@@ -346,20 +399,43 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			} else if before != 3 && tunnel.phase == 3 {
 				backoff = initialBackoff
 				logger.Info("tunnel_authenticated", "gateway", tunnel.plan.Selected.Zone, "tunnel_ready", false, "child_installed", true)
+				reconcileLeaf()
 			}
 		case packet := <-packet.espPackets:
 			data.submitInbound(packet.generation, freshPlan(), packet.peer, packet.packet)
 		case completion := <-data.completed:
-			// B4 must supply its current Router ID/origin/source-prefix verdict
-			// before any decrypted traffic can reach Wintun or an IP stack.
 			plan := freshPlan()
 			tunnel.observeData(completion, plan, time.Now())
-			data.accept(completion, plan, nil)
+			if leaf.pipeline != nil {
+				if _, err := leaf.pipeline.Accept(config, state.Store().ReadView(), lastPlan, time.Now(), completion); err != nil {
+					logger.Warn("leaf_packet_failed", "error", errors.Join(err, leaf.stop()))
+				}
+			} else {
+				data.accept(completion, plan, nil)
+			}
+			observeReady()
+		case result := <-leaf.opened:
+			if err := leaf.complete(ctx, config, state.Store().ReadView(), lastPlan, tunnel, leafID, time.Now(), result); err != nil {
+				logger.Warn("leaf_device_failed", "error", err)
+			}
+		case devicePacket := <-leaf.packets:
+			if devicePacket.err != nil {
+				logger.Warn("leaf_read_failed", "error", errors.Join(devicePacket.err, leaf.stop()))
+				continue
+			}
+			if leaf.pipeline != nil && devicePacket.generation == tunnel.generation {
+				leaf.pipeline.SubmitPacket(config, state.Store().ReadView(), lastPlan, time.Now(), devicePacket.packet)
+			}
 		case <-tunnelTicker.C:
 			if err := tunnel.tick(freshPlan(), time.Now()); err != nil {
 				stopTunnel(err.Error())
 			}
 			attemptTunnel()
+			reconcileLeaf()
+			if leaf.pipeline != nil {
+				leaf.pipeline.Tick(config, state.Store().ReadView(), lastPlan, time.Now())
+			}
+			observeReady()
 		case result := <-plans:
 			if result.generation != generation || result.plan.Revision != state.Store().VerifiedRevision() {
 				continue
@@ -427,6 +503,8 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				}
 				observeGateways()
 				requestPlan()
+				reconcileLeaf()
+				observeReady()
 			}
 		}
 	}

@@ -20,8 +20,8 @@ type packetDevice interface{ Write([]byte) error }
 // caller supplies an immediately current view at each serial event, including
 // crypto completion, and pins actual local addresses and both link-local ends.
 // Rekey retains this owner; rebind, gateway replacement or revoked attachment
-// permanently invalidates it. Production console activation still requires a
-// local address intent and publication of the gateway's real full Babel ID.
+// permanently invalidates it. The daemon supplies only current explicit host
+// addresses; remote routes require publication of their real full Babel IDs.
 type gatewayBabelPipeline struct {
 	tunnel      *gatewayTunnel
 	device      packetDevice
