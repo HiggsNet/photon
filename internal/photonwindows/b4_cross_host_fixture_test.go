@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,6 +35,10 @@ func TestServeWindowsB4Gateway(t *testing.T) {
 	}
 	if _, err := os.Stat("/.dockerenv"); err != nil {
 		t.Fatal("B4 gateway fixture requires a disposable container")
+	}
+	sadrMode := os.Getenv("PHOTON_WINDOWS_B4_SADR")
+	if sadrMode != "" && sadrMode != "0" && sadrMode != "1" {
+		t.Fatal("PHOTON_WINDOWS_B4_SADR must be 0 or 1")
 	}
 	ctx := t.Context()
 	command := func(name string, args ...string) string {
@@ -82,20 +87,28 @@ func TestServeWindowsB4Gateway(t *testing.T) {
 	} {
 		command("ip", args...)
 	}
+	ipv6Table, ipv6Channel, ipv6Options := "", "ipv6", ""
+	ipv6Route := gateway6 + "/128"
+	if sadrMode == "1" {
+		ipv6Table = "ipv6 sadr table sadr6;"
+		ipv6Channel, ipv6Options = "ipv6 sadr", "table sadr6;"
+		ipv6Route += " from " + local6 + "/128"
+	}
 	birdConfig := fmt.Sprintf(`log stderr all;
 router id 198.18.253.1;
+%s
 protocol device { scan time 1; }
 protocol static local4 { ipv4; route %s/32 blackhole; }
-protocol static local6 { ipv6; route %s/128 blackhole; }
+protocol static local6 { %s { %s }; route %s blackhole; }
 protocol kernel kernel4 { ipv4 { import none; export where source = RTS_BABEL; }; }
-protocol kernel kernel6 { ipv6 { import none; export where source = RTS_BABEL; }; }
+protocol kernel kernel6 { %s { %s import none; export where source = RTS_BABEL; }; }
 protocol babel %s {
  randomize router id yes;
  ipv4 { import all; export all; };
- ipv6 { import all; export all; };
+ %s { %s import all; export all; };
  interface "%s" { type wired; hello interval 1 s; update interval 4 s; rtt cost 0; };
 }
-`, gateway4, gateway6, protocol, iface)
+`, ipv6Table, gateway4, ipv6Channel, ipv6Options, ipv6Route, ipv6Channel, ipv6Options, protocol, ipv6Channel, ipv6Options, iface)
 	if err := os.WriteFile(filepath.Join(dir, "bird.conf"), []byte(birdConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +127,9 @@ protocol babel %s {
 	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
 		output, err := exec.CommandContext(ctx, os.Getenv("BIRDC_BIN"), "-s", filepath.Join(dir, "bird.ctl"), "show", "babel", "entries", protocol).CombinedOutput()
 		if err == nil {
-			fullID, err = bird.LocalBabelIdentity(string(output), protocol, []netip.Prefix{netip.MustParsePrefix(gateway4 + "/32"), netip.MustParsePrefix(gateway6 + "/128")})
+			// Ordinary IPv4 remains an exact local witness for this instance,
+			// including when its IPv6 entries use SADR's distinct CLI format.
+			fullID, err = bird.LocalBabelIdentity(string(output), protocol, []netip.Prefix{netip.MustParsePrefix(gateway4 + "/32")})
 			if err == nil && fullID != "" {
 				break
 			}
@@ -123,6 +138,30 @@ protocol babel %s {
 	}
 	if raw, err := hex.DecodeString(fullID); err != nil || len(raw) != 8 {
 		t.Fatal("no proven local full BIRD identity")
+	}
+
+	if sadrMode == "1" {
+		// Check real table and export views. A destination-only alternative
+		// could otherwise hide a lost Source during the native UDP echo test.
+		for _, query := range [][]string{{"show", "route", "table", "sadr6", "all"}, {"show", "route", "table", "sadr6", "export", protocol, "all"}} {
+			args := append([]string{"-s", filepath.Join(dir, "bird.ctl")}, query...)
+			output := command(os.Getenv("BIRDC_BIN"), args...)
+			found := false
+			for line := range strings.SplitSeq(output, "\n") {
+				fields := strings.Fields(line)
+				if len(fields) == 0 || fields[0] != gateway6+"/128" {
+					continue
+				}
+				if len(fields) < 3 || fields[1] != "from" || fields[2] != local6+"/128" {
+					t.Fatalf("SADR destination has unexpected source or destination-only fallback: %s", line)
+				}
+				found = true
+			}
+			if !found {
+				t.Fatalf("missing exact SADR route in %v: %s", query, output)
+			}
+			t.Logf("SADR public evidence (%s):\n%s", strings.Join(query, " "), output)
+		}
 	}
 
 	network, _, identity := signedNetwork(t)

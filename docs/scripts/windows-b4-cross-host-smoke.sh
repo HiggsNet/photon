@@ -6,6 +6,8 @@ cd "$(dirname "$0")/../.."
 : "${PHOTON_LINUX_IP:?Set the Linux LAN address reachable from Windows}"
 : "${PHOTON_BIRD_NIX_PACKAGE:?Set the local BIRD package under /nix/store}"
 [[ $PHOTON_LINUX_IP =~ ^[0-9.]+$ && $PHOTON_BIRD_NIX_PACKAGE == /nix/store/* && -x $PHOTON_BIRD_NIX_PACKAGE/bin/bird ]] || exit 2
+sadr_mode=${PHOTON_WINDOWS_B4_SADR:-0}
+[[ $sadr_mode == 0 || $sadr_mode == 1 ]] || { echo "PHOTON_WINDOWS_B4_SADR must be 0 or 1" >&2; exit 2; }
 ike_port=${PHOTON_WINDOWS_TUNNEL_IKE_PORT:-15000}
 natt_port=${PHOTON_WINDOWS_TUNNEL_NATT_PORT:-14500}
 [[ $ike_port =~ ^[0-9]+$ && $natt_port =~ ^[0-9]+$ && $ike_port -gt 1024 && $ike_port -lt 65536 && $natt_port -gt 1024 && $natt_port -lt 65536 && $ike_port != "$natt_port" ]] || exit 2
@@ -63,6 +65,7 @@ container_started=1
 docker run -d --name "$name" --network bridge --cap-add NET_ADMIN \
     -p "$PHOTON_LINUX_IP:$ike_port:500/udp" -p "$PHOTON_LINUX_IP:$natt_port:4500/udp" \
     --mount type=bind,src=/nix/store,dst=/nix/store,readonly -v "$work:/smoke:ro" \
+    -e "PHOTON_WINDOWS_B4_SADR=$sadr_mode" \
     -e "BIRD_BIN=$PHOTON_BIRD_NIX_PACKAGE/bin/bird" -e "BIRDC_BIN=$PHOTON_BIRD_NIX_PACKAGE/bin/birdc" \
     -e "PHOTON_CHARON_BINARY=$charon" -e "PHOTON_WINDOWS_TUNNEL_GATEWAY=$PHOTON_LINUX_IP" \
     -e "PHOTON_WINDOWS_TUNNEL_IKE_PORT=$ike_port" -e "PHOTON_WINDOWS_TUNNEL_NATT_PORT=$natt_port" \
