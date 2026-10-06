@@ -79,7 +79,7 @@ photon-windows-cross-build:
 	@mkdir -p $(BUILD_DIR)/windows-amd64
 	$(WINDOWS_AMD64_GO_ENV) $(GO) build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/windows-amd64/$(PHOTON_WINDOWS_BINARY_NAME) $(PHOTON_WINDOWS_MAIN_PACKAGE)
 	$(WINDOWS_AMD64_GO_ENV) $(GO) build ./internal/photonwindows ./internal/photonclient/ike ./internal/photonclient/esp ./pkg/core/host ./pkg/core/state ./pkg/core/zone ./pkg/core/gossip ./pkg/crypto ./pkg/routing ./pkg/transport/ipsec
-	@cp -R third_party $(BUILD_DIR)/windows-amd64/
+	@cp -Rf third_party $(BUILD_DIR)/windows-amd64/
 	@echo "Built: $(BUILD_DIR)/windows-amd64/$(PHOTON_WINDOWS_BINARY_NAME)"
 
 photon-windows-test:
