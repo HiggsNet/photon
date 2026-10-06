@@ -313,3 +313,11 @@ func (store *memoryGossipStateStore) PeerCheckpoints(ids []string) map[string]co
 	}
 	return out
 }
+
+func (store *memoryGossipStateStore) ReadCatalog() *corestate.CatalogView {
+	v := store.ReadView()
+	if v.State == nil || v.State.Network == nil {
+		return nil
+	}
+	return &corestate.CatalogView{ManagedZone: v.State.ManagedZone, Digests: corestate.ZoneDigests(v.State.Network)}
+}

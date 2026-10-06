@@ -493,3 +493,11 @@ func (store failingDiscoveryWriter) PeerCheckpoints(ids []string) map[string]cor
 	}
 	return out
 }
+
+func (store failingDiscoveryWriter) ReadCatalog() *corestate.CatalogView {
+	v := store.ReadView()
+	if v.State == nil || v.State.Network == nil {
+		return nil
+	}
+	return &corestate.CatalogView{ManagedZone: v.State.ManagedZone, Digests: corestate.ZoneDigests(v.State.Network)}
+}

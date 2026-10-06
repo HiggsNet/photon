@@ -40,11 +40,23 @@ master 保留旧版；候选版从独立 release 分支发布，不更新 Docker
 
 `ReadView` 之外约 2.14 s 并非全部业务计算，后台 GC 就占 0.76 s。继续减少复制可能同时降低 GC，但本次 CPU profile 不能精确断言每份垃圾来自哪条分配路径。现场出现的 111ms checkpoint 墙钟耗时也不能直接算作 CPU；若继续研究提交延迟，应另外统计事务/fsync 耗时。
 
-下一轮建议按以下边界逐项验证，不并入本次 RC.4 准备提交：
+本轮随后补充了窄读取和单段哈希分配优化，范围如下：
 
-1. `gossipStateView` 只读取同一 revision 下的 managed zone 与 zone digests，不要先构造完整 `ReadView`。catalog 的哈希计算另占 0.28 s，可先减少同一事件内的重复计算；若以后缓存单个 ZoneRoot，仅使变更 zone 失效，并按当前时间重新过滤撤销。
-2. `gossipSuppressions` 仅需要撤销结果及 peer 的 LastSync/ObservedLastSeen 时间。由 Store 提供这些字段，生命周期策略仍留在 daemon；不搬迁策略 owner，也不复制记录历史。
-3. 将单 peer 来源地址验证与全局 discovery 分开取数。保留父链、授权与撤销检查，避免每次收到包都构造整个网络和全部 checkpoint。跨事件缓存必须覆盖授权到期、未来撤销、端点 TTL 和 checkpoint 更新，不能只看 verified revision。
+1. 已完成：`gossipStateView` 通过 `ReadCatalog` 在同一读锁内取得 managed zone 与 zone digests，不再构造完整 `ReadView`。catalog 的哈希计算另占 0.28 s，可先减少同一事件内的重复计算；若以后缓存单个 ZoneRoot，仅使变更 zone 失效，并按当前时间重新过滤撤销。
+2. 已完成：`gossipSuppressions` 通过 `ReadPeerActivity(now)` 读取撤销结果及 peer 的 LastSync/ObservedLastSeen 时间。生命周期策略仍留在 daemon，每次重新判断未来撤销及 checkpoint 变化，不缓存超时结果。
+3. 暂不扩大范围：单 peer 来源地址验证与全局 discovery 仍保持原路径，今后可考虑分开取数。保留父链、授权与撤销检查，避免每次收到包都构造整个网络和全部 checkpoint。跨事件缓存必须覆盖授权到期、未来撤销、端点 TTL 和 checkpoint 更新，不能只看 verified revision。
+
+临时分配 profile 确认：旧目录查询主要分配在记录/字节切片深复制；移除复制后主要是哈希状态与编码 buffer。仅对 `Hash` 的单段输入使用库的 `blake2b.Sum256`，不引入缓存或对象池；测试覆盖空输入、块边界、单/多段等价和结果隔离，哈希及签名格式不变。
+
+同一合成网络 fixture 的三次本地基准：
+
+| 操作 | 改动前每次分配 | 本轮完成后每次分配 |
+| --- | ---: | ---: |
+| 目录读取和摘要计算 | 2,048,141 B | 454,298 B |
+| 生命周期输入读取 | 1,485,906 B | 3,424 B |
+| 单段哈希 | 416 B / 2 allocs | 32 B / 1 alloc |
+
+目录窄查询约 0.39–0.42 ms；生命周期窄查询约 7–8 us。基准存在运行噪声，分配量比单次耗时稳定。上方 2.90 s 现场 CPU 结果来自前一阶段，不包含本轮补充；本轮没有再次部署 les，不能据此宣称新的线上 CPU 降幅。discovery 全量读取和多段摘要编码仍有开销，本轮到此收尾。
 
 已验证完整 Go 测试、state/host/daemon 的 race 检查、go vet 和 Windows 公共依赖交叉编译；RC.4 准备分支的 `make smoke-all` 与 `make install-script-check` 也已通过；迁移、写盘失败回滚、未变 peer/verified 数据保留、未来撤销和查询隔离有测试覆盖。RC.4 的发布检查仍需按下文执行，长时间运行与特权数据面验证不由 CPU 采样替代。
 

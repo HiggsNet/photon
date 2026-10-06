@@ -17,6 +17,7 @@ import (
 // maintain a second gossip projection.
 type GossipStateStore interface {
 	ReadView() corestate.View
+	ReadCatalog() *corestate.CatalogView
 	PeerCheckpoints([]string) map[string]corestate.PeerCheckpoint
 	ApplyRemoteBatch(context.Context, string, []corestate.RemoteSnapshot, time.Time) (corestate.RemoteBatchResult, error)
 	UpdatePeerCheckpoints(context.Context, map[string]corestate.PeerCheckpointPatch) (corestate.CommitResult, error)
@@ -90,14 +91,14 @@ func (driver *GossipDriver) gossipStateView() GossipStateView {
 	if driver == nil || driver.gossipState == nil {
 		return GossipStateView{}
 	}
-	view := driver.gossipState.ReadView()
-	if view.State == nil || view.State.Network == nil {
+	view := driver.gossipState.ReadCatalog()
+	if view == nil {
 		return GossipStateView{}
 	}
 	return GossipStateView{
 		Loaded:       true,
-		ManagedZone:  view.State.ManagedZone,
-		Digests:      corestate.ZoneDigests(view.State.Network),
+		ManagedZone:  view.ManagedZone,
+		Digests:      view.Digests,
 		SenderPeerID: driver.GossipConfig().PeerID,
 	}
 }
