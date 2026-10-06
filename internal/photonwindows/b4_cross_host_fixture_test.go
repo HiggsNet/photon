@@ -73,6 +73,7 @@ func TestServeWindowsB4Gateway(t *testing.T) {
 	}
 	for _, args := range [][]string{
 		{"link", "add", iface, "type", "xfrm", "if_id", "524250"},
+		{"link", "set", iface, "multicast", "on"},
 		{"link", "set", iface, "up"},
 		{"-6", "addr", "flush", "dev", iface, "scope", "link"},
 		{"-6", "addr", "add", gatewayLL.String() + "/64", "dev", iface, "nodad"},
@@ -138,7 +139,9 @@ protocol babel %s {
 	}
 	network.Zones["catofes."].Delegations[gatewayZone] = delegation
 	network.Zones[gatewayZone] = zone.NewZoneState(gatewayZone, &authority)
-	now := time.Now().Truncate(time.Second)
+	// VM clocks may differ by a few seconds. Issue the disposable fixture just
+	// before now so strict production NotBefore checks do not delay startup.
+	now := time.Now().Add(-15 * time.Second).Truncate(time.Second)
 	put := func(path zone.ZonePath, key, kind string, value any) {
 		t.Helper()
 		encoded, err := json.Marshal(value)

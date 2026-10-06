@@ -76,7 +76,7 @@ docker run -d --name "$name" --network bridge --cap-add NET_ADMIN \
             if [ -S /tmp/ike-auth.vici ]; then break; fi
             sleep 0.1
         done
-        PHOTON_WINDOWS_B4_FIXTURE=/tmp/b4 /smoke/b4.test -test.run "^TestServeWindowsB4Gateway$" -test.v -test.count=1 -test.timeout=300s
+        PHOTON_WINDOWS_B4_FIXTURE=/tmp/b4 /smoke/b4.test -test.run "^TestServeWindowsB4Gateway$" -test.v -test.count=1 -test.timeout=420s
     ' > "$work/container-id.txt"
 ready=0
 for ((attempt=0;attempt<150;attempt++)); do
