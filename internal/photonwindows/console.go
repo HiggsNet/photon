@@ -30,6 +30,11 @@ type Daemon struct {
 	config        *Config
 	logger        *slog.Logger
 	started       atomic.Bool
+	ready         chan struct{}
+	observations  chan chan Observation
+	lifecycle     sync.Mutex
+	runCancel     context.CancelFunc
+	runErr        error
 	rebind        chan rebindRequest
 	plans         chan chan GatewayPlan
 	done          chan struct{}
@@ -43,7 +48,7 @@ type rebindRequest struct {
 }
 
 func NewDaemon(config *Config, logger *slog.Logger) *Daemon {
-	return &Daemon{config: config, logger: logger, rebind: make(chan rebindRequest), plans: make(chan chan GatewayPlan), done: make(chan struct{}), planGateway: PlanGateway, deviceFactory: openConfiguredPacketDevice}
+	return &Daemon{config: config, logger: logger, ready: make(chan struct{}), observations: make(chan chan Observation), rebind: make(chan rebindRequest), plans: make(chan chan GatewayPlan), done: make(chan struct{}), planGateway: PlanGateway, deviceFactory: openConfiguredPacketDevice}
 }
 
 // GatewayPlan returns a detached, freshly revalidated connection plan. It does
@@ -92,10 +97,21 @@ func (d *Daemon) Rebind(ctx context.Context) error {
 }
 
 func (d *Daemon) Run(ctx context.Context) (err error) {
+	d.lifecycle.Lock()
 	if !d.started.CompareAndSwap(false, true) {
+		d.lifecycle.Unlock()
 		return errors.New("Windows daemon already started")
 	}
-	defer close(d.done)
+	ctx, runCancel := context.WithCancel(ctx)
+	d.runCancel = runCancel
+	d.lifecycle.Unlock()
+	defer func() {
+		runCancel()
+		d.lifecycle.Lock()
+		d.runErr = err
+		close(d.done)
+		d.lifecycle.Unlock()
+	}()
 	config, logger := d.config, d.logger
 	if config == nil {
 		return errors.New("Windows config is required")
@@ -388,6 +404,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	defer ticker.Stop()
 	tunnelTicker := time.NewTicker(250 * time.Millisecond)
 	defer tunnelTicker.Stop()
+	close(d.ready)
 	for {
 		select {
 		case <-ctx.Done():
@@ -396,6 +413,8 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			return err
 		case result := <-d.plans:
 			result <- RevalidateGatewayPlan(config, state.Store().ReadView(), lastPlan, time.Now())
+		case result := <-d.observations:
+			result <- observeRuntime(config, state.Store().ReadView(), lastPlan, time.Now(), packet, tunnel, leaf, driver)
 		case packet := <-packet.ikePackets:
 			before := tunnel.phase
 			if err := tunnel.handle(packet, freshPlan(), time.Now()); err != nil {

@@ -227,3 +227,9 @@ func (l *Leaf) Candidates(now time.Time, authorize func(sadr.Route) bool) []sadr
 	})
 	return out
 }
+
+// NeighborLive reports current bidirectional reachability without requiring a
+// learned route. The caller still owns tunnel and origin authorization.
+func (l *Leaf) NeighborLive(now time.Time) bool {
+	return l.neighbor.Cost(now) != MetricInfinity
+}
