@@ -107,7 +107,7 @@ func TestDaemonRouteMutationRejectsUsingCommittedActiveStateNotDisk(t *testing.T
 	if err != nil {
 		t.Fatalf("apply active route: %v", err)
 	}
-	activeDisk := corestate.NewStore(state, nil).ReadView().State
+	activeDisk := corestate.NewStore(state, nil, nil).ReadView().State
 	state, err = applyAuthoritativeVerifiedTestIntent(state, commonRouteIntent(routeMutationRequest{
 		Zone: managed, Prefix: "10.0.4.0/24", Active: false,
 	}), rt.Now().Add(time.Second))
@@ -244,7 +244,7 @@ func commonIPAMIntentForTest(t *testing.T, request ipamMutationRequest) corestat
 }
 
 func applyAuthoritativeVerifiedTestIntent(state *corestate.VerifiedState, intent corestate.LocalIntent, now time.Time) (*corestate.VerifiedState, error) {
-	store := corestate.NewStore(state, nil)
+	store := corestate.NewStore(state, nil, nil)
 	if _, err := store.ApplyLocalIntent(context.Background(), intent, now); err != nil {
 		return nil, err
 	}
@@ -258,7 +258,7 @@ func applyAuthoritativeTestIntentAs(state *corestate.VerifiedState, managedZone 
 		TrustedRootPublicKey: append([]byte(nil), state.Network.Zones[zone.RootZone].Authority.Keys[0].Key...),
 		RootPrivateKey:       append([]byte(nil), state.RootPrivateKey...),
 		IdentityPrivateKey:   append([]byte(nil), privateKey...),
-	}, nil, nil)
+	}, nil, nil, nil)
 	if _, err := store.ApplyLocalIntent(context.Background(), intent, now); err != nil {
 		return err
 	}
@@ -281,7 +281,7 @@ func replacePersistedCommonForTest(t *testing.T, rt *testApp, verified *corestat
 	if err != nil || !found {
 		t.Fatalf("LoadCommon = found %v err %v", found, err)
 	}
-	verified = corestate.NewStore(verified, nil).ReadView().State
+	verified = corestate.NewStore(verified, nil, nil).ReadView().State
 	verified.TrustedRootPublicKey = append([]byte(nil), candidate.Verified.TrustedRootPublicKey...)
 	if err := store.CommitCommon(context.Background(), &corestate.CommitCandidate{
 		Verified: verified,

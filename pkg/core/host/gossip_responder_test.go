@@ -14,7 +14,7 @@ func TestGossipDriverBuildsFetchAndObjectPullResponsesFromBoundStore(t *testing.
 	path := zone.ZonePath("peer.catofes.")
 	network := zone.NewNetworkState()
 	network.Zones[path] = zone.NewZoneState(path, &zone.ZoneAuthority{Zone: path, Epoch: 1, Threshold: 1})
-	store := corestate.NewStore(&corestate.VerifiedState{ManagedZone: "local.catofes.", Network: network}, nil)
+	store := corestate.NewStore(&corestate.VerifiedState{ManagedZone: "local.catofes.", Network: network}, nil, nil)
 	driver := NewGossipDriver(NewClock(func() time.Time { return now }), DefaultEventBuffer, store, GossipDriverConfig{PeerID: "local.catofes."})
 	defer driver.Stop()
 

@@ -122,7 +122,7 @@ func buildManagedAuthorityRefreshState(t *testing.T) (*corestate.VerifiedState, 
 
 func managedAuthorityGrantSnapshot(t *testing.T, network *zone.NetworkState, managed zone.ZonePath, parentPriv ed25519.PrivateKey, permissions ...zone.Permission) *corestate.ZoneSnapshot {
 	t.Helper()
-	store := corestate.NewStore(&corestate.VerifiedState{Network: network, ManagedZone: managed.Parent(), RootPrivateKey: parentPriv, IdentityPrivateKey: parentPriv}, nil)
+	store := corestate.NewStore(&corestate.VerifiedState{Network: network, ManagedZone: managed.Parent(), RootPrivateKey: parentPriv, IdentityPrivateKey: parentPriv}, nil, nil)
 	if _, err := store.ApplyLocalIntent(context.Background(), corestate.GrantDelegationIntent{Zone: managed, Permissions: permissions}, time.Unix(2000, 0)); err != nil {
 		t.Fatalf("GrantDelegation: %v", err)
 	}

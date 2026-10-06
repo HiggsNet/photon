@@ -59,7 +59,7 @@ func TestStoreApplyRemoteBatchRetainsSuccessRejectSuccess(t *testing.T) {
 	bad := &ZoneSnapshot{Zone: "evil.catofes.", Authority: snapshotV1.Authority}
 
 	commitSink := &memoryCommitSink{}
-	store := NewStore(&VerifiedState{ManagedZone: "node-a.catofes.", Network: initial}, commitSink.Commit)
+	store := NewStore(&VerifiedState{ManagedZone: "node-a.catofes.", Network: initial}, commitSink.Commit, commitSink.CommitCheckpoints)
 	result, err := store.ApplyRemoteBatch(context.Background(), "peer-a", []RemoteSnapshot{
 		{Snapshot: snapshotV1, ExpectedRoot: ZoneRoot(ZoneStateFromSnapshot(snapshotV1))},
 		{Snapshot: bad, ExpectedRoot: []byte("advertised-root")},
@@ -104,7 +104,7 @@ func TestStoreApplyRemoteBatchIdenticalSnapshotOnlyClearsRejectedCheckpoint(t *t
 		Peers: map[string]PeerCheckpoint{"peer-a": {RejectedObjects: map[zone.ZonePath]RejectedObject{
 			"catofes.": {RootHash: append([]byte(nil), root...), Reason: "previous transient rejection", UpdatedUnix: now.Add(-time.Minute).Unix(), UntilUnix: now.Add(time.Minute).Unix()},
 		}}},
-	}, sink.Commit)
+	}, sink.Commit, sink.CommitCheckpoints)
 
 	result, err := store.ApplyRemoteBatch(context.Background(), "peer-a", []RemoteSnapshot{{Snapshot: snapshot, ExpectedRoot: root}}, now)
 	if err != nil {
@@ -149,7 +149,7 @@ func TestStoreApplyRemoteBatchRejectsRootAuthorityReplacement(t *testing.T) {
 		Network:              network,
 		TrustedRootPublicKey: trustedRoot,
 		IdentityPrivateKey:   identityPrivate,
-	}, nil)
+	}, nil, nil)
 	result, err := store.ApplyRemoteBatch(context.Background(), "peer-a", []RemoteSnapshot{{
 		Snapshot: snapshot, ExpectedRoot: ZoneRoot(ZoneStateFromSnapshot(snapshot)),
 	}}, now)
@@ -180,7 +180,7 @@ func TestStorePersistenceFailureLeavesStateAndRevisionUnchanged(t *testing.T) {
 	}
 	wantErr := errors.New("disk unavailable")
 	commitSink := &memoryCommitSink{err: wantErr}
-	store := NewStore(&VerifiedState{Network: initial}, commitSink.Commit)
+	store := NewStore(&VerifiedState{Network: initial}, commitSink.Commit, commitSink.CommitCheckpoints)
 	_, err = store.ApplyRemoteBatch(context.Background(), "peer-a", []RemoteSnapshot{{Snapshot: snapshot}}, now)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("ApplyRemoteBatch error = %v, want %v", err, wantErr)
@@ -196,7 +196,7 @@ func TestStorePersistenceFailureLeavesStateAndRevisionUnchanged(t *testing.T) {
 
 func TestStoreDeletePeerCheckpointsDoesNotAdvanceVerifiedRevision(t *testing.T) {
 	sink := &memoryCommitSink{}
-	store := NewStore(&VerifiedState{}, sink.Commit)
+	store := NewStore(&VerifiedState{}, sink.Commit, sink.CommitCheckpoints)
 	if result, err := store.UpdatePeerCheckpoint(context.Background(), "peer-a", PeerCheckpointPatch{
 		FailureCount: PatchField[int]{Set: true, Value: 2},
 	}); err != nil || !result.Committed {
@@ -236,7 +236,7 @@ func TestStoreReadViewIsDetached(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	store := NewStore(&VerifiedState{Network: initial, TrustedRootPublicKey: ed25519.PublicKey("root")}, nil)
+	store := NewStore(&VerifiedState{Network: initial, TrustedRootPublicKey: ed25519.PublicKey("root")}, nil, nil)
 	if _, err := store.ApplyRemoteBatch(context.Background(), "peer-a", []RemoteSnapshot{{Snapshot: snapshot}}, now); err != nil {
 		t.Fatalf("ApplyRemoteBatch: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestRestoreStorePreservesRevisionAndDetachesCandidate(t *testing.T) {
 		}},
 	}
 	commitSink := &memoryCommitSink{}
-	store, err := RestoreStore(candidate, 7, commitSink.Commit)
+	store, err := RestoreStore(candidate, 7, commitSink.Commit, commitSink.CommitCheckpoints)
 	if err != nil {
 		t.Fatalf("RestoreStore: %v", err)
 	}
@@ -288,10 +288,10 @@ func TestRestoreStorePreservesRevisionAndDetachesCandidate(t *testing.T) {
 }
 
 func TestRestoreStoreRejectsInvalidCandidate(t *testing.T) {
-	if _, err := RestoreStore(nil, 3, nil); !errors.Is(err, ErrInvalidStateRoot) {
+	if _, err := RestoreStore(nil, 3, nil, nil); !errors.Is(err, ErrInvalidStateRoot) {
 		t.Fatalf("nil RestoreStore error = %v", err)
 	}
-	if _, err := RestoreStore(&CommitCandidate{Verified: &VerifiedState{}}, 3, nil); !errors.Is(err, ErrInvalidStateRoot) {
+	if _, err := RestoreStore(&CommitCandidate{Verified: &VerifiedState{}}, 3, nil, nil); !errors.Is(err, ErrInvalidStateRoot) {
 		t.Fatalf("invalid RestoreStore error = %v", err)
 	}
 }
@@ -300,7 +300,7 @@ func TestStoreDoesNotRetainInitialState(t *testing.T) {
 	initial, _ := testNetwork(t)
 	rootKey := ed25519.PublicKey("root")
 	input := &VerifiedState{Network: initial, TrustedRootPublicKey: rootKey}
-	store := NewStore(input, nil)
+	store := NewStore(input, nil, nil)
 
 	rootKey[0] = 'X'
 	input.TrustedRootPublicKey[1] = 'Y'
@@ -324,7 +324,7 @@ func TestStoreConcurrentReadersSeeWholeRevision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	store := NewStore(&VerifiedState{Network: initial}, nil)
+	store := NewStore(&VerifiedState{Network: initial}, nil, nil)
 
 	var readers sync.WaitGroup
 	for range 8 {
@@ -354,7 +354,7 @@ func TestStoreConcurrentReadersSeeWholeRevision(t *testing.T) {
 func TestStoreUpdatePeerCheckpointIsTypedDetachedAndCheckpointOnly(t *testing.T) {
 	initial, _ := testNetwork(t)
 	commitSink := &memoryCommitSink{}
-	store := NewStore(&VerifiedState{Network: initial}, commitSink.Commit)
+	store := NewStore(&VerifiedState{Network: initial}, commitSink.Commit, commitSink.CommitCheckpoints)
 	root := []byte("rejected-root")
 	grace := []ObservedGraceEndpoint{{Endpoint: "192.0.2.2:4242", UntilUnix: 200}}
 	failure := &PeerFailure{Code: "timeout", Message: "round timed out", AtUnix: 99}
@@ -409,7 +409,7 @@ func TestStoreUpdatePeerCheckpointIsTypedDetachedAndCheckpointOnly(t *testing.T)
 
 func TestStoreUpdatePeerCheckpointNoopAndPersistenceFailure(t *testing.T) {
 	commitSink := &memoryCommitSink{}
-	store := NewStore(nil, commitSink.Commit)
+	store := NewStore(nil, commitSink.Commit, commitSink.CommitCheckpoints)
 	result, err := store.UpdatePeerCheckpoint(context.Background(), "peer-a", PeerCheckpointPatch{})
 	if err != nil || result.Committed || commitSink.commits != 0 {
 		t.Fatalf("empty patch result/error/commits = %+v/%v/%d", result, err, commitSink.commits)
@@ -427,4 +427,25 @@ func TestStoreUpdatePeerCheckpointNoopAndPersistenceFailure(t *testing.T) {
 	if view.Revision != 0 || len(view.Gossip.Peers) != 0 {
 		t.Fatalf("commitSink failure published metadata: %+v", view)
 	}
+}
+
+func (sink *memoryCommitSink) CommitCheckpoints(_ context.Context, peers map[string]*PeerCheckpoint, revision VerifiedRevision) error {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if sink.err != nil {
+		return sink.err
+	}
+	sink.commits++
+	sink.changes = ChangeSet{VerifiedRevision: revision, GossipCheckpointChanged: true}
+	if sink.state == nil {
+		sink.state = &CommitCandidate{Gossip: &GossipCheckpoint{Peers: make(map[string]PeerCheckpoint)}}
+	}
+	for id, p := range peers {
+		if p == nil {
+			delete(sink.state.Gossip.Peers, id)
+		} else {
+			sink.state.Gossip.Peers[id] = clonePeerCheckpoint(*p)
+		}
+	}
+	return nil
 }

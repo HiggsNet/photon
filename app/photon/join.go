@@ -278,7 +278,7 @@ func acceptJoinBundleInState(config *appConfig, bundle *joinBundle, key *private
 	if found {
 		common = state.Common
 	} else {
-		common = corestate.NewStore(nil, nil)
+		common = corestate.NewStore(nil, nil, nil)
 		defer common.Close()
 	}
 	if key == nil {

@@ -106,7 +106,7 @@ func TestGossipDriverPingSummaryShortcutOwnsCheckpointAndSkipsSession(t *testing
 	now := time.Now().Truncate(time.Second)
 	peerID := zone.ZonePath("peer.catofes.")
 	network, _ := signedDiscoveryNetwork(t, peerID, true, nil, now)
-	store := corestate.NewStore(&corestate.VerifiedState{ManagedZone: "local.catofes.", Network: network}, nil)
+	store := corestate.NewStore(&corestate.VerifiedState{ManagedZone: "local.catofes.", Network: network}, nil, nil)
 	driver := NewGossipDriver(newFakeClock(now), 2, store, GossipDriverConfig{PeerID: "local.catofes."})
 	defer driver.Stop()
 	bindMemoryGossipTransport(t, driver, peerID.String())
@@ -137,7 +137,7 @@ func TestGossipDriverPingSummaryShortcutOwnsCheckpointAndSkipsSession(t *testing
 
 func TestGossipDriverPingSummaryMismatchStartsCommonSession(t *testing.T) {
 	now := time.Unix(1000, 0)
-	store := corestate.NewStore(&corestate.VerifiedState{ManagedZone: "local.catofes.", Network: zone.NewNetworkState()}, nil)
+	store := corestate.NewStore(&corestate.VerifiedState{ManagedZone: "local.catofes.", Network: zone.NewNetworkState()}, nil, nil)
 	driver := NewGossipDriver(newFakeClock(now), 2, store, GossipDriverConfig{PeerID: "local.catofes."})
 	defer driver.Stop()
 	bindMemoryGossipTransport(t, driver, "peer-a")
@@ -159,7 +159,7 @@ func TestGossipDriverPingSummaryMismatchStartsCommonSession(t *testing.T) {
 func TestGossipDriverAnnounceIsHintAndDefersWhileSessionActive(t *testing.T) {
 	now := time.Unix(1000, 0)
 	network := zone.NewNetworkState()
-	store := corestate.NewStore(&corestate.VerifiedState{ManagedZone: "local.catofes.", Network: network}, nil)
+	store := corestate.NewStore(&corestate.VerifiedState{ManagedZone: "local.catofes.", Network: network}, nil, nil)
 	driver := NewGossipDriver(newFakeClock(now), 2, store, GossipDriverConfig{PeerID: "local.catofes."})
 	defer driver.Stop()
 	bindMemoryGossipTransport(t, driver, "peer-a")

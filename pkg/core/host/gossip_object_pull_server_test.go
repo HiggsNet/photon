@@ -18,7 +18,7 @@ func TestGossipDriverGossipObjectPullServerServesAndOwnsListener(t *testing.T) {
 	}
 	network := zone.NewNetworkState()
 	network.Zones["node-a."] = zone.NewZoneState("node-a.", &zone.ZoneAuthority{Zone: "node-a.", Epoch: 1, Threshold: 1})
-	driver := NewGossipDriver(NewClock(nil), DefaultEventBuffer, corestate.NewStore(&corestate.VerifiedState{Network: network}, nil), GossipDriverConfig{})
+	driver := NewGossipDriver(NewClock(nil), DefaultEventBuffer, corestate.NewStore(&corestate.VerifiedState{Network: network}, nil, nil), GossipDriverConfig{})
 	defer driver.Stop()
 	if err := driver.StartGossipObjectPullServer(t.Context(), listener, 1, time.Second); err != nil {
 		t.Fatalf("StartGossipObjectPullServer: %v", err)
@@ -133,4 +133,17 @@ func (store *blockingObjectPullStore) ReadView() corestate.View {
 	store.entered <- struct{}{}
 	<-store.release
 	return store.memoryGossipStateStore.ReadView()
+}
+
+func (store *blockingObjectPullStore) PeerCheckpoints(ids []string) map[string]corestate.PeerCheckpoint {
+	view := store.ReadView()
+	out := make(map[string]corestate.PeerCheckpoint)
+	if view.Gossip != nil {
+		for _, id := range ids {
+			if p, ok := view.Gossip.Peers[id]; ok {
+				out[id] = p
+			}
+		}
+	}
+	return out
 }

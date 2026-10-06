@@ -356,7 +356,7 @@ func TestDaemonHealthBIRDCutoverGateRootSmoke(t *testing.T) {
 	}
 	service := &Daemon{
 		health: &healthDriver{Manager: manager},
-		State:  newState(nil, corestate.NewStore(&corestate.VerifiedState{}, nil), initialRuntime),
+		State:  newState(nil, corestate.NewStore(&corestate.VerifiedState{}, nil, nil), initialRuntime),
 	}
 	service.recordBirdHealthObservationForLinks(links, nil, nsA, []string{"main"}, &bird.BirdObservation{})
 	if ready := service.ipsecRotateCutoverReady()["link-1"]; ready {

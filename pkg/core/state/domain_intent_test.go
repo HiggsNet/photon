@@ -16,7 +16,7 @@ func TestStoreGenericRecordRejectsTypedNamespaces(t *testing.T) {
 	install, _ := identityInstallFixture(t)
 	store := NewStore(&VerifiedState{
 		ManagedZone: install.ManagedZone, Network: install.Network, IdentityPrivateKey: install.IdentityPrivateKey,
-	}, nil)
+	}, nil, nil)
 	cases := []PutRecordIntent{
 		{Zone: install.ManagedZone, Key: "ipam/pools/10.0.0.0_8", Type: "application.test"},
 		{Zone: install.ManagedZone, Key: "apps/test", Type: routing.RecordTypeRouteAnnouncement},
@@ -62,7 +62,7 @@ func TestStoreTypedIPAMRouteAndServiceLifecycle(t *testing.T) {
 
 	store := NewStore(&VerifiedState{
 		ManagedZone: managed, Network: network, IdentityPrivateKey: install.IdentityPrivateKey,
-	}, nil)
+	}, nil, nil)
 	apply := func(intent LocalIntent, wantRevision VerifiedRevision) *zone.Record {
 		t.Helper()
 		result, err := store.ApplyLocalIntent(context.Background(), intent, now)
@@ -122,7 +122,7 @@ func TestStoreTypedRouteRejectsMissingAssignmentWithoutCommit(t *testing.T) {
 	install, _ := identityInstallFixture(t)
 	store := NewStore(&VerifiedState{
 		ManagedZone: install.ManagedZone, Network: install.Network, IdentityPrivateKey: install.IdentityPrivateKey,
-	}, nil)
+	}, nil, nil)
 	if _, err := store.ApplyLocalIntent(context.Background(), AnnounceRouteIntent{
 		Zone: install.ManagedZone, Prefix: "192.0.2.0/24",
 	}, time.Unix(1000, 0)); err == nil {
@@ -138,7 +138,7 @@ func TestStorePreviewLocalIntentUsesSameValidationWithoutPublishing(t *testing.T
 	install, _ := identityInstallFixture(t)
 	store := NewStore(&VerifiedState{
 		ManagedZone: install.ManagedZone, Network: install.Network, IdentityPrivateKey: install.IdentityPrivateKey,
-	}, nil)
+	}, nil, nil)
 	preview, err := store.PreviewLocalIntent(PutRecordIntent{
 		Zone: install.ManagedZone, Key: "apps/preview", Type: "application.test", Value: []byte("value"),
 	}, time.Unix(1000, 0))

@@ -393,7 +393,7 @@ func TestFlushRoutingReconcileCoalesces(t *testing.T) {
 func TestRoutingObservationDoesNotAdvancePersistentRevision(t *testing.T) {
 	verified := &corestate.VerifiedState{}
 	runtime := &photonlinux.LinuxState{}
-	service := &Daemon{State: newState(nil, corestate.NewStore(verified, nil), runtime)}
+	service := &Daemon{State: newState(nil, corestate.NewStore(verified, nil, nil), runtime)}
 	common := service.State.Common.ReadView()
 	rev := uint64(common.Revision)
 	observation := &routingObservation{

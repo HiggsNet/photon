@@ -235,7 +235,7 @@ firewall:
 
 func TestReconcileFirewall_NoInstances(t *testing.T) {
 	d := &Daemon{
-		State: newState(nil, corestate.NewStore(&corestate.VerifiedState{}, nil), &photonlinux.LinuxState{}), Config: &appConfig{},
+		State: newState(nil, corestate.NewStore(&corestate.VerifiedState{}, nil, nil), &photonlinux.LinuxState{}), Config: &appConfig{},
 	}
 	if err := d.reconcileFirewall(context.Background()); err != nil {
 		t.Fatalf("reconcileFirewall with no instances: %v", err)

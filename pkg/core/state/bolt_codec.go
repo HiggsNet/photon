@@ -85,16 +85,8 @@ func LoadBoltState(tx *bolt.Tx) (candidate *CommitCandidate, revision VerifiedRe
 		return nil, 0, report, true, fmt.Errorf("%w: verified payload: %v", ErrBoltStateCorrupt, err)
 	}
 
-	gossip := &GossipCheckpoint{}
-	if gossipBucket := common.Bucket(bucketGossip); gossipBucket != nil {
-		if data := gossipBucket.Get(keyPayload); data != nil {
-			if err := json.Unmarshal(data, gossip); err != nil {
-				report.GossipCheckpointDiscarded = true
-				gossip = &GossipCheckpoint{}
-			}
-		}
-	}
-	gossip = cloneGossipCheckpoint(gossip)
+	gossip, discarded := loadBoltCheckpoint(common.Bucket(bucketGossip))
+	report.GossipCheckpointDiscarded = discarded
 	return cloneCommitCandidate(verified, gossip), revision, report, true, nil
 }
 
@@ -125,10 +117,6 @@ func CommitBoltState(tx *bolt.Tx, candidate *CommitCandidate, changes ChangeSet)
 	if err != nil {
 		return false, err
 	}
-	gossipPayload, err := json.Marshal(cloneGossipCheckpoint(candidate.Gossip))
-	if err != nil {
-		return false, err
-	}
 
 	common := tx.Bucket(bucketCommonState)
 	if common != nil {
@@ -140,14 +128,20 @@ func CommitBoltState(tx *bolt.Tx, candidate *CommitCandidate, changes ChangeSet)
 		if err != nil {
 			return false, err
 		}
-		var currentPersisted persistedVerifiedState
-		if err := decodeRequiredJSON(verifiedBucket, keyPayload, &currentPersisted); err != nil {
-			return false, err
-		}
-		if !bytes.Equal(currentPersisted.TrustedRootPublicKey, candidate.Verified.TrustedRootPublicKey) {
-			return false, ErrTrustedRootPinChange
-		}
 		verifiedChanged := !bytes.Equal(verifiedBucket.Get(keyPayload), verifiedPayload)
+		// An identical, already validated payload necessarily retains the pin.
+		// Checkpoint-only commits must not decode the entire network/history
+		// just to compare that same pin again. Changed payloads still require
+		// the original persisted-state validation and immutable-pin check.
+		if verifiedChanged {
+			var currentPersisted persistedVerifiedState
+			if err := decodeRequiredJSON(verifiedBucket, keyPayload, &currentPersisted); err != nil {
+				return false, err
+			}
+			if !bytes.Equal(currentPersisted.TrustedRootPublicKey, candidate.Verified.TrustedRootPublicKey) {
+				return false, ErrTrustedRootPinChange
+			}
+		}
 		wantRevision := current
 		if verifiedChanged {
 			wantRevision++
@@ -184,7 +178,6 @@ func CommitBoltState(tx *bolt.Tx, candidate *CommitCandidate, changes ChangeSet)
 		value  []byte
 	}{
 		{verifiedBucket, keyPayload, verifiedPayload},
-		{gossipBucket, keyPayload, gossipPayload},
 	} {
 		fieldChanged, err := putBytesIfChanged(write.bucket, write.key, write.value)
 		if err != nil {
@@ -192,6 +185,11 @@ func CommitBoltState(tx *bolt.Tx, candidate *CommitCandidate, changes ChangeSet)
 		}
 		changed = changed || fieldChanged
 	}
+	checkpointChanged, err := replaceBoltCheckpoint(gossipBucket, candidate.Gossip)
+	if err != nil {
+		return false, err
+	}
+	changed = changed || checkpointChanged
 	for _, value := range []struct {
 		key   []byte
 		value uint64

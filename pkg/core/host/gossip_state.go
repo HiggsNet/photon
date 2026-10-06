@@ -17,6 +17,7 @@ import (
 // maintain a second gossip projection.
 type GossipStateStore interface {
 	ReadView() corestate.View
+	PeerCheckpoints([]string) map[string]corestate.PeerCheckpoint
 	ApplyRemoteBatch(context.Context, string, []corestate.RemoteSnapshot, time.Time) (corestate.RemoteBatchResult, error)
 	UpdatePeerCheckpoints(context.Context, map[string]corestate.PeerCheckpointPatch) (corestate.CommitResult, error)
 }

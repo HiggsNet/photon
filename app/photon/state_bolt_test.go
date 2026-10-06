@@ -94,7 +94,7 @@ func TestStateRejectsLinuxCommitAfterDiskRevisionDiverges(t *testing.T) {
 	defer state.Close()
 
 	before := state.Common.ReadView()
-	detached := corestate.NewStoreWithCheckpoint(before.State, before.Gossip, nil)
+	detached := corestate.NewStoreWithCheckpoint(before.State, before.Gossip, nil, nil)
 	if _, err := advanceTestVerifiedRevision(detached, time.Unix(1, 0)); err != nil {
 		t.Fatalf("advance detached verified revision: %v", err)
 	}

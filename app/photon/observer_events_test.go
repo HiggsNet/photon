@@ -25,7 +25,7 @@ func TestObserverIDsPayloadSortsAndOmitsEmpty(t *testing.T) {
 }
 
 func TestObserverLinkIDsPayload(t *testing.T) {
-	d := &Daemon{State: newState(nil, corestate.NewStoreWithCheckpoint(&corestate.VerifiedState{}, nil, nil), &photonlinux.LinuxState{})}
+	d := &Daemon{State: newState(nil, corestate.NewStoreWithCheckpoint(&corestate.VerifiedState{}, nil, nil, nil), &photonlinux.LinuxState{})}
 	d.linuxObservation.replaceIPsec(map[string]ipsec.LinkInstance{"link-b": {}, "link-a": {}}, nil)
 	payload, ok := d.observerLinkIDsPayload().(map[string]any)
 	if !ok {
@@ -38,7 +38,7 @@ func TestObserverLinkIDsPayload(t *testing.T) {
 }
 
 func TestObserverLinkIDsPayloadEmptyState(t *testing.T) {
-	d := &Daemon{State: newState(nil, corestate.NewStoreWithCheckpoint(&corestate.VerifiedState{}, nil, nil), nil)}
+	d := &Daemon{State: newState(nil, corestate.NewStoreWithCheckpoint(&corestate.VerifiedState{}, nil, nil, nil), nil)}
 	if got := d.observerLinkIDsPayload(); got != nil {
 		t.Errorf("payload = %v, want nil with no link instances", got)
 	}
@@ -49,7 +49,7 @@ func TestObserverPeerIDsPayload(t *testing.T) {
 		"peer-b": {LastSyncUnix: 1},
 		"peer-a": {LastSyncUnix: 1},
 	}}
-	d := &Daemon{State: newState(nil, corestate.NewStoreWithCheckpoint(&corestate.VerifiedState{}, checkpoint, nil), nil)}
+	d := &Daemon{State: newState(nil, corestate.NewStoreWithCheckpoint(&corestate.VerifiedState{}, checkpoint, nil, nil), nil)}
 	payload, ok := d.observerPeerIDsPayload().(map[string]any)
 	if !ok {
 		t.Fatal("observerPeerIDsPayload should return a map payload")
@@ -98,7 +98,7 @@ func TestNotifyStateChangedBroadcastsIDPayloads(t *testing.T) {
 	}}
 	hub := observer.NewHub()
 	d := &Daemon{
-		State:       newState(nil, corestate.NewStoreWithCheckpoint(&corestate.VerifiedState{}, checkpoint, nil), runtime),
+		State:       newState(nil, corestate.NewStoreWithCheckpoint(&corestate.VerifiedState{}, checkpoint, nil, nil), runtime),
 		observerHub: hub,
 		// Sync and Linux runtime are nil: common peer notifications remain,
 		// while platform link/route notifications must not be fabricated.

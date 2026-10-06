@@ -14,15 +14,15 @@ import (
 func TestGossipDriverCommitsBackoffAndCompletionOnceWithoutAdvancingRevision(t *testing.T) {
 	now := time.Unix(100, 0)
 	commits := 0
-	var committed *corestate.CommitCandidate
+	var committed map[string]*corestate.PeerCheckpoint
 	store := corestate.NewStoreWithCheckpoint(
 		&corestate.VerifiedState{ManagedZone: "local.catofes.", Network: zone.NewNetworkState()},
 		&corestate.GossipCheckpoint{Peers: map[string]corestate.PeerCheckpoint{"peer-a": {ObservedEndpoint: "127.0.0.1:33434", ObservedUntilUnix: now.Add(time.Minute).Unix(), ObservedFailureCount: 2}}},
-		func(_ context.Context, candidate *corestate.CommitCandidate, changes corestate.ChangeSet) error {
+		nil, func(_ context.Context, candidate map[string]*corestate.PeerCheckpoint, revision corestate.VerifiedRevision) error {
 			commits++
 			committed = candidate
-			if changes.NetworkChanged || !changes.GossipCheckpointChanged || changes.VerifiedRevision != 0 {
-				t.Fatalf("checkpoint changes = %#v", changes)
+			if revision != 0 {
+				t.Fatalf("checkpoint revision = %d", revision)
 			}
 			return nil
 		},

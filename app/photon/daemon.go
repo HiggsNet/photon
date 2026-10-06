@@ -1018,21 +1018,15 @@ func (d *Daemon) flushRevocationCleanup() {
 	if d.State == nil {
 		return
 	}
-	// This function is called after every sync-state update. Most calls have no
-	// revocations, so check the immutable committed state first and avoid the
-	// copy-on-write transaction (which deep-copies the whole state through JSON).
+	// Query revocations without copying records, history or unrelated checkpoints.
 	now := d.now()
-	view := d.State.Common.ReadView()
-	if view.State == nil {
-		return
-	}
-	revokedZones := collectAllRevokedZones(view.State.Network, now)
+	revokedZones, peers := d.State.Common.RevokedPeerCheckpoints(now)
 	if len(revokedZones) == 0 {
 		return
 	}
 	patches := make(map[string]corestate.PeerCheckpointPatch)
-	if view.Gossip != nil {
-		for peerID, peer := range view.Gossip.Peers {
+	if len(peers) > 0 {
+		for peerID, peer := range peers {
 			if revokedZones[zone.ZonePath(peerID)] && peerNeedsRevocationCleanup(peer) {
 				patches[peerID] = corestate.PeerCheckpointPatch{
 					DiscoveredEndpoint: corestate.PatchField[string]{Set: true}, DiscoveredAtUnix: corestate.PatchField[int64]{Set: true},

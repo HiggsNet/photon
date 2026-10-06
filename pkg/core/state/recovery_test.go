@@ -21,7 +21,7 @@ func TestStoreImportRecoverySnapshotManagedZoneAndNoop(t *testing.T) {
 		Network:              install.Network,
 		TrustedRootPublicKey: install.TrustedRootPublicKey,
 		IdentityPrivateKey:   install.IdentityPrivateKey,
-	}, sink.Commit)
+	}, sink.Commit, sink.CommitCheckpoints)
 
 	source := zone.CloneNetworkState(install.Network)
 	source.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
@@ -63,7 +63,7 @@ func TestStoreImportRecoverySnapshotKeepsPinnedRoot(t *testing.T) {
 		Network:              install.Network,
 		TrustedRootPublicKey: install.TrustedRootPublicKey,
 		IdentityPrivateKey:   install.IdentityPrivateKey,
-	}, nil)
+	}, nil, nil)
 
 	otherPublic, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -88,7 +88,7 @@ func TestStoreImportRecoverySnapshotRejectsUnpinnedRootReplacement(t *testing.T)
 		ManagedZone:        install.ManagedZone,
 		Network:            install.Network,
 		IdentityPrivateKey: install.IdentityPrivateKey,
-	}, nil)
+	}, nil, nil)
 	otherPublic, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
@@ -120,7 +120,7 @@ func TestStoreImportRecoverySnapshotPersistenceFailureDoesNotPublish(t *testing.
 		Network:              install.Network,
 		TrustedRootPublicKey: install.TrustedRootPublicKey,
 		IdentityPrivateKey:   install.IdentityPrivateKey,
-	}, (&memoryCommitSink{err: wantErr}).Commit)
+	}, (&memoryCommitSink{err: wantErr}).Commit, (&memoryCommitSink{err: wantErr}).CommitCheckpoints)
 	if _, err := store.ImportRecoverySnapshot(context.Background(), RecoveryImport{Snapshot: snapshot}, now); !errors.Is(err, wantErr) {
 		t.Fatalf("ImportRecoverySnapshot error = %v, want %v", err, wantErr)
 	}

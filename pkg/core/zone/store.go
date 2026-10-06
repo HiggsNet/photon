@@ -207,3 +207,32 @@ func boundRecordHistory(history []*Record) []*Record {
 	}
 	return append([]*Record(nil), history[len(history)-MaxRecordHistoryPerKey:]...)
 }
+
+// RevokedZones projects active revocations, including purged tombstones and descendants.
+func (network *NetworkState) RevokedZones(now time.Time) map[ZonePath]bool {
+	out := make(map[ZonePath]bool)
+	if network == nil {
+		return out
+	}
+	for z := range network.Zones {
+		if z.IsRoot() {
+			continue
+		}
+		if network.IsZoneRevoked(z, now) {
+			out[z] = true
+		}
+	}
+	// A purge may remove the revoked ZoneState while retaining its signed
+	// revocation in the parent. Include those direct tombstone paths too.
+	for _, parent := range network.Zones {
+		if parent == nil {
+			continue
+		}
+		for path := range parent.Revocations {
+			if network.IsZoneRevoked(path, now) {
+				out[path] = true
+			}
+		}
+	}
+	return out
+}

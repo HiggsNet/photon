@@ -17,7 +17,7 @@ func TestStoreApplyLocalRecordIntentVersionsAndRetainsNoPointers(t *testing.T) {
 	now := time.Unix(1000, 0)
 	network, _, identityPrivate, _ := managedAuthorityFixture(t, true)
 	commitSink := &memoryCommitSink{}
-	store := NewStore(&VerifiedState{ManagedZone: "node-a.catofes.", Network: network, IdentityPrivateKey: identityPrivate}, commitSink.Commit)
+	store := NewStore(&VerifiedState{ManagedZone: "node-a.catofes.", Network: network, IdentityPrivateKey: identityPrivate}, commitSink.Commit, commitSink.CommitCheckpoints)
 	value := []byte("v1")
 	first, err := store.ApplyLocalIntent(context.Background(), PutRecordIntent{
 		Zone: "node-a.catofes.", Key: "config", Type: "text", Value: value,
@@ -61,7 +61,7 @@ func TestStoreApplyLocalIntentsCommitsOnceAndRollsBackAsBatch(t *testing.T) {
 	now := time.Unix(1000, 0)
 	network, _, identityPrivate, _ := managedAuthorityFixture(t, true)
 	sink := &memoryCommitSink{}
-	store := NewStore(&VerifiedState{ManagedZone: "node-a.catofes.", Network: network, IdentityPrivateKey: identityPrivate}, sink.Commit)
+	store := NewStore(&VerifiedState{ManagedZone: "node-a.catofes.", Network: network, IdentityPrivateKey: identityPrivate}, sink.Commit, sink.CommitCheckpoints)
 
 	batch, err := store.ApplyLocalIntents(context.Background(), []LocalIntent{
 		PutRecordIntent{Zone: "node-a.catofes.", Key: "endpoint-a", Type: "text", Value: []byte("a")},
@@ -91,7 +91,7 @@ func TestStoreApplyLocalIntentsAtRevisionRejectsStalePlan(t *testing.T) {
 	now := time.Unix(1000, 0)
 	network, _, identityPrivate, _ := managedAuthorityFixture(t, true)
 	sink := &memoryCommitSink{}
-	store := NewStore(&VerifiedState{ManagedZone: "node-a.catofes.", Network: network, IdentityPrivateKey: identityPrivate}, sink.Commit)
+	store := NewStore(&VerifiedState{ManagedZone: "node-a.catofes.", Network: network, IdentityPrivateKey: identityPrivate}, sink.Commit, sink.CommitCheckpoints)
 	if _, err := store.ApplyLocalIntent(context.Background(), PutRecordIntent{
 		Zone: "node-a.catofes.", Key: "current", Type: "text", Value: []byte("current"),
 	}, now); err != nil {
@@ -113,7 +113,7 @@ func TestStoreApplyLocalIntentsAtRevisionRejectsStalePlan(t *testing.T) {
 func TestStoreProtocolRecordIntentValidatesTupleAndNoop(t *testing.T) {
 	now := time.Unix(1000, 0)
 	network, _, identityPrivate, _ := managedAuthorityFixture(t, true)
-	store := NewStore(&VerifiedState{ManagedZone: "node-a.catofes.", Network: network, IdentityPrivateKey: identityPrivate}, nil)
+	store := NewStore(&VerifiedState{ManagedZone: "node-a.catofes.", Network: network, IdentityPrivateKey: identityPrivate}, nil, nil)
 	intent := PutProtocolRecordIntent{
 		Kind: ProtocolRecordGossipEndpoint, Zone: "node-a.catofes.", Key: "sync/endpoint/udp", Type: "sync.endpoint", Value: []byte(`{"endpoints":[]}`),
 	}
@@ -137,7 +137,7 @@ func TestStoreProtocolRecordIntentValidatesTupleAndNoop(t *testing.T) {
 
 func TestStoreApplyLocalIntentRejectsMissingAndUnauthorizedKey(t *testing.T) {
 	network, _, _, _ := managedAuthorityFixture(t, true)
-	store := NewStore(&VerifiedState{Network: network}, nil)
+	store := NewStore(&VerifiedState{Network: network}, nil, nil)
 	intent := PutRecordIntent{Zone: "node-a.catofes.", Key: "config", Type: "text", Value: []byte("value")}
 	if _, err := store.ApplyLocalIntent(context.Background(), intent, time.Unix(1000, 0)); err == nil {
 		t.Fatal("missing private key was accepted")
@@ -146,7 +146,7 @@ func TestStoreApplyLocalIntentRejectsMissingAndUnauthorizedKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKey(other): %v", err)
 	}
-	store = NewStore(&VerifiedState{Network: network, IdentityPrivateKey: otherPrivate}, nil)
+	store = NewStore(&VerifiedState{Network: network, IdentityPrivateKey: otherPrivate}, nil, nil)
 	if _, err := store.ApplyLocalIntent(context.Background(), intent, time.Unix(1000, 0)); err == nil {
 		t.Fatal("unauthorized signer was accepted")
 	}
@@ -169,7 +169,7 @@ func TestStoreApplyLocalDelegationThenRevocationCleansPeerCheckpoint(t *testing.
 		"new.catofes.":      {LastSyncUnix: 1},
 		"leaf.new.catofes.": {LastSyncUnix: 1},
 		"other.catofes.":    {LastSyncUnix: 1},
-	}}, nil)
+	}}, nil, nil)
 	issued, err := store.ApplyLocalIntent(context.Background(), PutDelegationIntent{Parent: "catofes.", Authority: childAuthority}, now)
 	if err != nil {
 		t.Fatalf("PutDelegation: %v", err)
@@ -223,7 +223,7 @@ func TestStoreApplyLocalDelegationRefreshPreservesChildContent(t *testing.T) {
 	authorityV1 := &zone.ZoneAuthority{Zone: zone.ZonePath(child), Epoch: 1, Threshold: 1, Keys: []zone.AuthorizedKey{{
 		Key: childPublic, Capabilities: []zone.Capability{{Permissions: []zone.Permission{zone.PermWrite}}},
 	}}}
-	store := NewStore(&VerifiedState{Network: network, ManagedZone: "catofes.", IdentityPrivateKey: parentPrivate}, nil)
+	store := NewStore(&VerifiedState{Network: network, ManagedZone: "catofes.", IdentityPrivateKey: parentPrivate}, nil, nil)
 	if _, err := store.ApplyLocalIntent(context.Background(), PutDelegationIntent{Parent: "catofes.", Authority: authorityV1}, now); err != nil {
 		t.Fatalf("PutDelegation(v1): %v", err)
 	}
@@ -252,7 +252,7 @@ func TestStoreApplyLocalIntentPersistenceFailureDoesNotPublish(t *testing.T) {
 	network, _, identityPrivate, _ := managedAuthorityFixture(t, true)
 	wantErr := errors.New("local commit failed")
 	commitSink := &memoryCommitSink{err: wantErr}
-	store := NewStore(&VerifiedState{Network: network, IdentityPrivateKey: identityPrivate}, commitSink.Commit)
+	store := NewStore(&VerifiedState{Network: network, IdentityPrivateKey: identityPrivate}, commitSink.Commit, commitSink.CommitCheckpoints)
 	_, err := store.ApplyLocalIntent(context.Background(), PutRecordIntent{
 		Zone: "node-a.catofes.", Key: "config", Type: "text", Value: []byte("value"),
 	}, time.Unix(1000, 0))
@@ -272,7 +272,7 @@ func TestStoreRejectsLocalRootAuthorityUpdate(t *testing.T) {
 	}
 	ns := zone.NewNetworkState()
 	ns.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, photoncrypto.ConfiguredRootAuthority(pub))
-	store := NewStore(&VerifiedState{ManagedZone: zone.RootZone, Network: ns, TrustedRootPublicKey: pub, RootPrivateKey: priv}, nil)
+	store := NewStore(&VerifiedState{ManagedZone: zone.RootZone, Network: ns, TrustedRootPublicKey: pub, RootPrivateKey: priv}, nil, nil)
 	next := cloneAuthority(ns.Zones[zone.RootZone].Authority)
 	next.Epoch++
 	if _, err := store.ApplyLocalIntent(context.Background(), UpdateRootAuthorityIntent{Authority: next}, time.Now()); err == nil {
@@ -293,7 +293,7 @@ func TestStoreGrantDelegationUsesCurrentCandidateAndRollsBack(t *testing.T) {
 	}
 	authority := &zone.ZoneAuthority{Zone: child, Epoch: 1, Threshold: 1, Keys: []zone.AuthorizedKey{{Key: pub}}}
 	commitErr := error(nil)
-	store := NewStore(&VerifiedState{Network: network, ManagedZone: "catofes.", IdentityPrivateKey: parentPrivate}, func(context.Context, *CommitCandidate, ChangeSet) error { return commitErr })
+	store := NewStore(&VerifiedState{Network: network, ManagedZone: "catofes.", IdentityPrivateKey: parentPrivate}, func(context.Context, *CommitCandidate, ChangeSet) error { return commitErr }, nil)
 	if _, err := store.ApplyLocalIntent(context.Background(), PutDelegationIntent{Parent: child.Parent(), Authority: authority}, now); err != nil {
 		t.Fatal(err)
 	}

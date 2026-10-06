@@ -17,7 +17,7 @@ func TestStoreInstallIdentityInitialNoopAndDetached(t *testing.T) {
 	now := time.Unix(1000, 0)
 	install, _ := identityInstallFixture(t)
 	sink := &memoryCommitSink{}
-	store := NewStore(nil, sink.Commit)
+	store := NewStore(nil, sink.Commit, sink.CommitCheckpoints)
 
 	result, err := store.InstallIdentity(context.Background(), install, now)
 	if err != nil {
@@ -58,7 +58,7 @@ func TestStoreInstallIdentityRefreshPreservesLocalContentAndRejectsDowngrade(t *
 	if err := initial.Network.PutAt(record, now); err != nil {
 		t.Fatalf("PutAt(local-note): %v", err)
 	}
-	store := NewStore(nil, nil)
+	store := NewStore(nil, nil, nil)
 	if _, err := store.InstallIdentity(context.Background(), initial, now); err != nil {
 		t.Fatalf("InstallIdentity(initial): %v", err)
 	}
@@ -120,7 +120,7 @@ func TestStoreInstallIdentityRefreshPreservesLocalContentAndRejectsDowngrade(t *
 func TestStoreInstallIdentityRejectsIdentityAndTrustChanges(t *testing.T) {
 	now := time.Unix(1000, 0)
 	install, _ := identityInstallFixture(t)
-	store := NewStore(nil, nil)
+	store := NewStore(nil, nil, nil)
 	if _, err := store.InstallIdentity(context.Background(), install, now); err != nil {
 		t.Fatalf("InstallIdentity(initial): %v", err)
 	}
@@ -148,7 +148,7 @@ func TestStoreInstallIdentityPersistenceFailureDoesNotPublish(t *testing.T) {
 	install, _ := identityInstallFixture(t)
 	wantErr := errors.New("disk unavailable")
 	sink := &memoryCommitSink{err: wantErr}
-	store := NewStore(nil, sink.Commit)
+	store := NewStore(nil, sink.Commit, sink.CommitCheckpoints)
 
 	if _, err := store.InstallIdentity(context.Background(), install, time.Unix(1000, 0)); !errors.Is(err, wantErr) {
 		t.Fatalf("InstallIdentity error = %v, want %v", err, wantErr)
@@ -166,7 +166,7 @@ func TestStoreInstallIdentityRejectsUnauthorizedPrivateKey(t *testing.T) {
 		t.Fatalf("GenerateKey(other identity): %v", err)
 	}
 	install.IdentityPrivateKey = otherPrivate
-	store := NewStore(nil, nil)
+	store := NewStore(nil, nil, nil)
 	if _, err := store.InstallIdentity(context.Background(), install, time.Unix(1000, 0)); err == nil {
 		t.Fatal("InstallIdentity accepted a private key absent from the managed authority")
 	}

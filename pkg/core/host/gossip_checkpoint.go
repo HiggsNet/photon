@@ -75,14 +75,17 @@ func (driver *GossipDriver) commitGossipEventCheckpoint(ctx context.Context, ses
 		return nil
 	}
 	defer driver.LogSlowOperation("session_checkpoint", time.Now(), driver.PendingEventCount())
-	view := driver.gossipState.ReadView()
-	peers := make(map[string]corestate.PeerCheckpoint)
-	patches := make(map[string]corestate.PeerCheckpointPatch)
-	if view.Gossip != nil {
-		for peerID, checkpoint := range view.Gossip.Peers {
-			peers[peerID] = checkpoint
+	ids := make([]string, 0, len(backoffs)+1)
+	for _, action := range backoffs {
+		if action.PeerID != "" {
+			ids = append(ids, action.PeerID)
 		}
 	}
+	if session != nil && session.Done() && session.PeerID != "" {
+		ids = append(ids, session.PeerID)
+	}
+	peers := driver.gossipState.PeerCheckpoints(ids)
+	patches := make(map[string]corestate.PeerCheckpointPatch)
 	for _, action := range backoffs {
 		if action.PeerID == "" {
 			continue
