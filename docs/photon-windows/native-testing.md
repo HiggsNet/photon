@@ -4,6 +4,9 @@
 Windows 不需要安装 Go。测试使用临时数据库和 loopback 临时端口，不配置路由、
 防火墙、Wintun 或系统服务。
 
+B4 的 Wintun/IP Helper 管理员原生测试使用独立 opt-in 入口，包含双栈系统 UDP 往返及路由清理，
+见 [B4 数据通路验收](babel-testing.md)；不由本文普通 native smoke 自动启用。
+
 ## 执行
 
 在仓库根目录运行（模块缓存可通过 `GOMODCACHE` 指定）：

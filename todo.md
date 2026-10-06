@@ -254,12 +254,18 @@ B3 已完成上述协议、生命周期及双版本/Windows 跨主机验收；�
 ### B4. Babel/SADR 与 Wintun
 
 - [ ] 实现 leaf-only Babel codec/neighbor/route selection；不转发 learned route，只 originate 本节点获授权 prefix。
-- [ ] Router ID 从稳定身份材料推导；若完全可推导则不持久化。
+  - [x] 单 gateway 有界 Neighbor/Leaf：Hello/IHU、周期与触发公告、请求、序号回绕、刷新/到期/撤回；只导出本地 origin，当前授权逐次检查。完整 ESP 链路与 Daemon 接线另验。
+  - [x] 隔离 BIRD 2.19.1 双栈互通：随机完整 Router ID、IPv4-via-IPv6、IPv6、本地公告/撤回、learned 不再分发、静默邻居超时通过；此项尚未跨 ESP。
+- [x] Router ID 从 root pin、Zone 与 overlay 稳定推导，无独立持久状态；发布完整 64 位签名绑定，租约/碰撞/撤回 fail closed。Linux BIRD 完整运行时 ID 的自动发布另补，不能以低 32 位代替。
 - [ ] 实现 SADR lookup、ECMP/metric 切换和 route authorization gate，撤销后立即停止安装/使用非法 route。
-  - [x] 有界 SADR lookup、目的/源最长前缀、稳定 ECMP/metric、过期与逐 lookup 当前授权；完整 origin binding 和生产 owner 接入另验。
+  - [x] 有界 SADR lookup、目的/源最长前缀、稳定 ECMP/metric、过期与逐 lookup 当前授权；生产 owner 接入和 source-specific 授权另验。
+  - [x] 完整签名 origin/精确前缀、当前 SA 与双向包交付授权接入实验 pipeline；source-specific 授权规则未完成，当前明确拒绝。
 - [x] Wintun 使用固定官方 API/binding，明确 DLL 来源、ring ownership、packet buffer 归还、取消与 shutdown。官方 0.14.1 AMD64 DLL 固定 SHA-256，1 MiB ring/64 队列；Windows 原生两次创建、写 ring、cancel/join、关闭后拒绝均通过，见 [来源与边界](third_party/wintun/README.md)。尚未接业务 pipeline。
 - [ ] WindowsDriver 通过 IP Helper 管理 address/route/interface metric，使用 `Observe -> Plan -> Apply -> Re-observe`，不 shell out。
+  - [x] 限定新建 Wintun LUID 与配置 split aggregate 的 IP Helper driver；Windows 11 原生双栈 DAD、幂等、漂移修复、撤销及带配置关闭通过。Daemon 地址意图和就绪接线尚未完成。
 - [ ] 完成 `Wintun -> SADR -> ESP -> shared UDP` 及反向 pipeline 的 memory 与真实 interop 测试。
+  - [x] Windows 原生 `UDP socket -> Wintun.Read -> Wintun.Write -> UDP socket` 双栈往返及地址/路由资源回收通过；此项未跨 ESP。分层证据见 [B4 验收](docs/photon-windows/babel-testing.md)。
+  - [x] 内存设备、真实 ESP worker 与 shared UDP 双向集成：本机地址约束、控制包分流、双向撤销/到期、rekey overlap、队列背压和多前缀批包通过；console 默认拒绝保持，完整原生跨网关链路尚未完成。
 
 ### B5. Windows service、IPC 与 observation
 

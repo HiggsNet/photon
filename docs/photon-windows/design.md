@@ -21,6 +21,11 @@ XFRM、BIRD 或 network namespace。
 - split tunnel，只向 Windows 安装稳定 Photon aggregate route；
 - 不做 transit、IKE responder、lite-to-lite、full tunnel、DNS/NRPT、GUI 或 auto-update。
 
+Windows 是接入节点：Babel 只发布本节点当前获授权的本地前缀，不重新发布从 gateway 学到的
+路由。接收路由仅用于本机发包选路与入站来源授权校验；业务包出站源地址和入站目标地址必须
+属于本机，不启用 Windows IP forwarding，也不在远端节点之间转发业务包。
+这里的路由交换协议是 Babel；BIRD 是 Linux 上的路由软件，BFD 是另一种故障检测协议。
+
 ### 1.1 v1 支持与验收矩阵
 
 首版支持目标固定为 Windows 11 amd64。Windows 10、Windows Server、arm64 和模拟运行均不进入
@@ -113,8 +118,9 @@ Windows 已实现。原有 ECDSA bring-up smoke 在 Ubuntu 上也通过。构建
 - IKEv1、PSK/EAP、证书 CA 信任回退、未验证公钥不进入首版。rekey 失败不能越过 SA 到期、
   授权失效或序号上限继续发送；断线按已有 backoff 重试。
 
-B3 仍须以真正 Windows 实现验证相同集合、双方 rekey、外层 IPv4/IPv6、NAT 变化和错误
-proposal/身份/公钥的拒绝；本轮没有执行这些 Windows 或负向验收。任何更窄或新增的 proposal
+以上是 2026-10-01 的实现前基线。B3 后续已完成 Windows 协议实现、双版本 StrongSwan 与
+Windows VM 跨主机验收，实际场景及边界以 [IKE 验收](ike-testing.md) 和 [ESP 验收](esp-testing.md)
+为准；这不替代 B4 系统业务隧道或 B6 物理睡眠、多层 NAT 验收。任何更窄或新增的 proposal
 都须另有双向互通证据，不默认要求 Linux 改 profile。
 
 认证继续依据 verified transport-key/profile 与 Zone 身份绑定，不能仅凭 CERT 接受陌生公钥；
@@ -183,9 +189,13 @@ v1 的路由准入须同时满足以下条件，缺失任何一项都不得安�
 撤销或授权收紧时先使 packet lookup 中的旧授权不可用，再异步清理路由和 SA；失败不能恢复旧授权。
 Windows aggregate route 只把流量送入 Wintun，不能绕过用户态逐路由授权。
 
-以上是安装与撤销的验收契约。Router ID 派生、碰撞处理及端到端 binding 的 wire 方案仍须在 B4 实现
-并验证；仅从身份稳定派生 Router ID 不能证明收到的 origin 声明可信。在绑定完成前，prototype
-只能作为显式选择单个可信 gateway 的 experimental 实验，不能作为 production security boundary 发布。
+以上是安装与撤销的验收契约。B4 已实现由 root pin、Zone 和 overlay 派生的稳定完整 64 位 ID，
+并通过签名 `routing/babel/identities` 记录绑定 origin；租约到期、撤回、跨 Zone 碰撞均拒绝。
+Linux BIRD 的完整运行时 ID 发布仍待接入，不能将其低 32 位拼装为已验证身份。
+
+签名身份记录证明 Zone 对 ID 的认领，不证明 gateway 转发的每条 Babel Update 未冒用其他 origin；
+source-specific 路由的授权规则也尚未实现，当前明确拒绝。prototype 仍只适用于显式信任单个
+gateway 的 experimental 实验，不能作为抵御恶意 gateway 的端到端来源证明发布。
 
 ### 3.2 本机私钥模型
 
