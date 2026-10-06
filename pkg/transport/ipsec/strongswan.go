@@ -192,6 +192,14 @@ func routeBasedChildSA(spec TransportLinkSpec) map[string]any {
 }
 
 func broadTrafficSelectors(addr netip.Addr) []string {
+	// Link-local addresses carry the Babel control adjacency, not the set of
+	// business address families routed through this XFRM interface. In
+	// particular, derived IPv6 link-local tunnels also carry IPv4-via-IPv6
+	// Babel routes. Keep both families in the CHILD; current route/firewall
+	// authorization, rather than the control address family, admits traffic.
+	if addr.IsLinkLocalUnicast() {
+		return []string{"0.0.0.0/0", "::/0"}
+	}
 	if addr.IsValid() && addr.Is4() {
 		return []string{"0.0.0.0/0"}
 	}

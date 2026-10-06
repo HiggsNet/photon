@@ -54,8 +54,9 @@ func TestStrongSwanESP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for index, v6 := range []bool{false, true} {
-		t.Run(fmt.Sprintf("ipv%d", 4+2*index), func(t *testing.T) {
+	for index, testName := range []string{"ipv4", "ipv6", "link-local-dual-stack"} {
+		t.Run(testName, func(t *testing.T) {
+			v6, dual := index != 0, index == 2
 			name := fmt.Sprintf("photon-esp-%d", index)
 			iface := fmt.Sprintf("phesp%d", index)
 			ifID := uint32(525250 + index)
@@ -64,6 +65,10 @@ func TestStrongSwanESP(t *testing.T) {
 			if v6 {
 				local, remote = netip.MustParseAddr("fd55::1"), netip.MustParseAddr("fd55::2")
 				selector.StartAddr, selector.EndAddr = netip.MustParseAddr("::"), netip.MustParseAddr("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff")
+			}
+			selectors := []TrafficSelector{selector}
+			if dual {
+				selectors = append(selectors, TrafficSelector{StartAddr: netip.MustParseAddr("0.0.0.0"), EndAddr: netip.MustParseAddr("255.255.255.255"), EndPort: 65535})
 			}
 			runIP := func(args ...string) {
 				t.Helper()
@@ -80,11 +85,19 @@ func TestStrongSwanESP(t *testing.T) {
 				runIP("addr", "add", local.String()+"/32", "dev", iface)
 			}
 			runIP("route", "add", remote.String(), "dev", iface)
+			if dual {
+				runIP("-6", "addr", "add", "fe80::1/64", "dev", iface, "nodad")
+				runIP("addr", "add", "10.55.0.1/32", "dev", iface)
+				runIP("route", "add", "10.55.0.2", "dev", iface)
+			}
 			if err := driver.LoadPrivateKey(ctx, name, serverDER, ipsec.AlgorithmEd25519); err != nil {
 				t.Fatal(err)
 			}
 			defer driver.UnloadPrivateKey(context.Background(), name)
 			spec := ipsec.TransportLinkSpec{TransportID: name, LocalZone: zone.ZonePath(name + "-gateway."), PeerZone: zone.ZonePath(name + "-leaf."), LocalAddress: "127.0.0.1", XFRMIfID: ifID, LocalTunnelAddr: local, PeerTunnelAddr: remote, LocalPrivateKey: serverDER, LocalPrivateKeyAlgorithm: ipsec.AlgorithmEd25519, PeerPublicKey: clientDER}
+			if dual {
+				spec.LocalTunnelAddr, spec.PeerTunnelAddr = netip.MustParseAddr("fe80::1"), netip.MustParseAddr("fe80::2")
+			}
 			if err := driver.LoadConnection(ctx, spec); err != nil {
 				t.Fatal(err)
 			}
@@ -129,7 +142,7 @@ func TestStrongSwanESP(t *testing.T) {
 			if !initial.NAT.Required() {
 				t.Fatal("production forced encapsulation was not detected")
 			}
-			request, err := initiator.AuthRequest(AuthConfig{LocalID: string(spec.PeerZone), RemoteID: string(spec.LocalZone), PrivateKey: clientPriv, RemotePublicKey: serverPub, Child: ChildConfig{InitiatorSPI: 0x55667788 + uint32(index), LocalSelectors: []TrafficSelector{selector}, RemoteSelectors: []TrafficSelector{selector}}})
+			request, err := initiator.AuthRequest(AuthConfig{LocalID: string(spec.PeerZone), RemoteID: string(spec.LocalZone), PrivateKey: clientPriv, RemotePublicKey: serverPub, Child: ChildConfig{InitiatorSPI: 0x55667788 + uint32(index), LocalSelectors: selectors, RemoteSelectors: selectors}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -173,6 +186,14 @@ func TestStrongSwanESP(t *testing.T) {
 				}
 			}
 			for sequence := uint16(1); sequence <= 3; sequence++ {
+				if dual {
+					// Exercise both business families under the very same CHILD SA.
+					v6 = sequence%2 == 0
+					local, remote = netip.MustParseAddr("10.55.0.1"), netip.MustParseAddr("10.55.0.2")
+					if v6 {
+						local, remote = netip.MustParseAddr("fd55::1"), netip.MustParseAddr("fd55::2")
+					}
+				}
 				inner := espEchoPacket(remote, local, sequence)
 				encrypted, err := sender.Seal(inner)
 				if err != nil {
