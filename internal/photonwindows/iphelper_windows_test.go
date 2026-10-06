@@ -15,6 +15,10 @@ import (
 )
 
 func TestIPHelperSockaddrABI(t *testing.T) {
+	if unsafe.Sizeof(ipHelperInterfaceRow{}) != 168 || unsafe.Offsetof(ipHelperInterfaceRow{}.TransmitOffload) != 164 ||
+		unsafe.Offsetof(ipHelperInterfaceRow{}.DisableDefaultRoutes) != 166 || unsafe.Offsetof(ipHelperInterfaceTable{}.Table) != 8 {
+		t.Fatal("unexpected Windows SDK IP interface row layout")
+	}
 	if unsafe.Sizeof(windows.MibUnicastIpAddressRow{}) != 80 || unsafe.Offsetof(windows.MibUnicastIpAddressRow{}.InterfaceLuid) != 32 ||
 		unsafe.Offsetof(windows.MibUnicastIpAddressRow{}.OnLinkPrefixLength) != 60 || unsafe.Sizeof(windows.MibIpForwardRow2{}) != 104 {
 		t.Fatal("unexpected Windows SDK address/route row layout")
@@ -37,7 +41,7 @@ func ipHelperTestIntent() ipHelperIntent {
 }
 
 func ipHelperTestObservation() ipHelperObservation {
-	return ipHelperObservation{luid: 123, interfaces: [2]windows.MibIpInterfaceRow{
+	return ipHelperObservation{luid: 123, interfaces: [2]ipHelperInterfaceRow{
 		{Family: windows.AF_INET, InterfaceLuid: 123, NlMtu: 1400, Metric: 50},
 		{Family: windows.AF_INET6, InterfaceLuid: 123, NlMtu: 1400, Metric: 50},
 	}}
@@ -234,8 +238,8 @@ func TestIPHelperNativeLifecycle(t *testing.T) {
 	if _, err := driver.Observe(ctx); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("observe after close: %v", err)
 	}
-	row := windows.MibIpInterfaceRow{Family: windows.AF_INET, InterfaceLuid: device.luid}
-	if err := windows.GetIpInterfaceEntry(&row); err == nil {
+	row := ipHelperInterfaceRow{Family: windows.AF_INET, InterfaceLuid: device.luid}
+	if err := getIPHelperInterface(&row); err == nil {
 		t.Fatal("adapter interface survived Close")
 	}
 	t.Log("native dual-stack add, idempotence, drift repair, invalid-scope rejection, withdrawal and configured adapter teardown passed")

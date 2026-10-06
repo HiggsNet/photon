@@ -43,13 +43,13 @@ type ipHelperIntent struct {
 
 type ipHelperObservation struct {
 	luid       uint64
-	interfaces [2]windows.MibIpInterfaceRow
+	interfaces [2]ipHelperInterfaceRow
 	addresses  []windows.MibUnicastIpAddressRow
 	routes     []windows.MibIpForwardRow2
 }
 
 type ipHelperPlan struct {
-	interfaces  []windows.MibIpInterfaceRow
+	interfaces  []ipHelperInterfaceRow
 	removeAddr  []windows.MibUnicastIpAddressRow
 	addAddr     []netip.Prefix
 	removeRoute []windows.MibIpForwardRow2
@@ -141,8 +141,8 @@ func (d ipHelperDriver) observe(ctx context.Context) (ipHelperObservation, error
 		if err := ctx.Err(); err != nil {
 			return o, err
 		}
-		o.interfaces[n] = windows.MibIpInterfaceRow{Family: family, InterfaceLuid: o.luid}
-		if err := windows.GetIpInterfaceEntry(&o.interfaces[n]); err != nil {
+		o.interfaces[n] = ipHelperInterfaceRow{Family: family, InterfaceLuid: o.luid}
+		if err := getIPHelperInterface(&o.interfaces[n]); err != nil {
 			return o, err
 		}
 	}

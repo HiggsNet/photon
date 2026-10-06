@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 $env:PHOTON_WINTUN_SMOKE = '1'
 $env:PHOTON_IPHELPER_SMOKE = '1'
 try {
-    & (Join-Path $PSScriptRoot 'wintun.test.exe') '-test.run=^(TestWintunNative|TestIPHelper)' '-test.v' '-test.timeout=60s'
+    & (Join-Path $PSScriptRoot 'wintun.test.exe') '-test.run=^(TestWintunNative|TestIPHelper|TestConfiguredPacketDevice)' '-test.v' '-test.timeout=90s'
     $result = $LASTEXITCODE
 } finally {
     Remove-Item Env:PHOTON_WINTUN_SMOKE -ErrorAction SilentlyContinue

@@ -47,15 +47,16 @@ func checkWintunDLL() error {
 // Close cancels the wait, joins the reader, then ends the ring and adapter.
 // IP Helper configuration and packet authorization belong to the caller.
 type wintunDevice struct {
-	adapter *wintun.Adapter
-	session wintun.Session
-	luid    uint64
-	cancel  context.CancelFunc
-	done    chan struct{}
-	packets chan []byte
-	mu      sync.Mutex // serializes writes with ring teardown
-	closed  bool
-	err     error
+	adapter    *wintun.Adapter
+	session    wintun.Session
+	luid       uint64
+	cancel     context.CancelFunc
+	done       chan struct{}
+	packets    chan []byte
+	mu         sync.Mutex // serializes writes with ring teardown
+	closed     bool
+	err        error
+	unregister func()
 }
 
 func openWintun(ctx context.Context, name string, guid *windows.GUID) (*wintunDevice, error) {
@@ -65,25 +66,36 @@ func openWintun(ctx context.Context, name string, guid *windows.GUID) (*wintunDe
 	if err := checkWintunDLL(); err != nil {
 		return nil, err
 	}
+	if guid == nil {
+		generated, err := windows.GenerateGUID()
+		if err != nil {
+			return nil, err
+		}
+		guid = &generated
+	}
+	unregister := registerOwnedAdapter(*guid)
 	// Create, never attach to another service's existing adapter/session.
 	a, err := wintun.CreateAdapter(name, "Photon", guid)
 	if err != nil {
+		unregister()
 		return nil, err
 	}
 	session, err := a.StartSession(1 << 20)
 	if err != nil {
 		a.Close()
+		unregister()
 		return nil, err
 	}
 	stopEvent, err := windows.CreateEvent(nil, 1, 0, nil)
 	if err != nil {
 		session.End()
 		a.Close()
+		unregister()
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	d := &wintunDevice{adapter: a, session: session, luid: a.LUID(), cancel: cancel,
-		done: make(chan struct{}), packets: make(chan []byte, 64)}
+		done: make(chan struct{}), packets: make(chan []byte, 64), unregister: unregister}
 	go d.receive(ctx, stopEvent)
 	return d, nil
 }
@@ -103,6 +115,7 @@ func (d *wintunDevice) receive(ctx context.Context, stopEvent windows.Handle) {
 		d.closed = true
 		d.session.End()
 		_ = d.adapter.Close() // upstream wraps a void API; its return is undefined
+		d.unregister()
 		d.mu.Unlock()
 		_ = windows.CloseHandle(stopEvent)
 		close(d.packets)
