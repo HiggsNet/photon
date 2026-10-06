@@ -123,7 +123,32 @@ func (hosts gatewayResolvedHosts) LookupIPAddr(_ context.Context, host string) (
 }
 
 func authorizedGatewayRoutes(config *Config, view corestate.View, now time.Time) []AuthorizedGatewayRoute {
-	if view.State == nil || view.State.Network == nil || photoncrypto.VerifyPinnedRoot(view.State.Network, config.TrustedRootPublicKey) != nil {
+	set := currentAuthorizedRouteSet(config, view, now)
+	if set == nil {
+		return nil
+	}
+	var routes []AuthorizedGatewayRoute
+	for origin, announced := range set.Announced {
+		for prefix := range announced {
+			for _, aggregate := range config.Overlay.SplitRoutes {
+				if aggregate.Addr().BitLen() == prefix.Addr().BitLen() && aggregate.Bits() <= prefix.Bits() && aggregate.Contains(prefix.Addr()) {
+					routes = append(routes, AuthorizedGatewayRoute{Origin: origin, Prefix: prefix})
+					break
+				}
+			}
+		}
+	}
+	slices.SortFunc(routes, func(a, b AuthorizedGatewayRoute) int {
+		if a.Origin != b.Origin {
+			return strings.Compare(string(a.Origin), string(b.Origin))
+		}
+		return strings.Compare(a.Prefix.String(), b.Prefix.String())
+	})
+	return routes
+}
+
+func currentAuthorizedRouteSet(config *Config, view corestate.View, now time.Time) *routing.AuthorizedRouteSet {
+	if config == nil || view.State == nil || view.State.Network == nil || photoncrypto.VerifyPinnedRoot(view.State.Network, config.TrustedRootPublicKey) != nil {
 		return nil
 	}
 	// BuildAuthorizedRouteSet expects verified active input. A previous verified
@@ -150,22 +175,5 @@ func authorizedGatewayRoutes(config *Config, view corestate.View, now time.Time)
 	if err != nil {
 		return nil
 	}
-	var routes []AuthorizedGatewayRoute
-	for origin, announced := range set.Announced {
-		for prefix := range announced {
-			for _, aggregate := range config.Overlay.SplitRoutes {
-				if aggregate.Addr().BitLen() == prefix.Addr().BitLen() && aggregate.Bits() <= prefix.Bits() && aggregate.Contains(prefix.Addr()) {
-					routes = append(routes, AuthorizedGatewayRoute{Origin: origin, Prefix: prefix})
-					break
-				}
-			}
-		}
-	}
-	slices.SortFunc(routes, func(a, b AuthorizedGatewayRoute) int {
-		if a.Origin != b.Origin {
-			return strings.Compare(string(a.Origin), string(b.Origin))
-		}
-		return strings.Compare(a.Prefix.String(), b.Prefix.String())
-	})
-	return routes
+	return set
 }

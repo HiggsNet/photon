@@ -72,7 +72,7 @@ func (p *gatewayBabelPipeline) current(config *Config, view corestate.View, plan
 func (p *gatewayBabelPipeline) localOrigins(config *Config, view corestate.View, now time.Time) []babel.Origin {
 	var out []babel.Origin
 	for _, permission := range authorizedGatewayRoutes(config, view, now) {
-		if permission.Origin != config.ManagedZone {
+		if permission.Origin != config.ManagedZone || permission.Prefix.Bits() != permission.Prefix.Addr().BitLen() {
 			continue
 		}
 		for _, a := range p.addresses {
