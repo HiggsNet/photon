@@ -12,11 +12,17 @@
 - 使用公共 typed intent 发布签名 `routing/babel/identities`，检查租约、当前签名链和 root pin；
   跨 Zone 碰撞、撤回、到期及未来时间记录均拒绝。
 - 路由匹配完整 ID 的 origin 与精确公告前缀；提交/使用时重新检查 revision、当前 gateway、
-  SA generation、IKE/CHILD 硬过期和本机传输授权。source-specific 路由当前明确拒绝。
+  SA generation、IKE/CHILD 硬过期和本机传输授权。
 - `pkg/routing`、`pkg/core/state`、`internal/photonwindows` 的相关测试与 race 检查通过。
 
 签名记录证明身份认领，不证明转发 Update 的端到端来源；仍以显式信任的单 gateway 为实验边界。
-Linux BIRD 的随机完整运行时 ID 尚未自动发布，不能仅匹配 BIRD 的低 32 位放行。
+Linux BIRD 的随机完整运行时 ID 已由 Linux Daemon 自动发布，不能仅匹配 BIRD 的低 32 位放行。
+
+source-specific 路由的 source prefix 仅收紧本机使用条件：规范、非零且与目的地址同族，
+并须覆盖至少一个当前获授权且已公告的非共享本机 /32 或 /128。每次 lookup 仍验证实际
+本机地址，入站反向 lookup 以原始本机目标地址匹配该条件。远端仍须拥有精确目的前缀授权；
+source prefix 不授权额外本机地址，也不允许转发。双栈、fallback、反向匹配及排队期间
+撤销的包测试和 race 通过；真实 source-specific 跨主机互通尚未验收。
 
 ### 单 gateway Babel leaf
 
@@ -32,8 +38,20 @@ IPv4-via-IPv6 与 IPv6 学习、本地双栈公告及撤回、SIGSTOP 后无撤�
 均属于本机，learned route 的请求只得到撤回，不得到重新分发。
 
 `show babel entries <protocol>` 的本地注入前缀行提供完整运行时 ID，测试已与 wire ID 比对。
-未来自动发布必须识别本地来源并绑定实例、续租和重启；不能拿任意 learned entry 认作本机 ID，
-也不能假设没有本地公告时该表仍能提供 ID。
+生产解析器仅接受指定 protocol 中与当前授权本地前缀精确匹配、metric 为 0、Routes/Sources
+为 0 的本地注入证据；拒绝不完整或歧义 ID。Linux Daemon 启动、周期协调及路由协调后观察，
+通过公共签名事务发布两分钟租约，在剩余一分钟时续租；证据缺失或禁用时撤回。
+不能拿任意 learned entry 认作本机 ID，也不能假设没有本地公告时该表仍能提供 ID。
+生产解析器已再次通过真实 BIRD 2.19.1 验收，日志为
+`/tmp/photon-babel-identity-observer-interop.log`。
+
+Windows 本机地址意图仅取当前非共享、授权精确匹配的 /32 或 /128；不从子网猜测主机地址。
+自动公告保留手动撤回。Babel 链路地址复用 Linux 的 overlay/link/port generation 派生契约，
+当前仅支持显式 `derived-link-local`，不猜测未配置地址。
+
+StrongSwan 的 link-local 控制地址现允许同一 CHILD SA 的 IPv4/IPv6 业务 TS；全局地址的
+既有单地址族行为保持。StrongSwan 5.9.13 与 6.0.7 均通过同一 CHILD/SPI 双栈内核 ESP
+往返验收，日志为 `/tmp/photon-linklocal-dual-esp.log` 与 `-nix.log`。
 
 本次复验命令如下，需要隔离容器所需权限；Nix 包路径和镜像可换为具备 `bird`、`birdc`、
 `ip`、`bash` 的测试环境。脚本不修改宿主机路由，退出检查容器已清理。
@@ -59,7 +77,13 @@ GOCACHE=/tmp/photon-gocache GOMODCACHE=/home/herbertqiao/go/pkg/mod \
 origin 批包覆盖。控制 payload 最多 1200 字节，避免每条公告独占队列而遗漏尾部前缀。
 相关包全量测试及 pipeline race 通过。
 
-该 owner 尚未接入 console 的平台生命周期，测试不是 Windows 原生业务跨主机隧道验收。
+该 owner 已接入 console Daemon：认证完成后协调本机公告与身份租约，异步创建配置设备，
+检查当前 revision/generation 后接收完成结果；真实 Read pump、ESP completion 和周期 Tick
+由同一运行循环协调。撤销、重绑和停止先撤掉 pipeline，再关闭并 join 设备。
+仅当前 SA、平台地址就绪、Babel 邻居有效且实际本机地址能选到授权路由时发布
+`tunnel_ready_changed=true`，同时检查 source constraint；撤销、重绑、设备失败或停止时
+立即撤回 ready。composition 全包及相关 race 测试通过；这不是完整 Windows
+原生跨主机业务隧道验收。
 
 ### IP Helper 原生协调
 
@@ -72,8 +96,14 @@ Windows 11 amd64 VM 上 `TestIPHelperSockaddrABI`、`TestIPHelperPlanBoundaries`
 原生生命周期约 3.52 秒：双栈地址实际进入 DAD Preferred，重复协调无变化，删除路由后重建，
 撤销及带配置关闭 adapter 后无残留。使用临时 benchmark/ULA 前缀，未改 VM 管理网卡或默认路由。
 
-`Reconcile` 返回配置已收敛的观察，不能据此宣称 DAD 已完成或隧道可用；未来组合入口仍须检查
-实际地址状态后启用数据交付。
+`Reconcile` 返回配置已收敛的观察，不能据此宣称 DAD 已完成或隧道可用。平台组合入口已等待
+实际地址达到 DAD Preferred 后才交付设备，取消或失败会回收配置和 adapter。
+
+后续原生回归已覆盖创建、DAD、取消、重复关闭、重建、初始化期间取消；自建 Wintun 的
+通知不触发 underlay 重绑，外部临时接口变化仍能触发。修正 `x/sys` IP interface row 的
+原生布局差异（168 字节），增加 size/offset 断言，防止遍历接口表时读错后续行。
+平台原生生命周期、双栈往返及 B2 通知回归通过，临时网卡和路由已清理；证据为
+`/tmp/photon-b4-owned-device-native.log`。
 
 ### Wintun 与 Windows TCP/IP 双向收发
 
@@ -106,13 +136,35 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File 
 第三方 notice 内容和源文件权限保持不变。检查日志为 `/tmp/photon-b4-check.log`，
 打包修复的复验日志为 `/tmp/photon-b4-repeat-build-1.log` 和 `-2.log`。
 
+上述 Daemon、平台生命周期、source-specific 授权和就绪撤回接线后，再次运行完整
+`make check` 通过，覆盖 fmt、vet、全量 Go 测试、Linux 构建与 Windows amd64 交叉编译。
+本轮日志为 `/tmp/photon-b4-runtime-check.log`。
+
+## 完整业务链路验收入口（待执行）
+
+`docs/scripts/windows-b4-cross-host-smoke.sh` 构建实际 Windows Daemon 测试与一次性 Linux
+StrongSwan/BIRD 网关。网关使用随机临时身份、签名公共数据库与实际 BIRD 完整 ID；Windows
+通过真实 UDP socket 检查双栈往返、显式重绑后恢复和 adapter/地址/路由回收。BIRD 内核导出
+仅接受 learned Babel 路由，Windows 回程路由必须由本机公告实际学习。
+
+脚本需要明确授权测试 VM 上的临时数据库/密钥传输、Wintun 和测试路由变更。运行示例：
+
+```sh
+PHOTON_WINDOWS_SSH=photon-test@10.16.252.11 \
+PHOTON_LINUX_IP=10.16.255.8 \
+PHOTON_BIRD_NIX_PACKAGE=/nix/store/pxqa13ld4l0ihvz123bwhaimkn1pfjxw-bird-2.19.1 \
+bash docs/scripts/windows-b4-cross-host-smoke.sh
+```
+
+Linux/Windows 测试编译、脚本语法检查及 `--network none` 的 Linux 网关初始化通过。
+完整脚本尚未执行，不代表跨主机业务通过；初始化日志为 `/tmp/photon-b4-local.wd6IAd`。
+退出清理一次性容器和凭据，保留本次日志；测试进程硬超时或机器故障后仍须确认 VM 资源状态。
+
 ## 尚未完成的产品链路
 
-- Linux BIRD 完整运行时 Router ID 的读取、签名发布、续租和重启更新。
-- Windows 本机地址意图、IP Helper/DAD、Babel 与 packet device 的 Daemon 生命周期接线。
 - 通过实际 Windows Wintun、ESP、Linux StrongSwan/BIRD 的同一条完整业务链路验证，
   包括双向 IPv4/IPv6、授权撤销、gateway 切换、重绑和清理。
-- source-specific prefix 授权契约与端到端来源证明的剩余边界。
+- source-specific 路由的真实跨主机互通；端到端来源证明仍受上述可信单 gateway 边界限制。
 
-B4 未整体完成；B5 服务/IPC 与 B6 完整产品矩阵未纳入此次切片。console 的业务数据默认拒绝，
-`tunnel_ready=false`，不得因单项测试通过提前改成完整隧道就绪。
+B4 未整体完成；B5 服务/IPC 与 B6 完整产品矩阵未纳入此次切片。console 无当前授权
+pipeline 时仍默认拒绝业务数据；运行时就绪事件不能替代完整产品验收。
