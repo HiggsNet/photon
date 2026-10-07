@@ -58,7 +58,7 @@ cleanup() {
     if [[ $remote_created == 1 ]]; then
         if [[ $smoke_mode == service ]]; then
             # Only public runtime diagnostics; config.json contains fixture keys.
-            for pattern in '*.log' '*-events.json' '*-diagnostics.json' '*-peers.json' '*-routes.json' '*-owned-network.json' 'crash-recovery.json' 'network-change.json' 'gossip-convergence.json'; do
+            for pattern in '*.log' '*-events.json' '*-diagnostics.json' '*-peers.json' '*-routes.json' '*-owned-network.json' 'crash-recovery.json' 'network-change.json' 'gossip-convergence.json' 'adapter-conflict.json'; do
                 scp -q "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH:$remote/$pattern" "$work/" 2>/dev/null || true
             done
         fi

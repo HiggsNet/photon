@@ -287,14 +287,21 @@ B6 仍单独覆盖睡眠恢复、物理断网、崩溃恢复、长时间稳定�
 
 ### B6. 验收、安全与发布门槛
 
-- [ ] 建立 Windows VM + Linux Photon gateway 的可重复 test rig。
-- [ ] 里程碑 1：service、Wintun、split route、真实 gossip 与关闭重开。
-- [ ] 里程碑 2：StrongSwan IKE_AUTH/CHILD_SA 与双向 ESP IPv4/IPv6。
-- [ ] 里程碑 3：Babel 邻居、授权 route、SADR 与 gateway 切换。
+- [ ] 建立 Windows VM + 完整 Linux Photon gateway daemon 的可重复 test rig；当前隔离 rig 已运行生产 StrongSwanDriver/GossipDriver + 真实 StrongSwan/BIRD，尚未启动完整 `app/photon`。
+- [x] 里程碑 1：service、Wintun、split route、真实 gossip 与关闭重开；Linux gateway 补齐 Windows 初始缺失的签名 Babel identity，双版本 SCM/业务/落盘及崩溃后重启通过。
+- [x] 里程碑 2：StrongSwan IKE_AUTH/CHILD_SA 与双向 ESP IPv4/IPv6；B3/B4 双版本分层及 B5/B6 原生服务双栈业务通过。
+- [x] 里程碑 3：Babel 邻居、授权 route、SADR 与 gateway 切换；B4 两独立 gateway 的签名切换与 IPv6 SADR 双版本验收通过。
 - [ ] 里程碑 4：rekey、loss/dup/reorder、sleep/resume、network change、revocation 与 crash recovery。
+  - [x] 真实 loopback 地址新增/删除通知在同 SCM 进程触发重绑、新 SA 与双栈恢复，StrongSwan 5.9.13/6.0.7 均通过；不代表物理断网或睡眠恢复。
 - [ ] teardown 必须只删除本产品 owned resource；覆盖 normal stop、partial startup、crash restart、uninstall 和 stale resource adopt。
+  - [x] Windows 11 强制结束本次 SCM 进程后，临时 adapter 自动释放，同 Bolt/新 SA/双栈恢复通过；同名外部网卡保护及失败创建清理原生通过。
+  - [x] 已证实仍存活的外部 IP 接口占名时，SCM 明确失败退出、事件 104 且保留外部 alias/GUID；释放占名后，同配置/Bolt 重启双栈通过。
+  - [ ] 补齐长期 stale resource 残留/adopt 与失败期限；不通过名字或单独的 `ERROR_DUP_NAME` 猜 ownership。
 - [ ] codec/parser/state machine 持续 fuzz；portable 测试覆盖 Linux/Windows，管理员/driver 集成测试明确分层。
+  - [x] IPC 长度帧与严格 JSON 请求分派新增 fuzz，各 15 秒通过，seeds/race/Windows 编译通过；不把短时 fuzz 算作持续验收。
 - [ ] 发布前完成吞吐/CPU/内存基线、72h soak、Authenticode、checksum、SBOM 和安装/升级/卸载测试。
+
+当前证据与未完成门槛见 [B6 分层验收](docs/photon-windows/b6-testing.md)。
 
 ## C. 非当前主线
 

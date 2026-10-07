@@ -85,3 +85,6 @@ Windows 原生管道测试确认管理员/SYSTEM ACL、实际受限 token 拒绝
 IP Helper 三类通知测试及日志用例也在同一 VM 通过；通知进入 Daemon 后完成重绑。
 本地 `make check`（fmt、vet、全仓测试、Linux build、Windows cross-build）和 Windows `go vet` 通过。
 原生结果与交叉编译结果分别记录，不将 cross-build 当作原生服务验收。
+
+随后 B6 扩展了同一入口：默认从 Linux gateway 真实同步初始缺失的签名记录，并强制结束本次
+SCM 进程后重启；这些增量验收与后续边界见 [B6 分层验收](b6-testing.md)。
