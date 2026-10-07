@@ -403,6 +403,11 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 	if err != nil {
 		return err
 	}
+	// XFRM runtime and cleanup use this fallback when a planned host target
+	// is empty. Keep it bound to the same resolved default as overlays/BIRD.
+	if defaultNS, ok := config.Netns.Names[config.Netns.Default]; ok {
+		config.IPsec.DefaultNetNS = defaultNS
+	}
 	// Parse routing.instances[], if any.
 	if file.Routing != nil {
 		config.Routing, err = photonlinux.ParseRoutingConfig(file.Routing.Instances, config.Netns, config.DataDir)
