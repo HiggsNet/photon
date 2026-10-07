@@ -8,12 +8,51 @@ Windows 保持 leaf 接入节点、一个 active gateway、split tunnel，不增
 `docs/scripts/windows-service-smoke.sh` 运行生产 Windows CLI/SCM 入口，Linux 容器运行真实
 StrongSwan、BIRD，以及 Photon 的生产 StrongSwanDriver、GossipDriver 和 object-pull 服务。
 Linux 端仍是隔离 fixture，没有启动完整 `app/photon` gateway daemon。
-因此“完整 Linux Photon gateway 产品 rig”保持未完成，已有协议、资源和服务证据分别记录。
+这一入口保留为组件分层对照；完整产品入口另见下节。
 
 入口沿用 [服务验收](service-testing.md) 的 SSH、Linux LAN 地址、BIRD 和可选 StrongSwan 参数。
 默认开启远程 Gossip，额外发布 `PHOTON_WINDOWS_GOSSIP_PORT`（默认 15201）的 UDP/TCP；
 脚本要求端口空闲，不修改管理网卡或默认路由。`PHOTON_WINDOWS_B6_GOSSIP=0` 可仅运行静态快照场景。
 临时数据库和私钥只用于本次隔离测试，结束后清理。公开日志、DTO 和事件记录保留。
+
+### 完整 Linux gateway 入口
+
+`docs/scripts/windows-full-daemon-smoke.sh` 使用同样的 SSH、Linux LAN、BIRD 与 StrongSwan 参数，
+固定运行 Windows SCM/CLI 对真实 `app/photon daemon`。两端均从独立临时数据库启动；
+准备程序在 daemon 启动前关闭数据库，没有共用文件的第二 writer，也没有额外文件锁。
+bbolt 自带排他锁，在线观测通过 daemon 控制接口读取。
+
+Linux daemon 负责真实 Gossip/object-pull、StrongSwan 连接、XFRM 创建、BIRD 生成/启动及签名
+Babel 身份发布。辅助程序只生成临时初始材料、提供 UDP echo 和只读观测，不运行控制面 sidecar。
+脚本仅向容器 `lo` 添加 gateway 自身获授权的业务地址，不安装 Windows 静态回程。
+
+开始 Windows 业务前，必须确认 Linux 控制接口在线，实际 BIRD 的本地完整 Router ID 与 daemon
+签名记录相符，并确认保留预设的容器端口映射。Windows 初始缺少该网关身份，需真实远程同步。
+Windows 自己签发本地路由公告，Linux 再通过 Gossip 获取授权、Babel 学习并安装两个精确 host 回程；
+验收要求两条内核路由均为 `proto bird` 且指向实际 XFRM 接口，BIRD 查询显式覆盖全部表。
+
+容器使用独立 bridge、`NET_ADMIN` 和 `systempaths=unconfined`，后者允许生产 XFRM driver
+写本容器网络 sysctl；不使用 host network、privileged 或宿主 `/proc` 挂载。
+`/nix/store` 只读挂载用于固定 BIRD/StrongSwan。最终先停止本容器 daemon，再关闭 charon，
+复制公开配置/日志/DTO 后移除容器和远端临时目录，不保留私钥和数据库。
+
+2026-10-07，Windows 11 amd64 对 StrongSwan 5.9.13 和 6.0.7 的完整入口均通过。
+两版均观察到 Windows verified revision `3 → 7`、gateway 成功 pull 2 次；Linux 的两个
+精确 host 回程均为 `proto bird` 并指向实际 `phx...` XFRM 接口。初始、正常重启、强制结束后
+同 Bolt/新 SA、地址新增/删除、外部占名失败及解除后恢复的双栈业务全部通过。
+公开证据新增 `linux-status.txt`、`linux-identity.json`、`linux-ports.json`、`linux-routes.txt`、
+`linux-xfrm.txt`、`bird-entries.txt`、`bird-routes.txt` 和 `daemon.log`。
+
+| StrongSwan | 完整入口网络变化 generation | 新增后观察到业务恢复 | 删除后观察到业务恢复 |
+| --- | --- | --- | --- |
+| 5.9.13 | 3 → 7 → 11 | 6.71 秒 | 8.17 秒 |
+| 6.0.7 | 3 → 7 → 11 | 7.19 秒 | 7.97 秒 |
+
+以上仍是单次全链路观察总耗时，不作为本机期限或性能基线。
+完整联测同时修复了两个生产问题：顶层默认 namespace 未传给 XFRM driver，导致 host 配置
+误落入默认 named namespace；双栈静态路由混用一个 BIRD static protocol，导致真实解析失败。
+默认 namespace 现在由已解析配置传给 driver；静态协议分别生成稳定的 `_v4`、`_v6` 名称，
+保留各自路由与过滤语义。配置到实际 driver 命令链、BIRD 真实配置解析和上述双版本业务均通过。
 
 ## 已完成场景
 
@@ -70,7 +109,11 @@ Windows 原生 `TestWintunNativeForeignNamePreserved` 已确认大小写同名�
 分类为不可恢复冲突；仅 PnP/名称残留或观察失败继续现有 5 秒退避，不猜测归属或修改残留。
 当前且仍匹配 request/revision/授权/generation 的致命冲突使 composition 清理后退出；
 过期 completion 只清理自身设备，普通临时错误可重试。这些分支有 portable race 和 Windows 分类测试。
-长期无法确认归属的名称残留及失败期限仍需后续验收。
+未证实存活外部接口的 `ERROR_DUP_NAME` 从首次当前命名失败起设置 30 秒恢复预算，仍每 5 秒重试。
+重复失败、普通 Gossip revision 和过期 completion 不延长期限；当前成功、明确停止或期望变化才结束
+本次恢复。恰好到期的成功结果也要关闭，超时沿既有 composition 清理后报告失败，不删除未知对象。
+该预算只约束本机命名恢复，不代表设计中从 composition 启动起 30 秒的整个 crash-recovery 目标
+已经完成；长期真实 PnP 残留仍需原生验收。
 
 SCM 层的外部占名验收也在 StrongSwan 6.0.7 整轮回归通过：测试进程持有独立 Wintun
 adapter，服务尝试使用其 alias，最终以 Win32 1066/service-specific 1 停止，记录一次
@@ -95,12 +138,14 @@ SKF/Babel 长序列状态机、持续调度与更长 fuzz 仍有后续工作。
 Windows `go vet`、冲突处理 focused race、Windows 原生分类与 Wintun 生命周期测试通过。
 服务完整场景在上述 VM 和两个 StrongSwan 版本分层执行，最后一轮 6.0.7 增加了外部占名
 失败退出与恢复；之后仅调整脚本的进程创建时间采样诊断，Windows PowerShell 解析通过。
+后续完整 Linux daemon 入口两版本也均通过，名称恢复期限的 fake-time/race、默认 namespace
+配置/driver 回归及 BIRD 静态协议真实解析/包 race 通过；这些产品修复后的全仓 `make check` 通过。
 结束后再次只读核查最后一轮临时服务、事件源、adapter、测试地址及 host route 均为零，
 远端临时目录和 Linux 容器已删除。
 
 ## 后续门槛
 
-完整 Linux gateway daemon 的同 rig 验收、实际睡眠/恢复、物理换网与多层 NAT、
-丢包/重复/乱序产品矩阵、长期 stale resource 残留及失败期限仍待补齐。
+实际睡眠/恢复、物理换网与多层 NAT、
+丢包/重复/乱序产品矩阵、长期真实 PnP 残留及完整生命周期期限仍待补齐。
 吞吐/CPU/内存基线、72h soak、Authenticode、SBOM 和正式安装升级验收也未完成。
 当前分层验收不构成 Windows 正式发布。

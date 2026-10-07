@@ -88,3 +88,5 @@ IP Helper 三类通知测试及日志用例也在同一 VM 通过；通知进入
 
 随后 B6 扩展了同一入口：默认从 Linux gateway 真实同步初始缺失的签名记录，并强制结束本次
 SCM 进程后重启；这些增量验收与后续边界见 [B6 分层验收](b6-testing.md)。
+`docs/scripts/windows-full-daemon-smoke.sh` 则将 Linux 端换为完整 `app/photon daemon`，
+沿用同样参数，在 StrongSwan 5.9.13/6.0.7 上通过签名同步、动态双栈回程及完整服务恢复场景。
