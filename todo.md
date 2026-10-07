@@ -293,6 +293,8 @@ B6 仍单独覆盖睡眠恢复、物理断网、崩溃恢复、长时间稳定�
 - [x] 里程碑 3：Babel 邻居、授权 route、SADR 与 gateway 切换；B4 两独立 gateway 的签名切换与 IPv6 SADR 双版本验收通过。
 - [ ] 里程碑 4：rekey、loss/dup/reorder、sleep/resume、network change、revocation 与 crash recovery。
   - [x] 真实 loopback 地址新增/删除通知在同 SCM 进程触发重绑、新 SA 与双栈恢复，StrongSwan 5.9.13/6.0.7 均通过；不代表物理断网或睡眠恢复。
+  - [x] 接入原生自动恢复通知，地址不变也主动重连；真实 API 注册/注销、模拟回调到 composition 的接线及并发关闭通过，不计作真实睡眠/休眠/Modern Standby 业务验收。
+  - [x] 完整网关容器隔离阻断 IKE/NAT-T/ESP：旧 SA 存活时双栈发送超时、双向 ESP 丢包计数、DPD 退役及同 SCM 进程新 SA/双栈恢复，StrongSwan 5.9.13/6.0.7 均通过；保留 Gossip，不计作物理换网或多层 NAT 验收。
 - [ ] teardown 必须只删除本产品 owned resource；覆盖 normal stop、partial startup、crash restart、uninstall 和未知残留冲突；当前临时 Wintun/address/route 销毁后重建，不增加持久资源 adopt/journal。
   - [x] Windows 11 强制结束本次 SCM 进程后，临时 adapter 自动释放，同 Bolt/新 SA/双栈恢复通过；同名外部网卡保护及失败创建清理原生通过。
   - [x] 已证实仍存活的外部 IP 接口占名时，SCM 明确失败退出、事件 104 且保留外部 alias/GUID；释放占名后，同配置/Bolt 重启双栈通过。

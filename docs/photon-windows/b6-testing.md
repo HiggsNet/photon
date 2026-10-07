@@ -92,6 +92,63 @@ IKE/CHILD lease 更新并恢复双栈 echo。最终精确移除本次地址并�
 初次启动、正常重启、崩溃恢复和两次网络变化后各自独立的 SA/SPI。
 此项验证实际 OS 配置通知，仍不等同物理网卡断开、Wi-Fi 切换或睡眠恢复。
 
+### 地址未变时的恢复通知
+
+Windows composition 现在通过 `PowerRegisterSuspendResumeNotification` 订阅电源恢复。
+仅自动恢复事件 `PBT_APMRESUMEAUTOMATIC` 投递到容量为 1 的队列，忽略随后代表用户交互的
+`PBT_APMRESUMESUSPEND`，避免同次唤醒重复拆连接。回调不操作网络；composition 复用现有
+停止 leaf/旧 SA、重绑 socket、重新规划并认证的串行流程，原地址/路由不变也会触发。
+注册或注销错误传播为运行失败；注销失败保留已停用的回调上下文，避免释放 Windows 仍可能引用的内存。
+参见 [注册 API](https://learn.microsoft.com/en-us/windows/win32/api/powerbase/nf-powerbase-powerregistersuspendresumenotification)
+及 [恢复事件语义](https://learn.microsoft.com/en-us/windows/win32/power/pbt-apmresumeautomatic)。
+
+2026-10-07，Windows 11 amd64 原生通过真实 API 注册/注销、模拟错误、并发回调/关闭和
+真实注册到 synthetic resume callback、同地址 daemon 重绑及 object-pull 恢复的接线测试；
+portable focused race、Windows vet/cross-build 和全仓 `make check` 也通过。
+测试不改变机器电源状态，没有验证真实睡眠、休眠、Modern Standby 或醒来后的真实 ESP 业务。
+这些场景仍是独立验收门槛。MOBIKE 保持关闭，也未改变端口 generation/rotate。
+同日只读 `powercfg /a` 确认当前 VM 的 S1/S2/S3、休眠和 S0 低功耗待机均不可用；
+真实恢复场景需另用支持对应电源状态、且具备独立唤醒手段的环境，不在此 VM 上强行模拟验收。
+
+### 隔离网关传输中断与同进程恢复
+
+完整 daemon 入口另设可选的 `PHOTON_WINDOWS_TRANSPORT_OUTAGE=1`，同时指定已有的
+`PHOTON_NFT_NIX_PACKAGE`，指向 `/nix/store` 下包含 `bin/nft` 的包。仅在本次 bridge 容器
+创建唯一 nft 表，丢弃 `eth0` 上的 IKE/NAT-T/ESP；Gossip 保持可达，避免身份租约过期混淆
+DPD。不会改动宿主 firewall、Windows 管理网卡、默认路由或 SSH。
+
+Windows helper 与 Linux coordinator 用本次临时目录中的有期限 request/ack 协调，按以下门槛验收：
+
+1. 阻断后，旧 IKE/CHILD 仍 live、业务仍 ready 时，双栈新 nonce 均发送成功但接收超时；
+   探测前后均检查 live，不能把 adapter 已销毁导致的 bind 失败当作传输黑洞证据。
+2. nft 分别统计非零 ESP SPI 的 UDP/4500 密文，要求两个方向均实际丢包；IKE 的零 marker、
+   NAT keepalive 和短包不计入 ESP counter。原生 ESP 规则保留，但此场景实际走 NAT-T。
+3. 保持同一 SCM PID、创建时刻和运行状态，在 90 秒观察上限内看到 Windows 的旧 IKE/CHILD
+   均不 live、readiness 关闭，并要求本阶段新增生产日志明确报告 IKE 重传预算耗尽。
+   非 live 的 IPC generation 为 0，不能误要求它比旧 live generation 大。
+4. 删除本次精确 nft 表后，90 秒内恢复 live IKE/CHILD、更大的 live generation、两条新 lease
+   和双栈业务；Linux `swanctl --list-sas` 的新 IKE/CHILD 公共 ID 共同确认实际重新建 SA。
+   不要求断网期间远端立即删除尚未超时的旧 SA，也不以静态端口恢复冒充 MOBIKE。
+
+公开证据保留 `transport-outage.json`（含 live 探测、状态采样、进程和 lease）、
+`outage-nft.txt`、before/after SA 公共 ID/SPI 与 coordinator 日志，不导出会话密钥。
+失败和正常路径均删除本次 nft 表，结束后清理临时服务、私钥、数据库和容器。
+这覆盖隔离网关传输黑洞与 DPD 自动重连，不等同物理 Wi-Fi 切换、多层 NAT 或真实睡眠。
+
+2026-10-07，Windows 11 amd64 对两个 StrongSwan 版本的上述门槛与完整服务回归均通过：
+
+| StrongSwan | 同进程 PID | live generation | 阻断至观察到旧 SA 退役 | 恢复至验收完成 | NAT-T ESP 丢弃入/出 |
+| --- | --- | --- | --- | --- | --- |
+| 5.9.13 | 1432 | 3 → 6 | 33.41 秒 | 7.82 秒 | 15 / 11 包 |
+| 6.0.7 | 1636 | 3 → 6 | 39.21 秒 | 6.46 秒 | 17 / 13 包 |
+
+两版的早期双栈探测均为成功发送后接收超时，Linux 均出现新的 IKE/CHILD 公共 ID `#2`。
+表中时间包含 IPC/SSH 观测与恢复后的业务检查，阻断发生在既有 DPD 周期的不同位置；
+这些单次结果不是本机处理期限或性能基线。相同程序中的正常重启、强制结束重开、真实地址
+新增/删除、外部占名失败及解除后恢复也通过。公开日志分别位于
+`/tmp/photon-windows-full-daemon.9qKiFU`（5.9.13）和
+`/tmp/photon-windows-full-daemon.Pag9Jm`（6.0.7）。
+
 ### 同名外部网卡保护
 
 固定 Wintun 0.14.1 的创建便利函数会在名称冲突时重命名已有网卡。
@@ -142,6 +199,9 @@ Windows `go vet`、冲突处理 focused race、Windows 原生分类与 Wintun �
 配置/driver 回归及 BIRD 静态协议真实解析/包 race 通过；这些产品修复后的全仓 `make check` 通过。
 结束后再次只读核查最后一轮临时服务、事件源、adapter、测试地址及 host route 均为零，
 远端临时目录和 Linux 容器已删除。
+电源恢复入口完成后的 `make check` 通过；随后同一构建对两版 StrongSwan 的最终传输黑洞
+矩阵与完整服务回归通过。全部三轮本次隔离运行的临时服务、事件源、adapter、目录及精确
+测试地址/host route 再次核查均为零，本地测试密钥、数据库和程序已清理。
 
 ## 后续门槛
 
