@@ -74,8 +74,10 @@ func openWintun(ctx context.Context, name string, guid *windows.GUID) (*wintunDe
 		guid = &generated
 	}
 	unregister := registerOwnedAdapter(*guid)
-	// Create, never attach to another service's existing adapter/session.
-	a, err := wintun.CreateAdapter(name, "Photon", guid)
+	// Create, never attach to another service's existing adapter/session. The
+	// DLL's convenience naming path can rename a foreign NIC on collision, so
+	// create under an unpredictable temporary alias and rename only our GUID.
+	a, err := createWintunWithOwnedName(name, guid)
 	if err != nil {
 		unregister()
 		return nil, err
