@@ -17,6 +17,13 @@ $collisionCreated = $false
 $runFailure = $null
 $created = @()
 $ownedIndices = @()
+$gossipEvidence = $null
+$gossipConvergedRevision = $null
+$gossipEvidencePath = Join-Path $FixtureDirectory 'gossip-evidence.json'
+if (Test-Path $gossipEvidencePath) {
+    $gossipEvidence = Get-Content $gossipEvidencePath -Raw | ConvertFrom-Json
+    if (!$gossipEvidence.gateway -or !$gossipEvidence.missing_record -or $null -eq $gossipEvidence.initial_revision) { throw 'Incomplete remote Gossip fixture evidence' }
+}
 function Quote-Yaml([string]$Value) { return "'" + $Value.Replace("'", "''") + "'" }
 $fixture = Get-Content (Join-Path $FixtureDirectory 'config.json') -Raw | ConvertFrom-Json
 $yaml = @(
@@ -88,6 +95,50 @@ function Read-Status {
     if ($response.version -ne 1 -or $response.error) { throw 'Invalid status response' }
     return $response.result
 }
+function Read-OwnedProcess {
+    $service = Read-Service $name
+    if (!$service -or $service.State -ne 'Running' -or $service.ProcessId -eq 0 -or $service.StartName -ne 'LocalSystem') { throw 'Owned SCM service is not running as LocalSystem' }
+    $process = Get-Process -Id $service.ProcessId
+    $details = Get-CimInstance Win32_Process -Filter "ProcessId=$($service.ProcessId)"
+    if (!$details -or $details.ExecutablePath -ne $Executable -or $details.CommandLine -notlike "*$Config*" -or $details.CommandLine -notlike "*$name*") { throw 'Refusing to terminate a process not owned by this fixture service/config' }
+    if ($process.StartTime -lt $eventStart) { throw 'Refusing to terminate a pre-existing process' }
+    $current = Read-Service $name
+    if ($current.ProcessId -ne $process.Id -or $current.State -ne 'Running') { throw 'SCM process changed during ownership check' }
+    return $process
+}
+function Read-StateFileIdentity {
+    $path = Join-Path $FixtureDirectory 'windows.db'
+    $identity = & fsutil.exe file queryfileid $path
+    if ($LASTEXITCODE -ne 0 -or !$identity) { throw 'Cannot establish fixture Bolt file identity' }
+    return ($identity -join "`n")
+}
+function Save-OwnedNetworkSnapshot([string]$Phase) {
+    # Query only the unique fixture adapter name; do not collect or alter the
+    # management interface, or infer ownership from a destination prefix.
+    $adapters = @(Get-NetAdapter -Name $name -IncludeHidden -ErrorAction SilentlyContinue)
+    $interfaces = @()
+    foreach ($adapter in $adapters) {
+        $interfaces += [pscustomobject]@{
+            Name = $adapter.Name
+            InterfaceGuid = [string]$adapter.InterfaceGuid
+            InterfaceIndex = $adapter.ifIndex
+            Status = [string]$adapter.Status
+            Addresses = @(Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -ErrorAction SilentlyContinue | Select-Object IPAddress, PrefixLength, AddressFamily)
+            Routes = @(Get-NetRoute -InterfaceIndex $adapter.ifIndex -ErrorAction SilentlyContinue | Select-Object DestinationPrefix, NextHop, RouteMetric, AddressFamily)
+        }
+    }
+    $service = Read-Service $name
+    [pscustomobject]@{
+        Phase = $Phase
+        ObservedAt = [DateTime]::UtcNow.ToString('o')
+        ServiceState = $service.State
+        ProcessId = $service.ProcessId
+        ExitCode = $service.ExitCode
+        ServiceSpecificExitCode = $service.ServiceSpecificExitCode
+        Interfaces = $interfaces
+    } | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $FixtureDirectory ($Phase + '-owned-network.json'))
+    Write-Output "owned network snapshot: phase=$Phase adapters=$($adapters.Count) SCM=$($service.State) exit=$($service.ExitCode)"
+}
 function Probe-UDP([string]$Local, [string]$Remote, [string]$Phase) {
     $deadline = [DateTime]::UtcNow.AddSeconds(40)
     $payload = [Text.Encoding]::UTF8.GetBytes("SCM-$Phase-$Remote")
@@ -117,12 +168,29 @@ function Check-Business([string]$Phase) {
     Probe-UDP 'fd00:7068:b4::2' 'fd00:7068:b4::1' $Phase
     $status = Read-Status
     if (!$status.running -or !$status.tunnel_ready) { throw 'Business passed but daemon readiness is false' }
+    if ($gossipEvidence) {
+        if ([uint64]$status.revision -le [uint64]$gossipEvidence.initial_revision) { throw 'Ready daemon did not advance beyond the deliberately incomplete initial database' }
+        if ($null -ne $script:gossipConvergedRevision -and [uint64]$status.revision -lt $script:gossipConvergedRevision) { throw 'Restart lost the previously synchronized database revision' }
+    }
     Write-Output "live status: running=$($status.running) tunnel_ready=$($status.tunnel_ready)"
     foreach ($method in @('peers','routes','diagnostics')) {
         $text = & $Executable $method --config $Config
         if ($LASTEXITCODE -ne 0) { throw "Live $method IPC failed" }
         $response = $text | ConvertFrom-Json
         if ($response.version -ne 1 -or $response.method -ne $method -or $response.error -or $null -eq $response.result) { throw "Invalid $method response" }
+        if ($method -eq 'peers' -and $gossipEvidence -and $null -eq $script:gossipConvergedRevision) {
+            $synchronizedPeer = @($response.result.peers | Where-Object { $_.peer -eq $gossipEvidence.gateway -and $_.pull_successes -gt 0 })
+            if ($synchronizedPeer.Count -ne 1) { throw 'Initial business readiness lacks a successful real gateway Gossip pull' }
+            $script:gossipConvergedRevision = [uint64]$status.revision
+            [pscustomobject]@{
+                Gateway = $gossipEvidence.gateway
+                InitiallyMissingRecord = $gossipEvidence.missing_record
+                InitialRevision = $gossipEvidence.initial_revision
+                ConvergedRevision = $script:gossipConvergedRevision
+                Peer = $synchronizedPeer[0]
+            } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $FixtureDirectory 'gossip-convergence.json')
+            Write-Output "remote Gossip convergence passed: peer=$($gossipEvidence.gateway) revision=$($gossipEvidence.initial_revision) -> $script:gossipConvergedRevision pulls=$($synchronizedPeer[0].pull_successes)"
+        }
         [IO.File]::WriteAllText((Join-Path $FixtureDirectory ($Phase + '-' + $method + '.json')), ($text -join "`n"))
     }
 }
@@ -149,6 +217,55 @@ try {
     Invoke-Photon @('service','start','--name',$name)
     Check-Business 'restart'
     $ownedIndices += (Get-NetAdapter -Name $name).ifIndex
+
+    # Kill only the exact SCM-owned process after real bidirectional business.
+    # This deliberately skips Daemon.Stop and tests recovery of the same Bolt
+    # database, pipe endpoint, Wintun adapter name and split-route intent.
+    $beforeCrash = Read-Status
+    if (!$beforeCrash.ike.live -or !$beforeCrash.ike.child_live) { throw 'Crash precondition requires live IKE and CHILD' }
+    $stateFileIdentity = Read-StateFileIdentity
+    $crashProcess = Read-OwnedProcess
+    $crashProcessId = $crashProcess.Id
+    $crashProcessStart = $crashProcess.StartTime.ToUniversalTime()
+    Save-OwnedNetworkSnapshot 'before-crash'
+    Stop-Process -InputObject $crashProcess -Force
+    if (!$crashProcess.WaitForExit(10000)) { throw 'Owned process did not terminate' }
+    $stopDeadline = [DateTime]::UtcNow.AddSeconds(15)
+    do {
+        $crashed = Read-Service $name
+        if ($crashed.State -eq 'Stopped') { break }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $stopDeadline)
+    if ($crashed.State -ne 'Stopped' -or ($crashed.ExitCode -eq 0 -and $crashed.ServiceSpecificExitCode -eq 0)) { throw 'Forced process termination was not reported as an abnormal SCM stop' }
+    Save-OwnedNetworkSnapshot 'after-crash'
+    Expect-PhotonFailure @('status','--config',$Config)
+    Check-Events $name 2 1 0
+    Write-Output "forced crash confirmed: pid=$crashProcessId SCM=$($crashed.State) Win32=$($crashed.ExitCode) service=$($crashed.ServiceSpecificExitCode), no graceful runtime_stopped event"
+
+    Invoke-Photon @('service','start','--name',$name)
+    $recoveredProcess = Read-OwnedProcess
+    if ($recoveredProcess.StartTime.ToUniversalTime() -le $crashProcessStart) { throw 'SCM did not create a new process lifetime after crash' }
+    $recovering = Read-Status
+    Write-Output "post-crash initialized: pid=$($recoveredProcess.Id) running=$($recovering.running) tunnel_ready=$($recovering.tunnel_ready)"
+    Check-Business 'crash-recovery'
+    $afterCrash = Read-Status
+    if (!$afterCrash.ike.live -or !$afterCrash.ike.child_live -or $afterCrash.ike.generation -lt 1) { throw 'Recovered daemon has no live IKE/CHILD generation' }
+    # Generation is process-local and may reset. Compare process lifetime and
+    # both SA leases; do not mistake equal numeric counters for an old SA.
+    if ($afterCrash.ike.expires_at -eq $beforeCrash.ike.expires_at -or $afterCrash.ike.child_expires_at -eq $beforeCrash.ike.child_expires_at) { throw 'Crash recovery reused old IKE/CHILD lease evidence' }
+    if ((Read-StateFileIdentity) -ne $stateFileIdentity) { throw 'Crash recovery replaced the fixture Bolt database' }
+    $ownedIndices += (Get-NetAdapter -Name $name).ifIndex
+    Save-OwnedNetworkSnapshot 'after-crash-recovery'
+    [pscustomobject]@{
+        BeforeProcessId = $crashProcessId
+        BeforeProcessStart = $crashProcessStart.ToString('o')
+        AfterProcessId = $recoveredProcess.Id
+        AfterProcessStart = $recoveredProcess.StartTime.ToUniversalTime().ToString('o')
+        StateFileIdentity = $stateFileIdentity
+        BeforeIKE = $beforeCrash.ike
+        AfterIKE = $afterCrash.ike
+    } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $FixtureDirectory 'crash-recovery.json')
+    Write-Output "crash recovery passed: pid=$crashProcessId -> $($recoveredProcess.Id), fresh IKE/CHILD, same Bolt file, dual-stack business"
     Invoke-Photon @('stop','--config',$Config)
     $stopDeadline = [DateTime]::UtcNow.AddSeconds(15)
     do {
@@ -158,7 +275,7 @@ try {
     } while ([DateTime]::UtcNow -lt $stopDeadline)
     if ($stopped.State -ne 'Stopped' -or $stopped.ExitCode -ne 0 -or $stopped.ServiceSpecificExitCode -ne 0) { throw 'IPC stop did not cleanly join SCM process' }
     Expect-PhotonFailure @('status','--config',$Config)
-    Check-Events $name 2 2 0
+    Check-Events $name 3 2 0
     Invoke-Photon @('service','remove','--name',$name)
     if (Read-Service $name) { throw 'Service remains after removal' }
     Write-Output 'SCM install/start/stop/restart/remove passed'
