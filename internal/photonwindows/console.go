@@ -21,7 +21,10 @@ import (
 // RunConsole owns the common state and gossip resources until cancellation.
 // It restores an existing database; initial identity admission remains explicit.
 func RunConsole(ctx context.Context, config *Config, logger *slog.Logger) error {
-	return NewDaemon(config, logger).Run(ctx)
+	if config == nil {
+		return errors.New("Windows config is required")
+	}
+	return RunControlled(ctx, NewDaemon(config, logger), config.State.Path)
 }
 
 // Daemon owns one run of the Windows composition. Rebind is serialized with
