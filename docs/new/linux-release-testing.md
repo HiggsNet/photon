@@ -1,8 +1,17 @@
 # Linux 重构版测试
 
 本轮旧版固定为 `v0.5.6`（master 提交 `28472ea74615`），新版为
-`v0.6.0-rc.4`（Checkpoint 按 peer 提交、收窄状态读取和减少哈希分配）。新版只供测试，Windows 完整隧道尚未交付。
+`v0.6.0-rc.5`（修复被动接收方的 IPsec 端口轮换）。新版只供测试，Windows 完整隧道尚未交付。
 master 保留旧版；候选版从独立 release 分支发布，不更新 Docker `latest`。
+
+## rc.5 相对 rc.4 的变化：被动接收方端口轮换
+
+- 修复角色映射中明确的空值被当成缺省值、回退为主动拨号方的问题。空值表示仅被动接收连接，轮换时应继续加载被动配置，等待对端发起协商。
+- 对端为 `role=out`、本机为 `role=both` 时，修复前可能在端口轮换期间持续报 `load connection: at least one contact point is required`，对端收到 `AUTHENTICATION_FAILED` 或 `NO_PROPOSAL_CHOSEN`；旧隧道仍可能正常传输，但新隧道无法建立。
+- 同一配置加载用例在 v0.5.6 和 `cae426da` 的父提交通过，在 `cae426da`（2026-09-08，统一 IPsec 单代运行资源推导）失败。空角色判断的隐患在旧版已存在，该次重构开始覆盖轮换配置的角色，触发本次故障。
+- 回归测试覆盖 IPv4/IPv6 被动轮换配置加载、不主动拨号、保留旧运行资源及等待对端协商；同时覆盖按 link/runtime 查找角色和旧调用缺省行为。
+
+此修复不需要修改对端的 `role=out` 配置。发布包和本地测试不替代部署后的双向数据面与轮换验收。
 
 ## rc.4 相对 rc.3 的变化：Checkpoint 与读取性能
 
@@ -82,7 +91,7 @@ NixOS、容器或自定义 unit 应沿用原部署方式，显式固定版本。
 
 ```sh
 curl -fL --retry 3 -o /tmp/photon-install-rc.sh \
-  https://raw.githubusercontent.com/HiggsNet/photon/v0.6.0-rc.4/contrib/install.sh
+  https://raw.githubusercontent.com/HiggsNet/photon/v0.6.0-rc.5/contrib/install.sh
 ```
 
 先在测试机安装旧版，完成入网并确认双向通信，作为基线：
@@ -101,10 +110,10 @@ photon version
 
 ```sh
 sudo systemctl stop photon
-sudo install -d -m 0700 /var/backups/photon-before-rc4
-sudo cp -a /etc/photon /var/backups/photon-before-rc4/etc-photon
-sudo cp -a /usr/local/bin/photon /usr/local/bin/photon-services /var/backups/photon-before-rc4/
-sudo sh /tmp/photon-install-rc.sh --version v0.6.0-rc.4 --no-service
+sudo install -d -m 0700 /var/backups/photon-before-rc5
+sudo cp -a /etc/photon /var/backups/photon-before-rc5/etc-photon
+sudo cp -a /usr/local/bin/photon /usr/local/bin/photon-services /var/backups/photon-before-rc5/
+sudo sh /tmp/photon-install-rc.sh --version v0.6.0-rc.5 --no-service
 sudo systemctl start photon
 photon version
 sudo systemctl status photon --no-pager
@@ -143,14 +152,14 @@ sudo systemctl status photon --no-pager
 
 ```sh
 sudo systemctl stop photon
-sudo mv /etc/photon /etc/photon-rc4-saved
-sudo cp -a /var/backups/photon-before-rc4/etc-photon /etc/photon
-sudo cp -a /var/backups/photon-before-rc4/photon /var/backups/photon-before-rc4/photon-services /usr/local/bin/
+sudo mv /etc/photon /etc/photon-rc5-saved
+sudo cp -a /var/backups/photon-before-rc5/etc-photon /etc/photon
+sudo cp -a /var/backups/photon-before-rc5/photon /var/backups/photon-before-rc5/photon-services /usr/local/bin/
 sudo systemctl start photon
 photon version
 ```
 
-`/etc/photon-rc4-saved` 必须尚不存在，保留新版数据供诊断。回退后再次确认真实通信，
+`/etc/photon-rc5-saved` 必须尚不存在，保留新版数据供诊断。回退后再次确认真实通信，
 必要时重启测试机清理运行中的网络状态，不只检查程序版本。
 
 ## 发布者检查
@@ -158,4 +167,4 @@ photon version
 发布前执行 `make check`、`make smoke-all`、`make install-script-check`；
 记录特权数据面测试、真实升级和长时间测试是否实际执行，不以基础检查替代它们。
 GitHub Actions 必须提供两种 Linux 架构的归档和校验文件，Release 标记为
-Pre-release，RC.4 Docker 镜像使用显式 `v0.6.0-rc.4` 标签，正式 `latest` 保持不变。
+Pre-release，RC.5 Docker 镜像使用显式 `v0.6.0-rc.5` 标签，正式 `latest` 保持不变。
