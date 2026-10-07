@@ -45,6 +45,10 @@ type b4AuthorityCommand struct {
 }
 
 func startB4AuthorityPeer(t *testing.T, ctx context.Context, config *Config) *b4AuthorityPeer {
+	return startB4AuthorityPeerAt(t, ctx, config, "127.0.0.1:0")
+}
+
+func startB4AuthorityPeerAt(t *testing.T, ctx context.Context, config *Config, listen string) *b4AuthorityPeer {
 	t.Helper()
 	if len(config.Gateway.AllowedZones) == 0 {
 		t.Fatal("authority fixture requires at least one gateway")
@@ -92,7 +96,7 @@ func startB4AuthorityPeer(t *testing.T, ctx context.Context, config *Config) *b4
 		t.Fatal(err)
 	}
 	peerCtx, cancel := context.WithCancel(ctx)
-	socket, err := openPacketSockets(peerCtx, "127.0.0.1:0")
+	socket, err := openPacketSockets(peerCtx, listen)
 	if err != nil {
 		cancel()
 		source.Close()

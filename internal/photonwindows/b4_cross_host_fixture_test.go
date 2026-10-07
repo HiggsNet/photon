@@ -276,6 +276,9 @@ protocol babel %s {
 			}
 		}()
 	}
+	if os.Getenv("PHOTON_WINDOWS_B6_GOSSIP") == "1" {
+		startB6GatewayGossip(t, ctx, config, netip.AddrPortFrom(address, port("PHOTON_WINDOWS_GOSSIP_PORT")))
+	}
 	encoded, err := json.Marshal(config)
 	if err != nil {
 		t.Fatal(err)
