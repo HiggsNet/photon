@@ -57,6 +57,8 @@ func createWintunWithOwnedName(name string, guid *windows.GUID) (*wintun.Adapter
 			cause = errors.Join(cause, observeErr)
 			if foreign {
 				cause = errors.Join(errPacketDeviceConflict, cause)
+			} else {
+				cause = errors.Join(errPacketDeviceNamePending, cause)
 			}
 		}
 		return fail(fmt.Errorf("assign owned adapter name %q: %w", name, cause))

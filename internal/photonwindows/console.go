@@ -297,10 +297,10 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		backoff = min(backoff*2, maxBackoff)
 		logger.Info("tunnel_stopped", "reason", reason, "retry_at", nextTunnel, "tunnel_ready", false)
 	}
-	reconcileLeaf := func() {
+	reconcileLeaf := func() error {
 		now := time.Now()
 		if tunnel.phase != 3 {
-			return
+			return nil
 		}
 		var intentErr error
 		if leafID == [8]byte{} || !now.Before(nextLeafIntent) {
@@ -329,6 +329,10 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				logger.Info("leaf_unavailable", "reason", rejected, "tunnel_ready", false)
 			}
 		}
+		if errors.Is(intentErr, errPacketDeviceRecoveryExpired) {
+			return intentErr
+		}
+		return nil
 	}
 	attemptTunnel := func() {
 		if tunnel.phase != 0 || time.Now().Before(nextTunnel) {
@@ -425,7 +429,9 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			} else if before != 3 && tunnel.phase == 3 {
 				backoff = initialBackoff
 				logger.Info("tunnel_authenticated", "gateway", tunnel.plan.Selected.Zone, "tunnel_ready", false, "child_installed", true)
-				reconcileLeaf()
+				if err := reconcileLeaf(); err != nil {
+					return err
+				}
 			}
 			observeReady()
 		case packet := <-packet.espPackets:
@@ -444,7 +450,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		case result := <-leaf.opened:
 			if err := leaf.complete(ctx, config, state.Store().ReadView(), lastPlan, tunnel, leafID, time.Now(), result); err != nil {
 				logger.Warn("leaf_device_failed", "error", err)
-				if errors.Is(err, errPacketDeviceConflict) {
+				if errors.Is(err, errPacketDeviceConflict) || errors.Is(err, errPacketDeviceRecoveryExpired) {
 					return fmt.Errorf("leaf device cannot acquire its configured OS resources: %w", err)
 				}
 			}
@@ -462,7 +468,9 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				stopTunnel(err.Error())
 			}
 			attemptTunnel()
-			reconcileLeaf()
+			if err := reconcileLeaf(); err != nil {
+				return err
+			}
 			if leaf.pipeline != nil {
 				leaf.pipeline.Tick(config, state.Store().ReadView(), lastPlan, time.Now())
 			}
@@ -535,7 +543,9 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				}
 				observeGateways()
 				requestPlan()
-				reconcileLeaf()
+				if err := reconcileLeaf(); err != nil {
+					return err
+				}
 				observeReady()
 			}
 		}

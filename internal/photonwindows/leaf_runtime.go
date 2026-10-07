@@ -3,6 +3,7 @@ package photonwindows
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 	"slices"
 	"sync"
@@ -40,19 +41,20 @@ type leafDevicePacket struct {
 // bounded device reader run outside it. Every asynchronous result is checked
 // against current authorization before its first usable packet.
 type leafRuntime struct {
-	factory    packetDeviceFactory
-	pipeline   *gatewayBabelPipeline
-	device     ownedPacketDevice
-	attachment leafAttachment
-	opened     chan leafOpenResult
-	packets    chan leafDevicePacket
-	request    uint64
-	pending    bool
-	cancelOpen context.CancelFunc
-	openWG     sync.WaitGroup
-	cancelRead context.CancelFunc
-	readWG     sync.WaitGroup
-	retryAt    time.Time
+	factory              packetDeviceFactory
+	pipeline             *gatewayBabelPipeline
+	device               ownedPacketDevice
+	attachment           leafAttachment
+	opened               chan leafOpenResult
+	packets              chan leafDevicePacket
+	request              uint64
+	pending              bool
+	cancelOpen           context.CancelFunc
+	openWG               sync.WaitGroup
+	cancelRead           context.CancelFunc
+	readWG               sync.WaitGroup
+	retryAt              time.Time
+	nameRecoveryDeadline time.Time
 }
 
 func newLeafRuntime(factory packetDeviceFactory) *leafRuntime {
@@ -86,6 +88,13 @@ func desiredLeafAttachment(config *Config, view corestate.View, plan GatewayPlan
 // stop is deny-first even if adapter cleanup fails. Pending platform work must
 // close its own result after cancellation; its request can never be attached.
 func (r *leafRuntime) stop() error {
+	r.nameRecoveryDeadline = time.Time{}
+	return r.stopDevice()
+}
+
+// Retry cleanup does not cancel the current naming recovery episode. Explicit
+// stop/revocation uses stop above and clears its budget.
+func (r *leafRuntime) stopDevice() error {
 	r.pipeline = nil
 	r.request++
 	if r.cancelOpen != nil {
@@ -130,13 +139,19 @@ func (r *leafRuntime) reconcile(ctx context.Context, config *Config, view corest
 	if err != nil {
 		return errors.Join(err, r.stop())
 	}
+	if !r.attachment.equal(want) {
+		r.nameRecoveryDeadline = time.Time{}
+	}
+	if !r.nameRecoveryDeadline.IsZero() && !now.Before(r.nameRecoveryDeadline) {
+		return errors.Join(fmt.Errorf("%w: %q", errPacketDeviceRecoveryExpired, config.Wintun.AdapterName), r.stop())
+	}
 	if r.pipeline != nil && r.pipeline.leaf != nil && r.attachment.equal(want) {
 		return nil
 	}
 	if r.pending && r.attachment.equal(want) {
 		return nil
 	}
-	if err := r.stop(); err != nil {
+	if err := r.stopDevice(); err != nil {
 		return err
 	}
 	if now.Before(r.retryAt) {
@@ -184,7 +199,17 @@ func (r *leafRuntime) complete(ctx context.Context, config *Config, view coresta
 		}
 		return err
 	}
+	if !r.nameRecoveryDeadline.IsZero() && !now.Before(r.nameRecoveryDeadline) {
+		err := fmt.Errorf("%w: %q", errPacketDeviceRecoveryExpired, config.Wintun.AdapterName)
+		if result.device != nil {
+			err = errors.Join(err, result.device.Close())
+		}
+		return err
+	}
 	if result.err != nil {
+		if errors.Is(result.err, errPacketDeviceNamePending) && r.nameRecoveryDeadline.IsZero() {
+			r.nameRecoveryDeadline = now.Add(30 * time.Second)
+		}
 		r.retryAt = now.Add(5 * time.Second)
 		if result.device != nil {
 			return errors.Join(result.err, result.device.Close())
@@ -203,6 +228,7 @@ func (r *leafRuntime) complete(ctx context.Context, config *Config, view coresta
 		return errors.Join(err, result.device.Close())
 	}
 	r.device, r.pipeline, r.attachment = result.device, pipeline, want
+	r.nameRecoveryDeadline = time.Time{}
 	readCtx, cancel := context.WithCancel(ctx)
 	r.cancelRead = cancel
 	r.readWG.Add(1)

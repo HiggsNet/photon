@@ -10,6 +10,11 @@ import (
 // it. Only a completion still matching current authorization may be fatal.
 var errPacketDeviceConflict = errors.New("packet device conflicts with a foreign OS resource")
 
+// A duplicate alias with no confirmed live owner can be a transient PnP
+// remnant. Only this observed condition starts the bounded recovery budget.
+var errPacketDeviceNamePending = errors.New("packet device name is temporarily unavailable")
+var errPacketDeviceRecoveryExpired = errors.New("packet device name recovery exceeded 30 seconds")
+
 // ownedPacketDevice is one configured, exclusively owned OS packet adapter.
 // Close first rejects packets, removes owned routes/addresses, then releases it.
 type ownedPacketDevice interface {
