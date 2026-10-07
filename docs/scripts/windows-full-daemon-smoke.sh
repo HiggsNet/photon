@@ -6,6 +6,13 @@ cd "$(dirname "$0")/../.."
 : "${PHOTON_LINUX_IP:?Set the Linux LAN address reachable from Windows}"
 : "${PHOTON_BIRD_NIX_PACKAGE:?Set the local BIRD package under /nix/store}"
 [[ $PHOTON_LINUX_IP =~ ^[0-9.]+$ && $PHOTON_BIRD_NIX_PACKAGE == /nix/store/* && -x $PHOTON_BIRD_NIX_PACKAGE/bin/bird ]] || exit 2
+outage_mode=${PHOTON_WINDOWS_TRANSPORT_OUTAGE:-0}
+[[ $outage_mode == 0 || $outage_mode == 1 ]] || exit 2
+if [[ $outage_mode == 1 ]]; then
+    : "${PHOTON_NFT_NIX_PACKAGE:?Set the local nftables package under /nix/store}"
+    [[ $PHOTON_NFT_NIX_PACKAGE == /nix/store/* && -x $PHOTON_NFT_NIX_PACKAGE/bin/nft ]] || exit 2
+    nft="$PHOTON_NFT_NIX_PACKAGE/bin/nft"
+fi
 gossip_port=${PHOTON_WINDOWS_GOSSIP_PORT:-15201}
 ike_port=${PHOTON_WINDOWS_TUNNEL_IKE_PORT:-15000}
 natt_port=${PHOTON_WINDOWS_TUNNEL_NATT_PORT:-14500}
@@ -28,8 +35,19 @@ fi
 ssh_args=(-F /dev/null -o BatchMode=yes -o ConnectTimeout=10 -o LogLevel=ERROR)
 container_started=0
 remote_created=0
+outage_worker_pid=
+outage_table="photon_outage_${name##*.}"
 cleanup() {
     result=$?
+    if [[ -n $outage_worker_pid ]]; then
+        kill "$outage_worker_pid" 2>/dev/null || true
+        wait "$outage_worker_pid" 2>/dev/null || true
+    fi
+    if [[ $outage_mode == 1 && $container_started == 1 ]]; then
+        if docker exec "$name" "$nft" list table inet "$outage_table" >/dev/null 2>&1; then
+            docker exec "$name" "$nft" delete table inet "$outage_table" || result=1
+        fi
+    fi
     if [[ $container_started == 1 ]]; then
         # Stop the owned composition before charon; container removal is final fallback.
         docker exec "$name" bash -c '
@@ -53,7 +71,7 @@ cleanup() {
     fi
     if [[ $remote_created == 1 ]]; then
         # Only public runtime diagnostics; config.json contains fixture keys.
-        for pattern in '*.log' '*-events.json' '*-diagnostics.json' '*-peers.json' '*-routes.json' '*-owned-network.json' 'crash-recovery.json' 'network-change.json' 'gossip-convergence.json' 'adapter-conflict.json'; do
+        for pattern in '*.log' '*-events.json' '*-diagnostics.json' '*-peers.json' '*-routes.json' '*-owned-network.json' 'crash-recovery.json' 'network-change.json' 'gossip-convergence.json' 'adapter-conflict.json' 'transport-outage.json'; do
             scp -q "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH:$remote/$pattern" "$work/" 2>/dev/null || true
         done
         if ! ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"Remove-Item -LiteralPath '$remote' -Recurse -Force -ErrorAction Stop\""; then result=1; fi
@@ -136,12 +154,83 @@ chmod 600 "$work/windows.db" "$work/config.json"
 ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"New-Item -ItemType Directory '$remote' | Out-Null\""
 remote_created=1
 scp -q "${ssh_args[@]}" "$work/photon-windows.exe" "$work/windows.db" "$work/config.json" "$work/wintun.dll" "$work/gossip-evidence.json" docs/scripts/windows-service-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
+if [[ $outage_mode == 1 ]]; then
+    scp -q "${ssh_args[@]}" docs/scripts/windows-service-outage-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
+    coordinate_outage() (
+        trap - EXIT
+        # The parent also deletes this exact table on every failure path.
+        trap 'exit 1' TERM INT
+        wait_phase() {
+            local phase=$1 seconds=$2 value deadline=$((SECONDS + $2))
+            while ((SECONDS < deadline)); do
+                value=$(timeout 10 ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"if (Test-Path '$remote/outage-request.txt') { Get-Content '$remote/outage-request.txt' -Raw }\"") || return 1
+                value=${value//$'\r'/}
+                [[ $value == "$phase" ]] && return 0
+                # The PS finally block may request restoration before block.
+                [[ $phase == block && $value == restore ]] && return 1
+                sleep 1
+            done
+            echo "Outage coordinator timed out waiting for $phase" >&2
+            return 1
+        }
+        acknowledge() {
+            timeout 10 ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"[IO.File]::WriteAllText((Join-Path (Get-Location) '$remote/outage-$1.ack'), '$1')\""
+        }
+        snapshot_sas() {
+            local binary=swanctl
+            if [[ -n ${PHOTON_IKE_AUTH_NIX_PACKAGE:-} ]]; then binary="$PHOTON_IKE_AUTH_NIX_PACKAGE/bin/swanctl"; fi
+            # list-sas exposes public IDs/SPIs, never session keys.
+            timeout 10 docker exec "$name" "$binary" --list-sas --uri unix:///tmp/ike-auth.vici > "$work/outage-$1-sas.txt"
+            awk '/: #[0-9]+, ESTABLISHED, IKEv2/ {print $2}' "$work/outage-$1-sas.txt" | sort -u > "$work/outage-$1-ike-ids.txt"
+            awk '/: #[0-9]+, reqid .* INSTALLED,/ {print $2}' "$work/outage-$1-sas.txt" | sort -u > "$work/outage-$1-child-ids.txt"
+            [[ -s $work/outage-$1-ike-ids.txt && -s $work/outage-$1-child-ids.txt ]]
+        }
+        wait_phase block 90
+        snapshot_sas before
+        docker exec -i "$name" "$nft" -f - <<NFT
+add table inet $outage_table
+add chain inet $outage_table inbound { type filter hook input priority -10; policy accept; }
+add chain inet $outage_table outbound { type filter hook output priority -10; policy accept; }
+add rule inet $outage_table inbound iifname "eth0" udp dport 4500 udp length >= 12 @th,64,32 != 0 counter drop comment "natt-esp-in"
+add rule inet $outage_table outbound oifname "eth0" udp sport 4500 udp length >= 12 @th,64,32 != 0 counter drop comment "natt-esp-out"
+add rule inet $outage_table inbound iifname "eth0" udp dport { 500, 4500 } counter drop
+add rule inet $outage_table inbound iifname "eth0" meta l4proto esp counter drop
+add rule inet $outage_table outbound oifname "eth0" udp sport { 500, 4500 } counter drop
+add rule inet $outage_table outbound oifname "eth0" meta l4proto esp counter drop
+NFT
+        acknowledge blocked
+        wait_phase restore 120
+        docker exec "$name" "$nft" list table inet "$outage_table" > "$work/outage-nft.txt"
+        grep -Eq 'counter packets [1-9][0-9]*' "$work/outage-nft.txt"
+        # A nonzero first payload word is an ESP SPI; IKE has a zero marker.
+        # The length guard excludes NAT keepalive and truncated UDP payloads.
+        for direction in in out; do
+            grep -Eq "counter packets [1-9][0-9]*.*comment \"natt-esp-$direction\"" "$work/outage-nft.txt"
+        done
+        docker exec "$name" "$nft" delete table inet "$outage_table"
+        if docker exec "$name" "$nft" list table inet "$outage_table" >/dev/null 2>&1; then exit 1; fi
+        acknowledge restored
+        wait_phase recovered 150
+        snapshot_sas after
+        for kind in ike child; do
+            comm -13 "$work/outage-before-$kind-ids.txt" "$work/outage-after-$kind-ids.txt" > "$work/outage-new-$kind-ids.txt"
+            [[ -s $work/outage-new-$kind-ids.txt ]]
+        done
+        acknowledge verified
+    )
+    coordinate_outage > "$work/outage-coordinator.log" 2>&1 &
+    outage_worker_pid=$!
+fi
 remote_command="powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $remote/windows-service-smoke.ps1 -Executable $remote/photon-windows.exe -FixtureDirectory $remote"
 if ! ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "$remote_command" > "$work/windows.log" 2>&1; then
     cat "$work/windows.log"
     exit 1
 fi
 cat "$work/windows.log"
+if [[ -n $outage_worker_pid ]]; then
+    wait "$outage_worker_pid"
+    outage_worker_pid=
+fi
 
 # Captured during actual Windows service activity, before its final Stop.
 docker exec "$name" test -f /tmp/b4/return-routes-ready

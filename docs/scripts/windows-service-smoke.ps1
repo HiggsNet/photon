@@ -271,6 +271,8 @@ try {
     $initialStatus = Read-Status
     Write-Output "initial live status: running=$($initialStatus.running) tunnel_ready=$($initialStatus.tunnel_ready)"
     Check-Business 'initial'
+    $outageHelper = Join-Path $FixtureDirectory 'windows-service-outage-smoke.ps1'
+    if (Test-Path $outageHelper) { . $outageHelper }
     $ownedIndices += (Get-NetAdapter -Name $name).ifIndex
     Invoke-Photon @('service','stop','--name',$name)
     $stopped = Read-Service $name
