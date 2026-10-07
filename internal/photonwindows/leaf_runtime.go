@@ -177,19 +177,19 @@ func (r *leafRuntime) complete(ctx context.Context, config *Config, view coresta
 		return nil
 	}
 	r.pending = false
-	if result.err != nil {
-		r.retryAt = now.Add(5 * time.Second)
-		if result.device != nil {
-			return errors.Join(result.err, result.device.Close())
-		}
-		return result.err
-	}
 	want, err := desiredLeafAttachment(config, view, plan, tunnel, id, now)
 	if result.revision != view.Revision || err != nil || !want.equal(result.want) {
 		if result.device != nil {
 			return errors.Join(err, result.device.Close())
 		}
 		return err
+	}
+	if result.err != nil {
+		r.retryAt = now.Add(5 * time.Second)
+		if result.device != nil {
+			return errors.Join(result.err, result.device.Close())
+		}
+		return result.err
 	}
 	if result.device == nil {
 		return errors.New("leaf: device factory returned no device")

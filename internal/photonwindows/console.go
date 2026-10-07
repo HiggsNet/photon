@@ -444,6 +444,9 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		case result := <-leaf.opened:
 			if err := leaf.complete(ctx, config, state.Store().ReadView(), lastPlan, tunnel, leafID, time.Now(), result); err != nil {
 				logger.Warn("leaf_device_failed", "error", err)
+				if errors.Is(err, errPacketDeviceConflict) {
+					return fmt.Errorf("leaf device cannot acquire its configured OS resources: %w", err)
+				}
 			}
 		case devicePacket := <-leaf.packets:
 			if devicePacket.err != nil {
