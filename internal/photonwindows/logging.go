@@ -26,6 +26,7 @@ var runtimeEventIDs = map[string]uint32{
 	"gateway_candidates_changed": 301, "gateway_plan_changed": 302,
 	"tunnel_authenticated": 401, "tunnel_ready_changed": 402, "tunnel_stopped": 403, "tunnel_packet_rejected": 404, "tunnel_local_identity_unavailable": 405,
 	"leaf_unavailable": 501, "leaf_device_failed": 502, "leaf_read_failed": 503, "leaf_packet_failed": 504, "leaf_cleanup_failed": 505,
+	"power_resumed": 601,
 }
 
 type runtimeEventSink interface {

@@ -43,6 +43,7 @@ type Daemon struct {
 	done          chan struct{}
 	planGateway   func(context.Context, *Config, corestate.View, time.Time) GatewayPlan
 	deviceFactory packetDeviceFactory
+	watchResume   func(context.Context) (<-chan struct{}, func() error, error)
 }
 
 type rebindRequest struct {
@@ -51,7 +52,7 @@ type rebindRequest struct {
 }
 
 func NewDaemon(config *Config, logger *slog.Logger) *Daemon {
-	return &Daemon{config: config, logger: logger, ready: make(chan struct{}), observations: make(chan chan Observation), rebind: make(chan rebindRequest), plans: make(chan chan GatewayPlan), done: make(chan struct{}), planGateway: PlanGateway, deviceFactory: openConfiguredPacketDevice}
+	return &Daemon{config: config, logger: logger, ready: make(chan struct{}), observations: make(chan chan Observation), rebind: make(chan rebindRequest), plans: make(chan chan GatewayPlan), done: make(chan struct{}), planGateway: PlanGateway, deviceFactory: openConfiguredPacketDevice, watchResume: watchPowerResume}
 }
 
 // GatewayPlan returns a detached, freshly revalidated connection plan. It does
@@ -197,6 +198,11 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		return fmt.Errorf("watch network changes: %w", err)
 	}
 	defer func() { err = errors.Join(err, stopNetworkChanges()) }()
+	powerResumes, stopPowerResumes, err := d.watchResume(ctx)
+	if err != nil {
+		return fmt.Errorf("watch power resume: %w", err)
+	}
+	defer func() { err = errors.Join(err, stopPowerResumes()) }()
 	logger.Info("gossip_started", "address", packet.LocalAddr().String(), "zone", config.ManagedZone, "tunnel_ready", false)
 	type planRequest struct {
 		ctx        context.Context
@@ -507,6 +513,16 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			request.result <- rebind(request.ctx)
 		case <-packet.failed:
 			if ctx.Err() == nil {
+				_ = rebind(ctx)
+				syncPeers()
+			}
+		case _, ok := <-powerResumes:
+			if !ok {
+				powerResumes = nil
+				continue
+			}
+			if ctx.Err() == nil {
+				logger.Info("power_resumed")
 				_ = rebind(ctx)
 				syncPeers()
 			}

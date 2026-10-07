@@ -88,6 +88,12 @@ IKE 实测组合可用 StrongSwan 名称 `aes128-sha256-prfsha256-ecp256` 表达
 StrongSwan：Docker 安装 Ubuntu 24.04 的发行版包，native/NixOS 使用宿主机包。
 不能用 less 上的 6.0.7 代替 Docker/Ubuntu 构建的版本与插件验收。
 
+Windows v1 的换网与睡眠恢复采用停止旧数据面、使旧 generation 失效，再重新建立 IKE/CHILD
+和 Babel 就绪的流程，不保留原 SA，也不承诺无感漫游。MOBIKE 仍关闭；它不是 leaf/转发角色
+开关。若以后引入，须先明确本地 underlay/NAT 路径迁移与网关端口 generation/rotate 的边界：
+当前 rotate 会建立独立的新 SA/XFRM 路径，经激活与切换 gate 后清理旧连接，不能被原 SA 的
+端点迁移绕过。还需协调 rekey、共享 UDP 端点和数据面 owner；本轮不改变这一设计。
+
 StrongSwan 的默认 ESP proposal 存在版本差异：6.0.2 起加入可选 KE，而旧版本默认不要求
 独立 CHILD KE。首个 IKE_AUTH CHILD 的密钥派生又不同于 CREATE_CHILD_SA；因此不能只验证
 首次连通后就强制 X25519 PFS。参见
@@ -400,6 +406,9 @@ engine 猜测。service crash 后下一次启动只能 adopt 带匹配 owner/gen
 | crash recovery：下一次进程启动进入 composition | 在重新验证可信状态、ownership 和新 SA 前保持数据面关闭；不恢复旧 SA sequence/replay window | 30 秒内完成本机资源检查与 adopt/清理，进入可连接的 disconnected 状态或明确 failed；不以远端连通作为期限前提 |
 
 网络持续不可达时按配置 backoff 重试，并维持 disconnected；上述期限不承诺 VPN 建立时间。
+Windows composition 也监听原生自动恢复事件，地址和路由未变仍触发上述重连；随后代表用户
+交互恢复的通知不再次触发。恢复回调仅投递合并事件，资源操作仍由 composition 串行执行。
+真实睡眠、休眠和 Modern Standby 的恢复与期限仍需分别取得原生验收证据。
 进程崩溃到下一次启动的延迟由 SCM/管理员控制，不计入 recovery 时限。无法证明归属的 OS 资源
 不得删除；出现冲突则失败退出并报告具体对象。资源清理超时不能重新开放已失效的授权。
 
