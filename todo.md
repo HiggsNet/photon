@@ -276,11 +276,14 @@ B4 当前设计范围内的接线与分层验收完成；Windows 保持 leaf-onl
 
 ### B5. Windows service、IPC 与 observation
 
-- [ ] 使用 `x/sys/windows/svc` 接入 SCM，并提供复用同一 composition 的 `run --console`。
-- [ ] 网络变化通过 Windows notification 进入 Daemon；重建 UDP/IKE/route 时保持 owner/cleanup 顺序。
-- [ ] 使用 versioned named-pipe IPC，ACL 默认管理员；首版支持 status、peers、routes、diagnostics、stop；配置修改通过重启应用，不提供 reload。
-- [ ] WindowsObservation 展示 Wintun、UDP、IKE/CHILD_SA、Babel 和 route 的实时状态；离线只读 verified/config，不冒充 runtime。
-- [ ] Event Log/文件日志使用稳定 event id、severity 和敏感字段脱敏；metrics 保持有界低基数。
+- [x] 使用 `x/sys/windows/svc` 接入 SCM，并提供复用同一 composition 的 `run --console`；原生 LocalSystem 安装、停止、重启及初始化失败验收通过。
+- [x] 网络变化通过 Windows notification 进入 Daemon；重建 UDP/IKE/route 时保持 owner/cleanup 顺序；沿用 IP Helper 通知接线和 B4 rebind 资源回收。
+- [x] 使用 v1 named-pipe IPC，ACL 仅本机 SYSTEM/管理员；支持 status、peers、routes、diagnostics、stop；有界帧、超时、独占 owner 和服务端权限验证；配置修改通过重启应用，不提供 reload。
+- [x] WindowsObservation 展示 Wintun、UDP、IKE/CHILD_SA、Babel 和 route 的实时状态；重新检查授权与过期，返回有界公开 DTO；离线只读 verified/config，不冒充 runtime。
+- [x] Event Log/文件日志使用稳定 event id、severity 和敏感字段脱敏；文件日志最多 4 × 8 MiB；指标来自固定维度状态和有界计数，不增加 peer/IP 标签。
+
+B5 服务主流程已完成两版本 StrongSwan 的真实 Windows 跨主机验收，见 [服务与控制接口验收](docs/photon-windows/service-testing.md)。
+B6 仍单独覆盖睡眠恢复、物理断网、崩溃恢复、长时间稳定性及发布门槛。
 
 ### B6. 验收、安全与发布门槛
 

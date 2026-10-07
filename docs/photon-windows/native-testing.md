@@ -6,6 +6,9 @@ Windows 不需要安装 Go。测试使用临时数据库和 loopback 临时端�
 
 B4 的 Wintun/IP Helper 管理员原生测试使用独立 opt-in 入口，包含双栈系统 UDP 往返及路由清理，
 见 [B4 数据通路验收](babel-testing.md)；不由本文普通 native smoke 自动启用。
+B5 的 SCM 安装与跨主机业务测试另见 [服务与控制接口验收](service-testing.md)。
+当前 composition 测试包也包含临时 named-pipe 测试；权限相关用例要求管理员，
+创建的管道、受限测试进程及临时文件在测试结束时关闭或删除，不安装系统服务。
 
 ## 执行
 

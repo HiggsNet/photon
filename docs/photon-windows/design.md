@@ -503,4 +503,4 @@ IKE/CHILD SA 后，协调本机 host 公告、完整 Babel 身份租约和平台
 
 Windows 11 VM 与真实 StrongSwan/BIRD 的双栈业务、显式重绑、签名 gossip 撤销/恢复、
 IPv6 SADR、不同 gateway 切换与资源清理已通过，具体版本、脚本和证据见 [B4 验收](babel-testing.md)。
-SCM/IPC 与完整 B6 产品矩阵继续分别验收。
+SCM/IPC 已完成 B5 的原生服务验收，见 [服务与控制接口](service-testing.md)；完整 B6 产品矩阵继续单独验收。

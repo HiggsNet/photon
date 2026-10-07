@@ -8,6 +8,8 @@ cd "$(dirname "$0")/../.."
 [[ $PHOTON_LINUX_IP =~ ^[0-9.]+$ && $PHOTON_BIRD_NIX_PACKAGE == /nix/store/* && -x $PHOTON_BIRD_NIX_PACKAGE/bin/bird ]] || exit 2
 sadr_mode=${PHOTON_WINDOWS_B4_SADR:-0}
 [[ $sadr_mode == 0 || $sadr_mode == 1 ]] || { echo "PHOTON_WINDOWS_B4_SADR must be 0 or 1" >&2; exit 2; }
+smoke_mode=${PHOTON_WINDOWS_SMOKE_MODE:-b4}
+[[ $smoke_mode == b4 || $smoke_mode == service ]] || { echo "Unknown Windows smoke mode" >&2; exit 2; }
 ike_port=${PHOTON_WINDOWS_TUNNEL_IKE_PORT:-15000}
 natt_port=${PHOTON_WINDOWS_TUNNEL_NATT_PORT:-14500}
 [[ $ike_port =~ ^[0-9]+$ && $natt_port =~ ^[0-9]+$ && $ike_port -gt 1024 && $ike_port -lt 65536 && $natt_port -gt 1024 && $natt_port -lt 65536 && $ike_port != "$natt_port" ]] || exit 2
@@ -35,17 +37,27 @@ cleanup() {
         if ! docker rm -f "$name" >/dev/null; then result=1; fi
     fi
     if [[ $remote_created == 1 ]]; then
+        if [[ $smoke_mode == service ]]; then
+            # Only public runtime diagnostics; config.json contains fixture keys.
+            for pattern in '*.log' '*-events.json' 'initial-*.json' 'restart-*.json'; do
+                scp -q "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH:$remote/$pattern" "$work/" 2>/dev/null || true
+            done
+        fi
         if ! ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"Remove-Item -LiteralPath '$remote' -Recurse -Force -ErrorAction Stop\""; then result=1; fi
     fi
-    rm -f "$work/windows.db" "$work/config.json" "$work/b4.test" "$work/b4.test.exe" "$work/wintun.dll" "$work/wintun.zip"
-    printf 'B4 cross-host logs (fixture secrets removed): %s\n' "$work"
+    rm -f "$work/windows.db" "$work/config.json" "$work/b4.test" "$work/b4.test.exe" "$work/photon-windows.exe" "$work/wintun.dll" "$work/wintun.zip"
+    printf 'Windows %s cross-host logs (fixture secrets removed): %s\n' "$smoke_mode" "$work"
     exit "$result"
 }
 trap cleanup EXIT
 export GOCACHE=${GOCACHE:-/tmp/photon-gocache}
 export GOMODCACHE=${GOMODCACHE:-/home/herbertqiao/go/pkg/mod}
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c -o "$work/b4.test" ./internal/photonwindows
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go test -c -o "$work/b4.test.exe" ./internal/photonwindows
+if [[ $smoke_mode == service ]]; then
+    CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o "$work/photon-windows.exe" ./app/photon-windows
+else
+    CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go test -c -o "$work/b4.test.exe" ./internal/photonwindows
+fi
 git rev-parse HEAD > "$work/source-commit.txt"
 git status --short > "$work/source-status.txt"
 curl --fail --location --max-time 60 https://www.wintun.net/builds/wintun-0.14.1.zip -o "$work/wintun.zip"
@@ -93,8 +105,14 @@ docker cp "$name:/tmp/b4/config.json" "$work/config.json" >/dev/null
 chmod 600 "$work/windows.db" "$work/config.json"
 ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"New-Item -ItemType Directory '$remote' | Out-Null\""
 remote_created=1
-scp -q "${ssh_args[@]}" "$work/b4.test.exe" "$work/windows.db" "$work/config.json" "$work/wintun.dll" docs/scripts/windows-b4-cross-host-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
-if ! ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $remote/windows-b4-cross-host-smoke.ps1" > "$work/windows.log" 2>&1; then
+if [[ $smoke_mode == service ]]; then
+    scp -q "${ssh_args[@]}" "$work/photon-windows.exe" "$work/windows.db" "$work/config.json" "$work/wintun.dll" docs/scripts/windows-service-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
+    remote_command="powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $remote/windows-service-smoke.ps1 -Executable $remote/photon-windows.exe -FixtureDirectory $remote"
+else
+    scp -q "${ssh_args[@]}" "$work/b4.test.exe" "$work/windows.db" "$work/config.json" "$work/wintun.dll" docs/scripts/windows-b4-cross-host-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
+    remote_command="powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $remote/windows-b4-cross-host-smoke.ps1"
+fi
+if ! ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "$remote_command" > "$work/windows.log" 2>&1; then
     cat "$work/windows.log"
     exit 1
 fi
