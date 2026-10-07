@@ -56,3 +56,20 @@ func TestConfigValidateRejectsInvalidConfig(t *testing.T) {
 		t.Fatalf("run(config validate) code = %d, stderr = %q", code, stderr.String())
 	}
 }
+
+func TestRunModeIsExclusive(t *testing.T) {
+	for _, args := range [][]string{
+		{"run", "--console", "--service", "--config", "unused"},
+		{"run", "--service"},
+		{"run", "--service", "--config", "unused", "--name", "bad/name"},
+		{"service", "install"},
+		{"service", "unknown"},
+		{"service", "stop", "--name", ""},
+		{"service", "remove", "extra"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if got := run(args, &stdout, &stderr); got != 2 {
+			t.Fatalf("run(%v)=%d stderr=%s", args, got, stderr.String())
+		}
+	}
+}
