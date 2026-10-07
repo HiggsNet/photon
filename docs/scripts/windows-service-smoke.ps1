@@ -17,6 +17,9 @@ $collisionCreated = $false
 $runFailure = $null
 $created = @()
 $ownedIndices = @()
+$networkAddressOwned = $false
+$networkAddress = $null
+$networkIndex = $null
 $gossipEvidence = $null
 $gossipConvergedRevision = $null
 $gossipEvidencePath = Join-Path $FixtureDirectory 'gossip-evidence.json'
@@ -110,7 +113,9 @@ function Read-StateFileIdentity {
     $path = Join-Path $FixtureDirectory 'windows.db'
     $identity = & fsutil.exe file queryfileid $path
     if ($LASTEXITCODE -ne 0 -or !$identity) { throw 'Cannot establish fixture Bolt file identity' }
-    return ($identity -join "`n")
+    $fileIDs = [regex]::Matches(($identity -join "`n"), '(?i)\b0x[0-9a-f]+\b')
+    if ($fileIDs.Count -ne 1) { throw 'Cannot extract an unambiguous native Bolt file ID' }
+    return $fileIDs[0].Value.ToLowerInvariant()
 }
 function Save-OwnedNetworkSnapshot([string]$Phase) {
     # Query only the unique fixture adapter name; do not collect or alter the
@@ -194,6 +199,41 @@ function Check-Business([string]$Phase) {
         [IO.File]::WriteAllText((Join-Path $FixtureDirectory ($Phase + '-' + $method + '.json')), ($text -join "`n"))
     }
 }
+function Remove-OwnedNetworkAddress {
+    if (!$script:networkAddressOwned) { return }
+    $addresses = @(Get-NetIPAddress -InterfaceIndex $networkIndex -IPAddress $networkAddress -ErrorAction SilentlyContinue)
+    foreach ($address in $addresses) {
+        if ($address.PrefixLength -ne 32 -or !$address.SkipAsSource) { throw 'Temporary loopback address properties changed; refusing cleanup' }
+        Remove-NetIPAddress -InterfaceIndex $networkIndex -IPAddress $networkAddress -PolicyStore ActiveStore -Confirm:$false
+    }
+    if (Get-NetIPAddress -InterfaceIndex $networkIndex -IPAddress $networkAddress -ErrorAction SilentlyContinue) { throw 'Temporary loopback address remains' }
+    if (Get-NetRoute -InterfaceIndex $networkIndex -DestinationPrefix ($networkAddress + '/32') -ErrorAction SilentlyContinue) { throw 'Temporary loopback host route remains' }
+    $script:networkAddressOwned = $false
+}
+function Wait-NetworkRecovery([string]$Phase, $Before, [int]$ServiceProcessId, [DateTime]$TriggeredAt) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(40)
+    do {
+        $process = Read-OwnedProcess
+        if ($process.Id -ne $ServiceProcessId) { throw 'Network notification restarted SCM instead of rebinding the existing daemon' }
+        $status = Read-Status
+        if ($status.tunnel_ready -and $status.ike.live -and $status.ike.child_live -and [uint64]$status.ike.generation -gt [uint64]$Before.ike.generation -and $status.ike.expires_at -ne $Before.ike.expires_at -and $status.ike.child_expires_at -ne $Before.ike.child_expires_at) { break }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    if (!$status.tunnel_ready -or !$status.ike.live -or !$status.ike.child_live -or [uint64]$status.ike.generation -le [uint64]$Before.ike.generation -or $status.ike.expires_at -eq $Before.ike.expires_at -or $status.ike.child_expires_at -eq $Before.ike.child_expires_at) { throw "Network notification did not rebuild live IKE/CHILD within the observation timeout: $Phase" }
+    Check-Business $Phase | Out-Host
+    $script:ownedIndices += (Get-NetAdapter -Name $name).ifIndex
+    $completed = [DateTime]::UtcNow
+    Write-Host "network change recovered: $Phase pid=$ServiceProcessId generation=$($Before.ike.generation) -> $($status.ike.generation) observed_ms=$(($completed - $TriggeredAt).TotalMilliseconds)"
+    return [pscustomobject]@{
+        Phase = $Phase
+        ProcessId = $ServiceProcessId
+        TriggeredAt = $TriggeredAt.ToString('o')
+        CompletedAt = $completed.ToString('o')
+        ObservationMilliseconds = ($completed - $TriggeredAt).TotalMilliseconds
+        BeforeIKE = $Before.ike
+        AfterIKE = $status.ike
+    }
+}
 try {
     if ((Read-Service $name) -or (Read-Service $failedName)) { throw 'Refusing to reuse an existing service name' }
     $created += $name
@@ -266,6 +306,41 @@ try {
         AfterIKE = $afterCrash.ike
     } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $FixtureDirectory 'crash-recovery.json')
     Write-Output "crash recovery passed: pid=$crashProcessId -> $($recoveredProcess.Id), fresh IKE/CHILD, same Bolt file, dual-stack business"
+
+    # Trigger actual IPHelper notifications without changing the management
+    # NIC or a default route. .NET's loopback type is the native type 24; reject
+    # ambiguity before selecting its IPv4 index. The host address is never a
+    # source candidate and lives only in ActiveStore for this test.
+    $loopbacks = @([Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() | Where-Object { [int]$_.NetworkInterfaceType -eq 24 })
+    if ($loopbacks.Count -ne 1) { throw 'Expected one concrete type-24 loopback interface' }
+    $networkIndex = $loopbacks[0].GetIPProperties().GetIPv4Properties().Index
+    $loopbackIP = @(Get-NetIPInterface -InterfaceIndex $networkIndex -AddressFamily IPv4)
+    if ($loopbackIP.Count -ne 1 -or $loopbackIP[0].Dhcp -ne 'Disabled') { throw 'Refusing a non-static or ambiguous IPv4 loopback row' }
+    for ($attempt = 0; $attempt -lt 32; $attempt++) {
+        $candidate = '192.0.2.' + (Get-Random -Minimum 1 -Maximum 255)
+        if (!(Get-NetIPAddress -IPAddress $candidate -ErrorAction SilentlyContinue) -and !(Get-NetRoute -DestinationPrefix ($candidate + '/32') -ErrorAction SilentlyContinue)) { $networkAddress = $candidate; break }
+    }
+    if (!$networkAddress) { throw 'No unused TEST-NET host address for isolated network change' }
+    $beforeNetwork = Read-Status
+    $networkProcess = Read-OwnedProcess
+    $triggeredAt = [DateTime]::UtcNow
+    $networkAddressOwned = $true # Also clean up a partially applied cmdlet.
+    New-NetIPAddress -InterfaceIndex $networkIndex -IPAddress $networkAddress -PrefixLength 32 -SkipAsSource $true -PolicyStore ActiveStore | Out-Null
+    $added = Wait-NetworkRecovery 'network-address-added' $beforeNetwork $networkProcess.Id $triggeredAt
+    $beforeRemoval = Read-Status
+    $removedAt = [DateTime]::UtcNow
+    Remove-OwnedNetworkAddress
+    $removed = Wait-NetworkRecovery 'network-address-removed' $beforeRemoval $networkProcess.Id $removedAt
+    [pscustomobject]@{
+        InterfaceType = 24
+        InterfaceIndex = $networkIndex
+        Address = $networkAddress
+        PrefixLength = 32
+        SkipAsSource = $true
+        PolicyStore = 'ActiveStore'
+        Added = $added
+        Removed = $removed
+    } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $FixtureDirectory 'network-change.json')
     Invoke-Photon @('stop','--config',$Config)
     $stopDeadline = [DateTime]::UtcNow.AddSeconds(15)
     do {
@@ -301,6 +376,7 @@ try {
     $runFailure = $_
 } finally {
     $cleanupFailures = @()
+    try { Remove-OwnedNetworkAddress } catch { $cleanupFailures += $_.Exception.Message }
     foreach ($ownedName in $created) {
         try {
             $remaining = Read-Service $ownedName
