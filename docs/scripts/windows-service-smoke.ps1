@@ -10,6 +10,9 @@ $BadConfig = Join-Path $FixtureDirectory 'service-init-failure.yaml'
 $name = 'PhotonB5-' + $PID + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
 $failedName = $name + '-InitFailure'
 $collisionName = $name + '-ExistingSource'
+$adapterConflictName = $name + '-AdapterConflict'
+$foreignHandle = [IntPtr]::Zero
+$foreignGuid = [Guid]::Empty
 $eventStart = Get-Date
 $sourceParent = 'HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\Application'
 $collisionPath = Join-Path $sourceParent $collisionName
@@ -71,28 +74,29 @@ function Check-EventSource([string]$ServiceName) {
     if ($source.PhotonWindowsOwner -ne 'photon-windows-event-source-v1') { throw 'Event Log source ownership marker is absent' }
     if ($source.TypesSupported -ne 7) { throw 'Event Log source does not support Error/Warning/Information' }
 }
-function Check-Events([string]$ServiceName, [int]$StartedCount, [int]$StoppedCount, [int]$FailedCount) {
+function Check-Events([string]$ServiceName, [int]$StartedCount, [int]$StoppedCount, [int]$FailedCount, [int]$RuntimeFailedCount = 0) {
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     do {
         $events = @(Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName=$ServiceName; StartTime=$eventStart} -ErrorAction SilentlyContinue)
         $started = @($events | Where-Object { $_.Id -eq 101 -and $_.Level -eq 4 })
         $stopped = @($events | Where-Object { $_.Id -eq 103 -and $_.Level -eq 4 })
         $failed = @($events | Where-Object { $_.Id -eq 102 -and $_.Level -eq 2 })
-        if ($started.Count -eq $StartedCount -and $stopped.Count -eq $StoppedCount -and $failed.Count -eq $FailedCount) {
-            if (@($events | Where-Object { $_.Id -eq 104 }).Count -ne 0) { throw 'Unexpected runtime_stop_failed event' }
+        $runtimeFailed = @($events | Where-Object { $_.Id -eq 104 -and $_.Level -eq 2 })
+        if ($started.Count -eq $StartedCount -and $stopped.Count -eq $StoppedCount -and $failed.Count -eq $FailedCount -and $runtimeFailed.Count -eq $RuntimeFailedCount) {
+            if (@($events | Where-Object { $_.Id -eq 104 }).Count -ne $RuntimeFailedCount) { throw 'Unexpected runtime_stop_failed event severity' }
             $events | Select-Object TimeCreated, ProviderName, Id, Level, Message | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $FixtureDirectory ($ServiceName + '-events.json'))
-            Write-Output "Event Log passed: source=$ServiceName started101=$($started.Count) stopped103=$($stopped.Count) failed102=$($failed.Count)"
+            Write-Output "Event Log passed: source=$ServiceName started101=$($started.Count) stopped103=$($stopped.Count) failed102=$($failed.Count) runtimeFailed104=$($runtimeFailed.Count)"
             return
         }
         Start-Sleep -Milliseconds 200
     } while ([DateTime]::UtcNow -lt $deadline)
-    throw "Event Log mismatch: source=$ServiceName started=$($started.Count) stopped=$($stopped.Count) failed=$($failed.Count)"
+    throw "Event Log mismatch: source=$ServiceName started=$($started.Count) stopped=$($stopped.Count) failed=$($failed.Count) runtimeFailed=$($runtimeFailed.Count)"
 }
 function Read-Service([string]$ServiceName) {
     return Get-CimInstance Win32_Service -Filter "Name='$ServiceName'"
 }
-function Read-Status {
-    $text = & $Executable status --config $Config
+function Read-Status([string]$ControlConfig = $Config) {
+    $text = & $Executable status --config $ControlConfig
     if ($LASTEXITCODE -ne 0) { throw 'Live status IPC failed' }
     $response = $text | ConvertFrom-Json
     if ($response.version -ne 1 -or $response.error) { throw 'Invalid status response' }
@@ -104,9 +108,14 @@ function Read-OwnedProcess {
     $process = Get-Process -Id $service.ProcessId
     $details = Get-CimInstance Win32_Process -Filter "ProcessId=$($service.ProcessId)"
     if (!$details -or $details.ExecutablePath -ne $Executable -or $details.CommandLine -notlike "*$Config*" -or $details.CommandLine -notlike "*$name*") { throw 'Refusing to terminate a process not owned by this fixture service/config' }
-    if ($process.StartTime -lt $eventStart) { throw 'Refusing to terminate a pre-existing process' }
+    $observedStart = $process.StartTime
+    if ($null -eq $observedStart) { throw "Owned SCM process exited before creation-time verification: service=$name pid=$($service.ProcessId)" }
+    if ($observedStart -lt $eventStart) { throw 'Refusing to terminate a pre-existing process' }
     $current = Read-Service $name
     if ($current.ProcessId -ne $process.Id -or $current.State -ne 'Running') { throw 'SCM process changed during ownership check' }
+    # Process.StartTime is lazy and can become unavailable if the service exits
+    # after this check. Keep the verified sample, rather than querying it again.
+    $process | Add-Member -NotePropertyName FixtureStartedAtUtc -NotePropertyValue $observedStart.ToUniversalTime()
     return $process
 }
 function Read-StateFileIdentity {
@@ -168,10 +177,10 @@ function Probe-UDP([string]$Local, [string]$Remote, [string]$Phase) {
     } while ([DateTime]::UtcNow -lt $deadline)
     throw "Business echo timed out: $Phase $Local -> $Remote : $lastFailure"
 }
-function Check-Business([string]$Phase) {
+function Check-Business([string]$Phase, [string]$ControlConfig = $Config) {
     Probe-UDP '198.18.253.2' '198.18.253.1' $Phase
     Probe-UDP 'fd00:7068:b4::2' 'fd00:7068:b4::1' $Phase
-    $status = Read-Status
+    $status = Read-Status $ControlConfig
     if (!$status.running -or !$status.tunnel_ready) { throw 'Business passed but daemon readiness is false' }
     if ($gossipEvidence) {
         if ([uint64]$status.revision -le [uint64]$gossipEvidence.initial_revision) { throw 'Ready daemon did not advance beyond the deliberately incomplete initial database' }
@@ -179,7 +188,7 @@ function Check-Business([string]$Phase) {
     }
     Write-Output "live status: running=$($status.running) tunnel_ready=$($status.tunnel_ready)"
     foreach ($method in @('peers','routes','diagnostics')) {
-        $text = & $Executable $method --config $Config
+        $text = & $Executable $method --config $ControlConfig
         if ($LASTEXITCODE -ne 0) { throw "Live $method IPC failed" }
         $response = $text | ConvertFrom-Json
         if ($response.version -ne 1 -or $response.method -ne $method -or $response.error -or $null -eq $response.result) { throw "Invalid $method response" }
@@ -209,6 +218,18 @@ function Remove-OwnedNetworkAddress {
     if (Get-NetIPAddress -InterfaceIndex $networkIndex -IPAddress $networkAddress -ErrorAction SilentlyContinue) { throw 'Temporary loopback address remains' }
     if (Get-NetRoute -InterfaceIndex $networkIndex -DestinationPrefix ($networkAddress + '/32') -ErrorAction SilentlyContinue) { throw 'Temporary loopback host route remains' }
     $script:networkAddressOwned = $false
+}
+function Close-OwnedForeignAdapter {
+    if ($script:foreignHandle -eq [IntPtr]::Zero) { return }
+    [PhotonFixtureWintun]::Close($script:foreignHandle)
+    $script:foreignHandle = [IntPtr]::Zero
+    $deadline = [DateTime]::UtcNow.AddSeconds(5)
+    do {
+        $remaining = @(Get-NetAdapter -IncludeHidden | Where-Object { [Guid]$_.InterfaceGuid -eq $foreignGuid })
+        if ($remaining.Count -eq 0) { return }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw 'PS-owned foreign adapter remains after closing its exact handle'
 }
 function Wait-NetworkRecovery([string]$Phase, $Before, [int]$ServiceProcessId, [DateTime]$TriggeredAt) {
     $deadline = [DateTime]::UtcNow.AddSeconds(40)
@@ -266,7 +287,7 @@ try {
     $stateFileIdentity = Read-StateFileIdentity
     $crashProcess = Read-OwnedProcess
     $crashProcessId = $crashProcess.Id
-    $crashProcessStart = $crashProcess.StartTime.ToUniversalTime()
+    $crashProcessStart = $crashProcess.FixtureStartedAtUtc
     Save-OwnedNetworkSnapshot 'before-crash'
     Stop-Process -InputObject $crashProcess -Force
     if (!$crashProcess.WaitForExit(10000)) { throw 'Owned process did not terminate' }
@@ -284,7 +305,7 @@ try {
 
     Invoke-Photon @('service','start','--name',$name)
     $recoveredProcess = Read-OwnedProcess
-    if ($recoveredProcess.StartTime.ToUniversalTime() -le $crashProcessStart) { throw 'SCM did not create a new process lifetime after crash' }
+    if ($recoveredProcess.FixtureStartedAtUtc -le $crashProcessStart) { throw 'SCM did not create a new process lifetime after crash' }
     $recovering = Read-Status
     Write-Output "post-crash initialized: pid=$($recoveredProcess.Id) running=$($recovering.running) tunnel_ready=$($recovering.tunnel_ready)"
     Check-Business 'crash-recovery'
@@ -300,7 +321,7 @@ try {
         BeforeProcessId = $crashProcessId
         BeforeProcessStart = $crashProcessStart.ToString('o')
         AfterProcessId = $recoveredProcess.Id
-        AfterProcessStart = $recoveredProcess.StartTime.ToUniversalTime().ToString('o')
+        AfterProcessStart = $recoveredProcess.FixtureStartedAtUtc.ToString('o')
         StateFileIdentity = $stateFileIdentity
         BeforeIKE = $beforeCrash.ike
         AfterIKE = $afterCrash.ike
@@ -372,6 +393,74 @@ try {
     if (Read-Service $collisionName) { throw 'Event source collision did not roll back newly created SCM service' }
     if ((Get-ItemProperty $collisionPath).FixtureOwner -ne $name -or (Get-ItemProperty $collisionPath).PhotonWindowsOwner) { throw 'Existing unowned Event Log source was changed' }
     Write-Output 'Existing Event Log source preserved; failed install rolled back SCM registration'
+
+    # Keep a separate, PS-owned adapter alive while the service tries the same
+    # alias. This is foreign to the daemon, but still disposable by this test's
+    # exact handle; no management adapter or existing alias is involved.
+    if ((Read-Service $adapterConflictName) -or (Test-Path (Join-Path $sourceParent $adapterConflictName)) -or (Get-NetAdapter -Name $adapterConflictName -IncludeHidden -ErrorAction SilentlyContinue)) { throw 'Refusing an existing adapter-conflict resource' }
+    $wintunLibrary = (Resolve-Path (Join-Path (Split-Path -Parent $Executable) 'wintun.dll')).Path
+    $escapedLibrary = $wintunLibrary.Replace('"', '""')
+    Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class PhotonFixtureWintun {
+    [DllImport(@"$escapedLibrary", EntryPoint="WintunCreateAdapter", CharSet=CharSet.Unicode, SetLastError=true)]
+    public static extern IntPtr Create(string name, string tunnelType, ref Guid requestedGuid);
+    [DllImport(@"$escapedLibrary", EntryPoint="WintunCloseAdapter")]
+    public static extern void Close(IntPtr adapter);
+}
+"@
+    $foreignGuid = [Guid]::NewGuid()
+    $foreignHandle = [PhotonFixtureWintun]::Create($adapterConflictName, 'PhotonTest', [ref]$foreignGuid)
+    if ($foreignHandle -eq [IntPtr]::Zero) { throw "Cannot create disposable foreign adapter: Win32=$([Runtime.InteropServices.Marshal]::GetLastWin32Error())" }
+    $foreignBefore = @(Get-NetAdapter -Name $adapterConflictName -IncludeHidden)
+    if ($foreignBefore.Count -ne 1 -or [Guid]$foreignBefore[0].InterfaceGuid -ne $foreignGuid) { throw 'Foreign adapter identity does not match this test handle' }
+    $conflictConfig = Join-Path $FixtureDirectory 'service-adapter-conflict.yaml'
+    $conflictYaml = $yaml | ForEach-Object { if ($_ -like '  adapter_name:*') { '  adapter_name: ' + (Quote-Yaml $adapterConflictName) } else { $_ } }
+    [IO.File]::WriteAllLines($conflictConfig, [string[]]$conflictYaml, (New-Object Text.UTF8Encoding($false)))
+    $created += $adapterConflictName
+    Invoke-Photon @('service','install','--name',$adapterConflictName,'--config',$conflictConfig)
+    Check-EventSource $adapterConflictName
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $Executable service start --name $adapterConflictName
+        $conflictStartExit = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previousErrorAction }
+    $conflictDeadline = [DateTime]::UtcNow.AddSeconds(40)
+    do {
+        $conflictState = Read-Service $adapterConflictName
+        if ($conflictState.State -eq 'Stopped' -and ($conflictState.ExitCode -ne 0 -or $conflictState.ServiceSpecificExitCode -ne 0)) { break }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $conflictDeadline)
+    if ($conflictState.State -ne 'Stopped' -or ($conflictState.ExitCode -eq 0 -and $conflictState.ServiceSpecificExitCode -eq 0)) { throw 'Foreign alias collision did not fail the running SCM daemon' }
+    Check-Events $adapterConflictName 1 0 0 1
+    $foreignAfter = @(Get-NetAdapter -IncludeHidden | Where-Object { [Guid]$_.InterfaceGuid -eq $foreignGuid })
+    if ($foreignAfter.Count -ne 1 -or $foreignAfter[0].Name -ne $adapterConflictName) { throw 'Service renamed or removed the held foreign adapter' }
+    [pscustomobject]@{
+        Service = $adapterConflictName
+        StartCommandExitCode = $conflictStartExit
+        FinalState = $conflictState.State
+        ExitCode = $conflictState.ExitCode
+        ServiceSpecificExitCode = $conflictState.ServiceSpecificExitCode
+        BeforeGUID = [string]$foreignBefore[0].InterfaceGuid
+        AfterGUID = [string]$foreignAfter[0].InterfaceGuid
+        BeforeAlias = $foreignBefore[0].Name
+        AfterAlias = $foreignAfter[0].Name
+    } | ConvertTo-Json | Set-Content (Join-Path $FixtureDirectory 'adapter-conflict.json')
+    Write-Output "foreign adapter collision passed: start_exit=$conflictStartExit SCM=$($conflictState.State) Win32=$($conflictState.ExitCode), alias/GUID preserved, runtimeFailed104=1"
+    $conflictStateIdentity = Read-StateFileIdentity
+    Close-OwnedForeignAdapter
+    Invoke-Photon @('service','start','--name',$adapterConflictName)
+    Check-Business 'adapter-conflict-recovery' $conflictConfig
+    if ((Read-StateFileIdentity) -ne $conflictStateIdentity) { throw 'Alias conflict recovery replaced the Bolt database' }
+    $ownedIndices += (Get-NetAdapter -Name $adapterConflictName).ifIndex
+    Invoke-Photon @('service','stop','--name',$adapterConflictName)
+    $conflictRecoveredStop = Read-Service $adapterConflictName
+    if ($conflictRecoveredStop.State -ne 'Stopped' -or $conflictRecoveredStop.ExitCode -ne 0 -or $conflictRecoveredStop.ServiceSpecificExitCode -ne 0) { throw 'Recovered alias-conflict service did not stop cleanly' }
+    Check-Events $adapterConflictName 2 1 0 1
+    Invoke-Photon @('service','remove','--name',$adapterConflictName)
+    Write-Output 'foreign alias conflict recovery passed: released pipe/Bolt, same configuration/database restarted with dual-stack business'
 } catch {
     $runFailure = $_
 } finally {
@@ -388,6 +477,7 @@ try {
             if (Test-Path (Join-Path $sourceParent $ownedName)) { throw "Temporary Event Log source remains: $ownedName" }
         } catch { $cleanupFailures += $_.Exception.Message }
     }
+    try { Close-OwnedForeignAdapter } catch { $cleanupFailures += $_.Exception.Message }
     if ($collisionCreated) {
         try {
             if (Read-Service $collisionName) { Invoke-Photon @('service','remove','--name',$collisionName) }
@@ -398,6 +488,7 @@ try {
     }
     try {
         if (Get-NetAdapter -Name $name -ErrorAction SilentlyContinue) { throw 'Temporary Wintun adapter remains after stop' }
+        if (Get-NetAdapter -Name $adapterConflictName -ErrorAction SilentlyContinue) { throw 'Temporary conflict-recovery adapter remains after stop' }
         foreach ($index in ($ownedIndices | Select-Object -Unique)) {
             if (Get-NetIPAddress -InterfaceIndex $index -ErrorAction SilentlyContinue) { throw "Owned address remains on interface $index" }
             if (Get-NetRoute -InterfaceIndex $index -ErrorAction SilentlyContinue) { throw "Owned route remains on interface $index" }
