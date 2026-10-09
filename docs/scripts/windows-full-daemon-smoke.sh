@@ -7,7 +7,15 @@ cd "$(dirname "$0")/../.."
 : "${PHOTON_BIRD_NIX_PACKAGE:?Set the local BIRD package under /nix/store}"
 [[ $PHOTON_LINUX_IP =~ ^[0-9.]+$ && $PHOTON_BIRD_NIX_PACKAGE == /nix/store/* && -x $PHOTON_BIRD_NIX_PACKAGE/bin/bird ]] || exit 2
 outage_mode=${PHOTON_WINDOWS_TRANSPORT_OUTAGE:-0}
+rekey_mode=${PHOTON_WINDOWS_REKEY_TRAFFIC:-0}
+baseline_mode=${PHOTON_WINDOWS_BASELINE:-0}
+[[ $rekey_mode == 0 || $rekey_mode == 1 ]] || exit 2
+[[ $baseline_mode == 0 || $baseline_mode == 1 ]] || exit 2
 [[ $outage_mode == 0 || $outage_mode == 1 ]] || exit 2
+if ((outage_mode + rekey_mode + baseline_mode > 1)); then
+    echo 'Choose one independent B6 scenario: outage, rekey traffic, or baseline' >&2
+    exit 2
+fi
 if [[ $outage_mode == 1 ]]; then
     : "${PHOTON_NFT_NIX_PACKAGE:?Set the local nftables package under /nix/store}"
     [[ $PHOTON_NFT_NIX_PACKAGE == /nix/store/* && -x $PHOTON_NFT_NIX_PACKAGE/bin/nft ]] || exit 2
@@ -36,9 +44,14 @@ ssh_args=(-F /dev/null -o BatchMode=yes -o ConnectTimeout=10 -o LogLevel=ERROR)
 container_started=0
 remote_created=0
 outage_worker_pid=
+rekey_worker_pid=
 outage_table="photon_outage_${name##*.}"
 cleanup() {
     result=$?
+    if [[ -n $rekey_worker_pid ]]; then
+        kill "$rekey_worker_pid" 2>/dev/null || true
+        wait "$rekey_worker_pid" 2>/dev/null || true
+    fi
     if [[ -n $outage_worker_pid ]]; then
         kill "$outage_worker_pid" 2>/dev/null || true
         wait "$outage_worker_pid" 2>/dev/null || true
@@ -71,7 +84,7 @@ cleanup() {
     fi
     if [[ $remote_created == 1 ]]; then
         # Only public runtime diagnostics; config.json contains fixture keys.
-        for pattern in '*.log' '*-events.json' '*-diagnostics.json' '*-peers.json' '*-routes.json' '*-owned-network.json' 'crash-recovery.json' 'network-change.json' 'gossip-convergence.json' 'adapter-conflict.json' 'transport-outage.json'; do
+        for pattern in '*.log' '*-events.json' '*-diagnostics.json' '*-peers.json' '*-routes.json' '*-owned-network.json' 'crash-recovery.json' 'network-change.json' 'gossip-convergence.json' 'adapter-conflict.json' 'transport-outage.json' 'rekey-traffic*.json' 'baseline*.json'; do
             scp -q "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH:$remote/$pattern" "$work/" 2>/dev/null || true
         done
         if ! ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"Remove-Item -LiteralPath '$remote' -Recurse -Force -ErrorAction Stop\""; then result=1; fi
@@ -154,6 +167,15 @@ chmod 600 "$work/windows.db" "$work/config.json"
 ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"New-Item -ItemType Directory '$remote' | Out-Null\""
 remote_created=1
 scp -q "${ssh_args[@]}" "$work/photon-windows.exe" "$work/windows.db" "$work/config.json" "$work/wintun.dll" "$work/gossip-evidence.json" docs/scripts/windows-service-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
+if [[ $baseline_mode == 1 ]]; then
+    scp -q "${ssh_args[@]}" docs/scripts/windows-service-baseline.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
+fi
+if [[ $rekey_mode == 1 ]]; then
+    scp -q "${ssh_args[@]}" docs/scripts/windows-service-rekey-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
+    source docs/scripts/windows-rekey-coordinator.sh
+    coordinate_rekey > "$work/rekey-coordinator.log" 2>&1 &
+    rekey_worker_pid=$!
+fi
 if [[ $outage_mode == 1 ]]; then
     scp -q "${ssh_args[@]}" docs/scripts/windows-service-outage-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
     coordinate_outage() (
@@ -227,6 +249,10 @@ if ! ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "$remote_command" > "$work/windo
     exit 1
 fi
 cat "$work/windows.log"
+if [[ -n $rekey_worker_pid ]]; then
+    wait "$rekey_worker_pid"
+    rekey_worker_pid=
+fi
 if [[ -n $outage_worker_pid ]]; then
     wait "$outage_worker_pid"
     outage_worker_pid=

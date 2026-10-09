@@ -271,6 +271,10 @@ try {
     $initialStatus = Read-Status
     Write-Output "initial live status: running=$($initialStatus.running) tunnel_ready=$($initialStatus.tunnel_ready)"
     Check-Business 'initial'
+    $baselineHelper = Join-Path $FixtureDirectory 'windows-service-baseline.ps1'
+    if (Test-Path $baselineHelper) { . $baselineHelper; Test-ServiceBaseline }
+    $rekeyHelper = Join-Path $FixtureDirectory 'windows-service-rekey-smoke.ps1'
+    if (Test-Path $rekeyHelper) { . $rekeyHelper }
     $outageHelper = Join-Path $FixtureDirectory 'windows-service-outage-smoke.ps1'
     if (Test-Path $outageHelper) { . $outageHelper }
     $ownedIndices += (Get-NetAdapter -Name $name).ifIndex
