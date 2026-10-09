@@ -28,4 +28,4 @@ go test ./internal/photonclient/ike -run '^FuzzSKFSequence$' \
 
 2026-10-09，本切片在 Linux 执行 20 秒探索（退出含收尾约 21 秒），11,843 次执行、
 新增 13 个 interesting inputs，通过；focused seeds/race 与 Windows amd64 测试二进制编译通过。
-此处没有运行 Windows 原生测试，也没有完成小时级或持续调度验收。
+同日整合后，Windows 11 amd64 六包原生回归包含本项 seeds 并通过；仍未完成小时级或持续调度验收。

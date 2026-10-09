@@ -292,6 +292,7 @@ B6 仍单独覆盖睡眠恢复、物理断网、崩溃恢复、长时间稳定�
 - [x] 里程碑 2：StrongSwan IKE_AUTH/CHILD_SA 与双向 ESP IPv4/IPv6；B3/B4 双版本分层及 B5/B6 原生服务双栈业务通过。
 - [x] 里程碑 3：Babel 邻居、授权 route、SADR 与 gateway 切换；B4 两独立 gateway 的签名切换与 IPv6 SADR 双版本验收通过。
 - [ ] 里程碑 4：rekey、loss/dup/reorder、sleep/resume、network change、revocation 与 crash recovery。
+  - [x] 完整网关对持续双栈业务发起 CHILD/IKE rekey，StrongSwan 5.9.13/6.0.7 保持同 SCM PID/live generation，验证 SA 更替与后续业务；存在显著收包缺口，不计作无损或 loss/dup/reorder 验收，见 [重协商记录](docs/photon-windows/b6-rekey-testing.md)。
   - [x] 真实 loopback 地址新增/删除通知在同 SCM 进程触发重绑、新 SA 与双栈恢复，StrongSwan 5.9.13/6.0.7 均通过；不代表物理断网或睡眠恢复。
   - [x] 接入原生自动恢复通知，地址不变也主动重连；真实 API 注册/注销、模拟回调到 composition 的接线及并发关闭通过，不计作真实睡眠/休眠/Modern Standby 业务验收。
   - [x] 完整网关容器隔离阻断 IKE/NAT-T/ESP：旧 SA 存活时双栈发送超时、双向 ESP 丢包计数、DPD 退役及同 SCM 进程新 SA/双栈恢复，StrongSwan 5.9.13/6.0.7 均通过；保留 Gossip，不计作物理换网或多层 NAT 验收。
@@ -302,6 +303,7 @@ B6 仍单独覆盖睡眠恢复、物理断网、崩溃恢复、长时间稳定�
   - [ ] 补齐长期真实 PnP 残留与完整生命周期期限的原生验收；不通过名字或单独的 `ERROR_DUP_NAME` 猜 ownership。
 - [ ] codec/parser/state machine 持续 fuzz；portable 测试覆盖 Linux/Windows，管理员/driver 集成测试明确分层。
   - [x] IPC 长度帧与严格 JSON 请求分派新增 fuzz，各 15 秒通过，seeds/race/Windows 编译通过；不把短时 fuzz 算作持续验收。
+  - [x] SKF 认证分片长序列 fuzz：乱序重复、认证失败、PMTU 重启、到期清理与 64 片恢复；20 秒探索、race 及 Windows 原生 seeds 通过。六包原生入口补齐 Babel/SADR，持续 fuzz 门槛保留，见 [SKF 验收](docs/photon-windows/skf-fuzz-testing.md)。
 - [ ] 发布前完成吞吐/CPU/内存基线、72h soak、Authenticode、checksum、SBOM 和安装/升级/卸载测试。
 
 当前证据与未完成门槛见 [B6 分层验收](docs/photon-windows/b6-testing.md)。
@@ -325,4 +327,4 @@ B6 仍单独覆盖睡眠恢复、物理断网、崩溃恢复、长时间稳定�
 2. 旧 aggregate schema 的入口、fixtures 与版本承诺审计已完成；仓库目前未声明直接升级截止版本，现有兼容继续保留。
 3. 发布计划确定截止版本后，按独立范围退出 aggregate decoder、partitioned cleanup 迁移和 root 修复；不能按文件名一次删除。
 4. CLI 壳只随上述 owner 迁移逐步进入 `internal/photoncli`，不单独进行目录搬家。
-5. Windows B1/B2 控制面前置已收口：身份导入、唯一 Daemon/State/GossipDriver、当前授权候选规划、原生通知重绑与 Windows/Linux 跨主机恢复验收已完成。下一步按 B3 的来源/许可证决策实现 IKE/ESP，随后推进 Babel/SADR、Wintun、SCM/named-pipe 和完整验收。
+5. Windows B1–B5 当前设计范围已完成；继续 B6 的真实生命周期、链路故障、性能与发布门槛。保留各场景独立证据，不以组件或短时测试替代物理睡眠、72h soak 或正式发布验收。

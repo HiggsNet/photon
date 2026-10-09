@@ -203,7 +203,27 @@ Windows `go vet`、冲突处理 focused race、Windows 原生分类与 Wintun �
 矩阵与完整服务回归通过。全部三轮本次隔离运行的临时服务、事件源、adapter、目录及精确
 测试地址/host route 再次核查均为零，本地测试密钥、数据库和程序已清理。
 
-## 后续门槛
+## 2026-10-09 RC.5 合并与后续切片
+
+`windows` 已包含当日 `origin/master`，另合并 Linux RC.5 `9f7e764a`：保留显式为空的
+passive responder 角色，使 Linux gateway 被动端口轮换不错误回退为主动发起方。
+合并提交 `a96c0b1b`，同时同步该 RC 的 VERSION 与测试说明；没有发布 Windows 版本。
+IPsec race、全仓 `make check`、Windows composition 与 portable 五包 race 均通过。
+
+本轮回归暴露首次随机共享端口的 UDP/TCP 可用性差异：UDP 选出的端口，TCP 可能被
+占用或被 Windows 排除。首次 `:0` 绑定现在最多尝试 16 次，每次失败释放 UDP；
+已配置或已公布的端口不重选，重绑仍保持原 endpoint。focused 五轮 race、独立审阅和
+Windows 原生回归通过。此处未确定性注入连续 16 次 TCP 冲突，不将现场通过等同全部错误分支验证。
+
+原生入口新增此前遗漏的 Babel/SADR 两包，Windows 11 amd64 六包共 239 个顶层测试
+通过（含 13 个 fuzz seed suites）。新 [SKF 长序列 fuzz](skf-fuzz-testing.md) 覆盖
+有状态认证分片、PMTU 重启、到期与失败恢复；短时探索不计作持续 fuzz 门槛完成。
+全仓检查及原生日志保留在 `build/windows-b6-*`，避免只依赖可清理的 `/tmp`。
+
+双版本完整网关的[持续流量重协商](b6-rekey-testing.md)已通过明确的有界连续性门槛；
+原始发送/接收计数暴露明显缺口，后续须定位，不能称为无损切换。
+
+## 尚未完成的门槛
 
 实际睡眠/恢复、物理换网与多层 NAT、
 丢包/重复/乱序产品矩阵、长期真实 PnP 残留及完整生命周期期限仍待补齐。
