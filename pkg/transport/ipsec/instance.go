@@ -1216,11 +1216,12 @@ func roleForSpec(id string, spec TransportLinkSpec, roles map[string]string) str
 	if roles == nil {
 		return InitiatorRolePrimary
 	}
-	if role := roles[id]; role != "" {
+	// An explicitly empty role is a passive responder, not a missing role.
+	if role, ok := roles[id]; ok {
 		return role
 	}
 	if spec.TransportID != "" {
-		if role := roles[spec.TransportID]; role != "" {
+		if role, ok := roles[spec.TransportID]; ok {
 			return role
 		}
 	}
