@@ -88,6 +88,12 @@ func TestGossipSocketsFailedRebindRecoversAndCloseUnblocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer occupied.Close()
+	// An explicitly configured first bind must fail too, not pick a different
+	// port under the dynamic-port retry policy.
+	if unexpected, err := openPacketSockets(t.Context(), address); err == nil {
+		unexpected.Close()
+		t.Fatal("fixed endpoint silently changed after a bind conflict")
+	}
 	if err := sockets.Rebind(t.Context()); err == nil {
 		t.Fatal("expected TCP conflict")
 	}

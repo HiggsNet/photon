@@ -72,15 +72,29 @@ func (s *packetSockets) Rebind(ctx context.Context) error {
 	}
 	defer func() { close(s.changed); s.changed = make(chan struct{}) }()
 	lc := net.ListenConfig{}
-	packet, err := lc.ListenPacket(ctx, "udp", s.address)
-	if err != nil {
-		return err
+	// UDP port zero does not reserve the same TCP port. It may already be
+	// occupied or excluded by Windows for TCP. Retry only the first dynamic
+	// allocation, never silently change a configured or published endpoint.
+	attempts := 1
+	if _, port, err := net.SplitHostPort(s.address); err == nil && port == "0" {
+		attempts = 16
 	}
-	udp := packet.(*net.UDPConn)
-	listener, err := lc.Listen(ctx, "tcp", udp.LocalAddr().String())
-	if err != nil {
+	var udp *net.UDPConn
+	var listener net.Listener
+	for attempt := 0; attempt < attempts; attempt++ {
+		packet, err := lc.ListenPacket(ctx, "udp", s.address)
+		if err != nil {
+			return err
+		}
+		udp = packet.(*net.UDPConn)
+		listener, err = lc.Listen(ctx, "tcp", udp.LocalAddr().String())
+		if err == nil {
+			break
+		}
 		_ = udp.Close()
-		return err
+		if attempt+1 == attempts || ctx.Err() != nil {
+			return err
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		_ = udp.Close()
