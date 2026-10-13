@@ -1,8 +1,15 @@
 # Linux 重构版测试
 
 本轮旧版固定为 `v0.5.6`（master 提交 `28472ea74615`），新版为
-`v0.6.0-rc.5`（修复被动接收方的 IPsec 端口轮换）。新版只供测试，Windows 完整隧道尚未交付。
+`v0.6.0-rc.6`（修复 gossip 目录更新竞态与拒绝记录展示）。新版只供测试，Windows 完整隧道尚未交付。
 master 保留旧版；候选版从独立 release 分支发布，不更新 Docker `latest`。
+
+## rc.6 相对 rc.5 的变化：目录刷新与拒绝记录
+
+- 目录和快照分两次读取，期间 endpoint 等 record 更新可能造成 `root_mismatch`。每轮首次摘要不一致会等待已有拉取和校验结果结束，刷新目录一次；不应用摘要不符的快照，不延长原有整轮超时。
+- 刷新后仍不一致时保留拒绝与退避；签名、授权和版本校验继续执行。既有 gossip wire 格式保持不变，对端无需同步升级。
+- peer API 的 `rejected_digests` 只显示有效拒绝；校验成功后清除来源 peer 的拒绝，也清除其他 peer 对同一已验证摘要的拒绝。过期后再次失败会续期，过期本身不代表恢复。
+- 本地验证包括完整 Go 测试、vet、Linux 构建、Windows 交叉构建、全部 smoke 和核心包竞态检测；线上混版本长时间验收仍按下文执行。
 
 ## rc.5 相对 rc.4 的变化：被动接收方端口轮换
 
@@ -91,7 +98,7 @@ NixOS、容器或自定义 unit 应沿用原部署方式，显式固定版本。
 
 ```sh
 curl -fL --retry 3 -o /tmp/photon-install-rc.sh \
-  https://raw.githubusercontent.com/HiggsNet/photon/v0.6.0-rc.5/contrib/install.sh
+  https://raw.githubusercontent.com/HiggsNet/photon/v0.6.0-rc.6/contrib/install.sh
 ```
 
 先在测试机安装旧版，完成入网并确认双向通信，作为基线：
@@ -110,10 +117,10 @@ photon version
 
 ```sh
 sudo systemctl stop photon
-sudo install -d -m 0700 /var/backups/photon-before-rc5
-sudo cp -a /etc/photon /var/backups/photon-before-rc5/etc-photon
-sudo cp -a /usr/local/bin/photon /usr/local/bin/photon-services /var/backups/photon-before-rc5/
-sudo sh /tmp/photon-install-rc.sh --version v0.6.0-rc.5 --no-service
+sudo install -d -m 0700 /var/backups/photon-before-rc6
+sudo cp -a /etc/photon /var/backups/photon-before-rc6/etc-photon
+sudo cp -a /usr/local/bin/photon /usr/local/bin/photon-services /var/backups/photon-before-rc6/
+sudo sh /tmp/photon-install-rc.sh --version v0.6.0-rc.6 --no-service
 sudo systemctl start photon
 photon version
 sudo systemctl status photon --no-pager
@@ -152,14 +159,14 @@ sudo systemctl status photon --no-pager
 
 ```sh
 sudo systemctl stop photon
-sudo mv /etc/photon /etc/photon-rc5-saved
-sudo cp -a /var/backups/photon-before-rc5/etc-photon /etc/photon
-sudo cp -a /var/backups/photon-before-rc5/photon /var/backups/photon-before-rc5/photon-services /usr/local/bin/
+sudo mv /etc/photon /etc/photon-rc6-saved
+sudo cp -a /var/backups/photon-before-rc6/etc-photon /etc/photon
+sudo cp -a /var/backups/photon-before-rc6/photon /var/backups/photon-before-rc6/photon-services /usr/local/bin/
 sudo systemctl start photon
 photon version
 ```
 
-`/etc/photon-rc5-saved` 必须尚不存在，保留新版数据供诊断。回退后再次确认真实通信，
+`/etc/photon-rc6-saved` 必须尚不存在，保留新版数据供诊断。回退后再次确认真实通信，
 必要时重启测试机清理运行中的网络状态，不只检查程序版本。
 
 ## 发布者检查
@@ -167,4 +174,4 @@ photon version
 发布前执行 `make check`、`make smoke-all`、`make install-script-check`；
 记录特权数据面测试、真实升级和长时间测试是否实际执行，不以基础检查替代它们。
 GitHub Actions 必须提供两种 Linux 架构的归档和校验文件，Release 标记为
-Pre-release，RC.5 Docker 镜像使用显式 `v0.6.0-rc.5` 标签，正式 `latest` 保持不变。
+Pre-release，RC.6 Docker 镜像使用显式 `v0.6.0-rc.6` 标签，正式 `latest` 保持不变。
