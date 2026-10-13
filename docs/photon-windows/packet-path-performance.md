@@ -156,3 +156,24 @@ daemon 在处理首个 ESP 或 leaf 包之前设定 250 µs admission deadline�
 focused race、普通/测试标签 Windows 编译、完整 tagged race 和 `make check` 通过。Windows 原生新 burst、既有数据面/事实/计数及真实 Wintun 双栈回归全部通过，执行前逐文件验证冻结源码 SHA，执行后独立清理自有 PID、目录和网卡。源码、构建及检查材料保存在 `packet-burst/`，原生执行材料位于 `native-packet-burst/`。
 
 同计数标签、同首点 profile、同工具和参数的标准六点复测中，单流由 457.42/435.97 降为 401.50/375.42 Mbps，四流变化约 -1% 至 +2.5%，大窗口仍丢失约 7.8%。独立诊断轮 leaf 拒收为 28571 → 28140，到期请求为 32214 → 32205，没有明显缓解已观察到的拥塞；两个 profile 位置不同的轮次不交叉归因。每点仅一次短测，不证明单项因果或稳定收益。因此生产代码已回退到逐包主循环，保留尝试提交与完整测量记录；来源和两轮对照见 [吞吐记录](throughput-testing.md)。
+
+## 同步出站明文的所有权
+
+生产 leaf 队列中的包来自 Wintun 的独立复制，ring packet 已释放，读取线程不再写这份明文。私有 `processOwnedOutbound` 由 daemon 的原单包 leaf case 接管它，仍经相同 `outboundSA` preflight 和 AES 核心；completion 保留原明文直到同一事件中的 `completePacket` 使用最新 snapshot/time、selectors 和 route verdict 完成交付检查。该结果不进入异步队列，不跨 owner 事件，调用方在交付检查结束之前不得复用或修改输入。ESP 密文仍独立分配。
+
+现有 `processOutbound`、`newJob` 与异步提交继续复制输入，保留 caller 在 Seal 后、accept 前立即复用原 buffer 的契约。新增回归覆盖独占明文贯穿当前交付检查、交付后输入复用不改变实际 ESP 密文、真实签名路由撤回拒绝已加密结果，以及 preflight/取消不消耗 nonce。`BenchmarkGatewayPacketOwnedOutbound` 用同一签名/Babel、真实 ESP/UDP、调用方 facts 和两次当前门禁比较复制与接管路径；OS packet device 仍为内存实现。
+
+同一冻结 binary 在独占 CPU 窗口运行四个子基准各三轮 1 秒。下表大小是内层 IP 包总长，与服务吞吐工具的 UDP payload 大小不同；箭头均为复制 → 接管。
+
+| 内层包总长 | 中位耗时（µs） | 分配字节 | 分配次数 |
+| --- | --- | --- | --- |
+| 128 B | 10.369 → 10.123 | 480 → 352 | 6 → 5 |
+| 1200 B | 11.542 → 12.368 | 3872 → 2592 | 6 → 5 |
+
+全部原始耗时范围分别为复制 10.336–10.455 / 11.504–11.697 µs、接管 9.987–10.378 / 11.676–12.510 µs。这证明每包少一次明文分配，耗时结果混合，不能用于声称 Windows 吞吐改善或推算完整服务上限。
+
+focused race、普通/测试标签 Windows 编译及完整 tagged race（21.244 秒）通过。冻结的 tagged Windows executable 运行 Owned、Direct、Serial、CallerFacts、计数与 Wintun 共 20 个顶层场景，均 PASS、无 skip；真实 Wintun 覆盖双栈 UDP、两代关闭及路由/地址撤销，执行前验证 115 个源码文件 SHA，执行后独立确认自有 PID、目录和网卡已清理。原生功能材料位于 `native-owned-outbound/`，不参与性能测量。
+
+`make check` 起初暴露旧 CHILD audit fixture 对两 worker completion 次序的假设：清理残余控制包时调用普通 prepare，提前清空待检查的暖缓存。独立测试修补改用既有同步 AES 核心生成 pending 结果，保留当前 CHILD/selector 和暖缓存断言；原失败材料保留。相同完整检查重跑退出 0，日志为 `check-after-owned-outbound-fixture-order.log`。实际服务效果仍需 clean 产品的相同条件复测。
+
+冻结源码、三种 executable SHA、精确命令及原始基准均保存在 `build/validation/performance-20261012/owned-outbound/`。最初沙箱阻止网络接口查询的失败日志单独保留，成功回归使用相同测试选择在允许该查询的环境中执行。

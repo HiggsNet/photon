@@ -515,7 +515,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				pipeline := leaf.pipeline
 				var facts packetAuthorization
 				if pipeline.prepareSnapshotInto(config, packetView.read(state.Store()), lastPlan, time.Now(), &facts) {
-					completion, ok := data.processOutbound(pipeline.generation, facts.plan, devicePacket.packet,
+					completion, ok := data.processOwnedOutbound(pipeline.generation, facts.plan, devicePacket.packet,
 						func(packet []byte, outbound bool) bool { return pipeline.authorize(&facts, packet, outbound) })
 					if ok {
 						completePacket(completion)

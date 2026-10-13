@@ -213,6 +213,20 @@ func (d *gatewayDataplane) processOutbound(generation uint64, plan GatewayPlan, 
 	return d.process(d.outboundSA(generation, plan, packet, authorize), packet, true)
 }
 
+// processOwnedOutbound is only for an exclusively owned leaf packet in the
+// serial daemon turn. Its completion owns that plaintext through the fresh
+// delivery gate: the caller must not reuse or mutate it until completePacket
+// finishes, or retain the completion beyond that turn. It never enters either
+// asynchronous queue. Other callers keep processOutbound's detached input.
+func (d *gatewayDataplane) processOwnedOutbound(generation uint64, plan GatewayPlan, packet []byte, authorize func([]byte, bool) bool) (dataplaneCompletion, bool) {
+	sa := d.outboundSA(generation, plan, packet, authorize)
+	if sa == nil || d.ctx.Err() != nil {
+		return dataplaneCompletion{}, false
+	}
+	job := dataplaneJob{ctx: d.generationCtx, generation: d.generation, sa: sa, packet: packet, outbound: true}
+	return executeDataplaneJob(job), true
+}
+
 func (d *gatewayDataplane) process(sa *dataplaneSA, packet []byte, outbound bool) (dataplaneCompletion, bool) {
 	job, ok := d.newJob(sa, packet, outbound)
 	if !ok {

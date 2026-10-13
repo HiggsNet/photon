@@ -179,4 +179,67 @@ burst 后该点发送 **447839** 个请求、唯一回包 **415634**、期限内
 
 三组新补测（优化前标准、优化后标准和诊断）全部六点 `Completed=true`、`RecoveryPassed=true`、同组服务 PID/创建身份，无迟到、重复、损坏、外来、未发送序号、发送错误或预算耗尽。完整 SCM rig 与各组独立 gather/cleanup 均退出 0；自有服务、网卡、目录、Event Log 来源、容器以及私钥/数据库均已清理。后测 `matched-validation.json` 和 `matched-standard-comparison.json` 保存条件校验与原始对照，不覆盖早期样本。该产品源码完整 tagged race 和 `make check` 通过；`native-packet-burst/` 的冻结 executable 运行 25 个 Windows 原生顶层测试全部 PASS，无 skip，包含四类 burst、安全交付/CallerFacts/计数以及真实 Wintun 两代生命周期和双栈 OS UDP。clean archive 中 116 个 internal Go 文件与这份临时原生 executable 的源码 fingerprint 逐项一致，实际测试 PID3424 的临时网卡与目录也独立确认消失。
 
+## 2026-10-12 同步出站明文所有权检查点
+
+burst 回退后，`84001ce795e254357b6ec4444a2761e389a18109` 为同步出站入口接管 leaf packet 的独占明文；实际 Wintun 仍先复制数据再释放 ring，处理完成前不复用这份明文，交付前继续检查当前授权、SA/generation 和取消状态。既有普通入口及排队路径仍复制输入。便携同 binary 微基准证明每包减少一次分配（1200 字节输入减少 1280 B），耗时变化方向不一致，不由此宣称产品提速。
+
+本组 Windows 由上述 clean git archive 构建，executable SHA256 为 `4115bc680d91f12018ba1b61b84991beb116fc0eb3b3ddc5dd13f326c2374c90`。Go 1.26.5、构建标志、Linux/fixture `2c06877`、最终 `c1c8ea8` 工具及实际 SHA、1200 字节 payload、预热 2 秒、发送 8 秒、deadline 1 秒全部保持一致。标准轮与既有同计数构建 `4665b414` 的 `before-burst-standard/` 对照，首点 `f1-w64-IPv4` 采集 profile，diagnostic env 为 0，实际 metadata 不含诊断标记；新证据在 `after-owned-outbound-standard/` 和 `after-owned-outbound-bundle/`。所有样本保留，不用 burst 尝试的最高点作为优化前基线。
+
+| 地址族 / 流数 / 每流窗口 | 原同计数标准轮 / Mbps / echo 丢失 | 明文所有权标准轮 / Mbps / echo 丢失 |
+| --- | ---: | ---: |
+| IPv4 / 1 / 64 | 457.42 / 0% | **461.14 / 0.000260%** |
+| IPv6 / 1 / 64 | 435.97 / 0% | **460.67 / 0%** |
+| IPv4 / 4 / 64 | 424.53 / 0.389% | 441.93 / 0.359% |
+| IPv6 / 4 / 64 | 423.47 / 0.385% | 442.39 / 0.364% |
+| IPv4 / 4 / 1024 | 416.57 / 7.741% | 458.53 / 6.997% |
+| IPv6 / 4 / 1024 | 408.39 / 7.804% | 454.63 / 7.032% |
+
+IPv4 单流发送 384336、唯一回包 384335，存在 **1 个超期未回包请求**，不能称为零丢包。标准单流服务 CPU / 生成器 CPU（单核百分比）分别为 IPv4 **149.20 / 76.16**、IPv6 **155.47 / 77.54**。四流大窗口仍约 7% 丢失；各配置仅一轮短测，不能把约 1–11% 的本轮差值推为稳定收益。当前完整产品单流约 461 Mbps，1 Gbps 目标继续开放。
+
+独立诊断轮保存在 `after-owned-outbound-diagnostic/`，与 `queue-drop-diagnostic/` 使用相同固定 `f4-w1024-IPv4` profile 位置及 marker；其 Windows 来源与新标准轮相同。下面完整保留六点，不将这轮 profile 与标准首点 profile 混算增益。
+
+| 地址族 / 流数 / 每流窗口 | 原同计数诊断轮 / Mbps / echo 丢失 | 明文所有权诊断轮 / Mbps / echo 丢失 |
+| --- | ---: | ---: |
+| IPv4 / 1 / 64 | 383.15 / 0.000626% | 383.71 / 0% |
+| IPv6 / 1 / 64 | 360.43 / 0% | 369.63 / 0% |
+| IPv4 / 4 / 64 | 422.77 / 0.386% | 428.83 / 0.376% |
+| IPv6 / 4 / 64 | 437.89 / 0.394% | 437.88 / 0.376% |
+| IPv4 / 4 / 1024 | 400.06 / 8.000% | **317.34 / 9.921%** |
+| IPv6 / 4 / 1024 | 395.92 / 8.031% | 411.28 / 7.724% |
+
+固定大窗口点的三个独立匿名队列增量为 **RawIngress=3493、LeafIngress=24868、ESPIngress=644**，原对应增量为 2738、28571、890。该点发送 **326101** 个请求，唯一回包 **293747**、期限内未完成 **32354**，实际含排空 **8.8862852 秒**；服务 CPU **112.8846%**、生成器 **71.2123%** 单核。这些增量跨层与方向，不能相加充当业务丢失总数，也不能由 Leaf 数量减少判断丢包已解决；计数握手、轮询及排空边界见 `queue-drop-testing.md`。
+
+**317.34 Mbps 点包含控制面就绪中断，不能作为平稳容量。** 实际测量于 `2026-10-12T15:26:03.6167339Z` 开始，Windows daemon 在本地 `23:26:09.857+08:00` 记录对象拉取后的 `zone_applied`，随后于 `23:26:09.858+08:00`（测量第 **6.2413 秒**）记录 `tunnel_ready_changed=false`。它于 `23:26:23.173+08:00` 才恢复为 true，已经晚于约 `23:26:12.503` 的测量结束；`RecoveryPassed=true` 证明测量后恢复，不证明这段测量连续就绪。该区间没有观测到 socket deadline/delivery failure、rekey 或 selected peer 切换日志，不能据此推断阻塞写入或将中断归因于明文所有权。对两轮全部 12 点的只读日志审计中，其余 11 点没有记录测量内就绪变更；日志缺失不等于证明全程可用。原低点及原始账目保持不变，时间核对保存在 `owned-outbound/readiness-measurement-audit.json` 和 `after-owned-outbound-diagnostic/fixed-point-daemon-window.log`。
+
+标准首点与诊断 profile 分别为 `profile-4724.pprof`、`profile-7012.pprof`。后者持续 9.00 秒、原始样本 25.65 秒，`runtime.cgocall` 累计 20.15 秒包含 Windows 等待栈，不能把原始 284.98% 当作实际 CPU。过滤该等待栈后累计 `Daemon.Run` 2.86 秒、`acceptPrepared` 0.76 秒、`processOwnedOutbound` 0.55 秒；累计栈重叠，且该点包含就绪中断，不作精确性能归因。
+
+两轮均六点 `Completed=true`、同组服务 PID/创建身份、测后 `RecoveryPassed=true`；无迟到、损坏、外来、未发送序号、重复、发送错误或预算耗尽。完整 SCM rig 与独立 gather/cleanup 全部退出 0，自有服务、网卡、目录、Event Log 来源、容器以及私钥/数据库均已清理；条件和逐包账目验证在各组 `matched-validation.json`。完整 tagged race（21.244 秒）与重跑 `make check` 通过。`native-owned-outbound/` 的临时冻结 executable SHA256 为 `6a2831accf2e6d088c3296e561cc411a70b6e26f7eed0debf94f80c842842c51`，精确 20 个 Windows 原生测试全部 PASS、无 skip，包含 3 个所有权用例、Direct/Serial、CallerFacts、三类计数和实际双栈 Wintun 两代生命周期；测试 PID328、目录和网卡均独立清理。clean archive 的全部 **48 个生产 Go 文件**及三个新增/改动关键文件与该原生验证源码指纹逐字节一致；115 个 package Go 文件中仅旧 `packet_policy_audit_test.go` 的测试夹具顺序由 `b342c888` 调整，差异单独保存，不声称所有 115 文件完全一致。
+
 较早的 `before-original-tool/`、`before/`、`after-cache/` 15 秒原始样本全部保留：初版/时间戳工具使用固定序号槽位，丢包后存在 head-of-line 等待，其多流数据不作为最终容量矩阵。早期 `before/` 性能点完成但宿主协调器退出 143，后续资源由人工清理，不能将它说成完整 rig exit 0；统一工具各组使用独立协调器保存最终退出码并验证清理。
+
+## 多流、CPU 与串行处理边界
+
+这里的“4 流 / 小窗口”是 **4 个独立业务 UDP socket，每流最多 64 个未完成请求**，合计最多 256 个 pending credit；不是四个 CPU，也不是四条独立 Photon 隧道。工具分别使用目的端口 `port+flow`，为每流启动发送 goroutine 和独立 reader，最终 Mbps 是四流总和，不是每流速率。
+
+生产链路将这些内层业务流汇入同一 Wintun 读链、同一 `packetSockets` 外层 UDP socket 和当前出站 CHILD SA。`Daemon.Run` 使用 `newSerialGatewayDataplane`，在一个事件循环内同步执行入站/出站 AES、当前授权及交付；它没有为四流创建四个 crypto owner。该 goroutine 可以在不同逻辑核间迁移，但同一时刻只执行一个事件。独立异步测试构造器 `newGatewayDataplane` 的两个 workers 不能当作生产 daemon 的并行证据。
+
+即使简单增加 worker，当前 `esp.Sender.Seal` 的 mutex 仍覆盖序号分配和 AEAD，`Receiver.Open` 的 mutex 也覆盖认证解密及 replay 更新。同一个 Sender 的多次 Seal、同一个 Receiver 的多次 Open 各自串行；发送和接收使用独立的 mutex。重协商、当前权限检查、控制与业务 ESP 顺序是现有契约，多流并行不能仅靠增加 goroutine 得到。
+
+冻结 `84001ce` 的标准轮原始 JSON 显示：
+
+| 内层地址族 / 流数 / 每流窗口 | 总唯一 echo Mbps | 服务 CPU / 单核 % | 生成器 CPU / 单核 % | 实际统计秒数 | 唯一回包 / Expired |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| IPv4 / 1 / 64 | 461.14 | 149.20 | 76.16 | 8.001 | 384335 / 1 |
+| IPv4 / 4 / 64 | 441.93 | 149.43 | 87.75 | 8.992 | 413962 / 1493 |
+| IPv6 / 1 / 64 | 460.67 | 155.47 | 77.54 | 8.000 | 383898 / 0 |
+| IPv6 / 4 / 64 | 442.39 | 151.94 | 92.84 | 8.937 | 411824 / 1504 |
+
+CPU 来自 Windows `GetProcessTimes` 的进程累计 user+kernel 时间除以实际统计时长，**100% 对应一个逻辑核**。约 149–155% 表示整个服务平均消耗约 1.49–1.55 个逻辑核；它包含 reader、设备交接、runtime、内核及主循环等工作，不意味着四流的逐包授权/AES 在多个核上并行，也不能证明串行 owner 已达到单核 CPU 满载。旧样本只记录 `runtime.NumCPU()=8`，没有采集实际 `GOMAXPROCS`、进程 affinity 或逐线程/逐核 CPU；不能据此声称完成过 1/2/4/8 核对照。
+
+四流四个 socket 都有有效回包。四流小窗口约 0.36% 的请求超期，末尾排空使统计持续约 8.94–8.99 秒，单流则约 8 秒。四流本轮完成的总回包更多，但分母也更长，因此最终 goodput 仍约 442 Mbps。不能把它解释为“四流完全没有收益”，也不能把全部回包数直接除以 8 秒再命名为真实发送阶段吞吐，因为回包没有按发送阶段/排空阶段单独分账。
+
+同一个最终 c1c 工具在绕过 Photon 的四 socket、窗口 64 control 中测得 2006.97 Mbps、零 echo 丢失，生成器 CPU 为 265.90% 单核。这证明该工具在那个独立路径能利用多个核并测到超过 1 Gbps；它不证明共享隧道、同 SA 或 Wintun 链路具有相同并行能力。
+
+当前已经确认的是串行处理结构、共享 SA 锁和四流排空分母。尚未确认的是平台期中 CPU 执行、共享 I/O 等待、设备交接及调度各占多少。下一项有针对性的实验是固定生成器和负载，只对服务比较 `GOMAXPROCS=1/2/4/8`，同时记录实际生效值、affinity、CPU 与完整期限账目；提高该值不会自动将串行 owner 改为多核数据面。若要改变处理结构，仍须保留当前授权、CHILD 切换、序号/重放和投递顺序，并用相同完整链路独立验证。
+
+源码入口为 `docs/tools/udp-perf/main.go` 的 `runFlow` / `runClient`、`process_windows.go` 的 `processTimes`、`internal/photonwindows/console.go` 的数据面事件分支、`dataplane.go` 的两个构造器，以及 `internal/photonclient/esp/esp.go` 的 `Seal` / `Open`。数字来自本地 `build/validation/performance-20261012/after-owned-outbound-standard/throughput-f*-w64-IPv*.json` 与 `control/udp-credit-f4-w64.json`；冻结来源使用[重整前历史](performance-history.md)。

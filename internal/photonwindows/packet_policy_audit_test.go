@@ -79,20 +79,28 @@ func TestPacketPolicyAuditLiveChildAndSelectors(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			f := newPipelineFixture(t)
 			f.learn(t)
-			// Finish setup control transmissions before warming policy. The
-			// business completion helper otherwise uses ordinary prepare for
-			// intervening control packets, which deliberately clears the cache.
-			if !f.submitFromDevice(t, f.packet(true)) || !f.accept(t, f.businessCompletion(t)) {
-				t.Fatal("setup business exchange failed")
-			}
-			f.receiveBusiness(t)
 			view := detachedPacketPolicyView(f.view)
-			if !f.p.submitSnapshotPacket(f.config, view, f.plan, f.now, f.packet(true)) || f.p.policy == nil {
-				t.Fatal("warm snapshot submission rejected")
+			facts, ok := f.p.prepareSnapshot(f.config, view, f.plan, f.now)
+			if !ok || f.p.policy == nil {
+				t.Fatal("warm snapshot preparation rejected")
 			}
 			before := f.p.policy
-			outbound := f.businessCompletion(t)
-			inbound := f.inboundCompletion(t, f.packet(false))
+			// The two workers may finish setup controls after business crypto.
+			// Generate pending deliveries through the shared synchronous core:
+			// consuming controls with f.accept would deliberately clear policy.
+			outbound, ok := f.p.tunnel.data.processOutbound(f.p.generation, facts.plan, f.packet(true),
+				func(packet []byte, out bool) bool { return f.p.authorize(facts, packet, out) })
+			if !ok || outbound.err != nil {
+				t.Fatal("warm outbound crypto rejected", outbound.err)
+			}
+			wire, err := f.sender.Seal(f.packet(false))
+			if err != nil {
+				t.Fatal(err)
+			}
+			inbound, ok := f.p.tunnel.data.processInbound(f.p.generation, facts.plan, outbound.job.sa.endpoint, wire)
+			if !ok || inbound.err != nil {
+				t.Fatal("warm inbound crypto rejected", inbound.err)
+			}
 			if f.p.policy != before {
 				t.Fatal("fixture lost its warm cache before the live SA change")
 			}
@@ -109,7 +117,7 @@ func TestPacketPolicyAuditLiveChildAndSelectors(t *testing.T) {
 				address := netip.MustParseAddr("10.99.0.2")
 				inbound.job.sa.local = []ike.TrafficSelector{{StartAddr: address, EndAddr: address, EndPort: 65535}}
 			}
-			facts, ok := f.p.prepareSnapshot(f.config, view, f.plan, f.now.Add(time.Nanosecond))
+			facts, ok = f.p.prepareSnapshot(f.config, view, f.plan, f.now.Add(time.Nanosecond))
 			if !ok || f.p.policy != before {
 				t.Fatal("live SA change must still exercise the signed-policy cache hit")
 			}
