@@ -308,6 +308,7 @@ B6 仍单独覆盖睡眠恢复、物理断网、崩溃恢复、长时间稳定�
   - [x] 建立完整 SCM/Wintun/ESP 链路的有界 UDP echo CPU/内存基线；双栈窗口 8/64 对照揭示单核饱和、低吞吐及明显超时。Nix 6.0.7 完整采样，Ubuntu 5.9.13 部分采样均保留；历史结果不覆盖后续优化，也不代表性能达标，72h 等门槛不随此项关闭，见 [基线记录](docs/photon-windows/baseline-testing.md)。
   - [x] 实际 SCM CPU profile 定位重复验签；分片完成 readiness 检查降频、事件内授权事实复用及单 owner 的有界纯签名验算复用。授权时效、撤销、权限、包地址与当前 SA 检查保留；全量测试/构建与 crypto、Windows race 通过。分轮 portable 与实机证据分别保存在 [逐包优化](docs/photon-windows/packet-path-performance.md) 和 [SCM 对照](docs/photon-windows/profile-testing.md)，不以单轮短时吞吐代替长期稳定性或发布验收。
     - 固定同一 SCM/StrongSwan 6.0.7 配置，最终窗口 8 双栈中位 17.14/17.42 Mbps（初始 0.206/0.200），窗口 64 为 17.70/17.49 Mbps；八点均无丢失/超期且恢复通过。服务 CPU 约 1.25–1.33 个逻辑核，剩余热点为准备、JSON 与分配，仍非链路极限或长期稳定性结论。
+  - [x] 继续减少逐包准备与交接：不可变发布视图、精确策略到期、canonical 编码、ESP 输出分配、Babel/HasRoute、串行 AES 和周期就绪检查分别验证并提交；撤销、地址、当前 SA/generation 与投递前重新检查保留。2026-10-12 用同一最终 credit 工具、1200 字节、8 秒发送重测四个冻结版本，完整 SCM 单流双栈由 16.02/16.11 达到 419.85/407.26 Mbps，零丢包；四组 24 点及恢复完成，独立清理通过。多流仍有丢包与波动，1 Gbps、72h 和发布门槛继续开放，见 [统一吞吐对照](docs/photon-windows/throughput-testing.md)。
 
 当前证据与未完成门槛见 [B6 分层验收](docs/photon-windows/b6-testing.md)。
 

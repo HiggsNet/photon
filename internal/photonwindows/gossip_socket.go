@@ -16,6 +16,9 @@ import (
 // It owns no protocol state, workers or database handles.
 // A failed replacement leaves both protocols unavailable until the next retry.
 type packetSockets struct {
+	// Writes and socket/selection replacement take writeMu before mu. A send
+	// releases mu before network I/O so the sole reader can continue demuxing.
+	writeMu           sync.Mutex
 	mu                sync.Mutex
 	udp               *net.UDPConn
 	tcp               net.Listener
@@ -48,11 +51,13 @@ func openPacketSockets(ctx context.Context, address string) (*packetSockets, err
 }
 
 // Rebind closes the old generation before binding the same local endpoint.
-// Holding mu serializes rebind and close; bind performs only numeric local I/O
-// under a deadline. No reader holds mu while waiting on a socket.
+// Holding writeMu serializes rebind with writes and close; mu protects the
+// replacement. Bind performs only numeric local I/O under a deadline.
 func (s *packetSockets) Rebind(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -113,6 +118,8 @@ func (s *packetSockets) Rebind(ctx context.Context) error {
 }
 
 func (s *packetSockets) Close() error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -157,10 +164,10 @@ func (s *packetSockets) ReadDatagram(b []byte) (int, *net.UDPAddr, error) {
 			}
 			continue
 		}
-		n, addr, err := conn.ReadFromUDP(wire[:])
+		n, peer, err := conn.ReadFromUDPAddrPort(wire[:])
 		s.mu.Lock()
 		current := conn == s.udp
-		consumed := current && err == nil && s.demuxLocked(wire[:n], addr.AddrPort())
+		consumed := current && err == nil && s.demuxLocked(wire[:n], peer)
 		s.mu.Unlock()
 		if !current {
 			continue
@@ -175,6 +182,13 @@ func (s *packetSockets) ReadDatagram(b []byte) (int, *net.UDPAddr, error) {
 			// Local interface changes have their own OS notification path.
 			s.invalidate(conn, nil)
 		}
+		// IKE/ESP only need the value endpoint. Gossip retains its original
+		// UDPAddr interface, including mapped addresses and IPv6 zones; failed
+		// reads have no sender address, just as ReadFromUDP did.
+		var addr *net.UDPAddr
+		if err == nil {
+			addr = net.UDPAddrFromAddrPort(peer)
+		}
 		return copy(b, wire[:n]), addr, err
 	}
 }
@@ -183,6 +197,8 @@ func (s *packetSockets) ReadDatagram(b []byte) (int, *net.UDPAddr, error) {
 // loop. The driver then waits for replacement instead of spinning on errors or
 // terminating its sole accept worker permanently.
 func (s *packetSockets) invalidate(udp *net.UDPConn, tcp net.Listener) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || (udp != nil && udp != s.udp) || (tcp != nil && tcp != s.tcp) {
@@ -207,15 +223,18 @@ func (s *packetSockets) invalidate(udp *net.UDPConn, tcp net.Listener) {
 
 func (s *packetSockets) WriteDatagram(b []byte, addr *net.UDPAddr) (int, error) {
 	// Serialize writes with replacement so stale completion cannot claim success.
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed || s.udp == nil {
+	conn, closed := s.udp, s.closed
+	s.mu.Unlock()
+	if closed || conn == nil {
 		return 0, net.ErrClosed
 	}
-	if err := s.udp.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
+	if err := conn.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
 		return 0, err
 	}
-	return s.udp.WriteToUDP(b, addr)
+	return conn.WriteToUDP(b, addr)
 }
 
 func (s *packetSockets) clearTunnelLocked() {
@@ -228,6 +247,8 @@ func (s *packetSockets) clearTunnelLocked() {
 // reconnects; a zero endpoint clears the reservation. Endpoints are reachability
 // hints only: the IKE session and current verified policy must authenticate them.
 func (s *packetSockets) SelectTunnel(ikePeer, nattPeer netip.AddrPort) uint64 {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.clearTunnelLocked()
@@ -267,15 +288,19 @@ func (s *packetSockets) demuxLocked(packet []byte, peer netip.AddrPort) bool {
 // bound as Gossip sends. Windows uses one WriteToUDP per packet; no batch API
 // or background send queue is required to preserve packet lifetime.
 func (s *packetSockets) WriteTunnel(generation uint64, packet []byte, peer netip.AddrPort) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed || s.udp == nil || generation != s.tunnelGeneration || !peer.IsValid() || (peer != s.ikePeer && peer != s.nattPeer) {
+	conn := s.udp
+	valid := !s.closed && conn != nil && generation == s.tunnelGeneration && peer.IsValid() && (peer == s.ikePeer || peer == s.nattPeer)
+	s.mu.Unlock()
+	if !valid {
 		return net.ErrClosed
 	}
-	if err := s.udp.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
+	if err := conn.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
 		return err
 	}
-	_, err := s.udp.WriteToUDPAddrPort(packet, peer)
+	_, err := conn.WriteToUDPAddrPort(packet, peer)
 	return err
 }
 

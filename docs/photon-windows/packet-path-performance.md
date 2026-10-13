@@ -85,3 +85,35 @@
 | 入站 | 24.361 µs | 21.899 µs | 10.1% | 21 → 18 |
 
 这些数值包含测试 peer 的加解密、UDP 收发和调度，不能反推单包 daemon CPU 上限。原始数据为 `direct/packet-comparison.txt`。完整 Windows 包 race 通过；新增实际 ESP 测试验证排队的真实 Hello 在 128 个业务包之后才生成序号 129，仍被真实 64 包窗口 Receiver 接受，取消的明文 job 不消耗 nonce。另覆盖双向输入副本、篡改/重放、当前 endpoint / selector / generation / route / SA 归属、旧入站 CHILD overlap，以及签名路由撤回后拒绝已加密的直接处理结果。完整 SCM 吞吐仍须用固定源码二进制独立验证。
+
+## 周期就绪检查
+
+第三轮完整 Windows SCM 的 15.10 秒 profile 中，`leafRuntime.ready` 累计采样 0.51 秒，其中 0.46 秒来自签名检查。周期 `reconcile` 较少（0.15 秒，其中签名 0.13 秒），暂不扩展其生命周期实现。这些是有包含关系的采样时间，Windows 等待栈与 OS 调用混合，不能相加或直接当作活跃 CPU 比例。
+
+daemon 的周期日志检查改用私有 `readySnapshot`，共用当前不可变发布策略；仍即时读取和清除 Babel neighbor / candidate，并要求当前 host、实际设备地址与来源约束同时匹配。普通 `ready` 和 IPC 查询保持原行为。两个独立候选表的差分测试覆盖实时路由/邻居撤回、亚秒寿命、签名授权变化、SA 与原 DNS hint 边界，避免互相清理候选掩盖差异。完整仓库 fmt/vet/test 与 Linux/Windows 构建通过。
+
+固定有效区间的三轮同 fixture 稳态微基准（包含普通 `ReadView` 与新 owner 读取）为 5.168 ms / 137912 B / 2159 次 → 662.5 ns / 320 B / 2 次。它衡量这次重复检查的减法，不是全服务吞吐的相同比例提升。证据为 `policy/ready-snapshot-{tests.log,benchmark.txt,notes.txt}`；统一工具的实际 Windows 对照单列。
+
+## UDP 收包地址分配
+
+共享 UDP reader 使用 `ReadFromUDPAddrPort`，IKE/ESP 分流直接读取值类型 endpoint，仅实际返回 Gossip 时构造原接口要求的 `*net.UDPAddr`。旧 socket 的包/错误仍丢弃，selection generation、IPv4-mapped 规范化、IPv6 zone、错误时 nil 地址、packet 副本与原 16/64 项队列保持原契约。
+
+冻结前后 executable 的真实 loopback UDP 分流微基准，各跑三轮 1 秒：四种 IPv4/IPv6、ESP/IKE 组合均由每包 3 次分配降为 1 次。IPv4 ESP 为 1332 → 1280 B、IKE 为 260 → 208 B；IPv6 ESP 为 1344 → 1280 B、IKE 为 272 → 208 B。中位耗时有升有降（IPv4 ESP 14.244 → 14.793 µs），本片只证明分配减少，不据此宣称 CPU 或完整隧道吞吐提升。
+
+真实 dual-stack socket 验证 IPv4-mapped 源进入 ESP 后保留规范 endpoint/generation，解除 selection 后同一来源返回原 mapped Gossip 地址；超时/关闭仍返回 nil 地址。上述测试与既有共享 socket/rebind 测试的 race、Windows amd64 交叉编译通过，证据保存于 `build/validation/performance-20261012/socket/`。本片晚于四组固定产品测量，不计入它们的 executable。
+
+## 周期设备意图的数学验算
+
+第四轮后真实 Windows 的 8.10 秒 profile 中，`reconcile` 累计采样 0.11 秒，其中 0.10 秒为验签；周期暂停可能影响有界队列，但累计采样不能当作单次暂停时长或丢包原因。已有附着 pipeline 的 `reconcile` 改用其私有、有界的数学 Verifier。当前视图、权限、撤销、时间、gateway/DNS hint、活动 SA、Babel ID、host assignment/announcement 与双端 overlay 仍每次重建检查；没有设备意图或授权结果缓存。初次创建、pending completion 与普通入口使用 nil verifier。
+
+`desiredLeafAttachment` 原来推导的 `GatewayPlan.Routes` 没有消费者，去掉这次推导；实际设备地址及 split routes 仍从当前授权 route set 得到。相同实现的 nil 与 warm 数学 memo、真实签名 fixture、三轮 1 秒中位数为 **1.503 ms → 97.039 µs**。分配由约 36078 B / 542 次增为 42238 B / 573 次，来自完整数学缓存键的临时材料。这是单次周期检查的 portable 成本，不能按约 15.5 倍推算全服务吞吐。
+
+差分回归在同指针/同 revision 的可变 View 上先预热，再撤回真实签名 host/route、改变或篡改 overlay、修改 split/allowlist、退役 CHILD、改变 generation、跨原 DNS hint 寿命和 350 ms delegation 精确期限。双端 overlay 变化拒绝旧 SA 的本地授权绑定；独立 link-local 测试验证新签名 path 仍重算地址。focused race 通过，原始证据为 `leaf-verifier-tests.log`、`leaf-verifier-benchmark.txt` 及 `ready-profile-periodic.txt`。
+
+## UDP 收发锁范围
+
+同一 8.10 秒 profile 过滤 `runtime.cgocall` / `runtime.semasleep` 等待栈后，`WriteTunnel` 累计采样 0.53 秒，包含 mutex spin。原来发送持有共享状态锁直至 UDP 系统调用完成，同时阻挡 reader 分流。现在独立 `writeMu` 串行所有 Gossip/tunnel 发送、rebind、selection、invalidate 和 close；这些入口统一先 `writeMu` 后 `mu`。发送在 `mu` 内取连接并校验 generation/source 后释放它，但持续持有 `writeMu` 至同一秒期限内的实际发送结束，因此收包可以继续，旧发送仍不能跨 socket/selection 更替。
+
+同一冻结 fixture、真实双向 loopback UDP、1200 字节/最多 16 包在途、三轮 1 秒中位数：IPv4 **8834 → 8429 ns**、IPv6 **9697 → 7105 ns**，均为 1280 B / 1 次分配。这仅测 UDP 同步，不含 AES、授权或 Wintun，不能据此宣称 Windows 吞吐或达到 1 Gbps。证据位于 `socket-write-lock/`。
+
+测试用真实 UDP descriptor 的 `RawConn.Write` 暂占写操作，使生产发送实际阻塞；期间 ESP/IKE/Gossip 接收仍成功，selection/rebind/invalidate/close 必须等待旧发送完成，之后旧 generation 被拒绝。还覆盖 1000 包双栈并发收发、来源、generation、顺序和完整 payload。focused race 与 Windows 交叉编译通过；Windows 原生实际确认 RawWrite、上述 socket 回归、周期数学 memo 差分及原 LeafRuntime 全部通过，精确源码指纹和 executable SHA 保存于 `native-dirty-socket-leaf/`。这是提交前源文件验证，不冒充冻结的产品性能版本。

@@ -135,6 +135,10 @@ func leafDeviceIntentFromSet(config *Config, set *routing.AuthorizedRouteSet) (a
 // Linux's transport planner. Unsupported/automatic OS link-local modes are not
 // guessed, nor is a peer address learned from unauthenticated traffic.
 func leafLinkLocalAddresses(config *Config, view corestate.View, plan GatewayPlan, now time.Time) (netip.Addr, netip.Addr, error) {
+	return leafLinkLocalAddressesWithVerifier(config, view, plan, now, nil)
+}
+
+func leafLinkLocalAddressesWithVerifier(config *Config, view corestate.View, plan GatewayPlan, now time.Time, verifier *photoncrypto.Verifier) (netip.Addr, netip.Addr, error) {
 	fail := func(err error) (netip.Addr, netip.Addr, error) { return netip.Addr{}, netip.Addr{}, err }
 	if config == nil || view.State == nil || view.State.Network == nil || plan.Selected == nil {
 		return fail(errors.New("leaf: no gateway"))
@@ -149,14 +153,14 @@ func leafLinkLocalAddresses(config *Config, view corestate.View, plan GatewayPla
 		if zs == nil {
 			return fail(errors.New("leaf: overlay authority absent"))
 		}
-		if err := photoncrypto.VerifyChain(view.State.Network, path, now); err != nil {
+		if err := verifier.VerifyChain(view.State.Network, path, now); err != nil {
 			return fail(err)
 		}
 		record := zs.Records[key]
 		if record == nil || record.Zone != path || record.Key != key {
 			return fail(errors.New("leaf: overlay absent"))
 		}
-		if err := photoncrypto.VerifyRecord(record, zs.Authority, now); err != nil {
+		if err := verifier.VerifyRecord(record, zs.Authority, now); err != nil {
 			return fail(err)
 		}
 		current, err := ipsec.ParseOverlayIntentRecord(record)

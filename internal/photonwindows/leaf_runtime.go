@@ -11,6 +11,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/photonclient/sadr"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
 type leafAttachment struct {
@@ -62,26 +63,33 @@ func newLeafRuntime(factory packetDeviceFactory) *leafRuntime {
 }
 
 func desiredLeafAttachment(config *Config, view corestate.View, plan GatewayPlan, tunnel *gatewayTunnel, id [8]byte, now time.Time) (leafAttachment, error) {
+	return desiredLeafAttachmentWithVerifier(config, view, plan, tunnel, id, now, nil)
+}
+
+// An attached pipeline can share only its bounded signature-math memo here.
+// Lifecycle intent and every authorization/time check are still reconstructed
+// from the supplied current view, including for an arbitrary mutable View.
+func desiredLeafAttachmentWithVerifier(config *Config, view corestate.View, plan GatewayPlan, tunnel *gatewayTunnel, id [8]byte, now time.Time, verifier *photoncrypto.Verifier) (leafAttachment, error) {
 	want := leafAttachment{generation: tunnel.generation, id: id}
 	if tunnel.phase != 3 || tunnel.failed != nil || tunnel.session == nil || tunnel.data == nil || !now.Before(tunnel.expiresAt) || !now.Before(tunnel.ikeExpiresAt) {
 		return want, errors.New("leaf: authenticated SA unavailable")
 	}
-	binding, err := localTransportAuthorization(config, view, now)
+	binding, err := localTransportAuthorizationWithVerifier(config, view, now, verifier)
 	if err != nil || binding != tunnel.localAuthorization {
 		return want, errors.New("leaf: local transport authorization changed")
 	}
-	current := revalidateActiveGateway(config, view, plan, now)
+	current := revalidateActiveGatewaySelection(config, view, plan, now, verifier)
 	if !tunnel.current(current) || !tunnel.data.current(tunnel.generation, tunnel.data.active, current) {
 		return want, errors.New("leaf: current gateway unavailable")
 	}
-	if currentBabelOrigins(config, view, now)[id] != config.ManagedZone {
+	if currentBabelOriginsWithVerifier(config, view, now, verifier)[id] != config.ManagedZone {
 		return want, errors.New("leaf: local Babel identity unavailable")
 	}
-	want.addresses, want.routes = leafDeviceIntent(config, view, now)
+	want.addresses, want.routes = leafDeviceIntentFromSet(config, currentAuthorizedRouteSetWithVerifier(config, view, now, verifier))
 	if len(want.addresses) == 0 {
 		return want, errors.New("leaf: no authorized unicast host assignment and announcement")
 	}
-	want.local, want.peer, err = leafLinkLocalAddresses(config, view, current, now)
+	want.local, want.peer, err = leafLinkLocalAddressesWithVerifier(config, view, current, now, verifier)
 	return want, err
 }
 
@@ -135,7 +143,11 @@ func (r *leafRuntime) close() error {
 	}
 }
 func (r *leafRuntime) reconcile(ctx context.Context, config *Config, view corestate.View, plan GatewayPlan, tunnel *gatewayTunnel, id [8]byte, now time.Time) error {
-	want, err := desiredLeafAttachment(config, view, plan, tunnel, id, now)
+	var verifier *photoncrypto.Verifier
+	if r.pipeline != nil {
+		verifier = r.pipeline.verifier
+	}
+	want, err := desiredLeafAttachmentWithVerifier(config, view, plan, tunnel, id, now, verifier)
 	if err != nil {
 		return errors.Join(err, r.stop())
 	}
@@ -270,6 +282,33 @@ func (r *leafRuntime) ready(config *Config, view corestate.View, plan GatewayPla
 				continue
 			}
 			if len(r.pipeline.tunnel.lookupBabelRoutes(config, view, plan, view.Revision, []sadr.Route{route}, source, route.Destination.Addr(), now)) != 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// readySnapshot is only for the daemon's immutable packetStateView. Readiness
+// shares its current signed facts with packet delivery, but still reads the
+// live neighbor/candidate table and requires a source on this actual device.
+// Ordinary ready remains the entry point for IPC and arbitrary mutable Views.
+func (r *leafRuntime) readySnapshot(config *Config, view corestate.View, plan GatewayPlan, now time.Time) bool {
+	if r.pipeline == nil {
+		return false
+	}
+	p := r.pipeline
+	facts, ok := p.prepareSnapshot(config, view, plan, now)
+	if !ok {
+		return false
+	}
+	for _, route := range p.leaf.Candidates(now, facts.authorizeRoute) {
+		for _, host := range facts.hosts {
+			source := host.Addr()
+			if !p.localAddress(source, facts.localOrigins) {
+				continue
+			}
+			if sadr.HasRoute([]sadr.Route{route}, source, route.Destination.Addr(), now, facts.authorizeRoute) {
 				return true
 			}
 		}

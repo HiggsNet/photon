@@ -49,7 +49,7 @@ func (d *runtimePacketDevice) Write(packet []byte) error {
 }
 func (d *runtimePacketDevice) Close() error { d.once.Do(func() { close(d.closed) }); return nil }
 
-func runtimeFixture(t *testing.T) *pipelineFixture {
+func runtimeFixture(t testing.TB) *pipelineFixture {
 	t.Helper()
 	f := newPipelineFixture(t)
 	overlay := ipsec.OverlayIntentRecord{Version: 1, OverlayID: f.config.Overlay.ID, Provider: ipsec.ProviderStrongSwan, PathKeys: []string{ipsec.DefaultPathKey}, TunnelAddress: ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}}

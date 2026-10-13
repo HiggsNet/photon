@@ -306,7 +306,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		return freshPlanFrom(packetView.read(state.Store()), time.Now())
 	}
 	observeReady := func() {
-		ready := leaf.ready(config, state.Store().ReadView(), lastPlan, time.Now())
+		ready := leaf.readySnapshot(config, packetView.read(state.Store()), lastPlan, time.Now())
 		if ready != lastReady {
 			lastReady = ready
 			logger.Info("tunnel_ready_changed", "tunnel_ready", ready)
