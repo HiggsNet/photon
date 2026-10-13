@@ -9,15 +9,24 @@ cd "$(dirname "$0")/../.."
 outage_mode=${PHOTON_WINDOWS_TRANSPORT_OUTAGE:-0}
 rekey_mode=${PHOTON_WINDOWS_REKEY_TRAFFIC:-0}
 baseline_mode=${PHOTON_WINDOWS_BASELINE:-0}
+throughput_mode=${PHOTON_WINDOWS_THROUGHPUT:-0}
 profile_mode=${PHOTON_WINDOWS_CPU_PROFILE:-0}
+performance_bundle=${PHOTON_WINDOWS_PERFORMANCE_BUNDLE:-}
 [[ $profile_mode == 0 || $profile_mode == 1 ]] || exit 2
-[[ $profile_mode == 0 || $baseline_mode == 1 ]] || { echo 'CPU profile requires baseline mode' >&2; exit 2; }
+[[ $profile_mode == 0 || $baseline_mode == 1 || $throughput_mode == 1 ]] || { echo 'CPU profile requires baseline or throughput mode' >&2; exit 2; }
 [[ $rekey_mode == 0 || $rekey_mode == 1 ]] || exit 2
 [[ $baseline_mode == 0 || $baseline_mode == 1 ]] || exit 2
+[[ $throughput_mode == 0 || $throughput_mode == 1 ]] || exit 2
 [[ $outage_mode == 0 || $outage_mode == 1 ]] || exit 2
-if ((outage_mode + rekey_mode + baseline_mode > 1)); then
-    echo 'Choose one independent B6 scenario: outage, rekey traffic, or baseline' >&2
+if ((outage_mode + rekey_mode + baseline_mode + throughput_mode > 1)); then
+    echo 'Choose one independent B6 scenario: outage, rekey traffic, baseline, or throughput' >&2
     exit 2
+fi
+if [[ -n $performance_bundle ]]; then
+    [[ $throughput_mode == 1 || $baseline_mode == 1 ]] || { echo 'Prebuilt performance bundle requires an explicit performance mode' >&2; exit 2; }
+    for file in photon b4.test photon-windows.exe udp-perf udp-perf.exe performance-sources.json; do
+        [[ -f $performance_bundle/$file && ! -L $performance_bundle/$file ]] || { echo "Missing regular bundle file: $file" >&2; exit 2; }
+    done
 fi
 if [[ $outage_mode == 1 ]]; then
     : "${PHOTON_NFT_NIX_PACKAGE:?Set the local nftables package under /nix/store}"
@@ -67,7 +76,7 @@ cleanup() {
     if [[ $container_started == 1 ]]; then
         # Stop the owned composition before charon; container removal is final fallback.
         docker exec "$name" bash -c '
-            for file in /tmp/b4/daemon.pid /tmp/charon.pid; do
+            for file in /tmp/b4/throughput-echo4.pid /tmp/b4/throughput-echo6.pid /tmp/b4/daemon.pid /tmp/charon.pid; do
                 if ! read -r pid < "$file"; then continue; fi
                 [[ $pid =~ ^[0-9]+$ ]] || exit 1
                 kill -TERM "$pid" 2>/dev/null || continue
@@ -78,7 +87,7 @@ cleanup() {
             done
         ' >/dev/null 2>&1 || true
         docker logs "$name" > "$work/gateway.log" 2>&1 || true
-        for file in bird.conf bird-parse.txt daemon.log linux-status.txt linux-identity.json linux-ports.json linux-routes.txt linux-xfrm.txt bird-routes.txt bird-entries.txt; do
+        for file in bird.conf bird-parse.txt daemon.log linux-status.txt linux-identity.json linux-ports.json linux-routes.txt linux-xfrm.txt bird-routes.txt bird-entries.txt throughput-echo4.log throughput-echo6.log; do
             docker cp "$name:/tmp/b4/$file" "$work/$file" >/dev/null 2>&1 || true
         done
         docker cp "$name:/tmp/b4/bird.log" "$work/bird.log" >/dev/null 2>&1 || true
@@ -87,25 +96,37 @@ cleanup() {
     fi
     if [[ $remote_created == 1 ]]; then
         # Only public runtime diagnostics; config.json contains fixture keys.
-        for pattern in '*.log' '*-events.json' '*-diagnostics.json' '*-peers.json' '*-routes.json' '*-owned-network.json' 'crash-recovery.json' 'network-change.json' 'gossip-convergence.json' 'adapter-conflict.json' 'transport-outage.json' 'rekey-traffic*.json' 'baseline*.json' 'profile-*.pprof' 'profile-*.done' 'profile-*.error'; do
+        for pattern in '*.log' '*-events.json' '*-diagnostics.json' '*-peers.json' '*-routes.json' '*-owned-network.json' 'crash-recovery.json' 'network-change.json' 'gossip-convergence.json' 'adapter-conflict.json' 'transport-outage.json' 'rekey-traffic*.json' 'baseline*.json' 'throughput*.json' 'profile-*.pprof' 'profile-*.done' 'profile-*.error'; do
             scp -q "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH:$remote/$pattern" "$work/" 2>/dev/null || true
         done
         if ! ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"Remove-Item -LiteralPath '$remote' -Recurse -Force -ErrorAction Stop\""; then result=1; fi
     fi
-    rm -f "$work/photon" "$work/windows.db" "$work/config.json" "$work/b4.test" "$work/b4.test.exe" "$work/photon-windows.exe" "$work/wintun.dll" "$work/wintun.zip"
+    rm -f "$work/photon" "$work/windows.db" "$work/config.json" "$work/b4.test" "$work/b4.test.exe" "$work/photon-windows.exe" "$work/wintun.dll" "$work/wintun.zip" "$work/udp-perf" "$work/udp-perf.exe"
     printf 'Windows full-daemon cross-host logs (fixture secrets removed): %s\n' "$work"
     exit "$result"
 }
 trap cleanup EXIT
 export GOCACHE=${GOCACHE:-/tmp/photon-gocache}
 export GOMODCACHE=${GOMODCACHE:-/home/herbertqiao/go/pkg/mod}
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$work/photon" ./app/photon
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c -o "$work/b4.test" ./internal/photonwindows
 profile_tags=()
 if [[ $profile_mode == 1 ]]; then profile_tags=(-tags photon_profile); fi
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build "${profile_tags[@]}" -o "$work/photon-windows.exe" ./app/photon-windows
+if [[ -n $performance_bundle ]]; then
+    for file in photon b4.test photon-windows.exe udp-perf udp-perf.exe performance-sources.json; do cp "$performance_bundle/$file" "$work/$file"; done
+else
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$work/photon" ./app/photon
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c -o "$work/b4.test" ./internal/photonwindows
+    CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build "${profile_tags[@]}" -o "$work/photon-windows.exe" ./app/photon-windows
+    if [[ $throughput_mode == 1 ]]; then
+        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$work/udp-perf" ./docs/tools/udp-perf
+        CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o "$work/udp-perf.exe" ./docs/tools/udp-perf
+    fi
+fi
+if [[ $throughput_mode == 1 ]]; then
+    sha256sum "$work/udp-perf" "$work/udp-perf.exe" > "$work/throughput-tools-sha256.txt"
+fi
 git rev-parse HEAD > "$work/source-commit.txt"
 git status --short > "$work/source-status.txt"
+sha256sum "$work/photon" "$work/b4.test" "$work/photon-windows.exe" > "$work/binaries-sha256.txt"
 curl --fail --location --max-time 60 https://www.wintun.net/builds/wintun-0.14.1.zip -o "$work/wintun.zip"
 printf '%s  %s\n' 07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51 "$work/wintun.zip" | sha256sum --check --status
 unzip -p "$work/wintun.zip" wintun/bin/amd64/wintun.dll > "$work/wintun.dll"
@@ -174,6 +195,19 @@ remote_created=1
 scp -q "${ssh_args[@]}" "$work/photon-windows.exe" "$work/windows.db" "$work/config.json" "$work/wintun.dll" "$work/gossip-evidence.json" docs/scripts/windows-service-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
 if [[ $baseline_mode == 1 ]]; then
     scp -q "${ssh_args[@]}" docs/scripts/windows-service-baseline.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
+fi
+if [[ $throughput_mode == 1 ]]; then
+    for family in 4 6; do
+        if [[ $family == 4 ]]; then local_address=198.18.253.1; else local_address=fd00:7068:b4::1; fi
+        docker exec -d "$name" bash -c 'echo $$ > "/tmp/b4/throughput-echo$2.pid"; exec /smoke/udp-perf -mode echo -local "$1" -port 19100 -flows 4 -seconds 900 -ready "/tmp/b4/throughput-echo$2.ready" > "/tmp/b4/throughput-echo$2.log" 2>&1' -- "$local_address" "$family"
+        ready=0
+        for ((attempt=0;attempt<50;attempt++)); do
+            if docker exec "$name" test -f "/tmp/b4/throughput-echo$family.ready"; then ready=1;break;fi
+            sleep .1
+        done
+        [[ $ready == 1 ]] || { echo "Throughput echo $family startup failed" >&2; exit 1; }
+    done
+    scp -q "${ssh_args[@]}" "$work/udp-perf.exe" docs/scripts/windows-service-throughput.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
 fi
 if [[ $profile_mode == 1 ]]; then
     scp -q "${ssh_args[@]}" docs/scripts/windows-service-profile.ps1 "$PHOTON_WINDOWS_SSH:$remote/"

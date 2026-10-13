@@ -273,6 +273,8 @@ try {
     Check-Business 'initial'
     $baselineHelper = Join-Path $FixtureDirectory 'windows-service-baseline.ps1'
     if (Test-Path $baselineHelper) { . $baselineHelper; Test-ServiceBaseline }
+    $throughputHelper = Join-Path $FixtureDirectory 'windows-service-throughput.ps1'
+    if (Test-Path $throughputHelper) { . $throughputHelper; Test-ServiceThroughput }
     $rekeyHelper = Join-Path $FixtureDirectory 'windows-service-rekey-smoke.ps1'
     if (Test-Path $rekeyHelper) { . $rekeyHelper }
     $outageHelper = Join-Path $FixtureDirectory 'windows-service-outage-smoke.ps1'
