@@ -16,8 +16,9 @@ import (
 
 const dataplaneQueueSize = 64
 
-// gatewayDataplane belongs to the daemon event loop. Only crypto workers run
-// concurrently; owner methods must be serialized with revocation and delivery.
+// gatewayDataplane belongs to the daemon event loop. The daemon also owns all
+// crypto, including queued control packets. Standalone asynchronous consumers
+// may use workers; all owner methods serialize revocation and delivery.
 // It holds negotiated SAs, never a second copy of verified network state.
 type gatewayDataplane struct {
 	ctx              context.Context
@@ -57,13 +58,22 @@ type dataplaneCompletion struct {
 }
 
 func newGatewayDataplane(ctx context.Context) *gatewayDataplane {
-	ctx, cancel := context.WithCancel(ctx)
-	d := &gatewayDataplane{ctx: ctx, cancel: cancel, jobs: make(chan dataplaneJob, dataplaneQueueSize), completed: make(chan dataplaneCompletion, dataplaneQueueSize)}
-	d.reset(0)
+	d := newSerialGatewayDataplane(ctx)
 	for range 2 {
 		d.workers.Add(1)
 		go d.work()
 	}
+	return d
+}
+
+// The daemon consumes jobs itself, so Babel cannot allocate an ESP sequence
+// in a background worker and deliver it after the peer's replay window moved
+// past it. Each owner turn finishes bounded AES, revalidates and sends before
+// another packet can allocate a sequence. The existing control queue is bounded.
+func newSerialGatewayDataplane(ctx context.Context) *gatewayDataplane {
+	ctx, cancel := context.WithCancel(ctx)
+	d := &gatewayDataplane{ctx: ctx, cancel: cancel, jobs: make(chan dataplaneJob, dataplaneQueueSize), completed: make(chan dataplaneCompletion, dataplaneQueueSize)}
+	d.reset(0)
 	return d
 }
 
@@ -151,38 +161,88 @@ func (d *gatewayDataplane) retire(spi uint32) {
 }
 
 func (d *gatewayDataplane) submitInbound(generation uint64, plan GatewayPlan, endpoint netip.AddrPort, packet []byte) bool {
+	sa := d.inboundSA(generation, plan, endpoint, packet)
+	return sa != nil && d.submit(sa, packet, false)
+}
+
+func (d *gatewayDataplane) inboundSA(generation uint64, plan GatewayPlan, endpoint netip.AddrPort, packet []byte) *dataplaneSA {
 	if len(packet) < 36 || len(packet) > esp.MaxPacket {
-		return false
+		return nil
 	}
 	sa := d.sas[binary.BigEndian.Uint32(packet[:4])]
 	if sa == nil || endpoint != sa.endpoint || !d.current(generation, sa, plan) {
-		return false
+		return nil
 	}
-	return d.submit(sa, packet, false)
+	return sa
 }
 
 // authorize is the owner's current B4 route/control-packet verdict. A selected
 // gateway and broad negotiated selectors alone never authorize user traffic.
 // A nil verdict is deliberately deny-all until the B4 owner is connected.
 func (d *gatewayDataplane) submitOutbound(generation uint64, plan GatewayPlan, packet []byte, authorize func([]byte, bool) bool) bool {
+	sa := d.outboundSA(generation, plan, packet, authorize)
+	return sa != nil && d.submit(sa, packet, true)
+}
+
+func (d *gatewayDataplane) outboundSA(generation uint64, plan GatewayPlan, packet []byte, authorize func([]byte, bool) bool) *dataplaneSA {
 	sa := d.active
 	if !d.current(generation, sa, plan) || !dataplaneSelectors(sa, packet, true) || authorize == nil || !authorize(packet, true) {
-		return false
+		return nil
 	}
-	return d.submit(sa, packet, true)
+	return sa
+}
+
+// Direct processing keeps the same preflight and independently owned job as
+// queued processing. Its result still requires a fresh owner authorization at
+// accept; an AES error must reach observeData (including sequence exhaustion).
+func (d *gatewayDataplane) processInbound(generation uint64, plan GatewayPlan, endpoint netip.AddrPort, packet []byte) (dataplaneCompletion, bool) {
+	return d.process(d.inboundSA(generation, plan, endpoint, packet), packet, false)
+}
+
+func (d *gatewayDataplane) processOutbound(generation uint64, plan GatewayPlan, packet []byte, authorize func([]byte, bool) bool) (dataplaneCompletion, bool) {
+	return d.process(d.outboundSA(generation, plan, packet, authorize), packet, true)
+}
+
+func (d *gatewayDataplane) process(sa *dataplaneSA, packet []byte, outbound bool) (dataplaneCompletion, bool) {
+	job, ok := d.newJob(sa, packet, outbound)
+	if !ok {
+		return dataplaneCompletion{}, false
+	}
+	return executeDataplaneJob(job), true
+}
+
+func (d *gatewayDataplane) newJob(sa *dataplaneSA, packet []byte, outbound bool) (dataplaneJob, bool) {
+	if sa == nil || d.ctx.Err() != nil {
+		return dataplaneJob{}, false
+	}
+	return dataplaneJob{ctx: d.generationCtx, generation: d.generation, sa: sa, packet: bytes.Clone(packet), outbound: outbound}, true
 }
 
 func (d *gatewayDataplane) submit(sa *dataplaneSA, packet []byte, outbound bool) bool {
-	if d.ctx.Err() != nil {
+	job, ok := d.newJob(sa, packet, outbound)
+	if !ok {
 		return false
 	}
-	job := dataplaneJob{ctx: d.generationCtx, generation: d.generation, sa: sa, packet: bytes.Clone(packet), outbound: outbound}
 	select {
 	case d.jobs <- job:
 		return true
 	default:
 		return false
 	}
+}
+
+func executeDataplaneJob(job dataplaneJob) dataplaneCompletion {
+	result := dataplaneCompletion{job: job}
+	if err := job.ctx.Err(); err != nil {
+		result.err = err
+		return result
+	}
+	if job.outbound {
+		result.packet, result.err = job.sa.sender.Seal(job.packet)
+	} else {
+		result.packet, result.err = job.sa.receiver.Open(job.packet)
+	}
+	return result
 }
 
 // accept must run immediately before delivery in the same owner turn as its
@@ -216,12 +276,7 @@ func (d *gatewayDataplane) work() {
 			if job.ctx.Err() != nil {
 				continue
 			}
-			result := dataplaneCompletion{job: job}
-			if job.outbound {
-				result.packet, result.err = job.sa.sender.Seal(job.packet)
-			} else {
-				result.packet, result.err = job.sa.receiver.Open(job.packet)
-			}
+			result := executeDataplaneJob(job)
 			select {
 			case <-d.ctx.Done():
 				return

@@ -48,3 +48,40 @@
 | 入站 | 1.520 ms | 0.239 ms | 84659 B / 1006 次 |
 
 相对第一轮，时间再下降 89.9% / 84.3%；相对最初约快 50 / 28 倍。完整 payload 的安全保存使分配略增：第一轮分别为 122984 B / 1642 次、79473 B / 980 次。第二轮 packet-only profile 中 Ed25519 验签累计占比约 0.12%，主要成本转为 JSON 解析、gateway 选择、route set 推导及分配；不能将这些有包含关系的累计比例相加。`after2*` 原始数据继续保存于同一 portable 证据目录。
+
+## 第三轮：不可变发布快照与精确授权区间
+
+2026-10-12，目标是继续提高实际 Windows 吞吐，使用 [多流工具](throughput-testing.md) 独立验证。第三轮先减少复制和分配，再复用已证明不会变化的签名策略推导；公开 Store 和普通可变 View 的语义保持原样。
+
+- `packetStateView` 只供 daemon 串行逐包 owner 使用。每个事件检查 Store 身份及 verified revision，有新发布立即读取独立快照；同一发布只保留一份只读 State。Gossip checkpoint 不随 verified revision 变化，因此不进入这个视图。小网络 `ReadView` 的 4669 ns / 7832 B / 96 次分配降为此 owner 稳态读取的 5.508 ns / 0 B / 0 次。
+- canonical 签名 payload 提前计算容量、直接追加字符串，保留原字节与签名兼容性。ESP 在一份独立输出缓冲区内按 AEAD 允许的精确重叠原地加密，保留调用者输入。1200 字节 Seal 分配由 2576 B / 3 次降到 1296 B / 2 次；约 611 ns 的耗时没有明显变化，不据此宣称 CPU 提升。
+- 私有 `prepareSnapshot` 仅接受上述只读发布快照。身份包含 State 指针、revision、实际 config 内容和完整原 DNS planner hint；失败不保存，普通 `prepare` 每次计算并清除旧策略。不是以可变对象地址推断内容未变化。
+- 授权区间最迟在下一 Unix 秒结束，并提前止于全网络 delegation / ParentProof 的精确期限、canonical 地址 resolver 实际算出的期限、端口期限。地址/端口严格 `After` 边界保留额外 1 ns；极端 TTL 的 duration 溢出由原 resolver 计算。内存期限若含单调时钟，整个快照回退到逐次验证。墙钟倒退清除复用；原 DNS hint 的 10 秒 elapsed / wall 寿命每次检查，不随业务流量续期。
+- 每个事件更新精确 `now`，每次使用仍检查 attachment、generation、当前 IKE/CHILD 寿命与 SA 归属。`observeData` 后再次检查 CHILD；每包 source/destination、traffic selectors、精确本地地址、Babel neighbor/candidate 期限及来源约束继续现场检查。crypto job 不携带策略或事件授权。
+- `Leaf.HasRoute` 只回答当前是否存在合法业务路由，避免构造、排序 route 选择数组；仍遍历和清除全部失效候选。需要 next-hop 的调用方保留原 `Candidates` / `Lookup`。小 fixture 的判断微基准为 212.9 → 99.93 ns，256 B / 2 次 → 0 B / 0 次；这不是完整 packet 路径的两倍提升。
+
+同一冻结 executable、真实签名三 zone 与 ESP/UDP、1200 字节 payload、三轮 1 秒 portable 中位数（此对照先于 HasRoute 联接）：
+
+| 路径 | 普通独立 View / 每事件推导 | 只读快照 / 精确区间 | 后者每次分配 |
+| --- | ---: | ---: | ---: |
+| 出站 | 198.299 µs | 16.955 µs | 5016 B / 15 次 |
+| 入站 | 146.340 µs | 23.665 µs | 7554 B / 23 次 |
+
+这是固定 fixture 时间、内存 packet device 的串行事件成本，分别约快 11.7 / 6.2 倍，不能代替真实 Windows 吞吐。最初部分 benchmark 与 race 编译重叠，保留为初测；表中只采用无其他 host / VM 重负载的 `policy/packet-comparison-clean.txt`。
+
+回归包含真实签名 ParentProof fallback、未来 authority key 引起 Router ID 冲突、第三方亚秒到期使冲突解除、TTL 溢出、同 revision 到期、墙钟倒退、config / hint 修改、CHILD 切换与 selector 收窄。另经真实 `Store.ApplyRemoteBatch` 发布签名 IPAM 撤回，确认已加密的旧 completion 被新快照拒绝。完整 Windows 包 race 通过。原始证据保存在 `build/validation/performance-20261012/`；实机各轮固定二进制来源单独记录，1 Gbps 目标仍由真实测量判断。
+
+## 第四轮：主循环直接执行有界 AES
+
+生产 daemon 使用串行数据面 owner：业务包直接执行 AES，Babel 控制仍进入原有 64 项明文作业队列，由同一主循环每 turn 取一项处理。所有生产出站 ESP 序号在这个 owner 中分配，随即重新取当前发布视图和精确时间、观察 CHILD 切换、校验并投递。这样既减少业务 crypto job / completion 的线程调度，也防止已加密的后台 Babel 控制被超过 64 个快速业务包越过，落到对端重放窗口之外。
+
+原独立组件的 worker API 继续存在，与同步路径共用相同 preflight、独立 job 输入副本和 AES 实现。控制队列保持有界；单包不超过既有 ESP / IP 大小上限，主循环仍逐 turn 选择生命周期事件。投递门禁共用唯一 completion 处理逻辑，AES 错误不会被当作成功，也保留 sequence exhaustion 触发 rekey 和 pending CHILD 的认证入站 proof。
+
+同一冻结 executable 的 1200 字节签名 ESP / 真实 UDP 对照，三轮 1 秒中位数（两种模式均含第三轮策略及 HasRoute）：
+
+| 路径 | worker | 直接 AES | 时间下降 | 分配次数 |
+| --- | ---: | ---: | ---: | ---: |
+| 出站 | 17.862 µs | 12.485 µs | 30.1% | 11 → 8 |
+| 入站 | 24.361 µs | 21.899 µs | 10.1% | 21 → 18 |
+
+这些数值包含测试 peer 的加解密、UDP 收发和调度，不能反推单包 daemon CPU 上限。原始数据为 `direct/packet-comparison.txt`。完整 Windows 包 race 通过；新增实际 ESP 测试验证排队的真实 Hello 在 128 个业务包之后才生成序号 129，仍被真实 64 包窗口 Receiver 接受，取消的明文 job 不消耗 nonce。另覆盖双向输入副本、篡改/重放、当前 endpoint / selector / generation / route / SA 归属、旧入站 CHILD overlap，以及签名路由撤回后拒绝已加密的直接处理结果。完整 SCM 吞吐仍须用固定源码二进制独立验证。

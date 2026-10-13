@@ -17,17 +17,23 @@ import (
 // A fixed fixture time isolates CPU/allocation cost from lease expiration.
 // This is a serial event-path benchmark, not a network throughput claim.
 func BenchmarkGatewayPacketPath(b *testing.B) {
-	benchmarkGatewayPacketPath(b, false)
+	benchmarkGatewayPacketPath(b, false, false)
 }
 
 // The production serial daemon retains an immutable view for one verified
 // revision and reuses successful signed policy only until its exact transition.
 // Crypto, current SA/packet gates, real UDP and host delivery are still exercised.
 func BenchmarkGatewayPacketSnapshotPath(b *testing.B) {
-	benchmarkGatewayPacketPath(b, true)
+	benchmarkGatewayPacketPath(b, true, false)
 }
 
-func benchmarkGatewayPacketPath(b *testing.B, snapshot bool) {
+// Compare direct bounded AES with the same immutable policy, real UDP and
+// fresh completion gates as the worker path. This is not a VM throughput test.
+func BenchmarkGatewayPacketDirectPath(b *testing.B) {
+	benchmarkGatewayPacketPath(b, true, true)
+}
+
+func benchmarkGatewayPacketPath(b *testing.B, snapshot, direct bool) {
 	for _, outbound := range []bool{true, false} {
 		direction := "Inbound"
 		if outbound {
@@ -50,9 +56,21 @@ func benchmarkGatewayPacketPath(b *testing.B, snapshot bool) {
 					readView = func() corestate.View { return owner.read(store) }
 				}
 				submit := f.p.SubmitPacket
+				var processed dataplaneCompletion
 				accept := func(completion dataplaneCompletion) bool { return f.accept(b, completion) }
 				if snapshot {
 					submit = f.p.submitSnapshotPacket
+					if direct {
+						submit = func(config *Config, view corestate.View, plan GatewayPlan, now time.Time, packet []byte) bool {
+							facts, ok := f.p.prepareSnapshot(config, view, plan, now)
+							if !ok {
+								return false
+							}
+							processed, ok = f.p.tunnel.data.processOutbound(f.p.generation, facts.plan, packet,
+								func(packet []byte, outbound bool) bool { return f.p.authorize(facts, packet, outbound) })
+							return ok
+						}
+					}
 					accept = func(completion dataplaneCompletion) bool {
 						facts, ok := f.p.prepareSnapshot(f.config, f.view, f.plan, f.now)
 						if !ok {
@@ -90,7 +108,10 @@ func benchmarkGatewayPacketPath(b *testing.B, snapshot bool) {
 						if !submit(f.config, f.view, f.plan, f.now, packet) {
 							b.Fatal("outbound rejected")
 						}
-						completion := dataplaneResult(b, f.p.tunnel.data)
+						completion := processed
+						if !direct {
+							completion = dataplaneResult(b, f.p.tunnel.data)
+						}
 						f.view = readView()
 						if !accept(completion) {
 							b.Fatal("outbound completion rejected")
@@ -107,7 +128,12 @@ func benchmarkGatewayPacketPath(b *testing.B, snapshot bool) {
 							b.Fatalf("outbound ESP roundtrip failed: %v", err)
 						}
 					} else {
-						completion := f.inboundCompletion(b, packet)
+						var completion dataplaneCompletion
+						if direct {
+							completion = f.directInboundCompletion(b, packet)
+						} else {
+							completion = f.inboundCompletion(b, packet)
+						}
 						f.view = readView()
 						if !accept(completion) || len(f.device.written) != 1 || !bytes.Equal(f.device.written[0], packet) {
 							b.Fatal("inbound ESP delivery failed")
@@ -117,6 +143,28 @@ func benchmarkGatewayPacketPath(b *testing.B, snapshot bool) {
 				}
 			})
 		}
+	}
+}
+
+func (f *pipelineFixture) directInboundCompletion(t testing.TB, packet []byte) dataplaneCompletion {
+	t.Helper()
+	wire, err := f.sender.Seal(packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.peer.WriteToUDP(wire, f.p.tunnel.socket.LocalAddr()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case received := <-f.p.tunnel.socket.espPackets:
+		completion, ok := f.p.tunnel.data.processInbound(received.generation, f.plan, received.peer, received.packet)
+		if !ok {
+			t.Fatal("direct ESP ingress rejected")
+		}
+		return completion
+	case <-time.After(time.Second):
+		t.Fatal("shared UDP ESP ingress timeout")
+		return dataplaneCompletion{}
 	}
 }
 

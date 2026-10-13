@@ -253,7 +253,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		planRequests <- request
 	}
 	var lastPlan GatewayPlan
-	data := newGatewayDataplane(ctx)
+	data := newSerialGatewayDataplane(ctx)
 	defer data.close()
 	tunnel := &gatewayTunnel{socket: packet, data: data}
 	defer tunnel.stop()
@@ -436,6 +436,31 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	defer ticker.Stop()
 	tunnelTicker := time.NewTicker(250 * time.Millisecond)
 	defer tunnelTicker.Stop()
+	// Both queued control jobs and direct packet crypto finish at this gate.
+	// Read publication and time again after AES, then observe CHILD cutover and
+	// authorize delivery in the same serial owner turn.
+	completePacket := func(completion dataplaneCompletion) {
+		view, now := packetView.read(state.Store()), time.Now()
+		var facts *packetAuthorization
+		if leaf.pipeline != nil {
+			facts, _ = leaf.pipeline.prepareSnapshot(config, view, lastPlan, now)
+		}
+		var plan GatewayPlan
+		if facts != nil {
+			plan = facts.plan
+		} else {
+			// Transport cutover remains independent of Babel/device readiness.
+			plan = freshPlanFrom(view, now)
+		}
+		tunnel.observeData(completion, plan, now)
+		if facts != nil {
+			if _, err := leaf.pipeline.acceptPrepared(facts, completion); err != nil {
+				logger.Warn("leaf_packet_failed", "error", errors.Join(err, leaf.stop()))
+			}
+		} else {
+			data.accept(completion, plan, nil)
+		}
+	}
 	close(d.ready)
 	for {
 		select {
@@ -460,27 +485,12 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			}
 			observeReady()
 		case packet := <-packet.espPackets:
-			data.submitInbound(packet.generation, freshPlan(), packet.peer, packet.packet)
-		case completion := <-data.completed:
-			view, now := packetView.read(state.Store()), time.Now()
-			var facts *packetAuthorization
-			if leaf.pipeline != nil {
-				facts, _ = leaf.pipeline.prepareSnapshot(config, view, lastPlan, now)
+			if completion, ok := data.processInbound(packet.generation, freshPlan(), packet.peer, packet.packet); ok {
+				completePacket(completion)
 			}
-			var plan GatewayPlan
-			if facts != nil {
-				plan = facts.plan
-			} else {
-				// Transport cutover remains independent of Babel/device readiness.
-				plan = freshPlanFrom(view, now)
-			}
-			tunnel.observeData(completion, plan, now)
-			if facts != nil {
-				if _, err := leaf.pipeline.acceptPrepared(facts, completion); err != nil {
-					logger.Warn("leaf_packet_failed", "error", errors.Join(err, leaf.stop()))
-				}
-			} else {
-				data.accept(completion, plan, nil)
+		case job := <-data.jobs:
+			if job.ctx.Err() == nil {
+				completePacket(executeDataplaneJob(job))
 			}
 			// Readiness transition logging runs on the 250 ms lifecycle tick and
 			// authority/IKE events. Packet delivery above still revalidates now;
@@ -499,7 +509,19 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				continue
 			}
 			if leaf.pipeline != nil && devicePacket.generation == tunnel.generation {
-				leaf.pipeline.submitSnapshotPacket(config, packetView.read(state.Store()), lastPlan, time.Now(), devicePacket.packet)
+				// A host packet cannot impersonate the daemon's Babel control.
+				if _, _, ok := businessEndpoints(devicePacket.packet); !ok {
+					continue
+				}
+				pipeline := leaf.pipeline
+				facts, ok := pipeline.prepareSnapshot(config, packetView.read(state.Store()), lastPlan, time.Now())
+				if ok {
+					completion, ok := data.processOutbound(pipeline.generation, facts.plan, devicePacket.packet,
+						func(packet []byte, outbound bool) bool { return pipeline.authorize(facts, packet, outbound) })
+					if ok {
+						completePacket(completion)
+					}
+				}
 			}
 		case <-tunnelTicker.C:
 			if err := tunnel.tick(freshPlan(), time.Now()); err != nil {
