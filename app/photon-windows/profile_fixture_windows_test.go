@@ -118,3 +118,86 @@ func TestFixtureCPUProfileDoesNotOverwrite(t *testing.T) {
 		t.Fatal("changed existing profile")
 	}
 }
+
+func TestFixturePacketTimingMarker(t *testing.T) {
+	directory := t.TempDir()
+	if mode, err := readFixturePacketTimingMode(directory); mode != "" || err != nil {
+		t.Fatalf("absent marker: %q %v", mode, err)
+	}
+	path := filepath.Join(directory, "fixture-packet-timing-profile")
+	for _, value := range []string{"on:f1-w64-IPv4\n", "on:f4-w64-IPv4\n", "off:f1-w64-IPv4\n", "off:f4-w64-IPv4\n"} {
+		if err := os.WriteFile(path, []byte(value), 0600); err != nil {
+			t.Fatal(err)
+		}
+		mode, err := readFixturePacketTimingMode(directory)
+		if err != nil || (mode != "on" && mode != "off") {
+			t.Fatalf("valid marker %q: %q %v", value, mode, err)
+		}
+	}
+	for _, value := range []string{"", "on:f4-w1024-IPv4\n", "on:f4-w64-IPv6\n", "ON:f4-w64-IPv4\n", "on:f4-w64-IPv4\r\n", "off:f4-w64-IPv4\nextra", "arbitrary request exceeding the bounded marker size"} {
+		if err := os.WriteFile(path, []byte(value), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readFixturePacketTimingMode(directory); err == nil {
+			t.Fatalf("accepted malformed marker %q", value)
+		}
+		prefix := filepath.Join(directory, "profile")
+		if err := captureFixtureCPU(prefix, time.Millisecond); err == nil {
+			t.Fatal("started malformed capture")
+		}
+		if _, err := os.Stat(prefix + ".pprof"); !os.IsNotExist(err) {
+			t.Fatalf("malformed marker opened artifact: %v", err)
+		}
+	}
+}
+
+func TestFixturePacketTimingCaptureAndExclusiveArtifact(t *testing.T) {
+	for _, mode := range []string{"off", "on"} {
+		t.Run(mode, func(t *testing.T) {
+			directory := t.TempDir()
+			marker := filepath.Join(directory, "fixture-packet-timing-profile")
+			if err := os.WriteFile(marker, []byte(mode+":f4-w64-IPv4\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			prefix := filepath.Join(directory, "profile")
+			if err := captureFixtureCPU(prefix, time.Millisecond); err != nil {
+				t.Fatal(err)
+			}
+			file, err := os.Open(prefix + ".packet-timing.json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			var report photonwindows.FixturePacketTiming
+			if err := json.NewDecoder(file).Decode(&report); err != nil {
+				t.Fatal(err)
+			}
+			if report.SchemaVersion != 1 || report.Enabled != (mode == "on") {
+				t.Fatalf("wrong timing mode/schema: %+v", report)
+			}
+			if _, err := os.Stat(prefix + ".done"); err != nil {
+				t.Fatal("complete timing artifact was not acknowledged", err)
+			}
+		})
+	}
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "fixture-packet-timing-profile"), []byte("on:f4-w64-IPv4\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	prefix := filepath.Join(directory, "profile")
+	path := prefix + ".packet-timing.json"
+	if err := os.WriteFile(path, []byte("existing"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := captureFixtureCPU(prefix, time.Millisecond); err == nil {
+		t.Fatal("overwrote existing timing artifact")
+	}
+	if raw, _ := os.ReadFile(path); string(raw) != "existing" {
+		t.Fatal("changed existing timing artifact")
+	}
+	for _, suffix := range []string{".started", ".done"} {
+		if _, err := os.Stat(prefix + suffix); !os.IsNotExist(err) {
+			t.Fatalf("acknowledged rejected timing artifact: %s %v", suffix, err)
+		}
+	}
+}

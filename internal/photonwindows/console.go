@@ -458,6 +458,15 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			}
 		} else {
 			data.accept(completion, plan, nil)
+			if completion.timing.Sampled() {
+				outcome := fixturePacketTimingRejected
+				if errors.Is(completion.err, context.Canceled) || (completion.job.ctx != nil && completion.job.ctx.Err() != nil) {
+					outcome = fixturePacketTimingCanceled
+				} else if completion.err != nil {
+					outcome = fixturePacketTimingCryptoError
+				}
+				completion.timing.Finish(outcome)
+			}
 		}
 	}
 	close(d.ready)
@@ -484,11 +493,18 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			}
 			observeReady()
 		case packet := <-packet.espPackets:
+			packet.timing.Dequeue()
 			// Demux transferred a detached packet; this owner consumes it once.
 			// Plaintext aliases this buffer through synchronous completion;
 			// keep it untouched until delivery or rejection has finished.
-			if completion, ok := data.processOwnedInbound(packet.generation, freshPlan(), packet.peer, packet.packet); ok {
+			if completion, ok := data.processOwnedInbound(packet.generation, freshPlan(), packet.peer, packet.packet, packet.timing); ok {
 				completePacket(completion)
+			} else {
+				outcome := fixturePacketTimingRejected
+				if completion.timing.Sampled() && data.ctx.Err() != nil {
+					outcome = fixturePacketTimingCanceled
+				}
+				completion.timing.Finish(outcome)
 			}
 		case job := <-data.jobs:
 			if job.ctx.Err() == nil {
@@ -505,7 +521,9 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				}
 			}
 		case devicePacket := <-leaf.packets:
+			devicePacket.timing.Dequeue()
 			if devicePacket.err != nil {
+				devicePacket.timing.Finish(fixturePacketTimingRejected)
 				logger.Warn("leaf_read_failed", "error", errors.Join(devicePacket.err, leaf.stop()))
 				observeReady()
 				continue
@@ -513,17 +531,29 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			if leaf.pipeline != nil && devicePacket.generation == tunnel.generation {
 				// A host packet cannot impersonate the daemon's Babel control.
 				if _, _, ok := businessEndpoints(devicePacket.packet); !ok {
+					devicePacket.timing.Finish(fixturePacketTimingRejected)
 					continue
 				}
+				devicePacket.timing.Classify(fixturePacketTimingBusiness)
 				pipeline := leaf.pipeline
 				var facts packetAuthorization
 				if pipeline.prepareSnapshotInto(config, packetView.read(state.Store()), lastPlan, time.Now(), &facts) {
 					completion, ok := data.processOwnedOutbound(pipeline.generation, facts.plan, devicePacket.packet,
-						func(packet []byte, outbound bool) bool { return pipeline.authorize(&facts, packet, outbound) })
+						func(packet []byte, outbound bool) bool { return pipeline.authorize(&facts, packet, outbound) }, devicePacket.timing)
 					if ok {
 						completePacket(completion)
+					} else {
+						outcome := fixturePacketTimingRejected
+						if completion.timing.Sampled() && data.ctx.Err() != nil {
+							outcome = fixturePacketTimingCanceled
+						}
+						completion.timing.Finish(outcome)
 					}
+				} else {
+					devicePacket.timing.Finish(fixturePacketTimingRejected)
 				}
+			} else {
+				devicePacket.timing.Finish(fixturePacketTimingRejected)
 			}
 		case <-tunnelTicker.C:
 			if err := tunnel.tick(freshPlan(), time.Now()); err != nil {

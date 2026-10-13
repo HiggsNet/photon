@@ -14,6 +14,12 @@ function Test-ServiceThroughput {
         $profileLabel = 'f4-w1024-IPv4'
     }
     $profileCaptured = $false
+    $packetTiming = $null
+    if (Test-Path -LiteralPath (Join-Path $FixtureDirectory 'fixture-packet-timing-profile')) {
+        if (!$profileEnabled -or $dropDiagnostic) { throw 'Packet timing requires the independent CPU profile helper' }
+        $packetTiming = Read-FixturePacketTimingMode
+        $profileLabel = $packetTiming.Label
+    }
     $threadMarker = Join-Path $FixtureDirectory 'fixture-thread-cpu'
     $threadSampling = Test-Path -LiteralPath $threadMarker
     $sampleArguments = @()
@@ -66,6 +72,7 @@ function Test-ServiceThroughput {
         Results = $results
     }
     if ($dropDiagnostic) { $metadata.PacketDropDiagnostic = $true; $metadata.CPUProfileLabel = $profileLabel }
+    if ($packetTiming) { $metadata.PacketTimingMode = $packetTiming.Mode; $metadata.CPUProfileLabel = $profileLabel }
     if ($threadSampling) { $metadata.RuntimeSweep = $sweep; $metadata.ServiceRuntime = $runtimeReport; $metadata.ThreadCPUSampling = $true; $metadata.SampleIntervalMS = 250; $metadata.GeneratorGOMAXPROCS = 8 }
     try {
         if ($threadSampling) { $env:GOMAXPROCS = '8' }

@@ -36,6 +36,7 @@ type packetSockets struct {
 // These are bounded ingress queues, not protocol workers. The GossipDriver's
 // sole reader performs the demux; Daemon remains the tunnel lifecycle owner.
 type tunnelDatagram struct {
+	timing     fixturePacketTiming
 	generation uint64
 	peer       netip.AddrPort
 	packet     []byte
@@ -278,9 +279,16 @@ func (s *packetSockets) demuxLocked(packet []byte, peer netip.AddrPort) bool {
 	}
 	// Full queues drop datagrams; IKE retransmission recovers without blocking
 	// gossip reception, and ESP never creates an unbounded backlog.
+	var timing fixturePacketTiming
+	if queue == s.espPackets {
+		// Admission attempt precedes the existing detach and channel send. It
+		// is not an exact timestamp after the packet entered the queue.
+		timing = beginFixturePacketTimingQueue(fixturePacketTimingInbound)
+	}
 	if len(queue) < cap(queue) {
-		queue <- tunnelDatagram{s.tunnelGeneration, peer, append([]byte(nil), packet...)}
+		queue <- tunnelDatagram{timing: timing, generation: s.tunnelGeneration, peer: peer, packet: append([]byte(nil), packet...)}
 	} else if queue == s.espPackets {
+		timing.QueueRejected()
 		recordESPIngressDrop()
 	}
 	return true

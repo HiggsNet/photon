@@ -18,7 +18,7 @@ func TestDataplaneOwnedOutboundTransfersPlaintextThroughDelivery(t *testing.T) {
 	d, plan, child, _ := serialDataplaneFixture(t)
 	packet := dataplanePacket(true)
 	original := bytes.Clone(packet)
-	result, ok := d.processOwnedOutbound(10, plan, packet, dataplaneAllow)
+	result, ok := d.processOwnedOutbound(10, plan, packet, dataplaneAllow, fixturePacketTiming{})
 	if !ok || result.err != nil || !bytes.Equal(packet, original) {
 		t.Fatal("owned outbound changed its plaintext or failed AES", result.err)
 	}
@@ -56,7 +56,7 @@ func TestDataplaneOwnedOutboundRechecksSignedRoute(t *testing.T) {
 	}
 	packet := f.packet(true)
 	result, ok := f.p.tunnel.data.processOwnedOutbound(f.p.generation, facts.plan, packet,
-		func(packet []byte, outbound bool) bool { return f.p.authorize(&facts, packet, outbound) })
+		func(packet []byte, outbound bool) bool { return f.p.authorize(&facts, packet, outbound) }, fixturePacketTiming{})
 	if !ok || result.err != nil {
 		t.Fatal("owned signed outbound AES failed", result.err)
 	}
@@ -89,7 +89,7 @@ func TestDataplaneOwnedOutboundDenialAndCancellationPreserveSequence(t *testing.
 			case "generation canceled":
 				d.cancelGeneration()
 			}
-			result, ok := d.processOwnedOutbound(generation, plan, dataplanePacket(true), authorize)
+			result, ok := d.processOwnedOutbound(generation, plan, dataplanePacket(true), authorize, fixturePacketTiming{})
 			if scenario == "generation canceled" {
 				if !ok || !errors.Is(result.err, context.Canceled) || result.packet != nil {
 					t.Fatal("owned crypto did not observe the canceled generation", ok, result.err)
@@ -153,7 +153,7 @@ func BenchmarkGatewayPacketOwnedOutbound(b *testing.B) {
 					var processed bool
 					if owned {
 						result, processed = f.p.tunnel.data.processOwnedOutbound(f.p.generation, facts.plan, packet,
-							func(packet []byte, outbound bool) bool { return f.p.authorize(&facts, packet, outbound) })
+							func(packet []byte, outbound bool) bool { return f.p.authorize(&facts, packet, outbound) }, fixturePacketTiming{})
 					} else {
 						result, processed = f.p.tunnel.data.processOutbound(f.p.generation, facts.plan, packet,
 							func(packet []byte, outbound bool) bool { return f.p.authorize(&facts, packet, outbound) })

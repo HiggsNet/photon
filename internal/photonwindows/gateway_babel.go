@@ -1,6 +1,7 @@
 package photonwindows
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"net/netip"
@@ -218,30 +219,62 @@ func (p *gatewayBabelPipeline) Accept(config *Config, view corestate.View, plan 
 }
 
 func (p *gatewayBabelPipeline) acceptPrepared(facts *packetAuthorization, completion dataplaneCompletion) (bool, error) {
+	// This value owns finalization through the fresh gate that starts at AES
+	// completion. Delivery and classification stay on the same scalar trace.
+	outcome := fixturePacketTimingRejected
+	if completion.timing.Sampled() {
+		if errors.Is(completion.err, context.Canceled) || (completion.job.ctx != nil && completion.job.ctx.Err() != nil) {
+			outcome = fixturePacketTimingCanceled
+		} else if completion.err != nil {
+			outcome = fixturePacketTimingCryptoError
+		}
+	}
 	if !p.preparedCurrent(facts) {
+		completion.timing.Finish(outcome)
 		return false, nil
 	}
 	packet, peer, outbound, ok := p.tunnel.data.accept(completion, facts.plan, func(packet []byte, outbound bool) bool { return p.authorize(facts, packet, outbound) })
 	if !ok {
+		completion.timing.Finish(outcome)
 		return false, nil
 	}
 	if outbound {
-		return true, p.tunnel.socket.WriteTunnel(p.generation, packet, peer)
+		completion.timing.MarkDeliveryBegin()
+		err := p.tunnel.socket.WriteTunnel(p.generation, packet, peer)
+		completion.timing.MarkDeliveryEnd()
+		if err != nil {
+			completion.timing.Finish(fixturePacketTimingDeliveryError)
+		} else {
+			completion.timing.Finish(fixturePacketTimingDelivered)
+		}
+		return true, err
 	}
 	if from, _, err := babel.ParsePacket(packet, p.local); err == nil && from == p.peer {
+		completion.timing.Classify(fixturePacketTimingControl)
 		updates, err := p.leaf.SetLocal(facts.localOrigins)
 		if err != nil {
 			p.leaf = nil
+			completion.timing.Finish(fixturePacketTimingRejected)
 			return false, err
 		}
 		messages, err := p.leaf.Receive(packet, facts.now, facts.authorizeRoute)
 		if err != nil {
+			completion.timing.Finish(fixturePacketTimingRejected)
 			return false, err
 		}
 		p.send(facts, append(updates, messages...))
+		completion.timing.Finish(fixturePacketTimingDelivered)
 		return true, nil
 	}
-	return true, p.device.Write(packet)
+	completion.timing.MarkDeliveryBegin()
+	err := p.device.Write(packet)
+	completion.timing.MarkDeliveryEnd()
+	if err != nil {
+		completion.timing.Finish(fixturePacketTimingDeliveryError)
+	} else {
+		completion.timing.Finish(fixturePacketTimingDelivered)
+	}
+	return true, err
 }
 
 func businessAddress(a netip.Addr) bool {

@@ -29,10 +29,20 @@ func TestWintunNativeLifecycle(t *testing.T) {
 			t.Fatal("missing adapter LUID")
 		}
 		readCtx, stopRead := context.WithTimeout(context.Background(), 20*time.Millisecond)
-		_, err = d.Read(readCtx)
+		// Windows can emit IPv6 control traffic as soon as the adapter exists,
+		// even without our addresses/routes. Drain it under the same bounded
+		// caller deadline; the lifecycle contract is cancellation, not silence.
+		startupPackets := 0
+		for {
+			_, err = d.Read(readCtx)
+			if err != nil {
+				break
+			}
+			startupPackets++
+		}
 		stopRead()
 		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("empty ring read: %v", err)
+			t.Fatalf("read deadline after %d startup packets: %v", startupPackets, err)
 		}
 		if err := d.Write(nil); err == nil {
 			t.Fatal("accepted empty packet")
@@ -50,7 +60,7 @@ func TestWintunNativeLifecycle(t *testing.T) {
 		select {
 		case <-d.done:
 		case <-time.After(2 * time.Second):
-			t.Fatal("cancel did not stop native ring wait")
+			t.Fatal("cancel did not stop native receive loop")
 		}
 		d.Close()
 		d.Close()

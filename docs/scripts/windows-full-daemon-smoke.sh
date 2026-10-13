@@ -13,6 +13,8 @@ throughput_mode=${PHOTON_WINDOWS_THROUGHPUT:-0}
 throughput_seconds=${PHOTON_WINDOWS_THROUGHPUT_SECONDS:-15}
 profile_mode=${PHOTON_WINDOWS_CPU_PROFILE:-0}
 packet_drop_diagnostic=${PHOTON_WINDOWS_PACKET_DROP_DIAGNOSTIC:-0}
+packet_timing_mode=${PHOTON_WINDOWS_PACKET_TIMING:-}
+packet_timing_label=${PHOTON_WINDOWS_PACKET_TIMING_LABEL:-f1-w64-IPv4}
 performance_bundle=${PHOTON_WINDOWS_PERFORMANCE_BUNDLE:-}
 service_gomaxprocs=${PHOTON_WINDOWS_SERVICE_GOMAXPROCS:-}
 service_affinity=${PHOTON_WINDOWS_SERVICE_AFFINITY:-}
@@ -33,6 +35,13 @@ fi
 [[ $profile_mode == 0 || $profile_mode == 1 ]] || exit 2
 [[ $packet_drop_diagnostic == 0 || $packet_drop_diagnostic == 1 ]] || exit 2
 [[ $packet_drop_diagnostic == 0 || ( $throughput_mode == 1 && $profile_mode == 1 ) ]] || { echo 'Packet-drop diagnostic requires throughput and CPU profile modes' >&2; exit 2; }
+if [[ -n $packet_timing_mode ]]; then
+    [[ $packet_timing_mode == off || $packet_timing_mode == on ]] || { echo 'Packet timing mode must be off or on' >&2; exit 2; }
+    [[ $packet_timing_label == f1-w64-IPv4 || $packet_timing_label == f4-w64-IPv4 ]] || { echo 'Packet timing requires a supported IPv4 small-window point' >&2; exit 2; }
+    [[ $throughput_mode == 1 && $profile_mode == 1 && $packet_drop_diagnostic == 0 ]] || { echo 'Packet timing requires throughput and CPU profile without drop diagnostic' >&2; exit 2; }
+elif [[ -n ${PHOTON_WINDOWS_PACKET_TIMING_LABEL:-} ]]; then
+    echo 'Packet timing label requires an explicit off/on mode' >&2; exit 2
+fi
 [[ $profile_mode == 0 || $baseline_mode == 1 || $throughput_mode == 1 ]] || { echo 'CPU profile requires baseline or throughput mode' >&2; exit 2; }
 [[ $rekey_mode == 0 || $rekey_mode == 1 ]] || exit 2
 [[ $baseline_mode == 0 || $baseline_mode == 1 ]] || exit 2
@@ -117,7 +126,7 @@ cleanup() {
     fi
     if [[ $remote_created == 1 ]]; then
         # Only public runtime diagnostics; config.json contains fixture keys.
-        for pattern in '*.log' '*-events.json' '*-diagnostics.json' '*-peers.json' '*-routes.json' '*-owned-network.json' 'crash-recovery.json' 'network-change.json' 'gossip-convergence.json' 'adapter-conflict.json' 'transport-outage.json' 'rekey-traffic*.json' 'baseline*.json' 'throughput*.json' 'profile-*.pprof' 'profile-*.packet-drops.json' 'profile-*.done' 'profile-*.error' 'runtime-*.json' 'runtime-*.error'; do
+        for pattern in '*.log' '*-events.json' '*-diagnostics.json' '*-peers.json' '*-routes.json' '*-owned-network.json' 'crash-recovery.json' 'network-change.json' 'gossip-convergence.json' 'adapter-conflict.json' 'transport-outage.json' 'rekey-traffic*.json' 'baseline*.json' 'throughput*.json' 'profile-*.pprof' 'profile-*.packet-drops.json' 'profile-*.packet-timing.json' 'profile-*.done' 'profile-*.error' 'runtime-*.json' 'runtime-*.error'; do
             scp -q "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH:$remote/$pattern" "$work/" 2>/dev/null || true
         done
         if ! ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"Remove-Item -LiteralPath '$remote' -Recurse -Force -ErrorAction Stop\""; then result=1; fi
@@ -236,6 +245,10 @@ fi
 if [[ $packet_drop_diagnostic == 1 ]]; then
     printf 'f4-w1024-IPv4\n' > "$work/fixture-packet-drop-profile"
     scp -q "${ssh_args[@]}" "$work/fixture-packet-drop-profile" "$PHOTON_WINDOWS_SSH:$remote/"
+fi
+if [[ -n $packet_timing_mode ]]; then
+    printf '%s:%s\n' "$packet_timing_mode" "$packet_timing_label" > "$work/fixture-packet-timing-profile"
+    scp -q "${ssh_args[@]}" "$work/fixture-packet-timing-profile" "$PHOTON_WINDOWS_SSH:$remote/"
 fi
 if [[ $thread_cpu == 1 ]]; then
     printf '%s\n' "$service_gomaxprocs" > "$work/fixture-gomaxprocs"

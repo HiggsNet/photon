@@ -22,7 +22,7 @@ func TestDataplaneOwnedScratchEndsAtDeliveryOrDrop(t *testing.T) {
 	}
 	inner := dataplanePacket(true)
 	original := bytes.Clone(inner)
-	first, ok := d.processOwnedOutbound(10, plan, inner, dataplaneAllow)
+	first, ok := d.processOwnedOutbound(10, plan, inner, dataplaneAllow, fixturePacketTiming{})
 	if !ok || first.err != nil || !bytes.Equal(inner, original) || len(d.outboundScratch) != esp.MaxPacket || cap(d.outboundScratch) != esp.MaxPacket {
 		t.Fatal("owned encryption changed its input or lost its bounded workspace", first.err)
 	}
@@ -50,7 +50,7 @@ func TestDataplaneOwnedScratchEndsAtDeliveryOrDrop(t *testing.T) {
 	if _, err := peer.Open(queued.packet); err != nil {
 		t.Fatal("real peer rejected serial control", err)
 	}
-	dropped, ok := d.processOwnedOutbound(10, plan, inner, dataplaneAllow)
+	dropped, ok := d.processOwnedOutbound(10, plan, inner, dataplaneAllow, fixturePacketTiming{})
 	if !ok || dropped.err != nil || &dropped.packet[0] != backing {
 		t.Fatal("next owner turn failed to reuse its workspace", dropped.err)
 	}
@@ -59,7 +59,7 @@ func TestDataplaneOwnedScratchEndsAtDeliveryOrDrop(t *testing.T) {
 	}
 	// The rejected turn is finished. Do not inspect its borrowed packet after
 	// this next call, which is allowed to overwrite the same storage.
-	last, ok := d.processOwnedOutbound(10, plan, inner, dataplaneAllow)
+	last, ok := d.processOwnedOutbound(10, plan, inner, dataplaneAllow, fixturePacketTiming{})
 	if !ok || last.err != nil || &last.packet[0] != backing || !bytes.Equal(queued.packet, controlWire) {
 		t.Fatal("reuse aliased queued control or lost its bound", last.err)
 	}
@@ -76,7 +76,7 @@ func TestDataplaneOwnedScratchEndsAtDeliveryOrDrop(t *testing.T) {
 	if err := d.install(11, plan, endpoint, dataplaneChild(child.InitiatorSPI+1)); err != nil {
 		t.Fatal(err)
 	}
-	if result, ok := d.processOwnedOutbound(11, plan, inner, dataplaneAllow); !ok || result.err != nil {
+	if result, ok := d.processOwnedOutbound(11, plan, inner, dataplaneAllow, fixturePacketTiming{}); !ok || result.err != nil {
 		t.Fatal("fresh generation could not allocate its bounded workspace", result.err)
 	}
 	d.close()
@@ -88,7 +88,7 @@ func TestDataplaneOwnedScratchEndsAtDeliveryOrDrop(t *testing.T) {
 func TestDataplaneOwnedScratchCancellationDoesNotAllocate(t *testing.T) {
 	d, plan, _, _ := serialDataplaneFixture(t)
 	d.cancelGeneration()
-	result, ok := d.processOwnedOutbound(10, plan, dataplanePacket(true), dataplaneAllow)
+	result, ok := d.processOwnedOutbound(10, plan, dataplanePacket(true), dataplaneAllow, fixturePacketTiming{})
 	if !ok || !errors.Is(result.err, context.Canceled) || result.packet != nil || d.outboundScratch != nil {
 		t.Fatal("canceled owned crypto allocated output or lost its typed error", result.err)
 	}
@@ -105,7 +105,7 @@ func TestDataplaneOwnedBuffersRealUDPAndDevice(t *testing.T) {
 		inner := f.packet(true)
 		original := bytes.Clone(inner)
 		result, ok := f.p.tunnel.data.processOwnedOutbound(f.p.generation, facts.plan, inner,
-			func(packet []byte, outbound bool) bool { return f.p.authorize(&facts, packet, outbound) })
+			func(packet []byte, outbound bool) bool { return f.p.authorize(&facts, packet, outbound) }, fixturePacketTiming{})
 		if !ok || result.err != nil || !bytes.Equal(inner, original) {
 			t.Fatal("owned business ESP failed", result.err)
 		}
@@ -131,7 +131,7 @@ func TestDataplaneOwnedBuffersRealUDPAndDevice(t *testing.T) {
 	}
 	select {
 	case received := <-f.p.tunnel.socket.espPackets:
-		result, ok := f.p.tunnel.data.processOwnedInbound(received.generation, f.plan, received.peer, received.packet)
+		result, ok := f.p.tunnel.data.processOwnedInbound(received.generation, f.plan, received.peer, received.packet, fixturePacketTiming{})
 		if !ok || result.err != nil || result.job.packet != nil || !bytes.Equal(result.packet, inner) || &result.packet[0] != &received.packet[16] || cap(result.packet) != len(result.packet) {
 			t.Fatal("queue-owned ingress was copied, retained as ciphertext, or corrupted", result.err)
 		}
@@ -158,7 +158,7 @@ func TestDataplaneOwnedInboundSignedWithdrawalAfterAES(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, ok := f.p.tunnel.data.processOwnedInbound(f.p.generation, f.plan, f.p.tunnel.data.active.endpoint, wire)
+	result, ok := f.p.tunnel.data.processOwnedInbound(f.p.generation, f.plan, f.p.tunnel.data.active.endpoint, wire, fixturePacketTiming{})
 	if !ok || result.err != nil {
 		t.Fatal("owned inbound AES failed", result.err)
 	}
@@ -181,11 +181,11 @@ func TestDataplaneOwnedBuffersUseCurrentSAGates(t *testing.T) {
 		t.Run(change, func(t *testing.T) {
 			d, plan, child, _ := serialDataplaneFixture(t)
 			endpoint := d.active.endpoint
-			out, ok := d.processOwnedOutbound(10, plan, dataplanePacket(true), dataplaneAllow)
+			out, ok := d.processOwnedOutbound(10, plan, dataplanePacket(true), dataplaneAllow, fixturePacketTiming{})
 			if !ok || out.err != nil {
 				t.Fatal("owned outbound AES failed", out.err)
 			}
-			in, ok := d.processOwnedInbound(10, plan, endpoint, directInboundWire(t, child))
+			in, ok := d.processOwnedInbound(10, plan, endpoint, directInboundWire(t, child), fixturePacketTiming{})
 			if !ok || in.err != nil {
 				t.Fatal("owned inbound AES failed", in.err)
 			}
@@ -232,14 +232,14 @@ func TestDataplaneOwnedInboundErrorsNeverDeliverOrConsumeReplay(t *testing.T) {
 	wire := directInboundWire(t, child)
 	corrupted := bytes.Clone(wire)
 	corrupted[len(corrupted)-1] ^= 1
-	result, ok := d.processOwnedInbound(10, plan, endpoint, corrupted)
+	result, ok := d.processOwnedInbound(10, plan, endpoint, corrupted, fixturePacketTiming{})
 	if !ok || !errors.Is(result.err, esp.ErrAuthentication) || result.packet != nil || result.job.packet != nil {
 		t.Fatal("owned authentication failure exposed storage or lost its type", result.err)
 	}
 	if packet, _, _, accepted := d.accept(result, plan, dataplaneAllow); accepted || packet != nil {
 		t.Fatal("owned authentication failure reached delivery")
 	}
-	result, ok = d.processOwnedInbound(10, plan, endpoint, bytes.Clone(wire))
+	result, ok = d.processOwnedInbound(10, plan, endpoint, bytes.Clone(wire), fixturePacketTiming{})
 	if !ok || result.err != nil {
 		t.Fatal("failed owned decryption advanced replay", result.err)
 	}
@@ -248,7 +248,7 @@ func TestDataplaneOwnedInboundErrorsNeverDeliverOrConsumeReplay(t *testing.T) {
 	}
 	// Every admitted UDP event has its own detached storage. The original
 	// consumed ciphertext is never retried, even when checking replay rejection.
-	result, ok = d.processOwnedInbound(10, plan, endpoint, bytes.Clone(wire))
+	result, ok = d.processOwnedInbound(10, plan, endpoint, bytes.Clone(wire), fixturePacketTiming{})
 	if !ok || !errors.Is(result.err, esp.ErrReplay) || result.packet != nil || result.job.packet != nil {
 		t.Fatal("owned replay failure lost its type or exposed data", result.err)
 	}
@@ -277,7 +277,7 @@ func TestDataplaneOwnedInboundPreflightPreservesCiphertext(t *testing.T) {
 				d.cancel()
 			}
 			before := bytes.Clone(wire)
-			result, processed := d.processOwnedInbound(generation, plan, endpoint, wire)
+			result, processed := d.processOwnedInbound(generation, plan, endpoint, wire, fixturePacketTiming{})
 			if !bytes.Equal(wire, before) || result.packet != nil || result.job.packet != nil {
 				t.Fatal("owned ingress decrypted or retained a denied input")
 			}

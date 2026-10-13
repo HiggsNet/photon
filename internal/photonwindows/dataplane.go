@@ -53,6 +53,7 @@ type dataplaneJob struct {
 }
 
 type dataplaneCompletion struct {
+	timing fixturePacketTiming
 	job    dataplaneJob
 	packet []byte
 	err    error
@@ -217,17 +218,24 @@ func (d *gatewayDataplane) processInbound(generation uint64, plan GatewayPlan, e
 // consumed: the caller must not retry it, clear it, or return it to a pool.
 // Ordinary borrowed and asynchronous inputs retain processInbound/Open's
 // detached-output contract. No completion retains the ciphertext as job input.
-func (d *gatewayDataplane) processOwnedInbound(generation uint64, plan GatewayPlan, endpoint netip.AddrPort, packet []byte) (dataplaneCompletion, bool) {
+func (d *gatewayDataplane) processOwnedInbound(generation uint64, plan GatewayPlan, endpoint netip.AddrPort, packet []byte, timing fixturePacketTiming) (dataplaneCompletion, bool) {
 	sa := d.inboundSA(generation, plan, endpoint, packet)
 	if sa == nil || d.ctx.Err() != nil {
-		return dataplaneCompletion{}, false
+		return dataplaneCompletion{timing: timing}, false
 	}
-	result := dataplaneCompletion{job: dataplaneJob{ctx: d.generationCtx, generation: d.generation, sa: sa}}
+	result := dataplaneCompletion{timing: timing, job: dataplaneJob{ctx: d.generationCtx, generation: d.generation, sa: sa}}
 	if err := result.job.ctx.Err(); err != nil {
 		result.err = err
 		return result, true
 	}
+	result.timing.MarkAESBegin()
 	result.packet, result.err = sa.receiver.OpenOwned(packet)
+	result.timing.MarkAESEnd()
+	if result.err == nil && result.timing.Sampled() {
+		if _, _, business := businessEndpoints(result.packet); business {
+			result.timing.Classify(fixturePacketTimingBusiness)
+		}
+	}
 	return result, true
 }
 
@@ -243,13 +251,13 @@ func (d *gatewayDataplane) processOutbound(generation uint64, plan GatewayPlan, 
 // overwrite it. Do not retain the completion beyond that turn or reenter this
 // method during authorization/delivery. It never enters either asynchronous
 // queue; queued control and other callers retain independent Seal outputs.
-func (d *gatewayDataplane) processOwnedOutbound(generation uint64, plan GatewayPlan, packet []byte, authorize func([]byte, bool) bool) (dataplaneCompletion, bool) {
+func (d *gatewayDataplane) processOwnedOutbound(generation uint64, plan GatewayPlan, packet []byte, authorize func([]byte, bool) bool, timing fixturePacketTiming) (dataplaneCompletion, bool) {
 	sa := d.outboundSA(generation, plan, packet, authorize)
 	if sa == nil || d.ctx.Err() != nil {
-		return dataplaneCompletion{}, false
+		return dataplaneCompletion{timing: timing}, false
 	}
 	job := dataplaneJob{ctx: d.generationCtx, generation: d.generation, sa: sa, packet: packet, outbound: true}
-	result := dataplaneCompletion{job: job}
+	result := dataplaneCompletion{timing: timing, job: job}
 	if err := job.ctx.Err(); err != nil {
 		result.err = err
 		return result, true
@@ -257,7 +265,9 @@ func (d *gatewayDataplane) processOwnedOutbound(generation uint64, plan GatewayP
 	if d.outboundScratch == nil {
 		d.outboundScratch = make([]byte, esp.MaxPacket)
 	}
+	result.timing.MarkAESBegin()
 	result.packet, result.err = sa.sender.SealInto(d.outboundScratch[:0], packet)
+	result.timing.MarkAESEnd()
 	return result, true
 }
 

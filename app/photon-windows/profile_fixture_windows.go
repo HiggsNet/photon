@@ -7,6 +7,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime/pprof"
@@ -52,6 +53,10 @@ func init() {
 }
 
 func captureFixtureCPU(prefix string, limit time.Duration) error {
+	timingMode, err := readFixturePacketTimingMode(filepath.Dir(prefix))
+	if err != nil {
+		return err
+	}
 	file, err := os.OpenFile(prefix+".pprof", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return err
@@ -62,6 +67,15 @@ func captureFixtureCPU(prefix string, limit time.Duration) error {
 		return err
 	}
 	defer dropsFile.Close()
+	var timingFile *os.File
+	if timingMode != "" {
+		timingFile, err = os.OpenFile(prefix+".packet-timing.json", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err != nil {
+			file.Close()
+			return err
+		}
+		defer timingFile.Close()
+	}
 	if err = pprof.StartCPUProfile(file); err != nil {
 		file.Close()
 		return err
@@ -71,6 +85,18 @@ func captureFixtureCPU(prefix string, limit time.Duration) error {
 		if !stopped {
 			pprof.StopCPUProfile()
 			file.Close()
+		}
+	}()
+	timingStarted := false
+	if timingMode != "" {
+		if err := photonwindows.StartFixturePacketTiming(timingMode == "on"); err != nil {
+			return err
+		}
+		timingStarted = true
+	}
+	defer func() {
+		if timingStarted {
+			photonwindows.StopFixturePacketTiming()
 		}
 	}()
 	baseline := photonwindows.ReadFixturePacketDrops()
@@ -95,6 +121,11 @@ loop:
 		}
 	}
 	end := photonwindows.ReadFixturePacketDrops()
+	var timing photonwindows.FixturePacketTiming
+	if timingStarted {
+		timing = photonwindows.StopFixturePacketTiming()
+		timingStarted = false
+	}
 	pprof.StopCPUProfile()
 	err = file.Close()
 	stopped = true
@@ -111,7 +142,47 @@ loop:
 	if err = dropsFile.Close(); err != nil {
 		return err
 	}
+	if timingFile != nil {
+		if err := json.NewEncoder(timingFile).Encode(timing); err != nil {
+			return err
+		}
+		if err := timingFile.Close(); err != nil {
+			return err
+		}
+	}
 	return writeFixtureProfileMarker(prefix+".done", reason)
+}
+
+// This marker is private to the isolated profiling fixture. Bound reads and
+// reject malformed modes before opening artifacts or enabling any probe.
+func readFixturePacketTimingMode(directory string) (string, error) {
+	file, err := os.Open(filepath.Join(directory, "fixture-packet-timing-profile"))
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() || info.Size() > 32 {
+		return "", fmt.Errorf("invalid fixture packet timing marker")
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, 33))
+	if err != nil {
+		return "", err
+	}
+	switch string(raw) {
+	case "on:f1-w64-IPv4\n", "on:f4-w64-IPv4\n":
+		return "on", nil
+	case "off:f1-w64-IPv4\n", "off:f4-w64-IPv4\n":
+		return "off", nil
+	default:
+		return "", fmt.Errorf("invalid fixture packet timing marker")
+	}
 }
 
 type fixturePacketDropReport struct {

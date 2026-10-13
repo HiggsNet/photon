@@ -33,6 +33,7 @@ type leafOpenResult struct {
 	err      error
 }
 type leafDevicePacket struct {
+	timing     fixturePacketTiming
 	generation uint64
 	packet     []byte
 	err        error
@@ -122,7 +123,8 @@ func (r *leafRuntime) stopDevice() error {
 	r.readWG.Wait()
 	for {
 		select {
-		case <-r.packets:
+		case packet := <-r.packets:
+			packet.timing.Finish(fixturePacketTimingCanceled)
 		default:
 			return err
 		}
@@ -259,9 +261,12 @@ func (r *leafRuntime) complete(ctx context.Context, config *Config, view coresta
 				}
 				return
 			}
+			// This marks the admission attempt; channel send may be preempted.
+			event.timing = beginFixturePacketTimingQueue(fixturePacketTimingOutbound)
 			select {
 			case r.packets <- event:
 			default:
+				event.timing.QueueRejected()
 				recordLeafIngressDrop()
 			}
 		}
