@@ -5,12 +5,15 @@ package main
 // This file is only linked into explicitly tagged validation binaries. It does
 // not add a product CLI option, listener, or a control-protocol method.
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime/pprof"
 	"slices"
 	"time"
+
+	"github.com/HiggsNet/photon/internal/photonwindows"
 )
 
 func init() {
@@ -53,6 +56,12 @@ func captureFixtureCPU(prefix string, limit time.Duration) error {
 	if err != nil {
 		return err
 	}
+	dropsFile, err := os.OpenFile(prefix+".packet-drops.json", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		file.Close()
+		return err
+	}
+	defer dropsFile.Close()
 	if err = pprof.StartCPUProfile(file); err != nil {
 		file.Close()
 		return err
@@ -64,6 +73,7 @@ func captureFixtureCPU(prefix string, limit time.Duration) error {
 			file.Close()
 		}
 	}()
+	baseline := photonwindows.ReadFixturePacketDrops()
 	if err = writeFixtureProfileMarker(prefix+".started", "started\n"); err != nil {
 		return err
 	}
@@ -84,13 +94,39 @@ loop:
 			}
 		}
 	}
+	end := photonwindows.ReadFixturePacketDrops()
 	pprof.StopCPUProfile()
 	err = file.Close()
 	stopped = true
 	if err != nil {
 		return err
 	}
+	report, err := fixturePacketDropDelta(baseline, end)
+	if err != nil {
+		return err
+	}
+	if err = json.NewEncoder(dropsFile).Encode(report); err != nil {
+		return err
+	}
+	if err = dropsFile.Close(); err != nil {
+		return err
+	}
 	return writeFixtureProfileMarker(prefix+".done", reason)
+}
+
+type fixturePacketDropReport struct {
+	SchemaVersion int    `json:"schema_version"`
+	RawIngress    uint64 `json:"raw_ingress_drops"`
+	LeafIngress   uint64 `json:"leaf_ingress_drops"`
+	ESPIngress    uint64 `json:"esp_ingress_drops"`
+}
+
+func fixturePacketDropDelta(baseline, end photonwindows.FixturePacketDrops) (fixturePacketDropReport, error) {
+	if end.RawIngress < baseline.RawIngress || end.LeafIngress < baseline.LeafIngress || end.ESPIngress < baseline.ESPIngress {
+		return fixturePacketDropReport{}, fmt.Errorf("fixture packet drop counters moved backwards")
+	}
+	return fixturePacketDropReport{SchemaVersion: 1, RawIngress: end.RawIngress - baseline.RawIngress,
+		LeafIngress: end.LeafIngress - baseline.LeafIngress, ESPIngress: end.ESPIngress - baseline.ESPIngress}, nil
 }
 
 func writeFixtureProfileMarker(path, value string) error {

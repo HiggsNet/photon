@@ -142,3 +142,17 @@ ownership 回归验证同步 Open 不修改密文，返回后整个输入 buffer
 同一真实签名/Babel route fixture、固定时间、三轮 1 秒的准备及授权微基准，中位 **625.9 → 589.3 ns**，**192 B / 1 次分配 → 0 B / 0 次**。前版使用 `9c48297` 原指针实现及仅适配相同输出形状的 benchmark helper，后版使用调用方输出；两版其余源码相同，先后独占运行。这只证明此稳态事件的分配减少，不含完整 ESP、Windows I/O 或全服务吞吐，helper 的值复制也不能用于推算精确服务时间收益。
 
 新回归验证两个事件的时间独立、改变调用方值不改 policy、当前 generation 仍拒绝旧事实，配置缺失、精确 SA 到期和换代都清空旧输出。既有签名 deadline/撤销/CHILD 差分仍通过相同核心；focused race 与最新 Windows 原生 Dataplane/CallerFacts 均通过。原始源码、overlay、executable SHA、escape evidence 和基准位于 `event-facts/`；原生材料仍是 `native-dirty-owner-facts/` 的提交前源码验证，实际吞吐另用 clean 产品测量。
+
+## 同一处理线程的有界连续收包
+
+独立诊断轮固定 `4 flows / 每流窗口 1024 / IPv4` 的 profile 区间，三个既有 queue-full 增量为 raw 2738、leaf 28571、ESP 890。该点 echo 丢失 32214 包、约 8.00%，leaf 队列是最大观察项。这不是完整端到端账本，三个层与方向的计数不能相加归因全部丢包；测试标签的原子计数也可能影响吞吐。
+
+daemon 在处理首个 ESP 或 leaf 包之前设定 250 µs admission deadline，首包之后仅非阻塞逐包取出已就绪包。同一轮两个方向共享最多 8 包，包含首包。每包立即完成原 preflight、AES、重新读取当前 snapshot/time 与唯一交付门禁，然后才考虑下一包；不预收批次、不共享事件 facts、不积攒批末投递，也不改变队列大小、端口或 nonce 分配顺序。
+
+取消、handler 失败、generation/pipeline 变化会停止连续收包；已就绪 IKE 或 plaintext control job 会让出下一次主 select，认证 Babel 新排出的响应也会立即触发这一检查。其它 IPC、rebind、planner 与 tick 保留原 select 行为。250 µs 是准入预算，不是硬实时期限；它包含首包和阻塞发送时间，发送返回后若已耗尽预算则不再接下一包，因此不会在一轮连续启动八次一秒期限的慢发送。回到主 select 提供控制事件处理机会，不宣称随机 select 对某个事件有硬公平保证。
+
+回归覆盖两个方向合计 8 包、空队列不等待、首包已超预算、阻塞 handler 不重启预算、取消/错误/控制任务及时退出；真实 signed root IPAM 撤回经 Store publication 后下一包不能投递，真实 ESP 内 Babel retraction 也立即改变下一包的 route verdict。已有双向 ownership、CHILD overlap 与当前交付矩阵继续验证相同核心。普通 Windows 编译证明新增同步 handler、yield 及其授权 closure 不逃逸，helper 不保留 deadline、通道或 callbacks，局部 facts 没有新的 heap move；不据此宣称整条 packet path 零分配。
+
+focused race、普通/测试标签 Windows 编译、完整 tagged race 和 `make check` 通过。Windows 原生新 burst、既有数据面/事实/计数及真实 Wintun 双栈回归全部通过，执行前逐文件验证冻结源码 SHA，执行后独立清理自有 PID、目录和网卡。源码、构建及检查材料保存在 `packet-burst/`，原生执行材料位于 `native-packet-burst/`。
+
+同计数标签、同首点 profile、同工具和参数的标准六点复测中，单流由 457.42/435.97 降为 401.50/375.42 Mbps，四流变化约 -1% 至 +2.5%，大窗口仍丢失约 7.8%。独立诊断轮 leaf 拒收为 28571 → 28140，到期请求为 32214 → 32205，没有明显缓解已观察到的拥塞；两个 profile 位置不同的轮次不交叉归因。每点仅一次短测，不证明单项因果或稳定收益。因此生产代码已回退到逐包主循环，保留尝试提交与完整测量记录；来源和两轮对照见 [吞吐记录](throughput-testing.md)。

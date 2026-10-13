@@ -131,6 +131,7 @@ func (d *wintunDevice) receive(ctx context.Context, stopEvent windows.Handle) {
 			select {
 			case d.packets <- copyPacket:
 			default: // bounded ingress: drop under load, never pin ring memory
+				recordRawIngressDrop()
 			}
 			continue
 		}

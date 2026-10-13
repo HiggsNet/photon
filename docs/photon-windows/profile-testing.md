@@ -2,7 +2,7 @@
 
 ## 测试入口
 
-沿用 [性能基线](baseline-testing.md) 的完整 daemon 命令，加 `PHOTON_WINDOWS_CPU_PROFILE=1`；必须同时开启 `PHOTON_WINDOWS_BASELINE=1`，不能混入重协商或断网模式。
+沿用 [性能基线](baseline-testing.md) 或 [多流吞吐](throughput-testing.md) 的完整 daemon 命令，加 `PHOTON_WINDOWS_CPU_PROFILE=1`；必须同时开启其中一种独立性能模式，不能混入重协商或断网模式。
 
 该选项仅为本次 Windows executable 增加 `photon_profile` 构建标签。`app/photon-windows/profile_fixture_windows.go` 使用 `windows && photon_profile` 条件，默认构建的 GoFiles 不包含它。没有产品 CLI/config 字段、公开 HTTP/pprof listener 或 IPC method。
 
@@ -13,6 +13,18 @@ PowerShell helper 复用现有 SCM PID/创建时刻所有权检查，在首个 I
 原生测试验证 hard limit、主动停止、确认之后 gzip 完整可读以及拒绝覆盖既有 profile；默认编译排除入口、带标签 Windows cross-build/vet 均单独核验。测试构建不用于发行。
 
 产物包含原始 `.pprof`、`.done`、`baseline.json`、源码 commit/status 和 binary SHA256。CPU profile 是函数/栈/采样数据，不采集 heap、请求内容、私钥或 Bolt 文件；其中仍含源码路径和 executable 路径，仅保存在本地验收目录，不自动上传或发布。
+
+## 匿名队列丢包诊断
+
+新增 `photon_profile` 构建使用测试专属 `ReadFixturePacketDrops()` 读取进程累计的三个独立原子计数，不做 reset 或 enable。普通构建不提供该类型、接口或计数全局变量，三个私有 hook 可内联为空；不增加产品 CLI/config、IPC 或监听端口。具体位置及不包含的丢包见 [队列诊断边界](queue-drop-testing.md)。
+
+CPU profile 启动成功后、发布 `.started` 前读取 baseline；收到 stop 或到达 30 秒硬限制后、停止 CPU profile 前读取 end。`profile-PID.packet-drops.json` 独占创建为 0600，输出 `schema_version: 1` 及三个 `uint64` 增量 `raw_ingress_drops`、`leaf_ingress_drops`、`esp_ingress_drops`；不包含包内容、身份或地址。任何计数逆向都令采集失败，不发布 `.done`；正常结束必须将 pprof 和 JSON 都关闭后才确认完成。这个区间包含启动确认、停止请求至最多约 50 毫秒轮询的窄边界，并非精确等于工具发送的 8 秒。
+
+仅隔离 shell fixture 的 `PHOTON_WINDOWS_PACKET_DROP_DIAGNOSTIC=1` 开启诊断轮，要求同时为 `PHOTON_WINDOWS_THROUGHPUT=1` 和 `PHOTON_WINDOWS_CPU_PROFILE=1`。fixture 写入固定 marker `fixture-packet-drop-profile`，内容只能为 `f4-w1024-IPv4\n`；它将同一六点顺序中的唯一 CPU profile 延后到这个大窗口点。诊断轮 `throughput.json` 明确记录 `PacketDropDiagnostic=true` 和 `CPUProfileLabel=f4-w1024-IPv4`；缺 marker 的标准吞吐轮继续仅在首个 `f1-w64-IPv4` 点采集，历史 baseline 选择不变。marker 随自有 fixture 目录清理，shell collector 仅收固定 `profile-*.packet-drops.json` 公共结果。
+
+原生 Windows 测试验证 gzip/JSON 在完成确认后完整可读、pprof 和 JSON 拒绝覆盖、单字段计数逆向失败。PowerShell fixture 另检查 helper 语法、完整有效 schema，以及负数、小数、错误版本、缺字段、额外字段和 stale JSON 的拒绝；它验证非负整数表示，实际 Go producer 的字段类型固定为 `uint64`。带计数的同一 native executable 还验证并发累计、真实 ESP/leaf 队列满及取消/错误不误计，实际 Wintun 两代生命周期和 IPv4/IPv6 OS UDP roundtrip 全部通过，测试目录及自有网卡已独立确认消失。证据在 `build/validation/performance-20261012/native-packet-drops/`，ordinary/tagged 构建与内联证据见同级 `queue-drops/`。
+
+这三项不是完整端到端丢包账本：Raw 包含 OS 设备包，ESP 计数在认证前发生，其他网络栈、ring、远端和完整性/重放拒绝不在其中。不能相加后当作已认证业务 loss，也不能用零值证明无端到端损失。诊断轮单独保存源码、构建标签、实际 binary SHA 和数据，不把开启计数及改变 profile 位置的 CPU 差值当作旧标准矩阵的精确增益。
 
 ## 优化前真实证据
 

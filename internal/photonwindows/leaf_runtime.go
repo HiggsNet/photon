@@ -262,6 +262,7 @@ func (r *leafRuntime) complete(ctx context.Context, config *Config, view coresta
 			select {
 			case r.packets <- event:
 			default:
+				recordLeafIngressDrop()
 			}
 		}
 	}()

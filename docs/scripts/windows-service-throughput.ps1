@@ -6,6 +6,13 @@ function Test-ServiceThroughput {
     $profileHelper = Join-Path $FixtureDirectory 'windows-service-profile.ps1'
     $profileEnabled = Test-Path $profileHelper
     if ($profileEnabled) { . $profileHelper }
+    $dropMarker = Join-Path $FixtureDirectory 'fixture-packet-drop-profile'
+    $dropDiagnostic = Test-Path $dropMarker
+    $profileLabel = 'f1-w64-IPv4'
+    if ($dropDiagnostic) {
+        if (!$profileEnabled -or [IO.File]::ReadAllText($dropMarker) -ne "f4-w1024-IPv4`n") { throw 'Invalid fixture packet-drop profile marker' }
+        $profileLabel = 'f4-w1024-IPv4'
+    }
     $profileCaptured = $false
     $owner = Read-OwnedProcess
     $before = Read-Status
@@ -30,6 +37,7 @@ function Test-ServiceThroughput {
         ThroughputUnit = 'unique fully validated UDP echo application payload Mbps per direction; two traversals per echo'
         Results = $results
     }
+    if ($dropDiagnostic) { $metadata.PacketDropDiagnostic = $true; $metadata.CPUProfileLabel = $profileLabel }
     try {
         foreach ($point in @(@(1,64),@(4,64),@(4,1024))) {
             $flows = $point[0]; $window = $point[1]
@@ -40,7 +48,7 @@ function Test-ServiceThroughput {
                 if ($LASTEXITCODE -ne 0) { throw "Throughput warmup tool failed: $label" }
                 $warmup = Get-Content -LiteralPath $warmupFile -Raw | ConvertFrom-Json
                 $profilePrefix = $null
-                if ($profileEnabled -and !$profileCaptured) { $profilePrefix = Start-FixtureCPUProfile $owner }
+                if ($profileEnabled -and !$profileCaptured -and $label -eq $profileLabel) { $profilePrefix = Start-FixtureCPUProfile $owner }
                 $measurementFile = Join-Path $FixtureDirectory "throughput-$label.json"
                 try {
                     & $tool -mode client -local $family[1] -remote $family[2] -port 19100 -flows $flows -window $window -seconds $MeasureSeconds -payload 1200 -service-pid $owner.Id -output $measurementFile | Out-Null

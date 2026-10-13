@@ -12,8 +12,11 @@ baseline_mode=${PHOTON_WINDOWS_BASELINE:-0}
 throughput_mode=${PHOTON_WINDOWS_THROUGHPUT:-0}
 throughput_seconds=${PHOTON_WINDOWS_THROUGHPUT_SECONDS:-15}
 profile_mode=${PHOTON_WINDOWS_CPU_PROFILE:-0}
+packet_drop_diagnostic=${PHOTON_WINDOWS_PACKET_DROP_DIAGNOSTIC:-0}
 performance_bundle=${PHOTON_WINDOWS_PERFORMANCE_BUNDLE:-}
 [[ $profile_mode == 0 || $profile_mode == 1 ]] || exit 2
+[[ $packet_drop_diagnostic == 0 || $packet_drop_diagnostic == 1 ]] || exit 2
+[[ $packet_drop_diagnostic == 0 || ( $throughput_mode == 1 && $profile_mode == 1 ) ]] || { echo 'Packet-drop diagnostic requires throughput and CPU profile modes' >&2; exit 2; }
 [[ $profile_mode == 0 || $baseline_mode == 1 || $throughput_mode == 1 ]] || { echo 'CPU profile requires baseline or throughput mode' >&2; exit 2; }
 [[ $rekey_mode == 0 || $rekey_mode == 1 ]] || exit 2
 [[ $baseline_mode == 0 || $baseline_mode == 1 ]] || exit 2
@@ -98,7 +101,7 @@ cleanup() {
     fi
     if [[ $remote_created == 1 ]]; then
         # Only public runtime diagnostics; config.json contains fixture keys.
-        for pattern in '*.log' '*-events.json' '*-diagnostics.json' '*-peers.json' '*-routes.json' '*-owned-network.json' 'crash-recovery.json' 'network-change.json' 'gossip-convergence.json' 'adapter-conflict.json' 'transport-outage.json' 'rekey-traffic*.json' 'baseline*.json' 'throughput*.json' 'profile-*.pprof' 'profile-*.done' 'profile-*.error'; do
+        for pattern in '*.log' '*-events.json' '*-diagnostics.json' '*-peers.json' '*-routes.json' '*-owned-network.json' 'crash-recovery.json' 'network-change.json' 'gossip-convergence.json' 'adapter-conflict.json' 'transport-outage.json' 'rekey-traffic*.json' 'baseline*.json' 'throughput*.json' 'profile-*.pprof' 'profile-*.packet-drops.json' 'profile-*.done' 'profile-*.error'; do
             scp -q "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH:$remote/$pattern" "$work/" 2>/dev/null || true
         done
         if ! ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"Remove-Item -LiteralPath '$remote' -Recurse -Force -ErrorAction Stop\""; then result=1; fi
@@ -213,6 +216,10 @@ if [[ $throughput_mode == 1 ]]; then
 fi
 if [[ $profile_mode == 1 ]]; then
     scp -q "${ssh_args[@]}" docs/scripts/windows-service-profile.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
+fi
+if [[ $packet_drop_diagnostic == 1 ]]; then
+    printf 'f4-w1024-IPv4\n' > "$work/fixture-packet-drop-profile"
+    scp -q "${ssh_args[@]}" "$work/fixture-packet-drop-profile" "$PHOTON_WINDOWS_SSH:$remote/"
 fi
 if [[ $rekey_mode == 1 ]]; then
     scp -q "${ssh_args[@]}" docs/scripts/windows-service-rekey-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"

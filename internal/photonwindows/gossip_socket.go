@@ -280,6 +280,8 @@ func (s *packetSockets) demuxLocked(packet []byte, peer netip.AddrPort) bool {
 	// gossip reception, and ESP never creates an unbounded backlog.
 	if len(queue) < cap(queue) {
 		queue <- tunnelDatagram{s.tunnelGeneration, peer, append([]byte(nil), packet...)}
+	} else if queue == s.espPackets {
+		recordESPIngressDrop()
 	}
 	return true
 }

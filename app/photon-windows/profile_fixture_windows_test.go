@@ -4,11 +4,14 @@ package main
 
 import (
 	"compress/gzip"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/HiggsNet/photon/internal/photonwindows"
 )
 
 func TestFixtureCPUProfileBoundedAndFlushed(t *testing.T) {
@@ -37,6 +40,16 @@ func TestFixtureCPUProfileBoundedAndFlushed(t *testing.T) {
 		if string(done) != want {
 			t.Fatalf("done %q", done)
 		}
+		drops, err := os.Open(prefix + ".packet-drops.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var report fixturePacketDropReport
+		err = json.NewDecoder(drops).Decode(&report)
+		drops.Close()
+		if err != nil || report.SchemaVersion != 1 {
+			t.Fatalf("ack preceded complete packet-drop JSON: %+v %v", report, err)
+		}
 		file, err := os.Open(prefix + ".pprof")
 		if err != nil {
 			t.Fatal(err)
@@ -51,6 +64,44 @@ func TestFixtureCPUProfileBoundedAndFlushed(t *testing.T) {
 		file.Close()
 		if err != nil || len(data) == 0 {
 			t.Fatalf("ack preceded complete compressed profile: %v", err)
+		}
+	}
+}
+
+func TestFixtureCPUProfileDoesNotOverwritePacketDrops(t *testing.T) {
+	prefix := filepath.Join(t.TempDir(), "profile")
+	path := prefix + ".packet-drops.json"
+	if err := os.WriteFile(path, []byte("existing"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := captureFixtureCPU(prefix, time.Millisecond); err == nil {
+		t.Fatal("overwrote existing packet-drop artifact")
+	}
+	raw, _ := os.ReadFile(path)
+	if string(raw) != "existing" {
+		t.Fatal("changed existing packet-drop artifact")
+	}
+	for _, suffix := range []string{".started", ".done"} {
+		if _, err := os.Stat(prefix + suffix); !os.IsNotExist(err) {
+			t.Fatalf("acknowledged rejected artifact: %s %v", suffix, err)
+		}
+	}
+}
+
+func TestFixturePacketDropDeltaRejectsCounterRegression(t *testing.T) {
+	baseline := photonwindows.FixturePacketDrops{RawIngress: 5, LeafIngress: 8, ESPIngress: 13}
+	end := photonwindows.FixturePacketDrops{RawIngress: 7, LeafIngress: 11, ESPIngress: 17}
+	got, err := fixturePacketDropDelta(baseline, end)
+	if want := (fixturePacketDropReport{SchemaVersion: 1, RawIngress: 2, LeafIngress: 3, ESPIngress: 4}); err != nil || got != want {
+		t.Fatalf("delta %+v %v", got, err)
+	}
+	for _, changed := range []photonwindows.FixturePacketDrops{
+		{RawIngress: 4, LeafIngress: 8, ESPIngress: 13},
+		{RawIngress: 5, LeafIngress: 7, ESPIngress: 13},
+		{RawIngress: 5, LeafIngress: 8, ESPIngress: 12},
+	} {
+		if _, err := fixturePacketDropDelta(baseline, changed); err == nil {
+			t.Fatal("accepted counter regression")
 		}
 	}
 }

@@ -119,4 +119,64 @@ IPv4 单流相对优化前约 16.02 Mbps 达到约 28 倍，但仍未达到 1 Gb
 
 六点均 `Completed=true`、`RecoveryPassed=true`，服务保持同一 PID/创建身份；无迟到、损坏、外来、未发送序号、重复、发送错误或包预算耗尽。完整 SCM rig `rig.exit=0`，`cleanup.log` 独立确认自有服务、网卡、目录、Event Log 来源和 Linux 容器已消失，私钥及数据库已删除。首点 profile 为 `after-io-leaf-credit/profile-2948.pprof`。该检查点通过完整 Windows race 与 `make check`；新 socket/leaf 场景另以记录源码文件 SHA 的临时 Windows 原生测试 executable 验证通过，证据在 `native-dirty-socket-leaf/`，包括 Windows RawWrite 阻塞发送期间接收、socket 更换等待发送和双栈并行收发。这个临时功能验证不冒充该 clean 产品的七包原生回归，也不参与吞吐采样。
 
-较早的 `before-original-tool/`、`before/`、`after-cache/` 15 秒原始样本全部保留：初版/时间戳工具使用固定序号槽位，丢包后存在 head-of-line 等待，其多流数据不作为最终容量矩阵。早期 `before/` 性能点完成但宿主协调器退出 143，后续资源由人工清理，不能将它说成完整 rig exit 0；统一工具五组使用独立协调器保存最终退出码并验证清理。
+## 2026-10-12 第六组事件事实与同步入站检查点
+
+Windows product 固定为 `3c8a432e02a6070651af603f5e0e8189ab4fbab1` 的 clean git archive，executable SHA256 为 `1813c8643838957e3e0c01fd94e1fdceadaacdbe84800be2d5a85802b4389091`。它增加 `e96b316f` 同步入站密文借用和 `3c8a432` 事件调用方持有 facts；前者仍保持当前交付检查，后者每个事件使用自己的输出并在拒绝时清空，不由策略或 crypto job 持有调用方输出。构建、工具、Linux/fixture、时长、窗口、deadline 和首点 profile 条件与前五组一致，来源在 `after-facts-inbound-credit/performance-sources.json`。本组没有新增队列丢包诊断 hook 或延后 profile。
+
+| 地址族 / 流数 / 每流窗口 | 唯一 echo Mbps / 单方向 | echo 丢失 | 服务 CPU / 单核 % | 生成器 CPU / 单核 % |
+| --- | ---: | ---: | ---: | ---: |
+| IPv4 / 1 / 64 | **450.90** | 0% | 158.00 | 72.85 |
+| IPv6 / 1 / 64 | **424.74** | 0% | 150.77 | 68.35 |
+| IPv4 / 4 / 64 | 430.21 | 0.387% | 156.68 | 94.37 |
+| IPv6 / 4 / 64 | 431.57 | 0.386% | 151.99 | 94.83 |
+| IPv4 / 4 / 1024 | 421.62 | 7.622% | 151.33 | 102.29 |
+| IPv6 / 4 / 1024 | 423.71 | 7.652% | 150.94 | 92.41 |
+
+单流仍约 425–451 Mbps，尚未达到 1 Gbps；大窗口的本轮吞吐高于上一组，但仍丢失约 7.6% 请求。每点仅一轮 8 秒短测，不能把波动或两片微基准的差值当作稳定产品增益。后续固定大窗口的匿名队列丢包诊断另轮保存，不混入标准对照。
+
+六点均 `Completed=true`、`RecoveryPassed=true`，同服务 PID/创建身份；无迟到、损坏、外来、未发送序号、重复、发送错误或包预算耗尽。完整 SCM rig 与独立 gather/cleanup 均退出 0，私钥、数据库以及自有服务、网卡、目录、Event Log 来源和容器已清理。首点 profile 为 `after-facts-inbound-credit/profile-6300.pprof`；该检查点完整 Windows race 和 `make check` 均通过。相同两片冻结源码的临时 Windows 原生 executable 已运行 Dataplane 和 CallerFacts 的 16 个场景并全部 PASS，源码与 executable SHA、日志及自有目录清理证据在 `native-dirty-owner-facts/`；这份功能验证不冒充完整七包回归，也不参与本组采样。
+
+## 2026-10-12 同计数构建的 burst 前后对照
+
+为将诊断计数入口与 burst 的变化分开，补测优化前标准六点：Windows 固定为 `4665b4146748a6c84514be97cf93d3d7d21ff418`，SHA256 为 `12c64b76c8e7c0f6713333986b43935b11d71501c01674a426f91b5eb705863e`。优化后固定为 `4314c07dcd14e7e7f60136e4949a2b7155dae42e`，SHA256 为 `3b7b880ae68b9c95e5edf7d3b2276d36ea6fc32d48fb3a5a2cb098670c4eeda8`。两者均由 clean git archive 构建，使用相同 Go 1.26.5、`CGO_ENABLED=0`、`-buildvcs=false -tags photon_profile`；Linux/fixture 保持 `2c06877`，最终工具仍为 `c1c8ea8`，实际二进制 SHA 与前述共同来源一致。后续未提交代码不参与这两轮产品构建。
+
+burst 由同一个串行 owner 在处理首包后继续接收已就绪的数据包，两方向合计最多 8 包，250 微秒预算包含首包处理时间。预算限制下一次接收，不会中断已经阻塞的设备写入；每包仍检查当前权限、时间、generation 和交付条件，未扩大队列。源码与功能验证见 `packet-path-performance.md`。
+
+标准前后轮均为 1200 字节 payload、预热 2 秒、发送 8 秒、deadline 1 秒，profile 只在首个 `f1-w64-IPv4` 点采集。fixture 的 `PHOTON_WINDOWS_PACKET_DROP_DIAGNOSTIC=0`，实际 metadata 均没有 `PacketDropDiagnostic` 或 `CPUProfileLabel`，marker 也不存在。证据分别保存在 `before-burst-standard/`、`after-burst-standard/`；下表仍为单方向唯一 echo payload Mbps / echo 丢失百分比。
+
+| 地址族 / 流数 / 每流窗口 | burst 前 / 同计数构建 | burst 后 |
+| --- | ---: | ---: |
+| IPv4 / 1 / 64 | 457.42 / 0% | 401.50 / 0% |
+| IPv6 / 1 / 64 | 435.97 / 0% | 375.42 / 0% |
+| IPv4 / 4 / 64 | 424.53 / 0.389% | 435.15 / 0.384% |
+| IPv6 / 4 / 64 | 423.47 / 0.385% | 418.36 / 0.383% |
+| IPv4 / 4 / 1024 | 416.57 / 7.741% | 422.65 / 7.850% |
+| IPv6 / 4 / 1024 | 408.39 / 7.804% | 409.20 / 7.775% |
+
+标准单流的服务 CPU / 生成器 CPU，单位单核百分比，IPv4 为 **160.53 / 75.38 → 148.02 / 63.08**，IPv6 为 **149.59 / 73.43 → 133.19 / 64.84**。本轮标准四流吞吐变化约 -1.2% 至 +2.5%，单流低于优化前约 12–14%，没有验证 burst 的稳定提速；仍未达到 1 Gbps。每点仅一轮短测，不从这些差值推断统计显著性或长期退化原因。由于没有看到稳定收益，生产 burst 已由 `55ce540f` 回退；上述性能 executable 仍是冻结的 `4314c07d` 尝试，未混入后续 plaintext 所有权优化。这些固定检查点样本保留用于复核，不将已回退改动当作生效的性能优化。
+
+随后严格串行运行匹配的独立诊断六点，profile 均只在 `f4-w1024-IPv4`。优化前使用既有 `queue-drop-diagnostic/`，优化后为 `after-burst-diagnostic/`，Windows 来源各自与上表相同，工具及其他条件也相同。metadata 明确 `PacketDropDiagnostic=true`、`CPUProfileLabel=f4-w1024-IPv4`；该表不能与标准轮不同位置的 profile 交叉计算收益。
+
+| 地址族 / 流数 / 每流窗口 | 诊断 burst 前 | 诊断 burst 后 |
+| --- | ---: | ---: |
+| IPv4 / 1 / 64 | 383.15 / 0.000626% | 488.58 / 0% |
+| IPv6 / 1 / 64 | 360.43 / 0% | 425.77 / 0% |
+| IPv4 / 4 / 64 | 422.77 / 0.386% | 447.34 / 0.360% |
+| IPv6 / 4 / 64 | 437.89 / 0.394% | 473.03 / 0.360% |
+| IPv4 / 4 / 1024 | 400.06 / 8.000% | 447.92 / 7.191% |
+| IPv6 / 4 / 1024 | 395.92 / 8.031% | 458.10 / 7.082% |
+
+固定 IPv4 大窗口点的实际匿名队列增量：
+
+| 诊断轮 | RawIngress | LeafIngress | ESPIngress |
+| --- | ---: | ---: | ---: |
+| burst 前 / profile-5676 | 2738 | 28571 | 890 |
+| burst 后 / profile-5964 | 2387 | 28140 | 1678 |
+
+burst 后该点发送 **447839** 个请求、唯一回包 **415634**、期限内未完成 **32205**，含排空 **8.9079806 秒**，服务 CPU **157.6887%**、生成器 **90.6841%** 单核。优化前未完成请求为 **32214**；绝对数量近似持平，丢失比例下降不能说明丢包机制已解决。leaf 拒收仍约 2.8 万，burst 没有明显消除该瓶颈。三项发生于不同层与方向，不能相加当作完整业务 loss；Raw 可能包含 OS 包，ESP 在认证前计数。profile baseline/end 的握手与最多约 50 毫秒轮询边界也不等于精确 8 秒发送区间，完整计数语义见 `queue-drop-testing.md`。
+
+后测首点 `profile-6588.pprof` 与诊断 `profile-5964.pprof` 分别保存在对应目录。后者持续 9.00 秒、原始样本 26.64 秒，`runtime.cgocall` 累计 18.93 秒包含 Windows 等待栈，不能解释为实际 CPU 295.97%。保留原始 `profile-top.txt` 和过滤该栈的 `profile-ignore-cum.txt`；过滤后累计 `drainReadyPacketBurst` 2.87 秒、`acceptPrepared` 1.15 秒、`processOutbound` 0.87 秒、`authorize` 0.82 秒、`prepareSnapshotInto` 0.75 秒。累计栈重叠，不可相加或将过滤占比当作 OS CPU 计量。
+
+三组新补测（优化前标准、优化后标准和诊断）全部六点 `Completed=true`、`RecoveryPassed=true`、同组服务 PID/创建身份，无迟到、重复、损坏、外来、未发送序号、发送错误或预算耗尽。完整 SCM rig 与各组独立 gather/cleanup 均退出 0；自有服务、网卡、目录、Event Log 来源、容器以及私钥/数据库均已清理。后测 `matched-validation.json` 和 `matched-standard-comparison.json` 保存条件校验与原始对照，不覆盖早期样本。该产品源码完整 tagged race 和 `make check` 通过；`native-packet-burst/` 的冻结 executable 运行 25 个 Windows 原生顶层测试全部 PASS，无 skip，包含四类 burst、安全交付/CallerFacts/计数以及真实 Wintun 两代生命周期和双栈 OS UDP。clean archive 中 116 个 internal Go 文件与这份临时原生 executable 的源码 fingerprint 逐项一致，实际测试 PID3424 的临时网卡与目录也独立确认消失。
+
+较早的 `before-original-tool/`、`before/`、`after-cache/` 15 秒原始样本全部保留：初版/时间戳工具使用固定序号槽位，丢包后存在 head-of-line 等待，其多流数据不作为最终容量矩阵。早期 `before/` 性能点完成但宿主协调器退出 143，后续资源由人工清理，不能将它说成完整 rig exit 0；统一工具各组使用独立协调器保存最终退出码并验证清理。
