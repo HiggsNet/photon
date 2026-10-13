@@ -33,24 +33,24 @@ func (p *gatewayBabelPipeline) prepare(config *Config, view corestate.View, plan
 		return nil, false
 	}
 	t := p.tunnel
-	binding, err := localTransportAuthorization(config, view, now)
+	binding, err := localTransportAuthorizationWithVerifier(config, view, now, p.verifier)
 	if err != nil || binding != t.localAuthorization {
 		p.leaf = nil
 		return nil, false
 	}
-	origins := currentBabelOrigins(config, view, now)
+	origins := currentBabelOriginsWithVerifier(config, view, now, p.verifier)
 	if origins[p.routerID] != config.ManagedZone {
 		p.leaf = nil
 		return nil, false
 	}
-	current := revalidateActiveGatewaySelection(config, view, plan, now)
+	current := revalidateActiveGatewaySelection(config, view, plan, now, p.verifier)
 	if !t.current(current) || !t.data.current(t.generation, t.data.active, current) {
 		p.leaf = nil
 		return nil, false
 	}
 	// Build signed IPAM/route facts once for this event. Gateway selection and
 	// local/Babel identities retain their existing independent verification.
-	set := currentAuthorizedRouteSet(config, view, now)
+	set := currentAuthorizedRouteSetWithVerifier(config, view, now, p.verifier)
 	current.Routes = authorizedGatewayRoutesFromSet(config, set)
 	hosts, _ := leafDeviceIntentFromSet(config, set)
 	return &packetAuthorization{owner: p, plan: current, now: now,

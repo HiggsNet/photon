@@ -273,15 +273,25 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	backoff := initialBackoff
 	var nextTunnel time.Time
 	freshPlanFrom := func(view corestate.View, now time.Time) GatewayPlan {
-		if view.State == nil || photoncrypto.VerifyChain(view.State.Network, config.ManagedZone, now) != nil {
+		// The pipeline and this transport gate have the same serial owner.
+		// Reuse only signature math; every input and lifetime is checked anew.
+		var verifier *photoncrypto.Verifier
+		if leaf.pipeline != nil {
+			verifier = leaf.pipeline.verifier
+		}
+		if view.State == nil || verifier.VerifyChain(view.State.Network, config.ManagedZone, now) != nil {
 			return GatewayPlan{Rejected: "local authority is absent or expired"}
 		}
 		if tunnel.phase != 0 {
-			binding, err := localTransportAuthorization(config, view, now)
+			binding, err := localTransportAuthorizationWithVerifier(config, view, now, verifier)
 			if err != nil || binding != tunnel.localAuthorization {
 				return GatewayPlan{Rejected: "local transport authorization changed"}
 			}
-			return revalidateActiveGateway(config, view, lastPlan, now)
+			current := revalidateActiveGatewaySelection(config, view, lastPlan, now, verifier)
+			if current.Selected != nil {
+				current.Routes = authorizedGatewayRoutesFromSet(config, currentAuthorizedRouteSetWithVerifier(config, view, now, verifier))
+			}
+			return current
 		}
 		return RevalidateGatewayPlan(config, view, lastPlan, now)
 	}

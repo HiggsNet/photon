@@ -24,6 +24,10 @@ var (
 )
 
 func VerifyChain(ns *zone.NetworkState, zonePath zone.ZonePath, now time.Time) error {
+	return (*Verifier)(nil).VerifyChain(ns, zonePath, now)
+}
+
+func (v *Verifier) VerifyChain(ns *zone.NetworkState, zonePath zone.ZonePath, now time.Time) error {
 	if ns == nil {
 		return errors.New("network state is nil")
 	}
@@ -63,7 +67,7 @@ func VerifyChain(ns *zone.NetworkState, zonePath zone.ZonePath, now time.Time) e
 
 		delegation := parentState.Delegations[current]
 		if revocation := parentState.Revocations[current]; revocation != nil {
-			if err := VerifyDelegationRevocation(revocation, parentState.Authority, parent, now); err != nil {
+			if err := v.VerifyDelegationRevocation(revocation, parentState.Authority, parent, now); err != nil {
 				return err
 			}
 			if revocationAppliesToDelegation(revocation, delegation) {
@@ -76,7 +80,7 @@ func VerifyChain(ns *zone.NetworkState, zonePath zone.ZonePath, now time.Time) e
 		if delegation == nil {
 			return errors.New("delegation not found")
 		}
-		if err := VerifyDelegation(delegation, parentState.Authority, parent, now); err != nil {
+		if err := v.VerifyDelegation(delegation, parentState.Authority, parent, now); err != nil {
 			return err
 		}
 		if !equalBytes(AuthorityHash(currentState.Authority), delegation.AuthorityHash) {
@@ -114,6 +118,10 @@ func SignRecord(r *zone.Record, priv ed25519.PrivateKey) error {
 }
 
 func VerifyRecord(r *zone.Record, authority *zone.ZoneAuthority, now time.Time) error {
+	return (*Verifier)(nil).VerifyRecord(r, authority, now)
+}
+
+func (v *Verifier) VerifyRecord(r *zone.Record, authority *zone.ZoneAuthority, now time.Time) error {
 	if r == nil {
 		return errors.New("record is nil")
 	}
@@ -127,7 +135,7 @@ func VerifyRecord(r *zone.Record, authority *zone.ZoneAuthority, now time.Time) 
 	if !equalBytes(r.ValueHash, Hash(r.Value)) {
 		return errors.New("record value hash mismatch")
 	}
-	if !ed25519.Verify(key.Key, recordPayload(r), r.Signature) {
+	if !v.verifySignature(key.Key, recordPayload(r), r.Signature) {
 		return errors.New("record signature invalid")
 	}
 	return nil
@@ -147,6 +155,10 @@ func SignDelegation(d *zone.Delegation, parent zone.ZonePath, priv ed25519.Priva
 }
 
 func VerifyDelegation(d *zone.Delegation, parentAuthority *zone.ZoneAuthority, parentZone zone.ZonePath, now time.Time) error {
+	return (*Verifier)(nil).VerifyDelegation(d, parentAuthority, parentZone, now)
+}
+
+func (v *Verifier) VerifyDelegation(d *zone.Delegation, parentAuthority *zone.ZoneAuthority, parentZone zone.ZonePath, now time.Time) error {
 	if d == nil {
 		return errors.New("delegation is nil")
 	}
@@ -176,7 +188,7 @@ func VerifyDelegation(d *zone.Delegation, parentAuthority *zone.ZoneAuthority, p
 	if d.ExpiresAt != nil && !now.Before(*d.ExpiresAt) {
 		return errors.New("delegation expired")
 	}
-	if !ed25519.Verify(key.Key, delegationPayload(d, parentZone), d.Signature) {
+	if !v.verifySignature(key.Key, delegationPayload(d, parentZone), d.Signature) {
 		return errors.New("delegation signature invalid")
 	}
 	return nil
@@ -196,6 +208,10 @@ func SignDelegationRevocation(r *zone.DelegationRevocation, parent zone.ZonePath
 }
 
 func VerifyDelegationRevocation(r *zone.DelegationRevocation, parentAuthority *zone.ZoneAuthority, parentZone zone.ZonePath, now time.Time) error {
+	return (*Verifier)(nil).VerifyDelegationRevocation(r, parentAuthority, parentZone, now)
+}
+
+func (v *Verifier) VerifyDelegationRevocation(r *zone.DelegationRevocation, parentAuthority *zone.ZoneAuthority, parentZone zone.ZonePath, now time.Time) error {
 	if r == nil {
 		return errors.New("delegation revocation is nil")
 	}
@@ -221,7 +237,7 @@ func VerifyDelegationRevocation(r *zone.DelegationRevocation, parentAuthority *z
 	if err != nil {
 		return err
 	}
-	if !ed25519.Verify(key.Key, revocationPayload(r, parentZone), r.Signature) {
+	if !v.verifySignature(key.Key, revocationPayload(r, parentZone), r.Signature) {
 		return errors.New("revocation signature invalid")
 	}
 	return nil

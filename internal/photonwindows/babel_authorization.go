@@ -18,17 +18,21 @@ import (
 // still impersonate a published ID. The leaf therefore remains experimental
 // with an explicitly trusted gateway until Update origin proofs exist.
 func currentBabelOrigins(config *Config, view corestate.View, now time.Time) map[[8]byte]zone.ZonePath {
+	return currentBabelOriginsWithVerifier(config, view, now, nil)
+}
+
+func currentBabelOriginsWithVerifier(config *Config, view corestate.View, now time.Time, verifier *photoncrypto.Verifier) map[[8]byte]zone.ZonePath {
 	result := make(map[[8]byte]zone.ZonePath)
 	if config == nil || view.State == nil || view.State.Network == nil || photoncrypto.VerifyPinnedRoot(view.State.Network, config.TrustedRootPublicKey) != nil {
 		return result
 	}
 	conflicts := make(map[[8]byte]bool)
 	for path, zs := range view.State.Network.Zones {
-		if zs == nil || photoncrypto.VerifyChain(view.State.Network, path, now) != nil {
+		if zs == nil || verifier.VerifyChain(view.State.Network, path, now) != nil {
 			continue
 		}
 		record := zs.Records[routing.RecordKeyBabelIdentity]
-		if record == nil || record.Zone != path || photoncrypto.VerifyRecord(record, zs.Authority, now) != nil {
+		if record == nil || record.Zone != path || verifier.VerifyRecord(record, zs.Authority, now) != nil {
 			continue
 		}
 		value, err := routing.ParseBabelIdentityRecord(record, now)

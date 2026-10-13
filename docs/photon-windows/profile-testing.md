@@ -86,3 +86,40 @@ after 同一采样点持续 15.15 秒，原始样本总计 29.35 秒；仍保留
 after 完整 SCM 基线及后续正常重启、强制结束后恢复、真实地址变更通知、外部 alias 冲突恢复以 exit 0 完成。随后冻结同 revision 的六包 Windows 原生 executable，结束性能采样后才执行；`photonwindows`（含新增 packet authorization/撤销/到期边界）、Windows CLI、IKE、ESP、Babel、SADR 全部通过。原生 bundle source/status、二进制 SHA256 与完整日志另存同一 after 目录，产品继续编辑不改变这些已固定产物。
 
 最后额外只读复核本轮服务、adapter、Event Log source、远端 fixture 目录及 Docker 容器均已移除，本地 fixture 私密材料不存在；独立原生测试目录也已清理。结果保留于 `after/cleanup.log`，VM 随后释放。
+
+## 第二轮优化：有界签名验证结果复用
+
+产品改动截止 `11b74bed4dcb5e75ed555911ba33c6f9479ed20d`；完整 rig 构建时 HEAD 为仅追加文档的 `32abd07a44f1510fc1da2832581b95d2dfc65106`，真实 source/status 均已保留。七包原生测试在此之前从 `11b74be` 固定，产品源码一致。Windows executable SHA256：
+
+```text
+b479f467aa82c4a47ddd787e1026b282c3c5767c600cea14558067c6e09794a0
+```
+
+仍使用相同 VM、BIRD 2.19.1、StrongSwan 6.0.7、1200 字节载荷、窗口、预热、时长和首个测量点的 profile；没有为得到更高数字调整工具参数。证据保留在 `build/validation/b6-profile-20261009/after-signature-memo/`，对应隔离目录 `/tmp/photon-windows-full-daemon.3yiZUK`。
+
+| 配置 | 初始 before Mbps | event facts Mbps | 签名结果复用 Mbps |
+| --- | --- | --- | --- |
+| 窗口 8 / IPv4，三轮中位数 | 0.206 | 1.497 | 17.141 |
+| 窗口 8 / IPv6，三轮中位数 | 0.200 | 1.486 | 17.424 |
+| 窗口 64 / IPv4，单轮 | 0.100（全部迟到） | 1.585 | 17.701 |
+| 窗口 64 / IPv6，单轮 | 0.104（全部迟到） | 1.605 | 17.488 |
+
+第三组八个负载点全部 `Sent = Echoed`，`Expired`、`LateEchoed`、`Unmatched`、`Duplicates` 和 `SendBackpressure` 均为 0；各轮后的同进程恢复全部通过，最终 `Completed=true`。这些结论仅来自本 VM、当前完整 rig 的短时观察，不是所有部署环境的吞吐保证或长时间无损证明。
+
+负载阶段服务 CPU 为 **124.56–133.19% 单逻辑核**，生成器为 **2.19–3.85%**。CPU 百分比没有下降：闭环发送实际完成了更多数据，且工作可分布到多个线程。按同一个首轮 profile 测量点及既定单方向应用 goodput 口径计算，服务 CPU 秒/Mbit 依次为 **5.173 → 0.685 → 0.08365**；这比混用 CPU 百分比更能说明每单位完成载荷的成本。三组计算值另存 `build/validation/b6-profile-20261009/comparison.json`。
+
+本轮 private bytes 峰值 **58.23 MiB**、working set 峰值 **65.74 MiB**；idle 前后服务 CPU 为 6.86%/7.49%。短时内存样本和有界缓存单测仍不能替代 72h soak 或无泄漏验收。
+
+### 最终 profile 与工具边界
+
+首个 profile 点完成 15.923 Mbps，服务 CPU 133.19%；profile 持续 15.10 秒。Ed25519 Verify 累计样本由 **13.03 → 12.79 → 0.59 秒**，已不再主导 Go 计算样本。剩余累计路径包括 `gatewayBabelPipeline.prepare` 8.22 秒、`currentAuthorizedRouteSetWithVerifier` 4.64 秒、`json.Unmarshal` 3.92 秒、`planGatewaySelection` 3.73 秒、`mallocgc` 2.59 秒及 `gcDrain` 2.44 秒。它们重叠，不能相加；下一步可研究准备、解析和分配，但本切片没有继续修改算法。
+
+本轮原始 profile 仍有 Windows 等待栈：47.30 秒总样本中 `runtime.cgocall` 累计 28.83 秒。继续保留原始和显式筛选报告，不将 profile 百分比误报为实际 CPU 占用。为保留低于默认截断阈值的 Ed25519 条目，另生成 `cpu-all-cumulative.txt`，命令增加 `-nodefraction=0 -nodecount=0`。
+
+工具审查发现 C# 单线程逐包 Send/Poll/Receive、完整载荷检查和小数组分配可能限制更高吞吐；其固定 8192 项去重环也存在观测边界：回包序号落后最新已发送序号至少 8192 时记 `Unmatched`，即使当时尚在 pending。超过 8192 pps（1200 字节约 78.64 Mbps）后，接近 1 秒才返回的合法回包可能触及此边界，不能把这类计数都归因于网络丢包。
+
+本轮最高约 **1844 pps**，生成器未接近满核，且全部 `Unmatched=0`，未观察到这些工具边界影响结果。保留工具和参数以维持本轮对照；更高速测试需要另行验证生成器与追踪范围，不能把当前工具测得的最大值称为产品容量上限。
+
+第三轮完整 SCM rig exit 0，包含所有负载点后的同进程恢复及后续正常/异常重启、地址变化和冲突恢复。冻结的 **七包 Windows 原生回归全部通过**：原六包加 `pkg/crypto`，覆盖热签名命中后的撤销、到期、未来密钥、签名门限和字段变化仍须拒绝等边界；`native-tests.log`、实际 source/status、七个 executable SHA256 保存于本轮目录。
+
+最后额外只读核查本轮服务、adapter、Event Log source、fixture 目录和容器均不存在，本地测试私密材料已删除；独立七包原生测试目录也已删除。公开 `cleanup.log` 保留核验结果，VM 随后释放。此轮不包含 72h soak 或正式发布。

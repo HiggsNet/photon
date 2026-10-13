@@ -15,11 +15,15 @@ import (
 // revision may be accepted, but a local key/profile/overlay withdrawal must not
 // retain an SA just because the gateway's identity is still authorized.
 func localTransportAuthorization(config *Config, view corestate.View, now time.Time) ([32]byte, error) {
+	return localTransportAuthorizationWithVerifier(config, view, now, nil)
+}
+
+func localTransportAuthorizationWithVerifier(config *Config, view corestate.View, now time.Time, verifier *photoncrypto.Verifier) ([32]byte, error) {
 	var digest [32]byte
 	if view.State == nil || view.State.Network == nil {
 		return digest, errors.New("local transport: no verified state")
 	}
-	if err := photoncrypto.VerifyChain(view.State.Network, config.ManagedZone, now); err != nil {
+	if err := verifier.VerifyChain(view.State.Network, config.ManagedZone, now); err != nil {
 		return digest, err
 	}
 	local := view.State.Network.Zones[config.ManagedZone]
@@ -32,7 +36,7 @@ func localTransportAuthorization(config *Config, view corestate.View, now time.T
 		if record == nil || record.Key != key || record.Zone != config.ManagedZone {
 			return digest, errors.New("local transport: required record withdrawn")
 		}
-		if err := photoncrypto.VerifyRecord(record, local.Authority, now); err != nil {
+		if err := verifier.VerifyRecord(record, local.Authority, now); err != nil {
 			return digest, err
 		}
 		_, _ = hash.Write(binary.BigEndian.AppendUint64(nil, uint64(len(record.Value))))

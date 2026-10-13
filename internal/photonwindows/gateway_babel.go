@@ -10,6 +10,7 @@ import (
 	"github.com/HiggsNet/photon/internal/photonclient/babel"
 	"github.com/HiggsNet/photon/internal/photonclient/sadr"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
 // packetDevice is the delivery half of a packet device. Its bounded reader is
@@ -31,6 +32,7 @@ type gatewayBabelPipeline struct {
 	addresses   []netip.Addr
 	routerID    [8]byte
 	generation  uint64
+	verifier    *photoncrypto.Verifier // bounded signature math memo; serial owner only
 }
 
 func newGatewayBabelPipeline(tunnel *gatewayTunnel, device packetDevice, local, peer netip.Addr, id [8]byte, addresses []netip.Addr) (*gatewayBabelPipeline, error) {
@@ -46,7 +48,7 @@ func newGatewayBabelPipeline(tunnel *gatewayTunnel, device packetDevice, local, 
 	if err != nil {
 		return nil, err
 	}
-	return &gatewayBabelPipeline{tunnel: tunnel, device: device, leaf: leaf, local: local, peer: peer, routerID: id, addresses: slices.Clone(addresses), generation: tunnel.generation}, nil
+	return &gatewayBabelPipeline{tunnel: tunnel, device: device, leaf: leaf, local: local, peer: peer, routerID: id, addresses: slices.Clone(addresses), generation: tunnel.generation, verifier: new(photoncrypto.Verifier)}, nil
 }
 
 func (p *gatewayBabelPipeline) current(config *Config, view corestate.View, plan GatewayPlan, now time.Time) (GatewayPlan, bool) {
