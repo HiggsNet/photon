@@ -46,6 +46,20 @@ func TestTrackerReorderDeadlineAndSlotReuse(t *testing.T) {
 	}
 }
 
+func TestTrackerReadTimeWinsOverSenderScheduling(t *testing.T) {
+	tr := newTracker(1, 100, time.Second)
+	tr.sent(0)
+	tr.expire(time.Second)
+	tr.sent(time.Second + time.Millisecond)               // Reuse the expired slot.
+	tr.receive(reply{seq: 1, at: 900 * time.Millisecond}) // Already read before deadline.
+	tr.receive(reply{seq: 1, at: 2 * time.Second})        // Duplicate does not change its deadline.
+	tr.expire(2*time.Second + time.Millisecond)
+	tr.receive(reply{seq: 2, at: 2*time.Second + time.Millisecond}) // A real deadline miss stays a miss.
+	if tr.r.Sent != 2 || tr.r.OnTime != 1 || tr.r.Expired != 1 || tr.r.Echoed != 2 || tr.r.LateEchoed != 1 || tr.r.Duplicates != 1 {
+		t.Fatalf("sender scheduling changed actual read deadline: %+v", tr.r)
+	}
+}
+
 func TestPayloadEveryByteAndSequence(t *testing.T) {
 	p := makePayload(1200, 3)
 	binary.LittleEndian.PutUint64(p[16:24], 123456)

@@ -131,6 +131,7 @@ type slot struct {
 type tracker struct {
 	slots    []slot
 	seen     []uint64
+	sentAt   []time.Duration
 	oldest   uint64
 	pending  int
 	deadline time.Duration
@@ -138,7 +139,7 @@ type tracker struct {
 }
 
 func newTracker(window, max int, deadline time.Duration) *tracker {
-	return &tracker{slots: make([]slot, window), seen: make([]uint64, (max+64)/64), oldest: 1, deadline: deadline}
+	return &tracker{slots: make([]slot, window), seen: make([]uint64, (max+64)/64), sentAt: make([]time.Duration, max+1), oldest: 1, deadline: deadline}
 }
 
 func (t *tracker) canSend() bool {
@@ -148,6 +149,7 @@ func (t *tracker) sent(at time.Duration) uint64 {
 	t.r.Sent++
 	id := t.r.Sent
 	t.slots[id%uint64(len(t.slots))] = slot{seq: id, sent: at, pending: true}
+	t.sentAt[id] = at
 	t.pending++
 	return id
 }
@@ -191,17 +193,23 @@ func (t *tracker) receive(a reply) {
 	t.seen[word] |= bit
 	t.r.Echoed++
 	s := &t.slots[a.seq%uint64(len(t.slots))]
-	if s.seq != a.seq || !s.pending {
-		t.r.LateEchoed++
-		return
+	wasPending := s.seq == a.seq && s.pending
+	if wasPending {
+		s.pending = false
+		t.pending--
 	}
-	s.pending = false
-	t.pending--
-	rtt := a.at - s.sent
+	// The receive goroutine timestamps the read. Sender scheduling or a reused
+	// bounded window slot must not turn an already timely reply into a miss.
+	rtt := a.at - t.sentAt[a.seq]
 	if rtt >= t.deadline {
-		t.r.Expired++
+		if wasPending {
+			t.r.Expired++
+		}
 		t.r.LateEchoed++
 	} else {
+		if !wasPending {
+			t.r.Expired--
+		}
 		t.r.OnTime++
 	}
 	if rtt >= 0 {

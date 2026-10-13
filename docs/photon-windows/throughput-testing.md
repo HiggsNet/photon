@@ -25,8 +25,9 @@ bash docs/scripts/windows-full-daemon-smoke.sh
 
 - 每轮、每流使用随机 128-bit nonce、独立单调序号、流号和固定 payload 模式，校验所有非序号字节。外来 nonce、损坏、未发送序号、重复均单列，不增加 goodput。
 - 每流固定窗口槽位保存发送时间；待完成的槽位不复用。发送和交付分别运行，避免旧生成器逐包 Send/Poll/Receive 限制。收到唯一回包或到期后释放槽位，不重发原包。
-- 全轮去重 bitset 默认限制总计 800 万个序号，可明确设置最多 1600 万；最大窗口为每流 16384、最多 16 流、发送最长 30 秒、deadline 最长 3 秒，排空最长为发送结束后 deadline 加 100 毫秒。超出包预算标记 `PacketLimitReached` 并令 `Completed=false`。固定窗口槽位已经复用的旧唯一回包仍计为迟到，不因落后 8192 个序号而变成无法匹配。
+- 全轮去重 bitset 和发送时间戳默认限制总计 800 万个序号，可明确设置最多 1600 万；默认时间戳数组约 64 MB、bitset 约 1 MB，另有固定窗口/回包 channel，内存有明确上界。最大窗口为每流 16384、最多 16 流、发送最长 30 秒、deadline 最长 3 秒，排空最长为发送结束后 deadline 加 100 毫秒。超出包预算标记 `PacketLimitReached` 并令 `Completed=false`。固定窗口槽位已经复用的旧唯一回包仍可用完整序号和发送时间匹配，不因落后 8192 个序号而丢失追踪。
 - `Sent = OnTime + Expired`，`Echoed = OnTime + LateEchoed`。`Expired` 包含超时及最后未完成请求；迟到回包不会抹去 deadline miss。接收完的唯一完整 echo 分子除以包含排空的实际测量时间，得到一个方向的应用 payload Mbps。每个 echo 经两个方向各一次；不能以乘 2 后的合计速率宣称单方向达到 1 Gbps。RTT buckets 依赖来宾 monotonic clock 精度，只用于本次测量观察。
+- deadline 使用接收 goroutine 实际读取回包的 monotonic 时间。发送 goroutine 因调度晚消费通知，即使窗口已先到期或覆盖，仍按该包全轮保存的发送/读取时间判定；真实迟到不会因后续收到回包而消除期限失败。每流 `Expired` 在运行中是暂定计数，最终统计校正已读及时但通知延后的包。
 - 工具限制使内存和等待时间有上界，不将产品队列或权限缓存放宽。临时端口、服务、网卡、容器及私钥/数据库沿既有 rig 的所有失败/成功路径清理。
 
 Go 单元/race 测试覆盖重排、deadline 临界点、窗口复用、超过旧 8192 序号范围的合法迟到、重复、完整 payload 验证以及结果文件拒绝覆盖；真实 loopback 再注入一次丢包、重复、110 毫秒迟到验证统计。Windows 原生测试额外核验 CPU、进程创建身份与 private/working-set 采样。
