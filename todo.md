@@ -305,6 +305,7 @@ B6 仍单独覆盖睡眠恢复、物理断网、崩溃恢复、长时间稳定�
   - [x] IPC 长度帧与严格 JSON 请求分派新增 fuzz，各 15 秒通过，seeds/race/Windows 编译通过；不把短时 fuzz 算作持续验收。
   - [x] SKF 认证分片长序列 fuzz：乱序重复、认证失败、PMTU 重启、到期清理与 64 片恢复；20 秒探索、race 及 Windows 原生 seeds 通过。六包原生入口补齐 Babel/SADR，持续 fuzz 门槛保留，见 [SKF 验收](docs/photon-windows/skf-fuzz-testing.md)。
 - [ ] 发布前完成吞吐/CPU/内存基线、72h soak、Authenticode、checksum、SBOM 和安装/升级/卸载测试。
+  - [x] 建立完整 SCM/Wintun/ESP 链路的有界 UDP echo CPU/内存基线；双栈窗口 8/64 对照揭示单核饱和、低吞吐及明显超时。Nix 6.0.7 完整采样，Ubuntu 5.9.13 部分采样均保留；本项不代表性能达标，瓶颈仍待定位，72h 等门槛不随此项关闭，见 [基线记录](docs/photon-windows/baseline-testing.md)。
 
 当前证据与未完成门槛见 [B6 分层验收](docs/photon-windows/b6-testing.md)。
 

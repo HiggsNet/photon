@@ -16,7 +16,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
-func gatewayPlanFixture(t *testing.T) (*Config, corestate.View, time.Time, func(zone.ZonePath, string, string, any)) {
+func gatewayPlanFixture(t testing.TB) (*Config, corestate.View, time.Time, func(zone.ZonePath, string, string, any)) {
 	t.Helper()
 	network, _, private := signedNetwork(t)
 	// Use the same test signer at the root so the fixture can sign IPAM facts.

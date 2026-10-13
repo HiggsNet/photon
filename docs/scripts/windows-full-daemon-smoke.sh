@@ -9,6 +9,9 @@ cd "$(dirname "$0")/../.."
 outage_mode=${PHOTON_WINDOWS_TRANSPORT_OUTAGE:-0}
 rekey_mode=${PHOTON_WINDOWS_REKEY_TRAFFIC:-0}
 baseline_mode=${PHOTON_WINDOWS_BASELINE:-0}
+profile_mode=${PHOTON_WINDOWS_CPU_PROFILE:-0}
+[[ $profile_mode == 0 || $profile_mode == 1 ]] || exit 2
+[[ $profile_mode == 0 || $baseline_mode == 1 ]] || { echo 'CPU profile requires baseline mode' >&2; exit 2; }
 [[ $rekey_mode == 0 || $rekey_mode == 1 ]] || exit 2
 [[ $baseline_mode == 0 || $baseline_mode == 1 ]] || exit 2
 [[ $outage_mode == 0 || $outage_mode == 1 ]] || exit 2
@@ -84,7 +87,7 @@ cleanup() {
     fi
     if [[ $remote_created == 1 ]]; then
         # Only public runtime diagnostics; config.json contains fixture keys.
-        for pattern in '*.log' '*-events.json' '*-diagnostics.json' '*-peers.json' '*-routes.json' '*-owned-network.json' 'crash-recovery.json' 'network-change.json' 'gossip-convergence.json' 'adapter-conflict.json' 'transport-outage.json' 'rekey-traffic*.json' 'baseline*.json'; do
+        for pattern in '*.log' '*-events.json' '*-diagnostics.json' '*-peers.json' '*-routes.json' '*-owned-network.json' 'crash-recovery.json' 'network-change.json' 'gossip-convergence.json' 'adapter-conflict.json' 'transport-outage.json' 'rekey-traffic*.json' 'baseline*.json' 'profile-*.pprof' 'profile-*.done' 'profile-*.error'; do
             scp -q "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH:$remote/$pattern" "$work/" 2>/dev/null || true
         done
         if ! ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"Remove-Item -LiteralPath '$remote' -Recurse -Force -ErrorAction Stop\""; then result=1; fi
@@ -98,7 +101,9 @@ export GOCACHE=${GOCACHE:-/tmp/photon-gocache}
 export GOMODCACHE=${GOMODCACHE:-/home/herbertqiao/go/pkg/mod}
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$work/photon" ./app/photon
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c -o "$work/b4.test" ./internal/photonwindows
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o "$work/photon-windows.exe" ./app/photon-windows
+profile_tags=()
+if [[ $profile_mode == 1 ]]; then profile_tags=(-tags photon_profile); fi
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build "${profile_tags[@]}" -o "$work/photon-windows.exe" ./app/photon-windows
 git rev-parse HEAD > "$work/source-commit.txt"
 git status --short > "$work/source-status.txt"
 curl --fail --location --max-time 60 https://www.wintun.net/builds/wintun-0.14.1.zip -o "$work/wintun.zip"
@@ -169,6 +174,9 @@ remote_created=1
 scp -q "${ssh_args[@]}" "$work/photon-windows.exe" "$work/windows.db" "$work/config.json" "$work/wintun.dll" "$work/gossip-evidence.json" docs/scripts/windows-service-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
 if [[ $baseline_mode == 1 ]]; then
     scp -q "${ssh_args[@]}" docs/scripts/windows-service-baseline.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
+fi
+if [[ $profile_mode == 1 ]]; then
+    scp -q "${ssh_args[@]}" docs/scripts/windows-service-profile.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
 fi
 if [[ $rekey_mode == 1 ]]; then
     scp -q "${ssh_args[@]}" docs/scripts/windows-service-rekey-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"

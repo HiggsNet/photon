@@ -52,7 +52,7 @@ type pipelineFixture struct {
 	remoteID [8]byte
 }
 
-func newPipelineFixture(t *testing.T) *pipelineFixture {
+func newPipelineFixture(t testing.TB) *pipelineFixture {
 	t.Helper()
 	config, view, now, put := gatewayPlanFixture(t)
 	// A real local unicast address keeps the production rejection of loopback
@@ -144,7 +144,7 @@ func newPipelineFixture(t *testing.T) *pipelineFixture {
 	return &pipelineFixture{config, view, now, put, plan, p, device, peer, child, sender, receiver, remoteID}
 }
 
-func (f *pipelineFixture) accept(t *testing.T, c dataplaneCompletion) bool {
+func (f *pipelineFixture) accept(t testing.TB, c dataplaneCompletion) bool {
 	t.Helper()
 	ok, err := f.p.Accept(f.config, f.view, f.plan, f.now, c)
 	if err != nil {
@@ -152,11 +152,11 @@ func (f *pipelineFixture) accept(t *testing.T, c dataplaneCompletion) bool {
 	}
 	return ok
 }
-func (f *pipelineFixture) inbound(t *testing.T, packet []byte) bool {
+func (f *pipelineFixture) inbound(t testing.TB, packet []byte) bool {
 	t.Helper()
 	return f.accept(t, f.inboundCompletion(t, packet))
 }
-func (f *pipelineFixture) inboundCompletion(t *testing.T, packet []byte) dataplaneCompletion {
+func (f *pipelineFixture) inboundCompletion(t testing.TB, packet []byte) dataplaneCompletion {
 	t.Helper()
 	wire, err := f.sender.Seal(packet)
 	if err != nil {
@@ -181,7 +181,7 @@ func (f *pipelineFixture) inboundCompletion(t *testing.T, packet []byte) datapla
 		f.accept(t, c)
 	}
 }
-func (f *pipelineFixture) learn(t *testing.T) {
+func (f *pipelineFixture) learn(t testing.TB) {
 	t.Helper()
 	payload, err := babel.Encode([]babel.Message{{Type: babel.TLVHello, Seqno: 1, Interval: 400}, {Type: babel.TLVIHU, Address: f.p.local, Metric: 100, Interval: 400}, {Type: babel.TLVUpdate, Prefix: netip.MustParsePrefix("10.1.2.0/24"), RouterID: f.remoteID, NextHop: f.p.peer, Seqno: 7, Metric: 10, Interval: 1600}})
 	if err != nil {
@@ -208,7 +208,7 @@ func (f *pipelineFixture) packet(outbound bool) []byte {
 	}
 	return packet
 }
-func (f *pipelineFixture) submitFromDevice(t *testing.T, packet []byte) bool {
+func (f *pipelineFixture) submitFromDevice(t testing.TB, packet []byte) bool {
 	t.Helper()
 	f.device.read <- bytes.Clone(packet)
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
@@ -219,7 +219,7 @@ func (f *pipelineFixture) submitFromDevice(t *testing.T, packet []byte) bool {
 	}
 	return f.p.SubmitPacket(f.config, f.view, f.plan, f.now, read)
 }
-func (f *pipelineFixture) businessCompletion(t *testing.T) dataplaneCompletion {
+func (f *pipelineFixture) businessCompletion(t testing.TB) dataplaneCompletion {
 	t.Helper()
 	for {
 		c := dataplaneResult(t, f.p.tunnel.data)
@@ -229,7 +229,7 @@ func (f *pipelineFixture) businessCompletion(t *testing.T) dataplaneCompletion {
 		f.accept(t, c)
 	}
 }
-func (f *pipelineFixture) receiveBusiness(t *testing.T) []byte {
+func (f *pipelineFixture) receiveBusiness(t testing.TB) []byte {
 	t.Helper()
 	if err := f.peer.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
 		t.Fatal(err)

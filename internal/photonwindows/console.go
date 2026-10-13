@@ -452,7 +452,9 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			} else {
 				data.accept(completion, plan, nil)
 			}
-			observeReady()
+			// Readiness transition logging runs on the 250 ms lifecycle tick and
+			// authority/IKE events. Packet delivery above still revalidates now;
+			// IPC observations also evaluate readiness at their own read time.
 		case result := <-leaf.opened:
 			if err := leaf.complete(ctx, config, state.Store().ReadView(), lastPlan, tunnel, leafID, time.Now(), result); err != nil {
 				logger.Warn("leaf_device_failed", "error", err)

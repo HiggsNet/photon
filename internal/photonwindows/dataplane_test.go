@@ -55,7 +55,7 @@ func dataplanePacket(outbound bool) []byte {
 	return p
 }
 
-func dataplaneResult(t *testing.T, d *gatewayDataplane) dataplaneCompletion {
+func dataplaneResult(t testing.TB, d *gatewayDataplane) dataplaneCompletion {
 	t.Helper()
 	select {
 	case result := <-d.completed:

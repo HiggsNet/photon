@@ -133,7 +133,7 @@ func saveCommonState(t *testing.T, revision corestate.VerifiedRevision) (string,
 	return path, network, rootPublic, identityPrivate
 }
 
-func signedNetwork(t *testing.T) (*zone.NetworkState, ed25519.PublicKey, ed25519.PrivateKey) {
+func signedNetwork(t testing.TB) (*zone.NetworkState, ed25519.PublicKey, ed25519.PrivateKey) {
 	t.Helper()
 	rootPublic, rootPrivate, err := ed25519.GenerateKey(nil)
 	if err != nil {
