@@ -117,3 +117,28 @@ daemon 的周期日志检查改用私有 `readySnapshot`，共用当前不可变
 同一冻结 fixture、真实双向 loopback UDP、1200 字节/最多 16 包在途、三轮 1 秒中位数：IPv4 **8834 → 8429 ns**、IPv6 **9697 → 7105 ns**，均为 1280 B / 1 次分配。这仅测 UDP 同步，不含 AES、授权或 Wintun，不能据此宣称 Windows 吞吐或达到 1 Gbps。证据位于 `socket-write-lock/`。
 
 测试用真实 UDP descriptor 的 `RawConn.Write` 暂占写操作，使生产发送实际阻塞；期间 ESP/IKE/Gossip 接收仍成功，selection/rebind/invalidate/close 必须等待旧发送完成，之后旧 generation 被拒绝。还覆盖 1000 包双栈并发收发、来源、generation、顺序和完整 payload。focused race 与 Windows 交叉编译通过；Windows 原生实际确认 RawWrite、上述 socket 回归、周期数学 memo 差分及原 LeafRuntime 全部通过，精确源码指纹和 executable SHA 保存于 `native-dirty-socket-leaf/`。这是提交前源文件验证，不冒充冻结的产品性能版本。
+
+## 同步入站密文副本
+
+同步 `processInbound` 只在调用共同 AES 核心期间借用输入密文。`Receiver.Open` 使用 `AEAD.Open(nil, ...)` 返回独立明文，保留原输入；完成结果在返回前清空 `job.packet`，成功、错误和取消均不保留输入引用。异步 job 继续复制输入，出站继续保留独立明文，供投递前重新检查 selectors 和当前路由。原 preflight、context/generation/SA 元数据、pending CHILD proof 与唯一新鲜交付门禁保持原行为。
+
+冻结前后 executable 使用相同真实签名、ESP/UDP 与当前授权事实代码，仅替换同步入站实现。两个尺寸各跑三轮 1 秒，portable 中位数为：
+
+| IP 包字节数 | 耗时前 → 后 | 分配字节前 → 后 | 分配次数前 → 后 |
+| --- | ---: | ---: | ---: |
+| 128 | 18.336 → 18.286 µs | 1208 → 1032 B | 15 → 14 |
+| 1200 | 21.005 → 21.299 µs | 6809 → 5529 B | 15 → 14 |
+
+每包减少一份密文副本，分别节省 176 / 1280 B；耗时基本不变且有升有降，不据此宣称 CPU 或 Windows 吞吐改善。此夹具包含测试 peer 的加密、真实 UDP 收发与独立当前授权检查，OS packet device 使用内存实现。
+
+ownership 回归验证同步 Open 不修改密文，返回后整个输入 buffer 可以复用而不改变已认证明文；错误、重放和取消不保留密文，预 AES 取消不消耗入站序号。另以真实签名路由撤回验证双向已处理结果均被当前交付门禁拒绝。focused 数据面 race、Windows amd64 交叉编译和 Windows 原生 direct/serial 数据面回归通过。源码、overlay、基准与 race 原始证据位于 `inbound-ciphertext/`，原生执行与精确源码指纹位于 `native-dirty-owner-facts/`；这些是提交前验证，与固定产品吞吐测量分开保存。
+
+## 每事件授权事实的分配
+
+第五组首点 profile 中，过滤 Windows 等待栈后的 `mallocgc` 累计采样为 0.53 秒、`growslice` 为 0.34 秒、GC 为 1.10 秒；这些路径重叠，不相加或当作活跃 CPU 比例。daemon 的当前计划、出站准备、AES 完成和周期 readiness 改用调用方局部 `packetAuthorization`。`prepareSnapshotInto` 填入这一事件自己的事实，失败时清空输出；原指针入口委托相同实现。policy 与 crypto job 都不保留输出指针，没有增加另一份策略状态或改变成功策略的精确有效区间。
+
+现在、当前 attachment/SA、发布 revision、wall rollback、原 DNS hint 及投递前重新检查保持原行为。签名事实中的不可变 slices 仍按原快照 ownership 共享；事件的时间和 plan 值彼此独立。普通 mutable View 的 `prepare` 不变。
+
+同一真实签名/Babel route fixture、固定时间、三轮 1 秒的准备及授权微基准，中位 **625.9 → 589.3 ns**，**192 B / 1 次分配 → 0 B / 0 次**。前版使用 `9c48297` 原指针实现及仅适配相同输出形状的 benchmark helper，后版使用调用方输出；两版其余源码相同，先后独占运行。这只证明此稳态事件的分配减少，不含完整 ESP、Windows I/O 或全服务吞吐，helper 的值复制也不能用于推算精确服务时间收益。
+
+新回归验证两个事件的时间独立、改变调用方值不改 policy、当前 generation 仍拒绝旧事实，配置缺失、精确 SA 到期和换代都清空旧输出。既有签名 deadline/撤销/CHILD 差分仍通过相同核心；focused race 与最新 Windows 原生 Dataplane/CallerFacts 均通过。原始源码、overlay、executable SHA、escape evidence 和基准位于 `event-facts/`；原生材料仍是 `native-dirty-owner-facts/` 的提交前源码验证，实际吞吐另用 clean 产品测量。

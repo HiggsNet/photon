@@ -2,6 +2,8 @@ package photonwindows
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"net/netip"
 	"testing"
 	"time"
@@ -53,13 +55,51 @@ func TestDataplaneDirectBidirectionalOwnership(t *testing.T) {
 	if !ok || in.err != nil {
 		t.Fatal("direct inbound decryption failed", in.err)
 	}
-	wire[0] ^= 1
-	if !bytes.Equal(in.job.packet, original) {
-		t.Fatal("ingress packet ownership changed after caller buffer reuse")
+	if !bytes.Equal(wire, original) || in.job.packet != nil {
+		t.Fatal("direct inbound modified or retained its ciphertext input")
 	}
+	// Reuse the entire ingress buffer after synchronous Open. Only detached
+	// authenticated plaintext may reach selectors and delivery afterwards.
+	clear(wire)
 	plain, peer, outbound, accepted = d.accept(in, plan, dataplaneAllow)
 	if !accepted || outbound || peer != endpoint || !bytes.Equal(plain, dataplanePacket(false)) {
 		t.Fatal("direct inbound authenticated delivery failed")
+	}
+}
+
+func TestDataplaneDirectInboundCancellationDoesNotConsumeSequence(t *testing.T) {
+	for _, cancelOwner := range []bool{false, true} {
+		name := "generation"
+		if cancelOwner {
+			name = "owner"
+		}
+		t.Run(name, func(t *testing.T) {
+			d, plan, endpoint, child := dataplaneFixture(t)
+			wire := directInboundWire(t, child)
+			if cancelOwner {
+				d.cancel()
+			} else {
+				d.cancelGeneration()
+			}
+			result, ok := d.processInbound(10, plan, endpoint, wire)
+			wantProcessed := !cancelOwner
+			if ok != wantProcessed || result.packet != nil || result.job.packet != nil {
+				t.Fatal("cancelled direct inbound retained or exposed packet data")
+			}
+			if ok {
+				if !errors.Is(result.err, context.Canceled) || result.job.sa != d.active || result.job.generation != 10 || result.job.outbound {
+					t.Fatal("generation cancellation lost its current completion metadata", result.err)
+				}
+				if packet, _, _, accepted := d.accept(result, plan, dataplaneAllow); accepted || packet != nil {
+					t.Fatal("cancelled direct inbound became deliverable")
+				}
+			}
+			// Cancellation must stop before Open updates the replay window.
+			packet, err := d.active.receiver.Open(wire)
+			if err != nil || !bytes.Equal(packet, dataplanePacket(false)) {
+				t.Fatal("cancelled direct inbound consumed an authenticated sequence", err)
+			}
+		})
 	}
 }
 
@@ -183,7 +223,7 @@ func TestDataplaneDirectCryptoErrorsRemainUndeliverable(t *testing.T) {
 	corrupted := bytes.Clone(wire)
 	corrupted[len(corrupted)-1] ^= 1
 	result, ok := d.processInbound(10, plan, endpoint, corrupted)
-	if !ok || result.err == nil || result.packet != nil {
+	if !ok || result.err == nil || result.packet != nil || result.job.packet != nil {
 		t.Fatal("direct integrity error was lost or exposed plaintext", result.err)
 	}
 	if packet, _, _, accepted := d.accept(result, plan, dataplaneAllow); accepted || packet != nil {
@@ -198,7 +238,7 @@ func TestDataplaneDirectCryptoErrorsRemainUndeliverable(t *testing.T) {
 		t.Fatal("valid direct inbound packet was rejected")
 	}
 	result, ok = d.processInbound(10, plan, endpoint, wire)
-	if !ok || result.err == nil || result.packet != nil {
+	if !ok || result.err == nil || result.packet != nil || result.job.packet != nil {
 		t.Fatal("direct replay error was lost or exposed plaintext", result.err)
 	}
 	if packet, _, _, accepted := d.accept(result, plan, dataplaneAllow); accepted || packet != nil {
@@ -207,26 +247,35 @@ func TestDataplaneDirectCryptoErrorsRemainUndeliverable(t *testing.T) {
 }
 
 func TestDataplaneDirectSignedWithdrawalBeforeDelivery(t *testing.T) {
-	f := newPipelineFixture(t)
-	f.learn(t)
-	view := detachedPacketPolicyView(f.view)
-	facts, ok := f.p.prepareSnapshot(f.config, view, f.plan, f.now)
-	if !ok {
-		t.Fatal("signed pipeline authorization failed")
-	}
-	result, ok := f.p.tunnel.data.processOutbound(f.p.generation, facts.plan, f.packet(true), func(packet []byte, outbound bool) bool { return f.p.authorize(facts, packet, outbound) })
-	if !ok || result.err != nil {
-		t.Fatal("signed direct ESP submission failed", result.err)
-	}
-	key, _ := routing.NormalizeRouteAnnouncementKey("10.1.2.0/24")
-	f.put(f.config.Gateway.AllowedZones[0], key, routing.RecordTypeRouteAnnouncement, routing.RouteAnnouncementRecord{Version: 1, Prefix: "10.1.2.0/24", Active: false})
-	view = detachedPacketPolicyView(f.view)
-	view.Revision++
-	facts, ok = f.p.prepareSnapshot(f.config, view, f.plan, f.now.Add(time.Nanosecond))
-	if !ok {
-		t.Fatal("remote route withdrawal incorrectly removed the local attachment")
-	}
-	if accepted, err := f.p.acceptPrepared(facts, result); accepted || err != nil {
-		t.Fatal("direct encryption was mistaken for delivery authorization after signed withdrawal", err)
+	for _, direction := range []string{"outbound", "inbound"} {
+		t.Run(direction, func(t *testing.T) {
+			f := newPipelineFixture(t)
+			f.learn(t)
+			view := detachedPacketPolicyView(f.view)
+			facts, ok := f.p.prepareSnapshot(f.config, view, f.plan, f.now)
+			if !ok {
+				t.Fatal("signed pipeline authorization failed")
+			}
+			var result dataplaneCompletion
+			if direction == "outbound" {
+				result, ok = f.p.tunnel.data.processOutbound(f.p.generation, facts.plan, f.packet(true), func(packet []byte, outbound bool) bool { return f.p.authorize(facts, packet, outbound) })
+			} else {
+				result = f.directInboundCompletion(t, f.packet(false))
+			}
+			if !ok || result.err != nil {
+				t.Fatal("signed direct ESP processing failed", result.err)
+			}
+			key, _ := routing.NormalizeRouteAnnouncementKey("10.1.2.0/24")
+			f.put(f.config.Gateway.AllowedZones[0], key, routing.RecordTypeRouteAnnouncement, routing.RouteAnnouncementRecord{Version: 1, Prefix: "10.1.2.0/24", Active: false})
+			view = detachedPacketPolicyView(f.view)
+			view.Revision++
+			facts, ok = f.p.prepareSnapshot(f.config, view, f.plan, f.now.Add(time.Nanosecond))
+			if !ok {
+				t.Fatal("remote route withdrawal incorrectly removed the local attachment")
+			}
+			if accepted, err := f.p.acceptPrepared(facts, result); accepted || err != nil || len(f.device.written) != 0 {
+				t.Fatal("direct AES was mistaken for delivery authorization after signed withdrawal", err)
+			}
+		})
 	}
 }

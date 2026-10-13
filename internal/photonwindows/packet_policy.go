@@ -26,10 +26,22 @@ type packetPolicy struct {
 // with an arbitrary mutable corestate.View must call prepare. Each event still
 // supplies the immediately current snapshot, original DNS plan and exact now.
 func (p *gatewayBabelPipeline) prepareSnapshot(config *Config, view corestate.View, hint GatewayPlan, now time.Time) (*packetAuthorization, bool) {
+	var facts packetAuthorization
+	if !p.prepareSnapshotInto(config, view, hint, now, &facts) {
+		return nil, false
+	}
+	return &facts, true
+}
+
+// The serial daemon can keep each event's facts on its own stack. The output
+// is never retained by the policy or a crypto job, and a denied event clears it.
+// The pointer-returning component entry point delegates to these same gates.
+func (p *gatewayBabelPipeline) prepareSnapshotInto(config *Config, view corestate.View, hint GatewayPlan, now time.Time, facts *packetAuthorization) bool {
+	*facts = packetAuthorization{}
 	wall := now.Round(0)
 	if config == nil || !p.attached(now) || !packetGatewayHintCurrent(hint, now) {
 		p.policy, p.leaf = nil, nil
-		return nil, false
+		return false
 	}
 	policy := p.policy
 	if policy != nil && policy.state == view.State && policy.revision == view.Revision &&
@@ -38,25 +50,27 @@ func (p *gatewayBabelPipeline) prepareSnapshot(config *Config, view corestate.Vi
 		policy.lastWall = wall
 		// Only static signed facts are shared. The event has its own current
 		// time and still tests live generation, SA, CHILD and packet gates.
-		facts := policy.facts
+		*facts = policy.facts
 		facts.now, facts.plan.EvaluatedAt = now, now
-		if !p.preparedCurrent(&facts) {
+		if !p.preparedCurrent(facts) {
 			p.policy, p.leaf = nil, nil
-			return nil, false
+			*facts = packetAuthorization{}
+			return false
 		}
-		return &facts, true
+		return true
 	}
-	facts, ok := p.prepare(config, view, hint, now)
+	prepared, ok := p.prepare(config, view, hint, now)
 	if !ok {
-		return nil, false // failed authorization is never retained
+		return false // failed authorization is never retained
 	}
 	deadline := packetPolicyDeadline(view, now)
 	if wall.Before(deadline) {
 		p.policy = &packetPolicy{state: view.State, revision: view.Revision,
 			config: clonePacketPolicyConfig(config), hint: clonePacketGatewayHint(hint),
-			deadline: deadline, lastWall: wall, facts: *facts}
+			deadline: deadline, lastWall: wall, facts: *prepared}
 	}
-	return facts, true
+	*facts = *prepared
+	return true
 }
 
 func (p *gatewayBabelPipeline) submitSnapshotPacket(config *Config, view corestate.View, plan GatewayPlan, now time.Time, packet []byte) bool {

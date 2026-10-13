@@ -298,8 +298,8 @@ func (r *leafRuntime) readySnapshot(config *Config, view corestate.View, plan Ga
 		return false
 	}
 	p := r.pipeline
-	facts, ok := p.prepareSnapshot(config, view, plan, now)
-	if !ok {
+	var facts packetAuthorization
+	if !p.prepareSnapshotInto(config, view, plan, now, &facts) {
 		return false
 	}
 	for _, route := range p.leaf.Candidates(now, facts.authorizeRoute) {

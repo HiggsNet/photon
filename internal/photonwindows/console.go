@@ -282,7 +282,8 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			verifier = leaf.pipeline.verifier
 		}
 		if tunnel.phase == 3 && leaf.pipeline != nil {
-			if facts, ok := leaf.pipeline.prepareSnapshot(config, view, lastPlan, now); ok {
+			var facts packetAuthorization
+			if leaf.pipeline.prepareSnapshotInto(config, view, lastPlan, now, &facts) {
 				return facts.plan
 			}
 		}
@@ -441,20 +442,18 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	// authorize delivery in the same serial owner turn.
 	completePacket := func(completion dataplaneCompletion) {
 		view, now := packetView.read(state.Store()), time.Now()
-		var facts *packetAuthorization
-		if leaf.pipeline != nil {
-			facts, _ = leaf.pipeline.prepareSnapshot(config, view, lastPlan, now)
-		}
+		var facts packetAuthorization
+		haveFacts := leaf.pipeline != nil && leaf.pipeline.prepareSnapshotInto(config, view, lastPlan, now, &facts)
 		var plan GatewayPlan
-		if facts != nil {
+		if haveFacts {
 			plan = facts.plan
 		} else {
 			// Transport cutover remains independent of Babel/device readiness.
 			plan = freshPlanFrom(view, now)
 		}
 		tunnel.observeData(completion, plan, now)
-		if facts != nil {
-			if _, err := leaf.pipeline.acceptPrepared(facts, completion); err != nil {
+		if haveFacts {
+			if _, err := leaf.pipeline.acceptPrepared(&facts, completion); err != nil {
 				logger.Warn("leaf_packet_failed", "error", errors.Join(err, leaf.stop()))
 			}
 		} else {
@@ -514,10 +513,10 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 					continue
 				}
 				pipeline := leaf.pipeline
-				facts, ok := pipeline.prepareSnapshot(config, packetView.read(state.Store()), lastPlan, time.Now())
-				if ok {
+				var facts packetAuthorization
+				if pipeline.prepareSnapshotInto(config, packetView.read(state.Store()), lastPlan, time.Now(), &facts) {
 					completion, ok := data.processOutbound(pipeline.generation, facts.plan, devicePacket.packet,
-						func(packet []byte, outbound bool) bool { return pipeline.authorize(facts, packet, outbound) })
+						func(packet []byte, outbound bool) bool { return pipeline.authorize(&facts, packet, outbound) })
 					if ok {
 						completePacket(completion)
 					}

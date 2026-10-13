@@ -192,11 +192,21 @@ func (d *gatewayDataplane) outboundSA(generation uint64, plan GatewayPlan, packe
 	return sa
 }
 
-// Direct processing keeps the same preflight and independently owned job as
-// queued processing. Its result still requires a fresh owner authorization at
-// accept; an AES error must reach observeData (including sequence exhaustion).
+// Direct processing shares queued preflight and AES, then requires fresh owner
+// authorization at accept. Inbound borrows ciphertext only during synchronous
+// Open, which returns detached plaintext; its completion retains no input.
+// Outbound owns its plaintext for rechecking at accept. AES errors still reach
+// observeData (including sequence exhaustion).
 func (d *gatewayDataplane) processInbound(generation uint64, plan GatewayPlan, endpoint netip.AddrPort, packet []byte) (dataplaneCompletion, bool) {
-	return d.process(d.inboundSA(generation, plan, endpoint, packet), packet, false)
+	sa := d.inboundSA(generation, plan, endpoint, packet)
+	if sa == nil || d.ctx.Err() != nil {
+		return dataplaneCompletion{}, false
+	}
+	job := dataplaneJob{ctx: d.generationCtx, generation: d.generation, sa: sa, packet: packet}
+	result := executeDataplaneJob(job)
+	// The ciphertext is no longer needed on success, error or cancellation.
+	result.job.packet = nil
+	return result, true
 }
 
 func (d *gatewayDataplane) processOutbound(generation uint64, plan GatewayPlan, packet []byte, authorize func([]byte, bool) bool) (dataplaneCompletion, bool) {
