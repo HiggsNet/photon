@@ -31,18 +31,39 @@ func TestTrackerReorderDeadlineAndSlotReuse(t *testing.T) {
 	tr.sent(0)
 	tr.sent(time.Millisecond)
 	tr.receive(reply{seq: 2, at: 2 * time.Millisecond})
-	if tr.canSend() {
-		t.Fatal("reusing a pending sequence slot")
+	if !tr.canSend() {
+		t.Fatal("a completed request must release its credit despite an older pending request")
 	}
+	tr.sent(5 * time.Millisecond)
 	tr.receive(reply{seq: 1, at: 3 * time.Millisecond})
 	if !tr.canSend() {
 		t.Fatal("acknowledged slot remains blocked")
 	}
-	tr.sent(5 * time.Millisecond)
 	tr.receive(reply{seq: 3, at: time.Second + 5*time.Millisecond})
 	tr.receive(reply{seq: 4, at: time.Second})
 	if tr.r.OnTime != 2 || tr.r.Expired != 1 || tr.r.LateEchoed != 1 || tr.r.Unsent != 1 || tr.r.Sent != tr.r.OnTime+tr.r.Expired {
 		t.Fatalf("deadline accounting: %+v", tr.r)
+	}
+}
+
+func TestTrackerOneLossDoesNotBlockOtherCredits(t *testing.T) {
+	tr := newTracker(2, 20000, time.Second)
+	tr.sent(0) // Lose the first request; it retains exactly one credit.
+	for seq := 2; seq <= 10000; seq++ {
+		if !tr.canSend() || tr.pending != 1 {
+			t.Fatalf("older loss blocked the other credit at seq %d pending=%d", seq, tr.pending)
+		}
+		at := time.Duration(seq) * time.Microsecond
+		tr.sent(at)
+		if tr.canSend() {
+			t.Fatal("exceeded two pending credits")
+		}
+		tr.receive(reply{seq: uint64(seq), at: at + time.Microsecond})
+	}
+	tr.expire(time.Second)
+	tr.receive(reply{seq: 1, at: time.Second + time.Millisecond})
+	if tr.pending != 0 || tr.r.Sent != 10000 || tr.r.OnTime != 9999 || tr.r.Expired != 1 || tr.r.LateEchoed != 1 || tr.r.Echoed != 10000 {
+		t.Fatalf("credit accounting: %+v pending=%d", tr.r, tr.pending)
 	}
 }
 

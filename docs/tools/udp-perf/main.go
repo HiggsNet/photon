@@ -33,7 +33,7 @@ type flowResult struct {
 
 type result struct {
 	SchemaVersion                                                                                            int
-	Mode, Local, Remote, OS, Architecture, GoVersion, StartedUTC, Unit                                       string
+	Mode, Local, Remote, OS, Architecture, GoVersion, StartedUTC, Unit, WindowSemantics                      string
 	Port, Flows, WindowPerFlow, PayloadBytes, SendSeconds, DeadlineMS                                        int
 	MaxPackets, LogicalCPUs                                                                                  int
 	Seconds, GoodputMbps, DeadlineGoodputMbps, EchoLossPercent, DeadlineMissPercent, GeneratorCPUCorePercent float64
@@ -115,7 +115,7 @@ func writeExclusive(path string, data []byte) error {
 }
 
 func metadata(o options) result {
-	return result{SchemaVersion: 1, Mode: o.mode, Local: o.local, Remote: o.remote, OS: runtime.GOOS, Architecture: runtime.GOARCH, GoVersion: runtime.Version(), StartedUTC: time.Now().UTC().Format(time.RFC3339Nano), Unit: "unique fully validated UDP echo application payload Mbps per direction; two traversals per echo", Port: o.port, Flows: o.flows, WindowPerFlow: o.window, PayloadBytes: o.payload, SendSeconds: o.seconds, DeadlineMS: o.deadlineMS, MaxPackets: o.maxPackets, LogicalCPUs: runtime.NumCPU()}
+	return result{SchemaVersion: 1, Mode: o.mode, Local: o.local, Remote: o.remote, OS: runtime.GOOS, Architecture: runtime.GOARCH, GoVersion: runtime.Version(), StartedUTC: time.Now().UTC().Format(time.RFC3339Nano), Unit: "unique fully validated UDP echo application payload Mbps per direction; two traversals per echo", WindowSemantics: "pending request credits; completed requests immediately release one credit independently of sequence positions", Port: o.port, Flows: o.flows, WindowPerFlow: o.window, PayloadBytes: o.payload, SendSeconds: o.seconds, DeadlineMS: o.deadlineMS, MaxPackets: o.maxPackets, LogicalCPUs: runtime.NumCPU()}
 }
 
 type reply struct {
@@ -123,13 +123,8 @@ type reply struct {
 	at   time.Duration
 	kind int
 }
-type slot struct {
-	seq     uint64
-	sent    time.Duration
-	pending bool
-}
 type tracker struct {
-	slots    []slot
+	window   int
 	seen     []uint64
 	sentAt   []time.Duration
 	oldest   uint64
@@ -139,31 +134,28 @@ type tracker struct {
 }
 
 func newTracker(window, max int, deadline time.Duration) *tracker {
-	return &tracker{slots: make([]slot, window), seen: make([]uint64, (max+64)/64), sentAt: make([]time.Duration, max+1), oldest: 1, deadline: deadline}
+	return &tracker{window: window, seen: make([]uint64, (max+64)/64), sentAt: make([]time.Duration, max+1), oldest: 1, deadline: deadline}
 }
 
 func (t *tracker) canSend() bool {
-	return !t.slots[(t.r.Sent+1)%uint64(len(t.slots))].pending && t.pending < len(t.slots)
+	return t.pending < t.window
 }
 func (t *tracker) sent(at time.Duration) uint64 {
 	t.r.Sent++
 	id := t.r.Sent
-	t.slots[id%uint64(len(t.slots))] = slot{seq: id, sent: at, pending: true}
 	t.sentAt[id] = at
 	t.pending++
 	return id
 }
 func (t *tracker) expire(now time.Duration) {
 	for t.oldest <= t.r.Sent {
-		s := &t.slots[t.oldest%uint64(len(t.slots))]
-		if s.seq != t.oldest || !s.pending {
+		if t.seen[t.oldest/64]&(uint64(1)<<(t.oldest%64)) != 0 {
 			t.oldest++
 			continue
 		}
-		if now-s.sent < t.deadline {
+		if now-t.sentAt[t.oldest] < t.deadline {
 			break
 		}
-		s.pending = false
 		t.pending--
 		t.r.Expired++
 		t.oldest++
@@ -192,14 +184,12 @@ func (t *tracker) receive(a reply) {
 	}
 	t.seen[word] |= bit
 	t.r.Echoed++
-	s := &t.slots[a.seq%uint64(len(t.slots))]
-	wasPending := s.seq == a.seq && s.pending
+	wasPending := a.seq >= t.oldest
 	if wasPending {
-		s.pending = false
 		t.pending--
 	}
 	// The receive goroutine timestamps the read. Sender scheduling or a reused
-	// bounded window slot must not turn an already timely reply into a miss.
+	// expiry cursor must not turn an already timely reply into a miss.
 	rtt := a.at - t.sentAt[a.seq]
 	if rtt >= t.deadline {
 		if wasPending {

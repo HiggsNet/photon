@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory=$true)][string]$Executable,
-    [Parameter(Mandatory=$true)][string]$FixtureDirectory
+    [Parameter(Mandatory=$true)][string]$FixtureDirectory,
+    [ValidateRange(1,30)][int]$ThroughputSeconds = 15
 )
 $ErrorActionPreference = 'Stop'
 $Executable = (Resolve-Path $Executable).Path
@@ -274,7 +275,7 @@ try {
     $baselineHelper = Join-Path $FixtureDirectory 'windows-service-baseline.ps1'
     if (Test-Path $baselineHelper) { . $baselineHelper; Test-ServiceBaseline }
     $throughputHelper = Join-Path $FixtureDirectory 'windows-service-throughput.ps1'
-    if (Test-Path $throughputHelper) { . $throughputHelper; Test-ServiceThroughput }
+    if (Test-Path $throughputHelper) { . $throughputHelper; Test-ServiceThroughput -MeasureSeconds $ThroughputSeconds }
     $rekeyHelper = Join-Path $FixtureDirectory 'windows-service-rekey-smoke.ps1'
     if (Test-Path $rekeyHelper) { . $rekeyHelper }
     $outageHelper = Join-Path $FixtureDirectory 'windows-service-outage-smoke.ps1'

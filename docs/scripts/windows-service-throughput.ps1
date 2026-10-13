@@ -1,5 +1,6 @@
 # Dot-sourced only by the isolated full-daemon fixture; independent of the historical baseline.
 function Test-ServiceThroughput {
+    param([ValidateRange(1,30)][int]$MeasureSeconds = 15)
     $tool = Join-Path $FixtureDirectory 'udp-perf.exe'
     if (!(Test-Path -LiteralPath $tool)) { throw 'Missing bounded UDP performance tool' }
     $profileHelper = Join-Path $FixtureDirectory 'windows-service-profile.ps1'
@@ -21,7 +22,7 @@ function Test-ServiceThroughput {
         OSVersion = (Get-CimInstance Win32_OperatingSystem).Version
         CPUs = @(Get-CimInstance Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors)
         PayloadBytes = 1200
-        SendSeconds = 15
+        SendSeconds = $MeasureSeconds
         WarmupSeconds = 2
         EchoDeadlineMS = 1000
         Round = 1
@@ -42,7 +43,7 @@ function Test-ServiceThroughput {
                 if ($profileEnabled -and !$profileCaptured) { $profilePrefix = Start-FixtureCPUProfile $owner }
                 $measurementFile = Join-Path $FixtureDirectory "throughput-$label.json"
                 try {
-                    & $tool -mode client -local $family[1] -remote $family[2] -port 19100 -flows $flows -window $window -seconds 15 -payload 1200 -service-pid $owner.Id -output $measurementFile | Out-Null
+                    & $tool -mode client -local $family[1] -remote $family[2] -port 19100 -flows $flows -window $window -seconds $MeasureSeconds -payload 1200 -service-pid $owner.Id -output $measurementFile | Out-Null
                     if ($LASTEXITCODE -ne 0) { throw "Throughput tool failed: $label" }
                 } finally {
                     if ($profilePrefix) { Stop-FixtureCPUProfile $profilePrefix; $profileCaptured = $true }

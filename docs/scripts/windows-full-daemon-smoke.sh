@@ -10,6 +10,7 @@ outage_mode=${PHOTON_WINDOWS_TRANSPORT_OUTAGE:-0}
 rekey_mode=${PHOTON_WINDOWS_REKEY_TRAFFIC:-0}
 baseline_mode=${PHOTON_WINDOWS_BASELINE:-0}
 throughput_mode=${PHOTON_WINDOWS_THROUGHPUT:-0}
+throughput_seconds=${PHOTON_WINDOWS_THROUGHPUT_SECONDS:-15}
 profile_mode=${PHOTON_WINDOWS_CPU_PROFILE:-0}
 performance_bundle=${PHOTON_WINDOWS_PERFORMANCE_BUNDLE:-}
 [[ $profile_mode == 0 || $profile_mode == 1 ]] || exit 2
@@ -17,6 +18,7 @@ performance_bundle=${PHOTON_WINDOWS_PERFORMANCE_BUNDLE:-}
 [[ $rekey_mode == 0 || $rekey_mode == 1 ]] || exit 2
 [[ $baseline_mode == 0 || $baseline_mode == 1 ]] || exit 2
 [[ $throughput_mode == 0 || $throughput_mode == 1 ]] || exit 2
+[[ $throughput_seconds =~ ^[0-9]+$ && $throughput_seconds -ge 1 && $throughput_seconds -le 30 ]] || { echo 'Throughput seconds must be 1..30' >&2; exit 2; }
 [[ $outage_mode == 0 || $outage_mode == 1 ]] || exit 2
 if ((outage_mode + rekey_mode + baseline_mode + throughput_mode > 1)); then
     echo 'Choose one independent B6 scenario: outage, rekey traffic, baseline, or throughput' >&2
@@ -286,6 +288,7 @@ NFT
     outage_worker_pid=$!
 fi
 remote_command="powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $remote/windows-service-smoke.ps1 -Executable $remote/photon-windows.exe -FixtureDirectory $remote"
+if [[ $throughput_mode == 1 ]]; then remote_command+=" -ThroughputSeconds $throughput_seconds"; fi
 if ! ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "$remote_command" > "$work/windows.log" 2>&1; then
     cat "$work/windows.log"
     exit 1
