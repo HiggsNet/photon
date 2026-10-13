@@ -252,7 +252,8 @@ func RecordHash(r *zone.Record) []byte {
 }
 
 func recordPayload(r *zone.Record) []byte {
-	var b builder
+	keyID := KeyID(r.SignedBy)
+	b := builder{out: make([]byte, 0, 9*8+len(DomainRecord)+len(r.Zone)+len(r.Key)+len(r.Type)+len(r.ValueHash)+len(r.PrevHash)+len(keyID))}
 	b.str(DomainRecord)
 	b.str(r.Zone.String())
 	b.str(r.Key)
@@ -261,16 +262,18 @@ func recordPayload(r *zone.Record) []byte {
 	b.u64(r.Version)
 	b.bytes(r.PrevHash)
 	b.i64(r.Timestamp)
-	b.bytes(KeyID(r.SignedBy))
+	b.bytes(keyID)
 	return b.out
 }
 
 func delegationPayload(d *zone.Delegation, parent zone.ZonePath) []byte {
-	var b builder
+	keyID := KeyID(d.SignedBy)
+	scope := string(normalizedDelegationScope(d))
+	b := builder{out: make([]byte, 0, 8*8+len(DomainDelegation)+len(parent)+len(d.ZoneName)+len(scope)+len(d.AuthorityHash)+len(keyID))}
 	b.str(DomainDelegation)
 	b.str(parent.String())
 	b.str(d.ZoneName.String())
-	b.str(string(normalizedDelegationScope(d)))
+	b.str(scope)
 	b.u64(d.AuthorityEpoch)
 	b.bytes(d.AuthorityHash)
 	if d.ExpiresAt == nil {
@@ -278,12 +281,13 @@ func delegationPayload(d *zone.Delegation, parent zone.ZonePath) []byte {
 	} else {
 		b.i64(d.ExpiresAt.Unix())
 	}
-	b.bytes(KeyID(d.SignedBy))
+	b.bytes(keyID)
 	return b.out
 }
 
 func revocationPayload(r *zone.DelegationRevocation, parent zone.ZonePath) []byte {
-	var b builder
+	keyID := KeyID(r.SignedBy)
+	b := builder{out: make([]byte, 0, 11*8+len(DomainRevocation)+len(parent)+len(r.ParentZone)+len(r.ChildZone)+len(r.RevokedAuthorityHash)+len(r.Reason)+len(keyID))}
 	b.str(DomainRevocation)
 	b.str(parent.String())
 	b.str(r.ParentZone.String())
@@ -294,7 +298,7 @@ func revocationPayload(r *zone.DelegationRevocation, parent zone.ZonePath) []byt
 	b.i64(r.RevokedAt)
 	b.i64(r.TTLSeconds)
 	b.i64(r.GraceSeconds)
-	b.bytes(KeyID(r.SignedBy))
+	b.bytes(keyID)
 	return b.out
 }
 
@@ -319,7 +323,19 @@ func authorityPayload(a *zone.ZoneAuthority) []byte {
 	if a == nil {
 		return nil
 	}
-	var b builder
+	// Compute the canonical wire size once so dynamic authority capabilities
+	// do not repeatedly grow and copy the payload during signature checks.
+	size := 5*8 + len(DomainAuthority) + len(a.Zone)
+	for _, key := range a.Keys {
+		size += 4*8 + len(key.Key)
+		for _, cap := range key.Capabilities {
+			size += 2*8 + len(cap.KeyPrefix)
+			for _, perm := range cap.Permissions {
+				size += 8 + len(perm)
+			}
+		}
+	}
+	b := builder{out: make([]byte, 0, size)}
 	b.str(DomainAuthority)
 	b.str(a.Zone.String())
 	b.u64(a.Epoch)
@@ -419,7 +435,8 @@ type builder struct {
 }
 
 func (b *builder) str(s string) {
-	b.bytes([]byte(s))
+	b.u64(uint64(len(s)))
+	b.out = append(b.out, s...)
 }
 
 func (b *builder) bytes(v []byte) {
