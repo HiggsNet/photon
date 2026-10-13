@@ -144,6 +144,7 @@ func (driver *GossipDriver) applyGossipSnapshots(
 		selected = append(selected, action)
 		batch = append(batch, corestate.RemoteSnapshot{
 			Snapshot: action.Snapshot, ExpectedRoot: append([]byte(nil), action.ExpectedRoot...), Limits: limits,
+			RefreshOnRootMismatch: action.RefreshOnRootMismatch,
 		})
 	}
 	if len(batch) == 0 {
@@ -170,6 +171,10 @@ func (driver *GossipDriver) applyGossipSnapshots(
 
 func (driver *GossipDriver) logGossipSnapshotOutcome(peerID string, managedZone zone.ZonePath, action gossip.ApplySnapshotAction, outcome corestate.RemoteApplyOutcome) {
 	if outcome.Err != nil {
+		if action.RefreshOnRootMismatch && errors.Is(outcome.Err, corestate.ErrSnapshotRootMismatch) {
+			driver.logGossip("debug", "catalog_changed", peerID, GossipPhaseApply, outcome.Err, map[string]any{"zone": action.Snapshot.Zone})
+			return
+		}
 		driver.logGossip("warn", "zone_apply_failed", peerID, GossipPhaseApply, outcome.Err, map[string]any{"zone": action.Snapshot.Zone, "reason": gossip.RejectReason(outcome.Err)})
 		return
 	}

@@ -115,3 +115,30 @@ func TestBuildGossipPeerViewsProjectOwnersAndLiveDiagnosticsOnce(t *testing.T) {
 		t.Fatalf("canonical peers = %#v", peers)
 	}
 }
+
+func TestGossipPeerRejectionsExpireWithoutMutatingCheckpoint(t *testing.T) {
+	now := time.Unix(1000, 0)
+	id := "peer.catofes."
+	common := corestate.View{State: &corestate.VerifiedState{Network: zone.NewNetworkState()}, Gossip: &corestate.GossipCheckpoint{Peers: map[string]corestate.PeerCheckpoint{
+		id: {RejectedObjects: map[zone.ZonePath]corestate.RejectedObject{
+			"active.catofes.":  {Reason: "root_mismatch", UntilUnix: 1100},
+			"expired.catofes.": {Reason: "root_mismatch", UntilUnix: 1000},
+			"legacy.catofes.":  {Reason: "root_mismatch"},
+		}},
+	}}}
+	for _, tc := range []struct {
+		at    time.Time
+		count int
+	}{{now, 1}, {now.Add(100 * time.Second), 0}} {
+		view := BuildGossipPeersView(common, GossipPeersOptions{Now: tc.at, Bootstrap: []PeerBootstrap{{PeerID: id}}})
+		if len(view.Peers) != 1 || len(view.Peers[0].RejectedDigests) != tc.count {
+			t.Fatalf("at %s: %#v", tc.at, view)
+		}
+		if tc.count > 0 && view.Peers[0].RejectedDigests["active.catofes."].Reason != "root_mismatch" {
+			t.Fatal("lost current rejection")
+		}
+		if len(common.Gossip.Peers[id].RejectedObjects) != 3 {
+			t.Fatal("reading diagnostics mutated checkpoint")
+		}
+	}
+}

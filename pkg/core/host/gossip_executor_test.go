@@ -211,12 +211,12 @@ func TestGossipDriverApplySnapshotsOwnsStoreTransactionAndCompletion(t *testing.
 	defer driver.Stop()
 	result := driver.ExecuteGossipActions(context.Background(), &gossip.SyncSession{PeerID: "peer-a"}, []gossip.SyncAction{
 		gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "local.catofes."}},
-		gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "remote.catofes."}, RelaxedLimits: true, ReportResult: true},
+		gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "remote.catofes."}, RelaxedLimits: true, ReportResult: true, RefreshOnRootMismatch: true},
 	}, controller)
 	if result.Aborted || !result.NetworkChanged {
 		t.Fatalf("result = %#v", result)
 	}
-	if len(state.batch) != 1 || state.batch[0].Snapshot.Zone != "remote.catofes." || state.batch[0].Limits.MaxBytes != 8<<20 || !state.appliedAt.Equal(now) {
+	if len(state.batch) != 1 || state.batch[0].Snapshot.Zone != "remote.catofes." || state.batch[0].Limits.MaxBytes != 8<<20 || !state.batch[0].RefreshOnRootMismatch || !state.appliedAt.Equal(now) {
 		t.Fatalf("batch/time = %#v/%v", state.batch, state.appliedAt)
 	}
 	event, ok := driver.GossipSessionEventFor(<-driver.Events())

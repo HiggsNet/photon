@@ -233,7 +233,9 @@ func TestObserverPeersAPIIncludesEndpointAndDiagnosticsDetails(t *testing.T) {
 				Endpoint: "198.51.100.8:33434", UntilUnix: 1100,
 			}},
 			RejectedObjects: map[zone.ZonePath]corestate.RejectedObject{
-				"node-b.catofes.": {Reason: "verify_failed"},
+				"node-b.catofes.":  {Reason: "verify_failed", UntilUnix: 1100},
+				"expired.catofes.": {Reason: "root_mismatch", UntilUnix: now.Unix()},
+				"legacy.catofes.":  {Reason: "root_mismatch"},
 			},
 		}
 	})
@@ -260,6 +262,10 @@ func TestObserverPeersAPIIncludesEndpointAndDiagnosticsDetails(t *testing.T) {
 	data := resp.Data.(map[string]any)
 	if data["configured_addr"] != "192.0.2.10:33434" {
 		t.Fatalf("configured_addr = %v", data["configured_addr"])
+	}
+	rejected := data["rejected_digests"].(map[string]any)
+	if len(rejected) != 1 || rejected["node-b.catofes."] == nil {
+		t.Fatalf("current rejections = %#v, want only unexpired entry", rejected)
 	}
 	if data["last_update_source"] != "announce" || data["last_relay_suppression"] != "relay_fanout_limited" {
 		t.Fatalf("peer diagnostics missing: %#v", data)

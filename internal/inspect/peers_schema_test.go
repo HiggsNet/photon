@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/pkg/core/observability"
@@ -32,6 +33,7 @@ func TestPeersResponsePreservesObserverSchema(t *testing.T) {
 			DatagramStats:         &observability.PeerDatagramStats{ChunkFallbacks: 2},
 			ObjectPullStats:       &observability.PeerObjectPullStats{Failures: 1, LastFailure: errors.New("TCP unavailable")},
 		},
+		time.Unix(1000, 0),
 	)
 	got := inspect.PeersView{Peers: []inspect.PeerView{peerView}}
 	data, err := json.Marshal(got)
@@ -65,7 +67,7 @@ func TestPeersResponsePreservesObserverSchema(t *testing.T) {
 }
 
 func TestPeersResponseKeepsZeroValueSchemaFields(t *testing.T) {
-	peerView := inspect.BuildPeerViewFromCheckpoint("node-b.catofes.", "", nil, corestate.PeerCheckpoint{}, observability.PeerDiagnostics{})
+	peerView := inspect.BuildPeerViewFromCheckpoint("node-b.catofes.", "", nil, corestate.PeerCheckpoint{}, observability.PeerDiagnostics{}, time.Unix(1000, 0))
 	got := inspect.PeersView{Peers: []inspect.PeerView{peerView}}
 	data, err := json.Marshal(got)
 	if err != nil {

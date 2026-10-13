@@ -728,6 +728,17 @@ Relay 的 key 约束：
 
 对端推送的错误 digest / object 会进入 rejected cache（TTL 默认 10 分钟），在 TTL 内不重复拉取。这防止反复请求已知错误数据。
 
+目录与对象是两次独立读取，期间 record 更新可能使快照与先前公布的 digest 不同。
+每轮同步遇到首次快照或分页摘要不一致时，等待已发出的对象拉取、chunk fallback 和 apply acknowledgement 结束，再从第一页刷新目录一次。
+首次快照不一致保持严格拒绝应用，但不写入 rejected cache；日志记为 debug `catalog_changed`。
+刷新不延长原有 round deadline；再次不一致按原有错误路径拒绝、记录并退避。签名、授权和版本校验失败不走这条刷新路径。
+使用既有 `FETCH_CATALOG_PAGE` 与 object-pull 消息，无需对端升级或改变 wire 格式。
+
+`/api/v1/peers` 的 `rejected_digests` 只展示尚未到期的拒绝记录，TTL 到期不等同于已恢复。
+从某 peer 成功验证并应用该 zone 会清除该 peer 的拒绝记录；同一个成功校验的 digest 也会清除其他 peer 对该 digest 的拒绝记录，不清除其他摘要。
+过期 checkpoint 不作为当前故障展示，历史排查使用已有日志；不新增归档数据库或历史 API。
+同一摘要在 TTL 到期后再次被拒绝时，更新拒绝时间和有效期，确保持续故障仍能显示并受到拉取抑制；有效期内的重复拒绝不重复写入。
+
 ---
 
 ## 11. Daemon 事件驱动架构
