@@ -29,7 +29,7 @@ owner 总段结束于 `Finish` 的 QPC 读数，后面的直方图合并、解�
 | 子段 | 起点和终点 |
 | --- | --- |
 | `writer_lock_wait` | 复用主 delivery 开始时刻，至取得 `writeMu` 后的时钟读数；包含调用和 defer 的少量前置工作 |
-| `validation_state` | 前一时刻至完成 `mu` 下的当前 socket/generation/peer 校验 |
+| `validation_state` | 前一时刻至完成当前 socket/generation/peer 校验；字段由已持有的 `writeMu` 保护，历史版本额外取得 `mu` |
 | `deadline` | 校验结束至原 `time.Now()+1s` 和 `SetWriteDeadline` 返回 |
 | `udp_write` | 期限设置结束至原 `WriteToUDPAddrPort` 返回；包含 Go FD 锁、I/O 准备、系统调用和可能的完成等待 |
 
@@ -57,6 +57,39 @@ schema 2 原生 `native-validation-attempt-2/` 的 tagged internal 18、tagged a
 同一次开发冻结的 736 个原 Go 文件、9 个明确修改/新增 Go 文件（其中 internal owner 8 个）、2 个独列的原生 metadata helper、3 executable 和 47 个原始输出 SHA 均核验；源为 `b04180d` 加逐文件 dirty/new 声明。准备版本 `native-validation-attempt-1/` 在最后 clock 补强前仅完成 crossbuild，**0 native**，没有覆盖；第二版统一新 archive 重建三个 executable 后执行上述 15 child。原生/独立文件清理均 actual exit 0，15 个原 PID/100ns 创建身份和唯一远端目录均确认不存在。
 
 复用读取器的原派生摘要误留 Go 数量常数 735；原摘要及其 SHA 保留，实际 736 个源文件逐个核验通过。只按 manifest 长度另出 [数量修正摘要](../../build/validation/performance-20261013/packet-timing-v2-rig/native-validation-attempt-2/count-corrected-summary.json)，没有修改任何原始测量、源码制品或重测；[Root 原始结果复核](../../build/validation/performance-20261013/packet-timing-v2-rig/native-validation-attempt-2/root-native-audit.json) 独立验证全部 736 源/47 输出、30 个功能场景、15 个实际 runtime 及 12 点原始值，保留原派生数量差异。
+
+## 发送状态快照的锁减法，2026-10-14
+
+两轮 UDP 子段之后，两个独立源码审计确认：`udp`、`closed`、`tunnelGeneration`、`ikePeer`、`nattPeer` 的全部生产修改只在 Rebind、Close、invalidate、SelectTunnel 内，均持 `writeMu→mu`；构造时先 Rebind 再返回，尚未发布。收包/Accept 失败先释放 `mu` 后进入同一 invalidate。`SetReadDeadline` 只修改另属 reader 的字段并调用 UDPConn 自有期限 API，不修改上述五项。
+
+`WriteDatagram` / 私有 `writeTunnel` 已持 `writeMu` 跨快照、期限和实际写入，因此删除其快照的额外 `mu.Lock/Unlock`。setter 仍保留双锁，让原 reader/demux 的 `mu` 读取同步；其余 reader metadata 继续由 `mu` 保护。外层写锁、关闭/代次/端点校验、逐包一秒期限、同步交付和 scratch 所有权保持原样。仅一个 Go 文件变化，不增加第二状态 owner、访问器或新字段；收益最多是状态段中的部分锁成本，不先宣称吞吐提升。
+
+全量 `make check` 与普通 Windows 构建 actual exit 0；普通/诊断 internal 全包 race 分别 22.142s / 22.341s，actual exit 0。Windows 原生 ordinary 5、profile 7 个顶层场景全部 RUN/PASS（含两个只读 runtime helper），额外明确核验 select/rebind/invalidate/close 四个代次隔离子场景及 profile 的实际 stale-generation writer 拒绝。两个 native child、native wrapper、独立文件清理均 actual exit 0，原 PID/100ns 创建身份及唯一临时目录均确认不存在；实际 P8/8 logical CPU/`0xff`，无 skip。
+
+原生候选源为 `d67fd52` 加唯一 Go 文件 SHA `2946fde151590b0ceab1b4ca5926fa3b4d9e4b5cc767f55b9cfea5355a2e3b3e`；736 个原 Go 文件只有该处变化，单个 metadata helper 独列，未重跑未改的 Wintun、app 捕获、73 个报告检查或 12 点校准。便携材料在 `build/validation/performance-20261014/packet-socket-send-lock-checks/`；[原生汇总](../../build/validation/performance-20261014/packet-socket-snapshot-lock/complete-validation-summary.json) 与 [Root 复核](../../build/validation/performance-20261014/packet-socket-snapshot-lock/root-native-audit.json) 保留实际源码/制品/运行时/退出/子场景证据。完整业务使用旧/新清洁版本交错对照，尚不能以功能验证推断性能收益。
+
+### 旧/新清洁版本完整业务交错对照
+
+旧 A 为清洁 `9a6031e3b3adf9f3f4a39f4155223b065e8c57e8`、Windows SHA `4230b7ba…`，新 B 为清洁 `d660a79069560cbee1c58b3892b89609437b3aac`、SHA `d539334532bc672e0dd7d5501aeec3d46338b59843459aed70fdd95ed907651e`。新 archive 的 736 个原 Go 文件与上述原生候选逐字一致，不带 metadata helper；两版 Go 仅发送快照锁/注释不同，schema 2、Linux/echo/生成器、四个原脚本和 profile 位置保持一致。四次 fresh SCM 按 R1 old→new、R2 new→old，全部 on，仅四流 IPv4/每流 64/1200B/2 秒预热/8 秒发送/1 秒回包期限、实际 P8/`0xff`、线程 250ms。
+
+首次 `product-paired/` 在 Linux fixture 启动阶段报 `/smoke/b4.test: Permission denied`：复制 Common 时误将三个原 0755 的 Linux executable 变成 0644，字节/SHA 一致；**0 预热、0 正式点**，rig/matrix actual exit 1。失败清理确认独有容器/目录/私有输入不存在，服务尚未产生所有权证明，因此未声称全部服务 absence；同宿主另确认原 coordinator 身份不存在。该点是夹具 setup 失败，不计作性能低点，原目录/冻结/退出与失败范围原样保留。
+
+新 `product-paired-attempt-2/` 只保留三个 Linux 文件的 0755，六份 source/dest 字节一致、X_OK 通过；只读确认宿主 mount 无 noexec，既有 Docker 只读 bind 没加 noexec。Go、Windows exe、脚本及负载不变，没有重编译或重跑原生验证；43 项冻结新增权限证明，原失败目录不改。该轮四次完整 fixture、严格读取器、逐点恢复、独立 Docker/service/NIC/目录/私有输入清理均 actual exit 0，4 正式 + 4 预热共 32 个逐流 phase 账目完整保留，均无 logged ready 变化。matrix actual exit 0 后同宿主确认原 PID/创建身份已不存在。
+
+| 顺序/版本 | Mbps | 服务 CPU，%core | 状态段均值，µs | UDP write，µs | 父 delivery，µs | 过期 / 已回包 |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| R1 old | 459.154 | 155.091 | 0.326595 | 9.233214 | 10.283959 | 1498 / 428372 |
+| R1 new | 525.047 | 165.735 | 0.155899 | 9.045645 | 9.940298 | 1491 / 463030 |
+| R2 new | 496.983 | 152.220 | 0.147245 | 8.530718 | 9.351196 | 1479 / 458594 |
+| R2 old | 505.178 | 153.794 | 0.356240 | 8.516964 | 9.566397 | 1481 / 473147 |
+
+四行出站 business 的 Count 依次 1677/1814/1797/1851；均 delivered，四个 UDP 子段与父 delivery 同 Count，子和均不超父段，clock/invalid errors 与 unfinished 均 0，其他方向/类的 UDP 子段均空。状态段两轮从 0.326595→0.155899µs、0.356240→0.147245µs，包含 probe/prologue/调度，不能把差额全称作纯 mutex 成本。两轮 new 的状态 p50 桶 `[65,128]ns`、p99 `[257,512]ns`，old 的 p50 `[129,256]ns`、p99 `[2049,4096]ns`；保留 old 长尾、没有按容量选择替代点。
+
+旧/新吞吐中位分别 482.166/511.015Mbps，约 +5.983% **只作这四点的描述**。每版仅两重复，range 重叠，第二轮 new 496.983 还低于 old 505.178，不能称为稳定吞吐提升、统计显著或单项因果收益。计算保留发送及排空（四点 8.956408/8.4660768/8.858458/8.9913154 秒），没有剔除短尾或挑第一轮较高点。echo 失包率依次 0.348477/0.320976/0.321471/0.312034%，无 late echo 或 send errors，所有 expired 留存。
+
+同 profile 窗口的 raw/leaf/ESP 精确 drop 依次 `1/997/492`、`65/856/547`、`2/755/710`、`72/704/703`，仍不是可相加的端到端丢包账本。当前小改动确实减少了采样状态段，但 UDP 写入仍约 8.5–9.2µs、owner 单次消费仍同步交付，性能尚在约 0.5Gbps，未达到 1Gbps。下一重点继续是发送调用/完成路径与双向消费的串行阻塞，不以这约 0.2µs 的减法代替多核设计或内核归因。
+
+[完整交错矩阵](../../build/validation/performance-20261014/packet-socket-snapshot-lock/product-paired-attempt-2/complete-summary.json)、[原始制品/权限/资源证书](../../build/validation/performance-20261014/packet-socket-snapshot-lock/product-paired-attempt-2/final-source-raw-certificate.json)、[独立四点复核](../../build/validation/performance-20261013/packet-timing-analysis/lock-paired-independent-matrix-audit.json) 和四份 `packet-timing-analysis/lock-paired-r{1,2}-{old,new}.json` 保留精确 Sum/Count、直方图分位与原报告 SHA。独审核对全部方向/类别/结果、主段与 UDP 子段、4 正式及 4 预热的逐流账目和单位公式，并绑定源码、运行时、48 份原始材料 SHA 与清理证书，actual exit 0。首次失败及新目录完整材料均在本地 ignored 研究路径。
 
 ## 固定验证入口
 

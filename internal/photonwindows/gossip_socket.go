@@ -16,8 +16,10 @@ import (
 // It owns no protocol state, workers or database handles.
 // A failed replacement leaves both protocols unavailable until the next retry.
 type packetSockets struct {
-	// Writes and socket/selection replacement take writeMu before mu. A send
-	// releases mu before network I/O so the sole reader can continue demuxing.
+	// Every mutation of udp, closed, tunnelGeneration, ikePeer and nattPeer
+	// holds writeMu then mu. Either lock protects reads of those fields: sends
+	// hold writeMu through I/O; the sole reader uses mu independently. Other
+	// mutable reader metadata, including readDeadline and changed, uses mu.
 	writeMu           sync.Mutex
 	mu                sync.Mutex
 	udp               *net.UDPConn
@@ -226,9 +228,7 @@ func (s *packetSockets) WriteDatagram(b []byte, addr *net.UDPAddr) (int, error) 
 	// Serialize writes with replacement so stale completion cannot claim success.
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	s.mu.Lock()
 	conn, closed := s.udp, s.closed
-	s.mu.Unlock()
 	if closed || conn == nil {
 		return 0, net.ErrClosed
 	}
@@ -308,10 +308,8 @@ func (s *packetSockets) writeTunnel(generation uint64, packet []byte, peer netip
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	timing.MarkUDPWriterAcquired()
-	s.mu.Lock()
 	conn := s.udp
 	valid := !s.closed && conn != nil && generation == s.tunnelGeneration && peer.IsValid() && (peer == s.ikePeer || peer == s.nattPeer)
-	s.mu.Unlock()
 	timing.MarkUDPValidationDone()
 	if !valid {
 		return net.ErrClosed
