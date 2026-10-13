@@ -46,6 +46,10 @@ func TestFixturePacketTimingOrdinaryNoop(t *testing.T) {
 		trace.MarkAESBegin()
 		trace.MarkAESEnd()
 		trace.MarkDeliveryBegin()
+		trace.MarkUDPWriterAcquired()
+		trace.MarkUDPValidationDone()
+		trace.MarkUDPDeadlineDone()
+		trace.MarkUDPWriteDone()
 		trace.MarkDeliveryEnd()
 		trace.Finish(fixturePacketTimingDelivered)
 		if trace.Sampled() {

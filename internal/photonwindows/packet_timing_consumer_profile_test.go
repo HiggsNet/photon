@@ -153,7 +153,15 @@ func TestPacketTimingConsumerFreshGatesAndDelivery(t *testing.T) {
 			if scenario == "outbound" && !bytes.Equal(f.receiveBusiness(t), f.packet(true)) {
 				t.Fatal("sampled outbound delivery changed the real UDP packet")
 			}
-			assertConsumerTimingFinished(t, StopFixturePacketTiming(), direction, class, outcomes, true, delivery)
+			report := StopFixturePacketTiming()
+			assertConsumerTimingFinished(t, report, direction, class, outcomes, true, delivery)
+			for _, histogram := range report.Directions[direction].Classes[class].UDPDelivery.histograms() {
+				var want uint64
+				if scenario == "outbound" {
+					want = 1
+				}
+				assertPacketTimingHist(t, *histogram, want)
+			}
 		})
 	}
 }

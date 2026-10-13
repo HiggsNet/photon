@@ -172,7 +172,7 @@ func TestFixturePacketTimingCaptureAndExclusiveArtifact(t *testing.T) {
 			if err := json.NewDecoder(file).Decode(&report); err != nil {
 				t.Fatal(err)
 			}
-			if report.SchemaVersion != 1 || report.Enabled != (mode == "on") {
+			if report.SchemaVersion != 2 || report.Enabled != (mode == "on") {
 				t.Fatalf("wrong timing mode/schema: %+v", report)
 			}
 			if _, err := os.Stat(prefix + ".done"); err != nil {

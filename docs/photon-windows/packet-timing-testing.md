@@ -22,6 +22,42 @@ owner 总段结束于 `Finish` 的 QPC 读数，后面的直方图合并、解�
 
 入队时间戳取在发送尝试之前，因此区间可能包含入队前复制及线程被抢占的时间，并不是严格从 channel 成功入队之后开始。拒收不能生成成功入队的等待样本。入站 ESP 队列在认证前接收数据，解密失败、控制包和成功业务包需要分开解释。
 
+## 出站 UDP 调用内部，schema 2
+
+2026-10-14 继续细分出站业务包的同步发送。报告的 `schema_version` 升为 2，保留原六个 `stages`，在每个 class 下增加固定的 `udp_delivery` 四个直方图；入站、控制包和 unknown 的这四项保持空。历史 schema 1 原始报告及分析器副本保留，不向旧报告补字段；当前 fixture 严格读取 schema 2。
+
+| 子段 | 起点和终点 |
+| --- | --- |
+| `writer_lock_wait` | 复用主 delivery 开始时刻，至取得 `writeMu` 后的时钟读数；包含调用和 defer 的少量前置工作 |
+| `validation_state` | 前一时刻至完成 `mu` 下的当前 socket/generation/peer 校验 |
+| `deadline` | 校验结束至原 `time.Now()+1s` 和 `SetWriteDeadline` 返回 |
+| `udp_write` | 期限设置结束至原 `WriteToUDPAddrPort` 返回；包含 Go FD 锁、I/O 准备、系统调用和可能的完成等待 |
+
+四个子段包含相应采样时钟及调度成本，均为经过时间。解锁及函数返回尾部只落入主 delivery；不能将子段再加到主 delivery，或把 `udp_write` 全称作内核 CPU。失败只记录实际已执行的子段，每段使用自己的 Count。原锁顺序、共享连接、逐包一秒写期限、当前 generation 校验及同步写入语义保持不变；新增 trace 仍只含标量，结束时一次检查全部主/子段转换与溢出后统一记账。
+
+普通构建的四个新增标记仍为空方法。公共 `WriteTunnel` 契约保留，只有真实同步业务 completion 向同一私有实现借用它的 trace；控制路径不参与业务计时。诊断构建新增标量布局与四个标记的成本需单独校准，不能把 schema 1 和 2 的不同循环直接当作性能优化对照。
+
+本片便携专项验证通过正常交付、stale generation、关闭 UDP 在 deadline 处失败、真实过大 datagram 写失败、迟到 epoch、子段转换/累加溢出与非法分类。普通构建真实结构大小及空探针 0 alloc 验证通过，新增四标记可内联且 writer 的 trace 参数不逃逸；历史六段校准保留，另命名 `BenchmarkFixturePacketTimingUDPHooks` 以覆盖四个新标记。全量 `make check`（含普通 Windows 构建）及诊断包全量 race actual exit 0，材料在 `packet-timing-udp-{wiring,checks}/`。
+
+实际 PowerShell 5.1 的 schema 2 原始 71 个读取/marker/旧制品场景及 5 份脚本 parser 通过；独立审阅后收紧顶层字段大小写及 capture epoch 正值，增加两个反例，新 73 场景再次 actual exit 0、独立资源清理 exit 0。四个子段均覆盖 UInt64 超限、非法字段、错误方向、缺/多字段、Count 前缀、合法部分失败和 Sum 包络；临近 UInt64.MaxValue 仅差 100 的错误和能精确拒绝，不经 Double 舍入。两轮原始证明分别在 `packet-timing-v2-rig/ps-preflight-attempt-{1,2}/`，未覆盖旧结果。独立分析器显式兼容 schema 1/2，10 个数学/失败边界场景通过；四份 schema 1 原报告的分数均值与分位桶复算保持相同。
+
+独立源码复核另补父/子段包络及最后 owner end 不早于最后主 mark：在转换后、任何 histogram/outcome 写入前用减法预算检查子段和；异常计时整条拒绝，保持 selected/unfinished 账目，不部分合并。固定标量反例覆盖父时钟相对子段回退、子和超预算、缺父段、owner 结束回退及相等预算接受。两次补强后的所有采样/consumer 专项 race 分别 actual exit 0（1.279s、1.275s）；原完整检查结果及两次源 SHA 单独保留，没有冒称原完整检查是在最后补强源上重新运行。
+
+schema 2 原生 `native-validation-attempt-2/` 的 tagged internal 18、tagged app 7、ordinary internal 5 个顶层功能场景全部 PASS（共 30，含 3 个只读 runtime metadata helper），无 skip；另 12 个校准点，合计 15 个 fresh child 的实际退出码均为 0。固定实际 P8、8 logical CPU、process/system mask `0xff`、QPF 10MHz。沿用单独命名的新 UDP 空钩子循环、每点 1 秒、三轮交错顺序：
+
+| schema 2 隔离循环 | R1 / R2 / R3，ns/op | 中位，ns/op |
+| --- | --- | ---: |
+| QPC read，含 clock mutex | 71.60 / 69.61 / 69.45 | 69.61 |
+| UDP tagged off 的空钩子循环 | 36.92 / 35.01 / 35.61 | 35.61 |
+| 每次强制选中的完整 UDP 钩子循环 | 886.2 / 872.6 / 880.6 | 880.6 |
+| 实际 1/256 的空 UDP 钩子循环 | 38.89 / 39.09 / 40.21 | 39.09 |
+
+所有 12 点均 **0 B/op、0 allocs/op**。本表循环含四个新增标记，没有业务处理或 I/O；不是业务延迟、CPU 分账或纯探针比例，也不能机械扣除 QPC 常数。原 schema 1 循环和本表的代码/布局不同，分开解释。
+
+同一次开发冻结的 736 个原 Go 文件、9 个明确修改/新增 Go 文件（其中 internal owner 8 个）、2 个独列的原生 metadata helper、3 executable 和 47 个原始输出 SHA 均核验；源为 `b04180d` 加逐文件 dirty/new 声明。准备版本 `native-validation-attempt-1/` 在最后 clock 补强前仅完成 crossbuild，**0 native**，没有覆盖；第二版统一新 archive 重建三个 executable 后执行上述 15 child。原生/独立文件清理均 actual exit 0，15 个原 PID/100ns 创建身份和唯一远端目录均确认不存在。
+
+复用读取器的原派生摘要误留 Go 数量常数 735；原摘要及其 SHA 保留，实际 736 个源文件逐个核验通过。只按 manifest 长度另出 [数量修正摘要](../../build/validation/performance-20261013/packet-timing-v2-rig/native-validation-attempt-2/count-corrected-summary.json)，没有修改任何原始测量、源码制品或重测；[Root 原始结果复核](../../build/validation/performance-20261013/packet-timing-v2-rig/native-validation-attempt-2/root-native-audit.json) 独立验证全部 736 源/47 输出、30 个功能场景、15 个实际 runtime 及 12 点原始值，保留原派生数量差异。
+
 ## 固定验证入口
 
 在原完整吞吐、CPU profile 模式下设置 `PHOTON_WINDOWS_PACKET_TIMING=off` 或 `on`。`PHOTON_WINDOWS_PACKET_TIMING_LABEL` 只接受 `f1-w64-IPv4`、`f4-w64-IPv4`，缺省为单流。两模式使用同一个带标签的二进制、相同 profile 位置、负载及运行时设置，用来观察探针自身开销。未设置开关时保留既有采集方式。
@@ -63,7 +99,7 @@ QPC 频率为 10MHz；所有 native child 实际 Go P8、8 个可见 logical CPU
 
 [严格原生汇总](../../build/validation/performance-20261013/packet-timing-rig/native-validation-attempt-3/complete-validation-summary.json)、[Root 校准复算](../../build/validation/performance-20261013/packet-timing-rig/native-validation-attempt-3/root-native-audit.json)、[复用 39 项的 Root 核验](../../build/validation/performance-20261013/packet-timing-rig/native-validation-attempt-2/root-functional-audit.json) 与全部原始失败/成功材料保留在本地 ignored 目录。
 
-## 完整产品 off/on 对照，2026-10-13
+## 完整产品 off/on 对照，schema 1，2026-10-13
 
 四个 fresh SCM 实例按 R1 off→on、R2 on→off 执行，保留全部 8 个正式点及 8 个预热点。每实例固定 IPv4 单流/四流、每流 64 credits、1200B 应用载荷、2 秒预热、8 秒发送和 1 秒回包期限。生成器与服务均实际 Go P8、8 个可见 logical CPU、affinity `0xff`；线程 CPU 每 250ms 观测。CPU profile 和分段窗口固定在四流点，单流点未开启分段窗口。吞吐按经过发送及排空的完整时间计算，不剔除尾部排空。
 
@@ -104,6 +140,35 @@ road 是 PVE `10.16.255.202` 上的 LXC，Linux 网关/echo 仍在 road 的 Dock
 
 drop 是各位置在 profile 窗口的精确计数差额，没有逐序号关联，不相加结算端到端失包；抽样 queue_rejected 属于 unknown 类，也不乘 256 估算精确丢包。profile 窗口含开始确认/停止轮询，不等于生成器窗口。
 
-四个实例的完整 SCM fixture、严格读取器和独立 Docker/service/NIC/目录/私有输入清理均 actual exit 0。matrix actual exit 0 之后，同一宿主独立确认原 coordinator PID/创建身份已不存在。原始数值、全部低点及 source/runtime/profile/计数/退出/清理证据保留在 [完整矩阵汇总](../../build/validation/performance-20261013/packet-timing-rig/product-off-on/complete-summary.json) 和 [源文件/原始制品证书](../../build/validation/performance-20261013/packet-timing-rig/product-off-on/final-source-raw-certificate.json)；[R1 分段复算](../../build/validation/performance-20261013/packet-timing-analysis/r1-on.json)、[R2 分段复算](../../build/validation/performance-20261013/packet-timing-analysis/r2-on.json) 保留精确均值分数、分位桶及源报告 SHA。
+四个实例的完整 SCM fixture、严格读取器和独立 Docker/service/NIC/目录/私有输入清理均 actual exit 0。matrix actual exit 0 之后，同一宿主独立确认原 coordinator PID/创建身份已不存在。原始数值、全部低点及 source/runtime/profile/计数/退出/清理证据保留在 [完整矩阵汇总](../../build/validation/performance-20261013/packet-timing-rig/product-off-on/complete-summary.json) 和 [源文件/原始制品证书](../../build/validation/performance-20261013/packet-timing-rig/product-off-on/final-source-raw-certificate.json)，[独立矩阵复核](../../build/validation/performance-20261013/packet-timing-analysis/independent-matrix-audit.json) 另核源文件 SHA、实际运行时及 16 个 phase 的原始账目和数值；[R1 分段复算](../../build/validation/performance-20261013/packet-timing-analysis/r1-on.json)、[R2 分段复算](../../build/validation/performance-20261013/packet-timing-analysis/r2-on.json) 保留精确均值分数、分位桶及源报告 SHA。
+
+## 完整产品 UDP 子段，schema 2，2026-10-14
+
+清洁 `9a6031e3b3adf9f3f4a39f4155223b065e8c57e8` archive 的 736 个原 Go 文件与最后原生版本逐字一致，两个 metadata helper 未进入产品。两次 fresh SCM 使用同一 Windows tagged executable `4230b7ba771c5ee47525ccc2d898317a7e49dccabd79a0dd486dacc86fb789e7`、固定 Linux/echo/生成器和 32 个冻结制品/脚本。只运行四流 IPv4、每流 64 credits、1200B、2 秒预热和 8 秒发送/1 秒期限，P8/affinity `0xff`、线程 250ms，profile 固定在正式四流点。两次均为 on，**没有同版本 off 对照**，不将与 schema 1 的差异称作提速或探针开销。
+
+| 实例 | Mbps | 服务 CPU，%core | 已回包 / 过期 | echo 失包率 | 发送及排空，秒 |
+| --- | ---: | ---: | --- | ---: | ---: |
+| R1 on | 458.543 | 147.058 | 426303 / 1497 | 0.34993% | 8.9250342 |
+| R2 on | 468.514 | 148.147 | 438035 / 1485 | 0.33787% | 8.9754757 |
+
+两点与预热、阶段间隙均无 logged ready 变化，恢复/完整 SCM fixture/严格 schema 2 检查及独立 Docker/service/NIC/目录清理均 actual exit 0。全部正式/预热、逐流账目和低点保留；coordinator actual exit 0 后在同一宿主确认原 PID/创建身份已不存在。
+
+出站业务样本 R1 为 1670、R2 为 1714，四个子段及父 delivery 使用同一 Count，均 delivered；无 clock/invalid errors、unfinished 为 0。下表为 **按各自精确 SumNS/Count 计算的均值，µs**。
+
+| 出站 UDP 子段 | R1 | R2 |
+| --- | ---: | ---: |
+| 写锁等待，含开始调用及探针 | 0.175269 | 0.169078 |
+| 连接状态校验，含状态锁 | 0.375210 | 0.353267 |
+| 当前时间及写期限设置 | 0.287305 | 0.279055 |
+| 实际 UDP 写入调用至返回 | 9.348263 | 9.074796 |
+| 父 delivery，包含上述四段 | 10.345389 | 10.098541 |
+
+同 Count 的 UDP write Sum 占父 delivery Sum 的 90.36164% / 89.86244%，这是包围关系下的**采样经过时间占比，不是 CPU 或内核比例**。写调用包含 Go FD 写锁、准备/pinning、系统调用、可能的 IOCP 完成等待、调度及探针。写锁、状态校验和写期限各不足 0.4µs；至少在这两窗内，`writeMu` 竞争与逐包 `SetWriteDeadline` 不是同步交付的主要耗时。两轮 UDP write p50 都在 `(4.096, 8.192]µs`，R1/R2 p99 分别在 `(32.768, 65.536]µs` / `(16.384, 32.768]µs`，保留桶区间，不插值成精确分位。R2 出站 owner 均值为 14.354µs。
+
+R1 主段另有出/入 queue 410.508/443.972µs、ESP 0.781/0.652µs、owner 14.716/4.161µs，入站设备交付 0.649µs。入站四个 UDP 子段均为零。R1/R2 exact drop 分别 raw/leaf/ESP=`8/934/555`、`92/803/584`，不合并归因端到端 echo 失包；R1 抽样 queue_rejected 出/入为 2/4，仍独立于精确计数。
+
+下一优先级是发送调用/完成路径及单 owner 同步交付对双向消费的阻塞。普通 Go 同 FD 多 writer 仍受 FD 写锁约束，不能直接启动更多 writer 就宣称多核利用；密文还借用单 owner scratch，排队发送必须先有明确所有权及撤销、CHILD 切换、序号、关闭/join 的证明。保持现同步语义的更小候选是审计已有 `writeMu` 对连接字段的保护，只有确认全部字段写入也持该锁后，才移除冗余的内部状态读锁。它最多减少状态段的一部分，不能承诺大幅吞吐提升。
+
+[完整两点汇总](../../build/validation/performance-20261013/packet-timing-v2-rig/product-udp-on/complete-summary.json)、[源码/原始制品与资源证书](../../build/validation/performance-20261013/packet-timing-v2-rig/product-udp-on/final-source-raw-certificate.json)、[独立矩阵复核](../../build/validation/performance-20261013/packet-timing-analysis/v2-independent-matrix-audit.json)、[R1 精确分段复算](../../build/validation/performance-20261013/packet-timing-analysis/v2-r1-on.json)、[R2 精确分段复算](../../build/validation/performance-20261013/packet-timing-analysis/v2-r2-on.json) 保存在本地 ignored 目录，不发布密钥/包内容或新的产品入口。
 
 内核具体函数仍需独立的 Windows 调用栈观测。当前 VM 有系统 WPR 和 CPU/Network profile，尚未安装 WPA/xperf，也尚未开始 ETW 录制。本片的分段经过时间不能替代该项证据。

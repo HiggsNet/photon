@@ -22,6 +22,14 @@ const (
 	fixtureTimingStageCount
 )
 
+const (
+	fixtureTimingUDPWriter = iota
+	fixtureTimingUDPValidation
+	fixtureTimingUDPDeadline
+	fixtureTimingUDPWrite
+	fixtureTimingUDPStageCount
+)
+
 // A stamp contains only scalars. It borrows no packet, SA, address, or window
 // pointer, and is invalid outside its originating capture epoch. Stage ticks
 // remain local until Finish so late business/control classification applies to
@@ -32,10 +40,13 @@ type fixturePacketTiming struct {
 	owner     int64
 	mark      int64
 	ticks     [fixtureTimingOwner]uint64
+	udpMark   int64
+	udpTicks  [fixtureTimingUDPStageCount]uint64
 	direction fixturePacketTimingDirection
 	class     fixturePacketTimingClass
 	phase     uint8
 	valid     uint8
+	udpValid  uint8
 }
 
 // All durations are elapsed time, including sampled probe/scheduler waits;
@@ -67,9 +78,20 @@ type FixturePacketTimingOutcomes struct {
 }
 
 type FixturePacketTimingClassReport struct {
-	Class    string                      `json:"class"`
-	Outcomes FixturePacketTimingOutcomes `json:"outcomes"`
-	Stages   FixturePacketTimingStages   `json:"stages"`
+	Class       string                         `json:"class"`
+	Outcomes    FixturePacketTimingOutcomes    `json:"outcomes"`
+	Stages      FixturePacketTimingStages      `json:"stages"`
+	UDPDelivery FixturePacketTimingUDPDelivery `json:"udp_delivery"`
+}
+
+// These sub-stages partition only the observed part inside sampled WriteTunnel.
+// Parent delivery also includes the return/unlock tail. Wintun and control
+// delivery leave these histograms empty.
+type FixturePacketTimingUDPDelivery struct {
+	WriterLockWait  FixturePacketTimingHistogram `json:"writer_lock_wait"`
+	ValidationState FixturePacketTimingHistogram `json:"validation_state"`
+	Deadline        FixturePacketTimingHistogram `json:"deadline"`
+	UDPWrite        FixturePacketTimingHistogram `json:"udp_write"`
 }
 
 type FixturePacketTimingDirectionReport struct {
@@ -112,7 +134,7 @@ var fixturePacketTimingState struct {
 var activeFixturePacketTiming atomic.Pointer[fixturePacketTimingRun]
 
 func newFixturePacketTimingReport(enabled bool, epoch uint64, clock *fixturePacketTimingClock) FixturePacketTiming {
-	r := FixturePacketTiming{SchemaVersion: 1, Enabled: enabled, Epoch: epoch,
+	r := FixturePacketTiming{SchemaVersion: 2, Enabled: enabled, Epoch: epoch,
 		Clock: clock.name(), FrequencyHz: clock.frequency,
 		SampleEvery: fixturePacketTimingSampleEvery, HistogramUnit: "nanoseconds"}
 	for i := range r.BucketUpperBoundsNS {
@@ -300,6 +322,41 @@ func (t *fixturePacketTiming) MarkDeliveryBegin() {
 }
 func (t *fixturePacketTiming) MarkDeliveryEnd() { t.advance(fixtureTimingDelivery, fixtureTimingOwner) }
 
+// The first sub-stage reuses delivery's begin stamp, including the small call
+// entry/defer prologue before writeMu is acquired. No extra entry clock is read.
+// Only the synchronous business owner lends this trace to the socket writer.
+func (t *fixturePacketTiming) markUDPStage(stage uint8) {
+	r := t.currentLocked()
+	if r == nil {
+		return
+	}
+	defer r.mu.Unlock()
+	if stage >= fixtureTimingUDPStageCount || t.phase != fixtureTimingDelivery || t.udpValid != (1<<stage)-1 {
+		t.failLocked(r)
+		return
+	}
+	tick, ok := t.readLocked(r)
+	if !ok {
+		return
+	}
+	mark := t.udpMark
+	if stage == fixtureTimingUDPWriter {
+		mark = t.mark
+	}
+	if tick < mark {
+		t.failLocked(r)
+		return
+	}
+	t.udpTicks[stage] = uint64(tick) - uint64(mark)
+	t.udpMark = tick
+	t.udpValid |= 1 << stage
+}
+
+func (t *fixturePacketTiming) MarkUDPWriterAcquired() { t.markUDPStage(fixtureTimingUDPWriter) }
+func (t *fixturePacketTiming) MarkUDPValidationDone() { t.markUDPStage(fixtureTimingUDPValidation) }
+func (t *fixturePacketTiming) MarkUDPDeadlineDone()   { t.markUDPStage(fixtureTimingUDPDeadline) }
+func (t *fixturePacketTiming) MarkUDPWriteDone()      { t.markUDPStage(fixtureTimingUDPWrite) }
+
 func (t *fixturePacketTiming) QueueRejected() { t.Finish(fixturePacketTimingQueueRejected) }
 
 func fixtureTimingNanoseconds(ticks, frequency uint64) (uint64, bool) {
@@ -339,6 +396,10 @@ func (s *FixturePacketTimingStages) histograms() [fixtureTimingStageCount]*Fixtu
 	return [fixtureTimingStageCount]*FixturePacketTimingHistogram{&s.QueueWait, &s.Precheck, &s.AES, &s.FreshGate, &s.Delivery, &s.OwnerTotal}
 }
 
+func (s *FixturePacketTimingUDPDelivery) histograms() [fixtureTimingUDPStageCount]*FixturePacketTimingHistogram {
+	return [fixtureTimingUDPStageCount]*FixturePacketTimingHistogram{&s.WriterLockWait, &s.ValidationState, &s.Deadline, &s.UDPWrite}
+}
+
 func (o *FixturePacketTimingOutcomes) increment(outcome fixturePacketTimingOutcome) {
 	switch outcome {
 	case fixturePacketTimingDelivered:
@@ -362,6 +423,10 @@ func (t *fixturePacketTiming) Finish(outcome fixturePacketTimingOutcome) {
 		return
 	}
 	defer r.mu.Unlock()
+	if t.udpValid != 0 && (t.direction != fixturePacketTimingOutbound || t.class != fixturePacketTimingBusiness) {
+		t.failLocked(r)
+		return
+	}
 	if outcome > fixturePacketTimingCanceled || (t.phase == 0 && outcome != fixturePacketTimingQueueRejected && outcome != fixturePacketTimingCanceled) || (t.phase != 0 && outcome == fixturePacketTimingQueueRejected) {
 		t.failLocked(r)
 		return
@@ -372,7 +437,7 @@ func (t *fixturePacketTiming) Finish(outcome fixturePacketTimingOutcome) {
 		if !ok {
 			return
 		}
-		if tick < t.owner || (t.phase < fixtureTimingOwner && !t.endStageLocked(r, int(t.phase), tick)) {
+		if tick < t.owner || tick < t.mark || (t.phase < fixtureTimingOwner && !t.endStageLocked(r, int(t.phase), tick)) {
 			if t.epoch != 0 {
 				t.failLocked(r)
 			}
@@ -382,7 +447,9 @@ func (t *fixturePacketTiming) Finish(outcome fixturePacketTimingOutcome) {
 	}
 	series := &r.report.Directions[t.direction].Classes[t.class]
 	hist := series.Stages.histograms()
+	udpHist := series.UDPDelivery.histograms()
 	var durations [fixtureTimingStageCount]uint64
+	var udpDurations [fixtureTimingUDPStageCount]uint64
 	valid := t.valid
 	if t.phase != 0 {
 		valid |= 1 << fixtureTimingOwner
@@ -402,12 +469,50 @@ func (t *fixturePacketTiming) Finish(outcome fixturePacketTimingOutcome) {
 		}
 		durations[stage] = ns
 	}
+	// Convert/check all child observations before recording any parent or child
+	// histogram: a bad conversion or overflow cannot partly record the sample.
+	for stage, ticks := range t.udpTicks {
+		if t.udpValid&(1<<stage) == 0 {
+			continue
+		}
+		ns, ok := fixtureTimingNanoseconds(ticks, r.clock.frequency)
+		if !ok || ns > math.MaxUint64-udpHist[stage].SumNS {
+			t.failLocked(r)
+			return
+		}
+		udpDurations[stage] = ns
+	}
+	if t.udpValid != 0 {
+		if valid&(1<<fixtureTimingDelivery) == 0 {
+			t.failLocked(r)
+			return
+		}
+		// A regressing parent clock can still be after delivery's begin but
+		// before the last child end. Budget subtraction also rejects corrupted
+		// child totals without ever overflowing an intermediate sum.
+		remaining := durations[fixtureTimingDelivery]
+		for stage, ns := range udpDurations {
+			if t.udpValid&(1<<stage) == 0 {
+				continue
+			}
+			if ns > remaining {
+				t.failLocked(r)
+				return
+			}
+			remaining -= ns
+		}
+	}
 	for stage, ns := range durations {
 		if valid&(1<<stage) != 0 {
 			hist[stage].add(ns)
 		}
 	}
 	series.Outcomes.increment(outcome)
+	for stage, ns := range udpDurations {
+		if t.udpValid&(1<<stage) != 0 {
+			udpHist[stage].add(ns)
+		}
+	}
 	r.report.Directions[t.direction].Finished++
 	t.epoch = 0 // repeated Finish on this owned trace is inert
 }

@@ -240,7 +240,7 @@ func (p *gatewayBabelPipeline) acceptPrepared(facts *packetAuthorization, comple
 	}
 	if outbound {
 		completion.timing.MarkDeliveryBegin()
-		err := p.tunnel.socket.WriteTunnel(p.generation, packet, peer)
+		err := p.tunnel.socket.writeTunnel(p.generation, packet, peer, &completion.timing)
 		completion.timing.MarkDeliveryEnd()
 		if err != nil {
 			completion.timing.Finish(fixturePacketTimingDeliveryError)

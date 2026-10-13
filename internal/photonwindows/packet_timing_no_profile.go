@@ -17,4 +17,8 @@ func (*fixturePacketTiming) MarkAESBegin()                     {}
 func (*fixturePacketTiming) MarkAESEnd()                       {}
 func (*fixturePacketTiming) MarkDeliveryBegin()                {}
 func (*fixturePacketTiming) MarkDeliveryEnd()                  {}
+func (*fixturePacketTiming) MarkUDPWriterAcquired()            {}
+func (*fixturePacketTiming) MarkUDPValidationDone()            {}
+func (*fixturePacketTiming) MarkUDPDeadlineDone()              {}
+func (*fixturePacketTiming) MarkUDPWriteDone()                 {}
 func (*fixturePacketTiming) Finish(fixturePacketTimingOutcome) {}

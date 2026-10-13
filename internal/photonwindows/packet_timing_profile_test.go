@@ -29,6 +29,20 @@ func finishPacketTimingBusiness(trace *fixturePacketTiming) {
 	trace.Finish(fixturePacketTimingDelivered)
 }
 
+func finishPacketTimingUDPBusiness(trace *fixturePacketTiming) {
+	trace.Dequeue()
+	trace.MarkAESBegin()
+	trace.MarkAESEnd()
+	trace.MarkDeliveryBegin()
+	trace.MarkUDPWriterAcquired()
+	trace.MarkUDPValidationDone()
+	trace.MarkUDPDeadlineDone()
+	trace.MarkUDPWriteDone()
+	trace.MarkDeliveryEnd()
+	trace.Classify(fixturePacketTimingBusiness)
+	trace.Finish(fixturePacketTimingDelivered)
+}
+
 func assertPacketTimingHist(t *testing.T, h FixturePacketTimingHistogram, count uint64) {
 	t.Helper()
 	var sum uint64
@@ -50,7 +64,7 @@ func TestFixturePacketTimingDisabledSchemaAndOverlap(t *testing.T) {
 		finishPacketTimingBusiness(&trace)
 	}
 	report := StopFixturePacketTiming()
-	if report.SchemaVersion != 1 || report.Enabled || report.Epoch == 0 || report.FrequencyHz == 0 || report.SampleEvery != 256 || report.HistogramUnit != "nanoseconds" || report.Clock == "" {
+	if report.SchemaVersion != 2 || report.Enabled || report.Epoch == 0 || report.FrequencyHz == 0 || report.SampleEvery != 256 || report.HistogramUnit != "nanoseconds" || report.Clock == "" {
 		t.Fatalf("disabled metadata missing: %+v", report)
 	}
 	for _, direction := range report.Directions {
@@ -62,6 +76,9 @@ func TestFixturePacketTimingDisabledSchemaAndOverlap(t *testing.T) {
 				t.Fatal("disabled capture counted outcomes")
 			}
 			for _, hist := range class.Stages.histograms() {
+				assertPacketTimingHist(t, *hist, 0)
+			}
+			for _, hist := range class.UDPDelivery.histograms() {
 				assertPacketTimingHist(t, *hist, 0)
 			}
 		}
@@ -251,7 +268,7 @@ func TestFixturePacketTimingProbeAllocations(t *testing.T) {
 		allocs := testing.AllocsPerRun(100, func() {
 			run.next[fixturePacketTimingOutbound].Store(0) // exercise every sampled clock/record path
 			trace := beginFixturePacketTimingQueue(fixturePacketTimingOutbound)
-			finishPacketTimingBusiness(&trace)
+			finishPacketTimingUDPBusiness(&trace)
 		})
 		report := StopFixturePacketTiming()
 		if allocs != 0 || report.ClockErrors != 0 || report.InvalidSamples != 0 {
@@ -294,6 +311,28 @@ func BenchmarkFixturePacketTimingHooks(b *testing.B) {
 				}
 				trace := beginFixturePacketTimingQueue(fixturePacketTimingOutbound)
 				finishPacketTimingBusiness(&trace)
+			}
+		})
+	}
+}
+
+// The historical six-stage calibration remains above. This separately named
+// loop includes all four UDP sub-stage probes, without measuring any I/O.
+func BenchmarkFixturePacketTimingUDPHooks(b *testing.B) {
+	for _, mode := range []string{"off", "on_sampled", "on_sparse_256"} {
+		b.Run(mode, func(b *testing.B) {
+			if err := StartFixturePacketTiming(mode != "off"); err != nil {
+				b.Fatal(err)
+			}
+			run := fixturePacketTimingState.current
+			b.Cleanup(func() { StopFixturePacketTiming() })
+			b.ReportAllocs()
+			for b.Loop() {
+				if mode == "on_sampled" {
+					run.next[fixturePacketTimingOutbound].Store(0)
+				}
+				trace := beginFixturePacketTimingQueue(fixturePacketTimingOutbound)
+				finishPacketTimingUDPBusiness(&trace)
 			}
 		})
 	}

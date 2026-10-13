@@ -298,19 +298,31 @@ func (s *packetSockets) demuxLocked(packet []byte, peer netip.AddrPort) bool {
 // bound as Gossip sends. Windows uses one WriteToUDP per packet; no batch API
 // or background send queue is required to preserve packet lifetime.
 func (s *packetSockets) WriteTunnel(generation uint64, packet []byte, peer netip.AddrPort) error {
+	var timing fixturePacketTiming
+	return s.writeTunnel(generation, packet, peer, &timing)
+}
+
+// Only a synchronous sampled business completion lends its scalar trace.
+// Ordinary and control callers keep WriteTunnel's unchanged public contract.
+func (s *packetSockets) writeTunnel(generation uint64, packet []byte, peer netip.AddrPort, timing *fixturePacketTiming) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	timing.MarkUDPWriterAcquired()
 	s.mu.Lock()
 	conn := s.udp
 	valid := !s.closed && conn != nil && generation == s.tunnelGeneration && peer.IsValid() && (peer == s.ikePeer || peer == s.nattPeer)
 	s.mu.Unlock()
+	timing.MarkUDPValidationDone()
 	if !valid {
 		return net.ErrClosed
 	}
-	if err := conn.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
+	err := conn.SetWriteDeadline(time.Now().Add(time.Second))
+	timing.MarkUDPDeadlineDone()
+	if err != nil {
 		return err
 	}
-	_, err := conn.WriteToUDPAddrPort(packet, peer)
+	_, err = conn.WriteToUDPAddrPort(packet, peer)
+	timing.MarkUDPWriteDone()
 	return err
 }
 
