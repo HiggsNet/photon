@@ -10,8 +10,9 @@ import (
 )
 
 // packetAuthorization belongs to one synchronous owner event, never to a
-// tunnel, crypto job or cache. Every completion constructs fresh facts from the
-// current view and exact time, including expiry without a revision change.
+// crypto job. The immutable daemon snapshot may share signed-policy results
+// inside their exact validity interval, but every event has a fresh exact now
+// and live attachment/SA/packet checks. Ordinary detached views are recomputed.
 // The callbacks in gatewayDataplane execute synchronously and do not retain it.
 type packetAuthorization struct {
 	owner          *gatewayBabelPipeline
@@ -28,6 +29,9 @@ func (p *gatewayBabelPipeline) attached(now time.Time) bool {
 }
 
 func (p *gatewayBabelPipeline) prepare(config *Config, view corestate.View, plan GatewayPlan, now time.Time) (*packetAuthorization, bool) {
+	// Arbitrary detached Views remain mutable. Only the daemon's explicit
+	// immutable-snapshot entry point may reuse policy across owner events.
+	p.policy = nil
 	if config == nil || !p.attached(now) {
 		p.leaf = nil
 		return nil, false

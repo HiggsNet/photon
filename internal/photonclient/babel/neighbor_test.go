@@ -11,7 +11,7 @@ import (
 var neighborLocal = netip.MustParseAddr("fe80::1")
 var neighborPeer = netip.MustParseAddr("fe80::2")
 
-func neighborPacket(t *testing.T, m ...Message) []byte {
+func neighborPacket(t testing.TB, m ...Message) []byte {
 	t.Helper()
 	payload, err := Encode(m)
 	if err != nil {
@@ -23,7 +23,7 @@ func neighborPacket(t *testing.T, m ...Message) []byte {
 	}
 	return packet
 }
-func neighborUp(t *testing.T, l *Leaf, now time.Time) {
+func neighborUp(t testing.TB, l *Leaf, now time.Time) {
 	t.Helper()
 	_, err := l.Receive(neighborPacket(t, Message{Type: TLVHello, Seqno: 1, Interval: 400}, Message{Type: TLVIHU, Address: neighborLocal, Metric: 100, Interval: 400}), now, allowCandidate)
 	if err != nil {
@@ -31,7 +31,7 @@ func neighborUp(t *testing.T, l *Leaf, now time.Time) {
 	}
 }
 func allowCandidate(sadr.Route) bool { return true }
-func leafForTest(t *testing.T) (*Leaf, time.Time) {
+func leafForTest(t testing.TB) (*Leaf, time.Time) {
 	t.Helper()
 	l, err := NewLeaf(neighborLocal, neighborPeer, [8]byte{1}, 100)
 	if err != nil {
@@ -44,7 +44,7 @@ func leafForTest(t *testing.T) (*Leaf, time.Time) {
 func remoteUpdate() Message {
 	return Message{Type: TLVUpdate, Prefix: netip.MustParsePrefix("2001:db8::/64"), SourcePrefix: netip.MustParsePrefix("2001:db8:1::/64"), RouterID: [8]byte{2}, NextHop: neighborPeer, Seqno: 65535, Metric: 50, Interval: 100}
 }
-func receiveLeaf(t *testing.T, l *Leaf, now time.Time, m ...Message) []Message {
+func receiveLeaf(t testing.TB, l *Leaf, now time.Time, m ...Message) []Message {
 	t.Helper()
 	out, err := l.Receive(neighborPacket(t, m...), now, allowCandidate)
 	if err != nil {

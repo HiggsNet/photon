@@ -275,10 +275,16 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	var packetView packetStateView
 	freshPlanFrom := func(view corestate.View, now time.Time) GatewayPlan {
 		// The pipeline and this transport gate have the same serial owner.
-		// Reuse only signature math; every input and lifetime is checked anew.
+		// Its immutable snapshot policy stops at the next exact transition;
+		// current time, attachment and SA checks still run in every event.
 		var verifier *photoncrypto.Verifier
 		if leaf.pipeline != nil {
 			verifier = leaf.pipeline.verifier
+		}
+		if tunnel.phase == 3 && leaf.pipeline != nil {
+			if facts, ok := leaf.pipeline.prepareSnapshot(config, view, lastPlan, now); ok {
+				return facts.plan
+			}
 		}
 		if view.State == nil || verifier.VerifyChain(view.State.Network, config.ManagedZone, now) != nil {
 			return GatewayPlan{Rejected: "local authority is absent or expired"}
@@ -459,7 +465,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			view, now := packetView.read(state.Store()), time.Now()
 			var facts *packetAuthorization
 			if leaf.pipeline != nil {
-				facts, _ = leaf.pipeline.prepare(config, view, lastPlan, now)
+				facts, _ = leaf.pipeline.prepareSnapshot(config, view, lastPlan, now)
 			}
 			var plan GatewayPlan
 			if facts != nil {
@@ -493,7 +499,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				continue
 			}
 			if leaf.pipeline != nil && devicePacket.generation == tunnel.generation {
-				leaf.pipeline.SubmitPacket(config, packetView.read(state.Store()), lastPlan, time.Now(), devicePacket.packet)
+				leaf.pipeline.submitSnapshotPacket(config, packetView.read(state.Store()), lastPlan, time.Now(), devicePacket.packet)
 			}
 		case <-tunnelTicker.C:
 			if err := tunnel.tick(freshPlan(), time.Now()); err != nil {
@@ -504,7 +510,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				return err
 			}
 			if leaf.pipeline != nil {
-				leaf.pipeline.Tick(config, packetView.read(state.Store()), lastPlan, time.Now())
+				leaf.pipeline.tickSnapshot(config, packetView.read(state.Store()), lastPlan, time.Now())
 			}
 			observeReady()
 		case result := <-plans:

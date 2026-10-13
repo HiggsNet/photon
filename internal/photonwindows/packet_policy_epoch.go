@@ -33,11 +33,20 @@ func packetPolicyDeadline(view corestate.View, now time.Time) time.Time {
 		}
 		for _, delegation := range zs.Delegations {
 			if delegation != nil && delegation.ExpiresAt != nil {
+				// In-memory intents may retain monotonic time. One wall-clock
+				// epoch cannot bound its progress when the wall clock slows;
+				// use ordinary current verification for that rare snapshot.
+				if *delegation.ExpiresAt != delegation.ExpiresAt.Round(0) {
+					return now
+				}
 				earlier(*delegation.ExpiresAt)
 			}
 		}
 		for _, proof := range zs.ParentProof {
 			if proof != nil && proof.ExpiresAt != nil {
+				if *proof.ExpiresAt != proof.ExpiresAt.Round(0) {
+					return now
+				}
 				earlier(*proof.ExpiresAt)
 			}
 		}

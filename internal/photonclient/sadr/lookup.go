@@ -30,7 +30,7 @@ type Route struct {
 // Inputs and returned values contain no borrowed mutable storage. The caller
 // retains the candidate table and owns its revision/neighbor lifecycle.
 func Lookup(routes []Route, source, destination netip.Addr, now time.Time, authorize func(Route) bool) []Route {
-	if authorize == nil || len(routes) > MaxRoutes || !source.IsValid() || !destination.IsValid() || source.Is4In6() || destination.Is4In6() || source.BitLen() != destination.BitLen() || source.Zone() != "" || destination.Zone() != "" {
+	if !validQuery(len(routes), source, destination, authorize) {
 		return nil
 	}
 	bestDestination, bestSource, bestMetric := -1, -1, uint16(65535)
@@ -64,6 +64,27 @@ func Lookup(routes []Route, source, destination netip.Addr, now time.Time, autho
 		return bytes.Compare(a.RouterID[:], b.RouterID[:])
 	})
 	return slices.CompactFunc(selected, func(a, b Route) bool { return a.NextHop == b.NextHop && a.RouterID == b.RouterID })
+}
+
+// HasRoute checks whether Lookup would produce a nonempty result. It performs
+// the same current authorization and address/expiry checks without allocating
+// or ordering choices. authorize supplies a pure current verdict; invocation
+// count and order are not a contract. Callers needing a next hop use Lookup.
+func HasRoute(routes []Route, source, destination netip.Addr, now time.Time, authorize func(Route) bool) bool {
+	if !validQuery(len(routes), source, destination, authorize) {
+		return false
+	}
+	for _, route := range routes {
+		if validRoute(route, source, destination, now) && authorize(route) {
+			return true
+		}
+	}
+	return false
+}
+
+func validQuery(count int, source, destination netip.Addr, authorize func(Route) bool) bool {
+	return authorize != nil && count <= MaxRoutes && source.IsValid() && destination.IsValid() &&
+		!source.Is4In6() && !destination.Is4In6() && source.BitLen() == destination.BitLen() && source.Zone() == "" && destination.Zone() == ""
 }
 
 func validRoute(r Route, source, destination netip.Addr, now time.Time) bool {

@@ -17,6 +17,17 @@ import (
 // A fixed fixture time isolates CPU/allocation cost from lease expiration.
 // This is a serial event-path benchmark, not a network throughput claim.
 func BenchmarkGatewayPacketPath(b *testing.B) {
+	benchmarkGatewayPacketPath(b, false)
+}
+
+// The production serial daemon retains an immutable view for one verified
+// revision and reuses successful signed policy only until its exact transition.
+// Crypto, current SA/packet gates, real UDP and host delivery are still exercised.
+func BenchmarkGatewayPacketSnapshotPath(b *testing.B) {
+	benchmarkGatewayPacketPath(b, true)
+}
+
+func benchmarkGatewayPacketPath(b *testing.B, snapshot bool) {
 	for _, outbound := range []bool{true, false} {
 		direction := "Inbound"
 		if outbound {
@@ -33,6 +44,27 @@ func BenchmarkGatewayPacketPath(b *testing.B) {
 					b.Fatal(err)
 				}
 				b.Cleanup(store.Close)
+				readView := store.ReadView
+				if snapshot {
+					var owner packetStateView
+					readView = func() corestate.View { return owner.read(store) }
+				}
+				submit := f.p.SubmitPacket
+				accept := func(completion dataplaneCompletion) bool { return f.accept(b, completion) }
+				if snapshot {
+					submit = f.p.submitSnapshotPacket
+					accept = func(completion dataplaneCompletion) bool {
+						facts, ok := f.p.prepareSnapshot(f.config, f.view, f.plan, f.now)
+						if !ok {
+							return false
+						}
+						accepted, err := f.p.acceptPrepared(facts, completion)
+						if err != nil {
+							b.Fatal(err)
+						}
+						return accepted
+					}
+				}
 				packet := make([]byte, size)
 				copy(packet, f.packet(outbound))
 				binary.BigEndian.PutUint16(packet[2:4], uint16(size))
@@ -50,16 +82,17 @@ func BenchmarkGatewayPacketPath(b *testing.B) {
 				b.ReportAllocs()
 				b.ResetTimer()
 				for b.Loop() {
-					// Mirror the daemon's detached current view at each event;
-					// crypto completion uses a fresh view, never a submission grant.
-					f.view = store.ReadView()
+					// Each event reads the current verified revision. Snapshot
+					// mode keeps one read-only view and exact bounded policy;
+					// ordinary mode preserves detached-view semantics.
+					f.view = readView()
 					if outbound {
-						if !f.p.SubmitPacket(f.config, f.view, f.plan, f.now, packet) {
+						if !submit(f.config, f.view, f.plan, f.now, packet) {
 							b.Fatal("outbound rejected")
 						}
 						completion := dataplaneResult(b, f.p.tunnel.data)
-						f.view = store.ReadView()
-						if !f.accept(b, completion) {
+						f.view = readView()
+						if !accept(completion) {
 							b.Fatal("outbound completion rejected")
 						}
 						if err := f.peer.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
@@ -75,8 +108,8 @@ func BenchmarkGatewayPacketPath(b *testing.B) {
 						}
 					} else {
 						completion := f.inboundCompletion(b, packet)
-						f.view = store.ReadView()
-						if !f.accept(b, completion) || len(f.device.written) != 1 || !bytes.Equal(f.device.written[0], packet) {
+						f.view = readView()
+						if !accept(completion) || len(f.device.written) != 1 || !bytes.Equal(f.device.written[0], packet) {
 							b.Fatal("inbound ESP delivery failed")
 						}
 						f.device.written = f.device.written[:0]

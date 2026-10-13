@@ -83,3 +83,21 @@ func TestPacketPolicyDeadlinePortEquality(t *testing.T) {
 		t.Fatalf("expired port left a stale transition: %s", got)
 	}
 }
+
+func TestPacketPolicyDeadlineMonotonicDelegationUsesLiveVerification(t *testing.T) {
+	for _, parentProof := range []bool{false, true} {
+		config, view, now, _ := gatewayPlanFixture(t)
+		expires := time.Now().Add(time.Hour)
+		if expires == expires.Round(0) {
+			t.Fatal("fixture requires a monotonic expiry")
+		}
+		if parentProof {
+			view.State.Network.Zones[config.Gateway.AllowedZones[0]].ParentProof = []*zone.Delegation{{ExpiresAt: &expires}}
+		} else {
+			view.State.Network.Zones[zone.RootZone].Delegations["catofes."].ExpiresAt = &expires
+		}
+		if got := packetPolicyDeadline(view, now); !got.Equal(now) {
+			t.Fatal("monotonic expiry gained a wall-clock reuse interval", parentProof, got)
+		}
+	}
+}

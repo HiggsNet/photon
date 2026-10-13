@@ -228,6 +228,24 @@ func (l *Leaf) Candidates(now time.Time, authorize func(sadr.Route) bool) []sadr
 	return out
 }
 
+// HasRoute keeps the live candidate pruning of Candidates and checks whether
+// an authorized route matches this packet. It avoids materializing and sorting
+// two result slices when the caller only needs a delivery verdict.
+func (l *Leaf) HasRoute(source, destination netip.Addr, now time.Time, authorize func(sadr.Route) bool) bool {
+	matched := false
+	for origin, learned := range l.routes {
+		candidate := l.candidate(learned.message, learned.expires, now)
+		if !now.Before(learned.expires) || authorize == nil || !authorize(candidate) {
+			delete(l.routes, origin)
+			continue
+		}
+		if candidate.Metric != MetricInfinity && !matched {
+			matched = sadr.HasRoute([]sadr.Route{candidate}, source, destination, now, authorize)
+		}
+	}
+	return matched
+}
+
 // NeighborLive reports current bidirectional reachability without requiring a
 // learned route. The caller still owns tunnel and origin authorization.
 func (l *Leaf) NeighborLive(now time.Time) bool {

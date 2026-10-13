@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/photonclient/babel"
-	"github.com/HiggsNet/photon/internal/photonclient/sadr"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
@@ -33,6 +32,7 @@ type gatewayBabelPipeline struct {
 	routerID    [8]byte
 	generation  uint64
 	verifier    *photoncrypto.Verifier // bounded signature math memo; serial owner only
+	policy      *packetPolicy          // one immutable daemon snapshot's exact epoch
 }
 
 func newGatewayBabelPipeline(tunnel *gatewayTunnel, device packetDevice, local, peer netip.Addr, id [8]byte, addresses []netip.Addr) (*gatewayBabelPipeline, error) {
@@ -150,8 +150,7 @@ func (p *gatewayBabelPipeline) authorize(facts *packetAuthorization, packet []by
 	if !local {
 		return false
 	}
-	candidates := p.leaf.Candidates(facts.now, facts.authorizeRoute)
-	return len(sadr.Lookup(candidates, src, dst, facts.now, facts.authorizeRoute)) != 0
+	return p.leaf.HasRoute(src, dst, facts.now, facts.authorizeRoute)
 }
 
 func (p *gatewayBabelPipeline) send(facts *packetAuthorization, messages []babel.Message) {
@@ -186,12 +185,16 @@ func (p *gatewayBabelPipeline) Tick(config *Config, view corestate.View, plan Ga
 	if !ok {
 		return
 	}
+	p.tickPrepared(facts)
+}
+
+func (p *gatewayBabelPipeline) tickPrepared(facts *packetAuthorization) {
 	messages, err := p.leaf.SetLocal(facts.localOrigins)
 	if err != nil {
 		p.leaf = nil
 		return
 	}
-	p.send(facts, append(messages, p.leaf.Tick(now)...))
+	p.send(facts, append(messages, p.leaf.Tick(facts.now)...))
 }
 
 func (p *gatewayBabelPipeline) SubmitPacket(config *Config, view corestate.View, plan GatewayPlan, now time.Time, packet []byte) bool {
