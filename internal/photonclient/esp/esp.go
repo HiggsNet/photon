@@ -56,6 +56,7 @@ func newSA(spi uint32, keySalt []byte) (securityAssociation, error) {
 type Sender struct {
 	mu       sync.Mutex
 	sa       securityAssociation
+	nonce    [12]byte // Per-call workspace protected by mu; filled before every AEAD call.
 	sequence uint32
 }
 
@@ -94,10 +95,9 @@ func (s *Sender) Seal(ipPacket []byte) ([]byte, error) {
 	binary.BigEndian.PutUint32(packet[:4], s.sa.spi)
 	binary.BigEndian.PutUint32(packet[4:8], s.sequence)
 	binary.BigEndian.PutUint64(packet[8:16], uint64(s.sequence))
-	var nonce [12]byte
-	copy(nonce[:4], s.sa.salt[:])
-	copy(nonce[4:], packet[8:16])
-	return s.sa.aead.Seal(packet[:16], nonce[:], plaintext, packet[:8]), nil
+	copy(s.nonce[:4], s.sa.salt[:])
+	copy(s.nonce[4:], packet[8:16])
+	return s.sa.aead.Seal(packet[:16], s.nonce[:], plaintext, packet[:8]), nil
 }
 
 // Receiver is safe for concurrent use and must not be copied. Its 64-packet
@@ -107,6 +107,7 @@ func (s *Sender) Seal(ipPacket []byte) ([]byte, error) {
 type Receiver struct {
 	mu      sync.Mutex
 	sa      securityAssociation
+	nonce   [12]byte // Per-call workspace protected by mu; filled before every AEAD call.
 	highest uint32
 	seen    uint64
 }
@@ -141,10 +142,9 @@ func (r *Receiver) Open(packet []byte) ([]byte, error) {
 			return nil, ErrReplay
 		}
 	}
-	var nonce [12]byte
-	copy(nonce[:4], r.sa.salt[:])
-	copy(nonce[4:], packet[8:16])
-	plaintext, err := r.sa.aead.Open(nil, nonce[:], packet[16:], packet[:8])
+	copy(r.nonce[:4], r.sa.salt[:])
+	copy(r.nonce[4:], packet[8:16])
+	plaintext, err := r.sa.aead.Open(nil, r.nonce[:], packet[16:], packet[:8])
 	if err != nil {
 		return nil, ErrAuthentication
 	}
