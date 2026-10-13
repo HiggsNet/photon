@@ -14,6 +14,22 @@ throughput_seconds=${PHOTON_WINDOWS_THROUGHPUT_SECONDS:-15}
 profile_mode=${PHOTON_WINDOWS_CPU_PROFILE:-0}
 packet_drop_diagnostic=${PHOTON_WINDOWS_PACKET_DROP_DIAGNOSTIC:-0}
 performance_bundle=${PHOTON_WINDOWS_PERFORMANCE_BUNDLE:-}
+service_gomaxprocs=${PHOTON_WINDOWS_SERVICE_GOMAXPROCS:-}
+service_affinity=${PHOTON_WINDOWS_SERVICE_AFFINITY:-}
+thread_cpu=${PHOTON_WINDOWS_THREAD_CPU:-0}
+performance_round=${PHOTON_WINDOWS_PERFORMANCE_ROUND:-1}
+performance_sweep=${PHOTON_WINDOWS_PERFORMANCE_SWEEP:-}
+[[ $thread_cpu == 0 || $thread_cpu == 1 ]] || exit 2
+[[ $performance_round =~ ^[1-3]$ ]] || exit 2
+[[ -z $service_gomaxprocs || $service_gomaxprocs =~ ^(1|2|4|8)$ ]] || exit 2
+[[ -z $service_affinity || $service_affinity =~ ^(1|2|4|8)$ ]] || exit 2
+if [[ $thread_cpu == 1 || -n $service_gomaxprocs || -n $service_affinity || -n $performance_sweep ]]; then
+    [[ $throughput_mode == 1 && $profile_mode == 1 && $thread_cpu == 1 && $packet_drop_diagnostic == 0 ]] || { echo 'Runtime sweep requires throughput/profile/thread sampling without drop diagnostic' >&2; exit 2; }
+    [[ $performance_sweep == gomaxprocs || $performance_sweep == affinity ]] || { echo 'Choose explicit gomaxprocs or affinity sweep' >&2; exit 2; }
+    [[ -n $service_gomaxprocs && -n $service_affinity ]] || { echo 'Runtime sweep fixes both service Go P and logical CPU affinity' >&2; exit 2; }
+    [[ $performance_sweep != gomaxprocs || $service_affinity == 8 ]] || exit 2
+    [[ $performance_sweep != affinity || $service_gomaxprocs == 8 ]] || exit 2
+fi
 [[ $profile_mode == 0 || $profile_mode == 1 ]] || exit 2
 [[ $packet_drop_diagnostic == 0 || $packet_drop_diagnostic == 1 ]] || exit 2
 [[ $packet_drop_diagnostic == 0 || ( $throughput_mode == 1 && $profile_mode == 1 ) ]] || { echo 'Packet-drop diagnostic requires throughput and CPU profile modes' >&2; exit 2; }
@@ -101,7 +117,7 @@ cleanup() {
     fi
     if [[ $remote_created == 1 ]]; then
         # Only public runtime diagnostics; config.json contains fixture keys.
-        for pattern in '*.log' '*-events.json' '*-diagnostics.json' '*-peers.json' '*-routes.json' '*-owned-network.json' 'crash-recovery.json' 'network-change.json' 'gossip-convergence.json' 'adapter-conflict.json' 'transport-outage.json' 'rekey-traffic*.json' 'baseline*.json' 'throughput*.json' 'profile-*.pprof' 'profile-*.packet-drops.json' 'profile-*.done' 'profile-*.error'; do
+        for pattern in '*.log' '*-events.json' '*-diagnostics.json' '*-peers.json' '*-routes.json' '*-owned-network.json' 'crash-recovery.json' 'network-change.json' 'gossip-convergence.json' 'adapter-conflict.json' 'transport-outage.json' 'rekey-traffic*.json' 'baseline*.json' 'throughput*.json' 'profile-*.pprof' 'profile-*.packet-drops.json' 'profile-*.done' 'profile-*.error' 'runtime-*.json' 'runtime-*.error'; do
             scp -q "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH:$remote/$pattern" "$work/" 2>/dev/null || true
         done
         if ! ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"Remove-Item -LiteralPath '$remote' -Recurse -Force -ErrorAction Stop\""; then result=1; fi
@@ -220,6 +236,14 @@ fi
 if [[ $packet_drop_diagnostic == 1 ]]; then
     printf 'f4-w1024-IPv4\n' > "$work/fixture-packet-drop-profile"
     scp -q "${ssh_args[@]}" "$work/fixture-packet-drop-profile" "$PHOTON_WINDOWS_SSH:$remote/"
+fi
+if [[ $thread_cpu == 1 ]]; then
+    printf '%s\n' "$service_gomaxprocs" > "$work/fixture-gomaxprocs"
+    printf '%s\n' "$service_affinity" > "$work/fixture-cpu-affinity"
+    printf '250ms\n' > "$work/fixture-thread-cpu"
+    printf '%s\n' "$performance_round" > "$work/fixture-performance-round"
+    printf '%s\n' "$performance_sweep" > "$work/fixture-performance-sweep"
+    scp -q "${ssh_args[@]}" "$work/fixture-gomaxprocs" "$work/fixture-cpu-affinity" "$work/fixture-thread-cpu" "$work/fixture-performance-round" "$work/fixture-performance-sweep" "$PHOTON_WINDOWS_SSH:$remote/"
 fi
 if [[ $rekey_mode == 1 ]]; then
     scp -q "${ssh_args[@]}" docs/scripts/windows-service-rekey-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"

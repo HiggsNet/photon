@@ -21,6 +21,83 @@ import (
 type options struct {
 	mode, local, remote, output, ready                                 string
 	port, flows, window, payload, seconds, deadlineMS, pid, maxPackets int
+	threadCPU                                                          bool
+}
+
+// Thread counters are cumulative for (process creation, TID, thread creation).
+// Missing/exited threads prevent reconstructing complete process CPU from them.
+type threadSample struct {
+	TID                                    uint32
+	StartToken                             string
+	UserSeconds, KernelSeconds, CPUSeconds float64
+	ObservedSeconds                        float64
+	FirstSeen                              bool
+	Exited                                 bool
+	Error                                  string `json:",omitempty"`
+	ErrorCode                              uint32 `json:",omitempty"`
+}
+
+type affinitySample struct {
+	ProcessMask, SystemMask             string   `json:",omitempty"`
+	CPUs                                []int    `json:",omitempty"`
+	ProcessGroupIDs                     []uint16 `json:",omitempty"`
+	ProcessGroupCount, SystemGroupCount int
+	CPUCountLowerBound                  int
+	CPUCountUpperBound                  int
+	Complete                            bool
+	Error                               string `json:",omitempty"`
+}
+
+type threadObservation struct {
+	Enumerated, Limit   int
+	EnumerationComplete bool
+	Errors              []string `json:",omitempty"`
+	Threads             []threadSample
+	Missing             []threadIdentity `json:",omitempty"`
+}
+
+type threadIdentity struct {
+	TID        uint32
+	StartToken string
+}
+
+type threadHistory struct {
+	seen     map[threadIdentity]bool
+	previous map[threadIdentity]bool
+}
+
+func (h *threadHistory) observe(sample *processSample) {
+	if sample.Threads == nil {
+		return
+	}
+	if h.seen == nil {
+		h.seen = make(map[threadIdentity]bool)
+	}
+	current := make(map[threadIdentity]bool)
+	for i := range sample.Threads.Threads {
+		t := &sample.Threads.Threads[i]
+		if t.Error != "" || t.StartToken == "" {
+			continue
+		}
+		identity := threadIdentity{t.TID, t.StartToken}
+		t.FirstSeen = !h.seen[identity]
+		h.seen[identity], current[identity] = true, true
+	}
+	for identity := range h.previous {
+		if !current[identity] {
+			sample.Threads.Missing = append(sample.Threads.Missing, identity)
+		}
+	}
+	// Missing means not observed with valid counters; it is not proof of exit.
+	h.previous = current
+}
+
+type processSample struct {
+	Seconds, CPUSeconds           float64
+	PrivateBytes, WorkingSetBytes uint64
+	StartToken                    uint64
+	Affinity                      *affinitySample    `json:",omitempty"`
+	Threads                       *threadObservation `json:",omitempty"`
 }
 
 type flowResult struct {
@@ -36,6 +113,9 @@ type result struct {
 	Mode, Local, Remote, OS, Architecture, GoVersion, StartedUTC, Unit, WindowSemantics                      string
 	Port, Flows, WindowPerFlow, PayloadBytes, SendSeconds, DeadlineMS                                        int
 	MaxPackets, LogicalCPUs                                                                                  int
+	GeneratorGOMAXPROCS, SampleIntervalMS                                                                    int
+	GeneratorAffinity                                                                                        affinitySample
+	ThreadCPUSampling                                                                                        bool
 	Seconds, GoodputMbps, DeadlineGoodputMbps, EchoLossPercent, DeadlineMissPercent, GeneratorCPUCorePercent float64
 	Totals                                                                                                   flowResult
 	FlowResults                                                                                              []flowResult
@@ -54,6 +134,9 @@ func (o options) validate() error {
 	}
 	if o.seconds < 1 || o.seconds > 900 {
 		return errors.New("seconds must be 1..900")
+	}
+	if o.threadCPU && (o.mode != "client" || o.pid <= 0) {
+		return errors.New("thread CPU sampling requires client mode and a service PID")
 	}
 	if o.mode == "client" && (net.ParseIP(o.remote) == nil || o.seconds > 30 || o.window < 1 || o.window > 16384 || o.payload < 40 || o.payload > 1400 || o.deadlineMS < 10 || o.deadlineMS > 3000 || o.maxPackets < o.flows || o.maxPackets > 16000000) {
 		return errors.New("client requires explicit remote IP, <=30 seconds, window 1..16384, payload 40..1400, deadline 10..3000 ms, bounded packet budget")
@@ -76,6 +159,7 @@ func main() {
 	flag.IntVar(&o.deadlineMS, "deadline-ms", 1000, "per-packet echo deadline")
 	flag.IntVar(&o.pid, "service-pid", 0, "Windows service PID to sample; 0 disables")
 	flag.IntVar(&o.maxPackets, "max-packets", 8000000, "bounded total sequence tracking budget")
+	flag.BoolVar(&o.threadCPU, "thread-cpu", false, "opt-in Windows service thread CPU/identity/affinity samples at 250 ms")
 	flag.Parse()
 	if err := o.validate(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -115,7 +199,11 @@ func writeExclusive(path string, data []byte) error {
 }
 
 func metadata(o options) result {
-	return result{SchemaVersion: 1, Mode: o.mode, Local: o.local, Remote: o.remote, OS: runtime.GOOS, Architecture: runtime.GOARCH, GoVersion: runtime.Version(), StartedUTC: time.Now().UTC().Format(time.RFC3339Nano), Unit: "unique fully validated UDP echo application payload Mbps per direction; two traversals per echo", WindowSemantics: "pending request credits; completed requests immediately release one credit independently of sequence positions", Port: o.port, Flows: o.flows, WindowPerFlow: o.window, PayloadBytes: o.payload, SendSeconds: o.seconds, DeadlineMS: o.deadlineMS, MaxPackets: o.maxPackets, LogicalCPUs: runtime.NumCPU()}
+	r := result{SchemaVersion: 1, Mode: o.mode, Local: o.local, Remote: o.remote, OS: runtime.GOOS, Architecture: runtime.GOARCH, GoVersion: runtime.Version(), StartedUTC: time.Now().UTC().Format(time.RFC3339Nano), Unit: "unique fully validated UDP echo application payload Mbps per direction; two traversals per echo", WindowSemantics: "pending request credits; completed requests immediately release one credit independently of sequence positions", Port: o.port, Flows: o.flows, WindowPerFlow: o.window, PayloadBytes: o.payload, SendSeconds: o.seconds, DeadlineMS: o.deadlineMS, MaxPackets: o.maxPackets, LogicalCPUs: runtime.NumCPU(), GeneratorGOMAXPROCS: runtime.GOMAXPROCS(0), GeneratorAffinity: currentAffinity(), ThreadCPUSampling: o.threadCPU}
+	if o.pid != 0 {
+		r.SampleIntervalMS = 250
+	}
+	return r
 }
 
 type reply struct {
@@ -402,11 +490,13 @@ func runClient(o options) (result, error) {
 	var sampleErr error
 	var sampleDone chan struct{}
 	var sampleStop chan struct{}
+	var history threadHistory
 	if o.pid != 0 {
-		first, err := sampleProcess(o.pid, start)
+		first, err := sampleProcessMode(o.pid, start, o.threadCPU)
 		if err != nil {
 			return r, err
 		}
+		history.observe(&first)
 		r.Samples = append(r.Samples, first)
 		sampleStop = make(chan struct{})
 		sampleDone = make(chan struct{})
@@ -419,7 +509,7 @@ func runClient(o options) (result, error) {
 				case <-sampleStop:
 					return
 				case <-ticker.C:
-					sample, err := sampleProcess(o.pid, start)
+					sample, err := sampleProcessMode(o.pid, start, o.threadCPU)
 					if err != nil {
 						sampleErr = err
 						return
@@ -428,6 +518,7 @@ func runClient(o options) (result, error) {
 						sampleErr = errors.New("service process identity changed")
 						return
 					}
+					history.observe(&sample)
 					r.Samples = append(r.Samples, sample)
 				}
 			}
@@ -444,13 +535,15 @@ func runClient(o options) (result, error) {
 	if sampleStop != nil {
 		close(sampleStop)
 		<-sampleDone
-		sample, err := sampleProcess(o.pid, start)
+		sample, err := sampleProcessMode(o.pid, start, o.threadCPU)
 		sampleErr = errors.Join(sampleErr, err)
 		if err == nil {
 			if sample.StartToken != r.Samples[0].StartToken {
 				sampleErr = errors.Join(sampleErr, errors.New("service process identity changed"))
+			} else {
+				history.observe(&sample)
+				r.Samples = append(r.Samples, sample)
 			}
-			r.Samples = append(r.Samples, sample)
 		}
 	}
 	r.Seconds = time.Since(start).Seconds()

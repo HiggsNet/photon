@@ -4,13 +4,9 @@ import (
 	"errors"
 	"syscall"
 	"time"
-)
 
-type processSample struct {
-	Seconds, CPUSeconds           float64
-	PrivateBytes, WorkingSetBytes uint64
-	StartToken                    uint64
-}
+	"golang.org/x/sys/unix"
+)
 
 func currentCPUSeconds() (float64, error) {
 	var usage syscall.Rusage
@@ -19,4 +15,23 @@ func currentCPUSeconds() (float64, error) {
 }
 func sampleProcess(pid int, start time.Time) (processSample, error) {
 	return processSample{}, errors.New("service sampling is Windows-only")
+}
+
+func sampleProcessMode(pid int, start time.Time, threads bool) (processSample, error) {
+	return sampleProcess(pid, start)
+}
+
+func currentAffinity() affinitySample {
+	var cpus unix.CPUSet
+	if err := unix.SchedGetaffinity(0, &cpus); err != nil {
+		return affinitySample{Error: err.Error()}
+	}
+	r := affinitySample{Complete: true, ProcessGroupCount: 1, SystemGroupCount: 1}
+	for cpu := 0; cpu < len(cpus)*64; cpu++ {
+		if cpus.IsSet(cpu) {
+			r.CPUs = append(r.CPUs, cpu)
+		}
+	}
+	r.CPUCountLowerBound, r.CPUCountUpperBound = len(r.CPUs), len(r.CPUs)
+	return r
 }
