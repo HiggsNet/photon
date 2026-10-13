@@ -53,3 +53,36 @@ go tool pprof -top -cum -nodecount=40 -ignore=runtime.cgocall <profile.pprof>
 同负载 after 结果在产品优化独立提交且安全回归通过后补测；本切片不修改产品算法，也不把开启 profiler 的吞吐与无 profiler 的历史最好值直接比较。
 
 优化前整轮 `baseline.json` 为 `Completed=true`，八个负载点均 `RecoveryPassed=true`；随后完整 SCM 正常重启、崩溃恢复、网络地址增删及外部 alias 冲突恢复均通过，入口 exit 0。原有清理流程移除了本次容器、服务、远端 fixture 目录及私密材料。首个测量点之外的基线仍未启用 profiler，可在同一组结果中观察采样开销，但不能据单轮差异精确量化该开销。
+
+## 第一轮优化后的同配置实测
+
+产品 revision `0ca5d703d66925fe6ed5c13ebe9d9085dd7bfb9d`，包含 event facts 复用及将 readiness 重算移出逐包路径。2026-10-09 固定该源码后编译，同一 VM、BIRD/StrongSwan、地址族、payload、窗口、预热、时长和首轮 profile 位置均保持一致。after executable SHA256：
+
+```text
+3e86c8febbe52ff1cb0dbfe116c94578ae023844993f173efabc288277215b5a
+```
+
+证据为 `build/validation/b6-profile-20261009/after/`，对应临时运行 `/tmp/photon-windows-full-daemon.asn9Iy`。下表 before 使用本页带相同 profile 入口的那轮结果，未混用历史无 profiler 的最好值。
+
+| 配置 | before 有效载荷 Mbps | after 有效载荷 Mbps | 期限内回包与恢复 |
+| --- | --- | --- | --- |
+| 窗口 8 / IPv4，三轮中位数 | 0.206 | 1.497 | 两组均无丢失/超期，提升约 7.26 倍 |
+| 窗口 8 / IPv6，三轮中位数 | 0.200 | 1.486 | 两组均无丢失/超期，提升约 7.42 倍 |
+| 窗口 64 / IPv4，单轮 | 0.100（全部迟到） | 1.585 | before 期限 goodput 0；after 无丢失/超期 |
+| 窗口 64 / IPv6，单轮 | 0.104（全部迟到） | 1.605 | before 期限 goodput 0；after 无丢失/超期 |
+
+after 的八个负载点均 `RecoveryPassed=true`，`Completed=true`。服务 CPU 仍为约 99–101% 单逻辑核；生成器最高 1.56%。这是固定在途窗口的闭环压力配置，处理加快后实际发送请求数增加，不能将其表述为固定请求速率下的 CPU 百分比对照。首个采样点吞吐为 0.194→1.477 Mbps，服务 CPU 100.30→101.20%，按每单位成功应用载荷计算的 CPU 时间明显下降。
+
+before/after 样本 private bytes 峰值为 57.13/57.60 MiB，working set 为 65.04/65.19 MiB；这一小幅变化不足以作内存改善或泄漏结论。after idle 前后服务 CPU 为 7.48%/6.55%。
+
+### 剩余热点
+
+after 同一采样点持续 15.15 秒，原始样本总计 29.35 秒；仍保留上述 Windows 等待栈限制。使用同样的 Go 栈筛选后，`Daemon.Run` 累计 14.13 秒，Ed25519 Verify 12.79 秒，`gatewayBabelPipeline.prepare` 10.43 秒、`currentAuthorizedRouteSet` 5.77 秒、`localTransportAuthorization` 3.04 秒。累计路径互相包含，不相加。
+
+这表明第一轮已减少每包重复工作、提高吞吐，但 event 准备阶段的签名验证仍是下一步有依据的检查方向。本结果只归属于 `0ca5d70`，后续签名结果缓存或其他改动必须另行安全回归、重新固定二进制并追加独立对照，不能覆盖本轮证据。
+
+### 验证与资源边界
+
+after 完整 SCM 基线及后续正常重启、强制结束后恢复、真实地址变更通知、外部 alias 冲突恢复以 exit 0 完成。随后冻结同 revision 的六包 Windows 原生 executable，结束性能采样后才执行；`photonwindows`（含新增 packet authorization/撤销/到期边界）、Windows CLI、IKE、ESP、Babel、SADR 全部通过。原生 bundle source/status、二进制 SHA256 与完整日志另存同一 after 目录，产品继续编辑不改变这些已固定产物。
+
+最后额外只读复核本轮服务、adapter、Event Log source、远端 fixture 目录及 Docker 容器均已移除，本地 fixture 私密材料不存在；独立原生测试目录也已清理。结果保留于 `after/cleanup.log`，VM 随后释放。

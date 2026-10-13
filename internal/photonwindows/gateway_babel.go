@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/photonclient/babel"
+	"github.com/HiggsNet/photon/internal/photonclient/sadr"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
@@ -70,8 +71,12 @@ func (p *gatewayBabelPipeline) current(config *Config, view corestate.View, plan
 }
 
 func (p *gatewayBabelPipeline) localOrigins(config *Config, view corestate.View, now time.Time) []babel.Origin {
+	return p.originsFromRoutes(config, authorizedGatewayRoutes(config, view, now))
+}
+
+func (p *gatewayBabelPipeline) originsFromRoutes(config *Config, routes []AuthorizedGatewayRoute) []babel.Origin {
 	var out []babel.Origin
-	for _, permission := range authorizedGatewayRoutes(config, view, now) {
+	for _, permission := range routes {
 		if permission.Origin != config.ManagedZone || permission.Prefix.Bits() != permission.Prefix.Addr().BitLen() {
 			continue
 		}
@@ -100,11 +105,11 @@ func (p *gatewayBabelPipeline) localAddress(address netip.Addr, origins []babel.
 // authorize is evaluated both before crypto and immediately before delivery.
 // Inbound business packets must have an authorized reverse route and terminate
 // at an exact local address. This never forwards traffic between remote hosts.
-func (p *gatewayBabelPipeline) authorize(config *Config, view corestate.View, plan GatewayPlan, now time.Time, packet []byte, outbound bool) bool {
-	if _, ok := p.current(config, view, plan, now); !ok {
+func (p *gatewayBabelPipeline) authorize(facts *packetAuthorization, packet []byte, outbound bool) bool {
+	if !p.preparedCurrent(facts) {
 		return false
 	}
-	origins := p.localOrigins(config, view, now)
+	origins := facts.localOrigins
 	endpoint, source := p.local, p.peer
 	if outbound {
 		endpoint, source = p.peer, p.local
@@ -136,11 +141,18 @@ func (p *gatewayBabelPipeline) authorize(config *Config, view corestate.View, pl
 	if !p.localAddress(src, origins) {
 		return false
 	}
-	candidates := p.leaf.Candidates(now, currentBabelRouteAuthorizer(config, view, now))
-	return len(p.tunnel.lookupBabelRoutes(config, view, plan, view.Revision, candidates, src, dst, now)) != 0
+	local := false
+	for _, host := range facts.hosts {
+		local = local || host.Addr() == src
+	}
+	if !local {
+		return false
+	}
+	candidates := p.leaf.Candidates(facts.now, facts.authorizeRoute)
+	return len(sadr.Lookup(candidates, src, dst, facts.now, facts.authorizeRoute)) != 0
 }
 
-func (p *gatewayBabelPipeline) send(config *Config, view corestate.View, plan GatewayPlan, now time.Time, messages []babel.Message) {
+func (p *gatewayBabelPipeline) send(facts *packetAuthorization, messages []babel.Message) {
 	// Encode self-contained batches, including router/next-hop context. A full
 	// origin set must fit the bounded crypto queue without starving its tail.
 	for len(messages) > 0 {
@@ -163,21 +175,21 @@ func (p *gatewayBabelPipeline) send(config *Config, view corestate.View, plan Ga
 		if err != nil {
 			continue
 		}
-		p.tunnel.data.submitOutbound(p.generation, plan, packet, func(packet []byte, outbound bool) bool { return p.authorize(config, view, plan, now, packet, outbound) })
+		p.tunnel.data.submitOutbound(p.generation, facts.plan, packet, func(packet []byte, outbound bool) bool { return p.authorize(facts, packet, outbound) })
 	}
 }
 
 func (p *gatewayBabelPipeline) Tick(config *Config, view corestate.View, plan GatewayPlan, now time.Time) {
-	current, ok := p.current(config, view, plan, now)
+	facts, ok := p.prepare(config, view, plan, now)
 	if !ok {
 		return
 	}
-	messages, err := p.leaf.SetLocal(p.localOrigins(config, view, now))
+	messages, err := p.leaf.SetLocal(facts.localOrigins)
 	if err != nil {
 		p.leaf = nil
 		return
 	}
-	p.send(config, view, current, now, append(messages, p.leaf.Tick(now)...))
+	p.send(facts, append(messages, p.leaf.Tick(now)...))
 }
 
 func (p *gatewayBabelPipeline) SubmitPacket(config *Config, view corestate.View, plan GatewayPlan, now time.Time, packet []byte) bool {
@@ -185,19 +197,26 @@ func (p *gatewayBabelPipeline) SubmitPacket(config *Config, view corestate.View,
 	if _, _, ok := businessEndpoints(packet); !ok {
 		return false
 	}
-	current, ok := p.current(config, view, plan, now)
+	facts, ok := p.prepare(config, view, plan, now)
 	if !ok {
 		return false
 	}
-	return p.tunnel.data.submitOutbound(p.generation, current, packet, func(packet []byte, outbound bool) bool { return p.authorize(config, view, plan, now, packet, outbound) })
+	return p.tunnel.data.submitOutbound(p.generation, facts.plan, packet, func(packet []byte, outbound bool) bool { return p.authorize(facts, packet, outbound) })
 }
 
 func (p *gatewayBabelPipeline) Accept(config *Config, view corestate.View, plan GatewayPlan, now time.Time, completion dataplaneCompletion) (bool, error) {
-	current, ok := p.current(config, view, plan, now)
+	facts, ok := p.prepare(config, view, plan, now)
 	if !ok {
 		return false, nil
 	}
-	packet, peer, outbound, ok := p.tunnel.data.accept(completion, current, func(packet []byte, outbound bool) bool { return p.authorize(config, view, plan, now, packet, outbound) })
+	return p.acceptPrepared(facts, completion)
+}
+
+func (p *gatewayBabelPipeline) acceptPrepared(facts *packetAuthorization, completion dataplaneCompletion) (bool, error) {
+	if !p.preparedCurrent(facts) {
+		return false, nil
+	}
+	packet, peer, outbound, ok := p.tunnel.data.accept(completion, facts.plan, func(packet []byte, outbound bool) bool { return p.authorize(facts, packet, outbound) })
 	if !ok {
 		return false, nil
 	}
@@ -205,16 +224,16 @@ func (p *gatewayBabelPipeline) Accept(config *Config, view corestate.View, plan 
 		return true, p.tunnel.socket.WriteTunnel(p.generation, packet, peer)
 	}
 	if from, _, err := babel.ParsePacket(packet, p.local); err == nil && from == p.peer {
-		updates, err := p.leaf.SetLocal(p.localOrigins(config, view, now))
+		updates, err := p.leaf.SetLocal(facts.localOrigins)
 		if err != nil {
 			p.leaf = nil
 			return false, err
 		}
-		messages, err := p.leaf.Receive(packet, now, currentBabelRouteAuthorizer(config, view, now))
+		messages, err := p.leaf.Receive(packet, facts.now, facts.authorizeRoute)
 		if err != nil {
 			return false, err
 		}
-		p.send(config, view, current, now, append(updates, messages...))
+		p.send(facts, append(updates, messages...))
 		return true, nil
 	}
 	return true, p.device.Write(packet)

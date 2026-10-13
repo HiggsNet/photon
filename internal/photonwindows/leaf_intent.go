@@ -111,7 +111,10 @@ func (source *State) EnsureLocalLeafRoutes(ctx context.Context, config *Config, 
 // announcement. The OS route merely directs a split aggregate to the device;
 // the userspace pipeline still checks each actual route on every packet.
 func leafDeviceIntent(config *Config, view corestate.View, now time.Time) (addresses, splitRoutes []netip.Prefix) {
-	set := currentAuthorizedRouteSet(config, view, now)
+	return leafDeviceIntentFromSet(config, currentAuthorizedRouteSet(config, view, now))
+}
+
+func leafDeviceIntentFromSet(config *Config, set *routing.AuthorizedRouteSet) (addresses, splitRoutes []netip.Prefix) {
 	for _, p := range leafAssignedHosts(config, set) {
 		if set.Announced[config.ManagedZone][p] != nil {
 			addresses = append(addresses, p)

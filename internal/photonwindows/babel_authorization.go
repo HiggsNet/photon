@@ -84,6 +84,10 @@ func currentBabelRouteAuthorizer(config *Config, view corestate.View, now time.T
 	if config != nil {
 		hosts, _ = leafDeviceIntent(config, view, now)
 	}
+	return babelRouteAuthorizer(origins, authorized, hosts)
+}
+
+func babelRouteAuthorizer(origins map[[8]byte]zone.ZonePath, authorized []AuthorizedGatewayRoute, hosts []netip.Prefix) func(sadr.Route) bool {
 	return func(route sadr.Route) bool {
 		if route.Source.IsValid() {
 			// A source prefix only narrows local-host use of an independently

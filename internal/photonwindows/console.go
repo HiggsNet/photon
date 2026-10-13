@@ -272,8 +272,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	}
 	backoff := initialBackoff
 	var nextTunnel time.Time
-	freshPlan := func() GatewayPlan {
-		view, now := state.Store().ReadView(), time.Now()
+	freshPlanFrom := func(view corestate.View, now time.Time) GatewayPlan {
 		if view.State == nil || photoncrypto.VerifyChain(view.State.Network, config.ManagedZone, now) != nil {
 			return GatewayPlan{Rejected: "local authority is absent or expired"}
 		}
@@ -285,6 +284,9 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			return revalidateActiveGateway(config, view, lastPlan, now)
 		}
 		return RevalidateGatewayPlan(config, view, lastPlan, now)
+	}
+	freshPlan := func() GatewayPlan {
+		return freshPlanFrom(state.Store().ReadView(), time.Now())
 	}
 	observeReady := func() {
 		ready := leaf.ready(config, state.Store().ReadView(), lastPlan, time.Now())
@@ -443,10 +445,21 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		case packet := <-packet.espPackets:
 			data.submitInbound(packet.generation, freshPlan(), packet.peer, packet.packet)
 		case completion := <-data.completed:
-			plan := freshPlan()
-			tunnel.observeData(completion, plan, time.Now())
+			view, now := state.Store().ReadView(), time.Now()
+			var facts *packetAuthorization
 			if leaf.pipeline != nil {
-				if _, err := leaf.pipeline.Accept(config, state.Store().ReadView(), lastPlan, time.Now(), completion); err != nil {
+				facts, _ = leaf.pipeline.prepare(config, view, lastPlan, now)
+			}
+			var plan GatewayPlan
+			if facts != nil {
+				plan = facts.plan
+			} else {
+				// Transport cutover remains independent of Babel/device readiness.
+				plan = freshPlanFrom(view, now)
+			}
+			tunnel.observeData(completion, plan, now)
+			if facts != nil {
+				if _, err := leaf.pipeline.acceptPrepared(facts, completion); err != nil {
 					logger.Warn("leaf_packet_failed", "error", errors.Join(err, leaf.stop()))
 				}
 			} else {

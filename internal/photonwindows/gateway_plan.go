@@ -45,6 +45,14 @@ type GatewayPlan struct {
 }
 
 func planGateway(ctx context.Context, config *Config, view corestate.View, now time.Time, resolver ipsec.DNSResolver) GatewayPlan {
+	plan := planGatewaySelection(ctx, config, view, now, resolver)
+	if plan.Selected != nil {
+		plan.Routes = authorizedGatewayRoutes(config, view, now)
+	}
+	return plan
+}
+
+func planGatewaySelection(ctx context.Context, config *Config, view corestate.View, now time.Time, resolver ipsec.DNSResolver) GatewayPlan {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	plan := GatewayPlan{Revision: view.Revision, EvaluatedAt: now}
@@ -64,7 +72,6 @@ func planGateway(ctx context.Context, config *Config, view corestate.View, now t
 		plan.Rejected = "no authorized gateway contact"
 		return plan
 	}
-	plan.Routes = authorizedGatewayRoutes(config, view, now)
 	return plan
 }
 
@@ -84,13 +91,29 @@ func RevalidateGatewayPlan(config *Config, view corestate.View, plan GatewayPlan
 // with the authenticated SA's pinned identity and endpoint. Packet processing
 // must never replace the original planner timestamp with this result's time.
 func revalidateActiveGateway(config *Config, view corestate.View, plan GatewayPlan, now time.Time) GatewayPlan {
+	current := revalidateActiveGatewaySelection(config, view, plan, now)
+	if current.Selected != nil {
+		current.Routes = authorizedGatewayRoutes(config, view, now)
+	}
+	return current
+}
+
+func revalidateActiveGatewaySelection(config *Config, view corestate.View, plan GatewayPlan, now time.Time) GatewayPlan {
 	if plan.Selected == nil || plan.Rejected != "" || now.Before(plan.EvaluatedAt) || now.Sub(plan.EvaluatedAt) > 10*time.Second {
 		return GatewayPlan{Rejected: "active gateway DNS hint expired"}
 	}
-	return revalidateResolvedGateway(config, view, plan, now)
+	return revalidateResolvedGatewaySelection(config, view, plan, now)
 }
 
 func revalidateResolvedGateway(config *Config, view corestate.View, plan GatewayPlan, now time.Time) GatewayPlan {
+	current := revalidateResolvedGatewaySelection(config, view, plan, now)
+	if current.Selected != nil {
+		current.Routes = authorizedGatewayRoutes(config, view, now)
+	}
+	return current
+}
+
+func revalidateResolvedGatewaySelection(config *Config, view corestate.View, plan GatewayPlan, now time.Time) GatewayPlan {
 	resolved := gatewayResolvedHosts{}
 	seen := make(map[string]map[netip.Addr]bool)
 	for _, candidate := range plan.Candidates {
@@ -110,7 +133,7 @@ func revalidateResolvedGateway(config *Config, view corestate.View, plan Gateway
 			resolved[contact.Host] = append(resolved[contact.Host], net.IPAddr{IP: net.IP(address.AsSlice())})
 		}
 	}
-	return planGateway(context.Background(), config, view, now, resolved)
+	return planGatewaySelection(context.Background(), config, view, now, resolved)
 }
 
 type gatewayResolvedHosts map[string][]net.IPAddr
@@ -123,7 +146,10 @@ func (hosts gatewayResolvedHosts) LookupIPAddr(_ context.Context, host string) (
 }
 
 func authorizedGatewayRoutes(config *Config, view corestate.View, now time.Time) []AuthorizedGatewayRoute {
-	set := currentAuthorizedRouteSet(config, view, now)
+	return authorizedGatewayRoutesFromSet(config, currentAuthorizedRouteSet(config, view, now))
+}
+
+func authorizedGatewayRoutesFromSet(config *Config, set *routing.AuthorizedRouteSet) []AuthorizedGatewayRoute {
 	if set == nil {
 		return nil
 	}
