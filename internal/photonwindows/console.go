@@ -484,7 +484,10 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			}
 			observeReady()
 		case packet := <-packet.espPackets:
-			if completion, ok := data.processInbound(packet.generation, freshPlan(), packet.peer, packet.packet); ok {
+			// Demux transferred a detached packet; this owner consumes it once.
+			// Plaintext aliases this buffer through synchronous completion;
+			// keep it untouched until delivery or rejection has finished.
+			if completion, ok := data.processOwnedInbound(packet.generation, freshPlan(), packet.peer, packet.packet); ok {
 				completePacket(completion)
 			}
 		case job := <-data.jobs:

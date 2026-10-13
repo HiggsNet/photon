@@ -31,6 +31,7 @@ type gatewayDataplane struct {
 	cancelGeneration context.CancelFunc
 	sas              map[uint32]*dataplaneSA
 	active           *dataplaneSA
+	outboundScratch  []byte // Only the serial owned-business turn may borrow it.
 }
 
 type dataplaneSA struct {
@@ -93,6 +94,7 @@ func (d *gatewayDataplane) reset(generation uint64) {
 	d.generationCtx, d.cancelGeneration = context.WithCancel(d.ctx)
 	d.sas = make(map[uint32]*dataplaneSA)
 	d.active = nil
+	d.outboundScratch = nil
 }
 
 // install consumes fresh authenticated CHILD material exactly once. The owner
@@ -209,6 +211,26 @@ func (d *gatewayDataplane) processInbound(generation uint64, plan GatewayPlan, e
 	return result, true
 }
 
+// processOwnedInbound consumes one detached, exclusively owned UDP-demux
+// packet in the serial daemon turn. A successful inner packet aliases that
+// storage. On every error the result exposes no packet, and the input remains
+// consumed: the caller must not retry it, clear it, or return it to a pool.
+// Ordinary borrowed and asynchronous inputs retain processInbound/Open's
+// detached-output contract. No completion retains the ciphertext as job input.
+func (d *gatewayDataplane) processOwnedInbound(generation uint64, plan GatewayPlan, endpoint netip.AddrPort, packet []byte) (dataplaneCompletion, bool) {
+	sa := d.inboundSA(generation, plan, endpoint, packet)
+	if sa == nil || d.ctx.Err() != nil {
+		return dataplaneCompletion{}, false
+	}
+	result := dataplaneCompletion{job: dataplaneJob{ctx: d.generationCtx, generation: d.generation, sa: sa}}
+	if err := result.job.ctx.Err(); err != nil {
+		result.err = err
+		return result, true
+	}
+	result.packet, result.err = sa.receiver.OpenOwned(packet)
+	return result, true
+}
+
 func (d *gatewayDataplane) processOutbound(generation uint64, plan GatewayPlan, packet []byte, authorize func([]byte, bool) bool) (dataplaneCompletion, bool) {
 	return d.process(d.outboundSA(generation, plan, packet, authorize), packet, true)
 }
@@ -216,15 +238,27 @@ func (d *gatewayDataplane) processOutbound(generation uint64, plan GatewayPlan, 
 // processOwnedOutbound is only for an exclusively owned leaf packet in the
 // serial daemon turn. Its completion owns that plaintext through the fresh
 // delivery gate: the caller must not reuse or mutate it until completePacket
-// finishes, or retain the completion beyond that turn. It never enters either
-// asynchronous queue. Other callers keep processOutbound's detached input.
+// finishes. The ESP output borrows this owner's single bounded workspace until
+// synchronous delivery or drop completes; the next owned outbound call may
+// overwrite it. Do not retain the completion beyond that turn or reenter this
+// method during authorization/delivery. It never enters either asynchronous
+// queue; queued control and other callers retain independent Seal outputs.
 func (d *gatewayDataplane) processOwnedOutbound(generation uint64, plan GatewayPlan, packet []byte, authorize func([]byte, bool) bool) (dataplaneCompletion, bool) {
 	sa := d.outboundSA(generation, plan, packet, authorize)
 	if sa == nil || d.ctx.Err() != nil {
 		return dataplaneCompletion{}, false
 	}
 	job := dataplaneJob{ctx: d.generationCtx, generation: d.generation, sa: sa, packet: packet, outbound: true}
-	return executeDataplaneJob(job), true
+	result := dataplaneCompletion{job: job}
+	if err := job.ctx.Err(); err != nil {
+		result.err = err
+		return result, true
+	}
+	if d.outboundScratch == nil {
+		d.outboundScratch = make([]byte, esp.MaxPacket)
+	}
+	result.packet, result.err = sa.sender.SealInto(d.outboundScratch[:0], packet)
+	return result, true
 }
 
 func (d *gatewayDataplane) process(sa *dataplaneSA, packet []byte, outbound bool) (dataplaneCompletion, bool) {

@@ -33,8 +33,8 @@ func TestDataplaneOwnedOutboundTransfersPlaintextThroughDelivery(t *testing.T) {
 	if !accepted || !outbound || !checked {
 		t.Fatal("current delivery did not examine the transferred plaintext")
 	}
-	// Ownership lasts through that gate. Reusing the input afterwards cannot
-	// alter the independently owned ciphertext handed to the socket.
+	// The ESP workspace is independent of this plaintext, but borrowed only
+	// through synchronous delivery. Do not retain it for a later owned turn.
 	clear(packet)
 	receiver, err := esp.NewReceiver(child.ResponderSPI, child.Keys.InitiatorToResponder)
 	if err != nil {
