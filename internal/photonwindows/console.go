@@ -272,6 +272,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	}
 	backoff := initialBackoff
 	var nextTunnel time.Time
+	var packetView packetStateView
 	freshPlanFrom := func(view corestate.View, now time.Time) GatewayPlan {
 		// The pipeline and this transport gate have the same serial owner.
 		// Reuse only signature math; every input and lifetime is checked anew.
@@ -296,7 +297,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		return RevalidateGatewayPlan(config, view, lastPlan, now)
 	}
 	freshPlan := func() GatewayPlan {
-		return freshPlanFrom(state.Store().ReadView(), time.Now())
+		return freshPlanFrom(packetView.read(state.Store()), time.Now())
 	}
 	observeReady := func() {
 		ready := leaf.ready(config, state.Store().ReadView(), lastPlan, time.Now())
@@ -455,7 +456,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		case packet := <-packet.espPackets:
 			data.submitInbound(packet.generation, freshPlan(), packet.peer, packet.packet)
 		case completion := <-data.completed:
-			view, now := state.Store().ReadView(), time.Now()
+			view, now := packetView.read(state.Store()), time.Now()
 			var facts *packetAuthorization
 			if leaf.pipeline != nil {
 				facts, _ = leaf.pipeline.prepare(config, view, lastPlan, now)
@@ -492,7 +493,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				continue
 			}
 			if leaf.pipeline != nil && devicePacket.generation == tunnel.generation {
-				leaf.pipeline.SubmitPacket(config, state.Store().ReadView(), lastPlan, time.Now(), devicePacket.packet)
+				leaf.pipeline.SubmitPacket(config, packetView.read(state.Store()), lastPlan, time.Now(), devicePacket.packet)
 			}
 		case <-tunnelTicker.C:
 			if err := tunnel.tick(freshPlan(), time.Now()); err != nil {
@@ -503,7 +504,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				return err
 			}
 			if leaf.pipeline != nil {
-				leaf.pipeline.Tick(config, state.Store().ReadView(), lastPlan, time.Now())
+				leaf.pipeline.Tick(config, packetView.read(state.Store()), lastPlan, time.Now())
 			}
 			observeReady()
 		case result := <-plans:
