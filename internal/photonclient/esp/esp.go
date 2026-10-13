@@ -81,21 +81,23 @@ func (s *Sender) Seal(ipPacket []byte) ([]byte, error) {
 	}
 	s.sequence++
 	padding := (4 - (len(ipPacket)+2)%4) % 4
-	plaintext := make([]byte, len(ipPacket)+padding+2)
+	// Reserve header, plaintext and tag once. GCM permits exact input/output
+	// overlap, so encrypt in place after the independent caller-data copy.
+	packet := make([]byte, 16+len(ipPacket)+padding+2, 16+len(ipPacket)+padding+2+16)
+	plaintext := packet[16:]
 	copy(plaintext, ipPacket)
 	for i := 0; i < padding; i++ {
 		plaintext[len(ipPacket)+i] = byte(i + 1)
 	}
 	plaintext[len(plaintext)-2] = byte(padding)
 	plaintext[len(plaintext)-1] = next
-	packet := make([]byte, 16, 16+len(plaintext)+16)
 	binary.BigEndian.PutUint32(packet[:4], s.sa.spi)
 	binary.BigEndian.PutUint32(packet[4:8], s.sequence)
 	binary.BigEndian.PutUint64(packet[8:16], uint64(s.sequence))
 	var nonce [12]byte
 	copy(nonce[:4], s.sa.salt[:])
 	copy(nonce[4:], packet[8:16])
-	return s.sa.aead.Seal(packet, nonce[:], plaintext, packet[:8]), nil
+	return s.sa.aead.Seal(packet[:16], nonce[:], plaintext, packet[:8]), nil
 }
 
 // Receiver is safe for concurrent use and must not be copied. Its 64-packet
