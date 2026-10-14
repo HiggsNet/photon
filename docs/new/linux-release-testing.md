@@ -1,14 +1,14 @@
 # Linux 重构版测试
 
 本轮旧版固定为 `v0.5.6`（master 提交 `28472ea74615`），新版为
-`v0.6.0-rc.6`（修复 gossip 目录更新竞态与拒绝记录展示）。新版只供测试，Windows 完整隧道尚未交付。
+`v0.6.0-rc.7`（Gossip 窄读取与 verified 按 zone 持久化）。新版只供测试，Windows 完整隧道尚未交付。
 master 保留旧版；候选版从独立 release 分支发布，不更新 Docker `latest`。
 
-## rc.6 之后的本地性能研究（未发布）
+## rc.7：Gossip 窄读取与 CPU 基准
 
 2026-10-13 在 `/tmp/rc6` 的 `perf/rc6-gossip-projections` 分支收窄 Gossip
-读取。对照源码固定为已发布 rc.6 的 `f7d99cf7fdda`；下表比较原 rc.6 与本地
-修改，不是与 v0.5.6 的整机性能对照，也不代表线上 CPU 已下降。
+读取。对照源码固定为已发布 rc.6 的 `f7d99cf7fdda`；下表比较原 rc.6 与 rc.7 的 CPU
+改动，不是与 v0.5.6 的整机性能对照，也不代表线上 CPU 已下降。
 
 - 入站 observed checkpoint 与路径恢复只读取该 peer、当前记录和祖先授权链。
   每次使用仍执行签名、授权、撤销及时间检查；检查点持久化完成后才发布地址。
@@ -17,7 +17,7 @@ master 保留旧版；候选版从独立 release 分支发布，不更新 Docker
 - TCP zone/record 只复制所请求对象；UDP zone 回应只读取目标快照和 parent proof。
   返回值保持可独立修改，历史 record 的版本选择顺序和 zone 撤销策略保留。
 - `BuildObjectPullResponse` 的 Go 读取依赖改为 `ObjectPullSource`，请求类型处理仍
-  由 Gossip 协议层统一负责。wire、数据库 schema 和检查点提交语义保持不变。
+  由 Gossip 协议层统一负责。该 CPU 改动不改变 wire、数据库 schema 和检查点提交语义；rc.7 的存储改动见下一节。
 
 使用同一个 `BenchmarkGossipReadPaths`，28 个 zone（26 个 leaf），每 leaf
 10 条当前记录、每 key 8 份 history。入站 peer 使用真实签名授权链及 endpoint。
@@ -25,7 +25,7 @@ master 保留旧版；候选版从独立 release 分支发布，不更新 Docker
 并在计时前检查目标对象及 observed 地址实际产生。两版在同一 Ryzen 5700G 主机
 依次运行，`-cpu=1 -benchtime=1s -count=3`，下表取三次中位数：
 
-| 操作 | 原 rc.6 耗时 | 本地修改耗时 | 原 rc.6 分配 | 本地修改分配 |
+| 操作 | 原 rc.6 耗时 | CPU 优化耗时 | 原 rc.6 分配 | CPU 优化分配 |
 | --- | ---: | ---: | ---: | ---: |
 | 全局 discovery 输入 | 678.122 us | 128.702 us | 1,486,344 B | 184,960 B |
 | 入站来源校验、checkpoint 与地址恢复 | 1,615.246 us | 219.885 us | 2,981,440 B | 33,024 B |
@@ -50,9 +50,9 @@ socket 的环境中执行。基准输出和检查日志保存在本地
 
 这些是合成内存基准。下一阶段需在相同主机、配置和流量下采集实际 daemon
 CPU/alloc profile、写盘延迟和队列样本，才能判断 GC 与线上整体 CPU 的收益。
-本轮未发布或部署研究分支。
+rc.7 包含上述 CPU 改动；实际部署结果需单独确认。
 
-## CPU 优化之后的本地存储研究（未发布）
+## rc.7：按 zone 存储与 schema 2 升级
 
 2026-10-14 在 CPU 优化提交 `bab28786eb3d` 基础上建立
 `perf/rc6-storage` 分支。Common schema 从 1 升到 2：身份、全局 root 和 zone
@@ -93,7 +93,7 @@ NoSync 仅用于基准排除 fsync 等待；`db-page-B/op` 是分配的脏数据
 Linux 启动及二次启动、zone 删除和未变化数据保留、写入后失败的事务回滚，以及
 新格式损坏时拒绝加载。基准、落盘实验及验证日志保存在
 `/home/herbertqiao/Work/photon/build/validation/rc6-storage-20261014/`。
-本轮没有发布或部署；线上总写入量和 CPU 的收益仍需同机、同负载采样确认。
+rc.7 包含上述存储改动；线上总写入量和 CPU 的收益仍需同机、同负载采样确认。
 
 ## rc.6 相对 rc.5 的变化：目录刷新与拒绝记录
 
@@ -189,7 +189,7 @@ NixOS、容器或自定义 unit 应沿用原部署方式，显式固定版本。
 
 ```sh
 curl -fL --retry 3 -o /tmp/photon-install-rc.sh \
-  https://raw.githubusercontent.com/HiggsNet/photon/v0.6.0-rc.6/contrib/install.sh
+  https://raw.githubusercontent.com/HiggsNet/photon/v0.6.0-rc.7/contrib/install.sh
 ```
 
 先在测试机安装旧版，完成入网并确认双向通信，作为基线：
@@ -208,10 +208,10 @@ photon version
 
 ```sh
 sudo systemctl stop photon
-sudo install -d -m 0700 /var/backups/photon-before-rc6
-sudo cp -a /etc/photon /var/backups/photon-before-rc6/etc-photon
-sudo cp -a /usr/local/bin/photon /usr/local/bin/photon-services /var/backups/photon-before-rc6/
-sudo sh /tmp/photon-install-rc.sh --version v0.6.0-rc.6 --no-service
+sudo install -d -m 0700 /var/backups/photon-before-rc7
+sudo cp -a /etc/photon /var/backups/photon-before-rc7/etc-photon
+sudo cp -a /usr/local/bin/photon /usr/local/bin/photon-services /var/backups/photon-before-rc7/
+sudo sh /tmp/photon-install-rc.sh --version v0.6.0-rc.7 --no-service
 sudo systemctl start photon
 photon version
 sudo systemctl status photon --no-pager
@@ -250,14 +250,14 @@ sudo systemctl status photon --no-pager
 
 ```sh
 sudo systemctl stop photon
-sudo mv /etc/photon /etc/photon-rc6-saved
-sudo cp -a /var/backups/photon-before-rc6/etc-photon /etc/photon
-sudo cp -a /var/backups/photon-before-rc6/photon /var/backups/photon-before-rc6/photon-services /usr/local/bin/
+sudo mv /etc/photon /etc/photon-rc7-saved
+sudo cp -a /var/backups/photon-before-rc7/etc-photon /etc/photon
+sudo cp -a /var/backups/photon-before-rc7/photon /var/backups/photon-before-rc7/photon-services /usr/local/bin/
 sudo systemctl start photon
 photon version
 ```
 
-`/etc/photon-rc6-saved` 必须尚不存在，保留新版数据供诊断。回退后再次确认真实通信，
+`/etc/photon-rc7-saved` 必须尚不存在，保留新版数据供诊断。回退后再次确认真实通信，
 必要时重启测试机清理运行中的网络状态，不只检查程序版本。
 
 ## 发布者检查
@@ -265,4 +265,4 @@ photon version
 发布前执行 `make check`、`make smoke-all`、`make install-script-check`；
 记录特权数据面测试、真实升级和长时间测试是否实际执行，不以基础检查替代它们。
 GitHub Actions 必须提供两种 Linux 架构的归档和校验文件，Release 标记为
-Pre-release，RC.6 Docker 镜像使用显式 `v0.6.0-rc.6` 标签，正式 `latest` 保持不变。
+Pre-release，RC.7 Docker 镜像使用显式 `v0.6.0-rc.7` 标签，正式 `latest` 保持不变。
