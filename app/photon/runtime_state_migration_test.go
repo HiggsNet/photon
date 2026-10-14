@@ -374,25 +374,17 @@ func TestPartitionedRootRepairPersistsOnce(t *testing.T) {
 			return err
 		}
 		before = revision
-		bucket := tx.Bucket([]byte("photon:common-state")).Bucket([]byte("verified"))
-		var payload map[string]json.RawMessage
-		if err := json.Unmarshal(bucket.Get([]byte("payload")), &payload); err != nil {
+		bucket := tx.Bucket([]byte("photon:common-state")).Bucket([]byte("verified")).Bucket([]byte("zones"))
+		var root zone.ZoneState
+		if err := json.Unmarshal(bucket.Get([]byte(zone.RootZone)), &root); err != nil {
 			return err
 		}
-		var network zone.NetworkState
-		if err := json.Unmarshal(payload["network"], &network); err != nil {
-			return err
-		}
-		network.Zones[zone.RootZone].Authority.Keys[0].Capabilities = []zone.Capability{{Permissions: []zone.Permission{zone.PermWrite}}}
-		payload["network"], err = json.Marshal(&network)
+		root.Authority.Keys[0].Capabilities = []zone.Capability{{Permissions: []zone.Permission{zone.PermWrite}}}
+		data, err := json.Marshal(&root)
 		if err != nil {
 			return err
 		}
-		data, err := json.Marshal(payload)
-		if err != nil {
-			return err
-		}
-		return bucket.Put([]byte("payload"), data)
+		return bucket.Put([]byte(zone.RootZone), data)
 	}); err != nil {
 		t.Fatal(err)
 	}
