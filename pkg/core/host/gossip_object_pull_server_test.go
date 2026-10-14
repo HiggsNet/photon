@@ -135,6 +135,11 @@ func (store *blockingObjectPullStore) ReadView() corestate.View {
 	return store.memoryGossipStateStore.ReadView()
 }
 
+func (store *blockingObjectPullStore) ReadZoneSnapshot(path zone.ZonePath, now time.Time) (*corestate.ZoneSnapshot, bool, error) {
+	view := store.ReadView()
+	return corestate.NewStore(view.State, nil, nil).ReadZoneSnapshot(path, now)
+}
+
 func (store *blockingObjectPullStore) PeerCheckpoints(ids []string) map[string]corestate.PeerCheckpoint {
 	view := store.ReadView()
 	out := make(map[string]corestate.PeerCheckpoint)

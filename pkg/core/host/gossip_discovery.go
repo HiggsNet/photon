@@ -52,6 +52,10 @@ type GossipDiscoveryConfig struct {
 // overlay: it represents peers temporarily excluded by platform lifecycle
 // policy and is never persisted as gossip protocol state.
 func (driver *GossipDriver) GossipDiscoveryInput(suppressed map[string]bool) GossipDiscoveryInput {
+	return driver.gossipDiscoveryInput("", suppressed)
+}
+
+func (driver *GossipDriver) gossipDiscoveryInput(peerID string, suppressed map[string]bool) GossipDiscoveryInput {
 	input := GossipDiscoveryInput{Suppressed: cloneSuppressedPeers(suppressed)}
 	if driver == nil {
 		return input
@@ -65,13 +69,10 @@ func (driver *GossipDriver) GossipDiscoveryInput(suppressed map[string]bool) Gos
 	if driver.gossipState == nil {
 		return input
 	}
-	view := driver.gossipState.ReadView()
-	if view.State != nil {
-		input.ManagedZone = view.State.ManagedZone
-		input.Network = view.State.Network
-	}
-	if view.Gossip != nil {
-		input.Peers = view.Gossip.Peers
+	if view := driver.gossipState.ReadDiscovery(peerID); view != nil {
+		input.ManagedZone = view.ManagedZone
+		input.Network = view.Network
+		input.Peers = view.Peers
 	}
 	return input
 }
@@ -319,7 +320,7 @@ func (driver *GossipDriver) restoreGossipObservedPath(peerID string, suppressed 
 	if transport == nil || peerID == "" {
 		return nil
 	}
-	input := driver.GossipDiscoveryInput(suppressed)
+	input := driver.gossipDiscoveryInput(peerID, suppressed)
 	paths, prefer, ok := discoveryObservedPaths(input, peerID, input.Peers[peerID], now)
 	if !ok {
 		transport.RemoveObservedPeerAddr(peerID)

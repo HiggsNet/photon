@@ -194,7 +194,7 @@ func TestSyncSessionCatalogPageStartsObjectPull(t *testing.T) {
 	}
 }
 
-func TestSyncSessionCatalogPageRejectsRootMismatch(t *testing.T) {
+func TestSyncSessionCatalogPageRefreshesOnceOnRootMismatch(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
 	local := []corestate.ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}}
@@ -217,6 +217,18 @@ func TestSyncSessionCatalogPageRejectsRootMismatch(t *testing.T) {
 	}, now.Add(20*time.Millisecond))
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
+	}
+	if s.State != SyncSessionCatalogDiffing {
+		t.Fatalf("expected catalog refresh, got %s", s.State)
+	}
+	assertActionTypes(t, actions, []string{"SendFetchCatalogPageAction", "StartTimerAction"})
+	_, err = s.OnEvent(&CatalogPageReceivedEvent{PeerID: "peer-a", Page: &corestate.CatalogPage{CatalogRoot: root, Entries: remote, NextCursor: "1"}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actions, err = s.OnEvent(&CatalogPageReceivedEvent{PeerID: "peer-a", Page: &corestate.CatalogPage{CatalogRoot: []byte("wrong-again")}}, now)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if s.State != SyncSessionFailed {
 		t.Fatalf("expected state failed, got %s", s.State)

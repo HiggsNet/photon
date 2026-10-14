@@ -85,6 +85,24 @@ func loadedGossipState(paths ...zone.ZonePath) corestate.View {
 	return corestate.View{State: &corestate.VerifiedState{Network: network}}
 }
 
+func (reader *memoryGossipStateStore) ReadDiscovery(peerID string) *corestate.DiscoveryView {
+	view := reader.ReadView()
+	if view.State == nil {
+		return nil
+	}
+	return corestate.NewStoreWithCheckpoint(view.State, view.Gossip, nil, nil).ReadDiscovery(peerID)
+}
+
+func (reader *memoryGossipStateStore) ReadZoneSnapshot(path zone.ZonePath, now time.Time) (*corestate.ZoneSnapshot, bool, error) {
+	view := reader.ReadView()
+	return corestate.NewStore(view.State, nil, nil).ReadZoneSnapshot(path, now)
+}
+
+func (reader *memoryGossipStateStore) ReadRecordSnapshot(path zone.ZonePath, key string, version uint64) (*corestate.RecordSnapshot, error) {
+	view := reader.ReadView()
+	return corestate.NewStore(view.State, nil, nil).ReadRecordSnapshot(path, key, version)
+}
+
 func loadedManagedGossipState(managed zone.ZonePath, paths ...zone.ZonePath) corestate.View {
 	view := loadedGossipState(paths...)
 	view.State.ManagedZone = managed
@@ -211,12 +229,12 @@ func TestGossipDriverApplySnapshotsOwnsStoreTransactionAndCompletion(t *testing.
 	defer driver.Stop()
 	result := driver.ExecuteGossipActions(context.Background(), &gossip.SyncSession{PeerID: "peer-a"}, []gossip.SyncAction{
 		gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "local.catofes."}},
-		gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "remote.catofes."}, RelaxedLimits: true, ReportResult: true},
+		gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "remote.catofes."}, RelaxedLimits: true, ReportResult: true, RefreshOnRootMismatch: true},
 	}, controller)
 	if result.Aborted || !result.NetworkChanged {
 		t.Fatalf("result = %#v", result)
 	}
-	if len(state.batch) != 1 || state.batch[0].Snapshot.Zone != "remote.catofes." || state.batch[0].Limits.MaxBytes != 8<<20 || !state.appliedAt.Equal(now) {
+	if len(state.batch) != 1 || state.batch[0].Snapshot.Zone != "remote.catofes." || state.batch[0].Limits.MaxBytes != 8<<20 || !state.batch[0].RefreshOnRootMismatch || !state.appliedAt.Equal(now) {
 		t.Fatalf("batch/time = %#v/%v", state.batch, state.appliedAt)
 	}
 	event, ok := driver.GossipSessionEventFor(<-driver.Events())

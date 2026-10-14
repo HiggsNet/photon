@@ -59,7 +59,8 @@ func (store *BoltStore) View(read func(*bolt.Tx) error) error {
 	return store.db.View(read)
 }
 
-// LoadCommon loads common state and atomically persists any startup root repair.
+// LoadCommon loads common state and atomically persists a layout upgrade or
+// startup root repair. A layout-only upgrade preserves VerifiedRevision.
 func (store *BoltStore) LoadCommon() (*CommitCandidate, VerifiedRevision, BoltLoadReport, bool, error) {
 	var candidate *CommitCandidate
 	var revision VerifiedRevision
@@ -68,11 +69,13 @@ func (store *BoltStore) LoadCommon() (*CommitCandidate, VerifiedRevision, BoltLo
 	err := store.Update(func(tx *bolt.Tx) (bool, error) {
 		var err error
 		candidate, revision, report, found, err = LoadBoltState(tx)
-		if err != nil || !found || !report.RootAuthorityRepaired {
+		if err != nil || !found || (!report.RootAuthorityRepaired && !report.LegacyVerifiedLayout) {
 			return false, err
 		}
-		revision++
-		return CommitBoltState(tx, candidate, ChangeSet{VerifiedRevision: revision, NetworkChanged: true, SecurityPriority: true})
+		if report.RootAuthorityRepaired {
+			revision++
+		}
+		return CommitBoltState(tx, candidate, ChangeSet{VerifiedRevision: revision, NetworkChanged: report.RootAuthorityRepaired, SecurityPriority: report.RootAuthorityRepaired})
 	})
 	return candidate, revision, report, found, err
 }

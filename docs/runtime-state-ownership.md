@@ -153,6 +153,12 @@ Daemon 可以直接持有一个无独立锁/线程的 `LinuxObservation` 或 `Wi
 - composition root 打开唯一 BoltStore 并交给 State；State 统一关闭，typed partition 与 codec 不自行按路径打开数据库。
 - Daemon event loop 串行发布内存 mutation；耗时 Observe/Plan/Apply 可锁外执行，completion 必须回到 owner 后再提交。
 - 持久化成功后才能发布对应内存状态。
+- Common schema 2 的 `verified/payload` 只保存身份、全局 root 和 zone 路径清单；
+  `verified/zones` 按 zone 保存当前记录、历史和授权数据。提交逐项比较编码字节，
+  仅写变化或删除的 zone；路径清单用于拒绝缺失、多余或重复的 zone 数据。
+- schema 1 的整块 verified payload 可只读加载；Linux/Windows 启动在原有 BoltStore
+  事务中原子升级。布局升级不推进 verified revision，网络或身份内容改变才推进。
+  旧程序拒绝 schema 2，回退须同时恢复升级前数据库；不维护两份网络数据。
 - Daemon 只组合一个 State；common 调用显式进入 `State.Common`，Linux completion 通过 typed mutation 按 source verified revision 提交，不再暴露数据库或完整 LinuxState replacement。
 
 ## 8. 迁移原则

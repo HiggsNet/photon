@@ -84,7 +84,7 @@ func BuildGossipPeersView(common corestate.View, options GossipPeersOptions) Pee
 	for _, peerID := range ids {
 		facts := gossipPeerProjection(common, options, peerID)
 		view.Peers = append(view.Peers, BuildPeerViewFromCheckpoint(
-			peerID, facts.configuredAddr, facts.endpoints, facts.checkpoint, facts.diagnostics,
+			peerID, facts.configuredAddr, facts.endpoints, facts.checkpoint, facts.diagnostics, options.Now,
 		))
 	}
 	return view

@@ -90,13 +90,13 @@ func migrateLegacyLinuxStateTx(tx *bolt.Tx, trustedRoot ed25519.PublicKey) (lega
 		if !found {
 			return report, false, fmt.Errorf("%w: runtime bucket is missing", photonlinux.ErrLinuxStateCorrupt)
 		}
-		if peerCleanups == nil && !loadReport.RootAuthorityRepaired {
+		if peerCleanups == nil && !loadReport.RootAuthorityRepaired && !loadReport.LegacyVerifiedLayout {
 			return report, false, nil
 		}
 		var checkpointChanged bool
 		report.Gossip, checkpointChanged = projectLegacyPeerCleanups(candidate.Gossip, peerCleanups, report.Gossip)
 		commonChanged := false
-		if checkpointChanged || loadReport.RootAuthorityRepaired {
+		if checkpointChanged || loadReport.RootAuthorityRepaired || loadReport.LegacyVerifiedLayout {
 			if loadReport.RootAuthorityRepaired {
 				revision++
 			}

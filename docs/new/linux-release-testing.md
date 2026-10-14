@@ -1,8 +1,106 @@
 # Linux 重构版测试
 
 本轮旧版固定为 `v0.5.6`（master 提交 `28472ea74615`），新版为
-`v0.6.0-rc.5`（修复被动接收方的 IPsec 端口轮换）。新版只供测试，Windows 完整隧道尚未交付。
+`v0.6.0-rc.7`（Gossip 窄读取与 verified 按 zone 持久化）。新版只供测试，Windows 完整隧道尚未交付。
 master 保留旧版；候选版从独立 release 分支发布，不更新 Docker `latest`。
+
+## rc.7：Gossip 窄读取与 CPU 基准
+
+2026-10-13 在 `/tmp/rc6` 的 `perf/rc6-gossip-projections` 分支收窄 Gossip
+读取。对照源码固定为已发布 rc.6 的 `f7d99cf7fdda`；下表比较原 rc.6 与 rc.7 的 CPU
+改动，不是与 v0.5.6 的整机性能对照，也不代表线上 CPU 已下降。
+
+- 入站 observed checkpoint 与路径恢复只读取该 peer、当前记录和祖先授权链。
+  每次使用仍执行签名、授权、撤销及时间检查；检查点持久化完成后才发布地址。
+- 全局 discovery 保留全部当前记录和 peer 检查点，省去 record history 与本地私钥。
+  目录摘要仍由同一份当前记录计算，授权和端点 TTL 仍在每次使用时判断。
+- TCP zone/record 只复制所请求对象；UDP zone 回应只读取目标快照和 parent proof。
+  返回值保持可独立修改，历史 record 的版本选择顺序和 zone 撤销策略保留。
+- `BuildObjectPullResponse` 的 Go 读取依赖改为 `ObjectPullSource`，请求类型处理仍
+  由 Gossip 协议层统一负责。该 CPU 改动不改变 wire、数据库 schema 和检查点提交语义；rc.7 的存储改动见下一节。
+
+使用同一个 `BenchmarkGossipReadPaths`，28 个 zone（26 个 leaf），每 leaf
+10 条当前记录、每 key 8 份 history。入站 peer 使用真实签名授权链及 endpoint。
+持久化回调为空，测量内存路径；transport 使用内存 datagram 和同一固定 clock，
+并在计时前检查目标对象及 observed 地址实际产生。两版在同一 Ryzen 5700G 主机
+依次运行，`-cpu=1 -benchtime=1s -count=3`，下表取三次中位数：
+
+| 操作 | 原 rc.6 耗时 | CPU 优化耗时 | 原 rc.6 分配 | CPU 优化分配 |
+| --- | ---: | ---: | ---: | ---: |
+| 全局 discovery 输入 | 678.122 us | 128.702 us | 1,486,344 B | 184,960 B |
+| 入站来源校验、checkpoint 与地址恢复 | 1,615.246 us | 219.885 us | 2,981,440 B | 33,024 B |
+| TCP zone 响应 | 841.599 us | 5.911 us | 1,495,609 B | 9,104 B |
+| TCP 历史 record 响应 | 730.277 us | 0.4763 us | 1,487,248 B | 744 B |
+| UDP zone 回应规划 | 789.876 us | 31.376 us | 1,516,088 B | 38,065 B |
+
+入站路径分配下降约 98.9%，耗时下降约 86.4%。全局 discovery 的当前记录复制
+仍有开销；入站路径也仍有两次授权链验证。本轮没有用跨事件缓存替代这些检查。
+
+另外各采集一次入站基准 CPU profile：原版 `ReadView` / 全网复制调用链占 CPU
+样本约 84%，修改后 `VerifyChain` 调用链占约 87.6%。这确认主要复制热点已移除，
+剩余耗时主要来自授权验签。两份 profile 的总操作次数不同，只用于定位热点；
+累计调用链有重叠，不能相加。CPU/alloc profile 与文本报告也保存在下述日志目录。
+
+已通过 `make check`（完整 Go 测试、vet、Linux 构建和 Windows 交叉构建）、
+`make smoke-all` 及 `go test -race -count=1 ./pkg/core/state ./pkg/core/host ./pkg/core/gossip`。
+回归覆盖当前摘要等价、父链 proof fallback、授权到期、签名撤销及未来撤销、历史
+record 版本顺序、返回值深层隔离、并发提交和 wire 响应等价。网络检查在允许本机
+socket 的环境中执行。基准输出和检查日志保存在本地
+`build/validation/gossip-projections/`。
+
+这些是合成内存基准。下一阶段需在相同主机、配置和流量下采集实际 daemon
+CPU/alloc profile、写盘延迟和队列样本，才能判断 GC 与线上整体 CPU 的收益。
+rc.7 包含上述 CPU 改动；实际部署结果需单独确认。
+
+## rc.7：按 zone 存储与 schema 2 升级
+
+2026-10-14 在 CPU 优化提交 `bab28786eb3d` 基础上建立
+`perf/rc6-storage` 分支。Common schema 从 1 升到 2：身份、全局 root 和 zone
+路径清单保留在小型 `verified/payload`，当前记录、历史、授权及撤销数据按 zone
+保存到 `verified/zones`。提交仍比较全部候选编码，只有变化的 zone 执行 Put，
+删除的 zone 执行 Delete；本轮没有引入缓存或依赖不完整的 ChangedZones 提示。
+
+唯一 BoltStore、原子事务、不可变 root pin、verified revision 校验，以及持久化
+成功后发布内存的顺序保持不变。路径清单用于拒绝缺失、重复、路径不符或多余的
+zone 数据。schema 1 可以只读查询；Linux/Windows 启动在既有事务内一次性升级，
+单纯布局变化不推进 verified revision。迁移失败回滚旧格式，二次启动不重写。
+旧 rc.6 程序拒绝 schema 2，回退必须恢复升级前数据库；不要用新版数据库直接
+启动旧程序。checkpoint 仍是按 peer 的同步提交，没有改变重启提示的发布时机。
+
+同一主机依次运行相同 `BenchmarkVerifiedZoneCommit`，28-zone fixture 沿用前文
+checkpoint 基准（26 个 leaf、每 leaf 10 条当前记录、每 key 8 份历史），每轮只改
+一个 zone 的一条记录。`-cpu=1 -benchtime=1s -count=3`，表中为三次中位数。
+NoSync 仅用于基准排除 fsync 等待；`db-page-B/op` 是分配的脏数据库页字节，
+不能当作真实磁盘延迟或进程总写入量：
+
+| 指标 | CPU 优化提交 | 存储优化 |
+| --- | ---: | ---: |
+| 单 zone 提交耗时 | 15.886 ms | 1.907 ms |
+| 每次分配 | 5,277,164 B | 1,828,179 B |
+| 每次分配次数 | 22,372 | 1,233 |
+| 数据库脏页 | 1,695,744 B | 86,016 B |
+
+另用正常 fsync 的隔离临时数据库实测 `/proc/self/io`：35 个 zone，每 zone
+10 个 key、每 key 8 份历史、Value 256B，只改变一个 zone 的一个记录，提交 20 次，
+初始化写入排除。verified 每次写入从 2,285,568 B（约 2.18 MiB）降至 155,648 B
+（152 KiB），约减少 93.2%；单 peer checkpoint 前后均为 20 KiB。该实验只比较
+存储布局，没有真实签名验证或同步流量；GlobalRoot 在该 fixture 中保持不变，
+真实网络摘要更新还会重写小型 metadata。序列化仍遍历所有 zone，Bolt 的共享页、
+父节点和空闲页列表仍有开销，不宣称单条记录只产生一条记录大小的物理写入。
+
+已通过 `make check`、`make smoke-all` 和 state/host/gossip/app 的 race 检查。
+新增回归覆盖 schema-1 升级的身份密钥、记录历史、checkpoint 和 revision 保留，
+Linux 启动及二次启动、zone 删除和未变化数据保留、写入后失败的事务回滚，以及
+新格式损坏时拒绝加载。基准、落盘实验及验证日志保存在
+`/home/herbertqiao/Work/photon/build/validation/rc6-storage-20261014/`。
+rc.7 包含上述存储改动；线上总写入量和 CPU 的收益仍需同机、同负载采样确认。
+
+## rc.6 相对 rc.5 的变化：目录刷新与拒绝记录
+
+- 目录和快照分两次读取，期间 endpoint 等 record 更新可能造成 `root_mismatch`。每轮首次摘要不一致会等待已有拉取和校验结果结束，刷新目录一次；不应用摘要不符的快照，不延长原有整轮超时。
+- 刷新后仍不一致时保留拒绝与退避；签名、授权和版本校验继续执行。既有 gossip wire 格式保持不变，对端无需同步升级。
+- peer API 的 `rejected_digests` 只显示有效拒绝；校验成功后清除来源 peer 的拒绝，也清除其他 peer 对同一已验证摘要的拒绝。过期后再次失败会续期，过期本身不代表恢复。
+- 本地验证包括完整 Go 测试、vet、Linux 构建、Windows 交叉构建、全部 smoke 和核心包竞态检测；线上混版本长时间验收仍按下文执行。
 
 ## rc.5 相对 rc.4 的变化：被动接收方端口轮换
 
@@ -91,7 +189,7 @@ NixOS、容器或自定义 unit 应沿用原部署方式，显式固定版本。
 
 ```sh
 curl -fL --retry 3 -o /tmp/photon-install-rc.sh \
-  https://raw.githubusercontent.com/HiggsNet/photon/v0.6.0-rc.5/contrib/install.sh
+  https://raw.githubusercontent.com/HiggsNet/photon/v0.6.0-rc.7/contrib/install.sh
 ```
 
 先在测试机安装旧版，完成入网并确认双向通信，作为基线：
@@ -110,10 +208,10 @@ photon version
 
 ```sh
 sudo systemctl stop photon
-sudo install -d -m 0700 /var/backups/photon-before-rc5
-sudo cp -a /etc/photon /var/backups/photon-before-rc5/etc-photon
-sudo cp -a /usr/local/bin/photon /usr/local/bin/photon-services /var/backups/photon-before-rc5/
-sudo sh /tmp/photon-install-rc.sh --version v0.6.0-rc.5 --no-service
+sudo install -d -m 0700 /var/backups/photon-before-rc7
+sudo cp -a /etc/photon /var/backups/photon-before-rc7/etc-photon
+sudo cp -a /usr/local/bin/photon /usr/local/bin/photon-services /var/backups/photon-before-rc7/
+sudo sh /tmp/photon-install-rc.sh --version v0.6.0-rc.7 --no-service
 sudo systemctl start photon
 photon version
 sudo systemctl status photon --no-pager
@@ -152,14 +250,14 @@ sudo systemctl status photon --no-pager
 
 ```sh
 sudo systemctl stop photon
-sudo mv /etc/photon /etc/photon-rc5-saved
-sudo cp -a /var/backups/photon-before-rc5/etc-photon /etc/photon
-sudo cp -a /var/backups/photon-before-rc5/photon /var/backups/photon-before-rc5/photon-services /usr/local/bin/
+sudo mv /etc/photon /etc/photon-rc7-saved
+sudo cp -a /var/backups/photon-before-rc7/etc-photon /etc/photon
+sudo cp -a /var/backups/photon-before-rc7/photon /var/backups/photon-before-rc7/photon-services /usr/local/bin/
 sudo systemctl start photon
 photon version
 ```
 
-`/etc/photon-rc5-saved` 必须尚不存在，保留新版数据供诊断。回退后再次确认真实通信，
+`/etc/photon-rc7-saved` 必须尚不存在，保留新版数据供诊断。回退后再次确认真实通信，
 必要时重启测试机清理运行中的网络状态，不只检查程序版本。
 
 ## 发布者检查
@@ -167,4 +265,4 @@ photon version
 发布前执行 `make check`、`make smoke-all`、`make install-script-check`；
 记录特权数据面测试、真实升级和长时间测试是否实际执行，不以基础检查替代它们。
 GitHub Actions 必须提供两种 Linux 架构的归档和校验文件，Release 标记为
-Pre-release，RC.5 Docker 镜像使用显式 `v0.6.0-rc.5` 标签，正式 `latest` 保持不变。
+Pre-release，RC.7 Docker 镜像使用显式 `v0.6.0-rc.7` 标签，正式 `latest` 保持不变。

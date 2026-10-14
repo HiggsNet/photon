@@ -12,7 +12,9 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-const BoltSchemaVersion uint64 = 1
+const BoltSchemaVersion uint64 = 2
+
+const legacyBoltSchemaVersion uint64 = 1
 
 var (
 	ErrBoltStateCorrupt      = errors.New("common bbolt state is corrupt")
@@ -22,10 +24,11 @@ var (
 )
 
 var (
-	bucketCommonState = []byte("photon:common-state")
-	bucketCommonMeta  = []byte("meta")
-	bucketVerified    = []byte("verified")
-	bucketGossip      = []byte("gossip-checkpoint")
+	bucketCommonState   = []byte("photon:common-state")
+	bucketCommonMeta    = []byte("meta")
+	bucketVerified      = []byte("verified")
+	bucketVerifiedZones = []byte("zones")
+	bucketGossip        = []byte("gossip-checkpoint")
 
 	keySchemaVersion    = []byte("schema-version")
 	keyVerifiedRevision = []byte("verified-revision")
@@ -38,11 +41,14 @@ var (
 type BoltLoadReport struct {
 	GossipCheckpointDiscarded bool
 	RootAuthorityRepaired     bool
+	LegacyVerifiedLayout      bool
 }
 
 type persistedVerifiedState struct {
 	ManagedZone          zone.ZonePath      `json:"managed_zone"`
-	Network              *zone.NetworkState `json:"network"`
+	Network              *zone.NetworkState `json:"network,omitempty"` // schema 1 only
+	ZonePaths            []zone.ZonePath    `json:"zone_paths,omitempty"`
+	GlobalRoot           []byte             `json:"global_root"`
 	TrustedRootPublicKey []byte             `json:"trusted_root_public_key,omitempty"`
 	RootPrivateKey       []byte             `json:"root_private_key,omitempty"`
 	IdentityPrivateKey   []byte             `json:"identity_private_key,omitempty"`
@@ -69,10 +75,15 @@ func LoadBoltState(tx *bolt.Tx) (candidate *CommitCandidate, revision VerifiedRe
 		return nil, 0, report, true, err
 	}
 
-	var persisted persistedVerifiedState
-	if err := decodeRequiredJSON(verifiedBucket, keyPayload, &persisted); err != nil {
+	version, err := decodeRequiredUint64(meta, keySchemaVersion)
+	if err != nil {
 		return nil, 0, report, true, err
 	}
+	persisted, err := loadBoltVerified(verifiedBucket, version)
+	if err != nil {
+		return nil, 0, report, true, err
+	}
+	report.LegacyVerifiedLayout = version == legacyBoltSchemaVersion
 	verified := &VerifiedState{
 		ManagedZone:          persisted.ManagedZone,
 		Network:              persisted.Network,
@@ -106,14 +117,7 @@ func CommitBoltState(tx *bolt.Tx, candidate *CommitCandidate, changes ChangeSet)
 	if err := ValidateStateRoot(candidate.Verified); err != nil {
 		return false, err
 	}
-	persisted := persistedVerifiedState{
-		ManagedZone:          candidate.Verified.ManagedZone,
-		Network:              candidate.Verified.Network,
-		TrustedRootPublicKey: candidate.Verified.TrustedRootPublicKey,
-		RootPrivateKey:       candidate.Verified.RootPrivateKey,
-		IdentityPrivateKey:   candidate.Verified.IdentityPrivateKey,
-	}
-	verifiedPayload, err := json.Marshal(persisted)
+	encoded, err := encodeBoltVerified(candidate.Verified)
 	if err != nil {
 		return false, err
 	}
@@ -128,18 +132,47 @@ func CommitBoltState(tx *bolt.Tx, candidate *CommitCandidate, changes ChangeSet)
 		if err != nil {
 			return false, err
 		}
-		verifiedChanged := !bytes.Equal(verifiedBucket.Get(keyPayload), verifiedPayload)
-		// An identical, already validated payload necessarily retains the pin.
-		// Checkpoint-only commits must not decode the entire network/history
-		// just to compare that same pin again. Changed payloads still require
-		// the original persisted-state validation and immutable-pin check.
-		if verifiedChanged {
-			var currentPersisted persistedVerifiedState
-			if err := decodeRequiredJSON(verifiedBucket, keyPayload, &currentPersisted); err != nil {
+		version, err := decodeRequiredUint64(common.Bucket(bucketCommonMeta), keySchemaVersion)
+		if err != nil {
+			return false, err
+		}
+		var currentPersisted persistedVerifiedState
+		if err := decodeRequiredJSON(verifiedBucket, keyPayload, &currentPersisted); err != nil {
+			return false, err
+		}
+		if !bytes.Equal(currentPersisted.TrustedRootPublicKey, candidate.Verified.TrustedRootPublicKey) {
+			return false, ErrTrustedRootPinChange
+		}
+		var verifiedChanged bool
+		if version == legacyBoltSchemaVersion {
+			// A layout migration alone must not advance VerifiedRevision. Compare
+			// normalized legacy values, not their original JSON whitespace/order.
+			previous, err := loadBoltVerified(verifiedBucket, version)
+			if err != nil {
 				return false, err
 			}
-			if !bytes.Equal(currentPersisted.TrustedRootPublicKey, candidate.Verified.TrustedRootPublicKey) {
-				return false, ErrTrustedRootPinChange
+			previous.Network = zone.CloneNetworkState(previous.Network)
+			before, err := json.Marshal(previous)
+			if err != nil {
+				return false, err
+			}
+			next := persistedVerifiedState{
+				ManagedZone: candidate.Verified.ManagedZone, Network: zone.CloneNetworkState(candidate.Verified.Network),
+				TrustedRootPublicKey: candidate.Verified.TrustedRootPublicKey,
+				RootPrivateKey:       candidate.Verified.RootPrivateKey, IdentityPrivateKey: candidate.Verified.IdentityPrivateKey,
+			}
+			after, err := json.Marshal(next)
+			if err != nil {
+				return false, err
+			}
+			verifiedChanged = !bytes.Equal(before, after)
+		} else {
+			if currentPersisted.Network != nil {
+				return false, fmt.Errorf("%w: unexpected aggregate verified payload", ErrBoltStateCorrupt)
+			}
+			verifiedChanged, err = encoded.differsFrom(verifiedBucket)
+			if err != nil {
+				return false, err
 			}
 		}
 		wantRevision := current
@@ -172,19 +205,11 @@ func CommitBoltState(tx *bolt.Tx, candidate *CommitCandidate, changes ChangeSet)
 	}
 	changed = changed || created
 
-	for _, write := range []struct {
-		bucket *bolt.Bucket
-		key    []byte
-		value  []byte
-	}{
-		{verifiedBucket, keyPayload, verifiedPayload},
-	} {
-		fieldChanged, err := putBytesIfChanged(write.bucket, write.key, write.value)
-		if err != nil {
-			return false, err
-		}
-		changed = changed || fieldChanged
+	verifiedChanged, err := encoded.save(verifiedBucket)
+	if err != nil {
+		return false, err
 	}
+	changed = changed || verifiedChanged
 	checkpointChanged, err := replaceBoltCheckpoint(gossipBucket, candidate.Gossip)
 	if err != nil {
 		return false, err
@@ -215,7 +240,7 @@ func loadBoltRevision(common *bolt.Bucket) (VerifiedRevision, error) {
 	if err != nil {
 		return 0, err
 	}
-	if version != BoltSchemaVersion {
+	if version != BoltSchemaVersion && version != legacyBoltSchemaVersion {
 		return 0, fmt.Errorf("%w: got %d, want %d", ErrBoltSchemaUnsupported, version, BoltSchemaVersion)
 	}
 	verified, err := decodeRequiredUint64(meta, keyVerifiedRevision)

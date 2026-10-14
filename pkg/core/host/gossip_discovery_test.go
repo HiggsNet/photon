@@ -23,6 +23,18 @@ type failingDiscoveryWriter struct {
 
 func (writer failingDiscoveryWriter) ReadView() corestate.View { return writer.view }
 
+func (writer failingDiscoveryWriter) ReadDiscovery(peerID string) *corestate.DiscoveryView {
+	return corestate.NewStoreWithCheckpoint(writer.view.State, writer.view.Gossip, nil, nil).ReadDiscovery(peerID)
+}
+
+func (writer failingDiscoveryWriter) ReadZoneSnapshot(path zone.ZonePath, now time.Time) (*corestate.ZoneSnapshot, bool, error) {
+	return corestate.NewStore(writer.view.State, nil, nil).ReadZoneSnapshot(path, now)
+}
+
+func (writer failingDiscoveryWriter) ReadRecordSnapshot(path zone.ZonePath, key string, version uint64) (*corestate.RecordSnapshot, error) {
+	return corestate.NewStore(writer.view.State, nil, nil).ReadRecordSnapshot(path, key, version)
+}
+
 func (writer failingDiscoveryWriter) ApplyRemoteBatch(context.Context, string, []corestate.RemoteSnapshot, time.Time) (corestate.RemoteBatchResult, error) {
 	return corestate.RemoteBatchResult{}, nil
 }
@@ -289,7 +301,7 @@ func TestPlanGossipDiscoveryRepairsBootstrapWithoutVerifiedZone(t *testing.T) {
 	}
 }
 
-func signedDiscoveryNetwork(t *testing.T, peer zone.ZonePath, includePeer bool, endpoints []gossip.EndpointEntry, now time.Time) (*zone.NetworkState, ed25519.PrivateKey) {
+func signedDiscoveryNetwork(t testing.TB, peer zone.ZonePath, includePeer bool, endpoints []gossip.EndpointEntry, now time.Time) (*zone.NetworkState, ed25519.PrivateKey) {
 	t.Helper()
 	rootPublic, rootPrivate, err := ed25519.GenerateKey(nil)
 	if err != nil {

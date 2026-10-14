@@ -109,7 +109,7 @@ type PeerRuntimeView struct {
 	RejectedDigests       map[string]photonstate.PeerRejectedDigest `json:"rejected_digests,omitempty"`
 }
 
-func BuildPeerViewFromCheckpoint(id, configuredAddr string, endpoints []PeerEndpointView, checkpoint corestate.PeerCheckpoint, diagnostics observability.PeerDiagnostics) PeerView {
+func BuildPeerViewFromCheckpoint(id, configuredAddr string, endpoints []PeerEndpointView, checkpoint corestate.PeerCheckpoint, diagnostics observability.PeerDiagnostics, now time.Time) PeerView {
 	source := "discovered"
 	if configuredAddr != "" {
 		source = "bootstrap"
@@ -121,11 +121,11 @@ func BuildPeerViewFromCheckpoint(id, configuredAddr string, endpoints []PeerEndp
 		Source:          source,
 		ConfiguredAddr:  configuredAddr,
 		Endpoints:       endpoints,
-		PeerRuntimeView: buildPeerRuntimeViewFromCheckpoint(checkpoint, diagnostics),
+		PeerRuntimeView: buildPeerRuntimeViewFromCheckpoint(checkpoint, diagnostics, now),
 	}
 }
 
-func buildPeerRuntimeViewFromCheckpoint(checkpoint corestate.PeerCheckpoint, diagnostics observability.PeerDiagnostics) PeerRuntimeView {
+func buildPeerRuntimeViewFromCheckpoint(checkpoint corestate.PeerCheckpoint, diagnostics observability.PeerDiagnostics, now time.Time) PeerRuntimeView {
 	return PeerRuntimeView{
 		LastSyncUnix:          checkpoint.LastSyncUnix,
 		LastAttemptUnix:       checkpoint.LastAttemptUnix,
@@ -160,7 +160,7 @@ func buildPeerRuntimeViewFromCheckpoint(checkpoint corestate.PeerCheckpoint, dia
 		LastResponderZone:     diagnostics.LastResponderZone,
 		DatagramStats:         diagnostics.DatagramStats,
 		ObjectPullStats:       peerObjectPullStatsView(diagnostics.ObjectPullStats),
-		RejectedDigests:       peerRejectedDigestState(checkpoint.RejectedObjects),
+		RejectedDigests:       peerRejectedDigestState(checkpoint.RejectedObjects, now),
 	}
 }
 
@@ -179,12 +179,15 @@ func peerObservedGraceState(endpoints []corestate.ObservedGraceEndpoint) []photo
 	return out
 }
 
-func peerRejectedDigestState(objects map[zone.ZonePath]corestate.RejectedObject) map[string]photonstate.PeerRejectedDigest {
+func peerRejectedDigestState(objects map[zone.ZonePath]corestate.RejectedObject, now time.Time) map[string]photonstate.PeerRejectedDigest {
 	if len(objects) == 0 {
 		return nil
 	}
 	out := make(map[string]photonstate.PeerRejectedDigest, len(objects))
 	for path, rejected := range objects {
+		if rejected.UntilUnix <= now.Unix() {
+			continue
+		}
 		out[string(path)] = photonstate.PeerRejectedDigest{
 			Zone: path, RootHashHex: hex.EncodeToString(rejected.RootHash), Reason: rejected.Reason,
 			RejectedAtUnix: rejected.UpdatedUnix, UntilUnix: rejected.UntilUnix,

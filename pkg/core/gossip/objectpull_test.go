@@ -88,17 +88,18 @@ func TestBuildObjectPullResponseUsesDetachedVerifiedObject(t *testing.T) {
 	state := zone.NewZoneState(path, &zone.ZoneAuthority{Zone: path, Epoch: 1, Threshold: 1})
 	state.Records["endpoint"] = &zone.Record{Zone: path, Key: "endpoint", Type: "test.endpoint", Value: []byte("value"), Version: 1}
 	network.Zones[path] = state
+	store := corestate.NewStore(&corestate.VerifiedState{Network: network}, nil, nil)
 
-	response := BuildObjectPullResponse(network, &ObjectPullRequest{Type: ObjectPullRecord, Zone: path, Key: "endpoint"}, time.Unix(100, 0))
+	response := BuildObjectPullResponse(store, &ObjectPullRequest{Type: ObjectPullRecord, Zone: path, Key: "endpoint"}, time.Unix(100, 0))
 	if !response.OK || response.Record == nil || response.Record.Record == nil {
 		t.Fatalf("response = %#v", response)
 	}
 	response.Record.Record.Value[0] = 'X'
-	again := BuildObjectPullResponse(network, &ObjectPullRequest{Type: ObjectPullRecord, Zone: path, Key: "endpoint"}, time.Unix(100, 0))
+	again := BuildObjectPullResponse(store, &ObjectPullRequest{Type: ObjectPullRecord, Zone: path, Key: "endpoint"}, time.Unix(100, 0))
 	if got := string(again.Record.Record.Value); got != "value" {
 		t.Fatalf("response mutation leaked into verified state: %q", got)
 	}
-	if invalid := BuildObjectPullResponse(network, &ObjectPullRequest{Type: ObjectPullRecord, Zone: path}, time.Unix(100, 0)); invalid.OK || invalid.Error != "missing key" {
+	if invalid := BuildObjectPullResponse(store, &ObjectPullRequest{Type: ObjectPullRecord, Zone: path}, time.Unix(100, 0)); invalid.OK || invalid.Error != "missing key" {
 		t.Fatalf("invalid response = %#v", invalid)
 	}
 }

@@ -134,9 +134,10 @@ type CommitResult struct {
 }
 
 type RemoteSnapshot struct {
-	Snapshot     *ZoneSnapshot
-	ExpectedRoot []byte
-	Limits       SyncLimits
+	Snapshot              *ZoneSnapshot
+	ExpectedRoot          []byte
+	Limits                SyncLimits
+	RefreshOnRootMismatch bool
 }
 
 type RemoteApplyOutcome struct {
@@ -297,10 +298,23 @@ func (store *Store) ApplyRemoteBatch(ctx context.Context, peerID string, batch [
 					if clearRejectedObject(gossipCandidate, peerID, item.Snapshot.Zone) {
 						metadataChanged = true
 					}
+					// A verified copy from another peer also resolves rejection
+					// of that exact digest. Different roots remain independent.
+					acceptedRoot := item.ExpectedRoot
+					for otherID, metadata := range gossipCandidate.Peers {
+						if rejected, ok := metadata.RejectedObjects[item.Snapshot.Zone]; ok {
+							if len(acceptedRoot) == 0 {
+								acceptedRoot = ZoneRoot(ZoneStateFromSnapshot(item.Snapshot))
+							}
+							if bytes.Equal(rejected.RootHash, acceptedRoot) {
+								metadataChanged = clearRejectedObject(gossipCandidate, otherID, item.Snapshot.Zone) || metadataChanged
+							}
+						}
+					}
 				}
 			}
 		}
-		if outcome.Err != nil {
+		if outcome.Err != nil && !(item.RefreshOnRootMismatch && errors.Is(outcome.Err, ErrSnapshotRootMismatch)) {
 			outcome.RejectReason = remoteRejectReason(outcome.Err)
 			if item.Snapshot != nil && recordRejectedObject(gossipCandidate, peerID, item.Snapshot.Zone, rejectedRoot(item), outcome.RejectReason, now) {
 				metadataChanged = true
@@ -441,7 +455,7 @@ func recordRejectedObject(state *GossipCheckpoint, peerID string, path zone.Zone
 		metadata.RejectedObjects = make(map[zone.ZonePath]RejectedObject)
 	}
 	previous, ok := metadata.RejectedObjects[path]
-	if ok && previous.Reason == reason && bytes.Equal(previous.RootHash, root) {
+	if ok && previous.Reason == reason && bytes.Equal(previous.RootHash, root) && now.Unix() < previous.UntilUnix {
 		return false
 	}
 	metadata.RejectedObjects[path] = RejectedObject{

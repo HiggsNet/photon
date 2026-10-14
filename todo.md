@@ -287,6 +287,7 @@ B6 仍单独覆盖睡眠恢复、物理断网、崩溃恢复、长时间稳定�
 
 ### B6. 验收、安全与发布门槛
 
+- [x] 合并 Linux RC.6/RC.7 的目录漂移一次刷新、拒绝记录展示、Gossip 窄读取与按 zone 持久化；保留 Windows 性能/当前授权门禁，补充 OpenState 的 RC.6 common 布局升级/revision 保留/二次启动不重写回归。全仓检查、七包 race、采样构建及 Windows 原生状态/策略 22 项通过；原 PS 数组解析包装失败保留，独立复核/清理完成。schema2 回退须恢复旧数据库，不替代业务/吞吐/72h/发布验收，见 [RC 合并记录](docs/photon-windows/b6-testing.md#2026-10-14-rc6rc7-合并与-windows-状态回归)。
 - [x] 建立 Windows VM + 完整 Linux Photon gateway daemon 的可重复 test rig；`windows-full-daemon-smoke.sh` 运行真实 `app/photon daemon` 管理 XFRM/BIRD/Gossip，签名身份远程同步、双栈动态回程及 SCM 恢复场景在 StrongSwan 5.9.13/6.0.7 均通过；原组件 rig 保留作分层对照。
 - [x] 里程碑 1：service、Wintun、split route、真实 gossip 与关闭重开；Linux gateway 补齐 Windows 初始缺失的签名 Babel identity，双版本 SCM/业务/落盘及崩溃后重启通过。
 - [x] 里程碑 2：StrongSwan IKE_AUTH/CHILD_SA 与双向 ESP IPv4/IPv6；B3/B4 双版本分层及 B5/B6 原生服务双栈业务通过。

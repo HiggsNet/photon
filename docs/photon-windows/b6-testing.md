@@ -228,6 +228,37 @@ Windows 原生回归通过。此处未确定性注入连续 16 次 TCP 冲突，
 服务接近占满一个逻辑 CPU；窗口 64 暴露迟到与积压，每组之后另验证同进程双栈恢复。
 这只是固定 echo 负载下的基线，不是饱和容量或性能达标；实际热点仍须 profile 定位。
 
+## 2026-10-14 RC.6/RC.7 合并与 Windows 状态回归
+
+在性能历史整理后的 `a2a2bbd1` 上合并已发布 `v0.6.0-rc.7`（`df8ec528`），
+包含 RC.5 之后的五个提交；当日 `origin/master` 仍是旧版 `28472ea7`，已在 Windows
+祖先中。36 个 RC 目标文件与标签逐字相同，原有 Windows 性能实现保留；VERSION
+同步为 `0.6.0-rc.7`，这不是 Windows 发布或部署。
+
+- RC.6：目录/快照期间首次 root mismatch 排空已有工作后刷新目录一次，不延长
+  原 round deadline；签名错误或再次漂移仍拒绝。拒绝记录显示按当前时间过滤，
+  成功验证可清除其他 peer 对同一摘要的拒绝。
+- RC.7：Gossip discovery、zone/record responder 改用独立窄投影，保留授权链、
+  历史版本选择、撤销和时间检查；共同状态按 zone 持久化，事务失败不发布部分状态。
+
+新增 Windows `TestOpenStateUpgradesRC6CommonLayoutPreservingRevision`：真实签名
+common fixture 使用 RC.6 aggregate/schema1，经 OpenState 升级后 verified 内容和
+revision7 保留；再次启动数据库字节不变。公共迁移/zone delta/损坏拒绝/回滚回归保留，
+Windows 按 store/revision 的授权缓存契约不变。
+
+本次 `make check`（全仓 fmt/vet/test、Linux 构建、Windows amd64 交叉构建）、
+state/gossip/host/inspect/Windows/app 七包 race，以及 `photon_profile` 两包测试和
+Windows 采样构建通过。真实 Windows 普通 test executable 的 OpenState/PacketState/
+PacketPolicy **22 项全部 RUN/PASS、无 skip，Go actual exit0**；原 PS 包装及采集 exit1
+是 required-tests JSON 数组额外嵌套的解析失败，原 Completed=false/失败日志保留。
+独立精确集合复核 exit0，没有重跑测试；原 PID/创建身份、精确 exe 和唯一目录独立清理
+exit0，见 [原生分层证据](../../build/validation/rc-merge-20261014/native-state/post-native-validation.json)。
+所有测试 DB 使用自有临时目录；本次没有业务隧道或新的吞吐/长期验收。
+
+Common schema1 可读，启动原子升级到 schema2，单纯布局变化不推进 verified revision。
+后续回退 RC.6 或更早程序时必须同时恢复升级前数据库，见
+[RC.7 升级与回退边界](../new/linux-release-testing.md#rc7按-zone-存储与-schema-2-升级)。
+
 ## 尚未完成的门槛
 
 实际睡眠/恢复、物理换网与多层 NAT、

@@ -17,7 +17,7 @@ func (driver *GossipDriver) recordGossipObservedPath(ctx context.Context, peerID
 	if driver == nil || driver.gossipState == nil {
 		return false, ErrGossipDriverStopped
 	}
-	patch, ok := PlanVerifiedObservedCheckpoint(driver.GossipDiscoveryInput(suppressed), peerID, endpoint, now)
+	patch, ok := PlanVerifiedObservedCheckpoint(driver.gossipDiscoveryInput(peerID, suppressed), peerID, endpoint, now)
 	if !ok {
 		return false, nil
 	}

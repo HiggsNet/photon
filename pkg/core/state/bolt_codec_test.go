@@ -309,12 +309,12 @@ func TestLoadBoltStateRepairsOnlyLegacyRootCapabilities(t *testing.T) {
 			candidate.Verified.Network.Zones[zone.RootZone].Authority = photoncrypto.ConfiguredRootAuthority(pub)
 			commitCommonBoltTestState(t, db, candidate, 1)
 			if err := db.Update(func(tx *bolt.Tx) error {
-				bucket := tx.Bucket(bucketCommonState).Bucket(bucketVerified)
-				var persisted persistedVerifiedState
-				if err := json.Unmarshal(bucket.Get(keyPayload), &persisted); err != nil {
+				bucket := tx.Bucket(bucketCommonState).Bucket(bucketVerified).Bucket(bucketVerifiedZones)
+				var persisted zone.ZoneState
+				if err := json.Unmarshal(bucket.Get([]byte(zone.RootZone)), &persisted); err != nil {
 					return err
 				}
-				a := persisted.Network.Zones[zone.RootZone].Authority
+				a := persisted.Authority
 				a.Keys[0].Capabilities = []zone.Capability{{Permissions: []zone.Permission{zone.PermWrite}}}
 				if extraKey {
 					a.Keys = append(a.Keys, a.Keys[0])
@@ -323,7 +323,7 @@ func TestLoadBoltStateRepairsOnlyLegacyRootCapabilities(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				return bucket.Put(keyPayload, data)
+				return bucket.Put([]byte(zone.RootZone), data)
 			}); err != nil {
 				t.Fatal(err)
 			}
