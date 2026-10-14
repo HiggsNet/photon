@@ -85,6 +85,24 @@ func loadedGossipState(paths ...zone.ZonePath) corestate.View {
 	return corestate.View{State: &corestate.VerifiedState{Network: network}}
 }
 
+func (reader *memoryGossipStateStore) ReadDiscovery(peerID string) *corestate.DiscoveryView {
+	view := reader.ReadView()
+	if view.State == nil {
+		return nil
+	}
+	return corestate.NewStoreWithCheckpoint(view.State, view.Gossip, nil, nil).ReadDiscovery(peerID)
+}
+
+func (reader *memoryGossipStateStore) ReadZoneSnapshot(path zone.ZonePath, now time.Time) (*corestate.ZoneSnapshot, bool, error) {
+	view := reader.ReadView()
+	return corestate.NewStore(view.State, nil, nil).ReadZoneSnapshot(path, now)
+}
+
+func (reader *memoryGossipStateStore) ReadRecordSnapshot(path zone.ZonePath, key string, version uint64) (*corestate.RecordSnapshot, error) {
+	view := reader.ReadView()
+	return corestate.NewStore(view.State, nil, nil).ReadRecordSnapshot(path, key, version)
+}
+
 func loadedManagedGossipState(managed zone.ZonePath, paths ...zone.ZonePath) corestate.View {
 	view := loadedGossipState(paths...)
 	view.State.ManagedZone = managed

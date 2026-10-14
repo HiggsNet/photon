@@ -26,17 +26,15 @@ func (driver *GossipDriver) gossipFetchZoneResponse(path zone.ZonePath, budget i
 	if driver == nil || driver.gossipState == nil {
 		return gossipFetchZoneResponse{}
 	}
-	view := driver.gossipState.ReadView()
-	if view.State == nil || view.State.Network == nil || view.State.Network.Zones[path] == nil {
+	snapshot, revoked, err := driver.gossipState.ReadZoneSnapshot(path, now)
+	if err != nil {
 		return gossipFetchZoneResponse{}
 	}
-	network := view.State.Network
-	response := gossipFetchZoneResponse{Found: true, Plan: gossip.PlanSnapshotDatagrams(network, []zone.ZonePath{path}, budget, now)}
-	if network.IsZoneRevoked(path, now) {
-		return response
+	if revoked {
+		return gossipFetchZoneResponse{Found: true}
 	}
-	response.Snapshot, _ = corestate.Snapshot(network, path)
-	return response
+	network := &zone.NetworkState{Zones: map[zone.ZonePath]*zone.ZoneState{path: corestate.ZoneStateFromSnapshot(snapshot)}}
+	return gossipFetchZoneResponse{Found: true, Snapshot: snapshot, Plan: gossip.PlanSnapshotDatagrams(network, []zone.ZonePath{path}, budget, now)}
 }
 
 func (driver *GossipDriver) respondGossipFetchZone(ctx context.Context, peerID string, request *gossip.FetchZone, sender GossipSender, budget int) error {
@@ -123,12 +121,7 @@ func (driver *GossipDriver) GossipObjectPullResponse(request *gossip.ObjectPullR
 	if driver == nil || driver.gossipState == nil {
 		return &gossip.ObjectPullResponse{Error: "invalid request"}
 	}
-	view := driver.gossipState.ReadView()
-	var network *zone.NetworkState
-	if view.State != nil {
-		network = view.State.Network
-	}
-	response := gossip.BuildObjectPullResponse(network, request, now)
+	response := gossip.BuildObjectPullResponse(driver.gossipState, request, now)
 	if request != nil && response != nil && response.OK && response.Snapshot != nil {
 		driver.logGossip("debug", "lookup_snapshot", "", "object_pull", nil, map[string]any{"zone": request.Zone.String(), "records": len(response.Snapshot.Records)})
 	}

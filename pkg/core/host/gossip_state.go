@@ -16,7 +16,9 @@ import (
 // driver bucket, but it must not reinterpret the returned verified state or
 // maintain a second gossip projection.
 type GossipStateStore interface {
+	gossip.ObjectPullSource
 	ReadView() corestate.View
+	ReadDiscovery(string) *corestate.DiscoveryView
 	ReadCatalog() *corestate.CatalogView
 	PeerCheckpoints([]string) map[string]corestate.PeerCheckpoint
 	ApplyRemoteBatch(context.Context, string, []corestate.RemoteSnapshot, time.Time) (corestate.RemoteBatchResult, error)

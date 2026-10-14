@@ -35,19 +35,25 @@ type ObjectPullResponse struct {
 	Error    string                    `msgpack:"e,omitempty"`
 }
 
-// BuildObjectPullResponse resolves a protocol request from detached verified
-// state. Live transport, checkpoint and platform runtime state are irrelevant
-// to serving the requested immutable object.
-func BuildObjectPullResponse(network *zone.NetworkState, req *ObjectPullRequest, now time.Time) *ObjectPullResponse {
-	if network == nil || req == nil || !req.Zone.Valid() {
+// ObjectPullSource returns detached objects from one committed common store.
+// It exposes neither the complete network nor platform runtime state.
+type ObjectPullSource interface {
+	ReadZoneSnapshot(zone.ZonePath, time.Time) (*corestate.ZoneSnapshot, bool, error)
+	ReadRecordSnapshot(zone.ZonePath, string, uint64) (*corestate.RecordSnapshot, error)
+}
+
+// BuildObjectPullResponse resolves the wire request using only the requested
+// verified object. Zone snapshots retain their time-dependent revocation check.
+func BuildObjectPullResponse(source ObjectPullSource, req *ObjectPullRequest, now time.Time) *ObjectPullResponse {
+	if source == nil || req == nil || !req.Zone.Valid() {
 		return &ObjectPullResponse{Error: "invalid request"}
 	}
 	switch req.Type {
 	case ObjectPullZone:
-		if network.IsZoneRevoked(req.Zone, now) {
+		snapshot, revoked, err := source.ReadZoneSnapshot(req.Zone, now)
+		if revoked {
 			return &ObjectPullResponse{Error: "zone revoked"}
 		}
-		snapshot, err := corestate.Snapshot(network, req.Zone)
 		if err != nil {
 			return &ObjectPullResponse{Error: err.Error()}
 		}
@@ -56,7 +62,7 @@ func BuildObjectPullResponse(network *zone.NetworkState, req *ObjectPullRequest,
 		if req.Key == "" {
 			return &ObjectPullResponse{Error: "missing key"}
 		}
-		record, err := corestate.RecordSnapshotFor(network, req.Zone, req.Key, req.Version)
+		record, err := source.ReadRecordSnapshot(req.Zone, req.Key, req.Version)
 		if err != nil {
 			return &ObjectPullResponse{Error: err.Error()}
 		}
