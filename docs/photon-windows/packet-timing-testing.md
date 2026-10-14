@@ -1,5 +1,7 @@
 # Windows 业务包分段计时
 
+无加密的真实 Wintun＋跨主机 UDP 组合补测已完成，见 [组合路径计时对照](wintun-udp-timing-testing.md)：同边界四流 UDP write 为 9.94–10.39µs，原产品的 8.5–9.3µs 量级没有随 AES 省略而消失；Linux peer 的单 socket 路径仍可能构成约束，不据此将全部成本归给 Windows 内核。
+
 本片沿用真实 SCM 服务、Wintun、IKE/ESP、Babel 及 Linux 网关，定位完整业务往返的额外成本。控制面生成授权和路由，数据面执行当前规则；业务包不会重新运行 Gossip 同步或 IKE 握手。稳态签名授权投影已有缓存，实际数据路径仍检查当前连接、地址、路由、期限和撤销，并在加解密后重新确认。
 
 ## 范围与单位
