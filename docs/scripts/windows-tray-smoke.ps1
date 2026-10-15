@@ -71,8 +71,12 @@ $failure=$null; $completed=$false; $oldInstalled=$false; $oldBefore=$null; $firs
 $requestText=$null; $request=$null; $authority=$null; $stateID=$null
 $trayFaultsResult=$null
 $clipboardBackup=$null; $clipboardCaptured=$false; $clipboardRoundtrip=$false; $clipboardRestored=$false
+$clipboardOwnedTexts=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+$diagnosticEvidence=New-Object System.Collections.Generic.List[object]
+$diagnosticChecks=[pscustomobject]@{ClosedWindowBusiness=$false;PauseHeldAcrossStop=$false;ManualRefreshWhilePaused=$false;ClipboardRoundtrip=$false;RestartLogFresh=$false;RestartSAMatches=$false}
 $samples=New-Object System.Collections.Generic.List[object]
 $lifecycle=New-Object System.Collections.Generic.List[object]
+$visualEvidence=New-Object System.Collections.Generic.List[object]
 $owned=New-Object System.Collections.Generic.List[object]
 function Quote-TrayYaml([string]$Value) { "'"+$Value.Replace("'","''")+"'" }
 function Invoke-TrayCLI([string[]]$Arguments) {
@@ -179,7 +183,7 @@ function Check-TrayBusiness([string]$Phase) {
 function Save-TrayPhase([string]$Phase) {
     $s=Read-TrayStatus
     if((Read-TrayFileID) -cne $stateID){throw 'Tray phase changed the generated identity file'}
-    $entry=[pscustomobject]@{Phase=$Phase;AtUTC=[DateTime]::UtcNow.ToString('o');PID=$gui.Process.Id;Creation=$gui.Creation;StateFileID=Read-TrayFileID;Status=$s;Connection=[PhotonGuiSmokeNative]::Text($window,1001);Runtime=[PhotonGuiSmokeNative]::Text($window,1002);Admission=[PhotonGuiSmokeNative]::Text($window,1007);Request=[PhotonGuiSmokeNative]::Text($window,1008);CopyEnabled=[PhotonGuiSmokeNative]::IsWindowEnabled([PhotonGuiSmokeNative]::Control($window,1107));Screenshot=[PhotonGuiSmokeNative]::Screenshot($window,(Join-Path $FixtureDirectory ('tray-'+$Phase+'.png')))}
+    $entry=[pscustomobject]@{Phase=$Phase;AtUTC=[DateTime]::UtcNow.ToString('o');PID=$gui.Process.Id;Creation=$gui.Creation;StateFileID=Read-TrayFileID;Status=$s;Connection=[PhotonGuiSmokeNative]::Text($window,1001);Runtime=[PhotonGuiSmokeNative]::Text($window,1002);Admission=[PhotonGuiSmokeNative]::Text($window,1007);Request=[PhotonGuiSmokeNative]::Text($window,1008);CopyEnabled=[PhotonGuiSmokeNative]::IsWindowEnabled([PhotonGuiSmokeNative]::Control($window,1107));PhysicalGeometry=[PhotonGuiSmokeNative]::Geometry($window);Screenshot=[PhotonGuiSmokeNative]::Screenshot($window,(Join-Path $FixtureDirectory ('tray-'+$Phase+'.png')))}
     $samples.Add($entry);$entry|ConvertTo-Json -Depth 13|Set-Content -Encoding UTF8 (Join-Path $FixtureDirectory ('tray-'+$Phase+'.json'))
 }
 function Find-TrayWindow($Owner) {
@@ -191,6 +195,68 @@ function Exit-OwnedTray($Owner,[IntPtr]$Handle) {
     Assert-TrayOwner $Owner;[PhotonGuiSmokeNative]::Verify($Handle,$Owner.Process.Id)
     [PhotonGuiSmokeNative]::Exit($Handle)
     if(!$Owner.Process.WaitForExit(15000) -or $null -eq $Owner.Process.ExitCode -or $Owner.Process.ExitCode -ne 0){throw 'Tray exit did not join and return zero'}
+}
+function Open-TrayDiagnostics {
+    Click-Tray $window 1111
+    $found=[pscustomobject]@{Handle=[IntPtr]::Zero}
+    Wait-Tray {$found.Handle=[PhotonGuiSmokeNative]::FindDiagnostics($gui.Process.Id);$found.Handle -ne [IntPtr]::Zero} 'owned diagnostics window' 20
+    [PhotonGuiSmokeNative]::Verify($found.Handle,$gui.Process.Id)
+    [PhotonGuiSmokeNative]::ResizeDiagnostics($found.Handle)
+    $found.Handle
+}
+function Save-TrayDiagnostics([IntPtr]$Target,[string]$Phase,[string]$Page) {
+    [PhotonGuiSmokeNative]::Verify($Target,$gui.Process.Id)
+    $geometry=[PhotonGuiSmokeNative]::Geometry($Target)
+    $record=[pscustomobject]@{Phase=$Phase;Page=$Page;PID=$gui.Process.Id;Creation=$gui.Creation;AtUTC=[DateTime]::UtcNow.ToString('o');Text=[PhotonGuiSmokeNative]::Text($Target,2310);Metadata=[PhotonGuiSmokeNative]::Text($Target,2314);PhysicalGeometry=$geometry;Screenshot=$null}
+    $diagnosticEvidence.Add($record)
+    $record|ConvertTo-Json -Depth 7|Set-Content -Encoding UTF8 (Join-Path $FixtureDirectory ('tray-diagnostics-'+$Phase+'-'+$Page+'.json'))
+    foreach($controlID in @(2301,2302,2303,2310,2311,2312,2313,2314)) {
+        $metrics=@($geometry.Controls|Where-Object ID -eq $controlID)
+        if($metrics.Count -ne 1 -or !$metrics[0].Visible -or !$metrics[0].InsideClient -or $metrics[0].FontHeight -le 0){throw "Diagnostics $Page has a missing, clipped or unstyled control $controlID"}
+    }
+    $record.Screenshot=[PhotonGuiSmokeNative]::Screenshot($Target,(Join-Path $FixtureDirectory ('tray-diagnostics-'+$Phase+'-'+$Page+'.png')))
+    if($record.Screenshot -notmatch 'saved; varied pixels'){throw "Diagnostics $Page did not render a real screenshot"}
+    $record|ConvertTo-Json -Depth 7|Set-Content -Encoding UTF8 (Join-Path $FixtureDirectory ('tray-diagnostics-'+$Phase+'-'+$Page+'.json'))
+}
+function Assert-TrayDiagnosticLog([IntPtr]$Target,[string]$RequiredEvent) {
+    Click-Tray $Target 2301;Click-Tray $Target 2311
+    Wait-Tray {[PhotonGuiSmokeNative]::Text($Target,2314).Contains($statePath+'.log') -and [PhotonGuiSmokeNative]::Text($Target,2310).Contains('msg='+$RequiredEvent)} 'real runtime log tail'
+    $shown=[PhotonGuiSmokeNative]::Text($Target,2310)
+    $stream=[IO.File]::Open($statePath+'.log',[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    try {
+        $start=[Math]::Max(0,$stream.Length-262144);$null=$stream.Seek($start,[IO.SeekOrigin]::Begin)
+        $buffer=New-Object byte[] 262144;$count=$stream.Read($buffer,0,$buffer.Length)
+        $source=[Text.Encoding]::UTF8.GetString($buffer,0,$count)
+    } finally {$stream.Dispose()}
+    $lines=@($shown.TrimEnd([char[]]"`r`n") -split '\r?\n')
+    if([Text.Encoding]::UTF8.GetByteCount($shown.Replace("`r`n","`n")) -gt 262144 -or $lines.Count -gt 1000 -or !$source.Contains($lines[$lines.Count-1])){throw 'Displayed log is not a bounded tail of this owned runtime log file'}
+}
+function Check-TrayDiagnostics([IntPtr]$Target,[string]$Phase,[bool]$Running) {
+    Click-Tray $Target 2302;Click-Tray $Target 2311
+    if($Running) {
+        Wait-Tray {
+            $fresh=Read-TrayStatus;$peer=@($fresh.peers|Where-Object peer -eq 'gateway.catofes.')
+            $text=[PhotonGuiSmokeNative]::Text($Target,2310)
+            $peer.Count -eq 1 -and $text.Contains('gateway.catofes.') -and $text.Contains('pull_state="'+$peer[0].pull_state+'"') -and $text.Contains('对象拉取累计')
+        } 'real Gossip peer and raw pull state'
+    } else {
+        Wait-Tray {$text=[PhotonGuiSmokeNative]::Text($Target,2310);$text.Contains('已清空上次节点数据') -and !$text.Contains('gateway.catofes.')} 'stopped peer view clears stale nodes'
+    }
+    Save-TrayDiagnostics $Target $Phase 'peers'
+    Click-Tray $Target 2303;Click-Tray $Target 2311
+    Wait-Tray {try {
+        $detail=[PhotonGuiSmokeNative]::Text($Target,2310)|ConvertFrom-Json
+        if(!$Running){return $detail.runtime_state -eq 'stopped' -and !$detail.available -and @($detail.PSObject.Properties|Where-Object Name -eq 'observation').Count -eq 0}
+        $detail.runtime_state -eq 'running' -and $detail.available -and $detail.observation.running -and $detail.observation.tunnel_ready -and $detail.observation.ike.live -and $detail.observation.ike.gateway -ceq 'gateway.catofes.' -and @($detail.observation.babel.routes|Where-Object prefix -eq '198.18.253.1/32').Count -eq 1 -and @($detail.observation.babel.routes|Where-Object prefix -eq 'fd00:7068:b4::1/128').Count -eq 1
+    }catch{$false}} 'public diagnostics DTO reflects this runtime'
+    Save-TrayDiagnostics $Target $Phase 'details'
+    Assert-TrayDiagnosticLog $Target $(if($Running){'runtime_started'}else{'runtime_stopped'})
+    Save-TrayDiagnostics $Target $Phase 'log'
+}
+function Read-TrayLogStart([string]$Text) {
+    $records=[regex]::Matches($Text,'(?m)^time=(\S+)[^\r\n]*\bmsg=runtime_started\b')
+    if($records.Count -eq 0){throw 'Real diagnostic log has no timestamped runtime_started event'}
+    [DateTimeOffset]::Parse($records[$records.Count-1].Groups[1].Value)
 }
 try {
     if($session -le 0 -or ![Environment]::UserInteractive -or !$interactive -or $interactive -ine [Security.Principal.WindowsIdentity]::GetCurrent().Name -or $explorer.Count -eq 0){throw 'Tray acceptance requires the logged-in Explorer desktop'}
@@ -220,7 +286,7 @@ try {
     if($request.version -ne 1 -or $request.zone -cne $fixture.ManagedZone -or [Convert]::FromBase64String($request.public_key).Length -ne 32){throw 'Invalid generated tray identity'}
     [IO.File]::WriteAllText((Join-Path $FixtureDirectory 'autojoin-request.b64'),$requestText,(New-Object Text.UTF8Encoding($false)))
     Wait-Tray {[PhotonGuiSmokeNative]::Text($window,1008) -ceq $requestText -and [PhotonGuiSmokeNative]::IsWindowEnabled([PhotonGuiSmokeNative]::Control($window,1107))} 'pending request UI'
-    $clipboardBackup=[Windows.Forms.Clipboard]::GetDataObject();$clipboardCaptured=$true;Click-Tray $window 1107
+    $clipboardBackup=[Windows.Forms.Clipboard]::GetDataObject();$clipboardCaptured=$true;$null=$clipboardOwnedTexts.Add($requestText);Click-Tray $window 1107
     Wait-Tray {[Windows.Forms.Clipboard]::GetText([Windows.Forms.TextDataFormat]::UnicodeText) -ceq $requestText} 'complete clipboard request' 10;$clipboardRoundtrip=$true
     Save-TrayPhase 'pending';[IO.File]::WriteAllText($phaseFile,'request');Wait-TrayAck 'wrong-issued'
     Wait-Tray {$s=Read-TrayStatus;$s.admission.pending -and $s.admission.reason -eq 'delegation_key_mismatch' -and $s.admission.join_request_b64 -ceq $requestText -and !$s.ike.live -and !$s.tunnel_ready -and [PhotonGuiSmokeNative]::Text($window,1007).Contains('本机公钥不匹配')} 'signed wrong-key rejection'
@@ -230,11 +296,36 @@ try {
     if(!$authority.chain_verified -or $authority.request.public_key -cne $request.public_key -or $authority.root_public_key -cne $fixture.TrustedRootPublicKey -or @($authority.authority.Keys|Where-Object Key -ceq $request.public_key).Count -ne 1){throw 'Correct fixture delegation does not bind the generated identity/root'}
     Wait-Tray {[PhotonGuiSmokeNative]::Text($window,1008) -eq '' -and ![PhotonGuiSmokeNative]::IsWindowEnabled([PhotonGuiSmokeNative]::Control($window,1107))} 'adopted request cleared'
     Save-TrayPhase 'adopted';[IO.File]::WriteAllText($phaseFile,'adopted');Wait-TrayAck 'verified'
+    $diagnostics=Open-TrayDiagnostics
+    Check-TrayDiagnostics $diagnostics 'running' $true
+    [PhotonGuiSmokeNative]::Close($diagnostics)
+    if([PhotonGuiSmokeNative]::IsWindowVisible($diagnostics)){throw 'Closing diagnostics did not hide its owned window'}
+    $afterDiagnostics=Check-TrayBusiness 'diagnostics-closed'
+    if($afterDiagnostics.ike.expires_at -cne $adopted.ike.expires_at){throw 'Diagnostics close changed the running IKE lifetime'}
+    $diagnosticChecks.ClosedWindowBusiness=$true
     Wait-Tray {[PhotonGuiSmokeNative]::TrayPresent($window)} 'owned Explorer icon'
     [PhotonGuiSmokeNative]::Close($window);Wait-Tray {![PhotonGuiSmokeNative]::IsWindowVisible($window)} 'tray hide'
     $null=Check-TrayBusiness 'hidden';[PhotonGuiSmokeNative]::Open($window)
     [PhotonGuiSmokeNative]::RebuildOwnedTray($window);Wait-Tray {[PhotonGuiSmokeNative]::TrayPresent($window)} 'owned icon rebuilt'
+    $diagnostics=Open-TrayDiagnostics;Assert-TrayDiagnosticLog $diagnostics 'runtime_started'
+    Click-Tray $diagnostics 2312
+    Wait-Tray {[PhotonGuiSmokeNative]::Text($diagnostics,2312) -ceq '继续刷新'} 'diagnostics pause enabled'
+    $pausedLog=[PhotonGuiSmokeNative]::Text($diagnostics,2310)
     Click-Tray $window 1103;Wait-Tray {try{Assert-TrayStopped;$true}catch{$false}} 'full runtime stop and resource release' 30
+    if([PhotonGuiSmokeNative]::Text($diagnostics,2310) -cne $pausedLog){throw 'Paused diagnostics changed while main runtime stopped'}
+    $diagnosticChecks.PauseHeldAcrossStop=$true
+    Assert-TrayDiagnosticLog $diagnostics 'runtime_stopped'
+    if([PhotonGuiSmokeNative]::Text($diagnostics,2310) -ceq $pausedLog){throw 'Explicit refresh did not update the paused log after runtime stop'}
+    $diagnosticChecks.ManualRefreshWhilePaused=$true
+    $copyText=[PhotonGuiSmokeNative]::Text($diagnostics,2310);$null=$clipboardOwnedTexts.Add($copyText)
+    $stoppedLogStart=Read-TrayLogStart $copyText
+    Click-Tray $diagnostics 2313
+    Wait-Tray {[Windows.Forms.Clipboard]::GetText([Windows.Forms.TextDataFormat]::UnicodeText) -ceq $copyText} 'complete diagnostic log clipboard copy' 10
+    $diagnosticChecks.ClipboardRoundtrip=$true
+    Check-TrayDiagnostics $diagnostics 'stopped' $false
+    Click-Tray $diagnostics 2312
+    Wait-Tray {[PhotonGuiSmokeNative]::Text($diagnostics,2312) -ceq '暂停刷新'} 'diagnostics auto refresh resumed'
+    [PhotonGuiSmokeNative]::Close($diagnostics)
     $lifecycle.Add([pscustomobject]@{Phase='stopped';PID=$gui.Process.Id;PipeUnavailable=$true;OfflineDatabaseOpened=$true;AdapterAbsent=$true})
     Click-Tray $window 1102;$started=Check-TrayBusiness 'started'
     if($started.ike.expires_at -ceq $adopted.ike.expires_at){throw 'Start reused the previous IKE lifetime'}
@@ -255,11 +346,37 @@ try {
     $saved=Read-TrayStatus;if($gui.Process.Id -ne $beforeSaveOwner -or $saved.ike.expires_at -cne $started.ike.expires_at){throw 'Save restarted the owned runtime'}
     Click-Tray $settings 1106;Wait-Tray {[PhotonGuiSmokeNative]::Text($settings,2019).StartsWith('配置已读取') -and [PhotonGuiSmokeNative]::Text($settings,2015) -ceq '1360'} 'real saved MTU reloaded'
     $allowedRows=@([PhotonGuiSmokeNative]::ListItems($settings,2003));if($allowedRows.Count -ne 1 -or $allowedRows[0] -cne '*'){throw 'Portable wildcard did not survive actual reload'}
+    foreach($page in @(
+        [pscustomobject]@{ID=2101;Name='identity';Controls=@(2001,2002)},
+        [pscustomobject]@{ID=2103;Name='gateway';Controls=@(2003,2021,2121,2122,2123,2124,2005,2006,2007,2111,2112,2113,2114)},
+        [pscustomobject]@{ID=2104;Name='routes';Controls=@(2004,2022,2131,2132,2133,2134)},
+        [pscustomobject]@{ID=2102;Name='advanced';Controls=@(2011,2012,2013,2014,2015,2016,2017,2018)}
+    )) {
+        Click-Tray $settings $page.ID
+        $geometry=[PhotonGuiSmokeNative]::Geometry($settings)
+        $geometry|ConvertTo-Json -Depth 6|Set-Content -Encoding UTF8 (Join-Path $FixtureDirectory ('tray-settings-'+$page.Name+'.json'))
+        foreach($controlID in @($page.Controls)+@(2101,2103,2104,2102,1105,1106,2019)) {
+            $metrics=@($geometry.Controls|Where-Object ID -eq $controlID)
+            if($metrics.Count -ne 1 -or !$metrics[0].Visible -or !$metrics[0].InsideClient -or $metrics[0].FontHeight -le 0){throw "Settings page $($page.Name) has a missing, clipped or unstyled control $controlID"}
+        }
+        $shot=[PhotonGuiSmokeNative]::Screenshot($settings,(Join-Path $FixtureDirectory ('tray-settings-'+$page.Name+'.png')))
+        if($shot -notmatch 'saved; varied pixels'){throw "Settings page $($page.Name) did not render a real screenshot: $shot"}
+        $visualEvidence.Add([pscustomobject]@{Page=$page.Name;DPIEvidence='Real HWND DPI; monitor scaling unchanged';PhysicalGeometry=$geometry;Screenshot=$shot})
+    }
+    $visualEvidence.ToArray()|ConvertTo-Json -Depth 8|Set-Content -Encoding UTF8 (Join-Path $FixtureDirectory 'tray-settings-visual.json')
     $null=[PhotonGuiSmokeNative]::Screenshot($settings,(Join-Path $FixtureDirectory 'tray-settings.png'));[PhotonGuiSmokeNative]::Close($settings)
     Click-Tray $window 1104;Wait-Tray {try{$s=Read-TrayStatus;$s.tunnel_ready -and $s.ike.expires_at -cne $started.ike.expires_at}catch{$false}} 'same-GUI runtime restart with fresh SA'
     $restarted=Check-TrayBusiness 'restarted';$interfaces=@(Get-NetIPInterface -InterfaceAlias $adapterName -ErrorAction Stop)
     if($interfaces.Count -ne 2 -or @($interfaces|Where-Object {$_.NlMtu -ne 1360}).Count -ne 0 -or @($interfaces|Where-Object AddressFamily -eq 'IPv4').Count -ne 1 -or @($interfaces|Where-Object AddressFamily -eq 'IPv6').Count -ne 1){throw 'Restart did not apply MTU1360 to both owned address families'}
     Save-TrayPhase 'restarted';[IO.File]::WriteAllText($phaseFile,'restarted');Wait-TrayAck 'restart-verified'
+    $diagnostics=Open-TrayDiagnostics;Check-TrayDiagnostics $diagnostics 'restarted' $true
+    $diagnosticDetail=@($diagnosticEvidence|Where-Object {$_.Phase -eq 'restarted' -and $_.Page -eq 'details'})[0].Text|ConvertFrom-Json
+    if($diagnosticDetail.observation.ike.expires_at -cne $restarted.ike.expires_at){throw 'Diagnostics retained the pre-restart SA snapshot'}
+    $diagnosticChecks.RestartSAMatches=$true
+    $restartedLog=@($diagnosticEvidence|Where-Object {$_.Phase -eq 'restarted' -and $_.Page -eq 'log'})[0].Text
+    if((Read-TrayLogStart $restartedLog) -le $stoppedLogStart){throw 'Reconnected diagnostics retained the old runtime log snapshot'}
+    $diagnosticChecks.RestartLogFresh=$true
+    [PhotonGuiSmokeNative]::Close($diagnostics)
     $conflict=Start-OwnedTray (Join-Path $portableC 'photon-windows.exe') 'conflict';$conflictWindow=Find-TrayWindow $conflict
     Click-Tray $conflictWindow 1102
     Wait-Tray {[PhotonGuiSmokeNative]::Text($conflictWindow,1002).Contains('失败') -and ![PhotonGuiSmokeNative]::Text($conflictWindow,1001).Contains('已连接') -and [PhotonGuiSmokeNative]::Text($conflictWindow,1006).Contains('不会接管')} 'foreign active database rejected with actionable hint'
@@ -283,9 +400,12 @@ try {
     Assert-TrayReleased $movedOwner $movedIndex 'exited-c';Assert-OldRegistration
     $completed=$true
 }catch{$failure=$_.Exception.Message;$failurePosition=$_.InvocationInfo.PositionMessage;$failureStack=$_.ScriptStackTrace;[IO.File]::WriteAllText($phaseFile,'failed')}finally{
-    if($clipboardCaptured){try{if([Windows.Forms.Clipboard]::GetText([Windows.Forms.TextDataFormat]::UnicodeText) -ceq $requestText){if($null -eq $clipboardBackup){[Windows.Forms.Clipboard]::Clear()}else{[Windows.Forms.Clipboard]::SetDataObject($clipboardBackup,$true)};$clipboardRestored=$true}}catch{$failure="$failure; clipboard restore: $($_.Exception.Message)";$completed=$false}}
+    if($clipboardCaptured){try{if($clipboardOwnedTexts.Contains([Windows.Forms.Clipboard]::GetText([Windows.Forms.TextDataFormat]::UnicodeText))){if($null -eq $clipboardBackup){[Windows.Forms.Clipboard]::Clear()}else{[Windows.Forms.Clipboard]::SetDataObject($clipboardBackup,$true)};$clipboardRestored=$true}}catch{$failure="$failure; clipboard restore: $($_.Exception.Message)";$completed=$false}}
     foreach($entry in $owned){try{if(!$entry.Process.HasExited){Assert-TrayOwner $entry;$handle=[PhotonGuiSmokeNative]::Find($entry.Process.Id);if($handle -ne [IntPtr]::Zero){[PhotonGuiSmokeNative]::Exit($handle)};if(!$entry.Process.WaitForExit(15000)){Assert-TrayOwner $entry;Stop-Process -Id $entry.Process.Id -ErrorAction Stop;if(!$entry.Process.WaitForExit(10000)){throw 'Owned GUI cleanup deadline'}}}}catch{$failure="$failure; GUI cleanup: $($_.Exception.Message)";$completed=$false}}
     if($oldInstalled){try{Assert-OldRegistration;$null=Invoke-TrayCLI @('service','remove','--name',$oldService,'--config',$Config)}catch{$failure="$failure; old registration cleanup: $($_.Exception.Message)";$completed=$false}}
+    try {
+        [pscustomobject]@{Checks=$diagnosticChecks;Views=$diagnosticEvidence.ToArray()}|ConvertTo-Json -Depth 10|Set-Content -Encoding UTF8 (Join-Path $FixtureDirectory 'tray-diagnostics.json')
+    } catch {$failure="$failure; diagnostic evidence persistence: $($_.Exception.Message)";$completed=$false}
     [pscustomobject]@{SchemaVersion=1;Completed=$completed;Failure=$failure;FailurePosition=$failurePosition;FailureStack=$failureStack;SessionID=$session;InteractiveUser=$interactive;Explorer=@($explorer|Select-Object Id,SessionId);FirstRun=$firstRun;OldStoppedRegistration=$oldBefore|Select-Object Name,PathName,State,ProcessId,StartName;Request=$request;Authority=$authority;StateFileID=$stateID;AppliedInterfaces=@($interfaces|Select-Object InterfaceAlias,InterfaceIndex,AddressFamily,NlMtu);ClipboardRoundtrip=$clipboardRoundtrip;ClipboardRestored=$clipboardRestored;Faults=$trayFaultsResult;Lifecycle=$lifecycle.ToArray();Samples=$samples.ToArray();Processes=@($owned|ForEach-Object{[pscustomobject]@{PID=$_.Process.Id;Path=$_.Path;Creation=$_.Creation;Exited=$_.Process.HasExited;ExitCode=$(if($_.Process.HasExited){$_.Process.ExitCode}else{$null});ExpectedForcedExit=$_.ExpectedForcedExit}})}|ConvertTo-Json -Depth 20|Set-Content -Encoding UTF8 (Join-Path $FixtureDirectory 'tray-smoke.json')
     foreach($entry in $owned){$entry.Process.Dispose()}
 }

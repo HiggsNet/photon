@@ -26,10 +26,19 @@ GUI 不再接受 `--name`，每个实例使用独立的配置和数据库路径�
 - “启动连接”“停止连接”“重新连接”管理本次托盘进程拥有的 Daemon。
   打开 GUI 不自动连接；运行中的配置使用启动时的快照，保存设置不会自动重启。
 - 首次启动显示入网进度与可复制的入网请求，授权同步后自动继续连接。已入网与业务已连接分别展示。
+- “日志与诊断”提供日志、Gossip / Peer 和诊断详情三页，支持自动刷新、暂停、刷新一次及复制当前内容。
+  日志只读当前或最后一次连接的 `state.path + ".log"`，最多显示末尾 256 KiB / 1000 行；
+  来源、采样时间及截断提示位于正文上方。保存数据库路径不会切换正在运行的连接及其日志来源。
+  停止后仍可查看历史日志；Peer 和诊断详情在停止或实时读取失败后清除旧在线数据。
+  Peer 页显示原始 `pull_state`、更新时间和对象拉取计数；详情页为当前公开状态的 JSON，
+  包含入网、Wintun、IKE、Babel 和路由信息。暂停只冻结诊断窗口，“刷新一次”在暂停时仍有效。
+  关闭诊断窗口保留连接，退出托盘才停止 Daemon。
 - 关闭窗口隐藏到托盘；托盘可以打开窗口、启动、停止及停止连接后退出。
   退出会等待 Daemon 释放网络资源和数据库，不留下常驻子进程。
   托盘不可用时关闭窗口也走停止连接后退出流程。
 - 配置分为“身份”“网关与引导”“分流路由”“高级”四页。
+  页面导航和主操作使用统一强调色；身份、地址与网段采用等宽字体，输入框提供示例。
+  保存与重新读取位于设置页右下方，字段和列表按逻辑 DPI 单位排列。
   身份页填写根公钥和本机节点域名；网关规则与分流网段通过列表添加、修改和删除，
   无需在文本框中手工维护每行一项。引导节点分别填写 Photon 网关身份与 `主机:端口`。
   身份是网关实际的 Photon peer/zone，例如 `gateway-a.catofes.`；地址是 Gossip 的 UDP/TCP
@@ -63,11 +72,54 @@ GUI 不再接受 `--name`，每个实例使用独立的配置和数据库路径�
 旧版 Windows 服务已经停止时不影响托盘使用；如果仍在运行并占用同一数据库，
 需要先在 Windows 服务管理器停止旧服务。托盘不会自动停止、修改或接管既有服务。
 
+Windows 已有 `status`、`peers`、`routes`、`diagnostics` 只读命令，例如：
+
+```powershell
+.\photon-windows.exe diagnostics --config C:\Photon\config.yaml
+.\photon-windows.exe peers --config C:\Photon\config.yaml
+```
+
+这些命令读取正在运行实例的本机 IPC；Linux 的整套 `debug` 子命令尚未全部移植。
+诊断窗口复用现有公开状态，没有执行任意命令或打开另一份身份数据库。
+
+## 2026-10-16 日志与诊断窗口
+
+新增独立原生窗口，三页共用只读、可选择和滚动的正文区。日志打开和更新时定位到最新记录；
+暂停保留正文、选区和滚动位置，主窗口仍正常刷新。手动刷新在暂停或 worker 忙碌时不会丢失。
+窗口使用既有主题、字体和逐窗口 DPI 布局，最小逻辑尺寸为 700 × 620。
+
+日志读取只打开 regular file，不跟随最终 symlink/reparse point；不创建配置、日志、数据库或身份。
+每次按打开文件当时的大小只读末尾 256 KiB，保留最多 1000 行并处理 UTF-8 边界；
+共享删除权限、短时打开及关闭句柄允许既有 logger 轮转。日志路径以当前或最后一次 owned run 为准，
+保存新的数据库路径不会改读其他运行实例。日志脱敏沿用既有生产 logger。
+
+全仓 `make check`、五包 race 及 Windows app/internal/Gossip vet 通过；Windows app/internal
+两包在已登录 Session 2 运行，253 项通过、10 项 opt-in/helper 跳过，两个测试进程和一次性任务实际退出码均为 0。
+原生新增回归包括缺失日志无写入、无效配置及非 regular/link 拒绝、UTF-8/字节/行数边界、
+运行路径保持、轮转、原有脱敏、真实 worker 读取、暂停及忙碌时手动刷新、离线 JSON 无旧 observation、
+三页最小窗口几何及最新日志可见行。文件 ACL 拒读未单独注入验收。
+
+公开证据位于 `build/validation/windows-diagnostics-20261016/`。`accepted-tray/` 保留首轮真实桌面验收，
+之后根据截图修复日志初始滚动位置，最终原生测试见 `native-final-interactive.log`。
+`accepted-final-tray/` 与 `full-tray-final.log` 为最终冻结源码的完整重跑，实际退出码为 0，
+包含 `PORTABLE_TRAY_REAL_RUNTIME_PASS`。真实日志正文与文件、Peer 的 `pull_state` 与计数、
+公开 JSON 的 IKE/Babel 双栈路由一致；暂停保持、手动刷新、完整复制及剪贴板恢复通过。
+停止后 Peer/详情清除旧在线信息而日志仍可读，重连后的新 SA 与 status 一致；
+诊断关闭不改变 SA，双栈通信持续。三阶段九张最小窗口截图及物理几何保留，最终三页截图已独立目检，
+日志视口显示最新记录。完整组还回归首次配置、错误公钥拒绝、同进程正确入网、配置保存/MTU、
+竞争实例保护、换目录保持身份和退出释放资源；本轮未操作 PVE。
+Windows vet 曾扩大到包含 Linux-only BIRD 测试的 host 包，因 `syscall.Wait4` 不可用而失败，
+原件 `windows-vet-linux-only-host.log` 保留；该包普通/race 测试在 Linux 通过，Windows vet 通过范围如上。
+
 ## 可重复验收
 
 portable 测试覆盖参数、配置校验、外部变更、状态解析及路由文本；Windows 原生测试额外覆盖
 Win32 ABI、真实控件、DACL 保留、原子替换失败保护、运行生命周期及管道进程身份绑定。
-原生控件测试可以在 SSH 的非交互会话运行，不能据此认定托盘已在 Explorer 中出现。
+基础原生控件测试可在 SSH 非交互会话运行；启用 `PHOTON_WINDOWS_GUI_NATIVE=1` 的
+完整组包含真实可见性与 Tab 导航断言，应在已登录桌面运行，不能用不可见窗口代替。
+例如从管理员桌面终端先设置 `$env:PHOTON_WINDOWS_GUI_NATIVE='1'`，
+再运行 `go test ./app/photon-windows ./internal/photonwindows`，
+或由一次性 InteractiveToken/Highest 任务执行交叉编译的测试程序。
 
 完整桌面场景需要测试账号以控制台方式登录 Windows，保持解锁且 Explorer 运行。
 SSH 使用同一账号。通过一次性 InteractiveToken/Highest 计划任务在该用户桌面运行夹具，
@@ -266,3 +318,45 @@ CLI SCM 证据对应调整前源码，服务与运行链路在该布局调整中
 
 后续已补充直接托盘进程的真实强杀恢复，以及 PVE VM101/net0 断开后同进程自动双栈恢复，
 含独立定时恢复和宿主机配置核对，见 [托盘故障验收](tray-fault-testing.md)。
+
+## 2026-10-15 原生界面整理
+
+主窗口区分连接标题、运行说明、网关/入网与路由，正常连接以绿色标题呈现。
+路由使用等宽字体按列对齐，额外窗口高度分配给路由区；配置摘要和操作提示固定在底部。
+完整错误进入可选择、可复制、可滚动的只读详情框，不再挤占单行状态标题。
+同一状态轮询不重置文字选择，恢复健康状态也不抹去上一条操作失败提示。
+
+四个设置页统一导航、标题、说明、间距与输入示例；网关规则、引导节点及路由按组排列，
+高级字段分两列，保存按钮固定在右下。cue 仅提示示例，不写入配置或草稿。
+沿用原配置 schema、校验、原子保存、外部变更保护、托盘生命周期及管理员权限要求。
+
+exe 内嵌 common-controls v6 / PerMonitorV2 / asInvoker 清单，不增加前端运行时。
+每个顶层窗口独立处理 DPI、字体和最小尺寸；高对比度配色沿用系统颜色，禁用按钮单独绘制。
+字体、画刷在所有子控件关闭后统一释放。清单源为 `photon-windows.manifest`，
+1.4 KiB 的 `rsrc_windows_amd64.syso` 由固定版本 `rsrc v0.10.2` 生成并入库，
+普通构建无需安装资源编译器；`go generate ./app/photon-windows` 可重新生成，确定性比较通过。
+
+全仓 `make check`、两包 Windows vet 通过。完整原生组在 Windows 11 `photon-test`
+Session 2 的一次性任务内运行：243 项顶层通过、10 项 opt-in/helper 顶层跳过，
+两包实际退出码及任务实际退出码均为 0。新增检查覆盖 DRAWITEMSTRUCT ABI、
+96/144/192 DPI 通知、字体角色保持、最小窗口四页边界/不重叠、真实 Tab 遍历、
+长错误详情及轮询保留选择。144/192 为本次窗口注入的通知，未更改显示器缩放；
+实际桌面截图均为 96 DPI，不替代高 DPI 多显示器实机目检或系统高对比度模式验收。
+
+完整隔离 Photon gateway / StrongSwan 6.0.7 桌面验收通过：四页最小 700×700 截图、
+主窗口、待授权及占用失败提示均经独立目检，真实控件边界与字体记录一致。
+首次配置、自动入网、列表操作、通配符保存/重读、非法 MTU 保护、保存不重启、
+重新连接后双栈 MTU1360 与实际业务、双实例保护、换目录身份稳定及退出释放继续通过。
+本轮没有 PVE 操作或物理断网；先前故障验收与 Gossip 待观察项继续独立。
+
+公开证据在 `build/validation/windows-ui-20261015/`：`accepted-tray/` 为完整桌面原件，
+`native-interactive.log`、`make-check-final.log`、`windows-vet.log`、`ast.log`、
+`accepted-sources.sha256` 和 `source-recheck.log` 对应最终验证。
+首轮 SSH 原生组在控件可见性断言失败，诊断确认 SSH 窗口不可见，原断言未放宽；
+移至已登录桌面后通过。首次交互包装将正常 stderr 日志当成 PowerShell 错误提前结束，
+改为保留 stderr 并核实际原生退出码后完整重跑通过。
+原件保留在 `native-before-tab-diagnostic.log`、`native-tab-diagnostic.log`、
+`native-dpi-focused.log` 和 `native-interactive-before-stderr-fix.log`。
+
+`cleanup.log`、`docker-cleanup.txt` 独立确认本轮服务/source、适配器、地址、路由、
+GUI/原生测试任务、进程、远端目录和容器均无残留；两个原 Explorer 会话保留。

@@ -30,6 +30,7 @@ const (
 	guiReloadID             = 1106
 	guiCopyRequestID        = 1107
 	guiSettingsID           = 1110
+	guiDiagnosticsID        = 1111
 	guiConfigSummaryID      = 1009
 	guiOpenID               = 1201
 	guiTrayStartID          = 1202
@@ -140,6 +141,7 @@ type guiRequest struct {
 	Action       string
 	Form         desktopConfigForm
 	EditRevision uint64
+	IncludeLogs  bool
 }
 type guiResult struct {
 	Action       string
@@ -147,8 +149,12 @@ type guiResult struct {
 	EditRevision uint64
 	Err          error
 	Snapshot     desktopSnapshot
+	IncludeLogs  bool
+	LogTail      desktopLogTail
+	LogErr       error
 }
 type desktopWindow struct {
+	appearance                 *guiAppearance
 	hwnd, font, menu, icon     uintptr
 	controls                   map[int]uintptr
 	labels                     [2]uintptr
@@ -159,6 +165,8 @@ type desktopWindow struct {
 	quitting, quitSubmitted    bool
 	editRevision               uint64
 	settings                   uintptr
+	diagnostics                uintptr
+	diagnosticsView            *guiDiagnosticsView
 	settingsPage               int
 	formLabels                 map[int]uintptr
 	formLoaded                 bool
@@ -178,6 +186,7 @@ type desktopWindow struct {
 	snapshot                   desktopSnapshot
 	admission                  desktopAdmissionView
 	textCache                  map[uintptr]string
+	operationNote, liveError   string
 }
 
 func guiUTF16(s string) *uint16 {
@@ -203,7 +212,6 @@ func runDesktop(options desktopOptions) (err error) {
 	}()
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	guiUser32.NewProc("SetProcessDPIAware").Call()
 	backend, err := newDesktopBackend(options)
 	if err != nil {
 		return err
@@ -233,6 +241,12 @@ func runDesktop(options desktopOptions) (err error) {
 				dialog = window.settings
 			}
 		}
+		if window.diagnostics != 0 {
+			child, _, _ := guiUser32.NewProc("IsChild").Call(window.diagnostics, message.Window)
+			if message.Window == window.diagnostics || child != 0 {
+				dialog = window.diagnostics
+			}
+		}
 		handled, _, _ := guiIsDialogMessage.Call(dialog, uintptr(unsafe.Pointer(&message)))
 		if handled == 0 {
 			guiTranslateMessage.Call(uintptr(unsafe.Pointer(&message)))
@@ -249,7 +263,7 @@ func newDesktopWindow(backend *desktopBackend) (_ *desktopWindow, err error) {
 	icon, _, _ := guiLoadIcon.Call(0, 32512) // Shared IDI_APPLICATION; do not destroy.
 	guiRegisterOnce.Do(func() {
 		cursor, _, _ := guiLoadCursor.Call(0, 32512)
-		for _, name := range []string{"PhotonWindowsDesktop", "PhotonWindowsSettings"} {
+		for _, name := range []string{"PhotonWindowsDesktop", "PhotonWindowsSettings", "PhotonWindowsDiagnostics"} {
 			class := guiWindowClass{Style: 8, WindowProc: guiWindowProc, Instance: instance, Icon: icon, SmallIcon: icon, Cursor: cursor, Background: 16, ClassName: guiUTF16(name)}
 			class.Size = uint32(unsafe.Sizeof(class))
 			atom, _, e := guiRegisterClass.Call(uintptr(unsafe.Pointer(&class)))
@@ -274,51 +288,16 @@ func newDesktopWindow(backend *desktopBackend) (_ *desktopWindow, err error) {
 		return nil, guiCallError("CreateWindowEx", callErr)
 	}
 	guiWindows.Store(w.hwnd, w)
-	// An owned font is deleted only after all child controls are destroyed.
-	height := int32(-16)
-	w.font, _, callErr = guiCreateFont.Call(uintptr(height), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, uintptr(unsafe.Pointer(guiUTF16("Microsoft YaHei UI"))))
-	if w.font == 0 {
-		return nil, guiCallError("CreateFont", callErr)
+	if err := w.guiInitStyle(); err != nil {
+		return nil, err
 	}
-	static := uint32(0x50000000)
-	button := uint32(0x50010000)
-	edit := uint32(0x50010000 | 0x0004 | 0x0040 | 0x0080 | 0x1000 | 0x00200000 | 0x00100000)
-	specs := []struct {
-		id             int
-		class, text    string
-		style, exStyle uint32
-	}{
-		{guiStatusID, "STATIC", "连接：读取中…", static, 0},
-		{guiRuntimeID, "STATIC", "运行状态：读取中…", static, 0},
-		{guiGatewayID, "STATIC", "活动网关：—", static, 0},
-		{guiStartID, "BUTTON", "启动连接", button, 0},
-		{guiStopID, "BUTTON", "停止连接", button, 0},
-		{guiRestartID, "BUTTON", "重新连接", button, 0},
-		{guiAdmissionID, "STATIC", "入网：读取中…", static, 0},
-		{guiJoinRequestID, "EDIT", "", 0x50010000 | 0x0080 | 0x0800, 0x200},
-		{guiCopyRequestID, "BUTTON", "复制入网请求", button, 0},
-		{guiRoutesID, "EDIT", "尚无实时路由", edit | 0x0800, 0x200},
-		{guiConfigSummaryID, "STATIC", "设置正在读取…", static, 0},
-		{guiSettingsID, "BUTTON", "打开设置", button, 0},
-		{guiNoteID, "STATIC", "保存后需重新连接生效；关闭窗口隐藏到托盘，退出 Photon 会停止连接。", static, 0},
-	}
-	for _, spec := range specs {
-		hwnd, _, e := guiCreateWindow.Call(uintptr(spec.exStyle), uintptr(unsafe.Pointer(guiUTF16(spec.class))), uintptr(unsafe.Pointer(guiUTF16(spec.text))), uintptr(spec.style), 0, 0, 0, 0, w.hwnd, uintptr(spec.id), instance, 0)
-		if hwnd == 0 {
-			return nil, guiCallError("CreateWindowEx "+spec.class, e)
-		}
-		w.controls[spec.id] = hwnd
-		guiSendMessage.Call(hwnd, 0x0030, w.font, 1) // WM_SETFONT
-	}
-	for i, text := range []string{"实时 Babel 路由（目标 / 来源前缀 / origin / metric）", "配置文件 · " + backend.options.ConfigPath} {
-		hwnd, _, e := guiCreateWindow.Call(0, uintptr(unsafe.Pointer(guiUTF16("STATIC"))), uintptr(unsafe.Pointer(guiUTF16(text))), uintptr(static), 0, 0, 0, 0, w.hwnd, 0, instance, 0)
-		if hwnd == 0 {
-			return nil, guiCallError("CreateWindowEx label", e)
-		}
-		w.labels[i] = hwnd
-		guiSendMessage.Call(hwnd, 0x0030, w.font, 1)
+	if err := w.createMainControls(); err != nil {
+		return nil, err
 	}
 	if err := w.createSettingsWindow(); err != nil {
+		return nil, err
+	}
+	if err := w.createDiagnosticsWindow(); err != nil {
 		return nil, err
 	}
 	guiSendMessage.Call(w.controls[guiRoutesID], 0x00c5, 1<<20, 0)
@@ -365,7 +344,7 @@ func (w *desktopWindow) startWorker() {
 				if w.ctx.Err() != nil {
 					return
 				}
-				result := guiResult{Action: request.Action, EditRevision: request.EditRevision}
+				result := guiResult{Action: request.Action, EditRevision: request.EditRevision, IncludeLogs: request.IncludeLogs}
 				switch request.Action {
 				case "load":
 					result.Form, result.Err = w.backend.LoadForm()
@@ -383,6 +362,9 @@ func (w *desktopWindow) startWorker() {
 				// A quit result is sent only after the owned runtime has joined.
 				if request.Action != "quit" {
 					result.Snapshot = w.backend.Snapshot(w.ctx)
+					if request.IncludeLogs {
+						result.LogTail, result.LogErr = w.backend.LogTail()
+					}
 				}
 				w.postMu.Lock()
 				if w.ctx.Err() == nil {
@@ -408,6 +390,9 @@ func (w *desktopWindow) dispose() error {
 	// Also cover GetMessage failure or unexpected window destruction. Normal
 	// Quit already joined the runtime on the worker before reaching disposal.
 	cleanupErr := w.backend.Close()
+	if w.diagnostics != 0 {
+		guiDestroyWindow.Call(w.diagnostics)
+	}
 	if w.settings != 0 {
 		guiDestroyWindow.Call(w.settings)
 	}
@@ -428,10 +413,7 @@ func (w *desktopWindow) dispose() error {
 		guiDestroyMenu.Call(w.menu)
 		w.menu = 0
 	}
-	if w.font != 0 {
-		guiDeleteObject.Call(w.font)
-		w.font = 0
-	}
+	w.guiReleaseStyle()
 	return cleanupErr
 }
 
@@ -439,8 +421,14 @@ func desktopWindowProc(hwnd uintptr, message uint32, wp, lp uintptr) uintptr {
 	value, exists := guiWindows.Load(hwnd)
 	if exists {
 		w := value.(*desktopWindow)
+		if result, handled := w.guiHandleStyleMessage(hwnd, message, wp, lp); handled {
+			return result
+		}
 		if hwnd == w.settings {
 			return w.settingsWindowProc(hwnd, message, wp, lp)
+		}
+		if hwnd == w.diagnostics {
+			return w.diagnosticsWindowProc(hwnd, message, wp, lp)
 		}
 		if message == w.taskbarCreated && w.taskbarCreated != 0 {
 			w.tray = false
@@ -454,15 +442,6 @@ func desktopWindowProc(hwnd uintptr, message uint32, wp, lp uintptr) uintptr {
 		switch message {
 		case guiWMSize:
 			w.layout()
-			return 0
-		case guiWMGetMinMaxInfo:
-			if lp != 0 {
-				minimum := guiPoint{700, 620}
-				// LPARAM is native MINMAXINFO storage, not a Go pointer. Its
-				// fourth POINT is ptMinTrackSize. Copy only those two LONGs
-				// through the native API without reinterpreting its address.
-				guiMoveMemory.Call(lp+3*unsafe.Sizeof(minimum), uintptr(unsafe.Pointer(&minimum)), unsafe.Sizeof(minimum))
-			}
 			return 0
 		case guiWMCommand:
 			id, notification := int(wp&0xffff), uint16(wp>>16)
@@ -501,6 +480,9 @@ func desktopWindowProc(hwnd uintptr, message uint32, wp, lp uintptr) uintptr {
 				if w.settings != 0 {
 					guiShowWindow.Call(w.settings, 0)
 				}
+				if w.diagnostics != 0 {
+					guiShowWindow.Call(w.diagnostics, 0)
+				}
 				guiShowWindow.Call(hwnd, 0)
 			} else {
 				w.quit()
@@ -533,6 +515,9 @@ func (w *desktopWindow) submit(request guiRequest) {
 	if request.Action == "load" {
 		request.EditRevision = w.editRevision
 	}
+	if request.Action != "quit" {
+		request.IncludeLogs = w.diagnosticsReadLogs()
+	}
 	select {
 	case w.requests <- request:
 		w.busy = true
@@ -554,6 +539,12 @@ func (w *desktopWindow) submit(request guiRequest) {
 	}
 }
 func (w *desktopWindow) command(id int) {
+	if id == guiDiagnosticsID {
+		if !w.quitting {
+			w.openDiagnostics()
+		}
+		return
+	}
 	if id == guiSettingsID {
 		if !w.quitting {
 			w.openSettings()
@@ -631,7 +622,7 @@ func (w *desktopWindow) applyResult(result guiResult) {
 		if result.Err != nil {
 			w.quitting, w.quitSubmitted = false, false
 			w.enableForm(true)
-			for _, id := range []int{guiStartID, guiStopID, guiRestartID, guiReloadID, guiSettingsID} {
+			for _, id := range []int{guiStartID, guiStopID, guiRestartID, guiReloadID, guiSettingsID, guiDiagnosticsID} {
 				guiEnableWindow.Call(w.controls[id], 1)
 			}
 			if w.formLoaded {
@@ -702,6 +693,7 @@ func (w *desktopWindow) applyResult(result guiResult) {
 	}
 	w.updateConfigSummary()
 	w.render(result.Snapshot)
+	w.renderDiagnostics(result.Snapshot, result.LogTail, result.LogErr, result.IncludeLogs)
 	if w.settings != 0 && (result.Action == "load" || result.Action == "save") {
 		// EnableWindow queues paint for the action buttons. Complete this
 		// file operation's parent/child painting together; periodic status
@@ -737,12 +729,22 @@ func (w *desktopWindow) render(snapshot desktopSnapshot) {
 		}
 		if len(observation.Babel.Routes) > 0 {
 			var text strings.Builder
+			targetWidth, sourceWidth, originWidth := 18, 8, 12
+			for _, route := range observation.Babel.Routes {
+				targetWidth = max(targetWidth, len(route.Prefix.String()))
+				if route.SourcePrefix.IsValid() {
+					sourceWidth = max(sourceWidth, len(route.SourcePrefix.String()))
+				}
+				originWidth = max(originWidth, len(route.Origin))
+			}
 			for _, route := range observation.Babel.Routes {
 				source := "任意"
+				padding := sourceWidth - 2 // Two CJK characters occupy four mono cells.
 				if route.SourcePrefix.IsValid() {
 					source = route.SourcePrefix.String()
+					padding = sourceWidth
 				}
-				fmt.Fprintf(&text, "%s    来源 %s    origin %s    metric %d\r\n", route.Prefix, source, route.Origin, route.Metric)
+				fmt.Fprintf(&text, "%-*s  来源 %-*s  origin %-*s  metric %d\r\n", targetWidth, route.Prefix.String(), padding, source, originWidth, route.Origin, route.Metric)
 			}
 			if observation.RoutesTruncated {
 				text.WriteString("（路由列表已截断）\r\n")
@@ -751,7 +753,7 @@ func (w *desktopWindow) render(snapshot desktopSnapshot) {
 		}
 	}
 	if snapshot.Error != "" {
-		connection = "状态不可用 · " + snapshot.Error
+		connection = "状态不可用"
 		gateway = "—"
 		routes = "实时状态不可用，已清空上次路由。"
 	}
@@ -766,6 +768,8 @@ func (w *desktopWindow) render(snapshot desktopSnapshot) {
 	w.setText(w.controls[guiRoutesID], routes)
 	w.setText(w.controls[guiAdmissionID], w.admission.Label)
 	w.setText(w.controls[guiJoinRequestID], w.admission.Request)
+	w.liveError = snapshot.Error
+	w.refreshMainNote()
 	if wasPending != w.admission.Pending {
 		showRequest := uintptr(0)
 		if w.admission.Pending {
@@ -790,7 +794,8 @@ func (w *desktopWindow) setText(hwnd uintptr, text string) {
 	guiSetWindowText.Call(hwnd, uintptr(unsafe.Pointer(guiUTF16(text))))
 }
 func (w *desktopWindow) note(text string) {
-	w.setText(w.controls[guiNoteID], text)
+	w.operationNote = text
+	w.refreshMainNote()
 	if w.controls[guiSettingsNoteID] != 0 {
 		w.setText(w.controls[guiSettingsNoteID], text)
 	}
@@ -819,7 +824,7 @@ func (w *desktopWindow) quit() {
 	guiEnableWindow.Call(w.controls[guiCopyRequestID], 0)
 	w.updateTray(false)
 	w.enableForm(false)
-	for _, id := range []int{guiStartID, guiStopID, guiRestartID, guiSaveID, guiReloadID, guiSettingsID} {
+	for _, id := range []int{guiStartID, guiStopID, guiRestartID, guiSaveID, guiReloadID, guiSettingsID, guiDiagnosticsID} {
 		guiEnableWindow.Call(w.controls[id], 0)
 	}
 	w.note("正在停止连接并退出 Photon…")
@@ -883,51 +888,29 @@ func (w *desktopWindow) updateTray(add bool) {
 		w.tray = result != 0
 	}
 }
-func (w *desktopWindow) layout() {
-	var bounds guiRect
-	guiGetClientRect.Call(w.hwnd, uintptr(unsafe.Pointer(&bounds)))
-	width, height := int(bounds.Right), int(bounds.Bottom)
-	if width <= 0 || height <= 0 {
-		return
-	}
-	move := func(hwnd uintptr, x, y, wid, hei int) {
-		if hwnd != 0 {
-			guiMoveWindow.Call(hwnd, uintptr(x), uintptr(y), uintptr(max(wid, 0)), uintptr(max(hei, 0)), 1)
-		}
-	}
-	for row, id := range []int{guiStatusID, guiRuntimeID, guiGatewayID} {
-		move(w.controls[id], 16, 14+row*27, width-32, 24)
-	}
-	for column, id := range []int{guiStartID, guiStopID, guiRestartID} {
-		move(w.controls[id], 16+column*132, 100, 120, 30)
-	}
-	admissionHeight, routesTop, routesHeight := 26, 175, 130
-	if w.admission.Pending {
-		admissionHeight, routesTop, routesHeight = 52, 241, 80
-	}
-	move(w.controls[guiAdmissionID], 16, 141, width-32, admissionHeight)
-	move(w.controls[guiJoinRequestID], 16, 199, width-192, 30)
-	move(w.controls[guiCopyRequestID], width-164, 199, 148, 30)
-	move(w.labels[0], 16, routesTop, width-32, 23)
-	move(w.controls[guiRoutesID], 16, routesTop+26, width-32, routesHeight)
-	configTop := routesTop + 26 + routesHeight + 38
-	move(w.labels[1], 16, configTop-26, width-32, 23)
-	move(w.controls[guiConfigSummaryID], 16, configTop, width-32, height-configTop-124)
-	move(w.controls[guiSettingsID], 16, height-110, 132, 30)
-	move(w.controls[guiNoteID], 16, height-72, width-32, 64)
-}
 
 // Clipboard memory is allocated movable, as required by CF_UNICODETEXT. A
 // successful SetClipboardData transfers ownership to Windows; every failure
-// retains our ownership and frees the handle. Only public join material enters
-// this function, never configuration text or state database contents.
+// retains our ownership and frees the handle.
 func guiCopyPublicRequest(hwnd uintptr, request string) error {
 	if request == "" || len(request) > desktopJoinRequestLimit {
 		return errors.New("入网请求为空或超过长度上限")
 	}
-	encoded, err := windows.UTF16FromString(request)
+	return guiCopyUnicodeText(hwnd, request, desktopJoinRequestLimit)
+}
+
+// Callers supply only the public join request or currently displayed, bounded
+// diagnostic text. Configuration and database contents never enter this path.
+func guiCopyUnicodeText(hwnd uintptr, text string, maxUTF16 int) error {
+	if len(text) > maxUTF16*4 || maxUTF16 <= 0 {
+		return errors.New("文本超过复制长度上限")
+	}
+	encoded, err := windows.UTF16FromString(text)
 	if err != nil {
 		return err
+	}
+	if len(encoded)-1 > maxUTF16 {
+		return errors.New("文本超过复制长度上限")
 	}
 	bytes := uintptr(len(encoded)) * 2
 	memory, _, callErr := guiGlobalAlloc.Call(0x0042, bytes) // GMEM_MOVEABLE | GMEM_ZEROINIT

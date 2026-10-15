@@ -49,7 +49,7 @@ var guiRouteFields = []int{guiSplitFieldID, guiRouteInputID, guiRouteAddID, guiR
 var guiAdvancedFields = []int{guiStateFieldID, guiOverlayFieldID, guiListenFieldID, guiAdapterFieldID, guiMTUFieldID, guiLogFieldID, guiInitialFieldID, guiMaxFieldID}
 
 func (w *desktopWindow) createSettingsWindow() error {
-	hwnd, _, err := guiCreateWindow.Call(0, uintptr(unsafe.Pointer(guiUTF16("PhotonWindowsSettings"))), uintptr(unsafe.Pointer(guiUTF16("Photon Windows 设置"))), 0x00cf0000|0x02000000, 0x80000000, 0x80000000, 920, 760, w.hwnd, 0, w.instance, 0)
+	hwnd, _, err := guiCreateWindow.Call(0, uintptr(unsafe.Pointer(guiUTF16("PhotonWindowsSettings"))), uintptr(unsafe.Pointer(guiUTF16("Photon Windows 设置"))), 0x00cf0000|0x02000000, 0x80000000, 0x80000000, uintptr(w.guiScale(920)), uintptr(w.guiScale(760)), w.hwnd, 0, w.instance, 0)
 	if hwnd == 0 {
 		return guiCallError("CreateWindowEx settings", err)
 	}
@@ -70,7 +70,7 @@ func (w *desktopWindow) createSettingsWindow() error {
 	for _, spec := range []struct {
 		id   int
 		text string
-	}{{guiBasicPageID, "身份"}, {guiGatewayPageID, "网关与引导"}, {guiRoutePageID, "路由"}, {guiAdvancedPageID, "高级"}, {guiAllowedAddID, "添加"}, {guiAllowedUpdateID, "更新"}, {guiAllowedDeleteID, "删除"}, {guiAllowedClearID, "清除"}, {guiRouteAddID, "添加"}, {guiRouteUpdateID, "更新"}, {guiRouteDeleteID, "删除"}, {guiRouteClearID, "清除"}, {guiBootstrapAddID, "添加"}, {guiBootstrapUpdateID, "更新选中"}, {guiBootstrapDeleteID, "删除选中"}, {guiBootstrapClearID, "清除输入"}, {guiSaveID, "保存配置"}, {guiReloadID, "重新读取"}} {
+	}{{guiBasicPageID, "身份"}, {guiGatewayPageID, "网关与引导"}, {guiRoutePageID, "分流路由"}, {guiAdvancedPageID, "高级"}, {guiAllowedAddID, "添加"}, {guiAllowedUpdateID, "更新"}, {guiAllowedDeleteID, "移除"}, {guiAllowedClearID, "清除输入"}, {guiRouteAddID, "添加"}, {guiRouteUpdateID, "更新"}, {guiRouteDeleteID, "移除"}, {guiRouteClearID, "清除输入"}, {guiBootstrapAddID, "添加节点"}, {guiBootstrapUpdateID, "更新选中"}, {guiBootstrapDeleteID, "移除选中"}, {guiBootstrapClearID, "清除输入"}, {guiSaveID, "保存配置"}, {guiReloadID, "重新读取"}} {
 		if err := create(spec.id, "BUTTON", spec.text, button, 0); err != nil {
 			return err
 		}
@@ -81,16 +81,16 @@ func (w *desktopWindow) createSettingsWindow() error {
 	}{
 		{guiRootFieldID, "可信根公钥"},
 		{guiManagedFieldID, "本机管理域"},
-		{guiAllowedFieldID, "允许连接的网关"},
+		{guiAllowedFieldID, "网关规则"},
 		{guiAllowedInputID, ""},
 		{guiSplitFieldID, "经过 Photon 的网段"},
-		{guiRouteInputID, "新增或修改网段"},
-		{guiBootstrapListID, "引导节点：网关身份 / 地址"},
-		{guiBootstrapPeerID, "网关身份（peer）"}, {guiBootstrapAddressID, "引导地址（主机:端口）"},
-		{guiStateFieldID, "数据库绝对路径（保存本机身份，请勿随意更换）"},
-		{guiOverlayFieldID, "Overlay ID"}, {guiListenFieldID, "Gossip 监听地址（IP:port）"},
+		{guiRouteInputID, "网段地址"},
+		{guiBootstrapListID, "引导节点 · 网关身份 / 地址"},
+		{guiBootstrapPeerID, "网关身份"}, {guiBootstrapAddressID, "主机地址与端口"},
+		{guiStateFieldID, "身份数据库 · 绝对路径"},
+		{guiOverlayFieldID, "Overlay ID"}, {guiListenFieldID, "Gossip 监听地址"},
 		{guiAdapterFieldID, "虚拟网卡名称"}, {guiMTUFieldID, "MTU"}, {guiLogFieldID, "日志级别"},
-		{guiInitialFieldID, "重连初始间隔（例如 1s）"}, {guiMaxFieldID, "重连最大间隔（例如 1m）"},
+		{guiInitialFieldID, "重连初始间隔"}, {guiMaxFieldID, "重连最大间隔"},
 	}
 	for _, spec := range specs {
 		label, _, e := guiCreateWindow.Call(0, uintptr(unsafe.Pointer(guiUTF16("STATIC"))), uintptr(unsafe.Pointer(guiUTF16(spec.label))), 0x50000000, 0, 0, 0, 0, hwnd, 0, w.instance, 0)
@@ -129,6 +129,7 @@ func (w *desktopWindow) createSettingsWindow() error {
 	if err := create(guiSettingsNoteID, "STATIC", "保存后需重新连接生效；关闭本窗口保留未保存的编辑。", 0x50000000, 0); err != nil {
 		return err
 	}
+	w.styleSettingsControls()
 	guiEnableWindow.Call(w.controls[guiSaveID], 0)
 	w.showSettingsPage(guiBasicPageID)
 	w.layoutSettings()
@@ -146,12 +147,6 @@ func (w *desktopWindow) settingsWindowProc(hwnd uintptr, message uint32, wp, lp 
 		return 0
 	case guiWMSize:
 		w.layoutSettings()
-		return 0
-	case guiWMGetMinMaxInfo:
-		if lp != 0 {
-			minimum := guiPoint{700, 700}
-			guiMoveMemory.Call(lp+3*unsafe.Sizeof(minimum), uintptr(unsafe.Pointer(&minimum)), unsafe.Sizeof(minimum))
-		}
 		return 0
 	case guiWMCommand:
 		id, notification := int(wp&0xffff), uint16(wp>>16)
@@ -230,23 +225,23 @@ func (w *desktopWindow) showSettingsPage(page int) {
 			}
 		}
 	}
-	title, help := "本机身份", "向网络管理员获取可信根公钥和本机管理域。首次使用请依次填写身份、网关与路由，然后保存。"
+	title, help := "本机身份", "填写管理员提供的可信根公钥与本机管理域，再设置网关和路由。首次启动连接时会自动生成本机身份。"
 	switch page {
 	case guiGatewayPageID:
-		title, help = "网关与引导", "允许网关支持 *.example. 或 *。首次入网至少一个引导节点，已有数据库可留空。IPv6 地址请用 [地址]:端口。"
+		title, help = "网关与引导", "网关规则支持 *.example. 或 *。首次入网至少添加一个具体引导节点；已有身份数据库可留空。"
 	case guiRoutePageID:
-		title, help = "分流路由", "只将列表中的网段交给 Photon，例如 10.0.0.0/24 或 fd00::/64。选中条目后可修改或删除。"
+		title, help = "分流路由", "仅列表中的网段经过 Photon，其余流量保持原路径。支持 IPv4 与 IPv6；选中条目可编辑或移除。"
 	case guiAdvancedPageID:
-		title, help = "高级设置", "一般保留默认值即可。数据库保存本机身份；修改路径会切换身份。所有设置保存后需重新连接生效。"
+		title, help = "高级设置", "通常保留默认值即可。数据库路径决定使用哪个本机身份，修改前请确认。保存后需重新连接生效。"
 	}
 	w.setText(w.controls[guiPageTitleID], title)
 	w.setText(w.controls[guiPageHelpID], help)
 	for _, id := range []int{guiBasicPageID, guiGatewayPageID, guiRoutePageID, guiAdvancedPageID} {
-		pressed := uintptr(0)
+		kind := "body"
 		if id == page {
-			pressed = 1
+			kind = "primary"
 		}
-		guiSendMessage.Call(w.controls[id], 0xf3, pressed, 0)
+		w.guiStyleControl(w.controls[id], kind)
 	}
 	w.layoutSettings()
 }
@@ -416,59 +411,4 @@ func (w *desktopWindow) changeBootstrap(action int) {
 	w.clearBootstrapInputs()
 	w.refreshBootstrapList()
 	w.markFormDirty()
-}
-func (w *desktopWindow) layoutSettings() {
-	if w.settings == 0 {
-		return
-	}
-	var bounds guiRect
-	guiGetClientRect.Call(w.settings, uintptr(unsafe.Pointer(&bounds)))
-	width, height := int(bounds.Right), int(bounds.Bottom)
-	move := func(hwnd uintptr, x, y, wid, hei int) {
-		if hwnd != 0 {
-			guiMoveWindow.Call(hwnd, uintptr(x), uintptr(y), uintptr(max(wid, 0)), uintptr(max(hei, 0)), 1)
-		}
-	}
-	field := func(id, x, y, wid, hei int) {
-		move(w.formLabels[id], x, y, wid, 22)
-		move(w.controls[id], x, y+24, wid, hei)
-	}
-	for column, id := range []int{guiBasicPageID, guiGatewayPageID, guiRoutePageID, guiAdvancedPageID} {
-		move(w.controls[id], 24+column*150, 16, 138, 32)
-	}
-	move(w.controls[guiPageTitleID], 24, 68, width-48, 26)
-	move(w.controls[guiPageHelpID], 24, 104, width-48, 42)
-	field(guiRootFieldID, 24, 174, width-48, 32)
-	field(guiManagedFieldID, 24, 270, width-48, 32)
-	field(guiAllowedFieldID, 24, 152, width-48, 76)
-	move(w.formLabels[guiAllowedInputID], 0, 0, 0, 0)
-	move(w.controls[guiAllowedInputID], 24, 264, width-48-312, 30)
-	for column, id := range []int{guiAllowedAddID, guiAllowedUpdateID, guiAllowedDeleteID, guiAllowedClearID} {
-		move(w.controls[id], width-324+column*78, 264, 72, 30)
-	}
-	field(guiBootstrapListID, 24, 318, width-48, 92)
-	half := (width - 64) / 2
-	field(guiBootstrapPeerID, 24, 450, half, 30)
-	field(guiBootstrapAddressID, 40+half, 450, half, 30)
-	for column, id := range []int{guiBootstrapAddID, guiBootstrapUpdateID, guiBootstrapDeleteID, guiBootstrapClearID} {
-		move(w.controls[id], 24+column*138, 520, 126, 30)
-	}
-	field(guiSplitFieldID, 24, 168, width-48, 228)
-	field(guiRouteInputID, 24, 440, width-48, 30)
-	for column, id := range []int{guiRouteAddID, guiRouteUpdateID, guiRouteDeleteID, guiRouteClearID} {
-		move(w.controls[id], 24+column*138, 512, 126, 30)
-	}
-	field(guiStateFieldID, 24, 152, width-48, 30)
-	for row, ids := range [][]int{{guiOverlayFieldID, guiListenFieldID}, {guiAdapterFieldID, guiMTUFieldID}, {guiLogFieldID, guiInitialFieldID}, {guiMaxFieldID}} {
-		for column, id := range ids {
-			controlHeight := 28
-			if id == guiLogFieldID {
-				controlHeight = 180
-			}
-			field(id, 24+column*(half+16), 228+row*78, half, controlHeight)
-		}
-	}
-	move(w.controls[guiSaveID], 24, height-84, 120, 30)
-	move(w.controls[guiReloadID], 156, height-84, 120, 30)
-	move(w.controls[guiSettingsNoteID], 24, height-44, width-48, 40)
 }

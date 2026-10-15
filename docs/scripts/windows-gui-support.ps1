@@ -25,6 +25,7 @@ public static class PhotonGuiSmokeNative {
     [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr window, out Rect rect);
     [DllImport("user32.dll")] private static extern int MapWindowPoints(IntPtr from, IntPtr to, ref Rect points, uint count);
     [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr window);
+    [DllImport("gdi32.dll", EntryPoint="GetObjectW", SetLastError=true)] private static extern int GetFontObject(IntPtr font, int size, IntPtr description);
     [DllImport("user32.dll", SetLastError=true)] private static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
     [DllImport("user32.dll", SetLastError=true)] private static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll")] private static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);
@@ -46,6 +47,7 @@ public static class PhotonGuiSmokeNative {
     }
     public static IntPtr Find(uint expectedPID) { return FindClass(expectedPID, "PhotonWindowsDesktop"); }
     public static IntPtr FindSettings(uint expectedPID) { return FindClass(expectedPID, "PhotonWindowsSettings"); }
+    public static IntPtr FindDiagnostics(uint expectedPID) { return FindClass(expectedPID, "PhotonWindowsDiagnostics"); }
     public static void Verify(IntPtr window, uint expectedPID) {
         uint pid; GetWindowThreadProcessId(window, out pid);
         if (window == IntPtr.Zero || pid != expectedPID) throw new InvalidOperationException("GUI window ownership changed");
@@ -119,16 +121,25 @@ public static class PhotonGuiSmokeNative {
         if (SetThreadDpiAwarenessContext(previous) == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot restore DPI context");
     }
     public static void ResizeSettings(IntPtr window) {
+        ResizeLogical(window,700,700);
+    }
+    public static void ResizeDiagnostics(IntPtr window) {
+        ResizeLogical(window,700,620);
+    }
+    private static void ResizeLogical(IntPtr window,int logicalWidth,int logicalHeight) {
         var previous = EnterPhysicalDpiContext();
         try {
-            if (!SetWindowPos(window, IntPtr.Zero, 0, 0, 700, 700, 0x0016)) throw new Win32Exception(Marshal.GetLastWin32Error());
+            uint dpi = GetDpiForWindow(window);
+            if (dpi < 96 || dpi > 768) throw new InvalidOperationException("Unexpected owned window DPI");
+            int width = (int)((logicalWidth * dpi + 48) / 96), height = (int)((logicalHeight * dpi + 48) / 96);
+            if (!SetWindowPos(window, IntPtr.Zero, 0, 0, width, height, 0x0016)) throw new Win32Exception(Marshal.GetLastWin32Error());
             Send(window, 0, UIntPtr.Zero, IntPtr.Zero); // Bounded owner-thread WM_NULL synchronization.
             Rect rect;
-            if (!GetWindowRect(window, out rect) || rect.Right-rect.Left != 700 || rect.Bottom-rect.Top != 700) throw new InvalidOperationException("Settings minimum-size evidence is not 700x700 physical pixels");
+            if (!GetWindowRect(window, out rect) || rect.Right-rect.Left != width || rect.Bottom-rect.Top != height) throw new InvalidOperationException("Owned window minimum size differs from its requested logical size at real HWND DPI");
         } finally { RestoreDpiContext(previous); }
     }
     public sealed class ChildMetrics {
-        public int ID, Left, Top, Right, Bottom;
+        public int ID, Left, Top, Right, Bottom, FontHeight;
         public bool Visible, Enabled, InsideClient;
     }
     public sealed class WindowMetrics {
@@ -143,14 +154,26 @@ public static class PhotonGuiSmokeNative {
             Rect rect, client;
             if (!GetWindowRect(window,out rect) || !GetClientRect(window,out client)) throw new Win32Exception(Marshal.GetLastWin32Error());
             var children = new System.Collections.Generic.List<ChildMetrics>();
-            foreach (int id in new int[] { 2001, 1105, 1106 }) {
+            foreach (int id in new int[] { 1001,1002,1003,1004,1006,1007,1008,1009,1102,1103,1104,1105,1106,1107,1110,1111,
+                2001,2002,2003,2004,2005,2006,2007,2011,2012,2013,2014,2015,2016,2017,2018,2019,2021,2022,
+                2101,2102,2103,2104,2111,2112,2113,2114,2121,2122,2123,2124,2131,2132,2133,2134,2201,2202,
+                2301,2302,2303,2310,2311,2312,2313,2314 }) {
                 var child = GetDlgItem(window,id);
                 if (child == IntPtr.Zero) continue;
                 Rect bounds;
                 if (!GetWindowRect(child,out bounds)) throw new Win32Exception(Marshal.GetLastWin32Error());
                 MapWindowPoints(IntPtr.Zero,window,ref bounds,2);
+                int fontHeight = 0;
+                var font = new IntPtr(unchecked((long)Send(child,0x0031,UIntPtr.Zero,IntPtr.Zero).ToUInt64()));
+                if (font != IntPtr.Zero) {
+                    var description = Marshal.AllocHGlobal(92); // LOGFONTW, independent of pointer width.
+                    try {
+                        if (GetFontObject(font,92,description) != 92) throw new Win32Exception(Marshal.GetLastWin32Error(),"Read owned control font");
+                        fontHeight = Math.Abs(Marshal.ReadInt32(description));
+                    } finally { Marshal.FreeHGlobal(description); }
+                }
                 children.Add(new ChildMetrics { ID=id, Left=bounds.Left, Top=bounds.Top, Right=bounds.Right, Bottom=bounds.Bottom,
-                    Visible=IsWindowVisible(child), Enabled=IsWindowEnabled(child), InsideClient=bounds.Left>=client.Left && bounds.Top>=client.Top && bounds.Right<=client.Right && bounds.Bottom<=client.Bottom });
+                    FontHeight=fontHeight, Visible=IsWindowVisible(child), Enabled=IsWindowEnabled(child), InsideClient=bounds.Left>=client.Left && bounds.Top>=client.Top && bounds.Right<=client.Right && bounds.Bottom<=client.Bottom });
             }
             return new WindowMetrics { WindowWidth=rect.Right-rect.Left, WindowHeight=rect.Bottom-rect.Top,
                 ClientWidth=client.Right-client.Left, ClientHeight=client.Bottom-client.Top, DPI=GetDpiForWindow(window), Controls=children.ToArray() };
