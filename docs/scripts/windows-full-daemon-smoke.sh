@@ -8,6 +8,7 @@ cd "$(dirname "$0")/../.."
 [[ $PHOTON_LINUX_IP =~ ^[0-9.]+$ && $PHOTON_BIRD_NIX_PACKAGE == /nix/store/* && -x $PHOTON_BIRD_NIX_PACKAGE/bin/bird ]] || exit 2
 outage_mode=${PHOTON_WINDOWS_TRANSPORT_OUTAGE:-0}
 rekey_mode=${PHOTON_WINDOWS_REKEY_TRAFFIC:-0}
+impairment_mode=${PHOTON_WINDOWS_IMPAIRMENT:-0}
 baseline_mode=${PHOTON_WINDOWS_BASELINE:-0}
 throughput_mode=${PHOTON_WINDOWS_THROUGHPUT:-0}
 throughput_seconds=${PHOTON_WINDOWS_THROUGHPUT_SECONDS:-15}
@@ -44,12 +45,13 @@ elif [[ -n ${PHOTON_WINDOWS_PACKET_TIMING_LABEL:-} ]]; then
 fi
 [[ $profile_mode == 0 || $baseline_mode == 1 || $throughput_mode == 1 ]] || { echo 'CPU profile requires baseline or throughput mode' >&2; exit 2; }
 [[ $rekey_mode == 0 || $rekey_mode == 1 ]] || exit 2
+[[ $impairment_mode == 0 || $impairment_mode == 1 ]] || exit 2
 [[ $baseline_mode == 0 || $baseline_mode == 1 ]] || exit 2
 [[ $throughput_mode == 0 || $throughput_mode == 1 ]] || exit 2
 [[ $throughput_seconds =~ ^[0-9]+$ && $throughput_seconds -ge 1 && $throughput_seconds -le 30 ]] || { echo 'Throughput seconds must be 1..30' >&2; exit 2; }
 [[ $outage_mode == 0 || $outage_mode == 1 ]] || exit 2
-if ((outage_mode + rekey_mode + baseline_mode + throughput_mode > 1)); then
-    echo 'Choose one independent B6 scenario: outage, rekey traffic, baseline, or throughput' >&2
+if ((outage_mode + rekey_mode + impairment_mode + baseline_mode + throughput_mode > 1)); then
+    echo 'Choose one independent B6 scenario: outage, rekey traffic, impairment, baseline, or throughput' >&2
     exit 2
 fi
 if [[ -n $performance_bundle ]]; then
@@ -62,6 +64,16 @@ if [[ $outage_mode == 1 ]]; then
     : "${PHOTON_NFT_NIX_PACKAGE:?Set the local nftables package under /nix/store}"
     [[ $PHOTON_NFT_NIX_PACKAGE == /nix/store/* && -x $PHOTON_NFT_NIX_PACKAGE/bin/nft ]] || exit 2
     nft="$PHOTON_NFT_NIX_PACKAGE/bin/nft"
+fi
+if [[ $impairment_mode == 1 ]]; then
+    : "${PHOTON_TC_NIX_PACKAGE:?Set the local iproute2 package under /nix/store}"
+    : "${PHOTON_TCPDUMP_NIX_PACKAGE:?Set the local tcpdump package under /nix/store}"
+    [[ $PHOTON_TC_NIX_PACKAGE == /nix/store/* && -x $PHOTON_TC_NIX_PACKAGE/bin/tc ]] || exit 2
+    [[ $PHOTON_TCPDUMP_NIX_PACKAGE == /nix/store/* && -x $PHOTON_TCPDUMP_NIX_PACKAGE/bin/tcpdump ]] || exit 2
+    command -v jq >/dev/null
+    tc="$PHOTON_TC_NIX_PACKAGE/bin/tc"
+    tcpdump="$PHOTON_TCPDUMP_NIX_PACKAGE/bin/tcpdump"
+    source docs/scripts/windows-impairment-coordinator.sh
 fi
 gossip_port=${PHOTON_WINDOWS_GOSSIP_PORT:-15201}
 ike_port=${PHOTON_WINDOWS_TUNNEL_IKE_PORT:-15000}
@@ -87,9 +99,23 @@ container_started=0
 remote_created=0
 outage_worker_pid=
 rekey_worker_pid=
+impairment_worker_pid=
 outage_table="photon_outage_${name##*.}"
 cleanup() {
     result=$?
+    if [[ -n $impairment_worker_pid ]]; then
+        kill "$impairment_worker_pid" 2>/dev/null || true
+        wait "$impairment_worker_pid" 2>/dev/null || true
+    fi
+    if [[ $impairment_mode == 1 && $container_started == 1 ]]; then
+        cleanup_impairment || result=1
+        # Only public text summaries, never the fixture config or database.
+        for phase in loss duplicate reorder; do
+            for suffix in esp.txt capture.txt capture.done; do
+                docker cp "$name:/tmp/b4/impairment-$phase-$suffix" "$work/impairment-$phase-$suffix" >/dev/null 2>&1 || true
+            done
+        done
+    fi
     if [[ -n $rekey_worker_pid ]]; then
         kill "$rekey_worker_pid" 2>/dev/null || true
         wait "$rekey_worker_pid" 2>/dev/null || true
@@ -126,7 +152,7 @@ cleanup() {
     fi
     if [[ $remote_created == 1 ]]; then
         # Only public runtime diagnostics; config.json contains fixture keys.
-        for pattern in '*.log' '*-events.json' '*-diagnostics.json' '*-peers.json' '*-routes.json' '*-owned-network.json' 'crash-recovery.json' 'network-change.json' 'gossip-convergence.json' 'adapter-conflict.json' 'transport-outage.json' 'rekey-traffic*.json' 'baseline*.json' 'throughput*.json' 'profile-*.pprof' 'profile-*.packet-drops.json' 'profile-*.packet-timing.json' 'profile-*.done' 'profile-*.error' 'runtime-*.json' 'runtime-*.error'; do
+        for pattern in '*.log' '*-events.json' '*-diagnostics.json' '*-peers.json' '*-routes.json' '*-owned-network.json' 'crash-recovery.json' 'network-change.json' 'gossip-convergence.json' 'adapter-conflict.json' 'transport-outage.json' 'rekey-traffic*.json' 'impairment*.json' 'baseline*.json' 'throughput*.json' 'profile-*.pprof' 'profile-*.packet-drops.json' 'profile-*.packet-timing.json' 'profile-*.done' 'profile-*.error' 'runtime-*.json' 'runtime-*.error'; do
             scp -q "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH:$remote/$pattern" "$work/" 2>/dev/null || true
         done
         if ! ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"Remove-Item -LiteralPath '$remote' -Recurse -Force -ErrorAction Stop\""; then result=1; fi
@@ -264,6 +290,11 @@ if [[ $rekey_mode == 1 ]]; then
     coordinate_rekey > "$work/rekey-coordinator.log" 2>&1 &
     rekey_worker_pid=$!
 fi
+if [[ $impairment_mode == 1 ]]; then
+    scp -q "${ssh_args[@]}" docs/scripts/windows-service-impairment-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
+    coordinate_impairment > "$work/impairment-coordinator.log" 2>&1 &
+    impairment_worker_pid=$!
+fi
 if [[ $outage_mode == 1 ]]; then
     scp -q "${ssh_args[@]}" docs/scripts/windows-service-outage-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
     coordinate_outage() (
@@ -341,6 +372,10 @@ cat "$work/windows.log"
 if [[ -n $rekey_worker_pid ]]; then
     wait "$rekey_worker_pid"
     rekey_worker_pid=
+fi
+if [[ -n $impairment_worker_pid ]]; then
+    wait "$impairment_worker_pid"
+    impairment_worker_pid=
 fi
 if [[ -n $outage_worker_pid ]]; then
     wait "$outage_worker_pid"

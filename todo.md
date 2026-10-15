@@ -287,6 +287,8 @@ B6 仍单独覆盖睡眠恢复、物理断网、崩溃恢复、长时间稳定�
 
 ### B6. 验收、安全与发布门槛
 
+2026-10-14：当前 Windows 性能经用户确认可接受；剩余性能优化不再作为继续推进其他 B6 事项的前置依赖。后续优先补齐生命周期、链路故障和发布验收，短时性能结果仍不替代 72h soak。
+
 - [x] 合并 Linux RC.6/RC.7 的目录漂移一次刷新、拒绝记录展示、Gossip 窄读取与按 zone 持久化；保留 Windows 性能/当前授权门禁，补充 OpenState 的 RC.6 common 布局升级/revision 保留/二次启动不重写回归。全仓检查、七包 race、采样构建及 Windows 原生状态/策略 22 项通过；原 PS 数组解析包装失败保留，独立复核/清理完成。schema2 回退须恢复旧数据库，不替代业务/吞吐/72h/发布验收，见 [RC 合并记录](docs/photon-windows/b6-testing.md#2026-10-14-rc6rc7-合并与-windows-状态回归)。
 - [x] 建立 Windows VM + 完整 Linux Photon gateway daemon 的可重复 test rig；`windows-full-daemon-smoke.sh` 运行真实 `app/photon daemon` 管理 XFRM/BIRD/Gossip，签名身份远程同步、双栈动态回程及 SCM 恢复场景在 StrongSwan 5.9.13/6.0.7 均通过；原组件 rig 保留作分层对照。
 - [x] 里程碑 1：service、Wintun、split route、真实 gossip 与关闭重开；Linux gateway 补齐 Windows 初始缺失的签名 Babel identity，双版本 SCM/业务/落盘及崩溃后重启通过。
@@ -297,6 +299,7 @@ B6 仍单独覆盖睡眠恢复、物理断网、崩溃恢复、长时间稳定�
   - [x] 真实 loopback 地址新增/删除通知在同 SCM 进程触发重绑、新 SA 与双栈恢复，StrongSwan 5.9.13/6.0.7 均通过；不代表物理断网或睡眠恢复。
   - [x] 接入原生自动恢复通知，地址不变也主动重连；真实 API 注册/注销、模拟回调到 composition 的接线及并发关闭通过，不计作真实睡眠/休眠/Modern Standby 业务验收。
   - [x] 完整网关容器隔离阻断 IKE/NAT-T/ESP：旧 SA 存活时双栈发送超时、双向 ESP 丢包计数、DPD 退役及同 SCM 进程新 SA/双栈恢复，StrongSwan 5.9.13/6.0.7 均通过；保留 Gossip，不计作物理换网或多层 NAT 验收。
+  - [x] 完整网关出站 NAT-T ESP 密文 loss/duplicate/reorder：StrongSwan 5.9.13/6.0.7 对真实 Windows SCM 双栈各 7 点通过；实际密文复制/乱序、同 PID/generation/SA lease、应用完整性和逐阶段恢复均独立复核。仅覆盖 gateway → Windows、IPv4 外层及窗口内乱序，保留两次夹具失败和时钟校准证据，不关闭完整故障矩阵或其他 B6 门槛，见 [故障验收](docs/photon-windows/b6-impairment-testing.md)。
 - [ ] teardown 必须只删除本产品 owned resource；覆盖 normal stop、partial startup、crash restart、uninstall 和未知残留冲突；当前临时 Wintun/address/route 销毁后重建，不增加持久资源 adopt/journal。
   - [x] Windows 11 强制结束本次 SCM 进程后，临时 adapter 自动释放，同 Bolt/新 SA/双栈恢复通过；同名外部网卡保护及失败创建清理原生通过。
   - [x] 已证实仍存活的外部 IP 接口占名时，SCM 明确失败退出、事件 104 且保留外部 alias/GUID；释放占名后，同配置/Bolt 重启双栈通过。

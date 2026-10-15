@@ -280,6 +280,8 @@ try {
     if (Test-Path $rekeyHelper) { . $rekeyHelper }
     $outageHelper = Join-Path $FixtureDirectory 'windows-service-outage-smoke.ps1'
     if (Test-Path $outageHelper) { . $outageHelper }
+    $impairmentHelper = Join-Path $FixtureDirectory 'windows-service-impairment-smoke.ps1'
+    if (Test-Path $impairmentHelper) { . $impairmentHelper }
     $ownedIndices += (Get-NetAdapter -Name $name).ifIndex
     Invoke-Photon @('service','stop','--name',$name)
     $stopped = Read-Service $name
