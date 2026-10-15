@@ -34,7 +34,7 @@ type runtimeEventSink interface {
 	Close() error
 }
 
-// NewRuntimeLogger owns one bounded file beside the existing state database.
+// NewRuntimeLogger owns one bounded file beside the state database.
 // Console also writes to its supplied stream; SCM writes to its registered
 // Event Log source. Neither sink receives key material or raw packet bytes.
 func NewRuntimeLogger(config *Config, console io.Writer, serviceName string) (*slog.Logger, io.Closer, error) {
@@ -44,6 +44,11 @@ func NewRuntimeLogger(config *Config, console io.Writer, serviceName string) (*s
 	var level slog.Level
 	if err := level.UnmarshalText([]byte(config.Log.Level)); err != nil && config.Log.Level != "" {
 		return nil, nil, fmt.Errorf("log level: %w", err)
+	}
+	// The logger is created before Daemon.Run, including on first auto-join.
+	// This creates directories only, never an identity or database.
+	if err := os.MkdirAll(filepath.Dir(config.State.Path), 0700); err != nil {
+		return nil, nil, fmt.Errorf("create runtime log directory: %w", err)
 	}
 	file, err := openRuntimeLog(config.State.Path + ".log")
 	if err != nil {

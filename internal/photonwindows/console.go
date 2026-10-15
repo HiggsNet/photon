@@ -19,7 +19,8 @@ import (
 )
 
 // RunConsole owns the common state and gossip resources until cancellation.
-// It restores an existing database; initial identity admission remains explicit.
+// Absent state initializes a stable pending identity; admission remains driven
+// by verified parent delegation synchronized through the shared GossipDriver.
 func RunConsole(ctx context.Context, config *Config, logger *slog.Logger) error {
 	if config == nil {
 		return errors.New("Windows config is required")
@@ -30,20 +31,21 @@ func RunConsole(ctx context.Context, config *Config, logger *slog.Logger) error 
 // Daemon owns one run of the Windows composition. Rebind is serialized with
 // gossip event processing; it does not recreate state or the protocol driver.
 type Daemon struct {
-	config        *Config
-	logger        *slog.Logger
-	started       atomic.Bool
-	ready         chan struct{}
-	observations  chan chan Observation
-	lifecycle     sync.Mutex
-	runCancel     context.CancelFunc
-	runErr        error
-	rebind        chan rebindRequest
-	plans         chan chan GatewayPlan
-	done          chan struct{}
-	planGateway   func(context.Context, *Config, corestate.View, time.Time) GatewayPlan
-	deviceFactory packetDeviceFactory
-	watchResume   func(context.Context) (<-chan struct{}, func() error, error)
+	config           *Config
+	logger           *slog.Logger
+	started          atomic.Bool
+	ready            chan struct{}
+	observations     chan chan Observation
+	lifecycle        sync.Mutex
+	runCancel        context.CancelFunc
+	runErr           error
+	rebind           chan rebindRequest
+	plans            chan chan GatewayPlan
+	done             chan struct{}
+	planGateway      func(context.Context, *Config, corestate.View, time.Time) GatewayPlan
+	deviceFactory    packetDeviceFactory
+	watchResume      func(context.Context) (<-chan struct{}, func() error, error)
+	resolveBootstrap func(context.Context, *Config, netip.AddrPort) (map[string]*net.UDPAddr, error)
 }
 
 type rebindRequest struct {
@@ -52,7 +54,7 @@ type rebindRequest struct {
 }
 
 func NewDaemon(config *Config, logger *slog.Logger) *Daemon {
-	return &Daemon{config: config, logger: logger, ready: make(chan struct{}), observations: make(chan chan Observation), rebind: make(chan rebindRequest), plans: make(chan chan GatewayPlan), done: make(chan struct{}), planGateway: PlanGateway, deviceFactory: openConfiguredPacketDevice, watchResume: watchPowerResume}
+	return &Daemon{config: config, logger: logger, ready: make(chan struct{}), observations: make(chan chan Observation), rebind: make(chan rebindRequest), plans: make(chan chan GatewayPlan), done: make(chan struct{}), planGateway: PlanGateway, deviceFactory: openConfiguredPacketDevice, watchResume: watchPowerResume, resolveBootstrap: resolveGossipBootstrap}
 }
 
 // GatewayPlan returns a detached, freshly revalidated connection plan. It does
@@ -130,16 +132,22 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	if err != nil {
 		return fmt.Errorf("gossip_listen: %w", err)
 	}
-	state, err := OpenState(config.State.Path, config.ManagedZone, config.TrustedRootPublicKey, time.Second)
+	state, err := OpenOrInitializeState(config, time.Second)
 	if err != nil {
 		return err
 	}
 	defer func() { err = errors.Join(err, state.Close()) }()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	bootstrap, err := resolveGossipBootstrap(ctx, config, listenAddr)
+	bootstrap, err := d.resolveBootstrap(ctx, config, listenAddr)
 	if err != nil {
-		return err
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		// Offline startup must retain IPC and the join request. The existing
+		// planner refreshes these address hints; peer IDs remain configured.
+		logger.Warn("gossip_bootstrap_refresh_failed", "error", err)
+		bootstrap = make(map[string]*net.UDPAddr)
 	}
 	var peers []string
 	for _, hint := range config.Gateway.BootstrapHints {
@@ -227,7 +235,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			case <-plannerCtx.Done():
 				return
 			case request := <-planRequests:
-				bootstrap, bootstrapErr := resolveGossipBootstrap(request.ctx, config, listenAddr)
+				bootstrap, bootstrapErr := d.resolveBootstrap(request.ctx, config, listenAddr)
 				plan := d.planGateway(request.ctx, config, request.view, time.Now())
 				select {
 				case plans <- planResult{request.generation, plan, bootstrap, bootstrapErr}:

@@ -23,6 +23,13 @@ var (
 	ErrUnsupportedDelegationScope = errors.New("unsupported delegation scope")
 )
 
+// VerificationPendingError rejects input whose verification dependency may
+// become available after time advances or a parent authority is synchronized.
+// It is still a verification failure, never permission to accept the input.
+type VerificationPendingError string
+
+func (err VerificationPendingError) Error() string { return string(err) }
+
 func VerifyChain(ns *zone.NetworkState, zonePath zone.ZonePath, now time.Time) error {
 	return (*Verifier)(nil).VerifyChain(ns, zonePath, now)
 }
@@ -33,6 +40,9 @@ func (v *Verifier) VerifyChain(ns *zone.NetworkState, zonePath zone.ZonePath, no
 	}
 	zs := ns.Zones[zonePath]
 	if zs == nil {
+		if zonePath.Valid() && zonePath != zone.RootZone {
+			return VerificationPendingError("zone not found")
+		}
 		return errors.New("zone not found")
 	}
 	if !zonePath.Valid() {
@@ -53,16 +63,16 @@ func (v *Verifier) VerifyChain(ns *zone.NetworkState, zonePath zone.ZonePath, no
 	for current := zonePath; current != zone.RootZone; current = current.Parent() {
 		currentState := ns.Zones[current]
 		if currentState == nil {
-			return errors.New("zone not found")
+			return VerificationPendingError("zone not found")
 		}
 		if currentState.Authority == nil {
-			return errors.New("zone authority is nil")
+			return VerificationPendingError("zone authority is nil")
 		}
 
 		parent := current.Parent()
 		parentState := ns.Zones[parent]
 		if parentState == nil || parentState.Authority == nil {
-			return errors.New("parent zone authority is nil")
+			return VerificationPendingError("parent zone authority is nil")
 		}
 
 		delegation := parentState.Delegations[current]
@@ -78,7 +88,7 @@ func (v *Verifier) VerifyChain(ns *zone.NetworkState, zonePath zone.ZonePath, no
 			delegation = parentProofDelegation(currentState, current)
 		}
 		if delegation == nil {
-			return errors.New("delegation not found")
+			return VerificationPendingError("delegation not found")
 		}
 		if err := v.VerifyDelegation(delegation, parentState.Authority, parent, now); err != nil {
 			return err
@@ -231,7 +241,7 @@ func (v *Verifier) VerifyDelegationRevocation(r *zone.DelegationRevocation, pare
 		return errors.New("revocation authority hash is empty")
 	}
 	if r.RevokedAt > 0 && now.Unix() < r.RevokedAt {
-		return errors.New("revocation is not active yet")
+		return VerificationPendingError("revocation is not active yet")
 	}
 	key, err := findAuthorizedKey(parentAuthority, r.SignedBy, zone.PermDelegate, "", "", now)
 	if err != nil {
@@ -374,7 +384,7 @@ func findAuthorizedKey(a *zone.ZoneAuthority, signedBy ed25519.PublicKey, requir
 			continue
 		}
 		if candidate.NotBefore != 0 && now.Unix() < candidate.NotBefore {
-			return nil, errors.New("authorized key not yet valid")
+			return nil, VerificationPendingError("authorized key not yet valid")
 		}
 		if candidate.NotAfter != 0 && now.Unix() > candidate.NotAfter {
 			return nil, errors.New("authorized key expired")

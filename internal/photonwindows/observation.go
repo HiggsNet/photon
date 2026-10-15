@@ -10,6 +10,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/photonclient/babel"
 	"github.com/HiggsNet/photon/internal/photonclient/sadr"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
@@ -19,17 +20,18 @@ var ErrDaemonNotRunning = errors.New("Windows daemon is not running")
 // Observation is a detached, bounded sample from the daemon's event owner.
 // Configured addresses describe the attached device, never pending intentions.
 type Observation struct {
-	Running         bool              `json:"running"`
-	ObservedAt      time.Time         `json:"observed_at"`
-	Revision        uint64            `json:"revision"`
-	TunnelReady     bool              `json:"tunnel_ready"`
-	UDPAddress      string            `json:"udp_address"`
-	Wintun          WintunObservation `json:"wintun"`
-	IKE             IKEObservation    `json:"ike"`
-	Babel           BabelObservation  `json:"babel"`
-	Peers           []PeerObservation `json:"peers"`
-	PeersTruncated  bool              `json:"peers_truncated"`
-	RoutesTruncated bool              `json:"routes_truncated"`
+	Running         bool                      `json:"running"`
+	ObservedAt      time.Time                 `json:"observed_at"`
+	Revision        uint64                    `json:"revision"`
+	Admission       gossip.AdmissionDiagnosis `json:"admission"`
+	TunnelReady     bool                      `json:"tunnel_ready"`
+	UDPAddress      string                    `json:"udp_address"`
+	Wintun          WintunObservation         `json:"wintun"`
+	IKE             IKEObservation            `json:"ike"`
+	Babel           BabelObservation          `json:"babel"`
+	Peers           []PeerObservation         `json:"peers"`
+	PeersTruncated  bool                      `json:"peers_truncated"`
+	RoutesTruncated bool                      `json:"routes_truncated"`
 }
 type WintunObservation struct {
 	Configured  bool           `json:"configured"`
@@ -122,7 +124,7 @@ func (d *Daemon) Observe(ctx context.Context) (Observation, error) {
 }
 
 func observeRuntime(config *Config, view corestate.View, plan GatewayPlan, now time.Time, socket *packetSockets, tunnel *gatewayTunnel, leaf *leafRuntime, driver *corehost.GossipDriver) Observation {
-	out := Observation{Running: true, ObservedAt: now, Revision: uint64(view.Revision)}
+	out := Observation{Running: true, ObservedAt: now, Revision: uint64(view.Revision), Admission: driver.AdmissionDiagnosis(now)}
 	if socket != nil {
 		if addr := socket.LocalAddr(); addr != nil {
 			out.UDPAddress = addr.String()

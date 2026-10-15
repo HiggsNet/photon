@@ -14,6 +14,7 @@ import (
 	"unsafe"
 
 	"github.com/HiggsNet/photon/internal/photonwindows"
+	"github.com/HiggsNet/photon/pkg/core/gossip"
 	"golang.org/x/sys/windows"
 )
 
@@ -73,7 +74,7 @@ func TestDesktopNativeWindow(t *testing.T) {
 	if limits != wantLimits {
 		t.Fatalf("WM_GETMINMAXINFO changed wrong native fields: %v", limits)
 	}
-	for _, id := range []int{guiStatusID, guiServiceID, guiGatewayID, guiRoutesID, guiConfigID, guiNoteID, guiInstallID, guiStartID, guiStopID, guiRestartID, guiSaveID, guiReloadID} {
+	for _, id := range []int{guiStatusID, guiServiceID, guiGatewayID, guiRoutesID, guiConfigID, guiNoteID, guiAdmissionID, guiJoinRequestID, guiInstallID, guiStartID, guiStopID, guiRestartID, guiSaveID, guiReloadID, guiCopyRequestID} {
 		hwnd, _, _ := guiUser32.NewProc("GetDlgItem").Call(w.hwnd, uintptr(id))
 		if hwnd == 0 || hwnd != w.controls[id] {
 			t.Fatalf("missing native child control %d", id)
@@ -86,6 +87,38 @@ func TestDesktopNativeWindow(t *testing.T) {
 		return windows.UTF16ToString(buffer)
 	}
 	observation := &photonwindows.Observation{Running: true, TunnelReady: true, IKE: photonwindows.IKEObservation{Live: true, Gateway: "gateway.example."}, Babel: photonwindows.BabelObservation{Live: true, Routes: []photonwindows.RouteObservation{{Prefix: netip.MustParsePrefix("198.18.253.1/32"), Origin: "gateway.example.", Metric: 100}}}}
+	joinRequest, request := desktopTestJoinRequest(t)
+	observation.Admission = gossip.AdmissionDiagnosis{Pending: true, ManagedZone: joinRequest.Zone, Reason: gossip.AdmissionReasonMissingDelegation, JoinRequestB64: request}
+	w.render(desktopSnapshot{ServiceState: "running", Observation: observation})
+	if text(guiJoinRequestID) != request || !strings.Contains(text(guiStatusID), "待授权") || strings.Contains(text(guiGatewayID), "gateway.example.") || strings.Contains(text(guiRoutesID), "198.18.253.1") {
+		t.Fatal("pending admission retained connected state or truncated the public request")
+	}
+	if enabled, _, _ := guiUser32.NewProc("IsWindowEnabled").Call(w.controls[guiCopyRequestID]); enabled == 0 {
+		t.Fatal("pending request copy button is disabled")
+	}
+	observation.Admission.Reason = gossip.AdmissionReasonDelegationKeyMismatch
+	w.render(desktopSnapshot{ServiceState: "running", Observation: observation})
+	if !strings.Contains(text(guiAdmissionID), "本机公钥不匹配") || text(guiJoinRequestID) != request {
+		t.Fatal("delegation key mismatch did not preserve the current complete request")
+	}
+	for _, unavailable := range []desktopSnapshot{{ServiceState: "stopped", Observation: observation}, {ServiceState: "running", Observation: observation, Error: "IPC disconnected"}} {
+		w.render(unavailable)
+		if text(guiJoinRequestID) != "" || w.admission.Request != "" {
+			t.Fatal("unavailable observation retained admission request")
+		}
+		if enabled, _, _ := guiUser32.NewProc("IsWindowEnabled").Call(w.controls[guiCopyRequestID]); enabled != 0 {
+			t.Fatal("unavailable admission request remains copyable")
+		}
+	}
+	observation.Admission.Pending = false
+	observation.Admission.Reason = gossip.AdmissionReasonAdopted
+	// A leftover wire field must not preserve an old identity after adoption.
+	observation.TunnelReady = false
+	w.render(desktopSnapshot{ServiceState: "running", Observation: observation})
+	if text(guiJoinRequestID) != "" || !strings.Contains(text(guiAdmissionID), "已入网") || !strings.Contains(text(guiStatusID), "已入网，正在连接") {
+		t.Fatal("adopted state retained pending request or claimed a ready tunnel")
+	}
+	observation.TunnelReady = true
 	w.render(desktopSnapshot{ServiceState: "running", Observation: observation})
 	if !strings.Contains(text(guiStatusID), "已连接") || !strings.Contains(text(guiGatewayID), "gateway.example.") || !strings.Contains(text(guiRoutesID), "metric 100") {
 		t.Fatal("live status/route did not render")
@@ -145,5 +178,14 @@ func TestDesktopNativeWindow(t *testing.T) {
 	}
 	if w.ctx.Err() == nil {
 		t.Fatal("window destruction did not cancel its worker")
+	}
+}
+
+func TestDesktopClipboardBounds(t *testing.T) {
+	// All failures precede OpenClipboard, preserving the user's clipboard.
+	for _, request := range []string{"", "request\x00tail", strings.Repeat("a", desktopJoinRequestLimit+1)} {
+		if err := guiCopyPublicRequest(0, request); err == nil {
+			t.Fatal("accepted empty, embedded-NUL or oversized clipboard request")
+		}
 	}
 }

@@ -152,7 +152,7 @@ func applySnapshot(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time,
 	active := candidate.Zones[snapshot.Zone]
 	candidate.Zones[snapshot.Zone] = ZoneStateFromSnapshot(snapshot)
 	if err := photoncrypto.VerifyChain(candidate, snapshot.Zone, now); err != nil {
-		return nil, nil, fmt.Errorf("%w: %v", ErrUntrustedZone, err)
+		return nil, nil, fmt.Errorf("%w: %w", ErrUntrustedZone, err)
 	}
 	if beforeZone != nil && (snapshot.Zone == zone.RootZone || !allowAuthorityReset) {
 		if err := validateAuthorityTransition(snapshot.Zone, beforeZone.Authority, snapshot.Authority); err != nil {

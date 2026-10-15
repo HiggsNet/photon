@@ -12,6 +12,7 @@ import (
 	"sync"
 	"unsafe"
 
+	"github.com/HiggsNet/photon/pkg/core/gossip"
 	"golang.org/x/sys/windows"
 )
 
@@ -22,12 +23,15 @@ const (
 	guiRoutesID             = 1004
 	guiConfigID             = 1005
 	guiNoteID               = 1006
+	guiAdmissionID          = 1007
+	guiJoinRequestID        = 1008
 	guiInstallID            = 1101
 	guiStartID              = 1102
 	guiStopID               = 1103
 	guiRestartID            = 1104
 	guiSaveID               = 1105
 	guiReloadID             = 1106
+	guiCopyRequestID        = 1107
 	guiOpenID               = 1201
 	guiTrayStartID          = 1202
 	guiTrayStopID           = 1203
@@ -87,6 +91,14 @@ var (
 	guiGetModuleHandle       = guiKernel32.NewProc("GetModuleHandleW")
 	guiFreeConsole           = guiKernel32.NewProc("FreeConsole")
 	guiMoveMemory            = guiKernel32.NewProc("RtlMoveMemory")
+	guiGlobalAlloc           = guiKernel32.NewProc("GlobalAlloc")
+	guiGlobalLock            = guiKernel32.NewProc("GlobalLock")
+	guiGlobalUnlock          = guiKernel32.NewProc("GlobalUnlock")
+	guiGlobalFree            = guiKernel32.NewProc("GlobalFree")
+	guiOpenClipboard         = guiUser32.NewProc("OpenClipboard")
+	guiCloseClipboard        = guiUser32.NewProc("CloseClipboard")
+	guiEmptyClipboard        = guiUser32.NewProc("EmptyClipboard")
+	guiSetClipboardData      = guiUser32.NewProc("SetClipboardData")
 	guiWindows               sync.Map // HWND -> *desktopWindow; owned by the window thread.
 	guiRegisterOnce          sync.Once
 	guiRegisterError         error
@@ -153,6 +165,7 @@ type desktopWindow struct {
 	postMu                     sync.Mutex // Serializes cancellation and native HWND posting.
 	backend                    *desktopBackend
 	snapshot                   desktopSnapshot
+	admission                  desktopAdmissionView
 	textCache                  map[uintptr]string
 }
 
@@ -260,6 +273,9 @@ func newDesktopWindow(backend *desktopBackend) (_ *desktopWindow, err error) {
 		{guiStartID, "BUTTON", "启动", button, 0},
 		{guiStopID, "BUTTON", "停止", button, 0},
 		{guiRestartID, "BUTTON", "重启服务", button, 0},
+		{guiAdmissionID, "STATIC", "入网：读取中…", static, 0},
+		{guiJoinRequestID, "EDIT", "", 0x50010000 | 0x0080 | 0x0800, 0x200},
+		{guiCopyRequestID, "BUTTON", "复制入网请求", button, 0},
 		{guiRoutesID, "EDIT", "尚无实时路由", edit | 0x0800, 0x200},
 		{guiConfigID, "EDIT", "", edit, 0x200},
 		{guiSaveID, "BUTTON", "保存配置", button, 0},
@@ -284,6 +300,10 @@ func newDesktopWindow(backend *desktopBackend) (_ *desktopWindow, err error) {
 	}
 	guiSendMessage.Call(w.controls[guiConfigID], 0x00c5, 1<<20, 0) // EM_SETLIMITTEXT, bounded UTF-16.
 	guiSendMessage.Call(w.controls[guiRoutesID], 0x00c5, 1<<20, 0)
+	guiSendMessage.Call(w.controls[guiJoinRequestID], 0x00c5, desktopJoinRequestLimit, 0)
+	guiShowWindow.Call(w.controls[guiJoinRequestID], 0)
+	guiShowWindow.Call(w.controls[guiCopyRequestID], 0)
+	guiEnableWindow.Call(w.controls[guiCopyRequestID], 0)
 	w.menu, _, callErr = guiCreatePopupMenu.Call()
 	if w.menu == 0 {
 		return nil, guiCallError("CreatePopupMenu", callErr)
@@ -455,6 +475,7 @@ func desktopWindowProc(hwnd uintptr, message uint32, wp, lp uintptr) uintptr {
 			w.postMu.Lock()
 			w.cancel()
 			w.postMu.Unlock()
+			w.admission = desktopAdmissionView{}
 			guiKillTimer.Call(hwnd, 1)
 			if w.tray {
 				data := w.notifyData()
@@ -480,6 +501,11 @@ func (w *desktopWindow) submit(request guiRequest) {
 	select {
 	case w.requests <- request:
 		w.busy = true
+		if request.Action == "stop" || request.Action == "restart" {
+			w.admission.Request = ""
+			w.setText(w.controls[guiJoinRequestID], "")
+			guiEnableWindow.Call(w.controls[guiCopyRequestID], 0)
+		}
 		if request.Action == "load" {
 			guiEnableWindow.Call(w.controls[guiConfigID], 0)
 		}
@@ -499,6 +525,17 @@ func (w *desktopWindow) command(id int) {
 	}
 	if id == guiExitID {
 		w.quit()
+		return
+	}
+	if id == guiCopyRequestID {
+		if !w.admission.Pending || w.admission.Request == "" {
+			return
+		}
+		if err := guiCopyPublicRequest(w.hwnd, w.admission.Request); err != nil {
+			w.note("复制入网请求失败：" + err.Error())
+		} else {
+			w.note("完整入网请求已复制；请提交给上级管理员授权。")
+		}
 		return
 	}
 	if w.busy {
@@ -601,12 +638,22 @@ func (w *desktopWindow) applyResult(result guiResult) {
 }
 func (w *desktopWindow) render(snapshot desktopSnapshot) {
 	w.snapshot = snapshot
+	wasPending := w.admission.Pending
+	var diagnosis gossip.AdmissionDiagnosis
+	available := snapshot.ServiceState == "running" && snapshot.Error == "" && snapshot.Observation != nil && snapshot.Observation.Running
+	if snapshot.Observation != nil {
+		diagnosis = snapshot.Observation.Admission
+	}
+	w.admission = desktopAdmissionPresentation(diagnosis, available)
+	if snapshot.Error != "" {
+		w.admission.Label = "入网：实时状态暂不可用。"
+	}
 	state := map[string]string{"running": "运行中", "stopped": "已停止", "not-installed": "未安装", "start-pending": "正在启动", "stop-pending": "正在停止", "paused": "已暂停", "unknown": "不可用", "transitioning": "状态转换中"}[snapshot.ServiceState]
 	if state == "" {
 		state = "不可用"
 	}
 	connection, gateway, routes := "未连接", "—", "尚无实时路由"
-	if observation := snapshot.Observation; observation != nil {
+	if observation := snapshot.Observation; observation != nil && available {
 		if observation.TunnelReady {
 			connection = "已连接"
 		} else {
@@ -635,10 +682,31 @@ func (w *desktopWindow) render(snapshot desktopSnapshot) {
 		gateway = "—"
 		routes = "实时状态不可用，已清空上次路由。"
 	}
+	if w.admission.Pending {
+		connection, gateway, routes = "待授权", "—", "入网授权完成前尚无实时路由。"
+	} else if w.admission.Adopted && snapshot.Observation != nil && !snapshot.Observation.TunnelReady {
+		connection = "已入网，正在连接"
+	}
 	w.setText(w.controls[guiStatusID], "连接："+connection)
 	w.setText(w.controls[guiServiceID], "服务："+state+" · "+w.backend.options.ServiceName)
 	w.setText(w.controls[guiGatewayID], "活动网关："+gateway)
 	w.setText(w.controls[guiRoutesID], routes)
+	w.setText(w.controls[guiAdmissionID], w.admission.Label)
+	w.setText(w.controls[guiJoinRequestID], w.admission.Request)
+	if wasPending != w.admission.Pending {
+		showRequest := uintptr(0)
+		if w.admission.Pending {
+			showRequest = 5
+		}
+		guiShowWindow.Call(w.controls[guiJoinRequestID], showRequest)
+		guiShowWindow.Call(w.controls[guiCopyRequestID], showRequest)
+		w.layout()
+	}
+	canCopy := uintptr(0)
+	if w.admission.Request != "" {
+		canCopy = 1
+	}
+	guiEnableWindow.Call(w.controls[guiCopyRequestID], canCopy)
 	w.updateTray(false)
 }
 func (w *desktopWindow) setText(hwnd uintptr, text string) {
@@ -685,8 +753,12 @@ func (w *desktopWindow) notifyData() guiNotifyIcon {
 	tip := "Photon · 未连接"
 	if w.snapshot.Error != "" {
 		tip = "Photon · 状态不可用"
-	} else if w.snapshot.Observation != nil && w.snapshot.Observation.TunnelReady {
+	} else if w.admission.Pending {
+		tip = w.admission.Tooltip
+	} else if w.snapshot.ServiceState == "running" && w.snapshot.Observation != nil && w.snapshot.Observation.Running && w.snapshot.Observation.TunnelReady {
 		tip = "Photon · 已连接"
+	} else if w.admission.Adopted {
+		tip = w.admission.Tooltip
 	} else if w.snapshot.ServiceState == "stopped" {
 		tip = "Photon · 服务已停止"
 	} else if w.snapshot.ServiceState == "not-installed" {
@@ -728,11 +800,64 @@ func (w *desktopWindow) layout() {
 	for column, id := range []int{guiInstallID, guiStartID, guiStopID, guiRestartID} {
 		move(w.controls[id], 16+column*104, 100, 96, 30)
 	}
-	move(w.labels[0], 16, 143, width-32, 23)
-	move(w.controls[guiRoutesID], 16, 169, width-32, 130)
-	move(w.labels[1], 16, 311, width-32, 23)
-	move(w.controls[guiConfigID], 16, 337, width-32, height-423)
+	admissionHeight, routesTop, routesHeight := 26, 175, 130
+	if w.admission.Pending {
+		admissionHeight, routesTop, routesHeight = 52, 241, 110
+	}
+	move(w.controls[guiAdmissionID], 16, 141, width-32, admissionHeight)
+	move(w.controls[guiJoinRequestID], 16, 199, width-192, 30)
+	move(w.controls[guiCopyRequestID], width-164, 199, 148, 30)
+	move(w.labels[0], 16, routesTop, width-32, 23)
+	move(w.controls[guiRoutesID], 16, routesTop+26, width-32, routesHeight)
+	configTop := routesTop + 26 + routesHeight + 38
+	move(w.labels[1], 16, configTop-26, width-32, 23)
+	move(w.controls[guiConfigID], 16, configTop, width-32, height-configTop-86)
 	move(w.controls[guiSaveID], 16, height-72, 112, 30)
 	move(w.controls[guiReloadID], 140, height-72, 112, 30)
 	move(w.controls[guiNoteID], 16, height-34, width-32, 27)
+}
+
+// Clipboard memory is allocated movable, as required by CF_UNICODETEXT. A
+// successful SetClipboardData transfers ownership to Windows; every failure
+// retains our ownership and frees the handle. Only public join material enters
+// this function, never configuration text or state database contents.
+func guiCopyPublicRequest(hwnd uintptr, request string) error {
+	if request == "" || len(request) > desktopJoinRequestLimit {
+		return errors.New("入网请求为空或超过长度上限")
+	}
+	encoded, err := windows.UTF16FromString(request)
+	if err != nil {
+		return err
+	}
+	bytes := uintptr(len(encoded)) * 2
+	memory, _, callErr := guiGlobalAlloc.Call(0x0042, bytes) // GMEM_MOVEABLE | GMEM_ZEROINIT
+	if memory == 0 {
+		return guiCallError("GlobalAlloc", callErr)
+	}
+	defer func() {
+		if memory != 0 {
+			guiGlobalFree.Call(memory)
+		}
+	}()
+	address, _, callErr := guiGlobalLock.Call(memory)
+	if address == 0 {
+		return guiCallError("GlobalLock", callErr)
+	}
+	guiMoveMemory.Call(address, uintptr(unsafe.Pointer(&encoded[0])), bytes)
+	guiGlobalUnlock.Call(memory)
+	opened, _, callErr := guiOpenClipboard.Call(hwnd)
+	if opened == 0 {
+		return guiCallError("OpenClipboard", callErr)
+	}
+	defer guiCloseClipboard.Call()
+	emptied, _, callErr := guiEmptyClipboard.Call()
+	if emptied == 0 {
+		return guiCallError("EmptyClipboard", callErr)
+	}
+	copied, _, callErr := guiSetClipboardData.Call(13, memory) // CF_UNICODETEXT
+	if copied == 0 {
+		return guiCallError("SetClipboardData", callErr)
+	}
+	memory = 0 // Windows owns the allocation after successful publication.
+	return nil
 }

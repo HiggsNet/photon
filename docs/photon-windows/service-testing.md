@@ -6,7 +6,8 @@ Windows 继续作为接入节点，仅一个 active gateway，不转发其他节
 
 ## 管理命令
 
-在管理员管理的目录准备可执行文件、相邻的固定版本 `wintun.dll`、已导入的数据库和配置。
+在管理员管理的目录准备可执行文件、相邻的固定版本 `wintun.dll` 和配置。
+已有数据库继续恢复；数据库不存在时，服务首次启动生成本机身份并进入 [自动入网](autojoin-testing.md)，等待上级授权。
 服务安装要求配置及 `state.path` 使用绝对路径，启动账号为 LocalSystem，默认手动启动。
 
 ```powershell

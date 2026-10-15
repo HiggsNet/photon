@@ -8,6 +8,10 @@ $Executable = (Resolve-Path $Executable).Path
 $FixtureDirectory = (Resolve-Path $FixtureDirectory).Path
 $Config = Join-Path $FixtureDirectory 'service.yaml'
 $BadConfig = Join-Path $FixtureDirectory 'service-init-failure.yaml'
+$autojoinHelper = Join-Path $FixtureDirectory 'windows-service-autojoin-smoke.ps1'
+$autojoinEnabled = Test-Path -LiteralPath $autojoinHelper
+if ($autojoinEnabled -and (Test-Path -LiteralPath (Join-Path $FixtureDirectory 'windows.db'))) { throw 'Autojoin fixture must begin without an imported Windows database' }
+if ($autojoinEnabled) { [pscustomobject]@{ StateExistedBeforeStart = $false; StatePath = Join-Path $FixtureDirectory 'windows.db' } | ConvertTo-Json | Set-Content -Encoding UTF8 (Join-Path $FixtureDirectory 'autojoin-blank-state.json') }
 $name = 'PhotonB5-' + $PID + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
 $failedName = $name + '-InitFailure'
 $collisionName = $name + '-ExistingSource'
@@ -57,7 +61,11 @@ if ($fixture.Gateway.BootstrapHints.Count -gt 0) {
 }
 $yaml += @('wintun:', ('  adapter_name: ' + (Quote-Yaml $name)), '  mtu: 1400', 'log:', '  level: debug')
 [IO.File]::WriteAllLines($Config, [string[]]$yaml, (New-Object Text.UTF8Encoding($false)))
-$badYaml = $yaml | ForEach-Object { if ($_ -like '  path:*') { '  path: ' + (Quote-Yaml (Join-Path $FixtureDirectory 'missing-state.db')) } else { $_ } }
+$badStatePath = Join-Path $FixtureDirectory 'invalid-common-state.db'
+if (Test-Path -LiteralPath $badStatePath) { throw 'Refusing an existing corrupt-state fixture path' }
+[IO.File]::WriteAllBytes($badStatePath, [Text.Encoding]::ASCII.GetBytes('Photon fixture: deliberately corrupt existing common database'))
+$badStateHash = (Get-FileHash -LiteralPath $badStatePath -Algorithm SHA256).Hash
+$badYaml = $yaml | ForEach-Object { if ($_ -like '  path:*') { '  path: ' + (Quote-Yaml $badStatePath) } else { $_ } }
 [IO.File]::WriteAllLines($BadConfig, [string[]]$badYaml, (New-Object Text.UTF8Encoding($false)))
 function Invoke-Photon([string[]]$Arguments) {
     & $Executable @Arguments
@@ -277,6 +285,7 @@ try {
     Write-Output "running: pid=$($running.ProcessId) (daemon initialized; tunnel readiness is independent)"
     $initialStatus = Read-Status
     Write-Output "initial live status: running=$($initialStatus.running) tunnel_ready=$($initialStatus.tunnel_ready)"
+    if ($autojoinEnabled) { . $autojoinHelper; Test-ServiceAutojoin $initialStatus }
     Check-Business 'initial'
     $guiHelper = Join-Path $FixtureDirectory 'windows-service-gui-smoke.ps1'
     if (Test-Path $guiHelper) { . $guiHelper; Test-ServiceGui }
@@ -296,6 +305,7 @@ try {
     if ($stopped.State -ne 'Stopped' -or $stopped.ExitCode -ne 0 -or $stopped.ServiceSpecificExitCode -ne 0) { throw 'Stop did not join cleanly' }
     Invoke-Photon @('service','start','--name',$name)
     Check-Business 'restart'
+    if ($autojoinEnabled) { Assert-AutojoinRestart }
     $ownedIndices += (Get-NetAdapter -Name $name).ifIndex
 
     # Kill only the exact SCM-owned process after real bidirectional business.
@@ -399,6 +409,7 @@ try {
     Invoke-Photon @('service','install','--name',$failedName,'--config',$BadConfig)
     Check-EventSource $failedName
     Expect-PhotonFailure @('service','start','--name',$failedName)
+    if ((Get-FileHash -LiteralPath $badStatePath -Algorithm SHA256).Hash -cne $badStateHash) { throw 'Initialization failure changed the corrupt existing state file' }
     $failure = Read-Service $failedName
     if ($failure.State -ne 'Stopped' -or ($failure.ExitCode -eq 0 -and $failure.ServiceSpecificExitCode -eq 0)) { throw 'Initialization error did not exit as failed' }
     Write-Output "initialization failed as expected: Win32=$($failure.ExitCode) service=$($failure.ServiceSpecificExitCode)"

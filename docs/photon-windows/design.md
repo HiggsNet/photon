@@ -447,12 +447,15 @@ connected/ready 状态。
 
 以下记录 B2 阶段的公共状态同步实现；B3/B4 后续数据面接线见本节末尾。
 `photon-windows run --console --config <path>` 复用这一公共状态同步。
-`state.path` 必须指向已有的 common-schema bbolt，managed zone 和 root pin 必须与配置匹配。
-首次运行可先用 `state import --config <path> --bundle <file> --key <file>` 导入 Linux 签发的
+已有 `state.path` 必须为 common-schema bbolt，managed zone 和 root pin 必须与配置匹配。
+2026-10-15 扩展首次自动入网：服务启动时仅在数据库缺失且 bootstrap 有效的情况下生成独立身份，
+保存 root pin 与待授权 managed zone，通过公共 Gossip 同步并接纳上级授权；GUI 展示进度及公开请求。
+待授权时不配置隧道或业务网络，授权生效后由现有 owner 继续连接，见 [自动入网](autojoin-testing.md)。
+也可先用 `state import --config <path> --bundle <file> --key <file>` 导入 Linux 签发的
 join bundle 和 Photon Ed25519 JSON 密钥，见 [初始化步骤](native-testing.md#首次初始化)。
 导入只创建新数据库，拒绝覆盖已有文件；配置 root pin、zone、签名、有效期和密钥授权由公共身份逻辑验证。
 只接受 root-to-managed authorities/parent proofs，不将 bundle 中夹带的 records 或其他 zone 视为 verified。
-运行中的数据库不可同时由另一进程打开。尚未提供 Windows 密钥生成、自动入网或已有身份刷新命令。
+运行中的数据库不可同时由另一进程打开。已有身份不被首次初始化或导入命令覆盖。
 `gossip_listen` 默认为 `0.0.0.0:33434`，接受 IP:port（IPv6 如 `[::]:33434`）；
 UDP Gossip 与 TCP object-pull 绑定同一个地址和端口。bootstrap DNS 选择与监听地址相同族的第一个地址；
 启动时解析，运行中由有界 worker 定时和重绑后刷新。配置本身保持不可变，修改配置后重启。

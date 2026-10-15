@@ -10,6 +10,7 @@ outage_mode=${PHOTON_WINDOWS_TRANSPORT_OUTAGE:-0}
 rekey_mode=${PHOTON_WINDOWS_REKEY_TRAFFIC:-0}
 impairment_mode=${PHOTON_WINDOWS_IMPAIRMENT:-0}
 gui_mode=${PHOTON_WINDOWS_GUI_SMOKE:-0}
+autojoin_mode=${PHOTON_WINDOWS_AUTOJOIN_SMOKE:-0}
 baseline_mode=${PHOTON_WINDOWS_BASELINE:-0}
 throughput_mode=${PHOTON_WINDOWS_THROUGHPUT:-0}
 throughput_seconds=${PHOTON_WINDOWS_THROUGHPUT_SECONDS:-15}
@@ -48,12 +49,13 @@ fi
 [[ $rekey_mode == 0 || $rekey_mode == 1 ]] || exit 2
 [[ $impairment_mode == 0 || $impairment_mode == 1 ]] || exit 2
 [[ $gui_mode == 0 || $gui_mode == 1 ]] || exit 2
+[[ $autojoin_mode == 0 || $autojoin_mode == 1 ]] || exit 2
 [[ $baseline_mode == 0 || $baseline_mode == 1 ]] || exit 2
 [[ $throughput_mode == 0 || $throughput_mode == 1 ]] || exit 2
 [[ $throughput_seconds =~ ^[0-9]+$ && $throughput_seconds -ge 1 && $throughput_seconds -le 30 ]] || { echo 'Throughput seconds must be 1..30' >&2; exit 2; }
 [[ $outage_mode == 0 || $outage_mode == 1 ]] || exit 2
-if ((outage_mode + rekey_mode + impairment_mode + gui_mode + baseline_mode + throughput_mode > 1)); then
-    echo 'Choose one independent scenario: outage, rekey traffic, impairment, GUI, baseline, or throughput' >&2
+if ((outage_mode + rekey_mode + impairment_mode + (gui_mode || autojoin_mode) + baseline_mode + throughput_mode > 1)); then
+    echo 'Choose one independent scenario: outage, rekey traffic, impairment, GUI/autojoin, baseline, or throughput' >&2
     exit 2
 fi
 if [[ -n $performance_bundle ]]; then
@@ -102,9 +104,14 @@ remote_created=0
 outage_worker_pid=
 rekey_worker_pid=
 impairment_worker_pid=
+autojoin_worker_pid=
 outage_table="photon_outage_${name##*.}"
 cleanup() {
     result=$?
+    if [[ -n $autojoin_worker_pid ]]; then
+        kill "$autojoin_worker_pid" 2>/dev/null || true
+        wait "$autojoin_worker_pid" 2>/dev/null || true
+    fi
     if [[ -n $impairment_worker_pid ]]; then
         kill "$impairment_worker_pid" 2>/dev/null || true
         wait "$impairment_worker_pid" 2>/dev/null || true
@@ -145,7 +152,7 @@ cleanup() {
             done
         ' >/dev/null 2>&1 || true
         docker logs "$name" > "$work/gateway.log" 2>&1 || true
-        for file in bird.conf bird-parse.txt daemon.log linux-status.txt linux-identity.json linux-ports.json linux-routes.txt linux-xfrm.txt bird-routes.txt bird-entries.txt throughput-echo4.log throughput-echo6.log; do
+        for file in bird.conf bird-parse.txt daemon.log linux-status.txt linux-identity.json linux-ports.json linux-routes.txt linux-xfrm.txt bird-routes.txt bird-entries.txt throughput-echo4.log throughput-echo6.log autojoin-request.json autojoin-authority.json autojoin-wrong-request.b64 autojoin-wrong-bundle.b64 autojoin-correct-bundle.b64; do
             docker cp "$name:/tmp/b4/$file" "$work/$file" >/dev/null 2>&1 || true
         done
         docker cp "$name:/tmp/b4/bird.log" "$work/bird.log" >/dev/null 2>&1 || true
@@ -154,7 +161,7 @@ cleanup() {
     fi
     if [[ $remote_created == 1 ]]; then
         # Only public runtime diagnostics; config.json contains fixture keys.
-        for pattern in '*.log' '*-events.json' '*-diagnostics.json' '*-peers.json' '*-routes.json' '*-owned-network.json' 'crash-recovery.json' 'network-change.json' 'gossip-convergence.json' 'adapter-conflict.json' 'transport-outage.json' 'rekey-traffic*.json' 'impairment*.json' 'gui-*.json' 'gui-*.png' 'baseline*.json' 'throughput*.json' 'profile-*.pprof' 'profile-*.packet-drops.json' 'profile-*.packet-timing.json' 'profile-*.done' 'profile-*.error' 'runtime-*.json' 'runtime-*.error'; do
+        for pattern in '*.log' '*-events.json' '*-diagnostics.json' '*-peers.json' '*-routes.json' '*-owned-network.json' 'crash-recovery.json' 'network-change.json' 'gossip-convergence.json' 'adapter-conflict.json' 'transport-outage.json' 'rekey-traffic*.json' 'impairment*.json' 'gui-*.json' 'gui-*.png' 'autojoin-*.json' 'autojoin-*.png' 'baseline*.json' 'throughput*.json' 'profile-*.pprof' 'profile-*.packet-drops.json' 'profile-*.packet-timing.json' 'profile-*.done' 'profile-*.error' 'runtime-*.json' 'runtime-*.error'; do
             scp -q "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH:$remote/$pattern" "$work/" 2>/dev/null || true
         done
         if ! ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"Remove-Item -LiteralPath '$remote' -Recurse -Force -ErrorAction Stop\""; then result=1; fi
@@ -207,6 +214,7 @@ docker run -d --name "$name" --network bridge --cap-add NET_ADMIN --security-opt
     -e "BIRD_BIN=$PHOTON_BIRD_NIX_PACKAGE/bin/bird" -e "BIRDC_BIN=$PHOTON_BIRD_NIX_PACKAGE/bin/birdc" \
     -e "PHOTON_CHARON_BINARY=$charon" -e "PHOTON_WINDOWS_TUNNEL_GATEWAY=$PHOTON_LINUX_IP" \
     -e "PHOTON_WINDOWS_TUNNEL_IKE_PORT=$ike_port" -e "PHOTON_WINDOWS_TUNNEL_NATT_PORT=$natt_port" \
+    -e "PHOTON_WINDOWS_AUTOJOIN_SMOKE=$autojoin_mode" \
     "$image" bash -euo pipefail -c '
         export STRONGSWAN_CONF=/smoke/strongswan.conf
         mkdir -m 700 /tmp/b4
@@ -231,7 +239,7 @@ docker run -d --name "$name" --network bridge --cap-add NET_ADMIN --security-opt
         /smoke/b4.test -test.run "^TestServeFullDaemonEcho$" -test.v -test.count=1 -test.timeout=600s &
         echo_pid=$!
         trap '\''kill "$echo_pid" "$daemon_pid" "$charon_pid" 2>/dev/null || true; wait || true'\'' EXIT
-        /smoke/b4.test -test.run "^TestObserveFullDaemonGateway$" -test.v -test.count=1 -test.timeout=300s &
+        /smoke/b4.test -test.run "^TestObserveFullDaemonGateway$" -test.v -test.count=1 -test.timeout=600s &
         observer_pid=$!
         wait "$observer_pid"
         wait "$daemon_pid"
@@ -244,15 +252,83 @@ for ((attempt=0;attempt<900;attempt++)); do
     sleep .1
 done
 [[ $ready == 1 ]] || { docker logs "$name"; echo 'Full daemon control and identity startup timeout' >&2; exit 1; }
-docker cp "$name:/tmp/b4/windows.db" "$work/windows.db" >/dev/null
+if [[ $autojoin_mode == 0 ]]; then docker cp "$name:/tmp/b4/windows.db" "$work/windows.db" >/dev/null; fi
 docker cp "$name:/tmp/b4/config.json" "$work/config.json" >/dev/null
 docker cp "$name:/tmp/b4/gossip-evidence.json" "$work/gossip-evidence.json" >/dev/null
-chmod 600 "$work/windows.db" "$work/config.json"
+chmod 600 "$work/config.json"
+if [[ $autojoin_mode == 0 ]]; then chmod 600 "$work/windows.db"; fi
 ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"New-Item -ItemType Directory '$remote' | Out-Null\""
 remote_created=1
-scp -q "${ssh_args[@]}" "$work/photon-windows.exe" "$work/windows.db" "$work/config.json" "$work/wintun.dll" "$work/gossip-evidence.json" docs/scripts/windows-service-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
+scp -q "${ssh_args[@]}" "$work/photon-windows.exe" "$work/config.json" "$work/wintun.dll" "$work/gossip-evidence.json" docs/scripts/windows-service-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
+if [[ $autojoin_mode == 0 ]]; then scp -q "${ssh_args[@]}" "$work/windows.db" "$PHOTON_WINDOWS_SSH:$remote/"; fi
 if [[ $gui_mode == 1 ]]; then
     scp -q "${ssh_args[@]}" docs/scripts/windows-service-gui-smoke.ps1 docs/scripts/windows-gui-session-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
+fi
+if [[ $autojoin_mode == 1 ]]; then
+    scp -q "${ssh_args[@]}" docs/scripts/windows-service-autojoin-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
+    coordinate_autojoin() (
+        trap - EXIT
+        trap 'exit 1' TERM INT
+        trap 'status=$?; printf "Autojoin coordinator failed phase=%s line=%s status=%s\n" "${phase:-waiting}" "$LINENO" "$status" >&2; exit "$status"' ERR
+        wait_autojoin() {
+            local deadline=$((SECONDS + 180)) value
+            while ((SECONDS < deadline)); do
+                value=$(timeout 10 ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"if (Test-Path '$remote/autojoin-request-phase.txt') { Get-Content '$remote/autojoin-request-phase.txt' -Raw }\"") || return 1
+                value=${value//$'\r'/}
+                [[ $value == "$1" ]] && return 0
+                [[ $value == failed ]] && return 1
+                sleep .2
+            done
+            echo "Autojoin phase timeout: $1" >&2
+            return 1
+        }
+        acknowledge_autojoin() {
+            timeout 10 ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"[IO.File]::WriteAllText((Join-Path (Get-Location) '$remote/autojoin-$1.ack'), '$1')\""
+        }
+        fixture_cli() {
+            # Only the unique disposable container's production control socket.
+            timeout 20 docker exec -e PHOTON_CONFIG=/tmp/b4/gateway.yaml -e PHOTON_CONTROL_SOCKET=/tmp/b4/photon.sock "$name" /smoke/photon "$@"
+        }
+        record_autojoin_clocks() {
+            local before after guest
+            before=$(date -u '+%Y-%m-%dT%H:%M:%S.%NZ')
+            guest=$(timeout 10 ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"[DateTime]::UtcNow.ToString('o')\"")
+            guest=${guest//$'\r'/}
+            after=$(date -u '+%Y-%m-%dT%H:%M:%S.%NZ')
+            printf '{"phase":"%s","linux_before":"%s","windows_utc":"%s","linux_after":"%s"}\n' "$phase" "$before" "$guest" "$after" >> "$work/autojoin-clocks.jsonl"
+        }
+        phase=request
+        wait_autojoin request
+        record_autojoin_clocks
+        scp -q "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH:$remote/autojoin-request.b64" "$work/autojoin-request.b64"
+        docker cp "$work/autojoin-request.b64" "$name:/tmp/b4/autojoin-request.b64" >/dev/null
+        docker exec -e PHOTON_WINDOWS_FULL_DAEMON_FIXTURE=/tmp/b4 "$name" /smoke/b4.test -test.run '^TestPrepareWindowsAutojoinRequests$' -test.v -test.count=1
+        fixture_cli gossip delegate issue --permissions write /tmp/b4/autojoin-wrong-request.b64 /tmp/b4/autojoin-wrong-bundle.b64 > "$work/autojoin-wrong-issue.log"
+        grep -q 'via daemon' "$work/autojoin-wrong-issue.log"
+        acknowledge_autojoin wrong-issued
+        phase=wrong-seen
+        wait_autojoin wrong-seen
+        record_autojoin_clocks
+        fixture_cli gossip delegate revoke node-a.catofes. fixture-wrong-key > "$work/autojoin-revoke.log"
+        grep -q 'via daemon' "$work/autojoin-revoke.log"
+        fixture_cli gossip delegate issue --permissions write /tmp/b4/autojoin-request.b64 /tmp/b4/autojoin-correct-bundle.b64 > "$work/autojoin-correct-issue.log"
+        grep -q 'via daemon' "$work/autojoin-correct-issue.log"
+        docker exec -e PHOTON_WINDOWS_FULL_DAEMON_FIXTURE=/tmp/b4 "$name" /smoke/b4.test -test.run '^TestVerifyWindowsAutojoinBundle$' -test.v -test.count=1
+        docker cp "$name:/tmp/b4/autojoin-authority.json" "$work/autojoin-authority.json" >/dev/null
+        scp -q "${ssh_args[@]}" "$work/autojoin-authority.json" "$PHOTON_WINDOWS_SSH:$remote/"
+        acknowledge_autojoin correct-issued
+        phase=adopted
+        wait_autojoin adopted
+        record_autojoin_clocks
+        fixture_cli debug zone --json node-a.catofes. > "$work/autojoin-linux-adopted-zone.json"
+        acknowledge_autojoin verified
+        phase=restarted
+        wait_autojoin restarted
+        fixture_cli debug zone --json node-a.catofes. > "$work/autojoin-linux-restarted-zone.json"
+        acknowledge_autojoin restart-verified
+    )
+    coordinate_autojoin > "$work/autojoin-coordinator.log" 2>&1 &
+    autojoin_worker_pid=$!
 fi
 if [[ $baseline_mode == 1 ]]; then
     scp -q "${ssh_args[@]}" docs/scripts/windows-service-baseline.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
@@ -377,6 +453,10 @@ if ! ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "$remote_command" > "$work/windo
     exit 1
 fi
 cat "$work/windows.log"
+if [[ -n $autojoin_worker_pid ]]; then
+    wait "$autojoin_worker_pid"
+    autojoin_worker_pid=
+fi
 if [[ -n $rekey_worker_pid ]]; then
     wait "$rekey_worker_pid"
     rekey_worker_pid=

@@ -111,42 +111,54 @@ func TestPrepareWindowsFullDaemonGateway(t *testing.T) {
 		}
 	}
 	config := &Config{SchemaVersion: ConfigSchemaVersion, ManagedZone: localZone, TrustedRootPublicKey: root, State: StateConfig{Path: filepath.Join(dir, "windows.db")}, GossipListen: "0.0.0.0:0", Wintun: WintunConfig{AdapterName: "PhotonB4Cross", MTU: 1280}, Overlay: OverlayConfig{ID: "main", SplitRoutes: []netip.Prefix{netip.MustParsePrefix("198.18.253.0/24"), netip.MustParsePrefix("fd00:7068:b4::/64")}}, Gateway: GatewayConfig{AllowedZones: []zone.ZonePath{gatewayZone}}, Reconnect: ReconnectConfig{InitialBackoff: time.Second, MaxBackoff: 3 * time.Second}}
-	disk, err := corestate.OpenBoltStore(config.State.Path, 0o600, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = disk.CommitCommon(ctx, &corestate.CommitCandidate{Verified: &corestate.VerifiedState{ManagedZone: localZone, Network: network, TrustedRootPublicKey: root, IdentityPrivateKey: identity}, Gossip: &corestate.GossipCheckpoint{}}, corestate.ChangeSet{VerifiedRevision: 1, NetworkChanged: true})
-	if closeErr := disk.Close(); err != nil || closeErr != nil {
-		t.Fatal("fixture common state persistence failed", err, closeErr)
-	}
-	state, err := OpenState(config.State.Path, localZone, root, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan := PlanGateway(ctx, config, state.Store().ReadView(), now)
-	client, err := state.EnsureLocalTransport(ctx, config, now, plan, netip.MustParseAddrPort("0.0.0.0:16500"))
-	if err != nil {
-		state.Close()
-		t.Fatal(err)
-	}
-	defer clear(client.PrivateKey)
-	if _, err := state.EnsureLocalBabelIdentity(ctx, config, now); err != nil {
-		t.Fatal(err)
-	}
-	if err := state.Close(); err != nil {
-		t.Fatal(err)
-	}
+	var candidate *corestate.CommitCandidate
+	var revision corestate.VerifiedRevision
+	if os.Getenv("PHOTON_WINDOWS_AUTOJOIN_SMOKE") == "1" {
+		// No Windows database or private key is prepared for this mode. The
+		// production Windows initializer must generate its own stable identity.
+		delete(network.Zones[localZone.Parent()].Delegations, localZone)
+		delete(network.Zones, localZone)
+		candidate = &corestate.CommitCandidate{Verified: &corestate.VerifiedState{ManagedZone: gatewayZone, Network: network, TrustedRootPublicKey: root, IdentityPrivateKey: identity}, Gossip: &corestate.GossipCheckpoint{}}
+		revision = 1
+	} else {
+		disk, err := corestate.OpenBoltStore(config.State.Path, 0o600, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = disk.CommitCommon(ctx, &corestate.CommitCandidate{Verified: &corestate.VerifiedState{ManagedZone: localZone, Network: network, TrustedRootPublicKey: root, IdentityPrivateKey: identity}, Gossip: &corestate.GossipCheckpoint{}}, corestate.ChangeSet{VerifiedRevision: 1, NetworkChanged: true})
+		if closeErr := disk.Close(); err != nil || closeErr != nil {
+			t.Fatal("fixture common state persistence failed", err, closeErr)
+		}
+		state, err := OpenState(config.State.Path, localZone, root, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan := PlanGateway(ctx, config, state.Store().ReadView(), now)
+		client, err := state.EnsureLocalTransport(ctx, config, now, plan, netip.MustParseAddrPort("0.0.0.0:16500"))
+		if err != nil {
+			state.Close()
+			t.Fatal(err)
+		}
+		defer clear(client.PrivateKey)
+		if _, err := state.EnsureLocalBabelIdentity(ctx, config, now); err != nil {
+			t.Fatal(err)
+		}
+		if err := state.Close(); err != nil {
+			t.Fatal(err)
+		}
 
+		disk, err = corestate.OpenBoltStore(config.State.Path, 0600, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var found bool
+		candidate, revision, _, found, err = disk.LoadCommon()
+		closeErr := disk.Close()
+		if err != nil || closeErr != nil || !found {
+			t.Fatal("read prepared Windows snapshot", err, closeErr)
+		}
+	}
 	config.Gateway.BootstrapHints = []BootstrapHint{{Peer: gatewayZone, Address: gossipContact}}
-	disk, err = corestate.OpenBoltStore(config.State.Path, 0600, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	candidate, revision, _, found, err := disk.LoadCommon()
-	closeErr := disk.Close()
-	if err != nil || closeErr != nil || !found {
-		t.Fatal("read prepared Windows snapshot", err, closeErr)
-	}
 	write := func(name string, value any) {
 		data, err := json.Marshal(value)
 		if err != nil {
@@ -157,7 +169,11 @@ func TestPrepareWindowsFullDaemonGateway(t *testing.T) {
 		}
 	}
 	write("config.json", config)
-	write("gossip-evidence.json", map[string]any{"gateway": gatewayZone, "missing_record": routing.RecordKeyBabelIdentity, "initial_revision": revision})
+	initialRevision := revision
+	if os.Getenv("PHOTON_WINDOWS_AUTOJOIN_SMOKE") == "1" {
+		initialRevision = 0
+	}
+	write("gossip-evidence.json", map[string]any{"gateway": gatewayZone, "missing_record": routing.RecordKeyBabelIdentity, "initial_revision": initialRevision})
 	candidate.Verified.ManagedZone = gatewayZone
 	candidate.Gossip = &corestate.GossipCheckpoint{}
 	linuxDisk, err := corestate.OpenBoltStore(filepath.Join(dir, "linux.db"), 0600, time.Second)
@@ -334,6 +350,9 @@ func TestObserveFullDaemonGateway(t *testing.T) {
 	// Keep polling during Windows service lifetime, before its final Stop removes
 	// routes. Both exact host routes must be dynamically installed on an XFRM link.
 	deadline = time.Now().Add(180 * time.Second)
+	if os.Getenv("PHOTON_WINDOWS_AUTOJOIN_SMOKE") == "1" {
+		deadline = time.Now().Add(420 * time.Second)
+	}
 	for time.Now().Before(deadline) {
 		v4, e4 := run("ip", "-4", "route", "show", "exact", "198.18.253.2/32")
 		v6, e6 := run("ip", "-6", "route", "show", "exact", "fd00:7068:b4::2/128")

@@ -48,6 +48,11 @@ Windows PowerShell 5.1 下执行，两个测试包全部通过：
 
 ## 首次初始化
 
+首次安装推荐使用 [自动入网](autojoin-testing.md)：配置根公钥、节点域名和 bootstrap 后直接启动服务，
+复制界面中的入网请求交给上级管理员，授权同步后自动完成入网。无需预先从 Linux 导出数据库或私钥。
+
+以下保留离线 bundle 导入流程，适用于管理员已经准备好节点身份的场景。
+
 准备 Windows 配置，固定 `managed_zone` 和从可信管理渠道获得的 `trusted_root_public_key`。
 `state.path` 应位于管理员管理的目录，且目标文件必须不存在。导入命令不覆盖或刷新已有数据库。
 

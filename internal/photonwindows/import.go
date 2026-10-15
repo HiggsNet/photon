@@ -5,8 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/share"
@@ -71,26 +69,6 @@ func ImportState(ctx context.Context, config *Config, bundle *share.JoinBundle, 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(config.State.Path), 0o700); err != nil {
-		return err
-	}
-	file, err := os.OpenFile(config.State.Path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return fmt.Errorf("create new Photon state: %w", err)
-	}
-	defer func() {
-		if err != nil {
-			err = errors.Join(err, os.Remove(config.State.Path))
-		}
-	}()
-	if err = file.Close(); err != nil {
-		return err
-	}
-	store, err := corestate.OpenBoltStore(config.State.Path, 0o600, time.Second)
-	if err != nil {
-		return err
-	}
 	view := common.ReadView()
-	err = store.CommitCommon(ctx, &corestate.CommitCandidate{Verified: view.State, Gossip: view.Gossip}, result.Changes)
-	return errors.Join(err, store.Close())
+	return initializeStateFile(ctx, config.State.Path, &corestate.CommitCandidate{Verified: view.State, Gossip: view.Gossip}, result.Changes, time.Second)
 }

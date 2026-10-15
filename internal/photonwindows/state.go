@@ -43,6 +43,11 @@ func OpenState(path string, managed zone.ZonePath, trustedRoot ed25519.PublicKey
 	if info.IsDir() {
 		return nil, fmt.Errorf("Photon state %s is a directory", path)
 	}
+	// bbolt initializes a zero-length file on Open. An existing empty file is
+	// invalid input here, not permission to initialize or rewrite its bytes.
+	if info.Size() == 0 {
+		return nil, fmt.Errorf("load Photon common state %s: existing state is empty", path)
+	}
 	boltStore, err := corestate.OpenBoltStore(path, 0o600, lockTimeout)
 	if err != nil {
 		return nil, err
