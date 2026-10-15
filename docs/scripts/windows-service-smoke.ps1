@@ -19,6 +19,8 @@ $sourceParent = 'HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\Application'
 $collisionPath = Join-Path $sourceParent $collisionName
 $collisionCreated = $false
 $runFailure = $null
+$guiExtraStarts = 0
+$guiExtraStops = 0
 $created = @()
 $ownedIndices = @()
 $networkAddressOwned = $false
@@ -76,6 +78,10 @@ function Check-EventSource([string]$ServiceName) {
     if ($source.TypesSupported -ne 7) { throw 'Event Log source does not support Error/Warning/Information' }
 }
 function Check-Events([string]$ServiceName, [int]$StartedCount, [int]$StoppedCount, [int]$FailedCount, [int]$RuntimeFailedCount = 0) {
+    if ($ServiceName -eq $name) {
+        $StartedCount += $script:guiExtraStarts
+        $StoppedCount += $script:guiExtraStops
+    }
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     do {
         $events = @(Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName=$ServiceName; StartTime=$eventStart} -ErrorAction SilentlyContinue)
@@ -272,6 +278,8 @@ try {
     $initialStatus = Read-Status
     Write-Output "initial live status: running=$($initialStatus.running) tunnel_ready=$($initialStatus.tunnel_ready)"
     Check-Business 'initial'
+    $guiHelper = Join-Path $FixtureDirectory 'windows-service-gui-smoke.ps1'
+    if (Test-Path $guiHelper) { . $guiHelper; Test-ServiceGui }
     $baselineHelper = Join-Path $FixtureDirectory 'windows-service-baseline.ps1'
     if (Test-Path $baselineHelper) { . $baselineHelper; Test-ServiceBaseline }
     $throughputHelper = Join-Path $FixtureDirectory 'windows-service-throughput.ps1'

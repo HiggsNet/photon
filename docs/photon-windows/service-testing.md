@@ -25,6 +25,8 @@ Windows 继续作为接入节点，仅一个 active gateway，不转发其他节
 移除服务要求先停止，只接受当前可执行文件安装的命令行及属于本产品的 Event Log source。
 配置修改后重启，不提供 reload。
 
+本机窗口和托盘使用同一套服务与 IPC，见 [GUI 使用与桌面验收](gui-testing.md)。
+
 console 用 `run --console --config <path>`，同时提供相同 IPC。
 `status` 等运行态命令不打开数据库，也不创建身份；没有运行实例时返回失败。
 离线检查使用 `config validate`、`gateways`，后者仅检查已签名网关材料。

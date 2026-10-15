@@ -210,7 +210,7 @@ Daemon
 
 - [x] 支持矩阵先固定 Windows 11 amd64；Windows 10、arm64 在首个 vertical slice 后按真实 CI/设备验证扩展。
 - [x] 以 Linux 现网和 Ubuntu 5.9.13/Nix 6.0.7 双端隔离测试确定首版集合：IKE AES-CBC-128/SHA256/PRF-SHA256/P-256、Ed25519 认证、ESP AES-GCM-16-128；CHILD KE 支持 P-256 或 none，不强制旧网关使用 PFS，见 Windows design §1.2。候选由 StrongSwan 模拟，Windows 实现仍待 B3 验收。
-- [x] v1 保持 outbound-only leaf、一个 active gateway、split tunnel；不做 transit、IKE responder、full tunnel、DNS/NRPT、GUI 或自动更新。
+- [x] v1 网络范围保持 outbound-only leaf、一个 active gateway、split tunnel；不做 transit、IKE responder、full tunnel、DNS/NRPT 或自动更新。2026-10-15 按用户要求增加本机 GUI/托盘，见 B5a。
 - [x] 冻结 route-origin 验证：Babel route 安装前必须匹配 Photon verified authorization，撤销/授权收紧 fail closed。
 - [x] 定义 revocation、network change、service stop 和 crash recovery SLO。
 
@@ -284,6 +284,17 @@ B4 当前设计范围内的接线与分层验收完成；Windows 保持 leaf-onl
 
 B5 服务主流程已完成两版本 StrongSwan 的真实 Windows 跨主机验收，见 [服务与控制接口验收](docs/photon-windows/service-testing.md)。
 B6 仍单独覆盖睡眠恢复、物理断网、崩溃恢复、长时间稳定性及发布门槛。
+
+### B5a. 本机 GUI 与托盘
+
+2026-10-15 用户要求新增简单图形管理入口，按独立批次验证和提交。
+
+- [x] 同一 executable 提供原生状态窗口和托盘，显示实时连接状态、active gateway 与授权路由；SCM running 不等同业务隧道 ready，IPC 不可用时清除旧状态。
+- [x] 窗口及托盘复用现有 owned-service 安装/启动/停止操作；重启明确执行 stop/start；隐藏或退出界面不停止后台服务。
+- [x] 配置编辑严格校验 YAML 与服务路径，原子保存并保留权限；检测已发生的外部变更，明确提示重启后生效，不增加 reload 或第二数据库 writer。
+- [x] 完成 portable、Windows 原生与已登录桌面的窗口/托盘交互验收，区分非交互 API/控件测试与实际 Explorer 桌面证据。
+
+2026-10-15：全仓检查、Windows 原生与 race 通过；已登录 Windows 11 桌面对完整 Linux gateway 的状态/托盘/启停/配置保存/重启及退出后双栈业务通过，后续既有服务回归和独立资源清理通过。配置编辑采用 YAML 文本，首次身份导入仍使用 CLI；真实 Explorer 重启和 B6 门槛继续独立，见 [GUI 使用与验收](docs/photon-windows/gui-testing.md)。
 
 ### B6. 验收、安全与发布门槛
 

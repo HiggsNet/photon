@@ -138,6 +138,19 @@ func RunControlled(ctx context.Context, daemon *Daemon, statePath string) error 
 }
 
 func CallControl(ctx context.Context, statePath, method string) (ControlResponse, error) {
+	return callControl(ctx, statePath, method, 0)
+}
+
+// CallControlForProcess binds a desktop SCM observation to that service's live
+// process, rather than accepting a different privileged daemon at this pipe.
+func CallControlForProcess(ctx context.Context, statePath, method string, expectedPID uint32) (ControlResponse, error) {
+	if expectedPID == 0 {
+		return ControlResponse{}, errors.New("expected control server process ID is required")
+	}
+	return callControl(ctx, statePath, method, expectedPID)
+}
+
+func callControl(ctx context.Context, statePath, method string, expectedPID uint32) (ControlResponse, error) {
 	var empty ControlResponse
 	if !controlMethod(method) {
 		return empty, errors.New("unsupported control method")
@@ -174,7 +187,7 @@ func CallControl(ctx context.Context, statePath, method string) (ControlResponse
 		}
 	}
 	defer windows.CloseHandle(handle)
-	if err := controlVerifyServer(handle); err != nil {
+	if err := controlVerifyServer(handle, expectedPID); err != nil {
 		return empty, err
 	}
 	return exchangeControl(&controlPipeStream{ctx: ctx, handle: handle}, method)
@@ -183,10 +196,13 @@ func CallControl(ctx context.Context, statePath, method string) (ControlResponse
 // The DACL protects the real server, not a name squatted before startup. Check
 // the connected server's process token before transmitting even a stop request.
 // Identification SQOS above prevents a fake server impersonating this client.
-func controlVerifyServer(handle windows.Handle) error {
+func controlVerifyServer(handle windows.Handle, expectedPID uint32) error {
 	var pid uint32
 	if err := windows.GetNamedPipeServerProcessId(handle, &pid); err != nil {
 		return err
+	}
+	if expectedPID != 0 && pid != expectedPID {
+		return fmt.Errorf("control server process %d does not match SCM process %d", pid, expectedPID)
 	}
 	process, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
 	if err != nil {

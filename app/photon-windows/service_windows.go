@@ -53,19 +53,8 @@ func manageService(action, name, config string) error {
 	if err != nil {
 		return err
 	}
-	argv, err := windows.DecomposeCommandLine(installed.BinaryPathName)
-	if err != nil {
+	if err := validateOwnedService(installed, name, config); err != nil {
 		return err
-	}
-	executable, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	if len(argv) != 7 || !strings.EqualFold(filepath.Clean(argv[0]), filepath.Clean(executable)) || argv[1] != "run" || argv[2] != "--service" || argv[3] != "--name" || argv[4] != name || argv[5] != "--config" || !filepath.IsAbs(argv[6]) {
-		return fmt.Errorf("service %q is not owned by this Photon Windows executable", name)
-	}
-	if config != "" && !strings.EqualFold(filepath.Clean(config), filepath.Clean(argv[6])) {
-		return fmt.Errorf("service %q uses a different config", name)
 	}
 	status, err := service.Query()
 	if err != nil {
@@ -104,6 +93,29 @@ func manageService(action, name, config string) error {
 		return photonwindows.RemoveEventSource(name)
 	}
 	return fmt.Errorf("unsupported service action %q", action)
+}
+
+// Both CLI mutations and desktop observations use the installed SCM command as
+// the owner boundary; a matching service name alone never grants ownership.
+func validateOwnedService(installed mgr.Config, name, config string) error {
+	argv, err := windows.DecomposeCommandLine(installed.BinaryPathName)
+	if err != nil {
+		return err
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if installed.ServiceType != windows.SERVICE_WIN32_OWN_PROCESS || !strings.EqualFold(installed.ServiceStartName, "LocalSystem") {
+		return fmt.Errorf("service %q is not an owned LocalSystem process", name)
+	}
+	if len(argv) != 7 || !strings.EqualFold(filepath.Clean(argv[0]), filepath.Clean(executable)) || argv[1] != "run" || argv[2] != "--service" || argv[3] != "--name" || argv[4] != name || argv[5] != "--config" || !filepath.IsAbs(argv[6]) {
+		return fmt.Errorf("service %q is not owned by this Photon Windows executable", name)
+	}
+	if config != "" && !strings.EqualFold(filepath.Clean(config), filepath.Clean(argv[6])) {
+		return fmt.Errorf("service %q uses a different config", name)
+	}
+	return nil
 }
 
 func waitServiceState(service *mgr.Service, desired svc.State, timeout time.Duration) error {

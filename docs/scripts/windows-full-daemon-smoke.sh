@@ -9,6 +9,7 @@ cd "$(dirname "$0")/../.."
 outage_mode=${PHOTON_WINDOWS_TRANSPORT_OUTAGE:-0}
 rekey_mode=${PHOTON_WINDOWS_REKEY_TRAFFIC:-0}
 impairment_mode=${PHOTON_WINDOWS_IMPAIRMENT:-0}
+gui_mode=${PHOTON_WINDOWS_GUI_SMOKE:-0}
 baseline_mode=${PHOTON_WINDOWS_BASELINE:-0}
 throughput_mode=${PHOTON_WINDOWS_THROUGHPUT:-0}
 throughput_seconds=${PHOTON_WINDOWS_THROUGHPUT_SECONDS:-15}
@@ -46,12 +47,13 @@ fi
 [[ $profile_mode == 0 || $baseline_mode == 1 || $throughput_mode == 1 ]] || { echo 'CPU profile requires baseline or throughput mode' >&2; exit 2; }
 [[ $rekey_mode == 0 || $rekey_mode == 1 ]] || exit 2
 [[ $impairment_mode == 0 || $impairment_mode == 1 ]] || exit 2
+[[ $gui_mode == 0 || $gui_mode == 1 ]] || exit 2
 [[ $baseline_mode == 0 || $baseline_mode == 1 ]] || exit 2
 [[ $throughput_mode == 0 || $throughput_mode == 1 ]] || exit 2
 [[ $throughput_seconds =~ ^[0-9]+$ && $throughput_seconds -ge 1 && $throughput_seconds -le 30 ]] || { echo 'Throughput seconds must be 1..30' >&2; exit 2; }
 [[ $outage_mode == 0 || $outage_mode == 1 ]] || exit 2
-if ((outage_mode + rekey_mode + impairment_mode + baseline_mode + throughput_mode > 1)); then
-    echo 'Choose one independent B6 scenario: outage, rekey traffic, impairment, baseline, or throughput' >&2
+if ((outage_mode + rekey_mode + impairment_mode + gui_mode + baseline_mode + throughput_mode > 1)); then
+    echo 'Choose one independent scenario: outage, rekey traffic, impairment, GUI, baseline, or throughput' >&2
     exit 2
 fi
 if [[ -n $performance_bundle ]]; then
@@ -152,7 +154,7 @@ cleanup() {
     fi
     if [[ $remote_created == 1 ]]; then
         # Only public runtime diagnostics; config.json contains fixture keys.
-        for pattern in '*.log' '*-events.json' '*-diagnostics.json' '*-peers.json' '*-routes.json' '*-owned-network.json' 'crash-recovery.json' 'network-change.json' 'gossip-convergence.json' 'adapter-conflict.json' 'transport-outage.json' 'rekey-traffic*.json' 'impairment*.json' 'baseline*.json' 'throughput*.json' 'profile-*.pprof' 'profile-*.packet-drops.json' 'profile-*.packet-timing.json' 'profile-*.done' 'profile-*.error' 'runtime-*.json' 'runtime-*.error'; do
+        for pattern in '*.log' '*-events.json' '*-diagnostics.json' '*-peers.json' '*-routes.json' '*-owned-network.json' 'crash-recovery.json' 'network-change.json' 'gossip-convergence.json' 'adapter-conflict.json' 'transport-outage.json' 'rekey-traffic*.json' 'impairment*.json' 'gui-*.json' 'gui-*.png' 'baseline*.json' 'throughput*.json' 'profile-*.pprof' 'profile-*.packet-drops.json' 'profile-*.packet-timing.json' 'profile-*.done' 'profile-*.error' 'runtime-*.json' 'runtime-*.error'; do
             scp -q "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH:$remote/$pattern" "$work/" 2>/dev/null || true
         done
         if ! ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"Remove-Item -LiteralPath '$remote' -Recurse -Force -ErrorAction Stop\""; then result=1; fi
@@ -249,6 +251,9 @@ chmod 600 "$work/windows.db" "$work/config.json"
 ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"New-Item -ItemType Directory '$remote' | Out-Null\""
 remote_created=1
 scp -q "${ssh_args[@]}" "$work/photon-windows.exe" "$work/windows.db" "$work/config.json" "$work/wintun.dll" "$work/gossip-evidence.json" docs/scripts/windows-service-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
+if [[ $gui_mode == 1 ]]; then
+    scp -q "${ssh_args[@]}" docs/scripts/windows-service-gui-smoke.ps1 docs/scripts/windows-gui-session-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
+fi
 if [[ $baseline_mode == 1 ]]; then
     scp -q "${ssh_args[@]}" docs/scripts/windows-service-baseline.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
 fi
@@ -363,6 +368,9 @@ NFT
     outage_worker_pid=$!
 fi
 remote_command="powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $remote/windows-service-smoke.ps1 -Executable $remote/photon-windows.exe -FixtureDirectory $remote"
+if [[ $gui_mode == 1 ]]; then
+    remote_command="powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $remote/windows-gui-session-smoke.ps1 -Executable $remote/photon-windows.exe -FixtureDirectory $remote"
+fi
 if [[ $throughput_mode == 1 ]]; then remote_command+=" -ThroughputSeconds $throughput_seconds"; fi
 if ! ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "$remote_command" > "$work/windows.log" 2>&1; then
     cat "$work/windows.log"
