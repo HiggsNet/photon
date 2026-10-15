@@ -329,6 +329,14 @@ B6 仍单独覆盖睡眠恢复、物理断网、崩溃恢复、长时间稳定�
 
 2026-10-15：全仓检查、两包 race、Windows vet 与 235 项原生测试通过；真实桌面首次保存不需重新读取，四页最小窗口、三组列表、配置往返、托盘、启停及重启双栈 MTU 生效通过。后续服务回归和独立资源清理通过；测试负例与脚本修正前的失败证据保留，见 [首次配置与分组列表验收](docs/photon-windows/gui-testing.md#2026-10-15-首次配置与分组列表验收)。
 
+### B5f. 托盘直接运行 Photon
+
+- [x] GUI 默认在同进程管理一个 Daemon，去掉安装服务入口及 GUI `--name`；CLI 服务模式独立保留。
+- [x] 关闭窗口隐藏，退出托盘取消并等待 Daemon 释放资源；忙碌时退出不丢失，配置保存不改变当前运行快照。
+- [x] 同数据库双实例拒绝且不操作外来进程，停用的旧 SCM 登记不影响新目录运行；真实桌面自动入网、列表、双栈、退出释放及换目录重开身份稳定验收。
+
+2026-10-15：全仓检查、两包 race、Windows vet 和 240 项原生测试通过；真实已登录桌面完成自动入网、托盘隐藏、启停、配置及双栈、竞争实例保护、退出资源释放和换目录恢复原身份。独立 CLI SCM 生命周期回归与最终清理通过；本批移除 GUI 服务依赖，服务命令仍保留，见 [托盘直接运行验收](docs/photon-windows/gui-testing.md#2026-10-15-托盘直接运行-photon)。
+
 ### B6. 验收、安全与发布门槛
 
 2026-10-14：当前 Windows 性能经用户确认可接受；剩余性能优化不再作为继续推进其他 B6 事项的前置依赖。后续优先补齐生命周期、链路故障和发布验收，短时性能结果仍不替代 72h soak。
@@ -342,10 +350,13 @@ B6 仍单独覆盖睡眠恢复、物理断网、崩溃恢复、长时间稳定�
   - [x] 完整网关对持续双栈业务发起 CHILD/IKE rekey，StrongSwan 5.9.13/6.0.7 保持同 SCM PID/live generation，验证 SA 更替与后续业务；存在显著收包缺口，不计作无损或 loss/dup/reorder 验收，见 [重协商记录](docs/photon-windows/b6-rekey-testing.md)。
   - [x] 真实 loopback 地址新增/删除通知在同 SCM 进程触发重绑、新 SA 与双栈恢复，StrongSwan 5.9.13/6.0.7 均通过；不代表物理断网或睡眠恢复。
   - [x] 接入原生自动恢复通知，地址不变也主动重连；真实 API 注册/注销、模拟回调到 composition 的接线及并发关闭通过，不计作真实睡眠/休眠/Modern Standby 业务验收。
+  - [x] 托盘模式在 PVE VM101 唯一虚拟网卡真实 link-down/up 后，同 GUI 进程自动恢复双栈业务与授权路由；观察到约 32.82 秒链路中断，独立定时恢复与精确配置还原通过。不代表 Wi-Fi 换网、多层 NAT 或 OS 睡眠；该 VM 报告睡眠/休眠不可用，见 [托盘故障验收](docs/photon-windows/tray-fault-testing.md)。
+  - [ ] 延长托盘断网恢复后的控制面观察，验证新一轮 Gossip 同步；本轮双栈业务恢复时末次 peer 快照仍为 `pull_state=failed`，保留 `round_timeout` 日志，不能仅以业务通过判断完整控制面恢复。
   - [x] 完整网关容器隔离阻断 IKE/NAT-T/ESP：旧 SA 存活时双栈发送超时、双向 ESP 丢包计数、DPD 退役及同 SCM 进程新 SA/双栈恢复，StrongSwan 5.9.13/6.0.7 均通过；保留 Gossip，不计作物理换网或多层 NAT 验收。
   - [x] 完整网关出站 NAT-T ESP 密文 loss/duplicate/reorder：StrongSwan 5.9.13/6.0.7 对真实 Windows SCM 双栈各 7 点通过；实际密文复制/乱序、同 PID/generation/SA lease、应用完整性和逐阶段恢复均独立复核。仅覆盖 gateway → Windows、IPv4 外层及窗口内乱序，保留两次夹具失败和时钟校准证据，不关闭完整故障矩阵或其他 B6 门槛，见 [故障验收](docs/photon-windows/b6-impairment-testing.md)。
 - [ ] teardown 必须只删除本产品 owned resource；覆盖 normal stop、partial startup、crash restart、uninstall 和未知残留冲突；当前临时 Wintun/address/route 销毁后重建，不增加持久资源 adopt/journal。
   - [x] Windows 11 强制结束本次 SCM 进程后，临时 adapter 自动释放，同 Bolt/新 SA/双栈恢复通过；同名外部网卡保护及失败创建清理原生通过。
+  - [x] 直接运行的托盘按保留句柄精确强杀，实际异常退出 71；管道/路由/网卡/数据库释放，重开保持身份与文件 ID，新 IKE/CHILD 及真实双栈通过。最终正常退出与独立 PVE/Windows/容器清理通过，见 [托盘故障验收](docs/photon-windows/tray-fault-testing.md)。
   - [x] 已证实仍存活的外部 IP 接口占名时，SCM 明确失败退出、事件 104 且保留外部 alias/GUID；释放占名后，同配置/Bolt 重启双栈通过。
   - [x] 未证实存活外部接口的名称重复从首次当前命名失败起最多重试 30 秒，超时明确失败；过期结果/普通 revision 不延长预算，不删除未知残留。
   - [ ] 补齐长期真实 PnP 残留与完整生命周期期限的原生验收；不通过名字或单独的 `ERROR_DUP_NAME` 猜 ownership。

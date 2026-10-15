@@ -126,7 +126,7 @@ func (w *desktopWindow) createSettingsWindow() error {
 			return err
 		}
 	}
-	if err := create(guiSettingsNoteID, "STATIC", "保存后需重启服务生效；关闭本窗口保留未保存的编辑。", 0x50000000, 0); err != nil {
+	if err := create(guiSettingsNoteID, "STATIC", "保存后需重新连接生效；关闭本窗口保留未保存的编辑。", 0x50000000, 0); err != nil {
 		return err
 	}
 	guiEnableWindow.Call(w.controls[guiSaveID], 0)
@@ -206,7 +206,7 @@ func (w *desktopWindow) markFormDirty() {
 	w.dirty = true
 	w.editRevision++
 	w.updateConfigSummary()
-	w.note("有未保存的设置；保存后重启服务生效。")
+	w.note("有未保存的设置；保存后重新连接生效。")
 }
 func (w *desktopWindow) openSettings() {
 	guiShowWindow.Call(w.settings, 9)
@@ -237,7 +237,7 @@ func (w *desktopWindow) showSettingsPage(page int) {
 	case guiRoutePageID:
 		title, help = "分流路由", "只将列表中的网段交给 Photon，例如 10.0.0.0/24 或 fd00::/64。选中条目后可修改或删除。"
 	case guiAdvancedPageID:
-		title, help = "高级设置", "一般保留默认值即可。数据库保存本机身份；修改路径会切换身份。所有设置保存后需重启服务生效。"
+		title, help = "高级设置", "一般保留默认值即可。数据库保存本机身份；修改路径会切换身份。所有设置保存后需重新连接生效。"
 	}
 	w.setText(w.controls[guiPageTitleID], title)
 	w.setText(w.controls[guiPageHelpID], help)
@@ -309,7 +309,7 @@ func (w *desktopWindow) updateConfigSummary() {
 		status = "设置读取失败，请打开设置后重新读取"
 	}
 	if w.newConfig {
-		status = "首次使用：请填写设置并保存后安装、启动服务"
+		status = "首次使用：请填写设置并保存后启动连接"
 	}
 	if w.dirty {
 		status = "有未保存的设置"

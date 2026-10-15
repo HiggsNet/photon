@@ -10,6 +10,8 @@ outage_mode=${PHOTON_WINDOWS_TRANSPORT_OUTAGE:-0}
 rekey_mode=${PHOTON_WINDOWS_REKEY_TRAFFIC:-0}
 impairment_mode=${PHOTON_WINDOWS_IMPAIRMENT:-0}
 gui_mode=${PHOTON_WINDOWS_GUI_SMOKE:-0}
+tray_mode=${PHOTON_WINDOWS_TRAY_SMOKE:-0}
+tray_faults_mode=${PHOTON_WINDOWS_TRAY_FAULTS:-0}
 autojoin_mode=${PHOTON_WINDOWS_AUTOJOIN_SMOKE:-0}
 gateway_glob_mode=${PHOTON_WINDOWS_GATEWAY_GLOB:-0}
 baseline_mode=${PHOTON_WINDOWS_BASELINE:-0}
@@ -50,14 +52,23 @@ fi
 [[ $rekey_mode == 0 || $rekey_mode == 1 ]] || exit 2
 [[ $impairment_mode == 0 || $impairment_mode == 1 ]] || exit 2
 [[ $gui_mode == 0 || $gui_mode == 1 ]] || exit 2
+[[ $tray_mode == 0 || $tray_mode == 1 ]] || exit 2
+[[ $tray_faults_mode == 0 || $tray_faults_mode == 1 ]] || exit 2
 [[ $autojoin_mode == 0 || $autojoin_mode == 1 ]] || exit 2
 [[ $gateway_glob_mode == 0 || $gateway_glob_mode == 1 ]] || exit 2
 [[ $baseline_mode == 0 || $baseline_mode == 1 ]] || exit 2
 [[ $throughput_mode == 0 || $throughput_mode == 1 ]] || exit 2
 [[ $throughput_seconds =~ ^[0-9]+$ && $throughput_seconds -ge 1 && $throughput_seconds -le 30 ]] || { echo 'Throughput seconds must be 1..30' >&2; exit 2; }
 [[ $outage_mode == 0 || $outage_mode == 1 ]] || exit 2
-if ((outage_mode + rekey_mode + impairment_mode + (gui_mode || autojoin_mode) + baseline_mode + throughput_mode > 1)); then
-    echo 'Choose one independent scenario: outage, rekey traffic, impairment, GUI/autojoin, baseline, or throughput' >&2
+[[ $gui_mode == 0 ]] || { echo 'SCM GUI testing was replaced: use PHOTON_WINDOWS_TRAY_SMOKE=1 PHOTON_WINDOWS_AUTOJOIN_SMOKE=1' >&2; exit 2; }
+[[ $tray_mode == "$autojoin_mode" ]] || { echo 'Portable tray/autojoin acceptance requires both PHOTON_WINDOWS_TRAY_SMOKE=1 and PHOTON_WINDOWS_AUTOJOIN_SMOKE=1; use both 0 for CLI SCM regression' >&2; exit 2; }
+if [[ $tray_faults_mode == 1 ]]; then
+    [[ $tray_mode == 1 && $autojoin_mode == 1 ]] || { echo 'Tray faults require tray/autojoin modes' >&2; exit 2; }
+    [[ ${PHOTON_PVE_SSH:-} == root@10.16.255.200 && ${PHOTON_PVE_VMID:-} == 101 ]] || { echo 'Tray faults require the explicitly scoped PVE host and VM 101' >&2; exit 2; }
+    [[ -f docs/scripts/windows-pve-link-smoke.sh && -f docs/scripts/windows-tray-faults.ps1 ]] || { echo 'Missing tray fault fixture helpers' >&2; exit 2; }
+fi
+if ((outage_mode + rekey_mode + impairment_mode + tray_mode + baseline_mode + throughput_mode > 1)); then
+    echo 'Choose one independent scenario: outage, rekey traffic, impairment, tray/autojoin, baseline, or throughput' >&2
     exit 2
 fi
 if [[ -n $performance_bundle ]]; then
@@ -107,9 +118,22 @@ outage_worker_pid=
 rekey_worker_pid=
 impairment_worker_pid=
 autojoin_worker_pid=
+tray_faults_worker_pid=
+tray_faults_task_started=0
 outage_table="photon_outage_${name##*.}"
 cleanup() {
     result=$?
+    # Restore the VM link before any Windows collection or fixture deletion.
+    if [[ -n $tray_faults_worker_pid ]]; then
+        kill "$tray_faults_worker_pid" 2>/dev/null || true
+        wait "$tray_faults_worker_pid" 2>/dev/null || true
+    fi
+    if [[ $tray_faults_mode == 1 ]]; then
+        bash docs/scripts/windows-pve-link-smoke.sh restore "$work" >> "$work/pve-link-cleanup.log" 2>&1 || result=1
+        if [[ $tray_faults_task_started == 1 ]]; then
+            ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "$remote_command -CollectOnly -WaitSeconds 30" >> "$work/windows-collect-cleanup.log" 2>&1 || result=1
+        fi
+    fi
     if [[ -n $autojoin_worker_pid ]]; then
         kill "$autojoin_worker_pid" 2>/dev/null || true
         wait "$autojoin_worker_pid" 2>/dev/null || true
@@ -163,7 +187,7 @@ cleanup() {
     fi
     if [[ $remote_created == 1 ]]; then
         # Only public runtime diagnostics; config.json contains fixture keys.
-        for pattern in '*.log' '*-events.json' '*-diagnostics.json' '*-peers.json' '*-routes.json' '*-owned-network.json' 'crash-recovery.json' 'network-change.json' 'gossip-convergence.json' 'adapter-conflict.json' 'transport-outage.json' 'rekey-traffic*.json' 'impairment*.json' 'gui-*.json' 'gui-*.png' 'autojoin-*.json' 'autojoin-*.png' 'baseline*.json' 'throughput*.json' 'profile-*.pprof' 'profile-*.packet-drops.json' 'profile-*.packet-timing.json' 'profile-*.done' 'profile-*.error' 'runtime-*.json' 'runtime-*.error'; do
+        for pattern in '*.log' '*-events.json' '*-diagnostics.json' '*-peers.json' '*-routes.json' '*-owned-network.json' 'crash-recovery.json' 'network-change.json' 'gossip-convergence.json' 'adapter-conflict.json' 'transport-outage.json' 'rekey-traffic*.json' 'impairment*.json' 'gui-*.json' 'gui-*.png' 'tray-*.json' 'tray-*.png' 'tray-fault*.txt' 'autojoin-*.json' 'autojoin-*.png' 'baseline*.json' 'throughput*.json' 'profile-*.pprof' 'profile-*.packet-drops.json' 'profile-*.packet-timing.json' 'profile-*.done' 'profile-*.error' 'runtime-*.json' 'runtime-*.error'; do
             scp -q "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH:$remote/$pattern" "$work/" 2>/dev/null || true
         done
         if ! ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"Remove-Item -LiteralPath '$remote' -Recurse -Force -ErrorAction Stop\""; then result=1; fi
@@ -264,11 +288,52 @@ ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -N
 remote_created=1
 scp -q "${ssh_args[@]}" "$work/photon-windows.exe" "$work/config.json" "$work/wintun.dll" "$work/gossip-evidence.json" docs/scripts/windows-service-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
 if [[ $autojoin_mode == 0 ]]; then scp -q "${ssh_args[@]}" "$work/windows.db" "$PHOTON_WINDOWS_SSH:$remote/"; fi
-if [[ $gui_mode == 1 ]]; then
-    scp -q "${ssh_args[@]}" docs/scripts/windows-service-gui-smoke.ps1 docs/scripts/windows-gui-session-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
+if [[ $tray_mode == 1 ]]; then
+    scp -q "${ssh_args[@]}" docs/scripts/windows-gui-support.ps1 docs/scripts/windows-tray-smoke.ps1 docs/scripts/windows-gui-session-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
+fi
+if [[ $tray_faults_mode == 1 ]]; then
+    scp -q "${ssh_args[@]}" docs/scripts/windows-tray-faults.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
+    # Presence enables the optional fault phases in this unique tray fixture.
+    printf '1\n' > "$work/fixture-tray-faults"
+    scp -q "${ssh_args[@]}" "$work/fixture-tray-faults" "$PHOTON_WINDOWS_SSH:$remote/"
+    coordinate_tray_faults() (
+        trap - EXIT
+        trap 'exit 143' TERM INT
+        restore_link() {
+            status=$?
+            trap - EXIT
+            if [[ ${link_attempted:-0} == 1 ]]; then
+                bash docs/scripts/windows-pve-link-smoke.sh restore "$work" || status=1
+            fi
+            exit "$status"
+        }
+        trap restore_link EXIT
+        wait_fault_phase() {
+            local deadline=$((SECONDS + $2)) value
+            while ((SECONDS < deadline)); do
+                if value=$(timeout 12 ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"if (Test-Path '$remote/tray-fault-request.txt') { Get-Content '$remote/tray-fault-request.txt' -Raw }\""); then
+                    value=${value//$'\r'/}
+                    [[ $value != failed ]] || { echo "Windows tray fault phase failed while waiting for $1" >&2; return 1; }
+                    [[ $value != "$1" ]] || return 0
+                fi
+                sleep 1
+            done
+            echo "Tray fault phase timeout: $1" >&2
+            return 1
+        }
+        wait_fault_phase network-ready 600
+        link_attempted=1
+        bash docs/scripts/windows-pve-link-smoke.sh down "$work"
+        for ((second=0; second<30; second++)); do sleep 1; done
+        bash docs/scripts/windows-pve-link-smoke.sh restore "$work"
+        link_attempted=0
+        wait_fault_phase network-complete 180
+        printf 'Windows observed link recovery and completed dual-stack recovery checks.\n'
+    )
+    coordinate_tray_faults > "$work/pve-link-coordinator.log" 2>&1 &
+    tray_faults_worker_pid=$!
 fi
 if [[ $autojoin_mode == 1 ]]; then
-    scp -q "${ssh_args[@]}" docs/scripts/windows-service-autojoin-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
     coordinate_autojoin() (
         trap - EXIT
         trap 'exit 1' TERM INT
@@ -447,11 +512,23 @@ NFT
     outage_worker_pid=$!
 fi
 remote_command="powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $remote/windows-service-smoke.ps1 -Executable $remote/photon-windows.exe -FixtureDirectory $remote"
-if [[ $gui_mode == 1 ]]; then
-    remote_command="powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $remote/windows-gui-session-smoke.ps1 -Executable $remote/photon-windows.exe -FixtureDirectory $remote"
+if [[ $tray_mode == 1 ]]; then
+    remote_command="powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $remote/windows-gui-session-smoke.ps1 -Executable $remote/photon-windows.exe -FixtureDirectory $remote -MainScript windows-tray-smoke.ps1"
 fi
 if [[ $throughput_mode == 1 ]]; then remote_command+=" -ThroughputSeconds $throughput_seconds"; fi
-if ! ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "$remote_command" > "$work/windows.log" 2>&1; then
+if [[ $tray_faults_mode == 1 ]]; then
+    # The SSH session is intentionally finished before taking net0 down.
+    # Only the owned InteractiveTask remains to observe Down/Up locally.
+    tray_faults_task_started=1
+    ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "$remote_command -StartOnly" > "$work/windows.log" 2>&1
+    wait "$tray_faults_worker_pid"
+    tray_faults_worker_pid=
+    if ! ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "$remote_command -CollectOnly -WaitSeconds 180" >> "$work/windows.log" 2>&1; then
+        cat "$work/windows.log"
+        exit 1
+    fi
+    tray_faults_task_started=0
+elif ! ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "$remote_command" > "$work/windows.log" 2>&1; then
     cat "$work/windows.log"
     exit 1
 fi

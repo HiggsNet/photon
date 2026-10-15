@@ -15,9 +15,9 @@ import (
 	"github.com/HiggsNet/photon/internal/photonwindows"
 )
 
-type desktopOptions struct{ ConfigPath, ServiceName string }
+type desktopOptions struct{ ConfigPath string }
 type desktopSnapshot struct {
-	ServiceState string
+	RuntimeState string
 	Observation  *photonwindows.Observation
 	Error        string
 }
@@ -29,21 +29,15 @@ type desktopBackend struct {
 	loadAttempted bool
 	formLoaded    bool
 	digest        [32]byte
-	// Saving edits does not change the running daemon's pipe location.
-	activeStatePath string
-	activePID       uint32
-	activeCreated   uint64
+	runtimeMu     sync.Mutex // Serializes start, stop, restart and final cleanup.
+	run           *desktopRun
+	runtimeErr    error
+	closed        bool
 }
 
 func newDesktopBackend(options desktopOptions) (*desktopBackend, error) {
 	if !filepath.IsAbs(options.ConfigPath) {
 		return nil, errors.New("desktop requires an absolute config path")
-	}
-	if options.ServiceName == "" {
-		options.ServiceName = photonwindows.DefaultServiceName
-	}
-	if !validServiceName(options.ServiceName) {
-		return nil, errors.New("invalid service name")
 	}
 	options.ConfigPath = filepath.Clean(options.ConfigPath)
 	return &desktopBackend{options: options}, nil
@@ -100,7 +94,7 @@ func desktopParseConfig(text string) (*photonwindows.Config, error) {
 		return nil, err
 	}
 	if !filepath.IsAbs(config.State.Path) {
-		return nil, errors.New("service configuration requires an absolute state.path")
+		return nil, errors.New("desktop configuration requires an absolute state.path")
 	}
 	return config, nil
 }
@@ -201,44 +195,4 @@ func desktopObservation(response photonwindows.ControlResponse) (*photonwindows.
 		return nil, errors.New("daemon is no longer running")
 	}
 	return observation, nil
-}
-
-func (b *desktopBackend) Service(action string) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	switch action {
-	case "install", "start", "restart":
-		text, _, err := desktopReadConfig(b.options.ConfigPath)
-		if err != nil {
-			return err
-		}
-		config, err := desktopParseConfig(string(text))
-		if err != nil {
-			return err
-		}
-		if action == "restart" {
-			if err := manageService("stop", b.options.ServiceName, b.options.ConfigPath); err != nil {
-				return err
-			}
-			b.activeStatePath = ""
-			action = "start"
-		}
-		if err := manageService(action, b.options.ServiceName, b.options.ConfigPath); err != nil {
-			return err
-		}
-		// Install does not start the service. A start against an already-running
-		// service must not retarget IPC to newly edited configuration either.
-		if action == "start" && b.activeStatePath == "" {
-			b.activeStatePath = config.State.Path
-		}
-		return nil
-	case "stop":
-		if err := manageService(action, b.options.ServiceName, b.options.ConfigPath); err != nil {
-			return err
-		}
-		b.activeStatePath = ""
-		return nil
-	default:
-		return fmt.Errorf("unsupported desktop service action %q", action)
-	}
 }

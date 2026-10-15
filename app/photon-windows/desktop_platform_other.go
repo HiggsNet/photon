@@ -3,7 +3,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -33,9 +32,6 @@ func desktopOpenConfig(path string) (*os.File, error) {
 	return file, nil
 }
 
-func (b *desktopBackend) Snapshot(context.Context) desktopSnapshot {
-	return desktopSnapshot{ServiceState: "unknown", Error: "desktop service control requires Windows"}
-}
 func desktopPrepareReplacement(_ string, file *os.File, mode os.FileMode) error {
 	return file.Chmod(mode.Perm())
 }

@@ -11,14 +11,14 @@ import (
 
 func TestDesktopOptionsDoNotRequireAnExistingConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "not-created.yaml")
-	options, err := parseDesktopOptions([]string{"--config", path, "--name", "Photon-GUI-Test"}, io.Discard)
-	if err != nil || options.ConfigPath != path || options.ServiceName != "Photon-GUI-Test" {
+	options, err := parseDesktopOptions([]string{"--config", path}, io.Discard)
+	if err != nil || options.ConfigPath != path {
 		t.Fatalf("options=%+v err=%v", options, err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("parsing created or accessed configuration: %v", err)
 	}
-	for _, args := range [][]string{{"--name", ""}, {"--name", "bad/name"}, {"extra"}, {"--unknown"}} {
+	for _, args := range [][]string{{"--name", ""}, {"--name", "Photon"}, {"--name", "bad/name"}, {"extra"}, {"--unknown"}} {
 		if _, err := parseDesktopOptions(args, io.Discard); err == nil {
 			t.Fatalf("accepted invalid desktop arguments: %v", args)
 		}

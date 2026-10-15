@@ -3,7 +3,7 @@
 package main
 
 import (
-	"fmt"
+	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -46,7 +46,7 @@ func TestDesktopNativeWindow(t *testing.T) {
 	}
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	backend, err := newDesktopBackend(desktopOptions{ConfigPath: filepath.Join(t.TempDir(), "missing.yaml"), ServiceName: fmt.Sprintf("Photon-GUI-Native-Test-%d", os.Getpid())})
+	backend, err := newDesktopBackend(desktopOptions{ConfigPath: filepath.Join(t.TempDir(), "missing.yaml")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,29 @@ func TestDesktopNativeWindow(t *testing.T) {
 	if limits != wantLimits {
 		t.Fatalf("WM_GETMINMAXINFO changed wrong native fields: %v", limits)
 	}
-	for _, id := range []int{guiStatusID, guiServiceID, guiGatewayID, guiRoutesID, guiNoteID, guiAdmissionID, guiJoinRequestID, guiInstallID, guiStartID, guiStopID, guiRestartID, guiSaveID, guiReloadID, guiCopyRequestID} {
+	// At the smallest supported window, a wrapped runtime error must fit
+	// without covering the configuration summary or the settings button.
+	guiMoveWindow.Call(w.hwnd, 0, 0, 700, 620, 0)
+	windowRect := func(hwnd uintptr) guiRect {
+		var rect guiRect
+		if ok, _, err := guiUser32.NewProc("GetWindowRect").Call(hwnd, uintptr(unsafe.Pointer(&rect))); ok == 0 {
+			t.Fatalf("GetWindowRect: %v", err)
+		}
+		return rect
+	}
+	for _, pending := range []bool{false, true} {
+		w.admission.Pending = pending
+		w.layout()
+		summary := windowRect(w.controls[guiConfigSummaryID])
+		settings := windowRect(w.controls[guiSettingsID])
+		note := windowRect(w.controls[guiNoteID])
+		if summary.Bottom-summary.Top < 64 || note.Bottom-note.Top < 64 || summary.Bottom > settings.Top || settings.Bottom > note.Top {
+			t.Fatalf("pending=%t: smallest window clips summary/footer or overlaps controls: summary=%+v settings=%+v note=%+v", pending, summary, settings, note)
+		}
+	}
+	w.admission.Pending = false
+	w.layout()
+	for _, id := range []int{guiStatusID, guiRuntimeID, guiGatewayID, guiRoutesID, guiNoteID, guiAdmissionID, guiJoinRequestID, guiStartID, guiStopID, guiRestartID, guiSaveID, guiReloadID, guiCopyRequestID} {
 		parent := w.hwnd
 		if id == guiSaveID || id == guiReloadID {
 			parent = w.settings
@@ -89,6 +111,9 @@ func TestDesktopNativeWindow(t *testing.T) {
 			t.Fatal("raw YAML editor still exists")
 		}
 	}
+	if removed, _, _ := guiUser32.NewProc("GetDlgItem").Call(w.hwnd, 1101); removed != 0 {
+		t.Fatal("service installation control still exists")
+	}
 	text := func(id int) string {
 		size, _, _ := guiGetWindowTextLength.Call(w.controls[id])
 		buffer := make([]uint16, int(size)+1)
@@ -98,7 +123,7 @@ func TestDesktopNativeWindow(t *testing.T) {
 	observation := &photonwindows.Observation{Running: true, TunnelReady: true, IKE: photonwindows.IKEObservation{Live: true, Gateway: "gateway.example."}, Babel: photonwindows.BabelObservation{Live: true, Routes: []photonwindows.RouteObservation{{Prefix: netip.MustParsePrefix("198.18.253.1/32"), Origin: "gateway.example.", Metric: 100}}}}
 	joinRequest, request := desktopTestJoinRequest(t)
 	observation.Admission = gossip.AdmissionDiagnosis{Pending: true, ManagedZone: joinRequest.Zone, Reason: gossip.AdmissionReasonMissingDelegation, JoinRequestB64: request}
-	w.render(desktopSnapshot{ServiceState: "running", Observation: observation})
+	w.render(desktopSnapshot{RuntimeState: "running", Observation: observation})
 	if text(guiJoinRequestID) != request || !strings.Contains(text(guiStatusID), "待授权") || strings.Contains(text(guiGatewayID), "gateway.example.") || strings.Contains(text(guiRoutesID), "198.18.253.1") {
 		t.Fatal("pending admission retained connected state or truncated the public request")
 	}
@@ -106,11 +131,11 @@ func TestDesktopNativeWindow(t *testing.T) {
 		t.Fatal("pending request copy button is disabled")
 	}
 	observation.Admission.Reason = gossip.AdmissionReasonDelegationKeyMismatch
-	w.render(desktopSnapshot{ServiceState: "running", Observation: observation})
+	w.render(desktopSnapshot{RuntimeState: "running", Observation: observation})
 	if !strings.Contains(text(guiAdmissionID), "本机公钥不匹配") || text(guiJoinRequestID) != request {
 		t.Fatal("delegation key mismatch did not preserve the current complete request")
 	}
-	for _, unavailable := range []desktopSnapshot{{ServiceState: "stopped", Observation: observation}, {ServiceState: "running", Observation: observation, Error: "IPC disconnected"}} {
+	for _, unavailable := range []desktopSnapshot{{RuntimeState: "stopped", Observation: observation}, {RuntimeState: "running", Observation: observation, Error: "IPC disconnected"}} {
 		w.render(unavailable)
 		if text(guiJoinRequestID) != "" || w.admission.Request != "" {
 			t.Fatal("unavailable observation retained admission request")
@@ -123,12 +148,12 @@ func TestDesktopNativeWindow(t *testing.T) {
 	observation.Admission.Reason = gossip.AdmissionReasonAdopted
 	// A leftover wire field must not preserve an old identity after adoption.
 	observation.TunnelReady = false
-	w.render(desktopSnapshot{ServiceState: "running", Observation: observation})
+	w.render(desktopSnapshot{RuntimeState: "running", Observation: observation})
 	if text(guiJoinRequestID) != "" || !strings.Contains(text(guiAdmissionID), "已入网") || !strings.Contains(text(guiStatusID), "已入网，正在连接") {
 		t.Fatal("adopted state retained pending request or claimed a ready tunnel")
 	}
 	observation.TunnelReady = true
-	w.render(desktopSnapshot{ServiceState: "running", Observation: observation})
+	w.render(desktopSnapshot{RuntimeState: "running", Observation: observation})
 	if !strings.Contains(text(guiStatusID), "已连接") || !strings.Contains(text(guiGatewayID), "gateway.example.") || !strings.Contains(text(guiRoutesID), "metric 100") {
 		t.Fatal("live status/route did not render")
 	}
@@ -141,19 +166,26 @@ func TestDesktopNativeWindow(t *testing.T) {
 	if !w.dirty {
 		t.Fatal("native EN_CHANGE did not mark edits")
 	}
-	w.render(desktopSnapshot{ServiceState: "stopped", Error: "IPC disconnected"})
+	w.render(desktopSnapshot{RuntimeState: "stopped", Error: "IPC disconnected"})
 	if strings.Contains(text(guiGatewayID), "gateway.example.") || strings.Contains(text(guiRoutesID), "198.18.253.1") || strings.Contains(text(guiStatusID), "已连接") {
 		t.Fatal("offline result retained stale live status")
 	}
 	if text(guiManagedFieldID) != "new.example." {
 		t.Fatal("status polling replaced unsaved form")
 	}
-	w.applyResult(guiResult{Action: "load", Form: desktopConfigForm{ManagedZone: "old.example."}, EditRevision: revision - 1, Snapshot: desktopSnapshot{ServiceState: "stopped"}})
+	w.applyResult(guiResult{Action: "load", Form: desktopConfigForm{ManagedZone: "old.example."}, EditRevision: revision - 1, Snapshot: desktopSnapshot{RuntimeState: "stopped"}})
 	if text(guiManagedFieldID) != "new.example." || !w.dirty {
 		t.Fatal("asynchronous load overwrote newer edits")
 	}
+	// A failed cleanup must leave a visible, usable window and preserve edits;
+	// it must not turn a close error into an apparent successful exit.
+	w.quitting, w.quitSubmitted = true, true
+	w.applyResult(guiResult{Action: "quit", Err: errors.New("cleanup incomplete")})
+	if _, exists := guiWindows.Load(w.hwnd); !exists || w.quitting || w.quitSubmitted || !strings.Contains(text(guiNoteID), "停止连接失败") || text(guiManagedFieldID) != "new.example." {
+		t.Fatal("failed runtime cleanup destroyed the window or discarded edits")
+	}
 	// One fixed worker and one queued request remain bounded under repeated
-	// timer/button submissions. No SCM mutations are performed by this test.
+	// timer/button submissions. No connection is started by this test.
 	w.startWorker()
 	w.submit(guiRequest{Action: "refresh"})
 	for i := 0; i < 100; i++ {
@@ -177,13 +209,38 @@ func TestDesktopNativeWindow(t *testing.T) {
 	if got := text(guiManagedFieldID); got != "new.example." {
 		t.Fatalf("worker status replaced edits: %q", got)
 	}
-	// Missing Explorer must not turn Close into an unfindable hidden process.
-	// This branch deliberately tests the no-tray fallback, not a real tray.
+	// An Exit during an admitted task must wait for its result, then stop/join
+	// through the same worker instead of dropping the user's exit request.
 	w.dirty = false
 	w.tray = false
+	if timer, _, _ := guiSetTimer.Call(w.hwnd, 1, 20, 0); timer == 0 {
+		t.Fatal("native fallback timer unavailable")
+	}
+	w.submit(guiRequest{Action: "refresh"})
 	guiSendMessage.Call(w.hwnd, guiWMClose, 0, 0)
+	if !w.quitting || w.quitSubmitted {
+		t.Fatal("busy Close did not defer owned runtime cleanup")
+	}
+	// Deliberately discard WM_APP instead of dispatching it. Both the
+	// in-flight refresh and the following Close must finish solely through
+	// real timer messages, exercising the notification-failure recovery path.
+	timerMessages := 0
+	deadline = time.Now().Add(5 * time.Second)
+	for w.busy && time.Now().Before(deadline) {
+		var message guiMessage
+		guiUser32.NewProc("PeekMessageW").Call(uintptr(unsafe.Pointer(&message)), w.hwnd, guiResultMessage, guiResultMessage, 1)
+		if exists, _, _ := guiUser32.NewProc("PeekMessageW").Call(uintptr(unsafe.Pointer(&message)), w.hwnd, guiWMTimer, guiWMTimer, 1); exists != 0 {
+			timerMessages++
+			guiDispatchMessage.Call(uintptr(unsafe.Pointer(&message)))
+		} else {
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	if w.busy || timerMessages < 2 {
+		t.Fatal("exit lost its result-drain timer after missing WM_APP")
+	}
 	if _, exists := guiWindows.Load(w.hwnd); exists {
-		t.Fatal("Close without tray retained a hidden owner")
+		t.Fatal("queued Close without tray retained a hidden owner")
 	}
 	if w.ctx.Err() == nil {
 		t.Fatal("window destruction did not cancel its worker")
@@ -222,7 +279,7 @@ func TestDesktopNativeMissingFormCreatesConfigThroughWorker(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	path := filepath.Join(t.TempDir(), "first-setup.yaml")
-	backend, err := newDesktopBackend(desktopOptions{ConfigPath: path, ServiceName: fmt.Sprintf("Photon-GUI-Form-Test-%d", os.Getpid())})
+	backend, err := newDesktopBackend(desktopOptions{ConfigPath: path})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,9 +313,9 @@ func TestDesktopNativeMissingFormCreatesConfigThroughWorker(t *testing.T) {
 	if enabled, _, _ := guiUser32.NewProc("IsWindowEnabled").Call(w.controls[guiSaveID]); enabled == 0 {
 		t.Fatal("first setup requires a redundant reload before saving")
 	}
-	w.command(guiInstallID)
+	w.command(guiStartID)
 	if w.busy || !strings.Contains(get(guiSettingsNoteID), "请先填写并保存") {
-		t.Fatal("first setup attempted SCM installation before config existed")
+		t.Fatal("first setup attempted a connection before config existed")
 	}
 	// A failed reload is an unreadable existing file, not a confirmed first run.
 	if err := os.WriteFile(path, []byte("invalid: ["), 0600); err != nil {

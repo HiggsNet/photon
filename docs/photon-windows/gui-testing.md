@@ -1,7 +1,8 @@
 # Windows 本机界面与托盘
 
-同一个 `photon-windows.exe` 提供 CLI、原生窗口和托盘。界面复用现有 SCM 与本机
-named pipe，不运行第二个 Daemon，也不打开服务数据库。
+同一个 `photon-windows.exe` 提供 CLI、原生窗口和托盘。默认 GUI 在自身进程内管理一个
+Photon Daemon，复用 console 的运行链路与本机 named pipe，不需要安装 Windows 服务。
+窗口通过 IPC 读取公开状态，数据库和网络资源始终由同一个 Daemon 管理。
 
 ## 使用
 
@@ -11,22 +12,23 @@ named pipe，不运行第二个 Daemon，也不打开服务数据库。
 数据库不存在时，首次启动自动生成本机身份并等待上级授权，见 [自动入网](autojoin-testing.md)。
 
 右键可执行文件，选择“以管理员身份运行”，无参数启动默认进入窗口，读取可执行文件
-旁的 `config.yaml`。也可以在管理员 PowerShell 指定已有配置与服务名：
+旁的 `config.yaml`。也可以在管理员 PowerShell 指定已有配置：
 
 ```powershell
-.\photon-windows.exe gui --config C:\Photon\config.yaml --name PhotonWindows
+.\photon-windows.exe gui --config C:\Photon\config.yaml
 ```
 
-默认服务名为 `PhotonWindows`，隔离实例必须使用对应的 `--name`。已有 CLI 命令仍可使用。
+GUI 不再接受 `--name`，每个实例使用独立的配置和数据库路径。已有 CLI 服务命令仍可使用。
 目录、配置、数据库及 driver 应由管理员管理；界面沿用现有管理员权限要求，不自动提权。
 
-- 窗口显示服务状态、业务连接状态、活动网关和实时 Babel 路由。服务 Running 与业务
-  隧道 ready 分开显示；服务停止或 IPC 读取失败时清除旧网关与路由。
-- “安装服务”安装当前可执行文件和配置；“启动”“停止”“重启服务”管理这个实例。
-  只接受与当前 executable、配置及 LocalSystem 服务账号匹配的服务。
+- 窗口显示运行状态、业务连接状态、活动网关和实时 Babel 路由。Daemon 运行与业务
+  隧道 ready 分开显示；停止或 IPC 读取失败时清除旧网关与路由。
+- “启动连接”“停止连接”“重新连接”管理本次托盘进程拥有的 Daemon。
+  打开 GUI 不自动连接；运行中的配置使用启动时的快照，保存设置不会自动重启。
 - 首次启动显示入网进度与可复制的入网请求，授权同步后自动继续连接。已入网与业务已连接分别展示。
-- 关闭窗口隐藏到托盘；托盘可以打开窗口、启动、停止和退出界面。退出界面保留后台服务。
-  托盘不可用时关闭窗口会退出界面。
+- 关闭窗口隐藏到托盘；托盘可以打开窗口、启动、停止及停止连接后退出。
+  退出会等待 Daemon 释放网络资源和数据库，不留下常驻子进程。
+  托盘不可用时关闭窗口也走停止连接后退出流程。
 - 配置分为“身份”“网关与引导”“分流路由”“高级”四页。
   身份页填写根公钥和本机节点域名；网关规则与分流网段通过列表添加、修改和删除，
   无需在文本框中手工维护每行一项。引导节点分别填写 Photon 网关身份与 `主机:端口`。
@@ -44,9 +46,9 @@ named pipe，不运行第二个 Daemon，也不打开服务数据库。
   保存前复用现有配置校验及绝对 `state.path` 检查，无效配置不落盘。
   保存使用同目录临时文件及原子替换，并保留原 DACL。检查已发生的外部内容/文件身份变更，
   此时需“重新读取”后再编辑；这不是针对并发恶意写入的原子 compare-and-swap。
-  保存后明确点击“重启服务”生效，不自动重启，不提供热重载。
+  保存后明确点击“重新连接”生效，不自动重启，不提供热重载。
 
-缺失配置时自动打开身份页，提供可编辑的默认值；填写各页后直接“保存配置”，再安装和启动服务。
+缺失配置时自动打开身份页，提供可编辑的默认值；填写各页后直接“保存配置”，再“启动连接”。
 切换页面会保留尚未加入列表的输入；保存时会提示先添加或更新对应条目，避免丢失输入。
 不需要先创建空白 YAML 文件或手动点击“重新读取”。配置目录须已存在且可写。
 默认数据库位于配置文件同目录，使用配置文件名加 `.db`（`config.yaml` 对应 `config.db`）。
@@ -56,33 +58,40 @@ named pipe，不运行第二个 Daemon，也不打开服务数据库。
 无法解析的已有文件不会作为默认配置被覆盖，需先修正文件并重新读取。
 已有身份数据库继续沿用，首次离线导入也可使用现有 `state import` 命令。
 
+升级时先从托盘退出，再解压新程序并保留实际使用的配置和数据库；更换 exe 路径无需重新登记服务。
+`state.path` 仍是数据库的绝对路径，移动程序目录不会自动移动身份数据。
+旧版 Windows 服务已经停止时不影响托盘使用；如果仍在运行并占用同一数据库，
+需要先在 Windows 服务管理器停止旧服务。托盘不会自动停止、修改或接管既有服务。
+
 ## 可重复验收
 
 portable 测试覆盖参数、配置校验、外部变更、状态解析及路由文本；Windows 原生测试额外覆盖
-Win32 ABI、真实控件、DACL 保留、原子替换失败保护、服务 ownership 及管道进程身份绑定。
+Win32 ABI、真实控件、DACL 保留、原子替换失败保护、运行生命周期及管道进程身份绑定。
 原生控件测试可以在 SSH 的非交互会话运行，不能据此认定托盘已在 Explorer 中出现。
 
 完整桌面场景需要测试账号以控制台方式登录 Windows，保持解锁且 Explorer 运行。
 SSH 使用同一账号。通过一次性 InteractiveToken/Highest 计划任务在该用户桌面运行夹具，
-任务无持久触发器，结束后注销，只操作本次唯一命名的测试服务和本次 GUI。
+任务无持久触发器，结束后注销，只操作本次唯一目录和本次 GUI。
 
 ```sh
 PHOTON_WINDOWS_SSH=photon-test@10.16.252.11 \
 PHOTON_LINUX_IP=10.16.255.8 \
 PHOTON_BIRD_NIX_PACKAGE=/nix/store/<bird-package> \
 PHOTON_IKE_AUTH_NIX_PACKAGE=/nix/store/<strongswan-package> \
-PHOTON_WINDOWS_GUI_SMOKE=1 \
+PHOTON_WINDOWS_TRAY_SMOKE=1 PHOTON_WINDOWS_AUTOJOIN_SMOKE=1 \
 bash docs/scripts/windows-full-daemon-smoke.sh
 ```
 
-沿用完整 Linux Photon gateway、临时签名身份和真实 Windows SCM/Wintun/双栈业务。
-GUI 场景读取真实控件，发送 Win32 控件消息，核对 IPC DTO 与 SCM 进程，保存仅针对本次窗口的
+沿用完整 Linux Photon gateway、临时签名身份和真实 Windows Wintun/双栈业务。
+GUI 场景读取真实控件，发送 Win32 控件消息，核对 IPC DTO 与 GUI 进程，保存仅针对本次窗口的
 PrintWindow 截图。覆盖停止清空状态、启动恢复、非法选项拒绝、MTU 1400→1360 保存不重启、
-重启应用 MTU、退出界面后双栈通信继续。托盘检查核对本次 HWND/ID 的 Explorer 图标矩形，
+重新连接应用 MTU、退出界面后释放资源和换目录重开身份稳定。托盘检查核对本次 HWND/ID 的 Explorer 图标矩形，
 恢复检查只删除自己的图标并模拟 `TaskbarCreated`，不重启 Explorer。
 
-结束后继续既有服务回归，并删除本次服务、Event Log source、适配器、地址、路由、凭证和
+独立的 CLI 服务回归继续由原服务模式验证。托盘场景结束删除本次适配器、地址、路由、凭证和
 一次性计划任务。系统 Application 历史事件保留，不清空日志。
+
+以下是先前 SCM GUI 的历史验收记录，当前 GUI 的托盘运行语义以上述说明为准。
 
 ## 2026-10-15 验收记录
 
@@ -212,3 +221,48 @@ Windows 11 `photon-test` Session 2 / Explorer 556，对隔离完整 Photon gatew
 首轮桌面在首设成功后因测试参数 `$Input` 与 PowerShell 自动变量冲突中断，改名后完整重跑通过。
 截图夹具另补齐工作线程 DPI 上下文、同步重绘与物理几何记录，产品布局没有因此改动；
 失败日志与原始裁切图保留在 `full-rig-before-ps-variable-fix.log` 和 `failed-ps-variable/`。
+
+## 2026-10-15 托盘直接运行 Photon
+
+默认 GUI 改为在自身进程内管理 Daemon，移除安装服务入口与 GUI `--name`，不启动后台子进程。
+复用 console 的运行、控制管道和清理链路；窗口关闭隐藏，托盘退出取消并等待实际运行结束。
+忙碌时退出会排队等待，结果消息发送失败仍由定时器收取；失败保留窗口及编辑供重试。
+保存配置不改变当前运行快照，重新连接后应用。CLI SCM 的所有权校验和服务模式保留。
+
+Windows 11 `photon-test` Session 2 / Explorer 556 的真实桌面，以临时 authority、
+完整隔离 Linux Photon gateway / StrongSwan 6.0.7 验证，未修改真实网络授权或 IPAM：
+
+- 从另一工作目录启动无配置的副本，四页首次保存成功，不创建数据库、服务或自动连接。
+- GUI 内生成身份、等待授权、错误公钥拒绝及正确授权接纳，整个过程保持同一 GUI PID 和数据库身份。
+  授权后实际 Wintun、IKE/ESP、IPv4/IPv6 UDP 业务及路由通过。
+- 隐藏窗口、重建自身托盘图标后业务继续；停止释放管道、适配器及数据库，启动恢复同一身份。
+  通配符和列表往返、非法 MTU 保留原文件、保存不重启、重新连接双栈 MTU 1360 生效通过。
+- 同数据库竞争托盘被拒绝，其停止和退出不影响原实例的 SA 或双栈业务。
+  原托盘退出后管道、路由、适配器消失，离线数据库可读；换 exe 目录重开沿用已入网身份。
+  停用的旧服务登记始终保持原路径、账号及 PID 0，不影响以上操作。
+
+独立 CLI SCM 回归覆盖启停、同数据库崩溃恢复、地址增删通知、损坏数据库保护、Event Log source
+和外来适配器冲突保护及恢复，实际双栈业务通过。首轮托盘失败来自 Windows 返回
+`ERROR_PIPE_BUSY` 而占用提示仅覆盖 `ERROR_ACCESS_DENIED`；补齐提示并保留原错误码后重跑通过。
+未降低管道独占、进程绑定、文件权限或服务所有权要求。
+
+全仓 `make check`、两包 race、Windows vet 通过；Windows 两包原生测试 240 项顶层通过、
+10 项 opt-in/helper 顶层跳过。最小 700×620 主窗口覆盖正常及待入网两种布局，
+配置摘要与三行提示区域不重叠。最后仅调整提示区高度，原生与完整托盘桌面场景再次验收。
+CLI SCM 证据对应调整前源码，服务与运行链路在该布局调整中没有变化。
+桌面截图为 96 DPI，未验证高 DPI；托盘重建仅模拟 `TaskbarCreated`，未实际重启 Explorer。
+本批不替代 B6 的物理睡眠、长时间稳定性或发布验收。
+
+公开证据在 `build/validation/windows-tray-20261015/`：`accepted-tray/` 为最终桌面轮，
+`pre-note-layout/` 为功能通过后提示区调整前的原件，`accepted-scm/` 为独立服务回归。
+`native.log`、`make-check-final.log`、`race.log`、`windows-vet.log`、`ast.log`、
+`accepted-sources.sha256` 及 `sources-before-note-layout.sha256` 区分最终检查与服务回归源码。
+占用提示修正前失败日志和原件保留在 `full-tray-before-pipe-busy-hint.log`、
+`native-before-pipe-busy-hint.log`、`failed-pipe-busy-hint/`。
+
+最终 GUI、竞争 GUI、换目录 GUI、首设 GUI 及一次性桌面任务实际退出码均为 0，剪贴板已恢复。
+`cleanup.log`、`docker-cleanup.txt` 独立确认本轮服务、Event Log source、适配器、地址、路由、
+任务、进程、远端临时目录及四轮容器无残留；两名用户原有 Explorer 会话均保留。
+
+后续已补充直接托盘进程的真实强杀恢复，以及 PVE VM101/net0 断开后同进程自动双栈恢复，
+含独立定时恢复和宿主机配置核对，见 [托盘故障验收](tray-fault-testing.md)。

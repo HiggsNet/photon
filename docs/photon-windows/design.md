@@ -22,11 +22,12 @@ XFRM、BIRD 或 network namespace。
 - 不做 transit、IKE responder、lite-to-lite、full tunnel、DNS/NRPT 或 auto-update。
 
 2026-10-15 根据用户要求增加本机 GUI 与托盘管理入口，网络范围继续保持上述约束。
-界面复用同一 `photon-windows.exe` 的 SCM 操作和现有 named-pipe IPC，只显示运行中
-Daemon 的公开状态，不自行打开数据库、创建网络 Driver 或执行另一套连接状态机。
-提供状态、网关、路由、服务启停，以及身份、网关引导、分流路由和高级配置页；选项保存为原有 YAML 配置，
-复用同一 schema 与校验，配置保存仍需重启服务生效。
-关闭窗口隐藏到可用托盘，退出界面不停止后台服务。操作权限沿用本机管理员模型。
+默认 GUI 在本进程内管理一个 Daemon，复用 console 的 composition、控制管道和资源清理链路；
+窗口只通过绑定本进程的 named-pipe IPC 展示公开状态，不自行打开数据库或维护另一套连接状态机。
+提供状态、网关、路由、连接启停，以及身份、网关引导、分流路由和高级配置页；选项保存为原有 YAML 配置，
+复用同一 schema 与校验，保存后重新连接生效。
+关闭窗口隐藏到可用托盘，退出托盘先取消并等待本次 Daemon 退出。操作权限沿用本机管理员模型。
+GUI 不依赖 SCM 安装登记；Windows 服务保留为独立的可选 CLI 运行方式。
 
 Windows 是接入节点：Babel 只发布本节点当前获授权的本地前缀，不重新发布从 gateway 学到的
 路由。接收路由仅用于本机发包选路与入站来源授权校验；业务包出站源地址和入站目标地址必须

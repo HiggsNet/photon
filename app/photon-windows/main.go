@@ -143,7 +143,7 @@ func writeUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage: photon-windows <command>")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Commands:")
-	fmt.Fprintln(w, "  gui [--config <path>] [--name <name>]  Open the Windows status window and tray")
+	fmt.Fprintln(w, "  gui [--config <path>]           Run Photon from the Windows window and tray")
 	fmt.Fprintln(w, "  status|peers|routes|diagnostics|stop --config <path>  Query or stop the live daemon")
 	fmt.Fprintln(w, "  gateways --config <path>         Inspect signed gateway contacts offline (no route authorization)")
 	fmt.Fprintln(w, "  state import --config <path> --bundle <file> --key <file>  Initialize a new state database")

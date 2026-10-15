@@ -136,7 +136,7 @@ func completeFirstRunForm(form *desktopConfigForm) {
 func TestDesktopConfigFormFirstRunStatusDoesNotRequireAnotherLoad(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	b, err := newDesktopBackend(desktopOptions{ConfigPath: path, ServiceName: "PhotonFirstRun-" + filepath.Base(dir)})
+	b, err := newDesktopBackend(desktopOptions{ConfigPath: path})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestDesktopConfigFormFirstRunStatusDoesNotRequireAnotherLoad(t *testing.T) 
 		t.Fatalf("first load: %+v, %v", form, err)
 	}
 	// The GUI always takes a status snapshot after loading and on refresh.
-	// An absent/inaccessible SCM service must not invalidate this loaded form.
+	// An inactive runtime must not invalidate this loaded form.
 	for i := 0; i < 2; i++ {
 		b.Snapshot(context.Background())
 	}

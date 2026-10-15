@@ -168,13 +168,13 @@ func TestDesktopWindowsAtomicSaveFailurePreservesOriginal(t *testing.T) {
 	}
 }
 
-func TestDesktopWindowsUninstalledHasNoStaleObservation(t *testing.T) {
-	b, err := newDesktopBackend(desktopOptions{ConfigPath: filepath.Join(t.TempDir(), "config.yaml"), ServiceName: "PhotonDesktopAbsent-" + filepath.Base(t.TempDir())})
+func TestDesktopWindowsInactiveHasNoStaleObservation(t *testing.T) {
+	b, err := newDesktopBackend(desktopOptions{ConfigPath: filepath.Join(t.TempDir(), "config.yaml")})
 	if err != nil {
 		t.Fatal(err)
 	}
 	out := b.Snapshot(context.Background())
-	if out.ServiceState != "not-installed" || out.Observation != nil || out.Error != "" {
+	if out.RuntimeState != "stopped" || out.Observation != nil || out.Error != "" {
 		t.Fatalf("absent snapshot: %+v", out)
 	}
 }

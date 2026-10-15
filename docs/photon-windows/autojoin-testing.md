@@ -14,7 +14,7 @@
 具体字段含义见 [GUI 使用](gui-testing.md)。也可以继续复制 `config.example.yaml` 为
 `config.yaml` 并编辑，已有配置会自动显示为表单。
 
-点击“安装服务”及“启动”。
+点击“启动连接”，无需安装 Windows 服务。
 首次启动会创建身份，界面显示入网进度和完整请求；点击“复制入网请求”交给管理该父域的管理员。
 命令行也可读取同一运行状态：
 
@@ -61,7 +61,7 @@ PHOTON_WINDOWS_SSH=photon-test@10.16.252.11 \
 PHOTON_LINUX_IP=10.16.255.8 \
 PHOTON_BIRD_NIX_PACKAGE=/nix/store/<bird-package> \
 PHOTON_IKE_AUTH_NIX_PACKAGE=/nix/store/<strongswan-package> \
-PHOTON_WINDOWS_AUTOJOIN_SMOKE=1 PHOTON_WINDOWS_GUI_SMOKE=1 \
+PHOTON_WINDOWS_AUTOJOIN_SMOKE=1 PHOTON_WINDOWS_TRAY_SMOKE=1 \
 bash docs/scripts/windows-full-daemon-smoke.sh
 ```
 
@@ -70,6 +70,8 @@ Linux 使用隔离容器内的临时 authority，经生产控制接口先签发�
 Windows 验证拒绝后撤销并重新签发正确公钥的 `write` 授权。
 父域签名、root pin、epoch、请求公钥和叶节点后续签名记录分别核对；不操作真实网络的授权。
 双栈 host assignment 由夹具预先签发，验证首次入网不代表客户端能够自行分配 IP。
+
+以下为原 SCM GUI 的历史验收；当前托盘直接运行的验收见 [GUI 记录](gui-testing.md)。
 
 2026-10-15：Windows 11 amd64 `10.16.252.11` 的 `photon-test` Session 2 / Explorer 556，
 对完整 Linux Photon gateway / StrongSwan 6.0.7 验收通过：

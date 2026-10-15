@@ -8,10 +8,6 @@ $Executable = (Resolve-Path $Executable).Path
 $FixtureDirectory = (Resolve-Path $FixtureDirectory).Path
 $Config = Join-Path $FixtureDirectory 'service.yaml'
 $BadConfig = Join-Path $FixtureDirectory 'service-init-failure.yaml'
-$autojoinHelper = Join-Path $FixtureDirectory 'windows-service-autojoin-smoke.ps1'
-$autojoinEnabled = Test-Path -LiteralPath $autojoinHelper
-if ($autojoinEnabled -and (Test-Path -LiteralPath (Join-Path $FixtureDirectory 'windows.db'))) { throw 'Autojoin fixture must begin without an imported Windows database' }
-if ($autojoinEnabled) { [pscustomobject]@{ StateExistedBeforeStart = $false; StatePath = Join-Path $FixtureDirectory 'windows.db' } | ConvertTo-Json | Set-Content -Encoding UTF8 (Join-Path $FixtureDirectory 'autojoin-blank-state.json') }
 $name = 'PhotonB5-' + $PID + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
 $failedName = $name + '-InitFailure'
 $collisionName = $name + '-ExistingSource'
@@ -23,8 +19,6 @@ $sourceParent = 'HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\Application'
 $collisionPath = Join-Path $sourceParent $collisionName
 $collisionCreated = $false
 $runFailure = $null
-$guiExtraStarts = 0
-$guiExtraStops = 0
 $created = @()
 $ownedIndices = @()
 $networkAddressOwned = $false
@@ -86,10 +80,6 @@ function Check-EventSource([string]$ServiceName) {
     if ($source.TypesSupported -ne 7) { throw 'Event Log source does not support Error/Warning/Information' }
 }
 function Check-Events([string]$ServiceName, [int]$StartedCount, [int]$StoppedCount, [int]$FailedCount, [int]$RuntimeFailedCount = 0) {
-    if ($ServiceName -eq $name) {
-        $StartedCount += $script:guiExtraStarts
-        $StoppedCount += $script:guiExtraStops
-    }
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     do {
         $events = @(Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName=$ServiceName; StartTime=$eventStart} -ErrorAction SilentlyContinue)
@@ -285,10 +275,7 @@ try {
     Write-Output "running: pid=$($running.ProcessId) (daemon initialized; tunnel readiness is independent)"
     $initialStatus = Read-Status
     Write-Output "initial live status: running=$($initialStatus.running) tunnel_ready=$($initialStatus.tunnel_ready)"
-    if ($autojoinEnabled) { . $autojoinHelper; Test-ServiceAutojoin $initialStatus }
     Check-Business 'initial'
-    $guiHelper = Join-Path $FixtureDirectory 'windows-service-gui-smoke.ps1'
-    if (Test-Path $guiHelper) { . $guiHelper; Test-ServiceGui }
     $baselineHelper = Join-Path $FixtureDirectory 'windows-service-baseline.ps1'
     if (Test-Path $baselineHelper) { . $baselineHelper; Test-ServiceBaseline }
     $throughputHelper = Join-Path $FixtureDirectory 'windows-service-throughput.ps1'
@@ -305,7 +292,6 @@ try {
     if ($stopped.State -ne 'Stopped' -or $stopped.ExitCode -ne 0 -or $stopped.ServiceSpecificExitCode -ne 0) { throw 'Stop did not join cleanly' }
     Invoke-Photon @('service','start','--name',$name)
     Check-Business 'restart'
-    if ($autojoinEnabled) { Assert-AutojoinRestart }
     $ownedIndices += (Get-NetAdapter -Name $name).ifIndex
 
     # Kill only the exact SCM-owned process after real bidirectional business.

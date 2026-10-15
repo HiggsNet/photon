@@ -174,6 +174,6 @@ func (w *desktopWindow) guideNewConfig() bool {
 		return false
 	}
 	w.openSettings()
-	w.note("尚未创建配置：请先填写并保存设置，再安装、启动服务。")
+	w.note("尚未创建配置：请先填写并保存设置，再启动连接。")
 	return true
 }

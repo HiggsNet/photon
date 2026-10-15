@@ -54,6 +54,9 @@ func ListenControl(statePath string) (*ControlServer, error) {
 		1, 4096, 4096, 0, &sa)
 	runtime.KeepAlive(sd)
 	if err != nil {
+		if errors.Is(err, windows.ERROR_ACCESS_DENIED) || errors.Is(err, windows.ERROR_PIPE_BUSY) {
+			return nil, fmt.Errorf("reserve local control endpoint (可能已有 Photon 托盘或旧 Windows 服务占用同一数据库，请先停止原实例；此实例不会接管): %w", err)
+		}
 		return nil, fmt.Errorf("reserve local control endpoint: %w", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -141,8 +144,8 @@ func CallControl(ctx context.Context, statePath, method string) (ControlResponse
 	return callControl(ctx, statePath, method, 0)
 }
 
-// CallControlForProcess binds a desktop SCM observation to that service's live
-// process, rather than accepting a different privileged daemon at this pipe.
+// CallControlForProcess binds an observation to the expected live process,
+// rather than accepting a different privileged daemon at this pipe.
 func CallControlForProcess(ctx context.Context, statePath, method string, expectedPID uint32) (ControlResponse, error) {
 	if expectedPID == 0 {
 		return ControlResponse{}, errors.New("expected control server process ID is required")

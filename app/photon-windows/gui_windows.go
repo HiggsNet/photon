@@ -17,13 +17,12 @@ import (
 
 const (
 	guiStatusID             = 1001
-	guiServiceID            = 1002
+	guiRuntimeID            = 1002
 	guiGatewayID            = 1003
 	guiRoutesID             = 1004
 	guiNoteID               = 1006
 	guiAdmissionID          = 1007
 	guiJoinRequestID        = 1008
-	guiInstallID            = 1101
 	guiStartID              = 1102
 	guiStopID               = 1103
 	guiRestartID            = 1104
@@ -157,6 +156,7 @@ type desktopWindow struct {
 	taskbarCreated             uint32
 	tray                       bool
 	busy, settingConfig, dirty bool
+	quitting, quitSubmitted    bool
 	editRevision               uint64
 	settings                   uintptr
 	settingsPage               int
@@ -193,7 +193,8 @@ func guiCallError(operation string, err error) error {
 }
 
 func runDesktop(options desktopOptions) (err error) {
-	// A desktop process uses the same executable as SCM and owns no daemon.
+	// The tray owns its runtime in this process; closing the visible window
+	// keeps that runtime alive, while explicit Quit stops and joins it.
 	guiFreeConsole.Call()
 	defer func() {
 		if err != nil {
@@ -211,7 +212,7 @@ func runDesktop(options desktopOptions) (err error) {
 	if err != nil {
 		return err
 	}
-	defer window.dispose()
+	defer func() { err = errors.Join(err, window.dispose()) }()
 	window.startWorker()
 	window.submit(guiRequest{Action: "load"})
 	guiShowWindow.Call(window.hwnd, 5)
@@ -265,7 +266,7 @@ func newDesktopWindow(backend *desktopBackend) (_ *desktopWindow, err error) {
 	w := &desktopWindow{instance: instance, icon: icon, backend: backend, controls: make(map[int]uintptr), ctx: ctx, cancel: cancel, requests: make(chan guiRequest, 1), results: make(chan guiResult, 1), textCache: make(map[uintptr]string), bootstrapSelected: -1}
 	defer func() {
 		if err != nil {
-			w.dispose()
+			err = errors.Join(err, w.dispose())
 		}
 	}()
 	w.hwnd, _, callErr = guiCreateWindow.Call(0, uintptr(unsafe.Pointer(guiUTF16("PhotonWindowsDesktop"))), uintptr(unsafe.Pointer(guiUTF16("Photon Windows"))), 0x00cf0000|0x02000000, 0x80000000, 0x80000000, 920, 760, 0, 0, instance, 0)
@@ -288,19 +289,18 @@ func newDesktopWindow(backend *desktopBackend) (_ *desktopWindow, err error) {
 		style, exStyle uint32
 	}{
 		{guiStatusID, "STATIC", "连接：读取中…", static, 0},
-		{guiServiceID, "STATIC", "服务：读取中…", static, 0},
+		{guiRuntimeID, "STATIC", "运行状态：读取中…", static, 0},
 		{guiGatewayID, "STATIC", "活动网关：—", static, 0},
-		{guiInstallID, "BUTTON", "安装服务", button, 0},
-		{guiStartID, "BUTTON", "启动", button, 0},
-		{guiStopID, "BUTTON", "停止", button, 0},
-		{guiRestartID, "BUTTON", "重启服务", button, 0},
+		{guiStartID, "BUTTON", "启动连接", button, 0},
+		{guiStopID, "BUTTON", "停止连接", button, 0},
+		{guiRestartID, "BUTTON", "重新连接", button, 0},
 		{guiAdmissionID, "STATIC", "入网：读取中…", static, 0},
 		{guiJoinRequestID, "EDIT", "", 0x50010000 | 0x0080 | 0x0800, 0x200},
 		{guiCopyRequestID, "BUTTON", "复制入网请求", button, 0},
 		{guiRoutesID, "EDIT", "尚无实时路由", edit | 0x0800, 0x200},
 		{guiConfigSummaryID, "STATIC", "设置正在读取…", static, 0},
 		{guiSettingsID, "BUTTON", "打开设置", button, 0},
-		{guiNoteID, "STATIC", "配置保存后需重启服务生效；关闭窗口将隐藏到系统托盘。", static, 0},
+		{guiNoteID, "STATIC", "保存后需重新连接生效；关闭窗口隐藏到托盘，退出 Photon 会停止连接。", static, 0},
 	}
 	for _, spec := range specs {
 		hwnd, _, e := guiCreateWindow.Call(uintptr(spec.exStyle), uintptr(unsafe.Pointer(guiUTF16(spec.class))), uintptr(unsafe.Pointer(guiUTF16(spec.text))), uintptr(spec.style), 0, 0, 0, 0, w.hwnd, uintptr(spec.id), instance, 0)
@@ -333,7 +333,7 @@ func newDesktopWindow(backend *desktopBackend) (_ *desktopWindow, err error) {
 	for _, item := range []struct {
 		id   int
 		text string
-	}{{guiOpenID, "打开 Photon"}, {guiTrayStartID, "启动服务"}, {guiTrayStopID, "停止服务"}, {guiExitID, "退出界面（服务继续运行）"}} {
+	}{{guiOpenID, "打开 Photon"}, {guiTrayStartID, "启动连接"}, {guiTrayStopID, "停止连接"}, {guiExitID, "停止连接并退出 Photon"}} {
 		ok, _, e := guiAppendMenu.Call(w.menu, 0, uintptr(item.id), uintptr(unsafe.Pointer(guiUTF16(item.text))))
 		if ok == 0 {
 			return nil, guiCallError("AppendMenu", e)
@@ -372,15 +372,18 @@ func (w *desktopWindow) startWorker() {
 				case "save":
 					result.Err = w.backend.SaveForm(request.Form)
 				case "refresh":
+				case "quit":
+					result.Err = w.backend.Close()
 				default:
-					result.Err = w.backend.Service(request.Action)
+					result.Err = w.backend.Runtime(request.Action)
 				}
 				if w.ctx.Err() != nil {
 					return
 				}
-				// Snapshot IPC honors cancellation; SCM mutations already have
-				// their existing bounded wait. No task starts another worker.
-				result.Snapshot = w.backend.Snapshot(w.ctx)
+				// A quit result is sent only after the owned runtime has joined.
+				if request.Action != "quit" {
+					result.Snapshot = w.backend.Snapshot(w.ctx)
+				}
 				w.postMu.Lock()
 				if w.ctx.Err() == nil {
 					// One request is admitted until the UI consumes its result.
@@ -397,11 +400,14 @@ func (w *desktopWindow) startWorker() {
 	}()
 }
 
-func (w *desktopWindow) dispose() {
+func (w *desktopWindow) dispose() error {
 	w.postMu.Lock()
 	w.cancel()
 	w.postMu.Unlock()
 	w.worker.Wait()
+	// Also cover GetMessage failure or unexpected window destruction. Normal
+	// Quit already joined the runtime on the worker before reaching disposal.
+	cleanupErr := w.backend.Close()
 	if w.settings != 0 {
 		guiDestroyWindow.Call(w.settings)
 	}
@@ -426,6 +432,7 @@ func (w *desktopWindow) dispose() {
 		guiDeleteObject.Call(w.font)
 		w.font = 0
 	}
+	return cleanupErr
 }
 
 func desktopWindowProc(hwnd uintptr, message uint32, wp, lp uintptr) uintptr {
@@ -440,7 +447,7 @@ func desktopWindowProc(hwnd uintptr, message uint32, wp, lp uintptr) uintptr {
 			w.updateTray(true)
 			if !w.tray {
 				w.show()
-				w.note("系统托盘暂不可用，窗口保持打开。退出界面不会停止服务。")
+				w.note("系统托盘暂不可用，窗口保持打开。退出 Photon 会停止连接。")
 			}
 			return 0
 		}
@@ -520,7 +527,7 @@ func desktopWindowProc(hwnd uintptr, message uint32, wp, lp uintptr) uintptr {
 }
 
 func (w *desktopWindow) submit(request guiRequest) {
-	if w.busy || w.ctx.Err() != nil {
+	if w.busy || w.ctx.Err() != nil || (w.quitting && request.Action != "quit") {
 		return
 	}
 	if request.Action == "load" {
@@ -537,7 +544,7 @@ func (w *desktopWindow) submit(request guiRequest) {
 		if request.Action == "load" {
 			w.enableForm(false)
 		}
-		for _, id := range []int{guiInstallID, guiStartID, guiStopID, guiRestartID, guiSaveID, guiReloadID} {
+		for _, id := range []int{guiStartID, guiStopID, guiRestartID, guiSaveID, guiReloadID} {
 			guiEnableWindow.Call(w.controls[id], 0)
 		}
 		if request.Action != "refresh" {
@@ -548,7 +555,9 @@ func (w *desktopWindow) submit(request guiRequest) {
 }
 func (w *desktopWindow) command(id int) {
 	if id == guiSettingsID {
-		w.openSettings()
+		if !w.quitting {
+			w.openSettings()
+		}
 		return
 	}
 	if id == guiOpenID {
@@ -560,7 +569,7 @@ func (w *desktopWindow) command(id int) {
 		return
 	}
 	if id == guiCopyRequestID {
-		if !w.admission.Pending || w.admission.Request == "" {
+		if w.quitting || !w.admission.Pending || w.admission.Request == "" {
 			return
 		}
 		if err := guiCopyPublicRequest(w.hwnd, w.admission.Request); err != nil {
@@ -570,16 +579,11 @@ func (w *desktopWindow) command(id int) {
 		}
 		return
 	}
-	if w.busy {
+	if w.busy || w.quitting {
 		return
 	}
 	request := guiRequest{}
 	switch id {
-	case guiInstallID:
-		if w.guideNewConfig() {
-			return
-		}
-		request.Action = "install"
 	case guiStartID, guiTrayStartID:
 		if w.guideNewConfig() {
 			return
@@ -588,6 +592,9 @@ func (w *desktopWindow) command(id int) {
 	case guiStopID, guiTrayStopID:
 		request.Action = "stop"
 	case guiRestartID:
+		if w.guideNewConfig() {
+			return
+		}
 		request.Action = "restart"
 	case guiSaveID:
 		if !w.formLoaded {
@@ -620,6 +627,28 @@ func (w *desktopWindow) command(id int) {
 }
 func (w *desktopWindow) applyResult(result guiResult) {
 	w.busy = false
+	if result.Action == "quit" {
+		if result.Err != nil {
+			w.quitting, w.quitSubmitted = false, false
+			w.enableForm(true)
+			for _, id := range []int{guiStartID, guiStopID, guiRestartID, guiReloadID, guiSettingsID} {
+				guiEnableWindow.Call(w.controls[id], 1)
+			}
+			if w.formLoaded {
+				guiEnableWindow.Call(w.controls[guiSaveID], 1)
+			}
+			w.show()
+			w.note("停止连接失败：" + result.Err.Error() + "。请重试“停止连接并退出 Photon”。")
+			return
+		}
+		// Close succeeded only after the owned runtime joined.
+		guiDestroyWindow.Call(w.hwnd)
+		return
+	}
+	if w.quitting {
+		w.submitQuit()
+		return
+	}
 	if result.Action == "load" {
 		w.enableForm(true)
 		w.formLoaded = result.Err == nil
@@ -629,7 +658,7 @@ func (w *desktopWindow) applyResult(result guiResult) {
 			w.newConfig = false
 		}
 	}
-	for _, id := range []int{guiInstallID, guiStartID, guiStopID, guiRestartID, guiSaveID, guiReloadID} {
+	for _, id := range []int{guiStartID, guiStopID, guiRestartID, guiSaveID, guiReloadID} {
 		guiEnableWindow.Call(w.controls[id], 1)
 	}
 	loadChanged := result.Action == "load" && result.EditRevision != w.editRevision
@@ -648,23 +677,21 @@ func (w *desktopWindow) applyResult(result guiResult) {
 			if result.EditRevision == w.editRevision {
 				w.dirty = false
 			}
-			w.note("配置已保存；点击“重启服务”后生效。")
+			w.note("配置已保存；点击“重新连接”后生效。")
 		case "load":
 			if w.newConfig {
 				w.showSettingsPage(guiBasicPageID)
 				w.openSettings()
 				w.note("首次使用：先填写身份、网关与路由，然后保存配置。")
 			} else {
-				w.note("配置已读取。保存后需重启服务生效；退出界面不会停止服务。")
+				w.note("配置已读取。保存后需重新连接生效；退出 Photon 会停止连接。")
 			}
-		case "install":
-			w.note("服务已安装。点击“启动”连接。")
 		case "start":
-			w.note("服务已启动，正在读取实时连接状态。")
+			w.note("连接已启动，正在读取实时状态。")
 		case "stop":
-			w.note("服务已停止。")
+			w.note("连接已停止。")
 		case "restart":
-			w.note("服务已重启，配置将在新进程中生效。")
+			w.note("已重新连接，保存的配置已应用。")
 		}
 	}
 	if loadChanged {
@@ -686,7 +713,7 @@ func (w *desktopWindow) render(snapshot desktopSnapshot) {
 	w.snapshot = snapshot
 	wasPending := w.admission.Pending
 	var diagnosis gossip.AdmissionDiagnosis
-	available := snapshot.ServiceState == "running" && snapshot.Error == "" && snapshot.Observation != nil && snapshot.Observation.Running
+	available := snapshot.RuntimeState == "running" && snapshot.Error == "" && snapshot.Observation != nil && snapshot.Observation.Running
 	if snapshot.Observation != nil {
 		diagnosis = snapshot.Observation.Admission
 	}
@@ -694,7 +721,7 @@ func (w *desktopWindow) render(snapshot desktopSnapshot) {
 	if snapshot.Error != "" {
 		w.admission.Label = "入网：实时状态暂不可用。"
 	}
-	state := map[string]string{"running": "运行中", "stopped": "已停止", "not-installed": "未安装", "start-pending": "正在启动", "stop-pending": "正在停止", "paused": "已暂停", "unknown": "不可用", "transitioning": "状态转换中"}[snapshot.ServiceState]
+	state := map[string]string{"running": "运行中", "stopped": "已停止", "starting": "正在启动", "stopping": "正在停止", "failed": "启动或运行失败"}[snapshot.RuntimeState]
 	if state == "" {
 		state = "不可用"
 	}
@@ -734,7 +761,7 @@ func (w *desktopWindow) render(snapshot desktopSnapshot) {
 		connection = "已入网，正在连接"
 	}
 	w.setText(w.controls[guiStatusID], "连接："+connection)
-	w.setText(w.controls[guiServiceID], "服务："+state+" · "+w.backend.options.ServiceName)
+	w.setText(w.controls[guiRuntimeID], "运行状态："+state+" · 当前 Photon 窗口管理连接")
 	w.setText(w.controls[guiGatewayID], "活动网关："+gateway)
 	w.setText(w.controls[guiRoutesID], routes)
 	w.setText(w.controls[guiAdmissionID], w.admission.Label)
@@ -774,17 +801,40 @@ func (w *desktopWindow) show() {
 	guiSetForegroundWindow.Call(w.hwnd)
 }
 func (w *desktopWindow) quit() {
+	if w.quitting {
+		return
+	}
 	if w.dirty {
-		answer, _ := windows.MessageBox(windows.HWND(w.hwnd), guiUTF16("有尚未保存的设置。退出界面并丢弃编辑吗？服务将继续运行。"), guiUTF16("Photon Windows"), windows.MB_YESNO|windows.MB_ICONQUESTION)
+		answer, _ := windows.MessageBox(windows.HWND(w.hwnd), guiUTF16("有尚未保存的设置。停止连接、退出 Photon 并丢弃编辑吗？"), guiUTF16("Photon Windows"), windows.MB_YESNO|windows.MB_ICONQUESTION)
 		if answer != 6 {
 			return
 		}
 	}
-	guiDestroyWindow.Call(w.hwnd)
+	w.quitting = true
+	// Keep the timer until destruction: it also drains a result when the
+	// worker's PostMessage could not enqueue a notification. submit's quitting
+	// guard prevents this timer from scheduling any new refresh work.
+	w.admission.Request = ""
+	w.setText(w.controls[guiJoinRequestID], "")
+	guiEnableWindow.Call(w.controls[guiCopyRequestID], 0)
+	w.updateTray(false)
+	w.enableForm(false)
+	for _, id := range []int{guiStartID, guiStopID, guiRestartID, guiSaveID, guiReloadID, guiSettingsID} {
+		guiEnableWindow.Call(w.controls[id], 0)
+	}
+	w.note("正在停止连接并退出 Photon…")
+	w.submitQuit()
+}
+func (w *desktopWindow) submitQuit() {
+	if w.busy || w.quitSubmitted || w.ctx.Err() != nil {
+		return
+	}
+	w.submit(guiRequest{Action: "quit"})
+	w.quitSubmitted = w.busy
 }
 func (w *desktopWindow) popup() {
 	flags := uintptr(0)
-	if w.busy {
+	if w.busy || w.quitting {
 		flags = 1
 	}
 	guiEnableMenuItem.Call(w.menu, guiTrayStartID, flags)
@@ -802,18 +852,18 @@ func (w *desktopWindow) notifyData() guiNotifyIcon {
 	data := guiNotifyIcon{Window: w.hwnd, ID: 1, Flags: 1 | 2 | 4, Callback: guiTrayMessage, Icon: w.icon}
 	data.Size = uint32(unsafe.Sizeof(data))
 	tip := "Photon · 未连接"
-	if w.snapshot.Error != "" {
+	if w.quitting {
+		tip = "Photon · 正在停止连接并退出"
+	} else if w.snapshot.Error != "" {
 		tip = "Photon · 状态不可用"
 	} else if w.admission.Pending {
 		tip = w.admission.Tooltip
-	} else if w.snapshot.ServiceState == "running" && w.snapshot.Observation != nil && w.snapshot.Observation.Running && w.snapshot.Observation.TunnelReady {
+	} else if w.snapshot.RuntimeState == "running" && w.snapshot.Observation != nil && w.snapshot.Observation.Running && w.snapshot.Observation.TunnelReady {
 		tip = "Photon · 已连接"
 	} else if w.admission.Adopted {
 		tip = w.admission.Tooltip
-	} else if w.snapshot.ServiceState == "stopped" {
-		tip = "Photon · 服务已停止"
-	} else if w.snapshot.ServiceState == "not-installed" {
-		tip = "Photon · 服务未安装"
+	} else if w.snapshot.RuntimeState == "stopped" {
+		tip = "Photon · 连接已停止"
 	}
 	encoded, _ := windows.UTF16FromString(tip)
 	copy(data.Tip[:len(data.Tip)-1], encoded)
@@ -845,15 +895,15 @@ func (w *desktopWindow) layout() {
 			guiMoveWindow.Call(hwnd, uintptr(x), uintptr(y), uintptr(max(wid, 0)), uintptr(max(hei, 0)), 1)
 		}
 	}
-	for row, id := range []int{guiStatusID, guiServiceID, guiGatewayID} {
+	for row, id := range []int{guiStatusID, guiRuntimeID, guiGatewayID} {
 		move(w.controls[id], 16, 14+row*27, width-32, 24)
 	}
-	for column, id := range []int{guiInstallID, guiStartID, guiStopID, guiRestartID} {
-		move(w.controls[id], 16+column*104, 100, 96, 30)
+	for column, id := range []int{guiStartID, guiStopID, guiRestartID} {
+		move(w.controls[id], 16+column*132, 100, 120, 30)
 	}
 	admissionHeight, routesTop, routesHeight := 26, 175, 130
 	if w.admission.Pending {
-		admissionHeight, routesTop, routesHeight = 52, 241, 110
+		admissionHeight, routesTop, routesHeight = 52, 241, 80
 	}
 	move(w.controls[guiAdmissionID], 16, 141, width-32, admissionHeight)
 	move(w.controls[guiJoinRequestID], 16, 199, width-192, 30)
@@ -862,9 +912,9 @@ func (w *desktopWindow) layout() {
 	move(w.controls[guiRoutesID], 16, routesTop+26, width-32, routesHeight)
 	configTop := routesTop + 26 + routesHeight + 38
 	move(w.labels[1], 16, configTop-26, width-32, 23)
-	move(w.controls[guiConfigSummaryID], 16, configTop, width-32, height-configTop-86)
-	move(w.controls[guiSettingsID], 16, height-72, 132, 30)
-	move(w.controls[guiNoteID], 16, height-34, width-32, 27)
+	move(w.controls[guiConfigSummaryID], 16, configTop, width-32, height-configTop-124)
+	move(w.controls[guiSettingsID], 16, height-110, 132, 30)
+	move(w.controls[guiNoteID], 16, height-72, width-32, 64)
 }
 
 // Clipboard memory is allocated movable, as required by CF_UNICODETEXT. A

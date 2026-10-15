@@ -7,20 +7,17 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-
-	"github.com/HiggsNet/photon/internal/photonwindows"
 )
 
 func parseDesktopOptions(args []string, stderr io.Writer) (desktopOptions, error) {
 	flags := flag.NewFlagSet("photon-windows gui", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	path := flags.String("config", "", "configuration file (default: config.yaml beside the executable)")
-	name := flags.String("name", photonwindows.DefaultServiceName, "SCM service name")
 	if err := flags.Parse(args); err != nil {
 		return desktopOptions{}, err
 	}
-	if flags.NArg() != 0 || !validServiceName(*name) {
-		return desktopOptions{}, errors.New("Usage: photon-windows gui [--config <path>] [--name <name>]")
+	if flags.NArg() != 0 {
+		return desktopOptions{}, errors.New("Usage: photon-windows gui [--config <path>]")
 	}
 	if *path == "" {
 		executable, err := os.Executable()
@@ -33,7 +30,7 @@ func parseDesktopOptions(args []string, stderr io.Writer) (desktopOptions, error
 	if err != nil {
 		return desktopOptions{}, err
 	}
-	return desktopOptions{ConfigPath: absolute, ServiceName: *name}, nil
+	return desktopOptions{ConfigPath: absolute}, nil
 }
 
 func runGUI(args []string, stderr io.Writer) int {
