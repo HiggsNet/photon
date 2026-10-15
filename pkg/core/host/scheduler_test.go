@@ -31,6 +31,12 @@ func (clock *fakeClock) NewTimer(after time.Duration) EventTimer {
 		when:  clock.now.Add(after),
 		c:     make(chan time.Time, 1),
 	}
+	// Match time.NewTimer: an already-due timer does not need another
+	// Advance call before it can wake the scheduler.
+	if after <= 0 {
+		timer.c <- clock.now
+		return timer
+	}
 	clock.timers = append(clock.timers, timer)
 	return timer
 }
