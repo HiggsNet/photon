@@ -118,6 +118,111 @@ firewall → routing → IPsec 的处理顺序。事件驱动 reconcile 完成�
 线上性能验收。事件驱动的巡检不再推迟固定周期槽位，因此可能在刚处理完状态
 变化后较快再巡检一次；这换取相位稳定，不能承诺平均 CPU 消耗下降。
 
+## 2026-10-15：RC CPU 现场调研
+
+研究源码为 `/tmp/rc6` 的 `perf/rc6-gossip-projections`，提交 `fb78d514`。
+只读检查实际运行二进制：Table 与 less 均为 rc.7 `df8ec52`，suki.moe 仍为
+v0.5.6 `28472ea`。错峰提交尚未部署。三台均有 38 条 up 链路；硬件、流量及
+状态变更不同，以下是当时负载的观察，不能用来比较版本性能。
+
+按一秒间隔读取 `/proc/<pid>/stat` 和服务 cgroup 的 `cpu.stat`，各采样 181 点，
+实际覆盖约 182–185 秒。百分比以一个核心为 100%；回收子进程的 CPU 来自
+主进程 `cutime/cstime`，服务 cgroup 另含常驻 BIRD 等进程。
+
+| 节点 | CPU | 主进程平均 | 回收子进程平均 | 整个服务平均 | 主进程最高一秒区间 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Table / rc.7 | 1 vCPU EPYC Milan | 1.37% | 0.48% | 2.24% | 13.35% |
+| less / rc.7 | 2 vCPU Ryzen 5700G | 1.15% | 0.18% | 1.79% | 46.37% |
+| suki / v0.5.6 | 1 vCPU Xeon 8163 | 1.83% | 0.62% | 2.80% | 30.16% |
+
+在 less 使用已有 perf 对现有进程补采 120 秒 `cpu-clock:u`，499 Hz、frame
+pointer 展栈。678 个样本中 645 个属于 photon，33 个属于其新建的 ip/nft
+子进程，以下比例仅以 645 个 photon 用户态样本为分母。粗分互斥类别：后台
+GC 约 25.3%，目录摘要 `ZoneDigests` 调用链约 19.1%，授权链验证约 11.6%，
+`ReadView` 调用链约 3.1%。前一轮 DWARF 采样有大量缺失调用栈，未用来判断
+这些调用链的比例。两个 profile 窗口不同，不能直接相加或比较总 CPU 收益。
+
+优先候选：
+
+1. **减少未变 zone 的目录 root 重算。** `ReadCatalog` 虽然已避免整网复制，
+   每次仍通过 `ZoneDigests` 对全部 zone 的 authority、delegation、revocation
+   和当前 record 重新哈希。现有 28-zone 合成 fixture 的
+   `BenchmarkReadProjection/catalog/narrow` 三次耗时中位数约 0.380 ms，
+   每次分配 454,296 B、3,272 次。可在唯一 Store 内复用同一已提交版本的原始
+   `ZoneRoot`，读取时再按当前时间筛掉撤销的 zone，返回独立副本。不能只按
+   verified revision 缓存最终目录：未来撤销生效时可能没有新提交；也不能借此
+   跳过 `VerifyChain`、密钥到期或其他时间检查。实际实现与收益尚未验证。
+2. **批量执行上游路由命令。** Table 在另一个 70 秒 exec/wait 跟踪窗口内
+   启动 211 个不同 PID，其中 130 个为 `ip route replace`，对应五轮处理，
+   每轮 26 条；另有 5 个 `ip addr replace`。该窗口含事件驱动 reconcile，
+   不能解释为纯周期频率。`execUpstreamRouteManager.EnsureRoutes` 目前逐条
+   fork，适合先验证同一 netns 内用 `ip -batch` 合并执行，保留顺序和失败即停。
+   不需要引入长期缓存，也不应只凭上次期望配置相同就跳过真实系统修复。
+   strace 会扰动耗时，其 wait CPU 只能帮助定位，不能当作无跟踪的基线。
+3. **减少防火墙重复探测与无变化时的重建。** 同一 Table 跟踪窗口有 10 个
+   `iptables -V`、20 个 nft 读取进程和 10 个 `nft -f`。源码每次实例解析均
+   探测后端，NFT apply 会原子重建受管表。仅比较上次 `PolicyHash` 不足以
+   发现外部漂移；完整规则比较涉及安全和修复语义，复杂度高于前两项，暂列后续。
+
+Table 首轮 any 抓包混入大量 Higgs 流量并在约 43 秒触及 20,000 包上限，未用
+其包率代表 Photon。随后在 eth0 单独采集同步端口 90 秒：过滤掉两条无关 TCP
+后为 276 个 UDP、12 个 TCP 包，UDP payload 合计约 99 KB，最高一秒 87 包，
+抓包的内核丢弃计数为 0。该窗口支持先研究每事件计算和周期外部命令的判断，但抓包本身不能
+定位 CPU，也不能排除其他时段的重传或高流量问题。
+
+三台调研前后 daemon PID 未变，未重启或切换服务；没有改动网络配置和授权。
+上述现场采样阶段只补充调研记录；后续本地实现见下一节。原始计数、包头文本、perf
+数据、子进程跟踪、分析脚本和基准输出保存在本地
+`/home/herbertqiao/Work/photon/build/validation/cpu-20261015/`。
+
+## 2026-10-15：目录 root 复用与上游路由批处理（未发布）
+
+在 `fb78d514` 基础上实现前两项候选，版本仍为 rc.7。唯一 Common Store 按
+已提交的 verified revision 懒加载一份原始 zone root 快照，`ReadCatalog` 与
+`Store.ZoneDigests` 共用。任意 verified revision 变化后下一次读取重算整份
+原始快照，不依赖 ChangedZones；checkpoint-only 提交继续复用。每次读取仍按
+当前时间判断撤销，返回独立的 slice 和 hash；未来撤销生效、时间回退、purge、
+持久化失败和并发提交不会复用错误的可见目录。没有缓存授权链验证结果，wire
+摘要算法、数据库 schema、持久化成功后发布内存的顺序保持不变。
+
+`execUpstreamRouteManager` 将相邻且地址族相同的命令通过 stdin 交给一个
+`ip -4/-6 -batch -`，保留先地址后路由、排序及失败即停的顺序，不使用 `-force`。
+混合双栈按原顺序最多分四批；同一 IPv6 源地址加 26 条路由由 27 次调用变成
+1 次。命名空间作用域保持原样。对含批处理注释、引号、换行或 NUL 等特殊字符
+的接口名保留逐条 argv 执行，不让批处理解析器改变原参数含义。没有用上次期望
+配置相同作为跳过实际系统修复的依据。
+
+同一 Ryzen 5700G 本机依次运行，各 `-cpu=1 -benchtime=1s -count=3`，以下为
+三次中位数。目录使用既有 28-zone 合成 fixture，并在同一 binary 保留原重算
+路径作对照；路由在隔离 user/network namespace 内通过真实 iproute2 执行
+同样的源地址及 26 条路由，父/子 CPU 通过 `getrusage` 分别计量：
+
+| 项目 | 原路径 | 本地实现 |
+| --- | ---: | ---: |
+| 稳定版本目录读取 | 455.252 us | 9.611 us |
+| 目录每次分配 | 454,296 B / 3,272 次 | 5,120 B / 192 次 |
+| 单轮上游配置墙钟耗时 | 37.402 ms | 1.788 ms |
+| 单轮上游配置父子进程合计 CPU | 39.786 ms | 1.881 ms |
+| 单轮上游配置进程调用 | 27 | 1 |
+
+稳定目录分配下降约 98.9%；路由这条路径的父子进程 CPU 时间下降约 95.3%。
+目录首次未命中仍需重算，基准约 405.505 us、456,376 B；不能把稳定版本收益
+用于每次都有 verified 提交的负载。父子进程可在多核上重叠，合计 CPU 时间可能
+高于墙钟时间。这些均为局部基准，不是线上总 CPU 降幅。
+
+回归覆盖撤销时间跨越与回退、返回值隔离、持久化前/失败时的目录可见性、
+checkpoint-only 更新、身份安装、remote/recovery 提交、purge 及并发读写。
+路由测试覆盖双栈与命名空间参数、特殊接口名兼容、后续批次失败即停；隔离内核
+验收检查真实双栈路由与源地址、重复执行，以及批次中间错误后不执行后续行。
+批处理的地址族选项、失败即停和注释/引号规则还核对了
+[iproute2 的批处理入口](https://github.com/iproute2/iproute2/blob/v7.0.0/ip/ip.c)
+与[行解析实现](https://github.com/iproute2/iproute2/blob/v7.0.0/lib/utils.c)。
+已通过 `make check`、`make smoke-all`、state/host/gossip/photonlinux/app 的
+`go test -race -count=1`，以及显式开启的隔离内核验收。代码仍为本地未提交修改。
+基准和验证日志保存在本地
+`/home/herbertqiao/Work/photon/build/validation/cpu-optimizations-20261015/`。
+没有部署到线上，也没有发布 rc.8。
+
 ## rc.6 相对 rc.5 的变化：目录刷新与拒绝记录
 
 - 目录和快照分两次读取，期间 endpoint 等 record 更新可能造成 `root_mismatch`。每轮首次摘要不一致会等待已有拉取和校验结果结束，刷新目录一次；不应用摘要不符的快照，不延长原有整轮超时。

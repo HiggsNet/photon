@@ -231,12 +231,15 @@ func (m *execUpstreamRouteManager) EnsureRoutes(ctx context.Context, spec Upstre
 	if spec.Interface == "" {
 		return fmt.Errorf("upstream route interface is required")
 	}
+	commands := make([][]string, 0, len(spec.SourcePrefixes)+len(spec.Prefixes))
 	sourcePrefixes := append([]netip.Prefix(nil), spec.SourcePrefixes...)
 	sort.Slice(sourcePrefixes, func(i, j int) bool { return prefixLess(sourcePrefixes[i], sourcePrefixes[j]) })
 	for _, source := range sourcePrefixes {
-		if err := m.replaceAddress(ctx, spec.NetNS, spec.Interface, source); err != nil {
-			return err
+		family := "-6"
+		if source.Addr().Is4() {
+			family = "-4"
 		}
+		commands = append(commands, []string{family, "addr", "replace", source.String(), "dev", spec.Interface})
 	}
 	nextHopByFamily, err := upstreamNextHopByFamily(spec.MeshIPv4LL, spec.MeshIPv6LL)
 	if err != nil {
@@ -247,41 +250,54 @@ func (m *execUpstreamRouteManager) EnsureRoutes(ctx context.Context, spec Upstre
 	sort.Slice(prefixes, func(i, j int) bool { return prefixLess(prefixes[i], prefixes[j]) })
 	for _, prefix := range prefixes {
 		is4 := prefix.Addr().Is4()
-		if err := m.replaceRoute(ctx, spec.NetNS, spec.Interface, prefix, sourceByFamily[is4], nextHopByFamily[is4]); err != nil {
+		family := "-6"
+		if is4 {
+			family = "-4"
+		}
+		args := []string{family, "route", "replace", prefix.String(), "dev", spec.Interface, "proto", "static"}
+		if nextHop := nextHopByFamily[is4]; nextHop.IsValid() {
+			args = append(args, "via", nextHop.String())
+		}
+		if source := sourceByFamily[is4]; source.IsValid() {
+			args = append(args, "src", source.String())
+		}
+		commands = append(commands, args)
+	}
+	// ip batch strips comments before splitting arguments and has limited quote
+	// handling. Preserve argv execution for names it cannot represent literally.
+	batchable := !strings.ContainsAny(spec.Interface, " \t\r\n\x00#'\"\\")
+	for len(commands) > 0 {
+		args, input, count := commands[0], "", 1
+		if batchable {
+			// Family flags are process options, not batch commands. Group only
+			// adjacent families to retain address-before-route and failure order.
+			for count < len(commands) && commands[count][0] == args[0] {
+				count++
+			}
+			var script strings.Builder
+			for _, command := range commands[:count] {
+				script.WriteString(strings.Join(command[1:], " "))
+				script.WriteByte('\n')
+			}
+			input = script.String()
+			args = []string{args[0], "-batch", "-"}
+		}
+		if err := m.runIP(ctx, spec.NetNS, args, input); err != nil {
 			return err
 		}
+		commands = commands[count:]
 	}
 	return nil
 }
 
-func (m *execUpstreamRouteManager) replaceAddress(ctx context.Context, netnsName, iface string, prefix netip.Prefix) error {
-	family := "-6"
-	if prefix.Addr().Is4() {
-		family = "-4"
-	}
-	return m.runIP(ctx, netnsName, []string{family, "addr", "replace", prefix.String(), "dev", iface})
-}
-
-func (m *execUpstreamRouteManager) replaceRoute(ctx context.Context, netnsName, iface string, prefix netip.Prefix, source netip.Addr, nextHop netip.Addr) error {
-	family := "-6"
-	if prefix.Addr().Is4() {
-		family = "-4"
-	}
-	args := []string{family, "route", "replace", prefix.String(), "dev", iface, "proto", "static"}
-	if nextHop.IsValid() {
-		args = append(args, "via", nextHop.String())
-	}
-	if source.IsValid() {
-		args = append(args, "src", source.String())
-	}
-	return m.runIP(ctx, netnsName, args)
-}
-
-func (m *execUpstreamRouteManager) runIP(ctx context.Context, netnsName string, args []string) error {
+func (m *execUpstreamRouteManager) runIP(ctx context.Context, netnsName string, args []string, input string) error {
 	if netnsName != "" && netnsName != transportipsec.NetNSHost {
 		args = append([]string{"netns", "exec", netnsName, "ip"}, args...)
 	}
 	cmd := m.runner(ctx, "ip", args...)
+	if input != "" {
+		cmd.Stdin = strings.NewReader(input)
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("ip %s: %w (%s)", strings.Join(args, " "), err, strings.TrimSpace(string(out)))

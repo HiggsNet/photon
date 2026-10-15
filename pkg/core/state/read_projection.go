@@ -1,8 +1,10 @@
 package state
 
 import (
-	"github.com/HiggsNet/photon/pkg/core/zone"
+	"sort"
 	"time"
+
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 // DiscoveryView contains detached current records, authorization data and
@@ -125,7 +127,43 @@ func (store *Store) ReadCatalog() *CatalogView {
 	if store.state == nil || store.state.Network == nil {
 		return nil
 	}
-	return &CatalogView{ManagedZone: store.state.ManagedZone, Digests: ZoneDigests(store.state.Network)}
+	return &CatalogView{ManagedZone: store.state.ManagedZone, Digests: store.zoneDigestsLocked(time.Now())}
+}
+
+// catalogSnapshot contains only time-independent roots for one committed
+// revision. Store.mu pins that revision while readers build or use the snapshot;
+// concurrent first readers may publish equivalent immutable snapshots.
+type catalogSnapshot struct {
+	revision VerifiedRevision
+	digests  []ZoneDigest
+}
+
+// zoneDigestsLocked requires Store.mu to be held. Only raw zone roots are
+// reused: future revocations can become active without a verified commit, and
+// clock rollback can make a previously hidden zone visible again.
+func (store *Store) zoneDigestsLocked(now time.Time) []ZoneDigest {
+	if store.state == nil || store.state.Network == nil {
+		return nil
+	}
+	network := store.state.Network
+	catalog := store.catalog.Load()
+	if catalog == nil || catalog.revision != store.revision {
+		catalog = &catalogSnapshot{revision: store.revision, digests: make([]ZoneDigest, 0, len(network.Zones))}
+		for path, zs := range network.Zones {
+			if zs != nil {
+				catalog.digests = append(catalog.digests, ZoneDigest{Zone: path, RootHash: ZoneRoot(zs)})
+			}
+		}
+		sort.Slice(catalog.digests, func(i, j int) bool { return catalog.digests[i].Zone < catalog.digests[j].Zone })
+		store.catalog.Store(catalog)
+	}
+	out := make([]ZoneDigest, 0, len(catalog.digests))
+	for _, digest := range catalog.digests {
+		if !network.IsZoneRevoked(digest.Zone, now) {
+			out = append(out, ZoneDigest{Zone: digest.Zone, RootHash: append([]byte(nil), digest.RootHash...)})
+		}
+	}
+	return out
 }
 
 // PeerActivity contains only observation times, without applying lifecycle policy.
