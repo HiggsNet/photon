@@ -165,6 +165,29 @@ func TestSchedulerReplacementRejectsQueuedStaleGeneration(t *testing.T) {
 	requireSchedulerStops(t, scheduler)
 }
 
+func TestSchedulerCancelAndReuseRejectsAlreadyQueuedEvent(t *testing.T) {
+	clock := newFakeClock(time.Unix(1000, 0))
+	events := make(chan Event, 4)
+	scheduler := NewScheduler(clock, events)
+	defer scheduler.Stop()
+	id := TimerID{Namespace: GossipChunkSendNamespace, Owner: "peer", Key: "transfer"}
+	_, _ = scheduler.Schedule(id, clock.Now())
+	stale := receiveTimer(t, events)
+	scheduler.Cancel(id)
+	other := TimerID{Namespace: GossipChunkSendNamespace, Owner: "other", Key: "transfer"}
+	_, _ = scheduler.Schedule(other, clock.Now().Add(time.Hour))
+	scheduler.Cancel(other)
+	generation, _ := scheduler.Schedule(id, clock.Now().Add(time.Second))
+	if scheduler.Accept(stale) {
+		t.Fatal("reused ID accepted a canceled queued generation")
+	}
+	clock.Advance(time.Second)
+	fired := receiveTimer(t, events)
+	if fired.Generation != generation || !scheduler.Accept(fired) {
+		t.Fatalf("new generation rejected: %#v", fired)
+	}
+}
+
 func TestSchedulerSameDeadlineUsesScheduleOrder(t *testing.T) {
 	clock := newFakeClock(time.Unix(1000, 0))
 	events := make(chan Event, 3)

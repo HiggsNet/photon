@@ -141,6 +141,13 @@ func (driver *GossipDriver) HandleGossipHostEvent(ctx context.Context, hostEvent
 	if transport == nil {
 		return out, ErrGossipTransportRequired
 	}
+	if timer, ok := hostEvent.(TimerFired); ok && timer.ID.Namespace == GossipChunkSendNamespace {
+		out.Handled = true
+		if !driver.schedulerForRead().Accept(timer) {
+			return out, nil
+		}
+		return out, driver.flushGossipChunkSend(ctx, timer.ID)
+	}
 	if received, ok := hostEvent.(GossipPacketReceived); ok {
 		out.Handled = true
 		if received.Packet == nil {

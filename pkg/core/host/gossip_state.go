@@ -68,6 +68,22 @@ func (driver *GossipDriver) UpdateGossipBootstrap(peers map[string]*net.UDPAddr)
 }
 
 func (driver *GossipDriver) logGossip(level, event, peerID, phase string, err error, fields map[string]any) {
+	var quotaErr *gossip.QuotaExceededError
+	if errors.As(err, &quotaErr) {
+		if fields == nil {
+			fields = make(map[string]any)
+		}
+		fields["quota_requested_bytes"] = quotaErr.RequestedBytes
+		fields["quota_requested_objects"] = quotaErr.RequestedObjects
+		fields["quota_available_bytes"] = quotaErr.AvailableBytes
+		fields["quota_available_objects"] = quotaErr.AvailableObjects
+		fields["quota_byte_rate"] = quotaErr.ByteRate
+		fields["quota_byte_burst"] = quotaErr.ByteBurst
+		fields["quota_object_rate"] = quotaErr.ObjectRate
+		fields["quota_object_burst"] = quotaErr.ObjectBurst
+		fields["direction"] = quotaErr.Direction
+		fields["message_type"] = quotaErr.MessageType
+	}
 	config := driver.GossipConfig()
 	if config.Log != nil {
 		config.Log(GossipDriverLog{Level: level, Event: event, PeerID: peerID, Phase: phase, Err: err, Fields: fields})

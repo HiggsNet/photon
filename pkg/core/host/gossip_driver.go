@@ -73,11 +73,13 @@ type GossipDriver struct {
 	objectPullServerWG       sync.WaitGroup
 	gossipChunks             *gossip.ChunkAssemblyStore
 	gossipSentChunks         *gossip.SentChunkCache
-	gossipTransport          *gossip.Transport
-	datagramReceiver         datagramReceiver
-	datagramCancel           context.CancelFunc
-	datagramWG               sync.WaitGroup
-	stopped                  bool
+	// Payloads live only in gossipSentChunks; these are bounded transfer cursors.
+	gossipChunkSends map[TimerID]*gossipChunkSend
+	gossipTransport  *gossip.Transport
+	datagramReceiver datagramReceiver
+	datagramCancel   context.CancelFunc
+	datagramWG       sync.WaitGroup
+	stopped          bool
 }
 
 func NewGossipDriver(clock Clock, eventBuffer int, gossipState GossipStateStore, gossipConfig GossipDriverConfig) *GossipDriver {
@@ -92,6 +94,7 @@ func NewGossipDriver(clock Clock, eventBuffer int, gossipState GossipStateStore,
 		events:           make(chan Event, eventBuffer),
 		gossipChunks:     gossip.NewChunkAssemblyStore(),
 		gossipSentChunks: gossip.NewSentChunkCache(),
+		gossipChunkSends: make(map[TimerID]*gossipChunkSend),
 	}
 	driver.scheduler = NewScheduler(clock, driver.events)
 	return driver
@@ -246,6 +249,7 @@ func (driver *GossipDriver) Stop() {
 		return
 	}
 	driver.stopped = true
+	driver.gossipChunkSends = nil
 	scheduler := driver.scheduler
 	objectPullCancel := driver.objectPullCancel
 	objectPullServerCancel := driver.objectPullServerCancel
@@ -272,6 +276,7 @@ func (driver *GossipDriver) Stop() {
 	if driver.gossipChunks != nil {
 		driver.gossipChunks.Close()
 	}
+	driver.gossipSentChunks.Close()
 }
 
 func (driver *GossipDriver) schedulerForRead() *Scheduler {

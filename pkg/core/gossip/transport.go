@@ -435,6 +435,13 @@ func (t *Transport) validatePeer(peerID string) error {
 }
 
 func (t *Transport) logEvent(event Event, err error, start time.Time) {
+	if err != nil {
+		var quotaErr *QuotaExceededError
+		if errors.As(err, &quotaErr) {
+			quotaErr.Direction = event.Direction
+			quotaErr.MessageType = event.Type
+		}
+	}
 	if t == nil || t.log == nil {
 		return
 	}
@@ -550,7 +557,9 @@ func objectCost(message *Message) int64 {
 	case message.ObjectChunk != nil:
 		return 1
 	case message.ObjectChunkNACK != nil:
-		return int64(len(message.ObjectChunkNACK.Missing))
+		// This is one bounded repair request. The actual retransmitted chunks
+		// consume their own quota on the shared send/receive bucket.
+		return 1
 	case message.FetchZone != nil, message.FetchRecord != nil:
 		return 1
 	default:

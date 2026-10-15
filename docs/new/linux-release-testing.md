@@ -4,6 +4,19 @@
 `v0.6.0-rc.8`（在 rc.7 基础上增加周期错峰、目录 root 复用和上游路由批处理）。新版只供测试，Windows 完整隧道尚未交付。
 master 保留旧版；候选版从独立 release 分支发布，不更新 Docker `latest`。
 
+## rc.9：修复 quota 补额与分片续发，细分协调慢日志
+
+- 每个 peer 的字节/对象限额保留原值。补额保留纳秒分母下的整数余数，密集检查和拒绝请求不再丢失小数额度；时钟回退不会重复产生额度，满桶不积攒额外额度。
+- UDP 分片初发与修补复用原有有界发送缓存。统一 Host 调度器按小批续发，限流时保留未发送索引，等待额度后继续；事件循环不 sleep，不增加独立发送 worker。仍受原缓存容量和 30 秒 TTL 限制，过期不继续发送。
+- 续发保留请求的回复地址，每次发送仍走 transport 的 peer 检查。重叠修补合并尚未发送的索引；停机清除待发游标与缓存。NACK 按一次有界请求计费，实际重传数据片各自计费。
+- 调度器使用全局 generation 保持取消/替换后的过期事件拒绝，不再永久保留每个完成 transfer ID 的 generation 项。
+- quota 的普通 warn 包含消息类型、收发方向和 requested/available bytes/objects 及限额，无需全量开启 debug。
+- 协调日志增加固定子阶段：routing state read、授权路由、veth、upstream、BIRD write/start/configure/observe，以及 firewall state read、授权路由、preflight、apply；沿用 100ms 阈值与每阶段 30 秒限频，快速路径不输出日志。
+
+确定性回归包含每 1/5/10ms 检查后的完整补额、拒绝请求、时钟回退、满桶与大数溢出；128KiB 合成对象超过 128 个分片时，在刻意收紧的真实 transport quota 下完成初发、重新组装和 128 片修补，其他 peer 仍可发包。另覆盖请求回复地址、peer 移除、缓存过期/停机、重叠修补、stale timer 和不启用 debug 的 quota 诊断。
+
+此版本不改变 schema 2、Gossip wire、验签或授权逻辑；旧 peer 保持其原有配额行为。两条历史 quota 警告的精确报文仍不可追溯；2.07 秒 routing 和 2.4 秒 firewall 长尾尚未复现，新增子阶段日志用于定位，不能宣称其根因已修复。
+
 ## rc.7：Gossip 窄读取与 CPU 基准
 
 2026-10-13 在 `/tmp/rc6` 的 `perf/rc6-gossip-projections` 分支收窄 Gossip

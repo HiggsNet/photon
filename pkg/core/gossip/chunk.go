@@ -297,6 +297,32 @@ func (c *SentChunkCache) Repair(peerID string, nack *ObjectChunkNACK, now time.T
 	return result
 }
 
+// Chunk reads one detached part for a scheduled send. The existing bounded
+// cache remains the only owner of payloads, expiry and transfer limits.
+func (c *SentChunkCache) Chunk(peerID string, transferID []byte, index uint16, now time.Time) *ObjectChunk {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.pruneLocked(now)
+	entry := c.entries[sentTransferKey(peerID, transferID)]
+	if entry == nil || int(index) >= len(entry.chunks) {
+		return nil
+	}
+	return cloneObjectChunk(entry.chunks[index])
+}
+
+func (c *SentChunkCache) Close() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	clear(c.entries)
+	c.bytes = 0
+}
+
 func cloneObjectChunk(chunk *ObjectChunk) *ObjectChunk {
 	if chunk == nil {
 		return nil
