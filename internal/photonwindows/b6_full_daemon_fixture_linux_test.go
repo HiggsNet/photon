@@ -111,6 +111,11 @@ func TestPrepareWindowsFullDaemonGateway(t *testing.T) {
 		}
 	}
 	config := &Config{SchemaVersion: ConfigSchemaVersion, ManagedZone: localZone, TrustedRootPublicKey: root, State: StateConfig{Path: filepath.Join(dir, "windows.db")}, GossipListen: "0.0.0.0:0", Wintun: WintunConfig{AdapterName: "PhotonB4Cross", MTU: 1280}, Overlay: OverlayConfig{ID: "main", SplitRoutes: []netip.Prefix{netip.MustParsePrefix("198.18.253.0/24"), netip.MustParsePrefix("fd00:7068:b4::/64")}}, Gateway: GatewayConfig{AllowedZones: []zone.ZonePath{gatewayZone}}, Reconnect: ReconnectConfig{InitialBackoff: time.Second, MaxBackoff: 3 * time.Second}}
+	if os.Getenv("PHOTON_WINDOWS_GATEWAY_GLOB") == "1" {
+		// Test-only selection filter. Bootstrap remains a concrete peer below;
+		// the production Windows selector must find and verify the real gateway.
+		config.Gateway.AllowedZones[0] = "*.catofes."
+	}
 	var candidate *corestate.CommitCandidate
 	var revision corestate.VerifiedRevision
 	if os.Getenv("PHOTON_WINDOWS_AUTOJOIN_SMOKE") == "1" {

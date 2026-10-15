@@ -27,6 +27,7 @@ type desktopBackend struct {
 	mu            sync.Mutex
 	loaded        os.FileInfo
 	loadAttempted bool
+	formLoaded    bool
 	digest        [32]byte
 	// Saving edits does not change the running daemon's pipe location.
 	activeStatePath string
@@ -74,6 +75,11 @@ func desktopReadConfig(path string) ([]byte, os.FileInfo, error) {
 func (b *desktopBackend) LoadConfigText() (string, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return b.loadConfigText()
+}
+
+func (b *desktopBackend) loadConfigText() (string, error) {
+	b.formLoaded = false
 	data, info, err := desktopReadConfig(b.options.ConfigPath)
 	if errors.Is(err, os.ErrNotExist) {
 		b.loaded = nil
@@ -102,6 +108,10 @@ func desktopParseConfig(text string) (*photonwindows.Config, error) {
 func (b *desktopBackend) SaveConfigText(text string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return b.saveConfigText(text)
+}
+
+func (b *desktopBackend) saveConfigText(text string) error {
 	if len(text) > 1<<20 {
 		return errors.New("config exceeds 1 MiB")
 	}
@@ -135,6 +145,9 @@ func (b *desktopBackend) SaveConfigText(text string) error {
 	}
 	temp, err := os.CreateTemp(filepath.Dir(b.options.ConfigPath), ".photon-config-*")
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("configuration directory %q does not exist; create it before saving: %w", filepath.Dir(b.options.ConfigPath), err)
+		}
 		return err
 	}
 	defer os.Remove(temp.Name())

@@ -74,10 +74,19 @@ func TestDesktopNativeWindow(t *testing.T) {
 	if limits != wantLimits {
 		t.Fatalf("WM_GETMINMAXINFO changed wrong native fields: %v", limits)
 	}
-	for _, id := range []int{guiStatusID, guiServiceID, guiGatewayID, guiRoutesID, guiConfigID, guiNoteID, guiAdmissionID, guiJoinRequestID, guiInstallID, guiStartID, guiStopID, guiRestartID, guiSaveID, guiReloadID, guiCopyRequestID} {
-		hwnd, _, _ := guiUser32.NewProc("GetDlgItem").Call(w.hwnd, uintptr(id))
+	for _, id := range []int{guiStatusID, guiServiceID, guiGatewayID, guiRoutesID, guiNoteID, guiAdmissionID, guiJoinRequestID, guiInstallID, guiStartID, guiStopID, guiRestartID, guiSaveID, guiReloadID, guiCopyRequestID} {
+		parent := w.hwnd
+		if id == guiSaveID || id == guiReloadID {
+			parent = w.settings
+		}
+		hwnd, _, _ := guiUser32.NewProc("GetDlgItem").Call(parent, uintptr(id))
 		if hwnd == 0 || hwnd != w.controls[id] {
 			t.Fatalf("missing native child control %d", id)
+		}
+	}
+	for _, parent := range []uintptr{w.hwnd, w.settings} {
+		if raw, _, _ := guiUser32.NewProc("GetDlgItem").Call(parent, 1005); raw != 0 {
+			t.Fatal("raw YAML editor still exists")
 		}
 	}
 	text := func(id int) string {
@@ -126,8 +135,8 @@ func TestDesktopNativeWindow(t *testing.T) {
 	// Multiline EDIT intentionally does not send EN_CHANGE for WM_SETTEXT.
 	// Replace the selected text as an actual user edit to exercise the native
 	// notification rather than depending on WM_SETTEXT's different contract.
-	guiSendMessage.Call(w.controls[guiConfigID], 0x00b1, 0, ^uintptr(0))                                         // EM_SETSEL
-	guiSendMessage.Call(w.controls[guiConfigID], 0x00c2, 1, uintptr(unsafe.Pointer(guiUTF16("# new edit\r\n")))) // EM_REPLACESEL
+	guiSendMessage.Call(w.controls[guiManagedFieldID], 0x00b1, 0, ^uintptr(0))                                       // EM_SETSEL
+	guiSendMessage.Call(w.controls[guiManagedFieldID], 0x00c2, 1, uintptr(unsafe.Pointer(guiUTF16("new.example.")))) // EM_REPLACESEL
 	revision := w.editRevision
 	if !w.dirty {
 		t.Fatal("native EN_CHANGE did not mark edits")
@@ -136,11 +145,11 @@ func TestDesktopNativeWindow(t *testing.T) {
 	if strings.Contains(text(guiGatewayID), "gateway.example.") || strings.Contains(text(guiRoutesID), "198.18.253.1") || strings.Contains(text(guiStatusID), "已连接") {
 		t.Fatal("offline result retained stale live status")
 	}
-	if text(guiConfigID) != "# new edit\r\n" {
-		t.Fatal("status polling replaced unsaved YAML")
+	if text(guiManagedFieldID) != "new.example." {
+		t.Fatal("status polling replaced unsaved form")
 	}
-	w.applyResult(guiResult{Action: "load", Text: "old: file\n", EditRevision: revision - 1, Snapshot: desktopSnapshot{ServiceState: "stopped"}})
-	if text(guiConfigID) != "# new edit\r\n" || !w.dirty {
+	w.applyResult(guiResult{Action: "load", Form: desktopConfigForm{ManagedZone: "old.example."}, EditRevision: revision - 1, Snapshot: desktopSnapshot{ServiceState: "stopped"}})
+	if text(guiManagedFieldID) != "new.example." || !w.dirty {
 		t.Fatal("asynchronous load overwrote newer edits")
 	}
 	// One fixed worker and one queued request remain bounded under repeated
@@ -165,7 +174,7 @@ func TestDesktopNativeWindow(t *testing.T) {
 	if w.busy {
 		t.Fatal("bounded native worker did not return a result")
 	}
-	if got := text(guiConfigID); got != "# new edit\r\n" {
+	if got := text(guiManagedFieldID); got != "new.example." {
 		t.Fatalf("worker status replaced edits: %q", got)
 	}
 	// Missing Explorer must not turn Close into an unfindable hidden process.
@@ -188,4 +197,237 @@ func TestDesktopClipboardBounds(t *testing.T) {
 			t.Fatal("accepted empty, embedded-NUL or oversized clipboard request")
 		}
 	}
+}
+
+func awaitDesktopNativeResult(t *testing.T, w *desktopWindow) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for w.busy && time.Now().Before(deadline) {
+		var message guiMessage
+		if exists, _, _ := guiUser32.NewProc("PeekMessageW").Call(uintptr(unsafe.Pointer(&message)), w.hwnd, guiResultMessage, guiResultMessage, 1); exists != 0 {
+			guiDispatchMessage.Call(uintptr(unsafe.Pointer(&message)))
+		} else {
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	if w.busy {
+		t.Fatal("native form worker did not finish")
+	}
+}
+
+func TestDesktopNativeMissingFormCreatesConfigThroughWorker(t *testing.T) {
+	if os.Getenv("PHOTON_WINDOWS_GUI_NATIVE") != "1" {
+		t.Skip("set PHOTON_WINDOWS_GUI_NATIVE=1 for native Win32 forms")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	path := filepath.Join(t.TempDir(), "first-setup.yaml")
+	backend, err := newDesktopBackend(desktopOptions{ConfigPath: path, ServiceName: fmt.Sprintf("Photon-GUI-Form-Test-%d", os.Getpid())})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := newDesktopWindow(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		w.dispose()
+		var message guiMessage
+		guiUser32.NewProc("PeekMessageW").Call(uintptr(unsafe.Pointer(&message)), 0, 0x12, 0x12, 1)
+	}()
+	w.startWorker()
+	w.submit(guiRequest{Action: "load"})
+	awaitDesktopNativeResult(t, w)
+	get := func(id int) string {
+		text, err := guiControlText(w.controls[id])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return text
+	}
+	edit := func(id int, text string) {
+		guiSendMessage.Call(w.controls[id], 0xb1, 0, ^uintptr(0))
+		guiSendMessage.Call(w.controls[id], 0xc2, 1, uintptr(unsafe.Pointer(guiUTF16(text))))
+	}
+	click := func(id int) { guiSendMessage.Call(w.settings, guiWMCommand, uintptr(id), 0) }
+	if !w.formLoaded || !w.newConfig || w.dirty || get(guiRootFieldID) != "" || get(guiManagedFieldID) != "" || !filepath.IsAbs(get(guiStateFieldID)) {
+		t.Fatal("missing config did not load clean, safe, editable defaults")
+	}
+	if enabled, _, _ := guiUser32.NewProc("IsWindowEnabled").Call(w.controls[guiSaveID]); enabled == 0 {
+		t.Fatal("first setup requires a redundant reload before saving")
+	}
+	w.command(guiInstallID)
+	if w.busy || !strings.Contains(get(guiSettingsNoteID), "请先填写并保存") {
+		t.Fatal("first setup attempted SCM installation before config existed")
+	}
+	// A failed reload is an unreadable existing file, not a confirmed first run.
+	if err := os.WriteFile(path, []byte("invalid: ["), 0600); err != nil {
+		t.Fatal(err)
+	}
+	w.command(guiReloadID)
+	awaitDesktopNativeResult(t, w)
+	if w.newConfig || w.formLoaded || w.formLoadError == "" || !strings.Contains(get(guiConfigSummaryID), "读取失败") {
+		t.Fatal("failed reload retained a misleading first-run state")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	w.command(guiReloadID)
+	awaitDesktopNativeResult(t, w)
+	if !w.newConfig || !w.formLoaded || w.formLoadError != "" {
+		t.Fatal("missing file retry did not restore first setup")
+	}
+	for _, group := range [][]int{guiBasicFields, guiGatewayFields, guiRouteFields, guiAdvancedFields} {
+		for _, id := range group {
+			hwnd, _, _ := guiUser32.NewProc("GetDlgItem").Call(w.settings, uintptr(id))
+			if hwnd == 0 || hwnd != w.controls[id] {
+				t.Fatalf("missing native setting control %d", id)
+			}
+		}
+	}
+	var limits [5]guiPoint
+	guiSendMessage.Call(w.settings, guiWMGetMinMaxInfo, 0, uintptr(unsafe.Pointer(&limits[0])))
+	if limits[3] != (guiPoint{700, 700}) {
+		t.Fatal("settings minimum size changed")
+	}
+	w.command(guiSaveID)
+	awaitDesktopNativeResult(t, w)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("blank trust/identity fields created a config")
+	}
+	config, err := desktopParseConfig(desktopTestConfig(get(guiStateFieldID)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := desktopFormFromConfig(config)
+	for id, value := range map[int]string{guiRootFieldID: form.RootPublicKey, guiManagedFieldID: form.ManagedZone} {
+		edit(id, value)
+	}
+	for _, value := range desktopFormLines(form.AllowedGateways) {
+		edit(guiAllowedInputID, value)
+		click(guiAllowedAddID)
+	}
+	for _, value := range desktopFormLines(form.SplitRoutes) {
+		edit(guiRouteInputID, value)
+		click(guiRouteAddID)
+	}
+	// Allowed gateway entries are native list rows, with independent selection
+	// and update/delete controls rather than an encoded multiline editor.
+	allowed := w.optionLists[guiAllowedFieldID]
+	beforeAllowed := len(allowed.Rows)
+	edit(guiAllowedInputID, "temporary.example.")
+	click(guiAllowedAddID)
+	guiSendMessage.Call(w.controls[guiAllowedFieldID], 0x186, uintptr(beforeAllowed), 0)
+	guiSendMessage.Call(w.settings, guiWMCommand, guiAllowedFieldID|1<<16, 0)
+	if get(guiAllowedInputID) != "temporary.example." {
+		t.Fatal("gateway list selection did not populate editor")
+	}
+	edit(guiAllowedInputID, "*.temporary.example.")
+	click(guiAllowedUpdateID)
+	if len(allowed.Rows) != beforeAllowed+1 || allowed.Rows[beforeAllowed] != "*.temporary.example." {
+		t.Fatal("gateway list update failed")
+	}
+	guiSendMessage.Call(w.controls[guiAllowedFieldID], 0x186, uintptr(beforeAllowed), 0)
+	guiSendMessage.Call(w.settings, guiWMCommand, guiAllowedFieldID|1<<16, 0)
+	click(guiAllowedDeleteID)
+	if len(allowed.Rows) != beforeAllowed || allowed.Dirty || get(guiAllowedInputID) != "" {
+		t.Fatal("gateway list delete retained a draft or changed other rows")
+	}
+	// List drafts survive navigation and cannot silently enter a saved form.
+	edit(guiAllowedInputID, "*.example.")
+	click(guiRoutePageID)
+	if w.settingsPage != guiRoutePageID || get(guiAllowedInputID) != "*.example." || !w.optionLists[guiAllowedFieldID].Dirty {
+		t.Fatal("page switch lost an unapplied gateway draft")
+	}
+	w.command(guiSaveID)
+	if w.busy || !strings.Contains(get(guiSettingsNoteID), "尚未添加或更新") {
+		t.Fatal("save discarded an unapplied gateway draft")
+	}
+	click(guiAllowedClearID)
+	beforeRoutes := len(w.optionLists[guiSplitFieldID].Rows)
+	for _, invalid := range []string{"10.0.0.1/24", "0.0.0.0/0", "::/0"} {
+		edit(guiRouteInputID, invalid)
+		click(guiRouteAddID)
+		if len(w.optionLists[guiSplitFieldID].Rows) != beforeRoutes {
+			t.Fatalf("invalid split route %q was silently changed or accepted", invalid)
+		}
+	}
+	click(guiRouteClearID)
+	edit(guiBootstrapPeerID, "*.gateway.")
+	edit(guiBootstrapAddressID, "127.0.0.1:33434")
+	click(guiBootstrapAddID)
+	if len(w.bootstrapRows) != 0 || !strings.Contains(get(guiSettingsNoteID), "具体") {
+		t.Fatal("bootstrap accepted a pattern in place of a concrete gateway identity")
+	}
+	click(guiBootstrapClearID)
+	edit(guiBootstrapPeerID, "gateway.")
+	edit(guiBootstrapAddressID, "127.0.0.1:33434")
+	click(guiBootstrapAddID)
+	if len(w.bootstrapRows) != 1 || w.bootstrapDirty {
+		t.Fatal("bootstrap add did not apply and clear its draft")
+	}
+	// Same peer with a different address is a supported multi-address config.
+	edit(guiBootstrapPeerID, "gateway.")
+	edit(guiBootstrapAddressID, "127.0.0.2:33434")
+	click(guiBootstrapAddID)
+	if len(w.bootstrapRows) != 2 {
+		t.Fatal("same peer with another address was rejected")
+	}
+	detached, err := w.collectForm()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.bootstrapRows[0].Address = "127.0.0.3:33434"
+	if detached.BootstrapHints[0].Address != "127.0.0.1:33434" {
+		t.Fatal("worker form aliases mutable UI rows")
+	}
+	w.bootstrapRows[0].Address = "127.0.0.1:33434"
+	guiSendMessage.Call(w.controls[guiBootstrapListID], 0x186, 1, 0)
+	guiSendMessage.Call(w.settings, guiWMCommand, guiBootstrapListID|1<<16, 0)
+	if get(guiBootstrapPeerID) != "gateway." || get(guiBootstrapAddressID) != "127.0.0.2:33434" {
+		t.Fatal("selected bootstrap row did not populate both fields")
+	}
+	click(guiBootstrapDeleteID)
+	if len(w.bootstrapRows) != 1 || w.bootstrapDirty || get(guiBootstrapPeerID) != "" || get(guiBootstrapAddressID) != "" {
+		t.Fatal("delete retained an unapplied draft")
+	}
+	edit(guiBootstrapPeerID, "unapplied.example.")
+	w.command(guiSaveID)
+	if w.busy || !strings.Contains(get(guiSettingsNoteID), "尚未添加或更新") {
+		t.Fatal("save silently discarded an unapplied bootstrap draft")
+	}
+	click(guiAdvancedPageID)
+	if w.settingsPage != guiAdvancedPageID || !w.bootstrapDirty || get(guiBootstrapPeerID) != "unapplied.example." {
+		t.Fatal("page switch lost an unapplied bootstrap draft")
+	}
+	click(guiBootstrapClearID)
+	click(guiAdvancedPageID)
+	if w.settingsPage != guiAdvancedPageID {
+		t.Fatal("advanced page did not open")
+	}
+	edit(guiMTUFieldID, "1360")
+	edit(guiMaxFieldID, "31s")
+	w.command(guiSaveID)
+	awaitDesktopNativeResult(t, w)
+	saved, err := photonwindows.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.ManagedZone != config.ManagedZone || saved.Wintun.MTU != 1360 || saved.Reconnect.MaxBackoff != 31*time.Second || len(saved.Gateway.BootstrapHints) != 1 || w.dirty || w.newConfig {
+		t.Fatal("native worker save did not persist the complete form")
+	}
+	if _, err := os.Stat(saved.State.Path); !os.IsNotExist(err) {
+		t.Fatal("GUI first setup created or opened an identity DB")
+	}
+	w.command(guiReloadID)
+	awaitDesktopNativeResult(t, w)
+	if get(guiMTUFieldID) != "1360" || get(guiMaxFieldID) != "31s" || len(w.bootstrapRows) != 1 || w.dirty {
+		t.Fatal("native worker reload lost settings or marked programmatic changes dirty")
+	}
+	w.openSettings()
+	guiSendMessage.Call(w.settings, guiWMClose, 0, 0)
+	if w.settings == 0 || w.ctx.Err() != nil {
+		t.Fatal("settings Close destroyed the desktop worker")
+	}
+	w.dirty = false
 }

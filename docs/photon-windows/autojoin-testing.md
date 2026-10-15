@@ -7,11 +7,14 @@
 ## 安装与授权
 
 将构建包解压到管理员管理的固定目录，保留相邻的 `wintun.dll`。
-复制 `config.example.yaml` 为 `config.yaml`，替换实际 `trusted_root_public_key`、
-`managed_zone`、`gateway.bootstrap_hints`、网关 allowlist 和 split routes。
-`state.path` 使用绝对路径，指向这个节点专用的数据库。
+以管理员身份运行 `photon-windows.exe`，在“身份”页填写实际根公钥和节点域名；
+在“网关与引导”页添加允许网关规则和引导节点，在“分流路由”页添加网段。
+引导节点分开填写网关身份与 Gossip 地址。在“高级”页确认数据库绝对路径，
+指向这个节点专用的数据库，点击“保存配置”。没有 `config.yaml` 时会自动进入首次配置。
+具体字段含义见 [GUI 使用](gui-testing.md)。也可以继续复制 `config.example.yaml` 为
+`config.yaml` 并编辑，已有配置会自动显示为表单。
 
-以管理员身份运行 `photon-windows.exe`，点击“安装服务”及“启动”。
+点击“安装服务”及“启动”。
 首次启动会创建身份，界面显示入网进度和完整请求；点击“复制入网请求”交给管理该父域的管理员。
 命令行也可读取同一运行状态：
 

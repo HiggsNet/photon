@@ -24,7 +24,8 @@ XFRM、BIRD 或 network namespace。
 2026-10-15 根据用户要求增加本机 GUI 与托盘管理入口，网络范围继续保持上述约束。
 界面复用同一 `photon-windows.exe` 的 SCM 操作和现有 named-pipe IPC，只显示运行中
 Daemon 的公开状态，不自行打开数据库、创建网络 Driver 或执行另一套连接状态机。
-首次提供状态、网关、路由、服务启停与 YAML 配置编辑；配置保存仍需重启服务生效。
+提供状态、网关、路由、服务启停，以及身份、网关引导、分流路由和高级配置页；选项保存为原有 YAML 配置，
+复用同一 schema 与校验，配置保存仍需重启服务生效。
 关闭窗口隐藏到可用托盘，退出界面不停止后台服务。操作权限沿用本机管理员模型。
 
 Windows 是接入节点：Babel 只发布本节点当前获授权的本地前缀，不重新发布从 gateway 学到的
@@ -47,6 +48,9 @@ Windows VM 的 B3/B4 原生及跨主机证据见 [IKE 验收](ike-testing.md) �
 
 多个 `gateway.allowed_zones` 表示候选集合，不表示多个同时转发的 gateway。切换时先停止旧 gateway
 承载业务，再启用新 gateway；同一 gateway 的 rekey overlap 不视为第二个 active gateway。
+允许项支持完整身份和与 Linux 共享的 glob 匹配；通配符从当前 verified view 动态展开，
+排除根与本机，按身份排序并去重，再执行既有 gateway 身份、签名、角色、传输和 overlay 校验。
+bootstrap 仍为具体 peer，仅需匹配任一允许项，不因被匹配而授予信任。
 `overlay.split_routes` 只限制本机接入隧道的地址范围，不授予 route origin 权限。
 DNS/NRPT、默认路由和系统代理不由本产品修改。服务启动后配置保持不变，修改配置通过重启应用。
 
@@ -478,7 +482,8 @@ Wintun/IKE/路由和 SCM 仍由后续阶段验收。
 通知回调仅投递有界事件，注销在回调外执行，遵守
 [CancelMibChangeNotify2 的线程约束](https://learn.microsoft.com/en-us/windows/win32/api/netioapi/nf-netioapi-cancelmibchangenotify2)。
 
-`photon-windows gateways --config <path>` 离线读取同一数据库，逐一诊断 `gateway.allowed_zones`。
+`photon-windows gateways --config <path>` 离线读取同一数据库，按 `gateway.allowed_zones`
+从当前 view 展开具体网关后逐一诊断；精确身份不存在时仍输出拒绝原因。
 每次按当前时间复核 root pin、授权链、撤销、五项传输记录的签名和 owner/key、profile identity、
 Ed25519 key fingerprint/有效期、inbound role、overlay/path family 和有效地址/端口。
 输出 revision、评估时间、签名记录中的 IP contacts 或拒绝原因。bootstrap hints 不进入候选；

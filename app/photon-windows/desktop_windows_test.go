@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,51 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc/mgr"
 )
+
+func TestDesktopWindowsMissingConfigErrorsAreRecognized(t *testing.T) {
+	dir := t.TempDir()
+	for _, path := range []string{filepath.Join(dir, "config.yaml"), filepath.Join(dir, "missing-parent", "config.yaml")} {
+		file, err := desktopOpenConfig(path)
+		if file != nil {
+			file.Close()
+			t.Fatal("missing file opened")
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("native missing error for %q not recognized: %v", path, err)
+		}
+	}
+}
+
+func TestDesktopWindowsInvalidPathCannotBecomeNewForm(t *testing.T) {
+	dir := t.TempDir()
+	// '?' is forbidden in a Win32 file name. Check the actual native error
+	// before testing that LoadForm must not treat it as a missing config.
+	path := filepath.Join(dir, "config?.yaml")
+	file, openErr := desktopOpenConfig(path)
+	if file != nil {
+		file.Close()
+		t.Fatal("invalid native config path opened")
+	}
+	if !errors.Is(openErr, windows.ERROR_INVALID_NAME) || errors.Is(openErr, os.ErrNotExist) {
+		t.Fatalf("fixture did not produce a non-missing native error: %v", openErr)
+	}
+	b, err := newDesktopBackend(desktopOptions{ConfigPath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	form, loadErr := b.LoadForm()
+	if !errors.Is(loadErr, windows.ERROR_INVALID_NAME) || form.NewConfig || form.StatePath != "" {
+		t.Fatalf("invalid config path replaced by defaults: %+v, %v", form, loadErr)
+	}
+	valid := defaultDesktopConfigForm(filepath.Join(dir, "valid.yaml"))
+	completeFirstRunForm(&valid)
+	if err := b.SaveForm(valid); err == nil || !strings.Contains(err.Error(), "did not load successfully") {
+		t.Fatal("failed load allowed saving without successful reload")
+	}
+	if files, err := os.ReadDir(dir); err != nil || len(files) != 0 {
+		t.Fatalf("failed load/save created files: %v, %v", files, err)
+	}
+}
 
 func TestDesktopWindowsPreservesConfigDACL(t *testing.T) {
 	dir := t.TempDir()

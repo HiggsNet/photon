@@ -33,8 +33,9 @@ func GatewayCandidates(config *Config, view corestate.View, now time.Time) []Gat
 }
 
 func gatewayCandidates(ctx context.Context, config *Config, view corestate.View, now time.Time, resolver ipsec.DNSResolver, verifier *photoncrypto.Verifier) []GatewayCandidate {
-	out := make([]GatewayCandidate, 0, len(config.Gateway.AllowedZones))
-	for _, peer := range config.Gateway.AllowedZones {
+	peers := gatewayCandidateZones(config, view)
+	out := make([]GatewayCandidate, 0, len(peers))
+	for _, peer := range peers {
 		candidate := GatewayCandidate{Zone: peer}
 		contacts, fingerprint, err := gatewayContacts(ctx, config, view, peer, now, resolver, verifier)
 		if err != nil {
@@ -51,6 +52,45 @@ func gatewayCandidates(ctx context.Context, config *Config, view corestate.View,
 		out = append(out, candidate)
 	}
 	return out
+}
+
+// Selectors only choose which concrete identities to diagnose. A literal keeps
+// its configured position and missing-peer diagnosis; each glob expands from
+// this exact verified view in sorted order. No expansion or trust is cached.
+// Matching a zone, including one without IPsec records, grants no authority:
+// gatewayContacts still checks every candidate's complete signed facts.
+func gatewayCandidateZones(config *Config, view corestate.View) []zone.ZonePath {
+	if config == nil {
+		return nil
+	}
+	var peers []zone.ZonePath
+	seen := make(map[zone.ZonePath]bool)
+	add := func(peer zone.ZonePath) {
+		if !seen[peer] {
+			seen[peer] = true
+			peers = append(peers, peer)
+		}
+	}
+	for _, selector := range config.Gateway.AllowedZones {
+		if !zone.HasPatternMeta(string(selector)) {
+			add(selector)
+			continue
+		}
+		if view.State == nil || view.State.Network == nil {
+			continue
+		}
+		var matched []zone.ZonePath
+		for peer := range view.State.Network.Zones {
+			if peer.Valid() && !peer.IsRoot() && peer != config.ManagedZone && zone.MatchesPattern(string(selector), peer) {
+				matched = append(matched, peer)
+			}
+		}
+		slices.Sort(matched)
+		for _, peer := range matched {
+			add(peer)
+		}
+	}
+	return peers
 }
 
 func gatewayContacts(ctx context.Context, config *Config, view corestate.View, peer zone.ZonePath, now time.Time, resolver ipsec.DNSResolver, verifier *photoncrypto.Verifier) ([]ipsec.ContactPoint, string, error) {

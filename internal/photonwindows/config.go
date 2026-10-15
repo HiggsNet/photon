@@ -46,6 +46,8 @@ type OverlayConfig struct {
 }
 
 type GatewayConfig struct {
+	// AllowedZones retains the existing config shape; entries are exact zone
+	// selectors or shared path.Match globs, never an authorization source.
 	AllowedZones   []zone.ZonePath
 	BootstrapHints []BootstrapHint
 }
@@ -72,7 +74,9 @@ type ReconnectConfig struct {
 	MaxBackoff     time.Duration
 }
 
-type rawConfig struct {
+// ConfigOptions is the single YAML schema used by file parsing and option
+// editors. Normalization and validation remain shared with ParseConfig.
+type ConfigOptions struct {
 	GossipListen         string `yaml:"gossip_listen"`
 	SchemaVersion        int    `yaml:"schema_version"`
 	TrustedRootPublicKey string `yaml:"trusted_root_public_key"`
@@ -85,8 +89,8 @@ type rawConfig struct {
 		SplitRoutes []string `yaml:"split_routes"`
 	} `yaml:"overlay"`
 	Gateway struct {
-		AllowedZones   []string           `yaml:"allowed_zones"`
-		BootstrapHints []rawBootstrapHint `yaml:"bootstrap_hints"`
+		AllowedZones   []string               `yaml:"allowed_zones"`
+		BootstrapHints []BootstrapHintOptions `yaml:"bootstrap_hints"`
 	} `yaml:"gateway"`
 	Wintun struct {
 		AdapterName string `yaml:"adapter_name"`
@@ -101,7 +105,7 @@ type rawConfig struct {
 	} `yaml:"reconnect"`
 }
 
-type rawBootstrapHint struct {
+type BootstrapHintOptions struct {
 	Peer    string `yaml:"peer"`
 	Address string `yaml:"address"`
 }
@@ -126,7 +130,7 @@ func ParseConfig(r io.Reader) (*Config, error) {
 	if r == nil {
 		return nil, errors.New("config input is nil")
 	}
-	var raw rawConfig
+	var raw ConfigOptions
 	decoder := yaml.NewDecoder(r)
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&raw); err != nil {
@@ -142,7 +146,16 @@ func ParseConfig(r io.Reader) (*Config, error) {
 	return normalizeConfig(raw)
 }
 
-func normalizeConfig(raw rawConfig) (*Config, error) {
+// MarshalConfig validates editor options through the same owner as file reads.
+// It emits no private identity material and does not apply runtime changes.
+func MarshalConfig(options ConfigOptions) ([]byte, error) {
+	if _, err := normalizeConfig(options); err != nil {
+		return nil, err
+	}
+	return yaml.Marshal(options)
+}
+
+func normalizeConfig(raw ConfigOptions) (*Config, error) {
 	if raw.SchemaVersion != ConfigSchemaVersion {
 		return nil, fmt.Errorf("schema_version must be %d", ConfigSchemaVersion)
 	}
@@ -290,8 +303,11 @@ func parseAllowedZones(values []string) ([]zone.ZonePath, error) {
 	seen := make(map[zone.ZonePath]struct{}, len(values))
 	for i, value := range values {
 		path := zone.ZonePath(strings.TrimSpace(value))
-		if !path.Valid() || path.IsRoot() {
-			return nil, fmt.Errorf("gateway.allowed_zones[%d] must be a non-root fully-qualified Photon zone", i)
+		if err := zone.ValidatePattern(string(path)); err != nil {
+			return nil, fmt.Errorf("gateway.allowed_zones[%d]: %w", i, err)
+		}
+		if path.IsRoot() || (!zone.HasPatternMeta(string(path)) && !path.Valid()) {
+			return nil, fmt.Errorf("gateway.allowed_zones[%d] must be a non-root fully-qualified Photon zone or zone glob", i)
 		}
 		if _, ok := seen[path]; ok {
 			return nil, fmt.Errorf("gateway.allowed_zones[%d] duplicates %s", i, path)
@@ -302,16 +318,22 @@ func parseAllowedZones(values []string) ([]zone.ZonePath, error) {
 	return out, nil
 }
 
-func parseBootstrapHints(values []rawBootstrapHint, allowed []zone.ZonePath) ([]BootstrapHint, error) {
-	allowedSet := make(map[zone.ZonePath]struct{}, len(allowed))
-	for _, path := range allowed {
-		allowedSet[path] = struct{}{}
-	}
+func parseBootstrapHints(values []BootstrapHintOptions, allowed []zone.ZonePath) ([]BootstrapHint, error) {
 	out := make([]BootstrapHint, 0, len(values))
 	for i, raw := range values {
 		peer := zone.ZonePath(strings.TrimSpace(raw.Peer))
-		if _, ok := allowedSet[peer]; !ok {
-			return nil, fmt.Errorf("gateway.bootstrap_hints[%d].peer must appear in gateway.allowed_zones", i)
+		if !peer.Valid() || peer.IsRoot() || zone.HasPatternMeta(string(peer)) {
+			return nil, fmt.Errorf("gateway.bootstrap_hints[%d].peer must be a concrete non-root fully-qualified Photon zone", i)
+		}
+		matched := false
+		for _, pattern := range allowed {
+			if zone.MatchesPattern(string(pattern), peer) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return nil, fmt.Errorf("gateway.bootstrap_hints[%d].peer must appear in gateway.allowed_zones or match a selected zone glob", i)
 		}
 		address := strings.TrimSpace(raw.Address)
 		host, port, err := net.SplitHostPort(address)

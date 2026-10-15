@@ -16,6 +16,7 @@ overlay:
     - fd42::/16
 
 gateway:
+  # Exact peer IDs or Linux-style globs, e.g. '*.catofes.' or '*'. Quote globs in YAML.
   allowed_zones:
     - gateway-a.catofes.
   bootstrap_hints:

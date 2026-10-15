@@ -11,6 +11,7 @@ rekey_mode=${PHOTON_WINDOWS_REKEY_TRAFFIC:-0}
 impairment_mode=${PHOTON_WINDOWS_IMPAIRMENT:-0}
 gui_mode=${PHOTON_WINDOWS_GUI_SMOKE:-0}
 autojoin_mode=${PHOTON_WINDOWS_AUTOJOIN_SMOKE:-0}
+gateway_glob_mode=${PHOTON_WINDOWS_GATEWAY_GLOB:-0}
 baseline_mode=${PHOTON_WINDOWS_BASELINE:-0}
 throughput_mode=${PHOTON_WINDOWS_THROUGHPUT:-0}
 throughput_seconds=${PHOTON_WINDOWS_THROUGHPUT_SECONDS:-15}
@@ -50,6 +51,7 @@ fi
 [[ $impairment_mode == 0 || $impairment_mode == 1 ]] || exit 2
 [[ $gui_mode == 0 || $gui_mode == 1 ]] || exit 2
 [[ $autojoin_mode == 0 || $autojoin_mode == 1 ]] || exit 2
+[[ $gateway_glob_mode == 0 || $gateway_glob_mode == 1 ]] || exit 2
 [[ $baseline_mode == 0 || $baseline_mode == 1 ]] || exit 2
 [[ $throughput_mode == 0 || $throughput_mode == 1 ]] || exit 2
 [[ $throughput_seconds =~ ^[0-9]+$ && $throughput_seconds -ge 1 && $throughput_seconds -le 30 ]] || { echo 'Throughput seconds must be 1..30' >&2; exit 2; }
@@ -215,6 +217,7 @@ docker run -d --name "$name" --network bridge --cap-add NET_ADMIN --security-opt
     -e "PHOTON_CHARON_BINARY=$charon" -e "PHOTON_WINDOWS_TUNNEL_GATEWAY=$PHOTON_LINUX_IP" \
     -e "PHOTON_WINDOWS_TUNNEL_IKE_PORT=$ike_port" -e "PHOTON_WINDOWS_TUNNEL_NATT_PORT=$natt_port" \
     -e "PHOTON_WINDOWS_AUTOJOIN_SMOKE=$autojoin_mode" \
+    -e "PHOTON_WINDOWS_GATEWAY_GLOB=$gateway_glob_mode" \
     "$image" bash -euo pipefail -c '
         export STRONGSWAN_CONF=/smoke/strongswan.conf
         mkdir -m 700 /tmp/b4

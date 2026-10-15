@@ -251,6 +251,10 @@ func TestAutoJoinCommonGossipRejectsWrongKeyThenAdoptsWithoutRestart(t *testing.
 	leftIO, rightIO := newMemoryGossipDatagramPair()
 	left := newMemoryHostNode(parent, newWindowsGossipTransport(t, "catofes.", string(managed), leftIO, rightIO.LocalAddr()))
 	right := newMemoryHostNode(state, newWindowsGossipTransport(t, string(managed), "catofes.", rightIO, leftIO.LocalAddr()))
+	// Catalog changes can trigger reverse pulls too. Match the real daemon:
+	// both peers need object-pull workers before either begins synchronizing.
+	left.startObjectPull(t, right)
+	right.startObjectPull(t, left)
 	left.start(t)
 	// Engine is synchronous: start both pulls on its one event owner, including
 	// when delayed packets from the first round arrive during the second one.
@@ -286,7 +290,6 @@ func TestAutoJoinCommonGossipRejectsWrongKeyThenAdoptsWithoutRestart(t *testing.
 			t.Fatal(err)
 		}
 	}
-	right.startObjectPull(t, left)
 	defer left.stop(t)
 	rightStopped := false
 	defer func() {

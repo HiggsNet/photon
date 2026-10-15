@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -21,7 +20,6 @@ const (
 	guiServiceID            = 1002
 	guiGatewayID            = 1003
 	guiRoutesID             = 1004
-	guiConfigID             = 1005
 	guiNoteID               = 1006
 	guiAdmissionID          = 1007
 	guiJoinRequestID        = 1008
@@ -32,6 +30,8 @@ const (
 	guiSaveID               = 1105
 	guiReloadID             = 1106
 	guiCopyRequestID        = 1107
+	guiSettingsID           = 1110
+	guiConfigSummaryID      = 1009
 	guiOpenID               = 1201
 	guiTrayStartID          = 1202
 	guiTrayStopID           = 1203
@@ -138,11 +138,13 @@ type guiNotifyIcon struct {
 	BalloonIcon         uintptr
 }
 type guiRequest struct {
-	Action, Text string
+	Action       string
+	Form         desktopConfigForm
 	EditRevision uint64
 }
 type guiResult struct {
-	Action, Text string
+	Action       string
+	Form         desktopConfigForm
 	EditRevision uint64
 	Err          error
 	Snapshot     desktopSnapshot
@@ -156,7 +158,16 @@ type desktopWindow struct {
 	tray                       bool
 	busy, settingConfig, dirty bool
 	editRevision               uint64
-	newline                    string
+	settings                   uintptr
+	settingsPage               int
+	formLabels                 map[int]uintptr
+	formLoaded                 bool
+	newConfig                  bool
+	formLoadError              string
+	optionLists                map[int]*guiOptionList
+	bootstrapRows              []desktopBootstrapRow
+	bootstrapSelected          int
+	bootstrapDirty             bool
 	ctx                        context.Context
 	cancel                     context.CancelFunc
 	requests                   chan guiRequest
@@ -214,7 +225,14 @@ func runDesktop(options desktopOptions) (err error) {
 		if result == 0 {
 			return nil
 		}
-		handled, _, _ := guiIsDialogMessage.Call(window.hwnd, uintptr(unsafe.Pointer(&message)))
+		dialog := window.hwnd
+		if window.settings != 0 {
+			child, _, _ := guiUser32.NewProc("IsChild").Call(window.settings, message.Window)
+			if message.Window == window.settings || child != 0 {
+				dialog = window.settings
+			}
+		}
+		handled, _, _ := guiIsDialogMessage.Call(dialog, uintptr(unsafe.Pointer(&message)))
 		if handled == 0 {
 			guiTranslateMessage.Call(uintptr(unsafe.Pointer(&message)))
 			guiDispatchMessage.Call(uintptr(unsafe.Pointer(&message)))
@@ -230,18 +248,21 @@ func newDesktopWindow(backend *desktopBackend) (_ *desktopWindow, err error) {
 	icon, _, _ := guiLoadIcon.Call(0, 32512) // Shared IDI_APPLICATION; do not destroy.
 	guiRegisterOnce.Do(func() {
 		cursor, _, _ := guiLoadCursor.Call(0, 32512)
-		class := guiWindowClass{Style: 8, WindowProc: guiWindowProc, Instance: instance, Icon: icon, SmallIcon: icon, Cursor: cursor, Background: 16, ClassName: guiUTF16("PhotonWindowsDesktop")}
-		class.Size = uint32(unsafe.Sizeof(class))
-		atom, _, e := guiRegisterClass.Call(uintptr(unsafe.Pointer(&class)))
-		if atom == 0 {
-			guiRegisterError = guiCallError("RegisterClassEx", e)
+		for _, name := range []string{"PhotonWindowsDesktop", "PhotonWindowsSettings"} {
+			class := guiWindowClass{Style: 8, WindowProc: guiWindowProc, Instance: instance, Icon: icon, SmallIcon: icon, Cursor: cursor, Background: 16, ClassName: guiUTF16(name)}
+			class.Size = uint32(unsafe.Sizeof(class))
+			atom, _, e := guiRegisterClass.Call(uintptr(unsafe.Pointer(&class)))
+			if atom == 0 {
+				guiRegisterError = guiCallError("RegisterClassEx", e)
+				return
+			}
 		}
 	})
 	if guiRegisterError != nil {
 		return nil, guiRegisterError
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	w := &desktopWindow{instance: instance, icon: icon, backend: backend, controls: make(map[int]uintptr), ctx: ctx, cancel: cancel, requests: make(chan guiRequest, 1), results: make(chan guiResult, 1), textCache: make(map[uintptr]string), newline: "\n"}
+	w := &desktopWindow{instance: instance, icon: icon, backend: backend, controls: make(map[int]uintptr), ctx: ctx, cancel: cancel, requests: make(chan guiRequest, 1), results: make(chan guiResult, 1), textCache: make(map[uintptr]string), bootstrapSelected: -1}
 	defer func() {
 		if err != nil {
 			w.dispose()
@@ -277,9 +298,8 @@ func newDesktopWindow(backend *desktopBackend) (_ *desktopWindow, err error) {
 		{guiJoinRequestID, "EDIT", "", 0x50010000 | 0x0080 | 0x0800, 0x200},
 		{guiCopyRequestID, "BUTTON", "复制入网请求", button, 0},
 		{guiRoutesID, "EDIT", "尚无实时路由", edit | 0x0800, 0x200},
-		{guiConfigID, "EDIT", "", edit, 0x200},
-		{guiSaveID, "BUTTON", "保存配置", button, 0},
-		{guiReloadID, "BUTTON", "重新读取", button, 0},
+		{guiConfigSummaryID, "STATIC", "设置正在读取…", static, 0},
+		{guiSettingsID, "BUTTON", "打开设置", button, 0},
 		{guiNoteID, "STATIC", "配置保存后需重启服务生效；关闭窗口将隐藏到系统托盘。", static, 0},
 	}
 	for _, spec := range specs {
@@ -290,7 +310,7 @@ func newDesktopWindow(backend *desktopBackend) (_ *desktopWindow, err error) {
 		w.controls[spec.id] = hwnd
 		guiSendMessage.Call(hwnd, 0x0030, w.font, 1) // WM_SETFONT
 	}
-	for i, text := range []string{"实时 Babel 路由（目标 / 来源前缀 / origin / metric）", "基础配置 YAML · " + backend.options.ConfigPath} {
+	for i, text := range []string{"实时 Babel 路由（目标 / 来源前缀 / origin / metric）", "配置文件 · " + backend.options.ConfigPath} {
 		hwnd, _, e := guiCreateWindow.Call(0, uintptr(unsafe.Pointer(guiUTF16("STATIC"))), uintptr(unsafe.Pointer(guiUTF16(text))), uintptr(static), 0, 0, 0, 0, w.hwnd, 0, instance, 0)
 		if hwnd == 0 {
 			return nil, guiCallError("CreateWindowEx label", e)
@@ -298,7 +318,9 @@ func newDesktopWindow(backend *desktopBackend) (_ *desktopWindow, err error) {
 		w.labels[i] = hwnd
 		guiSendMessage.Call(hwnd, 0x0030, w.font, 1)
 	}
-	guiSendMessage.Call(w.controls[guiConfigID], 0x00c5, 1<<20, 0) // EM_SETLIMITTEXT, bounded UTF-16.
+	if err := w.createSettingsWindow(); err != nil {
+		return nil, err
+	}
 	guiSendMessage.Call(w.controls[guiRoutesID], 0x00c5, 1<<20, 0)
 	guiSendMessage.Call(w.controls[guiJoinRequestID], 0x00c5, desktopJoinRequestLimit, 0)
 	guiShowWindow.Call(w.controls[guiJoinRequestID], 0)
@@ -346,9 +368,9 @@ func (w *desktopWindow) startWorker() {
 				result := guiResult{Action: request.Action, EditRevision: request.EditRevision}
 				switch request.Action {
 				case "load":
-					result.Text, result.Err = w.backend.LoadConfigText()
+					result.Form, result.Err = w.backend.LoadForm()
 				case "save":
-					result.Err = w.backend.SaveConfigText(request.Text)
+					result.Err = w.backend.SaveForm(request.Form)
 				case "refresh":
 				default:
 					result.Err = w.backend.Service(request.Action)
@@ -380,6 +402,9 @@ func (w *desktopWindow) dispose() {
 	w.cancel()
 	w.postMu.Unlock()
 	w.worker.Wait()
+	if w.settings != 0 {
+		guiDestroyWindow.Call(w.settings)
+	}
 	if w.hwnd != 0 {
 		guiKillTimer.Call(w.hwnd, 1)
 		if w.tray {
@@ -407,6 +432,9 @@ func desktopWindowProc(hwnd uintptr, message uint32, wp, lp uintptr) uintptr {
 	value, exists := guiWindows.Load(hwnd)
 	if exists {
 		w := value.(*desktopWindow)
+		if hwnd == w.settings {
+			return w.settingsWindowProc(hwnd, message, wp, lp)
+		}
 		if message == w.taskbarCreated && w.taskbarCreated != 0 {
 			w.tray = false
 			w.updateTray(true)
@@ -431,10 +459,7 @@ func desktopWindowProc(hwnd uintptr, message uint32, wp, lp uintptr) uintptr {
 			return 0
 		case guiWMCommand:
 			id, notification := int(wp&0xffff), uint16(wp>>16)
-			if id == guiConfigID && notification == 0x0300 && !w.settingConfig {
-				w.dirty = true
-				w.editRevision++
-			} else if notification == 0 {
+			if notification == 0 {
 				w.command(id)
 			}
 			return 0
@@ -466,6 +491,9 @@ func desktopWindowProc(hwnd uintptr, message uint32, wp, lp uintptr) uintptr {
 			return 0
 		case guiWMClose:
 			if w.tray {
+				if w.settings != 0 {
+					guiShowWindow.Call(w.settings, 0)
+				}
 				guiShowWindow.Call(hwnd, 0)
 			} else {
 				w.quit()
@@ -507,7 +535,7 @@ func (w *desktopWindow) submit(request guiRequest) {
 			guiEnableWindow.Call(w.controls[guiCopyRequestID], 0)
 		}
 		if request.Action == "load" {
-			guiEnableWindow.Call(w.controls[guiConfigID], 0)
+			w.enableForm(false)
 		}
 		for _, id := range []int{guiInstallID, guiStartID, guiStopID, guiRestartID, guiSaveID, guiReloadID} {
 			guiEnableWindow.Call(w.controls[id], 0)
@@ -519,6 +547,10 @@ func (w *desktopWindow) submit(request guiRequest) {
 	}
 }
 func (w *desktopWindow) command(id int) {
+	if id == guiSettingsID {
+		w.openSettings()
+		return
+	}
 	if id == guiOpenID {
 		w.show()
 		return
@@ -544,24 +576,38 @@ func (w *desktopWindow) command(id int) {
 	request := guiRequest{}
 	switch id {
 	case guiInstallID:
+		if w.guideNewConfig() {
+			return
+		}
 		request.Action = "install"
 	case guiStartID, guiTrayStartID:
+		if w.guideNewConfig() {
+			return
+		}
 		request.Action = "start"
 	case guiStopID, guiTrayStopID:
 		request.Action = "stop"
 	case guiRestartID:
 		request.Action = "restart"
 	case guiSaveID:
+		if !w.formLoaded {
+			w.note("无法保存：" + w.formLoadError + "。请检查上方配置文件路径及访问权限，然后点击“重新读取”重试。")
+			return
+		}
+		if draft := w.unappliedDraft(); draft != "" {
+			w.note(draft + "输入尚未添加或更新，请在对应页面应用该条目或清除输入后保存。")
+			return
+		}
 		request.Action = "save"
-		text, err := w.configText()
+		form, err := w.collectForm()
 		if err != nil {
 			w.note(err.Error())
 			return
 		}
-		request.Text, request.EditRevision = text, w.editRevision
+		request.Form, request.EditRevision = form, w.editRevision
 	case guiReloadID:
 		if w.dirty {
-			answer, _ := windows.MessageBox(windows.HWND(w.hwnd), guiUTF16("重新读取会丢弃尚未保存的编辑。继续吗？"), guiUTF16("Photon Windows"), windows.MB_YESNO|windows.MB_ICONQUESTION)
+			answer, _ := windows.MessageBox(windows.HWND(w.settings), guiUTF16("重新读取会丢弃尚未保存的设置。继续吗？"), guiUTF16("Photon Windows"), windows.MB_YESNO|windows.MB_ICONQUESTION)
 			if answer != 6 {
 				return
 			}
@@ -572,55 +618,45 @@ func (w *desktopWindow) command(id int) {
 	}
 	w.submit(request)
 }
-func (w *desktopWindow) configText() (string, error) {
-	size, _, _ := guiGetWindowTextLength.Call(w.controls[guiConfigID])
-	if size > 1<<20 {
-		return "", errors.New("配置内容超过 1 MiB 上限")
-	}
-	buffer := make([]uint16, int(size)+1)
-	guiGetWindowText.Call(w.controls[guiConfigID], uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)))
-	text := windows.UTF16ToString(buffer)
-	if w.newline == "\n" {
-		text = strings.ReplaceAll(text, "\r\n", "\n")
-	}
-	return text, nil
-}
 func (w *desktopWindow) applyResult(result guiResult) {
 	w.busy = false
 	if result.Action == "load" {
-		guiEnableWindow.Call(w.controls[guiConfigID], 1)
+		w.enableForm(true)
+		w.formLoaded = result.Err == nil
+		w.formLoadError = ""
+		if result.Err != nil {
+			w.formLoadError = result.Err.Error()
+			w.newConfig = false
+		}
 	}
 	for _, id := range []int{guiInstallID, guiStartID, guiStopID, guiRestartID, guiSaveID, guiReloadID} {
 		guiEnableWindow.Call(w.controls[id], 1)
 	}
 	loadChanged := result.Action == "load" && result.EditRevision != w.editRevision
-	if result.Action == "load" && !loadChanged && (result.Err == nil || errors.Is(result.Err, os.ErrNotExist)) {
-		w.newline = "\n"
-		if strings.Contains(result.Text, "\r\n") {
-			w.newline = "\r\n"
-		}
-		w.settingConfig = true
-		display := strings.ReplaceAll(strings.ReplaceAll(result.Text, "\r\n", "\n"), "\n", "\r\n")
-		guiSetWindowText.Call(w.controls[guiConfigID], uintptr(unsafe.Pointer(guiUTF16(display))))
-		w.settingConfig = false
+	if result.Action == "load" && !loadChanged && result.Err == nil {
+		w.fillForm(result.Form)
+		w.newConfig = result.Form.NewConfig
 		w.dirty = false
 		w.editRevision++
 	}
 	if result.Err != nil {
-		if result.Action == "load" && errors.Is(result.Err, os.ErrNotExist) {
-			w.note("配置文件尚不存在；编辑有效 YAML 并保存后可安装服务。")
-		} else {
-			w.note("操作失败：" + result.Err.Error())
-		}
+		w.note("操作失败：" + result.Err.Error())
 	} else {
 		switch result.Action {
 		case "save":
+			w.newConfig = false
 			if result.EditRevision == w.editRevision {
 				w.dirty = false
 			}
 			w.note("配置已保存；点击“重启服务”后生效。")
 		case "load":
-			w.note("配置已读取。保存后需重启服务生效；退出界面不会停止服务。")
+			if w.newConfig {
+				w.showSettingsPage(guiBasicPageID)
+				w.openSettings()
+				w.note("首次使用：先填写身份、网关与路由，然后保存配置。")
+			} else {
+				w.note("配置已读取。保存后需重启服务生效；退出界面不会停止服务。")
+			}
 		case "install":
 			w.note("服务已安装。点击“启动”连接。")
 		case "start":
@@ -634,7 +670,17 @@ func (w *desktopWindow) applyResult(result guiResult) {
 	if loadChanged {
 		w.note("已保留读取期间的新编辑；如需丢弃编辑，请再次点击“重新读取”。")
 	}
+	if !w.formLoaded {
+		guiEnableWindow.Call(w.controls[guiSaveID], 0)
+	}
+	w.updateConfigSummary()
 	w.render(result.Snapshot)
+	if w.settings != 0 && (result.Action == "load" || result.Action == "save") {
+		// EnableWindow queues paint for the action buttons. Complete this
+		// file operation's parent/child painting together; periodic status
+		// refreshes do not invalidate the form or disturb ongoing editing.
+		guiUser32.NewProc("RedrawWindow").Call(w.settings, 0, 0, 0x0181) // INVALIDATE | ALLCHILDREN | UPDATENOW
+	}
 }
 func (w *desktopWindow) render(snapshot desktopSnapshot) {
 	w.snapshot = snapshot
@@ -716,7 +762,12 @@ func (w *desktopWindow) setText(hwnd uintptr, text string) {
 	w.textCache[hwnd] = text
 	guiSetWindowText.Call(hwnd, uintptr(unsafe.Pointer(guiUTF16(text))))
 }
-func (w *desktopWindow) note(text string) { w.setText(w.controls[guiNoteID], text) }
+func (w *desktopWindow) note(text string) {
+	w.setText(w.controls[guiNoteID], text)
+	if w.controls[guiSettingsNoteID] != 0 {
+		w.setText(w.controls[guiSettingsNoteID], text)
+	}
+}
 func (w *desktopWindow) show() {
 	guiShowWindow.Call(w.hwnd, 9)
 	guiShowWindow.Call(w.hwnd, 5)
@@ -724,7 +775,7 @@ func (w *desktopWindow) show() {
 }
 func (w *desktopWindow) quit() {
 	if w.dirty {
-		answer, _ := windows.MessageBox(windows.HWND(w.hwnd), guiUTF16("有尚未保存的配置编辑。退出界面并丢弃编辑吗？服务将继续运行。"), guiUTF16("Photon Windows"), windows.MB_YESNO|windows.MB_ICONQUESTION)
+		answer, _ := windows.MessageBox(windows.HWND(w.hwnd), guiUTF16("有尚未保存的设置。退出界面并丢弃编辑吗？服务将继续运行。"), guiUTF16("Photon Windows"), windows.MB_YESNO|windows.MB_ICONQUESTION)
 		if answer != 6 {
 			return
 		}
@@ -811,9 +862,8 @@ func (w *desktopWindow) layout() {
 	move(w.controls[guiRoutesID], 16, routesTop+26, width-32, routesHeight)
 	configTop := routesTop + 26 + routesHeight + 38
 	move(w.labels[1], 16, configTop-26, width-32, 23)
-	move(w.controls[guiConfigID], 16, configTop, width-32, height-configTop-86)
-	move(w.controls[guiSaveID], 16, height-72, 112, 30)
-	move(w.controls[guiReloadID], 140, height-72, 112, 30)
+	move(w.controls[guiConfigSummaryID], 16, configTop, width-32, height-configTop-86)
+	move(w.controls[guiSettingsID], 16, height-72, 132, 30)
 	move(w.controls[guiNoteID], 16, height-34, width-32, 27)
 }
 

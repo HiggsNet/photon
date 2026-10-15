@@ -1,6 +1,10 @@
 package ipsec
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/HiggsNet/photon/pkg/core/zone"
+)
 
 func TestParseMeshPolicyRuleZoneGlob(t *testing.T) {
 	rule, err := ParseMeshPolicyRule("strongswan://*.catofes.?role=in&family=dual&source=manual-dns,discovery&mode=family-redundant&max_peers=32")
@@ -64,6 +68,28 @@ func TestParseMeshPolicyRuleRejectsUnsupportedValues(t *testing.T) {
 	} {
 		if _, err := ParseMeshPolicyRule(raw); err == nil {
 			t.Fatalf("ParseMeshPolicyRule(%q) should fail", raw)
+		}
+	}
+}
+
+func TestMeshPolicyRuleSharedZoneGlobCompatibility(t *testing.T) {
+	for _, tc := range []struct {
+		pattern, peer string
+		want          bool
+	}{
+		{"gateway.catofes.", "gateway.catofes.", true},
+		{"*", "gateway.catofes.", true},
+		{"*.catofes.", "gateway.catofes.", true},
+		{"*.catofes.", "gateway.other.", false},
+		{"gateway-?.catofes.", "gateway-a.catofes.", true},
+		{"gateway-[ab].catofes.", "gateway-b.catofes.", true},
+		{"gateway-[ab].catofes.", "gateway-c.catofes.", false},
+		{".*", "gateway.catofes.", false},
+		{"[", "gateway.catofes.", false},
+	} {
+		rule := MeshPolicyRule{ZonePattern: tc.pattern}
+		if got := rule.MatchesZone(zone.ZonePath(tc.peer)); got != tc.want {
+			t.Errorf("pattern %q peer %q = %v, want %v", tc.pattern, tc.peer, got, tc.want)
 		}
 	}
 }
