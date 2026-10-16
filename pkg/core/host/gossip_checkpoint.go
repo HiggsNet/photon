@@ -85,7 +85,7 @@ func (driver *GossipDriver) commitGossipEventCheckpoint(ctx context.Context, ses
 		ids = append(ids, session.PeerID)
 	}
 	peers := driver.gossipState.PeerCheckpoints(ids)
-	patches := make(map[string]corestate.PeerCheckpointPatch)
+	var patches map[string]corestate.PeerCheckpointPatch
 	for _, action := range backoffs {
 		if action.PeerID == "" {
 			continue
@@ -93,6 +93,9 @@ func (driver *GossipDriver) commitGossipEventCheckpoint(ctx context.Context, ses
 		peer := peers[action.PeerID]
 		applyGossipBackoffCheckpoint(&peer, action.Err, now)
 		peers[action.PeerID] = peer
+		if patches == nil {
+			patches = make(map[string]corestate.PeerCheckpointPatch)
+		}
 		patch := patches[action.PeerID]
 		patch.LastAttemptUnix = corestate.PatchField[int64]{Set: true, Value: peer.LastAttemptUnix}
 		patch.BackoffUntilUnix = corestate.PatchField[int64]{Set: true, Value: peer.BackoffUntilUnix}
@@ -103,8 +106,19 @@ func (driver *GossipDriver) commitGossipEventCheckpoint(ctx context.Context, ses
 	}
 	if session != nil && session.Done() && session.PeerID != "" {
 		peer := peers[session.PeerID]
-		applyGossipCompletionCheckpoint(&peer, session.LastError(), now)
+		if !applyGossipCompletionCheckpoint(&peer, session.LastError(), now) && len(patches) == 0 {
+			// Timestamp precision is seconds. Repeated matching PINGs can
+			// complete immediately in one receive burst; do not build and
+			// submit the same already-committed checkpoint for every packet.
+			if ctx != nil {
+				return ctx.Err()
+			}
+			return nil
+		}
 		peers[session.PeerID] = peer
+		if patches == nil {
+			patches = make(map[string]corestate.PeerCheckpointPatch)
+		}
 		patch := patches[session.PeerID]
 		patch.LastAttemptUnix = corestate.PatchField[int64]{Set: true, Value: peer.LastAttemptUnix}
 		patch.BackoffUntilUnix = corestate.PatchField[int64]{Set: true, Value: peer.BackoffUntilUnix}
@@ -123,13 +137,14 @@ func (driver *GossipDriver) commitGossipEventCheckpoint(ctx context.Context, ses
 	return err
 }
 
-func applyGossipCompletionCheckpoint(peer *corestate.PeerCheckpoint, syncErr error, now time.Time) {
+func applyGossipCompletionCheckpoint(peer *corestate.PeerCheckpoint, syncErr error, now time.Time) bool {
+	previous := *peer
 	peer.LastAttemptUnix = now.Unix()
 	if syncErr != nil {
 		peer.FailureCount++
 		peer.BackoffUntilUnix = now.Add(gossipFailureBackoff(peer.FailureCount)).Unix()
 		peer.LastFailure = &corestate.PeerFailure{Code: corestate.PeerFailureUnknown, Message: syncErr.Error(), AtUnix: now.Unix()}
-		return
+		return true
 	}
 	peer.LastSyncUnix = now.Unix()
 	peer.BackoffUntilUnix = 0
@@ -139,6 +154,10 @@ func applyGossipCompletionCheckpoint(peer *corestate.PeerCheckpoint, syncErr err
 		peer.ObservedLastSyncUnix = now.Unix()
 		peer.ObservedFailureCount = 0
 	}
+	return peer.LastAttemptUnix != previous.LastAttemptUnix || peer.LastSyncUnix != previous.LastSyncUnix ||
+		peer.BackoffUntilUnix != previous.BackoffUntilUnix || peer.FailureCount != previous.FailureCount ||
+		peer.LastFailure != previous.LastFailure || peer.ObservedLastSyncUnix != previous.ObservedLastSyncUnix ||
+		peer.ObservedFailureCount != previous.ObservedFailureCount
 }
 
 func applyGossipBackoffCheckpoint(peer *corestate.PeerCheckpoint, actionErr error, now time.Time) {

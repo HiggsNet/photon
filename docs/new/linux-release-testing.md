@@ -1,8 +1,16 @@
 # Linux 重构版测试
 
 本轮旧版固定为 `v0.5.6`（master 提交 `28472ea74615`），新版为
-`v0.6.0-rc.10`（在 rc.9 基础上拆分 Gossip 输入与可靠结果交付，保留单消费者更新状态）。新版只供测试，Windows 完整隧道尚未交付。
+`v0.6.0-rc.11`（修复 SA 选择与轮换顺序，减少重复 checkpoint 更新和健康统计）。新版只供测试，Windows 完整隧道尚未交付。
 master 保留旧版；候选版从独立 release 分支发布，不更新 Docker `latest`。
+
+## rc.11：保留健康 SA、调整轮换顺序与减少重复工作
+
+SA 选择遍历同名候选，优先保留已建立且符合当前运行资源的连接；endpoint 不符只按 SA unique ID 修复，不再按连接名删除全部 SA。secondary takeover 在旧 SA 健康时先准备被动 staged 配置，复用至少两分钟的 takeover 等待，让 primary 先发起；旧 SA 消失或等待到期则主动兜底。准备失败与重启恢复保留该顺序。VICI 缺失 initiator 字段按 responder 解析。
+
+RC.9→RC.10 的相同 20 PING 突发已复现完成 checkpoint 更新流程 1→20 次，实际持久化前后均为一次。修复按已提交字段跳过完全相同的成功结果，更新流程回到一次；新一秒、失败恢复及持久化失败重试仍正常提交。另去掉空内部队列 pop 和结果 slice 复制，健康更新的 spool/SSE 共用一次完整统计快照。
+
+通过最终 make check、make smoke-all 和 host/ipsec/photonlinux/app 的 race 检查。SA 乱序、精确删除、轮换等待/兜底/重启，以及真实 Store 的突发与失败重试均有回归覆盖。诊断、原始基准、线上采样函数统计与结论边界保存在本地 `build/validation/rc10-perf-fix-20261016/report.md`。合成基准尚不能证明线上总 CPU 降幅；发布和部署证据单独记录于 `build/validation/rc11-20261016/`。
 
 ## rc.10：可靠交付内部结果，分批推进事件
 

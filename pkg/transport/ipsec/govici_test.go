@@ -718,6 +718,7 @@ func TestGoviciClientStreamsListSAs(t *testing.T) {
 	}
 	want := []SAState{{
 		Name:           "ipsec-main-ab",
+		InitiatorKnown: true,
 		Peer:           "198.51.100.20",
 		ChildSA:        "ipsec-main-ab-child",
 		IKEState:       "ESTABLISHED",

@@ -158,7 +158,7 @@ func (driver *GossipDriver) HandleGossipHostEvent(ctx context.Context, hostEvent
 		}
 		steps++
 	}
-	for ; steps < maxGossipEventBatch && ctx.Err() == nil; steps++ {
+	for ; steps < maxGossipEventBatch && driver.internalPending.Load() > 0 && ctx.Err() == nil; steps++ {
 		event := driver.takeGossipInternal()
 		if event == nil {
 			break

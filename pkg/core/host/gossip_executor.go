@@ -100,7 +100,7 @@ func (driver *GossipDriver) ExecuteGossipActions(
 			return result
 		}
 		result.NetworkChanged = applyResult.NetworkChanged
-		result.Events = append(result.Events, applyResult.Events...)
+		result.Events = applyResult.Events
 		if result.NetworkChanged {
 			view = driver.gossipStateView()
 			if !view.Loaded {

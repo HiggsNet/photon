@@ -331,6 +331,8 @@ func findStagedSA(states []SAState, inst LinkInstance) SAState {
 	if inst.StagedIKEName == "" {
 		return SAState{}
 	}
+	var best SAState
+	bestMatches := false
 	for _, state := range states {
 		if !saMatchesPathKey(state, inst.PathKey) {
 			continue
@@ -339,10 +341,13 @@ func findStagedSA(states []SAState, inst LinkInstance) SAState {
 			continue
 		}
 		if state.Name == inst.StagedIKEName || state.ChildSA == inst.StagedChildSAName {
-			return state
+			matches := inst.StagedXFRMIfID == 0 || state.XFRMIfID == inst.StagedXFRMIfID
+			if preferObservedSA(state, best, matches, bestMatches) {
+				best, bestMatches = state, matches
+			}
 		}
 	}
-	return SAState{}
+	return best
 }
 
 func rotateTimeout() time.Duration {
@@ -512,7 +517,11 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			inst.BackoffUntil = existing.BackoffUntil
 			inst.LastFailure = existing.LastFailure
 			result.Instances[id] = inst
-			result.add(ReconcileActionUpdate, &spec, &inst, "driver endpoint mismatch")
+			// A peer can reach the old responder config from a new/NAT port
+			// before its port record arrives. Never terminate every SA sharing
+			// that config name because one observed endpoint differs.
+			result.add(ReconcileActionRepair, &spec, &inst, "driver endpoint mismatch")
+			result.Actions[len(result.Actions)-1].SAUniqueID = sa.UniqueID
 			continue
 		}
 		if sa.Established && existing.ActualState != LinkStateUp {
@@ -604,7 +613,7 @@ func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLin
 		}
 		if existing.RemoteGeneration != desiredGen && (sa.Established || existing.StagedGeneration != 0 || existing.RotatePhase != RotatePhaseIdle) {
 			rotateRole := InitiatorRoleSecondaryStandby
-			if existing.InitiatorRole == InitiatorRoleSecondaryTakeover {
+			if (sa.InitiatorKnown && sa.Initiator) || (!sa.InitiatorKnown && existing.InitiatorRole == InitiatorRoleSecondaryTakeover) {
 				rotateRole = InitiatorRoleSecondaryTakeover
 			}
 			activationReady, activationGated := rotateActivationReady(id, rotateActivation)
@@ -880,6 +889,32 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 			r.add(ReconcileActionNoop, &stagedSpec, &existing, "rotate backoff active")
 			return
 		}
+		if initiatorRole == InitiatorRoleSecondaryTakeover && existing.StagedAttemptCount == 0 && existing.StagedNextAttempt != 0 {
+			// A working takeover path gives the primary time to learn the new
+			// local port record. The deadline is a fallback opportunity, never
+			// evidence that Gossip delivery has completed. If the old path
+			// disappears, do not delay recovery for the primary's benefit.
+			if now.Before(time.Unix(existing.StagedNextAttempt, 0)) && findInstanceSA(sas, existing).Established {
+				stagedSpec.InitiatorRole = InitiatorRoleSecondaryStandby
+				stagedSpec.ContactPoints = nil
+				if existing.RotatePhase == RotatePhasePreparing {
+					r.add(ReconcileActionPrepareRotate, &stagedSpec, &existing, "resume passive staged preparation")
+				} else {
+					r.add(ReconcileActionNoop, &stagedSpec, &existing, "awaiting primary rotation")
+				}
+				return
+			}
+			inst := existing
+			inst.StagedAttemptCount = 1
+			inst.StagedNextAttempt = now.Add(stagedInitiateBackoff(1)).Unix()
+			inst.RotatePhase = RotatePhasePreparing
+			inst.LastTransition = now.Unix()
+			r.Instances[id] = inst
+			// Reload the passive config with an actual remote endpoint before
+			// initiating. A wildcard responder config cannot initiate itself.
+			r.add(ReconcileActionPrepareRotate, &stagedSpec, &inst, "primary rotation fallback")
+			return
+		}
 		if existing.RotatePhase == RotatePhasePreparing {
 			r.add(ReconcileActionPrepareRotate, &stagedSpec, &existing, "resume staged sa preparation")
 			return
@@ -934,8 +969,16 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 	inst.RotatePhase = RotatePhasePreparing
 	inst.RotateDeadline = now.Add(rotateTimeout()).Unix()
 	if IsActiveInitiatorRole(stagedSpec.InitiatorRole) {
-		inst.StagedAttemptCount = 1
-		inst.StagedNextAttempt = now.Add(stagedInitiateBackoff(inst.StagedAttemptCount)).Unix()
+		if initiatorRole == InitiatorRoleSecondaryTakeover && findInstanceSA(sas, existing).Established {
+			wait := takeoverDelayFor(group.Reconcile.Backoff, existing.FailureCount)
+			inst.StagedNextAttempt = now.Add(wait).Unix()
+			inst.RotateDeadline = now.Add(wait + rotateTimeout()).Unix()
+			stagedSpec.InitiatorRole = InitiatorRoleSecondaryStandby
+			stagedSpec.ContactPoints = nil
+		} else {
+			inst.StagedAttemptCount = 1
+			inst.StagedNextAttempt = now.Add(stagedInitiateBackoff(inst.StagedAttemptCount)).Unix()
+		}
 	}
 	inst.LastTransition = now.Unix()
 	r.Instances[id] = inst
@@ -1403,7 +1446,19 @@ func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDrive
 		if action.Spec == nil {
 			return ApplyPlan{}, fmt.Errorf("%s action requires spec", action.Action)
 		}
-		plan, err := ApplyTransportLink(ctx, ipsec, xfrm, *action.Spec, netns)
+		plan := ApplyPlan{}
+		if action.SAUniqueID != 0 {
+			terminator, ok := ipsec.(SAUniqueIDTerminator)
+			if !ok {
+				return ApplyPlan{}, fmt.Errorf("ipsec driver does not support terminating an SA by unique id")
+			}
+			plan.add("terminate_sa_id", fmt.Sprintf("#%d", action.SAUniqueID), action.Reason)
+			if err := terminator.TerminateSAByID(ctx, action.SAUniqueID); err != nil {
+				return plan, fmt.Errorf("terminate stale SA #%d: %w", action.SAUniqueID, err)
+			}
+		}
+		applied, err := ApplyTransportLink(ctx, ipsec, xfrm, *action.Spec, netns)
+		plan.Operations = append(plan.Operations, applied.Operations...)
 		if err != nil {
 			return plan, err
 		}
@@ -1554,6 +1609,8 @@ func (r *ReconcileResult) add(action string, spec *TransportLinkSpec, inst *Link
 
 func findMatchingSA(states []SAState, spec TransportLinkSpec) SAState {
 	childName := ChildSAName(spec)
+	var best SAState
+	bestMatches := false
 	for _, state := range states {
 		if !saMatchesPathKey(state, spec.PathKey) {
 			continue
@@ -1562,10 +1619,13 @@ func findMatchingSA(states []SAState, spec TransportLinkSpec) SAState {
 			continue
 		}
 		if state.Name == spec.TransportID || state.ChildSA == childName || (spec.XFRMIfID != 0 && state.XFRMIfID == spec.XFRMIfID) {
-			return state
+			matches := (spec.XFRMIfID == 0 || state.XFRMIfID == spec.XFRMIfID) && saEndpointMatchesSpec(state, spec)
+			if preferObservedSA(state, best, matches, bestMatches) {
+				best, bestMatches = state, matches
+			}
 		}
 	}
-	return SAState{}
+	return best
 }
 
 func hasMatchingConnection(states []ConnectionState, spec TransportLinkSpec) bool {
@@ -1611,6 +1671,9 @@ func RecoverObservedLinkInstance(spec TransportLinkSpec, group LinkGroupSpec, ge
 			instance := NewLinkInstance(candidate, LinkStateUp, now)
 			instance.RemoteGeneration = candidate.Generation
 			instance.Endpoint = state.Endpoint
+			if candidate.InitiatorRole == InitiatorRoleSecondaryStandby && state.InitiatorKnown && state.Initiator {
+				instance.InitiatorRole = InitiatorRoleSecondaryTakeover
+			}
 			observed = append(observed, observedRuntime{spec: candidate, instance: instance, established: true})
 			continue
 		}
@@ -1653,6 +1716,11 @@ func RecoverObservedLinkInstance(spec TransportLinkSpec, group LinkGroupSpec, ge
 		// Restart its bounded deadline from startup; no stale deadline or
 		// backoff is recovered from disk.
 		active.RotateDeadline = now.Add(rotateTimeout()).Unix()
+		if active.InitiatorRole == InitiatorRoleSecondaryTakeover && observed[1].established {
+			wait := takeoverDelayFor(group.Reconcile.Backoff, active.FailureCount)
+			active.StagedNextAttempt = now.Add(wait).Unix()
+			active.RotateDeadline = now.Add(wait + rotateTimeout()).Unix()
+		}
 	}
 	return active, true, nil
 }
@@ -1678,18 +1746,39 @@ func hasMatchingXFRMLink(states []XFRMLinkState, spec TransportLinkSpec, netns N
 }
 
 func findInstanceSA(states []SAState, inst LinkInstance) SAState {
+	var best SAState
+	bestMatches := false
 	for _, state := range states {
 		if !saMatchesPathKey(state, inst.PathKey) {
 			continue
 		}
-		if state.Name == inst.IKEName || state.ChildSA == inst.ChildSAName {
-			return state
-		}
-		if inst.XFRMIfID != 0 && state.XFRMIfID == inst.XFRMIfID {
-			return state
+		if state.Name == inst.IKEName || state.ChildSA == inst.ChildSAName || (inst.XFRMIfID != 0 && state.XFRMIfID == inst.XFRMIfID) {
+			matches := saIdentityMatchesInstance(state, inst) && (inst.XFRMIfID == 0 || state.XFRMIfID == inst.XFRMIfID)
+			if inst.SelectedContact.Address != "" || inst.SelectedContact.Host != "" {
+				matches = matches && saEndpointMatchesSpec(state, TransportLinkSpec{ContactPoints: []ContactPoint{inst.SelectedContact}})
+			}
+			if preferObservedSA(state, best, matches, bestMatches) {
+				best, bestMatches = state, matches
+			}
 		}
 	}
-	return SAState{}
+	return best
+}
+
+// Selection must not depend on list-sas/map iteration order. Prefer a working
+// SA matching the verified runtime; stable age/ID ties retain an existing path
+// while a second negotiation is still arriving under the same config name.
+func preferObservedSA(candidate, current SAState, candidateMatches, currentMatches bool) bool {
+	if !saObserved(current) {
+		return true
+	}
+	if candidate.Established != current.Established {
+		return candidate.Established
+	}
+	if candidateMatches != currentMatches {
+		return candidateMatches
+	}
+	return olderSA(candidate, current)
 }
 
 func saMatchesPathKey(sa SAState, pathKey string) bool {

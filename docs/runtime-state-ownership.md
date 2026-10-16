@@ -35,6 +35,8 @@ GossipDriver 保持状态单写者，将可恢复输入与可靠结果分开交�
 
 消费循环自身产生的协议事件、快照应用结果和提交失败结果，通过返回值交回公共 dispatcher，不再向自己的输入队列投递。每轮最多执行 16 个就绪步骤，剩余结果保留在 driver 中，并用 `Continuations()` 的合并唤醒继续推进。存在就绪内部结果时暂停从输入队列取新工作，避免内部列表无限增长；可靠完成和 Daemon 其他事件仍可处理。只有等待异步 I/O、没有就绪内部结果时，输入消费正常继续。Linux daemon、sync serve/once 与 Windows 循环均同时 select 这三个入口，每次处理一个批次后返回外层循环；没有新增转发 goroutine 或并发状态写入。
 
+就绪结果提前推进可能让同一批匹配摘要的 PING 分别完成同步。成功 checkpoint 按实际已提交字段比较；同一秒内结果完全相同则跳过更新构造，不引入额外缓存或延迟提交。失败计数、失败清除、观察路径结果或时间戳变化仍正常同步提交，提交失败后的重试不能被合并掉。
+
 Health 与 observer 都是 Daemon 管理生命周期的可选子系统，不是所有平台必须具备的公共能力。Linux 可安装 healthDriver（manager、spool、运行标志和 Linux prober），Android 可以完全不创建它；同理 HTTP observer 只在需要的平台 composition 中启动。Gossip transport/address book 只由 GossipDriver 持有，Daemon 不保存第二份 transport 指针。
 
 `AppConfig` 是 app/platform 配置的唯一 owner。composition root 直接结合 AppConfig 与 verified identity 生成 detached `GossipDriverConfig` 和 transport config；GossipDriver 创建后只持有自己的协议配置快照。日志、reflector 和本机 endpoint 发布策略继续属于 app/platform composition。

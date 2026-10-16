@@ -1057,7 +1057,7 @@ func TestReconcileRecoversRotatedRuntimeMetadataFromSA(t *testing.T) {
 	}
 }
 
-func TestReconcileUpdatesWhenEstablishedSAEndpointPortIsStale(t *testing.T) {
+func TestReconcileRepairsWhenEstablishedSAEndpointPortIsStale(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	spec := TransportLinkSpec{
 		LocalZone:     "node-a.catofes.",
@@ -1094,9 +1094,9 @@ func TestReconcileUpdatesWhenEstablishedSAEndpointPortIsStale(t *testing.T) {
 		Now: now,
 	})
 
-	action := firstAction(result, ReconcileActionUpdate)
+	action := firstAction(result, ReconcileActionRepair)
 	if action == nil || action.Reason != "driver endpoint mismatch" {
-		t.Fatalf("actions = %+v, want update for stale endpoint port", result.Actions)
+		t.Fatalf("actions = %+v, want scoped repair for stale endpoint port", result.Actions)
 	}
 	inst := result.Instances[existing.ID]
 	if inst.ActualState != LinkStateConfiguring || inst.Endpoint != "198.51.100.20" {
