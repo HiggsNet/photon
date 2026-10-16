@@ -81,6 +81,10 @@ drainEvents:
 		select {
 		case hostEvent := <-service.gossipDriver.Events():
 			_, _ = service.handleGossipDriverEvent(context.Background(), hostEvent)
+		case hostEvent := <-service.gossipDriver.Completions():
+			_, _ = service.handleGossipDriverEvent(context.Background(), hostEvent)
+		case hostEvent := <-service.gossipDriver.Continuations():
+			_, _ = service.handleGossipDriverEvent(context.Background(), hostEvent)
 		default:
 			break drainEvents
 		}

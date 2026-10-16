@@ -172,6 +172,7 @@ func (driver *GossipDriver) applyGossipSnapshots(
 	if err != nil {
 		return GossipSnapshotApplyResult{}, err
 	}
+	out := GossipSnapshotApplyResult{NetworkChanged: result.Changes.NetworkChanged}
 	for index, action := range selected {
 		outcome := corestate.RemoteApplyOutcome{Zone: action.Snapshot.Zone}
 		if index < len(result.Outcomes) {
@@ -181,10 +182,10 @@ func (driver *GossipDriver) applyGossipSnapshots(
 		}
 		driver.logGossipSnapshotOutcome(peerID, managedZone, action, outcome)
 		if action.ReportResult {
-			_ = driver.PostGossip(&gossip.SnapshotAppliedEvent{PeerID: peerID, Zone: action.Snapshot.Zone, Err: outcome.Err})
+			out.Events = append(out.Events, &gossip.SnapshotAppliedEvent{PeerID: peerID, Zone: action.Snapshot.Zone, Err: outcome.Err})
 		}
 	}
-	return GossipSnapshotApplyResult{NetworkChanged: result.Changes.NetworkChanged}, nil
+	return out, nil
 }
 
 func (driver *GossipDriver) logGossipSnapshotOutcome(peerID string, managedZone zone.ZonePath, action gossip.ApplySnapshotAction, outcome corestate.RemoteApplyOutcome) {

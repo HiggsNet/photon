@@ -130,7 +130,7 @@ func (driver *GossipDriver) runGossipObjectPullWorker(ctx context.Context, jobs 
 				Snapshot: completion.Snapshot, Err: completion.Err,
 			}}
 			select {
-			case driver.events <- event:
+			case driver.completions <- event:
 				driver.objectPullPending.Add(-1)
 			case <-ctx.Done():
 				driver.objectPullPending.Add(-1)

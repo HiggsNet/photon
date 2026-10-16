@@ -56,7 +56,9 @@ func (driver *GossipDriver) logSlowOperation(operation string, elapsed time.Dura
 	// construct fields; suppressed samples retain counters for the next log.
 	log(GossipDriverLog{Level: "warn", Event: "slow_operation", Phase: operation, Fields: map[string]any{
 		"elapsed_ms": elapsed.Milliseconds(), "max_elapsed_ms": state.maxElapsed.Milliseconds(),
-		"queue_before": queueBefore, "queue_after": queueAfter, "queue_capacity": cap(driver.events),
+		"queue_before": queueBefore, "queue_after": queueAfter, "queue_capacity": cap(driver.events) + cap(driver.completions),
+		"input_queue_after": len(driver.events), "completion_queue_after": len(driver.completions),
+		"internal_pending": driver.internalPending.Load(), "dropped_packets": driver.datagramDrops.Load(),
 		"max_sampled_queue": state.maxQueue, "suppressed": state.suppressed,
 	}})
 }

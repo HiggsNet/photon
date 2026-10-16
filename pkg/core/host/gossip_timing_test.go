@@ -37,7 +37,7 @@ func TestGossipSlowOperationRateLimitPreservesWorstSample(t *testing.T) {
 	}
 	want := map[string]any{
 		"elapsed_ms": int64(120), "max_elapsed_ms": int64(2000), "suppressed": 2,
-		"queue_before": 4, "queue_after": 1, "queue_capacity": 64, "max_sampled_queue": 64,
+		"queue_before": 4, "queue_after": 1, "queue_capacity": 64 + DefaultGossipCompletionBuffer, "max_sampled_queue": 64,
 	}
 	for key, value := range want {
 		if got.Fields[key] != value {

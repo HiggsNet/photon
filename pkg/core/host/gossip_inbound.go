@@ -10,17 +10,19 @@ import (
 const GossipPhaseInbound = "inbound"
 
 // executeGossipPacketActions executes the ordered decisions produced by
-// gossip.PlanInboundPacket. Platforms no longer switch on InboundActionKind.
-func (driver *GossipDriver) executeGossipPacketActions(ctx context.Context, actions []gossip.InboundAction, sender GossipSender, budget int) error {
+// gossip.PlanInboundPacket and returns ready events even when a later action
+// fails. The dispatcher, not the input queue, owns their delivery.
+func (driver *GossipDriver) executeGossipPacketActions(ctx context.Context, actions []gossip.InboundAction, sender GossipSender, budget int) ([]gossip.SyncEvent, error) {
 	if driver == nil {
-		return ErrGossipDriverStopped
+		return nil, ErrGossipDriverStopped
 	}
 	if sender == nil {
-		return errGossipSenderRequired
+		return nil, errGossipSenderRequired
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	var events []gossip.SyncEvent
 	for _, action := range actions {
 		message := action.Message
 		if message == nil {
@@ -28,33 +30,26 @@ func (driver *GossipDriver) executeGossipPacketActions(ctx context.Context, acti
 		}
 		switch action.Kind {
 		case gossip.InboundPostSessionEvent:
-			err := driver.PostGossip(action.Event)
-			if err == nil {
-				continue
-			}
-			driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseInbound, PeerID: message.PeerID, Err: err})
-			// An active PING must still receive its responder messages even if
-			// its summary event encountered queue backpressure.
-			if message.Type == gossip.MessagePing {
-				continue
-			}
-			return err
+			events = append(events, action.Event)
 		case gossip.InboundRespondPing:
 			if err := driver.respondGossipPing(ctx, action, sender); err != nil {
-				return err
+				return events, err
 			}
 		case gossip.InboundRespondFetchCatalogPage:
 			driver.respondGossipCatalogPage(ctx, message, sender, budget)
 		case gossip.InboundRespondFetchZone:
 			if err := driver.respondGossipFetchZone(ctx, message.PeerID, message.FetchZone, sender, budget); err != nil {
-				return err
+				return events, err
 			}
 		case gossip.InboundHandleAnnounce:
 			if err := driver.StartGossipSession(message.PeerID, "announce_hint"); err != nil {
-				return err
+				return events, err
 			}
 		case gossip.InboundHandleObjectChunk:
 			result, err := driver.HandleGossipObjectChunk(ctx, message, driver.schedulerForRead().clock.Now())
+			if result.Event != nil {
+				events = append(events, result.Event)
+			}
 			if result.CheckpointErr != nil {
 				driver.logGossip("warn", "chunk_reject_state_commit_failed", result.PeerID, "checkpoint", result.CheckpointErr, map[string]any{"zone": result.Zone})
 			}
@@ -62,15 +57,15 @@ func (driver *GossipDriver) executeGossipPacketActions(ctx context.Context, acti
 				driver.observeChunkFallback(result.PeerID, 1, driver.schedulerForRead().clock.Now())
 			}
 			if err != nil {
-				return err
+				return events, err
 			}
 		case gossip.InboundHandleObjectChunkNACK:
 			if err := driver.handleGossipObjectChunkNACK(ctx, message, sender); err != nil {
-				return err
+				return events, err
 			}
 		}
 	}
-	return nil
+	return events, nil
 }
 
 func (driver *GossipDriver) respondGossipPing(ctx context.Context, action gossip.InboundAction, sender GossipSender) error {

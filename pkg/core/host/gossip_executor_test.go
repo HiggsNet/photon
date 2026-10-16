@@ -179,13 +179,13 @@ func TestGossipDriverExecuteGossipActionsUsesCommonOrdering(t *testing.T) {
 	if pull := <-pulls; pull.PeerID != "peer-a" || pull.Zone != "node-a.catofes." {
 		t.Fatalf("pull = %#v", pull)
 	}
-	if event, ok := driver.GossipSessionEventFor(<-driver.Events()); !ok {
+	if event, ok := driver.GossipSessionEventFor(<-driver.Completions()); !ok {
 		t.Fatal("object-pull completion was not queued")
 	} else if _, ok := event.(*gossip.ObjectPullResultEvent); !ok {
 		t.Fatalf("event = %T, want *gossip.ObjectPullResultEvent", event)
 	}
 	clock.Advance(time.Second)
-	if fired := receiveTimer(t, driver.Events()); fired.ID.Owner != "peer-a" || fired.ID.Key != gossip.TimerKindRound {
+	if fired := receiveTimer(t, driver.Completions()); fired.ID.Owner != "peer-a" || fired.ID.Key != gossip.TimerKindRound {
 		t.Fatalf("timer = %#v", fired)
 	}
 }
@@ -237,10 +237,10 @@ func TestGossipDriverApplySnapshotsOwnsStoreTransactionAndCompletion(t *testing.
 	if len(state.batch) != 1 || state.batch[0].Snapshot.Zone != "remote.catofes." || state.batch[0].Limits.MaxBytes != 8<<20 || !state.batch[0].RefreshOnRootMismatch || !state.appliedAt.Equal(now) {
 		t.Fatalf("batch/time = %#v/%v", state.batch, state.appliedAt)
 	}
-	event, ok := driver.GossipSessionEventFor(<-driver.Events())
-	if !ok {
-		t.Fatal("snapshot completion was not queued")
+	if len(result.Events) != 1 {
+		t.Fatalf("snapshot completions = %#v", result.Events)
 	}
+	event := result.Events[0]
 	applied, ok := event.(*gossip.SnapshotAppliedEvent)
 	if !ok || applied.Zone != "remote.catofes." || applied.Err != nil {
 		t.Fatalf("completion = %#v", event)

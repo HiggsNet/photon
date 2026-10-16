@@ -42,7 +42,7 @@ func TestGossipObjectPullWorkersUpdateRuntimeObservability(t *testing.T) {
 		t.Fatal(err)
 	}
 	select {
-	case <-driver.Events():
+	case <-driver.Completions():
 	case <-time.After(time.Second):
 		t.Fatal("object-pull completion was not delivered")
 	}

@@ -29,7 +29,11 @@ Daemon
 
 `Daemon` 是唯一产品生命周期和平台 mutation 编排者。子组件可以拥有接收 channel、bounded worker 和协议 timer，但不得再形成持有 Daemon、State、平台 Driver 与 BoltStore 的第二个产品 Runtime。
 
-Daemon 和 GossipDriver 各自拥有队列：GossipDriver 的队列只排序 packet、协议 timer、object-pull 等 gossip 事件；Daemon 的 queue/scheduler 处理 IPsec、routing、firewall、health 等平台工作。健康探测完成信号直接回到 Daemon event loop，不通过 GossipDriver 包装或转发。
+Daemon 和 GossipDriver 各自拥有队列：GossipDriver 只处理 packet、协议 timer、object-pull 等 gossip 事件；Daemon 的 queue/scheduler 处理 IPsec、routing、firewall、health 等平台工作。健康探测完成信号直接回到 Daemon event loop，不通过 GossipDriver 包装或转发。
+
+GossipDriver 保持状态单写者，将可恢复输入与可靠结果分开交付。`Events()` 的输入队列默认容量 64，UDP 满队列时丢弃并累计、限流记录；提示入队失败由调用方显式处理。`Completions()` 的可靠队列默认容量 4，object-pull worker 和协议 scheduler 在满时等待交付，停止时取消等待。默认 object-pull worker 为 4、任务队列 64、每 peer 最多 2 个并发拉取；可靠队列容量限制已完成快照的缓冲，不限制活跃 peer 数。
+
+消费循环自身产生的协议事件、快照应用结果和提交失败结果，通过返回值交回公共 dispatcher，不再向自己的输入队列投递。每轮最多执行 16 个就绪步骤，剩余结果保留在 driver 中，并用 `Continuations()` 的合并唤醒继续推进。存在就绪内部结果时暂停从输入队列取新工作，避免内部列表无限增长；可靠完成和 Daemon 其他事件仍可处理。只有等待异步 I/O、没有就绪内部结果时，输入消费正常继续。Linux daemon、sync serve/once 与 Windows 循环均同时 select 这三个入口，每次处理一个批次后返回外层循环；没有新增转发 goroutine 或并发状态写入。
 
 Health 与 observer 都是 Daemon 管理生命周期的可选子系统，不是所有平台必须具备的公共能力。Linux 可安装 healthDriver（manager、spool、运行标志和 Linux prober），Android 可以完全不创建它；同理 HTTP observer 只在需要的平台 composition 中启动。Gossip transport/address book 只由 GossipDriver 持有，Daemon 不保存第二份 transport 指针。
 

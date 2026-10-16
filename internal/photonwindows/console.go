@@ -264,6 +264,16 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	syncPeers()
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+	handleGossipEvent := func(event corehost.Event) {
+		before := state.Store().VerifiedRevision()
+		if _, err := driver.HandleGossipHostEvent(ctx, event, time.Now(), nil); err != nil && !errors.Is(err, corehost.ErrGossipSessionNotFound) && ctx.Err() == nil {
+			logger.Warn("gossip_event_failed", "error", err)
+		}
+		if state.Store().VerifiedRevision() != before {
+			observeGateways()
+			requestPlan()
+		}
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -326,14 +336,11 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			}
 			syncPeers()
 		case event := <-driver.Events():
-			before := state.Store().VerifiedRevision()
-			if _, err := driver.HandleGossipHostEvent(ctx, event, time.Now(), nil); err != nil && !errors.Is(err, corehost.ErrGossipSessionNotFound) && ctx.Err() == nil {
-				logger.Warn("gossip_event_failed", "error", err)
-			}
-			if state.Store().VerifiedRevision() != before {
-				observeGateways()
-				requestPlan()
-			}
+			handleGossipEvent(event)
+		case event := <-driver.Completions():
+			handleGossipEvent(event)
+		case event := <-driver.Continuations():
+			handleGossipEvent(event)
 		}
 	}
 }

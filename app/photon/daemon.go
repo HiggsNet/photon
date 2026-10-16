@@ -500,6 +500,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 			}
 		case hostEvent := <-d.gossipDriver.Events():
 			_, _ = d.handleGossipDriverEvent(ctx, hostEvent)
+		case hostEvent := <-d.gossipDriver.Completions():
+			_, _ = d.handleGossipDriverEvent(ctx, hostEvent)
+		case hostEvent := <-d.gossipDriver.Continuations():
+			_, _ = d.handleGossipDriverEvent(ctx, hostEvent)
 		}
 	}
 }

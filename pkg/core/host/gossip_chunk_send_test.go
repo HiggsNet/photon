@@ -41,7 +41,7 @@ func chunkSendFixture(t *testing.T, quota gossip.QuotaConfig) (*GossipDriver, *f
 func consumeChunkSendTimer(t *testing.T, driver *GossipDriver, clock *fakeClock, after time.Duration) error {
 	t.Helper()
 	clock.Advance(after)
-	event := receiveTimer(t, driver.Events())
+	event := receiveTimer(t, driver.Completions())
 	result, err := driver.HandleGossipHostEvent(context.Background(), event, clock.Now(), nil)
 	if !result.Handled {
 		t.Fatalf("send timer not handled: %#v", event)

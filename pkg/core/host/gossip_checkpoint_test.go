@@ -33,7 +33,7 @@ func TestGossipDriverCommitsBackoffAndCompletionOnceWithoutAdvancingRevision(t *
 	session.State = gossip.SyncSessionSummarySent
 	controller := &memoryGossipController{}
 
-	result, err := driver.handleGossipSessionEvent(context.Background(), &gossip.RoundTimeoutEvent{PeerID: "peer-a"}, now, controller)
+	result, _, err := driver.handleGossipSessionEvent(context.Background(), &gossip.RoundTimeoutEvent{PeerID: "peer-a"}, now, controller)
 	if err != nil || !result.Done || result.NewState != gossip.SyncSessionFailed {
 		t.Fatalf("result/error = %#v/%v", result, err)
 	}

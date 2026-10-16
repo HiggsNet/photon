@@ -121,14 +121,18 @@ func pumpEventLoopSync(ctx context.Context, services []*Daemon, transports []*go
 		}
 		processed := false
 		for index, service := range services {
+			var hostEvent corehost.Event
 			select {
-			case hostEvent := <-service.gossipDriver.Events():
-				if _, err := service.handleGossipDriverEvent(ctx, hostEvent); err != nil {
-					return fmt.Errorf("service %d event %T: %w", index, hostEvent, err)
-				}
-				processed = true
+			case hostEvent = <-service.gossipDriver.Events():
+			case hostEvent = <-service.gossipDriver.Completions():
+			case hostEvent = <-service.gossipDriver.Continuations():
 			default:
+				continue
 			}
+			if _, err := service.handleGossipDriverEvent(ctx, hostEvent); err != nil {
+				return fmt.Errorf("service %d event %T: %w", index, hostEvent, err)
+			}
+			processed = true
 		}
 		for index, transport := range transports {
 			packet, err := receiveWithContext(ctx, transport, time.Now().Add(10*time.Millisecond))

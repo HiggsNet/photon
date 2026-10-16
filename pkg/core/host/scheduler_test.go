@@ -294,7 +294,7 @@ func TestGossipDriverOwnsQueueSchedulerAndPureGossipEngine(t *testing.T) {
 		t.Fatalf("timer action handled=%v err=%v", handled, err)
 	}
 	clock.Advance(time.Second)
-	event, ok := driver.GossipSessionEventFor(<-driver.Events())
+	event, ok := driver.GossipSessionEventFor(<-driver.Completions())
 	if !ok {
 		t.Fatal("timer fire was not accepted")
 	}

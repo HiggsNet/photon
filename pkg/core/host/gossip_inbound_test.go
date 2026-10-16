@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
-	"errors"
 	"net"
 	"testing"
 	"time"
@@ -90,7 +89,7 @@ func TestGossipDriverExecuteGossipPacketActionsPlansPingResponsesAndHint(t *test
 		Ping:   &gossip.Ping{Summary: &corestate.CatalogSummary{CatalogRoot: []byte("remote"), ZoneCount: 1}},
 	}}
 	actions := driver.Gossip.PlanInbound(packet)
-	if err := driver.executeGossipPacketActions(context.Background(), actions, controller, controller.budget); err != nil {
+	if _, err := driver.executeGossipPacketActions(context.Background(), actions, controller, controller.budget); err != nil {
 		t.Fatalf("executeGossipPacketActions: %v", err)
 	}
 	if len(controller.outbound) != 2 || controller.outbound[0].Message.Type != gossip.MessagePong || controller.outbound[1].Message.Type != gossip.MessageFetchCatalogPage {
@@ -201,7 +200,7 @@ func TestGossipDriverExecuteGossipPacketActionsBuildsBoundedCatalogPage(t *testi
 		PeerID:           "peer-a",
 		FetchCatalogPage: &gossip.FetchCatalogPage{},
 	}}
-	if err := driver.executeGossipPacketActions(context.Background(), driver.Gossip.PlanInbound(packet), controller, controller.budget); err != nil {
+	if _, err := driver.executeGossipPacketActions(context.Background(), driver.Gossip.PlanInbound(packet), controller, controller.budget); err != nil {
 		t.Fatalf("executeGossipPacketActions: %v", err)
 	}
 	if len(controller.outbound) != 1 || controller.outbound[0].Message.CatalogPage == nil {
@@ -225,7 +224,7 @@ func TestGossipDriverOwnsFetchZoneChunkSendAndNACKRepair(t *testing.T) {
 		Type: gossip.MessageFetchZone, PeerID: "peer-a",
 		FetchZone: &gossip.FetchZone{Zone: "remote.catofes.", ChunkFallback: true},
 	}
-	if err := driver.executeGossipPacketActions(context.Background(), driver.Gossip.PlanInbound(&gossip.Packet{Message: fetch}), controller, controller.budget); err != nil {
+	if _, err := driver.executeGossipPacketActions(context.Background(), driver.Gossip.PlanInbound(&gossip.Packet{Message: fetch}), controller, controller.budget); err != nil {
 		t.Fatalf("execute FETCH_ZONE: %v", err)
 	}
 	diagnostics, ok := driver.Observability.Snapshot("peer-a", now)
@@ -247,7 +246,7 @@ func TestGossipDriverOwnsFetchZoneChunkSendAndNACKRepair(t *testing.T) {
 		Type: gossip.MessageObjectChunkNACK, PeerID: "peer-a",
 		ObjectChunkNACK: &gossip.ObjectChunkNACK{TransferID: append([]byte(nil), firstChunk.TransferID...), Missing: []uint16{firstChunk.Index}},
 	}
-	if err := driver.executeGossipPacketActions(context.Background(), driver.Gossip.PlanInbound(&gossip.Packet{Message: nack}), controller, controller.budget); err != nil {
+	if _, err := driver.executeGossipPacketActions(context.Background(), driver.Gossip.PlanInbound(&gossip.Packet{Message: nack}), controller, controller.budget); err != nil {
 		t.Fatalf("execute OBJECT_CHUNK_NACK: %v", err)
 	}
 	diagnostics, _ = driver.Observability.Snapshot("peer-a", now)
@@ -272,13 +271,17 @@ func TestGossipDriverExecuteGossipPacketActionsRespondsToActivePingWhenQueueFull
 		PeerID: "peer-a",
 		Ping:   &gossip.Ping{Summary: &corestate.CatalogSummary{CatalogRoot: []byte("remote")}},
 	}}
-	if err := driver.executeGossipPacketActions(context.Background(), driver.Gossip.PlanInbound(packet), controller, controller.budget); err != nil {
+	events, err := driver.executeGossipPacketActions(context.Background(), driver.Gossip.PlanInbound(packet), controller, controller.budget)
+	if err != nil {
 		t.Fatalf("executeGossipPacketActions: %v", err)
 	}
 	if len(controller.outbound) == 0 || controller.outbound[0].Message.Type != gossip.MessagePong {
 		t.Fatalf("outbound = %#v, want responder PONG", controller.outbound)
 	}
-	if len(controller.issues) != 1 || !errors.Is(controller.issues[0].Err, ErrGossipEventQueueFull) {
-		t.Fatalf("issues = %#v, want queue-full report", controller.issues)
+	if len(controller.issues) != 0 || len(events) != 1 {
+		t.Fatalf("issues/events = %#v/%#v, want summary result without queue-full report", controller.issues, events)
+	}
+	if _, ok := events[0].(*gossip.CatalogSummaryReceivedEvent); !ok {
+		t.Fatalf("event = %T, want catalog summary", events[0])
 	}
 }

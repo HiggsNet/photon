@@ -18,6 +18,7 @@ import (
 
 const (
 	DefaultEventBuffer            = 64
+	DefaultGossipCompletionBuffer = DefaultGossipObjectPullWorkers
 	GossipTimerNamespace          = "gossip"
 	DefaultPeerObservabilityLimit = 2048
 	DefaultPeerObservabilityTTL   = 24 * time.Hour
@@ -41,17 +42,16 @@ type GossipEvent struct {
 func (GossipEvent) isHostEvent() {}
 
 // GossipPacketReceived carries one packet accepted by the injected datagram
-// receiver. Packets and protocol timer/completion events share the same
-// bounded driver queue, preserving one backpressure and ordering boundary.
+// receiver. Retransmittable inputs use a separate bounded queue from reliable
+// timer and worker completions.
 type GossipPacketReceived struct {
 	Packet *gossip.Packet
 }
 
 func (GossipPacketReceived) isHostEvent() {}
 
-// GossipDriver owns the common gossip engine, bounded event queue and scheduler.
-// Platform composition roots inject datagram I/O around this object;
-// they do not create a second protocol queue or timer manager.
+// GossipDriver owns the common gossip engine, bounded input/completion queues
+// and scheduler. All events still advance state on one consumer goroutine.
 type GossipDriver struct {
 	Gossip        *gossip.Engine
 	Observability *observability.PeerObservabilityStore
@@ -59,7 +59,14 @@ type GossipDriver struct {
 	gossipState  GossipStateStore
 	gossipConfig GossipDriverConfig
 
-	events chan Event
+	events          chan Event
+	completions     chan Event
+	internalReady   chan Event
+	internalEvents  []gossip.SyncEvent
+	internalHead    int
+	internalPending atomic.Int64
+	datagramDrops   atomic.Uint64
+	nextDropLog     atomic.Int64
 
 	mu                       sync.RWMutex
 	slowOperations           map[string]slowGossipOperation
@@ -92,16 +99,20 @@ func NewGossipDriver(clock Clock, eventBuffer int, gossipState GossipStateStore,
 		gossipState:      gossipState,
 		gossipConfig:     cloneGossipDriverConfig(gossipConfig),
 		events:           make(chan Event, eventBuffer),
+		completions:      make(chan Event, DefaultGossipCompletionBuffer),
+		internalReady:    make(chan Event, 1),
 		gossipChunks:     gossip.NewChunkAssemblyStore(),
 		gossipSentChunks: gossip.NewSentChunkCache(),
 		gossipChunkSends: make(map[TimerID]*gossipChunkSend),
 	}
-	driver.scheduler = NewScheduler(clock, driver.events)
+	driver.scheduler = NewScheduler(clock, driver.completions)
 	return driver
 }
 
+// Events exposes recoverable input. Re-evaluate it on each select: it is nil
+// while ready internal results await processing, not while async I/O is pending.
 func (driver *GossipDriver) Events() <-chan Event {
-	if driver == nil {
+	if driver == nil || driver.internalPending.Load() > 0 {
 		return nil
 	}
 	return driver.events
@@ -111,7 +122,7 @@ func (driver *GossipDriver) PendingEventCount() int {
 	if driver == nil {
 		return 0
 	}
-	return len(driver.events)
+	return len(driver.events) + len(driver.completions) + int(driver.internalPending.Load())
 }
 
 // GossipConfig returns a detached snapshot of the protocol configuration
@@ -126,8 +137,8 @@ func (driver *GossipDriver) GossipConfig() GossipDriverConfig {
 }
 
 // PostGossip enqueues an external protocol event without blocking. Producers
-// receive explicit backpressure; scheduler delivery uses its own blocking,
-// shutdown-aware path so timeouts are never silently dropped.
+// receive explicit backpressure. It is for recoverable hints, never for results
+// of work already accepted by the driver.
 func (driver *GossipDriver) PostGossip(event gossip.SyncEvent) error {
 	if driver == nil {
 		return ErrGossipDriverStopped
@@ -234,7 +245,7 @@ func (driver *GossipDriver) ResetScheduler(clock Clock) {
 		return
 	}
 	old := driver.scheduler
-	driver.scheduler = NewScheduler(clock, driver.events)
+	driver.scheduler = NewScheduler(clock, driver.completions)
 	driver.mu.Unlock()
 	old.Stop()
 }
@@ -250,6 +261,9 @@ func (driver *GossipDriver) Stop() {
 	}
 	driver.stopped = true
 	driver.gossipChunkSends = nil
+	driver.internalEvents = nil
+	driver.internalHead = 0
+	driver.internalPending.Store(0)
 	scheduler := driver.scheduler
 	objectPullCancel := driver.objectPullCancel
 	objectPullServerCancel := driver.objectPullServerCancel
