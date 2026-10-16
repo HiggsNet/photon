@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
@@ -39,6 +41,10 @@ const (
 	kCatalogPageTimeoutMultiplier = 3
 	kRoundMultiplier              = 5
 )
+
+// Keep the session within the common executor's per-peer stream budget.
+// A slot remains occupied until validation/apply or chunk fallback finishes.
+const maxSessionObjectPulls = 2
 
 // SyncEvent advances one per-peer SyncSession. GossipDriver owns delivery;
 // platform composition does not dispatch these concrete event types.
@@ -309,25 +315,17 @@ func (s *SyncSession) onPongReceived(e *PongReceivedEvent, now time.Time) ([]Syn
 		return s.handleCatalogSummary(e.PeerID, e.Pong.Summary, now)
 	}
 
-	var actions []SyncAction
-
 	// We need zones from peer.
 	if len(e.MissingZones) > 0 {
 		s.State = SyncSessionObjectPulling
 		for _, z := range e.MissingZones {
 			s.pendingZones[z] = true
-			if !s.objectPullInflight[z] {
-				s.objectPullInflight[z] = true
-				actions = append(actions, StartObjectPullAction{PeerID: e.PeerID, Zone: z})
-			}
 		}
-		return actions, nil
+		return s.startPendingPulls(e.PeerID), nil
 	}
 
-	if len(actions) == 0 {
-		s.State = SyncSessionCompleted
-	}
-	return actions, nil
+	s.State = SyncSessionCompleted
+	return nil, nil
 }
 
 func (s *SyncSession) onCatalogSummaryReceived(e *CatalogSummaryReceivedEvent, now time.Time) ([]SyncAction, error) {
@@ -389,10 +387,6 @@ func (s *SyncSession) onCatalogPageReceived(e *CatalogPageReceivedEvent, now tim
 	for _, diff := range corestate.CatalogDiff(e.LocalEntries, e.Page.Entries) {
 		s.pendingZones[diff.Zone] = true
 		s.expectedDigests[diff.Zone] = diff
-		if !s.objectPullInflight[diff.Zone] {
-			s.objectPullInflight[diff.Zone] = true
-			actions = append(actions, StartObjectPullAction{PeerID: e.PeerID, Zone: diff.Zone})
-		}
 	}
 	s.lastCatalogCursor = e.Page.NextCursor
 	if e.Page.NextCursor != "" {
@@ -403,6 +397,9 @@ func (s *SyncSession) onCatalogPageReceived(e *CatalogPageReceivedEvent, now tim
 	if refresh := s.refreshCatalog(e.PeerID, now); refresh != nil {
 		return append(actions, refresh...), nil
 	}
+	// A parent may be on a later page than its children. Do not start any
+	// object until the complete catalog can be ordered by ancestry.
+	actions = append(actions, s.startPendingPulls(e.PeerID)...)
 	if len(s.objectPullInflight) > 0 {
 		s.State = SyncSessionObjectPulling
 		return actions, nil
@@ -451,12 +448,53 @@ func (s *SyncSession) reconcilePendingWithDigests(digests []corestate.ZoneDigest
 			delete(s.chunkFallbackZones, z)
 		}
 	}
-	if s.pendingEmpty() && (s.State == SyncSessionObjectPulling ||
+	if s.pendingEmpty() && s.lastCatalogCursor == "" && !s.catalogRefreshPending && (s.State == SyncSessionObjectPulling ||
 		s.State == SyncSessionChunkFallback) {
 		s.State = SyncSessionCompleted
 		return nil
 	}
-	return nil
+	return s.startPendingPulls(s.PeerID)
+}
+
+// startPendingPulls schedules only the shallowest pending layer. A downloaded
+// parent is still pending until its verified apply acknowledgement, so children
+// cannot race the installation of their authority. Pending also holds queued
+// work; the three active maps account for the bounded transport/apply slots.
+func (s *SyncSession) startPendingPulls(peerID string) []SyncAction {
+	if s.Done() || s.lastCatalogCursor != "" || s.catalogRefreshPending || s.pendingEmpty() {
+		return nil
+	}
+	depth := func(path zone.ZonePath) int {
+		if path.IsRoot() {
+			return 0
+		}
+		return strings.Count(path.String(), ".")
+	}
+	minimum := int(^uint(0) >> 1)
+	for path := range s.pendingZones {
+		minimum = min(minimum, depth(path))
+	}
+	var queued []zone.ZonePath
+	for path := range s.pendingZones {
+		if depth(path) == minimum && !s.objectPullInflight[path] && !s.snapshotApplyPending[path] && !s.chunkFallbackZones[path] {
+			queued = append(queued, path)
+		}
+	}
+	sort.Slice(queued, func(i, j int) bool { return queued[i] < queued[j] })
+	available := maxSessionObjectPulls - len(s.objectPullInflight) - len(s.snapshotApplyPending) - len(s.chunkFallbackZones)
+	var actions []SyncAction
+	for _, path := range queued {
+		if available <= 0 {
+			break
+		}
+		s.objectPullInflight[path] = true
+		available--
+		actions = append(actions, StartObjectPullAction{PeerID: peerID, Zone: path})
+	}
+	if len(actions) > 0 {
+		s.State = SyncSessionObjectPulling
+	}
+	return actions
 }
 
 func (s *SyncSession) onRoundTimeout(e *RoundTimeoutEvent) ([]SyncAction, error) {
@@ -579,21 +617,22 @@ func (s *SyncSession) onSnapshotApplied(e *SnapshotAppliedEvent, now time.Time) 
 	if refresh := s.refreshCatalog(e.PeerID, now); refresh != nil {
 		return refresh, nil
 	}
+	actions := s.startPendingPulls(e.PeerID)
 	if len(s.objectPullInflight) > 0 || len(s.snapshotApplyPending) > 0 {
 		s.State = SyncSessionObjectPulling
-		return nil, nil
+		return actions, nil
 	}
 	if len(s.chunkFallbackZones) > 0 {
 		s.State = SyncSessionChunkFallback
-		return nil, nil
+		return actions, nil
 	}
 	if s.lastCatalogCursor != "" {
 		s.State = SyncSessionCatalogDiffing
-		return nil, nil
+		return actions, nil
 	}
 	if s.pendingEmpty() {
 		s.State = SyncSessionCompleted
-		return nil, nil
+		return actions, nil
 	}
 	return s.failSnapshotApply(e.PeerID, e.Zone, errors.New("sync has pending zones without transport or apply work"), nil)
 }
