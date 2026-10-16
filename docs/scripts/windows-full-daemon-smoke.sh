@@ -385,6 +385,16 @@ if [[ $autojoin_mode == 1 ]]; then
         docker cp "$name:/tmp/b4/autojoin-authority.json" "$work/autojoin-authority.json" >/dev/null
         scp -q "${ssh_args[@]}" "$work/autojoin-authority.json" "$PHOTON_WINDOWS_SSH:$remote/"
         acknowledge_autojoin correct-issued
+        phase=address-waiting
+        wait_autojoin address-waiting
+        record_autojoin_clocks
+        fixture_cli debug zone --json . > "$work/autojoin-linux-before-assignment-zone.json"
+        fixture_cli route ipam assign --to node-a.catofes. . 198.18.253.2/32 > "$work/autojoin-assign-ipv4.log"
+        grep -q 'assigned IPAM 198.18.253.2/32 version .* via daemon' "$work/autojoin-assign-ipv4.log"
+        fixture_cli route ipam assign --to node-a.catofes. . fd00:7068:b4::2/128 > "$work/autojoin-assign-ipv6.log"
+        grep -q 'assigned IPAM fd00:7068:b4::2/128 version .* via daemon' "$work/autojoin-assign-ipv6.log"
+        fixture_cli debug zone --json . > "$work/autojoin-linux-assigned-zone.json"
+        acknowledge_autojoin address-assigned
         phase=adopted
         wait_autojoin adopted
         record_autojoin_clocks

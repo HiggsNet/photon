@@ -180,6 +180,26 @@ function Check-TrayBusiness([string]$Phase) {
     Assert-OldRegistration
     $s
 }
+function Assert-TrayUnassignedBusiness {
+    $probes=New-Object System.Collections.Generic.List[object]
+    try {
+        foreach($pair in @(@('198.18.253.2','198.18.253.1'),@('fd00:7068:b4::2','fd00:7068:b4::1'))){
+            $udp=$null;$probe=[pscustomobject]@{Local=$pair[0];Remote=$pair[1];Stage='bind';Sent=$false;Received=$false;SocketError=$null;NativeError=$null}
+            $probes.Add($probe)
+            try {
+                $ip=[Net.IPAddress]::Parse($pair[0]);$udp=New-Object Net.Sockets.UdpClient($ip.AddressFamily)
+                $udp.Client.Bind((New-Object Net.IPEndPoint($ip,0)));$udp.Client.ReceiveTimeout=500
+                $probe.Stage='send';$udp.Connect([Net.IPAddress]::Parse($pair[1]),19096)
+                $payload=[Text.Encoding]::UTF8.GetBytes('TRAY-UNASSIGNED-'+$token);$null=$udp.Send($payload,$payload.Length);$probe.Sent=$true
+                $probe.Stage='receive';$sender=New-Object Net.IPEndPoint($(if($ip.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetworkV6){[Net.IPAddress]::IPv6Any}else{[Net.IPAddress]::Any}),0)
+                $null=$udp.Receive([ref]$sender);$probe.Received=$true
+                throw 'Unassigned business address unexpectedly received a response'
+            }catch [Net.Sockets.SocketException] {
+                $probe.SocketError=$_.Exception.SocketErrorCode.ToString();$probe.NativeError=$_.Exception.NativeErrorCode
+            }finally{if($udp){$udp.Dispose()}}
+        }
+    }finally{$probes|ConvertTo-Json -Depth 5|Set-Content -Encoding UTF8 (Join-Path $FixtureDirectory 'tray-address-waiting-probes.json')}
+}
 function Save-TrayPhase([string]$Phase) {
     $s=Read-TrayStatus
     if((Read-TrayFileID) -cne $stateID){throw 'Tray phase changed the generated identity file'}
@@ -291,10 +311,20 @@ try {
     Save-TrayPhase 'pending';[IO.File]::WriteAllText($phaseFile,'request');Wait-TrayAck 'wrong-issued'
     Wait-Tray {$s=Read-TrayStatus;$s.admission.pending -and $s.admission.reason -eq 'delegation_key_mismatch' -and $s.admission.join_request_b64 -ceq $requestText -and !$s.ike.live -and !$s.tunnel_ready -and [PhotonGuiSmokeNative]::Text($window,1007).Contains('本机公钥不匹配')} 'signed wrong-key rejection'
     Save-TrayPhase 'wrong-key';[IO.File]::WriteAllText($phaseFile,'wrong-seen');Wait-TrayAck 'correct-issued'
-    $adopted=Check-TrayBusiness 'adopted';$authority=Get-Content (Join-Path $FixtureDirectory 'autojoin-authority.json') -Raw|ConvertFrom-Json
-    if($adopted.admission.pending -or $adopted.admission.reason -ne 'adopted'){throw 'Ready tray did not retain its signed admission'}
+    Wait-Tray {try{
+        $s=Read-TrayStatus
+        $s.running -and !$s.admission.pending -and $s.admission.reason -eq 'adopted' -and !$s.tunnel_ready -and $s.readiness.stage -eq 'address_assignment' -and $s.ike.live -and $s.ike.child_live -and $s.babel.live -and [Net.IPAddress]::Parse([string]$s.babel.local).IsIPv6LinkLocal -and [Net.IPAddress]::Parse([string]$s.babel.neighbor).IsIPv6LinkLocal -and !$s.wintun.configured -and @($s.wintun.addresses|Where-Object {$null -ne $_}).Count -eq 0 -and @($s.wintun.split_routes|Where-Object {$null -ne $_}).Count -eq 0 -and @($s.babel.routes|Where-Object {$null -ne $_}).Count -eq 0 -and [PhotonGuiSmokeNative]::Text($window,1001).Contains('等待业务IP分配')
+    }catch{$false}} 'adopted identity waits for its first authorized business address'
+    $addressWaitingPID=$gui.Process.Id;$addressWaitingCreation=$gui.Creation
+    $authority=Get-Content (Join-Path $FixtureDirectory 'autojoin-authority.json') -Raw|ConvertFrom-Json
     if(!$authority.chain_verified -or $authority.request.public_key -cne $request.public_key -or $authority.root_public_key -cne $fixture.TrustedRootPublicKey -or @($authority.authority.Keys|Where-Object Key -ceq $request.public_key).Count -ne 1){throw 'Correct fixture delegation does not bind the generated identity/root'}
     Wait-Tray {[PhotonGuiSmokeNative]::Text($window,1008) -eq '' -and ![PhotonGuiSmokeNative]::IsWindowEnabled([PhotonGuiSmokeNative]::Control($window,1107))} 'adopted request cleared'
+    Assert-TrayUnassignedBusiness
+    Save-TrayPhase 'address-waiting';[IO.File]::WriteAllText($phaseFile,'address-waiting');Wait-TrayAck 'address-assigned'
+    $adopted=Check-TrayBusiness 'adopted'
+    if($gui.Process.Id -ne $addressWaitingPID -or $gui.Creation -ne $addressWaitingCreation -or (Read-TrayFileID) -cne $stateID){throw 'First address assignment restarted the GUI or replaced its identity database'}
+    if($adopted.admission.pending -or $adopted.admission.reason -ne 'adopted' -or $adopted.readiness.stage){throw 'Address assignment did not automatically resume the adopted runtime'}
+    $lifecycle.Add([pscustomobject]@{Phase='first-address-assigned';PID=$gui.Process.Id;Creation=$gui.Creation;StateFileID=$stateID;SameProcess=$true;NoRestartClick=$true;TunnelReady=$adopted.tunnel_ready;AddressWaitingStage='address_assignment'})
     Save-TrayPhase 'adopted';[IO.File]::WriteAllText($phaseFile,'adopted');Wait-TrayAck 'verified'
     $diagnostics=Open-TrayDiagnostics
     Check-TrayDiagnostics $diagnostics 'running' $true

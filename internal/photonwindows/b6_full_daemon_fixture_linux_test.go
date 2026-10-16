@@ -100,6 +100,12 @@ func TestPrepareWindowsFullDaemonGateway(t *testing.T) {
 		put(zone.RootZone, key, routing.RecordTypeIPAMPool, routing.IPAMPoolRecord{Version: 1, Prefix: prefix, DelegatedTo: zone.RootZone, Active: true})
 	}
 	for path, prefixes := range map[zone.ZonePath][]string{localZone: {local4 + "/32", local6 + "/128"}, gatewayZone: {gateway4 + "/32", gateway6 + "/128"}} {
+		if path == localZone && os.Getenv("PHOTON_WINDOWS_AUTOJOIN_SMOKE") == "1" {
+			// Admission alone must not supply a business address. The live
+			// fixture daemon assigns these hosts only after Windows proves
+			// that its adopted identity is waiting for address admission.
+			continue
+		}
 		for _, prefix := range prefixes {
 			key, _ := routing.NormalizeIPAMAssignmentKey(prefix)
 			put(zone.RootZone, key, routing.RecordTypeIPAMAssignment, routing.IPAMAssignmentRecord{Version: 1, Prefix: prefix, AssignedTo: path, Active: true})

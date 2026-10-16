@@ -762,11 +762,22 @@ func (w *desktopWindow) render(snapshot desktopSnapshot) {
 	} else if w.admission.Adopted && snapshot.Observation != nil && !snapshot.Observation.TunnelReady {
 		connection = "已入网，正在连接"
 	}
+	readiness := desktopReadinessPresentation(snapshot.Observation, available)
+	if readiness.Status != "" {
+		connection = readiness.Status
+	}
+	admissionLabel := w.admission.Label
+	if readiness.AddressSummary != "" {
+		admissionLabel += "\r\n" + readiness.AddressSummary
+	}
+	if readiness.LinkSummary != "" {
+		admissionLabel += "\r\n" + readiness.LinkSummary
+	}
 	w.setText(w.controls[guiStatusID], "连接："+connection)
 	w.setText(w.controls[guiRuntimeID], "运行状态："+state+" · 当前 Photon 窗口管理连接")
 	w.setText(w.controls[guiGatewayID], "活动网关："+gateway)
 	w.setText(w.controls[guiRoutesID], routes)
-	w.setText(w.controls[guiAdmissionID], w.admission.Label)
+	w.setText(w.controls[guiAdmissionID], admissionLabel)
 	w.setText(w.controls[guiJoinRequestID], w.admission.Request)
 	w.liveError = snapshot.Error
 	w.refreshMainNote()
@@ -867,6 +878,9 @@ func (w *desktopWindow) notifyData() guiNotifyIcon {
 		tip = "Photon · 已连接"
 	} else if w.admission.Adopted {
 		tip = w.admission.Tooltip
+		if readiness := desktopReadinessPresentation(w.snapshot.Observation, desktopLiveSnapshot(w.snapshot)); readiness.Tooltip != "" {
+			tip = readiness.Tooltip
+		}
 	} else if w.snapshot.RuntimeState == "stopped" {
 		tip = "Photon · 连接已停止"
 	}

@@ -24,6 +24,7 @@ type Observation struct {
 	ObservedAt      time.Time                 `json:"observed_at"`
 	Revision        uint64                    `json:"revision"`
 	Admission       gossip.AdmissionDiagnosis `json:"admission"`
+	Readiness       ReadinessObservation      `json:"readiness"`
 	TunnelReady     bool                      `json:"tunnel_ready"`
 	UDPAddress      string                    `json:"udp_address"`
 	Wintun          WintunObservation         `json:"wintun"`
@@ -49,6 +50,7 @@ type IKEObservation struct {
 }
 type BabelObservation struct {
 	Live     bool               `json:"live"`
+	Local    netip.Addr         `json:"local,omitempty"`
 	Neighbor netip.Addr         `json:"neighbor"`
 	Routes   []RouteObservation `json:"routes"`
 }
@@ -152,6 +154,7 @@ func observeRuntime(config *Config, view corestate.View, plan GatewayPlan, now t
 	}
 	if p := leaf.pipeline; p != nil {
 		if _, valid := p.current(config, view, plan, now); valid {
+			out.Babel.Local = p.local
 			out.Babel.Live = p.leaf.NeighborLive(now)
 			if out.Babel.Live {
 				out.Babel.Neighbor = p.peer
@@ -232,6 +235,9 @@ func observeRuntime(config *Config, view corestate.View, plan GatewayPlan, now t
 			}
 			out.Peers = append(out.Peers, r)
 		}
+	}
+	if !out.TunnelReady && !out.Admission.Pending {
+		out.Readiness = observeLeafReadiness(config, view, now)
 	}
 	return out
 }

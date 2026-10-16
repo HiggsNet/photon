@@ -26,6 +26,10 @@ GUI 不再接受 `--name`，每个实例使用独立的配置和数据库路径�
 - “启动连接”“停止连接”“重新连接”管理本次托盘进程拥有的 Daemon。
   打开 GUI 不自动连接；运行中的配置使用启动时的快照，保存设置不会自动重启。
 - 首次启动显示入网进度与可复制的入网请求，授权同步后自动继续连接。已入网与业务已连接分别展示。
+- 已入网但尚无可用业务地址时，显示“等待业务IP分配”；收到有效分配及本机路由公告后自动继续，
+  无需重新连接。地址须为当前分流范围内、本节点独占且有效的 `/32` 或 `/128`，子网及共享分配不作为接口地址。
+  认证隧道和有效 overlay 的 `fe80::` 链路地址用于用户态 Babel 控制面，独立于业务 IPAM；
+  链路 IPv6 与实际 Wintun 业务地址分别显示，Babel 邻居在线不代表业务就绪。
 - “日志与诊断”提供日志、Gossip / Peer 和诊断详情三页，支持自动刷新、暂停、刷新一次及复制当前内容。
   日志只读当前或最后一次连接的 `state.path + ".log"`，最多显示末尾 256 KiB / 1000 行；
   来源、采样时间及截断提示位于正文上方。保存数据库路径不会切换正在运行的连接及其日志来源。
@@ -110,6 +114,42 @@ Windows 已有 `status`、`peers`、`routes`、`diagnostics` 只读命令，例�
 竞争实例保护、换目录保持身份和退出释放资源；本轮未操作 PVE。
 Windows vet 曾扩大到包含 Linux-only BIRD 测试的 host 包，因 `syscall.Wait4` 不可用而失败，
 原件 `windows-vet-linux-only-host.log` 保留；该包普通/race 测试在 Linux 通过，Windows vet 通过范围如上。
+
+## 2026-10-16 业务 IP 等待与链路 IPv6
+
+主窗口现在分别显示业务 IP、用户态隧道链路 IPv6，并为已入网但未分配有效 host 地址的节点显示
+“等待业务IP分配”。公开 `readiness.stage` 只解释两个已确认的地址门禁：`address_assignment`
+和 `address_announcement`；原始原因有界保留，未配置网卡本身不用于推断缺 IPAM。
+`babel.local` 只采样当前经过授权校验的实际 pipeline，`neighbor` 仍须当前邻居在线，
+不显示由 GUI 自行推导的地址。`wintun.addresses` 继续只描述实际业务接口地址。
+
+有效 SA、双方签名 overlay/path/epoch 和 Babel 身份到齐后，即使业务 host 还未分配，也可在
+原 pipeline owner 中交换严格绑定两端链路地址的 Babel 报文。此时没有 OS packet device、
+业务源地址或分流路由，业务包双向拒绝，`tunnel_ready` 保持 false。
+首次分配或后续撤销沿用同一 reconcile：分配及公告生效后自动创建业务附件，撤销后释放附件并保留
+有效控制面。代际变化、SA 过期或授权失效仍销毁控制面；没有增加 IPAM 写入口、额外 worker 或接口地址推断。
+
+全仓 `make check`、两包 race、Windows 两包 vet 通过；已登录桌面的 263 项 Windows 原生测试通过，
+10 项 opt-in/helper 跳过，两个测试进程及一次性任务实际退出码均为 0。新增回归覆盖
+有界原因、shared/subnet/范围外/无效分配、公告缺失与手工撤销、纯控制面邻居和真实 ESP、
+业务双向拒绝及撤销前 crypto completion 的再次校验、同 SA 分配升级、过期/授权失效，
+以及三行地址区最小窗口几何和离线清除旧地址。
+
+公开证据位于 `build/validation/windows-address-wait-20261016/`。最初恢复测试的 root snapshot
+夹具误用了小型 datagram 预算，失败原件保留；按生产 object-pull 的 8 MiB snapshot 预算修正后通过，
+生产配额没有改变。相关记录为 `focused-address-runtime-object-pull.log`、`make-check.log`、
+`race.log`、`native-interactive.log` 和 `ast.log`。
+
+真实桌面完整组实际退出码为 0，包含 `PORTABLE_TRAY_REAL_RUNTIME_PASS`。
+`accepted-tray/tray-address-waiting.json` 与截图证明：入网已接纳、IKE/CHILD 有效、两端 `fe80::`
+和 Babel 邻居在线，业务地址/路由为空、没有 Wintun、`tunnel_ready=false`。
+隔离网关通过其现有生产 control socket 分别签发测试 `/32`、`/128`，日志明确 `via daemon`；
+Gossip 同步后 GUI PID 9924、数据库 file ID、IKE generation/到期时间以及两端链路地址均未变化，
+业务接口和双栈路由自动出现，真实双栈 UDP 往返通过。独立对比见 `address-transition.json`。
+缺地址阶段的 UDP 负探针实际在源地址 bind 处失败，`Sent=false`；业务包的加密后拒绝另由原生回归验证，
+不将未发出的探针描述成经过 ESP 的负向验收。
+原有启停、MTU/配置、日志诊断、竞争实例和换目录恢复全部通过，剪贴板恢复。
+`cleanup.log`/`docker-cleanup.txt` 确认仅本次测试资源已清理，原桌面保留；本轮未操作 PVE 或用户实际 IPAM。
 
 ## 可重复验收
 

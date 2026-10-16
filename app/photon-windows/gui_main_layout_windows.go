@@ -68,6 +68,9 @@ func (w *desktopWindow) refreshMainNote() {
 	if w.liveError != "" && !strings.Contains(text, w.liveError) {
 		text += "\r\n\r\n实时状态详情：" + w.liveError
 	}
+	if readiness := desktopReadinessPresentation(w.snapshot.Observation, desktopLiveSnapshot(w.snapshot)); readiness.Detail != "" {
+		text += "\r\n\r\n连接详情：" + readiness.Detail
+	}
 	w.setText(w.controls[guiNoteID], text)
 }
 
@@ -83,7 +86,7 @@ func (w *desktopWindow) layout() {
 		w.guiMove(w.controls[id], 24+column*140, 96, 128, 34)
 	}
 	w.guiMove(w.controls[guiGatewayID], 24, 142, contentWidth, 24)
-	admissionHeight, routesTop := 26, 210
+	admissionHeight, routesTop := 66, 254
 	if w.admission.Pending {
 		admissionHeight, routesTop = 44, 260
 	}

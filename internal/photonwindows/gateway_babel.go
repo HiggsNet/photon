@@ -22,8 +22,9 @@ type packetDevice interface{ Write([]byte) error }
 // caller supplies an immediately current view at each serial event, including
 // crypto completion, and pins actual local addresses and both link-local ends.
 // Rekey retains this owner; rebind, gateway replacement or revoked attachment
-// permanently invalidates it. The daemon supplies only current explicit host
-// addresses; remote routes require publication of their real full Babel IDs.
+// permanently invalidates it. An empty attachment has no device or business
+// addresses and exchanges only Babel control. Remote routes require publication
+// of their real full Babel IDs.
 type gatewayBabelPipeline struct {
 	tunnel      *gatewayTunnel
 	device      packetDevice
@@ -37,7 +38,7 @@ type gatewayBabelPipeline struct {
 }
 
 func newGatewayBabelPipeline(tunnel *gatewayTunnel, device packetDevice, local, peer netip.Addr, id [8]byte, addresses []netip.Addr) (*gatewayBabelPipeline, error) {
-	if tunnel == nil || tunnel.socket == nil || device == nil || len(addresses) == 0 || len(addresses) > babel.MaxOrigins {
+	if tunnel == nil || tunnel.socket == nil || (device == nil) != (len(addresses) == 0) || len(addresses) > babel.MaxOrigins {
 		return nil, errors.New("Babel pipeline: attachment or local addresses absent")
 	}
 	for _, a := range addresses {
@@ -133,6 +134,9 @@ func (p *gatewayBabelPipeline) authorize(facts *packetAuthorization, packet []by
 			}
 		}
 		return true
+	}
+	if p.device == nil || len(p.addresses) == 0 {
+		return false
 	}
 	src, dst, ok := businessEndpoints(packet)
 	if !ok {
@@ -265,6 +269,10 @@ func (p *gatewayBabelPipeline) acceptPrepared(facts *packetAuthorization, comple
 		p.send(facts, append(updates, messages...))
 		completion.timing.Finish(fixturePacketTimingDelivered)
 		return true, nil
+	}
+	if p.device == nil {
+		completion.timing.Finish(fixturePacketTimingRejected)
+		return false, nil
 	}
 	completion.timing.MarkDeliveryBegin()
 	err := p.device.Write(packet)

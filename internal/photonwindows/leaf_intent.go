@@ -17,6 +17,12 @@ import (
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
+var (
+	errLeafRouteAuthorityUnavailable   = errors.New("leaf: verified route authority unavailable")
+	errLeafHostAssignmentUnavailable   = errors.New("leaf: no authorized unicast host assignment in configured split routes")
+	errLeafHostAnnouncementUnavailable = errors.New("leaf: authorized host assignment has no active route announcement")
+)
+
 // leafAssignedHosts never picks an address from a network or shared/anycast
 // assignment. A Windows leaf owns explicit unicast /32 and /128 assignments.
 func leafAssignedHosts(config *Config, set *routing.AuthorizedRouteSet) []netip.Prefix {
@@ -60,7 +66,7 @@ func (source *State) EnsureLocalLeafRoutes(ctx context.Context, config *Config, 
 	}
 	set := currentAuthorizedRouteSet(config, view, now)
 	if set == nil {
-		return errors.New("leaf: verified route authority unavailable")
+		return errLeafRouteAuthorityUnavailable
 	}
 	desired := leafAssignedHosts(config, set)
 	local := view.State.Network.Zones[config.ManagedZone]
@@ -129,6 +135,22 @@ func leafDeviceIntentFromSet(config *Config, set *routing.AuthorizedRouteSet) (a
 		}
 	}
 	return addresses, splitRoutes
+}
+
+// requiredLeafDeviceIntentFromSet explains the same address admission used to
+// open the device. A missing verified route set is never an IPAM diagnosis.
+func requiredLeafDeviceIntentFromSet(config *Config, set *routing.AuthorizedRouteSet) (addresses, splitRoutes []netip.Prefix, err error) {
+	if set == nil {
+		return nil, nil, errLeafRouteAuthorityUnavailable
+	}
+	if len(leafAssignedHosts(config, set)) == 0 {
+		return nil, nil, errLeafHostAssignmentUnavailable
+	}
+	addresses, splitRoutes = leafDeviceIntentFromSet(config, set)
+	if len(addresses) == 0 {
+		return nil, nil, errLeafHostAnnouncementUnavailable
+	}
+	return addresses, splitRoutes, nil
 }
 
 // leafLinkLocalAddresses uses the same link identity, path and address epoch as

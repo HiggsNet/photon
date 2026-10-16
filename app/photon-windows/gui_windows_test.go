@@ -152,9 +152,30 @@ func TestDesktopNativeWindow(t *testing.T) {
 	if text(guiJoinRequestID) != "" || !strings.Contains(text(guiAdmissionID), "已入网") || !strings.Contains(text(guiStatusID), "已入网，正在连接") {
 		t.Fatal("adopted state retained pending request or claimed a ready tunnel")
 	}
-	observation.TunnelReady = true
+	observation.Readiness = photonwindows.ReadinessObservation{Stage: photonwindows.ReadinessStageAddressAssignment, Reason: "current configuration has no usable signed host allocation"}
+	observation.Babel.Local = netip.MustParseAddr("fe80::1")
+	observation.Babel.Neighbor = netip.MustParseAddr("fe80::2")
 	w.render(desktopSnapshot{RuntimeState: "running", Observation: observation})
-	if !strings.Contains(text(guiStatusID), "已连接") || !strings.Contains(text(guiGatewayID), "gateway.example.") || !strings.Contains(text(guiRoutesID), "metric 100") {
+	if text(guiStatusID) != "连接：已入网，等待业务IP分配" || !strings.Contains(text(guiNoteID), observation.Readiness.Reason) || strings.Contains(text(guiNoteID), "198.18.253.2/32") || !strings.Contains(text(guiAdmissionID), "隧道链路 IPv6：fe80::1") || !strings.Contains(text(guiNoteID), "实时对端链路 IPv6：fe80::2") || text(guiJoinRequestID) != "" {
+		t.Fatal("canonical missing business IP diagnosis was not displayed or retained an old request/address")
+	}
+	w.guiMove(w.hwnd, 0, 0, 700, 620)
+	var admissionRect, routeLabelRect guiRect
+	guiUser32.NewProc("GetWindowRect").Call(w.controls[guiAdmissionID], uintptr(unsafe.Pointer(&admissionRect)))
+	guiUser32.NewProc("GetWindowRect").Call(w.labels[0], uintptr(unsafe.Pointer(&routeLabelRect)))
+	if strings.Count(text(guiAdmissionID), "\r\n") != 2 || admissionRect.Bottom-admissionRect.Top < int32(guiAtDPI(66, w.guiDPI(w.hwnd))) || admissionRect.Bottom > routeLabelRect.Top {
+		t.Fatal("minimum window clipped the three address/admission lines or overlapped the route section")
+	}
+	observation.Readiness.Stage = photonwindows.ReadinessStageAddressAnnouncement
+	w.render(desktopSnapshot{RuntimeState: "running", Observation: observation})
+	if text(guiStatusID) != "连接：已入网，等待地址同步" || !strings.Contains(text(guiNoteID), "已有当前配置可用") {
+		t.Fatal("authorized allocation and its address announcement were conflated")
+	}
+	observation.Readiness = photonwindows.ReadinessObservation{}
+	observation.TunnelReady = true
+	observation.Wintun = photonwindows.WintunObservation{Configured: true, Addresses: []netip.Prefix{netip.MustParsePrefix("198.18.253.2/32"), netip.MustParsePrefix("fd00:7068:b4::2/128")}}
+	w.render(desktopSnapshot{RuntimeState: "running", Observation: observation})
+	if !strings.Contains(text(guiStatusID), "已连接") || !strings.Contains(text(guiGatewayID), "gateway.example.") || !strings.Contains(text(guiRoutesID), "metric 100") || !strings.Contains(text(guiAdmissionID), "接口业务 IP：198.18.253.2/32") || !strings.Contains(text(guiNoteID), "fd00:7068:b4::2/128") {
 		t.Fatal("live status/route did not render")
 	}
 	// Multiline EDIT intentionally does not send EN_CHANGE for WM_SETTEXT.
@@ -169,6 +190,9 @@ func TestDesktopNativeWindow(t *testing.T) {
 	w.render(desktopSnapshot{RuntimeState: "stopped", Error: "IPC disconnected"})
 	if strings.Contains(text(guiGatewayID), "gateway.example.") || strings.Contains(text(guiRoutesID), "198.18.253.1") || strings.Contains(text(guiStatusID), "已连接") {
 		t.Fatal("offline result retained stale live status")
+	}
+	if strings.Contains(text(guiAdmissionID), "198.18.253.2") || strings.Contains(text(guiNoteID), "198.18.253.2") || strings.Contains(text(guiAdmissionID), "fe80::1") || strings.Contains(text(guiNoteID), "fe80::2") {
+		t.Fatal("offline result retained actual business IPs")
 	}
 	if text(guiManagedFieldID) != "new.example." {
 		t.Fatal("status polling replaced unsaved form")

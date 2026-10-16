@@ -86,11 +86,11 @@ func desiredLeafAttachmentWithVerifier(config *Config, view corestate.View, plan
 	if currentBabelOriginsWithVerifier(config, view, now, verifier)[id] != config.ManagedZone {
 		return want, errors.New("leaf: local Babel identity unavailable")
 	}
-	want.addresses, want.routes = leafDeviceIntentFromSet(config, currentAuthorizedRouteSetWithVerifier(config, view, now, verifier))
-	if len(want.addresses) == 0 {
-		return want, errors.New("leaf: no authorized unicast host assignment and announcement")
-	}
 	want.local, want.peer, err = leafLinkLocalAddressesWithVerifier(config, view, current, now, verifier)
+	if err != nil {
+		return want, err
+	}
+	want.addresses, want.routes, err = requiredLeafDeviceIntentFromSet(config, currentAuthorizedRouteSetWithVerifier(config, view, now, verifier))
 	return want, err
 }
 
@@ -151,7 +151,24 @@ func (r *leafRuntime) reconcile(ctx context.Context, config *Config, view corest
 	}
 	want, err := desiredLeafAttachmentWithVerifier(config, view, plan, tunnel, id, now, verifier)
 	if err != nil {
-		return errors.Join(err, r.stop())
+		if !errors.Is(err, errLeafHostAssignmentUnavailable) && !errors.Is(err, errLeafHostAnnouncementUnavailable) {
+			return errors.Join(err, r.stop())
+		}
+		// The authenticated, signed link is independent of business IPAM.
+		// Keep Babel in userspace while waiting; there is no OS packet device
+		// or local business source to authorize in this attachment.
+		if r.device == nil && r.pipeline != nil && r.pipeline.leaf != nil && r.attachment.equal(want) {
+			return err
+		}
+		if cleanupErr := r.stop(); cleanupErr != nil {
+			return errors.Join(err, cleanupErr)
+		}
+		pipeline, pipelineErr := newGatewayBabelPipeline(tunnel, nil, want.local, want.peer, id, nil)
+		if pipelineErr != nil {
+			return errors.Join(err, pipelineErr)
+		}
+		r.pipeline, r.attachment = pipeline, want
+		return err
 	}
 	if !r.attachment.equal(want) {
 		r.nameRecoveryDeadline = time.Time{}
