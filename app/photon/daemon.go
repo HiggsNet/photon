@@ -1055,9 +1055,15 @@ func (d *Daemon) flushRevocationCleanup() {
 			return
 		}
 	}
-	for peerID := range d.peerObservabilitySnapshots() {
-		if revokedZones[zone.ZonePath(peerID)] {
-			d.gossipDriver.Observability.Delete(peerID)
+	if d.gossipDriver != nil {
+		observations := d.gossipDriver.Observability
+		// Preserve snapshot's expiry cleanup without copying every peer's
+		// diagnostics just to delete entries in the known revocation set.
+		observations.PurgeExpired(d.now())
+		for peerID, revoked := range revokedZones {
+			if revoked {
+				observations.Delete(peerID.String())
+			}
 		}
 	}
 }

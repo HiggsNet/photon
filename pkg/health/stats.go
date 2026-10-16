@@ -117,14 +117,15 @@ func (w *RollingWindow) Snapshot() WindowSnapshot {
 		snap.LossRatio = float64(snap.Lost) / float64(snap.Sent)
 	}
 	if len(rtts) > 0 {
-		sortedRTTs := slices.Clone(rtts)
-		slices.Sort(sortedRTTs)
-		snap.MinRTT = sortedRTTs[0]
-		snap.MaxRTT = sortedRTTs[len(sortedRTTs)-1]
-		snap.P50RTT = percentile(sortedRTTs, 50)
-		snap.P95RTT = percentile(sortedRTTs, 95)
-		snap.P99RTT = percentile(sortedRTTs, 99)
+		// Jitter needs chronological order; the detached scratch slice can
+		// then be sorted in place for percentiles without another copy.
 		snap.Jitter = computeJitter(rtts)
+		slices.Sort(rtts)
+		snap.MinRTT = rtts[0]
+		snap.MaxRTT = rtts[len(rtts)-1]
+		snap.P50RTT = percentile(rtts, 50)
+		snap.P95RTT = percentile(rtts, 95)
+		snap.P99RTT = percentile(rtts, 99)
 	}
 	return snap
 }
