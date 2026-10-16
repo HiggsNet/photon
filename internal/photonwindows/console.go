@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"reflect"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -326,8 +327,13 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			logger.Warn("leaf_cleanup_failed", "error", err)
 		}
 		observeReady()
+		if tunnel.diagnostic.failure == nil || tunnel.diagnostic.failure.Historical || tunnel.diagnostic.failure.Message != boundedObservationText(reason) {
+			tunnel.observeEvent("attempt_failed", time.Now(), errors.New(reason))
+		}
 		tunnel.stop()
+		tunnel.observeProgress()
 		nextTunnel = time.Now().Add(backoff)
+		tunnel.diagnostic.retryAt = nextTunnel
 		backoff = min(backoff*2, maxBackoff)
 		logger.Info("tunnel_stopped", "reason", reason, "retry_at", nextTunnel, "tunnel_ready", false)
 	}
@@ -376,10 +382,19 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		if plan.Selected == nil {
 			return
 		}
+		// Record the chosen target before local preparation can fail. This does
+		// not claim a sent packet or an authenticated peer (generation stays 0).
+		tunnel.observeProgress()
+		tunnel.diagnostic.gateway = boundedObservationText(string(plan.Selected.Zone))
+		tunnel.diagnostic.remote = boundedObservationText(net.JoinHostPort(plan.Selected.Contact.Address, strconv.Itoa(int(plan.Selected.Contact.IKEPort))))
+		tunnel.diagnostic.generation = 0
 		before := state.Store().VerifiedRevision()
 		local, err := state.EnsureLocalTransport(ctx, config, time.Now(), plan, packet.LocalAddr().AddrPort())
 		if err != nil {
 			nextTunnel = time.Now().Add(backoff)
+			tunnel.observeEvent("local_identity_unavailable", time.Now(), err)
+			tunnel.observeProgress() // preparation ended; no active network attempt
+			tunnel.diagnostic.retryAt = nextTunnel
 			backoff = min(backoff*2, maxBackoff)
 			logger.Warn("tunnel_local_identity_unavailable", "error", err)
 			return

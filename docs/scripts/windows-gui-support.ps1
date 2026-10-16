@@ -112,6 +112,13 @@ public static class PhotonGuiSmokeNative {
         Send(combo, 0x014e, new UIntPtr((uint)index), IntPtr.Zero);
         Send(window, 0x0111, new UIntPtr(2016u | (1u<<16)), combo);
     }
+    public static void SelectComboIndex(IntPtr window, int id, int index) {
+        var combo = Control(window, id);
+        long count = (long)Send(combo, 0x0146, UIntPtr.Zero, IntPtr.Zero).ToUInt64();
+        if (index < 0 || index >= count) throw new InvalidOperationException("Combo index outside owned control");
+        Send(combo, 0x014e, new UIntPtr((uint)index), IntPtr.Zero);
+        Send(window, 0x0111, new UIntPtr((uint)id | (1u<<16)), combo);
+    }
     private static IntPtr EnterPhysicalDpiContext() {
         var previous = SetThreadDpiAwarenessContext(new IntPtr(-4));
         if (previous == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot enter physical DPI context");
@@ -157,7 +164,7 @@ public static class PhotonGuiSmokeNative {
             foreach (int id in new int[] { 1001,1002,1003,1004,1006,1007,1008,1009,1102,1103,1104,1105,1106,1107,1110,1111,
                 2001,2002,2003,2004,2005,2006,2007,2011,2012,2013,2014,2015,2016,2017,2018,2019,2021,2022,
                 2101,2102,2103,2104,2111,2112,2113,2114,2121,2122,2123,2124,2131,2132,2133,2134,2201,2202,
-                2301,2302,2303,2310,2311,2312,2313,2314 }) {
+                2301,2302,2303,2304,2305,2310,2311,2312,2313,2314,2315,2316,2317,2318 }) {
                 var child = GetDlgItem(window,id);
                 if (child == IntPtr.Zero) continue;
                 Rect bounds;

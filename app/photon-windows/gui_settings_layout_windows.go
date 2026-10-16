@@ -48,7 +48,7 @@ func (w *desktopWindow) styleSettingsControls() {
 		guiBootstrapPeerID:    "例如 gateway.example.",
 		guiBootstrapAddressID: "host:port 或 [IPv6]:port",
 		guiStateFieldID:       `例如 C:\Photon\photon.db`,
-		guiOverlayFieldID:     "main", guiListenFieldID: "0.0.0.0:33434",
+		guiOverlayFieldID:     "ipsec-main（须与网关一致）", guiListenFieldID: "0.0.0.0:33434",
 		guiAdapterFieldID: "Photon Windows", guiMTUFieldID: "1400",
 		guiInitialFieldID: "例如 1s", guiMaxFieldID: "例如 1m",
 	} {

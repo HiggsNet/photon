@@ -149,10 +149,12 @@ func TestDesktopNativeWindow(t *testing.T) {
 	// A leftover wire field must not preserve an old identity after adoption.
 	observation.TunnelReady = false
 	w.render(desktopSnapshot{RuntimeState: "running", Observation: observation})
-	if text(guiJoinRequestID) != "" || !strings.Contains(text(guiAdmissionID), "已入网") || !strings.Contains(text(guiStatusID), "已入网，正在连接") {
+	if text(guiJoinRequestID) != "" || !strings.Contains(text(guiAdmissionID), "已入网") || !strings.Contains(text(guiStatusID), "等待数据隧道") {
 		t.Fatal("adopted state retained pending request or claimed a ready tunnel")
 	}
 	observation.Readiness = photonwindows.ReadinessObservation{Stage: photonwindows.ReadinessStageAddressAssignment, Reason: "current configuration has no usable signed host allocation"}
+	observation.IKE.ChildLive = true
+	observation.Babel.Live = true
 	observation.Babel.Local = netip.MustParseAddr("fe80::1")
 	observation.Babel.Neighbor = netip.MustParseAddr("fe80::2")
 	w.render(desktopSnapshot{RuntimeState: "running", Observation: observation})

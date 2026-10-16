@@ -68,5 +68,41 @@ func desktopReadinessPresentation(observation *photonwindows.Observation, availa
 	if observation.Readiness.Reason != "" {
 		out.Detail += "\r\n当前就绪诊断：" + observation.Readiness.Reason
 	}
+	// Address readiness is an independent fact. It must never hide an earlier
+	// failure to select/authenticate the gateway or establish the control link.
+	switch {
+	case !observation.IKE.Live:
+		out.Status = "已入网，网关隧道未建立"
+		out.Tooltip = "Photon · 等待网关隧道"
+		out.Detail = "网关 IKE 隧道尚未建立；等待业务 IP 不表示隧道已经连通。\r\n" + out.Detail
+	case !observation.IKE.ChildLive:
+		out.Status = "已入网，等待数据隧道"
+		out.Tooltip = "Photon · 等待数据隧道"
+		out.Detail = "网关 IKE 已认证，数据隧道尚未就绪。\r\n" + out.Detail
+	case !observation.Babel.Local.IsValid():
+		out.Status = "已入网，等待链路本地控制面"
+		out.Tooltip = "Photon · 等待链路本地控制面"
+		out.Detail = "网关数据隧道已建立，链路本地控制面尚未就绪。\r\n" + out.Detail
+	case !observation.Babel.Live:
+		out.Status = "已入网，等待Babel邻居"
+		out.Tooltip = "Photon · 等待 Babel 邻居"
+		out.Detail = "链路本地地址已就绪，尚未确认实时 Babel 邻居。\r\n" + out.Detail
+	}
+	if gateway := observation.Gateway; gateway.Rejected != "" {
+		out.Detail += "\r\n最近网关选择诊断：" + gateway.Rejected
+	}
+	if !observation.IKE.Live {
+		shown := 0
+		for _, candidate := range observation.Gateway.Candidates {
+			if candidate.Rejected == "" {
+				continue
+			}
+			out.Detail += "\r\n最近候选诊断 · " + candidate.Zone + "：" + candidate.Rejected
+			shown++
+			if shown == 3 {
+				break
+			}
+		}
+	}
 	return out
 }

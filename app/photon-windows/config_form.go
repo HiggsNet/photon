@@ -36,7 +36,7 @@ func defaultDesktopConfigForm(configPath string) desktopConfigForm {
 		statePath = filepath.Join(filepath.Dir(configPath), base+".state.db")
 	}
 	return desktopConfigForm{
-		StatePath: statePath, OverlayID: "main", GossipListen: "0.0.0.0:33434",
+		StatePath: statePath, OverlayID: "ipsec-main", GossipListen: "0.0.0.0:33434",
 		AdapterName: "Photon Windows", MTU: "1400", LogLevel: "info", InitialBackoff: "1s", MaxBackoff: "1m",
 	}
 }

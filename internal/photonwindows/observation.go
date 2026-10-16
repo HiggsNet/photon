@@ -2,6 +2,7 @@ package photonwindows
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/netip"
@@ -25,6 +26,7 @@ type Observation struct {
 	Revision        uint64                    `json:"revision"`
 	Admission       gossip.AdmissionDiagnosis `json:"admission"`
 	Readiness       ReadinessObservation      `json:"readiness"`
+	Gateway         GatewayObservation        `json:"gateway"`
 	TunnelReady     bool                      `json:"tunnel_ready"`
 	UDPAddress      string                    `json:"udp_address"`
 	Wintun          WintunObservation         `json:"wintun"`
@@ -41,12 +43,26 @@ type WintunObservation struct {
 	SplitRoutes []netip.Prefix `json:"split_routes"`
 }
 type IKEObservation struct {
-	Live           bool      `json:"live"`
-	Gateway        string    `json:"gateway"`
-	Generation     uint64    `json:"generation"`
-	ExpiresAt      time.Time `json:"expires_at"`
-	ChildLive      bool      `json:"child_live"`
-	ChildExpiresAt time.Time `json:"child_expires_at"`
+	AttemptActive         bool   `json:"attempt_active"`
+	AttemptGateway        string `json:"attempt_gateway"`
+	AttemptRemoteEndpoint string `json:"attempt_remote_endpoint"`
+	AttemptGeneration     uint64 `json:"attempt_generation"`
+	// SendAttempts counts completed whole exchange sends, including the first,
+	// not individual fragments/datagrams. The deadline is zero without pending IKE.
+	SendAttempts     int                    `json:"send_attempts"`
+	NextRetransmitAt time.Time              `json:"next_retransmit_at"`
+	RetryAt          time.Time              `json:"retry_at"`
+	LastEvent        string                 `json:"last_event"`
+	LastEventAt      time.Time              `json:"last_event_at"`
+	LastFailure      *IKEFailureObservation `json:"last_failure,omitempty"`
+	LastRejection    *IKEFailureObservation `json:"last_rejection,omitempty"`
+	Phase            string                 `json:"phase"`
+	Live             bool                   `json:"live"`
+	Gateway          string                 `json:"gateway"`
+	Generation       uint64                 `json:"generation"`
+	ExpiresAt        time.Time              `json:"expires_at"`
+	ChildLive        bool                   `json:"child_live"`
+	ChildExpiresAt   time.Time              `json:"child_expires_at"`
 }
 type BabelObservation struct {
 	Live     bool               `json:"live"`
@@ -61,12 +77,21 @@ type RouteObservation struct {
 	Metric       uint16       `json:"metric"`
 }
 type PeerObservation struct {
-	Peer          string    `json:"peer"`
-	PullState     string    `json:"pull_state"`
-	UpdatedAt     time.Time `json:"updated_at"`
-	PullAttempts  int64     `json:"pull_attempts"`
-	PullSuccesses int64     `json:"pull_successes"`
-	PullFailures  int64     `json:"pull_failures"`
+	Peer                string                 `json:"peer"`
+	PullState           string                 `json:"pull_state"`
+	UpdatedAt           time.Time              `json:"updated_at"`
+	LastEvent           string                 `json:"last_event,omitempty"`
+	SessionFailure      *corestate.PeerFailure `json:"session_failure,omitempty"`
+	LastSyncUnix        int64                  `json:"last_sync_unix,omitempty"`
+	BackoffUntilUnix    int64                  `json:"backoff_until_unix,omitempty"`
+	PullAttempts        int64                  `json:"pull_attempts"`
+	PullSuccesses       int64                  `json:"pull_successes"`
+	PullFailures        int64                  `json:"pull_failures"`
+	LastPullUnix        int64                  `json:"last_pull_unix,omitempty"`
+	LastPullZone        string                 `json:"last_pull_zone,omitempty"`
+	LastPullError       string                 `json:"last_pull_error,omitempty"`
+	LastPullUnreachable bool                   `json:"last_pull_unreachable,omitempty"`
+	ChunkFallbacks      int64                  `json:"chunk_fallbacks,omitempty"`
 }
 
 // Started closes once the system control plane has initialized successfully.
@@ -144,9 +169,12 @@ func observeRuntime(config *Config, view corestate.View, plan GatewayPlan, now t
 		}
 	}
 	current := revalidateActiveGateway(config, view, plan, now)
+	out.Gateway = observeGatewayPlan(plan, current)
+	out.IKE = tunnel.observeIKE()
 	binding, err := localTransportAuthorization(config, view, now)
 	if err == nil && binding == tunnel.localAuthorization && tunnel.phase == 3 && tunnel.failed == nil && tunnel.session != nil && now.Before(tunnel.ikeExpiresAt) && tunnel.current(current) {
-		out.IKE = IKEObservation{Live: true, Gateway: string(tunnel.plan.Selected.Zone), Generation: tunnel.generation, ExpiresAt: tunnel.ikeExpiresAt}
+		out.IKE.Live, out.IKE.Gateway = true, string(tunnel.plan.Selected.Zone)
+		out.IKE.Generation, out.IKE.ExpiresAt = tunnel.generation, tunnel.ikeExpiresAt
 		if tunnel.data != nil && now.Before(tunnel.expiresAt) && tunnel.data.current(tunnel.generation, tunnel.data.active, current) {
 			out.IKE.ChildLive = true
 			out.IKE.ChildExpiresAt = tunnel.expiresAt
@@ -222,9 +250,19 @@ func observeRuntime(config *Config, view corestate.View, plan GatewayPlan, now t
 			ids = ids[:256]
 			out.PeersTruncated = true
 		}
+		// Rich peer errors remain a bounded sample inside the existing 1 MiB
+		// control frame, including worst-case JSON string escaping.
+		peerBytes := 2
 		for _, id := range ids {
 			p := peers[id]
-			r := PeerObservation{Peer: boundedObservationText(id), PullState: boundedObservationText(p.ActivePullState)}
+			r := PeerObservation{Peer: boundedObservationText(id), PullState: boundedObservationText(p.ActivePullState), LastEvent: boundedObservationText(p.ActivePullLastEvent)}
+			if view.Gossip != nil {
+				checkpoint := view.Gossip.Peers[id]
+				r.LastSyncUnix, r.BackoffUntilUnix = checkpoint.LastSyncUnix, checkpoint.BackoffUntilUnix
+				if failure := checkpoint.LastFailure; failure != nil {
+					r.SessionFailure = &corestate.PeerFailure{Code: corestate.PeerFailureCode(boundedObservationText(string(failure.Code))), Message: boundedObservationText(failure.Message), AtUnix: failure.AtUnix}
+				}
+			}
 			if p.ActivePullUpdatedUnix != 0 {
 				r.UpdatedAt = time.Unix(p.ActivePullUpdatedUnix, 0)
 			}
@@ -232,7 +270,22 @@ func observeRuntime(config *Config, view corestate.View, plan GatewayPlan, now t
 				r.PullAttempts = p.ObjectPullStats.Attempts
 				r.PullSuccesses = p.ObjectPullStats.Successes
 				r.PullFailures = p.ObjectPullStats.Failures
+				r.LastPullUnix = p.ObjectPullStats.LastUnix
+				r.LastPullZone = boundedObservationText(p.ObjectPullStats.LastZone)
+				r.LastPullUnreachable = p.ObjectPullStats.LastUnreachable
+				if p.ObjectPullStats.LastFailure != nil {
+					r.LastPullError = boundedObservationText(p.ObjectPullStats.LastFailure.Error())
+				}
 			}
+			if p.DatagramStats != nil {
+				r.ChunkFallbacks = p.DatagramStats.ChunkFallbacks
+			}
+			encoded, err := json.Marshal(r)
+			if err != nil || peerBytes+len(encoded)+1 > 256<<10 {
+				out.PeersTruncated = true
+				break
+			}
+			peerBytes += len(encoded) + 1
 			out.Peers = append(out.Peers, r)
 		}
 	}

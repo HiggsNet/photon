@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -11,16 +12,21 @@ import (
 )
 
 const (
-	guiDiagnosticsLogID      = 2301
-	guiDiagnosticsPeersID    = 2302
-	guiDiagnosticsDetailsID  = 2303
-	guiDiagnosticsTextID     = 2310
-	guiDiagnosticsRefreshID  = 2311
-	guiDiagnosticsPauseID    = 2312
-	guiDiagnosticsCopyID     = 2313
-	guiDiagnosticsMetadataID = 2314
-	guiDiagnosticsTitleID    = 2315
-	guiDiagnosticsTextLimit  = 1 << 20 // UTF-16 code units, including copied text.
+	guiDiagnosticsLogID       = 2301
+	guiDiagnosticsPeersID     = 2302
+	guiDiagnosticsDetailsID   = 2303
+	guiDiagnosticsOverviewID  = 2304
+	guiDiagnosticsGatewayID   = 2305
+	guiDiagnosticsTextID      = 2310
+	guiDiagnosticsRefreshID   = 2311
+	guiDiagnosticsPauseID     = 2312
+	guiDiagnosticsCopyID      = 2313
+	guiDiagnosticsMetadataID  = 2314
+	guiDiagnosticsTitleID     = 2315
+	guiDiagnosticsPeerListID  = 2316
+	guiDiagnosticsPeerTitleID = 2317
+	guiDiagnosticsLogFilterID = 2318
+	guiDiagnosticsTextLimit   = 1 << 20 // UTF-16 code units, including copied text.
 )
 
 // This is presentation state on the window thread. The existing backend and
@@ -28,6 +34,9 @@ const (
 // window's public view while the main window continues receiving snapshots.
 type guiDiagnosticsView struct {
 	page                    int
+	logFilter               int
+	peerID                  string
+	peerIDs, peerRows       []string
 	paused, force           bool
 	snapshot                desktopSnapshot
 	tail                    desktopLogTail
@@ -41,19 +50,26 @@ func (w *desktopWindow) createDiagnosticsWindow() error {
 		return guiCallError("CreateWindowEx diagnostics", err)
 	}
 	w.diagnostics = hwnd
-	w.diagnosticsView = &guiDiagnosticsView{page: guiDiagnosticsLogID}
+	w.diagnosticsView = &guiDiagnosticsView{page: guiDiagnosticsOverviewID}
 	guiWindows.Store(hwnd, w)
 	for _, spec := range []struct {
 		id                int
 		class, text, role string
 		style, ex         uintptr
 	}{
-		{guiDiagnosticsLogID, "BUTTON", "日志", "primary", 0x50010000, 0},
+		{guiDiagnosticsOverviewID, "BUTTON", "概览", "primary", 0x50010000, 0},
+		{guiDiagnosticsGatewayID, "BUTTON", "网关与隧道", "body", 0x50010000, 0},
 		{guiDiagnosticsPeersID, "BUTTON", "Gossip / Peer", "body", 0x50010000, 0},
-		{guiDiagnosticsDetailsID, "BUTTON", "诊断详情", "body", 0x50010000, 0},
+		{guiDiagnosticsLogID, "BUTTON", "日志", "body", 0x50010000, 0},
+		{guiDiagnosticsDetailsID, "BUTTON", "原始 JSON", "body", 0x50010000, 0},
 		{guiDiagnosticsTitleID, "STATIC", "日志与诊断", "title", 0x50000000, 0},
 		{guiDiagnosticsMetadataID, "STATIC", "等待读取当前 Photon 的公开诊断…", "muted", 0x50000000, 0},
-		{guiDiagnosticsTextID, "EDIT", "", "edit", 0x50010000 | 0x0004 | 0x0040 | 0x0080 | 0x0800 | 0x00200000 | 0x00100000, 0x200},
+		// Native soft wrapping keeps long reasons readable at narrow widths;
+		// copying still returns the original text, including intact raw JSON.
+		{guiDiagnosticsTextID, "EDIT", "", "edit", 0x50010000 | 0x0004 | 0x0040 | 0x0800 | 0x00200000, 0x200},
+		{guiDiagnosticsPeerTitleID, "STATIC", "节点", "body", 0x40000000, 0},
+		{guiDiagnosticsPeerListID, "LISTBOX", "", "edit", 0x40010000 | 0x0001 | 0x0100 | 0x00200000, 0x200},
+		{guiDiagnosticsLogFilterID, "COMBOBOX", "", "edit", 0x40010000 | 0x0003 | 0x00200000, 0},
 		{guiDiagnosticsRefreshID, "BUTTON", "刷新一次", "body", 0x50010000, 0},
 		{guiDiagnosticsPauseID, "BUTTON", "暂停刷新", "body", 0x50010000, 0},
 		{guiDiagnosticsCopyID, "BUTTON", "复制当前内容", "body", 0x50010000, 0},
@@ -66,6 +82,10 @@ func (w *desktopWindow) createDiagnosticsWindow() error {
 		w.guiStyleControl(child, spec.role)
 	}
 	w.guiApplyFont(w.controls[guiDiagnosticsTextID], "mono")
+	for _, label := range []string{"连接与网关", "警告与错误", "Gossip 同步", "全部日志"} {
+		guiSendMessage.Call(w.controls[guiDiagnosticsLogFilterID], 0x0143, 0, uintptr(unsafe.Pointer(guiUTF16(label)))) // CB_ADDSTRING
+	}
+	guiSendMessage.Call(w.controls[guiDiagnosticsLogFilterID], 0x014e, 0, 0)
 	guiSendMessage.Call(w.controls[guiDiagnosticsTextID], 0xc5, guiDiagnosticsTextLimit, 0)
 	w.layoutDiagnostics()
 	return nil
@@ -132,7 +152,12 @@ func (w *desktopWindow) drawDiagnostics() {
 	}
 	text, source, detail := "", "当前 Photon 进程的公开状态", ""
 	sampled := v.sampledAt
+	w.syncDiagnosticsPeerList()
 	switch v.page {
+	case guiDiagnosticsOverviewID:
+		text = desktopFormatOverview(v.snapshot)
+	case guiDiagnosticsGatewayID:
+		text = desktopFormatGateway(v.snapshot)
 	case guiDiagnosticsLogID:
 		source = v.tail.Path
 		if source == "" {
@@ -147,9 +172,9 @@ func (w *desktopWindow) drawDiagnostics() {
 			text = "尚无日志文件。启动连接后会在配置的日志目录生成日志。"
 			detail = "日志文件尚未创建"
 		default:
-			text = v.tail.Text
+			text = desktopFilterDiagnosticLog(v.tail.Text, v.logFilter)
 			if text == "" {
-				text = "日志文件当前为空。"
+				text = "当前筛选下暂无日志；可切换“全部日志”查看最近记录。"
 			}
 			if v.tail.Truncated {
 				detail = "已截断：仅显示文件末尾的最近日志"
@@ -162,7 +187,7 @@ func (w *desktopWindow) drawDiagnostics() {
 			}
 		}
 	case guiDiagnosticsPeersID:
-		text = desktopFormatPeers(v.snapshot)
+		text = desktopFormatPeer(v.snapshot, v.peerID)
 	case guiDiagnosticsDetailsID:
 		text = desktopFormatDiagnostics(v.snapshot)
 	}
@@ -205,6 +230,9 @@ func (w *desktopWindow) drawDiagnostics() {
 		lines = strings.Count(strings.TrimRight(bounded, "\r\n"), "\n") + 1
 	}
 	metadata := fmt.Sprintf("来源：%s\r\n采样：%s · %s · 显示 %d 字符 / %d 行", source, stamp, mode, utf8.RuneCountInString(bounded), lines)
+	if v.page == guiDiagnosticsPeersID {
+		metadata += "\r\n左侧选择节点；右侧分别查看最新会话、最近失败和历史计数。"
+	}
 	if detail != "" {
 		metadata += "\r\n" + detail
 	}
@@ -218,7 +246,9 @@ func (w *desktopWindow) drawDiagnostics() {
 		guiSendMessage.Call(w.controls[guiDiagnosticsTextID], 0xb7, 0, 0)           // EM_SCROLLCARET
 	}
 	w.setText(w.controls[guiDiagnosticsMetadataID], metadata)
-	for _, id := range []int{guiDiagnosticsLogID, guiDiagnosticsPeersID, guiDiagnosticsDetailsID} {
+	title := map[int]string{guiDiagnosticsOverviewID: "运行概览", guiDiagnosticsGatewayID: "网关与隧道", guiDiagnosticsPeersID: "Gossip 节点", guiDiagnosticsLogID: "运行日志", guiDiagnosticsDetailsID: "原始 JSON · 供进一步排查"}[v.page]
+	w.setText(w.controls[guiDiagnosticsTitleID], title)
+	for _, id := range []int{guiDiagnosticsOverviewID, guiDiagnosticsGatewayID, guiDiagnosticsLogID, guiDiagnosticsPeersID, guiDiagnosticsDetailsID} {
 		kind := "body"
 		if id == v.page {
 			kind = "primary"
@@ -232,6 +262,43 @@ func (w *desktopWindow) drawDiagnostics() {
 		pause = "继续刷新"
 	}
 	w.setText(w.controls[guiDiagnosticsPauseID], pause)
+	w.layoutDiagnostics()
+}
+
+func (w *desktopWindow) syncDiagnosticsPeerList() {
+	v := w.diagnosticsView
+	if v == nil {
+		return
+	}
+	var ids, rows []string
+	if desktopLiveSnapshot(v.snapshot) {
+		for _, peer := range v.snapshot.Observation.Peers {
+			ids = append(ids, peer.Peer)
+			rows = append(rows, desktopPeerRow(peer))
+		}
+	}
+	selected := slices.Index(ids, v.peerID)
+	if selected < 0 && len(ids) > 0 {
+		selected = 0
+	}
+	v.peerID = ""
+	if selected >= 0 {
+		v.peerID = ids[selected]
+	}
+	if !slices.Equal(rows, v.peerRows) || !slices.Equal(ids, v.peerIDs) {
+		list := w.controls[guiDiagnosticsPeerListID]
+		top, _, _ := guiSendMessage.Call(list, 0x018e, 0, 0) // LB_GETTOPINDEX
+		guiSendMessage.Call(list, 0x0184, 0, 0)              // LB_RESETCONTENT
+		for _, row := range rows {
+			guiSendMessage.Call(list, 0x0180, 0, uintptr(unsafe.Pointer(guiUTF16(row))))
+		}
+		if len(rows) > 0 {
+			guiSendMessage.Call(list, 0x0197, min(top, uintptr(len(rows)-1)), 0)
+		}
+		v.peerIDs, v.peerRows = ids, rows
+	}
+	guiSendMessage.Call(w.controls[guiDiagnosticsPeerListID], 0x0186, uintptr(selected), 0)
+	w.setText(w.controls[guiDiagnosticsPeerTitleID], fmt.Sprintf("节点（%d）", len(ids)))
 }
 
 func guiBoundDiagnosticsText(text string, limit int) (string, bool) {
@@ -262,15 +329,32 @@ func (w *desktopWindow) diagnosticsWindowProc(hwnd uintptr, message uint32, wp, 
 		w.layoutDiagnostics()
 		return 0
 	case guiWMCommand:
-		if uint16(wp>>16) != 0 {
-			return 0
-		}
 		v := w.diagnosticsView
 		if v == nil {
 			return 0
 		}
+		id, notification := int(wp&0xffff), uint16(wp>>16)
+		if notification == 1 && id == guiDiagnosticsPeerListID {
+			selected, _, _ := guiSendMessage.Call(w.controls[id], 0x0188, 0, 0)
+			if selected < uintptr(len(v.peerIDs)) {
+				v.peerID = v.peerIDs[selected]
+				w.drawDiagnostics()
+			}
+			return 0
+		}
+		if notification == 1 && id == guiDiagnosticsLogFilterID {
+			selected, _, _ := guiSendMessage.Call(w.controls[id], 0x0147, 0, 0)
+			if selected < 4 {
+				v.logFilter = int(selected)
+				w.drawDiagnostics()
+			}
+			return 0
+		}
+		if notification != 0 {
+			return 0
+		}
 		switch int(wp & 0xffff) {
-		case guiDiagnosticsLogID, guiDiagnosticsPeersID, guiDiagnosticsDetailsID:
+		case guiDiagnosticsOverviewID, guiDiagnosticsGatewayID, guiDiagnosticsLogID, guiDiagnosticsPeersID, guiDiagnosticsDetailsID:
 			v.page = int(wp & 0xffff)
 			w.drawDiagnostics()
 			if !v.paused {
@@ -308,12 +392,34 @@ func (w *desktopWindow) layoutDiagnostics() {
 	if width <= 0 || height <= 0 {
 		return
 	}
-	for col, id := range []int{guiDiagnosticsLogID, guiDiagnosticsPeersID, guiDiagnosticsDetailsID} {
-		w.guiMove(w.controls[id], 24+col*164, 16, 152, 32)
+	x := 24
+	for _, spec := range []struct{ id, width int }{{guiDiagnosticsOverviewID, 76}, {guiDiagnosticsGatewayID, 110}, {guiDiagnosticsPeersID, 108}, {guiDiagnosticsLogID, 68}, {guiDiagnosticsDetailsID, 100}} {
+		w.guiMove(w.controls[spec.id], x, 16, spec.width, 32)
+		x += spec.width + 8
 	}
 	w.guiMove(w.controls[guiDiagnosticsTitleID], 24, 66, width-48, 34)
 	w.guiMove(w.controls[guiDiagnosticsMetadataID], 24, 112, width-48, 88)
-	w.guiMove(w.controls[guiDiagnosticsTextID], 24, 212, width-48, max(height-284, 0))
+	left, top, contentWidth := 24, 212, width-48
+	peerPage := w.diagnosticsView != nil && w.diagnosticsView.page == guiDiagnosticsPeersID
+	logPage := w.diagnosticsView != nil && w.diagnosticsView.page == guiDiagnosticsLogID
+	showPeers, showLogs := uintptr(0), uintptr(0)
+	if peerPage {
+		showPeers = 5
+		listWidth := min(320, max(240, (width-60)/3))
+		w.guiMove(w.controls[guiDiagnosticsPeerTitleID], 24, 212, listWidth, 24)
+		w.guiMove(w.controls[guiDiagnosticsPeerListID], 24, 244, listWidth, max(height-316, 0))
+		left += listWidth + 12
+		contentWidth -= listWidth + 12
+	}
+	if logPage {
+		showLogs = 5
+		w.guiMove(w.controls[guiDiagnosticsLogFilterID], 24, 204, 260, 220)
+		top = 244
+	}
+	guiShowWindow.Call(w.controls[guiDiagnosticsPeerTitleID], showPeers)
+	guiShowWindow.Call(w.controls[guiDiagnosticsPeerListID], showPeers)
+	guiShowWindow.Call(w.controls[guiDiagnosticsLogFilterID], showLogs)
+	w.guiMove(w.controls[guiDiagnosticsTextID], left, top, contentWidth, max(height-top-72, 0))
 	w.guiMove(w.controls[guiDiagnosticsRefreshID], 24, height-48, 112, 32)
 	w.guiMove(w.controls[guiDiagnosticsPauseID], 148, height-48, 128, 32)
 	w.guiMove(w.controls[guiDiagnosticsCopyID], width-172, height-48, 148, 32)

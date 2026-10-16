@@ -228,19 +228,31 @@ function Open-TrayDiagnostics {
 function Save-TrayDiagnostics([IntPtr]$Target,[string]$Phase,[string]$Page) {
     [PhotonGuiSmokeNative]::Verify($Target,$gui.Process.Id)
     $geometry=[PhotonGuiSmokeNative]::Geometry($Target)
-    $record=[pscustomobject]@{Phase=$Phase;Page=$Page;PID=$gui.Process.Id;Creation=$gui.Creation;AtUTC=[DateTime]::UtcNow.ToString('o');Text=[PhotonGuiSmokeNative]::Text($Target,2310);Metadata=[PhotonGuiSmokeNative]::Text($Target,2314);PhysicalGeometry=$geometry;Screenshot=$null}
+    $record=[pscustomobject]@{Phase=$Phase;Page=$Page;PID=$gui.Process.Id;Creation=$gui.Creation;AtUTC=[DateTime]::UtcNow.ToString('o');Text=[PhotonGuiSmokeNative]::Text($Target,2310);Metadata=[PhotonGuiSmokeNative]::Text($Target,2314);PeerRows=@([PhotonGuiSmokeNative]::ListItems($Target,2316));PhysicalGeometry=$geometry;Screenshot=$null}
     $diagnosticEvidence.Add($record)
     $record|ConvertTo-Json -Depth 7|Set-Content -Encoding UTF8 (Join-Path $FixtureDirectory ('tray-diagnostics-'+$Phase+'-'+$Page+'.json'))
-    foreach($controlID in @(2301,2302,2303,2310,2311,2312,2313,2314)) {
+    foreach($controlID in @(2304,2305,2301,2302,2303,2310,2311,2312,2313,2314)) {
         $metrics=@($geometry.Controls|Where-Object ID -eq $controlID)
         if($metrics.Count -ne 1 -or !$metrics[0].Visible -or !$metrics[0].InsideClient -or $metrics[0].FontHeight -le 0){throw "Diagnostics $Page has a missing, clipped or unstyled control $controlID"}
+    }
+    foreach($controlID in @(2316,2317,2318)) {
+        $metrics=@($geometry.Controls|Where-Object ID -eq $controlID)
+        $expectedVisible=($Page -eq 'peers' -and $controlID -ne 2318) -or ($Page -eq 'log' -and $controlID -eq 2318)
+        if($metrics.Count -ne 1 -or $metrics[0].Visible -ne $expectedVisible){throw "Diagnostics $Page exposed or hid the wrong page-specific control $controlID"}
+        if($expectedVisible -and (!$metrics[0].InsideClient -or $metrics[0].FontHeight -le 0)){throw "Diagnostics $Page has clipped or unstyled page-specific control $controlID"}
+    }
+    if($Page -eq 'peers') {
+        $sidebar=@($geometry.Controls|Where-Object ID -eq 2316)[0];$content=@($geometry.Controls|Where-Object ID -eq 2310)[0]
+        if($sidebar.Right -gt $content.Left){throw 'Peer list overlaps selected-peer details'}
     }
     $record.Screenshot=[PhotonGuiSmokeNative]::Screenshot($Target,(Join-Path $FixtureDirectory ('tray-diagnostics-'+$Phase+'-'+$Page+'.png')))
     if($record.Screenshot -notmatch 'saved; varied pixels'){throw "Diagnostics $Page did not render a real screenshot"}
     $record|ConvertTo-Json -Depth 7|Set-Content -Encoding UTF8 (Join-Path $FixtureDirectory ('tray-diagnostics-'+$Phase+'-'+$Page+'.json'))
 }
 function Assert-TrayDiagnosticLog([IntPtr]$Target,[string]$RequiredEvent) {
-    Click-Tray $Target 2301;Click-Tray $Target 2311
+    Click-Tray $Target 2301
+    [PhotonGuiSmokeNative]::SelectComboIndex($Target,2318,3)
+    Click-Tray $Target 2311
     Wait-Tray {[PhotonGuiSmokeNative]::Text($Target,2314).Contains($statePath+'.log') -and [PhotonGuiSmokeNative]::Text($Target,2310).Contains('msg='+$RequiredEvent)} 'real runtime log tail'
     $shown=[PhotonGuiSmokeNative]::Text($Target,2310)
     $stream=[IO.File]::Open($statePath+'.log',[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
@@ -253,15 +265,40 @@ function Assert-TrayDiagnosticLog([IntPtr]$Target,[string]$RequiredEvent) {
     if([Text.Encoding]::UTF8.GetByteCount($shown.Replace("`r`n","`n")) -gt 262144 -or $lines.Count -gt 1000 -or !$source.Contains($lines[$lines.Count-1])){throw 'Displayed log is not a bounded tail of this owned runtime log file'}
 }
 function Check-TrayDiagnostics([IntPtr]$Target,[string]$Phase,[bool]$Running) {
+    Click-Tray $Target 2304;Click-Tray $Target 2311
+    Wait-Tray {
+        $text=[PhotonGuiSmokeNative]::Text($Target,2310)
+        if(!$Running){return $text.Contains('运行概览') -and $text.Contains('实时数据不可用') -and !$text.Contains('gateway.catofes.') -and !$text.Contains('198.18.253.2')}
+        $text.Contains('运行概览') -and $text.Contains('业务可用：是') -and $text.Contains('IKE 认证：是') -and $text.Contains('数据隧道：是') -and $text.Contains('198.18.253.2/32') -and $text.Contains('fd00:7068:b4::2/128')
+    } 'readable runtime overview from real connection facts'
+    Save-TrayDiagnostics $Target $Phase 'overview'
+    Click-Tray $Target 2305;Click-Tray $Target 2311
+    Wait-Tray {
+        $text=[PhotonGuiSmokeNative]::Text($Target,2310)
+        if(!$Running){return $text.Contains('网关与隧道') -and $text.Contains('实时数据不可用') -and !$text.Contains('gateway.catofes.')}
+        $fresh=Read-TrayStatus
+        $text.Contains('网关与隧道') -and $text.Contains('gateway.catofes.') -and $text.Contains('IKE 认证有效：是') -and $text.Contains('CHILD 数据隧道有效：是') -and $text.Contains('Babel 邻居有效：是') -and ![string]::IsNullOrWhiteSpace([string]$fresh.babel.local) -and ![string]::IsNullOrWhiteSpace([string]$fresh.babel.neighbor) -and $text.Contains([string]$fresh.babel.local) -and $text.Contains([string]$fresh.babel.neighbor) -and $text.Contains('198.18.253.2/32') -and $text.Contains('fd00:7068:b4::2/128')
+    } 'readable gateway and tunnel facts match this owned runtime'
+    Save-TrayDiagnostics $Target $Phase 'gateway'
     Click-Tray $Target 2302;Click-Tray $Target 2311
     if($Running) {
+        Wait-Tray {@([PhotonGuiSmokeNative]::ListItems($Target,2316)|Where-Object {$_.Contains('gateway.catofes.')}).Count -eq 1} 'native peer list contains the actual gateway'
+        $rows=@([PhotonGuiSmokeNative]::ListItems($Target,2316));$selectedRow=-1
+        for($index=0;$index -lt $rows.Count;$index++){if($rows[$index].Contains('gateway.catofes.')){$selectedRow=$index}}
+        if($selectedRow -lt 0){throw 'Real gateway disappeared before native peer selection'}
+        [PhotonGuiSmokeNative]::SelectRow($Target,2316,$selectedRow)
+        Click-Tray $Target 2311
         Wait-Tray {
             $fresh=Read-TrayStatus;$peer=@($fresh.peers|Where-Object peer -eq 'gateway.catofes.')
             $text=[PhotonGuiSmokeNative]::Text($Target,2310)
-            $peer.Count -eq 1 -and $text.Contains('gateway.catofes.') -and $text.Contains('pull_state="'+$peer[0].pull_state+'"') -and $text.Contains('对象拉取累计')
-        } 'real Gossip peer and raw pull state'
+            if($peer.Count -ne 1){return $false}
+            $counts='TCP 累计：尝试 '+$peer[0].pull_attempts+' · 成功 '+$peer[0].pull_successes+' · 失败 '+$peer[0].pull_failures
+            $tcpMatches=$text.Contains($counts)
+            if($peer[0].pull_attempts -eq 0 -and $peer[0].pull_successes -eq 0 -and $peer[0].pull_failures -eq 0){$tcpMatches=$text.Contains('尚无 TCP 对象拉取记录')}
+            $text.Contains('节点：gateway.catofes.') -and $text.Contains('原始状态：'+$peer[0].pull_state) -and $tcpMatches
+        } 'selected real Gossip peer and raw pull state survive refresh'
     } else {
-        Wait-Tray {$text=[PhotonGuiSmokeNative]::Text($Target,2310);$text.Contains('已清空上次节点数据') -and !$text.Contains('gateway.catofes.')} 'stopped peer view clears stale nodes'
+        Wait-Tray {$text=[PhotonGuiSmokeNative]::Text($Target,2310);@([PhotonGuiSmokeNative]::ListItems($Target,2316)).Count -eq 0 -and $text.Contains('实时数据不可用') -and !$text.Contains('gateway.catofes.')} 'stopped peer view clears stale nodes and selection'
     }
     Save-TrayDiagnostics $Target $Phase 'peers'
     Click-Tray $Target 2303;Click-Tray $Target 2311

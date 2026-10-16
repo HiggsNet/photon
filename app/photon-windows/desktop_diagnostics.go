@@ -124,6 +124,7 @@ func desktopFormatPeers(snapshot desktopSnapshot) string {
 	observation := snapshot.Observation
 	var text strings.Builder
 	fmt.Fprintf(&text, "Gossip / Peer\r\n采样时间：%s\r\n节点数量：%d\r\n", desktopDiagnosticTime(observation.ObservedAt), len(observation.Peers))
+	text.WriteString("同步状态表示最新会话；TCP 对象拉取是累计计数，不含 UDP 回退。进程重启或节点诊断记录淘汰后计数重置。\r\n")
 	for _, peer := range observation.Peers {
 		state := "未知状态"
 		switch gossip.SyncSessionState(peer.PullState) {
@@ -146,7 +147,20 @@ func desktopFormatPeers(snapshot desktopSnapshot) string {
 		case gossip.SyncSessionFailed:
 			state = "同步失败"
 		}
-		fmt.Fprintf(&text, "\r\n节点：%q\r\n同步状态：%s（pull_state=%q）\r\n更新时间：%s\r\n对象拉取累计：尝试 %d · 成功 %d · 失败 %d\r\n", peer.Peer, state, peer.PullState, desktopDiagnosticTime(peer.UpdatedAt), peer.PullAttempts, peer.PullSuccesses, peer.PullFailures)
+		fmt.Fprintf(&text, "\r\n节点：%q\r\n最新会话同步状态：%s（pull_state=%q）\r\n更新时间：%s\r\n最后事件：%q\r\n最后同步成功：%s\r\n退避截止：%s\r\n", peer.Peer, state, peer.PullState, desktopDiagnosticTime(peer.UpdatedAt), peer.LastEvent, desktopDiagnosticUnix(peer.LastSyncUnix), desktopDiagnosticUnix(peer.BackoffUntilUnix))
+		if failure := peer.SessionFailure; failure != nil {
+			fmt.Fprintf(&text, "会话最近失败记录：code=%q · 时间=%s · 原因=%q\r\n", failure.Code, desktopDiagnosticUnix(failure.AtUnix), failure.Message)
+		}
+		fmt.Fprintf(&text, "TCP 对象拉取累计（不含 UDP）：尝试 %d · 成功 %d · 失败 %d\r\n", peer.PullAttempts, peer.PullSuccesses, peer.PullFailures)
+		if peer.LastPullUnix != 0 || peer.LastPullZone != "" || peer.LastPullError != "" {
+			fmt.Fprintf(&text, "最后 TCP 拉取记录：时间=%s · zone=%q · 不可达=%t\r\n", desktopDiagnosticUnix(peer.LastPullUnix), peer.LastPullZone, peer.LastPullUnreachable)
+			if peer.LastPullError != "" {
+				fmt.Fprintf(&text, "最后 TCP 拉取错误（历史记录，不等于当前会话失败）：%q\r\n", peer.LastPullError)
+			}
+		}
+		if peer.ChunkFallbacks != 0 {
+			fmt.Fprintf(&text, "UDP 分块回退计数：%d（共享诊断收发口径，不等于成功对象数）\r\n", peer.ChunkFallbacks)
+		}
 	}
 	if len(observation.Peers) == 0 {
 		text.WriteString("\r\n当前有界样本尚无 Peer 活动记录。\r\n")
@@ -155,6 +169,13 @@ func desktopFormatPeers(snapshot desktopSnapshot) string {
 		text.WriteString("\r\n节点列表已截断，仅显示当前有界样本。\r\n")
 	}
 	return text.String()
+}
+
+func desktopDiagnosticUnix(value int64) string {
+	if value == 0 {
+		return "尚无时间记录"
+	}
+	return desktopDiagnosticTime(time.Unix(value, 0))
 }
 
 func desktopFormatDiagnostics(snapshot desktopSnapshot) string {

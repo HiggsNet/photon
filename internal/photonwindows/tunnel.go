@@ -17,6 +17,7 @@ import (
 // gatewayTunnel is owned exclusively by Daemon's event loop. It has no socket,
 // goroutine, persisted observation or independent copy of verified state.
 type gatewayTunnel struct {
+	diagnostic                               tunnelDiagnostic
 	childOverlapUntil                        time.Time
 	localAuthorization                       [32]byte
 	pendingChildSPI                          uint32
@@ -43,6 +44,10 @@ type gatewayTunnel struct {
 }
 
 func (t *gatewayTunnel) stop() {
+	if t.phase != 0 {
+		t.observeEvent("stopped", time.Now(), nil)
+		t.observeProgress()
+	}
 	// Deny data first. An idle established SA gets one best-effort encrypted
 	// Delete, without awaiting the peer or delaying local teardown/reconnect.
 	t.data.reset(t.generation + 1)
@@ -67,8 +72,20 @@ func (t *gatewayTunnel) stop() {
 	t.childOverlapUntil = time.Time{}
 }
 
-func (t *gatewayTunnel) start(plan GatewayPlan, localID string, private ed25519.PrivateKey, now time.Time) error {
+func (t *gatewayTunnel) start(plan GatewayPlan, localID string, private ed25519.PrivateKey, now time.Time) (err error) {
 	t.stop()
+	t.observeProgress()
+	t.diagnostic.gateway, t.diagnostic.remote, t.diagnostic.generation = "", "", 0
+	t.diagnostic.retryAt = time.Time{}
+	if plan.Selected != nil {
+		t.diagnostic.gateway = boundedObservationText(string(plan.Selected.Zone))
+	}
+	t.observeEvent("starting", now, nil)
+	defer func() {
+		if err != nil {
+			t.observeEvent("start_failed", now, err)
+		}
+	}()
 	if plan.Selected == nil || plan.Rejected != "" || len(private) != ed25519.PrivateKeySize {
 		return errors.New("tunnel: no current gateway or local transport key")
 	}
@@ -78,6 +95,7 @@ func (t *gatewayTunnel) start(plan GatewayPlan, localID string, private ed25519.
 		return errors.New("tunnel: invalid gateway endpoints")
 	}
 	peer := netip.AddrPortFrom(addr.Unmap(), contact.IKEPort)
+	t.diagnostic.remote = peer.String()
 	nattPeer := netip.AddrPortFrom(addr.Unmap(), contact.NATTPort)
 	local := t.socket.LocalAddr().AddrPort()
 	if local.Addr().IsUnspecified() {
@@ -138,6 +156,7 @@ func (t *gatewayTunnel) sendPending(now time.Time) error {
 	}
 	t.retryAt = now.Add(time.Second << t.attempts)
 	t.attempts++
+	t.observeEvent("exchange_sent", now, nil)
 	return nil
 }
 
@@ -147,7 +166,12 @@ func (t *gatewayTunnel) current(plan GatewayPlan) bool {
 
 // tick returns fatal lifecycle errors. Invalid network packets are separately
 // ignored without resetting retransmission deadlines or extending liveness.
-func (t *gatewayTunnel) tick(plan GatewayPlan, now time.Time) error {
+func (t *gatewayTunnel) tick(plan GatewayPlan, now time.Time) (err error) {
+	defer func() {
+		if err != nil {
+			t.observeEvent("lifecycle_failed", now, err)
+		}
+	}()
 	if t.phase == 0 {
 		return nil
 	}
@@ -219,7 +243,15 @@ func (t *gatewayTunnel) tick(plan GatewayPlan, now time.Time) error {
 	return nil
 }
 
-func (t *gatewayTunnel) handle(packet tunnelDatagram, plan GatewayPlan, now time.Time) error {
+func (t *gatewayTunnel) handle(packet tunnelDatagram, plan GatewayPlan, now time.Time) (err error) {
+	t.observeEvent("packet_received", now, nil)
+	defer func() {
+		if err != nil {
+			t.observeEvent("packet_rejected", now, err)
+		} else if t.phase == 3 && len(t.pending) == 0 {
+			t.observeProgress()
+		}
+	}()
 	if t.failed != nil {
 		return t.failed
 	}
@@ -258,6 +290,7 @@ func (t *gatewayTunnel) handle(packet tunnelDatagram, plan GatewayPlan, now time
 		clear(t.private)
 		t.private = nil
 		t.phase = 2
+		t.observeProgress()
 		requests := [][]byte{request}
 		if len(request) > 1196 {
 			requests, err = t.session.AuthRequestFragments(1196)
@@ -294,6 +327,8 @@ func (t *gatewayTunnel) handle(packet tunnelDatagram, plan GatewayPlan, now time
 		t.rekeyAt = now.Add(5 * time.Minute)
 		t.ikeRekeyAt, t.ikeExpiresAt = now.Add(30*time.Minute), now.Add(time.Hour)
 		t.child.Keys = ike.ChildKeys{}
+		t.observeProgress()
+		t.observeEvent("authenticated", now, nil)
 		return nil
 	case 3:
 		return t.handleEstablished(packet.packet, plan, now)

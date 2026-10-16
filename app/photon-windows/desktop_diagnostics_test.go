@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/HiggsNet/photon/internal/photonwindows"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
 func desktopLogFixture(t *testing.T) (*desktopBackend, string) {
@@ -226,5 +227,55 @@ func TestDesktopPeerFormattingPreservesUnknownAndEmptyStates(t *testing.T) {
 	text := desktopFormatPeers(snapshot)
 	if !strings.Contains(text, "未知状态") || !strings.Contains(text, `pull_state="future_state"`) || !strings.Contains(text, "暂无会话状态") || !strings.Contains(text, "尚无时间记录") {
 		t.Fatalf("unknown/empty state invented health: %s", text)
+	}
+}
+
+func TestDesktopPeerFormattingExplainsSessionFailureBeforeTCP(t *testing.T) {
+	when := time.Date(2026, 10, 16, 2, 0, 0, 0, time.UTC)
+	snapshot := desktopSnapshot{RuntimeState: "running", Observation: &photonwindows.Observation{Running: true, ObservedAt: when, Peers: []photonwindows.PeerObservation{{
+		Peer: "not-pulled.catofes.", PullState: "failed", UpdatedAt: when, LastEvent: "catalog_page_timeout",
+		SessionFailure: &corestate.PeerFailure{Code: corestate.PeerFailureTimeout, Message: "catalog page timeout", AtUnix: when.Unix()}, BackoffUntilUnix: when.Add(2 * time.Second).Unix(),
+	}}}}
+	text := desktopFormatPeers(snapshot)
+	for _, want := range []string{"最新会话同步状态：同步失败", `最后事件："catalog_page_timeout"`, `code="timeout"`, `原因="catalog page timeout"`, "退避截止：2026-10-16 02:00:02 UTC", "TCP 对象拉取累计（不含 UDP）：尝试 0 · 成功 0 · 失败 0", "进程重启或节点诊断记录淘汰后计数重置"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("TCP-before-session explanation missing %q: %s", want, text)
+		}
+	}
+	if strings.Contains(text, "最后 TCP 拉取错误") {
+		t.Fatal("session failure was invented as a TCP failure")
+	}
+}
+
+func TestDesktopPeerFormattingKeepsHistoricalTCPFailureAfterCompletedSession(t *testing.T) {
+	when := time.Date(2026, 10, 16, 2, 0, 0, 0, time.UTC)
+	observation := &photonwindows.Observation{Running: true, ObservedAt: when, Peers: []photonwindows.PeerObservation{{
+		Peer: "fallback.catofes.", PullState: "completed", UpdatedAt: when, LastEvent: "snapshot_applied", LastSyncUnix: when.Unix(),
+		PullAttempts: 2, PullFailures: 2, LastPullUnix: when.Add(-time.Second).Unix(), LastPullZone: "catofes.", LastPullError: "TCP connection refused", LastPullUnreachable: true, ChunkFallbacks: 1,
+	}}}
+	snapshot := desktopSnapshot{RuntimeState: "running", Observation: observation}
+	text := desktopFormatPeers(snapshot)
+	for _, want := range []string{"最新会话同步状态：本次同步已完成", "尝试 2 · 成功 0 · 失败 2", `zone="catofes."`, "不可达=true", "2026-10-16 01:59:59 UTC", "最后 TCP 拉取错误（历史记录，不等于当前会话失败）", "TCP connection refused", "UDP 分块回退计数：1", "不等于成功对象数"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("historical TCP record missing %q: %s", want, text)
+		}
+	}
+	if strings.Contains(text, "最新会话同步状态：同步失败") || strings.Contains(text, "会话最近失败记录") {
+		t.Fatal("completed session inherited historical TCP failure as its current failure")
+	}
+	// Formatting a newer snapshot must not latch the previous session error.
+	observation.Peers[0].SessionFailure = &corestate.PeerFailure{Code: corestate.PeerFailureProtocol, Message: "old session error"}
+	if !strings.Contains(desktopFormatPeers(snapshot), "old session error") {
+		t.Fatal("existing checkpoint failure was hidden")
+	}
+	observation.Peers[0].SessionFailure = nil
+	if strings.Contains(desktopFormatPeers(snapshot), "old session error") {
+		t.Fatal("cleared checkpoint error remained in the formatter")
+	}
+	var decoded struct {
+		Observation photonwindows.Observation `json:"observation"`
+	}
+	if err := json.Unmarshal([]byte(desktopFormatDiagnostics(snapshot)), &decoded); err != nil || len(decoded.Observation.Peers) != 1 || decoded.Observation.Peers[0].SessionFailure != nil || decoded.Observation.Peers[0].LastPullError != "TCP connection refused" {
+		t.Fatalf("diagnostic JSON hid or reclassified TCP history: %+v, %v", decoded, err)
 	}
 }

@@ -98,7 +98,7 @@ func TestDesktopConfigFormMissingDefaultsRequireRealTrustAndDoNotCreateIdentity(
 	if form.RootPublicKey != "" || form.ManagedZone != "" || form.AllowedGateways != "" || form.SplitRoutes != "" || len(form.BootstrapHints) != 0 {
 		t.Fatal("new form invented trust, network authority or routes")
 	}
-	if form.StatePath != filepath.Join(dir, "laptop-one.db") || !filepath.IsAbs(form.StatePath) || form.OverlayID != "main" || form.GossipListen != "0.0.0.0:33434" || form.AdapterName != "Photon Windows" || form.MTU != "1400" || form.LogLevel != "info" || form.InitialBackoff != "1s" || form.MaxBackoff != "1m" {
+	if form.StatePath != filepath.Join(dir, "laptop-one.db") || !filepath.IsAbs(form.StatePath) || form.OverlayID != "ipsec-main" || form.GossipListen != "0.0.0.0:33434" || form.AdapterName != "Photon Windows" || form.MTU != "1400" || form.LogLevel != "info" || form.InitialBackoff != "1s" || form.MaxBackoff != "1m" {
 		t.Fatalf("unexpected defaults: %+v", form)
 	}
 	if err := b.SaveForm(form); err == nil {
