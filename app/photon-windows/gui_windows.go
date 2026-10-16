@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
@@ -212,6 +213,20 @@ func runDesktop(options desktopOptions) (err error) {
 	}()
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+	instance, first, err := claimDesktopInstance(desktopInstanceName)
+	if err != nil {
+		return err
+	}
+	if !first {
+		return activateDesktopInstance(5 * time.Second)
+	}
+	defer func() { err = errors.Join(err, windows.CloseHandle(instance)) }()
+	// Older versions have the same window class but no named guard. Reuse an
+	// already running older tray instead of competing with its runtime.
+	if hwnd := existingDesktopWindow(); hwnd != 0 {
+		activateDesktopWindow(hwnd)
+		return nil
+	}
 	backend, err := newDesktopBackend(options)
 	if err != nil {
 		return err
@@ -440,6 +455,9 @@ func desktopWindowProc(hwnd uintptr, message uint32, wp, lp uintptr) uintptr {
 			return 0
 		}
 		switch message {
+		case guiActivateMessage:
+			w.show()
+			return 0
 		case guiWMSize:
 			w.layout()
 			return 0

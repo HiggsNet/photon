@@ -66,7 +66,7 @@ $phaseFile=Join-Path $FixtureDirectory 'autojoin-request-phase.txt'
 $session=(Get-Process -Id $PID).SessionId
 $interactive=(Get-CimInstance Win32_ComputerSystem).UserName
 $explorer=@(Get-Process explorer -ErrorAction SilentlyContinue|Where-Object SessionId -eq $session)
-$gui=$null; $conflict=$null; $window=[IntPtr]::Zero; $conflictWindow=[IntPtr]::Zero; $settings=[IntPtr]::Zero
+$gui=$null; $window=[IntPtr]::Zero; $settings=[IntPtr]::Zero
 $failure=$null; $completed=$false; $oldInstalled=$false; $oldBefore=$null; $firstRun=$null
 $requestText=$null; $request=$null; $authority=$null; $stateID=$null
 $trayFaultsResult=$null
@@ -96,7 +96,8 @@ function Assert-TrayOwner($Owner) {
     if(!$Owner -or $Owner.Process.HasExited){throw 'Owned tray GUI exited early'}
     $current=Get-Process -Id $Owner.Process.Id -ErrorAction Stop
     $details=Get-CimInstance Win32_Process -Filter "ProcessId=$($Owner.Process.Id)"
-    if(!$details -or $details.ExecutablePath -ine $Owner.Path -or $current.StartTime.ToUniversalTime() -ne $Owner.Creation -or $current.SessionId -ne $session -or $details.CommandLine -notlike ('*'+$Config+'*')){throw 'Tray GUI process ownership changed'}
+    $expectedConfig=$Config;if($Owner.ConfigPath){$expectedConfig=$Owner.ConfigPath}
+    if(!$details -or $details.ExecutablePath -ine $Owner.Path -or $current.StartTime.ToUniversalTime() -ne $Owner.Creation -or $current.SessionId -ne $session -or $details.CommandLine -notlike ('*'+$expectedConfig+'*')){throw 'Tray GUI process ownership changed'}
 }
 function Wait-Tray([scriptblock]$Condition,[string]$Label,[int]$Seconds=90) {
     $clock=[Diagnostics.Stopwatch]::StartNew()
@@ -407,12 +408,21 @@ try {
     if((Read-TrayLogStart $restartedLog) -le $stoppedLogStart){throw 'Reconnected diagnostics retained the old runtime log snapshot'}
     $diagnosticChecks.RestartLogFresh=$true
     [PhotonGuiSmokeNative]::Close($diagnostics)
-    $conflict=Start-OwnedTray (Join-Path $portableC 'photon-windows.exe') 'conflict';$conflictWindow=Find-TrayWindow $conflict
-    Click-Tray $conflictWindow 1102
-    Wait-Tray {[PhotonGuiSmokeNative]::Text($conflictWindow,1002).Contains('失败') -and ![PhotonGuiSmokeNative]::Text($conflictWindow,1001).Contains('已连接') -and [PhotonGuiSmokeNative]::Text($conflictWindow,1006).Contains('不会接管')} 'foreign active database rejected with actionable hint'
-    [pscustomobject]@{PID=$conflict.Process.Id;Creation=$conflict.Creation;Note=[PhotonGuiSmokeNative]::Text($conflictWindow,1006);Runtime=[PhotonGuiSmokeNative]::Text($conflictWindow,1002);OriginalOwnerPID=$gui.Process.Id;Screenshot=[PhotonGuiSmokeNative]::Screenshot($conflictWindow,(Join-Path $FixtureDirectory 'tray-conflict.png'))}|ConvertTo-Json -Depth 4|Set-Content -Encoding UTF8 (Join-Path $FixtureDirectory 'tray-conflict.json')
-    Click-Tray $conflictWindow 1103;Exit-OwnedTray $conflict $conflictWindow
-    $afterConflict=Check-TrayBusiness 'foreign-rejected';if($afterConflict.ike.expires_at -cne $restarted.ike.expires_at){throw 'Conflicting GUI changed the original runtime IKE lifetime'};$conflict=$null
+    $duplicatePath=Join-Path $portableC 'photon-windows.exe';$duplicateConfig=Join-Path $portableC 'duplicate-missing.yaml'
+    $duplicateDatabase=Join-Path $portableC 'duplicate-missing.db';$configBeforeDuplicate=[Convert]::ToBase64String([IO.File]::ReadAllBytes($Config))
+    if((Test-Path -LiteralPath $duplicateConfig) -or (Test-Path -LiteralPath $duplicateDatabase)){throw 'Duplicate launch fixture did not begin with a missing configuration/database'}
+    [PhotonGuiSmokeNative]::Close($window);Wait-Tray {![PhotonGuiSmokeNative]::IsWindowVisible($window)} 'original GUI hidden before duplicate launch'
+    $duplicateProcess=Start-Process -FilePath $duplicatePath -ArgumentList @('gui','--config',('"'+$duplicateConfig+'"')) -PassThru -RedirectStandardError (Join-Path $FixtureDirectory 'tray-duplicate-error.log')
+    if($duplicateProcess.Handle -eq [IntPtr]::Zero){throw 'Cannot retain duplicate GUI process handle'}
+    $duplicateOwner=[pscustomobject]@{Process=$duplicateProcess;Path=$duplicatePath;ConfigPath=$duplicateConfig;Creation=$duplicateProcess.StartTime.ToUniversalTime();Label='duplicate';ExpectedForcedExit=$false};$owned.Add($duplicateOwner)
+    if(!$duplicateProcess.HasExited){Assert-TrayOwner $duplicateOwner}
+    if(!$duplicateProcess.WaitForExit(10000) -or $null -eq $duplicateProcess.ExitCode -or $duplicateProcess.ExitCode -ne 0){throw 'Duplicate GUI did not exit promptly with a real zero exit code'}
+    Wait-Tray {[PhotonGuiSmokeNative]::IsWindowVisible($window)} 'duplicate launch restores the original GUI'
+    [PhotonGuiSmokeNative]::Verify($window,$gui.Process.Id);Assert-TrayOwner $gui
+    if([PhotonGuiSmokeNative]::Find($duplicateProcess.Id) -ne [IntPtr]::Zero -or @(Get-CimInstance Win32_Process|Where-Object {$_.ExecutablePath -ieq $duplicatePath -and $_.SessionId -eq $session}).Count -ne 0){throw 'Duplicate launch retained a second GUI process or window'}
+    if((Test-Path -LiteralPath $duplicateConfig) -or (Test-Path -LiteralPath $duplicateDatabase) -or [Convert]::ToBase64String([IO.File]::ReadAllBytes($Config)) -cne $configBeforeDuplicate){throw 'Duplicate launch created its alternate configuration/database or changed the active configuration'}
+    $afterDuplicate=Check-TrayBusiness 'duplicate-restored';if($afterDuplicate.ike.expires_at -cne $restarted.ike.expires_at){throw 'Duplicate launch changed the original runtime IKE lifetime'}
+    [pscustomobject]@{PID=$duplicateProcess.Id;Creation=$duplicateOwner.Creation;ExitCode=$duplicateProcess.ExitCode;OriginalOwnerPID=$gui.Process.Id;OriginalOwnerCreation=$gui.Creation;OriginalWindowVisible=[PhotonGuiSmokeNative]::IsWindowVisible($window);AlternateConfig=$duplicateConfig;AlternateConfigAbsent=$true;AlternateDatabaseAbsent=$true;OriginalConfigUnchanged=$true;StateFileID=Read-TrayFileID;SameIKEExpiresAt=$afterDuplicate.ike.expires_at;Screenshot=[PhotonGuiSmokeNative]::Screenshot($window,(Join-Path $FixtureDirectory 'tray-duplicate-restored.png'))}|ConvertTo-Json -Depth 5|Set-Content -Encoding UTF8 (Join-Path $FixtureDirectory 'tray-duplicate.json')
     $firstOwner=$gui.Process.Id;$firstIndex=$script:trayOwnedIndex;Exit-OwnedTray $gui $window;$gui=$null
     Assert-TrayReleased $firstOwner $firstIndex 'exited-b'
     $gui=Start-OwnedTray (Join-Path $portableC 'photon-windows.exe') 'moved';$window=Find-TrayWindow $gui
