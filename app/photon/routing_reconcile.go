@@ -34,7 +34,10 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 	if d.Config == nil {
 		return nil
 	}
-	common := d.State.Common.ReadView()
+	common := func() corestate.View {
+		defer d.gossipDriver.LogSlowOperation("routing_state_read", time.Now(), d.gossipDriver.PendingEventCount())
+		return d.State.Common.ReadView()
+	}()
 	if common.State == nil {
 		return nil
 	}
@@ -66,7 +69,10 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 	now := d.now()
 	summary := &routingObservation{Instances: birdInstances, LastRunUnix: now.Unix()}
 
-	ars, err := routing.BuildAuthorizedRouteSet(verified.Network, now)
+	ars, err := func() (*routing.AuthorizedRouteSet, error) {
+		defer d.gossipDriver.LogSlowOperation("routing_authorized_routes", time.Now(), d.gossipDriver.PendingEventCount())
+		return routing.BuildAuthorizedRouteSet(verified.Network, now)
+	}()
 	if err != nil {
 		summary.LastFailure = err
 		d.publishRoutingObservation(rev, summary)
@@ -74,7 +80,7 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 	}
 
 	var firstErr error
-	autoAnnounceChanged, autoAnnounceErr := d.autoAnnounceAssignedIPsResult(ars)
+	autoAnnounceChanged, autoAnnounceErr := d.autoAnnounceAssignedIPsResult(verified, ars)
 	if autoAnnounceErr != nil {
 		firstErr = autoAnnounceErr
 	}
@@ -82,13 +88,19 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 	// Auto-announce changes verified Network through its own common-state
 	// transaction. Refresh the common view only in that uncommon case.
 	if autoAnnounceChanged {
-		common = d.State.Common.ReadView()
+		common = func() corestate.View {
+			defer d.gossipDriver.LogSlowOperation("routing_state_read", time.Now(), d.gossipDriver.PendingEventCount())
+			return d.State.Common.ReadView()
+		}()
 		if common.State == nil {
 			return firstErr
 		}
 		rev = uint64(common.Revision)
 		verified = common.State
-		ars, err = routing.BuildAuthorizedRouteSet(verified.Network, now)
+		ars, err = func() (*routing.AuthorizedRouteSet, error) {
+			defer d.gossipDriver.LogSlowOperation("routing_authorized_routes", time.Now(), d.gossipDriver.PendingEventCount())
+			return routing.BuildAuthorizedRouteSet(verified.Network, now)
+		}()
 		if err != nil && firstErr == nil {
 			firstErr = fmt.Errorf("rebuild authorized route set after auto-announce: %w", err)
 		}
@@ -160,7 +172,10 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 	if inst.Upstream != nil && inst.Upstream.Enabled && inst.Upstream.CreateVeth {
 		vspec := inst.Upstream.Veth
 		vspec.MeshNetns = netnsName
-		if err := d.linuxDriver.EnsureRoutingVeth(ctx, vspec); err != nil {
+		if err := func() error {
+			defer d.gossipDriver.LogSlowOperation("routing_veth", time.Now(), d.gossipDriver.PendingEventCount())
+			return d.linuxDriver.EnsureRoutingVeth(ctx, vspec)
+		}(); err != nil {
 			instState.State = birdInstanceStateError
 			instState.LastFailure = fmt.Errorf("ensure veth: %w", err)
 			return fmt.Errorf("ensure upstream veth for netns %q: %w", netnsName, err)
@@ -184,7 +199,10 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 			MeshIPv4LL:     inst.Upstream.Veth.MeshIPv4LL,
 			MeshIPv6LL:     inst.Upstream.Veth.MeshIPv6LL,
 		}
-		if err := d.linuxDriver.EnsureUpstreamRoutes(ctx, rspec); err != nil {
+		if err := func() error {
+			defer d.gossipDriver.LogSlowOperation("routing_upstream", time.Now(), d.gossipDriver.PendingEventCount())
+			return d.linuxDriver.EnsureUpstreamRoutes(ctx, rspec)
+		}(); err != nil {
 			instState.State = birdInstanceStateError
 			instState.LastFailure = fmt.Errorf("ensure upstream routes: %w", err)
 			return fmt.Errorf("ensure upstream routes for netns %q: %w", netnsName, err)
@@ -217,7 +235,10 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 	switch mode {
 	case bird.BirdModeManaged:
 		if configChanged {
-			if err := d.linuxDriver.WriteBirdConfig(spec.ConfigPath, configBytes); err != nil {
+			if err := func() error {
+				defer d.gossipDriver.LogSlowOperation("routing_bird_write", time.Now(), d.gossipDriver.PendingEventCount())
+				return d.linuxDriver.WriteBirdConfig(spec.ConfigPath, configBytes)
+			}(); err != nil {
 				instState.State = birdInstanceStateError
 				instState.LastFailure = err
 				return fmt.Errorf("write bird config for netns %q: %w", netnsName, err)
@@ -239,7 +260,10 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 			return nil
 		}
 		if !running {
-			if err := d.linuxDriver.StartBird(ctx, spec); err != nil {
+			if err := func() error {
+				defer d.gossipDriver.LogSlowOperation("routing_bird_start", time.Now(), d.gossipDriver.PendingEventCount())
+				return d.linuxDriver.StartBird(ctx, spec)
+			}(); err != nil {
 				instState.State = birdInstanceStateError
 				instState.LastFailure = err
 				if !isDryRunMissingBirdError(err) {
@@ -252,7 +276,10 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 				instState.LastExit = ""
 			}
 		} else if configChanged {
-			if err := d.linuxDriver.ConfigureBird(ctx, spec.ControlSocketPath, spec.ConfigPath); err != nil {
+			if err := func() error {
+				defer d.gossipDriver.LogSlowOperation("routing_bird_configure", time.Now(), d.gossipDriver.PendingEventCount())
+				return d.linuxDriver.ConfigureBird(ctx, spec.ControlSocketPath, spec.ConfigPath)
+			}(); err != nil {
 				instState.State = birdInstanceStateDegraded
 				instState.LastFailure = err
 				if !isDryRunConnectError(err) {
@@ -298,6 +325,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 }
 
 func (d *Daemon) observeBirdForHealth(ctx context.Context, instances map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, netnsName string, overlays []string, socketPath string) {
+	defer d.gossipDriver.LogSlowOperation("routing_bird_observe", time.Now(), d.gossipDriver.PendingEventCount())
 	if d.health == nil || d.health.Manager == nil || socketPath == "" {
 		return
 	}
@@ -463,22 +491,17 @@ func isDryRunConnectError(err error) bool {
 // records for every IPAM assignment whose assigned_to equals this node's
 // managed zone. It commits network record changes through the daemon state
 // store so routing reconcile can run BIRD work from a refreshed committed
-// snapshot.
-func (d *Daemon) autoAnnounceAssignedIPsResult(ars *routing.AuthorizedRouteSet) (bool, error) {
-	if d.Config == nil || d.State == nil {
+// snapshot. verified and ars belong to the same reconcile snapshot.
+func (d *Daemon) autoAnnounceAssignedIPsResult(verified *corestate.VerifiedState, ars *routing.AuthorizedRouteSet) (bool, error) {
+	if d.Config == nil || d.State == nil || verified == nil {
 		return false, nil
 	}
-
-	view := d.State.Common.ReadView()
-	if view.State == nil {
-		return false, nil
-	}
-	announce, withdraw := routing.AutoAnnounceChanges(view.State.Network, view.State.ManagedZone, ars, d.Config.IPAM.AutoAnnounceAssignedIPs, d.Config.IPAM.Announce)
+	announce, withdraw := routing.AutoAnnounceChanges(verified.Network, verified.ManagedZone, ars, d.Config.IPAM.AutoAnnounceAssignedIPs, d.Config.IPAM.Announce)
 	if len(announce) == 0 && len(withdraw) == 0 {
 		return false, nil
 	}
 
-	managedZone := view.State.ManagedZone
+	managedZone := verified.ManagedZone
 	intents := make([]corestate.LocalIntent, 0, len(announce)+len(withdraw))
 	for _, prefix := range announce {
 		intents = append(intents, corestate.AnnounceRouteIntent{Zone: managedZone, Prefix: prefix.Masked().String(), Controller: routing.RouteControllerAuto})

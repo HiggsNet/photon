@@ -31,6 +31,12 @@ func (clock *fakeClock) NewTimer(after time.Duration) EventTimer {
 		when:  clock.now.Add(after),
 		c:     make(chan time.Time, 1),
 	}
+	// Match time.NewTimer: an already-due timer does not need another
+	// Advance call before it can wake the scheduler.
+	if after <= 0 {
+		timer.c <- clock.now
+		return timer
+	}
 	clock.timers = append(clock.timers, timer)
 	return timer
 }
@@ -165,6 +171,29 @@ func TestSchedulerReplacementRejectsQueuedStaleGeneration(t *testing.T) {
 	requireSchedulerStops(t, scheduler)
 }
 
+func TestSchedulerCancelAndReuseRejectsAlreadyQueuedEvent(t *testing.T) {
+	clock := newFakeClock(time.Unix(1000, 0))
+	events := make(chan Event, 4)
+	scheduler := NewScheduler(clock, events)
+	defer scheduler.Stop()
+	id := TimerID{Namespace: GossipChunkSendNamespace, Owner: "peer", Key: "transfer"}
+	_, _ = scheduler.Schedule(id, clock.Now())
+	stale := receiveTimer(t, events)
+	scheduler.Cancel(id)
+	other := TimerID{Namespace: GossipChunkSendNamespace, Owner: "other", Key: "transfer"}
+	_, _ = scheduler.Schedule(other, clock.Now().Add(time.Hour))
+	scheduler.Cancel(other)
+	generation, _ := scheduler.Schedule(id, clock.Now().Add(time.Second))
+	if scheduler.Accept(stale) {
+		t.Fatal("reused ID accepted a canceled queued generation")
+	}
+	clock.Advance(time.Second)
+	fired := receiveTimer(t, events)
+	if fired.Generation != generation || !scheduler.Accept(fired) {
+		t.Fatalf("new generation rejected: %#v", fired)
+	}
+}
+
 func TestSchedulerSameDeadlineUsesScheduleOrder(t *testing.T) {
 	clock := newFakeClock(time.Unix(1000, 0))
 	events := make(chan Event, 3)
@@ -265,7 +294,7 @@ func TestGossipDriverOwnsQueueSchedulerAndPureGossipEngine(t *testing.T) {
 		t.Fatalf("timer action handled=%v err=%v", handled, err)
 	}
 	clock.Advance(time.Second)
-	event, ok := driver.GossipSessionEventFor(<-driver.Events())
+	event, ok := driver.GossipSessionEventFor(<-driver.Completions())
 	if !ok {
 		t.Fatal("timer fire was not accepted")
 	}

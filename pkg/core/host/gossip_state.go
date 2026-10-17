@@ -18,7 +18,9 @@ import (
 type GossipStateStore interface {
 	gossip.ObjectPullSource
 	ReadView() corestate.View
+	// ReadDiscovery must return the verified Revision together with its network.
 	ReadDiscovery(string) *corestate.DiscoveryView
+	ReadPeerAuthorization(string) *corestate.DiscoveryView
 	ReadCatalog() *corestate.CatalogView
 	PeerCheckpoints([]string) map[string]corestate.PeerCheckpoint
 	ApplyRemoteBatch(context.Context, string, []corestate.RemoteSnapshot, time.Time) (corestate.RemoteBatchResult, error)
@@ -68,6 +70,22 @@ func (driver *GossipDriver) UpdateGossipBootstrap(peers map[string]*net.UDPAddr)
 }
 
 func (driver *GossipDriver) logGossip(level, event, peerID, phase string, err error, fields map[string]any) {
+	var quotaErr *gossip.QuotaExceededError
+	if errors.As(err, &quotaErr) {
+		if fields == nil {
+			fields = make(map[string]any)
+		}
+		fields["quota_requested_bytes"] = quotaErr.RequestedBytes
+		fields["quota_requested_objects"] = quotaErr.RequestedObjects
+		fields["quota_available_bytes"] = quotaErr.AvailableBytes
+		fields["quota_available_objects"] = quotaErr.AvailableObjects
+		fields["quota_byte_rate"] = quotaErr.ByteRate
+		fields["quota_byte_burst"] = quotaErr.ByteBurst
+		fields["quota_object_rate"] = quotaErr.ObjectRate
+		fields["quota_object_burst"] = quotaErr.ObjectBurst
+		fields["direction"] = quotaErr.Direction
+		fields["message_type"] = quotaErr.MessageType
+	}
 	config := driver.GossipConfig()
 	if config.Log != nil {
 		config.Log(GossipDriverLog{Level: level, Event: event, PeerID: peerID, Phase: phase, Err: err, Fields: fields})
@@ -156,6 +174,7 @@ func (driver *GossipDriver) applyGossipSnapshots(
 	if err != nil {
 		return GossipSnapshotApplyResult{}, err
 	}
+	out := GossipSnapshotApplyResult{NetworkChanged: result.Changes.NetworkChanged}
 	for index, action := range selected {
 		outcome := corestate.RemoteApplyOutcome{Zone: action.Snapshot.Zone}
 		if index < len(result.Outcomes) {
@@ -165,10 +184,10 @@ func (driver *GossipDriver) applyGossipSnapshots(
 		}
 		driver.logGossipSnapshotOutcome(peerID, managedZone, action, outcome)
 		if action.ReportResult {
-			_ = driver.PostGossip(&gossip.SnapshotAppliedEvent{PeerID: peerID, Zone: action.Snapshot.Zone, Err: outcome.Err})
+			out.Events = append(out.Events, &gossip.SnapshotAppliedEvent{PeerID: peerID, Zone: action.Snapshot.Zone, Err: outcome.Err})
 		}
 	}
-	return GossipSnapshotApplyResult{NetworkChanged: result.Changes.NetworkChanged}, nil
+	return out, nil
 }
 
 func (driver *GossipDriver) logGossipSnapshotOutcome(peerID string, managedZone zone.ZonePath, action gossip.ApplySnapshotAction, outcome corestate.RemoteApplyOutcome) {

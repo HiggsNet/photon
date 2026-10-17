@@ -109,27 +109,30 @@ func testGossipColdCatalog(t *testing.T, expireAfterParent bool) {
 	deadline := time.NewTimer(3 * time.Second)
 	defer deadline.Stop()
 	for driver.Gossip.Session("bootstrap") != nil {
+		var event Event
 		select {
-		case event := <-driver.Events():
-			result, err := driver.HandleGossipHostEvent(t.Context(), event, now, nil)
-			if err != nil || result.Session.TerminalErr != nil {
-				t.Fatalf("cold catalog event %T: result=%+v error=%v", event, result.Session, err)
-			}
-			if expireAfterParent && !expired && store.ReadView().State.Network.Zones["catofes."] != nil && store.ReadView().State.Network.Zones["catofes."].Authority != nil {
-				// Parent commit survives the finite round deadline. Its queued
-				// apply ACK must not finish a replacement session, which resumes
-				// from the committed catalog without fetching this parent again.
-				timedOut, err := driver.HandleGossipHostEvent(t.Context(), GossipEvent{Value: &gossip.RoundTimeoutEvent{PeerID: "bootstrap"}}, now, nil)
-				if err != nil || !timedOut.Session.Done || timedOut.Session.TerminalErr == nil {
-					t.Fatalf("round did not expire: %+v, %v", timedOut, err)
-				}
-				driver.Gossip.NewSession("bootstrap")
-				handle(&gossip.SyncTimerEvent{PeerID: "bootstrap"})
-				expired = true
-				pages()
-			}
+		case event = <-driver.Events():
+		case event = <-driver.Completions():
+		case event = <-driver.Continuations():
 		case <-deadline.C:
 			t.Fatal("cold catalog did not finish")
+		}
+		result, err := driver.HandleGossipHostEvent(t.Context(), event, now, nil)
+		if err != nil || result.Session.TerminalErr != nil {
+			t.Fatalf("cold catalog event %T: result=%+v error=%v", event, result.Session, err)
+		}
+		if expireAfterParent && !expired && store.ReadView().State.Network.Zones["catofes."] != nil && store.ReadView().State.Network.Zones["catofes."].Authority != nil {
+			// Parent commit survives the finite round deadline. Its queued
+			// apply ACK must not finish a replacement session, which resumes
+			// from the committed catalog without fetching this parent again.
+			timedOut, err := driver.HandleGossipHostEvent(t.Context(), GossipEvent{Value: &gossip.RoundTimeoutEvent{PeerID: "bootstrap"}}, now, nil)
+			if err != nil || !timedOut.Session.Done || timedOut.Session.TerminalErr == nil {
+				t.Fatalf("round did not expire: %+v, %v", timedOut, err)
+			}
+			driver.Gossip.NewSession("bootstrap")
+			handle(&gossip.SyncTimerEvent{PeerID: "bootstrap"})
+			expired = true
+			pages()
 		}
 	}
 	view := store.ReadView()

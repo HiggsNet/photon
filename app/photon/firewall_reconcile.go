@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/photonlinux"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/firewall"
 	"github.com/HiggsNet/photon/pkg/routing"
 )
@@ -27,7 +28,10 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 	if d.Config == nil {
 		return nil
 	}
-	common := d.State.Common.ReadView()
+	common := func() corestate.View {
+		defer d.gossipDriver.LogSlowOperation("firewall_state_read", time.Now(), d.gossipDriver.PendingEventCount())
+		return d.State.Common.ReadView()
+	}()
 	runtime := d.State.ReadLinux()
 	if common.State == nil || runtime == nil {
 		return nil
@@ -50,7 +54,10 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 	}
 
 	// Build authorized route set for prefix inputs.
-	ars, err := routing.BuildAuthorizedRouteSet(common.State.Network, now)
+	ars, err := func() (*routing.AuthorizedRouteSet, error) {
+		defer d.gossipDriver.LogSlowOperation("firewall_authorized_routes", time.Now(), d.gossipDriver.PendingEventCount())
+		return routing.BuildAuthorizedRouteSet(common.State.Network, now)
+	}()
 	if err != nil {
 		summary.LastFailure = err
 		d.publishFirewallObservation(rev, summary)
@@ -85,7 +92,10 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 			}
 			continue
 		}
-		resolvedBackend, preflight, resolveErr := d.linuxDriver.ResolveFirewallBackend(ctx, spec)
+		resolvedBackend, preflight, resolveErr := func() (string, firewall.FirewallPreflight, error) {
+			defer d.gossipDriver.LogSlowOperation("firewall_preflight", time.Now(), d.gossipDriver.PendingEventCount())
+			return d.linuxDriver.ResolveFirewallBackend(ctx, spec)
+		}()
 		summary.Backend = preflight.Backend
 		if resolveErr != nil {
 			entry.LastFailure = resolveErr
@@ -110,7 +120,10 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 			continue
 		}
 
-		result, err := d.linuxDriver.ApplyFirewall(ctx, spec, resolvedBackend, desired)
+		result, err := func() (firewall.FirewallApplyResult, error) {
+			defer d.gossipDriver.LogSlowOperation("firewall_apply", time.Now(), d.gossipDriver.PendingEventCount())
+			return d.linuxDriver.ApplyFirewall(ctx, spec, resolvedBackend, desired)
+		}()
 		entry.Backend = resolvedBackend
 		entry.PolicyHash = firewall.DesiredStateHash(desired)
 		entry.OwnedObjects = len(firewall.DesiredObjects(desired))

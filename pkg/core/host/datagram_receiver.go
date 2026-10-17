@@ -143,9 +143,14 @@ func (driver *GossipDriver) runGossipDatagramReceiver(
 			}
 		}
 		select {
-		case driver.events <- GossipPacketReceived{Packet: packet}:
 		case <-ctx.Done():
 			return
+		default:
+		}
+		select {
+		case driver.events <- GossipPacketReceived{Packet: packet}:
+		default:
+			driver.recordGossipDatagramDrop(packet)
 		}
 	}
 }

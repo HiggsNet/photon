@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 	"reflect"
 	"slices"
@@ -257,8 +258,15 @@ func TestDaemonFlushRevocationCleanupAlreadyCleanDoesNotCommit(t *testing.T) {
 	}
 	rt := &testApp{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
+	service.gossipDriver.Observability = observability.NewPeerObservabilityStore(8, time.Minute)
 	service.gossipDriver.Observability.Update("node-b.catofes.", now, func(peer *observability.PeerDiagnostics) {
 		peer.DatagramStats = &observability.PeerDatagramStats{ChunkFallbacks: 1}
+	})
+	service.gossipDriver.Observability.Update("node-a.catofes.", now, func(peer *observability.PeerDiagnostics) {
+		peer.DatagramStats = &observability.PeerDatagramStats{ChunkFallbacks: 7}
+	})
+	service.gossipDriver.Observability.Update("expired.catofes.", now.Add(-2*time.Minute), func(peer *observability.PeerDiagnostics) {
+		peer.HintAccepted = 1
 	})
 	before := uint64(service.State.Common.VerifiedRevision())
 
@@ -270,31 +278,47 @@ func TestDaemonFlushRevocationCleanupAlreadyCleanDoesNotCommit(t *testing.T) {
 	if _, ok := service.gossipDriver.Observability.Snapshot("node-b.catofes.", now); ok {
 		t.Fatal("already-clean fast path retained revoked peer observability")
 	}
+	if peer, ok := service.gossipDriver.Observability.Snapshot("node-a.catofes.", now); !ok || peer.DatagramStats == nil || peer.DatagramStats.ChunkFallbacks != 7 {
+		t.Fatalf("healthy peer observability changed: %+v, present=%v", peer, ok)
+	}
+	if purged := service.gossipDriver.Observability.PurgeExpired(now); purged != 0 {
+		t.Fatalf("cleanup left %d expired observability entries", purged)
+	}
 }
 
 func BenchmarkDaemonFlushRevocationCleanupAlreadyClean(b *testing.B) {
-	verified, checkpoint, runtime, config := buildTestDaemonOwners(b)
-	now := time.Unix(4140, 0)
-	checkpoint.Peers = map[string]corestate.PeerCheckpoint{
-		"node-b.catofes.": {LastFailure: &corestate.PeerFailure{Code: corestate.PeerFailureLegacy, Message: "zone revoked"}},
-	}
-	parent := verified.Network.Zones["catofes."]
-	delegation := parent.Delegations["node-b.catofes."]
-	parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
-		ChildZone:             "node-b.catofes.",
-		ParentZone:            "catofes.",
-		RevokedAuthorityEpoch: delegation.AuthorityEpoch,
-		RevokedAuthorityHash:  delegation.AuthorityHash,
-		RevokedAt:             now.Add(-time.Second).Unix(),
-	}
-	service := newTestDaemonFromOwners(
-		&testApp{Config: defaultAppConfig(), Clock: func() time.Time { return now }},
-		verified, checkpoint, runtime, config, time.Second,
-	)
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		service.flushRevocationCleanup()
+	for _, peers := range []int{0, 38, 256} {
+		b.Run(fmt.Sprintf("peers_%d", peers), func(b *testing.B) {
+			verified, checkpoint, runtime, config := buildTestDaemonOwners(b)
+			now := time.Unix(4140, 0)
+			checkpoint.Peers = map[string]corestate.PeerCheckpoint{
+				"node-b.catofes.": {LastFailure: &corestate.PeerFailure{Code: corestate.PeerFailureLegacy, Message: "zone revoked"}},
+			}
+			parent := verified.Network.Zones["catofes."]
+			delegation := parent.Delegations["node-b.catofes."]
+			parent.Revocations["node-b.catofes."] = &zone.DelegationRevocation{
+				ChildZone:             "node-b.catofes.",
+				ParentZone:            "catofes.",
+				RevokedAuthorityEpoch: delegation.AuthorityEpoch,
+				RevokedAuthorityHash:  delegation.AuthorityHash,
+				RevokedAt:             now.Add(-time.Second).Unix(),
+			}
+			service := newTestDaemonFromOwners(
+				&testApp{Config: defaultAppConfig(), Clock: func() time.Time { return now }},
+				verified, checkpoint, runtime, config, time.Second,
+			)
+			for i := range peers {
+				service.gossipDriver.Observability.Update(fmt.Sprintf("peer-%d.catofes.", i), now, func(peer *observability.PeerDiagnostics) {
+					peer.DatagramStats = &observability.PeerDatagramStats{ChunkFallbacks: 1}
+					peer.ObjectPullStats = &observability.PeerObjectPullStats{Attempts: 1}
+				})
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				service.flushRevocationCleanup()
+			}
+		})
 	}
 }
 

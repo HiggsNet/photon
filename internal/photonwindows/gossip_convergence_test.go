@@ -150,14 +150,17 @@ func (node *memoryHostNode) start(t *testing.T) {
 func (node *memoryHostNode) run() {
 	defer close(node.done)
 	for {
+		var event corehost.Event
 		select {
 		case <-node.ctx.Done():
 			return
-		case event := <-node.runtime.Events():
-			if err := node.handleEvent(event); err != nil {
-				node.recordError(err)
-				return
-			}
+		case event = <-node.runtime.Events():
+		case event = <-node.runtime.Completions():
+		case event = <-node.runtime.Continuations():
+		}
+		if err := node.handleEvent(event); err != nil {
+			node.recordError(err)
+			return
 		}
 	}
 }

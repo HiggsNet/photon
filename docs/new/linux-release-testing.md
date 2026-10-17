@@ -1,8 +1,63 @@
 # Linux 重构版测试
 
 本轮旧版固定为 `v0.5.6`（master 提交 `28472ea74615`），新版为
-`v0.6.0-rc.7`（Gossip 窄读取与 verified 按 zone 持久化）。新版只供测试，Windows 完整隧道尚未交付。
+`v0.6.0-rc.13`（在 rc.12 候选基础上减少入站验签、状态复制和重复健康统计）。新版只供测试，Windows 完整隧道尚未交付。
 master 保留旧版；候选版从独立 release 分支发布，不更新 Docker `latest`。
+
+## rc.13：减少入站、撤销查询与健康统计的重复工作
+
+入站 observed path 使用只含授权链与 checkpoint 的窄读取，省去无用记录复制；同一事件的固定处理时间内，只有前后 verified revision 相同时才复用验签结果。地址仍从持久化完成后的 checkpoint 恢复；revision 变化会重新验签，下一条事件也重新检查签名和有效期。
+
+撤销查询按 verified revision 与 RevokedAt 时间区间复用只读结果，返回值仍独立复制；同时检查区间上下界，覆盖定时生效、时钟回退、祖先撤销和已清除 zone 的 tombstone。checkpoint 更新仍读取最新值，deny-first 协调顺序保留。父路径读取改用字符串切片，保留根路径及非完整名称的旧行为。
+
+路由协调把本轮已有状态传给自动通告检查，减少一次全量 ReadView；提交自动通告后仍重新读取状态并构建授权路由。健康窗口只复用未变化的数值统计，新增样本或 Reset 立即失效；标签、状态与下一次探测时间仍从 Manager 当前状态生成，不改变探测频率、并发或通知规则。
+
+发布前已完成 make check、相关包 race，以及授权撤销、撤销清理和 NAT observed path smoke；覆盖失败提交可见性、版本变化重验、跨事件到期、并发读取、窗口重置及同轮自动通告更新 BIRD 导出过滤器。局部基准为同机五次中位数：入站 205→109 µs、33,024→15,456 B、416→218 次分配；38 链路健康快照 19.1→9.8 µs、42→4 次分配。有活跃撤销的重复投影约 3.02→0.13 µs，失效重算约 3.72 µs。这些数据只证明局部收益，不能替代 Table 实测或作为整体 CPU 降幅。
+
+本地详细证据见 build/validation/rc12-cpu-followup-20261016/ 与 rc12-routing-health-20261016/；本次发布和 Table 长时对照、抓包证据单独记录于 build/validation/rc13-table-20261017/。rc.12 是已部署 Table 的 c1aa8d5 候选，未创建发布标签；本次正式预发布版本顺延为 rc.13。schema 2、wire 编码、签名格式及默认 quota 保持不变。
+
+## rc.12：减少撤销清理与健康统计的复制（Table 候选）
+
+撤销清理直接按已确认的撤销名单删除诊断信息，保留原有过期清理步骤与 checkpoint 提交成功后再清理的顺序，省去复制全部 peer 诊断快照。健康窗口先按时间顺序计算 jitter，再原地排序已分离的临时 RTT 数组计算分位数，省去第二份数组；环形窗口及返回统计仍保持原语义。
+
+此轮不新增跨事件缓存、调度器或并发状态写入。回归覆盖健康 peer 保留、已过期诊断条目清理，以及环形窗口覆盖旧样本、丢包、jitter、分位数和重复快照。基准与验证证据位于本地 `build/validation/rc12-small-cpu-20261016/`；局部基准不能当作线上整体 CPU 降幅。
+
+已通过 `make check`（完整 Go 测试、vet、Linux 构建及 Windows 交叉构建）、health/observability/app 三包 race，以及撤销清理和 observer smoke。相同基准固定 CPU 0、`-cpu=1 -benchtime=1s -count=3`：38 个诊断条目的清理耗时中位数 16.098→2.570 µs，分配 24,616→848 B、130→12 次；默认 20 条健康样本快照 233.1→179.1 ns，288→160 B、2→1 次分配。无诊断条目时耗时为 1.150→1.254 µs，未显示耗时收益；收益主要来自避免复制已有诊断条目。以上为局部合成基准；候选 c1aa8d5 已部署 Table，未创建独立发布标签。
+
+## rc.11：保留健康 SA、调整轮换顺序与减少重复工作
+
+SA 选择遍历同名候选，优先保留已建立且符合当前运行资源的连接；endpoint 不符只按 SA unique ID 修复，不再按连接名删除全部 SA。secondary takeover 在旧 SA 健康时先准备被动 staged 配置，复用至少两分钟的 takeover 等待，让 primary 先发起；旧 SA 消失或等待到期则主动兜底。准备失败与重启恢复保留该顺序。VICI 缺失 initiator 字段按 responder 解析。
+
+RC.9→RC.10 的相同 20 PING 突发已复现完成 checkpoint 更新流程 1→20 次，实际持久化前后均为一次。修复按已提交字段跳过完全相同的成功结果，更新流程回到一次；新一秒、失败恢复及持久化失败重试仍正常提交。另去掉空内部队列 pop 和结果 slice 复制，健康更新的 spool/SSE 共用一次完整统计快照。
+
+通过最终 make check、make smoke-all 和 host/ipsec/photonlinux/app 的 race 检查。SA 乱序、精确删除、轮换等待/兜底/重启，以及真实 Store 的突发与失败重试均有回归覆盖。诊断、原始基准、线上采样函数统计与结论边界保存在本地 `build/validation/rc10-perf-fix-20261016/report.md`。合成基准尚不能证明线上总 CPU 降幅；发布和部署证据单独记录于 `build/validation/rc11-20261016/`。
+
+## rc.10：可靠交付内部结果，分批推进事件
+
+- Gossip 状态仍由一个消费循环更新。保留原有 4 个 TCP 对象拉取 worker、64 个待执行任务及每 peer 最多 2 个并发；worker 只做网络拉取与响应解析，返回结果后由消费循环验证、持久化并发布状态。
+- 可恢复输入默认容量 64，UDP 溢出时丢包并累计、限流记录。计时器与 worker 结果走独立容量 4 的可靠通道，满时生产 goroutine 等待交付，停止时可以取消；取消后的旧 timer generation 仍被拒绝。
+- 已接收 PONG、目录页、分片组装结果、快照应用确认及提交失败结果通过返回值交回 dispatcher，不再与新收包争抢输入槽位。整批快照持久化失败也会交付失败结果，让会话明确收尾。
+- 每轮最多执行 16 个就绪步骤，剩余结果保留并合并唤醒下一轮。有就绪内部工作时暂停取新输入，可靠结果与平台事件仍可处理；仅有异步 I/O 在途时不暂停输入。不增加结果转发 goroutine，也不并发提交状态事务。
+- Linux daemon、sync serve/once 与 Windows 公共消费入口同步接入。批次聚合会话完成时的 NetworkChanged，避免后续内部事件覆盖已完成的变化；本地输入拥塞不再标记为远端 invalid_message。
+
+已通过 make check、make smoke-all、公共 host/Linux/Windows 逻辑 race 检查及队列专项 race 连续 100 轮。回归包含单核满队列 PONG、快照成功/对象拒绝/整批提交失败、worker 满通道交付与停止、计时器取消、16 步预算续处理及等待 I/O 时继续响应其他输入。日志位于本地 build/validation/rc9-queue-fix-20261016/。
+
+schema 2、Gossip wire、签名授权与默认 quota 保持原样。路由、IPsec 和部分持久化仍可能同步占用消费循环；本次保证结果交付和步骤预算，不代表已消除所有 I/O 等待或证明实机 CPU 降幅。实体机部署与观察需单独记录。
+
+## rc.9：修复 quota 补额与分片续发，细分协调慢日志
+
+- 每个 peer 的字节/对象限额保留原值。补额保留纳秒分母下的整数余数，密集检查和拒绝请求不再丢失小数额度；时钟回退不会重复产生额度，满桶不积攒额外额度。
+- UDP 分片初发与修补复用原有有界发送缓存。统一 Host 调度器按小批续发，限流时保留未发送索引，等待额度后继续；事件循环不 sleep，不增加独立发送 worker。仍受原缓存容量和 30 秒 TTL 限制，过期不继续发送。
+- 续发保留请求的回复地址，每次发送仍走 transport 的 peer 检查。重叠修补合并尚未发送的索引；停机清除待发游标与缓存。NACK 按一次有界请求计费，实际重传数据片各自计费。
+- 调度器使用全局 generation 保持取消/替换后的过期事件拒绝，不再永久保留每个完成 transfer ID 的 generation 项。
+- quota 的普通 warn 包含消息类型、收发方向和 requested/available bytes/objects 及限额，无需全量开启 debug。
+- 协调日志增加固定子阶段：routing state read、授权路由、veth、upstream、BIRD write/start/configure/observe，以及 firewall state read、授权路由、preflight、apply；沿用 100ms 阈值与每阶段 30 秒限频，快速路径不输出日志。
+
+确定性回归包含每 1/5/10ms 检查后的完整补额、拒绝请求、时钟回退、满桶与大数溢出；128KiB 合成对象超过 128 个分片时，在刻意收紧的真实 transport quota 下完成初发、重新组装和 128 片修补，其他 peer 仍可发包。另覆盖请求回复地址、peer 移除、缓存过期/停机、重叠修补、stale timer 和不启用 debug 的 quota 诊断。
+
+已通过完整 make check、make smoke-all、make install-script-check，以及 state/host/gossip/photonlinux/app 的 race 检查。验证日志位于本地 build/validation/rc9-20261015/。
+
+此版本不改变 schema 2、Gossip wire、验签或授权逻辑；旧 peer 保持其原有配额行为。两条历史 quota 警告的精确报文仍不可追溯；2.07 秒 routing 和 2.4 秒 firewall 长尾尚未复现，新增子阶段日志用于定位，不能宣称其根因已修复。
 
 ## rc.7：Gossip 窄读取与 CPU 基准
 
@@ -94,6 +149,134 @@ Linux 启动及二次启动、zone 删除和未变化数据保留、写入后失
 新格式损坏时拒绝加载。基准、落盘实验及验证日志保存在
 `/home/herbertqiao/Work/photon/build/validation/rc6-storage-20261014/`。
 rc.7 包含上述存储改动；线上总写入量和 CPU 的收益仍需同机、同负载采样确认。
+
+## rc.8：周期 reconcile 错峰
+
+2026-10-14 在 `/tmp/rc6` 的 `perf/rc6-gossip-projections` 研究分支，以 rc.7
+发布提交 `df8ec528` 为基线，将周期巡检按启动恢复完成时间分相位：路由默认在
+10、40、70 秒执行，防火墙在 20、50、80 秒执行，IPsec 在 15、75、135 秒
+执行。rc.7 的调度仍是路由和防火墙每 30 秒同时巡检，并与每 60 秒的 IPsec
+和默认同步周期重合。新调度保持原周期；IPsec 自定义周期按其 1/4 设置相位。
+
+状态变化、撤销和 VICI 事件仍立即进入原有单写者处理，保留撤销清理与
+firewall → routing → IPsec 的处理顺序。事件驱动 reconcile 完成后，周期
+巡检仍回到各自相位，下一次等待不超过该层周期；耗时工作结束后按当前时间
+跳过已错过的槽位。禁用的层仍取消定时器。
+
+已在 rc.7 基线上通过调度回归（相位保持、禁用、自定义周期、错过槽位与时钟
+回退）和 `make check`（完整 Go 测试、vet、Linux 构建及 Windows 交叉构建）。
+验证日志在 `build/validation/reconcile-phases/check-rc7.log`。
+
+此改动只分散多层周期工作叠加的负载，不减少每轮工作量，也不拆分单次 IPsec
+巡检。默认周期下三层不再定时重合；自定义周期、耗时巡检和外部状态变化仍
+可能造成重叠。实际 CPU 峰值变化需同机上线采样确认，本地调度测试不能代替
+线上性能验收。事件驱动的巡检不再推迟固定周期槽位，因此可能在刚处理完状态
+变化后较快再巡检一次；这换取相位稳定，不能承诺平均 CPU 消耗下降。
+
+## 2026-10-15：RC CPU 现场调研
+
+研究源码为 `/tmp/rc6` 的 `perf/rc6-gossip-projections`，提交 `fb78d514`。
+只读检查实际运行二进制：Table 与 less 均为 rc.7 `df8ec52`，suki.moe 仍为
+v0.5.6 `28472ea`。错峰提交尚未部署。三台均有 38 条 up 链路；硬件、流量及
+状态变更不同，以下是当时负载的观察，不能用来比较版本性能。
+
+按一秒间隔读取 `/proc/<pid>/stat` 和服务 cgroup 的 `cpu.stat`，各采样 181 点，
+实际覆盖约 182–185 秒。百分比以一个核心为 100%；回收子进程的 CPU 来自
+主进程 `cutime/cstime`，服务 cgroup 另含常驻 BIRD 等进程。
+
+| 节点 | CPU | 主进程平均 | 回收子进程平均 | 整个服务平均 | 主进程最高一秒区间 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Table / rc.7 | 1 vCPU EPYC Milan | 1.37% | 0.48% | 2.24% | 13.35% |
+| less / rc.7 | 2 vCPU Ryzen 5700G | 1.15% | 0.18% | 1.79% | 46.37% |
+| suki / v0.5.6 | 1 vCPU Xeon 8163 | 1.83% | 0.62% | 2.80% | 30.16% |
+
+在 less 使用已有 perf 对现有进程补采 120 秒 `cpu-clock:u`，499 Hz、frame
+pointer 展栈。678 个样本中 645 个属于 photon，33 个属于其新建的 ip/nft
+子进程，以下比例仅以 645 个 photon 用户态样本为分母。粗分互斥类别：后台
+GC 约 25.3%，目录摘要 `ZoneDigests` 调用链约 19.1%，授权链验证约 11.6%，
+`ReadView` 调用链约 3.1%。前一轮 DWARF 采样有大量缺失调用栈，未用来判断
+这些调用链的比例。两个 profile 窗口不同，不能直接相加或比较总 CPU 收益。
+
+优先候选：
+
+1. **减少未变 zone 的目录 root 重算。** `ReadCatalog` 虽然已避免整网复制，
+   每次仍通过 `ZoneDigests` 对全部 zone 的 authority、delegation、revocation
+   和当前 record 重新哈希。现有 28-zone 合成 fixture 的
+   `BenchmarkReadProjection/catalog/narrow` 三次耗时中位数约 0.380 ms，
+   每次分配 454,296 B、3,272 次。可在唯一 Store 内复用同一已提交版本的原始
+   `ZoneRoot`，读取时再按当前时间筛掉撤销的 zone，返回独立副本。不能只按
+   verified revision 缓存最终目录：未来撤销生效时可能没有新提交；也不能借此
+   跳过 `VerifyChain`、密钥到期或其他时间检查。实际实现与收益尚未验证。
+2. **批量执行上游路由命令。** Table 在另一个 70 秒 exec/wait 跟踪窗口内
+   启动 211 个不同 PID，其中 130 个为 `ip route replace`，对应五轮处理，
+   每轮 26 条；另有 5 个 `ip addr replace`。该窗口含事件驱动 reconcile，
+   不能解释为纯周期频率。`execUpstreamRouteManager.EnsureRoutes` 目前逐条
+   fork，适合先验证同一 netns 内用 `ip -batch` 合并执行，保留顺序和失败即停。
+   不需要引入长期缓存，也不应只凭上次期望配置相同就跳过真实系统修复。
+   strace 会扰动耗时，其 wait CPU 只能帮助定位，不能当作无跟踪的基线。
+3. **减少防火墙重复探测与无变化时的重建。** 同一 Table 跟踪窗口有 10 个
+   `iptables -V`、20 个 nft 读取进程和 10 个 `nft -f`。源码每次实例解析均
+   探测后端，NFT apply 会原子重建受管表。仅比较上次 `PolicyHash` 不足以
+   发现外部漂移；完整规则比较涉及安全和修复语义，复杂度高于前两项，暂列后续。
+
+Table 首轮 any 抓包混入大量 Higgs 流量并在约 43 秒触及 20,000 包上限，未用
+其包率代表 Photon。随后在 eth0 单独采集同步端口 90 秒：过滤掉两条无关 TCP
+后为 276 个 UDP、12 个 TCP 包，UDP payload 合计约 99 KB，最高一秒 87 包，
+抓包的内核丢弃计数为 0。该窗口支持先研究每事件计算和周期外部命令的判断，但抓包本身不能
+定位 CPU，也不能排除其他时段的重传或高流量问题。
+
+三台调研前后 daemon PID 未变，未重启或切换服务；没有改动网络配置和授权。
+上述现场采样阶段只补充调研记录；后续本地实现见下一节。原始计数、包头文本、perf
+数据、子进程跟踪、分析脚本和基准输出保存在本地
+`/home/herbertqiao/Work/photon/build/validation/cpu-20261015/`。
+
+## rc.8：目录 root 复用与上游路由批处理
+
+在周期错峰提交 `fb78d514` 基础上，以 `1cbc784` 实现目录与路由优化，一并纳入 rc.8。唯一 Common Store 按
+已提交的 verified revision 懒加载一份原始 zone root 快照，`ReadCatalog` 与
+`Store.ZoneDigests` 共用。任意 verified revision 变化后下一次读取重算整份
+原始快照，不依赖 ChangedZones；checkpoint-only 提交继续复用。每次读取仍按
+当前时间判断撤销，返回独立的 slice 和 hash；未来撤销生效、时间回退、purge、
+持久化失败和并发提交不会复用错误的可见目录。没有缓存授权链验证结果，wire
+摘要算法、数据库 schema、持久化成功后发布内存的顺序保持不变。
+
+`execUpstreamRouteManager` 将相邻且地址族相同的命令通过 stdin 交给一个
+`ip -4/-6 -batch -`，保留先地址后路由、排序及失败即停的顺序，不使用 `-force`。
+混合双栈按原顺序最多分四批；同一 IPv6 源地址加 26 条路由由 27 次调用变成
+1 次。命名空间作用域保持原样。对含批处理注释、引号、换行或 NUL 等特殊字符
+的接口名保留逐条 argv 执行，不让批处理解析器改变原参数含义。没有用上次期望
+配置相同作为跳过实际系统修复的依据。
+
+同一 Ryzen 5700G 本机依次运行，各 `-cpu=1 -benchtime=1s -count=3`，以下为
+三次中位数。目录使用既有 28-zone 合成 fixture，并在同一 binary 保留原重算
+路径作对照；路由在隔离 user/network namespace 内通过真实 iproute2 执行
+同样的源地址及 26 条路由，父/子 CPU 通过 `getrusage` 分别计量：
+
+| 项目 | 原路径 | 本地实现 |
+| --- | ---: | ---: |
+| 稳定版本目录读取 | 455.252 us | 9.611 us |
+| 目录每次分配 | 454,296 B / 3,272 次 | 5,120 B / 192 次 |
+| 单轮上游配置墙钟耗时 | 37.402 ms | 1.788 ms |
+| 单轮上游配置父子进程合计 CPU | 39.786 ms | 1.881 ms |
+| 单轮上游配置进程调用 | 27 | 1 |
+
+稳定目录分配下降约 98.9%；路由这条路径的父子进程 CPU 时间下降约 95.3%。
+目录首次未命中仍需重算，基准约 405.505 us、456,376 B；不能把稳定版本收益
+用于每次都有 verified 提交的负载。父子进程可在多核上重叠，合计 CPU 时间可能
+高于墙钟时间。这些均为局部基准，不是线上总 CPU 降幅。
+
+回归覆盖撤销时间跨越与回退、返回值隔离、持久化前/失败时的目录可见性、
+checkpoint-only 更新、身份安装、remote/recovery 提交、purge 及并发读写。
+路由测试覆盖双栈与命名空间参数、特殊接口名兼容、后续批次失败即停；隔离内核
+验收检查真实双栈路由与源地址、重复执行，以及批次中间错误后不执行后续行。
+批处理的地址族选项、失败即停和注释/引号规则还核对了
+[iproute2 的批处理入口](https://github.com/iproute2/iproute2/blob/v7.0.0/ip/ip.c)
+与[行解析实现](https://github.com/iproute2/iproute2/blob/v7.0.0/lib/utils.c)。
+已通过 `make check`、`make smoke-all`、state/host/gossip/photonlinux/app 的
+`go test -race -count=1`，以及显式开启的隔离内核验收。
+基准和验证日志保存在本地
+`/home/herbertqiao/Work/photon/build/validation/cpu-optimizations-20261015/`。
+rc.8 不改变 rc.7 的 schema 2；发布与 Table 同机对照结果需另外记录，以上为本地验证。
 
 ## rc.6 相对 rc.5 的变化：目录刷新与拒绝记录
 
@@ -189,7 +372,7 @@ NixOS、容器或自定义 unit 应沿用原部署方式，显式固定版本。
 
 ```sh
 curl -fL --retry 3 -o /tmp/photon-install-rc.sh \
-  https://raw.githubusercontent.com/HiggsNet/photon/v0.6.0-rc.7/contrib/install.sh
+  https://raw.githubusercontent.com/HiggsNet/photon/v0.6.0-rc.9/contrib/install.sh
 ```
 
 先在测试机安装旧版，完成入网并确认双向通信，作为基线：
@@ -208,10 +391,10 @@ photon version
 
 ```sh
 sudo systemctl stop photon
-sudo install -d -m 0700 /var/backups/photon-before-rc7
-sudo cp -a /etc/photon /var/backups/photon-before-rc7/etc-photon
-sudo cp -a /usr/local/bin/photon /usr/local/bin/photon-services /var/backups/photon-before-rc7/
-sudo sh /tmp/photon-install-rc.sh --version v0.6.0-rc.7 --no-service
+sudo install -d -m 0700 /var/backups/photon-before-rc9
+sudo cp -a /etc/photon /var/backups/photon-before-rc9/etc-photon
+sudo cp -a /usr/local/bin/photon /usr/local/bin/photon-services /var/backups/photon-before-rc9/
+sudo sh /tmp/photon-install-rc.sh --version v0.6.0-rc.9 --no-service
 sudo systemctl start photon
 photon version
 sudo systemctl status photon --no-pager
@@ -250,14 +433,14 @@ sudo systemctl status photon --no-pager
 
 ```sh
 sudo systemctl stop photon
-sudo mv /etc/photon /etc/photon-rc7-saved
-sudo cp -a /var/backups/photon-before-rc7/etc-photon /etc/photon
-sudo cp -a /var/backups/photon-before-rc7/photon /var/backups/photon-before-rc7/photon-services /usr/local/bin/
+sudo mv /etc/photon /etc/photon-rc9-saved
+sudo cp -a /var/backups/photon-before-rc9/etc-photon /etc/photon
+sudo cp -a /var/backups/photon-before-rc9/photon /var/backups/photon-before-rc9/photon-services /usr/local/bin/
 sudo systemctl start photon
 photon version
 ```
 
-`/etc/photon-rc7-saved` 必须尚不存在，保留新版数据供诊断。回退后再次确认真实通信，
+`/etc/photon-rc9-saved` 必须尚不存在，保留新版数据供诊断。回退后再次确认真实通信，
 必要时重启测试机清理运行中的网络状态，不只检查程序版本。
 
 ## 发布者检查
@@ -265,4 +448,4 @@ photon version
 发布前执行 `make check`、`make smoke-all`、`make install-script-check`；
 记录特权数据面测试、真实升级和长时间测试是否实际执行，不以基础检查替代它们。
 GitHub Actions 必须提供两种 Linux 架构的归档和校验文件，Release 标记为
-Pre-release，RC.7 Docker 镜像使用显式 `v0.6.0-rc.7` 标签，正式 `latest` 保持不变。
+Pre-release，RC.9 Docker 镜像使用显式 `v0.6.0-rc.9` 标签，正式 `latest` 保持不变。

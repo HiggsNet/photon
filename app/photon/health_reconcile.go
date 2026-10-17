@@ -148,12 +148,20 @@ func (d *Daemon) handleHealthUpdate(now time.Time) {
 	if d.health == nil || d.health.Manager == nil {
 		return
 	}
+	if d.health.spool == nil && d.observerHub == nil {
+		return
+	}
+	// Spool and SSE describe the same completed update. Snapshot once: each
+	// snapshot computes rolling-window quantiles for every active probe.
+	snapshot := d.health.Snapshot(now)
 	if d.health.spool != nil {
-		if err := d.health.spool.Append(now, healthSpoolSamples(d.healthSamples())); err != nil && !errors.Is(err, healthspool.ErrNotConfigured) {
+		if err := d.health.spool.Append(now, healthSpoolSamples(healthSamplesFromSnapshot(snapshot))); err != nil && !errors.Is(err, healthspool.ErrNotConfigured) {
 			d.logWarn("health", "spool_write_failed", map[string]any{"error": err})
 		}
 	}
-	d.notifyObserver("health_updated", d.observerHealthLinkIDsPayload())
+	if d.observerHub != nil {
+		d.notifyObserver("health_updated", observerHealthIDsPayload(snapshot))
+	}
 }
 
 func healthSpoolSamples(links []inspect.HealthSample) []healthspool.Sample {
@@ -183,8 +191,10 @@ func (d *Daemon) healthSamples() []inspect.HealthSample {
 	if d.health == nil || d.health.Manager == nil {
 		return nil
 	}
-	now := d.now()
-	snapshot := d.health.Snapshot(now)
+	return healthSamplesFromSnapshot(d.health.Snapshot(d.now()))
+}
+
+func healthSamplesFromSnapshot(snapshot []health.LinkHealth) []inspect.HealthSample {
 	out := make([]inspect.HealthSample, 0, len(snapshot))
 	for _, h := range snapshot {
 		out = append(out, inspect.HealthSample{

@@ -66,6 +66,17 @@ func BenchmarkReadProjection(b *testing.B) {
 			return &CatalogView{ManagedZone: v.State.ManagedZone, Digests: ZoneDigests(v.State.Network)}
 		}},
 		{"catalog/narrow", func() any { return store.ReadCatalog() }},
+		{"catalog/recompute", func() any {
+			// The previous ReadCatalog path, measured against the same pinned
+			// fixture without adding the unrelated full ReadView copy.
+			store.mu.RLock()
+			defer store.mu.RUnlock()
+			return &CatalogView{ManagedZone: store.state.ManagedZone, Digests: ZoneDigests(store.state.Network)}
+		}},
+		{"catalog/cold", func() any {
+			store.catalog.Store(nil)
+			return store.ReadCatalog()
+		}},
 		{"activity/full", func() any {
 			v := store.ReadView()
 			out := PeerActivityView{RevokedZones: v.State.Network.RevokedZones(now), Peers: make(map[string]PeerActivity)}

@@ -106,12 +106,11 @@ type Scheduler struct {
 	clock  Clock
 	events chan<- Event
 
-	mu             sync.Mutex
-	timers         timerHeap
-	active         map[TimerID]uint64
-	lastGeneration map[TimerID]uint64
-	sequence       uint64
-	stopped        bool
+	mu       sync.Mutex
+	timers   timerHeap
+	active   map[TimerID]uint64
+	sequence uint64
+	stopped  bool
 
 	wake     chan struct{}
 	done     chan struct{}
@@ -123,13 +122,12 @@ func NewScheduler(clock Clock, events chan<- Event) *Scheduler {
 		clock = NewClock(nil)
 	}
 	scheduler := &Scheduler{
-		clock:          clock,
-		events:         events,
-		active:         make(map[TimerID]uint64),
-		lastGeneration: make(map[TimerID]uint64),
-		wake:           make(chan struct{}, 1),
-		done:           make(chan struct{}),
-		stopDone:       make(chan struct{}),
+		clock:    clock,
+		events:   events,
+		active:   make(map[TimerID]uint64),
+		wake:     make(chan struct{}, 1),
+		done:     make(chan struct{}),
+		stopDone: make(chan struct{}),
 	}
 	heap.Init(&scheduler.timers)
 	go scheduler.run()
@@ -145,10 +143,11 @@ func (scheduler *Scheduler) Schedule(id TimerID, deadline time.Time) (uint64, er
 		scheduler.mu.Unlock()
 		return 0, ErrSchedulerStopped
 	}
-	generation := scheduler.lastGeneration[id] + 1
-	scheduler.lastGeneration[id] = generation
-	scheduler.active[id] = generation
+	// A global generation also distinguishes reuse after cancel/accept without
+	// retaining every completed transfer ID for the lifetime of the daemon.
 	scheduler.sequence++
+	generation := scheduler.sequence
+	scheduler.active[id] = generation
 	heap.Push(&scheduler.timers, &scheduledTimer{
 		id:         id,
 		generation: generation,

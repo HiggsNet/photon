@@ -20,7 +20,7 @@ func TestGossipDriverHandleGossipSessionEventOwnsEngineToActionBridge(t *testing
 	defer driver.Stop()
 	driver.Gossip.NewSession("peer-a")
 
-	result, err := driver.handleGossipSessionEvent(context.Background(), &gossip.SyncTimerEvent{PeerID: "peer-a"}, clock.Now(), controller)
+	result, _, err := driver.handleGossipSessionEvent(context.Background(), &gossip.SyncTimerEvent{PeerID: "peer-a"}, clock.Now(), controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestGossipDriverHandleGossipHostEventOwnsPacketTimerAndCompletionDispatch(t
 		t.Fatal(err)
 	}
 	clock.Advance(time.Second)
-	timerResult, err := driver.HandleGossipHostEvent(context.Background(), <-driver.Events(), clock.Now(), nil)
+	timerResult, err := driver.HandleGossipHostEvent(context.Background(), <-driver.Completions(), clock.Now(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,10 +110,10 @@ func TestGossipDriverHandleGossipSessionEventRejectsMissingPeerOrSession(t *test
 	driver := NewGossipDriver(nil, 1, nil, GossipDriverConfig{})
 	defer driver.Stop()
 	controller := &memoryGossipController{}
-	if _, err := driver.handleGossipSessionEvent(context.Background(), &gossip.PacketEvent{}, time.Now(), controller); !errors.Is(err, ErrGossipEventPeerRequired) {
+	if _, _, err := driver.handleGossipSessionEvent(context.Background(), &gossip.PacketEvent{}, time.Now(), controller); !errors.Is(err, ErrGossipEventPeerRequired) {
 		t.Fatalf("missing peer error = %v", err)
 	}
-	if _, err := driver.handleGossipSessionEvent(context.Background(), &gossip.SyncTimerEvent{PeerID: "missing"}, time.Now(), controller); !errors.Is(err, ErrGossipSessionNotFound) {
+	if _, _, err := driver.handleGossipSessionEvent(context.Background(), &gossip.SyncTimerEvent{PeerID: "missing"}, time.Now(), controller); !errors.Is(err, ErrGossipSessionNotFound) {
 		t.Fatalf("missing session error = %v", err)
 	}
 }
@@ -134,9 +134,7 @@ func TestGossipDriverDrainsQueuedRepliesAfterSessionCompletes(t *testing.T) {
 		packet := GossipPacketReceived{Packet: &gossip.Packet{Message: &gossip.Message{
 			Type: gossip.MessagePong, PeerID: "peer-a", Pong: &gossip.Pong{},
 		}}}
-		if _, err := driver.HandleGossipHostEvent(ctx, packet, now, nil); err != nil {
-			t.Fatal(err)
-		}
+		driver.events <- packet
 	}
 	result, err := driver.HandleGossipHostEvent(ctx, <-driver.Events(), now, nil)
 	if err != nil || !result.Session.Done || driver.Gossip.Session("peer-a") != nil {
@@ -172,7 +170,7 @@ func TestGossipDriverRoundTimeoutDropsOnlyItsPeerChunkAssemblies(t *testing.T) {
 		t.Fatalf("first chunk: complete=%t err=%v", complete, err)
 	}
 	controller := &memoryGossipController{}
-	if _, err := driver.handleGossipSessionEvent(context.Background(), &gossip.RoundTimeoutEvent{PeerID: "peer-a"}, time.Now(), controller); err != nil {
+	if _, _, err := driver.handleGossipSessionEvent(context.Background(), &gossip.RoundTimeoutEvent{PeerID: "peer-a"}, time.Now(), controller); err != nil {
 		t.Fatal(err)
 	}
 	second := &gossip.ObjectChunk{TransferID: id, Object: gossip.ObjectPullZone, Zone: "catofes.", ObjectHash: make([]byte, 32), Index: 1, Total: 2, Data: []byte("second")}
@@ -191,7 +189,7 @@ func TestGossipDriverHandleGossipSessionEventOwnsCatalogEnrichment(t *testing.T)
 		{Zone: "local.catofes.", RootHash: []byte("local")},
 		{Zone: "remote.catofes.", RootHash: []byte("remote")},
 	}}}
-	if _, err := driver.handleGossipSessionEvent(context.Background(), event, time.Now(), controller); err != nil {
+	if _, _, err := driver.handleGossipSessionEvent(context.Background(), event, time.Now(), controller); err != nil {
 		t.Fatal(err)
 	}
 	if len(event.Page.Entries) != 1 || event.Page.Entries[0].Zone != "remote.catofes." {
@@ -280,13 +278,13 @@ func TestGossipDriverSchedulerDeliversChunkRepairThroughCommonEventBridge(t *tes
 		t.Fatal(err)
 	}
 	clock.Advance(gossip.ChunkRepairQuiet)
-	hostEvent := <-driver.Events()
+	hostEvent := <-driver.Completions()
 	event, ok := driver.GossipSessionEventFor(hostEvent)
 	if !ok {
 		t.Fatalf("host event %#v was not a gossip event", hostEvent)
 	}
 	controller := &memoryGossipController{}
-	if _, err := driver.handleGossipSessionEvent(context.Background(), event, clock.Now(), controller); err != nil {
+	if _, _, err := driver.handleGossipSessionEvent(context.Background(), event, clock.Now(), controller); err != nil {
 		t.Fatal(err)
 	}
 	if want := []string{"send:object_chunk_nack"}; !reflect.DeepEqual(controller.trace, want) {

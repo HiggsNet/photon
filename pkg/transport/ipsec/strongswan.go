@@ -271,6 +271,11 @@ func parseSAStates(event map[string]any) []SAState {
 		state.UniqueID = uint64Value(body["uniqueid"])
 		state.IKEAgeSeconds = uint64Value(body["established"])
 		state.Initiator, state.InitiatorKnown = boolValue(body["initiator"])
+		// VICI list-sa only emits initiator=yes for an outbound IKE_SA.
+		// Absence identifies the responder; it is not unknown direction.
+		if _, present := body["initiator"]; !present {
+			state.InitiatorKnown = true
+		}
 		remoteHost := stringValue(body["remote-host"])
 		remotePort := stringValue(body["remote-port"])
 		localHost := stringValue(body["local-host"])

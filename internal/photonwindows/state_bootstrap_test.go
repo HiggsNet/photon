@@ -265,16 +265,20 @@ func TestAutoJoinCommonGossipRejectsWrongKeyThenAdoptsWithoutRestart(t *testing.
 	go func() {
 		defer close(right.done)
 		for {
+			var event corehost.Event
 			select {
 			case <-right.ctx.Done():
 				return
 			case reply := <-requests:
 				reply <- right.runtime.StartGossipSession("catofes.", "auto-join fixture")
-			case event := <-right.runtime.Events():
-				if err := right.handleEvent(event); err != nil {
-					right.recordError(err)
-					return
-				}
+				continue
+			case event = <-right.runtime.Events():
+			case event = <-right.runtime.Completions():
+			case event = <-right.runtime.Continuations():
+			}
+			if err := right.handleEvent(event); err != nil {
+				right.recordError(err)
+				return
 			}
 		}
 	}()

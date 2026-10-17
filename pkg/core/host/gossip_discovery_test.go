@@ -27,6 +27,10 @@ func (writer failingDiscoveryWriter) ReadDiscovery(peerID string) *corestate.Dis
 	return corestate.NewStoreWithCheckpoint(writer.view.State, writer.view.Gossip, nil, nil).ReadDiscovery(peerID)
 }
 
+func (writer failingDiscoveryWriter) ReadPeerAuthorization(peerID string) *corestate.DiscoveryView {
+	return corestate.NewStoreWithCheckpoint(writer.view.State, writer.view.Gossip, nil, nil).ReadPeerAuthorization(peerID)
+}
+
 func (writer failingDiscoveryWriter) ReadZoneSnapshot(path zone.ZonePath, now time.Time) (*corestate.ZoneSnapshot, bool, error) {
 	return corestate.NewStore(writer.view.State, nil, nil).ReadZoneSnapshot(path, now)
 }

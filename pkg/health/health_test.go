@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -119,15 +120,47 @@ func TestRollingWindowCountsPacketsAcrossBursts(t *testing.T) {
 }
 
 func TestRollingWindowJitter(t *testing.T) {
-	w := NewRollingWindow(10)
+	w := NewRollingWindow(4)
 	now := time.Now()
+	w.Record(now, 100*time.Millisecond, true) // Evicted when the ring wraps.
 	w.Record(now, 10*time.Millisecond, true)
+	w.Record(now, 0, false)
 	w.Record(now, 20*time.Millisecond, true)
 	w.Record(now, 15*time.Millisecond, true)
 	snap := w.Snapshot()
 	// Jitter is mean abs deviation of consecutive samples: |20-10| + |15-20| = 15ms / 2 = 7.5ms
-	if snap.Jitter <= 0 {
-		t.Fatalf("jitter = %v, want > 0", snap.Jitter)
+	if snap.Jitter != 7500*time.Microsecond {
+		t.Fatalf("jitter = %v, want 7.5ms in chronological order", snap.Jitter)
+	}
+	if snap.MinRTT != 10*time.Millisecond || snap.MaxRTT != 20*time.Millisecond || snap.P50RTT != 15*time.Millisecond || snap.P95RTT != 15*time.Millisecond || snap.P99RTT != 15*time.Millisecond {
+		t.Fatalf("RTT percentiles = %+v", snap)
+	}
+	if snap.Sent != 4 || snap.Received != 3 || snap.Lost != 1 || snap.LastRTT != 15*time.Millisecond {
+		t.Fatalf("packet counts and latest RTT = %+v", snap)
+	}
+	if again := w.Snapshot(); again != snap {
+		t.Fatalf("snapshot mutated window: first=%+v second=%+v", snap, again)
+	}
+	w.Record(now, 5*time.Millisecond, true)
+	if next := w.Snapshot(); next.Jitter != 7500*time.Microsecond || next.MinRTT != 5*time.Millisecond || next.LastRTT != 5*time.Millisecond {
+		t.Fatalf("snapshot changed ring order or eviction: %+v", next)
+	}
+}
+
+func BenchmarkRollingWindowSnapshot(b *testing.B) {
+	for _, size := range []int{20, 128} {
+		b.Run(strconv.Itoa(size), func(b *testing.B) {
+			window := NewRollingWindow(size)
+			now := time.Unix(1000, 0)
+			for i := range 2*size + 5 {
+				window.Record(now, time.Duration((i*37)%101+1)*time.Millisecond, i%5 != 0)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				window.Snapshot()
+			}
+		})
 	}
 }
 

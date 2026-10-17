@@ -492,6 +492,24 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			}
 		}
 	}
+	handleGossipEvent := func(event corehost.Event) error {
+		before := state.Store().VerifiedRevision()
+		if _, err := driver.HandleGossipHostEvent(ctx, event, time.Now(), nil); err != nil && !errors.Is(err, corehost.ErrGossipSessionNotFound) && ctx.Err() == nil {
+			logger.Warn("gossip_event_failed", "error", err)
+		}
+		if state.Store().VerifiedRevision() != before {
+			if tunnel.phase != 0 && !tunnel.current(freshPlan()) {
+				stopTunnel("verified authorization withdrawn")
+			}
+			observeGateways()
+			requestPlan()
+			if err := reconcileLeaf(); err != nil {
+				return err
+			}
+			observeReady()
+		}
+		return nil
+	}
 	close(d.ready)
 	for {
 		select {
@@ -658,20 +676,16 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			}
 			syncPeers()
 		case event := <-driver.Events():
-			before := state.Store().VerifiedRevision()
-			if _, err := driver.HandleGossipHostEvent(ctx, event, time.Now(), nil); err != nil && !errors.Is(err, corehost.ErrGossipSessionNotFound) && ctx.Err() == nil {
-				logger.Warn("gossip_event_failed", "error", err)
+			if err := handleGossipEvent(event); err != nil {
+				return err
 			}
-			if state.Store().VerifiedRevision() != before {
-				if tunnel.phase != 0 && !tunnel.current(freshPlan()) {
-					stopTunnel("verified authorization withdrawn")
-				}
-				observeGateways()
-				requestPlan()
-				if err := reconcileLeaf(); err != nil {
-					return err
-				}
-				observeReady()
+		case event := <-driver.Completions():
+			if err := handleGossipEvent(event); err != nil {
+				return err
+			}
+		case event := <-driver.Continuations():
+			if err := handleGossipEvent(event); err != nil {
+				return err
 			}
 		}
 	}

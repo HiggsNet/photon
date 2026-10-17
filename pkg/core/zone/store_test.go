@@ -25,6 +25,19 @@ func TestZonePathParentAndAncestors(t *testing.T) {
 	}
 }
 
+func TestZonePathParentBoundaryInputs(t *testing.T) {
+	for _, tc := range []struct{ path, parent ZonePath }{
+		{"", "."}, {".", "."}, {"node", "."}, {"node.", "."},
+		{"node.site.", "site."}, {"node.site", "site."},
+		{".site.", "site."}, {"node..site.", ".site."},
+		{"..", "."}, {"...", ".."}, {"node..", "."},
+	} {
+		if got := tc.path.Parent(); got != tc.parent {
+			t.Errorf("%q.Parent() = %q, want %q", tc.path, got, tc.parent)
+		}
+	}
+}
+
 func TestNetworkStateGetFallback(t *testing.T) {
 	ns := NewNetworkState()
 	ns.Zones[RootZone] = NewZoneState(RootZone, nil)

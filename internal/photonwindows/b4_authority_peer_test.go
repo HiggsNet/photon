@@ -135,6 +135,7 @@ func startB4AuthorityPeerAt(t *testing.T, ctx context.Context, config *Config, l
 		ticker := time.NewTicker(250 * time.Millisecond)
 		defer ticker.Stop()
 		for {
+			var event corehost.Event
 			select {
 			case <-peerCtx.Done():
 				return
@@ -145,10 +146,10 @@ func startB4AuthorityPeerAt(t *testing.T, ctx context.Context, config *Config, l
 					_, err = driver.SyncGossipPeers(peerCtx, time.Now(), nil, true)
 				}
 				command.result <- err
-			case event := <-driver.Events():
-				if _, err := driver.HandleGossipHostEvent(peerCtx, event, time.Now(), nil); err != nil && !errors.Is(err, corehost.ErrGossipSessionNotFound) && peerCtx.Err() == nil {
-					peer.recordError(err)
-				}
+				continue
+			case event = <-driver.Events():
+			case event = <-driver.Completions():
+			case event = <-driver.Continuations():
 			case <-ticker.C:
 				if err := driver.RefreshGossipDiscovery(peerCtx, nil, time.Now(), transport); err != nil && peerCtx.Err() == nil {
 					peer.recordError(err)
@@ -156,6 +157,10 @@ func startB4AuthorityPeerAt(t *testing.T, ctx context.Context, config *Config, l
 				if _, err := driver.SyncGossipPeers(peerCtx, time.Now(), nil, false); err != nil && peerCtx.Err() == nil {
 					peer.recordError(err)
 				}
+				continue
+			}
+			if _, err := driver.HandleGossipHostEvent(peerCtx, event, time.Now(), nil); err != nil && !errors.Is(err, corehost.ErrGossipSessionNotFound) && peerCtx.Err() == nil {
+				peer.recordError(err)
 			}
 		}
 	}()

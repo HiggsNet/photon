@@ -45,6 +45,7 @@ type Daemon struct {
 	routingDirty           bool
 	routingForceReload     bool
 	firewallDirty          bool
+	reconcileEpoch         time.Time
 	daemonTimers           *corehost.Scheduler
 	daemonTimerEvents      chan corehost.Event
 
@@ -344,19 +345,20 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.flushFirewallReconcile(ctx)
 	d.logDebug("daemon", "startup_recovery_layer_done", map[string]any{"layer": "firewall"})
 	d.logDebug("daemon", "startup_recovery_done", nil)
+	d.reconcileEpoch = d.now()
 	if err := d.scheduleDaemonTimer(daemonTimerEndpoint, startupNow); err != nil {
 		return err
 	}
 	if err := d.scheduleDaemonTimer(daemonTimerSync, startupNow); err != nil {
 		return err
 	}
-	if err := d.scheduleDaemonTimer(daemonTimerIPsec, nextReconcileTime(startupNow, ipsecReconcileInterval)); err != nil {
+	if err := d.scheduleDaemonTimer(daemonTimerIPsec, d.nextReconcileTime(daemonTimerIPsec, d.now(), ipsecReconcileInterval)); err != nil {
 		return err
 	}
-	if err := d.scheduleDaemonTimer(daemonTimerRouting, nextReconcileTime(startupNow, routingReconcileInterval)); err != nil {
+	if err := d.scheduleDaemonTimer(daemonTimerRouting, d.nextReconcileTime(daemonTimerRouting, d.now(), routingReconcileInterval)); err != nil {
 		return err
 	}
-	if err := d.scheduleDaemonTimer(daemonTimerFirewall, nextReconcileTime(startupNow, firewallReconcileInterval)); err != nil {
+	if err := d.scheduleDaemonTimer(daemonTimerFirewall, d.nextReconcileTime(daemonTimerFirewall, d.now(), firewallReconcileInterval)); err != nil {
 		return err
 	}
 	if d.health != nil && d.health.Manager != nil {
@@ -383,35 +385,35 @@ func (d *Daemon) Run(ctx context.Context) error {
 			}
 		}
 		if ipsecFlushed {
-			if err := d.scheduleDaemonTimer(daemonTimerIPsec, nextReconcileTime(now, ipsecReconcileInterval)); err != nil {
+			if err := d.scheduleDaemonTimer(daemonTimerIPsec, d.nextReconcileTime(daemonTimerIPsec, d.now(), ipsecReconcileInterval)); err != nil {
 				return err
 			}
 		}
 		if interval := d.ipsecReconcileInterval(); interval != ipsecReconcileInterval {
 			ipsecReconcileInterval = interval
-			if err := d.scheduleDaemonTimer(daemonTimerIPsec, nextReconcileTime(now, interval)); err != nil {
+			if err := d.scheduleDaemonTimer(daemonTimerIPsec, d.nextReconcileTime(daemonTimerIPsec, d.now(), interval)); err != nil {
 				return err
 			}
 		}
 		if routingFlushed {
-			if err := d.scheduleDaemonTimer(daemonTimerRouting, nextReconcileTime(now, routingReconcileInterval)); err != nil {
+			if err := d.scheduleDaemonTimer(daemonTimerRouting, d.nextReconcileTime(daemonTimerRouting, d.now(), routingReconcileInterval)); err != nil {
 				return err
 			}
 		}
 		if interval := d.routingReconcileInterval(); interval != routingReconcileInterval {
 			routingReconcileInterval = interval
-			if err := d.scheduleDaemonTimer(daemonTimerRouting, nextReconcileTime(now, interval)); err != nil {
+			if err := d.scheduleDaemonTimer(daemonTimerRouting, d.nextReconcileTime(daemonTimerRouting, d.now(), interval)); err != nil {
 				return err
 			}
 		}
 		if firewallFlushed {
-			if err := d.scheduleDaemonTimer(daemonTimerFirewall, nextReconcileTime(now, firewallReconcileInterval)); err != nil {
+			if err := d.scheduleDaemonTimer(daemonTimerFirewall, d.nextReconcileTime(daemonTimerFirewall, d.now(), firewallReconcileInterval)); err != nil {
 				return err
 			}
 		}
 		if interval := d.firewallReconcileInterval(); interval != firewallReconcileInterval {
 			firewallReconcileInterval = interval
-			if err := d.scheduleDaemonTimer(daemonTimerFirewall, nextReconcileTime(now, interval)); err != nil {
+			if err := d.scheduleDaemonTimer(daemonTimerFirewall, d.nextReconcileTime(daemonTimerFirewall, d.now(), interval)); err != nil {
 				return err
 			}
 		}
@@ -470,21 +472,21 @@ func (d *Daemon) Run(ctx context.Context) error {
 				case daemonTimerIPsec:
 					d.ipsecDirty = true
 					if d.flushIPsecReconcile(ctx) {
-						if err := d.scheduleDaemonTimer(daemonTimerIPsec, nextReconcileTime(now, ipsecReconcileInterval)); err != nil {
+						if err := d.scheduleDaemonTimer(daemonTimerIPsec, d.nextReconcileTime(daemonTimerIPsec, d.now(), ipsecReconcileInterval)); err != nil {
 							return err
 						}
 					}
 				case daemonTimerRouting:
 					d.routingDirty = true
 					if d.flushRoutingReconcile(ctx) {
-						if err := d.scheduleDaemonTimer(daemonTimerRouting, nextReconcileTime(now, routingReconcileInterval)); err != nil {
+						if err := d.scheduleDaemonTimer(daemonTimerRouting, d.nextReconcileTime(daemonTimerRouting, d.now(), routingReconcileInterval)); err != nil {
 							return err
 						}
 					}
 				case daemonTimerFirewall:
 					d.firewallDirty = true
 					if d.flushFirewallReconcile(ctx) {
-						if err := d.scheduleDaemonTimer(daemonTimerFirewall, nextReconcileTime(now, firewallReconcileInterval)); err != nil {
+						if err := d.scheduleDaemonTimer(daemonTimerFirewall, d.nextReconcileTime(daemonTimerFirewall, d.now(), firewallReconcileInterval)); err != nil {
 							return err
 						}
 					}
@@ -497,6 +499,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 				continue
 			}
 		case hostEvent := <-d.gossipDriver.Events():
+			_, _ = d.handleGossipDriverEvent(ctx, hostEvent)
+		case hostEvent := <-d.gossipDriver.Completions():
+			_, _ = d.handleGossipDriverEvent(ctx, hostEvent)
+		case hostEvent := <-d.gossipDriver.Continuations():
 			_, _ = d.handleGossipDriverEvent(ctx, hostEvent)
 		}
 	}
@@ -1056,9 +1062,15 @@ func (d *Daemon) flushRevocationCleanup() {
 			return
 		}
 	}
-	for peerID := range d.peerObservabilitySnapshots() {
-		if revokedZones[zone.ZonePath(peerID)] {
-			d.gossipDriver.Observability.Delete(peerID)
+	if d.gossipDriver != nil {
+		observations := d.gossipDriver.Observability
+		// Preserve snapshot's expiry cleanup without copying every peer's
+		// diagnostics just to delete entries in the known revocation set.
+		observations.PurgeExpired(d.now())
+		for peerID, revoked := range revokedZones {
+			if revoked {
+				observations.Delete(peerID.String())
+			}
 		}
 	}
 }
@@ -1113,11 +1125,32 @@ func (d *Daemon) routingReconcileInterval() time.Duration {
 	return defaultRoutingReconcileInterval
 }
 
-func nextReconcileTime(now time.Time, interval time.Duration) time.Time {
+// nextReconcileTime keeps periodic audits on separate phases relative to this
+// daemon's startup. Immediate state-driven reconciles retain their deny-first
+// order; rescheduling them must not align all periodic timers again. Missed slots
+// are skipped, and the next audit is always within one configured interval.
+func (d *Daemon) nextReconcileTime(key string, now time.Time, interval time.Duration) time.Time {
 	if interval <= 0 {
 		return time.Time{}
 	}
-	return now.Add(interval)
+	var phase time.Duration
+	switch key {
+	case daemonTimerIPsec:
+		phase = interval / 4
+	case daemonTimerRouting:
+		phase = interval / 3
+	case daemonTimerFirewall:
+		phase = 2 * (interval / 3)
+	}
+	elapsed := now.Sub(d.reconcileEpoch) % interval
+	if elapsed < 0 {
+		elapsed += interval
+	}
+	delay := phase - elapsed
+	if delay <= 0 {
+		delay += interval
+	}
+	return now.Add(delay)
 }
 
 func boundedReconcileContext(ctx context.Context) (context.Context, context.CancelFunc) {

@@ -11,7 +11,7 @@ import (
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
-func TestGossipDriverHandleGossipObjectChunkCompletesIntoCommonEventQueue(t *testing.T) {
+func TestGossipDriverHandleGossipObjectChunkReturnsCompletion(t *testing.T) {
 	now := time.Unix(100, 0)
 	view := loadedGossipState("remote.catofes.")
 	snapshot, err := corestate.Snapshot(view.State.Network, "remote.catofes.")
@@ -24,6 +24,7 @@ func TestGossipDriverHandleGossipObjectChunkCompletesIntoCommonEventQueue(t *tes
 	}
 	driver := NewGossipDriver(nil, 4, &memoryGossipStateStore{views: []corestate.View{view}}, GossipDriverConfig{})
 	defer driver.Stop()
+	var event gossip.SyncEvent
 	for index, chunk := range chunks {
 		result, err := driver.HandleGossipObjectChunk(context.Background(), &gossip.Message{PeerID: "peer-a", ObjectChunk: chunk}, now)
 		if err != nil {
@@ -35,10 +36,10 @@ func TestGossipDriverHandleGossipObjectChunkCompletesIntoCommonEventQueue(t *tes
 		if index == len(chunks)-1 && (!result.Complete || !result.ChunkFallback) {
 			t.Fatalf("final result = %#v", result)
 		}
+		event = result.Event
 	}
-	event, ok := driver.GossipSessionEventFor(<-driver.Events())
 	completed, completedOK := event.(*gossip.ObjectChunkEvent)
-	if !ok || !completedOK || completed.Snapshot == nil || completed.Snapshot.Zone != snapshot.Zone {
+	if !completedOK || completed.Snapshot == nil || completed.Snapshot.Zone != snapshot.Zone {
 		t.Fatalf("completion event = %#v", event)
 	}
 }
@@ -61,9 +62,8 @@ func TestGossipDriverHandleGossipObjectChunkRejectsAndCheckpointsInvalidObject(t
 	if len(store.updates) != 1 || store.updates[0]["peer-a"].Reject == nil {
 		t.Fatalf("checkpoint updates = %#v", store.updates)
 	}
-	event, ok := driver.GossipSessionEventFor(<-driver.Events())
-	rejected, rejectedOK := event.(*gossip.ObjectChunkEvent)
-	if !ok || !rejectedOK || !errors.Is(rejected.Err, err) {
-		t.Fatalf("rejection event = %#v", event)
+	rejected, rejectedOK := result.Event.(*gossip.ObjectChunkEvent)
+	if !rejectedOK || !errors.Is(rejected.Err, err) {
+		t.Fatalf("rejection event = %#v", result.Event)
 	}
 }

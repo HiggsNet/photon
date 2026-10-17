@@ -10,6 +10,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
@@ -79,13 +80,16 @@ func syncServe(ctx context.Context) error {
 		"addr":    transport.LocalAddr(),
 	})
 	for {
+		var hostEvent corehost.Event
 		select {
 		case <-ctx.Done():
 			return nil
-		case hostEvent := <-service.gossipDriver.Events():
-			_, _ = service.handleGossipDriverEvent(ctx, hostEvent)
-			service.flushRevocationCleanup()
+		case hostEvent = <-service.gossipDriver.Events():
+		case hostEvent = <-service.gossipDriver.Completions():
+		case hostEvent = <-service.gossipDriver.Continuations():
 		}
+		_, _ = service.handleGossipDriverEvent(ctx, hostEvent)
+		service.flushRevocationCleanup()
 	}
 }
 
@@ -147,6 +151,7 @@ func syncOnce(peerID string) error {
 			quietTimer = time.NewTimer(remaining)
 			quiet = quietTimer.C
 		}
+		var hostEvent corehost.Event
 		select {
 		case <-ctx.Done():
 			if quietTimer != nil {
@@ -157,18 +162,20 @@ func syncOnce(peerID string) error {
 				return &syncPendingZonesError{zones: pending}
 			}
 			return errors.New("sync receive timed out")
-		case hostEvent := <-service.gossipDriver.Events():
-			if quietTimer != nil {
-				quietTimer.Stop()
-			}
-			responderQuietUntil = time.Time{}
-			if _, err := service.handleGossipDriverEvent(ctx, hostEvent); err != nil {
-				return err
-			}
-			service.flushRevocationCleanup()
+		case hostEvent = <-service.gossipDriver.Events():
+		case hostEvent = <-service.gossipDriver.Completions():
+		case hostEvent = <-service.gossipDriver.Continuations():
 		case <-quiet:
 			return nil
 		}
+		if quietTimer != nil {
+			quietTimer.Stop()
+		}
+		responderQuietUntil = time.Time{}
+		if _, err := service.handleGossipDriverEvent(ctx, hostEvent); err != nil {
+			return err
+		}
+		service.flushRevocationCleanup()
 	}
 }
 

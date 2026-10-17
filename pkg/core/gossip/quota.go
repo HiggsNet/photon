@@ -2,6 +2,7 @@ package gossip
 
 import (
 	"errors"
+	"math/bits"
 	"sync"
 	"time"
 )
@@ -17,6 +18,8 @@ type QuotaConfig struct {
 }
 
 type QuotaExceededError struct {
+	Direction          string
+	MessageType        MessageType
 	PeerID             string
 	RequestedBytes     int64
 	RequestedObjects   int64
@@ -45,9 +48,10 @@ type PeerQuotas struct {
 }
 
 type quotaBucket struct {
-	bytes   int64
-	objects int64
-	last    time.Time
+	bytes                          int64
+	objects                        int64
+	last                           time.Time
+	byteRemainder, objectRemainder int64
 }
 
 func NewPeerQuotas(config QuotaConfig) *PeerQuotas {
@@ -131,19 +135,28 @@ func (pq *PeerQuotas) pruneExpired(now time.Time) {
 }
 
 func (pq *PeerQuotas) refill(bucket *quotaBucket, now time.Time) {
-	if now.Before(bucket.last) {
-		bucket.last = now
+	if !now.After(bucket.last) {
 		return
 	}
-	elapsed := now.Sub(bucket.last).Seconds()
-	bucket.bytes = minInt64(pq.config.ByteBurst, bucket.bytes+int64(elapsed*float64(pq.config.ByteRate)))
-	bucket.objects = minInt64(pq.config.ObjectBurst, bucket.objects+int64(elapsed*float64(pq.config.ObjectRate)))
+	elapsed := uint64(now.Sub(bucket.last))
+	bucket.bytes, bucket.byteRemainder = refillTokens(bucket.bytes, bucket.byteRemainder, pq.config.ByteRate, pq.config.ByteBurst, elapsed)
+	bucket.objects, bucket.objectRemainder = refillTokens(bucket.objects, bucket.objectRemainder, pq.config.ObjectRate, pq.config.ObjectBurst, elapsed)
 	bucket.last = now
 }
 
-func minInt64(a, b int64) int64 {
-	if a < b {
-		return a
+// Keep the fractional token numerator across checks, including rejected and
+// zero-cost checks. A full bucket discards excess credit. The wide product
+// also handles long idle periods and large configured rates without overflow.
+func refillTokens(balance, remainder, rate, burst int64, elapsed uint64) (int64, int64) {
+	hi, lo := bits.Mul64(elapsed, uint64(rate))
+	lo, carry := bits.Add64(lo, uint64(remainder), 0)
+	hi += carry
+	if hi >= uint64(time.Second) {
+		return burst, 0
 	}
-	return b
+	added, fraction := bits.Div64(hi, lo, uint64(time.Second))
+	if added >= uint64(burst-balance) {
+		return burst, 0
+	}
+	return balance + int64(added), int64(fraction)
 }

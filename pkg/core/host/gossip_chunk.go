@@ -22,6 +22,7 @@ type GossipObjectChunkResult struct {
 	Complete      bool
 	ChunkFallback bool
 	CheckpointErr error
+	Event         gossip.SyncEvent
 }
 
 // HandleGossipObjectChunk owns bounded assembly, repair scheduling, snapshot
@@ -59,13 +60,13 @@ func (driver *GossipDriver) HandleGossipObjectChunk(ctx context.Context, message
 		return driver.rejectGossipObjectChunk(ctx, message.PeerID, chunk, result, err, now)
 	}
 	result.ChunkFallback = true
-	err = driver.PostGossip(&gossip.ObjectChunkEvent{PeerID: message.PeerID, Zone: chunk.Zone, Snapshot: snapshot})
-	return result, err
+	result.Event = &gossip.ObjectChunkEvent{PeerID: message.PeerID, Zone: chunk.Zone, Snapshot: snapshot}
+	return result, nil
 }
 
 func (driver *GossipDriver) rejectGossipObjectChunk(ctx context.Context, peerID string, chunk *gossip.ObjectChunk, result GossipObjectChunkResult, chunkErr error, now time.Time) (GossipObjectChunkResult, error) {
 	result.CheckpointErr = driver.RecordGossipRejectedObject(ctx, peerID, chunk, chunkErr, now)
-	_ = driver.PostGossip(&gossip.ObjectChunkEvent{PeerID: peerID, Zone: chunk.Zone, Err: chunkErr})
+	result.Event = &gossip.ObjectChunkEvent{PeerID: peerID, Zone: chunk.Zone, Err: chunkErr}
 	return result, chunkErr
 }
 

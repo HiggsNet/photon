@@ -29,9 +29,10 @@ type GossipStateView struct {
 	SenderPeerID string
 }
 
-// GossipSnapshotApplyResult reports whether the verified network changed.
+// GossipSnapshotApplyResult returns committed changes and application results.
 type GossipSnapshotApplyResult struct {
 	NetworkChanged bool
+	Events         []gossip.SyncEvent
 }
 
 // GossipExecutionIssue reports a failed effect without making platform
@@ -53,6 +54,8 @@ type GossipSender interface {
 type GossipExecutionResult struct {
 	NetworkChanged bool
 	Aborted        bool
+	// Events must advance on the consumer after the ordered effects finish.
+	Events []gossip.SyncEvent
 }
 
 // ExecuteGossipActions owns the shared effect ordering for one FSM event:
@@ -89,9 +92,15 @@ func (driver *GossipDriver) ExecuteGossipActions(
 		if err != nil {
 			driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseApply, PeerID: peerID, Err: err})
 			result.Aborted = true
+			for _, snapshot := range plan.Snapshots {
+				if snapshot.ReportResult && snapshot.Snapshot != nil {
+					result.Events = append(result.Events, &gossip.SnapshotAppliedEvent{PeerID: peerID, Zone: snapshot.Snapshot.Zone, Err: err})
+				}
+			}
 			return result
 		}
 		result.NetworkChanged = applyResult.NetworkChanged
+		result.Events = applyResult.Events
 		if result.NetworkChanged {
 			view = driver.gossipStateView()
 			if !view.Loaded {
@@ -115,7 +124,7 @@ func (driver *GossipDriver) ExecuteGossipActions(
 	for _, pull := range plan.ObjectPulls {
 		if err := driver.SubmitGossipObjectPull(pull); err != nil {
 			driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseObjectPull, PeerID: pull.PeerID, Err: err})
-			_ = driver.PostGossip(&gossip.ObjectPullResultEvent{PeerID: pull.PeerID, Zone: pull.Zone, Err: err})
+			result.Events = append(result.Events, &gossip.ObjectPullResultEvent{PeerID: pull.PeerID, Zone: pull.Zone, Err: err})
 		}
 	}
 	for _, timer := range plan.Timers {

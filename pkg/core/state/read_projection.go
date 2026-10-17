@@ -1,16 +1,20 @@
 package state
 
 import (
-	"github.com/HiggsNet/photon/pkg/core/zone"
+	"sort"
 	"time"
+
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 // DiscoveryView contains detached current records, authorization data and
-// restart hints. Discovery never needs record history or local private keys.
+// restart hints from one committed Revision. Discovery never needs record
+// history or local private keys.
 type DiscoveryView struct {
 	ManagedZone zone.ZonePath
 	Network     *zone.NetworkState
 	Peers       map[string]PeerCheckpoint
+	Revision    VerifiedRevision
 }
 
 // ReadDiscovery reads one coherent discovery input. An empty peerID selects
@@ -18,6 +22,20 @@ type DiscoveryView struct {
 // Ancestors retain authority, parent proofs, delegations and revocations, so
 // callers still verify signatures and time-dependent policy on every use.
 func (store *Store) ReadDiscovery(peerID string) *DiscoveryView {
+	return store.readDiscovery(peerID, true)
+}
+
+// ReadPeerAuthorization reads one peer's authorization chain and committed
+// checkpoint without copying endpoint records that observed-source handling
+// does not use. The same signatures, revocations and time checks remain possible.
+func (store *Store) ReadPeerAuthorization(peerID string) *DiscoveryView {
+	if peerID == "" {
+		return nil
+	}
+	return store.readDiscovery(peerID, false)
+}
+
+func (store *Store) readDiscovery(peerID string, records bool) *DiscoveryView {
 	if store == nil {
 		return nil
 	}
@@ -29,6 +47,7 @@ func (store *Store) ReadDiscovery(peerID string) *DiscoveryView {
 	network := store.state.Network
 	out := &DiscoveryView{
 		ManagedZone: store.state.ManagedZone,
+		Revision:    store.revision,
 		Network: &zone.NetworkState{
 			Zones:          make(map[zone.ZonePath]*zone.ZoneState),
 			GlobalRoot:     append([]byte(nil), network.GlobalRoot...),
@@ -53,7 +72,7 @@ func (store *Store) ReadDiscovery(peerID string) *DiscoveryView {
 	if path.Valid() {
 		for current := path; ; current = current.Parent() {
 			if zs, ok := network.Zones[current]; ok {
-				out.Network.Zones[current] = cloneDiscoveryZone(zs, current == path)
+				out.Network.Zones[current] = cloneDiscoveryZone(zs, records && current == path)
 			}
 			if current == zone.RootZone {
 				break
@@ -125,7 +144,43 @@ func (store *Store) ReadCatalog() *CatalogView {
 	if store.state == nil || store.state.Network == nil {
 		return nil
 	}
-	return &CatalogView{ManagedZone: store.state.ManagedZone, Digests: ZoneDigests(store.state.Network)}
+	return &CatalogView{ManagedZone: store.state.ManagedZone, Digests: store.zoneDigestsLocked(time.Now())}
+}
+
+// catalogSnapshot contains only time-independent roots for one committed
+// revision. Store.mu pins that revision while readers build or use the snapshot;
+// concurrent first readers may publish equivalent immutable snapshots.
+type catalogSnapshot struct {
+	revision VerifiedRevision
+	digests  []ZoneDigest
+}
+
+// zoneDigestsLocked requires Store.mu to be held. Only raw zone roots are
+// reused: future revocations can become active without a verified commit, and
+// clock rollback can make a previously hidden zone visible again.
+func (store *Store) zoneDigestsLocked(now time.Time) []ZoneDigest {
+	if store.state == nil || store.state.Network == nil {
+		return nil
+	}
+	network := store.state.Network
+	catalog := store.catalog.Load()
+	if catalog == nil || catalog.revision != store.revision {
+		catalog = &catalogSnapshot{revision: store.revision, digests: make([]ZoneDigest, 0, len(network.Zones))}
+		for path, zs := range network.Zones {
+			if zs != nil {
+				catalog.digests = append(catalog.digests, ZoneDigest{Zone: path, RootHash: ZoneRoot(zs)})
+			}
+		}
+		sort.Slice(catalog.digests, func(i, j int) bool { return catalog.digests[i].Zone < catalog.digests[j].Zone })
+		store.catalog.Store(catalog)
+	}
+	out := make([]ZoneDigest, 0, len(catalog.digests))
+	for _, digest := range catalog.digests {
+		if !network.IsZoneRevoked(digest.Zone, now) {
+			out = append(out, ZoneDigest{Zone: digest.Zone, RootHash: append([]byte(nil), digest.RootHash...)})
+		}
+	}
+	return out
 }
 
 // PeerActivity contains only observation times, without applying lifecycle policy.
@@ -149,7 +204,7 @@ func (store *Store) ReadPeerActivity(now time.Time) PeerActivityView {
 	defer store.mu.RUnlock()
 	out := PeerActivityView{Peers: make(map[string]PeerActivity, len(store.gossip.Peers))}
 	if store.state != nil {
-		out.RevokedZones = store.state.Network.RevokedZones(now)
+		out.RevokedZones = store.revokedZonesLocked(now)
 	}
 	for id, peer := range store.gossip.Peers {
 		out.Peers[id] = PeerActivity{LastSyncUnix: peer.LastSyncUnix, ObservedLastSeenUnix: peer.ObservedLastSeenUnix}

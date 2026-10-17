@@ -75,13 +75,8 @@ func (driver *GossipDriver) respondGossipFetchZone(ctx context.Context, peerID s
 	if err != nil {
 		return err
 	}
-	for _, chunk := range chunks {
-		if err := sender.SendGossip(ctx, gossip.OutboundMessage{PeerID: peerID, Message: &gossip.Message{Type: gossip.MessageObjectChunk, ObjectChunk: chunk}}); err != nil {
-			return err
-		}
-	}
 	driver.observeChunkFallback(peerID, len(chunks), now)
-	return nil
+	return driver.queueGossipChunkSend(ctx, peerID, chunks, sender)
 }
 
 func (driver *GossipDriver) buildGossipSnapshotChunks(peerID string, snapshot *corestate.ZoneSnapshot, budget int, now time.Time) ([]*gossip.ObjectChunk, error) {
@@ -106,12 +101,7 @@ func (driver *GossipDriver) handleGossipObjectChunkNACK(ctx context.Context, mes
 	now := driver.schedulerForRead().clock.Now()
 	chunks := driver.gossipSentChunks.Repair(message.PeerID, message.ObjectChunkNACK, now)
 	driver.observeChunkRepair(message.PeerID, len(chunks) == 0, len(chunks), now)
-	for _, chunk := range chunks {
-		if err := sender.SendGossip(ctx, gossip.OutboundMessage{PeerID: message.PeerID, Message: &gossip.Message{Type: gossip.MessageObjectChunk, ObjectChunk: chunk}}); err != nil {
-			return err
-		}
-	}
-	return nil
+	return driver.queueGossipChunkSend(ctx, message.PeerID, chunks, sender)
 }
 
 // GossipObjectPullResponse serves a read-only TCP object pull from the same

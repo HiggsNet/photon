@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -168,6 +169,8 @@ type Store struct {
 	state             *VerifiedState
 	gossip            *GossipCheckpoint
 	revision          VerifiedRevision
+	catalog           atomic.Pointer[catalogSnapshot]
+	revocations       atomic.Pointer[revocationSnapshot]
 	commit            CommitFunc
 	commitCheckpoints CheckpointCommitFunc
 	closed            bool
@@ -226,7 +229,7 @@ func (store *Store) ZoneDigests() ([]ZoneDigest, VerifiedRevision) {
 	}
 	store.mu.RLock()
 	defer store.mu.RUnlock()
-	return ZoneDigests(store.state.Network), store.revision
+	return store.zoneDigestsLocked(time.Now()), store.revision
 }
 
 // ApplyRemoteBatch applies every item with an independent savepoint. A

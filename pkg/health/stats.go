@@ -30,6 +30,8 @@ type RollingWindow struct {
 	ewma    time.Duration
 	consec  int // consecutive failures
 	lastOK  time.Time
+	cached  WindowSnapshot
+	valid   bool
 }
 
 // NewRollingWindow returns a rolling window with the given capacity.
@@ -53,6 +55,7 @@ func (w *RollingWindow) RecordProbe(at time.Time, result ProbeResult) {
 	result = normalizeProbeResult(result)
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.valid = false
 	w.samples[w.head] = sample{
 		at:       at,
 		rtt:      result.RTT,
@@ -82,10 +85,14 @@ func (w *RollingWindow) RecordProbe(at time.Time, result ProbeResult) {
 	}
 }
 
-// Snapshot computes the current aggregate statistics.
+// Snapshot returns aggregate statistics by value. Only RecordProbe and Reset
+// change the sample window, so unchanged reads can reuse the computed result.
 func (w *RollingWindow) Snapshot() WindowSnapshot {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.valid {
+		return w.cached
+	}
 	snap := WindowSnapshot{
 		Bursts:           w.count,
 		ConsecutiveFails: w.consec,
@@ -93,6 +100,7 @@ func (w *RollingWindow) Snapshot() WindowSnapshot {
 		LastSuccess:      w.lastOK,
 	}
 	if w.count == 0 {
+		w.cached, w.valid = snap, true
 		return snap
 	}
 	rtts := make([]time.Duration, 0, w.count)
@@ -117,15 +125,17 @@ func (w *RollingWindow) Snapshot() WindowSnapshot {
 		snap.LossRatio = float64(snap.Lost) / float64(snap.Sent)
 	}
 	if len(rtts) > 0 {
-		sortedRTTs := slices.Clone(rtts)
-		slices.Sort(sortedRTTs)
-		snap.MinRTT = sortedRTTs[0]
-		snap.MaxRTT = sortedRTTs[len(sortedRTTs)-1]
-		snap.P50RTT = percentile(sortedRTTs, 50)
-		snap.P95RTT = percentile(sortedRTTs, 95)
-		snap.P99RTT = percentile(sortedRTTs, 99)
+		// Jitter needs chronological order; the detached scratch slice can
+		// then be sorted in place for percentiles without another copy.
 		snap.Jitter = computeJitter(rtts)
+		slices.Sort(rtts)
+		snap.MinRTT = rtts[0]
+		snap.MaxRTT = rtts[len(rtts)-1]
+		snap.P50RTT = percentile(rtts, 50)
+		snap.P95RTT = percentile(rtts, 95)
+		snap.P99RTT = percentile(rtts, 99)
 	}
+	w.cached, w.valid = snap, true
 	return snap
 }
 
@@ -157,6 +167,7 @@ func (w *RollingWindow) Reset() {
 	w.ewma = 0
 	w.consec = 0
 	w.lastOK = time.Time{}
+	w.valid = false
 }
 
 func percentile(sorted []time.Duration, pct int) time.Duration {

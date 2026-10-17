@@ -142,7 +142,10 @@ func (d *Daemon) observerHealthLinkIDsPayload() any {
 	if d.health == nil || d.health.Manager == nil {
 		return nil
 	}
-	snapshot := d.health.Snapshot(d.now())
+	return observerHealthIDsPayload(d.health.Snapshot(d.now()))
+}
+
+func observerHealthIDsPayload(snapshot []health.LinkHealth) any {
 	ids := make([]string, 0, len(snapshot))
 	for _, h := range snapshot {
 		if h.InstanceID != "" {

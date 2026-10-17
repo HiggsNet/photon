@@ -2,6 +2,16 @@ package ipsec
 
 import "testing"
 
+func TestParseSAStatesRecognizesResponderWithoutInitiatorFlag(t *testing.T) {
+	states := parseSAStates(map[string]any{"ipsec-responder": map[string]any{
+		"uniqueid": "42", "version": "2", "state": "ESTABLISHED",
+		"initiator-spi": "0123456789abcdef", "responder-spi": "fedcba9876543210",
+	}})
+	if len(states) != 1 || !states[0].InitiatorKnown || states[0].Initiator {
+		t.Fatalf("responder direction = %+v", states)
+	}
+}
+
 func TestParseSAStatesFromVICIListSAs(t *testing.T) {
 	states := parseSAStates(map[string]any{
 		"ipsec-main-ab": map[string]any{
