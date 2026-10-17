@@ -6,6 +6,19 @@ Photon Daemon，复用 console 的运行链路与本机 named pipe，不需要�
 
 ## 使用
 
+在 Linux / WSL 或提供 Bash、Go、curl、unzip、zip、sha256sum 的构建环境执行：
+
+```sh
+make photon-windows-build
+```
+
+可用目录为 `build/windows-amd64/`，包含 exe、固定官方 Wintun DLL、配置示例、
+中文说明及许可证；分发包为 `build/photon-windows-amd64.zip`，旁边提供 `.zip.sha256`。
+首次构建下载并校验固定 Wintun 0.14.1，缓存位于 `build/downloads/`，后续构建重新核验。
+离线构建可指定 `make photon-windows-build WINTUN_DLL=/path/to/wintun.dll`，仍校验同一 DLL 摘要。
+打包不会覆盖已有 `config.yaml` 或数据库，也不会将它们或输出目录内的其它文件装入 ZIP。
+`make photon-windows-cross-build` 仅编译检查，不下载 DLL；`make check` 沿用该检查。
+
 在管理员管理的目录准备 `photon-windows.exe` 和相邻的固定版本 `wintun.dll`。
 可以直接在界面填写配置，也可以继续使用已有配置文件。
 示例配置见 [config.example.yaml](config.example.yaml)，其中的公钥、域名、地址都需要替换。

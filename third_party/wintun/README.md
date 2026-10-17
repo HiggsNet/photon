@@ -13,8 +13,20 @@ The binary is the unmodified, signed **Wintun 0.14.1** AMD64 DLL:
 - `wintun/bin/amd64/wintun.dll` SHA-256: `e5da8447dc2c320edc0fc52fa01885c103de8c118481f683643cacc3220dafce`
 - Redistribution terms: `LICENSE-binary.txt`, copied verbatim from the archive.
 
-The DLL is downloaded and checked by the explicit smoke bundle builder. It is
-not committed or silently downloaded by the daemon. Runtime requires the pinned
+`make photon-windows-build` downloads the official archive into
+`build/downloads/`, verifies its digest, extracts only the amd64 DLL and verifies
+the DLL digest above. Cached archives are verified on every build. For an
+explicit offline input, use `make photon-windows-build WINTUN_DLL=/path/wintun.dll`;
+the same pinned DLL digest is required. `make photon-windows-cross-build` remains
+an executable-only compile check and does not download Wintun.
+
+The complete portable directory is `build/windows-amd64/`; its matching archive
+is `build/photon-windows-amd64.zip` with an adjacent `.zip.sha256` file. Only the
+explicit executable, DLL, example configuration, Chinese usage notes and source/
+license notices enter the ZIP. Existing user configuration and state are not
+included or removed; the example is never installed as `config.yaml`.
+
+The DLL is not committed or silently downloaded by the daemon. Runtime requires the pinned
 DLL next to the executable and checks its digest before creating an adapter.
 The official binding searches only the application directory and System32.
 The installation directory must be writable only by its administrator/owner.

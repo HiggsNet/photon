@@ -74,13 +74,13 @@ vet:
 check: fmt vet test build photon-windows-cross-build
 
 photon-windows-build: photon-windows-cross-build
+	@BUILD_DIR="$(BUILD_DIR)" PHOTON_WINDOWS_EXE="$(BUILD_DIR)/windows-amd64/$(PHOTON_WINDOWS_BINARY_NAME)" WINTUN_DLL="$(WINTUN_DLL)" bash docs/scripts/windows-portable-build.sh
 
 photon-windows-cross-build:
-	@mkdir -p $(BUILD_DIR)/windows-amd64
-	$(WINDOWS_AMD64_GO_ENV) $(GO) build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/windows-amd64/$(PHOTON_WINDOWS_BINARY_NAME) $(PHOTON_WINDOWS_MAIN_PACKAGE)
+	@mkdir -p "$(BUILD_DIR)/windows-amd64"
+	$(WINDOWS_AMD64_GO_ENV) $(GO) build -ldflags "$(LDFLAGS)" -o "$(BUILD_DIR)/windows-amd64/$(PHOTON_WINDOWS_BINARY_NAME)" $(PHOTON_WINDOWS_MAIN_PACKAGE)
 	$(WINDOWS_AMD64_GO_ENV) $(GO) build ./internal/photonwindows ./internal/photonclient/ike ./internal/photonclient/esp ./pkg/core/host ./pkg/core/state ./pkg/core/zone ./pkg/core/gossip ./pkg/crypto ./pkg/routing ./pkg/transport/ipsec
-	@cp -Rf third_party $(BUILD_DIR)/windows-amd64/
-	@echo "Built: $(BUILD_DIR)/windows-amd64/$(PHOTON_WINDOWS_BINARY_NAME)"
+	@echo "Cross-built (executable only): $(BUILD_DIR)/windows-amd64/$(PHOTON_WINDOWS_BINARY_NAME)"
 
 photon-windows-test:
 	$(GO_ENV) $(GO) test ./internal/photonwindows ./internal/photonclient/ike ./internal/photonclient/esp $(PHOTON_WINDOWS_MAIN_PACKAGE)
@@ -1059,7 +1059,8 @@ help:
 	@echo "  fmt     - Format Go source code"
 	@echo "  vet     - Run go vet"
 	@echo "  check   - Run fmt, vet, test, and build"
-	@echo "  photon-windows-build - Cross-build Photon Windows for windows/amd64"
+	@echo "  photon-windows-build - Build Windows amd64 portable directory + ZIP (official Wintun; offline: WINTUN_DLL=/path/wintun.dll)"
+	@echo "  photon-windows-cross-build - Compile Windows amd64 only, without downloading or packaging Wintun"
 	@echo "  photon-windows-test - Run Photon Windows portable tests"
 	@echo "  release-check - Validate VERSION/repository state and run release tests"
 	@echo "  release-tag - Create local v<VERSION> tag after release checks"
