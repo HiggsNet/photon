@@ -3,10 +3,48 @@ package main
 import (
 	"github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/routing"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestReconcileRoutingRefreshesAutoAnnouncedRoutes(t *testing.T) {
+	verified, rt := buildAutoAnnounceTestState(t, "node-a.catofes.", []string{"10.0.0.0/24"}, nil)
+	rt.Config.DataDir = t.TempDir()
+	rt.Config.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{
+		"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true},
+	}}
+	var err error
+	rt.Config.Routing, err = photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{
+		{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged},
+	}, rt.Config.Netns, rt.Config.DataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := newTestDaemonFromOwners(rt, verified, nil, &photonlinux.LinuxState{}, nil, time.Second)
+	installTestBirdDrivers(service, &fakeBirdProcessManager{}, func(string, time.Duration) birdClient { return &fakeBirdClient{} })
+	if err := service.reconcileRouting(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	instance := service.linuxObservation.routingSnapshot().Instances["photontesth2"]
+	if instance == nil {
+		t.Fatal("missing BIRD observation")
+	}
+	config, err := readFileString(instance.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, exportFilter, found := strings.Cut(config, "filter photon_export_photontesth2 {")
+	exportFilter, _, _ = strings.Cut(exportFilter, "}")
+	if !found || !strings.Contains(exportFilter, "10.0.0.0/24") {
+		t.Fatal("BIRD config did not use the newly committed auto-announcement")
+	}
+	if service.State.Common.VerifiedRevision() == 0 {
+		t.Fatal("auto-announcement was not committed")
+	}
+}
 
 func TestAutoAnnounceAssignedIPsDisabled(t *testing.T) {
 	state, rt := buildAutoAnnounceTestState(t, "node-a.catofes.", []string{"10.0.0.0/24"}, nil)
@@ -17,7 +55,7 @@ func TestAutoAnnounceAssignedIPsDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
 	}
-	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
+	if _, err := service.autoAnnounceAssignedIPsResult(service.State.Common.ReadView().State, ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
 	}
 	view := service.State.Common.ReadView()
@@ -34,7 +72,7 @@ func TestAutoAnnounceAssignedIPsPublishesNew(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
 	}
-	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
+	if _, err := service.autoAnnounceAssignedIPsResult(service.State.Common.ReadView().State, ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
 	}
 
@@ -64,7 +102,7 @@ func TestAutoAnnounceAssignedIPsWithdrawsStale(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
 	}
-	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
+	if _, err := service.autoAnnounceAssignedIPsResult(service.State.Common.ReadView().State, ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
 	}
 
@@ -92,7 +130,7 @@ func TestAutoAnnounceAssignedIPsSkipsExisting(t *testing.T) {
 		t.Fatalf("BuildAuthorizedRouteSet: %v", err)
 	}
 	beforeRev := uint64(service.State.Common.VerifiedRevision())
-	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
+	if _, err := service.autoAnnounceAssignedIPsResult(service.State.Common.ReadView().State, ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
 	}
 	if afterRev := uint64(service.State.Common.VerifiedRevision()); afterRev != beforeRev {
@@ -121,7 +159,7 @@ func TestAutoAnnounceAssignedIPsSkipsInvalidAssignment(t *testing.T) {
 	if len(ars.Errors) == 0 {
 		t.Fatalf("expected authorization errors for un-pooled assignment")
 	}
-	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
+	if _, err := service.autoAnnounceAssignedIPsResult(service.State.Common.ReadView().State, ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
 	}
 
@@ -150,7 +188,7 @@ func TestAutoAnnounceAssignedIPsUsesAllAssignments(t *testing.T) {
 		},
 	}
 
-	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
+	if _, err := service.autoAnnounceAssignedIPsResult(service.State.Common.ReadView().State, ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
 	}
 	key, _ := routing.NormalizeRouteAnnouncementKey("10.0.0.0/24")
@@ -179,7 +217,7 @@ func TestAutoAnnounceSelectorsSeparatePersistentAndExplicitSharedRoutes(t *testi
 		{Prefix: netip.MustParsePrefix("10.0.3.0/24"), AssignedTo: "node-a.catofes.", Shared: true, Tag: "socks5.cn"},
 	}}
 
-	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
+	if _, err := service.autoAnnounceAssignedIPsResult(service.State.Common.ReadView().State, ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs: %v", err)
 	}
 	view := service.State.Common.ReadView()
@@ -197,7 +235,7 @@ func TestAutoAnnounceSelectorsSeparatePersistentAndExplicitSharedRoutes(t *testi
 	}
 
 	service.Config.IPAM.Announce = []string{"non-shared"}
-	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
+	if _, err := service.autoAnnounceAssignedIPsResult(service.State.Common.ReadView().State, ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs after config change: %v", err)
 	}
 	view = service.State.Common.ReadView()
@@ -212,7 +250,7 @@ func TestAutoAnnounceSelectorsSeparatePersistentAndExplicitSharedRoutes(t *testi
 	}
 
 	service.Config.IPAM.Announce = nil
-	if _, err := service.autoAnnounceAssignedIPsResult(ars); err != nil {
+	if _, err := service.autoAnnounceAssignedIPsResult(service.State.Common.ReadView().State, ars); err != nil {
 		t.Fatalf("autoAnnounceAssignedIPs after removing all selectors: %v", err)
 	}
 	view = service.State.Common.ReadView()

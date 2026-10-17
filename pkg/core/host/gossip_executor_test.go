@@ -86,11 +86,29 @@ func loadedGossipState(paths ...zone.ZonePath) corestate.View {
 }
 
 func (reader *memoryGossipStateStore) ReadDiscovery(peerID string) *corestate.DiscoveryView {
+	return reader.readDiscovery(peerID, true)
+}
+
+func (reader *memoryGossipStateStore) ReadPeerAuthorization(peerID string) *corestate.DiscoveryView {
+	return reader.readDiscovery(peerID, false)
+}
+
+func (reader *memoryGossipStateStore) readDiscovery(peerID string, records bool) *corestate.DiscoveryView {
 	view := reader.ReadView()
 	if view.State == nil {
 		return nil
 	}
-	return corestate.NewStoreWithCheckpoint(view.State, view.Gossip, nil, nil).ReadDiscovery(peerID)
+	store := corestate.NewStoreWithCheckpoint(view.State, view.Gossip, nil, nil)
+	var discovery *corestate.DiscoveryView
+	if records {
+		discovery = store.ReadDiscovery(peerID)
+	} else {
+		discovery = store.ReadPeerAuthorization(peerID)
+	}
+	if discovery != nil {
+		discovery.Revision = view.Revision
+	}
+	return discovery
 }
 
 func (reader *memoryGossipStateStore) ReadZoneSnapshot(path zone.ZonePath, now time.Time) (*corestate.ZoneSnapshot, bool, error) {

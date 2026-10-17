@@ -8,11 +8,13 @@ import (
 )
 
 // DiscoveryView contains detached current records, authorization data and
-// restart hints. Discovery never needs record history or local private keys.
+// restart hints from one committed Revision. Discovery never needs record
+// history or local private keys.
 type DiscoveryView struct {
 	ManagedZone zone.ZonePath
 	Network     *zone.NetworkState
 	Peers       map[string]PeerCheckpoint
+	Revision    VerifiedRevision
 }
 
 // ReadDiscovery reads one coherent discovery input. An empty peerID selects
@@ -20,6 +22,20 @@ type DiscoveryView struct {
 // Ancestors retain authority, parent proofs, delegations and revocations, so
 // callers still verify signatures and time-dependent policy on every use.
 func (store *Store) ReadDiscovery(peerID string) *DiscoveryView {
+	return store.readDiscovery(peerID, true)
+}
+
+// ReadPeerAuthorization reads one peer's authorization chain and committed
+// checkpoint without copying endpoint records that observed-source handling
+// does not use. The same signatures, revocations and time checks remain possible.
+func (store *Store) ReadPeerAuthorization(peerID string) *DiscoveryView {
+	if peerID == "" {
+		return nil
+	}
+	return store.readDiscovery(peerID, false)
+}
+
+func (store *Store) readDiscovery(peerID string, records bool) *DiscoveryView {
 	if store == nil {
 		return nil
 	}
@@ -31,6 +47,7 @@ func (store *Store) ReadDiscovery(peerID string) *DiscoveryView {
 	network := store.state.Network
 	out := &DiscoveryView{
 		ManagedZone: store.state.ManagedZone,
+		Revision:    store.revision,
 		Network: &zone.NetworkState{
 			Zones:          make(map[zone.ZonePath]*zone.ZoneState),
 			GlobalRoot:     append([]byte(nil), network.GlobalRoot...),
@@ -55,7 +72,7 @@ func (store *Store) ReadDiscovery(peerID string) *DiscoveryView {
 	if path.Valid() {
 		for current := path; ; current = current.Parent() {
 			if zs, ok := network.Zones[current]; ok {
-				out.Network.Zones[current] = cloneDiscoveryZone(zs, current == path)
+				out.Network.Zones[current] = cloneDiscoveryZone(zs, records && current == path)
 			}
 			if current == zone.RootZone {
 				break
@@ -187,7 +204,7 @@ func (store *Store) ReadPeerActivity(now time.Time) PeerActivityView {
 	defer store.mu.RUnlock()
 	out := PeerActivityView{Peers: make(map[string]PeerActivity, len(store.gossip.Peers))}
 	if store.state != nil {
-		out.RevokedZones = store.state.Network.RevokedZones(now)
+		out.RevokedZones = store.revokedZonesLocked(now)
 	}
 	for id, peer := range store.gossip.Peers {
 		out.Peers[id] = PeerActivity{LastSyncUnix: peer.LastSyncUnix, ObservedLastSeenUnix: peer.ObservedLastSeenUnix}

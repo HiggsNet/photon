@@ -234,13 +234,13 @@ func (driver *GossipDriver) acceptGossipInboundPath(ctx context.Context, packet 
 		return
 	}
 	peerID := packet.Message.PeerID
-	committed, err := driver.recordGossipObservedPath(ctx, peerID, packet.Addr.String(), suppressedPeers, now)
+	verification, committed, err := driver.recordGossipObservedPath(ctx, peerID, packet.Addr.String(), suppressedPeers, now)
 	if err != nil {
 		driver.logGossip("warn", "observed_checkpoint_commit_failed", peerID, "persistence", err, nil)
 	} else if committed {
 		driver.observeObservedSource(peerID, packet.Message.Type, now)
 	}
-	if err := driver.restoreGossipObservedPath(peerID, suppressedPeers, now, transport); err != nil {
+	if err := driver.restoreGossipObservedPath(peerID, suppressedPeers, now, transport, verification); err != nil {
 		driver.logGossip("debug", "observed_path_restore_failed", peerID, "discovery", err, nil)
 	}
 }

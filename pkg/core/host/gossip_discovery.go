@@ -26,15 +26,16 @@ const (
 // the in-memory peer address book. Suppressed peers remain dialable but do not
 // refresh discovery-derived checkpoint fields until the suppression clears.
 type GossipDiscoveryInput struct {
-	LocalPeerID    string
-	ManagedZone    zone.ZonePath
-	Network        *zone.NetworkState
-	Peers          map[string]corestate.PeerCheckpoint
-	Suppressed     map[string]bool
-	Bootstrap      map[string]*net.UDPAddr
-	BootstrapPeers []string
-	EndpointGrace  time.Duration
-	SourceOrder    []string
+	LocalPeerID      string
+	ManagedZone      zone.ZonePath
+	Network          *zone.NetworkState
+	Peers            map[string]corestate.PeerCheckpoint
+	Suppressed       map[string]bool
+	Bootstrap        map[string]*net.UDPAddr
+	BootstrapPeers   []string
+	EndpointGrace    time.Duration
+	SourceOrder      []string
+	verifiedRevision corestate.VerifiedRevision
 }
 
 // GossipDiscoveryConfig contains the platform-neutral, fixed discovery policy
@@ -52,10 +53,10 @@ type GossipDiscoveryConfig struct {
 // overlay: it represents peers temporarily excluded by platform lifecycle
 // policy and is never persisted as gossip protocol state.
 func (driver *GossipDriver) GossipDiscoveryInput(suppressed map[string]bool) GossipDiscoveryInput {
-	return driver.gossipDiscoveryInput("", suppressed)
+	return driver.gossipDiscoveryInput("", suppressed, true)
 }
 
-func (driver *GossipDriver) gossipDiscoveryInput(peerID string, suppressed map[string]bool) GossipDiscoveryInput {
+func (driver *GossipDriver) gossipDiscoveryInput(peerID string, suppressed map[string]bool, records bool) GossipDiscoveryInput {
 	input := GossipDiscoveryInput{Suppressed: cloneSuppressedPeers(suppressed)}
 	if driver == nil {
 		return input
@@ -69,10 +70,17 @@ func (driver *GossipDriver) gossipDiscoveryInput(peerID string, suppressed map[s
 	if driver.gossipState == nil {
 		return input
 	}
-	if view := driver.gossipState.ReadDiscovery(peerID); view != nil {
+	var view *corestate.DiscoveryView
+	if records {
+		view = driver.gossipState.ReadDiscovery(peerID)
+	} else {
+		view = driver.gossipState.ReadPeerAuthorization(peerID)
+	}
+	if view != nil {
 		input.ManagedZone = view.ManagedZone
 		input.Network = view.Network
 		input.Peers = view.Peers
+		input.verifiedRevision = view.Revision
 	}
 	return input
 }
@@ -313,15 +321,23 @@ func (driver *GossipDriver) RefreshGossipDiscovery(ctx context.Context, suppress
 
 // restoreGossipObservedPath republishes one already-persisted observed path
 // into the loss-tolerant address book after packet/checkpoint processing.
-func (driver *GossipDriver) restoreGossipObservedPath(peerID string, suppressed map[string]bool, now time.Time, transport *gossip.Transport) error {
+func (driver *GossipDriver) restoreGossipObservedPath(peerID string, suppressed map[string]bool, now time.Time, transport *gossip.Transport, verification gossipObservedVerification) error {
 	if !driver.gossipDiscoveryAvailable() {
 		return ErrGossipDriverStopped
 	}
 	if transport == nil || peerID == "" {
 		return nil
 	}
-	input := driver.gossipDiscoveryInput(peerID, suppressed)
-	paths, prefer, ok := discoveryObservedPaths(input, peerID, input.Peers[peerID], now)
+	input := driver.gossipDiscoveryInput(peerID, suppressed, false)
+	var paths []gossip.ObservedPath
+	var prefer, ok bool
+	if input.verifiedRevision != verification.revision {
+		paths, prefer, ok = discoveryObservedPaths(input, peerID, input.Peers[peerID], now)
+	} else if verification.valid && input.Network != nil {
+		// Reuse authorization only within this packet's fixed time and
+		// verified revision. Checkpoint fields still come from committed state.
+		paths, prefer, ok = observedCheckpointPaths(input.Peers[peerID], now)
+	}
 	if !ok {
 		transport.RemoveObservedPeerAddr(peerID)
 		return nil
@@ -472,6 +488,15 @@ func verifiedDiscoveryPeers(input GossipDiscoveryInput, now time.Time) []string 
 
 func discoveryObservedPaths(input GossipDiscoveryInput, peerID string, peer corestate.PeerCheckpoint, now time.Time) ([]gossip.ObservedPath, bool, bool) {
 	if !discoveryObservedActive(peer, now) || !discoveryPeerVerified(input, peerID, now) {
+		return nil, false, false
+	}
+	return observedCheckpointPaths(peer, now)
+}
+
+// observedCheckpointPaths builds addresses only after the caller has authorized
+// this peer for the committed verified revision and the supplied time.
+func observedCheckpointPaths(peer corestate.PeerCheckpoint, now time.Time) ([]gossip.ObservedPath, bool, bool) {
+	if !discoveryObservedActive(peer, now) {
 		return nil, false, false
 	}
 	addr, err := net.ResolveUDPAddr("udp", peer.ObservedEndpoint)

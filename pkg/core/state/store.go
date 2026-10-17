@@ -170,6 +170,7 @@ type Store struct {
 	gossip            *GossipCheckpoint
 	revision          VerifiedRevision
 	catalog           atomic.Pointer[catalogSnapshot]
+	revocations       atomic.Pointer[revocationSnapshot]
 	commit            CommitFunc
 	commitCheckpoints CheckpointCommitFunc
 	closed            bool

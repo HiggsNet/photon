@@ -18,7 +18,9 @@ import (
 type GossipStateStore interface {
 	gossip.ObjectPullSource
 	ReadView() corestate.View
+	// ReadDiscovery must return the verified Revision together with its network.
 	ReadDiscovery(string) *corestate.DiscoveryView
+	ReadPeerAuthorization(string) *corestate.DiscoveryView
 	ReadCatalog() *corestate.CatalogView
 	PeerCheckpoints([]string) map[string]corestate.PeerCheckpoint
 	ApplyRemoteBatch(context.Context, string, []corestate.RemoteSnapshot, time.Time) (corestate.RemoteBatchResult, error)

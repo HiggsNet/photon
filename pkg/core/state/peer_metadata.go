@@ -218,7 +218,10 @@ func (store *Store) RevokedPeerCheckpoints(now time.Time) (map[zone.ZonePath]boo
 	if store.state == nil {
 		return nil, nil
 	}
-	revoked := store.state.Network.RevokedZones(now)
+	revoked := store.revokedZonesLocked(now)
+	if len(revoked) == 0 {
+		return revoked, nil
+	}
 	var peers map[string]PeerCheckpoint
 	for id, peer := range store.gossip.Peers {
 		if revoked[zone.ZonePath(id)] {

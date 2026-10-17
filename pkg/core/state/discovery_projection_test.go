@@ -29,6 +29,42 @@ func TestDiscoveryProjectionPreservesChainAndTimeChecks(t *testing.T) {
 				t.Fatalf("projection chain at %v = %v, full network = %v", now, err, want)
 			}
 		}
+		got := store.ReadPeerAuthorization(path.String())
+		if err, want := photoncrypto.VerifyChain(got.Network, path, now), photoncrypto.VerifyChain(network, path, now); fmt.Sprint(err) != fmt.Sprint(want) {
+			t.Fatalf("authorization projection chain at %v = %v, want %v", now, err, want)
+		}
+	}
+}
+
+func TestPeerAuthorizationOmitsRecordsAndDetachesState(t *testing.T) {
+	network, _, _, _ := managedAuthorityFixture(t, true)
+	path := zone.ZonePath("node-a.catofes.")
+	network.Zones[path].Records["unused"] = &zone.Record{Zone: path, Key: "unused", Value: []byte("current")}
+	network.Zones[path].RecordHistory["unused"] = []*zone.Record{{Value: []byte("history")}}
+	checkpoint := &GossipCheckpoint{Peers: map[string]PeerCheckpoint{path.String(): {
+		ObservedEndpoint: "192.0.2.1:33434", ObservedUntilUnix: 200,
+		ObservedGraceEndpoints: []ObservedGraceEndpoint{{Endpoint: "192.0.2.2:33434", UntilUnix: 150}},
+	}}}
+	store := NewStoreWithCheckpoint(&VerifiedState{Network: network}, checkpoint, nil, nil)
+	view := store.ReadPeerAuthorization(path.String())
+	for _, zs := range view.Network.Zones {
+		if zs != nil && (len(zs.Records) != 0 || len(zs.RecordHistory) != 0) {
+			t.Fatal("authorization read copied unused records")
+		}
+	}
+	view.Network.Zones[path].Authority.Keys[0].Key[0] ^= 0xff
+	view.Peers[path.String()].ObservedGraceEndpoints[0].Endpoint = "mutated"
+	again := store.ReadPeerAuthorization(path.String())
+	if err := photoncrypto.VerifyChain(again.Network, path, time.Unix(100, 0)); err != nil {
+		t.Fatalf("returned authorization aliases store: %v", err)
+	}
+	if again.Peers[path.String()].ObservedGraceEndpoints[0].Endpoint != "192.0.2.2:33434" ||
+		store.ReadDiscovery(path.String()).Network.Zones[path].Records["unused"] == nil {
+		t.Fatal("authorization projection changed committed checkpoints or records")
+	}
+	var absent *Store
+	if absent.ReadPeerAuthorization(path.String()) != nil || store.ReadPeerAuthorization("") != nil {
+		t.Fatal("authorization read accepted absent store or unspecified peer")
 	}
 }
 
@@ -51,7 +87,7 @@ func TestScopedDiscoveryRetainsSignedAncestorRevocations(t *testing.T) {
 			}
 		}
 	}
-	view := store.ReadDiscovery(path.String())
+	view := store.ReadPeerAuthorization(path.String())
 	if err := photoncrypto.VerifyChain(view.Network, path, time.Unix(150, 0)); err != zone.ErrZoneRevoked {
 		t.Fatalf("signed revocation was not retained for chain verification: %v", err)
 	}

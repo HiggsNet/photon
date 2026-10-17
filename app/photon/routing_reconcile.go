@@ -80,7 +80,7 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 	}
 
 	var firstErr error
-	autoAnnounceChanged, autoAnnounceErr := d.autoAnnounceAssignedIPsResult(ars)
+	autoAnnounceChanged, autoAnnounceErr := d.autoAnnounceAssignedIPsResult(verified, ars)
 	if autoAnnounceErr != nil {
 		firstErr = autoAnnounceErr
 	}
@@ -491,25 +491,17 @@ func isDryRunConnectError(err error) bool {
 // records for every IPAM assignment whose assigned_to equals this node's
 // managed zone. It commits network record changes through the daemon state
 // store so routing reconcile can run BIRD work from a refreshed committed
-// snapshot.
-func (d *Daemon) autoAnnounceAssignedIPsResult(ars *routing.AuthorizedRouteSet) (bool, error) {
-	if d.Config == nil || d.State == nil {
+// snapshot. verified and ars belong to the same reconcile snapshot.
+func (d *Daemon) autoAnnounceAssignedIPsResult(verified *corestate.VerifiedState, ars *routing.AuthorizedRouteSet) (bool, error) {
+	if d.Config == nil || d.State == nil || verified == nil {
 		return false, nil
 	}
-
-	view := func() corestate.View {
-		defer d.gossipDriver.LogSlowOperation("routing_state_read", time.Now(), d.gossipDriver.PendingEventCount())
-		return d.State.Common.ReadView()
-	}()
-	if view.State == nil {
-		return false, nil
-	}
-	announce, withdraw := routing.AutoAnnounceChanges(view.State.Network, view.State.ManagedZone, ars, d.Config.IPAM.AutoAnnounceAssignedIPs, d.Config.IPAM.Announce)
+	announce, withdraw := routing.AutoAnnounceChanges(verified.Network, verified.ManagedZone, ars, d.Config.IPAM.AutoAnnounceAssignedIPs, d.Config.IPAM.Announce)
 	if len(announce) == 0 && len(withdraw) == 0 {
 		return false, nil
 	}
 
-	managedZone := view.State.ManagedZone
+	managedZone := verified.ManagedZone
 	intents := make([]corestate.LocalIntent, 0, len(announce)+len(withdraw))
 	for _, prefix := range announce {
 		intents = append(intents, corestate.AnnounceRouteIntent{Zone: managedZone, Prefix: prefix.Masked().String(), Controller: routing.RouteControllerAuto})

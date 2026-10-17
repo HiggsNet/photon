@@ -10,19 +10,28 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
+// gossipObservedVerification lives only across one packet's checkpoint commit
+// and address-book restore, both evaluated at the same time.
+type gossipObservedVerification struct {
+	revision corestate.VerifiedRevision
+	valid    bool
+}
+
 // recordGossipObservedPath persists one authenticated packet source after
 // validating it against the GossipDriver's current verified state.
-func (driver *GossipDriver) recordGossipObservedPath(ctx context.Context, peerID, endpoint string, suppressed map[string]bool, now time.Time) (bool, error) {
+func (driver *GossipDriver) recordGossipObservedPath(ctx context.Context, peerID, endpoint string, suppressed map[string]bool, now time.Time) (gossipObservedVerification, bool, error) {
 	defer driver.LogSlowOperation("observed_checkpoint", time.Now(), driver.PendingEventCount())
 	if driver == nil || driver.gossipState == nil {
-		return false, ErrGossipDriverStopped
+		return gossipObservedVerification{}, false, ErrGossipDriverStopped
 	}
-	patch, ok := PlanVerifiedObservedCheckpoint(driver.gossipDiscoveryInput(peerID, suppressed), peerID, endpoint, now)
+	input := driver.gossipDiscoveryInput(peerID, suppressed, false)
+	patch, ok := PlanVerifiedObservedCheckpoint(input, peerID, endpoint, now)
+	verification := gossipObservedVerification{revision: input.verifiedRevision, valid: ok}
 	if !ok {
-		return false, nil
+		return verification, false, nil
 	}
 	_, err := driver.gossipState.UpdatePeerCheckpoints(ctx, map[string]corestate.PeerCheckpointPatch{peerID: patch})
-	return err == nil, err
+	return verification, err == nil, err
 }
 
 // RecordGossipRejectedObject stores a bounded retry-suppression hint for a

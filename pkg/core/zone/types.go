@@ -32,12 +32,15 @@ func (zp ZonePath) Parent() ZonePath {
 		return RootZone
 	}
 
-	parts := strings.Split(s, ".")
-	if len(parts) <= 1 {
+	separator := strings.IndexByte(s, '.')
+	if separator < 0 {
 		return RootZone
 	}
-
-	return ZonePath(strings.Join(parts[1:], ".") + ".")
+	if len(s) < len(zp) {
+		return zp[separator+1:]
+	}
+	// Preserve Parent's behavior for names without a trailing dot too.
+	return ZonePath(s[separator+1:] + ".")
 }
 
 func (zp ZonePath) Valid() bool {
