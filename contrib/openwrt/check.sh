@@ -3,7 +3,7 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-sh -n "$script_dir/build.sh" "$script_dir/preflight.sh" "$script_dir/files/photon.init" "$script_dir/files/luci.photon"
+sh -n "$script_dir/build.sh" "$script_dir/preflight.sh" "$script_dir/files/photon.init" "$script_dir/files/photon.hotplug" "$script_dir/files/luci.photon"
 test_dir=$(mktemp -d)
 trap 'rm -rf "$test_dir"' EXIT HUP INT TERM
 
@@ -59,6 +59,18 @@ grep -Fx '<term_timeout><30>' "$call_log"
 [ -d "$test_dir/run/bird" ]
 service_triggers
 grep -Fx 'trigger <photon>' "$call_log"
+
+# Cleanup failures must remain failed tasks instead of starting a replacement.
+stop() { return 42; }
+start() { touch "$test_dir/restarted"; }
+if restart; then
+	echo 'restart hid a failed stop/cleanup' >&2
+	exit 1
+fi
+[ ! -e "$test_dir/restarted" ]
+stop() { return 0; }
+restart
+[ -e "$test_dir/restarted" ]
 
 # Invalid build targets are rejected without invoking a compiler.
 if GO=/nonexistent PHOTON_BUILD_DIR="$test_dir/build" "$script_dir/build.sh" invalid-target > "$test_dir/build.log" 2>&1; then

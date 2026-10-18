@@ -15,6 +15,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/internal/photonlinux"
+	"github.com/HiggsNet/photon/internal/photonopenwrt"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -58,6 +59,8 @@ type appConfig struct {
 	Netns                photonlinux.NetNSConfig
 	Routing              photonlinux.RoutingConfig
 	Firewall             photonlinux.FirewallConfig
+	OpenWrt              *photonopenwrt.Config
+	openWrtAddresses     []string
 	PeerLifecycle        inspect.PeerLifecycleConfig
 	Health               healthConfig
 	Observer             observerConfig
@@ -85,6 +88,7 @@ type configYAML struct {
 	Netns         *photonlinux.NetNSConfigYAML    `yaml:"netns"`
 	Routing       *photonlinux.RoutingConfigYAML  `yaml:"routing"`
 	Firewall      *photonlinux.FirewallConfigYAML `yaml:"firewall"`
+	OpenWrt       *photonopenwrt.Config           `yaml:"openwrt"`
 	PeerLifecycle *peerLifecycleYAML              `yaml:"peer_lifecycle"`
 	Health        *healthConfigYAML               `yaml:"health"`
 	Observer      *observerConfigYAML             `yaml:"observer"`
@@ -415,6 +419,15 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 		var err error
 		config.Firewall, err = photonlinux.ParseFirewallConfig(file.Firewall, config.Netns.Names, config.IPsec.PortMode)
 		if err != nil {
+			return err
+		}
+	}
+	config.OpenWrt = file.OpenWrt
+	if config.OpenWrt != nil {
+		if err := config.OpenWrt.Validate(); err != nil {
+			return fmt.Errorf("openwrt: %w", err)
+		}
+		if err := validateOpenWrtFirewall(config); err != nil {
 			return err
 		}
 	}

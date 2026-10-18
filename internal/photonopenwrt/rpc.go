@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -39,6 +40,7 @@ type Options struct {
 	Run               Runner
 	Validate          func(string) error
 	Views             ViewsReader
+	IntegrationStatus func(context.Context, string) (json.RawMessage, error)
 	LookPath          func(string) (string, error)
 	RuntimeDir        string
 	DefaultConfigPath string
@@ -83,6 +85,8 @@ func (h *Handler) Serve(ctx context.Context, args []string, input io.Reader, out
 			"validate_config": map[string]any{"content": ""},
 			"save_config":     map[string]any{"content": "", "sha256": ""},
 			"service":         map[string]any{"action": ""}, "diagnostics": map[string]any{},
+			"network_settings":      map[string]any{},
+			"save_network_settings": map[string]any{"settings": "", "sha256": ""},
 		})
 	}
 	response := map[string]any{"ok": false}
@@ -113,8 +117,9 @@ func (h *Handler) call(ctx context.Context, method string, input io.Reader) (map
 		return nil, errors.New("request must contain one JSON object")
 	}
 	allowed := map[string][]string{
-		"snapshot": {}, "get_config": {}, "diagnostics": {},
+		"snapshot": {}, "get_config": {}, "diagnostics": {}, "network_settings": {},
 		"validate_config": {"content"}, "save_config": {"content", "sha256"}, "service": {"action"},
+		"save_network_settings": {"settings", "sha256"},
 	}
 	fields, exists := allowed[method]
 	if !exists {
@@ -149,9 +154,18 @@ func (h *Handler) call(ctx context.Context, method string, input io.Reader) (map
 	case "save_config":
 		return h.saveConfig(ctx, values["content"], values["sha256"])
 	case "service":
-		return map[string]any{"ok": true}, h.service(ctx, values["action"])
+		err := h.service(ctx, values["action"])
+		response := map[string]any{"ok": true}
+		if values["action"] == "stop" || values["action"] == "restart" {
+			response["scheduled"], response["action"] = true, values["action"]
+		}
+		return response, err
 	case "diagnostics":
 		return h.diagnostics(ctx), nil
+	case "network_settings":
+		return h.networkSettings(ctx)
+	case "save_network_settings":
+		return h.saveNetworkSettings(ctx, values["settings"], values["sha256"])
 	}
 	return nil, errors.New("unknown method")
 }
@@ -286,11 +300,12 @@ func (h *Handler) saveConfig(ctx context.Context, content, expectedHash string) 
 }
 
 type serviceInfo struct {
-	Running     bool   `json:"running"`
-	PID         int    `json:"pid"`
-	Enabled     *bool  `json:"enabled"`
-	BootEnabled *bool  `json:"boot_enabled"`
-	Error       string `json:"error,omitempty"`
+	Running     bool              `json:"running"`
+	PID         int               `json:"pid"`
+	Enabled     *bool             `json:"enabled"`
+	BootEnabled *bool             `json:"boot_enabled"`
+	Error       string            `json:"error,omitempty"`
+	Action      serviceActionInfo `json:"action"`
 }
 
 func (h *Handler) enabled(ctx context.Context) (bool, error) {
@@ -314,6 +329,11 @@ func (h *Handler) enabled(ctx context.Context) (bool, error) {
 
 func (h *Handler) snapshot(ctx context.Context) map[string]any {
 	service := serviceInfo{}
+	if action, err := h.readServiceAction(ctx); err != nil {
+		service.Action.Error = err.Error()
+	} else {
+		service.Action = action
+	}
 	var warnings []string
 	if enabled, err := h.enabled(ctx); err == nil {
 		service.Enabled = &enabled
@@ -364,7 +384,7 @@ func (h *Handler) snapshot(ctx context.Context) map[string]any {
 	return response
 }
 
-func (h *Handler) service(ctx context.Context, action string) error {
+func (h *Handler) serviceLocked(ctx context.Context, action string) error {
 	switch action {
 	case "start", "restart":
 		enabled, err := h.enabled(ctx)
@@ -402,6 +422,9 @@ func (h *Handler) service(ctx context.Context, action string) error {
 		}
 	default:
 		return errors.New("unsupported service action")
+	}
+	if action == "stop" || action == "restart" {
+		return h.scheduleServiceAction(ctx, action)
 	}
 	if _, err := h.options.Run(ctx, h.options.InitPath, action); err != nil {
 		return fmt.Errorf("Photon service %s failed: %w", action, err)
@@ -455,18 +478,51 @@ func runCommand(ctx context.Context, name string, args ...string) ([]byte, error
 		return err
 	}
 	command.WaitDelay = time.Second
-	output := &limitedBuffer{}
+	limit := commandOutputLimit(name, args)
+	output := &limitedBuffer{limit: limit}
 	command.Stdout, command.Stderr = output, output
 	err := command.Run()
+	if output.truncated && limit == structuredCommandOutputLimit {
+		// The partial document is unusable JSON. Do not copy megabytes into a
+		// caller's diagnostic error when reporting this explicit failure.
+		return nil, errors.Join(err, fmt.Errorf("%w: %d bytes", errStructuredOutputTruncated, limit))
+	}
 	return output.Bytes(), err
 }
 
-type limitedBuffer struct{ bytes.Buffer }
+const diagnosticCommandOutputLimit = 32 << 10
+const structuredCommandOutputLimit = 8 << 20
+
+var errStructuredOutputTruncated = errors.New("structured command output exceeded limit")
+
+func commandOutputLimit(name string, args []string) int {
+	if name == "nft" && slices.Equal(args, []string{"-j", "list", "ruleset"}) ||
+		name == "ubus" && slices.Equal(args, []string{"call", "network.interface", "dump"}) {
+		return structuredCommandOutputLimit
+	}
+	return diagnosticCommandOutputLimit
+}
+
+type limitedBuffer struct {
+	buffer    bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func (b *limitedBuffer) Bytes() []byte { return b.buffer.Bytes() }
 
 func (b *limitedBuffer) Write(data []byte) (int, error) {
 	count := len(data)
-	if remaining := (32 << 10) - b.Len(); remaining > 0 {
-		_, _ = b.Buffer.Write(data[:min(remaining, count)])
+	limit := b.limit
+	if limit == 0 {
+		limit = diagnosticCommandOutputLimit
+	}
+	remaining := limit - b.buffer.Len()
+	if count > remaining {
+		b.truncated = true
+	}
+	if remaining > 0 {
+		_, _ = b.buffer.Write(data[:min(remaining, count)])
 	}
 	return count, nil
 }

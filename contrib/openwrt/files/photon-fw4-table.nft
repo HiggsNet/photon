@@ -1,0 +1,4 @@
+chain photon_openwrt_input {
+	comment "photon-openwrt:input"
+	include "/run/photon/fw4/*.nft"
+}

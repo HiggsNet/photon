@@ -12,6 +12,7 @@ import (
 	"github.com/HiggsNet/photon/internal/observability/healthspool"
 	"github.com/HiggsNet/photon/internal/observer"
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
+	"github.com/HiggsNet/photon/internal/photonopenwrt"
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
@@ -34,6 +35,11 @@ type Daemon struct {
 	State                  *State
 	linuxDriver            *photonlinux.LinuxDriver
 	ipsecDNSResolver       ipsec.DNSResolver
+	openWrtRunner          photonopenwrt.Runner
+	openWrtFirewall        openWrtFirewallManager
+	openWrtCleanupChecked  bool
+	openWrtAddresses       []string
+	openWrtObservation     openWrtObservation
 	health                 *healthDriver
 	observerHub            *observer.Hub
 	Log                    *appLogger
@@ -85,6 +91,7 @@ const (
 	daemonEventEndpointTimer         daemonEventType = "timer_endpoint_publish"
 	daemonEventSyncTrigger           daemonEventType = "sync_trigger"
 	daemonEventRoutingReload         daemonEventType = "routing_reload"
+	daemonEventOpenWrtRefresh        daemonEventType = "openwrt_refresh"
 	daemonEventIPsecCleanup          daemonEventType = "ipsec_cleanup"
 	daemonEventIPsecPortRotate       daemonEventType = "ipsec_port_rotate"
 	daemonEventIPsecLifecycle        daemonEventType = "ipsec_lifecycle"
@@ -290,6 +297,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return err
 	}
 	defer stopObserver()
+	defer d.cleanupOpenWrtOnStop()
 	subsystemCtx, stopSubsystems := context.WithCancel(ctx)
 	stopIPsecEvents := d.startIPsecLifecycleEventWatcher(subsystemCtx)
 	var healthUpdates <-chan struct{}
@@ -484,6 +492,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 						}
 					}
 				case daemonTimerFirewall:
+					if d.openWrtEnabled() {
+						if _, err := d.publishLocalProtocols(); err != nil {
+							d.logWarn("openwrt", "refresh_failed", map[string]any{"error": err})
+						}
+					}
 					d.firewallDirty = true
 					if d.flushFirewallReconcile(ctx) {
 						if err := d.scheduleDaemonTimer(daemonTimerFirewall, d.nextReconcileTime(daemonTimerFirewall, d.now(), firewallReconcileInterval)); err != nil {
@@ -649,6 +662,11 @@ func (d *Daemon) handleEvent(event daemonEvent) (daemonEventResult, bool, bool) 
 		return daemonEventResult{Error: err}, changed, false
 	case daemonEventSyncTrigger:
 		return daemonEventResult{}, true, false
+	case daemonEventOpenWrtRefresh:
+		changed, err := d.publishLocalProtocols()
+		d.firewallDirty = true
+		_, firewallErr := d.flushFirewallReconcileResult(controlContext(event.Context))
+		return daemonEventResult{Error: errors.Join(err, firewallErr)}, changed, false
 	case daemonEventRoutingReload:
 		d.routingForceReload = true
 		d.routingDirty = true
@@ -889,6 +907,7 @@ func (d *Daemon) publishLocalProtocols() (bool, error) {
 	if d.State == nil {
 		return false, errors.New("daemon service is not initialized")
 	}
+	d.refreshOpenWrtNetworks(context.Background())
 	common := d.State.Common.ReadView()
 	runtime := d.State.ReadLinux()
 	if common.State == nil || common.State.Network == nil || runtime == nil {

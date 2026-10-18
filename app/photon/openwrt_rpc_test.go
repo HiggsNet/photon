@@ -92,4 +92,15 @@ func TestOpenWrtReadsCanonicalViewsThroughRealLocalControlSocket(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "photon.db")); !os.IsNotExist(err) {
 		t.Fatal("control query created a database")
 	}
+	runtime, err := openWrtIntegrationStatus(t.Context(), configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var integration openWrtStatus
+	if err := json.Unmarshal(runtime, &integration); err != nil {
+		t.Fatal(err)
+	}
+	if integration.Enabled || integration.FirewallApplied {
+		t.Fatalf("disabled daemon reported active integration: %+v", integration)
+	}
 }

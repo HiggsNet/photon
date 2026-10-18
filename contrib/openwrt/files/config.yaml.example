@@ -42,5 +42,17 @@ gossip:
 #     - id: photon
 #       backend: nft
 #
-# Host ingress and LAN forwarding also need explicit firewall4 rules. See
-# OPENWRT.md; Photon does not rewrite /etc/config/firewall on installation.
+# Host ingress can opt into fw4 integration using logical network names.
+# LAN forwarding still needs explicit configuration. See OPENWRT.md.
+# openwrt:
+#   wan_networks: [wan, wan6]
+#   announce_ipsec: true
+#   auto_firewall: true
+#
+# For ipsec.port_mode=range append this managed host entry to the existing
+# firewall.instances list (do not add a second firewall: mapping):
+#     - id: host
+#       host: true
+#       backend: nft
+#       redirect_grace:
+#         enabled: true

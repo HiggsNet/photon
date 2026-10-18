@@ -19,6 +19,8 @@ var callValidateConfig = declare('validate_config', ['content']);
 var callSaveConfig = declare('save_config', ['content', 'sha256']);
 var callService = declare('service', ['action']);
 var callDiagnostics = declare('diagnostics');
+var callNetworkSettings = declare('network_settings');
+var callSaveNetworkSettings = declare('save_network_settings', ['settings', 'sha256']);
 
 function checked(reply) {
 	if (!reply || reply.ok !== true)
@@ -81,7 +83,8 @@ return view.extend({
 	load: function() {
 		return Promise.all([
 			callSnapshot().then(checked).catch(function(e) { return { error: errorText(e) }; }),
-			callGetConfig().then(checked).catch(function(e) { return { error: errorText(e) }; })
+			callGetConfig().then(checked).catch(function(e) { return { error: errorText(e) }; }),
+			callNetworkSettings().then(checked).catch(function(e) { return { error: errorText(e) }; })
 		]);
 	},
 
@@ -93,16 +96,129 @@ return view.extend({
 
 	updateButtons: function() {
 		var self = this;
+		var yamlDirty = this.configKnown && this.editor.value !== this.savedContent;
+		var busy = this.configBusy || this.serviceBusy || this.serviceTaskRunning || this.networkBusy;
 		this.configButtons.forEach(function(button) {
-			button.disabled = self.readonly || self.configBusy || self.serviceBusy || !self.configKnown;
+			button.disabled = self.readonly || busy || self.networkDirty || !self.configKnown;
 		});
-		this.reloadButton.disabled = this.configBusy || this.serviceBusy;
-		this.editor.readOnly = this.readonly || this.configBusy || this.serviceBusy || !this.configKnown;
+		this.reloadButton.disabled = busy || this.networkDirty;
+		this.editor.readOnly = this.readonly || busy || this.networkDirty || !this.configKnown;
 		this.serviceButtons.forEach(function(button) {
-			button.disabled = self.readonly || self.serviceBusy || self.configBusy;
+			button.disabled = self.readonly || busy || self.networkDirty;
 		});
+		[this.networkSelect, this.announceCheckbox, this.firewallCheckbox, this.networkSaveButton].forEach(function(control) {
+			control.disabled = self.readonly || busy || yamlDirty || !self.configKnown || !self.networkKnown;
+		});
+		this.networkReloadButton.disabled = busy || yamlDirty;
+		this.networkDirtyLabel.textContent = yamlDirty ? _('请先保存或撤回 YAML 编辑，再修改网络设置。') :
+			this.networkDirty ? _('网络设置有未保存修改；保存或重新读取后可继续编辑 YAML。') : '';
 		this.dirtyLabel.textContent = !this.configKnown ? _('尚未读取配置') :
 			this.editor.value !== this.savedContent ? _('有未保存的修改') : _('无未保存的修改');
+	},
+
+	showNetworkRuntime: function(reply) {
+		var runtime = reply && reply.ok === true && reply.runtime;
+		var rows = [
+			[_('运行中的集成'), runtime ? runtime.enabled === true ? _('已启用') : _('已禁用') : _('状态未知')],
+			[_('运行中的逻辑网络'), runtime && Array.isArray(runtime.wan_networks) ? runtime.wan_networks.join(', ') : null],
+			[_('当前设备'), runtime && Array.isArray(runtime.devices) ? runtime.devices.join(', ') : null],
+			[_('当前 WAN 地址'), runtime && Array.isArray(runtime.addresses) ? runtime.addresses.join(', ') : null],
+			[_('WAN 地址发布到 IPsec'), runtime ? runtime.announce_ipsec === true ? _('已启用') : _('已关闭') : _('状态未知')],
+			[_('firewall4 规则应用'), !runtime ? _('状态未知') : runtime.auto_firewall !== true ? _('未启用自动规则') :
+				runtime.firewall_applied === true ? _('守护进程报告已应用') : _('尚未应用或应用失败')],
+			[_('最近运行错误'), runtime ? runtime.last_error || _('无已报告错误') : reply && (reply.runtime_error || reply.error)],
+			[_('运行状态更新时间'), runtime ? syncTime(runtime.updated_at) : null]
+		];
+		replace(this.networkRuntimeNode, [rowsTable(rows)].concat(reply && reply.inventory_error ?
+			[E('p', { 'class': 'alert-message error' }, reply.inventory_error)] : []));
+	},
+
+	installNetworkSettings: function(reply) {
+		var settings = reply.settings;
+		if (!settings || !Array.isArray(settings.wan_networks) || typeof settings.announce_ipsec !== 'boolean' ||
+			typeof settings.auto_firewall !== 'boolean' || typeof reply.sha256 !== 'string')
+			throw new Error(_('网络设置返回格式无效。'));
+		if (!this.configKnown || reply.sha256 !== this.configSHA)
+			throw new Error(_('网络设置与 YAML 版本不同，请先重新读取配置。'));
+		var selected = settings.wan_networks;
+		var inventory = Array.isArray(reply.inventory) ? reply.inventory : [];
+		var options = inventory.map(function(network) {
+			var addresses = (network.ipv4_addresses || []).concat(network.ipv6_addresses || []);
+			var label = network.name + ' (' + (network.up ? _('运行') : _('离线')) + ', ' + display(network.l3_device) + ')';
+			if (addresses.length) label += ' — ' + addresses.join(', ');
+			var option = E('option', { 'value': network.name }, label);
+			option.selected = selected.indexOf(network.name) !== -1;
+			return option;
+		});
+		selected.forEach(function(name) {
+			if (inventory.some(function(network) { return network.name === name; })) return;
+			var option = E('option', { 'value': name }, name + _('（当前未发现）'));
+			option.selected = true;
+			options.push(option);
+		});
+		replace(this.networkSelect, options);
+		this.announceCheckbox.checked = settings.announce_ipsec;
+		this.firewallCheckbox.checked = settings.auto_firewall;
+		this.networkKnown = true;
+		this.networkDirty = false;
+		this.showNetworkRuntime(reply);
+		this.notice(this.networkMessage, reply.inventory_error ||
+			(reply.status && reply.status.error) || '', !!reply.inventory_error || !!(reply.status && reply.status.error));
+		this.updateButtons();
+	},
+
+	fetchNetworkSettings: function() {
+		var self = this;
+		return callNetworkSettings().then(checked).then(function(reply) {
+			self.installNetworkSettings(reply);
+		}).catch(function(error) {
+			self.networkKnown = false;
+			self.notice(self.networkMessage, errorText(error), true);
+			self.showNetworkRuntime({ error: errorText(error) });
+			self.updateButtons();
+		});
+	},
+
+	refreshNetworkRuntime: function() {
+		var self = this;
+		return callNetworkSettings().then(checked).then(function(reply) {
+			// Polling updates observations only. Never replace form values, YAML,
+			// or the optimistic-lock SHA while either editor has pending changes.
+			self.showNetworkRuntime(reply);
+		}).catch(function(error) { self.showNetworkRuntime({ error: errorText(error) }); });
+	},
+
+	reloadNetworkSettings: function() {
+		var self = this;
+		if (this.configBusy || this.serviceBusy || this.serviceTaskRunning || this.networkBusy || this.configKnown && this.editor.value !== this.savedContent)
+			return Promise.resolve();
+		if (this.networkDirty && !window.confirm(_('重新读取会丢弃未保存的网络设置，是否继续？')))
+			return Promise.resolve();
+		this.networkBusy = true;
+		this.updateButtons();
+		return this.fetchNetworkSettings().finally(function() { self.networkBusy = false; self.updateButtons(); });
+	},
+
+	saveNetworkSettings: function() {
+		var self = this;
+		if (this.readonly || this.configBusy || this.serviceBusy || this.serviceTaskRunning || this.networkBusy || !this.configKnown || !this.networkKnown || this.editor.value !== this.savedContent)
+			return Promise.resolve();
+		var settings = {
+			wan_networks: Array.prototype.map.call(this.networkSelect.selectedOptions, function(option) { return option.value; }),
+			announce_ipsec: this.announceCheckbox.checked,
+			auto_firewall: this.firewallCheckbox.checked
+		};
+		this.networkBusy = true;
+		this.updateButtons();
+		return callSaveNetworkSettings(JSON.stringify(settings), this.configSHA).then(checked).then(function(reply) {
+			if (typeof reply.content !== 'string' || typeof reply.sha256 !== 'string' || !reply.sha256)
+				throw new Error(_('保存结果缺少 YAML 或版本信息，请保留网络选择并重新读取确认。'));
+			self.networkDirty = false;
+			self.installConfig(reply);
+			self.notice(self.configMessage, _('网络设置已保存到同一 YAML，尚未应用。请明确点击“重启”使运行中的服务采用这些设置。'), false);
+			return self.fetchNetworkSettings();
+		}).catch(function(error) { self.notice(self.networkMessage, errorText(error) + _(' 网络选择和 YAML 编辑内容已保留。'), true); })
+			.finally(function() { self.networkBusy = false; self.updateButtons(); });
 	},
 
 	showSnapshot: function(snapshot) {
@@ -113,6 +229,14 @@ return view.extend({
 			return;
 		}
 		var service = snapshot.service || {};
+		var task = service.action;
+		if (task)
+			this.serviceTaskRunning = typeof task.running === 'boolean' ? task.running : true;
+		var taskName = task && task.action === 'stop' ? _('停止') : task && task.action === 'restart' ? _('重启') : _('服务操作');
+		var taskState = task && typeof task.running !== 'boolean' ? _('procd 操作状态未知，已暂停配置及服务写入') :
+			task && task.running === true ? taskName + _('请求已提交，正在执行') :
+			task && typeof task.exit_code === 'number' ? taskName + _('任务已结束，退出码 ') + task.exit_code :
+			this.serviceTaskRunning ? _('请求已提交，操作状态尚未确认，请刷新状态。') : _('无正在执行的服务任务');
 		var daemon = snapshot.daemon || {};
 		var summary = snapshot.summary;
 		// Cached database summaries must never be presented as live connectivity.
@@ -125,6 +249,7 @@ return view.extend({
 			service.running ? _('运行中，PID ') + display(service.pid) : _('未运行');
 		replace(this.statusNode, [rowsTable([
 			[_('Photon 进程'), processState],
+			[_('服务操作任务'), taskState],
 			[_('服务开关'), typeof service.enabled !== 'boolean' ? _('状态未知') :
 				service.enabled ? _('已启用') : _('已禁用；启动前需先启用')],
 			[_('开机启动'), typeof service.boot_enabled !== 'boolean' ? _('状态未知') :
@@ -140,7 +265,9 @@ return view.extend({
 			[_('最近链路错误'), online ? failureText(daemon.last_link_failure) : null],
 			[_('最近路由错误'), online ? failureText(daemon.last_routing_failure) : null]
 		])].concat(service.error ? [E('p', { 'class': 'alert-message error' }, _('服务状态查询失败：') + service.error)] : [])
+			.concat(task && task.error ? [E('p', { 'class': 'alert-message error' }, _('服务操作错误：') + task.error)] : [])
 			.concat(snapshot.error ? [E('p', { 'class': 'alert-message warning' }, snapshot.error)] : []));
+		this.updateButtons();
 		this.showDetails(snapshot, online && summary && summary.DaemonOnline === true);
 	},
 
@@ -200,7 +327,7 @@ return view.extend({
 
 	reloadConfig: function() {
 		var self = this;
-		if (this.configBusy || this.serviceBusy)
+		if (this.configBusy || this.serviceBusy || this.serviceTaskRunning || this.networkBusy || this.networkDirty)
 			return Promise.resolve();
 		if (this.configKnown && this.editor.value !== this.savedContent &&
 			!window.confirm(_('重新读取会丢弃当前未保存的修改，是否继续？')))
@@ -209,6 +336,7 @@ return view.extend({
 		this.updateButtons();
 		return callGetConfig().then(checked).then(function(reply) {
 			self.installConfig(reply);
+			return self.fetchNetworkSettings();
 		}).catch(function(error) {
 			self.notice(self.configMessage, errorText(error), true);
 		}).finally(function() {
@@ -219,7 +347,7 @@ return view.extend({
 
 	editConfig: function(save) {
 		var self = this;
-		if (this.readonly || this.configBusy || this.serviceBusy || !this.configKnown)
+		if (this.readonly || this.configBusy || this.serviceBusy || this.serviceTaskRunning || this.networkBusy || this.networkDirty || !this.configKnown)
 			return Promise.resolve();
 		var content = this.editor.value;
 		var sha = this.configSHA;
@@ -236,6 +364,7 @@ return view.extend({
 			self.notice(self.configMessage, save ?
 				_('配置已保存，运行中的服务尚未应用。请在确认后点击“重启”。') :
 				_('配置校验通过。校验不代表依赖就绪、网络权限已授权或实际流量通畅。'), false);
+			if (save) return self.fetchNetworkSettings();
 		}).catch(function(error) {
 			self.notice(self.configMessage, errorText(error) + _(' 编辑内容已保留；如配置已被其他会话修改，请先复制自己的编辑，再重新读取合并。'), true);
 		}).finally(function() {
@@ -246,12 +375,16 @@ return view.extend({
 
 	serviceAction: function(action) {
 		var self = this;
-		if (this.readonly || this.serviceBusy || this.configBusy)
+		if (this.readonly || this.serviceBusy || this.serviceTaskRunning || this.configBusy || this.networkBusy || this.networkDirty)
 			return Promise.resolve();
 		this.serviceBusy = true;
 		this.updateButtons();
-		return callService(action).then(checked).then(function() {
-			self.notice(self.serviceMessage, _('操作请求已接受。服务状态将刷新，进程启动和网络就绪需要时间。'), false);
+		return callService(action).then(checked).then(function(reply) {
+			if (reply.scheduled === true) self.serviceTaskRunning = true;
+			self.updateButtons();
+			self.notice(self.serviceMessage, reply.scheduled === true ?
+				_('停止 / 重启请求已提交给 procd。请查看服务操作任务及刷新后的进程状态。') :
+				_('操作请求已接受。服务状态将刷新，进程启动和网络就绪需要时间。'), false);
 			return self.refreshStatus();
 		}).catch(function(error) {
 			self.notice(self.serviceMessage, errorText(error), true);
@@ -286,6 +419,10 @@ return view.extend({
 		this.configKnown = false;
 		this.configBusy = false;
 		this.serviceBusy = false;
+		this.serviceTaskRunning = false;
+		this.networkBusy = false;
+		this.networkDirty = false;
+		this.networkKnown = false;
 		this.statusGeneration = 0;
 		this.savedContent = '';
 		this.configSHA = '';
@@ -295,6 +432,18 @@ return view.extend({
 		this.configMessage = E('p', { 'style': 'display: none', 'role': 'status' });
 		this.configPath = E('code');
 		this.dirtyLabel = E('span', { 'role': 'status' });
+		this.networkMessage = E('p', { 'style': 'display: none', 'role': 'status' });
+		this.networkDirtyLabel = E('p', { 'role': 'status' });
+		this.networkRuntimeNode = E('div');
+		var networkChanged = function() { self.networkDirty = true; self.updateButtons(); };
+		this.networkSelect = E('select', { 'multiple': true, 'size': 6, 'style': 'width: 100%; height: auto; min-height: 9em',
+			'aria-label': _('WAN 逻辑网络'), 'change': networkChanged });
+		this.announceCheckbox = E('input', { 'type': 'checkbox', 'change': networkChanged });
+		this.firewallCheckbox = E('input', { 'type': 'checkbox', 'change': networkChanged });
+		this.networkSaveButton = E('button', { 'class': 'btn cbi-button cbi-button-save', 'type': 'button',
+			'click': function() { return self.saveNetworkSettings(); } }, _('保存网络设置到 YAML'));
+		this.networkReloadButton = E('button', { 'class': 'btn cbi-button', 'type': 'button',
+			'click': function() { return self.reloadNetworkSettings(); } }, _('重新读取网络设置'));
 		this.editor = E('textarea', {
 			'rows': 25,
 			'wrap': 'off',
@@ -327,8 +476,14 @@ return view.extend({
 		} catch (error) {
 			this.notice(this.configMessage, errorText(error), true);
 		}
+		try {
+			this.installNetworkSettings(checked(data[2]));
+		} catch (error) {
+			this.notice(this.networkMessage, errorText(error), true);
+			this.showNetworkRuntime({ error: errorText(error) });
+		}
 		this.updateButtons();
-		poll.add(function() { return self.refreshStatus(); }, 10);
+		poll.add(function() { return Promise.all([self.refreshStatus(), self.refreshNetworkRuntime()]); }, 10);
 		return E('div', { 'class': 'cbi-map' }, [
 			E('h2', {}, 'Photon'),
 			E('p', {}, _('通过系统 procd 管理 Photon，复用现有 charon/VICI 和 Photon 管理的 BIRD。')),
@@ -344,6 +499,18 @@ return view.extend({
 			E('section', { 'class': 'cbi-section' }, [
 				E('h3', {}, _('节点与链路')),
 				this.detailsNode
+			]),
+			E('section', { 'class': 'cbi-section' }, [
+				E('h3', {}, _('WAN 与自动防火墙')),
+				E('p', {}, _('选择 netifd 逻辑网络（例如 wan、wan6），允许多选。默认关闭；选中网络不存在或离线时不会改用其他网卡。')),
+				this.networkMessage,
+				E('label', {}, [_('WAN 逻辑网络'), this.networkSelect]),
+				E('p', {}, [E('label', {}, [this.announceCheckbox, ' ', _('跟随所选 WAN 的地址发布 IPsec 接入地址')])]),
+				E('p', {}, [E('label', {}, [this.firewallCheckbox, ' ', _('自动维护 Photon 所需的 firewall4 输入规则')])]),
+				E('p', {}, _('表单只修改同一 YAML 的 openwrt 设置；保存不会立即改规则或重启服务。运行状态来自守护进程，网络库存可用不表示规则已应用或业务已通。')),
+				this.networkDirtyLabel,
+				E('div', { 'class': 'cbi-page-actions' }, [this.networkSaveButton, this.networkReloadButton]),
+				this.networkRuntimeNode
 			]),
 			E('section', { 'class': 'cbi-section' }, [
 				E('h3', {}, _('配置')),

@@ -15,7 +15,7 @@ import (
 const defaultFirewallReconcileInterval = 30 * time.Second
 
 func (d *Daemon) firewallReconcileInterval() time.Duration {
-	if d.Config == nil || len(d.Config.Firewall.ManagedInstances()) == 0 {
+	if d.Config == nil || (len(d.Config.Firewall.ManagedInstances()) == 0 && !d.openWrtEnabled() && d.openWrtFirewall == nil) {
 		return 0
 	}
 	return defaultFirewallReconcileInterval
@@ -181,5 +181,5 @@ func (d *Daemon) flushFirewallReconcileResult(ctx context.Context) (bool, error)
 	reconcileCtx, cancel := boundedReconcileContext(ctx)
 	defer cancel()
 	err := d.reconcileFirewall(reconcileCtx)
-	return true, err
+	return true, errors.Join(err, d.reconcileOpenWrtFirewall(reconcileCtx, err))
 }

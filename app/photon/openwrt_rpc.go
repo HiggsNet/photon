@@ -17,7 +17,7 @@ import (
 )
 
 func platformAdvancedCommands() []*cli.Command {
-	return []*cli.Command{cmdOpenWrtRPC()}
+	return []*cli.Command{cmdOpenWrtRPC(), cmdOpenWrtRefresh(), cmdOpenWrtCleanup()}
 }
 
 func cmdOpenWrtRPC() *cli.Command {
@@ -32,11 +32,38 @@ func cmdOpenWrtRPC() *cli.Command {
 					_, err := parseOpenWrtConfig(content)
 					return err
 				},
-				Views: openWrtControlViews,
+				Views:             openWrtControlViews,
+				IntegrationStatus: openWrtIntegrationStatus,
 			})
 			return adapter.Serve(ctx, command.Args().Slice(), os.Stdin, os.Stdout)
 		},
 	}
+}
+
+func openWrtIntegrationStatus(ctx context.Context, configPath string) (json.RawMessage, error) {
+	file, err := os.Open(configPath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, photonopenwrt.MaxConfigBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	config, err := parseOpenWrtConfig(string(data))
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	value, online, err := readCanonicalViewViaControlContext[json.RawMessage](ctx, config, controlRequest{Method: "openwrt_status_view"}, false)
+	if err != nil {
+		return nil, err
+	}
+	if !online {
+		return nil, errors.New("Photon control interface is unavailable; no live OpenWrt integration status")
+	}
+	return value, nil
 }
 
 // Use the real Linux configuration parser. The management editor additionally

@@ -5,7 +5,7 @@ PKG_NAME:=photon
 PHOTON_VERSION:=0.6.0-rc.13
 # APK accepts _rc13; retain the upstream spelling in the binary version.
 PKG_VERSION:=0.6.0_rc13
-PKG_RELEASE:=3
+PKG_RELEASE:=4
 PKG_BUILD_DEPENDS:=golang/host
 PKG_BUILD_PARALLEL:=1
 PKG_BUILD_FLAGS:=no-mips16
@@ -31,7 +31,7 @@ define Package/photon
   SUBMENU:=VPN
   TITLE:=Photon mesh daemon
   URL:=https://github.com/HiggsNet/photon
-  DEPENDS:=$(GO_ARCH_DEPENDS) @IPV6 +ip-full +iputils-ping +nftables-json +bird2 +bird2c \
+  DEPENDS:=$(GO_ARCH_DEPENDS) @IPV6 +ip-full +iputils-ping +nftables-json +firewall4 +ubus +jsonfilter +bird2 +bird2c \
     +kmod-xfrm-interface +kmod-veth +kmod-crypto-gcm +kmod-crypto-hmac \
     +kmod-crypto-sha256 +strongswan +strongswan-charon +strongswan-swanctl \
     +strongswan-mod-kernel-netlink +strongswan-mod-socket-default \
@@ -65,6 +65,10 @@ define Package/photon/install
 	$(INSTALL_BIN) ./files/luci.photon $(1)/usr/libexec/rpcd/luci.photon
 	$(INSTALL_CONF) ./files/photon.config $(1)/etc/config/photon
 	$(INSTALL_CONF) ./files/config.yaml.example $(1)/etc/photon/config.yaml.example
+	$(INSTALL_DIR) $(1)/etc/hotplug.d/iface $(1)/usr/share/nftables.d/table-pre $(1)/usr/share/nftables.d/chain-pre/input
+	$(INSTALL_DATA) ./files/photon.hotplug $(1)/etc/hotplug.d/iface/95-photon
+	$(INSTALL_DATA) ./files/photon-fw4-table.nft $(1)/usr/share/nftables.d/table-pre/30-photon.nft
+	$(INSTALL_DATA) ./files/photon-fw4-input.nft $(1)/usr/share/nftables.d/chain-pre/input/30-photon.nft
 endef
 
 $(eval $(call BuildPackage,photon))

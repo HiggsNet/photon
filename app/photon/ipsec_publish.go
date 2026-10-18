@@ -5,6 +5,8 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
+	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/HiggsNet/photon/internal/photonlinux"
@@ -27,6 +29,11 @@ func (d *Daemon) ipsecProtocolPlan(verified *corestate.VerifiedState, runtime *p
 		return plan, nil
 	}
 	config := d.Config
+	if config.OpenWrt != nil && config.OpenWrt.AnnounceIPsec {
+		copy := *config
+		copy.openWrtAddresses = append([]string(nil), d.openWrtAddresses...)
+		config = &copy
+	}
 	if verified.ManagedZone == zone.RootZone {
 		d.logDebug("ipsec", "publish_skipped", map[string]any{"reason": "root_zone"})
 		return plan, nil
@@ -204,6 +211,26 @@ func localIPsecRecords(config *appConfig, verified *corestate.VerifiedState, key
 }
 
 func localIPsecAddressRecord(config *appConfig, verified *corestate.VerifiedState, now time.Time) ipsec.AddressRecord {
+	if config.OpenWrt != nil && config.OpenWrt.AnnounceIPsec {
+		addresses := append(append([]string(nil), config.IPsec.AnnounceAddrs...), config.openWrtAddresses...)
+		record := photonlinux.BuildIPsecAddressRecord(addresses, nil, config.IPsec.AnnounceDNS, "", nil, now)
+		manual := make(map[string]bool, len(config.IPsec.AnnounceAddrs))
+		for _, value := range config.IPsec.AnnounceAddrs {
+			if addr, err := netip.ParseAddr(strings.TrimSpace(value)); err == nil {
+				manual[addr.String()] = true
+			}
+		}
+		for i := range record.Addresses {
+			address := &record.Addresses[i]
+			if address.Source == ipsec.SourceManualAddress && !manual[address.Address] {
+				// Reuse the existing protocol source so downstream source policy
+				// can distinguish WAN discovery from explicit operator intent.
+				address.Source = ipsec.SourceDiscovery
+				address.ID = strings.Replace(address.ID, "announce-", "wan-", 1)
+			}
+		}
+		return record
+	}
 	var endpoints *gossip.EndpointRecord
 	if config.IPsec.AnnounceGossipEndpoints && verified != nil && verified.Network != nil && verified.ManagedZone != "" {
 		if zs := verified.Network.Zones[verified.ManagedZone]; zs != nil {

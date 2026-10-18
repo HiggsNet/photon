@@ -545,6 +545,15 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		writeControlResponse(conn, controlResponse{OK: true, Message: "sync scheduled"})
+	case "openwrt_status_view":
+		writeCanonicalView(conn, d.openWrtObservation.read())
+	case "openwrt_refresh":
+		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventOpenWrtRefresh, Context: ctx})
+		if result.Error != nil {
+			writeControlResponse(conn, controlError(result.Error))
+			return
+		}
+		writeControlResponse(conn, controlResponse{OK: true, Message: "OpenWrt network integration refreshed"})
 	case "routing_reload":
 		result := d.enqueueEvent(ctx, daemonEvent{Type: daemonEventRoutingReload})
 		if result.Error != nil {

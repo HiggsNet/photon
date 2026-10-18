@@ -78,17 +78,17 @@ func BuildFirewallPolicyInput(spec firewall.FirewallInstanceSpec, ars *routing.A
 	// 500/4500; previous ports keep rotate grace alive during the configured
 	// window.
 	if spec.IsHost && verified.Network != nil && verified.ManagedZone.Valid() {
-		input.AdvertisedCurrentIKEPorts, input.AdvertisedCurrentNATTPorts, input.AdvertisedPreviousIKEPorts, input.AdvertisedPreviousNATTPorts = extractIPsecRedirectPortsFromNetwork(verified.Network, verified.ManagedZone, now)
+		input.AdvertisedCurrentIKEPorts, input.AdvertisedCurrentNATTPorts, input.AdvertisedPreviousIKEPorts, input.AdvertisedPreviousNATTPorts = IPsecRedirectPortsFromNetwork(verified.Network, verified.ManagedZone, now)
 	}
 
 	return input
 }
 
-// extractIPsecRedirectPortsFromNetwork reads the signed ipsec/ports record from
+// IPsecRedirectPortsFromNetwork reads the signed ipsec/ports record from
 // the managed zone's active state and returns current advertised ports plus
 // previous-generation ports still within the grace window. These ports are used
 // by the host firewall planner to generate DNAT/redirect rules.
-func extractIPsecRedirectPortsFromNetwork(network *zone.NetworkState, managedZone zone.ZonePath, now time.Time) (currentIKE []uint16, currentNATT []uint16, previousIKE []uint16, previousNATT []uint16) {
+func IPsecRedirectPortsFromNetwork(network *zone.NetworkState, managedZone zone.ZonePath, now time.Time) (currentIKE []uint16, currentNATT []uint16, previousIKE []uint16, previousNATT []uint16) {
 	if network == nil || !managedZone.Valid() {
 		return nil, nil, nil, nil
 	}

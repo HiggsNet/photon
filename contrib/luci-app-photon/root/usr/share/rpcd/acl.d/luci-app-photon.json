@@ -3,12 +3,12 @@
 		"description": "Read Photon status and manage only the Photon configuration and service",
 		"read": {
 			"ubus": {
-				"luci.photon": ["snapshot", "get_config", "diagnostics"]
+				"luci.photon": ["snapshot", "get_config", "diagnostics", "network_settings"]
 			}
 		},
 		"write": {
 			"ubus": {
-				"luci.photon": ["validate_config", "save_config", "service"]
+				"luci.photon": ["validate_config", "save_config", "service", "save_network_settings"]
 			}
 		}
 	}

@@ -38,3 +38,42 @@ start_service() {
 service_triggers() {
 	procd_add_reload_trigger photon
 }
+
+stop_service() {
+	# Capture before procd removes its instance from ubus. Cleanup must not race
+	# the last reconcile of a daemon that is still shutting down.
+	photon_stopping_pid="$(ubus call service list '{"name":"photon"}' 2>/dev/null | jsonfilter -e '@.photon.instances.main.pid')"
+}
+
+service_stopped() {
+	local remaining=35
+	case "$photon_stopping_pid" in
+		''|*[!0-9]*) ;;
+		*)
+			while kill -0 "$photon_stopping_pid" 2>/dev/null; do
+				[ "$remaining" -gt 0 ] || {
+					echo 'photon: daemon has not stopped; skipping external fw4 cleanup' >&2
+					return 1
+				}
+				sleep 1
+				remaining=$((remaining - 1))
+			done
+			;;
+	esac
+	# Explicit init stop also cleans up after forced termination. Direct kills
+	# are recovered by procd respawn; this is not a process-exit callback.
+	[ -x /usr/sbin/photon ] || return 0
+	/usr/sbin/photon advanced openwrt-cleanup
+}
+
+# rc.common's default restart continues into start even when stop/cleanup fails.
+# Preserve that failure so the submitted procd task can report it to LuCI.
+restart() {
+	local result
+	trap '' TERM
+	stop "$@"
+	result=$?
+	trap - TERM
+	[ "$result" -eq 0 ] || return "$result"
+	start "$@"
+}

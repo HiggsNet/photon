@@ -36,6 +36,9 @@ func fixture(t *testing.T) (*Handler, string, *[]string) {
 				return []byte("1"), nil
 			}
 			if name == "ubus" {
+				if len(args) == 4 && args[2] == "list" && args[3] == serviceActionQuery {
+					return []byte(`{}`), nil
+				}
 				return []byte(`{"photon":{"instances":{"main":{"running":true,"pid":123}}}}`), nil
 			}
 			return nil, nil
@@ -77,7 +80,7 @@ func TestRPCListAndRejectedArgumentsHaveNoEffects(t *testing.T) {
 		t.Fatal(err)
 	}
 	var methods map[string]map[string]any
-	if err := json.Unmarshal(output.Bytes(), &methods); err != nil || len(methods) != 6 {
+	if err := json.Unmarshal(output.Bytes(), &methods); err != nil || len(methods) != 8 {
 		t.Fatalf("invalid method schema: %s, %v", output.String(), err)
 	}
 	for _, test := range []struct {
@@ -271,7 +274,7 @@ func TestRPCServiceStartsOnlyConfiguredEnabledDaemon(t *testing.T) {
 	if reply := invoke(t, h, "service", map[string]any{"action": "disable"}); reply["ok"] != true {
 		t.Fatal(reply)
 	}
-	expected := []string{"uci set photon.main.enabled=0", "uci commit photon", h.options.InitPath + " disable"}
+	expected := []string{"ubus call service list " + serviceActionQuery, "uci set photon.main.enabled=0", "uci commit photon", h.options.InitPath + " disable"}
 	if strings.Join(*calls, "\n") != strings.Join(expected, "\n") {
 		t.Fatalf("unexpected disable scope: %v", *calls)
 	}

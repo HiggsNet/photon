@@ -1,0 +1,10 @@
+#!/bin/sh
+# netifd events are invalidation hints; only the running daemon may publish
+# signed records and apply rules. No database/configuration is opened here.
+case "$ACTION" in
+	ifup|ifupdate|ifdown) ;;
+	*) return 0 ;;
+esac
+[ -S /run/photon/photon.sock ] || return 0
+PHOTON_CONTROL_SOCKET=/run/photon/photon.sock \
+	/usr/sbin/photon advanced openwrt-refresh >/dev/null 2>&1 || true

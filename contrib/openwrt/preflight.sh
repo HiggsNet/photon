@@ -34,7 +34,7 @@ readlink -f /run 2>/dev/null || true
 
 check 'Linux' test "$(uname -s)" = Linux
 check 'network namespace API present (creation not tested)' test -e /proc/self/ns/net
-for tool in ip nft bird birdc sysctl swanctl ping; do
+for tool in ip nft bird birdc sysctl swanctl ping ubus fw4; do
 	check "command: $tool" command -v "$tool"
 done
 check 'ip JSON link dump' ip -j link show
