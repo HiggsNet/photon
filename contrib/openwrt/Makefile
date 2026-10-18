@@ -2,8 +2,10 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=photon
-PKG_VERSION:=0.6.0-rc.13
-PKG_RELEASE:=1
+PHOTON_VERSION:=0.6.0-rc.13
+# APK accepts _rc13; retain the upstream spelling in the binary version.
+PKG_VERSION:=0.6.0_rc13
+PKG_RELEASE:=2
 PKG_BUILD_DEPENDS:=golang/host
 PKG_BUILD_PARALLEL:=1
 PKG_BUILD_FLAGS:=no-mips16
@@ -15,7 +17,7 @@ PHOTON_SOURCE_DIR?=$(realpath $(CURDIR)/../..)
 GO_PKG:=github.com/HiggsNet/photon
 GO_PKG_BUILD_PKG:=$(GO_PKG)/app/photon
 GO_PKG_INSTALL_EXTRA:=internal/observer/web
-GO_PKG_LDFLAGS_X:=main.buildDescribe=openwrt-$(PKG_VERSION)-r$(PKG_RELEASE) main.buildDirty=unknown
+GO_PKG_LDFLAGS_X:=main.buildDescribe=openwrt-v$(PHOTON_VERSION)-r$(PKG_RELEASE) main.buildDirty=unknown
 
 include $(INCLUDE_DIR)/package.mk
 include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
@@ -29,11 +31,11 @@ define Package/photon
   SUBMENU:=VPN
   TITLE:=Photon mesh daemon
   URL:=https://github.com/HiggsNet/photon
-  DEPENDS:=$(GO_ARCH_DEPENDS) @IPV6 +ip-full +iputils-ping +nftables-json +bird2 \
+  DEPENDS:=$(GO_ARCH_DEPENDS) @IPV6 +ip-full +iputils-ping +nftables-json +bird2 +bird2c \
     +kmod-xfrm-interface +kmod-veth +kmod-crypto-gcm +kmod-crypto-hmac \
-    +kmod-crypto-sha256 +strongswan-charon +strongswan-swanctl \
+    +kmod-crypto-sha256 +strongswan +strongswan-charon +strongswan-swanctl \
     +strongswan-mod-kernel-netlink +strongswan-mod-socket-default \
-    +strongswan-mod-openssl +strongswan-mod-pubkey +strongswan-mod-pem \
+    +strongswan-mod-openssl +strongswan-mod-pubkey +strongswan-mod-pem +strongswan-mod-pkcs1 \
     +strongswan-mod-pkcs8 +strongswan-mod-x509 +strongswan-mod-random
 endef
 
@@ -55,11 +57,12 @@ define Build/Prepare
 endef
 
 define Package/photon/install
-	$(INSTALL_DIR) $(1)/usr/sbin $(1)/usr/libexec $(1)/etc/init.d $(1)/etc/config
+	$(INSTALL_DIR) $(1)/usr/sbin $(1)/usr/libexec/rpcd $(1)/etc/init.d $(1)/etc/config
 	$(INSTALL_DIR) -m0700 $(1)/etc/photon
 	$(INSTALL_BIN) $(GO_PKG_BUILD_BIN_DIR)/photon $(1)/usr/sbin/photon
 	$(INSTALL_BIN) ./files/photon.init $(1)/etc/init.d/photon
 	$(INSTALL_BIN) ./preflight.sh $(1)/usr/libexec/photon-preflight
+	$(INSTALL_BIN) ./files/luci.photon $(1)/usr/libexec/rpcd/luci.photon
 	$(INSTALL_CONF) ./files/photon.config $(1)/etc/config/photon
 	$(INSTALL_CONF) ./files/config.yaml.example $(1)/etc/photon/config.yaml.example
 endef

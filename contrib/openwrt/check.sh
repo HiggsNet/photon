@@ -3,7 +3,7 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-sh -n "$script_dir/build.sh" "$script_dir/preflight.sh" "$script_dir/files/photon.init"
+sh -n "$script_dir/build.sh" "$script_dir/preflight.sh" "$script_dir/files/photon.init" "$script_dir/files/luci.photon"
 test_dir=$(mktemp -d)
 trap 'rm -rf "$test_dir"' EXIT HUP INT TERM
 
@@ -52,6 +52,7 @@ TEST_CONFIG="$test_dir/config with spaces.yaml"
 start_service
 grep -Fx "<command><$test_dir/photon><daemon>" "$call_log"
 grep -Fx "<env><PHOTON_CONFIG=$TEST_CONFIG><PHOTON_CONTROL_SOCKET=$test_dir/run/photon.sock><PATH=/usr/sbin:/usr/bin:/sbin:/bin>" "$call_log"
+grep -Fx "<file><$TEST_CONFIG></etc/config/photon><$test_dir/photon>" "$call_log"
 grep -Fx '<respawn><3600><5><5>' "$call_log"
 grep -Fx '<term_timeout><30>' "$call_log"
 [ "$(grep -c '^instance ' "$call_log")" -eq 1 ]

@@ -897,11 +897,34 @@ func TestBuildStrongSwanConnectionUsesRouteBasedChildSA(t *testing.T) {
 	if child["start_action"] != "none" {
 		t.Fatalf("start_action = %#v, want none", child["start_action"])
 	}
-	if got := child["local_ts"].([]string); len(got) != 1 || got[0] != "::/0" {
+	if got := child["local_ts"].([]string); len(got) != 2 || got[0] != "0.0.0.0/0" || got[1] != "::/0" {
 		t.Fatalf("local_ts = %+v", got)
 	}
-	if got := child["remote_ts"].([]string); len(got) != 1 || got[0] != "::/0" {
+	if got := child["remote_ts"].([]string); len(got) != 2 || got[0] != "0.0.0.0/0" || got[1] != "::/0" {
 		t.Fatalf("remote_ts = %+v", got)
+	}
+}
+
+func TestRouteBasedPayloadFamiliesDoNotFollowTunnelAddressFamily(t *testing.T) {
+	for _, tunnel := range []string{"", "169.254.42.1", "fe80::42:1"} {
+		t.Run(tunnel, func(t *testing.T) {
+			address, _ := netip.ParseAddr(tunnel)
+			message, err := BuildLoadConnMessage(TransportLinkSpec{
+				LocalZone: "node-a.catofes.", PeerZone: "node-b.catofes.",
+				TransportID: "dual-payload", XFRMIfID: 42,
+				LocalTunnelAddr: address, PeerTunnelAddr: address,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			child := message["dual-payload"].(map[string]any)["children"].(map[string]any)["dual-payload-child"].(map[string]any)
+			for _, side := range []string{"local_ts", "remote_ts"} {
+				selectors := child[side].([]string)
+				if len(selectors) != 2 || selectors[0] != "0.0.0.0/0" || selectors[1] != "::/0" {
+					t.Fatalf("%s with tunnel address %q must carry both payload families: %v", side, tunnel, selectors)
+				}
+			}
+		})
 	}
 }
 

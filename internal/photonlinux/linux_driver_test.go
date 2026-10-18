@@ -143,10 +143,19 @@ func TestConfiguredAndCleanupDriversKeepDifferentVICIRequirements(t *testing.T) 
 		t.Fatal("cleanup skipped VICI with no overlays")
 	}
 	config.LinkGroups = []transportipsec.LinkGroupSpec{{ID: "main"}}
-	if driver, err := NewDaemonDriver(config, nil, nil); err == nil {
-		_ = driver.Close()
-		t.Fatal("configured data plane skipped VICI")
+	// The daemon and its control API must survive charon starting later. VICI
+	// operations still report the dependency as unavailable until it is ready.
+	driver, err = NewDaemonDriver(config, nil, nil)
+	if err != nil {
+		t.Fatalf("configured data plane with delayed VICI: %v", err)
 	}
+	if _, err := driver.ListIPsecSAs(context.Background()); err == nil {
+		t.Fatal("configured data plane concealed unavailable VICI")
+	}
+	if _, _, supported, err := driver.SubscribeIPsecLifecycle(context.Background()); !supported || err == nil {
+		t.Fatalf("unavailable VICI subscription = (supported=%v err=%v)", supported, err)
+	}
+	_ = driver.Close()
 	config.Driver = IPsecDriverDryRun
 	driver, err = NewIPsecCleanupDriver(config)
 	if err != nil {

@@ -181,17 +181,7 @@ func (p *observerProvider) Zones(zoneFilter string) (any, error) {
 }
 
 func (p *observerProvider) Peers(peerFilter string) (any, error) {
-	d := p.daemon
-	if d == nil || d.State == nil {
-		return inspect.PeersView{Peers: []inspect.PeerView{}}, nil
-	}
-	view := d.State.Common.ReadView()
-	if view.State == nil {
-		return inspect.PeersView{Peers: []inspect.PeerView{}}, nil
-	}
-	now := d.now()
-	observabilitySnapshots := d.peerObservabilitySnapshots()
-	peers := inspect.BuildGossipPeersView(view, gossipPeersOptions(d.gossipDriver.GossipConfig(), observabilitySnapshots, now))
+	peers := p.daemon.peerSnapshotView()
 	if peerFilter != "" {
 		for _, peer := range peers.Peers {
 			if peer.PeerID == peerFilter {

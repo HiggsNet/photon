@@ -86,10 +86,10 @@ func cmdAdvanced() *cli.Command {
 		Name:        "advanced",
 		Usage:       "Low-level synchronization, recovery, and maintenance commands",
 		Description: "Commands for manual synchronization, state recovery, and local maintenance. Most installations only need the daemon.",
-		Commands: []*cli.Command{
+		Commands: append([]*cli.Command{
 			cmdSync(),
 			cmdRecovery(),
-		},
+		}, platformAdvancedCommands()...),
 	}
 }
 

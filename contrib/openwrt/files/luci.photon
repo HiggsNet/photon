@@ -1,0 +1,8 @@
+#!/bin/sh
+# rpcd invokes this short-lived adapter; procd remains the daemon owner.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+unset PHOTON_CONFIG PHOTON_STATE PHOTON_CONTROL_SOCKET_SCOPE
+PHOTON_CONTROL_SOCKET=/run/photon/photon.sock
+export PHOTON_CONTROL_SOCKET
+exec /usr/sbin/photon advanced openwrt-rpc "$@"

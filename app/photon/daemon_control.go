@@ -666,6 +666,8 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		writeCanonicalView(conn, buildPeerLifecycleDebugView(d.Config, common, links, reconcile, d.now()))
 	case "gossip_peers_view":
 		writeCanonicalView(conn, d.gossipPeerSnapshotForControl())
+	case "peers_view":
+		writeCanonicalView(conn, d.peerSnapshotView())
 	case "revocation_view":
 		observedLinks, _ := d.linuxObservation.ipsecSnapshot()
 		linkStates := observedLinks

@@ -1,0 +1,13 @@
+{
+	"admin/services/photon": {
+		"title": "Photon",
+		"order": 80,
+		"action": {
+			"type": "view",
+			"path": "photon/overview"
+		},
+		"depends": {
+			"acl": ["luci-app-photon"]
+		}
+	}
+}

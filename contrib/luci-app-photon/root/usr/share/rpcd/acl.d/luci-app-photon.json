@@ -1,0 +1,15 @@
+{
+	"luci-app-photon": {
+		"description": "Read Photon status and manage only the Photon configuration and service",
+		"read": {
+			"ubus": {
+				"luci.photon": ["snapshot", "get_config", "diagnostics"]
+			}
+		},
+		"write": {
+			"ubus": {
+				"luci.photon": ["validate_config", "save_config", "service"]
+			}
+		}
+	}
+}

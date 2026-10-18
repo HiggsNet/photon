@@ -257,7 +257,8 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 		return interfaceBlocks[i].InterfacePattern < interfaceBlocks[j].InterfacePattern
 	})
 
-	// Build static route block if any static routes are specified.
+	// A BIRD static protocol accepts one address family. Split a dual-stack
+	// route set while preserving existing names for single-family instances.
 	var staticBlocks []StaticRouteBlock
 	if len(spec.StaticRoutes) > 0 {
 		block := StaticRouteBlock{Name: staticName}
@@ -269,7 +270,14 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 				block.IPv6Routes = append(block.IPv6Routes, route)
 			}
 		}
-		staticBlocks = append(staticBlocks, block)
+		if len(block.IPv4Routes) > 0 && len(block.IPv6Routes) > 0 {
+			staticBlocks = append(staticBlocks,
+				StaticRouteBlock{Name: staticName + "4", IPv4Routes: block.IPv4Routes},
+				StaticRouteBlock{Name: staticName + "6", IPv6Routes: block.IPv6Routes},
+			)
+		} else {
+			staticBlocks = append(staticBlocks, block)
+		}
 	}
 
 	return BirdConfig{

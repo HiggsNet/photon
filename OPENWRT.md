@@ -1,246 +1,273 @@
 # Photon on OpenWrt / ImmortalWrt
 
-目标：直接在 OpenWrt / ImmortalWrt 路由器上运行 Photon，复用 Linux 的 strongSwan、XFRM 和 BIRD 路径，省去额外虚拟机。两种固件共用打包和 procd 适配，覆盖 AMD/Intel x86-64、32 位 x86、ARM32 和 ARM64。
+在 OpenWrt / ImmortalWrt 上运行 Photon，复用 Linux 的 strongSwan/VICI、XFRM 与 BIRD，并通过原生 procd 和 LuCI 管理。当前已验证 x86/64 测试虚拟机上的管理闭环、真实 charon 依赖恢复，以及隔离 Babel/IPsec 联合双栈流量；ARM 仍处于交叉编译阶段，真实 WAN/LAN 接入尚未验收。
 
-## 开发基线
+## 当前状态（2026-10-18）
 
-- 建立日期：2026-10-18。
-- 独立仓库：`/home/herbertqiao/Work/photon-openwrt`。
-- 开发分支：`openwrt/initial-port`。
-- 基线：`v0.6.0-rc.13`，提交 `3faf3a96dcfb86bd90acd7321fb667e9df1781a1`。
-- 保留上游 Git 历史；本副本有独立的 `.git`，没有共享对象库依赖。
-- 来自已提交源码的克隆，没有复制原目录中的运行数据库、私钥、抓包或构建产物。
+开发分支为 `openwrt/initial-port`，上游基线为 `v0.6.0-rc.13`（`3faf3a96dcfb86bd90acd7321fb667e9df1781a1`）。初步移植已本地提交为 `ea917baf`；本轮继续完成 LuCI、RPC、依赖、恢复与双栈适配，整理为本地提交；未推送，也未发布版本。
 
-已开始实现：`contrib/openwrt/` 提供静态交叉编译脚本、SDK 本地源码包定义、procd 服务、UCI 启动设置、YAML 示例和只读设备检查。尚未完成真实 SDK 打包、固件运行或实机接入，不构成所有型号/版本的兼容承诺。
-
-## 产品组织：安装包、LuCI 与系统服务
-
-适配的交付目标是能安装、配置、启动、诊断和接入 LAN 的路由器软件。当前编译成功只完成其中一个环节。包结构收敛为两个包：
-
-| 包 | 负责内容 | 架构 |
+| 层次 | 已验证事实 | 边界 |
 | --- | --- | --- |
-| `photon` | 主程序、依赖声明、YAML 示例、UCI 服务设置、procd 启动、设备检查 | 使用目标 SDK 的 CPU/ABI 包架构 |
-| `luci-app-photon`（待实现） | LuCI 页面、菜单、rpcd 接口及 ACL；依赖 `photon` 与所需 LuCI/rpcd 组件 | 页面和脚本部分为 `all` |
+| 主程序 | 最新源码完成 amd64、386、ARMv5/v6/v7、ARM64 六种静态构建，无动态解释器或共享库依赖 | ARM 未在目标设备执行；不能推广到全部 CPU、固件和内核 |
+| SDK 包 | 匹配 ImmortalWrt 25.12.1 x86/64 SDK 构建并安装 Photon、LuCI 与 13 个 strongSwan APK；应用 r1→r2 活动升级及二进制内容触发重启通过 | 只验证该固件/架构；未生成其他目标 SDK 的安装包 |
+| procd | 启停、重生、数据库恢复，以及原生 daemon 在真实 charon 缺失、启动、停止、重启后的 reconcile/watcher 自动恢复通过，daemon PID 保持不变 | 依赖恢复使用空 SA；有活动 SA 时的业务重建、整机重启及 WAN 恢复未验收 |
+| LuCI/rpcd | 六方法注册、HTTP ACL、真实表单登录、状态/节点/链路、诊断、配置校验保存与冲突处理通过 | 首轮编辑测试使用临时注入会话；随后另用真实临时账号验证登录及已安装 ACL 的角色映射 |
+| XFRM/BIRD | 原六项测试，以及生产 BIRD 配置经真实 IPsec 学习双方 IPv4/IPv6 前缀、双向业务地址 ping、SA/接口计数、BIRD 撤路和恢复通过 | IPv4 underlay 上的隔离对等端；不是生产 WAN/LAN 或持续负载验收 |
+| charon/IKE | strongSwan 6.0.3：VICI wrapper 恢复、P256 IPv6 双向 tunnel ping、Ed25519 canonical 双栈双向 ping 及双方 CHILD/IKE rekey 均通过；共享 TS 修复后重新回归通过 | IKE/ESP 底层为 IPv4；未验证 IPv6 underlay、实际 WAN/NAT 变化或有活动 SA 的 daemon 恢复 |
+| LAN/业务 | 尚未验收 | netifd/firewall4 自动接入尚未实现 |
 
-无 Web 管理需求时直接安装 `photon`；需要面板时安装 `luci-app-photon`，由包管理器解析主程序与运行依赖。依赖来自匹配固件的软件源，不把其他系统的 BIRD/charon/ip 二进制塞入程序，也不在首次启动时临时下载安装依赖。
+测试设备为 `root@10.16.255.80`：QEMU、ImmortalWrt 25.12.1、`x86_64`、Linux 6.12.94。先手工暂存源码构建产物完成管理验收，再使用 `apk add` 安装实际 SDK 产物，复核原有配置保留、rpcd 自动注册和原生二进制启动。首轮 r1 ELF SHA256 为 `3da383a91e4e3dce22bd90f7bc9470e94b3f02df4321c7e2628f610a4c376b72`；完成双栈修复与实际升级后，当前 r2 为 `fda077279dfec8a863822973dd111f63364b477e139bd3cb9ed2d17c0611061f`，与 r2 SDK 包内成品一致。首轮管理验收身份为 `router.acceptance.invalid.`，监听 `127.0.0.1:43434`，bootstrap 仅为 `127.0.0.1:43435`，数据库位于独立临时目录；节点真实处于 `auto-join / syncing_parent`，没有签发生产委派或接入生产路由。
 
-### 依赖各自解决的问题
+本地证据保存在被 Git 忽略的 `build/openwrt/device-acceptance/`，总览为 `final-summary.json`；远端临时目录为 `/tmp/photon-acceptance.eEmOlk`。它们是本次验收产物，不随源码提交发布。
 
-| 组件 | 用途与归属 |
+后续应用依赖恢复证据位于 `build/openwrt/device-acceptance-next/native-recovery/`；联合协议验收与修复前后日志位于 `build/openwrt/device-acceptance-next/`，汇总为 `joint-summary.json`，远端为 `/tmp/photon-joint.CNcbFc`。r1→r2 升级及单独更换二进制的验证位于 `build/openwrt/device-acceptance-next/upgrade-r2/`，远端为 `/tmp/photon-upgrade.GGkPbJ`。
+
+验收后保留原生软件安装，Photon、这次新增的系统 BIRD/swanctl 均停止并禁用。已删除本次临时身份、数据库和 `/etc/photon/config.yaml`，面板重新显示安装包示例；未配置生产身份。构建容器已停止，SDK 和日志保留供复查。
+
+## 包、依赖与进程归属
+
+| 包 | 内容 | 架构 |
+| --- | --- | --- |
+| `photon` | 主程序、运行依赖、procd、UCI 服务设置、YAML 示例、只读 preflight 和 rpcd 启动入口 | 目标 SDK 的 CPU/ABI 包架构 |
+| `luci-app-photon` | JavaScript 页面、菜单和方法级 ACL；依赖 `luci-base` 与 `photon` | `all` |
+
+不需要 Web 管理时只安装 `photon`。需要面板时安装 `luci-app-photon`，由匹配固件的软件源解析依赖。Go、编译器和 SDK 只用于构建机；运行时不另装工具链，也不捆绑其他发行版的网络工具。
+
+| 运行依赖 | 用途 |
 | --- | --- |
-| Go、编译器、SDK | 构建机工具，路由器运行时不需要 |
-| `ip-full` | 提供完整 iproute2 的 link/route/rule/netns/XFRM 与 JSON 查询；不能仅检查命令名 `ip` 是否存在 |
-| `bird2` | 提供 BIRD 可执行文件；Photon 生成配置并管理自己的 Babel 实例 |
-| charon、VICI、所选 strongSwan 插件 | 系统 swanctl 服务提供 IKE 与内核 IPsec 管理，Photon 通过 VICI 提交连接 |
-| XFRM/veth/crypto 内核模块 | 内核的数据面能力，必须与设备当前内核 ABI 匹配 |
-| `nftables-json` 与 firewall4 | nft 提供命令接口；firewall4 继续管理主机/LAN/WAN 规则，Photon 管自己的表与 namespace 策略 |
-| `iputils-ping` | 当前健康探测 raw socket 不可用时的后备实现，使用分数秒 `-i`/`-W`、IPv6 和源地址参数，不默认依赖 BusyBox 兼容这些行为 |
+| `ip-full` | 完整 iproute2、JSON 查询、link/route/rule/netns/XFRM |
+| `iputils-ping` | raw socket 健康探测的后备实现，所用参数不默认依赖 BusyBox 兼容 |
+| `bird2`、`bird2c` | BIRD/Babel 实例及 `birdc` 控制工具；Photon 停止实例会使用 `birdc ... down` |
+| `strongswan`、charon、swanctl 和所选插件 | 系统 IKE/VICI 服务及密钥、算法支持 |
+| XFRM、veth、GCM/HMAC/SHA256 内核模块 | 内核接口及加密能力，必须匹配当前内核 ABI |
+| `nftables-json` | Photon 自有表与 namespace 内策略；主机 LAN/WAN 规则仍归 firewall4 |
 
-主包已声明上述运行依赖；加密插件仍须用实际密钥装载、握手与重协商验证。`iputils-ping` 已补入依赖，procd 显式设置 PATH，优先从 `/usr/bin` 选择 iputils，保留 `/sbin` 中的 ip-full alternatives。选了包并不代表被固件裁掉的 `CONFIG_NET_NS` 自动恢复。
+真实 SDK 检查发现并修正：APK 包版本使用 `0.6.0_rc13`，程序仍标识上游 RC.13；主包直接依赖 `strongswan` 基包与 `bird2c`。该 strongSwan 包的 nonce 模块由基包提供。最终协议验收使用 13 个匹配 SDK 的 strongSwan 包：`strongswan`、`strongswan-charon`、`strongswan-swanctl`，以及 `strongswan-mod-{kernel-netlink,socket-default,openssl,pubkey,pem,pkcs1,pkcs8,x509,random,vici}`；VICI 由 swanctl 的传递依赖带入。这个 OpenSSL 组合已通过下文的实际密钥装载、IKE/ESP 和重协商测试。
 
-### 进程管理只有明确的负责人
+首次 12 包组合的 `load-key` 成功，但 `load-conn` 返回 `parsing request failed`，这次失败不计为通过。原因是 raw 公钥证书构造请求 `KEY_ANY`，需要 PKCS1 插件解析 SubjectPublicKeyInfo（SPKI）的算法 OID，再转交 OpenSSL 的 ECDSA/Ed25519 provider。该插件并不表示改用 RSA 身份。补入 `strongswan-mod-pkcs1` 及主包依赖后，按原生产消息和算法提案重新通过首轮 IKE 验收；该次插件修复无需更改 Go 消息。后续联合流量测试另发现并修复了双栈 BIRD static 配置与 CHILD payload 选择器问题，见下文。
 
-```text
-LuCI 页面 --ubus/rpcd--> Photon 专用管理接口
-                              |
-                   /etc/init.d/photon（procd）
-                              |
-                         photon daemon
-                           |       |
-                         VICI    BIRD 子进程
-                           |
-                         charon
-                           ^
-                   系统 swanctl 服务（procd）
-```
+进程负责人保持唯一：LuCI 经 `ubus/rpcd` 调用 Photon 专用接口；procd 管前台 `photon daemon`；固件原有 swanctl 服务管 charon；Photon 经 VICI 使用 charon，并管理自己的 BIRD 子进程。不新增 systemd、第二个常驻管理服务或独立保活循环。
 
-LuCI 只请求服务操作；procd 管一个前台 `photon daemon` 的启动、停止、重启与日志。charon 继续由固件原有 swanctl 服务管理，Photon 不另起 charon。Photon 管理自己生成配置的 BIRD 实例，安装 `bird2` 是获得程序，不表示要启动系统 `/etc/init.d/bird`。无需引入 systemd、额外常驻管理守护进程或第二套循环保活脚本。
+`bird2` 的包安装脚本可能自动启用系统 `/etc/init.d/bird`。本次设备原先没有 BIRD，安装后只停止并禁用了本次新增的空配置系统实例，主机路由未变。已有设备必须先识别系统 BIRD 的使用者和配置，不能照抄无条件停用既有 BIRD 的命令。
 
-`START=95` 仅决定开机调用顺序，不代表 charon/VICI 或 WAN 已就绪。源码中的 `NewReconnectingGoviciClient` 首次构造会立即连接 VICI，失败会使数据面初始化退出；后续断线重连与首次依赖缺失是两件事。当前脚本只有 procd 有限次重启，不能宣称已覆盖长时间延迟就绪。下一步必须验证并实现首次就绪等待/重试、charon 重启和网络变化后的恢复，同时避免重启共享 swanctl 影响其他 VPN。
+`START=95` 只决定开机调用顺序。首次 VICI socket 缺失或拒绝连接时，客户端保留重试能力，允许 Photon 控制接口先启动；既有 watcher 从 1 秒起退避订阅、上限 1 分钟，IPsec reconcile 默认每分钟重试。权限拒绝或非法路径等永久错误仍使初始化失败，Photon 不重启共享 swanctl。独立 wrapper 与原生 procd 应用均已用真实 charon 验证延迟启动及重启恢复，后者还核对了事件重新订阅、canonical 错误清除及同一 daemon PID；该恢复测试为空 SA，不能推广为活动链路业务已自动重建。
 
-### LuCI 首版的交互与配置归属
+## 面板与配置约定
 
-采用现代 LuCI JavaScript 页面配合 rpcd/ubus，参照官方示例的菜单和 ACL 结构；没有为了面板专门引入 Lua 的必要。首版页面计划如下，当前尚未实现：
+LuCI 使用现代 JavaScript 页面，不为面板另引入 Lua。服务菜单下提供四部分：
 
-1. **概览**：分别显示进程运行、VICI、IKE/CHILD、Babel 邻居和路由状态。进程运行不显示为网络已连通。
-2. **服务与配置**：开关、开机启动、启停/重启、配置导入与校验。先提供完整 YAML 的受控编辑；后续表单写入同一 YAML，不同时维护另一份完整 UCI 协议配置。
-3. **节点与链路**：复用现有 control socket 的 canonical inspect DTO，展示 peer、链路、最后失败及同步情况；补窄的结构化查询入口，不抓取人读文本，也不直读 bbolt。
-4. **诊断**：包/工具/内核能力、配置错误、VICI 可用性、近期服务日志与只读检查结果。只读检查不被标注为真实流量验收。
-5. **LAN 接入**：选择已有 LAN 区域、需要接入的前缀，展示将创建的命名接口/forwarding 规则和撤回方式；独立验收后再实现自动应用。
+1. **概览与服务**：进程/PID、开关、控制接口、canonical 接入模式/阶段/原因、节点与链路计数及最近错误；启用、禁用、启动、停止、重启和刷新。
+2. **节点与链路**：节点选用地址、同步时间、拉取状态和错误；链路接口、地址、状态、CHILD 名称、BIRD 状态及错误。离线或读取失败时清空旧详情。
+3. **配置**：YAML 读取、校验、保存和重新读取。保存不自动重启，保存/校验与服务写操作互斥，状态轮询不覆盖编辑内容。
+4. **诊断**：工具、可见内核能力、VICI 查询、只读 preflight 和近期日志，执行时间与输出大小受限。
 
-配置归属保持一处负责：`/etc/config/photon` 管服务开关和 YAML 路径；YAML 管本机协议意图；bbolt 管身份及已验证网络事实；`/etc/config/network`、`/etc/config/firewall` 管 netifd/firewall4 的主机网络意图；`/run/photon` 放生成文件和 socket。签名记录、委派和路由授权仍走 Photon 原有命令与验证流程，LuCI 配置项不能替代它们。
+进程运行、控制接口响应、链路运行与接入授权分别展示，均不能代替端到端业务验证。面板读取本地 control socket 的 `daemon_status_view`、`status_view`、`peers_view`、`links_view`，复用 canonical inspect DTO。`peers_view` 与 Observer 共享投影，原有 `gossip_peers_view` 调试 schema 保持不变；离线查询不会打开或初始化数据库。链路详情来自已有观测，不额外发起实时 VICI SA 查询；也不要求开放 Observer HTTP 端口。
 
-面板需要的 RPC 限于 Photon 状态、配置校验/应用和本服务启停。使用 LuCI 登录与方法级 ACL，避免授予任意 shell、任意路径文件访问或整个系统服务的写权限。状态复用本地 control socket 和 inspect 模型；面板本身不要求额外开放 Photon Observer 的 HTTP 监听端口。配置应用须先用实际解析器校验，再原子替换配置；失败不覆盖运行配置。相关 RPC、校验命令与 LuCI 包目前均是待实现项。
+`/usr/libexec/rpcd/luci.photon` 短时执行同一主程序的 `photon advanced openwrt-rpc`。接口只有六个方法：
 
-### 接下来的实现顺序
+| ACL | 方法 |
+| --- | --- |
+| read | `snapshot`、`get_config`、`diagnostics` |
+| write | `validate_config`、`save_config`、`service` |
 
-先用一个匹配版本的 x86/64 SDK 证明主包依赖能安装且 procd 生命周期正常，补齐 VICI 首次就绪与恢复；然后实现 LuCI 的服务/概览/诊断与配置校验闭环；再接入 netifd/firewall4 的 LAN 流量并验证 reload、重启和撤回；最后在 x86、ARM32、ARM64 分别跑对应 SDK 构建与设备验收。所有架构共用服务与 LuCI 代码，每种内核/固件包仍须分别构建和验证。
+应用 ACL 不授任意 shell、客户端指定文件路径、通用 UCI 写入或其他服务管理权限。配置读取 UCI 指定的绝对 `.yaml`/`.yml` 路径，限制 128 KiB 和单个 YAML mapping 文档，使用实际 Linux 配置解析器校验。保存使用读取版本的 SHA256、文件锁、`0600` 同目录临时文件和原子替换；校验或版本冲突失败时不覆盖配置，编辑文本保留。校验通过只证明可解析，不能替代身份、权限及网络验证。
 
-## 当前使用方法
+配置归属如下：
 
-### 1. 构建各架构主程序
+| 位置 | 负责人及用途 |
+| --- | --- |
+| `/etc/config/photon` | 服务开关和 YAML 路径 |
+| YAML | 本机 Photon 协议配置 |
+| bbolt 数据库 | 身份与已验证网络事实 |
+| `/etc/config/network`、`/etc/config/firewall` | netifd/firewall4 的主机网络意图 |
+| `/run/photon` | 临时 socket、BIRD 配置、PID 等运行文件 |
 
-开发主机需要 Go 1.25 以上。Photon 以及当前 `x/crypto`、`x/sys` 都要求这个最低版本；旧版 SDK 的 Go host 工具也需要达到该要求，不降级协议依赖来迁就旧工具链。
+签名、委派、IPAM 与路由授权继续走 Photon 原有验证流程，面板配置不能替代授权。
+
+## 构建与安装
+
+### 静态主程序
+
+需要 Go 1.25 以上；默认构建六种目标：
 
 ```sh
 contrib/openwrt/build.sh
-# 也可以只构建一部分；可选 mips/mipsle 使用 softfloat。
+# 也可指定部分目标：
 contrib/openwrt/build.sh amd64 386 armv7 arm64
 ```
 
-默认输出至 `build/openwrt/`，每个二进制附带独立 `.sha256` 文件，`SHA256SUMS` 汇总本次构建目标；通过 `PHOTON_BUILD_DIR` 可更改位置。`GO`、`GOCACHE`、`GOMODCACHE` 可以显式指定。当前开发机可用独立缓存：
+| 目标 | CPU/浮点基线 |
+| --- | --- |
+| `amd64` | AMD/Intel x86-64，`GOAMD64=v1` |
+| `386` | 32 位 x86，`GO386=softfloat` |
+| `armv5`、`armv6`、`armv7` | 相应 `GOARM` 与 softfloat |
+| `arm64` | ARMv8 AArch64，`GOARM64=v8.0` |
+
+产物、每目标 SHA256 和本次调用的 `SHA256SUMS` 默认位于 `build/openwrt/`。可用 `PHOTON_BUILD_DIR`、`GO`、`GOCACHE`、`GOMODCACHE` 指定输出和工具缓存。脚本还接受可选 `mips/mipsle` softfloat 编译探测，不能据此宣称 MIPS 固件可用。
+
+这些名字不是 opkg/apk 包架构。包的 CPU/ABI、内核和 libc 条件必须由相应 SDK 确定；不能重命名某架构或固件的包来适配其他目标。
+
+### SDK 两个包
+
+本次使用官方 ImmortalWrt 25.12.1 x86/64 SDK、固定的 base/packages/luci/routing feeds 和 SDK Go 1.26.4，已完成两包构建及设备安装。SDK 压缩包 SHA256 为 `02ad8cfc775001ccae8e9282d19696de54e3ab3963f005737ad61f8698263edd`。产物位于 `build/openwrt/sdk-immortalwrt-25.12.1-x86_64/`，目录内 `SHA256SUMS` 覆盖全部 15 个 APK，`PROVENANCE.md` 记录 SDK 来源、feed commits、隔离构建环境、日志和复现命令。未将 SDK 生成的额外 kmod 装入设备。
+
+原 r1 产物继续保留；当前应用候选为该目录下 `r2/`，其 `SHA256SUMS`、`PROVENANCE.md` 和源码哈希清单单独记录这次构建。主包为 `photon-0.6.0_rc13-r2.apk`，LuCI 为 `luci-app-photon-0.6.0_rc13-r2.apk`，程序版本为 `openwrt-v0.6.0-rc.13-r2`。13 个 strongSwan 包保持原样，r2 主程序包含下述双栈修复。
+
+该发行版公开源缺少 strongSwan，官方失败日志显示 wolfSSL 插件缺 `wolfssl/wolfcrypt/mlkem.h`；本次使用同版本源码，仅选择所需 OpenSSL 组合构建。其他固件仍应使用各自匹配的软件源与 SDK。通用入口如下，Go host 须至少 1.25：
 
 ```sh
-GOCACHE=/tmp/photon-openwrt-gocache \
-GOMODCACHE=/tmp/photon-openwrt-gomodcache contrib/openwrt/build.sh
-```
-
-| 构建目标 | 设备类型 | CPU/浮点基线 |
-| --- | --- | --- |
-| `amd64` | AMD/Intel 64 位软路由，OpenWrt x86/64 | GOAMD64=v1，不要求 AVX |
-| `386` | 32 位 x86 路由器 | GO386=softfloat，不要求 SSE2 浮点 |
-| `armv5` | ARMv5 及以上 32 位设备 | GOARM=5,softfloat |
-| `armv6` | ARMv6 及以上 32 位设备 | GOARM=6,softfloat |
-| `armv7` | ARMv7 32 位路由器 | GOARM=7,softfloat |
-| `arm64` | ARMv8 AArch64 路由器 | GOARM64=v8.0 |
-
-构建目标不是 opkg/apk 包的架构名。ARM 的 `arm_cortex-a7`、`arm_cortex-a9`、`aarch64_cortex-a53` 等包架构以及 x86 包架构必须由相应版本/目标的 SDK 决定；不能把一个 SDK 生成的安装包重命名后用于其他架构。纯 Go 静态二进制不依赖固件 libc 的浮点 ABI，但仍受 CPU 指令、Go 支持的内核和固件能力限制。
-
-### 2. 只读检查设备
-
-将 `contrib/openwrt/preflight.sh` 复制到测试设备后运行 `sh preflight.sh`。脚本打印固件、架构、内存/存储、ip JSON、netns API、BIRD 版本、VICI 和 nft 可见性；不会加载模块、创建接口/namespace、启动服务或修改路由/防火墙。自定义 VICI 路径用 `PHOTON_VICI_SOCKET` 指定。
-
-脚本检查失败返回非零。全部只读检查通过仍不能证明 namespace 创建/移动、XFRM if_id、实际算法、firewall4 放行和端到端业务成功。开发机的结果也不计入设备验收。
-
-### 3. 在匹配的 SDK 中打包
-
-以下是待真实 SDK 验证的开发入口。使用目标 OpenWrt / ImmortalWrt 版本及架构对应的 SDK，启用 packages feed，确保其 Go host 版本至少 1.25。`PHOTON_SOURCE_DIR` 指向本分支的绝对路径。
-
-```sh
-# 在 SDK 目录执行；PHOTON_SOURCE_DIR 由你填入实际源码目录。
+# 在 SDK 中执行，源码路径换成实际值。
 cp -R /path/to/photon/contrib/openwrt package/photon
-./scripts/feeds update packages
-./scripts/feeds install -a -p packages
-make menuconfig  # Network -> VPN -> photon，选为模块 M
+cp -R /path/to/photon/contrib/luci-app-photon package/luci-app-photon
+# 保留 SDK 自带的固定 feed revisions；本次 ImmortalWrt 的 BIRD 在 routing feed。
+./scripts/feeds update -a
+./scripts/feeds install -a
+make menuconfig  # photon 和 luci-app-photon 选 M
 make package/photon/compile V=s PHOTON_SOURCE_DIR=/path/to/photon
+make package/luci-app-photon/compile V=s PHOTON_SOURCE_DIR=/path/to/photon
 ```
 
-修改本地源码后先执行 `make package/photon/clean PHOTON_SOURCE_DIR=/path/to/photon` 再编译，以刷新 SDK 的 prepare 缓存。包只复制源码目录与 Go 清单，不复制工作区的 `.git`、设备身份、运行数据库和构建目录。包格式由目标 SDK 决定（ipk 或 apk），不得混用不同固件版本的 kmod。
+SDK 的 `package/` 是复制件；脚本、包规则和页面改动须同步后 clean/compile，主程序源码更新也须先 `make package/photon/clean` 以刷新 prepare。主包只复制源码目录和 Go 清单，不复制 `.git`、身份、密钥、运行数据库或构建目录。LuCI 使用 `$(TOPDIR)/feeds/luci/luci.mk`，架构为 `all`。
 
-依赖选择 `ip-full`、`iputils-ping`、`nftables-json`、BIRD、XFRM/veth、AES-GCM/HMAC/SHA256 内核模块和 charon/VICI。strongSwan 选 OpenSSL crypto、raw public key、PEM/PKCS8/X509 解码和 RNG，作为当前 Ed25519/P-256、AES-CBC/HMAC-SHA256 与 ESP AES-GCM 的候选组合；实际加载、VICI 装载密钥、协商与重协商仍待实测。不是安装 `strongswan-full`。固件内核还必须开启 `CONFIG_NAMESPACES`、`CONFIG_NET_NS`，包依赖不能补回裁掉的内核功能。
+将实际生成的两个包复制到隔离测试设备后，按固件格式使用 `opkg install` 或 `apk add`；未签名的本地 APK 才使用 `--allow-untrusted`。依赖必须来自匹配软件源，尤其不能混用其他内核的 kmod。包依赖无法补回裁掉的 `CONFIG_NAMESPACES/CONFIG_NET_NS`。
 
-### 4. procd 与配置
+本次 APK 候选需一起提供两个应用包和 13 个 strongSwan 包；将这 15 个包放到专用 `/tmp/photon-candidate/` 后执行 `apk add --allow-untrusted /tmp/photon-candidate/*.apk`，其余依赖由匹配源解析。同版本本地包重编译后，使用 `--force-reinstall` 并核对文件 SHA，确保 charon 的默认插件加载列表也更新。
 
-包默认 `enabled=0`，只提供 `/etc/photon/config.yaml.example`。先复制为 `/etc/photon/config.yaml`，填入已有身份、可信根与 bootstrap，再依照原有 Photon 流程接入；没有自动新建根或授予网络权限。UCI 只管理启动开关和配置文件路径，协议配置继续由 YAML 单独负责。
+安装后检查 `ubus -v list luci.photon` 和 LuCI“服务 → Photon”。本次 LuCI 包的标准安装脚本自动重载 rpcd，六方法直接注册成功；Photon 已有 UCI/YAML 配置被保留，新的默认 UCI 文件写为 `.apk-new`。其他固件新插件未注册时可重载 rpcd，再重新登录使 ACL 生效。标准包安装可能建立开机调用链接，但 UCI `enabled=0` 时不启动 daemon；面板分别显示和管理这两个开关。
 
-持久数据库默认 `/etc/photon/photon.db`，支持通过 YAML 的 `data_dir`、`state_path` 迁移到 extroot。BIRD 示例明确使用 `/run/photon/bird/` 的临时配置/socket/PID，日志交给 procd/logd，不持续写 flash 日志。控制 socket 使用原 CLI 默认的 `/run/photon/photon.sock`。须在设备确认 `/run` 指向临时存储。BIRD 示例使用 `shutdown_policy: stop`，服务停止时一并停止该实例。
+### 配置与服务
 
-确认配置、依赖及测试网络边界后，在测试设备执行：
+包默认 `enabled=0`，仅提供 `/etc/photon/config.yaml.example`。在面板读取示例，填写已有身份、可信根和 bootstrap，校验保存后明确“启用服务及开机启动”，再“启动”；没有自动新建根或授予网络权限。运行中修改配置后须明确“重启”。
+
+“启用”只开启 UCI 服务开关和开机启动，不自动启动；“禁用”关闭这两者，不停止当前进程。立即停止另点“停止”。禁用后启动/重启被拒绝，先启用才可启动。保存配置不重启，也不隐式调用 `reload_config`。
+
+默认数据库为持久的 `/etc/photon/photon.db`，可经 YAML 的 `data_dir/state_path` 放到 extroot。示例 BIRD 文件与控制 socket 使用 `/run/photon`，日志交给 procd/logd，不持续写 flash 日志；须确认设备 `/run` 指向临时存储。BIRD `shutdown_policy: stop` 随服务停止关闭自有实例。
+
+命令行使用 `/etc/init.d/photon`；先检查已有 swanctl 配置和 VICI，就绪责任仍属于系统 swanctl。手动编辑 YAML 可调用 Photon reload，UCI 改动可通过 `reload_config` 通知 procd，命令行编辑不经过面板的 SHA 冲突检查。procd 前台单实例运行，退出后按 5 秒间隔有限次重启，停止宽限 30 秒。将 YAML、UCI 和 `/usr/sbin/photon` 均列入 procd 文件哈希；包升级后 init 启动会检测程序内容变化并替换旧进程，相同内容的重复启动保留 PID。
+
+## 已完成的真实设备验收
+
+### LuCI、HTTP、ACL 与配置
+
+`luci-readonly.json`、`luci-http-browser.json`、`luci-login.json` 和 `luci-cleanup.json` 记录了以下结果；浏览器直接访问设备，没有拦截或伪造响应：
+
+- 六个 RPC 在真实 rpcd 注册；只读会话能读取三个方法，三个写方法被拒。读写会话均不能调用 `file.read/file.exec`、`uci.set` 或通用 `service.set`，无 Photon ACL 的会话被真实 LuCI dispatcher 拒绝。
+- 最初 SSH 注入临时内存会话验证管理闭环；随后用两个命名临时 rpcd 登录项，分别仅授 Photon read 与 read+write，以及独立的最小主题只读权限。真实 `session.login` 与浏览器用户名/密码表单登录均通过，证明已安装 ACL 到登录角色的映射，页面控件权限正确且无浏览器异常。
+- 真实 10 秒状态轮询保留未保存 YAML；非法 YAML 校验失败保留文本；注释级保存成功且 daemon PID 不变；并发恢复配置后，编辑器旧 SHA 保存被拒且不丢文本。最终配置原文和 SHA 恢复。
+- 面板真实显示 pending 接入原因、回环 bootstrap 节点、空链路，以及缺失 swanctl/VICI 的诊断；没有把控制接口在线标成网络已通。
+- 7 个测试会话全部销毁，只撤销本次命名 login section 的 UCI delta，删除临时主题 ACL；rpcd 持久文件和原 delta 校验恢复。未改 root 密码、既有登录权限，也未为测试账号重载 rpcd。凭据未写入报告或截图。
+
+`luci-form-read-overview.png` 与 `luci-form-write-overview.png` 展示真实页面，配置编辑区截图遮蔽。Photon 自身 ACL 不包含主题框架的额外通用权限。
+
+原生 APK 安装后又用两个临时账号完成真实表单登录复验：SDK 压缩后的 14201 字节 JavaScript 实际返回 HTTP 200，pending 展示与读写权限正确，非法 YAML 校验保留编辑内容，浏览器无异常。`native-apk-luci-browser.json` 与截图记录该轮结果；这两个会话及其临时账号/主题 ACL 也已清理，既有 rpcd 配置和 UCI delta 校验恢复。
+
+### procd 生命周期
+
+脚本为 `build/openwrt/device-lifecycle.sh`，设备日志为临时目录中的 `procd-lifecycle.log`。手工暂存阶段及 SDK 原生 APK 安装后均对隔离 daemon 验证：
+
+- 启用只改 UCI/开机开关，不启动进程；重启替换 PID，始终只有一个 daemon。
+- 禁用保留运行 PID，但拒绝新的启动/重启；停止清理控制 socket，canonical live 状态转离线。
+- 停止后启用不自动启动；再次启动后仅杀死本次隔离 daemon，procd 约 5 秒重生，临时持久数据库恢复，控制接口重新在线。
+- 最终停止并禁用：`running=false`、`enabled=false`、`boot_enabled=false`。
+
+实际 SDK r1→r2 活动升级另外验证：`apk add` 后 daemon PID 从 `4894` 变为 `5053`，运行中 `/proc/PID/exe` 与已安装 r2 ELF SHA 一致；临时身份密钥、YAML、UCI SHA 和 bbolt inode 保留，启用与开机状态保持。单独固定 r2 init、参数和配置，仅原子替换 r1/r2 二进制内容，两次均触发进程替换且始终只有一个 daemon；相同内容再次启动保持 PID。测试后恢复 r2，删除临时身份与数据库，恢复原 UCI，服务停止并禁用。证据为 `device-acceptance-next/upgrade-r2/upgrade.log`；未测试禁用状态升级、卸载重装或跨固件升级。
+
+另用 `build/openwrt/device-missing-vici.sh` 启用真实 strongSwan overlay，将 VICI 指向不存在的隔离 socket。应用仍为 `daemon_online=true`，控制接口可用；canonical `last_link_failure` 与 `Links.LastFailure` 报告 `ipsec_reconcile_failed` 和 ENOENT，日志记录 reconcile 与事件订阅失败。这是真实应用的首次依赖缺失验收，没有使用模拟 VICI 服务。测试后配置 SHA 恢复，服务停止并禁用，无新增 namespace 遗留。
+
+随后用仓库脚本 `contrib/openwrt/tests/device-vici-recovery.sh` 对已安装原生 Photon 完成真实依赖恢复，证据位于 `build/openwrt/device-acceptance-next/native-recovery/`：
+
+- procd 管理的 daemon 始终保持 PID `901`，控制接口一直在线；charon 最初缺失时报告 `ipsec_reconcile_failed`。
+- 在独立 namespace 和私有挂载中启动真实 charon 后，reconcile 错误自动清除；charon 日志确认 `child-updown`、`ike-updown` 两个订阅稳定注册。
+- 停止该测试 charon 后，错误再次可见；重启后错误自动清除，两种事件重新稳定订阅，Photon 未重启。
+- 测试后 host namespace、接口、路由、mountinfo、忽略计数器的 nft 规则及原系统配置恢复；删除临时私钥、数据库和 YAML，服务停止并禁用。
+
+本轮仅使用回环 pending 测试身份且 SA 为空，证明应用读取和订阅真实依赖的恢复，不证明活动 SA 或已有业务链路在 charon 重启后重建。实际 Babel/ESP 流量由下文的独立联合测试覆盖。
+
+原生 APK 在空闲 pending、仅 Gossip 的这次 VM 单点观测 RSS 为 14016 KiB、7 个线程，不能当作低内存路由器、带加密流量或长时间负载的资源结论。`native-apk-preflight.log` 记录实际系统 charon 就绪时的检查：0 项失败、2 项能力/负载待测提醒；检查后新增的 swanctl 服务停止并禁用。
+
+### 隔离 XFRM 与 BIRD/Babel
+
+`isolated-smoke-summary.json` 与对应日志记录六项通过：
+
+| 测试 | 验证内容 |
+| --- | --- |
+| `TestSystemXFRMDriverIntegrationSmoke` | namespace/XFRM 接口生命周期 |
+| `TestExecProcessManagerRootSmoke` | Photon 管理的 BIRD 进程生命周期 |
+| `TestBabelTwoNodeRootSmoke` | 两节点实际 IPv4 路由学习 |
+| `TestBabelImportFilterNegativeRootSmoke` | 导入过滤的拒绝路径 |
+| `TestBabelAnycastFailoverRootSmoke` | Anycast IPv4 路由故障切换 |
+| `TestBabelDualInterfaceCostFailoverRootSmoke` | 双接口代价与路由故障切换 |
+
+namespace、主机接口、IPv4/IPv6 全路由表在测试前后相同，没有残留测试 BIRD 进程。本批没有运行 charon/IKE，XFRM 未发送加密流量，Babel 未验证 IPv6 路由学习，也未运行默认主机 VICI 或 host-upstream 测试。
+
+### 隔离真实 charon、双栈加密流量与恢复
+
+`strongswan-smoke-summary.json`、`vici-recovery.log`、`ike-p256.log` 和 `ike-ed25519-dualstack.log` 记录补齐 PKCS1 必要依赖后重新执行的结果：
+
+| 测试 | 已验证事实 |
+| --- | --- |
+| `TestReconnectingGoviciClientDelayedCharonRecoverySmoke` | socket 不存在时构造成功，`ListSAs` 明确报 ENOENT；真实 charon 6.0.3 启动后返回空 SA 列表及版本；准确 PID 经 SIGTERM/Wait 停止后操作明确失败；重启后同一个 wrapper 自行恢复 |
+| `TestStrongSwanDriverIKEBringupSmoke` | 随机 P256 密钥、真实 IKE/CHILD、IPv6 XFRM tunnel 双向 ping |
+| `TestStrongSwanAlgorithmInteropSmoke/candidate=false/ipv4=false` | 原 canonical Ed25519，IPv6 双向 ping；A、B 分别发起 CHILD 和 IKE rekey，每次核对 SA ID/SPI 并再次双向 ping |
+| `TestStrongSwanAlgorithmInteropSmoke/candidate=false/ipv4=true` | 同一 canonical Ed25519 路径的 IPv4 双向 ping 及双方 CHILD/IKE rekey |
+
+测试运行于独立 network namespace，使用临时 VICI socket、配置、pid 目录和随机测试身份密钥，不连接系统默认 VICI，也不改生产记录或授权。`unshare --propagation private` 隔离 `/run` bind mount；恢复测试核对不同的 mount namespace、私有 pid 目录 inode 及无 shared/master 传播标记的真实 mountinfo。失败诊断使用 `ip xfrm state list nokeys` 保留 SPI/算法信息，避免记录临时会话密钥。
+
+首次 12 包组合的失败日志单独保留，补齐 13 包后的通过日志单独计数；未开启 container 跳过选项，也未更改连接字段或算法提案。最终命名空间、主机接口、IPv4/IPv6 全路由表、mountinfo 与忽略计数器的 nft 规则均与测试前一致，无残留测试 charon/BIRD 进程。
+
+这份首轮证据覆盖实际设备内核和 strongSwan 的隔离协议与数据面。IPv4/IPv6 ping 使用相应隧道内地址，IKE 底层使用 namespace veth 的 IPv4。该表中的 VICI 测试仅覆盖 wrapper；上文的后续原生 procd 测试另外覆盖空 SA 时的应用 watcher/reconcile 恢复。
+
+### Babel 经真实 IPsec 的联合双栈流量
+
+`pkg/transport/ipsec/babel_ipsec_smoke_test.go` 的 `TestBabelOverIPsecDualStackSmoke` 使用独立门槛 `PHOTON_IPSEC_BABEL_SMOKE=1`。两个隔离 namespace 各运行真实 charon、XFRM 和生产 BIRD 配置生成器、进程管理器及客户端；临时测试密钥和前缀不涉及生产身份或授权。
+
+严格测试先暴露了两个生产兼容问题，失败记录保留，未计为通过：
+
+1. `joint-parser-failure.log`：同一 BIRD static protocol 混合 IPv4/IPv6 通道，被设备 BIRD 拒绝为 `Different channel type`。生成器现按族拆开混合 static 配置，单族协议名保持原样。
+2. `joint-after-bird-fix.log`：两族路由均实际由 Babel 学到，IPv6 业务 ping 与 SA 计数通过，但 IPv4 三包全部不可达，XFRM 接口出现三个 TX 错误。真实 CHILD 仅协商 `::/0`，IPv4 缺少 ESP policy。生产 CHILD 选择器现同时承载 IPv4/IPv6 payload，不再由诊断隧道地址族决定；身份、if_id、底层地址族和授权契约保持原样。
+
+修复后以原有严格断言重新执行，`joint-final.log` 记录 **20.13 秒通过**：
+
+- 每侧只宣告本机 loopback 的 IPv4/IPv6 测试前缀。远端前缀须由 BIRD 的 Babel 协议选中，并以 `proto bird`、XFRM 接口进入 namespace 内核路由表；没有静态远端业务路由。
+- 先 IPv6、后 IPv4，以双方 loopback 业务地址为源和目的双向 ping。每族单独核对 `route get` 确实走 XFRM，以及双方真实 SA 入站和接口收发包计数增长。
+- 停止仅本轮 BIRD B 后，A 的两族远端前缀从 BIRD 和内核表撤回；恢复 B 后重新收敛，再次验证两族双向业务 ping 和计数。
+- 因生产选择器为共享逻辑，又重跑 P256 IPv6，以及 Ed25519 canonical IPv4/IPv6 的双方 CHILD/IKE rekey 与双向 ping，全部通过；日志为 `p256-after-ts-fix.log`、`ed25519-dualstack-after-ts-fix.log`。
+
+该测试的 IPv4/IPv6 指 **ESP 内业务 payload**，IKE/ESP underlay 是两个 namespace 间 veth 的 IPv4；不代表真实 IPv6 underlay 或公网 NAT/WAN 已验证。Babel Hello/Update 经生产配置字段设为 1 秒以限定测试时长，不是默认计时或持续负载结论。它也不证明有活动 SA 时 charon 重启后的应用业务重建。
+
+最终 namespace、host 接口、IPv4/IPv6 全表路由、mountinfo 和忽略计数器的 nft 规则与执行前逐字一致，无残留测试 charon/BIRD 进程。汇总为 `build/openwrt/device-acceptance-next/joint-summary.json`；真实 LAN 接入、生产多节点与持续流量仍待单独验收。
+
+原有 network、firewall、dropbear、rpcd、uhttpd 配置 SHA 保持一致，firewall4 规则在忽略计数器后相同。上述结果只说明本次有边界的验收与恢复，不代表业务或全部网络路径已经验收。
+
+## 本地回归与剩余工作
+
+本地已完成服务脚本模拟检查、实际 YAML 解析、真实 Unix control socket canonical 响应、RPC 配置/并发/超时回归，以及 VICI 缺失、拒绝连接、恢复、永久错误和关闭后的模拟服务测试。18 项 LuCI Node 回归仍属于模拟 DOM/RPC，与上述设备浏览器证据分别计数。
 
 ```sh
-# charon 由固件原有 swanctl 服务管理；先检查 /etc/config/ipsec 的本机设置。
-/etc/init.d/swanctl enable
-/etc/init.d/swanctl start
-uci set photon.main.enabled='1'
-uci commit photon
-/etc/init.d/photon enable
-/etc/init.d/photon start
-logread -e photon
-photon status
+sh contrib/openwrt/check.sh
+node contrib/luci-app-photon/tests/luci.test.cjs
+go test ./internal/photonopenwrt ./internal/photonlinux ./pkg/transport/ipsec
+go test -race ./internal/photonopenwrt ./pkg/transport/ipsec
+go test ./app/photon -run 'TestOpenWrt'
 ```
 
-procd 前台运行单个 Photon 实例，退出后按 5 秒间隔有限次重启，停止宽限 30 秒。服务启动顺序在 swanctl 之后，但首次 VICI 连接仍要求 charon 已就绪，长期延迟启动尚未适配；不另外启动 charon 或系统 BIRD。YAML 修改后执行 `/etc/init.d/photon reload`，UCI 修改可用 `reload_config` 通知 procd。首次依赖等待、WAN 切换、charon 重启后的实际恢复仍须实现并完成设备验收。
+`contrib/openwrt/preflight.sh` 是只读检查入口；全部通过也不证明 namespace 创建、实际算法和流量通畅。已有 `docs/scripts/ipsec-xfrm-preflight.sh` 会创建临时接口/namespace，不能混作只读检查。
 
-### 5. firewall4 与 LAN 接入
+下一步先完善主机路由和地址的撤回：当前 `internal/photonlinux/routing.go` 的 `EnsureRoutes` 只执行 replace，ARS 前缀缩减或清空后，旧主机路由和源地址不会自动删除。`app/photon/routing_reconcile.go` 停用只停止同步，没有拆除既有配置。接入 LAN 前需以 Photon 拥有的对象为边界核对期望与实际状态，撤回旧对象并保留第三方路由，不能直接删除整条接口。
 
-本轮不自动改写 firewall4。Photon namespace 内的转发、防火墙与主路由器的 `inet fw4` 是不同处理环节。先在目标设备规划：
+其次补备份恢复：默认 `/etc/photon/` 已由 SDK conffiles 生成的 keep 规则覆盖，但自定义 YAML、数据库及密钥路径不自动纳入；直接复制运行中的 bbolt 也不能作为一致性备份。需要保存原运行状态、停止后备份或使用事务快照，并在隔离环境验证恢复。
 
-- 主机 input 对 Gossip UDP 33434 和当前宣告的 IKE/NAT-T 端口放行，限制来源/入口范围。
-- 若需要 LAN 进入 mesh，启用 routing upstream veth，并在 firewall4 中声明相应接口及明确的 LAN/mesh 双向 forwarding 和允许前缀。
-- 初次验证固定端口。轮换端口需另验 host DNAT/SNAT 与 fw4 的优先级/规则，不直接开放整个端口区间。
-- 实际执行 firewall reload、WAN 变化和重启后检查 IPv4/IPv6 流量；独立 nft 表中的 accept 不能证明 fw4 放行。
+协议验收仍需有活动 SA 时 charon 重启后的应用链路与业务重建、整机重启、真实 IPv6 underlay、WAN/NAT 变化、firewall4 reload、端口轮换与权限撤回。ARM32/ARM64 还需各自 SDK 和目标设备执行，最后测量吞吐、长时间内存与 flash 写入。
 
-仅有隧道握手不表示路由器上的应用或 LAN 已接入 mesh。路由发布、IPAM 与授权仍遵循原有流程。
-
-## 初步判断
-
-从代码依赖和 OpenWrt 官方软件包定义判断，直接运行有可行性。Photon 已采用 `CGO_ENABLED=0` 构建，主程序可以避免依赖目标机的 glibc；这不等于目标固件具有完整的网络功能，也不代表低内存设备的资源占用已经合格。
-
-Linux 平台组装入口在 `internal/photonlinux/`，无需另写一套 IKE 或 Gossip 协议。优先复用这些实现，通过打包、启动脚本和配置解决平台差异。
-
-## 需要核实和适配的部分
-
-| 部分 | 现有实现和 OpenWrt 条件 | 后续工作 |
-| --- | --- | --- |
-| 服务管理 | 当前通用安装脚本提供 systemd 单元；OpenWrt 使用 procd | 增加原生启动脚本，处理依赖就绪、重启、退出和日志 |
-| strongSwan | Photon 直接连接现有 charon 的 VICI socket；官方包拆分了 charon、VICI 和加密插件 | 按目标固件确认插件、socket 路径、公钥装载和握手算法；charon 继续由系统服务管理 |
-| 内核 IPsec | 使用 route-based XFRM interface 和 `if_id` | 核实 `kmod-xfrm-interface`、IPv4/IPv6 IPsec 和协商算法对应的内核支持 |
-| 网络命名空间 | 现有 Linux 驱动会创建 namespace，并移动 XFRM/veth 接口 | 检查固件的 `CONFIG_NAMESPACES`、`CONFIG_NET_NS`、veth 和 mount/setns 能力；不能仅看包名 |
-| 命令工具 | 使用 `ip -j`、`ip netns exec`、sysctl、nft，健康探测另有 ping 后备路径 | 以 `ip-full` 为候选，逐条验证实际命令；检查 BusyBox 的参数兼容性 |
-| BIRD | Photon 管理自己的 BIRD 进程、配置及控制 socket；OpenWrt 有 `bird2` 包并支持 Babel | 验证生成配置可解析，区分系统已有的 BIRD 实例及 Photon 实例 |
-| 防火墙 | Photon 使用自有 nft 表；路由器还可能由 firewall4 管理转发和 NAT | 检查各链实际处理结果、reload、端口轮换与 NAT；独立表里的 accept 不能保证别的链放行 |
-| 存储 | Photon 使用持久化 bbolt 状态，另有运行时 socket、密钥材料和 BIRD 文件 | 根据 overlay/extroot 布局选择路径；先确认 `/var`、`/run` 是否临时存储，不能直接套用服务器路径 |
-| 资源 | 服务器上的 CPU 数据不能代表路由器 | 记录固件空闲内存、程序大小、RSS、写入量、吞吐、重协商和长时间稳定性 |
-
-不要直接安装所有 strongSwan 插件来掩盖依赖缺口。应从实际身份密钥、IKE/ESP 协商结果和 VICI 操作推导包集合，并在目标发行版上验证。
-
-## 首轮验证顺序
-
-1. 确认路由器型号、CPU 架构、OpenWrt 版本、内核版本及可用 RAM/存储。
-2. 在宿主机交叉编译主程序，检查 ELF 架构及动态链接依赖。
-3. 在测试设备检查命名空间、XFRM、veth、工具和 VICI，先不接入生产路由。
-4. 增加 procd 与打包适配，用独立配置、身份和测试数据目录启动。
-5. 验证握手、CHILD_SA、Babel 邻居以及 IPv4/IPv6 真实流量。
-6. 验证路由器重启、WAN 地址变化、firewall reload、charon 重启和端口轮换。
-7. 长时间测量 CPU、内存、存储写入和数据平面表现，再决定适用的设备范围。
-
-已有 `docs/scripts/ipsec-xfrm-preflight.sh` 可作为功能清单参考，但它依赖 bash，并会临时创建接口和 namespace，不能当作只读设备检查脚本直接使用。
-
-## 交叉编译复现
-
-2026-10-18 首轮使用 Go 1.26.5 对 RC.13 源码完成以下构建（初次研究记录）：
-
-| 目标 | 结果 | 主程序大小（约） |
-| --- | --- | --- |
-| Linux amd64 | 通过，静态链接 ELF | 15 MiB |
-| Linux arm64 | 通过，静态链接 ELF | 14 MiB |
-| Linux mipsle，softfloat | 通过，静态链接 ELF | 16 MiB |
-
-产物和 SHA256 存放在本副本忽略的 `build/openwrt/` 下。尚未执行 ARM/MIPS 二进制，也没有在 OpenWrt 设备启动服务。
-
-首次使用旧 `/tmp/photon-gomodcache` 的 ARM64/MIPS 构建因缓存仅有 amd64 平台文件而失败。改用独立完整缓存 `/tmp/photon-openwrt-gomodcache` 后三种目标全部通过，没有修改源码或依赖版本。
-
-在开发机运行，`ARCH` 可取 `amd64`、`arm64` 或 `mipsle`；MIPS 的浮点 ABI 需要匹配设备，本轮以 `softfloat` 作编译探测。
-
-```sh
-ARCH=arm64
-CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" GOMIPS=softfloat \
-  go build -trimpath -ldflags='-s -w' \
-  -o "build/openwrt/photon-linux-$ARCH" ./app/photon
-```
-
-编译成功仅代表该目标的主程序可构建。ARM、MIPS 的其他大小端/浮点组合和目标固件运行情况需要分别验证。
-
-本轮已使用 `contrib/openwrt/build.sh` 完成默认六种架构构建，逐个检查 ELF：均没有动态解释器或共享库 `NEEDED` 项。产物约 13–15 MiB（未压缩）。x86-64 和 x86 的 `version` 已在当前 Linux 开发机运行；x86 softfloat 的 `pkg/core/state`、`pkg/core/host`、`pkg/health` 测试通过。首次沙箱运行 32 位程序被系统调用过滤拦截，放行后运行通过，不能将这个沙箱现象当作固件故障。
-
-`contrib/openwrt/check.sh` 已验证脚本语法、默认禁用、缺少/相对配置路径拒绝、带空格配置路径传递、单实例注册、重启参数和 reload trigger；这里使用 stub procd，不是设备服务验收。真实 Linux 配置解析测试 `TestOpenWrtConfigExample` 覆盖初始示例及取消注释后的数据面配置，确认数据库保持持久化、BIRD 使用临时路径。
-
-仍未验证：真实 SDK 生成 ipk/apk、ARM 执行、固件开机启动、实际公钥装载及 IKE/ESP/Babel/业务流量、firewall4 reload、内存和 flash 占用。尚未推送、发布或部署到设备。
+LAN 自动接入尚未实现。主机 input、Photon namespace 与 `inet fw4` 是不同处理环节；接入前须明确 LAN/mesh 接口、双向 forwarding 和允许前缀，按原流程取得路由/IPAM 权限，再检查实际 IPv4/IPv6 流量。独立 nft 表的 accept、隧道握手或 Babel 路由学习都不能单独证明 LAN 可用。
 
 ## 参考来源
 
-2026-10-18 查询的官方源码；以下 master 链接会变化，最终包清单须按目标 OpenWrt 版本重新核实。
+2026-10-18 核对的官方源码，master 链接会变化，包清单以目标固件版本为准：
 
-- [OpenWrt strongSwan 包与插件定义](https://github.com/openwrt/packages/blob/master/net/strongswan/Makefile)
-- [OpenWrt strongSwan swanctl/procd 启动实现](https://github.com/openwrt/packages/blob/master/net/strongswan/files/swanctl.init)
-- [OpenWrt iproute2 的 ip-full/ip-tiny 定义](https://github.com/openwrt/openwrt/blob/master/package/network/utils/iproute2/Makefile)
-- [OpenWrt 内核 XFRM/veth 包定义](https://github.com/openwrt/openwrt/blob/master/package/kernel/linux/modules/netsupport.mk)
-- [OpenWrt BIRD 2 包定义](https://github.com/openwrt/packages/blob/master/net/bird2/Makefile)
-- [ImmortalWrt strongSwan 包与插件定义](https://github.com/immortalwrt/packages/blob/master/net/strongswan/Makefile)
-- [ImmortalWrt 内核模块定义](https://github.com/immortalwrt/immortalwrt/blob/master/package/kernel/linux/modules/netsupport.mk)
-- [OpenWrt Go 包构建接口](https://github.com/openwrt/packages/blob/master/lang/golang/golang-package.mk)
-- [OpenWrt Go 架构映射](https://github.com/openwrt/packages/blob/master/lang/golang/golang-values.mk)
-- [OpenWrt procd 脚本接口](https://github.com/openwrt/openwrt/blob/master/package/system/procd/files/procd.sh)
-- [LuCI 官方 JavaScript 应用示例](https://github.com/openwrt/luci/blob/master/applications/luci-app-example/README.md)
-- [LuCI 应用目录结构](https://github.com/openwrt/luci/blob/master/applications/luci-app-example/structure.md)
-- [OpenWrt iputils-ping 包定义](https://github.com/openwrt/packages/blob/master/net/iputils/Makefile)
+- [本次 SDK 及校验清单](https://downloads.immortalwrt.org/releases/25.12.1/targets/x86/64/)、[固定 feed 清单](https://downloads.immortalwrt.org/releases/25.12.1/targets/x86/64/feeds.buildinfo)、[官方 strongSwan 构建失败日志](https://downloads.immortalwrt.org/releases/faillogs-25.12/x86_64/packages/strongswan/compile.txt)
+- [OpenWrt strongSwan 包与插件](https://github.com/openwrt/packages/blob/master/net/strongswan/Makefile)、[swanctl/procd](https://github.com/openwrt/packages/blob/master/net/strongswan/files/swanctl.init)、[ImmortalWrt strongSwan](https://github.com/immortalwrt/packages/blob/master/net/strongswan/Makefile)
+- [iproute2](https://github.com/openwrt/openwrt/blob/master/package/network/utils/iproute2/Makefile)、[iputils](https://github.com/openwrt/packages/blob/master/net/iputils/Makefile)、[BIRD](https://github.com/openwrt/packages/blob/master/net/bird2/Makefile)
+- [OpenWrt 内核模块](https://github.com/openwrt/openwrt/blob/master/package/kernel/linux/modules/netsupport.mk)、[ImmortalWrt 内核模块](https://github.com/immortalwrt/immortalwrt/blob/master/package/kernel/linux/modules/netsupport.mk)
+- [Go 构建接口](https://github.com/openwrt/packages/blob/master/lang/golang/golang-package.mk)、[架构映射](https://github.com/openwrt/packages/blob/master/lang/golang/golang-values.mk)、[procd 接口](https://github.com/openwrt/openwrt/blob/master/package/system/procd/files/procd.sh)
+- [LuCI JavaScript 示例](https://github.com/openwrt/luci/tree/master/applications/luci-app-example)、[rpcd 会话与 ACL](https://github.com/openwrt/rpcd/blob/master/session.c)、[LuCI 登录与权限](https://github.com/openwrt/luci/blob/master/modules/luci-base/ucode/dispatcher.uc)

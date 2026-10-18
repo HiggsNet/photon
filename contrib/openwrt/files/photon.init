@@ -27,7 +27,7 @@ start_service() {
 	procd_set_param env "PHOTON_CONFIG=$config_file" \
 		PHOTON_CONTROL_SOCKET=/run/photon/photon.sock \
 		PATH=/usr/sbin:/usr/bin:/sbin:/bin
-	procd_set_param file "$config_file" /etc/config/photon
+	procd_set_param file "$config_file" /etc/config/photon /usr/sbin/photon
 	procd_set_param respawn 3600 5 5
 	procd_set_param term_timeout 30
 	procd_set_param stdout 1

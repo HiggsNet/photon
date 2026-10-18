@@ -3,7 +3,6 @@ package ipsec
 import (
 	"fmt"
 	"net"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -181,24 +180,17 @@ func routeBasedChildSA(spec TransportLinkSpec) map[string]any {
 	// secondary-standby responder can't be promoted implicitly by traffic
 	// hitting a trap policy during a rolling or batch restart.
 	startAction := "none"
+	// A route-based XFRM interface carries both payload families, regardless
+	// of its diagnostic tunnel addresses or the outer IKE address family.
+	// Babel uses IPv6 link-local while its learned routes can also carry IPv4.
 	return map[string]any{
 		"mode":         StrongSwanChildMode,
-		"local_ts":     broadTrafficSelectors(spec.LocalTunnelAddr),
-		"remote_ts":    broadTrafficSelectors(spec.PeerTunnelAddr),
+		"local_ts":     []string{"0.0.0.0/0", "::/0"},
+		"remote_ts":    []string{"0.0.0.0/0", "::/0"},
 		"if_id_in":     fmt.Sprintf("%d", spec.XFRMIfID),
 		"if_id_out":    fmt.Sprintf("%d", spec.XFRMIfID),
 		"start_action": startAction,
 	}
-}
-
-func broadTrafficSelectors(addr netip.Addr) []string {
-	if addr.IsValid() && addr.Is4() {
-		return []string{"0.0.0.0/0"}
-	}
-	if addr.IsValid() && addr.Is6() {
-		return []string{"::/0"}
-	}
-	return []string{"0.0.0.0/0", "::/0"}
 }
 
 func firstContactPoint(points []ContactPoint) (ContactPoint, bool) {

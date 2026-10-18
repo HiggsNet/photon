@@ -790,8 +790,13 @@ func writeStrongSwanConf(viciSocket string) (string, error) {
 	install_routes = no
 	install_virtual_ip = no
 	uniqueids = no
-	stderr {
-		default = 2
+	filelog {
+		stderr {
+			default = 1
+			cfg = 2
+			lib = 2
+			asn = -1
+		}
 	}
 	plugins {
 		vici {
@@ -809,7 +814,7 @@ func writeStrongSwanConf(viciSocket string) (string, error) {
 func startCharonInNetNS(ctx context.Context, t *testing.T, ns, piddir, conf string, logFile *os.File) *exec.Cmd {
 	t.Helper()
 	script := fmt.Sprintf("mkdir -p /run && mount --bind %s /run && STRONGSWAN_CONF=%s exec charon", piddir, conf)
-	cmd := exec.CommandContext(ctx, "unshare", "-m", "ip", "netns", "exec", ns, "bash", "-c", script)
+	cmd := exec.CommandContext(ctx, "unshare", "-m", "--propagation", "private", "ip", "netns", "exec", ns, "bash", "-c", script)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	if err := cmd.Start(); err != nil {
@@ -881,9 +886,9 @@ func dumpStrongSwanSmokeDiagnostics(t *testing.T, ctx context.Context, ns, viciS
 		name string
 		args []string
 	}{
-		{name: "swanctl list conns", args: []string{"netns", "exec", ns, "swanctl", "--uri", "unix://" + viciSocket, "--list-conns"}},
-		{name: "swanctl list sas", args: []string{"netns", "exec", ns, "swanctl", "--uri", "unix://" + viciSocket, "--list-sas"}},
-		{name: "xfrm state", args: []string{"netns", "exec", ns, "ip", "xfrm", "state"}},
+		{name: "swanctl list conns", args: []string{"netns", "exec", ns, "swanctl", "--list-conns", "--uri", "unix://" + viciSocket}},
+		{name: "swanctl list sas", args: []string{"netns", "exec", ns, "swanctl", "--list-sas", "--uri", "unix://" + viciSocket}},
+		{name: "xfrm state", args: []string{"netns", "exec", ns, "ip", "xfrm", "state", "list", "nokeys"}},
 		{name: "xfrm policy", args: []string{"netns", "exec", ns, "ip", "xfrm", "policy"}},
 		{name: "links", args: []string{"netns", "exec", ns, "ip", "link", "show"}},
 		{name: "addresses", args: []string{"netns", "exec", ns, "ip", "addr", "show"}},

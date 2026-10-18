@@ -2,13 +2,18 @@ package ipsec
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"iter"
+	"net"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -441,6 +446,165 @@ func TestStrongSwanDriverLimitsConcurrentAsyncInitiates(t *testing.T) {
 	}
 	if got := client.peakActive(); got > concurrency {
 		t.Fatalf("peak concurrent initiates = %d, want <= %d", got, concurrency)
+	}
+}
+
+func TestReconnectingVICIClientRecoversAfterInitialDialFailure(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		t.Run(fmt.Sprintf("streaming=%v", streaming), func(t *testing.T) {
+			factoryCalls, closed := 0, 0
+			client, err := newReconnectingVICIClient(func() (VICIClient, func() error, error) {
+				factoryCalls++
+				switch factoryCalls {
+				case 1:
+					return nil, nil, fmt.Errorf("dial unix: %w", syscall.ENOENT)
+				case 2:
+					return nil, nil, fmt.Errorf("dial unix: %w", syscall.ECONNREFUSED)
+				default:
+					return &scriptedVICIClient{}, func() error { closed++; return nil }, nil
+				}
+			})
+			if err != nil {
+				t.Fatalf("construct before charon: %v", err)
+			}
+			defer client.Close()
+			call := func() error {
+				if streaming {
+					_, err := client.CallStreaming(context.Background(), "list-sas", "list-sa", nil)
+					return err
+				}
+				_, err := client.Call(context.Background(), "version", nil)
+				return err
+			}
+			if err := call(); !errors.Is(err, syscall.ECONNREFUSED) {
+				t.Fatalf("operation while charon is absent = %v, want connection refused", err)
+			}
+			if err := call(); err != nil {
+				t.Fatalf("operation after charon starts: %v", err)
+			}
+			if err := call(); err != nil {
+				t.Fatalf("reuse recovered session: %v", err)
+			}
+			if factoryCalls != 3 {
+				t.Fatalf("factory calls = %d, want initial, unavailable retry, successful retry", factoryCalls)
+			}
+			if err := client.Close(); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+			if closed != 1 {
+				t.Fatalf("recovered session close count = %d, want 1", closed)
+			}
+		})
+	}
+}
+
+func TestReconnectingGoviciClientRecoversWhenUnixSocketAppears(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "charon.vici")
+	client, err := NewReconnectingGoviciClient(socketPath)
+	if err != nil {
+		t.Fatalf("construct before socket exists: %v", err)
+	}
+	defer client.Close()
+	if _, err := client.Call(context.Background(), "version", nil); !errors.Is(err, syscall.ENOENT) {
+		t.Fatalf("Call before socket exists = %v, want missing socket", err)
+	}
+	if _, _, err := client.SubscribeEvents(context.Background(), "child-updown"); !errors.Is(err, syscall.ENOENT) {
+		t.Fatalf("SubscribeEvents before socket exists = %v, want missing socket", err)
+	}
+
+	// A minimal VICI server verifies that the same wrapper can dial a socket
+	// created after startup and complete a command, without a real charon.
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	serverResult := make(chan error, 1)
+	releaseServer := make(chan struct{})
+	defer close(releaseServer)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			serverResult <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+			serverResult <- err
+			return
+		}
+		var size uint32
+		if err := binary.Read(conn, binary.BigEndian, &size); err != nil {
+			serverResult <- err
+			return
+		}
+		packet := make([]byte, size)
+		if _, err := io.ReadFull(conn, packet); err != nil {
+			serverResult <- err
+			return
+		}
+		if string(packet) != "\x00\x07version" {
+			serverResult <- fmt.Errorf("unexpected command packet %q", packet)
+			return
+		}
+		// Four-byte length followed by an empty CMD_RESPONSE packet (type 1).
+		_, err = conn.Write([]byte{0, 0, 0, 1, 1})
+		serverResult <- err
+		<-releaseServer
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := client.Call(ctx, "version", nil); err != nil {
+		t.Fatalf("Call after socket appears: %v", err)
+	}
+	if err := <-serverResult; err != nil {
+		t.Fatalf("VICI server: %v", err)
+	}
+}
+
+func TestReconnectingVICIClientPreservesPermanentStartupErrors(t *testing.T) {
+	for _, cause := range []error{syscall.EACCES, syscall.EINVAL, syscall.ENAMETOOLONG} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			client, err := newReconnectingVICIClient(func() (VICIClient, func() error, error) {
+				return nil, nil, fmt.Errorf("dial unix: %w", cause)
+			})
+			if client != nil || !errors.Is(err, cause) {
+				t.Fatalf("constructor = (%v, %v), want permanent dial error %v", client, err, cause)
+			}
+		})
+	}
+	if client, err := NewReconnectingGoviciClient(filepath.Join(t.TempDir(), strings.Repeat("x", 256))); err == nil {
+		_ = client.Close()
+		t.Fatal("accepted invalid Unix socket path")
+	}
+}
+
+func TestReconnectingVICIClientClosedBeforeInitialConnectionDoesNotDial(t *testing.T) {
+	factoryCalls := 0
+	client, err := newReconnectingVICIClient(func() (VICIClient, func() error, error) {
+		factoryCalls++
+		return nil, nil, syscall.ENOENT
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if _, err := client.Call(context.Background(), "version", nil); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Call after Close = %v, want closed", err)
+	}
+	if _, err := client.CallStreaming(context.Background(), "list-sas", "list-sa", nil); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("CallStreaming after Close = %v, want closed", err)
+	}
+	if _, _, err := client.SubscribeEvents(context.Background(), "child-updown"); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("SubscribeEvents after Close = %v, want closed", err)
+	}
+	if factoryCalls != 1 {
+		t.Fatalf("factory calls = %d, want no dial after Close", factoryCalls)
 	}
 }
 
