@@ -6,6 +6,8 @@
 
 开发分支为 `openwrt/initial-port`，上游基线为 `v0.6.0-rc.13`（`3faf3a96dcfb86bd90acd7321fb667e9df1781a1`）。初步移植已本地提交为 `ea917baf`；本轮继续完成 LuCI、RPC、依赖、恢复与双栈适配，整理为本地提交；未推送，也未发布版本。
 
+共用修复已独立合入本地 `release/linux-0.6.0-rc.13`：VICI 恢复 `de6cae5f`、双栈 BIRD/IPsec `c657eee5`、upstream 归属撤回及通用升级文档 `1dfba603`，并回并到本分支以共享提交祖先。RC 分支没有包含 LuCI、rpcd、procd 或 OpenWrt SDK 包规则；已发布的 RC.13 标签保持不变。通用 Linux 行为和迁移边界见 [路由设计](docs/new/routing.md) 与 [RC 开发记录](docs/new/linux-release-testing.md)。
+
 | 层次 | 已验证事实 | 边界 |
 | --- | --- | --- |
 | 主程序 | 最新源码完成 amd64、386、ARMv5/v6/v7、ARM64 六种静态构建，无动态解释器或共享库依赖 | ARM 未在目标设备执行；不能推广到全部 CPU、固件和内核 |
