@@ -80,9 +80,17 @@ func TestGenerateWithStaticRoutes(t *testing.T) {
 	}
 	s := string(cfg)
 
-	// Must have a protocol static block.
-	if !strings.Contains(s, "protocol static photon_static_photontesth2 {") {
-		t.Errorf("missing protocol static block\n%s", s)
+	// BIRD rejects two different channel types in a static protocol.
+	start4 := strings.Index(s, "protocol static photon_static_photontesth24 {")
+	start6 := strings.Index(s, "protocol static photon_static_photontesth26 {")
+	if start4 < 0 || start6 <= start4 || strings.Count(s, "protocol static ") != 2 {
+		t.Fatalf("dual-stack routes need separate static protocols\n%s", s)
+	}
+	if strings.Contains(s[start4:start6], "ipv6 {") || strings.Contains(s[start4:start6], "route 2001:db8:") {
+		t.Errorf("IPv6 channel or route emitted in the IPv4 static protocol\n%s", s)
+	}
+	if strings.Contains(s[start6:], "ipv4 {") || strings.Contains(s[start6:], "route 10.0.0.0/24") {
+		t.Errorf("IPv4 channel or route emitted in the IPv6 static protocol\n%s", s)
 	}
 	// Must have the IPv4 route via the upstream interface.
 	if !strings.Contains(s, `route 10.0.0.0/24 via "phv2host";`) {
