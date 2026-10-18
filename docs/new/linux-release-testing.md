@@ -4,6 +4,50 @@
 `v0.6.0-rc.13`（在 rc.12 候选基础上减少入站验签、状态复制和重复健康统计）。新版只供测试，Windows 完整隧道尚未交付。
 master 保留旧版；候选版从独立 release 分支发布，不更新 Docker `latest`。
 
+## RC.13 后续开发：共用 Linux 数据面修复（未发布）
+
+2026-10-18 从 `openwrt/initial-port` 提取三组共用修复，合入本地
+`release/linux-0.6.0-rc.13`。本节描述后续开发提交，不改已发布的
+`v0.6.0-rc.13` 标签或安装包，也未发布新版本。LuCI、rpcd、procd、SDK
+包规则和 OpenWrt 示例配置仍留在移植分支。
+
+- VICI 首次 ENOENT/ECONNREFUSED 时允许 daemon 控制接口启动，复用原有
+  watcher/reconcile 重试；权限拒绝和非法路径等永久错误仍使初始化失败。
+- BIRD 双栈 static 按地址族拆分；路由式 XFRM CHILD 同时协商 IPv4/IPv6
+  payload，避免由隧道诊断地址族限制实际业务族。
+- Upstream 从实际内核状态识别协议标记 242 的新对象，支持前缀缩减、清空、
+  manager 重建和部分失败重试。新意图冲突也先撤回不再授权的旧路由；第三方
+  同前缀路由、源地址引用与 IPv4 secondary 均有保护。启用的 upstream 切换到
+  external 且停止地址管理时下发空集合；停用/移除实例、更换目标仍不自动拆除。
+
+升级前需要核对新的行为边界。归属范围为 peer namespace/interface 中的协议
+242 地址及主表路由，每个范围只允许一个配置实例管理。旧版 `proto static`
+路由无法自动证明归属，与期望路由冲突时保留并报错；未标记的精确源地址仅借用，
+不收编、不自动删除。现有安装需核实旧对象归属后迁移，不能宣称无停机自动升级。
+
+新源地址使用 `noprefixroute`，不再隐式生成覆盖整个分配前缀的 connected 主表
+路由；保留前缀长度用于源身份。旧未标记地址被借用时仍可能保留已有 connected
+路由，因此升级与干净启动的网络结果可能不同。原来依赖这条隐式路由的环境，
+必须先由明确的外部路由管理者配置相应路径。详细职责见 [路由设计](routing.md)。
+
+地址归属要求目标 ip/kernel 实际保留 `IFA_PROTO`，新增后读回核对；不支持时
+明确报错，不降级为清理未标记地址。若内核忽略标记而留下未标记对象，保留现场
+供核实；manager 重建不会认领它们。协议 242 是本地管理约定，不支持其他管理者
+并发修改同一对象的原子接管。IPv6 DAD 未完成时新增路由可能暂时报错，既有协调
+在后续轮次重试，不关闭 DAD。
+
+通用修复原在 ImmortalWrt 25.12.1 x86/64、Linux 6.12.94、iproute2 6.18.0
+完成隔离实测：真实 charon 恢复、Babel 经 IPsec 双栈学习/业务流量/撤路恢复，
+以及 upstream 六组归属和失败重试场景。测试密钥、前缀和 namespace 均隔离，
+主机接口、路由、防火墙、挂载和五份配置前后相同；地址删除保护的拒绝路径也验证
+保留第三方对象。这些证据不等于生产 Linux、所有旧内核、WAN/LAN 或 ARM 实机
+验收。对应测试随通用修复保留，源码提取后的 RC 回归单独核验。
+
+提取后的 RC 工作树已通过 `make check`（fmt、全量 vet/Go 测试、Linux 构建
+及 Windows 客户端交叉构建），并通过 app/photon、internal/photonlinux、
+IPsec、BIRD 四包 race。21 个通用修复源文件/测试与已验收的 OpenWrt 提交
+`333b258c` 逐文件相同；RC 没有引入 OpenWrt 的包或管理面依赖。
+
 ## rc.13：减少入站、撤销查询与健康统计的重复工作
 
 入站 observed path 使用只含授权链与 checkpoint 的窄读取，省去无用记录复制；同一事件的固定处理时间内，只有前后 verified revision 相同时才复用验签结果。地址仍从持久化完成后的 checkpoint 恢复；revision 变化会重新验签，下一条事件也重新检查签名和有效期。
@@ -210,7 +254,7 @@ GC 约 25.3%，目录摘要 `ZoneDigests` 调用链约 19.1%，授权链验证�
 2. **批量执行上游路由命令。** Table 在另一个 70 秒 exec/wait 跟踪窗口内
    启动 211 个不同 PID，其中 130 个为 `ip route replace`，对应五轮处理，
    每轮 26 条；另有 5 个 `ip addr replace`。该窗口含事件驱动 reconcile，
-   不能解释为纯周期频率。`execUpstreamRouteManager.EnsureRoutes` 目前逐条
+   不能解释为纯周期频率。该次采样的 `execUpstreamRouteManager.EnsureRoutes` 逐条
    fork，适合先验证同一 netns 内用 `ip -batch` 合并执行，保留顺序和失败即停。
    不需要引入长期缓存，也不应只凭上次期望配置相同就跳过真实系统修复。
    strace 会扰动耗时，其 wait CPU 只能帮助定位，不能当作无跟踪的基线。

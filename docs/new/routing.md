@@ -414,8 +414,8 @@ routing:
 1. 在 `create_veth: true` 时创建或修复 veth pair、配置两端 link-local 地址并启用接口 forwarding；
 2. 让 mesh 内 BIRD 在 routing 配置给出的精确 upstream 接口（默认 `phv2host`）上运行 Babel；此接口不使用 mesh tunnel 的 `type wireless` ETX/RTT 配置；
 3. 对本机 `assigned_to == managed_zone` 的前缀，在 mesh 内生成 BIRD static route，下一跳为 external 端对应地址族的 link-local，并用 `mesh.interface` 固定出口；
-4. 在 external 一侧为已授权的远端 announcement 写 kernel static route，下一跳为 mesh 端 link-local 地址，并排除本机自己持有的 assignment；
-5. 在 external 接口上配置本机非 shared assignment 的首个可用地址，供这些回程路由选择 source address；shared/Anycast assignment 只保留为服务路由，不配置到 veth。
+4. 在 external 一侧的主路由表为已授权的远端 announcement 写 `proto 242` 路由，下一跳为 mesh 端 link-local 地址，并排除本机自己持有的 assignment；
+5. 在 external 接口上配置本机非 shared assignment 的首个可用地址，供这些回程路由选择 source address。新地址使用 `proto 242` 和 `noprefixroute`，保留 assignment 的 prefix length，但不隐式生成覆盖整个分配前缀的 connected 主表路由；shared/Anycast assignment 只保留为服务路由，不配置到 veth。
 
 `static` 的 BIRD static route 表示“本机拥有该前缀且其实际承载在 external 一侧”，不等于扩大 BIRD export 权限。一个前缀仍须有有效 announcement 才会被 export。
 
@@ -423,7 +423,9 @@ routing:
 
 `external` 模式让 Photon 保留 mesh 侧的 BIRD/Babel veth interface，但不生成本机 static route，也不在 external 一侧写 kernel route。它适合 host 或另一个 namespace 已由管理员运行 BIRD/FRR/babeld，或有自定义策略路由的场景。路由、转发和 firewall 都由管理员负责。
 
-external 模式可显式设置 `install_source_addresses: true`，让 Photon 在自己管理的 external veth endpoint 上安装从本节点非 shared assignment 派生的源地址。shared/Anycast assignment 不会安装到 veth。地址保留 assignment 的 prefix length，因此会在 external endpoint 上生成对应的 connected route；管理员必须移除其他接口上冲突的 connected prefix。该选项不会添加远端业务静态路由，也不会接管 external 路由守护进程。
+external 模式可显式设置 `install_source_addresses: true`，让 Photon 在自己管理的 external veth endpoint 上安装从本节点非 shared assignment 派生的源地址。shared/Anycast assignment 不会安装到 veth。新地址同样使用 `proto 242` 和 `noprefixroute`，只提供源身份；本地业务前缀所需的 connected route 或其他转发路由由外部管理者显式配置。该选项不会添加远端业务静态路由，也不会接管 external 路由守护进程。
+
+启用的 upstream 从 `static` 切换到 `external` 时仍提交当前期望集合：撤回原先带归属标记的远端主表路由；若同时关闭 `install_source_addresses`，也尝试撤回带标记的旧源地址。第三方引用保护可能阻止源地址删除，并产生明确错误。
 
 ### 6.5 边界
 
@@ -431,6 +433,28 @@ external 模式可显式设置 `install_source_addresses: true`，让 Photon 在
 - `transit: false` 只禁止 mesh overlay 间中继，不等于关闭 host ↔ mesh 的 veth 接入。
 - host 侧 Docker connected route 与更宽的 host → mesh route 会按最长前缀匹配；服务子网应避开与本地 connected subnet 的意外重叠。
 - `external` 模式不是“自动接入 host”的简写：它只交出接口，必须由外部路由守护进程或管理员完成数据面。
+
+### 6.6 内核归属与安全撤回
+
+协议号 `242` 专用于 Photon upstream。路由的管理范围是目标 network namespace、external peer 接口和主表（`main` / `254`）；源地址的范围是同一 namespace 的该接口。使用前须确认其他管理者未在这个范围占用协议号 242。配置解析拒绝两个启用实例共同管理同一 peer namespace/interface，host 的空值与 `host` 别名视为同一目标。
+
+每次协调从内核 JSON 读取实际地址和路由，并逐项核对协议标记。归属不依赖 manager 内存或另一份数据库，因此重启 daemon 或重建 manager 后仍能识别已创建的对象。授权前缀缩减或清空时，只删除本范围内带标记的旧对象；已经撤销的旧路由优先清理，新的源地址或期望路由冲突不会阻止这些独立撤回。已有未标记的精确源地址可以只读借用，Photon 不改写其标记；与期望路由同前缀的第三方主表路由则报冲突，保留原对象。
+
+删除前会重新读取并核对对象的标记和属性。若 IPv4 primary 的删除会连带移除要保留的 secondary，或任意路由表中的第三方路由仍以待删地址作为 preferred source，就保留该源地址并报告错误。协调不会修改共享 sysctl 绕过这些保护。地址删除缺少针对协议标记的内核原子比较，管理员应避免与 Photon 并发修改同一个对象。
+
+命令或观测失败会中止后续操作，已完成的步骤保留；下一轮协调重新读取实际内核状态并重试。新增 IPv6 源地址可能尚处于 DAD tentative 状态，此时带该源地址的 route add 可以返回 `Invalid source address`。错误会报告给调用者，既有 routing reconcile 后续重试（默认间隔 30 秒），不关闭 DAD，也不另起后台轮询器。
+
+该功能需要 `ip` 支持协议标记及数值 JSON 输出，并需要内核实际保留地址的 `IFA_PROTO` 元数据；仅能执行旧版 `ip addr replace` 不足以证明兼容。新增地址后会读回核对标记，缺失时明确报错并保留现场，未标记对象不会被自动认领或删除。目前实际内核验收覆盖 ImmortalWrt 25.12.1 x86/64、Linux 6.12.94 和 iproute2 6.18；其他 Linux/固件须验证相同能力，六架构静态编译不代表这些内核能力均已验收。
+
+停用或移除整个 routing/upstream 实例，以及改变 peer namespace/interface，仍遵循原有停止同步而不自动拆除原目标资源的约定。需要清理原目标时须单独确认其归属和依赖；前缀撤回能力不包含这部分生命周期操作。veth 本身及两端 link-local 地址继续由既有 veth 管理路径负责。
+
+### 6.7 从未标记对象升级
+
+旧版本安装的 `proto static` 路由和未标记源地址没有足够信息证明归属。新版本不会根据接口、网关或 `src` 相似就自动收编，也不会批量清理接口上的 static 路由。旧路由可能与新期望集合冲突，使该 routing 实例报告错误；旧精确源地址被借用后，其后续撤回仍由原管理者负责。
+
+升级前应在配置指定的目标 namespace 保存 IPv4/IPv6 全路由表、external 接口地址与现有配置，检查协议号 242 的占用，并由管理员结合维护记录确认旧对象的负责人。需交接的对象应在受控维护中逐项迁移；来源不明的对象保持原样。迁移完成后再核对新建对象的标记、两族业务流量及缩减/清空行为，不能将进程启动成功作为迁移完成。
+
+`noprefixroute` 是相对旧版的行为变化。旧版安装带子网长度的源地址会隐式产生 connected 主表路由；新建源地址不会产生它。借用的旧地址及其 connected route 则保持原样，所以带遗留对象的升级与清空后重新创建可能有不同的路由结果。依赖旧 connected route 的部署须先明确由哪个外部配置或路由管理者继续提供该路由，再安排切换，避免重新启动或重新创建接口后丢失必要路径。
 
 ---
 
@@ -514,7 +538,7 @@ BIRD 正常不代表前缀已获授权；record 已获授权也不代表本机�
 | pool / assignment / route authorization | `pkg/routing/authorization.go` |
 | record type capability 验证 | `pkg/crypto/sign.go` |
 | CLI IPAM / route 写入 | `app/photon/ipam.go`、`app/photon/route.go` |
-| routing reconcile、auto announcement、external routes | `app/photon/routing_reconcile.go`、`app/photon/routing_upstream_routes.go` |
+| routing reconcile、auto announcement、external routes | `app/photon/routing_reconcile.go`、`internal/photonlinux/upstream.go` |
 | BIRD config、filter、process、veth | `pkg/routing/bird/` |
 | Router-ID 派生 | `pkg/routing/bird/routerid.go` |
 | BIRD 版本预检 | `pkg/routing/bird/preflight.go` |

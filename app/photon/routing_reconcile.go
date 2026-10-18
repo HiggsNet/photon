@@ -181,8 +181,9 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 			return fmt.Errorf("ensure upstream veth for netns %q: %w", netnsName, err)
 		}
 	}
-	if inst.Upstream != nil && inst.Upstream.Enabled &&
-		(inst.Upstream.Mode == photonlinux.UpstreamModeStatic || inst.Upstream.InstallSourceAddresses) {
+	// An enabled upstream always reconciles its desired set, including an
+	// empty set after switching to external routing/address management.
+	if inst.Upstream != nil && inst.Upstream.Enabled {
 		var routePrefixes []netip.Prefix
 		if inst.Upstream.Mode == photonlinux.UpstreamModeStatic {
 			routePrefixes = photonlinux.ExternalUpstreamRoutePrefixes(ars, verified.ManagedZone)
