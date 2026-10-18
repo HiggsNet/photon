@@ -82,6 +82,48 @@ instances:
 	}
 }
 
+func TestRoutingUpstreamTargetsHaveOneActiveOwner(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		peerNamespace string
+		peerInterface string
+		disabled      bool
+		mode          string
+		upstreamOff   bool
+		wantConflict  bool
+	}{
+		{name: "same_target", wantConflict: true},
+		{name: "host_alias", peerNamespace: ipsec.NetNSHost, wantConflict: true},
+		{name: "other_namespace", peerNamespace: "other"},
+		{name: "other_interface", peerInterface: "otherpeer"},
+		{name: "disabled_instance", disabled: true},
+		{name: "disabled_mode", mode: ipsec.RoutingModeDisabled},
+		{name: "disabled_upstream", upstreamOff: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ns := NetNSConfig{Names: map[string]ipsec.NetNSSpec{
+				"mesh-a": {Kind: ipsec.NetNSName, Name: "mesh-a"},
+				"mesh-b": {Kind: ipsec.NetNSName, Name: "mesh-b"},
+			}}
+			first := RoutingInstanceYAML{ID: "a", NetNS: "mesh-a", Upstream: &UpstreamConfigYAML{}}
+			second := RoutingInstanceYAML{ID: "b", NetNS: "mesh-b", Mode: tc.mode,
+				Disabled: &tc.disabled, Upstream: &UpstreamConfigYAML{
+					Disabled: &tc.upstreamOff,
+					External: UpstreamEndpointYAML{NetNS: tc.peerNamespace, Interface: tc.peerInterface},
+				},
+			}
+			_, err := ParseRoutingConfig([]RoutingInstanceYAML{first, second}, ns, t.TempDir())
+			if tc.wantConflict {
+				if err == nil || !strings.Contains(err.Error(), "already managed by routing.instances[0]") {
+					t.Fatalf("shared upstream error = %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("independent/inactive upstream: %v", err)
+			}
+		})
+	}
+}
+
 func TestParseUpstreamConfigExternalMode(t *testing.T) {
 	yamlInput := `
 instances:

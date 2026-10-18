@@ -302,10 +302,25 @@ const (
 // ParseRoutingConfig parses `routing.instances[]` into RoutingConfig.
 func ParseRoutingConfig(yamlInstances []RoutingInstanceYAML, netnsCfg NetNSConfig, dataDir string) (RoutingConfig, error) {
 	var instances []RoutingInstance
+	type upstreamTarget struct{ netns, iface string }
+	upstreamOwners := make(map[upstreamTarget]int)
 	for i, yi := range yamlInstances {
 		inst, err := parseRoutingInstance(yi, netnsCfg, dataDir)
 		if err != nil {
 			return RoutingConfig{}, fmt.Errorf("routing.instances[%d]: %w", i, err)
+		}
+		// Upstream protocol markers are scoped to one peer interface. Two
+		// active instances must not reconcile different desired sets there.
+		if inst.Enabled && inst.Bird.Mode != ipsec.RoutingModeDisabled && inst.Upstream != nil && inst.Upstream.Enabled {
+			netns := inst.Upstream.Veth.PeerNetns
+			if netns == ipsec.NetNSHost {
+				netns = ""
+			}
+			target := upstreamTarget{netns, inst.Upstream.Veth.PeerInterface}
+			if previous, exists := upstreamOwners[target]; exists {
+				return RoutingConfig{}, fmt.Errorf("routing.instances[%d]: upstream peer interface %q in netns %q is already managed by routing.instances[%d]", i, target.iface, target.netns, previous)
+			}
+			upstreamOwners[target] = i
 		}
 		instances = append(instances, inst)
 	}

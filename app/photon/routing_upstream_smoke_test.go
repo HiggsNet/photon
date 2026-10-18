@@ -538,6 +538,31 @@ func TestExternalUpstreamCanInstallSourceAddressesWithoutStaticRoutes(t *testing
 	if !prefixesContain(fakeRM.ensureSpec.SourcePrefixes, "10.0.0.1/16") {
 		t.Fatalf("external source addresses = %+v, want 10.0.0.1/16", fakeRM.ensureSpec.SourcePrefixes)
 	}
+
+	// Handing address management back to the external router must send an
+	// empty desired set to withdraw previously managed objects on this target.
+	service.Config.Routing.Instances[0].Upstream.InstallSourceAddresses = false
+	fakeRM.ensureCalled = false
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("external upstream without address management: %v", err)
+	}
+	if !fakeRM.ensureCalled || len(fakeRM.ensureSpec.SourcePrefixes) != 0 || len(fakeRM.ensureSpec.Prefixes) != 0 {
+		t.Fatalf("external handoff did not reconcile empty desired set: %+v", fakeRM)
+	}
+
+	// Withdrawal must still reach the platform when the instance remains
+	// enabled but the authorized route set has become empty.
+	inst := service.Config.Routing.Instances[0]
+	inst.Upstream.Mode = photonlinux.UpstreamModeStatic
+	inst.Upstream.InstallSourceAddresses = true
+	fakeRM.ensureCalled = false
+	if err := service.reconcileRoutingForInstance(context.Background(), service.State.Common.ReadView().State,
+		map[string]*bird.InstanceObservation{}, nil, nil, inst, &routing.AuthorizedRouteSet{}, service.Config, now, false); err != nil {
+		t.Fatalf("empty authorized set: %v", err)
+	}
+	if !fakeRM.ensureCalled || len(fakeRM.ensureSpec.SourcePrefixes) != 0 || len(fakeRM.ensureSpec.Prefixes) != 0 {
+		t.Fatalf("authorization withdrawal did not reconcile empty desired set: %+v", fakeRM)
+	}
 }
 
 // fakeVethManager is a no-op VethManager for testing.

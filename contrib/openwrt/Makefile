@@ -5,7 +5,7 @@ PKG_NAME:=photon
 PHOTON_VERSION:=0.6.0-rc.13
 # APK accepts _rc13; retain the upstream spelling in the binary version.
 PKG_VERSION:=0.6.0_rc13
-PKG_RELEASE:=2
+PKG_RELEASE:=3
 PKG_BUILD_DEPENDS:=golang/host
 PKG_BUILD_PARALLEL:=1
 PKG_BUILD_FLAGS:=no-mips16

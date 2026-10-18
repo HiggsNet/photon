@@ -32,26 +32,28 @@ func BenchmarkUpstreamRouteExec(b *testing.B) {
 		spec.Prefixes = append(spec.Prefixes, netip.MustParsePrefix(fmt.Sprintf("2001:db8:%x::/64", i+1)))
 	}
 	manager := newExecUpstreamRouteManager()
+	// Both branches execute the same explicit plan. Reconciliation now includes
+	// ownership observation and withdrawal; comparing it to the old unconditional
+	// replace loop would measure different work rather than batch execution.
+	commands := [][]string{{"-6", "addr", "replace", "2001:db8::1/128", "dev", "lo", "noprefixroute", "proto", "242"}}
+	prefixes := append([]netip.Prefix(nil), spec.Prefixes...)
+	sort.Slice(prefixes, func(i, j int) bool { return prefixLess(prefixes[i], prefixes[j]) })
+	for _, prefix := range prefixes {
+		commands = append(commands, []string{"-6", "route", "replace", prefix.String(), "table", "main", "dev", "lo", "proto", "242", "src", "2001:db8::1", "metric", "1024"})
+	}
 	cases := []struct {
 		name string
 		run  func() error
 	}{
 		{"per_command", func() error {
-			// The pre-optimization host-netns path starts a separate ip for
-			// each source address and route, stopping on the first error.
-			prefixes := append([]netip.Prefix(nil), spec.Prefixes...)
-			sort.Slice(prefixes, func(i, j int) bool { return prefixLess(prefixes[i], prefixes[j]) })
-			if _, err := exec.Command("ip", "-6", "addr", "replace", "2001:db8::1/128", "dev", "lo").CombinedOutput(); err != nil {
-				return err
-			}
-			for _, prefix := range prefixes {
-				if _, err := exec.Command("ip", "-6", "route", "replace", prefix.String(), "dev", "lo", "proto", "static", "src", "2001:db8::1").CombinedOutput(); err != nil {
+			for _, command := range commands {
+				if _, err := manager.runIPOutput(context.Background(), spec.NetNS, command, ""); err != nil {
 					return err
 				}
 			}
 			return nil
 		}},
-		{"batch", func() error { return manager.EnsureRoutes(context.Background(), spec) }},
+		{"batch", func() error { return manager.runUpstreamBatch(context.Background(), spec, commands) }},
 	}
 	for _, tc := range cases {
 		b.Run(tc.name, func(b *testing.B) {

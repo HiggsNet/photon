@@ -1,6 +1,6 @@
 # Photon on OpenWrt / ImmortalWrt
 
-在 OpenWrt / ImmortalWrt 上运行 Photon，复用 Linux 的 strongSwan/VICI、XFRM 与 BIRD，并通过原生 procd 和 LuCI 管理。当前已验证 x86/64 测试虚拟机上的管理闭环、真实 charon 依赖恢复，以及隔离 Babel/IPsec 联合双栈流量；ARM 仍处于交叉编译阶段，真实 WAN/LAN 接入尚未验收。
+在 OpenWrt / ImmortalWrt 上运行 Photon，复用 Linux 的 strongSwan/VICI、XFRM 与 BIRD，并通过原生 procd 和 LuCI 管理。当前已验证 x86/64 测试虚拟机上的管理闭环、真实 charon 依赖恢复、隔离 Babel/IPsec 联合双栈流量，以及 upstream 路由和源地址的安全撤回；ARM 仍处于交叉编译阶段，真实 WAN/LAN 接入尚未验收。
 
 ## 当前状态（2026-10-18）
 
@@ -9,18 +9,21 @@
 | 层次 | 已验证事实 | 边界 |
 | --- | --- | --- |
 | 主程序 | 最新源码完成 amd64、386、ARMv5/v6/v7、ARM64 六种静态构建，无动态解释器或共享库依赖 | ARM 未在目标设备执行；不能推广到全部 CPU、固件和内核 |
-| SDK 包 | 匹配 ImmortalWrt 25.12.1 x86/64 SDK 构建并安装 Photon、LuCI 与 13 个 strongSwan APK；应用 r1→r2 活动升级及二进制内容触发重启通过 | 只验证该固件/架构；未生成其他目标 SDK 的安装包 |
+| SDK 包 | 匹配 ImmortalWrt 25.12.1 x86/64 SDK 构建并安装 Photon、LuCI 与 13 个 strongSwan APK；r1→r2 活动升级、二进制内容触发重启及 r2→r3 禁用状态升级通过 | 只验证该固件/架构；未生成其他目标 SDK 的安装包 |
 | procd | 启停、重生、数据库恢复，以及原生 daemon 在真实 charon 缺失、启动、停止、重启后的 reconcile/watcher 自动恢复通过，daemon PID 保持不变 | 依赖恢复使用空 SA；有活动 SA 时的业务重建、整机重启及 WAN 恢复未验收 |
 | LuCI/rpcd | 六方法注册、HTTP ACL、真实表单登录、状态/节点/链路、诊断、配置校验保存与冲突处理通过 | 首轮编辑测试使用临时注入会话；随后另用真实临时账号验证登录及已安装 ACL 的角色映射 |
 | XFRM/BIRD | 原六项测试，以及生产 BIRD 配置经真实 IPsec 学习双方 IPv4/IPv6 前缀、双向业务地址 ping、SA/接口计数、BIRD 撤路和恢复通过 | IPv4 underlay 上的隔离对等端；不是生产 WAN/LAN 或持续负载验收 |
 | charon/IKE | strongSwan 6.0.3：VICI wrapper 恢复、P256 IPv6 双向 tunnel ping、Ed25519 canonical 双栈双向 ping 及双方 CHILD/IKE rekey 均通过；共享 TS 修复后重新回归通过 | IKE/ESP 底层为 IPv4；未验证 IPv6 underlay、实际 WAN/NAT 变化或有活动 SA 的 daemon 恢复 |
+| Upstream 撤回 | 双栈增加、缩减、清空、manager 重建、部分删除失败后重试，以及第三方地址、同前缀路由和源地址引用保护通过 | 使用内核协议标记识别新对象；旧版本未标记对象及停用/移除实例不自动清理 |
 | LAN/业务 | 尚未验收 | netifd/firewall4 自动接入尚未实现 |
 
-测试设备为 `root@10.16.255.80`：QEMU、ImmortalWrt 25.12.1、`x86_64`、Linux 6.12.94。先手工暂存源码构建产物完成管理验收，再使用 `apk add` 安装实际 SDK 产物，复核原有配置保留、rpcd 自动注册和原生二进制启动。首轮 r1 ELF SHA256 为 `3da383a91e4e3dce22bd90f7bc9470e94b3f02df4321c7e2628f610a4c376b72`；完成双栈修复与实际升级后，当前 r2 为 `fda077279dfec8a863822973dd111f63364b477e139bd3cb9ed2d17c0611061f`，与 r2 SDK 包内成品一致。首轮管理验收身份为 `router.acceptance.invalid.`，监听 `127.0.0.1:43434`，bootstrap 仅为 `127.0.0.1:43435`，数据库位于独立临时目录；节点真实处于 `auto-join / syncing_parent`，没有签发生产委派或接入生产路由。
+测试设备为 `root@10.16.255.80`：QEMU、ImmortalWrt 25.12.1、`x86_64`、Linux 6.12.94。先手工暂存源码构建产物完成管理验收，再使用 `apk add` 安装实际 SDK 产物，复核原有配置保留、rpcd 自动注册和原生二进制启动。首轮 r1 ELF SHA256 为 `3da383a91e4e3dce22bd90f7bc9470e94b3f02df4321c7e2628f610a4c376b72`；双栈修复后的 r2 为 `fda077279dfec8a863822973dd111f63364b477e139bd3cb9ed2d17c0611061f`；当前撤回修复后的 r3 为 `6a3e039522d05701782011bacbf1948f0749198c3072525fe16bdb6d5070bd4e`，各与对应 SDK 包内成品一致。首轮管理验收身份为 `router.acceptance.invalid.`，监听 `127.0.0.1:43434`，bootstrap 仅为 `127.0.0.1:43435`，数据库位于独立临时目录；节点真实处于 `auto-join / syncing_parent`，没有签发生产委派或接入生产路由。
 
 本地证据保存在被 Git 忽略的 `build/openwrt/device-acceptance/`，总览为 `final-summary.json`；远端临时目录为 `/tmp/photon-acceptance.eEmOlk`。它们是本次验收产物，不随源码提交发布。
 
 后续应用依赖恢复证据位于 `build/openwrt/device-acceptance-next/native-recovery/`；联合协议验收与修复前后日志位于 `build/openwrt/device-acceptance-next/`，汇总为 `joint-summary.json`，远端为 `/tmp/photon-joint.CNcbFc`。r1→r2 升级及单独更换二进制的验证位于 `build/openwrt/device-acceptance-next/upgrade-r2/`，远端为 `/tmp/photon-upgrade.GGkPbJ`。
+
+后续 upstream 内核验收位于 `build/openwrt/device-acceptance-next/upstream-owned/`，其多轮日志保留真实失败和修复记录；r2→r3 禁用状态原生升级证据位于 `build/openwrt/device-acceptance-next/upgrade-r3/`，远端为 `/tmp/photon-upgrade-r3.PbGFiJ`。
 
 验收后保留原生软件安装，Photon、这次新增的系统 BIRD/swanctl 均停止并禁用。已删除本次临时身份、数据库和 `/etc/photon/config.yaml`，面板重新显示安装包示例；未配置生产身份。构建容器已停止，SDK 和日志保留供复查。
 
@@ -84,6 +87,18 @@ LuCI 使用现代 JavaScript 页面，不为面板另引入 Lua。服务菜单�
 
 签名、委派、IPAM 与路由授权继续走 Photon 原有验证流程，面板配置不能替代授权。
 
+### Upstream 路由与源地址的归属
+
+启用的 upstream 按当前授权前缀集合协调主机侧对象。新路由和新源地址使用专用协议号 `242`；归属范围为目标 network namespace、peer 接口，以及主表路由或该接口地址。不要将这个范围内的协议号 242 分配给其他管理者。配置解析拒绝两个启用实例共同管理同一个 peer namespace/interface。
+
+协调从内核 JSON 读取实际对象，不另建数据库或保活服务。前缀缩减、清空或切换到 external 且不再安装源地址时，只撤回具有归属标记的旧对象；重新创建 manager 后仍可从内核恢复归属。停用或移除整个实例、改变 upstream 目标不会自动拆除原目标资源，仍须单独处理生命周期。
+
+源地址使用 `noprefixroute`，只提供主机源身份，不隐式安装覆盖整个分配前缀的 connected 主表路由；链路本地地址及实际业务路由各自管理。已有完全相同的未标记源地址仅借用，不重新标记。旧版本的 `proto static` 路由、未标记地址及第三方对象不会被自动收编或批量清理；与期望路由冲突时明确报错，旧对象需核实归属后另行迁移。
+
+删除前重新确认对象标记和实际属性。若删除 IPv4 主地址会连带删除要保留的 secondary，或任意路由表的第三方路由仍引用待删源地址，则保留地址并报告错误，不修改共享 sysctl 绕过检查。单步失败后，下次协调重新读取内核并继续；不依赖上一批命令全部成功。
+
+这一能力要求 `ip-full` 与内核实际保留地址的 `IFA_PROTO` 元数据，新增后会读回核对；不支持时返回错误，不降级为清理未标记地址。验证范围以本文记录的固件为准。地址删除没有针对协议标记的内核原子比较，不能与其他管理者并发修改同一个对象；本轮不宣称任意旧固件或并发外部接管均已兼容。[内核地址属性定义](https://www.kernel.org/doc/html/v6.9/networking/netlink_spec/rt_addr.html)。
+
 ## 构建与安装
 
 ### 静态主程序
@@ -111,7 +126,7 @@ contrib/openwrt/build.sh amd64 386 armv7 arm64
 
 本次使用官方 ImmortalWrt 25.12.1 x86/64 SDK、固定的 base/packages/luci/routing feeds 和 SDK Go 1.26.4，已完成两包构建及设备安装。SDK 压缩包 SHA256 为 `02ad8cfc775001ccae8e9282d19696de54e3ab3963f005737ad61f8698263edd`。产物位于 `build/openwrt/sdk-immortalwrt-25.12.1-x86_64/`，目录内 `SHA256SUMS` 覆盖全部 15 个 APK，`PROVENANCE.md` 记录 SDK 来源、feed commits、隔离构建环境、日志和复现命令。未将 SDK 生成的额外 kmod 装入设备。
 
-原 r1 产物继续保留；当前应用候选为该目录下 `r2/`，其 `SHA256SUMS`、`PROVENANCE.md` 和源码哈希清单单独记录这次构建。主包为 `photon-0.6.0_rc13-r2.apk`，LuCI 为 `luci-app-photon-0.6.0_rc13-r2.apk`，程序版本为 `openwrt-v0.6.0-rc.13-r2`。13 个 strongSwan 包保持原样，r2 主程序包含下述双栈修复。
+原 r1、r2 产物继续保留；当前应用候选为该目录下 `r3/`，其 `SHA256SUMS`、`PROVENANCE.md` 和 320 项生产源码/资源哈希清单单独记录这次构建。主包为 `photon-0.6.0_rc13-r3.apk`，程序版本为 `openwrt-v0.6.0-rc.13-r3`；LuCI 仍为 `luci-app-photon-0.6.0_rc13-r2.apk`，13 个 strongSwan 包保持原 SHA。r3 同时包含双栈与撤回修复。首个含数值路由类型问题的 r3 构建单独保留在构建临时目录的 `r3-diagnostic-1/`，没有混入候选或安装到设备。
 
 该发行版公开源缺少 strongSwan，官方失败日志显示 wolfSSL 插件缺 `wolfssl/wolfcrypt/mlkem.h`；本次使用同版本源码，仅选择所需 OpenSSL 组合构建。其他固件仍应使用各自匹配的软件源与 SDK。通用入口如下，Go host 须至少 1.25：
 
@@ -170,7 +185,9 @@ SDK 的 `package/` 是复制件；脚本、包规则和页面改动须同步后 
 - 停止后启用不自动启动；再次启动后仅杀死本次隔离 daemon，procd 约 5 秒重生，临时持久数据库恢复，控制接口重新在线。
 - 最终停止并禁用：`running=false`、`enabled=false`、`boot_enabled=false`。
 
-实际 SDK r1→r2 活动升级另外验证：`apk add` 后 daemon PID 从 `4894` 变为 `5053`，运行中 `/proc/PID/exe` 与已安装 r2 ELF SHA 一致；临时身份密钥、YAML、UCI SHA 和 bbolt inode 保留，启用与开机状态保持。单独固定 r2 init、参数和配置，仅原子替换 r1/r2 二进制内容，两次均触发进程替换且始终只有一个 daemon；相同内容再次启动保持 PID。测试后恢复 r2，删除临时身份与数据库，恢复原 UCI，服务停止并禁用。证据为 `device-acceptance-next/upgrade-r2/upgrade.log`；未测试禁用状态升级、卸载重装或跨固件升级。
+实际 SDK r1→r2 活动升级另外验证：`apk add` 后 daemon PID 从 `4894` 变为 `5053`，运行中 `/proc/PID/exe` 与已安装 r2 ELF SHA 一致；临时身份密钥、YAML、UCI SHA 和 bbolt inode 保留，启用与开机状态保持。单独固定 r2 init、参数和配置，仅原子替换 r1/r2 二进制内容，两次均触发进程替换且始终只有一个 daemon；相同内容再次启动保持 PID。测试后恢复 r2，删除临时身份与数据库，恢复原 UCI，服务停止并禁用。证据为 `device-acceptance-next/upgrade-r2/upgrade.log`。
+
+随后只升级 Photon r2→r3，LuCI 和 strongSwan 不重装。APK 与包内 ELF SHA 在设备上均核对通过；原 UCI 保留，`running=false`、`enabled=false`、`boot_enabled=false`，没有新增身份或配置。接口、全部路由表、namespace、mountinfo、忽略计数器的 nft 规则及五份系统配置前后完全一致。证据为 `device-acceptance-next/upgrade-r3/upgrade.log`。卸载重装和跨固件升级仍未测试。
 
 另用 `build/openwrt/device-missing-vici.sh` 启用真实 strongSwan overlay，将 VICI 指向不存在的隔离 socket。应用仍为 `daemon_online=true`，控制接口可用；canonical `last_link_failure` 与 `Links.LastFailure` 报告 `ipsec_reconcile_failed` 和 ENOENT，日志记录 reconcile 与事件订阅失败。这是真实应用的首次依赖缺失验收，没有使用模拟 VICI 服务。测试后配置 SHA 恢复，服务停止并禁用，无新增 namespace 遗留。
 
@@ -239,9 +256,26 @@ namespace、主机接口、IPv4/IPv6 全路由表在测试前后相同，没有�
 
 原有 network、firewall、dropbear、rpcd、uhttpd 配置 SHA 保持一致，firewall4 规则在忽略计数器后相同。上述结果只说明本次有边界的验收与恢复，不代表业务或全部网络路径已经验收。
 
+### Upstream 路由和源地址的隔离撤回
+
+`internal/photonlinux/upstream_reconcile_smoke_test.go` 的 `TestUpstreamOwnedReconcileRootSmoke` 使用独立门槛 `PHOTON_UPSTREAM_OWNERSHIP_SMOKE=1`。外层以 `unshare -m --propagation private -n` 启动测试子进程，核对实际 network namespace 与主机不同；全部 veth、地址和路由只存在于可丢弃的子 namespace，没有生产身份、授权或主机路由写入。
+
+最终原有严格断言 **25.96 秒全部通过**，证据为 `device-acceptance-next/upstream-owned/upstream-final.log`：
+
+- 两族路由/源地址增加、重复协调、缩减到后一组并切换 preferred source、清空；重建 manager 后再次缩减、清空，不依赖旧 Go 内存。未标记第三方地址、静态路由和 link-local 地址保留。
+- 已有精确源地址只读借用；期望路由与第三方同前缀路由冲突时明确报错，已不再授权的旧 Photon 路由仍先行撤回。另验证清空时仅删除自己带标记的路由，同前缀不同协议/metric 的第三方路由原样保留。
+- IPv4 primary 下有第三方 secondary 时拒绝删除；IPv4/IPv6 的第三方路由在 main 或 table 123 引用待删源地址时也拒绝。保留被引用的源地址和第三方对象，没有通过修改 sysctl 绕过保护。
+- 测试 runner 在第一条真实内核删除成功后注入 exit 42。错误和部分进度可见，新 manager 再读内核后完成剩余清理，第三方对象保留。这是明确的故障注入，与其他实际内核断言分别说明。
+
+初次新建 IPv6 源地址时，DAD 尚未完成，真实 route add 明确返回 `Invalid source address`；日志保留 `Tentative=true` 与已部分安装的 IPv4 路由。仅在这个可核实的瞬态下，等待真实 DAD 完成后显式执行下一轮协调，最终收敛；不关闭 DAD、不添加 `nodad`，生产仍使用既有协调重试（默认 30 秒）。其他错误没有吞掉重试。测试预置的第三方 IPv6 地址也先完成 DAD 再记录基线。
+
+失败记录单独保留：初次 DAD 失败、测试观察器使用 `dev` 查询导致 JSON 省略 dev 字段，以及生产 parser 未兼容 `ip -N` 将 route type 输出为 `"1"/"2"`。观察器改为全主表读取后严格核对 dev，生产 parser 规范化数字与名称，local 绑定豁免仍限定 table 255、kernel、local、同接口和精确源主机地址，没有放宽为整个 local 表。各轮失败未计为通过。
+
+最终主机 network namespace ID、namespace 列表、接口、IPv4/IPv6 全路由表、mountinfo、忽略计数器的 nft 规则，以及 network/firewall/rpcd/dropbear/uhttpd 五份配置的 SHA 均与测试前完全一致。这证明隔离内核上的对象协调，不等同于真实 LAN 客户端或整机重启验收。
+
 ## 本地回归与剩余工作
 
-本地已完成服务脚本模拟检查、实际 YAML 解析、真实 Unix control socket canonical 响应、RPC 配置/并发/超时回归，以及 VICI 缺失、拒绝连接、恢复、永久错误和关闭后的模拟服务测试。18 项 LuCI Node 回归仍属于模拟 DOM/RPC，与上述设备浏览器证据分别计数。
+本地已完成服务脚本模拟检查、实际 YAML 解析、真实 Unix control socket canonical 响应、RPC 配置/并发/超时回归，以及 VICI 缺失、拒绝连接、恢复、永久错误和关闭后的模拟服务测试。本轮撤回修改后 `go test ./...`、app/photon 与 internal/photonlinux 的 race 和 vet 通过；单测另覆盖完整输入预校验、坏 JSON、对象读取后变化、标记丢失和删除失败重试。18 项 LuCI Node 回归仍属于模拟 DOM/RPC，与上述设备浏览器证据分别计数。
 
 ```sh
 sh contrib/openwrt/check.sh
@@ -253,7 +287,7 @@ go test ./app/photon -run 'TestOpenWrt'
 
 `contrib/openwrt/preflight.sh` 是只读检查入口；全部通过也不证明 namespace 创建、实际算法和流量通畅。已有 `docs/scripts/ipsec-xfrm-preflight.sh` 会创建临时接口/namespace，不能混作只读检查。
 
-下一步先完善主机路由和地址的撤回：当前 `internal/photonlinux/routing.go` 的 `EnsureRoutes` 只执行 replace，ARS 前缀缩减或清空后，旧主机路由和源地址不会自动删除。`app/photon/routing_reconcile.go` 停用只停止同步，没有拆除既有配置。接入 LAN 前需以 Photon 拥有的对象为边界核对期望与实际状态，撤回旧对象并保留第三方路由，不能直接删除整条接口。
+主机侧新标记对象的前缀撤回已经实现并完成隔离内核验收。后续需继续处理旧版本未标记对象的迁移，以及停用、移除实例或更换 upstream 目标的资源生命周期；目前仍保留原有停止同步而不自动拆除的约定。
 
 其次补备份恢复：默认 `/etc/photon/` 已由 SDK conffiles 生成的 keep 规则覆盖，但自定义 YAML、数据库及密钥路径不自动纳入；直接复制运行中的 bbolt 也不能作为一致性备份。需要保存原运行状态、停止后备份或使用事务快照，并在隔离环境验证恢复。
 
