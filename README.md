@@ -7,6 +7,8 @@ Photon 是一个实验性的“信任优先” mesh VPN 控制平面。它不把
 
 ## 安装
 
+OpenWrt / ImmortalWrt 适配（x86-64、x86、ARM32、ARM64）见 [OPENWRT.md](OPENWRT.md)，目前为开发阶段。
+
 Linux `amd64` / `arm64` 可直接从最新 GitHub Release 安装（默认安装 `photon`、
 `photon-services` 和 `photon.service`）：
 

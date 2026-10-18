@@ -1,0 +1,46 @@
+# Copy to /etc/photon/config.yaml and supply your existing Photon identity.
+# Protocol configuration stays in YAML; UCI only controls the procd service.
+data_dir: /etc/photon
+state_path: /etc/photon/photon.db
+trusted_root_public_key:
+
+log:
+  level: info
+  mode: stderr
+
+gossip:
+  peer_id: router.example.
+  listen_addr: "[::]:33434"
+  # init:
+  #   managed_zone: router.example.
+  #   key_path: /etc/photon/identity.key.json
+  bootstrap: []
+
+# Enable the following blocks after checking the device's kernel and packages.
+# Existing Photon authorization and join procedures still apply.
+# netns:
+#   default:
+#     name: photon
+#     forwarding: {}
+# ipsec:
+#   driver: strongswan
+#   vici_socket: /var/run/charon.vici
+#   port_mode: fixed
+# overlays:
+#   - id: ipsec-main
+#     connect:
+#       - "strongswan://*.example.?role=both&family=dual&mode=family-redundant"
+# routing:
+#   instances:
+#     - id: main
+#       shutdown_policy: stop
+#       config_file: /run/photon/bird/main.conf
+#       control_socket: /run/photon/bird/main.ctl
+#       pid_file: /run/photon/bird/main.pid
+# firewall:
+#   instances:
+#     - id: photon
+#       backend: nft
+#
+# Host ingress and LAN forwarding also need explicit firewall4 rules. See
+# OPENWRT.md; Photon does not rewrite /etc/config/firewall on installation.
