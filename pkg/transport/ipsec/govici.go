@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/strongswan/govici/vici"
 )
@@ -59,8 +60,19 @@ func NewReconnectingGoviciClient(socketPath string) (*ReconnectingVICIClient, er
 		}
 		return client, client.Close, nil
 	}
+	return newReconnectingVICIClient(factory)
+}
+
+func newReconnectingVICIClient(factory VICIClientFactory) (*ReconnectingVICIClient, error) {
 	client, closeFn, err := factory()
 	if err != nil {
+		// The service manager owns charon and may start it after Photon. Keep
+		// the daemon available while its existing watcher/reconcile retries the
+		// missing or not-yet-listening socket. Other errors (such as permission
+		// denied or an invalid socket path) remain startup failures.
+		if errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED) {
+			return &ReconnectingVICIClient{factory: factory}, nil
+		}
 		return nil, err
 	}
 	return &ReconnectingVICIClient{factory: factory, client: client, closeFn: closeFn}, nil
@@ -227,9 +239,9 @@ func (c *ReconnectingVICIClient) current() (VICIClient, error) {
 	if c.client != nil {
 		return c.client, nil
 	}
-	// A previous reconnect may have failed while charon was still down. Keep
-	// the wrapper usable so the watcher's next backoff attempt can dial the
-	// newly-created VICI socket.
+	// The initial dial or a reconnect may have failed while charon was still
+	// down. Keep the wrapper usable so the next operation can dial the
+	// newly-created VICI socket. Dial errors remain visible to callers.
 	if c.factory == nil {
 		return nil, errMissingGoviciSession()
 	}

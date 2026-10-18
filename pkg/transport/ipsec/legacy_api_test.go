@@ -38,9 +38,5 @@ func RotateChildSAName(transportID string, generation uint64) string {
 }
 
 func NewReconnectingVICIClient(factory VICIClientFactory) (*ReconnectingVICIClient, error) {
-	client, closeFn, err := factory()
-	if err != nil {
-		return nil, err
-	}
-	return &ReconnectingVICIClient{factory: factory, client: client, closeFn: closeFn}, nil
+	return newReconnectingVICIClient(factory)
 }
