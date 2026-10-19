@@ -4,12 +4,35 @@
 `v0.6.0-rc.13`（在 rc.12 候选基础上减少入站验签、状态复制和重复健康统计）。新版只供测试，Windows 完整隧道尚未交付。
 master 保留旧版；候选版从独立 release 分支发布，不更新 Docker `latest`。
 
+## RC.13 后续开发：合入 OpenWrt 集成（未发布）
+
+2026-10-19 将 `openwrt/initial-port` 快进合入本地
+`release/linux-0.6.0-rc.13`。RC 原提交 `1dfba603` 是移植分支的祖先，
+因此直接保留全部原始提交，包括功能提交 `80ed6a93`，没有复制代码或重写历史。
+
+RC 现包含 WAN 逻辑网络选择及地址跟随、hotplug/control 通知、原有签名
+IPsec 地址发布、fw4 归属链和 current/grace 端口放行，以及 LuCI/rpcd、
+procd 一次性停止/重启任务和 SDK 包规则。`openwrt` 配置默认关闭，
+普通 Linux 不自动调用 netifd 或启用 fw4 规则；range 模式仍复用明确配置的
+host 防火墙重定向负责人。没有新增签名协议或 IPAM/路由权限。
+
+合并不移动已发布的 `v0.6.0-rc.13` 标签，不替换已发布的二进制、APK 或
+容器，也不推送、发布或部署。原 r4 安装包和设备证据仍对应原生产源码；
+本轮只合并分支并在 RC 工作树进行本地回归，不重复设备安装。
+OpenWrt 配置、原生验收与生产 WAN/LAN、DHCP/PPPoE、ARM 实机的边界见
+[OpenWrt 开发记录](../../OPENWRT.md)。
+
+合并后的 RC 工作树已通过 `make check`（fmt、全量 vet/Go 测试、Linux
+构建及 Windows 客户端交叉构建），以及 app/photon、internal/photonopenwrt、
+internal/photonlinux 三包 race、29 项 LuCI Node 回归和 OpenWrt 脚本检查。
+生产代码与已验收的 `80ed6a93` 逐文件相同；本轮未重复执行 opt-in 设备测试。
+
 ## RC.13 后续开发：共用 Linux 数据面修复（未发布）
 
 2026-10-18 从 `openwrt/initial-port` 提取三组共用修复，合入本地
 `release/linux-0.6.0-rc.13`。本节描述后续开发提交，不改已发布的
-`v0.6.0-rc.13` 标签或安装包，也未发布新版本。LuCI、rpcd、procd、SDK
-包规则和 OpenWrt 示例配置仍留在移植分支。
+`v0.6.0-rc.13` 标签或安装包，也未发布新版本。当时只提取共用修复，
+OpenWrt 专用包与管理面随后在 2026-10-19 整体合入，见上一节。
 
 - VICI 首次 ENOENT/ECONNREFUSED 时允许 daemon 控制接口启动，复用原有
   watcher/reconcile 重试；权限拒绝和非法路径等永久错误仍使初始化失败。
@@ -46,7 +69,7 @@ master 保留旧版；候选版从独立 release 分支发布，不更新 Docker
 提取后的 RC 工作树已通过 `make check`（fmt、全量 vet/Go 测试、Linux 构建
 及 Windows 客户端交叉构建），并通过 app/photon、internal/photonlinux、
 IPsec、BIRD 四包 race。21 个通用修复源文件/测试与已验收的 OpenWrt 提交
-`333b258c` 逐文件相同；RC 没有引入 OpenWrt 的包或管理面依赖。
+`333b258c` 逐文件相同；这次共用修复提取当时没有引入 OpenWrt 的包或管理面依赖。
 
 ## rc.13：减少入站、撤销查询与健康统计的重复工作
 
