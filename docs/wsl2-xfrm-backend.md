@@ -27,11 +27,9 @@ Photon 原生数据面使用 XFRM interface（`phx*` 设备，child SA 以 `if_i
 
 配套约束：
 
-- charon 必须 `process_route = no`。否则 charon 对已路由子网安装 bypass 策略，
-  mesh 流量绕过隧道直连，表现为"隧道 up 但不通"。
-- charon 的 xfrm 策略安装在 photon 的 netns 内（`netns.default.kind: host` 时即宿主）。
-- gateway overlay INPUT 需要放行解封装后 ct=invalid 的 mesh 源（规则已在
-  firewall planner，与 `xfrm_backend` 无关；见 `docs/new/firewall.md` §4.3）。
+- charon 必须设置 `process_route = no`。不设置时，charon 会给已经路由的子网安装 bypass 策略，mesh 流量不进隧道。现象是隧道状态为 up，流量不通。
+- charon 把 xfrm 策略装在 photon 的 netns 里。`netns.default.kind: host` 时，这个 netns 就是宿主网络命名空间。
+- gateway 的 overlay INPUT 要放行解封装后 conntrack 状态为 invalid 的 mesh 源。这条规则在 firewall planner 里，与 `xfrm_backend` 无关。见 `docs/new/firewall.md` §4.3。
 
 ## 3. 为什么不是 VTI（含 shared VTI）
 
@@ -53,8 +51,7 @@ Photon 原生数据面使用 XFRM interface（`phx*` 设备，child SA 以 `if_i
   处理后的包，纯策略与 VTI 数据面均不通（双栈实验确认，与端口分配无关）。
 - **IPv6**：NAT 模式无 IPv6 underlay，因此本方案仅覆盖 IPv4。mesh 双栈在
   WSL2 上是平台限制，不是配置问题。
-- **端口**：NAT 模式下 500/4500 可用；若宿主服务占用（如 Windows IKEEXT），
-  用 `ipsec.fixed_ike_port` / `fixed_natt_port` 改端口（配置贯通见 C3 提交）。
+- **端口**：NAT 模式下 500 和 4500 可用。Windows 的 IKEEXT 占用了这两个端口时，客户端和 gateway 改成同一对非默认端口：`ipsec.fixed_ike_port`、`fixed_natt_port`，以及 charon 的 `port`、`port_nat_t`。
 - **验证状态**：policy + NAT IPv4 已对真实 gateway（interface 后端）完成
   ICMP + TCP 全通验证；DPD/rekey/撤销的长稳行为未测。
 
