@@ -689,24 +689,24 @@ func portRecordMatchesConfig(record *ipsec.PortRecord, mode string, r *ipsec.Por
 	if recordMode != mode {
 		return false
 	}
+	// Range mode still binds charon to FixedIKE/FixedNATT (see
+	// plannedCurrentPortSelection); only the advertised ports come from the
+	// range. A listener-port change must republish in both modes.
+	effectiveIKE := config.IPsec.FixedIKEPort
+	if effectiveIKE == 0 {
+		effectiveIKE = uint16(ipsec.DefaultIKEPort)
+	}
+	effectiveNATT := config.IPsec.FixedNATTPort
+	if effectiveNATT == 0 {
+		effectiveNATT = uint16(ipsec.DefaultNATTPort)
+	}
+	if record.Current == nil ||
+		record.Current.IKE.Local != effectiveIKE ||
+		record.Current.NATT.Local != effectiveNATT {
+		return false
+	}
 	if mode != ipsec.PortModeRange {
-		// Fixed ports participate in the match so changed
-		// ipsec.fixed_ike_port/fixed_natt_port trigger republication.
-		// Compare against the effective ports (after default fill) that
-		// localIPsecPortRecord uses, not the raw config values.
-		effectiveIKE := config.IPsec.FixedIKEPort
-		if effectiveIKE == 0 {
-			effectiveIKE = uint16(ipsec.DefaultIKEPort)
-		}
-		effectiveNATT := config.IPsec.FixedNATTPort
-		if effectiveNATT == 0 {
-			effectiveNATT = uint16(ipsec.DefaultNATTPort)
-		}
-		if record.Current == nil {
-			return false
-		}
-		return record.Current.IKE.Local == effectiveIKE &&
-			record.Current.NATT.Local == effectiveNATT
+		return true
 	}
 	return ipsecPortRangesEqual(record.Range, r)
 }

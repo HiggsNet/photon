@@ -15,6 +15,11 @@ start_charon() {
 		return
 	fi
 	echo "starting charon..."
+	# /run is volatile; recreate the socket parent on every boot.
+	vici_socket="$(grep -oP 'socket = unix://\K.*' "$INSTALL_DIR/charon.conf" || true)"
+	if [ -n "$vici_socket" ]; then
+		mkdir -p "$(dirname "$vici_socket")"
+	fi
 	setsid nohup env \
 		STRONGSWAN_CONF="$INSTALL_DIR/charon.conf" \
 		/usr/lib/ipsec/charon \

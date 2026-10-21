@@ -27,7 +27,9 @@ fi
 # Determine phx device for the wsl2-poc overlay
 if [ -z "$PHX_DEV" ]; then
   # Find the phx device that has the wsl2-poc tunnel address
-  PHX_DEV=$(ip netns exec photon ip -br addr show to "$PREFIX" 2>/dev/null | awk -F: '{print $2}' | tr -d ' ' | head -1)
+  # `ip -br` columns are whitespace-separated (`<ifname> <state> <addrs>`),
+  # not `index: name:` rows. Strip an xfrm `@peer` suffix if present.
+  PHX_DEV=$(ip netns exec photon ip -br addr show to "$PREFIX" 2>/dev/null | awk '$1 ~ /^phx/ { sub(/@.*/, "", $1); print $1; exit }')
 fi
 if [ -z "$PHX_DEV" ]; then
   echo "ERROR: no phx device found with address in $PREFIX" >&2
@@ -36,9 +38,6 @@ if [ -z "$PHX_DEV" ]; then
   exit 1
 fi
 echo "using device: $PHX_DEV"
-
-# Derive network address from prefix for firewall rules
-NETWORK="${PREFIX%/*}"
 
 # --- Routes ---
 # Install return routes for the client's tunnel addresses.
@@ -50,12 +49,11 @@ NETWORK="${PREFIX%/*}"
 # Extract the prefix as an ip route command argument
 if echo "$PREFIX" | grep -q ':'; then
   # IPv6
-  ROUTE_CMD="ip -6 route replace $PREFIX dev $PHX_DEV"
+  ip netns exec photon ip -6 route replace "$PREFIX" dev "$PHX_DEV"
 else
   # IPv4
-  ROUTE_CMD="ip -4 route replace $PREFIX dev $PHX_DEV"
+  ip netns exec photon ip -4 route replace "$PREFIX" dev "$PHX_DEV"
 fi
-ip netns exec photon eval "$ROUTE_CMD"
 echo "route installed: $PREFIX dev $PHX_DEV"
 
 # --- Firewall ---
@@ -65,22 +63,22 @@ echo "route installed: $PREFIX dev $PHX_DEV"
 # packets because the gateway didn't see the outbound direction.
 
 # Input chain: allow client tunnel traffic to gateway local addresses
+if echo "$PREFIX" | grep -q ':'; then
+  ADDR_MATCH=(ip6 saddr "$PREFIX")
+else
+  ADDR_MATCH=(ip saddr "$PREFIX")
+fi
+
 ip netns exec photon nft insert rule inet photon_default photon_default_input \
-  ip saddr "$NETWORK/24" accept 2>/dev/null || \
-ip netns exec photon nft insert rule inet photon_default photon_default_input \
-  ip6 saddr "$PREFIX" accept 2>/dev/null || true
+  "${ADDR_MATCH[@]}" accept
 
 # Forward chain: allow transit (if forwarding is enabled)
 ip netns exec photon nft insert rule inet photon_default photon_default_forward \
-  ip saddr "$NETWORK/24" accept 2>/dev/null || \
-ip netns exec photon nft insert rule inet photon_default photon_default_forward \
-  ip6 saddr "$PREFIX" accept 2>/dev/null || true
+  "${ADDR_MATCH[@]}" accept
 
 # Accept invalid conntrack state for xfrm-decapsulated packets
 ip netns exec photon nft insert rule inet photon_default photon_default_input \
-  ip saddr "$NETWORK/24" ct state invalid accept 2>/dev/null || \
-ip netns exec photon nft insert rule inet photon_default photon_default_input \
-  ip6 saddr "$PREFIX" ct state invalid accept 2>/dev/null || true
+  "${ADDR_MATCH[@]}" ct state invalid accept
 
 echo "firewall rules added"
 echo ""

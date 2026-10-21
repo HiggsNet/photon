@@ -461,10 +461,20 @@ func extractIPsecRedirectPortsFromNetwork(network *zone.NetworkState, managedZon
 // nowFunc returns the current time. Overridable in tests.
 var nowFunc = func() time.Time { return time.Time{} }
 
-// firewallCharonPorts returns the current charon IKE/NAT-T listen ports.
-// First version: defaults (500/4500). Future: derive from ipsec port record.
-func firewallCharonPorts(_ *appConfig, _ *stateFile) (uint16, uint16) {
-	return 500, 4500
+// firewallCharonPorts returns the charon IKE/NAT-T listen ports the host
+// firewall should open. These are the local listener ports, matching the
+// defaults localIPsecPortRecord publishes when the config leaves them unset.
+func firewallCharonPorts(config *appConfig, _ *stateFile) (uint16, uint16) {
+	ike, natt := uint16(ipsec.DefaultIKEPort), uint16(ipsec.DefaultNATTPort)
+	if config != nil {
+		if config.IPsec.FixedIKEPort != 0 {
+			ike = config.IPsec.FixedIKEPort
+		}
+		if config.IPsec.FixedNATTPort != 0 {
+			natt = config.IPsec.FixedNATTPort
+		}
+	}
+	return ike, natt
 }
 
 // flushFirewallReconcile runs firewall reconcile if dirty.

@@ -60,10 +60,12 @@ zone 签名密钥由客户端生成。IKE 用的 transport 密钥由 daemon 写�
      <join-request.b64> <bundle-output.b64>
    ```
 
-4. 客户端保存 bundle，写入本地数据库。这一步不联系 daemon。
+4. 客户端保存 bundle，写入本地数据库。这一步不联系 daemon。此时还没有 `config.yaml`，不设 `PHOTON_STATE` 会写入 `/etc/photon/photon.db`。
 
    ```bash
-   <higgs>/build/photon gossip join accept --direct \
+   sudo mkdir -p /var/lib/photon
+   sudo env PHOTON_STATE=/var/lib/photon/state.db \
+     <higgs>/build/photon gossip join accept --direct \
      ~/.photon-poc/join-bundle.b64 ~/.photon-poc/zone-key.json
    ```
 
@@ -74,8 +76,8 @@ zone 签名密钥由客户端生成。IKE 用的 transport 密钥由 daemon 写�
 `config.yaml` 至少包含这些项：
 
 ```yaml
-data_dir: ~/.photon-poc
-state_path: ~/.photon-poc/state.db
+data_dir: /var/lib/photon
+state_path: /var/lib/photon/state.db
 trusted_root_public_key: <管理员提供的根公钥>
 
 gossip:
@@ -110,6 +112,7 @@ overlays:
 - `role: out` 表示本机只主动建隧道。gateway 侧用自己的角色配置，不要照抄这一项。
 - overlay 的 `id` 和 `pool` 必须与 gateway 上为这个客户端准备的 overlay 一致。PoC 用 `wsl2-poc`；接入现有 mesh 时改成 gateway 给出的 id。
 - `trusted_root_public_key`、`peer_id`、`bootstrap` 由 gateway 管理员提供。zone 名带结尾的点。
+- YAML 不展开 `~`。`data_dir` 和 `state_path` 必须写绝对路径，并且 `state_path` 必须就是上面 `PHOTON_STATE` 指向的文件。
 
 端口：NAT 模式下 500 和 4500 可用，上面的配置不用写端口。Windows 的 IKEEXT 占用了这两个端口时，客户端和 gateway 必须改成同一对非默认端口，例如 33700 和 33701：
 

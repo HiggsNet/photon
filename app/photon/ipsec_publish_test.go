@@ -760,6 +760,39 @@ func TestPublishIPsecOverlayIntentStableWhenUnchanged(t *testing.T) {
 	}
 }
 
+func TestPortRecordMatchesConfigRepublishesListenerChangeInRangeMode(t *testing.T) {
+	config := defaultAppConfig()
+	config.IPsec.PortMode = ipsec.PortModeRange
+	config.IPsec.PortRange = ipsec.PortRange{From: 40000, To: 40007}
+	config.IPsec.FixedIKEPort = 500
+	config.IPsec.FixedNATTPort = 4500
+	record, err := localIPsecPortRecord(config, nil, time.Unix(5000, 0))
+	if err != nil {
+		t.Fatalf("localIPsecPortRecord: %v", err)
+	}
+	if !portRecordMatchesConfig(record, ipsec.PortModeRange, &config.IPsec.PortRange, config) {
+		t.Fatal("unchanged range-mode record should match")
+	}
+	config.IPsec.FixedIKEPort = 33700
+	config.IPsec.FixedNATTPort = 33701
+	if portRecordMatchesConfig(record, ipsec.PortModeRange, &config.IPsec.PortRange, config) {
+		t.Fatal("range mode reused the old record after the local listener ports changed")
+	}
+	republished, err := localIPsecPortRecord(config, &stateFile{
+		Network:     &zone.NetworkState{Zones: map[zone.ZonePath]*zone.ZoneState{}},
+		ManagedZone: "node.test.",
+	}, time.Unix(5000, 0))
+	if err != nil {
+		t.Fatalf("republish: %v", err)
+	}
+	if republished.Current.IKE.Local != 33700 || republished.Current.NATT.Local != 33701 {
+		t.Fatalf("listener ports = %d/%d, want 33700/33701", republished.Current.IKE.Local, republished.Current.NATT.Local)
+	}
+	if republished.Current.IKE.Advertised == republished.Current.IKE.Local {
+		t.Fatalf("range mode advertised the listener port %d", republished.Current.IKE.Local)
+	}
+}
+
 func TestLocalIPsecAddressRecordAnnounceGossipEndpointsDisabled(t *testing.T) {
 	state, _ := buildTestNetworkState(t)
 	state.ManagedZone = "node-b.catofes."

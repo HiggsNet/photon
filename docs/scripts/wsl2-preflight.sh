@@ -10,7 +10,7 @@
 #   sudo docs/scripts/wsl2-preflight.sh
 set -euo pipefail
 
-vici_socket="${PHOTON_VICI_SOCKET:-/run/charon.vici}"
+vici_socket="${PHOTON_VICI_SOCKET:-/run/photon/charon.vici}"
 failures=0
 
 check() {
