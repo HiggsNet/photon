@@ -224,6 +224,39 @@ func TestSystemXFRMDriverAssignExtraAddressDoesNotPrune(t *testing.T) {
 	}
 }
 
+func TestPolicyAssignExtraAddressUsesLoopback(t *testing.T) {
+	var commands []recordedCommand
+	driver := SystemXFRMDriver{
+		Backend:      XFRMBackendPolicy,
+		DefaultNetNS: NetNSSpec{Kind: NetNSHost},
+		IPPath:       "ip",
+		Command: func(_ context.Context, name string, args ...string) ([]byte, error) {
+			commands = append(commands, recordedCommand{name: name, args: append([]string(nil), args...)})
+			return nil, nil
+		},
+	}
+	spec := TransportLinkSpec{InterfaceName: "phx2a", XFRMIfID: 42}
+	if err := driver.AssignExtraAddress(context.Background(), spec, "fd00:1234::fff4/128"); err != nil {
+		t.Fatalf("AssignExtraAddress: %v", err)
+	}
+	got := commandStrings(commands)
+	for _, cmd := range got {
+		if strings.Contains(cmd, "dev phx2a") {
+			t.Fatalf("policy extra address used resource name as device: %v", got)
+		}
+	}
+	want := "ip addr replace fd00:1234::fff4/128 dev lo"
+	found := false
+	for _, cmd := range got {
+		if cmd == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing lo extra assignment %q in %v", want, got)
+	}
+}
+
 func TestSystemXFRMDriverEnablesMulticastOnExistingInterface(t *testing.T) {
 	var commands []recordedCommand
 	driver := SystemXFRMDriver{

@@ -73,16 +73,19 @@ type LinkGroupSpec struct {
 	DefaultPathMode    string
 	AddressSourceOrder []string
 	// AllowedAddressFamilies limits the underlay families selected for this
-	// group. It is populated from a matching local mesh policy rule rather than
-	// from a peer-advertised capability.
+	// group. It is populated from a matching local mesh policy rule rather
+	// than from a peer-advertised capability.
 	AllowedAddressFamilies []string
-	MaxPeers               int
-	MaxLinksPerPeer        int
-	TunnelAddressPool      netip.Prefix
-	TunnelAddressSpec      TunnelAddressSpec
-	Reconcile              ReconcilePolicy
-	ConnectRules           []string
-	DenyRules              []string
+	// XFRMBackend selects the local data-plane device model for this group's
+	// links (see XFRMBackend*). Empty selects XFRMBackendInterface.
+	XFRMBackend       XFRMBackend
+	MaxPeers          int
+	MaxLinksPerPeer   int
+	TunnelAddressPool netip.Prefix
+	TunnelAddressSpec TunnelAddressSpec
+	Reconcile         ReconcilePolicy
+	ConnectRules      []string
+	DenyRules         []string
 }
 
 type TransportLinkSpec struct {
@@ -268,6 +271,9 @@ func (g LinkGroupSpec) Normalized() LinkGroupSpec {
 	out := g
 	if out.Provider == "" {
 		out.Provider = ProviderStrongSwan
+	}
+	if out.XFRMBackend == "" {
+		out.XFRMBackend = XFRMBackendInterface
 	}
 	if out.DefaultPathMode == "" {
 		out.DefaultPathMode = PathModeFamilyRedundant

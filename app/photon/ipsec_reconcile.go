@@ -98,8 +98,8 @@ func (d *DaemonService) reconcileIPsecLinks(ctx context.Context) error {
 				})
 			}
 		case ipsec.ReconcileActionCreate, ipsec.ReconcileActionUpdate, ipsec.ReconcileActionRepair, ipsec.ReconcileActionPrepareStandby,
-			ipsec.ReconcileActionTeardown, ipsec.ReconcileActionPrepareRotate, ipsec.ReconcileActionInitiateRotate, ipsec.ReconcileActionCommitRotate,
-			ipsec.ReconcileActionRollbackRotate, ipsec.ReconcileActionCleanupRotate:
+			ipsec.ReconcileActionAdopt, ipsec.ReconcileActionTeardown, ipsec.ReconcileActionPrepareRotate, ipsec.ReconcileActionInitiateRotate,
+			ipsec.ReconcileActionCommitRotate, ipsec.ReconcileActionRollbackRotate, ipsec.ReconcileActionCleanupRotate:
 			netns := netnsForAction(action, groups)
 			if _, err := ipsec.ApplyReconcileAction(ctx, ipsecDriver, xfrmDriver, action, netns); err != nil {
 				markIPsecActionFailed(result.Instances, action, groupBackoffPolicy(action, groups), now, err)
@@ -383,7 +383,7 @@ func (d *DaemonService) maintainExistingXFRMInterfaces(ctx context.Context, xfrm
 		if err != nil {
 			return fmt.Errorf("inspect xfrm interface %q: %w", candidate.InterfaceName, err)
 		}
-		matches, reason := xfrmLinkStateMatchReason(state, candidate)
+		matches, reason := d.xfrmLinkStateMatchReason(state, candidate)
 		d.logDebug("ipsec", "xfrm_runtime_observed", xfrmLinkObservationLogFields("runtime_ensure", id, "active", candidate, state, matches, reason))
 		if !state.NamespaceExists || !state.InterfaceExists {
 			d.logDebug("ipsec", "xfrm_maintenance_skip_missing", map[string]any{
@@ -410,7 +410,9 @@ func (d *DaemonService) maintainExistingXFRMInterfaces(ctx context.Context, xfrm
 
 	var repairs []ipsec.XFRMObservedInterface
 	for _, item := range items {
-		if !item.matches {
+		// Shared attachments hide peer-route drift (lo always "exists").
+		// Re-Ensure is idempotent and restores the underlay /32|/128.
+		if !item.matches || item.state.SharedAttachment {
 			repairs = append(repairs, ipsec.XFRMObservedInterface{Spec: item.candidate, State: item.state})
 		}
 	}
@@ -569,6 +571,7 @@ func ipsecActionAppliesXFRM(action string) bool {
 		ipsec.ReconcileActionUpdate,
 		ipsec.ReconcileActionRepair,
 		ipsec.ReconcileActionPrepareStandby,
+		ipsec.ReconcileActionAdopt,
 		ipsec.ReconcileActionTeardown,
 		ipsec.ReconcileActionPrepareRotate,
 		ipsec.ReconcileActionCommitRotate,
@@ -725,7 +728,7 @@ func (d *DaemonService) filterSAsWithMissingRuntimeLinks(ctx context.Context, in
 			if err != nil {
 				return nil, nil, err
 			}
-			matches, reason := xfrmLinkStateMatchReason(state, candidate)
+			matches, reason := d.xfrmLinkStateMatchReason(state, candidate)
 			d.logDebug("ipsec", "xfrm_runtime_observed", xfrmLinkObservationLogFields("pre_reconcile_filter", id, xfrmCandidateRuntime(spec, candidate, instances[id]), candidate, state, matches, reason))
 			if matches {
 				found = true
@@ -759,26 +762,28 @@ func (d *DaemonService) filterSAsWithMissingRuntimeLinks(ctx context.Context, in
 	return filtered, missing, nil
 }
 
-func xfrmLinkStateMatchReason(state ipsec.XFRMLinkState, spec ipsec.TransportLinkSpec) (bool, string) {
+func (d *DaemonService) xfrmLinkStateMatchReason(state ipsec.XFRMLinkState, spec ipsec.TransportLinkSpec) (bool, string) {
 	if !state.NamespaceExists || !state.InterfaceExists {
 		if !state.NamespaceExists {
 			return false, "missing_namespace"
 		}
 		return false, "missing_interface"
 	}
-	if state.FlagsKnown && (!state.InterfaceUp || !state.Multicast) {
-		if !state.InterfaceUp {
-			return false, "interface_down"
-		}
+	if state.FlagsKnown && !state.InterfaceUp {
+		return false, "interface_down"
+	}
+	// Shared attachments (policy backend on lo) never carry MULTICAST,
+	// and lo's addrgen/forwarding flags are not part of the attachment.
+	if state.FlagsKnown && !state.Multicast && !state.SharedAttachment {
 		return false, "missing_multicast"
 	}
-	if state.IPv6AddrGenModeKnown && !state.IPv6AddrGenDisabled {
+	if !state.SharedAttachment && state.IPv6AddrGenModeKnown && !state.IPv6AddrGenDisabled {
 		return false, "ipv6_addrgen_enabled"
 	}
 	if state.NamespaceForwardingKnown && !state.NamespaceForwarding {
 		return false, "namespace_forwarding_disabled"
 	}
-	if state.InterfaceForwardingKnown && !state.InterfaceForwarding {
+	if !state.SharedAttachment && state.InterfaceForwardingKnown && !state.InterfaceForwarding {
 		return false, "interface_forwarding_disabled"
 	}
 	if !spec.LocalTunnelAddr.IsValid() {

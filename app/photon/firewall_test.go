@@ -574,6 +574,24 @@ func TestFirewallInstanceSpecFromConfig(t *testing.T) {
 	}
 }
 
+func TestFirewallCharonPortsFollowsConfiguredListeners(t *testing.T) {
+	ike, natt := firewallCharonPorts(nil, nil)
+	if ike != 500 || natt != 4500 {
+		t.Fatalf("defaults = %d/%d, want 500/4500", ike, natt)
+	}
+	config := defaultAppConfig()
+	ike, natt = firewallCharonPorts(config, nil)
+	if ike != 500 || natt != 4500 {
+		t.Fatalf("unset config = %d/%d, want 500/4500", ike, natt)
+	}
+	config.IPsec.FixedIKEPort = 33700
+	config.IPsec.FixedNATTPort = 33701
+	ike, natt = firewallCharonPorts(config, nil)
+	if ike != 33700 || natt != 33701 {
+		t.Fatalf("configured listeners = %d/%d, want 33700/33701", ike, natt)
+	}
+}
+
 func TestReconcileFirewall_NoInstances(t *testing.T) {
 	d := &DaemonService{
 		StateStore: NewDaemonStateStore(&stateFile{}),

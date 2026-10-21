@@ -553,9 +553,17 @@ func mapGossipEndpointSourceToIPsec(ep gossip.EndpointEntry) (source, reachabili
 
 func localIPsecPortRecord(config *appConfig, state *stateFile, now time.Time) (*ipsec.PortRecord, error) {
 	// IPsec ports are independent of the gossip listen address. Use the IKEv2
-	// defaults unless the configuration explicitly requests a different mode.
-	ike := uint16(ipsec.DefaultIKEPort)
-	natt := uint16(ipsec.DefaultNATTPort)
+	// defaults unless the configuration explicitly requests different ports or
+	// mode. WSL2 mirrored networking needs non-default ports because the
+	// Windows host IKEEXT owns 500/4500.
+	ike := config.IPsec.FixedIKEPort
+	natt := config.IPsec.FixedNATTPort
+	if ike == 0 {
+		ike = uint16(ipsec.DefaultIKEPort)
+	}
+	if natt == 0 {
+		natt = uint16(ipsec.DefaultNATTPort)
+	}
 	existing := existingIPsecPortRecord(state)
 	previous := existing
 	if previous == nil {
@@ -571,7 +579,7 @@ func localIPsecPortRecord(config *appConfig, state *stateFile, now time.Time) (*
 		portRange = &config.IPsec.PortRange
 		generation = nextPortGeneration(state, existing, config, now)
 	}
-	if existing != nil && existing.Current != nil && existing.Current.Generation == generation && portRecordMatchesConfig(existing, mode, portRange) {
+	if existing != nil && existing.Current != nil && existing.Current.Generation == generation && portRecordMatchesConfig(existing, mode, portRange, config) {
 		return existing, nil
 	}
 	return ipsec.PlanPortRecord(ipsec.PortPlanOptions{
@@ -670,7 +678,7 @@ func ipsecPortRecordStateFromRecord(record *ipsec.PortRecord) *ipsecPortRecordSt
 	return state
 }
 
-func portRecordMatchesConfig(record *ipsec.PortRecord, mode string, r *ipsec.PortRange) bool {
+func portRecordMatchesConfig(record *ipsec.PortRecord, mode string, r *ipsec.PortRange, config *appConfig) bool {
 	if record == nil {
 		return false
 	}
@@ -679,6 +687,22 @@ func portRecordMatchesConfig(record *ipsec.PortRecord, mode string, r *ipsec.Por
 		recordMode = ipsec.PortModeFixed
 	}
 	if recordMode != mode {
+		return false
+	}
+	// Range mode still binds charon to FixedIKE/FixedNATT (see
+	// plannedCurrentPortSelection); only the advertised ports come from the
+	// range. A listener-port change must republish in both modes.
+	effectiveIKE := config.IPsec.FixedIKEPort
+	if effectiveIKE == 0 {
+		effectiveIKE = uint16(ipsec.DefaultIKEPort)
+	}
+	effectiveNATT := config.IPsec.FixedNATTPort
+	if effectiveNATT == 0 {
+		effectiveNATT = uint16(ipsec.DefaultNATTPort)
+	}
+	if record.Current == nil ||
+		record.Current.IKE.Local != effectiveIKE ||
+		record.Current.NATT.Local != effectiveNATT {
 		return false
 	}
 	if mode != ipsec.PortModeRange {

@@ -438,7 +438,13 @@ func pingTunnelAddr(t *testing.T, ctx context.Context, ns string, target netip.A
 		runAppCommand(t, ctx, "ip", "netns", "exec", ns, "ping", "-c", "1", "-W", "3", target.String())
 		return
 	}
-	runAppCommand(t, ctx, "ip", "netns", "exec", ns, "ping", "-6", "-c", "1", "-W", "3", target.String()+"%"+iface)
+	// The %iface scope suffix is only valid for link-local targets; global
+	// addresses must be resolved without it.
+	if target.IsLinkLocalUnicast() {
+		runAppCommand(t, ctx, "ip", "netns", "exec", ns, "ping", "-6", "-c", "1", "-W", "3", target.String()+"%"+iface)
+		return
+	}
+	runAppCommand(t, ctx, "ip", "netns", "exec", ns, "ping", "-6", "-c", "1", "-W", "3", target.String())
 }
 
 func pingTunnelAddrShouldFail(t *testing.T, ctx context.Context, ns string, target netip.Addr, iface string) []byte {
@@ -446,8 +452,10 @@ func pingTunnelAddrShouldFail(t *testing.T, ctx context.Context, ns string, targ
 	var cmdArgs []string
 	if target.Is4() {
 		cmdArgs = []string{"netns", "exec", ns, "ping", "-c", "1", "-W", "1", target.String()}
-	} else {
+	} else if target.IsLinkLocalUnicast() {
 		cmdArgs = []string{"netns", "exec", ns, "ping", "-6", "-c", "1", "-W", "1", target.String() + "%" + iface}
+	} else {
+		cmdArgs = []string{"netns", "exec", ns, "ping", "-6", "-c", "1", "-W", "1", target.String()}
 	}
 	out, err := appExecCommand(ctx, "ip", cmdArgs...)
 	if err == nil {
@@ -490,7 +498,11 @@ func daemonTestXFRMDriver(defaultNetNS ipsec.NetNSSpec, stateNetNS string) ipsec
 
 func startDaemonTestCharonInNetNS(ctx context.Context, t *testing.T, ns, piddir, conf string, logFile *os.File) *exec.Cmd {
 	t.Helper()
-	script := fmt.Sprintf("mkdir -p /run && mount --bind %s /run && STRONGSWAN_CONF=%s exec charon --debug-cfg 2 --debug-ike 2 --debug-mgr 2", piddir, conf)
+	charonPath := "/usr/lib/ipsec/charon"
+	if resolved, err := exec.LookPath("charon"); err == nil {
+		charonPath = resolved
+	}
+	script := fmt.Sprintf("mkdir -p /run && mount --bind %s /run && STRONGSWAN_CONF=%s exec %s --debug-cfg 2 --debug-ike 2 --debug-mgr 2", piddir, conf, charonPath)
 	cmd := exec.CommandContext(ctx, "unshare", "-m", "ip", "netns", "exec", ns, "bash", "-c", script)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
@@ -632,6 +644,12 @@ func addDaemonTestIPsecRecords(t *testing.T, zs *zone.ZoneState, peer zone.ZoneP
 	if zs == nil {
 		t.Fatalf("missing zone state for %s", peer)
 	}
+	// The advertised underlay family must match the literal address, or the
+	// planner derives the wrong path key and SAs stop matching the link.
+	family := ipsec.FamilyIPv4
+	if ip := net.ParseIP(address); ip != nil && ip.To4() == nil {
+		family = ipsec.FamilyIPv6
+	}
 	zs.Records[ipsec.RecordKeyProfile] = unsignedIPsecRecord(t, peer, ipsec.RecordKeyProfile, ipsec.RecordTypeProfile, ipsec.ProfileRecord{
 		Version:                 1,
 		Enabled:                 true,
@@ -639,17 +657,17 @@ func addDaemonTestIPsecRecords(t *testing.T, zs *zone.ZoneState, peer zone.ZoneP
 		IKEIdentity:             string(peer),
 		TransportKeyFingerprint: key.Fingerprint,
 		Role:                    accept,
-		AddressFamilies:         []string{ipsec.FamilyIPv4},
+		AddressFamilies:         []string{family},
 		PathModes:               []string{ipsec.PathModeFamilyRedundant},
 		UpdatedAt:               now.Unix(),
 	})
 	zs.Records[ipsec.RecordKeyAddresses] = unsignedIPsecRecord(t, peer, ipsec.RecordKeyAddresses, ipsec.RecordTypeAddresses, ipsec.AddressRecord{
 		Version: 1,
 		Addresses: []ipsec.AddressAdvertisement{{
-			ID:           "underlay-v4",
+			ID:           "underlay-" + family,
 			Source:       ipsec.SourceManualAddress,
 			Address:      address,
-			Family:       ipsec.FamilyIPv4,
+			Family:       family,
 			Reachability: ipsec.ReachabilityPublic,
 		}},
 		UpdatedAt: now.Unix(),
@@ -682,11 +700,17 @@ func setTestIPsecOverlayIntent(t *testing.T, zs *zone.ZoneState, peer zone.ZoneP
 		t.Fatalf("missing zone state for %s", peer)
 	}
 	group = group.Normalized()
+	// Path keys must cover the group's advertised tunnel address family; the
+	// legacy helper was IPv4-only and broke IPv6 underlay scenarios.
+	pathKeys := []string{"family:ipv4"}
+	if group.TunnelAddressSpec.Family == ipsec.FamilyIPv6 {
+		pathKeys = []string{"family:ipv6", "family:ipv4"}
+	}
 	zs.Records[ipsec.OverlayIntentRecordKey(group.ID)] = unsignedIPsecRecord(t, peer, ipsec.OverlayIntentRecordKey(group.ID), ipsec.RecordTypeOverlayIntent, ipsec.OverlayIntentRecord{
 		Version:       1,
 		OverlayID:     group.ID,
 		Provider:      group.Provider,
-		PathKeys:      []string{"family:ipv4"},
+		PathKeys:      pathKeys,
 		TunnelAddress: group.TunnelAddressSpec,
 		UpdatedAt:     now.Unix(),
 	})

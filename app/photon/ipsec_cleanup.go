@@ -177,8 +177,8 @@ func newIPsecCleanupDrivers(config *appConfig) (configuredIPsecDrivers, error) {
 			return configuredIPsecDrivers{}, fmt.Errorf("initialize strongswan vici client: %w", err)
 		}
 		return configuredIPsecDrivers{
-			ipsecDriver: &ipsec.StrongSwanDriver{VICI: client},
-			xfrmDriver:  ipsec.NewSystemXFRMDriver(config.IPsec.DefaultNetNS),
+			ipsecDriver: &ipsec.StrongSwanDriver{VICI: client, XFRMBackend: ipsec.XFRMBackend(config.IPsec.XFRMBackend)},
+			xfrmDriver:  newXFRMDriverForBackend(config.IPsec),
 			close:       client.Close,
 		}, nil
 	default:

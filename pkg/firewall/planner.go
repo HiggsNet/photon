@@ -178,6 +178,21 @@ func buildOverlayRules(desired *FirewallDesiredState, spec FirewallInstanceSpec,
 		}
 	}
 
+	// 0. xfrm-decapsulated overlay input from mesh-authorized sources may
+	// carry ct state invalid: the gateway often never saw the outbound
+	// direction (asymmetric tunnel). Accept it before the generic invalid
+	// drop. This is overlay INPUT semantics, not an xfrm_backend or WSL2
+	// switch; FORWARD already has a scoped transit equivalent.
+	if len(prefixes.MeshAuthorizedV4) > 0 || len(prefixes.MeshAuthorizedV6) > 0 {
+		allMesh := append(append([]netip.Prefix{}, prefixes.MeshAuthorizedV4...), prefixes.MeshAuthorizedV6...)
+		addRule(ChainInput, Rule{
+			Action:   ActionAccept,
+			CtStates: []string{CtStateInvalid},
+			Src:      allMesh,
+			Comment:  "xfrm mesh invalid accept",
+		})
+	}
+
 	// 1. invalid drop (ct state)
 	addRule(ChainInput, Rule{Action: ActionDrop, CtStates: []string{CtStateInvalid}, Comment: "invalid drop"})
 

@@ -107,6 +107,12 @@ type XFRMExtraAddressAssigner interface {
 	AssignExtraAddress(context.Context, TransportLinkSpec, string) error
 }
 
+// XFRMAttachmentReclaimer removes per-link L3 state that is not a dedicated
+// device (policy backend: lo address and underlay peer route).
+type XFRMAttachmentReclaimer interface {
+	ReclaimAttachment(context.Context, TransportLinkSpec) error
+}
+
 type XFRMLinkState struct {
 	NetNS                    NetNSSpec
 	NamespaceExists          bool
@@ -121,6 +127,10 @@ type XFRMLinkState struct {
 	InterfaceForwardingKnown bool
 	InterfaceForwarding      bool
 	Addresses                []netip.Prefix
+	// SharedAttachment is true when the local L3 attachment is a shared
+	// device (loopback for the policy backend) rather than a per-link
+	// XFRM interface. Matching then requires UP, not MULTICAST.
+	SharedAttachment bool
 }
 
 type XFRMLinkInspector interface {
@@ -184,6 +194,11 @@ type StrongSwanDriver struct {
 	LogConfig        func(event string, fields map[string]any)
 	OperationTimeout time.Duration
 	InitiateAsync    bool
+	// XFRMBackend selects how CHILD SAs bind to the local data-plane device.
+	// The empty value selects the historical XFRM interface binding (if_id);
+	// XFRMBackendPolicy omits if_id bindings so charon installs pure xfrm
+	// policies without requiring a virtual device.
+	XFRMBackend XFRMBackend
 	// InitiateTimeout is sent to charon in the VICI request.  It bounds the
 	// blocking controller callback inside charon; a Go context timeout alone
 	// only disconnects the client and does not release charon's worker.
@@ -369,6 +384,12 @@ func TeardownTransportLink(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriv
 	}
 	if err := xfrm.DeleteInterface(ctx, spec.InterfaceName); err != nil {
 		return plan, fmt.Errorf("delete interface: %w", err)
+	}
+	if reclaimer, ok := xfrm.(XFRMAttachmentReclaimer); ok {
+		plan.add("reclaim_attachment", spec.InterfaceName, FormatScopedTunnelAddress(spec.LocalTunnelAddr, spec.InterfaceName, spec.NetNS))
+		if err := reclaimer.ReclaimAttachment(ctx, spec); err != nil {
+			return plan, fmt.Errorf("reclaim attachment: %w", err)
+		}
 	}
 	return plan, nil
 }

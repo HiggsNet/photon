@@ -420,3 +420,86 @@ func TestApplyReconcileActionPrepareRotateResponderDoesNotInitiate(t *testing.T)
 		t.Fatalf("responder initiated = %+v, want none", ipsecDrv.Initiated)
 	}
 }
+
+func TestApplyReconcileActionAdoptEnsuresAttachmentWithoutInitiating(t *testing.T) {
+	spec := TransportLinkSpec{
+		LocalZone:       "node-a.catofes.",
+		PeerZone:        "node-b.catofes.",
+		OverlayID:       "ipsec-main",
+		Provider:        ProviderStrongSwan,
+		TransportID:     "ipsec-main-ab",
+		InterfaceName:   "phx1",
+		XFRMIfID:        77,
+		LocalTunnelAddr: netip.MustParseAddr("10.99.0.1"),
+		PeerTunnelAddr:  netip.MustParseAddr("10.99.0.2"),
+		ContactPoints: []ContactPoint{{
+			Address:  "198.51.100.20",
+			Family:   FamilyIPv4,
+			IKEPort:  DefaultIKEPort,
+			NATTPort: DefaultNATTPort,
+		}},
+	}
+	ipsecDrv := &DryRunDriver{}
+	xfrmDrv := &DryRunDriver{}
+	plan, err := ApplyReconcileAction(context.Background(), ipsecDrv, xfrmDrv, ReconcileAction{
+		Action: ReconcileActionAdopt,
+		Spec:   &spec,
+	}, NetNSSpec{Kind: NetNSHost})
+	if err != nil {
+		t.Fatalf("ApplyReconcileAction: %v", err)
+	}
+	if len(ipsecDrv.Connections) != 0 || len(ipsecDrv.Initiated) != 0 {
+		t.Fatalf("adopt should not load or initiate, connections=%+v initiated=%+v", ipsecDrv.Connections, ipsecDrv.Initiated)
+	}
+	if len(xfrmDrv.Interfaces) != 1 || xfrmDrv.Interfaces[0].InterfaceName != spec.InterfaceName {
+		t.Fatalf("adopt should EnsureInterface, interfaces=%+v", xfrmDrv.Interfaces)
+	}
+	hasEnsure := false
+	for _, op := range plan.Operations {
+		if op.Action == "ensure_interface" {
+			hasEnsure = true
+		}
+	}
+	if !hasEnsure {
+		t.Fatalf("adopt plan missing ensure_interface: %+v", plan.Operations)
+	}
+}
+
+func TestApplyReconcileActionInstanceTeardownReclaimsStagedAttachmentInNetNS(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	spec := TransportLinkSpec{
+		LocalZone:       "node-a.catofes.",
+		PeerZone:        "node-b.catofes.",
+		OverlayID:       "ipsec-main",
+		Provider:        ProviderStrongSwan,
+		TransportID:     "ipsec-abcd12",
+		InterfaceName:   "phx1",
+		XFRMIfID:        77,
+		LocalTunnelAddr: netip.MustParseAddr("10.99.0.1"),
+		PeerTunnelAddr:  netip.MustParseAddr("10.99.0.2"),
+		NetNS:           "photon",
+	}
+	inst := NewLinkInstance(spec, LinkStateUp, now)
+	inst.StagedIKEName = "ipsec-abcd12-r2"
+	inst.StagedInterfaceName = "phx2"
+	inst.StagedXFRMIfID = 88
+	inst.StagedLocalTunnelAddr = netip.MustParseAddr("10.99.0.3")
+	inst.StagedPeerTunnelAddr = netip.MustParseAddr("10.99.0.4")
+	xfrm := &recordingReclaimDriver{}
+	ipsecDrv := &DryRunDriver{}
+	if _, err := ApplyReconcileAction(context.Background(), ipsecDrv, xfrm, ReconcileAction{
+		Action:   ReconcileActionTeardown,
+		Instance: &inst,
+	}, NetNSSpec{Kind: NetNSName, Name: "photon"}); err != nil {
+		t.Fatalf("ApplyReconcileAction: %v", err)
+	}
+	if len(xfrm.reclaimed) != 2 {
+		t.Fatalf("reclaimed = %+v, want active + staged", xfrm.reclaimed)
+	}
+	if xfrm.reclaimed[0].LocalTunnelAddr != spec.LocalTunnelAddr || xfrm.reclaimed[0].NetNS != "photon" {
+		t.Fatalf("active reclaim = %+v, want netns photon and active addrs", xfrm.reclaimed[0])
+	}
+	if xfrm.reclaimed[1].LocalTunnelAddr != inst.StagedLocalTunnelAddr || xfrm.reclaimed[1].PeerTunnelAddr != inst.StagedPeerTunnelAddr {
+		t.Fatalf("staged reclaim = %+v, want staged tunnel addrs", xfrm.reclaimed[1])
+	}
+}

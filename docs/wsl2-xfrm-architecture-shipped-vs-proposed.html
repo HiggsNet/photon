@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>推荐终态 vs 本轮实际落地</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --bg-card: #151d28;
+      --bg-elev: #1a2332;
+      --line: #2a3545;
+      --text: #e7ecf3;
+      --muted: #8b9bb4;
+      --rec: #5ec4a0;
+      --rec-dim: rgba(94, 196, 160, 0.14);
+      --rec-line: #3a9a7a;
+      --ship: #7aa2f7;
+      --ship-dim: rgba(122, 162, 247, 0.16);
+      --gap: #e8a54b;
+      --gap-dim: rgba(232, 165, 75, 0.16);
+      --ok: #5ec4a0;
+      --leak: #e06c75;
+      --mono: "IBM Plex Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+      --sans: "IBM Plex Sans", "Noto Sans SC", "Segoe UI", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans); }
+    header {
+      padding: 20px 24px 12px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, #18202c 0%, var(--bg) 100%);
+      position: sticky; top: 0; z-index: 5;
+    }
+    h1 { font-size: 18px; margin: 0 0 6px; font-weight: 650; }
+    .lede { color: var(--muted); font-size: 13px; line-height: 1.55; max-width: 980px; }
+    .lede code, code { font-family: var(--mono); font-size: 12px; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; align-items: center; }
+    .seg { display: inline-flex; background: var(--bg-elev); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+    .seg button {
+      appearance: none; border: 0; background: transparent; color: var(--muted);
+      padding: 7px 12px; font: 12.5px/1 var(--sans); cursor: pointer;
+    }
+    .seg button[aria-pressed="true"] { background: #243044; color: var(--text); font-weight: 600; }
+    .hint { font-size: 12px; color: var(--muted); }
+    main { padding: 18px 20px 48px; }
+    .legend { display: flex; flex-wrap: wrap; gap: 12px 18px; margin: 0 0 16px; font-size: 12px; color: var(--muted); }
+    .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -2px; border: 1px solid rgba(255,255,255,.12); }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+    @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
+    .col-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
+    .col h2 { font-size: 15px; margin: 0; }
+    .badge { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; border: 1px solid; }
+    .badge.rec { color: var(--rec); border-color: var(--rec-line); background: var(--rec-dim); }
+    .badge.ship { color: var(--ship); border-color: #4d6eab; background: var(--ship-dim); }
+    .stage { background: var(--bg-card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 12px; }
+    svg.arch { width: 100%; height: auto; display: block; }
+    .node { cursor: pointer; }
+    .node:focus { outline: none; }
+    .callout { margin-top: 12px; border: 1px solid var(--line); border-radius: 10px; background: #121924; padding: 12px 14px; min-height: 132px; }
+    .callout h3 { margin: 0 0 6px; font-size: 13.5px; }
+    .callout p { margin: 0; font-size: 13px; line-height: 1.55; color: var(--muted); }
+    .tag { display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; margin-right: 6px; }
+    .tag.ok { background: var(--rec-dim); color: var(--ok); }
+    .tag.gap { background: var(--gap-dim); color: var(--gap); }
+    .tag.keep { background: var(--ship-dim); color: var(--ship); }
+    .flow { display: none; margin-top: 4px; }
+    .flow.visible { display: block; }
+    pre.tree { margin: 0; font-family: var(--mono); font-size: 12px; line-height: 1.48; background: var(--bg-card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; overflow: auto; }
+    .k-ok { color: var(--ok); }
+    .k-gap { color: var(--gap); }
+    .k-dim { color: var(--muted); }
+    table.diff { width: 100%; border-collapse: collapse; font-size: 13px; background: var(--bg-card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+    table.diff th, table.diff td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; line-height: 1.45; }
+    table.diff th { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); background: #121924; }
+    table.diff tr:last-child td { border-bottom: 0; }
+    table.diff tr[data-id] { cursor: pointer; }
+    table.diff tr[data-id]:hover td { background: #1b2533; }
+    table.diff tr.active td { background: #223044; }
+    .verdict { margin: 18px 0 0; padding: 12px 14px; border-left: 3px solid var(--gap); background: var(--gap-dim); border-radius: 0 8px 8px 0; font-size: 13.5px; line-height: 1.55; }
+    footer { color: var(--muted); font-size: 12px; padding: 16px 4px 0; }
+    .path { font-family: var(--mono); font-size: 11.5px; color: var(--ship); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>推荐终态 vs 本轮实际落地</h1>
+    <p class="lede">
+      推荐的是两个 adapter 类型，运行期零分支。本轮做的是收口泄漏（1+2），<strong>刻意没拆类型</strong>。
+      知识已经从 planner / owner / daemon 收回 <code>SystemXFRMDriver</code> 内部，但内部仍是 <code>if policyBackend()</code>。
+    </p>
+    <div class="toolbar">
+      <div class="seg" role="tablist">
+        <button type="button" id="tab-arch" aria-pressed="true">架构对照</button>
+        <button type="button" id="tab-tree">还剩哪些 if</button>
+        <button type="button" id="tab-table">逐层差异</button>
+      </div>
+      <span class="hint">点色块看这一层：已对齐 / 还差什么</span>
+    </div>
+  </header>
+  <main>
+    <div class="legend">
+      <span><i class="sw" style="background:#1f6b52"></i>已按推荐落地</span>
+      <span><i class="sw" style="background:#8a5a20"></i>本轮有意留下的缺口</span>
+      <span><i class="sw" style="background:#2a3a55"></i>共享、本来就不变</span>
+    </div>
+
+    <div id="view-arch" class="grid">
+      <div class="col">
+        <div class="col-head">
+          <h2>推荐终态（第 4 步）</h2>
+          <span class="badge rec">proposed</span>
+        </div>
+        <div class="stage">
+          <svg class="arch" viewBox="0 0 420 520" role="img" aria-label="推荐终态">
+            <g class="node" data-id="yaml" tabindex="0">
+              <rect x="50" y="16" width="320" height="40" rx="8" fill="#2a3a55" stroke="#7aa2f7"/>
+              <text x="210" y="41" text-anchor="middle" fill="#d7e4ff" font-size="13" font-weight="650">config.yaml · 只在 factory 读一次</text>
+            </g>
+            <line x1="210" y1="56" x2="210" y2="74" stroke="#7aa2f7"/>
+            <g class="node" data-id="factory" tabindex="0">
+              <rect x="70" y="74" width="280" height="36" rx="8" fill="#1f6b52" stroke="#5ec4a0"/>
+              <text x="210" y="97" text-anchor="middle" fill="#d6fff0" font-size="12" font-weight="650">newXFRMDriverForBackend() → XFRMDriver</text>
+            </g>
+            <line x1="130" y1="110" x2="130" y2="128" stroke="#5ec4a0"/>
+            <line x1="290" y1="110" x2="290" y2="128" stroke="#5ec4a0"/>
+            <g class="node" data-id="adapters" tabindex="0">
+              <rect x="28" y="128" width="168" height="56" rx="8" fill="#1f6b52" stroke="#5ec4a0"/>
+              <text x="112" y="152" text-anchor="middle" fill="#d6fff0" font-size="12" font-weight="650">InterfaceXFRM</text>
+              <text x="112" y="170" text-anchor="middle" fill="#b6ead8" font-size="10">独立类型 · phx* + if_id</text>
+            </g>
+            <g class="node" data-id="adapters" tabindex="0">
+              <rect x="224" y="128" width="168" height="56" rx="8" fill="#1f6b52" stroke="#5ec4a0"/>
+              <text x="308" y="152" text-anchor="middle" fill="#d6fff0" font-size="12" font-weight="650">PolicyXFRM</text>
+              <text x="308" y="170" text-anchor="middle" fill="#b6ead8" font-size="10">独立类型 · lo + underlay 路由</text>
+            </g>
+            <line x1="112" y1="184" x2="210" y2="206" stroke="#5ec4a0"/>
+            <line x1="308" y1="184" x2="210" y2="206" stroke="#5ec4a0"/>
+            <g class="node" data-id="iface" tabindex="0">
+              <rect x="50" y="206" width="320" height="48" rx="8" fill="#1f6b52" stroke="#5ec4a0"/>
+              <text x="210" y="226" text-anchor="middle" fill="#d6fff0" font-size="13" font-weight="650">XFRMDriver 接口</text>
+              <text x="210" y="244" text-anchor="middle" fill="#b6ead8" font-size="10">运行期零分支 · 调用方不知道 backend 这个词</text>
+            </g>
+            <line x1="210" y1="254" x2="210" y2="272" stroke="#3d4f6a"/>
+            <g class="node" data-id="callers" tabindex="0">
+              <rect x="40" y="272" width="340" height="48" rx="8" fill="#243044" stroke="#3d4f6a"/>
+              <text x="210" y="292" text-anchor="middle" fill="#c5d0e0" font-size="12" font-weight="650">planner · instance · daemon · owner</text>
+              <text x="210" y="310" text-anchor="middle" fill="#8b9bb4" font-size="10">InterfaceName = phx&lt;id&gt; · 不读 xfrm_backend</text>
+            </g>
+            <line x1="210" y1="320" x2="210" y2="338" stroke="#3d4f6a"/>
+            <g class="node" data-id="sswan" tabindex="0">
+              <rect x="40" y="338" width="340" height="40" rx="8" fill="#1f6b52" stroke="#5ec4a0"/>
+              <text x="210" y="363" text-anchor="middle" fill="#d6fff0" font-size="12" font-weight="650">StrongSwanDriver 构造时决定是否剥 if_id</text>
+            </g>
+            <text x="210" y="404" text-anchor="middle" fill="#5ec4a0" font-size="12">xfrm_backend 只在两个构造函数出现</text>
+            <text x="210" y="424" text-anchor="middle" fill="#8b9bb4" font-size="11">删除 PolicyXFRM → interface 路径完全复原</text>
+          </svg>
+        </div>
+        <div class="callout" id="rec-detail">
+          <h3><span class="tag keep">终态</span>点左边色块</h3>
+          <p>两个 adapter 共用同一接口。lo / 剪枝 / 路由 / multicast / if_id 都是实现细节。</p>
+        </div>
+      </div>
+
+      <div class="col">
+        <div class="col-head">
+          <h2>本轮实际（1+2，停在拆类型前）</h2>
+          <span class="badge ship">shipped</span>
+        </div>
+        <div class="stage">
+          <svg class="arch" viewBox="0 0 420 520" role="img" aria-label="本轮落地">
+            <g class="node" data-id="yaml" tabindex="0">
+              <rect x="50" y="16" width="320" height="40" rx="8" fill="#8a5a20" stroke="#e8a54b"/>
+              <text x="210" y="33" text-anchor="middle" fill="#ffe9c4" font-size="13" font-weight="650">config.yaml 仍复制到三处</text>
+              <text x="210" y="49" text-anchor="middle" fill="#f3d7a5" font-size="10">LinkGroupSpec + StrongSwanDriver + SystemXFRMDriver</text>
+            </g>
+            <line x1="210" y1="56" x2="210" y2="74" stroke="#e8a54b"/>
+            <g class="node" data-id="factory" tabindex="0">
+              <rect x="50" y="74" width="320" height="40" rx="8" fill="#8a5a20" stroke="#e8a54b"/>
+              <text x="210" y="91" text-anchor="middle" fill="#ffe9c4" font-size="12" font-weight="650">newXFRMDriverForBackend 设 Backend 字段</text>
+              <text x="210" y="107" text-anchor="middle" fill="#f3d7a5" font-size="10">返回的仍是同一个 SystemXFRMDriver 类型</text>
+            </g>
+            <line x1="210" y1="114" x2="210" y2="132" stroke="#e8a54b"/>
+            <g class="node" data-id="adapters" tabindex="0">
+              <rect x="40" y="132" width="340" height="70" rx="8" fill="#8a5a20" stroke="#e8a54b"/>
+              <text x="210" y="154" text-anchor="middle" fill="#ffe9c4" font-size="13" font-weight="650">SystemXFRMDriver + if policyBackend()</text>
+              <text x="210" y="172" text-anchor="middle" fill="#f3d7a5" font-size="10">Ensure / Assign / Delete / Inspect / batch 内部仍分支</text>
+              <text x="210" y="188" text-anchor="middle" fill="#f3d7a5" font-size="10">observedInterfaceName() → "lo"</text>
+            </g>
+            <line x1="210" y1="202" x2="210" y2="220" stroke="#5ec4a0"/>
+            <g class="node" data-id="iface" tabindex="0">
+              <rect x="50" y="220" width="320" height="48" rx="8" fill="#1f6b52" stroke="#5ec4a0"/>
+              <text x="210" y="240" text-anchor="middle" fill="#d6fff0" font-size="13" font-weight="650">XFRMDriver 接口（未加方法）</text>
+              <text x="210" y="256" text-anchor="middle" fill="#b6ead8" font-size="10">路由已是 Ensure 不变量 · 删掉 PeerRouteInstaller</text>
+            </g>
+            <line x1="210" y1="268" x2="210" y2="286" stroke="#5ec4a0"/>
+            <g class="node" data-id="callers" tabindex="0">
+              <rect x="40" y="286" width="340" height="48" rx="8" fill="#1f6b52" stroke="#5ec4a0"/>
+              <text x="210" y="306" text-anchor="middle" fill="#d6fff0" font-size="12" font-weight="650">planner / owner / daemon 已收回</text>
+              <text x="210" y="322" text-anchor="middle" fill="#b6ead8" font-size="10">phx* 资源名 · SharedAttachment · 不再读 config</text>
+            </g>
+            <line x1="210" y1="334" x2="210" y2="352" stroke="#e8a54b"/>
+            <g class="node" data-id="sswan" tabindex="0">
+              <rect x="40" y="352" width="340" height="40" rx="8" fill="#8a5a20" stroke="#e8a54b"/>
+              <text x="210" y="377" text-anchor="middle" fill="#ffe9c4" font-size="12" font-weight="650">StrongSwanDriver.XFRMBackend 字段仍在，load 时剥 if_id</text>
+            </g>
+            <text x="210" y="418" text-anchor="middle" fill="#e8a54b" font-size="12">泄漏已停在 driver 内部 · 类型还是一个</text>
+            <text x="210" y="438" text-anchor="middle" fill="#8b9bb4" font-size="11">这正是文档写的「为第 4 步铺路，不先拆类型」</text>
+          </svg>
+        </div>
+        <div class="callout" id="ship-detail">
+          <h3><span class="tag gap">落地</span>点右边色块</h3>
+          <p>上层已经按推荐形状调用。差的是 adapter 还没从 flag 变成两个类型。</p>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-tree" class="flow">
+      <p class="hint" style="margin:0 0 10px">driver 内部还活着的分支。绿 = 本轮已消掉；橙 = 留给第 4 步。</p>
+      <div class="grid">
+        <div>
+          <h2 style="font-size:14px;margin:0 0 8px">推荐：运行期没有这些 if</h2>
+          <pre class="tree"><span class="k-ok">EnsureInterface          // 两个类型各写各的</span>
+<span class="k-ok">AssignAddress            // PolicyXFRM 直接写 lo</span>
+<span class="k-ok">DeleteInterface          // PolicyXFRM 直接 return nil</span>
+<span class="k-ok">InspectLink              // PolicyXFRM 直接看 lo</span>
+<span class="k-ok">InspectLinks             // 同上</span>
+<span class="k-ok">linkStateMatchesSpec     // 看 SharedAttachment 字段</span>
+<span class="k-ok">EnsureObservedInterfaces</span>
+<span class="k-ok">StrongSwanDriver.load    // 构造时已决定报文形状</span>
+
+<span class="k-dim">xfrm_backend 只出现在：</span>
+<span class="k-ok">  newXFRMDriverForBackend</span>
+<span class="k-ok">  new StrongSwanDriver{…}</span></pre>
+        </div>
+        <div>
+          <h2 style="font-size:14px;margin:0 0 8px">本轮：if 从 8 层收到 1 层</h2>
+          <pre class="tree"><span class="k-ok">planner                  // 不再 override 成 lo</span>
+<span class="k-ok">owner.Validate           // phx* 能过</span>
+<span class="k-ok">daemon.policyXFRMBackend // 已删，看 SharedAttachment</span>
+<span class="k-ok">XFRMPeerRouteInstaller   // 已删，Ensure 自带路由</span>
+<span class="k-ok">Adopt                    // 走 EnsureInterface</span>
+
+<span class="k-gap">SystemXFRMDriver.policyBackend() 仍被：</span>
+<span class="k-gap">  EnsureInterface</span>
+<span class="k-gap">  AssignAddress / DeleteInterface</span>
+<span class="k-gap">  InspectLink / InspectLinks</span>
+<span class="k-gap">  observedInterfaceName</span>
+<span class="k-gap">  EnsureObservedInterfaces</span>
+<span class="k-gap">StrongSwanDriver.XFRMBackend</span>
+<span class="k-gap">LinkGroupSpec.XFRMBackend  // config 仍写入，planner 已不用</span></pre>
+        </div>
+      </div>
+    </div>
+
+    <div id="view-table" class="flow">
+      <table class="diff">
+        <thead>
+          <tr><th style="width:22%">层</th><th>推荐</th><th>本轮实际</th></tr>
+        </thead>
+        <tbody>
+          <tr data-id="callers">
+            <td>planner / spec 名</td>
+            <td>永远 <code>phx&lt;id&gt;</code></td>
+            <td><span class="tag ok">对齐</span>删掉 <code>applyPolicyDeviceOverride</code></td>
+          </tr>
+          <tr data-id="callers">
+            <td>owner / teardown</td>
+            <td>资源名可校验</td>
+            <td><span class="tag ok">对齐</span>lo 不再进入 instance</td>
+          </tr>
+          <tr data-id="iface">
+            <td>对端路由</td>
+            <td>Ensure 不变量</td>
+            <td><span class="tag ok">对齐</span>删掉 optional 接口；Adopt 也走 Ensure；错误不再吞</td>
+          </tr>
+          <tr data-id="callers">
+            <td>daemon 匹配</td>
+            <td>只消费 Inspect 结果</td>
+            <td><span class="tag ok">对齐</span>看 <code>SharedAttachment</code>，不读 config</td>
+          </tr>
+          <tr data-id="sswan">
+            <td>VICI if_id</td>
+            <td>构造时决定</td>
+            <td><span class="tag gap">半对齐</span>仍是 driver 字段 + load 时 <code>if policy</code></td>
+          </tr>
+          <tr data-id="adapters">
+            <td>XFRM 实现</td>
+            <td>两个类型</td>
+            <td><span class="tag gap">未做</span>一个类型 + <code>Backend</code> flag + 内部 if</td>
+          </tr>
+          <tr data-id="yaml">
+            <td><code>xfrm_backend</code> 出现次数</td>
+            <td>两个构造函数</td>
+            <td><span class="tag gap">仍多</span>config → group + 两个 driver 字段</td>
+          </tr>
+          <tr data-id="factory">
+            <td>factory</td>
+            <td>返回不同 adapter</td>
+            <td><span class="tag gap">未做</span>只赋值 <code>driver.Backend</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="verdict">
+      <strong>一句话：</strong>调用面已经是推荐形状（phx 资源名、Ensure 含路由、daemon 不读 backend）。
+      实现面还是「一个 driver 里的 flag」，不是「两个 adapter」。
+      这是文档里写明的停点——第 4 步拆类型时，调用方不用再改。
+    </div>
+    <footer>
+      源码：<span class="path">pkg/transport/ipsec/{xfrm_exec.go,xfrm_policy.go,xfrm_batch.go,strongswan.go}</span>
+      · 决策：<span class="path">docs/wsl2-action-plan-tmp.md</span>
+    </footer>
+  </main>
+  <script>
+    const rec = {
+      yaml: { title: "YAML 只喂 factory", tag: "keep", body: "xfrm_backend 是构造参数，不是运行期对象上的字段。netns 选择与数据面选择分开。" },
+      factory: { title: "真 seam 的位置", tag: "ok", body: "两个 adapter 才构成真 seam。factory 是唯一知道这个词的地方。" },
+      adapters: { title: "InterfaceXFRM | PolicyXFRM", tag: "ok", body: "各写各的 Ensure/Assign/Inspect。删除 PolicyXFRM 后 interface 路径应完全复原。" },
+      iface: { title: "小接口，深行为", tag: "ok", body: "语义是「给这条 link 一个本地 L3 附着点」。路由、lo、multicast 都不出现在签名里。" },
+      callers: { title: "上层无知", tag: "ok", body: "planner 不 override。owner 继续校验 phx。daemon 不读 backend。" },
+      sswan: { title: "VICI 是内部 seam", tag: "ok", body: "StrongSwan driver 构造时拿到同一选择，load 前剥 if_id。不必让 LinkGroup 再传一遍。" },
+    };
+    const ship = {
+      yaml: { title: "仍复制到三处", tag: "gap", body: "config 写入 LinkGroupSpec、StrongSwanDriver.XFRMBackend、SystemXFRMDriver.Backend。planner 已不再读 group 上的字段，但字段还在。" },
+      factory: { title: "factory 只设字段", tag: "gap", body: "newXFRMDriverForBackend 返回同一个类型，Backend=policy。没有 InterfaceXFRM / PolicyXFRM。" },
+      adapters: { title: "一个类型 + 内部 if", tag: "gap", body: "Ensure/Assign/Delete/Inspect/batch 全是 if policyBackend()。知识在 driver 里，但不是两个 adapter。这是本轮明确不做的第 4 步。" },
+      iface: { title: "接口已按推荐用", tag: "ok", body: "没加新方法。路由收进 Ensure，删掉 XFRMPeerRouteInstaller。Adopt 走 EnsureInterface，不再空操作。" },
+      callers: { title: "泄漏已从上层拿走", tag: "ok", body: "InterfaceName 保持 phx*。daemon 看 SharedAttachment。owner 能校验。这是本轮真正交付的部分。" },
+      sswan: { title: "load 时仍分支", tag: "gap", body: "applyPolicyChildSA 合理，但还挂在运行期字段上，不是构造期选定的报文策略。" },
+    };
+    function card(el, rec) {
+      el.innerHTML = `<h3><span class="tag ${rec.tag}">${rec.tag === "ok" ? "对齐" : rec.tag === "gap" ? "缺口" : "终态"}</span>${rec.title}</h3><p>${rec.body}</p>`;
+    }
+    function activate(id) {
+      document.querySelectorAll(".node rect").forEach(r => r.setAttribute("stroke-width", "1"));
+      document.querySelectorAll(`.node[data-id="${id}"] rect`).forEach(r => r.setAttribute("stroke-width", "2.4"));
+      if (rec[id]) card(document.getElementById("rec-detail"), rec[id]);
+      if (ship[id]) card(document.getElementById("ship-detail"), ship[id]);
+    }
+    document.querySelectorAll(".node").forEach(n => {
+      n.addEventListener("click", () => activate(n.getAttribute("data-id")));
+      n.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activate(n.getAttribute("data-id")); }});
+    });
+    const views = { arch: document.getElementById("view-arch"), tree: document.getElementById("view-tree"), table: document.getElementById("view-table") };
+    const tabs = { arch: document.getElementById("tab-arch"), tree: document.getElementById("tab-tree"), table: document.getElementById("tab-table") };
+    function show(name) {
+      views.arch.style.display = name === "arch" ? "grid" : "none";
+      views.tree.classList.toggle("visible", name === "tree");
+      views.table.classList.toggle("visible", name === "table");
+      Object.entries(tabs).forEach(([k, b]) => b.setAttribute("aria-pressed", k === name ? "true" : "false"));
+    }
+    tabs.arch.onclick = () => show("arch");
+    tabs.tree.onclick = () => show("tree");
+    tabs.table.onclick = () => show("table");
+    document.querySelectorAll("tr[data-id]").forEach(tr => {
+      tr.addEventListener("click", () => {
+        document.querySelectorAll("tr[data-id]").forEach(x => x.classList.remove("active"));
+        tr.classList.add("active");
+        show("arch");
+        activate(tr.getAttribute("data-id"));
+      });
+    });
+  </script>
+</body>
+</html>

@@ -269,8 +269,22 @@ func TestBuildDesiredState_AsymmetricTransitInvalidAcceptedBeforeDrop(t *testing
 			t.Errorf("early asymmetric rule %q not found", comment)
 		}
 	}
-	if desired.InputRules[0].Comment != "invalid drop" {
-		t.Fatalf("input first rule = %+v, want INVALID drop unchanged", desired.InputRules[0])
+	// Overlay INPUT starts with mesh-authorized INVALID accept (when mesh
+	// prefixes exist), then the generic invalid drop. Same ct-asymmetric
+	// problem as FORWARD transit; not an xfrm_backend switch.
+	meshInvalidIdx := slices.IndexFunc(desired.InputRules, func(rule Rule) bool {
+		return rule.Comment == "xfrm mesh invalid accept"
+	})
+	invalidDropInput := slices.IndexFunc(desired.InputRules, func(rule Rule) bool {
+		return rule.Comment == "invalid drop"
+	})
+	if meshInvalidIdx >= 0 {
+		if invalidDropInput < 0 || meshInvalidIdx >= invalidDropInput {
+			t.Fatalf("mesh invalid accept (%d) must be before invalid drop (%d)", meshInvalidIdx, invalidDropInput)
+		}
+	}
+	if invalidDropInput < 0 {
+		t.Fatalf("input INVALID drop not found")
 	}
 	if desired.ForwardRules[invalidDrop+1].Comment != "established related" {
 		t.Fatalf("rule after INVALID drop = %+v, want established/related", desired.ForwardRules[invalidDrop+1])

@@ -151,8 +151,11 @@ func TestDaemonStateChangedAdoptsObservedIPsecSA(t *testing.T) {
 			t.Fatalf("debug links output missing %q:\n%s", want, output)
 		}
 	}
-	if len(driver.Connections) != 0 || len(driver.Interfaces) != 0 {
-		t.Fatalf("adopt maintenance = connections:%d interfaces:%+v, want no redundant apply when observed state matches", len(driver.Connections), driver.Interfaces)
+	if len(driver.Connections) != 0 {
+		t.Fatalf("adopt should not load connections, got %+v", driver.Connections)
+	}
+	if len(driver.Interfaces) != 1 || driver.Interfaces[0].InterfaceName != spec.InterfaceName {
+		t.Fatalf("adopt should EnsureInterface, interfaces=%+v", driver.Interfaces)
 	}
 }
 
@@ -218,8 +221,11 @@ func TestDaemonStartupRecoversIPsecLinkState(t *testing.T) {
 	if latest.IPsecReconcile == nil || len(latest.IPsecReconcile.Actions) != 1 || latest.IPsecReconcile.Actions[0].Action != ipsec.ReconcileActionAdopt {
 		t.Fatalf("startup reconcile = %+v, want adopt", latest.IPsecReconcile)
 	}
-	if len(driver.Connections) != 0 || len(driver.Interfaces) != 0 {
-		t.Fatalf("startup adopt maintenance = connections:%d interfaces:%+v, want no redundant apply when observed state matches", len(driver.Connections), driver.Interfaces)
+	if len(driver.Connections) != 0 {
+		t.Fatalf("startup adopt should not load connections, got %+v", driver.Connections)
+	}
+	if len(driver.Interfaces) != 1 || driver.Interfaces[0].InterfaceName != spec.InterfaceName {
+		t.Fatalf("startup adopt should EnsureInterface, interfaces=%+v", driver.Interfaces)
 	}
 }
 

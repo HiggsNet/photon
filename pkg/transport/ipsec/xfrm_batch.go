@@ -3,6 +3,7 @@ package ipsec
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/netip"
 	"sort"
@@ -147,9 +148,10 @@ func (d SystemXFRMDriver) inspectLinksInNamespace(ctx context.Context, netns Net
 	interfaceNames := make([]string, 0, len(specs))
 	seenInterfaces := make(map[string]bool, len(specs))
 	for _, spec := range specs {
-		if _, exists := linksByName[spec.InterfaceName]; exists && !seenInterfaces[spec.InterfaceName] {
-			seenInterfaces[spec.InterfaceName] = true
-			interfaceNames = append(interfaceNames, spec.InterfaceName)
+		observed := d.observedInterfaceName(spec.InterfaceName)
+		if _, exists := linksByName[observed]; exists && !seenInterfaces[observed] {
+			seenInterfaces[observed] = true
+			interfaceNames = append(interfaceNames, observed)
 		}
 	}
 	sort.Strings(interfaceNames)
@@ -166,8 +168,10 @@ func (d SystemXFRMDriver) inspectLinksInNamespace(ctx context.Context, netns Net
 			NamespaceForwardingKnown: true,
 			NamespaceForwarding:      namespaceForwarding,
 		}
-		link, exists := linksByName[spec.InterfaceName]
+		observed := d.observedInterfaceName(spec.InterfaceName)
+		link, exists := linksByName[observed]
 		state.InterfaceExists = exists
+		state.SharedAttachment = d.policyBackend()
 		if exists {
 			state.FlagsKnown = link.Flags != nil
 			for _, flag := range link.Flags {
@@ -181,8 +185,8 @@ func (d SystemXFRMDriver) inspectLinksInNamespace(ctx context.Context, netns Net
 			state.IPv6AddrGenModeKnown = link.IPv6AddrGenMode != ""
 			state.IPv6AddrGenDisabled = link.IPv6AddrGenMode == "none"
 			state.InterfaceForwardingKnown = true
-			state.InterfaceForwarding = interfaceForwarding[spec.InterfaceName]
-			state.Addresses = append([]netip.Prefix(nil), addressesByName[spec.InterfaceName]...)
+			state.InterfaceForwarding = interfaceForwarding[observed]
+			state.Addresses = append([]netip.Prefix(nil), addressesByName[observed]...)
 		}
 		states[i] = state
 	}
@@ -252,6 +256,7 @@ func (d SystemXFRMDriver) EnsureObservedInterfaces(ctx context.Context, observed
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	var sharedErrs []error
 	for _, key := range keys {
 		items := groups[key]
 		if len(items) == 0 {
@@ -271,6 +276,15 @@ func (d SystemXFRMDriver) EnsureObservedInterfaces(ctx context.Context, observed
 			if !state.NamespaceExists || !state.InterfaceExists {
 				if err := d.EnsureInterface(ctx, item.Spec); err != nil {
 					return err
+				}
+				continue
+			}
+			if state.SharedAttachment {
+				// lo is always present; re-run Ensure so the underlay peer
+				// route is restored if it drifted. Do not touch lo flags.
+				// A probe/replace failure on one link must not skip the rest.
+				if err := d.EnsureInterface(ctx, item.Spec); err != nil {
+					sharedErrs = append(sharedErrs, fmt.Errorf("link %s: %w", item.Spec.LinkID, err))
 				}
 				continue
 			}
@@ -296,7 +310,7 @@ func (d SystemXFRMDriver) EnsureObservedInterfaces(ctx context.Context, observed
 			}
 		}
 	}
-	return nil
+	return errors.Join(sharedErrs...)
 }
 
 func xfrmBatchNetNSKey(netns NetNSSpec) string {

@@ -84,8 +84,10 @@ func TestIPTablesDriver_UsesGenerationIPSetsForLargePrefixSets(t *testing.T) {
 		t.Fatalf("first Apply: %v", err)
 	}
 
-	if len(runner.ipsets) != 1 {
-		t.Fatalf("managed ipsets = %v, want one shared source/destination set", runner.ipsets)
+	// Two ipsets are expected: one for the transit source/destination match,
+	// one for the INPUT chain's mesh invalid accept source match.
+	if len(runner.ipsets) != 2 {
+		t.Fatalf("managed ipsets = %v, want source + destination sets", runner.ipsets)
 	}
 	for name, members := range runner.ipsetMembers {
 		if len(members) != 30 {
@@ -117,7 +119,8 @@ func TestIPTablesDriver_UsesGenerationIPSetsForLargePrefixSets(t *testing.T) {
 	if _, err := driver.Apply(context.Background(), plan, desired); err != nil {
 		t.Fatalf("second Apply: %v", err)
 	}
-	if len(runner.ipsets) != 1 {
+	// Two ipsets after cutover: transit + INPUT mesh invalid accept.
+	if len(runner.ipsets) != 2 {
 		t.Fatalf("ipsets after generation cutover = %v, want only active generation", runner.ipsets)
 	}
 	for name := range firstSets {

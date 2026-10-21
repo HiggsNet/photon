@@ -254,7 +254,7 @@ firewall:
 - 每个 hook point 是字符串列表，可以写多条规则，严格保持 YAML 顺序。
 - overlay 支持 `pre_input` / `post_input`、`pre_forward` / `post_forward`、`pre_output` / `post_output`。
 - host 支持 `host_pre_input` / `host_post_input` 和 `host_pre_prerouting` / `host_post_prerouting`。
-- `pre_input` 位于 invalid drop 和 loopback accept 之后；`pre_forward` 位于 scoped asymmetric-transit INVALID accept、通用 invalid drop 和 established/related accept 之后；`pre_output` 位于 Photon output 规则之前。所有 `post_*` 都位于 Photon 生成规则之后、terminal default verdict 之前。
+- `pre_input` 位于 mesh-authorized INVALID accept、通用 invalid drop 和 loopback accept 之后；`pre_forward` 位于 scoped asymmetric-transit INVALID accept、通用 invalid drop 和 established/related accept 之后；`pre_output` 位于 Photon output 规则之前。所有 `post_*` 都位于 Photon 生成规则之后、terminal default verdict 之前。
 - nft 表达式随 Photon 规则进入同一个 `nft -f` 事务，失败时旧 table 保持生效。
 - iptables 表达式先写入 inactive generation；IPv4/IPv6 都准备完成后才切换内置链 jump，切换失败会尝试回滚已激活的新 jump。
 - 表达式只能是当前 chain 的 rule body。配置会拒绝换行、分号、shell 元字符、nft object command，以及 iptables 的 `-A/-I/-D/-N/-X/-F/-P/-t` 等规则/chain/table 管理参数；命令始终以 argv 执行，不经过 shell。
@@ -310,6 +310,7 @@ overlay 实例生成 `input`、`forward`、`output` 三条 filter chain。
 #### input chain（按生成顺序）
 
 ```text
+0. mesh-authorized INVALID accept（仅当存在 MeshAuthorized 前缀）
 1. invalid drop (ct state)
 2. loopback accept
 3. pre_input hook
@@ -321,6 +322,8 @@ overlay 实例生成 `input`、`forward`、`output` 三条 filter chain。
 9. post_input hook
 10. default policy (drop / accept)
 ```
+
+xfrm 解封装后的 overlay 入站包，对端网关常常看不到反向握手，conntrack 会标成 `INVALID`。input 在通用 invalid drop 之前放行 **mesh-authorized 源** 的这类包，否则 TCP/UDP 会被静默丢掉。这是 overlay INPUT 的流量语义，与 `xfrm_backend`、WSL2 无关；FORWARD 上对应的是 scoped asymmetric-transit INVALID accept。
 
 #### forward chain
 
@@ -336,7 +339,7 @@ overlay 实例生成 `input`、`forward`、`output` 三条 filter chain。
 9. default policy (drop / accept)
 ```
 
-非对称路由下，中间节点可能看到 SYN 及后续 ACK/data，却看不到反方向的 SYN-ACK，因而把后续包标成 `INVALID`。前置例外只放行原本已由接口和授权前缀约束的 transit 流量；input chain 与其他 forward 流量仍先执行通用 `INVALID drop`。
+非对称路由下，中间节点可能看到 SYN 及后续 ACK/data，却看不到反方向的 SYN-ACK，因而把后续包标成 `INVALID`。FORWARD 的前置例外只放行原本已由接口和授权前缀约束的 transit 流量；其余 forward 流量仍先执行通用 `INVALID drop`。INPUT 的 mesh-authorized INVALID accept 是同一类问题在本机交付路径上的对应规则。
 
 #### output chain
 

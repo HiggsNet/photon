@@ -2044,13 +2044,24 @@ func newConfiguredIPsecDrivers(config ipsecConfig, logConfig func(event string, 
 				LogConfig:             logConfig,
 				InitiateAsync:         true,
 				InitiateClientFactory: initiateClientFactory,
+				XFRMBackend:           ipsec.XFRMBackend(config.XFRMBackend),
 			},
-			xfrmDriver: ipsec.NewSystemXFRMDriver(config.DefaultNetNS),
+			xfrmDriver: newXFRMDriverForBackend(config),
 			close:      client.Close,
 		}, nil
 	default:
 		return configuredIPsecDrivers{}, fmt.Errorf("unsupported ipsec driver %q", driver)
 	}
+}
+
+func newXFRMDriverForBackend(config ipsecConfig) ipsec.SystemXFRMDriver {
+	driver := ipsec.NewSystemXFRMDriver(config.DefaultNetNS)
+	backend, err := ipsec.NormalizeXFRMBackend(config.XFRMBackend)
+	if err != nil {
+		backend = ipsec.XFRMBackendInterface
+	}
+	driver.Backend = backend
+	return driver
 }
 
 func (d *DaemonService) installConfiguredIPsecDrivers(drivers configuredIPsecDrivers) error {

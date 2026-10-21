@@ -1,0 +1,24 @@
+# Photon WSL2 client charon configuration.
+#
+# Key settings for WSL2:
+#   install_routes = no   Photon manages routes; charon must not interfere.
+#   process_route = no    Prevents charon from installing bypass policies for
+#                         routed subnets (which would block mesh traffic).
+#   port / port_nat_t     Non-default ports avoid conflicts with Windows
+#                         IKEEXT (which occupies 500/4500 in mirrored mode).
+#                         In NAT mode, 500/4500 are safe but non-default
+#                         ports are recommended for consistency.
+
+charon {
+	install_routes = no
+	process_route = no
+	port = {{CHARON_PORT}}
+	port_nat_t = {{CHARON_NATT_PORT}}
+	make_before_break = yes
+
+	plugins {
+		vici {
+			socket = unix://{{VICI_SOCKET_PATH}}
+		}
+	}
+}

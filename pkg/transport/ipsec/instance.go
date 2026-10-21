@@ -1426,20 +1426,28 @@ func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDrive
 			return ApplyPlan{}, fmt.Errorf("refuse unmanaged teardown: %w", err)
 		}
 		connSpec := TransportLinkSpec{
-			PeerZone:      action.Instance.PeerZone,
-			TransportID:   action.Instance.IKEName,
-			InterfaceName: action.Instance.InterfaceName,
-			XFRMIfID:      action.Instance.XFRMIfID,
+			PeerZone:        action.Instance.PeerZone,
+			TransportID:     action.Instance.IKEName,
+			InterfaceName:   action.Instance.InterfaceName,
+			XFRMIfID:        action.Instance.XFRMIfID,
+			LocalTunnelAddr: action.Instance.LocalTunnelAddr,
+			PeerTunnelAddr:  action.Instance.PeerTunnelAddr,
+			NetNS:           netns.Target(),
 		}
 		if _, err := TeardownConnectionOnly(ctx, ipsec, connSpec); err != nil {
 			return ApplyPlan{}, err
 		}
-		if action.Instance.StagedIKEName != "" {
-			stagedSpec := TransportLinkSpec{
-				PeerZone:      action.Instance.PeerZone,
-				TransportID:   action.Instance.StagedIKEName,
-				InterfaceName: firstNonEmptyString(action.Instance.StagedInterfaceName, action.Instance.InterfaceName),
-				XFRMIfID:      firstNonZeroUint32(action.Instance.StagedXFRMIfID, action.Instance.XFRMIfID),
+		var stagedSpec TransportLinkSpec
+		hasStaged := action.Instance.StagedIKEName != ""
+		if hasStaged {
+			stagedSpec = TransportLinkSpec{
+				PeerZone:        action.Instance.PeerZone,
+				TransportID:     action.Instance.StagedIKEName,
+				InterfaceName:   firstNonEmptyString(action.Instance.StagedInterfaceName, action.Instance.InterfaceName),
+				XFRMIfID:        firstNonZeroUint32(action.Instance.StagedXFRMIfID, action.Instance.XFRMIfID),
+				LocalTunnelAddr: action.Instance.StagedLocalTunnelAddr,
+				PeerTunnelAddr:  action.Instance.StagedPeerTunnelAddr,
+				NetNS:           netns.Target(),
 			}
 			if _, err := TeardownConnectionOnly(ctx, ipsec, stagedSpec); err != nil {
 				return ApplyPlan{}, err
@@ -1460,6 +1468,16 @@ func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDrive
 		if err := xfrm.DeleteInterface(ctx, action.Instance.InterfaceName); err != nil {
 			return ApplyPlan{}, fmt.Errorf("delete interface: %w", err)
 		}
+		if reclaimer, ok := xfrm.(XFRMAttachmentReclaimer); ok {
+			if err := reclaimer.ReclaimAttachment(ctx, connSpec); err != nil {
+				return ApplyPlan{}, fmt.Errorf("reclaim attachment: %w", err)
+			}
+			if hasStaged {
+				if err := reclaimer.ReclaimAttachment(ctx, stagedSpec); err != nil {
+					return ApplyPlan{}, fmt.Errorf("reclaim staged attachment: %w", err)
+				}
+			}
+		}
 		return ApplyPlan{}, nil
 	case ReconcileActionCleanupDuplicateSA:
 		if action.SAUniqueID == 0 {
@@ -1475,7 +1493,23 @@ func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDrive
 			return plan, fmt.Errorf("terminate duplicate SA #%d: %w", action.SAUniqueID, err)
 		}
 		return plan, nil
-	case ReconcileActionAdopt, ReconcileActionNoop:
+	case ReconcileActionAdopt:
+		if action.Spec == nil {
+			return ApplyPlan{}, nil
+		}
+		plan := ApplyPlan{}
+		plan.add("ensure_interface", action.Spec.InterfaceName, fmt.Sprintf("if_id=%d netns=%s", action.Spec.XFRMIfID, action.Spec.NetNS))
+		if err := xfrm.EnsureInterface(ctx, *action.Spec); err != nil {
+			return plan, fmt.Errorf("ensure interface: %w", err)
+		}
+		if action.Spec.LocalTunnelAddr.IsValid() {
+			plan.add("assign_address", action.Spec.InterfaceName, FormatScopedTunnelAddress(action.Spec.LocalTunnelAddr, action.Spec.InterfaceName, action.Spec.NetNS))
+			if err := xfrm.AssignAddress(ctx, *action.Spec, tunnelAddressPrefix(action.Spec.LocalTunnelAddr)); err != nil {
+				return plan, fmt.Errorf("assign address: %w", err)
+			}
+		}
+		return plan, nil
+	case ReconcileActionNoop:
 		return ApplyPlan{}, nil
 	default:
 		return ApplyPlan{}, fmt.Errorf("unsupported reconcile action %q", action.Action)

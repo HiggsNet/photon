@@ -41,6 +41,11 @@ func (d *StrongSwanDriver) buildLoadConnMessage(spec TransportLinkSpec) (map[str
 	if err != nil {
 		return nil, err
 	}
+	if d.XFRMBackend == XFRMBackendPolicy {
+		if err := applyPolicyChildSA(msg, spec); err != nil {
+			return nil, err
+		}
+	}
 	if len(spec.PeerPublicKey) == 0 {
 		return msg, nil
 	}
@@ -189,6 +194,43 @@ func routeBasedChildSA(spec TransportLinkSpec) map[string]any {
 		"if_id_out":    fmt.Sprintf("%d", spec.XFRMIfID),
 		"start_action": startAction,
 	}
+}
+
+// applyPolicyChildSA removes all if_id and mark bindings. The child SA is
+// bound purely by its traffic selectors, and charon installs the xfrm
+// policies and states. This avoids all VTI device limitations.
+//
+// The default broad TS (0.0.0.0/0, ::/0) from routeBasedChildSA is kept so
+// the tunnel carries mesh traffic (not just the tunnel address pair). For a
+// multi-link client, narrow the TS per link to avoid policy conflicts.
+func applyPolicyChildSA(msg map[string]any, spec TransportLinkSpec) error {
+	child, err := childSAOfMessage(msg, spec)
+	if err != nil {
+		return err
+	}
+	delete(child, "if_id_in")
+	delete(child, "if_id_out")
+	return nil
+}
+
+func childSAOfMessage(msg map[string]any, spec TransportLinkSpec) (map[string]any, error) {
+	raw, ok := msg[spec.TransportID]
+	if !ok {
+		return nil, fmt.Errorf("connection %s missing from load-conn message", spec.TransportID)
+	}
+	conn, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("connection %s is not a map", spec.TransportID)
+	}
+	children, ok := conn["children"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("connection %s has no children map", spec.TransportID)
+	}
+	child, ok := children[ChildSAName(spec)].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("connection %s has no child %s", spec.TransportID, ChildSAName(spec))
+	}
+	return child, nil
 }
 
 func broadTrafficSelectors(addr netip.Addr) []string {
