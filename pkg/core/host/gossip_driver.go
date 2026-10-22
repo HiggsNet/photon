@@ -81,12 +81,14 @@ type GossipDriver struct {
 	gossipChunks             *gossip.ChunkAssemblyStore
 	gossipSentChunks         *gossip.SentChunkCache
 	// Payloads live only in gossipSentChunks; these are bounded transfer cursors.
-	gossipChunkSends map[TimerID]*gossipChunkSend
-	gossipTransport  *gossip.Transport
-	datagramReceiver datagramReceiver
-	datagramCancel   context.CancelFunc
-	datagramWG       sync.WaitGroup
-	stopped          bool
+	gossipChunkSends     map[TimerID]*gossipChunkSend
+	chunkLimitLastLog    time.Time
+	chunkLimitSuppressed int
+	gossipTransport      *gossip.Transport
+	datagramReceiver     datagramReceiver
+	datagramCancel       context.CancelFunc
+	datagramWG           sync.WaitGroup
+	stopped              bool
 }
 
 func NewGossipDriver(clock Clock, eventBuffer int, gossipState GossipStateStore, gossipConfig GossipDriverConfig) *GossipDriver {

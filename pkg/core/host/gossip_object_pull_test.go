@@ -92,3 +92,38 @@ func TestGossipObjectPullWorkersProvideBoundedBackpressureAndStop(t *testing.T) 
 		t.Fatalf("submit after stop = %v, want %v", err, ErrGossipDriverStopped)
 	}
 }
+
+func TestGossipObjectPullWorkerPreservesReachabilityClassification(t *testing.T) {
+	for _, unreachable := range []bool{false, true} {
+		t.Run(map[bool]string{false: "semantic", true: "network"}[unreachable], func(t *testing.T) {
+			failure := errors.New("invalid object response")
+			var pullErr error = failure
+			if unreachable {
+				pullErr = &net.OpError{Op: "dial", Net: "tcp", Err: failure}
+			}
+			driver := NewGossipDriver(nil, 4, nil, GossipDriverConfig{})
+			t.Cleanup(driver.Stop)
+			executor := NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{
+				Client: &memoryObjectPullClient{err: pullErr},
+				Discovery: func() GossipDiscoveryInput {
+					return GossipDiscoveryInput{Network: zone.NewNetworkState(), Bootstrap: map[string]*net.UDPAddr{"peer": {IP: net.ParseIP("127.0.0.1"), Port: 1}}}
+				},
+			})
+			if err := driver.StartGossipObjectPullWorkers(t.Context(), executor, 1, 1); err != nil {
+				t.Fatal(err)
+			}
+			if err := driver.SubmitGossipObjectPull(gossip.StartObjectPullAction{PeerID: "peer", Zone: "node.catofes."}); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case event := <-driver.Completions():
+				result := event.(GossipEvent).Value.(*gossip.ObjectPullResultEvent)
+				if result.Unreachable != unreachable || !errors.Is(result.Err, failure) {
+					t.Fatalf("completion=%#v", result)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("worker result not delivered")
+			}
+		})
+	}
+}

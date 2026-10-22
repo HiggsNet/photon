@@ -128,6 +128,7 @@ func (driver *GossipDriver) runGossipObjectPullWorker(ctx context.Context, jobs 
 			event := GossipEvent{Value: &gossip.ObjectPullResultEvent{
 				PeerID: completion.PeerID, Zone: completion.Zone,
 				Snapshot: completion.Snapshot, Err: completion.Err,
+				Unreachable: completion.Unreachable,
 			}}
 			select {
 			case driver.completions <- event:

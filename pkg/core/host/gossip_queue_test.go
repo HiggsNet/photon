@@ -176,7 +176,7 @@ func TestGossipQueueInternalBudgetYieldsAndRetainsAllResults(t *testing.T) {
 		t.Fatalf("input queue/inflight = %d/%d", len(driver.events), inflight())
 	}
 	for _, session := range sessions {
-		if session.State != gossip.SyncSessionChunkFallback {
+		if session.State != gossip.SyncSessionFailed || !errors.Is(session.LastError(), ErrGossipObjectPullExecutorRequired) || driver.Gossip.Session(session.PeerID) != nil {
 			t.Fatalf("final session %s state = %s", session.PeerID, session.State)
 		}
 	}

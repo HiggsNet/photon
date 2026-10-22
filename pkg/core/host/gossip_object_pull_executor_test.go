@@ -56,6 +56,10 @@ func TestGossipObjectPullExecutorRejectsMissingAddressAndInvalidResponse(t *test
 		Client:    &memoryObjectPullClient{},
 		Discovery: func() GossipDiscoveryInput { return GossipDiscoveryInput{Network: zone.NewNetworkState()} },
 	})
+	localFailure := executor.PullFrom(t.Context(), GossipDiscoveryInput{}, gossip.StartObjectPullAction{PeerID: "peer-a", Zone: "node-a."})
+	if localFailure.Err == nil || localFailure.Unreachable {
+		t.Fatalf("missing local state classified as unreachable: %#v", localFailure)
+	}
 	completion := executor.PullGossipObject(t.Context(), gossip.StartObjectPullAction{PeerID: "unknown", Zone: "node-a."})
 	if completion.Err == nil {
 		t.Fatal("missing address succeeded")
@@ -70,6 +74,13 @@ func TestGossipObjectPullExecutorRejectsMissingAddressAndInvalidResponse(t *test
 	}, gossip.StartObjectPullAction{PeerID: "peer-a", Zone: "node-a."})
 	if !errors.Is(completion.Err, wantErr) {
 		t.Fatalf("error = %v, want %v", completion.Err, wantErr)
+	}
+}
+
+func TestGossipObjectPullCancellationIsNotUnreachable(t *testing.T) {
+	err := &net.OpError{Op: "dial", Net: "tcp", Err: context.Canceled}
+	if isGossipObjectPullUnreachable(err) {
+		t.Fatal("cancellation triggered transport fallback")
 	}
 }
 

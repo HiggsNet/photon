@@ -499,6 +499,8 @@ func RejectReason(err error) string {
 		return "message_too_large"
 	case errors.Is(err, ErrQuotaExceeded):
 		return "quota"
+	case errors.Is(err, ErrChunkSendCacheFull):
+		return "resource_limited"
 	case strings.Contains(err.Error(), "replay"):
 		return "replay"
 	case strings.Contains(err.Error(), "unsupported gossip wire version"):

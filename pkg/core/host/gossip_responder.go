@@ -3,7 +3,6 @@ package host
 import (
 	"context"
 	"crypto/rand"
-	"errors"
 	"fmt"
 	"time"
 
@@ -12,7 +11,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
-var ErrGossipChunkSendCacheFull = errors.New("gossip chunk send cache limits exceeded")
+var ErrGossipChunkSendCacheFull = gossip.ErrChunkSendCacheFull
 
 // gossipFetchZoneResponse is detached responder input derived from one
 // committed Store read and consumed inside GossipDriver.
@@ -59,21 +58,34 @@ func (driver *GossipDriver) respondGossipFetchZone(ctx context.Context, peerID s
 			"bytes": oversized.Size, "limit": budget,
 		})
 	}
+	var chunks []*gossip.ObjectChunk
+	if request.ChunkFallback && response.Snapshot != nil {
+		var err error
+		chunks, err = driver.buildGossipSnapshotChunks(peerID, response.Snapshot, budget, now)
+		if err != nil {
+			return err
+		}
+		driver.mu.RLock()
+		active := driver.gossipChunkSends[gossipChunkSendTimerID(peerID, chunks[0].TransferID)] != nil
+		driver.mu.RUnlock()
+		if active {
+			return nil
+		}
+	}
 	for _, announce := range response.Plan.Announces {
 		if announce == nil {
 			continue
 		}
 		if err := sender.SendGossip(ctx, gossip.OutboundMessage{PeerID: peerID, Message: &gossip.Message{Type: gossip.MessageAnnounce, Announce: announce}}); err != nil {
+			if len(chunks) > 0 {
+				driver.gossipSentChunks.Drop(peerID, chunks[0].TransferID)
+			}
 			return err
 		}
 		driver.logGossip("info", "sending_announce", peerID, "responder", nil, map[string]any{"digests": len(announce.Zones)})
 	}
-	if !request.ChunkFallback || response.Snapshot == nil {
+	if len(chunks) == 0 {
 		return nil
-	}
-	chunks, err := driver.buildGossipSnapshotChunks(peerID, response.Snapshot, budget, now)
-	if err != nil {
-		return err
 	}
 	driver.observeChunkFallback(peerID, len(chunks), now)
 	return driver.queueGossipChunkSend(ctx, peerID, chunks, sender)
@@ -88,10 +100,7 @@ func (driver *GossipDriver) buildGossipSnapshotChunks(peerID string, snapshot *c
 	if err != nil {
 		return nil, err
 	}
-	if !driver.gossipSentChunks.Put(peerID, transferID, chunks, now) {
-		return nil, ErrGossipChunkSendCacheFull
-	}
-	return chunks, nil
+	return driver.gossipSentChunks.Put(peerID, transferID, chunks, now)
 }
 
 func (driver *GossipDriver) handleGossipObjectChunkNACK(ctx context.Context, message *gossip.Message, sender GossipSender) error {

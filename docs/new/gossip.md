@@ -396,7 +396,7 @@ Phase 3: Object Pull（对象拉取）
 
 ### 5.2 UDP Chunk Fallback（兜底路径）
 
-当 TCP object pull 失败（超时、不可达等），接收方请求 UDP chunk fallback：
+当 TCP object pull 因超时或网络不可达而失败时，接收方请求 UDP chunk fallback。本机队列、并发或 quota 不足，以及协议响应错误和取消，直接结束本轮并退避，不触发另一次 UDP bulk transfer：
 
 ```
 接收方                         发送方
@@ -421,8 +421,9 @@ Phase 3: Object Pull（对象拉取）
 - 重组缓存 TTL：2 分钟（`chunkAssemblyTTL`）
 - 所有 chunk 到齐后做 content hash 校验
 - 校验通过后再做 root hash / 签名验证
-- 每个 fallback 使用随机 16-byte `transfer_id`；接收 quiet 150ms 后只 NACK 缺块索引。
-- 发送端只从 30 秒 TTL 的已发送缓存重传；每 peer 最多 4 个 inflight transfer，缓存总量最多 32 MiB。
+- 新 fallback 使用随机 16-byte `transfer_id`；同 peer、同对象内容和分片布局的未过期传输复用 ID，正在发送时的重复请求不重启发送。接收 quiet 150ms 后只 NACK 缺块索引。
+- 发送缓存每 peer 最多 4 条，全局最多 1024 条、32 MiB payload。首轮或补包发送结束后保留至多 30 秒供 NACK 修复；容量不足时优先淘汰最久未使用且当前未发送的缓存，正在发送的传输不会被淘汰。完成的旧传输不阻挡后续新对象，永久发送失败立即释放对应缓存。
+- 无法通过淘汰空闲缓存满足上限时拒绝新传输，由请求方整轮超时后的重试退避恢复；发送端记录 `resource_limited`、触发的限制和占用，重复警告每 30 秒合并一次。准入失败不额外发送 ANNOUNCE。
 - 每个 transfer 最多 3 个 repair round，每个 NACK 最多 128 个索引；重复 NACK 不重复发送。
 - NACK 和 repair chunk 都经过现有 datagram budget、replay 与 peer quota；完整对象 hash 和签名链通过后才 apply。
 - `SyncSession` round timeout 会丢弃该 peer 未完成的 assembly；超时后的 unsolicited chunk 不会 apply。
@@ -726,7 +727,7 @@ Relay 的 key 约束：
 | Chunk assembly TTL | 2 min | UDP chunk 重组超时 |
 | Chunk repair quiet / send TTL | 150ms / 30s | 缺块检测与发送缓存有效期 |
 | Chunk repair rounds / NACK | 3 / 128 indexes | 单 transfer repair 上限 |
-| Chunk peer inflight / send cache | 4 / 32 MiB | 接收 peer 并发与全局发送缓存上限 |
+| Chunk peer inflight / send cache | 4 / 1024 条 / 32 MiB | 接收 peer 并发、每 peer 发送缓存 4 条及全局发送缓存上限；发送中的缓存保留，空闲缓存按需淘汰 |
 | round timeout | ≥5s | 整轮超时（RTT 感知）|
 | TCP pull timeout | 5s | object pull 超时 |
 

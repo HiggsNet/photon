@@ -56,7 +56,7 @@ func TestSyncSessionSchedulesCompleteCatalogAndWaitsForAncestorApply(t *testing.
 	// A's completed download still occupies its slot until the apply ACK.
 	wantPulls(event(&ObjectPullResultEvent{PeerID: "peer", Zone: "a.", Snapshot: &corestate.ZoneSnapshot{Zone: "a."}}))
 	// B's TCP failure retains its slot while UDP fallback is outstanding.
-	wantPulls(event(&ObjectPullResultEvent{PeerID: "peer", Zone: "b.", Err: errors.New("TCP unavailable")}))
+	wantPulls(event(&ObjectPullResultEvent{PeerID: "peer", Zone: "b.", Unreachable: true, Err: errors.New("TCP unavailable")}))
 	wantPulls(event(&SnapshotAppliedEvent{PeerID: "peer", Zone: "a."}), "c.")
 	wantPulls(event(&ObjectChunkEvent{PeerID: "peer", Zone: "b.", Snapshot: &corestate.ZoneSnapshot{Zone: "b."}}))
 	wantPulls(event(&SnapshotAppliedEvent{PeerID: "peer", Zone: "b."}), "d.")

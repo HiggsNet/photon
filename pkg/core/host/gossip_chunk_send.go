@@ -22,18 +22,27 @@ type gossipChunkSend struct {
 	expires    time.Time
 }
 
+func gossipChunkSendTimerID(peerID string, transferID []byte) TimerID {
+	return TimerID{Namespace: GossipChunkSendNamespace, Owner: peerID, Key: hex.EncodeToString(transferID)}
+}
+
 func (driver *GossipDriver) queueGossipChunkSend(ctx context.Context, peerID string, chunks []*gossip.ObjectChunk, sender GossipSender) error {
 	if len(chunks) == 0 {
 		return nil
 	}
-	id := TimerID{Namespace: GossipChunkSendNamespace, Owner: peerID, Key: hex.EncodeToString(chunks[0].TransferID)}
+	id := gossipChunkSendTimerID(peerID, chunks[0].TransferID)
 	driver.mu.Lock()
 	if driver.stopped {
 		driver.mu.Unlock()
+		driver.gossipSentChunks.Drop(peerID, chunks[0].TransferID)
 		return ErrGossipDriverStopped
 	}
 	job := driver.gossipChunkSends[id]
 	if job == nil {
+		if !driver.gossipSentChunks.Activate(peerID, chunks[0].TransferID, driver.scheduler.clock.Now()) {
+			driver.mu.Unlock()
+			return nil
+		}
 		job = &gossipChunkSend{sender: sender, transferID: append([]byte(nil), chunks[0].TransferID...), expires: driver.scheduler.clock.Now().Add(gossip.ChunkTransferTTL)}
 		driver.gossipChunkSends[id] = job
 	}
@@ -60,29 +69,34 @@ func (driver *GossipDriver) flushGossipChunkSend(ctx context.Context, id TimerID
 	if job == nil {
 		return nil
 	}
-	finish := func() {
+	finish := func(retainRepair bool) {
 		driver.mu.Lock()
 		delete(driver.gossipChunkSends, id)
 		driver.mu.Unlock()
 		driver.schedulerForRead().Cancel(id)
+		if retainRepair {
+			driver.gossipSentChunks.Sent(id.Owner, job.transferID, driver.schedulerForRead().clock.Now())
+		} else {
+			driver.gossipSentChunks.Drop(id.Owner, job.transferID)
+		}
 	}
 	now := driver.schedulerForRead().clock.Now()
 	if !now.Before(job.expires) {
-		finish()
+		finish(false)
 		return nil
 	}
 	delay := time.Millisecond
 	for sent := 0; sent < gossipChunkSendBatch && len(job.indexes) > 0; sent++ {
 		chunk := driver.gossipSentChunks.Chunk(id.Owner, job.transferID, job.indexes[0], now)
 		if chunk == nil {
-			finish()
+			finish(false)
 			return nil
 		}
 		err := job.sender.SendGossip(ctx, gossip.OutboundMessage{PeerID: id.Owner, Message: &gossip.Message{Type: gossip.MessageObjectChunk, ObjectChunk: chunk}})
 		if err != nil {
 			var quotaErr *gossip.QuotaExceededError
 			if !errors.As(err, &quotaErr) || quotaErr.RequestedBytes > quotaErr.ByteBurst || quotaErr.RequestedObjects > quotaErr.ObjectBurst {
-				finish()
+				finish(false)
 				driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseSend, PeerID: id.Owner, Err: err})
 				return err
 			}
@@ -100,7 +114,7 @@ func (driver *GossipDriver) flushGossipChunkSend(ctx context.Context, id TimerID
 		job.indexes = job.indexes[1:]
 	}
 	if len(job.indexes) == 0 {
-		finish()
+		finish(true)
 		return nil
 	}
 	deadline := driver.schedulerForRead().clock.Now().Add(delay)
@@ -109,7 +123,7 @@ func (driver *GossipDriver) flushGossipChunkSend(ctx context.Context, id TimerID
 	}
 	_, err := driver.schedulerForRead().Schedule(id, deadline)
 	if err != nil {
-		finish()
+		finish(false)
 	}
 	return err
 }

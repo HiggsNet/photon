@@ -86,7 +86,6 @@ func (executor *GossipObjectPullExecutor) PullFrom(ctx context.Context, input Go
 	now := executor.config.Now()
 	if input.Network == nil {
 		completion.Err = fmt.Errorf("no committed state for peer %s", action.PeerID)
-		completion.Unreachable = true
 		return completion
 	}
 	addresses := executor.orderAddresses(action.PeerID, ResolveGossipObjectPullAddresses(input, action.PeerID, now), now)
@@ -242,7 +241,7 @@ func encodedObjectPullResponseSize(response *gossip.ObjectPullResponse) int {
 }
 
 func isGossipObjectPullUnreachable(err error) bool {
-	if err == nil {
+	if err == nil || errors.Is(err, context.Canceled) {
 		return false
 	}
 	if errors.Is(err, context.DeadlineExceeded) {

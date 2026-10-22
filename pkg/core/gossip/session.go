@@ -108,6 +108,9 @@ type ObjectPullResultEvent struct {
 	Zone     zone.ZonePath
 	Snapshot *corestate.ZoneSnapshot
 	Err      error
+	// Only a transport reachability failure justifies another bulk transfer
+	// over UDP. Local capacity and invalid responses use normal session backoff.
+	Unreachable bool
 }
 
 func (*ObjectPullResultEvent) SyncEventMarker() {}
@@ -521,6 +524,9 @@ func (s *SyncSession) onObjectPullResult(e *ObjectPullResultEvent, now time.Time
 	var actions []SyncAction
 
 	if e.Err != nil {
+		if !e.Unreachable {
+			return s.failSnapshotApply(e.PeerID, e.Zone, e.Err, nil)
+		}
 		s.chunkFallbackZones[e.Zone] = true
 		actions = append(actions, SendChunkFallbackAction{PeerID: e.PeerID, Zone: e.Zone})
 	} else if e.Snapshot != nil {

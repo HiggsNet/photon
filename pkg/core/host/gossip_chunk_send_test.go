@@ -177,6 +177,9 @@ func TestGossipChunkSendRechecksPeerAndClearsPermanentFailure(t *testing.T) {
 	if len(driver.gossipChunkSends) != 0 {
 		t.Fatal("failed transfer retained")
 	}
+	if driver.gossipSentChunks.Chunk("peer", chunks[0].TransferID, 0, clock.Now()) != nil {
+		t.Fatal("failed continuation retained its repair cache")
+	}
 }
 
 func TestGossipQuotaWarningIncludesDiagnosticsWithoutDebug(t *testing.T) {

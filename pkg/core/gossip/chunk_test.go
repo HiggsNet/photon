@@ -19,8 +19,8 @@ func TestSentChunkCacheRepairsMissingWithoutDuplicateAmplification(t *testing.T)
 	now := time.Unix(100, 0)
 	id := []byte("0123456789abcdef")
 	cache := NewSentChunkCache()
-	if !cache.Put("peer-a", id, testSentChunks(id), now) {
-		t.Fatal("put rejected")
+	if _, err := cache.Put("peer-a", id, testSentChunks(id), now); err != nil {
+		t.Fatal(err)
 	}
 	nack := &ObjectChunkNACK{TransferID: id, Missing: []uint16{2, 0}}
 	got := cache.Repair("peer-a", nack, now)
@@ -36,8 +36,8 @@ func TestSentChunkCacheRejectsWrongOrExpiredTransfer(t *testing.T) {
 	now := time.Unix(100, 0)
 	id := []byte("0123456789abcdef")
 	cache := NewSentChunkCache()
-	if !cache.Put("peer-a", id, testSentChunks(id), now) {
-		t.Fatal("put rejected")
+	if _, err := cache.Put("peer-a", id, testSentChunks(id), now); err != nil {
+		t.Fatal(err)
 	}
 	if got := cache.Repair("peer-a", &ObjectChunkNACK{TransferID: []byte("fedcba9876543210"), Missing: []uint16{0}}, now); len(got) != 0 {
 		t.Fatal("wrong transfer id repaired")
@@ -170,8 +170,8 @@ func TestSentChunkCacheDetachesInputAndOutput(t *testing.T) {
 	chunks := testSentChunks(id)
 	want := append([]byte(nil), chunks[0].Data...)
 	cache := NewSentChunkCache()
-	if !cache.Put("peer-a", id, chunks, now) {
-		t.Fatal("Put rejected")
+	if _, err := cache.Put("peer-a", id, chunks, now); err != nil {
+		t.Fatal(err)
 	}
 	chunks[0].Data[0] ^= 0xff
 	first := cache.Repair("peer-a", &ObjectChunkNACK{TransferID: id, Missing: []uint16{0}}, now)
