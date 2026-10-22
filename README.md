@@ -13,13 +13,13 @@ Linux `amd64` / `arm64` 可直接从最新 GitHub Release 安装（默认安装 
 `photon-services` 和 `photon.service`）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/HiggsNet/photon/v0.6.0/contrib/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/HiggsNet/photon/v0.6.1/contrib/install.sh | sh
 ```
 
 更新到最新 Release：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/HiggsNet/photon/v0.6.0/contrib/update.sh | sh
+curl -fsSL https://raw.githubusercontent.com/HiggsNet/photon/v0.6.1/contrib/update.sh | sh
 ```
 
 安装和更新会在替换二进制前检查完整数据面依赖，包括 `ip`、`ping`、
@@ -34,7 +34,7 @@ BIRD 2.14+、nftables、iptables/IPv6、`ipset` 和 StrongSwan。缺少依赖时
 需要在同一主机额外运行一个管理节点时，显式传入 `--admin`：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/HiggsNet/photon/v0.6.0/contrib/install.sh | \
+curl -fsSL https://raw.githubusercontent.com/HiggsNet/photon/v0.6.1/contrib/install.sh | \
   sudo sh -s -- --admin
 ```
 
@@ -48,6 +48,8 @@ authority/gossip 控制面，不配置 overlays、routing 或 firewall。详细�
 
 `update.sh` 会检测已有的 `photon-admin`：已安装 admin 的节点会自动一起更新，普通节点
 仍只更新普通组件。
+
+Windows 11 amd64 可下载 [v0.6.1 便携包](https://github.com/HiggsNet/photon/releases/download/v0.6.1/photon-v0.6.1-windows-amd64.zip)，完整解压后以管理员身份运行。首次配置、入网和升级步骤见 [Windows 使用说明](docs/photon-windows/README.zh-CN.txt)。
 
 其他安装方式：
 

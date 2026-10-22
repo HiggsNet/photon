@@ -11,6 +11,93 @@ permissions:
   packages: write
 
 jobs:
+  tests:
+    name: Test shared and Linux code
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test ./...
+      - run: go vet ./...
+
+  windows:
+    name: Build Windows amd64 portable archive
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: test "$GITHUB_REF_NAME" = "v$(tr -d '\r\n' < VERSION)"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build and validate portable archive
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: "0"
+        run: |
+          set -eu
+          version=snapshot
+          if [ "${GITHUB_REF_TYPE:-}" = tag ]; then version="$GITHUB_REF_NAME"; fi
+          commit="$(git rev-parse --short=12 HEAD)"
+          describe="$(git describe --tags --always --dirty)"
+          built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          ldflags="-s -w -X main.buildCommit=${commit} -X main.buildDescribe=${describe} -X main.buildDirty=false -X main.buildTime=${built_at}"
+          mkdir -p build/windows-amd64 dist
+          go build -trimpath -ldflags "$ldflags" -o build/windows-amd64/photon-windows.exe ./app/photon-windows
+          bash docs/scripts/windows-portable-build.sh
+          PHOTON_WINDOWS_EXE="$PWD/build/windows-amd64/photon-windows.exe" WINTUN_DLL="$PWD/build/windows-amd64/wintun.dll" bash docs/scripts/windows-portable-build-test.sh
+          cp build/photon-windows-amd64.zip "dist/photon-${version}-windows-amd64.zip"
+          cd dist
+          sha256sum *.zip > photon-windows-amd64.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: photon-windows-amd64
+          path: |
+            dist/*.zip
+            dist/*.sha256
+
+  windows-native:
+    name: Test Windows amd64 natively
+    needs: windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: photon-windows-amd64
+          path: dist
+      - name: Verify and run portable executable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $checksum = (Get-Content dist/photon-windows-amd64.sha256 -Raw).Trim() -split '\s+', 2
+          $archive = Join-Path dist $checksum[1]
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $checksum[0]) { throw 'Archive checksum mismatch' }
+          Expand-Archive -LiteralPath $archive -DestinationPath portable
+          Push-Location portable
+          try {
+            foreach ($line in Get-Content SHA256SUMS) {
+              $parts = $line -split '\s+', 2
+              if ((Get-FileHash -LiteralPath $parts[1] -Algorithm SHA256).Hash.ToLowerInvariant() -ne $parts[0]) { throw "Checksum mismatch: $($parts[1])" }
+            }
+            & .\photon-windows.exe version
+            if ($LASTEXITCODE -ne 0) { throw 'Portable executable failed' }
+          } finally { Pop-Location }
+      - name: Run common and Windows native tests
+        run: go test -count=1 ./pkg/core/gossip ./pkg/core/host ./internal/photonwindows ./app/photon-windows
+
   build:
     name: Build linux-${{ matrix.goarch }}
     runs-on: ${{ matrix.runner }}
@@ -53,7 +140,8 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           set -eu
-          version="${GITHUB_REF_NAME:-snapshot}"
+          version=snapshot
+          if [ "${GITHUB_REF_TYPE:-}" = tag ]; then version="$GITHUB_REF_NAME"; fi
           commit="$(git rev-parse --short=12 HEAD)"
           describe="$(git describe --tags --always --dirty)"
           dirty="false"
@@ -114,7 +202,8 @@ jobs:
         run: |
           set -eu
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
-          version="${GITHUB_REF_NAME:-snapshot}"
+          version=snapshot
+          if [ "${GITHUB_REF_TYPE:-}" = tag ]; then version="$GITHUB_REF_NAME"; fi
           commit="$(git rev-parse --short=12 HEAD)"
           describe="$(git describe --tags --always --dirty)"
           dirty="false"
@@ -154,7 +243,7 @@ jobs:
 
   docker-manifest:
     name: Publish Docker manifest
-    needs: docker
+    needs: [docker, tests, windows-native]
     runs-on: ubuntu-24.04
     steps:
       - name: Prepare image metadata
@@ -162,7 +251,8 @@ jobs:
         run: |
           set -eu
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
-          version="${GITHUB_REF_NAME:-snapshot}"
+          version=snapshot
+          if [ "${GITHUB_REF_TYPE:-}" = tag ]; then version="$GITHUB_REF_NAME"; fi
           commit="${GITHUB_SHA::12}"
           echo "image=${image}" >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
@@ -204,10 +294,14 @@ jobs:
     name: Publish GitHub release
     if: startsWith(github.ref, 'refs/tags/')
     needs:
+      - tests
+      - windows-native
       - build
       - docker-manifest
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout release notes
+        uses: actions/checkout@v4
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
@@ -215,17 +309,23 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Prepare release notes
+        run: |
+          set -eu
+          notes="docs/releases/${GITHUB_REF_NAME}.md"
+          if [ -f "$notes" ]; then
+            cp "$notes" dist/RELEASE_NOTES.md
+          else
+            printf '%s\n' 'Linux amd64/arm64、Windows amd64 安装包及 SHA256 校验文件见附件。' '含 -rc.N 的版本为预发布，不更新正式版或 Docker latest。' > dist/RELEASE_NOTES.md
+          fi
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           prerelease: ${{ contains(github.ref_name, '-') }}
           make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
-          body: |
-            Linux amd64 / arm64 安装包及对应 SHA256 校验文件见附件。
-
-            含 `-rc.N` 的版本为预发布测试版，不更新正式版或 Docker latest。
-            Linux 新旧版本对照测试、安装和回退步骤见：
-            https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/new/linux-release-testing.md
+          body_path: dist/RELEASE_NOTES.md
           files: |
             dist/*.tar.gz
+            dist/*.zip
             dist/*.sha256

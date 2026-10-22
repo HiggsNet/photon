@@ -1,4 +1,10 @@
-# Linux v0.6.0 发布、升级与测试记录
+# Linux / Windows v0.6.1 发布与测试记录
+
+`v0.6.1` 以 Linux v0.6.0 为基线，合并已提交的 Windows 客户端与两项共享 Gossip 修复：多地址回退、分片发送缓存生命周期和回退错误分类。Linux amd64/arm64 与 Windows 11 amd64 使用统一版本号；详细变化、校验与验收边界见 [v0.6.1 发布说明](../releases/v0.6.1.md)。
+
+本版不新增 Common schema 或 wire 迁移。Linux 安装及回退沿用下文；Windows 提供含固定官方 Wintun DLL 的便携 ZIP，使用和升级步骤见 [Windows 说明](../photon-windows/README.zh-CN.txt)。
+
+## v0.6.0 历史发布基线
 
 `v0.6.0` 是由 RC.13 和后续 IPsec 地址宣告/回退功能形成的 Linux 正式版，提供 amd64/arm64 归档和容器镜像。本次正式发布会更新 GitHub 正式版与 Docker `latest`，发布源码来自当前 release 分支；版本发布不包含节点部署。
 
