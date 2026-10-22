@@ -13,10 +13,14 @@ func BuildProfileRecord(localZone zone.ZonePath, fingerprint, role string, group
 	if role == "" {
 		role = RoleBoth
 	}
+	families := addresses.PublicationFamilies()
+	if role == RoleOut && len(addresses.Addresses) == 0 {
+		families = []string{FamilyIPv4, FamilyIPv6}
+	}
 	return ProfileRecord{
 		Version: 1, Enabled: true, Provider: ProviderStrongSwan,
 		IKEIdentity: string(localZone), TransportKeyFingerprint: fingerprint,
-		Role: role, AddressFamilies: addresses.PublicationFamilies(),
+		Role: role, AddressFamilies: families,
 		PathModes: profilePathModes(groups), NAT: profileNAT(addresses),
 	}
 }

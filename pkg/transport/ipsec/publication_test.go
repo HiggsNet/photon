@@ -23,7 +23,7 @@ func TestProfilePublicationFamiliesAndConservativeNAT(t *testing.T) {
 		t.Fatalf("public address must not prove inbound reachability: %+v", profile.NAT)
 	}
 	fallback := BuildProfileRecord("node.example.", "", RoleOut, nil, AddressRecord{})
-	if !slices.Equal(fallback.AddressFamilies, []string{FamilyIPv4}) || !slices.Equal(fallback.PathModes, []string{PathModeFamilyRedundant}) || fallback.Role != RoleOut || fallback.NAT.Hint != NATHintUnknown {
+	if !slices.Equal(fallback.AddressFamilies, []string{FamilyIPv4, FamilyIPv6}) || !slices.Equal(fallback.PathModes, []string{PathModeFamilyRedundant}) || fallback.Role != RoleOut || fallback.NAT.Hint != NATHintUnknown {
 		t.Fatalf("fallback profile: %+v", fallback)
 	}
 	mapped := AddressRecord{Addresses: []AddressAdvertisement{{Address: "::ffff:192.0.2.1"}}}

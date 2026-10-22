@@ -34,6 +34,8 @@ type Daemon struct {
 	State                  *State
 	linuxDriver            *photonlinux.LinuxDriver
 	ipsecDNSResolver       ipsec.DNSResolver
+	ipsecInterfaceReader   func() ([]photonlinux.IPsecInterface, error)
+	ipsecContactQuality    map[zone.ZonePath]map[string]ipsecContactObservation
 	health                 *healthDriver
 	observerHub            *observer.Hub
 	Log                    *appLogger

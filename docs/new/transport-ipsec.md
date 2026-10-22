@@ -213,6 +213,10 @@ overlays:
 - 远端 `ipsec/profile.role` 是远端发布的能力声明，planner 用“本机 role + 远端 role”推导本机 `InitiatorRole`。
 - `overlays[].connect` URI 里的 `role=...` 是本机策略过滤条件，只匹配远端 profile 的 `role`；它不改写本机 `ipsec.role`，也不改写远端 record。
 
+无公网入站映射的 NAT 节点应显式使用 `ipsec.role: out`，可以省略所有 announce 项。`out` 发布空的入站地址集合，并独立声明 IPv4/IPv6 能力及 overlay path keys；对端仍能准备双栈 responder，本节点主动拨号。仅省略 announce 不会改变默认的 `both` 角色。
+
+IPsec 宣告支持固定 IP、DNS、接口三种显式来源，默认 priority 均为 100；配置与过滤规则见 [配置说明](config.md)。地址项的可选 `fallback: true` 表示继承的 Gossip/旧配置兜底来源，保留原 `source` 供本地来源策略筛选。新 planner 把兜底放到显式项之后，失败退避允许跨来源选择；旧节点可以读取该记录，但不会执行新增的兜底排序语义。协议仍使用 version 1，未增加记录类型。
+
 因此示例中的 `role=both` 表示“这个 overlay 只选择远端声明为 `both` 的 peer”。如果希望本机也连接 `role=in` 的远端，需要增加一条 connect rule，或去掉该过滤条件。
 
 ### 系统运行时

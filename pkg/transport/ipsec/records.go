@@ -65,14 +65,6 @@ const (
 	AlgorithmECDSAP256       = "ecdsa-p256"
 )
 
-var defaultAddressSourceOrder = []string{
-	SourceManualAddress,
-	SourceManualDNS,
-	SourceDiscovery,
-	SourceReflector,
-	SourceLocal,
-}
-
 type ProfileRecord struct {
 	Version                 int        `json:"version"`
 	Enabled                 bool       `json:"enabled"`
@@ -106,6 +98,7 @@ type AddressAdvertisement struct {
 	Families       []string `json:"families,omitempty"`
 	RefreshSeconds int64    `json:"refresh_seconds,omitempty"`
 	Priority       int      `json:"priority,omitempty"`
+	Fallback       bool     `json:"fallback,omitempty"`
 	Reachability   string   `json:"reachability,omitempty"`
 	TTLSeconds     int64    `json:"ttl_seconds,omitempty"`
 	LastObserved   int64    `json:"last_observed,omitempty"`
@@ -175,6 +168,7 @@ type AddressCandidate struct {
 	Address      string
 	Family       string
 	Priority     int
+	Fallback     bool
 	Reachability string
 	ExpiresAt    time.Time
 	RefreshAt    time.Time
@@ -197,6 +191,7 @@ type ContactPoint struct {
 	Family       string
 	Reachability string
 	Priority     int
+	Fallback     bool
 	Generation   uint64
 	Current      bool
 	IKEPort      uint16
@@ -219,12 +214,13 @@ type ContactPointQuality struct {
 }
 
 type AddressCandidateOptions struct {
-	DNSResolver       DNSResolver
-	SourceOrder       []string
-	AllowedSources    []string
-	AllowPrivateLocal bool
-	Now               time.Time
-	ContactQuality    map[string]ContactPointQuality
+	DNSResolver         DNSResolver
+	SourceOrder         []string
+	AllowedSources      []string
+	AllowPrivateLocal   bool
+	Now                 time.Time
+	ContactQuality      map[string]ContactPointQuality
+	EstablishedContacts map[string]bool
 }
 
 func ParseProfileRecord(record *zone.Record) (*ProfileRecord, error) {
@@ -576,6 +572,7 @@ func ResolveAddressCandidates(ctx context.Context, record *AddressRecord, now ti
 		return nil, nil
 	}
 	var out []AddressCandidate
+	var resolutionErrors []error
 	for _, address := range record.Addresses {
 		if !sourceAllowed(address.Source, opts.AllowedSources) {
 			continue
@@ -588,7 +585,8 @@ func ResolveAddressCandidates(ctx context.Context, record *AddressRecord, now ti
 		if address.Host != "" && opts.DNSResolver != nil && (address.Source == SourceManualDNS || address.Source == SourceDiscovery) {
 			resolved, err := opts.DNSResolver.LookupIPAddr(ctx, address.Host)
 			if err != nil {
-				return nil, fmt.Errorf("resolve address %s host %q: %w", address.ID, address.Host, err)
+				resolutionErrors = append(resolutionErrors, fmt.Errorf("resolve address %s host %q: %w", address.ID, address.Host, err))
+				continue
 			}
 			// Sort resolved IPs so family-redundant selection is deterministic
 			// even if the OS resolver returns addresses in varying order.
@@ -623,6 +621,9 @@ func ResolveAddressCandidates(ctx context.Context, record *AddressRecord, now ti
 		}
 	}
 	sortAddressCandidates(out, opts.SourceOrder)
+	if len(out) == 0 {
+		return nil, errors.Join(resolutionErrors...)
+	}
 	return out, nil
 }
 
@@ -634,6 +635,7 @@ func newAddressCandidate(address AddressAdvertisement, resolvedAddress, family s
 		Address:      resolvedAddress,
 		Family:       family,
 		Priority:     address.Priority,
+		Fallback:     address.Fallback,
 		Reachability: address.Reachability,
 		ExpiresAt:    expiresAt,
 		RefreshAt:    refreshAt,
@@ -646,7 +648,10 @@ func newAddressCandidate(address AddressAdvertisement, resolvedAddress, family s
 
 func sortAddressCandidates(out []AddressCandidate, sourceOrder []string) {
 	sort.SliceStable(out, func(i, j int) bool {
-		if sourceRank(out[i].Source, sourceOrder) != sourceRank(out[j].Source, sourceOrder) {
+		if out[i].Fallback != out[j].Fallback {
+			return !out[i].Fallback
+		}
+		if len(sourceOrder) > 0 && sourceRank(out[i].Source, sourceOrder) != sourceRank(out[j].Source, sourceOrder) {
 			return sourceRank(out[i].Source, sourceOrder) < sourceRank(out[j].Source, sourceOrder)
 		}
 		if out[i].Priority != out[j].Priority {
@@ -705,6 +710,7 @@ func ResolveContactPoints(ctx context.Context, addresses *AddressRecord, ports *
 				Family:       address.Family,
 				Reachability: address.Reachability,
 				Priority:     address.Priority,
+				Fallback:     address.Fallback,
 				Generation:   port.Generation,
 				Current:      port.Current,
 				IKEPort:      port.IKE.DialPort(),
@@ -862,17 +868,23 @@ func (binding PortBinding) DialPort() uint16 {
 
 func sortContactPoints(points []ContactPoint, opts AddressCandidateOptions) {
 	sort.SliceStable(points, func(i, j int) bool {
-		if sourceRank(points[i].Source, opts.SourceOrder) != sourceRank(points[j].Source, opts.SourceOrder) {
-			return sourceRank(points[i].Source, opts.SourceOrder) < sourceRank(points[j].Source, opts.SourceOrder)
+		if len(opts.EstablishedContacts) > 0 && opts.EstablishedContacts[points[i].Key()] != opts.EstablishedContacts[points[j].Key()] {
+			return opts.EstablishedContacts[points[i].Key()]
 		}
-		if reachabilityRank(points[i].Reachability) != reachabilityRank(points[j].Reachability) {
-			return reachabilityRank(points[i].Reachability) < reachabilityRank(points[j].Reachability)
+		if contactInBackoff(points[i], opts.Now) != contactInBackoff(points[j], opts.Now) {
+			return !contactInBackoff(points[i], opts.Now)
+		}
+		if points[i].Fallback != points[j].Fallback {
+			return !points[i].Fallback
+		}
+		if len(opts.SourceOrder) > 0 && sourceRank(points[i].Source, opts.SourceOrder) != sourceRank(points[j].Source, opts.SourceOrder) {
+			return sourceRank(points[i].Source, opts.SourceOrder) < sourceRank(points[j].Source, opts.SourceOrder)
 		}
 		if points[i].Priority != points[j].Priority {
 			return points[i].Priority > points[j].Priority
 		}
-		if contactInBackoff(points[i], opts.Now) != contactInBackoff(points[j], opts.Now) {
-			return !contactInBackoff(points[i], opts.Now)
+		if reachabilityRank(points[i].Reachability) != reachabilityRank(points[j].Reachability) {
+			return reachabilityRank(points[i].Reachability) < reachabilityRank(points[j].Reachability)
 		}
 		if points[i].Current != points[j].Current {
 			return points[i].Current
@@ -959,9 +971,6 @@ func contactRankReason(point ContactPoint, now time.Time) string {
 }
 
 func sourceRank(source string, sourceOrder []string) int {
-	if len(sourceOrder) == 0 {
-		sourceOrder = defaultAddressSourceOrder
-	}
 	for i, known := range sourceOrder {
 		if source == known {
 			return i

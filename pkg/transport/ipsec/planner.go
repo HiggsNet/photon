@@ -37,6 +37,8 @@ type LinkPlannerOptions struct {
 	AllowPrivateLocal   bool
 	ContactPointQuality map[zone.ZonePath]map[string]ContactPointQuality
 	ExcludedPeers       map[zone.ZonePath]string
+	EstablishedSAs      []SAState
+	establishedByName   map[string][]SAState
 }
 
 type LinkPlan struct {
@@ -62,6 +64,13 @@ func PlanTransportLinks(ctx context.Context, ns *zone.NetworkState, local zone.Z
 	now := opts.Now
 	if now.IsZero() {
 		now = time.Now()
+	}
+	// Index once per plan rather than scanning every peer's SAs for each address.
+	opts.establishedByName = make(map[string][]SAState)
+	for _, sa := range opts.EstablishedSAs {
+		if sa.Established {
+			opts.establishedByName[sa.Name] = append(opts.establishedByName[sa.Name], sa)
+		}
 	}
 	peers := sortedZones(ns)
 	plan := LinkPlan{Roles: map[string]string{}}
@@ -190,17 +199,43 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 			return nil, false, PlanSkip{}, linkIndex, err
 		}
 		allContacts = filterContactPointsByFamily(allContacts, group.AllowedAddressFamilies)
-		contacts = SelectContactPointsWithOptions(allContacts, group.DefaultPathMode, AddressCandidateOptions{
-			SourceOrder:    group.AddressSourceOrder,
-			Now:            now,
-			ContactQuality: opts.ContactPointQuality[peer],
-		})
 		if remoteNeedsInboundNATEvidence(records.Profile) {
-			contacts = filterInboundNATEvidence(contacts)
-			if len(contacts) == 0 {
+			allContacts = filterInboundNATEvidence(allContacts)
+			if len(allContacts) == 0 {
 				return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipNoInboundNATEvidence, Detail: natEvidenceDetail(records.Profile)}, linkIndex, nil
 			}
 		}
+		// Retain a current-generation endpoint with an established SA. Only
+		// candidates still allowed by local policy and the signed record qualify.
+		established := map[string]bool{}
+		for _, point := range allContacts {
+			if !point.Current {
+				continue
+			}
+			pathKey := DefaultPathKey
+			if group.DefaultPathMode == PathModeFamilyRedundant {
+				pathKey = "family:" + point.Family
+			}
+			linkID := StableLinkID(local, peer, group.ID, pathKey)
+			generation := runtimeGenerationForPortGeneration(point.Generation)
+			name := RuntimeConnectionID(linkID, generation, group.Provider)
+			ifID := RuntimeXFRMIfID(linkID, generation, group.Provider)
+			for _, sa := range opts.establishedByName[name] {
+				if !sa.Established || sa.LocalIdentity != string(local) || sa.RemoteIdentity != string(peer) || sa.XFRMIfID != ifID || sa.Name != name {
+					continue
+				}
+				host, port, err := net.SplitHostPort(firstNonEmptyString(sa.RemoteEndpoint, sa.Endpoint))
+				if err == nil && contactHostMatches(host, point) && portMatchesContactPoint(port, point) {
+					established[point.Key()] = true
+				}
+			}
+		}
+		contacts = SelectContactPointsWithOptions(allContacts, group.DefaultPathMode, AddressCandidateOptions{
+			SourceOrder:         group.AddressSourceOrder,
+			Now:                 now,
+			ContactQuality:      opts.ContactPointQuality[peer],
+			EstablishedContacts: established,
+		})
 		if len(contacts) == 0 {
 			return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipNoContactPoints}, linkIndex, nil
 		}

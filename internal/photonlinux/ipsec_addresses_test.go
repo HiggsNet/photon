@@ -23,21 +23,21 @@ func TestIPsecAddressPublicationPriorityAndLeaseBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := BuildIPsecAddressRecord([]string{"192.0.2.1"}, []string{"192.0.2.1:123", "[2001:db8::1]:456"}, []string{" vpn.example ", "vpn.example"}, "127.0.0.1:99", endpoints, now)
+	got := BuildIPsecAddressRecord(IPsecConfig{AnnounceAddrs: []IPsecAnnounceAddress{{Address: "192.0.2.1", Priority: 100}}, AnnounceDNS: []IPsecAnnounceDNS{{Host: "vpn.example", Priority: 100}}, AnnounceGossipEndpoints: true}, nil, []string{"192.0.2.1:123", "[2001:db8::1]:456"}, "127.0.0.1:99", endpoints, now)
 	if len(got.Addresses) != 5 {
 		t.Fatalf("addresses = %+v", got.Addresses)
 	}
-	wantPriorities := []int{100, 99, 98, 42, 12}
+	wantPriorities := []int{100, 100, 100, 100, 100}
 	for i, address := range got.Addresses {
 		if int(address.Priority) != wantPriorities[i] {
 			t.Fatalf("priority at %d = %d", i, address.Priority)
 		}
 	}
-	if got.Addresses[0].Source != ipsec.SourceManualAddress || got.Addresses[2].Host != "vpn.example" || got.Addresses[3].Address != "192.0.2.3" || got.Addresses[3].Source != ipsec.SourceReflector || got.Addresses[4].Reachability != ipsec.ReachabilityPrivate || got.Addresses[4].Source != ipsec.SourceLocal {
+	if got.Addresses[0].Source != ipsec.SourceManualAddress || got.Addresses[1].Host != "vpn.example" || got.Addresses[3].Address != "192.0.2.3" || got.Addresses[3].Source != ipsec.SourceReflector || got.Addresses[4].Reachability != ipsec.ReachabilityPrivate || got.Addresses[4].Source != ipsec.SourceLocal {
 		t.Fatalf("source order/classification = %+v", got.Addresses)
 	}
 	// At exact expiry the entry remains; one nanosecond later it is removed.
-	later := BuildIPsecAddressRecord(nil, nil, nil, "", endpoints, now.Add(time.Nanosecond))
+	later := BuildIPsecAddressRecord(IPsecConfig{AnnounceGossipEndpoints: true}, nil, nil, "", endpoints, now.Add(time.Nanosecond))
 	for _, address := range later.Addresses {
 		if address.Address == "192.0.2.3" {
 			t.Fatal("expired endpoint retained")
@@ -49,7 +49,7 @@ func TestIPsecAddressPublicationPriorityAndLeaseBoundary(t *testing.T) {
 	}
 	// Lease renewal must not refresh declaration timestamps.
 	endpoints.Endpoints[1].LastObserved++
-	refreshed := BuildIPsecAddressRecord([]string{"192.0.2.1"}, []string{"192.0.2.1:123", "[2001:db8::1]:456"}, []string{"vpn.example"}, "", endpoints, now)
+	refreshed := BuildIPsecAddressRecord(IPsecConfig{AnnounceAddrs: []IPsecAnnounceAddress{{Address: "192.0.2.1", Priority: 100}}, AnnounceDNS: []IPsecAnnounceDNS{{Host: "vpn.example", Priority: 100}}, AnnounceGossipEndpoints: true}, nil, []string{"192.0.2.1:123", "[2001:db8::1]:456"}, "", endpoints, now)
 	if !reflect.DeepEqual(got, refreshed) {
 		t.Fatal("lease renewal changed IPsec declaration")
 	}
@@ -63,7 +63,7 @@ func TestIPsecAddressPublicationFallbackAndDefaultTTL(t *testing.T) {
 		{"192.0.2.1:123", "192.0.2.1"}, {"host.example:123", ""},
 	} {
 		t.Run(tc.listen, func(t *testing.T) {
-			got := BuildIPsecAddressRecord(nil, nil, nil, tc.listen, nil, now)
+			got := BuildIPsecAddressRecord(IPsecConfig{AnnounceGossipEndpoints: true}, nil, nil, tc.listen, nil, now)
 			if tc.address == "" {
 				if len(got.Addresses) != 0 {
 					t.Fatalf("unexpected fallback: %+v", got)
@@ -78,7 +78,7 @@ func TestIPsecAddressPublicationFallbackAndDefaultTTL(t *testing.T) {
 		{Address: "192.0.2.2", LastObserved: now.Add(-gossip.DefaultEndpointTTL - time.Second).Unix()},
 		{Address: "2001:db8::1", Source: "interface", Scope: "global"},
 	}}
-	got := BuildIPsecAddressRecord(nil, nil, nil, "", endpoints, now)
+	got := BuildIPsecAddressRecord(IPsecConfig{AnnounceGossipEndpoints: true}, nil, nil, "", endpoints, now)
 	if len(got.Addresses) != 2 || got.Addresses[0].Source != ipsec.SourceManualAddress || got.Addresses[1].Source != ipsec.SourceDiscovery {
 		t.Fatalf("default TTL or source mapping: %+v", got)
 	}

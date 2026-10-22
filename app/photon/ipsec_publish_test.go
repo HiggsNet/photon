@@ -473,7 +473,7 @@ func TestPublishIPsecRecordsSkipsWithoutLinkGroups(t *testing.T) {
 
 func TestLocalIPsecAddressRecordAnnounceAddrs(t *testing.T) {
 	config := defaultAppConfig()
-	config.IPsec.AnnounceAddrs = []string{"203.0.113.5", "2001:db8::5"}
+	config.IPsec.AnnounceAddrs = []photonlinux.IPsecAnnounceAddress{{Address: "203.0.113.5", Priority: 100}, {Address: "2001:db8::5", Priority: 100}}
 	config.AdvertiseAddrs = []string{"203.0.113.5:33434"}
 	config.ListenAddr = "0.0.0.0:4500"
 
@@ -498,7 +498,7 @@ func TestLocalIPsecOverlayIntentUsesDNSFamilies(t *testing.T) {
 	now := time.Unix(5000, 0)
 	config := defaultAppConfig()
 	config.ListenAddr = "0.0.0.0:4500"
-	config.IPsec.AnnounceDNS = []string{"vpn.example.com"}
+	config.IPsec.AnnounceDNS = []photonlinux.IPsecAnnounceDNS{{Host: "vpn.example.com", Priority: 100}}
 	config.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
 
 	records, err := localIPsecRecords(config, &corestate.VerifiedState{ManagedZone: "node-a.catofes.", Network: zone.NewNetworkState()}, &ipsec.TransportKeyRecord{
@@ -580,17 +580,17 @@ func TestLocalIPsecAddressRecordFollowsGossipEndpoints(t *testing.T) {
 		byID[ad.ID] = ad
 	}
 
-	if ad, ok := byID["endpoint-1"]; !ok || ad.Source != ipsec.SourceManualAddress || ad.Address != "203.0.113.10" {
-		t.Fatalf("advertise endpoint mapping unexpected: %+v", byID["endpoint-1"])
+	if ad, ok := byID["endpoint-203.0.113.10"]; !ok || ad.Source != ipsec.SourceManualAddress || ad.Address != "203.0.113.10" {
+		t.Fatalf("advertise endpoint mapping unexpected: %+v", byID["endpoint-203.0.113.10"])
 	}
-	if ad, ok := byID["endpoint-2"]; !ok || ad.Source != ipsec.SourceReflector || ad.Address != "198.51.100.20" {
-		t.Fatalf("reflector endpoint mapping unexpected: %+v", byID["endpoint-2"])
+	if ad, ok := byID["endpoint-198.51.100.20"]; !ok || ad.Source != ipsec.SourceReflector || ad.Address != "198.51.100.20" {
+		t.Fatalf("reflector endpoint mapping unexpected: %+v", byID["endpoint-198.51.100.20"])
 	}
-	if ad, ok := byID["endpoint-3"]; !ok || ad.Source != ipsec.SourceLocal || ad.Address != "10.0.0.5" || ad.Reachability != ipsec.ReachabilityPrivate {
-		t.Fatalf("private interface mapping unexpected: %+v", byID["endpoint-3"])
+	if ad, ok := byID["endpoint-10.0.0.5"]; !ok || ad.Source != ipsec.SourceLocal || ad.Address != "10.0.0.5" || ad.Reachability != ipsec.ReachabilityPrivate {
+		t.Fatalf("private interface mapping unexpected: %+v", byID["endpoint-10.0.0.5"])
 	}
-	if ad, ok := byID["endpoint-4"]; !ok || ad.Source != ipsec.SourceDiscovery || ad.Address != "203.0.113.50" || ad.Reachability != ipsec.ReachabilityPublic {
-		t.Fatalf("public interface mapping unexpected: %+v", byID["endpoint-4"])
+	if ad, ok := byID["endpoint-203.0.113.50"]; !ok || ad.Source != ipsec.SourceDiscovery || ad.Address != "203.0.113.50" || ad.Reachability != ipsec.ReachabilityPublic {
+		t.Fatalf("public interface mapping unexpected: %+v", byID["endpoint-203.0.113.50"])
 	}
 	for _, ad := range record.Addresses {
 		if ad.TTLSeconds != 0 || ad.LastObserved != 0 {

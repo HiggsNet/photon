@@ -20,6 +20,13 @@ const (
 	defaultVICIInitiateConcurrency   = 4
 )
 
+// ContactAttemptError distinguishes failed negotiation/establishment from local
+// key, namespace, interface or configuration failures that changing IP cannot fix.
+type ContactAttemptError struct{ Err error }
+
+func (e *ContactAttemptError) Error() string { return e.Err.Error() }
+func (e *ContactAttemptError) Unwrap() error { return e.Err }
+
 type SAState struct {
 	Name            string
 	UniqueID        uint64
@@ -329,7 +336,7 @@ func InitiateTransportChild(ctx context.Context, ipsec IPsecDriver, spec Transpo
 		if errors.Is(err, context.DeadlineExceeded) {
 			return nil
 		}
-		return fmt.Errorf("initiate child: %w", err)
+		return &ContactAttemptError{Err: fmt.Errorf("initiate child: %w", err)}
 	}
 	return nil
 }

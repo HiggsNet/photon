@@ -276,9 +276,6 @@ func (g LinkGroupSpec) Normalized() LinkGroupSpec {
 		out.Reconcile.RotateRetentionSeconds = 3600
 	}
 	out.NetNS = out.NetNS.Normalized()
-	if len(out.AddressSourceOrder) == 0 {
-		out.AddressSourceOrder = append([]string(nil), defaultAddressSourceOrder...)
-	}
 	out.TunnelAddressSpec = out.normalizedTunnelAddress()
 	if out.TunnelAddressSpec.Mode == TunnelAddressSequentialPool && out.TunnelAddressSpec.Pool.IsValid() {
 		out.TunnelAddressPool = out.TunnelAddressSpec.Pool

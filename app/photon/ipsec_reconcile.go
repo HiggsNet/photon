@@ -35,21 +35,6 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 	}
 	now := d.now()
 	dnsResolver := d.ipsecReconcileDNSResolver()
-	plan := ipsec.LinkPlan{}
-	if len(groups) > 0 {
-		var err error
-		plan, err = ipsec.PlanTransportLinks(ctx, verified.Network, verified.ManagedZone, groups, ipsec.LinkPlannerOptions{
-			Now:                 now,
-			DNSResolver:         dnsResolver,
-			ContactPointQuality: d.buildIPsecContactPointQuality(verified, now),
-			ExcludedPeers:       peerLifecycleExcludedPeers(common.Gossip, now, d.Config.PeerLifecycle),
-		})
-		if err != nil {
-			d.recordIPsecReconcileError(rev, now.Unix(), err)
-			return err
-		}
-		plan.Desired = photonlinux.InjectIPsecKeyMaterial(verified.Network, runtime.IPsecTransportKey, plan.Desired)
-	}
 	if d.linuxDriver == nil {
 		err := errors.New("linux driver is not configured")
 		d.recordIPsecReconcileError(rev, now.Unix(), err)
@@ -66,11 +51,27 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		d.recordIPsecReconcileError(rev, now.Unix(), err)
 		return fmt.Errorf("list ipsec sas: %w", err)
 	}
+	plan := ipsec.LinkPlan{}
+	if len(groups) > 0 {
+		var err error
+		plan, err = ipsec.PlanTransportLinks(ctx, verified.Network, verified.ManagedZone, groups, ipsec.LinkPlannerOptions{
+			Now:                 now,
+			DNSResolver:         dnsResolver,
+			ContactPointQuality: d.buildIPsecContactPointQuality(verified, now),
+			EstablishedSAs:      sas,
+			ExcludedPeers:       peerLifecycleExcludedPeers(common.Gossip, now, d.Config.PeerLifecycle),
+		})
+		if err != nil {
+			d.recordIPsecReconcileError(rev, now.Unix(), err)
+			return err
+		}
+		plan.Desired = photonlinux.InjectIPsecKeyMaterial(verified.Network, runtime.IPsecTransportKey, plan.Desired)
+	}
 	// Link instances are daemon working memory, not restart input. A fresh
 	// process starts empty and reconstructs usable current/previous generations
 	// from the connection, SA and XFRM observations below.
 	instances, _ := d.linuxObservation.ipsecSnapshot()
-	forceUpdates, err := ipsec.LocalAnnounceDNSForceUpdates(ctx, d.Config.IPsec.AnnounceDNS, d.Config.IPsec.AnnounceDNSReconnectAfter, plan.Desired, instances, sas, dnsResolver)
+	forceUpdates, err := ipsec.LocalAnnounceDNSForceUpdates(ctx, d.Config.IPsec.AnnounceDNSHosts(), d.Config.IPsec.AnnounceDNSReconnectAfter, plan.Desired, instances, sas, dnsResolver)
 	if err != nil {
 		d.logWarn("ipsec", "local_announce_dns_check_failed", map[string]any{"error": err.Error()})
 	}
@@ -258,6 +259,8 @@ func ipsecReconcileActionLogFields(action ipsec.ReconcileAction) map[string]any 
 			fields["endpoint_natt_port"] = cp.NATTPort
 			fields["endpoint_current"] = cp.Current
 			fields["endpoint_source"] = cp.Source
+			fields["endpoint_priority"] = cp.Priority
+			fields["endpoint_fallback"] = cp.Fallback
 		}
 	}
 	if action.Instance != nil {
@@ -295,6 +298,8 @@ func (d *Daemon) publishIPsecObservation(rev uint64, unix int64, instances map[s
 		return
 	}
 	summary := summarizeIPsecReconcile(unix, desired, sas, actions, skips, lastError)
+	previous, _ := d.linuxObservation.ipsecSnapshot()
+	d.observeIPsecContactOutcomes(previous, instances, time.Unix(unix, 0))
 	d.linuxObservation.replaceIPsec(instances, summary)
 }
 
@@ -326,12 +331,23 @@ func (d *Daemon) recordIPsecReconcileError(rev uint64, unix int64, err error) {
 // IPsec planner deprioritize addresses that are currently in backoff or have
 // recent failures, matching the gossip transport's own dialing preferences.
 func (d *Daemon) buildIPsecContactPointQuality(verified *corestate.VerifiedState, now time.Time) map[zone.ZonePath]map[string]ipsec.ContactPointQuality {
+	out := make(map[zone.ZonePath]map[string]ipsec.ContactPointQuality)
+	for peer, contacts := range d.ipsecContactQuality {
+		for key, entry := range contacts {
+			if now.Sub(entry.UpdatedAt) > 30*time.Minute && !now.Before(entry.Quality.BackoffUntil) {
+				continue
+			}
+			if out[peer] == nil {
+				out[peer] = map[string]ipsec.ContactPointQuality{}
+			}
+			out[peer][key] = entry.Quality
+		}
+	}
 	if d.gossipDriver == nil || d.gossipDriver.Transport() == nil || verified == nil || verified.Network == nil {
-		return nil
+		return out
 	}
 	transport := d.gossipDriver.Transport()
 	ns := verified.Network
-	out := make(map[zone.ZonePath]map[string]ipsec.ContactPointQuality)
 
 	for _, peerID := range transport.KnownPeerIDs() {
 		peerPath := zone.ZonePath(peerID)
@@ -353,7 +369,15 @@ func (d *Daemon) buildIPsecContactPointQuality(verified *corestate.VerifiedState
 
 		inner := photonlinux.BuildIPsecContactQuality(states, records.Addresses, portAds)
 		if len(inner) > 0 {
-			out[peerPath] = inner
+			if out[peerPath] == nil {
+				out[peerPath] = inner
+			} else {
+				for key, quality := range inner {
+					if _, owned := out[peerPath][key]; !owned {
+						out[peerPath][key] = quality
+					}
+				}
+			}
 		}
 	}
 	return out

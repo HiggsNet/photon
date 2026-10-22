@@ -552,7 +552,7 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 		if (existing.ActualState == LinkStateConfiguring || existing.ActualState == LinkStateConnecting) && !sa.Established {
 			if saObserved(sa) {
 				if !linkEstablishing(existing, now) {
-					inst := MarkLinkApplyFailure(existing, groupBackoffForSpec(spec, in.GroupBackoff), now, fmt.Errorf("waiting for in-progress SA"))
+					inst := MarkLinkApplyFailure(existing, groupBackoffForSpec(spec, in.GroupBackoff), now, &ContactAttemptError{Err: fmt.Errorf("waiting for in-progress SA")})
 					result.Instances[id] = inst
 					result.add(ReconcileActionNoop, &spec, &inst, "awaiting in-progress sa")
 					continue
@@ -564,7 +564,7 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 				result.add(ReconcileActionNoop, &spec, &existing, "awaiting established sa")
 				continue
 			}
-			inst := MarkLinkApplyFailure(existing, groupBackoffForSpec(spec, in.GroupBackoff), now, fmt.Errorf("waiting for established SA"))
+			inst := MarkLinkApplyFailure(existing, groupBackoffForSpec(spec, in.GroupBackoff), now, &ContactAttemptError{Err: fmt.Errorf("waiting for established SA")})
 			result.Instances[id] = inst
 			result.add(ReconcileActionNoop, &spec, &inst, "awaiting established sa")
 			continue

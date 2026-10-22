@@ -1,9 +1,9 @@
 package photonlinux
 
 import (
-	"fmt"
 	"net"
 	"net/netip"
+	"sort"
 	"strings"
 	"time"
 
@@ -11,116 +11,113 @@ import (
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
-// BuildIPsecAddressRecord combines local declarations and optional gossip endpoints.
-// A nil endpoints argument disables gossip inheritance. Inputs are never mutated.
-func BuildIPsecAddressRecord(announce, advertise, dns []string, listen string, endpoints *gossip.EndpointRecord, now time.Time) ipsec.AddressRecord {
+// BuildIPsecAddressRecord merges explicit declarations before automatic fallbacks.
+// Interface and global filters never alter Gossip's own endpoint discovery.
+func BuildIPsecAddressRecord(config IPsecConfig, interfaces []ipsec.AddressAdvertisement, advertise []string, listen string, endpoints *gossip.EndpointRecord, now time.Time) ipsec.AddressRecord {
 	record := ipsec.AddressRecord{Version: 1}
-	seen := map[string]bool{}
-	priority := 100
-	nextID := 1
-
-	addAddress := func(ad ipsec.AddressAdvertisement) {
-		if ad.ID == "" {
-			ad.ID = fmt.Sprintf("addr-%d", nextID)
-			nextID++
-		}
-		record.Addresses = append(record.Addresses, ad)
-		priority--
+	if config.Role == ipsec.RoleOut {
+		return record
 	}
-
-	// 1. IPsec-specific manual addresses (highest priority).
-	for _, candidate := range announce {
-		parsed, err := netip.ParseAddr(strings.TrimSpace(candidate))
+	seen := map[string]bool{}
+	add := func(ad ipsec.AddressAdvertisement) {
+		key := ad.Address
+		if key == "" {
+			key = ad.Host
+		}
+		if key == "" || seen[key] {
+			return
+		}
+		seen[key] = true
+		record.Addresses = append(record.Addresses, ad)
+	}
+	// Priority is shared across all explicit kinds. Stable IDs do not depend on
+	// another entry appearing/disappearing, or on a lease renewal timestamp.
+	var explicit []ipsec.AddressAdvertisement
+	for _, entry := range config.AnnounceAddrs {
+		addr, err := netip.ParseAddr(strings.TrimSpace(entry.Address))
 		if err != nil {
 			continue
 		}
-		addr := parsed.String()
-		if seen[addr] {
-			continue
-		}
-		family := ipsecFamily(addr)
-		if family == "" {
-			continue
-		}
-		seen[addr] = true
-		addAddress(ipsec.AddressAdvertisement{
-			ID:           fmt.Sprintf("announce-%d", nextID),
-			Source:       ipsec.SourceManualAddress,
-			Address:      addr,
-			Family:       family,
-			Priority:     priority,
-			Reachability: ipsecReachability(addr),
-		})
+		explicit = append(explicit, ipsec.AddressAdvertisement{ID: "announce-" + addr.String(), Source: ipsec.SourceManualAddress, Address: addr.String(), Family: ipsecFamily(addr.String()), Priority: entry.Priority, Reachability: ipsecReachability(addr.String())})
 	}
-
-	// 2. Top-level advertise addresses (backward compatibility).
-	for _, candidate := range advertise {
-		addr := advertiseHost(candidate)
-		if addr == "" || seen[addr] {
+	for _, entry := range config.AnnounceDNS {
+		host := strings.TrimSpace(entry.Host)
+		if host == "" {
 			continue
 		}
-		family := ipsecFamily(addr)
-		if family == "" {
-			continue
-		}
-		seen[addr] = true
-		addAddress(ipsec.AddressAdvertisement{
-			ID:           fmt.Sprintf("advertise-%d", nextID),
-			Source:       ipsec.SourceManualAddress,
-			Address:      addr,
-			Family:       family,
-			Priority:     priority,
-			Reachability: ipsecReachability(addr),
-		})
+		explicit = append(explicit, ipsec.AddressAdvertisement{ID: "dns-" + host, Source: ipsec.SourceManualDNS, Host: host, Families: []string{ipsec.FamilyIPv4, ipsec.FamilyIPv6}, Priority: entry.Priority, Reachability: ipsec.ReachabilityPublic})
 	}
-
-	// 3. Manual DNS names.
-	for _, host := range dns {
-		host = strings.TrimSpace(host)
-		if host == "" || seen[host] {
-			continue
+	explicit = append(explicit, interfaces...)
+	sort.SliceStable(explicit, func(i, j int) bool {
+		if explicit[i].Priority != explicit[j].Priority {
+			return explicit[i].Priority > explicit[j].Priority
 		}
-		seen[host] = true
-		addAddress(ipsec.AddressAdvertisement{
-			ID:           fmt.Sprintf("dns-%d", nextID),
-			Source:       ipsec.SourceManualDNS,
-			Host:         host,
-			Families:     []string{ipsec.FamilyIPv4, ipsec.FamilyIPv6},
-			Priority:     priority,
-			Reachability: ipsec.ReachabilityPublic,
-		})
-	}
-
-	// 4. Follow gossip endpoints (reflector / interface discovery).
-	if endpoints != nil {
-		for _, ad := range ipsecAddressesFromGossipEndpoints(endpoints, seen, now) {
-			addAddress(ad)
-		}
-	}
-
-	// 5. Fallback to listen_addr host.
-	if len(record.Addresses) == 0 {
-		host := advertiseHost(listen)
-		if host != "" && host != "0.0.0.0" && host != "::" {
-			if family := ipsecFamily(host); family != "" {
-				addAddress(ipsec.AddressAdvertisement{
-					ID:           "listen",
-					Source:       ipsec.SourceLocal,
-					Address:      host,
-					Family:       family,
-					Priority:     priority,
-					Reachability: ipsecReachability(host),
-				})
+		return false
+	})
+	for _, ad := range explicit {
+		if ad.Source == ipsec.SourceDiscovery {
+			addr, err := netip.ParseAddr(ad.Address)
+			if err != nil || !config.AnnounceFilter.Allows(addr) {
+				continue
 			}
+		}
+		add(ad)
+	}
+	// Preserve the legacy top-level declaration independently of whether Gossip
+	// endpoint inheritance is enabled, but keep it below explicit IPsec entries.
+	for _, entry := range advertise {
+		addr := advertiseHost(entry)
+		if ipsecFamily(addr) == "" {
+			continue
+		}
+		addAutomaticIPsecAddress(&record, seen, config, ipsec.AddressAdvertisement{ID: "advertise-" + addr, Source: ipsec.SourceManualAddress, Address: addr, Family: ipsecFamily(addr), Priority: DefaultIPsecAnnouncePriority, Reachability: ipsecReachability(addr), Fallback: true})
+	}
+	if config.AnnounceGossipEndpoints {
+		if endpoints != nil {
+			eligible := *endpoints
+			if len(config.AnnounceInterfaces) > 0 {
+				// Explicit interface selection replaces the broad interface scan for
+				// IPsec. Otherwise an excluded or withdrawn address returns via Gossip.
+				eligible.Endpoints = nil
+				for _, entry := range endpoints.Endpoints {
+					if strings.Split(entry.Source, "+")[0] != "interface" {
+						eligible.Endpoints = append(eligible.Endpoints, entry)
+					}
+				}
+			}
+			// The helper maintains its own seen set; global filtering must not mark a
+			// rejected address as published.
+			for _, ad := range ipsecAddressesFromGossipEndpoints(&eligible, map[string]bool{}, now) {
+				addAutomaticIPsecAddress(&record, seen, config, ad)
+			}
+		}
+	}
+	// Preserve legacy listen-host fallback only when no interface selector is
+	// configured. An empty selected-interface set must not borrow another NIC.
+	if len(record.Addresses) == 0 && len(config.AnnounceInterfaces) == 0 {
+		addr := advertiseHost(listen)
+		if addr != "0.0.0.0" && addr != "::" && ipsecFamily(addr) != "" {
+			addAutomaticIPsecAddress(&record, seen, config, ipsec.AddressAdvertisement{ID: "listen", Source: ipsec.SourceLocal, Address: addr, Family: ipsecFamily(addr), Priority: DefaultIPsecAnnouncePriority, Reachability: ipsecReachability(addr), Fallback: true})
 		}
 	}
 	return record
 }
 
+func addAutomaticIPsecAddress(record *ipsec.AddressRecord, seen map[string]bool, config IPsecConfig, ad ipsec.AddressAdvertisement) {
+	addr, err := netip.ParseAddr(ad.Address)
+	if err != nil || seen[ad.Address] || !config.AnnounceFilter.Allows(addr) {
+		return
+	}
+	ad.Fallback = true
+	// Gossip-specific weights do not compete with explicit IPsec priorities.
+	ad.Priority = DefaultIPsecAnnouncePriority
+	seen[ad.Address] = true
+	record.Addresses = append(record.Addresses, ad)
+}
+
 // ipsecAddressesFromGossipEndpoints updates seen for each accepted address.
 func ipsecAddressesFromGossipEndpoints(er *gossip.EndpointRecord, seen map[string]bool, now time.Time) []ipsec.AddressAdvertisement {
 	var out []ipsec.AddressAdvertisement
-	nextID := 1
 	for _, ep := range er.Endpoints {
 		addr := ep.Address
 		if addr == "" || seen[addr] {
@@ -148,7 +145,7 @@ func ipsecAddressesFromGossipEndpoints(er *gossip.EndpointRecord, seen map[strin
 		seen[addr] = true
 		source, reachability := mapGossipEndpointSourceToIPsec(ep)
 		out = append(out, ipsec.AddressAdvertisement{
-			ID:           fmt.Sprintf("endpoint-%d", nextID),
+			ID:           "endpoint-" + addr,
 			Source:       source,
 			Address:      addr,
 			Family:       family,
@@ -159,7 +156,6 @@ func ipsecAddressesFromGossipEndpoints(er *gossip.EndpointRecord, seen map[strin
 			// the record change every gossip lease renewal even when the set of
 			// addresses is unchanged.
 		})
-		nextID++
 	}
 	return out
 }

@@ -107,10 +107,10 @@ func TestIPsecConfigAnnouncements(t *testing.T) {
 		t.Fatalf("applyIPsecYAML: %v", err)
 	}
 	config.Normalize()
-	if len(config.AnnounceAddrs) != 2 || config.AnnounceAddrs[0] != "203.0.113.10" || config.AnnounceAddrs[1] != "2001:db8::10" {
+	if len(config.AnnounceAddrs) != 2 || config.AnnounceAddrs[0].Address != "203.0.113.10" || config.AnnounceAddrs[1].Address != "2001:db8::10" {
 		t.Fatalf("AnnounceAddrs = %v", config.AnnounceAddrs)
 	}
-	if len(config.AnnounceDNS) != 2 || config.AnnounceDNS[0] != "vpn.example.com" || config.AnnounceDNS[1] != "vpn6.example.com" {
+	if len(config.AnnounceDNS) != 2 || config.AnnounceDNS[0].Host != "vpn.example.com" || config.AnnounceDNS[1].Host != "vpn6.example.com" {
 		t.Fatalf("AnnounceDNS = %v", config.AnnounceDNS)
 	}
 	if config.AnnounceDNSReconnectAfter != 2*time.Minute {

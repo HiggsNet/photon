@@ -4,6 +4,14 @@
 `v0.6.0-rc.13`（在 rc.12 候选基础上减少入站验签、状态复制和重复健康统计）。新版只供测试，Windows 完整隧道尚未交付。
 master 保留旧版；候选版从独立 release 分支发布，不更新 Docker `latest`。
 
+## RC 后续：IPsec 接口宣告与跨来源回退
+
+固定 IP、DNS 和指定 Linux 接口的显式宣告默认同级（priority 100，可省略），Gossip 继承及旧配置地址处于最低兜底层。接口采集支持 IPv4/IPv6 开关、include/exclude 网段、全局自动地址过滤和独立撤回；选择接口后不再通过 Gossip 的全网卡扫描补回已排除地址。保留原字符串/逗号列表配置形式，接口名与 OpenWrt 逻辑网络名的区别见 [配置说明](config.md)。
+
+连接选择先执行本地来源、family 与 NAT 证据筛选，再保留符合当前记录的已建立连接；未连接候选优先避开退避，允许跨来源及静态 priority 回退。IPsec 协商/建链超时按地址、端口、generation 记录临时证据，本机密钥、namespace、接口设置错误和 staged 轮换错误不惩罚当前地址。DNS 解析失败不阻断其他来源；IPv4/IPv6 仍分别建链。`role: out` 发布空入站地址，同时独立发布双栈 profile 和 overlay 能力，适用于无入站映射的 NAT 节点。
+
+已通过完整 `make check`、photonlinux/ipsec/app 三包 race，以及只读真实 netlink 地址采集；新增回归覆盖同级默认值、旧配置、过滤、接口换址/下线/观察失败、签名记录稳定性、跨来源回退、健康连接保留和主动双栈声明。地址切换的签名发布和建链回退使用隔离模拟；本轮未执行实际业务链路切换或节点部署。数据存储 schema 与记录 version 不变；可选 `fallback` 字段由新 planner 执行，旧 peer 不识别其排序语义。
+
 ## rc.13：减少入站、撤销查询与健康统计的重复工作
 
 入站 observed path 使用只含授权链与 checkpoint 的窄读取，省去无用记录复制；同一事件的固定处理时间内，只有前后 verified revision 相同时才复用验签结果。地址仍从持久化完成后的 checkpoint 恢复；revision 变化会重新验签，下一条事件也重新检查签名和有效期。

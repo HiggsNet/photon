@@ -53,12 +53,29 @@ func (d *Daemon) ipsecProtocolPlan(verified *corestate.VerifiedState, runtime *p
 		"link_groups":  len(config.IPsec.LinkGroups),
 	})
 	now := d.now()
+	var interfaces []ipsec.AddressAdvertisement
+	if config.IPsec.Role != ipsec.RoleOut && len(config.IPsec.AnnounceInterfaces) > 0 {
+		reader := d.ipsecInterfaceReader
+		if reader == nil {
+			reader = photonlinux.ReadIPsecInterfaces
+		}
+		inventory, readErr := reader()
+		if readErr != nil {
+			d.logWarn("ipsec", "announce_interfaces_failed", map[string]any{"error": readErr})
+		} else {
+			var selectErr error
+			interfaces, selectErr = photonlinux.SelectIPsecInterfaceAddresses(config.IPsec.AnnounceInterfaces, inventory)
+			if selectErr != nil {
+				d.logWarn("ipsec", "announce_interfaces_failed", map[string]any{"error": selectErr})
+			}
+		}
+	}
 	key, keyRecord, err := ensureIPsecTransportKey(runtime, verified.IdentityPrivateKey, now)
 	if err != nil {
 		return plan, err
 	}
 	plan.TransportKey = photonstate.CloneIPsecTransportKeyState(key)
-	records, err := localIPsecRecords(config, verified, keyRecord, now)
+	records, err := localIPsecRecords(config, verified, keyRecord, now, interfaces...)
 	if err != nil {
 		return plan, err
 	}
@@ -171,14 +188,14 @@ func ensureIPsecTransportKey(linuxState *photonlinux.LinuxState, identityPrivate
 	}, record, nil
 }
 
-func localIPsecRecords(config *appConfig, verified *corestate.VerifiedState, key *ipsec.TransportKeyRecord, now time.Time) ([]localIPsecRecord, error) {
+func localIPsecRecords(config *appConfig, verified *corestate.VerifiedState, key *ipsec.TransportKeyRecord, now time.Time, interfaces ...ipsec.AddressAdvertisement) ([]localIPsecRecord, error) {
 	if config == nil {
 		return nil, fmt.Errorf("config is nil")
 	}
 	if key == nil {
 		return nil, fmt.Errorf("transport key record is required")
 	}
-	addresses := localIPsecAddressRecord(config, verified, now)
+	addresses := localIPsecAddressRecord(config, verified, now, interfaces...)
 	ports, err := ipsec.PlanPortPublication(config.IPsec.PortMode, &config.IPsec.PortRange, config.IPsec.PortRotateInterval, config.IPsec.PortPreviousGrace, existingIPsecPortRecord(verified), now)
 	if err != nil {
 		return nil, err
@@ -197,13 +214,13 @@ func localIPsecRecords(config *appConfig, verified *corestate.VerifiedState, key
 			existing = zs.Records
 		}
 	}
-	for _, intent := range ipsec.BuildOverlayIntentRecords(config.IPsec.LinkGroups, addresses.PublicationFamilies(), existing, now) {
+	for _, intent := range ipsec.BuildOverlayIntentRecords(config.IPsec.LinkGroups, profile.AddressFamilies, existing, now) {
 		records = append(records, localIPsecRecord{key: ipsec.OverlayIntentRecordKey(intent.OverlayID), recordType: ipsec.RecordTypeOverlayIntent, value: intent})
 	}
 	return records, nil
 }
 
-func localIPsecAddressRecord(config *appConfig, verified *corestate.VerifiedState, now time.Time) ipsec.AddressRecord {
+func localIPsecAddressRecord(config *appConfig, verified *corestate.VerifiedState, now time.Time, interfaces ...ipsec.AddressAdvertisement) ipsec.AddressRecord {
 	var endpoints *gossip.EndpointRecord
 	if config.IPsec.AnnounceGossipEndpoints && verified != nil && verified.Network != nil && verified.ManagedZone != "" {
 		if zs := verified.Network.Zones[verified.ManagedZone]; zs != nil {
@@ -215,7 +232,7 @@ func localIPsecAddressRecord(config *appConfig, verified *corestate.VerifiedStat
 			}
 		}
 	}
-	return photonlinux.BuildIPsecAddressRecord(config.IPsec.AnnounceAddrs, config.AdvertiseAddrs, config.IPsec.AnnounceDNS, config.ListenAddr, endpoints, now)
+	return photonlinux.BuildIPsecAddressRecord(config.IPsec, interfaces, config.AdvertiseAddrs, config.ListenAddr, endpoints, now)
 }
 
 func existingIPsecPortRecord(verified *corestate.VerifiedState) *ipsec.PortRecord {

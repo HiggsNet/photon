@@ -389,7 +389,7 @@ func TestLinkGroupSpecDefaultsAndTunnelAddresses(t *testing.T) {
 	if normalized.Reconcile.RotateRetentionSeconds != 3600 {
 		t.Fatalf("rotate retention = %d, want 3600", normalized.Reconcile.RotateRetentionSeconds)
 	}
-	if len(normalized.AddressSourceOrder) != len(defaultAddressSourceOrder) {
+	if len(normalized.AddressSourceOrder) != 0 {
 		t.Fatalf("address source order = %+v", normalized.AddressSourceOrder)
 	}
 	if normalized.NetNS.Target() != "photon-ipsec" || normalized.NetNS.Create {

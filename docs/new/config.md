@@ -166,6 +166,36 @@ ipsec:
 - `announce_dns_reconnect_after`：默认 `5m`。主动拨号端发现当前 SA 的本地地址已不在自身 `announce_dns` 解析结果中，并且超过该时间未收到入站包时，重建连接；设为 `0` 禁用。DNS 解析失败或 NAT 导致地址作用域不可比较时不会重建。
 - `announce_gossip_endpoints`：是否把 gossip endpoint discovery 的地址也作为 IPsec 地址候选来源，默认 true。
 
+`announce_addrs`、`announce_dns`、`announce_interfaces` 默认同级，`priority` 均默认为 `100`，数值越大越优先；通常可以省略。前两项兼容原来的字符串列表和逗号分隔字符串，也接受带优先级的对象：
+
+```yaml
+ipsec:
+  role: both
+  announce_addrs:
+    - 203.0.113.10
+    - address: 203.0.113.11
+      priority: 200
+  announce_dns:
+    - host: vpn.example.com
+  announce_interfaces:
+    - name: eth0
+      ipv4: true
+      ipv6: true
+      include: []
+      exclude: ["192.168.0.0/16", "fc00::/7"]
+  announce_gossip_endpoints: true
+```
+
+接口名是 **Linux host namespace 的实际设备名**（例如 `eth0`、`pppoe-wan`），不是 OpenWrt 的 `wan`、`wan6` 逻辑网络名。OpenWrt 逻辑网络到实际设备的动态解析由其平台适配层负责。`ipv4`、`ipv6` 省略时均为 true；`include` 为空时不额外限制网段，否则只采集匹配地址；`exclude` 优先排除匹配地址。自动采集只接收单播地址，排除 loopback、link-local 及 temporary、tentative、DAD-failed、deprecated/过期地址；私网地址和 ULA 可由网段规则决定是否保留，采集并不证明公网入站可达。
+
+地址观察复用 daemon 端点发布定时器；每个选定接口独立更新，下线或消失时撤回该接口的自动地址，观察失败时撤回自动接口地址并记录诊断，手工 IP/DNS 保留。配置了接口选择后，IPsec 不再继承 Gossip 的全网卡扫描结果，也不使用监听地址补回空接口结果；reflector 和 Gossip 显式 advertise 地址仍可作为兜底。Gossip 自身的发现策略不变。
+
+若需要对所有自动来源统一限制（包括 reflector、Gossip advertise、旧的顶层 advertise 和 listen fallback），使用 `ipsec.announce_filter`，同样支持 `ipv4`、`ipv6`、`include`、`exclude`。例如 `announce_filter: {ipv4: false, exclude: ["fc00::/7"]}` 只允许符合条件的自动 IPv6 地址。它不改写手工 `announce_addrs`、`announce_dns`。
+
+继承的 Gossip 地址处于单独的最低兜底层，不用 Gossip 的优先级覆盖显式 IPsec 宣告；旧的顶层 `gossip.advertise_addrs` 和 listen-host fallback 也归这一层。连接端先执行本地来源、地址族及 NAT 证据筛选，再保留仍被允许的当前代已建立连接；其余候选先避开失败退避，再比较显式/兜底层、可选来源顺序、priority 和稳定的质量排序。同一地址族内允许跨来源回退，IPv4/IPv6 默认仍分别建链。DNS 解析失败不阻断其他可解析地址；IPsec 自身的建链失败会按实际地址、端口和 generation 记录进程内退避证据，不依赖 Gossip 端口是否可达。
+
+**无入站映射的 NAT 后节点**通常只需配置 `ipsec.role: out`，三种 announce 均可省略。`out` 不发布供对端拨入的地址，仍发布身份、密钥、端口和双栈 overlay 能力，由本节点主动连接 `in`/`both` 节点。`role` 默认仍为 `both`，留空地址不自动推断为 `out`；双方均为 `out` 时不建立直连。
+
 ## Overlay Link Policy
 
 `overlays[]` 是本机 mesh policy。它决定本节点想和哪些 peer 建链、用哪个 provider、放入哪个 netns。它不直接进入 gossip。
@@ -203,7 +233,7 @@ overlays:
 - `provider`：数据面 provider，当前主线是 `strongswan`。只有配置了使用 `strongswan` 的 overlay 后，daemon 才会发布本节点 signed `ipsec/*` records。
 - `netns`：引用顶层 `netns` 中声明的名字；省略时使用 `netns.default`。
 - `default_path_mode`：远端候选地址的建链模式，常用 `family-redundant`，按 IPv4/IPv6 family 选 contact point；`exhaustive` 会保留更多候选。
-- `address_source_order`：本 group 选择对端地址时的来源优先级，例如 `manual-address`、`manual-dns`、`discovery`、`reflector`。
+- `address_source_order`：可选的对端地址来源允许列表及顺序，例如 `manual-address`、`manual-dns`、`discovery`、`reflector`。默认不区分三种显式来源的先后，按宣告的 priority 选择；显式配置时未列出的来源被排除，同层候选按该来源顺序选择。它不把 Gossip 兜底提升到显式层，也不阻止对退避来源进行回退。
 - `max_peers` / `max_links_per_peer`：限制本 group 参与的 peer 数量和每个 peer 的 link 数量。
 - `tunnel_address`：隧道接口地址分配方式。IPv6 默认 `derived-link-local`；显式地址池优先用 `derived-pool`。`sequential-pool` 只适合旧配置迁移或测试。
 - `reconcile.interval`：周期安全扫频，用于 SA 观察和恢复；它不是每次变更的唯一触发，daemon 也会按 state/config/VICI 事件触发 reconcile。

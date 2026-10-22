@@ -98,26 +98,30 @@ type IPsecConfig struct {
 	PortRange                 ipsec.PortRange
 	PortRotateInterval        time.Duration
 	PortPreviousGrace         time.Duration
-	AnnounceAddrs             []string
-	AnnounceDNS               []string
+	AnnounceAddrs             []IPsecAnnounceAddress
+	AnnounceDNS               []IPsecAnnounceDNS
+	AnnounceInterfaces        []IPsecAnnounceInterface
+	AnnounceFilter            IPsecAnnounceFilter
 	AnnounceDNSReconnectAfter time.Duration
 	AnnounceGossipEndpoints   bool
 }
 
 // IPsecConfigYAML is the top-level ipsec configuration block.
 type IPsecConfigYAML struct {
-	Role                      string           `yaml:"role"`
-	DeprecatedAccept          string           `yaml:"accept"`
-	Driver                    string           `yaml:"driver"`
-	VICISocket                string           `yaml:"vici_socket"`
-	PortMode                  string           `yaml:"port_mode"`
-	PortRange                 ipsec.PortRange  `yaml:"port_range"`
-	PortRotateInterval        string           `yaml:"port_rotate_interval"`
-	PortPreviousGrace         string           `yaml:"port_previous_grace"`
-	AnnounceAddrs             configStringList `yaml:"announce_addrs"`
-	AnnounceDNS               configStringList `yaml:"announce_dns"`
-	AnnounceDNSReconnectAfter string           `yaml:"announce_dns_reconnect_after"`
-	AnnounceGossipEndpoints   *bool            `yaml:"announce_gossip_endpoints"`
+	Role                      string                   `yaml:"role"`
+	DeprecatedAccept          string                   `yaml:"accept"`
+	Driver                    string                   `yaml:"driver"`
+	VICISocket                string                   `yaml:"vici_socket"`
+	PortMode                  string                   `yaml:"port_mode"`
+	PortRange                 ipsec.PortRange          `yaml:"port_range"`
+	PortRotateInterval        string                   `yaml:"port_rotate_interval"`
+	PortPreviousGrace         string                   `yaml:"port_previous_grace"`
+	AnnounceAddrs             ipsecAnnounceAddresses   `yaml:"announce_addrs"`
+	AnnounceDNS               ipsecAnnounceDNSNames    `yaml:"announce_dns"`
+	AnnounceInterfaces        []IPsecAnnounceInterface `yaml:"announce_interfaces"`
+	AnnounceFilter            IPsecAnnounceFilter      `yaml:"announce_filter"`
+	AnnounceDNSReconnectAfter string                   `yaml:"announce_dns_reconnect_after"`
+	AnnounceGossipEndpoints   *bool                    `yaml:"announce_gossip_endpoints"`
 }
 
 // DefaultIPsecConfig supplies defaults before explicit YAML fields are applied.
@@ -201,15 +205,36 @@ func (raw IPsecConfigYAML) Apply(config *IPsecConfig) error {
 		}
 		config.PortPreviousGrace = d
 	}
-	for _, raw := range raw.AnnounceAddrs {
-		candidate := strings.TrimSpace(raw)
+	for _, entry := range raw.AnnounceAddrs {
+		candidate := strings.TrimSpace(entry.Address)
 		addr, err := netip.ParseAddr(candidate)
 		if err != nil {
-			return fmt.Errorf("invalid ipsec.announce_addrs entry %q: expected an IP address without a port", raw)
+			return fmt.Errorf("invalid ipsec.announce_addrs entry %q: expected an IP address without a port", entry.Address)
 		}
-		config.AnnounceAddrs = append(config.AnnounceAddrs, addr.String())
+		entry.Address = addr.String()
+		config.AnnounceAddrs = append(config.AnnounceAddrs, entry)
 	}
-	config.AnnounceDNS = append(config.AnnounceDNS, raw.AnnounceDNS...)
+	for _, entry := range raw.AnnounceDNS {
+		if strings.TrimSpace(entry.Host) == "" || strings.ContainsAny(entry.Host, " /:\t\r\n") {
+			return fmt.Errorf("invalid ipsec.announce_dns host %q", entry.Host)
+		}
+		config.AnnounceDNS = append(config.AnnounceDNS, entry)
+	}
+	seenInterfaces := map[string]bool{}
+	for _, entry := range raw.AnnounceInterfaces {
+		if entry.Name == "" || len(entry.Name) > 15 || strings.ContainsAny(entry.Name, " /:\t\r\n\x00") || entry.Name == "." || entry.Name == ".." || seenInterfaces[entry.Name] {
+			return fmt.Errorf("invalid or duplicate ipsec.announce_interfaces name %q", entry.Name)
+		}
+		if err := entry.IPsecAnnounceFilter.Validate(); err != nil {
+			return err
+		}
+		seenInterfaces[entry.Name] = true
+		config.AnnounceInterfaces = append(config.AnnounceInterfaces, entry)
+	}
+	if err := raw.AnnounceFilter.Validate(); err != nil {
+		return err
+	}
+	config.AnnounceFilter = raw.AnnounceFilter
 	if raw.AnnounceDNSReconnectAfter != "" {
 		d, err := parseIPsecDuration(raw.AnnounceDNSReconnectAfter, "ipsec.announce_dns_reconnect_after")
 		if err != nil {
