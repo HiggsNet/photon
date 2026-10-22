@@ -123,7 +123,7 @@ func (driver *GossipDriver) runGossipObjectPullWorker(ctx context.Context, jobs 
 			}
 			driver.observeObjectPullResult(completion, driver.schedulerForRead().clock.Now())
 			driver.logGossip("debug", "worker_done", completion.PeerID, GossipPhaseObjectPull, completion.Err, map[string]any{
-				"zone": completion.Zone, "bytes": completion.Bytes, "ok": completion.Err == nil,
+				"zone": completion.Zone, "addr": completion.Addr, "bytes": completion.Bytes, "ok": completion.Err == nil,
 			})
 			event := GossipEvent{Value: &gossip.ObjectPullResultEvent{
 				PeerID: completion.PeerID, Zone: completion.Zone,

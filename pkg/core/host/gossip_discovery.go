@@ -247,49 +247,46 @@ func FilterGossipCatalogPage(input GossipDiscoveryInput, peerID string, page *co
 	return local, &filtered
 }
 
-// ResolveGossipObjectPullAddress selects the TCP object-pull destination from
-// the same verified/checkpoint/bootstrap inputs used by UDP discovery. TCP and
-// UDP intentionally share the numeric endpoint port.
+// ResolveGossipObjectPullAddress returns the first TCP candidate for callers
+// that only display an address. Outbound pulls use the complete candidate list.
 func ResolveGossipObjectPullAddress(input GossipDiscoveryInput, peerID string, now time.Time) string {
-	if peerID == "" {
+	addresses := ResolveGossipObjectPullAddresses(input, peerID, now)
+	if len(addresses) == 0 {
 		return ""
 	}
-	peer := input.Peers[peerID]
-	if discoveryObservedActive(peer, now) && discoveryPeerVerified(input, peerID, now) {
-		if addr := discoveryTCPAddress(peer.ObservedEndpoint); addr != "" {
-			return addr
+	return addresses[0]
+}
+
+// ResolveGossipObjectPullAddresses retains the verified observed paths,
+// bootstrap and signed endpoints. TCP and UDP share the numeric endpoint port,
+// but a working UDP path does not establish TCP reachability.
+func ResolveGossipObjectPullAddresses(input GossipDiscoveryInput, peerID string, now time.Time) []string {
+	if peerID == "" {
+		return nil
+	}
+	var addresses []string
+	seen := make(map[string]bool)
+	add := func(addr string) {
+		if addr != "" && !seen[addr] {
+			seen[addr] = true
+			addresses = append(addresses, addr)
 		}
 	}
-	if addr := discoveryTCPAddressFromUDP(input.Bootstrap[peerID]); addr != "" {
-		return addr
+	peer := input.Peers[peerID]
+	if paths, _, ok := discoveryObservedPaths(input, peerID, peer, now); ok {
+		for _, path := range paths {
+			add(discoveryTCPAddressFromUDP(path.Addr))
+		}
 	}
-	var private string
+	add(discoveryTCPAddressFromUDP(input.Bootstrap[peerID]))
 	for _, entry := range sortedDiscoveryEndpoints(gossip.ExtractPeerEndpointsAt(input.Network, now)[peerID]) {
 		udp, err := entry.UDPAddr()
 		if err != nil {
 			continue
 		}
-		addr := discoveryTCPAddressFromUDP(udp)
-		if addr == "" {
-			continue
-		}
-		if discoveryEndpointRank(entry) == 2 {
-			if private == "" {
-				private = addr
-			}
-			continue
-		}
-		return addr
+		add(discoveryTCPAddressFromUDP(udp))
 	}
-	return private
-}
-
-func discoveryTCPAddress(endpoint string) string {
-	udp, err := net.ResolveUDPAddr("udp", endpoint)
-	if err != nil {
-		return ""
-	}
-	return discoveryTCPAddressFromUDP(udp)
+	return addresses
 }
 
 func discoveryTCPAddressFromUDP(udp *net.UDPAddr) string {
@@ -614,7 +611,7 @@ func buildDiscoveryAddresses(entries []gossip.EndpointEntry, bootstrap *net.UDPA
 	for _, entry := range sortedDiscoveryEndpoints(entries) {
 		addr, err := entry.UDPAddr()
 		if err == nil {
-			source := strings.ToLower(entry.Source)
+			source, _, _ := strings.Cut(strings.ToLower(entry.Source), "+")
 			if source == "" {
 				source = "interface"
 			}
@@ -644,6 +641,16 @@ func buildDiscoveryAddresses(entries []gossip.EndpointEntry, bootstrap *net.UDPA
 		appendSource(source)
 	}
 	for _, source := range []string{"recent", "bootstrap", "advertise", "reflector", "interface"} {
+		appendSource(source)
+	}
+	// Source describes how an endpoint was learned, not whether it is valid.
+	// Preserve endpoints from older/newer publishers with unfamiliar sources.
+	var remaining []string
+	for source := range bySource {
+		remaining = append(remaining, source)
+	}
+	sort.Strings(remaining)
+	for _, source := range remaining {
 		appendSource(source)
 	}
 	return out

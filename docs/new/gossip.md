@@ -391,6 +391,8 @@ Phase 3: Object Pull（对象拉取）
 - 请求大小上限 1 MiB，响应大小上限 8 MiB
 - 完成后对 snapshot 做完整签名和信任链验证
 - 对发送方而言，这是只读响应：读取本地 verified snapshot，编码返回，不改变 active sync FSM。
+- Linux 与 Windows 共用候选选择：保留有效的 verified observed/grace path、bootstrap 和 signed endpoint，去重后依次尝试；UDP 可达不代表 TCP 可达，TCP 单独记录成功和失败。
+- 网络错误或单次尝试超时后切换其他地址。全部候选共用至多 5s 的 object pull budget（调用方更早的 deadline 优先），每次尝试为剩余候选预留时间；取消、quota 或协议响应错误直接结束。最近 TCP 成功的地址优先，失败地址降级 30s，闲置历史在 2min 后清除。
 
 ### 5.2 UDP Chunk Fallback（兜底路径）
 
@@ -551,13 +553,13 @@ RoundTimeout(peer) = max(5s, 5 × estimatedRTT(peer)) + 5s (object pull budget)
 
 ```
 1. 获取 peer 的出站地址列表
-2. 按 reachability 排序：最近成功 > 未尝试 > 失败中 > backoff 中
+2. 按 reachability 排序：最近成功且无后续失败 > 未尝试/历史已过期 > 最近失败 > backoff 中
 3. 如果出站地址为空，尝试 lastSeenAddr / observedPath
 4. 填充 nonce + timestamp（如果为零）
 5. MessagePack 编码
 6. 检查 wire size ≤ maxMessageBytes
 7. 检查 quota
-8. 依次尝试每个地址，第一个成功则返回
+8. 依次尝试每个地址，逐地址记录和输出发送错误，第一个写入成功则返回；写入成功不作为远端可达证据
 ```
 
 ### 7.3 接收流程
@@ -582,6 +584,10 @@ RoundTimeout(peer) = max(5s, 5 × estimatedRTT(peer)) + 5s (object pull budget)
 - backoff 到期时间
 
 短时间连续失败会触发指数 backoff（base 500ms，max 30s）。地址排序时 backoff 中的地址排在最后。
+
+UDP 写入失败立即记录该地址的失败；等待 PONG/catalog 超时也会记录地址失败，覆盖更早的成功偏好。
+超时仍按现有 FSM 结束本轮并对 peer 退避，下一轮按新的地址顺序尝试，不延长本轮 deadline。
+地址失败偏好在 2min 后过期；仍有效的 signed endpoint 不因来源带 `+grace` 后缀或未知 source 而丢失。
 
 ### 7.5 入站白名单管理
 

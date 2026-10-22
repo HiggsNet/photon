@@ -285,6 +285,8 @@ func (t *Transport) sendToAddrs(peerID string, message *Message, addrs []*net.UD
 			sentAddr = addr
 			break
 		}
+		t.RecordAddrFailure(peerID, addr)
+		t.logEvent(event, lastErr, start)
 	}
 	if sentAddr != nil {
 		t.lastSentMu.Lock()
@@ -296,14 +298,12 @@ func (t *Transport) sendToAddrs(peerID string, message *Message, addrs []*net.UD
 		t.logEvent(event, nil, start)
 		return nil
 	}
-	t.logEvent(event, lastErr, start)
 	return lastErr
 }
 
 // sendAddrsFor returns the candidate addresses for a peer ordered by
-// reachability state. Successful and recently-attempted addresses come first;
-// addresses in backoff are moved to the end. The ordering rotates so that a
-// single unreachable address at the head does not permanently starve the rest.
+// reachability state. Recent failures override older successes; otherwise the
+// discovery order is preserved. UDP write success alone is not reachability.
 func (t *Transport) sendAddrsFor(peerID string) []*net.UDPAddr {
 	if t == nil || peerID == "" {
 		return nil
@@ -359,11 +359,11 @@ func addrSendRank(addr *net.UDPAddr, peerID string, t *Transport, now time.Time)
 	if !state.BackoffUntil.IsZero() && now.Before(state.BackoffUntil) {
 		return 3
 	}
+	if state.FailureCount > 0 && now.Sub(state.LastFailure) < addrSuccessResetAfter {
+		return 2
+	}
 	if !state.LastSuccess.IsZero() && now.Sub(state.LastSuccess) < addrSuccessResetAfter {
 		return 0
-	}
-	if state.FailureCount > 0 {
-		return 2
 	}
 	return 1
 }
@@ -855,7 +855,12 @@ func (t *Transport) getAddrState(peerID, addr string) *addrState {
 	if t.addrStates == nil {
 		return nil
 	}
-	return t.addrStates[peerID][addr]
+	state := t.addrStates[peerID][addr]
+	if state == nil {
+		return nil
+	}
+	copyState := *state
+	return &copyState
 }
 
 func (t *Transport) recordAddrAttempt(peerID, addr string) {
