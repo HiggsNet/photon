@@ -372,6 +372,13 @@ func (t *Transport) Receive() (*Packet, error) {
 	start := t.now()
 	buf := make([]byte, t.maxMessageBytes+1)
 	n, addr, err := t.datagram.ReadDatagram(buf)
+	event := Event{Direction: "recv", Addr: udpAddrString(addr), Bytes: n}
+	// Windows can return both the filled buffer and WSAEMSGSIZE for an
+	// oversized datagram. The extra byte proves it exceeds our wire budget.
+	if n > t.maxMessageBytes {
+		t.logEvent(event, ErrMessageTooLarge, start)
+		return nil, ErrMessageTooLarge
+	}
 	if err != nil {
 		// Read deadlines are used by callers to poll for context cancellation
 		// and timers; timeouts are routine and should not pollute debug logs.
@@ -379,11 +386,6 @@ func (t *Transport) Receive() (*Packet, error) {
 			t.logEvent(Event{Direction: "recv", Addr: udpAddrString(addr)}, err, start)
 		}
 		return nil, err
-	}
-	event := Event{Direction: "recv", Addr: udpAddrString(addr), Bytes: n}
-	if n > t.maxMessageBytes {
-		t.logEvent(event, ErrMessageTooLarge, start)
-		return nil, ErrMessageTooLarge
 	}
 	message, err := UnmarshalMessage(buf[:n])
 	if err != nil {

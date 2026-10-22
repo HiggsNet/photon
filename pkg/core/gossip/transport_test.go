@@ -549,3 +549,32 @@ func TestRemovePeerClearsAddrState(t *testing.T) {
 		t.Fatalf("recent inbound path after RemovePeer should be nil")
 	}
 }
+
+type datagramReadResult struct {
+	DatagramIO
+	n   int
+	err error
+}
+
+func (d datagramReadResult) ReadDatagram([]byte) (int, *net.UDPAddr, error) {
+	return d.n, nil, d.err
+}
+
+func TestReceiveClassifiesOversizedDataEvenWithReadError(t *testing.T) {
+	readErr := errors.New("datagram was truncated by the socket")
+	for _, n := range []int{0, 9} {
+		var event Event
+		transport, err := NewTransport(Config{PeerID: "node", MaxMessageBytes: 8, Log: func(e Event) { event = e }}, datagramReadResult{n: n, err: readErr})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = transport.Receive()
+		if n == 0 {
+			if !errors.Is(err, readErr) {
+				t.Fatalf("ordinary read error changed: %v", err)
+			}
+		} else if !errors.Is(err, ErrMessageTooLarge) || event.Reason != "message_too_large" || event.Bytes != n {
+			t.Fatalf("oversize error/event=%v/%#v", err, event)
+		}
+	}
+}
