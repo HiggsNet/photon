@@ -150,11 +150,19 @@ func TestPacketPolicyAuditPublishedWithdrawalRejectsQueuedPacket(t *testing.T) {
 	t.Cleanup(store.Close)
 	var reader packetStateView
 	view := reader.read(store)
-	if !f.p.submitSnapshotPacket(f.config, view, f.plan, f.now, f.packet(true)) || f.p.policy == nil {
-		t.Fatal("initial snapshot submission rejected")
+	facts, ok := f.p.prepareSnapshot(f.config, view, f.plan, f.now)
+	if !ok || f.p.policy == nil {
+		t.Fatal("initial snapshot preparation rejected")
 	}
 	before := f.p.policy
-	completion := f.businessCompletion(t)
+	// Retain a completed business job before delivery, as in the adjacent SA
+	// audit. Draining async setup controls through businessCompletion would
+	// deliberately clear policy, depending on worker scheduling.
+	completion, processed := f.p.tunnel.data.processOutbound(f.p.generation, facts.plan, f.packet(true),
+		func(packet []byte, outbound bool) bool { return f.p.authorize(facts, packet, outbound) })
+	if !processed || completion.err != nil {
+		t.Fatal("initial business crypto rejected", completion.err)
+	}
 	if f.p.policy != before {
 		t.Fatal("fixture did not retain a policy before the queued completion")
 	}
@@ -186,7 +194,7 @@ func TestPacketPolicyAuditPublishedWithdrawalRejectsQueuedPacket(t *testing.T) {
 	if current.State == view.State || current.Revision != view.Revision+1 {
 		t.Fatal("packet snapshot owner missed the published withdrawal")
 	}
-	facts, ok := f.p.prepareSnapshot(f.config, current, f.plan, f.now.Add(time.Nanosecond))
+	facts, ok = f.p.prepareSnapshot(f.config, current, f.plan, f.now.Add(time.Nanosecond))
 	if !ok || f.p.policy == before {
 		t.Fatal("valid attachment did not rebuild policy for the published withdrawal")
 	}
