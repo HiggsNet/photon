@@ -21,6 +21,6 @@
 - 已分区 common state 的 root authority 修复也走这一启动事务，修复发生时更新 verified revision；不能随 aggregate decoder 一起删除。
 - 旧 `identity_key_path` 不是现行身份来源，迁移时忽略；身份私钥、transport key 和 Endpoint ACL 仍按各自 owner 恢复。
 
-当前仓库 VERSION 为 0.5.6，未声明旧 aggregate 直接升级的截止版本。版本号本身不能证明旧库已完成迁移；截止版本尚待发布计划明确，此次审计未取消旧库支持。
+v0.6.0 继续保留旧 aggregate 的事务迁移，Common 存储使用 RC.7 引入的 schema 2，未声明旧 aggregate 直接升级的截止版本。版本号本身不能证明旧库已完成迁移；升级前须保留一致的数据库备份，回退旧版使用升级前数据库。
 
 迁移实现仅在 app 私有 decoder 中保留 legacyPeerState；旧 aggregate 的 stateFile 中转模型已删除。当前在线 inspect 仍使用地址宽限期与拒绝记录 DTO，这些响应字段不随旧库迁移退场。

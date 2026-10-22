@@ -2,6 +2,8 @@
 
 Photon 是一个实验性的“信任优先” mesh VPN 控制平面。它不把任何单节点的本地配置当成全网真相，而是先维护一份可验证、最终一致的 Zone 状态数据库，再由每个节点的 daemon 把已验证状态收敛成本机的 gossip、IPsec/XFRM、BIRD/Babel、firewall、health 和 observer 等运行时配置。
 
+当前 Linux 正式版为 [v0.6.0](https://github.com/HiggsNet/photon/releases/tag/v0.6.0)，提供 amd64/arm64 归档和双架构容器镜像。升级旧版前先备份配置、身份和数据库，参见 [升级与回退说明](docs/new/linux-release-testing.md)；本版的接口地址宣告、过滤及 NAT 主动模式见 [配置说明](docs/new/config.md)。
+
 - 整体架构与模块划分：[docs/new/overall.md](docs/new/overall.md)
 - 详细设计文档：[docs/design.md](docs/design.md)
 
@@ -11,13 +13,13 @@ Linux `amd64` / `arm64` 可直接从最新 GitHub Release 安装（默认安装 
 `photon-services` 和 `photon.service`）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/HiggsNet/photon/master/contrib/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/HiggsNet/photon/v0.6.0/contrib/install.sh | sh
 ```
 
 更新到最新 Release：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/HiggsNet/photon/master/contrib/update.sh | sh
+curl -fsSL https://raw.githubusercontent.com/HiggsNet/photon/v0.6.0/contrib/update.sh | sh
 ```
 
 安装和更新会在替换二进制前检查完整数据面依赖，包括 `ip`、`ping`、
@@ -32,7 +34,7 @@ BIRD 2.14+、nftables、iptables/IPv6、`ipset` 和 StrongSwan。缺少依赖时
 需要在同一主机额外运行一个管理节点时，显式传入 `--admin`：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/HiggsNet/photon/master/contrib/install.sh | \
+curl -fsSL https://raw.githubusercontent.com/HiggsNet/photon/v0.6.0/contrib/install.sh | \
   sudo sh -s -- --admin
 ```
 

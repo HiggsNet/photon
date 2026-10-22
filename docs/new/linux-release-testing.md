@@ -1,8 +1,12 @@
-# Linux 重构版测试
+# Linux v0.6.0 发布、升级与测试记录
 
-本轮旧版固定为 `v0.5.6`（master 提交 `28472ea74615`），新版为
-`v0.6.0-rc.13`（在 rc.12 候选基础上减少入站验签、状态复制和重复健康统计）。新版只供测试，Windows 完整隧道尚未交付。
-master 保留旧版；候选版从独立 release 分支发布，不更新 Docker `latest`。
+`v0.6.0` 是由 RC.13 和后续 IPsec 地址宣告/回退功能形成的 Linux 正式版，提供 amd64/arm64 归档和容器镜像。本次正式发布会更新 GitHub 正式版与 Docker `latest`，发布源码来自当前 release 分支；版本发布不包含节点部署。
+
+从 `v0.5.6` 或早期 RC 升级前，先备份配置、身份密钥和一致的数据库副本。Common schema 2 由既有启动事务迁移，回退旧版本应恢复升级前数据库。旧 aggregate 支持范围见 [兼容性说明](../operator-compatibility.md)，安装、测试和回退步骤保留在下文。
+
+发布前已通过完整 `make check`、`make smoke-all`、`make install-script-check`、相关包 race 和真实 Linux 网卡只读采集。RC 的 Table 运行和抓包证据保留原范围；新增接口签名发布与连接回退通过隔离模拟验证，本次没有新增长期实网、生产 NAT 切换或部署验收结论。发布产物为 Linux，Windows 原生客户端及独立 OpenWrt 适配分支不属于本次新增发布范围。
+
+以下 RC 小节为历史测试记录，旧版对照固定为 `v0.5.6`（master 提交 `28472ea74615`）；其中“不更新 latest”和“仅供测试”描述对应历史预发布。
 
 ## RC 后续：IPsec 接口宣告与跨来源回退
 
@@ -455,5 +459,4 @@ photon version
 
 发布前执行 `make check`、`make smoke-all`、`make install-script-check`；
 记录特权数据面测试、真实升级和长时间测试是否实际执行，不以基础检查替代它们。
-GitHub Actions 必须提供两种 Linux 架构的归档和校验文件，Release 标记为
-Pre-release，RC.9 Docker 镜像使用显式 `v0.6.0-rc.9` 标签，正式 `latest` 保持不变。
+GitHub Actions 必须提供两种 Linux 架构的归档和校验文件。Release 的预发布/正式版标记须与标签一致：`vX.Y.Z-rc.N` 标记 Pre-release，使用显式镜像标签且不更新正式 `latest`；`vX.Y.Z` 标记正式版并更新 GitHub 与镜像 `latest`。正式发布完成后分别核对标签提交、Actions、归档校验值、双架构镜像清单及版本输出；不要以其中一项代替全部发布证据。
