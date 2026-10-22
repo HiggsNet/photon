@@ -23,12 +23,26 @@ var (
 	ErrUnsupportedDelegationScope = errors.New("unsupported delegation scope")
 )
 
+// VerificationPendingError rejects input whose verification dependency may
+// become available after time advances or a parent authority is synchronized.
+// It is still a verification failure, never permission to accept the input.
+type VerificationPendingError string
+
+func (err VerificationPendingError) Error() string { return string(err) }
+
 func VerifyChain(ns *zone.NetworkState, zonePath zone.ZonePath, now time.Time) error {
+	return (*Verifier)(nil).VerifyChain(ns, zonePath, now)
+}
+
+func (v *Verifier) VerifyChain(ns *zone.NetworkState, zonePath zone.ZonePath, now time.Time) error {
 	if ns == nil {
 		return errors.New("network state is nil")
 	}
 	zs := ns.Zones[zonePath]
 	if zs == nil {
+		if zonePath.Valid() && zonePath != zone.RootZone {
+			return VerificationPendingError("zone not found")
+		}
 		return errors.New("zone not found")
 	}
 	if !zonePath.Valid() {
@@ -49,21 +63,21 @@ func VerifyChain(ns *zone.NetworkState, zonePath zone.ZonePath, now time.Time) e
 	for current := zonePath; current != zone.RootZone; current = current.Parent() {
 		currentState := ns.Zones[current]
 		if currentState == nil {
-			return errors.New("zone not found")
+			return VerificationPendingError("zone not found")
 		}
 		if currentState.Authority == nil {
-			return errors.New("zone authority is nil")
+			return VerificationPendingError("zone authority is nil")
 		}
 
 		parent := current.Parent()
 		parentState := ns.Zones[parent]
 		if parentState == nil || parentState.Authority == nil {
-			return errors.New("parent zone authority is nil")
+			return VerificationPendingError("parent zone authority is nil")
 		}
 
 		delegation := parentState.Delegations[current]
 		if revocation := parentState.Revocations[current]; revocation != nil {
-			if err := VerifyDelegationRevocation(revocation, parentState.Authority, parent, now); err != nil {
+			if err := v.VerifyDelegationRevocation(revocation, parentState.Authority, parent, now); err != nil {
 				return err
 			}
 			if revocationAppliesToDelegation(revocation, delegation) {
@@ -74,9 +88,9 @@ func VerifyChain(ns *zone.NetworkState, zonePath zone.ZonePath, now time.Time) e
 			delegation = parentProofDelegation(currentState, current)
 		}
 		if delegation == nil {
-			return errors.New("delegation not found")
+			return VerificationPendingError("delegation not found")
 		}
-		if err := VerifyDelegation(delegation, parentState.Authority, parent, now); err != nil {
+		if err := v.VerifyDelegation(delegation, parentState.Authority, parent, now); err != nil {
 			return err
 		}
 		if !equalBytes(AuthorityHash(currentState.Authority), delegation.AuthorityHash) {
@@ -114,6 +128,10 @@ func SignRecord(r *zone.Record, priv ed25519.PrivateKey) error {
 }
 
 func VerifyRecord(r *zone.Record, authority *zone.ZoneAuthority, now time.Time) error {
+	return (*Verifier)(nil).VerifyRecord(r, authority, now)
+}
+
+func (v *Verifier) VerifyRecord(r *zone.Record, authority *zone.ZoneAuthority, now time.Time) error {
 	if r == nil {
 		return errors.New("record is nil")
 	}
@@ -127,7 +145,7 @@ func VerifyRecord(r *zone.Record, authority *zone.ZoneAuthority, now time.Time) 
 	if !equalBytes(r.ValueHash, Hash(r.Value)) {
 		return errors.New("record value hash mismatch")
 	}
-	if !ed25519.Verify(key.Key, recordPayload(r), r.Signature) {
+	if !v.verifySignature(key.Key, recordPayload(r), r.Signature) {
 		return errors.New("record signature invalid")
 	}
 	return nil
@@ -147,6 +165,10 @@ func SignDelegation(d *zone.Delegation, parent zone.ZonePath, priv ed25519.Priva
 }
 
 func VerifyDelegation(d *zone.Delegation, parentAuthority *zone.ZoneAuthority, parentZone zone.ZonePath, now time.Time) error {
+	return (*Verifier)(nil).VerifyDelegation(d, parentAuthority, parentZone, now)
+}
+
+func (v *Verifier) VerifyDelegation(d *zone.Delegation, parentAuthority *zone.ZoneAuthority, parentZone zone.ZonePath, now time.Time) error {
 	if d == nil {
 		return errors.New("delegation is nil")
 	}
@@ -176,7 +198,7 @@ func VerifyDelegation(d *zone.Delegation, parentAuthority *zone.ZoneAuthority, p
 	if d.ExpiresAt != nil && !now.Before(*d.ExpiresAt) {
 		return errors.New("delegation expired")
 	}
-	if !ed25519.Verify(key.Key, delegationPayload(d, parentZone), d.Signature) {
+	if !v.verifySignature(key.Key, delegationPayload(d, parentZone), d.Signature) {
 		return errors.New("delegation signature invalid")
 	}
 	return nil
@@ -196,6 +218,10 @@ func SignDelegationRevocation(r *zone.DelegationRevocation, parent zone.ZonePath
 }
 
 func VerifyDelegationRevocation(r *zone.DelegationRevocation, parentAuthority *zone.ZoneAuthority, parentZone zone.ZonePath, now time.Time) error {
+	return (*Verifier)(nil).VerifyDelegationRevocation(r, parentAuthority, parentZone, now)
+}
+
+func (v *Verifier) VerifyDelegationRevocation(r *zone.DelegationRevocation, parentAuthority *zone.ZoneAuthority, parentZone zone.ZonePath, now time.Time) error {
 	if r == nil {
 		return errors.New("delegation revocation is nil")
 	}
@@ -215,13 +241,13 @@ func VerifyDelegationRevocation(r *zone.DelegationRevocation, parentAuthority *z
 		return errors.New("revocation authority hash is empty")
 	}
 	if r.RevokedAt > 0 && now.Unix() < r.RevokedAt {
-		return errors.New("revocation is not active yet")
+		return VerificationPendingError("revocation is not active yet")
 	}
 	key, err := findAuthorizedKey(parentAuthority, r.SignedBy, zone.PermDelegate, "", "", now)
 	if err != nil {
 		return err
 	}
-	if !ed25519.Verify(key.Key, revocationPayload(r, parentZone), r.Signature) {
+	if !v.verifySignature(key.Key, revocationPayload(r, parentZone), r.Signature) {
 		return errors.New("revocation signature invalid")
 	}
 	return nil
@@ -236,7 +262,8 @@ func RecordHash(r *zone.Record) []byte {
 }
 
 func recordPayload(r *zone.Record) []byte {
-	var b builder
+	keyID := KeyID(r.SignedBy)
+	b := builder{out: make([]byte, 0, 9*8+len(DomainRecord)+len(r.Zone)+len(r.Key)+len(r.Type)+len(r.ValueHash)+len(r.PrevHash)+len(keyID))}
 	b.str(DomainRecord)
 	b.str(r.Zone.String())
 	b.str(r.Key)
@@ -245,16 +272,18 @@ func recordPayload(r *zone.Record) []byte {
 	b.u64(r.Version)
 	b.bytes(r.PrevHash)
 	b.i64(r.Timestamp)
-	b.bytes(KeyID(r.SignedBy))
+	b.bytes(keyID)
 	return b.out
 }
 
 func delegationPayload(d *zone.Delegation, parent zone.ZonePath) []byte {
-	var b builder
+	keyID := KeyID(d.SignedBy)
+	scope := string(normalizedDelegationScope(d))
+	b := builder{out: make([]byte, 0, 8*8+len(DomainDelegation)+len(parent)+len(d.ZoneName)+len(scope)+len(d.AuthorityHash)+len(keyID))}
 	b.str(DomainDelegation)
 	b.str(parent.String())
 	b.str(d.ZoneName.String())
-	b.str(string(normalizedDelegationScope(d)))
+	b.str(scope)
 	b.u64(d.AuthorityEpoch)
 	b.bytes(d.AuthorityHash)
 	if d.ExpiresAt == nil {
@@ -262,12 +291,13 @@ func delegationPayload(d *zone.Delegation, parent zone.ZonePath) []byte {
 	} else {
 		b.i64(d.ExpiresAt.Unix())
 	}
-	b.bytes(KeyID(d.SignedBy))
+	b.bytes(keyID)
 	return b.out
 }
 
 func revocationPayload(r *zone.DelegationRevocation, parent zone.ZonePath) []byte {
-	var b builder
+	keyID := KeyID(r.SignedBy)
+	b := builder{out: make([]byte, 0, 11*8+len(DomainRevocation)+len(parent)+len(r.ParentZone)+len(r.ChildZone)+len(r.RevokedAuthorityHash)+len(r.Reason)+len(keyID))}
 	b.str(DomainRevocation)
 	b.str(parent.String())
 	b.str(r.ParentZone.String())
@@ -278,7 +308,7 @@ func revocationPayload(r *zone.DelegationRevocation, parent zone.ZonePath) []byt
 	b.i64(r.RevokedAt)
 	b.i64(r.TTLSeconds)
 	b.i64(r.GraceSeconds)
-	b.bytes(KeyID(r.SignedBy))
+	b.bytes(keyID)
 	return b.out
 }
 
@@ -303,7 +333,19 @@ func authorityPayload(a *zone.ZoneAuthority) []byte {
 	if a == nil {
 		return nil
 	}
-	var b builder
+	// Compute the canonical wire size once so dynamic authority capabilities
+	// do not repeatedly grow and copy the payload during signature checks.
+	size := 5*8 + len(DomainAuthority) + len(a.Zone)
+	for _, key := range a.Keys {
+		size += 4*8 + len(key.Key)
+		for _, cap := range key.Capabilities {
+			size += 2*8 + len(cap.KeyPrefix)
+			for _, perm := range cap.Permissions {
+				size += 8 + len(perm)
+			}
+		}
+	}
+	b := builder{out: make([]byte, 0, size)}
 	b.str(DomainAuthority)
 	b.str(a.Zone.String())
 	b.u64(a.Epoch)
@@ -342,7 +384,7 @@ func findAuthorizedKey(a *zone.ZoneAuthority, signedBy ed25519.PublicKey, requir
 			continue
 		}
 		if candidate.NotBefore != 0 && now.Unix() < candidate.NotBefore {
-			return nil, errors.New("authorized key not yet valid")
+			return nil, VerificationPendingError("authorized key not yet valid")
 		}
 		if candidate.NotAfter != 0 && now.Unix() > candidate.NotAfter {
 			return nil, errors.New("authorized key expired")
@@ -403,7 +445,8 @@ type builder struct {
 }
 
 func (b *builder) str(s string) {
-	b.bytes([]byte(s))
+	b.u64(uint64(len(s)))
+	b.out = append(b.out, s...)
 }
 
 func (b *builder) bytes(v []byte) {

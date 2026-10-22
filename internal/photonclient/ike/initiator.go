@@ -8,18 +8,31 @@ import (
 	"net/netip"
 )
 
-// Initiator owns one SA_INIT followed by IKE_AUTH. Its caller owns transport,
-// deadlines and serialization. SA_INIT remains unauthenticated; no traffic or
+// Initiator owns one IKE session: initial authentication, liveness, CHILD/IKE
+// rekeying and deletion. A rekey successor may be the original responder of
+// its new SA. Its caller owns transport, deadlines and serialization.
+// SA_INIT remains unauthenticated; no traffic or
 // route may be authorized until IKE_AUTH and the caller's current policy pass.
 type Initiator struct {
-	spi            uint64
-	nonce, request []byte
-	private        *ecdh.PrivateKey
-	init           *InitResult
-	peerEd25519    bool
-	auth           *authPending
-	authDone       bool
-	local, remote  netip.AddrPort
+	spi                   uint64
+	nonce, request        []byte
+	private               *ecdh.PrivateKey
+	init                  *InitResult
+	peerEd25519           bool
+	peerFragmentation     bool
+	cookieRetries         uint8
+	auth                  *authPending
+	authDone              bool
+	local, remote         netip.AddrPort
+	exchanges             exchangeState
+	childPending          *childPending
+	children              map[uint32]*childSA
+	deletePending         *childDeletePending
+	closing, closed       bool
+	originalResponder     bool
+	dormant, rekeyed      bool
+	ikePending            *ikeRekeyPending
+	localRekey, peerRekey *ikeRekeyCandidate
 }
 
 type InitResult struct {
@@ -48,7 +61,7 @@ func newInitiator(local, remote netip.AddrPort) (*Initiator, error) {
 	if err != nil {
 		return nil, err
 	}
-	i := &Initiator{private: key, nonce: make([]byte, 32), local: local, remote: remote}
+	i := &Initiator{private: key, nonce: make([]byte, 32), local: local, remote: remote, exchanges: exchangeState{nextLocal: 2}}
 	var spi [8]byte
 	for i.spi == 0 {
 		if _, err := rand.Read(spi[:]); err != nil {
@@ -68,6 +81,7 @@ func newInitiator(local, remote netip.AddrPort) (*Initiator, error) {
 		ps = append(ps, natPayload(NotifyNATDetectionSource, i.spi, 0, local), natPayload(NotifyNATDetectionDestination, i.spi, 0, remote))
 	}
 	ps = append(ps, Payload{Type: PayloadNotify, Data: []byte{0, 0, 0x40, 0x2f, 0, 5}})
+	ps = append(ps, Payload{Type: PayloadNotify, Data: []byte{0, 0, 0x40, 0x2e}})
 	i.request, err = EncodeMessage(Header{InitiatorSPI: i.spi, ExchangeType: ExchangeSAInit, Flags: FlagInitiator}, ps)
 	if err != nil {
 		return nil, err
@@ -90,7 +104,7 @@ func (i *Initiator) HandleInitResponse(packet []byte) (*InitResult, error) {
 		return nil, fmt.Errorf("ike: response does not match pending SA_INIT")
 	}
 	var sa, ke, nonce []byte
-	var peerEd25519, seenHashes bool
+	var peerEd25519, seenHashes, peerFragmentation bool
 	for _, p := range ps {
 		switch p.Type {
 		case PayloadSA:
@@ -102,6 +116,13 @@ func (i *Initiator) HandleInitResponse(packet []byte) (*InitResult, error) {
 		case PayloadNotify:
 			var n Notify
 			n, err = DecodeNotify(p.Data)
+			if err == nil && n.Type == NotifyFragmentationSupported {
+				if peerFragmentation || n.Protocol != 0 || len(n.SPI) != 0 || len(n.Data) != 0 {
+					err = fmt.Errorf("ike: invalid fragmentation support notification")
+				} else {
+					peerFragmentation = true
+				}
+			}
 			if err == nil && (len(n.SPI) != 0 || n.Type < 16384 || n.Type == 16390) {
 				err = fmt.Errorf("ike: unsupported SA_INIT notification %d", n.Type)
 			}
@@ -146,6 +167,7 @@ func (i *Initiator) HandleInitResponse(packet []byte) (*InitResult, error) {
 	}
 	i.private = nil
 	i.peerEd25519 = peerEd25519
+	i.peerFragmentation = peerFragmentation
 	i.init = &InitResult{ResponderSPI: h.ResponderSPI, Nonce: nonce, Keys: keys, Response: append([]byte(nil), packet...), NAT: nat}
 	return cloneInitResult(i.init), nil
 }

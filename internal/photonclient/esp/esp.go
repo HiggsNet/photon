@@ -10,6 +10,7 @@ import (
 	"errors"
 	"math"
 	"sync"
+	"unsafe"
 )
 
 const (
@@ -56,6 +57,7 @@ func newSA(spi uint32, keySalt []byte) (securityAssociation, error) {
 type Sender struct {
 	mu       sync.Mutex
 	sa       securityAssociation
+	nonce    [12]byte // Per-call workspace protected by mu; filled before every AEAD call.
 	sequence uint32
 }
 
@@ -67,12 +69,34 @@ func NewSender(spi uint32, keySalt []byte) (*Sender, error) {
 	return &Sender{sa: sa}, nil
 }
 
-// Seal returns an ESP packet without outer IP or UDP headers. The caller must
-// first enforce the SA's outbound traffic selectors and its effective MTU.
+// Seal returns a detached ESP packet without outer IP or UDP headers. The caller
+// must first enforce the SA's outbound traffic selectors and its effective MTU.
 func (s *Sender) Seal(ipPacket []byte) ([]byte, error) {
+	return s.seal(nil, ipPacket, false)
+}
+
+// SealInto writes an ESP packet at the beginning of dst, using its capacity
+// rather than its length. The caller must first enforce the SA's outbound
+// traffic selectors and its effective MTU. The returned packet shares dst's
+// storage; ipPacket remains unchanged.
+//
+// The output write region must not overlap ipPacket's readable bytes. Disjoint
+// regions of the same backing array are allowed. Insufficient capacity or
+// overlap returns ErrInvalidPacket without changing dst or consuming a sequence.
+func (s *Sender) SealInto(dst, ipPacket []byte) ([]byte, error) {
+	return s.seal(dst, ipPacket, true)
+}
+
+func (s *Sender) seal(dst, ipPacket []byte, into bool) ([]byte, error) {
 	next, err := innerProtocol(ipPacket)
 	if err != nil {
 		return nil, err
+	}
+	padding := (4 - (len(ipPacket)+2)%4) % 4
+	plaintextEnd := 16 + len(ipPacket) + padding + 2
+	wireLength := plaintextEnd + 16
+	if into && (cap(dst) < wireLength || overlappingBytes(dst[:wireLength], ipPacket)) {
+		return nil, ErrInvalidPacket
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -80,22 +104,27 @@ func (s *Sender) Seal(ipPacket []byte) ([]byte, error) {
 		return nil, ErrSequenceExhausted
 	}
 	s.sequence++
-	padding := (4 - (len(ipPacket)+2)%4) % 4
-	plaintext := make([]byte, len(ipPacket)+padding+2)
+	// Reserve header, plaintext and tag once. GCM permits exact input/output
+	// overlap, so encrypt in place after the independent caller-data copy.
+	var packet []byte
+	if into {
+		packet = dst[:plaintextEnd]
+	} else {
+		packet = make([]byte, plaintextEnd, wireLength)
+	}
+	plaintext := packet[16:]
 	copy(plaintext, ipPacket)
 	for i := 0; i < padding; i++ {
 		plaintext[len(ipPacket)+i] = byte(i + 1)
 	}
 	plaintext[len(plaintext)-2] = byte(padding)
 	plaintext[len(plaintext)-1] = next
-	packet := make([]byte, 16, 16+len(plaintext)+16)
 	binary.BigEndian.PutUint32(packet[:4], s.sa.spi)
 	binary.BigEndian.PutUint32(packet[4:8], s.sequence)
 	binary.BigEndian.PutUint64(packet[8:16], uint64(s.sequence))
-	var nonce [12]byte
-	copy(nonce[:4], s.sa.salt[:])
-	copy(nonce[4:], packet[8:16])
-	return s.sa.aead.Seal(packet, nonce[:], plaintext, packet[:8]), nil
+	copy(s.nonce[:4], s.sa.salt[:])
+	copy(s.nonce[4:], packet[8:16])
+	return s.sa.aead.Seal(packet[:16], s.nonce[:], plaintext, packet[:8]), nil
 }
 
 // Receiver is safe for concurrent use and must not be copied. Its 64-packet
@@ -105,6 +134,7 @@ func (s *Sender) Seal(ipPacket []byte) ([]byte, error) {
 type Receiver struct {
 	mu      sync.Mutex
 	sa      securityAssociation
+	nonce   [12]byte // Per-call workspace protected by mu; filled before every AEAD call.
 	highest uint32
 	seen    uint64
 }
@@ -121,6 +151,20 @@ func NewReceiver(spi uint32, keySalt []byte) (*Receiver, error) {
 // packet. Before delivery, the caller must enforce inbound traffic selectors.
 // TFC padding, dummy packets, and IPv6 jumbograms are not supported.
 func (r *Receiver) Open(packet []byte) ([]byte, error) {
+	return r.open(packet, false)
+}
+
+// OpenOwned authenticates and unwraps an exclusively owned ESP packet in place.
+// The caller must treat packet's storage as consumed even on failure. On success
+// the returned inner IP packet shares that storage and has no spare capacity.
+// The caller must retain exclusive ownership until delivery or discard finishes,
+// and enforce inbound traffic selectors before delivery. Packet checks and
+// replay handling are the same as Open.
+func (r *Receiver) OpenOwned(packet []byte) ([]byte, error) {
+	return r.open(packet, true)
+}
+
+func (r *Receiver) open(packet []byte, owned bool) ([]byte, error) {
 	if len(packet) < 36 || len(packet) > MaxPacket || len(packet)%4 != 0 {
 		return nil, ErrInvalidPacket
 	}
@@ -139,10 +183,13 @@ func (r *Receiver) Open(packet []byte) ([]byte, error) {
 			return nil, ErrReplay
 		}
 	}
-	var nonce [12]byte
-	copy(nonce[:4], r.sa.salt[:])
-	copy(nonce[4:], packet[8:16])
-	plaintext, err := r.sa.aead.Open(nil, nonce[:], packet[16:], packet[:8])
+	copy(r.nonce[:4], r.sa.salt[:])
+	copy(r.nonce[4:], packet[8:16])
+	var dst []byte
+	if owned {
+		dst = packet[16:16]
+	}
+	plaintext, err := r.sa.aead.Open(dst, r.nonce[:], packet[16:], packet[:8])
 	if err != nil {
 		return nil, ErrAuthentication
 	}
@@ -168,6 +215,15 @@ func (r *Receiver) Open(packet []byte) ([]byte, error) {
 		r.seen |= uint64(1) << (r.highest - sequence)
 	}
 	return inner, nil
+}
+
+// overlappingBytes compares only the ranges read or written, not spare capacity.
+func overlappingBytes(a, b []byte) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return false
+	}
+	return uintptr(unsafe.Pointer(&a[0])) <= uintptr(unsafe.Pointer(&b[len(b)-1])) &&
+		uintptr(unsafe.Pointer(&b[0])) <= uintptr(unsafe.Pointer(&a[len(a)-1]))
 }
 
 func innerProtocol(packet []byte) (byte, error) {

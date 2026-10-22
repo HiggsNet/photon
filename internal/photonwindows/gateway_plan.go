@@ -45,10 +45,18 @@ type GatewayPlan struct {
 }
 
 func planGateway(ctx context.Context, config *Config, view corestate.View, now time.Time, resolver ipsec.DNSResolver) GatewayPlan {
+	plan := planGatewaySelection(ctx, config, view, now, resolver, nil)
+	if plan.Selected != nil {
+		plan.Routes = authorizedGatewayRoutes(config, view, now)
+	}
+	return plan
+}
+
+func planGatewaySelection(ctx context.Context, config *Config, view corestate.View, now time.Time, resolver ipsec.DNSResolver, verifier *photoncrypto.Verifier) GatewayPlan {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	plan := GatewayPlan{Revision: view.Revision, EvaluatedAt: now}
-	plan.Candidates = gatewayCandidates(ctx, config, view, now, resolver)
+	plan.Candidates = gatewayCandidates(ctx, config, view, now, resolver, verifier)
 	if err := ctx.Err(); err != nil {
 		plan.Rejected = err.Error()
 		return plan
@@ -64,7 +72,6 @@ func planGateway(ctx context.Context, config *Config, view corestate.View, now t
 		plan.Rejected = "no authorized gateway contact"
 		return plan
 	}
-	plan.Routes = authorizedGatewayRoutes(config, view, now)
 	return plan
 }
 
@@ -75,6 +82,38 @@ func RevalidateGatewayPlan(config *Config, view corestate.View, plan GatewayPlan
 	if view.Revision != plan.Revision || plan.Rejected != "" {
 		return GatewayPlan{Revision: view.Revision, EvaluatedAt: now, Rejected: "gateway plan is stale or rejected"}
 	}
+	return revalidateResolvedGateway(config, view, plan, now)
+}
+
+// Established SAs can survive unrelated verified revisions. Cached DNS is only
+// a short-lived reachability hint: all signed records, chains and route facts
+// are reconstructed from the current view, then the caller compares the result
+// with the authenticated SA's pinned identity and endpoint. Packet processing
+// must never replace the original planner timestamp with this result's time.
+func revalidateActiveGateway(config *Config, view corestate.View, plan GatewayPlan, now time.Time) GatewayPlan {
+	current := revalidateActiveGatewaySelection(config, view, plan, now, nil)
+	if current.Selected != nil {
+		current.Routes = authorizedGatewayRoutes(config, view, now)
+	}
+	return current
+}
+
+func revalidateActiveGatewaySelection(config *Config, view corestate.View, plan GatewayPlan, now time.Time, verifier *photoncrypto.Verifier) GatewayPlan {
+	if plan.Selected == nil || plan.Rejected != "" || now.Before(plan.EvaluatedAt) || now.Sub(plan.EvaluatedAt) > 10*time.Second {
+		return GatewayPlan{Rejected: "active gateway DNS hint expired"}
+	}
+	return revalidateResolvedGatewaySelection(config, view, plan, now, verifier)
+}
+
+func revalidateResolvedGateway(config *Config, view corestate.View, plan GatewayPlan, now time.Time) GatewayPlan {
+	current := revalidateResolvedGatewaySelection(config, view, plan, now, nil)
+	if current.Selected != nil {
+		current.Routes = authorizedGatewayRoutes(config, view, now)
+	}
+	return current
+}
+
+func revalidateResolvedGatewaySelection(config *Config, view corestate.View, plan GatewayPlan, now time.Time, verifier *photoncrypto.Verifier) GatewayPlan {
 	resolved := gatewayResolvedHosts{}
 	seen := make(map[string]map[netip.Addr]bool)
 	for _, candidate := range plan.Candidates {
@@ -94,7 +133,7 @@ func RevalidateGatewayPlan(config *Config, view corestate.View, plan GatewayPlan
 			resolved[contact.Host] = append(resolved[contact.Host], net.IPAddr{IP: net.IP(address.AsSlice())})
 		}
 	}
-	return planGateway(context.Background(), config, view, now, resolved)
+	return planGatewaySelection(context.Background(), config, view, now, resolved, verifier)
 }
 
 type gatewayResolvedHosts map[string][]net.IPAddr
@@ -107,31 +146,11 @@ func (hosts gatewayResolvedHosts) LookupIPAddr(_ context.Context, host string) (
 }
 
 func authorizedGatewayRoutes(config *Config, view corestate.View, now time.Time) []AuthorizedGatewayRoute {
-	if view.State == nil || view.State.Network == nil || photoncrypto.VerifyPinnedRoot(view.State.Network, config.TrustedRootPublicKey) != nil {
-		return nil
-	}
-	// BuildAuthorizedRouteSet expects verified active input. A previous verified
-	// revision can outlive an authority/delegation: recheck every relevant record
-	// and chain against now before invoking the common IPAM authorization logic.
-	active := zone.NewNetworkState()
-	for path, zs := range view.State.Network.Zones {
-		if zs == nil || photoncrypto.VerifyChain(view.State.Network, path, now) != nil {
-			continue
-		}
-		copy := *zs
-		copy.Records = make(map[string]*zone.Record)
-		for key, record := range zs.Records {
-			if !strings.HasPrefix(key, routing.RecordKeyPrefixIPAMPools) && !strings.HasPrefix(key, routing.RecordKeyPrefixIPAMAssignments) && !strings.HasPrefix(key, routing.RecordKeyPrefixRoutes) {
-				continue
-			}
-			if record != nil && record.Zone == path && record.Key == key && photoncrypto.VerifyRecord(record, zs.Authority, now) == nil {
-				copy.Records[key] = record
-			}
-		}
-		active.Zones[path] = &copy
-	}
-	set, err := routing.BuildAuthorizedRouteSet(active, now)
-	if err != nil {
+	return authorizedGatewayRoutesFromSet(config, currentAuthorizedRouteSet(config, view, now))
+}
+
+func authorizedGatewayRoutesFromSet(config *Config, set *routing.AuthorizedRouteSet) []AuthorizedGatewayRoute {
+	if set == nil {
 		return nil
 	}
 	var routes []AuthorizedGatewayRoute
@@ -152,4 +171,39 @@ func authorizedGatewayRoutes(config *Config, view corestate.View, now time.Time)
 		return strings.Compare(a.Prefix.String(), b.Prefix.String())
 	})
 	return routes
+}
+
+func currentAuthorizedRouteSet(config *Config, view corestate.View, now time.Time) *routing.AuthorizedRouteSet {
+	return currentAuthorizedRouteSetWithVerifier(config, view, now, nil)
+}
+
+func currentAuthorizedRouteSetWithVerifier(config *Config, view corestate.View, now time.Time, verifier *photoncrypto.Verifier) *routing.AuthorizedRouteSet {
+	if config == nil || view.State == nil || view.State.Network == nil || photoncrypto.VerifyPinnedRoot(view.State.Network, config.TrustedRootPublicKey) != nil {
+		return nil
+	}
+	// BuildAuthorizedRouteSet expects verified active input. A previous verified
+	// revision can outlive an authority/delegation: recheck every relevant record
+	// and chain against now before invoking the common IPAM authorization logic.
+	active := zone.NewNetworkState()
+	for path, zs := range view.State.Network.Zones {
+		if zs == nil || verifier.VerifyChain(view.State.Network, path, now) != nil {
+			continue
+		}
+		copy := *zs
+		copy.Records = make(map[string]*zone.Record)
+		for key, record := range zs.Records {
+			if !strings.HasPrefix(key, routing.RecordKeyPrefixIPAMPools) && !strings.HasPrefix(key, routing.RecordKeyPrefixIPAMAssignments) && !strings.HasPrefix(key, routing.RecordKeyPrefixRoutes) {
+				continue
+			}
+			if record != nil && record.Zone == path && record.Key == key && verifier.VerifyRecord(record, zs.Authority, now) == nil {
+				copy.Records[key] = record
+			}
+		}
+		active.Zones[path] = &copy
+	}
+	set, err := routing.BuildAuthorizedRouteSet(active, now)
+	if err != nil {
+		return nil
+	}
+	return set
 }

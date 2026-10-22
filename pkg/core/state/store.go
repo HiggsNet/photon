@@ -319,7 +319,11 @@ func (store *Store) ApplyRemoteBatch(ctx context.Context, peerID string, batch [
 		}
 		if outcome.Err != nil && !(item.RefreshOnRootMismatch && errors.Is(outcome.Err, ErrSnapshotRootMismatch)) {
 			outcome.RejectReason = remoteRejectReason(outcome.Err)
-			if item.Snapshot != nil && recordRejectedObject(gossipCandidate, peerID, item.Snapshot.Zone, rejectedRoot(item), outcome.RejectReason, now) {
+			// A future activation or missing ancestor must still fail validation,
+			// but its digest can become valid without changing. Let the normal
+			// bounded gossip schedule retry instead of suppressing it for ten minutes.
+			var pending photoncrypto.VerificationPendingError
+			if item.Snapshot != nil && !errors.As(outcome.Err, &pending) && recordRejectedObject(gossipCandidate, peerID, item.Snapshot.Zone, rejectedRoot(item), outcome.RejectReason, now) {
 				metadataChanged = true
 			}
 		}

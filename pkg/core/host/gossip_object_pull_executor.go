@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"sync"
 	"time"
 
@@ -39,7 +40,17 @@ type GossipObjectPullExecutor struct {
 	peers   map[string]int
 	quotaMu sync.Mutex
 	quotas  *gossip.PeerQuotas
+	addrMu  sync.Mutex
+	addrs   map[objectPullAddress]objectPullAddressHealth
 }
+
+type objectPullAddress struct{ peer, address string }
+type objectPullAddressHealth struct{ success, failure time.Time }
+
+const (
+	objectPullAddressTTL     = 2 * time.Minute
+	objectPullAddressBackoff = 30 * time.Second
+)
 
 func NewGossipObjectPullExecutor(config GossipObjectPullExecutorConfig) *GossipObjectPullExecutor {
 	if config.Now == nil {
@@ -55,6 +66,7 @@ func NewGossipObjectPullExecutor(config GossipObjectPullExecutorConfig) *GossipO
 		config: config,
 		peers:  make(map[string]int),
 		quotas: gossip.NewPeerQuotas(config.Quota),
+		addrs:  make(map[objectPullAddress]objectPullAddressHealth),
 	}
 }
 
@@ -74,57 +86,124 @@ func (executor *GossipObjectPullExecutor) PullFrom(ctx context.Context, input Go
 	now := executor.config.Now()
 	if input.Network == nil {
 		completion.Err = fmt.Errorf("no committed state for peer %s", action.PeerID)
-		completion.Unreachable = true
 		return completion
 	}
-	addr := ResolveGossipObjectPullAddress(input, action.PeerID, now)
-	if addr == "" {
+	addresses := executor.orderAddresses(action.PeerID, ResolveGossipObjectPullAddresses(input, action.PeerID, now), now)
+	if len(addresses) == 0 {
 		completion.Err = fmt.Errorf("no TCP address for peer %s", action.PeerID)
 		completion.Unreachable = true
 		return completion
 	}
-	completion.Addr = addr
 	release, err := executor.acquirePeer(action.PeerID)
 	if err != nil {
 		completion.Err = err
 		return completion
 	}
 	defer release()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// All candidates share one budget. Reserve time for the remaining ones so
+	// a blackholed first address cannot consume the entire fallback window.
+	ctx, cancel := context.WithTimeout(ctx, gossip.ObjectPullBudget)
+	defer cancel()
 	request := &gossip.ObjectPullRequest{Type: gossip.ObjectPullZone, Zone: action.Zone}
 	requestBytes, err := gossip.EncodeObjectPullRequest(request)
-	if err == nil {
-		err = executor.allowQuota(action.PeerID, int64(len(requestBytes)), now)
-	}
 	if err != nil {
 		completion.Err = err
 		return completion
 	}
-	response, err := executor.config.Client.Exchange(ctx, addr, request)
-	responseBytes := encodedObjectPullResponseSize(response)
-	if err == nil {
-		err = executor.allowQuota(action.PeerID, int64(responseBytes), executor.config.Now())
-	}
-	if err == nil && (response == nil || !response.OK) {
-		message := "empty response"
-		if response != nil && response.Error != "" {
-			message = response.Error
+	for i, addr := range addresses {
+		if err := ctx.Err(); err != nil {
+			completion.Err = err
+			break
 		}
-		err = fmt.Errorf("object pull failed: %s", message)
+		if err := executor.allowQuota(action.PeerID, int64(len(requestBytes)), executor.config.Now()); err != nil {
+			completion.Err = err
+			break
+		}
+		completion.Addr = addr
+		deadline, _ := ctx.Deadline()
+		attempt, stop := context.WithTimeout(ctx, time.Until(deadline)/time.Duration(len(addresses)-i))
+		response, err := executor.config.Client.Exchange(attempt, addr, request)
+		stop()
+		responseBytes := encodedObjectPullResponseSize(response)
+		completion.Bytes += responseBytes
+		if err != nil {
+			completion.Err = err
+			if ctx.Err() != nil {
+				completion.Err = ctx.Err()
+				break
+			}
+			if !isGossipObjectPullUnreachable(err) {
+				break
+			}
+			executor.recordAddress(action.PeerID, addr, false)
+			continue
+		}
+		// A completed exchange establishes TCP reachability. Semantic and quota
+		// failures do not justify replaying the request at another address.
+		executor.recordAddress(action.PeerID, addr, true)
+		err = executor.allowQuota(action.PeerID, int64(responseBytes), executor.config.Now())
+		if err == nil && (response == nil || !response.OK) {
+			message := "empty response"
+			if response != nil && response.Error != "" {
+				message = response.Error
+			}
+			err = fmt.Errorf("object pull failed: %s", message)
+		}
+		if err == nil && response.Snapshot == nil {
+			err = errors.New("object pull returned empty snapshot")
+		}
+		if err == nil && response.Snapshot.Zone != action.Zone {
+			err = fmt.Errorf("object pull returned zone %s for request %s", response.Snapshot.Zone, action.Zone)
+		}
+		completion.Err = err
+		if err == nil {
+			completion.Snapshot = response.Snapshot
+		}
+		break
 	}
-	if err == nil && response.Snapshot == nil {
-		err = errors.New("object pull returned empty snapshot")
-	}
-	if err == nil && response.Snapshot.Zone != action.Zone {
-		err = fmt.Errorf("object pull returned zone %s for request %s", response.Snapshot.Zone, action.Zone)
-	}
-	completion.Err = err
-	completion.Addr = addr
-	completion.Bytes = responseBytes
-	completion.Unreachable = isGossipObjectPullUnreachable(err)
-	if err == nil {
-		completion.Snapshot = response.Snapshot
-	}
+	completion.Unreachable = isGossipObjectPullUnreachable(completion.Err)
 	return completion
+}
+
+// TCP quality is kept independently of UDP and expires with idle addresses.
+func (executor *GossipObjectPullExecutor) orderAddresses(peer string, addresses []string, now time.Time) []string {
+	executor.addrMu.Lock()
+	defer executor.addrMu.Unlock()
+	for key, health := range executor.addrs {
+		if now.Sub(health.success) >= objectPullAddressTTL && now.Sub(health.failure) >= objectPullAddressTTL {
+			delete(executor.addrs, key)
+		}
+	}
+	rank := func(addr string) int {
+		health := executor.addrs[objectPullAddress{peer, addr}]
+		if !health.failure.IsZero() && now.Sub(health.failure) < objectPullAddressBackoff {
+			return 2
+		}
+		if !health.success.IsZero() && now.Sub(health.success) < objectPullAddressTTL {
+			return 0
+		}
+		return 1
+	}
+	sort.SliceStable(addresses, func(i, j int) bool { return rank(addresses[i]) < rank(addresses[j]) })
+	return addresses
+}
+
+func (executor *GossipObjectPullExecutor) recordAddress(peer, address string, success bool) {
+	executor.addrMu.Lock()
+	defer executor.addrMu.Unlock()
+	key := objectPullAddress{peer, address}
+	health := executor.addrs[key]
+	if success {
+		health.success = executor.config.Now()
+		health.failure = time.Time{}
+	} else {
+		health.failure = executor.config.Now()
+		health.success = time.Time{}
+	}
+	executor.addrs[key] = health
 }
 
 func (executor *GossipObjectPullExecutor) acquirePeer(peerID string) (func(), error) {
@@ -162,7 +241,7 @@ func encodedObjectPullResponseSize(response *gossip.ObjectPullResponse) int {
 }
 
 func isGossipObjectPullUnreachable(err error) bool {
-	if err == nil {
+	if err == nil || errors.Is(err, context.Canceled) {
 		return false
 	}
 	if errors.Is(err, context.DeadlineExceeded) {

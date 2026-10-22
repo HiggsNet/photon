@@ -287,7 +287,7 @@ func TestSyncSessionConcurrentObjectPullsComplete(t *testing.T) {
 	_, _ = s.OnEvent(&PongReceivedEvent{
 		PeerID:       "peer-a",
 		Pong:         &Pong{},
-		MissingZones: []zone.ZonePath{"catofes.", "node-a.catofes."},
+		MissingZones: []zone.ZonePath{"node-b.catofes.", "node-a.catofes."},
 	}, now)
 
 	if s.State != SyncSessionObjectPulling {
@@ -298,8 +298,8 @@ func TestSyncSessionConcurrentObjectPullsComplete(t *testing.T) {
 	// session must stay in object_pulling so the second result is not dropped.
 	actions1, err := s.OnEvent(&ObjectPullResultEvent{
 		PeerID:   "peer-a",
-		Zone:     "catofes.",
-		Snapshot: &corestate.ZoneSnapshot{Zone: "catofes."},
+		Zone:     "node-b.catofes.",
+		Snapshot: &corestate.ZoneSnapshot{Zone: "node-b.catofes."},
 	}, now)
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
@@ -324,7 +324,7 @@ func TestSyncSessionConcurrentObjectPullsComplete(t *testing.T) {
 	}
 	assertActionTypes(t, actions2, []string{"ApplySnapshotAction"})
 
-	ack1, err := s.OnEvent(&SnapshotAppliedEvent{PeerID: "peer-a", Zone: "catofes."}, now)
+	ack1, err := s.OnEvent(&SnapshotAppliedEvent{PeerID: "peer-a", Zone: "node-b.catofes."}, now)
 	if err != nil {
 		t.Fatalf("first SnapshotAppliedEvent: %v", err)
 	}
@@ -349,15 +349,15 @@ func TestSyncSessionConcurrentObjectPullsOneError(t *testing.T) {
 	_, _ = s.OnEvent(&PongReceivedEvent{
 		PeerID:       "peer-a",
 		Pong:         &Pong{},
-		MissingZones: []zone.ZonePath{"catofes.", "node-a.catofes."},
+		MissingZones: []zone.ZonePath{"node-b.catofes.", "node-a.catofes."},
 	}, now)
 
 	// First pull fails. We request chunk fallback but stay in object_pulling
 	// because another pull is still in flight.
 	actions1, err := s.OnEvent(&ObjectPullResultEvent{
-		PeerID: "peer-a",
-		Zone:   "catofes.",
-		Err:    errors.New("tcp unreachable"),
+		PeerID:      "peer-a",
+		Zone:        "node-b.catofes.",
+		Unreachable: true, Err: errors.New("tcp unreachable"),
 	}, now)
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
@@ -431,9 +431,9 @@ func TestSyncSessionObjectPullErrorFallsBackToChunk(t *testing.T) {
 	}, now)
 
 	actions, err := s.OnEvent(&ObjectPullResultEvent{
-		PeerID: "peer-a",
-		Zone:   "node-a.catofes.",
-		Err:    errors.New("tcp unreachable"),
+		PeerID:      "peer-a",
+		Zone:        "node-a.catofes.",
+		Unreachable: true, Err: errors.New("tcp unreachable"),
 	}, now)
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
@@ -458,7 +458,7 @@ func TestSyncSessionChunkComplete(t *testing.T) {
 		Pong:         &Pong{},
 		MissingZones: []zone.ZonePath{"node-a.catofes."},
 	}, now)
-	_, _ = s.OnEvent(&ObjectPullResultEvent{PeerID: "peer-a", Zone: "node-a.catofes.", Err: errors.New("tcp unreachable")}, now)
+	_, _ = s.OnEvent(&ObjectPullResultEvent{PeerID: "peer-a", Zone: "node-a.catofes.", Unreachable: true, Err: errors.New("tcp unreachable")}, now)
 
 	actions, err := s.OnEvent(&ObjectChunkEvent{
 		PeerID:   "peer-a",

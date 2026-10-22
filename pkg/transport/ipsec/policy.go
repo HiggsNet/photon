@@ -3,7 +3,6 @@ package ipsec
 import (
 	"fmt"
 	"net/url"
-	"path"
 	"strconv"
 	"strings"
 
@@ -68,7 +67,7 @@ func ParseMeshPolicyRule(raw string) (MeshPolicyRule, error) {
 		}
 	} else {
 		rule.ZonePattern = target
-		if err := validateZonePattern(rule.ZonePattern); err != nil {
+		if err := zone.ValidatePattern(rule.ZonePattern); err != nil {
 			return MeshPolicyRule{}, err
 		}
 	}
@@ -144,27 +143,7 @@ func (r MeshPolicyRule) Validate() error {
 }
 
 func (r MeshPolicyRule) MatchesZone(peer zone.ZonePath) bool {
-	if r.ZonePattern == "" {
-		return false
-	}
-	if r.ZonePattern == string(peer) {
-		return true
-	}
-	ok, err := path.Match(r.ZonePattern, string(peer))
-	return err == nil && ok
-}
-
-func validateZonePattern(pattern string) error {
-	if pattern == "" {
-		return fmt.Errorf("zone pattern is required")
-	}
-	if strings.Contains(pattern, "://") {
-		return fmt.Errorf("invalid zone pattern %q", pattern)
-	}
-	if _, err := path.Match(pattern, "node.example."); err != nil {
-		return fmt.Errorf("invalid zone glob %q: %w", pattern, err)
-	}
-	return nil
+	return zone.MatchesPattern(r.ZonePattern, peer)
 }
 
 func firstQuery(values url.Values, key string) string {

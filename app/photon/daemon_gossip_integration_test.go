@@ -44,7 +44,7 @@ func TestDaemonObjectChunkCompletionNotifiesPlatformOnce(t *testing.T) {
 	session := gossip.NewSyncSession(peerID)
 	_, _ = session.OnEvent(&gossip.SyncTimerEvent{PeerID: peerID}, now)
 	_, _ = session.OnEvent(&gossip.PongReceivedEvent{PeerID: peerID, Pong: &gossip.Pong{}, MissingZones: []zone.ZonePath{"catofes."}}, now)
-	_, _ = session.OnEvent(&gossip.ObjectPullResultEvent{PeerID: peerID, Zone: "catofes.", Err: errors.New("tcp unavailable")}, now)
+	_, _ = session.OnEvent(&gossip.ObjectPullResultEvent{PeerID: peerID, Zone: "catofes.", Unreachable: true, Err: errors.New("tcp unavailable")}, now)
 	service.gossipDriver.Gossip.SetSession(peerID, session)
 	notifications := 0
 	service.Hooks.OnStateChanged = func() { notifications++ }

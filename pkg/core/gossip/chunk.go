@@ -23,7 +23,26 @@ const (
 	MaxChunkPeerInflight   = 4
 	MaxChunkObjectBytes    = 8 << 20
 	MaxChunkSendCacheBytes = 32 << 20
+	MaxChunkSendTransfers  = 1024
 )
+
+var ErrChunkSendCacheFull = errors.New("gossip chunk send cache limits exceeded")
+
+// ChunkSendCacheFullError describes admission pressure, not a malformed packet.
+type ChunkSendCacheFullError struct {
+	PeerID         string
+	Limit          string
+	PeerTransfers  int
+	Transfers      int
+	Bytes          int
+	RequestedBytes int
+}
+
+func (e *ChunkSendCacheFullError) Error() string {
+	return fmt.Sprintf("%s: peer=%s limit=%s peer_transfers=%d/%d transfers=%d/%d bytes=%d/%d requested_bytes=%d", ErrChunkSendCacheFull, e.PeerID, e.Limit, e.PeerTransfers, MaxChunkPeerInflight, e.Transfers, MaxChunkSendTransfers, e.Bytes, MaxChunkSendCacheBytes, e.RequestedBytes)
+}
+
+func (e *ChunkSendCacheFullError) Unwrap() error { return ErrChunkSendCacheFull }
 
 type chunkAssembly struct {
 	peerID       string
@@ -213,6 +232,8 @@ type sentChunkTransfer struct {
 	expires      time.Time
 	repairRounds int
 	lastRequest  string
+	active       bool
+	lastUsed     time.Time
 }
 
 // SentChunkCache retains bounded detached chunks for NACK repair.
@@ -230,38 +251,146 @@ func sentTransferKey(peerID string, transferID []byte) string {
 	return peerID + "|" + hex.EncodeToString(transferID)
 }
 
-func (c *SentChunkCache) Put(peerID string, transferID []byte, chunks []*ObjectChunk, now time.Time) bool {
+// Put admits one initial send, reusing an identical unexpired transfer. Idle
+// repair entries may be evicted under pressure; paced sends are always pinned.
+func (c *SentChunkCache) Put(peerID string, transferID []byte, chunks []*ObjectChunk, now time.Time) ([]*ObjectChunk, error) {
 	if c == nil || peerID == "" || len(transferID) != 16 || len(chunks) == 0 {
-		return false
+		return nil, errors.New("invalid chunk send cache input")
+	}
+	requestedBytes := 0
+	for i, chunk := range chunks {
+		if chunk == nil || int(chunk.Index) != i || int(chunk.Total) != len(chunks) || !bytes.Equal(chunk.TransferID, transferID) {
+			return nil, errors.New("invalid chunk send cache parts")
+		}
+		requestedBytes += len(chunk.Data)
+	}
+	if requestedBytes == 0 {
+		return nil, errors.New("empty chunk send cache payload")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.pruneLocked(now)
 	peerCount := 0
+	activePeer, activeCount, activeBytes := 0, 0, 0
 	for _, entry := range c.entries {
 		if entry.peerID == peerID {
 			peerCount++
+			if sameChunkObject(entry.chunks, chunks) {
+				entry.lastUsed = now
+				return cloneObjectChunks(entry.chunks), nil
+			}
+			if entry.active {
+				activePeer++
+			}
+		}
+		if entry.active {
+			activeCount++
+			activeBytes += entry.bytes
 		}
 	}
-	if peerCount >= MaxChunkPeerInflight {
-		return false
+	full := func(limit string) ([]*ObjectChunk, error) {
+		return nil, &ChunkSendCacheFullError{PeerID: peerID, Limit: limit, PeerTransfers: peerCount, Transfers: len(c.entries), Bytes: c.bytes, RequestedBytes: requestedBytes}
 	}
-	entry := &sentChunkTransfer{peerID: peerID, transferID: append([]byte(nil), transferID...), created: now, expires: now.Add(ChunkTransferTTL)}
+	if activePeer >= MaxChunkPeerInflight {
+		return full("peer_active_transfers")
+	}
+	if activeCount >= MaxChunkSendTransfers {
+		return full("transfers")
+	}
+	if activeBytes+requestedBytes > MaxChunkSendCacheBytes {
+		return full("bytes")
+	}
+	key := sentTransferKey(peerID, transferID)
+	if c.entries[key] != nil {
+		return nil, errors.New("chunk transfer id reused for a different object")
+	}
+	// Admission above proves that reclaiming only idle entries is sufficient.
+	// Do not evict any repair data for a request that cannot be admitted.
+	for peerCount >= MaxChunkPeerInflight || len(c.entries) >= MaxChunkSendTransfers || c.bytes+requestedBytes > MaxChunkSendCacheBytes {
+		oldestKey := ""
+		var oldest *sentChunkTransfer
+		for candidateKey, candidate := range c.entries {
+			if candidate.active || peerCount >= MaxChunkPeerInflight && candidate.peerID != peerID {
+				continue
+			}
+			if oldest == nil || candidate.lastUsed.Before(oldest.lastUsed) || candidate.lastUsed.Equal(oldest.lastUsed) && candidateKey < oldestKey {
+				oldestKey, oldest = candidateKey, candidate
+			}
+		}
+		c.removeLocked(oldestKey)
+		if oldest.peerID == peerID {
+			peerCount--
+		}
+	}
+	entry := &sentChunkTransfer{peerID: peerID, transferID: append([]byte(nil), transferID...), created: now, expires: now.Add(ChunkTransferTTL), active: true, lastUsed: now}
 	for _, chunk := range chunks {
-		if chunk == nil {
-			continue
-		}
 		copyChunk := cloneObjectChunk(chunk)
 		entry.bytes += len(copyChunk.Data)
 		entry.chunks = append(entry.chunks, copyChunk)
 	}
-	if entry.bytes == 0 || entry.bytes > MaxChunkSendCacheBytes || c.bytes+entry.bytes > MaxChunkSendCacheBytes {
-		return false
-	}
-	key := sentTransferKey(peerID, transferID)
 	c.entries[key] = entry
 	c.bytes += entry.bytes
+	return chunks, nil
+}
+
+func sameChunkObject(left, right []*ObjectChunk) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	a, b := left[0], right[0]
+	return a.Object == b.Object && a.Zone == b.Zone && a.Key == b.Key && a.Version == b.Version &&
+		bytes.Equal(a.ObjectHash, b.ObjectHash) && bytes.Equal(a.RootHash, b.RootHash) &&
+		len(a.Data) == len(b.Data)
+}
+
+func cloneObjectChunks(chunks []*ObjectChunk) []*ObjectChunk {
+	out := make([]*ObjectChunk, len(chunks))
+	for i, chunk := range chunks {
+		out[i] = cloneObjectChunk(chunk)
+	}
+	return out
+}
+
+// Activate pins an idle transfer before a resend or repair job starts. Repeated
+// requests cannot extend an already active job's lifetime.
+func (c *SentChunkCache) Activate(peerID string, transferID []byte, now time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.pruneLocked(now)
+	entry := c.entries[sentTransferKey(peerID, transferID)]
+	if entry == nil {
+		return false
+	}
+	if !entry.active {
+		entry.active = true
+		entry.expires = now.Add(ChunkTransferTTL)
+	}
+	entry.lastUsed = now
 	return true
+}
+
+// Sent releases admission capacity while retaining best-effort NACK repair.
+func (c *SentChunkCache) Sent(peerID string, transferID []byte, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if entry := c.entries[sentTransferKey(peerID, transferID)]; entry != nil {
+		entry.active = false
+		entry.lastUsed = now
+		entry.expires = now.Add(ChunkTransferTTL)
+	}
+}
+
+func (c *SentChunkCache) Drop(peerID string, transferID []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.removeLocked(sentTransferKey(peerID, transferID))
+}
+
+func (c *SentChunkCache) removeLocked(key string) {
+	if entry := c.entries[key]; entry != nil {
+		c.bytes -= entry.bytes
+	}
+	delete(c.entries, key)
 }
 
 func (c *SentChunkCache) Repair(peerID string, nack *ObjectChunkNACK, now time.Time) []*ObjectChunk {
@@ -287,6 +416,7 @@ func (c *SentChunkCache) Repair(peerID string, nack *ObjectChunkNACK, now time.T
 	}
 	entry.lastRequest = signature
 	entry.repairRounds++
+	entry.lastUsed = now
 	result := make([]*ObjectChunk, 0, len(indexes))
 	for _, index := range indexes {
 		if int(index) >= len(entry.chunks) || entry.chunks[index] == nil {
@@ -338,10 +468,7 @@ func cloneObjectChunk(chunk *ObjectChunk) *ObjectChunk {
 func (c *SentChunkCache) pruneLocked(now time.Time) {
 	for key, entry := range c.entries {
 		if entry == nil || !entry.expires.After(now) {
-			if entry != nil {
-				c.bytes -= entry.bytes
-			}
-			delete(c.entries, key)
+			c.removeLocked(key)
 		}
 	}
 }

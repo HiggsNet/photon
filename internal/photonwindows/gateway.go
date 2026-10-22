@@ -29,14 +29,15 @@ type GatewayCandidate struct {
 // verified revision has not changed. Bootstrap hints cannot authorize contacts.
 // DNS-only addresses are left for the future online connection planner.
 func GatewayCandidates(config *Config, view corestate.View, now time.Time) []GatewayCandidate {
-	return gatewayCandidates(context.Background(), config, view, now, nil)
+	return gatewayCandidates(context.Background(), config, view, now, nil, nil)
 }
 
-func gatewayCandidates(ctx context.Context, config *Config, view corestate.View, now time.Time, resolver ipsec.DNSResolver) []GatewayCandidate {
-	out := make([]GatewayCandidate, 0, len(config.Gateway.AllowedZones))
-	for _, peer := range config.Gateway.AllowedZones {
+func gatewayCandidates(ctx context.Context, config *Config, view corestate.View, now time.Time, resolver ipsec.DNSResolver, verifier *photoncrypto.Verifier) []GatewayCandidate {
+	peers := gatewayCandidateZones(config, view)
+	out := make([]GatewayCandidate, 0, len(peers))
+	for _, peer := range peers {
 		candidate := GatewayCandidate{Zone: peer}
-		contacts, fingerprint, err := gatewayContacts(ctx, config, view, peer, now, resolver)
+		contacts, fingerprint, err := gatewayContacts(ctx, config, view, peer, now, resolver, verifier)
 		if err != nil {
 			candidate.Rejected = err.Error()
 		} else {
@@ -53,7 +54,46 @@ func gatewayCandidates(ctx context.Context, config *Config, view corestate.View,
 	return out
 }
 
-func gatewayContacts(ctx context.Context, config *Config, view corestate.View, peer zone.ZonePath, now time.Time, resolver ipsec.DNSResolver) ([]ipsec.ContactPoint, string, error) {
+// Selectors only choose which concrete identities to diagnose. A literal keeps
+// its configured position and missing-peer diagnosis; each glob expands from
+// this exact verified view in sorted order. No expansion or trust is cached.
+// Matching a zone, including one without IPsec records, grants no authority:
+// gatewayContacts still checks every candidate's complete signed facts.
+func gatewayCandidateZones(config *Config, view corestate.View) []zone.ZonePath {
+	if config == nil {
+		return nil
+	}
+	var peers []zone.ZonePath
+	seen := make(map[zone.ZonePath]bool)
+	add := func(peer zone.ZonePath) {
+		if !seen[peer] {
+			seen[peer] = true
+			peers = append(peers, peer)
+		}
+	}
+	for _, selector := range config.Gateway.AllowedZones {
+		if !zone.HasPatternMeta(string(selector)) {
+			add(selector)
+			continue
+		}
+		if view.State == nil || view.State.Network == nil {
+			continue
+		}
+		var matched []zone.ZonePath
+		for peer := range view.State.Network.Zones {
+			if peer.Valid() && !peer.IsRoot() && peer != config.ManagedZone && zone.MatchesPattern(string(selector), peer) {
+				matched = append(matched, peer)
+			}
+		}
+		slices.Sort(matched)
+		for _, peer := range matched {
+			add(peer)
+		}
+	}
+	return peers
+}
+
+func gatewayContacts(ctx context.Context, config *Config, view corestate.View, peer zone.ZonePath, now time.Time, resolver ipsec.DNSResolver, verifier *photoncrypto.Verifier) ([]ipsec.ContactPoint, string, error) {
 	fail := func(reason string) ([]ipsec.ContactPoint, string, error) { return nil, "", errors.New(reason) }
 	if view.State == nil || view.State.Network == nil {
 		return fail("verified state is absent")
@@ -65,7 +105,7 @@ func gatewayContacts(ctx context.Context, config *Config, view corestate.View, p
 	if err := photoncrypto.VerifyPinnedRoot(network, config.TrustedRootPublicKey); err != nil {
 		return fail(err.Error())
 	}
-	if err := photoncrypto.VerifyChain(network, peer, now); err != nil {
+	if err := verifier.VerifyChain(network, peer, now); err != nil {
 		return fail(err.Error())
 	}
 	zs := network.Zones[peer]
@@ -78,7 +118,7 @@ func gatewayContacts(ctx context.Context, config *Config, view corestate.View, p
 		if record == nil || record.Zone != peer || record.Key != key {
 			return fail("missing or mismatched record: " + key)
 		}
-		if err := photoncrypto.VerifyRecord(record, zs.Authority, now); err != nil {
+		if err := verifier.VerifyRecord(record, zs.Authority, now); err != nil {
 			return fail(key + ": " + err.Error())
 		}
 		selected.Zones[peer].Records[key] = record

@@ -215,7 +215,7 @@ type BirdConfig struct {
 	UpstreamFilter *FilterBlock // optional kernel export filter for upstream
 }
 
-// StaticRouteBlock describes one "protocol static { route ... }" block.
+// StaticRouteBlock groups static routes rendered as one protocol per family.
 type StaticRouteBlock struct {
 	Name       string
 	IPv4Routes []StaticRoute

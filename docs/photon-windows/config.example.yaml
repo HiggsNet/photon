@@ -10,12 +10,14 @@ state:
   path: 'C:\ProgramData\HiggsNet\Photon Windows\photon.db'
 
 overlay:
-  id: main
+  # Must match the gateway's signed overlay ID. This matches the Linux example.
+  id: ipsec-main
   split_routes:
     - 10.42.0.0/16
     - fd42::/16
 
 gateway:
+  # Exact peer IDs or Linux-style globs, e.g. '*.catofes.' or '*'. Quote globs in YAML.
   allowed_zones:
     - gateway-a.catofes.
   bootstrap_hints:

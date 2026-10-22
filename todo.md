@@ -210,7 +210,7 @@ Daemon
 
 - [x] 支持矩阵先固定 Windows 11 amd64；Windows 10、arm64 在首个 vertical slice 后按真实 CI/设备验证扩展。
 - [x] 以 Linux 现网和 Ubuntu 5.9.13/Nix 6.0.7 双端隔离测试确定首版集合：IKE AES-CBC-128/SHA256/PRF-SHA256/P-256、Ed25519 认证、ESP AES-GCM-16-128；CHILD KE 支持 P-256 或 none，不强制旧网关使用 PFS，见 Windows design §1.2。候选由 StrongSwan 模拟，Windows 实现仍待 B3 验收。
-- [x] v1 保持 outbound-only leaf、一个 active gateway、split tunnel；不做 transit、IKE responder、full tunnel、DNS/NRPT、GUI 或自动更新。
+- [x] v1 网络范围保持 outbound-only leaf、一个 active gateway、split tunnel；不做 transit、IKE responder、full tunnel、DNS/NRPT 或自动更新。2026-10-15 按用户要求增加本机 GUI/托盘，见 B5a。
 - [x] 冻结 route-origin 验证：Babel route 安装前必须匹配 Photon verified authorization，撤销/授权收紧 fail closed。
 - [x] 定义 revocation、network change、service stop 和 crash recovery SLO。
 
@@ -236,41 +236,170 @@ B2 控制面前置已收口，可以进入 B3。这里不包含 SCM、Wintun/IP 
 - [x] 完成锁定 `ranet-lite` commit 的 [port map、license/provenance 与采用/重写决策](docs/photon-windows/ranet-port-map.md)；已在三个派生 codec 文件保留来源头，并交付完整 MIT notice；没有引入上游依赖。
 - [x] 实现有界 codec/proposal、CBC/HMAC/P-256/PRF+、独立向量与 fuzz；单次 SA_INIT 与隔离 strongSwan 5.9.13 默认 proposals 实际互通，并通过加密拒绝响应证明双向 keymat，见 [验收记录](docs/photon-windows/ike-testing.md)。尚未完成认证或 CHILD，不将此结果视为隧道成功。
 - [x] 分离 IKE codec/parser 与 initiator session state machine，实现 `IKE_SA_INIT -> IKE_AUTH -> 首个 CHILD_SA`。Ed25519/FQDN 绑定预先授权的 peer pin，校验双向 TS 收窄；隔离 strongSwan 使用生产连接生成器完成真实认证及 CHILD 安装，方向 key/salt 与 XFRM 一致。此项仅协议建链，不包含 ESP 数据包、Daemon 当前授权提交和 NAT-T/rekey。
-- [ ] 与 Photon StrongSwan 验证 ID encoding、raw Ed25519、NAT-T、proposal、retransmit、fragmentation 和错误通知。
-- [ ] 使用现有 Linux 连接生成器验证 Windows 与实际构建的 proposal 交集，覆盖首个 CHILD、CREATE_CHILD_SA 与双方发起的 rekey；依据 design §1.2 现场基线，不以改窄 Linux profile 代替兼容实现。
-- [ ] 实现 CHILD/IKE rekey、overlap、simultaneous rekey、DPD/liveness 与网络变化重连。
-- [x] 实现 tunnel-mode IPv4/IPv6 ESP、固定 SA SPI 校验、32 位 sequence、64 包 anti-replay、AEAD/padding/length 验证；序号耗尽拒绝，验签失败不推进窗口，独立向量、并发与 fuzz 验证。当前为大小有界的同步处理；多 SA SPI 分派和有界 crypto worker/queue 随实际共享 UDP owner 接入，仍未完成。
+- [x] 与 Photon StrongSwan 验证 ID encoding、raw Ed25519、NAT-T、proposal、retransmit、fragmentation 和错误通知。
+  - [x] AUTH 的 SKF 分片有界重组、乱序/重复/丢响应重传，strongSwan 5.9.13/6.0.7 均通过真实多片握手；后续交换共用已认证消息入口与序号 owner。
+- [x] 使用现有 Linux 连接生成器验证 Windows 与实际构建的 proposal 交集，覆盖首个 CHILD、CREATE_CHILD_SA 与双方发起的 rekey；依据 design §1.2 现场基线，不以改窄 Linux profile 代替兼容实现。
+  - [x] 默认无 KE 路径、认证后的 PFS 拒绝兼容、独立 P-256 capability；两方向 CHILD/IKE rekey、outer IPv4/IPv6、XFRM key/salt 及实际内核 echo 均在 strongSwan 5.9.13/6.0.7 通过。
+- [x] 实现 CHILD/IKE rekey、overlap、simultaneous rekey、DPD/liveness 与网络变化重连。
+  - [x] 统一双向 exchange owner、原密文重传、Delete、nonce 冲突裁决、IKE 角色切换；真实双版本测试强制交叉双方 pending CHILD/IKE 请求，不以顺序 rekey 替代碰撞。
+  - [x] Daemon 接入有界重传、定时 DPD、keepalive、失败销毁/重连、peer cutover、120 秒 overlap 上限；撤销、过期与 rebind 先阻断旧 generation。Windows VM 到两版本隔离 strongSwan 完成实际 AUTH/NAT-T、CHILD/IKE rekey 和四阶段内核 echo，见 [IKE 验收](docs/photon-windows/ike-testing.md)。物理睡眠/多层 NAT 产品矩阵仍归 B6。
+- [x] 实现 tunnel-mode IPv4/IPv6 ESP、固定 SA SPI 校验、32 位 sequence、64 包 anti-replay、AEAD/padding/length 验证；序号耗尽拒绝并触发 rekey，验签失败不推进窗口，独立向量、并发与 fuzz 验证。
 - [x] 实现 NAT detection 与 UDP 4500 IKE/ESP/keepalive 分流；隔离 strongSwan 完成真实 NAT-T AUTH 与双向 IPv4/IPv6 ESP 内核 echo。详情及实际构建版本见 [ESP 验收](docs/photon-windows/esp-testing.md)；不代表真实 NAT 设备、多层 NAT 或 Windows 跨主机隧道验收。
-- [ ] 接入多 SA SPI demux、有界 crypto workers/队列及当前授权 gate；不能将上述纯协议验证当作 Daemon 数据面已可用。
-- [ ] 一个共享 UDP socket 承载 IKE/ESP/gossip 所需流量；明确分流、队列、MTU 和 Windows batch-send 退化路径。
+- [x] 接入多 SA SPI demux、有界 crypto workers/队列及当前授权 gate；业务路由与 Wintun 整链路仍由 B4 验收。
+  - [x] 有界三 SA（old + simultaneous candidates）、双 crypto worker、64 项 ingress/completion 队列；generation、当前 gateway pin/contact、TS 和独立 packet policy 在提交/交付处校验，缺 B4 verdict 时默认拒绝。
+- [x] 一个共享 UDP socket 承载 IKE/ESP/gossip；IKE 队列 16、ESP 64、gossip/控制分片 1200 字节预算，ESP ingress 不截断；Windows 逐包发送、1 秒写期限，generation 隔离网络重绑前后的写入。
+
+B3 已完成上述协议、生命周期及双版本/Windows 跨主机验收；不代表 B4 系统业务隧道、B5 服务或 B6 全产品场景完成。最新证据与资源边界见 [IKE 验收](docs/photon-windows/ike-testing.md)。
 
 ### B4. Babel/SADR 与 Wintun
 
-- [ ] 实现 leaf-only Babel codec/neighbor/route selection；不转发 learned route，只 originate 本节点获授权 prefix。
-- [ ] Router ID 从稳定身份材料推导；若完全可推导则不持久化。
-- [ ] 实现 SADR lookup、ECMP/metric 切换和 route authorization gate，撤销后立即停止安装/使用非法 route。
-- [ ] Wintun 使用固定官方 API/binding，明确 DLL 来源、ring ownership、packet buffer 归还、取消与 shutdown。
-- [ ] WindowsDriver 通过 IP Helper 管理 address/route/interface metric，使用 `Observe -> Plan -> Apply -> Re-observe`，不 shell out。
-- [ ] 完成 `Wintun -> SADR -> ESP -> shared UDP` 及反向 pipeline 的 memory 与真实 interop 测试。
+- [x] 实现 leaf-only Babel codec/neighbor/route selection；不转发 learned route，只 originate 本节点获授权 prefix。
+  - [x] 单 gateway 有界 Neighbor/Leaf：Hello/IHU、周期与触发公告、请求、序号回绕、刷新/到期/撤回；只导出本地 origin，当前授权逐次检查。Daemon 与真实 ESP/Wintun 双栈链路、重绑及授权撤销/恢复通过。
+  - [x] 隔离 BIRD 2.19.1 双栈互通：随机完整 Router ID、IPv4-via-IPv6、IPv6、本地公告/撤回、learned 不再分发、静默邻居超时通过；此项尚未跨 ESP。
+- [x] Router ID 从 root pin、Zone 与 overlay 稳定推导，无独立持久状态；发布完整 64 位签名绑定，租约/碰撞/撤回 fail closed。Linux Daemon 从授权本地注入证据观察 BIRD 完整运行时 ID，经公共签名事务发布、续租及撤回；生产解析器真实 BIRD 验收通过，不能以低 32 位代替。
+- [x] 实现 SADR lookup、ECMP/metric 切换和 route authorization gate，撤销后立即停止安装/使用非法 route。
+  - [x] 有界 SADR lookup、目的/源最长前缀、稳定 ECMP/metric、过期与逐 lookup 当前授权；已接生产 owner，真实 IPv6 SADR 跨主机与不同 gateway 切换验收通过。
+  - [x] 完整签名 origin/精确前缀、当前 SA 与双向包交付授权接入 pipeline；source-specific 仅收紧当前授权本机 host 使用条件，双向匹配、fallback、排队撤销及 race 通过，不扩大地址或转发授权。
+- [x] Wintun 使用固定官方 API/binding，明确 DLL 来源、ring ownership、packet buffer 归还、取消与 shutdown。官方 0.14.1 AMD64 DLL 固定 SHA-256，1 MiB ring/64 队列；Windows 原生两次创建、写 ring、cancel/join、关闭后拒绝均通过，见 [来源与边界](third_party/wintun/README.md)。已接 Daemon 业务 pipeline，完整原生跨主机另验。
+- [x] WindowsDriver 通过 IP Helper 管理 address/route/interface metric，使用 `Observe -> Plan -> Apply -> Re-observe`，不 shell out。
+  - [x] 本机地址仅取授权非共享 /32、/128，自动公告保留手动撤回；链路本地地址复用 Linux overlay/link/port generation 派生契约。
+  - [x] 限定新建 Wintun LUID 与配置 split aggregate 的 IP Helper driver；Windows 11 原生双栈 DAD、幂等、漂移修复、撤销及带配置关闭通过。
+  - [x] Daemon 异步设备配置与 DAD 就绪、当前 revision/generation 校验、Read pump 和停止/重绑回收接线；平台原生取消/重建/通知过滤与 composition race 通过。
+- [x] 完成 `Wintun -> SADR -> ESP -> shared UDP` 及反向 pipeline 的 memory 与真实 interop 测试。
+  - [x] Windows 原生 `UDP socket -> Wintun.Read -> Wintun.Write -> UDP socket` 双栈往返及地址/路由资源回收通过；此项未跨 ESP。分层证据见 [B4 验收](docs/photon-windows/babel-testing.md)。
+  - [x] 内存设备、真实 ESP worker 与 shared UDP 双向集成：本机地址约束、控制包分流、双向撤销/到期、rekey overlap、队列背压和多前缀批包通过；console 无当前授权 pipeline 时默认拒绝。
+  - [x] Windows 11 与真实 StrongSwan/BIRD 同一链路：双栈业务、显式重绑、签名 gossip 授权撤销/恢复、平台资源回收通过；IPv6 SADR 模式在 StrongSwan 5.9.13/6.0.7 均通过，见 [B4 验收](docs/photon-windows/babel-testing.md)。
+  - [x] 两独立 gateway 实机切换：A 保持存活，由签名 profile 禁用触发停止旧设备/SA generation，B 认证并恢复双栈，旧 A 双栈业务持续拒绝；StrongSwan 5.9.13/6.0.7 与 owned 资源清理均通过。
+
+B4 当前设计范围内的接线与分层验收完成；Windows 保持 leaf-only、仅一个 active gateway。
+签名 Router ID 认领不构成抵御恶意 gateway 的端到端来源证明。SCM/IPC 和全产品验收由 B5/B6 继续推进。
 
 ### B5. Windows service、IPC 与 observation
 
-- [ ] 使用 `x/sys/windows/svc` 接入 SCM，并提供复用同一 composition 的 `run --console`。
-- [ ] 网络变化通过 Windows notification 进入 Daemon；重建 UDP/IKE/route 时保持 owner/cleanup 顺序。
-- [ ] 使用 versioned named-pipe IPC，ACL 默认管理员；首版支持 status、peers、routes、diagnostics、stop；配置修改通过重启应用，不提供 reload。
-- [ ] WindowsObservation 展示 Wintun、UDP、IKE/CHILD_SA、Babel 和 route 的实时状态；离线只读 verified/config，不冒充 runtime。
-- [ ] Event Log/文件日志使用稳定 event id、severity 和敏感字段脱敏；metrics 保持有界低基数。
+- [x] 使用 `x/sys/windows/svc` 接入 SCM，并提供复用同一 composition 的 `run --console`；原生 LocalSystem 安装、停止、重启及初始化失败验收通过。
+- [x] 网络变化通过 Windows notification 进入 Daemon；重建 UDP/IKE/route 时保持 owner/cleanup 顺序；沿用 IP Helper 通知接线和 B4 rebind 资源回收。
+- [x] 使用 v1 named-pipe IPC，ACL 仅本机 SYSTEM/管理员；支持 status、peers、routes、diagnostics、stop；有界帧、超时、独占 owner 和服务端权限验证；配置修改通过重启应用，不提供 reload。
+- [x] WindowsObservation 展示 Wintun、UDP、IKE/CHILD_SA、Babel 和 route 的实时状态；重新检查授权与过期，返回有界公开 DTO；离线只读 verified/config，不冒充 runtime。
+- [x] Event Log/文件日志使用稳定 event id、severity 和敏感字段脱敏；文件日志最多 4 × 8 MiB；指标来自固定维度状态和有界计数，不增加 peer/IP 标签。
+
+B5 服务主流程已完成两版本 StrongSwan 的真实 Windows 跨主机验收，见 [服务与控制接口验收](docs/photon-windows/service-testing.md)。
+B6 仍单独覆盖睡眠恢复、物理断网、崩溃恢复、长时间稳定性及发布门槛。
+
+### B5a. 本机 GUI 与托盘
+
+2026-10-15 用户要求新增简单图形管理入口，按独立批次验证和提交。
+
+- [x] 同一 executable 提供原生状态窗口和托盘，显示实时连接状态、active gateway 与授权路由；SCM running 不等同业务隧道 ready，IPC 不可用时清除旧状态。
+- [x] 窗口及托盘复用现有 owned-service 安装/启动/停止操作；重启明确执行 stop/start；隐藏或退出界面不停止后台服务。
+- [x] 配置编辑严格校验 YAML 与服务路径，原子保存并保留权限；检测已发生的外部变更，明确提示重启后生效，不增加 reload 或第二数据库 writer。
+- [x] 完成 portable、Windows 原生与已登录桌面的窗口/托盘交互验收，区分非交互 API/控件测试与实际 Explorer 桌面证据。
+
+2026-10-15：全仓检查、Windows 原生与 race 通过；已登录 Windows 11 桌面对完整 Linux gateway 的状态/托盘/启停/配置保存/重启及退出后双栈业务通过，后续既有服务回归和独立资源清理通过。配置编辑采用 YAML 文本，该批次首次身份导入使用 CLI；后续自动入网见 B5b，真实 Explorer 重启和 B6 门槛继续独立，见 [GUI 使用与验收](docs/photon-windows/gui-testing.md)。
+
+### B5b. 首次自动入网
+
+- [x] 缺失数据库时生成并保护本机身份，保存待授权 common state；已有或损坏数据库不覆盖，重启身份稳定。
+- [x] 复用公共 Gossip 请求、诊断与授权接纳；待授权期间控制接口可用，不建立隧道/网卡/业务路由，授权同步后同进程继续连接。
+- [x] GUI 展示入网状态、中文等待原因及可复制请求，停止/错误/已接纳时清除旧请求；保留 CLI 离线导入兼容。
+- [x] portable、Windows 原生和真实空数据库到授权/双栈业务验收，明确合成身份与真实数据通路，完成独立清理和本地提交。
+- [x] 多域跨页冷启动先收齐目录，再按父域层级和两个 pull/apply/fallback 槽推进，等待父域应用 ACK 后启动子域；真实 signed Store/Driver 回归复现旧故障并验证无需进程重启及 round 超时续传，见 [多域冷启动修复](docs/photon-windows/autojoin-testing.md#2026-10-16-多域冷启动同步修复)。
+
+2026-10-15：全仓、六包 race、Windows 原生及完整网关验收通过；从空数据库生成本机身份，经错公钥拒绝/正确授权同步，在同 SCM 进程完成入网和真实双栈业务，重启身份稳定。修复生产请求的 RawURL 格式兼容及共享临时验证失败误入 10 分钟拒收缓存；严格时间/签名/权限校验和坏签名缓存保持。三阶段真实桌面截图、公开签名证据与前两轮失败均保留，独立清理通过，见 [自动入网验收](docs/photon-windows/autojoin-testing.md)。
+
+### B5c. 图形配置选项
+
+- [x] 将 YAML 编辑框替换为基本/高级配置表单，引导节点分开填写身份和地址并支持多条管理。
+- [x] 完整往返现有配置字段，缺失配置可在界面创建；复用原有校验、原子保存、权限保留与外部变更检测。
+- [x] 完成 portable、Windows 原生及已登录桌面配置编辑/保存/重启与自动入网回归，独立清理并本地提交。
+
+2026-10-15：基本/高级设置支持完整配置及多网关、多引导地址，未知/无效已有配置不被默认值覆盖。全仓、两包 race、Windows vet 与原生测试通过；真实桌面最小窗口表单、引导节点增改删、无效输入拒绝、配置往返、保存不重启及重启双栈 MTU 生效通过。组合自动入网及后续服务回归通过，首轮列表高度调整前后的完整证据均保留，独立清理完成，见 [配置表单验收](docs/photon-windows/gui-testing.md#2026-10-15-配置表单验收)。
+
+### B5d. 网关通配符
+
+- [x] Windows `gateway.allowed_zones` 复用 Linux glob 规则，保留精确身份兼容，bootstrap 使用具体身份并匹配允许项。
+- [x] 从当前 verified view 动态展开候选并确定排序、去重，保持原有身份/签名/权限验证及单活动网关行为。
+- [x] 完成 parser、动态候选、授权拒绝、GUI 通配符保存往返、真实自动入网与双栈验收，独立清理并本地提交。
+
+2026-10-15：全仓、四包 race、Windows vet 与原生回归通过。真实 Windows 从 `*.catofes.` 自动入网并认证具体网关，GUI 保存/重读 `*`、重启及双栈业务通过；后续服务回归和独立清理完成。原生回归同时修正已在前批复现的自动入网测试双端 worker 配置缺口，保留全部断言和生产限额，失败对比与连续重复证据保留，见 [网关通配符验收](docs/photon-windows/gui-testing.md#2026-10-15-网关通配符验收)。
+
+### B5e. 首次配置与设置页整理
+
+- [x] 缺少配置文件时自动进入首次填写，直接保存新文件；已有损坏、外部修改、权限及目录错误给出具体原因并保留保护。
+- [x] 设置拆分为身份、网关与引导、分流路由、高级四页；网关规则与路由改为列表增改删，跨页保留输入。
+- [x] 在真实 Windows 桌面以 exe 旁无 `config.yaml`、不同工作目录验证首次保存，再回归托盘、服务、配置往返和双栈业务；完成独立复核、清理和本地提交。
+
+2026-10-15：全仓检查、两包 race、Windows vet 与 235 项原生测试通过；真实桌面首次保存不需重新读取，四页最小窗口、三组列表、配置往返、托盘、启停及重启双栈 MTU 生效通过。后续服务回归和独立资源清理通过；测试负例与脚本修正前的失败证据保留，见 [首次配置与分组列表验收](docs/photon-windows/gui-testing.md#2026-10-15-首次配置与分组列表验收)。
+
+### B5f. 托盘直接运行 Photon
+
+- [x] GUI 默认在同进程管理一个 Daemon，去掉安装服务入口及 GUI `--name`；CLI 服务模式独立保留。
+- [x] 关闭窗口隐藏，退出托盘取消并等待 Daemon 释放资源；忙碌时退出不丢失，配置保存不改变当前运行快照。
+- [x] 同数据库双实例拒绝且不操作外来进程，停用的旧 SCM 登记不影响新目录运行；真实桌面自动入网、列表、双栈、退出释放及换目录重开身份稳定验收。
+
+2026-10-15：全仓检查、两包 race、Windows vet 和 240 项原生测试通过；真实已登录桌面完成自动入网、托盘隐藏、启停、配置及双栈、竞争实例保护、退出资源释放和换目录恢复原身份。独立 CLI SCM 生命周期回归与最终清理通过；本批移除 GUI 服务依赖，服务命令仍保留，见 [托盘直接运行验收](docs/photon-windows/gui-testing.md#2026-10-15-托盘直接运行-photon)。
+
+### B5g. 原生界面整理
+
+- [x] 统一系统控件主题、字体层次和强调色；主窗路由区伸缩、错误详情可选择滚动，轮询保留操作提示及文字选择。
+- [x] 四页设置统一分组、对齐、输入示例和右下保存操作；每个顶层窗口独立处理 DPI，保持原配置/生命周期及权限语义。
+- [x] 完整原生组 243 项通过，合成 96/144/192 DPI、字体、控件几何及 Tab 导航通过；真实 96 DPI 桌面四页最小窗口和完整托盘双栈验收通过。高 DPI 多显示器目检仍独立，见 [原生界面整理](docs/photon-windows/gui-testing.md#2026-10-15-原生界面整理)。
+
+### B5h. 日志与公开诊断
+
+- [x] 原生“日志与诊断”窗口显示当前连接的有界文件日志、Gossip / Peer 同步状态和公开诊断 JSON；复用原 IPC 与单 worker，支持暂停、刷新一次与复制。
+- [x] 日志只读末尾 256 KiB / 1000 行，跟随当前或最后一次连接的固定路径，停止后可读历史；离线或 IPC 错误清除旧 Peer 和隧道详情。
+- [x] 已登录桌面的真实日志/Peer/详情、暂停刷新复制、启停重连及双栈回归通过；253 项原生测试、全仓检查与五包 race 通过，见 [日志与诊断验收](docs/photon-windows/gui-testing.md#2026-10-16-日志与诊断窗口)。
+
+### B5i. 业务地址等待与链路本地控制面
+
+- [x] 公开诊断区分缺少可用业务 IP 分配和缺少本机公告；GUI 分别显示实际业务地址和真实用户态隧道链路 IPv6，不用空 Wintun 反推分配状态。
+- [x] 已认证 SA 与有效 overlay 下，缺业务地址可保留仅 Babel 的 `fe80::` 控制面；无 OS 网卡或业务源地址，业务包双向拒绝，分配到达后自动升级原运行实例。
+- [x] 真实 Windows 无业务 IP 入网、链路本地邻居在线、隔离网络首次分配后同进程/同 SA 双栈恢复通过；263 项原生测试、全仓/race 及独立清理通过，见 [业务 IP 与链路 IPv6 验收](docs/photon-windows/gui-testing.md#2026-10-16-业务-ip-等待与链路-ipv6)。
 
 ### B6. 验收、安全与发布门槛
 
-- [ ] 建立 Windows VM + Linux Photon gateway 的可重复 test rig。
-- [ ] 里程碑 1：service、Wintun、split route、真实 gossip 与关闭重开。
-- [ ] 里程碑 2：StrongSwan IKE_AUTH/CHILD_SA 与双向 ESP IPv4/IPv6。
-- [ ] 里程碑 3：Babel 邻居、授权 route、SADR 与 gateway 切换。
+2026-10-14：当前 Windows 性能经用户确认可接受；剩余性能优化不再作为继续推进其他 B6 事项的前置依赖。后续优先补齐生命周期、链路故障和发布验收，短时性能结果仍不替代 72h soak。
+
+- [x] 合并 Linux RC.6/RC.7 的目录漂移一次刷新、拒绝记录展示、Gossip 窄读取与按 zone 持久化；保留 Windows 性能/当前授权门禁，补充 OpenState 的 RC.6 common 布局升级/revision 保留/二次启动不重写回归。全仓检查、七包 race、采样构建及 Windows 原生状态/策略 22 项通过；原 PS 数组解析包装失败保留，独立复核/清理完成。schema2 回退须恢复旧数据库，不替代业务/吞吐/72h/发布验收，见 [RC 合并记录](docs/photon-windows/b6-testing.md#2026-10-14-rc6rc7-合并与-windows-状态回归)。
+- [x] 建立 Windows VM + 完整 Linux Photon gateway daemon 的可重复 test rig；`windows-full-daemon-smoke.sh` 运行真实 `app/photon daemon` 管理 XFRM/BIRD/Gossip，签名身份远程同步、双栈动态回程及 SCM 恢复场景在 StrongSwan 5.9.13/6.0.7 均通过；原组件 rig 保留作分层对照。
+- [x] 里程碑 1：service、Wintun、split route、真实 gossip 与关闭重开；Linux gateway 补齐 Windows 初始缺失的签名 Babel identity，双版本 SCM/业务/落盘及崩溃后重启通过。
+- [x] 里程碑 2：StrongSwan IKE_AUTH/CHILD_SA 与双向 ESP IPv4/IPv6；B3/B4 双版本分层及 B5/B6 原生服务双栈业务通过。
+- [x] 里程碑 3：Babel 邻居、授权 route、SADR 与 gateway 切换；B4 两独立 gateway 的签名切换与 IPv6 SADR 双版本验收通过。
 - [ ] 里程碑 4：rekey、loss/dup/reorder、sleep/resume、network change、revocation 与 crash recovery。
-- [ ] teardown 必须只删除本产品 owned resource；覆盖 normal stop、partial startup、crash restart、uninstall 和 stale resource adopt。
+  - [x] 完整网关对持续双栈业务发起 CHILD/IKE rekey，StrongSwan 5.9.13/6.0.7 保持同 SCM PID/live generation，验证 SA 更替与后续业务；存在显著收包缺口，不计作无损或 loss/dup/reorder 验收，见 [重协商记录](docs/photon-windows/b6-rekey-testing.md)。
+  - [x] 真实 loopback 地址新增/删除通知在同 SCM 进程触发重绑、新 SA 与双栈恢复，StrongSwan 5.9.13/6.0.7 均通过；不代表物理断网或睡眠恢复。
+  - [x] 接入原生自动恢复通知，地址不变也主动重连；真实 API 注册/注销、模拟回调到 composition 的接线及并发关闭通过，不计作真实睡眠/休眠/Modern Standby 业务验收。
+  - [x] 托盘模式在 PVE VM101 唯一虚拟网卡真实 link-down/up 后，同 GUI 进程自动恢复双栈业务与授权路由；观察到约 32.82 秒链路中断，独立定时恢复与精确配置还原通过。不代表 Wi-Fi 换网、多层 NAT 或 OS 睡眠；该 VM 报告睡眠/休眠不可用，见 [托盘故障验收](docs/photon-windows/tray-fault-testing.md)。
+  - [ ] 延长托盘断网恢复后的控制面观察，验证新一轮 Gossip 同步；本轮双栈业务恢复时末次 peer 快照仍为 `pull_state=failed`，保留 `round_timeout` 日志，不能仅以业务通过判断完整控制面恢复。
+  - [x] 完整网关容器隔离阻断 IKE/NAT-T/ESP：旧 SA 存活时双栈发送超时、双向 ESP 丢包计数、DPD 退役及同 SCM 进程新 SA/双栈恢复，StrongSwan 5.9.13/6.0.7 均通过；保留 Gossip，不计作物理换网或多层 NAT 验收。
+  - [x] 完整网关出站 NAT-T ESP 密文 loss/duplicate/reorder：StrongSwan 5.9.13/6.0.7 对真实 Windows SCM 双栈各 7 点通过；实际密文复制/乱序、同 PID/generation/SA lease、应用完整性和逐阶段恢复均独立复核。仅覆盖 gateway → Windows、IPv4 外层及窗口内乱序，保留两次夹具失败和时钟校准证据，不关闭完整故障矩阵或其他 B6 门槛，见 [故障验收](docs/photon-windows/b6-impairment-testing.md)。
+- [ ] teardown 必须只删除本产品 owned resource；覆盖 normal stop、partial startup、crash restart、uninstall 和未知残留冲突；当前临时 Wintun/address/route 销毁后重建，不增加持久资源 adopt/journal。
+  - [x] Windows 11 强制结束本次 SCM 进程后，临时 adapter 自动释放，同 Bolt/新 SA/双栈恢复通过；同名外部网卡保护及失败创建清理原生通过。
+  - [x] 直接运行的托盘按保留句柄精确强杀，实际异常退出 71；管道/路由/网卡/数据库释放，重开保持身份与文件 ID，新 IKE/CHILD 及真实双栈通过。最终正常退出与独立 PVE/Windows/容器清理通过，见 [托盘故障验收](docs/photon-windows/tray-fault-testing.md)。
+  - [x] 已证实仍存活的外部 IP 接口占名时，SCM 明确失败退出、事件 104 且保留外部 alias/GUID；释放占名后，同配置/Bolt 重启双栈通过。
+  - [x] 未证实存活外部接口的名称重复从首次当前命名失败起最多重试 30 秒，超时明确失败；过期结果/普通 revision 不延长预算，不删除未知残留。
+  - [ ] 补齐长期真实 PnP 残留与完整生命周期期限的原生验收；不通过名字或单独的 `ERROR_DUP_NAME` 猜 ownership。
 - [ ] codec/parser/state machine 持续 fuzz；portable 测试覆盖 Linux/Windows，管理员/driver 集成测试明确分层。
+  - [x] IPC 长度帧与严格 JSON 请求分派新增 fuzz，各 15 秒通过，seeds/race/Windows 编译通过；不把短时 fuzz 算作持续验收。
+  - [x] SKF 认证分片长序列 fuzz：乱序重复、认证失败、PMTU 重启、到期清理与 64 片恢复；20 秒探索、race 及 Windows 原生 seeds 通过。六包原生入口补齐 Babel/SADR，持续 fuzz 门槛保留，见 [SKF 验收](docs/photon-windows/skf-fuzz-testing.md)。
 - [ ] 发布前完成吞吐/CPU/内存基线、72h soak、Authenticode、checksum、SBOM 和安装/升级/卸载测试。
+  - [x] 建立完整 SCM/Wintun/ESP 链路的有界 UDP echo CPU/内存基线；双栈窗口 8/64 对照揭示单核饱和、低吞吐及明显超时。Nix 6.0.7 完整采样，Ubuntu 5.9.13 部分采样均保留；历史结果不覆盖后续优化，也不代表性能达标，72h 等门槛不随此项关闭，见 [基线记录](docs/photon-windows/baseline-testing.md)。
+  - [x] 实际 SCM CPU profile 定位重复验签；分片完成 readiness 检查降频、事件内授权事实复用及单 owner 的有界纯签名验算复用。授权时效、撤销、权限、包地址与当前 SA 检查保留；全量测试/构建与 crypto、Windows race 通过。分轮 portable 与实机证据分别保存在 [逐包优化](docs/photon-windows/packet-path-performance.md) 和 [SCM 对照](docs/photon-windows/profile-testing.md)，不以单轮短时吞吐代替长期稳定性或发布验收。
+    - 固定同一 SCM/StrongSwan 6.0.7 配置，最终窗口 8 双栈中位 17.14/17.42 Mbps（初始 0.206/0.200），窗口 64 为 17.70/17.49 Mbps；八点均无丢失/超期且恢复通过。服务 CPU 约 1.25–1.33 个逻辑核，剩余热点为准备、JSON 与分配，仍非链路极限或长期稳定性结论。
+  - [x] 继续减少逐包准备与交接：不可变发布视图、精确策略到期、canonical 编码、ESP 输出分配、Babel/HasRoute、串行 AES、周期就绪检查、周期纯数学复用、UDP 收发锁和逐包分配分别验证并提交；撤销、地址、当前 SA/generation 与投递前重新检查保留。2026-10-12 用同一最终 credit 工具、1200 字节、8 秒发送重测六个冻结版本，完整 SCM 单流双栈由 16.02/16.11 达到 450.90/424.74 Mbps，零丢包；六组 36 点及恢复完成，独立清理通过。最新四流小窗口约 430 Mbps/0.39% 丢失，大窗口约 422 Mbps/7.6% 丢失；1 Gbps、72h 和发布门槛继续开放，见 [统一吞吐对照](docs/photon-windows/throughput-testing.md)。
+  - [x] 实测此前锁定的 Ranet `24a24a2` 与当前 `9eaabcd` Windows 数据通路；两版双栈六点、原生回归与独立清理通过。当前研究夹具单流约 500 Mbps/零丢包，四流小窗口约 689/702 Mbps/丢失 3/2 包；采用静态 SA/路由并省略控制平面，不作为完整产品速度比值或 1 Gbps 验收，见 [Ranet 对照](docs/photon-windows/ranet-performance.md)。
+  - [x] 补充逐层队列拒收诊断与完整服务复测；缺少稳定收益的连续取包尝试已回退。`84001ce` 接管同步出站明文，每包减少一次分配，交付前授权检查保留；全量检查、race 与 Windows 原生 20 项通过。冻结版本标准双栈单流约 461 Mbps（IPv4 有 1 个超期请求），四流约 442–459 Mbps，大窗口仍丢失约 7%。独立诊断轮的 317 Mbps 点在测量内发生就绪中断，不能作为平稳容量；两轮 12 点、恢复及独立清理均保留，1 Gbps 目标继续开放，见 [完整记录](docs/photon-windows/throughput-testing.md)。
+  - [x] 隔离真实共享 UDP socket 的系统调用与发送包装成本；显式 IPv4 的 16 点和匹配产品 `[::]` 双栈设置的三轮 12 点分别完整保留。同一冻结研究程序在窗口 64、1264/1284 B UDP payload 下，双栈发送包装中位约 864/882 Mbps，1200 B 等效约 820/824 Mbps；省略 Wintun、加密、授权、reader 分流和主循环，不能当作完整产品吞吐或归因全部差额。回归、Windows 原生 11 项、逐包账目及自有资源清理通过，未新增产品模式或扩大队列，见 [I/O 对照](docs/photon-windows/outer-socket-io-testing.md)。
+
+  - [x] 增加测试构建的真实业务包分段计时：1/256 采样、两个方向/业务与控制分类、窗口冻结、失败与未完成账目；普通空探针保持实际结构大小。全量检查、race、Windows 原生功能及 12 点 QPC/钩子零分配校准通过，修正旧 Wintun 生命周期测试对系统自发包的假设；同一清洁二进制四个完整产品 off/on 实例与独立清理通过。两轮 ESP 均值约 0.6–0.8µs、出站同步发送约 9.3–9.7µs、入队至消费约 400–465µs；尚待发送内部拆解与内核调用栈，不以两次重复的吞吐差额归因探针开销，见 [分段计时](docs/photon-windows/packet-timing-testing.md)。
+  - [x] 将出站业务 UDP 交付再细分为写锁等待、连接状态校验、写期限设置及实际 write，schema 2 保留原六段；失败只记实际段，父/子与末尾退时在记账前整条拒绝。普通布局/空探针不变，全量检查、race、73 个 Windows 报告检查及原生 30 项功能/12 点零分配校准通过。两次清洁版本完整产品采样/资源清理通过，实际 UDP write 均值约 9.07–9.35µs，占父交付 elapsed Sum 约 90%，三个前置子段各不足 0.4µs；非 CPU 分账、非同版本 off 对照，具体内核调用栈和消费并行仍待研究。
+  - [x] 完整审计发送字段的双锁写入不变量，删除两个发送入口已有写锁保护下的重复状态快照锁；所有动态检查、一秒写期限及同步所有权保持。全量检查、普通/诊断 race、12 个 Windows 原生功能及代次隔离子场景通过；四个完整服务旧新反序对照/清理通过，状态段两轮约 0.33–0.36→0.15–0.16µs。吞吐旧 459/505、新 525/497Mbps，仅两重复/区间重叠且第二轮反降，不承诺稳定吞吐提升；夹具执行位 setup 失败在新目录修复且原始证据保留。
+  - [x] 补测 Wintun＋跨主机 UDP 的无加密组合路径及同口径分段计时；保留真实 raw64/leaf64/esp64、单 owner、共享 socket 和 1264B 外层长度。便携普通/race、原生 6 项功能/6 点零分配校准、双栈低压完整回包及三轮 off/on 的 12 正式/12 预热点与独立清理通过；marker 发布竞态在新目录修复，原失败与预热失包保留。关闭采样单流/四流中位 679/588Mbps，开启 608/547；无 AES 的四流 UDP write 仍约 9.94–10.39µs、Wintun write 约 0.62–0.77µs，Linux 单 socket peer 组级 CPU 约 0.82–0.91 核，未排除其约束或达到 1Gbps，见 [组合对照](docs/photon-windows/wintun-udp-timing-testing.md)。
+  - [x] 保留相同 PWU1/Linux peer 与真实共享 AF6 UDP writer/demux，补齐无 Wintun 的三组六正式/六预热对照；新增 native 3 项、低压完整回包、独立数学及 owned cleanup 通过，私有 PS/清理准备失败保留并复核。单流/四流中位 722/659Mbps，四流 UDP write 7.34–8.04µs；四流 leaf/esp64 full 分别 423–577/874–995、超期 1379–1451，仍共用 owner/FD。新 checksum、供给/缓冲、callback、同进程 client CPU 和 RTT 边界不同，整体不可直接作 Wintun 因果差分；相同 Linux peer 组级 CPU 0.78–0.90 核且 kernel 占约 88%，1Gbps 继续开放，见 [同 peer 对照](docs/photon-windows/shared-peer-udp-testing.md)。
+  - [x] 核对实际 VirtIO USO 配置并验证逐消息 1/2/4 个等长 frame 分段及普通 1284B 混长度后继；同 AF6/IPv4 peer 八帧内容/checksum 完整、socket 全局分段前后 0。另两帧普通 nil-oob WriteMsg 对照也返回 n=0，而 WriteTo 返回1284；两实验 wire 完整但 API 计数不符，Go/PS strict exit1 原件保留，采集/owned cleanup0。定位到 Go1.26.5 Windows WriteMsg 计数路径候选，不声称硬件执行、API 全通过、批发送提速或产品已实现，见 [USO 研究](docs/photon-windows/udp-segmentation-testing.md)。
+  - [x] subagent 分别检索 Linux 分流/批处理与 Go Windows WriteMsg 官方资料，Root 补核 Tailscale 原作者实验、QUIC 加密对照及 Wintun/Microsoft 源码。明确四 inner flow 仍是同一外层 tuple/owner、mmsg 与 GSO/GRO 的区别，并核到 Go CL685436 的计数变化候选；没有把 Linux 多 Gbps 或论文比例外推成本站收益。资料调查完成，completion 分支、USO 容量、Linux 单变量批读及 1Gbps 继续开放，见 [公开研究](docs/photon-windows/udp-performance-research.md)。
+
+当前证据与未完成门槛见 [B6 分层验收](docs/photon-windows/b6-testing.md)。
 
 ## C. 非当前主线
 
@@ -291,4 +420,4 @@ B2 控制面前置已收口，可以进入 B3。这里不包含 SCM、Wintun/IP 
 2. 旧 aggregate schema 的入口、fixtures 与版本承诺审计已完成；仓库目前未声明直接升级截止版本，现有兼容继续保留。
 3. 发布计划确定截止版本后，按独立范围退出 aggregate decoder、partitioned cleanup 迁移和 root 修复；不能按文件名一次删除。
 4. CLI 壳只随上述 owner 迁移逐步进入 `internal/photoncli`，不单独进行目录搬家。
-5. Windows B1/B2 控制面前置已收口：身份导入、唯一 Daemon/State/GossipDriver、当前授权候选规划、原生通知重绑与 Windows/Linux 跨主机恢复验收已完成。下一步按 B3 的来源/许可证决策实现 IKE/ESP，随后推进 Babel/SADR、Wintun、SCM/named-pipe 和完整验收。
+5. Windows B1–B5 当前设计范围已完成；继续 B6 的真实生命周期、链路故障、性能与发布门槛。保留各场景独立证据，不以组件或短时测试替代物理睡眠、72h soak 或正式发布验收。

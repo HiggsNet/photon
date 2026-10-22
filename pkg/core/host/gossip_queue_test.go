@@ -105,25 +105,49 @@ func TestGossipQueueInternalBudgetYieldsAndRetainsAllResults(t *testing.T) {
 	driver := NewGossipDriver(newFakeClock(now), 1,
 		&memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipDriverConfig{})
 	defer driver.Stop()
-	bindMemoryGossipTransport(t, driver, "peer-a", "peer-b")
-	session := driver.Gossip.NewSession("peer-a")
-	_, _ = session.OnEvent(&gossip.SyncTimerEvent{PeerID: "peer-a"}, now)
-	missing := make([]zone.ZonePath, 40)
-	for index := range missing {
-		missing[index] = zone.ZonePath(fmt.Sprintf("node-%d.catofes.", index))
+	const count = 40
+	peerIDs := []string{"peer-b"}
+	for index := range count {
+		peerIDs = append(peerIDs, fmt.Sprintf("peer-%02d.catofes.", index))
+	}
+	bindMemoryGossipTransport(t, driver, peerIDs...)
+	// Each independent session obeys the bounded per-peer pull window. Produce
+	// real executor results without workers, then queue the burst together so
+	// the consumer must yield rather than process all of them in one turn.
+	sessions := make([]*gossip.SyncSession, 0, count)
+	for _, peerID := range peerIDs[1:] {
+		session := driver.Gossip.NewSession(peerID)
+		_, _ = session.OnEvent(&gossip.SyncTimerEvent{PeerID: peerID}, now)
+		actions, err := session.OnEvent(&gossip.PongReceivedEvent{PeerID: peerID, Pong: &gossip.Pong{}, MissingZones: []zone.ZonePath{"remote.catofes."}}, now)
+		if err != nil || session.InflightCount() != 1 {
+			t.Fatalf("one bounded pull: inflight=%d error=%v", session.InflightCount(), err)
+		}
+		result := driver.ExecuteGossipActions(t.Context(), session, actions, &memoryGossipController{})
+		if result.Aborted || len(result.Events) != 1 {
+			t.Fatalf("local pull failure result = %#v", result)
+		}
+		failure, ok := result.Events[0].(*gossip.ObjectPullResultEvent)
+		if !ok || failure.Err == nil || failure.PeerID != peerID || failure.Zone != "remote.catofes." {
+			t.Fatalf("unexpected executor result: %#v", result.Events[0])
+		}
+		driver.appendGossipInternal(result.Events)
+		sessions = append(sessions, session)
 	}
 	driver.events <- GossipPacketReceived{}
-	// Workers are deliberately not started: every submit produces a local
-	// failure result, which must reach the FSM despite a full input queue.
-	_, err := driver.HandleGossipHostEvent(t.Context(), GossipEvent{Value: &gossip.PongReceivedEvent{
-		PeerID: "peer-a", Pong: &gossip.Pong{}, MissingZones: missing,
-	}}, now, nil)
+	_, err := driver.HandleGossipHostEvent(t.Context(), GossipPacketReceived{}, now, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	remaining := len(missing) - (maxGossipEventBatch - 1)
-	if session.InflightCount() != remaining || driver.internalPending.Load() != int64(remaining) {
-		t.Fatalf("inflight/pending = %d/%d, want %d", session.InflightCount(), driver.internalPending.Load(), remaining)
+	inflight := func() int {
+		var total int
+		for _, session := range sessions {
+			total += session.InflightCount()
+		}
+		return total
+	}
+	remaining := count - (maxGossipEventBatch - 1)
+	if inflight() != remaining || driver.internalPending.Load() != int64(remaining) {
+		t.Fatalf("inflight/pending = %d/%d, want %d", inflight(), driver.internalPending.Load(), remaining)
 	}
 	if driver.Events() != nil {
 		t.Fatal("new inputs must not grow an unfinished internal batch")
@@ -135,7 +159,7 @@ func TestGossipQueueInternalBudgetYieldsAndRetainsAllResults(t *testing.T) {
 	other.AccumulateNetworkChanged(true)
 	driver.completions <- GossipEvent{Value: &gossip.PongReceivedEvent{PeerID: "peer-b", Pong: &gossip.Pong{}}}
 	result, err := driver.HandleGossipHostEvent(t.Context(), <-driver.Completions(), now, nil)
-	if err != nil || !result.NetworkChanged || driver.Gossip.Session("peer-b") != nil || result.Session.PeerID != "peer-a" {
+	if err != nil || !result.NetworkChanged || driver.Gossip.Session("peer-b") != nil || result.Session.PeerID != peerIDs[2*(maxGossipEventBatch-1)] {
 		t.Fatalf("interleaved completion result/error = %#v/%v", result, err)
 	}
 	for driver.internalPending.Load() > 0 {
@@ -148,8 +172,13 @@ func TestGossipQueueInternalBudgetYieldsAndRetainsAllResults(t *testing.T) {
 			t.Fatal("internal batch did not wake the consumer")
 		}
 	}
-	if session.InflightCount() != 0 || session.State != gossip.SyncSessionChunkFallback || driver.Events() == nil || len(driver.events) != 1 {
-		t.Fatalf("final state/inflight = %s/%d", session.State, session.InflightCount())
+	if driver.Events() == nil || len(driver.events) != 1 || inflight() != 0 {
+		t.Fatalf("input queue/inflight = %d/%d", len(driver.events), inflight())
+	}
+	for _, session := range sessions {
+		if session.State != gossip.SyncSessionFailed || !errors.Is(session.LastError(), ErrGossipObjectPullExecutorRequired) || driver.Gossip.Session(session.PeerID) != nil {
+			t.Fatalf("final session %s state = %s", session.PeerID, session.State)
+		}
 	}
 }
 

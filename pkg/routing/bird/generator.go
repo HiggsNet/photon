@@ -200,7 +200,7 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 	kernelName := "photon_kern_" + suffix
 	kernelName4 := kernelName + "4"
 	kernelName6 := kernelName + "6"
-	babelName := "photon_babel_" + suffix
+	babelName := BabelProtocolName(spec.NetNSName)
 	importFilterName := "photon_import_" + suffix
 	exportFilterName := "photon_export_" + suffix
 	staticName := "photon_static_" + suffix
@@ -489,22 +489,25 @@ func formatBabelDuration(value time.Duration) string {
 	return fmt.Sprintf("%d ms", value/time.Millisecond)
 }
 
-// renderStaticRouteBlock renders one "protocol static { ... }" block.
+// A BIRD static protocol accepts only one channel family. Keep each family's
+// protocol name stable when the other family's routes are added or removed.
 func renderStaticRouteBlock(b *bytes.Buffer, sr StaticRouteBlock, ipv4Table, ipv6Table string) {
-	fmt.Fprintf(b, "\nprotocol static %s {\n", sr.Name)
 	if ipv4Table != "" && len(sr.IPv4Routes) > 0 {
+		fmt.Fprintf(b, "\nprotocol static %s_v4 {\n", sr.Name)
 		fmt.Fprintf(b, "    ipv4 { table %s; };\n", ipv4Table)
 		for _, r := range sr.IPv4Routes {
 			renderStaticRouteLine(b, r)
 		}
+		fmt.Fprintln(b, "}")
 	}
 	if ipv6Table != "" && len(sr.IPv6Routes) > 0 {
+		fmt.Fprintf(b, "\nprotocol static %s_v6 {\n", sr.Name)
 		fmt.Fprintf(b, "    ipv6 { table %s; };\n", ipv6Table)
 		for _, r := range sr.IPv6Routes {
 			renderStaticRouteLine(b, r)
 		}
+		fmt.Fprintln(b, "}")
 	}
-	fmt.Fprintln(b, "}")
 }
 
 func renderStaticRouteLine(b *bytes.Buffer, r StaticRoute) {

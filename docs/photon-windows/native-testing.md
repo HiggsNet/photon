@@ -4,6 +4,12 @@
 Windows 不需要安装 Go。测试使用临时数据库和 loopback 临时端口，不配置路由、
 防火墙、Wintun 或系统服务。
 
+B4 的 Wintun/IP Helper 管理员原生测试使用独立 opt-in 入口，包含双栈系统 UDP 往返及路由清理，
+见 [B4 数据通路验收](babel-testing.md)；不由本文普通 native smoke 自动启用。
+B5 的 SCM 安装与跨主机业务测试另见 [服务与控制接口验收](service-testing.md)。
+当前 composition 测试包也包含临时 named-pipe 测试；权限相关用例要求管理员，
+创建的管道、受限测试进程及临时文件在测试结束时关闭或删除，不安装系统服务。
+
 ## 执行
 
 在仓库根目录运行（模块缓存可通过 `GOMODCACHE` 指定）：
@@ -41,6 +47,11 @@ Windows PowerShell 5.1 下执行，两个测试包全部通过：
 测试账号具有管理员权限，因此也未验证普通用户运行。
 
 ## 首次初始化
+
+首次安装推荐使用 [自动入网](autojoin-testing.md)：配置根公钥、节点域名和 bootstrap 后直接启动服务，
+复制界面中的入网请求交给上级管理员，授权同步后自动完成入网。无需预先从 Linux 导出数据库或私钥。
+
+以下保留离线 bundle 导入流程，适用于管理员已经准备好节点身份的场景。
 
 准备 Windows 配置，固定 `managed_zone` 和从可信管理渠道获得的 `trusted_root_public_key`。
 `state.path` 应位于管理员管理的目录，且目标文件必须不存在。导入命令不覆盖或刷新已有数据库。

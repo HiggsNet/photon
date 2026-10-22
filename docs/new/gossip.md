@@ -391,10 +391,12 @@ Phase 3: Object Pull（对象拉取）
 - 请求大小上限 1 MiB，响应大小上限 8 MiB
 - 完成后对 snapshot 做完整签名和信任链验证
 - 对发送方而言，这是只读响应：读取本地 verified snapshot，编码返回，不改变 active sync FSM。
+- Linux 与 Windows 共用候选选择：保留有效的 verified observed/grace path、bootstrap 和 signed endpoint，去重后依次尝试；UDP 可达不代表 TCP 可达，TCP 单独记录成功和失败。
+- 网络错误或单次尝试超时后切换其他地址。全部候选共用至多 5s 的 object pull budget（调用方更早的 deadline 优先），每次尝试为剩余候选预留时间；取消、quota 或协议响应错误直接结束。最近 TCP 成功的地址优先，失败地址降级 30s，闲置历史在 2min 后清除。
 
 ### 5.2 UDP Chunk Fallback（兜底路径）
 
-当 TCP object pull 失败（超时、不可达等），接收方请求 UDP chunk fallback：
+当 TCP object pull 因超时或网络不可达而失败时，接收方请求 UDP chunk fallback。本机队列、并发或 quota 不足，以及协议响应错误和取消，直接结束本轮并退避，不触发另一次 UDP bulk transfer：
 
 ```
 接收方                         发送方
@@ -419,8 +421,9 @@ Phase 3: Object Pull（对象拉取）
 - 重组缓存 TTL：2 分钟（`chunkAssemblyTTL`）
 - 所有 chunk 到齐后做 content hash 校验
 - 校验通过后再做 root hash / 签名验证
-- 每个 fallback 使用随机 16-byte `transfer_id`；接收 quiet 150ms 后只 NACK 缺块索引。
-- 发送端只从 30 秒 TTL 的已发送缓存重传；每 peer 最多 4 个 inflight transfer，缓存总量最多 32 MiB。
+- 新 fallback 使用随机 16-byte `transfer_id`；同 peer、同对象内容和分片布局的未过期传输复用 ID，正在发送时的重复请求不重启发送。接收 quiet 150ms 后只 NACK 缺块索引。
+- 发送缓存每 peer 最多 4 条，全局最多 1024 条、32 MiB payload。首轮或补包发送结束后保留至多 30 秒供 NACK 修复；容量不足时优先淘汰最久未使用且当前未发送的缓存，正在发送的传输不会被淘汰。完成的旧传输不阻挡后续新对象，永久发送失败立即释放对应缓存。
+- 无法通过淘汰空闲缓存满足上限时拒绝新传输，由请求方整轮超时后的重试退避恢复；发送端记录 `resource_limited`、触发的限制和占用，重复警告每 30 秒合并一次。准入失败不额外发送 ANNOUNCE。
 - 每个 transfer 最多 3 个 repair round，每个 NACK 最多 128 个索引；重复 NACK 不重复发送。
 - NACK 和 repair chunk 都经过现有 datagram budget、replay 与 peer quota；完整对象 hash 和签名链通过后才 apply。
 - `SyncSession` round timeout 会丢弃该 peer 未完成的 assembly；超时后的 unsolicited chunk 不会 apply。
@@ -551,13 +554,13 @@ RoundTimeout(peer) = max(5s, 5 × estimatedRTT(peer)) + 5s (object pull budget)
 
 ```
 1. 获取 peer 的出站地址列表
-2. 按 reachability 排序：最近成功 > 未尝试 > 失败中 > backoff 中
+2. 按 reachability 排序：最近成功且无后续失败 > 未尝试/历史已过期 > 最近失败 > backoff 中
 3. 如果出站地址为空，尝试 lastSeenAddr / observedPath
 4. 填充 nonce + timestamp（如果为零）
 5. MessagePack 编码
 6. 检查 wire size ≤ maxMessageBytes
 7. 检查 quota
-8. 依次尝试每个地址，第一个成功则返回
+8. 依次尝试每个地址，逐地址记录和输出发送错误，第一个写入成功则返回；写入成功不作为远端可达证据
 ```
 
 ### 7.3 接收流程
@@ -582,6 +585,10 @@ RoundTimeout(peer) = max(5s, 5 × estimatedRTT(peer)) + 5s (object pull budget)
 - backoff 到期时间
 
 短时间连续失败会触发指数 backoff（base 500ms，max 30s）。地址排序时 backoff 中的地址排在最后。
+
+UDP 写入失败立即记录该地址的失败；等待 PONG/catalog 超时也会记录地址失败，覆盖更早的成功偏好。
+超时仍按现有 FSM 结束本轮并对 peer 退避，下一轮按新的地址顺序尝试，不延长本轮 deadline。
+地址失败偏好在 2min 后过期；仍有效的 signed endpoint 不因来源带 `+grace` 后缀或未知 source 而丢失。
 
 ### 7.5 入站白名单管理
 
@@ -720,7 +727,7 @@ Relay 的 key 约束：
 | Chunk assembly TTL | 2 min | UDP chunk 重组超时 |
 | Chunk repair quiet / send TTL | 150ms / 30s | 缺块检测与发送缓存有效期 |
 | Chunk repair rounds / NACK | 3 / 128 indexes | 单 transfer repair 上限 |
-| Chunk peer inflight / send cache | 4 / 32 MiB | 接收 peer 并发与全局发送缓存上限 |
+| Chunk peer inflight / send cache | 4 / 1024 条 / 32 MiB | 接收 peer 并发、每 peer 发送缓存 4 条及全局发送缓存上限；发送中的缓存保留，空闲缓存按需淘汰 |
 | round timeout | ≥5s | 整轮超时（RTT 感知）|
 | TCP pull timeout | 5s | object pull 超时 |
 

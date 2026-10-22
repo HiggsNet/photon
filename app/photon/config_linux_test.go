@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -8,6 +10,61 @@ import (
 	"github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
+
+func TestParsedNamespaceDefaultReachesXFRMOwner(t *testing.T) {
+	for _, test := range []struct {
+		name, namespace string
+		want            ipsec.NetNSSpec
+	}{
+		{"implicit", "", ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: ipsec.DefaultNetNSName, Create: true}},
+		{"host", "netns:\n  default:\n    kind: host\n", ipsec.NetNSSpec{Kind: ipsec.NetNSHost}},
+		{"named", "netns:\n  default:\n    kind: name\n    name: isolated\n    create: false\n", ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "isolated"}},
+		{"path", "netns:\n  default:\n    kind: path\n    path: /run/netns/isolated\n", ipsec.NetNSSpec{Kind: ipsec.NetNSPath, Path: "/run/netns/isolated"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config := defaultAppConfig()
+			if err := parseConfigYAML(test.namespace+"overlays:\n  - id: main\n    provider: strongswan\n    netns: default\n", config); err != nil {
+				t.Fatal(err)
+			}
+			normalizeAppConfig(config)
+			if config.IPsec.DefaultNetNS != test.want || config.IPsec.LinkGroups[0].NetNS != test.want {
+				t.Fatalf("XFRM default %+v differs from configured overlay %+v; want %+v", config.IPsec.DefaultNetNS, config.IPsec.LinkGroups[0].NetNS, test.want)
+			}
+		})
+	}
+}
+
+func TestHostNamespaceConfigDoesNotCreateOrEnterNamedNamespace(t *testing.T) {
+	config := defaultAppConfig()
+	if err := parseConfigYAML("netns:\n  default:\n    kind: host\noverlays:\n  - id: main\n    provider: strongswan\n    netns: default\n", config); err != nil {
+		t.Fatal(err)
+	}
+	// Exercise the same constructor and empty host target used by the Linux
+	// composition, recording system commands instead of mutating the test host.
+	driver := ipsec.NewSystemXFRMDriver(config.IPsec.DefaultNetNS)
+	created, up := false, false
+	driver.Command = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		command := strings.Join(args, " ")
+		for _, arg := range args {
+			if arg == "netns" {
+				t.Fatalf("host-owned interface escaped into namespace command: %s %s", name, command)
+			}
+		}
+		if command == "link show dev phx-config-host" {
+			return nil, errors.New("interface does not exist yet")
+		}
+		created = created || strings.Contains(command, "link add phx-config-host type xfrm if_id 42")
+		up = up || command == "link set phx-config-host up"
+		return nil, nil
+	}
+	spec := ipsec.TransportLinkSpec{InterfaceName: "phx-config-host", XFRMIfID: 42, NetNS: config.IPsec.LinkGroups[0].NetNS.Target()}
+	if err := driver.EnsureInterface(t.Context(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if !created || !up {
+		t.Fatalf("host interface was not created and brought up: created=%v up=%v", created, up)
+	}
+}
 
 func TestParseConfigYAMLNetNSDefault(t *testing.T) {
 	config := defaultAppConfig()

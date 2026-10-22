@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"reflect"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,24 +16,37 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
 // RunConsole owns the common state and gossip resources until cancellation.
-// It restores an existing database; it does not provision identity or a tunnel.
+// Absent state initializes a stable pending identity; admission remains driven
+// by verified parent delegation synchronized through the shared GossipDriver.
 func RunConsole(ctx context.Context, config *Config, logger *slog.Logger) error {
-	return NewDaemon(config, logger).Run(ctx)
+	if config == nil {
+		return errors.New("Windows config is required")
+	}
+	return RunControlled(ctx, NewDaemon(config, logger), config.State.Path)
 }
 
 // Daemon owns one run of the Windows composition. Rebind is serialized with
 // gossip event processing; it does not recreate state or the protocol driver.
 type Daemon struct {
-	config      *Config
-	logger      *slog.Logger
-	started     atomic.Bool
-	rebind      chan rebindRequest
-	plans       chan chan GatewayPlan
-	done        chan struct{}
-	planGateway func(context.Context, *Config, corestate.View, time.Time) GatewayPlan
+	config           *Config
+	logger           *slog.Logger
+	started          atomic.Bool
+	ready            chan struct{}
+	observations     chan chan Observation
+	lifecycle        sync.Mutex
+	runCancel        context.CancelFunc
+	runErr           error
+	rebind           chan rebindRequest
+	plans            chan chan GatewayPlan
+	done             chan struct{}
+	planGateway      func(context.Context, *Config, corestate.View, time.Time) GatewayPlan
+	deviceFactory    packetDeviceFactory
+	watchResume      func(context.Context) (<-chan struct{}, func() error, error)
+	resolveBootstrap func(context.Context, *Config, netip.AddrPort) (map[string]*net.UDPAddr, error)
 }
 
 type rebindRequest struct {
@@ -41,7 +55,7 @@ type rebindRequest struct {
 }
 
 func NewDaemon(config *Config, logger *slog.Logger) *Daemon {
-	return &Daemon{config: config, logger: logger, rebind: make(chan rebindRequest), plans: make(chan chan GatewayPlan), done: make(chan struct{}), planGateway: PlanGateway}
+	return &Daemon{config: config, logger: logger, ready: make(chan struct{}), observations: make(chan chan Observation), rebind: make(chan rebindRequest), plans: make(chan chan GatewayPlan), done: make(chan struct{}), planGateway: PlanGateway, deviceFactory: openConfiguredPacketDevice, watchResume: watchPowerResume, resolveBootstrap: resolveGossipBootstrap}
 }
 
 // GatewayPlan returns a detached, freshly revalidated connection plan. It does
@@ -90,10 +104,21 @@ func (d *Daemon) Rebind(ctx context.Context) error {
 }
 
 func (d *Daemon) Run(ctx context.Context) (err error) {
+	d.lifecycle.Lock()
 	if !d.started.CompareAndSwap(false, true) {
+		d.lifecycle.Unlock()
 		return errors.New("Windows daemon already started")
 	}
-	defer close(d.done)
+	ctx, runCancel := context.WithCancel(ctx)
+	d.runCancel = runCancel
+	d.lifecycle.Unlock()
+	defer func() {
+		runCancel()
+		d.lifecycle.Lock()
+		d.runErr = err
+		close(d.done)
+		d.lifecycle.Unlock()
+	}()
 	config, logger := d.config, d.logger
 	if config == nil {
 		return errors.New("Windows config is required")
@@ -108,16 +133,22 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	if err != nil {
 		return fmt.Errorf("gossip_listen: %w", err)
 	}
-	state, err := OpenState(config.State.Path, config.ManagedZone, config.TrustedRootPublicKey, time.Second)
+	state, err := OpenOrInitializeState(config, time.Second)
 	if err != nil {
 		return err
 	}
 	defer func() { err = errors.Join(err, state.Close()) }()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	bootstrap, err := resolveGossipBootstrap(ctx, config, listenAddr)
+	bootstrap, err := d.resolveBootstrap(ctx, config, listenAddr)
 	if err != nil {
-		return err
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		// Offline startup must retain IPC and the join request. The existing
+		// planner refreshes these address hints; peer IDs remain configured.
+		logger.Warn("gossip_bootstrap_refresh_failed", "error", err)
+		bootstrap = make(map[string]*net.UDPAddr)
 	}
 	var peers []string
 	for _, hint := range config.Gateway.BootstrapHints {
@@ -147,7 +178,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		},
 	})
 	defer driver.Stop()
-	packet, err := openGossipSockets(ctx, config.GossipListen)
+	packet, err := openPacketSockets(ctx, config.GossipListen)
 	if err != nil {
 		return fmt.Errorf("listen gossip UDP: %w", err)
 	}
@@ -176,6 +207,11 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		return fmt.Errorf("watch network changes: %w", err)
 	}
 	defer func() { err = errors.Join(err, stopNetworkChanges()) }()
+	powerResumes, stopPowerResumes, err := d.watchResume(ctx)
+	if err != nil {
+		return fmt.Errorf("watch power resume: %w", err)
+	}
+	defer func() { err = errors.Join(err, stopPowerResumes()) }()
 	logger.Info("gossip_started", "address", packet.LocalAddr().String(), "zone", config.ManagedZone, "tunnel_ready", false)
 	type planRequest struct {
 		ctx        context.Context
@@ -200,7 +236,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			case <-plannerCtx.Done():
 				return
 			case request := <-planRequests:
-				bootstrap, bootstrapErr := resolveGossipBootstrap(request.ctx, config, listenAddr)
+				bootstrap, bootstrapErr := d.resolveBootstrap(request.ctx, config, listenAddr)
 				plan := d.planGateway(request.ctx, config, request.view, time.Now())
 				select {
 				case plans <- planResult{request.generation, plan, bootstrap, bootstrapErr}:
@@ -226,12 +262,170 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		planRequests <- request
 	}
 	var lastPlan GatewayPlan
+	data := newSerialGatewayDataplane(ctx)
+	defer data.close()
+	tunnel := &gatewayTunnel{socket: packet, data: data}
+	defer tunnel.stop()
+	leaf := newLeafRuntime(d.deviceFactory)
+	defer func() { err = errors.Join(err, leaf.close()) }()
+	var leafID [8]byte
+	var nextLeafIntent time.Time
+	var leafRejected string
+	var lastReady bool
+	initialBackoff, maxBackoff := config.Reconnect.InitialBackoff, config.Reconnect.MaxBackoff
+	if initialBackoff <= 0 {
+		initialBackoff = time.Second
+	}
+	if maxBackoff < initialBackoff {
+		maxBackoff = 30 * time.Second
+	}
+	backoff := initialBackoff
+	var nextTunnel time.Time
+	var packetView packetStateView
+	freshPlanFrom := func(view corestate.View, now time.Time) GatewayPlan {
+		// The pipeline and this transport gate have the same serial owner.
+		// Its immutable snapshot policy stops at the next exact transition;
+		// current time, attachment and SA checks still run in every event.
+		var verifier *photoncrypto.Verifier
+		if leaf.pipeline != nil {
+			verifier = leaf.pipeline.verifier
+		}
+		if tunnel.phase == 3 && leaf.pipeline != nil {
+			var facts packetAuthorization
+			if leaf.pipeline.prepareSnapshotInto(config, view, lastPlan, now, &facts) {
+				return facts.plan
+			}
+		}
+		if view.State == nil || verifier.VerifyChain(view.State.Network, config.ManagedZone, now) != nil {
+			return GatewayPlan{Rejected: "local authority is absent or expired"}
+		}
+		if tunnel.phase != 0 {
+			binding, err := localTransportAuthorizationWithVerifier(config, view, now, verifier)
+			if err != nil || binding != tunnel.localAuthorization {
+				return GatewayPlan{Rejected: "local transport authorization changed"}
+			}
+			current := revalidateActiveGatewaySelection(config, view, lastPlan, now, verifier)
+			if current.Selected != nil {
+				current.Routes = authorizedGatewayRoutesFromSet(config, currentAuthorizedRouteSetWithVerifier(config, view, now, verifier))
+			}
+			return current
+		}
+		return RevalidateGatewayPlan(config, view, lastPlan, now)
+	}
+	freshPlan := func() GatewayPlan {
+		return freshPlanFrom(packetView.read(state.Store()), time.Now())
+	}
+	observeReady := func() {
+		ready := leaf.readySnapshot(config, packetView.read(state.Store()), lastPlan, time.Now())
+		if ready != lastReady {
+			lastReady = ready
+			logger.Info("tunnel_ready_changed", "tunnel_ready", ready)
+		}
+	}
+	stopTunnel := func(reason string) {
+		if err := leaf.stop(); err != nil {
+			logger.Warn("leaf_cleanup_failed", "error", err)
+		}
+		observeReady()
+		if tunnel.diagnostic.failure == nil || tunnel.diagnostic.failure.Historical || tunnel.diagnostic.failure.Message != boundedObservationText(reason) {
+			tunnel.observeEvent("attempt_failed", time.Now(), errors.New(reason))
+		}
+		tunnel.stop()
+		tunnel.observeProgress()
+		nextTunnel = time.Now().Add(backoff)
+		tunnel.diagnostic.retryAt = nextTunnel
+		backoff = min(backoff*2, maxBackoff)
+		logger.Info("tunnel_stopped", "reason", reason, "retry_at", nextTunnel, "tunnel_ready", false)
+	}
+	reconcileLeaf := func() error {
+		now := time.Now()
+		if tunnel.phase != 3 {
+			return nil
+		}
+		var intentErr error
+		if leafID == [8]byte{} || !now.Before(nextLeafIntent) {
+			nextLeafIntent = now.Add(5 * time.Second)
+			before := state.Store().VerifiedRevision()
+			intentErr = state.EnsureLocalLeafRoutes(ctx, config, now)
+			if intentErr == nil {
+				leafID, intentErr = state.EnsureLocalBabelIdentity(ctx, config, now)
+			}
+			if before != state.Store().VerifiedRevision() {
+				requestPlan()
+			}
+		}
+		if intentErr == nil {
+			intentErr = leaf.reconcile(ctx, config, state.Store().ReadView(), lastPlan, tunnel, leafID, now)
+		} else {
+			intentErr = errors.Join(intentErr, leaf.stop())
+		}
+		rejected := ""
+		if intentErr != nil {
+			rejected = intentErr.Error()
+		}
+		if rejected != leafRejected {
+			leafRejected = rejected
+			if rejected != "" {
+				logger.Info("leaf_unavailable", "reason", rejected, "tunnel_ready", false)
+			}
+		}
+		if errors.Is(intentErr, errPacketDeviceRecoveryExpired) {
+			return intentErr
+		}
+		return nil
+	}
+	attemptTunnel := func() {
+		if tunnel.phase != 0 || time.Now().Before(nextTunnel) {
+			return
+		}
+		plan := freshPlan()
+		if plan.Selected == nil {
+			return
+		}
+		// Record the chosen target before local preparation can fail. This does
+		// not claim a sent packet or an authenticated peer (generation stays 0).
+		tunnel.observeProgress()
+		tunnel.diagnostic.gateway = boundedObservationText(string(plan.Selected.Zone))
+		tunnel.diagnostic.remote = boundedObservationText(net.JoinHostPort(plan.Selected.Contact.Address, strconv.Itoa(int(plan.Selected.Contact.IKEPort))))
+		tunnel.diagnostic.generation = 0
+		before := state.Store().VerifiedRevision()
+		local, err := state.EnsureLocalTransport(ctx, config, time.Now(), plan, packet.LocalAddr().AddrPort())
+		if err != nil {
+			nextTunnel = time.Now().Add(backoff)
+			tunnel.observeEvent("local_identity_unavailable", time.Now(), err)
+			tunnel.observeProgress() // preparation ended; no active network attempt
+			tunnel.diagnostic.retryAt = nextTunnel
+			backoff = min(backoff*2, maxBackoff)
+			logger.Warn("tunnel_local_identity_unavailable", "error", err)
+			return
+		}
+		defer clear(local.PrivateKey)
+		if state.Store().VerifiedRevision() != before {
+			requestPlan()
+			return
+		}
+		binding, err := localTransportAuthorization(config, state.Store().ReadView(), time.Now())
+		if err != nil {
+			stopTunnel(err.Error())
+			return
+		}
+		if err := tunnel.start(plan, local.ID, local.PrivateKey, time.Now()); err != nil {
+			stopTunnel(err.Error())
+		} else {
+			tunnel.localAuthorization = binding
+		}
+	}
 	rebindPending := false
 	rebind := func(rebindCtx context.Context) error {
 		rebindCtx, cancelRebind := context.WithCancel(rebindCtx)
 		stopCancel := context.AfterFunc(ctx, cancelRebind)
 		defer stopCancel()
 		defer cancelRebind()
+		if err := leaf.stop(); err != nil {
+			logger.Warn("leaf_cleanup_failed", "error", err)
+		}
+		observeReady()
+		tunnel.stop() // deny old packets before replacing the shared endpoint
 		err := packet.Rebind(rebindCtx)
 		lastPlan = GatewayPlan{}
 		rebindPending = err != nil && ctx.Err() == nil
@@ -264,22 +458,156 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	syncPeers()
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
-	handleGossipEvent := func(event corehost.Event) {
+	tunnelTicker := time.NewTicker(250 * time.Millisecond)
+	defer tunnelTicker.Stop()
+	// Both queued control jobs and direct packet crypto finish at this gate.
+	// Read publication and time again after AES, then observe CHILD cutover and
+	// authorize delivery in the same serial owner turn.
+	completePacket := func(completion dataplaneCompletion) {
+		view, now := packetView.read(state.Store()), time.Now()
+		var facts packetAuthorization
+		haveFacts := leaf.pipeline != nil && leaf.pipeline.prepareSnapshotInto(config, view, lastPlan, now, &facts)
+		var plan GatewayPlan
+		if haveFacts {
+			plan = facts.plan
+		} else {
+			// Transport cutover remains independent of Babel/device readiness.
+			plan = freshPlanFrom(view, now)
+		}
+		tunnel.observeData(completion, plan, now)
+		if haveFacts {
+			if _, err := leaf.pipeline.acceptPrepared(&facts, completion); err != nil {
+				logger.Warn("leaf_packet_failed", "error", errors.Join(err, leaf.stop()))
+			}
+		} else {
+			data.accept(completion, plan, nil)
+			if completion.timing.Sampled() {
+				outcome := fixturePacketTimingRejected
+				if errors.Is(completion.err, context.Canceled) || (completion.job.ctx != nil && completion.job.ctx.Err() != nil) {
+					outcome = fixturePacketTimingCanceled
+				} else if completion.err != nil {
+					outcome = fixturePacketTimingCryptoError
+				}
+				completion.timing.Finish(outcome)
+			}
+		}
+	}
+	handleGossipEvent := func(event corehost.Event) error {
 		before := state.Store().VerifiedRevision()
 		if _, err := driver.HandleGossipHostEvent(ctx, event, time.Now(), nil); err != nil && !errors.Is(err, corehost.ErrGossipSessionNotFound) && ctx.Err() == nil {
 			logger.Warn("gossip_event_failed", "error", err)
 		}
 		if state.Store().VerifiedRevision() != before {
+			if tunnel.phase != 0 && !tunnel.current(freshPlan()) {
+				stopTunnel("verified authorization withdrawn")
+			}
 			observeGateways()
 			requestPlan()
+			if err := reconcileLeaf(); err != nil {
+				return err
+			}
+			observeReady()
 		}
+		return nil
 	}
+	close(d.ready)
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			err := leaf.stop()
+			observeReady()
+			return err
 		case result := <-d.plans:
 			result <- RevalidateGatewayPlan(config, state.Store().ReadView(), lastPlan, time.Now())
+		case result := <-d.observations:
+			result <- observeRuntime(config, state.Store().ReadView(), lastPlan, time.Now(), packet, tunnel, leaf, driver)
+		case packet := <-packet.ikePackets:
+			before := tunnel.phase
+			if err := tunnel.handle(packet, freshPlan(), time.Now()); err != nil {
+				logger.Debug("tunnel_packet_rejected", "error", err)
+			} else if before != 3 && tunnel.phase == 3 {
+				backoff = initialBackoff
+				logger.Info("tunnel_authenticated", "gateway", tunnel.plan.Selected.Zone, "tunnel_ready", false, "child_installed", true)
+				if err := reconcileLeaf(); err != nil {
+					return err
+				}
+			}
+			observeReady()
+		case packet := <-packet.espPackets:
+			packet.timing.Dequeue()
+			// Demux transferred a detached packet; this owner consumes it once.
+			// Plaintext aliases this buffer through synchronous completion;
+			// keep it untouched until delivery or rejection has finished.
+			if completion, ok := data.processOwnedInbound(packet.generation, freshPlan(), packet.peer, packet.packet, packet.timing); ok {
+				completePacket(completion)
+			} else {
+				outcome := fixturePacketTimingRejected
+				if completion.timing.Sampled() && data.ctx.Err() != nil {
+					outcome = fixturePacketTimingCanceled
+				}
+				completion.timing.Finish(outcome)
+			}
+		case job := <-data.jobs:
+			if job.ctx.Err() == nil {
+				completePacket(executeDataplaneJob(job))
+			}
+			// Readiness transition logging runs on the 250 ms lifecycle tick and
+			// authority/IKE events. Packet delivery above still revalidates now;
+			// IPC observations also evaluate readiness at their own read time.
+		case result := <-leaf.opened:
+			if err := leaf.complete(ctx, config, state.Store().ReadView(), lastPlan, tunnel, leafID, time.Now(), result); err != nil {
+				logger.Warn("leaf_device_failed", "error", err)
+				if errors.Is(err, errPacketDeviceConflict) || errors.Is(err, errPacketDeviceRecoveryExpired) {
+					return fmt.Errorf("leaf device cannot acquire its configured OS resources: %w", err)
+				}
+			}
+		case devicePacket := <-leaf.packets:
+			devicePacket.timing.Dequeue()
+			if devicePacket.err != nil {
+				devicePacket.timing.Finish(fixturePacketTimingRejected)
+				logger.Warn("leaf_read_failed", "error", errors.Join(devicePacket.err, leaf.stop()))
+				observeReady()
+				continue
+			}
+			if leaf.pipeline != nil && devicePacket.generation == tunnel.generation {
+				// A host packet cannot impersonate the daemon's Babel control.
+				if _, _, ok := businessEndpoints(devicePacket.packet); !ok {
+					devicePacket.timing.Finish(fixturePacketTimingRejected)
+					continue
+				}
+				devicePacket.timing.Classify(fixturePacketTimingBusiness)
+				pipeline := leaf.pipeline
+				var facts packetAuthorization
+				if pipeline.prepareSnapshotInto(config, packetView.read(state.Store()), lastPlan, time.Now(), &facts) {
+					completion, ok := data.processOwnedOutbound(pipeline.generation, facts.plan, devicePacket.packet,
+						func(packet []byte, outbound bool) bool { return pipeline.authorize(&facts, packet, outbound) }, devicePacket.timing)
+					if ok {
+						completePacket(completion)
+					} else {
+						outcome := fixturePacketTimingRejected
+						if completion.timing.Sampled() && data.ctx.Err() != nil {
+							outcome = fixturePacketTimingCanceled
+						}
+						completion.timing.Finish(outcome)
+					}
+				} else {
+					devicePacket.timing.Finish(fixturePacketTimingRejected)
+				}
+			} else {
+				devicePacket.timing.Finish(fixturePacketTimingRejected)
+			}
+		case <-tunnelTicker.C:
+			if err := tunnel.tick(freshPlan(), time.Now()); err != nil {
+				stopTunnel(err.Error())
+			}
+			attemptTunnel()
+			if err := reconcileLeaf(); err != nil {
+				return err
+			}
+			if leaf.pipeline != nil {
+				leaf.pipeline.tickSnapshot(config, packetView.read(state.Store()), lastPlan, time.Now())
+			}
+			observeReady()
 		case result := <-plans:
 			if result.generation != generation || result.plan.Revision != state.Store().VerifiedRevision() {
 				continue
@@ -306,10 +634,22 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				logger.Info("gateway_plan_changed", "plan", result.plan, "tunnel_ready", false)
 			}
 			lastPlan = result.plan
+			attemptTunnel()
+			observeReady()
 		case request := <-d.rebind:
 			request.result <- rebind(request.ctx)
 		case <-packet.failed:
 			if ctx.Err() == nil {
+				_ = rebind(ctx)
+				syncPeers()
+			}
+		case _, ok := <-powerResumes:
+			if !ok {
+				powerResumes = nil
+				continue
+			}
+			if ctx.Err() == nil {
+				logger.Info("power_resumed")
 				_ = rebind(ctx)
 				syncPeers()
 			}
@@ -336,11 +676,17 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			}
 			syncPeers()
 		case event := <-driver.Events():
-			handleGossipEvent(event)
+			if err := handleGossipEvent(event); err != nil {
+				return err
+			}
 		case event := <-driver.Completions():
-			handleGossipEvent(event)
+			if err := handleGossipEvent(event); err != nil {
+				return err
+			}
 		case event := <-driver.Continuations():
-			handleGossipEvent(event)
+			if err := handleGossipEvent(event); err != nil {
+				return err
+			}
 		}
 	}
 }

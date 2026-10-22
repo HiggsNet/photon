@@ -34,6 +34,7 @@ func validateGenericRecordIntent(intent PutRecordIntent) error {
 		routing.RecordTypeIPAMAssignment,
 		routing.RecordTypeRouteAnnouncement,
 		routing.RecordTypeRoutingNetns,
+		routing.RecordTypeBabelIdentity,
 		"service.socks5.v1",
 		"ipsec.profile.v1",
 		"ipsec.addresses.v1",

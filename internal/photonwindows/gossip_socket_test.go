@@ -11,7 +11,7 @@ import (
 func TestGossipSocketsRebindPreservesBlockedIO(t *testing.T) {
 	for _, address := range []string{"127.0.0.1:0", "[::1]:0"} {
 		t.Run(address, func(t *testing.T) {
-			sockets, err := openGossipSockets(t.Context(), address)
+			sockets, err := openPacketSockets(t.Context(), address)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -76,7 +76,7 @@ func TestGossipSocketsRebindPreservesBlockedIO(t *testing.T) {
 }
 
 func TestGossipSocketsFailedRebindRecoversAndCloseUnblocks(t *testing.T) {
-	sockets, err := openGossipSockets(t.Context(), "127.0.0.1:0")
+	sockets, err := openPacketSockets(t.Context(), "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,6 +88,12 @@ func TestGossipSocketsFailedRebindRecoversAndCloseUnblocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer occupied.Close()
+	// An explicitly configured first bind must fail too, not pick a different
+	// port under the dynamic-port retry policy.
+	if unexpected, err := openPacketSockets(t.Context(), address); err == nil {
+		unexpected.Close()
+		t.Fatal("fixed endpoint silently changed after a bind conflict")
+	}
 	if err := sockets.Rebind(t.Context()); err == nil {
 		t.Fatal("expected TCP conflict")
 	}
@@ -124,7 +130,7 @@ func TestGossipSocketsFailedRebindRecoversAndCloseUnblocks(t *testing.T) {
 }
 
 func TestGossipSocketsReadDeadline(t *testing.T) {
-	sockets, err := openGossipSockets(t.Context(), "127.0.0.1:0")
+	sockets, err := openPacketSockets(t.Context(), "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +149,7 @@ func TestGossipSocketsReadDeadline(t *testing.T) {
 }
 
 func TestGossipSocketsBrokenAcceptRequestsRecovery(t *testing.T) {
-	sockets, err := openGossipSockets(t.Context(), "127.0.0.1:0")
+	sockets, err := openPacketSockets(t.Context(), "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}

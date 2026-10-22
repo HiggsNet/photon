@@ -80,9 +80,10 @@ func TestGenerateWithStaticRoutes(t *testing.T) {
 	}
 	s := string(cfg)
 
-	// Must have a protocol static block.
-	if !strings.Contains(s, "protocol static photon_static_photontesth2 {") {
-		t.Errorf("missing protocol static block\n%s", s)
+	// BIRD permits only one address-family channel per static protocol.
+	if !strings.Contains(s, "protocol static photon_static_photontesth2_v4 {") ||
+		!strings.Contains(s, "protocol static photon_static_photontesth2_v6 {") || strings.Count(s, "protocol static ") != 2 {
+		t.Errorf("missing separate family static protocols\n%s", s)
 	}
 	// Must have the IPv4 route via the upstream interface.
 	if !strings.Contains(s, `route 10.0.0.0/24 via "phv2host";`) {

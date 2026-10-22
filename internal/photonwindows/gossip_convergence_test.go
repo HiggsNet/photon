@@ -29,9 +29,12 @@ func TestGossipDriversConvergeCommonStateAndReloadWithoutClientRuntime(t *testin
 	rightState := fixture.openState(t, fixture.rightPath, "node-b.catofes.")
 	left := newMemoryHostNode(leftState, leftTransport)
 	right := newMemoryHostNode(rightState, rightTransport)
+	// As in the daemon, install workers on both sides before catalog hints can
+	// trigger reverse pulls. Missing workers are local failures, not UDP fallback.
+	left.startObjectPull(t, right)
+	right.startObjectPull(t, left)
 	left.start(t)
 	right.start(t)
-	right.startObjectPull(t, left)
 
 	right.beginSync(t, "node-a.catofes.")
 	waitForWindowsState(t, time.Second, func() bool {
@@ -46,10 +49,17 @@ func TestGossipDriversConvergeCommonStateAndReloadWithoutClientRuntime(t *testin
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for gossip session completion")
 	}
-	// GossipDriver now owns authenticated inbound-path checkpointing. The
-	// completion that triggered relay is reported before the remote relay packet
-	// necessarily reaches this node, so wait for that independent checkpoint
-	// commit before taking the byte-for-byte persistence baseline.
+	// Complete the reverse TCP pull, then explicitly exercise an authenticated
+	// UDP path with matching catalogs. A TCP-only convergence need not produce
+	// another UDP packet after the remote authority first becomes verified.
+	select {
+	case <-left.completed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reverse gossip session completion")
+	}
+	if err := left.transport.Send("node-b.catofes.", &gossip.Message{Type: gossip.MessagePing, Ping: &gossip.Ping{Summary: corestate.CatalogSummaryFor(left.store.ReadView().State.Network)}}); err != nil {
+		t.Fatal(err)
+	}
 	waitForWindowsState(t, time.Second, func() bool {
 		peer := right.store.ReadView().Gossip.Peers["node-a.catofes."]
 		return peer.ObservedEndpoint != "" && peer.ObservedLastSyncUnix != 0

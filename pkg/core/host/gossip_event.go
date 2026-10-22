@@ -196,6 +196,11 @@ func (driver *GossipDriver) handleGossipHostStep(ctx context.Context, hostEvent 
 		events, err := driver.executeGossipPacketActions(ctx, driver.Gossip.PlanInbound(received.Packet), sender, sender.datagramBudget())
 		if err != nil {
 			driver.logGossipPacketFailure(received.Packet, err)
+			// Capacity pressure is handled and logged here. Propagating it to
+			// platform loops would emit a second warning for every rejected request.
+			if errors.Is(err, ErrGossipChunkSendCacheFull) {
+				err = nil
+			}
 		}
 		return out, events, err
 	}
@@ -322,6 +327,32 @@ func (driver *GossipDriver) logGossipPacketFailure(packet *gossip.Packet, err er
 	if packet != nil && packet.Message != nil {
 		peerID = packet.Message.PeerID
 		fields["type"] = packet.Message.Type
+		if packet.Message.FetchZone != nil {
+			fields["zone"] = packet.Message.FetchZone.Zone
+		}
+	}
+	if errors.Is(err, ErrGossipChunkSendCacheFull) {
+		now := driver.schedulerForRead().clock.Now()
+		driver.mu.Lock()
+		if !driver.chunkLimitLastLog.IsZero() && now.Sub(driver.chunkLimitLastLog) < slowGossipOperationInterval {
+			driver.chunkLimitSuppressed++
+			driver.mu.Unlock()
+			return
+		}
+		fields["suppressed"] = driver.chunkLimitSuppressed
+		driver.chunkLimitLastLog, driver.chunkLimitSuppressed = now, 0
+		driver.mu.Unlock()
+		var capacity *gossip.ChunkSendCacheFullError
+		if errors.As(err, &capacity) {
+			fields["limit"] = capacity.Limit
+			fields["peer_transfers"] = capacity.PeerTransfers
+			fields["peer_transfer_limit"] = gossip.MaxChunkPeerInflight
+			fields["cache_transfers"] = capacity.Transfers
+			fields["cache_transfer_limit"] = gossip.MaxChunkSendTransfers
+			fields["cache_bytes"] = capacity.Bytes
+			fields["cache_byte_limit"] = gossip.MaxChunkSendCacheBytes
+			fields["requested_bytes"] = capacity.RequestedBytes
+		}
 	}
 	driver.logGossip("warn", "packet_failed", peerID, "packet", err, fields)
 }

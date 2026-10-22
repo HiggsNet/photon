@@ -19,13 +19,27 @@ XFRM、BIRD 或 network namespace。
 - 内嵌 Babel leaf 和用户态 source-specific route table；
 - Wintun 承接 Windows TCP/IP stack 的 L3 packet；
 - split tunnel，只向 Windows 安装稳定 Photon aggregate route；
-- 不做 transit、IKE responder、lite-to-lite、full tunnel、DNS/NRPT、GUI 或 auto-update。
+- 不做 transit、IKE responder、lite-to-lite、full tunnel、DNS/NRPT 或 auto-update。
+
+2026-10-15 根据用户要求增加本机 GUI 与托盘管理入口，网络范围继续保持上述约束。
+默认 GUI 在本进程内管理一个 Daemon，复用 console 的 composition、控制管道和资源清理链路；
+窗口只通过绑定本进程的 named-pipe IPC 展示公开状态，不自行打开数据库或维护另一套连接状态机。
+提供状态、网关、路由、连接启停，以及身份、网关引导、分流路由和高级配置页；选项保存为原有 YAML 配置，
+复用同一 schema 与校验，保存后重新连接生效。
+关闭窗口隐藏到可用托盘，退出托盘先取消并等待本次 Daemon 退出。操作权限沿用本机管理员模型。
+GUI 不依赖 SCM 安装登记；Windows 服务保留为独立的可选 CLI 运行方式。
+
+Windows 是接入节点：Babel 只发布本节点当前获授权的本地前缀，不重新发布从 gateway 学到的
+路由。接收路由仅用于本机发包选路与入站来源授权校验；业务包出站源地址和入站目标地址必须
+属于本机，不启用 Windows IP forwarding，也不在远端节点之间转发业务包。
+这里的路由交换协议是 Babel；BIRD 是 Linux 上的路由软件，BFD 是另一种故障检测协议。
 
 ### 1.1 v1 支持与验收矩阵
 
 首版支持目标固定为 Windows 11 amd64。Windows 10、Windows Server、arm64 和模拟运行均不进入
 首版支持承诺，须在第一个真实 vertical slice 后分别补齐 CI 与设备验收才能扩展。此处是产品范围，
-不是已通过兼容测试的声明；当前 Linux 上的测试和 Windows 交叉编译只证明公共逻辑与编译边界。
+不是完整产品兼容测试的声明。Linux 上的测试和 Windows 交叉编译只证明公共逻辑与编译边界；
+Windows VM 的 B3/B4 原生及跨主机证据见 [IKE 验收](ike-testing.md) 和 [B4 验收](babel-testing.md)。
 
 | 环境 | 当前验证用途 | 发布前必须补齐 |
 | --- | --- | --- |
@@ -35,6 +49,9 @@ XFRM、BIRD 或 network namespace。
 
 多个 `gateway.allowed_zones` 表示候选集合，不表示多个同时转发的 gateway。切换时先停止旧 gateway
 承载业务，再启用新 gateway；同一 gateway 的 rekey overlap 不视为第二个 active gateway。
+允许项支持完整身份和与 Linux 共享的 glob 匹配；通配符从当前 verified view 动态展开，
+排除根与本机，按身份排序并去重，再执行既有 gateway 身份、签名、角色、传输和 overlay 校验。
+bootstrap 仍为具体 peer，仅需匹配任一允许项，不因被匹配而授予信任。
 `overlay.split_routes` 只限制本机接入隧道的地址范围，不授予 route origin 权限。
 DNS/NRPT、默认路由和系统代理不由本产品修改。服务启动后配置保持不变，修改配置通过重启应用。
 
@@ -82,6 +99,12 @@ IKE 实测组合可用 StrongSwan 名称 `aes128-sha256-prfsha256-ecp256` 表达
 StrongSwan：Docker 安装 Ubuntu 24.04 的发行版包，native/NixOS 使用宿主机包。
 不能用 less 上的 6.0.7 代替 Docker/Ubuntu 构建的版本与插件验收。
 
+Windows v1 的换网与睡眠恢复采用停止旧数据面、使旧 generation 失效，再重新建立 IKE/CHILD
+和 Babel 就绪的流程，不保留原 SA，也不承诺无感漫游。MOBIKE 仍关闭；它不是 leaf/转发角色
+开关。若以后引入，须先明确本地 underlay/NAT 路径迁移与网关端口 generation/rotate 的边界：
+当前 rotate 会建立独立的新 SA/XFRM 路径，经激活与切换 gate 后清理旧连接，不能被原 SA 的
+端点迁移绕过。还需协调 rekey、共享 UDP 端点和数据面 owner；本轮不改变这一设计。
+
 StrongSwan 的默认 ESP proposal 存在版本差异：6.0.2 起加入可选 KE，而旧版本默认不要求
 独立 CHILD KE。首个 IKE_AUTH CHILD 的密钥派生又不同于 CREATE_CHILD_SA；因此不能只验证
 首次连通后就强制 X25519 PFS。参见
@@ -113,8 +136,9 @@ Windows 已实现。原有 ECDSA bring-up smoke 在 Ubuntu 上也通过。构建
 - IKEv1、PSK/EAP、证书 CA 信任回退、未验证公钥不进入首版。rekey 失败不能越过 SA 到期、
   授权失效或序号上限继续发送；断线按已有 backoff 重试。
 
-B3 仍须以真正 Windows 实现验证相同集合、双方 rekey、外层 IPv4/IPv6、NAT 变化和错误
-proposal/身份/公钥的拒绝；本轮没有执行这些 Windows 或负向验收。任何更窄或新增的 proposal
+以上是 2026-10-01 的实现前基线。B3 后续已完成 Windows 协议实现、双版本 StrongSwan 与
+Windows VM 跨主机验收，实际场景及边界以 [IKE 验收](ike-testing.md) 和 [ESP 验收](esp-testing.md)
+为准；这不替代 B4 系统业务隧道或 B6 物理睡眠、多层 NAT 验收。任何更窄或新增的 proposal
 都须另有双向互通证据，不默认要求 Linux 改 profile。
 
 认证继续依据 verified transport-key/profile 与 Zone 身份绑定，不能仅凭 CERT 接受陌生公钥；
@@ -183,9 +207,18 @@ v1 的路由准入须同时满足以下条件，缺失任何一项都不得安�
 撤销或授权收紧时先使 packet lookup 中的旧授权不可用，再异步清理路由和 SA；失败不能恢复旧授权。
 Windows aggregate route 只把流量送入 Wintun，不能绕过用户态逐路由授权。
 
-以上是安装与撤销的验收契约。Router ID 派生、碰撞处理及端到端 binding 的 wire 方案仍须在 B4 实现
-并验证；仅从身份稳定派生 Router ID 不能证明收到的 origin 声明可信。在绑定完成前，prototype
-只能作为显式选择单个可信 gateway 的 experimental 实验，不能作为 production security boundary 发布。
+以上是安装与撤销的验收契约。B4 已实现由 root pin、Zone 和 overlay 派生的稳定完整 64 位 ID，
+并通过签名 `routing/babel/identities` 记录绑定 origin；租约到期、撤回、跨 Zone 碰撞均拒绝。
+Linux Daemon 已从指定 BIRD protocol 的当前授权本地注入证据读取完整运行时 ID，
+经公共签名事务发布、续租及撤回，不能将其低 32 位拼装为已验证身份。
+
+source-specific 路由的 source prefix 仅收紧已授权目的路由的本机使用条件：同地址族、规范
+非零前缀，覆盖至少一个当前非共享的本机 host assignment/announcement，使用时仍须验证
+实际本机源地址；入站反向匹配原始本机目标地址。它不授予额外地址或转发权限。
+
+签名身份记录证明 Zone 对 ID 的认领，不证明 gateway 转发的每条 Babel Update 未冒用其他 origin。
+prototype 仍只适用于显式信任的 gateway，同时仅一个 active gateway；不能作为抵御恶意
+gateway 的端到端来源证明发布。
 
 ### 3.2 本机私钥模型
 
@@ -384,6 +417,9 @@ engine 猜测。service crash 后下一次启动只能 adopt 带匹配 owner/gen
 | crash recovery：下一次进程启动进入 composition | 在重新验证可信状态、ownership 和新 SA 前保持数据面关闭；不恢复旧 SA sequence/replay window | 30 秒内完成本机资源检查与 adopt/清理，进入可连接的 disconnected 状态或明确 failed；不以远端连通作为期限前提 |
 
 网络持续不可达时按配置 backoff 重试，并维持 disconnected；上述期限不承诺 VPN 建立时间。
+Windows composition 也监听原生自动恢复事件，地址和路由未变仍触发上述重连；随后代表用户
+交互恢复的通知不再次触发。恢复回调仅投递合并事件，资源操作仍由 composition 串行执行。
+真实睡眠、休眠和 Modern Standby 的恢复与期限仍需分别取得原生验收证据。
 进程崩溃到下一次启动的延迟由 SCM/管理员控制，不计入 recovery 时限。无法证明归属的 OS 资源
 不得删除；出现冲突则失败退出并报告具体对象。资源清理超时不能重新开放已失效的授权。
 
@@ -412,15 +448,19 @@ F 阶段修正为以下顺序：
 后续窄切口加入。未实现的命令不得伪造
 connected/ready 状态。
 
-### B2 console 当前实现与验证边界
+### B2 console 阶段实现与验证边界
 
-`photon-windows run --console --config <path>` 现在运行公共状态同步。
-`state.path` 必须指向已有的 common-schema bbolt，managed zone 和 root pin 必须与配置匹配。
-首次运行可先用 `state import --config <path> --bundle <file> --key <file>` 导入 Linux 签发的
+以下记录 B2 阶段的公共状态同步实现；B3/B4 后续数据面接线见本节末尾。
+`photon-windows run --console --config <path>` 复用这一公共状态同步。
+已有 `state.path` 必须为 common-schema bbolt，managed zone 和 root pin 必须与配置匹配。
+2026-10-15 扩展首次自动入网：服务启动时仅在数据库缺失且 bootstrap 有效的情况下生成独立身份，
+保存 root pin 与待授权 managed zone，通过公共 Gossip 同步并接纳上级授权；GUI 展示进度及公开请求。
+待授权时不配置隧道或业务网络，授权生效后由现有 owner 继续连接，见 [自动入网](autojoin-testing.md)。
+也可先用 `state import --config <path> --bundle <file> --key <file>` 导入 Linux 签发的
 join bundle 和 Photon Ed25519 JSON 密钥，见 [初始化步骤](native-testing.md#首次初始化)。
 导入只创建新数据库，拒绝覆盖已有文件；配置 root pin、zone、签名、有效期和密钥授权由公共身份逻辑验证。
 只接受 root-to-managed authorities/parent proofs，不将 bundle 中夹带的 records 或其他 zone 视为 verified。
-运行中的数据库不可同时由另一进程打开。尚未提供 Windows 密钥生成、自动入网或已有身份刷新命令。
+运行中的数据库不可同时由另一进程打开。已有身份不被首次初始化或导入命令覆盖。
 `gossip_listen` 默认为 `0.0.0.0:33434`，接受 IP:port（IPv6 如 `[::]:33434`）；
 UDP Gossip 与 TCP object-pull 绑定同一个地址和端口。bootstrap DNS 选择与监听地址相同族的第一个地址；
 启动时解析，运行中由有界 worker 定时和重绑后刷新。配置本身保持不可变，修改配置后重启。
@@ -443,7 +483,8 @@ Wintun/IKE/路由和 SCM 仍由后续阶段验收。
 通知回调仅投递有界事件，注销在回调外执行，遵守
 [CancelMibChangeNotify2 的线程约束](https://learn.microsoft.com/en-us/windows/win32/api/netioapi/nf-netioapi-cancelmibchangenotify2)。
 
-`photon-windows gateways --config <path>` 离线读取同一数据库，逐一诊断 `gateway.allowed_zones`。
+`photon-windows gateways --config <path>` 离线读取同一数据库，按 `gateway.allowed_zones`
+从当前 view 展开具体网关后逐一诊断；精确身份不存在时仍输出拒绝原因。
 每次按当前时间复核 root pin、授权链、撤销、五项传输记录的签名和 owner/key、profile identity、
 Ed25519 key fingerprint/有效期、inbound role、overlay/path family 和有效地址/端口。
 输出 revision、评估时间、签名记录中的 IP contacts 或拒绝原因。bootstrap hints 不进入候选；
@@ -470,3 +511,20 @@ console 复用同一候选校验：启动时、Gossip 事件推进 verified revi
 B3 的实现顺序、锁定上游来源、各模块移植/重写决策和许可证材料见
 [ranet-lite port map](ranet-port-map.md)。原型 IKE 为 AEAD-only，CHILD rekey 不支持 KE，
 identity 使用 ASN1_DN；因此不能原样移植后宣称兼容当前 Linux 基线，也不以改窄 Linux profile 规避实现。
+
+### B3/B4 console 当前数据面
+
+console 继续使用同一个 Daemon、State/BoltStore 和 GossipDriver；当前签名传输材料建立
+IKE/CHILD SA 后，协调本机 host 公告、完整 Babel 身份租约和平台设备。只配置获授权的
+非共享 /32、/128 与相应地址族的配置 split aggregate；Babel 链路地址复用 Linux 的
+`derived-link-local` 派生契约。异步配置完成须复验当前 revision/generation，DAD Preferred
+后才交付设备；旧完成结果关闭回收。
+
+真实 Wintun Read/Write、ESP completion、Babel 邻居与 SADR 选路由同一运行循环协调。
+每次业务提交及交付重新验证当前 SA、origin/精确目的前缀和本机地址；learned route 不再公告。
+只有平台地址、当前 SA、有效邻居及实际本机源可用的授权路由同时成立时，才输出
+`tunnel_ready_changed=true`。撤销、设备失败、停止和重绑撤回 pipeline，并回收设备及配置。
+
+Windows 11 VM 与真实 StrongSwan/BIRD 的双栈业务、显式重绑、签名 gossip 撤销/恢复、
+IPv6 SADR、不同 gateway 切换与资源清理已通过，具体版本、脚本和证据见 [B4 验收](babel-testing.md)。
+SCM/IPC 已完成 B5 的原生服务验收，见 [服务与控制接口](service-testing.md)；完整 B6 产品矩阵继续单独验收。

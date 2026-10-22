@@ -13,8 +13,6 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	"github.com/HiggsNet/photon/pkg/core/share"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
-	"github.com/HiggsNet/photon/pkg/core/zone"
-	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
 func writeConfiguredPendingBootstrap(store *corestate.BoltStore, config *appConfig) error {
@@ -25,23 +23,9 @@ func writeConfiguredPendingBootstrap(store *corestate.BoltStore, config *appConf
 	if err != nil {
 		return err
 	}
-	rootAuthority := photoncrypto.ConfiguredRootAuthority(config.TrustedRootPublicKey)
-	ns := zone.NewNetworkState()
-	ns.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, rootAuthority)
-	// Pending auto-join has a stable local identity but no verified managed
-	// authority yet. Keep an explicit authority-less zone placeholder so the
-	// common root remains structurally valid while gossip.AutoJoinPending still
-	// reports that synchronization/adoption is required.
-	ns.Zones[config.ManagedZone] = zone.NewZoneState(config.ManagedZone, nil)
-	configureValidation(ns)
-	candidate := &corestate.CommitCandidate{
-		Verified: &corestate.VerifiedState{
-			ManagedZone:          config.ManagedZone,
-			Network:              ns,
-			TrustedRootPublicKey: append(ed25519.PublicKey(nil), config.TrustedRootPublicKey...),
-			IdentityPrivateKey:   append(ed25519.PrivateKey(nil), key.PrivateKey...),
-		},
-		Gossip: &corestate.GossipCheckpoint{},
+	candidate, err := corestate.NewPendingIdentity(config.ManagedZone, config.TrustedRootPublicKey, key.PrivateKey)
+	if err != nil {
+		return err
 	}
 	return initializeStateDB(store, candidate, 0, &photonlinux.LinuxState{})
 }
