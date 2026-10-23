@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -125,6 +126,99 @@ func TestDesktopNativeDiagnosticsPeerSelectionTracksCurrentSnapshot(t *testing.T
 		if listCount() != 0 || selected() != -1 || w.diagnosticsView.peerID != "" || strings.Contains(get(guiDiagnosticsTextID), "a.example.") || strings.Contains(get(guiDiagnosticsTextID), "z.example.") {
 			t.Fatal("inactive or empty public snapshot retained a peer row, selection or details")
 		}
+	}
+	// The same native sidebar supports gateways without sharing its selected
+	// identity with Gossip. Plan reorder and a new node preserve the selection.
+	guiSendMessage.Call(w.diagnostics, guiWMCommand, guiDiagnosticsGatewayID, 0)
+	observation = &photonwindows.Observation{Running: true, ObservedAt: now,
+		Gateway: photonwindows.GatewayObservation{Selected: "m.example.", Candidates: []photonwindows.GatewayCandidateObservation{{Zone: "m.example."}, {Zone: "z.example."}}},
+		IKE:     photonwindows.IKEObservation{AttemptActive: true, AttemptGateway: "m.example.", Phase: "auth"},
+	}
+	sample(desktopSnapshot{RuntimeState: "running", Observation: observation})
+	index = slices.Index(w.diagnosticsView.peerIDs, "m.example.")
+	if index < 0 || listCount() != 3 {
+		t.Fatal("gateway navigation lacks summary or candidate nodes")
+	}
+	guiSendMessage.Call(w.controls[guiDiagnosticsPeerListID], 0x186, uintptr(index), 0)
+	guiSendMessage.Call(w.diagnostics, guiWMCommand, guiDiagnosticsPeerListID|1<<16, 0)
+	if w.diagnosticsView.gatewayID != "m.example." || !strings.Contains(get(guiDiagnosticsTextID), "状态：连接中") || strings.Contains(get(guiDiagnosticsTextID), "z.example.") {
+		t.Fatal("gateway selection did not isolate its connection state")
+	}
+	observation.Gateway.Candidates = []photonwindows.GatewayCandidateObservation{{Zone: "z.example."}, {Zone: "a.example."}, {Zone: "m.example."}}
+	observation.IKE.Live, observation.IKE.Gateway = true, "m.example."
+	sample(desktopSnapshot{RuntimeState: "running", Observation: observation})
+	if w.diagnosticsView.gatewayID != "m.example." || w.diagnosticsView.peerIDs[selected()] != "m.example." || !strings.Contains(get(guiDiagnosticsTextID), "状态：已认证") {
+		t.Fatal("gateway insertion/reorder changed selected node or lost authentication")
+	}
+	sample(desktopSnapshot{RuntimeState: "stopped", Observation: observation})
+	if listCount() != 0 || w.diagnosticsView.gatewayID != "" || strings.Contains(get(guiDiagnosticsTextID), "m.example.") {
+		t.Fatal("stopped gateway page retained live nodes or details")
+	}
+}
+
+func TestDesktopNativeDiagnosticsRefreshPreservesReading(t *testing.T) {
+	if os.Getenv("PHOTON_WINDOWS_GUI_NATIVE") != "1" {
+		t.Skip("set PHOTON_WINDOWS_GUI_NATIVE=1 for native diagnostics controls")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	b, err := newDesktopBackend(desktopOptions{ConfigPath: filepath.Join(t.TempDir(), "missing.yaml")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := newDesktopWindow(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := w.dispose(); err != nil {
+			t.Error(err)
+		}
+		var message guiMessage
+		guiUser32.NewProc("PeekMessageW").Call(uintptr(unsafe.Pointer(&message)), 0, 0x12, 0x12, 1)
+	}()
+	w.guiMove(w.diagnostics, 40, 40, 700, 620)
+	guiShowWindow.Call(w.diagnostics, 5)
+	edit := w.controls[guiDiagnosticsTextID]
+	text := strings.Repeat("当前节点 · IKE authentication and connection details\r\n", 1800)
+	w.updateDiagnosticsText(text)
+	guiSendMessage.Call(edit, 0xb1, 70000, 70015) // Also covers selections beyond the packed 16-bit limit.
+	guiSendMessage.Call(edit, 0xb6, 0, 12)
+	before := guiReadDiagnosticsPosition(edit)
+	w.updateDiagnosticsText(text + "new status\r\n")
+	after := guiReadDiagnosticsPosition(edit)
+	if before.firstLine == 0 || after.firstLine != before.firstLine || after.start != 70000 || after.end != 70015 {
+		t.Fatalf("refresh moved viewport/selection: before=%+v after=%+v", before, after)
+	}
+	w.diagnosticsView.page, w.diagnosticsView.peerID = guiDiagnosticsPeersID, "other.example."
+	w.updateDiagnosticsText("another node\r\n")
+	if pos := guiReadDiagnosticsPosition(edit); pos.firstLine != 0 || pos.start != 0 || pos.end != 0 {
+		t.Fatalf("new node inherited another view's reading position: %+v", pos)
+	}
+	w.diagnosticsView.page = guiDiagnosticsOverviewID
+	w.updateDiagnosticsText(text)
+	if pos := guiReadDiagnosticsPosition(edit); pos.firstLine != before.firstLine || pos.start != before.start || pos.end != before.end {
+		t.Fatalf("returning to a view lost reading position: %+v", pos)
+	}
+	w.diagnosticsView.page = guiDiagnosticsLogID
+	w.updateDiagnosticsText(text)
+	if pos := guiReadDiagnosticsPosition(edit); pos.firstLine == 0 || !pos.follow {
+		t.Fatalf("new log view did not follow its tail: %+v", pos)
+	}
+	guiSendMessage.Call(edit, 0xb1, 5, 15)
+	guiSendMessage.Call(edit, 0xb6, 0, ^uintptr(14)) // Scroll up 15 lines.
+	before = guiReadDiagnosticsPosition(edit)
+	w.updateDiagnosticsText(text + "new log entry\r\n")
+	after = guiReadDiagnosticsPosition(edit)
+	if after.firstLine != before.firstLine || after.start != 5 || after.end != 15 || after.follow {
+		t.Fatalf("incoming logs interrupted reading: before=%+v after=%+v", before, after)
+	}
+	length, _, _ := guiGetWindowTextLength.Call(edit)
+	guiSendMessage.Call(edit, 0xb1, length, length)
+	guiSendMessage.Call(edit, 0xb7, 0, 0)
+	w.updateDiagnosticsText(text + strings.Repeat("new log entry\r\n", 60))
+	if pos := guiReadDiagnosticsPosition(edit); !pos.follow || pos.start != pos.end {
+		t.Fatalf("returning to bottom did not resume log following: %+v", pos)
 	}
 }
 
@@ -313,10 +407,11 @@ func TestDesktopNativeDiagnosticsReadPauseRefreshAndOffline(t *testing.T) {
 		if metadata.Bottom > content.Top {
 			t.Fatal("diagnostics metadata overlaps the readonly content")
 		}
-		if visible(guiDiagnosticsPeerListID) != (page == guiDiagnosticsPeersID) || visible(guiDiagnosticsPeerTitleID) != (page == guiDiagnosticsPeersID) || visible(guiDiagnosticsLogFilterID) != (page == guiDiagnosticsLogID) {
+		nodePage := page == guiDiagnosticsPeersID || page == guiDiagnosticsGatewayID
+		if visible(guiDiagnosticsPeerListID) != nodePage || visible(guiDiagnosticsPeerTitleID) != nodePage || visible(guiDiagnosticsNodeTitleID) != nodePage || visible(guiDiagnosticsLogFilterID) != (page == guiDiagnosticsLogID) {
 			t.Fatal("diagnostics leaked peer navigation or log filtering into another page")
 		}
-		if page == guiDiagnosticsPeersID {
+		if nodePage {
 			list, title := controlRect(guiDiagnosticsPeerListID), controlRect(guiDiagnosticsPeerTitleID)
 			if list.Right > content.Left || title.Bottom > list.Top {
 				t.Fatal("peer sidebar overlaps selected-peer details or its title")

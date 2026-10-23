@@ -7,8 +7,9 @@ import (
 	"slices"
 	"strings"
 	"time"
-	"unicode/utf8"
 	"unsafe"
+
+	"github.com/HiggsNet/photon/internal/photonwindows"
 )
 
 const (
@@ -26,6 +27,7 @@ const (
 	guiDiagnosticsPeerListID  = 2316
 	guiDiagnosticsPeerTitleID = 2317
 	guiDiagnosticsLogFilterID = 2318
+	guiDiagnosticsNodeTitleID = 2319
 	guiDiagnosticsTextLimit   = 1 << 20 // UTF-16 code units, including copied text.
 )
 
@@ -36,7 +38,11 @@ type guiDiagnosticsView struct {
 	page                    int
 	logFilter               int
 	peerID                  string
+	gatewayID               string
+	listPage                int
 	peerIDs, peerRows       []string
+	textView                string
+	reading                 map[string]guiDiagnosticsReading
 	paused, force           bool
 	snapshot                desktopSnapshot
 	tail                    desktopLogTail
@@ -68,6 +74,7 @@ func (w *desktopWindow) createDiagnosticsWindow() error {
 		// copying still returns the original text, including intact raw JSON.
 		{guiDiagnosticsTextID, "EDIT", "", "edit", 0x50010000 | 0x0004 | 0x0040 | 0x0800 | 0x00200000, 0x200},
 		{guiDiagnosticsPeerTitleID, "STATIC", "节点", "body", 0x40000000, 0},
+		{guiDiagnosticsNodeTitleID, "STATIC", "节点详情", "section", 0x40000000, 0},
 		{guiDiagnosticsPeerListID, "LISTBOX", "", "edit", 0x40010000 | 0x0001 | 0x0100 | 0x00200000, 0x200},
 		{guiDiagnosticsLogFilterID, "COMBOBOX", "", "edit", 0x40010000 | 0x0003 | 0x00200000, 0},
 		{guiDiagnosticsRefreshID, "BUTTON", "刷新一次", "body", 0x50010000, 0},
@@ -157,7 +164,7 @@ func (w *desktopWindow) drawDiagnostics() {
 	case guiDiagnosticsOverviewID:
 		text = desktopFormatOverview(v.snapshot)
 	case guiDiagnosticsGatewayID:
-		text = desktopFormatGateway(v.snapshot)
+		text = desktopFormatGatewayNode(v.snapshot, v.gatewayID)
 	case guiDiagnosticsLogID:
 		source = v.tail.Path
 		if source == "" {
@@ -225,26 +232,11 @@ func (w *desktopWindow) drawDiagnostics() {
 	if !sampled.IsZero() {
 		stamp = sampled.Local().Format("2006-01-02 15:04:05")
 	}
-	lines := 0
-	if bounded != "" {
-		lines = strings.Count(strings.TrimRight(bounded, "\r\n"), "\n") + 1
-	}
-	metadata := fmt.Sprintf("来源：%s\r\n采样：%s · %s · 显示 %d 字符 / %d 行", source, stamp, mode, utf8.RuneCountInString(bounded), lines)
-	if v.page == guiDiagnosticsPeersID {
-		metadata += "\r\n左侧选择节点；右侧分别查看最新会话、最近失败和历史计数。"
-	}
+	metadata := fmt.Sprintf("%s · 更新于 %s\r\n来源：%s", mode, stamp, source)
 	if detail != "" {
 		metadata += "\r\n" + detail
 	}
-	contentChanged := w.textCache[w.controls[guiDiagnosticsTextID]] != bounded
-	w.setText(w.controls[guiDiagnosticsTextID], bounded)
-	if contentChanged && v.page == guiDiagnosticsLogID {
-		// A log tail opens on its newest records. Pause keeps this buffer and
-		// its scroll position stable while the user reads or selects text.
-		length, _, _ := guiGetWindowTextLength.Call(w.controls[guiDiagnosticsTextID])
-		guiSendMessage.Call(w.controls[guiDiagnosticsTextID], 0xb1, length, length) // EM_SETSEL at the actual text end.
-		guiSendMessage.Call(w.controls[guiDiagnosticsTextID], 0xb7, 0, 0)           // EM_SCROLLCARET
-	}
+	w.updateDiagnosticsText(bounded)
 	w.setText(w.controls[guiDiagnosticsMetadataID], metadata)
 	title := map[int]string{guiDiagnosticsOverviewID: "运行概览", guiDiagnosticsGatewayID: "网关与隧道", guiDiagnosticsPeersID: "Gossip 节点", guiDiagnosticsLogID: "运行日志", guiDiagnosticsDetailsID: "原始 JSON · 供进一步排查"}[v.page]
 	w.setText(w.controls[guiDiagnosticsTitleID], title)
@@ -262,7 +254,6 @@ func (w *desktopWindow) drawDiagnostics() {
 		pause = "继续刷新"
 	}
 	w.setText(w.controls[guiDiagnosticsPauseID], pause)
-	w.layoutDiagnostics()
 }
 
 func (w *desktopWindow) syncDiagnosticsPeerList() {
@@ -270,35 +261,76 @@ func (w *desktopWindow) syncDiagnosticsPeerList() {
 	if v == nil {
 		return
 	}
+	if v.page != guiDiagnosticsPeersID && v.page != guiDiagnosticsGatewayID {
+		return
+	}
 	var ids, rows []string
+	selection := v.peerID
 	if desktopLiveSnapshot(v.snapshot) {
-		for _, peer := range v.snapshot.Observation.Peers {
-			ids = append(ids, peer.Peer)
-			rows = append(rows, desktopPeerRow(peer))
+		if v.page == guiDiagnosticsGatewayID {
+			ids, rows = []string{""}, []string{"连接总览"}
+			for _, id := range desktopGatewayNodes(v.snapshot) {
+				ids = append(ids, id)
+				rows = append(rows, desktopGatewayState(v.snapshot.Observation, id)+" · "+desktopDebugCell(id, 128))
+			}
+		} else {
+			peers := slices.Clone(v.snapshot.Observation.Peers)
+			slices.SortFunc(peers, func(a, b photonwindows.PeerObservation) int { return strings.Compare(a.Peer, b.Peer) })
+			for _, peer := range peers {
+				ids = append(ids, peer.Peer)
+				rows = append(rows, desktopPeerRow(peer))
+			}
 		}
 	}
-	selected := slices.Index(ids, v.peerID)
+	if v.page == guiDiagnosticsGatewayID {
+		selection = v.gatewayID
+	}
+	selected := slices.Index(ids, selection)
 	if selected < 0 && len(ids) > 0 {
 		selected = 0
 	}
-	v.peerID = ""
+	selection = ""
 	if selected >= 0 {
-		v.peerID = ids[selected]
+		selection = ids[selected]
 	}
-	if !slices.Equal(rows, v.peerRows) || !slices.Equal(ids, v.peerIDs) {
+	if v.page == guiDiagnosticsGatewayID {
+		v.gatewayID = selection
+	} else {
+		v.peerID = selection
+	}
+	if v.listPage != v.page || !slices.Equal(rows, v.peerRows) || !slices.Equal(ids, v.peerIDs) {
 		list := w.controls[guiDiagnosticsPeerListID]
 		top, _, _ := guiSendMessage.Call(list, 0x018e, 0, 0) // LB_GETTOPINDEX
-		guiSendMessage.Call(list, 0x0184, 0, 0)              // LB_RESETCONTENT
+		topID := ""
+		if v.listPage == v.page && top < uintptr(len(v.peerIDs)) {
+			topID = v.peerIDs[top]
+		}
+		guiSendMessage.Call(list, 0x000b, 0, 0) // WM_SETREDRAW
+		guiSendMessage.Call(list, 0x0184, 0, 0) // LB_RESETCONTENT
 		for _, row := range rows {
 			guiSendMessage.Call(list, 0x0180, 0, uintptr(unsafe.Pointer(guiUTF16(row))))
 		}
-		if len(rows) > 0 {
-			guiSendMessage.Call(list, 0x0197, min(top, uintptr(len(rows)-1)), 0)
+		guiSendMessage.Call(list, 0x0186, uintptr(selected), 0)
+		if index := slices.Index(ids, topID); index >= 0 {
+			top = uintptr(index)
 		}
+		if len(rows) > 0 {
+			guiSendMessage.Call(list, 0x0197, min(top, uintptr(len(rows)-1)), 0) // LB_SETTOPINDEX after selection.
+		}
+		guiSendMessage.Call(list, 0x000b, 1, 0)
+		guiUser32.NewProc("RedrawWindow").Call(list, 0, 0, 0x405) // Invalidate client and frame.
 		v.peerIDs, v.peerRows = ids, rows
+		v.listPage = v.page
 	}
-	guiSendMessage.Call(w.controls[guiDiagnosticsPeerListID], 0x0186, uintptr(selected), 0)
-	w.setText(w.controls[guiDiagnosticsPeerTitleID], fmt.Sprintf("节点（%d）", len(ids)))
+	label, title := fmt.Sprintf("Gossip 节点（%d）", len(ids)), "请选择节点"
+	if v.page == guiDiagnosticsGatewayID {
+		label, title = fmt.Sprintf("网关节点（%d）", max(len(ids)-1, 0)), "连接总览"
+	}
+	if selection != "" {
+		title = selection
+	}
+	w.setText(w.controls[guiDiagnosticsPeerTitleID], label)
+	w.setText(w.controls[guiDiagnosticsNodeTitleID], title)
 }
 
 func guiBoundDiagnosticsText(text string, limit int) (string, bool) {
@@ -337,7 +369,11 @@ func (w *desktopWindow) diagnosticsWindowProc(hwnd uintptr, message uint32, wp, 
 		if notification == 1 && id == guiDiagnosticsPeerListID {
 			selected, _, _ := guiSendMessage.Call(w.controls[id], 0x0188, 0, 0)
 			if selected < uintptr(len(v.peerIDs)) {
-				v.peerID = v.peerIDs[selected]
+				if v.page == guiDiagnosticsGatewayID {
+					v.gatewayID = v.peerIDs[selected]
+				} else {
+					v.peerID = v.peerIDs[selected]
+				}
 				w.drawDiagnostics()
 			}
 			return 0
@@ -356,6 +392,7 @@ func (w *desktopWindow) diagnosticsWindowProc(hwnd uintptr, message uint32, wp, 
 		switch int(wp & 0xffff) {
 		case guiDiagnosticsOverviewID, guiDiagnosticsGatewayID, guiDiagnosticsLogID, guiDiagnosticsPeersID, guiDiagnosticsDetailsID:
 			v.page = int(wp & 0xffff)
+			w.layoutDiagnostics()
 			w.drawDiagnostics()
 			if !v.paused {
 				w.refreshDiagnostics()
@@ -398,29 +435,37 @@ func (w *desktopWindow) layoutDiagnostics() {
 		x += spec.width + 8
 	}
 	w.guiMove(w.controls[guiDiagnosticsTitleID], 24, 66, width-48, 34)
-	w.guiMove(w.controls[guiDiagnosticsMetadataID], 24, 112, width-48, 88)
-	left, top, contentWidth := 24, 212, width-48
-	peerPage := w.diagnosticsView != nil && w.diagnosticsView.page == guiDiagnosticsPeersID
+	w.guiMove(w.controls[guiDiagnosticsMetadataID], 24, 108, width-48, 64)
+	left, top, contentWidth := 24, 184, width-48
+	peerPage := w.diagnosticsView != nil && (w.diagnosticsView.page == guiDiagnosticsPeersID || w.diagnosticsView.page == guiDiagnosticsGatewayID)
 	logPage := w.diagnosticsView != nil && w.diagnosticsView.page == guiDiagnosticsLogID
 	showPeers, showLogs := uintptr(0), uintptr(0)
 	if peerPage {
 		showPeers = 5
-		listWidth := min(320, max(240, (width-60)/3))
-		w.guiMove(w.controls[guiDiagnosticsPeerTitleID], 24, 212, listWidth, 24)
-		w.guiMove(w.controls[guiDiagnosticsPeerListID], 24, 244, listWidth, max(height-316, 0))
+		listWidth := min(300, max(220, (width-60)/3))
+		w.guiMove(w.controls[guiDiagnosticsPeerTitleID], 24, 184, listWidth, 24)
+		w.guiMove(w.controls[guiDiagnosticsPeerListID], 24, 216, listWidth, max(height-288, 0))
 		left += listWidth + 12
 		contentWidth -= listWidth + 12
+		w.guiMove(w.controls[guiDiagnosticsNodeTitleID], left, 184, contentWidth, 24)
+		top = 216
 	}
 	if logPage {
 		showLogs = 5
-		w.guiMove(w.controls[guiDiagnosticsLogFilterID], 24, 204, 260, 220)
-		top = 244
+		w.guiMove(w.controls[guiDiagnosticsLogFilterID], 24, 176, 260, 220)
+		top = 216
 	}
 	guiShowWindow.Call(w.controls[guiDiagnosticsPeerTitleID], showPeers)
 	guiShowWindow.Call(w.controls[guiDiagnosticsPeerListID], showPeers)
+	guiShowWindow.Call(w.controls[guiDiagnosticsNodeTitleID], showPeers)
 	guiShowWindow.Call(w.controls[guiDiagnosticsLogFilterID], showLogs)
 	w.guiMove(w.controls[guiDiagnosticsTextID], left, top, contentWidth, max(height-top-72, 0))
 	w.guiMove(w.controls[guiDiagnosticsRefreshID], 24, height-48, 112, 32)
 	w.guiMove(w.controls[guiDiagnosticsPauseID], 148, height-48, 128, 32)
 	w.guiMove(w.controls[guiDiagnosticsCopyID], width-172, height-48, 148, 32)
+	font := "body"
+	if w.diagnosticsView != nil && (logPage || w.diagnosticsView.page == guiDiagnosticsDetailsID) {
+		font = "mono"
+	}
+	w.guiApplyFont(w.controls[guiDiagnosticsTextID], font)
 }
