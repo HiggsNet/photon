@@ -10,8 +10,8 @@ import (
 )
 
 // packetPolicyDeadline bounds reuse of immutable signed-policy results. Every
-// integer-second check (authority keys, revocations, transport keys and Babel
-// identities) is reevaluated at the next second, even without a new revision.
+// integer-second check (authority keys, revocations and transport keys) is
+// reevaluated at the next second, even without a new revision.
 // Exact delegation and contact expiry can end the interval sooner. The caller
 // separately checks current snapshot/config/planner identity, clock rollback,
 // the original DNS hint lifetime and mutable SA/Babel/packet gates every event.

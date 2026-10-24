@@ -2,7 +2,6 @@ package photonwindows
 
 import (
 	"encoding/binary"
-	"encoding/hex"
 	"net/netip"
 	"testing"
 	"time"
@@ -55,7 +54,8 @@ func TestSourceSpecificAdmissionOnlyNarrowsLocalHosts(t *testing.T) {
 		}
 	}
 	// The destination owner owns neither the broad source pool nor the local host.
-	// Shared/anycast or merely network assignments are not a host witness.
+	// Shared/anycast or a subnet without the selected host's announcement is
+	// not a local host witness.
 	addSourceHost(f, "10.9.0.1/32", true)
 	route.Source = netip.MustParsePrefix("10.0.0.0/8")
 	if currentBabelRouteAuthorizer(f.config, f.view, f.now)(route) {
@@ -63,9 +63,15 @@ func TestSourceSpecificAdmissionOnlyNarrowsLocalHosts(t *testing.T) {
 	}
 	key, _ := routing.NormalizeIPAMAssignmentKey("10.9.0.1/32")
 	delete(f.view.State.Network.Zones[zone.RootZone].Records, key)
+	hostKey, _ := routing.NormalizeRouteAnnouncementKey("10.9.0.1/32")
+	delete(f.view.State.Network.Zones[f.config.ManagedZone].Records, hostKey)
 	addSourceHost(f, "10.9.0.0/24", false)
 	if currentBabelRouteAuthorizer(f.config, f.view, f.now)(route) {
-		t.Fatal("network assignment substituted for an explicit local host")
+		t.Fatal("subnet announcement substituted for the selected local host announcement")
+	}
+	f.put(f.config.ManagedZone, hostKey, routing.RecordTypeRouteAnnouncement, routing.RouteAnnouncementRecord{Version: 1, Prefix: "10.9.0.1/32", Active: true})
+	if !currentBabelRouteAuthorizer(f.config, f.view, f.now)(route) {
+		t.Fatal("selected and announced subnet host refused")
 	}
 }
 
@@ -75,7 +81,12 @@ func TestSourceSpecificIPv6HostAndBroadFilters(t *testing.T) {
 	pool := "2001:db8::/32"
 	key, _ := routing.NormalizeIPAMPoolKey(pool)
 	f.put(zone.RootZone, key, routing.RecordTypeIPAMPool, routing.IPAMPoolRecord{Version: 1, Prefix: pool, DelegatedTo: zone.RootZone, Active: true})
-	addSourceHost(f, "2001:db8:1::1/128", false)
+	// Keep the /64 IPAM assignment, but announce only the selected /128.
+	localAssignment := "2001:db8:1::/64"
+	key, _ = routing.NormalizeIPAMAssignmentKey(localAssignment)
+	f.put(zone.RootZone, key, routing.RecordTypeIPAMAssignment, routing.IPAMAssignmentRecord{Version: 1, Prefix: localAssignment, AssignedTo: f.config.ManagedZone, Active: true})
+	key, _ = routing.NormalizeRouteAnnouncementKey("2001:db8:1::1/128")
+	f.put(f.config.ManagedZone, key, routing.RecordTypeRouteAnnouncement, routing.RouteAnnouncementRecord{Version: 1, Prefix: "2001:db8:1::1/128", Active: true})
 	dst := "2001:db8:2::/64"
 	key, _ = routing.NormalizeIPAMAssignmentKey(dst)
 	f.put(zone.RootZone, key, routing.RecordTypeIPAMAssignment, routing.IPAMAssignmentRecord{Version: 1, Prefix: dst, AssignedTo: "node-a.catofes.", Active: true})
@@ -124,6 +135,19 @@ func TestSourceSpecificIPv6HostAndBroadFilters(t *testing.T) {
 	if !f.inbound(t, packet) {
 		t.Fatal("IPv6 source-specific inbound completion refused")
 	}
+	// Owning a subnet does not attach every address in it to this leaf.
+	copy(packet[24:40], netip.MustParseAddr("2001:db8:1::2").AsSlice())
+	if f.inbound(t, packet) {
+		t.Fatal("unselected subnet address reached the host")
+	}
+	copy(packet[24:40], local.AsSlice())
+	completion := f.inboundCompletion(t, packet)
+	key, _ = routing.NormalizeIPAMAssignmentKey(localAssignment)
+	f.put(zone.RootZone, key, routing.RecordTypeIPAMAssignment, routing.IPAMAssignmentRecord{Version: 1, Prefix: localAssignment, AssignedTo: f.config.ManagedZone, Active: false})
+	f.view.Revision++
+	if f.accept(t, completion) {
+		t.Fatal("queued IPv6 business packet survived subnet withdrawal")
+	}
 }
 
 func TestSourceSpecificPipelineBothDirectionsAndFallback(t *testing.T) {
@@ -164,7 +188,7 @@ func TestSourceSpecificPipelineBothDirectionsAndFallback(t *testing.T) {
 
 func TestSourceSpecificQueuedCompletionRechecksAuthority(t *testing.T) {
 	for _, direction := range []string{"outbound", "inbound"} {
-		for _, scenario := range []string{"assignment", "announcement", "origin-lease"} {
+		for _, scenario := range []string{"assignment", "announcement", "destination-announcement"} {
 			t.Run(direction+"/"+scenario, func(t *testing.T) {
 				f := newPipelineFixture(t)
 				learnSourceRoute(t, f, "10.0.0.0/8")
@@ -184,9 +208,9 @@ func TestSourceSpecificQueuedCompletionRechecksAuthority(t *testing.T) {
 				case "announcement":
 					key, _ := routing.NormalizeRouteAnnouncementKey("10.9.0.1/32")
 					f.put(f.config.ManagedZone, key, routing.RecordTypeRouteAnnouncement, routing.RouteAnnouncementRecord{Version: 1, Prefix: "10.9.0.1/32", Active: false})
-				case "origin-lease":
-					f.put("node-a.catofes.", routing.RecordKeyBabelIdentity, routing.RecordTypeBabelIdentity, routing.BabelIdentityRecord{Version: 1, RouterIDs: []string{hex.EncodeToString(f.remoteID[:])}, ExpiresAt: f.now.Add(time.Second).Unix()})
-					f.now = f.now.Add(time.Second)
+				case "destination-announcement":
+					key, _ := routing.NormalizeRouteAnnouncementKey("10.1.2.0/24")
+					f.put("node-a.catofes.", key, routing.RecordTypeRouteAnnouncement, routing.RouteAnnouncementRecord{Version: 1, Prefix: "10.1.2.0/24", Active: false})
 				}
 				f.view.Revision++
 				if f.accept(t, completion) || len(f.device.written) != 0 {

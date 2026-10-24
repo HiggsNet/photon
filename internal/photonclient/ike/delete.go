@@ -223,7 +223,10 @@ func (i *Initiator) ResolveChildRekey(oldLocalSPI uint32) (ChildRekeyResolution,
 	}
 	r.SurvivingSPI = survivor.result.InitiatorSPI
 	r.LocalInitiated = survivor.localInitiated
-	if survivor.localInitiated {
+	// The predecessor may already be gone after our Delete response or a
+	// simultaneous peer Delete. Resolving the surviving relationship again
+	// must not ask the lifecycle owner to delete that missing CHILD twice.
+	if survivor.localInitiated && i.children[oldLocalSPI] != nil {
 		r.DeleteSPI = oldLocalSPI
 	}
 	return r, nil

@@ -114,3 +114,48 @@ func TestChildResolutionReportsInitiatorAndIKERefusalType(t *testing.T) {
 		t.Fatal("IKE refusal lacks exchange identity", err)
 	}
 }
+
+func TestChildRekeyResolutionDoesNotDeleteRetiredPredecessor(t *testing.T) {
+	a := informationalFixture(t)
+	b := mirrorIKE(a)
+	oldA := a.auth.child.InitiatorSPI
+	oldAChild, _ := a.Child(oldA)
+	oldB := oldAChild.ResponderSPI
+	oldBChild, _ := b.Child(oldB)
+	request, err := a.ChildRequest(configForExistingChild(oldAChild, 0x11223344))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply, _, err := b.HandleChildRequest(request, configForExistingChild(oldBChild, 0x55667788))
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := a.HandleChildResponse(reply)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := a.ResolveChildRekey(oldA)
+	if err != nil || decision.DeleteSPI != oldA || decision.SurvivingSPI != created.Child.InitiatorSPI {
+		t.Fatal("old CHILD must be deleted exactly once", decision, err)
+	}
+	request, err = a.ChildDeleteRequest([]uint32{decision.DeleteSPI})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply, _, err = b.HandleChildDelete(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = a.HandleChildDelete(reply); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		decision, err = a.ResolveChildRekey(oldA)
+		if err != nil || decision.SurvivingSPI != created.Child.InitiatorSPI || decision.DeleteSPI != 0 {
+			t.Fatal("completed Delete rearmed a missing predecessor", decision, err)
+		}
+	}
+	if _, err = a.InformationalRequest(); err != nil {
+		t.Fatal("cleanup blocked the next exchange", err)
+	}
+}

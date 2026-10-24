@@ -170,6 +170,7 @@ func runStrongSwanWindowsTunnel(t *testing.T, gateway, local string) {
 		}
 	}
 	checkEcho()
+	rekeyDeadline, expiryDeadline := tunnel.rekeyAt, tunnel.expiresAt
 	tunnel.deleteAt = time.Now()
 	for data.sas[oldSPI] != nil {
 		select {
@@ -184,6 +185,12 @@ func runStrongSwanWindowsTunnel(t *testing.T, gateway, local string) {
 		case <-ctx.Done():
 			t.Fatal("old CHILD deletion timeout")
 		}
+	}
+	if tunnel.deleteSPI != 0 {
+		t.Fatal("completed old CHILD Delete scheduled a second deletion")
+	}
+	if tunnel.rekeyAt != rekeyDeadline || tunnel.expiresAt != expiryDeadline {
+		t.Fatal("old CHILD cleanup extended the active key lifetimes")
 	}
 	checkEcho()
 	oldSession := tunnel.session

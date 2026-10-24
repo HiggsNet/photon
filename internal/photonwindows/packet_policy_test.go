@@ -135,12 +135,8 @@ func TestPacketPolicySignedSecondTransitionsDifferential(t *testing.T) {
 						t.Fatal("remote identity collision invalidated local attachment")
 					}
 					validRoute := facts.authorizeRoute(sadr.Route{Destination: netip.MustParsePrefix("10.1.2.0/24"), RouterID: f.remoteID})
-					want := at.Before(deadline)
-					if scenario == "identity collision expires" {
-						want = !want
-					}
-					if validRoute != want {
-						t.Fatal("signed identity transition missed", at, validRoute)
+					if !validRoute {
+						t.Fatal("optional identity transition changed prefix authorization", at)
 					}
 				}
 			}

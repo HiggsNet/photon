@@ -21,20 +21,22 @@ var ErrDaemonNotRunning = errors.New("Windows daemon is not running")
 // Observation is a detached, bounded sample from the daemon's event owner.
 // Configured addresses describe the attached device, never pending intentions.
 type Observation struct {
-	Running         bool                      `json:"running"`
-	ObservedAt      time.Time                 `json:"observed_at"`
-	Revision        uint64                    `json:"revision"`
-	Admission       gossip.AdmissionDiagnosis `json:"admission"`
-	Readiness       ReadinessObservation      `json:"readiness"`
-	Gateway         GatewayObservation        `json:"gateway"`
-	TunnelReady     bool                      `json:"tunnel_ready"`
-	UDPAddress      string                    `json:"udp_address"`
-	Wintun          WintunObservation         `json:"wintun"`
-	IKE             IKEObservation            `json:"ike"`
-	Babel           BabelObservation          `json:"babel"`
-	Peers           []PeerObservation         `json:"peers"`
-	PeersTruncated  bool                      `json:"peers_truncated"`
-	RoutesTruncated bool                      `json:"routes_truncated"`
+	Connections          []ConnectionObservation   `json:"connections"`
+	ConnectionsTruncated bool                      `json:"connections_truncated"`
+	Running              bool                      `json:"running"`
+	ObservedAt           time.Time                 `json:"observed_at"`
+	Revision             uint64                    `json:"revision"`
+	Admission            gossip.AdmissionDiagnosis `json:"admission"`
+	Readiness            ReadinessObservation      `json:"readiness"`
+	Gateway              GatewayObservation        `json:"gateway"`
+	TunnelReady          bool                      `json:"tunnel_ready"`
+	UDPAddress           string                    `json:"udp_address"`
+	Wintun               WintunObservation         `json:"wintun"`
+	IKE                  IKEObservation            `json:"ike"`
+	Babel                BabelObservation          `json:"babel"`
+	Peers                []PeerObservation         `json:"peers"`
+	PeersTruncated       bool                      `json:"peers_truncated"`
+	RoutesTruncated      bool                      `json:"routes_truncated"`
 }
 type WintunObservation struct {
 	Configured  bool           `json:"configured"`
@@ -71,9 +73,10 @@ type BabelObservation struct {
 	Routes   []RouteObservation `json:"routes"`
 }
 type RouteObservation struct {
+	Peer         string       `json:"peer,omitempty"`
 	Prefix       netip.Prefix `json:"prefix"`
 	SourcePrefix netip.Prefix `json:"source_prefix"`
-	Origin       string       `json:"origin"`
+	Origin       string       `json:"origin"` // Unknown for gateway-forwarded Babel routes.
 	Metric       uint16       `json:"metric"`
 }
 type PeerObservation struct {
@@ -205,7 +208,6 @@ func observeRuntime(config *Config, view corestate.View, plan GatewayPlan, now t
 			origins = slices.DeleteFunc(origins, func(origin babel.Origin) bool {
 				return !slices.Contains(hosts, origin.Prefix)
 			})
-			identities := currentBabelOrigins(config, view, now)
 			// Bound both response size and work. A truncation is explicit; no omitted
 			// candidate is presented as an installed or selected route.
 			lookups := 0
@@ -225,7 +227,7 @@ func observeRuntime(config *Config, view corestate.View, plan GatewayPlan, now t
 					selected := sadr.Lookup(candidates, source, candidate.Destination.Addr(), now, authorize)
 					out.TunnelReady = out.TunnelReady || leaf.device != nil && len(selected) > 0
 					for _, route := range selected {
-						r := RouteObservation{Prefix: route.Destination, SourcePrefix: route.Source, Origin: string(identities[route.RouterID]), Metric: route.Metric}
+						r := RouteObservation{Prefix: route.Destination, SourcePrefix: route.Source, Metric: route.Metric}
 						if !seen[r] {
 							if len(out.Babel.Routes) == 256 {
 								out.RoutesTruncated = true

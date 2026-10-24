@@ -70,7 +70,7 @@ func (w *desktopWindow) createSettingsWindow() error {
 	for _, spec := range []struct {
 		id   int
 		text string
-	}{{guiBasicPageID, "身份"}, {guiGatewayPageID, "网关与引导"}, {guiRoutePageID, "分流路由"}, {guiAdvancedPageID, "高级"}, {guiAllowedAddID, "添加"}, {guiAllowedUpdateID, "更新"}, {guiAllowedDeleteID, "移除"}, {guiAllowedClearID, "清除输入"}, {guiRouteAddID, "添加"}, {guiRouteUpdateID, "更新"}, {guiRouteDeleteID, "移除"}, {guiRouteClearID, "清除输入"}, {guiBootstrapAddID, "添加节点"}, {guiBootstrapUpdateID, "更新选中"}, {guiBootstrapDeleteID, "移除选中"}, {guiBootstrapClearID, "清除输入"}, {guiSaveID, "保存配置"}, {guiReloadID, "重新读取"}} {
+	}{{guiBasicPageID, "身份"}, {guiGatewayPageID, "节点与引导"}, {guiRoutePageID, "分流路由"}, {guiAdvancedPageID, "高级"}, {guiAllowedAddID, "添加"}, {guiAllowedUpdateID, "更新"}, {guiAllowedDeleteID, "移除"}, {guiAllowedClearID, "清除输入"}, {guiRouteAddID, "添加"}, {guiRouteUpdateID, "更新"}, {guiRouteDeleteID, "移除"}, {guiRouteClearID, "清除输入"}, {guiBootstrapAddID, "添加节点"}, {guiBootstrapUpdateID, "更新选中"}, {guiBootstrapDeleteID, "移除选中"}, {guiBootstrapClearID, "清除输入"}, {guiSaveID, "保存配置"}, {guiReloadID, "重新读取"}} {
 		if err := create(spec.id, "BUTTON", spec.text, button, 0); err != nil {
 			return err
 		}
@@ -81,12 +81,12 @@ func (w *desktopWindow) createSettingsWindow() error {
 	}{
 		{guiRootFieldID, "可信根公钥"},
 		{guiManagedFieldID, "本机管理域"},
-		{guiAllowedFieldID, "网关规则"},
+		{guiAllowedFieldID, "节点范围"},
 		{guiAllowedInputID, ""},
 		{guiSplitFieldID, "经过 Photon 的网段"},
 		{guiRouteInputID, "网段地址"},
-		{guiBootstrapListID, "引导节点 · 网关身份 / 地址"},
-		{guiBootstrapPeerID, "网关身份"}, {guiBootstrapAddressID, "主机地址与端口"},
+		{guiBootstrapListID, "引导节点 · 节点身份 / 地址"},
+		{guiBootstrapPeerID, "节点身份"}, {guiBootstrapAddressID, "主机地址与端口"},
 		{guiStateFieldID, "身份数据库 · 绝对路径"},
 		{guiOverlayFieldID, "Overlay ID"}, {guiListenFieldID, "Gossip 监听地址"},
 		{guiAdapterFieldID, "虚拟网卡名称"}, {guiMTUFieldID, "MTU"}, {guiLogFieldID, "日志级别"},
@@ -225,10 +225,10 @@ func (w *desktopWindow) showSettingsPage(page int) {
 			}
 		}
 	}
-	title, help := "本机身份", "填写管理员提供的可信根公钥与本机管理域，再设置网关和路由。首次启动连接时会自动生成本机身份。"
+	title, help := "本机身份", "填写管理员提供的可信根公钥与本机管理域，再设置节点和路由。首次启动连接时会自动生成本机身份。"
 	switch page {
 	case guiGatewayPageID:
-		title, help = "网关与引导", "网关规则支持 *.example. 或 *。首次入网至少添加一个具体引导节点；已有身份数据库可留空。"
+		title, help = "节点与引导", "节点范围支持 *.example. 或 *。首次入网至少添加一个具体引导节点；已有身份数据库可留空。"
 	case guiRoutePageID:
 		title, help = "分流路由", "仅列表中的网段经过 Photon，其余流量保持原路径。支持 IPv4 与 IPv6；选中条目可编辑或移除。"
 	case guiAdvancedPageID:
@@ -379,7 +379,7 @@ func (w *desktopWindow) changeBootstrap(action int) {
 	peer, address = strings.TrimSpace(peer), strings.TrimSpace(address)
 	peerZone := zone.ZonePath(peer)
 	if peerErr != nil || addressErr != nil || !peerZone.Valid() || peerZone.IsRoot() || zone.HasPatternMeta(peer) {
-		w.note("请输入具体的完整网关身份，例如 gateway.example.；引导节点不能使用通配符。")
+		w.note("请输入具体的完整节点身份，例如 gateway.example.；引导节点不能使用通配符。")
 		return
 	}
 	host, port, err := net.SplitHostPort(address)

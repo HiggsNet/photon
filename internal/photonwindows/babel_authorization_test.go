@@ -14,39 +14,45 @@ import (
 	"github.com/HiggsNet/photon/pkg/routing"
 )
 
-func TestCurrentFullBabelOriginBinding(t *testing.T) {
-	config, view, now, put := gatewayPlanFixture(t)
-	peer := zone.ZonePath("node-a.catofes.")
-	id := [8]byte{0x12, 0x34, 0x56, 0x78, 0x90, 0xab, 0xcd, 0xef}
-	binding := routing.BabelIdentityRecord{Version: 1, RouterIDs: []string{"1234567890abcdef"}, ExpiresAt: now.Add(time.Minute).Unix()}
-	put(peer, routing.RecordKeyBabelIdentity, routing.RecordTypeBabelIdentity, binding)
-	if got := currentBabelOrigins(config, view, now)[id]; got != peer {
-		t.Fatal("signed full ID not bound", got)
-	}
-	if len(currentBabelOrigins(config, view, now.Add(time.Minute))) != 0 {
-		t.Fatal("expired binding retained")
-	}
-	if len(currentBabelOrigins(config, view, now.Add(-time.Second))) != 0 {
-		t.Fatal("future binding accepted after clock rollback")
-	}
-	put(peer, routing.RecordKeyBabelIdentity, routing.RecordTypeBabelIdentity, routing.BabelIdentityRecord{Version: 1, ExpiresAt: now.Add(time.Minute).Unix()})
-	if len(currentBabelOrigins(config, view, now)) != 0 {
-		t.Fatal("withdrawn identity retained")
-	}
-	put(peer, routing.RecordKeyBabelIdentity, routing.RecordTypeBabelIdentity, binding)
-	put("catofes.", routing.RecordKeyBabelIdentity, routing.RecordTypeBabelIdentity, binding)
-	if len(currentBabelOrigins(config, view, now)) != 0 {
-		t.Fatal("cross-zone collision selected an arbitrary origin")
-	}
-	delete(view.State.Network.Zones["catofes."].Records, routing.RecordKeyBabelIdentity)
-	record := view.State.Network.Zones[peer].Records[routing.RecordKeyBabelIdentity]
-	record.Signature[0] ^= 1
-	if len(currentBabelOrigins(config, view, now)) != 0 {
-		t.Fatal("invalid signature accepted")
+func TestBabelRouteAuthorizationIgnoresIdentityRecords(t *testing.T) {
+	for _, scenario := range []string{"absent", "expired", "withdrawn", "conflicting", "invalid signature", "malformed"} {
+		t.Run(scenario, func(t *testing.T) {
+			config, view, now, put := gatewayPlanFixture(t)
+			peer := zone.ZonePath("node-a.catofes.")
+			binding := routing.BabelIdentityRecord{Version: 1, RouterIDs: []string{"1234567890abcdef"}, ExpiresAt: now.Add(time.Minute).Unix()}
+			switch scenario {
+			case "absent":
+			case "expired":
+				binding.ExpiresAt = now.Unix()
+				put(peer, routing.RecordKeyBabelIdentity, routing.RecordTypeBabelIdentity, binding)
+			case "withdrawn":
+				binding.RouterIDs = nil
+				put(peer, routing.RecordKeyBabelIdentity, routing.RecordTypeBabelIdentity, binding)
+			case "conflicting":
+				put(peer, routing.RecordKeyBabelIdentity, routing.RecordTypeBabelIdentity, binding)
+				put("catofes.", routing.RecordKeyBabelIdentity, routing.RecordTypeBabelIdentity, binding)
+			case "invalid signature", "malformed":
+				put(peer, routing.RecordKeyBabelIdentity, routing.RecordTypeBabelIdentity, binding)
+				record := view.State.Network.Zones[peer].Records[routing.RecordKeyBabelIdentity]
+				if scenario == "malformed" {
+					record.Value = []byte("invalid")
+				} else {
+					record.Signature[0] ^= 1
+				}
+			}
+			route := sadr.Route{Destination: netip.MustParsePrefix("10.1.2.0/24"), RouterID: [8]byte{9}}
+			if !currentBabelRouteAuthorizer(config, view, now)(route) {
+				t.Fatal("authorized prefix rejected because of optional identity records")
+			}
+			route.Destination = netip.MustParsePrefix("10.2.0.0/16")
+			if currentBabelRouteAuthorizer(config, view, now)(route) {
+				t.Fatal("unauthorized prefix accepted")
+			}
+		})
 	}
 }
 
-func TestBabelRouteLookupRequiresCurrentSAOriginAndExactPrefix(t *testing.T) {
+func TestBabelRouteLookupRequiresCurrentSAAndAuthorizedExactPrefix(t *testing.T) {
 	config, view, now, put := gatewayPlanFixture(t)
 	peer := zone.ZonePath("node-a.catofes.")
 	// Give the already-authorized parent its own local transport facts. This
@@ -83,13 +89,8 @@ func TestBabelRouteLookupRequiresCurrentSAOriginAndExactPrefix(t *testing.T) {
 	lookup := func() []sadr.Route {
 		return tunnel.lookupBabelRoutes(config, view, plan, view.Revision, []sadr.Route{r}, src, dst, now)
 	}
-	if len(lookup()) != 0 {
-		t.Fatal("prefix permission alone accepted missing origin")
-	}
-	binding := routing.BabelIdentityRecord{Version: 1, RouterIDs: []string{"1234567890abcdef"}, ExpiresAt: now.Add(time.Minute).Unix()}
-	put(peer, routing.RecordKeyBabelIdentity, routing.RecordTypeBabelIdentity, binding)
 	if len(lookup()) != 1 {
-		t.Fatal("current signed exact origin/prefix rejected")
+		t.Fatal("authorized route from trusted gateway requires an identity record")
 	}
 	for _, mutate := range []func(){
 		func() { tunnel.expiresAt = now },
@@ -104,8 +105,8 @@ func TestBabelRouteLookupRequiresCurrentSAOriginAndExactPrefix(t *testing.T) {
 		tunnel.data.generation = tunnel.generation
 	}
 	r.RouterID[0] ^= 1
-	if len(lookup()) != 0 {
-		t.Fatal("low 32-bit ID match granted permission")
+	if len(lookup()) != 1 {
+		t.Fatal("Router ID change invalidated authorized prefix")
 	}
 	r.RouterID[0] ^= 1
 	r.Source = netip.MustParsePrefix("10.0.0.0/8")
@@ -121,15 +122,6 @@ func TestBabelRouteLookupRequiresCurrentSAOriginAndExactPrefix(t *testing.T) {
 		t.Fatal("supernet inherited exact announcement permission")
 	}
 	r.Destination = netip.MustParsePrefix("10.1.2.0/24")
-	// Move the valid binding to a different authorized zone: equal prefixes in
-	// another origin are not an excuse to associate this origin with its gateway.
-	delete(view.State.Network.Zones[peer].Records, routing.RecordKeyBabelIdentity)
-	put("catofes.", routing.RecordKeyBabelIdentity, routing.RecordTypeBabelIdentity, binding)
-	if len(lookup()) != 0 {
-		t.Fatal("gateway substituted for signed origin")
-	}
-	delete(view.State.Network.Zones["catofes."].Records, routing.RecordKeyBabelIdentity)
-	put(peer, routing.RecordKeyBabelIdentity, routing.RecordTypeBabelIdentity, binding)
 	key, _ := routing.NormalizeRouteAnnouncementKey(r.Destination.String())
 	put(peer, key, routing.RecordTypeRouteAnnouncement, routing.RouteAnnouncementRecord{Version: 1, Prefix: r.Destination.String(), Active: false})
 	if len(lookup()) != 0 {

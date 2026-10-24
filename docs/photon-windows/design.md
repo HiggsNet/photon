@@ -14,7 +14,7 @@ XFRM、BIRD 或 network namespace。
 第一版固定以下边界：
 
 - outbound-only IKEv2 initiator；
-- 一个 active Photon gateway；
+- 同时连接全部已验证且可连接的匹配节点，各连接独立恢复；
 - 用户态 ESP tunnel mode；
 - 内嵌 Babel leaf 和用户态 source-specific route table；
 - Wintun 承接 Windows TCP/IP stack 的 L3 packet；
@@ -47,8 +47,11 @@ Windows VM 的 B3/B4 原生及跨主机证据见 [IKE 验收](ike-testing.md) �
 | Windows 11 amd64 VM | 首版运行验收目标 | 真实 UDP、Wintun、IP Helper、SCM、停止/重启/崩溃恢复 |
 | Photon Linux gateway | 协议互通目标 | StrongSwan IKE/ESP、BIRD Babel、撤销后停止转发 |
 
-多个 `gateway.allowed_zones` 表示候选集合，不表示多个同时转发的 gateway。切换时先停止旧 gateway
-承载业务，再启用新 gateway；同一 gateway 的 rekey overlap 不视为第二个 active gateway。
+`gateway.allowed_zones` 是连接范围：范围内每个可连接的已验证节点均维护独立 IKE/CHILD/Babel 状态，
+不再按配置顺序独占选择一个网关。未填写时默认为 `*`；已有显式范围保持不变。所有连接共用
+一张 Wintun 网卡和一个本机报文读取器，单节点失败不移除其他节点使用的网卡或路由。
+本机发包按目的前缀长度、源前缀长度、Babel metric 选路，等价路径按源/目的地址稳定分配。
+Windows 完全不中转：不发布学到的远端路由，不将任何远端业务报文送入另一条连接。
 允许项支持完整身份和与 Linux 共享的 glob 匹配；通配符从当前 verified view 动态展开，
 排除根与本机，按身份排序并去重，再执行既有 gateway 身份、签名、角色、传输和 overlay 校验。
 bootstrap 仍为具体 peer，仅需匹配任一允许项，不因被匹配而授予信任。
@@ -190,35 +193,33 @@ Photon Windows 继续消费 Photon 的可信事实层：
 静态 gateway address 只能作为 bootstrap hint。IKE responder identity 必须匹配已验证的
 transport record，Babel route 必须在写入 SADR table 前通过 `AuthorizedRouteSet`。
 
-### 3.1 route-origin 安装契约
+### 3.1 可信网关与前缀授权契约
 
 v1 的路由准入须同时满足以下条件，缺失任何一项都不得安装或继续使用：
 
-1. 接收路由的 SA 属于当前 active gateway；gateway 的 identity、transport key、overlay 和撤销状态
+1. 接收路由的 SA 属于对应的当前活动节点连接；该节点的 identity、transport key、overlay 和撤销状态
    均由当前 verified records 确认，bootstrap hint 和配置 allowlist 不能替代验证。
-2. Babel 64-bit Router ID 必须无歧义地绑定到 verified origin Zone。绑定缺失、冲突或失效时拒绝该路由；
-   不能把 next-hop gateway 自动当作 origin，也不能因为某个 Zone 授权了同一 prefix 就放行。
-3. 使用当前 verified snapshot 与当前时间构建 `routing.BuildAuthorizedRouteSet`，匹配
-   `Announced[origin][prefix]` 的有效授权，并限制在配置 split aggregate 内。SADR 的 source prefix
-   同样须通过明确授权规则；规则未实现时拒绝带 source constraint 的路由，不静默丢弃该约束。
-4. 安装前检查规划所用 `VerifiedRevision` 仍为当前值；异步完成过期时丢弃并重新规划。
+2. 使用当前 verified snapshot 与当前时间构建 `routing.BuildAuthorizedRouteSet`，目的前缀必须
+   精确匹配其中某个 Zone 的有效公告授权，并限制在配置 split aggregate 内。可信网关提供
+   可达性；不要求 Babel Router ID 与该 Zone 绑定，也不将网关或前缀授权者冒充路由来源。
+   SADR 的 source prefix 同样须通过明确授权规则，不静默丢弃该约束。
+3. 安装前检查规划所用 `VerifiedRevision` 仍为当前值；异步完成过期时丢弃并重新规划。
    record 到期也须触发重新校验，不能只等待 revision 变化。
 
 撤销或授权收紧时先使 packet lookup 中的旧授权不可用，再异步清理路由和 SA；失败不能恢复旧授权。
 Windows aggregate route 只把流量送入 Wintun，不能绕过用户态逐路由授权。
 
-以上是安装与撤销的验收契约。B4 已实现由 root pin、Zone 和 overlay 派生的稳定完整 64 位 ID，
-并通过签名 `routing/babel/identities` 记录绑定 origin；租约到期、撤回、跨 Zone 碰撞均拒绝。
-Linux Daemon 已从指定 BIRD protocol 的当前授权本地注入证据读取完整运行时 ID，
-经公共签名事务发布、续租及撤回，不能将其低 32 位拼装为已验证身份。
+2026-10-22 撤除 Windows 的 Router ID/Zone 身份绑定准入策略。完整 64 位 Router ID
+仍由 root pin、Zone 和 overlay 稳定派生，用于 Babel 协议运行；Windows 不再发布、续租
+或校验 `routing/babel/identities`。已有记录的缺失、过期、撤回或冲突不影响路由准入，
+因此旧 Linux 节点无需增加记录。路由观察中的 origin 留空，避免声称已验证实际来源。
 
 source-specific 路由的 source prefix 仅收紧已授权目的路由的本机使用条件：同地址族、规范
 非零前缀，覆盖至少一个当前非共享的本机 host assignment/announcement，使用时仍须验证
 实际本机源地址；入站反向匹配原始本机目标地址。它不授予额外地址或转发权限。
 
-签名身份记录证明 Zone 对 ID 的认领，不证明 gateway 转发的每条 Babel Update 未冒用其他 origin。
-prototype 仍只适用于显式信任的 gateway，同时仅一个 active gateway；不能作为抵御恶意
-gateway 的端到端来源证明发布。
+各连接分别以已验证的可信节点为边界；签名前缀授权限制可用目的范围，
+不构成抵御恶意 gateway 的端到端路由来源证明。
 
 ### 3.2 本机私钥模型
 
@@ -498,7 +499,8 @@ console 复用同一候选校验：启动时、Gossip 事件推进 verified revi
 这仍是观察日志，不是 active gateway 选择或数据面撤销执行器。尚无 SA/路由可由该观察控制，
 后续数据面接入不得把 5 秒观察周期当作路由授权有效期或安全撤销目标。
 
-在线 `PlanGateway` 使用签名记录解析 DNS，并按 allowlist/contact 顺序选出一个待连接目标。
+在线 `PlanGateway` 使用签名记录解析 DNS，为范围内每个已验证节点生成待连接目标。
+`Targets` 列出全部目标，`Selected` 保留首项作为旧诊断兼容摘要，不控制唯一连接。
 唯一 worker 每轮最多 3 秒（bootstrap 部分最多 1 秒），不阻塞 Gossip event loop；新 revision、
 重绑或新一轮请求取消旧计划，完成时以 generation/revision 丢弃旧结果，再按当前时间复验。
 `Daemon.GatewayPlan` 返回 detached 且重新校验的当前结果；计划内容相同也更新 revision，
@@ -506,7 +508,7 @@ console 复用同一候选校验：启动时、Gossip 事件推进 verified revi
 
 路由规划先对当前网络的每个相关 zone chain/record 签名重验，再复用 `BuildAuthorizedRouteSet`，
 保留真实 origin，限制在 split aggregate 内。Selected 是待连接目标，Routes 是授权事实；
-没有 SA、Router ID/origin 绑定的结果不得安装路由。这些后续数据面条件仍归 B3/B4。
+没有当前已认证 SA 或有效前缀授权的结果不得安装路由。这些数据面条件归 B3/B4。
 
 B3 的实现顺序、锁定上游来源、各模块移植/重写决策和许可证材料见
 [ranet-lite port map](ranet-port-map.md)。原型 IKE 为 AEAD-only，CHILD rekey 不支持 KE，
@@ -515,13 +517,15 @@ identity 使用 ASN1_DN；因此不能原样移植后宣称兼容当前 Linux �
 ### B3/B4 console 当前数据面
 
 console 继续使用同一个 Daemon、State/BoltStore 和 GossipDriver；当前签名传输材料建立
-IKE/CHILD SA 后，协调本机 host 公告、完整 Babel 身份租约和平台设备。只配置获授权的
-非共享 /32、/128 与相应地址族的配置 split aggregate；Babel 链路地址复用 Linux 的
+IKE/CHILD SA 后，协调本机 host 公告和平台设备。本节点获授权的
+非共享 host 分配使用原地址，子网分配稳定选取网络地址加一；所选地址须落在配置 split
+范围内，仅配置和公告其 /32、/128，保留原有子网 IPAM 分配，不提供子网转发。
+设备路由仍为相应地址族的配置 split aggregate；Babel 链路地址复用 Linux 的
 `derived-link-local` 派生契约。异步配置完成须复验当前 revision/generation，DAD Preferred
 后才交付设备；旧完成结果关闭回收。
 
 真实 Wintun Read/Write、ESP completion、Babel 邻居与 SADR 选路由同一运行循环协调。
-每次业务提交及交付重新验证当前 SA、origin/精确目的前缀和本机地址；learned route 不再公告。
+每次业务提交及交付重新验证当前 SA、精确目的前缀授权和本机地址；learned route 不再公告。
 只有平台地址、当前 SA、有效邻居及实际本机源可用的授权路由同时成立时，才输出
 `tunnel_ready_changed=true`。撤销、设备失败、停止和重绑撤回 pipeline，并回收设备及配置。
 

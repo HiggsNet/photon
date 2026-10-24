@@ -236,9 +236,6 @@ protocol babel %s {
 		t.Fatal(err)
 	}
 	defer clear(client.PrivateKey)
-	if _, err := state.EnsureLocalBabelIdentity(ctx, config, now); err != nil {
-		t.Fatal(err)
-	}
 	if err := state.Close(); err != nil {
 		t.Fatal(err)
 	}

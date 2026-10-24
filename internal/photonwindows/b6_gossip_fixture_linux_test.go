@@ -16,8 +16,8 @@ import (
 )
 
 // Start the real public GossipDriver and object-pull server in the gateway
-// container. The Windows snapshot deliberately lacks the gateway's signed
-// Babel identity: business readiness requires receiving and persisting it over
+// container. The Windows snapshot deliberately lacks a signed destination
+// announcement: business traffic requires receiving and persisting it over
 // the published UDP/TCP endpoint, not a preloaded or local sidecar update.
 func startB6GatewayGossip(t *testing.T, ctx context.Context, config *Config, contact netip.AddrPort) {
 	t.Helper()
@@ -33,11 +33,12 @@ func startB6GatewayGossip(t *testing.T, ctx context.Context, config *Config, con
 		t.Fatal("load Windows gossip fixture snapshot", err)
 	}
 	gateway := config.Gateway.AllowedZones[0]
-	if peer.state.Store().ReadView().State.Network.Zones[gateway].Records[routing.RecordKeyBabelIdentity] == nil {
+	missingRecord, _ := routing.NormalizeRouteAnnouncementKey("198.18.253.1/32")
+	if peer.state.Store().ReadView().State.Network.Zones[gateway].Records[missingRecord] == nil {
 		disk.Close()
-		t.Fatal("gateway gossip source has no signed Babel identity")
+		t.Fatal("gateway gossip source has no signed destination announcement")
 	}
-	delete(candidate.Verified.Network.Zones[gateway].Records, routing.RecordKeyBabelIdentity)
+	delete(candidate.Verified.Network.Zones[gateway].Records, missingRecord)
 	err = disk.CommitCommon(ctx, candidate, corestate.ChangeSet{VerifiedRevision: revision + 1, NetworkChanged: true})
 	closeErr := disk.Close()
 	if err != nil || closeErr != nil {
@@ -48,7 +49,7 @@ func startB6GatewayGossip(t *testing.T, ctx context.Context, config *Config, con
 		Gateway         string                     `json:"gateway"`
 		MissingRecord   string                     `json:"missing_record"`
 		InitialRevision corestate.VerifiedRevision `json:"initial_revision"`
-	}{string(gateway), routing.RecordKeyBabelIdentity, revision + 1}
+	}{string(gateway), missingRecord, revision + 1}
 	data, err := json.Marshal(evidence)
 	if err != nil {
 		t.Fatal(err)
@@ -56,5 +57,5 @@ func startB6GatewayGossip(t *testing.T, ctx context.Context, config *Config, con
 	if err := os.WriteFile(filepath.Join(filepath.Dir(config.State.Path), "gossip-evidence.json"), data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	t.Log("gateway production GossipDriver ready; Windows must receive missing signed Babel identity remotely")
+	t.Log("gateway production GossipDriver ready; Windows must receive missing signed destination announcement remotely")
 }

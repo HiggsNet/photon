@@ -112,9 +112,6 @@ func newPipelineFixture(t testing.TB) *pipelineFixture {
 	key, _ = routing.NormalizeRouteAnnouncementKey(prefix)
 	put(config.ManagedZone, key, routing.RecordTypeRouteAnnouncement, routing.RouteAnnouncementRecord{Version: 1, Prefix: prefix, Active: true})
 	localID, remoteID := [8]byte{1}, [8]byte{2}
-	for path, id := range map[zone.ZonePath][8]byte{config.ManagedZone: localID, gateway: remoteID} {
-		put(path, routing.RecordKeyBabelIdentity, routing.RecordTypeBabelIdentity, routing.BabelIdentityRecord{Version: 1, RouterIDs: []string{hex.EncodeToString(id[:])}, ExpiresAt: now.Add(time.Hour).Unix()})
-	}
 	plan := planGateway(t.Context(), config, view, now, gatewayResolvedHosts{"gateway.example": {{IP: net.IP(address.AsSlice())}}})
 	if plan.Selected == nil {
 		t.Fatal("verified gateway fixture rejected", plan)
@@ -333,8 +330,9 @@ func TestBabelPipelineCompletionRevalidation(t *testing.T) {
 				case "local-id-withdraw":
 					f.put(f.config.ManagedZone, routing.RecordKeyBabelIdentity, routing.RecordTypeBabelIdentity, routing.BabelIdentityRecord{Version: 1, ExpiresAt: f.now.Add(time.Hour).Unix()})
 				}
-				if f.accept(t, completion) || len(f.device.written) != 0 {
-					t.Fatal("revoked or expired completion delivered")
+				want := scenario == "identity-expiry" || scenario == "local-id-withdraw"
+				if f.accept(t, completion) != want || (len(f.device.written) == 1) != (want && direction == "inbound") {
+					t.Fatal("completion did not preserve prefix/SA authorization independently of identity records")
 				}
 			})
 		}

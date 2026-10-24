@@ -19,12 +19,14 @@ import (
 
 var (
 	errLeafRouteAuthorityUnavailable   = errors.New("leaf: verified route authority unavailable")
-	errLeafHostAssignmentUnavailable   = errors.New("leaf: no authorized unicast host assignment in configured split routes")
+	errLeafHostAssignmentUnavailable   = errors.New("leaf: no authorized non-shared business address in configured split routes")
 	errLeafHostAnnouncementUnavailable = errors.New("leaf: authorized host assignment has no active route announcement")
 )
 
-// leafAssignedHosts never picks an address from a network or shared/anycast
-// assignment. A Windows leaf owns explicit unicast /32 and /128 assignments.
+// leafAssignedHosts keeps explicit host assignments and selects the first host
+// after the network address from each non-shared subnet assignment, as Linux's
+// upstream source selection does. Only the selected /32 or /128 is configured
+// and announced; an IPAM pool alone never grants a local address.
 func leafAssignedHosts(config *Config, set *routing.AuthorizedRouteSet) []netip.Prefix {
 	var hosts []netip.Prefix
 	if set == nil {
@@ -32,12 +34,20 @@ func leafAssignedHosts(config *Config, set *routing.AuthorizedRouteSet) []netip.
 	}
 	for _, a := range set.AllAssignments {
 		p := a.Prefix
-		if a.AssignedTo != config.ManagedZone || a.Shared || p.Bits() != p.Addr().BitLen() || !businessAddress(p.Addr()) {
+		if a.AssignedTo != config.ManagedZone || a.Shared || !p.IsValid() {
 			continue
 		}
+		address := p.Masked().Addr()
+		if p.Bits() < address.BitLen() {
+			address = address.Next()
+		}
+		if !p.Contains(address) || !businessAddress(address) {
+			continue
+		}
+		host := netip.PrefixFrom(address, address.BitLen())
 		for _, split := range config.Overlay.SplitRoutes {
-			if split.Contains(p.Addr()) {
-				hosts = append(hosts, p)
+			if split.Contains(address) {
+				hosts = append(hosts, host)
 				break
 			}
 		}

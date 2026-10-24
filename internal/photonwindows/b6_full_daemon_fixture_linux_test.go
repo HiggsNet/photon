@@ -122,6 +122,7 @@ func TestPrepareWindowsFullDaemonGateway(t *testing.T) {
 		// the production Windows selector must find and verify the real gateway.
 		config.Gateway.AllowedZones[0] = "*.catofes."
 	}
+	missingRouteKey, _ := routing.NormalizeRouteAnnouncementKey(gateway4 + "/32")
 	var candidate *corestate.CommitCandidate
 	var revision corestate.VerifiedRevision
 	if os.Getenv("PHOTON_WINDOWS_AUTOJOIN_SMOKE") == "1" {
@@ -151,9 +152,6 @@ func TestPrepareWindowsFullDaemonGateway(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer clear(client.PrivateKey)
-		if _, err := state.EnsureLocalBabelIdentity(ctx, config, now); err != nil {
-			t.Fatal(err)
-		}
 		if err := state.Close(); err != nil {
 			t.Fatal(err)
 		}
@@ -164,6 +162,16 @@ func TestPrepareWindowsFullDaemonGateway(t *testing.T) {
 		}
 		var found bool
 		candidate, revision, _, found, err = disk.LoadCommon()
+		if err == nil && found {
+			// Keep Linux's complete source snapshot, while Windows must learn
+			// a required prefix permission through the real GossipDriver.
+			windowsCandidate := *candidate
+			windowsVerified := *candidate.Verified
+			windowsVerified.Network = zone.CloneNetworkState(candidate.Verified.Network)
+			delete(windowsVerified.Network.Zones[gatewayZone].Records, missingRouteKey)
+			windowsCandidate.Verified = &windowsVerified
+			err = disk.CommitCommon(ctx, &windowsCandidate, corestate.ChangeSet{VerifiedRevision: revision + 1, NetworkChanged: true})
+		}
 		closeErr := disk.Close()
 		if err != nil || closeErr != nil || !found {
 			t.Fatal("read prepared Windows snapshot", err, closeErr)
@@ -180,11 +188,11 @@ func TestPrepareWindowsFullDaemonGateway(t *testing.T) {
 		}
 	}
 	write("config.json", config)
-	initialRevision := revision
+	initialRevision := revision + 1
 	if os.Getenv("PHOTON_WINDOWS_AUTOJOIN_SMOKE") == "1" {
 		initialRevision = 0
 	}
-	write("gossip-evidence.json", map[string]any{"gateway": gatewayZone, "missing_record": routing.RecordKeyBabelIdentity, "initial_revision": initialRevision})
+	write("gossip-evidence.json", map[string]any{"gateway": gatewayZone, "missing_record": missingRouteKey, "initial_revision": initialRevision})
 	candidate.Verified.ManagedZone = gatewayZone
 	candidate.Gossip = &corestate.GossipCheckpoint{}
 	linuxDisk, err := corestate.OpenBoltStore(filepath.Join(dir, "linux.db"), 0600, time.Second)

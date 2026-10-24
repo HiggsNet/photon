@@ -23,7 +23,7 @@ type learnedRoute struct {
 	requested        bool
 }
 
-// Leaf is a single-gateway, non-transit Babel speaker. It never advertises
+// Leaf is one adjacency of a non-transit Babel speaker. It never advertises
 // learned routes, and therefore never establishes feasibility distances for
 // remote origins. Updates claiming its own router ID are always rejected.
 // One serial owner must retain it across SA rekeys and discard it on gateway
@@ -36,6 +36,16 @@ type Leaf struct {
 	origins              []Origin
 	routes               map[Origin]learnedRoute
 	nextUpdate, nextDump time.Time
+}
+
+// A multi-adjacency owner shares its local-origin sequence space. Moving it
+// forward triggers an update; no learned route is advertised on another link.
+func (l *Leaf) OriginSequence() uint16 { return l.seqno }
+func (l *Leaf) SynchronizeSequence(seqno uint16) {
+	if int16(seqno-l.seqno) > 0 {
+		l.seqno = seqno
+		l.nextUpdate = time.Time{}
+	}
 }
 
 func NewLeaf(local, peer netip.Addr, routerID [8]byte, receiveCost uint16) (*Leaf, error) {

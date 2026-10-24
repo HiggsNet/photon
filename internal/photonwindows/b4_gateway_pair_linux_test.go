@@ -330,9 +330,6 @@ func TestPrepareWindowsB4GatewaySwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer clear(client.PrivateKey)
-	if _, err := state.EnsureLocalBabelIdentity(t.Context(), config, now); err != nil {
-		t.Fatal(err)
-	}
 	public, err := x509.MarshalPKIXPublicKey(client.PrivateKey.Public())
 	if err != nil {
 		t.Fatal(err)

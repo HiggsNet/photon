@@ -58,7 +58,8 @@ func (t *gatewayTunnel) stop() {
 			}
 		}
 	}
-	t.generation = t.socket.SelectTunnel(netip.AddrPort{}, netip.AddrPort{})
+	t.socket.releaseTunnel(t.generation)
+	t.generation = 0
 	t.data.reset(t.generation)
 	clear(t.private)
 	t.session, t.pending, t.private = nil, nil, nil
@@ -112,7 +113,7 @@ func (t *gatewayTunnel) start(plan GatewayPlan, localID string, private ed25519.
 	if err != nil {
 		return err
 	}
-	t.generation = t.socket.SelectTunnel(peer, nattPeer)
+	t.generation = t.socket.reserveTunnel(peer, nattPeer)
 	t.data.reset(t.generation)
 	t.session, t.plan, t.peer = session, plan, peer
 	t.localID, t.private, t.phase = localID, append(ed25519.PrivateKey(nil), private...), 1

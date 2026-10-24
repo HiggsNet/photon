@@ -72,8 +72,8 @@ func ParseBabelIdentityRecord(record *zone.Record, now time.Time) (*BabelIdentit
 }
 
 // StableBabelRouterID is a full-width Windows leaf ID derived from verified
-// identity material. Its signed publication is still required for origin
-// admission; hashing or matching the low BIRD 32 bits never grants permission.
+// identity material. This is a Babel protocol identifier, not proof of route
+// origin; Windows authorizes prefixes received from its trusted gateway.
 func StableBabelRouterID(path zone.ZonePath, root ed25519.PublicKey, instance string) ([8]byte, error) {
 	var id [8]byte
 	if !path.Valid() || len(root) != ed25519.PublicKeySize || instance == "" || strings.ContainsRune(instance, 0) {

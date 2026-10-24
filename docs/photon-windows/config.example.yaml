@@ -17,9 +17,9 @@ overlay:
     - fd42::/16
 
 gateway:
-  # Exact peer IDs or Linux-style globs, e.g. '*.catofes.' or '*'. Quote globs in YAML.
+  # Connect all verified, reachable peers. Exact IDs/globs may restrict this scope.
   allowed_zones:
-    - gateway-a.catofes.
+    - '*'
   bootstrap_hints:
     - peer: gateway-a.catofes.
       address: gateway.example.net:33434

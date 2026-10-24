@@ -11,28 +11,29 @@ import (
 	"github.com/HiggsNet/photon/internal/photonclient/ike"
 )
 
-// packetSockets shares one UDP endpoint between Gossip and a selected tunnel,
+// packetSockets shares one UDP endpoint between Gossip and independently reserved tunnels,
 // keeping receive and accept loops alive across a local socket replacement.
 // It owns no protocol state, workers or database handles.
 // A failed replacement leaves both protocols unavailable until the next retry.
 type packetSockets struct {
-	// Every mutation of udp, closed, tunnelGeneration, ikePeer and nattPeer
+	// Every mutation of udp, closed, tunnelGeneration and reservations
 	// holds writeMu then mu. Either lock protects reads of those fields: sends
 	// hold writeMu through I/O; the sole reader uses mu independently. Other
 	// mutable reader metadata, including readDeadline and changed, uses mu.
-	writeMu           sync.Mutex
-	mu                sync.Mutex
-	udp               *net.UDPConn
-	tcp               net.Listener
-	address           string
-	changed           chan struct{}
-	failed            chan struct{}
-	closed            bool
-	readDeadline      time.Time
-	tunnelGeneration  uint64
-	ikePeer, nattPeer netip.AddrPort
-	ikePackets        chan tunnelDatagram
-	espPackets        chan tunnelDatagram
+	writeMu          sync.Mutex
+	mu               sync.Mutex
+	udp              *net.UDPConn
+	tcp              net.Listener
+	address          string
+	changed          chan struct{}
+	failed           chan struct{}
+	closed           bool
+	readDeadline     time.Time
+	tunnelGeneration uint64
+	tunnels          map[uint64]tunnelEndpoints
+	tunnelPeers      map[netip.AddrPort]map[uint64]bool
+	ikePackets       chan tunnelDatagram
+	espPackets       chan tunnelDatagram
 }
 
 // These are bounded ingress queues, not protocol workers. The GossipDriver's
@@ -240,7 +241,8 @@ func (s *packetSockets) WriteDatagram(b []byte, addr *net.UDPAddr) (int, error) 
 
 func (s *packetSockets) clearTunnelLocked() {
 	s.tunnelGeneration++
-	s.ikePeer, s.nattPeer = netip.AddrPort{}, netip.AddrPort{}
+	clear(s.tunnels)
+	clear(s.tunnelPeers)
 }
 
 // SelectTunnel reserves the exact remote IKE/NAT-T endpoints. It invalidates
@@ -254,18 +256,30 @@ func (s *packetSockets) SelectTunnel(ikePeer, nattPeer netip.AddrPort) uint64 {
 	defer s.mu.Unlock()
 	s.clearTunnelLocked()
 	if !s.closed {
-		s.ikePeer, s.nattPeer = ikePeer, nattPeer
+		s.addTunnelLocked(s.tunnelGeneration, ikePeer, nattPeer)
 	}
 	return s.tunnelGeneration
 }
 
 func (s *packetSockets) demuxLocked(packet []byte, peer netip.AddrPort) bool {
 	peer = netip.AddrPortFrom(peer.Addr().Unmap(), peer.Port())
-	if peer != s.ikePeer && peer != s.nattPeer {
+	reservations := s.tunnelPeers[peer]
+	if len(reservations) == 0 {
+		return false
+	}
+	for generation := range reservations {
+		s.demuxTunnelLocked(packet, peer, generation, s.tunnels[generation])
+	}
+	return true
+}
+
+func (s *packetSockets) demuxTunnelLocked(packet []byte, peer netip.AddrPort, generation uint64, endpoints tunnelEndpoints) bool {
+	peer = netip.AddrPortFrom(peer.Addr().Unmap(), peer.Port())
+	if peer != endpoints.ike && peer != endpoints.natt {
 		return false
 	}
 	queue := s.ikePackets
-	if peer == s.nattPeer {
+	if peer == endpoints.natt {
 		kind, body, err := ike.ParseNATDatagram(packet)
 		if err != nil || kind == ike.NATDatagramKeepalive {
 			return true
@@ -286,7 +300,7 @@ func (s *packetSockets) demuxLocked(packet []byte, peer netip.AddrPort) bool {
 		timing = beginFixturePacketTimingQueue(fixturePacketTimingInbound)
 	}
 	if len(queue) < cap(queue) {
-		queue <- tunnelDatagram{timing: timing, generation: s.tunnelGeneration, peer: peer, packet: append([]byte(nil), packet...)}
+		queue <- tunnelDatagram{timing: timing, generation: generation, peer: peer, packet: append([]byte(nil), packet...)}
 	} else if queue == s.espPackets {
 		timing.QueueRejected()
 		recordESPIngressDrop()
@@ -309,7 +323,8 @@ func (s *packetSockets) writeTunnel(generation uint64, packet []byte, peer netip
 	defer s.writeMu.Unlock()
 	timing.MarkUDPWriterAcquired()
 	conn := s.udp
-	valid := !s.closed && conn != nil && generation == s.tunnelGeneration && peer.IsValid() && (peer == s.ikePeer || peer == s.nattPeer)
+	endpoints, reserved := s.tunnels[generation]
+	valid := !s.closed && conn != nil && reserved && peer.IsValid() && (peer == endpoints.ike || peer == endpoints.natt)
 	timing.MarkUDPValidationDone()
 	if !valid {
 		return net.ErrClosed

@@ -19,6 +19,10 @@ func TestReadinessUsesVerifiedUsableHostAssignmentAndAnnouncement(t *testing.T) 
 		t.Run(scenario, func(t *testing.T) {
 			config, view, now, put := gatewayPlanFixture(t)
 			config.ManagedZone = "node-a.catofes."
+			// The gateway fixture's destination subnet would now supply a local
+			// address; isolate the assignment being tested here.
+			gatewayAssignment, _ := routing.NormalizeIPAMAssignmentKey("10.1.0.0/16")
+			delete(view.State.Network.Zones[zone.RootZone].Records, gatewayAssignment)
 			config.Overlay.SplitRoutes = append(config.Overlay.SplitRoutes, netip.MustParsePrefix("fd00::/8"))
 			prefix := "10.9.0.1/32"
 			assignment := routing.IPAMAssignmentRecord{Version: 1, Prefix: prefix, AssignedTo: config.ManagedZone, Active: true}
@@ -27,6 +31,7 @@ func TestReadinessUsesVerifiedUsableHostAssignmentAndAnnouncement(t *testing.T) 
 			switch scenario {
 			case "subnet":
 				prefix, assignment.Prefix = "10.9.0.0/24", "10.9.0.0/24"
+				want = ReadinessStageAddressAnnouncement
 			case "shared":
 				assignment.Shared = true
 			case "outside-split":
@@ -89,48 +94,52 @@ func TestReadinessUnavailableRouteAuthorityIsNotMissingAssignment(t *testing.T) 
 }
 
 func TestLeafRuntimeRecoversWhenSignedAssignmentArrives(t *testing.T) {
-	f := runtimeFixture(t)
-	key, _ := routing.NormalizeIPAMAssignmentKey("10.9.0.1/32")
-	delete(f.view.State.Network.Zones[zone.RootZone].Records, key)
-	device := newRuntimeDevice()
-	opens := 0
-	r := newLeafRuntime(func(context.Context, string, []netip.Prefix, []netip.Prefix, uint32, uint32) (ownedPacketDevice, error) {
-		opens++
-		return device, nil
-	})
-	t.Cleanup(func() { r.close() })
-	if err := r.reconcile(t.Context(), f.config, f.view, f.plan, f.p.tunnel, f.p.routerID, f.now); !errors.Is(err, errLeafHostAssignmentUnavailable) {
-		t.Fatalf("unassigned control plane unavailable: %v", err)
-	}
-	if opens != 0 || r.pending || r.device != nil || r.pipeline == nil || r.pipeline.device != nil || len(r.pipeline.addresses) != 0 {
-		t.Fatal("unassigned node opened or attached a device")
-	}
-	f.p = r.pipeline
-	f.learn(t)
-	observation := func() Observation {
-		return observeRuntime(f.config, f.view, f.plan, f.now, f.p.tunnel.socket, f.p.tunnel, r, nil)
-	}
-	before := observation()
-	if before.Readiness.Stage != ReadinessStageAddressAssignment || before.TunnelReady || before.Wintun.Configured || !before.Babel.Live || !before.Babel.Local.IsLinkLocalUnicast() || before.Babel.Local != f.p.local || before.Babel.Neighbor != f.p.peer {
-		t.Fatalf("missing assignment not observable: %+v", before)
-	}
-	// Synchronize a real signed root snapshot through the common store. Keep
-	// the same SA, leaf runtime and device factory throughout the transition.
-	applySignedHostAssignment(t, f)
-	if err := r.reconcile(t.Context(), f.config, f.view, f.plan, f.p.tunnel, f.p.routerID, f.now); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.complete(t.Context(), f.config, f.view, f.plan, f.p.tunnel, f.p.routerID, f.now, runtimeOpenResult(t, r)); err != nil {
-		t.Fatal(err)
-	}
-	f.p = r.pipeline
-	if after := observation(); after.Readiness.Stage != "" || !after.Wintun.Configured || after.TunnelReady || opens != 1 {
-		t.Fatalf("assignment was not attached without premature readiness: %+v", after)
-	}
-	f.learn(t)
-	after := observation()
-	if !after.TunnelReady || after.Readiness.Stage != "" || !after.IKE.ChildLive || after.IKE.Generation != before.IKE.Generation || len(after.Wintun.Addresses) != 1 || after.Wintun.Addresses[0].String() != "10.9.0.1/32" {
-		t.Fatalf("same runtime did not recover after assignment and authenticated Babel: %+v", after)
+	for _, assignment := range []string{"10.9.0.1/32", "10.9.0.0/24"} {
+		t.Run(assignment, func(t *testing.T) {
+			f := runtimeFixture(t)
+			key, _ := routing.NormalizeIPAMAssignmentKey("10.9.0.1/32")
+			delete(f.view.State.Network.Zones[zone.RootZone].Records, key)
+			device := newRuntimeDevice()
+			opens := 0
+			r := newLeafRuntime(func(context.Context, string, []netip.Prefix, []netip.Prefix, uint32, uint32) (ownedPacketDevice, error) {
+				opens++
+				return device, nil
+			})
+			t.Cleanup(func() { r.close() })
+			if err := r.reconcile(t.Context(), f.config, f.view, f.plan, f.p.tunnel, f.p.routerID, f.now); !errors.Is(err, errLeafHostAssignmentUnavailable) {
+				t.Fatalf("unassigned control plane unavailable: %v", err)
+			}
+			if opens != 0 || r.pending || r.device != nil || r.pipeline == nil || r.pipeline.device != nil || len(r.pipeline.addresses) != 0 {
+				t.Fatal("unassigned node opened or attached a device")
+			}
+			f.p = r.pipeline
+			f.learn(t)
+			observation := func() Observation {
+				return observeRuntime(f.config, f.view, f.plan, f.now, f.p.tunnel.socket, f.p.tunnel, r, nil)
+			}
+			before := observation()
+			if before.Readiness.Stage != ReadinessStageAddressAssignment || before.TunnelReady || before.Wintun.Configured || !before.Babel.Live || !before.Babel.Local.IsLinkLocalUnicast() || before.Babel.Local != f.p.local || before.Babel.Neighbor != f.p.peer {
+				t.Fatalf("missing assignment not observable: %+v", before)
+			}
+			// Synchronize a real signed root snapshot through the common store. Keep
+			// the same SA, leaf runtime and device factory throughout the transition.
+			applySignedHostAssignment(t, f, assignment)
+			if err := r.reconcile(t.Context(), f.config, f.view, f.plan, f.p.tunnel, f.p.routerID, f.now); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.complete(t.Context(), f.config, f.view, f.plan, f.p.tunnel, f.p.routerID, f.now, runtimeOpenResult(t, r)); err != nil {
+				t.Fatal(err)
+			}
+			f.p = r.pipeline
+			if after := observation(); after.Readiness.Stage != "" || !after.Wintun.Configured || after.TunnelReady || opens != 1 {
+				t.Fatalf("assignment was not attached without premature readiness: %+v", after)
+			}
+			f.learn(t)
+			after := observation()
+			if !after.TunnelReady || after.Readiness.Stage != "" || !after.IKE.ChildLive || after.IKE.Generation != before.IKE.Generation || len(after.Wintun.Addresses) != 1 || after.Wintun.Addresses[0].String() != "10.9.0.1/32" {
+				t.Fatalf("same runtime did not recover after assignment and authenticated Babel: %+v", after)
+			}
+		})
 	}
 }
 
@@ -296,12 +305,12 @@ func TestControlOnlyRuntimeInvalidatesUntrustedOrExpiredAttachment(t *testing.T)
 	}
 }
 
-func applySignedHostAssignment(t *testing.T, f *pipelineFixture) {
+func applySignedHostAssignment(t *testing.T, f *pipelineFixture, prefix string) {
 	t.Helper()
 	store := corestate.NewStore(&corestate.VerifiedState{ManagedZone: f.config.ManagedZone, TrustedRootPublicKey: f.config.TrustedRootPublicKey, Network: zone.CloneNetworkState(f.view.State.Network)}, nil, nil)
 	defer store.Close()
-	key, _ := routing.NormalizeIPAMAssignmentKey("10.9.0.1/32")
-	f.put(zone.RootZone, key, routing.RecordTypeIPAMAssignment, routing.IPAMAssignmentRecord{Version: 1, Prefix: "10.9.0.1/32", AssignedTo: f.config.ManagedZone, Active: true})
+	key, _ := routing.NormalizeIPAMAssignmentKey(prefix)
+	f.put(zone.RootZone, key, routing.RecordTypeIPAMAssignment, routing.IPAMAssignmentRecord{Version: 1, Prefix: prefix, AssignedTo: f.config.ManagedZone, Active: true})
 	snapshot, err := corestate.Snapshot(f.view.State.Network, zone.RootZone)
 	if err != nil {
 		t.Fatal(err)

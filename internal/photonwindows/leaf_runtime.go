@@ -26,6 +26,7 @@ func (a leafAttachment) equal(b leafAttachment) bool {
 }
 
 type leafOpenResult struct {
+	owner    *leafRuntime
 	request  uint64
 	revision corestate.VerifiedRevision
 	want     leafAttachment
@@ -43,6 +44,7 @@ type leafDevicePacket struct {
 // bounded device reader run outside it. Every asynchronous result is checked
 // against current authorization before its first usable packet.
 type leafRuntime struct {
+	sharedCompletions    bool
 	factory              packetDeviceFactory
 	pipeline             *gatewayBabelPipeline
 	device               ownedPacketDevice
@@ -82,9 +84,6 @@ func desiredLeafAttachmentWithVerifier(config *Config, view corestate.View, plan
 	current := revalidateActiveGatewaySelection(config, view, plan, now, verifier)
 	if !tunnel.current(current) || !tunnel.data.current(tunnel.generation, tunnel.data.active, current) {
 		return want, errors.New("leaf: current gateway unavailable")
-	}
-	if currentBabelOriginsWithVerifier(config, view, now, verifier)[id] != config.ManagedZone {
-		return want, errors.New("leaf: local Babel identity unavailable")
 	}
 	want.local, want.peer, err = leafLinkLocalAddressesWithVerifier(config, view, current, now, verifier)
 	if err != nil {
@@ -133,6 +132,9 @@ func (r *leafRuntime) stopDevice() error {
 func (r *leafRuntime) close() error {
 	err := r.stop()
 	r.openWG.Wait()
+	if r.sharedCompletions {
+		return err
+	}
 	for {
 		select {
 		case result := <-r.opened:
@@ -197,7 +199,7 @@ func (r *leafRuntime) reconcile(ctx context.Context, config *Config, view corest
 	go func() {
 		defer r.openWG.Done()
 		device, err := r.factory(openCtx, config.Wintun.AdapterName, slices.Clone(want.addresses), slices.Clone(want.routes), uint32(config.Wintun.MTU), 100)
-		result := leafOpenResult{request: request, revision: view.Revision, want: want, device: device, err: err}
+		result := leafOpenResult{owner: r, request: request, revision: view.Revision, want: want, device: device, err: err}
 		if openCtx.Err() != nil {
 			if device != nil {
 				_ = device.Close()
@@ -260,6 +262,9 @@ func (r *leafRuntime) complete(ctx context.Context, config *Config, view coresta
 	}
 	r.device, r.pipeline, r.attachment = result.device, pipeline, want
 	r.nameRecoveryDeadline = time.Time{}
+	if _, shared := result.device.(*meshDeviceLease); shared {
+		return nil
+	}
 	readCtx, cancel := context.WithCancel(ctx)
 	r.cancelRead = cancel
 	r.readWG.Add(1)

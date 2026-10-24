@@ -209,6 +209,12 @@ func (t *gatewayTunnel) activateChild(spi uint32, now time.Time) error {
 	if err := t.data.activate(spi); err != nil {
 		return err
 	}
+	// Cleanup can resolve the same survivor again. Its already-running key
+	// lifetimes belong to first activation, never to a later Delete response.
+	if t.child.InitiatorSPI == spi {
+		t.pendingChildSPI = 0
+		return nil
+	}
 	child, ok := t.session.Child(spi)
 	if !ok {
 		return errors.New("tunnel: rekey winner not present")

@@ -91,6 +91,20 @@ func desktopFormatGateway(snapshot desktopSnapshot) string {
 		return text.String()
 	}
 	gateway := observation.Gateway
+	if len(observation.Connections) > 0 {
+		text.WriteString("\r\n[Mesh 连接 · 完全不中转]\r\n")
+		for _, peer := range observation.Connections {
+			fmt.Fprintf(text, "节点：%s · IKE %s · CHILD %s · Babel %s · 业务就绪 %s\r\n", peer.Peer, desktopDebugYes(peer.IKE.Live), desktopDebugYes(peer.IKE.ChildLive), desktopDebugYes(peer.BabelLive), desktopDebugYes(peer.TunnelReady))
+			if peer.IKE.LastFailure != nil {
+				desktopDebugIKERecord(text, peer.IKE.LastFailure, false)
+			}
+		}
+		if observation.ConnectionsTruncated {
+			text.WriteString("（连接列表已截断）\r\n")
+		}
+		desktopDebugOptional(text, "最近计划拒因", gateway.Rejected)
+		return text.String()
+	}
 	if rejection := observation.IKE.LastRejection; rejection != nil {
 		desktopDebugIKERecord(text, rejection, true)
 	}

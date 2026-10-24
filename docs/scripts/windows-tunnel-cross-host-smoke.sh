@@ -7,6 +7,8 @@ cd "$(dirname "$0")/../.."
 : "${PHOTON_LINUX_IP:?Set the Linux LAN IP reachable from Windows}"
 ike_port=${PHOTON_WINDOWS_TUNNEL_IKE_PORT:-15000}
 natt_port=${PHOTON_WINDOWS_TUNNEL_NATT_PORT:-14500}
+timed_mode=${PHOTON_WINDOWS_TIMED_REKEY_SMOKE:-0}
+[[ $timed_mode == 0 || $timed_mode == 1 ]] || exit 2
 [[ $PHOTON_LINUX_IP =~ ^[0-9.]+$ && $ike_port =~ ^[0-9]+$ && $natt_port =~ ^[0-9]+$ ]] || exit 2
 [[ $ike_port -gt 1024 && $ike_port -lt 65536 && $natt_port -gt 1024 && $natt_port -lt 65536 && $ike_port != "$natt_port" ]] || exit 2
 for port in "$ike_port" "$natt_port"; do
@@ -105,8 +107,9 @@ docker cp "$name:/tmp/windows.json" "$work/windows.json" >/dev/null
 chmod 600 "$work/windows.json"
 ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"New-Item -ItemType Directory '$remote' | Out-Null\""
 remote_created=1
-scp -q "${ssh_args[@]}" "$work/cross.test.exe" "$work/windows.json" docs/scripts/windows-tunnel-cross-host-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
-if ! ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $remote/windows-tunnel-cross-host-smoke.ps1" > "$work/windows.log" 2>&1; then
+scp -q "${ssh_args[@]}" "$work/cross.test.exe" "$work/windows.json" "$PHOTON_WINDOWS_SSH:$remote/"
+windows_command="\$env:PHOTON_WINDOWS_TUNNEL_CROSS_CONFIG = '$remote/windows.json'; \$env:PHOTON_WINDOWS_TIMED_REKEY_SMOKE = '$timed_mode'; & './$remote/cross.test.exe' '-test.run=^TestWindowsStrongSwanCrossHost$' '-test.v' '-test.count=1' '-test.timeout=8m'; exit \$LASTEXITCODE"
+if ! ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"$windows_command\"" > "$work/windows.log" 2>&1; then
     cat "$work/windows.log"
     exit 1
 fi

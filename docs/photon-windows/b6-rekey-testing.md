@@ -59,3 +59,69 @@ IKE 交换和交换完成后的样本继续增长，但发送与接收计数仍�
 
 本切片未注入 loss/dup/reorder，没有验证 Windows 主动定时 rekey 的长期流量，
 也不代替真实睡眠、多层 NAT、吞吐基线或 72h soak；B6 总里程碑保持未完成。
+
+## 自动五分钟定时点验证（2026-10-23）
+
+Windows 当前在建立或激活 CHILD 后 5 分钟主动换钥，CHILD 硬到期为 10 分钟；IKE
+主动换钥为 30 分钟，硬到期为 1 小时。正常 CHILD 换钥应保留 IKE SA、传输 generation
+和本机网卡；需要更换 ESP SPI 与密钥，并回收旧 CHILD。初次 IKE_AUTH 中的 CHILD
+与后续 CREATE_CHILD_SA 的 KE/PFS 协商不同，因此仅验证初次连接不覆盖这个时点。
+
+新增可选长测保留上述生产定时器，实际连续运行约 5 分 20 秒：
+
+```sh
+PHOTON_WINDOWS_TIMED_REKEY_SMOKE=1 \
+GOMODCACHE=/home/herbertqiao/go/pkg/mod \
+bash docs/scripts/ike-auth-smoke.sh
+```
+
+隔离容器中同时维护两条独立 IKE/ESP 隧道，每条约 10 个 ICMP probe/s；使用序号匹配
+唯一回复，检查最大回复间隔、自动 CHILD 更替、旧 CHILD 回收、原 IKE SPI 和 generation
+保持，以及另一连接不中断。默认快速 smoke 不执行这项长测。StrongSwan 包选择方式
+沿用原入口。
+
+真实 Windows → Linux 的同一检查通过现有跨主机入口启用：
+
+```sh
+PHOTON_WINDOWS_SSH=photon-test@10.16.252.11 \
+PHOTON_LINUX_IP=10.16.255.8 \
+PHOTON_WINDOWS_TIMED_REKEY_SMOKE=1 \
+bash docs/scripts/windows-tunnel-cross-host-smoke.sh
+```
+
+该入口只为一次性容器发布指定的测试 UDP 端口，使用临时随机测试凭据，不安装 Windows
+网卡、路由或服务；结束后移除两端临时凭据、程序、目录和容器。Windows 直接调用测试
+程序，无需修改 PowerShell 执行策略。完整 Wintun/SCM 的长期业务仍属于独立验收范围。
+
+### 本次发现与修复
+
+修复前，portable 双连接和真实 Windows 11 跨主机测试在 StrongSwan 5.9.13、6.0.7
+上均于约 5 分 10 秒报 `ike: unknown or repeated local CHILD Delete SPI`。第一次自动
+CHILD 换钥成功，五秒后删除旧 CHILD；处理删除确认时再次解析 successor，错误地又把
+已删除的 predecessor 排进删除队列，再过五秒触发生命周期失败。正式 `v0.6.1` 中也有
+这段逻辑，单连接即可触发，不依赖多节点改动。
+
+修复使 `ResolveChildRekey` 只对仍存在的 predecessor 返回 Delete 决策；对已激活的同一
+CHILD 重复解析时保持原有效期，不因旧 CHILD 的清理确认延长密钥寿命。新增确定性
+回归通过真实加密请求/回复复现先换钥、再 Delete、再解析 survivor 的顺序；快速互通
+矩阵也检查删除不会重新排队、不会重置当前密钥期限。
+
+修复后的实际自动五分钟长测结果：
+
+| 客户端场景 | StrongSwan | 发送 / 唯一回复 | 最大回复间隔 |
+| --- | --- | --- | --- |
+| 真实 Windows 11 → 隔离 Linux | 5.9.13 | 3189 / 3189 | 101.96 ms |
+| 真实 Windows 11 → 隔离 Linux | 6.0.7 | 3189 / 3189 | 110.76 ms |
+| portable 双隧道，各条 | 5.9.13 | 各 3189 / 3189 | 最大 104.11 ms |
+| portable 双隧道，各条 | 6.0.7 | 各 3189 / 3189 | 最大 114.15 ms |
+
+每轮真实运行约 320 秒，保留生产定时器；全部无过期 probe、无重复、结束无 outstanding，
+原 generation 与 IKE SPI 保持，CHILD SPI 更换且旧 CHILD 回收。5.9.13 使用既有认证
+no-PFS 回退，6.0.7 使用 P-256；两版默认 Linux proposal 均未改窄。Windows 长测后
+又完成 CHILD rekey/Delete 与 IKE rekey、各阶段的 Linux 内核 echo。
+
+当前工作目录完整 `make check`、IKE/Windows race 和打包回归通过。公开日志与源码指纹
+保存在忽略目录 `build/validation/windows-rekey-20261023/`；新测试包位于
+`build/windows-mesh-rekey-20261023/`，标记为 `v0.6.1-mesh-rekey-dev`。尚未发布新正式版。
+本次未启用 Wintun、SCM 或真实网卡路由，不将上述结果称为完整 Windows 业务长稳验收，
+也未等待 30 分钟 IKE 自然定时点或执行 72h soak。

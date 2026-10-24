@@ -33,7 +33,7 @@ type guiOptionList struct {
 
 func (w *desktopWindow) initializeOptionLists() {
 	w.optionLists = map[int]*guiOptionList{
-		guiAllowedFieldID: {List: guiAllowedFieldID, Input: guiAllowedInputID, Add: guiAllowedAddID, Update: guiAllowedUpdateID, Delete: guiAllowedDeleteID, Clear: guiAllowedClearID, Name: "允许网关", Selected: -1},
+		guiAllowedFieldID: {List: guiAllowedFieldID, Input: guiAllowedInputID, Add: guiAllowedAddID, Update: guiAllowedUpdateID, Delete: guiAllowedDeleteID, Clear: guiAllowedClearID, Name: "允许节点", Selected: -1},
 		guiSplitFieldID:   {List: guiSplitFieldID, Input: guiRouteInputID, Add: guiRouteAddID, Update: guiRouteUpdateID, Delete: guiRouteDeleteID, Clear: guiRouteClearID, Name: "分流路由", Selected: -1},
 	}
 }
@@ -115,7 +115,7 @@ func (w *desktopWindow) changeOptionList(list *guiOptionList, action int) {
 				valid = valid && path.Valid() && !path.IsRoot()
 			}
 			if !valid {
-				w.note("请输入具体网关身份或有效通配符，例如 gateway.example.、*.example. 或 *。")
+				w.note("请输入具体节点身份或有效通配符，例如 gateway.example.、*.example. 或 *。")
 				return
 			}
 		} else {

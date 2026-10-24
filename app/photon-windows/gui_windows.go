@@ -745,6 +745,17 @@ func (w *desktopWindow) render(snapshot desktopSnapshot) {
 		if observation.IKE.Live {
 			gateway = observation.IKE.Gateway
 		}
+		if len(observation.Connections) > 0 {
+			var connected []string
+			for _, peer := range observation.Connections {
+				if peer.IKE.Live {
+					connected = append(connected, peer.Peer)
+				}
+			}
+			if len(connected) > 0 {
+				gateway = strings.Join(connected, "、")
+			}
+		}
 		if len(observation.Babel.Routes) > 0 {
 			var text strings.Builder
 			targetWidth, sourceWidth, originWidth := 18, 8, 12
@@ -793,7 +804,7 @@ func (w *desktopWindow) render(snapshot desktopSnapshot) {
 	}
 	w.setText(w.controls[guiStatusID], "连接："+connection)
 	w.setText(w.controls[guiRuntimeID], "运行状态："+state+" · 当前 Photon 窗口管理连接")
-	w.setText(w.controls[guiGatewayID], "活动网关："+gateway)
+	w.setText(w.controls[guiGatewayID], "已连接节点："+gateway)
 	w.setText(w.controls[guiRoutesID], routes)
 	w.setText(w.controls[guiAdmissionID], admissionLabel)
 	w.setText(w.controls[guiJoinRequestID], w.admission.Request)

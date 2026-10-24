@@ -6,17 +6,18 @@
 跨主机协议验收已完成，见 [IKE 验收](ike-testing.md)。本文按独立切片记录 B4，
 不把公共逻辑、平台 API 或单段数据通路的通过当作完整产品隧道通过。
 
-### 完整 Router ID 与当前授权
+### 当前准入策略（2026-10-22）
 
 - 由 root pin、Zone 和 overlay 派生稳定的完整 64 位 Router ID，不增加独立持久状态。
-- 使用公共 typed intent 发布签名 `routing/babel/identities`，检查租约、当前签名链和 root pin；
-  跨 Zone 碰撞、撤回、到期及未来时间记录均拒绝。
-- 路由匹配完整 ID 的 origin 与精确公告前缀；提交/使用时重新检查 revision、当前 gateway、
-  SA generation、IKE/CHILD 硬过期和本机传输授权。
-- `pkg/routing`、`pkg/core/state`、`internal/photonwindows` 的相关测试与 race 检查通过。
+- Windows 不再发布或依赖 `routing/babel/identities`；记录缺失、过期、撤回、冲突及无效内容
+  不阻止已授权路由，旧 Linux 节点无需配套升级。
+- 路由由可信 gateway 提供，目的前缀精确匹配当前签名公告授权及配置 split 范围；
+  提交/使用时重新检查 revision、当前 gateway、SA generation、IKE/CHILD 硬过期和本机传输授权。
+- 回归覆盖无身份记录的双向业务、Router ID 变化、旧身份记录过期/撤回，以及前缀撤销、
+  SADR、本机地址和 SA/generation 的现有拒绝条件。本次执行结果见文末更新。
 
-签名记录证明身份认领，不证明转发 Update 的端到端来源；仍以显式信任的单 gateway 为实验边界。
-Linux BIRD 的随机完整运行时 ID 已由 Linux Daemon 自动发布，不能仅匹配 BIRD 的低 32 位放行。
+各活动连接仍以对应的可信节点为边界，不声称验证了转发 Update 的端到端来源。
+路由观察中的 origin 留空。下文真实 BIRD/Windows 验收为既有历史证据，不能代替本次改动后的原生验收。
 
 source-specific 路由的 source prefix 仅收紧本机使用条件：规范、非零且与目的地址同族，
 并须覆盖至少一个当前获授权且已公告的非共享本机 /32 或 /128。每次 lookup 仍验证实际
@@ -42,11 +43,15 @@ IPv4-via-IPv6 与 IPv6 学习、本地双栈公告及撤回、SIGSTOP 后无撤�
 为 0 的本地注入证据；拒绝不完整或歧义 ID。Linux Daemon 启动、周期协调及路由协调后观察，
 通过公共签名事务发布两分钟租约，在剩余一分钟时续租；证据缺失或禁用时撤回。
 不能拿任意 learned entry 认作本机 ID，也不能假设没有本地公告时该表仍能提供 ID。
-生产解析器已再次通过真实 BIRD 2.19.1 验收，日志为
+这是 Linux 可选身份发布实现的历史验收，Windows 已不依赖该记录。
+生产解析器当时通过真实 BIRD 2.19.1 验收，日志为
 `/tmp/photon-babel-identity-observer-interop.log`。
 
-Windows 本机地址意图仅取当前非共享、授权精确匹配的 /32 或 /128；不从子网猜测主机地址。
-自动公告保留手动撤回。Babel 链路地址复用 Linux 的 overlay/link/port generation 派生契约，
+Windows 本机地址意图取当前分流范围内、本节点非共享分配的明确主机地址：`/32`、`/128`
+保留原地址，子网分配稳定选取网络地址加一，并仅配置、签名公告对应的 `/32`、`/128`。
+例如 `2a0d:2905:1:3f::/64` 选用 `2a0d:2905:1:3f::1/128`，无需撤销或新增 IPAM 分配；
+仅有 pool 不产生地址，未选中的子网地址不作为本机业务端点。自动公告保留所选主机地址的
+手动撤回，分配撤销后撤回自动公告及设备地址。Babel 链路地址复用 Linux 的 overlay/link/port generation 派生契约，
 当前仅支持显式 `derived-link-local`，不猜测未配置地址。
 
 StrongSwan 的 link-local 控制地址现允许同一 CHILD SA 的 IPv4/IPv6 业务 TS；全局地址的
@@ -77,7 +82,7 @@ GOCACHE=/tmp/photon-gocache GOMODCACHE=/home/herbertqiao/go/pkg/mod \
 origin 批包覆盖。控制 payload 最多 1200 字节，避免每条公告独占队列而遗漏尾部前缀。
 相关包全量测试及 pipeline race 通过。
 
-该 owner 已接入 console Daemon：认证完成后协调本机公告与身份租约，异步创建配置设备，
+该 owner 已接入 console Daemon：认证完成后协调本机公告，异步创建配置设备，
 检查当前 revision/generation 后接收完成结果；真实 Read pump、ESP completion 和周期 Tick
 由同一运行循环协调。撤销、重绑和停止先撤掉 pipeline，再关闭并 join 设备。
 仅当前 SA、平台地址就绪、Babel 邻居有效且实际本机地址能选到授权路由时发布
@@ -208,7 +213,46 @@ generation 拒绝的既有 pipeline 测试。
 
 ## 产品边界与下一阶段
 
-- 端到端来源证明仍受上述可信单 gateway 边界限制，不由 Router ID 签名认领替代。
+- 端到端来源证明仍受上述可信节点边界限制，不由 Router ID 签名认领替代。
 
 B4 当前设计范围内的接线与分层验收已完成。B5 服务/IPC 与 B6 完整产品矩阵仍待推进；
 console 无当前授权 pipeline 时仍默认拒绝业务数据，运行时就绪事件不能替代完整产品验收。
+
+## 2026-10-22 撤除 Windows Router ID 身份绑定
+
+Windows 移除接收、逐包检查、设备启动与就绪判断中的身份记录要求，并停止本机身份记录的
+发布与续租；保留稳定 Router ID、可信网关、签名前缀授权、split、SADR、本机地址及 SA 检查。
+普通 pipeline fixture 不再预置任何 Babel 身份记录，双向 ESP/UDP 与内存设备回归据此运行。
+B6 初始快照改为缺少必要的目的前缀公告，继续验证真实 Gossip 同步，避免依赖可选身份记录。
+
+- `go test ./internal/photonwindows ./internal/photonclient/babel ./internal/photonclient/sadr ./app/photon-windows -count=1` 通过。
+- Windows 路由、pipeline、SADR、逐包授权、缓存、设备生命周期及运行时观察相关 `-race` 回归通过。
+- Linux/Windows `go vet` 与 Windows amd64 构建通过，`git diff --check` 通过。
+
+受限环境最初禁止网卡枚举及本机套接字，网络相关回归在允许本机测试网络资源的环境重跑通过。
+本次未运行 Windows 原生、真实 BIRD/StrongSwan 跨主机或现网业务验收，未部署。
+
+## 2026-10-23 多节点连接，Windows 完全不中转
+
+运行时为每个已验证、匹配连接范围的节点分别维护 IKE/CHILD、Babel 邻居、地址回退和退避。
+新配置未填写范围时默认为 `*`，已有显式范围保持不变。全部连接共用一张 Wintun 和一个
+读取器，网卡生命周期独立于首个连接。本机报文跨连接按目的前缀、源前缀、metric 选路；
+等价路径按源/目的地址稳定分配。只发布本机 origin，各邻居共用本机公告序号空间。
+
+Windows 完全不中转：出站源地址必须是已授权且实际配置的本机地址，入站目标必须是本机地址；
+不把远端收到的报文转送其他连接，不发布 learned route，不启用 Windows IP forwarding。
+
+本次验证：
+
+- 当前工作目录 `make check`、相关三包 race、Windows amd64 交叉构建通过。
+- Windows 11 原生回归：Windows 平台 223、桌面 69、Babel 18 项顶层通过，共 310 项；
+  17 项需要额外平台/GUI 集成开关的用例明确跳过。本轮未开启 Wintun/服务集成开关。
+- 两节点专项覆盖独立连接/重试、相同远端端点分流、共享网卡、DNS 失败隔离、跨节点
+  SADR 优先级、失效路由回退、实际 ESP 解密后的本机交付及中转拒绝。
+- `docs/scripts/ike-auth-smoke.sh` 在 `--network none` 容器中对 StrongSwan 5.9.13 通过：
+  两条 IKE/ESP 隧道同时认证并完成内核 ICMP 往返，停止第一条后第二条仍使用原 generation/SPI
+  完成往返；原有 rekey、fragment 和 cookie 回归通过。这是隔离 Linux 内核互通，不替代
+  Windows 上同时连接多个真实 Linux 节点并使用 Wintun 的端到端验收。
+
+公开测试记录位于本机忽略目录 `build/validation/windows-mesh-20261023/`，Windows 专用临时
+测试目录已删除。本次尚未创建发布标签或修改已发布的 v0.6.1 产物。

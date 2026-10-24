@@ -59,6 +59,7 @@ docker run --rm --network none --cap-add NET_ADMIN \
   "${docker_extra[@]}" -e "PHOTON_CHARON_BINARY=$charon_binary" \
   -e "PHOTON_IKE_SMOKE_PATTERN=$smoke_pattern" \
   -e "PHOTON_IKE_FRAGMENT_SIZE=$fragment_size" \
+  -e "PHOTON_WINDOWS_TIMED_REKEY_SMOKE=${PHOTON_WINDOWS_TIMED_REKEY_SMOKE:-0}" \
   -v "$smoke_dir:/smoke:ro" "$smoke_image" bash -euo pipefail -c '
     export STRONGSWAN_CONF=/smoke/strongswan.conf
     "$PHOTON_CHARON_BINARY" > /tmp/charon.log 2>&1 &
@@ -70,7 +71,10 @@ docker run --rm --network none --cap-add NET_ADMIN \
     done
     PHOTON_IKE_AUTH_SMOKE=1 PHOTON_IKE_FRAGMENT_SMOKE=1 /smoke/ike.test -test.run "$PHOTON_IKE_SMOKE_PATTERN" -test.v -test.count=1
     if [ "$PHOTON_IKE_FRAGMENT_SIZE" = 1280 ]; then
-      PHOTON_WINDOWS_TUNNEL_SMOKE=1 /smoke/windows.test -test.run "^TestStrongSwanWindowsTunnel$" -test.v -test.count=1
+      PHOTON_WINDOWS_TUNNEL_SMOKE=1 /smoke/windows.test -test.run "^TestStrongSwanWindows(Tunnel|MeshTunnels)$" -test.v -test.count=1
+      if [ "$PHOTON_WINDOWS_TIMED_REKEY_SMOKE" = 1 ]; then
+        PHOTON_WINDOWS_TUNNEL_SMOKE=1 /smoke/windows.test -test.run "^TestStrongSwanWindowsMeshTimedRekey$" -test.v -test.count=1 -test.timeout=7m
+      fi
     fi
   '
 }

@@ -53,7 +53,12 @@ func TestWindowsStrongSwanCrossHost(t *testing.T) {
 	if err != nil || !address.Is4() || config.IKEPort == 0 || config.NATTPort == 0 || len(config.PrivateKey) != ed25519.PrivateKeySize || len(config.GatewayPublicKey) != ed25519.PublicKeySize {
 		t.Fatal("invalid cross-host fixture configuration")
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 75*time.Second)
+	limit := 75 * time.Second
+	timed := os.Getenv("PHOTON_WINDOWS_TIMED_REKEY_SMOKE") == "1"
+	if timed {
+		limit = 7 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), limit)
 	defer cancel()
 	socket, err := openPacketSockets(ctx, "0.0.0.0:0")
 	if err != nil {
@@ -165,12 +170,22 @@ func TestWindowsStrongSwanCrossHost(t *testing.T) {
 		}
 	}
 	echo("initial CHILD")
+	if timed {
+		verifyMeshTimedRekey(t, ctx, socket, []*gatewayTunnel{tunnel})
+	}
 	oldSPI := tunnel.child.InitiatorSPI
 	tunnel.rekeyAt = time.Now()
 	pump("CHILD rekey", func() bool { return tunnel.child.InitiatorSPI != oldSPI && len(tunnel.pending) == 0 })
 	echo("replacement CHILD")
+	rekeyDeadline, expiryDeadline := tunnel.rekeyAt, tunnel.expiresAt
 	tunnel.deleteAt = time.Now()
 	pump("old CHILD Delete", func() bool { return data.sas[oldSPI] == nil })
+	if tunnel.deleteSPI != 0 {
+		t.Fatal("old CHILD Delete scheduled a second deletion")
+	}
+	if tunnel.rekeyAt != rekeyDeadline || tunnel.expiresAt != expiryDeadline {
+		t.Fatal("old CHILD cleanup extended active key lifetimes")
+	}
 	echo("after CHILD Delete")
 	oldSession := tunnel.session
 	tunnel.ikeRekeyAt = time.Now()

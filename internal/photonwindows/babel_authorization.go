@@ -6,52 +6,7 @@ import (
 
 	"github.com/HiggsNet/photon/internal/photonclient/sadr"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
-	"github.com/HiggsNet/photon/pkg/core/zone"
-	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
-	"github.com/HiggsNet/photon/pkg/routing"
 )
-
-// currentBabelOrigins derives no origin from a next hop or BIRD's low 32 bits.
-// Every binding is a current signed assertion for the exact 64-bit Router ID.
-// Collisions between zones invalidate every claimant, independent of map order.
-// This authenticates the ID claim, not a forwarded Babel Update: a gateway can
-// still impersonate a published ID. The leaf therefore remains experimental
-// with an explicitly trusted gateway until Update origin proofs exist.
-func currentBabelOrigins(config *Config, view corestate.View, now time.Time) map[[8]byte]zone.ZonePath {
-	return currentBabelOriginsWithVerifier(config, view, now, nil)
-}
-
-func currentBabelOriginsWithVerifier(config *Config, view corestate.View, now time.Time, verifier *photoncrypto.Verifier) map[[8]byte]zone.ZonePath {
-	result := make(map[[8]byte]zone.ZonePath)
-	if config == nil || view.State == nil || view.State.Network == nil || photoncrypto.VerifyPinnedRoot(view.State.Network, config.TrustedRootPublicKey) != nil {
-		return result
-	}
-	conflicts := make(map[[8]byte]bool)
-	for path, zs := range view.State.Network.Zones {
-		if zs == nil || verifier.VerifyChain(view.State.Network, path, now) != nil {
-			continue
-		}
-		record := zs.Records[routing.RecordKeyBabelIdentity]
-		if record == nil || record.Zone != path || verifier.VerifyRecord(record, zs.Authority, now) != nil {
-			continue
-		}
-		value, err := routing.ParseBabelIdentityRecord(record, now)
-		if err != nil {
-			continue
-		}
-		ids, _ := value.IDs()
-		for _, id := range ids {
-			if old, ok := result[id]; ok && old != path {
-				conflicts[id] = true
-			}
-			result[id] = path
-		}
-	}
-	for id := range conflicts {
-		delete(result, id)
-	}
-	return result
-}
 
 // lookupBabelRoutes is called by the active tunnel owner at packet use time.
 // The candidate planner's revision must still be current, and expiration is
@@ -82,16 +37,18 @@ func (t *gatewayTunnel) lookupBabelRoutes(config *Config, view corestate.View, p
 }
 
 func currentBabelRouteAuthorizer(config *Config, view corestate.View, now time.Time) func(sadr.Route) bool {
-	origins := currentBabelOrigins(config, view, now)
 	authorized := authorizedGatewayRoutes(config, view, now)
 	var hosts []netip.Prefix
 	if config != nil {
 		hosts, _ = leafDeviceIntent(config, view, now)
 	}
-	return babelRouteAuthorizer(origins, authorized, hosts)
+	return babelRouteAuthorizer(authorized, hosts)
 }
 
-func babelRouteAuthorizer(origins map[[8]byte]zone.ZonePath, authorized []AuthorizedGatewayRoute, hosts []netip.Prefix) func(sadr.Route) bool {
+// The authenticated gateway supplies reachability. Signed Photon records
+// authorize destination prefixes; Babel Router IDs are protocol state, not
+// identity credentials, and need no routing/babel/identities binding.
+func babelRouteAuthorizer(authorized []AuthorizedGatewayRoute, hosts []netip.Prefix) func(sadr.Route) bool {
 	return func(route sadr.Route) bool {
 		if route.Source.IsValid() {
 			// A source prefix only narrows local-host use of an independently
@@ -110,12 +67,8 @@ func babelRouteAuthorizer(origins map[[8]byte]zone.ZonePath, authorized []Author
 				return false
 			}
 		}
-		origin, ok := origins[route.RouterID]
-		if !ok {
-			return false
-		}
 		for _, permission := range authorized {
-			if permission.Origin == origin && permission.Prefix == route.Destination {
+			if permission.Prefix == route.Destination {
 				return true
 			}
 		}

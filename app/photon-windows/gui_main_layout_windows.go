@@ -27,7 +27,7 @@ func (w *desktopWindow) createMainControls() error {
 		{guiStartID, "BUTTON", "启动连接", button, 0, "primary"},
 		{guiStopID, "BUTTON", "停止连接", button, 0, "body"},
 		{guiRestartID, "BUTTON", "重新连接", button, 0, "body"},
-		{guiGatewayID, "STATIC", "活动网关：—", static, 0, "section"},
+		{guiGatewayID, "STATIC", "已连接节点：—", static, 0, "section"},
 		{guiAdmissionID, "STATIC", "入网：读取中…", static, 0, "body"},
 		{guiJoinRequestID, "EDIT", "", 0x50010000 | 0x0080 | 0x0800, 0x200, "mono"},
 		{guiCopyRequestID, "BUTTON", "复制入网请求", button, 0, "body"},

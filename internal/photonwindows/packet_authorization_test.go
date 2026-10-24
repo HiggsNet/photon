@@ -187,7 +187,7 @@ func TestPacketSignatureMemoKeepsCurrentPolicy(t *testing.T) {
 			t.Fatal("cached signature extended a transport key lifetime")
 		}
 	})
-	t.Run("future signed identity collision", func(t *testing.T) {
+	t.Run("ignored future signed identity collision", func(t *testing.T) {
 		f := newPipelineFixture(t)
 		private := packetFixtureRootSigner(t, f)
 		value, err := json.Marshal(routing.BabelIdentityRecord{Version: 1, RouterIDs: []string{hex.EncodeToString(f.remoteID[:])}, ExpiresAt: f.now.Add(time.Hour).Unix()})
@@ -199,13 +199,13 @@ func TestPacketSignatureMemoKeepsCurrentPolicy(t *testing.T) {
 			t.Fatal(err)
 		}
 		f.view.State.Network.Zones[zone.RootZone].Records[record.Key] = record
-		f.learn(t) // VerifyRecord warms the future record's valid signature too.
+		f.learn(t)
 		facts, ok := f.p.prepare(f.config, f.view, f.plan, f.now.Add(time.Second))
 		if !ok {
 			t.Fatal("collision affects remote ID, not local attachment")
 		}
-		if f.p.authorize(facts, f.packet(true), true) {
-			t.Fatal("cached math hid newly active Router ID conflict")
+		if !f.p.authorize(facts, f.packet(true), true) {
+			t.Fatal("optional Router ID conflict revoked an authorized prefix")
 		}
 	})
 	t.Run("current child selectors", func(t *testing.T) {

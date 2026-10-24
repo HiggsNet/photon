@@ -297,7 +297,7 @@ func parseSplitRoutes(values []string) ([]netip.Prefix, error) {
 
 func parseAllowedZones(values []string) ([]zone.ZonePath, error) {
 	if len(values) == 0 {
-		return nil, errors.New("gateway.allowed_zones must contain at least one verified gateway zone")
+		return []zone.ZonePath{"*"}, nil
 	}
 	out := make([]zone.ZonePath, 0, len(values))
 	seen := make(map[zone.ZonePath]struct{}, len(values))

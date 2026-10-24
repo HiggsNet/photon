@@ -262,7 +262,7 @@ B3 已完成上述协议、生命周期及双版本/Windows 跨主机验收；�
   - [x] 完整签名 origin/精确前缀、当前 SA 与双向包交付授权接入 pipeline；source-specific 仅收紧当前授权本机 host 使用条件，双向匹配、fallback、排队撤销及 race 通过，不扩大地址或转发授权。
 - [x] Wintun 使用固定官方 API/binding，明确 DLL 来源、ring ownership、packet buffer 归还、取消与 shutdown。官方 0.14.1 AMD64 DLL 固定 SHA-256，1 MiB ring/64 队列；Windows 原生两次创建、写 ring、cancel/join、关闭后拒绝均通过，见 [来源与边界](third_party/wintun/README.md)。已接 Daemon 业务 pipeline，完整原生跨主机另验。
 - [x] WindowsDriver 通过 IP Helper 管理 address/route/interface metric，使用 `Observe -> Plan -> Apply -> Re-observe`，不 shell out。
-  - [x] 本机地址仅取授权非共享 /32、/128，自动公告保留手动撤回；链路本地地址复用 Linux overlay/link/port generation 派生契约。
+  - [x] 本机地址取授权非共享分配：host 使用原地址，子网选网络地址加一，仅配置及公告 /32、/128，自动公告保留主机地址的手动撤回；链路本地地址复用 Linux overlay/link/port generation 派生契约。
   - [x] 限定新建 Wintun LUID 与配置 split aggregate 的 IP Helper driver；Windows 11 原生双栈 DAD、幂等、漂移修复、撤销及带配置关闭通过。
   - [x] Daemon 异步设备配置与 DAD 就绪、当前 revision/generation 校验、Read pump 和停止/重绑回收接线；平台原生取消/重建/通知过滤与 composition race 通过。
 - [x] 完成 `Wintun -> SADR -> ESP -> shared UDP` 及反向 pipeline 的 memory 与真实 interop 测试。

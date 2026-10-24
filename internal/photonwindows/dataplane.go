@@ -45,6 +45,7 @@ type dataplaneSA struct {
 }
 
 type dataplaneJob struct {
+	owner      *gatewayDataplane
 	ctx        context.Context
 	generation uint64
 	sa         *dataplaneSA
@@ -205,7 +206,7 @@ func (d *gatewayDataplane) processInbound(generation uint64, plan GatewayPlan, e
 	if sa == nil || d.ctx.Err() != nil {
 		return dataplaneCompletion{}, false
 	}
-	job := dataplaneJob{ctx: d.generationCtx, generation: d.generation, sa: sa, packet: packet}
+	job := dataplaneJob{owner: d, ctx: d.generationCtx, generation: d.generation, sa: sa, packet: packet}
 	result := executeDataplaneJob(job)
 	// The ciphertext is no longer needed on success, error or cancellation.
 	result.job.packet = nil
@@ -223,7 +224,7 @@ func (d *gatewayDataplane) processOwnedInbound(generation uint64, plan GatewayPl
 	if sa == nil || d.ctx.Err() != nil {
 		return dataplaneCompletion{timing: timing}, false
 	}
-	result := dataplaneCompletion{timing: timing, job: dataplaneJob{ctx: d.generationCtx, generation: d.generation, sa: sa}}
+	result := dataplaneCompletion{timing: timing, job: dataplaneJob{owner: d, ctx: d.generationCtx, generation: d.generation, sa: sa}}
 	if err := result.job.ctx.Err(); err != nil {
 		result.err = err
 		return result, true
@@ -256,7 +257,7 @@ func (d *gatewayDataplane) processOwnedOutbound(generation uint64, plan GatewayP
 	if sa == nil || d.ctx.Err() != nil {
 		return dataplaneCompletion{timing: timing}, false
 	}
-	job := dataplaneJob{ctx: d.generationCtx, generation: d.generation, sa: sa, packet: packet, outbound: true}
+	job := dataplaneJob{owner: d, ctx: d.generationCtx, generation: d.generation, sa: sa, packet: packet, outbound: true}
 	result := dataplaneCompletion{timing: timing, job: job}
 	if err := job.ctx.Err(); err != nil {
 		result.err = err
@@ -283,7 +284,7 @@ func (d *gatewayDataplane) newJob(sa *dataplaneSA, packet []byte, outbound bool)
 	if sa == nil || d.ctx.Err() != nil {
 		return dataplaneJob{}, false
 	}
-	return dataplaneJob{ctx: d.generationCtx, generation: d.generation, sa: sa, packet: bytes.Clone(packet), outbound: outbound}, true
+	return dataplaneJob{owner: d, ctx: d.generationCtx, generation: d.generation, sa: sa, packet: bytes.Clone(packet), outbound: outbound}, true
 }
 
 func (d *gatewayDataplane) submit(sa *dataplaneSA, packet []byte, outbound bool) bool {

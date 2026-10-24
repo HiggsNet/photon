@@ -30,10 +30,12 @@ func TestLeafHostAssignmentsAndManualWithdrawal(t *testing.T) {
 		}
 		network.Zones[path].Records[key] = record
 	}
-	config := &Config{ManagedZone: "node-a.catofes.", TrustedRootPublicKey: root, Overlay: OverlayConfig{SplitRoutes: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}}}
-	poolKey, _ := routing.NormalizeIPAMPoolKey("10.0.0.0/8")
-	put(zone.RootZone, poolKey, routing.RecordTypeIPAMPool, routing.IPAMPoolRecord{Version: 1, Prefix: "10.0.0.0/8", DelegatedTo: zone.RootZone, Active: true})
-	for _, prefix := range []string{"10.1.0.1/32", "10.2.0.0/24", "10.3.0.1/32"} {
+	config := &Config{ManagedZone: "node-a.catofes.", TrustedRootPublicKey: root, Overlay: OverlayConfig{SplitRoutes: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("2a0d:2905:1::/48")}}}
+	for _, pool := range config.Overlay.SplitRoutes {
+		poolKey, _ := routing.NormalizeIPAMPoolKey(pool.String())
+		put(zone.RootZone, poolKey, routing.RecordTypeIPAMPool, routing.IPAMPoolRecord{Version: 1, Prefix: pool.String(), DelegatedTo: zone.RootZone, Active: true})
+	}
+	for _, prefix := range []string{"10.1.0.1/32", "10.2.0.0/24", "10.3.0.0/24", "2a0d:2905:1:3f::/64"} {
 		key, _ := routing.NormalizeIPAMAssignmentKey(prefix)
 		put(zone.RootZone, key, routing.RecordTypeIPAMAssignment, routing.IPAMAssignmentRecord{Version: 1, Prefix: prefix, AssignedTo: config.ManagedZone, Active: true})
 	}
@@ -44,15 +46,23 @@ func TestLeafHostAssignmentsAndManualWithdrawal(t *testing.T) {
 		t.Fatal(err)
 	}
 	addresses, routes := leafDeviceIntent(config, source.common.ReadView(), now)
-	if len(addresses) != 1 || addresses[0].String() != "10.1.0.1/32" || len(routes) != 1 {
-		t.Fatal("guessed subnet address or overrode manual withdrawal", addresses, routes)
+	if len(addresses) != 3 || addresses[0].String() != "10.1.0.1/32" || addresses[1].String() != "10.2.0.1/32" || addresses[2].String() != "2a0d:2905:1:3f::1/128" || len(routes) != 2 {
+		t.Fatal("wrong host selection or manual withdrawal overridden", addresses, routes)
+	}
+	// Derived hosts are signed route announcements, never new overlapping IPAM
+	// assignments or advertisements for the entire assigned subnet.
+	set := currentAuthorizedRouteSet(config, source.common.ReadView(), now)
+	if len(set.AllAssignments) != 4 || len(set.Announced[config.ManagedZone]) != 3 {
+		t.Fatal("subnet assignment was replaced or advertised wholesale", set)
 	}
 	revision := source.common.VerifiedRevision()
 	if err := source.EnsureLocalLeafRoutes(t.Context(), config, now); err != nil || source.common.VerifiedRevision() != revision {
 		t.Fatal("steady reconciliation rewrote state", err)
 	}
-	if _, err := source.common.ApplyLocalIntent(t.Context(), corestate.RevokeIPAMAssignmentIntent{Zone: zone.RootZone, Prefix: "10.1.0.1/32"}, now); err != nil {
-		t.Fatal(err)
+	for _, prefix := range []string{"10.1.0.1/32", "10.2.0.0/24", "2a0d:2905:1:3f::/64"} {
+		if _, err := source.common.ApplyLocalIntent(t.Context(), corestate.RevokeIPAMAssignmentIntent{Zone: zone.RootZone, Prefix: prefix}, now); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := source.EnsureLocalLeafRoutes(t.Context(), config, now); err != nil {
 		t.Fatal(err)
@@ -60,11 +70,45 @@ func TestLeafHostAssignmentsAndManualWithdrawal(t *testing.T) {
 	if addresses, _ := leafDeviceIntent(config, source.common.ReadView(), now); len(addresses) != 0 {
 		t.Fatal("revoked host address retained")
 	}
-	key, _ := routing.NormalizeRouteAnnouncementKey("10.1.0.1/32")
-	record := source.common.ReadView().State.Network.Zones[config.ManagedZone].Records[key]
-	announcement, err := routing.ParseRouteAnnouncementRecord(record)
-	if err != nil || announcement.Active {
-		t.Fatal("auto announcement not withdrawn", err)
+	for _, address := range addresses {
+		key, _ := routing.NormalizeRouteAnnouncementKey(address.String())
+		record := source.common.ReadView().State.Network.Zones[config.ManagedZone].Records[key]
+		announcement, err := routing.ParseRouteAnnouncementRecord(record)
+		if err != nil || announcement.Active {
+			t.Fatal("auto announcement not withdrawn", address, err)
+		}
+	}
+}
+
+func TestLeafAssignedHostsSubnetBoundaries(t *testing.T) {
+	config := &Config{ManagedZone: "node-a.catofes.", Overlay: OverlayConfig{SplitRoutes: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("2001:db8::/32")}}}
+	for _, tc := range []struct {
+		prefix, want string
+		shared       bool
+		owner        zone.ZonePath
+	}{
+		{"10.2.0.0/24", "10.2.0.1/32", false, config.ManagedZone},
+		{"10.2.0.0/31", "10.2.0.1/32", false, config.ManagedZone},
+		{"10.2.0.0/32", "10.2.0.0/32", false, config.ManagedZone},
+		{"2001:db8:1::/64", "2001:db8:1::1/128", false, config.ManagedZone},
+		{"2001:db8:1::/127", "2001:db8:1::1/128", false, config.ManagedZone},
+		{"2001:db8:1::/128", "2001:db8:1::/128", false, config.ManagedZone},
+		{"2001:db8:1::/64", "", true, config.ManagedZone},
+		{"2001:db8:1::/64", "", false, "node-b.catofes."},
+		{"2001:db9::/64", "", false, config.ManagedZone},
+		{"fe80::/64", "", false, config.ManagedZone},
+	} {
+		t.Run(tc.prefix+"/"+string(tc.owner), func(t *testing.T) {
+			set := &routing.AuthorizedRouteSet{AllAssignments: []*routing.AssignmentEntry{{Prefix: netip.MustParsePrefix(tc.prefix), AssignedTo: tc.owner, Shared: tc.shared}}}
+			hosts := leafAssignedHosts(config, set)
+			if tc.want == "" {
+				if len(hosts) != 0 {
+					t.Fatal("unusable assignment selected", hosts)
+				}
+			} else if len(hosts) != 1 || hosts[0].String() != tc.want {
+				t.Fatalf("hosts = %v, want %s", hosts, tc.want)
+			}
+		})
 	}
 }
 

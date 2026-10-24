@@ -18,13 +18,13 @@ import (
 // goroutine and never lets control packets enter the host stack.
 type packetDevice interface{ Write([]byte) error }
 
-// gatewayBabelPipeline is an experimental, single-gateway packet owner. The
+// gatewayBabelPipeline owns one authenticated peer adjacency. The
 // caller supplies an immediately current view at each serial event, including
 // crypto completion, and pins actual local addresses and both link-local ends.
 // Rekey retains this owner; rebind, gateway replacement or revoked attachment
 // permanently invalidates it. An empty attachment has no device or business
-// addresses and exchanges only Babel control. Remote routes require publication
-// of their real full Babel IDs.
+// addresses and exchanges only Babel control. It never relays remote traffic
+// or advertises learned routes to any other adjacency.
 type gatewayBabelPipeline struct {
 	tunnel      *gatewayTunnel
 	device      packetDevice
@@ -61,7 +61,7 @@ func (p *gatewayBabelPipeline) current(config *Config, view corestate.View, plan
 	valid := config != nil && t.generation == p.generation && t.phase == 3 && t.failed == nil && t.session != nil && t.data != nil && now.Before(t.ikeExpiresAt) && now.Before(t.expiresAt)
 	if valid {
 		binding, err := localTransportAuthorization(config, view, now)
-		valid = err == nil && binding == t.localAuthorization && currentBabelOrigins(config, view, now)[p.routerID] == config.ManagedZone
+		valid = err == nil && binding == t.localAuthorization
 	}
 	current := GatewayPlan{}
 	if valid {

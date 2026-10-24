@@ -95,8 +95,11 @@ func TestDesktopConfigFormMissingDefaultsRequireRealTrustAndDoNotCreateIdentity(
 	if !form.NewConfig {
 		t.Fatal("missing configuration was not identified as a new form")
 	}
-	if form.RootPublicKey != "" || form.ManagedZone != "" || form.AllowedGateways != "" || form.SplitRoutes != "" || len(form.BootstrapHints) != 0 {
+	if form.RootPublicKey != "" || form.ManagedZone != "" || form.SplitRoutes != "" || len(form.BootstrapHints) != 0 {
 		t.Fatal("new form invented trust, network authority or routes")
+	}
+	if form.AllowedGateways != "*" {
+		t.Fatal("new configuration does not discover all verified peers")
 	}
 	if form.StatePath != filepath.Join(dir, "laptop-one.db") || !filepath.IsAbs(form.StatePath) || form.OverlayID != "ipsec-main" || form.GossipListen != "0.0.0.0:33434" || form.AdapterName != "Photon Windows" || form.MTU != "1400" || form.LogLevel != "info" || form.InitialBackoff != "1s" || form.MaxBackoff != "1m" {
 		t.Fatalf("unexpected defaults: %+v", form)
@@ -232,7 +235,7 @@ func TestDesktopConfigFormInvalidFieldsAndExternalChangesLeaveOriginalUntouched(
 		func(f *desktopConfigForm) { f.MTU = "not an integer" },
 		func(f *desktopConfigForm) { f.MTU = "1279" },
 		func(f *desktopConfigForm) { f.SplitRoutes = "0.0.0.0/0" },
-		func(f *desktopConfigForm) { f.AllowedGateways = "" },
+		func(f *desktopConfigForm) { f.AllowedGateways = "[" },
 		func(f *desktopConfigForm) {
 			f.BootstrapHints = []desktopBootstrapRow{{Peer: "unknown.", Address: "host:33434"}}
 		},

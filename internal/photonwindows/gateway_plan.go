@@ -18,7 +18,7 @@ import (
 )
 
 // GatewaySelection is a target for a future authenticated IKE connection, not
-// an established SA. The allowlist order selects one gateway deterministically.
+// an established SA. Every eligible peer gets a connection; order only stabilizes diagnostics.
 type GatewaySelection struct {
 	Zone        zone.ZonePath      `json:"zone"`
 	Identity    string             `json:"identity"`
@@ -29,7 +29,7 @@ type GatewaySelection struct {
 
 // AuthorizedGatewayRoute records only the signed origin/prefix authorization.
 // It cannot authorize installation: B3/B4 must additionally authenticate the SA
-// and bind the received Router ID to this exact origin (including collisions).
+// and match the destination against these signed prefix permissions.
 type AuthorizedGatewayRoute struct {
 	Origin zone.ZonePath `json:"origin"`
 	Prefix netip.Prefix  `json:"prefix"`
@@ -39,6 +39,7 @@ type GatewayPlan struct {
 	Revision    corestate.VerifiedRevision `json:"revision"`
 	EvaluatedAt time.Time                  `json:"evaluated_at"`
 	Candidates  []GatewayCandidate         `json:"candidates"`
+	Targets     []GatewaySelection         `json:"targets,omitempty"`
 	Selected    *GatewaySelection          `json:"selected,omitempty"`
 	Routes      []AuthorizedGatewayRoute   `json:"route_authorizations,omitempty"`
 	Rejected    string                     `json:"rejected,omitempty"`
@@ -57,19 +58,21 @@ func planGatewaySelection(ctx context.Context, config *Config, view corestate.Vi
 	defer cancel()
 	plan := GatewayPlan{Revision: view.Revision, EvaluatedAt: now}
 	plan.Candidates = gatewayCandidates(ctx, config, view, now, resolver, verifier)
-	if err := ctx.Err(); err != nil {
-		plan.Rejected = err.Error()
-		return plan
-	}
 	for _, candidate := range plan.Candidates {
 		if candidate.Rejected != "" || len(candidate.Contacts) == 0 {
 			continue
 		}
-		plan.Selected = &GatewaySelection{Zone: candidate.Zone, Identity: candidate.Identity, PublicKey: candidate.PublicKey, Fingerprint: candidate.Fingerprint, Contact: candidate.Contacts[0]}
-		break
+		selection := GatewaySelection{Zone: candidate.Zone, Identity: candidate.Identity, PublicKey: candidate.PublicKey, Fingerprint: candidate.Fingerprint, Contact: candidate.Contacts[0]}
+		plan.Targets = append(plan.Targets, selection)
+		if plan.Selected == nil {
+			plan.Selected = &selection
+		}
 	}
 	if plan.Selected == nil {
 		plan.Rejected = "no authorized gateway contact"
+		if err := ctx.Err(); err != nil {
+			plan.Rejected = err.Error()
+		}
 		return plan
 	}
 	return plan
@@ -133,7 +136,22 @@ func revalidateResolvedGatewaySelection(config *Config, view corestate.View, pla
 			resolved[contact.Host] = append(resolved[contact.Host], net.IPAddr{IP: net.IP(address.AsSlice())})
 		}
 	}
-	return planGatewaySelection(context.Background(), config, view, now, resolved, verifier)
+	current := planGatewaySelection(context.Background(), config, view, now, resolved, verifier)
+	// A healthy connection keeps its authenticated contact while other peers or
+	// address preference change. A removed contact still forces replacement.
+	if plan.Selected != nil && current.Selected != nil && plan.Selected.Zone == current.Selected.Zone {
+		for _, candidate := range current.Candidates {
+			if candidate.Zone != plan.Selected.Zone {
+				continue
+			}
+			for _, contact := range candidate.Contacts {
+				if contact == plan.Selected.Contact {
+					current.Selected.Contact = contact
+				}
+			}
+		}
+	}
+	return current
 }
 
 type gatewayResolvedHosts map[string][]net.IPAddr
