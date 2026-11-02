@@ -343,6 +343,11 @@ func newDesktopWindow(backend *desktopBackend) (_ *desktopWindow, err error) {
 	if timer == 0 {
 		return nil, guiCallError("SetTimer", callErr)
 	}
+	for _, hwnd := range []uintptr{w.hwnd, w.settings, w.diagnostics} {
+		if err := guiFitInitialWindow(hwnd); err != nil {
+			return nil, err
+		}
+	}
 	w.layout()
 	return w, nil
 }
