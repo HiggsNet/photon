@@ -437,7 +437,7 @@ func TestMeshLocalOriginSequencesRemainCommonAcrossNeighbors(t *testing.T) {
 		}
 	}
 	b.leaf.pipeline.leaf.SynchronizeSequence(42)
-	m.synchronizeSequences()
+	m.noteSequence(b)
 	for _, p := range []*meshPeer{a, b} {
 		for _, message := range p.leaf.pipeline.leaf.Tick(f.now) {
 			if message.Type == babel.TLVUpdate && message.Metric != babel.MetricInfinity {
