@@ -44,6 +44,9 @@ func (s *packetSockets) releaseTunnel(generation uint64) {
 	defer s.mu.Unlock()
 	endpoints := s.tunnels[generation]
 	delete(s.tunnels, generation)
+	if generation != 0 {
+		s.cancelUDPControlLocked(generation, false)
+	}
 	for _, peer := range []netip.AddrPort{endpoints.ike, endpoints.natt} {
 		delete(s.tunnelPeers[peer], generation)
 		if len(s.tunnelPeers[peer]) == 0 {
