@@ -42,6 +42,7 @@ type dataplaneSA struct {
 	local, remote []ike.TrafficSelector
 	spi           uint32
 	keys          [2][32]byte
+	child         ike.ChildResult // Detached negotiation metadata, without keys.
 }
 
 type dataplaneJob struct {
@@ -141,6 +142,7 @@ func (d *gatewayDataplane) install(generation uint64, plan GatewayPlan, endpoint
 	gateway := *plan.Selected
 	gateway.PublicKey = bytes.Clone(gateway.PublicKey)
 	sa := &dataplaneSA{gateway: gateway, endpoint: endpoint, receiver: receiver, sender: sender, local: slices.Clone(child.LocalSelectors), remote: slices.Clone(child.RemoteSelectors), spi: child.InitiatorSPI, keys: keys}
+	sa.child = ike.ChildResult{InitiatorSPI: child.InitiatorSPI, ResponderSPI: child.ResponderSPI, LocalSelectors: sa.local, RemoteSelectors: sa.remote}
 	d.sas[sa.spi] = sa
 	if d.active == nil {
 		d.active = sa

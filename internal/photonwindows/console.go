@@ -267,9 +267,15 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		defer close(ikeDone)
 		mesh.runIKEStarts(ikeCtx)
 	}()
+	ikeResponsesDone := make(chan struct{})
+	go func() {
+		defer close(ikeResponsesDone)
+		mesh.runIKEResponses(ikeCtx)
+	}()
 	defer func() {
 		stopIKE()
 		<-ikeDone
+		<-ikeResponsesDone
 	}()
 	var lastReady bool
 	observeReady := func() {
@@ -348,6 +354,11 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			sampled <- mesh.observationSnapshot(lastPlan)
 		case prepared := <-mesh.ikePrepared:
 			mesh.finishIKEStart(prepared)
+		case response := <-mesh.ikeResponded:
+			if err := mesh.finishIKEResponse(response); err != nil {
+				return err
+			}
+			observeReady()
 		case datagram := <-packet.ikePackets:
 			if err := mesh.handleIKE(datagram); err != nil {
 				return err

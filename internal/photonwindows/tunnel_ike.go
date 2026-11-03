@@ -98,20 +98,3 @@ func (t *gatewayTunnel) tickOldIKE(now time.Time) {
 	clear(t.oldIKE[len(retained):])
 	t.oldIKE = retained
 }
-
-func (t *gatewayTunnel) handleOldIKE(old *ikeOverlap, message *ike.ExchangeMessage, now time.Time) error {
-	result, err := old.session.HandleExchange(message, nil)
-	if err != nil {
-		return err
-	}
-	if message.Header().Flags&ike.FlagResponse != 0 {
-		old.pending = nil
-	}
-	if result.Deleted != nil && result.Deleted.IKE {
-		old.pending = nil
-	}
-	if result.Reply != nil {
-		return t.sendSessionReply(old.session, result.Reply)
-	}
-	return nil
-}

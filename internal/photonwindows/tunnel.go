@@ -3,8 +3,6 @@ package photonwindows
 import (
 	"context"
 	"crypto/ed25519"
-	"crypto/rand"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -30,6 +28,7 @@ type gatewayTunnel struct {
 	socket                                   *packetSockets
 	data                                     *gatewayDataplane
 	session                                  *ike.Initiator
+	ikeLeased                                bool
 	plan                                     GatewayPlan
 	generation                               uint64
 	peer                                     netip.AddrPort
@@ -51,7 +50,7 @@ func (t *gatewayTunnel) stop() {
 	// Deny data first. An idle established SA gets one best-effort encrypted
 	// Delete, without awaiting the peer or delaying local teardown/reconnect.
 	t.data.reset(t.generation + 1)
-	if t.phase == 3 && t.session != nil && len(t.session.PendingRequest()) == 0 && t.failed == nil {
+	if t.phase == 3 && !t.ikeLeased && t.session != nil && len(t.session.PendingRequest()) == 0 && t.failed == nil {
 		if request, err := t.session.IKEDeleteRequest(); err == nil {
 			if wire, err := ike.EncapsulateIKE(request); err == nil {
 				_ = t.socket.WriteTunnel(t.generation, wire, t.peer)
@@ -63,6 +62,7 @@ func (t *gatewayTunnel) stop() {
 	t.data.reset(t.generation)
 	clear(t.private)
 	t.session, t.pending, t.private = nil, nil, nil
+	t.ikeLeased = false
 	t.phase = 0
 	t.plan = GatewayPlan{}
 	t.child = ike.ChildResult{}
@@ -182,7 +182,11 @@ func (t *gatewayTunnel) current(plan GatewayPlan) bool {
 
 // tick returns fatal lifecycle errors. Invalid network packets are separately
 // ignored without resetting retransmission deadlines or extending liveness.
-func (t *gatewayTunnel) tick(plan GatewayPlan, now time.Time) (err error) {
+func (t *gatewayTunnel) tick(plan GatewayPlan, now time.Time) error {
+	return t.tickWithScheduler(plan, now, nil)
+}
+
+func (t *gatewayTunnel) tickWithScheduler(plan GatewayPlan, now time.Time, schedule func(ikeTimerRequest)) (err error) {
 	defer func() {
 		if err != nil {
 			t.observeEvent("lifecycle_failed", now, err)
@@ -216,39 +220,17 @@ func (t *gatewayTunnel) tick(plan GatewayPlan, now time.Time) (err error) {
 		return errors.New("tunnel: active CHILD withdrawn")
 	}
 	if t.phase == 3 && len(t.pending) == 0 {
-		if t.deleteSPI != 0 && !now.Before(t.deleteAt) {
-			request, err := t.session.ChildDeleteRequest([]uint32{t.deleteSPI})
+		if request := t.dueIKERequest(now); request.kind != 0 {
+			if schedule != nil {
+				schedule(request)
+				return nil
+			}
+			packets, err := prepareIKETimer(request)
 			if err != nil {
 				return err
 			}
-			t.deleteSPI = 0
-			return t.sendNew([][]byte{request}, now)
+			return t.applyIKETimer(request, packets, now)
 		}
-		if !now.Before(t.ikeRekeyAt) {
-			request, err := t.session.IKERekeyRequest()
-			if err != nil {
-				return err
-			}
-			return t.sendNew([][]byte{request}, now)
-		}
-		if !now.Before(t.rekeyAt) {
-			spi, err := freshChildSPI()
-			if err != nil {
-				return err
-			}
-			request, err := t.session.ChildRequest(ike.ChildExchangeConfig{Child: ike.ChildConfig{InitiatorSPI: spi, LocalSelectors: t.child.LocalSelectors, RemoteSelectors: t.child.RemoteSelectors}, RekeySPI: t.child.InitiatorSPI, DHGroup: t.rekeyGroup})
-			if err != nil {
-				return err
-			}
-			return t.sendNew([][]byte{request}, now)
-		}
-	}
-	if t.phase == 3 && len(t.pending) == 0 && !now.Before(t.probeAt) {
-		packet, err := t.session.InformationalRequest()
-		if err != nil {
-			return err
-		}
-		return t.sendNew([][]byte{packet}, now)
 	}
 	if t.natt && t.phase == 3 && !now.Before(t.keepaliveAt) {
 		if err := t.socket.WriteTunnel(t.generation, []byte{0xff}, t.peer); err != nil {
@@ -268,75 +250,124 @@ func (t *gatewayTunnel) handle(packet tunnelDatagram, plan GatewayPlan, now time
 			t.observeProgress()
 		}
 	}()
+	if err := t.validateIKEIngress(packet, plan); err != nil {
+		return err
+	}
+	switch t.phase {
+	case 1, 2:
+		input := t.ikeHandshakeInput(plan)
+		action, err := prepareIKEHandshakeResponse(t.phase, packet.packet, now, input)
+		return t.applyIKEHandshakeResponse(action, plan, now, err)
+	case 3:
+		return t.handleEstablished(packet.packet, plan, now)
+	}
+	return fmt.Errorf("tunnel: inactive session")
+}
+
+func (t *gatewayTunnel) validateIKEIngress(packet tunnelDatagram, plan GatewayPlan) error {
 	if t.failed != nil {
 		return t.failed
 	}
 	if packet.generation != t.generation || packet.peer != t.peer || !t.current(plan) {
 		return errors.New("tunnel: stale or unauthorized ingress")
 	}
-	switch t.phase {
-	case 1:
-		if retry, err := t.session.HandleInitCookie(packet.packet); err == nil {
-			t.pending = [][]byte{retry}
-			return t.sendPending(now) // challenge never resets the attempt budget
-		}
-		result, err := t.session.HandleInitResponse(packet.packet)
+	return nil
+}
+
+type ikeHandshakeInput struct {
+	session   *ike.Initiator
+	private   ed25519.PrivateKey
+	localID   string
+	selection GatewaySelection
+	natt      bool
+}
+
+type ikeHandshakeAction struct {
+	cookie       []byte
+	floatNATT    bool
+	authPrepared bool
+	requests     [][]byte
+	auth         *ike.AuthResult
+}
+
+func (t *gatewayTunnel) ikeHandshakeInput(plan GatewayPlan) ikeHandshakeInput {
+	return ikeHandshakeInput{session: t.session, private: t.private, localID: t.localID, selection: *plan.Selected, natt: t.natt}
+}
+
+// prepareIKEHandshakeResponse owns only the negotiating session. Socket writes
+// and installation remain serialized with packet authorization by the caller.
+func prepareIKEHandshakeResponse(phase uint8, packet []byte, now time.Time, input ikeHandshakeInput) (action ikeHandshakeAction, err error) {
+	session := input.session
+	if phase == 2 {
+		_, payload, err := ike.DecodeHeader(packet)
 		if err != nil {
-			return err
+			return action, err
 		}
-		if !result.NAT.Required() && !t.natt {
-			return errors.New("tunnel: gateway did not negotiate UDP encapsulation")
+		if payload == ike.PayloadSKF {
+			action.auth, err = session.HandleAuthFragment(packet, now)
+		} else {
+			action.auth, err = session.HandleAuthResponse(packet)
 		}
+		return action, err
+	}
+	if retry, err := session.HandleInitCookie(packet); err == nil {
+		action.cookie = retry
+		return action, nil
+	}
+	result, err := session.HandleInitResponse(packet)
+	if err != nil {
+		return action, err
+	}
+	if !result.NAT.Required() && !input.natt {
+		return action, errors.New("tunnel: gateway did not negotiate UDP encapsulation")
+	}
+	action.floatNATT = true
+	spi, err := freshChildSPI()
+	if err != nil {
+		return action, err
+	}
+	selectors := []ike.TrafficSelector{
+		{StartAddr: netip.MustParseAddr("0.0.0.0"), EndAddr: netip.MustParseAddr("255.255.255.255"), EndPort: 65535},
+		{StartAddr: netip.MustParseAddr("::"), EndAddr: netip.MustParseAddr("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"), EndPort: 65535},
+	}
+	request, err := session.AuthRequest(ike.AuthConfig{LocalID: input.localID, RemoteID: input.selection.Identity, PrivateKey: input.private, RemotePublicKey: input.selection.PublicKey, Child: ike.ChildConfig{InitiatorSPI: spi, LocalSelectors: selectors, RemoteSelectors: selectors}})
+	if err != nil {
+		return action, err
+	}
+	action.authPrepared = true
+	action.requests = [][]byte{request}
+	if len(request) > 1196 {
+		action.requests, err = session.AuthRequestFragments(1196)
+	}
+	return action, err
+}
+
+func (t *gatewayTunnel) applyIKEHandshakeResponse(action ikeHandshakeAction, plan GatewayPlan, now time.Time, err error) error {
+	if action.floatNATT {
 		t.peer = netip.AddrPortFrom(t.peer.Addr(), plan.Selected.Contact.NATTPort)
 		t.natt = true
-		var spi [4]byte
-		for binary.BigEndian.Uint32(spi[:]) < 256 {
-			if _, err := rand.Read(spi[:]); err != nil {
-				return err
-			}
-		}
-		selectors := []ike.TrafficSelector{
-			{StartAddr: netip.MustParseAddr("0.0.0.0"), EndAddr: netip.MustParseAddr("255.255.255.255"), EndPort: 65535},
-			{StartAddr: netip.MustParseAddr("::"), EndAddr: netip.MustParseAddr("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"), EndPort: 65535},
-		}
-		request, err := t.session.AuthRequest(ike.AuthConfig{LocalID: t.localID, RemoteID: plan.Selected.Identity, PrivateKey: t.private, RemotePublicKey: plan.Selected.PublicKey, Child: ike.ChildConfig{InitiatorSPI: binary.BigEndian.Uint32(spi[:]), LocalSelectors: selectors, RemoteSelectors: selectors}})
-		if err != nil {
-			return err
-		}
+	}
+	if action.authPrepared {
 		clear(t.private)
 		t.private = nil
 		t.phase = 2
 		t.observeProgress()
-		requests := [][]byte{request}
-		if len(request) > 1196 {
-			requests, err = t.session.AuthRequestFragments(1196)
-			if err != nil {
-				return err
-			}
-		}
-		return t.sendNew(requests, now)
-	case 2:
-		_, payload, err := ike.DecodeHeader(packet.packet)
-		if err != nil {
-			return err
-		}
-		var result *ike.AuthResult
-		if payload == ike.PayloadSKF {
-			result, err = t.session.HandleAuthFragment(packet.packet, now)
-		} else {
-			result, err = t.session.HandleAuthResponse(packet.packet)
-		}
-		if err != nil {
-			return err
-		}
-		if result == nil {
-			return nil
-		}
-		if err := t.data.install(t.generation, plan, t.peer, result.Child); err != nil {
+	}
+	if err != nil {
+		return err
+	}
+	switch {
+	case action.cookie != nil:
+		t.pending = [][]byte{action.cookie}
+		return t.sendPending(now) // challenge never resets the attempt budget
+	case action.authPrepared:
+		return t.sendNew(action.requests, now)
+	case action.auth != nil:
+		if err := t.data.install(t.generation, plan, t.peer, action.auth.Child); err != nil {
 			t.failed = err
 			return err
 		}
-		t.child, t.phase, t.pending = result.Child, 3, nil
+		t.child, t.phase, t.pending = action.auth.Child, 3, nil
 		t.probeAt, t.keepaliveAt = now.Add(20*time.Second), now.Add(15*time.Second)
 		// This finite bound is replaced only by successful rekey, never traffic.
 		t.expiresAt = now.Add(10 * time.Minute)
@@ -345,9 +376,6 @@ func (t *gatewayTunnel) handle(packet tunnelDatagram, plan GatewayPlan, now time
 		t.child.Keys = ike.ChildKeys{}
 		t.observeProgress()
 		t.observeEvent("authenticated", now, nil)
-		return nil
-	case 3:
-		return t.handleEstablished(packet.packet, plan, now)
 	}
-	return fmt.Errorf("tunnel: inactive session")
+	return nil
 }

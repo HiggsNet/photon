@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/HiggsNet/photon/internal/photonclient/esp"
@@ -46,47 +47,105 @@ func (t *gatewayTunnel) sendSessionReply(session *ike.Initiator, reply []byte) e
 	return nil
 }
 
-func (t *gatewayTunnel) handleEstablished(packet []byte, plan GatewayPlan, now time.Time) error {
+type childSelectorPair struct {
+	local, remote []ike.TrafficSelector
+}
+
+// The request owns selector snapshots. The worker uses only the selected IKE
+// session, whose methods must remain exclusively leased until it returns.
+type establishedExchangeInput struct {
+	session *ike.Initiator
+	old     *ikeOverlap
+	active  childSelectorPair
+	bySPI   map[uint32]childSelectorPair
+}
+
+type establishedExchangeResult struct {
+	header   ike.Header
+	exchange *ike.ExchangeResult
+	refusal  *ike.ChildExchangeError
+	err      error
+}
+
+func (t *gatewayTunnel) establishedExchangeInput(packet []byte) (establishedExchangeInput, error) {
 	session, old, err := t.ikeSession(packet)
 	if err != nil {
-		return err
+		return establishedExchangeInput{}, err
 	}
+	input := establishedExchangeInput{session: session, old: old}
+	if old == nil {
+		input.active = childSelectorPair{slices.Clone(t.child.LocalSelectors), slices.Clone(t.child.RemoteSelectors)}
+		input.bySPI = make(map[uint32]childSelectorPair, len(t.data.sas))
+		for spi, sa := range t.data.sas {
+			input.bySPI[spi] = childSelectorPair{slices.Clone(sa.local), slices.Clone(sa.remote)}
+		}
+	}
+	return input, nil
+}
+
+func prepareEstablishedExchange(input establishedExchangeInput, packet []byte, now time.Time) establishedExchangeResult {
+	session := input.session
 	message, err := session.DecodeExchange(packet, now)
 	if err != nil || message == nil {
-		return err
+		return establishedExchangeResult{err: err}
 	}
 	header := message.Header()
 	var config *ike.ChildExchangeConfig
-	if old != nil {
-		return t.handleOldIKE(old, message, now)
-	}
-	if header.ExchangeType == ike.ExchangeCreateChild && header.Flags&ike.FlagResponse == 0 && !message.IsIKERekey() {
+	if input.old == nil && header.ExchangeType == ike.ExchangeCreateChild && header.Flags&ike.FlagResponse == 0 && !message.IsIKERekey() {
 		offer, err := session.InspectChildExchange(message)
 		if err != nil {
-			return err
+			return establishedExchangeResult{err: err}
 		}
 		spi, err := freshChildSPI()
 		if err != nil {
-			return err
+			return establishedExchangeResult{err: err}
 		}
-		// A peer cannot widen an existing CHILD by asking to rekey it. The
-		// current gateway pin was revalidated before this authenticated offer.
-		local, remote := t.child.LocalSelectors, t.child.RemoteSelectors
-		if old := t.data.sas[offer.RekeySPI]; old != nil {
-			local, remote = old.local, old.remote
+		// A peer may narrow selectors on rekey but cannot widen them.
+		selectors, exists := input.bySPI[offer.RekeySPI]
+		if !exists {
+			selectors = input.active
 		}
-		if err := ike.ValidateTrafficSelectorNarrowing(offer.LocalSelectors, local); err != nil {
-			return err
+		if err := ike.ValidateTrafficSelectorNarrowing(offer.LocalSelectors, selectors.local); err != nil {
+			return establishedExchangeResult{err: err}
 		}
-		if err := ike.ValidateTrafficSelectorNarrowing(offer.RemoteSelectors, remote); err != nil {
-			return err
+		if err := ike.ValidateTrafficSelectorNarrowing(offer.RemoteSelectors, selectors.remote); err != nil {
+			return establishedExchangeResult{err: err}
 		}
 		config = &ike.ChildExchangeConfig{Child: ike.ChildConfig{InitiatorSPI: spi, LocalSelectors: offer.LocalSelectors, RemoteSelectors: offer.RemoteSelectors}, RekeySPI: offer.RekeySPI, DHGroup: offer.DHGroup}
 	}
 	result, err := session.HandleExchange(message, config)
+	prepared := establishedExchangeResult{header: header, exchange: result, err: err}
+	if input.old == nil {
+		errors.As(err, &prepared.refusal)
+	}
+	return prepared
+}
+
+func (t *gatewayTunnel) handleEstablished(packet []byte, plan GatewayPlan, now time.Time) error {
+	input, err := t.establishedExchangeInput(packet)
 	if err != nil {
-		var refusal *ike.ChildExchangeError
-		if errors.As(err, &refusal) {
+		return err
+	}
+	return t.applyEstablishedExchange(input, prepareEstablishedExchange(input, packet, now), plan, now)
+}
+
+func (t *gatewayTunnel) applyEstablishedExchange(input establishedExchangeInput, prepared establishedExchangeResult, plan GatewayPlan, now time.Time) error {
+	result, header, session := prepared.exchange, prepared.header, input.session
+	if old := input.old; old != nil {
+		if prepared.err != nil || result == nil {
+			return prepared.err
+		}
+		if header.Flags&ike.FlagResponse != 0 || result.Deleted != nil && result.Deleted.IKE {
+			old.pending = nil
+		}
+		if result.Reply != nil {
+			return t.sendSessionReply(session, result.Reply)
+		}
+		return nil
+	}
+
+	if prepared.err != nil {
+		if refusal := prepared.refusal; refusal != nil {
 			t.pending = nil
 			if refusal.IKERekey {
 				t.ikeRekeyAt = now.Add(30 * time.Second)
@@ -108,12 +167,29 @@ func (t *gatewayTunnel) handleEstablished(packet []byte, plan GatewayPlan, now t
 			}
 			return nil
 		}
-		return err
+		return prepared.err
+	}
+	if result == nil {
+		return nil // Waiting for additional authenticated fragments.
 	}
 	if header.Flags&ike.FlagResponse != 0 {
 		t.pending = nil
 	}
 	if result.Child != nil {
+		if header.Flags&ike.FlagResponse == 0 {
+			local, remote := t.child.LocalSelectors, t.child.RemoteSelectors
+			if previous := t.data.sas[result.Child.RekeySPI]; previous != nil {
+				local, remote = previous.local, previous.remote
+			}
+			if err := ike.ValidateTrafficSelectorNarrowing(result.Child.Child.LocalSelectors, local); err != nil {
+				t.failed = err
+				return err
+			}
+			if err := ike.ValidateTrafficSelectorNarrowing(result.Child.Child.RemoteSelectors, remote); err != nil {
+				t.failed = err
+				return err
+			}
+		}
 		if err := t.installRekey(result.Child, plan, now); err != nil {
 			t.failed = err
 			return err
@@ -206,6 +282,10 @@ func (t *gatewayTunnel) resolveChild(oldSPI uint32, now time.Time) error {
 }
 
 func (t *gatewayTunnel) activateChild(spi uint32, now time.Time) error {
+	sa := t.data.sas[spi]
+	if sa == nil || sa.child.InitiatorSPI != spi {
+		return errors.New("tunnel: rekey winner not present")
+	}
 	if err := t.data.activate(spi); err != nil {
 		return err
 	}
@@ -215,20 +295,16 @@ func (t *gatewayTunnel) activateChild(spi uint32, now time.Time) error {
 		t.pendingChildSPI = 0
 		return nil
 	}
-	child, ok := t.session.Child(spi)
-	if !ok {
-		return errors.New("tunnel: rekey winner not present")
-	}
-	clear(child.Keys.InitiatorToResponder)
-	clear(child.Keys.ResponderToInitiator)
-	child.Keys = ike.ChildKeys{}
-	t.child = child
+	t.child = sa.child
 	t.pendingChildSPI = 0
 	t.expiresAt, t.rekeyAt = now.Add(10*time.Minute), now.Add(5*time.Minute)
 	return nil
 }
 
 func (t *gatewayTunnel) observeData(result dataplaneCompletion, plan GatewayPlan, now time.Time) {
+	if t.phase != 3 || t.failed != nil || !now.Before(t.ikeExpiresAt) || !now.Before(t.expiresAt) {
+		return
+	}
 	job := result.job
 	if job.sa != nil && job.outbound && job.sa == t.data.active && errors.Is(result.err, esp.ErrSequenceExhausted) && job.ctx.Err() == nil && t.data.current(job.generation, job.sa, plan) {
 		t.rekeyAt = now // exhausted Sender remains fail-closed until fresh CHILD
