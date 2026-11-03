@@ -16,6 +16,8 @@ import (
 // The callbacks in gatewayDataplane execute synchronously and do not retain it.
 type packetAuthorization struct {
 	owner          *gatewayBabelPipeline
+	revisionStore  *corestate.Store
+	revision       corestate.VerifiedRevision
 	plan           GatewayPlan
 	now            time.Time
 	localOrigins   []babel.Origin
@@ -60,5 +62,6 @@ func (p *gatewayBabelPipeline) prepare(config *Config, view corestate.View, plan
 func (p *gatewayBabelPipeline) preparedCurrent(facts *packetAuthorization) bool {
 	// Keep mutable SA/generation checks at use time: observeData may activate a
 	// new CHILD between prepare and delivery in this same owner event.
-	return facts != nil && facts.owner == p && p.attached(facts.now) && p.tunnel.current(facts.plan) && p.tunnel.data.current(p.generation, p.tunnel.data.active, facts.plan)
+	return facts != nil && facts.owner == p &&
+		(facts.revisionStore == nil || facts.revisionStore.VerifiedRevision() == facts.revision) && p.attached(facts.now) && p.tunnel.current(facts.plan) && p.tunnel.data.current(p.generation, p.tunnel.data.active, facts.plan)
 }

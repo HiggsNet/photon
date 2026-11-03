@@ -19,13 +19,35 @@ const packetPolicyMaxAge = time.Minute
 // separately checks current snapshot/config/planner identity, clock rollback,
 // the original DNS hint lifetime and mutable SA/Babel/packet gates every event.
 func packetPolicyDeadline(view corestate.View, now time.Time) time.Time {
-	now = now.Round(0) // wall time; monotonic elapsed time must not hide rollback
-	deadline := now.Add(packetPolicyMaxAge)
+	return packetPolicyDeadlineWithMonotonic(view, now, nil)
+}
+
+// A Mesh worker may publish a second deadline for a delegation whose
+// verification uses the monotonic clock. Packet use must satisfy both clocks.
+func packetPolicyDeadlineWithMonotonic(view corestate.View, now time.Time, monotonic *time.Time) time.Time {
+	wall := now.Round(0)
+	deadline := wall.Add(packetPolicyMaxAge)
 	earlier := func(at time.Time) {
 		at = at.Round(0)
-		if at.After(now) && at.Before(deadline) {
+		if at.After(wall) && at.Before(deadline) {
 			deadline = at
 		}
+	}
+	delegationExpiry := func(at *time.Time) bool {
+		if at == nil {
+			return true
+		}
+		if *at == at.Round(0) {
+			earlier(*at)
+			return true
+		}
+		if monotonic == nil || now == wall {
+			return false
+		}
+		if at.After(now) && (monotonic.IsZero() || at.Before(*monotonic)) {
+			*monotonic = *at
+		}
+		return true
 	}
 	atUnix := func(second int64) {
 		if second != 0 {
@@ -45,7 +67,7 @@ func packetPolicyDeadline(view corestate.View, now time.Time) time.Time {
 		}
 	}
 	if view.State == nil || view.State.Network == nil {
-		return now
+		return wall
 	}
 	for _, zs := range view.State.Network.Zones {
 		if zs == nil {
@@ -64,26 +86,17 @@ func packetPolicyDeadline(view corestate.View, now time.Time) time.Time {
 		for _, delegation := range zs.Delegations {
 			if delegation != nil {
 				authority(&delegation.Authority)
-			}
-			if delegation != nil && delegation.ExpiresAt != nil {
-				// In-memory intents may retain monotonic time. One wall-clock
-				// epoch cannot bound its progress when the wall clock slows;
-				// use ordinary current verification for that rare snapshot.
-				if *delegation.ExpiresAt != delegation.ExpiresAt.Round(0) {
-					return now
+				if !delegationExpiry(delegation.ExpiresAt) {
+					return wall
 				}
-				earlier(*delegation.ExpiresAt)
 			}
 		}
 		for _, proof := range zs.ParentProof {
 			if proof != nil {
 				authority(&proof.Authority)
-			}
-			if proof != nil && proof.ExpiresAt != nil {
-				if *proof.ExpiresAt != proof.ExpiresAt.Round(0) {
-					return now
+				if !delegationExpiry(proof.ExpiresAt) {
+					return wall
 				}
-				earlier(*proof.ExpiresAt)
 			}
 		}
 		// Read the canonical resolver's actual expiration, including its

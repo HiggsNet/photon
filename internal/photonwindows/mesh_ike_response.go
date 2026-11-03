@@ -121,9 +121,13 @@ func (m *meshRuntime) finishIKEResponse(result meshIKEResponseResult) error {
 		clear(request.input.private)
 		return nil
 	}
-	p.responding = nil
 	now := time.Now()
-	plan := m.fresh(p, m.view.read(m.state.Store()), now)
+	plan, pending := m.projectedPlan(p, now)
+	if pending {
+		p.heldResponse = &result
+		return nil
+	}
+	p.responding, p.heldResponse = nil, nil
 	expired := t.phase == 3 && (!now.Before(t.ikeExpiresAt) || !now.Before(t.expiresAt))
 	if err := t.validateIKEIngress(request.packet, plan); err != nil || t.phase != request.phase || expired {
 		clear(request.input.private)
@@ -170,7 +174,10 @@ func (m *meshRuntime) dispatchPendingIKE(p *meshPeer, now time.Time) {
 	if p.responding != nil || len(p.ikeInbox) == 0 {
 		return
 	}
-	plan := m.fresh(p, m.view.read(m.state.Store()), now)
+	plan, pending := m.projectedPlan(p, now)
+	if pending {
+		return
+	}
 	packet := p.ikeInbox[0]
 	if err := t.validateIKEIngress(packet, plan); err != nil {
 		m.rejectIKE(p, now, err)

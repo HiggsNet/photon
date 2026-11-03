@@ -18,14 +18,15 @@ type meshIKEStart struct {
 }
 
 type meshIKEStartResult struct {
-	request   *meshIKEStart
-	revision  corestate.VerifiedRevision
-	published bool
-	local     LocalTransportIdentity
-	plan      GatewayPlan
-	binding   [32]byte
-	start     preparedIKEStart
-	err       error
+	request                 *meshIKEStart
+	revision                corestate.VerifiedRevision
+	at, deadline, monotonic time.Time
+	published               bool
+	local                   LocalTransportIdentity
+	plan                    GatewayPlan
+	binding                 [32]byte
+	start                   preparedIKEStart
+	err                     error
 }
 
 func (m *meshRuntime) attempt(p *meshPeer) {
@@ -74,7 +75,7 @@ func (m *meshRuntime) prepareIKEAttempt(ctx context.Context, request *meshIKESta
 	}
 	store := m.state.Store()
 	view, now := store.ReadView(), time.Now()
-	result := meshIKEStartResult{request: request, revision: view.Revision}
+	result := meshIKEStartResult{request: request, revision: view.Revision, at: now.Round(0)}
 	result.plan = RevalidateGatewayPlan(&request.config, view, request.hint, now)
 	if result.plan.Selected == nil {
 		return result
@@ -91,6 +92,7 @@ func (m *meshRuntime) prepareIKEAttempt(ctx context.Context, request *meshIKESta
 		result.err = ctx.Err()
 	}
 	if result.err == nil {
+		result.deadline = packetPolicyDeadlineWithMonotonic(view, now, &result.monotonic)
 		result.start, result.err = prepareIKEStart(result.plan, request.endpoint)
 	}
 	return result
@@ -110,17 +112,15 @@ func (m *meshRuntime) finishIKEStart(result meshIKEStartResult) {
 		return
 	}
 	now := time.Now()
-	current := m.fresh(p, m.view.read(m.state.Store()), now)
-	if current.Selected == nil || !dataplaneGatewayEqual(*current.Selected, *result.plan.Selected) {
+	if !packetGatewayHintCurrent(p.plan, now) {
 		return
 	}
-	if result.err == nil {
-		binding, err := localTransportAuthorization(&p.config, m.view.read(m.state.Store()), now)
-		if err != nil || binding != result.binding {
-			return
-		}
+	wall := now.Round(0)
+	if result.err == nil && (wall.Before(result.at) || !wall.Before(result.deadline) ||
+		!result.monotonic.IsZero() && !now.Before(result.monotonic)) {
+		return
 	}
-	if err := p.tunnel.installIKEStart(current, result.local.ID, result.local.PrivateKey, result.start, now, result.err); err != nil {
+	if err := p.tunnel.installIKEStart(result.plan, result.local.ID, result.local.PrivateKey, result.start, now, result.err); err != nil {
 		m.stopPeer(p, err.Error())
 		return
 	}

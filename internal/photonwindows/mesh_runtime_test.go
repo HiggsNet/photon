@@ -203,10 +203,17 @@ func meshRouteFixture(t *testing.T) (*meshRuntime, *gatewayPatternFixture) {
 		put(entry.peer, key, routing.RecordTypeRouteAnnouncement, routing.RouteAnnouncementRecord{Version: 1, Prefix: entry.prefix, Active: true})
 	}
 	// Local transport pin is signed exactly as for the peer fixtures.
-	for _, k := range []string{ipsec.RecordKeyProfile, ipsec.RecordKeyTransportKey, ipsec.RecordKeyAddresses, ipsec.RecordKeyPorts, ipsec.OverlayIntentRecordKey("main")} {
+	for _, k := range []string{ipsec.RecordKeyProfile, ipsec.RecordKeyTransportKey, ipsec.RecordKeyAddresses, ipsec.RecordKeyPorts} {
 		r := f.view.State.Network.Zones["node-a.catofes."].Records[k]
 		// The profile's identity is independent of its zone signing key.
 		put(f.config.ManagedZone, k, r.Type, jsonValue(t, r.Value))
+	}
+	for _, path := range []zone.ZonePath{f.config.ManagedZone, "node-a.catofes.", "node-b.catofes."} {
+		put(path, ipsec.OverlayIntentRecordKey("main"), ipsec.RecordTypeOverlayIntent, ipsec.OverlayIntentRecord{
+			Version: 1, OverlayID: "main", Provider: ipsec.ProviderStrongSwan,
+			PathKeys:      []string{ipsec.DefaultPathKey},
+			TunnelAddress: ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6},
+		})
 	}
 	socket, err := openPacketSockets(t.Context(), "127.0.0.1:0")
 	if err != nil {
@@ -234,7 +241,11 @@ func meshRouteFixture(t *testing.T) (*meshRuntime, *gatewayPatternFixture) {
 		if err := p.tunnel.data.install(p.tunnel.generation, p.plan, endpoint, child); err != nil {
 			t.Fatal(err)
 		}
-		p.leaf.pipeline, err = newGatewayBabelPipeline(p.tunnel, &memoryPacketDevice{}, netip.MustParseAddr("fe80::1"), netip.MustParseAddr("fe80::2"), [8]byte{1}, []netip.Addr{netip.MustParseAddr("10.9.0.1")})
+		local, remote, err := leafLinkLocalAddresses(&p.config, f.view, p.plan, f.now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.leaf.pipeline, err = newGatewayBabelPipeline(p.tunnel, &memoryPacketDevice{}, local, remote, [8]byte{1}, []netip.Addr{netip.MustParseAddr("10.9.0.1")})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -334,6 +345,15 @@ func TestMeshDecryptsBothPeersButNeverRelaysTheirTraffic(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.state = &State{common: store}
+	m.policy = newMeshPolicyWorker(store)
+	var inputs meshPolicyInputs
+	for _, p := range m.ordered() {
+		if _, pending := m.policy.project(p, f.view.Revision, f.now); !pending {
+			t.Fatal("initial policy was not queued")
+		}
+		request := <-m.policy.requests
+		m.policy.finish(meshPolicyResult{request: request, projection: inputs.project(request, f.view, f.now)}, f.view.Revision, f.now)
+	}
 	for i, p := range m.ordered() {
 		device := p.leaf.pipeline.device.(*memoryPacketDevice)
 		child := dataplaneChild(uint32(500 + i))
