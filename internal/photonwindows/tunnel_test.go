@@ -16,7 +16,7 @@ import (
 func TestTunnelSequenceExhaustionSchedulesFreshChild(t *testing.T) {
 	data, plan, _, _ := dataplaneFixture(t)
 	now := time.Now()
-	tunnel := gatewayTunnel{data: data, rekeyAt: now.Add(time.Minute)}
+	tunnel := gatewayTunnel{data: data, phase: 3, rekeyAt: now.Add(time.Minute), ikeExpiresAt: now.Add(time.Hour), expiresAt: now.Add(time.Hour)}
 	result := dataplaneCompletion{job: dataplaneJob{ctx: data.generationCtx, generation: data.generation, sa: data.active, outbound: true}, err: esp.ErrSequenceExhausted}
 	stale := result
 	stale.job.generation--

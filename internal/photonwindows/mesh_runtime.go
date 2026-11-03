@@ -33,6 +33,8 @@ type meshRuntime struct {
 	onPublication    func()
 	ikeStarts        chan *meshIKEStart
 	ikePrepared      chan meshIKEStartResult
+	ikeResponses     chan *meshIKEResponse
+	ikeResponded     chan meshIKEResponseResult
 	initial, maximum time.Duration
 	id               [8]byte
 	nextIntent       time.Time
@@ -40,21 +42,25 @@ type meshRuntime struct {
 }
 
 type meshPeer struct {
-	config   Config
-	plan     GatewayPlan
-	tunnel   *gatewayTunnel
-	leaf     *leafRuntime
-	backoff  time.Duration
-	next     time.Time
-	contact  int
-	rejected string
-	starting *meshIKEStart
+	config     Config
+	plan       GatewayPlan
+	tunnel     *gatewayTunnel
+	leaf       *leafRuntime
+	backoff    time.Duration
+	next       time.Time
+	contact    int
+	rejected   string
+	starting   *meshIKEStart
+	responding *meshIKEResponse
+	ikeInbox   []tunnelDatagram
 }
 
 func newMeshRuntime(ctx context.Context, config *Config, state *State, socket *packetSockets, factory packetDeviceFactory, logger *slog.Logger, onPublication func()) *meshRuntime {
 	m := &meshRuntime{ctx: ctx, config: config, state: state, socket: socket, logger: logger, peers: make(map[zone.ZonePath]*meshPeer), byData: make(map[*gatewayDataplane]*meshPeer), device: newMeshDevice(ctx, factory), opened: make(chan leafOpenResult, 64), jobs: make(chan dataplaneJob, dataplaneQueueSize), onPublication: onPublication}
 	m.ikeStarts = make(chan *meshIKEStart, 4)
 	m.ikePrepared = make(chan meshIKEStartResult)
+	m.ikeResponses = make(chan *meshIKEResponse, 4)
+	m.ikeResponded = make(chan meshIKEResponseResult)
 	m.initial, m.maximum = config.Reconnect.InitialBackoff, config.Reconnect.MaxBackoff
 	if m.initial <= 0 {
 		m.initial = time.Second
@@ -151,6 +157,7 @@ func (m *meshRuntime) fresh(p *meshPeer, view corestate.View, now time.Time) Gat
 }
 
 func (m *meshRuntime) stopPeer(p *meshPeer, reason string) {
+	p.responding, p.ikeInbox = nil, nil
 	if p.starting != nil {
 		p.starting.cancel()
 		p.starting = nil
@@ -249,9 +256,17 @@ func (m *meshRuntime) tick() error {
 	now := time.Now()
 	starts := 0
 	for _, p := range m.ordered() {
-		if p.tunnel.phase != 0 {
-			if err := p.tunnel.tick(m.fresh(p, m.view.read(m.state.Store()), now), now); err != nil {
+		if p.responding != nil && p.tunnel.phase == 3 &&
+			(!now.Before(p.tunnel.ikeExpiresAt) || !now.Before(p.tunnel.expiresAt)) {
+			m.stopPeer(p, "tunnel hard lifetime reached while processing IKE")
+		}
+		if p.tunnel.phase != 0 && p.responding == nil {
+			if err := p.tunnel.tickWithScheduler(m.fresh(p, m.view.read(m.state.Store()), now), now, func(request ikeTimerRequest) {
+				m.scheduleIKETimer(p, request, now)
+			}); err != nil {
 				m.stopPeer(p, err.Error())
+			} else {
+				m.dispatchPendingIKE(p, now)
 			}
 		}
 		// Bound work per owner turn without serializing peer lifetimes. A dead
@@ -297,14 +312,9 @@ func (m *meshRuntime) handleIKE(packet tunnelDatagram) error {
 	if p == nil {
 		return nil
 	}
-	before := p.tunnel.phase
-	if err := p.tunnel.handle(packet, m.fresh(p, m.view.read(m.state.Store()), time.Now()), time.Now()); err != nil {
-		m.logger.Debug("tunnel_packet_rejected", "peer", p.config.Gateway.AllowedZones[0], "error", err)
-	} else if before != 3 && p.tunnel.phase == 3 {
-		p.backoff = m.initial
-		m.logger.Info("tunnel_authenticated", "peer", p.config.Gateway.AllowedZones[0], "child_installed", true)
-		return m.reconcile()
-	}
+	now := time.Now()
+	plan := m.fresh(p, m.view.read(m.state.Store()), now)
+	m.enqueueIKEResponse(p, packet, plan, now)
 	return nil
 }
 
