@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -142,17 +143,15 @@ func TestRawICMProberFallsBackWhenNamespaceWorkerCannotStart(t *testing.T) {
 func TestRawICMPNamespaceWorkerRunsDifferentSocketsConcurrently(t *testing.T) {
 	started := make(chan string, 2)
 	release := make(chan struct{})
-	var nextFD atomic.Int32
 	var active atomic.Int32
 	var maxActive atomic.Int32
 	worker := &rawICMPNamespaceWorker{
 		jobs: make(chan rawICMPJob),
 		done: make(chan struct{}),
-		openSocket: func(rawSocketKey) (int, uint32, error) {
-			return int(nextFD.Add(1)), 0, nil
+		openSocket: func(rawSocketKey) (*rawICMPSocket, error) {
+			return newRawICMPSocket(-1, 0, func() error { return nil }), nil
 		},
-		closeSocket: func(int) error { return nil },
-		probeSocket: func(_ rawICMPJob, key rawSocketKey, _ int, _ uint32) rawProbeResult {
+		probeSocket: func(_ rawICMPJob, key rawSocketKey, _ *rawICMPSocket) rawProbeResult {
 			current := active.Add(1)
 			for {
 				previous := maxActive.Load()
@@ -206,12 +205,12 @@ func TestRawICMPNamespaceWorkerRunsDifferentSocketsConcurrently(t *testing.T) {
 }
 
 func TestRawICMPSocketSerializesSharedSocket(t *testing.T) {
-	socket := newRawICMPSocket(1, 0)
+	socket := newRawICMPSocket(-1, 0, nil)
 	started := make(chan struct{}, 2)
 	release := make(chan struct{})
 	var active atomic.Int32
 	var maxActive atomic.Int32
-	run := func(rawICMPJob, rawSocketKey, int, uint32) rawProbeResult {
+	run := func(rawICMPJob, rawSocketKey, *rawICMPSocket) rawProbeResult {
 		current := active.Add(1)
 		for {
 			previous := maxActive.Load()
@@ -254,9 +253,10 @@ func TestRawICMPSocketSerializesSharedSocket(t *testing.T) {
 func TestWaitRawICMPReturnsAsSoonAsBurstCompletes(t *testing.T) {
 	started := time.Now()
 	calls := 0
-	err := waitRawICMP(context.Background(), -1, started.Add(time.Second), func() (bool, error) {
+	socket := &rawICMPSocket{}
+	err := socket.wait(context.Background(), started.Add(time.Second), func() bool {
 		calls++
-		return true, nil
+		return true
 	})
 	if err != nil {
 		t.Fatalf("waitRawICMP: %v", err)
@@ -269,6 +269,41 @@ func TestWaitRawICMPReturnsAsSoonAsBurstCompletes(t *testing.T) {
 	}
 }
 
+func TestRawICMPWaitCancellationKeepsSocketReusable(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+	conn, err := reader.SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	socket := &rawICMPSocket{file: reader, conn: conn}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	err = socket.wait(ctx, time.Now().Add(time.Second), func() bool {
+		calls++
+		if calls == 2 {
+			cancel()
+		}
+		return false
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled wait: got %v, want context.Canceled", err)
+	}
+
+	deadline := time.Now().Add(20 * time.Millisecond)
+	if err := socket.wait(context.Background(), deadline, func() bool { return false }); err != nil {
+		t.Fatalf("reused wait: %v", err)
+	}
+	if time.Now().Before(deadline) {
+		t.Fatal("reused wait returned before its deadline")
+	}
+}
+
 func TestRawICMPNamespaceWorkerFallsBackAndRateLimitsStaleSocketReopen(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	var opens atomic.Int32
@@ -277,14 +312,14 @@ func TestRawICMPNamespaceWorkerFallsBackAndRateLimitsStaleSocketReopen(t *testin
 	worker := &rawICMPNamespaceWorker{
 		jobs: make(chan rawICMPJob),
 		done: make(chan struct{}),
-		openSocket: func(rawSocketKey) (int, uint32, error) {
-			return int(opens.Add(1)), 42, nil
+		openSocket: func(rawSocketKey) (*rawICMPSocket, error) {
+			opens.Add(1)
+			return newRawICMPSocket(-1, 42, func() error {
+				closes.Add(1)
+				return nil
+			}), nil
 		},
-		closeSocket: func(int) error {
-			closes.Add(1)
-			return nil
-		},
-		probeSocket: func(_ rawICMPJob, _ rawSocketKey, _ int, _ uint32) rawProbeResult {
+		probeSocket: func(_ rawICMPJob, _ rawSocketKey, _ *rawICMPSocket) rawProbeResult {
 			if probes.Add(1) == 1 {
 				return rawProbeResult{
 					err:         fmt.Errorf("send raw ICMP echo: %w", unix.ENETUNREACH),

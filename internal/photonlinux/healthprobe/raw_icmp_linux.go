@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -172,9 +173,8 @@ type rawICMPNamespaceWorker struct {
 	netns       string
 	jobs        chan rawICMPJob
 	done        chan struct{}
-	openSocket  func(rawSocketKey) (int, uint32, error)
-	closeSocket func(int) error
-	probeSocket func(rawICMPJob, rawSocketKey, int, uint32) rawProbeResult
+	openSocket  func(rawSocketKey) (*rawICMPSocket, error)
+	probeSocket func(rawICMPJob, rawSocketKey, *rawICMPSocket) rawProbeResult
 	now         func() time.Time
 	mu          sync.RWMutex
 	once        sync.Once
@@ -186,7 +186,6 @@ func newRawICMPWorker(netns string) (rawICMPWorker, error) {
 		jobs:        make(chan rawICMPJob),
 		done:        make(chan struct{}),
 		openSocket:  openRawICMPSocket,
-		closeSocket: unix.Close,
 		probeSocket: probeRawICMP,
 		now:         time.Now,
 	}
@@ -254,11 +253,7 @@ func (w *rawICMPNamespaceWorker) run(ready chan<- error) {
 			sockets[key] = slot
 		}
 		socket, err := slot.acquire(w.now(), job.cfg.Interval, func() (*rawICMPSocket, error) {
-			fd, zoneID, err := w.openSocket(key)
-			if err != nil {
-				return nil, err
-			}
-			return newRawICMPSocket(fd, zoneID, w.closeSocket), nil
+			return w.openSocket(key)
 		})
 		if err != nil {
 			job.result <- rawProbeResult{err: err, unavailable: true}
@@ -414,16 +409,14 @@ type rawICMPSocket struct {
 	fd          int
 	zoneID      uint32
 	ready       chan struct{}
-	closeSocket func(int) error
+	closeSocket func() error
+	file        *os.File
+	conn        syscall.RawConn
 	closeOnce   sync.Once
 	staleErr    error
 }
 
-func newRawICMPSocket(fd int, zoneID uint32, closers ...func(int) error) *rawICMPSocket {
-	closeSocket := unix.Close
-	if len(closers) > 0 && closers[0] != nil {
-		closeSocket = closers[0]
-	}
+func newRawICMPSocket(fd int, zoneID uint32, closeSocket func() error) *rawICMPSocket {
 	socket := &rawICMPSocket{
 		fd:          fd,
 		zoneID:      zoneID,
@@ -437,7 +430,7 @@ func newRawICMPSocket(fd int, zoneID uint32, closers ...func(int) error) *rawICM
 func (s *rawICMPSocket) probe(
 	job rawICMPJob,
 	key rawSocketKey,
-	run func(rawICMPJob, rawSocketKey, int, uint32) rawProbeResult,
+	run func(rawICMPJob, rawSocketKey, *rawICMPSocket) rawProbeResult,
 ) rawProbeResult {
 	select {
 	case <-s.ready:
@@ -451,7 +444,7 @@ func (s *rawICMPSocket) probe(
 			unavailable: true,
 		}
 	}
-	result := run(job, key, s.fd, s.zoneID)
+	result := run(job, key, s)
 	if result.reopen {
 		s.staleErr = result.err
 		s.close()
@@ -461,7 +454,7 @@ func (s *rawICMPSocket) probe(
 
 func (s *rawICMPSocket) close() {
 	s.closeOnce.Do(func() {
-		_ = s.closeSocket(s.fd)
+		_ = s.closeSocket()
 	})
 }
 
@@ -475,7 +468,7 @@ func rawSocketKeyForTarget(target ProbeTarget) rawSocketKey {
 	return key
 }
 
-func probeRawICMP(job rawICMPJob, key rawSocketKey, fd int, zoneID uint32) rawProbeResult {
+func probeRawICMP(job rawICMPJob, key rawSocketKey, socket *rawICMPSocket) rawProbeResult {
 	burst := job.cfg.Burst
 	if burst <= 0 {
 		burst = 3
@@ -493,11 +486,11 @@ func probeRawICMP(job rawICMPJob, key rawSocketKey, fd int, zoneID uint32) rawPr
 	var sent int
 	var received int
 	var lastRTT time.Duration
-	drain := func() (bool, error) {
+	drain := func() bool {
 		for {
-			seq, ok := readRawICMPReply(fd, key.family, job.id)
+			seq, ok := readRawICMPReply(socket.fd, key.family, job.id)
 			if !ok {
-				return sent == burst && len(pending) == 0, nil
+				return sent == burst && len(pending) == 0
 			}
 			if sent, known := pending[seq]; known {
 				delete(pending, seq)
@@ -509,12 +502,12 @@ func probeRawICMP(job rawICMPJob, key rawSocketKey, fd int, zoneID uint32) rawPr
 	start := time.Now()
 	for i := 0; i < burst; i++ {
 		nextSend := start.Add(time.Duration(i) * pingBurstInterval)
-		if err := waitRawICMP(job.ctx, fd, nextSend, drain); err != nil {
+		if err := socket.wait(job.ctx, nextSend, drain); err != nil {
 			return rawProbeResult{sent: sent, received: received, lastRTT: lastRTT, err: err}
 		}
 		sequence := uint16(job.seq.Add(1))
 		packet := makeICMPEchoPacket(key.family, job.id, sequence)
-		if err := unix.Sendto(fd, packet, 0, rawDestination(job.target, key.family, zoneID)); err != nil {
+		if err := unix.Sendto(socket.fd, packet, 0, rawDestination(job.target, key.family, socket.zoneID)); err != nil {
 			reopen := shouldReopenRawICMPSocket(err)
 			return rawProbeResult{
 				sent:        sent,
@@ -528,7 +521,7 @@ func probeRawICMP(job rawICMPJob, key rawSocketKey, fd int, zoneID uint32) rawPr
 		sent++
 		pending[sequence] = time.Now()
 	}
-	if err := waitRawICMP(job.ctx, fd, deadline, drain); err != nil {
+	if err := socket.wait(job.ctx, deadline, drain); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			return rawProbeResult{sent: sent, received: received, lastRTT: lastRTT}
 		}
@@ -543,7 +536,29 @@ func shouldReopenRawICMPSocket(err error) bool {
 		errors.Is(err, unix.EADDRNOTAVAIL)
 }
 
-func openRawICMPSocket(key rawSocketKey) (int, uint32, error) {
+func openRawICMPSocket(key rawSocketKey) (*rawICMPSocket, error) {
+	fd, zoneID, err := openRawICMPFD(key)
+	if err != nil {
+		return nil, err
+	}
+	// NewFile takes ownership and registers the nonblocking descriptor
+	// with Go's network poller. The socket stays in its original namespace.
+	file := os.NewFile(uintptr(fd), "raw ICMP")
+	conn, err := file.SyscallConn()
+	if err == nil {
+		err = file.SetReadDeadline(time.Time{})
+	}
+	if err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("register raw ICMP socket with Go poller: %w", err)
+	}
+	socket := newRawICMPSocket(fd, zoneID, file.Close)
+	socket.file = file
+	socket.conn = conn
+	return socket, nil
+}
+
+func openRawICMPFD(key rawSocketKey) (int, uint32, error) {
 	protocol := unix.IPPROTO_ICMP
 	if key.family == unix.AF_INET6 {
 		protocol = unix.IPPROTO_ICMPV6
@@ -666,6 +681,9 @@ func readRawICMPReply(fd, family int, id uint16) (uint16, bool) {
 	buf := make([]byte, 1500)
 	for {
 		n, _, err := unix.Recvfrom(fd, buf, unix.MSG_DONTWAIT)
+		if err == unix.EINTR {
+			continue
+		}
 		if err != nil || n == 0 {
 			return 0, false
 		}
@@ -696,28 +714,41 @@ func parseRawICMPReply(packet []byte, family int, id uint16) (uint16, bool) {
 	return binary.BigEndian.Uint16(packet[6:8]), true
 }
 
-func waitRawICMP(ctx context.Context, fd int, until time.Time, drain func() (bool, error)) error {
-	for {
-		done, err := drain()
-		if err != nil {
-			return err
-		}
-		if done {
-			return nil
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		remaining := time.Until(until)
-		if remaining <= 0 {
-			return nil
-		}
-		milliseconds := max(int((remaining+time.Millisecond-1)/time.Millisecond), 1)
-		_, err = unix.Poll([]unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}, milliseconds)
-		if err != nil && !errors.Is(err, syscall.EINTR) {
-			return err
-		}
+func (s *rawICMPSocket) wait(ctx context.Context, until time.Time, drain func() bool) error {
+	if drain() {
+		return nil
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !time.Now().Before(until) {
+		return nil
+	}
+	if err := s.file.SetReadDeadline(until); err != nil {
+		return err
+	}
+	// Join the cancellation callback before the next wait on this cached
+	// socket so it cannot overwrite the next read deadline.
+	canceled := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		_ = s.file.SetReadDeadline(time.Now())
+		close(canceled)
+	})
+	err := s.conn.Read(func(uintptr) bool {
+		return drain()
+	})
+	if !stop() {
+		<-canceled
+	}
+	_ = s.file.SetReadDeadline(time.Time{})
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		drain()
+		return nil
+	}
+	return err
 }
 
 func netNSPath(netns string) string {
