@@ -152,6 +152,10 @@ func (r *leafRuntime) reconcile(ctx context.Context, config *Config, view corest
 		verifier = r.pipeline.verifier
 	}
 	want, err := desiredLeafAttachmentWithVerifier(config, view, plan, tunnel, id, now, verifier)
+	return r.reconcilePrepared(ctx, config, view.Revision, tunnel, id, now, want, err)
+}
+
+func (r *leafRuntime) reconcilePrepared(ctx context.Context, config *Config, revision corestate.VerifiedRevision, tunnel *gatewayTunnel, id [8]byte, now time.Time, want leafAttachment, err error) error {
 	if err != nil {
 		if !errors.Is(err, errLeafHostAssignmentUnavailable) && !errors.Is(err, errLeafHostAnnouncementUnavailable) {
 			return errors.Join(err, r.stop())
@@ -199,7 +203,7 @@ func (r *leafRuntime) reconcile(ctx context.Context, config *Config, view corest
 	go func() {
 		defer r.openWG.Done()
 		device, err := r.factory(openCtx, config.Wintun.AdapterName, slices.Clone(want.addresses), slices.Clone(want.routes), uint32(config.Wintun.MTU), 100)
-		result := leafOpenResult{owner: r, request: request, revision: view.Revision, want: want, device: device, err: err}
+		result := leafOpenResult{owner: r, request: request, revision: revision, want: want, device: device, err: err}
 		if openCtx.Err() != nil {
 			if device != nil {
 				_ = device.Close()
@@ -218,6 +222,11 @@ func (r *leafRuntime) reconcile(ctx context.Context, config *Config, view corest
 }
 
 func (r *leafRuntime) complete(ctx context.Context, config *Config, view corestate.View, plan GatewayPlan, tunnel *gatewayTunnel, id [8]byte, now time.Time, result leafOpenResult) error {
+	want, err := desiredLeafAttachment(config, view, plan, tunnel, id, now)
+	return r.completePrepared(ctx, config, view.Revision, tunnel, id, now, result, want, err)
+}
+
+func (r *leafRuntime) completePrepared(ctx context.Context, config *Config, revision corestate.VerifiedRevision, tunnel *gatewayTunnel, id [8]byte, now time.Time, result leafOpenResult, want leafAttachment, err error) error {
 	if result.request != r.request {
 		if result.device != nil {
 			return result.device.Close()
@@ -225,8 +234,7 @@ func (r *leafRuntime) complete(ctx context.Context, config *Config, view coresta
 		return nil
 	}
 	r.pending = false
-	want, err := desiredLeafAttachment(config, view, plan, tunnel, id, now)
-	if result.revision != view.Revision || err != nil || !want.equal(result.want) {
+	if result.revision != revision || err != nil || !want.equal(result.want) {
 		if result.device != nil {
 			return errors.Join(err, result.device.Close())
 		}
@@ -330,6 +338,11 @@ func (r *leafRuntime) readySnapshot(config *Config, view corestate.View, plan Ga
 	if !p.prepareSnapshotInto(config, view, plan, now, &facts) {
 		return false
 	}
+	return r.readyPrepared(&facts)
+}
+
+func (r *leafRuntime) readyPrepared(facts *packetAuthorization) bool {
+	p, now := r.pipeline, facts.now
 	for _, route := range p.leaf.Candidates(now, facts.authorizeRoute) {
 		for _, host := range facts.hosts {
 			source := host.Addr()

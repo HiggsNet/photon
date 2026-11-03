@@ -88,7 +88,7 @@ func (t *gatewayTunnel) tickOldIKE(now time.Time) {
 			if err != nil {
 				break
 			}
-			if err := t.socket.WriteTunnel(t.generation, wire, t.peer); err != nil {
+			if err := t.writeIKE(wire); err != nil {
 				break
 			}
 		}

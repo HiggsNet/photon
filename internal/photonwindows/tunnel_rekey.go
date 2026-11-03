@@ -40,7 +40,7 @@ func (t *gatewayTunnel) sendSessionReply(session *ike.Initiator, reply []byte) e
 		if err != nil {
 			return err
 		}
-		if err := t.socket.WriteTunnel(t.generation, wire, t.peer); err != nil {
+		if err := t.writeIKE(wire); err != nil {
 			return err
 		}
 	}

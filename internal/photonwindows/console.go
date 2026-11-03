@@ -39,7 +39,7 @@ type Daemon struct {
 	runCancel        context.CancelFunc
 	runErr           error
 	rebind           chan rebindRequest
-	plans            chan chan GatewayPlan
+	plans            chan chan gatewayPlanSample
 	done             chan struct{}
 	planGateway      func(context.Context, *Config, corestate.View, time.Time) GatewayPlan
 	deviceFactory    packetDeviceFactory
@@ -53,7 +53,12 @@ type rebindRequest struct {
 }
 
 func NewDaemon(config *Config, logger *slog.Logger) *Daemon {
-	return &Daemon{config: config, logger: logger, ready: make(chan struct{}), observations: make(chan meshObservationRequest), rebind: make(chan rebindRequest), plans: make(chan chan GatewayPlan), done: make(chan struct{}), planGateway: PlanGateway, deviceFactory: openConfiguredPacketDevice, watchResume: watchPowerResume, resolveBootstrap: resolveGossipBootstrap}
+	return &Daemon{config: config, logger: logger, ready: make(chan struct{}), observations: make(chan meshObservationRequest), rebind: make(chan rebindRequest), plans: make(chan chan gatewayPlanSample), done: make(chan struct{}), planGateway: PlanGateway, deviceFactory: openConfiguredPacketDevice, watchResume: watchPowerResume, resolveBootstrap: resolveGossipBootstrap}
+}
+
+type gatewayPlanSample struct {
+	plan  GatewayPlan
+	store *corestate.Store
 }
 
 // GatewayPlan returns a detached, freshly revalidated connection plan. It does
@@ -61,7 +66,7 @@ func NewDaemon(config *Config, logger *slog.Logger) *Daemon {
 func (d *Daemon) GatewayPlan(ctx context.Context) (GatewayPlan, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	result := make(chan GatewayPlan, 1)
+	result := make(chan gatewayPlanSample, 1)
 	select {
 	case d.plans <- result:
 	case <-d.done:
@@ -70,8 +75,8 @@ func (d *Daemon) GatewayPlan(ctx context.Context) (GatewayPlan, error) {
 		return GatewayPlan{}, ctx.Err()
 	}
 	select {
-	case plan := <-result:
-		return plan, nil
+	case sample := <-result:
+		return RevalidateGatewayPlan(d.config, sample.store.ReadView(), sample.plan, time.Now()), nil
 	case <-d.done:
 		return GatewayPlan{}, net.ErrClosed
 	case <-ctx.Done():
@@ -234,7 +239,9 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				return
 			case request := <-planRequests:
 				bootstrap, bootstrapErr := d.resolveBootstrap(request.ctx, config, listenAddr)
-				plan := d.planGateway(request.ctx, config, state.Store().ReadView(), time.Now())
+				view := state.Store().ReadView()
+				plan := d.planGateway(request.ctx, config, view, time.Now())
+				plan = RevalidateGatewayPlan(config, view, plan, time.Now())
 				select {
 				case plans <- planResult{request.generation, plan, bootstrap, bootstrapErr}:
 				case <-plannerCtx.Done():
@@ -267,6 +274,11 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		defer close(ikeDone)
 		mesh.runIKEStarts(ikeCtx)
 	}()
+	ikeWritesDone := make(chan struct{})
+	go func() {
+		defer close(ikeWritesDone)
+		mesh.runIKEWrites(ikeCtx)
+	}()
 	ikeResponsesDone := make(chan struct{})
 	go func() {
 		defer close(ikeResponsesDone)
@@ -276,7 +288,19 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		stopIKE()
 		<-ikeDone
 		<-ikeResponsesDone
+		<-ikeWritesDone
 	}()
+	policyCtx, stopPolicy := context.WithCancel(ctx)
+	policyDone := make(chan struct{})
+	go func() {
+		defer close(policyDone)
+		mesh.policy.run(policyCtx)
+	}()
+	defer func() {
+		stopPolicy()
+		<-policyDone
+	}()
+
 	var lastReady bool
 	observeReady := func() {
 		ready := mesh.ready()
@@ -309,7 +333,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	gossipPublished := make(chan struct{}, 1)
 	gossipDone := make(chan error, 1)
 	go func(initial map[string]*net.UDPAddr) {
-		gossipDone <- runMeshGossip(gossipCtx, config, state.Store(), driver, transport, logger, initial, gossipRefresh, gossipPublished)
+		gossipDone <- runMeshGossip(gossipCtx, config, state, driver, transport, logger, initial, gossipRefresh, mesh.leafIntents, gossipPublished)
 	}(bootstrap)
 	gossipExited := false
 	defer func() {
@@ -349,9 +373,20 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		case <-ctx.Done():
 			return nil
 		case result := <-d.plans:
-			result <- RevalidateGatewayPlan(config, state.Store().ReadView(), lastPlan, time.Now())
+			result <- gatewayPlanSample{lastPlan, state.Store()}
 		case sampled := <-observationSnapshots:
 			sampled <- mesh.observationSnapshot(lastPlan)
+		case result := <-mesh.policy.results:
+			mesh.policy.finish(result, state.Store().VerifiedRevision(), time.Now())
+			if held := result.request.peer.heldResponse; held != nil {
+				if err := mesh.finishIKEResponse(*held); err != nil {
+					return err
+				}
+			}
+		case failure := <-mesh.ikeWriteFailures:
+			if peer := mesh.findGeneration(failure.generation); peer != nil {
+				mesh.stopPeer(peer, failure.err.Error())
+			}
 		case prepared := <-mesh.ikePrepared:
 			mesh.finishIKEStart(prepared)
 		case response := <-mesh.ikeResponded:
@@ -391,7 +426,6 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				bootstrap = result.bootstrap
 				refreshGossip()
 			}
-			result.plan = RevalidateGatewayPlan(config, state.Store().ReadView(), result.plan, time.Now())
 			// Revision/time are diagnostic metadata, not a change in the selected
 			// target or authorization. Never report a planned target as a live SA.
 			comparable, previous := result.plan, lastPlan

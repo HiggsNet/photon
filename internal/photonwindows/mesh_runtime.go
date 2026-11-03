@@ -35,24 +35,29 @@ type meshRuntime struct {
 	ikePrepared      chan meshIKEStartResult
 	ikeResponses     chan *meshIKEResponse
 	ikeResponded     chan meshIKEResponseResult
+	ikeWrites        chan meshIKEWrite
+	ikeWriteFailures chan meshIKEWriteFailure
 	initial, maximum time.Duration
 	id               [8]byte
 	nextIntent       time.Time
-	view             packetStateView
+	leafIntents      chan struct{}
+	policy           *meshPolicyWorker
 }
 
 type meshPeer struct {
-	config     Config
-	plan       GatewayPlan
-	tunnel     *gatewayTunnel
-	leaf       *leafRuntime
-	backoff    time.Duration
-	next       time.Time
-	contact    int
-	rejected   string
-	starting   *meshIKEStart
-	responding *meshIKEResponse
-	ikeInbox   []tunnelDatagram
+	policy       meshPeerPolicy
+	config       Config
+	plan         GatewayPlan
+	tunnel       *gatewayTunnel
+	leaf         *leafRuntime
+	backoff      time.Duration
+	next         time.Time
+	contact      int
+	rejected     string
+	starting     *meshIKEStart
+	responding   *meshIKEResponse
+	heldResponse *meshIKEResponseResult
+	ikeInbox     []tunnelDatagram
 }
 
 func newMeshRuntime(ctx context.Context, config *Config, state *State, socket *packetSockets, factory packetDeviceFactory, logger *slog.Logger, onPublication func()) *meshRuntime {
@@ -61,6 +66,12 @@ func newMeshRuntime(ctx context.Context, config *Config, state *State, socket *p
 	m.ikePrepared = make(chan meshIKEStartResult)
 	m.ikeResponses = make(chan *meshIKEResponse, 4)
 	m.ikeResponded = make(chan meshIKEResponseResult)
+	if state != nil {
+		m.policy = newMeshPolicyWorker(state.Store())
+		m.leafIntents = make(chan struct{}, 1)
+		m.ikeWrites = make(chan meshIKEWrite, meshIKEWriteQueueSize)
+		m.ikeWriteFailures = make(chan meshIKEWriteFailure, meshIKEWriteQueueSize)
+	}
 	m.initial, m.maximum = config.Reconnect.InitialBackoff, config.Reconnect.MaxBackoff
 	if m.initial <= 0 {
 		m.initial = time.Second
@@ -113,6 +124,9 @@ func (m *meshRuntime) update(plan GatewayPlan) {
 			leaf.opened = m.opened
 			leaf.sharedCompletions = true
 			p = &meshPeer{config: config, tunnel: &gatewayTunnel{socket: m.socket, data: data}, leaf: leaf, backoff: m.initial}
+			if m.ikeWrites != nil {
+				p.tunnel.queueIKE = m.queueIKEWrite
+			}
 			m.peers[candidate.Zone], m.byData[data] = p, p
 			m.peerOrder = nil
 		}
@@ -139,25 +153,13 @@ func (m *meshRuntime) update(plan GatewayPlan) {
 	}
 }
 
-func (m *meshRuntime) fresh(p *meshPeer, view corestate.View, now time.Time) GatewayPlan {
-	if pipeline := p.leaf.pipeline; pipeline != nil && p.tunnel.phase == 3 {
-		var facts packetAuthorization
-		if pipeline.prepareSnapshotInto(&p.config, view, p.plan, now, &facts) {
-			return facts.plan
-		}
-	}
-	if p.tunnel.phase != 0 {
-		binding, err := localTransportAuthorization(&p.config, view, now)
-		if err != nil || binding != p.tunnel.localAuthorization {
-			return GatewayPlan{Rejected: "local transport authorization changed"}
-		}
-		return revalidateActiveGateway(&p.config, view, p.plan, now)
-	}
-	return RevalidateGatewayPlan(&p.config, view, p.plan, now)
-}
-
 func (m *meshRuntime) stopPeer(p *meshPeer, reason string) {
+	if p.heldResponse != nil {
+		clear(p.heldResponse.request.input.private)
+		p.heldResponse = nil
+	}
 	p.responding, p.ikeInbox = nil, nil
+	p.policy = meshPeerPolicy{}
 	if p.starting != nil {
 		p.starting.cancel()
 		p.starting = nil
@@ -205,6 +207,27 @@ func (m *meshRuntime) close() error {
 	}
 }
 
+// packetFacts uses only the worker's settled projection and the current SA.
+func (m *meshRuntime) packetFacts(p *meshPeer, view corestate.View, now time.Time, facts *packetAuthorization) bool {
+	pipeline := p.leaf.pipeline
+	if pipeline == nil {
+		return false
+	}
+	if m.policy == nil {
+		return pipeline.prepareSnapshotInto(&p.config, view, p.plan, now, facts)
+	}
+	projection, _ := m.policy.project(p, m.state.Store().VerifiedRevision(), now)
+	return projection.packetFacts(pipeline, now, facts)
+}
+
+func (m *meshRuntime) projectedPlan(p *meshPeer, now time.Time) (GatewayPlan, bool) {
+	projection, pending := m.policy.project(p, m.state.Store().VerifiedRevision(), now)
+	if projection == nil || projection.binding != p.tunnel.localAuthorization {
+		return GatewayPlan{}, pending
+	}
+	return projection.plan, false
+}
+
 func (m *meshRuntime) reconcile() error {
 	active := false
 	for _, p := range m.peers {
@@ -221,20 +244,25 @@ func (m *meshRuntime) reconcile() error {
 		if err != nil {
 			return err
 		}
-		before := m.state.Store().VerifiedRevision()
-		if err = m.state.EnsureLocalLeafRoutes(m.ctx, m.config, now); err != nil {
-			m.stopAll(err.Error())
-			return nil
-		}
-		if before != m.state.Store().VerifiedRevision() {
-			m.onPublication()
+		select {
+		case m.leafIntents <- struct{}{}:
+		default:
 		}
 	}
 	for _, p := range m.ordered() {
 		if p.tunnel.phase != 3 {
 			continue
 		}
-		err := p.leaf.reconcile(m.ctx, &p.config, m.view.read(m.state.Store()), p.plan, p.tunnel, m.id, now)
+		revision := m.state.Store().VerifiedRevision()
+		projection, pending := m.policy.project(p, revision, now)
+		if pending || projection == nil || projection.plan.Selected == nil || projection.binding != p.tunnel.localAuthorization ||
+			!p.tunnel.current(projection.plan) || !p.tunnel.data.current(p.tunnel.generation, p.tunnel.data.active, projection.plan) ||
+			!now.Before(p.tunnel.ikeExpiresAt) || !now.Before(p.tunnel.expiresAt) {
+			continue
+		}
+		want := projection.attachment
+		want.generation, want.id = p.tunnel.generation, m.id
+		err := p.leaf.reconcilePrepared(m.ctx, &p.config, revision, p.tunnel, m.id, now, want, projection.attachmentErr)
 		rejected := ""
 		if err != nil {
 			rejected = err.Error()
@@ -261,7 +289,11 @@ func (m *meshRuntime) tick() error {
 			m.stopPeer(p, "tunnel hard lifetime reached while processing IKE")
 		}
 		if p.tunnel.phase != 0 && p.responding == nil {
-			if err := p.tunnel.tickWithScheduler(m.fresh(p, m.view.read(m.state.Store()), now), now, func(request ikeTimerRequest) {
+			plan, pending := m.projectedPlan(p, now)
+			if pending {
+				continue
+			}
+			if err := p.tunnel.tickWithScheduler(plan, now, func(request ikeTimerRequest) {
 				m.scheduleIKETimer(p, request, now)
 			}); err != nil {
 				m.stopPeer(p, err.Error())
@@ -282,7 +314,10 @@ func (m *meshRuntime) tick() error {
 	for _, p := range m.ordered() {
 		if p.leaf.pipeline != nil {
 			p.leaf.pipeline.leaf.SynchronizeSequence(m.seqno)
-			p.leaf.pipeline.tickSnapshot(&p.config, m.view.read(m.state.Store()), p.plan, time.Now())
+			var facts packetAuthorization
+			if m.packetFacts(p, corestate.View{}, time.Now(), &facts) {
+				p.leaf.pipeline.tickPrepared(&facts)
+			}
 			m.synchronizeSequences()
 		}
 	}
@@ -291,8 +326,11 @@ func (m *meshRuntime) tick() error {
 
 func (m *meshRuntime) invalidate() error {
 	for _, p := range m.ordered() {
-		if p.tunnel.phase != 0 && !p.tunnel.current(m.fresh(p, m.view.read(m.state.Store()), time.Now())) {
-			m.stopPeer(p, "verified authorization withdrawn")
+		if p.tunnel.phase != 0 {
+			plan, pending := m.projectedPlan(p, time.Now())
+			if !pending && !p.tunnel.current(plan) {
+				m.stopPeer(p, "verified authorization withdrawn")
+			}
 		}
 	}
 	return m.reconcile()
@@ -313,7 +351,13 @@ func (m *meshRuntime) handleIKE(packet tunnelDatagram) error {
 		return nil
 	}
 	now := time.Now()
-	plan := m.fresh(p, m.view.read(m.state.Store()), now)
+	plan, pending := m.projectedPlan(p, now)
+	if pending {
+		if packet.peer == p.tunnel.peer && len(p.ikeInbox) < meshIKEPendingResponses {
+			p.ikeInbox = append(p.ikeInbox, packet)
+		}
+		return nil
+	}
 	m.enqueueIKEResponse(p, packet, plan, now)
 	return nil
 }
@@ -321,8 +365,9 @@ func (m *meshRuntime) handleIKE(packet tunnelDatagram) error {
 func (m *meshRuntime) handleESP(packet tunnelDatagram) {
 	packet.timing.Dequeue()
 	p := m.findGeneration(packet.generation)
-	if p != nil {
-		completion, ok := p.tunnel.data.processOwnedInbound(packet.generation, m.fresh(p, m.view.read(m.state.Store()), time.Now()), packet.peer, packet.packet, packet.timing)
+	var facts packetAuthorization
+	if p != nil && m.packetFacts(p, corestate.View{}, time.Now(), &facts) {
+		completion, ok := p.tunnel.data.processOwnedInbound(packet.generation, facts.plan, packet.peer, packet.packet, packet.timing)
 		if ok {
 			m.complete(completion)
 			return
@@ -338,21 +383,15 @@ func (m *meshRuntime) complete(completion dataplaneCompletion) {
 		completion.timing.Finish(fixturePacketTimingCanceled)
 		return
 	}
-	view, now := m.view.read(m.state.Store()), time.Now()
+	now := time.Now()
 	var facts packetAuthorization
-	haveFacts := p.leaf.pipeline != nil && p.leaf.pipeline.prepareSnapshotInto(&p.config, view, p.plan, now, &facts)
-	plan := facts.plan
-	if !haveFacts {
-		plan = m.fresh(p, view, now)
-	}
-	p.tunnel.observeData(completion, plan, now)
-	if haveFacts {
-		if _, err := p.leaf.pipeline.acceptPrepared(&facts, completion); err != nil {
-			m.logger.Warn("leaf_packet_failed", "error", errors.Join(err, p.leaf.stop()))
-		}
-	} else {
-		p.tunnel.data.accept(completion, plan, nil)
+	if !m.packetFacts(p, corestate.View{}, now, &facts) {
 		completion.timing.Finish(fixturePacketTimingRejected)
+		return
+	}
+	p.tunnel.observeData(completion, facts.plan, now)
+	if _, err := p.leaf.pipeline.acceptPrepared(&facts, completion); err != nil {
+		m.logger.Warn("leaf_packet_failed", "error", errors.Join(err, p.leaf.stop()))
 	}
 }
 
@@ -361,7 +400,18 @@ func (m *meshRuntime) completeOpen(result leafOpenResult) error {
 		if p.leaf != result.owner {
 			continue
 		}
-		err := p.leaf.complete(m.ctx, &p.config, m.view.read(m.state.Store()), p.plan, p.tunnel, m.id, time.Now(), result)
+		now, revision := time.Now(), m.state.Store().VerifiedRevision()
+		projection, _ := m.policy.project(p, revision, now)
+		var want leafAttachment
+		var intentErr error
+		if projection != nil && projection.attachmentErr == nil && p.tunnel.phase == 3 && p.tunnel.failed == nil &&
+			projection.binding == p.tunnel.localAuthorization && p.tunnel.current(projection.plan) &&
+			p.tunnel.data.current(p.tunnel.generation, p.tunnel.data.active, projection.plan) &&
+			now.Before(p.tunnel.ikeExpiresAt) && now.Before(p.tunnel.expiresAt) {
+			want = projection.attachment
+			want.generation, want.id = p.tunnel.generation, m.id
+		}
+		err := p.leaf.completePrepared(m.ctx, &p.config, revision, p.tunnel, m.id, now, result, want, intentErr)
 		if errors.Is(err, errPacketDeviceConflict) || errors.Is(err, errPacketDeviceRecoveryExpired) {
 			return err
 		}
@@ -396,7 +446,7 @@ func (m *meshRuntime) selectRoute(packet []byte, view corestate.View, now time.T
 			continue
 		}
 		var facts packetAuthorization
-		if !pipeline.prepareSnapshotInto(&p.config, view, p.plan, now, &facts) || !pipeline.localAddress(source, facts.localOrigins) {
+		if !m.packetFacts(p, view, now, &facts) || !pipeline.localAddress(source, facts.localOrigins) {
 			continue
 		}
 		routes := sadr.Lookup(pipeline.leaf.Candidates(now, facts.authorizeRoute), source, destination, now, facts.authorizeRoute)
@@ -436,7 +486,7 @@ func (m *meshRuntime) handleHost(event leafDevicePacket) {
 		event.timing.Finish(fixturePacketTimingRejected)
 		return
 	}
-	choice := m.selectRoute(event.packet, m.view.read(m.state.Store()), time.Now())
+	choice := m.selectRoute(event.packet, corestate.View{}, time.Now())
 	if choice == nil {
 		event.timing.Finish(fixturePacketTimingRejected)
 		return
@@ -453,7 +503,8 @@ func (m *meshRuntime) handleHost(event leafDevicePacket) {
 
 func (m *meshRuntime) ready() bool {
 	for _, p := range m.ordered() {
-		if p.leaf.readySnapshot(&p.config, m.view.read(m.state.Store()), p.plan, time.Now()) {
+		var facts packetAuthorization
+		if m.packetFacts(p, corestate.View{}, time.Now(), &facts) && p.leaf.readyPrepared(&facts) {
 			return true
 		}
 	}

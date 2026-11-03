@@ -26,6 +26,7 @@ type gatewayTunnel struct {
 	deleteSPI                                uint32
 	failed                                   error
 	socket                                   *packetSockets
+	queueIKE                                 func(uint64, []byte, netip.AddrPort, bool) error
 	data                                     *gatewayDataplane
 	session                                  *ike.Initiator
 	ikeLeased                                bool
@@ -50,14 +51,21 @@ func (t *gatewayTunnel) stop() {
 	// Deny data first. An idle established SA gets one best-effort encrypted
 	// Delete, without awaiting the peer or delaying local teardown/reconnect.
 	t.data.reset(t.generation + 1)
+	retireQueued := false
 	if t.phase == 3 && !t.ikeLeased && t.session != nil && len(t.session.PendingRequest()) == 0 && t.failed == nil {
 		if request, err := t.session.IKEDeleteRequest(); err == nil {
 			if wire, err := ike.EncapsulateIKE(request); err == nil {
-				_ = t.socket.WriteTunnel(t.generation, wire, t.peer)
+				if t.queueIKE == nil {
+					_ = t.writeIKE(wire)
+				} else {
+					retireQueued = t.queueIKE(t.generation, wire, t.peer, true) == nil
+				}
 			}
 		}
 	}
-	t.socket.releaseTunnel(t.generation)
+	if !retireQueued {
+		t.socket.releaseTunnel(t.generation)
+	}
 	t.generation = 0
 	t.data.reset(t.generation)
 	clear(t.private)
@@ -166,7 +174,7 @@ func (t *gatewayTunnel) sendPending(now time.Time) error {
 				return err
 			}
 		}
-		if err := t.socket.WriteTunnel(t.generation, wire, t.peer); err != nil {
+		if err := t.writeIKE(wire); err != nil {
 			return err
 		}
 	}
@@ -233,7 +241,7 @@ func (t *gatewayTunnel) tickWithScheduler(plan GatewayPlan, now time.Time, sched
 		}
 	}
 	if t.natt && t.phase == 3 && !now.Before(t.keepaliveAt) {
-		if err := t.socket.WriteTunnel(t.generation, []byte{0xff}, t.peer); err != nil {
+		if err := t.writeIKE([]byte{0xff}); err != nil {
 			return err
 		}
 		t.keepaliveAt = now.Add(15 * time.Second)

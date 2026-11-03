@@ -17,7 +17,8 @@ import (
 // runMeshGossip owns protocol dispatch and discovery after startup. The mesh
 // consumes a notification of the latest committed revision and never waits
 // for Gossip verification, persistence, or outbound synchronization.
-func runMeshGossip(ctx context.Context, config *Config, store *corestate.Store, driver *corehost.GossipDriver, transport *gossip.Transport, logger *slog.Logger, bootstrap map[string]*net.UDPAddr, refresh <-chan map[string]*net.UDPAddr, published chan<- struct{}) error {
+func runMeshGossip(ctx context.Context, config *Config, state *State, driver *corehost.GossipDriver, transport *gossip.Transport, logger *slog.Logger, bootstrap map[string]*net.UDPAddr, refresh <-chan map[string]*net.UDPAddr, leafIntents <-chan struct{}, published chan<- struct{}) error {
+	store := state.Store()
 	var lastCandidates []GatewayCandidate
 	observeGateways := func() {
 		view, now := store.ReadView(), time.Now()
@@ -41,6 +42,11 @@ func runMeshGossip(ctx context.Context, config *Config, store *corestate.Store, 
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-leafIntents:
+			if err := state.EnsureLocalLeafRoutes(ctx, config, time.Now()); err != nil &&
+				!errors.Is(err, corestate.ErrVerifiedRevisionStale) && ctx.Err() == nil {
+				logger.Warn("leaf_route_publication_failed", "error", err)
+			}
 		case next := <-refresh:
 			if !reflect.DeepEqual(bootstrap, next) {
 				if err := driver.UpdateGossipBootstrap(next); err != nil {
