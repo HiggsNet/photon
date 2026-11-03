@@ -296,11 +296,16 @@ func TestRawICMPWaitCancellationKeepsSocketReusable(t *testing.T) {
 	}
 
 	deadline := time.Now().Add(20 * time.Millisecond)
-	if err := socket.wait(context.Background(), deadline, func() bool { return false }); err != nil {
+	var drainedAtDeadline bool
+	if err := socket.wait(context.Background(), deadline, func() bool {
+		// Model a reply that becomes available as the poll deadline fires.
+		drainedAtDeadline = !time.Now().Before(deadline)
+		return drainedAtDeadline
+	}); err != nil {
 		t.Fatalf("reused wait: %v", err)
 	}
-	if time.Now().Before(deadline) {
-		t.Fatal("reused wait returned before its deadline")
+	if !drainedAtDeadline {
+		t.Fatal("reused wait did not drain replies at its deadline")
 	}
 }
 

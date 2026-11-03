@@ -680,7 +680,7 @@ func internetChecksum(packet []byte) uint16 {
 func readRawICMPReply(fd, family int, id uint16) (uint16, bool) {
 	buf := make([]byte, 1500)
 	for {
-		n, _, err := unix.Recvfrom(fd, buf, unix.MSG_DONTWAIT)
+		n, err := recvRawICMPNonblocking(fd, buf)
 		if err == unix.EINTR {
 			continue
 		}
