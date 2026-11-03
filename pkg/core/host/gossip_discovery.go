@@ -36,6 +36,7 @@ type GossipDiscoveryInput struct {
 	EndpointGrace    time.Duration
 	SourceOrder      []string
 	verifiedRevision corestate.VerifiedRevision
+	observedVerifier *photoncrypto.Verifier
 }
 
 // GossipDiscoveryConfig contains the platform-neutral, fixed discovery policy
@@ -524,7 +525,7 @@ func discoveryPeerVerified(input GossipDiscoveryInput, peerID string, now time.T
 	}
 	network := *input.Network
 	network.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
-	return photoncrypto.VerifyChain(&network, path, now) == nil
+	return input.observedVerifier.VerifyChain(&network, path, now) == nil
 }
 
 func discoveryObservedActive(peer corestate.PeerCheckpoint, now time.Time) bool {
