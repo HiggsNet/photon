@@ -523,3 +523,20 @@ func TestStoreStaleCatalogCannotUseRevokedLocalZone(t *testing.T) {
 		t.Fatalf("revoked matching root satisfied stale pull: result=%+v err=%v", result, err)
 	}
 }
+
+func TestVerifiedRevisionDoesNotWaitForSnapshotLock(t *testing.T) {
+	store := NewStore(nil, nil, nil)
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.revision.Store(17)
+	got := make(chan VerifiedRevision, 1)
+	go func() { got <- store.VerifiedRevision() }()
+	select {
+	case revision := <-got:
+		if revision != 17 {
+			t.Fatalf("published revision = %d, want 17", revision)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("revision reader waited for the snapshot lock")
+	}
+}

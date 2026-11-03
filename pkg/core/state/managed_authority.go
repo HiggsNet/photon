@@ -30,7 +30,7 @@ func (store *Store) RefreshManagedAuthority(ctx context.Context, now time.Time) 
 		store.mu.RUnlock()
 		return commit, authority, ErrVerifiedStoreClosed
 	}
-	baseRevision := store.revision
+	baseRevision := store.VerifiedRevision()
 	current := cloneVerifiedState(store.state)
 	gossipCandidate := cloneGossipCheckpoint(store.gossip)
 	store.mu.RUnlock()
@@ -61,7 +61,7 @@ func (store *Store) RefreshManagedAuthority(ctx context.Context, now time.Time) 
 	store.mu.Lock()
 	store.state = candidate
 	store.gossip = gossipCandidate
-	store.revision = nextRevision
+	store.revision.Store(uint64(nextRevision))
 	store.mu.Unlock()
 	return CommitResult{Committed: true, Changes: changes}, authority, nil
 }

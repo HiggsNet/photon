@@ -69,7 +69,7 @@ func (store *Store) changePeerCheckpoints(ctx context.Context, patches map[strin
 		store.mu.RUnlock()
 		return CommitResult{}, ErrVerifiedStoreClosed
 	}
-	revision := store.revision
+	revision := store.VerifiedRevision()
 	// writeMu excludes all writers until publication. Public reads are detached.
 	peers := store.gossip.Peers
 	store.mu.RUnlock()

@@ -56,7 +56,7 @@ func (store *Store) PurgeRevoked(ctx context.Context, now time.Time, target zone
 		store.mu.RUnlock()
 		return out, ErrVerifiedStoreClosed
 	}
-	baseRevision := store.revision
+	baseRevision := store.VerifiedRevision()
 	candidate := cloneVerifiedState(store.state)
 	gossipCandidate := cloneGossipCheckpoint(store.gossip)
 	store.mu.RUnlock()
@@ -97,7 +97,7 @@ func (store *Store) PurgeRevoked(ctx context.Context, now time.Time, target zone
 	store.mu.Lock()
 	store.state = candidate
 	store.gossip = gossipCandidate
-	store.revision = nextRevision
+	store.revision.Store(uint64(nextRevision))
 	store.mu.Unlock()
 	out.Committed = true
 	out.Changes = changes

@@ -47,7 +47,7 @@ func (store *Store) readDiscovery(peerID string, records bool) *DiscoveryView {
 	network := store.state.Network
 	out := &DiscoveryView{
 		ManagedZone: store.state.ManagedZone,
-		Revision:    store.revision,
+		Revision:    store.VerifiedRevision(),
 		Network: &zone.NetworkState{
 			Zones:          make(map[zone.ZonePath]*zone.ZoneState),
 			GlobalRoot:     append([]byte(nil), network.GlobalRoot...),
@@ -164,8 +164,8 @@ func (store *Store) zoneDigestsLocked(now time.Time) []ZoneDigest {
 	}
 	network := store.state.Network
 	catalog := store.catalog.Load()
-	if catalog == nil || catalog.revision != store.revision {
-		catalog = &catalogSnapshot{revision: store.revision, digests: make([]ZoneDigest, 0, len(network.Zones))}
+	if catalog == nil || catalog.revision != store.VerifiedRevision() {
+		catalog = &catalogSnapshot{revision: store.VerifiedRevision(), digests: make([]ZoneDigest, 0, len(network.Zones))}
 		for path, zs := range network.Zones {
 			if zs != nil {
 				catalog.digests = append(catalog.digests, ZoneDigest{Zone: path, RootHash: ZoneRoot(zs)})
