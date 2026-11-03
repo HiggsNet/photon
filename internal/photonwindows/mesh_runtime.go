@@ -222,8 +222,11 @@ func (m *meshRuntime) packetFacts(p *meshPeer, view corestate.View, now time.Tim
 
 func (m *meshRuntime) projectedPlan(p *meshPeer, now time.Time) (GatewayPlan, bool) {
 	projection, pending := m.policy.project(p, m.state.Store().VerifiedRevision(), now)
+	if pending {
+		return GatewayPlan{}, true
+	}
 	if projection == nil || projection.binding != p.tunnel.localAuthorization {
-		return GatewayPlan{}, pending
+		return GatewayPlan{}, false
 	}
 	return projection.plan, false
 }
@@ -402,10 +405,10 @@ func (m *meshRuntime) completeOpen(result leafOpenResult) error {
 			continue
 		}
 		now, revision := time.Now(), m.state.Store().VerifiedRevision()
-		projection, _ := m.policy.project(p, revision, now)
+		projection, pending := m.policy.project(p, revision, now)
 		var want leafAttachment
 		var intentErr error
-		if projection != nil && projection.attachmentErr == nil && p.tunnel.phase == 3 && p.tunnel.failed == nil &&
+		if !pending && projection != nil && projection.attachmentErr == nil && p.tunnel.phase == 3 && p.tunnel.failed == nil &&
 			projection.binding == p.tunnel.localAuthorization && p.tunnel.current(projection.plan) &&
 			p.tunnel.data.current(p.tunnel.generation, p.tunnel.data.active, projection.plan) &&
 			now.Before(p.tunnel.ikeExpiresAt) && now.Before(p.tunnel.expiresAt) {
