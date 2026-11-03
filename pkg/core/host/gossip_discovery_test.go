@@ -517,3 +517,59 @@ func (store failingDiscoveryWriter) ReadCatalog() *corestate.CatalogView {
 	}
 	return &corestate.CatalogView{ManagedZone: v.State.ManagedZone, Digests: corestate.ZoneDigests(v.State.Network)}
 }
+
+func TestObservedPathVerifierRechecksExpiryAndRevocation(t *testing.T) {
+	const peer zone.ZonePath = "peer."
+	now := time.Unix(1000, 0)
+	expires := now.Add(time.Second)
+	rootPublic, rootKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	network := zone.NewNetworkState()
+	root := zone.NewZoneState(zone.RootZone, photoncrypto.ConfiguredRootAuthority(rootPublic))
+	network.Zones[zone.RootZone] = root
+	authority := &zone.ZoneAuthority{Zone: peer, Epoch: 1, Threshold: 1}
+	network.Zones[peer] = zone.NewZoneState(peer, authority)
+	delegation := &zone.Delegation{ZoneName: peer, Authority: *authority, ExpiresAt: &expires}
+	if err := photoncrypto.SignDelegation(delegation, zone.RootZone, rootKey); err != nil {
+		t.Fatal(err)
+	}
+	root.Delegations[peer] = delegation
+	store := corestate.NewStore(&corestate.VerifiedState{Network: network}, nil, nil)
+	driver := NewGossipDriver(nil, 1, store, GossipDriverConfig{})
+	defer driver.Stop()
+	check := func(at time.Time, endpoint string, want bool) {
+		t.Helper()
+		verified, committed, err := driver.recordGossipObservedPath(t.Context(), peer.String(), endpoint, nil, at)
+		if err != nil || verified.valid != want || committed != want {
+			t.Fatalf("at %v: verified=%t committed=%t err=%v, want %t", at, verified.valid, committed, err, want)
+		}
+	}
+	const original = "192.0.2.1:33434"
+	const rejected = "192.0.2.2:33434"
+	check(now, original, true)
+	check(expires.Add(-time.Nanosecond), original, true)
+	check(expires, rejected, false)
+
+	revocation := &zone.DelegationRevocation{
+		ParentZone: zone.RootZone, ChildZone: peer, RevokedAt: now.Unix(),
+		RevokedAuthorityEpoch: delegation.AuthorityEpoch, RevokedAuthorityHash: delegation.AuthorityHash,
+	}
+	if err := photoncrypto.SignDelegationRevocation(revocation, zone.RootZone, rootKey); err != nil {
+		t.Fatal(err)
+	}
+	root.Revocations[peer] = revocation
+	snapshot, err := corestate.Snapshot(network, zone.RootZone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.ApplyRemoteBatch(t.Context(), "relay", []corestate.RemoteSnapshot{{Snapshot: snapshot}}, now)
+	if err != nil || !result.Committed {
+		t.Fatalf("publish revocation: result=%+v err=%v", result, err)
+	}
+	check(now, rejected, false)
+	if got := store.PeerCheckpoints([]string{peer.String()})[peer.String()].ObservedEndpoint; got != original {
+		t.Fatalf("invalid path replaced committed endpoint with %q", got)
+	}
+}

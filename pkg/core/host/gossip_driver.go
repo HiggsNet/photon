@@ -14,6 +14,7 @@ import (
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	"github.com/HiggsNet/photon/pkg/core/observability"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
 const (
@@ -58,6 +59,8 @@ type GossipDriver struct {
 
 	gossipState  GossipStateStore
 	gossipConfig GossipDriverConfig
+	// Only the single event consumer uses this verifier for inbound paths.
+	observedPathVerifier photoncrypto.Verifier
 
 	events          chan Event
 	completions     chan Event
