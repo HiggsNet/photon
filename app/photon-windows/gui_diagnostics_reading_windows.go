@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"unsafe"
 )
 
@@ -61,7 +62,15 @@ func (w *desktopWindow) updateDiagnosticsText(text string) {
 		r.follow = true
 	}
 	guiSendMessage.Call(edit, 0x000b, 0, 0) // WM_SETREDRAW
-	w.setText(edit, text)
+	previous := w.textCache[edit]
+	if v.page == guiDiagnosticsLogID && v.textView == key && previous != "" && strings.HasPrefix(text, previous) {
+		length, _, _ := guiGetWindowTextLength.Call(edit)
+		guiSendMessage.Call(edit, 0xb1, length, length)                                             // EM_SETSEL
+		guiSendMessage.Call(edit, 0xc2, 0, uintptr(unsafe.Pointer(guiUTF16(text[len(previous):])))) // EM_REPLACESEL
+		w.textCache[edit] = text
+	} else {
+		w.setText(edit, text)
+	}
 	follow := v.page == guiDiagnosticsLogID && r.follow
 	if follow {
 		length, _, _ := guiGetWindowTextLength.Call(edit)

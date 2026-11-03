@@ -210,18 +210,18 @@ func TestDesktopNativeWindow(t *testing.T) {
 	if _, exists := guiWindows.Load(w.hwnd); !exists || w.quitting || w.quitSubmitted || !strings.Contains(text(guiNoteID), "停止连接失败") || text(guiManagedFieldID) != "new.example." {
 		t.Fatal("failed runtime cleanup destroyed the window or discarded edits")
 	}
-	// One fixed worker and one queued request remain bounded under repeated
+	// One fixed worker and one outstanding refresh remain bounded under repeated
 	// timer/button submissions. No connection is started by this test.
 	w.startWorker()
 	w.submit(guiRequest{Action: "refresh"})
 	for i := 0; i < 100; i++ {
 		w.submit(guiRequest{Action: "refresh"})
 	}
-	if len(w.requests) > 1 || !w.busy {
+	if len(w.requests) > 1 || !w.refreshing || w.busy {
 		t.Fatal("request queue/busy guard is not bounded")
 	}
 	deadline := time.Now().Add(10 * time.Second)
-	for w.busy && time.Now().Before(deadline) {
+	for w.refreshing && time.Now().Before(deadline) {
 		var message guiMessage
 		if exists, _, _ := guiUser32.NewProc("PeekMessageW").Call(uintptr(unsafe.Pointer(&message)), w.hwnd, guiResultMessage, guiResultMessage, 1); exists != 0 {
 			guiDispatchMessage.Call(uintptr(unsafe.Pointer(&message)))
@@ -229,7 +229,7 @@ func TestDesktopNativeWindow(t *testing.T) {
 			time.Sleep(5 * time.Millisecond)
 		}
 	}
-	if w.busy {
+	if w.refreshing {
 		t.Fatal("bounded native worker did not return a result")
 	}
 	if got := text(guiManagedFieldID); got != "new.example." {
@@ -244,8 +244,8 @@ func TestDesktopNativeWindow(t *testing.T) {
 	}
 	w.submit(guiRequest{Action: "refresh"})
 	guiSendMessage.Call(w.hwnd, guiWMClose, 0, 0)
-	if !w.quitting || w.quitSubmitted {
-		t.Fatal("busy Close did not defer owned runtime cleanup")
+	if !w.quitting || !w.quitSubmitted {
+		t.Fatal("Close did not queue behind the in-flight refresh")
 	}
 	// Deliberately discard WM_APP instead of dispatching it. Both the
 	// in-flight refresh and the following Close must finish solely through
@@ -285,7 +285,7 @@ func TestDesktopClipboardBounds(t *testing.T) {
 func awaitDesktopNativeResult(t *testing.T, w *desktopWindow) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
-	for w.busy && time.Now().Before(deadline) {
+	for (w.busy || w.refreshing) && time.Now().Before(deadline) {
 		var message guiMessage
 		if exists, _, _ := guiUser32.NewProc("PeekMessageW").Call(uintptr(unsafe.Pointer(&message)), w.hwnd, guiResultMessage, guiResultMessage, 1); exists != 0 {
 			guiDispatchMessage.Call(uintptr(unsafe.Pointer(&message)))
@@ -293,7 +293,7 @@ func awaitDesktopNativeResult(t *testing.T, w *desktopWindow) {
 			time.Sleep(5 * time.Millisecond)
 		}
 	}
-	if w.busy {
+	if w.busy || w.refreshing {
 		t.Fatal("native form worker did not finish")
 	}
 }

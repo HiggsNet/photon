@@ -208,7 +208,11 @@ func TestDesktopNativeDiagnosticsRefreshPreservesReading(t *testing.T) {
 	guiSendMessage.Call(edit, 0xb1, 5, 15)
 	guiSendMessage.Call(edit, 0xb6, 0, ^uintptr(14)) // Scroll up 15 lines.
 	before = guiReadDiagnosticsPosition(edit)
-	w.updateDiagnosticsText(text + "new log entry\r\n")
+	appended := text + "new log entry\r\n"
+	w.updateDiagnosticsText(appended)
+	if got, err := guiControlText(edit); err != nil || got != appended {
+		t.Fatalf("native log append did not add the new record: length=%d, err=%v", len(got), err)
+	}
 	after = guiReadDiagnosticsPosition(edit)
 	if after.firstLine != before.firstLine || after.start != 5 || after.end != 15 || after.follow {
 		t.Fatalf("incoming logs interrupted reading: before=%+v after=%+v", before, after)
