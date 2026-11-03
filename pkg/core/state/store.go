@@ -499,3 +499,10 @@ func clearRejectedObject(state *GossipCheckpoint, peerID string, path zone.ZoneP
 	state.Peers[peerID] = metadata
 	return true
 }
+
+// ReadGossipCheckpoint copies synchronization hints without cloning signed state.
+func (store *Store) ReadGossipCheckpoint() *GossipCheckpoint {
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	return cloneGossipCheckpoint(store.gossip)
+}

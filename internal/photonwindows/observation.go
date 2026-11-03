@@ -137,7 +137,7 @@ func (d *Daemon) Observe(ctx context.Context) (Observation, error) {
 	defer cancel()
 	result := make(chan Observation, 1)
 	select {
-	case d.observations <- result:
+	case d.observations <- meshObservationRequest{ctx: ctx, reply: result}:
 	case <-d.done:
 		return Observation{}, net.ErrClosed
 	case <-ctx.Done():
@@ -160,17 +160,7 @@ func observeRuntime(config *Config, view corestate.View, plan GatewayPlan, now t
 			out.UDPAddress = addr.String()
 		}
 	}
-	if leaf.device != nil {
-		out.Wintun = WintunObservation{Configured: true, Addresses: slices.Clone(leaf.attachment.addresses), SplitRoutes: slices.Clone(leaf.attachment.routes)}
-		if len(out.Wintun.Addresses) > 256 {
-			out.Wintun.Addresses = out.Wintun.Addresses[:256]
-			out.Wintun.Truncated = true
-		}
-		if len(out.Wintun.SplitRoutes) > 256 {
-			out.Wintun.SplitRoutes = out.Wintun.SplitRoutes[:256]
-			out.Wintun.Truncated = true
-		}
-	}
+	out.Wintun = observeWintun(leaf)
 	current := revalidateActiveGateway(config, view, plan, now)
 	out.Gateway = observeGatewayPlan(plan, current)
 	out.IKE = tunnel.observeIKE()
@@ -192,55 +182,74 @@ func observeRuntime(config *Config, view corestate.View, plan GatewayPlan, now t
 			}
 			authorize := currentBabelRouteAuthorizer(config, view, now)
 			candidates := p.leaf.Candidates(now, authorize)
-			// Candidates has just checked every complete route against the
-			// sampled authorization. Reuse those exact verdicts during SADR
-			// selection instead of rescanning permissions for every lookup.
-			allowed := make(map[sadr.Route]bool, len(candidates))
-			for _, route := range candidates {
-				allowed[route] = true
-			}
-			authorize = func(route sadr.Route) bool { return allowed[route] }
 			origins := p.localOrigins(config, view, now)
 			hosts, _ := leafDeviceIntent(config, view, now)
-			// Mirror lookupBabelRoutes' explicit host restriction once for the
-			// sample. p.current above has checked the current SA/gateway/local
-			// binding; view and now cannot change within this owner event.
-			origins = slices.DeleteFunc(origins, func(origin babel.Origin) bool {
-				return !slices.Contains(hosts, origin.Prefix)
-			})
-			// Bound both response size and work. A truncation is explicit; no omitted
-			// candidate is presented as an installed or selected route.
-			lookups := 0
-			seen := make(map[RouteObservation]bool)
-		outer:
-			for _, candidate := range candidates {
-				for _, origin := range origins {
-					source := origin.Prefix.Addr()
-					if source.BitLen() != candidate.Destination.Addr().BitLen() || candidate.Source.IsValid() && !candidate.Source.Contains(source) {
-						continue
-					}
-					if lookups == 256 {
+			out.observeRoutes(candidates, origins, hosts, now)
+		}
+	}
+	out.observeGossipPeers(view, now, driver)
+	if !out.TunnelReady && !out.Admission.Pending {
+		out.Readiness = observeLeafReadiness(config, view, now)
+	}
+	return out
+}
+func observeWintun(leaf *leafRuntime) WintunObservation {
+	var out WintunObservation
+	if leaf.device != nil {
+		out = WintunObservation{Configured: true, Addresses: slices.Clone(leaf.attachment.addresses), SplitRoutes: slices.Clone(leaf.attachment.routes)}
+		if len(out.Addresses) > 256 {
+			out.Addresses = out.Addresses[:256]
+			out.Truncated = true
+		}
+		if len(out.SplitRoutes) > 256 {
+			out.SplitRoutes = out.SplitRoutes[:256]
+			out.Truncated = true
+		}
+	}
+	return out
+}
+
+func (out *Observation) observeRoutes(candidates []sadr.Route, origins []babel.Origin, hosts []netip.Prefix, now time.Time) {
+	// Callers have already authorized every route in this detached slice.
+	authorize := func(sadr.Route) bool { return true }
+	// Mirror lookupBabelRoutes' explicit host restriction for the sample.
+	origins = slices.DeleteFunc(origins, func(origin babel.Origin) bool {
+		return !slices.Contains(hosts, origin.Prefix)
+	})
+	// Bound both response size and work. A truncation is explicit; no omitted
+	// candidate is presented as an installed or selected route.
+	lookups := 0
+	seen := make(map[RouteObservation]bool)
+outer:
+	for _, candidate := range candidates {
+		for _, origin := range origins {
+			source := origin.Prefix.Addr()
+			if source.BitLen() != candidate.Destination.Addr().BitLen() || candidate.Source.IsValid() && !candidate.Source.Contains(source) {
+				continue
+			}
+			if lookups == 256 {
+				out.RoutesTruncated = true
+				break outer
+			}
+			lookups++
+			selected := sadr.Lookup(candidates, source, candidate.Destination.Addr(), now, authorize)
+			out.TunnelReady = out.TunnelReady || out.Wintun.Configured && len(selected) > 0
+			for _, route := range selected {
+				r := RouteObservation{Prefix: route.Destination, SourcePrefix: route.Source, Metric: route.Metric}
+				if !seen[r] {
+					if len(out.Babel.Routes) == 256 {
 						out.RoutesTruncated = true
 						break outer
 					}
-					lookups++
-					selected := sadr.Lookup(candidates, source, candidate.Destination.Addr(), now, authorize)
-					out.TunnelReady = out.TunnelReady || leaf.device != nil && len(selected) > 0
-					for _, route := range selected {
-						r := RouteObservation{Prefix: route.Destination, SourcePrefix: route.Source, Metric: route.Metric}
-						if !seen[r] {
-							if len(out.Babel.Routes) == 256 {
-								out.RoutesTruncated = true
-								break outer
-							}
-							seen[r] = true
-							out.Babel.Routes = append(out.Babel.Routes, r)
-						}
-					}
+					seen[r] = true
+					out.Babel.Routes = append(out.Babel.Routes, r)
 				}
 			}
 		}
 	}
+}
+
+func (out *Observation) observeGossipPeers(view corestate.View, now time.Time, driver *corehost.GossipDriver) {
 	if driver != nil && driver.Observability != nil {
 		peers := driver.Observability.Snapshots(now)
 		ids := make([]string, 0, len(peers))
@@ -291,11 +300,8 @@ func observeRuntime(config *Config, view corestate.View, plan GatewayPlan, now t
 			out.Peers = append(out.Peers, r)
 		}
 	}
-	if !out.TunnelReady && !out.Admission.Pending {
-		out.Readiness = observeLeafReadiness(config, view, now)
-	}
-	return out
 }
+
 func boundedObservationText(s string) string {
 	if len(s) > 256 {
 		return s[:256]

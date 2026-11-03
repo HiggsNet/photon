@@ -13,8 +13,8 @@ import (
 func TestPacketPolicyDeadlineDelegationAndParentProof(t *testing.T) {
 	config, view, now, _ := gatewayPlanFixture(t)
 	now = now.Add(100 * time.Millisecond)
-	if got, want := packetPolicyDeadline(view, now), time.Unix(now.Unix()+1, 0); got != want {
-		t.Fatalf("integer-second deadline = %s, want %s", got, want)
+	if got, want := packetPolicyDeadline(view, now), time.Unix(now.Unix()+60, 1); got != want {
+		t.Fatalf("contact deadline = %s, want %s", got, want)
 	}
 	// Every zone matters: an unrelated identity or assignment can collide
 	// with the selected remote origin. ParentProof is a real chain fallback.
@@ -79,7 +79,7 @@ func TestPacketPolicyDeadlinePortEquality(t *testing.T) {
 	if got := packetPolicyDeadline(view, now); got != now.Add(time.Nanosecond) {
 		t.Fatalf("strict After port deadline = %s, want %s", got, now.Add(time.Nanosecond))
 	}
-	if got := packetPolicyDeadline(view, now.Add(time.Nanosecond)); got != now.Add(time.Second) {
+	if got := packetPolicyDeadline(view, now.Add(time.Nanosecond)); got != now.Add(time.Nanosecond).Add(packetPolicyMaxAge) {
 		t.Fatalf("expired port left a stale transition: %s", got)
 	}
 }

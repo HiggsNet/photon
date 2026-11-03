@@ -6,6 +6,7 @@ import (
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
+	"github.com/HiggsNet/photon/pkg/routing"
 )
 
 const (
@@ -22,13 +23,19 @@ type ReadinessObservation struct {
 }
 
 func observeLeafReadiness(config *Config, view corestate.View, now time.Time) ReadinessObservation {
+	return observeLeafReadinessFromSet(config, view, now, func() *routing.AuthorizedRouteSet {
+		return currentAuthorizedRouteSet(config, view, now)
+	})
+}
+
+func observeLeafReadinessFromSet(config *Config, view corestate.View, now time.Time, routeSet func() *routing.AuthorizedRouteSet) ReadinessObservation {
 	var err error
 	if config == nil || view.State == nil || view.State.Network == nil {
 		err = errLeafRouteAuthorityUnavailable
 	} else if err = photoncrypto.VerifyPinnedRoot(view.State.Network, config.TrustedRootPublicKey); err == nil {
 		err = photoncrypto.VerifyChain(view.State.Network, config.ManagedZone, now)
 		if err == nil {
-			_, _, err = requiredLeafDeviceIntentFromSet(config, currentAuthorizedRouteSet(config, view, now))
+			_, _, err = requiredLeafDeviceIntentFromSet(config, routeSet())
 		}
 	}
 	var out ReadinessObservation

@@ -2,26 +2,46 @@ package photonwindows
 
 import (
 	"context"
+	"math"
 	"net"
 	"time"
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
-// packetPolicyDeadline bounds reuse of immutable signed-policy results. Every
-// integer-second check (authority keys, revocations and transport keys) is
-// reevaluated at the next second, even without a new revision.
-// Exact delegation and contact expiry can end the interval sooner. The caller
+const packetPolicyMaxAge = time.Minute
+
+// packetPolicyDeadline bounds reuse by actual signed-policy transitions and
+// a periodic refresh. Integer-second fields only change at their own boundary.
+// The caller
 // separately checks current snapshot/config/planner identity, clock rollback,
 // the original DNS hint lifetime and mutable SA/Babel/packet gates every event.
 func packetPolicyDeadline(view corestate.View, now time.Time) time.Time {
 	now = now.Round(0) // wall time; monotonic elapsed time must not hide rollback
-	deadline := time.Unix(now.Unix(), 0).Add(time.Second)
+	deadline := now.Add(packetPolicyMaxAge)
 	earlier := func(at time.Time) {
 		at = at.Round(0)
 		if at.After(now) && at.Before(deadline) {
 			deadline = at
+		}
+	}
+	atUnix := func(second int64) {
+		if second != 0 {
+			earlier(time.Unix(second, 0))
+		}
+	}
+	authority := func(a *zone.ZoneAuthority) {
+		if a == nil {
+			return
+		}
+		for _, key := range a.Keys {
+			atUnix(key.NotBefore)
+			// Authority keys remain valid throughout their final second.
+			if key.NotAfter != 0 && key.NotAfter < math.MaxInt64 {
+				atUnix(key.NotAfter + 1)
+			}
 		}
 	}
 	if view.State == nil || view.State.Network == nil {
@@ -31,7 +51,20 @@ func packetPolicyDeadline(view corestate.View, now time.Time) time.Time {
 		if zs == nil {
 			continue
 		}
+		authority(zs.Authority)
+		for _, revocation := range zs.Revocations {
+			if revocation != nil && revocation.RevokedAt > 0 {
+				atUnix(revocation.RevokedAt)
+			}
+		}
+		if key, err := ipsec.ParseTransportKeyRecord(zs.Records[ipsec.RecordKeyTransportKey]); err == nil {
+			atUnix(key.NotBefore)
+			atUnix(key.NotAfter)
+		}
 		for _, delegation := range zs.Delegations {
+			if delegation != nil {
+				authority(&delegation.Authority)
+			}
 			if delegation != nil && delegation.ExpiresAt != nil {
 				// In-memory intents may retain monotonic time. One wall-clock
 				// epoch cannot bound its progress when the wall clock slows;
@@ -43,6 +76,9 @@ func packetPolicyDeadline(view corestate.View, now time.Time) time.Time {
 			}
 		}
 		for _, proof := range zs.ParentProof {
+			if proof != nil {
+				authority(&proof.Authority)
+			}
 			if proof != nil && proof.ExpiresAt != nil {
 				if *proof.ExpiresAt != proof.ExpiresAt.Round(0) {
 					return now

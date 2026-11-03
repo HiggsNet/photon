@@ -291,3 +291,15 @@ func TestPacketPolicyClockAndDNSLifetime(t *testing.T) {
 		}
 	})
 }
+
+func TestPacketPolicyReusesAcrossOrdinarySecond(t *testing.T) {
+	f := newPipelineFixture(t)
+	view := detachedPacketPolicyView(f.view)
+	if _, ok := f.p.prepareSnapshot(f.config, view, f.plan, f.now); !ok || f.p.policy == nil {
+		t.Fatal("initial signed policy unavailable")
+	}
+	initial := f.p.policy
+	if _, ok := f.p.prepareSnapshot(f.config, view, f.plan, f.now.Add(time.Second)); !ok || f.p.policy != initial {
+		t.Fatal("ordinary second boundary rebuilt signed policy")
+	}
+}

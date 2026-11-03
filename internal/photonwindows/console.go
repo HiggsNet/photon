@@ -34,7 +34,7 @@ type Daemon struct {
 	logger           *slog.Logger
 	started          atomic.Bool
 	ready            chan struct{}
-	observations     chan chan Observation
+	observations     chan meshObservationRequest
 	lifecycle        sync.Mutex
 	runCancel        context.CancelFunc
 	runErr           error
@@ -53,7 +53,7 @@ type rebindRequest struct {
 }
 
 func NewDaemon(config *Config, logger *slog.Logger) *Daemon {
-	return &Daemon{config: config, logger: logger, ready: make(chan struct{}), observations: make(chan chan Observation), rebind: make(chan rebindRequest), plans: make(chan chan GatewayPlan), done: make(chan struct{}), planGateway: PlanGateway, deviceFactory: openConfiguredPacketDevice, watchResume: watchPowerResume, resolveBootstrap: resolveGossipBootstrap}
+	return &Daemon{config: config, logger: logger, ready: make(chan struct{}), observations: make(chan meshObservationRequest), rebind: make(chan rebindRequest), plans: make(chan chan GatewayPlan), done: make(chan struct{}), planGateway: PlanGateway, deviceFactory: openConfiguredPacketDevice, watchResume: watchPowerResume, resolveBootstrap: resolveGossipBootstrap}
 }
 
 // GatewayPlan returns a detached, freshly revalidated connection plan. It does
@@ -214,7 +214,6 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	type planRequest struct {
 		ctx        context.Context
 		generation uint64
-		view       corestate.View
 	}
 	type planResult struct {
 		generation   uint64
@@ -235,7 +234,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				return
 			case request := <-planRequests:
 				bootstrap, bootstrapErr := d.resolveBootstrap(request.ctx, config, listenAddr)
-				plan := d.planGateway(request.ctx, config, request.view, time.Now())
+				plan := d.planGateway(request.ctx, config, state.Store().ReadView(), time.Now())
 				select {
 				case plans <- planResult{request.generation, plan, bootstrap, bootstrapErr}:
 				case <-plannerCtx.Done():
@@ -252,7 +251,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		var requestCtx context.Context
 		// Finish before the five-second periodic refresh, including slow DNS.
 		requestCtx, cancelPlan = context.WithTimeout(plannerCtx, 3*time.Second)
-		request := planRequest{requestCtx, generation, state.Store().ReadView()}
+		request := planRequest{requestCtx, generation}
 		select {
 		case <-planRequests:
 		default:
@@ -289,44 +288,45 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		requestPlan()
 		return err
 	}
-	var lastGateways []GatewayCandidate
-	observeGateways := func() {
-		view := state.Store().ReadView()
-		now := time.Now()
-		candidates := GatewayCandidates(config, view, now)
-		if !reflect.DeepEqual(lastGateways, candidates) {
-			logger.Info("gateway_candidates_changed", "revision", view.Revision, "evaluated_at", now,
-				"candidates", candidates, "tunnel_ready", false, "route_authorized", false)
-			lastGateways = candidates
+	gossipCtx, stopGossip := context.WithCancel(ctx)
+	gossipRefresh := make(chan map[string]*net.UDPAddr, 1)
+	gossipPublished := make(chan struct{}, 1)
+	gossipDone := make(chan error, 1)
+	go func(initial map[string]*net.UDPAddr) {
+		gossipDone <- runMeshGossip(gossipCtx, config, state.Store(), driver, transport, logger, initial, gossipRefresh, gossipPublished)
+	}(bootstrap)
+	gossipExited := false
+	defer func() {
+		stopGossip()
+		if !gossipExited {
+			<-gossipDone
 		}
+	}()
+	refreshGossip := func() {
+		// The worker needs the latest bootstrap snapshot, not every intermediate
+		// discovery request. The packet loop never waits for Gossip to catch up.
+		select {
+		case <-gossipRefresh:
+		default:
+		}
+		gossipRefresh <- bootstrap
 	}
-	observeGateways()
 	requestPlan()
-	syncPeers := func() {
-		if _, err := driver.SyncGossipPeers(ctx, time.Now(), nil, false); err != nil && ctx.Err() == nil {
-			logger.Warn("gossip_sync_failed", "error", err)
-		}
-	}
-	syncPeers()
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	tunnelTicker := time.NewTicker(250 * time.Millisecond)
 	defer tunnelTicker.Stop()
-	handleGossipEvent := func(event corehost.Event) error {
-		before := state.Store().VerifiedRevision()
-		if _, err := driver.HandleGossipHostEvent(ctx, event, time.Now(), nil); err != nil && !errors.Is(err, corehost.ErrGossipSessionNotFound) && ctx.Err() == nil {
-			logger.Warn("gossip_event_failed", "error", err)
-		}
-		if state.Store().VerifiedRevision() != before {
-			if err := mesh.invalidate(); err != nil {
-				return err
-			}
-			observeGateways()
-			requestPlan()
-			observeReady()
-		}
-		return nil
-	}
+	observationSnapshots := make(chan chan meshObservationSnapshot)
+	observationCtx, cancelObservations := context.WithCancel(ctx)
+	observationsDone := make(chan struct{})
+	go func() {
+		defer close(observationsDone)
+		d.runObservations(observationCtx, observationSnapshots, state.Store(), driver)
+	}()
+	defer func() {
+		cancelObservations()
+		<-observationsDone
+	}()
 	close(d.ready)
 	for {
 		select {
@@ -334,8 +334,8 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			return nil
 		case result := <-d.plans:
 			result <- RevalidateGatewayPlan(config, state.Store().ReadView(), lastPlan, time.Now())
-		case result := <-d.observations:
-			result <- mesh.observe(lastPlan, driver)
+		case sampled := <-observationSnapshots:
+			sampled <- mesh.observationSnapshot(lastPlan)
 		case datagram := <-packet.ikePackets:
 			if err := mesh.handleIKE(datagram); err != nil {
 				return err
@@ -365,14 +365,8 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			if result.bootstrapErr != nil {
 				logger.Warn("gossip_bootstrap_refresh_failed", "error", result.bootstrapErr)
 			} else if !reflect.DeepEqual(bootstrap, result.bootstrap) {
-				if err := driver.UpdateGossipBootstrap(result.bootstrap); err != nil {
-					return err
-				}
 				bootstrap = result.bootstrap
-				if err := driver.RefreshGossipDiscovery(ctx, nil, time.Now(), transport); err != nil {
-					return err
-				}
-				syncPeers()
+				refreshGossip()
 			}
 			result.plan = RevalidateGatewayPlan(config, state.Store().ReadView(), result.plan, time.Now())
 			// Revision/time are diagnostic metadata, not a change in the selected
@@ -388,10 +382,11 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			observeReady()
 		case request := <-d.rebind:
 			request.result <- rebind(request.ctx)
+			refreshGossip()
 		case <-packet.failed:
 			if ctx.Err() == nil {
 				_ = rebind(ctx)
-				syncPeers()
+				refreshGossip()
 			}
 		case _, ok := <-powerResumes:
 			if !ok {
@@ -401,7 +396,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			if ctx.Err() == nil {
 				logger.Info("power_resumed")
 				_ = rebind(ctx)
-				syncPeers()
+				refreshGossip()
 			}
 		case _, ok := <-networkChanges:
 			if !ok {
@@ -410,33 +405,23 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			}
 			if ctx.Err() == nil {
 				_ = rebind(ctx)
-				syncPeers()
+				refreshGossip()
 			}
 		case <-ticker.C:
 			if rebindPending {
 				_ = rebind(ctx)
 			}
-			observeGateways()
 			requestPlan()
-			if err := driver.RefreshGossipDiscovery(ctx, nil, time.Now(), transport); err != nil {
-				if ctx.Err() != nil {
-					return nil
-				}
-				return fmt.Errorf("refresh gossip discovery: %w", err)
-			}
-			syncPeers()
-		case event := <-driver.Events():
-			if err := handleGossipEvent(event); err != nil {
+			refreshGossip()
+		case <-gossipPublished:
+			if err := mesh.invalidate(); err != nil {
 				return err
 			}
-		case event := <-driver.Completions():
-			if err := handleGossipEvent(event); err != nil {
-				return err
-			}
-		case event := <-driver.Continuations():
-			if err := handleGossipEvent(event); err != nil {
-				return err
-			}
+			requestPlan()
+			observeReady()
+		case err := <-gossipDone:
+			gossipExited = true
+			return err
 		}
 	}
 }
