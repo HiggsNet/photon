@@ -31,6 +31,8 @@ type meshRuntime struct {
 	opened           chan leafOpenResult
 	jobs             chan dataplaneJob
 	onPublication    func()
+	ikeStarts        chan *meshIKEStart
+	ikePrepared      chan meshIKEStartResult
 	initial, maximum time.Duration
 	id               [8]byte
 	nextIntent       time.Time
@@ -46,10 +48,13 @@ type meshPeer struct {
 	next     time.Time
 	contact  int
 	rejected string
+	starting *meshIKEStart
 }
 
 func newMeshRuntime(ctx context.Context, config *Config, state *State, socket *packetSockets, factory packetDeviceFactory, logger *slog.Logger, onPublication func()) *meshRuntime {
 	m := &meshRuntime{ctx: ctx, config: config, state: state, socket: socket, logger: logger, peers: make(map[zone.ZonePath]*meshPeer), byData: make(map[*gatewayDataplane]*meshPeer), device: newMeshDevice(ctx, factory), opened: make(chan leafOpenResult, 64), jobs: make(chan dataplaneJob, dataplaneQueueSize), onPublication: onPublication}
+	m.ikeStarts = make(chan *meshIKEStart, 4)
+	m.ikePrepared = make(chan meshIKEStartResult)
 	m.initial, m.maximum = config.Reconnect.InitialBackoff, config.Reconnect.MaxBackoff
 	if m.initial <= 0 {
 		m.initial = time.Second
@@ -146,6 +151,10 @@ func (m *meshRuntime) fresh(p *meshPeer, view corestate.View, now time.Time) Gat
 }
 
 func (m *meshRuntime) stopPeer(p *meshPeer, reason string) {
+	if p.starting != nil {
+		p.starting.cancel()
+		p.starting = nil
+	}
 	if err := p.leaf.stop(); err != nil {
 		m.logger.Warn("leaf_cleanup_failed", "peer", p.config.Gateway.AllowedZones[0], "error", err)
 	}
@@ -187,34 +196,6 @@ func (m *meshRuntime) close() error {
 			return err
 		}
 	}
-}
-
-func (m *meshRuntime) attempt(p *meshPeer, now time.Time) {
-	plan := m.fresh(p, m.view.read(m.state.Store()), now)
-	if plan.Selected == nil {
-		return
-	}
-	before := m.state.Store().VerifiedRevision()
-	local, err := m.state.EnsureLocalTransport(m.ctx, &p.config, now, plan, m.socket.LocalAddr().AddrPort())
-	if err != nil {
-		m.stopPeer(p, err.Error())
-		return
-	}
-	defer clear(local.PrivateKey)
-	if before != m.state.Store().VerifiedRevision() {
-		m.onPublication()
-		return
-	}
-	binding, err := localTransportAuthorization(&p.config, m.view.read(m.state.Store()), time.Now())
-	if err != nil {
-		m.stopPeer(p, err.Error())
-		return
-	}
-	if err = p.tunnel.start(plan, local.ID, local.PrivateKey, now); err != nil {
-		m.stopPeer(p, err.Error())
-		return
-	}
-	p.tunnel.localAuthorization = binding
 }
 
 func (m *meshRuntime) reconcile() error {
@@ -268,13 +249,15 @@ func (m *meshRuntime) tick() error {
 	now := time.Now()
 	starts := 0
 	for _, p := range m.ordered() {
-		if err := p.tunnel.tick(m.fresh(p, m.view.read(m.state.Store()), now), now); err != nil {
-			m.stopPeer(p, err.Error())
+		if p.tunnel.phase != 0 {
+			if err := p.tunnel.tick(m.fresh(p, m.view.read(m.state.Store()), now), now); err != nil {
+				m.stopPeer(p, err.Error())
+			}
 		}
 		// Bound work per owner turn without serializing peer lifetimes. A dead
 		// first peer never blocks attempts to the other authorized peers.
-		if p.tunnel.phase == 0 && !now.Before(p.next) && starts < 4 {
-			m.attempt(p, now)
+		if p.tunnel.phase == 0 && p.starting == nil && !now.Before(p.next) && starts < 4 {
+			m.attempt(p)
 			starts++
 		}
 	}
