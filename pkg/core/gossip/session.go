@@ -224,6 +224,11 @@ type SyncSession struct {
 	localCatalogRoot  []byte
 	remoteCatalogRoot []byte
 	lastCatalogCursor string
+	// For a fixed root, each accepted page has a distinct next cursor.
+	acceptedCatalogPages map[string]bool
+	// A page with a different root superseded this catalog. Late pages
+	// from it must not seed or advance the refresh.
+	supersededCatalogRoot []byte
 	// A catalog and its objects are separate reads. Refresh once after drift,
 	// draining outstanding work before reusing the per-zone result slots.
 	catalogRefreshPending bool
@@ -342,6 +347,11 @@ func (s *SyncSession) handleCatalogSummary(peerID string, summary *corestate.Cat
 	if summary == nil {
 		return nil, nil
 	}
+	// Keep the catalog pinned until its pages and objects are processed.
+	// A mismatching page or snapshot can still trigger the bounded refresh.
+	if s.State == SyncSessionCatalogDiffing || len(s.acceptedCatalogPages) > 0 {
+		return nil, nil
+	}
 	if bytes.Equal(summary.CatalogRoot, s.remoteCatalogRoot) && s.State == SyncSessionCompleted {
 		return nil, nil
 	}
@@ -369,8 +379,15 @@ func (s *SyncSession) onCatalogPageReceived(e *CatalogPageReceivedEvent, now tim
 	if e.Page == nil {
 		return nil, nil
 	}
+	if len(s.supersededCatalogRoot) > 0 && bytes.Equal(e.Page.CatalogRoot, s.supersededCatalogRoot) {
+		return nil, nil
+	}
+	if s.acceptedCatalogPages[""] || (bytes.Equal(e.Page.CatalogRoot, s.remoteCatalogRoot) && s.acceptedCatalogPages[e.Page.NextCursor]) {
+		return nil, nil
+	}
 	if len(s.remoteCatalogRoot) > 0 && !bytes.Equal(e.Page.CatalogRoot, s.remoteCatalogRoot) {
 		if !s.catalogRefreshed {
+			s.supersededCatalogRoot = s.remoteCatalogRoot
 			s.catalogRefreshPending = true
 			s.lastCatalogCursor = ""
 			s.State = SyncSessionObjectPulling
@@ -385,6 +402,10 @@ func (s *SyncSession) onCatalogPageReceived(e *CatalogPageReceivedEvent, now tim
 	if len(s.remoteCatalogRoot) == 0 {
 		s.remoteCatalogRoot = append([]byte(nil), e.Page.CatalogRoot...)
 	}
+	if s.acceptedCatalogPages == nil {
+		s.acceptedCatalogPages = make(map[string]bool)
+	}
+	s.acceptedCatalogPages[e.Page.NextCursor] = true
 	s.State = SyncSessionCatalogDiffing
 	var actions []SyncAction
 	for _, diff := range corestate.CatalogDiff(e.LocalEntries, e.Page.Entries) {
@@ -661,6 +682,7 @@ func (s *SyncSession) refreshCatalog(peerID string, now time.Time) []SyncAction 
 	s.expectedDigests = make(map[zone.ZonePath]corestate.ZoneDigest)
 	s.remoteCatalogRoot = nil
 	s.lastCatalogCursor = ""
+	s.acceptedCatalogPages = nil
 	s.State = SyncSessionCatalogDiffing
 	// Keep the original round deadline so repeated updates cannot prolong a
 	// session indefinitely. Existing v0.5 peers understand this same request.

@@ -357,3 +357,73 @@ func (store *memoryGossipStateStore) ReadCatalog() *corestate.CatalogView {
 	}
 	return &corestate.CatalogView{ManagedZone: v.State.ManagedZone, Digests: corestate.ZoneDigests(v.State.Network)}
 }
+
+func TestGossipDriverCrossedPingCatalogRequests(t *testing.T) {
+	for _, pingFirst := range []bool{false, true} {
+		name := "pong first"
+		if pingFirst {
+			name = "ping first"
+		}
+		t.Run(name, func(t *testing.T) {
+			const peer = "less."
+			clock := newFakeClock(time.Unix(100, 0))
+			store := &memoryGossipStateStore{views: []corestate.View{loadedGossipState("konomi.")}}
+			driver := NewGossipDriver(clock, 4, store, GossipDriverConfig{PeerID: "konomi."})
+			defer driver.Stop()
+			sender := &memoryGossipController{}
+			local := driver.GossipCatalogSummary()
+			remote := &corestate.CatalogSummary{CatalogRoot: []byte("remote catalog"), ZoneCount: 32}
+
+			deliver := func(message *gossip.Message) {
+				t.Helper()
+				message.PeerID = peer
+				actions := driver.Gossip.PlanInbound(&gossip.Packet{Message: message})
+				events, err := driver.executeGossipPacketActions(t.Context(), actions, sender, gossip.DefaultDatagramBudget)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, event := range events {
+					if _, _, err := driver.handleGossipSessionEvent(t.Context(), event, clock.Now(), sender); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			ping := &gossip.Message{Type: gossip.MessagePing, Ping: &gossip.Ping{Summary: remote}}
+			pong := &gossip.Message{Type: gossip.MessagePong, Pong: &gossip.Pong{Summary: remote}}
+			driver.Gossip.NewSession(peer)
+			timer := &gossip.SyncTimerEvent{PeerID: peer, LocalSummary: local}
+			if _, _, err := driver.handleGossipSessionEvent(t.Context(), timer, clock.Now(), sender); err != nil {
+				t.Fatal(err)
+			}
+			sender.trace = nil
+			if pingFirst {
+				deliver(ping)
+				deliver(pong)
+			} else {
+				deliver(pong)
+				deliver(ping)
+			}
+			page := &gossip.Message{Type: gossip.MessageCatalogPage, CatalogPage: &corestate.CatalogPage{
+				CatalogRoot: remote.CatalogRoot, NextCursor: "18",
+			}}
+			for range 3 {
+				deliver(page)
+			}
+			want := []string{"send:fetch_catalog_page", "send:pong", "send:fetch_catalog_page"}
+			if pingFirst {
+				want[0], want[1] = want[1], want[0]
+			}
+			if !slices.Equal(sender.trace, want) {
+				t.Fatalf("send trace = %v, want %v", sender.trace, want)
+			}
+
+			// A legacy peer can still use the unsolicited Ping responder.
+			driver.Gossip.RemoveSession(peer)
+			sender.trace = nil
+			deliver(ping)
+			if want := []string{"send:pong", "send:fetch_catalog_page"}; !slices.Equal(sender.trace, want) {
+				t.Fatalf("unsolicited send trace = %v, want %v", sender.trace, want)
+			}
+		})
+	}
+}
