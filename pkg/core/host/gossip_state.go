@@ -18,8 +18,8 @@ import (
 type GossipStateStore interface {
 	gossip.ObjectPullSource
 	ReadView() corestate.View
-	// ReadDiscovery must return the verified Revision together with its network.
-	ReadDiscovery(string) *corestate.DiscoveryView
+	// ReadDiscoveryRecords returns a detached network and its verified Revision.
+	ReadDiscoveryRecords(peerID, prefix string) *corestate.DiscoveryView
 	ReadPeerAuthorization(string) *corestate.DiscoveryView
 	ReadCatalog() *corestate.CatalogView
 	PeerCheckpoints([]string) map[string]corestate.PeerCheckpoint
