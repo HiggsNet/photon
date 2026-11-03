@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -127,7 +128,13 @@ func (d SystemXFRMDriver) InspectLinks(ctx context.Context, specs []TransportLin
 	}
 
 	namedNamespaces := map[string]bool{}
+	if needNamedNamespaces && d.listNetNS != nil {
+		var err error
+		namedNamespaces, err = d.listNetNS()
+		needNamedNamespaces = err != nil
+	}
 	if needNamedNamespaces {
+		namedNamespaces = make(map[string]bool)
 		out, err := d.output(ctx, d.ipCommand(), "-j", "netns", "list")
 		if err != nil {
 			return nil, nil, fmt.Errorf("list network namespaces: %w", err)
@@ -171,43 +178,28 @@ func (d SystemXFRMDriver) InspectLinks(ctx context.Context, specs []TransportLin
 }
 
 func (d SystemXFRMDriver) inspectLinksInNamespace(ctx context.Context, netns NetNSSpec, specs []TransportLinkSpec) ([]XFRMLinkState, []XFRMLinkState, error) {
-	linkOut, err := d.outputInNetNS(ctx, netns, "-j", "-d", "link", "show")
-	if err != nil {
-		return nil, nil, fmt.Errorf("batch inspect links in %s: %w", netnsLabel(netns), err)
+	var links []observedInterface
+	var err error
+	if d.inspectNetlink != nil {
+		links, err = d.inspectNetlink(ctx, netns)
 	}
-	var links []ipJSONLink
-	if err := json.Unmarshal(linkOut, &links); err != nil {
-		return nil, nil, fmt.Errorf("parse link JSON in %s: %w", netnsLabel(netns), err)
-	}
-	linksByName := make(map[string]ipJSONLink, len(links))
-	for _, link := range links {
-		linksByName[link.IfName] = link
+	if d.inspectNetlink == nil || err != nil {
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
+		}
+		links, err = d.inspectLinksViaIP(ctx, netns)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
-	addrOut, err := d.outputInNetNS(ctx, netns, "-j", "addr", "show")
-	if err != nil {
-		return nil, nil, fmt.Errorf("batch inspect addresses in %s: %w", netnsLabel(netns), err)
-	}
-	var addressLinks []ipJSONAddressLink
-	if err := json.Unmarshal(addrOut, &addressLinks); err != nil {
-		return nil, nil, fmt.Errorf("parse address JSON in %s: %w", netnsLabel(netns), err)
-	}
-	addressesByName := make(map[string][]netip.Prefix, len(addressLinks))
-	for _, link := range addressLinks {
-		for _, info := range link.AddrInfo {
-			addr, err := netip.ParseAddr(info.Local)
-			if err != nil || info.PrefixLen < 0 || info.PrefixLen > addr.BitLen() {
-				continue
-			}
-			addressesByName[link.IfName] = append(addressesByName[link.IfName], netip.PrefixFrom(addr, info.PrefixLen))
-		}
-	}
+	linksByName := make(map[string]XFRMLinkState, len(links))
 	var inventory []XFRMLinkState
 	for _, link := range links {
-		if link.LinkInfo.InfoKind != "xfrm" {
-			continue
+		linksByName[link.state.InterfaceName] = link.state
+		if link.xfrm {
+			inventory = append(inventory, link.state)
 		}
-		inventory = append(inventory, observedXFRMLink(netns, link, addressesByName[link.IfName]))
 	}
 	if len(specs) == 0 {
 		return nil, inventory, nil
@@ -236,10 +228,9 @@ func (d SystemXFRMDriver) inspectLinksInNamespace(ctx context.Context, netns Net
 			NamespaceForwardingKnown: true,
 			NamespaceForwarding:      namespaceForwarding,
 		}
-		link, exists := linksByName[spec.InterfaceName]
+		observed, exists := linksByName[spec.InterfaceName]
 		state.InterfaceExists = exists
 		if exists {
-			observed := observedXFRMLink(netns, link, addressesByName[spec.InterfaceName])
 			state.XFRMIfID = observed.XFRMIfID
 			state.FlagsKnown = observed.FlagsKnown
 			state.InterfaceUp = observed.InterfaceUp
@@ -248,11 +239,54 @@ func (d SystemXFRMDriver) inspectLinksInNamespace(ctx context.Context, netns Net
 			state.IPv6AddrGenDisabled = observed.IPv6AddrGenDisabled
 			state.InterfaceForwardingKnown = true
 			state.InterfaceForwarding = interfaceForwarding[spec.InterfaceName]
-			state.Addresses = observed.Addresses
+			state.Addresses = append([]netip.Prefix(nil), observed.Addresses...)
 		}
 		states[i] = state
 	}
 	return states, inventory, nil
+}
+
+type observedInterface struct {
+	state          XFRMLinkState
+	xfrm           bool
+	hasPeerAddress bool
+}
+
+func (d SystemXFRMDriver) inspectLinksViaIP(ctx context.Context, netns NetNSSpec) ([]observedInterface, error) {
+	linkOut, err := d.outputInNetNS(ctx, netns, "-j", "-d", "link", "show")
+	if err != nil {
+		return nil, fmt.Errorf("batch inspect links in %s: %w", netnsLabel(netns), err)
+	}
+	var links []ipJSONLink
+	if err := json.Unmarshal(linkOut, &links); err != nil {
+		return nil, fmt.Errorf("parse link JSON in %s: %w", netnsLabel(netns), err)
+	}
+	addrOut, err := d.outputInNetNS(ctx, netns, "-j", "addr", "show")
+	if err != nil {
+		return nil, fmt.Errorf("batch inspect addresses in %s: %w", netnsLabel(netns), err)
+	}
+	var addressLinks []ipJSONAddressLink
+	if err := json.Unmarshal(addrOut, &addressLinks); err != nil {
+		return nil, fmt.Errorf("parse address JSON in %s: %w", netnsLabel(netns), err)
+	}
+	addressesByName := make(map[string][]netip.Prefix, len(addressLinks))
+	for _, link := range addressLinks {
+		for _, info := range link.AddrInfo {
+			addr, err := netip.ParseAddr(info.Local)
+			if err != nil || info.PrefixLen < 0 || info.PrefixLen > addr.BitLen() {
+				continue
+			}
+			addressesByName[link.IfName] = append(addressesByName[link.IfName], netip.PrefixFrom(addr, info.PrefixLen))
+		}
+	}
+	observed := make([]observedInterface, 0, len(links))
+	for _, link := range links {
+		observed = append(observed, observedInterface{
+			state: observedXFRMLink(netns, link, addressesByName[link.IfName]),
+			xfrm:  link.LinkInfo.InfoKind == "xfrm",
+		})
+	}
+	return observed, nil
 }
 
 func observedXFRMLink(netns NetNSSpec, link ipJSONLink, addresses []netip.Prefix) XFRMLinkState {
@@ -304,6 +338,34 @@ func (d SystemXFRMDriver) inspectForwardingInNamespace(ctx context.Context, netn
 }
 
 func (d SystemXFRMDriver) readForwardingValues(ctx context.Context, netns NetNSSpec, keys []string) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if d.inNetNS != nil {
+		values := make([]string, 0, len(keys))
+		err := d.inNetNS(netns.Normalized(), func() error {
+			// These files resolve against the calling thread's network namespace.
+			for _, key := range keys {
+				path, err := forwardingProcPath(key)
+				if err != nil {
+					return err
+				}
+				out, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				value := strings.TrimSpace(string(out))
+				if value != "0" && value != "1" {
+					return fmt.Errorf("unexpected forwarding value for %s", key)
+				}
+				values = append(values, value)
+			}
+			return nil
+		})
+		if err == nil {
+			return values, nil
+		}
+	}
 	out, err := d.outputSysctl(ctx, netns, append([]string{"-n"}, keys...)...)
 	if err != nil {
 		return nil, fmt.Errorf("inspect forwarding in %s: %w", netnsLabel(netns), err)

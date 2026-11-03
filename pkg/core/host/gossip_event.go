@@ -404,7 +404,13 @@ func (driver *GossipDriver) handleGossipSessionEvent(ctx context.Context, event 
 	case *gossip.CatalogSummaryReceivedEvent:
 		driver.observeCatalogSummary(peerID, typed.Summary, now)
 	case *gossip.CatalogPageReceivedEvent:
-		typed.LocalEntries, typed.Page = FilterGossipCatalogPage(driver.GossipDiscoveryInput(nil), peerID, typed.Page, now)
+		view := driver.gossipStateView()
+		typed.LocalEntries = view.Digests
+		var peer corestate.PeerCheckpoint
+		if driver.gossipState != nil {
+			peer = driver.gossipState.PeerCheckpoints([]string{peerID})[peerID]
+		}
+		typed.Page = filterGossipCatalogPage(view.ManagedZone, peer, typed.Page, now)
 		driver.observeCatalogPage(peerID, typed.Page, now)
 	}
 	engineResult := driver.Gossip.HandleEvent(event, now)

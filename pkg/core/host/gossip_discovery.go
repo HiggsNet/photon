@@ -228,15 +228,17 @@ func PlanVerifiedObservedCheckpoint(input GossipDiscoveryInput, peerID, endpoint
 // FilterGossipCatalogPage removes the locally managed zone and temporarily
 // rejected remote roots using only common verified/checkpoint state.
 func FilterGossipCatalogPage(input GossipDiscoveryInput, peerID string, page *corestate.CatalogPage, now time.Time) ([]corestate.ZoneDigest, *corestate.CatalogPage) {
-	local := corestate.ZoneDigests(input.Network)
+	return corestate.ZoneDigests(input.Network), filterGossipCatalogPage(input.ManagedZone, input.Peers[peerID], page, now)
+}
+
+func filterGossipCatalogPage(managedZone zone.ZonePath, peer corestate.PeerCheckpoint, page *corestate.CatalogPage, now time.Time) *corestate.CatalogPage {
 	if page == nil || len(page.Entries) == 0 {
-		return local, page
+		return page
 	}
-	peer := input.Peers[peerID]
 	filtered := *page
 	filtered.Entries = make([]corestate.ZoneDigest, 0, len(page.Entries))
 	for _, entry := range page.Entries {
-		if entry.Zone == input.ManagedZone {
+		if entry.Zone == managedZone {
 			continue
 		}
 		rejected, ok := peer.RejectedObjects[entry.Zone]
@@ -245,7 +247,7 @@ func FilterGossipCatalogPage(input GossipDiscoveryInput, peerID string, page *co
 		}
 		filtered.Entries = append(filtered.Entries, entry)
 	}
-	return local, &filtered
+	return &filtered
 }
 
 // ResolveGossipObjectPullAddress returns the first TCP candidate for callers

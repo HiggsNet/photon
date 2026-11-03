@@ -12,25 +12,55 @@ import (
 
 type CommandRunner func(context.Context, string, ...string) ([]byte, error)
 
+type xfrmMutationKind uint8
+
+const (
+	xfrmAdd xfrmMutationKind = iota
+	xfrmDelete
+	xfrmMove
+	xfrmUp
+	xfrmMulticast
+	xfrmDisableAddrGen
+	xfrmReplaceAddr
+	xfrmDeleteAddr
+)
+
+type xfrmMutation struct {
+	kind   xfrmMutationKind
+	ifID   uint32
+	target NetNSSpec
+	prefix netip.Prefix
+}
+
 type SystemXFRMDriver struct {
-	Command      CommandRunner
-	Stat         func(string) error
-	DefaultNetNS NetNSSpec
-	StateNetNS   NetNSSpec
-	IPPath       string
-	SysctlPath   string
-	TruePath     string
+	Command        CommandRunner
+	Stat           func(string) error
+	DefaultNetNS   NetNSSpec
+	StateNetNS     NetNSSpec
+	IPPath         string
+	SysctlPath     string
+	TruePath       string
+	inNetNS        func(NetNSSpec, func() error) error
+	mutateNetlink  func(context.Context, NetNSSpec, string, xfrmMutation) (bool, error)
+	listNetNS      func() (map[string]bool, error)
+	probeNetNS     func(string) (bool, error)
+	inspectNetlink func(context.Context, NetNSSpec) ([]observedInterface, error)
 }
 
 func NewSystemXFRMDriver(defaultNetNS NetNSSpec) SystemXFRMDriver {
 	return SystemXFRMDriver{
-		Command:      execCommand,
-		Stat:         statPath,
-		DefaultNetNS: defaultNetNS.Normalized(),
-		StateNetNS:   NetNSSpec{Kind: NetNSHost},
-		IPPath:       resolveExecutable("ip"),
-		SysctlPath:   resolveExecutable("sysctl"),
-		TruePath:     resolveExecutable("true"),
+		Command:        execCommand,
+		Stat:           statPath,
+		DefaultNetNS:   defaultNetNS.Normalized(),
+		StateNetNS:     NetNSSpec{Kind: NetNSHost},
+		IPPath:         resolveExecutable("ip"),
+		SysctlPath:     resolveExecutable("sysctl"),
+		TruePath:       resolveExecutable("true"),
+		inNetNS:        inXFRMNetNS,
+		inspectNetlink: inspectPlatformLinks,
+		listNetNS:      listPlatformNetNS,
+		probeNetNS:     probePlatformNetNS,
+		mutateNetlink:  mutatePlatformLink,
 	}
 }
 
@@ -52,8 +82,12 @@ func (d SystemXFRMDriver) EnsureNamespace(ctx context.Context, spec NetNSSpec) e
 		}
 		return nil
 	case NetNSName:
+		values, err := d.readForwardingValues(ctx, spec, namespaceForwardingKeys[:])
+		if err == nil {
+			return d.repairNamespaceForwarding(ctx, spec, values)
+		}
 		if d.netnsExists(ctx, spec.Name) {
-			return d.enableNamespaceForwarding(ctx, spec)
+			return d.repairNamespaceForwarding(ctx, spec, nil)
 		}
 		if !spec.Create {
 			return fmt.Errorf("netns %q does not exist and create=false", spec.Name)
@@ -240,10 +274,10 @@ func (d SystemXFRMDriver) DeleteInterface(ctx context.Context, name string) erro
 	}
 	netns := d.DefaultNetNS.Normalized()
 	if d.linkExists(ctx, netns, name) {
-		return d.runInNetNS(ctx, netns, "link", "delete", name)
+		return d.mutateLink(ctx, netns, name, xfrmMutation{kind: xfrmDelete}, "link", "delete", name)
 	}
 	if d.linkExists(ctx, NetNSSpec{Kind: NetNSHost}, name) {
-		return d.run(ctx, d.ipCommand(), "link", "delete", name)
+		return d.mutateLink(ctx, NetNSSpec{Kind: NetNSHost}, name, xfrmMutation{kind: xfrmDelete}, "link", "delete", name)
 	}
 	return nil
 }
@@ -262,7 +296,7 @@ func (d SystemXFRMDriver) AssignAddress(ctx context.Context, spec TransportLinkS
 	if err := d.pruneInterfaceAddresses(ctx, netns, spec.InterfaceName, address); err != nil {
 		return err
 	}
-	return d.runInNetNS(ctx, netns, "addr", "replace", address, "dev", spec.InterfaceName)
+	return d.replaceAddress(ctx, netns, spec.InterfaceName, address)
 }
 
 func (d SystemXFRMDriver) AssignExtraAddress(ctx context.Context, spec TransportLinkSpec, address string) error {
@@ -276,7 +310,20 @@ func (d SystemXFRMDriver) AssignExtraAddress(ctx context.Context, spec Transport
 	if err != nil {
 		return err
 	}
-	return d.runInNetNS(ctx, netns, "addr", "replace", address, "dev", spec.InterfaceName)
+	return d.replaceAddress(ctx, netns, spec.InterfaceName, address)
+}
+
+func (d SystemXFRMDriver) replaceAddress(ctx context.Context, netns NetNSSpec, name, address string) error {
+	args := []string{"addr", "replace", address, "dev", name}
+	prefix, err := netip.ParsePrefix(address)
+	if err != nil {
+		addr, err := netip.ParseAddr(address)
+		if err != nil || addr.Zone() != "" {
+			return d.runInNetNS(ctx, netns, args...)
+		}
+		prefix = netip.PrefixFrom(addr, addr.BitLen())
+	}
+	return d.mutateLink(ctx, netns, name, xfrmMutation{kind: xfrmReplaceAddr, prefix: prefix}, args...)
 }
 
 func (d SystemXFRMDriver) pruneInterfaceAddresses(ctx context.Context, netns NetNSSpec, name, target string) error {
@@ -301,7 +348,7 @@ func (d SystemXFRMDriver) pruneInterfaceAddresses(ctx context.Context, netns Net
 		if prefix.Addr() == targetAddr {
 			continue
 		}
-		if err := d.runInNetNS(ctx, netns, "addr", "del", addr, "dev", name); err != nil {
+		if err := d.mutateLink(ctx, netns, name, xfrmMutation{kind: xfrmDeleteAddr, prefix: prefix}, "addr", "del", addr, "dev", name); err != nil {
 			return err
 		}
 	}
@@ -309,6 +356,15 @@ func (d SystemXFRMDriver) pruneInterfaceAddresses(ctx context.Context, netns Net
 }
 
 func (d SystemXFRMDriver) interfaceAddresses(ctx context.Context, netns NetNSSpec, name, family string) ([]string, error) {
+	if link, found, ok := d.lookupNetlink(ctx, netns, name); ok && found && !link.hasPeerAddress {
+		var addresses []string
+		for _, prefix := range link.state.Addresses {
+			if (family == "-4") == prefix.Addr().Is4() {
+				addresses = append(addresses, prefix.String())
+			}
+		}
+		return addresses, nil
+	}
 	out, err := d.outputInNetNS(ctx, netns, family, "-o", "addr", "show", "dev", name)
 	if err != nil {
 		return nil, err
@@ -334,6 +390,12 @@ type xfrmInterfaceLinkState struct {
 }
 
 func (d SystemXFRMDriver) inspectInterfaceLink(ctx context.Context, netns NetNSSpec, name string) (xfrmInterfaceLinkState, error) {
+	if link, found, ok := d.lookupNetlink(ctx, netns, name); ok {
+		return xfrmInterfaceLinkState{
+			exists: found, flagsKnown: link.state.FlagsKnown,
+			up: link.state.InterfaceUp, multicast: link.state.Multicast,
+		}, nil
+	}
 	out, err := d.outputInNetNS(ctx, netns, "link", "show", "dev", name)
 	if err != nil {
 		return xfrmInterfaceLinkState{}, nil
@@ -391,14 +453,38 @@ func (d SystemXFRMDriver) stateNetNS() NetNSSpec {
 }
 
 func (d SystemXFRMDriver) netnsExists(ctx context.Context, name string) bool {
+	if d.probeNetNS != nil && ctx.Err() == nil {
+		if exists, err := d.probeNetNS(name); err == nil {
+			return exists
+		}
+	}
 	return d.commandSucceeds(ctx, d.ipCommand(), "netns", "exec", name, d.trueCommand())
 }
 
 func (d SystemXFRMDriver) linkExists(ctx context.Context, netns NetNSSpec, name string) bool {
+	if _, found, ok := d.lookupNetlink(ctx, netns, name); ok {
+		return found
+	}
 	if netns.Normalized().Kind == NetNSHost {
 		return d.commandSucceeds(ctx, d.ipCommand(), "link", "show", "dev", name)
 	}
 	return d.commandSucceedsInNetNS(ctx, netns, "link", "show", "dev", name)
+}
+
+func (d SystemXFRMDriver) lookupNetlink(ctx context.Context, netns NetNSSpec, name string) (link observedInterface, found, ok bool) {
+	if d.inspectNetlink == nil {
+		return observedInterface{}, false, false
+	}
+	links, err := d.inspectNetlink(ctx, netns.Normalized())
+	if err != nil {
+		return observedInterface{}, false, false
+	}
+	for _, link := range links {
+		if link.state.InterfaceName == name {
+			return link, true, true
+		}
+	}
+	return observedInterface{}, false, true
 }
 
 func (d SystemXFRMDriver) moveLinkFrom(ctx context.Context, source NetNSSpec, name string, target NetNSSpec) error {
@@ -413,9 +499,9 @@ func (d SystemXFRMDriver) moveLinkFrom(ctx context.Context, source NetNSSpec, na
 	case NetNSName:
 		switch target.Kind {
 		case NetNSHost:
-			return d.runInNetNS(ctx, source, "link", "set", name, "netns", "1")
+			return d.mutateLink(ctx, source, name, xfrmMutation{kind: xfrmMove, target: target}, "link", "set", name, "netns", "1")
 		case NetNSName:
-			return d.runInNetNS(ctx, source, "link", "set", name, "netns", target.Name)
+			return d.mutateLink(ctx, source, name, xfrmMutation{kind: xfrmMove, target: target}, "link", "set", name, "netns", target.Name)
 		case NetNSPath:
 			return fmt.Errorf("moving links to path netns %q is not supported by the exec driver; bind it under /var/run/netns and use kind=name", target.Path)
 		default:
@@ -434,7 +520,7 @@ func (d SystemXFRMDriver) moveLink(ctx context.Context, name string, netns NetNS
 	case NetNSHost:
 		return nil
 	case NetNSName:
-		return d.run(ctx, d.ipCommand(), "link", "set", name, "netns", netns.Name)
+		return d.mutateLink(ctx, NetNSSpec{Kind: NetNSHost}, name, xfrmMutation{kind: xfrmMove, target: netns}, "link", "set", name, "netns", netns.Name)
 	case NetNSPath:
 		return fmt.Errorf("moving links to path netns %q is not supported by the exec driver; bind it under /var/run/netns and use kind=name", netns.Path)
 	default:
@@ -462,19 +548,33 @@ func sameNetNS(a, b NetNSSpec) bool {
 
 func (d SystemXFRMDriver) addXFRMInterface(ctx context.Context, netns NetNSSpec, name string, ifID uint32) error {
 	args := []string{"link", "add", name, "type", "xfrm", "if_id", fmt.Sprintf("%d", ifID)}
-	return d.runInNetNS(ctx, netns, args...)
+	return d.mutateLink(ctx, netns, name, xfrmMutation{kind: xfrmAdd, ifID: ifID}, args...)
 }
 
 func (d SystemXFRMDriver) setLinkUp(ctx context.Context, netns NetNSSpec, name string) error {
-	return d.runInNetNS(ctx, netns, "link", "set", name, "up")
+	return d.mutateLink(ctx, netns, name, xfrmMutation{kind: xfrmUp}, "link", "set", name, "up")
 }
 
 func (d SystemXFRMDriver) enableMulticast(ctx context.Context, netns NetNSSpec, name string) error {
-	return d.runInNetNS(ctx, netns, "link", "set", name, "multicast", "on")
+	return d.mutateLink(ctx, netns, name, xfrmMutation{kind: xfrmMulticast}, "link", "set", name, "multicast", "on")
 }
 
 func (d SystemXFRMDriver) disableIPv6AddrGen(ctx context.Context, netns NetNSSpec, name string) error {
-	return d.runInNetNS(ctx, netns, "link", "set", name, "addrgenmode", "none")
+	return d.mutateLink(ctx, netns, name, xfrmMutation{kind: xfrmDisableAddrGen}, "link", "set", name, "addrgenmode", "none")
+}
+
+func (d SystemXFRMDriver) mutateLink(ctx context.Context, netns NetNSSpec, name string, op xfrmMutation, args ...string) error {
+	if d.mutateNetlink != nil {
+		attempted, err := d.mutateNetlink(ctx, netns.Normalized(), name, op)
+		if err == nil {
+			return nil
+		}
+		// Once sent, a missing acknowledgement cannot rule out a mutation.
+		if attempted || ctx.Err() != nil {
+			return fmt.Errorf("%s in %s: %w", strings.Join(args, " "), netnsLabel(netns), err)
+		}
+	}
+	return d.runInNetNS(ctx, netns, args...)
 }
 
 func (d SystemXFRMDriver) runInNetNS(ctx context.Context, netns NetNSSpec, args ...string) error {
@@ -577,13 +677,17 @@ var namespaceForwardingKeys = [...]string{
 }
 
 func (d SystemXFRMDriver) enableNamespaceForwarding(ctx context.Context, netns NetNSSpec) error {
-	values, readErr := d.readForwardingValues(ctx, netns, namespaceForwardingKeys[:])
+	values, _ := d.readForwardingValues(ctx, netns, namespaceForwardingKeys[:])
+	return d.repairNamespaceForwarding(ctx, netns, values)
+}
+
+func (d SystemXFRMDriver) repairNamespaceForwarding(ctx context.Context, netns NetNSSpec, values []string) error {
 	for i, key := range namespaceForwardingKeys {
 		// With no reliable observation, retain the unconditional repair.
-		if readErr == nil && values[i] == "1" {
+		if values != nil && values[i] == "1" {
 			continue
 		}
-		if err := d.sysctl(ctx, netns, "-w", key+"=1"); err != nil {
+		if err := d.writeForwarding(ctx, netns, key); err != nil {
 			return err
 		}
 	}
@@ -592,15 +696,48 @@ func (d SystemXFRMDriver) enableNamespaceForwarding(ctx context.Context, netns N
 
 func (d SystemXFRMDriver) enableInterfaceForwarding(ctx context.Context, netns NetNSSpec, iface string) error {
 	params := []string{
-		fmt.Sprintf("net.ipv4.conf.%s.forwarding=1", iface),
-		fmt.Sprintf("net.ipv6.conf.%s.forwarding=1", iface),
+		fmt.Sprintf("net.ipv4.conf.%s.forwarding", iface),
+		fmt.Sprintf("net.ipv6.conf.%s.forwarding", iface),
 	}
 	for _, p := range params {
-		if err := d.sysctl(ctx, netns, "-w", p); err != nil {
+		if err := d.writeForwarding(ctx, netns, p); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func forwardingProcPath(key string) (string, error) {
+	if strings.Contains(key, "/") || strings.Contains(key, "..") {
+		return "", fmt.Errorf("unsupported forwarding key %q", key)
+	}
+	return "/proc/sys/" + strings.ReplaceAll(key, ".", "/"), nil
+}
+
+func (d SystemXFRMDriver) writeForwarding(ctx context.Context, netns NetNSSpec, key string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if d.inNetNS != nil {
+		path, err := forwardingProcPath(key)
+		if err == nil {
+			var attempted bool
+			err = d.inNetNS(netns.Normalized(), func() error {
+				file, err := os.OpenFile(path, os.O_WRONLY, 0)
+				if err != nil {
+					return err
+				}
+				defer file.Close()
+				attempted = true
+				_, err = file.WriteString("1\n")
+				return err
+			})
+			if err == nil || attempted {
+				return err
+			}
+		}
+	}
+	return d.sysctl(ctx, netns, "-w", key+"=1")
 }
 
 func (d SystemXFRMDriver) sysctl(ctx context.Context, netns NetNSSpec, args ...string) error {

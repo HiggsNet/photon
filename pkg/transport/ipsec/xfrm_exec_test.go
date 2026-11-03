@@ -196,6 +196,7 @@ func TestSystemXFRMDriverCreatesHostBornXFRMInterfaceForNamedNamespace(t *testin
 	}
 	got := commandStrings(commands)
 	want := []string{
+		"ip netns exec photontesth2 sysctl -n net.ipv4.conf.all.forwarding net.ipv4.conf.default.forwarding net.ipv6.conf.all.forwarding net.ipv6.conf.default.forwarding",
 		"ip netns exec photontesth2 true",
 		"ip netns add photontesth2",
 		"ip netns exec photontesth2 sysctl -n net.ipv4.conf.all.forwarding net.ipv4.conf.default.forwarding net.ipv6.conf.all.forwarding net.ipv6.conf.default.forwarding",
@@ -294,8 +295,8 @@ func TestSystemXFRMDriverEnablesMulticastOnExistingInterface(t *testing.T) {
 	}
 	got := commandStrings(commands)
 	want := []string{
-		"ip netns exec photontesth2 true",
 		"ip netns exec photontesth2 sysctl -n net.ipv4.conf.all.forwarding net.ipv4.conf.default.forwarding net.ipv6.conf.all.forwarding net.ipv6.conf.default.forwarding",
+		"ip netns exec photontesth2 true",
 		"ip netns exec photontesth2 sysctl -w net.ipv4.conf.all.forwarding=1",
 		"ip netns exec photontesth2 sysctl -w net.ipv4.conf.default.forwarding=1",
 		"ip netns exec photontesth2 sysctl -w net.ipv6.conf.all.forwarding=1",
@@ -396,8 +397,8 @@ func TestSystemXFRMDriverMovesHostResidualInterfaceIntoNamedNamespace(t *testing
 	}
 	got := commandStrings(commands)
 	want := []string{
-		"ip netns exec photontesth2 true",
 		"ip netns exec photontesth2 sysctl -n net.ipv4.conf.all.forwarding net.ipv4.conf.default.forwarding net.ipv6.conf.all.forwarding net.ipv6.conf.default.forwarding",
+		"ip netns exec photontesth2 true",
 		"ip netns exec photontesth2 sysctl -w net.ipv4.conf.all.forwarding=1",
 		"ip netns exec photontesth2 sysctl -w net.ipv4.conf.default.forwarding=1",
 		"ip netns exec photontesth2 sysctl -w net.ipv6.conf.all.forwarding=1",
@@ -843,10 +844,9 @@ func TestSystemXFRMDriverRepairsNamespaceForwardingDrift(t *testing.T) {
 		name   string
 		spec   NetNSSpec
 		prefix string
-		probe  []string
 	}{
 		{name: "host", spec: NetNSSpec{Kind: NetNSHost}},
-		{name: "named", spec: NetNSSpec{Kind: NetNSName, Name: "mesh"}, prefix: "ip netns exec mesh ", probe: []string{"ip netns exec mesh true"}},
+		{name: "named", spec: NetNSSpec{Kind: NetNSName, Name: "mesh"}, prefix: "ip netns exec mesh "},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var commands []string
@@ -855,8 +855,6 @@ func TestSystemXFRMDriverRepairsNamespaceForwardingDrift(t *testing.T) {
 				command := strings.Join(append([]string{name}, args...), " ")
 				commands = append(commands, command)
 				switch command {
-				case "ip netns exec mesh true":
-					return nil, nil
 				case tc.prefix + read:
 					return []byte("1\n1\n1\n" + v6Default + "\n"), nil
 				case tc.prefix + "sysctl -w net.ipv6.conf.default.forwarding=1":
@@ -868,7 +866,7 @@ func TestSystemXFRMDriverRepairsNamespaceForwardingDrift(t *testing.T) {
 			}}
 			for _, drift := range []bool{false, true, false} {
 				commands = nil
-				want := append(append([]string(nil), tc.probe...), tc.prefix+read)
+				want := []string{tc.prefix + read}
 				if drift {
 					v6Default = "0"
 					want = append(want, tc.prefix+"sysctl -w net.ipv6.conf.default.forwarding=1")
