@@ -4,12 +4,43 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 
 	bolt "go.etcd.io/bbolt"
 )
 
 var bucketCheckpointPeers = []byte("peers")
+
+const checkpointRefreshIntervalSeconds = 5
+
+// Compare with the on-disk checkpoint so frequent in-memory updates do not
+// keep moving the persistence window. First observations, resets and semantic
+// changes still persist immediately.
+func canSkipCheckpointRefresh(data []byte, next PeerCheckpoint) bool {
+	var persisted PeerCheckpoint
+	if data == nil || json.Unmarshal(data, &persisted) != nil {
+		return false
+	}
+	fields := [][2]*int64{
+		{&persisted.LastAttemptUnix, &next.LastAttemptUnix},
+		{&persisted.LastSyncUnix, &next.LastSyncUnix},
+		{&persisted.ObservedLastSeenUnix, &next.ObservedLastSeenUnix},
+		{&persisted.ObservedLastSyncUnix, &next.ObservedLastSyncUnix},
+		{&persisted.ObservedUntilUnix, &next.ObservedUntilUnix},
+	}
+	for _, field := range fields {
+		old, new := *field[0], *field[1]
+		if old == new {
+			continue
+		}
+		if old <= 0 || new < old || new-old >= checkpointRefreshIntervalSeconds {
+			return false
+		}
+		*field[0] = new
+	}
+	return reflect.DeepEqual(persisted, next)
+}
 
 // Legacy payload takes precedence: an older binary may have written it after
 // a downgrade. Old binaries safely see an empty (loss-tolerant) checkpoint when
@@ -153,6 +184,9 @@ func (store *BoltStore) CommitCheckpoints(ctx context.Context, updates map[strin
 					}
 					changed = true
 				}
+				continue
+			}
+			if canSkipCheckpointRefresh(peers.Get([]byte(id)), *peer) {
 				continue
 			}
 			data, err := json.Marshal(peer)

@@ -13,6 +13,53 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
+func TestCheckpointTimestampRefreshCoalescesOnlyOnDisk(t *testing.T) {
+	db := openCommonBoltTestDB(t)
+	initial := commonBoltTestCandidate(1)
+	initial.Gossip.Peers["peer-a"] = PeerCheckpoint{
+		ObservedEndpoint:     "192.0.2.1:33434",
+		ObservedLastSeenUnix: 100, ObservedUntilUnix: 200,
+		LastSyncUnix: 100, LastAttemptUnix: 100,
+	}
+	commitCommonBoltTestState(t, db, initial, 1)
+	disk := &BoltStore{db: db}
+	store, err := RestoreStore(initial, 1, disk.CommitCommon, disk.CommitCheckpoints)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refresh := func(now, wantDisk int64, endpoint string) {
+		t.Helper()
+		_, err := store.UpdatePeerCheckpoint(context.Background(), "peer-a", PeerCheckpointPatch{
+			ObservedEndpoint:  PatchField[string]{Set: endpoint != "", Value: endpoint},
+			ObservedLastUnix:  PatchField[int64]{Set: true, Value: now},
+			ObservedUntilUnix: PatchField[int64]{Set: true, Value: now + 100},
+			LastAttemptUnix:   PatchField[int64]{Set: true, Value: now},
+			LastSyncUnix:      PatchField[int64]{Set: true, Value: now},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		live := store.PeerCheckpoints([]string{"peer-a"})["peer-a"]
+		if live.ObservedLastSeenUnix != now || live.ObservedUntilUnix != now+100 || live.LastSyncUnix != now {
+			t.Fatalf("live checkpoint = %+v, want refresh at %d", live, now)
+		}
+		loaded, _, _, _, err := disk.LoadCommon()
+		if err != nil {
+			t.Fatal(err)
+		}
+		persisted := loaded.Gossip.Peers["peer-a"]
+		if persisted.ObservedLastSeenUnix != wantDisk || persisted.ObservedUntilUnix != wantDisk+100 ||
+			persisted.LastSyncUnix != wantDisk || persisted.ObservedEndpoint != live.ObservedEndpoint {
+			t.Fatalf("persisted checkpoint = %+v, want refresh at %d and endpoint %q", persisted, wantDisk, live.ObservedEndpoint)
+		}
+	}
+	refresh(101, 100, "")
+	refresh(104, 100, "")
+	refresh(105, 105, "")
+	refresh(106, 106, "192.0.2.2:33434")
+	refresh(103, 103, "") // A clock rollback is not a forward refresh.
+}
+
 func TestCheckpointNarrowCommitMigrationRollbackAndIsolation(t *testing.T) {
 	db := openCommonBoltTestDB(t)
 	initial := commonBoltTestCandidate(1)
