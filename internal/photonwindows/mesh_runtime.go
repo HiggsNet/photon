@@ -365,6 +365,20 @@ func (m *meshRuntime) handleIKE(packet tunnelDatagram) error {
 	return nil
 }
 
+const meshESPReceiveBatch = 8
+
+func (m *meshRuntime) handleESPBatch(ctx context.Context, pending <-chan tunnelDatagram, first tunnelDatagram) {
+	m.handleESP(first)
+	for i := 1; i < meshESPReceiveBatch && ctx.Err() == nil; i++ {
+		select {
+		case packet := <-pending:
+			m.handleESP(packet)
+		default:
+			return
+		}
+	}
+}
+
 func (m *meshRuntime) handleESP(packet tunnelDatagram) {
 	packet.timing.Dequeue()
 	p := m.findGeneration(packet.generation)

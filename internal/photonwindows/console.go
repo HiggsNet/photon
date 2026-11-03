@@ -400,7 +400,10 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			}
 			observeReady()
 		case datagram := <-packet.espPackets:
-			mesh.handleESP(datagram)
+			// Give a receive burst a bounded turn before competing again with
+			// host sends and control work. Keep ESP processing in FIFO order
+			// on this owner so replay state and SA lifetimes stay serialized.
+			mesh.handleESPBatch(ctx, packet.espPackets, datagram)
 		case job := <-mesh.jobs:
 			if job.ctx.Err() == nil {
 				mesh.complete(executeDataplaneJob(job))
