@@ -453,11 +453,11 @@ func (m *meshRuntime) selectRoute(packet []byte, view corestate.View, now time.T
 		if !m.packetFacts(p, view, now, &facts) || !pipeline.localAddress(source, facts.localOrigins) {
 			continue
 		}
-		routes := sadr.Lookup(pipeline.leaf.Candidates(now, facts.authorizeRoute), source, destination, now, facts.authorizeRoute)
-		if len(routes) == 0 {
+		route, ok := pipeline.leaf.LookupRoute(source, destination, now, facts.authorizeRoute)
+		if !ok {
 			continue
 		}
-		candidate := meshChoice{p, facts, routes[0]}
+		candidate := meshChoice{p, facts, route}
 		if len(choices) > 0 {
 			r, b := candidate.route, choices[0].route
 			d, s, bd, bs := r.Destination.Bits(), max(0, r.Source.Bits()), b.Destination.Bits(), max(0, b.Source.Bits())

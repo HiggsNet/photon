@@ -35,6 +35,7 @@ type Leaf struct {
 	seqno                uint16
 	origins              []Origin
 	routes               map[Origin]learnedRoute
+	forwarding           *forwardingTable
 	nextUpdate, nextDump time.Time
 }
 
@@ -118,6 +119,7 @@ func (l *Leaf) update(o Origin, metric uint16) Message {
 // Tick has no catch-up bursts. It emits local origins every update interval,
 // and requests a refresh once before each learned route expires.
 func (l *Leaf) Tick(now time.Time) []Message {
+	defer l.refreshForwarding()
 	out := l.neighbor.Tick(now)
 	if !now.Before(l.nextUpdate) {
 		l.nextUpdate = now.Add(updateInterval)
@@ -127,7 +129,7 @@ func (l *Leaf) Tick(now time.Time) []Message {
 	}
 	for o, r := range l.routes {
 		if !now.Before(r.expires) {
-			delete(l.routes, o)
+			l.removeRoute(o)
 			continue
 		}
 		if !r.requested && !now.Before(r.refresh) && l.neighbor.Cost(now) != MetricInfinity {
@@ -147,23 +149,21 @@ func (l *Leaf) Receive(packet []byte, now time.Time, authorize func(sadr.Route) 
 	if err != nil {
 		return nil, err
 	}
+	defer l.refreshForwarding()
 	// Prune before insertion so expired or newly unauthorized entries cannot
 	// exhaust the bounded table. Lookup must still revalidate on every use.
-	for o, r := range l.routes {
-		if !now.Before(r.expires) || authorize == nil || !authorize(l.candidate(r.message, r.expires, now)) {
-			delete(l.routes, o)
-		}
-	}
+	l.pruneRoutes(now, authorize)
 	for _, m := range batch.Updates {
 		if m.Wildcard {
 			clear(l.routes)
+			l.forwarding = nil
 			continue
 		}
 		o := Origin{m.Prefix, m.SourcePrefix}
 		if m.Metric == MetricInfinity {
 			// RFC 8966 section 3.5.3 keys a route by prefix and neighbor;
 			// retractions are feasible regardless of a change in router ID.
-			delete(l.routes, o)
+			l.removeRoute(o)
 			continue
 		}
 		if !validOrigin(o) || m.RouterID == l.routerID || m.NextHop != l.neighbor.peer {
@@ -181,6 +181,7 @@ func (l *Leaf) Receive(packet []byte, now time.Time, authorize func(sadr.Route) 
 		if !exists && len(l.routes) >= sadr.MaxRoutes {
 			continue
 		}
+		l.forwarding = nil
 		l.routes[o] = learnedRoute{message: m, expires: expires, refresh: now.Add(time.Duration(m.Interval) * 30 * time.Millisecond)}
 	}
 	out := batch.Replies
@@ -212,6 +213,21 @@ func (l *Leaf) Receive(packet []byte, now time.Time, authorize func(sadr.Route) 
 	return out, nil
 }
 
+// RevalidateRoutes applies a newly installed authorization policy to learned
+// routes. It runs on the control owner before packets can use that policy.
+func (l *Leaf) RevalidateRoutes(now time.Time, authorize func(sadr.Route) bool) {
+	l.pruneRoutes(now, authorize)
+	l.refreshForwarding()
+}
+
+func (l *Leaf) pruneRoutes(now time.Time, authorize func(sadr.Route) bool) {
+	for o, r := range l.routes {
+		if !now.Before(r.expires) || authorize == nil || !authorize(l.candidate(r.message, r.expires, now)) {
+			l.removeRoute(o)
+		}
+	}
+}
+
 func (l *Leaf) candidate(m Message, expires time.Time, now time.Time) sadr.Route {
 	metric := uint16(min(uint32(MetricInfinity), uint32(m.Metric)+uint32(l.neighbor.Cost(now))))
 	return sadr.Route{Destination: m.Prefix, Source: m.SourcePrefix, RouterID: m.RouterID, NextHop: m.NextHop, Metric: metric, ExpiresAt: expires}
@@ -221,11 +237,12 @@ func (l *Leaf) candidate(m Message, expires time.Time, now time.Time) sadr.Route
 // authorization. Remote feasibility distances are absent because this leaf
 // never advertises learned routes (RFC 8966 sections 3.5.1 and 3.7.3).
 func (l *Leaf) Candidates(now time.Time, authorize func(sadr.Route) bool) []sadr.Route {
+	defer l.refreshForwarding()
 	var out []sadr.Route
 	for o, r := range l.routes {
 		candidate := l.candidate(r.message, r.expires, now)
 		if !now.Before(r.expires) || authorize == nil || !authorize(candidate) {
-			delete(l.routes, o)
+			l.removeRoute(o)
 			continue
 		}
 		if candidate.Metric != MetricInfinity {
@@ -241,24 +258,6 @@ func SortCandidates(routes []sadr.Route) {
 	slices.SortFunc(routes, func(a, b sadr.Route) int {
 		return compareOrigin(Origin{a.Destination, a.Source}, Origin{b.Destination, b.Source})
 	})
-}
-
-// HasRoute keeps the live candidate pruning of Candidates and checks whether
-// an authorized route matches this packet. It avoids materializing and sorting
-// two result slices when the caller only needs a delivery verdict.
-func (l *Leaf) HasRoute(source, destination netip.Addr, now time.Time, authorize func(sadr.Route) bool) bool {
-	matched := false
-	for origin, learned := range l.routes {
-		candidate := l.candidate(learned.message, learned.expires, now)
-		if !now.Before(learned.expires) || authorize == nil || !authorize(candidate) {
-			delete(l.routes, origin)
-			continue
-		}
-		if candidate.Metric != MetricInfinity && !matched {
-			matched = sadr.HasRoute([]sadr.Route{candidate}, source, destination, now, authorize)
-		}
-	}
-	return matched
 }
 
 // NeighborLive reports current bidirectional reachability without requiring a

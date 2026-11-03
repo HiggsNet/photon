@@ -157,6 +157,9 @@ func (w *meshPolicyWorker) finish(result meshPolicyResult, revision corestate.Ve
 	p.policy.pending = nil
 	if result.projection != nil && !result.projection.lastWall.Before(result.request.at) &&
 		result.projection.current(p, revision, now) {
+		if p.leaf != nil && p.leaf.pipeline != nil {
+			p.leaf.pipeline.leaf.RevalidateRoutes(now, result.projection.authorize)
+		}
 		p.policy.current, p.policy.graceDeadline = result.projection, time.Time{}
 	}
 }
