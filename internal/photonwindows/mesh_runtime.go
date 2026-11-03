@@ -318,7 +318,7 @@ func (m *meshRuntime) tick() error {
 			if m.packetFacts(p, corestate.View{}, time.Now(), &facts) {
 				p.leaf.pipeline.tickPrepared(&facts)
 			}
-			m.synchronizeSequences()
+			m.noteSequence(p)
 		}
 	}
 	return nil
@@ -377,7 +377,6 @@ func (m *meshRuntime) handleESP(packet tunnelDatagram) {
 }
 
 func (m *meshRuntime) complete(completion dataplaneCompletion) {
-	defer m.synchronizeSequences()
 	p := m.byData[completion.job.owner]
 	if p == nil {
 		completion.timing.Finish(fixturePacketTimingCanceled)
@@ -390,6 +389,8 @@ func (m *meshRuntime) complete(completion dataplaneCompletion) {
 		return
 	}
 	p.tunnel.observeData(completion, facts.plan, now)
+	p.leaf.pipeline.leaf.SynchronizeSequence(m.seqno)
+	defer m.noteSequence(p)
 	if _, err := p.leaf.pipeline.acceptPrepared(&facts, completion); err != nil {
 		m.logger.Warn("leaf_packet_failed", "error", errors.Join(err, p.leaf.stop()))
 	}
@@ -520,16 +521,15 @@ func (m *meshRuntime) reset() {
 	}
 }
 
-func (m *meshRuntime) synchronizeSequences() {
-	for _, p := range m.ordered() {
-		if p.leaf.pipeline == nil || p.leaf.pipeline.leaf == nil {
-			continue
-		}
-		seqno := p.leaf.pipeline.leaf.OriginSequence()
-		if int16(seqno-m.seqno) > 0 {
-			m.seqno = seqno
-		}
+func (m *meshRuntime) noteSequence(p *meshPeer) {
+	if p.leaf.pipeline == nil || p.leaf.pipeline.leaf == nil {
+		return
 	}
+	seqno := p.leaf.pipeline.leaf.OriginSequence()
+	if int16(seqno-m.seqno) <= 0 {
+		return
+	}
+	m.seqno = seqno
 	for _, p := range m.ordered() {
 		if p.leaf.pipeline != nil && p.leaf.pipeline.leaf != nil {
 			p.leaf.pipeline.leaf.SynchronizeSequence(m.seqno)
