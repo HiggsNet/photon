@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -102,7 +103,19 @@ func TestPacketSocketReceiveDuringBlockedWrite(t *testing.T) {
 					written <- err
 				}
 			}()
-			waitPacketSocketWriter(t, s)
+			nativeControl := kind == "Gossip" && runtime.GOOS == "windows"
+			if nativeControl {
+				select {
+				case err := <-written:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-time.After(500 * time.Millisecond):
+					t.Fatal("Gossip send waited for the ESP descriptor writer")
+				}
+			} else {
+				waitPacketSocketWriter(t, s)
+			}
 			request, err := ike.NewInitiator()
 			if err != nil {
 				t.Fatal(err)
@@ -150,8 +163,10 @@ func TestPacketSocketReceiveDuringBlockedWrite(t *testing.T) {
 				}
 			}
 			unblock()
-			if err := <-written; err != nil {
-				t.Fatal(err)
+			if !nativeControl {
+				if err := <-written; err != nil {
+					t.Fatal(err)
+				}
 			}
 			peer.SetReadDeadline(time.Now().Add(time.Second))
 			buffer := make([]byte, 1200)

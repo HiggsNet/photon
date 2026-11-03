@@ -32,6 +32,7 @@ type packetSockets struct {
 	tunnelGeneration uint64
 	tunnels          map[uint64]tunnelEndpoints
 	tunnelPeers      map[netip.AddrPort]map[uint64]bool
+	controlWrites    map[*udpControlWrite]struct{} // Windows overlapped sends, guarded by writeMu.
 	ikePackets       chan tunnelDatagram
 	espPackets       chan tunnelDatagram
 }
@@ -71,6 +72,7 @@ func (s *packetSockets) Rebind(ctx context.Context) error {
 		return err
 	}
 	s.clearTunnelLocked()
+	s.cancelUDPControlLocked(0, true)
 	if s.udp != nil {
 		_ = s.udp.Close()
 		s.udp = nil
@@ -131,6 +133,7 @@ func (s *packetSockets) Close() error {
 	}
 	s.closed = true
 	s.clearTunnelLocked()
+	s.cancelUDPControlLocked(0, true)
 	var err error
 	if s.udp != nil {
 		err = errors.Join(err, s.udp.Close())
@@ -209,6 +212,7 @@ func (s *packetSockets) invalidate(udp *net.UDPConn, tcp net.Listener) {
 		return
 	}
 	s.clearTunnelLocked()
+	s.cancelUDPControlLocked(0, true)
 	if s.udp != nil {
 		_ = s.udp.Close()
 		s.udp = nil
@@ -226,17 +230,26 @@ func (s *packetSockets) invalidate(udp *net.UDPConn, tcp net.Listener) {
 }
 
 func (s *packetSockets) WriteDatagram(b []byte, addr *net.UDPAddr) (int, error) {
-	// Serialize writes with replacement so stale completion cannot claim success.
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	conn, closed := s.udp, s.closed
-	if closed || conn == nil {
-		return 0, net.ErrClosed
+	return s.writeUDPControl(b, addr, 0)
+}
+
+func (s *packetSockets) WriteIKE(generation uint64, packet []byte, peer netip.AddrPort) error {
+	if generation == 0 || !peer.IsValid() {
+		return net.ErrClosed
 	}
-	if err := conn.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
-		return 0, err
+	_, err := s.writeUDPControl(packet, net.UDPAddrFromAddrPort(peer), generation)
+	return err
+}
+
+func (s *packetSockets) udpControlCurrentLocked(conn *net.UDPConn, generation uint64, peer netip.AddrPort) bool {
+	if conn == nil || conn != s.udp || s.closed {
+		return false
 	}
-	return conn.WriteToUDP(b, addr)
+	if generation == 0 {
+		return true
+	}
+	endpoints, reserved := s.tunnels[generation]
+	return reserved && (peer == endpoints.ike || peer == endpoints.natt)
 }
 
 func (s *packetSockets) clearTunnelLocked() {
@@ -255,6 +268,7 @@ func (s *packetSockets) SelectTunnel(ikePeer, nattPeer netip.AddrPort) uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.clearTunnelLocked()
+	s.cancelUDPControlLocked(0, false)
 	if !s.closed {
 		s.addTunnelLocked(s.tunnelGeneration, ikePeer, nattPeer)
 	}
