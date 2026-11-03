@@ -279,37 +279,40 @@ func observedXFRMLink(netns NetNSSpec, link ipJSONLink, addresses []netip.Prefix
 }
 
 func (d SystemXFRMDriver) inspectForwardingInNamespace(ctx context.Context, netns NetNSSpec, interfaces []string) (bool, map[string]bool, error) {
-	keys := []string{
-		"net.ipv4.conf.all.forwarding",
-		"net.ipv4.conf.default.forwarding",
-		"net.ipv6.conf.all.forwarding",
-		"net.ipv6.conf.default.forwarding",
-	}
+	keys := append([]string(nil), namespaceForwardingKeys[:]...)
 	for _, iface := range interfaces {
 		keys = append(keys,
 			fmt.Sprintf("net.ipv4.conf.%s.forwarding", iface),
 			fmt.Sprintf("net.ipv6.conf.%s.forwarding", iface),
 		)
 	}
-	args := append([]string{"-n"}, keys...)
-	out, err := d.outputSysctl(ctx, netns, args...)
+	values, err := d.readForwardingValues(ctx, netns, keys)
 	if err != nil {
-		return false, nil, fmt.Errorf("inspect forwarding in %s: %w", netnsLabel(netns), err)
+		return false, nil, err
 	}
-	values := strings.Fields(string(out))
-	if len(values) != len(keys) {
-		return false, nil, fmt.Errorf("inspect forwarding in %s: got %d values for %d keys", netnsLabel(netns), len(values), len(keys))
-	}
+	namespaceKeyCount := len(namespaceForwardingKeys)
 	namespaceForwarding := true
-	for _, value := range values[:4] {
+	for _, value := range values[:namespaceKeyCount] {
 		namespaceForwarding = namespaceForwarding && value == "1"
 	}
 	interfaceForwarding := make(map[string]bool, len(interfaces))
 	for i, iface := range interfaces {
-		base := 4 + i*2
+		base := namespaceKeyCount + i*2
 		interfaceForwarding[iface] = values[base] == "1" && values[base+1] == "1"
 	}
 	return namespaceForwarding, interfaceForwarding, nil
+}
+
+func (d SystemXFRMDriver) readForwardingValues(ctx context.Context, netns NetNSSpec, keys []string) ([]string, error) {
+	out, err := d.outputSysctl(ctx, netns, append([]string{"-n"}, keys...)...)
+	if err != nil {
+		return nil, fmt.Errorf("inspect forwarding in %s: %w", netnsLabel(netns), err)
+	}
+	values := strings.Fields(string(out))
+	if len(values) != len(keys) {
+		return nil, fmt.Errorf("inspect forwarding in %s: got %d values for %d keys", netnsLabel(netns), len(values), len(keys))
+	}
+	return values, nil
 }
 
 func (d SystemXFRMDriver) outputSysctl(ctx context.Context, netns NetNSSpec, args ...string) ([]byte, error) {

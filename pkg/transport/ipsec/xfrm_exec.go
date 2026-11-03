@@ -569,15 +569,21 @@ func (d SystemXFRMDriver) trueCommand() string {
 	return "true"
 }
 
+var namespaceForwardingKeys = [...]string{
+	"net.ipv4.conf.all.forwarding",
+	"net.ipv4.conf.default.forwarding",
+	"net.ipv6.conf.all.forwarding",
+	"net.ipv6.conf.default.forwarding",
+}
+
 func (d SystemXFRMDriver) enableNamespaceForwarding(ctx context.Context, netns NetNSSpec) error {
-	params := []string{
-		"net.ipv4.conf.all.forwarding=1",
-		"net.ipv4.conf.default.forwarding=1",
-		"net.ipv6.conf.all.forwarding=1",
-		"net.ipv6.conf.default.forwarding=1",
-	}
-	for _, p := range params {
-		if err := d.sysctl(ctx, netns, "-w", p); err != nil {
+	values, readErr := d.readForwardingValues(ctx, netns, namespaceForwardingKeys[:])
+	for i, key := range namespaceForwardingKeys {
+		// With no reliable observation, retain the unconditional repair.
+		if readErr == nil && values[i] == "1" {
+			continue
+		}
+		if err := d.sysctl(ctx, netns, "-w", key+"=1"); err != nil {
 			return err
 		}
 	}
