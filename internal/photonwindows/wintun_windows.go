@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wintun"
@@ -54,7 +55,7 @@ type wintunDevice struct {
 	done       chan struct{}
 	packets    chan []byte
 	mu         sync.Mutex // serializes writes with ring teardown
-	closed     bool
+	closed     atomic.Bool
 	err        error
 	unregister func()
 }
@@ -114,7 +115,7 @@ func (d *wintunDevice) receive(ctx context.Context, stopEvent windows.Handle) {
 		}
 		d.cancel()
 		d.mu.Lock()
-		d.closed = true
+		d.closed.Store(true)
 		d.session.End()
 		_ = d.adapter.Close() // upstream wraps a void API; its return is undefined
 		d.unregister()
@@ -156,12 +157,14 @@ func (d *wintunDevice) Read(ctx context.Context) ([]byte, error) {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case packet, ok := <-d.packets:
+		// The reader already detached this buffer from the ring. A successful
+		// read only needs to check whether teardown has started.
+		if ok && !d.closed.Load() {
+			return packet, nil
+		}
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		if !ok || d.closed {
-			return nil, errors.Join(io.ErrClosedPipe, d.err)
-		}
-		return packet, nil
+		return nil, errors.Join(io.ErrClosedPipe, d.err)
 	}
 }
 
@@ -173,7 +176,7 @@ func (d *wintunDevice) Write(packet []byte) error {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.closed {
+	if d.closed.Load() {
 		return io.ErrClosedPipe
 	}
 	buffer, err := d.session.AllocateSendPacket(len(packet))

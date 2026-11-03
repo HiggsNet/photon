@@ -119,7 +119,7 @@ func (d ipHelperDriver) lock(ctx context.Context) (func(), error) {
 		return nil, errors.New("IP Helper requires an owned Wintun adapter")
 	}
 	d.device.mu.Lock()
-	if d.device.closed || d.device.luid == 0 {
+	if d.device.closed.Load() || d.device.luid == 0 {
 		d.device.mu.Unlock()
 		return nil, io.ErrClosedPipe
 	}
