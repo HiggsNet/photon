@@ -180,6 +180,9 @@ func (d *wintunDevice) Write(packet []byte) error {
 		return io.ErrClosedPipe
 	}
 	buffer, err := d.session.AllocateSendPacket(len(packet))
+	if errors.Is(err, windows.ERROR_BUFFER_OVERFLOW) {
+		return errPacketDeviceFull
+	}
 	if err != nil {
 		return err
 	}

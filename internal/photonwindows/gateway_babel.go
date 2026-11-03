@@ -13,6 +13,8 @@ import (
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
+var errPacketDeviceFull = errors.New("packet device receive ring full")
+
 // packetDevice is the delivery half of a packet device. Its bounded reader is
 // pumped by the same event loop through SubmitPacket; this owner starts no I/O
 // goroutine and never lets control packets enter the host stack.
@@ -279,6 +281,11 @@ func (p *gatewayBabelPipeline) acceptPrepared(facts *packetAuthorization, comple
 	completion.timing.MarkDeliveryEnd()
 	if err != nil {
 		completion.timing.Finish(fixturePacketTimingDeliveryError)
+		// A full ring drops this packet. Tearing down the attachment would
+		// also interrupt unrelated traffic while the host drains the ring.
+		if errors.Is(err, errPacketDeviceFull) {
+			return false, nil
+		}
 	} else {
 		completion.timing.Finish(fixturePacketTimingDelivered)
 	}
