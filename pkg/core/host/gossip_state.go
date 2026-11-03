@@ -191,6 +191,10 @@ func (driver *GossipDriver) applyGossipSnapshots(
 }
 
 func (driver *GossipDriver) logGossipSnapshotOutcome(peerID string, managedZone zone.ZonePath, action gossip.ApplySnapshotAction, outcome corestate.RemoteApplyOutcome) {
+	if outcome.AlreadySatisfied {
+		driver.logGossip("debug", "snapshot_already_satisfied", peerID, GossipPhaseApply, nil, map[string]any{"zone": action.Snapshot.Zone})
+		return
+	}
 	if outcome.Err != nil {
 		if action.RefreshOnRootMismatch && errors.Is(outcome.Err, corestate.ErrSnapshotRootMismatch) {
 			driver.logGossip("debug", "catalog_changed", peerID, GossipPhaseApply, outcome.Err, map[string]any{"zone": action.Snapshot.Zone})

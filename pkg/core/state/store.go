@@ -146,6 +146,7 @@ type RemoteApplyOutcome struct {
 	Result             *ApplyResult
 	ManagedZoneAdopted bool
 	AuthorityRefreshed bool
+	AlreadySatisfied   bool
 	RejectReason       string
 	Err                error
 }
@@ -256,6 +257,7 @@ func (store *Store) ApplyRemoteBatch(ctx context.Context, peerID string, batch [
 	baseGossip := cloneGossipCheckpoint(store.gossip)
 	store.mu.RUnlock()
 	candidate := base
+	committedNetwork := base.Network
 	gossipCandidate := baseGossip
 	changedZones := make([]zone.ZonePath, 0, len(batch))
 	metadataChanged := false
@@ -276,6 +278,16 @@ func (store *Store) ApplyRemoteBatch(ctx context.Context, peerID string, batch [
 		} else if len(item.ExpectedRoot) > 0 {
 			actual := ZoneRoot(ZoneStateFromSnapshot(item.Snapshot))
 			if !bytes.Equal(actual, item.ExpectedRoot) {
+				path := item.Snapshot.Zone
+				// Only a previously committed copy can satisfy stale catalog work.
+				// The incoming snapshot is discarded without applying any of it.
+				if bytes.Equal(actual, ZoneRoot(committedNetwork.Zones[path])) &&
+					!candidate.Network.IsZoneRevoked(path, now) &&
+					photoncrypto.VerifyChain(committedNetwork, path, now) == nil {
+					outcome.AlreadySatisfied = true
+					out.Outcomes = append(out.Outcomes, outcome)
+					continue
+				}
 				outcome.Err = fmt.Errorf("%w for %s: expected %x, received %x", ErrSnapshotRootMismatch, item.Snapshot.Zone, item.ExpectedRoot, actual)
 			}
 		}

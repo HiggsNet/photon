@@ -64,6 +64,7 @@ func TestStoreApplyRemoteBatchRetainsSuccessRejectSuccess(t *testing.T) {
 		{Snapshot: snapshotV1, ExpectedRoot: ZoneRoot(ZoneStateFromSnapshot(snapshotV1))},
 		{Snapshot: bad, ExpectedRoot: []byte("advertised-root")},
 		{Snapshot: snapshotV2, ExpectedRoot: ZoneRoot(ZoneStateFromSnapshot(snapshotV2))},
+		{Snapshot: snapshotV2, ExpectedRoot: ZoneRoot(ZoneStateFromSnapshot(snapshotV1)), RefreshOnRootMismatch: true},
 	}, now)
 	if err != nil {
 		t.Fatalf("ApplyRemoteBatch: %v", err)
@@ -71,8 +72,9 @@ func TestStoreApplyRemoteBatchRetainsSuccessRejectSuccess(t *testing.T) {
 	if !result.Committed || !result.Changes.NetworkChanged || !result.Changes.GossipCheckpointChanged {
 		t.Fatalf("commit result = %+v, want network and metadata commit", result.CommitResult)
 	}
-	if len(result.Outcomes) != 3 || result.Outcomes[0].Err != nil || !errors.Is(result.Outcomes[1].Err, ErrSnapshotRootMismatch) || result.Outcomes[2].Err != nil {
-		t.Fatalf("outcomes = %#v, want success/reject/success", result.Outcomes)
+	if len(result.Outcomes) != 4 || result.Outcomes[0].Err != nil || !errors.Is(result.Outcomes[1].Err, ErrSnapshotRootMismatch) ||
+		result.Outcomes[2].Err != nil || !errors.Is(result.Outcomes[3].Err, ErrSnapshotRootMismatch) {
+		t.Fatalf("outcomes = %#v, want success/reject/success/reject uncommitted root", result.Outcomes)
 	}
 	view := store.ReadView()
 	if got := string(view.State.Network.Zones["catofes."].Records["identity"].Value); got != "v2" {
@@ -136,8 +138,13 @@ func TestStoreApplyRemoteBatchIdenticalSnapshotOnlyClearsRejectedCheckpoint(t *t
 
 func TestStoreRepeatedRejectionRenewsOnlyAfterExpiry(t *testing.T) {
 	now := time.Unix(1000, 0)
-	network, _ := testNetwork(t)
-	snapshot, err := Snapshot(network, "catofes.")
+	network, privateKey := testNetwork(t)
+	source := cloneNetworkState(network)
+	source.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
+	if err := source.PutAt(signedRecord(t, privateKey, "catofes.", "identity", []byte("new"), 1, nil, now.Unix()), now); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := Snapshot(source, "catofes.")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -488,4 +495,31 @@ func (sink *memoryCommitSink) CommitCheckpoints(_ context.Context, peers map[str
 		}
 	}
 	return nil
+}
+
+func TestStoreStaleCatalogCannotUseRevokedLocalZone(t *testing.T) {
+	now := time.Unix(1000, 0)
+	path := zone.ZonePath("catofes.")
+	network, rootKey, _ := testNetworkWithKeys(t)
+	parent := network.Zones[zone.RootZone]
+	delegation := parent.Delegations[path]
+	revocation := &zone.DelegationRevocation{
+		ParentZone: zone.RootZone, ChildZone: path, RevokedAt: now.Unix(),
+		RevokedAuthorityEpoch: delegation.AuthorityEpoch, RevokedAuthorityHash: delegation.AuthorityHash,
+	}
+	if err := photoncrypto.SignDelegationRevocation(revocation, zone.RootZone, rootKey); err != nil {
+		t.Fatal(err)
+	}
+	parent.Revocations[path] = revocation
+	snapshot, err := Snapshot(network, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(&VerifiedState{ManagedZone: "local.catofes.", Network: network}, nil, nil)
+	result, err := store.ApplyRemoteBatch(t.Context(), "relay", []RemoteSnapshot{
+		{Snapshot: snapshot, ExpectedRoot: []byte("stale"), RefreshOnRootMismatch: true},
+	}, now)
+	if err != nil || len(result.Outcomes) != 1 || !errors.Is(result.Outcomes[0].Err, ErrSnapshotRootMismatch) || result.Outcomes[0].AlreadySatisfied {
+		t.Fatalf("revoked matching root satisfied stale pull: result=%+v err=%v", result, err)
+	}
 }

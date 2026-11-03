@@ -79,6 +79,9 @@ func TestGossipDriversConvergeCommonStateAndReloadWithoutClientRuntime(t *testin
 		t.Fatal(err)
 	}
 	beforeReject := right.store.VerifiedRevision()
+	// Use a root absent from the committed store so this exercises rejection
+	// rather than the already-satisfied stale catalog path.
+	snapshot.Authority.Epoch++
 	// Completed sessions are now removed by GossipDriver itself. This direct
 	// executor check supplies its own detached protocol context instead of
 	// relying on a stale session retained after convergence.
