@@ -14,19 +14,24 @@ import (
 	"github.com/HiggsNet/photon/pkg/routing"
 )
 
-const meshPolicyQueueSize = 64
+const (
+	meshPolicyQueueSize = 64
+	// Bound publication-to-application latency even if the verifier is stalled.
+	meshPolicyRevisionGrace = 2 * time.Second
+)
 
 // meshPeerPolicy belongs to the Mesh event owner. A request contains no
 // references to mutable session, device, or route state used by the worker.
 type meshPeerPolicy struct {
-	pending *meshPolicyRequest
-	current *meshPolicyProjection
+	pending       *meshPolicyRequest
+	current       *meshPolicyProjection
+	graceDeadline time.Time
 }
 
 type meshPolicyRequest struct {
 	peer     *meshPeer // Opaque completion identity. The worker never reads it.
 	revision corestate.VerifiedRevision
-	store    *corestate.Store
+	at       time.Time
 	config   Config
 	hint     GatewayPlan
 }
@@ -71,42 +76,68 @@ func plannerPolicyEqual(a, b GatewayPlan) bool {
 	return packetGatewayHintEqual(a, b)
 }
 
-func (r *meshPolicyRequest) matches(p *meshPeer, revision corestate.VerifiedRevision) bool {
-	return r.revision == revision && packetPolicyConfigEqual(&p.config, &r.config) && plannerPolicyEqual(p.plan, r.hint)
+func (r *meshPolicyRequest) matchesHint(p *meshPeer) bool {
+	return packetPolicyConfigEqual(&p.config, &r.config) && plannerPolicyEqual(p.plan, r.hint)
+}
+
+func (p *meshPolicyProjection) validAt(now time.Time) bool {
+	wall := now.Round(0)
+	return !wall.Before(p.lastWall) && wall.Before(p.deadline) &&
+		(p.monotonic.IsZero() || now.Before(p.monotonic))
 }
 
 func (p *meshPolicyProjection) current(peer *meshPeer, revision corestate.VerifiedRevision, now time.Time) bool {
-	wall := now.Round(0)
-	return p.request.matches(peer, revision) && !wall.Before(p.lastWall) &&
-		wall.Before(p.deadline) && (p.monotonic.IsZero() || now.Before(p.monotonic)) && packetGatewayHintCurrent(peer.plan, now)
+	return p.request.revision == revision && p.request.matchesHint(peer) &&
+		p.validAt(now) && packetGatewayHintCurrent(peer.plan, now)
 }
 
-// project never reads the full store view or verifies records. On a miss it
-// queues at most one request per peer and immediately marks the peer pending.
-// Returning pending is distinct from a verified denial and must not tear down
-// an otherwise live session. Packets for a pending peer still fail closed.
+func (p *meshPeerPolicy) accepts(projection *meshPolicyProjection, now time.Time) bool {
+	return p.current == projection && projection.validAt(now) &&
+		(p.graceDeadline.IsZero() || now.Before(p.graceDeadline))
+}
+
+// project queues at most one request per peer. While a newer revision is
+// pending, ESP can use the unchanged installed policy for one bounded grace.
+// IKE and device attachment must wait for a settled current projection.
 func (w *meshPolicyWorker) project(p *meshPeer, revision corestate.VerifiedRevision, now time.Time) (*meshPolicyProjection, bool) {
+	policy := &p.policy
 	if !packetGatewayHintCurrent(p.plan, now) {
+		*policy = meshPeerPolicy{}
 		return nil, false
 	}
-	if current := p.policy.current; current != nil {
-		if current.current(p, revision, now) {
-			current.lastWall = now.Round(0)
-			return current, false
-		}
-		p.policy.current = nil
+	wall := now.Round(0)
+	if policy.pending != nil && wall.Before(policy.pending.at) {
+		policy.pending = nil
 	}
-	if p.policy.pending == nil {
+	var installed *meshPolicyProjection
+	if current := policy.current; current != nil {
+		switch {
+		case !current.validAt(now) || !current.request.matchesHint(p) || current.request.revision > revision:
+			policy.current, policy.graceDeadline = nil, time.Time{}
+		case current.request.revision == revision:
+			current.lastWall = wall
+			return current, false
+		case current.plan.Selected != nil:
+			if policy.graceDeadline.IsZero() {
+				policy.graceDeadline = now.Add(meshPolicyRevisionGrace)
+			}
+			if policy.accepts(current, now) {
+				current.lastWall = wall
+				installed = current
+			}
+		}
+	}
+	if policy.pending == nil && len(w.requests) < cap(w.requests) {
 		request := &meshPolicyRequest{
-			peer: p, revision: revision, store: w.store, config: clonePacketPolicyConfig(&p.config), hint: clonePacketGatewayHint(p.plan),
+			peer: p, revision: revision, at: wall, config: clonePacketPolicyConfig(&p.config), hint: clonePacketGatewayHint(p.plan),
 		}
 		select {
 		case w.requests <- request:
-			p.policy.pending = request
+			policy.pending = request
 		default:
 		}
 	}
-	return nil, true
+	return installed, true
 }
 
 // finish runs on the Mesh owner. Revocation and plan changes invalidate even
@@ -117,8 +148,9 @@ func (w *meshPolicyWorker) finish(result meshPolicyResult, revision corestate.Ve
 		return
 	}
 	p.policy.pending = nil
-	if result.projection != nil && result.projection.current(p, revision, now) {
-		p.policy.current = result.projection
+	if result.projection != nil && !result.projection.lastWall.Before(result.request.at) &&
+		result.projection.current(p, revision, now) {
+		p.policy.current, p.policy.graceDeadline = result.projection, time.Time{}
 	}
 }
 
@@ -140,7 +172,7 @@ func (p *meshPolicyProjection) packetFacts(pipeline *gatewayBabelPipeline, now t
 		return false
 	}
 	prepared := packetAuthorization{
-		owner: pipeline, revisionStore: p.request.store, revision: p.request.revision, plan: p.plan, now: now, hosts: p.hosts, localOrigins: origins, authorizeRoute: p.authorize,
+		owner: pipeline, projection: p, plan: p.plan, now: now, hosts: p.hosts, localOrigins: origins, authorizeRoute: p.authorize,
 	}
 	if !pipeline.preparedCurrent(&prepared) {
 		return false

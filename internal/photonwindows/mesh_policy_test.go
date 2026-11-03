@@ -81,7 +81,7 @@ func meshPolicyFixtureResolver() gatewayResolvedHosts {
 	return gatewayResolvedHosts{"gateway.example": {{IP: net.IPv4(192, 0, 2, 1)}}}
 }
 
-func TestMeshPolicyProjectionPinsInstalledSAAndStoreRevision(t *testing.T) {
+func TestMeshPolicyProjectionPinsInstalledSAAndPolicy(t *testing.T) {
 	f := runtimeFixture(t)
 	store := corestate.NewStore(f.view.State, nil, nil)
 	defer store.Close()
@@ -104,9 +104,22 @@ func TestMeshPolicyProjectionPinsInstalledSAAndStoreRevision(t *testing.T) {
 	if !projection.packetFacts(f.p, f.now, &facts) {
 		t.Fatal("signed projection rejected its pinned installed SA")
 	}
-	facts.revision++
+	next := view.Revision + 1
+	continued, pending := worker.project(peer, next, f.now)
+	if !pending || continued != projection || !f.p.preparedCurrent(&facts) {
+		t.Fatal("new revision interrupted installed ESP policy before verification settled")
+	}
+	replacement := <-worker.requests
+	denial := &meshPolicyProjection{
+		request: replacement, deadline: f.now.Add(time.Minute), lastWall: f.now,
+		plan: GatewayPlan{Rejected: "verified authorization withdrawn"},
+	}
+	worker.finish(meshPolicyResult{request: replacement, projection: denial}, next, f.now)
 	if f.p.preparedCurrent(&facts) {
-		t.Fatal("final packet gate accepted facts pinned to another published revision")
+		t.Fatal("final packet gate retained facts from before verified denial")
+	}
+	if result, pending := worker.project(peer, next, f.now); result != denial || pending {
+		t.Fatal("verified denial did not replace installed policy")
 	}
 }
 
@@ -119,5 +132,53 @@ func TestMeshPolicyDeadlineKeepsMonotonicDelegationBoundary(t *testing.T) {
 	wall := packetPolicyDeadlineWithMonotonic(view, now, &monotonic)
 	if monotonic != expiry || !wall.After(expiry.Round(0)) {
 		t.Fatalf("deadline wall=%s monotonic=%s, want monotonic %s", wall, monotonic, expiry)
+	}
+}
+
+func TestMeshPolicyRevisionGraceDoesNotExtendOrOverrideExpiry(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		deadline time.Duration
+		change   func(*meshPeer)
+		checkAt  time.Duration
+	}{
+		{name: "grace", deadline: time.Minute, checkAt: meshPolicyRevisionGrace},
+		{name: "known expiry", deadline: time.Second, checkAt: time.Second},
+		{name: "changed hint", deadline: time.Minute, checkAt: time.Second,
+			change: func(p *meshPeer) { p.plan.Selected.Contact.Address = "192.0.2.2" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config, view, now, _ := gatewayPlanFixture(t)
+			hint := planGateway(t.Context(), config, view, now, meshPolicyFixtureResolver())
+			if hint.Selected == nil {
+				t.Fatal("test requires a current planner hint", hint.Rejected)
+			}
+			peer := &meshPeer{config: *config, plan: hint}
+			worker := newMeshPolicyWorker(nil)
+			worker.project(peer, view.Revision, now)
+			request := <-worker.requests
+			installed := &meshPolicyProjection{
+				request: request, deadline: now.Add(test.deadline), lastWall: now, plan: hint,
+			}
+			worker.finish(meshPolicyResult{request: request, projection: installed}, view.Revision, now)
+
+			if got, pending := worker.project(peer, view.Revision+1, now); got != installed || !pending {
+				t.Fatalf("expected existing ESP policy while refresh pending, got=%v pending=%t", got, pending)
+			}
+			newer := <-worker.requests
+			worker.finish(meshPolicyResult{request: newer, projection: &meshPolicyProjection{
+				request: newer, deadline: now.Add(time.Minute), lastWall: now, plan: hint,
+			}}, view.Revision+2, now.Add(time.Millisecond))
+			// A later revision must not extend the grace or install an older result.
+			if got, pending := worker.project(peer, view.Revision+2, now.Add(2*time.Millisecond)); got != installed || !pending {
+				t.Fatalf("stale result replaced the original installed policy: got=%v pending=%t", got, pending)
+			}
+			if test.change != nil {
+				test.change(peer)
+			}
+			if got, pending := worker.project(peer, view.Revision+2, now.Add(test.checkAt)); got != nil || !pending {
+				t.Fatalf("installed policy survived validity boundary: got=%v pending=%t", got, pending)
+			}
+		})
 	}
 }
