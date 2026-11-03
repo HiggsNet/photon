@@ -169,7 +169,7 @@ type Store struct {
 	mu                sync.RWMutex
 	state             *VerifiedState
 	gossip            *GossipCheckpoint
-	revision          VerifiedRevision
+	revision          atomic.Uint64
 	catalog           atomic.Pointer[catalogSnapshot]
 	revocations       atomic.Pointer[revocationSnapshot]
 	commit            CommitFunc
@@ -195,13 +195,14 @@ func RestoreStore(candidate *CommitCandidate, revision VerifiedRevision, commit 
 	if err := ValidateStateRoot(candidate.Verified); err != nil {
 		return nil, err
 	}
-	return &Store{
+	store := &Store{
 		state:             cloneVerifiedState(candidate.Verified),
 		gossip:            cloneGossipCheckpoint(candidate.Gossip),
-		revision:          revision,
 		commit:            commit,
 		commitCheckpoints: checkpointCommit,
-	}, nil
+	}
+	store.revision.Store(uint64(revision))
+	return store, nil
 }
 
 func (store *Store) ReadView() View {
@@ -210,18 +211,17 @@ func (store *Store) ReadView() View {
 	}
 	store.mu.RLock()
 	defer store.mu.RUnlock()
-	return View{State: cloneVerifiedState(store.state), Gossip: cloneGossipCheckpoint(store.gossip), Revision: store.revision}
+	return View{State: cloneVerifiedState(store.state), Gossip: cloneGossipCheckpoint(store.gossip), Revision: store.VerifiedRevision()}
 }
 
-// VerifiedRevision returns the currently published verified-state revision
-// without cloning the verified state or gossip checkpoint.
+// VerifiedRevision reads the latest committed revision without taking the
+// store lock. Writers publish it after replacing the verified state under mu;
+// callers that need both together must use ReadView.
 func (store *Store) VerifiedRevision() VerifiedRevision {
 	if store == nil {
 		return 0
 	}
-	store.mu.RLock()
-	defer store.mu.RUnlock()
-	return store.revision
+	return VerifiedRevision(store.revision.Load())
 }
 
 func (store *Store) ZoneDigests() ([]ZoneDigest, VerifiedRevision) {
@@ -230,7 +230,7 @@ func (store *Store) ZoneDigests() ([]ZoneDigest, VerifiedRevision) {
 	}
 	store.mu.RLock()
 	defer store.mu.RUnlock()
-	return store.zoneDigestsLocked(time.Now()), store.revision
+	return store.zoneDigestsLocked(time.Now()), store.VerifiedRevision()
 }
 
 // ApplyRemoteBatch applies every item with an independent savepoint. A
@@ -252,7 +252,7 @@ func (store *Store) ApplyRemoteBatch(ctx context.Context, peerID string, batch [
 		store.mu.RUnlock()
 		return out, ErrVerifiedStoreClosed
 	}
-	baseRevision := store.revision
+	baseRevision := store.VerifiedRevision()
 	base := cloneVerifiedState(store.state)
 	baseGossip := cloneGossipCheckpoint(store.gossip)
 	store.mu.RUnlock()
@@ -366,7 +366,7 @@ func (store *Store) ApplyRemoteBatch(ctx context.Context, peerID string, batch [
 	store.mu.Lock()
 	store.state = candidate
 	store.gossip = gossipCandidate
-	store.revision = nextRevision
+	store.revision.Store(uint64(nextRevision))
 	store.mu.Unlock()
 	out.Committed = true
 	out.Changes = changes

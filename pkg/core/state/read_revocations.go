@@ -26,11 +26,11 @@ func (store *Store) revokedZonesLocked(now time.Time) map[zone.ZonePath]bool {
 	}
 	second := now.Unix()
 	snapshot := store.revocations.Load()
-	if snapshot == nil || snapshot.revision != store.revision || second < snapshot.fromUnix ||
+	if snapshot == nil || snapshot.revision != store.VerifiedRevision() || second < snapshot.fromUnix ||
 		(snapshot.untilUnix != 0 && second >= snapshot.untilUnix) {
 		network := store.state.Network
 		snapshot = &revocationSnapshot{
-			revision: store.revision, fromUnix: math.MinInt64,
+			revision: store.VerifiedRevision(), fromUnix: math.MinInt64,
 			zones: network.RevokedZones(now),
 		}
 		// ActiveRevocation depends on time only through positive RevokedAt
