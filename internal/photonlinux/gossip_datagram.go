@@ -35,10 +35,6 @@ func ListenGossipDatagram(listenAddr string) (*GossipDatagramIO, error) {
 	return &GossipDatagramIO{conn: conn}, nil
 }
 
-func (io *GossipDatagramIO) ReadDatagram(buffer []byte) (int, *net.UDPAddr, error) {
-	return io.conn.ReadFromUDP(buffer)
-}
-
 func (io *GossipDatagramIO) WriteDatagram(payload []byte, addr *net.UDPAddr) (int, error) {
 	return io.conn.WriteToUDP(payload, addr)
 }

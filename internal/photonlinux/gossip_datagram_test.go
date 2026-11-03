@@ -2,21 +2,37 @@ package photonlinux
 
 import (
 	"bytes"
+	"errors"
+	"os"
 	"testing"
 	"time"
 )
 
 func TestGossipDatagramIORoundTrip(t *testing.T) {
-	a, err := ListenGossipDatagram("127.0.0.1:0")
+	t.Run("IPv4", func(t *testing.T) { testGossipDatagramRoundTrip(t, "127.0.0.1:0") })
+	t.Run("IPv6", func(t *testing.T) { testGossipDatagramRoundTrip(t, "[::1]:0") })
+}
+
+func testGossipDatagramRoundTrip(t *testing.T, listen string) {
+	t.Helper()
+	a, err := ListenGossipDatagram(listen)
 	if err != nil {
 		t.Skipf("UDP sockets are unavailable: %v", err)
 	}
 	defer a.Close()
-	b, err := ListenGossipDatagram("127.0.0.1:0")
+	b, err := ListenGossipDatagram(listen)
 	if err != nil {
 		t.Skipf("UDP sockets are unavailable: %v", err)
 	}
 	defer b.Close()
+
+	buffer := make([]byte, 64)
+	if err := b.SetReadDeadline(time.Now().Add(20 * time.Millisecond)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	if _, _, err := b.ReadDatagram(buffer); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("empty receive = %v, want deadline exceeded", err)
+	}
 
 	want := []byte("packet")
 	if _, err := a.WriteDatagram(want, b.LocalAddr()); err != nil {
@@ -25,7 +41,6 @@ func TestGossipDatagramIORoundTrip(t *testing.T) {
 	if err := b.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
 		t.Fatalf("SetReadDeadline: %v", err)
 	}
-	buffer := make([]byte, 64)
 	n, addr, err := b.ReadDatagram(buffer)
 	if err != nil {
 		t.Fatalf("ReadDatagram: %v", err)
