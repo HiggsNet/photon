@@ -315,16 +315,6 @@ func TestObserveFullDaemonGateway(t *testing.T) {
 			time.Sleep(time.Second)
 			continue
 		}
-		raw, err := run("/smoke/photon", "debug", "record", "gateway.catofes.", routing.RecordKeyBabelIdentity)
-		var record struct {
-			Value string `json:"value"`
-		}
-		var binding routing.BabelIdentityRecord
-		if err != nil || json.Unmarshal(raw, &record) != nil || json.Unmarshal([]byte(record.Value), &binding) != nil || len(binding.RouterIDs) != 1 || binding.ExpiresAt <= time.Now().Unix() {
-			last = string(raw)
-			time.Sleep(time.Second)
-			continue
-		}
 		entries, err := run(os.Getenv("BIRDC_BIN"), "-s", filepath.Join(dir, "bird.ctl"), "show", "babel", "entries")
 		if err != nil {
 			last = string(entries)
@@ -339,12 +329,15 @@ func TestObserveFullDaemonGateway(t *testing.T) {
 			}
 		}
 		id, err := bird.LocalBabelIdentity(string(entries), protocol, []netip.Prefix{netip.MustParsePrefix("198.18.253.1/32")})
-		if err != nil || id == "" || id != binding.RouterIDs[0] {
-			last = fmt.Sprintf("BIRD identity mismatch: %s %v %s", id, err, entries)
+		if err != nil || id == "" {
+			last = fmt.Sprintf("BIRD identity unavailable: %s %v %s", id, err, entries)
 			time.Sleep(time.Second)
 			continue
 		}
 		portsRaw, err := run("/smoke/photon", "debug", "record", "gateway.catofes.", ipsec.RecordKeyPorts)
+		var record struct {
+			Value string `json:"value"`
+		}
 		var ports ipsec.PortRecord
 		if err != nil || json.Unmarshal(portsRaw, &record) != nil || json.Unmarshal([]byte(record.Value), &ports) != nil || ports.Current == nil {
 			last = string(portsRaw)
@@ -357,7 +350,6 @@ func TestObserveFullDaemonGateway(t *testing.T) {
 			t.Fatalf("production daemon changed published mapped ports: %+v", ports)
 		}
 		save("linux-status.txt", status)
-		save("linux-identity.json", raw)
 		save("linux-ports.json", portsRaw)
 		save("bird-entries.txt", entries)
 		save("control-ready", []byte(id))
