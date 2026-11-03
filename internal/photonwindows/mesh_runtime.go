@@ -48,6 +48,7 @@ type meshPeer struct {
 	policy       meshPeerPolicy
 	config       Config
 	plan         GatewayPlan
+	planEpoch    uint64
 	tunnel       *gatewayTunnel
 	leaf         *leafRuntime
 	backoff      time.Duration
@@ -107,6 +108,15 @@ func peerGatewayPlan(plan GatewayPlan, candidate GatewayCandidate, contact int) 
 	return plan
 }
 
+// setPlan is the owner-side publication point for peer planner hints. Plans
+// and their nested slices are immutable after publication.
+func (p *meshPeer) setPlan(next GatewayPlan) {
+	if p.planEpoch == 0 || !plannerPolicyEqual(p.plan, next) {
+		p.planEpoch++
+	}
+	p.plan = next
+}
+
 func (m *meshRuntime) update(plan GatewayPlan) {
 	seen := make(map[zone.ZonePath]bool)
 	for _, candidate := range plan.Candidates {
@@ -138,7 +148,7 @@ func (m *meshRuntime) update(plan GatewayPlan) {
 				}
 			}
 		}
-		p.plan = peerGatewayPlan(plan, candidate, p.contact)
+		p.setPlan(peerGatewayPlan(plan, candidate, p.contact))
 	}
 	for key, p := range m.peers {
 		if seen[key] {
@@ -174,7 +184,7 @@ func (m *meshRuntime) stopPeer(p *meshPeer, reason string) {
 	p.backoff = min(p.backoff*2, m.maximum)
 	p.contact++
 	if len(p.plan.Candidates) > 0 && len(p.plan.Candidates[0].Contacts) > 0 {
-		p.plan = peerGatewayPlan(p.plan, p.plan.Candidates[0], p.contact)
+		p.setPlan(peerGatewayPlan(p.plan, p.plan.Candidates[0], p.contact))
 	}
 	m.logger.Info("tunnel_stopped", "peer", p.config.Gateway.AllowedZones[0], "reason", reason, "retry_at", p.next)
 }
@@ -534,7 +544,7 @@ func (m *meshRuntime) ready() bool {
 func (m *meshRuntime) reset() {
 	m.stopAll("local network endpoint replaced")
 	for _, p := range m.peers {
-		p.plan = GatewayPlan{}
+		p.setPlan(GatewayPlan{})
 	}
 }
 

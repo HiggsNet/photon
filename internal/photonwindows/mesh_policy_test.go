@@ -17,7 +17,8 @@ func TestMeshPolicyPendingAndLateResult(t *testing.T) {
 	}
 
 	worker := newMeshPolicyWorker(nil)
-	peer := &meshPeer{config: *config, plan: hint}
+	peer := &meshPeer{config: *config}
+	peer.setPlan(hint)
 	for range 2 {
 		if got, pending := worker.project(peer, view.Revision, now); got != nil || !pending {
 			t.Fatalf("uncomputed policy got=%v pending=%v", got, pending)
@@ -39,11 +40,22 @@ func TestMeshPolicyPendingAndLateResult(t *testing.T) {
 	second := <-worker.requests
 	projection := &meshPolicyProjection{request: second, deadline: now.Add(time.Second), lastWall: now}
 	worker.finish(meshPolicyResult{request: second, projection: projection}, view.Revision+1, now)
-	peer.plan.EvaluatedAt = now.Add(time.Millisecond)
-	peer.plan.Revision = view.Revision + 1
+	refreshed := hint
+	refreshed.EvaluatedAt, refreshed.Revision = now.Add(time.Millisecond), view.Revision+1
+	peer.setPlan(refreshed)
+	if peer.planEpoch == 0 || peer.planEpoch != second.planEpoch {
+		t.Fatal("equivalent planner refresh changed the policy epoch")
+	}
 	if got, pending := worker.project(peer, view.Revision+1, now.Add(2*time.Millisecond)); got != projection || pending {
 		t.Fatalf("equivalent planner refresh got=%v pending=%v", got, pending)
 	}
+	changed := clonePacketGatewayHint(refreshed)
+	changed.Selected.Contact.Address = "192.0.2.200"
+	peer.setPlan(changed)
+	if peer.planEpoch == second.planEpoch || second.matchesHint(peer) {
+		t.Fatal("policy request survived an endpoint change")
+	}
+	peer.setPlan(refreshed)
 	if got, pending := worker.project(peer, view.Revision+1, now.Add(time.Second)); got != nil || !pending {
 		t.Fatalf("policy survived exact expiry got=%v pending=%v", got, pending)
 	}

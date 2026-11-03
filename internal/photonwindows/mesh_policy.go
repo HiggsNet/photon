@@ -29,11 +29,12 @@ type meshPeerPolicy struct {
 }
 
 type meshPolicyRequest struct {
-	peer     *meshPeer // Opaque completion identity. The worker never reads it.
-	revision corestate.VerifiedRevision
-	at       time.Time
-	config   Config
-	hint     GatewayPlan
+	peer      *meshPeer // Opaque completion identity. The worker never reads it.
+	revision  corestate.VerifiedRevision
+	at        time.Time
+	config    Config
+	hint      GatewayPlan
+	planEpoch uint64
 }
 
 type meshPolicyProjection struct {
@@ -78,7 +79,8 @@ func plannerPolicyEqual(a, b GatewayPlan) bool {
 }
 
 func (r *meshPolicyRequest) matchesHint(p *meshPeer) bool {
-	return packetPolicyConfigEqual(&p.config, &r.config) && plannerPolicyEqual(p.plan, r.hint)
+	return packetPolicyConfigEqual(&p.config, &r.config) &&
+		(r.planEpoch != 0 && p.planEpoch == r.planEpoch || plannerPolicyEqual(p.plan, r.hint))
 }
 
 func (p *meshPolicyProjection) validAt(now time.Time) bool {
@@ -136,7 +138,7 @@ func (w *meshPolicyWorker) project(p *meshPeer, revision corestate.VerifiedRevis
 	}
 	if policy.pending == nil && len(w.requests) < cap(w.requests) {
 		request := &meshPolicyRequest{
-			peer: p, revision: revision, at: wall, config: clonePacketPolicyConfig(&p.config), hint: clonePacketGatewayHint(p.plan),
+			peer: p, revision: revision, at: wall, config: clonePacketPolicyConfig(&p.config), hint: clonePacketGatewayHint(p.plan), planEpoch: p.planEpoch,
 		}
 		select {
 		case w.requests <- request:
