@@ -22,14 +22,23 @@ func packetPolicyDeadline(view corestate.View, now time.Time) time.Time {
 	return packetPolicyDeadlineWithMonotonic(view, now, nil)
 }
 
+func packetPolicyDeadlineWithMonotonic(view corestate.View, now time.Time, monotonic *time.Time) time.Time {
+	return packetPolicyDeadlineWithin(view, now, now.Round(0).Add(packetPolicyMaxAge), monotonic)
+}
+
+// Mesh authorization separates actual signed transitions from the soft cache
+// refresh. A zero result means no future wall-clock transition was found.
+func meshPolicySignedDeadline(view corestate.View, now time.Time, monotonic *time.Time) time.Time {
+	return packetPolicyDeadlineWithin(view, now, time.Time{}, monotonic)
+}
+
 // A Mesh worker may publish a second deadline for a delegation whose
 // verification uses the monotonic clock. Packet use must satisfy both clocks.
-func packetPolicyDeadlineWithMonotonic(view corestate.View, now time.Time, monotonic *time.Time) time.Time {
+func packetPolicyDeadlineWithin(view corestate.View, now, deadline time.Time, monotonic *time.Time) time.Time {
 	wall := now.Round(0)
-	deadline := wall.Add(packetPolicyMaxAge)
 	earlier := func(at time.Time) {
 		at = at.Round(0)
-		if at.After(wall) && at.Before(deadline) {
+		if at.After(wall) && (deadline.IsZero() || at.Before(deadline)) {
 			deadline = at
 		}
 	}

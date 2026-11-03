@@ -129,7 +129,7 @@ func TestMeshPolicyDeadlineKeepsMonotonicDelegationBoundary(t *testing.T) {
 	expiry := now.Add(50 * time.Millisecond)
 	view.State.Network.Zones[config.Gateway.AllowedZones[0]].ParentProof = []*zone.Delegation{{ExpiresAt: &expiry}}
 	var monotonic time.Time
-	wall := packetPolicyDeadlineWithMonotonic(view, now, &monotonic)
+	wall := meshPolicySignedDeadline(view, now, &monotonic)
 	if monotonic != expiry || !wall.After(expiry.Round(0)) {
 		t.Fatalf("deadline wall=%s monotonic=%s, want monotonic %s", wall, monotonic, expiry)
 	}
@@ -180,5 +180,53 @@ func TestMeshPolicyRevisionGraceDoesNotExtendOrOverrideExpiry(t *testing.T) {
 				t.Fatalf("installed policy survived validity boundary: got=%v pending=%t", got, pending)
 			}
 		})
+	}
+}
+
+func TestMeshPolicySoftRefreshDoesNotInterruptInstalledPolicy(t *testing.T) {
+	config, view, now, _ := gatewayPlanFixture(t)
+	hint := planGateway(t.Context(), config, view, now, meshPolicyFixtureResolver())
+	if hint.Selected == nil {
+		t.Fatal("test requires a current planner hint", hint.Rejected)
+	}
+	peer := &meshPeer{config: *config, plan: hint}
+	worker := newMeshPolicyWorker(nil)
+	worker.project(peer, view.Revision, now)
+	request := <-worker.requests
+	installed := &meshPolicyProjection{request: request, plan: hint, lastWall: now, refreshAt: now.Add(time.Second)}
+	worker.finish(meshPolicyResult{request: request, projection: installed}, view.Revision, now)
+
+	soft := installed.refreshAt
+	if got, pending := worker.project(peer, view.Revision, soft); got != installed || pending || len(worker.requests) != 1 {
+		t.Fatalf("soft refresh interrupted settled policy or was not queued: got=%v pending=%t", got, pending)
+	}
+	refresh := <-worker.requests
+	refreshResult := &meshPolicyProjection{request: refresh, plan: hint, lastWall: soft, refreshAt: soft.Add(time.Minute)}
+	if got, pending := worker.project(peer, view.Revision+1, soft); got != installed || !pending {
+		t.Fatalf("new revision during soft refresh lost original policy: got=%v pending=%t", got, pending)
+	}
+	worker.finish(meshPolicyResult{request: refresh, projection: refreshResult}, view.Revision+1, soft)
+	if peer.policy.current != installed {
+		t.Fatal("obsolete soft refresh replaced installed policy")
+	}
+}
+
+func TestMeshPolicySignedDeadlineIsIndependentOfSoftAge(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	network := zone.NewNetworkState()
+	view := corestate.View{State: &corestate.VerifiedState{Network: network}}
+	var monotonic time.Time
+	if hard := meshPolicySignedDeadline(view, now, &monotonic); !hard.IsZero() {
+		t.Fatalf("no signed transition, got hard deadline %s", hard)
+	}
+	root := zone.NewZoneState(zone.RootZone, nil)
+	network.Zones[zone.RootZone] = root
+	future := now.Add(2 * packetPolicyMaxAge)
+	root.Revocations["child."] = &zone.DelegationRevocation{RevokedAt: future.Unix()}
+	if hard := meshPolicySignedDeadline(view, now, &monotonic); !hard.Equal(future) {
+		t.Fatalf("hard deadline = %s, want exact revocation time %s", hard, future)
+	}
+	if deadline := packetPolicyDeadline(view, now); !deadline.Equal(now.Add(packetPolicyMaxAge)) {
+		t.Fatalf("ordinary synchronous cache interval changed: %s", deadline)
 	}
 }
