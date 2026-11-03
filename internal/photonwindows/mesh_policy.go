@@ -39,6 +39,7 @@ type meshPolicyRequest struct {
 type meshPolicyProjection struct {
 	request             *meshPolicyRequest
 	deadline, monotonic time.Time
+	refreshAt           time.Time
 	lastWall            time.Time // Advanced by the Mesh owner only.
 	binding             [32]byte
 	plan                GatewayPlan
@@ -82,7 +83,7 @@ func (r *meshPolicyRequest) matchesHint(p *meshPeer) bool {
 
 func (p *meshPolicyProjection) validAt(now time.Time) bool {
 	wall := now.Round(0)
-	return !wall.Before(p.lastWall) && wall.Before(p.deadline) &&
+	return !wall.Before(p.lastWall) && (p.deadline.IsZero() || wall.Before(p.deadline)) &&
 		(p.monotonic.IsZero() || now.Before(p.monotonic))
 }
 
@@ -110,13 +111,19 @@ func (w *meshPolicyWorker) project(p *meshPeer, revision corestate.VerifiedRevis
 		policy.pending = nil
 	}
 	var installed *meshPolicyProjection
+	pendingRevision := true
 	if current := policy.current; current != nil {
 		switch {
 		case !current.validAt(now) || !current.request.matchesHint(p) || current.request.revision > revision:
 			policy.current, policy.graceDeadline = nil, time.Time{}
 		case current.request.revision == revision:
 			current.lastWall = wall
-			return current, false
+			if current.refreshAt.IsZero() || wall.Before(current.refreshAt) {
+				return current, false
+			}
+			// Soft cache age asks the worker to refresh. The same revision
+			// remains settled until an actual signed boundary or replacement.
+			installed, pendingRevision = current, false
 		case current.plan.Selected != nil:
 			if policy.graceDeadline.IsZero() {
 				policy.graceDeadline = now.Add(meshPolicyRevisionGrace)
@@ -137,7 +144,7 @@ func (w *meshPolicyWorker) project(p *meshPeer, revision corestate.VerifiedRevis
 		default:
 		}
 	}
-	return installed, true
+	return installed, pendingRevision
 }
 
 // finish runs on the Mesh owner. Revocation and plan changes invalidate even
@@ -189,6 +196,7 @@ type meshPolicyInputs struct {
 	revision     corestate.VerifiedRevision
 	config       Config
 	at, deadline time.Time
+	refreshAt    time.Time
 	monotonic    time.Time
 	routes       *routing.AuthorizedRouteSet
 }
@@ -219,13 +227,17 @@ func (s *meshPolicyInputs) project(request *meshPolicyRequest, view corestate.Vi
 	config := &request.config
 	wall := now.Round(0)
 	if s.revision != view.Revision || !slices.Equal(s.config.TrustedRootPublicKey, config.TrustedRootPublicKey) ||
-		wall.Before(s.at) || !wall.Before(s.deadline) || (!s.monotonic.IsZero() && !now.Before(s.monotonic)) {
+		wall.Before(s.at) || !wall.Before(s.refreshAt) ||
+		(!s.deadline.IsZero() && !wall.Before(s.deadline)) || (!s.monotonic.IsZero() && !now.Before(s.monotonic)) {
 		s.revision, s.config, s.at = view.Revision, *config, wall
+		s.refreshAt = wall.Add(packetPolicyMaxAge)
 		s.monotonic = time.Time{}
-		s.deadline = packetPolicyDeadlineWithMonotonic(view, now, &s.monotonic)
+		s.deadline = meshPolicySignedDeadline(view, now, &s.monotonic)
 		s.routes = currentAuthorizedRouteSetWithVerifier(config, view, now, &s.verifier)
 	}
-	projection := &meshPolicyProjection{request: request, lastWall: wall, deadline: s.deadline, monotonic: s.monotonic}
+	projection := &meshPolicyProjection{
+		request: request, lastWall: wall, deadline: s.deadline, monotonic: s.monotonic, refreshAt: s.refreshAt,
+	}
 	binding, err := localTransportAuthorizationWithVerifier(config, view, now, &s.verifier)
 	if err != nil {
 		projection.plan.Rejected = "local transport authorization changed"
