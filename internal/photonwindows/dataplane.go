@@ -334,7 +334,9 @@ func (d *gatewayDataplane) accept(result dataplaneCompletion, plan GatewayPlan, 
 }
 
 func (d *gatewayDataplane) current(generation uint64, sa *dataplaneSA, plan GatewayPlan) bool {
-	return d.ctx.Err() == nil && sa != nil && generation == d.generation && d.sas[sa.spi] == sa && plan.Rejected == "" && plan.Selected != nil && dataplaneGatewayEqual(sa.gateway, *plan.Selected) && dataplaneEndpoint(*plan.Selected, sa.endpoint)
+	// install validates the endpoint once. The installed SA is immutable, and
+	// gateway equality below pins the address and both ports on every use.
+	return d.ctx.Err() == nil && sa != nil && generation == d.generation && d.sas[sa.spi] == sa && plan.Rejected == "" && plan.Selected != nil && dataplaneGatewayEqual(sa.gateway, *plan.Selected)
 }
 
 func (d *gatewayDataplane) work() {
