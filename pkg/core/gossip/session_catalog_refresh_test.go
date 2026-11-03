@@ -13,7 +13,7 @@ import (
 )
 
 func TestSyncSessionCatalogDriftWithVerifiedSnapshots(t *testing.T) {
-	for _, outcome := range []string{"recovers", "changes again", "invalid signature"} {
+	for _, outcome := range []string{"recovers", "changes again", "invalid signature", "already committed through another peer"} {
 		t.Run(outcome, func(t *testing.T) {
 			now := time.Unix(1000, 0)
 			network, _, privateKey := testNetworkWithKeys(t)
@@ -85,18 +85,36 @@ func TestSyncSessionCatalogDriftWithVerifiedSnapshots(t *testing.T) {
 				fetched.Records[EndpointRecordKeyUDP].Signature[0] ^= 1
 			}
 			assertActionTypes(t, page(fetched), []string{"StartObjectPullAction"})
+			if outcome == "already committed through another peer" {
+				// Replay the LAX sequence: the relay still expects v2 while
+				// the owner independently commits v3 before the pull returns.
+				fetched = snapshots[2]
+				root := corestate.ZoneRoot(corestate.ZoneStateFromSnapshot(fetched))
+				result, err := store.ApplyRemoteBatch(t.Context(), "owner", []corestate.RemoteSnapshot{{Snapshot: fetched, ExpectedRoot: root}}, now)
+				if err != nil || !result.Committed || !result.Changes.NetworkChanged {
+					t.Fatalf("independent commit: result=%+v err=%v", result, err)
+				}
+				// ParentProof is outside ZoneRoot. Incoming data, including
+				// this altered proof, must never reach the committed store.
+				remote := *fetched
+				remote.ParentProof = []*zone.Delegation{{ZoneName: "unrelated.catofes."}}
+				fetched = &remote
+			}
 			if outcome == "changes again" {
 				fetched = snapshots[2]
 			}
 			lastErr := apply(fetched)
 			ack := event(&SnapshotAppliedEvent{PeerID: "peer-a", Zone: "catofes.", Err: lastErr})
 			view := store.ReadView()
-			if outcome == "recovers" {
+			if outcome == "recovers" || outcome == "already committed through another peer" {
 				if lastErr != nil || s.State != SyncSessionCompleted || len(ack) != 0 || view.Revision != 1 || len(view.Gossip.Peers["peer-a"].RejectedObjects) != 0 {
 					t.Fatalf("recovery: err=%v state=%s view=%#v", lastErr, s.State, view)
 				}
 				if !bytes.Equal(corestate.ZoneRoot(view.State.Network.Zones["catofes."]), corestate.ZoneRoot(corestate.ZoneStateFromSnapshot(fetched))) {
 					t.Fatal("did not accept the refreshed verified snapshot")
+				}
+				if outcome == "already committed through another peer" && len(view.State.Network.Zones["catofes."].ParentProof) != len(snapshots[2].ParentProof) {
+					t.Fatal("discarded snapshot changed the committed parent proof")
 				}
 			} else {
 				assertActionTypes(t, ack, []string{"RecordBackoffAction"})
