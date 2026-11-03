@@ -917,13 +917,6 @@ func (d *Daemon) publishLocalProtocols() (bool, error) {
 	if routingIntent != nil {
 		intents = append(intents, *routingIntent)
 	}
-	babelIdentity, err := d.routingBabelIdentityProtocolIntent(context.Background(), common.State, d.now())
-	if err != nil {
-		return false, fmt.Errorf("plan Babel identity record: %w", err)
-	}
-	if babelIdentity != nil {
-		intents = append(intents, *babelIdentity)
-	}
 	result, err := commitLocalProtocols(context.Background(), d.State, revision, intents, ipsecPlan.TransportKey, d.now())
 	if err != nil {
 		return false, err
@@ -1106,14 +1099,7 @@ func (d *Daemon) flushRoutingReconcileResult(ctx context.Context) (bool, error) 
 	d.noteReconcileFlush("routing")
 	reconcileCtx, cancel := boundedReconcileContext(ctx)
 	defer cancel()
-	err := d.reconcileRouting(reconcileCtx)
-	// Re-observe after a BIRD restart/configuration change, including failure
-	// paths that must withdraw a now-unavailable identity. Use the same local
-	// protocol publication owner as startup and lease renewal.
-	if publishErr := d.publishRoutingBabelIdentity(reconcileCtx); publishErr != nil && err == nil {
-		err = publishErr
-	}
-	return true, err
+	return true, d.reconcileRouting(reconcileCtx)
 }
 
 func (d *Daemon) routingReconcileInterval() time.Duration {

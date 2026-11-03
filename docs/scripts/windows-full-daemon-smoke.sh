@@ -178,7 +178,7 @@ cleanup() {
             done
         ' >/dev/null 2>&1 || true
         docker logs "$name" > "$work/gateway.log" 2>&1 || true
-        for file in bird.conf bird-parse.txt daemon.log linux-status.txt linux-identity.json linux-ports.json linux-routes.txt linux-xfrm.txt bird-routes.txt bird-entries.txt throughput-echo4.log throughput-echo6.log autojoin-request.json autojoin-authority.json autojoin-wrong-request.b64 autojoin-wrong-bundle.b64 autojoin-correct-bundle.b64; do
+        for file in bird.conf bird-parse.txt daemon.log linux-status.txt linux-ports.json linux-routes.txt linux-xfrm.txt bird-routes.txt bird-entries.txt throughput-echo4.log throughput-echo6.log autojoin-request.json autojoin-authority.json autojoin-wrong-request.b64 autojoin-wrong-bundle.b64 autojoin-correct-bundle.b64; do
             docker cp "$name:/tmp/b4/$file" "$work/$file" >/dev/null 2>&1 || true
         done
         docker cp "$name:/tmp/b4/bird.log" "$work/bird.log" >/dev/null 2>&1 || true
