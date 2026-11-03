@@ -163,6 +163,7 @@ type desktopWindow struct {
 	taskbarCreated             uint32
 	tray                       bool
 	busy, settingConfig, dirty bool
+	refreshing                 bool
 	quitting, quitSubmitted    bool
 	editRevision               uint64
 	settings                   uintptr
@@ -292,7 +293,7 @@ func newDesktopWindow(backend *desktopBackend) (_ *desktopWindow, err error) {
 		return nil, guiRegisterError
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	w := &desktopWindow{instance: instance, icon: icon, backend: backend, controls: make(map[int]uintptr), ctx: ctx, cancel: cancel, requests: make(chan guiRequest, 1), results: make(chan guiResult, 1), textCache: make(map[uintptr]string), bootstrapSelected: -1}
+	w := &desktopWindow{instance: instance, icon: icon, backend: backend, controls: make(map[int]uintptr), ctx: ctx, cancel: cancel, requests: make(chan guiRequest, 2), results: make(chan guiResult, 2), textCache: make(map[uintptr]string), bootstrapSelected: -1}
 	defer func() {
 		if err != nil {
 			err = errors.Join(err, w.dispose())
@@ -388,7 +389,7 @@ func (w *desktopWindow) startWorker() {
 				}
 				w.postMu.Lock()
 				if w.ctx.Err() == nil {
-					// One request is admitted until the UI consumes its result.
+					// At most one refresh and one user action await UI consumption.
 					// Never block the native owner while holding this mutex.
 					select {
 					case w.results <- result:
@@ -532,7 +533,7 @@ func desktopWindowProc(hwnd uintptr, message uint32, wp, lp uintptr) uintptr {
 }
 
 func (w *desktopWindow) submit(request guiRequest) {
-	if w.busy || w.ctx.Err() != nil || (w.quitting && request.Action != "quit") {
+	if w.busy || (request.Action == "refresh" && w.refreshing) || w.ctx.Err() != nil || (w.quitting && request.Action != "quit") {
 		return
 	}
 	if request.Action == "load" {
@@ -543,6 +544,10 @@ func (w *desktopWindow) submit(request guiRequest) {
 	}
 	select {
 	case w.requests <- request:
+		if request.Action == "refresh" {
+			w.refreshing = true
+			return
+		}
 		w.busy = true
 		if request.Action == "stop" || request.Action == "restart" {
 			w.admission.Request = ""
@@ -555,9 +560,7 @@ func (w *desktopWindow) submit(request guiRequest) {
 		for _, id := range []int{guiStartID, guiStopID, guiRestartID, guiSaveID, guiReloadID} {
 			guiEnableWindow.Call(w.controls[id], 0)
 		}
-		if request.Action != "refresh" {
-			w.note("正在处理…")
-		}
+		w.note("正在处理…")
 	default:
 	}
 }
@@ -640,6 +643,14 @@ func (w *desktopWindow) command(id int) {
 	w.submit(request)
 }
 func (w *desktopWindow) applyResult(result guiResult) {
+	if result.Action == "refresh" {
+		w.refreshing = false
+		if !w.busy && !w.quitting {
+			w.render(result.Snapshot)
+			w.renderDiagnostics(result.Snapshot, result.LogTail, result.LogErr, result.IncludeLogs)
+		}
+		return
+	}
 	w.busy = false
 	if result.Action == "quit" {
 		if result.Err != nil {
