@@ -222,10 +222,11 @@ func TestSyncSessionCatalogPageRefreshesOnceOnRootMismatch(t *testing.T) {
 		t.Fatalf("expected catalog refresh, got %s", s.State)
 	}
 	assertActionTypes(t, actions, []string{"SendFetchCatalogPageAction", "StartTimerAction"})
-	_, err = s.OnEvent(&CatalogPageReceivedEvent{PeerID: "peer-a", Page: &corestate.CatalogPage{CatalogRoot: root, Entries: remote, NextCursor: "1"}}, now)
+	actions, err = s.OnEvent(&CatalogPageReceivedEvent{PeerID: "peer-a", Page: &corestate.CatalogPage{CatalogRoot: []byte("wrong-root"), Entries: remote, NextCursor: "1"}}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertActionTypes(t, actions, []string{"SendFetchCatalogPageAction", "StartTimerAction"})
 	actions, err = s.OnEvent(&CatalogPageReceivedEvent{PeerID: "peer-a", Page: &corestate.CatalogPage{CatalogRoot: []byte("wrong-again")}}, now)
 	if err != nil {
 		t.Fatal(err)

@@ -191,3 +191,64 @@ func TestSyncSessionCatalogRefreshKeepsRoundTimeout(t *testing.T) {
 		t.Fatal("refresh escaped original round deadline")
 	}
 }
+
+func TestSyncSessionCatalogDeduplicationBoundaries(t *testing.T) {
+	const peer = "peer-a"
+	now := time.Unix(1000, 0)
+	oldRoot, newRoot := []byte("old root"), []byte("new root")
+	start := &SyncTimerEvent{PeerID: peer, LocalSummary: &corestate.CatalogSummary{CatalogRoot: []byte("local")}}
+	summary := &CatalogSummaryReceivedEvent{PeerID: peer, Summary: &corestate.CatalogSummary{CatalogRoot: oldRoot, ZoneCount: 32}}
+	step := func(t *testing.T, session *SyncSession, event SyncEvent, want ...string) {
+		t.Helper()
+		actions, err := session.OnEvent(event, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertActionTypes(t, actions, want)
+	}
+	page := func(root []byte, next string, entries ...corestate.ZoneDigest) *CatalogPageReceivedEvent {
+		return &CatalogPageReceivedEvent{PeerID: peer, Page: &corestate.CatalogPage{CatalogRoot: root, NextCursor: next, Entries: entries}}
+	}
+	t.Run("lost page retries in a new round", func(t *testing.T) {
+		s := NewSyncSession(peer)
+		step(t, s, start, "SendPingAction", "StartTimerAction")
+		step(t, s, summary, "SendFetchCatalogPageAction", "StartTimerAction")
+		step(t, s, summary)
+		step(t, s, &CatalogPageTimeoutEvent{PeerID: peer}, "RecordBackoffAction")
+		retry := NewSyncSession(peer)
+		step(t, retry, start, "SendPingAction", "StartTimerAction")
+		step(t, retry, summary, "SendFetchCatalogPageAction", "StartTimerAction")
+	})
+	t.Run("refresh ignores pages from the superseded root", func(t *testing.T) {
+		s := NewSyncSession(peer)
+		step(t, s, start, "SendPingAction", "StartTimerAction")
+		step(t, s, summary, "SendFetchCatalogPageAction", "StartTimerAction")
+		first := page(oldRoot, "18")
+		step(t, s, first, "SendFetchCatalogPageAction", "StartTimerAction")
+		step(t, s, page(newRoot, ""), "SendFetchCatalogPageAction", "StartTimerAction")
+		step(t, s, first)
+		step(t, s, summary)
+		step(t, s, page(newRoot, "18"), "SendFetchCatalogPageAction", "StartTimerAction")
+		step(t, s, page(oldRoot, ""))
+		step(t, s, page(newRoot, ""))
+		if s.State != SyncSessionCompleted {
+			t.Fatalf("state = %s, want completed", s.State)
+		}
+	})
+	t.Run("duplicate last page cannot restart object pull", func(t *testing.T) {
+		s := NewSyncSession(peer)
+		step(t, s, start, "SendPingAction", "StartTimerAction")
+		step(t, s, summary, "SendFetchCatalogPageAction", "StartTimerAction")
+		last := page(oldRoot, "", corestate.ZoneDigest{Zone: "changed.catofes.", RootHash: []byte("record root")})
+		step(t, s, last, "StartObjectPullAction")
+		step(t, s, last)
+		step(t, s, summary)
+		if s.State != SyncSessionObjectPulling || !s.objectPullInflight["changed.catofes."] {
+			t.Fatalf("state = %s, inflight = %v", s.State, s.objectPullInflight)
+		}
+		step(t, s, &ObjectPullResultEvent{PeerID: peer, Zone: "changed.catofes.", Snapshot: &corestate.ZoneSnapshot{Zone: "changed.catofes."}}, "ApplySnapshotAction")
+		step(t, s, &SnapshotAppliedEvent{PeerID: peer, Zone: "changed.catofes.", Err: corestate.ErrSnapshotRootMismatch}, "SendFetchCatalogPageAction", "StartTimerAction")
+		// Snapshot drift alone does not establish that the catalog changed.
+		step(t, s, last, "StartObjectPullAction")
+	})
+}

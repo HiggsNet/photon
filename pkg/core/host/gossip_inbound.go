@@ -80,6 +80,10 @@ func (driver *GossipDriver) respondGossipPing(ctx context.Context, action gossip
 	summary := corestate.CatalogSummaryForDigests(view.Digests)
 	driver.observeCatalogSummary(message.PeerID, summary, driver.schedulerForRead().clock.Now())
 	for _, response := range gossip.PlanPingResponse(message.Ping, summary) {
+		// The Ping summary is already delivered to the active session.
+		if action.ActiveSession && response.Type == gossip.MessageFetchCatalogPage {
+			continue
+		}
 		if err := sender.SendGossip(ctx, gossip.OutboundMessage{PeerID: message.PeerID, Message: response}); err != nil {
 			driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseSend, PeerID: message.PeerID, Err: err})
 		}
