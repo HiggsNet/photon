@@ -73,7 +73,41 @@ func (t *gatewayTunnel) stop() {
 	t.childOverlapUntil = time.Time{}
 }
 
-func (t *gatewayTunnel) start(plan GatewayPlan, localID string, private ed25519.PrivateKey, now time.Time) (err error) {
+type preparedIKEStart struct {
+	session        *ike.Initiator
+	peer, nattPeer netip.AddrPort
+}
+
+func prepareIKEStart(plan GatewayPlan, local netip.AddrPort) (preparedIKEStart, error) {
+	var start preparedIKEStart
+	if plan.Selected == nil || plan.Rejected != "" {
+		return start, errors.New("tunnel: no current gateway")
+	}
+	contact := plan.Selected.Contact
+	addr, err := netip.ParseAddr(contact.Address)
+	if err != nil || contact.IKEPort == 0 || contact.NATTPort == 0 {
+		return start, errors.New("tunnel: invalid gateway endpoints")
+	}
+	start.peer = netip.AddrPortFrom(addr.Unmap(), contact.IKEPort)
+	start.nattPeer = netip.AddrPortFrom(addr.Unmap(), contact.NATTPort)
+	if local.Addr().IsUnspecified() {
+		probe, err := net.DialUDP("udp", nil, net.UDPAddrFromAddrPort(start.peer))
+		if err != nil {
+			return start, err
+		}
+		local = netip.AddrPortFrom(probe.LocalAddr().(*net.UDPAddr).AddrPort().Addr().Unmap(), local.Port())
+		probe.Close()
+	}
+	start.session, err = ike.NewInitiatorWithEndpoints(local, start.peer)
+	return start, err
+}
+
+func (t *gatewayTunnel) start(plan GatewayPlan, localID string, private ed25519.PrivateKey, now time.Time) error {
+	start, err := prepareIKEStart(plan, t.socket.LocalAddr().AddrPort())
+	return t.installIKEStart(plan, localID, private, start, now, err)
+}
+
+func (t *gatewayTunnel) installIKEStart(plan GatewayPlan, localID string, private ed25519.PrivateKey, start preparedIKEStart, now time.Time, prepareErr error) (err error) {
 	t.stop()
 	t.observeProgress()
 	t.diagnostic.gateway, t.diagnostic.remote, t.diagnostic.generation = "", "", 0
@@ -87,39 +121,20 @@ func (t *gatewayTunnel) start(plan GatewayPlan, localID string, private ed25519.
 			t.observeEvent("start_failed", now, err)
 		}
 	}()
-	if plan.Selected == nil || plan.Rejected != "" || len(private) != ed25519.PrivateKeySize {
-		return errors.New("tunnel: no current gateway or local transport key")
+	if prepareErr != nil {
+		return prepareErr
 	}
-	contact := plan.Selected.Contact
-	addr, err := netip.ParseAddr(contact.Address)
-	if err != nil || contact.IKEPort == 0 || contact.NATTPort == 0 {
-		return errors.New("tunnel: invalid gateway endpoints")
+	if len(private) != ed25519.PrivateKeySize {
+		return errors.New("tunnel: no current local transport key")
 	}
-	peer := netip.AddrPortFrom(addr.Unmap(), contact.IKEPort)
-	t.diagnostic.remote = peer.String()
-	nattPeer := netip.AddrPortFrom(addr.Unmap(), contact.NATTPort)
-	local := t.socket.LocalAddr().AddrPort()
-	if local.Addr().IsUnspecified() {
-		// Route lookup only: this temporary socket never sends or receives IKE.
-		// The single shared bound socket remains the packet transport owner.
-		probe, err := net.DialUDP("udp", nil, net.UDPAddrFromAddrPort(peer))
-		if err != nil {
-			return err
-		}
-		local = netip.AddrPortFrom(probe.LocalAddr().(*net.UDPAddr).AddrPort().Addr().Unmap(), local.Port())
-		probe.Close()
-	}
-	session, err := ike.NewInitiatorWithEndpoints(local, peer)
-	if err != nil {
-		return err
-	}
-	t.generation = t.socket.reserveTunnel(peer, nattPeer)
+	t.diagnostic.remote = start.peer.String()
+	t.generation = t.socket.reserveTunnel(start.peer, start.nattPeer)
 	t.data.reset(t.generation)
-	t.session, t.plan, t.peer = session, plan, peer
+	t.session, t.plan, t.peer = start.session, plan, start.peer
 	t.localID, t.private, t.phase = localID, append(ed25519.PrivateKey(nil), private...), 1
 	t.rekeyGroup = ike.GroupP256
-	t.natt = peer == nattPeer || peer.Port() == 4500
-	return t.sendNew([][]byte{session.Request()}, now)
+	t.natt = start.peer == start.nattPeer || start.peer.Port() == 4500
+	return t.sendNew([][]byte{start.session.Request()}, now)
 }
 
 func (t *gatewayTunnel) sendNew(packets [][]byte, now time.Time) error {

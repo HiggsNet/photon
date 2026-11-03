@@ -261,6 +261,16 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	var lastPlan GatewayPlan
 	mesh := newMeshRuntime(ctx, config, state, packet, d.deviceFactory, logger, requestPlan)
 	defer func() { err = errors.Join(err, mesh.close()) }()
+	ikeCtx, stopIKE := context.WithCancel(ctx)
+	ikeDone := make(chan struct{})
+	go func() {
+		defer close(ikeDone)
+		mesh.runIKEStarts(ikeCtx)
+	}()
+	defer func() {
+		stopIKE()
+		<-ikeDone
+	}()
 	var lastReady bool
 	observeReady := func() {
 		ready := mesh.ready()
@@ -336,6 +346,8 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			result <- RevalidateGatewayPlan(config, state.Store().ReadView(), lastPlan, time.Now())
 		case sampled := <-observationSnapshots:
 			sampled <- mesh.observationSnapshot(lastPlan)
+		case prepared := <-mesh.ikePrepared:
+			mesh.finishIKEStart(prepared)
 		case datagram := <-packet.ikePackets:
 			if err := mesh.handleIKE(datagram); err != nil {
 				return err
