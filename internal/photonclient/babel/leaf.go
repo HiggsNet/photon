@@ -232,10 +232,15 @@ func (l *Leaf) Candidates(now time.Time, authorize func(sadr.Route) bool) []sadr
 			out = append(out, candidate)
 		}
 	}
-	slices.SortFunc(out, func(a, b sadr.Route) int {
+	SortCandidates(out)
+	return out
+}
+
+// SortCandidates gives detached routes the same order as Candidates.
+func SortCandidates(routes []sadr.Route) {
+	slices.SortFunc(routes, func(a, b sadr.Route) int {
 		return compareOrigin(Origin{a.Destination, a.Source}, Origin{b.Destination, b.Source})
 	})
-	return out
 }
 
 // HasRoute keeps the live candidate pruning of Candidates and checks whether
@@ -260,4 +265,22 @@ func (l *Leaf) HasRoute(source, destination netip.Addr, now time.Time, authorize
 // learned route. The caller still owns tunnel and origin authorization.
 func (l *Leaf) NeighborLive(now time.Time) bool {
 	return l.neighbor.Cost(now) != MetricInfinity
+}
+
+// SnapshotCandidates copies learned routes for diagnostics. The owner samples
+// the link cost once. The consumer checks signed authorization and sorts the
+// detached slice without pruning or otherwise changing the live route table.
+func (l *Leaf) SnapshotCandidates(now time.Time) []sadr.Route {
+	cost := l.neighbor.Cost(now)
+	if cost == MetricInfinity {
+		return nil
+	}
+	routes := make([]sadr.Route, 0, len(l.routes))
+	for _, r := range l.routes {
+		metric := uint16(min(uint32(MetricInfinity), uint32(r.message.Metric)+uint32(cost)))
+		if now.Before(r.expires) && metric != MetricInfinity {
+			routes = append(routes, sadr.Route{Destination: r.message.Prefix, Source: r.message.SourcePrefix, RouterID: r.message.RouterID, NextHop: r.message.NextHop, Metric: metric, ExpiresAt: r.expires})
+		}
+	}
+	return routes
 }
