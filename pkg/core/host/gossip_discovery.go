@@ -54,10 +54,10 @@ type GossipDiscoveryConfig struct {
 // overlay: it represents peers temporarily excluded by platform lifecycle
 // policy and is never persisted as gossip protocol state.
 func (driver *GossipDriver) GossipDiscoveryInput(suppressed map[string]bool) GossipDiscoveryInput {
-	return driver.gossipDiscoveryInput("", suppressed, true)
+	return driver.gossipDiscoveryInput("", suppressed, true, "")
 }
 
-func (driver *GossipDriver) gossipDiscoveryInput(peerID string, suppressed map[string]bool, records bool) GossipDiscoveryInput {
+func (driver *GossipDriver) gossipDiscoveryInput(peerID string, suppressed map[string]bool, records bool, recordPrefix string) GossipDiscoveryInput {
 	input := GossipDiscoveryInput{Suppressed: cloneSuppressedPeers(suppressed)}
 	if driver == nil {
 		return input
@@ -73,7 +73,7 @@ func (driver *GossipDriver) gossipDiscoveryInput(peerID string, suppressed map[s
 	}
 	var view *corestate.DiscoveryView
 	if records {
-		view = driver.gossipState.ReadDiscovery(peerID)
+		view = driver.gossipState.ReadDiscoveryRecords(peerID, recordPrefix)
 	} else {
 		view = driver.gossipState.ReadPeerAuthorization(peerID)
 	}
@@ -305,7 +305,7 @@ func (driver *GossipDriver) RefreshGossipDiscovery(ctx context.Context, suppress
 	if !driver.gossipDiscoveryAvailable() {
 		return ErrGossipDriverStopped
 	}
-	input := driver.GossipDiscoveryInput(suppressed)
+	input := driver.gossipDiscoveryInput("", suppressed, true, gossip.EndpointRecordKeyPrefix)
 	plan := PlanGossipDiscovery(input, now)
 	if len(plan.Patches) > 0 {
 		if driver.gossipState == nil {
@@ -328,7 +328,7 @@ func (driver *GossipDriver) restoreGossipObservedPath(peerID string, suppressed 
 	if transport == nil || peerID == "" {
 		return nil
 	}
-	input := driver.gossipDiscoveryInput(peerID, suppressed, false)
+	input := driver.gossipDiscoveryInput(peerID, suppressed, false, "")
 	var paths []gossip.ObservedPath
 	var prefer, ok bool
 	if input.verifiedRevision != verification.revision {
@@ -463,15 +463,11 @@ func verifiedDiscoveryPeers(input GossipDiscoveryInput, now time.Time) []string 
 			seen[id] = true
 		}
 	}
-	for path := range network.Zones {
-		if photoncrypto.VerifyChain(&network, path, now) == nil {
-			add(path)
-		}
-	}
 	for parent, state := range network.Zones {
 		if state == nil || photoncrypto.VerifyChain(&network, parent, now) != nil {
 			continue
 		}
+		add(parent)
 		for child := range state.Delegations {
 			if !network.IsZoneRevoked(child, now) {
 				add(child)

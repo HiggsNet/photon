@@ -24,7 +24,7 @@ func (driver *GossipDriver) recordGossipObservedPath(ctx context.Context, peerID
 	if driver == nil || driver.gossipState == nil {
 		return gossipObservedVerification{}, false, ErrGossipDriverStopped
 	}
-	input := driver.gossipDiscoveryInput(peerID, suppressed, false)
+	input := driver.gossipDiscoveryInput(peerID, suppressed, false, "")
 	input.observedVerifier = &driver.observedPathVerifier
 	patch, ok := PlanVerifiedObservedCheckpoint(input, peerID, endpoint, now)
 	verification := gossipObservedVerification{revision: input.verifiedRevision, valid: ok}

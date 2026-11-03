@@ -23,8 +23,8 @@ type failingDiscoveryWriter struct {
 
 func (writer failingDiscoveryWriter) ReadView() corestate.View { return writer.view }
 
-func (writer failingDiscoveryWriter) ReadDiscovery(peerID string) *corestate.DiscoveryView {
-	return corestate.NewStoreWithCheckpoint(writer.view.State, writer.view.Gossip, nil, nil).ReadDiscovery(peerID)
+func (writer failingDiscoveryWriter) ReadDiscoveryRecords(peerID, prefix string) *corestate.DiscoveryView {
+	return corestate.NewStoreWithCheckpoint(writer.view.State, writer.view.Gossip, nil, nil).ReadDiscoveryRecords(peerID, prefix)
 }
 
 func (writer failingDiscoveryWriter) ReadPeerAuthorization(peerID string) *corestate.DiscoveryView {

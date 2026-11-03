@@ -124,6 +124,16 @@ func TestReadDiscoveryRetainsDigestsAndDetachesCurrentState(t *testing.T) {
 		}
 	}
 	peer := store.ReadDiscovery(path.String())
+	filtered := store.ReadDiscoveryRecords("", "record-0")
+	filteredZone := filtered.Network.Zones[path]
+	if filtered.Revision != all.Revision || len(filteredZone.Records) != 1 ||
+		!reflect.DeepEqual(filteredZone.Records["record-0"], peer.Network.Zones[path].Records["record-0"]) ||
+		!reflect.DeepEqual(filteredZone.ParentProof, peer.Network.Zones[path].ParentProof) {
+		t.Fatal("filtered discovery lost the selected record or verification context")
+	}
+	filteredZone.Records["record-0"].Value[0] ^= 0xff
+	filteredZone.ParentProof[0].Signature[0] ^= 0xff
+	filtered.Peers[path.String()].LastFailure.Message = "changed"
 	if len(peer.Network.Zones) != 3 || len(peer.Peers) != 1 || len(peer.Network.Zones[path].Records) != 10 {
 		t.Fatalf("scoped discovery copied unrelated data: zones=%d peers=%d", len(peer.Network.Zones), len(peer.Peers))
 	}

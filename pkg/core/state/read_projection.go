@@ -2,6 +2,7 @@ package state
 
 import (
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -22,7 +23,13 @@ type DiscoveryView struct {
 // Ancestors retain authority, parent proofs, delegations and revocations, so
 // callers still verify signatures and time-dependent policy on every use.
 func (store *Store) ReadDiscovery(peerID string) *DiscoveryView {
-	return store.readDiscovery(peerID, true)
+	return store.ReadDiscoveryRecords(peerID, "")
+}
+
+// ReadDiscoveryRecords returns the same detached discovery view with current
+// records restricted to keys matching prefix. An empty prefix includes all keys.
+func (store *Store) ReadDiscoveryRecords(peerID, prefix string) *DiscoveryView {
+	return store.readDiscovery(peerID, true, prefix)
 }
 
 // ReadPeerAuthorization reads one peer's authorization chain and committed
@@ -32,10 +39,10 @@ func (store *Store) ReadPeerAuthorization(peerID string) *DiscoveryView {
 	if peerID == "" {
 		return nil
 	}
-	return store.readDiscovery(peerID, false)
+	return store.readDiscovery(peerID, false, "")
 }
 
-func (store *Store) readDiscovery(peerID string, records bool) *DiscoveryView {
+func (store *Store) readDiscovery(peerID string, records bool, prefix string) *DiscoveryView {
 	if store == nil {
 		return nil
 	}
@@ -58,7 +65,7 @@ func (store *Store) readDiscovery(peerID string, records bool) *DiscoveryView {
 	}
 	if peerID == "" {
 		for path, zs := range network.Zones {
-			out.Network.Zones[path] = cloneDiscoveryZone(zs, true)
+			out.Network.Zones[path] = cloneDiscoveryZone(zs, records, prefix)
 		}
 		for id, peer := range store.gossip.Peers {
 			out.Peers[id] = clonePeerCheckpoint(peer)
@@ -72,7 +79,7 @@ func (store *Store) readDiscovery(peerID string, records bool) *DiscoveryView {
 	if path.Valid() {
 		for current := path; ; current = current.Parent() {
 			if zs, ok := network.Zones[current]; ok {
-				out.Network.Zones[current] = cloneDiscoveryZone(zs, records && current == path)
+				out.Network.Zones[current] = cloneDiscoveryZone(zs, records && current == path, prefix)
 			}
 			if current == zone.RootZone {
 				break
@@ -82,7 +89,7 @@ func (store *Store) readDiscovery(peerID string, records bool) *DiscoveryView {
 	return out
 }
 
-func cloneDiscoveryZone(zs *zone.ZoneState, records bool) *zone.ZoneState {
+func cloneDiscoveryZone(zs *zone.ZoneState, records bool, prefix string) *zone.ZoneState {
 	if zs == nil {
 		return nil
 	}
@@ -93,8 +100,17 @@ func cloneDiscoveryZone(zs *zone.ZoneState, records bool) *zone.ZoneState {
 		Revocations: cloneRevocationMap(zs.Revocations),
 		MerkleRoot:  append([]byte(nil), zs.MerkleRoot...),
 	}
-	if records {
+	if records && prefix == "" {
 		out.Records = cloneRecordMap(zs.Records)
+	} else if records {
+		for key, record := range zs.Records {
+			if strings.HasPrefix(key, prefix) {
+				if out.Records == nil {
+					out.Records = make(map[string]*zone.Record)
+				}
+				out.Records[key] = cloneRecord(record)
+			}
+		}
 	}
 	return out
 }
