@@ -297,28 +297,28 @@ func TestMeshSelectsDestinationAndSurvivingRouteWithoutTransit(t *testing.T) {
 	copy(packet[12:16], []byte{10, 9, 0, 1})
 	copy(packet[16:20], []byte{10, 1, 2, 3})
 	a := m.selectRoute(packet, f.view, f.now)
-	if a == nil || a.peer.config.Gateway.AllowedZones[0] != "node-a.catofes." {
+	if a.peer == nil || a.peer.config.Gateway.AllowedZones[0] != "node-a.catofes." {
 		t.Fatal("first destination did not select its peer")
 	}
 	copy(packet[16:20], []byte{10, 2, 2, 3})
 	b := m.selectRoute(packet, f.view, f.now)
-	if b == nil || b.peer == a.peer {
+	if b.peer == nil || b.peer == a.peer {
 		t.Fatal("different destination did not use simultaneous second connection")
 	}
 	// A second valid path to the same prefix is immediately eligible after
 	// the first neighbor fails; no gateway switch or adapter recreation occurs.
 	meshLearn(t, b.peer, f.view, f.now, "10.1.0.0/16", 30)
 	copy(packet[16:20], []byte{10, 1, 2, 3})
-	if choice := m.selectRoute(packet, f.view, f.now); choice == nil || choice.peer != a.peer {
+	if choice := m.selectRoute(packet, f.view, f.now); choice.peer == nil || choice.peer != a.peer {
 		t.Fatal("lowest metric path not selected")
 	}
 	m.stopPeer(a.peer, "peer disconnected")
-	if choice := m.selectRoute(packet, f.view, f.now); choice == nil || choice.peer != b.peer {
+	if choice := m.selectRoute(packet, f.view, f.now); choice.peer == nil || choice.peer != b.peer {
 		t.Fatal("healthy peer did not take over route")
 	}
 	// A packet sourced by another node is not local traffic, even with a route.
 	copy(packet[12:16], []byte{10, 2, 2, 3})
-	if m.selectRoute(packet, f.view, f.now) != nil {
+	if m.selectRoute(packet, f.view, f.now).peer != nil {
 		t.Fatal("transit/source-spoofing packet entered a peer tunnel")
 	}
 	facts, ok := b.peer.leaf.pipeline.prepare(&b.peer.config, f.view, b.peer.plan, f.now)
@@ -413,13 +413,13 @@ func TestMeshSelectionPrefersDestinationThenSourceThenCost(t *testing.T) {
 	packet := dataplanePacket(true)
 	copy(packet[12:16], []byte{10, 9, 0, 1})
 	copy(packet[16:20], []byte{10, 1, 2, 3})
-	if choice := m.selectRoute(packet, f.view, f.now); choice == nil || choice.peer != b {
+	if choice := m.selectRoute(packet, f.view, f.now); choice.peer == nil || choice.peer != b {
 		t.Fatal("more-specific source should precede metric across peers")
 	}
 	key, _ := routing.NormalizeRouteAnnouncementKey("10.1.2.0/24")
 	f.put(t, "node-a.catofes.", key, routing.RecordTypeRouteAnnouncement, routing.RouteAnnouncementRecord{Version: 1, Prefix: "10.1.2.0/24", Active: true})
 	meshLearn(t, a, f.view, f.now, "10.1.2.0/24", 500)
-	if choice := m.selectRoute(packet, f.view, f.now); choice == nil || choice.peer != a {
+	if choice := m.selectRoute(packet, f.view, f.now); choice.peer == nil || choice.peer != a {
 		t.Fatal("more-specific destination should precede source and metric across peers")
 	}
 }

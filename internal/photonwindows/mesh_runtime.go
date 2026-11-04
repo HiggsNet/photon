@@ -462,12 +462,13 @@ type meshChoice struct {
 
 // Only locally originated packets enter selection. RFC 9079 destination then
 // source specificity precedes cost; a stable address hash spreads equal paths.
-func (m *meshRuntime) selectRoute(packet []byte, view corestate.View, now time.Time) *meshChoice {
+func (m *meshRuntime) selectRoute(packet []byte, view corestate.View, now time.Time) meshChoice {
 	source, destination, ok := businessEndpoints(packet)
 	if !ok {
-		return nil
+		return meshChoice{}
 	}
-	var choices []meshChoice
+	var best meshChoice
+	var ties []meshChoice
 	for _, p := range m.ordered() {
 		pipeline := p.leaf.pipeline
 		if pipeline == nil {
@@ -482,25 +483,31 @@ func (m *meshRuntime) selectRoute(packet []byte, view corestate.View, now time.T
 			continue
 		}
 		candidate := meshChoice{p, facts, route}
-		if len(choices) > 0 {
-			r, b := candidate.route, choices[0].route
-			d, s, bd, bs := r.Destination.Bits(), max(0, r.Source.Bits()), b.Destination.Bits(), max(0, b.Source.Bits())
-			if d < bd || d == bd && s < bs || d == bd && s == bs && r.Metric > b.Metric {
-				continue
-			}
-			if d > bd || s > bs || r.Metric < b.Metric {
-				choices = choices[:0]
-			}
+		if best.peer == nil {
+			best = candidate
+			continue
 		}
-		choices = append(choices, candidate)
+		r, b := route, best.route
+		d, s, bd, bs := r.Destination.Bits(), max(0, r.Source.Bits()), b.Destination.Bits(), max(0, b.Source.Bits())
+		if d < bd || d == bd && s < bs || d == bd && s == bs && r.Metric > b.Metric {
+			continue
+		}
+		if d > bd || s > bs || r.Metric < b.Metric {
+			best, ties = candidate, ties[:0]
+			continue
+		}
+		if len(ties) == 0 {
+			ties = append(ties, best)
+		}
+		ties = append(ties, candidate)
 	}
-	if len(choices) == 0 {
-		return nil
+	if len(ties) == 0 {
+		return best
 	}
 	hash := fnv.New32a()
 	_, _ = hash.Write(source.AsSlice())
 	_, _ = hash.Write(destination.AsSlice())
-	return &choices[int(hash.Sum32()%uint32(len(choices)))]
+	return ties[int(hash.Sum32()%uint32(len(ties)))]
 }
 
 func (m *meshRuntime) handleHost(event leafDevicePacket) {
@@ -515,7 +522,7 @@ func (m *meshRuntime) handleHost(event leafDevicePacket) {
 		return
 	}
 	choice := m.selectRoute(event.packet, corestate.View{}, time.Now())
-	if choice == nil {
+	if choice.peer == nil {
 		event.timing.Finish(fixturePacketTimingRejected)
 		return
 	}

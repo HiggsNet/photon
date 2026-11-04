@@ -33,7 +33,7 @@ func TestMeshESPContinuesWithLeasedIKE(t *testing.T) {
 	copy(packet[12:16], []byte{10, 9, 0, 1})
 	copy(packet[16:20], []byte{10, 1, 2, 3})
 	choice := m.selectRoute(packet, f.view, f.now)
-	if choice == nil {
+	if choice.peer == nil {
 		t.Fatal("fixture has no usable route")
 	}
 	p := choice.peer
@@ -42,7 +42,7 @@ func TestMeshESPContinuesWithLeasedIKE(t *testing.T) {
 		t.Fatal("fixture failed to leave IKE work pending")
 	}
 	choice = m.selectRoute(packet, f.view, f.now)
-	if choice == nil || choice.peer != p {
+	if choice.peer == nil || choice.peer != p {
 		t.Fatal("an in-flight IKE request blocked the installed route")
 	}
 	data := p.tunnel.data
