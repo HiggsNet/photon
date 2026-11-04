@@ -62,7 +62,7 @@ func TestMeshHostBatchRechecksCanceledSA(t *testing.T) {
 		packet := dataplanePacket(true)
 		copy(packet[12:16], []byte{10, 9, 0, 1})
 		copy(packet[16:20], []byte{10, 1, 2, 3})
-		completion, ok := m.prepareHost(leafDevicePacket{generation: 1, packet: packet})
+		completion, ok := m.sealHost(leafDevicePacket{generation: 1, packet: packet})
 		if !ok || completion.err != nil {
 			t.Fatalf("fixture packet rejected before cancellation: %v", completion.err)
 		}
@@ -74,7 +74,7 @@ func TestMeshHostBatchRechecksCanceledSA(t *testing.T) {
 	socket := m.socket
 	m.socket = nil
 	defer func() { m.socket = socket }()
-	batch.flush(m)
+	batch.flush(m, nil)
 	if batch.count != 0 || len(batch.wire) != 0 {
 		t.Fatal("discarded packets retained batch scratch")
 	}

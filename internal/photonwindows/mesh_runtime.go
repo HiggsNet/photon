@@ -6,6 +6,7 @@ import (
 	"hash/fnv"
 	"log/slog"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/HiggsNet/photon/internal/photonclient/sadr"
@@ -14,10 +15,10 @@ import (
 	"github.com/HiggsNet/photon/pkg/routing"
 )
 
-// meshRuntime is owned by the existing daemon event loop. Every neighbor has
-// independent IKE, CHILD, Babel and retry state. Only adapter acquisition/read
-// runs outside that owner. Ingress goes to the local device, never to a peer.
+// The daemon owns control events. Packet workers use stateMu to select and
+// validate live state, and run crypto and I/O separately.
 type meshRuntime struct {
+	stateMu          sync.Mutex
 	ctx              context.Context
 	config           *Config
 	state            *State
@@ -42,7 +43,9 @@ type meshRuntime struct {
 	nextIntent       time.Time
 	leafIntents      chan struct{}
 	policy           *meshPolicyWorker
-	outboundBatch    []byte // Workspace owned by the current host turn.
+	txWake           meshTXWake
+	outboundBatch    []byte // Owned by the TX worker.
+	outboundScratch  []byte // Owned by the TX worker.
 }
 
 type meshPeer struct {
@@ -65,6 +68,8 @@ type meshPeer struct {
 func newMeshRuntime(ctx context.Context, config *Config, state *State, socket *packetSockets, factory packetDeviceFactory, logger *slog.Logger, onPublication func()) *meshRuntime {
 	m := &meshRuntime{ctx: ctx, config: config, state: state, socket: socket, logger: logger, peers: make(map[zone.ZonePath]*meshPeer), byData: make(map[*gatewayDataplane]*meshPeer), device: newMeshDevice(ctx, factory), opened: make(chan leafOpenResult, 64), jobs: make(chan dataplaneJob, dataplaneQueueSize), onPublication: onPublication}
 	m.ikeStarts = make(chan *meshIKEStart, 4)
+	m.txWake.ready = make(chan struct{}, 1)
+	m.device.wake = m.txWake.signal
 	m.ikePrepared = make(chan meshIKEStartResult)
 	m.ikeResponses = make(chan *meshIKEResponse, 4)
 	m.ikeResponded = make(chan meshIKEResponseResult)
@@ -131,6 +136,7 @@ func (m *meshRuntime) update(plan GatewayPlan) {
 			config.Gateway.AllowedZones = []zone.ZonePath{candidate.Zone}
 			data := newSerialGatewayDataplane(m.ctx)
 			data.jobs = m.jobs
+			data.jobReady = m.txWake.signal
 			leaf := newLeafRuntime(m.device.acquire)
 			leaf.opened = m.opened
 			leaf.sharedCompletions = true
@@ -210,8 +216,6 @@ func (m *meshRuntime) close() error {
 			if result.device != nil {
 				err = errors.Join(err, result.device.Close())
 			}
-		case event := <-m.device.packets:
-			event.timing.Finish(fixturePacketTimingCanceled)
 		default:
 			return err
 		}
@@ -376,44 +380,8 @@ func (m *meshRuntime) handleIKE(packet tunnelDatagram) error {
 	return nil
 }
 
-const meshESPReceiveBatch = 8
-
-func (m *meshRuntime) handleESPBatch(ctx context.Context, pending <-chan tunnelDatagram, first tunnelDatagram) {
-	m.handleESP(first)
-	for i := 1; i < meshESPReceiveBatch && ctx.Err() == nil; i++ {
-		select {
-		case packet := <-pending:
-			m.handleESP(packet)
-		default:
-			return
-		}
-	}
-}
-
 func (m *meshRuntime) handleESP(packet tunnelDatagram) {
-	packet.timing.Dequeue()
-	p := m.findGeneration(packet.generation)
-	var facts packetAuthorization
-	if p != nil && m.packetFacts(p, corestate.View{}, time.Now(), &facts) {
-		completion, ok := p.tunnel.data.processOwnedInbound(packet.generation, facts.plan, packet.peer, packet.packet, packet.timing)
-		if ok {
-			m.complete(completion)
-			return
-		}
-	}
-	packet.timing.Finish(fixturePacketTimingRejected)
-}
-
-func (m *meshRuntime) complete(completion dataplaneCompletion) {
-	var facts packetAuthorization
-	p := m.prepareCompletion(&completion, time.Now(), &facts)
-	if p == nil {
-		return
-	}
-	defer m.noteSequence(p)
-	if _, err := p.leaf.pipeline.acceptPrepared(&facts, completion); err != nil {
-		m.failDelivery(p, err)
-	}
+	m.receiveESP(packet)
 }
 
 func (m *meshRuntime) prepareCompletion(completion *dataplaneCompletion, now time.Time, facts *packetAuthorization) *meshPeer {
@@ -532,32 +500,14 @@ func (m *meshRuntime) selectRoute(packet []byte, view corestate.View, now time.T
 	return ties[int(hash.Sum32()%uint32(len(ties)))]
 }
 
-func (m *meshRuntime) handleHost(event leafDevicePacket) {
-	if completion, ok := m.prepareHost(event); ok {
-		m.completeHost(completion)
-	}
-}
-
-func (m *meshRuntime) completeHost(completion meshHostCompletion) {
-	p := m.currentHost(&completion, time.Now())
-	if p != nil {
-		if err := completion.pipeline.writePreparedOutbound(completion.packet, completion.job.sa.endpoint, &completion.timing); err != nil {
-			m.failDelivery(p, err)
-		}
-	} else {
-		completion.finishStale()
-	}
-}
-
-// A sealed host packet stays committed for this owner turn. Recheck only hard
-// lifetimes and transport ownership. The socket checks its endpoint reservation
-// again under the writer lock, including rebinds from outside this owner.
+// Recheck the attachment, SA and policy across concurrent control updates.
+// Route selection stays committed for packets already prepared by the sender.
 func (m *meshRuntime) currentHost(completion *meshHostCompletion, now time.Time) *meshPeer {
 	job := completion.job
 	p := m.byData[job.owner]
 	if p == nil || p.leaf.pipeline != completion.pipeline || !completion.pipeline.attached(now) ||
 		job.generation != job.owner.generation || job.sa != job.owner.active || job.ctx.Err() != nil ||
-		completion.projection != nil && !completion.projection.validAt(now) {
+		completion.projection != nil && !p.policy.accepts(completion.projection, now) {
 		return nil
 	}
 	return p
@@ -567,7 +517,9 @@ func (m *meshRuntime) prepareHost(event leafDevicePacket) (meshHostCompletion, b
 	event.timing.Dequeue()
 	if event.err != nil {
 		event.timing.Finish(fixturePacketTimingRejected)
-		m.stopAll(event.err.Error())
+		if m.device.current(event.generation) {
+			m.stopAll(event.err.Error())
+		}
 		return meshHostCompletion{}, false
 	}
 	if !m.device.current(event.generation) {
@@ -588,21 +540,14 @@ func (m *meshRuntime) prepareHost(event leafDevicePacket) (meshHostCompletion, b
 		event.timing.Finish(fixturePacketTimingRejected)
 		return meshHostCompletion{}, false
 	}
-	completion, ok := choice.peer.tunnel.data.processSelectedOutbound(pipeline.generation, choice.facts.plan, event.packet, choice.flow, event.timing)
-	if !ok {
-		completion.timing.Finish(fixturePacketTimingRejected)
+	data := choice.peer.tunnel.data
+	sa := data.active
+	if !data.current(pipeline.generation, sa, choice.facts.plan) || !choice.flow.matches(sa, true) {
+		event.timing.Finish(fixturePacketTimingRejected)
 		return meshHostCompletion{}, false
 	}
-	if completion.err != nil {
-		choice.peer.tunnel.observeData(completion, choice.facts.plan, time.Now())
-		outcome := fixturePacketTimingCryptoError
-		if completion.job.ctx.Err() != nil {
-			outcome = fixturePacketTimingCanceled
-		}
-		completion.timing.Finish(outcome)
-		return meshHostCompletion{}, false
-	}
-	return meshHostCompletion{completion, pipeline, choice.facts.projection}, true
+	job := dataplaneJob{owner: data, ctx: data.generationCtx, generation: data.generation, sa: sa, packet: event.packet, outbound: true}
+	return meshHostCompletion{dataplaneCompletion{job: job, timing: event.timing}, pipeline, choice.facts.projection}, true
 }
 
 func (m *meshRuntime) ready() bool {

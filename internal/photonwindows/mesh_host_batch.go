@@ -11,7 +11,7 @@ const (
 	maxHostBatchPayload = 65507
 )
 
-// Only this synchronous owner turn may submit a sealed host packet.
+// Only the TX worker may submit a sealed host packet.
 type meshHostCompletion struct {
 	dataplaneCompletion
 	pipeline   *gatewayBabelPipeline
@@ -33,9 +33,11 @@ type meshHostBatch struct {
 	size    int
 }
 
-func (m *meshRuntime) handleHostBatch(ctx context.Context, pending <-chan leafDevicePacket, first leafDevicePacket) {
-	if !udpSegmentation || len(pending) == 0 || m.socket.udpSegmentationDisabled.Load() {
-		m.handleHost(first)
+func (m *meshRuntime) handleHostBatch(ctx context.Context, writer *meshPacketWriter, first leafDevicePacket, reader readyPacketDevice) {
+	if !udpSegmentation || reader == nil || m.socket.udpSegmentationDisabled.Load() {
+		if completion, ok := m.sealHost(first); ok {
+			m.submitHost(writer, &completion)
+		}
 		return
 	}
 
@@ -48,17 +50,17 @@ func (m *meshRuntime) handleHostBatch(ctx context.Context, pending <-chan leafDe
 		// A device read error can tear down the attachment. Submit any
 		// preceding packets before entering that lifecycle path.
 		if event.err != nil {
-			batch.flush(m)
-			m.handleHost(event)
+			batch.flush(m, writer)
+			m.sealHost(event)
 			return
 		}
-		if completion, ok := m.prepareHost(event); ok {
+		if completion, ok := m.sealHost(event); ok {
 			if len(completion.packet)*2 > maxHostBatchPayload {
-				batch.flush(m)
-				m.completeHost(completion)
+				batch.flush(m, writer)
+				m.submitHost(writer, &completion)
 			} else {
 				if !batch.canAppend(completion) {
-					batch.flush(m)
+					batch.flush(m, writer)
 				}
 				batch.append(completion)
 			}
@@ -66,14 +68,13 @@ func (m *meshRuntime) handleHostBatch(ctx context.Context, pending <-chan leafDe
 		if i+1 == meshHostBatchSize || ctx.Err() != nil {
 			break
 		}
-		select {
-		case event = <-pending:
-		default:
-			batch.flush(m)
-			return
+		packet, ok, err := reader.TryRead()
+		if !ok && err == nil {
+			break
 		}
+		event = meshHostEvent(first.generation, packet, err)
 	}
-	batch.flush(m)
+	batch.flush(m, writer)
 }
 
 func (b *meshHostBatch) canAppend(completion meshHostCompletion) bool {
@@ -89,7 +90,7 @@ func (b *meshHostBatch) canAppend(completion meshHostCompletion) bool {
 }
 
 func (b *meshHostBatch) append(completion meshHostCompletion) {
-	// processOwnedOutbound's single workspace is overwritten by the next
+	// The sender's scratch is overwritten by the next
 	// encryption. Keep each ciphertext distinct until the batch is written.
 	start := len(b.wire)
 	b.wire = append(b.wire, completion.packet...)
@@ -99,7 +100,7 @@ func (b *meshHostBatch) append(completion meshHostCompletion) {
 	b.count++
 }
 
-func (b *meshHostBatch) flush(m *meshRuntime) {
+func (b *meshHostBatch) flush(m *meshRuntime, writer *meshPacketWriter) {
 	if b.count == 0 {
 		return
 	}
@@ -110,12 +111,11 @@ func (b *meshHostBatch) flush(m *meshRuntime) {
 		b.count, b.size, b.wire = 0, 0, b.wire[:0]
 	}()
 	if b.count == 1 {
-		m.completeHost(packets[0])
+		m.submitHost(writer, &packets[0])
 		return
 	}
 
-	p := m.currentHost(&packets[0], time.Now())
-	if p == nil {
+	if !m.hostCanSubmit(&packets[0]) {
 		for i := range packets {
 			packets[i].finishStale()
 		}
@@ -127,20 +127,36 @@ func (b *meshHostBatch) flush(m *meshRuntime) {
 		traces[i].MarkDeliveryBegin()
 	}
 	job := packets[0].job
-	submitted, err := m.socket.writeTunnelSegments(job.generation, job.sa.endpoint, wire, b.size, traces[:len(packets)])
+	submitted, err := writer.writeTunnelSegments(job.generation, job.sa.endpoint, wire, b.size, traces[:len(packets)])
 	if submitted {
 		for i := range packets {
 			finishOutboundDelivery(&traces[i], err)
 		}
-		if err != nil {
-			m.failDelivery(p, err)
-		}
+		m.failTX(job, packets[0].pipeline, err)
 		return
 	}
 
 	// Winsock definitively rejected segmentation. Submit the same ciphertext
 	// in order using ordinary writes and the same transport gate.
-	for _, completion := range packets {
-		m.completeHost(completion)
+	for i := range packets {
+		m.submitHost(writer, &packets[i])
 	}
+}
+
+func (m *meshRuntime) hostCanSubmit(completion *meshHostCompletion) bool {
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+	return m.currentHost(completion, time.Now()) != nil
+}
+
+func (m *meshRuntime) submitHost(writer *meshPacketWriter, completion *meshHostCompletion) {
+	if !m.hostCanSubmit(completion) {
+		completion.finishStale()
+		return
+	}
+	job := completion.job
+	completion.timing.MarkDeliveryBegin()
+	err := writer.writeTunnel(job.generation, completion.packet, job.sa.endpoint, &completion.timing)
+	finishOutboundDelivery(&completion.timing, err)
+	m.failTX(job, completion.pipeline, err)
 }

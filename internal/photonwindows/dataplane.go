@@ -25,6 +25,7 @@ type gatewayDataplane struct {
 	cancel           context.CancelFunc
 	workers          sync.WaitGroup
 	jobs             chan dataplaneJob
+	jobReady         func()
 	completed        chan dataplaneCompletion
 	generation       uint64
 	generationCtx    context.Context
@@ -228,20 +229,8 @@ func (d *gatewayDataplane) processOwnedInbound(generation uint64, plan GatewayPl
 	if sa == nil || d.ctx.Err() != nil {
 		return dataplaneCompletion{timing: timing}, false
 	}
-	result := dataplaneCompletion{timing: timing, job: dataplaneJob{owner: d, ctx: d.generationCtx, generation: d.generation, sa: sa}}
-	if err := result.job.ctx.Err(); err != nil {
-		result.err = err
-		return result, true
-	}
-	result.timing.MarkAESBegin()
-	result.packet, result.err = sa.receiver.OpenOwned(packet)
-	result.timing.MarkAESEnd()
-	if result.err == nil && result.timing.Sampled() {
-		if _, _, business := businessEndpoints(result.packet); business {
-			result.timing.Classify(fixturePacketTimingBusiness)
-		}
-	}
-	return result, true
+	job := dataplaneJob{owner: d, ctx: d.generationCtx, generation: d.generation, sa: sa}
+	return openOwnedInbound(job, packet, timing), true
 }
 
 func (d *gatewayDataplane) processOutbound(generation uint64, plan GatewayPlan, packet []byte, authorize func([]byte, bool) bool) (dataplaneCompletion, bool) {
@@ -250,16 +239,6 @@ func (d *gatewayDataplane) processOutbound(generation uint64, plan GatewayPlan, 
 
 func (d *gatewayDataplane) processOwnedOutbound(generation uint64, plan GatewayPlan, packet []byte, authorize func([]byte, bool) bool, timing fixturePacketTiming) (dataplaneCompletion, bool) {
 	return d.sealOwnedOutbound(d.outboundSA(generation, plan, packet, authorize), packet, timing)
-}
-
-// processSelectedOutbound uses the mesh owner's route and source authorization
-// from this turn and still applies the active SA's negotiated selectors.
-func (d *gatewayDataplane) processSelectedOutbound(generation uint64, plan GatewayPlan, packet []byte, flow dataplaneFlow, timing fixturePacketTiming) (dataplaneCompletion, bool) {
-	sa := d.active
-	if !d.current(generation, sa, plan) || !flow.matches(sa, true) {
-		return dataplaneCompletion{timing: timing}, false
-	}
-	return d.sealOwnedOutbound(sa, packet, timing)
 }
 
 // sealOwnedOutbound is only for an exclusively owned leaf packet in the
@@ -311,6 +290,9 @@ func (d *gatewayDataplane) submit(sa *dataplaneSA, packet []byte, outbound bool)
 	}
 	select {
 	case d.jobs <- job:
+		if d.jobReady != nil {
+			d.jobReady()
+		}
 		return true
 	default:
 		return false

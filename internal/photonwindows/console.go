@@ -315,8 +315,10 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		stopCancel := context.AfterFunc(ctx, cancelRebind)
 		defer stopCancel()
 		defer cancelRebind()
+		mesh.stateMu.Lock()
 		mesh.reset()
 		observeReady()
+		mesh.stateMu.Unlock()
 		err := packet.Rebind(rebindCtx)
 		lastPlan = GatewayPlan{}
 		rebindPending = err != nil && ctx.Err() == nil
@@ -367,6 +369,14 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		cancelObservations()
 		<-observationsDone
 	}()
+	packetCtx, stopPackets := context.WithCancel(ctx)
+	var packetWorkers sync.WaitGroup
+	packetWorkers.Go(func() { mesh.runTX(packetCtx) })
+	packetWorkers.Go(func() { mesh.runRX(packetCtx) })
+	defer func() {
+		stopPackets()
+		packetWorkers.Wait()
+	}()
 	close(d.ready)
 	for {
 		select {
@@ -375,50 +385,68 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		case result := <-d.plans:
 			result <- gatewayPlanSample{lastPlan, state.Store()}
 		case sampled := <-observationSnapshots:
-			sampled <- mesh.observationSnapshot(lastPlan)
+			mesh.stateMu.Lock()
+			snapshot := mesh.observationSnapshot(lastPlan)
+			mesh.stateMu.Unlock()
+			sampled <- snapshot
 		case result := <-mesh.policy.results:
+			mesh.stateMu.Lock()
 			mesh.policy.finish(result, state.Store().VerifiedRevision(), time.Now())
+			var finishErr error
 			if held := result.request.peer.heldResponse; held != nil {
-				if err := mesh.finishIKEResponse(*held); err != nil {
-					return err
-				}
+				finishErr = mesh.finishIKEResponse(*held)
+			}
+			mesh.stateMu.Unlock()
+			if finishErr != nil {
+				return finishErr
 			}
 		case failure := <-mesh.ikeWriteFailures:
+			mesh.stateMu.Lock()
 			if peer := mesh.findGeneration(failure.generation); peer != nil {
 				mesh.stopPeer(peer, failure.err.Error())
 			}
+			mesh.stateMu.Unlock()
 		case prepared := <-mesh.ikePrepared:
+			mesh.stateMu.Lock()
 			mesh.finishIKEStart(prepared)
+			mesh.stateMu.Unlock()
 		case response := <-mesh.ikeResponded:
-			if err := mesh.finishIKEResponse(response); err != nil {
-				return err
+			mesh.stateMu.Lock()
+			finishErr := mesh.finishIKEResponse(response)
+			if finishErr == nil {
+				observeReady()
 			}
-			observeReady()
+			mesh.stateMu.Unlock()
+			if finishErr != nil {
+				return finishErr
+			}
 		case datagram := <-packet.ikePackets:
-			if err := mesh.handleIKE(datagram); err != nil {
-				return err
+			mesh.stateMu.Lock()
+			handleErr := mesh.handleIKE(datagram)
+			if handleErr == nil {
+				observeReady()
 			}
-			observeReady()
-		case datagram := <-packet.espPackets:
-			// Give a receive burst a bounded turn before competing again with
-			// host sends and control work. Keep ESP processing in FIFO order
-			// on this owner so replay state and SA lifetimes stay serialized.
-			mesh.handleESPBatch(ctx, packet.espPackets, datagram)
-		case job := <-mesh.jobs:
-			if job.ctx.Err() == nil {
-				mesh.complete(executeDataplaneJob(job))
+			mesh.stateMu.Unlock()
+			if handleErr != nil {
+				return handleErr
 			}
 		case result := <-mesh.opened:
-			if err := mesh.completeOpen(result); err != nil {
-				return err
+			mesh.stateMu.Lock()
+			openErr := mesh.completeOpen(result)
+			mesh.stateMu.Unlock()
+			if openErr != nil {
+				return openErr
 			}
-		case event := <-mesh.device.packets:
-			mesh.handleHostBatch(ctx, mesh.device.packets, event)
 		case <-tunnelTicker.C:
-			if err := mesh.tick(); err != nil {
-				return err
+			mesh.stateMu.Lock()
+			tickErr := mesh.tick()
+			if tickErr == nil {
+				observeReady()
 			}
-			observeReady()
+			mesh.stateMu.Unlock()
+			if tickErr != nil {
+				return tickErr
+			}
 		case result := <-plans:
 			if result.generation != generation || result.plan.Revision != state.Store().VerifiedRevision() {
 				continue
@@ -438,8 +466,10 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				logger.Info("gateway_plan_changed", "plan", result.plan, "tunnel_ready", false)
 			}
 			lastPlan = result.plan
+			mesh.stateMu.Lock()
 			mesh.update(lastPlan)
 			observeReady()
+			mesh.stateMu.Unlock()
 		case request := <-d.rebind:
 			request.result <- rebind(request.ctx)
 			refreshGossip()
@@ -474,11 +504,16 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			requestPlan()
 			refreshGossip()
 		case <-gossipPublished:
-			if err := mesh.invalidate(); err != nil {
-				return err
+			mesh.stateMu.Lock()
+			invalidateErr := mesh.invalidate()
+			if invalidateErr == nil {
+				observeReady()
+			}
+			mesh.stateMu.Unlock()
+			if invalidateErr != nil {
+				return invalidateErr
 			}
 			requestPlan()
-			observeReady()
 		case err := <-gossipDone:
 			gossipExited = true
 			return err

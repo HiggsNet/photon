@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 )
 
-// A single adapter/reader serves every peer. Leases only keep it alive; closing
+// A single adapter serves every peer. Leases only keep it alive; closing
 // a failed peer's lease cannot remove routes used by healthy peers.
 type meshDevice struct {
 	mu                sync.Mutex
@@ -19,10 +19,15 @@ type meshDevice struct {
 	addresses, routes []netip.Prefix
 	generation        uint64
 	activeGeneration  atomic.Uint64
+	source            atomic.Pointer[meshDeviceSource]
 	refs              int
 	cancel            context.CancelFunc
-	reader            sync.WaitGroup
-	packets           chan leafDevicePacket
+	wake              func()
+}
+
+type meshDeviceSource struct {
+	device     ownedPacketDevice
+	generation uint64
 }
 
 type meshDeviceLease struct {
@@ -32,7 +37,7 @@ type meshDeviceLease struct {
 }
 
 func newMeshDevice(ctx context.Context, factory packetDeviceFactory) *meshDevice {
-	return &meshDevice{ctx: ctx, factory: factory, packets: make(chan leafDevicePacket, 64)}
+	return &meshDevice{ctx: ctx, factory: factory}
 }
 
 func (m *meshDevice) acquire(ctx context.Context, name string, addresses, routes []netip.Prefix, mtu, metric uint32) (ownedPacketDevice, error) {
@@ -64,35 +69,12 @@ func (m *meshDevice) acquire(ctx context.Context, name string, addresses, routes
 		}
 		m.device, m.addresses, m.routes = device, slices.Clone(addresses), slices.Clone(routes)
 		m.generation++
-		generation := m.generation
-		m.activeGeneration.Store(generation)
-		readCtx := deviceCtx
 		m.cancel = cancel
-		m.reader.Add(1)
-		go func() {
-			defer m.reader.Done()
-			for {
-				packet, err := device.Read(readCtx)
-				if readCtx.Err() != nil {
-					return
-				}
-				event := leafDevicePacket{generation: generation, packet: packet, err: err}
-				if err != nil {
-					select {
-					case m.packets <- event:
-					case <-readCtx.Done():
-					}
-					return
-				}
-				event.timing = beginFixturePacketTimingQueue(fixturePacketTimingOutbound)
-				select {
-				case m.packets <- event:
-				default:
-					event.timing.QueueRejected()
-					recordLeafIngressDrop()
-				}
-			}
-		}()
+		m.activeGeneration.Store(m.generation)
+		m.source.Store(&meshDeviceSource{device: device, generation: m.generation})
+		if m.wake != nil {
+			m.wake()
+		}
 	}
 	m.refs++
 	return &meshDeviceLease{owner: m, device: m.device}, nil
@@ -117,9 +99,12 @@ func (l *meshDeviceLease) Close() (err error) {
 		m.refs--
 		if m.refs == 0 {
 			m.activeGeneration.Store(0)
+			m.source.Store(nil)
+			if m.wake != nil {
+				m.wake()
+			}
 			m.cancel()
 			err = m.device.Close()
-			m.reader.Wait()
 			m.device = nil
 		}
 	})

@@ -12,14 +12,16 @@ import (
 
 const udpSegmentation = true
 
-// UDP_SEND_MSG_SIZE is a DWORD per-message Winsock control field. The socket
-// option stays untouched so ordinary ESP and control datagrams use plain UDP.
-func writeUDPSegments(conn *net.UDPConn, packet []byte, size int, peer netip.AddrPort) (submitted, unsupported bool, err error) {
+type udpSegmentControl struct {
+	header windows.WSACMSGHDR
+	size   uint32
+}
+
+func udpSegmentOptions(size int) udpSegmentControl {
+	// UDP_SEND_MSG_SIZE is per message. The shared socket option stays
+	// untouched so ordinary ESP and control datagrams use plain UDP.
 	const udpSendMsgSize = 2
-	control := struct {
-		header windows.WSACMSGHDR
-		size   uint32
-	}{
+	return udpSegmentControl{
 		header: windows.WSACMSGHDR{
 			Len:   unsafe.Sizeof(windows.WSACMSGHDR{}) + unsafe.Sizeof(uint32(0)),
 			Level: windows.IPPROTO_UDP,
@@ -27,8 +29,16 @@ func writeUDPSegments(conn *net.UDPConn, packet []byte, size int, peer netip.Add
 		},
 		size: uint32(size),
 	}
+}
+
+func writeUDPSegments(conn *net.UDPConn, packet []byte, size int, peer netip.AddrPort) (submitted, unsupported bool, err error) {
+	control := udpSegmentOptions(size)
 	oob := unsafe.Slice((*byte)(unsafe.Pointer(&control)), int(unsafe.Sizeof(control)))
 	n, _, err := conn.WriteMsgUDPAddrPort(packet, oob, peer)
+	return udpSegmentWriteStatus(n, len(packet), err)
+}
+
+func udpSegmentWriteStatus(n, length int, err error) (submitted, unsupported bool, result error) {
 	if n == 0 && err != nil {
 		switch {
 		case errors.Is(err, windows.WSAENOPROTOOPT), errors.Is(err, windows.WSAEOPNOTSUPP), errors.Is(err, windows.WSAEPROTONOSUPPORT):
@@ -40,7 +50,7 @@ func writeUDPSegments(conn *net.UDPConn, packet []byte, size int, peer netip.Add
 	}
 	// On Windows, Go can return zero bytes with a successful synchronous
 	// WSASendMsg. Its poller skips the completion query in that case.
-	if err == nil && n != 0 && n != len(packet) {
+	if err == nil && n != 0 && n != length {
 		err = io.ErrShortWrite
 	}
 	// Do not retry a datagram if Winsock might have accepted it.

@@ -43,20 +43,27 @@ func checkWintunDLL() error {
 	return nil
 }
 
-// wintunDevice owns a newly created adapter and one ring session. The reader
-// copies and releases every borrowed ring packet before handing data to Go.
-// Close cancels the wait, joins the reader, then ends the ring and adapter.
-// IP Helper configuration and packet authorization belong to the caller.
+// wintunDevice owns one adapter and ring session. The caller reads directly
+// from Wintun and receives a detached copy, so no Go queue drains the ring.
+// Each direction has its own gate. Teardown wakes readers and joins both
+// directions before releasing the rings and read wait handles.
 type wintunDevice struct {
 	adapter    *wintun.Adapter
 	session    wintun.Session
 	luid       uint64
 	cancel     context.CancelFunc
+	stop       chan struct{}
 	done       chan struct{}
-	packets    chan []byte
-	mu         sync.Mutex // serializes writes with ring teardown
+	stopOnce   sync.Once
+	closeOnce  sync.Once
+	mu         sync.Mutex // serializes IP Helper with adapter destruction
 	closed     atomic.Bool
-	err        error
+	stopped    atomic.Bool
+	writeMu    sync.Mutex
+	reader     chan struct{} // serialization token, never holds packet data
+	readEvent  windows.Handle
+	stopEvent  windows.Handle
+	cancelRead windows.Handle
 	unregister func()
 }
 
@@ -96,76 +103,156 @@ func openWintun(ctx context.Context, name string, guid *windows.GUID) (*wintunDe
 		unregister()
 		return nil, err
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	d := &wintunDevice{adapter: a, session: session, luid: a.LUID(), cancel: cancel,
-		done: make(chan struct{}), packets: make(chan []byte, 64), unregister: unregister}
-	go d.receive(ctx, stopEvent)
+	cancelRead, err := windows.CreateEvent(nil, 1, 0, nil)
+	if err != nil {
+		_ = windows.CloseHandle(stopEvent)
+		session.End()
+		a.Close()
+		unregister()
+		return nil, err
+	}
+	lifetime, cancel := context.WithCancel(ctx)
+	d := &wintunDevice{
+		adapter: a, session: session, luid: a.LUID(), cancel: cancel,
+		stop: make(chan struct{}), done: make(chan struct{}), reader: make(chan struct{}, 1),
+		readEvent: session.ReadWaitEvent(), stopEvent: stopEvent, cancelRead: cancelRead,
+		unregister: unregister,
+	}
+	context.AfterFunc(lifetime, d.Close)
 	return d, nil
 }
 
-func (d *wintunDevice) receive(ctx context.Context, stopEvent windows.Handle) {
-	wakeDone := make(chan struct{})
-	stopWake := context.AfterFunc(ctx, func() {
-		defer close(wakeDone)
-		_ = windows.SetEvent(stopEvent)
-	})
-	defer func() {
-		if !stopWake() {
-			<-wakeDone // do not close a handle while the callback still uses it
+func (d *wintunDevice) acquireReader(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if d.stopped.Load() {
+		return io.ErrClosedPipe
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-d.stop:
+		return io.ErrClosedPipe
+	case d.reader <- struct{}{}:
+		if !d.stopped.Load() {
+			return nil
 		}
-		d.cancel()
-		d.mu.Lock()
-		d.closed.Store(true)
-		d.session.End()
-		_ = d.adapter.Close() // upstream wraps a void API; its return is undefined
-		d.unregister()
-		d.mu.Unlock()
-		_ = windows.CloseHandle(stopEvent)
-		close(d.packets)
-		close(d.done)
-	}()
-	for ctx.Err() == nil {
-		packet, err := d.session.ReceivePacket()
-		if err == nil {
-			copyPacket := append([]byte(nil), packet...)
-			d.session.ReleaseReceivePacket(packet)
-			select {
-			case d.packets <- copyPacket:
-			default: // bounded ingress: drop under load, never pin ring memory
-				recordRawIngressDrop()
-			}
-			continue
-		}
-		if errors.Is(err, windows.ERROR_NO_MORE_ITEMS) {
-			_, err = windows.WaitForMultipleObjects([]windows.Handle{stopEvent, d.session.ReadWaitEvent()}, false, windows.INFINITE)
-			if err == nil {
-				continue
-			}
-		}
-		d.mu.Lock()
-		d.err = err
-		d.mu.Unlock()
-		return
+		<-d.reader
+		return io.ErrClosedPipe
+	}
+}
+
+func (d *wintunDevice) releaseReader() {
+	<-d.reader
+}
+
+// readRing is called while the reader owns the session lifetime. Copy before
+// releasing the borrowed Wintun memory, including when Close races this read.
+func (d *wintunDevice) readRing() ([]byte, bool, error) {
+	if d.stopped.Load() {
+		return nil, false, io.ErrClosedPipe
+	}
+	packet, err := d.session.ReceivePacket()
+	if errors.Is(err, windows.ERROR_NO_MORE_ITEMS) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, errors.Join(io.ErrClosedPipe, err)
+	}
+	detached := append([]byte(nil), packet...)
+	d.session.ReleaseReceivePacket(packet)
+	if d.stopped.Load() {
+		return nil, false, io.ErrClosedPipe
+	}
+	return detached, true, nil
+}
+
+// TryRead pulls an immediately available packet. A nil error with ok=false
+// means the caller can retry later; the session's only reader may wait.
+func (d *wintunDevice) TryRead() ([]byte, bool, error) {
+	if d.stopped.Load() {
+		return nil, false, io.ErrClosedPipe
+	}
+	select {
+	case d.reader <- struct{}{}:
+		defer d.releaseReader()
+		return d.readRing()
+	default:
+		return nil, false, nil
 	}
 }
 
 func (d *wintunDevice) Read(ctx context.Context) ([]byte, error) {
-	if err := ctx.Err(); err != nil {
+	if err := d.acquireReader(ctx); err != nil {
 		return nil, err
 	}
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case packet, ok := <-d.packets:
-		// The reader already detached this buffer from the ring. A successful
-		// read only needs to check whether teardown has started.
-		if ok && !d.closed.Load() {
-			return packet, nil
+	defer d.releaseReader()
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		d.mu.Lock()
-		defer d.mu.Unlock()
-		return nil, errors.Join(io.ErrClosedPipe, d.err)
+		if packet, ok, err := d.readRing(); ok || err != nil {
+			return packet, err
+		}
+		if err := d.waitReadable(ctx); err != nil {
+			return nil, err
+		}
 	}
+}
+
+// WaitReadable waits on the driver readiness hint without consuming a packet.
+// The sole reader calls it after TryRead reports an empty ring and retries
+// TryRead on wake, since the auto-reset driver event can also be stale.
+func (d *wintunDevice) WaitReadable(ctx context.Context) error {
+	if err := d.acquireReader(ctx); err != nil {
+		return err
+	}
+	defer d.releaseReader()
+	return d.waitReadable(ctx)
+}
+
+func (d *wintunDevice) waitReadable(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if d.stopped.Load() {
+		return io.ErrClosedPipe
+	}
+	handles := [...]windows.Handle{d.stopEvent, d.readEvent, d.cancelRead}
+	count := 2
+	var stopWake func() bool
+	var wakeDone chan struct{}
+	if ctx.Done() != nil {
+		count = 3
+		wakeDone = make(chan struct{})
+		stopWake = context.AfterFunc(ctx, func() {
+			_ = windows.SetEvent(d.cancelRead)
+			close(wakeDone)
+		})
+	}
+	status, err := windows.WaitForMultipleObjects(handles[:count], false, windows.INFINITE)
+	// Only this reader can use the reusable event. If its callback ran,
+	// join it before resetting the event or releasing the lifetime lock.
+	if stopWake != nil && !stopWake() {
+		<-wakeDone
+		if resetErr := windows.ResetEvent(d.cancelRead); err == nil {
+			err = resetErr
+		}
+	}
+	if d.stopped.Load() {
+		return io.ErrClosedPipe
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if err != nil {
+		return err
+	}
+	if status != windows.WAIT_OBJECT_0+1 {
+		return fmt.Errorf("unexpected Wintun read wait status %#x", status)
+	}
+	return nil
 }
 
 // Write copies a complete IP packet into the driver. Allocate failure owns no
@@ -174,9 +261,9 @@ func (d *wintunDevice) Write(packet []byte) error {
 	if len(packet) == 0 || len(packet) > wintun.PacketSizeMax {
 		return errors.New("invalid Wintun packet size")
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.closed.Load() {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+	if d.stopped.Load() {
 		return io.ErrClosedPipe
 	}
 	buffer, err := d.session.AllocateSendPacket(len(packet))
@@ -191,7 +278,32 @@ func (d *wintunDevice) Write(packet []byte) error {
 	return nil
 }
 
+// quiesce rejects new I/O and wakes waiters while leaving the adapter intact
+// for configuredPacketDevice's IP Helper cleanup.
+func (d *wintunDevice) quiesce() {
+	d.stopOnce.Do(func() {
+		d.stopped.Store(true)
+		close(d.stop)
+		_ = windows.SetEvent(d.stopEvent)
+	})
+}
+
 func (d *wintunDevice) Close() {
-	d.cancel()
-	<-d.done
+	d.closeOnce.Do(func() {
+		d.quiesce()
+		d.cancel()
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		d.closed.Store(true)
+		d.reader <- struct{}{}
+		defer d.releaseReader()
+		d.writeMu.Lock()
+		defer d.writeMu.Unlock()
+		d.session.End()
+		_ = d.adapter.Close() // upstream wraps a void API; its return is undefined
+		d.unregister()
+		_ = windows.CloseHandle(d.stopEvent)
+		_ = windows.CloseHandle(d.cancelRead)
+		close(d.done)
+	})
 }

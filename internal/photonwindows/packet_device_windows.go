@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -17,8 +18,8 @@ type configuredPacketDevice struct {
 	driver   *ipHelperDriver
 	cleanup  ipHelperIntent
 	cancel   context.CancelFunc
-	mu       sync.Mutex
-	closed   bool
+	mu       sync.Mutex // fences writes against IP Helper cleanup
+	closed   atomic.Bool
 	once     sync.Once
 	closeErr error
 }
@@ -120,25 +121,42 @@ func waitIPHelperReady(ctx context.Context, driver *ipHelperDriver, want ipHelpe
 }
 
 func (d *configuredPacketDevice) Read(ctx context.Context) ([]byte, error) {
-	d.mu.Lock()
-	closed := d.closed
-	d.mu.Unlock()
-	if closed {
+	if d.closed.Load() {
 		return nil, io.ErrClosedPipe
 	}
 	packet, err := d.device.Read(ctx)
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.closed {
+	if d.closed.Load() {
 		return nil, io.ErrClosedPipe
 	}
 	return packet, err
 }
 
+func (d *configuredPacketDevice) TryRead() ([]byte, bool, error) {
+	if d.closed.Load() {
+		return nil, false, io.ErrClosedPipe
+	}
+	packet, ok, err := d.device.TryRead()
+	if d.closed.Load() {
+		return nil, false, io.ErrClosedPipe
+	}
+	return packet, ok, err
+}
+
+func (d *configuredPacketDevice) WaitReadable(ctx context.Context) error {
+	if d.closed.Load() {
+		return io.ErrClosedPipe
+	}
+	err := d.device.WaitReadable(ctx)
+	if d.closed.Load() {
+		return io.ErrClosedPipe
+	}
+	return err
+}
+
 func (d *configuredPacketDevice) Write(packet []byte) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.closed {
+	if d.closed.Load() {
 		return io.ErrClosedPipe
 	}
 	return d.device.Write(packet)
@@ -147,12 +165,13 @@ func (d *configuredPacketDevice) Write(packet []byte) error {
 func (d *configuredPacketDevice) Close() error {
 	d.once.Do(func() {
 		d.mu.Lock()
-		d.closed = true // deny delivery before removing any OS resources
+		d.closed.Store(true) // deny delivery before removing any OS resources
 		d.mu.Unlock()
+		d.device.quiesce()
 		d.cancel()
 		_, d.closeErr = d.driver.Reconcile(context.Background(), d.cleanup)
 		// Adapter destruction is the fallback even when observation or explicit
-		// removal fails. It also joins the bounded Wintun reader.
+		// removal fails. It also joins in-flight Wintun reads and writes.
 		d.device.Close()
 	})
 	return d.closeErr

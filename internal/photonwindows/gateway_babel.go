@@ -235,41 +235,11 @@ func (p *gatewayBabelPipeline) acceptPrepared(facts *packetAuthorization, comple
 	if outbound {
 		return true, p.writePreparedOutbound(packet, peer, &completion.timing)
 	}
-	if from, _, err := babel.ParsePacket(packet, p.local); err == nil && from == p.peer {
-		completion.timing.Classify(fixturePacketTimingControl)
-		updates, err := p.leaf.SetLocal(facts.localOrigins)
-		if err != nil {
-			p.leaf = nil
-			completion.timing.Finish(fixturePacketTimingRejected)
-			return false, err
-		}
-		messages, err := p.leaf.Receive(packet, facts.now, facts.authorizeRoute)
-		if err != nil {
-			completion.timing.Finish(fixturePacketTimingRejected)
-			return false, err
-		}
-		p.send(facts, append(updates, messages...))
-		completion.timing.Finish(fixturePacketTimingDelivered)
-		return true, nil
+	device, accepted, err := p.prepareInboundDelivery(facts, packet, &completion.timing)
+	if device == nil {
+		return accepted, err
 	}
-	if p.device == nil {
-		completion.timing.Finish(fixturePacketTimingRejected)
-		return false, nil
-	}
-	completion.timing.MarkDeliveryBegin()
-	err := p.device.Write(packet)
-	completion.timing.MarkDeliveryEnd()
-	if err != nil {
-		completion.timing.Finish(fixturePacketTimingDeliveryError)
-		// A full ring drops this packet. Tearing down the attachment would
-		// also interrupt unrelated traffic while the host drains the ring.
-		if errors.Is(err, errPacketDeviceFull) {
-			return false, nil
-		}
-	} else {
-		completion.timing.Finish(fixturePacketTimingDelivered)
-	}
-	return true, err
+	return deliverInbound(device, packet, &completion.timing)
 }
 
 func (p *gatewayBabelPipeline) writePreparedOutbound(packet []byte, peer netip.AddrPort, timing *fixturePacketTiming) error {

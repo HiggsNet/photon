@@ -160,16 +160,21 @@ func TestMeshDeviceHasOneReaderAndSurvivesPeerFailure(t *testing.T) {
 	default:
 	}
 	device.input <- []byte{1, 2, 3}
-	select {
-	case event := <-m.packets:
-		if !m.current(event.generation) || !bytes.Equal(event.packet, []byte{1, 2, 3}) {
-			t.Fatal("shared reader lost generation")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("shared reader stopped with first peer")
+	source := m.source.Load()
+	if source == nil || !m.current(source.generation) {
+		t.Fatal("first peer retired the shared packet source")
+	}
+	readCtx, cancelRead := context.WithTimeout(t.Context(), time.Second)
+	defer cancelRead()
+	packet, err := source.device.Read(readCtx)
+	if err != nil || !bytes.Equal(packet, []byte{1, 2, 3}) {
+		t.Fatalf("shared packet source stopped with first peer: %v, %v", packet, err)
 	}
 	if err := b.Close(); err != nil {
 		t.Fatal(err)
+	}
+	if m.source.Load() != nil || m.current(source.generation) {
+		t.Fatal("last peer did not retire the packet source")
 	}
 	select {
 	case <-device.closed:

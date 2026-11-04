@@ -16,7 +16,7 @@ import (
 )
 
 // Exercises the real OS IP stack in both directions on a disposable adapter:
-// UDP socket -> routing -> Wintun.Read -> reply -> Wintun.Write -> UDP socket.
+// UDP socket -> routing -> Wintun.TryRead -> reply -> Wintun.Write -> UDP socket.
 // No physical network listener, firewall change or external peer is involved.
 func TestWintunNativeUDPRoundTrip(t *testing.T) {
 	if os.Getenv("PHOTON_IPHELPER_SMOKE") != "1" {
@@ -81,9 +81,18 @@ func TestWintunNativeUDPRoundTrip(t *testing.T) {
 			readCtx, stopRead := context.WithTimeout(ctx, 5*time.Second)
 			defer stopRead()
 			for {
-				packet, err := device.Read(readCtx)
+				if err := readCtx.Err(); err != nil {
+					t.Fatal(err)
+				}
+				packet, ok, err := device.TryRead()
 				if err != nil {
 					t.Fatal(err)
+				}
+				if !ok {
+					if err := device.WaitReadable(readCtx); err != nil {
+						t.Fatal(err)
+					}
+					continue
 				}
 				reply := wintunUDPReply(packet, local, remote, payload)
 				if reply == nil {

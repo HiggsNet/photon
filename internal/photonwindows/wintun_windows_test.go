@@ -60,7 +60,7 @@ func TestWintunNativeLifecycle(t *testing.T) {
 		select {
 		case <-d.done:
 		case <-time.After(2 * time.Second):
-			t.Fatal("cancel did not stop native receive loop")
+			t.Fatal("cancel did not close native adapter")
 		}
 		d.Close()
 		d.Close()

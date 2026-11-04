@@ -18,9 +18,9 @@ import (
 // A failed replacement leaves both protocols unavailable until the next retry.
 type packetSockets struct {
 	// Every mutation of udp, closed, tunnelGeneration and reservations
-	// holds writeMu then mu. Either lock protects reads of those fields: sends
-	// hold writeMu through I/O; the sole reader uses mu independently. Other
-	// mutable reader metadata, including readDeadline and changed, uses mu.
+	// holds writeMu then mu. Either lock protects reads of those fields. The
+	// Windows overlapped path holds writeMu only through submission, and the
+	// reader uses mu independently. Reader metadata also uses mu.
 	udpSegmentationDisabled atomic.Bool // Capability is scoped to the current socket.
 	writeMu                 sync.Mutex
 	mu                      sync.Mutex
