@@ -38,7 +38,8 @@ type PeerCheckpointPatch struct {
 	ClearRejected      []zone.ZonePath
 }
 
-// CheckpointCommitFunc persists only affected peers before publishing them in memory.
+// CheckpointCommitFunc accepts only affected peers before publishing them in memory.
+// The persistence owner may batch forward refreshes of established timestamps.
 // A nil peer deletes its checkpoint. Values are detached; no verified data is supplied.
 type CheckpointCommitFunc func(context.Context, map[string]*PeerCheckpoint, VerifiedRevision) error
 

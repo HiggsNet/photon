@@ -4,42 +4,41 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"sort"
+	"time"
 
 	bolt "go.etcd.io/bbolt"
 )
 
 var bucketCheckpointPeers = []byte("peers")
 
-const checkpointRefreshIntervalSeconds = 5
+const checkpointRefreshInterval = 5 * time.Second
 
-// Compare with the on-disk checkpoint so frequent in-memory updates do not
-// keep moving the persistence window. First observations, resets and semantic
-// changes still persist immediately.
-func canSkipCheckpointRefresh(data []byte, next PeerCheckpoint) bool {
-	var persisted PeerCheckpoint
-	if data == nil || json.Unmarshal(data, &persisted) != nil {
+// Only forward refreshes of an established checkpoint can wait for the batch.
+func isCheckpointRefresh(previous, next PeerCheckpoint) bool {
+	if reflect.DeepEqual(previous, next) {
 		return false
 	}
 	fields := [][2]*int64{
-		{&persisted.LastAttemptUnix, &next.LastAttemptUnix},
-		{&persisted.LastSyncUnix, &next.LastSyncUnix},
-		{&persisted.ObservedLastSeenUnix, &next.ObservedLastSeenUnix},
-		{&persisted.ObservedLastSyncUnix, &next.ObservedLastSyncUnix},
-		{&persisted.ObservedUntilUnix, &next.ObservedUntilUnix},
+		{&previous.LastAttemptUnix, &next.LastAttemptUnix},
+		{&previous.LastSyncUnix, &next.LastSyncUnix},
+		{&previous.ObservedLastSeenUnix, &next.ObservedLastSeenUnix},
+		{&previous.ObservedLastSyncUnix, &next.ObservedLastSyncUnix},
+		{&previous.ObservedUntilUnix, &next.ObservedUntilUnix},
 	}
 	for _, field := range fields {
 		old, new := *field[0], *field[1]
 		if old == new {
 			continue
 		}
-		if old <= 0 || new < old || new-old >= checkpointRefreshIntervalSeconds {
+		if old <= 0 || new < old {
 			return false
 		}
 		*field[0] = new
 	}
-	return reflect.DeepEqual(persisted, next)
+	return reflect.DeepEqual(previous, next)
 }
 
 // Legacy payload takes precedence: an older binary may have written it after
@@ -132,7 +131,10 @@ func (store *BoltStore) CommitCheckpoints(ctx context.Context, updates map[strin
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return store.Update(func(tx *bolt.Tx) (bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	var queued map[string]PeerCheckpoint
+	err := store.updateLocked(func(tx *bolt.Tx) (bool, error) {
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
@@ -186,7 +188,18 @@ func (store *BoltStore) CommitCheckpoints(ctx context.Context, updates map[strin
 				}
 				continue
 			}
-			if canSkipCheckpointRefresh(peers.Get([]byte(id)), *peer) {
+			previous, pending := store.checkpointRefreshes[id]
+			pending = pending && store.checkpointRevision == revision
+			valid := pending
+			if !pending {
+				previous = PeerCheckpoint{}
+				valid = json.Unmarshal(peers.Get([]byte(id)), &previous) == nil
+			}
+			if valid && (isCheckpointRefresh(previous, *peer) || (pending && reflect.DeepEqual(previous, *peer))) {
+				if queued == nil {
+					queued = make(map[string]PeerCheckpoint)
+				}
+				queued[id] = clonePeerCheckpoint(*peer)
 				continue
 			}
 			data, err := json.Marshal(peer)
@@ -201,4 +214,86 @@ func (store *BoltStore) CommitCheckpoints(ctx context.Context, updates map[strin
 		}
 		return changed, nil
 	})
+	if err != nil {
+		return err
+	}
+	if store.checkpointRevision != revision {
+		clear(store.checkpointRefreshes)
+		store.checkpointRevision = revision
+	}
+	for id := range updates {
+		delete(store.checkpointRefreshes, id)
+	}
+	for id, peer := range queued {
+		if store.checkpointRefreshes == nil {
+			store.checkpointRefreshes = make(map[string]PeerCheckpoint)
+		}
+		store.checkpointRefreshes[id] = peer
+	}
+	store.scheduleCheckpointFlushLocked()
+	return nil
+}
+
+func (store *BoltStore) scheduleCheckpointFlushLocked() {
+	if store.checkpointTimer != nil || len(store.checkpointRefreshes) == 0 {
+		return
+	}
+	store.checkpointTimer = time.AfterFunc(checkpointRefreshInterval, func() {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		store.checkpointTimer = nil
+		if store.closed {
+			return
+		}
+		if err := store.flushCheckpointRefreshesLocked(); err != nil {
+			slog.Warn("flush gossip checkpoint refreshes", "error", err)
+			store.scheduleCheckpointFlushLocked()
+		}
+	})
+}
+
+func (store *BoltStore) flushCheckpointRefreshesLocked() error {
+	if len(store.checkpointRefreshes) == 0 {
+		return nil
+	}
+	err := store.updateLocked(func(tx *bolt.Tx) (bool, error) {
+		common := tx.Bucket(bucketCommonState)
+		if common == nil {
+			return false, nil
+		}
+		revision, err := loadBoltRevision(common)
+		if err != nil || revision != store.checkpointRevision {
+			return false, err
+		}
+		bucket := common.Bucket(bucketGossip)
+		if bucket == nil || bucket.Get(keyPayload) != nil {
+			return false, nil
+		}
+		peers := bucket.Bucket(bucketCheckpointPeers)
+		if peers == nil {
+			return false, nil
+		}
+		changed := false
+		for id, peer := range store.checkpointRefreshes {
+			key := []byte(id)
+			var persisted PeerCheckpoint
+			// A full transaction may already have replaced this checkpoint.
+			if json.Unmarshal(peers.Get(key), &persisted) != nil || !isCheckpointRefresh(persisted, peer) {
+				continue
+			}
+			data, err := json.Marshal(peer)
+			if err != nil {
+				return false, err
+			}
+			if err := peers.Put(key, data); err != nil {
+				return false, err
+			}
+			changed = true
+		}
+		return changed, nil
+	})
+	if err == nil {
+		clear(store.checkpointRefreshes)
+	}
+	return err
 }

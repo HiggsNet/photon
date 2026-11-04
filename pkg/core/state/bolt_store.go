@@ -30,6 +30,10 @@ type BoltStore struct {
 	mu     sync.Mutex
 	db     boltDB
 	closed bool
+
+	checkpointRefreshes map[string]PeerCheckpoint
+	checkpointRevision  VerifiedRevision
+	checkpointTimer     *time.Timer
 }
 
 func OpenBoltStore(path string, mode os.FileMode, lockTimeout time.Duration) (*BoltStore, error) {
@@ -89,6 +93,10 @@ func (store *BoltStore) Update(update func(*bolt.Tx) (bool, error)) error {
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	return store.updateLocked(update)
+}
+
+func (store *BoltStore) updateLocked(update func(*bolt.Tx) (bool, error)) error {
 	if store.closed || store.db == nil {
 		return ErrBoltStoreClosed
 	}
@@ -116,12 +124,19 @@ func (store *BoltStore) CommitCommon(ctx context.Context, candidate *CommitCandi
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return store.Update(func(tx *bolt.Tx) (bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	err := store.updateLocked(func(tx *bolt.Tx) (bool, error) {
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
 		return CommitBoltState(tx, candidate, changes)
 	})
+	if err == nil {
+		// The full candidate includes the live checkpoint partition.
+		clear(store.checkpointRefreshes)
+	}
+	return err
 }
 
 func (store *BoltStore) Close() error {
@@ -133,9 +148,13 @@ func (store *BoltStore) Close() error {
 	if store.closed {
 		return nil
 	}
+	if store.checkpointTimer != nil {
+		store.checkpointTimer.Stop()
+	}
+	flushErr := store.flushCheckpointRefreshesLocked()
 	store.closed = true
 	if store.db == nil {
-		return nil
+		return flushErr
 	}
-	return store.db.Close()
+	return errors.Join(flushErr, store.db.Close())
 }

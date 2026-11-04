@@ -21,8 +21,14 @@ func TestCheckpointTimestampRefreshCoalescesOnlyOnDisk(t *testing.T) {
 		ObservedLastSeenUnix: 100, ObservedUntilUnix: 200,
 		LastSyncUnix: 100, LastAttemptUnix: 100,
 	}
+	initial.Gossip.Peers["peer-b"] = PeerCheckpoint{LastSyncUnix: 100}
 	commitCommonBoltTestState(t, db, initial, 1)
 	disk := &BoltStore{db: db}
+	t.Cleanup(func() {
+		if err := disk.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	store, err := RestoreStore(initial, 1, disk.CommitCommon, disk.CommitCheckpoints)
 	if err != nil {
 		t.Fatal(err)
@@ -55,9 +61,69 @@ func TestCheckpointTimestampRefreshCoalescesOnlyOnDisk(t *testing.T) {
 	}
 	refresh(101, 100, "")
 	refresh(104, 100, "")
-	refresh(105, 105, "")
+	refresh(105, 100, "")
+	if _, err := store.UpdatePeerCheckpoint(context.Background(), "peer-b", PeerCheckpointPatch{
+		LastSyncUnix: PatchField[int64]{Set: true, Value: 102},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	readBatch := func() (txID int, peerA, peerB int64) {
+		t.Helper()
+		if err := disk.View(func(tx *bolt.Tx) error {
+			txID = tx.ID()
+			loaded, _, _, _, err := LoadBoltState(tx)
+			if err == nil {
+				peerA = loaded.Gossip.Peers["peer-a"].LastSyncUnix
+				peerB = loaded.Gossip.Peers["peer-b"].LastSyncUnix
+			}
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	before, a, b := readBatch()
+	if a != 100 || b != 100 {
+		t.Fatalf("checkpoints persisted before batch: %d, %d", a, b)
+	}
+	disk.mu.Lock()
+	if disk.checkpointTimer == nil {
+		disk.mu.Unlock()
+		t.Fatal("checkpoint batch did not schedule a flush")
+	}
+	disk.checkpointTimer.Reset(0)
+	disk.mu.Unlock()
+	deadline := time.Now().Add(time.Second)
+	for {
+		after, a, b := readBatch()
+		if after != before || time.Now().After(deadline) {
+			if after != before+1 || a != 105 || b != 102 {
+				t.Fatalf("batch = tx %d, checkpoints %d and %d, want tx %d with 105 and 102", after, a, b, before+1)
+			}
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 	refresh(106, 106, "192.0.2.2:33434")
-	refresh(103, 103, "") // A clock rollback is not a forward refresh.
+	refresh(110, 106, "")
+	refresh(107, 107, "") // Rollback relative to the queued refresh persists immediately.
+	refresh(109, 107, "")
+	path := db.Path()
+	if err := disk.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenBoltStore(path, 0o600, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	loaded, _, _, _, err := reopened.LoadCommon()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.Gossip.Peers["peer-a"].LastSyncUnix; got != 109 {
+		t.Fatalf("checkpoint after reopen = %d, want 109", got)
+	}
 }
 
 func TestCheckpointNarrowCommitMigrationRollbackAndIsolation(t *testing.T) {
