@@ -134,6 +134,7 @@ func (store *BoltStore) CommitCheckpoints(ctx context.Context, updates map[strin
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	var queued map[string]PeerCheckpoint
+	var flushed bool
 	err := store.updateLocked(func(tx *bolt.Tx) (bool, error) {
 		if err := ctx.Err(); err != nil {
 			return false, err
@@ -212,6 +213,19 @@ func (store *BoltStore) CommitCheckpoints(ctx context.Context, updates map[strin
 			}
 			changed = changed || wrote
 		}
+		if changed {
+			// The immediate commit is already paying for a sync. Include
+			// pending refreshes, with the current updates taking precedence.
+			if store.checkpointRevision == revision {
+				if _, err := writeCheckpointRefreshes(peers, store.checkpointRefreshes, updates); err != nil {
+					return false, err
+				}
+			}
+			if _, err := writeCheckpointRefreshes(peers, queued, nil); err != nil {
+				return false, err
+			}
+			flushed = true
+		}
 		return changed, nil
 	})
 	if err != nil {
@@ -220,6 +234,10 @@ func (store *BoltStore) CommitCheckpoints(ctx context.Context, updates map[strin
 	if store.checkpointRevision != revision {
 		clear(store.checkpointRefreshes)
 		store.checkpointRevision = revision
+	}
+	if flushed {
+		clear(store.checkpointRefreshes)
+		return nil
 	}
 	for id := range updates {
 		delete(store.checkpointRefreshes, id)
@@ -273,27 +291,34 @@ func (store *BoltStore) flushCheckpointRefreshesLocked() error {
 		if peers == nil {
 			return false, nil
 		}
-		changed := false
-		for id, peer := range store.checkpointRefreshes {
-			key := []byte(id)
-			var persisted PeerCheckpoint
-			// A full transaction may already have replaced this checkpoint.
-			if json.Unmarshal(peers.Get(key), &persisted) != nil || !isCheckpointRefresh(persisted, peer) {
-				continue
-			}
-			data, err := json.Marshal(peer)
-			if err != nil {
-				return false, err
-			}
-			if err := peers.Put(key, data); err != nil {
-				return false, err
-			}
-			changed = true
-		}
-		return changed, nil
+		return writeCheckpointRefreshes(peers, store.checkpointRefreshes, nil)
 	})
 	if err == nil {
 		clear(store.checkpointRefreshes)
 	}
 	return err
+}
+
+func writeCheckpointRefreshes(peers *bolt.Bucket, pending map[string]PeerCheckpoint, superseded map[string]*PeerCheckpoint) (bool, error) {
+	changed := false
+	for id, peer := range pending {
+		if _, ok := superseded[id]; ok {
+			continue
+		}
+		key := []byte(id)
+		var persisted PeerCheckpoint
+		// The refresh may already have been persisted or superseded.
+		if json.Unmarshal(peers.Get(key), &persisted) != nil || !isCheckpointRefresh(persisted, peer) {
+			continue
+		}
+		data, err := json.Marshal(peer)
+		if err != nil {
+			return false, err
+		}
+		if err := peers.Put(key, data); err != nil {
+			return false, err
+		}
+		changed = true
+	}
+	return changed, nil
 }

@@ -284,6 +284,7 @@ func (driver *GossipDriver) relayGossipUpdate(ctx context.Context, sourcePeerID 
 	}
 	root := hex.EncodeToString(summary.CatalogRoot)
 	relayed := 0
+	var queuedPeers []string
 	for _, peerID := range GossipOutboundPeers(input, now) {
 		if peerID == sourcePeerID {
 			continue
@@ -307,7 +308,13 @@ func (driver *GossipDriver) relayGossipUpdate(ctx context.Context, sourcePeerID 
 			driver.logGossip("warn", "relay_event_dropped", peerID, "session", err, map[string]any{"source_peer": sourcePeerID})
 			continue
 		}
-		committed, err := driver.RecordGossipRelay(ctx, peerID, root, now)
+		queuedPeers = append(queuedPeers, peerID)
+	}
+	if len(queuedPeers) == 0 {
+		return
+	}
+	committed, err := driver.recordGossipRelays(ctx, queuedPeers, root, now)
+	for _, peerID := range queuedPeers {
 		if err != nil {
 			driver.logGossip("warn", "relay_checkpoint_commit_failed", peerID, "persistence", err, nil)
 			continue

@@ -104,7 +104,20 @@ func TestCheckpointTimestampRefreshCoalescesOnlyOnDisk(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
+	if _, err := store.UpdatePeerCheckpoint(context.Background(), "peer-b", PeerCheckpointPatch{
+		LastSyncUnix: PatchField[int64]{Set: true, Value: 103},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, _, b = readBatch()
+	if b != 102 {
+		t.Fatalf("peer-b persisted before an immediate write: %d", b)
+	}
 	refresh(106, 106, "192.0.2.2:33434")
+	after, a, b := readBatch()
+	if after != before+1 || a != 106 || b != 103 {
+		t.Fatalf("immediate batch = tx %d, checkpoints %d and %d, want tx %d with 106 and 103", after, a, b, before+1)
+	}
 	refresh(110, 106, "")
 	refresh(107, 107, "") // Rollback relative to the queued refresh persists immediately.
 	refresh(109, 107, "")

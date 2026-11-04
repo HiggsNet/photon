@@ -223,13 +223,12 @@ func TestGossipDriverFinishesSessionAndStartsDeferredHint(t *testing.T) {
 func TestGossipDriverFinishesChangedSessionAndOwnsRelay(t *testing.T) {
 	now := time.Unix(100, 0)
 	view := loadedManagedGossipState("local.catofes.", "remote.catofes.")
-	view.Gossip = &corestate.GossipCheckpoint{Peers: map[string]corestate.PeerCheckpoint{"peer-c": {}}}
+	view.Gossip = &corestate.GossipCheckpoint{Peers: map[string]corestate.PeerCheckpoint{"peer-c": {}, "peer-d": {}, "peer-e": {}}}
 	state := &memoryGossipStateStore{views: []corestate.View{view, view}}
-	driver := NewGossipDriver(newFakeClock(now), 4, state, GossipDriverConfig{
+	driver := NewGossipDriver(newFakeClock(now), 2, state, GossipDriverConfig{
 		PeerID: "local.catofes.",
 		Discovery: GossipDiscoveryConfig{
-			Bootstrap:      map[string]*net.UDPAddr{"peer-c": {IP: net.ParseIP("127.0.0.1"), Port: 33434}},
-			BootstrapPeers: []string{"peer-c"},
+			BootstrapPeers: []string{"peer-c", "peer-d", "peer-e"},
 		},
 	})
 	defer driver.Stop()
@@ -243,24 +242,32 @@ func TestGossipDriverFinishesChangedSessionAndOwnsRelay(t *testing.T) {
 	if !result.NetworkChanged || driver.Gossip.Session("peer-b") != nil {
 		t.Fatalf("result=%#v source_session=%#v", result, driver.Gossip.Session("peer-b"))
 	}
-	event, ok := driver.GossipSessionEventFor(<-driver.Events())
-	if !ok {
-		t.Fatal("relay did not queue a session event")
-	}
-	timer, ok := event.(*gossip.SyncTimerEvent)
-	if !ok || timer.PeerID != "peer-c" || timer.LocalSummary == nil {
-		t.Fatalf("relay event = %#v", event)
-	}
 	wantRoot := corestate.CatalogRoot(corestate.ZoneDigests(view.State.Network))
-	if !bytes.Equal(timer.LocalSummary.CatalogRoot, wantRoot) {
-		t.Fatalf("relay root = %x, want %x", timer.LocalSummary.CatalogRoot, wantRoot)
-	}
-	if len(state.updates) != 1 || !state.updates[0]["peer-c"].LastRelayRootHex.Set {
+	if len(state.updates) != 1 || len(state.updates[0]) != 2 {
 		t.Fatalf("relay checkpoint updates = %#v", state.updates)
 	}
-	diagnostics, ok := driver.Observability.Snapshot("peer-c", now)
-	if !ok || diagnostics.LastUpdateSource != "peer-b" || diagnostics.LastRelaySuppression != "" {
-		t.Fatalf("relay diagnostics = %#v", diagnostics)
+	for _, peerID := range []string{"peer-c", "peer-d"} {
+		select {
+		case queued := <-driver.Events():
+			event, _ := driver.GossipSessionEventFor(queued)
+			timer, ok := event.(*gossip.SyncTimerEvent)
+			if !ok || timer.PeerID != peerID || timer.LocalSummary == nil || !bytes.Equal(timer.LocalSummary.CatalogRoot, wantRoot) {
+				t.Fatalf("relay event for %s = %#v", peerID, event)
+			}
+		default:
+			t.Fatalf("missing relay event for %s", peerID)
+		}
+		patch := state.updates[0][peerID]
+		if !patch.LastRelayRootHex.Set || !patch.LastRelayUnix.Set || patch.LastRelayUnix.Value != now.Unix() {
+			t.Fatalf("relay checkpoint for %s = %#v", peerID, patch)
+		}
+		diagnostics, ok := driver.Observability.Snapshot(peerID, now)
+		if !ok || diagnostics.LastUpdateSource != "peer-b" || diagnostics.LastRelaySuppression != "" {
+			t.Fatalf("relay diagnostics for %s = %#v", peerID, diagnostics)
+		}
+	}
+	if driver.Gossip.Session("peer-e") != nil {
+		t.Fatal("relay session for the dropped event was not removed")
 	}
 }
 

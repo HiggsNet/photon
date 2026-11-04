@@ -60,16 +60,25 @@ func (driver *GossipDriver) RecordGossipRejectedObject(ctx context.Context, peer
 // RecordGossipRelay persists relay throttling state without reading or
 // rewriting unrelated peer checkpoint fields.
 func (driver *GossipDriver) RecordGossipRelay(ctx context.Context, peerID, catalogRoot string, now time.Time) (bool, error) {
+	return driver.recordGossipRelays(ctx, []string{peerID}, catalogRoot, now)
+}
+
+func (driver *GossipDriver) recordGossipRelays(ctx context.Context, peerIDs []string, catalogRoot string, now time.Time) (bool, error) {
 	if driver == nil || driver.gossipState == nil {
 		return false, ErrGossipDriverStopped
 	}
-	if peerID == "" {
-		return false, errors.New("gossip relay peer is required")
-	}
-	result, err := driver.gossipState.UpdatePeerCheckpoints(ctx, map[string]corestate.PeerCheckpointPatch{peerID: {
+	patch := corestate.PeerCheckpointPatch{
 		LastRelayUnix:    corestate.PatchField[int64]{Set: true, Value: now.Unix()},
 		LastRelayRootHex: corestate.PatchField[string]{Set: true, Value: catalogRoot},
-	}})
+	}
+	patches := make(map[string]corestate.PeerCheckpointPatch, len(peerIDs))
+	for _, peerID := range peerIDs {
+		if peerID == "" {
+			return false, errors.New("gossip relay peer is required")
+		}
+		patches[peerID] = patch
+	}
+	result, err := driver.gossipState.UpdatePeerCheckpoints(ctx, patches)
 	return result.Committed, err
 }
 
