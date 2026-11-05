@@ -80,7 +80,7 @@ func TestControlExchangeUsesOnlyOwner(t *testing.T) {
 		_ = server.SetDeadline(deadline)
 		result := make(chan error, 1)
 		go func() { defer server.Close(); result <- serveControlRequest(context.Background(), server, daemon) }()
-		response, err := exchangeControl(client, method)
+		response, err := ExchangeControl(client, method)
 		client.Close()
 		if err != nil || response.Version != 1 || response.Method != method || !json.Valid(response.Result) {
 			t.Fatalf("%s: %+v %v", method, response, err)
@@ -103,7 +103,7 @@ func TestControlStopWaitsForCleanup(t *testing.T) {
 	_ = server.SetDeadline(time.Now().Add(time.Second))
 	go func() { _ = serveControlRequest(context.Background(), server, daemon) }()
 	done := make(chan error, 1)
-	go func() { _, err := exchangeControl(client, "stop"); done <- err }()
+	go func() { _, err := ExchangeControl(client, "stop"); done <- err }()
 	select {
 	case err := <-done:
 		t.Fatalf("stop replied before cleanup: %v", err)

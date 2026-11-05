@@ -193,7 +193,7 @@ func callControl(ctx context.Context, statePath, method string, expectedPID uint
 	if err := controlVerifyServer(handle, expectedPID); err != nil {
 		return empty, err
 	}
-	return exchangeControl(&controlPipeStream{ctx: ctx, handle: handle}, method)
+	return ExchangeControl(&controlPipeStream{ctx: ctx, handle: handle}, method)
 }
 
 // The DACL protects the real server, not a name squatted before startup. Check

@@ -11,6 +11,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -33,11 +34,19 @@ type ControlResponse struct {
 }
 
 type ControlError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code       string `json:"code"`
+	Message    string `json:"message"`
+	NativeCode uint32 `json:"native_code,omitempty"`
 }
 
 func (e *ControlError) Error() string { return e.Code + ": " + e.Message }
+
+func (e *ControlError) Unwrap() error {
+	if e.NativeCode != 0 {
+		return syscall.Errno(e.NativeCode)
+	}
+	return nil
+}
 
 // ControlEndpoint has no identity material and does not open the state file.
 // Windows paths are case insensitive; an absolute clean path is stable across
@@ -215,7 +224,9 @@ func serveControlRequest(ctx context.Context, stream io.ReadWriter, daemon Contr
 	return nil
 }
 
-func exchangeControl(stream io.ReadWriter, method string) (ControlResponse, error) {
+// ExchangeControl performs one framed exchange. The transport owner serializes
+// requests and supplies cancellation or I/O deadlines for its private stream.
+func ExchangeControl(stream io.ReadWriter, method string) (ControlResponse, error) {
 	var response ControlResponse
 	if !controlMethod(method) {
 		return response, errors.New("unsupported control method")
