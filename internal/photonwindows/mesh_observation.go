@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/netip"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/HiggsNet/photon/internal/photonclient/babel"
@@ -100,6 +101,7 @@ func (s meshObservationSnapshot) render(config *Config, view corestate.View, dri
 	// AllowedZones changes only the per-peer gateway selection.
 	binding, bindingErr := localTransportAuthorizationWithVerifier(config, view, now, verifier)
 	set := currentAuthorizedRouteSetWithVerifier(config, view, now, verifier)
+	out.observeNodeAddresses(set)
 	permissions := authorizedGatewayRoutesFromSet(config, set)
 	hosts, _ := leafDeviceIntentFromSet(config, set)
 	authorize := babelRouteAuthorizer(permissions, hosts)
@@ -194,5 +196,44 @@ func (d *Daemon) renderObservation(ctx context.Context, request meshObservationR
 			request.reply <- snapshot.render(d.config, view, driver, verifier)
 			return
 		}
+	}
+}
+
+func (out *Observation) observeNodeAddresses(set *routing.AuthorizedRouteSet) {
+	if set == nil {
+		return
+	}
+	type addressKey struct {
+		node   string
+		prefix netip.Prefix
+	}
+	rows := make(map[addressKey]bool, len(set.AllAssignments))
+	for _, assignment := range set.AllAssignments {
+		rows[addressKey{string(assignment.AssignedTo), assignment.Prefix}] = false
+	}
+	for node, prefixes := range set.Announced {
+		for prefix := range prefixes {
+			rows[addressKey{string(node), prefix}] = true
+		}
+	}
+	keys := make([]addressKey, 0, len(rows))
+	for key := range rows {
+		keys = append(keys, key)
+	}
+	slices.SortFunc(keys, func(a, b addressKey) int {
+		if order := strings.Compare(a.node, b.node); order != 0 {
+			return order
+		}
+		return a.prefix.Compare(b.prefix)
+	})
+	if len(keys) > 256 {
+		out.NodeAddressesTruncated = true
+		keys = keys[:256]
+	}
+	out.NodeAddresses = make([]NodeAddressObservation, 0, len(keys))
+	for _, key := range keys {
+		out.NodeAddresses = append(out.NodeAddresses, NodeAddressObservation{
+			Node: boundedObservationText(key.node), Prefix: key.prefix, Announced: rows[key],
+		})
 	}
 }

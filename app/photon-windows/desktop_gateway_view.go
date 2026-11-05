@@ -15,6 +15,9 @@ func desktopGatewayNodes(snapshot desktopSnapshot) []string {
 	}
 	o := snapshot.Observation
 	ids := []string{o.Gateway.Selected, o.IKE.Gateway, o.IKE.AttemptGateway}
+	for _, connection := range o.Connections {
+		ids = append(ids, connection.Peer)
+	}
 	for _, candidate := range o.Gateway.Candidates {
 		ids = append(ids, candidate.Zone)
 	}
@@ -27,10 +30,20 @@ func desktopGatewayNodes(snapshot desktopSnapshot) []string {
 	return slices.DeleteFunc(slices.Compact(ids), func(id string) bool { return id == "" })
 }
 
+func desktopGatewayConnection(o *photonwindows.Observation, id string) (photonwindows.ConnectionObservation, bool) {
+	for _, connection := range o.Connections {
+		if connection.Peer == id {
+			return connection, true
+		}
+	}
+	return photonwindows.ConnectionObservation{IKE: o.IKE, BabelLive: o.Babel.Live, TunnelReady: o.TunnelReady}, false
+}
+
 func desktopGatewayState(o *photonwindows.Observation, id string) string {
-	ike := o.IKE
+	connection, meshPeer := desktopGatewayConnection(o, id)
+	ike := connection.IKE
 	switch {
-	case ike.Live && ike.Gateway == id && ike.ChildLive && o.TunnelReady:
+	case ike.Live && ike.Gateway == id && ike.ChildLive && connection.TunnelReady:
 		return "业务就绪"
 	case ike.Live && ike.Gateway == id && ike.ChildLive:
 		return "隧道已建立"
@@ -41,6 +54,9 @@ func desktopGatewayState(o *photonwindows.Observation, id string) string {
 	}
 	if f := ike.LastFailure; f != nil && f.Gateway == id && !f.Historical && !desktopDebugIKERejected(f.Event) {
 		return "连接失败"
+	}
+	if meshPeer {
+		return "未建立隧道"
 	}
 	if o.Gateway.Selected == id {
 		return "待连接"
@@ -78,7 +94,8 @@ func desktopFormatGatewayNode(snapshot desktopSnapshot, id string) string {
 			break
 		}
 	}
-	ike := o.IKE
+	connection, meshPeer := desktopGatewayConnection(o, id)
+	ike := connection.IKE
 	live := ike.Live && ike.Gateway == id
 	attempt := ike.AttemptActive && ike.AttemptGateway == id
 	text.WriteString("\r\n[连接状态]\r\n")
@@ -88,14 +105,26 @@ func desktopFormatGatewayNode(snapshot desktopSnapshot, id string) string {
 		if ike.ChildLive {
 			fmt.Fprintf(text, "CHILD 有效截止：%s\r\n", desktopDebugTime(ike.ChildExpiresAt))
 		}
-		fmt.Fprintf(text, "Babel 邻居有效：%s\r\n业务可用：%s\r\n", desktopDebugYes(o.Babel.Live), desktopDebugYes(o.TunnelReady))
-		if o.Babel.Local.IsValid() {
+		fmt.Fprintf(text, "Babel 邻居有效：%s\r\n业务可用：%s\r\n", desktopDebugYes(connection.BabelLive), desktopDebugYes(connection.TunnelReady))
+		if (!meshPeer || o.IKE.Gateway == id) && o.Babel.Local.IsValid() {
 			fmt.Fprintf(text, "用户态链路本地 IPv6：%s\r\n", o.Babel.Local)
 		}
-		if o.Babel.Live && o.Babel.Neighbor.IsValid() {
+		if (!meshPeer || o.IKE.Gateway == id) && o.Babel.Live && o.Babel.Neighbor.IsValid() {
 			fmt.Fprintf(text, "当前邻居 IPv6：%s\r\n", o.Babel.Neighbor)
 		}
-		fmt.Fprintf(text, "可用路由样本：%d\r\n", len(o.Babel.Routes))
+		routes := len(o.Babel.Routes)
+		if meshPeer {
+			routes = 0
+			for _, route := range o.Babel.Routes {
+				if route.Peer == id {
+					routes++
+				}
+			}
+		}
+		fmt.Fprintf(text, "可用路由样本：%d\r\n", routes)
+		if o.RoutesTruncated {
+			text.WriteString("路由样本已截断。\r\n")
+		}
 		desktopDebugAddresses(text, o)
 	} else if !attempt {
 		text.WriteString("此节点当前没有已认证隧道或进行中的连接尝试。\r\n")

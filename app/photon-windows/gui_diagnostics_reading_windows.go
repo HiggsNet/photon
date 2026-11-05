@@ -32,6 +32,12 @@ func guiReadDiagnosticsPosition(edit uintptr) guiDiagnosticsReading {
 	return r
 }
 
+func (r guiDiagnosticsReading) restore(edit uintptr) {
+	guiSendMessage.Call(edit, 0xb1, uintptr(r.start), uintptr(r.end))
+	first, _, _ := guiSendMessage.Call(edit, 0xce, 0, 0)
+	guiSendMessage.Call(edit, 0xb6, 0, r.firstLine-first) // EM_LINESCROLL; signed delta.
+}
+
 // Update only this EDIT, without re-laying out or repainting the whole window.
 // Each page/node keeps its own reading position. Logs follow new records only
 // when already at the bottom and no text is selected.
@@ -42,6 +48,8 @@ func (w *desktopWindow) updateDiagnosticsText(text string) {
 		node = v.gatewayID
 	} else if v.page == guiDiagnosticsPeersID {
 		node = v.peerID
+	} else if v.page == guiDiagnosticsRoutesID {
+		node = v.route.label()
 	}
 	filter := 0
 	if v.page == guiDiagnosticsLogID {
@@ -76,9 +84,7 @@ func (w *desktopWindow) updateDiagnosticsText(text string) {
 		length, _, _ := guiGetWindowTextLength.Call(edit)
 		guiSendMessage.Call(edit, 0xb1, length, length) // EM_SETSEL
 	} else {
-		guiSendMessage.Call(edit, 0xb1, uintptr(r.start), uintptr(r.end))
-		first, _, _ := guiSendMessage.Call(edit, 0xce, 0, 0)
-		guiSendMessage.Call(edit, 0xb6, 0, r.firstLine-first) // EM_LINESCROLL; signed delta.
+		r.restore(edit)
 	}
 	guiSendMessage.Call(edit, 0x000b, 1, 0)
 	if follow {

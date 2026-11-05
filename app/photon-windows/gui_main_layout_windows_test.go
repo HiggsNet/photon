@@ -67,8 +67,8 @@ func TestDesktopNativeMainDetailsAndResizableRoutes(t *testing.T) {
 	}
 	var class [32]uint16
 	guiUser32.NewProc("GetClassNameW").Call(w.controls[guiRoutesID], uintptr(unsafe.Pointer(&class[0])), uintptr(len(class)))
-	if !strings.EqualFold(windows.UTF16ToString(class[:]), "EDIT") {
-		t.Fatal("route control changed its public Win32 access contract")
+	if !strings.EqualFold(windows.UTF16ToString(class[:]), "LISTBOX") {
+		t.Fatal("route summary is not a native list")
 	}
 	rect := func(hwnd uintptr) guiRect {
 		var bounds guiRect

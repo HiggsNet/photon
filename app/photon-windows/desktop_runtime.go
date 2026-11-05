@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/HiggsNet/photon/internal/photonwindows"
@@ -14,6 +13,7 @@ import (
 // edits cannot retarget this run's pipe, state database or transport settings.
 type desktopRun struct {
 	statePath string
+	daemon    *photonwindows.Daemon
 	ctx       context.Context
 	cancel    context.CancelFunc
 	ready     <-chan struct{}
@@ -76,7 +76,7 @@ func (b *desktopBackend) startRuntime() error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	daemon := photonwindows.NewDaemon(config, logger)
-	run := &desktopRun{statePath: config.State.Path, ctx: ctx, cancel: cancel, ready: daemon.Started(), done: make(chan struct{})}
+	run := &desktopRun{statePath: config.State.Path, daemon: daemon, ctx: ctx, cancel: cancel, ready: daemon.Started(), done: make(chan struct{})}
 	b.mu.Lock()
 	b.run, b.runtimeErr = run, nil
 	b.mu.Unlock()
@@ -185,14 +185,9 @@ func (b *desktopBackend) Snapshot(ctx context.Context) desktopSnapshot {
 	if lastErr != nil {
 		return out
 	}
-	response, err := photonwindows.CallControlForProcess(ctx, run.statePath, "status", uint32(os.Getpid()))
+	observation, err := run.daemon.Observe(ctx)
 	if err != nil {
 		out.Error = "live status unavailable: " + err.Error()
-		return out
-	}
-	observation, err := desktopObservation(response)
-	if err != nil {
-		out.Error = err.Error()
 		return out
 	}
 	b.mu.Lock()
@@ -206,6 +201,6 @@ func (b *desktopBackend) Snapshot(ctx context.Context) desktopSnapshot {
 		}
 		return out
 	}
-	out.Observation = observation
+	out.Observation = &observation
 	return out
 }

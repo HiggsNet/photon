@@ -124,7 +124,7 @@ func TestDesktopNativeWindow(t *testing.T) {
 	joinRequest, request := desktopTestJoinRequest(t)
 	observation.Admission = gossip.AdmissionDiagnosis{Pending: true, ManagedZone: joinRequest.Zone, Reason: gossip.AdmissionReasonMissingDelegation, JoinRequestB64: request}
 	w.render(desktopSnapshot{RuntimeState: "running", Observation: observation})
-	if text(guiJoinRequestID) != request || !strings.Contains(text(guiStatusID), "待授权") || strings.Contains(text(guiGatewayID), "gateway.example.") || strings.Contains(text(guiRoutesID), "198.18.253.1") {
+	if text(guiJoinRequestID) != request || !strings.Contains(text(guiStatusID), "待授权") || strings.Contains(text(guiGatewayID), "gateway.example.") || strings.Contains(strings.Join(w.routeRows, "\n"), "198.18.253.1") {
 		t.Fatal("pending admission retained connected state or truncated the public request")
 	}
 	if enabled, _, _ := guiUser32.NewProc("IsWindowEnabled").Call(w.controls[guiCopyRequestID]); enabled == 0 {
@@ -177,7 +177,7 @@ func TestDesktopNativeWindow(t *testing.T) {
 	observation.TunnelReady = true
 	observation.Wintun = photonwindows.WintunObservation{Configured: true, Addresses: []netip.Prefix{netip.MustParsePrefix("198.18.253.2/32"), netip.MustParsePrefix("fd00:7068:b4::2/128")}}
 	w.render(desktopSnapshot{RuntimeState: "running", Observation: observation})
-	if !strings.Contains(text(guiStatusID), "已连接") || !strings.Contains(text(guiGatewayID), "gateway.example.") || !strings.Contains(text(guiRoutesID), "metric 100") || !strings.Contains(text(guiAdmissionID), "接口业务 IP：198.18.253.2/32") || !strings.Contains(text(guiNoteID), "fd00:7068:b4::2/128") {
+	if !strings.Contains(text(guiStatusID), "已连接") || !strings.Contains(text(guiGatewayID), "gateway.example.") || !strings.Contains(strings.Join(w.routeRows, "\n"), "1 条路径") || !strings.Contains(text(guiAdmissionID), "接口业务 IP：198.18.253.2/32") || !strings.Contains(text(guiNoteID), "fd00:7068:b4::2/128") {
 		t.Fatal("live status/route did not render")
 	}
 	// Multiline EDIT intentionally does not send EN_CHANGE for WM_SETTEXT.
@@ -190,7 +190,7 @@ func TestDesktopNativeWindow(t *testing.T) {
 		t.Fatal("native EN_CHANGE did not mark edits")
 	}
 	w.render(desktopSnapshot{RuntimeState: "stopped", Error: "IPC disconnected"})
-	if strings.Contains(text(guiGatewayID), "gateway.example.") || strings.Contains(text(guiRoutesID), "198.18.253.1") || strings.Contains(text(guiStatusID), "已连接") {
+	if strings.Contains(text(guiGatewayID), "gateway.example.") || strings.Contains(strings.Join(w.routeRows, "\n"), "198.18.253.1") || strings.Contains(text(guiStatusID), "已连接") {
 		t.Fatal("offline result retained stale live status")
 	}
 	if strings.Contains(text(guiAdmissionID), "198.18.253.2") || strings.Contains(text(guiNoteID), "198.18.253.2") || strings.Contains(text(guiAdmissionID), "fe80::1") || strings.Contains(text(guiNoteID), "fe80::2") {

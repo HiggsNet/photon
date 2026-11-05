@@ -28,6 +28,8 @@ const (
 	guiDiagnosticsPeerTitleID = 2317
 	guiDiagnosticsLogFilterID = 2318
 	guiDiagnosticsNodeTitleID = 2319
+	guiDiagnosticsRoutesID    = 2320
+	guiDiagnosticsAddressesID = 2321
 	guiDiagnosticsTextLimit   = 1 << 20 // UTF-16 code units, including copied text.
 )
 
@@ -36,6 +38,7 @@ const (
 // window's public view while the main window continues receiving snapshots.
 type guiDiagnosticsView struct {
 	page                    int
+	route                   routeKey
 	logFilter               int
 	peerID                  string
 	gatewayID               string
@@ -65,8 +68,10 @@ func (w *desktopWindow) createDiagnosticsWindow() error {
 	}{
 		{guiDiagnosticsOverviewID, "BUTTON", "概览", "primary", 0x50010000, 0},
 		{guiDiagnosticsGatewayID, "BUTTON", "网关与隧道", "body", 0x50010000, 0},
-		{guiDiagnosticsPeersID, "BUTTON", "Gossip / Peer", "body", 0x50010000, 0},
+		{guiDiagnosticsPeersID, "BUTTON", "Gossip", "body", 0x50010000, 0},
 		{guiDiagnosticsLogID, "BUTTON", "日志", "body", 0x50010000, 0},
+		{guiDiagnosticsRoutesID, "BUTTON", "Babel 路由", "body", 0x50010000, 0},
+		{guiDiagnosticsAddressesID, "BUTTON", "节点地址", "body", 0x50010000, 0},
 		{guiDiagnosticsDetailsID, "BUTTON", "原始 JSON", "body", 0x50010000, 0},
 		{guiDiagnosticsTitleID, "STATIC", "日志与诊断", "title", 0x50000000, 0},
 		{guiDiagnosticsMetadataID, "STATIC", "等待读取当前 Photon 的公开诊断…", "muted", 0x50000000, 0},
@@ -195,6 +200,10 @@ func (w *desktopWindow) drawDiagnostics() {
 		}
 	case guiDiagnosticsPeersID:
 		text = desktopFormatPeer(v.snapshot, v.peerID)
+	case guiDiagnosticsRoutesID:
+		text = desktopFormatRouteSelection(v.snapshot, v.route)
+	case guiDiagnosticsAddressesID:
+		text = desktopFormatNodeAddresses(v.snapshot)
 	case guiDiagnosticsDetailsID:
 		text = desktopFormatDiagnostics(v.snapshot)
 	}
@@ -238,9 +247,9 @@ func (w *desktopWindow) drawDiagnostics() {
 	}
 	w.updateDiagnosticsText(bounded)
 	w.setText(w.controls[guiDiagnosticsMetadataID], metadata)
-	title := map[int]string{guiDiagnosticsOverviewID: "运行概览", guiDiagnosticsGatewayID: "网关与隧道", guiDiagnosticsPeersID: "Gossip 节点", guiDiagnosticsLogID: "运行日志", guiDiagnosticsDetailsID: "原始 JSON · 供进一步排查"}[v.page]
+	title := map[int]string{guiDiagnosticsOverviewID: "运行概览", guiDiagnosticsGatewayID: "网关与隧道", guiDiagnosticsPeersID: "Gossip 节点", guiDiagnosticsLogID: "运行日志", guiDiagnosticsRoutesID: "Babel 路由详情", guiDiagnosticsAddressesID: "节点地址与通告", guiDiagnosticsDetailsID: "原始 JSON · 供进一步排查"}[v.page]
 	w.setText(w.controls[guiDiagnosticsTitleID], title)
-	for _, id := range []int{guiDiagnosticsOverviewID, guiDiagnosticsGatewayID, guiDiagnosticsLogID, guiDiagnosticsPeersID, guiDiagnosticsDetailsID} {
+	for _, id := range []int{guiDiagnosticsOverviewID, guiDiagnosticsGatewayID, guiDiagnosticsLogID, guiDiagnosticsPeersID, guiDiagnosticsRoutesID, guiDiagnosticsAddressesID, guiDiagnosticsDetailsID} {
 		kind := "body"
 		if id == v.page {
 			kind = "primary"
@@ -390,8 +399,11 @@ func (w *desktopWindow) diagnosticsWindowProc(hwnd uintptr, message uint32, wp, 
 			return 0
 		}
 		switch int(wp & 0xffff) {
-		case guiDiagnosticsOverviewID, guiDiagnosticsGatewayID, guiDiagnosticsLogID, guiDiagnosticsPeersID, guiDiagnosticsDetailsID:
+		case guiDiagnosticsOverviewID, guiDiagnosticsGatewayID, guiDiagnosticsLogID, guiDiagnosticsPeersID, guiDiagnosticsRoutesID, guiDiagnosticsAddressesID, guiDiagnosticsDetailsID:
 			v.page = int(wp & 0xffff)
+			if v.page == guiDiagnosticsRoutesID {
+				v.route = routeKey{}
+			}
 			w.layoutDiagnostics()
 			w.drawDiagnostics()
 			if !v.paused {
@@ -430,7 +442,7 @@ func (w *desktopWindow) layoutDiagnostics() {
 		return
 	}
 	x := 24
-	for _, spec := range []struct{ id, width int }{{guiDiagnosticsOverviewID, 76}, {guiDiagnosticsGatewayID, 110}, {guiDiagnosticsPeersID, 108}, {guiDiagnosticsLogID, 68}, {guiDiagnosticsDetailsID, 100}} {
+	for _, spec := range []struct{ id, width int }{{guiDiagnosticsOverviewID, 56}, {guiDiagnosticsGatewayID, 94}, {guiDiagnosticsPeersID, 96}, {guiDiagnosticsLogID, 54}, {guiDiagnosticsRoutesID, 88}, {guiDiagnosticsAddressesID, 82}, {guiDiagnosticsDetailsID, 84}} {
 		w.guiMove(w.controls[spec.id], x, 16, spec.width, 32)
 		x += spec.width + 8
 	}

@@ -12,7 +12,7 @@ const guiMainDefaultNote = "保存后需重新连接生效；关闭窗口隐藏�
 func (w *desktopWindow) createMainControls() error {
 	static := uint32(0x50000000)
 	button := uint32(0x50010000)
-	routes := uint32(0x50010000 | 0x0004 | 0x0040 | 0x0080 | 0x0800 | 0x00200000 | 0x00100000)
+	routes := uint32(0x50010000 | 0x0001 | 0x0100 | 0x00200000)
 	// Wrap details and retain a vertical scrollbar so full diagnostics remain
 	// selectable and readable without expanding the connection title.
 	details := uint32(0x50010000 | 0x0004 | 0x0040 | 0x0800 | 0x00200000)
@@ -31,7 +31,7 @@ func (w *desktopWindow) createMainControls() error {
 		{guiAdmissionID, "STATIC", "入网：读取中…", static, 0, "body"},
 		{guiJoinRequestID, "EDIT", "", 0x50010000 | 0x0080 | 0x0800, 0x200, "mono"},
 		{guiCopyRequestID, "BUTTON", "复制入网请求", button, 0, "body"},
-		{guiRoutesID, "EDIT", "尚无实时路由", routes, 0x200, "mono"},
+		{guiRoutesID, "LISTBOX", "", routes, 0x200, "body"},
 		{guiConfigSummaryID, "STATIC", "设置正在读取…", static, 0, "body"},
 		{guiSettingsID, "BUTTON", "打开设置", button, 0, "body"},
 		{guiDiagnosticsID, "BUTTON", "日志与诊断", button, 0, "body"},
@@ -45,7 +45,7 @@ func (w *desktopWindow) createMainControls() error {
 		w.controls[spec.id] = hwnd
 		w.guiStyleControl(hwnd, spec.kind)
 	}
-	for index, text := range []string{"实时 Babel 路由（目标 / 来源前缀 / origin / metric）", "配置文件 · " + w.backend.options.ConfigPath} {
+	for index, text := range []string{"Babel 路由摘要 · 双击前缀查看路径", "配置文件 · " + w.backend.options.ConfigPath} {
 		hwnd, _, err := guiCreateWindow.Call(0, uintptr(unsafe.Pointer(guiUTF16("STATIC"))), uintptr(unsafe.Pointer(guiUTF16(text))), uintptr(static), 0, 0, 0, 0, w.hwnd, 0, w.instance, 0)
 		if hwnd == 0 {
 			return guiCallError("CreateWindowEx label", err)

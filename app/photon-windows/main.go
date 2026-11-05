@@ -145,6 +145,7 @@ func writeUsage(w io.Writer) {
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  gui [--config <path>]           Run Photon from the Windows window and tray")
 	fmt.Fprintln(w, "  status|peers|routes|diagnostics|stop --config <path>  Query or stop the live daemon")
+	fmt.Fprintln(w, "  routes --config <path> --destination <IP>          Filter the Babel route sample")
 	fmt.Fprintln(w, "  gateways --config <path>         Inspect signed gateway contacts offline (no route authorization)")
 	fmt.Fprintln(w, "  state import --config <path> --bundle <file> --key <file>  Initialize a new state database")
 	fmt.Fprintln(w, "  run --console --config <path>    Run the Windows leaf daemon in the foreground")

@@ -81,3 +81,25 @@ func TestGatewayNodeDistinguishesAttemptAuthenticationAndReadiness(t *testing.T)
 		t.Fatal("removed node retained another node's state")
 	}
 }
+
+func TestGatewayNodeUsesItsOwnMeshConnection(t *testing.T) {
+	s := debugViewFixture()
+	o := s.Observation
+	o.IKE = photonwindows.IKEObservation{Gateway: "gateway.catofes.", Live: true, ChildLive: true}
+	o.TunnelReady = true
+	o.Connections = []photonwindows.ConnectionObservation{
+		{Peer: "second.example.", IKE: photonwindows.IKEObservation{Gateway: "second.example.", Live: true, ChildLive: true}, BabelLive: true, TunnelReady: true},
+		{Peer: "offline.example."},
+	}
+	if !slices.Contains(desktopGatewayNodes(s), "second.example.") {
+		t.Fatal("live Mesh peer missing from node list")
+	}
+	for id, want := range map[string]string{
+		"second.example.":  "状态：业务就绪",
+		"offline.example.": "状态：未建立隧道",
+	} {
+		if got := desktopFormatGatewayNode(s, id); !strings.Contains(got, want) {
+			t.Fatalf("node %s missing %q:\n%s", id, want, got)
+		}
+	}
+}

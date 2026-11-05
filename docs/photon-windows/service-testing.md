@@ -16,6 +16,7 @@ Windows 继续作为接入节点，仅一个 active gateway，不转发其他节
 .\photon-windows.exe status --config C:\Photon\config.yaml
 .\photon-windows.exe peers --config C:\Photon\config.yaml
 .\photon-windows.exe routes --config C:\Photon\config.yaml
+.\photon-windows.exe routes --config C:\Photon\config.yaml --destination 2a0d:2905:1::1
 .\photon-windows.exe diagnostics --config C:\Photon\config.yaml
 .\photon-windows.exe service stop
 .\photon-windows.exe service remove

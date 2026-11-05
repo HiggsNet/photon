@@ -164,6 +164,8 @@ type desktopWindow struct {
 	tray                       bool
 	busy, settingConfig, dirty bool
 	refreshing                 bool
+	routeKeys                  []routeKey
+	routeRows                  []string
 	quitting, quitSubmitted    bool
 	editRevision               uint64
 	settings                   uintptr
@@ -316,7 +318,6 @@ func newDesktopWindow(backend *desktopBackend) (_ *desktopWindow, err error) {
 	if err := w.createDiagnosticsWindow(); err != nil {
 		return nil, err
 	}
-	guiSendMessage.Call(w.controls[guiRoutesID], 0x00c5, 1<<20, 0)
 	guiSendMessage.Call(w.controls[guiJoinRequestID], 0x00c5, desktopJoinRequestLimit, 0)
 	guiShowWindow.Call(w.controls[guiJoinRequestID], 0)
 	guiShowWindow.Call(w.controls[guiCopyRequestID], 0)
@@ -340,7 +341,7 @@ func newDesktopWindow(backend *desktopBackend) (_ *desktopWindow, err error) {
 	}
 	w.taskbarCreated = uint32(registered)
 	w.updateTray(true)
-	timer, _, callErr := guiSetTimer.Call(w.hwnd, 1, 2000, 0)
+	timer, _, callErr := guiSetTimer.Call(w.hwnd, 1, guiActiveRefreshMS, 0)
 	if timer == 0 {
 		return nil, guiCallError("SetTimer", callErr)
 	}
@@ -469,6 +470,10 @@ func desktopWindowProc(hwnd uintptr, message uint32, wp, lp uintptr) uintptr {
 			return 0
 		case guiWMCommand:
 			id, notification := int(wp&0xffff), uint16(wp>>16)
+			if id == guiRoutesID && notification == 2 {
+				w.openSelectedRoute()
+				return 0
+			}
 			if notification == 0 {
 				w.command(id)
 			}
@@ -508,6 +513,7 @@ func desktopWindowProc(hwnd uintptr, message uint32, wp, lp uintptr) uintptr {
 					guiShowWindow.Call(w.diagnostics, 0)
 				}
 				guiShowWindow.Call(hwnd, 0)
+				guiSetTimer.Call(hwnd, 1, guiTrayRefreshMS, 0)
 			} else {
 				w.quit()
 			}
@@ -751,7 +757,7 @@ func (w *desktopWindow) render(snapshot desktopSnapshot) {
 	if state == "" {
 		state = "不可用"
 	}
-	connection, gateway, routes := "未连接", "—", "尚无实时路由"
+	connection, gateway := "未连接", "—"
 	if observation := snapshot.Observation; observation != nil && available {
 		if observation.TunnelReady {
 			connection = "已连接"
@@ -772,38 +778,13 @@ func (w *desktopWindow) render(snapshot desktopSnapshot) {
 				gateway = strings.Join(connected, "、")
 			}
 		}
-		if len(observation.Babel.Routes) > 0 {
-			var text strings.Builder
-			targetWidth, sourceWidth, originWidth := 18, 8, 12
-			for _, route := range observation.Babel.Routes {
-				targetWidth = max(targetWidth, len(route.Prefix.String()))
-				if route.SourcePrefix.IsValid() {
-					sourceWidth = max(sourceWidth, len(route.SourcePrefix.String()))
-				}
-				originWidth = max(originWidth, len(route.Origin))
-			}
-			for _, route := range observation.Babel.Routes {
-				source := "任意"
-				padding := sourceWidth - 2 // Two CJK characters occupy four mono cells.
-				if route.SourcePrefix.IsValid() {
-					source = route.SourcePrefix.String()
-					padding = sourceWidth
-				}
-				fmt.Fprintf(&text, "%-*s  来源 %-*s  origin %-*s  metric %d\r\n", targetWidth, route.Prefix.String(), padding, source, originWidth, route.Origin, route.Metric)
-			}
-			if observation.RoutesTruncated {
-				text.WriteString("（路由列表已截断）\r\n")
-			}
-			routes = text.String()
-		}
 	}
 	if snapshot.Error != "" {
 		connection = "状态不可用"
 		gateway = "—"
-		routes = "实时状态不可用，已清空上次路由。"
 	}
 	if w.admission.Pending {
-		connection, gateway, routes = "待授权", "—", "入网授权完成前尚无实时路由。"
+		connection, gateway = "待授权", "—"
 	} else if w.admission.Adopted && snapshot.Observation != nil && !snapshot.Observation.TunnelReady {
 		connection = "已入网，正在连接"
 	}
@@ -821,7 +802,7 @@ func (w *desktopWindow) render(snapshot desktopSnapshot) {
 	w.setText(w.controls[guiStatusID], "连接："+connection)
 	w.setText(w.controls[guiRuntimeID], "运行状态："+state+" · 当前 Photon 窗口管理连接")
 	w.setText(w.controls[guiGatewayID], "已连接节点："+gateway)
-	w.setText(w.controls[guiRoutesID], routes)
+	w.syncMainRoutes(snapshot, available && !w.admission.Pending)
 	w.setText(w.controls[guiAdmissionID], admissionLabel)
 	w.setText(w.controls[guiJoinRequestID], w.admission.Request)
 	w.liveError = snapshot.Error
@@ -856,7 +837,18 @@ func (w *desktopWindow) note(text string) {
 		w.setText(w.controls[guiSettingsNoteID], text)
 	}
 }
+
+const (
+	guiActiveRefreshMS = 2000
+	guiTrayRefreshMS   = 10000
+)
+
 func (w *desktopWindow) show() {
+	visible, _, _ := guiUser32.NewProc("IsWindowVisible").Call(w.hwnd)
+	if visible == 0 && !w.quitting {
+		guiSetTimer.Call(w.hwnd, 1, guiActiveRefreshMS, 0)
+		w.submit(guiRequest{Action: "refresh"})
+	}
 	guiShowWindow.Call(w.hwnd, 9)
 	guiShowWindow.Call(w.hwnd, 5)
 	guiSetForegroundWindow.Call(w.hwnd)

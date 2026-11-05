@@ -20,23 +20,31 @@ var ErrDaemonNotRunning = errors.New("Windows daemon is not running")
 
 // Observation is a detached, bounded sample from the daemon's event owner.
 // Configured addresses describe the attached device, never pending intentions.
+type NodeAddressObservation struct {
+	Node      string       `json:"node"`
+	Prefix    netip.Prefix `json:"prefix"`
+	Announced bool         `json:"announced"`
+}
+
 type Observation struct {
-	Connections          []ConnectionObservation   `json:"connections"`
-	ConnectionsTruncated bool                      `json:"connections_truncated"`
-	Running              bool                      `json:"running"`
-	ObservedAt           time.Time                 `json:"observed_at"`
-	Revision             uint64                    `json:"revision"`
-	Admission            gossip.AdmissionDiagnosis `json:"admission"`
-	Readiness            ReadinessObservation      `json:"readiness"`
-	Gateway              GatewayObservation        `json:"gateway"`
-	TunnelReady          bool                      `json:"tunnel_ready"`
-	UDPAddress           string                    `json:"udp_address"`
-	Wintun               WintunObservation         `json:"wintun"`
-	IKE                  IKEObservation            `json:"ike"`
-	Babel                BabelObservation          `json:"babel"`
-	Peers                []PeerObservation         `json:"peers"`
-	PeersTruncated       bool                      `json:"peers_truncated"`
-	RoutesTruncated      bool                      `json:"routes_truncated"`
+	NodeAddresses          []NodeAddressObservation  `json:"node_addresses,omitempty"`
+	NodeAddressesTruncated bool                      `json:"node_addresses_truncated,omitempty"`
+	Connections            []ConnectionObservation   `json:"connections"`
+	ConnectionsTruncated   bool                      `json:"connections_truncated"`
+	Running                bool                      `json:"running"`
+	ObservedAt             time.Time                 `json:"observed_at"`
+	Revision               uint64                    `json:"revision"`
+	Admission              gossip.AdmissionDiagnosis `json:"admission"`
+	Readiness              ReadinessObservation      `json:"readiness"`
+	Gateway                GatewayObservation        `json:"gateway"`
+	TunnelReady            bool                      `json:"tunnel_ready"`
+	UDPAddress             string                    `json:"udp_address"`
+	Wintun                 WintunObservation         `json:"wintun"`
+	IKE                    IKEObservation            `json:"ike"`
+	Babel                  BabelObservation          `json:"babel"`
+	Peers                  []PeerObservation         `json:"peers"`
+	PeersTruncated         bool                      `json:"peers_truncated"`
+	RoutesTruncated        bool                      `json:"routes_truncated"`
 }
 type WintunObservation struct {
 	Configured  bool           `json:"configured"`
