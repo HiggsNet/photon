@@ -39,9 +39,9 @@ func TestHostNamespaceConfigDoesNotCreateOrEnterNamedNamespace(t *testing.T) {
 	if err := parseConfigYAML("netns:\n  default:\n    kind: host\noverlays:\n  - id: main\n    provider: strongswan\n    netns: default\n", config); err != nil {
 		t.Fatal(err)
 	}
-	// Exercise the same constructor and empty host target used by the Linux
-	// composition, recording system commands instead of mutating the test host.
-	driver := ipsec.NewSystemXFRMDriver(config.IPsec.DefaultNetNS)
+	// Exercise the empty host target with the command backend, without
+	// inspecting or mutating the test host through netlink.
+	driver := ipsec.SystemXFRMDriver{DefaultNetNS: config.IPsec.DefaultNetNS}
 	created, up := false, false
 	driver.Command = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		command := strings.Join(args, " ")
