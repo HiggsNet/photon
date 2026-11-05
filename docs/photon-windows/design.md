@@ -21,13 +21,33 @@ XFRM、BIRD 或 network namespace。
 - split tunnel，只向 Windows 安装稳定 Photon aggregate route；
 - 不做 transit、IKE responder、lite-to-lite、full tunnel、DNS/NRPT 或 auto-update。
 
-2026-10-15 根据用户要求增加本机 GUI 与托盘管理入口，网络范围继续保持上述约束。
-默认 GUI 在本进程内管理一个 Daemon，复用 console 的 composition、控制管道和资源清理链路；
-窗口只通过绑定本进程的 named-pipe IPC 展示公开状态，不自行打开数据库或维护另一套连接状态机。
+2026-11-05 按独立应用拆分原生 GUI 与后台，网络范围继续保持上述约束：
+
+- `app/photon-windows` 构建 `photon-windows.exe`，只提供后台、SCM 服务和 CLI，不包含窗口或托盘入口。
+- `app/photon-windows-gui` 构建 `photon-windows-gui.exe`，承接原生窗口、托盘、表单与公开状态展示。
+- 以后其他前端作为同级应用接入；是否采用固定版本的 FlClash，在拆分和验证完成后决定。
+
+默认 GUI 从自身所在目录启动唯一的 `photon-windows.exe run --stdio --config <绝对路径>` 子进程，
+通过继承的私有标准输入/输出流复用 v1 长度帧、JSON 请求和响应确认；不在 GUI 进程创建 Daemon、
+打开身份数据库或运行网络状态机。后台仍提供原有管理员 named-pipe 接口，SCM 模式保持可选。
+标准输出仅承载协议，日志写入既有轮转文件；启动失败通过结构化响应返回。
+启动响应的 `method` 为 `ready`，成功 `result` 包含 `pid`、`state_path`、`config_sha256`；
+前端核对自有子进程 PID、预期数据库路径和配置原文 SHA-256，防止配置保存或外部修改将状态归到错误运行实例。
+这只表示后台初始化完成，隧道是否可用仍读取公开状态中的 readiness。
+初始化后使用 `status/peers/routes/diagnostics/stop`，帧与响应确认规则沿用 `internal/photonwindows/control.go`。
+启动响应无需确认；后续每条响应完整读取后发送一个 `0x01` 字节，串行发起请求，不能交错帧。
+独立前端可以实现同一私有流协议，或在具有相应权限时连接后台 named pipe；两种方式都不读取数据库。
+
 提供状态、网关、路由、连接启停，以及身份、网关引导、分流路由和高级配置页；选项保存为原有 YAML 配置，
 复用同一 schema 与校验，保存后重新连接生效。
-关闭窗口隐藏到可用托盘，退出托盘先取消并等待本次 Daemon 退出。操作权限沿用本机管理员模型。
-GUI 不依赖 SCM 安装登记；Windows 服务保留为独立的可选 CLI 运行方式。
+关闭窗口隐藏到可用托盘，退出托盘先请求后台停止，收到清理完成响应并等待自有子进程退出。
+前端崩溃导致私有流关闭时，后台取消并清理本次运行；重启前端复用原身份。超时强制终止只针对
+本次启动并保留句柄的子进程，并明确作为失败返回。操作权限沿用本机管理员模型，本轮不放宽管道权限。
+
+本轮新增的私有流处理和子进程管理用于建立实际进程边界；没有新增网络状态 owner、数据库 writer 或代理后端框架。
+拆分后的七包 Windows 原生回归已通过，见 [原生验收](native-testing.md#2026-11-05-后台与原生-gui-拆分验收)；
+真实已登录桌面及既有 test 身份的 IPv6 业务已单独验证，见 [桌面验收](gui-testing.md#2026-11-05-拆分后的既有-test-身份桌面验收)；
+IPv4/双栈、物理断网、睡眠及长期稳定性仍独立，原程序同样存在的远端 ICMP 丢包尚未定位。
 
 Windows 是接入节点：Babel 只发布本节点当前获授权的本地前缀，不重新发布从 gateway 学到的
 路由。接收路由仅用于本机发包选路与入站来源授权校验；业务包出站源地址和入站目标地址必须

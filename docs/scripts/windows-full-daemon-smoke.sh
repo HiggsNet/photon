@@ -192,7 +192,7 @@ cleanup() {
         done
         if ! ssh "${ssh_args[@]}" "$PHOTON_WINDOWS_SSH" "powershell.exe -NoLogo -NoProfile -NonInteractive -Command \"Remove-Item -LiteralPath '$remote' -Recurse -Force -ErrorAction Stop\""; then result=1; fi
     fi
-    rm -f "$work/photon" "$work/windows.db" "$work/config.json" "$work/b4.test" "$work/b4.test.exe" "$work/photon-windows.exe" "$work/wintun.dll" "$work/wintun.zip" "$work/udp-perf" "$work/udp-perf.exe"
+    rm -f "$work/photon" "$work/windows.db" "$work/config.json" "$work/b4.test" "$work/b4.test.exe" "$work/photon-windows.exe" "$work/photon-windows-gui.exe" "$work/wintun.dll" "$work/wintun.zip" "$work/udp-perf" "$work/udp-perf.exe"
     printf 'Windows full-daemon cross-host logs (fixture secrets removed): %s\n' "$work"
     exit "$result"
 }
@@ -212,12 +212,16 @@ else
         CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o "$work/udp-perf.exe" ./docs/tools/udp-perf
     fi
 fi
+if [[ $tray_mode == 1 ]]; then
+    CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o "$work/photon-windows-gui.exe" ./app/photon-windows-gui
+fi
 if [[ $throughput_mode == 1 ]]; then
     sha256sum "$work/udp-perf" "$work/udp-perf.exe" > "$work/throughput-tools-sha256.txt"
 fi
 git rev-parse HEAD > "$work/source-commit.txt"
 git status --short > "$work/source-status.txt"
 sha256sum "$work/photon" "$work/b4.test" "$work/photon-windows.exe" > "$work/binaries-sha256.txt"
+if [[ $tray_mode == 1 ]]; then sha256sum "$work/photon-windows-gui.exe" >> "$work/binaries-sha256.txt"; fi
 curl --fail --location --max-time 60 https://www.wintun.net/builds/wintun-0.14.1.zip -o "$work/wintun.zip"
 printf '%s  %s\n' 07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51 "$work/wintun.zip" | sha256sum --check --status
 unzip -p "$work/wintun.zip" wintun/bin/amd64/wintun.dll > "$work/wintun.dll"
@@ -289,6 +293,7 @@ remote_created=1
 scp -q "${ssh_args[@]}" "$work/photon-windows.exe" "$work/config.json" "$work/wintun.dll" "$work/gossip-evidence.json" docs/scripts/windows-service-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
 if [[ $autojoin_mode == 0 ]]; then scp -q "${ssh_args[@]}" "$work/windows.db" "$PHOTON_WINDOWS_SSH:$remote/"; fi
 if [[ $tray_mode == 1 ]]; then
+    scp -q "${ssh_args[@]}" "$work/photon-windows-gui.exe" "$PHOTON_WINDOWS_SSH:$remote/"
     scp -q "${ssh_args[@]}" docs/scripts/windows-gui-support.ps1 docs/scripts/windows-tray-smoke.ps1 docs/scripts/windows-gui-session-smoke.ps1 "$PHOTON_WINDOWS_SSH:$remote/"
 fi
 if [[ $tray_faults_mode == 1 ]]; then

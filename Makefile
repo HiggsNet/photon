@@ -6,6 +6,8 @@ SERVICES_BINARY_NAME := photon-services
 SERVICES_MAIN_PACKAGE := ./app/photon-services
 PHOTON_WINDOWS_BINARY_NAME := photon-windows.exe
 PHOTON_WINDOWS_MAIN_PACKAGE := ./app/photon-windows
+PHOTON_WINDOWS_GUI_BINARY_NAME := photon-windows-gui.exe
+PHOTON_WINDOWS_GUI_MAIN_PACKAGE := ./app/photon-windows-gui
 BUILD_DIR := build
 GO := go
 GO_CACHE ?= /tmp/photon-gocache
@@ -79,11 +81,12 @@ photon-windows-build: photon-windows-cross-build
 photon-windows-cross-build:
 	@mkdir -p "$(BUILD_DIR)/windows-amd64"
 	$(WINDOWS_AMD64_GO_ENV) $(GO) build -ldflags "$(LDFLAGS)" -o "$(BUILD_DIR)/windows-amd64/$(PHOTON_WINDOWS_BINARY_NAME)" $(PHOTON_WINDOWS_MAIN_PACKAGE)
+	$(WINDOWS_AMD64_GO_ENV) $(GO) build -ldflags "$(LDFLAGS)" -o "$(BUILD_DIR)/windows-amd64/$(PHOTON_WINDOWS_GUI_BINARY_NAME)" $(PHOTON_WINDOWS_GUI_MAIN_PACKAGE)
 	$(WINDOWS_AMD64_GO_ENV) $(GO) build ./internal/photonwindows ./internal/photonclient/ike ./internal/photonclient/esp ./pkg/core/host ./pkg/core/state ./pkg/core/zone ./pkg/core/gossip ./pkg/crypto ./pkg/routing ./pkg/transport/ipsec
-	@echo "Cross-built (executable only): $(BUILD_DIR)/windows-amd64/$(PHOTON_WINDOWS_BINARY_NAME)"
+	@echo "Cross-built backend and GUI: $(BUILD_DIR)/windows-amd64/"
 
 photon-windows-test:
-	$(GO_ENV) $(GO) test ./internal/photonwindows ./internal/photonclient/ike ./internal/photonclient/esp $(PHOTON_WINDOWS_MAIN_PACKAGE)
+	$(GO_ENV) $(GO) test ./internal/photonwindows ./internal/photonclient/ike ./internal/photonclient/esp $(PHOTON_WINDOWS_MAIN_PACKAGE) $(PHOTON_WINDOWS_GUI_MAIN_PACKAGE)
 
 install:
 	$(GO_ENV) $(GO) install $(MAIN_PACKAGE)

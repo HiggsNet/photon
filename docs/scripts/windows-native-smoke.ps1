@@ -2,8 +2,9 @@ $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $originalLocation = Get-Location
 try {
+    $env:PHOTON_WINDOWS_TEST_BACKEND = Join-Path $root 'photon-windows.exe'
     Write-Output ('Windows version: ' + [Environment]::OSVersion.Version)
-    foreach ($package in @('internal/photonwindows', 'app/photon-windows', 'internal/photonclient/ike', 'internal/photonclient/esp', 'internal/photonclient/babel', 'internal/photonclient/sadr')) {
+    foreach ($package in @('internal/photonwindows', 'app/photon-windows', 'app/photon-windows-gui', 'internal/photonclient/ike', 'internal/photonclient/esp', 'internal/photonclient/babel', 'internal/photonclient/sadr')) {
         Set-Location (Join-Path $root $package)
         Write-Output ('Testing ' + $package)
         & '.\native.test.exe' '-test.v' '-test.timeout=120s'

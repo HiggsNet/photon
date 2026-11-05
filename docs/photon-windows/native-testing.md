@@ -18,7 +18,7 @@ B5 的 SCM 安装与跨主机业务测试另见 [服务与控制接口验收](se
 bash docs/scripts/windows-native-smoke-build.sh
 ```
 
-脚本输出独立测试包路径，内含四个测试程序（composition、CLI、IKE、ESP）、第三方 notice、公开配置样例、PowerShell 入口、
+脚本输出独立测试包路径，内含 composition、后台 CLI、独立 GUI、IKE、ESP、Babel 和 SADR 测试程序，以及供 GUI 进程测试启动的后台 EXE、第三方 notice、公开配置样例、PowerShell 入口、
 源码 commit 和工作树状态。将整个目录复制到 Windows，例如：
 
 ```sh
@@ -29,6 +29,19 @@ ssh user@windows-host 'powershell.exe -NoLogo -NoProfile -NonInteractive -Execut
 替换目录后缀及 SSH 地址；目标父目录需已存在。`ExecutionPolicy Bypass` 仅作用于该进程。
 入口在任一测试包失败时返回非零，每包超时 120 秒；运行目录保留原仓库结构，
 以便 CLI 测试读取配置样例。PowerShell 中 Go 测试参数加引号，避免带点的参数被拆开。
+GUI 进程测试通过 `PHOTON_WINDOWS_TEST_BACKEND` 使用包内后台 EXE，不在 Windows 临时编译；测试会验证后台独立运行、前端连接丢失后的退出、身份稳定和数据库释放。
+
+## 2026-11-05 后台与原生 GUI 拆分验收
+
+使用 Go 1.25.14 构建后台 EXE 和七个测试包，在 Windows 11 amd64（build 26200）的管理员测试账户执行，七包均通过：`internal/photonwindows`、`app/photon-windows`、`app/photon-windows-gui`、IKE、ESP、Babel 和 SADR。
+
+本次验证独立 GUI 子进程启动真实后台、公开状态与入网请求、保存后重启应用新配置、身份稳定、竞争实例拒绝、正常停止、前端连接丢失后的后台清理、后台崩溃后的旧状态清除和数据库锁释放；启动错误保留原生错误码。生产 GUI 不创建 Daemon 或打开数据库。
+
+Linux 全仓测试、上述后台/GUI/composition 三包 race、Linux/Windows vet、Windows 两个 EXE 和测试包交叉编译、便携包双 EXE/校验和/保留用户数据回归通过。修改的 PowerShell 夹具在 Windows 通过语法解析，未执行完整桌面夹具。
+
+未开启交互桌面、Wintun/路由等 opt-in 用例，亦未验证拆分后的真实双栈跨主机业务、物理断网或睡眠；原生测试不能替代这些验收。远端仅使用本次唯一临时目录、临时数据库、本机端口与自有进程，测试后确认无残留进程并清理目录；没有安装服务或部署新版本。
+
+随后已按用户要求使用既有 `windows-test.catofes.` 补充 10 项交互原生测试与真实桌面/IPv6 业务；测试范围、远端丢包对照及清理见 [桌面验收](gui-testing.md#2026-11-05-拆分后的既有-test-身份桌面验收)，不扩大为 IPv4/双栈或长期稳定性结论。
 
 ## 2026-10-01 验证结果
 

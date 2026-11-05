@@ -52,6 +52,7 @@ jobs:
           ldflags="-s -w -X main.buildCommit=${commit} -X main.buildDescribe=${describe} -X main.buildDirty=false -X main.buildTime=${built_at}"
           mkdir -p build/windows-amd64 dist
           go build -trimpath -ldflags "$ldflags" -o build/windows-amd64/photon-windows.exe ./app/photon-windows
+          go build -trimpath -ldflags "$ldflags" -o build/windows-amd64/photon-windows-gui.exe ./app/photon-windows-gui
           bash docs/scripts/windows-portable-build.sh
           PHOTON_WINDOWS_EXE="$PWD/build/windows-amd64/photon-windows.exe" WINTUN_DLL="$PWD/build/windows-amd64/wintun.dll" bash docs/scripts/windows-portable-build-test.sh
           cp build/photon-windows-amd64.zip "dist/photon-${version}-windows-amd64.zip"
@@ -94,9 +95,11 @@ jobs:
             }
             & .\photon-windows.exe version
             if ($LASTEXITCODE -ne 0) { throw 'Portable executable failed' }
+            & .\photon-windows-gui.exe version
+            if ($LASTEXITCODE -ne 0) { throw 'Portable GUI executable failed' }
           } finally { Pop-Location }
       - name: Run common and Windows native tests
-        run: go test -count=1 ./pkg/core/gossip ./pkg/core/host ./internal/photonwindows ./app/photon-windows
+        run: go test -count=1 ./pkg/core/gossip ./pkg/core/host ./internal/photonwindows ./app/photon-windows ./app/photon-windows-gui
 
   build:
     name: Build linux-${{ matrix.goarch }}

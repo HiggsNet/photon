@@ -12,6 +12,7 @@ using System.Threading.Tasks;
 public static class PhotonGuiSmokeNative {
     private delegate bool WindowVisitor(IntPtr window, IntPtr parameter);
     [DllImport("user32.dll")] private static extern bool EnumWindows(WindowVisitor visitor, IntPtr parameter);
+    [DllImport("user32.dll")] private static extern bool EnumChildWindows(IntPtr parent, WindowVisitor visitor, IntPtr parameter);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] private static extern int GetClassName(IntPtr window, StringBuilder text, int maximum);
     [DllImport("user32.dll")] private static extern IntPtr GetDlgItem(IntPtr window, int id);
@@ -37,11 +38,18 @@ public static class PhotonGuiSmokeNative {
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] private static extern uint RegisterWindowMessage(string name);
     private static IntPtr FindClass(uint expectedPID, string className) {
         IntPtr found = IntPtr.Zero;
-        EnumWindows(delegate(IntPtr window, IntPtr ignored) {
+        WindowVisitor match = delegate(IntPtr window, IntPtr ignored) {
             uint pid; GetWindowThreadProcessId(window, out pid);
             var name = new StringBuilder(256); GetClassName(window, name, name.Capacity);
             if (pid == expectedPID && name.ToString() == className) { found = window; return false; }
             return true;
+        };
+        EnumWindows(delegate(IntPtr window, IntPtr ignored) {
+            uint pid; GetWindowThreadProcessId(window, out pid);
+            if (pid != expectedPID) return true;
+            match(window, ignored);
+            if (found == IntPtr.Zero) EnumChildWindows(window, match, IntPtr.Zero);
+            return found == IntPtr.Zero;
         }, IntPtr.Zero);
         return found;
     }
@@ -254,7 +262,7 @@ function Test-GuiFirstRun {
     $root = Join-Path $FixtureDirectory ('gui-first-run-' + $token)
     $bin = Join-Path $root 'bin'
     $working = Join-Path $root 'cwd'
-    $copiedExecutable = Join-Path $bin 'photon-windows.exe'
+    $copiedExecutable = Join-Path $bin 'photon-windows-gui.exe'
     $expectedConfig = Join-Path $bin 'config.yaml'
     $expectedState = Join-Path $bin 'config.db'
     $firstProcess = $null
@@ -295,8 +303,10 @@ function Test-GuiFirstRun {
         if ($session -le 0 -or $session -ne $ExpectedSessionID -or ![Environment]::UserInteractive) { throw 'First-run GUI requires the same verified interactive desktop' }
         if (Test-Path -LiteralPath $root) { throw 'Refusing an existing first-run fixture directory' }
         $null = New-Item -ItemType Directory -Path $bin,$working
-        [IO.File]::Copy($Executable,$copiedExecutable,$false)
-        $sourceHash=(Get-FileHash -LiteralPath $Executable -Algorithm SHA256).Hash
+        $sourceGui = Join-Path (Split-Path $Executable) 'photon-windows-gui.exe'
+        [IO.File]::Copy($sourceGui,$copiedExecutable,$false)
+        [IO.File]::Copy($Executable,(Join-Path $bin 'photon-windows.exe'),$false)
+        $sourceHash=(Get-FileHash -LiteralPath $sourceGui -Algorithm SHA256).Hash
         if ((Get-FileHash -LiteralPath $copiedExecutable -Algorithm SHA256).Hash -cne $sourceHash) { throw 'First-run copy does not match the tested executable' }
         if ((Test-Path -LiteralPath $expectedConfig) -or (Test-Path -LiteralPath $expectedState) -or @(Get-ChildItem -LiteralPath $working -Force).Count -ne 0 -or (Get-CimInstance Win32_Service -Filter "Name='$firstName'")) { throw 'First-run fixture was not initially blank' }
         $firstProcess = Start-Process -FilePath $copiedExecutable -WorkingDirectory $working -ArgumentList @('gui') -PassThru -RedirectStandardError (Join-Path $FixtureDirectory 'gui-first-run-process-error.log')

@@ -106,7 +106,9 @@ function Wait-Tray([scriptblock]$Condition,[string]$Label,[int]$Seconds=90) {
 }
 function Read-TrayStatus {
     Assert-TrayOwner $gui
-    $raw=[PhotonTrayControl]::Status($statePath,[uint32]$gui.Process.Id)
+    $children=@(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($gui.Process.Id)" | Where-Object { $_.ExecutablePath -ieq (Join-Path (Split-Path $gui.Path) 'photon-windows.exe') -and $_.CommandLine -like '*--stdio*' -and $_.CommandLine -like ('*'+$Config+'*') })
+    if($children.Count -ne 1){throw 'Expected exactly one owned backend child'}
+    $raw=[PhotonTrayControl]::Status($statePath,[uint32]$children[0].ProcessId)
     $response=$raw|ConvertFrom-Json
     if($response.version -ne 1 -or $response.method -ne 'status' -or $response.error -or !$response.result){throw 'Invalid owned GUI status DTO'}
     $response.result
@@ -146,7 +148,7 @@ function Assert-TrayReleased([uint32]$PreviousPID,[int]$InterfaceIndex,[string]$
     Wait-Tray {@(Get-NetAdapter -Name $adapterName -IncludeHidden -ErrorAction SilentlyContinue).Count -eq 0} 'exited GUI adapter removed' 20
     if(@(Get-NetRoute -InterfaceIndex $InterfaceIndex -ErrorAction SilentlyContinue).Count -ne 0){throw 'Exiting GUI retained routes on its owned interface'}
     $pipeAvailable=$false
-    try{$null=[PhotonTrayControl]::Status($statePath,$PreviousPID);$pipeAvailable=$true}catch{}
+    try{$null=Invoke-TrayCLI @('status','--config',$Config);$pipeAvailable=$true}catch{}
     if($pipeAvailable){throw 'Exiting GUI left its IPC endpoint available'}
     $null=Invoke-TrayCLI @('gateways','--config',$Config)
     if((Read-TrayFileID) -cne $stateID){throw 'GUI exit replaced the stable database'}
@@ -173,7 +175,7 @@ function Check-TrayBusiness([string]$Phase) {
     foreach($prefix in @('198.18.253.1/32','fd00:7068:b4::1/128')){if(@($s.babel.routes|Where-Object prefix -eq $prefix).Count -ne 1){throw 'Tray runtime lacks an authorized dual-stack route'}}
     if((Read-TrayFileID) -cne $stateID){throw 'Tray runtime replaced its stable database'}
     $children=@(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($gui.Process.Id)")
-    if($children.Count -ne 0){throw 'GUI launched a child process instead of owning the daemon in process'}
+    if($children.Count -ne 1 -or $children[0].ExecutablePath -ine (Join-Path (Split-Path $gui.Path) 'photon-windows.exe')){throw 'GUI does not own exactly one separate Photon backend'}
     $adapter=@(Get-NetAdapter -Name $adapterName -ErrorAction Stop)
     if($adapter.Count -ne 1){throw 'Cannot identify exactly one owned tray adapter'}
     $script:trayOwnedIndex=[int]$adapter[0].ifIndex
@@ -330,8 +332,8 @@ try {
     $oldBefore=Get-CimInstance Win32_Service -Filter "Name='$oldService'";Assert-OldRegistration
     $portableB=Join-Path $FixtureDirectory 'portable-b';$portableC=Join-Path $FixtureDirectory 'portable-c'
     $null=New-Item -ItemType Directory -Path $portableB,$portableC
-    foreach($dir in @($portableB,$portableC)){[IO.File]::Copy($Executable,(Join-Path $dir 'photon-windows.exe'),$false);[IO.File]::Copy((Join-Path (Split-Path $Executable) 'wintun.dll'),(Join-Path $dir 'wintun.dll'),$false)}
-    $gui=Start-OwnedTray (Join-Path $portableB 'photon-windows.exe') 'b';$window=Find-TrayWindow $gui
+    foreach($dir in @($portableB,$portableC)){foreach($file in @('photon-windows.exe','photon-windows-gui.exe','wintun.dll')){[IO.File]::Copy((Join-Path (Split-Path $Executable) $file),(Join-Path $dir $file),$false)}}
+    $gui=Start-OwnedTray (Join-Path $portableB 'photon-windows-gui.exe') 'b';$window=Find-TrayWindow $gui
     if([PhotonGuiSmokeNative]::HasControl($window,1101)){throw 'Portable GUI retained the SCM install control'}
     Start-Sleep -Milliseconds 500
     if(Test-Path -LiteralPath $statePath){throw 'Opening GUI automatically initialized a daemon before Start'}
@@ -445,7 +447,7 @@ try {
     if((Read-TrayLogStart $restartedLog) -le $stoppedLogStart){throw 'Reconnected diagnostics retained the old runtime log snapshot'}
     $diagnosticChecks.RestartLogFresh=$true
     [PhotonGuiSmokeNative]::Close($diagnostics)
-    $duplicatePath=Join-Path $portableC 'photon-windows.exe';$duplicateConfig=Join-Path $portableC 'duplicate-missing.yaml'
+    $duplicatePath=Join-Path $portableC 'photon-windows-gui.exe';$duplicateConfig=Join-Path $portableC 'duplicate-missing.yaml'
     $duplicateDatabase=Join-Path $portableC 'duplicate-missing.db';$configBeforeDuplicate=[Convert]::ToBase64String([IO.File]::ReadAllBytes($Config))
     if((Test-Path -LiteralPath $duplicateConfig) -or (Test-Path -LiteralPath $duplicateDatabase)){throw 'Duplicate launch fixture did not begin with a missing configuration/database'}
     [PhotonGuiSmokeNative]::Close($window);Wait-Tray {![PhotonGuiSmokeNative]::IsWindowVisible($window)} 'original GUI hidden before duplicate launch'
@@ -462,7 +464,7 @@ try {
     [pscustomobject]@{PID=$duplicateProcess.Id;Creation=$duplicateOwner.Creation;ExitCode=$duplicateProcess.ExitCode;OriginalOwnerPID=$gui.Process.Id;OriginalOwnerCreation=$gui.Creation;OriginalWindowVisible=[PhotonGuiSmokeNative]::IsWindowVisible($window);AlternateConfig=$duplicateConfig;AlternateConfigAbsent=$true;AlternateDatabaseAbsent=$true;OriginalConfigUnchanged=$true;StateFileID=Read-TrayFileID;SameIKEExpiresAt=$afterDuplicate.ike.expires_at;Screenshot=[PhotonGuiSmokeNative]::Screenshot($window,(Join-Path $FixtureDirectory 'tray-duplicate-restored.png'))}|ConvertTo-Json -Depth 5|Set-Content -Encoding UTF8 (Join-Path $FixtureDirectory 'tray-duplicate.json')
     $firstOwner=$gui.Process.Id;$firstIndex=$script:trayOwnedIndex;Exit-OwnedTray $gui $window;$gui=$null
     Assert-TrayReleased $firstOwner $firstIndex 'exited-b'
-    $gui=Start-OwnedTray (Join-Path $portableC 'photon-windows.exe') 'moved';$window=Find-TrayWindow $gui
+    $gui=Start-OwnedTray (Join-Path $portableC 'photon-windows-gui.exe') 'moved';$window=Find-TrayWindow $gui
     Click-Tray $window 1102;$moved=Check-TrayBusiness 'moved'
     if($gui.Process.Id -eq $firstOwner -or $moved.admission.pending -or (Read-TrayFileID) -cne $stateID){throw 'Moving the portable executable lost the stable admitted identity'}
     Save-TrayPhase 'moved'

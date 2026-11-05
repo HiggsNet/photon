@@ -3,16 +3,19 @@
 set -euo pipefail
 repo=$(cd "$(dirname "$0")/../.." && pwd)
 source_exe=${PHOTON_WINDOWS_EXE:-$repo/build/windows-amd64/photon-windows.exe}
+source_gui=${PHOTON_WINDOWS_GUI_EXE:-$(dirname "$source_exe")/photon-windows-gui.exe}
 source_dll=${WINTUN_DLL:-$repo/build/windows-amd64/wintun.dll}
 [[ $source_exe == /* ]] || source_exe="$repo/$source_exe"
+[[ $source_gui == /* ]] || source_gui="$repo/$source_gui"
 [[ $source_dll == /* ]] || source_dll="$repo/$source_dll"
-[[ -f $source_exe && -f $source_dll ]] || { echo 'First run make photon-windows-build, or provide PHOTON_WINDOWS_EXE and WINTUN_DLL.' >&2; exit 2; }
+[[ -f $source_exe && -f $source_gui && -f $source_dll ]] || { echo 'First build both Windows executables and provide WINTUN_DLL.' >&2; exit 2; }
 fixture=$(mktemp -d "${TMPDIR:-/tmp}/photon-portable-test.XXXXXX")
 trap 'rm -rf -- "$fixture"' EXIT
 build="$fixture/output with spaces"
 output="$build/windows-amd64"
 mkdir -p "$output/third_party/wintun"
 cp -- "$source_exe" "$output/photon-windows.exe"
+cp -- "$source_gui" "$output/photon-windows-gui.exe"
 for file in config.yaml windows.db identity.key.json unrelated.txt third_party/wintun/private.key; do
     printf 'owned regression marker: %s\n' "$file" > "$output/$file"
 done
@@ -27,9 +30,10 @@ unzip -q "$build/photon-windows-amd64.zip" -d "$fixture/unpacked"
     cd "$fixture/unpacked"
     sha256sum --check --status SHA256SUMS
 )
-expected=(photon-windows.exe wintun.dll README.zh-CN.txt config.example.yaml SHA256SUMS third_party/wintun/README.md third_party/wintun/LICENSE-go.txt third_party/wintun/LICENSE-binary.txt third_party/ranet-lite/README.md third_party/ranet-lite/LICENSE)
+expected=(photon-windows.exe photon-windows-gui.exe wintun.dll README.zh-CN.txt config.example.yaml SHA256SUMS third_party/wintun/README.md third_party/wintun/LICENSE-go.txt third_party/wintun/LICENSE-binary.txt third_party/ranet-lite/README.md third_party/ranet-lite/LICENSE)
 diff -u <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort) <(unzip -Z1 "$build/photon-windows-amd64.zip" | LC_ALL=C sort)
 cmp "$output/photon-windows.exe" "$fixture/unpacked/photon-windows.exe"
+cmp "$output/photon-windows-gui.exe" "$fixture/unpacked/photon-windows-gui.exe"
 for file in config.yaml windows.db identity.key.json unrelated.txt third_party/wintun/private.key; do
     [[ $(cat "$output/$file") == "owned regression marker: $file" ]]
 done

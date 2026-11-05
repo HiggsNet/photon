@@ -20,7 +20,7 @@ var (
 )
 
 func main() {
-	os.Exit(run(defaultCommandArgs(os.Args[1:]), os.Stdout, os.Stderr))
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -29,8 +29,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	switch args[0] {
-	case "gui":
-		return runGUI(args[1:], stderr)
 	case "status", "peers", "routes", "diagnostics", "stop":
 		return runControl(args[0], args[1:], stdout, stderr)
 	case "service":
@@ -42,7 +40,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "run":
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer cancel()
-		return runConsole(ctx, args[1:], stderr)
+		return runConsole(ctx, args[1:], stdout, stderr)
 	case "version", "--version", "-version":
 		if len(args) != 1 {
 			fmt.Fprintln(stderr, "photon-windows version accepts no arguments")
@@ -62,19 +60,29 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-func runConsole(ctx context.Context, args []string, stderr io.Writer) (code int) {
+func runConsole(ctx context.Context, args []string, stdout, stderr io.Writer) (code int) {
 	flags := flag.NewFlagSet("photon-windows run", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	console := flags.Bool("console", false, "run in the foreground")
 	service := flags.Bool("service", false, "run under Windows SCM")
+	stdio := flags.Bool("stdio", false, "run as a frontend-owned backend over private standard I/O")
 	name := flags.String("name", photonwindows.DefaultServiceName, "SCM service name")
 	path := flags.String("config", "", "path to Photon Windows YAML config")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
-	if *console == *service || *path == "" || flags.NArg() != 0 || !validServiceName(*name) {
-		fmt.Fprintln(stderr, "Usage: photon-windows run --console --config <path> | run --service --config <path> [--name <name>]")
+	modes := 0
+	for _, enabled := range []bool{*console, *service, *stdio} {
+		if enabled {
+			modes++
+		}
+	}
+	if modes != 1 || *path == "" || flags.NArg() != 0 || !validServiceName(*name) {
+		fmt.Fprintln(stderr, "Usage: photon-windows run --console --config <path> | run --service --config <path> [--name <name>] | run --stdio --config <path>")
 		return 2
+	}
+	if *stdio {
+		return runFrontendBackend(ctx, *path, stdout, stderr)
 	}
 	config, err := photonwindows.LoadConfig(*path)
 	if err != nil {
@@ -143,13 +151,13 @@ func writeUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage: photon-windows <command>")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Commands:")
-	fmt.Fprintln(w, "  gui [--config <path>]           Run Photon from the Windows window and tray")
 	fmt.Fprintln(w, "  status|peers|routes|diagnostics|stop --config <path>  Query or stop the live daemon")
 	fmt.Fprintln(w, "  routes --config <path> --destination <IP>          Filter the Babel route sample")
 	fmt.Fprintln(w, "  gateways --config <path>         Inspect signed gateway contacts offline (no route authorization)")
 	fmt.Fprintln(w, "  state import --config <path> --bundle <file> --key <file>  Initialize a new state database")
 	fmt.Fprintln(w, "  run --console --config <path>    Run the Windows leaf daemon in the foreground")
 	fmt.Fprintln(w, "  run --service --config <path>    SCM service entrypoint")
+	fmt.Fprintln(w, "  run --stdio --config <path>      Frontend-owned backend (framed private IPC)")
 	fmt.Fprintln(w, "  service install|start|stop|remove [--name <name>] [--config <path>]")
 	fmt.Fprintln(w, "  config validate --config <path>  Validate configuration without starting the service")
 	fmt.Fprintln(w, "  version                          Show build information")

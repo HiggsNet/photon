@@ -1,8 +1,59 @@
 # Windows 本机界面与托盘
 
-同一个 `photon-windows.exe` 提供 CLI、原生窗口和托盘。默认 GUI 在自身进程内管理一个
-Photon Daemon，复用 console 的运行链路与本机 named pipe，不需要安装 Windows 服务。
-窗口通过 IPC 读取公开状态，数据库和网络资源始终由同一个 Daemon 管理。
+2026-11-05 后台拆分：当前源码以 `photon-windows-gui.exe` 提供原生窗口和托盘，以相邻的
+`photon-windows.exe` 提供独立后台。下述已有侧栏/桌面证据保留为拆分前记录；
+拆分后的原生回归见 [原生验收](native-testing.md#2026-11-05-后台与原生-gui-拆分验收)，真实桌面结果见下节；现有 test 仅配置 IPv6 分流，IPv4/双栈验收仍单独保留。
+
+## 2026-11-05 拆分后的既有 test 身份桌面验收
+
+在 Windows 11 VM101 的 `photon-test` 已登录桌面（Session 1，96 DPI）直接使用原有 `windows-test.catofes.` 身份、`Photon-Windows-Test/config.yaml` 和 `windows-test.db`，没有重新生成身份、签发授权或分配地址。程序放在独立的 `Photon-GUI-Split-20261105-01` 目录，旧程序保留，测试前在停止状态备份配置与数据库。
+
+10 项带可见性/焦点断言的原生 UI 测试通过。真实 GUI 进程为 11472，独立后台先为 6048，停止后重开为 5524；同值保存配置不重启后台。13 帧覆盖 Dashboard、Gossip、Tunnel、Babel、日志、诊断、四页设置及停止/重开状态，已目检主窗口、高级设置和停止画面。无效 MTU 1279 被拒绝且配置字节未变；恢复原值保存后，隐藏到托盘仍能使用网络，停止清空节点并回收后台/适配器/路由，重新连接无需授权。
+
+现有业务地址保持 `2a0d:2905:1:2f::1/128`，测试配置只接管 `2a0d:2905::/32`。普通 IPv6 可达，连接、托盘隐藏、重开三轮各 3 个总长 1280 字节 IPv6 探测共 9/9 回包。普通包的短探测出现丢包，因此额外用相同 test 身份与配置、暖机 10 秒、三个目标各 30 次做了原程序对照：
+
+| 目标 | 拆分版回包 | 原程序回包 |
+| --- | --- | --- |
+| More `2a0d:2905:1:1::1` | 30/30 | 30/30 |
+| Less `2a0d:2905:1:2::1` | 27/30 | 26/30 |
+| Neutron `2a0d:2905:1:b::1` | 27/30 | 23/30 |
+
+这仅证明原程序也能复现相关目标的丢包；两轮为顺序短样本，原程序版本元数据为 `unknown`，二进制 SHA-256 单独保留，不能由此宣称拆分改善性能、定位根因或通过长期链路稳定性验收。IPv4、物理断网与睡眠未在本轮覆盖。
+
+本轮修正两处测试适配：窗口查找增加同 PID 子窗口枚举，以支持嵌入的设置/诊断页；重复激活测试允许合法的只读状态刷新，继续禁止启动后台、配置写入或其他 mutation。首次旧夹具因只枚举顶层设置窗口超时，未创建身份，原失败证据保留；随后改用用户指定的既有身份验证。
+
+证据位于 `build/validation/windows-gui-split-20261105/`：`result.json`、`native-desktop.log`、13 张阶段截图及 QMP 控制台帧，`stable-*`/`baseline-*` 为探测原始结果。截图与公开 DTO 不包含私钥或数据库内容；数据库备份只保留在测试账户的独立目录中。测试结束恢复原配置字节，数据库 File ID 保持不变，独立清理核对记录任务退出、进程、适配器、路由和新测试路径的防火墙提示残留；旧程序和原身份保留，没有部署到其他主机。
+
+## 2026-11-05 侧栏与精简 Dashboard
+
+主窗口改为左侧导航与右侧内容区，参照 FlClash 的浅色卡片、留白和圆角导航。
+Dashboard、Gossip、Tunnel、Babel、日志、诊断和设置在同一个窗口内切换；设置入口固定在侧栏底部。
+默认窗口 1100×760，最小尺寸 920×700（逻辑 DPI 单位），设置保留身份、节点与引导、分流路由及高级四页。
+只有诊断区展示概览、节点地址和原始 JSON 的子导航；常用详情页直接从侧栏访问。
+
+Dashboard 优先呈现是否入网及右上角连接/断开操作，节点按名称倒序合并展示，双击进入节点详情。
+Gossip 使用最新同步会话结论；历史拉取失败计数不覆盖成功状态。
+每个节点的 IPv4/IPv6 勾选仅来自该节点当前有效 IKE/CHILD、业务就绪和授权路由样本；
+同一条数据隧道可以承载双栈，不将两个勾解释成两条独立 CHILD 隧道。
+未就绪或缺少路由样本时显示待就绪，不推断缺失协议已经可用。
+健康监测显示 Babel 邻居状态，不冒充主动 ping、丢包或延迟结果。
+截断样本明确标注；停止或读取失败后清空旧节点状态；节点选择、滚动位置和未保存设置按身份保留。
+待授权时提供完整入网请求，详细错误与最近操作在诊断概览可读、可复制。
+
+验证使用仓库最低 Go 1.25 系列工具链。当前 Windows 测试机没有登录用户，因此原生控件绘制与
+几何检查在独立的非交互测试进程中完成。5 项原生测试覆盖 Dashboard 操作/页面嵌入、全部设置和状态页
+在默认/最小尺寸下的边界、节点倒序与选中项保留、首次配置保存、诊断文本保留和窗口工作区适配。
+`WM_PRINT` 截图使用合成公开观测，仅证明实际控件绘制与布局，不证明真实网络或交互桌面验收。
+DPI/真实 Tab、重复激活及依赖可见桌面的诊断阅读测试在当前 SSH 会话无法通过，保留原断言，
+待登录桌面后复测；没有将非交互运行的失败称为通过。未更新测试机原程序、真实配置、身份或网络授权。
+
+证据及预览位于 `build/validation/windows-dashboard-20261105/`；便携预览包位于
+`build/windows-dashboard-preview/photon-windows-amd64.zip`。这是本地工作版本，不是正式 Release。
+
+
+`photon-windows-gui.exe` 提供原生窗口和托盘，从自身目录启动独立的 `photon-windows.exe` 后台，
+不需要安装 Windows 服务。窗口通过私有流 IPC 读取公开状态并请求停止，
+数据库和网络资源始终由后台的唯一 Daemon 管理；后台仍保留 CLI 与管理员 named pipe。
 
 ## 使用
 
@@ -19,7 +70,7 @@ make photon-windows-build
 打包不会覆盖已有 `config.yaml` 或数据库，也不会将它们或输出目录内的其它文件装入 ZIP。
 `make photon-windows-cross-build` 仅编译检查，不下载 DLL；`make check` 沿用该检查。
 
-在管理员管理的目录准备 `photon-windows.exe` 和相邻的固定版本 `wintun.dll`。
+在管理员管理的目录准备 `photon-windows-gui.exe`、`photon-windows.exe` 和相邻的固定版本 `wintun.dll`。
 可以直接在界面填写配置，也可以继续使用已有配置文件。
 示例配置见 [config.example.yaml](config.example.yaml)，其中的公钥、域名、地址都需要替换。
 数据库不存在时，首次启动自动生成本机身份并等待上级授权，见 [自动入网](autojoin-testing.md)。
@@ -28,7 +79,7 @@ make photon-windows-build
 旁的 `config.yaml`。也可以在管理员 PowerShell 指定已有配置：
 
 ```powershell
-.\photon-windows.exe gui --config C:\Photon\config.yaml
+.\photon-windows-gui.exe --config C:\Photon\config.yaml
 ```
 
 GUI 不再接受 `--name`，同一登录会话只保留一个托盘实例。重复启动恢复已有窗口，
@@ -218,7 +269,7 @@ Win32 ABI、真实控件、DACL 保留、原子替换失败保护、运行生命
 基础原生控件测试可在 SSH 非交互会话运行；启用 `PHOTON_WINDOWS_GUI_NATIVE=1` 的
 完整组包含真实可见性与 Tab 导航断言，应在已登录桌面运行，不能用不可见窗口代替。
 例如从管理员桌面终端先设置 `$env:PHOTON_WINDOWS_GUI_NATIVE='1'`，
-再运行 `go test ./app/photon-windows ./internal/photonwindows`，
+再运行 `go test ./app/photon-windows-gui ./internal/photonwindows`，
 或由一次性 InteractiveToken/Highest 任务执行交叉编译的测试程序。
 
 完整桌面场景需要测试账号以控制台方式登录 Windows，保持解锁且 Explorer 运行。

@@ -15,7 +15,7 @@ import (
 	"github.com/HiggsNet/photon/internal/photonwindows"
 )
 
-type desktopOptions struct{ ConfigPath string }
+type desktopOptions struct{ ConfigPath, BackendPath string }
 type desktopSnapshot struct {
 	RuntimeState string
 	Observation  *photonwindows.Observation

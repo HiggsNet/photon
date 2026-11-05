@@ -10,14 +10,14 @@ import (
 )
 
 func parseDesktopOptions(args []string, stderr io.Writer) (desktopOptions, error) {
-	flags := flag.NewFlagSet("photon-windows gui", flag.ContinueOnError)
+	flags := flag.NewFlagSet("photon-windows-gui", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	path := flags.String("config", "", "configuration file (default: config.yaml beside the executable)")
 	if err := flags.Parse(args); err != nil {
 		return desktopOptions{}, err
 	}
 	if flags.NArg() != 0 {
-		return desktopOptions{}, errors.New("Usage: photon-windows gui [--config <path>]")
+		return desktopOptions{}, errors.New("Usage: photon-windows-gui [--config <path>]")
 	}
 	if *path == "" {
 		executable, err := os.Executable()

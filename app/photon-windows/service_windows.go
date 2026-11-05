@@ -95,8 +95,8 @@ func manageService(action, name, config string) error {
 	return fmt.Errorf("unsupported service action %q", action)
 }
 
-// Both CLI mutations and desktop observations use the installed SCM command as
-// the owner boundary; a matching service name alone never grants ownership.
+// CLI mutations use the installed command as the owner boundary; a matching
+// service name alone never grants ownership.
 func validateOwnedService(installed mgr.Config, name, config string) error {
 	argv, err := windows.DecomposeCommandLine(installed.BinaryPathName)
 	if err != nil {

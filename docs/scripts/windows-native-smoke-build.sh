@@ -5,10 +5,11 @@ cd "$(dirname "$0")/../.."
 output=$(mktemp -d "${TMPDIR:-/tmp}/photon-windows-native.XXXXXX")
 export GOOS=windows GOARCH=amd64 CGO_ENABLED=0
 export GOCACHE="${GOCACHE:-/tmp/photon-gocache}"
-for package in internal/photonwindows app/photon-windows internal/photonclient/ike internal/photonclient/esp internal/photonclient/babel internal/photonclient/sadr; do
+for package in internal/photonwindows app/photon-windows app/photon-windows-gui internal/photonclient/ike internal/photonclient/esp internal/photonclient/babel internal/photonclient/sadr; do
     mkdir -p "$output/$package"
     go test -c -o "$output/$package/native.test.exe" "./$package"
 done
+go build -o "$output/photon-windows.exe" ./app/photon-windows
 mkdir -p "$output/docs/photon-windows"
 cp docs/photon-windows/config.example.yaml "$output/docs/photon-windows/"
 cp docs/scripts/windows-native-smoke.ps1 "$output/run.ps1"

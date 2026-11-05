@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -24,7 +23,7 @@ func desktopRuntimeFixture(t *testing.T) (*desktopBackend, *photonwindows.Config
 	if err := os.WriteFile(path, []byte(text), 0600); err != nil {
 		t.Fatal(err)
 	}
-	b, err := newDesktopBackend(desktopOptions{ConfigPath: path})
+	b, err := newDesktopBackend(desktopOptions{ConfigPath: path, BackendPath: desktopTestBackend(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +47,7 @@ func assertDesktopRuntime(t *testing.T, b *desktopBackend, state string) desktop
 	if got.RuntimeState != state {
 		t.Fatalf("runtime state: %+v, want %s", got, state)
 	}
-	if state == "running" && runtime.GOOS == "windows" {
+	if state == "running" {
 		if got.Error != "" || got.Observation == nil || !got.Observation.Running || !got.Observation.Admission.Pending || got.Observation.TunnelReady || got.Observation.Wintun.Configured {
 			t.Fatalf("owned pending runtime: %+v", got)
 		}
@@ -57,6 +56,64 @@ func assertDesktopRuntime(t *testing.T, b *desktopBackend, state string) desktop
 		t.Fatalf("inactive runtime retained observation: %+v", got)
 	}
 	return got
+}
+
+func TestDesktopRuntimeIsSeparateAndFrontendLossReleasesBackend(t *testing.T) {
+	b, config := desktopRuntimeFixture(t)
+	if err := b.Runtime("start"); err != nil {
+		t.Fatal(err)
+	}
+	run := b.run
+	if run.process.Process.Pid == os.Getpid() {
+		t.Fatal("frontend still hosts the daemon")
+	}
+	request := assertDesktopRuntime(t, b, "running").Observation.Admission.JoinRequestB64
+	if request == "" {
+		t.Fatal("backend did not expose the pending admission request")
+	}
+	_ = run.stream.Close()
+	select {
+	case <-run.done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("backend survived loss of its frontend connection")
+	}
+	assertDesktopStateReleased(t, config)
+	if err := b.Runtime("start"); err != nil {
+		t.Fatal(err)
+	}
+	if got := assertDesktopRuntime(t, b, "running").Observation.Admission.JoinRequestB64; got != request {
+		t.Fatal("frontend replacement changed the persisted identity")
+	}
+}
+
+func TestDesktopRuntimeMissingBackendDoesNotCreateIdentity(t *testing.T) {
+	b, config := desktopRuntimeFixture(t)
+	b.options.BackendPath = filepath.Join(t.TempDir(), "missing-backend")
+	if err := b.Runtime("start"); err == nil {
+		t.Fatal("missing backend started")
+	}
+	assertDesktopRuntime(t, b, "failed")
+	if _, err := os.Stat(config.State.Path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("frontend created or opened the identity database")
+	}
+}
+
+func TestDesktopRuntimeBackendCrashClearsLiveState(t *testing.T) {
+	b, config := desktopRuntimeFixture(t)
+	if err := b.Runtime("start"); err != nil {
+		t.Fatal(err)
+	}
+	assertDesktopRuntime(t, b, "running")
+	if err := b.run.process.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-b.run.done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("owned backend did not exit")
+	}
+	assertDesktopRuntime(t, b, "failed")
+	assertDesktopStateReleased(t, config)
 }
 
 func assertDesktopStateReleased(t *testing.T, config *photonwindows.Config) {

@@ -24,9 +24,8 @@ func TestDesktopWindowsRuntimeOwnsPipeAndRefusesCompetingRun(t *testing.T) {
 	if request == "" {
 		t.Fatal("pending runtime did not expose its public join request")
 	}
-	// This second backend even shares our PID. Its own readiness must never
-	// be inferred from the privileged pipe belonging to the first daemon.
-	other, err := newDesktopBackend(desktopOptions{ConfigPath: owner.options.ConfigPath})
+	// A competing child cannot infer readiness from the first child's pipe.
+	other, err := newDesktopBackend(desktopOptions{ConfigPath: owner.options.ConfigPath, BackendPath: owner.options.BackendPath})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,11 +43,14 @@ func TestDesktopWindowsRuntimeOwnsPipeAndRefusesCompetingRun(t *testing.T) {
 	if got := assertDesktopRuntime(t, owner, "running"); got.Observation.Admission.JoinRequestB64 != request {
 		t.Fatal("stopping the failed competitor changed the real owner")
 	}
-	// The public control path must bind to the desktop process, not SCM.
+	// The public control path binds to the owned backend, independently of SCM.
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	if _, err := photonwindows.CallControlForProcess(ctx, config.State.Path, "status", uint32(os.Getpid())); err != nil {
+	if owner.run.process.Process.Pid == os.Getpid() {
+		t.Fatal("GUI still owns the network daemon")
+	}
+	if _, err := photonwindows.CallControlForProcess(ctx, config.State.Path, "status", uint32(owner.run.process.Process.Pid)); err != nil {
 		cancel()
-		t.Fatalf("desktop process did not own its pipe: %v", err)
+		t.Fatalf("backend process did not own its pipe: %v", err)
 	}
 	cancel()
 	if err := owner.Runtime("stop"); err != nil {
@@ -57,7 +59,7 @@ func TestDesktopWindowsRuntimeOwnsPipeAndRefusesCompetingRun(t *testing.T) {
 	assertDesktopRuntime(t, owner, "stopped")
 	assertDesktopStateReleased(t, config)
 	ctx, cancel = context.WithTimeout(context.Background(), 100*time.Millisecond)
-	if _, err := photonwindows.CallControlForProcess(ctx, config.State.Path, "status", uint32(os.Getpid())); err == nil {
+	if _, err := photonwindows.CallControlForProcess(ctx, config.State.Path, "status", uint32(owner.run.process.Process.Pid)); err == nil {
 		cancel()
 		t.Fatal("joined runtime retained its pipe")
 	}

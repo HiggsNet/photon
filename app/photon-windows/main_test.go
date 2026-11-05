@@ -60,6 +60,9 @@ func TestConfigValidateRejectsInvalidConfig(t *testing.T) {
 func TestRunModeIsExclusive(t *testing.T) {
 	for _, args := range [][]string{
 		{"run", "--console", "--service", "--config", "unused"},
+		{"run", "--console", "--stdio", "--config", "unused"},
+		{"run", "--service", "--stdio", "--config", "unused"},
+		{"run", "--stdio"},
 		{"run", "--service"},
 		{"run", "--service", "--config", "unused", "--name", "bad/name"},
 		{"service", "install"},
@@ -70,6 +73,15 @@ func TestRunModeIsExclusive(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		if got := run(args, &stdout, &stderr); got != 2 {
 			t.Fatalf("run(%v)=%d stderr=%s", args, got, stderr.String())
+		}
+	}
+}
+
+func TestBackendDoesNotDispatchGUI(t *testing.T) {
+	for _, args := range [][]string{nil, {"gui"}} {
+		var stdout, stderr bytes.Buffer
+		if code := run(args, &stdout, &stderr); code != 2 {
+			t.Fatalf("backend accepted GUI invocation %v: %d", args, code)
 		}
 	}
 }

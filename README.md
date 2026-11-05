@@ -51,6 +51,8 @@ authority/gossip 控制面，不配置 overlays、routing 或 firewall。详细�
 
 Windows 11 amd64 可下载 [v0.6.5 便携包](https://github.com/HiggsNet/photon/releases/download/v0.6.5/photon-v0.6.5-windows-amd64.zip)，完整解压后以管理员身份运行。首次配置、入网和升级步骤见 [Windows 使用说明](docs/photon-windows/README.zh-CN.txt)。
 
+当前开发版已将后台 `photon-windows.exe` 与原生界面 `photon-windows-gui.exe` 拆成独立程序，构建便携包时同时包含二者；此拆分尚未发布，已发布的 v0.6.5 仍使用原来的单程序入口。
+
 其他安装方式：
 
 - **Docker**：`make docker-build` 构建基于 Ubuntu 24.04 的运行时镜像，镜像同时包含 `photon` 与 `photon-services`；真实数据面（IPsec/XFRM、BIRD、firewall、netns）仍需要 `--privileged --network host` 和兼容的宿主 Linux 内核。

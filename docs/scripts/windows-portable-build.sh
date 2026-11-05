@@ -10,6 +10,7 @@ output="$build/windows-amd64"
 archive="$build/photon-windows-amd64.zip"
 archive_hash="$archive.sha256"
 source_exe=${PHOTON_WINDOWS_EXE:-$output/photon-windows.exe}
+source_gui=${PHOTON_WINDOWS_GUI_EXE:-$(dirname "$source_exe")/photon-windows-gui.exe}
 version=0.14.1
 zip_hash=07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51
 dll_hash=e5da8447dc2c320edc0fc52fa01885c103de8c118481f683643cacc3220dafce
@@ -50,8 +51,10 @@ publish_file() {
 command -v sha256sum >/dev/null
 command -v zip >/dev/null
 [[ -f $source_exe && ! -L $source_exe ]] || fail "Build the Windows executable first: $source_exe"
+[[ -f $source_gui && ! -L $source_gui ]] || fail "Build the Windows GUI executable first: $source_gui"
 mkdir -p "$stage/package/third_party/wintun" "$stage/package/third_party/ranet-lite"
 cp -- "$source_exe" "$stage/package/photon-windows.exe"
+cp -- "$source_gui" "$stage/package/photon-windows-gui.exe"
 if [[ -n ${WINTUN_DLL:-} ]]; then
     [[ -f $WINTUN_DLL ]] || fail "WINTUN_DLL must name a local regular DLL: $WINTUN_DLL"
     cp -- "$WINTUN_DLL" "$stage/package/wintun.dll"
@@ -73,7 +76,7 @@ fi
 verify_hash "$dll_hash" "$stage/package/wintun.dll"
 cp -- docs/photon-windows/README.zh-CN.txt "$stage/package/README.zh-CN.txt"
 cp -- docs/photon-windows/config.example.yaml "$stage/package/config.example.yaml"
-files=(photon-windows.exe wintun.dll README.zh-CN.txt config.example.yaml)
+files=(photon-windows.exe photon-windows-gui.exe wintun.dll README.zh-CN.txt config.example.yaml)
 for file in third_party/wintun/README.md third_party/wintun/LICENSE-go.txt third_party/wintun/LICENSE-binary.txt third_party/ranet-lite/README.md third_party/ranet-lite/LICENSE; do
     cp -- "$file" "$stage/package/$file"
     files+=("$file")
@@ -95,7 +98,7 @@ ensure_directory "$output/third_party/wintun"
 ensure_directory "$output/third_party/ranet-lite"
 for file in "${files[@]}" SHA256SUMS; do
     mode=0644
-    [[ $file != photon-windows.exe ]] || mode=0755
+    [[ $file != *.exe ]] || mode=0755
     publish_file "$stage/package/$file" "$output/$file" "$mode"
 done
 publish_file "$stage/photon-windows-amd64.zip" "$archive"
