@@ -7,6 +7,11 @@ import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as path;
 import 'package:yaml/yaml.dart';
 
+String get photonExecutable => path.join(
+  File(Platform.resolvedExecutable).parent.path,
+  'photon-windows.exe',
+);
+
 abstract interface class PhotonBackend {
   bool get hasProcess;
   Future<int>? get exitCode;

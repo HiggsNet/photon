@@ -12,6 +12,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'controller.dart';
 import 'proxy_bridge.dart';
+import 'setup_view.dart';
 
 enum _Page { overview, tunnels, peers, routes, services, diagnostics }
 
@@ -125,23 +126,50 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
                                   spacing: 12,
                                   runSpacing: 8,
                                   children: [
-                                    TextButton(
-                                      onPressed:
-                                          !allowed ||
-                                              owner.busy ||
-                                              owner.hasLease
-                                          ? null
-                                          : () => owner.pickConfig(() async {
-                                              final file = await picker
-                                                  .pickerFile();
-                                              final uri = file?.uri;
-                                              return uri != null &&
-                                                      uri.scheme == 'file'
-                                                  ? uri.toFilePath()
-                                                  : null;
-                                            }),
-                                      child: Text(l.importFile),
-                                    ),
+                                    if (!owner.hasLease) ...[
+                                      TextButton(
+                                        onPressed: allowed && !owner.busy
+                                            ? () => owner.pickConfig(
+                                                choosePhotonConfig,
+                                              )
+                                            : null,
+                                        child: Text(l.importFile),
+                                      ),
+                                      TextButton(
+                                        onPressed: allowed && !owner.busy
+                                            ? () => owner.pickConfig(
+                                                () =>
+                                                    editPhotonSettings(context),
+                                              )
+                                            : null,
+                                        child: Text(l.photonCreateConfig),
+                                      ),
+                                      if (owner.configPath
+                                          case final String config) ...[
+                                        TextButton(
+                                          onPressed: allowed && !owner.busy
+                                              ? () => owner.pickConfig(
+                                                  () => editPhotonSettings(
+                                                    context,
+                                                    config: config,
+                                                  ),
+                                                )
+                                              : null,
+                                          child: Text(l.photonSettings),
+                                        ),
+                                        TextButton(
+                                          onPressed: allowed && !owner.busy
+                                              ? () => owner.pickConfig(
+                                                  () => showPhotonImport(
+                                                    context,
+                                                    config,
+                                                  ),
+                                                )
+                                              : null,
+                                          child: Text(l.photonImportIdentity),
+                                        ),
+                                      ],
+                                    ],
                                     if (owner.hasLease)
                                       TextButton(
                                         onPressed: owner.busy

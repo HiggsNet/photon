@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:fl_clash/common/common.dart';
 import 'package:fl_clash/enum/enum.dart';
+import 'package:fl_clash/features/form/form.dart' show FormPage;
 import 'package:fl_clash/main.dart' as application;
 import 'package:fl_clash/photon/controller.dart';
 import 'package:fl_clash/photon/proxy_bridge.dart';
@@ -12,6 +13,7 @@ import 'package:fl_clash/state.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
+import 'package:prism_ui/prism_ui.dart' show TextFormField;
 
 import 'socks_probe.dart';
 
@@ -88,6 +90,47 @@ void main() {
           () => find.byType(PhotonView).evaluate().isNotEmpty,
           'Photon page',
         );
+        final settings = File('${output.path}/settings-copy.yaml');
+        await settings.writeAsBytes(originalConfig);
+        await photonController.pickConfig(() async => settings.path);
+        await tester.pump();
+        await tester.tap(find.text(labels.photonSettings));
+        await waitFor(
+          () => find.byType(FormPage).evaluate().isNotEmpty,
+          'settings form',
+        );
+        await tester.pump(const Duration(milliseconds: 400));
+        await phase('settings-open');
+        final logLevel = find.descendant(
+          of: find.byKey(const ValueKey('log_level')),
+          matching: find.byType(TextFormField),
+        );
+        await tester.scrollUntilVisible(
+          logLevel,
+          240,
+          scrollable: find
+              .descendant(
+                of: find.byType(FormPage),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+        );
+        final previous = tester.widget<TextFormField>(logLevel).initialValue;
+        final level = previous == 'debug' ? 'info' : 'debug';
+        await tester.enterText(logLevel, level);
+        await tester.tap(find.text(labels.save).hitTestable());
+        await waitFor(
+          () =>
+              find.byType(FormPage).evaluate().isEmpty &&
+              !photonController.busy,
+          'settings saved',
+        );
+        expect(await settings.readAsString(), contains('level: $level'));
+        expect(await File(_config).readAsBytes(), originalConfig);
+        results['settings_form_saved'] = true;
+        await phase('settings-saved');
+        await photonController.pickConfig(() async => _config);
+        await tester.pump();
         await tester.tap(find.text(labels.start).first);
         await waitFor(
           () => photonController.observation?['tunnel_ready'] == true,
@@ -439,12 +482,18 @@ void main() {
             .map((log) => log.toJson())
             .toList();
         expect(recovered.exitCode, 0, reason: '${recovered.stderr}');
-        await File(
-          '${output.path}/result.json',
-        ).writeAsString(const JsonEncoder.withIndent('  ').convert(results));
+        await File('${output.path}/result.json')
+            .writeAsString(const JsonEncoder.withIndent('  ').convert(results));
       } finally {
+        final form = find.byType(FormPage);
+        if (form.evaluate().isNotEmpty) {
+          Navigator.of(tester.element(form)).pop();
+          await waitFor(() => !photonController.busy, 'settings closed');
+        }
         results['controller_error'] = photonController.error?.toString();
         await photonController.stop();
+        results['stop_error'] = photonController.error?.toString();
+        await photonController.pickConfig(() async => _config);
         container
             .read(patchClashConfigProvider.notifier)
             .update((state) => state.copyWith(tun: originalTun));
@@ -459,9 +508,8 @@ void main() {
         await tester.pump();
         await preferences.saveConfig(container.read(configProvider));
         expect(await File(_config).readAsBytes(), originalConfig);
-        await File(
-          '${output.path}/partial-result.json',
-        ).writeAsString(const JsonEncoder.withIndent('  ').convert(results));
+        await File('${output.path}/partial-result.json')
+            .writeAsString(const JsonEncoder.withIndent('  ').convert(results));
         await container.read(coreHandlerProvider).close();
       }
     },

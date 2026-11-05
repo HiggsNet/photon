@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:fl_clash/common/constant.dart' show safeModeBuild;
 import 'package:flutter/foundation.dart';
-import 'package:path/path.dart' as path;
 
 import 'backend.dart';
 import 'preferences.dart';
@@ -64,7 +63,7 @@ final class PhotonController extends ChangeNotifier {
           _configPath = File(selected).absolute.path;
           await preferences?.saveConfigPath(_configPath!);
         }
-      });
+      }, cleanupOnError: false);
 
   Future<void> start({required bool allowed}) => _enqueue(() async {
     if (_closed || !allowed || hasLease) return;
@@ -257,11 +256,6 @@ final photonController = PhotonController(
     if (safeModeBuild || !Platform.isWindows) {
       throw StateError('Photon is disabled on this platform or in safe mode');
     }
-    return PhotonProcess(
-      executable: path.join(
-        File(Platform.resolvedExecutable).parent.path,
-        'photon-windows.exe',
-      ),
-    );
+    return PhotonProcess(executable: photonExecutable);
   },
 );
