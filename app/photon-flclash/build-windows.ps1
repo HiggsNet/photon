@@ -56,6 +56,10 @@ if ((Get-Content -LiteralPath (Join-Path $Checkout 'pubspec.yaml') -Raw) -match 
 foreach ($name in @('photon-windows.exe','wintun.dll')) {
     if (!(Test-Path -LiteralPath (Join-Path $BackendDirectory $name) -PathType Leaf)) { throw "Missing $name" }
 }
+$notices = @('wintun\README.md', 'wintun\LICENSE-go.txt', 'wintun\LICENSE-binary.txt', 'ranet-lite\README.md', 'ranet-lite\LICENSE')
+foreach ($notice in $notices) {
+    if (!(Test-Path -LiteralPath (Join-Path $BackendDirectory ('third_party\' + $notice)) -PathType Leaf)) { throw "Missing backend notice: $notice" }
+}
 Push-Location $Checkout
 try {
     Invoke-BuildTool 'flutter' @('pub', 'get')
@@ -69,6 +73,12 @@ try {
         Copy-Item -LiteralPath (Join-Path $BackendDirectory $name) -Destination $OutputDirectory
     }
     Copy-Item -LiteralPath (Join-Path $Checkout 'LICENSE') -Destination (Join-Path $OutputDirectory 'LICENSE.FlClash')
+    foreach ($notice in $notices) {
+        $destination = Join-Path $OutputDirectory ('third_party\' + $notice)
+        New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $BackendDirectory ('third_party\' + $notice)) -Destination $destination
+    }
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README.md') -Destination (Join-Path $OutputDirectory 'README.Photon.md')
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'upstream.env') -Destination $OutputDirectory
     $hashes = @(Get-ChildItem -LiteralPath $OutputDirectory -File -Recurse | Sort-Object FullName | ForEach-Object {
         (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $_.FullName.Substring((Get-Item -LiteralPath $OutputDirectory).FullName.Length + 1).Replace('\','/')

@@ -1,35 +1,40 @@
-# Photon 的 FlClash 前端
+# Photon 的 FlClash Windows 客户端
 
-锁定 FlClash v0.9.3，将 Photon 作为独立后台接入。上游代码下载到忽略的 `build/photon-flclash/upstream`；仓库只维护版本锁、三个上游文件的小补丁及 `overlay/` 中的接入代码。切换上游版本必须同时更新 Mihomo 和 prism_ui 的锁定提交。
+锁定 FlClash v0.9.3，复用其代理组、连接、日志、设置和托盘。Photon 后台独立运行；仓库维护版本锁、上游接入补丁及 `overlay/`，不复制一整份上游源码。原生 GUI 保留为另一个独立客户端。
 
-当前切片在 Windows 的 **工具 → Photon** 提供选择已有 YAML 配置、启动/停止、连接状态、内网地址和连接数量。选择配置只记录文件路径，不导入、重写或复制身份数据库。窗口和页面不拥有网络资源；应用级 controller 持有唯一后台进程，退出 FlClash 时与 Mihomo 一起关闭。通信复用 Photon v1 私有流，核对 PID、配置 SHA256 和状态文件路径；超时或失联清除状态，未确认进程退出时保留归属并阻止新实例。
+## 使用
 
-这是接入原型，还没有可分发的统一 Windows 客户端。授权导入、设置保存、服务目录、自动生成代理配置及双 TUN 防回环尚未接入。普通用户提权也尚未接入 FlClash Helper；这一切片需要以管理员身份运行整个客户端。安全模式禁止启动 Photon。原生 GUI 仍作为独立可用客户端保留。
+1. 打开 FlClash，进入侧栏 **Photon**，选择已有的 Photon Windows YAML 配置并连接。配置路径自动保存；选择文件不会复制、重写身份或数据库。
+2. 在 **概览、隧道、节点、路由、代理服务、诊断** 中查看实时状态。可以筛选节点/地址/路由、复制入网请求和诊断，检查 IKE/ESP、Babel、同步和失败原因。数据采样被截断时会显示提示。
+3. 在代理服务中勾选多个端点，点击 **使用选中的代理**。生成独立的 Photon 配置并启用系统代理，在 FlClash 的代理页使用 `Photon` 手选组、`Photon Auto` 自动择优或 `Photon Balance` 负载均衡。
+4. 系统代理和 TUN 开关沿用 FlClash 的仪表盘、设置及托盘。只连接 Photon 可以仅访问内网；暂停代理不会停止 Photon。主动停止 Photon 会先停用正在使用的 Photon 代理配置，再关闭内网连接。
 
-## 准备源码
+目前整个客户端请求管理员权限。首次入网配置创建、授权文件导入及 Photon 设置编辑尚未迁入新界面，可先用独立原生 GUI 完成；已有身份可直接使用。安全模式禁止启动 Photon。
 
-在安装 Git、Bash 的开发环境执行：
+## 数据与网络边界
+
+- 应用级 controller 持有唯一后台进程，经 v1 私有帧协议核对 PID、配置 SHA256 和状态路径。关闭页面/隐藏窗口不会释放网络；退出应用等待后台回收。退出未确认时保留归属并拒绝重启。
+- `services` 每两秒读取签名状态，再次验证当前 root、授权链、撤销、地址分配及服务签名。快照最多有效五秒；已授权不等于已测通。界面只消费公开 DTO，不打开 Photon 数据库。
+- 勾选项按信任 root 和节点隔离保存；移除失效节点，确定性生成并用真实 Mihomo 校验后原子替换配置。只更新 Photon 所属配置，保留其他订阅和代理配置。内容无变化时不重新应用网络配置。
+- SOCKS5 节点绑定 Photon 网卡。Photon 内网、选中服务地址、引导地址和当前网关公网地址进入 TUN 路由排除，同时提供直连规则。配置中的直连规则不替代操作系统路由排除。
+- 服务失效或 Photon 意外退出时，正在使用的 Photon 配置关闭已有连接并切换到拒绝新公网流量的规则；用户主动停止则关闭代理接管。该应用级处理尚不等同于经过完整崩溃/睡眠矩阵验证的系统防泄漏保证。
+
+## 准备与构建
 
 ```sh
 bash app/photon-flclash/prepare.sh
-```
-
-脚本不会覆盖不属于它的已有目录；再次执行会校验锁定版本并同步接入代码。不要在生成的目录维护修改，应修改 `overlay/` 或补丁后重新准备。FlClash 及其依赖的许可证和原有声明保留在检出目录中。
-
-## 检查与构建
-
-使用 `upstream.env` 中的 Flutter 3.47.6。FlClash 核心使用 Go 1.27.1，Photon 后台继续使用自己的 Go 1.25 工具链。完整构建还需要上游要求的 Rust、C/C++ 和 Windows Flutter 工具链。
-
-```sh
 cd build/photon-flclash/upstream
 flutter pub get
-flutter analyze --no-fatal-infos
-flutter test test/photon test/providers/system_action_test.dart test/widgets test/lint
+dart run intl_utils:generate
+flutter analyze
+flutter test test/photon test/providers/action_test.dart test/providers/system_action_test.dart test/l10n test/lint
 ```
 
-只验证 Dart 界面时，可在**临时检出**将 `hooks.user_defines.setup.build_assets` 设为 `false`，避免编译 Go 核心。完整 widget 回归仍需 Rust 编辑器库：保留 `rust_api.build_assets: true`，或按上游方式指定 `FRB_DART_LOAD_EXTERNAL_LIBRARY_NATIVE_LIB_DIR`。这些测试开关不能进入发布构建。
+`prepare.sh` 只操作它创建并标记的锁定检出，升级补丁时先校验、撤回旧补丁；发生冲突则保留原内容。请修改 `overlay/` 或补丁后重新准备，不在生成的检出中维护修改。
 
-在具备工具链的 Windows 环境，从 Photon 仓库运行：
+版本要求见 `upstream.env`：Flutter 3.47.6、FlClash Go 1.27.1、Rust 1.99.0；Photon 后台使用 Go 1.25。Windows 还需要 Visual Studio C++ 构建工具和 Windows SDK。
+
+在具备工具链的 Windows 上执行：
 
 ```powershell
 .\app\photon-flclash\build-windows.ps1 `
@@ -38,10 +43,26 @@ flutter test test/photon test/providers/system_action_test.dart test/widgets tes
   -OutputDirectory .\build\photon-flclash\windows-amd64
 ```
 
-脚本验证锁定版本、启用真实原生构建，附带 Photon 后台、Wintun、上游许可证和校验和，不携带用户配置或身份。该 Windows 打包脚本尚未执行完整构建验收。
+打包先用 `make photon-windows-build` 生成含驱动及第三方声明的后台目录。脚本验证锁定提交、子模块、接入文件摘要及编译器版本，启用真实原生构建，附带 Photon 后台、Wintun、上游许可证和 SHA256SUMS，不携带用户配置或身份。FlClash 和依赖的许可证及声明保留在源码与产物中。
 
-## 2026-11-05 验证
+仅测试 Dart 界面时，可在临时检出关闭两个 `build_assets` hook，并指定从锁定源码构建的 `FRB_DART_LOAD_EXTERNAL_LIBRARY_NATIVE_LIB_DIR`。生产构建拒绝这些关闭 hook 的检出。
 
-协议、进程、页面及上游退出流程/widget/lint 合计 1051 项回归通过，最后的局部调整后又通过 30 项相关测试。Rust 编辑器依赖由锁定源码独立构建，测试指定该库并在临时检出关闭两个原生构建 hook；生产 hook 保持开启。原始结果见 `build/validation/photon-flclash-20261105/`。Windows 打包脚本仅检查语法，未完成完整 GUI 构建或桌面验收。
+## Windows 实机验收
 
-同一 `backend.dart` 在 Windows 11 的原有 `windows-test.catofes.` 身份上运行成功：取得 `2a0d:2905:1:2f::1/128`，隧道进入就绪，向 More 的 IPv6 ping 2/3 回包，首包超时。停止后后台进程、Photon 网卡和分流路由均为零，原配置 SHA256 与数据库文件身份保持不变。这是 Dart 适配器的真实后台验收，不是完整 FlClash 窗口或双 TUN 验收；不据此声称网络无丢包。
+`overlay/integration_test/photon_windows_test.dart` 在已登录桌面执行真实控件操作，通过以下两个参数使用明确授权的测试身份和证据目录：
+
+```powershell
+flutter test integration_test/photon_windows_test.dart -d windows `
+  --dart-define=PHOTON_TEST_CONFIG=C:\Photon\config.yaml `
+  --dart-define=PHOTON_TEST_EVIDENCE=C:\Photon\acceptance
+```
+
+构建目录须先附带匹配的 `photon-windows.exe` 与 `wintun.dll`。测试涉及真实系统代理和虚拟网卡，应在隔离 Windows VM 中执行；首次免责声明使用上游的 `FLCLASH_ACCEPT_DISCLAIMER=1` 无人值守入口。测试结束恢复原开关并核对配置文件字节。
+
+2026-11-06：Go 后台测试及 101 项前端/退出/本地化/界面规则测试通过，静态检查无问题；此前完整回归 1051 项通过。Windows 已完成完整 release 构建和真实窗口六页切换、多选操作，原有 test 身份的 11 个发布节点/33 个端点可见。经 FlClash 的洛杉矶、新加坡、东京三个 HTTPS 出口均验证成功。
+
+双 TUN 的最小真实数据面已通过：普通应用不显式设置代理时走洛杉矶出口，显式 HTTP 代理仍正常，More 内网 IPv6 1232 字节 ping 3/3；Photon 公网出口仍走物理网卡，SOCKS 地址走 Photon。洛杉矶和新加坡还通过本地 Mihomo 的 UDP ASSOCIATE 完成 IPv4 DNS 查询；东京的同一 UDP 查询持续超时，TCP 正常，不能据此宣称该端点 UDP 可用。
+
+已修复网关域名被 Fake-IP 替换导致的回环，并按实际外层路径变化触发重连。自动择优/负载均衡、清空选择后的阻断、重新选择及停止后重连恢复已在真实桌面验证。物理换网/睡眠、其他 VPN、性能与长时间运行等完整矩阵仍未完成；IPv4 内网、普通用户权限拆分、首次入网设置迁移、安装升级与正式发布分别由根目录 `todo.md` D1–D8 跟踪。公开验收日志在 `build/validation/photon-flclash-full-20261105/`，不包含身份私钥。
+
+完整范围、已知限制和便携包实测见 [验收记录](../../docs/photon-windows/flclash-testing.md)。
