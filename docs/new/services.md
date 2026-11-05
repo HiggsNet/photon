@@ -8,6 +8,8 @@ Service 发布把“可信网络状态”和“容器部署”拆开：Photon da
 
 当前只提供一套固定名为 `socks5` 的服务。每个发布 network 生成一个只连接该 network 的 `socks-<network>` GOST v3 容器，HTTP proxy 由一个 `h2` GOST v3 容器提供。域名解析由各容器内的 GOST resolver 完成，默认优先返回 IPv4。
 
+应用层代理链、自动消费可信节点目录和源节点选择出口的后续方案见 [Photon Proxy 设计草案](../photon-proxy-design.md)。该方案尚未实现，不改变本文描述的 `photon-services` 行为。
+
 相关文档：IPAM assignment 与路由授权见 [routing.md](routing.md)，endpoint ACL 的规则生成见 [firewall.md](firewall.md)，`ipam.announce` 配置见 [config.md](config.md)，验收入口见 [testing.md](testing.md)。
 
 ---

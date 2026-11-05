@@ -101,6 +101,8 @@ build/photon daemon                                                     # 长期
 | [docs/new/daemon.md](docs/new/daemon.md) | daemon 单 writer 模型与 reconcile |
 | [docs/new/transport-ipsec.md](docs/new/transport-ipsec.md) | StrongSwan/IKEv2 + XFRM 数据面 |
 | [docs/new/routing.md](docs/new/routing.md) | BIRD/Babel、route、IPAM |
+| [docs/new/services.md](docs/new/services.md) | 现有 SOCKS5 服务发布与 GOST 部署 |
+| [docs/photon-proxy-design.md](docs/photon-proxy-design.md) | Photon Proxy 设计草案：应用层代理链、可信节点发现与选路，尚未实现 |
 | [docs/new/firewall.md](docs/new/firewall.md) / [health.md](docs/new/health.md) / [observer.md](docs/new/observer.md) | 防火墙、健康探测、Web 状态控制台 |
 | [docs/new/testing.md](docs/new/testing.md) | 测试与 smoke 目标说明 |
 | [docs/design.md](docs/design.md) | 完整设计文档 |
