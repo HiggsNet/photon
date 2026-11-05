@@ -2,6 +2,7 @@ package photonwindows
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -30,6 +31,7 @@ func RunConsole(ctx context.Context, config *Config, logger *slog.Logger) error 
 // Daemon owns one run of the Windows composition. Rebind is serialized with
 // gossip event processing; it does not recreate state or the protocol driver.
 type Daemon struct {
+	instanceID       string
 	config           *Config
 	logger           *slog.Logger
 	started          atomic.Bool
@@ -53,7 +55,7 @@ type rebindRequest struct {
 }
 
 func NewDaemon(config *Config, logger *slog.Logger) *Daemon {
-	return &Daemon{config: config, logger: logger, ready: make(chan struct{}), observations: make(chan meshObservationRequest), rebind: make(chan rebindRequest), plans: make(chan chan gatewayPlanSample), done: make(chan struct{}), planGateway: PlanGateway, deviceFactory: openConfiguredPacketDevice, watchResume: watchPowerResume, resolveBootstrap: resolveGossipBootstrap}
+	return &Daemon{instanceID: rand.Text(), config: config, logger: logger, ready: make(chan struct{}), observations: make(chan meshObservationRequest), rebind: make(chan rebindRequest), plans: make(chan chan gatewayPlanSample), done: make(chan struct{}), planGateway: PlanGateway, deviceFactory: openConfiguredPacketDevice, watchResume: watchPowerResume, resolveBootstrap: resolveGossipBootstrap}
 }
 
 type gatewayPlanSample struct {

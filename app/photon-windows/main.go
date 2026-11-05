@@ -29,7 +29,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	switch args[0] {
-	case "status", "peers", "routes", "diagnostics", "stop":
+	case "status", "peers", "routes", "diagnostics", "services", "stop":
 		return runControl(args[0], args[1:], stdout, stderr)
 	case "service":
 		return runServiceCommand(args[1:], stdout, stderr)
@@ -151,7 +151,7 @@ func writeUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage: photon-windows <command>")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Commands:")
-	fmt.Fprintln(w, "  status|peers|routes|diagnostics|stop --config <path>  Query or stop the live daemon")
+	fmt.Fprintln(w, "  status|peers|routes|diagnostics|services|stop --config <path>  Query or stop the live daemon")
 	fmt.Fprintln(w, "  routes --config <path> --destination <IP>          Filter the Babel route sample")
 	fmt.Fprintln(w, "  gateways --config <path>         Inspect signed gateway contacts offline (no route authorization)")
 	fmt.Fprintln(w, "  state import --config <path> --bundle <file> --key <file>  Initialize a new state database")

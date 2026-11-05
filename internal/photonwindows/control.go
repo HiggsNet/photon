@@ -65,7 +65,7 @@ func ControlEndpoint(statePath string) (string, error) {
 
 func controlMethod(method string) bool {
 	switch method {
-	case "status", "peers", "routes", "diagnostics", "stop":
+	case "status", "peers", "routes", "diagnostics", "services", "stop":
 		return true
 	}
 	return false
@@ -162,6 +162,23 @@ func controlResult(ctx context.Context, daemon ControlDaemon, method string) Con
 			return fail("stop_failed", "daemon shutdown did not complete")
 		}
 		response.Result = json.RawMessage(`{"stopped":true}`)
+		return response
+	}
+	if method == "services" {
+		owner, ok := daemon.(interface {
+			Services(context.Context) (ServiceDirectory, error)
+		})
+		if !ok {
+			return fail("unavailable", "service directory is unavailable")
+		}
+		directory, err := owner.Services(ctx)
+		if err != nil {
+			return fail("unavailable", "verified service directory is unavailable")
+		}
+		response.Result, err = json.Marshal(directory)
+		if err != nil {
+			return fail("unavailable", "service directory could not be encoded")
+		}
 		return response
 	}
 	observation, err := daemon.Observe(ctx)

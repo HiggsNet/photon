@@ -17,6 +17,7 @@ import (
 
 type controlTestDaemon struct {
 	observed    atomic.Int32
+	services    atomic.Int32
 	stopped     atomic.Bool
 	stopGate    <-chan struct{}
 	stopStarted chan struct{}
@@ -25,6 +26,10 @@ type controlTestDaemon struct {
 func (d *controlTestDaemon) Observe(context.Context) (Observation, error) {
 	d.observed.Add(1)
 	return Observation{Running: true, Revision: 7}, nil
+}
+func (d *controlTestDaemon) Services(context.Context) (ServiceDirectory, error) {
+	d.services.Add(1)
+	return ServiceDirectory{InstanceID: "test", Services: []ServiceEntry{}}, nil
 }
 func (d *controlTestDaemon) Stop(ctx context.Context) error {
 	if d.stopStarted != nil {
@@ -52,7 +57,7 @@ func TestControlStrictRequest(t *testing.T) {
 			t.Errorf("accepted %s", body)
 		}
 	}
-	for _, method := range []string{"status", "peers", "routes", "diagnostics", "stop"} {
+	for _, method := range []string{"status", "peers", "routes", "diagnostics", "services", "stop"} {
 		got, err := decodeControlRequest([]byte(`{"version":1,"method":"` + method + `"}`))
 		if err != nil || got != method {
 			t.Fatalf("%s: %q %v", method, got, err)
@@ -73,7 +78,7 @@ func TestControlFramesBounded(t *testing.T) {
 }
 func TestControlExchangeUsesOnlyOwner(t *testing.T) {
 	daemon := &controlTestDaemon{}
-	for _, method := range []string{"status", "peers", "routes", "diagnostics", "stop"} {
+	for _, method := range []string{"status", "peers", "routes", "diagnostics", "services", "stop"} {
 		client, server := net.Pipe()
 		deadline := time.Now().Add(time.Second)
 		_ = client.SetDeadline(deadline)
@@ -89,7 +94,7 @@ func TestControlExchangeUsesOnlyOwner(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if daemon.observed.Load() != 4 || !daemon.stopped.Load() {
+	if daemon.observed.Load() != 4 || daemon.services.Load() != 1 || !daemon.stopped.Load() {
 		t.Fatal("did not call one runtime owner")
 	}
 }
