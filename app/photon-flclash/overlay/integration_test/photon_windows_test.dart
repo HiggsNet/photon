@@ -74,6 +74,10 @@ void main() {
       final labels = currentAppLocalizations;
       final originalTun = container.read(patchClashConfigProvider).tun;
       final originalProxy = container.read(networkSettingProvider).systemProxy;
+      final originalLogs = container.read(appSettingProvider).openLogs;
+      container
+          .read(appSettingProvider.notifier)
+          .update((state) => state.copyWith(openLogs: true));
       try {
         await photonController.initialize();
         await photonController.pickConfig(() async => _config);
@@ -199,6 +203,34 @@ void main() {
           }
         }
         results['proxy_traces'] = traces;
+        expect(
+          traces.where((trace) => trace.containsKey('udp_dns')),
+          isNotEmpty,
+          reason: 'At least one selected exit must relay a real UDP DNS query',
+        );
+        final groupTraces = <Map<String, dynamic>>[];
+        for (final group in ['Photon Auto', 'Photon Balance']) {
+          await container
+              .read(proxiesActionProvider.notifier)
+              .changeProxy(groupName: 'Photon', proxyName: group);
+          final probe = await Process.run('curl.exe', [
+            '--silent',
+            '--show-error',
+            '--max-time',
+            '20',
+            '--proxy',
+            'http://127.0.0.1:$port',
+            'https://www.cloudflare.com/cdn-cgi/trace',
+          ]);
+          groupTraces.add({
+            'group': group,
+            'exit_code': probe.exitCode,
+            'trace': probe.stdout,
+            'error': probe.stderr,
+          });
+          expect(probe.exitCode, 0, reason: '$group: ${probe.stderr}');
+        }
+        results['group_traces'] = groupTraces;
         await container
             .read(proxiesActionProvider.notifier)
             .changeProxy(groupName: 'Photon', proxyName: endpoints.first.name);
@@ -320,21 +352,112 @@ void main() {
         expect(direct.exitCode, 0, reason: '${direct.stderr}');
         expect(ping.exitCode, 0);
         expect(photonController.observation?['tunnel_ready'], isTrue);
+        for (final id in photonController.selected.toList()) {
+          await photonController.toggleEndpoint(id, false);
+        }
+        expect(photonController.selected, isEmpty);
+        expect(container.read(isStartProvider), isTrue);
+        final blocked = await Process.run('curl.exe', [
+          '--silent',
+          '--show-error',
+          '--max-time',
+          '10',
+          '--proxy',
+          'http://127.0.0.1:$port',
+          'https://www.cloudflare.com/cdn-cgi/trace',
+        ]);
+        results['empty_selection_blocked'] = {
+          'exit_code': blocked.exitCode,
+          'error': blocked.stderr,
+        };
+        expect(blocked.exitCode, isNot(0));
+        expect(photonController.hasLease, isTrue);
+        for (final endpoint in endpoints) {
+          await photonController.toggleEndpoint(endpoint.id, true);
+        }
+        await waitFor(
+          () => photonProxyBridge.ready,
+          'restore authorized selections',
+        );
+        expect(
+          photonController.selected.containsAll(
+            endpoints.map((endpoint) => endpoint.id),
+          ),
+          isTrue,
+        );
+        await photonController.stop();
+        expect(photonController.hasLease, isFalse);
+        expect(container.read(isStartProvider), isFalse);
+        await photonController.start(allowed: true);
+        await waitFor(
+          () => photonController.observation?['tunnel_ready'] == true,
+          'Photon reconnect',
+        );
+        expect(
+          photonController.selected.containsAll(
+            endpoints.map((endpoint) => endpoint.id),
+          ),
+          isTrue,
+        );
+        await photonController.applyProxies(photonProxyBridge.apply);
+        await waitFor(
+          () => photonProxyBridge.ready && container.read(isStartProvider),
+          'proxy recovery after Photon reconnect',
+        );
+        final recovered = await Process.run('curl.exe', [
+          '--silent',
+          '--show-error',
+          '--max-time',
+          '20',
+          '--noproxy',
+          '*',
+          'https://www.cloudflare.com/cdn-cgi/trace',
+        ]);
+        results['reconnected_tun'] = {
+          'exit_code': recovered.exitCode,
+          'trace': recovered.stdout,
+          'error': recovered.stderr,
+        };
+        final directSocks = await Process.run('curl.exe', [
+          '--silent',
+          '--show-error',
+          '--max-time',
+          '20',
+          '--proxy',
+          'socks5h://${endpoints.first.authority}',
+          'https://www.cloudflare.com/cdn-cgi/trace',
+        ]);
+        results['reconnect_direct_socks'] = {
+          'exit_code': directSocks.exitCode,
+          'trace': directSocks.stdout,
+          'error': directSocks.stderr,
+        };
+        results['reconnect_observation'] = photonController.observation;
+        results['reconnect_core_logs'] = container
+            .read(logsProvider)
+            .list
+            .map((log) => log.toJson())
+            .toList();
+        expect(recovered.exitCode, 0, reason: '${recovered.stderr}');
         await File(
           '${output.path}/result.json',
         ).writeAsString(const JsonEncoder.withIndent('  ').convert(results));
       } finally {
         results['controller_error'] = photonController.error?.toString();
+        await photonController.stop();
         container
             .read(patchClashConfigProvider.notifier)
             .update((state) => state.copyWith(tun: originalTun));
-        await photonController.stop();
         container
             .read(networkSettingProvider.notifier)
             .update((state) => state.copyWith(systemProxy: originalProxy));
         await container.read(setupActionProvider.notifier).setRunning(false);
+        container
+            .read(appSettingProvider.notifier)
+            .update((state) => state.copyWith(openLogs: originalLogs));
         await Future<void>.delayed(const Duration(seconds: 3));
         await tester.pump();
+        await preferences.saveConfig(container.read(configProvider));
         expect(await File(_config).readAsBytes(), originalConfig);
         await File(
           '${output.path}/partial-result.json',

@@ -248,4 +248,25 @@ void main() {
     await controller.close();
     controller.dispose();
   });
+
+  test(
+    'a selection refreshes expired authorization before applying intent',
+    () async {
+      final backend = FakeBackend()
+        ..serviceSample = directoryFixture(
+          now: DateTime.now().subtract(const Duration(milliseconds: 4000)),
+        );
+      final controller = PhotonController(createBackend: () => backend)
+        ..selectConfig('/test/config.yaml');
+      await controller.start(allowed: true);
+      await Future<void>.delayed(const Duration(milliseconds: 1100));
+      expect(controller.directoryFresh, isFalse);
+      backend.serviceSample = directoryFixture();
+      await controller.toggleEndpoint('1' * 32, true);
+      expect(controller.selected, {'1' * 32});
+      expect(controller.directoryFresh, isTrue);
+      await controller.close();
+      controller.dispose();
+    },
+  );
 }

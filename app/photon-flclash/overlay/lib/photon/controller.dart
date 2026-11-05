@@ -117,7 +117,10 @@ final class PhotonController extends ChangeNotifier {
     if (!hasLease && !_closed) await start(allowed: allowed);
   }
 
-  Future<void> _refreshServices(PhotonBackend backend) async {
+  Future<void> _refreshServices(
+    PhotonBackend backend, {
+    bool publish = true,
+  }) async {
     try {
       final next = PhotonDirectory.fromJson(await backend.services());
       if (!next.fresh(DateTime.now())) {
@@ -151,7 +154,7 @@ final class PhotonController extends ChangeNotifier {
           );
         }
       });
-      await onServicesChanged?.call(next, selected);
+      if (publish) await onServicesChanged?.call(next, selected);
     } catch (error) {
       _error = error;
       await _invalidateServices();
@@ -159,6 +162,10 @@ final class PhotonController extends ChangeNotifier {
   }
 
   Future<void> toggleEndpoint(String id, bool enabled) => _enqueue(() async {
+    final backend = _backend;
+    if (!directoryFresh && backend != null) {
+      await _refreshServices(backend, publish: false);
+    }
     final current = _directory;
     if (current == null ||
         !directoryFresh ||

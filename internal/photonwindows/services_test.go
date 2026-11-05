@@ -13,6 +13,7 @@ import (
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/HiggsNet/photon/pkg/routing"
 	photonservice "github.com/HiggsNet/photon/pkg/service"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func TestServiceDirectoryRevalidatesSignedFacts(t *testing.T) {
@@ -138,6 +139,42 @@ func TestProxyBypassDomainAcceptsOnlyLiteralHostnames(t *testing.T) {
 	for input, want := range map[string]string{"Gateway.Example.": "gateway.example", "bootstrap.example": "bootstrap.example", "192.0.2.1": "", "2001:db8::1": "", "*.example": "", "#DIRECT": "", "bad name": "", "a..example": "", "-a.example": "", "a/path": ""} {
 		if got := proxyBypassDomain(input); got != want {
 			t.Errorf("%q: %q != %q", input, got, want)
+		}
+	}
+}
+
+func TestServiceDirectoryProtectsSignedGatewayDNSBeforeFirstPlan(t *testing.T) {
+	for _, badSignature := range []bool{false, true} {
+		network, _, private := signedNetwork(t)
+		root := private.Public().(ed25519.PublicKey)
+		network.Zones[zone.RootZone].Authority = photoncrypto.ConfiguredRootAuthority(root)
+		if err := photoncrypto.SignDelegation(network.Zones[zone.RootZone].Delegations["catofes."], zone.RootZone, private); err != nil {
+			t.Fatal(err)
+		}
+		owner := zone.ZonePath("node-a.catofes.")
+		data, err := json.Marshal(ipsec.AddressRecord{Version: 1, Addresses: []ipsec.AddressAdvertisement{{ID: "dns", Source: ipsec.SourceManualDNS, Host: "Gateway.Example.", Families: []string{ipsec.FamilyIPv4}, RefreshSeconds: 60}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		record := &zone.Record{Zone: owner, Key: ipsec.RecordKeyAddresses, Type: ipsec.RecordTypeAddresses, Value: data, Version: 1, Timestamp: time.Now().Unix()}
+		if err := photoncrypto.SignRecord(record, private); err != nil {
+			t.Fatal(err)
+		}
+		if badSignature {
+			record.Signature[0] ^= 1
+		}
+		network.Zones[owner].Records[record.Key] = record
+		config := &Config{ManagedZone: "client.catofes.", TrustedRootPublicKey: root, Gateway: GatewayConfig{AllowedZones: []zone.ZonePath{owner}}}
+		result, err := buildServiceDirectory(t.Context(), config, corestate.View{State: &corestate.VerifiedState{Network: network}}, "first-instance", time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if badSignature {
+			if len(result.BypassDomains) != 0 {
+				t.Fatal("unsigned domain bypass", result)
+			}
+		} else if len(result.BypassDomains) != 1 || result.BypassDomains[0] != "gateway.example" {
+			t.Fatal("bootstrap DNS missing before planner", result)
 		}
 	}
 }

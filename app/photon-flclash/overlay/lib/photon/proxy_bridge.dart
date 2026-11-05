@@ -181,8 +181,8 @@ final class PhotonProxyBridge {
       return;
     }
     final core = container.read(coreHandlerProvider);
-    await core.closeConnections();
     if (explicitStop) {
+      await core.closeConnections();
       await container.read(setupActionProvider.notifier).setRunning(false);
       return;
     }
@@ -194,22 +194,29 @@ final class PhotonProxyBridge {
       'proxy-groups': <dynamic>[],
       'rules': [
         for (final rule in _lastProfile?['rules'] as List? ?? const [])
-          if (rule is String && rule.startsWith('IP-CIDR')) rule,
+          if (rule is String &&
+              (rule.startsWith('IP-CIDR') ||
+                  rule.startsWith('PROCESS-PATH-REGEX,')))
+            rule,
         'MATCH,REJECT',
       ],
     };
+    final content = encodePhotonProfile(blocked);
+    final digest = sha256.convert(utf8.encode(content)).toString();
+    if (_profileDigest == digest) return;
+    await core.closeConnections();
     container
         .read(patchClashConfigProvider.notifier)
         .update((state) => state.copyWith(mode: Mode.rule));
     await profile.saveFile(
-      Uint8List.fromList(utf8.encode(encodePhotonProfile(blocked))),
+      Uint8List.fromList(utf8.encode(content)),
       validate: core.validateProfile,
     );
-    _profileDigest = null;
     final applied = await container
         .read(setupActionProvider.notifier)
         .applyProfile(force: true, silence: true);
     if (!applied) throw StateError('Could not pause the Photon proxy profile');
+    _profileDigest = digest;
   }
 }
 

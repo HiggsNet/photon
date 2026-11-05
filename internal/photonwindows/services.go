@@ -16,6 +16,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	photonservice "github.com/HiggsNet/photon/pkg/service"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 type ServiceDirectory struct {
@@ -114,6 +115,27 @@ func buildServiceDirectory(ctx context.Context, config *Config, view corestate.V
 		}
 	}
 	verifier := &photoncrypto.Verifier{}
+	// Publish DNS bootstrap protection before the first online plan completes.
+	// Otherwise a reconnect can briefly replace real gateway DNS with Fake-IP.
+	for _, peer := range gatewayCandidateZones(config, view) {
+		zs := network.Zones[peer]
+		if zs == nil || peer == config.ManagedZone || verifier.VerifyChain(network, peer, now) != nil {
+			continue
+		}
+		record := zs.Records[ipsec.RecordKeyAddresses]
+		if record == nil || record.Zone != peer || record.Key != ipsec.RecordKeyAddresses || verifier.VerifyRecord(record, zs.Authority, now) != nil {
+			continue
+		}
+		addresses, err := ipsec.ParseAddressRecord(record)
+		if err != nil {
+			continue
+		}
+		for _, address := range addresses.Addresses {
+			if domain := proxyBypassDomain(address.Host); domain != "" {
+				out.BypassDomains = append(out.BypassDomains, domain)
+			}
+		}
+	}
 	authorized := currentAuthorizedRouteSetWithVerifier(config, view, now, verifier)
 	paths := make([]zone.ZonePath, 0, len(network.Zones))
 	for path := range network.Zones {
@@ -181,6 +203,8 @@ func buildServiceDirectory(ctx context.Context, config *Config, view corestate.V
 			out.Services = append(out.Services, entry)
 		}
 	}
+	slices.Sort(out.BypassDomains)
+	out.BypassDomains = slices.Compact(out.BypassDomains)
 	return out, ctx.Err()
 }
 
