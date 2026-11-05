@@ -133,3 +133,11 @@ func TestServiceDirectoryDaemonLifecycle(t *testing.T) {
 		t.Fatal("stopped daemon returned a directory")
 	}
 }
+
+func TestProxyBypassDomainAcceptsOnlyLiteralHostnames(t *testing.T) {
+	for input, want := range map[string]string{"Gateway.Example.": "gateway.example", "bootstrap.example": "bootstrap.example", "192.0.2.1": "", "2001:db8::1": "", "*.example": "", "#DIRECT": "", "bad name": "", "a..example": "", "-a.example": "", "a/path": ""} {
+		if got := proxyBypassDomain(input); got != want {
+			t.Errorf("%q: %q != %q", input, got, want)
+		}
+	}
+}

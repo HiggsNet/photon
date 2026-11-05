@@ -13,6 +13,8 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
+import 'socks_probe.dart';
+
 const _config = String.fromEnvironment('PHOTON_TEST_CONFIG');
 const _evidence = String.fromEnvironment('PHOTON_TEST_EVIDENCE');
 
@@ -30,8 +32,16 @@ void main() {
       final output = Directory(_evidence);
       await output.create(recursive: true);
       final results = <String, dynamic>{};
+      Future<void> phase(String value) async {
+        await File('${output.path}/phase.txt').writeAsString(value);
+        // Leave the real desktop visible for an independent VM console capture.
+        await Future<void>.delayed(const Duration(seconds: 3));
+      }
+
       final originalConfig = await File(_config).readAsBytes();
+      final testErrorHandler = FlutterError.onError;
       application.main([]);
+      FlutterError.onError = testErrorHandler;
 
       Future<void> waitFor(
         bool Function() check,
@@ -40,7 +50,9 @@ void main() {
       }) async {
         final deadline = DateTime.now().add(Duration(seconds: seconds));
         while (!check()) {
-          if (DateTime.now().isAfter(deadline)) fail('Timed out: $description');
+          if (DateTime.now().isAfter(deadline)) {
+            fail('Timed out: $description; Photon: ${photonController.error}');
+          }
           await tester.pump(const Duration(milliseconds: 100));
           await Future<void>.delayed(const Duration(milliseconds: 100));
         }
@@ -78,6 +90,7 @@ void main() {
           'existing identity admission and tunnel',
         );
         results['connected'] = photonController.observation;
+        await phase('connected');
         final tabs = [
           labels.photonTunnel,
           labels.peers,
@@ -89,6 +102,7 @@ void main() {
           await tester.tap(find.text(label).first);
           await tester.pump(const Duration(milliseconds: 400));
           expect(find.byType(PhotonView), findsOneWidget);
+          await phase('tab-$label');
         }
         final directory = photonController.directory!;
         final wanted = {
@@ -117,8 +131,16 @@ void main() {
             scrollable: scrollable,
             maxScrolls: 30,
           );
+          await Scrollable.ensureVisible(
+            tester.element(find.byKey(ValueKey(endpoint.id))),
+            alignment: 0.5,
+          );
+          await waitFor(() => !photonController.busy, 'selection idle');
           await tester.tap(find.byKey(ValueKey(endpoint.id)));
-          await tester.pump(const Duration(milliseconds: 300));
+          await waitFor(
+            () => photonController.selected.contains(endpoint.id),
+            'selected ${endpoint.owner}',
+          );
         }
         expect(
           photonController.selected.containsAll(
@@ -142,6 +164,7 @@ void main() {
           'proxy profile activation',
           seconds: 90,
         );
+        await phase('proxies-selected');
         final port = container.read(patchClashConfigProvider).mixedPort;
         final traces = <Map<String, dynamic>>[];
         for (final endpoint in endpoints) {
@@ -169,8 +192,16 @@ void main() {
             reason: '${endpoint.owner}: ${result.stderr}',
           );
           expect(result.stdout as String, contains('ip='));
+          try {
+            traces.last['udp_dns'] = await probeSocksUDP(port);
+          } catch (error) {
+            traces.last['udp_error'] = '$error';
+          }
         }
         results['proxy_traces'] = traces;
+        await container
+            .read(proxiesActionProvider.notifier)
+            .changeProxy(groupName: 'Photon', proxyName: endpoints.first.name);
         container
             .read(patchClashConfigProvider.notifier)
             .update((state) => state.copyWith.tun(enable: true));
@@ -181,6 +212,12 @@ void main() {
           isTrue,
         );
         await Future<void>.delayed(const Duration(seconds: 5));
+        await waitFor(
+          () =>
+              photonController.observation?['tunnel_ready'] == true &&
+              photonProxyBridge.ready,
+          'tunnel remains ready after proxy TUN activation',
+        );
         final network = await Process.run('powershell.exe', [
           '-NoProfile',
           '-NonInteractive',
@@ -188,6 +225,8 @@ void main() {
           r'Get-NetAdapter -IncludeHidden | Where-Object {$_.Name -eq "Photon Windows Test" -or $_.Name -eq "FlClash"} | Select-Object Name,Status,InterfaceIndex | ConvertTo-Json',
         ]);
         results['dual_tun_adapters'] = network.stdout;
+        results['after_tun_observation'] = photonController.observation;
+        await phase('dual-tun');
         final direct = await Process.run('curl.exe', [
           '--silent',
           '--show-error',
@@ -202,7 +241,59 @@ void main() {
           'trace': direct.stdout,
           'error': direct.stderr,
         };
-        expect(direct.exitCode, 0, reason: '${direct.stderr}');
+        final routing = await Process.run('powershell.exe', [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          r"@('1.1.1.1','123.57.143.66','2a0d:2905:1:a::20') | ForEach-Object { Find-NetRoute -RemoteIPAddress $_ } | Select-Object IPAddress,DestinationPrefix,NextHop,InterfaceIndex,InterfaceAlias,RouteMetric | ConvertTo-Json",
+        ]);
+        results['routes'] = routing.stdout;
+        final proxyAfterTun = await Process.run('curl.exe', [
+          '--silent',
+          '--show-error',
+          '--max-time',
+          '20',
+          '--proxy',
+          'http://127.0.0.1:$port',
+          'https://www.cloudflare.com/cdn-cgi/trace',
+        ]);
+        results['proxy_after_tun'] = {
+          'exit_code': proxyAfterTun.exitCode,
+          'trace': proxyAfterTun.stdout,
+          'error': proxyAfterTun.stderr,
+        };
+        if (direct.exitCode != 0) {
+          final alternatives = <Map<String, dynamic>>[];
+          for (final stack in [
+            TunStack.gvisor,
+            TunStack.system,
+            TunStack.mixed,
+          ]) {
+            container
+                .read(patchClashConfigProvider.notifier)
+                .update((state) => state.copyWith.tun(stack: stack));
+            await container
+                .read(setupActionProvider.notifier)
+                .applyProfile(force: true);
+            await Future<void>.delayed(const Duration(seconds: 3));
+            final probe = await Process.run('curl.exe', [
+              '--silent',
+              '--show-error',
+              '--max-time',
+              '15',
+              '--noproxy',
+              '*',
+              'https://www.cloudflare.com/cdn-cgi/trace',
+            ]);
+            alternatives.add({
+              'stack': stack.name,
+              'exit_code': probe.exitCode,
+              'trace': probe.stdout,
+              'error': probe.stderr,
+            });
+          }
+          results['tun_stack_diagnostics'] = alternatives;
+        }
         final ping = await Process.run('ping.exe', [
           '-6',
           '-n',
@@ -217,12 +308,23 @@ void main() {
           'exit_code': ping.exitCode,
           'output': ping.stdout,
         };
+        results['core_logs'] = container
+            .read(logsProvider)
+            .list
+            .map((log) => log.toJson())
+            .toList();
+        results['connections'] =
+            (await container.read(coreHandlerProvider).getConnections())
+                .map((connection) => connection.toJson())
+                .toList();
+        expect(direct.exitCode, 0, reason: '${direct.stderr}');
         expect(ping.exitCode, 0);
         expect(photonController.observation?['tunnel_ready'], isTrue);
         await File(
           '${output.path}/result.json',
         ).writeAsString(const JsonEncoder.withIndent('  ').convert(results));
       } finally {
+        results['controller_error'] = photonController.error?.toString();
         container
             .read(patchClashConfigProvider.notifier)
             .update((state) => state.copyWith(tun: originalTun));
@@ -231,6 +333,8 @@ void main() {
             .read(networkSettingProvider.notifier)
             .update((state) => state.copyWith(systemProxy: originalProxy));
         await container.read(setupActionProvider.notifier).setRunning(false);
+        await Future<void>.delayed(const Duration(seconds: 3));
+        await tester.pump();
         expect(await File(_config).readAsBytes(), originalConfig);
         await File(
           '${output.path}/partial-result.json',

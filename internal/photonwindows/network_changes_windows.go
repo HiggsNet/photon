@@ -3,6 +3,7 @@ package photonwindows
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -36,11 +37,25 @@ var networkChangeCallback = windows.NewCallback(func(token *byte, _ uintptr, kin
 })
 
 func watchNetworkChanges(ctx context.Context) (<-chan struct{}, func() error, error) {
+	return watchNetworkSnapshot(ctx, underlaySnapshot)
+}
+
+func watchNetworkChangesForTargets(ctx context.Context, targets func() []netip.Addr) (<-chan struct{}, func() error, error) {
+	return watchNetworkSnapshot(ctx, func() ([32]byte, error) {
+		addresses := targets()
+		if len(addresses) == 0 {
+			return underlaySnapshot()
+		}
+		return outboundRouteSnapshot(addresses)
+	})
+}
+
+func watchNetworkSnapshot(ctx context.Context, snapshot func() ([32]byte, error)) (<-chan struct{}, func() error, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
 	changes := make(chan struct{}, 1)
-	previous, err := underlaySnapshot()
+	previous, err := snapshot()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -91,7 +106,7 @@ func watchNetworkChanges(ctx context.Context) (<-chan struct{}, func() error, er
 				return
 			case <-subscription.raw:
 			}
-			current, err := underlaySnapshot()
+			current, err := snapshot()
 			changed := subscription.initial.Swap(false)
 			if err != nil {
 				changed = changed || !failed // one rebind per continuous query failure

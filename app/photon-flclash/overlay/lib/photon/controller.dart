@@ -140,7 +140,11 @@ final class PhotonController extends ChangeNotifier {
         if (!directoryFresh) {
           unawaited(
             _enqueue(
-              _invalidateServices,
+              () async {
+                if (identical(_directory, next) && !directoryFresh) {
+                  await _invalidateServices();
+                }
+              },
               clearError: false,
               cleanupOnError: false,
             ),

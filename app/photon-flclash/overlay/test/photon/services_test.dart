@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:fl_clash/photon/controller.dart';
 import 'package:fl_clash/photon/preferences.dart';
 import 'package:fl_clash/photon/services.dart';
@@ -20,6 +21,7 @@ Map<String, dynamic> directoryFixture({
     'valid_until': at.add(const Duration(seconds: 5)).toIso8601String(),
     'adapter_name': 'Photon Test',
     'bypass_prefixes': ['192.0.2.1/32', 'fd42::/16'],
+    'bypass_domains': ['gateway.example'],
     'services': [
       {
         'id': 'owner/services/socks5',
@@ -90,6 +92,12 @@ void main() {
         'load-balance',
       ]);
       expect(groups.first['proxies'], isNot(contains('DIRECT')));
+      final dns = profile['dns'] as Map;
+      expect(dns['fake-ip-filter'], contains('gateway.example'));
+      expect(
+        (dns['nameserver-policy'] as Map)['gateway.example'],
+        everyElement(endsWith('#DIRECT')),
+      );
       final tun = profile['tun'] as Map;
       expect(tun['enable'], isFalse);
       expect(
@@ -203,6 +211,28 @@ void main() {
       controller.dispose();
     },
   );
+
+  test('queued expiry cannot invalidate a newer service snapshot', () async {
+    final backend = FakeBackend()
+      ..serviceSample = directoryFixture(
+        now: DateTime.now().subtract(const Duration(milliseconds: 4000)),
+      );
+    final controller = PhotonController(createBackend: () => backend)
+      ..selectConfig('/test/config.yaml');
+    await controller.start(allowed: true);
+    final gate = Completer<void>();
+    backend.servicesWait = gate;
+    final refreshing = controller.refresh();
+    await Future<void>.delayed(const Duration(milliseconds: 1100));
+    backend.serviceSample = directoryFixture();
+    gate.complete();
+    await refreshing;
+    await Future<void>.delayed(Duration.zero);
+    expect(controller.directoryFresh, isTrue);
+    expect(controller.hasLease, isTrue);
+    await controller.close();
+    controller.dispose();
+  });
 
   test('failed proxy cleanup still joins the Photon backend', () async {
     final backend = FakeBackend();

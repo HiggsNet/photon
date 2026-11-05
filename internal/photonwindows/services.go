@@ -28,6 +28,7 @@ type ServiceDirectory struct {
 	Services        []ServiceEntry `json:"services"`
 	AdapterName     string         `json:"adapter_name"`
 	BypassPrefixes  []netip.Prefix `json:"bypass_prefixes"`
+	BypassDomains   []string       `json:"bypass_domains"`
 }
 
 type ServiceEntry struct {
@@ -68,6 +69,9 @@ func (d *Daemon) Services(ctx context.Context) (ServiceDirectory, error) {
 		}
 		for _, candidate := range sample.plan.Candidates {
 			for _, contact := range candidate.Contacts {
+				if host := proxyBypassDomain(contact.Host); host != "" {
+					directory.BypassDomains = append(directory.BypassDomains, host)
+				}
 				if address, err := netip.ParseAddr(contact.Address); err == nil {
 					directory.BypassPrefixes = append(directory.BypassPrefixes, netip.PrefixFrom(address, address.BitLen()))
 				}
@@ -75,6 +79,8 @@ func (d *Daemon) Services(ctx context.Context) (ServiceDirectory, error) {
 		}
 		slices.SortFunc(directory.BypassPrefixes, func(a, b netip.Prefix) int { return strings.Compare(a.String(), b.String()) })
 		directory.BypassPrefixes = slices.Compact(directory.BypassPrefixes)
+		slices.Sort(directory.BypassDomains)
+		directory.BypassDomains = slices.Compact(directory.BypassDomains)
 		return directory, nil
 	case <-d.done:
 		return ServiceDirectory{}, net.ErrClosed
@@ -95,9 +101,16 @@ func buildServiceDirectory(ctx context.Context, config *Config, view corestate.V
 	out := ServiceDirectory{InstanceID: instanceID, RootFingerprint: hex.EncodeToString(root[:]), ManagedZone: config.ManagedZone, Revision: uint64(view.Revision), ObservedAt: now, ValidUntil: now.Add(5 * time.Second), Services: []ServiceEntry{}}
 	out.AdapterName = config.Wintun.AdapterName
 	out.BypassPrefixes = slices.Clone(config.Overlay.SplitRoutes)
+	for _, address := range gossipRouteTargets(view, now) {
+		out.BypassPrefixes = append(out.BypassPrefixes, netip.PrefixFrom(address, address.BitLen()))
+	}
 	for _, hint := range config.Gateway.BootstrapHints {
 		if endpoint, err := netip.ParseAddrPort(hint.Address); err == nil {
 			out.BypassPrefixes = append(out.BypassPrefixes, netip.PrefixFrom(endpoint.Addr(), endpoint.Addr().BitLen()))
+		} else if host, _, err := net.SplitHostPort(hint.Address); err == nil {
+			if domain := proxyBypassDomain(host); domain != "" {
+				out.BypassDomains = append(out.BypassDomains, domain)
+			}
 		}
 	}
 	verifier := &photoncrypto.Verifier{}
@@ -169,4 +182,22 @@ func buildServiceDirectory(ctx context.Context, config *Config, view corestate.V
 		}
 	}
 	return out, ctx.Err()
+}
+
+func proxyBypassDomain(host string) string {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	if _, err := netip.ParseAddr(host); err == nil || host == "" || len(host) > 253 {
+		return ""
+	}
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return ""
+		}
+		for _, c := range label {
+			if c != '-' && (c < 'a' || c > 'z') && (c < '0' || c > '9') {
+				return ""
+			}
+		}
+	}
+	return host
 }

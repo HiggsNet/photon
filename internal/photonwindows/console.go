@@ -207,7 +207,9 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	if err := driver.StartGossipTransport(ctx, transport, func(err error) { logger.Warn("gossip_receive_failed", "error", err) }); err != nil {
 		return err
 	}
-	networkChanges, stopNetworkChanges, err := watchNetworkChanges(ctx)
+	networkTargets := networkRouteTargets{splitRoutes: config.Overlay.SplitRoutes}
+	networkTargets.update(GatewayPlan{}, bootstrap)
+	networkChanges, stopNetworkChanges, err := watchNetworkChangesForTargets(ctx, networkTargets.load)
 	if err != nil {
 		return fmt.Errorf("watch network changes: %w", err)
 	}
@@ -227,6 +229,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		plan         GatewayPlan
 		bootstrap    map[string]*net.UDPAddr
 		bootstrapErr error
+		paths        []netip.Addr
 	}
 	planRequests := make(chan planRequest, 1)
 	plans := make(chan planResult, 1)
@@ -244,8 +247,10 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				view := state.Store().ReadView()
 				plan := d.planGateway(request.ctx, config, view, time.Now())
 				plan = RevalidateGatewayPlan(config, view, plan, time.Now())
+				paths := networkRouteTargets{splitRoutes: config.Overlay.SplitRoutes}
+				paths.update(plan, bootstrap, gossipRouteTargets(view, time.Now())...)
 				select {
-				case plans <- planResult{request.generation, plan, bootstrap, bootstrapErr}:
+				case plans <- planResult{request.generation, plan, bootstrap, bootstrapErr, paths.load()}:
 				case <-plannerCtx.Done():
 				}
 			}
@@ -468,6 +473,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				logger.Info("gateway_plan_changed", "plan", result.plan, "tunnel_ready", false)
 			}
 			lastPlan = result.plan
+			networkTargets.addresses.Store(&result.paths)
 			mesh.stateMu.Lock()
 			mesh.update(lastPlan)
 			observeReady()

@@ -12,6 +12,7 @@ final class PhotonDirectory {
     required this.services,
     required this.adapterName,
     required this.bypassPrefixes,
+    required this.bypassDomains,
   });
 
   factory PhotonDirectory.fromJson(Map<String, dynamic> data) {
@@ -52,6 +53,7 @@ final class PhotonDirectory {
       services: List.unmodifiable(entries),
       adapterName: data['adapter_name'] as String? ?? '',
       bypassPrefixes: List<String>.from(data['bypass_prefixes'] as List? ?? []),
+      bypassDomains: List<String>.from(data['bypass_domains'] as List? ?? []),
     );
   }
 
@@ -64,6 +66,7 @@ final class PhotonDirectory {
   final List<PhotonService> services;
   final String adapterName;
   final List<String> bypassPrefixes;
+  final List<String> bypassDomains;
 
   String get scope => '$rootFingerprint/$managedZone';
   bool fresh(DateTime now) =>
@@ -210,6 +213,25 @@ Map<String, dynamic> photonProxyProfile({
     'ipv6': true,
     'mode': 'rule',
     'allow-lan': false,
+    'dns': {
+      'enable': true,
+      'ipv6': true,
+      'enhanced-mode': 'fake-ip',
+      'fake-ip-filter-mode': 'blacklist',
+      'fake-ip-filter': directory.bypassDomains,
+      'default-nameserver': ['223.5.5.5', '1.1.1.1'],
+      'nameserver': [
+        'https://doh.pub/dns-query',
+        'https://dns.alidns.com/dns-query',
+      ],
+      'nameserver-policy': {
+        for (final domain in directory.bypassDomains)
+          domain: [
+            'https://223.5.5.5/dns-query#DIRECT',
+            'https://1.1.1.1/dns-query#DIRECT',
+          ],
+      },
+    },
     'tun': {
       'enable': false,
       'auto-route': true,

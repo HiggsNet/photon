@@ -8,6 +8,7 @@ class FakeBackend implements PhotonBackend {
   final calls = <String>[];
   final exited = Completer<int>();
   Completer<void>? starting;
+  Completer<void>? servicesWait;
   StateError? statusError;
   Map<String, dynamic> sample = {'running': true, 'tunnel_ready': true};
   bool failStop = false;
@@ -32,6 +33,7 @@ class FakeBackend implements PhotonBackend {
 
   @override
   Future<Map<String, dynamic>> services() async {
+    await servicesWait?.future;
     final now = DateTime.now().toUtc();
     return serviceSample ??
         {
