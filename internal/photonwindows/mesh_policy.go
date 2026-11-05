@@ -17,7 +17,7 @@ import (
 const (
 	meshPolicyQueueSize = 64
 	// Bound publication-to-application latency even if the verifier is stalled.
-	meshPolicyRevisionGrace = 2 * time.Second
+	meshPolicyRevisionGrace = 20 * time.Second
 )
 
 // meshPeerPolicy belongs to the Mesh event owner. A request contains no

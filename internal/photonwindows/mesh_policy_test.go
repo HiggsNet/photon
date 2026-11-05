@@ -188,6 +188,14 @@ func TestMeshPolicyRevisionGraceDoesNotExtendOrOverrideExpiry(t *testing.T) {
 			if test.change != nil {
 				test.change(peer)
 			}
+			if test.name == "grace" {
+				// Keep the equivalent DNS hint fresh so the grace is the
+				// boundary under test, rather than the hint's own lifetime.
+				peer.plan.EvaluatedAt = now.Add(test.checkAt - time.Second)
+				if got, pending := worker.project(peer, view.Revision+2, peer.plan.EvaluatedAt); got != installed || !pending {
+					t.Fatalf("installed policy expired before grace ended: got=%v pending=%t", got, pending)
+				}
+			}
 			if got, pending := worker.project(peer, view.Revision+2, now.Add(test.checkAt)); got != nil || !pending {
 				t.Fatalf("installed policy survived validity boundary: got=%v pending=%t", got, pending)
 			}
