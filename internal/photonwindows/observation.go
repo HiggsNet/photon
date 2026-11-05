@@ -1,6 +1,7 @@
 package photonwindows
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -315,4 +316,9 @@ func boundedObservationText(s string) string {
 		return s[:256]
 	}
 	return s
+}
+
+// CompareRoutePrefixes orders observed prefixes by network, length, and address.
+func CompareRoutePrefixes(a, b netip.Prefix) int {
+	return cmp.Or(a.Masked().Addr().Compare(b.Masked().Addr()), cmp.Compare(a.Bits(), b.Bits()), a.Addr().Compare(b.Addr()))
 }

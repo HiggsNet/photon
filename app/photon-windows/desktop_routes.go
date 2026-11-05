@@ -29,10 +29,10 @@ func desktopRouteGroups(routes []photonwindows.RouteObservation) ([]routeKey, ma
 		groups[key] = append(groups[key], route)
 	}
 	slices.SortFunc(keys, func(a, b routeKey) int {
-		if order := a.destination.Compare(b.destination); order != 0 {
+		if order := photonwindows.CompareRoutePrefixes(a.destination, b.destination); order != 0 {
 			return order
 		}
-		return a.source.Compare(b.source)
+		return photonwindows.CompareRoutePrefixes(a.source, b.source)
 	})
 	return keys, groups
 }
@@ -102,7 +102,7 @@ func desktopFormatNodeAddresses(snapshot desktopSnapshot) string {
 		if order := strings.Compare(a.Node, b.Node); order != 0 {
 			return order
 		}
-		return a.Prefix.Compare(b.Prefix)
+		return photonwindows.CompareRoutePrefixes(a.Prefix, b.Prefix)
 	})
 	var text strings.Builder
 	fmt.Fprintf(&text, "已验证的 IPAM 分配与路由通告 · %d 条\r\n", len(addresses))

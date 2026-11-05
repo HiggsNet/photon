@@ -224,7 +224,7 @@ func (out *Observation) observeNodeAddresses(set *routing.AuthorizedRouteSet) {
 		if order := strings.Compare(a.node, b.node); order != 0 {
 			return order
 		}
-		return a.prefix.Compare(b.prefix)
+		return CompareRoutePrefixes(a.prefix, b.prefix)
 	})
 	if len(keys) > 256 {
 		out.NodeAddressesTruncated = true
