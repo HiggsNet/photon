@@ -75,3 +75,22 @@
 [两帧原始报告](../../build/validation/performance-20261014/uso-research/execution-bytecount-control/native-functional/downloaded/done.json)、[独立 source/16 raw/8 冻结/实际退出与清理证书](../../build/validation/performance-20261014/uso-research/execution-bytecount-control/final-source-raw-certificate.json) 和 [Root 两实验最终复核](../../build/validation/performance-20261014/uso-research/root-final-evidence-audit.json) 完成；原 8 帧实验的 5 冻结/16 raw 与无 Wintun 矩阵的 20 冻结/743 Go 均未改变。
 
 当日公开资料进一步核到改变计数取得方式的固定 Go 提交、Linux GSO/GRO 的原作者研究，以及 RSS/系统 trace 的适用边界，见 [公开研究与下一项对照](udp-performance-research.md)。源码候选仍待实际 completion 分支验证，严格失败与未测容量状态不变。
+
+## More 内网发送速率和接收核对，2026-11-03
+
+单独 AF6 测试 socket 使用全 socket `UDP_SEND_MSG_SIZE`，与产品 socket
+隔离。Windows 每轮提交 32,000 个 1264 B 报文，More 按独立 datagram
+长度、阶段和序号核对。分别每次提交 1、4、16 个，交替重复两轮。
+空载尽快提交时，Windows 完成每轮用时约 179、55–77、28–29 ms。
+这是发送端提交速率，More 未能收齐，不能换算成可持续链路吞吐。
+
+控制总提交速率约 500 Mbps 后，六轮均收到 32,000 个独立报文，无缺失
+或坏格式，接收约 501 Mbps。进程 CPU 计数每轮约为 156/297、219/234、
+78/16 ms，样本短且计数粒度粗。16 段组的 CPU 结果值得更长的对照，
+4 段组没有稳定 CPU 优势。这里没有 ESP、TCP 或共享产品 socket，
+不能证明 Photon 吞吐提升，也不能证明由物理网卡完成分段。
+
+同批复核的此前实机主循环样本中，UDP 交付平均 8.55 µs，Wintun 写入
+平均 0.67 µs，Wintun P95 落在 1.024 µs 桶内。Wintun 读写锁解耦和
+CHILD 端点复用的内网对照中，单向下载/上传约 486/376 Mbps，双向
+上传两轮为 8.4/4.2 Mbps，仍未解决双向上传受压。测试机恢复原版本。
