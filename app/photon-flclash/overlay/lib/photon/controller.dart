@@ -87,6 +87,11 @@ final class PhotonController extends ChangeNotifier {
 
   Future<void> stop() => _enqueue(_release, cleanupOnError: false);
 
+  Future<void> restart({required bool allowed}) async {
+    await stop();
+    if (!hasLease && !_closed) await start(allowed: allowed);
+  }
+
   Future<void> _release() async {
     _timer?.cancel();
     _timer = null;

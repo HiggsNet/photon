@@ -30,8 +30,17 @@ git -C "$target" -c url.https://github.com/.insteadOf=git@github.com: \
 [[ $(git -C "$target/core/Clash.Meta" rev-parse HEAD) == "$FLCLASH_MIHOMO_COMMIT" ]]
 [[ $(git -C "$target/plugins/prism_ui" rev-parse HEAD) == "$FLCLASH_PRISM_COMMIT" ]]
 if ! git -C "$target" apply --reverse --check "$integration/patches/photon.patch" 2>/dev/null; then
+  previous="$target/.photon-flclash.patch"
+  if [[ -f "$previous" ]] && git -C "$target" apply --reverse --check "$previous" 2>/dev/null; then
+    git -C "$target" apply --reverse "$previous"
+    if ! git -C "$target" apply --check "$integration/patches/photon.patch"; then
+      git -C "$target" apply "$previous"
+      exit 1
+    fi
+  fi
   git -C "$target" apply --check "$integration/patches/photon.patch"
   git -C "$target" apply "$integration/patches/photon.patch"
 fi
+cp -- "$integration/patches/photon.patch" "$target/.photon-flclash.patch"
 cp -R -- "$integration/overlay/." "$target/"
 printf 'Prepared FlClash %s + Photon at %s\n' "$FLCLASH_VERSION" "$target"

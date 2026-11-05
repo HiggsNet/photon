@@ -1,3 +1,286 @@
+diff --git a/arb/intl_en.arb b/arb/intl_en.arb
+index cbda0e3..cd78d59 100644
+--- a/arb/intl_en.arb
++++ b/arb/intl_en.arb
+@@ -1076,5 +1076,31 @@
+   "fakeipFilterDesc": "These domains get real IPs instead of Fake-IPs. In whitelist mode, only they get Fake-IPs.",
+   "fallbackFilterGeositeDesc": "Domains in these GeoSite categories are resolved by Fallback directly.",
+   "fallbackFilterIpcidrDesc": "When Nameserver returns an IP in these ranges, the Fallback answer is used.",
+-  "fallbackFilterDomainDesc": "These domains are resolved by Fallback directly."
++  "fallbackFilterDomainDesc": "These domains are resolved by Fallback directly.",
++  "photonName": "Photon",
++  "photonTunnel": "Tunnels",
++  "photonRoutes": "Routes",
++  "photonServices": "Proxy services",
++  "photonDiagnostics": "Diagnostics",
++  "photonIdentity": "Network identity",
++  "photonWaiting": "Waiting for authorization",
++  "photonEmpty": "No records to display",
++  "photonOffline": "Connect Photon to view live network details.",
++  "photonSelected": "Selected services",
++  "photonTrusted": "Authorized endpoint",
++  "photonUnprobed": "Reachability not tested",
++  "photonWithdrawn": "Withdrawn",
++  "photonUnauthorized": "Authorization invalid",
++  "photonStale": "Service information expired. Refresh before using it.",
++  "photonApply": "Use selected proxies",
++  "photonMultiTip": "Select several endpoints to use automatic selection, manual selection, or load balancing in Proxies.",
++  "photonSearch": "Filter nodes, addresses or routes",
++  "photonRekey": "Security association",
++  "photonMetric": "Route metric",
++  "photonRevision": "Verified revision",
++  "photonSaveDiagnostics": "Copy diagnostics",
++  "photonRestart": "Reconnect Photon",
++  "photonAdvanced": "Advanced details",
++  "photonTruncated": "This sample is incomplete.",
++  "photonProxyRequiresTunnel": "Establish the Photon tunnel before using these proxy services."
+ }
+diff --git a/arb/intl_es.arb b/arb/intl_es.arb
+index 417db6b..ad2fd51 100644
+--- a/arb/intl_es.arb
++++ b/arb/intl_es.arb
+@@ -1076,5 +1076,31 @@
+   "fakeipFilterDesc": "Estos dominios reciben su IP real en lugar de una Fake-IP. En modo whitelist, solo ellos reciben Fake-IP.",
+   "fallbackFilterGeositeDesc": "Los dominios de estas categorías GeoSite se resuelven directamente con Fallback.",
+   "fallbackFilterIpcidrDesc": "Si Nameserver devuelve una IP de estos rangos, se usa la respuesta de Fallback.",
+-  "fallbackFilterDomainDesc": "Estos dominios se resuelven directamente con Fallback."
++  "fallbackFilterDomainDesc": "Estos dominios se resuelven directamente con Fallback.",
++  "photonName": "Photon",
++  "photonTunnel": "Túneles",
++  "photonRoutes": "Rutas",
++  "photonServices": "Servicios proxy",
++  "photonDiagnostics": "Diagnóstico",
++  "photonIdentity": "Identidad de red",
++  "photonWaiting": "Esperando autorización",
++  "photonEmpty": "No hay registros",
++  "photonOffline": "Conecta Photon para ver los detalles de red.",
++  "photonSelected": "Servicios seleccionados",
++  "photonTrusted": "Punto autorizado",
++  "photonUnprobed": "Accesibilidad sin comprobar",
++  "photonWithdrawn": "Retirado",
++  "photonUnauthorized": "Autorización no válida",
++  "photonStale": "La información caducó. Actualiza antes de usarla.",
++  "photonApply": "Usar proxies seleccionados",
++  "photonMultiTip": "Selecciona varios puntos para selección automática o balanceo.",
++  "photonSearch": "Filtrar nodos, direcciones o rutas",
++  "photonRekey": "Asociación de seguridad",
++  "photonMetric": "Métrica de ruta",
++  "photonRevision": "Versión verificada",
++  "photonSaveDiagnostics": "Copiar diagnóstico",
++  "photonRestart": "Reconectar Photon",
++  "photonAdvanced": "Detalles avanzados",
++  "photonTruncated": "La muestra está incompleta.",
++  "photonProxyRequiresTunnel": "Establece el túnel Photon antes de usar estos proxies."
+ }
+diff --git a/arb/intl_fr.arb b/arb/intl_fr.arb
+index aa4e778..ffca847 100644
+--- a/arb/intl_fr.arb
++++ b/arb/intl_fr.arb
+@@ -1076,5 +1076,31 @@
+   "fakeipFilterDesc": "Ces domaines reçoivent leur vraie IP au lieu d’une Fake-IP. En mode whitelist, eux seuls reçoivent une Fake-IP.",
+   "fallbackFilterGeositeDesc": "Les domaines de ces catégories GeoSite sont résolus directement par Fallback.",
+   "fallbackFilterIpcidrDesc": "Si Nameserver renvoie une IP de ces plages, la réponse de Fallback est utilisée.",
+-  "fallbackFilterDomainDesc": "Ces domaines sont résolus directement par Fallback."
++  "fallbackFilterDomainDesc": "Ces domaines sont résolus directement par Fallback.",
++  "photonName": "Photon",
++  "photonTunnel": "Tunnels",
++  "photonRoutes": "Routes",
++  "photonServices": "Services proxy",
++  "photonDiagnostics": "Diagnostic",
++  "photonIdentity": "Identité réseau",
++  "photonWaiting": "En attente d’autorisation",
++  "photonEmpty": "Aucune donnée",
++  "photonOffline": "Connectez Photon pour voir les détails du réseau.",
++  "photonSelected": "Services sélectionnés",
++  "photonTrusted": "Point autorisé",
++  "photonUnprobed": "Accessibilité non testée",
++  "photonWithdrawn": "Retiré",
++  "photonUnauthorized": "Autorisation invalide",
++  "photonStale": "Les informations ont expiré. Actualisez-les.",
++  "photonApply": "Utiliser les proxys sélectionnés",
++  "photonMultiTip": "Sélectionnez plusieurs points pour la sélection automatique ou la répartition.",
++  "photonSearch": "Filtrer les nœuds, adresses ou routes",
++  "photonRekey": "Association de sécurité",
++  "photonMetric": "Métrique de route",
++  "photonRevision": "Version vérifiée",
++  "photonSaveDiagnostics": "Copier le diagnostic",
++  "photonRestart": "Reconnecter Photon",
++  "photonAdvanced": "Détails avancés",
++  "photonTruncated": "Cet échantillon est incomplet.",
++  "photonProxyRequiresTunnel": "Établissez le tunnel Photon avant d’utiliser les proxys."
+ }
+diff --git a/arb/intl_ja.arb b/arb/intl_ja.arb
+index d6ff2b3..101c4fb 100644
+--- a/arb/intl_ja.arb
++++ b/arb/intl_ja.arb
+@@ -1076,5 +1076,31 @@
+   "fakeipFilterDesc": "これらのドメインには Fake-IP ではなく実際の IP を返します。whitelist モードでは、これらだけが Fake-IP を使います。",
+   "fallbackFilterGeositeDesc": "これらの GeoSite カテゴリのドメインは、直接 Fallback で解決します。",
+   "fallbackFilterIpcidrDesc": "Nameserver がこれらの範囲の IP を返したときは、Fallback の結果を使います。",
+-  "fallbackFilterDomainDesc": "これらのドメインは、直接 Fallback で解決します。"
++  "fallbackFilterDomainDesc": "これらのドメインは、直接 Fallback で解決します。",
++  "photonName": "Photon",
++  "photonTunnel": "トンネル",
++  "photonRoutes": "ルート",
++  "photonServices": "プロキシサービス",
++  "photonDiagnostics": "診断",
++  "photonIdentity": "ネットワーク ID",
++  "photonWaiting": "承認待ち",
++  "photonEmpty": "表示する記録がありません",
++  "photonOffline": "Photon に接続するとネットワークの詳細を表示します。",
++  "photonSelected": "選択したサービス",
++  "photonTrusted": "承認済みエンドポイント",
++  "photonUnprobed": "到達性は未確認",
++  "photonWithdrawn": "撤回済み",
++  "photonUnauthorized": "承認が無効",
++  "photonStale": "サービス情報が期限切れです。更新してください。",
++  "photonApply": "選択したプロキシを使用",
++  "photonMultiTip": "複数の接続先を選び、プロキシ画面で自動選択・手動選択・負荷分散を使えます。",
++  "photonSearch": "ノード・アドレス・ルートを検索",
++  "photonRekey": "セキュリティアソシエーション",
++  "photonMetric": "ルートメトリック",
++  "photonRevision": "検証済みリビジョン",
++  "photonSaveDiagnostics": "診断情報をコピー",
++  "photonRestart": "Photon に再接続",
++  "photonAdvanced": "詳細情報",
++  "photonTruncated": "この表示は一部のデータです。",
++  "photonProxyRequiresTunnel": "プロキシサービスの使用前に Photon トンネルを接続してください。"
+ }
+diff --git a/arb/intl_ko.arb b/arb/intl_ko.arb
+index ead8d29..830ce47 100644
+--- a/arb/intl_ko.arb
++++ b/arb/intl_ko.arb
+@@ -1076,5 +1076,31 @@
+   "fakeipFilterDesc": "이 도메인에는 Fake-IP 대신 실제 IP를 반환합니다. whitelist 모드에서는 이 도메인만 Fake-IP를 사용합니다.",
+   "fallbackFilterGeositeDesc": "이 GeoSite 분류의 도메인은 바로 Fallback으로 확인합니다.",
+   "fallbackFilterIpcidrDesc": "Nameserver가 이 범위의 IP를 반환하면 Fallback 결과를 사용합니다.",
+-  "fallbackFilterDomainDesc": "이 도메인은 바로 Fallback으로 확인합니다."
++  "fallbackFilterDomainDesc": "이 도메인은 바로 Fallback으로 확인합니다.",
++  "photonName": "Photon",
++  "photonTunnel": "터널",
++  "photonRoutes": "경로",
++  "photonServices": "프록시 서비스",
++  "photonDiagnostics": "진단",
++  "photonIdentity": "네트워크 ID",
++  "photonWaiting": "승인 대기 중",
++  "photonEmpty": "표시할 항목 없음",
++  "photonOffline": "Photon에 연결하면 네트워크 정보를 볼 수 있습니다.",
++  "photonSelected": "선택한 서비스",
++  "photonTrusted": "승인된 엔드포인트",
++  "photonUnprobed": "연결 가능 여부 미확인",
++  "photonWithdrawn": "철회됨",
++  "photonUnauthorized": "승인 무효",
++  "photonStale": "서비스 정보가 만료되었습니다. 새로 고침하세요.",
++  "photonApply": "선택한 프록시 사용",
++  "photonMultiTip": "여러 엔드포인트를 선택해 자동 선택이나 부하 분산을 사용하세요.",
++  "photonSearch": "노드, 주소 또는 경로 검색",
++  "photonRekey": "보안 연결",
++  "photonMetric": "경로 메트릭",
++  "photonRevision": "검증된 버전",
++  "photonSaveDiagnostics": "진단 복사",
++  "photonRestart": "Photon 다시 연결",
++  "photonAdvanced": "고급 정보",
++  "photonTruncated": "일부 데이터만 표시됩니다.",
++  "photonProxyRequiresTunnel": "프록시 사용 전에 Photon 터널에 연결하세요."
+ }
+diff --git a/arb/intl_ru.arb b/arb/intl_ru.arb
+index 58e77e7..5eec57f 100644
+--- a/arb/intl_ru.arb
++++ b/arb/intl_ru.arb
+@@ -1076,5 +1076,31 @@
+   "fakeipFilterDesc": "Эти домены получают реальные IP вместо Fake-IP. В режиме whitelist Fake-IP получают только они.",
+   "fallbackFilterGeositeDesc": "Домены из этих категорий GeoSite сразу разрешаются через Fallback.",
+   "fallbackFilterIpcidrDesc": "Если Nameserver возвращает IP из этих диапазонов, используется ответ Fallback.",
+-  "fallbackFilterDomainDesc": "Эти домены сразу разрешаются через Fallback."
++  "fallbackFilterDomainDesc": "Эти домены сразу разрешаются через Fallback.",
++  "photonName": "Photon",
++  "photonTunnel": "Туннели",
++  "photonRoutes": "Маршруты",
++  "photonServices": "Прокси-сервисы",
++  "photonDiagnostics": "Диагностика",
++  "photonIdentity": "Сетевая идентичность",
++  "photonWaiting": "Ожидание авторизации",
++  "photonEmpty": "Нет записей",
++  "photonOffline": "Подключите Photon для просмотра состояния сети.",
++  "photonSelected": "Выбранные сервисы",
++  "photonTrusted": "Авторизованная точка",
++  "photonUnprobed": "Доступность не проверена",
++  "photonWithdrawn": "Отозван",
++  "photonUnauthorized": "Недействительная авторизация",
++  "photonStale": "Данные устарели. Обновите их перед использованием.",
++  "photonApply": "Использовать выбранные прокси",
++  "photonMultiTip": "Выберите несколько точек для автоматического выбора или балансировки.",
++  "photonSearch": "Поиск узлов, адресов и маршрутов",
++  "photonRekey": "Ассоциация безопасности",
++  "photonMetric": "Метрика маршрута",
++  "photonRevision": "Проверенная версия",
++  "photonSaveDiagnostics": "Копировать диагностику",
++  "photonRestart": "Переподключить Photon",
++  "photonAdvanced": "Подробности",
++  "photonTruncated": "Показана часть данных.",
++  "photonProxyRequiresTunnel": "Сначала установите туннель Photon."
+ }
+diff --git a/arb/intl_zh_CN.arb b/arb/intl_zh_CN.arb
+index b44010c..2aef6d7 100644
+--- a/arb/intl_zh_CN.arb
++++ b/arb/intl_zh_CN.arb
+@@ -1076,5 +1076,31 @@
+   "fakeipFilterDesc": "这些域名不使用 Fake-IP，返回真实 IP；过滤模式为 whitelist 时则只有它们使用 Fake-IP。",
+   "fallbackFilterGeositeDesc": "属于这些 GeoSite 分类的域名直接使用 Fallback 解析。",
+   "fallbackFilterIpcidrDesc": "Nameserver 返回这些网段内的 IP 时，改用 Fallback 的结果。",
+-  "fallbackFilterDomainDesc": "这些域名直接使用 Fallback 解析。"
++  "fallbackFilterDomainDesc": "这些域名直接使用 Fallback 解析。",
++  "photonName": "Photon",
++  "photonTunnel": "隧道",
++  "photonRoutes": "路由",
++  "photonServices": "代理服务",
++  "photonDiagnostics": "诊断",
++  "photonIdentity": "网络身份",
++  "photonWaiting": "等待入网授权",
++  "photonEmpty": "暂无记录",
++  "photonOffline": "连接 Photon 后查看实时网络详情。",
++  "photonSelected": "已选服务",
++  "photonTrusted": "端点授权有效",
++  "photonUnprobed": "尚未探测可达性",
++  "photonWithdrawn": "已撤回",
++  "photonUnauthorized": "授权失效",
++  "photonStale": "服务信息已过期，刷新后方可使用。",
++  "photonApply": "使用已选代理",
++  "photonMultiTip": "可同时选择多个端点，在“代理”页使用自动选择、手动切换或负载均衡。",
++  "photonSearch": "搜索节点、地址或路由",
++  "photonRekey": "安全关联",
++  "photonMetric": "路由代价",
++  "photonRevision": "已验证状态版本",
++  "photonSaveDiagnostics": "复制诊断信息",
++  "photonRestart": "重新连接 Photon",
++  "photonAdvanced": "高级详情",
++  "photonTruncated": "当前展示为部分数据。",
++  "photonProxyRequiresTunnel": "请先建立 Photon 隧道，再使用这些代理服务。"
+ }
+diff --git a/lib/common/l10n_labels.dart b/lib/common/l10n_labels.dart
+index 9a69b8d..d1169ed 100644
+--- a/lib/common/l10n_labels.dart
++++ b/lib/common/l10n_labels.dart
+@@ -9,6 +9,7 @@ extension PageLabelL10n on PageLabel {
+     final appLocalizations = currentAppLocalizations;
+     return switch (this) {
+       PageLabel.dashboard => appLocalizations.dashboard,
++      PageLabel.photon => appLocalizations.photonName,
+       PageLabel.proxies => appLocalizations.proxies,
+       PageLabel.profiles => appLocalizations.profiles,
+       PageLabel.tools => appLocalizations.tools,
+diff --git a/lib/enum/enum.dart b/lib/enum/enum.dart
+index 75b35bd..70edb2d 100644
+--- a/lib/enum/enum.dart
++++ b/lib/enum/enum.dart
+@@ -524,6 +524,7 @@ extension GeoResourceExt on GeoResource {
+ 
+ enum PageLabel {
+   dashboard,
++  photon,
+   proxies,
+   profiles,
+   tools,
 diff --git a/lib/providers/action.dart b/lib/providers/action.dart
 index 3a2f9df..1d8441f 100644
 --- a/lib/providers/action.dart
@@ -34,6 +317,33 @@ index df905f7..87c5ca9 100644
      commonPrint.log('exit');
    }
  
+diff --git a/lib/views/navigation.dart b/lib/views/navigation.dart
+index 757c9e1..0301f4a 100644
+--- a/lib/views/navigation.dart
++++ b/lib/views/navigation.dart
+@@ -1,6 +1,9 @@
++import 'dart:io';
++
+ import 'package:fl_clash/common/app_ports.dart';
+ import 'package:fl_clash/enum/enum.dart';
+ import 'package:fl_clash/models/models.dart';
++import 'package:fl_clash/photon/view.dart';
+ import 'package:fl_clash/ui/icons/app_glyphs.dart';
+ import 'package:fl_clash/views/views.dart';
+ 
+@@ -18,6 +21,12 @@ class Navigation implements NavigationPort {
+         label: PageLabel.dashboard,
+         builder: (_) => const DashboardView(),
+       ),
++      if (Platform.isWindows)
++        NavigationItem(
++          glyph: AppGlyphs.vpn,
++          label: PageLabel.photon,
++          builder: (_) => const PhotonView(),
++        ),
+       NavigationItem(
+         glyph: AppGlyphs.proxies,
+         label: PageLabel.proxies,
 diff --git a/lib/views/tools.dart b/lib/views/tools.dart
 index ae786fb..db1acf3 100644
 --- a/lib/views/tools.dart

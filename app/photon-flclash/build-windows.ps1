@@ -47,6 +47,8 @@ Push-Location $Checkout
 try {
     & flutter pub get
     Check-Exit 'Flutter dependencies'
+    & dart run intl_utils:generate
+    Check-Exit 'Generate localizations'
     & flutter build windows --release
     Check-Exit 'Windows release build'
     $bundle = Join-Path $Checkout 'build\windows\x64\runner\Release'

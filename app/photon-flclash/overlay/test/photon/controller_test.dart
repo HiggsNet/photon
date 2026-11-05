@@ -9,6 +9,7 @@ class FakeBackend implements PhotonBackend {
   final exited = Completer<int>();
   Completer<void>? starting;
   StateError? statusError;
+  Map<String, dynamic> sample = {'running': true, 'tunnel_ready': true};
   bool failStop = false;
   @override
   bool hasProcess = false;
@@ -25,7 +26,7 @@ class FakeBackend implements PhotonBackend {
   Future<Map<String, dynamic>> status() async {
     calls.add('status');
     if (statusError != null) throw statusError!;
-    return {'running': true, 'tunnel_ready': true};
+    return sample;
   }
 
   @override
@@ -97,16 +98,19 @@ void main() {
     },
   );
 
-  test('IPC failure clears observation, joins the backend and allows explicit restart', () async {
-    await controller.start(allowed: true);
-    backends.single.statusError = StateError('IPC lost');
-    await controller.refresh();
-    expect(controller.observation, isNull);
-    expect(controller.error, isNotNull);
-    expect(controller.hasLease, isFalse);
-    await controller.start(allowed: true);
-    expect(backends, hasLength(2));
-  });
+  test(
+    'IPC failure clears observation, joins the backend and allows explicit restart',
+    () async {
+      await controller.start(allowed: true);
+      backends.single.statusError = StateError('IPC lost');
+      await controller.refresh();
+      expect(controller.observation, isNull);
+      expect(controller.error, isNotNull);
+      expect(controller.hasLease, isFalse);
+      await controller.start(allowed: true);
+      expect(backends, hasLength(2));
+    },
+  );
 
   test(
     'unconfirmed cleanup retains ownership and blocks another launch',

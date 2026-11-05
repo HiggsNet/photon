@@ -1,6 +1,7 @@
 import 'package:fl_clash/photon/controller.dart';
 import 'package:fl_clash/photon/view.dart';
 import 'package:fl_clash/providers/app.dart';
+import 'package:fl_clash/widgets/widgets.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -39,14 +40,23 @@ void main() {
     tester,
   ) async {
     await tester.pumpWidget(view());
-    expect(find.text('Disconnected'), findsOneWidget);
+    expect(
+      tester.widget<Text>(find.byKey(const ValueKey('photon-status'))).data,
+      'Disconnected',
+    );
     await tester.tap(find.text('Start'));
     await tester.pumpAndSettle();
-    expect(find.text('Connected'), findsOneWidget);
+    expect(
+      tester.widget<Text>(find.byKey(const ValueKey('photon-status'))).data,
+      'Connected',
+    );
     expect(find.text('Stop'), findsOneWidget);
     await tester.tap(find.text('Stop'));
     await tester.pumpAndSettle();
-    expect(find.text('Disconnected'), findsOneWidget);
+    expect(
+      tester.widget<Text>(find.byKey(const ValueKey('photon-status'))).data,
+      'Disconnected',
+    );
     expect(controller.observation, isNull);
   });
 
@@ -77,8 +87,88 @@ void main() {
     await tester.tap(find.text('Start'));
     await tester.pumpAndSettle();
     expect(find.textContaining('IPC lost'), findsOneWidget);
-    expect(find.text('Disconnected'), findsOneWidget);
-    expect(find.text('Connected'), findsNothing);
+    expect(
+      tester.widget<Text>(find.byKey(const ValueKey('photon-status'))).data,
+      'Disconnected',
+    );
+    expect(controller.observation, isNull);
     expect(backend.hasProcess, isFalse);
   });
+
+  photonTest(
+    'live tunnel, gossip and route pages expose useful details and filter rows',
+    (tester) async {
+      tester.view.physicalSize = const Size(1400, 1100);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      backend.sample = {
+        'running': true,
+        'tunnel_ready': true,
+        'admission': {
+          'pending': false,
+          'managed_zone': 'windows-test.catofes.',
+        },
+        'wintun': {
+          'addresses': ['fd42::1/128'],
+          'split_routes': ['fd42::/16'],
+        },
+        'connections': [
+          {
+            'peer': 'gateway.catofes.',
+            'tunnel_ready': true,
+            'babel_live': true,
+            'ike': {
+              'live': true,
+              'child_live': true,
+              'phase': 'established',
+              'attempt_remote_endpoint': '192.0.2.1:4500',
+            },
+          },
+        ],
+        'peers': [
+          {
+            'peer': 'gossip.catofes.',
+            'pull_state': 'synced',
+            'pull_attempts': 3,
+            'pull_successes': 3,
+          },
+        ],
+        'babel': {
+          'live': true,
+          'routes': [
+            {
+              'prefix': 'fd42:1::/64',
+              'peer': 'gateway.catofes.',
+              'metric': 42,
+              'source_prefix': '::/0',
+            },
+          ],
+        },
+      };
+      await tester.pumpWidget(view());
+      await tester.tap(find.text('Start'));
+      await tester.pumpAndSettle();
+      expect(find.text('fd42::1/128'), findsOneWidget);
+      await tester.tap(find.text('Tunnels').first);
+      await tester.pumpAndSettle();
+      expect(find.text('gateway.catofes.'), findsOneWidget);
+      expect(find.text('192.0.2.1:4500'), findsOneWidget);
+      await tester.tap(find.text('Peers').first);
+      await tester.pumpAndSettle();
+      expect(find.text('gossip.catofes.'), findsOneWidget);
+      await tester.tap(find.text('Routes').first);
+      await tester.pumpAndSettle();
+      expect(find.text('fd42:1::/64'), findsOneWidget);
+      expect(find.text('42'), findsOneWidget);
+      await tester.enterText(find.byType(TextField), 'no-match');
+      await tester.pumpAndSettle();
+      expect(find.text('fd42:1::/64'), findsNothing);
+      expect(find.text('No records to display'), findsOneWidget);
+      await tester.tap(find.text('Diagnostics').first);
+      await tester.pumpAndSettle();
+      expect(find.text('Copy diagnostics'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 }
