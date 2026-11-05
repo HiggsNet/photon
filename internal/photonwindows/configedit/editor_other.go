@@ -1,6 +1,6 @@
 //go:build !windows
 
-package main
+package configedit
 
 import (
 	"errors"
@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 )
 
-func desktopOpenConfig(path string) (*os.File, error) {
+func Open(path string) (*os.File, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
@@ -32,10 +32,10 @@ func desktopOpenConfig(path string) (*os.File, error) {
 	return file, nil
 }
 
-func desktopPrepareReplacement(_ string, file *os.File, mode os.FileMode) error {
+func prepareReplacement(_ string, file *os.File, mode os.FileMode) error {
 	return file.Chmod(mode.Perm())
 }
-func desktopReplaceConfig(temp, path string, exists bool) error {
+func Replace(temp, path string, exists bool) error {
 	if exists {
 		if err := os.Rename(temp, path); err != nil {
 			return err

@@ -124,6 +124,9 @@ func runConsole(ctx context.Context, args []string, stdout, stderr io.Writer) (c
 }
 
 func runConfig(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "edit" {
+		return runConfigEdit(args[1:], os.Stdin, stdout, stderr)
+	}
 	if len(args) == 0 || args[0] != "validate" {
 		fmt.Fprintln(stderr, "Usage: photon-windows config validate --config <path>")
 		return 2
@@ -160,6 +163,7 @@ func writeUsage(w io.Writer) {
 	fmt.Fprintln(w, "  run --stdio --config <path>      Frontend-owned backend (framed private IPC)")
 	fmt.Fprintln(w, "  service install|start|stop|remove [--name <name>] [--config <path>]")
 	fmt.Fprintln(w, "  config validate --config <path>  Validate configuration without starting the service")
+	fmt.Fprintln(w, "  config edit --config <path> [--new]  Edit configuration using a private JSON session")
 	fmt.Fprintln(w, "  version                          Show build information")
 	fmt.Fprintln(w, "  help                             Show this help")
 	fmt.Fprintln(w, "")

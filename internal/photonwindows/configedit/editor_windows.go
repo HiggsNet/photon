@@ -1,6 +1,6 @@
 //go:build windows
 
-package main
+package configedit
 
 import (
 	"errors"
@@ -11,7 +11,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func desktopOpenConfig(path string) (*os.File, error) {
+func Open(path string) (*os.File, error) {
 	name, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return nil, err
@@ -25,7 +25,7 @@ func desktopOpenConfig(path string) (*os.File, error) {
 	return os.NewFile(uintptr(handle), path), nil
 }
 
-func desktopPrepareReplacement(path string, file *os.File, _ os.FileMode) error {
+func prepareReplacement(path string, file *os.File, _ os.FileMode) error {
 	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
 	if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
 		user, tokenErr := windows.GetCurrentProcessToken().GetTokenUser()
@@ -46,9 +46,9 @@ func desktopPrepareReplacement(path string, file *os.File, _ os.FileMode) error 
 	return err
 }
 
-var desktopReplaceFile = windows.NewLazySystemDLL("kernel32.dll").NewProc("ReplaceFileW")
+var replaceFile = windows.NewLazySystemDLL("kernel32.dll").NewProc("ReplaceFileW")
 
-func desktopReplaceConfig(temp, path string, exists bool) error {
+func Replace(temp, path string, exists bool) error {
 	from, err := windows.UTF16PtrFromString(temp)
 	if err != nil {
 		return err
@@ -62,7 +62,7 @@ func desktopReplaceConfig(temp, path string, exists bool) error {
 	}
 	// ReplaceFile preserves the replaced file's DACL and attributes. Do not set
 	// IGNORE_MERGE_ERRORS: inability to retain its ACL must fail the save.
-	result, _, callErr := desktopReplaceFile.Call(uintptr(unsafe.Pointer(to)), uintptr(unsafe.Pointer(from)), 0, 0, 0, 0)
+	result, _, callErr := replaceFile.Call(uintptr(unsafe.Pointer(to)), uintptr(unsafe.Pointer(from)), 0, 0, 0, 0)
 	if result == 0 {
 		return callErr
 	}
