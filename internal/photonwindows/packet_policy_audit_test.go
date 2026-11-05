@@ -111,7 +111,7 @@ func TestPacketPolicyAuditLiveChildAndSelectors(t *testing.T) {
 				}
 			} else {
 				address := netip.MustParseAddr("10.99.0.2")
-				inbound.job.sa.local = []ike.TrafficSelector{{StartAddr: address, EndAddr: address, EndPort: 65535}}
+				replaceDataplaneSelectorsForTest(inbound.job.sa, []ike.TrafficSelector{{StartAddr: address, EndAddr: address, EndPort: 65535}}, inbound.job.sa.remote)
 			}
 			facts, ok = f.p.prepareSnapshot(f.config, view, f.plan, f.now.Add(time.Nanosecond))
 			if !ok || f.p.policy != before {

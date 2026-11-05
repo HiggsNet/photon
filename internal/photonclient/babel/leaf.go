@@ -151,7 +151,7 @@ func (l *Leaf) Receive(packet []byte, now time.Time, authorize func(sadr.Route) 
 	}
 	defer l.refreshForwarding()
 	// Prune before insertion so expired or newly unauthorized entries cannot
-	// exhaust the bounded table. Lookup must still revalidate on every use.
+	// exhaust the bounded table.
 	l.pruneRoutes(now, authorize)
 	for _, m := range batch.Updates {
 		if m.Wildcard {

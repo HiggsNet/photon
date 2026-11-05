@@ -70,7 +70,21 @@ func addressFamily(addr netip.Addr) int {
 // LookupRoute finds the first authorized path in destination, source, metric
 // order. Live link cost, lease expiry and authorization are checked on use.
 func (l *Leaf) LookupRoute(source, destination netip.Addr, now time.Time, authorize func(sadr.Route) bool) (sadr.Route, bool) {
-	if authorize == nil || !source.IsValid() || !destination.IsValid() ||
+	if authorize == nil {
+		return sadr.Route{}, false
+	}
+	return l.lookupRoute(source, destination, now, authorize)
+}
+
+// LookupInstalledRoute uses the policy already applied by Receive and
+// RevalidateRoutes. The serial owner must revalidate before publishing any new
+// policy. Neighbor reachability and route lifetime are checked on every lookup.
+func (l *Leaf) LookupInstalledRoute(source, destination netip.Addr, now time.Time) (sadr.Route, bool) {
+	return l.lookupRoute(source, destination, now, nil)
+}
+
+func (l *Leaf) lookupRoute(source, destination netip.Addr, now time.Time, authorize func(sadr.Route) bool) (sadr.Route, bool) {
+	if !source.IsValid() || !destination.IsValid() ||
 		source.Is4In6() || destination.Is4In6() || source.BitLen() != destination.BitLen() || source.Zone() != "" || destination.Zone() != "" {
 		return sadr.Route{}, false
 	}
@@ -91,7 +105,7 @@ func (l *Leaf) LookupRoute(source, destination netip.Addr, now time.Time, author
 				continue
 			}
 			route.Metric = uint16(metric)
-			if authorize(route) {
+			if authorize == nil || authorize(route) {
 				return route, true
 			}
 		}

@@ -123,7 +123,7 @@ func TestPacketTimingConsumerFreshGatesAndDelivery(t *testing.T) {
 			}
 			if scenario == "selectors changed" {
 				address := netip.MustParseAddr("10.99.0.1")
-				f.p.tunnel.data.active.local = []ike.TrafficSelector{{StartAddr: address, EndAddr: address, EndPort: 65535}}
+				replaceDataplaneSelectorsForTest(f.p.tunnel.data.active, []ike.TrafficSelector{{StartAddr: address, EndAddr: address, EndPort: 65535}}, f.p.tunnel.data.active.remote)
 			}
 			accepted, err := f.p.acceptPrepared(&facts, result)
 			outcomes := FixturePacketTimingOutcomes{Delivered: 1}

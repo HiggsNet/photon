@@ -42,6 +42,7 @@ type meshRuntime struct {
 	nextIntent       time.Time
 	leafIntents      chan struct{}
 	policy           *meshPolicyWorker
+	outboundBatch    []byte // Workspace owned by the current host turn.
 }
 
 type meshPeer struct {
@@ -404,23 +405,34 @@ func (m *meshRuntime) handleESP(packet tunnelDatagram) {
 }
 
 func (m *meshRuntime) complete(completion dataplaneCompletion) {
+	var facts packetAuthorization
+	p := m.prepareCompletion(&completion, time.Now(), &facts)
+	if p == nil {
+		return
+	}
+	defer m.noteSequence(p)
+	if _, err := p.leaf.pipeline.acceptPrepared(&facts, completion); err != nil {
+		m.failDelivery(p, err)
+	}
+}
+
+func (m *meshRuntime) prepareCompletion(completion *dataplaneCompletion, now time.Time, facts *packetAuthorization) *meshPeer {
 	p := m.byData[completion.job.owner]
 	if p == nil {
 		completion.timing.Finish(fixturePacketTimingCanceled)
-		return
+		return nil
 	}
-	now := time.Now()
-	var facts packetAuthorization
-	if !m.packetFacts(p, corestate.View{}, now, &facts) {
+	if !m.packetFacts(p, corestate.View{}, now, facts) {
 		completion.timing.Finish(fixturePacketTimingRejected)
-		return
+		return nil
 	}
-	p.tunnel.observeData(completion, facts.plan, now)
+	p.tunnel.observeData(*completion, facts.plan, now)
 	p.leaf.pipeline.leaf.SynchronizeSequence(m.seqno)
-	defer m.noteSequence(p)
-	if _, err := p.leaf.pipeline.acceptPrepared(&facts, completion); err != nil {
-		m.logger.Warn("leaf_packet_failed", "error", errors.Join(err, p.leaf.stop()))
-	}
+	return p
+}
+
+func (m *meshRuntime) failDelivery(p *meshPeer, err error) {
+	m.logger.Warn("leaf_packet_failed", "error", errors.Join(err, p.leaf.stop()))
 }
 
 func (m *meshRuntime) completeOpen(result leafOpenResult) error {
@@ -458,13 +470,15 @@ type meshChoice struct {
 	peer  *meshPeer
 	facts packetAuthorization
 	route sadr.Route
+	flow  dataplaneFlow
 }
 
 // Only locally originated packets enter selection. RFC 9079 destination then
 // source specificity precedes cost; a stable address hash spreads equal paths.
 func (m *meshRuntime) selectRoute(packet []byte, view corestate.View, now time.Time) meshChoice {
-	source, destination, ok := businessEndpoints(packet)
-	if !ok {
+	flow, ok := parseDataplaneFlow(packet)
+	source, destination := flow.source, flow.destination
+	if !ok || !businessAddress(source) || !businessAddress(destination) {
 		return meshChoice{}
 	}
 	var best meshChoice
@@ -478,11 +492,19 @@ func (m *meshRuntime) selectRoute(packet []byte, view corestate.View, now time.T
 		if !m.packetFacts(p, view, now, &facts) || !pipeline.localAddress(source, facts.localOrigins) {
 			continue
 		}
-		route, ok := pipeline.leaf.LookupRoute(source, destination, now, facts.authorizeRoute)
+		var route sadr.Route
+		var ok bool
+		if facts.projection != nil {
+			// Babel admits updates with this installed signed policy. The
+			// policy owner prunes the table before replacing the projection.
+			route, ok = pipeline.leaf.LookupInstalledRoute(source, destination, now)
+		} else {
+			route, ok = pipeline.leaf.LookupRoute(source, destination, now, facts.authorizeRoute)
+		}
 		if !ok {
 			continue
 		}
-		candidate := meshChoice{p, facts, route}
+		candidate := meshChoice{peer: p, facts: facts, route: route, flow: flow}
 		if best.peer == nil {
 			best = candidate
 			continue
@@ -511,29 +533,76 @@ func (m *meshRuntime) selectRoute(packet []byte, view corestate.View, now time.T
 }
 
 func (m *meshRuntime) handleHost(event leafDevicePacket) {
+	if completion, ok := m.prepareHost(event); ok {
+		m.completeHost(completion)
+	}
+}
+
+func (m *meshRuntime) completeHost(completion meshHostCompletion) {
+	p := m.currentHost(&completion, time.Now())
+	if p != nil {
+		if err := completion.pipeline.writePreparedOutbound(completion.packet, completion.job.sa.endpoint, &completion.timing); err != nil {
+			m.failDelivery(p, err)
+		}
+	} else {
+		completion.finishStale()
+	}
+}
+
+// A sealed host packet stays committed for this owner turn. Recheck only hard
+// lifetimes and transport ownership. The socket checks its endpoint reservation
+// again under the writer lock, including rebinds from outside this owner.
+func (m *meshRuntime) currentHost(completion *meshHostCompletion, now time.Time) *meshPeer {
+	job := completion.job
+	p := m.byData[job.owner]
+	if p == nil || p.leaf.pipeline != completion.pipeline || !completion.pipeline.attached(now) ||
+		job.generation != job.owner.generation || job.sa != job.owner.active || job.ctx.Err() != nil ||
+		completion.projection != nil && !completion.projection.validAt(now) {
+		return nil
+	}
+	return p
+}
+
+func (m *meshRuntime) prepareHost(event leafDevicePacket) (meshHostCompletion, bool) {
 	event.timing.Dequeue()
 	if event.err != nil {
 		event.timing.Finish(fixturePacketTimingRejected)
 		m.stopAll(event.err.Error())
-		return
+		return meshHostCompletion{}, false
 	}
 	if !m.device.current(event.generation) {
 		event.timing.Finish(fixturePacketTimingRejected)
-		return
+		return meshHostCompletion{}, false
 	}
 	choice := m.selectRoute(event.packet, corestate.View{}, time.Now())
 	if choice.peer == nil {
 		event.timing.Finish(fixturePacketTimingRejected)
-		return
+		return meshHostCompletion{}, false
 	}
 	event.timing.Classify(fixturePacketTimingBusiness)
 	pipeline := choice.peer.leaf.pipeline
-	completion, ok := choice.peer.tunnel.data.processOwnedOutbound(pipeline.generation, choice.facts.plan, event.packet, func(packet []byte, outbound bool) bool { return pipeline.authorize(&choice.facts, packet, outbound) }, event.timing)
-	if ok {
-		m.complete(completion)
-	} else {
-		completion.timing.Finish(fixturePacketTimingRejected)
+	// Selection already checked the advertised origin and learned route in
+	// this owner turn. The device and exact signed host assignment still
+	// have to authorize this source, regardless of the advertised prefix.
+	if !pipeline.assignedHost(&choice.facts, choice.flow.source) {
+		event.timing.Finish(fixturePacketTimingRejected)
+		return meshHostCompletion{}, false
 	}
+	completion, ok := choice.peer.tunnel.data.processSelectedOutbound(pipeline.generation, choice.facts.plan, event.packet, choice.flow, event.timing)
+	if !ok {
+		completion.timing.Finish(fixturePacketTimingRejected)
+		return meshHostCompletion{}, false
+	}
+	if completion.err != nil {
+		choice.peer.tunnel.observeData(completion, choice.facts.plan, time.Now())
+		outcome := fixturePacketTimingCryptoError
+		if completion.job.ctx.Err() != nil {
+			outcome = fixturePacketTimingCanceled
+		}
+		completion.timing.Finish(outcome)
+		return meshHostCompletion{}, false
+	}
+	return meshHostCompletion{completion, pipeline, choice.facts.projection}, true
 }
 
 func (m *meshRuntime) ready() bool {

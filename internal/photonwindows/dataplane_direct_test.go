@@ -188,7 +188,7 @@ func TestDataplaneDirectDeliveryRevalidation(t *testing.T) {
 				d.sas[child.InitiatorSPI], d.active = &replacement, &replacement
 			case "selectors":
 				address := netip.MustParseAddr("10.99.0.1")
-				d.active.local = []ike.TrafficSelector{{StartAddr: address, EndAddr: address, EndPort: 65535}}
+				replaceDataplaneSelectorsForTest(d.active, []ike.TrafficSelector{{StartAddr: address, EndAddr: address, EndPort: 65535}}, d.active.remote)
 			case "active CHILD":
 				next := dataplaneChild(child.InitiatorSPI + 1)
 				if err := d.install(10, plan, endpoint, next); err != nil {

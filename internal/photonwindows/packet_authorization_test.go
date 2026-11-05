@@ -217,7 +217,7 @@ func TestPacketSignatureMemoKeepsCurrentPolicy(t *testing.T) {
 			t.Fatal("warm authorization failed")
 		}
 		address := netip.MustParseAddr("10.8.0.1")
-		completion.job.sa.local = []ike.TrafficSelector{{StartAddr: address, EndAddr: address, EndPort: 65535}}
+		replaceDataplaneSelectorsForTest(completion.job.sa, []ike.TrafficSelector{{StartAddr: address, EndAddr: address, EndPort: 65535}}, completion.job.sa.remote)
 		if accepted, err := f.p.acceptPrepared(facts, completion); accepted || err != nil {
 			t.Fatal("memo bypassed current CHILD selectors", err)
 		}

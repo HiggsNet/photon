@@ -35,14 +35,15 @@ type gatewayDataplane struct {
 }
 
 type dataplaneSA struct {
-	gateway       GatewaySelection
-	endpoint      netip.AddrPort
-	receiver      *esp.Receiver
-	sender        *esp.Sender
-	local, remote []ike.TrafficSelector
-	spi           uint32
-	keys          [2][32]byte
-	child         ike.ChildResult // Detached negotiation metadata, without keys.
+	gateway              GatewaySelection
+	endpoint             netip.AddrPort
+	receiver             *esp.Receiver
+	sender               *esp.Sender
+	local, remote        []ike.TrafficSelector
+	unrestrictedFamilies selectorFamilies
+	spi                  uint32
+	keys                 [2][32]byte
+	child                ike.ChildResult // Detached negotiation metadata, without keys.
 }
 
 type dataplaneJob struct {
@@ -142,6 +143,7 @@ func (d *gatewayDataplane) install(generation uint64, plan GatewayPlan, endpoint
 	gateway := *plan.Selected
 	gateway.PublicKey = bytes.Clone(gateway.PublicKey)
 	sa := &dataplaneSA{gateway: gateway, endpoint: endpoint, receiver: receiver, sender: sender, local: slices.Clone(child.LocalSelectors), remote: slices.Clone(child.RemoteSelectors), spi: child.InitiatorSPI, keys: keys}
+	sa.unrestrictedFamilies = unrestrictedSelectorFamilies(sa.local) & unrestrictedSelectorFamilies(sa.remote)
 	sa.child = ike.ChildResult{InitiatorSPI: child.InitiatorSPI, ResponderSPI: child.ResponderSPI, LocalSelectors: sa.local, RemoteSelectors: sa.remote}
 	d.sas[sa.spi] = sa
 	if d.active == nil {
@@ -246,7 +248,21 @@ func (d *gatewayDataplane) processOutbound(generation uint64, plan GatewayPlan, 
 	return d.process(d.outboundSA(generation, plan, packet, authorize), packet, true)
 }
 
-// processOwnedOutbound is only for an exclusively owned leaf packet in the
+func (d *gatewayDataplane) processOwnedOutbound(generation uint64, plan GatewayPlan, packet []byte, authorize func([]byte, bool) bool, timing fixturePacketTiming) (dataplaneCompletion, bool) {
+	return d.sealOwnedOutbound(d.outboundSA(generation, plan, packet, authorize), packet, timing)
+}
+
+// processSelectedOutbound uses the mesh owner's route and source authorization
+// from this turn and still applies the active SA's negotiated selectors.
+func (d *gatewayDataplane) processSelectedOutbound(generation uint64, plan GatewayPlan, packet []byte, flow dataplaneFlow, timing fixturePacketTiming) (dataplaneCompletion, bool) {
+	sa := d.active
+	if !d.current(generation, sa, plan) || !flow.matches(sa, true) {
+		return dataplaneCompletion{timing: timing}, false
+	}
+	return d.sealOwnedOutbound(sa, packet, timing)
+}
+
+// sealOwnedOutbound is only for an exclusively owned leaf packet in the
 // serial daemon turn. Its completion owns that plaintext through the fresh
 // delivery gate: the caller must not reuse or mutate it until completePacket
 // finishes. The ESP output borrows this owner's single bounded workspace until
@@ -254,8 +270,7 @@ func (d *gatewayDataplane) processOutbound(generation uint64, plan GatewayPlan, 
 // overwrite it. Do not retain the completion beyond that turn or reenter this
 // method during authorization/delivery. It never enters either asynchronous
 // queue; queued control and other callers retain independent Seal outputs.
-func (d *gatewayDataplane) processOwnedOutbound(generation uint64, plan GatewayPlan, packet []byte, authorize func([]byte, bool) bool, timing fixturePacketTiming) (dataplaneCompletion, bool) {
-	sa := d.outboundSA(generation, plan, packet, authorize)
+func (d *gatewayDataplane) sealOwnedOutbound(sa *dataplaneSA, packet []byte, timing fixturePacketTiming) (dataplaneCompletion, bool) {
 	if sa == nil || d.ctx.Err() != nil {
 		return dataplaneCompletion{timing: timing}, false
 	}
@@ -327,7 +342,10 @@ func (d *gatewayDataplane) accept(result dataplaneCompletion, plan GatewayPlan, 
 	if job.outbound {
 		inner = job.packet
 	}
-	if !dataplaneSelectors(job.sa, inner, job.outbound) || authorize == nil || !authorize(inner, job.outbound) {
+	if !dataplaneSelectors(job.sa, inner, job.outbound) {
+		return nil, netip.AddrPort{}, false, false
+	}
+	if authorize == nil || !authorize(inner, job.outbound) {
 		return nil, netip.AddrPort{}, false, false
 	}
 	return result.packet, job.sa.endpoint, job.outbound, true

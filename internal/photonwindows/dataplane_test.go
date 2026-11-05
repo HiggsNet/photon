@@ -206,6 +206,13 @@ func TestDataplaneOverlapAndBoundedShutdown(t *testing.T) {
 	}
 }
 
+// Some delivery-gate fixtures simulate a selector change on the same SA.
+// Production installs a new CHILD instead. Keep the derived mask in sync.
+func replaceDataplaneSelectorsForTest(sa *dataplaneSA, local, remote []ike.TrafficSelector) {
+	sa.local, sa.remote = local, remote
+	sa.unrestrictedFamilies = unrestrictedSelectorFamilies(local) & unrestrictedSelectorFamilies(remote)
+}
+
 func TestDataplaneNegotiatedSelectors(t *testing.T) {
 	d, _, _, _ := dataplaneFixture(t)
 	sa := d.active
@@ -218,7 +225,9 @@ func TestDataplaneNegotiatedSelectors(t *testing.T) {
 		t.Fatal("wrong source accepted")
 	}
 	packet[15] = 1
-	sa.remote[0].Protocol, sa.remote[0].StartPort, sa.remote[0].EndPort = 17, 443, 443
+	restricted := sa.remote[0]
+	restricted.Protocol, restricted.StartPort, restricted.EndPort = 17, 443, 443
+	replaceDataplaneSelectorsForTest(sa, sa.local, []ike.TrafficSelector{restricted})
 	if !dataplaneSelectors(sa, packet, true) {
 		t.Fatal("UDP port selector refused")
 	}
@@ -235,5 +244,60 @@ func TestDataplaneNegotiatedSelectors(t *testing.T) {
 	packet[2] = 1
 	if dataplaneSelectors(sa, packet, true) {
 		t.Fatal("bad packet length accepted")
+	}
+}
+
+func TestDataplaneUnrestrictedSelectorFamilies(t *testing.T) {
+	fullIPv4 := ike.TrafficSelector{StartAddr: netip.IPv4Unspecified(), EndAddr: netip.MustParseAddr("255.255.255.255"), EndPort: 65535}
+	fullIPv6 := ike.TrafficSelector{StartAddr: netip.IPv6Unspecified(), EndAddr: netip.MustParseAddr("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"), EndPort: 65535}
+	udp443 := fullIPv4
+	udp443.Protocol, udp443.StartPort, udp443.EndPort = 17, 443, 443
+	narrowIPv4 := fullIPv4
+	narrowIPv4.EndAddr = netip.MustParseAddr("10.0.0.1")
+
+	fragment := dataplanePacket(true)
+	fragment[6] = 0x20
+	malformed := dataplanePacket(true)
+	malformed[2] = 1
+	ipv6 := make([]byte, 40)
+	ipv6[0], ipv6[6] = 0x60, 59 // IPv6 with no next header.
+
+	for _, tc := range []struct {
+		name          string
+		local, remote []ike.TrafficSelector
+		families      selectorFamilies
+		results       [5]bool
+	}{
+		{"dual stack", []ike.TrafficSelector{fullIPv4, fullIPv6}, []ike.TrafficSelector{fullIPv4, fullIPv6},
+			selectorIPv4 | selectorIPv6, [5]bool{true, true, true, true, false}},
+		{"mixed families", []ike.TrafficSelector{fullIPv4, fullIPv6}, []ike.TrafficSelector{fullIPv6, udp443},
+			selectorIPv6, [5]bool{true, false, false, true, false}},
+		{"IPv4 only", []ike.TrafficSelector{fullIPv4}, []ike.TrafficSelector{fullIPv4},
+			selectorIPv4, [5]bool{true, true, true, false, false}},
+		{"one-sided narrow range", []ike.TrafficSelector{fullIPv4}, []ike.TrafficSelector{narrowIPv4},
+			0, [5]bool{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, plan, endpoint, _ := dataplaneFixture(t)
+			child := dataplaneChild(512)
+			child.LocalSelectors, child.RemoteSelectors = tc.local, tc.remote
+			if err := d.install(10, plan, endpoint, child); err != nil {
+				t.Fatal(err)
+			}
+			sa := d.sas[child.InitiatorSPI]
+			if sa.unrestrictedFamilies != tc.families {
+				t.Fatalf("compiled families = %d, want %d", sa.unrestrictedFamilies, tc.families)
+			}
+			results := [5]bool{
+				dataplaneSelectors(sa, dataplanePacket(true), true),
+				dataplaneSelectors(sa, dataplanePacket(false), false),
+				dataplaneSelectors(sa, fragment, true),
+				dataplaneSelectors(sa, ipv6, true),
+				dataplaneSelectors(sa, malformed, true),
+			}
+			if results != tc.results {
+				t.Fatalf("selector results = %v, want %v", results, tc.results)
+			}
+		})
 	}
 }

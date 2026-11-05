@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/HiggsNet/photon/internal/photonclient/ike"
@@ -20,21 +21,22 @@ type packetSockets struct {
 	// holds writeMu then mu. Either lock protects reads of those fields: sends
 	// hold writeMu through I/O; the sole reader uses mu independently. Other
 	// mutable reader metadata, including readDeadline and changed, uses mu.
-	writeMu          sync.Mutex
-	mu               sync.Mutex
-	udp              *net.UDPConn
-	tcp              net.Listener
-	address          string
-	changed          chan struct{}
-	failed           chan struct{}
-	closed           bool
-	readDeadline     time.Time
-	tunnelGeneration uint64
-	tunnels          map[uint64]tunnelEndpoints
-	tunnelPeers      map[netip.AddrPort]map[uint64]bool
-	controlWrites    map[*udpControlWrite]struct{} // Windows overlapped sends, guarded by writeMu.
-	ikePackets       chan tunnelDatagram
-	espPackets       chan tunnelDatagram
+	udpSegmentationDisabled atomic.Bool // Capability is scoped to the current socket.
+	writeMu                 sync.Mutex
+	mu                      sync.Mutex
+	udp                     *net.UDPConn
+	tcp                     net.Listener
+	address                 string
+	changed                 chan struct{}
+	failed                  chan struct{}
+	closed                  bool
+	readDeadline            time.Time
+	tunnelGeneration        uint64
+	tunnels                 map[uint64]tunnelEndpoints
+	tunnelPeers             map[netip.AddrPort]map[uint64]bool
+	controlWrites           map[*udpControlWrite]struct{} // Windows overlapped sends, guarded by writeMu.
+	ikePackets              chan tunnelDatagram
+	espPackets              chan tunnelDatagram
 }
 
 // These are bounded ingress queues, not protocol workers. The GossipDriver's
@@ -71,6 +73,7 @@ func (s *packetSockets) Rebind(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	s.udpSegmentationDisabled.Store(false)
 	s.clearTunnelLocked()
 	s.cancelUDPControlLocked(0, true)
 	if s.udp != nil {
@@ -323,8 +326,7 @@ func (s *packetSockets) demuxTunnelLocked(packet []byte, peer netip.AddrPort, ge
 }
 
 // WriteTunnel is serialized with rebind/selection and has the same one-second
-// bound as Gossip sends. Windows uses one WriteToUDP per packet; no batch API
-// or background send queue is required to preserve packet lifetime.
+// bound as Gossip sends. Control and standalone callers use plain UDP.
 func (s *packetSockets) WriteTunnel(generation uint64, packet []byte, peer netip.AddrPort) error {
 	var timing fixturePacketTiming
 	return s.writeTunnel(generation, packet, peer, &timing)
@@ -351,6 +353,44 @@ func (s *packetSockets) writeTunnel(generation uint64, packet []byte, peer netip
 	_, err = conn.WriteToUDPAddrPort(packet, peer)
 	timing.MarkUDPWriteDone()
 	return err
+}
+
+// writeTunnelSegments serializes endpoint validation and the single Winsock
+// operation against socket replacement. A false result means no datagrams
+// were submitted and the caller can use the ordinary writes.
+func (s *packetSockets) writeTunnelSegments(generation uint64, peer netip.AddrPort, packet []byte, size int, traces []fixturePacketTiming) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if s.udpSegmentationDisabled.Load() {
+		return false, nil
+	}
+	for i := range traces {
+		traces[i].MarkUDPWriterAcquired()
+	}
+	conn := s.udp
+	endpoints, reserved := s.tunnels[generation]
+	valid := !s.closed && conn != nil && reserved && peer.IsValid() && (peer == endpoints.ike || peer == endpoints.natt)
+	for i := range traces {
+		traces[i].MarkUDPValidationDone()
+	}
+	if !valid {
+		return true, net.ErrClosed
+	}
+	err := conn.SetWriteDeadline(time.Now().Add(time.Second))
+	for i := range traces {
+		traces[i].MarkUDPDeadlineDone()
+	}
+	if err != nil {
+		return true, err
+	}
+	submitted, unsupported, err := writeUDPSegments(conn, packet, size, peer)
+	if unsupported {
+		s.udpSegmentationDisabled.Store(true)
+	}
+	for i := range traces {
+		traces[i].MarkUDPWriteDone()
+	}
+	return submitted, err
 }
 
 func (s *packetSockets) SetReadDeadline(deadline time.Time) error {

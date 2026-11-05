@@ -413,7 +413,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				return err
 			}
 		case event := <-mesh.device.packets:
-			mesh.handleHost(event)
+			mesh.handleHostBatch(ctx, mesh.device.packets, event)
 		case <-tunnelTicker.C:
 			if err := mesh.tick(); err != nil {
 				return err

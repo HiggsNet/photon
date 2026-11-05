@@ -137,9 +137,6 @@ func (p *gatewayBabelPipeline) authorize(facts *packetAuthorization, packet []by
 		}
 		return true
 	}
-	if p.device == nil || len(p.addresses) == 0 {
-		return false
-	}
 	src, dst, ok := businessEndpoints(packet)
 	if !ok {
 		return false
@@ -147,17 +144,23 @@ func (p *gatewayBabelPipeline) authorize(facts *packetAuthorization, packet []by
 	if !outbound {
 		src, dst = dst, src
 	}
-	if !p.localAddress(src, origins) {
-		return false
+	return p.authorizeBusiness(facts, src, dst)
+}
+
+func (p *gatewayBabelPipeline) authorizeBusiness(facts *packetAuthorization, src, dst netip.Addr) bool {
+	return p.localAddress(src, facts.localOrigins) && p.assignedHost(facts, src) &&
+		p.leaf.HasRoute(src, dst, facts.now, facts.authorizeRoute)
+}
+
+func (p *gatewayBabelPipeline) assignedHost(facts *packetAuthorization, address netip.Addr) bool {
+	if p.device != nil {
+		for _, host := range facts.hosts {
+			if host.Addr() == address {
+				return true
+			}
+		}
 	}
-	local := false
-	for _, host := range facts.hosts {
-		local = local || host.Addr() == src
-	}
-	if !local {
-		return false
-	}
-	return p.leaf.HasRoute(src, dst, facts.now, facts.authorizeRoute)
+	return false
 }
 
 func (p *gatewayBabelPipeline) send(facts *packetAuthorization, messages []babel.Message) {
@@ -225,35 +228,12 @@ func (p *gatewayBabelPipeline) Accept(config *Config, view corestate.View, plan 
 }
 
 func (p *gatewayBabelPipeline) acceptPrepared(facts *packetAuthorization, completion dataplaneCompletion) (bool, error) {
-	// This value owns finalization through the fresh gate that starts at AES
-	// completion. Delivery and classification stay on the same scalar trace.
-	outcome := fixturePacketTimingRejected
-	if completion.timing.Sampled() {
-		if errors.Is(completion.err, context.Canceled) || (completion.job.ctx != nil && completion.job.ctx.Err() != nil) {
-			outcome = fixturePacketTimingCanceled
-		} else if completion.err != nil {
-			outcome = fixturePacketTimingCryptoError
-		}
-	}
-	if !p.preparedCurrent(facts) {
-		completion.timing.Finish(outcome)
-		return false, nil
-	}
-	packet, peer, outbound, ok := p.tunnel.data.accept(completion, facts.plan, func(packet []byte, outbound bool) bool { return p.authorize(facts, packet, outbound) })
+	packet, peer, outbound, ok := p.authorizeCompletion(facts, &completion)
 	if !ok {
-		completion.timing.Finish(outcome)
 		return false, nil
 	}
 	if outbound {
-		completion.timing.MarkDeliveryBegin()
-		err := p.tunnel.socket.writeTunnel(p.generation, packet, peer, &completion.timing)
-		completion.timing.MarkDeliveryEnd()
-		if err != nil {
-			completion.timing.Finish(fixturePacketTimingDeliveryError)
-		} else {
-			completion.timing.Finish(fixturePacketTimingDelivered)
-		}
-		return true, err
+		return true, p.writePreparedOutbound(packet, peer, &completion.timing)
 	}
 	if from, _, err := babel.ParsePacket(packet, p.local); err == nil && from == p.peer {
 		completion.timing.Classify(fixturePacketTimingControl)
@@ -290,6 +270,47 @@ func (p *gatewayBabelPipeline) acceptPrepared(facts *packetAuthorization, comple
 		completion.timing.Finish(fixturePacketTimingDelivered)
 	}
 	return true, err
+}
+
+func (p *gatewayBabelPipeline) writePreparedOutbound(packet []byte, peer netip.AddrPort, timing *fixturePacketTiming) error {
+	timing.MarkDeliveryBegin()
+	err := p.tunnel.socket.writeTunnel(p.generation, packet, peer, timing)
+	finishOutboundDelivery(timing, err)
+	return err
+}
+
+func finishOutboundDelivery(timing *fixturePacketTiming, err error) {
+	timing.MarkDeliveryEnd()
+	if err != nil {
+		timing.Finish(fixturePacketTimingDeliveryError)
+	} else {
+		timing.Finish(fixturePacketTimingDelivered)
+	}
+}
+
+func (p *gatewayBabelPipeline) authorizeCompletion(facts *packetAuthorization, completion *dataplaneCompletion) ([]byte, netip.AddrPort, bool, bool) {
+	// This value owns finalization through the fresh gate that starts at AES
+	// completion. Delivery and classification stay on the same scalar trace.
+	outcome := fixturePacketTimingRejected
+	if completion.timing.Sampled() {
+		if errors.Is(completion.err, context.Canceled) || (completion.job.ctx != nil && completion.job.ctx.Err() != nil) {
+			outcome = fixturePacketTimingCanceled
+		} else if completion.err != nil {
+			outcome = fixturePacketTimingCryptoError
+		}
+	}
+	if !p.preparedCurrent(facts) {
+		completion.timing.Finish(outcome)
+		return nil, netip.AddrPort{}, false, false
+	}
+	packet, peer, outbound, ok := p.tunnel.data.accept(*completion, facts.plan, func(packet []byte, outbound bool) bool {
+		return p.authorize(facts, packet, outbound)
+	})
+	if !ok {
+		completion.timing.Finish(outcome)
+		return nil, netip.AddrPort{}, false, false
+	}
+	return packet, peer, outbound, true
 }
 
 func businessAddress(a netip.Addr) bool {

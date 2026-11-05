@@ -24,20 +24,34 @@ func TestLeafForwardingTracksCurrentRoutesAndPolicy(t *testing.T) {
 			t.Fatalf("lookup at %v: got %+v, want %v from %v", at, got, want.Prefix, want.SourcePrefix)
 		}
 	}
+	checkInstalled := func(at time.Time, want Message) {
+		t.Helper()
+		got, ok := l.LookupInstalledRoute(source, destination, at)
+		if !ok || got.Destination != want.Prefix || got.Source != want.SourcePrefix {
+			t.Fatalf("installed lookup at %v: got %+v, want %v from %v", at, got, want.Prefix, want.SourcePrefix)
+		}
+	}
 	check(now, allowCandidate, specific)
+	checkInstalled(now, specific)
 	check(now, func(route sadr.Route) bool { return route.Destination != specific.Prefix }, fallback)
 	check(now.Add(3500*time.Millisecond), allowCandidate, fallback)
+	checkInstalled(now.Add(3500*time.Millisecond), fallback)
 	receiveLeaf(t, l, now, Message{Type: TLVIHU, Address: neighborLocal, Metric: 200, Interval: 400})
 	if got, _ := l.LookupRoute(source, destination, now, allowCandidate); got.Metric != 250 {
 		t.Fatalf("lookup kept the old link cost: %+v", got)
 	}
 	l.RevalidateRoutes(now, func(route sadr.Route) bool { return route.Destination != specific.Prefix })
 	check(now, allowCandidate, fallback)
+	checkInstalled(now, fallback)
 	receiveLeaf(t, l, now, specific)
 	check(now, allowCandidate, specific)
 	specific.Metric = MetricInfinity
 	receiveLeaf(t, l, now, specific)
 	check(now, allowCandidate, fallback)
+	checkInstalled(now, fallback)
+	if _, ok := l.LookupInstalledRoute(source, destination, now.Add(14*time.Second)); ok {
+		t.Fatal("installed lookup bypassed live neighbor gate")
+	}
 	if l.HasRoute(source, destination, now.Add(14*time.Second), allowCandidate) || l.HasRoute(source, destination, now, nil) {
 		t.Fatal("lookup bypassed live neighbor or authorization gate")
 	}

@@ -18,6 +18,7 @@ import (
 	"github.com/HiggsNet/photon/internal/photonclient/babel"
 	"github.com/HiggsNet/photon/internal/photonclient/esp"
 	"github.com/HiggsNet/photon/internal/photonclient/ike"
+	"github.com/HiggsNet/photon/internal/photonclient/sadr"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/HiggsNet/photon/pkg/routing"
@@ -446,5 +447,105 @@ func TestMeshLocalOriginSequencesRemainCommonAcrossNeighbors(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func meshHostRouteFixture(t *testing.T) (*meshRuntime, *gatewayPatternFixture, *meshPeer, leafDevicePacket) {
+	t.Helper()
+	m, f := meshRouteFixture(t)
+	f.view.State.ManagedZone = f.config.ManagedZone
+	f.view.State.TrustedRootPublicKey = f.config.TrustedRootPublicKey
+	store, err := corestate.RestoreStore(&corestate.CommitCandidate{Verified: f.view.State}, f.view.Revision, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	m.state = &State{common: store}
+	m.policy = newMeshPolicyWorker(store)
+	var inputs meshPolicyInputs
+	for _, p := range m.ordered() {
+		if _, pending := m.policy.project(p, f.view.Revision, f.now); !pending {
+			t.Fatal("initial policy was not queued")
+		}
+		request := <-m.policy.requests
+		m.policy.finish(meshPolicyResult{request: request, projection: inputs.project(request, f.view, f.now)}, f.view.Revision, f.now)
+	}
+	m.device.activeGeneration.Store(1)
+	packet := dataplanePacket(true)
+	copy(packet[12:16], []byte{10, 9, 0, 1})
+	copy(packet[16:20], []byte{10, 1, 2, 3})
+	return m, f, m.peers["node-a.catofes."], leafDevicePacket{generation: 1, packet: packet}
+}
+
+func TestMeshHostAdmissionTracksInstalledBabelRetraction(t *testing.T) {
+	m, f, p, event := meshHostRouteFixture(t)
+	p.policy.current.authorize = func(sadr.Route) bool {
+		t.Error("host admission reran signed authorization on the installed route")
+		return false
+	}
+	completion, ok := m.prepareHost(event)
+	if !ok || m.currentHost(&completion, time.Now()) != p {
+		t.Fatal("initial route did not admit a packet")
+	}
+	meshLearn(t, p, f.view, time.Now(), "10.1.0.0/16", babel.MetricInfinity)
+	if _, ok := m.prepareHost(event); ok {
+		t.Fatal("next host packet used a retracted route")
+	}
+	if m.currentHost(&completion, time.Now()) != p {
+		t.Fatal("Babel retraction canceled a packet already admitted in this turn")
+	}
+	if m.currentHost(&completion, p.tunnel.expiresAt) != nil {
+		t.Fatal("an admitted packet could submit after the hard CHILD expiry")
+	}
+	p.tunnel.data.retire(completion.job.sa.spi)
+	if m.currentHost(&completion, time.Now()) != nil {
+		t.Fatal("an admitted packet could submit on a retired CHILD")
+	}
+}
+
+func TestMeshHostAdmissionRevalidatesOnSignedPolicyInstallation(t *testing.T) {
+	m, f, p, event := meshHostRouteFixture(t)
+	if _, ok := m.prepareHost(event); !ok {
+		t.Fatal("initial signed route did not admit a packet")
+	}
+	key, _ := routing.NormalizeIPAMAssignmentKey("10.1.0.0/16")
+	records := f.view.State.Network.Zones[zone.RootZone].Records
+	previous := records[key]
+	value, err := json.Marshal(routing.IPAMAssignmentRecord{Version: 1, Prefix: "10.1.0.0/16", AssignedTo: "node-a.catofes.", Active: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	withdrawal := &zone.Record{Zone: zone.RootZone, Key: key, Type: routing.RecordTypeIPAMAssignment, Value: value,
+		Version: previous.Version + 1, PrevHash: photoncrypto.RecordHash(previous), Timestamp: now.Unix()}
+	if err := photoncrypto.SignRecord(withdrawal, f.private); err != nil {
+		t.Fatal(err)
+	}
+	records[key] = withdrawal
+	snapshot, err := corestate.Snapshot(f.view.State.Network, zone.RootZone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := m.state.Store()
+	limits := corestate.DefaultSyncLimits()
+	limits.MaxBytes = 8 << 20
+	result, err := store.ApplyRemoteBatch(t.Context(), "mesh-signed-withdrawal",
+		[]corestate.RemoteSnapshot{{Snapshot: snapshot, Limits: limits}}, now)
+	if err != nil || !result.Committed || len(result.Outcomes) != 1 || result.Outcomes[0].Err != nil {
+		t.Fatalf("signed withdrawal did not publish: %+v, %v", result, err)
+	}
+	view := store.ReadView()
+	now = time.Now()
+	if _, pending := m.policy.project(p, view.Revision, now); !pending {
+		t.Fatal("updated signed policy was not queued")
+	}
+	request := <-m.policy.requests
+	var inputs meshPolicyInputs
+	m.policy.finish(meshPolicyResult{request: request, projection: inputs.project(request, view, now)}, view.Revision, now)
+	if p.policy.current == nil || p.policy.current.request.revision != view.Revision {
+		t.Fatal("updated signed policy was not installed")
+	}
+	if _, ok := m.prepareHost(event); ok {
+		t.Fatal("next host packet used a route revoked by the installed signed policy")
 	}
 }
