@@ -1,0 +1,61 @@
+diff --git a/lib/providers/action.dart b/lib/providers/action.dart
+index 3a2f9df..1d8441f 100644
+--- a/lib/providers/action.dart
++++ b/lib/providers/action.dart
+@@ -14,6 +14,7 @@ import 'package:fl_clash/enum/enum.dart';
+ import 'package:fl_clash/models/models.dart';
+ import 'package:fl_clash/plugins/app.dart';
+ import 'package:fl_clash/plugins/service.dart';
++import 'package:fl_clash/photon/controller.dart';
+ import 'package:fl_clash/providers/actions/system_exit.dart';
+ import 'package:fl_clash/providers/mitm.dart';
+ import 'package:fl_clash/providers/providers.dart';
+diff --git a/lib/providers/actions/system.dart b/lib/providers/actions/system.dart
+index df905f7..87c5ca9 100644
+--- a/lib/providers/actions/system.dart
++++ b/lib/providers/actions/system.dart
+@@ -40,7 +40,9 @@ class SystemAction extends _$SystemAction {
+   }
+ 
+   @protected
+-  Duration get exitWatchdogDuration => const Duration(seconds: 3);
++  Duration get exitWatchdogDuration => photonController.hasLease
++      ? const Duration(seconds: 25)
++      : const Duration(seconds: 3);
+ 
+   @protected
+   Future<void> cleanupExitResources(bool needSave) async {
+@@ -100,7 +102,7 @@ class SystemAction extends _$SystemAction {
+ 
+   @protected
+   Future<void> closeCore() async {
+-    await _core.close();
++    await Future.wait([photonController.close(), _core.close()]);
+     commonPrint.log('exit');
+   }
+ 
+diff --git a/lib/views/tools.dart b/lib/views/tools.dart
+index ae786fb..db1acf3 100644
+--- a/lib/views/tools.dart
++++ b/lib/views/tools.dart
+@@ -2,6 +2,7 @@ import 'package:fl_clash/common/common.dart';
+ import 'package:fl_clash/enum/enum.dart';
+ import 'package:fl_clash/l10n/l10n.dart';
+ import 'package:fl_clash/models/models.dart';
++import 'package:fl_clash/photon/view.dart';
+ import 'package:fl_clash/providers/providers.dart';
+ import 'package:fl_clash/ui/icons/icons.dart';
+ import 'package:fl_clash/views/about.dart';
+@@ -50,6 +51,12 @@ class _ToolViewState extends ConsumerState<ToolsView> {
+     return generateSection(
+       title: context.appLocalizations.settings,
+       items: [
++        if (system.isWindows)
++          ListItem.open(
++            leading: const GlyphIcon(AppGlyphs.vpn),
++            title: const Text('Photon'),
++            widget: const PhotonView(),
++          ),
+         const _LocaleItem(),
+         const _ThemeItem(),
+         if (system.isDesktop) const _HotkeyItem(),
