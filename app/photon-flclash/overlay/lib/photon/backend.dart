@@ -12,6 +12,7 @@ abstract interface class PhotonBackend {
   Future<int>? get exitCode;
   Future<void> start(String configPath);
   Future<Map<String, dynamic>> status();
+  Future<Map<String, dynamic>> services();
   Future<void> stop();
 }
 
@@ -93,6 +94,9 @@ final class PhotonProcess implements PhotonBackend {
   @override
   Future<Map<String, dynamic>> status() => _request('status');
 
+  @override
+  Future<Map<String, dynamic>> services() => _request('services');
+
   Future<Map<String, dynamic>> _request(String method) {
     final operation = _tail
         .then((_) async {
@@ -112,6 +116,8 @@ final class PhotonProcess implements PhotonBackend {
             process.stdin.add(const [1]);
             await process.stdin.flush();
             return _result(response, method);
+          } on PhotonControlException {
+            rethrow;
           } catch (_) {
             _broken = true;
             rethrow;

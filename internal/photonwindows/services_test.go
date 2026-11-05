@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -45,6 +46,9 @@ func TestServiceDirectoryRevalidatesSignedFacts(t *testing.T) {
 			active := scenario != "withdrawn"
 			service := put(owner, "services/socks5", photonservice.RecordTypeSOCKS5, photonservice.SOCKS5Record{Type: "socks5", Active: &active, Endpoints: []photonservice.SOCKS5Endpoint{{Region: "cn", Address: "fd42:1::20", Port: 1080}, {Region: "jp", Address: "fd42:1::21", Port: 2080}}})
 			config := &Config{ManagedZone: owner, TrustedRootPublicKey: root}
+			config.Wintun.AdapterName = "Photon Test"
+			config.Overlay.SplitRoutes = []netip.Prefix{netip.MustParsePrefix("fd42::/16")}
+			config.Gateway.BootstrapHints = []BootstrapHint{{Address: "192.0.2.5:33434"}, {Address: "[2001:db8::5]:33434"}, {Address: "bootstrap.example:33434"}}
 			switch scenario {
 			case "bad-signature":
 				service.Signature[0] ^= 1
@@ -80,6 +84,9 @@ func TestServiceDirectoryRevalidatesSignedFacts(t *testing.T) {
 			}
 			if got.InstanceID != "instance-one" || got.Revision != 7 || !got.ValidUntil.Equal(now.Add(5*time.Second)) {
 				t.Fatal("missing snapshot identity or bounded freshness", got)
+			}
+			if got.AdapterName != "Photon Test" || len(got.BypassPrefixes) != 3 {
+				t.Fatal("missing adapter or exact bootstrap/split bypasses", got)
 			}
 			entry := got.Services[0]
 			if scenario != "active" {

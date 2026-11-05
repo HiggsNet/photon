@@ -11,6 +11,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'controller.dart';
+import 'proxy_bridge.dart';
 
 enum _Page { overview, tunnels, peers, routes, services, diagnostics }
 
@@ -30,6 +31,13 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
   bool _advanced = false;
 
   PhotonController get owner => widget.controller ?? photonController;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.controller == null) photonProxyBridge.attach();
+    owner.initialize();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -340,11 +348,65 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
           truncated: status['routes_truncated'] == true,
         );
       case _Page.services:
+        final directory = owner.directory;
         return [
           () => _DetailCard(
             title: l.photonServices,
-            lines: [(l.photonSelected, l.photonEmpty)],
+            lines: [
+              (l.photonSelected, '${owner.selected.length}'),
+              (l.photonName, l.photonMultiTip),
+              if (!owner.directoryFresh) (l.status, l.photonStale),
+            ],
+            footer: FilledButton(
+              onPressed:
+                  widget.controller != null ||
+                      owner.busy ||
+                      !owner.directoryFresh ||
+                      owner.selected.isEmpty ||
+                      status['tunnel_ready'] != true
+                  ? null
+                  : () => owner.applyProxies(photonProxyBridge.apply),
+              child: Text(l.photonApply),
+            ),
           ),
+          if (directory != null)
+            for (final service in directory.services)
+              () => _DetailCard(
+                title: service.owner,
+                lines: [
+                  (
+                    l.status,
+                    service.status == 'active'
+                        ? l.photonTrusted
+                        : service.status == 'withdrawn'
+                        ? l.photonWithdrawn
+                        : l.photonUnauthorized,
+                  ),
+                  if (service.diagnostic.isNotEmpty)
+                    (l.errorDetails, service.diagnostic),
+                ],
+                footer: Column(
+                  children: [
+                    for (final endpoint in service.endpoints)
+                      ListItem.checkbox(
+                        key: ValueKey(endpoint.id),
+                        title: Text(endpoint.region),
+                        subtitle: Text(
+                          '${endpoint.authority}\n${l.photonUnprobed}',
+                        ),
+                        value: owner.selected.contains(endpoint.id),
+                        onChanged: !owner.directoryFresh || owner.busy
+                            ? null
+                            : (value) => owner.toggleEndpoint(
+                                endpoint.id,
+                                value == true,
+                              ),
+                      ),
+                  ],
+                ),
+              ),
+          if (directory != null && directory.services.isEmpty)
+            () => _DetailCard(title: l.photonEmpty, lines: []),
         ];
       case _Page.diagnostics:
         final readiness = _map(status['readiness']);

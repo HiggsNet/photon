@@ -11,6 +11,7 @@ class FakeBackend implements PhotonBackend {
   StateError? statusError;
   Map<String, dynamic> sample = {'running': true, 'tunnel_ready': true};
   bool failStop = false;
+  Map<String, dynamic>? serviceSample;
   @override
   bool hasProcess = false;
   @override
@@ -27,6 +28,21 @@ class FakeBackend implements PhotonBackend {
     calls.add('status');
     if (statusError != null) throw statusError!;
     return sample;
+  }
+
+  @override
+  Future<Map<String, dynamic>> services() async {
+    final now = DateTime.now().toUtc();
+    return serviceSample ??
+        {
+          'instance_id': 'test',
+          'root_fingerprint': 'a' * 64,
+          'managed_zone': 'windows-test.catofes.',
+          'revision': 1,
+          'observed_at': now.toIso8601String(),
+          'valid_until': now.add(const Duration(seconds: 5)).toIso8601String(),
+          'services': [],
+        };
   }
 
   @override

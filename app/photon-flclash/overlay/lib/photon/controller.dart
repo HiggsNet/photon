@@ -6,12 +6,24 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as path;
 
 import 'backend.dart';
+import 'preferences.dart';
+import 'services.dart';
 
 final class PhotonController extends ChangeNotifier {
-  PhotonController({required PhotonBackend Function() createBackend})
-    : _createBackend = createBackend;
+  PhotonController({
+    required PhotonBackend Function() createBackend,
+    this.preferences,
+  }) : _createBackend = createBackend;
 
   final PhotonBackend Function() _createBackend;
+  final PhotonPreferences? preferences;
+  Future<void> Function(PhotonDirectory, Set<String>)? onServicesChanged;
+  Future<void> Function(bool explicitStop)? onServicesInvalidated;
+  PhotonDirectory? _directory;
+  String? _selectionScope;
+  Set<String> _selected = {};
+  Future<void>? _initializing;
+  Timer? _expiry;
   PhotonBackend? _backend;
   Future<void> _tail = Future.value();
   Future<void>? _refresh;
@@ -29,6 +41,13 @@ final class PhotonController extends ChangeNotifier {
   Map<String, dynamic>? get observation => _observation;
   Object? get error => _error;
   String? get configPath => _configPath;
+  PhotonDirectory? get directory => _directory;
+  bool get directoryFresh => _directory?.fresh(DateTime.now()) ?? false;
+  Set<String> get selected => Set.unmodifiable(_selected);
+
+  Future<void> initialize() => _initializing ??= _enqueue(() async {
+    _configPath ??= await preferences?.configPath();
+  }, cleanupOnError: false);
 
   void selectConfig(String value) {
     if (_closed || busy || hasLease) return;
@@ -43,6 +62,7 @@ final class PhotonController extends ChangeNotifier {
         final selected = await pick();
         if (selected != null && !_closed) {
           _configPath = File(selected).absolute.path;
+          await preferences?.saveConfigPath(_configPath!);
         }
       });
 
@@ -72,6 +92,7 @@ final class PhotonController extends ChangeNotifier {
       return;
     }
     _observation = await backend.status();
+    await _refreshServices(backend);
     _timer = Timer.periodic(const Duration(seconds: 2), (_) {
       unawaited(refresh());
     });
@@ -81,34 +102,109 @@ final class PhotonController extends ChangeNotifier {
     if (_closed || !hasLease || _busy) return Future.value();
     return _refresh ??= _enqueue(() async {
       final backend = _backend;
-      if (backend != null) _observation = await backend.status();
-    }).whenComplete(() => _refresh = null);
+      if (backend != null) {
+        _observation = await backend.status();
+        await _refreshServices(backend);
+      }
+    }, showBusy: false).whenComplete(() => _refresh = null);
   }
 
-  Future<void> stop() => _enqueue(_release, cleanupOnError: false);
+  Future<void> stop() =>
+      _enqueue(() => _release(explicitStop: true), cleanupOnError: false);
 
   Future<void> restart({required bool allowed}) async {
     await stop();
     if (!hasLease && !_closed) await start(allowed: allowed);
   }
 
-  Future<void> _release() async {
+  Future<void> _refreshServices(PhotonBackend backend) async {
+    try {
+      final next = PhotonDirectory.fromJson(await backend.services());
+      if (!next.fresh(DateTime.now())) {
+        throw StateError('Photon service information expired');
+      }
+      if (_selectionScope != next.scope) {
+        _selected = await preferences?.selection(next.scope) ?? {};
+        _selectionScope = next.scope;
+      }
+      final active = next.endpoints.map((endpoint) => endpoint.id).toSet();
+      final retained = _selected.intersection(active);
+      if (!setEquals(retained, _selected)) {
+        _selected = retained;
+        await preferences?.saveSelection(next.scope, retained);
+      }
+      _directory = next;
+      _expiry?.cancel();
+      final remaining = next.validUntil.difference(DateTime.now());
+      _expiry = Timer(remaining.isNegative ? Duration.zero : remaining, () {
+        if (!directoryFresh) {
+          unawaited(
+            _enqueue(
+              _invalidateServices,
+              clearError: false,
+              cleanupOnError: false,
+            ),
+          );
+        }
+      });
+      await onServicesChanged?.call(next, selected);
+    } catch (error) {
+      _error = error;
+      await _invalidateServices();
+    }
+  }
+
+  Future<void> toggleEndpoint(String id, bool enabled) => _enqueue(() async {
+    final current = _directory;
+    if (current == null ||
+        !directoryFresh ||
+        !current.endpoints.any((endpoint) => endpoint.id == id)) {
+      return;
+    }
+    final next = {..._selected};
+    enabled ? next.add(id) : next.remove(id);
+    await preferences?.saveSelection(current.scope, next);
+    _selected = next;
+    await onServicesChanged?.call(current, selected);
+  }, cleanupOnError: false);
+
+  Future<void> applyProxies(Future<void> Function() apply) =>
+      _enqueue(apply, cleanupOnError: false);
+
+  Future<void> _invalidateServices({bool explicitStop = false}) async {
+    _expiry?.cancel();
+    _expiry = null;
+    _directory = null;
+    await onServicesInvalidated?.call(explicitStop);
+  }
+
+  Future<void> _release({bool explicitStop = false}) async {
     _timer?.cancel();
     _timer = null;
     _observation = null;
+    Object? invalidationError;
+    try {
+      await _invalidateServices(explicitStop: explicitStop);
+    } catch (error) {
+      invalidationError = error;
+    }
     final backend = _backend;
     if (backend == null) return;
     await backend.stop();
     _backend = null;
+    if (invalidationError != null) {
+      throw StateError('Proxy cleanup failed: $invalidationError');
+    }
   }
 
   Future<void> _enqueue(
     Future<void> Function() action, {
     bool clearError = true,
     bool cleanupOnError = true,
+    bool showBusy = true,
   }) {
     final operation = _tail.then((_) async {
-      _busy = true;
+      _busy = showBusy;
       if (clearError) _error = null;
       notifyListeners();
       try {
@@ -134,13 +230,18 @@ final class PhotonController extends ChangeNotifier {
   Future<void> close() {
     _closed = true;
     _timer?.cancel();
-    return _closing ??= _enqueue(_release, cleanupOnError: false).then((_) {
-      if (hasLease) throw StateError('Photon backend exit is unconfirmed');
-    });
+    return _closing ??=
+        _enqueue(
+          () => _release(explicitStop: true),
+          cleanupOnError: false,
+        ).then((_) {
+          if (hasLease) throw StateError('Photon backend exit is unconfirmed');
+        });
   }
 }
 
 final photonController = PhotonController(
+  preferences: StoredPhotonPreferences(),
   createBackend: () {
     if (safeModeBuild || !Platform.isWindows) {
       throw StateError('Photon is disabled on this platform or in safe mode');

@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import '../helpers/test_app.dart';
 import 'controller_test.dart' show FakeBackend;
+import 'services_test.dart' show directoryFixture;
 
 void main() {
   late PhotonController controller;
@@ -171,4 +172,26 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+  photonTest('proxy services allow more than one endpoint to stay selected', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1400, 1100);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    backend.serviceSample = directoryFixture();
+    await tester.pumpWidget(view());
+    await tester.tap(find.text('Start'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Proxy services').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(ValueKey('1' * 32)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(ValueKey('2' * 32)));
+    await tester.pumpAndSettle();
+    expect(controller.selected, {'1' * 32, '2' * 32});
+    expect(find.textContaining('[fd42:1::20]:1080'), findsOneWidget);
+    expect(find.textContaining('[fd42:1::21]:2080'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }

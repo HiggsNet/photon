@@ -14,6 +14,16 @@ Get-Content -LiteralPath (Join-Path $PSScriptRoot 'upstream.env') | ForEach-Obje
 function Check-Exit([string]$Operation) {
     if ($LASTEXITCODE -ne 0) { throw "$Operation failed: $LASTEXITCODE" }
 }
+function Invoke-BuildTool([string]$Program, [string[]]$ToolArguments) {
+    # Windows PowerShell 5 can promote successful native stderr progress to an error.
+    $previous = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $Program @ToolArguments
+        $code = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previous }
+    if ($code -ne 0) { throw "$Program failed: $code" }
+}
 if (Test-Path -LiteralPath $OutputDirectory) { throw 'Output directory must be new' }
 if ((Get-Content -LiteralPath (Join-Path $Checkout '.photon-flclash') -Raw).Trim() -cne $lock.FLCLASH_COMMIT) { throw 'Checkout was not prepared by Photon' }
 $head = & git -C $Checkout rev-parse HEAD
@@ -39,18 +49,18 @@ if ($version.frameworkVersion -cne $lock.FLCLASH_FLUTTER_VERSION -or $version.fr
 $goVersion = & go env GOVERSION
 Check-Exit 'Read Go version'
 if ($goVersion -cne ('go' + $lock.FLCLASH_GO_VERSION)) { throw 'FlClash Go version mismatch' }
+$rustVersion = & rustc --version
+Check-Exit 'Read Rust version'
+if ($rustVersion -notmatch ('^rustc ' + [regex]::Escape($lock.FLCLASH_RUST_VERSION) + ' ')) { throw 'FlClash Rust version mismatch' }
 if ((Get-Content -LiteralPath (Join-Path $Checkout 'pubspec.yaml') -Raw) -match 'build_assets:\s*false') { throw 'Native build hooks must be enabled for packaging' }
 foreach ($name in @('photon-windows.exe','wintun.dll')) {
     if (!(Test-Path -LiteralPath (Join-Path $BackendDirectory $name) -PathType Leaf)) { throw "Missing $name" }
 }
 Push-Location $Checkout
 try {
-    & flutter pub get
-    Check-Exit 'Flutter dependencies'
-    & dart run intl_utils:generate
-    Check-Exit 'Generate localizations'
-    & flutter build windows --release
-    Check-Exit 'Windows release build'
+    Invoke-BuildTool 'flutter' @('pub', 'get')
+    Invoke-BuildTool 'dart' @('run', 'intl_utils:generate')
+    Invoke-BuildTool 'flutter' @('build', 'windows', '--release')
     $bundle = Join-Path $Checkout 'build\windows\x64\runner\Release'
     if (!(Test-Path -LiteralPath (Join-Path $bundle 'FlClash.exe'))) { throw 'Windows x64 bundle missing' }
     New-Item -ItemType Directory -Path $OutputDirectory | Out-Null

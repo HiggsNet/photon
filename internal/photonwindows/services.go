@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net"
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
@@ -25,6 +26,8 @@ type ServiceDirectory struct {
 	ObservedAt      time.Time      `json:"observed_at"`
 	ValidUntil      time.Time      `json:"valid_until"`
 	Services        []ServiceEntry `json:"services"`
+	AdapterName     string         `json:"adapter_name"`
+	BypassPrefixes  []netip.Prefix `json:"bypass_prefixes"`
 }
 
 type ServiceEntry struct {
@@ -59,7 +62,20 @@ func (d *Daemon) Services(ctx context.Context) (ServiceDirectory, error) {
 	}
 	select {
 	case sample := <-result:
-		return buildServiceDirectory(ctx, d.config, sample.store.ReadView(), d.instanceID, time.Now())
+		directory, err := buildServiceDirectory(ctx, d.config, sample.store.ReadView(), d.instanceID, time.Now())
+		if err != nil {
+			return ServiceDirectory{}, err
+		}
+		for _, candidate := range sample.plan.Candidates {
+			for _, contact := range candidate.Contacts {
+				if address, err := netip.ParseAddr(contact.Address); err == nil {
+					directory.BypassPrefixes = append(directory.BypassPrefixes, netip.PrefixFrom(address, address.BitLen()))
+				}
+			}
+		}
+		slices.SortFunc(directory.BypassPrefixes, func(a, b netip.Prefix) int { return strings.Compare(a.String(), b.String()) })
+		directory.BypassPrefixes = slices.Compact(directory.BypassPrefixes)
+		return directory, nil
 	case <-d.done:
 		return ServiceDirectory{}, net.ErrClosed
 	case <-ctx.Done():
@@ -77,6 +93,13 @@ func buildServiceDirectory(ctx context.Context, config *Config, view corestate.V
 	}
 	root := sha256.Sum256(config.TrustedRootPublicKey)
 	out := ServiceDirectory{InstanceID: instanceID, RootFingerprint: hex.EncodeToString(root[:]), ManagedZone: config.ManagedZone, Revision: uint64(view.Revision), ObservedAt: now, ValidUntil: now.Add(5 * time.Second), Services: []ServiceEntry{}}
+	out.AdapterName = config.Wintun.AdapterName
+	out.BypassPrefixes = slices.Clone(config.Overlay.SplitRoutes)
+	for _, hint := range config.Gateway.BootstrapHints {
+		if endpoint, err := netip.ParseAddrPort(hint.Address); err == nil {
+			out.BypassPrefixes = append(out.BypassPrefixes, netip.PrefixFrom(endpoint.Addr(), endpoint.Addr().BitLen()))
+		}
+	}
 	verifier := &photoncrypto.Verifier{}
 	authorized := currentAuthorizedRouteSetWithVerifier(config, view, now, verifier)
 	paths := make([]zone.ZonePath, 0, len(network.Zones))
