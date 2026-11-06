@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:fl_clash/common/common.dart';
 import 'package:fl_clash/features/form/form.dart';
@@ -16,30 +18,57 @@ Future<String?> choosePhotonConfig() async {
 Future<String?> editPhotonSettings(
   BuildContext context, {
   String? config,
+  bool chooseLocation = false,
 }) async {
-  final create = config == null;
-  if (create) {
+  final String configPath;
+  final bool create;
+  if (config != null) {
+    configPath = config;
+    create = false;
+  } else if (chooseLocation) {
     final title = context.appLocalizations.photonCreateConfig;
     final folder = await FilePicker.getDirectoryPath(
       dialogTitle: title,
       initialDirectory: await appPath.downloadDirPath,
     );
     if (folder == null) return null;
-    config = path.join(folder, 'photon.yaml');
+    configPath = path.join(folder, 'photon.yaml');
+    create = true;
+  } else {
+    final directory = await Directory(
+      path.join(await appPath.homeDirPath, 'photon'),
+    ).create(recursive: true);
+    configPath = path.join(directory.path, 'photon.yaml');
+    create =
+        await FileSystemEntity.type(configPath, followLinks: false) ==
+        FileSystemEntityType.notFound;
   }
   if (!context.mounted) return null;
-  final session = await PhotonConfigSession.open(config, create: create);
+  final session = await PhotonConfigSession.open(configPath, create: create);
   try {
     if (!context.mounted) return null;
-    final saved = await showFormSheet<bool>(
-      context: context,
-      builder: (_) => _PhotonSettingsForm(session: session, config: config!),
+    final saved = await showPhotonSettingsForm(
+      context,
+      config: configPath,
+      form: session.form,
+      onSave: session.save,
     );
-    return saved == true ? config : null;
+    return saved == true ? configPath : null;
   } finally {
     await session.close();
   }
 }
+
+Future<bool?> showPhotonSettingsForm(
+  BuildContext context, {
+  required String config,
+  required Map<String, dynamic> form,
+  required Future<void> Function(Map<String, dynamic>) onSave,
+}) => showFormSheet<bool>(
+  context: context,
+  builder: (_) =>
+      _PhotonSettingsForm(config: config, form: form, onSave: onSave),
+);
 
 Future<String?> showPhotonImport(BuildContext context, String config) async {
   final imported = await showFormSheet<bool>(
@@ -50,23 +79,35 @@ Future<String?> showPhotonImport(BuildContext context, String config) async {
 }
 
 class _PhotonSettingsForm extends StatefulWidget {
-  const _PhotonSettingsForm({required this.session, required this.config});
+  const _PhotonSettingsForm({
+    required this.config,
+    required this.form,
+    required this.onSave,
+  });
 
-  final PhotonConfigSession session;
   final String config;
+  final Map<String, dynamic> form;
+  final Future<void> Function(Map<String, dynamic>) onSave;
 
   @override
   State<_PhotonSettingsForm> createState() => _PhotonSettingsFormState();
 }
 
 class _PhotonSettingsFormState extends State<_PhotonSettingsForm> {
-  late final _form = Map<String, dynamic>.of(widget.session.form);
+  late final _form = Map<String, dynamic>.of(widget.form);
   late final _hints = [
     for (final hint in _form['bootstrap_hints'] as List? ?? const [])
       Map<String, dynamic>.from(hint as Map),
   ];
+  bool _advanced = false;
   bool _saving = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_form['new_config'] == true && _hints.isEmpty) _hints.add({});
+  }
 
   Future<void> _save() async {
     if (_saving) return;
@@ -75,7 +116,10 @@ class _PhotonSettingsFormState extends State<_PhotonSettingsForm> {
       _error = null;
     });
     try {
-      await widget.session.save({..._form, 'bootstrap_hints': _hints});
+      await widget.onSave({
+        ..._form,
+        'bootstrap_hints': [for (final hint in _hints) Map.of(hint)],
+      });
       if (mounted) Navigator.pop(context, true);
     } catch (error) {
       if (mounted) setState(() => _error = error.toString());
@@ -84,24 +128,36 @@ class _PhotonSettingsFormState extends State<_PhotonSettingsForm> {
     }
   }
 
-  Widget _field(String name, String label, {bool multiline = false}) => FormRow(
-    title: label,
-    trailing: multiline
-        ? TextFormField(
-            key: ValueKey(name),
-            initialValue: _form[name] as String,
-            autocorrect: false,
-            maxLines: null,
-            keyboardType: TextInputType.multiline,
-            onChanged: (value) => _form[name] = value,
-          )
-        : FormRowTextField(
-            key: ValueKey(name),
-            initialValue: _form[name] as String,
-            autocorrect: false,
-            onChanged: (value) => _form[name] = value,
+  Widget _field(String name, String label, {TextInputType? keyboardType}) =>
+      FormRow(
+        title: label,
+        trailing: FormRowTextField(
+          key: ValueKey(name),
+          initialValue: _form[name] as String,
+          autocorrect: false,
+          keyboardType: keyboardType,
+          onChanged: (value) => _form[name] = value,
+        ),
+      );
+
+  Widget _lines(String name, String label, {required String example}) =>
+      generateSection(
+        title: label,
+        items: [
+          Semantics(
+            label: label,
+            child: TextFormField(
+              key: ValueKey(name),
+              initialValue: _form[name] as String,
+              decoration: InputDecoration(hintText: example),
+              autocorrect: false,
+              maxLines: null,
+              keyboardType: TextInputType.multiline,
+              onChanged: (value) => _form[name] = value,
+            ),
           ),
-  );
+        ],
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -115,18 +171,12 @@ class _PhotonSettingsFormState extends State<_PhotonSettingsForm> {
         saving: _saving,
         error: _error,
         children: [
-          Text(widget.config),
+          if (create) Text(l.photonFirstRunHint),
           generateSection(
-            footer: create ? l.photonFirstRunHint : null,
+            title: l.photonIdentity,
             items: [
               _field('managed_zone', l.photonManagedZone),
               _field('root_public_key', l.photonRootKey),
-              _field('split_routes', l.photonRoutes, multiline: true),
-              _field(
-                'allowed_gateways',
-                l.photonAllowedGateways,
-                multiline: true,
-              ),
             ],
           ),
           generateSection(
@@ -137,7 +187,7 @@ class _PhotonSettingsFormState extends State<_PhotonSettingsForm> {
                   key: ObjectKey(hint),
                   children: [
                     FormRow(
-                      title: l.photonManagedZone,
+                      title: l.peers,
                       trailing: FormRowTextField(
                         initialValue: hint['peer'] as String?,
                         autocorrect: false,
@@ -169,19 +219,36 @@ class _PhotonSettingsFormState extends State<_PhotonSettingsForm> {
               ),
             ],
           ),
-          generateSection(
+          _lines('split_routes', l.photonRoutes, example: 'fd42::/16'),
+          _lines('allowed_gateways', l.photonAllowedGateways, example: '*'),
+          FormRow(
             title: l.advancedConfig,
-            items: [
-              _field('state_path', l.photonStatePath),
-              _field('overlay_id', l.photonOverlay),
-              _field('gossip_listen', l.photonGossipListen),
-              _field('adapter_name', l.photonAdapter),
-              _field('mtu', 'MTU'),
-              _field('log_level', l.logLevel),
-              _field('initial_backoff', l.photonInitialRetry),
-              _field('max_backoff', l.photonMaxRetry),
-            ],
+            onPressed: _saving
+                ? null
+                : () => setState(() => _advanced = !_advanced),
+            trailing: Text(_advanced ? l.showLess : l.showMore),
           ),
+          if (_advanced)
+            generateSection(
+              items: [
+                Text(widget.config),
+                _field('state_path', l.photonStatePath),
+                _field('overlay_id', l.photonOverlay),
+                _field('gossip_listen', l.photonGossipListen),
+                _field('adapter_name', l.photonAdapter),
+                _field('mtu', 'MTU', keyboardType: TextInputType.number),
+                ListItem<String>.options(
+                  title: Text(l.logLevel),
+                  options: const ['debug', 'info', 'warn', 'error'],
+                  value: _form['log_level'] as String,
+                  textBuilder: (value) => value,
+                  onChanged: (value) =>
+                      setState(() => _form['log_level'] = value),
+                ),
+                _field('initial_backoff', l.photonInitialRetry),
+                _field('max_backoff', l.photonMaxRetry),
+              ],
+            ),
         ],
       ),
     );

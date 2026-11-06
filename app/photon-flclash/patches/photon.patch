@@ -1,8 +1,8 @@
 diff --git a/arb/intl_en.arb b/arb/intl_en.arb
-index cbda0e3..a858bef 100644
+index cbda0e3..6bb0dad 100644
 --- a/arb/intl_en.arb
 +++ b/arb/intl_en.arb
-@@ -1076,5 +1076,48 @@
+@@ -1076,5 +1076,51 @@
    "fakeipFilterDesc": "These domains get real IPs instead of Fake-IPs. In whitelist mode, only they get Fake-IPs.",
    "fallbackFilterGeositeDesc": "Domains in these GeoSite categories are resolved by Fallback directly.",
    "fallbackFilterIpcidrDesc": "When Nameserver returns an IP in these ranges, the Fallback answer is used.",
@@ -36,6 +36,9 @@ index cbda0e3..a858bef 100644
 +  "photonProxyRequiresTunnel": "Establish the Photon tunnel before using these proxy services.",
 +  "photonCreateConfig": "Create Photon configuration",
 +  "photonSettings": "Photon settings",
++  "photonSetupHint": "Enter your network details in Photon settings to get started.",
++  "photonUseConfigFile": "Use existing Photon YAML",
++  "photonStopToEdit": "Stop Photon before changing its settings.",
 +  "photonManagedZone": "Node zone",
 +  "photonRootKey": "Trusted root public key",
 +  "photonAllowedGateways": "Allowed gateways",
@@ -46,17 +49,17 @@ index cbda0e3..a858bef 100644
 +  "photonAdapter": "Adapter name",
 +  "photonInitialRetry": "Initial retry delay",
 +  "photonMaxRetry": "Maximum retry delay",
-+  "photonFirstRunHint": "Use the settings from your network administrator. Enter routes and gateway selectors one per line. Add a bootstrap node to request authorization on first start.",
++  "photonFirstRunHint": "Use the node zone, trusted root public key, and at least one private network route from your administrator. Enter routes and gateway selectors one per line. Add a bootstrap node for automatic enrollment.",
 +  "photonImportIdentity": "Import authorization",
 +  "photonJoinBundle": "Join bundle",
 +  "photonImportFiles": "Select the join bundle and its matching private key.",
 +  "photonImportHint": "Import creates an identity database at the path in this configuration. That path must be unused."
  }
 diff --git a/arb/intl_es.arb b/arb/intl_es.arb
-index 417db6b..70d44e7 100644
+index 417db6b..132e488 100644
 --- a/arb/intl_es.arb
 +++ b/arb/intl_es.arb
-@@ -1076,5 +1076,48 @@
+@@ -1076,5 +1076,51 @@
    "fakeipFilterDesc": "Estos dominios reciben su IP real en lugar de una Fake-IP. En modo whitelist, solo ellos reciben Fake-IP.",
    "fallbackFilterGeositeDesc": "Los dominios de estas categorías GeoSite se resuelven directamente con Fallback.",
    "fallbackFilterIpcidrDesc": "Si Nameserver devuelve una IP de estos rangos, se usa la respuesta de Fallback.",
@@ -90,6 +93,9 @@ index 417db6b..70d44e7 100644
 +  "photonProxyRequiresTunnel": "Establece el túnel Photon antes de usar estos proxies.",
 +  "photonCreateConfig": "Crear configuración de Photon",
 +  "photonSettings": "Ajustes de Photon",
++  "photonSetupHint": "Para empezar, introduce los datos de red en los ajustes de Photon.",
++  "photonUseConfigFile": "Usar un YAML existente de Photon",
++  "photonStopToEdit": "Detén Photon antes de cambiar sus ajustes.",
 +  "photonManagedZone": "Zona del nodo",
 +  "photonRootKey": "Clave pública raíz de confianza",
 +  "photonAllowedGateways": "Puertas de enlace permitidas",
@@ -100,17 +106,17 @@ index 417db6b..70d44e7 100644
 +  "photonAdapter": "Nombre del adaptador",
 +  "photonInitialRetry": "Espera inicial de reintento",
 +  "photonMaxRetry": "Espera máxima de reintento",
-+  "photonFirstRunHint": "Usa los datos del administrador de red. Escribe una ruta o un selector de puerta de enlace por línea. Añade un nodo de arranque para solicitar autorización al iniciar por primera vez.",
++  "photonFirstRunHint": "Introduce la zona del nodo, la clave pública raíz de confianza y al menos una ruta de red privada que te haya dado tu administrador. Escribe una ruta o un selector de puerta de enlace por línea. Añade un nodo de arranque para el registro automático.",
 +  "photonImportIdentity": "Importar autorización",
 +  "photonJoinBundle": "Paquete de incorporación",
 +  "photonImportFiles": "Selecciona el paquete de incorporación y su clave privada correspondiente.",
 +  "photonImportHint": "La importación crea una base de identidad en la ruta de la configuración. La ruta debe estar libre."
  }
 diff --git a/arb/intl_fr.arb b/arb/intl_fr.arb
-index aa4e778..dc8d0f4 100644
+index aa4e778..512677c 100644
 --- a/arb/intl_fr.arb
 +++ b/arb/intl_fr.arb
-@@ -1076,5 +1076,48 @@
+@@ -1076,5 +1076,51 @@
    "fakeipFilterDesc": "Ces domaines reçoivent leur vraie IP au lieu d’une Fake-IP. En mode whitelist, eux seuls reçoivent une Fake-IP.",
    "fallbackFilterGeositeDesc": "Les domaines de ces catégories GeoSite sont résolus directement par Fallback.",
    "fallbackFilterIpcidrDesc": "Si Nameserver renvoie une IP de ces plages, la réponse de Fallback est utilisée.",
@@ -144,6 +150,9 @@ index aa4e778..dc8d0f4 100644
 +  "photonProxyRequiresTunnel": "Établissez le tunnel Photon avant d’utiliser les proxys.",
 +  "photonCreateConfig": "Créer une configuration Photon",
 +  "photonSettings": "Réglages Photon",
++  "photonSetupHint": "Pour commencer, saisissez les paramètres réseau dans les réglages de Photon.",
++  "photonUseConfigFile": "Utiliser un fichier YAML Photon existant",
++  "photonStopToEdit": "Arrêtez Photon avant de modifier ses réglages.",
 +  "photonManagedZone": "Zone du nœud",
 +  "photonRootKey": "Clé publique racine de confiance",
 +  "photonAllowedGateways": "Passerelles autorisées",
@@ -154,17 +163,17 @@ index aa4e778..dc8d0f4 100644
 +  "photonAdapter": "Nom de l’adaptateur",
 +  "photonInitialRetry": "Délai initial de réessai",
 +  "photonMaxRetry": "Délai maximal de réessai",
-+  "photonFirstRunHint": "Utilisez les paramètres de votre administrateur réseau. Saisissez une route ou un sélecteur de passerelle par ligne. Ajoutez un nœud d’amorçage pour demander une autorisation au premier démarrage.",
++  "photonFirstRunHint": "Saisissez la zone du nœud, la clé publique racine de confiance et au moins une route du réseau privé fournis par votre administrateur. Saisissez une route ou un sélecteur de passerelle par ligne. Ajoutez un nœud d’amorçage pour l’inscription automatique.",
 +  "photonImportIdentity": "Importer une autorisation",
 +  "photonJoinBundle": "Dossier d’adhésion",
 +  "photonImportFiles": "Sélectionnez le dossier d’adhésion et la clé privée correspondante.",
 +  "photonImportHint": "L’import crée une base d’identité à l’emplacement indiqué dans la configuration. Cet emplacement doit être libre."
  }
 diff --git a/arb/intl_ja.arb b/arb/intl_ja.arb
-index d6ff2b3..6cd21f9 100644
+index d6ff2b3..c3fab32 100644
 --- a/arb/intl_ja.arb
 +++ b/arb/intl_ja.arb
-@@ -1076,5 +1076,48 @@
+@@ -1076,5 +1076,51 @@
    "fakeipFilterDesc": "これらのドメインには Fake-IP ではなく実際の IP を返します。whitelist モードでは、これらだけが Fake-IP を使います。",
    "fallbackFilterGeositeDesc": "これらの GeoSite カテゴリのドメインは、直接 Fallback で解決します。",
    "fallbackFilterIpcidrDesc": "Nameserver がこれらの範囲の IP を返したときは、Fallback の結果を使います。",
@@ -198,6 +207,9 @@ index d6ff2b3..6cd21f9 100644
 +  "photonProxyRequiresTunnel": "プロキシサービスの使用前に Photon トンネルを接続してください。",
 +  "photonCreateConfig": "Photon 設定を作成",
 +  "photonSettings": "Photon 設定",
++  "photonSetupHint": "Photon 設定でネットワーク情報を入力して開始します。",
++  "photonUseConfigFile": "既存の Photon YAML を使用",
++  "photonStopToEdit": "設定を変更する前に Photon を停止してください。",
 +  "photonManagedZone": "ノードゾーン",
 +  "photonRootKey": "信頼するルート公開鍵",
 +  "photonAllowedGateways": "許可するゲートウェイ",
@@ -208,17 +220,17 @@ index d6ff2b3..6cd21f9 100644
 +  "photonAdapter": "アダプター名",
 +  "photonInitialRetry": "初回再試行までの時間",
 +  "photonMaxRetry": "最大再試行間隔",
-+  "photonFirstRunHint": "ネットワーク管理者から受け取った設定を使ってください。ルートとゲートウェイの条件は 1 行に 1 件ずつ入力します。初回起動時に承認を申請するには、ブートストラップノードを追加してください。",
++  "photonFirstRunHint": "管理者から受け取ったノードゾーン、信頼するルート公開鍵、少なくとも 1 件の内部ネットワークルートを入力します。ルートとゲートウェイの条件は 1 行に 1 件ずつ入力します。自動登録にはブートストラップノードが必要です。",
 +  "photonImportIdentity": "参加承認をインポート",
 +  "photonJoinBundle": "参加バンドル",
 +  "photonImportFiles": "参加バンドルと対応する秘密鍵を選択してください。",
 +  "photonImportHint": "インポートすると、設定で指定したパスに ID データベースを作成します。未使用のパスを指定してください。"
  }
 diff --git a/arb/intl_ko.arb b/arb/intl_ko.arb
-index ead8d29..6aa4668 100644
+index ead8d29..bfc607f 100644
 --- a/arb/intl_ko.arb
 +++ b/arb/intl_ko.arb
-@@ -1076,5 +1076,48 @@
+@@ -1076,5 +1076,51 @@
    "fakeipFilterDesc": "이 도메인에는 Fake-IP 대신 실제 IP를 반환합니다. whitelist 모드에서는 이 도메인만 Fake-IP를 사용합니다.",
    "fallbackFilterGeositeDesc": "이 GeoSite 분류의 도메인은 바로 Fallback으로 확인합니다.",
    "fallbackFilterIpcidrDesc": "Nameserver가 이 범위의 IP를 반환하면 Fallback 결과를 사용합니다.",
@@ -252,6 +264,9 @@ index ead8d29..6aa4668 100644
 +  "photonProxyRequiresTunnel": "프록시 사용 전에 Photon 터널에 연결하세요.",
 +  "photonCreateConfig": "Photon 설정 만들기",
 +  "photonSettings": "Photon 설정",
++  "photonSetupHint": "Photon 설정에서 네트워크 정보를 입력하여 시작하세요.",
++  "photonUseConfigFile": "기존 Photon YAML 사용",
++  "photonStopToEdit": "설정을 변경하기 전에 Photon을 중지하세요.",
 +  "photonManagedZone": "노드 영역",
 +  "photonRootKey": "신뢰하는 루트 공개 키",
 +  "photonAllowedGateways": "허용된 게이트웨이",
@@ -262,17 +277,17 @@ index ead8d29..6aa4668 100644
 +  "photonAdapter": "어댑터 이름",
 +  "photonInitialRetry": "초기 재시도 간격",
 +  "photonMaxRetry": "최대 재시도 간격",
-+  "photonFirstRunHint": "네트워크 관리자에게 받은 설정을 사용하세요. 경로와 게이트웨이 선택자는 한 줄에 하나씩 입력하세요. 첫 실행 때 승인을 요청하려면 부트스트랩 노드를 추가하세요.",
++  "photonFirstRunHint": "관리자가 제공한 노드 영역, 신뢰하는 루트 공개 키, 내부 네트워크 경로 한 개 이상을 입력하세요. 경로와 게이트웨이 선택 규칙은 한 줄에 하나씩 입력하세요. 자동 등록에는 부트스트랩 노드가 필요합니다.",
 +  "photonImportIdentity": "가입 승인 가져오기",
 +  "photonJoinBundle": "가입 번들",
 +  "photonImportFiles": "가입 번들과 해당 개인 키를 선택하세요.",
 +  "photonImportHint": "가져오면 설정의 경로에 ID 데이터베이스가 생성됩니다. 사용 중이지 않은 경로를 지정하세요."
  }
 diff --git a/arb/intl_ru.arb b/arb/intl_ru.arb
-index 58e77e7..85921c9 100644
+index 58e77e7..967bb28 100644
 --- a/arb/intl_ru.arb
 +++ b/arb/intl_ru.arb
-@@ -1076,5 +1076,48 @@
+@@ -1076,5 +1076,51 @@
    "fakeipFilterDesc": "Эти домены получают реальные IP вместо Fake-IP. В режиме whitelist Fake-IP получают только они.",
    "fallbackFilterGeositeDesc": "Домены из этих категорий GeoSite сразу разрешаются через Fallback.",
    "fallbackFilterIpcidrDesc": "Если Nameserver возвращает IP из этих диапазонов, используется ответ Fallback.",
@@ -306,6 +321,9 @@ index 58e77e7..85921c9 100644
 +  "photonProxyRequiresTunnel": "Сначала установите туннель Photon.",
 +  "photonCreateConfig": "Создать конфигурацию Photon",
 +  "photonSettings": "Настройки Photon",
++  "photonSetupHint": "Чтобы начать, укажите параметры сети в настройках Photon.",
++  "photonUseConfigFile": "Использовать существующий YAML Photon",
++  "photonStopToEdit": "Остановите Photon, прежде чем менять его настройки.",
 +  "photonManagedZone": "Зона узла",
 +  "photonRootKey": "Доверенный открытый ключ корня",
 +  "photonAllowedGateways": "Разрешённые шлюзы",
@@ -316,17 +334,17 @@ index 58e77e7..85921c9 100644
 +  "photonAdapter": "Имя адаптера",
 +  "photonInitialRetry": "Начальная задержка повтора",
 +  "photonMaxRetry": "Максимальная задержка повтора",
-+  "photonFirstRunHint": "Используйте параметры от администратора сети. Введите по одному маршруту или шаблону шлюза в строке. Добавьте начальный узел, чтобы запросить разрешение при первом запуске.",
++  "photonFirstRunHint": "Укажите зону узла, доверенный корневой открытый ключ и хотя бы один маршрут внутренней сети, предоставленные администратором. Вводите маршруты и правила выбора шлюза по одному на строку. Для автоматической регистрации добавьте начальный узел.",
 +  "photonImportIdentity": "Импортировать разрешение",
 +  "photonJoinBundle": "Пакет подключения",
 +  "photonImportFiles": "Выберите пакет подключения и соответствующий закрытый ключ.",
 +  "photonImportHint": "При импорте создаётся база идентификации по пути из конфигурации. Этот путь должен быть свободен."
  }
 diff --git a/arb/intl_zh_CN.arb b/arb/intl_zh_CN.arb
-index b44010c..c165308 100644
+index b44010c..c22c834 100644
 --- a/arb/intl_zh_CN.arb
 +++ b/arb/intl_zh_CN.arb
-@@ -1076,5 +1076,48 @@
+@@ -1076,5 +1076,51 @@
    "fakeipFilterDesc": "这些域名不使用 Fake-IP，返回真实 IP；过滤模式为 whitelist 时则只有它们使用 Fake-IP。",
    "fallbackFilterGeositeDesc": "属于这些 GeoSite 分类的域名直接使用 Fallback 解析。",
    "fallbackFilterIpcidrDesc": "Nameserver 返回这些网段内的 IP 时，改用 Fallback 的结果。",
@@ -360,6 +378,9 @@ index b44010c..c165308 100644
 +  "photonProxyRequiresTunnel": "请先建立 Photon 隧道，再使用这些代理服务。",
 +  "photonCreateConfig": "新建 Photon 配置",
 +  "photonSettings": "Photon 设置",
++  "photonSetupHint": "打开 Photon 设置，填写网络信息即可开始使用。",
++  "photonUseConfigFile": "选用已有 Photon YAML",
++  "photonStopToEdit": "停止 Photon 后即可修改设置。",
 +  "photonManagedZone": "节点域名",
 +  "photonRootKey": "受信任的根公钥",
 +  "photonAllowedGateways": "允许的网关",
@@ -370,7 +391,7 @@ index b44010c..c165308 100644
 +  "photonAdapter": "虚拟网卡名称",
 +  "photonInitialRetry": "初始重试间隔",
 +  "photonMaxRetry": "最长重试间隔",
-+  "photonFirstRunHint": "请填写网络管理员提供的配置。路由和允许的网关每行一项。添加引导节点后，首次启动可申请入网授权。",
++  "photonFirstRunHint": "填写管理员提供的节点域名、可信根公钥和至少一条内网路由。路由和网关规则每行一项。自动入网还需要引导节点。",
 +  "photonImportIdentity": "导入入网授权",
 +  "photonJoinBundle": "入网授权包",
 +  "photonImportFiles": "请选择入网授权包和与之匹配的私钥文件。",

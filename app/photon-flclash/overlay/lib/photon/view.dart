@@ -48,6 +48,13 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
     return ListenableBuilder(
       listenable: owner,
       builder: (context, _) {
+        final config = owner.configPath;
+        final canEdit =
+            allowed && !owner.busy && !owner.closed && !owner.hasLease;
+        void openSettings() {
+          owner.pickConfig(() => editPhotonSettings(context, config: config));
+        }
+
         final status = owner.observation;
         final connected = status?['tunnel_ready'] == true;
         final connections = _list(status?['connections']);
@@ -108,57 +115,67 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
                                           ? null
                                           : owner.hasLease
                                           ? owner.stop
-                                          : !allowed || owner.configPath == null
+                                          : !allowed
                                           ? null
+                                          : config == null
+                                          ? openSettings
                                           : () => owner.start(allowed: allowed),
                                       child: Text(
-                                        owner.hasLease ? l.stop : l.start,
+                                        owner.hasLease
+                                            ? l.stop
+                                            : config == null
+                                            ? l.photonSettings
+                                            : l.start,
                                       ),
                                     ),
                                   ],
                                 ),
-                                if (owner.configPath != null)
+                                if (config != null)
                                   Text(
-                                    owner.configPath!,
+                                    config,
+                                    style: AppTextStyle.caption1.of(context),
+                                  ),
+                                if (config == null && !owner.hasLease)
+                                  Text(l.photonSetupHint),
+                                if (owner.hasLease)
+                                  Text(
+                                    l.photonStopToEdit,
                                     style: AppTextStyle.caption1.of(context),
                                   ),
                                 Wrap(
                                   spacing: 12,
                                   runSpacing: 8,
                                   children: [
+                                    if (config != null)
+                                      TextButton(
+                                        onPressed: canEdit
+                                            ? openSettings
+                                            : null,
+                                        child: Text(l.photonSettings),
+                                      ),
                                     if (!owner.hasLease) ...[
                                       TextButton(
-                                        onPressed: allowed && !owner.busy
+                                        onPressed: canEdit
                                             ? () => owner.pickConfig(
                                                 choosePhotonConfig,
                                               )
                                             : null,
-                                        child: Text(l.importFile),
+                                        child: Text(l.photonUseConfigFile),
                                       ),
-                                      TextButton(
-                                        onPressed: allowed && !owner.busy
-                                            ? () => owner.pickConfig(
-                                                () =>
-                                                    editPhotonSettings(context),
-                                              )
-                                            : null,
-                                        child: Text(l.photonCreateConfig),
-                                      ),
-                                      if (owner.configPath
-                                          case final String config) ...[
+                                      if (config != null) ...[
                                         TextButton(
-                                          onPressed: allowed && !owner.busy
+                                          onPressed: canEdit
                                               ? () => owner.pickConfig(
                                                   () => editPhotonSettings(
                                                     context,
-                                                    config: config,
+                                                    chooseLocation: true,
                                                   ),
                                                 )
                                               : null,
-                                          child: Text(l.photonSettings),
+                                          child: Text(l.photonCreateConfig),
                                         ),
                                         TextButton(
-                                          onPressed: allowed && !owner.busy
+                                          onPressed: canEdit
                                               ? () => owner.pickConfig(
                                                   () => showPhotonImport(
                                                     context,
@@ -225,7 +242,7 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
                             onChanged: (value) =>
                                 setState(() => _filter = value.toLowerCase()),
                           ),
-                        if (status == null)
+                        if (status == null && config != null)
                           _DetailCard(
                             title: l.disconnected,
                             lines: [(l.photonName, l.photonOffline)],

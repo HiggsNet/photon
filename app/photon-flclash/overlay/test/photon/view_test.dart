@@ -1,4 +1,6 @@
 import 'package:fl_clash/photon/controller.dart';
+import 'package:fl_clash/photon/setup.dart';
+import 'package:fl_clash/photon/setup_view.dart';
 import 'package:fl_clash/photon/view.dart';
 import 'package:fl_clash/providers/app.dart';
 import 'package:fl_clash/widgets/widgets.dart';
@@ -37,6 +39,119 @@ void main() {
     child: PhotonView(controller: controller, isWindows: true),
   );
 
+  testWidgets('new Photon users can start with settings or use existing YAML', (
+    tester,
+  ) async {
+    controller = PhotonController(createBackend: FakeBackend.new);
+    await tester.pumpWidget(view());
+    await tester.pumpAndSettle();
+    final settings = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Photon settings'),
+    );
+    expect(settings.onPressed, isNotNull);
+    expect(find.text('Use existing Photon YAML'), findsOneWidget);
+    expect(find.text('Start'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    await controller.close();
+    controller.dispose();
+  });
+
+  testWidgets('settings can be corrected after a rejected save', (
+    tester,
+  ) async {
+    final form = <String, dynamic>{
+      'new_config': true,
+      'managed_zone': '',
+      'root_public_key': '',
+      'split_routes': '',
+      'allowed_gateways': '*',
+      'state_path': '/app/photon/photon.db',
+      'overlay_id': 'ipsec-main',
+      'gossip_listen': '0.0.0.0:33434',
+      'adapter_name': 'Photon Windows',
+      'mtu': '1400',
+      'log_level': 'info',
+      'initial_backoff': '1s',
+      'max_backoff': '1m',
+    };
+    final attempts = <Map<String, dynamic>>[];
+    bool? saved;
+    await tester.pumpWidget(
+      TestApp(
+        locale: const Locale('en'),
+        wrapInProviderScope: true,
+        child: Builder(
+          builder: (context) => Scaffold(
+            title: 'Photon',
+            body: Center(
+              child: FilledButton(
+                onPressed: () async {
+                  saved = await showPhotonSettingsForm(
+                    context,
+                    config: '/app/photon/photon.yaml',
+                    form: form,
+                    onSave: (edited) async {
+                      attempts.add(edited);
+                      if (edited['managed_zone'] == '') {
+                        throw const PhotonSetupException(
+                          'Node zone is required',
+                        );
+                      }
+                    },
+                  );
+                },
+                child: const Text('Edit'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Edit'));
+    await tester.pumpAndSettle();
+    expect(find.text('Bootstrap nodes'), findsOneWidget);
+    expect(find.text('Identity database path'), findsNothing);
+    await tester.tap(find.byTooltip('Save'));
+    await tester.pumpAndSettle();
+    expect(find.text('Node zone is required'), findsOneWidget);
+    expect(saved, isNull);
+    final zone = find.byKey(const ValueKey('managed_zone'));
+    await tester.ensureVisible(zone);
+    await tester.enterText(zone, 'client.example.');
+    final routes = find.byKey(const ValueKey('split_routes'));
+    await tester.scrollUntilVisible(
+      routes,
+      100,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.enterText(routes, 'fd42::/16\nfd43::/16');
+    final advanced = find.text('Advanced configuration');
+    await tester.scrollUntilVisible(
+      advanced,
+      100,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(advanced);
+    await tester.pumpAndSettle();
+    final mtu = find.byKey(const ValueKey('mtu'));
+    await tester.scrollUntilVisible(
+      mtu,
+      100,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.enterText(mtu, '1420');
+    await tester.tap(find.byTooltip('Save'));
+    await tester.pumpAndSettle();
+    expect(saved, isTrue);
+    expect(attempts, hasLength(2));
+    expect(attempts.last, containsPair('managed_zone', 'client.example.'));
+    expect(attempts.last, containsPair('split_routes', 'fd42::/16\nfd43::/16'));
+    expect(attempts.last, containsPair('mtu', '1420'));
+    expect(attempts.last, containsPair('state_path', '/app/photon/photon.db'));
+    expect(attempts.last, containsPair('bootstrap_hints', [{}]));
+    expect(form['managed_zone'], isEmpty);
+  });
+
   photonTest('starts, displays status and addresses, then stops', (
     tester,
   ) async {
@@ -52,6 +167,14 @@ void main() {
       'Connected',
     );
     expect(find.text('Stop'), findsOneWidget);
+    expect(
+      tester
+          .widget<TextButton>(
+            find.widgetWithText(TextButton, 'Photon settings'),
+          )
+          .onPressed,
+      isNull,
+    );
     await tester.tap(find.text('Stop'));
     await tester.pumpAndSettle();
     expect(
@@ -59,6 +182,14 @@ void main() {
       'Disconnected',
     );
     expect(controller.observation, isNull);
+    expect(
+      tester
+          .widget<TextButton>(
+            find.widgetWithText(TextButton, 'Photon settings'),
+          )
+          .onPressed,
+      isNotNull,
+    );
   });
 
   photonTest('leaving the page preserves the backend until app exit', (
