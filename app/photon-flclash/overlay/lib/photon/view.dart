@@ -398,7 +398,7 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
           () => _DetailCard(
             title: l.photonServices,
             lines: [
-              (l.photonSelected, '${owner.selected.length}'),
+              (l.photonEndpointCount, '${directory?.endpoints.length ?? 0}'),
               (l.photonName, l.photonMultiTip),
               if (!owner.directoryFresh) (l.status, l.photonStale),
               if (status['tunnel_ready'] != true)
@@ -409,7 +409,8 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
                   widget.controller != null ||
                       owner.busy ||
                       !owner.directoryFresh ||
-                      owner.selected.isEmpty ||
+                      directory == null ||
+                      directory.endpoints.isEmpty ||
                       status['tunnel_ready'] != true
                   ? null
                   : () => owner.applyProxies(photonProxyBridge.apply),
@@ -431,26 +432,11 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
                   ),
                   if (service.diagnostic.isNotEmpty)
                     (l.errorDetails, service.diagnostic),
+                  for (final endpoint in service.endpoints)
+                    (endpoint.region, endpoint.authority),
+                  if (service.endpoints.isNotEmpty)
+                    (l.status, l.photonUnprobed),
                 ],
-                footer: Column(
-                  children: [
-                    for (final endpoint in service.endpoints)
-                      ListItem.checkbox(
-                        key: ValueKey(endpoint.id),
-                        title: Text(endpoint.region),
-                        subtitle: Text(
-                          '${endpoint.authority}\n${l.photonUnprobed}',
-                        ),
-                        value: owner.selected.contains(endpoint.id),
-                        onChanged: !owner.directoryFresh || owner.busy
-                            ? null
-                            : (value) => owner.toggleEndpoint(
-                                endpoint.id,
-                                value == true,
-                              ),
-                      ),
-                  ],
-                ),
               ),
           if (directory != null && directory.services.isEmpty)
             () => _DetailCard(title: l.photonEmpty, lines: []),

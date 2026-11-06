@@ -1,5 +1,5 @@
 diff --git a/arb/intl_en.arb b/arb/intl_en.arb
-index cbda0e3..6bb0dad 100644
+index cbda0e3..193438e 100644
 --- a/arb/intl_en.arb
 +++ b/arb/intl_en.arb
 @@ -1076,5 +1076,51 @@
@@ -17,14 +17,14 @@ index cbda0e3..6bb0dad 100644
 +  "photonWaiting": "Waiting for authorization",
 +  "photonEmpty": "No records to display",
 +  "photonOffline": "Connect Photon to view live network details.",
-+  "photonSelected": "Selected services",
++  "photonEndpointCount": "Authorized endpoints",
 +  "photonTrusted": "Authorized endpoint",
 +  "photonUnprobed": "Reachability not tested",
 +  "photonWithdrawn": "Withdrawn",
 +  "photonUnauthorized": "Authorization invalid",
 +  "photonStale": "Service information expired. Refresh before using it.",
-+  "photonApply": "Use selected proxies",
-+  "photonMultiTip": "Select several endpoints to use automatic selection, manual selection, or load balancing in Proxies.",
++  "photonApply": "Use Photon proxies",
++  "photonMultiTip": "Authorized nodes are added automatically. Choose their use in the proxy groups and rules.",
 +  "photonSearch": "Filter nodes, addresses or routes",
 +  "photonRekey": "Security association",
 +  "photonMetric": "Route metric",
@@ -56,7 +56,7 @@ index cbda0e3..6bb0dad 100644
 +  "photonImportHint": "Import creates an identity database at the path in this configuration. That path must be unused."
  }
 diff --git a/arb/intl_es.arb b/arb/intl_es.arb
-index 417db6b..132e488 100644
+index 417db6b..f00a9ce 100644
 --- a/arb/intl_es.arb
 +++ b/arb/intl_es.arb
 @@ -1076,5 +1076,51 @@
@@ -74,14 +74,14 @@ index 417db6b..132e488 100644
 +  "photonWaiting": "Esperando autorización",
 +  "photonEmpty": "No hay registros",
 +  "photonOffline": "Conecta Photon para ver los detalles de red.",
-+  "photonSelected": "Servicios seleccionados",
++  "photonEndpointCount": "Puntos de conexión autorizados",
 +  "photonTrusted": "Punto autorizado",
 +  "photonUnprobed": "Accesibilidad sin comprobar",
 +  "photonWithdrawn": "Retirado",
 +  "photonUnauthorized": "Autorización no válida",
 +  "photonStale": "La información caducó. Actualiza antes de usarla.",
-+  "photonApply": "Usar proxies seleccionados",
-+  "photonMultiTip": "Selecciona varios puntos para selección automática o balanceo.",
++  "photonApply": "Usar los proxies de Photon",
++  "photonMultiTip": "Los nodos autorizados se añaden automáticamente. Configura su uso en los grupos y las reglas.",
 +  "photonSearch": "Filtrar nodos, direcciones o rutas",
 +  "photonRekey": "Asociación de seguridad",
 +  "photonMetric": "Métrica de ruta",
@@ -113,7 +113,7 @@ index 417db6b..132e488 100644
 +  "photonImportHint": "La importación crea una base de identidad en la ruta de la configuración. La ruta debe estar libre."
  }
 diff --git a/arb/intl_fr.arb b/arb/intl_fr.arb
-index aa4e778..512677c 100644
+index aa4e778..184c218 100644
 --- a/arb/intl_fr.arb
 +++ b/arb/intl_fr.arb
 @@ -1076,5 +1076,51 @@
@@ -131,14 +131,14 @@ index aa4e778..512677c 100644
 +  "photonWaiting": "En attente d’autorisation",
 +  "photonEmpty": "Aucune donnée",
 +  "photonOffline": "Connectez Photon pour voir les détails du réseau.",
-+  "photonSelected": "Services sélectionnés",
++  "photonEndpointCount": "Points de connexion autorisés",
 +  "photonTrusted": "Point autorisé",
 +  "photonUnprobed": "Accessibilité non testée",
 +  "photonWithdrawn": "Retiré",
 +  "photonUnauthorized": "Autorisation invalide",
 +  "photonStale": "Les informations ont expiré. Actualisez-les.",
-+  "photonApply": "Utiliser les proxys sélectionnés",
-+  "photonMultiTip": "Sélectionnez plusieurs points pour la sélection automatique ou la répartition.",
++  "photonApply": "Utiliser les proxys Photon",
++  "photonMultiTip": "Les nœuds autorisés sont ajoutés automatiquement. Réglez leur utilisation dans les groupes et les règles.",
 +  "photonSearch": "Filtrer les nœuds, adresses ou routes",
 +  "photonRekey": "Association de sécurité",
 +  "photonMetric": "Métrique de route",
@@ -170,7 +170,7 @@ index aa4e778..512677c 100644
 +  "photonImportHint": "L’import crée une base d’identité à l’emplacement indiqué dans la configuration. Cet emplacement doit être libre."
  }
 diff --git a/arb/intl_ja.arb b/arb/intl_ja.arb
-index d6ff2b3..c3fab32 100644
+index d6ff2b3..095ec37 100644
 --- a/arb/intl_ja.arb
 +++ b/arb/intl_ja.arb
 @@ -1076,5 +1076,51 @@
@@ -188,14 +188,14 @@ index d6ff2b3..c3fab32 100644
 +  "photonWaiting": "承認待ち",
 +  "photonEmpty": "表示する記録がありません",
 +  "photonOffline": "Photon に接続するとネットワークの詳細を表示します。",
-+  "photonSelected": "選択したサービス",
++  "photonEndpointCount": "承認済みの接続先",
 +  "photonTrusted": "承認済みエンドポイント",
 +  "photonUnprobed": "到達性は未確認",
 +  "photonWithdrawn": "撤回済み",
 +  "photonUnauthorized": "承認が無効",
 +  "photonStale": "サービス情報が期限切れです。更新してください。",
-+  "photonApply": "選択したプロキシを使用",
-+  "photonMultiTip": "複数の接続先を選び、プロキシ画面で自動選択・手動選択・負荷分散を使えます。",
++  "photonApply": "Photon プロキシを使用",
++  "photonMultiTip": "承認済みノードは自動で追加されます。使い方はプロキシグループとルールで設定します。",
 +  "photonSearch": "ノード・アドレス・ルートを検索",
 +  "photonRekey": "セキュリティアソシエーション",
 +  "photonMetric": "ルートメトリック",
@@ -227,7 +227,7 @@ index d6ff2b3..c3fab32 100644
 +  "photonImportHint": "インポートすると、設定で指定したパスに ID データベースを作成します。未使用のパスを指定してください。"
  }
 diff --git a/arb/intl_ko.arb b/arb/intl_ko.arb
-index ead8d29..bfc607f 100644
+index ead8d29..5ee03f6 100644
 --- a/arb/intl_ko.arb
 +++ b/arb/intl_ko.arb
 @@ -1076,5 +1076,51 @@
@@ -245,14 +245,14 @@ index ead8d29..bfc607f 100644
 +  "photonWaiting": "승인 대기 중",
 +  "photonEmpty": "표시할 항목 없음",
 +  "photonOffline": "Photon에 연결하면 네트워크 정보를 볼 수 있습니다.",
-+  "photonSelected": "선택한 서비스",
++  "photonEndpointCount": "승인된 엔드포인트",
 +  "photonTrusted": "승인된 엔드포인트",
 +  "photonUnprobed": "연결 가능 여부 미확인",
 +  "photonWithdrawn": "철회됨",
 +  "photonUnauthorized": "승인 무효",
 +  "photonStale": "서비스 정보가 만료되었습니다. 새로 고침하세요.",
-+  "photonApply": "선택한 프록시 사용",
-+  "photonMultiTip": "여러 엔드포인트를 선택해 자동 선택이나 부하 분산을 사용하세요.",
++  "photonApply": "Photon 프록시 사용",
++  "photonMultiTip": "승인된 노드는 자동으로 추가됩니다. 프록시 그룹과 규칙에서 사용 방식을 지정하세요.",
 +  "photonSearch": "노드, 주소 또는 경로 검색",
 +  "photonRekey": "보안 연결",
 +  "photonMetric": "경로 메트릭",
@@ -284,7 +284,7 @@ index ead8d29..bfc607f 100644
 +  "photonImportHint": "가져오면 설정의 경로에 ID 데이터베이스가 생성됩니다. 사용 중이지 않은 경로를 지정하세요."
  }
 diff --git a/arb/intl_ru.arb b/arb/intl_ru.arb
-index 58e77e7..967bb28 100644
+index 58e77e7..33371c3 100644
 --- a/arb/intl_ru.arb
 +++ b/arb/intl_ru.arb
 @@ -1076,5 +1076,51 @@
@@ -302,14 +302,14 @@ index 58e77e7..967bb28 100644
 +  "photonWaiting": "Ожидание авторизации",
 +  "photonEmpty": "Нет записей",
 +  "photonOffline": "Подключите Photon для просмотра состояния сети.",
-+  "photonSelected": "Выбранные сервисы",
++  "photonEndpointCount": "Авторизованные точки подключения",
 +  "photonTrusted": "Авторизованная точка",
 +  "photonUnprobed": "Доступность не проверена",
 +  "photonWithdrawn": "Отозван",
 +  "photonUnauthorized": "Недействительная авторизация",
 +  "photonStale": "Данные устарели. Обновите их перед использованием.",
-+  "photonApply": "Использовать выбранные прокси",
-+  "photonMultiTip": "Выберите несколько точек для автоматического выбора или балансировки.",
++  "photonApply": "Использовать прокси Photon",
++  "photonMultiTip": "Авторизованные узлы добавляются автоматически. Настройте их использование в группах и правилах.",
 +  "photonSearch": "Поиск узлов, адресов и маршрутов",
 +  "photonRekey": "Ассоциация безопасности",
 +  "photonMetric": "Метрика маршрута",
@@ -341,7 +341,7 @@ index 58e77e7..967bb28 100644
 +  "photonImportHint": "При импорте создаётся база идентификации по пути из конфигурации. Этот путь должен быть свободен."
  }
 diff --git a/arb/intl_zh_CN.arb b/arb/intl_zh_CN.arb
-index b44010c..c22c834 100644
+index b44010c..3d8e342 100644
 --- a/arb/intl_zh_CN.arb
 +++ b/arb/intl_zh_CN.arb
 @@ -1076,5 +1076,51 @@
@@ -359,14 +359,14 @@ index b44010c..c22c834 100644
 +  "photonWaiting": "等待入网授权",
 +  "photonEmpty": "暂无记录",
 +  "photonOffline": "连接 Photon 后查看实时网络详情。",
-+  "photonSelected": "已选服务",
++  "photonEndpointCount": "已授权端点",
 +  "photonTrusted": "端点授权有效",
 +  "photonUnprobed": "尚未探测可达性",
 +  "photonWithdrawn": "已撤回",
 +  "photonUnauthorized": "授权失效",
 +  "photonStale": "服务信息已过期，刷新后方可使用。",
-+  "photonApply": "使用已选代理",
-+  "photonMultiTip": "可同时选择多个端点，在“代理”页使用自动选择、手动切换或负载均衡。",
++  "photonApply": "使用 Photon 代理",
++  "photonMultiTip": "已授权节点会自动加入。可通过代理组和规则决定如何使用。",
 +  "photonSearch": "搜索节点、地址或路由",
 +  "photonRekey": "安全关联",
 +  "photonMetric": "路由代价",

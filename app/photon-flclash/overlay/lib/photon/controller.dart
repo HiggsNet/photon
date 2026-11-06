@@ -16,11 +16,9 @@ final class PhotonController extends ChangeNotifier {
 
   final PhotonBackend Function() _createBackend;
   final PhotonPreferences? preferences;
-  Future<void> Function(PhotonDirectory, Set<String>)? onServicesChanged;
+  Future<void> Function(PhotonDirectory)? onServicesChanged;
   Future<void> Function()? onServicesInvalidated;
   PhotonDirectory? _directory;
-  String? _selectionScope;
-  Set<String> _selected = {};
   Future<void>? _initializing;
   Timer? _expiry;
   PhotonBackend? _backend;
@@ -42,7 +40,6 @@ final class PhotonController extends ChangeNotifier {
   String? get configPath => _configPath;
   PhotonDirectory? get directory => _directory;
   bool get directoryFresh => _directory?.fresh(DateTime.now()) ?? false;
-  Set<String> get selected => Set.unmodifiable(_selected);
 
   Future<void> initialize() => _initializing ??= _enqueue(() async {
     _configPath ??= await preferences?.configPath();
@@ -115,24 +112,11 @@ final class PhotonController extends ChangeNotifier {
     if (!hasLease && !_closed) await start(allowed: allowed);
   }
 
-  Future<void> _refreshServices(
-    PhotonBackend backend, {
-    bool publish = true,
-  }) async {
+  Future<void> _refreshServices(PhotonBackend backend) async {
     try {
       final next = PhotonDirectory.fromJson(await backend.services());
       if (!next.fresh(DateTime.now())) {
         throw StateError('Photon service information expired');
-      }
-      if (_selectionScope != next.scope) {
-        _selected = await preferences?.selection(next.scope) ?? {};
-        _selectionScope = next.scope;
-      }
-      final active = next.endpoints.map((endpoint) => endpoint.id).toSet();
-      final retained = _selected.intersection(active);
-      if (!setEquals(retained, _selected)) {
-        _selected = retained;
-        await preferences?.saveSelection(next.scope, retained);
       }
       _directory = next;
       _expiry?.cancel();
@@ -152,30 +136,12 @@ final class PhotonController extends ChangeNotifier {
           );
         }
       });
-      if (publish) await onServicesChanged?.call(next, selected);
+      await onServicesChanged?.call(next);
     } catch (error) {
       _error = error;
       await _invalidateServices();
     }
   }
-
-  Future<void> toggleEndpoint(String id, bool enabled) => _enqueue(() async {
-    final backend = _backend;
-    if (!directoryFresh && backend != null) {
-      await _refreshServices(backend, publish: false);
-    }
-    final current = _directory;
-    if (current == null ||
-        !directoryFresh ||
-        !current.endpoints.any((endpoint) => endpoint.id == id)) {
-      return;
-    }
-    final next = {..._selected};
-    enabled ? next.add(id) : next.remove(id);
-    await preferences?.saveSelection(current.scope, next);
-    _selected = next;
-    await onServicesChanged?.call(current, selected);
-  }, cleanupOnError: false);
 
   Future<void> applyProxies(Future<void> Function() apply) =>
       _enqueue(apply, cleanupOnError: false);

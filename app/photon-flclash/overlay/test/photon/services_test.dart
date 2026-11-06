@@ -1,8 +1,10 @@
 import 'dart:async';
+
 import 'package:fl_clash/photon/controller.dart';
 import 'package:fl_clash/photon/preferences.dart';
 import 'package:fl_clash/photon/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:yaml/yaml.dart';
 
 import 'controller_test.dart' show FakeBackend;
 
@@ -50,167 +52,193 @@ Map<String, dynamic> directoryFixture({
 
 class MemoryPhotonPreferences implements PhotonPreferences {
   String? savedPath;
-  final selections = <String, Set<String>>{};
   @override
   Future<String?> configPath() async => savedPath;
   @override
   Future<void> saveConfigPath(String value) async {
     savedPath = value;
   }
-
-  @override
-  Future<Set<String>> selection(String scope) async => {...?selections[scope]};
-  @override
-  Future<void> saveSelection(String scope, Set<String> selected) async {
-    selections[scope] = {...selected};
-  }
 }
 
 void main() {
-  test(
-    'multiple selected SOCKS5 endpoints form stable manual, auto and balance groups',
-    () {
-      final directory = PhotonDirectory.fromJson(directoryFixture());
-      Map<String, dynamic> build(Set<String> selected) => photonProxyProfile(
+  test('a user policy keeps its rules and can use all Photon endpoints', () {
+    final directory = PhotonDirectory.fromJson(directoryFixture());
+    final template = Map<String, dynamic>.from(
+      loadYaml('''
+proxy-groups:
+  - {name: Nodes, type: select, proxies: [Photon, DIRECT]}
+rules:
+  - RULE-SET,google,Nodes
+  - MATCH,DIRECT
+rule-providers:
+  google:
+    type: inline
+    behavior: domain
+    payload: ['+.google.example']
+''') as Map,
+    );
+    final profile = photonProxyProfile(
+      directory: directory,
+      now: DateTime.now(),
+      splitRoutes: [],
+      adapter: directory.adapterName,
+      backendPath: 'backend',
+      template: template,
+    );
+    expect(
+      (profile['rules'] as List).skipWhile(
+        (rule) => rule != 'RULE-SET,google,Nodes',
+      ),
+      template['rules'],
+    );
+    expect(profile['rule-providers'], template['rule-providers']);
+    final providers = profile['proxy-providers'] as Map;
+    expect(providers['photon-services']['payload'], hasLength(2));
+    final offline = blockedPhotonProfile(profile);
+    expect(offline['rules'], profile['rules']);
+    expect(
+      (offline['proxy-groups'] as List).first,
+      (template['proxy-groups'] as List).first,
+    );
+    expect((offline['proxy-groups'] as List)[1]['proxies'], ['REJECT']);
+    expect((offline['proxy-providers'] as Map)['photon-services']['payload'], [
+      {'name': 'Photon Offline', 'type': 'reject'},
+    ]);
+    expect(encodePhotonProfile(profile), contains('RULE-SET,google,Nodes'));
+    expect(template.containsKey('proxy-providers'), isFalse);
+  });
+
+  test('all authorized SOCKS5 endpoints form stable manual, auto and balance groups', () {
+    final directory = PhotonDirectory.fromJson(directoryFixture());
+    Map<String, dynamic> build(PhotonDirectory directory) => photonProxyProfile(
+      directory: directory,
+      now: DateTime.now(),
+      splitRoutes: ['fd42::/16'],
+      adapter: directory.adapterName,
+      backendPath: r'C:\Photon\photon-windows.exe',
+    );
+    final shuffled = directoryFixture();
+    final entry = (shuffled['services'] as List).first as Map;
+    entry['endpoints'] = (entry['endpoints'] as List).reversed.toList();
+    final profile = build(directory);
+    expect(profile['proxies'], hasLength(2));
+    expect(
+      encodePhotonProfile(profile),
+      encodePhotonProfile(build(PhotonDirectory.fromJson(shuffled))),
+    );
+    final groups = profile['proxy-groups'] as List;
+    expect(groups.map((group) => group['type']), [
+      'select',
+      'url-test',
+      'load-balance',
+    ]);
+    expect(groups.first['proxies'], isNot(contains('DIRECT')));
+    final dns = profile['dns'] as Map;
+    expect(dns['fake-ip-filter'], contains('gateway.example'));
+    expect(
+      (dns['nameserver-policy'] as Map)['gateway.example'],
+      everyElement(endsWith('#DIRECT')),
+    );
+    final tun = profile['tun'] as Map;
+    expect(tun['enable'], isFalse);
+    expect(
+      tun['route-exclude-address'],
+      containsAll([
+        '192.0.2.1/32',
+        'fd42::/16',
+        'fd42:1::20/128',
+        'fd42:1::21/128',
+      ]),
+    );
+    for (final proxy in profile['proxies'] as List) {
+      expect(proxy['interface-name'], 'Photon Test');
+    }
+  });
+
+  test('expired snapshots, invalid endpoint identities and empty directories cannot generate a profile', () {
+    final directory = PhotonDirectory.fromJson(
+      directoryFixture(
+        now: DateTime.now().subtract(const Duration(seconds: 10)),
+      ),
+    );
+    expect(
+      () => photonProxyProfile(
         directory: directory,
-        selected: selected,
         now: DateTime.now(),
-        splitRoutes: ['fd42::/16'],
-        adapter: directory.adapterName,
-        backendPath: r'C:\Photon\photon-windows.exe',
-      );
-      final profile = build({'2' * 32, '1' * 32});
-      expect(profile['proxies'], hasLength(2));
-      expect(
-        encodePhotonProfile(profile),
-        encodePhotonProfile(build({'1' * 32, '2' * 32})),
-      );
-      final groups = profile['proxy-groups'] as List;
-      expect(groups.map((group) => group['type']), [
-        'select',
-        'url-test',
-        'load-balance',
-      ]);
-      expect(groups.first['proxies'], isNot(contains('DIRECT')));
-      final dns = profile['dns'] as Map;
-      expect(dns['fake-ip-filter'], contains('gateway.example'));
-      expect(
-        (dns['nameserver-policy'] as Map)['gateway.example'],
-        everyElement(endsWith('#DIRECT')),
-      );
-      final tun = profile['tun'] as Map;
-      expect(tun['enable'], isFalse);
-      expect(
-        tun['route-exclude-address'],
-        containsAll([
-          '192.0.2.1/32',
-          'fd42::/16',
-          'fd42:1::20/128',
-          'fd42:1::21/128',
-        ]),
-      );
-      for (final proxy in profile['proxies'] as List) {
-        expect(proxy['interface-name'], 'Photon Test');
-      }
-    },
-  );
+        splitRoutes: [],
+        adapter: 'Photon Test',
+        backendPath: 'backend',
+      ),
+      throwsStateError,
+    );
+    final invalid = directoryFixture();
+    (invalid['services'] as List).first['endpoints'][0]['port'] = 0;
+    expect(() => PhotonDirectory.fromJson(invalid), throwsFormatException);
+    final empty = PhotonDirectory.fromJson(directoryFixture(withdrawn: true));
+    expect(
+      () => photonProxyProfile(
+        directory: empty,
+        now: DateTime.now(),
+        splitRoutes: [],
+        adapter: empty.adapterName,
+        backendPath: 'backend',
+      ),
+      throwsStateError,
+    );
+  });
 
-  test(
-    'expired snapshots, invalid endpoint identities and empty selections cannot generate a profile',
-    () {
-      final directory = PhotonDirectory.fromJson(
-        directoryFixture(
-          now: DateTime.now().subtract(const Duration(seconds: 10)),
-        ),
-      );
-      expect(
-        () => photonProxyProfile(
-          directory: directory,
-          selected: {'1' * 32},
-          now: DateTime.now(),
-          splitRoutes: [],
-          adapter: 'Photon Test',
-          backendPath: 'backend',
-        ),
-        throwsStateError,
-      );
-      final invalid = directoryFixture();
-      (invalid['services'] as List).first['endpoints'][0]['port'] = 0;
-      expect(() => PhotonDirectory.fromJson(invalid), throwsFormatException);
-      final active = PhotonDirectory.fromJson(directoryFixture());
-      expect(
-        () => photonProxyProfile(
-          directory: active,
-          selected: {},
-          now: DateTime.now(),
-          splitRoutes: [],
-          adapter: active.adapterName,
-          backendPath: 'backend',
-        ),
-        throwsStateError,
-      );
-    },
-  );
+  test('config path persists and refresh publishes the current authorized directory', () async {
+    final prefs = MemoryPhotonPreferences();
+    final backend = FakeBackend()..serviceSample = directoryFixture();
+    var controller = PhotonController(
+      createBackend: () => backend,
+      preferences: prefs,
+    );
+    await controller.pickConfig(() async => '/test/config.yaml');
+    await controller.start(allowed: true);
+    expect(controller.directory?.endpoints, hasLength(2));
+    await controller.close();
+    controller.dispose();
+    final restarted = FakeBackend()..serviceSample = directoryFixture();
+    controller = PhotonController(
+      createBackend: () => restarted,
+      preferences: prefs,
+    );
+    await controller.initialize();
+    expect(controller.configPath, '/test/config.yaml');
+    await controller.start(allowed: true);
+    expect(controller.directory?.endpoints, hasLength(2));
+    restarted.serviceSample = directoryFixture(withdrawn: true);
+    await controller.refresh();
+    expect(controller.directory?.endpoints, isEmpty);
+    restarted.serviceSample = directoryFixture(root: 'b');
+    await controller.refresh();
+    expect(controller.directory?.endpoints, hasLength(2));
+    expect(controller.directory?.rootFingerprint, 'b' * 64);
+    await controller.close();
+    controller.dispose();
+  });
 
-  test(
-    'config path and multi-selection survive restart, revocation removes selection, roots are isolated',
-    () async {
-      final prefs = MemoryPhotonPreferences();
-      final backend = FakeBackend()..serviceSample = directoryFixture();
-      var controller = PhotonController(
-        createBackend: () => backend,
-        preferences: prefs,
+  test('directory expiry invalidates the proxy owner while leaving Photon connected', () async {
+    final backend = FakeBackend()
+      ..serviceSample = directoryFixture(
+        now: DateTime.now().subtract(const Duration(milliseconds: 4000)),
       );
-      await controller.pickConfig(() async => '/test/config.yaml');
-      await controller.start(allowed: true);
-      await controller.toggleEndpoint('1' * 32, true);
-      await controller.toggleEndpoint('2' * 32, true);
-      expect(controller.selected, hasLength(2));
-      await controller.close();
-      controller.dispose();
-      final restarted = FakeBackend()..serviceSample = directoryFixture();
-      controller = PhotonController(
-        createBackend: () => restarted,
-        preferences: prefs,
-      );
-      await controller.initialize();
-      expect(controller.configPath, '/test/config.yaml');
-      await controller.start(allowed: true);
-      expect(controller.selected, hasLength(2));
-      restarted.serviceSample = directoryFixture(withdrawn: true);
-      await controller.refresh();
-      expect(controller.selected, isEmpty);
-      restarted.serviceSample = directoryFixture(root: 'b');
-      await controller.refresh();
-      expect(controller.selected, isEmpty);
-      await controller.close();
-      controller.dispose();
-    },
-  );
-
-  test(
-    'directory expiry invalidates the proxy owner while leaving Photon connected',
-    () async {
-      final backend = FakeBackend()
-        ..serviceSample = directoryFixture(
-          now: DateTime.now().subtract(const Duration(milliseconds: 4000)),
-        );
-      final controller = PhotonController(createBackend: () => backend)
-        ..selectConfig('/test/config.yaml');
-      var invalidations = 0;
-      controller.onServicesInvalidated = () async {
-        invalidations++;
-      };
-      await controller.start(allowed: true);
-      expect(controller.directoryFresh, isTrue);
-      await Future<void>.delayed(const Duration(milliseconds: 1100));
-      expect(controller.directory, isNull);
-      expect(invalidations, 1);
-      expect(controller.hasLease, isTrue);
-      await controller.close();
-      controller.dispose();
-    },
-  );
+    final controller = PhotonController(createBackend: () => backend)
+      ..selectConfig('/test/config.yaml');
+    var invalidations = 0;
+    controller.onServicesInvalidated = () async {
+      invalidations++;
+    };
+    await controller.start(allowed: true);
+    expect(controller.directoryFresh, isTrue);
+    await Future<void>.delayed(const Duration(milliseconds: 1100));
+    expect(controller.directory, isNull);
+    expect(invalidations, 1);
+    expect(controller.hasLease, isTrue);
+    await controller.close();
+    controller.dispose();
+  });
 
   test('queued expiry cannot invalidate a newer service snapshot', () async {
     final backend = FakeBackend()
@@ -248,25 +276,4 @@ void main() {
     await controller.close();
     controller.dispose();
   });
-
-  test(
-    'a selection refreshes expired authorization before applying intent',
-    () async {
-      final backend = FakeBackend()
-        ..serviceSample = directoryFixture(
-          now: DateTime.now().subtract(const Duration(milliseconds: 4000)),
-        );
-      final controller = PhotonController(createBackend: () => backend)
-        ..selectConfig('/test/config.yaml');
-      await controller.start(allowed: true);
-      await Future<void>.delayed(const Duration(milliseconds: 1100));
-      expect(controller.directoryFresh, isFalse);
-      backend.serviceSample = directoryFixture();
-      await controller.toggleEndpoint('1' * 32, true);
-      expect(controller.selected, {'1' * 32});
-      expect(controller.directoryFresh, isTrue);
-      await controller.close();
-      controller.dispose();
-    },
-  );
 }

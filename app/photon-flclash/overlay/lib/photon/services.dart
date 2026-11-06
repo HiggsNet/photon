@@ -1,6 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
 
+const _photonProvider = 'photon-services';
+const _photonGroups = ['Photon', 'Photon Auto', 'Photon Balance'];
+
 final class PhotonDirectory {
   PhotonDirectory._({
     required this.instanceID,
@@ -68,7 +71,6 @@ final class PhotonDirectory {
   final List<String> bypassPrefixes;
   final List<String> bypassDomains;
 
-  String get scope => '$rootFingerprint/$managedZone';
   bool fresh(DateTime now) =>
       now.toUtc().isBefore(validUntil) &&
       !observedAt.isAfter(now.toUtc().add(const Duration(seconds: 5)));
@@ -178,22 +180,19 @@ String _string(Map<String, dynamic> data, String key) {
 
 Map<String, dynamic> photonProxyProfile({
   required PhotonDirectory directory,
-  required Set<String> selected,
   required DateTime now,
   required List<String> splitRoutes,
   required String adapter,
   required String backendPath,
+  Map<String, dynamic>? template,
 }) {
   if (!directory.fresh(now)) {
     throw StateError('Photon service information expired');
   }
-  final endpoints =
-      directory.endpoints
-          .where((endpoint) => selected.contains(endpoint.id))
-          .toList()
-        ..sort((a, b) => a.id.compareTo(b.id));
+  final endpoints = directory.endpoints.toList()
+    ..sort((a, b) => a.id.compareTo(b.id));
   if (endpoints.isEmpty || adapter.isEmpty) {
-    throw StateError('Select an authorized Photon proxy endpoint');
+    throw StateError('No authorized Photon proxy endpoints are available');
   }
   final exclusions = <String>{
     ...directory.bypassPrefixes,
@@ -207,8 +206,42 @@ Map<String, dynamic> photonProxyProfile({
     for (final prefix in orderedExclusions)
       '${prefix.contains(':') ? 'IP-CIDR6' : 'IP-CIDR'},$prefix,DIRECT,no-resolve',
     'PROCESS-PATH-REGEX,${RegExp.escape(backendPath).replaceAll(',', r'\x2c')},DIRECT',
-    'MATCH,Photon',
   ];
+  final proxies = [
+    for (final endpoint in endpoints)
+      {
+        'name': endpoint.name,
+        'type': 'socks5',
+        'server': endpoint.address,
+        'port': endpoint.port,
+        'udp': true,
+        'interface-name': adapter,
+      },
+  ];
+  final templateProxies = template?['proxies'] as List? ?? const [];
+  final templateGroups = template?['proxy-groups'] as List? ?? const [];
+  final templateProviders = template?['proxy-providers'] as Map? ?? const {};
+  final templateRules = template?['rules'] as List?;
+  if (template != null) {
+    if (templateRules == null || templateRules.isEmpty) {
+      throw const FormatException('The Photon proxy template needs rules');
+    }
+    if (templateProviders.containsKey(_photonProvider) ||
+        [
+          ...templateProxies,
+          ...templateGroups,
+        ].any((item) => _photonGroups.contains((item as Map)['name']))) {
+      throw const FormatException(
+        'The Photon proxy template uses a reserved name',
+      );
+    }
+  }
+  final groupEndpoints = template == null
+      ? {'proxies': names}
+      : {
+          'use': [_photonProvider],
+          'empty-fallback': 'REJECT',
+        };
   return {
     'ipv6': true,
     'mode': 'rule',
@@ -238,27 +271,39 @@ Map<String, dynamic> photonProxyProfile({
       'auto-detect-interface': true,
       'route-exclude-address': orderedExclusions,
     },
-    'proxies': [
-      for (final endpoint in endpoints)
-        {
-          'name': endpoint.name,
-          'type': 'socks5',
-          'server': endpoint.address,
-          'port': endpoint.port,
-          'udp': true,
-          'interface-name': adapter,
+    'proxies': template == null ? proxies : templateProxies,
+    if (template != null)
+      'proxy-providers': {
+        ...templateProviders,
+        _photonProvider: {
+          'type': 'inline',
+          'payload': proxies,
+          'health-check': {
+            'enable': true,
+            'url': 'https://www.gstatic.com/generate_204',
+            'interval': 300,
+          },
         },
-    ],
+      },
+    if (template?['rule-providers'] case final Map providers)
+      'rule-providers': providers,
+    if (template?['sub-rules'] case final Map subRules) 'sub-rules': subRules,
     'proxy-groups': [
+      ...templateGroups,
       {
         'name': 'Photon',
         'type': 'select',
-        'proxies': ['Photon Auto', 'Photon Balance', ...names],
+        ...groupEndpoints,
+        'proxies': [
+          'Photon Auto',
+          'Photon Balance',
+          if (template == null) ...names,
+        ],
       },
       {
         'name': 'Photon Auto',
         'type': 'url-test',
-        'proxies': names,
+        ...groupEndpoints,
         'url': 'https://www.gstatic.com/generate_204',
         'interval': 300,
         'tolerance': 80,
@@ -267,12 +312,15 @@ Map<String, dynamic> photonProxyProfile({
         'name': 'Photon Balance',
         'type': 'load-balance',
         'strategy': 'consistent-hashing',
-        'proxies': names,
+        ...groupEndpoints,
         'url': 'https://www.gstatic.com/generate_204',
         'interval': 300,
       },
     ],
-    'rules': rules,
+    'rules': [
+      ...rules,
+      ...(templateRules ?? ['MATCH,Photon']),
+    ],
   };
 }
 
@@ -280,6 +328,32 @@ String encodePhotonProfile(Map<String, dynamic> profile) =>
     const JsonEncoder.withIndent('  ').convert(profile);
 
 Map<String, dynamic> blockedPhotonProfile(Map<String, dynamic> profile) {
+  final providers = profile['proxy-providers'];
+  if (providers is Map && providers.containsKey(_photonProvider)) {
+    return {
+      ...profile,
+      'proxy-providers': {
+        ...providers,
+        _photonProvider: {
+          'type': 'inline',
+          'payload': [
+            {'name': 'Photon Offline', 'type': 'reject'},
+          ],
+        },
+      },
+      'proxy-groups': [
+        for (final group in profile['proxy-groups'] as List)
+          if (_photonGroups.contains((group as Map)['name']))
+            {
+              'name': group['name'],
+              'type': 'select',
+              'proxies': ['REJECT'],
+            }
+          else
+            group,
+      ],
+    };
+  }
   return {
     'ipv6': true,
     'dns': ?profile['dns'],

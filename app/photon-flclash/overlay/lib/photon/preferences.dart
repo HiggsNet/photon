@@ -3,8 +3,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 abstract interface class PhotonPreferences {
   Future<String?> configPath();
   Future<void> saveConfigPath(String value);
-  Future<Set<String>> selection(String scope);
-  Future<void> saveSelection(String scope, Set<String> selected);
 }
 
 final class StoredPhotonPreferences implements PhotonPreferences {
@@ -19,23 +17,6 @@ final class StoredPhotonPreferences implements PhotonPreferences {
       value,
     )) {
       throw StateError('Photon config path could not be saved');
-    }
-  }
-
-  @override
-  Future<Set<String>> selection(String scope) async =>
-      (await SharedPreferences.getInstance())
-          .getStringList('photon.v1.selected.$scope')
-          ?.toSet() ??
-      {};
-
-  @override
-  Future<void> saveSelection(String scope, Set<String> selected) async {
-    if (!await (await SharedPreferences.getInstance()).setStringList(
-      'photon.v1.selected.$scope',
-      selected.toList()..sort(),
-    )) {
-      throw StateError('Photon proxy selection could not be saved');
     }
   }
 }

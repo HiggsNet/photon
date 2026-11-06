@@ -170,31 +170,6 @@ void main() {
               matching: find.byType(Scrollable),
             )
             .first;
-        for (final endpoint in endpoints) {
-          if (photonController.selected.contains(endpoint.id)) continue;
-          await tester.scrollUntilVisible(
-            find.byKey(ValueKey(endpoint.id)),
-            400,
-            scrollable: scrollable,
-            maxScrolls: 30,
-          );
-          await Scrollable.ensureVisible(
-            tester.element(find.byKey(ValueKey(endpoint.id))),
-            alignment: 0.5,
-          );
-          await waitFor(() => !photonController.busy, 'selection idle');
-          await tester.tap(find.byKey(ValueKey(endpoint.id)));
-          await waitFor(
-            () => photonController.selected.contains(endpoint.id),
-            'selected ${endpoint.owner}',
-          );
-        }
-        expect(
-          photonController.selected.containsAll(
-            endpoints.map((endpoint) => endpoint.id),
-          ),
-          isTrue,
-        );
         await tester.scrollUntilVisible(
           find.text(labels.photonApply),
           -400,
@@ -222,7 +197,14 @@ void main() {
             .read(networkSettingProvider.notifier)
             .update((state) => state.copyWith(systemProxy: true));
         expect(await setup.setRunning(true), isTrue);
-        await phase('proxies-selected');
+        final generated = await container
+            .read(coreHandlerProvider)
+            .readConfig(container.read(currentProfileIdProvider)!);
+        expect(
+          (generated['proxies'] as List).map((proxy) => (proxy as Map)['name']),
+          unorderedEquals(directory.endpoints.map((endpoint) => endpoint.name)),
+        );
+        await phase('all-authorized-proxies');
         final port = container.read(patchClashConfigProvider).mixedPort;
         final traces = <Map<String, dynamic>>[];
         for (final endpoint in endpoints) {
@@ -406,39 +388,6 @@ void main() {
         expect(direct.exitCode, 0, reason: '${direct.stderr}');
         expect(ping.exitCode, 0);
         expect(photonController.observation?['tunnel_ready'], isTrue);
-        for (final id in photonController.selected.toList()) {
-          await photonController.toggleEndpoint(id, false);
-        }
-        expect(photonController.selected, isEmpty);
-        expect(container.read(isStartProvider), isTrue);
-        final blocked = await Process.run('curl.exe', [
-          '--silent',
-          '--show-error',
-          '--max-time',
-          '10',
-          '--proxy',
-          'http://127.0.0.1:$port',
-          'https://www.cloudflare.com/cdn-cgi/trace',
-        ]);
-        results['empty_selection_blocked'] = {
-          'exit_code': blocked.exitCode,
-          'error': blocked.stderr,
-        };
-        expect(blocked.exitCode, isNot(0));
-        expect(photonController.hasLease, isTrue);
-        for (final endpoint in endpoints) {
-          await photonController.toggleEndpoint(endpoint.id, true);
-        }
-        await waitFor(
-          () => photonProxyBridge.ready,
-          'restore authorized selections',
-        );
-        expect(
-          photonController.selected.containsAll(
-            endpoints.map((endpoint) => endpoint.id),
-          ),
-          isTrue,
-        );
         await setup.setRunning(false);
         expect(photonController.observation?['tunnel_ready'], isTrue);
         expect(await setup.setRunning(true), isTrue);
@@ -463,12 +412,6 @@ void main() {
         await waitFor(
           () => photonController.observation?['tunnel_ready'] == true,
           'Photon reconnect',
-        );
-        expect(
-          photonController.selected.containsAll(
-            endpoints.map((endpoint) => endpoint.id),
-          ),
-          isTrue,
         );
         await waitFor(
           () => photonProxyBridge.ready && container.read(isStartProvider),
@@ -509,9 +452,8 @@ void main() {
             .map((log) => log.toJson())
             .toList();
         expect(recovered.exitCode, 0, reason: '${recovered.stderr}');
-        await File(
-          '${output.path}/result.json',
-        ).writeAsString(const JsonEncoder.withIndent('  ').convert(results));
+        await File('${output.path}/result.json')
+            .writeAsString(const JsonEncoder.withIndent('  ').convert(results));
       } finally {
         final form = find.byType(FormPage);
         if (form.evaluate().isNotEmpty) {
@@ -536,9 +478,8 @@ void main() {
         await tester.pump();
         await preferences.saveConfig(container.read(configProvider));
         expect(await File(_config).readAsBytes(), originalConfig);
-        await File(
-          '${output.path}/partial-result.json',
-        ).writeAsString(const JsonEncoder.withIndent('  ').convert(results));
+        await File('${output.path}/partial-result.json')
+            .writeAsString(const JsonEncoder.withIndent('  ').convert(results));
         await container.read(coreHandlerProvider).close();
       }
     },

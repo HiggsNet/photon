@@ -6,20 +6,36 @@
 
 1. 打开 FlClash，进入侧栏 **Photon**。首次使用点 **Photon 设置**，填写管理员提供的节点名、可信根公钥和至少一条内网路由。首次自动入网还需要引导地址。保存后应用会在用户数据目录下管理 `photon/photon.yaml`。已有身份可用 **选用已有 Photon YAML** 继续使用原配置。
 2. 在 **概览、隧道、节点、路由、代理服务、诊断** 中查看实时状态。可以筛选节点/地址/路由、复制入网请求和诊断，检查 IKE/ESP、Babel、同步和失败原因。数据采样被截断时会显示提示。
-3. 在代理服务中勾选多个端点，点击 **使用选中的代理** 以选用 Photon 配置。在 FlClash 的代理页使用 `Photon` 手选组、`Photon Auto` 自动择优或 `Photon Balance` 负载均衡。
+3. Photon 自动将当前有效、已授权的 SOCKS5 端点加入代理组。在代理服务中点击 **使用 Photon 代理** 以选用生成的配置。在 FlClash 的代理页使用 `Photon` 手选组、`Photon Auto` 自动择优或 `Photon Balance` 负载均衡。
 4. Photon 连接、代理接管、系统代理和 TUN 通过各自的入口控制。仅连接 Photon 可以访问内网。关闭 Photon 后，普通代理配置继续运行。使用 Photon 配置时，接管保持开启，无法经 Photon 转发的代理流量会被拒绝，节点在隧道重连后自动恢复。
 
 首次连接后可在概览复制待授权的入网请求。如果管理员已提供离线授权包和与之匹配的现有密钥，可以在连接前用 **导入授权** 安装，目标配置须指向尚无数据库的状态目录。已有身份直接使用原配置即可。
 
 停止 Photon 后可打开 **Photon 设置**，修改引导节点、路由或允许的网关，网卡、MTU 和日志级别等选项位于 **高级配置**。保存后的参数在下次连接时生效。配置路径自动保存。客户端可用普通权限打开，连接 Photon 时会由 Windows 请求批准本次后台启动。Mihomo 的 TUN 授权仍由 FlClash helper 处理。离线导入身份需要能创建受保护状态库的管理员权限。安全模式禁止启动 Photon。
 
+## 自定义代理规则
+
+在 Photon 配置旁放一个同名的 `.proxy.yaml` 文件，例如 `photon.yaml` 对应 `photon.proxy.yaml`。可从已有 Mihomo 配置复制代理组和规则。Photon 读取其中的 `proxies`、`proxy-providers`、`proxy-groups`、`rules`、`rule-providers` 和 `sub-rules`，把防回环所需规则放在用户规则之前。DNS 和 TUN 继续由 FlClash 与 Photon 管理。模板需要至少一条规则，最多 4 MiB。移除模板会恢复内置的 Photon 规则。
+
+```yaml
+proxy-groups:
+  - name: Nodes
+    type: select
+    proxies: [Photon, DIRECT]
+rules:
+  - DOMAIN-SUFFIX,google.com,Nodes
+  - MATCH,DIRECT
+```
+
+`Photon`、`Photon Auto`、`Photon Balance` 和 `photon-services` 由 Photon 提供。自定义组也可以用 `use: [photon-services]` 引入所有节点，再用 Mihomo 的 `filter` 筛选地区。建议为这类组设置 `empty-fallback: REJECT`，让筛选后为空的组拒绝连接。模板由用户编辑，生成的配置由 FlClash 管理。模板启用后，Photon 断开时只停用 Photon 出口，用户规则和其他出口继续可用。
+
 ## 数据与网络边界
 
 - 应用级 controller 持有唯一后台进程，经 v1 私有帧协议核对 PID、配置 SHA256 和状态路径。关闭页面/隐藏窗口不会释放网络；退出应用等待后台回收。退出未确认时保留归属并拒绝重启。
 - `services` 每两秒读取签名状态，再次验证当前 root、授权链、撤销、地址分配及服务签名。快照最多有效五秒；已授权不等于已测通。界面只消费公开 DTO，不打开 Photon 数据库。
-- 勾选项按信任 root 和节点隔离保存；移除失效节点，确定性生成并用真实 Mihomo 校验后原子替换配置。只更新 Photon 所属配置，保留其他订阅和代理配置。内容无变化时不重新应用网络配置。
-- SOCKS5 节点绑定 Photon 网卡。Photon 内网、选中服务地址、引导地址和当前网关公网地址进入 TUN 路由排除，同时提供直连规则。配置中的直连规则不替代操作系统路由排除。
-- 服务失效、主动停止或 Photon 意外退出时，正在使用的 Photon 配置切换到拒绝新代理流量的规则并关闭旧连接。独立的代理开关维持用户选择。完整崩溃和睡眠恢复由 D7 跟踪。
+- 节点随授权目录更新，经 Mihomo 校验后原子替换生成的配置。只更新 Photon 所属配置，保留用户模板、其他订阅和代理配置。内容无变化时不重新应用网络配置。
+- SOCKS5 节点绑定 Photon 网卡。Photon 内网、服务地址、引导地址和当前网关公网地址进入 TUN 路由排除，同时提供直连规则。配置中的直连规则不替代操作系统路由排除。
+- 服务失效、主动停止或 Photon 意外退出时，正在使用的 Photon 配置切换到拒绝 Photon 代理流量的状态并关闭旧连接。独立的代理开关维持用户选择。完整崩溃和睡眠恢复由 D7 跟踪。
 
 ## 准备与构建
 
