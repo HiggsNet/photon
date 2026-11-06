@@ -60,3 +60,11 @@ Photon 设置、新建配置与离线授权导入集中在 Photon 页。两个 W
 桌面入口 `Photon (FlClash)` 已切换到新版便携目录。已打开离线授权表单，并从 Windows 文件夹选择进入新建配置表单，验证缺少根公钥时显示保存错误。首次自动入网的完整授权交换待独立验收。
 
 更新后的 Windows x64 ZIP 位于 `build/photon-flclash/dist/photon-flclash-windows-settings-amd64-20261106.zip`，66,481,410 字节，SHA256 `993cd9bb993fff2d3b44455f6d962a9dffe4227813ac5547328a038ae882234f`。校验通过 76 个文件，包括逐文件校验清单。包内无测试配置、私钥或数据库。
+
+## 2026-11-06 代理停止回归
+
+`a634e0bc` 将主动停止时的顺序调整为先暂停代理监听，再关闭已有连接。Core 断开时，暂停状态保留并显示错误。等待停止期间切换到其他配置时，跳过关闭全部连接。
+
+三项故障注入测试在旧实现上分别复现停止指令被跳过、断开后恢复代理状态，以及配置切换时过早关闭连接。修复后 210 项相关 Flutter 回归通过，三项故障注入也在 Windows 通过。实际终止代理核心后，Windows 系统代理和 TUN 的资源回收仍待实测。
+
+修复版 Windows x64 ZIP 位于 `build/photon-flclash/dist/photon-flclash-windows-proxy-stop-amd64-20261106.zip`，66,481,267 字节，SHA256 `c64927bba19e97df762c295e35e32464918e71cc7ad51da7ce5623c84efdbbfc`。包内 76 个文件均通过校验。测试桌面入口仍指向上一个实机验收版。证据在 `build/validation/photon-flclash-proxy-stop-20261106/`。
