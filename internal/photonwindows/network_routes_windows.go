@@ -1,10 +1,8 @@
 package photonwindows
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"net/netip"
-	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -17,11 +15,11 @@ var getBestRoute2 = ipHelperDLL.NewProc("GetBestRoute2")
 // and route notifications cannot reset the inner network. A VPN or specific
 // route that changes a real outer path still triggers recovery. All IP Helper
 // calls run in the network observer, never the packet-owner loop.
-func outboundRouteSnapshot(targets []netip.Addr) ([32]byte, error) {
+func outboundRouteSnapshot(targets []netip.Addr) (map[netip.Addr]string, error) {
 	if err := getBestRoute2.Find(); err != nil {
-		return [32]byte{}, err
+		return nil, err
 	}
-	var entries []string
+	entries := make(map[netip.Addr]string, len(targets))
 	for _, target := range targets {
 		destination := ipHelperSockaddr(target)
 		var route windows.MibIpForwardRow2
@@ -30,18 +28,18 @@ func outboundRouteSnapshot(targets []netip.Addr) ([32]byte, error) {
 		if result != 0 {
 			// Stable unreachability is data; losing or regaining a route must change
 			// the signature rather than coalescing every failure into one error.
-			entries = append(entries, fmt.Sprintf("target:%s:unreachable:%d", target, result))
+			entries[target] = "unreachable"
 			continue
 		}
 		row := windows.MibIfRow2{InterfaceLuid: route.InterfaceLuid}
 		if err := ipHelperCall("GetIfEntry2", unsafe.Pointer(&row)); err != nil {
-			return [32]byte{}, err
+			return nil, err
 		}
 		ipif := ipHelperInterfaceRow{Family: destination.Family, InterfaceLuid: route.InterfaceLuid}
 		if err := getIPHelperInterface(&ipif); err != nil {
-			return [32]byte{}, err
+			return nil, err
 		}
-		entries = append(entries, fmt.Sprintf("target:%s:source:%s:route:%s:%s:%d:if:%s:%d:%d:%d:%d:%d:%d:%d:%d", target, ipHelperAddr(&source), ipHelperRoutePrefix(route), ipHelperAddr(&route.NextHop), route.Metric, row.InterfaceGuid.String(), row.InterfaceLuid, row.OperStatus, row.AdminStatus, row.MediaConnectState, row.Mtu, ipif.NlMtu, ipif.Metric, ipif.Connected))
+		entries[target] = fmt.Sprintf("source:%s:hop:%s:if:%s:%d:%d:%d:%d:%d:%d:%d", ipHelperAddr(&source), ipHelperAddr(&route.NextHop), row.InterfaceGuid.String(), row.InterfaceLuid, row.OperStatus, row.AdminStatus, row.MediaConnectState, row.Mtu, ipif.NlMtu, ipif.Connected)
 	}
-	return sha256.Sum256([]byte(strings.Join(entries, "\n"))), nil
+	return entries, nil
 }

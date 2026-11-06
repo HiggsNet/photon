@@ -316,30 +316,33 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			logger.Info("tunnel_ready_changed", "tunnel_ready", ready)
 		}
 	}
-	rebindPending := false
-	rebind := func(rebindCtx context.Context) error {
+	var rebindPending string
+	rebind := func(rebindCtx context.Context, reason string) error {
 		rebindCtx, cancelRebind := context.WithCancel(rebindCtx)
 		stopCancel := context.AfterFunc(ctx, cancelRebind)
 		defer stopCancel()
 		defer cancelRebind()
 		mesh.stateMu.Lock()
-		mesh.reset()
+		mesh.reset(reason)
 		observeReady()
 		mesh.stateMu.Unlock()
 		err := packet.Rebind(rebindCtx)
 		lastPlan = GatewayPlan{}
-		rebindPending = err != nil && ctx.Err() == nil
+		rebindPending = ""
 		if err != nil {
-			logger.Warn("gossip_rebind_failed", "error", err)
+			if ctx.Err() == nil {
+				rebindPending = reason
+			}
+			logger.Warn("gossip_rebind_failed", "reason", reason, "error", err)
 		} else {
-			logger.Info("gossip_rebound", "address", packet.LocalAddr().String())
+			logger.Info("gossip_rebound", "reason", reason, "address", packet.LocalAddr().String())
 		}
 		requestPlan()
 		return err
 	}
-	roam := func() error {
+	roam := func(reason string) error {
 		mesh.stateMu.Lock()
-		preserved := !rebindPending && mesh.roam(time.Now())
+		preserved := rebindPending == "" && mesh.roam(time.Now())
 		var err error
 		if preserved {
 			err = mesh.tick()
@@ -349,7 +352,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		if preserved {
 			requestPlan()
 		} else {
-			_ = rebind(ctx)
+			_ = rebind(ctx, reason)
 		}
 		return err
 	}
@@ -499,11 +502,11 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			observeReady()
 			mesh.stateMu.Unlock()
 		case request := <-d.rebind:
-			request.result <- rebind(request.ctx)
+			request.result <- rebind(request.ctx, "manual_rebind")
 			refreshGossip()
 		case <-packet.failed:
 			if ctx.Err() == nil {
-				_ = rebind(ctx)
+				_ = rebind(ctx, "socket_failed")
 				refreshGossip()
 			}
 		case _, ok := <-powerResumes:
@@ -513,7 +516,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			}
 			if ctx.Err() == nil {
 				logger.Info("power_resumed")
-				if err := roam(); err != nil {
+				if err := roam("system_resumed"); err != nil {
 					return err
 				}
 				refreshGossip()
@@ -524,14 +527,14 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				continue
 			}
 			if ctx.Err() == nil {
-				if err := roam(); err != nil {
+				if err := roam("outer_path_changed"); err != nil {
 					return err
 				}
 				refreshGossip()
 			}
 		case <-ticker.C:
-			if rebindPending {
-				_ = rebind(ctx)
+			if rebindPending != "" {
+				_ = rebind(ctx, rebindPending)
 			}
 			requestPlan()
 			refreshGossip()

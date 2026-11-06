@@ -46,6 +46,8 @@ type Observation struct {
 	Peers                  []PeerObservation         `json:"peers"`
 	PeersTruncated         bool                      `json:"peers_truncated"`
 	RoutesTruncated        bool                      `json:"routes_truncated"`
+	ipv4RouteReady         bool
+	ipv6RouteReady         bool
 }
 type WintunObservation struct {
 	Configured  bool           `json:"configured"`
@@ -69,6 +71,7 @@ type IKEObservation struct {
 	LastRejection    *IKEFailureObservation `json:"last_rejection,omitempty"`
 	Phase            string                 `json:"phase"`
 	Live             bool                   `json:"live"`
+	MOBIKE           bool                   `json:"mobike"`
 	Gateway          string                 `json:"gateway"`
 	Generation       uint64                 `json:"generation"`
 	ExpiresAt        time.Time              `json:"expires_at"`
@@ -242,7 +245,14 @@ outer:
 			}
 			lookups++
 			selected := sadr.Lookup(candidates, source, candidate.Destination.Addr(), now, authorize)
-			out.TunnelReady = out.TunnelReady || out.Wintun.Configured && len(selected) > 0
+			if out.Wintun.Configured && len(selected) > 0 {
+				out.TunnelReady = true
+				if source.Is4() {
+					out.ipv4RouteReady = true
+				} else {
+					out.ipv6RouteReady = true
+				}
+			}
 			for _, route := range selected {
 				r := RouteObservation{Prefix: route.Destination, SourcePrefix: route.Source, Metric: route.Metric}
 				if !seen[r] {

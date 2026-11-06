@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -37,20 +38,33 @@ var networkChangeCallback = windows.NewCallback(func(token *byte, _ uintptr, kin
 })
 
 func watchNetworkChanges(ctx context.Context) (<-chan struct{}, func() error, error) {
-	return watchNetworkSnapshot(ctx, underlaySnapshot)
-}
-
-func watchNetworkChangesForTargets(ctx context.Context, targets func() []netip.Addr) (<-chan struct{}, func() error, error) {
-	return watchNetworkSnapshot(ctx, func() ([32]byte, error) {
-		addresses := targets()
-		if len(addresses) == 0 {
-			return underlaySnapshot()
-		}
-		return outboundRouteSnapshot(addresses)
+	return watchNetworkSnapshot(ctx, underlaySnapshot, func(previous, current [32]byte) bool {
+		return previous != current
 	})
 }
 
-func watchNetworkSnapshot(ctx context.Context, snapshot func() ([32]byte, error)) (<-chan struct{}, func() error, error) {
+func watchNetworkChangesForTargets(ctx context.Context, targets func() []netip.Addr) (<-chan struct{}, func() error, error) {
+	type snapshot struct {
+		underlay [32]byte
+		paths    map[netip.Addr]string
+	}
+	return watchNetworkSnapshot(ctx, func() (snapshot, error) {
+		addresses := targets()
+		if len(addresses) == 0 {
+			value, err := underlaySnapshot()
+			return snapshot{underlay: value}, err
+		}
+		value, err := outboundRouteSnapshot(addresses)
+		return snapshot{paths: value}, err
+	}, func(previous, current snapshot) bool {
+		if previous.paths == nil && current.paths == nil {
+			return previous.underlay != current.underlay
+		}
+		return outboundPathsChanged(previous.paths, current.paths)
+	})
+}
+
+func watchNetworkSnapshot[T any](ctx context.Context, snapshot func() (T, error), pathChanged func(T, T) bool) (<-chan struct{}, func() error, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
@@ -99,21 +113,29 @@ func watchNetworkSnapshot(ctx context.Context, snapshot func() ([32]byte, error)
 	started = true
 	go func() {
 		defer close(done)
-		failed := false
 		for {
 			select {
 			case <-observerCtx.Done():
 				return
 			case <-subscription.raw:
 			}
-			current, err := snapshot()
+			// Route installation can publish an incomplete path before the rest
+			// of the same update reaches IP Helper.
+			timer := time.NewTimer(250 * time.Millisecond)
+			select {
+			case <-observerCtx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			select {
+			case <-subscription.raw:
+			default:
+			}
 			changed := subscription.initial.Swap(false)
-			if err != nil {
-				changed = changed || !failed // one rebind per continuous query failure
-				failed = true
-			} else {
-				changed = changed || failed || current != previous
-				previous, failed = current, false
+			if current, err := snapshot(); err == nil {
+				changed = changed || pathChanged(previous, current)
+				previous = current
 			}
 			if changed {
 				select {

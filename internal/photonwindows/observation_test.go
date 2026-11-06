@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/photonclient/babel"
+	"github.com/HiggsNet/photon/internal/photonclient/sadr"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	"github.com/HiggsNet/photon/pkg/core/observability"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
@@ -117,6 +118,34 @@ func TestRuntimeObservationRequiresInstalledSource(t *testing.T) {
 	}
 }
 
+func TestRouteObservationReportsFamiliesIndependently(t *testing.T) {
+	now := time.Now()
+	hosts := []netip.Prefix{netip.MustParsePrefix("10.9.0.1/32"), netip.MustParsePrefix("fd00::1/128")}
+	origins := []babel.Origin{{Prefix: hosts[0]}, {Prefix: hosts[1]}}
+	routes := []sadr.Route{
+		{Destination: netip.MustParsePrefix("10.1.0.0/16"), NextHop: netip.MustParseAddr("fe80::1"), RouterID: [8]byte{1}, ExpiresAt: now.Add(time.Minute), Metric: 10},
+		{Destination: netip.MustParsePrefix("fd12::/32"), NextHop: netip.MustParseAddr("fe80::1"), RouterID: [8]byte{1}, ExpiresAt: now.Add(time.Minute), Metric: 10},
+	}
+	for _, tc := range []struct {
+		name       string
+		routes     []sadr.Route
+		configured bool
+		ipv4, ipv6 bool
+	}{
+		{"dual stack", routes, true, true, true},
+		{"IPv4 only", routes[:1], true, true, false},
+		{"IPv6 only", routes[1:], true, false, true},
+		{"device down", routes, false, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := Observation{Wintun: WintunObservation{Configured: tc.configured}}
+			out.observeRoutes(tc.routes, origins, hosts, now)
+			if out.ipv4RouteReady != tc.ipv4 || out.ipv6RouteReady != tc.ipv6 || out.TunnelReady != (tc.ipv4 || tc.ipv6) {
+				t.Fatalf("unexpected IPv4, IPv6, aggregate readiness: %t, %t, %t", out.ipv4RouteReady, out.ipv6RouteReady, out.TunnelReady)
+			}
+		})
+	}
+}
 func TestRuntimeObservationBoundsPeerDiagnostics(t *testing.T) {
 	f, r := observationFixture(t)
 	driver := &corehost.GossipDriver{Observability: observability.NewPeerObservabilityStore(512, time.Hour)}

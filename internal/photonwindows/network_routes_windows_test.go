@@ -3,6 +3,7 @@ package photonwindows
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/netip"
 	"os"
 	"testing"
@@ -36,7 +37,7 @@ func TestWindowsOuterRouteSnapshotIgnoresUnrelatedTunAndDetectsActualPath(t *tes
 	// Wait out DAD/adapter initialization before checking the unrelated path.
 	time.Sleep(200 * time.Millisecond)
 	unrelated, err := outboundRouteSnapshot([]netip.Addr{target})
-	if err != nil || unrelated != before {
+	if err != nil || !maps.Equal(unrelated, before) {
 		t.Fatal("unrelated virtual adapter altered outer path", err)
 	}
 	want.Routes = append(want.Routes, netip.MustParsePrefix("198.18.254.0/24"))
@@ -44,14 +45,14 @@ func TestWindowsOuterRouteSnapshotIgnoresUnrelatedTunAndDetectsActualPath(t *tes
 		t.Fatal(err)
 	}
 	changed, err := outboundRouteSnapshot([]netip.Addr{target})
-	if err != nil || changed == before {
+	if err != nil || !outboundPathsChanged(before, changed) {
 		t.Fatal("real path change was ignored", err)
 	}
 	if _, err := driver.Reconcile(ctx, ipHelperIntent{MTU: 1400, Metric: 50}); err != nil {
 		t.Fatal(err)
 	}
 	restored, err := outboundRouteSnapshot([]netip.Addr{target})
-	if err != nil || restored != before {
+	if err != nil || !maps.Equal(restored, before) {
 		t.Fatal("outer route did not restore", err)
 	}
 }

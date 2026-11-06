@@ -55,6 +55,7 @@ func (t *gatewayTunnel) observeProgress() {
 
 func (t *gatewayTunnel) observeIKE() IKEObservation {
 	out := IKEObservation{Phase: observedIKEPhase(t.phase), AttemptActive: t.phase != 0, AttemptGateway: t.diagnostic.gateway, AttemptRemoteEndpoint: t.diagnostic.remote, AttemptGeneration: t.diagnostic.generation, RetryAt: t.diagnostic.retryAt, LastEvent: t.diagnostic.lastEvent, LastEventAt: t.diagnostic.lastEventAt}
+	out.MOBIKE = t.mobike
 	if t.phase != 0 {
 		if t.plan.Selected != nil {
 			out.AttemptGateway = boundedObservationText(string(t.plan.Selected.Zone))

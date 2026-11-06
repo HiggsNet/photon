@@ -32,3 +32,19 @@ func TestNetworkRouteTargetsAreDetachedAndDeterministic(t *testing.T) {
 		t.Fatal("inner/link-local address included in outer observer", inner.load())
 	}
 }
+
+func TestOutboundPathsChangedIgnoresTargetChurn(t *testing.T) {
+	a := netip.MustParseAddr("192.0.2.1")
+	b := netip.MustParseAddr("192.0.2.2")
+	c := netip.MustParseAddr("2001:db8::3")
+	previous := map[netip.Addr]string{a: "wifi", b: "ethernet"}
+	if outboundPathsChanged(previous, map[netip.Addr]string{a: "wifi", c: "wifi"}) {
+		t.Fatal("target refresh was treated as a path change")
+	}
+	if !outboundPathsChanged(previous, map[netip.Addr]string{a: "ethernet", c: "wifi"}) {
+		t.Fatal("a retained target changed interfaces without triggering recovery")
+	}
+	if !outboundPathsChanged(previous, map[netip.Addr]string{a: "unreachable"}) {
+		t.Fatal("loss of a retained path was ignored")
+	}
+}

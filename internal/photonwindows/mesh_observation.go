@@ -19,10 +19,13 @@ import (
 // Connections reports actual independent peer lifetimes. The legacy summary
 // describes one representative connection; it is never an exclusive gateway.
 type ConnectionObservation struct {
-	Peer        string         `json:"peer"`
-	IKE         IKEObservation `json:"ike"`
-	BabelLive   bool           `json:"babel_live"`
-	TunnelReady bool           `json:"tunnel_ready"`
+	Peer            string         `json:"peer"`
+	IKE             IKEObservation `json:"ike"`
+	BabelLive       bool           `json:"babel_live"`
+	TunnelReady     bool           `json:"tunnel_ready"`
+	IPv4RouteReady  bool           `json:"ipv4_route_ready"`
+	IPv6RouteReady  bool           `json:"ipv6_route_ready"`
+	RoutesTruncated bool           `json:"routes_truncated,omitempty"`
 }
 
 type meshObservationRequest struct {
@@ -129,7 +132,10 @@ func (s meshObservationSnapshot) render(config *Config, view corestate.View, dri
 		}
 		out.TunnelReady = out.TunnelReady || sample.TunnelReady
 		peer := boundedObservationText(string(p.config.Gateway.AllowedZones[0]))
-		connection := ConnectionObservation{Peer: peer, IKE: sample.IKE, BabelLive: sample.Babel.Live, TunnelReady: sample.TunnelReady}
+		connection := ConnectionObservation{
+			Peer: peer, IKE: sample.IKE, BabelLive: sample.Babel.Live, TunnelReady: sample.TunnelReady,
+			IPv4RouteReady: sample.ipv4RouteReady, IPv6RouteReady: sample.ipv6RouteReady, RoutesTruncated: sample.RoutesTruncated,
+		}
 		encoded, _ := json.Marshal(connection)
 		if len(out.Connections) < 256 && connectionBytes+len(encoded)+1 <= 128<<10 {
 			out.Connections = append(out.Connections, connection)

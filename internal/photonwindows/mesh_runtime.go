@@ -171,6 +171,10 @@ func (m *meshRuntime) update(plan GatewayPlan) {
 }
 
 func (m *meshRuntime) stopPeer(p *meshPeer, reason string) {
+	m.stopPeerWithEvent(p, "attempt_failed", reason)
+}
+
+func (m *meshRuntime) stopPeerWithEvent(p *meshPeer, event, reason string) {
 	if p.heldResponse != nil {
 		clear(p.heldResponse.request.input.private)
 		p.heldResponse = nil
@@ -184,7 +188,7 @@ func (m *meshRuntime) stopPeer(p *meshPeer, reason string) {
 	if err := p.leaf.stop(); err != nil {
 		m.logger.Warn("leaf_cleanup_failed", "peer", p.config.Gateway.AllowedZones[0], "error", err)
 	}
-	p.tunnel.observeEvent("attempt_failed", time.Now(), errors.New(reason))
+	p.tunnel.observeEvent(event, time.Now(), errors.New(reason))
 	p.tunnel.stop()
 	p.next = time.Now().Add(p.backoff)
 	p.tunnel.diagnostic.retryAt = p.next
@@ -562,9 +566,9 @@ func (m *meshRuntime) ready() bool {
 
 // Network replacement invalidates every peer's old endpoint reservation. This
 // is the only shared transport teardown; ordinary peer failures stay isolated.
-func (m *meshRuntime) reset() {
-	m.stopAll("local network endpoint replaced")
-	for _, p := range m.peers {
+func (m *meshRuntime) reset(reason string) {
+	for _, p := range m.ordered() {
+		m.stopPeerWithEvent(p, "network_rebind", reason)
 		p.setPlan(GatewayPlan{})
 	}
 }
@@ -583,7 +587,7 @@ func (m *meshRuntime) roam(now time.Time) bool {
 		if p.tunnel.mobike {
 			p.tunnel.requestMOBIKE(now)
 		} else if p.tunnel.phase != 0 || p.starting != nil {
-			m.stopPeer(p, "local network path changed without negotiated MOBIKE")
+			m.stopPeerWithEvent(p, "network_rebind", "mobike_not_negotiated")
 		}
 	}
 	return true

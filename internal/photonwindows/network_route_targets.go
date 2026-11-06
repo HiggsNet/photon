@@ -21,6 +21,17 @@ func (t *networkRouteTargets) load() []netip.Addr {
 	return nil
 }
 
+// A plan refresh can change the monitored peers without changing any path.
+// New targets get a baseline; only paths observed in both samples can change.
+func outboundPathsChanged(previous, current map[netip.Addr]string) bool {
+	for target, path := range current {
+		if old, ok := previous[target]; ok && old != path {
+			return true
+		}
+	}
+	return false
+}
+
 func (t *networkRouteTargets) update(plan GatewayPlan, bootstrap map[string]*net.UDPAddr, additional ...netip.Addr) {
 	addresses := slices.Clone(additional)
 	for _, endpoint := range bootstrap {
