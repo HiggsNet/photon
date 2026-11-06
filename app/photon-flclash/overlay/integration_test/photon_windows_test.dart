@@ -140,7 +140,7 @@ void main() {
         await phase('connected');
         final tabs = [
           labels.photonTunnel,
-          labels.peers,
+          labels.photonGossipPeers,
           labels.photonRoutes,
           labels.photonDiagnostics,
           labels.photonServices,

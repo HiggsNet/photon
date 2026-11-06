@@ -164,7 +164,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       tester.widget<Text>(find.byKey(const ValueKey('photon-status'))).data,
-      'Connected',
+      'Tunnel ready',
     );
     expect(find.text('Stop'), findsOneWidget);
     expect(
@@ -228,7 +228,7 @@ void main() {
   });
 
   photonTest(
-    'live tunnel, gossip and route pages expose useful details and filter rows',
+    'the tunnel table separates readiness from IKE and keeps details accessible',
     (tester) async {
       tester.view.physicalSize = const Size(1400, 1100);
       tester.view.devicePixelRatio = 1;
@@ -250,6 +250,8 @@ void main() {
             'peer': 'gateway.catofes.',
             'tunnel_ready': true,
             'babel_live': true,
+            'ipv4_route_ready': false,
+            'ipv6_route_ready': true,
             'ike': {
               'live': true,
               'child_live': true,
@@ -257,13 +259,35 @@ void main() {
               'attempt_remote_endpoint': '192.0.2.1:4500',
             },
           },
+          {
+            'peer': 'second.catofes.',
+            'tunnel_ready': false,
+            'babel_live': false,
+            'ike': {
+              'live': false,
+              'child_live': false,
+              'phase': 'init',
+              'attempt_remote_endpoint': '[2001:db8::2]:500',
+              'last_failure': {
+                'event': 'network_rebind',
+                'message': 'outer_path_changed',
+              },
+            },
+          },
         ],
         'peers': [
           {
             'peer': 'gossip.catofes.',
-            'pull_state': 'synced',
-            'pull_attempts': 3,
-            'pull_successes': 3,
+            'last_sync_unix': 1735689600,
+            'last_event': 'scan_timer',
+          },
+          {
+            'peer': 'other-gossip.catofes.',
+            'session_failure': {
+              'code': 'timeout',
+              'message': 'round timer timed out',
+              'at_unix': 1735689700,
+            },
           },
         ],
         'babel': {
@@ -286,9 +310,46 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('gateway.catofes.'), findsOneWidget);
       expect(find.text('192.0.2.1:4500'), findsOneWidget);
-      await tester.tap(find.text('Peers').first);
+      expect(find.text('IKE'), findsOneWidget);
+      expect(find.text('ESP'), findsOneWidget);
+      expect(find.text('Babel'), findsOneWidget);
+      expect(find.text('Outer'), findsOneWidget);
+      expect(find.byTooltip('Route ready'), findsOneWidget);
+      expect(find.byTooltip('No usable route'), findsOneWidget);
+      expect(find.text('Initializing'), findsOneWidget);
+      expect(find.text('Not ready'), findsOneWidget);
+      expect(
+        tester.getCenter(find.text('second.catofes.')).dy,
+        lessThan(tester.getCenter(find.text('gateway.catofes.')).dy),
+      );
+      await tester.enterText(find.byType(TextField), '2001:db8::2');
+      await tester.pumpAndSettle();
+      expect(find.text('gateway.catofes.'), findsNothing);
+      expect(find.text('second.catofes.'), findsOneWidget);
+      tester.view.physicalSize = const Size(640, 900);
+      await tester.pumpAndSettle();
+      expect(find.text('[2001:db8::2]:500'), findsNothing);
+      await tester.tap(find.text('second.catofes.'));
+      await tester.pumpAndSettle();
+      expect(find.text('[2001:db8::2]:500'), findsOneWidget);
+      final reason = find.text('Outer network path changed');
+      expect(reason, findsOneWidget);
+      Navigator.of(tester.element(reason)).pop();
+      tester.view.physicalSize = const Size(1400, 1100);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Gossip peers').first);
       await tester.pumpAndSettle();
       expect(find.text('gossip.catofes.'), findsOneWidget);
+      expect(find.text('Synced'), findsOneWidget);
+      expect(find.text('Sync failed'), findsOneWidget);
+      expect(find.text('scan_timer'), findsNothing);
+      expect(find.text('round timer timed out'), findsNothing);
+      await tester.tap(find.text('other-gossip.catofes.'));
+      await tester.pumpAndSettle();
+      final syncTimeout = find.text('Sync timed out');
+      expect(syncTimeout, findsOneWidget);
+      Navigator.of(tester.element(syncTimeout)).pop();
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Routes').first);
       await tester.pumpAndSettle();
       expect(find.text('fd42:1::/64'), findsOneWidget);
@@ -303,25 +364,26 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
-  photonTest(
-    'proxy services display every authorized endpoint without checkboxes',
-    (tester) async {
-      tester.view.physicalSize = const Size(1400, 1100);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-      backend.serviceSample = directoryFixture();
-      await tester.pumpWidget(view());
-      await tester.tap(find.text('Start'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Proxy services').first);
-      await tester.pumpAndSettle();
-      expect(find.text('Authorized endpoints'), findsOneWidget);
-      expect(find.text('Use Photon proxies'), findsOneWidget);
-      expect(find.byType(Checkbox), findsNothing);
-      expect(find.textContaining('[fd42:1::20]:1080'), findsOneWidget);
-      expect(find.textContaining('[fd42:1::21]:2080'), findsOneWidget);
-      expect(tester.takeException(), isNull);
-    },
-  );
+  photonTest('proxy services group all authorized endpoints by publisher', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1400, 1100);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    backend.serviceSample = directoryFixture();
+    await tester.pumpWidget(view());
+    await tester.tap(find.text('Start'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Proxy services').first);
+    await tester.pumpAndSettle();
+    expect(find.text('Endpoints'), findsOneWidget);
+    expect(find.text('Switch to Photon profile'), findsOneWidget);
+    expect(find.byType(Checkbox), findsNothing);
+    expect(find.text('owner.catofes.'), findsOneWidget);
+    expect(find.text('cn · jp'), findsOneWidget);
+    expect(find.text('2'), findsOneWidget);
+    expect(find.textContaining('fd42:1::2'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 }
