@@ -182,8 +182,11 @@ final class PhotonProxyBridge {
     }
     final core = container.read(coreHandlerProvider);
     if (explicitStop) {
-      await core.closeConnections();
       await container.read(setupActionProvider.notifier).setRunning(false);
+      if (container.read(currentProfileProvider)?.url == photonProfileSource &&
+          !container.read(isStartProvider)) {
+        await core.closeConnections();
+      }
       return;
     }
     final profile = _managed();

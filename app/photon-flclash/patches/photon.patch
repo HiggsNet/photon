@@ -414,7 +414,7 @@ index 3a2f9df..08eacdd 100644
  import 'package:fl_clash/providers/mitm.dart';
  import 'package:fl_clash/providers/providers.dart';
 diff --git a/lib/providers/actions/setup.dart b/lib/providers/actions/setup.dart
-index 3f1e2c6..72f60c2 100644
+index 3f1e2c6..4b7d49e 100644
 --- a/lib/providers/actions/setup.dart
 +++ b/lib/providers/actions/setup.dart
 @@ -185,6 +185,12 @@ class SetupAction extends _$SetupAction {
@@ -430,6 +430,16 @@ index 3f1e2c6..72f60c2 100644
      if (request.initialize) {
        var applied = false;
        try {
+@@ -276,7 +282,8 @@ class SetupAction extends _$SetupAction {
+ 
+   bool _isUnanswered(Object error) =>
+       isUnansweredCoreError(error) ||
+-      error is CoreMethodException && error.code == 'service_refused';
++      error is CoreMethodException &&
++          (error.isCoreUnavailable || error.code == 'service_refused');
+ 
+   /// An excluded SSID parks the listener without ending the run.
+   void syncSuspend() {
 diff --git a/lib/providers/actions/system.dart b/lib/providers/actions/system.dart
 index df905f7..990086b 100644
 --- a/lib/providers/actions/system.dart
