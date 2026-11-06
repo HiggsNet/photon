@@ -29,16 +29,33 @@ func (s frontendStream) Close() error {
 	return err
 }
 
-func runFrontendBackend(ctx context.Context, path string, stdout, stderr io.Writer) int {
-	stream := frontendStream{Reader: os.Stdin, Writer: stdout}
+func readFrontendConfig(path string) ([]byte, error) {
+	const limit = 1 << 20
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if len(data) > limit {
+		return nil, errors.New("Photon configuration is too large")
+	}
+	return data, err
+}
+
+func runFrontendBackend(ctx context.Context, path string, stream io.ReadWriteCloser, expectedDigest string, stderr io.Writer) int {
 	fail := func(err error) int {
-		_ = photonwindows.WriteControlReady(stdout, photonwindows.ControlReady{}, err)
+		_ = photonwindows.WriteControlReady(stream, photonwindows.ControlReady{}, err)
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	data, err := os.ReadFile(path)
+	data, err := readFrontendConfig(path)
 	if err != nil {
 		return fail(err)
+	}
+	digest := fmt.Sprintf("%x", sha256.Sum256(data))
+	if expectedDigest != "" && digest != expectedDigest {
+		return fail(errors.New("Photon configuration changed during elevation"))
 	}
 	config, err := photonwindows.ParseConfig(strings.NewReader(string(data)))
 	if err != nil {
@@ -51,7 +68,7 @@ func runFrontendBackend(ctx context.Context, path string, stdout, stderr io.Writ
 	if err != nil {
 		return fail(err)
 	}
-	runErr := photonwindows.RunControlStream(ctx, photonwindows.NewDaemon(config, logger), fmt.Sprintf("%x", sha256.Sum256(data)), stream)
+	runErr := photonwindows.RunControlStream(ctx, photonwindows.NewDaemon(config, logger), digest, stream)
 	if err := errors.Join(runErr, closer.Close()); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1

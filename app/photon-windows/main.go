@@ -41,6 +41,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer cancel()
 		return runConsole(ctx, args[1:], stdout, stderr)
+	case "frontend-worker":
+		return runFrontendWorker(context.Background(), args[1:], stderr)
 	case "version", "--version", "-version":
 		if len(args) != 1 {
 			fmt.Fprintln(stderr, "photon-windows version accepts no arguments")
@@ -66,6 +68,7 @@ func runConsole(ctx context.Context, args []string, stdout, stderr io.Writer) (c
 	console := flags.Bool("console", false, "run in the foreground")
 	service := flags.Bool("service", false, "run under Windows SCM")
 	stdio := flags.Bool("stdio", false, "run as a frontend-owned backend over private standard I/O")
+	elevate := flags.Bool("elevate", false, "request administrator privileges for the frontend backend when needed")
 	name := flags.String("name", photonwindows.DefaultServiceName, "SCM service name")
 	path := flags.String("config", "", "path to Photon Windows YAML config")
 	if err := flags.Parse(args); err != nil {
@@ -77,12 +80,16 @@ func runConsole(ctx context.Context, args []string, stdout, stderr io.Writer) (c
 			modes++
 		}
 	}
-	if modes != 1 || *path == "" || flags.NArg() != 0 || !validServiceName(*name) {
+	if modes != 1 || *elevate && !*stdio || *path == "" || flags.NArg() != 0 || !validServiceName(*name) {
 		fmt.Fprintln(stderr, "Usage: photon-windows run --console --config <path> | run --service --config <path> [--name <name>] | run --stdio --config <path>")
 		return 2
 	}
 	if *stdio {
-		return runFrontendBackend(ctx, *path, stdout, stderr)
+		stream := frontendStream{Reader: os.Stdin, Writer: stdout}
+		if *elevate {
+			return runElevatedFrontend(ctx, *path, stream, stderr)
+		}
+		return runFrontendBackend(ctx, *path, stream, "", stderr)
 	}
 	config, err := photonwindows.LoadConfig(*path)
 	if err != nil {
