@@ -78,6 +78,36 @@ check: fmt vet test build photon-windows-cross-build
 photon-windows-build: photon-windows-cross-build
 	@BUILD_DIR="$(BUILD_DIR)" PHOTON_WINDOWS_EXE="$(BUILD_DIR)/windows-amd64/$(PHOTON_WINDOWS_BINARY_NAME)" WINTUN_DLL="$(WINTUN_DLL)" bash docs/scripts/windows-portable-build.sh
 
+.PHONY: photon-flclash-build
+photon-flclash-build:
+	@set -eu; \
+	case "$$(uname -s)" in \
+		MINGW*|MSYS*|CYGWIN*) path_tool=cygpath ;; \
+		*) path_tool=wslpath ;; \
+	esac; \
+	if ! command -v "$$path_tool" >/dev/null || ! command -v powershell.exe >/dev/null; then \
+		echo "FlClash requires the Windows Flutter toolchain. Run on Windows or in WSL with Windows interop." >&2; \
+		echo "For the native Photon ZIP on Linux, run make photon-windows-build." >&2; \
+		exit 1; \
+	fi; \
+	win_script=$$("$$path_tool" -a -w app/photon-flclash/build-windows.ps1); \
+	case "$$win_script" in \
+		[A-Za-z]:*) ;; \
+		*) echo "Put the checkout on a Windows drive (for example /mnt/c/photon in WSL)." >&2; exit 1 ;; \
+	esac; \
+	mkdir -p "$(BUILD_DIR)"; \
+	win_build=$$("$$path_tool" -a -w "$(BUILD_DIR)"); \
+	case "$$win_build" in \
+		[A-Za-z]:*) ;; \
+		*) echo "Put BUILD_DIR on a Windows drive." >&2; exit 1 ;; \
+	esac; \
+	$(MAKE) photon-windows-build; \
+	bash app/photon-flclash/prepare.sh "$(BUILD_DIR)/photon-flclash/upstream"; \
+	MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$$win_script" \
+		-Checkout "$$win_build\photon-flclash\upstream" \
+		-BackendDirectory "$$win_build\windows-amd64" \
+		-ArchivePath "$$win_build\photon-flclash\dist\photon-flclash-windows-amd64.zip"
+
 photon-windows-cross-build:
 	@mkdir -p "$(BUILD_DIR)/windows-amd64"
 	$(WINDOWS_AMD64_GO_ENV) $(GO) build -ldflags "$(LDFLAGS)" -o "$(BUILD_DIR)/windows-amd64/$(PHOTON_WINDOWS_BINARY_NAME)" $(PHOTON_WINDOWS_MAIN_PACKAGE)
@@ -1063,6 +1093,7 @@ help:
 	@echo "  vet     - Run go vet"
 	@echo "  check   - Run fmt, vet, test, and build"
 	@echo "  photon-windows-build - Build Windows amd64 portable directory + ZIP (official Wintun; offline: WINTUN_DLL=/path/wintun.dll)"
+	@echo "  photon-flclash-build - Build the FlClash + Photon Windows amd64 ZIP on Windows or WSL"
 	@echo "  photon-windows-cross-build - Compile Windows amd64 only, without downloading or packaging Wintun"
 	@echo "  photon-windows-test - Run Photon Windows portable tests"
 	@echo "  release-check - Validate VERSION/repository state and run release tests"

@@ -23,6 +23,16 @@
 
 ## 准备与构建
 
+在 Windows 上用带 GNU Make、Bash 和 `zip` 的终端运行，或在启用了 Windows 互操作的 WSL 中从 Windows 磁盘上的检出运行，例如 `/mnt/c/photon`。
+
+```sh
+make photon-flclash-build
+```
+
+目标会编译 Photon 后台、准备锁定的 FlClash 源码并调用 Windows Flutter 打包。ZIP 默认位于 `build/photon-flclash/dist/photon-flclash-windows-amd64.zip`，内含 `SHA256SUMS`。Windows 的 `PATH` 需要包含锁定版本的 Flutter、Go 和 Rust，并安装 Visual Studio C++ 构建工具及 Windows SDK。Photon 后台要求 Go 1.25 或更新版本，WSL 中用 Linux Go 编译。独立 Linux 主机可以用 `make photon-windows-build` 交叉编译 Photon 原生便携包。Flutter 的 Windows 界面编译需要 Windows 主机。
+
+如果只准备源码和运行检查，可以单独执行以下命令。
+
 ```sh
 bash app/photon-flclash/prepare.sh
 cd build/photon-flclash/upstream

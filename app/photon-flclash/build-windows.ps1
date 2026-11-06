@@ -1,12 +1,24 @@
+[CmdletBinding(DefaultParameterSetName='Directory')]
 param(
     [Parameter(Mandatory=$true)][string]$Checkout,
     [Parameter(Mandatory=$true)][string]$BackendDirectory,
-    [Parameter(Mandatory=$true)][string]$OutputDirectory
+    [Parameter(Mandatory=$true, ParameterSetName='Directory')][string]$OutputDirectory,
+    [Parameter(Mandatory=$true, ParameterSetName='Archive')][string]$ArchivePath
 )
 $ErrorActionPreference = 'Stop'
 $Checkout = (Resolve-Path -LiteralPath $Checkout).Path
 $BackendDirectory = (Resolve-Path -LiteralPath $BackendDirectory).Path
-$OutputDirectory = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
+$stage = $null
+if ($ArchivePath) {
+    $ArchivePath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ArchivePath)
+    if ([IO.Path]::GetExtension($ArchivePath) -ne '.zip' -or (Test-Path -LiteralPath $ArchivePath -PathType Container)) {
+        throw 'ArchivePath must name a ZIP file'
+    }
+    $stage = Join-Path (Split-Path -Parent $ArchivePath) ('.flclash-' + [Guid]::NewGuid().ToString('N'))
+    $OutputDirectory = Join-Path $stage 'bundle'
+} else {
+    $OutputDirectory = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
+}
 $lock = @{}
 Get-Content -LiteralPath (Join-Path $PSScriptRoot 'upstream.env') | ForEach-Object {
     if ($_ -match '^([A-Z_]+)=(.+)$') { $lock[$matches[1]] = $matches[2] }
@@ -67,6 +79,7 @@ try {
     Invoke-BuildTool 'flutter' @('build', 'windows', '--release')
     $bundle = Join-Path $Checkout 'build\windows\x64\runner\Release'
     if (!(Test-Path -LiteralPath (Join-Path $bundle 'FlClash.exe'))) { throw 'Windows x64 bundle missing' }
+    if ($stage) { [IO.Directory]::CreateDirectory($stage) | Out-Null }
     New-Item -ItemType Directory -Path $OutputDirectory | Out-Null
     Copy-Item -Path (Join-Path $bundle '*') -Destination $OutputDirectory -Recurse
     foreach ($name in @('photon-windows.exe','wintun.dll')) {
@@ -84,5 +97,17 @@ try {
         (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $_.FullName.Substring((Get-Item -LiteralPath $OutputDirectory).FullName.Length + 1).Replace('\','/')
     })
     $hashes | Set-Content -Encoding ASCII (Join-Path $OutputDirectory 'SHA256SUMS')
-} finally { Pop-Location }
-Write-Output "Prepared Windows bundle: $OutputDirectory"
+    if ($stage) {
+        $stagedZip = Join-Path $stage 'portable.zip'
+        Compress-Archive -Path (Join-Path $OutputDirectory '*') -DestinationPath $stagedZip
+        Move-Item -LiteralPath $stagedZip -Destination $ArchivePath -Force
+        Write-Output "Prepared Windows ZIP: $ArchivePath"
+    } else {
+        Write-Output "Prepared Windows bundle: $OutputDirectory"
+    }
+} finally {
+    Pop-Location
+    if ($stage -and (Test-Path -LiteralPath $stage)) {
+        Remove-Item -LiteralPath $stage -Recurse -Force
+    }
+}
