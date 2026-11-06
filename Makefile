@@ -103,10 +103,14 @@ photon-flclash-build:
 	esac; \
 	$(MAKE) photon-windows-build; \
 	bash app/photon-flclash/prepare.sh "$(BUILD_DIR)/photon-flclash/upstream"; \
+	set --; \
+	if [ -n "$${PHOTON_FLCLASH_SIGNING_THUMBPRINT:-}" ]; then \
+		set -- -SigningCertificateThumbprint "$$PHOTON_FLCLASH_SIGNING_THUMBPRINT"; \
+	fi; \
 	MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$$win_script" \
 		-Checkout "$$win_build\photon-flclash\upstream" \
 		-BackendDirectory "$$win_build\windows-amd64" \
-		-ArchivePath "$$win_build\photon-flclash\dist\photon-flclash-windows-amd64.zip"
+		-ArchivePath "$$win_build\photon-flclash\dist\photon-flclash-windows-amd64.zip" "$$@"
 
 photon-windows-cross-build:
 	@mkdir -p "$(BUILD_DIR)/windows-amd64"

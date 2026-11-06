@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory=$true)][string]$Checkout,
     [Parameter(Mandatory=$true)][string]$BackendDirectory,
     [Parameter(Mandatory=$true, ParameterSetName='Directory')][string]$OutputDirectory,
-    [Parameter(Mandatory=$true, ParameterSetName='Archive')][string]$ArchivePath
+    [Parameter(Mandatory=$true, ParameterSetName='Archive')][string]$ArchivePath,
+    [string]$SigningCertificateThumbprint = $env:PHOTON_FLCLASH_SIGNING_THUMBPRINT
 )
 $ErrorActionPreference = 'Stop'
 $Checkout = (Resolve-Path -LiteralPath $Checkout).Path
@@ -18,6 +19,23 @@ if ($ArchivePath) {
     $OutputDirectory = Join-Path $stage 'bundle'
 } else {
     $OutputDirectory = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
+}
+$signTool = $null
+$signedDirectory = $null
+if ($SigningCertificateThumbprint) {
+    if ($SigningCertificateThumbprint -notmatch '^[0-9a-fA-F]{40}$') {
+        throw 'SigningCertificateThumbprint must be a 40-digit certificate thumbprint'
+    }
+    $certificate = Get-Item -LiteralPath "Cert:\CurrentUser\My\$SigningCertificateThumbprint" -ErrorAction SilentlyContinue
+    if (!$certificate) { throw 'The selected code signing certificate is missing from the CurrentUser\My store' }
+    if (!$certificate.HasPrivateKey) { throw 'The selected code signing certificate has no accessible private key' }
+    $signTool = (Get-Command signtool.exe -CommandType Application).Source
+    if (!$stage) {
+        if (Test-Path -LiteralPath $OutputDirectory) { throw 'Output directory must be new' }
+        $signedDirectory = $OutputDirectory
+        $stage = Join-Path (Split-Path -Parent $signedDirectory) ('.flclash-' + [Guid]::NewGuid().ToString('N'))
+        $OutputDirectory = Join-Path $stage 'bundle'
+    }
 }
 $lock = @{}
 Get-Content -LiteralPath (Join-Path $PSScriptRoot 'upstream.env') | ForEach-Object {
@@ -93,16 +111,38 @@ try {
     }
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README.md') -Destination (Join-Path $OutputDirectory 'README.Photon.md')
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'upstream.env') -Destination $OutputDirectory
+    if ($signTool) {
+        $binaries = Get-ChildItem -LiteralPath $OutputDirectory -File -Recurse |
+            Where-Object { $_.Extension -in '.exe', '.dll' }
+        foreach ($binary in $binaries) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $binary.FullName
+            if ($signature.Status -eq 'NotSigned' -or $signature.SignatureType -eq 'Catalog') {
+                Invoke-BuildTool $signTool @(
+                    'sign', '/sha1', $SigningCertificateThumbprint, '/fd', 'SHA256',
+                    '/tr', 'http://timestamp.digicert.com', '/td', 'SHA256', $binary.FullName
+                )
+                Invoke-BuildTool $signTool @('verify', '/pa', '/tw', $binary.FullName)
+            } else {
+                Invoke-BuildTool $signTool @('verify', '/pa', $binary.FullName)
+            }
+        }
+    } else {
+        Write-Warning 'This preview bundle has no Photon publisher signature. Set PHOTON_FLCLASH_SIGNING_THUMBPRINT for signed distribution.'
+    }
     $hashes = @(Get-ChildItem -LiteralPath $OutputDirectory -File -Recurse | Sort-Object FullName | ForEach-Object {
         (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $_.FullName.Substring((Get-Item -LiteralPath $OutputDirectory).FullName.Length + 1).Replace('\','/')
     })
     $hashes | Set-Content -Encoding ASCII (Join-Path $OutputDirectory 'SHA256SUMS')
-    if ($stage) {
+    if ($ArchivePath) {
         $stagedZip = Join-Path $stage 'portable.zip'
         Compress-Archive -Path (Join-Path $OutputDirectory '*') -DestinationPath $stagedZip
         Move-Item -LiteralPath $stagedZip -Destination $ArchivePath -Force
         Write-Output "Prepared Windows ZIP: $ArchivePath"
     } else {
+        if ($signedDirectory) {
+            [IO.Directory]::Move($OutputDirectory, $signedDirectory)
+            $OutputDirectory = $signedDirectory
+        }
         Write-Output "Prepared Windows bundle: $OutputDirectory"
     }
 } finally {

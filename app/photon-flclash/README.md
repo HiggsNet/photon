@@ -57,6 +57,10 @@ flutter test test/photon test/providers/action_test.dart test/providers/system_a
 
 打包先用 `make photon-windows-build` 生成含驱动及第三方声明的后台目录。脚本验证锁定提交、子模块、接入文件摘要及编译器版本，启用真实原生构建，附带 Photon 后台、Wintun、上游许可证和 SHA256SUMS，不携带用户配置或身份。FlClash 和依赖的许可证及声明保留在源码与产物中。
 
+对外分发时，在打包用户的 Windows「当前用户 → 个人」证书库中配置公开受信的代码签名证书及其私钥，并将 Windows SDK 的 `signtool.exe` 加入 Windows 的 `PATH`。运行 `make photon-flclash-build` 前设置 `PHOTON_FLCLASH_SIGNING_THUMBPRINT`，值为证书指纹。直接调用 PowerShell 脚本时也可传入 `-SigningCertificateThumbprint`。
+
+签名模式会在生成校验和前为未签名的 EXE 和 DLL 加上 SHA-256 Authenticode 签名及时间戳，验证包内每个 EXE 和 DLL，并保留 Wintun 等已有有效签名的文件。签名或验签失败会中止打包。未指定证书时会生成预览包并显示提示。即使发布者已签名，新版本仍可能需要积累 SmartScreen 信誉。详见 [Microsoft 的 SmartScreen 说明](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation)。
+
 仅测试 Dart 界面时，可在临时检出关闭两个 `build_assets` hook，并指定从锁定源码构建的 `FRB_DART_LOAD_EXTERNAL_LIBRARY_NATIVE_LIB_DIR`。生产构建拒绝这些关闭 hook 的检出。
 
 ## Windows 实机验收
