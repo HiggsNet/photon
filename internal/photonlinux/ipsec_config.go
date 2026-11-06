@@ -92,6 +92,7 @@ type IPsecConfig struct {
 	DefaultNetNS              ipsec.NetNSSpec
 	LinkGroups                []ipsec.LinkGroupSpec
 	Role                      string
+	MOBIKE                    bool
 	Driver                    string
 	VICISocket                string
 	PortMode                  string
@@ -109,6 +110,7 @@ type IPsecConfig struct {
 // IPsecConfigYAML is the top-level ipsec configuration block.
 type IPsecConfigYAML struct {
 	Role                      string                   `yaml:"role"`
+	MOBIKE                    *bool                    `yaml:"mobike"`
 	DeprecatedAccept          string                   `yaml:"accept"`
 	Driver                    string                   `yaml:"driver"`
 	VICISocket                string                   `yaml:"vici_socket"`
@@ -171,6 +173,9 @@ func (raw IPsecConfigYAML) Apply(config *IPsecConfig) error {
 	}
 	if raw.DeprecatedAccept != "" {
 		return fmt.Errorf("ipsec.accept is deprecated; use ipsec.role")
+	}
+	if raw.MOBIKE != nil {
+		config.MOBIKE = *raw.MOBIKE
 	}
 	if raw.VICISocket != "" {
 		config.VICISocket = raw.VICISocket

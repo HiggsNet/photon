@@ -106,7 +106,7 @@ Windows composition 现在通过 `PowerRegisterSuspendResumeNotification` 订阅
 真实注册到 synthetic resume callback、同地址 daemon 重绑及 object-pull 恢复的接线测试；
 portable focused race、Windows vet/cross-build 和全仓 `make check` 也通过。
 测试不改变机器电源状态，没有验证真实睡眠、休眠、Modern Standby 或醒来后的真实 ESP 业务。
-这些场景仍是独立验收门槛。MOBIKE 保持关闭，也未改变端口 generation/rotate。
+这些场景仍是独立验收门槛。这轮验证使用默认关闭 MOBIKE 的恢复路径。
 同日只读 `powercfg /a` 确认当前 VM 的 S1/S2/S3、休眠和 S0 低功耗待机均不可用；
 真实恢复场景需另用支持对应电源状态、且具备独立唤醒手段的环境，不在此 VM 上强行模拟验收。
 
@@ -258,6 +258,23 @@ exit0，见 [原生分层证据](../../build/validation/rc-merge-20261014/native
 Common schema1 可读，启动原子升级到 schema2，单纯布局变化不推进 verified revision。
 后续回退 RC.6 或更早程序时必须同时恢复升级前数据库，见
 [RC.7 升级与回退边界](../new/linux-release-testing.md#rc7按-zone-存储与-schema-2-升级)。
+
+## 2026-11-06 MOBIKE 迁移计时
+
+在隔离 Linux 网络命名空间中运行本次提交的 Windows 可移植隧道逻辑，对接
+StrongSwan 6.0.7。用 Go 测试 overlay 重复[互通测试](../../internal/photonwindows/tunnel_interop_test.go)
+里的端点替换步骤。每次同时换客户端的回环 IP 和 UDP 源端口，保持同一网关入口与已建立的 SA。
+从新 UDP socket 已就绪、提交 MOBIKE 更新请求起计时，立即驱动 IKE 状态机。
+
+| 观测点 | 样本数 | 中位数 | P95 | 最大值 |
+| --- | ---: | ---: | ---: | ---: |
+| 客户端收到并验证 MOBIKE 响应 | 20 | 0.258 ms | 0.315 ms | 0.331 ms |
+| 读回网关 SA 并验证 ESP echo | 20 | 0.575 ms | 0.664 ms | 0.744 ms |
+
+20 次均保留原 IKE/CHILD SA 和客户端 ESP 状态。P95 取按耗时排序的第 19 个样本。
+这些数值衡量本机回环中的协议与验证开销。Windows 实机仍需从旧链路最后一个成功业务包计到
+新链路第一个成功业务包，并分别记录新网络就绪和 MOBIKE 应答时刻，才能区分系统换网、网关 RTT
+和隧道迁移的耗时。
 
 ## 尚未完成的门槛
 

@@ -379,6 +379,10 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 	for _, spec := range in.Desired {
 		desiredByID[LinkInstanceID(spec)] = spec
 	}
+	connectionDPD := make(map[string]uint32, len(in.Connections))
+	for _, conn := range in.Connections {
+		connectionDPD[conn.Name] = conn.DPDDelay
+	}
 	for id, spec := range desiredByID {
 		existing, exists := result.Instances[id]
 		if !exists {
@@ -472,7 +476,10 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			continue
 		}
 		specHash := TransportLinkSpecHash(spec)
-		if existing.DesiredSpecHash != specHash {
+		// VICI reports DPD but not MOBIKE in list-conns. They are set together
+		// for managed connections, so a restart can detect an old policy.
+		dpd, observed := connectionDPD[existing.IKEName]
+		if existing.DesiredSpecHash != specHash || !rotateActive && observed && dpd != mobikeDPDDelay(spec) {
 			if inLinkBackoff(existing, now) {
 				result.add(ReconcileActionNoop, &spec, &existing, "apply backoff active")
 				continue

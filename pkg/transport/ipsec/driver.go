@@ -57,6 +57,7 @@ type ConnectionState struct {
 	LocalIdentity  string
 	RemoteIdentity string
 	RemoteEndpoint string
+	DPDDelay       uint32
 }
 
 type VICIEvent struct {

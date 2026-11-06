@@ -133,6 +133,10 @@ func BuildStrongSwanConnection(spec TransportLinkSpec) (map[string]any, error) {
 			childName: routeBasedChildSA(spec),
 		},
 	}
+	if spec.MOBIKE {
+		conn["mobike"] = "yes"
+		conn["dpd_delay"] = fmt.Sprintf("%ds", mobikeDPDDelay(spec))
+	}
 	if hasPoint {
 		remotePort := chooseStrongSwanRemotePort(point)
 		conn["remote_port"] = fmt.Sprintf("%d", remotePort)
@@ -144,6 +148,16 @@ func BuildStrongSwanConnection(spec TransportLinkSpec) (map[string]any, error) {
 		conn["local_port"] = fmt.Sprintf("%d", spec.LocalIKEPort)
 	}
 	return conn, nil
+}
+
+func mobikeDPDDelay(spec TransportLinkSpec) uint32 {
+	if !spec.MOBIKE {
+		return 0
+	}
+	if _, hasPoint := firstContactPoint(spec.ContactPoints); hasPoint {
+		return 20
+	}
+	return 60 // Give the client the first opportunity to check its own NAT path.
 }
 
 func ChildSAName(spec TransportLinkSpec) string {
@@ -337,6 +351,7 @@ func parseConnectionStates(event map[string]any) []ConnectionState {
 		state.LocalIdentity = firstString(body["local-id"], body["local_id"], local["id"])
 		state.RemoteIdentity = firstString(body["remote-id"], body["remote_id"], remote["id"])
 		state.RemoteEndpoint = firstConnectionRemoteEndpoint(body)
+		state.DPDDelay = uint32Value(body["dpd_delay"])
 		states = append(states, state)
 	}
 	return states

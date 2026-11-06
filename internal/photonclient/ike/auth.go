@@ -31,6 +31,7 @@ type AuthConfig struct {
 	PrivateKey        ed25519.PrivateKey
 	RemotePublicKey   ed25519.PublicKey
 	Child             ChildConfig
+	MOBIKE            bool
 }
 
 // ChildResult always uses local orientation despite its historical field names:
@@ -46,12 +47,14 @@ type ChildResult struct {
 type AuthResult struct {
 	RemoteID string
 	Child    ChildResult
+	MOBIKE   bool
 }
 
 type authPending struct {
 	remoteID   string
 	remoteKey  ed25519.PublicKey
 	child      ChildConfig
+	mobike     bool
 	request    []byte
 	fragments  [][]byte
 	reassembly skfReassembly
@@ -139,7 +142,11 @@ func (i *Initiator) AuthRequest(c AuthConfig) ([]byte, error) {
 	auth := signAuth(c.PrivateKey, signedOctets(i.request, i.init.Nonce, i.init.Keys.SKPI, idi))
 	// The ESP receiver requires the exact inner IP length, so explicitly tell
 	// the peer not to add Traffic Flow Confidentiality padding (RFC 7296 1.3.1).
-	first, body, err := EncodePayloads([]Payload{{Type: PayloadIDi, Data: idi}, {Type: PayloadIDr, Data: idr}, {Type: PayloadAUTH, Data: auth}, {Type: PayloadSA, Data: sa}, {Type: PayloadTSi, Data: tsi}, {Type: PayloadTSr, Data: tsr}, {Type: PayloadNotify, Data: []byte{0, 0, 0x40, 0x0a}}})
+	payloads := []Payload{{Type: PayloadIDi, Data: idi}, {Type: PayloadIDr, Data: idr}, {Type: PayloadAUTH, Data: auth}, {Type: PayloadSA, Data: sa}, {Type: PayloadTSi, Data: tsi}, {Type: PayloadTSr, Data: tsr}, {Type: PayloadNotify, Data: []byte{0, 0, 0x40, 0x0a}}}
+	if c.MOBIKE {
+		payloads = append(payloads, mobilityNotify(notifyMOBIKESupported, nil))
+	}
+	first, body, err := EncodePayloads(payloads)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +157,7 @@ func (i *Initiator) AuthRequest(c AuthConfig) ([]byte, error) {
 	child := c.Child
 	child.LocalSelectors = append([]TrafficSelector(nil), child.LocalSelectors...)
 	child.RemoteSelectors = append([]TrafficSelector(nil), child.RemoteSelectors...)
-	i.auth = &authPending{remoteID: c.RemoteID, remoteKey: bytes.Clone(c.RemotePublicKey), child: child, request: request}
+	i.auth = &authPending{remoteID: c.RemoteID, remoteKey: bytes.Clone(c.RemotePublicKey), child: child, mobike: c.MOBIKE, request: request}
 	return bytes.Clone(request), nil
 }
 
@@ -182,6 +189,7 @@ func (i *Initiator) handleAuthPlain(first uint8, plain []byte) (*AuthResult, err
 		return nil, err
 	}
 	var id, auth, sa, tsi, tsr []byte
+	var peerMOBIKE bool
 	for _, p := range ps {
 		switch p.Type {
 		case PayloadIDr:
@@ -205,6 +213,9 @@ func (i *Initiator) handleAuthPlain(first uint8, plain []byte) (*AuthResult, err
 			// Transport mode changes the CHILD semantics and was not requested.
 			if n.Type == 16391 || n.Type == 16387 {
 				return nil, fmt.Errorf("ike: unrequested CHILD mode or compression")
+			}
+			if n.Type == notifyMOBIKESupported && len(n.SPI) == 0 {
+				peerMOBIKE = true
 			}
 		case 37, PayloadVendor: // Certificates cannot replace the pinned public key.
 		default:
@@ -242,8 +253,9 @@ func (i *Initiator) handleAuthPlain(first uint8, plain []byte) (*AuthResult, err
 		return nil, err
 	}
 	i.authDone = true
+	i.mobike = i.auth.mobike && peerMOBIKE
 	i.auth.reassembly.Reset()
-	result := &AuthResult{RemoteID: i.auth.remoteID, Child: ChildResult{InitiatorSPI: i.auth.child.InitiatorSPI, ResponderSPI: spi, LocalSelectors: local, RemoteSelectors: remote, Keys: keys}}
+	result := &AuthResult{RemoteID: i.auth.remoteID, MOBIKE: i.mobike, Child: ChildResult{InitiatorSPI: i.auth.child.InitiatorSPI, ResponderSPI: spi, LocalSelectors: local, RemoteSelectors: remote, Keys: keys}}
 	i.rememberChild(result.Child, 0, nil)
 	return result, nil
 }

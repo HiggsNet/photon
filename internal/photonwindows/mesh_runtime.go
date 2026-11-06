@@ -140,7 +140,7 @@ func (m *meshRuntime) update(plan GatewayPlan) {
 			leaf := newLeafRuntime(m.device.acquire)
 			leaf.opened = m.opened
 			leaf.sharedCompletions = true
-			p = &meshPeer{config: config, tunnel: &gatewayTunnel{socket: m.socket, data: data}, leaf: leaf, backoff: m.initial}
+			p = &meshPeer{config: config, tunnel: &gatewayTunnel{socket: m.socket, data: data, offerMOBIKE: config.Gateway.MOBIKE}, leaf: leaf, backoff: m.initial}
 			if m.ikeWrites != nil {
 				p.tunnel.queueIKE = m.queueIKEWrite
 			}
@@ -567,6 +567,26 @@ func (m *meshRuntime) reset() {
 	for _, p := range m.peers {
 		p.setPlan(GatewayPlan{})
 	}
+}
+
+// A wildcard socket can send on the new route without replacing its
+// reservations. Preserve each negotiated SA; other peers reconnect.
+func (m *meshRuntime) roam(now time.Time) bool {
+	if !m.config.Gateway.MOBIKE || !m.socket.LocalAddr().AddrPort().Addr().Unmap().IsUnspecified() {
+		return false
+	}
+	peers := m.ordered()
+	if !slices.ContainsFunc(peers, func(p *meshPeer) bool { return p.tunnel.mobike }) {
+		return false
+	}
+	for _, p := range peers {
+		if p.tunnel.mobike {
+			p.tunnel.requestMOBIKE(now)
+		} else if p.tunnel.phase != 0 || p.starting != nil {
+			m.stopPeer(p, "local network path changed without negotiated MOBIKE")
+		}
+	}
+	return true
 }
 
 func (m *meshRuntime) noteSequence(p *meshPeer) {

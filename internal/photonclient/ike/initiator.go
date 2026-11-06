@@ -20,6 +20,9 @@ type Initiator struct {
 	init                  *InitResult
 	peerEd25519           bool
 	peerFragmentation     bool
+	mobike                bool
+	mobikeNAT             []byte
+	mobikeCookie          []byte
 	cookieRetries         uint8
 	auth                  *authPending
 	authDone              bool

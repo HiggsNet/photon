@@ -122,11 +122,16 @@ IKE 实测组合可用 StrongSwan 名称 `aes128-sha256-prfsha256-ecp256` 表达
 StrongSwan：Docker 安装 Ubuntu 24.04 的发行版包，native/NixOS 使用宿主机包。
 不能用 less 上的 6.0.7 代替 Docker/Ubuntu 构建的版本与插件验收。
 
-Windows v1 的换网与睡眠恢复采用停止旧数据面、使旧 generation 失效，再重新建立 IKE/CHILD
-和 Babel 就绪的流程，不保留原 SA，也不承诺无感漫游。MOBIKE 仍关闭；它不是 leaf/转发角色
-开关。若以后引入，须先明确本地 underlay/NAT 路径迁移与网关端口 generation/rotate 的边界：
-当前 rotate 会建立独立的新 SA/XFRM 路径，经激活与切换 gate 后清理旧连接，不能被原 SA 的
-端点迁移绕过。还需协调 rekey、共享 UDP 端点和数据面 owner；本轮不改变这一设计。
+配置 `gateway.mobike: true` 可让 Windows 发布签名的 `role: out, mobike: true` profile，
+并在 IKE_AUTH 提议 MOBIKE。Linux 网关通过 `ipsec.mobike: true` 对获准的移动 peer 接受协商。
+开启后，使用通配地址监听的 Windows 客户端在换网或唤醒时复用 UDP socket，在同一个网关端口
+代次内更新客户端的外层路径。原 IKE/CHILD、ESP 序号和 Wintun/Babel 会话继续有效。
+上游 NAT 单独改写映射时，公网网关可从有效的 ESP 包更新地址，客户端也会用带 NAT 检测的
+IKE 探活发现静默变化。首次探活发现 NAT 时会发送一次显式更新来建立基线。
+
+迁移使用现有 IKE 消息窗口，等待中的旧应答只完成它对应的迁移请求。未协商 MOBIKE、使用
+固定地址监听、socket 故障或迁移超过五秒时，客户端回到相应的重连流程。网关地址和端口
+继续由签名 contact 约束。端口换代由 Rotate 建立新 SA/XFRM，经过激活与切换 gate 后清理旧连接。
 
 StrongSwan 的默认 ESP proposal 存在版本差异：6.0.2 起加入可选 KE，而旧版本默认不要求
 独立 CHILD KE。首个 IKE_AUTH CHILD 的密钥派生又不同于 CREATE_CHILD_SA；因此不能只验证

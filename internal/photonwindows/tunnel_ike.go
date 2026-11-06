@@ -48,6 +48,9 @@ func (t *gatewayTunnel) switchIKE(previous, next *ike.Initiator, deleteOld bool,
 		return errors.New("tunnel: IKE overlap limit reached")
 	}
 	t.session, t.pending = next, nil
+	if !t.mobikeDeadline.IsZero() {
+		t.requestMOBIKE(now)
+	}
 	t.probeAt = now // validate the new keys promptly, without changing ESP counters
 	t.ikeRekeyAt, t.ikeExpiresAt = now.Add(30*time.Minute), now.Add(time.Hour)
 	for _, candidate := range []struct {

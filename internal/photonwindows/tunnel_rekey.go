@@ -235,6 +235,13 @@ func (t *gatewayTunnel) applyEstablishedExchange(input establishedExchangeInput,
 	if result.Liveness && header.Flags&ike.FlagResponse != 0 {
 		t.probeAt = now.Add(20 * time.Second)
 	}
+	if result.NATChanged {
+		t.requestMOBIKE(now)
+	}
+	if result.MOBIKEUpdated && t.mobikeSent == t.mobikeEpoch {
+		t.mobikeDeadline = time.Time{}
+		t.observeEvent("mobike_updated", now, nil)
+	}
 	if result.Reply != nil {
 		return t.sendSessionReply(session, result.Reply)
 	}

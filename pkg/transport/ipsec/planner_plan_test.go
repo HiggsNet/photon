@@ -45,6 +45,41 @@ func TestPlanTransportLinksBuildsDesiredSpecsFromActiveState(t *testing.T) {
 	}
 }
 
+func TestPlanTransportLinksMOBIKERequiresOutboundRoleAndOptIn(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	ns := zone.NewNetworkState()
+	const local, mobile, stationary, gateway zone.ZonePath = "a.catofes.", "mobile.catofes.", "static.catofes.", "gateway.catofes."
+	addresses := []AddressAdvertisement{{ID: "public", Source: SourceManualAddress, Address: "198.51.100.10"}}
+	addIPsecNode(t, ns, local, RoleBoth, addresses, now)
+	addIPsecNode(t, ns, mobile, RoleOut, nil, now)
+	addIPsecNode(t, ns, stationary, RoleOut, nil, now)
+	addIPsecNode(t, ns, gateway, RoleBoth, addresses, now)
+	for _, peer := range []zone.ZonePath{mobile, gateway} {
+		profile, err := ParseProfileRecord(ns.Zones[peer].Records[RecordKeyProfile])
+		if err != nil {
+			t.Fatal(err)
+		}
+		profile.MOBIKE = true
+		ns.Zones[peer].Records[RecordKeyProfile] = record(t, peer, RecordKeyProfile, RecordTypeProfile, profile)
+	}
+	for _, allowed := range []bool{false, true} {
+		plan, err := PlanTransportLinks(t.Context(), ns, local, []LinkGroupSpec{{ID: "ipsec-main"}}, LinkPlannerOptions{Now: now, MOBIKE: allowed})
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen := map[zone.ZonePath]bool{}
+		for _, spec := range plan.Desired {
+			seen[spec.PeerZone] = true
+			if want := allowed && spec.PeerZone == mobile; spec.MOBIKE != want {
+				t.Fatalf("MOBIKE for %s = %t, want %t", spec.PeerZone, spec.MOBIKE, want)
+			}
+		}
+		if !seen[mobile] || !seen[stationary] || !seen[gateway] {
+			t.Fatalf("missing peers: %+v", plan.Skipped)
+		}
+	}
+}
+
 func TestPlanTransportLinksSkipsLifecycleExcludedPeer(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()

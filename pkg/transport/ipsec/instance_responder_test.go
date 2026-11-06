@@ -39,6 +39,13 @@ func TestReconcileResponderPortRotation(t *testing.T) {
 		{ID: "b-v4", Source: SourceManualAddress, Address: "198.51.100.20", Priority: 100},
 		{ID: "b-v6", Source: SourceManualAddress, Address: "2001:db8::20", Priority: 100},
 	}, now)
+	peer := ns.Zones["node-b.catofes."]
+	profile, err := ParseProfileRecord(peer.Records[RecordKeyProfile])
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile.MOBIKE = true
+	peer.Records[RecordKeyProfile] = record(t, peer.Path, RecordKeyProfile, RecordTypeProfile, profile)
 	ns.Zones["node-a.catofes."].Records[RecordKeyPorts] = record(t, "node-a.catofes.", RecordKeyPorts, RecordTypePorts, PortRecord{
 		Version: 1, Mode: PortModeFixed,
 		Current: &PortSelection{
@@ -49,7 +56,7 @@ func TestReconcileResponderPortRotation(t *testing.T) {
 		UpdatedAt: now.Unix(),
 	})
 	group := LinkGroupSpec{ID: "ipsec-main"}
-	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now, MOBIKE: true})
 	if err != nil || len(plan.Desired) != 2 {
 		t.Fatalf("plan = %+v, error = %v, want two passive family paths", plan, err)
 	}
@@ -78,6 +85,9 @@ func TestReconcileResponderPortRotation(t *testing.T) {
 			if action.Spec.InitiatorRole != "" || len(action.Spec.ContactPoints) != 0 {
 				t.Fatalf("staged role = %q, contacts = %+v, want passive responder", action.Spec.InitiatorRole, action.Spec.ContactPoints)
 			}
+			if !action.Spec.MOBIKE || action.Spec.Generation == previous.Generation {
+				t.Fatalf("rotate did not retain MOBIKE on a separate generation: %+v", action.Spec)
+			}
 			if _, err := BuildStrongSwanConnection(*action.Spec); err != nil {
 				t.Fatalf("staged connection: %v", err)
 			}
@@ -100,5 +110,29 @@ func TestReconcileResponderPortRotation(t *testing.T) {
 				t.Fatalf("actions = %+v, want responder to await peer negotiation", waiting.Actions)
 			}
 		})
+	}
+}
+
+func TestReconcileRecoveredConnectionAppliesMOBIKEPolicy(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	for _, enable := range []bool{false, true} {
+		spec := TransportLinkSpec{
+			LocalZone: "gateway.catofes.", PeerZone: "client.catofes.",
+			TransportID: "ipsec-mobile", Generation: 1, MOBIKE: enable,
+		}
+		recovered := NewLinkInstance(spec, LinkStateUp, now)
+		previous := spec
+		previous.MOBIKE = !enable
+		result := ReconcileLinkInstances(ReconcileInputs{
+			Desired:     []TransportLinkSpec{spec},
+			Instances:   map[string]LinkInstance{recovered.ID: recovered},
+			Roles:       map[string]string{recovered.ID: ""},
+			Connections: []ConnectionState{{Name: spec.TransportID, DPDDelay: mobikeDPDDelay(previous)}},
+			Now:         now,
+		})
+		action := firstAction(result, ReconcileActionUpdate)
+		if action == nil || action.Spec == nil || action.Spec.MOBIKE != enable {
+			t.Fatalf("MOBIKE enable=%t: expected update, got %+v", enable, result.Actions)
+		}
 	}
 }

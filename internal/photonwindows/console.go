@@ -337,6 +337,22 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		requestPlan()
 		return err
 	}
+	roam := func() error {
+		mesh.stateMu.Lock()
+		preserved := !rebindPending && mesh.roam(time.Now())
+		var err error
+		if preserved {
+			err = mesh.tick()
+			observeReady()
+		}
+		mesh.stateMu.Unlock()
+		if preserved {
+			requestPlan()
+		} else {
+			_ = rebind(ctx)
+		}
+		return err
+	}
 	gossipCtx, stopGossip := context.WithCancel(ctx)
 	gossipRefresh := make(chan map[string]*net.UDPAddr, 1)
 	gossipPublished := make(chan struct{}, 1)
@@ -410,7 +426,11 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		case failure := <-mesh.ikeWriteFailures:
 			mesh.stateMu.Lock()
 			if peer := mesh.findGeneration(failure.generation); peer != nil {
-				mesh.stopPeer(peer, failure.err.Error())
+				if peer.tunnel.mobike {
+					peer.tunnel.waitForMOBIKEPath(time.Now())
+				} else {
+					mesh.stopPeer(peer, failure.err.Error())
+				}
 			}
 			mesh.stateMu.Unlock()
 		case prepared := <-mesh.ikePrepared:
@@ -493,7 +513,9 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			}
 			if ctx.Err() == nil {
 				logger.Info("power_resumed")
-				_ = rebind(ctx)
+				if err := roam(); err != nil {
+					return err
+				}
 				refreshGossip()
 			}
 		case _, ok := <-networkChanges:
@@ -502,7 +524,9 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				continue
 			}
 			if ctx.Err() == nil {
-				_ = rebind(ctx)
+				if err := roam(); err != nil {
+					return err
+				}
 				refreshGossip()
 			}
 		case <-ticker.C:

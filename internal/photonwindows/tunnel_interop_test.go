@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/binary"
+	"net"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -23,15 +24,19 @@ func TestStrongSwanWindowsTunnel(t *testing.T) {
 	if os.Getenv("PHOTON_WINDOWS_TUNNEL_SMOKE") != "1" {
 		t.Skip("run docs/scripts/ike-auth-smoke.sh")
 	}
-	for _, outer := range []struct{ name, gateway, local string }{
-		{"outer-ipv4", "127.0.0.1", "127.0.0.2:0"},
-		{"outer-ipv6", "::1", "[::1]:0"},
+	for _, outer := range []struct {
+		name, gateway, local string
+		mobike               bool
+	}{
+		{"outer-ipv4", "127.0.0.1", "127.0.0.2:0", false},
+		{"outer-ipv6", "::1", "[::1]:0", false},
+		{"mobike-ipv4", "127.0.0.1", "127.0.0.2:0", true},
 	} {
-		t.Run(outer.name, func(t *testing.T) { runStrongSwanWindowsTunnel(t, outer.gateway, outer.local) })
+		t.Run(outer.name, func(t *testing.T) { runStrongSwanWindowsTunnel(t, outer.gateway, outer.local, outer.mobike) })
 	}
 }
 
-func runStrongSwanWindowsTunnel(t *testing.T, gateway, local string) {
+func runStrongSwanWindowsTunnel(t *testing.T, gateway, local string, mobike bool) {
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
 	vici, err := ipsec.NewGoviciClient("/tmp/ike-auth.vici")
@@ -56,6 +61,7 @@ func runStrongSwanWindowsTunnel(t *testing.T, gateway, local string) {
 	}
 	defer driver.UnloadPrivateKey(context.Background(), name)
 	spec := ipsec.TransportLinkSpec{TransportID: name, LocalZone: "windows-gateway.", PeerZone: "windows-leaf.", LocalAddress: gateway, XFRMIfID: 524248, LocalTunnelAddr: netip.MustParseAddr("10.55.3.1"), PeerTunnelAddr: netip.MustParseAddr("10.55.3.2"), LocalPrivateKey: serverDER, LocalPrivateKeyAlgorithm: ipsec.AlgorithmEd25519, PeerPublicKey: clientDER}
+	spec.MOBIKE = mobike
 	if err := driver.LoadConnection(ctx, spec); err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +83,7 @@ func runStrongSwanWindowsTunnel(t *testing.T, gateway, local string) {
 	defer func() { socket.Close(); <-readerDone }()
 	data := newGatewayDataplane(ctx)
 	defer data.close()
-	tunnel := &gatewayTunnel{socket: socket, data: data}
+	tunnel := &gatewayTunnel{socket: socket, data: data, offerMOBIKE: mobike}
 	defer tunnel.stop()
 	plan := GatewayPlan{Selected: &GatewaySelection{Zone: spec.LocalZone, Identity: string(spec.LocalZone), PublicKey: serverPub, Contact: ipsec.ContactPoint{Address: gateway, IKEPort: 500, NATTPort: 4500}}}
 	if err := tunnel.start(plan, string(spec.PeerZone), clientPriv, time.Now()); err != nil {
@@ -102,19 +108,21 @@ func runStrongSwanWindowsTunnel(t *testing.T, gateway, local string) {
 	if data.active == nil || !tunnel.natt {
 		t.Fatal("authenticated CHILD not installed")
 	}
+	if tunnel.mobike != mobike {
+		t.Fatalf("negotiated MOBIKE = %t, want %t", tunnel.mobike, mobike)
+	}
 	if err := tunnel.tick(plan, tunnel.probeAt); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case packet := <-socket.ikePackets:
-		if err := tunnel.handle(packet, plan, time.Now()); err != nil {
-			t.Fatal(err)
+	for len(tunnel.pending) != 0 {
+		select {
+		case packet := <-socket.ikePackets:
+			if err := tunnel.handle(packet, plan, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+		case <-ctx.Done():
+			t.Fatal("DPD timed out")
 		}
-	case <-ctx.Done():
-		t.Fatal("DPD timed out")
-	}
-	if len(tunnel.pending) != 0 {
-		t.Fatal("DPD did not complete")
 	}
 	checkEcho := func() {
 		t.Helper()
@@ -153,6 +161,51 @@ func runStrongSwanWindowsTunnel(t *testing.T, gateway, local string) {
 		}
 	}
 	checkEcho()
+	if mobike {
+		readSA := func() ipsec.SAState {
+			sas, err := driver.ListSAs(ctx)
+			if err != nil || len(sas) != 1 || !sas[0].Established {
+				t.Fatalf("gateway SA: %+v, %v", sas, err)
+			}
+			return sas[0]
+		}
+		before, child, generation := readSA(), data.active, tunnel.generation
+		// Simulate the OS delivering the same flow through a new endpoint.
+		// Keep the existing reservations, as on a wildcard-socket route change.
+		replacement, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 3)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		socket.writeMu.Lock()
+		socket.mu.Lock()
+		old := socket.udp
+		socket.udp, socket.address = replacement, replacement.LocalAddr().String()
+		socket.mu.Unlock()
+		socket.writeMu.Unlock()
+		_ = old.Close()
+		tunnel.requestMOBIKE(time.Now())
+		for !tunnel.mobikeDeadline.IsZero() {
+			select {
+			case packet := <-socket.ikePackets:
+				if err := tunnel.handle(packet, plan, time.Now()); err != nil {
+					t.Fatal(err)
+				}
+			case <-ticker.C:
+				if err := tunnel.tick(plan, time.Now()); err != nil {
+					t.Fatal(err)
+				}
+			case <-ctx.Done():
+				t.Fatal("MOBIKE update timed out")
+			}
+		}
+		after := readSA()
+		if after.RemoteEndpoint != socket.address || after.UniqueID != before.UniqueID ||
+			after.ReqID != before.ReqID || tunnel.generation != generation || data.active != child {
+			t.Fatalf("MOBIKE changed SA ownership or failed to move endpoint: %+v -> %+v", before, after)
+		}
+		checkEcho()
+		t.Log("MOBIKE updated the authenticated endpoint with the existing SA and ESP counters")
+	}
 	oldSPI := tunnel.child.InitiatorSPI
 	tunnel.rekeyAt = time.Now()
 	for tunnel.child.InitiatorSPI == oldSPI || len(tunnel.pending) != 0 {

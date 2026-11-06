@@ -196,6 +196,11 @@ ipsec:
 
 **无入站映射的 NAT 后节点**通常只需配置 `ipsec.role: out`，三种 announce 均可省略。`out` 不发布供对端拨入的地址，仍发布身份、密钥、端口和双栈 overlay 能力，由本节点主动连接 `in`/`both` 节点。`role` 默认仍为 `both`，留空地址不自动推断为 `out`；双方均为 `out` 时不建立直连。
 
+移动 Linux 节点可以在 `role: out` 下加 `ipsec.mobike: true`。Linux 网关也需配置
+`ipsec.mobike: true`，它会为本地 overlay 策略选中且签名 profile 同时声明 `role: out`
+和 `mobike: true` 的 peer 开启 StrongSwan MOBIKE。网关互联和省略选项的连接继续使用原配置。
+双方在 IKE_AUTH 中协商能力。已有 SA 在该网关端口代次内迁移，端口换代沿用 Rotate。
+
 ## Overlay Link Policy
 
 `overlays[]` 是本机 mesh policy。它决定本节点想和哪些 peer 建链、用哪个 provider、放入哪个 netns。它不直接进入 gossip。

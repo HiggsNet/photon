@@ -2,6 +2,7 @@ package photonwindows
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -138,6 +139,11 @@ func (m *meshRuntime) finishIKEResponse(result meshIKEResponseResult) error {
 	var err error
 	if request.timer.kind != 0 {
 		err = result.err
+		if errors.Is(err, errMOBIKEPathUnavailable) {
+			t.waitForMOBIKEPath(now)
+			m.dispatchPendingIKE(p, now)
+			return nil
+		}
 		if err == nil {
 			err = t.applyIKETimer(request.timer, result.packets, now)
 		}

@@ -118,6 +118,7 @@ func (source *State) EnsureLocalTransport(ctx context.Context, config *Config, n
 	// The Windows leaf supports both underlay families and the existing
 	// family-redundant profile; it advertises no listener/address ownership.
 	profile := ipsec.ProfileRecord{Version: 1, Enabled: true, Provider: ipsec.ProviderStrongSwan, IKEIdentity: string(config.ManagedZone), TransportKeyFingerprint: disk.Record.Fingerprint, Role: ipsec.RoleOut, AddressFamilies: []string{ipsec.FamilyIPv4, ipsec.FamilyIPv6}, PathModes: []string{ipsec.PathModeFamilyRedundant}, NAT: ipsec.NATProfile{Hint: ipsec.NATHintBehindNAT, InboundReachable: ipsec.NATReachableFalse}}
+	profile.MOBIKE = config.Gateway.MOBIKE
 	if err := profile.Validate(config.ManagedZone); err != nil {
 		return out, err
 	}

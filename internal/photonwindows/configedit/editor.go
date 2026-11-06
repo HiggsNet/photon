@@ -20,6 +20,7 @@ type Editor struct {
 	loaded        os.FileInfo
 	loadAttempted bool
 	formLoaded    bool
+	formMOBIKE    bool
 	digest        [32]byte
 }
 

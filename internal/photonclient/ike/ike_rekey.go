@@ -181,7 +181,7 @@ func (i *Initiator) finishIKERekey(p *ikeRekeyPending, o ikeRekeyOffer, peerInit
 	if err != nil {
 		return nil, err
 	}
-	session := &Initiator{spi: si, init: &InitResult{ResponderSPI: sr, Keys: keys, NAT: i.init.NAT}, authDone: true, peerFragmentation: i.peerFragmentation, originalResponder: peerInitiated, dormant: true, local: i.local, remote: i.remote}
+	session := &Initiator{spi: si, init: &InitResult{ResponderSPI: sr, Keys: keys, NAT: i.init.NAT}, authDone: true, peerFragmentation: i.peerFragmentation, originalResponder: peerInitiated, dormant: true, local: i.local, remote: i.remote, mobike: i.mobike}
 	minimum := ni
 	if bytes.Compare(nr, minimum) < 0 {
 		minimum = nr

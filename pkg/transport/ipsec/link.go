@@ -109,6 +109,7 @@ type TransportLinkSpec struct {
 	// This is not the node's advertised entry port; advertised/range ports are
 	// handled as remote contact points and host firewall redirects.
 	LocalIKEPort uint16
+	MOBIKE       bool `json:",omitempty"`
 	// Generation is the current port/contact generation for this link.
 	// For outbound links it is derived from the peer's contact point; for
 	// inbound links it is derived from the local port record.

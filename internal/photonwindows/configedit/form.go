@@ -19,6 +19,7 @@ type Form struct {
 	RootPublicKey   string         `json:"root_public_key"`
 	ManagedZone     string         `json:"managed_zone"`
 	AllowedGateways string         `json:"allowed_gateways"`
+	MOBIKE          *bool          `json:"mobike,omitempty"`
 	SplitRoutes     string         `json:"split_routes"`
 	StatePath       string         `json:"state_path"`
 	OverlayID       string         `json:"overlay_id"`
@@ -60,6 +61,10 @@ func FromConfig(config *photonwindows.Config) Form {
 		AdapterName: config.Wintun.AdapterName, MTU: strconv.Itoa(config.Wintun.MTU), LogLevel: config.Log.Level,
 		InitialBackoff: config.Reconnect.InitialBackoff.String(), MaxBackoff: config.Reconnect.MaxBackoff.String(),
 	}
+	if config.Gateway.MOBIKE {
+		mobike := true
+		form.MOBIKE = &mobike
+	}
 	var routes, gateways []string
 	for _, route := range config.Overlay.SplitRoutes {
 		routes = append(routes, route.String())
@@ -91,6 +96,9 @@ func FormText(form Form) (string, error) {
 	options.State.Path, options.GossipListen = form.StatePath, form.GossipListen
 	options.Overlay.ID, options.Overlay.SplitRoutes = form.OverlayID, Lines(form.SplitRoutes)
 	options.Gateway.AllowedZones = Lines(form.AllowedGateways)
+	if form.MOBIKE != nil {
+		options.Gateway.MOBIKE = *form.MOBIKE
+	}
 	for _, row := range form.BootstrapHints {
 		if strings.TrimSpace(row.Peer) == "" && strings.TrimSpace(row.Address) == "" {
 			continue
@@ -118,6 +126,7 @@ func (b *Editor) LoadForm() (Form, error) {
 	text, err := b.LoadText()
 	if errors.Is(err, os.ErrNotExist) {
 		b.formLoaded = true
+		b.formMOBIKE = false
 		form := DefaultForm(b.path)
 		form.NewConfig = true
 		return form, nil
@@ -130,16 +139,26 @@ func (b *Editor) LoadForm() (Form, error) {
 		return Form{}, err
 	}
 	b.formLoaded = true
+	b.formMOBIKE = config.Gateway.MOBIKE
 	return FromConfig(config), nil
 }
 
 func (b *Editor) SaveForm(form Form) error {
+	if !b.formLoaded {
+		return errors.New("configuration form did not load successfully; correct the existing file and reload before saving")
+	}
+	mobike := b.formMOBIKE
+	if form.MOBIKE != nil {
+		mobike = *form.MOBIKE
+	}
+	form.MOBIKE = &mobike
 	text, err := FormText(form)
 	if err != nil {
 		return err
 	}
-	if !b.formLoaded {
-		return errors.New("configuration form did not load successfully; correct the existing file and reload before saving")
+	if err := b.SaveText(text); err != nil {
+		return err
 	}
-	return b.SaveText(text)
+	b.formMOBIKE = mobike
+	return nil
 }

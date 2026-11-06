@@ -26,6 +26,8 @@ const (
 	exchangeDelete
 	exchangeIKERekey
 	exchangeIKEDelete
+	exchangeMOBIKEProbe
+	exchangeMOBIKEUpdate
 )
 
 func (i *Initiator) beginExchange(exchange, kind uint8, ps []Payload) ([]byte, error) {
@@ -214,11 +216,12 @@ func (i *Initiator) DecodeExchange(packet []byte, now time.Time) (*ExchangeMessa
 // ExchangeResult reports one completed authenticated exchange. Reply is sent
 // through ReplyPackets when a datagram budget requires negotiated fragmentation.
 type ExchangeResult struct {
-	Reply    []byte
-	Child    *ChildExchangeResult
-	Deleted  *DeleteResult
-	Liveness bool
-	IKE      *IKERekeyResult
+	Reply                     []byte
+	Child                     *ChildExchangeResult
+	Deleted                   *DeleteResult
+	Liveness                  bool
+	IKE                       *IKERekeyResult
+	NATChanged, MOBIKEUpdated bool
 }
 
 // HandleExchange consumes an opaque message after any required policy check.
@@ -246,8 +249,13 @@ func (i *Initiator) HandleExchange(m *ExchangeMessage, childConfig *ChildExchang
 			result.Reply, result.Child, err = i.handleChildRequest(m, *childConfig)
 		}
 	case ExchangeInformational:
-		if isIKEDelete(m.payloads) || m.header.Flags&FlagResponse != 0 && i.exchanges.pendingKind == exchangeIKEDelete {
+		response := m.header.Flags&FlagResponse != 0
+		if response && (i.exchanges.pendingKind == exchangeMOBIKEProbe || i.exchanges.pendingKind == exchangeMOBIKEUpdate) {
+			err = i.handleMOBIKEResponse(m, result)
+		} else if isIKEDelete(m.payloads) || response && i.exchanges.pendingKind == exchangeIKEDelete {
 			result.Reply, result.Deleted, err = i.handleIKEDelete(m)
+		} else if !response && i.mobike && hasMOBIKEPathRequest(m.payloads) {
+			result.Reply, err = i.replyMOBIKEPathRequest(m)
 		} else if len(m.payloads) == 0 && !(m.header.Flags&FlagResponse != 0 && i.exchanges.pendingKind == exchangeDelete) {
 			result.Reply, err = i.handleInformational(m)
 			result.Liveness = err == nil

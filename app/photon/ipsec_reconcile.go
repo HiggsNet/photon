@@ -56,6 +56,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		var err error
 		plan, err = ipsec.PlanTransportLinks(ctx, verified.Network, verified.ManagedZone, groups, ipsec.LinkPlannerOptions{
 			Now:                 now,
+			MOBIKE:              d.Config.IPsec.MOBIKE,
 			DNSResolver:         dnsResolver,
 			ContactPointQuality: d.buildIPsecContactPointQuality(verified, now),
 			EstablishedSAs:      sas,

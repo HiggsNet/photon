@@ -1,10 +1,15 @@
 package photonwindows
 
 import (
+	"errors"
+	"fmt"
+	"net/netip"
 	"time"
 
 	"github.com/HiggsNet/photon/internal/photonclient/ike"
 )
+
+var errMOBIKEPathUnavailable = errors.New("tunnel: MOBIKE path unavailable")
 
 type ikeTimerKind uint8
 
@@ -13,18 +18,31 @@ const (
 	ikeTimerRekey
 	ikeTimerChild
 	ikeTimerProbe
+	ikeTimerMOBIKEProbe
+	ikeTimerMOBIKEUpdate
 )
 
 type ikeTimerRequest struct {
-	kind    ikeTimerKind
-	session *ike.Initiator
-	spi     uint32
-	child   ike.ChildExchangeConfig
+	kind          ikeTimerKind
+	session       *ike.Initiator
+	spi           uint32
+	child         ike.ChildExchangeConfig
+	local, remote netip.AddrPort
+	mobikeEpoch   uint64
+}
+
+func (t *gatewayTunnel) requestMOBIKE(now time.Time) {
+	t.mobikeEpoch++
+	if t.mobikeDeadline.IsZero() {
+		t.mobikeDeadline = now.Add(5 * time.Second)
+	}
 }
 
 func (t *gatewayTunnel) dueIKERequest(now time.Time) ikeTimerRequest {
 	request := ikeTimerRequest{session: t.session}
 	switch {
+	case t.mobikeEpoch != t.mobikeSent:
+		request.kind, request.mobikeEpoch = ikeTimerMOBIKEUpdate, t.mobikeEpoch
 	case t.deleteSPI != 0 && !now.Before(t.deleteAt):
 		request.kind, request.spi = ikeTimerDelete, t.deleteSPI
 	case !now.Before(t.ikeRekeyAt):
@@ -37,6 +55,12 @@ func (t *gatewayTunnel) dueIKERequest(now time.Time) ikeTimerRequest {
 		}
 	case !now.Before(t.probeAt):
 		request.kind = ikeTimerProbe
+		if t.mobike {
+			request.kind = ikeTimerMOBIKEProbe
+		}
+	}
+	if request.kind == ikeTimerMOBIKEProbe || request.kind == ikeTimerMOBIKEUpdate {
+		request.local, request.remote = t.socket.LocalAddr().AddrPort(), t.peer
 	}
 	return request
 }
@@ -56,6 +80,13 @@ func prepareIKETimer(request ikeTimerRequest) ([][]byte, error) {
 		}
 	case ikeTimerProbe:
 		_, err = session.InformationalRequest()
+	case ikeTimerMOBIKEProbe, ikeTimerMOBIKEUpdate:
+		var local netip.AddrPort
+		local, err = outboundUDPLocal(request.local, request.remote)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", errMOBIKEPathUnavailable, err)
+		}
+		_, err = session.MOBIKERequest(local, request.remote, request.kind == ikeTimerMOBIKEUpdate)
 	}
 	if err != nil {
 		return nil, err
@@ -63,9 +94,18 @@ func prepareIKETimer(request ikeTimerRequest) ([][]byte, error) {
 	return session.PendingRequestPackets(1196)
 }
 
+func (t *gatewayTunnel) waitForMOBIKEPath(now time.Time) {
+	if t.mobikeDeadline.IsZero() {
+		t.requestMOBIKE(now)
+	}
+}
+
 func (t *gatewayTunnel) applyIKETimer(request ikeTimerRequest, packets [][]byte, now time.Time) error {
 	if request.kind == ikeTimerDelete {
 		t.deleteSPI = 0
+	}
+	if request.kind == ikeTimerMOBIKEUpdate {
+		t.mobikeSent = request.mobikeEpoch
 	}
 	t.pending, t.attempts = packets, 0
 	return t.sendPending(now)

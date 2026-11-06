@@ -34,6 +34,9 @@ type gatewayTunnel struct {
 	generation                               uint64
 	peer                                     netip.AddrPort
 	natt                                     bool
+	offerMOBIKE, mobike                      bool
+	mobikeEpoch, mobikeSent                  uint64
+	mobikeDeadline                           time.Time
 	phase                                    uint8 // 0 stopped, 1 INIT, 2 AUTH, 3 established
 	localID                                  string
 	private                                  ed25519.PrivateKey
@@ -71,6 +74,7 @@ func (t *gatewayTunnel) stop() {
 	clear(t.private)
 	t.session, t.pending, t.private = nil, nil, nil
 	t.ikeLeased = false
+	t.mobike, t.mobikeEpoch, t.mobikeSent, t.mobikeDeadline = false, 0, 0, time.Time{}
 	t.phase = 0
 	t.plan = GatewayPlan{}
 	t.child = ike.ChildResult{}
@@ -98,16 +102,25 @@ func prepareIKEStart(plan GatewayPlan, local netip.AddrPort) (preparedIKEStart, 
 	}
 	start.peer = netip.AddrPortFrom(addr.Unmap(), contact.IKEPort)
 	start.nattPeer = netip.AddrPortFrom(addr.Unmap(), contact.NATTPort)
-	if local.Addr().IsUnspecified() {
-		probe, err := net.DialUDP("udp", nil, net.UDPAddrFromAddrPort(start.peer))
-		if err != nil {
-			return start, err
-		}
-		local = netip.AddrPortFrom(probe.LocalAddr().(*net.UDPAddr).AddrPort().Addr().Unmap(), local.Port())
-		probe.Close()
+	local, err = outboundUDPLocal(local, start.peer)
+	if err != nil {
+		return start, err
 	}
 	start.session, err = ike.NewInitiatorWithEndpoints(local, start.peer)
 	return start, err
+}
+
+func outboundUDPLocal(local, remote netip.AddrPort) (netip.AddrPort, error) {
+	if !local.Addr().Unmap().IsUnspecified() {
+		return local, nil
+	}
+	probe, err := net.DialUDP("udp", nil, net.UDPAddrFromAddrPort(remote))
+	if err != nil {
+		return netip.AddrPort{}, err
+	}
+	defer probe.Close()
+	source := probe.LocalAddr().(*net.UDPAddr).AddrPort().Addr().Unmap()
+	return netip.AddrPortFrom(source, local.Port()), nil
 }
 
 func (t *gatewayTunnel) start(plan GatewayPlan, localID string, private ed25519.PrivateKey, now time.Time) error {
@@ -218,6 +231,9 @@ func (t *gatewayTunnel) tickWithScheduler(plan GatewayPlan, now time.Time, sched
 	if t.phase == 3 && !now.Before(t.expiresAt) {
 		return errors.New("tunnel: CHILD hard lifetime reached")
 	}
+	if !t.mobikeDeadline.IsZero() && !now.Before(t.mobikeDeadline) {
+		return errors.New("tunnel: MOBIKE update timed out")
+	}
 	if t.phase == 3 && len(t.data.sas) > 1 && !t.childOverlapUntil.IsZero() && !now.Before(t.childOverlapUntil) {
 		return errors.New("tunnel: CHILD overlap cleanup deadline reached")
 	}
@@ -234,6 +250,10 @@ func (t *gatewayTunnel) tickWithScheduler(plan GatewayPlan, now time.Time, sched
 				return nil
 			}
 			packets, err := prepareIKETimer(request)
+			if errors.Is(err, errMOBIKEPathUnavailable) {
+				t.waitForMOBIKEPath(now)
+				return nil
+			}
 			if err != nil {
 				return err
 			}
@@ -288,6 +308,7 @@ type ikeHandshakeInput struct {
 	localID   string
 	selection GatewaySelection
 	natt      bool
+	mobike    bool
 }
 
 type ikeHandshakeAction struct {
@@ -299,7 +320,7 @@ type ikeHandshakeAction struct {
 }
 
 func (t *gatewayTunnel) ikeHandshakeInput(plan GatewayPlan) ikeHandshakeInput {
-	return ikeHandshakeInput{session: t.session, private: t.private, localID: t.localID, selection: *plan.Selected, natt: t.natt}
+	return ikeHandshakeInput{session: t.session, private: t.private, localID: t.localID, selection: *plan.Selected, natt: t.natt, mobike: t.offerMOBIKE}
 }
 
 // prepareIKEHandshakeResponse owns only the negotiating session. Socket writes
@@ -338,7 +359,7 @@ func prepareIKEHandshakeResponse(phase uint8, packet []byte, now time.Time, inpu
 		{StartAddr: netip.MustParseAddr("0.0.0.0"), EndAddr: netip.MustParseAddr("255.255.255.255"), EndPort: 65535},
 		{StartAddr: netip.MustParseAddr("::"), EndAddr: netip.MustParseAddr("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"), EndPort: 65535},
 	}
-	request, err := session.AuthRequest(ike.AuthConfig{LocalID: input.localID, RemoteID: input.selection.Identity, PrivateKey: input.private, RemotePublicKey: input.selection.PublicKey, Child: ike.ChildConfig{InitiatorSPI: spi, LocalSelectors: selectors, RemoteSelectors: selectors}})
+	request, err := session.AuthRequest(ike.AuthConfig{LocalID: input.localID, RemoteID: input.selection.Identity, PrivateKey: input.private, RemotePublicKey: input.selection.PublicKey, MOBIKE: input.mobike, Child: ike.ChildConfig{InitiatorSPI: spi, LocalSelectors: selectors, RemoteSelectors: selectors}})
 	if err != nil {
 		return action, err
 	}
@@ -377,6 +398,10 @@ func (t *gatewayTunnel) applyIKEHandshakeResponse(action ikeHandshakeAction, pla
 		}
 		t.child, t.phase, t.pending = action.auth.Child, 3, nil
 		t.probeAt, t.keepaliveAt = now.Add(20*time.Second), now.Add(15*time.Second)
+		t.mobike = action.auth.MOBIKE
+		if t.mobike {
+			t.probeAt = now // Establish a NAT baseline while the path is known to work.
+		}
 		// This finite bound is replaced only by successful rekey, never traffic.
 		t.expiresAt = now.Add(10 * time.Minute)
 		t.rekeyAt = now.Add(5 * time.Minute)

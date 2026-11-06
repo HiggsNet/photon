@@ -72,6 +72,7 @@ type ProfileRecord struct {
 	IKEIdentity             string     `json:"ike_identity"`
 	TransportKeyFingerprint string     `json:"transport_key_fingerprint"`
 	Role                    string     `json:"role"`
+	MOBIKE                  bool       `json:"mobike,omitempty"`
 	AddressFamilies         []string   `json:"address_families"`
 	PathModes               []string   `json:"path_modes"`
 	NAT                     NATProfile `json:"nat"`

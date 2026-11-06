@@ -50,6 +50,7 @@ type GatewayConfig struct {
 	// selectors or shared path.Match globs, never an authorization source.
 	AllowedZones   []zone.ZonePath
 	BootstrapHints []BootstrapHint
+	MOBIKE         bool
 }
 
 // BootstrapHint only locates an initial peer. It never authorizes the peer;
@@ -91,6 +92,7 @@ type ConfigOptions struct {
 	Gateway struct {
 		AllowedZones   []string               `yaml:"allowed_zones"`
 		BootstrapHints []BootstrapHintOptions `yaml:"bootstrap_hints"`
+		MOBIKE         bool                   `yaml:"mobike,omitempty"`
 	} `yaml:"gateway"`
 	Wintun struct {
 		AdapterName string `yaml:"adapter_name"`
@@ -205,6 +207,7 @@ func normalizeConfig(raw ConfigOptions) (*Config, error) {
 		return nil, err
 	}
 	config.Gateway.AllowedZones, err = parseAllowedZones(raw.Gateway.AllowedZones)
+	config.Gateway.MOBIKE = raw.Gateway.MOBIKE
 	if err != nil {
 		return nil, err
 	}
