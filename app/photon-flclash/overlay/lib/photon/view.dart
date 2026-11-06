@@ -384,6 +384,8 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
               (l.photonSelected, '${owner.selected.length}'),
               (l.photonName, l.photonMultiTip),
               if (!owner.directoryFresh) (l.status, l.photonStale),
+              if (status['tunnel_ready'] != true)
+                (l.status, l.photonProxyRequiresTunnel),
             ],
             footer: FilledButton(
               onPressed:

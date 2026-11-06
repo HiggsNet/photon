@@ -19,7 +19,7 @@ final class PhotonProxyBridge {
   String? _published;
   String? _profileDigest;
   bool _applying = false;
-  Map<String, dynamic>? _lastProfile;
+  int? _blockedProfileId;
 
   bool get ready =>
       photonController.directoryFresh &&
@@ -102,19 +102,24 @@ final class PhotonProxyBridge {
         throw StateError('Photon proxy profile is unavailable');
       }
       final container = globalState.container;
+      final alreadySelected =
+          container.read(currentProfileIdProvider) == profile.id;
       container.read(currentProfileIdProvider.notifier).value = profile.id;
-      final started = await container
+      final applied = await container
           .read(setupActionProvider.notifier)
-          .setRunning(true, initialize: true);
-      if (!started) throw StateError('Proxy startup did not complete');
-      container
-          .read(networkSettingProvider.notifier)
-          .update((state) => state.copyWith(systemProxy: true));
+          .applyProfile(force: true, silence: true);
+      if (!applied) {
+        throw StateError('Photon proxy profile could not be applied');
+      }
+      if (alreadySelected &&
+          container.read(currentProfileIdProvider) == profile.id) {
+        await container.read(coreHandlerProvider).closeConnections();
+      }
       container
           .read(currentPageLabelProvider.notifier)
           .toPage(PageLabel.proxies);
     } catch (_) {
-      await _invalidate(false);
+      await _invalidate();
       rethrow;
     } finally {
       _applying = false;
@@ -125,7 +130,7 @@ final class PhotonProxyBridge {
     if (_managed() == null) return;
     if (selected.isEmpty ||
         photonController.observation?['tunnel_ready'] != true) {
-      await _invalidate(false);
+      await _invalidate();
       return;
     }
     await _publish(directory, selected);
@@ -162,8 +167,9 @@ final class PhotonProxyBridge {
         .putProfile(latest.copyWith(lastUpdateDate: saved.lastUpdateDate));
     _profileDigest = digest;
     _published = digest;
-    _lastProfile = generated;
-    if (container.read(currentProfileProvider)?.url == photonProfileSource) {
+    _blockedProfileId = null;
+    if (!create &&
+        container.read(currentProfileProvider)?.url == photonProfileSource) {
       final applied = await container
           .read(setupActionProvider.notifier)
           .applyProfile(force: true, silence: true);
@@ -174,52 +180,23 @@ final class PhotonProxyBridge {
     }
   }
 
-  Future<void> _invalidate(bool explicitStop) async {
+  Future<void> _invalidate() async {
     _published = null;
     final container = globalState.container;
-    if (container.read(currentProfileProvider)?.url != photonProfileSource) {
+    final current = container.read(currentProfileProvider);
+    if (current == null ||
+        current.url != photonProfileSource ||
+        current.id == _blockedProfileId) {
       return;
     }
-    final core = container.read(coreHandlerProvider);
-    if (explicitStop) {
-      await container.read(setupActionProvider.notifier).setRunning(false);
-      if (container.read(currentProfileProvider)?.url == photonProfileSource &&
-          !container.read(isStartProvider)) {
-        await core.closeConnections();
-      }
-      return;
-    }
-    final profile = _managed();
-    if (profile == null) return;
-    final blocked = {
-      ...?_lastProfile,
-      'proxies': <dynamic>[],
-      'proxy-groups': <dynamic>[],
-      'rules': [
-        for (final rule in _lastProfile?['rules'] as List? ?? const [])
-          if (rule is String &&
-              (rule.startsWith('IP-CIDR') ||
-                  rule.startsWith('PROCESS-PATH-REGEX,')))
-            rule,
-        'MATCH,REJECT',
-      ],
-    };
-    final content = encodePhotonProfile(blocked);
-    final digest = sha256.convert(utf8.encode(content)).toString();
-    if (_profileDigest == digest) return;
-    await core.closeConnections();
-    container
-        .read(patchClashConfigProvider.notifier)
-        .update((state) => state.copyWith(mode: Mode.rule));
-    await profile.saveFile(
-      Uint8List.fromList(utf8.encode(content)),
-      validate: core.validateProfile,
-    );
     final applied = await container
         .read(setupActionProvider.notifier)
         .applyProfile(force: true, silence: true);
     if (!applied) throw StateError('Could not pause the Photon proxy profile');
-    _profileDigest = digest;
+    if (container.read(currentProfileIdProvider) == current.id) {
+      await container.read(coreHandlerProvider).closeConnections();
+      _blockedProfileId = current.id;
+    }
   }
 }
 

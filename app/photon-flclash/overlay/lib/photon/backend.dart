@@ -25,6 +25,7 @@ final class PhotonProcess implements PhotonBackend {
   PhotonProcess({
     required this.executable,
     this.arguments = const [],
+    this.requestElevation = false,
     this.timeout = const Duration(seconds: 10),
     this.startupTimeout = const Duration(seconds: 10),
     this.shutdownTimeout = const Duration(seconds: 10),
@@ -32,6 +33,7 @@ final class PhotonProcess implements PhotonBackend {
 
   final String executable;
   final List<String> arguments;
+  final bool requestElevation;
   final Duration timeout;
   final Duration startupTimeout;
   final Duration shutdownTimeout;
@@ -64,6 +66,7 @@ final class PhotonProcess implements PhotonBackend {
       ...arguments,
       'run',
       '--stdio',
+      if (requestElevation) '--elevate',
       '--config',
       config.path,
     ], workingDirectory: File(executable).absolute.parent.path);

@@ -17,7 +17,7 @@ final class PhotonController extends ChangeNotifier {
   final PhotonBackend Function() _createBackend;
   final PhotonPreferences? preferences;
   Future<void> Function(PhotonDirectory, Set<String>)? onServicesChanged;
-  Future<void> Function(bool explicitStop)? onServicesInvalidated;
+  Future<void> Function()? onServicesInvalidated;
   PhotonDirectory? _directory;
   String? _selectionScope;
   Set<String> _selected = {};
@@ -108,8 +108,7 @@ final class PhotonController extends ChangeNotifier {
     }, showBusy: false).whenComplete(() => _refresh = null);
   }
 
-  Future<void> stop() =>
-      _enqueue(() => _release(explicitStop: true), cleanupOnError: false);
+  Future<void> stop() => _enqueue(_release, cleanupOnError: false);
 
   Future<void> restart({required bool allowed}) async {
     await stop();
@@ -181,20 +180,20 @@ final class PhotonController extends ChangeNotifier {
   Future<void> applyProxies(Future<void> Function() apply) =>
       _enqueue(apply, cleanupOnError: false);
 
-  Future<void> _invalidateServices({bool explicitStop = false}) async {
+  Future<void> _invalidateServices() async {
     _expiry?.cancel();
     _expiry = null;
     _directory = null;
-    await onServicesInvalidated?.call(explicitStop);
+    if (!_closed) await onServicesInvalidated?.call();
   }
 
-  Future<void> _release({bool explicitStop = false}) async {
+  Future<void> _release() async {
     _timer?.cancel();
     _timer = null;
     _observation = null;
     Object? invalidationError;
     try {
-      await _invalidateServices(explicitStop: explicitStop);
+      await _invalidateServices();
     } catch (error) {
       invalidationError = error;
     }
@@ -240,13 +239,9 @@ final class PhotonController extends ChangeNotifier {
   Future<void> close() {
     _closed = true;
     _timer?.cancel();
-    return _closing ??=
-        _enqueue(
-          () => _release(explicitStop: true),
-          cleanupOnError: false,
-        ).then((_) {
-          if (hasLease) throw StateError('Photon backend exit is unconfirmed');
-        });
+    return _closing ??= _enqueue(_release, cleanupOnError: false).then((_) {
+      if (hasLease) throw StateError('Photon backend exit is unconfirmed');
+    });
   }
 }
 
@@ -256,6 +251,10 @@ final photonController = PhotonController(
     if (safeModeBuild || !Platform.isWindows) {
       throw StateError('Photon is disabled on this platform or in safe mode');
     }
-    return PhotonProcess(executable: photonExecutable);
+    return PhotonProcess(
+      executable: photonExecutable,
+      requestElevation: true,
+      startupTimeout: const Duration(minutes: 2),
+    );
   },
 );

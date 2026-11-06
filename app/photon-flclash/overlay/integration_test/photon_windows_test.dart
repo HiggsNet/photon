@@ -201,16 +201,27 @@ void main() {
           scrollable: scrollable,
           maxScrolls: 30,
         );
+        final setup = container.read(setupActionProvider.notifier);
+        await setup.setRunning(false);
         await tester.tap(find.text(labels.photonApply));
         await waitFor(
           () =>
               photonProxyBridge.ready &&
               container.read(currentProfileProvider)?.url ==
                   photonProfileSource &&
-              container.read(isStartProvider),
+              !photonController.busy,
           'proxy profile activation',
           seconds: 90,
         );
+        expect(container.read(isStartProvider), isFalse);
+        expect(
+          container.read(networkSettingProvider).systemProxy,
+          originalProxy,
+        );
+        container
+            .read(networkSettingProvider.notifier)
+            .update((state) => state.copyWith(systemProxy: true));
+        expect(await setup.setRunning(true), isTrue);
         await phase('proxies-selected');
         final port = container.read(patchClashConfigProvider).mixedPort;
         final traces = <Map<String, dynamic>>[];
@@ -428,9 +439,26 @@ void main() {
           ),
           isTrue,
         );
+        await setup.setRunning(false);
+        expect(photonController.observation?['tunnel_ready'], isTrue);
+        expect(await setup.setRunning(true), isTrue);
         await photonController.stop();
         expect(photonController.hasLease, isFalse);
-        expect(container.read(isStartProvider), isFalse);
+        expect(container.read(isStartProvider), isTrue);
+        expect(await setup.setRunning(false), isTrue);
+        expect(await setup.setRunning(true), isTrue);
+        expect(photonController.hasLease, isFalse);
+        final offline = await Process.run('curl.exe', [
+          '--silent',
+          '--show-error',
+          '--max-time',
+          '10',
+          '--proxy',
+          'http://127.0.0.1:$port',
+          'https://www.cloudflare.com/cdn-cgi/trace',
+        ]);
+        expect(offline.exitCode, isNot(0));
+        results['independent_switches'] = true;
         await photonController.start(allowed: true);
         await waitFor(
           () => photonController.observation?['tunnel_ready'] == true,
@@ -442,7 +470,6 @@ void main() {
           ),
           isTrue,
         );
-        await photonController.applyProxies(photonProxyBridge.apply);
         await waitFor(
           () => photonProxyBridge.ready && container.read(isStartProvider),
           'proxy recovery after Photon reconnect',
@@ -482,8 +509,9 @@ void main() {
             .map((log) => log.toJson())
             .toList();
         expect(recovered.exitCode, 0, reason: '${recovered.stderr}');
-        await File('${output.path}/result.json')
-            .writeAsString(const JsonEncoder.withIndent('  ').convert(results));
+        await File(
+          '${output.path}/result.json',
+        ).writeAsString(const JsonEncoder.withIndent('  ').convert(results));
       } finally {
         final form = find.byType(FormPage);
         if (form.evaluate().isNotEmpty) {
@@ -508,8 +536,9 @@ void main() {
         await tester.pump();
         await preferences.saveConfig(container.read(configProvider));
         expect(await File(_config).readAsBytes(), originalConfig);
-        await File('${output.path}/partial-result.json')
-            .writeAsString(const JsonEncoder.withIndent('  ').convert(results));
+        await File(
+          '${output.path}/partial-result.json',
+        ).writeAsString(const JsonEncoder.withIndent('  ').convert(results));
         await container.read(coreHandlerProvider).close();
       }
     },

@@ -1,50 +1,80 @@
-import 'dart:async';
-
-import 'package:fl_clash/core/controller.dart';
-import 'package:fl_clash/core/interface.dart';
-import 'package:fl_clash/core/method.dart';
 import 'package:fl_clash/models/models.dart';
 import 'package:fl_clash/photon/controller.dart';
 import 'package:fl_clash/photon/proxy_bridge.dart';
+import 'package:fl_clash/photon/services.dart';
 import 'package:fl_clash/providers/providers.dart';
 import 'package:fl_clash/state.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mocktail/mocktail.dart';
 import 'package:riverpod/riverpod.dart';
 
 import '../helpers/test_profiles.dart';
 
-class _Core extends Mock implements CoreHandlerInterface {}
-
 class _Setup extends SetupAction {
-  @override
-  void applyProfileDebounce({bool silence = false, bool force = false}) {}
+  int applies = 0;
 
   @override
-  void resetCoreTraffic() {}
+  Future<bool> applyProfile({
+    bool silence = false,
+    bool force = false,
+    Future<void> Function()? preloadInvoke,
+  }) async {
+    applies++;
+    return false;
+  }
 }
 
 void main() {
-  late _Core core;
-  late ProviderContainer container;
-  late Profile unrelated;
+  test('offline profile keeps Photon bypasses and rejects proxy traffic', () {
+    final profile = blockedPhotonProfile({
+      'proxies': [
+        {'name': 'Photon endpoint'},
+      ],
+      'proxy-groups': [
+        {'name': 'Photon'},
+      ],
+      'mode': 'direct',
+      'dns': {
+        'fake-ip-filter': ['bootstrap.example'],
+      },
+      'tun': {
+        'route-exclude-address': ['192.0.2.1/32'],
+      },
+      'rules': [
+        'IP-CIDR,192.0.2.1/32,DIRECT,no-resolve',
+        'IP-CIDR6,2001:db8::/64,Photon,no-resolve',
+        'PROCESS-PATH-REGEX,photon,DIRECT',
+        'MATCH,DIRECT',
+      ],
+    });
+    expect(profile, {
+      'ipv6': true,
+      'dns': {
+        'fake-ip-filter': ['bootstrap.example'],
+      },
+      'tun': {
+        'route-exclude-address': ['192.0.2.1/32'],
+      },
+      'rules': [
+        'IP-CIDR,192.0.2.1/32,DIRECT,no-resolve',
+        'PROCESS-PATH-REGEX,photon,DIRECT',
+        'MATCH,REJECT',
+      ],
+    });
+  });
 
-  setUp(() async {
-    core = _Core();
-    unrelated = Profile.normal(label: 'Independent');
-    final photon = Profile.normal(label: 'Photon')
-        .copyWith(url: photonProfileSource);
-    container = ProviderContainer(
+  test('Photon stop leaves both independent proxy intents alone', () async {
+    final photon = Profile.normal(
+      label: 'Photon',
+    ).copyWith(url: photonProfileSource);
+    final independent = Profile.normal(label: 'Independent');
+    final setup = _Setup();
+    final container = ProviderContainer(
       overrides: [
-        appVisibleProvider.overrideWithBuild((_, _) => false),
-        initProvider.overrideWithBuild((_, _) => true),
-        currentProfileIdProvider.overrideWithBuild((_, _) => unrelated.id),
-        networkSettingProvider.overrideWithBuild(
-          (_, _) => const NetworkProps(systemProxy: true),
+        currentProfileIdProvider.overrideWithBuild((_, _) => independent.id),
+        profilesProvider.overrideWith(
+          () => TestProfiles([photon, independent]),
         ),
-        profilesProvider.overrideWith(() => TestProfiles([unrelated, photon])),
-        setupActionProvider.overrideWith(_Setup.new),
-        coreHandlerProvider.overrideWithValue(CoreController.scoped(core)),
+        setupActionProvider.overrideWith(() => setup),
       ],
     );
     addTearDown(container.dispose);
@@ -54,58 +84,18 @@ void main() {
       photonController.onServicesChanged = null;
       photonController.onServicesInvalidated = null;
     });
-    when(core.startListener).thenAnswer((_) async {});
-    when(core.closeConnections).thenAnswer((_) async {});
-    await container.read(setupActionProvider.notifier).setRunning(true);
-    expect(container.read(proxyStateProvider).isStart, isTrue);
+
+    container.read(runTimeProvider.notifier).value = 1;
+    await photonController.onServicesInvalidated!();
+    expect(setup.applies, 0);
+    expect(container.read(isStartProvider), isTrue);
+
     container.read(currentProfileIdProvider.notifier).value = photon.id;
-  });
-
-  test(
-    'connection-close timeout leaves the listener and system proxy off',
-    () async {
-      when(core.stopListener).thenAnswer((_) async {});
-      final timeout = TimeoutException('connection.closeAll');
-      when(core.closeConnections).thenAnswer((_) async => throw timeout);
-
-      await expectLater(
-        photonController.onServicesInvalidated!(true),
-        throwsA(same(timeout)),
-      );
-      verifyInOrder([core.stopListener, core.closeConnections]);
-      expect(container.read(proxyStateProvider).isStart, isFalse);
-      expect(container.read(runningVpnOptionsProvider), isNull);
-    },
-  );
-
-  test('disconnected Core does not restore the system proxy on stop', () async {
-    const disconnect = CoreMethodException(
-      code: 'transport_disconnected',
-      message: 'Core closed its connection',
-    );
-    when(core.stopListener).thenAnswer((_) async => throw disconnect);
-
     await expectLater(
-      photonController.onServicesInvalidated!(true),
-      throwsA(same(disconnect)),
+      photonController.onServicesInvalidated!(),
+      throwsStateError,
     );
-    expect(container.read(proxyStateProvider).isStart, isFalse);
-    expect(container.read(runningVpnOptionsProvider), isNull);
-  });
-
-  test('keeps connections owned by a newly selected profile', () async {
-    final entered = Completer<void>();
-    final stopped = Completer<void>();
-    when(core.stopListener).thenAnswer((_) {
-      entered.complete();
-      return stopped.future;
-    });
-    final stop = photonController.onServicesInvalidated!(true);
-    await entered.future;
-    container.read(currentProfileIdProvider.notifier).value = unrelated.id;
-    stopped.complete();
-    await stop;
-
-    verifyNever(core.closeConnections);
+    expect(setup.applies, 1);
+    expect(container.read(isStartProvider), isTrue);
   });
 }

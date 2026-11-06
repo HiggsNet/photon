@@ -278,3 +278,21 @@ Map<String, dynamic> photonProxyProfile({
 
 String encodePhotonProfile(Map<String, dynamic> profile) =>
     const JsonEncoder.withIndent('  ').convert(profile);
+
+Map<String, dynamic> blockedPhotonProfile(Map<String, dynamic> profile) {
+  return {
+    'ipv6': true,
+    'dns': ?profile['dns'],
+    'tun': ?profile['tun'],
+    'rules': [
+      for (final rule in profile['rules'] as List? ?? const [])
+        if (rule is String &&
+            ((rule.startsWith('IP-CIDR,') || rule.startsWith('IP-CIDR6,')) &&
+                    rule.endsWith(',DIRECT,no-resolve') ||
+                rule.startsWith('PROCESS-PATH-REGEX,') &&
+                    rule.endsWith(',DIRECT')))
+          rule,
+      'MATCH,REJECT',
+    ],
+  };
+}

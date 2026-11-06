@@ -68,3 +68,13 @@ Photon 设置、新建配置与离线授权导入集中在 Photon 页。两个 W
 三项故障注入测试在旧实现上分别复现停止指令被跳过、断开后恢复代理状态，以及配置切换时过早关闭连接。修复后 210 项相关 Flutter 回归通过，三项故障注入也在 Windows 通过。实际终止代理核心后，Windows 系统代理和 TUN 的资源回收仍待实测。
 
 修复版 Windows x64 ZIP 位于 `build/photon-flclash/dist/photon-flclash-windows-proxy-stop-amd64-20261106.zip`，66,481,267 字节，SHA256 `c64927bba19e97df762c295e35e32464918e71cc7ad51da7ce5623c84efdbbfc`。包内 76 个文件均通过校验。测试桌面入口仍指向上一个实机验收版。证据在 `build/validation/photon-flclash-proxy-stop-20261106/`。
+
+## 2026-11-06 独立开关与普通权限启动
+
+选择 Photon 代理配置不改变接管、系统代理或 TUN 的开关。当前是普通代理配置时，Photon 停止不重新应用该配置。使用 Photon 配置时，隧道不可用会在实际生效的配置中保留引导绕行并拒绝代理流量。应用在监听前加载对应规则，隧道恢复后重新发布当前获授权的节点。
+
+在 Windows 桌面使用原 test 身份，验证选择节点后接管仍关闭、暂停代理时隧道仍就绪、关闭 Photon 后代理保持开启、Photon 停止期间代理可以独立启停且公网请求被拒绝，以及重连后无需重新选节点即可恢复 TUN 出口。三地 HTTPS、内网 IPv6、配置副本保存及原配置字节校验通过，测试退出码为 0。相关 Flutter 回归 209 项通过。
+
+便携版启动声明为 `asInvoker`。在已登录桌面用 `photon-test` 的受限令牌启动，独立读取实际 FlClash 进程的权限标记确认未提权。Windows 原生测试覆盖受限进程与提升权限进程的管道、对端 PID 校验及提权期间配置变更拒绝。旧版的 Windows 防火墙提示仍覆盖在桌面上，待人工确认 UAC 后继续验证普通账户首次连接。
+
+新版 ZIP 位于 `build/photon-flclash/dist/photon-flclash-windows-independent-amd64-20261106.zip`，69,578,802 字节，SHA256 `2d02a63084234ce43008c4c28de159b336397941458fe4b87ac66386a4e9b53f`，76 个文件均通过校验。证据在 `build/validation/photon-flclash-independent-20261106/`。

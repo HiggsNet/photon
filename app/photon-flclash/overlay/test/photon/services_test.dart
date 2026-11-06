@@ -198,7 +198,7 @@ void main() {
       final controller = PhotonController(createBackend: () => backend)
         ..selectConfig('/test/config.yaml');
       var invalidations = 0;
-      controller.onServicesInvalidated = (_) async {
+      controller.onServicesInvalidated = () async {
         invalidations++;
       };
       await controller.start(allowed: true);
@@ -239,7 +239,7 @@ void main() {
     final controller = PhotonController(createBackend: () => backend)
       ..selectConfig('/test/config.yaml');
     await controller.start(allowed: true);
-    controller.onServicesInvalidated = (_) async {
+    controller.onServicesInvalidated = () async {
       throw StateError('Core already exited');
     };
     await controller.stop();

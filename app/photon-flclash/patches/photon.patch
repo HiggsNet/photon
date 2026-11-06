@@ -401,36 +401,45 @@ index 75b35bd..70edb2d 100644
    profiles,
    tools,
 diff --git a/lib/providers/action.dart b/lib/providers/action.dart
-index 3a2f9df..08eacdd 100644
+index 3a2f9df..5ca6dee 100644
 --- a/lib/providers/action.dart
 +++ b/lib/providers/action.dart
-@@ -14,6 +14,8 @@ import 'package:fl_clash/enum/enum.dart';
+@@ -14,6 +14,9 @@ import 'package:fl_clash/enum/enum.dart';
  import 'package:fl_clash/models/models.dart';
  import 'package:fl_clash/plugins/app.dart';
  import 'package:fl_clash/plugins/service.dart';
 +import 'package:fl_clash/photon/controller.dart';
 +import 'package:fl_clash/photon/proxy_bridge.dart';
++import 'package:fl_clash/photon/services.dart' show blockedPhotonProfile;
  import 'package:fl_clash/providers/actions/system_exit.dart';
  import 'package:fl_clash/providers/mitm.dart';
  import 'package:fl_clash/providers/providers.dart';
 diff --git a/lib/providers/actions/setup.dart b/lib/providers/actions/setup.dart
-index 3f1e2c6..4b7d49e 100644
+index 3f1e2c6..e75bb72 100644
 --- a/lib/providers/actions/setup.dart
 +++ b/lib/providers/actions/setup.dart
-@@ -185,6 +185,12 @@ class SetupAction extends _$SetupAction {
+@@ -185,13 +185,17 @@ class SetupAction extends _$SetupAction {
    }
  
    Future<bool> _start(_RunRequest request) async {
-+    if (ref.read(currentProfileIdProvider) != null &&
-+        ref.read(currentProfileProvider)?.url == photonProfileSource &&
-+        !photonProxyBridge.ready) {
-+      _setLocalRunning(false);
-+      throw MessageException(currentAppLocalizations.photonProxyRequiresTunnel);
-+    }
-     if (request.initialize) {
+-    if (request.initialize) {
++    final photon =
++        ref.read(currentProfileIdProvider) != null &&
++        ref.read(currentProfileProvider)?.url == photonProfileSource;
++    if (request.initialize || photon) {
        var applied = false;
        try {
-@@ -276,7 +282,8 @@ class SetupAction extends _$SetupAction {
+         applied = await applyProfile(
+-          force: !request.resume,
+-          preloadInvoke: () => _startCoreRunning(request),
++          force: photon || !request.resume,
++          preloadInvoke: photon ? null : () => _startCoreRunning(request),
+         );
++        if (applied && photon) await _startCoreRunning(request);
+       } catch (_) {
+         applied = false;
+       }
+@@ -276,7 +280,8 @@ class SetupAction extends _$SetupAction {
  
    bool _isUnanswered(Object error) =>
        isUnansweredCoreError(error) ||
@@ -440,6 +449,75 @@ index 3f1e2c6..4b7d49e 100644
  
    /// An excluded SSID parks the listener without ending the run.
    void syncSuspend() {
+@@ -498,13 +503,15 @@ class SetupAction extends _$SetupAction {
+       ),
+     );
+     final appendSystemDns = networkSetting.appendSystemDns;
++    final photon =
++        ref.read(profileProvider(profileId))?.url == photonProfileSource;
+     final isCustom = setupState.profileType == ProfileType.custom;
+     final scriptContent =
+-        !isCustom && setupState.extendType == ExtendType.script
++        !photon && !isCustom && setupState.extendType == ExtendType.script
+         ? await setupState.script?.content
+         : null;
+     final hasScript = scriptContent?.isNotEmpty == true;
+-    final profileBase = !isCustom && !hasScript
++    final profileBase = !photon && !isCustom && !hasScript
+         ? await _core.getProfileBase(profileId)
+         : null;
+     Map<String, dynamic> rawConfig = isCustom
+@@ -521,6 +528,8 @@ class SetupAction extends _$SetupAction {
+     if (hasScript) {
+       rawConfig = await handleEvaluate(scriptContent!, rawConfig);
+     }
++    final blocked = photon && !photonProxyBridge.ready;
++    if (blocked) rawConfig = blockedPhotonProfile(rawConfig);
+     final directory = await appPath.profilesPath;
+     final injected = await _resolveInjectedProviders(
+       setupState,
+@@ -536,21 +545,24 @@ class SetupAction extends _$SetupAction {
+         profilesPath: directory,
+         profileId: profileId,
+         rawConfig: rawConfig,
+-        realPatchConfig: patchConfig,
++        realPatchConfig: photon
++            ? patchConfig.copyWith(mode: Mode.rule)
++            : patchConfig,
+         overrides: setupState.overrides,
+         bypassPrivateRoute: networkSetting.bypassPrivateRoute,
+         keepEmptyDnsOverrides: setupState.profileType != ProfileType.custom,
+         appendSystemDns: appendSystemDns,
+-        addedRules: setupState.addedRules,
++        addedRules: blocked ? const [] : setupState.addedRules,
+         defaultUA: defaultUA,
+         authentication: networkSetting.authentication.credentials,
+-        matchTarget:
+-            profileBase == null ||
+-                setupState.matchTarget?.trim().isNotEmpty == true
++        matchTarget: blocked
++            ? null
++            : profileBase == null ||
++                  setupState.matchTarget?.trim().isNotEmpty == true
+             ? setupState.matchTarget
+             : lastMatchTarget(profileBase.base.matchRules),
+         safeMode: ref.read(safeModeProvider),
+-        mitmModules: setupState.mitmModules,
++        mitmModules: blocked ? const [] : setupState.mitmModules,
+       ),
+     );
+     if (profileBase == null) {
+@@ -638,6 +650,10 @@ class SetupAction extends _$SetupAction {
+   }
+ 
+   PatchClashConfig _effectivePatchConfig(PatchClashConfig patchConfig) {
++    if (ref.read(currentProfileIdProvider) != null &&
++        ref.read(currentProfileProvider)?.url == photonProfileSource) {
++      patchConfig = patchConfig.copyWith(mode: Mode.rule);
++    }
+     if (ref.read(safeModeProvider)) {
+       return patchConfig.copyWith(
+         tun: patchConfig.tun.copyWith(enable: false),
 diff --git a/lib/providers/actions/system.dart b/lib/providers/actions/system.dart
 index df905f7..990086b 100644
 --- a/lib/providers/actions/system.dart
@@ -618,32 +696,3 @@ index 212e6ff..d73d8f3 100644
    flutter_test:
      sdk: flutter
    flutter_lints: ^6.0.0
-diff --git a/windows/runner/CMakeLists.txt b/windows/runner/CMakeLists.txt
-index 394917c..e2501e8 100644
---- a/windows/runner/CMakeLists.txt
-+++ b/windows/runner/CMakeLists.txt
-@@ -20,6 +20,10 @@ add_executable(${BINARY_NAME} WIN32
- # that need different build settings.
- apply_standard_settings(${BINARY_NAME})
- 
-+# The Photon runner manifest declares requireAdministrator. Do not merge a
-+# second, conflicting asInvoker declaration generated by the MSVC linker.
-+target_link_options(${BINARY_NAME} PRIVATE "/MANIFESTUAC:NO")
-+
- # Add preprocessor definitions for the build version.
- target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION=\"${FLUTTER_VERSION}\"")
- target_compile_definitions(${BINARY_NAME} PRIVATE "FLUTTER_VERSION_MAJOR=${FLUTTER_VERSION_MAJOR}")
-diff --git a/windows/runner/runner.exe.manifest b/windows/runner/runner.exe.manifest
-index 153653e..2bca251 100644
---- a/windows/runner/runner.exe.manifest
-+++ b/windows/runner/runner.exe.manifest
-@@ -5,6 +5,9 @@
-       <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
-     </windowsSettings>
-   </application>
-+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
-+    <security><requestedPrivileges><requestedExecutionLevel level="requireAdministrator" uiAccess="false"/></requestedPrivileges></security>
-+  </trustInfo>
-   <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
-     <application>
-       <!-- Windows 10 and Windows 11 -->
