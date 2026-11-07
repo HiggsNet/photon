@@ -248,6 +248,7 @@ void main() {
         'connections': [
           {
             'peer': 'gateway.catofes.',
+            'outer_family': 'ipv4',
             'tunnel_ready': true,
             'babel_live': true,
             'ipv4_route_ready': false,
@@ -258,6 +259,11 @@ void main() {
               'phase': 'established',
               'attempt_remote_endpoint': '192.0.2.1:4500',
             },
+          },
+          {
+            'peer': 'gateway.catofes.',
+            'outer_family': 'ipv6',
+            'tunnel_ready': true,
           },
           {
             'peer': 'second.catofes.',
@@ -308,7 +314,11 @@ void main() {
       expect(find.text('fd42::1/128'), findsOneWidget);
       await tester.tap(find.text('Tunnels').first);
       await tester.pumpAndSettle();
-      expect(find.text('gateway.catofes.'), findsOneWidget);
+      expect(find.text('gateway.catofes.'), findsNWidgets(2));
+      expect(
+        find.byKey(const ValueKey<Object>(('gateway.catofes.', 'IPv6'))),
+        findsOneWidget,
+      );
       expect(find.text('192.0.2.1:4500'), findsOneWidget);
       expect(find.text('IKE'), findsOneWidget);
       expect(find.text('ESP'), findsOneWidget);
@@ -320,7 +330,7 @@ void main() {
       expect(find.text('Not ready'), findsOneWidget);
       expect(
         tester.getCenter(find.text('second.catofes.')).dy,
-        lessThan(tester.getCenter(find.text('gateway.catofes.')).dy),
+        lessThan(tester.getCenter(find.text('gateway.catofes.').first).dy),
       );
       await tester.enterText(find.byType(TextField), '2001:db8::2');
       await tester.pumpAndSettle();
@@ -379,6 +389,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Endpoints'), findsOneWidget);
     expect(find.text('Switch to Photon profile'), findsOneWidget);
+    expect(find.text('Import YAML template'), findsOneWidget);
+    expect(find.text('Edit YAML template'), findsOneWidget);
     expect(find.byType(Checkbox), findsNothing);
     expect(find.text('owner.catofes.'), findsOneWidget);
     expect(find.text('cn · jp'), findsOneWidget);

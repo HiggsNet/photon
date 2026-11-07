@@ -5,7 +5,7 @@
 ## 使用
 
 1. 打开 FlClash，进入侧栏 **Photon**。首次使用点 **Photon 设置**，填写管理员提供的节点名、可信根公钥和至少一条内网路由。首次自动入网还需要引导地址。保存后应用会在用户数据目录下管理 `photon/photon.yaml`。已有身份可用 **选用已有 Photon YAML** 继续使用原配置。
-2. 在 **概览、隧道、Gossip 节点、路由、代理服务、诊断** 中查看实时状态。每个网关选择一个外层地址（IPv4 或 IPv6）建立连接；同一连接可以承载内层双栈。隧道表中的 IPv4 和 IPv6 分别表示内层是否已有可用路由，「外层」表示连网关使用的地址族。点击一行可查看完整远端地址、ESP 到期时间和最近一次失败或重连原因。Gossip 节点表显示同步状态，代理服务表按发布节点汇总地区和端点数。数据采样被截断时会显示提示。
+2. 在 **概览、隧道、Gossip 节点、路由、代理服务、诊断** 中查看实时状态。网关同时提供已授权的 IPv4、IPv6 地址且本地支持双栈时，Photon 分别尝试建立两条隧道，单条也能承载内层双栈。隧道表按外层连接显示，每行的 IPv4 和 IPv6 分别表示内层是否已有可用路由，「外层」表示连网关使用的地址族。点击一行可查看完整远端地址、ESP 到期时间和最近一次失败或重连原因。Gossip 节点表显示同步状态，代理服务表按发布节点汇总地区和端点数。数据采样被截断时会显示提示。
 3. Photon 自动将当前有效、已授权的 SOCKS5 端点加入代理组。在代理服务中点击 **切换到 Photon 配置**，FlClash 会生成并选用独立的 Photon 配置；无需先导入其他配置。前往 **代理** 页使用 `Photon` 手选组、`Photon Auto` 自动择优或 `Photon Balance` 负载均衡，再按需要开启 FlClash 的代理接管。已有配置和订阅不会被覆盖，可以在 **配置** 页随时切回。
 4. Photon 连接、代理接管、系统代理和 TUN 通过各自的入口控制。仅连接 Photon 可以访问内网。关闭 Photon 后，普通代理配置继续运行。使用 Photon 配置时，接管保持开启，无法经 Photon 转发的代理流量会被拒绝，节点在隧道重连后自动恢复。
 
@@ -15,7 +15,7 @@
 
 ## 自定义代理规则
 
-在 Photon 配置旁放一个同名的 `.proxy.yaml` 文件，例如 `photon.yaml` 对应 `photon.proxy.yaml`。可从已有 Mihomo 配置复制代理组和规则。Photon 读取其中的 `proxies`、`proxy-providers`、`proxy-groups`、`rules`、`rule-providers` 和 `sub-rules`，把防回环所需规则放在用户规则之前。DNS 和 TUN 继续由 FlClash 与 Photon 管理。模板需要至少一条规则，最多 4 MiB。移除模板会恢复内置的 Photon 规则。
+打开 **Photon → 代理服务 → 规则模板**。用 **导入 YAML 模板** 选择已有的 Mihomo YAML，或用 **编辑 YAML 模板** 打开 FlClash 自带的编辑器。验证通过后，模板保存为 Photon 配置旁的同名 `.proxy.yaml`，例如 `photon.yaml` 对应 `photon.proxy.yaml`。也可直接编辑这个文件。Photon 读取其中的 `proxies`、`proxy-providers`、`proxy-groups`、`rules`、`rule-providers` 和 `sub-rules`，把防回环所需规则放在用户规则之前。DNS 和 TUN 继续由 FlClash 与 Photon 管理。模板需要至少一条规则，最多 4 MiB。点击 **使用内置规则** 可以移除模板。
 
 ```yaml
 proxy-groups:

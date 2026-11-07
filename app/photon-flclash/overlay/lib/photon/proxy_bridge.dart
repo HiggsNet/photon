@@ -15,6 +15,29 @@ import 'controller.dart';
 import 'services.dart';
 
 const photonProfileSource = 'photon://local/services';
+const _templateLimit = 4 * 1024 * 1024;
+
+File photonProxyTemplateFile(String configPath) =>
+    File('${path.withoutExtension(configPath)}.proxy.yaml');
+
+Future<String> readPhotonProxyTemplate(File file) async {
+  if (await file.length() > _templateLimit) {
+    throw const FormatException('The Photon proxy template exceeds 4 MiB');
+  }
+  return file.readAsString();
+}
+
+Map<String, dynamic> _parseTemplate(String text) {
+  final yaml = loadYaml(text);
+  if (yaml is! Map) {
+    throw const FormatException(
+      'The Photon proxy template must be a YAML mapping',
+    );
+  }
+  final template = Map<String, dynamic>.from(yaml);
+  validatePhotonProxyTemplate(template);
+  return template;
+}
 
 final class PhotonProxyBridge {
   bool _attached = false;
@@ -60,29 +83,54 @@ final class PhotonProxyBridge {
   Future<Map<String, dynamic>?> _readTemplate() async {
     final configPath = photonController.configPath;
     if (configPath == null) return null;
-    final file = File('${path.withoutExtension(configPath)}.proxy.yaml');
+    final file = photonProxyTemplateFile(configPath);
     if (!await file.exists()) {
       _templateText = null;
       _template = null;
       return null;
     }
-    if (await file.length() > 4 * 1024 * 1024) {
-      throw const FormatException('The Photon proxy template exceeds 4 MiB');
-    }
-    final source = await file.readAsString();
+    final source = await readPhotonProxyTemplate(file);
     if (source != _templateText) {
-      _template = await compute((text) {
-        final yaml = loadYaml(text);
-        if (yaml is! Map) {
-          throw const FormatException(
-            'The Photon proxy template must be a YAML mapping',
-          );
-        }
-        return Map<String, dynamic>.from(yaml);
-      }, source);
+      _template = await compute(_parseTemplate, source);
       _templateText = source;
     }
     return _template;
+  }
+
+  /// Called on the controller queue so an in-flight refresh cannot publish
+  /// between validating and replacing the template.
+  Future<void> saveTemplate(String configPath, String source) async {
+    if (utf8.encode(source).length > _templateLimit) {
+      throw const FormatException('The Photon proxy template exceeds 4 MiB');
+    }
+    final template = await compute(_parseTemplate, source);
+    final directory = photonController.directory;
+    final now = DateTime.now();
+    final profile =
+        directory != null &&
+            directory.fresh(now) &&
+            directory.endpoints.isNotEmpty &&
+            directory.adapterName.isNotEmpty
+        ? _profile(directory, template: template)
+        : photonProxyTemplatePreview(template);
+    await _validateProfile(
+      encodePhotonProfile(profile),
+      _managed()?.ageSecretKey ?? '',
+    );
+    await photonProxyTemplateFile(configPath).writeAsStringAtomically(source);
+  }
+
+  Future<void> _validateProfile(String content, String secret) async {
+    final file = File(await appPath.tempFilePath);
+    try {
+      await file.safeWriteAsString(content);
+      final core = globalState.container.read(coreHandlerProvider);
+      if (await core.validateProfile(file.path, secret) case final issue?) {
+        throw MessageException(issue);
+      }
+    } finally {
+      await file.safeDelete();
+    }
   }
 
   String? _desired() {
@@ -184,22 +232,12 @@ final class PhotonProxyBridge {
     profile ??= Profile.normal(label: 'Photon')
         .copyWith(url: photonProfileSource, autoUpdate: false);
     if (_profileDigest == digest && _published == networkDigest) return;
-    _published = null;
-    final core = container.read(coreHandlerProvider);
-    final temp = File(await appPath.tempFilePath);
-    try {
-      await temp.safeWriteAsString(content);
-      if (await core.validateProfile(temp.path, profile.ageSecretKey)
-          case final issue?) {
-        throw MessageException(issue);
-      }
-      if (!directory.fresh(DateTime.now())) {
-        throw StateError('Photon service information expired while applying');
-      }
-      await (await profile.file).writeAsStringAtomically(content);
-    } finally {
-      await temp.safeDelete();
+    await _validateProfile(content, profile.ageSecretKey);
+    if (!directory.fresh(DateTime.now())) {
+      throw StateError('Photon service information expired while applying');
     }
+    _published = null;
+    await (await profile.file).writeAsStringAtomically(content);
     final latest =
         container.read(profilesProvider).getProfile(profile.id) ?? profile;
     container
@@ -216,7 +254,7 @@ final class PhotonProxyBridge {
       if (!applied) {
         throw StateError('Photon proxy profile could not be applied');
       }
-      await core.closeConnections();
+      await container.read(coreHandlerProvider).closeConnections();
     }
   }
 

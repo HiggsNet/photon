@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:fl_clash/common/common.dart';
 import 'package:fl_clash/l10n/l10n.dart';
+import 'package:fl_clash/pages/editor.dart';
 import 'package:fl_clash/providers/app.dart';
 import 'package:fl_clash/ui/icons/icons.dart';
 import 'package:fl_clash/widgets/widgets.dart';
@@ -31,6 +32,8 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
   _Page _page = _Page.overview;
   String _filter = '';
   bool _advanced = false;
+  String? _templateConfig;
+  Future<bool>? _hasTemplate;
 
   PhotonController get owner => widget.controller ?? photonController;
 
@@ -241,7 +244,7 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
                                 setState(() => _filter = value.toLowerCase()),
                           ),
                         if (_page == _Page.services && status != null)
-                          _proxyControls(l, status),
+                          _proxyControls(l, status, config, allowed),
                         if (status == null && config != null)
                           _DetailCard(
                             title: l.disconnected,
@@ -405,6 +408,7 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
       final ike = _map(entry['ike']);
       return _matches([
         _text(entry['peer']),
+        _outerFamily(entry),
         _text(ike['attempt_remote_endpoint']),
         _ikeState(l, ike),
       ]);
@@ -430,16 +434,13 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
         final ready = entry['tunnel_ready'] == true;
         final ike = _map(entry['ike']);
         final remote = _text(ike['attempt_remote_endpoint']);
-        final outer = remote.isEmpty
-            ? ''
-            : remote.startsWith('[')
-            ? 'IPv6'
-            : 'IPv4';
+        final outer = _outerFamily(entry);
         final ipv4 = _routeReady(entry, 'ipv4_route_ready');
         final ipv6 = _routeReady(entry, 'ipv6_route_ready');
         final colors = context.colorScheme;
         return _PhotonTableRow(
           title: peer,
+          id: (peer, outer),
           cells: [
             Text(peer),
             Text(
@@ -523,7 +524,12 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
     );
   }
 
-  Widget _proxyControls(AppLocalizations l, Map<String, dynamic> status) {
+  Widget _proxyControls(
+    AppLocalizations l,
+    Map<String, dynamic> status,
+    String? config,
+    bool allowed,
+  ) {
     final directory = owner.directory;
     final hasEndpoints = directory?.endpoints.isNotEmpty == true;
     final ready = status['tunnel_ready'] == true;
@@ -543,10 +549,150 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
           child: Text(l.photonApply),
         ),
         Text(l.photonMultiTip),
+        if (config != null && allowed) _templateControls(l, config),
         if (!ready) Text(l.photonProxyRequiresTunnel),
         if (ready && !owner.directoryFresh) Text(l.photonStale),
       ],
     );
+  }
+
+  Widget _templateControls(AppLocalizations l, String config) {
+    final file = photonProxyTemplateFile(config);
+    if (_templateConfig != config) {
+      _templateConfig = config;
+      _hasTemplate = file.exists();
+    }
+    return FutureBuilder<bool>(
+      key: ValueKey(config),
+      future: _hasTemplate,
+      builder: (context, snapshot) {
+        final hasTemplate = snapshot.data == true;
+        final editable =
+            !owner.busy &&
+            !owner.closed &&
+            snapshot.connectionState == ConnectionState.done;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          spacing: 4,
+          children: [
+            Text(
+              l.photonProxyTemplate,
+              style: AppTextStyle.headline.of(context),
+            ),
+            Text(
+              hasTemplate ? file.uri.pathSegments.last : l.photonBuiltinRules,
+            ),
+            Text(l.photonTemplateHint),
+            Wrap(
+              spacing: 8,
+              children: [
+                TextButton(
+                  onPressed: editable ? () => _importTemplate(config) : null,
+                  child: Text(l.photonImportTemplate),
+                ),
+                TextButton(
+                  onPressed: editable
+                      ? () => _editTemplate(config, file)
+                      : null,
+                  child: Text(l.photonEditTemplate),
+                ),
+                if (hasTemplate)
+                  TextButton(
+                    onPressed: editable ? () => _resetTemplate(config) : null,
+                    child: Text(l.photonBuiltinRules),
+                  ),
+              ],
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _resetTemplate(String config) async {
+    final l = context.appLocalizations;
+    final confirmed = await dialogs.showMessage(
+      title: l.photonBuiltinRules,
+      message: TextSpan(text: l.photonRemoveTemplate),
+      destructive: true,
+    );
+    if (confirmed == true && mounted) await _changeTemplate(config, null);
+  }
+
+  Future<void> _importTemplate(String config) async {
+    try {
+      final input = await choosePhotonConfig();
+      if (input == null || !mounted) return;
+      final source = await readPhotonProxyTemplate(File(input));
+      if (!mounted) return;
+      await _changeTemplate(config, source);
+    } catch (error) {
+      if (mounted) await dialogs.showAlert(message: TextSpan(text: '$error'));
+    }
+  }
+
+  Future<void> _editTemplate(String config, File file) async {
+    try {
+      final source = await file.exists()
+          ? await readPhotonProxyTemplate(file)
+          : 'rules:\n  - MATCH,Photon\n';
+      if (!mounted) return;
+      final l = context.appLocalizations;
+      await BaseNavigator.push<void>(
+        context,
+        EditorPage(
+          title: l.photonEditTemplate,
+          content: source,
+          onSave: (context, _, content) async {
+            final saved = await _changeTemplate(
+              config,
+              await content.readText(),
+            );
+            if (saved && context.mounted) Navigator.of(context).pop();
+          },
+          onPop: (context, _, content) async {
+            final answer = await dialogs.showSaveChanges(
+              title: l.photonEditTemplate,
+            );
+            if (answer == null || !context.mounted) return false;
+            return !answer ||
+                await _changeTemplate(config, await content.readText());
+          },
+        ),
+      );
+    } catch (error) {
+      if (mounted) await dialogs.showAlert(message: TextSpan(text: '$error'));
+    }
+  }
+
+  Future<bool> _changeTemplate(String config, String? source) async {
+    if (!mounted || owner.closed || owner.configPath != config) return false;
+    final file = photonProxyTemplateFile(config);
+    Object? problem;
+    var changed = false;
+    await owner.applyProxies(() async {
+      if (owner.closed || owner.configPath != config) return;
+      try {
+        if (source == null) {
+          if (await file.exists()) await file.delete();
+        } else {
+          await photonProxyBridge.saveTemplate(config, source);
+        }
+        changed = true;
+      } catch (error) {
+        problem = error;
+      }
+    });
+    if (!mounted) return changed;
+    if (problem != null) {
+      await dialogs.showAlert(message: TextSpan(text: '$problem'));
+      return false;
+    }
+    if (changed) {
+      setState(() => _hasTemplate = file.exists());
+      await owner.refresh();
+    }
+    return changed;
   }
 
   Widget _proxyTable(AppLocalizations l) {
@@ -618,10 +764,12 @@ class _PhotonTableRow {
   const _PhotonTableRow({
     required this.title,
     required this.cells,
+    this.id,
     this.details = const [],
   });
 
   final String title;
+  final Object? id;
   final List<Widget> cells;
   final List<(String, String)> details;
 }
@@ -712,7 +860,7 @@ class _PhotonTable extends StatelessWidget {
                   return ColoredBox(color: fill, child: content);
                 }
                 return PressSurface(
-                  key: ValueKey(row.title),
+                  key: ValueKey(row.id ?? row.title),
                   fill: fill,
                   shape: AppShape.none,
                   onPressed: () => showSheet<void>(
@@ -739,6 +887,18 @@ class _PhotonTable extends StatelessWidget {
       },
     );
   }
+}
+
+String _outerFamily(Map<String, dynamic> entry) {
+  switch (entry['outer_family']) {
+    case 'ipv4':
+      return 'IPv4';
+    case 'ipv6':
+      return 'IPv6';
+  }
+  final endpoint = _text(_map(entry['ike'])['attempt_remote_endpoint']);
+  if (endpoint.isEmpty) return '';
+  return endpoint.startsWith('[') ? 'IPv6' : 'IPv4';
 }
 
 String _ikeState(AppLocalizations l, Map<String, dynamic> ike) =>

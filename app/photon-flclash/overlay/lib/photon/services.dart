@@ -178,6 +178,40 @@ String _string(Map<String, dynamic> data, String key) {
   return value;
 }
 
+void validatePhotonProxyTemplate(Map<String, dynamic> template) {
+  final rules = template['rules'];
+  if (rules is! List ||
+      rules.isEmpty ||
+      rules.any((rule) => rule is! String || rule.trim().isEmpty)) {
+    throw const FormatException('The Photon proxy template needs rules');
+  }
+  for (final section in ['proxies', 'proxy-groups']) {
+    final items = template[section];
+    if (items == null) continue;
+    if (items is! List ||
+        items.any((item) => item is! Map || item['name'] is! String)) {
+      throw FormatException('Invalid Photon proxy template section: $section');
+    }
+    if (items.any((item) => _photonGroups.contains((item as Map)['name']))) {
+      throw const FormatException(
+        'The Photon proxy template uses a reserved name',
+      );
+    }
+  }
+  for (final section in ['proxy-providers', 'rule-providers', 'sub-rules']) {
+    final value = template[section];
+    if (value != null && value is! Map) {
+      throw FormatException('Invalid Photon proxy template section: $section');
+    }
+  }
+  if ((template['proxy-providers'] as Map?)?.containsKey(_photonProvider) ==
+      true) {
+    throw const FormatException(
+      'The Photon proxy template uses a reserved name',
+    );
+  }
+}
+
 Map<String, dynamic> photonProxyProfile({
   required PhotonDirectory directory,
   required DateTime now,
@@ -200,7 +234,6 @@ Map<String, dynamic> photonProxyProfile({
     for (final endpoint in endpoints)
       '${endpoint.address}/${endpoint.address.contains(':') ? 128 : 32}',
   };
-  final names = endpoints.map((endpoint) => endpoint.name).toList();
   final orderedExclusions = exclusions.toList()..sort();
   final rules = <String>[
     for (final prefix in orderedExclusions)
@@ -218,24 +251,41 @@ Map<String, dynamic> photonProxyProfile({
         'interface-name': adapter,
       },
   ];
+  return _renderPhotonProxyProfile(
+    proxies: proxies,
+    exclusions: orderedExclusions,
+    bypassDomains: directory.bypassDomains,
+    bypassRules: rules,
+    template: template,
+  );
+}
+
+/// Used only by Mihomo's validator when no signed service directory is live.
+Map<String, dynamic> photonProxyTemplatePreview(
+  Map<String, dynamic> template,
+) => _renderPhotonProxyProfile(
+  proxies: const [
+    {'name': 'Photon Offline', 'type': 'reject'},
+  ],
+  exclusions: const [],
+  bypassDomains: const [],
+  bypassRules: const [],
+  template: template,
+);
+
+Map<String, dynamic> _renderPhotonProxyProfile({
+  required List<Map<String, dynamic>> proxies,
+  required List<String> exclusions,
+  required List<String> bypassDomains,
+  required List<String> bypassRules,
+  required Map<String, dynamic>? template,
+}) {
+  final names = proxies.map((proxy) => proxy['name']).toList();
+  if (template != null) validatePhotonProxyTemplate(template);
   final templateProxies = template?['proxies'] as List? ?? const [];
   final templateGroups = template?['proxy-groups'] as List? ?? const [];
   final templateProviders = template?['proxy-providers'] as Map? ?? const {};
   final templateRules = template?['rules'] as List?;
-  if (template != null) {
-    if (templateRules == null || templateRules.isEmpty) {
-      throw const FormatException('The Photon proxy template needs rules');
-    }
-    if (templateProviders.containsKey(_photonProvider) ||
-        [
-          ...templateProxies,
-          ...templateGroups,
-        ].any((item) => _photonGroups.contains((item as Map)['name']))) {
-      throw const FormatException(
-        'The Photon proxy template uses a reserved name',
-      );
-    }
-  }
   final groupEndpoints = template == null
       ? {'proxies': names}
       : {
@@ -251,14 +301,14 @@ Map<String, dynamic> photonProxyProfile({
       'ipv6': true,
       'enhanced-mode': 'fake-ip',
       'fake-ip-filter-mode': 'blacklist',
-      'fake-ip-filter': directory.bypassDomains,
+      'fake-ip-filter': bypassDomains,
       'default-nameserver': ['223.5.5.5', '1.1.1.1'],
       'nameserver': [
         'https://doh.pub/dns-query',
         'https://dns.alidns.com/dns-query',
       ],
       'nameserver-policy': {
-        for (final domain in directory.bypassDomains)
+        for (final domain in bypassDomains)
           domain: [
             'https://223.5.5.5/dns-query#DIRECT',
             'https://1.1.1.1/dns-query#DIRECT',
@@ -269,7 +319,7 @@ Map<String, dynamic> photonProxyProfile({
       'enable': false,
       'auto-route': true,
       'auto-detect-interface': true,
-      'route-exclude-address': orderedExclusions,
+      'route-exclude-address': exclusions,
     },
     'proxies': template == null ? proxies : templateProxies,
     if (template != null)
@@ -318,7 +368,7 @@ Map<String, dynamic> photonProxyProfile({
       },
     ],
     'rules': [
-      ...rules,
+      ...bypassRules,
       ...(templateRules ?? ['MATCH,Photon']),
     ],
   };

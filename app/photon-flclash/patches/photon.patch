@@ -1,8 +1,8 @@
 diff --git a/arb/intl_en.arb b/arb/intl_en.arb
-index cbda0e3..0c3ca31 100644
+index cbda0e3..3917df7 100644
 --- a/arb/intl_en.arb
 +++ b/arb/intl_en.arb
-@@ -1076,5 +1076,76 @@
+@@ -1076,5 +1076,82 @@
    "fakeipFilterDesc": "These domains get real IPs instead of Fake-IPs. In whitelist mode, only they get Fake-IPs.",
    "fallbackFilterGeositeDesc": "Domains in these GeoSite categories are resolved by Fallback directly.",
    "fallbackFilterIpcidrDesc": "When Nameserver returns an IP in these ranges, the Fallback answer is used.",
@@ -49,6 +49,12 @@ index cbda0e3..0c3ca31 100644
 +  "photonUnauthorized": "Authorization invalid",
 +  "photonStale": "Service information expired. Refresh before using it.",
 +  "photonApply": "Switch to Photon profile",
++  "photonProxyTemplate": "Rules template",
++  "photonBuiltinRules": "Built-in rules",
++  "photonTemplateHint": "Use Photon, Photon Auto, or Photon Balance in your rules. Photon adds all available nodes automatically.",
++  "photonImportTemplate": "Import YAML template",
++  "photonEditTemplate": "Edit YAML template",
++  "photonRemoveTemplate": "Delete the custom template for this Photon configuration and use the built-in rules?",
 +  "photonMultiTip": "All available Photon nodes are added to a separate profile. You can switch back to your other profiles at any time.",
 +  "photonSearch": "Filter nodes, addresses or routes",
 +  "photonRekey": "Security association",
@@ -81,10 +87,10 @@ index cbda0e3..0c3ca31 100644
 +  "photonImportHint": "Import creates an identity database at the path in this configuration. That path must be unused."
  }
 diff --git a/arb/intl_es.arb b/arb/intl_es.arb
-index 417db6b..4ba5d0d 100644
+index 417db6b..f98f6e8 100644
 --- a/arb/intl_es.arb
 +++ b/arb/intl_es.arb
-@@ -1076,5 +1076,76 @@
+@@ -1076,5 +1076,82 @@
    "fakeipFilterDesc": "Estos dominios reciben su IP real en lugar de una Fake-IP. En modo whitelist, solo ellos reciben Fake-IP.",
    "fallbackFilterGeositeDesc": "Los dominios de estas categorías GeoSite se resuelven directamente con Fallback.",
    "fallbackFilterIpcidrDesc": "Si Nameserver devuelve una IP de estos rangos, se usa la respuesta de Fallback.",
@@ -131,6 +137,12 @@ index 417db6b..4ba5d0d 100644
 +  "photonUnauthorized": "Autorización no válida",
 +  "photonStale": "La información caducó. Actualiza antes de usarla.",
 +  "photonApply": "Cambiar al perfil Photon",
++  "photonProxyTemplate": "Plantilla de reglas",
++  "photonBuiltinRules": "Usar reglas integradas",
++  "photonTemplateHint": "Las reglas pueden usar Photon, Photon Auto o Photon Balance. Los nodos disponibles se añaden automáticamente.",
++  "photonImportTemplate": "Importar plantilla YAML",
++  "photonEditTemplate": "Editar plantilla YAML",
++  "photonRemoveTemplate": "¿Eliminar la plantilla de esta configuración de Photon y usar las reglas integradas?",
 +  "photonMultiTip": "Los nodos disponibles se añaden a un perfil Photon independiente. Puedes volver a tus otros perfiles en cualquier momento.",
 +  "photonSearch": "Filtrar nodos, direcciones o rutas",
 +  "photonRekey": "Asociación de seguridad",
@@ -163,10 +175,10 @@ index 417db6b..4ba5d0d 100644
 +  "photonImportHint": "La importación crea una base de identidad en la ruta de la configuración. La ruta debe estar libre."
  }
 diff --git a/arb/intl_fr.arb b/arb/intl_fr.arb
-index aa4e778..bbb962a 100644
+index aa4e778..a8781d8 100644
 --- a/arb/intl_fr.arb
 +++ b/arb/intl_fr.arb
-@@ -1076,5 +1076,76 @@
+@@ -1076,5 +1076,82 @@
    "fakeipFilterDesc": "Ces domaines reçoivent leur vraie IP au lieu d’une Fake-IP. En mode whitelist, eux seuls reçoivent une Fake-IP.",
    "fallbackFilterGeositeDesc": "Les domaines de ces catégories GeoSite sont résolus directement par Fallback.",
    "fallbackFilterIpcidrDesc": "Si Nameserver renvoie une IP de ces plages, la réponse de Fallback est utilisée.",
@@ -213,6 +225,12 @@ index aa4e778..bbb962a 100644
 +  "photonUnauthorized": "Autorisation invalide",
 +  "photonStale": "Les informations ont expiré. Actualisez-les.",
 +  "photonApply": "Basculer vers le profil Photon",
++  "photonProxyTemplate": "Modèle de règles",
++  "photonBuiltinRules": "Utiliser les règles intégrées",
++  "photonTemplateHint": "Les règles peuvent cibler Photon, Photon Auto ou Photon Balance. Les nœuds disponibles sont ajoutés automatiquement.",
++  "photonImportTemplate": "Importer un modèle YAML",
++  "photonEditTemplate": "Modifier le modèle YAML",
++  "photonRemoveTemplate": "Supprimer le modèle de cette configuration Photon et utiliser les règles intégrées ?",
 +  "photonMultiTip": "Les nœuds disponibles sont ajoutés à un profil Photon distinct. Vous pouvez revenir à vos autres profils à tout moment.",
 +  "photonSearch": "Filtrer les nœuds, adresses ou routes",
 +  "photonRekey": "Association de sécurité",
@@ -245,10 +263,10 @@ index aa4e778..bbb962a 100644
 +  "photonImportHint": "L’import crée une base d’identité à l’emplacement indiqué dans la configuration. Cet emplacement doit être libre."
  }
 diff --git a/arb/intl_ja.arb b/arb/intl_ja.arb
-index d6ff2b3..5caf87d 100644
+index d6ff2b3..f7632bc 100644
 --- a/arb/intl_ja.arb
 +++ b/arb/intl_ja.arb
-@@ -1076,5 +1076,76 @@
+@@ -1076,5 +1076,82 @@
    "fakeipFilterDesc": "これらのドメインには Fake-IP ではなく実際の IP を返します。whitelist モードでは、これらだけが Fake-IP を使います。",
    "fallbackFilterGeositeDesc": "これらの GeoSite カテゴリのドメインは、直接 Fallback で解決します。",
    "fallbackFilterIpcidrDesc": "Nameserver がこれらの範囲の IP を返したときは、Fallback の結果を使います。",
@@ -295,6 +313,12 @@ index d6ff2b3..5caf87d 100644
 +  "photonUnauthorized": "承認が無効",
 +  "photonStale": "サービス情報が期限切れです。更新してください。",
 +  "photonApply": "Photon プロファイルに切り替え",
++  "photonProxyTemplate": "ルールテンプレート",
++  "photonBuiltinRules": "組み込みルールを使う",
++  "photonTemplateHint": "ルールの宛先に Photon、Photon Auto、Photon Balance を指定できます。利用可能なノードは自動で追加されます。",
++  "photonImportTemplate": "YAML テンプレートをインポート",
++  "photonEditTemplate": "YAML テンプレートを編集",
++  "photonRemoveTemplate": "この Photon 設定のテンプレートを削除して組み込みルールを使用しますか？",
 +  "photonMultiTip": "利用可能なノードは専用の Photon プロファイルに追加されます。元のプロファイルにはいつでも戻せます。",
 +  "photonSearch": "ノード・アドレス・ルートを検索",
 +  "photonRekey": "セキュリティアソシエーション",
@@ -327,10 +351,10 @@ index d6ff2b3..5caf87d 100644
 +  "photonImportHint": "インポートすると、設定で指定したパスに ID データベースを作成します。未使用のパスを指定してください。"
  }
 diff --git a/arb/intl_ko.arb b/arb/intl_ko.arb
-index ead8d29..14eea0e 100644
+index ead8d29..2ebd9f1 100644
 --- a/arb/intl_ko.arb
 +++ b/arb/intl_ko.arb
-@@ -1076,5 +1076,76 @@
+@@ -1076,5 +1076,82 @@
    "fakeipFilterDesc": "이 도메인에는 Fake-IP 대신 실제 IP를 반환합니다. whitelist 모드에서는 이 도메인만 Fake-IP를 사용합니다.",
    "fallbackFilterGeositeDesc": "이 GeoSite 분류의 도메인은 바로 Fallback으로 확인합니다.",
    "fallbackFilterIpcidrDesc": "Nameserver가 이 범위의 IP를 반환하면 Fallback 결과를 사용합니다.",
@@ -377,6 +401,12 @@ index ead8d29..14eea0e 100644
 +  "photonUnauthorized": "승인 무효",
 +  "photonStale": "서비스 정보가 만료되었습니다. 새로 고침하세요.",
 +  "photonApply": "Photon 프로필로 전환",
++  "photonProxyTemplate": "규칙 템플릿",
++  "photonBuiltinRules": "기본 규칙 사용",
++  "photonTemplateHint": "규칙에서 Photon, Photon Auto 또는 Photon Balance를 사용할 수 있습니다. 사용 가능한 노드는 자동으로 추가됩니다.",
++  "photonImportTemplate": "YAML 템플릿 가져오기",
++  "photonEditTemplate": "YAML 템플릿 편집",
++  "photonRemoveTemplate": "이 Photon 구성의 사용자 템플릿을 삭제하고 기본 규칙을 사용할까요?",
 +  "photonMultiTip": "사용 가능한 노드는 별도의 Photon 프로필에 추가됩니다. 언제든지 다른 프로필로 돌아갈 수 있습니다.",
 +  "photonSearch": "노드, 주소 또는 경로 검색",
 +  "photonRekey": "보안 연결",
@@ -409,10 +439,10 @@ index ead8d29..14eea0e 100644
 +  "photonImportHint": "가져오면 설정의 경로에 ID 데이터베이스가 생성됩니다. 사용 중이지 않은 경로를 지정하세요."
  }
 diff --git a/arb/intl_ru.arb b/arb/intl_ru.arb
-index 58e77e7..4eb22e4 100644
+index 58e77e7..442cef8 100644
 --- a/arb/intl_ru.arb
 +++ b/arb/intl_ru.arb
-@@ -1076,5 +1076,76 @@
+@@ -1076,5 +1076,82 @@
    "fakeipFilterDesc": "Эти домены получают реальные IP вместо Fake-IP. В режиме whitelist Fake-IP получают только они.",
    "fallbackFilterGeositeDesc": "Домены из этих категорий GeoSite сразу разрешаются через Fallback.",
    "fallbackFilterIpcidrDesc": "Если Nameserver возвращает IP из этих диапазонов, используется ответ Fallback.",
@@ -459,6 +489,12 @@ index 58e77e7..4eb22e4 100644
 +  "photonUnauthorized": "Недействительная авторизация",
 +  "photonStale": "Данные устарели. Обновите их перед использованием.",
 +  "photonApply": "Перейти на профиль Photon",
++  "photonProxyTemplate": "Шаблон правил",
++  "photonBuiltinRules": "Использовать встроенные правила",
++  "photonTemplateHint": "В правилах можно указать Photon, Photon Auto или Photon Balance. Доступные узлы добавляются автоматически.",
++  "photonImportTemplate": "Импортировать шаблон YAML",
++  "photonEditTemplate": "Изменить шаблон YAML",
++  "photonRemoveTemplate": "Удалить шаблон этой конфигурации Photon и использовать встроенные правила?",
 +  "photonMultiTip": "Доступные узлы добавляются в отдельный профиль Photon. Вернуться к другим профилям можно в любой момент.",
 +  "photonSearch": "Поиск узлов, адресов и маршрутов",
 +  "photonRekey": "Ассоциация безопасности",
@@ -491,10 +527,10 @@ index 58e77e7..4eb22e4 100644
 +  "photonImportHint": "При импорте создаётся база идентификации по пути из конфигурации. Этот путь должен быть свободен."
  }
 diff --git a/arb/intl_zh_CN.arb b/arb/intl_zh_CN.arb
-index b44010c..3c5da17 100644
+index b44010c..2c0e8eb 100644
 --- a/arb/intl_zh_CN.arb
 +++ b/arb/intl_zh_CN.arb
-@@ -1076,5 +1076,76 @@
+@@ -1076,5 +1076,82 @@
    "fakeipFilterDesc": "这些域名不使用 Fake-IP，返回真实 IP；过滤模式为 whitelist 时则只有它们使用 Fake-IP。",
    "fallbackFilterGeositeDesc": "属于这些 GeoSite 分类的域名直接使用 Fallback 解析。",
    "fallbackFilterIpcidrDesc": "Nameserver 返回这些网段内的 IP 时，改用 Fallback 的结果。",
@@ -541,6 +577,12 @@ index b44010c..3c5da17 100644
 +  "photonUnauthorized": "授权失效",
 +  "photonStale": "服务信息已过期，刷新后方可使用。",
 +  "photonApply": "切换到 Photon 配置",
++  "photonProxyTemplate": "规则模板",
++  "photonBuiltinRules": "使用内置规则",
++  "photonTemplateHint": "规则可以指向 Photon、Photon Auto 或 Photon Balance。可用节点会自动加入。",
++  "photonImportTemplate": "导入 YAML 模板",
++  "photonEditTemplate": "编辑 YAML 模板",
++  "photonRemoveTemplate": "删除当前 Photon 配置的自定义模板，恢复内置规则？",
 +  "photonMultiTip": "所有可用节点会自动加入独立的 Photon 配置。可随时切回原来的配置。",
 +  "photonSearch": "搜索节点、地址或路由",
 +  "photonRekey": "安全关联",
