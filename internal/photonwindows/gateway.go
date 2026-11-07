@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
-	"net"
 	"net/netip"
 	"slices"
 	"time"
@@ -181,5 +180,5 @@ func gatewayContacts(ctx context.Context, config *Config, view corestate.View, p
 // PlanGateway resolves signed DNS advertisements within a single bounded budget.
 // Callers must run this outside the Gossip loop and discard stale completions.
 func PlanGateway(ctx context.Context, config *Config, view corestate.View, now time.Time) GatewayPlan {
-	return planGateway(ctx, config, view, now, net.DefaultResolver)
+	return planGateway(ctx, config, view, now, controlDNS(ctx))
 }

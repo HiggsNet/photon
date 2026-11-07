@@ -59,8 +59,9 @@ func NewDaemon(config *Config, logger *slog.Logger) *Daemon {
 }
 
 type gatewayPlanSample struct {
-	plan  GatewayPlan
-	store *corestate.Store
+	plan     GatewayPlan
+	store    *corestate.Store
+	underlay bool
 }
 
 // GatewayPlan returns a detached, freshly revalidated connection plan. It does
@@ -145,6 +146,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	defer func() { err = errors.Join(err, state.Close()) }()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	ctx = context.WithValue(ctx, outboundDNSKey{}, newControlDNS())
 	bootstrap, err := d.resolveBootstrap(ctx, config, listenAddr)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -188,6 +190,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		return fmt.Errorf("listen gossip UDP: %w", err)
 	}
 	defer packet.Close()
+	packet.configureOutboundRoutes(listenAddr.Addr(), config.Overlay.SplitRoutes)
 	transport, err := gossip.NewTransport(gossip.Config{PeerID: string(config.ManagedZone), KnownPeers: bootstrap}, packet)
 	if err != nil {
 		return err
@@ -196,7 +199,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		return err
 	}
 	executor := corehost.NewGossipObjectPullExecutor(corehost.GossipObjectPullExecutorConfig{
-		Client: objectPullClient{}, Discovery: func() corehost.GossipDiscoveryInput { return driver.GossipDiscoveryInput(nil) },
+		Client: objectPullClient{routes: packet.outboundRoutes}, Discovery: func() corehost.GossipDiscoveryInput { return driver.GossipDiscoveryInput(nil) },
 	})
 	if err := driver.StartGossipObjectPullWorkers(ctx, executor, 0, 0); err != nil {
 		return err
@@ -207,9 +210,9 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	if err := driver.StartGossipTransport(ctx, transport, func(err error) { logger.Warn("gossip_receive_failed", "error", err) }); err != nil {
 		return err
 	}
-	networkTargets := networkRouteTargets{splitRoutes: config.Overlay.SplitRoutes}
+	networkTargets := networkRouteTargets{splitRoutes: config.Overlay.SplitRoutes, changed: make(chan struct{}, 1)}
 	networkTargets.update(GatewayPlan{}, bootstrap)
-	networkChanges, stopNetworkChanges, err := watchNetworkChangesForTargets(ctx, networkTargets.load)
+	networkChanges, stopNetworkChanges, err := watchNetworkChangesForTargets(ctx, &networkTargets, packet.outboundRoutes)
 	if err != nil {
 		return fmt.Errorf("watch network changes: %w", err)
 	}
@@ -409,7 +412,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		case <-ctx.Done():
 			return nil
 		case result := <-d.plans:
-			result <- gatewayPlanSample{lastPlan, state.Store()}
+			result <- gatewayPlanSample{plan: lastPlan, store: state.Store(), underlay: packet.outboundRoutes != nil}
 		case sampled := <-observationSnapshots:
 			mesh.stateMu.Lock()
 			snapshot := mesh.observationSnapshot(lastPlan)
@@ -496,7 +499,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				logger.Info("gateway_plan_changed", "plan", result.plan, "tunnel_ready", false)
 			}
 			lastPlan = result.plan
-			networkTargets.addresses.Store(&result.paths)
+			networkTargets.publish(result.paths)
 			mesh.stateMu.Lock()
 			mesh.update(lastPlan)
 			observeReady()
@@ -516,6 +519,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			}
 			if ctx.Err() == nil {
 				logger.Info("power_resumed")
+				packet.outboundRoutes.invalidate()
 				if err := roam("system_resumed"); err != nil {
 					return err
 				}
@@ -556,10 +560,12 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	}
 }
 
-type objectPullClient struct{}
+type objectPullClient struct{ routes *outboundRouteResolver }
 
-func (objectPullClient) Exchange(ctx context.Context, addr string, request *gossip.ObjectPullRequest) (*gossip.ObjectPullResponse, error) {
-	conn, err := (&net.Dialer{Timeout: 1500 * time.Millisecond}).DialContext(ctx, "tcp", addr)
+func (c objectPullClient) Exchange(ctx context.Context, addr string, request *gossip.ObjectPullRequest) (*gossip.ObjectPullResponse, error) {
+	dialCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	conn, err := c.routes.dialObjectPull(dialCtx, net.Dialer{}, addr)
+	cancel()
 	if err != nil {
 		return nil, err
 	}

@@ -90,7 +90,7 @@ type preparedIKEStart struct {
 	peer, nattPeer netip.AddrPort
 }
 
-func prepareIKEStart(plan GatewayPlan, local netip.AddrPort) (preparedIKEStart, error) {
+func prepareIKEStart(plan GatewayPlan, local netip.AddrPort, socket *packetSockets) (preparedIKEStart, error) {
 	var start preparedIKEStart
 	if plan.Selected == nil || plan.Rejected != "" {
 		return start, errors.New("tunnel: no current gateway")
@@ -102,7 +102,7 @@ func prepareIKEStart(plan GatewayPlan, local netip.AddrPort) (preparedIKEStart, 
 	}
 	start.peer = netip.AddrPortFrom(addr.Unmap(), contact.IKEPort)
 	start.nattPeer = netip.AddrPortFrom(addr.Unmap(), contact.NATTPort)
-	local, err = outboundUDPLocal(local, start.peer)
+	local, err = socket.outerLocal(local, start.peer)
 	if err != nil {
 		return start, err
 	}
@@ -124,7 +124,7 @@ func outboundUDPLocal(local, remote netip.AddrPort) (netip.AddrPort, error) {
 }
 
 func (t *gatewayTunnel) start(plan GatewayPlan, localID string, private ed25519.PrivateKey, now time.Time) error {
-	start, err := prepareIKEStart(plan, t.socket.LocalAddr().AddrPort())
+	start, err := prepareIKEStart(plan, t.socket.LocalAddr().AddrPort(), t.socket)
 	return t.installIKEStart(plan, localID, private, start, now, err)
 }
 

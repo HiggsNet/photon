@@ -19,3 +19,7 @@ func (w *meshPacketWriter) writeTunnel(generation uint64, packet []byte, peer ne
 func (w *meshPacketWriter) writeTunnelSegments(generation uint64, peer netip.AddrPort, packet []byte, size int, traces []fixturePacketTiming) (bool, error) {
 	return w.socket.writeTunnelSegments(generation, peer, packet, size, traces)
 }
+
+func (s *packetSockets) writeTunnel(generation uint64, packet []byte, peer netip.AddrPort, timing *fixturePacketTiming) error {
+	return s.writeTunnelDefault(generation, packet, peer, timing)
+}

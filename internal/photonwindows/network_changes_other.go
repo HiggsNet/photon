@@ -7,7 +7,7 @@ import (
 	"net/netip"
 )
 
-func watchNetworkChangesForTargets(ctx context.Context, _ func() []netip.Addr) (<-chan struct{}, func() error, error) {
+func watchNetworkChangesForTargets(ctx context.Context, _ *networkRouteTargets, _ *outboundRouteResolver) (<-chan struct{}, func() error, error) {
 	return watchNetworkChanges(ctx)
 }
 
@@ -19,3 +19,8 @@ func watchNetworkChanges(ctx context.Context) (<-chan struct{}, func() error, er
 	}
 	return nil, func() error { return nil }, nil
 }
+
+type outboundRouteResolver struct{}
+
+func (*packetSockets) configureOutboundRoutes(netip.Addr, []netip.Prefix) {}
+func (*outboundRouteResolver) invalidate()                                {}

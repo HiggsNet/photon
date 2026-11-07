@@ -93,7 +93,7 @@ func (m *meshRuntime) prepareIKEAttempt(ctx context.Context, request *meshIKESta
 	}
 	if result.err == nil {
 		result.deadline = packetPolicyDeadlineWithMonotonic(view, now, &result.monotonic)
-		result.start, result.err = prepareIKEStart(result.plan, request.endpoint)
+		result.start, result.err = prepareIKEStart(result.plan, request.endpoint, m.socket)
 	}
 	return result
 }

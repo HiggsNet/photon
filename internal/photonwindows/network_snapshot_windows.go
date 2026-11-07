@@ -62,7 +62,7 @@ func underlaySnapshot() ([32]byte, error) {
 		// MIB_IF_TABLE2 can briefly retain an adapter after its IP interfaces
 		// have been deleted. Such tombstones cannot be an IP underlay and must
 		// not resurrect our GUID after Close unregisters its ownership.
-		if ownedAdapterGUIDs.refs[row.InterfaceGuid] != 0 || !ipLUIDs[row.InterfaceLuid] {
+		if excludedOutboundAdapter(row) || !ipLUIDs[row.InterfaceLuid] {
 			continue
 		}
 		underlay[row.InterfaceLuid] = true

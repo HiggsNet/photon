@@ -21,7 +21,8 @@ type packetSockets struct {
 	// holds writeMu then mu. Either lock protects reads of those fields. The
 	// Windows overlapped path holds writeMu only through submission, and the
 	// reader uses mu independently. Reader metadata also uses mu.
-	udpSegmentationDisabled atomic.Bool // Capability is scoped to the current socket.
+	udpSegmentationDisabled atomic.Bool            // Capability is scoped to the current socket.
+	outboundRoutes          *outboundRouteResolver // Configured before starting the daemon workers.
 	writeMu                 sync.Mutex
 	mu                      sync.Mutex
 	udp                     *net.UDPConn
@@ -61,6 +62,7 @@ func openPacketSockets(ctx context.Context, address string) (*packetSockets, err
 // Holding writeMu serializes rebind with writes and close; mu protects the
 // replacement. Bind performs only numeric local I/O under a deadline.
 func (s *packetSockets) Rebind(ctx context.Context) error {
+	s.outboundRoutes.invalidate()
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	s.writeMu.Lock()
@@ -334,7 +336,7 @@ func (s *packetSockets) WriteTunnel(generation uint64, packet []byte, peer netip
 
 // Only a synchronous sampled business completion lends its scalar trace.
 // Ordinary and control callers keep WriteTunnel's unchanged public contract.
-func (s *packetSockets) writeTunnel(generation uint64, packet []byte, peer netip.AddrPort, timing *fixturePacketTiming) error {
+func (s *packetSockets) writeTunnelDefault(generation uint64, packet []byte, peer netip.AddrPort, timing *fixturePacketTiming) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	timing.MarkUDPWriterAcquired()

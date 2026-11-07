@@ -23,7 +23,7 @@ type udpControlWrite struct {
 	overlapped windows.Overlapped
 	address    windows.RawSockaddrAny
 	buffer     windows.WSABuf
-	control    udpSegmentControl
+	control    [8]uint64
 	message    windows.WSAMsg
 	conn       *net.UDPConn // Identifies the immutable family of this handle.
 	ipv4       bool
@@ -100,6 +100,10 @@ func (t udpWriteTiming) mark(mark func(*fixturePacketTiming)) {
 // native submission. A pending write keeps its descriptor and buffers pinned
 // without holding the lifecycle gate. Retirement cancels it by generation.
 func (s *packetSockets) submitUDPWrite(op *udpControlWrite, packet []byte, peer netip.AddrPort, scope uint32, generation uint64, segmentSize int, timing udpWriteTiming) (int, bool, error) {
+	path, err := s.outboundRoutes.packetPath(peer.Addr(), generation)
+	if err != nil {
+		return 0, true, err
+	}
 	op.generation = generation
 	op.done = false
 	// The low bit keeps completion out of the Go runtime's completion port
@@ -148,7 +152,7 @@ func (s *packetSockets) submitUDPWrite(op *udpControlWrite, packet []byte, peer 
 			return
 		}
 		timing.mark((*fixturePacketTiming).MarkUDPDeadlineDone)
-		err = op.send(size, segmentSize)
+		err = op.send(size, segmentSize, path)
 		pending := errors.Is(err, windows.ERROR_IO_PENDING)
 		if pending {
 			if s.controlWrites == nil {
@@ -196,19 +200,48 @@ func (s *packetSockets) submitUDPWrite(op *udpControlWrite, packet []byte, peer 
 	return sent, true, err
 }
 
-func (op *udpControlWrite) send(addressSize int32, segmentSize int) error {
-	if segmentSize == 0 {
+func (op *udpControlWrite) send(addressSize int32, segmentSize int, path outboundRoute) error {
+	if segmentSize == 0 && path.index == 0 {
 		return windows.WSASendTo(op.handle, &op.buffer, 1, nil, 0, &op.address, addressSize, &op.overlapped, nil)
 	}
-	op.control = udpSegmentOptions(segmentSize)
+	controlLength := op.setControl(path, segmentSize)
 	op.message = windows.WSAMsg{
 		Name:        (*syscall.RawSockaddrAny)(unsafe.Pointer(&op.address)),
 		Namelen:     addressSize,
 		Buffers:     &op.buffer,
 		BufferCount: 1,
-		Control:     windows.WSABuf{Len: uint32(unsafe.Sizeof(op.control)), Buf: (*byte)(unsafe.Pointer(&op.control))},
+		Control:     windows.WSABuf{Len: controlLength, Buf: (*byte)(unsafe.Pointer(&op.control))},
 	}
 	return windows.WSASendMsg(op.handle, &op.message, 0, nil, &op.overlapped, nil)
+}
+
+func (op *udpControlWrite) setControl(path outboundRoute, segmentSize int) uint32 {
+	// Each Windows control message starts on a pointer-sized boundary.
+	const headerSize = unsafe.Sizeof(windows.WSACMSGHDR{})
+	const alignment = unsafe.Sizeof(uintptr(0))
+	clear(op.control[:])
+	base := unsafe.Pointer(&op.control)
+	var offset uintptr
+	if path.index != 0 {
+		header := (*windows.WSACMSGHDR)(base)
+		data := unsafe.Add(base, headerSize)
+		// Even on a dual-stack socket, a mapped IPv4 destination uses IP_PKTINFO.
+		if path.source.Is4() {
+			info := (*windows.IN_PKTINFO)(data)
+			*info = windows.IN_PKTINFO{Addr: path.source.As4(), Ifindex: path.index}
+			*header = windows.WSACMSGHDR{Len: headerSize + unsafe.Sizeof(*info), Level: windows.IPPROTO_IP, Type: windows.IP_PKTINFO}
+		} else {
+			info := (*windows.IN6_PKTINFO)(data)
+			*info = windows.IN6_PKTINFO{Addr: path.source.As16(), Ifindex: path.index}
+			*header = windows.WSACMSGHDR{Len: headerSize + unsafe.Sizeof(*info), Level: windows.IPPROTO_IPV6, Type: windows.IPV6_PKTINFO}
+		}
+		offset = (header.Len + alignment - 1) &^ (alignment - 1)
+	}
+	if segmentSize != 0 {
+		*(*udpSegmentControl)(unsafe.Add(base, offset)) = udpSegmentOptions(segmentSize)
+		offset += unsafe.Sizeof(udpSegmentControl{})
+	}
+	return uint32(offset)
 }
 
 func (op *udpControlWrite) wait() (int, error) {

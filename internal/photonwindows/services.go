@@ -28,6 +28,8 @@ type ServiceDirectory struct {
 	ValidUntil      time.Time      `json:"valid_until"`
 	Services        []ServiceEntry `json:"services"`
 	AdapterName     string         `json:"adapter_name"`
+	UnderlayRouting bool           `json:"underlay_routing,omitempty"`
+	OverlayPrefixes []netip.Prefix `json:"overlay_prefixes,omitempty"`
 	BypassPrefixes  []netip.Prefix `json:"bypass_prefixes"`
 	BypassDomains   []string       `json:"bypass_domains"`
 }
@@ -68,6 +70,7 @@ func (d *Daemon) Services(ctx context.Context) (ServiceDirectory, error) {
 		if err != nil {
 			return ServiceDirectory{}, err
 		}
+		directory.UnderlayRouting = sample.underlay
 		for _, candidate := range sample.plan.Candidates {
 			for _, contact := range candidate.Contacts {
 				if host := proxyBypassDomain(contact.Host); host != "" {
@@ -101,6 +104,7 @@ func buildServiceDirectory(ctx context.Context, config *Config, view corestate.V
 	root := sha256.Sum256(config.TrustedRootPublicKey)
 	out := ServiceDirectory{InstanceID: instanceID, RootFingerprint: hex.EncodeToString(root[:]), ManagedZone: config.ManagedZone, Revision: uint64(view.Revision), ObservedAt: now, ValidUntil: now.Add(5 * time.Second), Services: []ServiceEntry{}}
 	out.AdapterName = config.Wintun.AdapterName
+	out.OverlayPrefixes = slices.Clone(config.Overlay.SplitRoutes)
 	out.BypassPrefixes = slices.Clone(config.Overlay.SplitRoutes)
 	for _, address := range gossipRouteTargets(view, now) {
 		out.BypassPrefixes = append(out.BypassPrefixes, netip.PrefixFrom(address, address.BitLen()))

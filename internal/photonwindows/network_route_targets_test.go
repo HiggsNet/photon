@@ -48,3 +48,16 @@ func TestOutboundPathsChangedIgnoresTargetChurn(t *testing.T) {
 		t.Fatal("loss of a retained path was ignored")
 	}
 }
+
+func TestOutboundRoutePrefersSpecificityThenCombinedMetric(t *testing.T) {
+	defaultRoute := outboundRoute{index: 1, luid: 10, prefixBits: 0, metric: 5}
+	specific := outboundRoute{index: 2, luid: 20, prefixBits: 24, metric: 500}
+	faster := outboundRoute{index: 3, luid: 30, prefixBits: 24, metric: 450}
+	if !specific.precedes(defaultRoute) || !faster.precedes(specific) || defaultRoute.precedes(specific) {
+		t.Fatal("longest prefix must win before the combined metric")
+	}
+	faster.metric = specific.metric
+	if !specific.precedes(faster) || faster.precedes(specific) {
+		t.Fatal("equal routes need a stable tie-break")
+	}
+}

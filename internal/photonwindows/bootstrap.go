@@ -12,7 +12,7 @@ import (
 // The whole list shares a one-second budget so slow DNS cannot hold up the
 // gateway planner or consume the next periodic refresh interval.
 func resolveGossipBootstrap(ctx context.Context, config *Config, listen netip.AddrPort) (map[string]*net.UDPAddr, error) {
-	return resolveGossipBootstrapWith(ctx, config, listen, net.DefaultResolver)
+	return resolveGossipBootstrapWith(ctx, config, listen, controlDNS(ctx))
 }
 
 type bootstrapResolver interface {

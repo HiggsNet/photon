@@ -40,31 +40,32 @@ var networkChangeCallback = windows.NewCallback(func(token *byte, _ uintptr, kin
 func watchNetworkChanges(ctx context.Context) (<-chan struct{}, func() error, error) {
 	return watchNetworkSnapshot(ctx, underlaySnapshot, func(previous, current [32]byte) bool {
 		return previous != current
-	})
+	}, nil)
 }
 
-func watchNetworkChangesForTargets(ctx context.Context, targets func() []netip.Addr) (<-chan struct{}, func() error, error) {
+func watchNetworkChangesForTargets(ctx context.Context, targets *networkRouteTargets, resolver *outboundRouteResolver) (<-chan struct{}, func() error, error) {
 	type snapshot struct {
 		underlay [32]byte
 		paths    map[netip.Addr]string
 	}
 	return watchNetworkSnapshot(ctx, func() (snapshot, error) {
-		addresses := targets()
+		resolver.invalidate()
+		addresses := targets.load()
 		if len(addresses) == 0 {
 			value, err := underlaySnapshot()
 			return snapshot{underlay: value}, err
 		}
-		value, err := outboundRouteSnapshot(addresses)
+		value, err := outboundRouteSnapshot(addresses, resolver.source)
 		return snapshot{paths: value}, err
 	}, func(previous, current snapshot) bool {
 		if previous.paths == nil && current.paths == nil {
 			return previous.underlay != current.underlay
 		}
 		return outboundPathsChanged(previous.paths, current.paths)
-	})
+	}, targets.changed)
 }
 
-func watchNetworkSnapshot[T any](ctx context.Context, snapshot func() (T, error), pathChanged func(T, T) bool) (<-chan struct{}, func() error, error) {
+func watchNetworkSnapshot[T any](ctx context.Context, snapshot func() (T, error), pathChanged func(T, T) bool, targetChanges <-chan struct{}) (<-chan struct{}, func() error, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
@@ -118,6 +119,7 @@ func watchNetworkSnapshot[T any](ctx context.Context, snapshot func() (T, error)
 			case <-observerCtx.Done():
 				return
 			case <-subscription.raw:
+			case <-targetChanges:
 			}
 			// Route installation can publish an incomplete path before the rest
 			// of the same update reaches IP Helper.
@@ -130,6 +132,10 @@ func watchNetworkSnapshot[T any](ctx context.Context, snapshot func() (T, error)
 			}
 			select {
 			case <-subscription.raw:
+			default:
+			}
+			select {
+			case <-targetChanges:
 			default:
 			}
 			changed := subscription.initial.Swap(false)

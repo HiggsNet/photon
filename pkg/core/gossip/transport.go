@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"net"
+	"net/netip"
 	"sort"
 	"strings"
 	"sync"
@@ -836,11 +837,11 @@ func (t *Transport) LastSendAddr(peerID string) *net.UDPAddr {
 	if addrStr == "" {
 		return nil
 	}
-	addr, err := net.ResolveUDPAddr("udp", addrStr)
+	addr, err := netip.ParseAddrPort(addrStr)
 	if err != nil {
 		return nil
 	}
-	return addr
+	return net.UDPAddrFromAddrPort(addr)
 }
 
 func (t *Transport) now() time.Time {

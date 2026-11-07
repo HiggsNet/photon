@@ -48,3 +48,9 @@ func (w *meshPacketWriter) write(generation uint64, peer netip.AddrPort, packet 
 	_, submitted, err := w.socket.submitUDPWrite(w.op, packet, peer, scope, generation, size, timing)
 	return submitted, err
 }
+
+func (s *packetSockets) writeTunnel(generation uint64, packet []byte, peer netip.AddrPort, timing *fixturePacketTiming) error {
+	writer := s.newMeshPacketWriter()
+	defer writer.close()
+	return writer.writeTunnel(generation, packet, peer, timing)
+}

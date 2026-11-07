@@ -28,6 +28,7 @@ type ikeTimerRequest struct {
 	spi           uint32
 	child         ike.ChildExchangeConfig
 	local, remote netip.AddrPort
+	socket        *packetSockets
 	mobikeEpoch   uint64
 }
 
@@ -61,6 +62,7 @@ func (t *gatewayTunnel) dueIKERequest(now time.Time) ikeTimerRequest {
 	}
 	if request.kind == ikeTimerMOBIKEProbe || request.kind == ikeTimerMOBIKEUpdate {
 		request.local, request.remote = t.socket.LocalAddr().AddrPort(), t.peer
+		request.socket = t.socket
 	}
 	return request
 }
@@ -82,7 +84,7 @@ func prepareIKETimer(request ikeTimerRequest) ([][]byte, error) {
 		_, err = session.InformationalRequest()
 	case ikeTimerMOBIKEProbe, ikeTimerMOBIKEUpdate:
 		var local netip.AddrPort
-		local, err = outboundUDPLocal(request.local, request.remote)
+		local, err = request.socket.outerLocal(request.local, request.remote)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", errMOBIKEPathUnavailable, err)
 		}

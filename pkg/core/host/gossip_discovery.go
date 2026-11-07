@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/netip"
 	"sort"
 	"strings"
 	"time"
@@ -495,22 +496,23 @@ func observedCheckpointPaths(peer corestate.PeerCheckpoint, now time.Time) ([]go
 	if !discoveryObservedActive(peer, now) {
 		return nil, false, false
 	}
-	addr, err := net.ResolveUDPAddr("udp", peer.ObservedEndpoint)
+	endpoint, err := netip.ParseAddrPort(peer.ObservedEndpoint)
 	if err != nil {
 		return nil, false, false
 	}
+	addr := net.UDPAddrFromAddrPort(endpoint)
 	paths := []gossip.ObservedPath{{Addr: addr, Until: time.Unix(peer.ObservedUntilUnix, 0)}}
 	seen := map[string]bool{peer.ObservedEndpoint: true}
 	for _, entry := range peer.ObservedGraceEndpoints {
 		if entry.Endpoint == "" || seen[entry.Endpoint] || entry.UntilUnix == 0 || !now.Before(time.Unix(entry.UntilUnix, 0)) {
 			continue
 		}
-		grace, err := net.ResolveUDPAddr("udp", entry.Endpoint)
+		grace, err := netip.ParseAddrPort(entry.Endpoint)
 		if err != nil {
 			continue
 		}
 		seen[entry.Endpoint] = true
-		paths = append(paths, gossip.ObservedPath{Addr: grace, Until: time.Unix(entry.UntilUnix, 0)})
+		paths = append(paths, gossip.ObservedPath{Addr: net.UDPAddrFromAddrPort(grace), Until: time.Unix(entry.UntilUnix, 0)})
 	}
 	prefer := peer.LastFailure != nil || peer.DiscoveredEndpoint == "" || discoveryAddressPrivate(peer.DiscoveredEndpoint)
 	return paths, prefer, true
@@ -665,11 +667,11 @@ func recentDiscoveryAddresses(out []*net.UDPAddr, peer corestate.PeerCheckpoint,
 	if now.After(time.Unix(peer.LastSyncUnix, 0).Add(grace)) {
 		return out
 	}
-	addr, err := net.ResolveUDPAddr("udp", peer.DiscoveredEndpoint)
+	addr, err := netip.ParseAddrPort(peer.DiscoveredEndpoint)
 	if err != nil {
 		return out
 	}
-	return appendDiscoveryAddress(out, addr)
+	return appendDiscoveryAddress(out, net.UDPAddrFromAddrPort(addr))
 }
 
 func appendDiscoveryAddress(out []*net.UDPAddr, addr *net.UDPAddr) []*net.UDPAddr {
