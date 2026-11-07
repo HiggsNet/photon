@@ -14,6 +14,8 @@ final class PhotonDirectory {
     required this.validUntil,
     required this.services,
     required this.adapterName,
+    required this.underlayRouting,
+    required this.overlayPrefixes,
     required this.bypassPrefixes,
     required this.bypassDomains,
   });
@@ -55,6 +57,10 @@ final class PhotonDirectory {
       validUntil: until,
       services: List.unmodifiable(entries),
       adapterName: data['adapter_name'] as String? ?? '',
+      underlayRouting: data['underlay_routing'] == true,
+      overlayPrefixes: List<String>.from(
+        data['overlay_prefixes'] as List? ?? [],
+      ),
       bypassPrefixes: List<String>.from(data['bypass_prefixes'] as List? ?? []),
       bypassDomains: List<String>.from(data['bypass_domains'] as List? ?? []),
     );
@@ -68,6 +74,8 @@ final class PhotonDirectory {
   final DateTime validUntil;
   final List<PhotonService> services;
   final String adapterName;
+  final bool underlayRouting;
+  final List<String> overlayPrefixes;
   final List<String> bypassPrefixes;
   final List<String> bypassDomains;
 
@@ -229,7 +237,9 @@ Map<String, dynamic> photonProxyProfile({
     throw StateError('No authorized Photon proxy endpoints are available');
   }
   final exclusions = <String>{
-    ...directory.bypassPrefixes,
+    ...directory.underlayRouting
+        ? directory.overlayPrefixes
+        : directory.bypassPrefixes,
     ...splitRoutes,
     for (final endpoint in endpoints)
       '${endpoint.address}/${endpoint.address.contains(':') ? 128 : 32}',
@@ -254,7 +264,9 @@ Map<String, dynamic> photonProxyProfile({
   return _renderPhotonProxyProfile(
     proxies: proxies,
     exclusions: orderedExclusions,
-    bypassDomains: directory.bypassDomains,
+    bypassDomains: directory.underlayRouting
+        ? const []
+        : directory.bypassDomains,
     bypassRules: rules,
     template: template,
   );

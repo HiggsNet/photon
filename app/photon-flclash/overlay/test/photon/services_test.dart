@@ -61,6 +61,39 @@ class MemoryPhotonPreferences implements PhotonPreferences {
 }
 
 void main() {
+  test(
+    'a gateway IP or hostname change leaves the socket-routed profile stable',
+    () {
+      final now = DateTime.now();
+      Map<String, dynamic> profile(String gateway, String host) {
+        final directory = PhotonDirectory.fromJson({
+          ...directoryFixture(now: now),
+          'underlay_routing': true,
+          'overlay_prefixes': ['fd42::/16'],
+          'bypass_prefixes': [gateway, 'fd42::/16'],
+          'bypass_domains': [host],
+        });
+        return photonProxyProfile(
+          directory: directory,
+          now: now,
+          splitRoutes: [],
+          adapter: directory.adapterName,
+          backendPath: 'backend',
+        );
+      }
+
+      final before = profile('192.0.2.1/32', 'gateway.example');
+      final after = profile('2001:db8::2/128', 'replacement.example');
+      expect(after, before);
+      expect(
+        (after['tun'] as Map)['route-exclude-address'],
+        contains('fd42::/16'),
+      );
+      expect(encodePhotonProfile(after), isNot(contains('2001:db8::2')));
+      expect((after['dns'] as Map)['fake-ip-filter'], isEmpty);
+    },
+  );
+
   test('a user policy keeps its rules and can use all Photon endpoints', () {
     final directory = PhotonDirectory.fromJson(directoryFixture());
     final template = Map<String, dynamic>.from(
