@@ -155,6 +155,7 @@ type guiResult struct {
 	LogErr       error
 }
 type desktopWindow struct {
+	proxy                      *desktopProxyWindow
 	appearance                 *guiAppearance
 	hwnd, font, menu, icon     uintptr
 	controls                   map[int]uintptr
@@ -265,6 +266,12 @@ func runDesktop(options desktopOptions) (err error) {
 				dialog = window.diagnostics
 			}
 		}
+		if window.proxy != nil && window.proxy.hwnd != 0 {
+			root, _, _ := guiUser32.NewProc("GetAncestor").Call(message.Window, 2)
+			if root == window.proxy.hwnd {
+				dialog = root
+			}
+		}
 		handled, _, _ := guiIsDialogMessage.Call(dialog, uintptr(unsafe.Pointer(&message)))
 		if handled == 0 {
 			guiTranslateMessage.Call(uintptr(unsafe.Pointer(&message)))
@@ -281,7 +288,7 @@ func newDesktopWindow(backend *desktopBackend) (_ *desktopWindow, err error) {
 	icon, _, _ := guiLoadIcon.Call(0, 32512) // Shared IDI_APPLICATION; do not destroy.
 	guiRegisterOnce.Do(func() {
 		cursor, _, _ := guiLoadCursor.Call(0, 32512)
-		for _, name := range []string{"PhotonWindowsDesktop", "PhotonWindowsSettings", "PhotonWindowsDiagnostics"} {
+		for _, name := range []string{"PhotonWindowsDesktop", "PhotonWindowsSettings", "PhotonWindowsDiagnostics", "PhotonWindowsProxy"} {
 			class := guiWindowClass{Style: 8, WindowProc: guiWindowProc, Instance: instance, Icon: icon, SmallIcon: icon, Cursor: cursor, Background: 16, ClassName: guiUTF16(name)}
 			class.Size = uint32(unsafe.Sizeof(class))
 			atom, _, e := guiRegisterClass.Call(uintptr(unsafe.Pointer(&class)))
@@ -329,7 +336,7 @@ func newDesktopWindow(backend *desktopBackend) (_ *desktopWindow, err error) {
 	for _, item := range []struct {
 		id   int
 		text string
-	}{{guiOpenID, "打开 Photon"}, {guiTrayStartID, "启动连接"}, {guiTrayStopID, "停止连接"}, {guiExitID, "停止连接并退出 Photon"}} {
+	}{{guiOpenID, "打开 Photon"}, {guiTrayStartID, "启动连接"}, {guiTrayStopID, "停止连接"}, {guiProxyOpenID, "代理管理…"}, {guiExitID, "停止连接并退出 Photon"}} {
 		ok, _, e := guiAppendMenu.Call(w.menu, 0, uintptr(item.id), uintptr(unsafe.Pointer(guiUTF16(item.text))))
 		if ok == 0 {
 			return nil, guiCallError("AppendMenu", e)
@@ -411,7 +418,7 @@ func (w *desktopWindow) dispose() error {
 	w.worker.Wait()
 	// Also cover GetMessage failure or unexpected window destruction. Normal
 	// Quit already joined the runtime on the worker before reaching disposal.
-	cleanupErr := w.backend.Close()
+	cleanupErr := errors.Join(w.closeProxy(), w.backend.Close())
 	if w.diagnostics != 0 {
 		guiDestroyWindow.Call(w.diagnostics)
 	}
@@ -451,6 +458,9 @@ func desktopWindowProc(hwnd uintptr, message uint32, wp, lp uintptr) uintptr {
 		}
 		if hwnd == w.diagnostics {
 			return w.diagnosticsWindowProc(hwnd, message, wp, lp)
+		}
+		if w.proxy != nil && hwnd == w.proxy.hwnd {
+			return w.proxyWindowProc(hwnd, message, wp, lp)
 		}
 		if message == w.taskbarCreated && w.taskbarCreated != 0 {
 			w.tray = false
@@ -506,6 +516,7 @@ func desktopWindowProc(hwnd uintptr, message uint32, wp, lp uintptr) uintptr {
 			return 0
 		case guiWMClose:
 			if w.tray {
+				w.hideProxy()
 				if w.settings != 0 {
 					guiShowWindow.Call(w.settings, 0)
 				}
@@ -571,6 +582,10 @@ func (w *desktopWindow) submit(request guiRequest) {
 	}
 }
 func (w *desktopWindow) command(id int) {
+	if id == guiProxyOpenID {
+		w.openProxy()
+		return
+	}
 	if id == guiDiagnosticsID {
 		if !w.quitting {
 			w.openDiagnostics()

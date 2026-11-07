@@ -27,6 +27,20 @@ Photon Windows（Windows 11 amd64）
 - 默认直接运行托盘，无需安装 Windows 服务。窗口和后台分别运行在独立进程；已有旧服务若占用同一数据库，先停止它。
 - 需要排查时从侧栏打开 Gossip、Tunnel、Babel 或日志；“诊断”提供概览、节点地址和原始 JSON。
 
+独立代理
+- 在主窗口或托盘打开“代理管理”。将官方 Windows amd64 Mihomo 解压并命名为
+  mihomo.exe，放在 photon-windows-gui.exe 旁边。试用包如果已带 Mihomo 可直接使用。
+- 选择端口（默认 17890），点击“启动代理”。在需要代理的应用里使用
+  127.0.0.1:17890，支持 HTTP 和 SOCKS5。代理管理独立于 Photon 的连接开关。
+- 代理组与当前出口从 Mihomo 读取。选一个代理组，再选择出口并点击“应用出口”。
+  自动负载均衡组由 Mihomo 自行选择。
+- 默认使用当前 Photon 配置旁的同名 .proxy.yaml（例如 photon.proxy.yaml）。
+  停止代理后也可点“选用规则模板…”选择其他 YAML，再启动。支持规则、代理组、
+  代理和规则集配置，运行配置由程序生成，模板源文件保持原样。
+- 默认规则走 Photon。隧道未就绪、目录过期或授权节点被撤回时，Photon 出口
+  拒绝流量。模板中的其他有效出口仍可使用。关闭窗口可保留代理，退出 Photon
+  会回收它启动的核心和监听端口。此版本通过本地端口为应用提供代理。
+
 命令行（管理员 PowerShell）
   .\photon-windows.exe version
   .\photon-windows.exe help

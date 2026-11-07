@@ -35,6 +35,7 @@ func (w *desktopWindow) createMainControls() error {
 		{guiConfigSummaryID, "STATIC", "设置正在读取…", static, 0, "body"},
 		{guiSettingsID, "BUTTON", "打开设置", button, 0, "body"},
 		{guiDiagnosticsID, "BUTTON", "日志与诊断", button, 0, "body"},
+		{guiProxyOpenID, "BUTTON", "代理管理…", button, 0, "body"},
 		{guiNoteID, "EDIT", guiMainDefaultNote, details, 0x200, "edit"},
 	}
 	for _, spec := range specs {
@@ -106,5 +107,6 @@ func (w *desktopWindow) layout() {
 	w.guiMove(w.controls[guiConfigSummaryID], 24, summaryTop, contentWidth, 64)
 	w.guiMove(w.controls[guiSettingsID], 24, settingsTop, 136, 32)
 	w.guiMove(w.controls[guiDiagnosticsID], 172, settingsTop, 152, 32)
+	w.guiMove(w.controls[guiProxyOpenID], 348, settingsTop, 132, 32)
 	w.guiMove(w.controls[guiNoteID], 24, noteTop, contentWidth, 64)
 }
