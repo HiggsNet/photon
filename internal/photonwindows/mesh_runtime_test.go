@@ -44,7 +44,7 @@ func TestMeshPlanConnectsEveryAuthorizedPeer(t *testing.T) {
 	if len(m.peers) != 2 {
 		t.Fatal("planner still reduces peers to one gateway")
 	}
-	a, b := m.peers["node-a.catofes."], m.peers["node-b.catofes."]
+	a, b := m.peers[meshPath{"node-a.catofes.", ipsec.FamilyIPv4}], m.peers[meshPath{"node-b.catofes.", ipsec.FamilyIPv4}]
 	if a == nil || b == nil || a.tunnel.data == b.tunnel.data {
 		t.Fatal("peers share mutable SA state")
 	}
@@ -77,7 +77,7 @@ func TestMeshPlanConnectsEveryAuthorizedPeer(t *testing.T) {
 	// A signed candidate disappearing removes exactly its own connection.
 	delete(f.view.State.Network.Zones["node-a.catofes."].Records, ipsec.RecordKeyProfile)
 	m.update(planGateway(t.Context(), f.config, f.view, f.now, nil))
-	if len(m.peers) != 1 || m.peers["node-b.catofes."] != b || b.tunnel.generation != secondGeneration {
+	if len(m.peers) != 1 || m.peers[meshPath{"node-b.catofes.", ipsec.FamilyIPv4}] != b || b.tunnel.generation != secondGeneration {
 		t.Fatal("revocation disturbed the surviving connection")
 	}
 }
@@ -120,6 +120,62 @@ func TestMeshSocketReservationsSurviveOtherPeerRetirement(t *testing.T) {
 	}
 	if err := s.WriteTunnel(b, packet, endpoint); err == nil {
 		t.Fatal("old generation survived socket replacement")
+	}
+}
+
+func TestMeshSameGatewayKeepsBothOuterFamilies(t *testing.T) {
+	socket, err := openPacketSockets(t.Context(), "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer socket.Close()
+	m := newMeshRuntime(t.Context(), &Config{}, nil, socket, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), func() {})
+	defer m.close()
+	_, private, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const gateway = "node-a.catofes."
+	candidate := GatewayCandidate{Zone: gateway}
+	var responders []*net.UDPConn
+	for _, address := range []string{"127.0.0.1", "::1"} {
+		addr := netip.MustParseAddr(address)
+		server, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IP(addr.AsSlice())})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer server.Close()
+		responders = append(responders, server)
+		port := uint16(server.LocalAddr().(*net.UDPAddr).Port)
+		candidate.Contacts = append(candidate.Contacts, ipsec.ContactPoint{Address: address, IKEPort: port, NATTPort: port})
+	}
+	now := time.Now()
+	plan := GatewayPlan{Candidates: []GatewayCandidate{candidate}, EvaluatedAt: now}
+	m.update(plan)
+	v4, v6 := m.peers[meshPath{gateway, ipsec.FamilyIPv4}], m.peers[meshPath{gateway, ipsec.FamilyIPv6}]
+	if v4 == nil || v6 == nil || v4.tunnel.data == v6.tunnel.data {
+		t.Fatal("gateway does not own two independent paths")
+	}
+	for i, peer := range []*meshPeer{v4, v6} {
+		if err := peer.tunnel.start(peer.plan, "local.catofes.", private, now); err != nil {
+			t.Fatal(err)
+		}
+		if err := responders[i].SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		var wire [2048]byte
+		if n, source, err := responders[i].ReadFromUDPAddrPort(wire[:]); err != nil ||
+			n == 0 || outerFamily(source.Addr()) != peer.plan.outerFamily {
+			t.Fatalf("no IKE request on %s: source=%s bytes=%d err=%v", peer.plan.outerFamily, source, n, err)
+		}
+	}
+	generation := v4.tunnel.generation
+	plan.Candidates[0].Contacts = candidate.Contacts[:1]
+	m.update(plan)
+	_, reserved := socket.tunnels[generation]
+	if len(m.peers) != 1 || v4.tunnel.phase != 1 || v4.tunnel.generation != generation ||
+		!reserved || v6.tunnel.phase != 0 {
+		t.Fatal("withdrawing IPv6 disturbed the IPv4 path")
 	}
 }
 
@@ -414,7 +470,7 @@ func TestMeshDefaultDiscoversAllVerifiedPeers(t *testing.T) {
 
 func TestMeshSelectionPrefersDestinationThenSourceThenCost(t *testing.T) {
 	m, f := meshRouteFixture(t)
-	a, b := m.peers["node-a.catofes."], m.peers["node-b.catofes."]
+	a, b := m.peers[meshPath{"node-a.catofes.", ipsec.FamilyIPv4}], m.peers[meshPath{"node-b.catofes.", ipsec.FamilyIPv4}]
 	meshLearn(t, b, f.view, f.now, "10.1.0.0/16", 300, netip.MustParsePrefix("10.9.0.0/24"))
 	packet := dataplanePacket(true)
 	copy(packet[12:16], []byte{10, 9, 0, 1})
@@ -432,7 +488,7 @@ func TestMeshSelectionPrefersDestinationThenSourceThenCost(t *testing.T) {
 
 func TestMeshLocalOriginSequencesRemainCommonAcrossNeighbors(t *testing.T) {
 	m, f := meshRouteFixture(t)
-	a, b := m.peers["node-a.catofes."], m.peers["node-b.catofes."]
+	a, b := m.peers[meshPath{"node-a.catofes.", ipsec.FamilyIPv4}], m.peers[meshPath{"node-b.catofes.", ipsec.FamilyIPv4}]
 	for _, p := range []*meshPeer{a, b} {
 		facts, ok := p.leaf.pipeline.prepare(&p.config, f.view, p.plan, f.now)
 		if !ok {
@@ -479,7 +535,7 @@ func meshHostRouteFixture(t *testing.T) (*meshRuntime, *gatewayPatternFixture, *
 	packet := dataplanePacket(true)
 	copy(packet[12:16], []byte{10, 9, 0, 1})
 	copy(packet[16:20], []byte{10, 1, 2, 3})
-	return m, f, m.peers["node-a.catofes."], leafDevicePacket{generation: 1, packet: packet}
+	return m, f, m.peers[meshPath{"node-a.catofes.", ipsec.FamilyIPv4}], leafDevicePacket{generation: 1, packet: packet}
 }
 
 func TestMeshHostAdmissionTracksInstalledBabelRetraction(t *testing.T) {

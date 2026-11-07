@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func TestMeshHostBatchPinsShapeAndCopiesBorrowedCiphertext(t *testing.T) {
@@ -50,7 +51,7 @@ func TestMeshHostBatchRechecksCanceledSA(t *testing.T) {
 	m.state = &State{common: store}
 	m.policy = newMeshPolicyWorker(store)
 	var inputs meshPolicyInputs
-	p := m.peers["node-a.catofes."]
+	p := m.peers[meshPath{"node-a.catofes.", ipsec.FamilyIPv4}]
 	if _, pending := m.policy.project(p, f.view.Revision, f.now); !pending {
 		t.Fatal("initial policy was not queued")
 	}

@@ -21,17 +21,21 @@ import (
 // Invoked only by the existing --network none StrongSwan container rig. There
 // is one Windows UDP owner and two simultaneous real IKE/ESP kernel peers.
 func TestStrongSwanWindowsMeshTunnels(t *testing.T) {
-	runStrongSwanWindowsMeshTunnels(t, false)
+	runStrongSwanWindowsMeshTunnels(t, false, false)
+}
+
+func TestStrongSwanWindowsDualOuterTunnels(t *testing.T) {
+	runStrongSwanWindowsMeshTunnels(t, false, true)
 }
 
 func TestStrongSwanWindowsMeshTimedRekey(t *testing.T) {
 	if os.Getenv("PHOTON_WINDOWS_TIMED_REKEY_SMOKE") != "1" {
 		t.Skip("set PHOTON_WINDOWS_TIMED_REKEY_SMOKE=1 for the real five-minute timer")
 	}
-	runStrongSwanWindowsMeshTunnels(t, true)
+	runStrongSwanWindowsMeshTunnels(t, true, false)
 }
 
-func runStrongSwanWindowsMeshTunnels(t *testing.T, timed bool) {
+func runStrongSwanWindowsMeshTunnels(t *testing.T, timed, dualOuter bool) {
 	if os.Getenv("PHOTON_WINDOWS_TUNNEL_SMOKE") != "1" {
 		t.Skip("run docs/scripts/ike-auth-smoke.sh")
 	}
@@ -52,7 +56,11 @@ func runStrongSwanWindowsMeshTunnels(t *testing.T, timed bool) {
 		t.Fatal(err)
 	}
 	clientDER, _ := x509.MarshalPKIXPublicKey(clientPublic)
-	socket, err := openPacketSockets(ctx, "127.0.0.2:0")
+	listen := "127.0.0.2:0"
+	if dualOuter {
+		listen = "0.0.0.0:0"
+	}
+	socket, err := openPacketSockets(ctx, listen)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,12 +76,23 @@ func runStrongSwanWindowsMeshTunnels(t *testing.T, timed bool) {
 	}()
 	defer func() { socket.Close(); <-readerDone }()
 	var tunnels []*gatewayTunnel
-	for i := range 2 {
-		name, iface := fmt.Sprintf("photon-mesh-%d", i), fmt.Sprintf("phmesh%d", i)
-		serverPublic, serverPrivate, err := ed25519.GenerateKey(nil)
+	var sharedGatewayKey ed25519.PrivateKey
+	if dualOuter {
+		_, sharedGatewayKey, err = ed25519.GenerateKey(nil)
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+	for i := range 2 {
+		name, iface := fmt.Sprintf("photon-mesh-%d", i), fmt.Sprintf("phmesh%d", i)
+		serverPrivate := sharedGatewayKey
+		if serverPrivate == nil {
+			_, serverPrivate, err = ed25519.GenerateKey(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		serverPublic := serverPrivate.Public().(ed25519.PublicKey)
 		serverDER, _ := x509.MarshalPKCS8PrivateKey(serverPrivate)
 		ifID := uint32(524249 + i)
 		serverIP, clientIP := fmt.Sprintf("10.55.%d.1", 4+i), fmt.Sprintf("10.55.%d.2", 4+i)
@@ -83,12 +102,23 @@ func runStrongSwanWindowsMeshTunnels(t *testing.T, timed bool) {
 			}
 		}
 		defer exec.Command("ip", "link", "del", iface).Run()
-		if err := driver.LoadPrivateKey(ctx, name, serverDER, ipsec.AlgorithmEd25519); err != nil {
-			t.Fatal(err)
+		if !dualOuter || i == 0 {
+			if err := driver.LoadPrivateKey(ctx, name, serverDER, ipsec.AlgorithmEd25519); err != nil {
+				t.Fatal(err)
+			}
+			defer driver.UnloadPrivateKey(context.Background(), name)
 		}
-		defer driver.UnloadPrivateKey(context.Background(), name)
 		gateway := fmt.Sprintf("127.0.0.%d", 1+i*2)
-		spec := ipsec.TransportLinkSpec{TransportID: name, LocalZone: zone.ZonePath(fmt.Sprintf("mesh-%d.gateway.", i)), PeerZone: "mesh.windows.", LocalAddress: gateway, XFRMIfID: ifID, LocalTunnelAddr: netip.MustParseAddr(serverIP), PeerTunnelAddr: netip.MustParseAddr(clientIP), LocalPrivateKey: serverDER, LocalPrivateKeyAlgorithm: ipsec.AlgorithmEd25519, PeerPublicKey: clientDER}
+		gatewayZone := zone.ZonePath(fmt.Sprintf("mesh-%d.gateway.", i))
+		path := ""
+		if dualOuter {
+			gatewayZone = "mesh.gateway."
+			if i == 1 {
+				gateway = "::1"
+			}
+			path = "family:" + outerFamily(netip.MustParseAddr(gateway))
+		}
+		spec := ipsec.TransportLinkSpec{TransportID: name, LocalZone: gatewayZone, PeerZone: "mesh.windows.", PathKey: path, LocalAddress: gateway, XFRMIfID: ifID, LocalTunnelAddr: netip.MustParseAddr(serverIP), PeerTunnelAddr: netip.MustParseAddr(clientIP), LocalPrivateKey: serverDER, LocalPrivateKeyAlgorithm: ipsec.AlgorithmEd25519, PeerPublicKey: clientDER}
 		if err := driver.LoadConnection(ctx, spec); err != nil {
 			t.Fatal(err)
 		}

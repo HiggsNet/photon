@@ -71,7 +71,7 @@ docker run --rm --network none --cap-add NET_ADMIN \
     done
     PHOTON_IKE_AUTH_SMOKE=1 PHOTON_IKE_FRAGMENT_SMOKE=1 /smoke/ike.test -test.run "$PHOTON_IKE_SMOKE_PATTERN" -test.v -test.count=1
     if [ "$PHOTON_IKE_FRAGMENT_SIZE" = 1280 ]; then
-      PHOTON_WINDOWS_TUNNEL_SMOKE=1 /smoke/windows.test -test.run "^TestStrongSwanWindows(Tunnel|MeshTunnels)$" -test.v -test.count=1
+      PHOTON_WINDOWS_TUNNEL_SMOKE=1 /smoke/windows.test -test.run "^TestStrongSwanWindows(Tunnel|MeshTunnels|DualOuterTunnels)$" -test.v -test.count=1
       if [ "$PHOTON_WINDOWS_TIMED_REKEY_SMOKE" = 1 ]; then
         PHOTON_WINDOWS_TUNNEL_SMOKE=1 /smoke/windows.test -test.run "^TestStrongSwanWindowsMeshTimedRekey$" -test.v -test.count=1 -test.timeout=7m
       fi

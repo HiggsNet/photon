@@ -43,6 +43,7 @@ type GatewayPlan struct {
 	Selected    *GatewaySelection          `json:"selected,omitempty"`
 	Routes      []AuthorizedGatewayRoute   `json:"route_authorizations,omitempty"`
 	Rejected    string                     `json:"rejected,omitempty"`
+	outerFamily string
 }
 
 func planGateway(ctx context.Context, config *Config, view corestate.View, now time.Time, resolver ipsec.DNSResolver) GatewayPlan {
@@ -54,11 +55,19 @@ func planGateway(ctx context.Context, config *Config, view corestate.View, now t
 }
 
 func planGatewaySelection(ctx context.Context, config *Config, view corestate.View, now time.Time, resolver ipsec.DNSResolver, verifier *photoncrypto.Verifier) GatewayPlan {
+	return planGatewayForFamily(ctx, config, view, now, resolver, verifier, "")
+}
+
+func planGatewayForFamily(ctx context.Context, config *Config, view corestate.View, now time.Time, resolver ipsec.DNSResolver, verifier *photoncrypto.Verifier, family string) GatewayPlan {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	plan := GatewayPlan{Revision: view.Revision, EvaluatedAt: now}
+	plan := GatewayPlan{Revision: view.Revision, EvaluatedAt: now, outerFamily: family}
 	plan.Candidates = gatewayCandidates(ctx, config, view, now, resolver, verifier)
-	for _, candidate := range plan.Candidates {
+	for i := range plan.Candidates {
+		candidate := &plan.Candidates[i]
+		if family != "" {
+			candidate.Contacts = contactsForFamily(candidate.Contacts, family)
+		}
 		if candidate.Rejected != "" || len(candidate.Contacts) == 0 {
 			continue
 		}
@@ -136,7 +145,7 @@ func revalidateResolvedGatewaySelection(config *Config, view corestate.View, pla
 			resolved[contact.Host] = append(resolved[contact.Host], net.IPAddr{IP: net.IP(address.AsSlice())})
 		}
 	}
-	current := planGatewaySelection(context.Background(), config, view, now, resolved, verifier)
+	current := planGatewayForFamily(context.Background(), config, view, now, resolved, verifier, plan.outerFamily)
 	// A healthy connection keeps its authenticated contact while other peers or
 	// address preference change. A removed contact still forces replacement.
 	if plan.Selected != nil && current.Selected != nil && plan.Selected.Zone == current.Selected.Zone {
@@ -152,6 +161,24 @@ func revalidateResolvedGatewaySelection(config *Config, view corestate.View, pla
 		}
 	}
 	return current
+}
+
+func contactsForFamily(contacts []ipsec.ContactPoint, family string) []ipsec.ContactPoint {
+	var selected []ipsec.ContactPoint
+	for _, contact := range contacts {
+		addr, err := netip.ParseAddr(contact.Address)
+		if err == nil && outerFamily(addr) == family {
+			selected = append(selected, contact)
+		}
+	}
+	return selected
+}
+
+func outerFamily(address netip.Addr) string {
+	if address.Unmap().Is4() {
+		return ipsec.FamilyIPv4
+	}
+	return ipsec.FamilyIPv6
 }
 
 type gatewayResolvedHosts map[string][]net.IPAddr

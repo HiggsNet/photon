@@ -6,6 +6,7 @@ import (
 	"hash/fnv"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/routing"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 // The daemon owns control events. Packet workers use stateMu to select and
@@ -24,7 +26,7 @@ type meshRuntime struct {
 	state            *State
 	socket           *packetSockets
 	logger           *slog.Logger
-	peers            map[zone.ZonePath]*meshPeer
+	peers            map[meshPath]*meshPeer
 	peerOrder        []*meshPeer
 	seqno            uint16
 	byData           map[*gatewayDataplane]*meshPeer
@@ -48,6 +50,11 @@ type meshRuntime struct {
 	outboundScratch  []byte // Owned by the TX worker.
 }
 
+type meshPath struct {
+	zone   zone.ZonePath
+	family string
+}
+
 type meshPeer struct {
 	policy       meshPeerPolicy
 	config       Config
@@ -66,7 +73,7 @@ type meshPeer struct {
 }
 
 func newMeshRuntime(ctx context.Context, config *Config, state *State, socket *packetSockets, factory packetDeviceFactory, logger *slog.Logger, onPublication func()) *meshRuntime {
-	m := &meshRuntime{ctx: ctx, config: config, state: state, socket: socket, logger: logger, peers: make(map[zone.ZonePath]*meshPeer), byData: make(map[*gatewayDataplane]*meshPeer), device: newMeshDevice(ctx, factory), opened: make(chan leafOpenResult, 64), jobs: make(chan dataplaneJob, dataplaneQueueSize), onPublication: onPublication}
+	m := &meshRuntime{ctx: ctx, config: config, state: state, socket: socket, logger: logger, peers: make(map[meshPath]*meshPeer), byData: make(map[*gatewayDataplane]*meshPeer), device: newMeshDevice(ctx, factory), opened: make(chan leafOpenResult, 64), jobs: make(chan dataplaneJob, dataplaneQueueSize), onPublication: onPublication}
 	m.ikeStarts = make(chan *meshIKEStart, 4)
 	m.txWake.ready = make(chan struct{}, 1)
 	m.device.wake = m.txWake.signal
@@ -93,11 +100,16 @@ func (m *meshRuntime) ordered() []*meshPeer {
 	if m.peerOrder != nil {
 		return m.peerOrder
 	}
-	keys := make([]zone.ZonePath, 0, len(m.peers))
+	keys := make([]meshPath, 0, len(m.peers))
 	for key := range m.peers {
 		keys = append(keys, key)
 	}
-	slices.Sort(keys)
+	slices.SortFunc(keys, func(a, b meshPath) int {
+		if a.zone != b.zone {
+			return strings.Compare(string(a.zone), string(b.zone))
+		}
+		return strings.Compare(a.family, b.family)
+	})
 	peers := make([]*meshPeer, 0, len(keys))
 	for _, key := range keys {
 		peers = append(peers, m.peers[key])
@@ -124,38 +136,31 @@ func (p *meshPeer) setPlan(next GatewayPlan) {
 }
 
 func (m *meshRuntime) update(plan GatewayPlan) {
-	seen := make(map[zone.ZonePath]bool)
+	local := m.socket.LocalAddr()
+	if local == nil {
+		return
+	}
+	address := local.AddrPort().Addr().Unmap()
+	seen := make(map[meshPath]bool)
 	for _, candidate := range plan.Candidates {
-		if candidate.Rejected != "" || len(candidate.Contacts) == 0 || plan.Rejected != "" {
+		if candidate.Rejected != "" || plan.Rejected != "" {
 			continue
 		}
-		seen[candidate.Zone] = true
-		p := m.peers[candidate.Zone]
-		if p == nil {
-			config := *m.config
-			config.Gateway.AllowedZones = []zone.ZonePath{candidate.Zone}
-			data := newSerialGatewayDataplane(m.ctx)
-			data.jobs = m.jobs
-			data.jobReady = m.txWake.signal
-			leaf := newLeafRuntime(m.device.acquire)
-			leaf.opened = m.opened
-			leaf.sharedCompletions = true
-			p = &meshPeer{config: config, tunnel: &gatewayTunnel{socket: m.socket, data: data, offerMOBIKE: config.Gateway.MOBIKE}, leaf: leaf, backoff: m.initial}
-			if m.ikeWrites != nil {
-				p.tunnel.queueIKE = m.queueIKEWrite
+		for _, family := range []string{ipsec.FamilyIPv4, ipsec.FamilyIPv6} {
+			// Go's IPv6 wildcard UDP socket accepts both families. A specific
+			// bind, or a wildcard on a host with only IPv4, is single-family.
+			if !(address.Is6() && address.IsUnspecified()) && outerFamily(address) != family {
+				continue
 			}
-			m.peers[candidate.Zone], m.byData[data] = p, p
-			m.peerOrder = nil
-		}
-		if p.tunnel.phase != 0 && p.plan.Selected != nil {
-			for i, contact := range candidate.Contacts {
-				if contact == p.plan.Selected.Contact {
-					p.contact = i
-					break
-				}
+			familyCandidate := candidate
+			familyCandidate.Contacts = contactsForFamily(candidate.Contacts, family)
+			if len(familyCandidate.Contacts) == 0 {
+				continue
 			}
+			key := meshPath{zone: candidate.Zone, family: family}
+			seen[key] = true
+			m.updatePath(plan, familyCandidate, key)
 		}
-		p.setPlan(peerGatewayPlan(plan, candidate, p.contact))
 	}
 	for key, p := range m.peers {
 		if seen[key] {
@@ -168,6 +173,36 @@ func (m *meshRuntime) update(plan GatewayPlan) {
 		delete(m.peers, key)
 		m.peerOrder = nil
 	}
+}
+
+func (m *meshRuntime) updatePath(plan GatewayPlan, candidate GatewayCandidate, key meshPath) {
+	plan.outerFamily = key.family
+	p := m.peers[key]
+	if p == nil {
+		config := *m.config
+		config.Gateway.AllowedZones = []zone.ZonePath{candidate.Zone}
+		data := newSerialGatewayDataplane(m.ctx)
+		data.jobs = m.jobs
+		data.jobReady = m.txWake.signal
+		leaf := newLeafRuntime(m.device.acquire)
+		leaf.opened = m.opened
+		leaf.sharedCompletions = true
+		p = &meshPeer{config: config, tunnel: &gatewayTunnel{socket: m.socket, data: data, offerMOBIKE: config.Gateway.MOBIKE}, leaf: leaf, backoff: m.initial}
+		if m.ikeWrites != nil {
+			p.tunnel.queueIKE = m.queueIKEWrite
+		}
+		m.peers[key], m.byData[data] = p, p
+		m.peerOrder = nil
+	}
+	if p.tunnel.phase != 0 && p.plan.Selected != nil {
+		for i, contact := range candidate.Contacts {
+			if contact == p.plan.Selected.Contact {
+				p.contact = i
+				break
+			}
+		}
+	}
+	p.setPlan(peerGatewayPlan(plan, candidate, p.contact))
 }
 
 func (m *meshRuntime) stopPeer(p *meshPeer, reason string) {
@@ -197,7 +232,7 @@ func (m *meshRuntime) stopPeerWithEvent(p *meshPeer, event, reason string) {
 	if len(p.plan.Candidates) > 0 && len(p.plan.Candidates[0].Contacts) > 0 {
 		p.setPlan(peerGatewayPlan(p.plan, p.plan.Candidates[0], p.contact))
 	}
-	m.logger.Info("tunnel_stopped", "peer", p.config.Gateway.AllowedZones[0], "reason", reason, "retry_at", p.next)
+	m.logger.Info("tunnel_stopped", "peer", p.config.Gateway.AllowedZones[0], "outer_family", p.plan.outerFamily, "reason", reason, "retry_at", p.next)
 }
 
 func (m *meshRuntime) stopAll(reason string) {
@@ -569,7 +604,7 @@ func (m *meshRuntime) ready() bool {
 func (m *meshRuntime) reset(reason string) {
 	for _, p := range m.ordered() {
 		m.stopPeerWithEvent(p, "network_rebind", reason)
-		p.setPlan(GatewayPlan{})
+		p.setPlan(GatewayPlan{outerFamily: p.plan.outerFamily})
 	}
 }
 
