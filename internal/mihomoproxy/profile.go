@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/netip"
 	"slices"
@@ -108,7 +109,17 @@ func (t Template) Render(listener Listener, directory *photonwindows.ServiceDire
 	}
 	online := len(endpoints) > 0
 	provider := map[string]any{"type": "inline", "payload": endpoints}
-	groups := slices.Clone(t.groups)
+	groups := make([]namedItem, 0, len(t.groups)+len(photonGroups))
+	for _, group := range t.groups {
+		// A filter can exclude the offline placeholder. Prevent Mihomo's
+		// implicit empty-group fallback from sending that traffic direct.
+		_, hasFallback := group["empty-fallback"]
+		if !hasFallback && usesPhotonProvider(group) {
+			group = maps.Clone(group)
+			group["empty-fallback"] = "REJECT"
+		}
+		groups = append(groups, group)
+	}
 	if online {
 		provider["health-check"] = map[string]any{"enable": true, "url": healthURL, "interval": 300}
 		groups = append(groups,
@@ -206,4 +217,17 @@ func directoryConfig(directory *photonwindows.ServiceDirectory, now time.Time) (
 	}
 	slices.Sort(rules)
 	return endpoints, slices.Compact(rules), nil
+}
+
+func usesPhotonProvider(group namedItem) bool {
+	all, _ := group["include-all"].(bool)
+	allProviders, _ := group["include-all-providers"].(bool)
+	if all || allProviders {
+		return true
+	}
+	providers, _ := group["use"].([]any)
+	return slices.ContainsFunc(providers, func(value any) bool {
+		name, _ := value.(string)
+		return name == providerName
+	})
 }
