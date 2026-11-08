@@ -17,10 +17,8 @@ type ZoneDigest struct {
 
 // CatalogSummary identifies a complete ordered zone-digest projection.
 type CatalogSummary struct {
-	CatalogRoot []byte       `json:"catalog_root" msgpack:"r"`
-	ZoneCount   int          `json:"zone_count" msgpack:"z"`
-	FirstPage   *CatalogPage `json:"first_page,omitempty" msgpack:"p,omitempty"`
-	NextCursor  string       `json:"next_cursor,omitempty" msgpack:"c,omitempty"`
+	CatalogRoot []byte `json:"catalog_root" msgpack:"r"`
+	ZoneCount   int    `json:"zone_count" msgpack:"z"`
 }
 
 // CatalogPage is a detached slice of a catalog projection. Pagination and

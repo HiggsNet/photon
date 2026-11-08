@@ -22,7 +22,6 @@ const (
 	MessagePing             MessageType = "ping"
 	MessagePong             MessageType = "pong"
 	MessageFetchZone        MessageType = "fetch_zone"
-	MessageFetchRecord      MessageType = "fetch_record"
 	MessageFetchCatalogPage MessageType = "fetch_catalog_page"
 	MessageCatalogPage      MessageType = "catalog_page"
 	MessageAnnounce         MessageType = "announce"
@@ -40,7 +39,6 @@ type Message struct {
 	Ping             *Ping                  `json:"ping,omitempty" msgpack:"g,omitempty"`
 	Pong             *Pong                  `json:"pong,omitempty" msgpack:"o,omitempty"`
 	FetchZone        *FetchZone             `json:"fetch_zone,omitempty" msgpack:"f,omitempty"`
-	FetchRecord      *FetchRecord           `json:"fetch_record,omitempty" msgpack:"r,omitempty"`
 	FetchCatalogPage *FetchCatalogPage      `json:"fetch_catalog_page,omitempty" msgpack:"fc,omitempty"`
 	CatalogPage      *corestate.CatalogPage `json:"catalog_page,omitempty" msgpack:"cp,omitempty"`
 	Announce         *Announce              `json:"announce,omitempty" msgpack:"a,omitempty"`
@@ -65,12 +63,6 @@ type FetchZone struct {
 	ChunkFallback bool          `json:"chunk_fallback,omitempty" msgpack:"c,omitempty"`
 }
 
-type FetchRecord struct {
-	Zone    zone.ZonePath `json:"zone" msgpack:"z"`
-	Key     string        `json:"key" msgpack:"k"`
-	Version uint64        `json:"version,omitempty" msgpack:"v,omitempty"`
-}
-
 type Announce struct {
 	Zones []corestate.ZoneDigest `json:"zones,omitempty" msgpack:"z,omitempty"`
 }
@@ -79,8 +71,6 @@ type ObjectChunk struct {
 	TransferID []byte                `json:"transfer_id" msgpack:"x"`
 	Object     ObjectPullRequestType `json:"object" msgpack:"o"`
 	Zone       zone.ZonePath         `json:"zone" msgpack:"z"`
-	Key        string                `json:"key,omitempty" msgpack:"k,omitempty"`
-	Version    uint64                `json:"version,omitempty" msgpack:"v,omitempty"`
 	RootHash   []byte                `json:"root_hash,omitempty" msgpack:"rh,omitempty"`
 	ObjectHash []byte                `json:"object_hash" msgpack:"h"`
 	Index      uint16                `json:"index" msgpack:"i"`
@@ -128,7 +118,6 @@ func validateMessage(message *Message) error {
 		message.Ping != nil,
 		message.Pong != nil,
 		message.FetchZone != nil,
-		message.FetchRecord != nil,
 		message.FetchCatalogPage != nil,
 		message.CatalogPage != nil,
 		message.Announce != nil,
@@ -156,10 +145,6 @@ func validateMessage(message *Message) error {
 		if message.FetchZone == nil || !message.FetchZone.Zone.Valid() {
 			return errors.New("fetch_zone message has invalid zone")
 		}
-	case MessageFetchRecord:
-		if message.FetchRecord == nil || !message.FetchRecord.Zone.Valid() || message.FetchRecord.Key == "" {
-			return errors.New("fetch_record message has invalid selector")
-		}
 	case MessageFetchCatalogPage:
 		if message.FetchCatalogPage == nil {
 			return errors.New("fetch_catalog_page message missing body")
@@ -181,7 +166,7 @@ func validateMessage(message *Message) error {
 		if message.ObjectChunk == nil || len(message.ObjectChunk.TransferID) != 16 || !message.ObjectChunk.Zone.Valid() || len(message.ObjectChunk.ObjectHash) == 0 || message.ObjectChunk.Total == 0 || message.ObjectChunk.Index >= message.ObjectChunk.Total || len(message.ObjectChunk.Data) == 0 {
 			return errors.New("object_chunk message has invalid chunk")
 		}
-		if message.ObjectChunk.Object != ObjectPullZone && message.ObjectChunk.Object != ObjectPullRecord {
+		if message.ObjectChunk.Object != ObjectPullZone {
 			return errors.New("object_chunk message has invalid object type")
 		}
 	case MessageObjectChunkNACK:

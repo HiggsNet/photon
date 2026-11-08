@@ -33,8 +33,8 @@ Photon gossip 仅传播**已签名的 Zone 状态**。任何进入 active state 
 
 | 层 | 载体 | 角色 | 不能承担的职责 |
 |----|------|------|----------------|
-| UDP control | `ping` / `pong` / `fetch_catalog_page` / `catalog_page` / `announce` / `fetch_zone` | 交换 bounded summary、分页 catalog、请求对象、发送 digest hint | 不依赖 IP fragmentation，不承载 unbounded list，不把 UDP record 流作为正确性前提 |
-| TCP object pull | 短连接 MessagePack | 拉取完整 Zone snapshot 或完整 record object | 不改变 trust boundary，不跳过签名验证 |
+| UDP control | `ping` / `pong` / `fetch_catalog_page` / `catalog_page` / `announce` / `fetch_zone` | 交换 bounded summary、分页 catalog、请求对象、发送 digest hint | 不依赖 IP fragmentation，不承载 unbounded list |
+| TCP object pull | 短连接 MessagePack | 拉取完整 Zone snapshot | 不改变 trust boundary，不跳过签名验证 |
 | UDP chunk fallback | `object_chunk` | TCP object pull 不可达时的兜底完整对象传输 | 不作为默认 bulk path，不承载未验证的部分状态 |
 
 ### 1.3 硬规则
@@ -125,8 +125,6 @@ CatalogRoot = hash(sorted(zone_path + zone_root))
 type CatalogSummary struct {
     CatalogRoot []byte       // catalog 根 hash
     ZoneCount   int          // zone 总数
-    FirstPage   *CatalogPage // 可选：第一页数据（默认不发送）
-    NextCursor  string       // 可选：下一页游标
 }
 ```
 
@@ -158,7 +156,6 @@ type Message struct {
     Ping             *Ping
     Pong             *Pong
     FetchZone        *FetchZone
-    FetchRecord      *FetchRecord
     FetchCatalogPage *FetchCatalogPage
     CatalogPage      *CatalogPage
     Announce         *Announce
@@ -192,22 +189,14 @@ type FetchZone struct {
     ChunkFallback bool     // 是否请求 UDP chunk fallback
 }
 
-type FetchRecord struct {
-    Zone    ZonePath
-    Key     string
-    Version uint64 // 可选：指定版本
-}
-
 type Announce struct {
     Zones []ZoneDigest // zone digest hint（bounded）
 }
 
 type ObjectChunk struct {
 	TransferID []byte                // 16-byte short-lived transfer id
-    Object     ObjectPullRequestType // "zone" 或 "record"
+    Object     ObjectPullRequestType // "zone"
     Zone       ZonePath
-    Key        string
-    Version    uint64
     RootHash   []byte
     ObjectHash []byte    // 完整对象的 content hash
     Index      uint16    // 当前分片索引（从 0 开始）
@@ -268,7 +257,6 @@ photon.gossip.m1\n<msgpack payload with version=1>
 | `fetch_catalog_page` | 请求 | 双向 | 请求 catalog 分页 |
 | `catalog_page` | 响应 | 双向 | 返回 catalog 分页数据 |
 | `fetch_zone` | 请求 | 双向 | UDP chunk fallback 请求；普通 snapshot 请求仅作为只读兼容响应 |
-| `fetch_record` | 请求 | 双向 | 请求单条 record |
 | `announce` | 主动 | 双向 | hint ingress；不作为正确性主路径 |
 | `object_chunk` | 主动 | 双向 | UDP 分片传输大对象 |
 
@@ -377,10 +365,11 @@ Phase 3: Object Pull（对象拉取）
 ```
 接收方                 发送方
   │                      │
-  │──── FETCH_ZONE ─────▶│
-  │    {zone, expected}  │
+  │──── TCP connect ────▶│
+  │──── object pull ────▶│
+  │    {type: zone, zone}│
   │                      │
-  │◀─── TCP connect ─────│
+  │◀─── response ────────│
   │    MessagePack       │
   │    ZoneSnapshot      │
   │                      │
@@ -524,7 +513,7 @@ RoundTimeout(peer) = max(5s, 5 × estimatedRTT(peer)) + 5s (object pull budget)
 
 `SyncSession.OnEvent` 返回的 `SyncAction` 由 daemon 事件循环按以下顺序执行：
 
-1. **Apply snapshots/records**（可能有多个 apply）
+1. **Apply Zone snapshots**（可能有多个 apply）
 2. **SaveState**（仅当 apply 成功后 persist）
 3. **Reconcile pending**（检查 pending zone 是否已经满足）
 4. **Send messages**（PING/PONG/ANNOUNCE/FETCH_CATALOG_PAGE/CATALOG_PAGE/FETCH_ZONE）
@@ -702,7 +691,7 @@ Relay 的 key 约束：
 | 资源 | 默认速率 | 默认突发 |
 |------|----------|----------|
 | 字节 | 256 KiB/s | 256 KiB |
-| 对象 (zone/record) | 128/s | 128 |
+| 对象 | 128/s | 128 |
 
 超过任一限制返回 `ErrQuotaExceeded`，数据包被丢弃。
 

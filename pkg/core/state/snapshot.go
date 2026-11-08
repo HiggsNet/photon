@@ -27,11 +27,6 @@ var (
 
 const DefaultSnapshotMaxBytes = 1200
 
-type RecordSnapshot struct {
-	Zone   zone.ZonePath `json:"zone" msgpack:"z"`
-	Record *zone.Record  `json:"record" msgpack:"r"`
-}
-
 type ZoneSnapshot struct {
 	Zone          zone.ZonePath                                `json:"zone" msgpack:"z"`
 	Authority     *zone.ZoneAuthority                          `json:"authority" msgpack:"a"`
@@ -81,28 +76,6 @@ func Snapshot(ns *zone.NetworkState, path zone.ZonePath) (*ZoneSnapshot, error) 
 		Revocations: cloneRevocationMap(zs.Revocations),
 		Records:     cloneRecordMap(zs.Records),
 	}, nil
-}
-
-func RecordSnapshotFor(ns *zone.NetworkState, path zone.ZonePath, key string, version uint64) (*RecordSnapshot, error) {
-	if ns == nil {
-		return nil, errors.New("network state is nil")
-	}
-	if !path.Valid() || key == "" {
-		return nil, zone.ErrInvalidFQKey
-	}
-	zs := ns.Zones[path]
-	if zs == nil {
-		return nil, fmt.Errorf("%w: %s", zone.ErrZoneNotFound, path)
-	}
-	for _, record := range append([]*zone.Record(nil), zs.RecordHistory[key]...) {
-		if record != nil && (version == 0 || record.Version == version) {
-			return &RecordSnapshot{Zone: path, Record: cloneRecord(record)}, nil
-		}
-	}
-	if record := zs.Records[key]; record != nil && (version == 0 || record.Version == version) {
-		return &RecordSnapshot{Zone: path, Record: cloneRecord(record)}, nil
-	}
-	return nil, fmt.Errorf("%w: %s/%s", zone.ErrRecordNotFound, path, key)
 }
 
 // ApplySnapshot validates and applies snapshot to a detached target-zone COW

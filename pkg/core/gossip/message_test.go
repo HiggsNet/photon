@@ -42,21 +42,6 @@ func TestMarshalUnmarshalPing(t *testing.T) {
 	}
 }
 
-func TestRejectsInvalidMessageShape(t *testing.T) {
-	_, err := MarshalMessage(&Message{
-		Type:      MessageFetchRecord,
-		PeerID:    "node-a",
-		Nonce:     1,
-		Timestamp: 123,
-		FetchRecord: &FetchRecord{
-			Zone: "catofes.",
-		},
-	})
-	if err == nil {
-		t.Fatalf("MarshalMessage accepted fetch_record without key")
-	}
-}
-
 func TestRejectsUnsupportedWireVersion(t *testing.T) {
 	_, err := MarshalMessage(&Message{
 		Version:   WireVersion + 1,

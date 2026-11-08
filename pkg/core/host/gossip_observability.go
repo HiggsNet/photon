@@ -21,10 +21,6 @@ func (driver *GossipDriver) observeCatalogSummary(peerID string, summary *corest
 		peer.DatagramStats.LastCatalogUnix = now.Unix()
 		peer.DatagramStats.LastCatalogRootHex = hex.EncodeToString(summary.CatalogRoot)
 		peer.DatagramStats.LastCatalogZoneCount = summary.ZoneCount
-		peer.DatagramStats.LastCatalogCursor = summary.NextCursor
-		if summary.FirstPage != nil {
-			peer.DatagramStats.LastCatalogPageEntries = len(summary.FirstPage.Entries)
-		}
 		peer.DatagramStats.LastCatalogRejectedReason = ""
 	})
 }

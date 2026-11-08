@@ -54,7 +54,6 @@ func BenchmarkGossipReadPaths(b *testing.B) {
 	packet := &gossip.Packet{Addr: &net.UDPAddr{IP: net.ParseIP("203.0.113.1"), Port: 33434},
 		Message: &gossip.Message{PeerID: path.String(), Type: gossip.MessagePing}}
 	zoneRequest := &gossip.ObjectPullRequest{Type: gossip.ObjectPullZone, Zone: path}
-	recordRequest := &gossip.ObjectPullRequest{Type: gossip.ObjectPullRecord, Zone: path, Key: "record-0", Version: 3}
 	cases := []struct {
 		name string
 		run  func()
@@ -62,7 +61,6 @@ func BenchmarkGossipReadPaths(b *testing.B) {
 		{"discovery", func() { gossipReadBenchmarkResult = driver.GossipDiscoveryInput(nil) }},
 		{"inbound_path", func() { driver.acceptGossipInboundPath(b.Context(), packet, now, nil, transport) }},
 		{"tcp_zone", func() { gossipReadBenchmarkResult = driver.GossipObjectPullResponse(zoneRequest, now) }},
-		{"tcp_record_history", func() { gossipReadBenchmarkResult = driver.GossipObjectPullResponse(recordRequest, now) }},
 		{"udp_zone", func() {
 			gossipReadBenchmarkResult = driver.gossipFetchZoneResponse(path, gossip.DefaultDatagramBudget, now)
 		}},
@@ -80,7 +78,7 @@ func BenchmarkGossipReadPaths(b *testing.B) {
 				if addr := transport.ObservedPeerAddr(path.String()); addr == nil || addr.String() != packet.Addr.String() {
 					b.Fatal("inbound benchmark did not validate and publish the peer")
 				}
-			case "tcp_zone", "tcp_record_history":
+			case "tcp_zone":
 				if response := gossipReadBenchmarkResult.(*gossip.ObjectPullResponse); !response.OK {
 					b.Fatalf("object benchmark failed: %s", response.Error)
 				}

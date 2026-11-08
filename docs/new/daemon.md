@@ -204,7 +204,7 @@ UDP reader 收到包后，由 Packet Demuxer 按 `peer_id` 路由：
 
 - 命中活跃 `SyncSession` 的包 → `PacketEvent`，交给该 session 的 FSM。
 - 未命中的包 → `UnsolicitedPacketEvent`，由事件循环里的只读 responder / hint ingress 处理：
-  - `PING` / `FETCH_CATALOG_PAGE` / `FETCH_ZONE` / `FETCH_RECORD`：直接读取 committed snapshot 并回复。
+  - `PING` / `FETCH_CATALOG_PAGE` / `FETCH_ZONE`：直接读取已提交的状态并回复。
   - `ANNOUNCE`：记录 hint，必要时创建或唤醒 active pull session。
 
 Demuxer 只按 `peer_id` 路由，不解释 message type；message type 由 `SyncSession` 或 unsolicited handler 在事件循环内判断。
@@ -295,7 +295,7 @@ Checkpoint 在 `gossip-checkpoint/peers` 下按 peer ID 保存小型 JSON；字�
 
 必须在事件循环内串行执行的状态变更：
 
-- `NetworkState` apply：`ApplySnapshot`、`ApplyRecordSnapshot`
+- `NetworkState` apply：`ApplySnapshot`
 - peer runtime 更新：sync 状态、观测地址、backoff、last error
 - `saveState()` 落盘
 - `Transport` 运行时表更新：`AddKnownPeerID`、`SetPeerAddrs`、`SetObservedPeerPaths`

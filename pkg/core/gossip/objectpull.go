@@ -14,32 +14,25 @@ import (
 // ObjectPullRequestType defines the kind of object being requested.
 type ObjectPullRequestType string
 
-const (
-	ObjectPullZone   ObjectPullRequestType = "zone"
-	ObjectPullRecord ObjectPullRequestType = "record"
-)
+const ObjectPullZone ObjectPullRequestType = "zone"
 
-// ObjectPullRequest is sent over TCP to request a zone snapshot or a single record.
+// ObjectPullRequest is sent over TCP to request a Zone snapshot.
 type ObjectPullRequest struct {
-	Type    ObjectPullRequestType `msgpack:"t"`
-	Zone    zone.ZonePath         `msgpack:"z"`
-	Key     string                `msgpack:"k,omitempty"`
-	Version uint64                `msgpack:"v,omitempty"`
+	Type ObjectPullRequestType `msgpack:"t"`
+	Zone zone.ZonePath         `msgpack:"z"`
 }
 
 // ObjectPullResponse is returned by the TCP object-pull server.
 type ObjectPullResponse struct {
-	OK       bool                      `msgpack:"ok"`
-	Snapshot *corestate.ZoneSnapshot   `msgpack:"s,omitempty"`
-	Record   *corestate.RecordSnapshot `msgpack:"r,omitempty"`
-	Error    string                    `msgpack:"e,omitempty"`
+	OK       bool                    `msgpack:"ok"`
+	Snapshot *corestate.ZoneSnapshot `msgpack:"s,omitempty"`
+	Error    string                  `msgpack:"e,omitempty"`
 }
 
 // ObjectPullSource returns detached objects from one committed common store.
 // It exposes neither the complete network nor platform runtime state.
 type ObjectPullSource interface {
 	ReadZoneSnapshot(zone.ZonePath, time.Time) (*corestate.ZoneSnapshot, bool, error)
-	ReadRecordSnapshot(zone.ZonePath, string, uint64) (*corestate.RecordSnapshot, error)
 }
 
 // BuildObjectPullResponse resolves the wire request using only the requested
@@ -48,28 +41,17 @@ func BuildObjectPullResponse(source ObjectPullSource, req *ObjectPullRequest, no
 	if source == nil || req == nil || !req.Zone.Valid() {
 		return &ObjectPullResponse{Error: "invalid request"}
 	}
-	switch req.Type {
-	case ObjectPullZone:
-		snapshot, revoked, err := source.ReadZoneSnapshot(req.Zone, now)
-		if revoked {
-			return &ObjectPullResponse{Error: "zone revoked"}
-		}
-		if err != nil {
-			return &ObjectPullResponse{Error: err.Error()}
-		}
-		return &ObjectPullResponse{OK: true, Snapshot: snapshot}
-	case ObjectPullRecord:
-		if req.Key == "" {
-			return &ObjectPullResponse{Error: "missing key"}
-		}
-		record, err := source.ReadRecordSnapshot(req.Zone, req.Key, req.Version)
-		if err != nil {
-			return &ObjectPullResponse{Error: err.Error()}
-		}
-		return &ObjectPullResponse{OK: true, Record: record}
-	default:
+	if req.Type != ObjectPullZone {
 		return &ObjectPullResponse{Error: "unsupported request type"}
 	}
+	snapshot, revoked, err := source.ReadZoneSnapshot(req.Zone, now)
+	if revoked {
+		return &ObjectPullResponse{Error: "zone revoked"}
+	}
+	if err != nil {
+		return &ObjectPullResponse{Error: err.Error()}
+	}
+	return &ObjectPullResponse{OK: true, Snapshot: snapshot}
 }
 
 // ExchangeObjectPull performs the platform-neutral request/response exchange

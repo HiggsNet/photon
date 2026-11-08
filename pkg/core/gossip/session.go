@@ -364,9 +364,6 @@ func (s *SyncSession) handleCatalogSummary(peerID string, summary *corestate.Cat
 		s.State = SyncSessionCompleted
 		return nil, nil
 	}
-	if summary.FirstPage != nil {
-		return s.onCatalogPageReceived(&CatalogPageReceivedEvent{PeerID: peerID, Page: summary.FirstPage}, now)
-	}
 	s.State = SyncSessionCatalogDiffing
 	s.lastCatalogCursor = ""
 	return []SyncAction{

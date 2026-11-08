@@ -9,11 +9,12 @@ message Message {
   uint64 nonce = 2;
   int64 timestamp = 3;
 
+  reserved 13;
+
   oneof body {
     Ping ping = 10;
     Pong pong = 11;
     FetchZone fetch_zone = 12;
-    FetchRecord fetch_record = 13;
     Announce announce = 14;
   }
 }
@@ -33,12 +34,6 @@ message Pong {
 
 message FetchZone {
   string zone = 1;
-}
-
-message FetchRecord {
-  string zone = 1;
-  string key = 2;
-  uint64 version = 3;
 }
 
 message Announce {

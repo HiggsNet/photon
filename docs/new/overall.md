@@ -46,7 +46,7 @@ Gossip 负责把这些 signed Zone state 在 peer 之间同步。它维护的是
 
 - 交换 Zone digest 和 record metadata。
 - 通过 UDP 传递小消息和 announce hint。
-- 通过 object pull 拉取较大的 Zone snapshot 或 record object。
+- 通过 object pull 拉取完整的 Zone snapshot。
 - 维护 endpoint discovery、bootstrap peer、observed path 等可达性信息。
 - 在验证通过后更新本地 active state。
 

@@ -45,7 +45,6 @@ func TestGossipDriverCatalogSummaryUpdatesSessionObservability(t *testing.T) {
 		Summary: &corestate.CatalogSummary{
 			CatalogRoot: []byte{0x21, 0x22},
 			ZoneCount:   2,
-			NextCursor:  "next-page",
 		},
 	}}, clock.Now(), nil)
 	if err != nil {
@@ -59,7 +58,7 @@ func TestGossipDriverCatalogSummaryUpdatesSessionObservability(t *testing.T) {
 		t.Fatalf("diagnostics = %#v", diagnostics)
 	}
 	stats := diagnostics.DatagramStats
-	if stats.LastCatalogRootHex != "2122" || stats.LastCatalogZoneCount != 2 || stats.LastCatalogCursor != "next-page" {
+	if stats.LastCatalogRootHex != "2122" || stats.LastCatalogZoneCount != 2 {
 		t.Fatalf("catalog stats = %#v", stats)
 	}
 	if diagnostics.ActivePullState != string(gossip.SyncSessionCatalogDiffing) || diagnostics.ActivePullLastEvent != "catalog_summary" {

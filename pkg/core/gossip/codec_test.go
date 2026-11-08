@@ -118,15 +118,15 @@ func TestCommonMessageSizesWithinDatagramBudget(t *testing.T) {
 	}{
 		{
 			name:    "ping",
-			message: commonWireMessage(MessagePing, &Ping{Summary: &corestate.CatalogSummary{CatalogRoot: digest.RootHash, ZoneCount: 1}}, nil, nil, nil, nil),
+			message: commonWireMessage(MessagePing, &Ping{Summary: &corestate.CatalogSummary{CatalogRoot: digest.RootHash, ZoneCount: 1}}, nil, nil, nil),
 		},
 		{
 			name:    "pong",
-			message: commonWireMessage(MessagePong, nil, &Pong{Summary: &corestate.CatalogSummary{CatalogRoot: digest.RootHash, ZoneCount: 1}}, nil, nil, nil),
+			message: commonWireMessage(MessagePong, nil, &Pong{Summary: &corestate.CatalogSummary{CatalogRoot: digest.RootHash, ZoneCount: 1}}, nil, nil),
 		},
 		{
 			name:    "announce digest",
-			message: commonWireMessage(MessageAnnounce, nil, nil, nil, nil, &Announce{Zones: []corestate.ZoneDigest{digest}}),
+			message: commonWireMessage(MessageAnnounce, nil, nil, nil, &Announce{Zones: []corestate.ZoneDigest{digest}}),
 		},
 	}
 
@@ -142,17 +142,16 @@ func TestCommonMessageSizesWithinDatagramBudget(t *testing.T) {
 	}
 }
 
-func commonWireMessage(messageType MessageType, ping *Ping, pong *Pong, fetchZone *FetchZone, fetchRecord *FetchRecord, announce *Announce) *Message {
+func commonWireMessage(messageType MessageType, ping *Ping, pong *Pong, fetchZone *FetchZone, announce *Announce) *Message {
 	return &Message{
-		Version:     WireVersion,
-		Type:        messageType,
-		PeerID:      "node-a.catofes.",
-		Nonce:       123456789,
-		Timestamp:   1717171717,
-		Ping:        ping,
-		Pong:        pong,
-		FetchZone:   fetchZone,
-		FetchRecord: fetchRecord,
-		Announce:    announce,
+		Version:   WireVersion,
+		Type:      messageType,
+		PeerID:    "node-a.catofes.",
+		Nonce:     123456789,
+		Timestamp: 1717171717,
+		Ping:      ping,
+		Pong:      pong,
+		FetchZone: fetchZone,
+		Announce:  announce,
 	}
 }

@@ -35,10 +35,6 @@ func (writer failingDiscoveryWriter) ReadZoneSnapshot(path zone.ZonePath, now ti
 	return corestate.NewStore(writer.view.State, nil, nil).ReadZoneSnapshot(path, now)
 }
 
-func (writer failingDiscoveryWriter) ReadRecordSnapshot(path zone.ZonePath, key string, version uint64) (*corestate.RecordSnapshot, error) {
-	return corestate.NewStore(writer.view.State, nil, nil).ReadRecordSnapshot(path, key, version)
-}
-
 func (writer failingDiscoveryWriter) ApplyRemoteBatch(context.Context, string, []corestate.RemoteSnapshot, time.Time) (corestate.RemoteBatchResult, error) {
 	return corestate.RemoteBatchResult{}, nil
 }

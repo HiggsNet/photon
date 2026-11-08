@@ -133,17 +133,6 @@ func (store *Store) ReadZoneSnapshot(path zone.ZonePath, now time.Time) (*ZoneSn
 	return snapshot, revoked, err
 }
 
-// ReadRecordSnapshot preserves the object-pull record lookup policy and
-// version order, but copies only the selected record, including history.
-func (store *Store) ReadRecordSnapshot(path zone.ZonePath, key string, version uint64) (*RecordSnapshot, error) {
-	if store == nil {
-		return RecordSnapshotFor(nil, path, key, version)
-	}
-	store.mu.RLock()
-	defer store.mu.RUnlock()
-	return RecordSnapshotFor(store.state.Network, path, key, version)
-}
-
 // CatalogView is the detached catalog data read together from one committed root.
 // It excludes records, history, private keys and peer restart hints.
 type CatalogView struct {

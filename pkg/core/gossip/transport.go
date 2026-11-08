@@ -525,8 +525,6 @@ func MessageObjectCounts(message *Message) (zones int, records int) {
 		return 0, 0
 	case message.FetchZone != nil:
 		return 1, 0
-	case message.FetchRecord != nil:
-		return 1, 1
 	case message.FetchCatalogPage != nil:
 		return 1, 0
 	case message.CatalogPage != nil:
@@ -534,9 +532,6 @@ func MessageObjectCounts(message *Message) (zones int, records int) {
 	case message.Announce != nil:
 		return len(message.Announce.Zones), 0
 	case message.ObjectChunk != nil:
-		if message.ObjectChunk.Object == ObjectPullRecord {
-			return 0, 1
-		}
 		return 1, 0
 	case message.ObjectChunkNACK != nil:
 		return 0, 0
@@ -565,7 +560,7 @@ func objectCost(message *Message) int64 {
 		// This is one bounded repair request. The actual retransmitted chunks
 		// consume their own quota on the shared send/receive bucket.
 		return 1
-	case message.FetchZone != nil, message.FetchRecord != nil:
+	case message.FetchZone != nil:
 		return 1
 	default:
 		return 1

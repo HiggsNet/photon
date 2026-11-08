@@ -162,7 +162,7 @@ func TestReadDiscoveryRetainsDigestsAndDetachesCurrentState(t *testing.T) {
 	}
 }
 
-func TestStoreObjectReadsPreserveHistoryAndFutureRevocation(t *testing.T) {
+func TestStoreZoneSnapshotIsDetachedAndHonorsFutureRevocation(t *testing.T) {
 	path := zone.ZonePath("node-a.catofes.")
 	candidate := commonBoltTestCandidate(1)
 	network := candidate.Verified.Network
@@ -176,16 +176,6 @@ func TestStoreObjectReadsPreserveHistoryAndFutureRevocation(t *testing.T) {
 		{Zone: path, Key: "value", Version: 2, Value: []byte("second")},
 	}
 	store := NewStore(candidate.Verified, nil, nil)
-	for _, version := range []uint64{0, 1, 2, 3, 4} {
-		got, err := store.ReadRecordSnapshot(path, "value", version)
-		want, wantErr := RecordSnapshotFor(network, path, "value", version)
-		if !reflect.DeepEqual(got, want) || fmt.Sprint(err) != fmt.Sprint(wantErr) {
-			t.Fatalf("record v%d = %#v/%v, want %#v/%v", version, got, err, want, wantErr)
-		}
-		if got != nil {
-			got.Record.Value[0] ^= 0xff
-		}
-	}
 	snapshot, revoked, err := store.ReadZoneSnapshot(path, time.Unix(199, 0))
 	want, _ := Snapshot(network, path)
 	if err != nil || revoked || !reflect.DeepEqual(snapshot, want) || snapshot.RecordHistory != nil {
@@ -234,11 +224,6 @@ func TestProjectedReadsAreDetachedDuringConcurrentCommits(t *testing.T) {
 			t.Fatal(err)
 		}
 		snapshot.Records["current"].Value[0] ^= 0xff
-		record, err := store.ReadRecordSnapshot(path, "current", 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		record.Record.Value[0] ^= 0xff
 	}
 	wg.Wait()
 	if got := string(store.ReadDiscovery(path.String()).Network.Zones[path].Records["current"].Value); got != "value-40" {

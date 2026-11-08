@@ -116,11 +116,6 @@ func (reader *memoryGossipStateStore) ReadZoneSnapshot(path zone.ZonePath, now t
 	return corestate.NewStore(view.State, nil, nil).ReadZoneSnapshot(path, now)
 }
 
-func (reader *memoryGossipStateStore) ReadRecordSnapshot(path zone.ZonePath, key string, version uint64) (*corestate.RecordSnapshot, error) {
-	view := reader.ReadView()
-	return corestate.NewStore(view.State, nil, nil).ReadRecordSnapshot(path, key, version)
-}
-
 func loadedManagedGossipState(managed zone.ZonePath, paths ...zone.ZonePath) corestate.View {
 	view := loadedGossipState(paths...)
 	view.State.ManagedZone = managed

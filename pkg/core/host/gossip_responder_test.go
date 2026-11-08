@@ -12,17 +12,13 @@ import (
 )
 
 // The legacy builder read a detached full network before answering. Keep that
-// read policy as a test oracle, including its record-history lookup order.
+// read policy as a test oracle.
 type fullNetworkObjectSource struct{ network *zone.NetworkState }
 
 func (source fullNetworkObjectSource) ReadZoneSnapshot(path zone.ZonePath, now time.Time) (*corestate.ZoneSnapshot, bool, error) {
 	revoked := source.network.IsZoneRevoked(path, now)
 	snapshot, err := corestate.Snapshot(source.network, path)
 	return snapshot, revoked, err
-}
-
-func (source fullNetworkObjectSource) ReadRecordSnapshot(path zone.ZonePath, key string, version uint64) (*corestate.RecordSnapshot, error) {
-	return corestate.RecordSnapshotFor(source.network, path, key, version)
 }
 
 func TestGossipObjectProjectionsPreserveWireResponses(t *testing.T) {
@@ -44,12 +40,7 @@ func TestGossipObjectProjectionsPreserveWireResponses(t *testing.T) {
 			{Type: gossip.ObjectPullZone, Zone: path},
 			{Type: gossip.ObjectPullZone, Zone: "missing.catofes."},
 			{Type: gossip.ObjectPullZone, Zone: "invalid"},
-			{Type: gossip.ObjectPullRecord, Zone: path},
-			{Type: gossip.ObjectPullRecord, Zone: path, Key: "missing"},
 			{Type: "unsupported", Zone: path},
-		}
-		for _, version := range []uint64{0, 1, 2, 3, 4} {
-			requests = append(requests, &gossip.ObjectPullRequest{Type: gossip.ObjectPullRecord, Zone: path, Key: "value", Version: version})
 		}
 		for _, request := range requests {
 			got := driver.GossipObjectPullResponse(request, now)

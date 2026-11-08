@@ -48,8 +48,6 @@ type chunkAssembly struct {
 	peerID       string
 	object       ObjectPullRequestType
 	zone         zone.ZonePath
-	key          string
-	version      uint64
 	rootHash     []byte
 	objectHash   []byte
 	transferID   []byte
@@ -106,8 +104,6 @@ func (s *ChunkAssemblyStore) Add(peerID string, chunk *ObjectChunk, now time.Tim
 			peerID:     peerID,
 			object:     chunk.Object,
 			zone:       chunk.Zone,
-			key:        chunk.Key,
-			version:    chunk.Version,
 			rootHash:   append([]byte(nil), chunk.RootHash...),
 			objectHash: append([]byte(nil), chunk.ObjectHash...),
 			transferID: append([]byte(nil), chunk.TransferID...),
@@ -117,7 +113,7 @@ func (s *ChunkAssemblyStore) Add(peerID string, chunk *ObjectChunk, now time.Tim
 		}
 		s.entries[key] = entry
 	}
-	if entry.total != chunk.Total || entry.object != chunk.Object || entry.zone != chunk.Zone || entry.key != chunk.Key || entry.version != chunk.Version || !bytes.Equal(entry.transferID, chunk.TransferID) || !bytes.Equal(entry.objectHash, chunk.ObjectHash) || !bytes.Equal(entry.rootHash, chunk.RootHash) {
+	if entry.total != chunk.Total || entry.object != chunk.Object || entry.zone != chunk.Zone || !bytes.Equal(entry.transferID, chunk.TransferID) || !bytes.Equal(entry.objectHash, chunk.ObjectHash) || !bytes.Equal(entry.rootHash, chunk.RootHash) {
 		delete(s.entries, key)
 		return nil, false, errors.New("chunk metadata changed during assembly")
 	}
@@ -338,7 +334,7 @@ func sameChunkObject(left, right []*ObjectChunk) bool {
 		return false
 	}
 	a, b := left[0], right[0]
-	return a.Object == b.Object && a.Zone == b.Zone && a.Key == b.Key && a.Version == b.Version &&
+	return a.Object == b.Object && a.Zone == b.Zone &&
 		bytes.Equal(a.ObjectHash, b.ObjectHash) && bytes.Equal(a.RootHash, b.RootHash) &&
 		len(a.Data) == len(b.Data)
 }
