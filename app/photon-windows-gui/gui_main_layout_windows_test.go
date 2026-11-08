@@ -77,20 +77,18 @@ func TestDesktopNativeMainDetailsAndResizableRoutes(t *testing.T) {
 		}
 		return bounds
 	}
+	w.show()
 	for _, pending := range []bool{false, true} {
 		w.admission.Pending = pending
-		guiMoveWindow.Call(w.hwnd, 0, 0, uintptr(w.guiScale(700)), uintptr(w.guiScale(620)), 0)
+		w.guiMove(w.hwnd, 0, 0, 920, 700)
 		w.layout()
-		smallRoutes := rect(w.controls[guiRoutesID])
-		summary, settings, note := rect(w.controls[guiConfigSummaryID]), rect(w.controls[guiSettingsID]), rect(w.controls[guiNoteID])
-		if smallRoutes.Bottom <= smallRoutes.Top || summary.Bottom > settings.Top || settings.Bottom > note.Top || note.Bottom-note.Top < int32(w.guiScale(64)) {
-			t.Fatalf("pending=%t: compact layout clips or overlaps: routes=%+v summary=%+v settings=%+v note=%+v", pending, smallRoutes, summary, settings, note)
-		}
-		guiMoveWindow.Call(w.hwnd, 0, 0, uintptr(w.guiScale(920)), uintptr(w.guiScale(760)), 0)
+		guiCheckVisibleDashboardBounds(t, w)
+		small := rect(w.controls[guiNodeListID])
+		w.guiMove(w.hwnd, 0, 0, 1100, 860)
 		w.layout()
-		largeRoutes := rect(w.controls[guiRoutesID])
-		if largeRoutes.Bottom-largeRoutes.Top <= smallRoutes.Bottom-smallRoutes.Top+int32(w.guiScale(100)) {
-			t.Fatalf("pending=%t: route viewport did not use additional window height", pending)
+		large := rect(w.controls[guiNodeListID])
+		if large.Bottom-large.Top <= small.Bottom-small.Top+int32(w.guiScale(40)) {
+			t.Fatal("node viewport did not use additional window height")
 		}
 	}
 }

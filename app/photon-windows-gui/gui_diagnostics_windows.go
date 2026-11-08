@@ -54,7 +54,7 @@ type guiDiagnosticsView struct {
 }
 
 func (w *desktopWindow) createDiagnosticsWindow() error {
-	hwnd, _, err := guiCreateWindow.Call(0, uintptr(unsafe.Pointer(guiUTF16("PhotonWindowsDiagnostics"))), uintptr(unsafe.Pointer(guiUTF16("Photon Windows · 日志与诊断"))), 0x00cf0000|0x02000000, 0x80000000, 0x80000000, uintptr(w.guiScale(940)), uintptr(w.guiScale(720)), w.hwnd, 0, w.instance, 0)
+	hwnd, _, err := guiCreateWindow.Call(0x10000, uintptr(unsafe.Pointer(guiUTF16("PhotonWindowsDiagnostics"))), uintptr(unsafe.Pointer(guiUTF16("Photon Windows · 日志与诊断"))), 0x40000000|0x02000000, 0, 0, uintptr(w.guiScale(940)), uintptr(w.guiScale(720)), w.hwnd, 0, w.instance, 0)
 	if hwnd == 0 {
 		return guiCallError("CreateWindowEx diagnostics", err)
 	}
@@ -120,11 +120,9 @@ func (w *desktopWindow) openDiagnostics() {
 	if w.diagnostics == 0 || w.quitting {
 		return
 	}
-	guiShowWindow.Call(w.diagnostics, 9)
-	guiShowWindow.Call(w.diagnostics, 5)
-	guiSetForegroundWindow.Call(w.diagnostics)
+	w.selectMainPage(w.diagnosticsView.page)
+	w.show()
 	w.drawDiagnostics()
-	w.refreshDiagnostics()
 }
 
 func (w *desktopWindow) refreshDiagnostics() {
@@ -168,6 +166,9 @@ func (w *desktopWindow) drawDiagnostics() {
 	switch v.page {
 	case guiDiagnosticsOverviewID:
 		text = desktopFormatOverview(v.snapshot)
+		if w.operationNote != "" {
+			text += "\r\n[最近操作]\r\n" + w.operationNote
+		}
 	case guiDiagnosticsGatewayID:
 		text = desktopFormatGatewayNode(v.snapshot, v.gatewayID)
 	case guiDiagnosticsLogID:
@@ -278,13 +279,15 @@ func (w *desktopWindow) syncDiagnosticsPeerList() {
 	if desktopLiveSnapshot(v.snapshot) {
 		if v.page == guiDiagnosticsGatewayID {
 			ids, rows = []string{""}, []string{"连接总览"}
-			for _, id := range desktopGatewayNodes(v.snapshot) {
+			gatewayIDs := desktopGatewayNodes(v.snapshot)
+			slices.Reverse(gatewayIDs)
+			for _, id := range gatewayIDs {
 				ids = append(ids, id)
 				rows = append(rows, desktopGatewayState(v.snapshot.Observation, id)+" · "+desktopDebugCell(id, 128))
 			}
 		} else {
 			peers := slices.Clone(v.snapshot.Observation.Peers)
-			slices.SortFunc(peers, func(a, b photonwindows.PeerObservation) int { return strings.Compare(a.Peer, b.Peer) })
+			slices.SortFunc(peers, func(a, b photonwindows.PeerObservation) int { return strings.Compare(b.Peer, a.Peer) })
 			for _, peer := range peers {
 				ids = append(ids, peer.Peer)
 				rows = append(rows, desktopPeerRow(peer))
@@ -360,7 +363,7 @@ func guiBoundDiagnosticsText(text string, limit int) (string, bool) {
 func (w *desktopWindow) diagnosticsWindowProc(hwnd uintptr, message uint32, wp, lp uintptr) uintptr {
 	switch message {
 	case guiWMClose:
-		guiShowWindow.Call(hwnd, 0)
+		w.selectMainPage(0)
 		return 0
 	case guiWMDestroy:
 		guiWindows.Delete(hwnd)
@@ -401,6 +404,8 @@ func (w *desktopWindow) diagnosticsWindowProc(hwnd uintptr, message uint32, wp, 
 		switch int(wp & 0xffff) {
 		case guiDiagnosticsOverviewID, guiDiagnosticsGatewayID, guiDiagnosticsLogID, guiDiagnosticsPeersID, guiDiagnosticsRoutesID, guiDiagnosticsAddressesID, guiDiagnosticsDetailsID:
 			v.page = int(wp & 0xffff)
+			w.mainPage = v.page
+			w.layout()
 			if v.page == guiDiagnosticsRoutesID {
 				v.route = routeKey{}
 			}
@@ -441,31 +446,41 @@ func (w *desktopWindow) layoutDiagnostics() {
 	if width <= 0 || height <= 0 {
 		return
 	}
+	advanced := w.diagnosticsView != nil && (w.diagnosticsView.page == guiDiagnosticsOverviewID || w.diagnosticsView.page == guiDiagnosticsAddressesID || w.diagnosticsView.page == guiDiagnosticsDetailsID)
 	x := 24
-	for _, spec := range []struct{ id, width int }{{guiDiagnosticsOverviewID, 56}, {guiDiagnosticsGatewayID, 94}, {guiDiagnosticsPeersID, 96}, {guiDiagnosticsLogID, 54}, {guiDiagnosticsRoutesID, 88}, {guiDiagnosticsAddressesID, 82}, {guiDiagnosticsDetailsID, 84}} {
-		w.guiMove(w.controls[spec.id], x, 16, spec.width, 32)
-		x += spec.width + 8
+	for _, id := range []int{guiDiagnosticsOverviewID, guiDiagnosticsGatewayID, guiDiagnosticsPeersID, guiDiagnosticsLogID, guiDiagnosticsRoutesID, guiDiagnosticsAddressesID, guiDiagnosticsDetailsID} {
+		show := uintptr(0)
+		if advanced && (id == guiDiagnosticsOverviewID || id == guiDiagnosticsAddressesID || id == guiDiagnosticsDetailsID) {
+			show = 5
+			w.guiMove(w.controls[id], x, 16, 112, 32)
+			x += 120
+		}
+		guiShowWindow.Call(w.controls[id], show)
 	}
-	w.guiMove(w.controls[guiDiagnosticsTitleID], 24, 66, width-48, 34)
-	w.guiMove(w.controls[guiDiagnosticsMetadataID], 24, 108, width-48, 64)
-	left, top, contentWidth := 24, 184, width-48
+	offset := 0
+	if !advanced {
+		offset = 38
+	}
+	w.guiMove(w.controls[guiDiagnosticsTitleID], 24, 66-offset, width-48, 34)
+	w.guiMove(w.controls[guiDiagnosticsMetadataID], 24, 108-offset, width-48, 64)
+	left, top, contentWidth := 24, 184-offset, width-48
 	peerPage := w.diagnosticsView != nil && (w.diagnosticsView.page == guiDiagnosticsPeersID || w.diagnosticsView.page == guiDiagnosticsGatewayID)
 	logPage := w.diagnosticsView != nil && w.diagnosticsView.page == guiDiagnosticsLogID
 	showPeers, showLogs := uintptr(0), uintptr(0)
 	if peerPage {
 		showPeers = 5
 		listWidth := min(300, max(220, (width-60)/3))
-		w.guiMove(w.controls[guiDiagnosticsPeerTitleID], 24, 184, listWidth, 24)
-		w.guiMove(w.controls[guiDiagnosticsPeerListID], 24, 216, listWidth, max(height-288, 0))
+		w.guiMove(w.controls[guiDiagnosticsPeerTitleID], 24, 184-offset, listWidth, 24)
+		w.guiMove(w.controls[guiDiagnosticsPeerListID], 24, 216-offset, listWidth, max(height-288+offset, 0))
 		left += listWidth + 12
 		contentWidth -= listWidth + 12
-		w.guiMove(w.controls[guiDiagnosticsNodeTitleID], left, 184, contentWidth, 24)
-		top = 216
+		w.guiMove(w.controls[guiDiagnosticsNodeTitleID], left, 184-offset, contentWidth, 24)
+		top = 216 - offset
 	}
 	if logPage {
 		showLogs = 5
-		w.guiMove(w.controls[guiDiagnosticsLogFilterID], 24, 176, 260, 220)
-		top = 216
+		w.guiMove(w.controls[guiDiagnosticsLogFilterID], 24, 176-offset, 260, 220)
+		top = 216 - offset
 	}
 	guiShowWindow.Call(w.controls[guiDiagnosticsPeerTitleID], showPeers)
 	guiShowWindow.Call(w.controls[guiDiagnosticsPeerListID], showPeers)

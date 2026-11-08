@@ -34,23 +34,23 @@ func (w *desktopWindow) styleSettingsControls() {
 	}
 	w.guiStyleControl(w.controls[guiPageTitleID], "title")
 	w.guiApplyFont(w.controls[guiPageTitleID], "title")
-	for _, id := range []int{guiPageHelpID, guiSettingsNoteID} {
+	for _, id := range []int{guiPageHelpID, guiSettingsNoteID, guiSettingsPathID} {
 		w.guiStyleControl(w.controls[id], "muted")
 		w.guiApplyFont(w.controls[id], "body")
 	}
 	w.guiStyleControl(w.controls[guiSaveID], "primary")
 	w.guiApplyFont(w.controls[guiSaveID], "body")
 	for id, cue := range map[int]string{
-		guiRootFieldID:        "管理员提供的 Base64 公钥",
-		guiManagedFieldID:     "例如 node.example.",
-		guiAllowedInputID:     "例如 *.example. 或 gateway.example.",
-		guiRouteInputID:       "例如 10.0.0.0/24 或 fd00::/64",
-		guiBootstrapPeerID:    "例如 gateway.example.",
+		guiRootFieldID:        "Base64 public key",
+		guiManagedFieldID:     "node.example.",
+		guiAllowedInputID:     "*.example. / gateway.example.",
+		guiRouteInputID:       "10.0.0.0/24 / fd00::/64",
+		guiBootstrapPeerID:    "gateway.example.",
 		guiBootstrapAddressID: "host:port 或 [IPv6]:port",
-		guiStateFieldID:       `例如 C:\Photon\photon.db`,
-		guiOverlayFieldID:     "ipsec-main（须与网关一致）", guiListenFieldID: "0.0.0.0:33434",
+		guiStateFieldID:       `C:\Photon\photon.db`,
+		guiOverlayFieldID:     "ipsec-main", guiListenFieldID: "0.0.0.0:33434",
 		guiAdapterFieldID: "Photon Windows", guiMTUFieldID: "1400",
-		guiInitialFieldID: "例如 1s", guiMaxFieldID: "例如 1m",
+		guiInitialFieldID: "1s", guiMaxFieldID: "1m",
 	} {
 		guiSendMessage.Call(w.controls[id], 0x1501, 0, uintptr(unsafe.Pointer(guiUTF16(cue)))) // EM_SETCUEBANNER
 	}
@@ -119,6 +119,7 @@ func (w *desktopWindow) layoutSettings() {
 			field(id, margin+column*(half+gap), 232+row*76, half, controlHeight)
 		}
 	}
+	move(w.controls[guiSettingsPathID], margin, height-124, content, 22)
 	move(w.controls[guiSettingsNoteID], margin, height-98, content, 42)
 	move(w.controls[guiReloadID], width-margin-252, height-48, 112, 32)
 	move(w.controls[guiSaveID], width-margin-128, height-48, 128, 32)

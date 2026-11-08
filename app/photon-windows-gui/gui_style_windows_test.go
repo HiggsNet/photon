@@ -49,7 +49,7 @@ func TestDesktopNativeDPIAndTabNavigation(t *testing.T) {
 	// An SSH-launched test process can inherit STARTUPINFO/SW_HIDE, which
 	// overrides its first ShowWindow call. Match production restore/show and
 	// require visible ancestors before testing their keyboard navigation.
-	for _, hwnd := range []uintptr{w.hwnd, w.settings} {
+	for _, hwnd := range []uintptr{w.hwnd} {
 		guiShowWindow.Call(hwnd, 9)
 		guiShowWindow.Call(hwnd, 5)
 		shown, _, _ := guiUser32.NewProc("IsWindowVisible").Call(hwnd)
@@ -59,7 +59,8 @@ func TestDesktopNativeDPIAndTabNavigation(t *testing.T) {
 			t.Fatalf("native fixture top-level window is hidden: hwnd=%x parent=%x style=%x main=%x settings=%x", hwnd, parent, style, w.hwnd, w.settings)
 		}
 	}
-	for _, id := range []int{guiStartID, guiSaveID} {
+	w.openSettings()
+	for _, id := range []int{guiConnectID, guiSaveID} {
 		style, _, _ := guiUser32.NewProc("GetWindowLongPtrW").Call(w.controls[id], ^uintptr(15))
 		if style&0xf != 0xb || style&0x10000 == 0 {
 			t.Fatalf("primary button %d lost BS_OWNERDRAW or keyboard tab behavior: style=%x", id, style)
@@ -70,7 +71,7 @@ func TestDesktopNativeDPIAndTabNavigation(t *testing.T) {
 	defer func() {
 		// Restore each owned window's DPI before disposal; no monitor or
 		// process-wide setting was modified by the synthetic notifications.
-		for _, hwnd := range []uintptr{w.hwnd, w.settings} {
+		for _, hwnd := range []uintptr{w.hwnd} {
 			var rect guiRect
 			guiUser32.NewProc("GetWindowRect").Call(hwnd, uintptr(unsafe.Pointer(&rect)))
 			dpi, _, _ := guiUser32.NewProc("GetDpiForWindow").Call(hwnd)
@@ -202,15 +203,15 @@ func TestDesktopNativeDPIAndTabNavigation(t *testing.T) {
 		for _, top := range []struct {
 			hwnd   uintptr
 			height int32
-		}{{w.hwnd, 620}, {w.settings, 700}} {
-			suggested := guiRect{Left: 20, Top: 20, Right: 20 + int32(700*dpi/96), Bottom: 20 + top.height*int32(dpi)/96}
+		}{{w.hwnd, 700}} {
+			suggested := guiRect{Left: 20, Top: 20, Right: 20 + int32(920*dpi/96), Bottom: 20 + top.height*int32(dpi)/96}
 			guiSendMessage.Call(top.hwnd, 0x02e0, uintptr(dpi|dpi<<16), uintptr(unsafe.Pointer(&suggested)))
 			if got := w.guiDPI(top.hwnd); got != dpi {
 				t.Fatalf("WM_DPICHANGED did not update its top-level owner: got %d want %d", got, dpi)
 			}
 			limits := [5]guiPoint{}
 			guiSendMessage.Call(top.hwnd, guiWMGetMinMaxInfo, 0, uintptr(unsafe.Pointer(&limits[0])))
-			if limits[3] != (guiPoint{int32(700 * dpi / 96), top.height * int32(dpi) / 96}) {
+			if limits[3] != (guiPoint{int32(920 * dpi / 96), top.height * int32(dpi) / 96}) {
 				t.Fatalf("dpi=%d scaled minimum=%+v", dpi, limits[3])
 			}
 		}

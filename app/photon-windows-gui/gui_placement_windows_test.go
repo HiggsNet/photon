@@ -50,7 +50,7 @@ func TestDesktopNativeInitialWindowsFitWorkArea(t *testing.T) {
 		var message guiMessage
 		guiUser32.NewProc("PeekMessageW").Call(uintptr(unsafe.Pointer(&message)), 0, 0x12, 0x12, 1)
 	}()
-	for _, hwnd := range []uintptr{w.hwnd, w.settings, w.diagnostics} {
+	for _, hwnd := range []uintptr{w.hwnd} {
 		monitor, _, _ := guiUser32.NewProc("MonitorFromWindow").Call(hwnd, 2)
 		info := guiMonitorInfo{Size: uint32(unsafe.Sizeof(guiMonitorInfo{}))}
 		if ok, _, err := guiUser32.NewProc("GetMonitorInfoW").Call(monitor, uintptr(unsafe.Pointer(&info))); ok == 0 {

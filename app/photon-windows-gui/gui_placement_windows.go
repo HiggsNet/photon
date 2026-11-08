@@ -19,7 +19,7 @@ func guiFitWindowRect(bounds, work guiRect) guiRect {
 }
 
 // Initial Windows placement can extend under the taskbar on a small display.
-// Use the nearest monitor's work area for each of the three top-level windows.
+// Use the nearest monitor's work area for the application window.
 func guiFitInitialWindow(hwnd uintptr) error {
 	monitor, _, err := guiUser32.NewProc("MonitorFromWindow").Call(hwnd, 2)
 	if monitor == 0 {

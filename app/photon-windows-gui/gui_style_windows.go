@@ -11,8 +11,8 @@ import (
 
 var guiSetWindowTheme = windows.NewLazySystemDLL("uxtheme.dll").NewProc("SetWindowTheme")
 
-// One visual owner per desktop. Each top-level window has its own DPI; fonts
-// and brushes remain alive until all windows and their child controls close.
+// One visual owner per desktop. Embedded pages inherit the main window DPI;
+// fonts and brushes remain alive until all child controls close.
 type guiAppearance struct {
 	dpi       map[uintptr]uint32
 	fonts     map[uint32]map[string]uintptr
@@ -100,12 +100,15 @@ func (w *desktopWindow) guiInitStyle() error {
 	}
 	w.font = w.appearance.fonts[dpi]["body"]
 	if dpi != 96 {
-		guiUser32.NewProc("SetWindowPos").Call(w.hwnd, 0, 0, 0, uintptr(w.guiScale(920)), uintptr(w.guiScale(760)), 0x16)
+		guiUser32.NewProc("SetWindowPos").Call(w.hwnd, 0, 0, 0, uintptr(w.guiScale(1100)), uintptr(w.guiScale(760)), 0x16)
 	}
 	return nil
 }
 
 func guiFontKind(role string) string {
+	if role == "cardTitle" {
+		return "title"
+	}
 	switch role {
 	case "title", "section", "mono":
 		return role
@@ -139,7 +142,7 @@ func (w *desktopWindow) guiStyleControl(hwnd uintptr, kind string) {
 	if windows.UTF16ToString(class[:]) == "Button" {
 		style, _, _ := guiUser32.NewProc("GetWindowLongPtrW").Call(hwnd, ^uintptr(15)) // GWL_STYLE=-16
 		style &^= 0xf
-		if kind == "primary" {
+		if kind == "primary" || kind == "secondary" || kind == "nav" || kind == "navActive" {
 			style |= 0xb
 		} // BS_OWNERDRAW
 		guiUser32.NewProc("SetWindowLongPtrW").Call(hwnd, ^uintptr(15), style)
@@ -164,9 +167,9 @@ func (w *desktopWindow) guiColor(role string) uint32 {
 	if w.appearance.contrast {
 		index := uintptr(8) // COLOR_WINDOWTEXT
 		switch role {
-		case "background", "surface":
+		case "background", "surface", "sidebar":
 			index = 5
-		case "accent":
+		case "accent", "selected":
 			index = 13
 		case "pressed":
 			index = 13
@@ -182,17 +185,23 @@ func (w *desktopWindow) guiColor(role string) uint32 {
 	}
 	switch role {
 	case "background":
-		return guiRGB(245, 247, 251)
+		return guiRGB(247, 248, 252)
 	case "surface", "onAccent":
 		return guiRGB(255, 255, 255)
 	case "accent":
-		return guiRGB(37, 99, 211)
+		return guiRGB(103, 80, 164)
 	case "pressed":
-		return guiRGB(29, 78, 167)
+		return guiRGB(79, 55, 134)
 	case "muted", "disabledText":
 		return guiRGB(89, 101, 122)
 	case "disabled":
 		return guiRGB(225, 230, 239)
+	case "sidebar":
+		return guiRGB(240, 241, 248)
+	case "selected":
+		return guiRGB(232, 224, 246)
+	case "warning":
+		return guiRGB(174, 85, 25)
 	case "success":
 		return guiRGB(20, 112, 67)
 	default:
@@ -223,12 +232,9 @@ func (w *desktopWindow) guiHandleStyleMessage(hwnd uintptr, message uint32, wp, 
 	switch message {
 	case guiWMGetMinMaxInfo:
 		if lp != 0 {
-			height := 620
-			if hwnd == w.settings {
-				height = 700
-			}
+			height := 700
 			dpi := w.guiDPI(hwnd)
-			minimum := guiPoint{int32(guiAtDPI(700, dpi)), int32(guiAtDPI(height, dpi))}
+			minimum := guiPoint{int32(guiAtDPI(920, dpi)), int32(guiAtDPI(height, dpi))}
 			guiMoveMemory.Call(lp+3*unsafe.Sizeof(minimum), uintptr(unsafe.Pointer(&minimum)), unsafe.Sizeof(minimum))
 		}
 		return 0, true
@@ -269,16 +275,25 @@ func (w *desktopWindow) guiHandleStyleMessage(hwnd uintptr, message uint32, wp, 
 		var rect guiRect
 		guiGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&rect)))
 		guiUser32.NewProc("FillRect").Call(wp, uintptr(unsafe.Pointer(&rect)), w.guiBrush(w.guiColor("background")))
+		if hwnd == w.hwnd {
+			w.drawMainBackground(wp)
+		}
 		return 1, true
 	case 0x133, 0x134, 0x138: // EDIT, LISTBOX, STATIC (including readonly EDIT)
 		role := w.appearance.roles[lp]
 		background := "background"
-		if role == "edit" || role == "mono" {
+		if role == "edit" || role == "mono" || role == "cardTitle" || role == "cardMuted" {
 			background = "surface"
 		}
+		if lp == w.controls[guiBrandID] || lp == w.controls[guiBrandNoteID] {
+			background = "sidebar"
+		}
 		text := "body"
-		if role == "muted" {
+		if role == "muted" || role == "cardMuted" {
 			text = "muted"
+		}
+		if lp == w.controls[guiHeroTitleID] && w.admission.Adopted && w.snapshot.Error == "" {
+			text = "success"
 		}
 		if lp == w.controls[guiStatusID] && w.snapshot.Error == "" && w.snapshot.Observation != nil && w.snapshot.Observation.TunnelReady {
 			text = "success"
@@ -293,12 +308,25 @@ func (w *desktopWindow) guiHandleStyleMessage(hwnd uintptr, message uint32, wp, 
 		}
 		var item guiDrawItem
 		guiMoveMemory.Call(uintptr(unsafe.Pointer(&item)), lp, unsafe.Sizeof(item))
-		if item.Type != 4 || w.appearance.roles[item.Window] != "primary" {
+		if w.drawDashboardItem(item) {
+			return 1, true
+		}
+		role := w.appearance.roles[item.Window]
+		if item.Type != 4 || (role != "primary" && role != "secondary" && role != "nav" && role != "navActive") {
 			return 0, false
 		}
 		saved, _, _ := guiGDI32.NewProc("SaveDC").Call(item.DC)
 		defer guiGDI32.NewProc("RestoreDC").Call(item.DC, saved)
 		fill, text := "accent", "onAccent"
+		if role == "secondary" {
+			fill, text = "surface", "accent"
+		}
+		if role == "nav" {
+			fill, text = "sidebar", "muted"
+		}
+		if role == "navActive" {
+			fill, text = "selected", "accent"
+		}
 		if item.State&1 != 0 {
 			fill = "pressed"
 		}
@@ -307,19 +335,31 @@ func (w *desktopWindow) guiHandleStyleMessage(hwnd uintptr, message uint32, wp, 
 		}
 		if w.appearance.contrast && item.State&4 == 0 {
 			fill, text = "accent", "onAccent"
+			if role == "nav" {
+				fill, text = "sidebar", "body"
+			}
 		}
-		guiUser32.NewProc("FillRect").Call(item.DC, uintptr(unsafe.Pointer(&item.Rect)), w.guiBrush(w.guiColor("background")))
+		base := "background"
+		if role == "nav" || role == "navActive" {
+			base = "sidebar"
+		}
+		guiUser32.NewProc("FillRect").Call(item.DC, uintptr(unsafe.Pointer(&item.Rect)), w.guiBrush(w.guiColor(base)))
 		guiGDI32.NewProc("SelectObject").Call(item.DC, w.guiBrush(w.guiColor(fill)))
 		pen, _, _ := guiGDI32.NewProc("GetStockObject").Call(8) // NULL_PEN
 		guiGDI32.NewProc("SelectObject").Call(item.DC, pen)
-		radius := uintptr(guiAtDPI(8, w.guiDPI(item.Window)))
+		radius := uintptr(guiAtDPI(20, w.guiDPI(item.Window)))
 		guiGDI32.NewProc("RoundRect").Call(item.DC, uintptr(item.Rect.Left), uintptr(item.Rect.Top), uintptr(item.Rect.Right), uintptr(item.Rect.Bottom), radius, radius)
 		font, _, _ := guiSendMessage.Call(item.Window, 0x31, 0, 0)
 		guiGDI32.NewProc("SelectObject").Call(item.DC, font)
 		guiGDI32.NewProc("SetTextColor").Call(item.DC, uintptr(w.guiColor(text)))
 		guiGDI32.NewProc("SetBkMode").Call(item.DC, 1)
 		label, _ := guiControlText(item.Window)
-		guiUser32.NewProc("DrawTextW").Call(item.DC, uintptr(unsafe.Pointer(guiUTF16(label))), ^uintptr(0), uintptr(unsafe.Pointer(&item.Rect)), 0x8025)
+		labelRect, flags := item.Rect, uintptr(0x8025)
+		if role == "nav" || role == "navActive" {
+			labelRect.Left += int32(guiAtDPI(16, w.guiDPI(item.Window)))
+			flags = 0x8024
+		}
+		guiUser32.NewProc("DrawTextW").Call(item.DC, uintptr(unsafe.Pointer(guiUTF16(label))), ^uintptr(0), uintptr(unsafe.Pointer(&labelRect)), flags)
 		if item.State&0x10 != 0 {
 			focus := guiRect{item.Rect.Left + 4, item.Rect.Top + 4, item.Rect.Right - 4, item.Rect.Bottom - 4}
 			guiUser32.NewProc("DrawFocusRect").Call(item.DC, uintptr(unsafe.Pointer(&focus)))

@@ -56,7 +56,7 @@ func TestDesktopNativeDiagnosticsPeerSelectionTracksCurrentSnapshot(t *testing.T
 		var message guiMessage
 		guiUser32.NewProc("PeekMessageW").Call(uintptr(unsafe.Pointer(&message)), 0, 0x12, 0x12, 1)
 	}()
-	guiShowWindow.Call(w.diagnostics, 5)
+	w.openDiagnostics()
 	w.diagnosticsView.paused = true
 	guiSendMessage.Call(w.diagnostics, guiWMCommand, guiDiagnosticsPeersID, 0)
 	var class [32]uint16
@@ -177,8 +177,9 @@ func TestDesktopNativeDiagnosticsRefreshPreservesReading(t *testing.T) {
 		var message guiMessage
 		guiUser32.NewProc("PeekMessageW").Call(uintptr(unsafe.Pointer(&message)), 0, 0x12, 0x12, 1)
 	}()
-	w.guiMove(w.diagnostics, 40, 40, 700, 620)
-	guiShowWindow.Call(w.diagnostics, 5)
+	w.guiMove(w.hwnd, 0, 0, 920, 700)
+	w.layout()
+	w.openDiagnostics()
 	edit := w.controls[guiDiagnosticsTextID]
 	text := strings.Repeat("当前节点 · IKE authentication and connection details\r\n", 1800)
 	w.updateDiagnosticsText(text)
@@ -281,7 +282,8 @@ func TestDesktopNativeDiagnosticsReadPauseRefreshAndOffline(t *testing.T) {
 		return text
 	}
 	click := func(id int) { guiSendMessage.Call(w.diagnostics, guiWMCommand, uintptr(id), 0) }
-	w.guiMove(w.diagnostics, 40, 40, 700, 620)
+	w.guiMove(w.hwnd, 0, 0, 920, 700)
+	w.layout()
 	w.startWorker()
 	w.openDiagnostics()
 	awaitDesktopNativeResult(t, w)
@@ -388,7 +390,8 @@ func TestDesktopNativeDiagnosticsReadPauseRefreshAndOffline(t *testing.T) {
 	}
 	// Use the top-level window's actual DPI for native minimum-size geometry.
 	// A synthetic map override would not establish an OS DPI transition.
-	w.guiMove(w.diagnostics, 40, 40, 700, 620)
+	w.guiMove(w.hwnd, 0, 0, 920, 700)
+	w.layout()
 	var client guiRect
 	guiGetClientRect.Call(w.diagnostics, uintptr(unsafe.Pointer(&client)))
 	controlRect := func(id int) guiRect {
@@ -428,7 +431,10 @@ func TestDesktopNativeDiagnosticsReadPauseRefreshAndOffline(t *testing.T) {
 			}
 		}
 		var previous guiRect
-		for column, id := range []int{guiDiagnosticsOverviewID, guiDiagnosticsGatewayID, guiDiagnosticsPeersID, guiDiagnosticsLogID, guiDiagnosticsDetailsID} {
+		for column, id := range []int{guiDiagnosticsOverviewID, guiDiagnosticsAddressesID, guiDiagnosticsDetailsID} {
+			if !visible(id) {
+				continue
+			}
 			button := controlRect(id)
 			if column > 0 && previous.Right > button.Left {
 				t.Fatal("five-page navigation overlaps at minimum diagnostics size")

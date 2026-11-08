@@ -50,8 +50,13 @@ func TestDesktopNativeDuplicateActivationRestoresHiddenWindow(t *testing.T) {
 	if visible, _, _ := guiUser32.NewProc("IsWindowVisible").Call(w.hwnd); visible == 0 {
 		t.Fatal("duplicate activation did not restore the existing window")
 	}
-	if backend.run != nil || len(w.requests) != 0 {
-		t.Fatal("activation started a runtime or queued a backend operation")
+	if backend.run != nil {
+		t.Fatal("activation started a runtime")
+	}
+	for len(w.requests) != 0 {
+		if request := <-w.requests; request.Action != "refresh" {
+			t.Fatalf("activation queued a mutation instead of a status refresh: %s", request.Action)
+		}
 	}
 	if _, err := os.Stat(config); !os.IsNotExist(err) {
 		t.Fatalf("activation touched missing configuration: %v", err)

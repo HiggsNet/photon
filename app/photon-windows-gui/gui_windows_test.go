@@ -70,29 +70,16 @@ func TestDesktopNativeWindow(t *testing.T) {
 	// The owner must leave every field except ptMinTrackSize unchanged.
 	limits := [5]guiPoint{{1, 2}, {3, 4}, {5, 6}, {7, 8}, {9, 10}}
 	guiSendMessage.Call(w.hwnd, guiWMGetMinMaxInfo, 0, uintptr(unsafe.Pointer(&limits[0])))
-	wantLimits := [5]guiPoint{{1, 2}, {3, 4}, {5, 6}, {700, 620}, {9, 10}}
+	wantLimits := [5]guiPoint{{1, 2}, {3, 4}, {5, 6}, {920, 700}, {9, 10}}
 	if limits != wantLimits {
 		t.Fatalf("WM_GETMINMAXINFO changed wrong native fields: %v", limits)
 	}
-	// At the smallest supported window, a wrapped runtime error must fit
-	// without covering the configuration summary or the settings button.
-	guiMoveWindow.Call(w.hwnd, 0, 0, 700, 620, 0)
-	windowRect := func(hwnd uintptr) guiRect {
-		var rect guiRect
-		if ok, _, err := guiUser32.NewProc("GetWindowRect").Call(hwnd, uintptr(unsafe.Pointer(&rect))); ok == 0 {
-			t.Fatalf("GetWindowRect: %v", err)
-		}
-		return rect
-	}
+	w.show()
+	w.guiMove(w.hwnd, 0, 0, 920, 700)
 	for _, pending := range []bool{false, true} {
 		w.admission.Pending = pending
 		w.layout()
-		summary := windowRect(w.controls[guiConfigSummaryID])
-		settings := windowRect(w.controls[guiSettingsID])
-		note := windowRect(w.controls[guiNoteID])
-		if summary.Bottom-summary.Top < 64 || note.Bottom-note.Top < 64 || summary.Bottom > settings.Top || settings.Bottom > note.Top {
-			t.Fatalf("pending=%t: smallest window clips summary/footer or overlaps controls: summary=%+v settings=%+v note=%+v", pending, summary, settings, note)
-		}
+		guiCheckVisibleDashboardBounds(t, w)
 	}
 	w.admission.Pending = false
 	w.layout()
@@ -161,12 +148,8 @@ func TestDesktopNativeWindow(t *testing.T) {
 	if text(guiStatusID) != "连接：已入网，等待业务IP分配" || !strings.Contains(text(guiNoteID), observation.Readiness.Reason) || strings.Contains(text(guiNoteID), "198.18.253.2/32") || !strings.Contains(text(guiAdmissionID), "隧道链路 IPv6：fe80::1") || !strings.Contains(text(guiNoteID), "实时对端链路 IPv6：fe80::2") || text(guiJoinRequestID) != "" {
 		t.Fatal("canonical missing business IP diagnosis was not displayed or retained an old request/address")
 	}
-	w.guiMove(w.hwnd, 0, 0, 700, 620)
-	var admissionRect, routeLabelRect guiRect
-	guiUser32.NewProc("GetWindowRect").Call(w.controls[guiAdmissionID], uintptr(unsafe.Pointer(&admissionRect)))
-	guiUser32.NewProc("GetWindowRect").Call(w.labels[0], uintptr(unsafe.Pointer(&routeLabelRect)))
-	if strings.Count(text(guiAdmissionID), "\r\n") != 2 || admissionRect.Bottom-admissionRect.Top < int32(guiAtDPI(66, w.guiDPI(w.hwnd))) || admissionRect.Bottom > routeLabelRect.Top {
-		t.Fatal("minimum window clipped the three address/admission lines or overlapped the route section")
+	if hero, _ := guiControlText(w.controls[guiHeroTitleID]); hero != "已入网" {
+		t.Fatal("compact dashboard lost admission state")
 	}
 	observation.Readiness.Stage = photonwindows.ReadinessStageAddressAnnouncement
 	w.render(desktopSnapshot{RuntimeState: "running", Observation: observation})
@@ -369,9 +352,9 @@ func TestDesktopNativeMissingFormCreatesConfigThroughWorker(t *testing.T) {
 		}
 	}
 	var limits [5]guiPoint
-	guiSendMessage.Call(w.settings, guiWMGetMinMaxInfo, 0, uintptr(unsafe.Pointer(&limits[0])))
-	if limits[3] != (guiPoint{700, 700}) {
-		t.Fatal("settings minimum size changed")
+	guiSendMessage.Call(w.hwnd, guiWMGetMinMaxInfo, 0, uintptr(unsafe.Pointer(&limits[0])))
+	if limits[3] != (guiPoint{920, 700}) {
+		t.Fatal("application minimum size changed")
 	}
 	w.command(guiSaveID)
 	awaitDesktopNativeResult(t, w)

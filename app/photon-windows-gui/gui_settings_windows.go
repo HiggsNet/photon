@@ -37,6 +37,7 @@ const (
 	guiRoutePageID        = 2104
 	guiPageTitleID        = 2201
 	guiPageHelpID         = 2202
+	guiSettingsPathID     = 2203
 	guiBootstrapAddID     = 2111
 	guiBootstrapUpdateID  = 2112
 	guiBootstrapDeleteID  = 2113
@@ -49,7 +50,7 @@ var guiRouteFields = []int{guiSplitFieldID, guiRouteInputID, guiRouteAddID, guiR
 var guiAdvancedFields = []int{guiStateFieldID, guiOverlayFieldID, guiListenFieldID, guiAdapterFieldID, guiMTUFieldID, guiLogFieldID, guiInitialFieldID, guiMaxFieldID}
 
 func (w *desktopWindow) createSettingsWindow() error {
-	hwnd, _, err := guiCreateWindow.Call(0, uintptr(unsafe.Pointer(guiUTF16("PhotonWindowsSettings"))), uintptr(unsafe.Pointer(guiUTF16("Photon Windows 设置"))), 0x00cf0000|0x02000000, 0x80000000, 0x80000000, uintptr(w.guiScale(920)), uintptr(w.guiScale(760)), w.hwnd, 0, w.instance, 0)
+	hwnd, _, err := guiCreateWindow.Call(0x10000, uintptr(unsafe.Pointer(guiUTF16("PhotonWindowsSettings"))), uintptr(unsafe.Pointer(guiUTF16("Photon Windows 设置"))), 0x40000000|0x02000000, 0, 0, uintptr(w.guiScale(920)), uintptr(w.guiScale(760)), w.hwnd, 0, w.instance, 0)
 	if hwnd == 0 {
 		return guiCallError("CreateWindowEx settings", err)
 	}
@@ -129,6 +130,9 @@ func (w *desktopWindow) createSettingsWindow() error {
 	if err := create(guiSettingsNoteID, "STATIC", "保存后需重新连接生效；关闭本窗口保留未保存的编辑。", 0x50000000, 0); err != nil {
 		return err
 	}
+	if err := create(guiSettingsPathID, "STATIC", "配置文件："+w.backend.options.ConfigPath, 0x50008000, 0); err != nil {
+		return err
+	}
 	w.styleSettingsControls()
 	guiEnableWindow.Call(w.controls[guiSaveID], 0)
 	w.showSettingsPage(guiBasicPageID)
@@ -139,7 +143,7 @@ func (w *desktopWindow) createSettingsWindow() error {
 func (w *desktopWindow) settingsWindowProc(hwnd uintptr, message uint32, wp, lp uintptr) uintptr {
 	switch message {
 	case guiWMClose:
-		guiShowWindow.Call(hwnd, 0)
+		w.selectMainPage(0)
 		return 0
 	case guiWMDestroy:
 		guiWindows.Delete(hwnd)
@@ -204,10 +208,10 @@ func (w *desktopWindow) markFormDirty() {
 	w.note("有未保存的设置；保存后重新连接生效。")
 }
 func (w *desktopWindow) openSettings() {
-	guiShowWindow.Call(w.settings, 9)
-	guiShowWindow.Call(w.settings, 5)
-	guiSetForegroundWindow.Call(w.settings)
+	w.selectMainPage(guiSettingsID)
+	w.show()
 }
+
 func (w *desktopWindow) showSettingsPage(page int) {
 	w.settingsPage = page
 	for _, group := range []struct {

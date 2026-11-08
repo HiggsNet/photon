@@ -156,10 +156,11 @@ type guiResult struct {
 }
 type desktopWindow struct {
 	proxy                      *desktopProxyWindow
+	mainPage                   int
+	nodeRows                   []desktopNodeRow
 	appearance                 *guiAppearance
 	hwnd, font, menu, icon     uintptr
 	controls                   map[int]uintptr
-	labels                     [2]uintptr
 	instance                   uintptr
 	taskbarCreated             uint32
 	tray                       bool
@@ -253,19 +254,9 @@ func runDesktop(options desktopOptions) (err error) {
 		if result == 0 {
 			return nil
 		}
+		// Embedded pages carry WS_EX_CONTROLPARENT, allowing one native dialog
+		// traversal to cross the sidebar and the visible page in both directions.
 		dialog := window.hwnd
-		if window.settings != 0 {
-			child, _, _ := guiUser32.NewProc("IsChild").Call(window.settings, message.Window)
-			if message.Window == window.settings || child != 0 {
-				dialog = window.settings
-			}
-		}
-		if window.diagnostics != 0 {
-			child, _, _ := guiUser32.NewProc("IsChild").Call(window.diagnostics, message.Window)
-			if message.Window == window.diagnostics || child != 0 {
-				dialog = window.diagnostics
-			}
-		}
 		if window.proxy != nil && window.proxy.hwnd != 0 {
 			root, _, _ := guiUser32.NewProc("GetAncestor").Call(message.Window, 2)
 			if root == window.proxy.hwnd {
@@ -308,7 +299,7 @@ func newDesktopWindow(backend *desktopBackend) (_ *desktopWindow, err error) {
 			err = errors.Join(err, w.dispose())
 		}
 	}()
-	w.hwnd, _, callErr = guiCreateWindow.Call(0, uintptr(unsafe.Pointer(guiUTF16("PhotonWindowsDesktop"))), uintptr(unsafe.Pointer(guiUTF16("Photon Windows"))), 0x00cf0000|0x02000000, 0x80000000, 0x80000000, 920, 760, 0, 0, instance, 0)
+	w.hwnd, _, callErr = guiCreateWindow.Call(0, uintptr(unsafe.Pointer(guiUTF16("PhotonWindowsDesktop"))), uintptr(unsafe.Pointer(guiUTF16("Photon Windows"))), 0x00cf0000|0x02000000, 0x80000000, 0x80000000, 1100, 760, 0, 0, instance, 0)
 	if w.hwnd == 0 {
 		return nil, guiCallError("CreateWindowEx", callErr)
 	}
@@ -352,10 +343,8 @@ func newDesktopWindow(backend *desktopBackend) (_ *desktopWindow, err error) {
 	if timer == 0 {
 		return nil, guiCallError("SetTimer", callErr)
 	}
-	for _, hwnd := range []uintptr{w.hwnd, w.settings, w.diagnostics} {
-		if err := guiFitInitialWindow(hwnd); err != nil {
-			return nil, err
-		}
+	if err := guiFitInitialWindow(w.hwnd); err != nil {
+		return nil, err
 	}
 	w.layout()
 	return w, nil
@@ -480,6 +469,10 @@ func desktopWindowProc(hwnd uintptr, message uint32, wp, lp uintptr) uintptr {
 			return 0
 		case guiWMCommand:
 			id, notification := int(wp&0xffff), uint16(wp>>16)
+			if id == guiNodeListID && notification == 2 {
+				w.openDashboardNode()
+				return 0
+			}
 			if id == guiRoutesID && notification == 2 {
 				w.openSelectedRoute()
 				return 0
@@ -574,7 +567,7 @@ func (w *desktopWindow) submit(request guiRequest) {
 		if request.Action == "load" {
 			w.enableForm(false)
 		}
-		for _, id := range []int{guiStartID, guiStopID, guiRestartID, guiSaveID, guiReloadID} {
+		for _, id := range []int{guiStartID, guiStopID, guiRestartID, guiConnectID, guiSaveID, guiReloadID} {
 			guiEnableWindow.Call(w.controls[id], 0)
 		}
 		w.note("正在处理…")
@@ -586,17 +579,15 @@ func (w *desktopWindow) command(id int) {
 		w.openProxy()
 		return
 	}
-	if id == guiDiagnosticsID {
-		if !w.quitting {
-			w.openDiagnostics()
-		}
+	if w.mainNavigation(id) {
 		return
 	}
-	if id == guiSettingsID {
-		if !w.quitting {
-			w.openSettings()
+	if id == guiConnectID {
+		if w.snapshot.RuntimeState == "running" || w.snapshot.RuntimeState == "starting" {
+			id = guiStopID
+		} else {
+			id = guiStartID
 		}
-		return
 	}
 	if id == guiOpenID {
 		w.show()
@@ -677,7 +668,7 @@ func (w *desktopWindow) applyResult(result guiResult) {
 		if result.Err != nil {
 			w.quitting, w.quitSubmitted = false, false
 			w.enableForm(true)
-			for _, id := range []int{guiStartID, guiStopID, guiRestartID, guiReloadID, guiSettingsID, guiDiagnosticsID} {
+			for _, id := range []int{guiStartID, guiStopID, guiRestartID, guiConnectID, guiReloadID, guiSettingsID, guiDiagnosticsID} {
 				guiEnableWindow.Call(w.controls[id], 1)
 			}
 			if w.formLoaded {
@@ -704,7 +695,7 @@ func (w *desktopWindow) applyResult(result guiResult) {
 			w.newConfig = false
 		}
 	}
-	for _, id := range []int{guiStartID, guiStopID, guiRestartID, guiSaveID, guiReloadID} {
+	for _, id := range []int{guiStartID, guiStopID, guiRestartID, guiConnectID, guiSaveID, guiReloadID} {
 		guiEnableWindow.Call(w.controls[id], 1)
 	}
 	loadChanged := result.Action == "load" && result.EditRevision != w.editRevision
@@ -836,6 +827,7 @@ func (w *desktopWindow) render(snapshot desktopSnapshot) {
 		canCopy = 1
 	}
 	guiEnableWindow.Call(w.controls[guiCopyRequestID], canCopy)
+	w.renderDashboard()
 	w.updateTray(false)
 }
 func (w *desktopWindow) setText(hwnd uintptr, text string) {
@@ -866,6 +858,7 @@ func (w *desktopWindow) show() {
 	}
 	guiShowWindow.Call(w.hwnd, 9)
 	guiShowWindow.Call(w.hwnd, 5)
+	w.layout()
 	guiSetForegroundWindow.Call(w.hwnd)
 }
 func (w *desktopWindow) quit() {
@@ -887,7 +880,7 @@ func (w *desktopWindow) quit() {
 	guiEnableWindow.Call(w.controls[guiCopyRequestID], 0)
 	w.updateTray(false)
 	w.enableForm(false)
-	for _, id := range []int{guiStartID, guiStopID, guiRestartID, guiSaveID, guiReloadID, guiSettingsID, guiDiagnosticsID} {
+	for _, id := range []int{guiStartID, guiStopID, guiRestartID, guiConnectID, guiSaveID, guiReloadID, guiSettingsID, guiDiagnosticsID} {
 		guiEnableWindow.Call(w.controls[id], 0)
 	}
 	w.note("正在停止连接并退出 Photon…")
