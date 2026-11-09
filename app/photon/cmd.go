@@ -820,25 +820,6 @@ func cmdSync() *cli.Command {
 					return syncStatus(cmd.Bool("verbose"))
 				},
 			},
-			{
-				Name:        "serve",
-				Usage:       "Start the gossip sync server",
-				Description: "Serve incoming Gossip sync and object pulls for protocol debugging.",
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return syncServe(ctx)
-				},
-			},
-			{
-				Name:      "once",
-				Usage:     "Run a standalone sync round with a peer",
-				UsageText: "photon advanced sync once <peer-id>",
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					if cmd.Args().Len() != 1 {
-						return cli.Exit("usage: photon advanced sync once <peer-id>", 1)
-					}
-					return syncOnce(cmd.Args().First())
-				},
-			},
 		},
 	}
 }

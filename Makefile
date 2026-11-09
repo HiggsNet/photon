@@ -1,4 +1,4 @@
-.PHONY: all build clean test test-verbose fmt vet check install run photon-windows-build photon-windows-cross-build photon-windows-test smoke smoke-all root-smoke join-smoke zone-sort-smoke record-view-smoke cli-surface-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke firewall-smoke firewall-container-smoke health-smoke health-fault-smoke health-fault-container-smoke services-smoke peer-lifecycle-smoke revocation-cleanup-smoke revocation-data-plane-smoke revocation-data-plane-container-smoke observer-smoke ipsec-xfrm-preflight ipsec-xfrm-smoke ipsec-xfrm-container-smoke bird-babel-preflight bird-babel-smoke bird-babel-container-smoke phase7-1-bird-experiment phase7-1-wg-gre-experiment release-check release-tag release-push help
+.PHONY: all build clean test test-verbose fmt vet check install run photon-windows-build photon-windows-cross-build photon-windows-test smoke smoke-all root-smoke join-smoke zone-sort-smoke record-view-smoke cli-surface-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke firewall-smoke firewall-container-smoke health-smoke health-fault-smoke health-fault-container-smoke services-smoke peer-lifecycle-smoke revocation-cleanup-smoke revocation-data-plane-smoke revocation-data-plane-container-smoke observer-smoke ipsec-xfrm-preflight ipsec-xfrm-smoke ipsec-xfrm-container-smoke bird-babel-preflight bird-babel-smoke bird-babel-container-smoke phase7-1-bird-experiment phase7-1-wg-gre-experiment release-check release-tag release-push help
 
 BINARY_NAME := photon
 MAIN_PACKAGE := ./app/photon
@@ -28,7 +28,7 @@ CGO_ENABLED := 0
 GO_ENV := GOCACHE=$(GO_CACHE) GOMODCACHE=$(GO_MOD_CACHE) CGO_ENABLED=$(CGO_ENABLED)
 WINDOWS_GO_MOD_CACHE ?= /tmp/photon-windows-gomodcache
 WINDOWS_AMD64_GO_ENV := GOCACHE=$(GO_CACHE) GOMODCACHE=$(WINDOWS_GO_MOD_CACHE) CGO_ENABLED=0 GOOS=windows GOARCH=amd64
-SMOKE_TARGETS := join-smoke zone-sort-smoke record-view-smoke cli-surface-smoke phase1-smoke phase2-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-observed-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke peer-lifecycle-smoke revocation-cleanup-smoke observer-smoke
+SMOKE_TARGETS := join-smoke zone-sort-smoke record-view-smoke cli-surface-smoke phase2-run-smoke phase3-daemon-smoke phase3-daemon-fallback-smoke admin-daemon-smoke multi-node-smoke chain-relay-smoke discovery-smoke reflector-smoke bootstrap-join-smoke nat-daemon-observed-smoke delegation-revoke-smoke object-pull-smoke chunk-fallback-smoke ipsec-policy-smoke ipsec-dry-run-smoke routing-dry-run-smoke firewall-dry-run-smoke peer-lifecycle-smoke revocation-cleanup-smoke observer-smoke
 ROOT_SMOKE_TARGETS := ipsec-xfrm-smoke bird-babel-smoke firewall-smoke health-fault-smoke
 ISOLATED_SMOKE_TARGETS := smoke smoke-all root-smoke $(SMOKE_TARGETS) $(ROOT_SMOKE_TARGETS)
 
@@ -299,9 +299,7 @@ observer-smoke:
 #   node-a.catofes.；仍使用短 peer_id 的旧目标只保留兼容性检查语义。
 # - 非 root 配置都写入 trusted_root_public_key，使测试能捕获错误 root 或
 #   缺失 root 状态，而不是误信任本地 authority。
-# - 部分 sync-once smoke 会允许 "pending zones" 后再断言最终状态：
-#   sync once 不能在对端还有对象待拉取时宣称完全收敛，但当前单向传输
-#   目标本身可能已经成功。
+# - 同步 smoke 等待并检查 record、授权或 peer 状态，直接验证同步结果。
 
 # join-smoke 流程：
 # 1. 创建隔离的 root admin、catofes 管理端和 node-b 数据目录。
@@ -350,107 +348,6 @@ cli-surface-smoke:
 	$(GO_ENV) $(GO) test ./internal/inspect/text -run 'TestWrite(ZonesUsesSummaryAndVerboseTables|GossipPeersUsesGossipRuntimeFields|LinksUsesTransportSummaryAndVerboseTables|FirewallSummaryFiltersAndHidesDebugDetails|ServicesShowsPublishedAndLocalServices)'
 	@echo "CLI surface smoke passed"
 
-# phase1-smoke 流程：
-# 1. 创建 root、catofes、node-a、node-b 四个隔离状态目录。
-# 2. 建立 "." -> catofes. -> node-a/node-b 的完整 delegation chain。
-# 3. join bundle 只携带各节点自己的最小 trust chain；对端状态通过同步获取。
-# 4. 启动 node-b 的 sync serve，node-a 写入 identity 后执行一次 sync once。
-# 5. sync once 允许 pending zones；最终只断言 B 已收到并可展示 A 的 record。
-phase1-smoke: build
-	@set -eu; \
-	tmp="$${TMPDIR:-/tmp}/photon-phase1-smoke"; \
-	rm -rf "$$tmp"; \
-	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b"; \
-	printf '%s\n' 'data_dir: '"$$tmp/admin" 'gossip:' '  peer_id: node-admin' '  listen_addr: 127.0.0.1:43433' > "$$tmp/admin/config.yaml"; \
-	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'gossip:' '  peer_id: zone-catofes-admin' '  listen_addr: 127.0.0.1:43436' > "$$tmp/catofes/config.yaml"; \
-	printf '%s\n' 'data_dir: '"$$tmp/a" 'gossip:' '  peer_id: node-a.catofes.' '  listen_addr: 127.0.0.1:43434' '  bootstrap:' '    - id: node-b.catofes.' '      addr: 127.0.0.1:43435' > "$$tmp/a/config.yaml"; \
-	printf '%s\n' 'data_dir: '"$$tmp/b" 'gossip:' '  peer_id: node-b.catofes.' '  listen_addr: 127.0.0.1:43435' '  bootstrap:' '    - id: node-a.catofes.' '      addr: 127.0.0.1:43434' > "$$tmp/b/config.yaml"; \
-	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
-	root_key="$$(PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
-	printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/catofes/config.yaml"; \
-	printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/a/config.yaml"; \
-	printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/b/config.yaml"; \
-	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-a.key.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-a.catofes. "$$tmp/node-a.key.json" "$$tmp/node-a.request.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-a.request.json" "$$tmp/node-a.bundle.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-b.key.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-b.catofes. "$$tmp/node-b.key.json" "$$tmp/node-b.request.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-b.request.json" "$$tmp/node-b.bundle.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-a.bundle.json" "$$tmp/node-a.key.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-b.bundle.json" "$$tmp/node-b.key.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync serve >"$$tmp/b.log" 2>&1 & \
-	server_pid="$$!"; \
-	trap 'status="$$?"; kill "$$server_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/b.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
-	sleep 1; \
-	if ! kill -0 "$$server_pid" >/dev/null 2>&1; then cat "$$tmp/b.log"; exit 1; fi; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-a.catofes. identity node-a >/dev/null; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-b.catofes. >"$$tmp/a.log" 2>&1 || grep -q 'pending zones' "$$tmp/a.log"; \
-	kill "$$server_pid" >/dev/null 2>&1 || true; \
-	wait "$$server_pid" >/dev/null 2>&1 || true; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity | grep -q 'identity'; \
-	echo "Phase1 smoke passed"
-
-# phase2-smoke 流程：
-# 1. 创建 root、catofes、node-a、node-b，并写入相同 trusted_root_public_key。
-# 2. A/B 用最小 join bundle 加入，后续对端 delegation/record 通过同步获得。
-# 3. A/B 分别写入自己的 identity record。
-# 4. 先启动 B serve 让 A 拉取 B，再启动 A serve 让 B 拉取 A。
-# 5. 最后检查双方 record list、sync status 和 verify，证明双向收敛。
-phase2-smoke: build
-	@set -eu; \
-	tmp="$${TMPDIR:-/tmp}/photon-phase2-smoke"; \
-	rm -rf "$$tmp"; \
-	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b"; \
-	printf '%s\n' 'data_dir: '"$$tmp/admin" 'gossip:' '  peer_id: node-admin' '  listen_addr: 127.0.0.1:43443' > "$$tmp/admin/config.yaml"; \
-	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'gossip:' '  peer_id: zone-catofes-admin' '  listen_addr: 127.0.0.1:43446' > "$$tmp/catofes/config.yaml"; \
-	printf '%s\n' 'data_dir: '"$$tmp/a" 'gossip:' '  peer_id: node-a.catofes.' '  listen_addr: 127.0.0.1:43444' '  bootstrap:' '    - id: node-b.catofes.' '      addr: 127.0.0.1:43445' > "$$tmp/a/config.yaml"; \
-	printf '%s\n' 'data_dir: '"$$tmp/b" 'gossip:' '  peer_id: node-b.catofes.' '  listen_addr: 127.0.0.1:43445' '  bootstrap:' '    - id: node-a.catofes.' '      addr: 127.0.0.1:43444' > "$$tmp/b/config.yaml"; \
-	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
-	root_key="$$(PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
-	printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/catofes/config.yaml"; \
-	printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/a/config.yaml"; \
-	printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/b/config.yaml"; \
-	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-a.key.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-a.catofes. "$$tmp/node-a.key.json" "$$tmp/node-a.request.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-a.request.json" "$$tmp/node-a.bundle.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-b.key.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-b.catofes. "$$tmp/node-b.key.json" "$$tmp/node-b.request.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-b.request.json" "$$tmp/node-b.bundle.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-a.bundle.json" "$$tmp/node-a.key.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-b.bundle.json" "$$tmp/node-b.key.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-a.catofes. identity node-a >/dev/null; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-b.catofes. identity node-b >/dev/null; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync serve >"$$tmp/b.log" 2>&1 & server_pid="$$!"; \
-	trap 'status="$$?"; kill "$$server_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/b.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
-	sleep 1; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-b.catofes. >"$$tmp/a.log" 2>&1 || grep -q 'pending zones' "$$tmp/a.log"; \
-	sleep 1; \
-	kill "$$server_pid" >/dev/null 2>&1 || true; \
-	wait "$$server_pid" >/dev/null 2>&1 || true; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync serve >"$$tmp/a.log" 2>&1 & server_pid="$$!"; \
-	sleep 1; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-a.catofes. >"$$tmp/b.log" 2>&1 || grep -q 'pending zones' "$$tmp/b.log"; \
-	sleep 1; \
-	kill "$$server_pid" >/dev/null 2>&1 || true; \
-	wait "$$server_pid" >/dev/null 2>&1 || true; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter identity | grep -q 'identity'; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity | grep -q 'identity'; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status | grep -q 'peer node-b.catofes.'; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status | grep -q 'peer node-a.catofes.'; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-a.catofes. >/dev/null; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-a.catofes. >/dev/null; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
-	echo "Phase2 two-node smoke passed"
-
 # phase2-run-smoke 流程：
 # 1. 准备两节点 delegation chain，并让 A 先写入 identity。
 # 2. 启动 A 的 daemon，再延迟启动 B，验证 B 可自动追上 A。
@@ -491,17 +388,22 @@ phase2-run-smoke: build
 	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 1 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
 	for i in 1 2 3 4 5; do if [ -S "$$tmp/b/photon.sock" ]; then break; fi; sleep 1; done; \
 	[ -S "$$tmp/b/photon.sock" ]; \
-	for i in 1 2 3 4 5; do if PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity | grep -q 'identity'; then break; fi; sleep 1; done; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity | grep -q 'identity'; \
+	for i in 1 2 3 4 5; do if PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record get node-a.catofes. identity 2>/dev/null | grep -Fxq 'value: node-a'; then break; fi; sleep 1; done; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record get node-a.catofes. identity | grep -Fxq 'value: node-a'; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-a.catofes. >/dev/null; \
 	kill "$$b_pid" >/dev/null 2>&1 || true; wait "$$b_pid" >/dev/null 2>&1 || true; b_pid=""; \
 	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-b.catofes. identity node-b-restored >/dev/null; \
 	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 1 >"$$tmp/b-restart.log" 2>&1 & b_pid="$$!"; \
-	for i in 1 2 3 4 5; do if PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter identity --verbose | grep -q 'node-b-restored'; then break; fi; sleep 1; done; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter identity --verbose | grep -q 'node-b-restored'; \
+	for i in 1 2 3 4 5; do if PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record get node-b.catofes. identity 2>/dev/null | grep -Fxq 'value: node-b-restored'; then break; fi; sleep 1; done; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record get node-b.catofes. identity | grep -Fxq 'value: node-b-restored'; \
 	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
-	a_root="$$(PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status | awk '/^local_root:/ {print $$2}')"; \
-	b_root="$$(PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status | awk '/^local_root:/ {print $$2}')"; \
-	[ "$$a_root" = "$$b_root" ]; \
+	a_status="$$(PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status)"; \
+	b_status="$$(PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status)"; \
+	printf '%s\n' "$$a_status" | grep -Fq 'peer node-b.catofes.'; \
+	printf '%s\n' "$$b_status" | grep -Fq 'peer node-a.catofes.'; \
+	a_root="$$(printf '%s\n' "$$a_status" | awk '/^local_root:/ {print $$2}')"; \
+	b_root="$$(printf '%s\n' "$$b_status" | awk '/^local_root:/ {print $$2}')"; \
+	[ -n "$$a_root" ] && [ "$$a_root" = "$$b_root" ] || exit 1; \
 	kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \
 	echo "Phase2 daemon smoke passed"
 
@@ -633,13 +535,8 @@ admin-daemon-smoke: build
 	kill "$$admin_pid" "$$catofes_pid" >/dev/null 2>&1 || true; \
 	echo "Admin daemon smoke passed"
 
-# multi-node-smoke 流程：
-# 1. 准备 A/B/C 三节点，A 作为 hub，B/C 只通过 A 同步。
-# 2. 所有 leaf 用最小 join bundle 加入；hub 从同步 snapshot 学到其他 leaf。
-# 3. B 写入 identity，A serve 后 B 先把状态推给 A。
-# 4. C 对 A 执行 sync once，通过 A 学到 B 的 record。
-# 5. 停止并重启 A 的 serve 路径，B 写入更高版本 record。
-# 6. 断言 A 和 C 都看到 B 的新版本，验证重启恢复和 latest-record 收敛。
+# B/C 只配置 A，三节点均禁用 endpoint 发布。确认 B 的记录经 A 传到 C，
+# 并在 A 重启后再次传播 B 在 A 停机期间写入的新版本。
 multi-node-smoke: build
 	@set -eu; \
 	tmp="$${TMPDIR:-/tmp}/photon-multi-node-smoke"; \
@@ -647,9 +544,9 @@ multi-node-smoke: build
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b" "$$tmp/c"; \
 	printf '%s\n' 'data_dir: '"$$tmp/admin" 'gossip:' '  peer_id: node-admin' '  listen_addr: 127.0.0.1:43453' > "$$tmp/admin/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'gossip:' '  peer_id: zone-catofes-admin' '  listen_addr: 127.0.0.1:43456' > "$$tmp/catofes/config.yaml"; \
-	printf '%s\n' 'data_dir: '"$$tmp/a" 'gossip:' '  peer_id: node-a.catofes.' '  listen_addr: 127.0.0.1:43454' '  bootstrap:' '    - id: node-b.catofes.' '      addr: 127.0.0.1:43455' '    - id: node-c.catofes.' '      addr: 127.0.0.1:43457' > "$$tmp/a/config.yaml"; \
-	printf '%s\n' 'data_dir: '"$$tmp/b" 'gossip:' '  peer_id: node-b.catofes.' '  listen_addr: 127.0.0.1:43455' '  bootstrap:' '    - id: node-a.catofes.' '      addr: 127.0.0.1:43454' > "$$tmp/b/config.yaml"; \
-	printf '%s\n' 'data_dir: '"$$tmp/c" 'gossip:' '  peer_id: node-c.catofes.' '  listen_addr: 127.0.0.1:43457' '  bootstrap:' '    - id: node-a.catofes.' '      addr: 127.0.0.1:43454' > "$$tmp/c/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/a" 'gossip:' '  peer_id: node-a.catofes.' '  listen_addr: 127.0.0.1:43454' '  publish_endpoints: false' '  bootstrap:' '    - id: node-b.catofes.' '      addr: 127.0.0.1:43455' '    - id: node-c.catofes.' '      addr: 127.0.0.1:43457' > "$$tmp/a/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/b" 'gossip:' '  peer_id: node-b.catofes.' '  listen_addr: 127.0.0.1:43455' '  publish_endpoints: false' '  bootstrap:' '    - id: node-a.catofes.' '      addr: 127.0.0.1:43454' > "$$tmp/b/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/c" 'gossip:' '  peer_id: node-c.catofes.' '  listen_addr: 127.0.0.1:43457' '  publish_endpoints: false' '  bootstrap:' '    - id: node-a.catofes.' '      addr: 127.0.0.1:43454' > "$$tmp/c/config.yaml"; \
 	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
 	root_key="$$(PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
 	for node in catofes a b c; do printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/$$node/config.yaml"; done; \
@@ -661,34 +558,26 @@ multi-node-smoke: build
 	for node in a b c; do PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; done; \
 	for node in a b c; do PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
 	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-b.catofes. identity node-b >/dev/null; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync serve >"$$tmp/a.log" 2>&1 & server_pid="$$!"; \
-	trap 'status="$$?"; kill "$$server_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/a-restart.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
-	sleep 1; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-a.catofes. >"$$tmp/b-to-a.log" 2>&1 || grep -q 'pending zones' "$$tmp/b-to-a.log"; \
-	sleep 1; \
-	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-a.catofes. >"$$tmp/c-to-a.log" 2>&1 || grep -q 'pending zones' "$$tmp/c-to-a.log"; \
-	sleep 1; \
-	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-a.catofes. >"$$tmp/c-to-a-2.log" 2>&1 || grep -q 'pending zones' "$$tmp/c-to-a-2.log"; \
-	sleep 1; \
-	kill "$$server_pid" >/dev/null 2>&1 || true; \
-	wait "$$server_pid" >/dev/null 2>&1 || true; \
-	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter identity | grep -q 'identity'; \
+	a_pid=""; b_pid=""; c_pid=""; \
+	trap 'status="$$?"; kill "$$a_pid" "$$b_pid" "$$c_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/b.log" "$$tmp/c.log" "$$tmp/a-restart.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
+	poll_record() { \
+		for i in 1 2 3 4 5 6 7 8 9 10 11 12; do \
+			if PHOTON_CONFIG="$$tmp/$$1/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record get node-b.catofes. identity 2>/dev/null | grep -Fxq "value: $$2"; then return 0; fi; \
+			sleep 1; \
+		done; \
+		return 1; \
+	}; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 1 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 1 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 1 >"$$tmp/c.log" 2>&1 & c_pid="$$!"; \
+	poll_record c node-b; \
 	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
-	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status | grep -q 'peer node-a.catofes.'; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-b.catofes. identity node-b-restarted >/dev/null; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync serve >"$$tmp/a-restart.log" 2>&1 & server_pid="$$!"; \
-	sleep 1; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-a.catofes. >"$$tmp/b-to-a-restart.log" 2>&1 || grep -q 'pending zones' "$$tmp/b-to-a-restart.log"; \
-	sleep 1; \
-	for i in 1 2 3 4 5 6 7 8; do \
-		PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-a.catofes. >"$$tmp/c-to-a-restart-$$i.log" 2>&1 || grep -q 'pending zones' "$$tmp/c-to-a-restart-$$i.log"; \
-		if PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter identity --verbose 2>/dev/null | grep -q 'node-b-restarted'; then break; fi; \
-		sleep 1; \
-	done; \
-	kill "$$server_pid" >/dev/null 2>&1 || true; \
-	wait "$$server_pid" >/dev/null 2>&1 || true; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter identity --verbose | grep -q 'node-b-restarted'; \
-	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter identity --verbose | grep -q 'node-b-restarted'; \
+	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status | grep -Fq 'peer node-a.catofes.'; \
+	kill "$$a_pid"; wait "$$a_pid" || true; a_pid=""; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put node-b.catofes. identity node-b-restarted | grep -q "via daemon"; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 1 >"$$tmp/a-restart.log" 2>&1 & a_pid="$$!"; \
+	poll_record a node-b-restarted; \
+	poll_record c node-b-restarted; \
 	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
 	echo "Multi-node smoke passed"
 
@@ -787,7 +676,7 @@ reflector-smoke:
 # 1. 准备 catofes、node-a、node-b，其中 B 只知道 bootstrap A。
 # 2. catofes 以 daemon 启动，提供 UDP gossip 和同端口 TCP object pull。
 # 3. A 先从 catofes 同步到 B 的 delegated identity，但还没有 B 的 endpoint。
-# 4. A 写入 identity 并启动 daemon，作为 B 的首次接入入口。
+# 4. A 通过在线 daemon 写入 identity，作为 B 的首次接入入口。
 # 5. B accept bundle 后启动 daemon，依靠已验证身份入站白名单和 observed reply address。
 # 6. 断言 A 看到 B 的 endpoint，B 也看到 A 的既有 record，覆盖首次接入死锁。
 bootstrap-join-smoke: build
@@ -796,7 +685,7 @@ bootstrap-join-smoke: build
 	rm -rf "$$tmp"; \
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/node-a" "$$tmp/node-b"; \
 	catofes_pid=""; a_pid=""; b_pid=""; \
-	trap 'status="$$?"; kill "$${catofes_pid:-}" "$${a_pid:-}" "$${b_pid:-}" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/catofes.log" "$$tmp/node-a-bootstrap.log" "$$tmp/node-a.log" "$$tmp/node-b.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
+	trap 'status="$$?"; kill "$${catofes_pid:-}" "$${a_pid:-}" "$${b_pid:-}" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/catofes.log" "$$tmp/node-a.log" "$$tmp/node-b.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	printf '%s\n' 'data_dir: '"$$tmp/admin" 'gossip:' '  peer_id: node-admin' '  listen_addr: 127.0.0.1:43500' > "$$tmp/admin/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'gossip:' '  peer_id: zone-catofes-admin' '  listen_addr: 127.0.0.1:43501' > "$$tmp/catofes/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/node-a" 'gossip:' '  peer_id: node-a.catofes.' '  listen_addr: 127.0.0.1:43502' '  bootstrap:' '    - id: zone-catofes-admin' '      addr: 127.0.0.1:43501' > "$$tmp/node-a/config.yaml"; \
@@ -816,13 +705,13 @@ bootstrap-join-smoke: build
 	PHOTON_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-b.catofes. "$$tmp/node-b.key.json" "$$tmp/node-b.request.json" >/dev/null; \
 	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-b.request.json" "$$tmp/node-b.bundle.json" >/dev/null; \
 	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 1 >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
-	sleep 2; \
-	if ! kill -0 "$$catofes_pid" >/dev/null 2>&1; then cat "$$tmp/catofes.log"; exit 1; fi; \
-	PHOTON_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once zone-catofes-admin >"$$tmp/node-a-bootstrap.log" 2>&1; \
-	PHOTON_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
-	PHOTON_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-a.catofes. identity node-a >/dev/null; \
 	PHOTON_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 1 >"$$tmp/node-a.log" 2>&1 & a_pid="$$!"; \
-	sleep 1; \
+	for i in 1 2 3 4 5 6 7 8; do \
+		if PHOTON_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null 2>&1; then break; fi; \
+		sleep 1; \
+	done; \
+	PHOTON_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
+	PHOTON_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put node-a.catofes. identity node-a | grep -q 'via daemon'; \
 	PHOTON_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-b.bundle.json" "$$tmp/node-b.key.json" >/dev/null; \
 	PHOTON_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 1 >"$$tmp/node-b.log" 2>&1 & b_pid="$$!"; \
 	for i in 1 2 3 4 5 6 7 8; do \
@@ -830,65 +719,16 @@ bootstrap-join-smoke: build
 		sleep 1; \
 	done; \
 	PHOTON_CONFIG="$$tmp/node-a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter sync/endpoint/udp 2>/dev/null | grep -q 'sync/endpoint/udp'; \
-	PHOTON_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity 2>/dev/null | grep -q 'identity'; \
+	for i in 1 2 3 4 5 6 7 8; do \
+		if PHOTON_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record get node-a.catofes. identity 2>/dev/null | grep -Fxq 'value: node-a'; then break; fi; \
+		sleep 1; \
+	done; \
+	PHOTON_CONFIG="$$tmp/node-b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record get node-a.catofes. identity | grep -Fxq 'value: node-a'; \
 	kill "$$catofes_pid" "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \
 	echo "Bootstrap join smoke passed"
 
-# nat-observed-smoke 流程：
-# 1. 准备 A/B，其中 B 设置 publish_endpoints: false 模拟 NAT 后节点。
-# 2. catofes 以 daemon 启动，提供 UDP gossip 和同端口 TCP object pull。
-# 3. A 先从 catofes 同步必要 delegation，再作为 serve 端等待 B。
-# 4. B 主动连 A，A 只能记录 observed UDP path，不能生成 durable discovered_addr。
-# 5. A 停止 serve 后写入 record，再通过 observed path 对 B 执行 sync once。
-# 6. 断言 B 收到 A 的 record，证明无 signed endpoint 时仍可用 verified observed path 返回同步。
-nat-observed-smoke: build
-	@set -eu; \
-	tmp="$${TMPDIR:-/tmp}/photon-nat-observed-smoke"; \
-	rm -rf "$$tmp"; \
-	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b"; \
-	printf '%s\n' 'data_dir: '"$$tmp/admin" 'gossip:' '  peer_id: node-admin' '  listen_addr: 127.0.0.1:43540' > "$$tmp/admin/config.yaml"; \
-	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'gossip:' '  peer_id: zone-catofes-admin' '  listen_addr: 127.0.0.1:43541' '  publish_endpoints: false' > "$$tmp/catofes/config.yaml"; \
-	printf '%s\n' 'data_dir: '"$$tmp/a" 'gossip:' '  peer_id: node-a.catofes.' '  listen_addr: 127.0.0.1:43542' '  bootstrap:' '    - id: zone-catofes-admin' '      addr: 127.0.0.1:43541' > "$$tmp/a/config.yaml"; \
-	printf '%s\n' 'data_dir: '"$$tmp/b" 'gossip:' '  peer_id: node-b.catofes.' '  listen_addr: 127.0.0.1:43543' '  publish_endpoints: false' '  bootstrap:' '    - id: node-a.catofes.' '      addr: 127.0.0.1:43542' > "$$tmp/b/config.yaml"; \
-	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root init >/dev/null; \
-	root_key="$$(PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip root pubkey)"; \
-	for node in catofes a b; do printf '%s\n' 'trusted_root_public_key: '"$$root_key" >> "$$tmp/$$node/config.yaml"; done; \
-	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/catofes.key.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request catofes. "$$tmp/catofes.key.json" "$$tmp/catofes.request.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/admin/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/catofes.request.json" "$$tmp/catofes.bundle.json" >/dev/null; \
-	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/catofes.bundle.json" "$$tmp/catofes.key.json" >/dev/null; \
-	for node in a b; do PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-$$node.key.json" >/dev/null; PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
-	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 1 >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
-	a_pid=""; b_pid=""; \
-	trap 'status="$$?"; kill "$$catofes_pid" "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/catofes.log" "$$tmp/a.log" "$$tmp/b.log" "$$tmp/put.out" "$$tmp/a-to-b.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
-	sleep 1; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once zone-catofes-admin >/dev/null; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
-	kill "$$catofes_pid" >/dev/null 2>&1 || true; wait "$$catofes_pid" >/dev/null 2>&1 || true; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync serve >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
-	sleep 1; \
-	if ! kill -0 "$$a_pid" >/dev/null 2>&1; then cat "$$tmp/a.log"; exit 1; fi; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
-	for i in 1 2 3 4 5 6 7 8; do if PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. 2>/dev/null | grep -q 'observed_status: active'; then break; fi; sleep 1; done; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. | grep -q 'observed_addr: 127.0.0.1:43543'; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. | grep -q 'observed_status: active'; \
-	if PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. | grep -q 'discovered_addr: 127.0.0.1:43543'; then exit 1; fi; \
-	kill "$$a_pid" >/dev/null 2>&1 || true; wait "$$a_pid" >/dev/null 2>&1 || true; a_pid=""; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-a.catofes. identity node-a-observed >"$$tmp/put.out"; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-b.catofes. >"$$tmp/a-to-b.log" 2>&1 || grep -q 'pending zones' "$$tmp/a-to-b.log"; \
-	for i in 1 2 3 4 5 6 7 8; do if PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity --verbose 2>/dev/null | grep -q 'node-a-observed'; then break; fi; sleep 1; done; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity --verbose 2>/dev/null | grep -q 'node-a-observed'; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-a.catofes. >/dev/null; \
-	kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \
-	echo "NAT observed path smoke passed"
-
-# nat-daemon-observed-smoke 流程：
-# 1. 准备 A/B，其中 B 禁用 endpoint 发布，A 使用 advertise_addr。
-# 2. catofes 以 daemon 启动，提供 UDP gossip 和同端口 TCP object pull。
-# 3. A 先从 catofes 同步 delegation，再启动 A/B daemon。
-# 4. 断言 A 对 B 只记录 observed_addr/observed_status，不产生 discovered_addr。
-# 5. 通过 A 的 control socket 写入 record。
-# 6. 等待 B 收到并 verify A，确保 daemon 路径与 direct CLI 的 NAT observed 行为一致。
+# A 先从 catofes 同步 B 的授权，随后只从 B 的入站包学习地址。
+# 验证 A 写入的记录能传给 B，且 B 停止后 A 重启仍能恢复 observed path。
 nat-daemon-observed-smoke: build
 	@set -eu; \
 	tmp="$${TMPDIR:-/tmp}/photon-nat-daemon-observed-smoke"; \
@@ -908,43 +748,48 @@ nat-daemon-observed-smoke: build
 	for node in a b; do PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip keygen "$$tmp/node-$$node.key.json" >/dev/null; PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join request node-$$node.catofes. "$$tmp/node-$$node.key.json" "$$tmp/node-$$node.request.json" >/dev/null; PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
 	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 1 >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
 	a_pid=""; b_pid=""; \
-	trap 'status="$$?"; kill "$$catofes_pid" "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/catofes.log" "$$tmp/a.log" "$$tmp/b.log" "$$tmp/record-put.out" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
+	trap 'status="$$?"; kill "$$catofes_pid" "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/catofes.log" "$$tmp/a.log" "$tmp/b.log" "$tmp/a-restart.log" "$tmp/record-put.out" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	sleep 1; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once zone-catofes-admin >/dev/null; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
+	for i in 1 2 3 4 5 6 7 8; do if PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null 2>&1; then break; fi; sleep 1; done; \
 	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
 	kill "$$catofes_pid" >/dev/null 2>&1 || true; wait "$$catofes_pid" >/dev/null 2>&1 || true; catofes_pid=""; \
-	PHOTON_CONTROL_SOCKET="$$tmp/a/photon.sock" PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
 	sleep 2; \
-	PHOTON_CONTROL_SOCKET="$$tmp/b/photon.sock" PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
 	for i in 1 2 3 4 5; do if [ -S "$$tmp/a/photon.sock" ] && [ -S "$$tmp/b/photon.sock" ]; then break; fi; sleep 1; done; \
 	[ -S "$$tmp/a/photon.sock" ]; \
 	[ -S "$$tmp/b/photon.sock" ]; \
-	for i in 1 2 3 4 5 6 7 8; do if PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. 2>/dev/null | grep -q 'observed_status: active'; then break; fi; sleep 1; done; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. | grep -q 'observed_addr: 127.0.0.1:43563'; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. | grep -q 'observed_status: active'; \
-	if PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes. | grep -q 'discovered_addr: 127.0.0.1:43563'; then echo "FAIL: B should not have discovered_addr" >&2; exit 1; fi; \
-	PHOTON_CONTROL_SOCKET="$$tmp/a/photon.sock" PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put node-a.catofes. identity node-a-nat-daemon >"$$tmp/record-put.out"; \
+	check_observed() { \
+		peer="$$(PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes.)" || return 1; \
+		printf '%s\n' "$$peer" | grep -q '^daemon: online ' && \
+		printf '%s\n' "$$peer" | grep -qx 'observed_addr: 127\.0\.0\.1:43563' && \
+		printf '%s\n' "$$peer" | grep -Eq '^observed_status: active( |$$)' && \
+		printf '%s\n' "$$peer" | grep -Fxq 'discovered_addr: -'; \
+	}; \
+	for i in 1 2 3 4 5 6 7 8; do if check_observed 2>/dev/null; then break; fi; sleep 1; done; \
+	check_observed || { printf '%s\n' "$$peer" >&2; exit 1; }; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put node-a.catofes. identity node-a-nat-daemon >"$$tmp/record-put.out"; \
 	grep -q 'via daemon' "$$tmp/record-put.out"; \
-	for i in 1 2 3 4 5 6 7 8 9 10; do if PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity --verbose 2>/dev/null | grep -q 'node-a-nat-daemon'; then break; fi; sleep 1; done; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-a.catofes. --filter identity --verbose 2>/dev/null | grep -q 'node-a-nat-daemon'; \
+	for i in 1 2 3 4 5 6 7 8 9 10; do if PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record get node-a.catofes. identity 2>/dev/null | grep -Fxq 'value: node-a-nat-daemon'; then break; fi; sleep 1; done; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record get node-a.catofes. identity 2>/dev/null | grep -Fxq 'value: node-a-nat-daemon'; \
 	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-a.catofes. >/dev/null; \
-	kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \
+	kill "$$b_pid" "$$a_pid"; \
+	wait "$$b_pid" || true; b_pid=""; \
+	wait "$$a_pid" || true; a_pid=""; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/a-restart.log" 2>&1 & a_pid="$$!"; \
+	for i in 1 2 3 4 5; do if check_observed 2>/dev/null; then break; fi; sleep 1; done; \
+	check_observed || { printf '%s\n' "$$peer" >&2; exit 1; }; \
 	echo "NAT daemon observed path smoke passed"
 
-# delegation-revoke-smoke 流程：
-# 1. 准备 A/B/C 和 catofes，其中 B 先发布 identity 与 endpoint record。
-# 2. 所有 leaf 用最小 join bundle 加入，后续对端状态和撤销通过同步传播。
-# 3. 让 A/C 通过同步信任 B，并确认 B endpoint 进入 discovered peers。
-# 4. catofes. 对 node-b.catofes. 写入 parent-authoritative revocation。
-# 5. A/C 从 catofes 同步 revocation 后，verify B 必须失败且 debug zone 显示 revoked。
-# 6. 断言 A 的 discovered peers 不再包含 B，防止撤销节点通过旧 endpoint 复活。
+# 先让 A/C 同步并信任 B，确认 C 学到 B 的 endpoint。
+# 由 catofes 在线撤销 B，验证 A/C 标记 B 为 revoked，C 清理发现地址。
 delegation-revoke-smoke: build
 	@set -eu; \
 	tmp="$${TMPDIR:-/tmp}/photon-delegation-revoke-smoke"; \
 	rm -rf "$$tmp"; \
 	mkdir -p "$$tmp/admin" "$$tmp/catofes" "$$tmp/a" "$$tmp/b" "$$tmp/c"; \
 	printf '%s\n' 'data_dir: '"$$tmp/admin" 'gossip:' '  peer_id: node-admin' '  listen_addr: 127.0.0.1:43510' > "$$tmp/admin/config.yaml"; \
-	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'gossip:' '  peer_id: zone-catofes-admin' '  listen_addr: 127.0.0.1:43511' > "$$tmp/catofes/config.yaml"; \
+	printf '%s\n' 'data_dir: '"$$tmp/catofes" 'gossip:' '  peer_id: zone-catofes-admin' '  listen_addr: 127.0.0.1:43511' '  bootstrap:' '    - id: node-a.catofes.' '      addr: 127.0.0.1:43512' '    - id: node-c.catofes.' '      addr: 127.0.0.1:43514' > "$$tmp/catofes/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/a" 'gossip:' '  peer_id: node-a.catofes.' '  listen_addr: 127.0.0.1:43512' '  bootstrap:' '    - id: zone-catofes-admin' '      addr: 127.0.0.1:43511' '    - id: node-b.catofes.' '      addr: 127.0.0.1:43513' '    - id: node-c.catofes.' '      addr: 127.0.0.1:43514' > "$$tmp/a/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/b" 'gossip:' '  peer_id: node-b.catofes.' '  listen_addr: 127.0.0.1:43513' '  bootstrap:' '    - id: node-a.catofes.' '      addr: 127.0.0.1:43512' > "$$tmp/b/config.yaml"; \
 	printf '%s\n' 'data_dir: '"$$tmp/c" 'gossip:' '  peer_id: node-c.catofes.' '  listen_addr: 127.0.0.1:43514' '  bootstrap:' '    - id: zone-catofes-admin' '      addr: 127.0.0.1:43511' '    - id: node-a.catofes.' '      addr: 127.0.0.1:43512' > "$$tmp/c/config.yaml"; \
@@ -959,43 +804,33 @@ delegation-revoke-smoke: build
 	for node in b c a; do PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate issue --direct "$$tmp/node-$$node.request.json" "$$tmp/node-$$node.bundle.json" >/dev/null; done; \
 	for node in a b c; do PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip join accept --direct "$$tmp/node-$$node.bundle.json" "$$tmp/node-$$node.key.json" >/dev/null; done; \
 	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put --direct node-b.catofes. identity node-b >/dev/null; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/b-seed.log" 2>&1 & b_seed_pid="$$!"; \
-	sleep 1; kill "$$b_seed_pid" >/dev/null 2>&1 || true; wait "$$b_seed_pid" >/dev/null 2>&1 || true; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
-	catofes_pid=""; \
-	trap 'status="$$?"; kill "$$a_pid" "$$catofes_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/catofes.log" "$$tmp/b-to-a.log" "$$tmp/c-to-a.log" "$$tmp/a-from-catofes.log" "$$tmp/c-from-catofes.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
-	sleep 1; \
-	for i in 1 2 3 4 5; do \
-		PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-a.catofes. >"$$tmp/b-to-a.log" 2>&1 || grep -Eq 'pending zones|sync receive timed out' "$$tmp/b-to-a.log"; \
-		if PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug zone node-b.catofes. >/dev/null 2>&1; then break; fi; \
+	a_pid=""; b_pid=""; c_pid=""; catofes_pid=""; \
+	trap 'status="$$?"; kill "$$a_pid" "$$b_pid" "$$c_pid" "$$catofes_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/a.log" "$$tmp/b.log" "$$tmp/c.log" "$$tmp/catofes.log" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 1 >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
+	for i in 1 2 3 4 5; do if [ -S "$$tmp/catofes/photon.sock" ]; then break; fi; sleep 1; done; \
+	[ -S "$$tmp/catofes/photon.sock" ]; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 1 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 1 >"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 1 >"$$tmp/c.log" 2>&1 & c_pid="$$!"; \
+	for i in 1 2 3 4 5 6 7 8 9 10; do \
+		if PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status --verbose 2>/dev/null | grep -Fq 'discovered peer=node-b.catofes.'; then break; fi; \
 		sleep 1; \
 	done; \
-	for i in 1 2 3 4 5; do \
-		PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once node-a.catofes. >"$$tmp/c-to-a.log" 2>&1 || grep -Eq 'pending zones|sync receive timed out' "$$tmp/c-to-a.log"; \
-		if PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug zone node-b.catofes. >/dev/null 2>&1; then break; fi; \
-		sleep 1; \
-	done; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
-	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
-	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status --verbose | grep -q 'discovered peer=node-b.catofes.'; \
-	kill "$$a_pid" >/dev/null 2>&1 || true; \
-	wait "$$a_pid" >/dev/null 2>&1 || true; \
-	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate revoke --direct node-b.catofes. retired >/dev/null; \
-	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/catofes.log" 2>&1 & catofes_pid="$$!"; \
-	sleep 1; \
+	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status --verbose | grep -Fq 'discovered peer=node-b.catofes.'; \
 	for node in a c; do \
-		for i in 1 2 3; do \
-			PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync once zone-catofes-admin >"$$tmp/$$node-from-catofes.log" 2>&1 || grep -Eq 'pending zones|gossip peer quota exceeded|sync receive timed out' "$$tmp/$$node-from-catofes.log"; \
+		PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
+	done; \
+	PHOTON_CONFIG="$$tmp/catofes/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip delegate revoke node-b.catofes. retired | grep -q 'via daemon'; \
+	for node in a c; do \
+		for i in 1 2 3 4 5 6 7 8 9 10; do \
 			if PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug zone node-b.catofes. 2>/dev/null | grep -q 'revoked: true'; then break; fi; \
 			sleep 1; \
 		done; \
+		PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug zone node-b.catofes. | grep -q 'revoked: true'; \
+		if PHOTON_CONFIG="$$tmp/$$node/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null 2>&1; then exit 1; fi; \
 	done; \
-	if PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null 2>&1; then exit 1; fi; \
-	if PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null 2>&1; then exit 1; fi; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug zone node-b.catofes. | grep -q 'revoked: true'; \
-	PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug zone node-b.catofes. | grep -q 'revoked: true'; \
-	if PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status --verbose | grep -q 'discovered peer=node-b.catofes.'; then exit 1; fi; \
-	kill "$$a_pid" "$$catofes_pid" >/dev/null 2>&1 || true; \
+	c_status="$$(PHOTON_CONFIG="$$tmp/c/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status --verbose)"; \
+	if printf '%s\n' "$$c_status" | grep -Fq 'discovered peer=node-b.catofes.'; then exit 1; fi; \
 	echo "Delegation revoke smoke passed"
 
 # object-pull-smoke 流程：
@@ -1112,8 +947,6 @@ help:
 	@echo "  zone-sort-smoke - Verify hierarchical dot/hyphen zone ordering"
 	@echo "  record-view-smoke - Verify human record values and verbose metadata"
 	@echo "  cli-surface-smoke - Verify gossip/links/route/firewall/service show hierarchy and tables"
-	@echo "  phase1-smoke - Run a local two-peer gossip smoke test"
-	@echo "  phase2-smoke - Run bidirectional two-peer sync smoke test"
 	@echo "  phase2-run-smoke - Run daemon reconnect/recovery smoke test"
 	@echo "  phase3-daemon-smoke - Run daemon control write and sync smoke test"
 	@echo "  phase3-daemon-fallback-smoke - Run daemon-off direct write recovery smoke test"
@@ -1122,7 +955,6 @@ help:
 	@echo "  discovery-smoke - Run endpoint discovery smoke test"
 	@echo "  reflector-smoke - Run public IP reflector endpoint smoke test"
 	@echo "  bootstrap-join-smoke - Run new-node bootstrap admission smoke test"
-	@echo "  nat-observed-smoke - Run NAT-style verified observed UDP path smoke test"
 	@echo "  nat-daemon-observed-smoke - Run daemon-based NAT observed path smoke test"
 	@echo "  admin-daemon-smoke - Run admin daemon delegation issue/grant/revoke smoke test"
 	@echo "  delegation-revoke-smoke - Run delegation revocation convergence smoke test"

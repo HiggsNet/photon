@@ -81,13 +81,7 @@ func TestGossipObjectPullWorkersProvideBoundedBackpressureAndStop(t *testing.T) 
 	if err := driver.SubmitGossipObjectPull(gossip.StartObjectPullAction{PeerID: "peer-c", Zone: "c.catofes."}); !errors.Is(err, ErrGossipObjectPullQueueFull) {
 		t.Fatalf("third submit error = %v, want %v", err, ErrGossipObjectPullQueueFull)
 	}
-	if got := driver.PendingGossipObjectPullCount(); got != 2 {
-		t.Fatalf("pending = %d, want 2", got)
-	}
 	driver.Stop()
-	if got := driver.PendingGossipObjectPullCount(); got != 0 {
-		t.Fatalf("pending after stop = %d, want 0", got)
-	}
 	if err := driver.SubmitGossipObjectPull(first); !errors.Is(err, ErrGossipDriverStopped) {
 		t.Fatalf("submit after stop = %v, want %v", err, ErrGossipDriverStopped)
 	}

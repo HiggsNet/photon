@@ -95,7 +95,8 @@ Gossip 运行于事件驱动的 daemon 架构中：
 - 大对象主路径是 TCP object pull；UDP chunk fallback 只在 TCP 不可达时传完整对象。
 - 收到 hint 不触发 relay；只有本地 active state 真正 apply 成功并发生变化后，才按 relay 规则通知其他 peer。
 - 带 `CatalogSummary` 的 unsolicited `PING` 也是一种 hint：如果 `catalog_root` 与本端一致，直接记录 peer sync 状态并跳过 SyncSession；不一致时回退到 hint 处理，可能创建 active pull。
-- 旧协议兼容字段已删除：Ping/Pong 不再携带完整 digest/fetch list；旧 `sync.go` receive/deadline 路径也已移除，event-loop 是 daemon 与 `advanced sync once` 的唯一收包调度模型。
+- Ping/Pong 用 catalog summary 表达目录状态。
+- Linux daemon 和 Windows 后端各自运行事件循环，通过共用的 GossipDriver 消费协议事件。
 
 ---
 

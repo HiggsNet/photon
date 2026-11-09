@@ -731,15 +731,6 @@ func (s *SyncSession) PendingCount() int {
 	return len(s.pendingZones)
 }
 
-// PendingZones returns a detached list of zones not yet reconciled.
-func (s *SyncSession) PendingZones() []zone.ZonePath {
-	out := make([]zone.ZonePath, 0, len(s.pendingZones))
-	for path := range s.pendingZones {
-		out = append(out, path)
-	}
-	return out
-}
-
 // InflightCount reports outstanding object-pull operations.
 func (s *SyncSession) InflightCount() int {
 	return len(s.objectPullInflight)

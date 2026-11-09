@@ -310,9 +310,6 @@ func TestGossipQueueWorkerWaitsForCompletionCapacityAndCanStop(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("worker did not finish I/O")
 			}
-			if driver.PendingGossipObjectPullCount() != 1 {
-				t.Fatal("worker did not retain its result while the completion queue was full")
-			}
 			if stopBlocked {
 				stopped := make(chan struct{})
 				go func() {
@@ -323,9 +320,6 @@ func TestGossipQueueWorkerWaitsForCompletionCapacityAndCanStop(t *testing.T) {
 				case <-stopped:
 				case <-time.After(time.Second):
 					t.Fatal("stop blocked on undelivered completion")
-				}
-				if driver.PendingGossipObjectPullCount() != 0 {
-					t.Fatal("stop did not cancel retained result")
 				}
 				return
 			}

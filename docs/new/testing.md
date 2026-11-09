@@ -62,7 +62,6 @@ git diff --check
 
 ```bash
 make join-smoke
-make phase2-smoke
 make phase2-run-smoke
 make phase3-daemon-smoke
 make object-pull-smoke
@@ -77,8 +76,7 @@ make observer-smoke
 | 目标 | 说明 |
 |------|------|
 | `join-smoke` | 不启动 UDP，只验证 root admin -> `catofes.` -> leaf node 的 join、bundle、密钥和本地 trust chain。 |
-| `phase2-smoke` | 双节点手动同步，验证 A/B signed zone 和 record 双向收敛。 |
-| `phase2-run-smoke` | 使用长期运行同步入口验证重连、恢复和后台收敛路径。 |
+| `phase2-run-smoke` | 验证双节点记录双向同步、Zone 签名校验和重启后的收敛。 |
 | `phase3-daemon-smoke` | 验证 CLI 通过 daemon control socket 写入、本机单 writer 和 daemon 驱动同步。 |
 | `object-pull-smoke` | 验证大 record 不塞进超大 UDP 包，而是通过 object pull 收敛。 |
 | `ipsec-dry-run-smoke` | 验证 IPsec planner、dry-run apply、fake driver reconcile 和 debug/read model 边界。 |
@@ -96,8 +94,9 @@ make smoke-all
 
 ```bash
 make join-smoke
-make phase1-smoke
-make phase2-smoke
+make zone-sort-smoke
+make record-view-smoke
+make cli-surface-smoke
 make phase2-run-smoke
 make phase3-daemon-smoke
 make phase3-daemon-fallback-smoke
@@ -107,7 +106,6 @@ make chain-relay-smoke
 make discovery-smoke
 make reflector-smoke
 make bootstrap-join-smoke
-make nat-observed-smoke
 make nat-daemon-observed-smoke
 make delegation-revoke-smoke
 make object-pull-smoke
@@ -125,17 +123,15 @@ make observer-smoke
 
 | 目标 | 说明 |
 |------|------|
-| `phase1-smoke` | 最小双 peer gossip 收敛，重点覆盖 summary/catalog fetch 基础路径。 |
 | `phase3-daemon-fallback-smoke` | 验证 daemon 不在线时 CLI 直接写 DB 的开发/恢复 fallback，下一次 daemon 能加载并传播。 |
 | `admin-daemon-smoke` | 验证管理端 daemon 运行时，delegation issue/revoke 经 control socket 写入。 |
-| `multi-node-smoke` | 三节点传递同步，覆盖非直连节点通过中间 peer 收敛。 |
+| `multi-node-smoke` | 验证三个 daemon 经中间节点传播记录，以及中间节点重启后追上新版本。 |
 | `chain-relay-smoke` | 四节点链式拓扑，验证 relay fanout 能减少等待完整周期的时间。 |
 | `discovery-smoke` | 验证 signed endpoint discovery 和 peer 地址更新。 |
 | `reflector-smoke` | 验证 public IP reflector endpoint 路径。 |
 | `bootstrap-join-smoke` | 验证新节点通过 bootstrap admission 加入并同步。 |
-| `nat-observed-smoke` | 验证 NAT/outbound-only 场景下的 observed UDP path。 |
-| `nat-daemon-observed-smoke` | daemon 版 NAT observed path 验证。 |
-| `delegation-revoke-smoke` | 验证 delegation revocation 传播和下游状态失效。 |
+| `nat-daemon-observed-smoke` | 验证使用 observed UDP 地址传播记录，以及对端离线时重启仍能恢复该地址。 |
+| `delegation-revoke-smoke` | 验证撤销传播到在线 daemon 后，信任校验失效并清理发现地址。 |
 | `chunk-fallback-smoke` | 验证 TCP object pull 不可达时 UDP chunk fallback 能补齐大对象（以 daemon 的 `via=udp_chunks` apply 日志确认），并先覆盖乱序丢块 NACK、重复 NACK 和过期/错误 transfer。 |
 | `ipsec-policy-smoke` | 验证 IPsec mesh policy URI 解析和 planner rule 匹配。 |
 | `peer-lifecycle-smoke` | 验证 peer status、revoked peer 阻断和 peer lifecycle debug 输出。 |

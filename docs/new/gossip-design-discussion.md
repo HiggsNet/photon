@@ -42,8 +42,17 @@
 
 迁移前需要确定要覆盖哪些网络。如果原问题只是 B 无法反向拨入 A，A 发起的双向 TCP 会话就能覆盖该场景。如果 A 到 B 的出站 TCP 也受限，才需要考虑 QUIC 等可用传输。QUIC 提供运行在 UDP 上的可靠流，仍需验证目标网络能否建立 QUIC 连接。采用可靠流后，Gossip 可以把报文分段和丢包重传交给传输层，继续负责摘要比对、对象验证和同步重试。
 
+## Linux Daemon 入口收敛
+
+Linux 统一使用 `photon daemon` 运行 Gossip。已删除 `advanced sync serve` 和 `advanced sync once` 的 CLI 入口、独立启动流程和事件循环。它们原先和 daemon 共用 GossipDriver 和协议状态机，但各自启动 UDP、TCP 对象服务和拉取 worker，并消费同样的输入、完成和续处理事件。
+
+`advanced sync status` 仍可查询在线 daemon 或离线 checkpoint。内部 `sync_trigger` 仍只确认已调度。如果以后需要立即同步并等待结果，应在在线 daemon 中按指定 peer 的会话结果区分成功、失败和超时。
+
+- `phase2-run-smoke` 覆盖双节点记录双向同步、Zone 签名校验及重启后收敛。
+- 三节点中间节点重启、bootstrap 授权和在线撤销传播均使用 daemon，直接等待记录、授权和发现结果。
+- `nat-daemon-observed-smoke` 合并两套 observed path 场景，覆盖记录传播与重启后恢复 observed UDP 地址。
+
 ## 后续讨论
 
-- **Daemon：** 公共 Gossip 自己驱动队列；平台负责启停、地址变化和消费已提交的版本。手动同步请求交给在线 daemon；独立运行模式是否仍有用户需求，另行讨论。
 - **状态：** 磁盘保存可信事实和确有重启价值的提示。退避、去重留在内存，历史错误由日志表达；隧道策略自己判断授权和链路状态。
 - **界面和日志：** 一份公共节点状态供 Dashboard、CLI 和 Web 使用。首页表达最近同步结果和当前阻塞，协议细节放在详情。统一事件类别和错误语义，保留按需追踪、脱敏和轮转。

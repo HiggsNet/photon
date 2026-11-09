@@ -77,7 +77,6 @@ type GossipDriver struct {
 	objectPullCancel         context.CancelFunc
 	objectPullJobs           chan gossip.StartObjectPullAction
 	objectPullWG             sync.WaitGroup
-	objectPullPending        atomic.Int64
 	objectPullServerCancel   context.CancelFunc
 	objectPullServerListener net.Listener
 	objectPullServerWG       sync.WaitGroup
@@ -291,7 +290,6 @@ func (driver *GossipDriver) Stop() {
 	driver.datagramWG.Wait()
 	driver.objectPullWG.Wait()
 	driver.objectPullServerWG.Wait()
-	driver.objectPullPending.Store(0)
 	if driver.gossipChunks != nil {
 		driver.gossipChunks.Close()
 	}

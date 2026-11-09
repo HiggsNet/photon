@@ -167,35 +167,21 @@ PHOTON_CONFIG=/tmp/photon-catofes/config.yaml photon advanced recovery import-zo
 
 **注意**：使用 `--direct` 前必须确认没有 daemon 正在管理同一份状态文件或相同的 IPsec/XFRM 对象，否则可能产生并发写或数据面状态不一致。
 
-## 手动同步
+## Gossip 同步
 
-长期运行用 daemon。排障时可用手动同步命令。`serve/once` 会独立打开本地状态和监听端口，应在对应节点的 daemon 停止时使用；`once` 不会向在线 daemon 发送同步请求。
-
-查看同步状态：
-
-```bash
-PHOTON_CONFIG=/tmp/photon-a/config.yaml photon advanced sync status --verbose
-```
-
-对某个 peer 执行一次同步：
-
-```bash
-PHOTON_CONFIG=/tmp/photon-a/config.yaml photon advanced sync once node-b.catofes.
-```
-
-启动用于协议调试的被动 Gossip 服务（UDP 同步和 TCP 对象拉取）：
-
-```bash
-PHOTON_CONFIG=/tmp/photon-b/config.yaml photon advanced sync serve
-```
-
-常驻同步统一使用 daemon（原 `advanced sync run` 入口已移除）：
+启动 daemon 后，Gossip 会按配置自动同步。临时排障也可在前台运行：
 
 ```bash
 PHOTON_CONFIG=/tmp/photon-a/config.yaml photon daemon --interval 5
 ```
 
-`advanced sync once` 如果输出 pending zones，通常表示对端已返回摘要，但还有对象需要继续拉取；再跑一轮或交给 daemon 后台收敛。
+查看 peer、Zone 摘要和同步状态：
+
+```bash
+PHOTON_CONFIG=/tmp/photon-a/config.yaml photon advanced sync status --verbose
+```
+
+daemon 在线时读取实时状态，离线时显示最近保存的 checkpoint。可用 `photon debug verify <zone>` 验证指定 Zone 的信任链。
 
 ## 常用 Debug
 

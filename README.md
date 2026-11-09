@@ -115,7 +115,7 @@ build/photon daemon                                                     # 长期
 make check    # 格式化、vet、测试、CGO_ENABLED=0 构建
 ```
 
-常用 smoke：`make phase2-smoke`（双节点同步）、`make multi-node-smoke`（三节点传播）、`make chain-relay-smoke`（链式 relay）、`make observer-smoke`。真实数据面需要特权环境，是显式目标，例如 `sudo make ipsec-xfrm-smoke`、`sudo make bird-babel-smoke`。完整清单与适用场景见 [docs/new/testing.md](docs/new/testing.md)。
+常用 smoke：`make phase2-run-smoke`（双节点同步）、`make multi-node-smoke`（三节点传播）、`make chain-relay-smoke`（链式 relay）、`make observer-smoke`。真实数据面需要特权环境，是显式目标，例如 `sudo make ipsec-xfrm-smoke`、`sudo make bird-babel-smoke`。完整清单与适用场景见 [docs/new/testing.md](docs/new/testing.md)。
 
 发布流程见 `make release-check` / `make release-tag` / `make release-push`，tag 必须严格为 `v$(cat VERSION)`。
 

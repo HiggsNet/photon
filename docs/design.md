@@ -1046,7 +1046,7 @@ type PeerView struct {
 
 ## 七、Phase 6 事件驱动 Daemon 设计要点
 
-Phase 6 已将 daemon 同步层从「阻塞式 `syncRound` + 双 UDP 收包 goroutine」改造成「单一 UDP reader + 事件循环 + per-peer `SyncSession` 状态机」，并删除旧 `syncRound` 回退路径。`PING/PONG` wire 类型也已收敛为 catalog summary，不再携带旧 digest/fetch 兼容字段。daemon 与 `advanced sync once` 都通过同一套 event-loop pump 处理收包、超时和状态持久化。
+Phase 6 已将 daemon 同步层从「阻塞式 `syncRound` + 双 UDP 收包 goroutine」改造成「单一 UDP reader + 事件循环 + per-peer `SyncSession` 状态机」，并删除旧 `syncRound` 回退路径。`PING/PONG` wire 类型也已收敛为 catalog summary，不再携带旧 digest/fetch 兼容字段。Linux daemon 通过 event-loop pump 处理收包、超时和状态持久化。
 
 ### 7.1 为什么必须重构
 

@@ -2,8 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
-	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,9 +10,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/HiggsNet/photon/pkg/core/gossip"
-	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 func (l *appLogger) withNow(now func() time.Time) *appLogger {
@@ -48,32 +43,6 @@ func (l *appLogger) setLevel(level logLevel) *appLogger {
 	}
 	l.level = level
 	return l
-}
-
-func syncErrorReason(err error) string {
-	var pending *syncPendingZonesError
-	switch {
-	case err == nil:
-		return ""
-	case errors.As(err, &pending):
-		return "pending_zones"
-	case errors.Is(err, context.DeadlineExceeded):
-		return "context_deadline"
-	case isReceiveTimeout(err):
-		return "timeout"
-	case errors.Is(err, gossip.ErrUnknownPeer):
-		return "unknown_peer"
-	case errors.Is(err, gossip.ErrMessageTooLarge):
-		return "message_too_large"
-	case errors.Is(err, gossip.ErrQuotaExceeded):
-		return "quota"
-	default:
-		reason := gossip.RejectReason(err)
-		if reason != "invalid_message" {
-			return reason
-		}
-		return "sync_error"
-	}
 }
 
 func TestAppLoggerWritesStructuredFields(t *testing.T) {
@@ -162,16 +131,6 @@ func TestAppLoggerWritesToConfiguredFile(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "event=packet_failed") {
 		t.Fatalf("stderr log line = %q, want duplicate console output", stderr.String())
-	}
-}
-
-func TestSyncErrorReasonPendingZones(t *testing.T) {
-	err := &syncPendingZonesError{zones: []zone.ZonePath{"node-b.catofes."}}
-	if got := syncErrorReason(err); got != "pending_zones" {
-		t.Fatalf("syncErrorReason = %q, want pending_zones", got)
-	}
-	if !strings.Contains(err.Error(), "sync once timed out with pending zones: node-b.catofes.") {
-		t.Fatalf("pending error text = %q", err.Error())
 	}
 }
 

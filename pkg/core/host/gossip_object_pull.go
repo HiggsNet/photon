@@ -87,21 +87,12 @@ func (driver *GossipDriver) SubmitGossipObjectPull(action gossip.StartObjectPull
 	if jobs == nil {
 		return ErrGossipObjectPullExecutorRequired
 	}
-	driver.objectPullPending.Add(1)
 	select {
 	case jobs <- action:
 		return nil
 	default:
-		driver.objectPullPending.Add(-1)
 		return ErrGossipObjectPullQueueFull
 	}
-}
-
-func (driver *GossipDriver) PendingGossipObjectPullCount() int {
-	if driver == nil {
-		return 0
-	}
-	return int(driver.objectPullPending.Load())
 }
 
 func (driver *GossipDriver) runGossipObjectPullWorker(ctx context.Context, jobs <-chan gossip.StartObjectPullAction, executor *GossipObjectPullExecutor) {
@@ -132,9 +123,7 @@ func (driver *GossipDriver) runGossipObjectPullWorker(ctx context.Context, jobs 
 			}}
 			select {
 			case driver.completions <- event:
-				driver.objectPullPending.Add(-1)
 			case <-ctx.Done():
-				driver.objectPullPending.Add(-1)
 				return
 			}
 		}
