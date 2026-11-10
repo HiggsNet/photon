@@ -281,7 +281,7 @@ Daemon 使用结构化日志，关键事件如下：
 | `daemon` | `started` | Daemon 启动，包含 peer_id、addr、interval |
 | `sync` | `zone_applied` | Zone snapshot 被成功应用 |
 | `sync` | `zone_apply_failed` | Zone snapshot 应用失败（含 reject reason） |
-| `sync` | `hinted_sync_started` | 收到 announce hint 后启动 sync session |
+| `sync` | `hinted_sync_started` | 收到目录摘要后启动 sync session |
 | `sync` | `send_failed` | 发送 UDP 消息失败 |
 | `sync` | `event_dropped` | Sync event 因队列满被丢弃 |
 | `ipsec` | `vici_lifecycle_event` | StrongSwan 生命周期事件 |

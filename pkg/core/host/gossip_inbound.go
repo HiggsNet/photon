@@ -41,10 +41,6 @@ func (driver *GossipDriver) executeGossipPacketActions(ctx context.Context, acti
 			if err := driver.respondGossipFetchZone(ctx, message.PeerID, message.FetchZone, sender, budget); err != nil {
 				return events, err
 			}
-		case gossip.InboundHandleAnnounce:
-			if err := driver.StartGossipSession(message.PeerID, "announce_hint"); err != nil {
-				return events, err
-			}
 		case gossip.InboundHandleObjectChunk:
 			result, err := driver.HandleGossipObjectChunk(ctx, message, driver.schedulerForRead().clock.Now())
 			if result.Event != nil {
@@ -92,9 +88,9 @@ func (driver *GossipDriver) respondGossipPing(ctx context.Context, action gossip
 		return nil
 	}
 	if !gossip.CatalogRootsMatch(message.Ping.Summary, summary) {
-		return driver.StartGossipSession(message.PeerID, "announce_hint")
+		return driver.StartGossipSession(message.PeerID, "ping_summary")
 	}
-	if err := driver.commitGossipEventCheckpoint(ctx, &gossip.SyncSession{PeerID: message.PeerID, State: gossip.SyncSessionCompleted}, nil, driver.schedulerForRead().clock.Now()); err != nil {
+	if err := driver.commitGossipEventCheckpoint(ctx, &gossip.SyncSession{PeerID: message.PeerID, State: gossip.SyncSessionCompleted}, driver.schedulerForRead().clock.Now()); err != nil {
 		return err
 	}
 	driver.observeSyncHint(message.PeerID, "ping_summary_match", "", true, driver.schedulerForRead().clock.Now())

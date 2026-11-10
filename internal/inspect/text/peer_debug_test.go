@@ -29,7 +29,7 @@ func TestWritePeerDebug(t *testing.T) {
 			ActivePullLastEvent: "catalog_page",
 			ActivePullUpdated:   "2023-11-14T22:13:20Z",
 			LastHint:            "2023-11-14T22:13:20Z",
-			LastHintReason:      "announce_hint",
+			LastHintReason:      "ping_summary",
 			LastHintSuppression: "session_active",
 			LastResponder:       "2023-11-14T22:13:20Z",
 			LastResponderKind:   "chunk_fallback",

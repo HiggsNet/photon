@@ -14,6 +14,7 @@ import (
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	"github.com/HiggsNet/photon/pkg/core/observability"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
@@ -64,6 +65,7 @@ type GossipDriver struct {
 	observedPathVerifier photoncrypto.Verifier
 	// The event loop owns round lifetimes.
 	objectPullRounds map[string]*gossipObjectPullRound
+	revokedPeers     map[zone.ZonePath]bool
 
 	events          chan Event
 	completions     chan Event

@@ -1,7 +1,6 @@
 package host
 
 import (
-	"errors"
 	"testing"
 	"time"
 
@@ -11,14 +10,14 @@ import (
 
 func TestPlanGossipActionsClassifiesInStableOrder(t *testing.T) {
 	now := time.Unix(100, 0)
-	errA := errors.New("a")
+
 	actions := []gossip.SyncAction{
 		gossip.StartObjectPullAction{PeerID: "peer-a", Zone: "a.catofes."},
 		gossip.SendPingAction{PeerID: "peer-a"},
 		gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "a.catofes."}},
 		gossip.StartTimerAction{PeerID: "peer-a", Kind: gossip.TimerKindRound, Deadline: now},
 		gossip.StartObjectPullAction{PeerID: "peer-a", Zone: "b.catofes."},
-		gossip.RecordBackoffAction{PeerID: "peer-a", Err: errA},
+
 		gossip.CancelTimerAction{PeerID: "peer-a", Kind: gossip.TimerKindCatalogPage},
 	}
 
@@ -34,8 +33,5 @@ func TestPlanGossipActionsClassifiesInStableOrder(t *testing.T) {
 	}
 	if len(plan.Timers) != 2 {
 		t.Fatalf("timers = %#v", plan.Timers)
-	}
-	if len(plan.Backoffs) != 1 || plan.Backoffs[0].Err != errA {
-		t.Fatalf("backoffs = %#v", plan.Backoffs)
 	}
 }

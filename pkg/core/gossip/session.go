@@ -179,13 +179,6 @@ type ApplySnapshotAction struct {
 
 func (ApplySnapshotAction) isSyncAction() {}
 
-type RecordBackoffAction struct {
-	PeerID string
-	Err    error
-}
-
-func (RecordBackoffAction) isSyncAction() {}
-
 type StartTimerAction struct {
 	PeerID   string
 	Kind     string
@@ -376,9 +369,7 @@ func (s *SyncSession) onCatalogPageReceived(e *CatalogPageReceivedEvent, now tim
 		}
 		s.State = SyncSessionFailed
 		s.lastError = errors.New("catalog page root mismatch")
-		return []SyncAction{
-			RecordBackoffAction{PeerID: e.PeerID, Err: s.lastError},
-		}, nil
+		return nil, nil
 	}
 	if len(s.remoteCatalogRoot) == 0 {
 		s.remoteCatalogRoot = append([]byte(nil), e.Page.CatalogRoot...)
@@ -423,9 +414,7 @@ func (s *SyncSession) onCatalogPageTimeout(e *CatalogPageTimeoutEvent) ([]SyncAc
 	}
 	s.State = SyncSessionFailed
 	s.lastError = errors.New("catalog page timeout")
-	return []SyncAction{
-		RecordBackoffAction{PeerID: e.PeerID, Err: s.lastError},
-	}, nil
+	return nil, nil
 }
 
 func (s *SyncSession) reconcilePendingWithDigests(digests []corestate.ZoneDigest) []SyncAction {
@@ -506,7 +495,6 @@ func (s *SyncSession) onRoundTimeout(e *RoundTimeoutEvent) ([]SyncAction, error)
 	s.State = SyncSessionFailed
 	s.lastError = errors.New("round timeout")
 	return []SyncAction{
-		RecordBackoffAction{PeerID: e.PeerID, Err: s.lastError},
 		CancelTimerAction{PeerID: e.PeerID, Kind: TimerKindCatalogPage},
 	}, nil
 }
@@ -522,13 +510,13 @@ func (s *SyncSession) onObjectPullResult(e *ObjectPullResultEvent, now time.Time
 
 	if e.Err != nil {
 		if !e.Unreachable {
-			return s.failSnapshotApply(e.PeerID, e.Zone, e.Err, nil)
+			return s.failSnapshotApply(e.Zone, e.Err, nil)
 		}
 		s.chunkFallbackZones[e.Zone] = true
 		actions = append(actions, SendChunkFallbackAction{PeerID: e.PeerID, Zone: e.Zone})
 	} else if e.Snapshot != nil {
 		if e.Snapshot.Zone != e.Zone {
-			return s.failSnapshotApply(e.PeerID, e.Zone, fmt.Errorf("object pull zone mismatch: requested %s, received %s", e.Zone, e.Snapshot.Zone), nil)
+			return s.failSnapshotApply(e.Zone, fmt.Errorf("object pull zone mismatch: requested %s, received %s", e.Zone, e.Snapshot.Zone), nil)
 		}
 		s.snapshotApplyPending[e.Zone] = true
 		actions = append(actions, ApplySnapshotAction{
@@ -553,7 +541,7 @@ func (s *SyncSession) onObjectPullResult(e *ObjectPullResultEvent, now time.Time
 	// If any zone failed over to UDP chunk fallback, stay in that state so
 	// onObjectChunk can process the response. Otherwise complete if nothing is
 	// left to fetch; a remaining pending zone without inflight work is a hard
-	// error, not a reason to wait for ANNOUNCE payloads.
+	// error.
 	if len(s.chunkFallbackZones) > 0 {
 		s.State = SyncSessionChunkFallback
 	} else if len(s.snapshotApplyPending) > 0 {
@@ -565,9 +553,6 @@ func (s *SyncSession) onObjectPullResult(e *ObjectPullResultEvent, now time.Time
 	} else {
 		s.State = SyncSessionFailed
 		s.lastError = errors.New("sync has pending zones after object pull without fallback")
-		actions = append(actions,
-			RecordBackoffAction{PeerID: e.PeerID, Err: s.lastError},
-		)
 	}
 	return actions, nil
 }
@@ -579,13 +564,11 @@ func (s *SyncSession) onObjectChunk(e *ObjectChunkEvent) ([]SyncAction, error) {
 	if e.Err != nil {
 		s.State = SyncSessionFailed
 		s.lastError = e.Err
-		return []SyncAction{
-			RecordBackoffAction{PeerID: e.PeerID, Err: e.Err},
-		}, nil
+		return nil, nil
 	}
 	if e.Snapshot != nil {
 		if e.Snapshot.Zone != e.Zone {
-			return s.failSnapshotApply(e.PeerID, e.Zone, fmt.Errorf("chunk snapshot zone mismatch: requested %s, received %s", e.Zone, e.Snapshot.Zone), nil)
+			return s.failSnapshotApply(e.Zone, fmt.Errorf("chunk snapshot zone mismatch: requested %s, received %s", e.Zone, e.Snapshot.Zone), nil)
 		}
 		delete(s.chunkFallbackZones, e.Zone)
 		s.snapshotApplyPending[e.Zone] = true
@@ -609,7 +592,7 @@ func (s *SyncSession) onSnapshotApplied(e *SnapshotAppliedEvent, now time.Time) 
 	delete(s.snapshotApplyPending, e.Zone)
 	if e.Err != nil {
 		if s.catalogRefreshed || !errors.Is(e.Err, corestate.ErrSnapshotRootMismatch) {
-			return s.failSnapshotApply(e.PeerID, e.Zone, e.Err, nil)
+			return s.failSnapshotApply(e.Zone, e.Err, nil)
 		}
 		s.catalogRefreshPending = true
 	} else {
@@ -637,7 +620,7 @@ func (s *SyncSession) onSnapshotApplied(e *SnapshotAppliedEvent, now time.Time) 
 		s.State = SyncSessionCompleted
 		return actions, nil
 	}
-	return s.failSnapshotApply(e.PeerID, e.Zone, errors.New("sync has pending zones without transport or apply work"), nil)
+	return s.failSnapshotApply(e.Zone, errors.New("sync has pending zones without transport or apply work"), nil)
 }
 
 func (s *SyncSession) expectedRoot(path zone.ZonePath) []byte {
@@ -668,13 +651,10 @@ func (s *SyncSession) refreshCatalog(peerID string, now time.Time) []SyncAction 
 	}
 }
 
-func (s *SyncSession) failSnapshotApply(peerID string, path zone.ZonePath, err error, actions []SyncAction) ([]SyncAction, error) {
+func (s *SyncSession) failSnapshotApply(path zone.ZonePath, err error, actions []SyncAction) ([]SyncAction, error) {
 	s.State = SyncSessionFailed
 	s.lastError = err
 	delete(s.snapshotApplyPending, path)
-	actions = append(actions,
-		RecordBackoffAction{PeerID: peerID, Err: err},
-	)
 	return actions, nil
 }
 

@@ -82,76 +82,32 @@ func (driver *GossipDriver) recordGossipRelays(ctx context.Context, peerIDs []st
 	return result.Committed, err
 }
 
-// commitGossipEventCheckpoint folds every restart-hint mutation produced by
-// one FSM event into one checkpoint-only Store transaction. Backoff actions
-// retain protocol order and terminal completion is applied last, matching the
-// session's final outcome without involving a platform mutation batch.
-func (driver *GossipDriver) commitGossipEventCheckpoint(ctx context.Context, session *gossip.SyncSession, backoffs []gossip.RecordBackoffAction, now time.Time) error {
-	if driver == nil || driver.gossipState == nil {
-		return nil
-	}
-	if len(backoffs) == 0 && (session == nil || !session.Done()) {
+// commitGossipEventCheckpoint records the terminal result once per session.
+func (driver *GossipDriver) commitGossipEventCheckpoint(ctx context.Context, session *gossip.SyncSession, now time.Time) error {
+	if driver == nil || driver.gossipState == nil || session == nil || !session.Done() || session.PeerID == "" {
 		return nil
 	}
 	defer driver.LogSlowOperation("session_checkpoint", time.Now(), driver.PendingEventCount())
-	ids := make([]string, 0, len(backoffs)+1)
-	for _, action := range backoffs {
-		if action.PeerID != "" {
-			ids = append(ids, action.PeerID)
+	peerID := session.PeerID
+	peer := driver.gossipState.PeerCheckpoints([]string{peerID})[peerID]
+	if !applyGossipCompletionCheckpoint(&peer, session.LastError(), now) {
+		if ctx != nil {
+			return ctx.Err()
 		}
+		return nil
 	}
-	if session != nil && session.Done() && session.PeerID != "" {
-		ids = append(ids, session.PeerID)
+	patch := corestate.PeerCheckpointPatch{
+		BackoffUntilUnix: corestate.PatchField[int64]{Set: true, Value: peer.BackoffUntilUnix},
+		FailureCount:     corestate.PatchField[int]{Set: true, Value: peer.FailureCount},
+		LastFailure:      corestate.PatchField[*corestate.PeerFailure]{Set: true, Value: peer.LastFailure},
 	}
-	peers := driver.gossipState.PeerCheckpoints(ids)
-	var patches map[string]corestate.PeerCheckpointPatch
-	for _, action := range backoffs {
-		if action.PeerID == "" {
-			continue
-		}
-		peer := peers[action.PeerID]
-		applyGossipBackoffCheckpoint(&peer, action.Err, now)
-		peers[action.PeerID] = peer
-		if patches == nil {
-			patches = make(map[string]corestate.PeerCheckpointPatch)
-		}
-		patch := patches[action.PeerID]
-		patch.BackoffUntilUnix = corestate.PatchField[int64]{Set: true, Value: peer.BackoffUntilUnix}
-		if action.Err != nil {
-			patch.LastFailure = corestate.PatchField[*corestate.PeerFailure]{Set: true, Value: peer.LastFailure}
-		}
-		patches[action.PeerID] = patch
+	if session.LastError() == nil {
+		patch.LastSyncUnix = corestate.PatchField[int64]{Set: true, Value: peer.LastSyncUnix}
 	}
-	if session != nil && session.Done() && session.PeerID != "" {
-		peer := peers[session.PeerID]
-		if !applyGossipCompletionCheckpoint(&peer, session.LastError(), now) && len(patches) == 0 {
-			// Timestamp precision is seconds. Repeated matching PINGs can
-			// complete immediately in one receive burst; do not build and
-			// submit the same already-committed checkpoint for every packet.
-			if ctx != nil {
-				return ctx.Err()
-			}
-			return nil
-		}
-		peers[session.PeerID] = peer
-		if patches == nil {
-			patches = make(map[string]corestate.PeerCheckpointPatch)
-		}
-		patch := patches[session.PeerID]
-		patch.BackoffUntilUnix = corestate.PatchField[int64]{Set: true, Value: peer.BackoffUntilUnix}
-		patch.FailureCount = corestate.PatchField[int]{Set: true, Value: peer.FailureCount}
-		patch.LastFailure = corestate.PatchField[*corestate.PeerFailure]{Set: true, Value: peer.LastFailure}
-		if session.LastError() == nil {
-			patch.LastSyncUnix = corestate.PatchField[int64]{Set: true, Value: peer.LastSyncUnix}
-		}
-		patches[session.PeerID] = patch
-	}
-	if _, err := driver.gossipState.UpdatePeerCheckpoints(ctx, patches); err != nil {
+	if _, err := driver.gossipState.UpdatePeerCheckpoints(ctx, map[string]corestate.PeerCheckpointPatch{peerID: patch}); err != nil {
 		return err
 	}
-	for peerID := range patches {
-		driver.observeSyncAttempt(peerID, now)
-	}
+	driver.observeSyncAttempt(peerID, now)
 	return nil
 }
 
@@ -170,13 +126,6 @@ func applyGossipCompletionCheckpoint(peer *corestate.PeerCheckpoint, syncErr err
 	return peer.LastSyncUnix != previous.LastSyncUnix ||
 		peer.BackoffUntilUnix != previous.BackoffUntilUnix || peer.FailureCount != previous.FailureCount ||
 		peer.LastFailure != previous.LastFailure
-}
-
-func applyGossipBackoffCheckpoint(peer *corestate.PeerCheckpoint, actionErr error, now time.Time) {
-	if actionErr != nil {
-		peer.LastFailure = &corestate.PeerFailure{Code: corestate.PeerFailureUnknown, Message: actionErr.Error(), AtUnix: now.Unix()}
-	}
-	peer.BackoffUntilUnix = now.Add(gossipFailureBackoff(peer.FailureCount)).Unix()
 }
 
 func gossipFailureBackoff(failures int) time.Duration {

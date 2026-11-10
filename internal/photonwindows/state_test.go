@@ -92,16 +92,20 @@ func TestOpenStateRejectsConfigTrustMismatch(t *testing.T) {
 }
 
 func TestOpenStateRejectsLegacyZoneDatabase(t *testing.T) {
-	network, rootPublic, _ := signedNetwork(t)
+	_, rootPublic, _ := signedNetwork(t)
 	path := filepath.Join(t.TempDir(), "legacy.db")
-	legacy, err := zone.OpenBoltStore(path, 0o600)
+	db, err := bolt.Open(path, 0o600, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := legacy.SaveNetwork(network); err != nil {
+	if err := db.Update(func(tx *bolt.Tx) error {
+		_, err := tx.CreateBucket([]byte("zone:."))
+		return err
+	}); err != nil {
+		_ = db.Close()
 		t.Fatal(err)
 	}
-	if err := legacy.Close(); err != nil {
+	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := OpenState(path, "node-a.catofes.", rootPublic, time.Second); !errors.Is(err, corestate.ErrBoltSchemaUnsupported) {

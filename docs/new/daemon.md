@@ -190,13 +190,11 @@ for {
 **processEvents() 阶段**（[`daemon.go:860-895`](../../app/photon/daemon.go#L860-L895)）：
 
 非阻塞 drain 所有已排队事件，处理完后以 **Phase 6.5 拒绝优先顺序**执行 flush：
-1. `flushRevocationCleanup()` — 清理已吊销 zone 的 gossip peer cache
-2. `flushFirewallReconcile()` — 刷新防火墙规则
-3. `flushRoutingReconcile()` — 刷新路由
-4. `flushIPsecReconcile()` — 刷新 IPsec 链路
-5. `flushRevocationCleanup()` — 再次清理（flush 中可能发现新的吊销路径）
+1. `flushFirewallReconcile()` — 刷新防火墙规则
+2. `flushRoutingReconcile()` — 刷新路由
+3. `flushIPsecReconcile()` — 刷新 IPsec 链路
 
-这个顺序确保吊销的 prefix 和 peer entry 在任何层可能重新接受流量之前从 allow set 中移除。
+签名撤销提交时清除对应的 Gossip checkpoint，共享 GossipDriver 负责清理活动会话、地址和诊断。数据面先撤销防火墙授权，再回收路由和 IPsec 链路。
 
 ### 3.1 Packet Demuxer
 
@@ -205,7 +203,7 @@ UDP reader 收到包后，由 Packet Demuxer 按 `peer_id` 路由：
 - 命中活跃 `SyncSession` 的包 → `PacketEvent`，交给该 session 的 FSM。
 - 未命中的包 → `UnsolicitedPacketEvent`，由事件循环里的只读 responder / hint ingress 处理：
   - `PING` / `FETCH_CATALOG_PAGE` / `FETCH_ZONE`：直接读取已提交的状态并回复。
-  - `ANNOUNCE`：记录 hint，必要时创建或唤醒 active pull session。
+  - 带目录摘要的 `PING`：目录根不同时触发主动同步。
 
 Demuxer 只按 `peer_id` 路由，不解释 message type；message type 由 `SyncSession` 或 unsolicited handler 在事件循环内判断。
 
@@ -285,7 +283,6 @@ Checkpoint 在 `gossip-checkpoint/peers` 下按 peer ID 保存小型 JSON；字�
 当状态变化时（sync 成功应用了 Zone snapshot、admin 写入 record 等），daemon 会：
 1. 调用 `OnStateChanged` hook（测试用）
 2. 通知 observer 推送 SSE 事件
-3. 执行 `flushRevocationCleanup()`（拒绝优先）
 4. 设置所有 dirty 标记并依次 flush：firewall → routing → IPsec
 5. 完成后再次清理 gossip peer cache
 
@@ -325,7 +322,7 @@ Daemon 运行期间，推荐所有写操作都通过 control socket。如果外�
 旧代码在收包路径里用 `defer saveState()`，落盘时机隐式。当前设计明确只在以下时机落盘：
 
 - `SyncSession` 进入 `Completed` 或 `Failed`
-- 应用 `ANNOUNCE` / object pull 结果后 digest 发生变化
+- 应用通过验证的 Zone 快照后目录发生变化
 - control / admin 事件处理完成后
 
 以下情况不落盘：
@@ -469,17 +466,15 @@ Flush 方法返回 `bool` 表示是否确实执行了 reconcile。
 - 当 link group 数为 0 且没有链路实例时，IPsec reconcile 定时器关闭（返回 0）
 - 当 routing 实例数为 0 时，routing reconcile 定时器关闭
 
-### 6.4 Phase 6.5：拒绝优先顺序
+### 6.4 撤销后的拒绝优先顺序
 
 ```
-flushRevocationCleanup()  // 1. 清理 gossip peer cache
-flushFirewallReconcile()   // 2. 防火墙（allow set）
-flushRoutingReconcile()    // 3. 路由
-flushIPsecReconcile()      // 4. IPsec
-flushRevocationCleanup()   // 5. 再次清理
+flushFirewallReconcile()  // 防火墙 allow set
+flushRoutingReconcile()   // 路由
+flushIPsecReconcile()     // IPsec
 ```
 
-吊销优先于任何允许操作。被吊销 zone 的 peer 必须先从 endpoint cache、observed path、object-pull 候选中被清除，这样后续的防火墙 / routing / IPsec reconcile 才不会继续考虑它。
+Store 在提交生效的撤销时删除相关 Gossip checkpoint，共享 Gossip discovery 清理会话、端点和诊断。Linux 各子系统依据已验证的撤销更新目标状态，先收紧防火墙访问，再撤路由和 IPsec 链路。
 
 ### 6.5 同一事件队列的 sync-trigger 链
 
@@ -487,13 +482,13 @@ flushRevocationCleanup()   // 5. 再次清理
 record_put
   → handleRecordPutEvent: 写入签名 record
   → notifyStateChanged: 设置 dirty 标记 + flush 子系统
-  → processEvents drain 中: flush revocation → firewall → routing → ipsec
+  → processEvents drain 中: flush firewall → routing → ipsec
 
 sync timer
   → handleSyncTimerEvent: 加载新状态 + 为每个出站 peer 启动 SyncSession
   → SyncSession FSM 完成 → completeSyncSession
     → notifyStateChanged（如果有变化）
-    → relaySyncToPeers: 通知其他 peer
+    → GossipDriver 向其他 peer 发送带新目录摘要的 PING
 
 endpoint publish timer
   → handleEndpointTimerEvent: 发布 endpoint、IPsec transport、routing netns 记录

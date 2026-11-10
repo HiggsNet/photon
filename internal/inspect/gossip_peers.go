@@ -9,6 +9,7 @@ import (
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	"github.com/HiggsNet/photon/pkg/core/observability"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 type PeerBootstrap struct {
@@ -43,7 +44,11 @@ func BuildGossipPeerDebugViews(common corestate.View, options GossipPeersOptions
 }
 
 func BuildGossipPeerDebugView(common corestate.View, options GossipPeersOptions, peerID string) (PeerDebugView, bool) {
-	if common.State == nil || common.State.Network == nil || !PeerKnown(gossipPeerSetInput(common, options), peerID) {
+	if common.State == nil || common.State.Network == nil {
+		return PeerDebugView{}, false
+	}
+	revoked := common.State.Network.IsZoneRevoked(zone.ZonePath(peerID), options.Now)
+	if !revoked && !PeerKnown(gossipPeerSetInput(common, options), peerID) {
 		return PeerDebugView{}, false
 	}
 	facts := gossipPeerProjection(common, options, peerID)
@@ -53,7 +58,9 @@ func BuildGossipPeerDebugView(common corestate.View, options GossipPeersOptions,
 	)
 	view.DiscoveredAddr = facts.discoveredAddr
 	view.Historical = gossipPeerHistorical(common, options, peerID, facts.checkpoint)
-	if view.Historical {
+	if revoked {
+		view.Status = "revoked"
+	} else if view.Historical {
 		view.Status = "offline"
 	}
 	return view, true

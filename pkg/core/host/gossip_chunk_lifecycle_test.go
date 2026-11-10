@@ -14,15 +14,12 @@ import (
 )
 
 type lifecycleChunkSender struct {
-	chunks    []*gossip.ObjectChunk
-	announces int
-	failure   error
+	chunks []*gossip.ObjectChunk
+
+	failure error
 }
 
 func (s *lifecycleChunkSender) SendGossip(_ context.Context, out gossip.OutboundMessage) error {
-	if out.Message.Announce != nil {
-		s.announces++
-	}
 	if out.Message.ObjectChunk != nil {
 		s.chunks = append(s.chunks, out.Message.ObjectChunk)
 		return s.failure
@@ -92,7 +89,7 @@ func TestGossipDuplicateFetchDoesNotRestartActiveSend(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(sender.chunks) != 1 || sender.announces != 0 || len(driver.gossipChunkSends) != 1 || len(job.indexes) != pending || !job.expires.Equal(expires) {
+	if len(sender.chunks) != 1 || len(driver.gossipChunkSends) != 1 || len(job.indexes) != pending || !job.expires.Equal(expires) {
 		t.Fatal("duplicate request amplified or prolonged the active send")
 	}
 	clock.Advance(gossip.ChunkTransferTTL)
@@ -206,7 +203,7 @@ func TestGossipChunkCapacityWarningIsClassifiedThrottledAndHandled(t *testing.T)
 		}
 	}
 	if len(warnings) != 1 || datagram.writeCount() != 0 {
-		t.Fatalf("warnings=%d announces before admission=%d", len(warnings), datagram.writeCount())
+		t.Fatalf("warnings=%d datagrams before admission=%d", len(warnings), datagram.writeCount())
 	}
 	fields := warnings[0].Fields
 	if fields["reason"] != "resource_limited" || fields["limit"] != "peer_active_transfers" || fields["zone"] != paths[4] || fields["peer_transfers"] != 4 || fields["cache_bytes"].(int) == 0 || fields["cache_byte_limit"] != gossip.MaxChunkSendCacheBytes {

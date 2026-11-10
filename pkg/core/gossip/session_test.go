@@ -241,7 +241,7 @@ func TestSyncSessionCatalogPageRefreshesOnceOnRootMismatch(t *testing.T) {
 	if s.State != SyncSessionFailed {
 		t.Fatalf("expected state failed, got %s", s.State)
 	}
-	assertActionTypes(t, actions, []string{"RecordBackoffAction"})
+	assertActionTypes(t, actions, nil)
 }
 
 func TestSyncSessionCatalogPageBeforeTimerDoesNotPanic(t *testing.T) {
@@ -486,7 +486,7 @@ func TestSyncSessionRoundTimeout(t *testing.T) {
 	if s.State != SyncSessionFailed {
 		t.Fatalf("expected state failed, got %s", s.State)
 	}
-	assertActionTypes(t, actions, []string{"RecordBackoffAction", "CancelTimerAction"})
+	assertActionTypes(t, actions, []string{"CancelTimerAction"})
 }
 
 func TestSyncSessionRTTAwareTimeouts(t *testing.T) {
@@ -553,8 +553,6 @@ func actionType(a SyncAction) string {
 		return "StartObjectPullAction"
 	case ApplySnapshotAction:
 		return "ApplySnapshotAction"
-	case RecordBackoffAction:
-		return "RecordBackoffAction"
 	case StartTimerAction:
 		return "StartTimerAction"
 	case CancelTimerAction:

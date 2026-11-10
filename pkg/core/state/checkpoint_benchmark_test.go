@@ -114,7 +114,7 @@ func BenchmarkRevocationRead(b *testing.B) {
 	b.Run("projection", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			store.RevokedPeerCheckpoints(time.Unix(100, 0))
+			store.ReadRevokedZones(time.Unix(100, 0))
 		}
 	})
 }

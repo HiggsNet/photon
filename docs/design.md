@@ -57,7 +57,7 @@
 gossip 维护时尤其要避免三种混淆：
 
 - **身份与可达性混淆**：Zone trust chain / record signature 决定身份和授权；bootstrap、signed endpoint、reflector、DNS、observed UDP path 只提供联系候选。
-- **hint 与完整对象混淆**：`announce` 是 digest hint；不能把 UDP announce payload 当成事务或完整性保证。
+- **摘要与完整对象混淆**：PING/PONG 的目录根用于判断差异，应用完整 Zone 仍需验证签名和对象摘要。
 - **bulk path 与 fallback 混淆**：大对象主路径是 TCP object pull；UDP chunk fallback 只在 TCP 不可达时兜底。
 
 ### 1.2 总体架构（核心 + 插件）
@@ -542,7 +542,7 @@ overlays:
 远端节点从“不支持/未广播 StrongSwan”变成“广播可连接”时，本机不会因为收到某个字符串就立即修改系统网络。当前 daemon 的处理路径是：
 
 ```text
-gossip announce hint / catalog summary diff
+gossip PING/PONG catalog summary diff
   -> event-loop SyncSession 拉取 catalog page
   -> TCP object pull / UDP chunk fallback
   -> VerifyChain / VerifyRecord / ApplySnapshot
@@ -1107,16 +1107,15 @@ SyncTimerEvent
   -> Completed / Failed
 ```
 
-对应事件包括 `CatalogSummaryReceivedEvent`、`CatalogPageReceivedEvent`、`CatalogPageTimeoutEvent`，FSM 动作为 `SendFetchCatalogPageAction`；入站 catalog page 请求由公共 responder planner 处理，不再保留无生产者的 `SendCatalogPageAction`。`ANNOUNCE` 在新状态机里退回 hint / wakeup 角色：它可以触发一次 summary round，但不能作为 catalog diff 或完整对象事务的 correctness baseline。只有本地 `ZoneRoot` 与 catalog diff 记录的 expected root 匹配，或完整 object pull / chunk apply 成功后，Zone 才算完成。
+对应事件包括 `CatalogSummaryReceivedEvent`、`CatalogPageReceivedEvent`、`CatalogPageTimeoutEvent`，FSM 动作为 `SendFetchCatalogPageAction`，入站 catalog page 请求由公共 responder planner 处理。节点用带目录摘要的 PING 通知邻居。只有本地 `ZoneRoot` 与 catalog diff 记录的 expected root 匹配，或完整 object pull / chunk apply 成功后，Zone 才算完成。
 
 ### 7.4 MTU / TCP Pull / UDP Chunk 的集成
 
 重构后这些能力作为 FSM 事件处理：
 
-- 发送 snapshot 超预算 → 发 digest-only `ANNOUNCE` 或 skeleton hint，接收方基于 digest mismatch 触发 TCP object pull。
+- 目录摘要不同时比较目录页，按差异发起 TCP object pull。
 - TCP object pull 改为异步 worker pool，完成后 post `ObjectPullResultEvent`。
-- TCP 不可达 → 进入 `ChunkFallback`，发送 `FETCH_ZONE{ChunkFallback:true}`，接收 `object_chunk` 事件驱动重组。
-- UDP announce 不作为完整 Zone 事务；如果一个 Zone 需要完整对象才能达到目标 root，正确路径是 object pull 或 chunk fallback。
+- TCP 不可达 → 进入 `ChunkFallback`，发送 `FETCH_ZONE`，接收 `object_chunk` 事件驱动重组。
 
 ### 7.5 状态变更与持久化边界
 
@@ -1125,7 +1124,7 @@ SyncTimerEvent
 旧代码在 `handlePacketUntil` / `syncRound` 里用 `defer saveState()`，落盘时机隐式。新设计只在明确状态转换时落盘：
 
 - `Completed` / `Failed`
-- 应用 `ANNOUNCE` 后 digest 发生变化
+- 验证并应用 Zone 快照后 digest 发生变化
 - control/admin 事件处理完成后
 
 所有落盘仍在 daemon 主 goroutine 串行执行。

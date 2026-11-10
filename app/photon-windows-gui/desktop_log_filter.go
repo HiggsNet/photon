@@ -23,7 +23,7 @@ func desktopFilterDiagnosticLog(text string, filter int) string {
 		case 1:
 			keep = level == "WARN" || level == "ERROR"
 		case 2:
-			for _, prefix := range []string{"gossip_", "session_", "worker_", "zone_", "packet_", "sending_announce", "announce_hint", "hinted_sync", "ping_summary"} {
+			for _, prefix := range []string{"gossip_", "session_", "worker_", "zone_", "packet_", "sync_hint", "hinted_sync", "ping_summary"} {
 				keep = keep || strings.HasPrefix(event, prefix)
 			}
 		}

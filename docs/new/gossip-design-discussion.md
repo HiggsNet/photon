@@ -18,7 +18,7 @@
 
 已移除 `FirstPage`、摘要内的 `NextCursor` 和相应的接收处理。摘要只携带根摘要和 Zone 数量。摘要不一致时，用空 `cursor` 的 `FetchCatalogPage` 请求目录第一页，再用目录页返回的游标请求后续页。
 
-PONG 携带目录摘要才推进同步。UDP `FETCH_ZONE` 只请求 Zone 快照分块，接收端直接发送分块。
+PONG 携带目录摘要才推进同步。更新通知使用带目录摘要的 PING，旧 ANNOUNCE 消息已删除。UDP `FETCH_ZONE` 只请求 Zone 快照分块，接收端直接发送分块。
 
 ## 公共 Gossip 传输：保留现有设计
 
@@ -62,7 +62,7 @@ Linux 统一使用 `photon daemon` 运行 Gossip。已删除 `advanced sync serv
 
 Linux 隧道生命周期用内存中的活动时间判断何时暂停重建。达到阈值时保存暂停标记，IPsec 规划和状态展示读取这个标记。Gossip 发现和地址过期仍独立运行。重启后尚未暂停的 peer 从新的观察窗口开始，已暂停的 peer 等到新的认证活动后解除暂停。
 
-签名撤销立即使节点或子树失去授权并清理运行态。撤销 Zone 正文和 Gossip checkpoint 由显式的 `advanced recovery purge-revoked --apply` 删除，父区中的签名撤销证明继续保留。
+签名撤销生效时，公共 Store 删除对应的 Gossip checkpoint，共享 Driver 清理会话、地址和诊断。撤销 Zone 正文和 Gossip checkpoint 由显式的 `advanced recovery purge-revoked --apply` 删除，父区中的签名撤销证明继续保留。
 
 Common 数据库锁定在 schema 2。旧整库用 v0.6.6 迁移，旧的整块 Gossip checkpoint 则直接忽略。
 

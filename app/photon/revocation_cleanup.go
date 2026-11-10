@@ -120,22 +120,6 @@ func isConfiguredBootstrapPeerWithConfig(config *appConfig, peerID string) bool 
 	return false
 }
 
-// peerNeedsRevocationCleanup reports whether the typed checkpoint cleanup
-// would change the runtime-owned fields of one peer.
-func peerNeedsRevocationCleanup(peer corestate.PeerCheckpoint) bool {
-	return peer.LastSuccessfulEndpoint != "" ||
-		peer.ObservedEndpoint != "" ||
-		peer.ObservedFirstSeenUnix != 0 ||
-		peer.ObservedLastSeenUnix != 0 ||
-		peer.ObservedUntilUnix != 0 ||
-		peer.ObservedGraceEndpoints != nil ||
-		peer.BackoffUntilUnix != 0 ||
-		peer.FailureCount != 0 ||
-		peer.LastFailure == nil ||
-		peer.LastFailure.Code != corestate.PeerFailureLegacy ||
-		peer.LastFailure.Message != "zone revoked"
-}
-
 func collectAllRevokedZones(network *zone.NetworkState, now time.Time) map[zone.ZonePath]bool {
 	return network.RevokedZones(now)
 }

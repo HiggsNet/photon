@@ -72,10 +72,11 @@ func (store *Store) ImportRecoverySnapshot(ctx context.Context, input RecoveryIm
 
 	nextRevision := baseRevision + 1
 	changes := ChangeSet{
-		VerifiedRevision: nextRevision,
-		ChangedZones:     []zone.ZonePath{input.Snapshot.Zone},
-		NetworkChanged:   true,
-		SecurityPriority: true,
+		VerifiedRevision:        nextRevision,
+		ChangedZones:            []zone.ZonePath{input.Snapshot.Zone},
+		NetworkChanged:          true,
+		SecurityPriority:        true,
+		GossipCheckpointChanged: pruneRevokedCheckpoints(gossipCandidate, candidate.Network, now),
 	}
 	if store.commit != nil {
 		if err := store.commit(ctx, cloneCommitCandidate(candidate, gossipCandidate), changes); err != nil {

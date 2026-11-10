@@ -22,7 +22,6 @@ func TestPlanInboundPacketActiveMessageActions(t *testing.T) {
 		{"fetch_zone", &Message{Type: MessageFetchZone, PeerID: peerID, FetchZone: &FetchZone{Zone: "catofes."}}, []InboundActionKind{InboundRespondFetchZone}, nil},
 		{"fetch_catalog", &Message{Type: MessageFetchCatalogPage, PeerID: peerID, FetchCatalogPage: &FetchCatalogPage{}}, []InboundActionKind{InboundRespondFetchCatalogPage}, nil},
 		{"catalog_page", &Message{Type: MessageCatalogPage, PeerID: peerID, CatalogPage: &corestate.CatalogPage{}}, []InboundActionKind{InboundPostSessionEvent}, &CatalogPageReceivedEvent{}},
-		{"announce", &Message{Type: MessageAnnounce, PeerID: peerID}, []InboundActionKind{InboundHandleAnnounce}, nil},
 		{"object_chunk", &Message{Type: MessageObjectChunk, PeerID: peerID}, []InboundActionKind{InboundHandleObjectChunk}, nil},
 		{"object_chunk_nack", &Message{Type: MessageObjectChunkNACK, PeerID: peerID}, []InboundActionKind{InboundHandleObjectChunkNACK}, nil},
 	}
@@ -54,7 +53,6 @@ func TestPlanInboundPacketUnsolicitedPolicy(t *testing.T) {
 		{"ping", &Message{Type: MessagePing, PeerID: peerID, Ping: &Ping{}}, InboundRespondPing},
 		{"fetch_zone", &Message{Type: MessageFetchZone, PeerID: peerID, FetchZone: &FetchZone{}}, InboundRespondFetchZone},
 		{"fetch_catalog", &Message{Type: MessageFetchCatalogPage, PeerID: peerID, FetchCatalogPage: &FetchCatalogPage{}}, InboundRespondFetchCatalogPage},
-		{"announce", &Message{Type: MessageAnnounce, PeerID: peerID}, InboundHandleAnnounce},
 		{"object_chunk_nack", &Message{Type: MessageObjectChunkNACK, PeerID: peerID}, InboundHandleObjectChunkNACK},
 	}
 	for _, test := range tests {

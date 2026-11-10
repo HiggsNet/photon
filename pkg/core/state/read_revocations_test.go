@@ -28,14 +28,13 @@ func TestRevocationProjectionAcrossTimeIntervals(t *testing.T) {
 		t.Helper()
 		now := time.Unix(second, 0)
 		want := network.RevokedZones(now)
-		got, _ := store.RevokedPeerCheckpoints(now)
-		projected := store.ReadRevokedZones(now)
-		if !reflect.DeepEqual(got, want) || !reflect.DeepEqual(projected, want) {
-			t.Errorf("at %d: cleanup=%v projection=%v, want %v", second, got, projected, want)
+		got := store.ReadRevokedZones(now)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("at %d: projection=%v, want %v", second, got, want)
 		}
 		// Even an empty result must remain detached from the cached projection.
 		clear(got)
-		projected["caller."] = true
+		got["caller."] = true
 	}
 	// Includes both sides of activation, purged tombstones, ancestors, negative
 	// timestamps and rollback across more than one scheduled boundary.
@@ -70,7 +69,7 @@ func TestRevocationProjectionFollowsPublication(t *testing.T) {
 					return nil
 				}, func(context.Context, map[string]*PeerCheckpoint, VerifiedRevision) error { return nil })
 			now := time.Unix(1000, 0)
-			before, _ := store.RevokedPeerCheckpoints(now)
+			before := store.ReadRevokedZones(now)
 			if before[path] {
 				t.Fatal("fixture already revoked")
 			}
@@ -85,7 +84,7 @@ func TestRevocationProjectionFollowsPublication(t *testing.T) {
 				close(release)
 				t.Fatal("commit never reached persistence")
 			}
-			pending, _ := store.RevokedPeerCheckpoints(now)
+			pending := store.ReadRevokedZones(now)
 			close(release)
 			if err := <-done; (fail && !errors.Is(err, wantErr)) || (!fail && err != nil) {
 				t.Fatalf("commit: %v", err)
@@ -93,7 +92,7 @@ func TestRevocationProjectionFollowsPublication(t *testing.T) {
 			if pending[path] {
 				t.Fatal("uncommitted revocation was visible")
 			}
-			after, _ := store.RevokedPeerCheckpoints(now)
+			after := store.ReadRevokedZones(now)
 			if after[path] == fail {
 				t.Fatal("projection did not follow committed revision")
 			}
@@ -103,9 +102,12 @@ func TestRevocationProjectionFollowsPublication(t *testing.T) {
 			if _, err := store.UpdatePeerCheckpoint(t.Context(), path.String(), PeerCheckpointPatch{ObservedLastUnix: PatchField[int64]{Set: true, Value: 7}}); err != nil {
 				t.Fatal(err)
 			}
-			_, peers := store.RevokedPeerCheckpoints(now)
-			if !fail && peers[path.String()].ObservedLastSeenUnix != 7 {
-				t.Fatal("cached revocations hid a new checkpoint")
+			if err := store.PruneRevokedPeerCheckpoints(t.Context(), now); err != nil {
+				t.Fatal(err)
+			}
+			_, retained := store.PeerCheckpoints([]string{path.String()})[path.String()]
+			if retained != fail {
+				t.Fatal("pruning did not follow committed revocation")
 			}
 		})
 	}

@@ -261,10 +261,9 @@ func (store *Store) applyLocalIntents(ctx context.Context, intents []LocalIntent
 	}
 	changedZones := make([]zone.ZonePath, 0, len(intents))
 	var securityPriority bool
-	var metadataChanged bool
 	out.Results = make([]LocalIntentResult, 0, len(intents))
 	for _, intent := range intents {
-		result, changed, additional, secure, checkpointChanged, err := applyLocalIntentCandidate(candidate, gossipCandidate, intent, now)
+		result, changed, additional, secure, err := applyLocalIntentCandidate(candidate, intent, now)
 		if err != nil {
 			return LocalIntentBatchResult{}, err
 		}
@@ -275,9 +274,9 @@ func (store *Store) applyLocalIntents(ctx context.Context, intents []LocalIntent
 			changedZones = appendZoneOnce(changedZones, path)
 		}
 		securityPriority = securityPriority || secure
-		metadataChanged = metadataChanged || checkpointChanged
 		out.Results = append(out.Results, result)
 	}
+	metadataChanged := securityPriority && pruneRevokedCheckpoints(gossipCandidate, candidate.Network, now)
 	if len(changedZones) == 0 && !metadataChanged {
 		out.Changes.VerifiedRevision = baseRevision
 		return out, nil
@@ -308,12 +307,11 @@ func (store *Store) applyLocalIntents(ctx context.Context, intents []LocalIntent
 	return cloneLocalIntentBatchResult(out), nil
 }
 
-func applyLocalIntentCandidate(candidate *VerifiedState, gossipCandidate *GossipCheckpoint, intent LocalIntent, now time.Time) (LocalIntentResult, zone.ZonePath, []zone.ZonePath, bool, bool, error) {
+func applyLocalIntentCandidate(candidate *VerifiedState, intent LocalIntent, now time.Time) (LocalIntentResult, zone.ZonePath, []zone.ZonePath, bool, error) {
 	var out LocalIntentResult
 	var changed zone.ZonePath
 	var additionallyChanged []zone.ZonePath
 	var securityPriority bool
-	var metadataChanged bool
 	var err error
 	switch typed := intent.(type) {
 	case PutRecordIntent:
@@ -354,14 +352,13 @@ func applyLocalIntentCandidate(candidate *VerifiedState, gossipCandidate *Gossip
 		out.Revocation, changed, err = applyRevokeDelegationIntent(candidate, typed, now)
 		if err == nil {
 			securityPriority = true
-			metadataChanged = cleanupRevokedPeerCheckpoint(gossipCandidate, typed.Child)
 		}
 	case UpdateRootAuthorityIntent:
 		err = ErrRootAuthorityChange
 	default:
 		err = fmt.Errorf("unsupported local intent %T", intent)
 	}
-	return out, changed, additionallyChanged, securityPriority, metadataChanged, err
+	return out, changed, additionallyChanged, securityPriority, err
 }
 
 func validateProtocolRecordIntent(intent PutProtocolRecordIntent) error {
@@ -636,21 +633,6 @@ func ensureZoneCollections(state *zone.ZoneState) {
 	if state.RecordHistory == nil {
 		state.RecordHistory = make(map[string][]*zone.Record)
 	}
-}
-
-func cleanupRevokedPeerCheckpoint(state *GossipCheckpoint, revoked zone.ZonePath) bool {
-	if state == nil || !revoked.Valid() {
-		return false
-	}
-	changed := false
-	for peerID := range state.Peers {
-		path := zone.ZonePath(peerID)
-		if path == revoked || zoneDescendsFrom(path, revoked) {
-			delete(state.Peers, peerID)
-			changed = true
-		}
-	}
-	return changed
 }
 
 func zoneDescendsFrom(path, parent zone.ZonePath) bool {

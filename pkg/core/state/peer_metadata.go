@@ -55,11 +55,61 @@ func (store *Store) changePeerCheckpoints(ctx context.Context, patches map[strin
 	if store == nil {
 		return CommitResult{}, ErrVerifiedStoreClosed
 	}
-	if ctx == nil {
-		ctx = context.Background()
+	store.writeMu.Lock()
+	defer store.writeMu.Unlock()
+	return store.changePeerCheckpointsLocked(ctx, patches, deleted)
+}
+
+// PruneRevokedPeerCheckpoints catches active revocations at startup or after
+// their activation time. It uses the same signed-state predicate as commits.
+func (store *Store) PruneRevokedPeerCheckpoints(ctx context.Context, now time.Time) error {
+	if store == nil {
+		return ErrVerifiedStoreClosed
 	}
 	store.writeMu.Lock()
 	defer store.writeMu.Unlock()
+	store.mu.RLock()
+	if store.closed {
+		store.mu.RUnlock()
+		return ErrVerifiedStoreClosed
+	}
+	var deleted []string
+	if store.state != nil {
+		deleted = revokedCheckpointPeers(store.gossip, store.state.Network, now)
+	}
+	store.mu.RUnlock()
+	if len(deleted) == 0 {
+		return nil
+	}
+	_, err := store.changePeerCheckpointsLocked(ctx, nil, deleted)
+	return err
+}
+
+func pruneRevokedCheckpoints(checkpoint *GossipCheckpoint, network *zone.NetworkState, now time.Time) bool {
+	ids := revokedCheckpointPeers(checkpoint, network, now)
+	for _, peerID := range ids {
+		delete(checkpoint.Peers, peerID)
+	}
+	return len(ids) > 0
+}
+
+func revokedCheckpointPeers(checkpoint *GossipCheckpoint, network *zone.NetworkState, now time.Time) []string {
+	if checkpoint == nil || network == nil {
+		return nil
+	}
+	var ids []string
+	for peerID := range checkpoint.Peers {
+		if network.IsZoneRevoked(zone.ZonePath(peerID), now) {
+			ids = append(ids, peerID)
+		}
+	}
+	return ids
+}
+
+func (store *Store) changePeerCheckpointsLocked(ctx context.Context, patches map[string]PeerCheckpointPatch, deleted []string) (CommitResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	store.mu.RLock()
 	if store.closed {
 		store.mu.RUnlock()
@@ -223,33 +273,6 @@ func peerCheckpointEmpty(metadata PeerCheckpoint) bool {
 		metadata.RejectedObjects = nil
 	}
 	return reflect.DeepEqual(metadata, PeerCheckpoint{})
-}
-
-// RevokedPeerCheckpoints returns only revocation results and affected hints.
-// The application decides cleanup policy; no network records or keys escape.
-func (store *Store) RevokedPeerCheckpoints(now time.Time) (map[zone.ZonePath]bool, map[string]PeerCheckpoint) {
-	if store == nil {
-		return nil, nil
-	}
-	store.mu.RLock()
-	defer store.mu.RUnlock()
-	if store.state == nil {
-		return nil, nil
-	}
-	revoked := store.revokedZonesLocked(now)
-	if len(revoked) == 0 {
-		return revoked, nil
-	}
-	var peers map[string]PeerCheckpoint
-	for id, peer := range store.gossip.Peers {
-		if revoked[zone.ZonePath(id)] {
-			if peers == nil {
-				peers = make(map[string]PeerCheckpoint)
-			}
-			peers[id] = clonePeerCheckpoint(peer)
-		}
-	}
-	return revoked, peers
 }
 
 // PeerCheckpoints returns detached hints for only the requested peers.

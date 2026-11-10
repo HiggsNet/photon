@@ -22,11 +22,8 @@ func TestSyncSessionLocalAndSemanticPullFailuresBackOffWithoutUDP(t *testing.T) 
 			if err != nil || session.State != SyncSessionFailed || !errors.Is(session.LastError(), failure) {
 				t.Fatalf("state=%s last error=%v error=%v", session.State, session.LastError(), err)
 			}
-			if len(actions) != 1 {
+			if len(actions) != 0 {
 				t.Fatalf("actions=%#v", actions)
-			}
-			if _, ok := actions[0].(RecordBackoffAction); !ok {
-				t.Fatalf("failure triggered another transport: %#v", actions)
 			}
 		})
 	}

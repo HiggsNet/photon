@@ -152,14 +152,14 @@ func TestGossipQueueInternalBudgetYieldsAndRetainsAllResults(t *testing.T) {
 	if driver.Events() != nil {
 		t.Fatal("new inputs must not grow an unfinished internal batch")
 	}
-	// Reliable completions remain consumable while the batch is paused. This
-	// also checks aggregate changes aren't hidden by the last internal result.
+	// Reliable completions remain consumable while the batch is paused.
+	// Finishing a round does not report its earlier commit a second time.
 	other := driver.Gossip.NewSession("peer-b")
 	other.State = gossip.SyncSessionSummarySent
 	other.AccumulateNetworkChanged(true)
 	driver.completions <- GossipEvent{Value: &gossip.PongReceivedEvent{PeerID: "peer-b", Pong: &gossip.Pong{Summary: corestate.CatalogSummaryFor(nil)}}}
 	result, err := driver.HandleGossipHostEvent(t.Context(), <-driver.Completions(), now, nil)
-	if err != nil || !result.NetworkChanged || driver.Gossip.Session("peer-b") != nil || result.Session.PeerID != peerIDs[2*(maxGossipEventBatch-1)] {
+	if err != nil || result.NetworkChanged || driver.Gossip.Session("peer-b") != nil || result.Session.PeerID != peerIDs[2*(maxGossipEventBatch-1)] {
 		t.Fatalf("interleaved completion result/error = %#v/%v", result, err)
 	}
 	for driver.internalPending.Load() > 0 {

@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"maps"
 	"net"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 const DefaultGossipRelayFanout = 8
@@ -47,6 +49,11 @@ func (driver *GossipDriver) SyncGossipPeers(ctx context.Context, now time.Time, 
 		return false, ErrGossipTransportRequired
 	}
 	input := driver.GossipDiscoveryInput(suppressedPeers)
+	if input.Network != nil && !maps.Equal(driver.revokedPeers, gossipDiscoveryRevocations(input, now)) {
+		if err := driver.RefreshGossipDiscovery(ctx, suppressedPeers, now, driver.gossipTransportForRead()); err != nil {
+			return false, err
+		}
+	}
 	summary := corestate.CatalogSummaryFor(input.Network)
 	changed := false
 	var errs []error
@@ -78,14 +85,14 @@ func (driver *GossipDriver) StartGossipSession(peerID, reason string) error {
 	if driver == nil {
 		return ErrGossipDriverStopped
 	}
-	if peerID == "" {
+	if peerID == "" || driver.revokedPeers[zone.ZonePath(peerID)] {
 		return nil
 	}
 	now := driver.schedulerForRead().clock.Now()
 	if driver.Gossip.HasActiveSession(peerID) {
 		driver.Gossip.DeferHint(peerID)
 		driver.observeSyncHint(peerID, reason, "session_active", false, now)
-		driver.logGossip("debug", "announce_hint_suppressed", peerID, "session", nil, map[string]any{"reason": "session_active"})
+		driver.logGossip("debug", "sync_hint_suppressed", peerID, "session", nil, map[string]any{"reason": "session_active"})
 		return nil
 	}
 	if driver.gossipObjectPullDraining(peerID) {
@@ -135,7 +142,7 @@ type GossipEventResult struct {
 type GossipHostEventResult struct {
 	Handled bool
 	Session GossipEventResult
-	// NetworkChanged includes every session completed within this batch.
+	// NetworkChanged reports verified state committed within this batch.
 	NetworkChanged bool
 }
 
@@ -197,7 +204,11 @@ func (driver *GossipDriver) handleGossipHostStep(ctx context.Context, hostEvent 
 	}
 	if received, ok := hostEvent.(GossipPacketReceived); ok {
 		out.Handled = true
-		if received.Packet == nil {
+		if received.Packet == nil || received.Packet.Message == nil {
+			return out, nil, nil
+		}
+		peerID := received.Packet.Message.PeerID
+		if suppressedPeers[peerID] || driver.revokedPeers[zone.ZonePath(peerID)] {
 			return out, nil, nil
 		}
 		driver.acceptGossipInboundPath(ctx, received.Packet, now, suppressedPeers, transport)
@@ -235,6 +246,7 @@ func (driver *GossipDriver) handleGossipHostStep(ctx context.Context, hostEvent 
 	if errors.Is(err, ErrGossipSessionNotFound) {
 		return out, nil, nil
 	}
+	out.NetworkChanged = result.NetworkChanged
 	if err == nil && result.Done {
 		// Only UDP discovery timeouts are evidence against the UDP address.
 		// A round expiring during TCP object pull must not penalize it.
@@ -251,7 +263,6 @@ func (driver *GossipDriver) handleGossipHostStep(ctx context.Context, hostEvent 
 			transport.RecordAddrFailure(result.PeerID, addr)
 		}
 		driver.finishGossipSession(ctx, &result, now, suppressedPeers)
-		out.NetworkChanged = result.NetworkChanged
 	}
 	out.Session = result
 	return out, events, err
@@ -315,7 +326,7 @@ func (driver *GossipDriver) startDeferredGossipSession(peerID string) bool {
 	if driver.Gossip.HasActiveSession(peerID) || driver.gossipObjectPullDraining(peerID) || !driver.Gossip.TakePendingHint(peerID) {
 		return false
 	}
-	return driver.StartGossipSession(peerID, "announce_hint_followup") == nil && driver.Gossip.HasActiveSession(peerID)
+	return driver.StartGossipSession(peerID, "deferred_sync") == nil && driver.Gossip.HasActiveSession(peerID)
 }
 
 func (driver *GossipDriver) relayGossipUpdate(ctx context.Context, sourcePeerID string, now time.Time, suppressedPeers map[string]bool) {

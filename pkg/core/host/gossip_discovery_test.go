@@ -39,6 +39,10 @@ func (writer failingDiscoveryWriter) ApplyRemoteBatch(context.Context, string, [
 	return corestate.RemoteBatchResult{}, nil
 }
 
+func (writer failingDiscoveryWriter) PruneRevokedPeerCheckpoints(context.Context, time.Time) error {
+	return writer.err
+}
+
 func (writer failingDiscoveryWriter) UpdatePeerCheckpoints(context.Context, map[string]corestate.PeerCheckpointPatch) (corestate.CommitResult, error) {
 	return corestate.CommitResult{}, writer.err
 }
@@ -532,6 +536,9 @@ func TestObservedPathVerifierRechecksExpiryAndRevocation(t *testing.T) {
 	check(now, original, true)
 	check(expires.Add(-time.Nanosecond), original, true)
 	check(expires, rejected, false)
+	if got := store.PeerCheckpoints([]string{peer.String()})[peer.String()].ObservedEndpoint; got != original {
+		t.Fatalf("expired path replaced committed endpoint with %q", got)
+	}
 
 	revocation := &zone.DelegationRevocation{
 		ParentZone: zone.RootZone, ChildZone: peer, RevokedAt: now.Unix(),
@@ -550,8 +557,8 @@ func TestObservedPathVerifierRechecksExpiryAndRevocation(t *testing.T) {
 		t.Fatalf("publish revocation: result=%+v err=%v", result, err)
 	}
 	check(now, rejected, false)
-	if got := store.PeerCheckpoints([]string{peer.String()})[peer.String()].ObservedEndpoint; got != original {
-		t.Fatalf("invalid path replaced committed endpoint with %q", got)
+	if _, ok := store.PeerCheckpoints([]string{peer.String()})[peer.String()]; ok {
+		t.Fatal("revoked peer checkpoint remains after the remote commit")
 	}
 }
 

@@ -103,10 +103,10 @@ func TestCompletionRetryAfterPersistenceFailureIsNotCoalesced(t *testing.T) {
 	driver := NewGossipDriver(newFakeClock(now), 4, common, GossipDriverConfig{})
 	defer driver.Stop()
 	session := &gossip.SyncSession{PeerID: "peer-a", State: gossip.SyncSessionCompleted}
-	if err := driver.commitGossipEventCheckpoint(t.Context(), session, nil, now); !errors.Is(err, wantErr) {
+	if err := driver.commitGossipEventCheckpoint(t.Context(), session, now); !errors.Is(err, wantErr) {
 		t.Fatalf("first commit=%v", err)
 	}
-	if err := driver.commitGossipEventCheckpoint(t.Context(), session, nil, now); err != nil {
+	if err := driver.commitGossipEventCheckpoint(t.Context(), session, now); err != nil {
 		t.Fatal(err)
 	}
 	if attempts != 2 || common.PeerCheckpoints([]string{"peer-a"})["peer-a"].LastSyncUnix != now.Unix() {

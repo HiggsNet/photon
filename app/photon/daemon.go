@@ -333,9 +333,6 @@ func (d *Daemon) Run(ctx context.Context) error {
 	routingReconcileInterval := d.routingReconcileInterval()
 	firewallReconcileInterval := d.firewallReconcileInterval()
 	d.refreshGossipDiscovery()
-	// Clear revoked gossip runtime hints before startup recovery. Offline peer
-	// suppression is derived directly from the retained gossip checkpoint.
-	d.flushRevocationCleanup()
 	d.logDebug("daemon", "startup_recovery_begin", nil)
 	d.logDebug("daemon", "startup_recovery_layer_begin", map[string]any{"layer": "ipsec"})
 	d.recoverIPsecLinksOnStart(ctx)
@@ -530,17 +527,11 @@ func (d *Daemon) enqueueEvent(ctx context.Context, event daemonEvent) daemonEven
 }
 
 func (d *Daemon) processEvents(ctx context.Context, first *daemonEvent) (syncNow bool, shutdown bool, ipsecFlushed bool, routingFlushed bool, firewallFlushed bool) {
-	// Gossip and timer handlers can mark changes before this batch starts.
-	d.flushRevocationCleanup()
 	defer func() {
-		// Phase 6.5 deny-first order: revocation cleanup → firewall → routing
-		// → IPsec → revocation cleanup again. This ensures revoked prefixes
-		// and peer entries are removed from allow sets before any layer can
-		// re-accept traffic from the revoked subtree.
+		// Withdraw access before tearing down routes and IPsec links.
 		firewallFlushed = d.flushFirewallReconcile(ctx) || firewallFlushed
 		routingFlushed = d.flushRoutingReconcile(ctx) || routingFlushed
 		ipsecFlushed = d.flushIPsecReconcile(ctx) || ipsecFlushed
-		d.flushRevocationCleanup()
 		if routingFlushed {
 			d.notifyObserver("route_changed", nil)
 			d.notifyObserver("bird_updated", nil)
@@ -563,8 +554,6 @@ func (d *Daemon) processEvents(ctx context.Context, first *daemonEvent) (syncNow
 			}
 		}
 		result, triggerSync, stop := d.handleEvent(event)
-		// Remove revoked peer hints before any early reconcile or next event.
-		d.flushRevocationCleanup()
 		if event.Type == daemonEventIPsecCleanup && result.Error == nil {
 			ipsecFlushed = d.flushIPsecReconcile(ctx) || ipsecFlushed
 		}
@@ -1015,59 +1004,6 @@ func (d *Daemon) notifyStateChanged() {
 func (d *Daemon) noteReconcileFlush(layer string) {
 	if d.Hooks.OnReconcileFlush != nil {
 		d.Hooks.OnReconcileFlush(layer)
-	}
-}
-
-// flushRevocationCleanup clears runtime-relevant fields from SyncPeers entries
-// whose zone is currently revoked. This implements Phase 6.5.5 gossip peer
-// cache cleanup: revoked peers must not maintain discovered endpoints,
-// observed paths, backoff or object-pull candidates. The entry itself is
-// retained with a "revoked" failure for diagnostics until explicit purge.
-func (d *Daemon) flushRevocationCleanup() {
-	if d.State == nil {
-		return
-	}
-	// Query revocations without copying records, history or unrelated checkpoints.
-	now := d.now()
-	revokedZones, peers := d.State.Common.RevokedPeerCheckpoints(now)
-	if len(revokedZones) == 0 {
-		return
-	}
-	patches := make(map[string]corestate.PeerCheckpointPatch)
-	if len(peers) > 0 {
-		for peerID, peer := range peers {
-			if revokedZones[zone.ZonePath(peerID)] && peerNeedsRevocationCleanup(peer) {
-				patches[peerID] = corestate.PeerCheckpointPatch{
-					LastSuccessfulEndpoint: corestate.PatchField[string]{Set: true},
-					ObservedEndpoint:       corestate.PatchField[string]{Set: true}, ObservedFirstUnix: corestate.PatchField[int64]{Set: true},
-					ObservedLastUnix:  corestate.PatchField[int64]{Set: true},
-					ObservedUntilUnix: corestate.PatchField[int64]{Set: true},
-					ObservedGrace:     corestate.PatchField[[]corestate.ObservedGraceEndpoint]{Set: true},
-					BackoffUntilUnix:  corestate.PatchField[int64]{Set: true}, FailureCount: corestate.PatchField[int]{Set: true},
-					LastFailure: corestate.PatchField[*corestate.PeerFailure]{Set: true, Value: &corestate.PeerFailure{
-						Code: corestate.PeerFailureLegacy, Message: "zone revoked", AtUnix: now.Unix(),
-					}},
-				}
-			}
-		}
-	}
-	d.noteReconcileFlush("revocation_cleanup")
-	if len(patches) > 0 {
-		if _, err := d.State.Common.UpdatePeerCheckpoints(context.Background(), patches); err != nil {
-			d.logWarn("sync", "revocation_cleanup_commit_failed", map[string]any{"error": err})
-			return
-		}
-	}
-	if d.gossipDriver != nil {
-		observations := d.gossipDriver.Observability
-		// Preserve snapshot's expiry cleanup without copying every peer's
-		// diagnostics just to delete entries in the known revocation set.
-		observations.PurgeExpired(d.now())
-		for peerID, revoked := range revokedZones {
-			if revoked {
-				observations.Delete(peerID.String())
-			}
-		}
 	}
 }
 

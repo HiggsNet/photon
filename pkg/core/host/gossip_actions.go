@@ -9,7 +9,6 @@ type GossipActionPlan struct {
 	Outbound    []gossip.OutboundMessage
 	ObjectPulls []gossip.StartObjectPullAction
 	Timers      []gossip.SyncAction
-	Backoffs    []gossip.RecordBackoffAction
 }
 
 // PlanGossipActions is the single common phase-classification switch. Platform
@@ -29,8 +28,6 @@ func PlanGossipActions(actions []gossip.SyncAction) GossipActionPlan {
 			plan.ObjectPulls = append(plan.ObjectPulls, typed)
 		case gossip.StartTimerAction, gossip.CancelTimerAction:
 			plan.Timers = append(plan.Timers, action)
-		case gossip.RecordBackoffAction:
-			plan.Backoffs = append(plan.Backoffs, typed)
 		}
 	}
 	return plan

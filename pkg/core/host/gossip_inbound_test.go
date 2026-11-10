@@ -1,7 +1,6 @@
 package host
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"net"
@@ -152,40 +151,6 @@ func TestGossipDriverPingSummaryMismatchStartsCommonSession(t *testing.T) {
 	}
 	if driver.PendingEventCount() != 1 {
 		t.Fatalf("pending events = %d, want 1", driver.PendingEventCount())
-	}
-}
-
-func TestGossipDriverAnnounceIsHintAndDefersWhileSessionActive(t *testing.T) {
-	now := time.Unix(1000, 0)
-	network := zone.NewNetworkState()
-	store := corestate.NewStore(&corestate.VerifiedState{ManagedZone: "local.catofes.", Network: network}, nil, nil)
-	driver := NewGossipDriver(newFakeClock(now), 2, store, GossipDriverConfig{PeerID: "local.catofes."})
-	defer driver.Stop()
-	bindMemoryGossipTransport(t, driver, "peer-a")
-	rootBefore := corestate.CatalogRoot(corestate.ZoneDigests(network))
-	packet := GossipPacketReceived{Packet: &gossip.Packet{Message: &gossip.Message{
-		Type: gossip.MessageAnnounce, PeerID: "peer-a",
-		Announce: &gossip.Announce{Zones: []corestate.ZoneDigest{{Zone: "remote.catofes.", RootHash: []byte("remote")}}},
-	}}}
-
-	if _, err := driver.HandleGossipHostEvent(context.Background(), packet, now, nil); err != nil {
-		t.Fatal(err)
-	}
-	if session := driver.Gossip.Session("peer-a"); session == nil || session.State != gossip.SyncSessionIdle {
-		t.Fatalf("announce session = %#v", session)
-	}
-	if driver.PendingEventCount() != 1 {
-		t.Fatalf("announce events = %d, want 1", driver.PendingEventCount())
-	}
-	if rootAfter := corestate.CatalogRoot(corestate.ZoneDigests(store.ReadView().State.Network)); !bytes.Equal(rootAfter, rootBefore) {
-		t.Fatal("announce mutated verified network")
-	}
-	<-driver.Events()
-	if _, err := driver.HandleGossipHostEvent(context.Background(), packet, now, nil); err != nil {
-		t.Fatal(err)
-	}
-	if driver.PendingEventCount() != 0 || !driver.Gossip.PendingHint("peer-a") {
-		t.Fatalf("active announce events/pending = %d/%t", driver.PendingEventCount(), driver.Gossip.PendingHint("peer-a"))
 	}
 }
 

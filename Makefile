@@ -277,7 +277,7 @@ peer-lifecycle-smoke:
 	@echo "Peer lifecycle smoke passed"
 
 revocation-cleanup-smoke:
-	$(GO_ENV) $(GO) test ./app/photon -run 'TestRevocation|TestCollectAllRevokedZones|TestCleanupRevokedPeerCache|TestConfiguredBootstrapPeerRevoked|TestWriteRevocationImpacts|TestDaemonFlushRevocationCleanup|TestDaemonRevocationCleanupPeerCache|TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate' -v
+	$(GO_ENV) $(GO) test ./app/photon -run 'TestRevocation|TestCollectAllRevokedZones|TestConfiguredBootstrapPeerRevoked|TestDaemonDiscoveryClearsRevokedPeerHintsAndDiagnostics|TestDaemonRevocationCleanupPeerCache|TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate' -v
 	@echo "Revocation cleanup smoke passed"
 
 revocation-data-plane-smoke: build
@@ -894,7 +894,7 @@ object-pull-smoke: build
 #    object pull server 绑定失败（daemon 继续运行，只剩 UDP）。
 # 3. A 正常启动 daemon（UDP+TCP）。
 # 4. B 通过 control socket 写入 3000-byte bigdata record。
-# 5. B 的 UDP gossip 向 A 发出 announce/digest；A 尝试 TCP object pull B
+# 5. B 的 UDP gossip 向 A 发出带目录摘要的 PING；A 尝试 TCP object pull B
 #    失败（connection refused），触发 chunk fallback 路径。
 # 6. A 发送 fetch_zone；B 将 zone snapshot 拆成
 #    多个 UDP object_chunk 发给 A。

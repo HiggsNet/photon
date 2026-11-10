@@ -115,7 +115,7 @@ func GossipOutboundPeers(input GossipDiscoveryInput, now time.Time) []string {
 	seen := make(map[string]bool)
 	peers := make([]string, 0, len(input.Bootstrap)+len(input.Peers))
 	add := func(peerID string) {
-		if peerID == "" || peerID == input.LocalPeerID || peerID == input.ManagedZone.String() || seen[peerID] || input.Suppressed[peerID] {
+		if peerID == "" || peerID == input.LocalPeerID || peerID == input.ManagedZone.String() || seen[peerID] || input.Suppressed[peerID] || input.Network.IsZoneRevoked(zone.ZonePath(peerID), now) {
 			return
 		}
 		seen[peerID] = true
@@ -190,6 +190,7 @@ type GossipPeerAddressUpdate struct {
 
 type GossipDiscoveryPlan struct {
 	KnownPeerIDs []string
+	Revoked      map[zone.ZonePath]bool
 	Peers        map[string]GossipPeerAddressUpdate
 	Patches      map[string]corestate.PeerCheckpointPatch
 	Addresses    map[string][]*net.UDPAddr
@@ -312,6 +313,23 @@ func (driver *GossipDriver) RefreshGossipDiscovery(ctx context.Context, suppress
 			return err
 		}
 	}
+	if len(plan.Revoked) > 0 && driver.gossipState != nil {
+		if err := driver.gossipState.PruneRevokedPeerCheckpoints(ctx, now); err != nil {
+			return err
+		}
+	}
+	driver.revokedPeers = plan.Revoked
+	for path := range plan.Revoked {
+		peerID := path.String()
+		if driver.Gossip.HasActiveSession(peerID) {
+			driver.CancelGossipTimers(peerID)
+			driver.dropGossipPeerChunks(peerID)
+			driver.removeGossipSession(peerID)
+		}
+		driver.Gossip.TakePendingHint(peerID)
+		driver.Observability.Delete(peerID)
+	}
+	driver.Observability.PurgeExpired(now)
 	ApplyGossipDiscoveryPlan(transport, plan)
 	return nil
 }
@@ -365,9 +383,10 @@ func PlanGossipDiscovery(input GossipDiscoveryInput, now time.Time) GossipDiscov
 		return plan
 	}
 	plan.KnownPeerIDs = verifiedDiscoveryPeers(input, now)
+	plan.Revoked = gossipDiscoveryRevocations(input, now)
 	discovered := gossip.ExtractPeerEndpointsAt(input.Network, now)
 	for peerID, bootstrap := range input.Bootstrap {
-		if !input.Suppressed[peerID] {
+		if !input.Suppressed[peerID] && !plan.Revoked[zone.ZonePath(peerID)] {
 			plan.Addresses[peerID] = GossipDiscoveryAddresses(discovered[peerID], bootstrap, input.SourceOrder)
 		}
 	}
@@ -384,9 +403,12 @@ func PlanGossipDiscovery(input GossipDiscoveryInput, now time.Time) GossipDiscov
 	sort.Strings(peerIDs)
 	for _, peerID := range peerIDs {
 		peer := input.Peers[peerID]
+		if plan.Revoked[zone.ZonePath(peerID)] {
+			continue
+		}
 		update := plan.Peers[peerID]
 		if peer.LastSuccessfulEndpoint != "" {
-			if input.Suppressed[peerID] || input.Network.IsZoneRevoked(zone.ZonePath(peerID), now) {
+			if input.Suppressed[peerID] {
 				patch := plan.Patches[peerID]
 				patch.LastSuccessfulEndpoint = corestate.PatchField[string]{Set: true}
 				plan.Patches[peerID] = patch
@@ -416,6 +438,26 @@ func PlanGossipDiscovery(input GossipDiscoveryInput, now time.Time) GossipDiscov
 	return plan
 }
 
+func gossipDiscoveryRevocations(input GossipDiscoveryInput, now time.Time) map[zone.ZonePath]bool {
+	revoked := input.Network.RevokedZones(now)
+	add := func(peerID string) {
+		path := zone.ZonePath(peerID)
+		if !revoked[path] && input.Network.IsZoneRevoked(path, now) {
+			revoked[path] = true
+		}
+	}
+	for peerID := range input.Peers {
+		add(peerID)
+	}
+	for peerID := range input.Bootstrap {
+		add(peerID)
+	}
+	for _, peerID := range input.BootstrapPeers {
+		add(peerID)
+	}
+	return revoked
+}
+
 func ApplyGossipDiscoveryPlan(transport *gossip.Transport, plan GossipDiscoveryPlan) {
 	if transport == nil {
 		return
@@ -426,6 +468,9 @@ func ApplyGossipDiscoveryPlan(transport *gossip.Transport, plan GossipDiscoveryP
 	}
 	for _, peerID := range plan.KnownPeerIDs {
 		transport.AddKnownPeerID(peerID)
+	}
+	for path := range plan.Revoked {
+		transport.RemovePeer(path.String())
 	}
 	peerIDs := make([]string, 0, len(plan.Peers))
 	for peerID := range plan.Peers {

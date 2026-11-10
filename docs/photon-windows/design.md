@@ -360,18 +360,18 @@ daemon 的 sync、endpoint publisher、IPsec、routing、firewall 和 health 周
 Windows composition 不得把平台 completion 回投到 GossipDriver。
 同步事件的稳定诊断名和 peer ID 提取也由公共包提供，executor 不重复维护 event type switch。
 在 classifier 之后，共享 inbound planner 统一解释 message type，产出有序的 session-event、
-Ping/fetch responder、announce、chunk 或 NACK action。它固定 active/unsolicited policy 和
+Ping/fetch responder、chunk 或 NACK action。它固定 active/unsolicited policy 和
 nil payload 的 fail-closed 行为；平台 composition 只执行真正的平台副作用。
 Read-only fetch 分类与 Ping response message planning 同样共享：公共逻辑固定 responder 标签、
 catalog-root equality，以及 Pong 后按需请求 catalog page 的顺序；executor 负责读取本地 summary、
 观测和实际发送。
-`gossip.Engine` 是同步 FSM/session registry：拥有 per-peer session 与 pending announce hint，但不拥有
+`gossip.Engine` 是同步 FSM/session registry：拥有 per-peer session 与待处理的摘要提示，但不拥有
 event queue、timer 资源、数据库或平台副作用。公共 `host.GossipDriver` 拥有 bounded event queue 和单
 heap/wakeup Scheduler；timer policy/期限仍由 gossip session action 决定，Scheduler 只统一执行
 replace/cancel、generation stale 防护、背压和 stop。Linux daemon 已把共享 receive loop 产出的 verified packet
 注入 GossipDriver event queue；Photon Windows 后续必须走同一入口和 action 顺序。
 send action 到 wire message 的映射由 gossip 唯一实现；GossipDriver 的公共 action plan 固定
-apply -> outbound -> object-pull -> timer -> backoff/persistence 分相和 persistence scope 合并。
+apply -> outbound -> object-pull -> timer -> checkpoint persistence 的顺序。
 平台 controller 只执行各相，不得再次按具体 gossip action 类型建立 switch。
 
 因此平台注入边界不只有 UDP：至少还包括 timer clock、verified state projection、snapshot
@@ -382,9 +382,7 @@ UDP object chunk assembly、quiet-period NACK 和 sent-chunk repair cache 也复
 `pkg/core/gossip` 的同一实现。共享策略固定 object/hash/metadata 校验、per-peer inflight、
 repair rounds、NACK index、TTL 和内存 byte 上限；GossipDriver 负责公共 NACK/chunk 与完整对象处理，平台只提供
 实际 I/O，不在 Linux/Windows 各保留一套 executor。
-Datagram announce planning、wire-size/MTU budget 计算和 zone snapshot chunk packing 也位于
-gossip。它直接使用 state 的 `ZoneRoot`，统一排序、oversized 分类、object/root hash 与 chunk metadata；平台 executor
-只提供随机 transfer ID，并承担 sent cache、UDP send 和日志副作用。
+wire-size/MTU budget 计算和 Zone snapshot chunk packing 位于公共 Gossip。共享 Driver 管理 sent cache 和日志，平台 adapter 负责 UDP I/O。
 
 portable core 不得：
 

@@ -68,7 +68,6 @@ const (
 	PeerFailureTimeout   PeerFailureCode = "timeout"
 	PeerFailureTransport PeerFailureCode = "transport"
 	PeerFailureProtocol  PeerFailureCode = "protocol"
-	PeerFailureLegacy    PeerFailureCode = "legacy"
 )
 
 // PeerFailure is a loss-tolerant, serializable error record. Scheduling must
@@ -339,6 +338,9 @@ func (store *Store) ApplyRemoteBatch(ctx context.Context, peerID string, batch [
 	}
 
 	networkChanged := len(changedZones) > 0
+	if networkChanged || metadataChanged {
+		metadataChanged = pruneRevokedCheckpoints(gossipCandidate, candidate.Network, now) || metadataChanged
+	}
 	if !networkChanged && !metadataChanged {
 		out.Changes.VerifiedRevision = baseRevision
 		return out, nil

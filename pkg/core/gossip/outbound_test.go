@@ -57,7 +57,7 @@ func TestOutboundMessageForAction(t *testing.T) {
 }
 
 func TestOutboundMessageForActionRejectsHostAction(t *testing.T) {
-	if outbound, ok := OutboundMessageForAction(RecordBackoffAction{}); ok || outbound.Message != nil {
+	if outbound, ok := OutboundMessageForAction(ApplySnapshotAction{}); ok || outbound.Message != nil {
 		t.Fatalf("outbound = %#v ok=%t, want non-send action", outbound, ok)
 	}
 }

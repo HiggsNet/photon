@@ -24,7 +24,6 @@ const (
 	MessageFetchZone        MessageType = "fetch_zone"
 	MessageFetchCatalogPage MessageType = "fetch_catalog_page"
 	MessageCatalogPage      MessageType = "catalog_page"
-	MessageAnnounce         MessageType = "announce"
 	MessageObjectChunk      MessageType = "object_chunk"
 	MessageObjectChunkNACK  MessageType = "object_chunk_nack"
 )
@@ -41,7 +40,6 @@ type Message struct {
 	FetchZone        *FetchZone             `json:"fetch_zone,omitempty" msgpack:"f,omitempty"`
 	FetchCatalogPage *FetchCatalogPage      `json:"fetch_catalog_page,omitempty" msgpack:"fc,omitempty"`
 	CatalogPage      *corestate.CatalogPage `json:"catalog_page,omitempty" msgpack:"cp,omitempty"`
-	Announce         *Announce              `json:"announce,omitempty" msgpack:"a,omitempty"`
 	ObjectChunk      *ObjectChunk           `json:"object_chunk,omitempty" msgpack:"c,omitempty"`
 	ObjectChunkNACK  *ObjectChunkNACK       `json:"object_chunk_nack,omitempty" msgpack:"cn,omitempty"`
 }
@@ -60,10 +58,6 @@ type FetchCatalogPage struct {
 
 type FetchZone struct {
 	Zone zone.ZonePath `json:"zone" msgpack:"z"`
-}
-
-type Announce struct {
-	Zones []corestate.ZoneDigest `json:"zones,omitempty" msgpack:"z,omitempty"`
 }
 
 type ObjectChunk struct {
@@ -119,7 +113,6 @@ func validateMessage(message *Message) error {
 		message.FetchZone != nil,
 		message.FetchCatalogPage != nil,
 		message.CatalogPage != nil,
-		message.Announce != nil,
 		message.ObjectChunk != nil,
 		message.ObjectChunkNACK != nil,
 	} {
@@ -156,10 +149,6 @@ func validateMessage(message *Message) error {
 			if !entry.Zone.Valid() || len(entry.RootHash) == 0 {
 				return errors.New("catalog_page message has invalid entry")
 			}
-		}
-	case MessageAnnounce:
-		if message.Announce == nil {
-			return errors.New("announce message missing announce body")
 		}
 	case MessageObjectChunk:
 		if message.ObjectChunk == nil || len(message.ObjectChunk.TransferID) != 16 || !message.ObjectChunk.Zone.Valid() || len(message.ObjectChunk.ObjectHash) == 0 || message.ObjectChunk.Total == 0 || message.ObjectChunk.Index >= message.ObjectChunk.Total || len(message.ObjectChunk.Data) == 0 {

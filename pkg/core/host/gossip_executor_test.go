@@ -43,6 +43,10 @@ type memoryGossipStateStore struct {
 	updateErr   error
 }
 
+func (reader *memoryGossipStateStore) PruneRevokedPeerCheckpoints(context.Context, time.Time) error {
+	return reader.updateErr
+}
+
 func (reader *memoryGossipStateStore) UpdatePeerCheckpoints(_ context.Context, patches map[string]corestate.PeerCheckpointPatch) (corestate.CommitResult, error) {
 	if reader.trace != nil {
 		*reader.trace = append(*reader.trace, "checkpoint")
@@ -171,7 +175,6 @@ func TestGossipDriverExecuteGossipActionsUsesCommonOrdering(t *testing.T) {
 		gossip.SendPingAction{PeerID: "peer-a"},
 		gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "node-a.catofes."}},
 		gossip.StartTimerAction{PeerID: "peer-a", Kind: gossip.TimerKindRound, Deadline: deadline},
-		gossip.RecordBackoffAction{PeerID: "peer-a", Err: errors.New("retry")},
 	}
 
 	result := driver.ExecuteGossipActions(context.Background(), session, actions, controller)

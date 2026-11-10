@@ -549,8 +549,6 @@ func MessageObjectCounts(message *Message) (zones int, records int) {
 		return 1, 0
 	case message.CatalogPage != nil:
 		return len(message.CatalogPage.Entries), 0
-	case message.Announce != nil:
-		return len(message.Announce.Zones), 0
 	case message.ObjectChunk != nil:
 		return 1, 0
 	case message.ObjectChunkNACK != nil:
@@ -572,8 +570,6 @@ func objectCost(message *Message) int64 {
 		return 1
 	case message.CatalogPage != nil:
 		return int64(len(message.CatalogPage.Entries))
-	case message.Announce != nil:
-		return int64(len(message.Announce.Zones))
 	case message.ObjectChunk != nil:
 		return 1
 	case message.ObjectChunkNACK != nil:

@@ -33,15 +33,14 @@ Photon gossip 仅传播**已签名的 Zone 状态**。任何进入 active state 
 
 | 层 | 载体 | 角色 | 不能承担的职责 |
 |----|------|------|----------------|
-| UDP control | `ping` / `pong` / `fetch_catalog_page` / `catalog_page` / `announce` / `fetch_zone` | 交换 bounded summary、分页 catalog、请求对象、发送 digest hint | 不依赖 IP fragmentation，不承载 unbounded list |
+| UDP control | `ping` / `pong` / `fetch_catalog_page` / `catalog_page` / `fetch_zone` | 交换 bounded summary、分页 catalog、请求对象、发送 digest hint | 不依赖 IP fragmentation，不承载 unbounded list |
 | TCP object pull | 短连接 MessagePack | 拉取完整 Zone snapshot | 不改变 trust boundary，不跳过签名验证 |
 | UDP chunk fallback | `object_chunk` | TCP object pull 不可达时的兜底完整对象传输 | 不作为默认 bulk path，不承载未验证的部分状态 |
 
 ### 1.3 硬规则
 
 - UDP datagram 默认预算 **1200 bytes**；任何 UDP message 都必须先按 wire size 预算打包。
-- 所有 list 都必须 bounded：catalog page、announce digest 都不能假设一包装得下；旧 Ping/Pong digest/fetch list 已删除。
-- `announce` 是 hint，只携带 digest；不能依赖 UDP announce payload 完成一个 Zone。
+- catalog 按有界页面传输。PING 和 PONG 携带目录摘要，接收端据此决定是否开始同步。
 - 大对象默认走 TCP object pull；UDP chunk fallback 只在 TCP pull 明确失败或不可达后使用。
 - relay 只在本地 verified active state 实际变化后触发；收到 hint 本身不是 relay 条件。
 
@@ -88,10 +87,9 @@ Gossip 运行于事件驱动的 daemon 架构中：
 |------|------|------------------------------|
 | Active pull FSM | 发起 `PING`，比较 catalog，启动 TCP object pull / UDP chunk fallback，apply 验证后的对象 | 是 |
 | Read-only responder | 响应 `FETCH_CATALOG_PAGE`、TCP object pull、必要时响应 UDP chunk fallback | 否 |
-| Hint ingress | 接收 `ANNOUNCE`、relay hint 或带 Summary 的 unsolicited `PING`，决定是否唤醒一次 active pull | 否；最多创建或唤醒主动同步 |
+| Hint ingress | 接收带 Summary 的 `PING`，决定是否唤醒一次 active pull | 否；最多创建或唤醒主动同步 |
 
 - `FETCH_*` 是只读请求，响应方直接从本地 verified state 读数据并返回，不进入“服务中”会话状态。
-- `ANNOUNCE` 只表示“我这里可能有新 digest/object”，不作为完整同步的正确性前提。
 - 大对象主路径是 TCP object pull；UDP chunk fallback 只在 TCP 不可达时传完整对象。
 - 收到 hint 不触发 relay；只有本地 active state 真正 apply 成功并发生变化后，才按 relay 规则通知其他 peer。
 - 带 `CatalogSummary` 的 unsolicited `PING` 也是一种 hint：如果 `catalog_root` 与本端一致，直接记录 peer sync 状态并跳过 SyncSession；不一致时回退到 hint 处理，可能创建 active pull。
@@ -159,8 +157,8 @@ type Message struct {
     FetchZone        *FetchZone
     FetchCatalogPage *FetchCatalogPage
     CatalogPage      *CatalogPage
-    Announce         *Announce
     ObjectChunk      *ObjectChunk
+    ObjectChunkNACK  *ObjectChunkNACK
 }
 ```
 
@@ -186,12 +184,7 @@ type FetchCatalogPage struct {
 }
 
 type FetchZone struct {
-    Zone          ZonePath // 需要拉取的 zone
-    ChunkFallback bool     // 是否请求 UDP chunk fallback
-}
-
-type Announce struct {
-    Zones []ZoneDigest // zone digest hint（bounded）
+    Zone ZonePath // 通过 UDP chunk 拉取的 zone
 }
 
 type ObjectChunk struct {
@@ -258,7 +251,6 @@ photon.gossip.m1\n<msgpack payload with version=1>
 | `fetch_catalog_page` | 请求 | 双向 | 请求 catalog 分页 |
 | `catalog_page` | 响应 | 双向 | 返回 catalog 分页数据 |
 | `fetch_zone` | 请求 | 双向 | 请求 UDP 分块发送 Zone 快照 |
-| `announce` | 主动 | 双向 | hint ingress；不作为正确性主路径 |
 | `object_chunk` | 主动 | 双向 | UDP 分片传输大对象 |
 
 ---
@@ -290,7 +282,7 @@ Phase 3: Object Pull（对象拉取）
 - 如果一方 catalog 为空 → 立即完成
 - 如果 `catalog_root` 不同 → 进入 Phase 2
 
-**unsolicited PING 的处理**：当 B 在没有主动 session 的情况下收到 A 的 `PING {summary}` 时，同样视为一次 summary round。
+**unsolicited PING 的处理**：`respondGossipPing` 回复本地摘要。目录根一致时更新同步状态，根不同时请求目录页并启动主动同步。
 
 - `catalog_root` 一致 → B 直接记录 peer sync 状态，不创建 SyncSession（稳态短路）
 - `catalog_root` 不一致 → B 把该 `PING` 当作 hint，可能创建或唤醒 active pull；同时 B 在回复 `PONG` 后会额外发送 `FETCH_CATALOG_PAGE`，主动拉取 A 的 catalog 分页
@@ -337,23 +329,10 @@ Phase 3: Object Pull（对象拉取）
 
 ### 4.4 Hint 与主动同步
 
-`ANNOUNCE` 和带 Summary 的 unsolicited `PING` 都是 hint，不是对象同步主路径。现代路径应按以下方式处理：
+本地记录提交后，daemon 触发一轮同步，向可用 peer 发送带当前目录摘要的 `PING`。从远端拉取并验证提交发生变化后，GossipDriver 也用带摘要的 `PING` 通知其他邻居，受 relay fanout 和退避限制。
 
-```
-收到 ANNOUNCE / relay hint / unsolicited PING{summary}
-  → 校验消息基本格式、peer、quota、防重放
-  → 如果是 PING{summary} 且 catalog_root 与本端一致
-       → 记录 peer sync 状态并返回（稳态短路，不创建 SyncSession）
-  → 否则
-       → 记录 hint digest / source / time
-       → 如果没有活跃 session，创建或唤醒 active pull FSM
-       → active pull 通过 catalog diff + object pull 获取完整对象
-  → apply 成功且 active state 变化后，才触发 relay
-```
+收到摘要后，目录根一致就结束本轮。目录根不同则走分页目录和 Zone 拉取。通知丢失时由周期同步补上。
 
-`ANNOUNCE` 只保留 bounded digest 信息，用于低成本唤醒和观测；不能携带 snapshot/records，也不负责完成正确同步。
-
-带 `CatalogSummary` 的 `PING` 比 `ANNOUNCE` 更强：它直接提供了对端 catalog root。root 一致时可以避免创建 SyncSession 的冗余开销；root 不一致时行为与 `ANNOUNCE` 类似，但响应方还会立即发送 `FETCH_CATALOG_PAGE` 主动拉取 catalog。
 
 ---
 
@@ -413,7 +392,7 @@ Phase 3: Object Pull（对象拉取）
 - 校验通过后再做 root hash / 签名验证
 - 新 fallback 使用随机 16-byte `transfer_id`；同 peer、同对象内容和分片布局的未过期传输复用 ID，正在发送时的重复请求不重启发送。接收 quiet 150ms 后只 NACK 缺块索引。
 - 发送缓存每 peer 最多 4 条，全局最多 1024 条、32 MiB payload。首轮或补包发送结束后保留至多 30 秒供 NACK 修复；容量不足时优先淘汰最久未使用且当前未发送的缓存，正在发送的传输不会被淘汰。完成的旧传输不阻挡后续新对象，永久发送失败立即释放对应缓存。
-- 无法通过淘汰空闲缓存满足上限时拒绝新传输，由请求方整轮超时后的重试退避恢复；发送端记录 `resource_limited`、触发的限制和占用，重复警告每 30 秒合并一次。准入失败不额外发送 ANNOUNCE。
+- 无法通过淘汰空闲缓存满足上限时拒绝新传输，由请求方整轮超时后的重试退避恢复；发送端记录 `resource_limited`、触发的限制和占用，重复警告每 30 秒合并一次。
 - 每个 transfer 最多 3 个 repair round，每个 NACK 最多 128 个索引；重复 NACK 不重复发送。
 - NACK 和 repair chunk 都经过现有 datagram budget、replay 与 peer quota；完整对象 hash 和签名链通过后才 apply。
 - `SyncSession` round timeout 会丢弃该 peer 未完成的 assembly；超时后的 unsolicited chunk 不会 apply。
@@ -517,7 +496,7 @@ RoundTimeout(peer) = max(5s, 5 × estimatedRTT(peer)) + 5s (object pull budget)
 1. **Apply Zone snapshots**（可能有多个 apply）
 2. **SaveState**（仅当 apply 成功后 persist）
 3. **Reconcile pending**（检查 pending zone 是否已经满足）
-4. **Send messages**（PING/PONG/ANNOUNCE/FETCH_CATALOG_PAGE/CATALOG_PAGE/FETCH_ZONE）
+4. **Send messages**（PING/PONG/FETCH_CATALOG_PAGE/CATALOG_PAGE/FETCH_ZONE）
 5. **Start async object pulls**
 6. **Start/cancel timers**
 7. **Record backoff**
@@ -668,7 +647,7 @@ https://ddns.oray.com/checkip
 
 Relay 的 key 约束：
 
-- **仅在本地 active state 实际变化后触发**，收到 hint / announce 本身不触发 relay
+- **仅在本地 active state 实际变化后触发**，收到目录摘要本身不触发 relay
 - relay fanout 上限为 8 个 peer（`maxRelayFanoutPerUpdate`）
 - 两次 relay 之间至少有 1 秒的最小间隔（`relayMinInterval`）
 
@@ -771,19 +750,18 @@ Packet → routePacket()
   └── 无匹配 → UnsolicitedPacketEvent → 由 handlePacket 处理
 ```
 
-gossip packet 事件直接以 StateStore committed state 为唯一权威。`handlePacketEvent` 在事件循环中先于控制请求处理；只读响应（`PONG`、`FETCH_CATALOG_PAGE`、`FETCH_ZONE` 等）从 committed view 直接生成 summary、page 或目标 zone 的 announce 计划，不复制完整 Network。observed path 等控制状态通过局部 COW 直接提交到 StateStore；`SyncRuntime` 不再持有第二份 state。
+Gossip 收包事件以 Store 已提交的状态为准。响应 PING、FETCH_CATALOG_PAGE 和 FETCH_ZONE 时，分别读取目录摘要、目录页和目标 Zone 的分块。Observed path 通过局部 COW 提交到 Store。
 
 对于有 SyncSession 的场景，具体消息类型转换：
 
 | 入站消息 | 转换事件 |
 |----------|----------|
 | PING (有 Summary) | 匹配活跃 session 时 → `CatalogSummaryReceivedEvent`；无匹配 session 时 → 按 unsolicited PING 处理 |
-| PING (无 Summary) | 回退到 `PongReceivedEvent` |
+| PING (无 Summary) | 回复带本地摘要的 PONG |
 | PONG | `PongReceivedEvent` |
 | FETCH_ZONE | 从已提交的 Zone 快照生成 UDP 分块 |
 | FETCH_CATALOG_PAGE | direct read-only responder；不进入 active `SyncSession` |
 | CATALOG_PAGE | `CatalogPageReceivedEvent` |
-| ANNOUNCE | hint ingress：没有活跃 session 时创建 active pull；已有 session 时记录 follow-up hint，不改当前 FSM |
 | OBJECT_CHUNK | 走全局 chunk assembly |
 
 **unsolicited PING 的处理**：无匹配 session 时，带 `Summary` 的 `PING` 先由 `respondPing` 回复 `PONG`（如果 root 不一致还会额外发送 `FETCH_CATALOG_PAGE`），然后进入 `maybeShortcutSyncFromPingSummary`。root 一致则记录 peer sync 状态并直接返回；不一致或 summary 生成失败则回退到 `handleAnnounceHint`，按 hint 创建/唤醒 active pull。
@@ -806,14 +784,12 @@ Scheduler 使用 `(namespace, owner, key, generation)` 标识 timer，以一个 
 ### 11.5 状态变更通知链
 
 ```
-SyncSession 完成 + state changed
-  → completeSyncSession()
-    → refreshGossipDiscovery()
-    → notifyStateChanged()
-      → flushRevocationCleanup()
-      → mark ipsecDirty, routingDirty, firewallDirty
-      → flush firewall → flush routing → flush IPsec reconcile
-    → relaySyncToPeers()
+Store 应用已验证的快照
+  → 若有生效的撤销，同一次提交删除相关 peer checkpoint
+  → 宿主在本批事件结束时刷新 Gossip discovery，清掉撤销 peer 的地址、会话和诊断
+  → Linux 将 firewall、routing、IPsec 标记为待 reconcile，依次执行
+
+同步成功完成且状态变化时，GossipDriver 向其他 peer 发带新摘要的 PING。
 ```
 
 ---

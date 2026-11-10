@@ -25,6 +25,7 @@ type GossipStateStore interface {
 	PeerCheckpoints([]string) map[string]corestate.PeerCheckpoint
 	ApplyRemoteBatch(context.Context, string, []corestate.RemoteSnapshot, time.Time) (corestate.RemoteBatchResult, error)
 	UpdatePeerCheckpoints(context.Context, map[string]corestate.PeerCheckpointPatch) (corestate.CommitResult, error)
+	PruneRevokedPeerCheckpoints(context.Context, time.Time) error
 }
 
 // GossipDriverConfig contains platform-neutral configuration. Resolved bootstrap

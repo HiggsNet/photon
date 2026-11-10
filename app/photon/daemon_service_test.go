@@ -9,6 +9,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
@@ -166,16 +167,32 @@ func TestRootCommandIncludesDaemon(t *testing.T) {
 
 func TestDaemonGossipChangeDefersPlatformWorkToEventLoop(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	service := newTestDaemonFromOwners(&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second)
+	now := time.Unix(2230, 0)
+	const peerID = "node-b.catofes."
+	target := *verified
+	target.Network = zone.CloneNetworkState(verified.Network)
+	putVerifiedEndpointRecord(t, verified, "192.0.2.1", 33434, now)
+	snapshot, err := corestate.Snapshot(verified.Network, peerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := corestate.ZoneRoot(verified.Network.Zones[peerID])
+	service := newTestDaemonFromOwners(&testApp{Config: defaultAppConfig(), Clock: func() time.Time { return now }}, &target, checkpoint, runtime, config, time.Second)
 	flushes := 0
 	service.Hooks.OnReconcileFlush = func(string) { flushes++ }
-	// A session may apply changes before its remaining object pulls time out.
-	// Its terminal event must still schedule platform reconciliation.
-	session := service.gossipDriver.Gossip.NewSession("peer-a")
-	session.State = gossip.SyncSessionObjectPulling
-	session.AccumulateNetworkChanged(true)
-	result, err := service.handleGossipDriverEvent(context.Background(), corehost.GossipEvent{Value: &gossip.RoundTimeoutEvent{PeerID: "peer-a"}})
-	if err != nil || !result.Session.Done || !result.Session.NetworkChanged {
+	session := service.gossipDriver.Gossip.NewSession(peerID)
+	_, _ = session.OnEvent(&gossip.SyncTimerEvent{PeerID: peerID}, now)
+	_, _ = session.OnEvent(&gossip.CatalogPageReceivedEvent{PeerID: peerID, Page: &corestate.CatalogPage{
+		CatalogRoot: []byte("catalog"),
+		Entries: []corestate.ZoneDigest{
+			{Zone: peerID, RootHash: root},
+			{Zone: "node-c.catofes.", RootHash: []byte("other root")},
+		},
+	}}, now)
+	result, err := service.handleGossipDriverEvent(t.Context(), corehost.GossipEvent{Value: &gossip.ObjectPullResultEvent{
+		PeerID: peerID, Zone: peerID, Snapshot: snapshot,
+	}})
+	if err != nil || result.Session.Done || !result.NetworkChanged {
 		t.Fatalf("Gossip result = %#v, error = %v", result, err)
 	}
 	if flushes != 0 {
@@ -184,5 +201,9 @@ func TestDaemonGossipChangeDefersPlatformWorkToEventLoop(t *testing.T) {
 	_, _, ipsecFlushed, routingFlushed, firewallFlushed := service.processEvents(context.Background(), nil)
 	if !ipsecFlushed || !routingFlushed || !firewallFlushed || flushes != 3 {
 		t.Fatalf("next batch flushes = %v/%v/%v, count %d", ipsecFlushed, routingFlushed, firewallFlushed, flushes)
+	}
+	result, err = service.handleGossipDriverEvent(t.Context(), corehost.GossipEvent{Value: &gossip.RoundTimeoutEvent{PeerID: peerID}})
+	if err != nil || !result.Session.Done || result.NetworkChanged {
+		t.Fatalf("terminal Gossip result = %#v, error = %v", result, err)
 	}
 }

@@ -195,7 +195,7 @@ func testGossipColdCatalog(t *testing.T, pullsAtTimeout int) {
 				case <-deadline.C:
 					t.Fatal("timeout did not cancel the running child pulls")
 				}
-				if err := driver.StartGossipSession("bootstrap", "announce_hint"); err != nil {
+				if err := driver.StartGossipSession("bootstrap", "ping_summary"); err != nil {
 					t.Fatal(err)
 				}
 			}

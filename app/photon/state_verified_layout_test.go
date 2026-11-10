@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"github.com/HiggsNet/photon/pkg/core/zone"
 
 	"os"
 	"path/filepath"
@@ -21,15 +20,18 @@ func TestOpenStateRejectsOldDatabasesWithoutWriting(t *testing.T) {
 		t.Run(schema, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "photon.db")
 			if schema == "aggregate database" {
-				store, err := zone.OpenBoltStore(path, 0o600)
+				db, err := bolt.Open(path, 0o600, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := store.SaveNetwork(verified.Network); err != nil {
-					_ = store.Close()
+				if err := db.Update(func(tx *bolt.Tx) error {
+					_, err := tx.CreateBucket([]byte("zone:."))
+					return err
+				}); err != nil {
+					_ = db.Close()
 					t.Fatal(err)
 				}
-				if err := store.Close(); err != nil {
+				if err := db.Close(); err != nil {
 					t.Fatal(err)
 				}
 			} else {

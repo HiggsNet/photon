@@ -45,7 +45,7 @@ Zone 是 Photon 的核心数据模型。每个 Zone 有自己的 authority、del
 Gossip 负责把这些 signed Zone state 在 peer 之间同步。它维护的是控制面数据库，不直接修改系统网络。它的主要职责是：
 
 - 交换 Zone digest 和 record metadata。
-- 通过 UDP 传递小消息和 announce hint。
+- 通过 UDP 交换带目录摘要的 PING/PONG，通知邻居同步。
 - 通过 object pull 拉取完整的 Zone snapshot。
 - 维护 endpoint discovery、bootstrap peer、observed path 等可达性信息。
 - 在验证通过后更新本地 active state。

@@ -117,7 +117,7 @@ func TestSyncSessionCatalogDriftWithVerifiedSnapshots(t *testing.T) {
 					t.Fatal("discarded snapshot changed the committed parent proof")
 				}
 			} else {
-				assertActionTypes(t, ack, []string{"RecordBackoffAction"})
+				assertActionTypes(t, ack, nil)
 				if lastErr == nil || s.State != SyncSessionFailed || view.Revision != 0 || len(view.Gossip.Peers["peer-a"].RejectedObjects) != 1 {
 					t.Fatalf("failure: err=%v state=%s view=%#v", lastErr, s.State, view)
 				}
@@ -204,7 +204,7 @@ func TestSyncSessionCatalogRefreshKeepsRoundTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertActionTypes(t, actions, []string{"RecordBackoffAction", "CancelTimerAction"})
+	assertActionTypes(t, actions, []string{"CancelTimerAction"})
 	if s.State != SyncSessionFailed {
 		t.Fatal("refresh escaped original round deadline")
 	}
@@ -232,7 +232,7 @@ func TestSyncSessionCatalogDeduplicationBoundaries(t *testing.T) {
 		step(t, s, start, "SendPingAction", "StartTimerAction")
 		step(t, s, summary, "SendFetchCatalogPageAction", "StartTimerAction")
 		step(t, s, summary)
-		step(t, s, &CatalogPageTimeoutEvent{PeerID: peer}, "RecordBackoffAction")
+		step(t, s, &CatalogPageTimeoutEvent{PeerID: peer})
 		retry := NewSyncSession(peer)
 		step(t, retry, start, "SendPingAction", "StartTimerAction")
 		step(t, retry, summary, "SendFetchCatalogPageAction", "StartTimerAction")

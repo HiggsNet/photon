@@ -159,26 +159,32 @@ func TestCheckpointNarrowCommitIgnoresAggregateAndPreservesOtherPeers(t *testing
 	})
 }
 
-func TestRevocationProjectionTracksTimeAndDetachesPeers(t *testing.T) {
+func TestPruneRevokedCheckpointAtActivation(t *testing.T) {
+	db := openCommonBoltTestDB(t)
 	initial := commonBoltTestCandidate(1)
-	parent := initial.Verified.Network.Zones[zone.RootZone]
 	path := zone.ZonePath("purged.")
-	parent.Revocations[path] = &zone.DelegationRevocation{ParentZone: zone.RootZone, ChildZone: path, RevokedAt: 100}
-	initial.Gossip.Peers[string(path)] = PeerCheckpoint{LastFailure: &PeerFailure{Message: "original"}}
-	store := NewStoreWithCheckpoint(initial.Verified, initial.Gossip, nil, nil)
-	before, _ := store.RevokedPeerCheckpoints(time.Unix(99, 0))
-	if before[path] {
-		t.Fatal("future revocation active early")
+	initial.Verified.Network.Zones[zone.RootZone].Revocations[path] = &zone.DelegationRevocation{
+		ParentZone: zone.RootZone, ChildZone: path, RevokedAt: 100,
 	}
-	revoked, peers := store.RevokedPeerCheckpoints(time.Unix(100, 0))
-	if !revoked[path] || len(peers) != 1 {
-		t.Fatalf("missing purged tombstone: %v %v", revoked, peers)
+	initial.Gossip.Peers["child.purged."] = PeerCheckpoint{LastSuccessfulEndpoint: "192.0.2.2:33434"}
+	commitCommonBoltTestState(t, db, initial, 1)
+	disk := &BoltStore{db: db}
+	store, err := RestoreStore(initial, 1, disk.CommitCommon, disk.CommitCheckpoints)
+	if err != nil {
+		t.Fatal(err)
 	}
-	peers[string(path)].LastFailure.Message = "mutated"
-	delete(revoked, path)
-	again, values := store.RevokedPeerCheckpoints(time.Unix(101, 0))
-	if !again[path] || values[string(path)].LastFailure.Message != "original" {
-		t.Fatal("projection aliases store")
+	for _, second := range []int64{99, 100, 101} {
+		if err := store.PruneRevokedPeerCheckpoints(t.Context(), time.Unix(second, 0)); err != nil {
+			t.Fatal(err)
+		}
+		loaded, revision, _, _, err := disk.LoadCommon()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, retained := loaded.Gossip.Peers["child.purged."]
+		if retained != (second < 100) || revision != 1 || loaded.Gossip.Peers["peer-a"].FailureCount != 2 {
+			t.Fatalf("at %d: retained=%v revision=%d checkpoints=%+v", second, retained, revision, loaded.Gossip)
+		}
 	}
 }
 

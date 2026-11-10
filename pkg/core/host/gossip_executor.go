@@ -59,7 +59,7 @@ type GossipExecutionResult struct {
 }
 
 // ExecuteGossipActions owns the shared effect ordering for one FSM event:
-// read/apply, refresh/reconcile, send, object pull, timer, backoff and
+// read/apply, refresh/reconcile, send, object pull, timer and checkpoint
 // persistence. The sender performs only actual datagram I/O.
 func (driver *GossipDriver) ExecuteGossipActions(
 	ctx context.Context,
@@ -132,7 +132,7 @@ func (driver *GossipDriver) ExecuteGossipActions(
 			driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseTimer, PeerID: syncActionPeerID(timer), Err: err})
 		}
 	}
-	if err := driver.commitGossipEventCheckpoint(ctx, session, plan.Backoffs, driver.schedulerForRead().clock.Now()); err != nil {
+	if err := driver.commitGossipEventCheckpoint(ctx, session, driver.schedulerForRead().clock.Now()); err != nil {
 		peerID := ""
 		if session != nil {
 			peerID = session.PeerID

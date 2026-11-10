@@ -46,7 +46,7 @@ func TestWriteSyncStatusVerbose(t *testing.T) {
 					HintAccepted:        2,
 					HintSuppressed:      1,
 					LastHint:            "2023-11-14T22:13:20Z",
-					LastHintReason:      "announce_hint",
+					LastHintReason:      "ping_summary",
 					LastHintSuppression: "session_active",
 					ReadOnlyResponder:   3,
 					LastResponder:       "2023-11-14T22:13:20Z",

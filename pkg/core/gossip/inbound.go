@@ -9,7 +9,6 @@ const (
 	InboundRespondPing             InboundActionKind = "respond_ping"
 	InboundRespondFetchZone        InboundActionKind = "respond_fetch_zone"
 	InboundRespondFetchCatalogPage InboundActionKind = "respond_fetch_catalog_page"
-	InboundHandleAnnounce          InboundActionKind = "handle_announce"
 	InboundHandleObjectChunk       InboundActionKind = "handle_object_chunk"
 	InboundHandleObjectChunkNACK   InboundActionKind = "handle_object_chunk_nack"
 )
@@ -94,8 +93,6 @@ func PlanInboundPacket(packet *Packet, sessions map[string]*SyncSession) []Inbou
 			Message:       message,
 			Event:         &CatalogPageReceivedEvent{PeerID: message.PeerID, Page: message.CatalogPage},
 		}}
-	case MessageAnnounce:
-		return []InboundAction{action(InboundHandleAnnounce)}
 	case MessageObjectChunk:
 		if !active {
 			return nil

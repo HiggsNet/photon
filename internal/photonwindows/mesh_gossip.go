@@ -70,6 +70,9 @@ func runMeshGossip(ctx context.Context, config *Config, state *State, driver *co
 		}
 		if revision := store.VerifiedRevision(); revision != lastRevision {
 			lastRevision = revision
+			if err := driver.RefreshGossipDiscovery(ctx, nil, time.Now(), transport); err != nil && ctx.Err() == nil {
+				logger.Warn("gossip_discovery_refresh_failed", "error", err)
+			}
 			select {
 			case published <- struct{}{}:
 			default:
