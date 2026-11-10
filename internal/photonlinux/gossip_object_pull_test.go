@@ -58,30 +58,12 @@ func TestGossipObjectPullClientHonorsExpiredContext(t *testing.T) {
 }
 
 func TestGossipObjectPullClientCancelClosesConnectedSocket(t *testing.T) {
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer listener.Close()
-
-	requestRead := make(chan error, 1)
-	closed := make(chan error, 1)
-	go func() {
-		conn, err := listener.Accept()
-		if err != nil {
-			requestRead <- err
-			return
-		}
-		defer conn.Close()
-		_ = conn.SetReadDeadline(time.Now().Add(4 * time.Second))
-		_, err = gossip.DecodeObjectPullRequest(conn)
-		requestRead <- err
-		if err == nil {
-			var buffer [1]byte
-			_, err = conn.Read(buffer[:])
-			closed <- err
-		}
-	}()
+	_ = listener.SetDeadline(time.Now().Add(time.Second))
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -92,15 +74,20 @@ func TestGossipObjectPullClientCancelClosesConnectedSocket(t *testing.T) {
 		})
 		result <- err
 	}()
-	select {
-	case err := <-requestRead:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("server did not receive the request")
+	conn, err := listener.AcceptTCP()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := gossip.DecodeObjectPullRequest(conn); err != nil {
+		t.Fatal(err)
 	}
 	cancel()
+	var buffer [1]byte
+	if _, err := conn.Read(buffer[:]); !errors.Is(err, io.EOF) {
+		t.Fatalf("server read = %v, want EOF from client socket closure", err)
+	}
 	select {
 	case err := <-result:
 		if err == nil {
@@ -108,14 +95,6 @@ func TestGossipObjectPullClientCancelClosesConnectedSocket(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("cancel did not interrupt the TCP read")
-	}
-	select {
-	case err := <-closed:
-		if !errors.Is(err, io.EOF) {
-			t.Fatalf("server read = %v, want EOF from client socket closure", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("client socket stayed open after cancellation")
 	}
 }
 

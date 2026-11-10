@@ -267,7 +267,7 @@ func TestGossipQueueWaitingIODoesNotPauseInputs(t *testing.T) {
 	if err := driver.StartGossipObjectPullWorkers(t.Context(), executor, 1, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := driver.SubmitGossipObjectPull(gossip.StartObjectPullAction{PeerID: "peer-a", Zone: "remote.catofes."}); err != nil {
+	if err := driver.submitGossipObjectPull(driver.Gossip.NewSession("peer-a"), gossip.StartObjectPullAction{PeerID: "peer-a", Zone: "remote.catofes."}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -302,7 +302,7 @@ func TestGossipQueueWorkerWaitsForCompletionCapacityAndCanStop(t *testing.T) {
 			if err := driver.StartGossipObjectPullWorkers(t.Context(), memoryObjectPullExecutor(pulls), 1, 1); err != nil {
 				t.Fatal(err)
 			}
-			if err := driver.SubmitGossipObjectPull(gossip.StartObjectPullAction{PeerID: "peer-a", Zone: "remote.catofes."}); err != nil {
+			if err := driver.submitGossipObjectPull(driver.Gossip.NewSession("peer-a"), gossip.StartObjectPullAction{PeerID: "peer-a", Zone: "remote.catofes."}); err != nil {
 				t.Fatal(err)
 			}
 			select {

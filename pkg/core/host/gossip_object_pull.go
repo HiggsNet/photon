@@ -111,11 +111,7 @@ func (driver *GossipDriver) StartGossipObjectPullWorkers(ctx context.Context, ex
 	return nil
 }
 
-// SubmitGossipObjectPull never blocks the single-writer event loop.
-func (driver *GossipDriver) SubmitGossipObjectPull(action gossip.StartObjectPullAction) error {
-	return driver.submitGossipObjectPull(nil, action)
-}
-
+// submitGossipObjectPull admits a job owned by a session without blocking the event loop.
 func (driver *GossipDriver) submitGossipObjectPull(session *gossip.SyncSession, action gossip.StartObjectPullAction) error {
 	if driver == nil {
 		return ErrGossipDriverStopped
@@ -129,17 +125,17 @@ func (driver *GossipDriver) submitGossipObjectPull(session *gossip.SyncSession, 
 	if jobs == nil {
 		return ErrGossipObjectPullExecutorRequired
 	}
-	var round *gossipObjectPullRound
-	if session != nil {
-		round = driver.objectPullRounds[action.PeerID]
-		if round == nil {
-			ctx, cancel := context.WithCancel(driver.objectPullContext)
-			round = &gossipObjectPullRound{session: session, ctx: ctx, cancel: cancel}
-			if driver.objectPullRounds == nil {
-				driver.objectPullRounds = make(map[string]*gossipObjectPullRound)
-			}
-			driver.objectPullRounds[action.PeerID] = round
+	if session == nil || session.PeerID != action.PeerID {
+		return ErrGossipSessionNotFound
+	}
+	round := driver.objectPullRounds[action.PeerID]
+	if round == nil {
+		ctx, cancel := context.WithCancel(driver.objectPullContext)
+		round = &gossipObjectPullRound{session: session, ctx: ctx, cancel: cancel}
+		if driver.objectPullRounds == nil {
+			driver.objectPullRounds = make(map[string]*gossipObjectPullRound)
 		}
+		driver.objectPullRounds[action.PeerID] = round
 	}
 	select {
 	case jobs <- gossipObjectPullJob{action: action, round: round}:
@@ -181,21 +177,15 @@ func (driver *GossipDriver) runGossipObjectPullWorker(ctx context.Context, jobs 
 		case <-ctx.Done():
 			return
 		case job := <-jobs:
-			action := job.action
-			pullCtx := ctx
-			if job.round != nil {
-				if !job.round.begin() {
-					continue
-				}
-				pullCtx = job.round.ctx
+			if !job.round.begin() {
+				continue
 			}
+			action, pullCtx := job.action, job.round.ctx
 			now := driver.schedulerForRead().clock.Now()
 			driver.observeObjectPullAttempt(action.PeerID, action.Zone, now)
 			driver.logGossip("debug", "worker_start", action.PeerID, GossipPhaseObjectPull, nil, map[string]any{"zone": action.Zone})
 			completion := executor.PullGossipObject(pullCtx, action)
-			if job.round != nil {
-				job.round.end()
-			}
+			job.round.end()
 			if pullCtx.Err() == nil {
 				driver.observeObjectPullResult(completion, driver.schedulerForRead().clock.Now())
 			}

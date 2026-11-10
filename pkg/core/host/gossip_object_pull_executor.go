@@ -12,8 +12,6 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 )
 
-const DefaultGossipObjectPullPerPeer = 2
-
 var ErrGossipObjectPullClientRequired = errors.New("gossip object-pull client is required")
 
 // GossipObjectPullClient is the injected outbound stream-exchange capability.
@@ -23,21 +21,18 @@ type GossipObjectPullClient interface {
 }
 
 type GossipObjectPullExecutorConfig struct {
-	Client       GossipObjectPullClient
-	Discovery    func() GossipDiscoveryInput
-	Now          func() time.Time
-	PerPeerLimit int
-	Quota        gossip.QuotaConfig
+	Client    GossipObjectPullClient
+	Discovery func() GossipDiscoveryInput
+	Now       func() time.Time
+	Quota     gossip.QuotaConfig
 }
 
 // GossipObjectPullExecutor is the common worker used by GossipDriver and offline
-// recovery. It owns peer concurrency, quota, address resolution and response
-// validation; the injected client performs only the TCP exchange.
+// recovery. It owns quota, address resolution and response validation.
+// The caller schedules pulls and the injected client performs the TCP exchange.
 type GossipObjectPullExecutor struct {
 	config GossipObjectPullExecutorConfig
 
-	peerMu  sync.Mutex
-	peers   map[string]int
 	quotaMu sync.Mutex
 	quotas  *gossip.PeerQuotas
 	addrMu  sync.Mutex
@@ -56,15 +51,11 @@ func NewGossipObjectPullExecutor(config GossipObjectPullExecutorConfig) *GossipO
 	if config.Now == nil {
 		config.Now = time.Now
 	}
-	if config.PerPeerLimit <= 0 {
-		config.PerPeerLimit = DefaultGossipObjectPullPerPeer
-	}
 	if config.Quota.ByteRate <= 0 {
 		config.Quota = gossip.QuotaConfig{ByteRate: 8 << 20, ByteBurst: 8 << 20, ObjectRate: 16, ObjectBurst: 16}
 	}
 	return &GossipObjectPullExecutor{
 		config: config,
-		peers:  make(map[string]int),
 		quotas: gossip.NewPeerQuotas(config.Quota),
 		addrs:  make(map[objectPullAddress]objectPullAddressHealth),
 	}
@@ -94,12 +85,6 @@ func (executor *GossipObjectPullExecutor) PullFrom(ctx context.Context, input Go
 		completion.Unreachable = true
 		return completion
 	}
-	release, err := executor.acquirePeer(action.PeerID)
-	if err != nil {
-		completion.Err = err
-		return completion
-	}
-	defer release()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -204,23 +189,6 @@ func (executor *GossipObjectPullExecutor) recordAddress(peer, address string, su
 		health.success = time.Time{}
 	}
 	executor.addrs[key] = health
-}
-
-func (executor *GossipObjectPullExecutor) acquirePeer(peerID string) (func(), error) {
-	executor.peerMu.Lock()
-	defer executor.peerMu.Unlock()
-	if executor.peers[peerID] >= executor.config.PerPeerLimit {
-		return nil, fmt.Errorf("object pull per-peer inflight limit reached for %s (%d)", peerID, executor.config.PerPeerLimit)
-	}
-	executor.peers[peerID]++
-	return func() {
-		executor.peerMu.Lock()
-		defer executor.peerMu.Unlock()
-		executor.peers[peerID]--
-		if executor.peers[peerID] <= 0 {
-			delete(executor.peers, peerID)
-		}
-	}, nil
 }
 
 func (executor *GossipObjectPullExecutor) allowQuota(peerID string, bytes int64, now time.Time) error {

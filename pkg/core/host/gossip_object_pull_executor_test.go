@@ -99,28 +99,6 @@ func TestGossipObjectPullExecutorRejectsWrongZone(t *testing.T) {
 	}
 }
 
-func TestGossipObjectPullExecutorPerPeerLimit(t *testing.T) {
-	executor := NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{PerPeerLimit: 2})
-	first, err := executor.acquirePeer("peer-a")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer first()
-	second, err := executor.acquirePeer("peer-a")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer second()
-	if _, err := executor.acquirePeer("peer-a"); err == nil {
-		t.Fatal("third same-peer pull acquired beyond limit")
-	}
-	if other, err := executor.acquirePeer("peer-b"); err != nil {
-		t.Fatalf("independent peer rejected: %v", err)
-	} else {
-		other()
-	}
-}
-
 func TestGossipObjectPullExecutorQuotaAccountsBytesAndObjects(t *testing.T) {
 	now := time.Unix(1000, 0)
 	executor := NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{Quota: gossip.QuotaConfig{

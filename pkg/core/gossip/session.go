@@ -42,8 +42,8 @@ const (
 	kRoundMultiplier              = 5
 )
 
-// Keep the session within the common executor's per-peer stream budget.
-// A slot remains occupied until validation/apply or chunk fallback finishes.
+// Bound one peer's work. A slot remains occupied until validation/apply or
+// chunk fallback finishes.
 const maxSessionObjectPulls = 2
 
 // SyncEvent advances one per-peer SyncSession. GossipDriver owns delivery;
@@ -464,9 +464,6 @@ func (s *SyncSession) reconcilePendingWithDigests(digests []corestate.ZoneDigest
 		if bytes.Equal(expected.RootHash, root) {
 			delete(s.pendingZones, z)
 			delete(s.expectedDigests, z)
-			delete(s.objectPullInflight, z)
-			delete(s.snapshotApplyPending, z)
-			delete(s.chunkFallbackZones, z)
 		}
 	}
 	if s.pendingEmpty() && s.lastCatalogCursor == "" && !s.catalogRefreshPending && (s.State == SyncSessionObjectPulling ||
@@ -531,9 +528,7 @@ func (s *SyncSession) onRoundTimeout(e *RoundTimeoutEvent) ([]SyncAction, error)
 }
 
 func (s *SyncSession) onObjectPullResult(e *ObjectPullResultEvent, now time.Time) ([]SyncAction, error) {
-	// Only process results for zones that are still in flight. A zone may be
-	// removed from objectPullInflight early if an announce arrived first, or if
-	// a concurrent result for the same zone was already processed.
+	// Only process results for zones that are still in flight.
 	if !s.objectPullInflight[e.Zone] {
 		return nil, nil
 	}

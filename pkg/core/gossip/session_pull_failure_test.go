@@ -12,7 +12,6 @@ func TestSyncSessionLocalAndSemanticPullFailuresBackOffWithoutUDP(t *testing.T) 
 	for _, failure := range []error{
 		ErrQuotaExceeded,
 		errors.New("object-pull queue full"),
-		errors.New("object pull per-peer inflight limit reached"),
 		errors.New("object pull returned empty snapshot"),
 		errors.New("object pull failed: zone revoked"),
 	} {

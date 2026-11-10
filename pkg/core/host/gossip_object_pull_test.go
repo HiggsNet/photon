@@ -38,7 +38,7 @@ func TestGossipObjectPullWorkersUpdateRuntimeObservability(t *testing.T) {
 	if err := driver.StartGossipObjectPullWorkers(t.Context(), executor, 1, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := driver.SubmitGossipObjectPull(gossip.StartObjectPullAction{PeerID: "peer-a", Zone: "a.catofes."}); err != nil {
+	if err := driver.submitGossipObjectPull(driver.Gossip.NewSession("peer-a"), gossip.StartObjectPullAction{PeerID: "peer-a", Zone: "a.catofes."}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -71,18 +71,19 @@ func TestGossipObjectPullWorkersProvideBoundedBackpressureAndStop(t *testing.T) 
 		t.Fatal(err)
 	}
 	first := gossip.StartObjectPullAction{PeerID: "peer-a", Zone: "a.catofes."}
-	if err := driver.SubmitGossipObjectPull(first); err != nil {
+	session := driver.Gossip.NewSession(first.PeerID)
+	if err := driver.submitGossipObjectPull(session, first); err != nil {
 		t.Fatal(err)
 	}
 	<-client.entered
-	if err := driver.SubmitGossipObjectPull(gossip.StartObjectPullAction{PeerID: "peer-b", Zone: "b.catofes."}); err != nil {
+	if err := driver.submitGossipObjectPull(driver.Gossip.NewSession("peer-b"), gossip.StartObjectPullAction{PeerID: "peer-b", Zone: "b.catofes."}); err != nil {
 		t.Fatal(err)
 	}
-	if err := driver.SubmitGossipObjectPull(gossip.StartObjectPullAction{PeerID: "peer-c", Zone: "c.catofes."}); !errors.Is(err, ErrGossipObjectPullQueueFull) {
+	if err := driver.submitGossipObjectPull(driver.Gossip.NewSession("peer-c"), gossip.StartObjectPullAction{PeerID: "peer-c", Zone: "c.catofes."}); !errors.Is(err, ErrGossipObjectPullQueueFull) {
 		t.Fatalf("third submit error = %v, want %v", err, ErrGossipObjectPullQueueFull)
 	}
 	driver.Stop()
-	if err := driver.SubmitGossipObjectPull(first); !errors.Is(err, ErrGossipDriverStopped) {
+	if err := driver.submitGossipObjectPull(session, first); !errors.Is(err, ErrGossipDriverStopped) {
 		t.Fatalf("submit after stop = %v, want %v", err, ErrGossipDriverStopped)
 	}
 }
@@ -106,7 +107,7 @@ func TestGossipObjectPullWorkerPreservesReachabilityClassification(t *testing.T)
 			if err := driver.StartGossipObjectPullWorkers(t.Context(), executor, 1, 1); err != nil {
 				t.Fatal(err)
 			}
-			if err := driver.SubmitGossipObjectPull(gossip.StartObjectPullAction{PeerID: "peer", Zone: "node.catofes."}); err != nil {
+			if err := driver.submitGossipObjectPull(driver.Gossip.NewSession("peer"), gossip.StartObjectPullAction{PeerID: "peer", Zone: "node.catofes."}); err != nil {
 				t.Fatal(err)
 			}
 			select {
