@@ -159,7 +159,7 @@ func startB4AuthorityPeerAt(t *testing.T, ctx context.Context, config *Config, l
 				}
 				continue
 			}
-			if _, err := driver.HandleGossipHostEvent(peerCtx, event, time.Now()); err != nil && !errors.Is(err, corehost.ErrGossipSessionNotFound) && peerCtx.Err() == nil {
+			if _, err := driver.HandleGossipHostEvent(peerCtx, event, time.Now()); err != nil && peerCtx.Err() == nil {
 				peer.recordError(err)
 			}
 		}

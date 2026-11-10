@@ -1,6 +1,7 @@
 package host
 
 import (
+	"log/slog"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
@@ -90,7 +91,7 @@ func (driver *GossipDriver) recordGossipDatagramDrop(packet *gossip.Packet) {
 	if packet != nil && packet.Message != nil {
 		peerID = packet.Message.PeerID
 	}
-	driver.logGossip("warn", "packet_dropped", peerID, GossipPhaseInbound, ErrGossipEventQueueFull, map[string]any{
+	driver.logGossip(slog.LevelWarn, "packet_dropped", peerID, GossipPhaseInbound, ErrGossipEventQueueFull, map[string]any{
 		"reason": "input_queue_full", "dropped_total": dropped, "queue_capacity": cap(driver.events),
 	})
 }

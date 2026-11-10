@@ -3,8 +3,10 @@ package host
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,12 +20,41 @@ type memoryGossipController struct {
 	issues []GossipExecutionIssue
 }
 
+type capturedGossipLog struct {
+	Level  string
+	Event  string
+	PeerID string
+	Phase  string
+	Err    error
+	Fields map[string]any
+}
+
+type gossipLogCapture func(capturedGossipLog)
+
+func (gossipLogCapture) Enabled(context.Context, slog.Level) bool { return true }
+
+func (capture gossipLogCapture) Handle(_ context.Context, record slog.Record) error {
+	fields := make(map[string]any, record.NumAttrs())
+	record.Attrs(func(attr slog.Attr) bool {
+		fields[attr.Key] = attr.Value.Any()
+		return true
+	})
+	peerID, _ := fields["peer_id"].(string)
+	phase, _ := fields["phase"].(string)
+	err, _ := fields["error"].(error)
+	capture(capturedGossipLog{
+		Level: strings.ToLower(record.Level.String()), Event: record.Message,
+		PeerID: peerID, Phase: phase, Err: err, Fields: fields,
+	})
+	return nil
+}
+
 func gossipConfigCapturingIssues(config GossipDriverConfig, issues *[]GossipExecutionIssue) GossipDriverConfig {
-	config.Log = func(event GossipDriverLog) {
+	config.Log = gossipLogCapture(func(event capturedGossipLog) {
 		if event.Err != nil {
 			*issues = append(*issues, GossipExecutionIssue{Phase: event.Phase, PeerID: event.PeerID, Err: event.Err})
 		}
-	}
+	})
 	return config
 }
 

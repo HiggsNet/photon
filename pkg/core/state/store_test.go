@@ -92,7 +92,7 @@ func TestStoreApplyRemoteBatchRetainsSuccessRejectSuccess(t *testing.T) {
 	}
 }
 
-func TestStoreApplyRemoteBatchIdenticalSnapshotOnlyClearsRejectedCheckpoint(t *testing.T) {
+func TestStoreApplyRemoteBatchClearsOnlySourceRejectionInMemory(t *testing.T) {
 	now := time.Unix(1000, 0)
 	network, _ := testNetwork(t)
 	network.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
@@ -107,8 +107,6 @@ func TestStoreApplyRemoteBatchIdenticalSnapshotOnlyClearsRejectedCheckpoint(t *t
 			"catofes.": {RootHash: append([]byte(nil), root...), Reason: "previous transient rejection", UpdatedUnix: now.Add(-time.Minute).Unix(), UntilUnix: now.Add(time.Minute).Unix()},
 		}}, "peer-b": {RejectedObjects: map[zone.ZonePath]RejectedObject{
 			"catofes.": {RootHash: append([]byte(nil), root...), Reason: "root_mismatch", UntilUnix: now.Add(time.Minute).Unix()},
-		}}, "peer-c": {RejectedObjects: map[zone.ZonePath]RejectedObject{
-			"catofes.": {RootHash: []byte("different-root"), Reason: "root_mismatch", UntilUnix: now.Add(time.Minute).Unix()},
 		}}},
 	}, sink.Commit, sink.CommitCheckpoints)
 
@@ -120,18 +118,18 @@ func TestStoreApplyRemoteBatchIdenticalSnapshotOnlyClearsRejectedCheckpoint(t *t
 		t.Fatalf("checkpoint-only result = %#v", result.CommitResult)
 	}
 	view := store.ReadView()
-	if view.Revision != 0 || len(view.Gossip.Peers["peer-a"].RejectedObjects) != 0 || sink.commits != 1 {
+	if view.Revision != 0 || len(view.Gossip.Peers["peer-a"].RejectedObjects) != 0 || sink.commits != 0 {
 		t.Fatalf("view/commits = revision %d checkpoint %#v commits %d", view.Revision, view.Gossip.Peers["peer-a"], sink.commits)
 	}
-	if len(view.Gossip.Peers["peer-b"].RejectedObjects) != 0 || len(view.Gossip.Peers["peer-c"].RejectedObjects) != 1 {
-		t.Fatal("recovery must clear matching digests across peers and retain different digests")
+	if !bytes.Equal(view.Gossip.Peers["peer-b"].RejectedObjects["catofes."].RootHash, root) {
+		t.Fatal("success changed another peer's rejection")
 	}
 
 	noop, err := store.ApplyRemoteBatch(context.Background(), "peer-a", []RemoteSnapshot{{Snapshot: snapshot, ExpectedRoot: root}}, now)
 	if err != nil {
 		t.Fatalf("ApplyRemoteBatch(no-op): %v", err)
 	}
-	if noop.Committed || noop.Changes.NetworkChanged || noop.Changes.GossipCheckpointChanged || sink.commits != 1 {
+	if noop.Committed || noop.Changes.NetworkChanged || noop.Changes.GossipCheckpointChanged || sink.commits != 0 {
 		t.Fatalf("pure no-op result/commits = %#v/%d", noop.CommitResult, sink.commits)
 	}
 }
@@ -152,19 +150,19 @@ func TestStoreRepeatedRejectionRenewsOnlyAfterExpiry(t *testing.T) {
 	store := NewStore(&VerifiedState{ManagedZone: "local.catofes.", Network: network}, sink.Commit, sink.CommitCheckpoints)
 	for _, tc := range []struct {
 		at         time.Time
-		commits    int
+		changed    bool
 		rejectedAt int64
 	}{
-		{now, 1, now.Unix()},
-		{now.Add(time.Second), 1, now.Unix()},
-		{now.Add(RejectedObjectTTL), 2, now.Add(RejectedObjectTTL).Unix()},
+		{now, true, now.Unix()},
+		{now.Add(time.Second), false, now.Unix()},
+		{now.Add(RejectedObjectTTL), true, now.Add(RejectedObjectTTL).Unix()},
 	} {
 		result, err := store.ApplyRemoteBatch(context.Background(), "peer-a", []RemoteSnapshot{{Snapshot: snapshot, ExpectedRoot: []byte("wrong-root")}}, tc.at)
 		if err != nil || !errors.Is(result.Outcomes[0].Err, ErrSnapshotRootMismatch) {
 			t.Fatalf("result=%#v err=%v", result, err)
 		}
 		rejected := store.ReadView().Gossip.Peers["peer-a"].RejectedObjects["catofes."]
-		if sink.commits != tc.commits || rejected.UpdatedUnix != tc.rejectedAt || rejected.UntilUnix != tc.rejectedAt+int64(RejectedObjectTTL/time.Second) {
+		if sink.commits != 0 || result.Committed != tc.changed || rejected.UpdatedUnix != tc.rejectedAt || rejected.UntilUnix != tc.rejectedAt+int64(RejectedObjectTTL/time.Second) {
 			t.Fatalf("at %s: commits=%d rejected=%#v", tc.at, sink.commits, rejected)
 		}
 		if store.VerifiedRevision() != 0 {
@@ -402,7 +400,6 @@ func TestStoreUpdatePeerCheckpointIsTypedDetachedAndCheckpointOnly(t *testing.T)
 	initial, _ := testNetwork(t)
 	commitSink := &memoryCommitSink{}
 	store := NewStore(&VerifiedState{Network: initial}, commitSink.Commit, commitSink.CommitCheckpoints)
-	root := []byte("rejected-root")
 	grace := []ObservedGraceEndpoint{{Endpoint: "192.0.2.2:4242", UntilUnix: 200}}
 	failure := &PeerFailure{Code: "timeout", Message: "round timed out", AtUnix: 99}
 	result, err := store.UpdatePeerCheckpoint(context.Background(), "peer-a", PeerCheckpointPatch{
@@ -411,9 +408,6 @@ func TestStoreUpdatePeerCheckpointIsTypedDetachedAndCheckpointOnly(t *testing.T)
 		FailureCount:     PatchField[int]{Set: true, Value: 2},
 		ObservedGrace:    PatchField[[]ObservedGraceEndpoint]{Set: true, Value: grace},
 		LastFailure:      PatchField[*PeerFailure]{Set: true, Value: failure},
-		Reject: map[zone.ZonePath]RejectedObject{
-			"bad.catofes.": {RootHash: root, Reason: "untrusted_zone", UpdatedUnix: 100},
-		},
 	})
 	if err != nil {
 		t.Fatalf("UpdatePeerCheckpoint: %v", err)
@@ -424,7 +418,6 @@ func TestStoreUpdatePeerCheckpointIsTypedDetachedAndCheckpointOnly(t *testing.T)
 	if result.Changes.VerifiedRevision != 0 {
 		t.Fatalf("checkpoint changed verified revision to %d", result.Changes.VerifiedRevision)
 	}
-	root[0] = 'X'
 	grace[0].Endpoint = "mutated"
 	failure.Message = "mutated"
 	view := store.ReadView()
@@ -435,21 +428,8 @@ func TestStoreUpdatePeerCheckpointIsTypedDetachedAndCheckpointOnly(t *testing.T)
 	if peer.LastFailure == nil || peer.LastFailure.Code != "timeout" || peer.LastFailure.Error() != "round timed out" {
 		t.Fatalf("peer failure = %+v", peer.LastFailure)
 	}
-	if string(peer.RejectedObjects["bad.catofes."].RootHash) != "rejected-root" {
-		t.Fatal("metadata patch retained rejected root input")
-	}
 	if commitSink.commits != 1 || commitSink.changes.NetworkChanged {
 		t.Fatalf("commitSink commit = %d/%+v", commitSink.commits, commitSink.changes)
-	}
-
-	clearResult, err := store.UpdatePeerCheckpoint(context.Background(), "peer-a", PeerCheckpointPatch{
-		ClearRejected: []zone.ZonePath{"bad.catofes."},
-	})
-	if err != nil || !clearResult.Committed {
-		t.Fatalf("clear rejected result/error = %+v/%v", clearResult, err)
-	}
-	if len(store.ReadView().Gossip.Peers["peer-a"].RejectedObjects) != 0 {
-		t.Fatal("clear rejected patch did not remove entry")
 	}
 }
 

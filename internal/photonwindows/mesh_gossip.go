@@ -19,9 +19,10 @@ import (
 // for Gossip verification, persistence, or outbound synchronization.
 func runMeshGossip(ctx context.Context, config *Config, state *State, driver *corehost.GossipDriver, transport *gossip.Transport, logger *slog.Logger, bootstrap map[string]*net.UDPAddr, refresh <-chan map[string]*net.UDPAddr, leafIntents <-chan struct{}, published chan<- struct{}) error {
 	store := state.Store()
+	gossipLog := logger.With("component", "gossip")
 	syncPeers := func() {
 		if _, err := driver.SyncGossipPeers(ctx, time.Now(), false); err != nil && ctx.Err() == nil {
-			logger.Warn("gossip_sync_failed", "error", err)
+			gossipLog.Warn("gossip_sync_failed", "error", err)
 		}
 	}
 	lastRevision := store.VerifiedRevision()
@@ -64,14 +65,14 @@ func runMeshGossip(ctx context.Context, config *Config, state *State, driver *co
 			syncPeers()
 		}
 		if event != nil {
-			if _, err := driver.HandleGossipHostEvent(ctx, event, time.Now()); err != nil && !errors.Is(err, corehost.ErrGossipSessionNotFound) && ctx.Err() == nil {
-				logger.Warn("gossip_event_failed", "error", err)
+			if _, err := driver.HandleGossipHostEvent(ctx, event, time.Now()); err != nil && ctx.Err() == nil {
+				gossipLog.Warn("gossip_event_failed", "error", err)
 			}
 		}
 		if revision := store.VerifiedRevision(); revision != lastRevision {
 			lastRevision = revision
 			if err := driver.RefreshGossipDiscovery(time.Now(), transport); err != nil && ctx.Err() == nil {
-				logger.Warn("gossip_discovery_refresh_failed", "error", err)
+				gossipLog.Warn("gossip_discovery_refresh_failed", "error", err)
 			}
 			select {
 			case published <- struct{}{}:

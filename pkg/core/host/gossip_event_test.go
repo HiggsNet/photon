@@ -116,7 +116,7 @@ func TestGossipDriverHandleGossipSessionEventRejectsMissingPeerOrSession(t *test
 	if _, _, err := driver.handleGossipSessionEvent(context.Background(), &gossip.PacketEvent{}, time.Now(), controller); !errors.Is(err, ErrGossipEventPeerRequired) {
 		t.Fatalf("missing peer error = %v", err)
 	}
-	if _, _, err := driver.handleGossipSessionEvent(context.Background(), &gossip.SyncTimerEvent{PeerID: "missing"}, time.Now(), controller); !errors.Is(err, ErrGossipSessionNotFound) {
+	if _, _, err := driver.handleGossipSessionEvent(context.Background(), &gossip.SyncTimerEvent{PeerID: "missing"}, time.Now(), controller); !errors.Is(err, errGossipSessionNotFound) {
 		t.Fatalf("missing session error = %v", err)
 	}
 }

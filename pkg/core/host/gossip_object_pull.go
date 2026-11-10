@@ -3,6 +3,7 @@ package host
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
@@ -126,7 +127,7 @@ func (driver *GossipDriver) submitGossipObjectPull(session *gossip.SyncSession, 
 		return ErrGossipObjectPullExecutorRequired
 	}
 	if session == nil || session.PeerID != action.PeerID {
-		return ErrGossipSessionNotFound
+		return errGossipSessionNotFound
 	}
 	round := driver.objectPullRounds[action.PeerID]
 	if round == nil {
@@ -183,13 +184,12 @@ func (driver *GossipDriver) runGossipObjectPullWorker(ctx context.Context, jobs 
 			action, pullCtx := job.action, job.round.ctx
 			now := driver.schedulerForRead().clock.Now()
 			driver.observeObjectPullAttempt(action.PeerID, action.Zone, now)
-			driver.logGossip("debug", "worker_start", action.PeerID, GossipPhaseObjectPull, nil, map[string]any{"zone": action.Zone})
 			completion := executor.PullGossipObject(pullCtx, action)
 			job.round.end()
 			if pullCtx.Err() == nil {
 				driver.observeObjectPullResult(completion, driver.schedulerForRead().clock.Now())
 			}
-			driver.logGossip("debug", "worker_done", completion.PeerID, GossipPhaseObjectPull, completion.Err, map[string]any{
+			driver.logGossip(slog.LevelDebug, "worker_done", completion.PeerID, GossipPhaseObjectPull, completion.Err, map[string]any{
 				"zone": completion.Zone, "addr": completion.Addr, "bytes": completion.Bytes, "ok": completion.Err == nil,
 			})
 			event := GossipEvent{Value: &gossip.ObjectPullResultEvent{

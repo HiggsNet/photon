@@ -1,6 +1,9 @@
 package host
 
-import "time"
+import (
+	"log/slog"
+	"time"
+)
 
 const (
 	slowGossipOperationThreshold = 100 * time.Millisecond
@@ -54,11 +57,11 @@ func (driver *GossipDriver) logSlowOperation(operation string, elapsed time.Dura
 	driver.mu.Unlock()
 	// Invoke the logger outside the driver lock. Only emitted slow samples
 	// construct fields; suppressed samples retain counters for the next log.
-	log(GossipDriverLog{Level: "warn", Event: "slow_operation", Phase: operation, Fields: map[string]any{
+	driver.logGossip(slog.LevelWarn, "slow_operation", "", operation, nil, map[string]any{
 		"elapsed_ms": elapsed.Milliseconds(), "max_elapsed_ms": state.maxElapsed.Milliseconds(),
 		"queue_before": queueBefore, "queue_after": queueAfter, "queue_capacity": cap(driver.events) + cap(driver.completions),
 		"input_queue_after": len(driver.events), "completion_queue_after": len(driver.completions),
-		"internal_pending": driver.internalPending.Load(), "dropped_packets": driver.datagramDrops.Load(),
+		"internal_pending": driver.internalPending.Load(), "datagram_drops": driver.datagramDrops.Load(),
 		"max_sampled_queue": state.maxQueue, "suppressed": state.suppressed,
-	}})
+	})
 }

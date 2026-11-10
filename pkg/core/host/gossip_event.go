@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"maps"
 	"net"
 	"time"
@@ -109,7 +110,7 @@ func (driver *GossipDriver) StartGossipSession(peerID, reason string) error {
 	if driver.Gossip.HasActiveSession(peerID) {
 		driver.Gossip.DeferHint(peerID)
 		driver.observeSyncHint(peerID, reason, "session_active", false, now)
-		driver.logGossip("debug", "sync_hint_suppressed", peerID, "session", nil, map[string]any{"reason": "session_active"})
+		driver.logGossip(slog.LevelDebug, "sync_hint_suppressed", peerID, "session", nil, map[string]any{"reason": "session_active"})
 		return nil
 	}
 	if driver.gossipObjectPullDraining(peerID) {
@@ -124,18 +125,18 @@ func (driver *GossipDriver) StartGossipSession(peerID, reason string) error {
 	session := driver.Gossip.NewSession(peerID)
 	if err := driver.PostGossip(&gossip.SyncTimerEvent{PeerID: peerID, LocalSummary: summary}); err != nil {
 		driver.Gossip.RemoveSession(peerID)
-		driver.logGossip("warn", "event_dropped", peerID, "session", err, map[string]any{"reason": "sync_events_full"})
+		driver.logGossip(slog.LevelWarn, "event_dropped", peerID, "session", err, map[string]any{"reason": "sync_events_full"})
 		return err
 	}
 	driver.observeSyncHint(peerID, reason, "", true, now)
 	driver.observeActivePull(peerID, "hint_queued", session, now)
-	driver.logGossip("debug", "hinted_sync_started", peerID, "session", nil, map[string]any{"reason": reason})
+	driver.logGossip(slog.LevelDebug, "hinted_sync_started", peerID, "session", nil, map[string]any{"reason": reason})
 	return nil
 }
 
 var (
 	ErrGossipEventPeerRequired = errors.New("gossip event peer is required")
-	ErrGossipSessionNotFound   = errors.New("gossip session not found")
+	errGossipSessionNotFound   = errors.New("gossip session not found")
 )
 
 // GossipEventResult is the platform-neutral outcome of advancing one session
@@ -217,7 +218,10 @@ func (driver *GossipDriver) handleGossipHostStep(ctx context.Context, hostEvent 
 		if !driver.schedulerForRead().Accept(timer) {
 			return out, nil, nil
 		}
-		return out, nil, driver.flushGossipChunkSend(ctx, timer.ID)
+		if err := driver.flushGossipChunkSend(ctx, timer.ID); err != nil {
+			driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseSend, PeerID: timer.ID.Owner, Err: err})
+		}
+		return out, nil, nil
 	}
 	if received, ok := hostEvent.(GossipPacketReceived); ok {
 		out.Handled = true
@@ -233,13 +237,8 @@ func (driver *GossipDriver) handleGossipHostStep(ctx context.Context, hostEvent 
 		events, err := driver.executeGossipPacketActions(ctx, driver.Gossip.PlanInbound(received.Packet), sender, sender.datagramBudget())
 		if err != nil {
 			driver.logGossipPacketFailure(received.Packet, err)
-			// Capacity pressure is handled and logged here. Propagating it to
-			// platform loops would emit a second warning for every rejected request.
-			if errors.Is(err, ErrGossipChunkSendCacheFull) {
-				err = nil
-			}
 		}
-		return out, events, err
+		return out, events, nil
 	}
 	event, ok := driver.GossipSessionEventFor(hostEvent)
 	if !ok {
@@ -264,7 +263,7 @@ func (driver *GossipDriver) handleGossipHostStep(ctx context.Context, hostEvent 
 	// Replies and worker completions can already be queued when an earlier
 	// event finishes and removes their session. They are stale work, not a
 	// failure of the event consumer.
-	if errors.Is(err, ErrGossipSessionNotFound) {
+	if errors.Is(err, errGossipSessionNotFound) {
 		return out, nil, nil
 	}
 	out.NetworkChanged = result.NetworkChanged
@@ -305,12 +304,12 @@ func (driver *GossipDriver) acceptGossipInboundPath(ctx context.Context, packet 
 	}
 	verification, recorded, err := driver.recordGossipObservedPath(ctx, peerID, packet.Addr.String(), confirmed, now)
 	if err != nil {
-		driver.logGossip("warn", "observed_path_update_failed", peerID, "discovery", err, nil)
+		driver.logGossip(slog.LevelWarn, "observed_path_update_failed", peerID, "discovery", err, nil)
 	} else if recorded {
 		driver.observeObservedSource(peerID, packet.Message.Type, now)
 	}
 	if err := driver.publishGossipObservedPath(peerID, now, transport, verification); err != nil {
-		driver.logGossip("debug", "observed_path_publish_failed", peerID, "discovery", err, nil)
+		driver.logGossip(slog.LevelDebug, "observed_path_publish_failed", peerID, "discovery", err, nil)
 	}
 }
 
@@ -391,7 +390,7 @@ func (driver *GossipDriver) RelayGossipUpdate(ctx context.Context, sourcePeerID 
 		driver.Gossip.NewSession(peerID)
 		if err := driver.PostGossip(&gossip.SyncTimerEvent{PeerID: peerID, LocalSummary: summary}); err != nil {
 			driver.Gossip.RemoveSession(peerID)
-			driver.logGossip("warn", "relay_event_dropped", peerID, "session", err, map[string]any{"source_peer": sourcePeerID})
+			driver.logGossip(slog.LevelWarn, "relay_event_dropped", peerID, "session", err, map[string]any{"source_peer": sourcePeerID})
 			continue
 		}
 		queuedPeers = append(queuedPeers, peerID)
@@ -402,7 +401,7 @@ func (driver *GossipDriver) RelayGossipUpdate(ctx context.Context, sourcePeerID 
 	updated, err := driver.recordGossipRelays(ctx, queuedPeers, root, now)
 	for _, peerID := range queuedPeers {
 		if err != nil {
-			driver.logGossip("warn", "relay_state_update_failed", peerID, "relay", err, nil)
+			driver.logGossip(slog.LevelWarn, "relay_state_update_failed", peerID, "relay", err, nil)
 			continue
 		}
 		if updated {
@@ -422,9 +421,11 @@ func (driver *GossipDriver) logGossipPacketFailure(packet *gossip.Packet, err er
 		fields["type"] = packet.Message.Type
 		if packet.Message.FetchZone != nil {
 			fields["zone"] = packet.Message.FetchZone.Zone
+		} else if packet.Message.ObjectChunk != nil {
+			fields["zone"] = packet.Message.ObjectChunk.Zone
 		}
 	}
-	if errors.Is(err, ErrGossipChunkSendCacheFull) {
+	if errors.Is(err, gossip.ErrChunkSendCacheFull) {
 		now := driver.schedulerForRead().clock.Now()
 		driver.mu.Lock()
 		if !driver.chunkLimitLastLog.IsZero() && now.Sub(driver.chunkLimitLastLog) < slowGossipOperationInterval {
@@ -447,7 +448,7 @@ func (driver *GossipDriver) logGossipPacketFailure(packet *gossip.Packet, err er
 			fields["requested_bytes"] = capacity.RequestedBytes
 		}
 	}
-	driver.logGossip("warn", "packet_failed", peerID, "packet", err, fields)
+	driver.logGossip(slog.LevelWarn, "packet_failed", peerID, "packet", err, fields)
 }
 
 // handleGossipSessionEvent is the internal bridge from Engine/FSM advancement
@@ -464,13 +465,13 @@ func (driver *GossipDriver) handleGossipSessionEvent(ctx context.Context, event 
 	}
 	peerID := gossip.SyncEventPeerID(event)
 	if peerID == "" {
-		driver.logGossip("debug", "event_dropped", "", "session", ErrGossipEventPeerRequired, nil)
+		driver.logGossip(slog.LevelDebug, "event_dropped", "", "session", ErrGossipEventPeerRequired, nil)
 		return out, nil, ErrGossipEventPeerRequired
 	}
 	session := driver.Gossip.Session(peerID)
 	if session == nil {
-		driver.logGossip("debug", "event_dropped", peerID, "session", ErrGossipSessionNotFound, nil)
-		return out, nil, ErrGossipSessionNotFound
+		driver.logGossip(slog.LevelDebug, "event_dropped", peerID, "session", errGossipSessionNotFound, nil)
+		return out, nil, errGossipSessionNotFound
 	}
 	if _, ok := event.(*gossip.RoundTimeoutEvent); ok {
 		driver.dropGossipPeerChunks(peerID)
@@ -521,11 +522,11 @@ func (driver *GossipDriver) handleGossipSessionEvent(ctx context.Context, event 
 	}
 	driver.observeActivePull(peerID, gossip.SyncEventName(event), session, now)
 	if out.ProtocolErr != nil {
-		driver.logGossip("warn", "session_event_error", peerID, "session", out.ProtocolErr, nil)
+		driver.logGossip(slog.LevelWarn, "session_event_error", peerID, "session", out.ProtocolErr, nil)
 	}
 	if out.NewState != out.OldState {
-		driver.logGossip("debug", "session_state_changed", peerID, "session", nil, map[string]any{
-			"event": gossip.SyncEventName(event), "old_state": out.OldState, "new_state": out.NewState,
+		driver.logGossip(slog.LevelDebug, "session_state_changed", peerID, "session", nil, map[string]any{
+			"trigger": gossip.SyncEventName(event), "old_state": out.OldState, "new_state": out.NewState,
 			"pending": out.Pending, "inflight": out.Inflight,
 		})
 	}

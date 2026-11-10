@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"log/slog"
 	"net"
 	"strings"
 	"testing"
@@ -16,22 +17,24 @@ import (
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
-func TestGossipDriverLoggerPreservesLevelsAtInfoThreshold(t *testing.T) {
-	for _, level := range []string{"debug", "info", "warn", "error"} {
-		t.Run(level, func(t *testing.T) {
+func TestAppLoggerAcceptsCommonGossipRecords(t *testing.T) {
+	for _, level := range []slog.Level{slog.LevelDebug, slog.LevelInfo, slog.LevelWarn, slog.LevelError} {
+		t.Run(level.String(), func(t *testing.T) {
 			var output bytes.Buffer
 			logger := (&appLogger{}).setLevel(logLevelInfo).withOutput(&output)
-			gossipDriverLogger(logger)(corehost.GossipDriverLog{
-				Level: level, Event: "zone_applied", PeerID: "node-b.catofes.",
-				Fields: map[string]any{"via": "udp_chunks", "zone": "node-b.catofes."},
-			})
-			if level == "debug" {
-				if output.Len() != 0 {
-					t.Fatalf("debug event escaped info threshold: %s", &output)
-				}
+			enabled := logger.Enabled(t.Context(), level)
+			if enabled != (level >= slog.LevelInfo) {
+				t.Fatalf("enabled = %v", enabled)
+			}
+			if !enabled {
 				return
 			}
-			for _, want := range []string{"level=" + level, "event=zone_applied", "peer_id=node-b.catofes.", "via=udp_chunks", "zone=node-b.catofes."} {
+			record := slog.NewRecord(time.Now(), level, "zone_applied", 0)
+			record.AddAttrs(slog.String("component", "gossip"), slog.String("peer_id", "node-b.catofes."))
+			if err := logger.Handle(t.Context(), record); err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{"level=" + strings.ToLower(level.String()), "component=gossip", "event=zone_applied", "peer_id=node-b.catofes."} {
 				if !strings.Contains(output.String(), want) {
 					t.Fatalf("log %q missing %q", output.String(), want)
 				}

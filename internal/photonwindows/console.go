@@ -135,6 +135,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	gossipLog := logger.With("component", "gossip")
 	listenAddr, err := netip.ParseAddrPort(config.GossipListen)
 	if err != nil {
 		return fmt.Errorf("gossip_listen: %w", err)
@@ -154,7 +155,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		}
 		// Offline startup must retain IPC and the join request. The existing
 		// planner refreshes these address hints; peer IDs remain configured.
-		logger.Warn("gossip_bootstrap_refresh_failed", "error", err)
+		gossipLog.Warn("gossip_bootstrap_refresh_failed", "error", err)
 		bootstrap = make(map[string]*net.UDPAddr)
 	}
 	var peers []string
@@ -164,25 +165,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	driver := corehost.NewGossipDriver(nil, 0, state.Store(), corehost.GossipDriverConfig{
 		PeerID: string(config.ManagedZone), Limits: corestate.DefaultSyncLimits(),
 		Discovery: corehost.GossipDiscoveryConfig{Bootstrap: bootstrap, BootstrapPeers: peers},
-		Log: func(record corehost.GossipDriverLog) {
-			level := slog.LevelDebug
-			switch record.Level {
-			case "info":
-				level = slog.LevelInfo
-			case "warn":
-				level = slog.LevelWarn
-			case "error":
-				level = slog.LevelError
-			}
-			attrs := []any{"peer", record.PeerID, "phase", record.Phase}
-			if record.Err != nil {
-				attrs = append(attrs, "error", record.Err)
-			}
-			for key, value := range record.Fields {
-				attrs = append(attrs, key, value)
-			}
-			logger.Log(ctx, level, record.Event, attrs...)
-		},
+		Log:       logger.Handler(),
 	})
 	defer driver.Stop()
 	packet, err := openPacketSockets(ctx, config.GossipListen)
@@ -208,7 +191,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	if err := driver.RefreshGossipDiscovery(time.Now(), transport); err != nil {
 		return err
 	}
-	if err := driver.StartGossipTransport(ctx, transport, func(err error) { logger.Warn("gossip_receive_failed", "error", err) }); err != nil {
+	if err := driver.StartGossipTransport(ctx, transport, func(err error) { gossipLog.Warn("gossip_receive_failed", "error", err) }); err != nil {
 		return err
 	}
 	networkTargets := networkRouteTargets{splitRoutes: config.Overlay.SplitRoutes, changed: make(chan struct{}, 1)}
@@ -223,7 +206,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		return fmt.Errorf("watch power resume: %w", err)
 	}
 	defer func() { err = errors.Join(err, stopPowerResumes()) }()
-	logger.Info("gossip_started", "address", packet.LocalAddr().String(), "zone", config.ManagedZone, "tunnel_ready", false)
+	gossipLog.Info("gossip_started", "address", packet.LocalAddr().String(), "zone", config.ManagedZone, "tunnel_ready", false)
 	type planRequest struct {
 		ctx        context.Context
 		generation uint64
@@ -350,9 +333,9 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			if ctx.Err() == nil {
 				rebindPending = reason
 			}
-			logger.Warn("gossip_rebind_failed", "reason", reason, "error", err)
+			gossipLog.Warn("gossip_rebind_failed", "reason", reason, "error", err)
 		} else {
-			logger.Info("gossip_rebound", "reason", reason, "address", packet.LocalAddr().String())
+			gossipLog.Info("gossip_rebound", "reason", reason, "address", packet.LocalAddr().String())
 		}
 		requestPlan()
 		return err
@@ -499,7 +482,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				continue
 			}
 			if result.bootstrapErr != nil {
-				logger.Warn("gossip_bootstrap_refresh_failed", "error", result.bootstrapErr)
+				gossipLog.Warn("gossip_bootstrap_refresh_failed", "error", result.bootstrapErr)
 			} else if !reflect.DeepEqual(bootstrap, result.bootstrap) {
 				bootstrap = result.bootstrap
 				refreshGossip()

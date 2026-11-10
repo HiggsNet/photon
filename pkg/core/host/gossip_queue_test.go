@@ -212,8 +212,8 @@ func TestGossipQueueTimerDeliveryIndependentOfFullInput(t *testing.T) {
 }
 
 func TestGossipQueueDatagramOverflowDropsAndContinues(t *testing.T) {
-	warnings := make(chan GossipDriverLog, 8)
-	driver := NewGossipDriver(nil, 1, nil, GossipDriverConfig{Log: func(log GossipDriverLog) { warnings <- log }})
+	warnings := make(chan capturedGossipLog, 8)
+	driver := NewGossipDriver(nil, 1, nil, GossipDriverConfig{Log: gossipLogCapture(func(log capturedGossipLog) { warnings <- log })})
 	defer driver.Stop()
 	driver.events <- GossipPacketReceived{}
 	receiver := newFakeDatagramReceiver()
@@ -288,11 +288,11 @@ func TestGossipQueueWorkerWaitsForCompletionCapacityAndCanStop(t *testing.T) {
 	for _, stopBlocked := range []bool{false, true} {
 		t.Run(fmt.Sprintf("stop=%t", stopBlocked), func(t *testing.T) {
 			workerDone := make(chan struct{}, 1)
-			driver := NewGossipDriver(nil, 1, nil, GossipDriverConfig{Log: func(log GossipDriverLog) {
+			driver := NewGossipDriver(nil, 1, nil, GossipDriverConfig{Log: gossipLogCapture(func(log capturedGossipLog) {
 				if log.Event == "worker_done" {
 					workerDone <- struct{}{}
 				}
-			}})
+			})})
 			defer driver.Stop()
 			driver.events <- GossipPacketReceived{}
 			for range cap(driver.completions) {

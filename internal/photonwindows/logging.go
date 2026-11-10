@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/HiggsNet/photon/internal/logoutput"
 )
 
 const logFileLimit = 8 << 20
@@ -62,9 +64,9 @@ func NewRuntimeLogger(config *Config, console io.Writer, serviceName string) (*s
 			return nil, nil, fmt.Errorf("open Event Log: %w", err)
 		}
 	}
-	handlers := []slog.Handler{slog.NewTextHandler(file, &slog.HandlerOptions{Level: level})}
+	handlers := []slog.Handler{logoutput.TextHandler(file, level)}
 	if console != nil {
-		handlers = append(handlers, slog.NewTextHandler(console, &slog.HandlerOptions{Level: level}))
+		handlers = append(handlers, logoutput.TextHandler(console, level))
 	}
 	handler := &runtimeLogHandler{handlers: handlers, event: event, level: level}
 	return slog.New(handler), &runtimeLogCloser{file: file, event: event}, nil
@@ -131,7 +133,7 @@ func (h *runtimeLogHandler) Handle(ctx context.Context, record slog.Record) erro
 	if h.event != nil && record.Level >= slog.LevelInfo {
 		// Use the same sanitized representation, never the original record.
 		var text strings.Builder
-		_ = slog.NewTextHandler(&text, nil).Handle(ctx, safe)
+		_ = logoutput.TextHandler(&text, slog.LevelInfo).Handle(ctx, safe)
 		result = errors.Join(result, h.event.Report(record.Level, id, text.String()))
 	}
 	return result

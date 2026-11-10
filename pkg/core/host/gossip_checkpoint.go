@@ -8,7 +8,6 @@ import (
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
-	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 // gossipObservedVerification lives only across one packet's state update
@@ -39,28 +38,6 @@ func (driver *GossipDriver) recordGossipObservedPath(ctx context.Context, peerID
 	_, err := driver.gossipState.UpdatePeerCheckpoints(ctx, map[string]corestate.PeerCheckpointPatch{peerID: patch})
 	verification.confirmedChanged = err == nil && patch.LastSuccessfulEndpoint.Set
 	return verification, err == nil, err
-}
-
-// RecordGossipRejectedObject stores a bounded retry-suppression hint for a
-// chunk whose advertised object could not be decoded or verified.
-func (driver *GossipDriver) RecordGossipRejectedObject(ctx context.Context, peerID string, chunk *gossip.ObjectChunk, rejection error, now time.Time) error {
-	if driver == nil || driver.gossipState == nil {
-		return ErrGossipDriverStopped
-	}
-	if peerID == "" || chunk == nil || chunk.Object != gossip.ObjectPullZone || !chunk.Zone.Valid() || len(chunk.RootHash) == 0 {
-		return nil
-	}
-	reason := gossip.RejectReason(rejection)
-	if reason == "" {
-		reason = "verify_failed"
-	}
-	_, err := driver.gossipState.UpdatePeerCheckpoints(ctx, map[string]corestate.PeerCheckpointPatch{peerID: {
-		Reject: map[zone.ZonePath]corestate.RejectedObject{chunk.Zone: {
-			RootHash: append([]byte(nil), chunk.RootHash...), Reason: reason,
-			UpdatedUnix: now.Unix(), UntilUnix: now.Add(corestate.RejectedObjectTTL).Unix(),
-		}},
-	}})
-	return err
 }
 
 // recordGossipRelays updates the live throttle and catalog deduplication state.

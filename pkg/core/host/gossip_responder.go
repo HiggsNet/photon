@@ -4,13 +4,12 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
-
-var ErrGossipChunkSendCacheFull = gossip.ErrChunkSendCacheFull
 
 func (driver *GossipDriver) respondGossipFetchZone(ctx context.Context, peerID string, request *gossip.FetchZone, sender GossipSender, budget int) error {
 	if request == nil || driver.gossipState == nil {
@@ -20,7 +19,7 @@ func (driver *GossipDriver) respondGossipFetchZone(ctx context.Context, peerID s
 	driver.observeReadOnlyResponder(peerID, "chunk_fallback", request.Zone, now)
 	snapshot, revoked, err := driver.gossipState.ReadZoneSnapshot(request.Zone, now)
 	if err != nil {
-		driver.logGossip("debug", "fetch_zone_snapshot_missing", peerID, "responder", err, map[string]any{"zone": request.Zone})
+		driver.logGossip(slog.LevelDebug, "fetch_zone_snapshot_missing", peerID, "responder", err, map[string]any{"zone": request.Zone})
 		return nil
 	}
 	if revoked || snapshot == nil {
@@ -71,7 +70,7 @@ func (driver *GossipDriver) GossipObjectPullResponse(request *gossip.ObjectPullR
 	}
 	response := gossip.BuildObjectPullResponse(driver.gossipState, request, now)
 	if request != nil && response != nil && response.OK && response.Snapshot != nil {
-		driver.logGossip("debug", "lookup_snapshot", "", "object_pull", nil, map[string]any{"zone": request.Zone.String(), "records": len(response.Snapshot.Records)})
+		driver.logGossip(slog.LevelDebug, "lookup_snapshot", "", "object_pull", nil, map[string]any{"zone": request.Zone.String(), "records": len(response.Snapshot.Records)})
 	}
 	return response
 }

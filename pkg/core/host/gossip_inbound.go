@@ -2,6 +2,7 @@ package host
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
@@ -42,15 +43,13 @@ func (driver *GossipDriver) executeGossipPacketActions(ctx context.Context, acti
 				return events, err
 			}
 		case gossip.InboundHandleObjectChunk:
-			result, err := driver.HandleGossipObjectChunk(ctx, message, driver.schedulerForRead().clock.Now())
-			if result.Event != nil {
-				events = append(events, result.Event)
-			}
-			if result.CheckpointErr != nil {
-				driver.logGossip("warn", "chunk_reject_state_commit_failed", result.PeerID, "checkpoint", result.CheckpointErr, map[string]any{"zone": result.Zone})
-			}
-			if result.ChunkFallback {
-				driver.observeChunkFallback(result.PeerID, 1, driver.schedulerForRead().clock.Now())
+			now := driver.schedulerForRead().clock.Now()
+			event, err := driver.HandleGossipObjectChunk(message, now)
+			if event != nil {
+				events = append(events, event)
+				if event.Snapshot != nil {
+					driver.observeChunkFallback(message.PeerID, 1, now)
+				}
 			}
 			if err != nil {
 				return events, err
@@ -90,13 +89,14 @@ func (driver *GossipDriver) respondGossipPing(ctx context.Context, action gossip
 		return nil
 	}
 	if !gossip.CatalogRootsMatch(message.Ping.Summary, summary) {
-		return driver.StartGossipSession(message.PeerID, "ping_summary")
+		_ = driver.StartGossipSession(message.PeerID, "ping_summary")
+		return nil
 	}
 	if err := driver.commitGossipEventCheckpoint(ctx, &gossip.SyncSession{PeerID: message.PeerID, State: gossip.SyncSessionCompleted}, driver.schedulerForRead().clock.Now()); err != nil {
 		return err
 	}
 	driver.observeSyncHint(message.PeerID, "ping_summary_match", "", true, driver.schedulerForRead().clock.Now())
-	driver.logGossip("debug", "ping_summary_shortcut", message.PeerID, "session", nil, map[string]any{"reason": "catalog_root_match"})
+	driver.logGossip(slog.LevelDebug, "ping_summary_shortcut", message.PeerID, "session", nil, map[string]any{"reason": "catalog_root_match"})
 	return nil
 }
 
@@ -113,7 +113,7 @@ func (driver *GossipDriver) respondGossipCatalogPage(ctx context.Context, messag
 	if err != nil {
 		driver.observeDatagramTooLarge(message.PeerID, "catalog_page", "", "", 0, budget, driver.schedulerForRead().clock.Now())
 		driver.observeCatalogReject(message.PeerID, cursor, gossip.RejectReason(err), driver.schedulerForRead().clock.Now())
-		driver.logGossip("warn", "catalog_page_failed", message.PeerID, "responder", err, map[string]any{"cursor": cursor})
+		driver.logGossip(slog.LevelWarn, "catalog_page_failed", message.PeerID, "responder", err, map[string]any{"cursor": cursor})
 		return
 	}
 	driver.observeCatalogPage(message.PeerID, page, driver.schedulerForRead().clock.Now())

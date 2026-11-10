@@ -97,7 +97,6 @@ func (driver *GossipDriver) flushGossipChunkSend(ctx context.Context, id TimerID
 			var quotaErr *gossip.QuotaExceededError
 			if !errors.As(err, &quotaErr) || quotaErr.RequestedBytes > quotaErr.ByteBurst || quotaErr.RequestedObjects > quotaErr.ObjectBurst {
 				finish(false)
-				driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseSend, PeerID: id.Owner, Err: err})
 				return err
 			}
 			// Do not sleep on the host event loop. Retain the failed index and

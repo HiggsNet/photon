@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"net"
 	"time"
 
@@ -31,41 +30,12 @@ func gossipDriverConfig(app *appConfig, verified *corestate.VerifiedState, logge
 	return corehost.GossipDriverConfig{
 		PeerID: configuredPeerID(app, verified),
 		Limits: syncLimits(app),
-		Log:    gossipDriverLogger(logger),
+		Log:    logger,
 		Discovery: corehost.GossipDiscoveryConfig{
 			Bootstrap:      configuredKnownPeers(app),
 			BootstrapPeers: bootstrapPeerIDs(app.Bootstrap),
 			SourceOrder:    append([]string(nil), app.EndpointSourceOrder...),
 		},
-	}
-}
-
-func gossipDriverLogger(logger *appLogger) func(corehost.GossipDriverLog) {
-	if logger == nil {
-		return nil
-	}
-	return func(event corehost.GossipDriverLog) {
-		fields := make(map[string]any, len(event.Fields)+3)
-		maps.Copy(fields, event.Fields)
-		if event.PeerID != "" {
-			fields["peer_id"] = event.PeerID
-		}
-		if event.Phase != "" {
-			fields["phase"] = event.Phase
-		}
-		if event.Err != nil {
-			fields["error"] = event.Err
-		}
-		switch event.Level {
-		case "error":
-			logger.Error("sync", event.Event, fields)
-		case "warn":
-			logger.Warn("sync", event.Event, fields)
-		case "info":
-			logger.Info("sync", event.Event, fields)
-		default:
-			logger.Debug("sync", event.Event, fields)
-		}
 	}
 }
 

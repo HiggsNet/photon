@@ -255,7 +255,7 @@ function Assert-TrayDiagnosticLog([IntPtr]$Target,[string]$RequiredEvent) {
     Click-Tray $Target 2301
     [PhotonGuiSmokeNative]::SelectComboIndex($Target,2318,3)
     Click-Tray $Target 2311
-    Wait-Tray {[PhotonGuiSmokeNative]::Text($Target,2314).Contains($statePath+'.log') -and [PhotonGuiSmokeNative]::Text($Target,2310).Contains('msg='+$RequiredEvent)} 'real runtime log tail'
+    Wait-Tray {[PhotonGuiSmokeNative]::Text($Target,2314).Contains($statePath+'.log') -and [PhotonGuiSmokeNative]::Text($Target,2310).Contains('event='+$RequiredEvent)} 'real runtime log tail'
     $shown=[PhotonGuiSmokeNative]::Text($Target,2310)
     $stream=[IO.File]::Open($statePath+'.log',[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
     try {
@@ -314,7 +314,7 @@ function Check-TrayDiagnostics([IntPtr]$Target,[string]$Phase,[bool]$Running) {
     Save-TrayDiagnostics $Target $Phase 'log'
 }
 function Read-TrayLogStart([string]$Text) {
-    $records=[regex]::Matches($Text,'(?m)^time=(\S+)[^\r\n]*\bmsg=runtime_started\b')
+    $records=[regex]::Matches($Text,'(?m)^ts=(\S+)[^\r\n]*\bevent=runtime_started\b')
     if($records.Count -eq 0){throw 'Real diagnostic log has no timestamped runtime_started event'}
     [DateTimeOffset]::Parse($records[$records.Count-1].Groups[1].Value)
 }

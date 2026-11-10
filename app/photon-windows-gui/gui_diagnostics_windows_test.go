@@ -304,11 +304,11 @@ func TestDesktopNativeDiagnosticsReadPauseRefreshAndOffline(t *testing.T) {
 	if firstVisibleLine == 0 {
 		t.Fatal("log tail did not scroll to the newest records at the minimum window size")
 	}
-	filteredLog := "time=2026-10-16T01:00:00Z level=INFO msg=runtime_started event_id=101\n" +
-		"time=2026-10-16T01:00:01Z level=INFO msg=gossip_started event_id=201\n" +
-		"time=2026-10-16T01:00:02Z level=DEBUG msg=packet_trace event_id=999\n" +
-		"time=2026-10-16T01:00:03Z level=WARN msg=fixture_warning event_id=999\n" +
-		"time=2026-10-16T01:00:04Z level=ERROR msg=fixture_error event_id=999\n"
+	filteredLog := "ts=2026-10-16T01:00:00Z level=info event=runtime_started event_id=101\n" +
+		"ts=2026-10-16T01:00:01Z level=info event=gossip_started component=gossip event_id=201\n" +
+		"ts=2026-10-16T01:00:02Z level=debug event=packet_trace component=gossip event_id=999\n" +
+		"ts=2026-10-16T01:00:03Z level=warn event=fixture_warning event_id=999\n" +
+		"ts=2026-10-16T01:00:04Z level=error event=fixture_error event_id=999\n"
 	if err := os.WriteFile(tail.Path, []byte(filteredLog), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -320,15 +320,15 @@ func TestDesktopNativeDiagnosticsReadPauseRefreshAndOffline(t *testing.T) {
 		awaitDesktopNativeResult(t, w)
 	}
 	selectFilter(0)
-	if shown := get(guiDiagnosticsTextID); !strings.Contains(shown, "msg=runtime_started") || strings.Contains(shown, "msg=packet_trace") || strings.Contains(shown, "msg=gossip_started") {
+	if shown := get(guiDiagnosticsTextID); !strings.Contains(shown, "event=runtime_started") || strings.Contains(shown, "event=packet_trace") || strings.Contains(shown, "event=gossip_started") {
 		t.Fatal("default connection log filter exposed unrelated debug/Gossip records or hid runtime startup")
 	}
 	selectFilter(1)
-	if shown := get(guiDiagnosticsTextID); !strings.Contains(shown, "msg=fixture_warning") || !strings.Contains(shown, "msg=fixture_error") || strings.Contains(shown, "msg=runtime_started") {
+	if shown := get(guiDiagnosticsTextID); !strings.Contains(shown, "event=fixture_warning") || !strings.Contains(shown, "event=fixture_error") || strings.Contains(shown, "event=runtime_started") {
 		t.Fatal("warning/error native filter did not use real record levels")
 	}
 	selectFilter(2)
-	if shown := get(guiDiagnosticsTextID); !strings.Contains(shown, "msg=gossip_started") || strings.Contains(shown, "msg=runtime_started") {
+	if shown := get(guiDiagnosticsTextID); !strings.Contains(shown, "event=gossip_started") || strings.Contains(shown, "event=runtime_started") {
 		t.Fatal("Gossip native filter did not isolate Gossip records")
 	}
 	selectFilter(3)

@@ -28,7 +28,9 @@ func loadBoltCheckpoint(bucket *bolt.Bucket) (*GossipCheckpoint, bool) {
 			discarded = true
 			return nil
 		}
-		out.Peers[string(k)] = peer
+		if !peerCheckpointEmpty(peer) {
+			out.Peers[string(k)] = peer
+		}
 		return nil
 	})
 	return out, discarded

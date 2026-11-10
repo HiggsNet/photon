@@ -30,8 +30,6 @@ type PeerCheckpointPatch struct {
 	ObservedUntilUnix      PatchField[int64]
 	ObservedGrace          PatchField[[]ObservedGraceEndpoint]
 	LastFailure            PatchField[*PeerFailure]
-	Reject                 map[zone.ZonePath]RejectedObject
-	ClearRejected          []zone.ZonePath
 }
 
 // CheckpointCommitFunc accepts only affected peers before publishing them in memory.
@@ -199,6 +197,7 @@ func restartPeerCheckpoint(peer PeerCheckpoint) PeerCheckpoint {
 	peer.ObservedLastSeenUnix = 0
 	peer.ObservedUntilUnix = 0
 	peer.ObservedGraceEndpoints = nil
+	peer.RejectedObjects = nil
 	return peer
 }
 
@@ -221,19 +220,6 @@ func applyPeerCheckpointPatch(metadata *PeerCheckpoint, patch PeerCheckpointPatc
 	}
 	if patch.LastFailure.Set {
 		metadata.LastFailure = clonePeerFailure(patch.LastFailure.Value)
-	}
-	if len(patch.Reject) > 0 && metadata.RejectedObjects == nil {
-		metadata.RejectedObjects = make(map[zone.ZonePath]RejectedObject, len(patch.Reject))
-	}
-	for path, rejected := range patch.Reject {
-		if !path.Valid() {
-			continue
-		}
-		rejected.RootHash = append([]byte(nil), rejected.RootHash...)
-		metadata.RejectedObjects[path] = rejected
-	}
-	for _, path := range patch.ClearRejected {
-		delete(metadata.RejectedObjects, path)
 	}
 }
 

@@ -13,7 +13,7 @@ func desktopFilterDiagnosticLog(text string, filter int) string {
 	}
 	var out strings.Builder
 	for _, line := range strings.SplitAfter(text, "\n") {
-		level, event := desktopDiagnosticLogFields(line)
+		level, event, component := desktopDiagnosticLogFields(line)
 		keep := false
 		switch filter {
 		case 0:
@@ -21,11 +21,9 @@ func desktopFilterDiagnosticLog(text string, filter int) string {
 				keep = keep || strings.HasPrefix(event, prefix)
 			}
 		case 1:
-			keep = level == "WARN" || level == "ERROR"
+			keep = strings.EqualFold(level, "warn") || strings.EqualFold(level, "error")
 		case 2:
-			for _, prefix := range []string{"gossip_", "session_", "worker_", "zone_", "packet_", "sync_hint", "hinted_sync", "ping_summary"} {
-				keep = keep || strings.HasPrefix(event, prefix)
-			}
+			keep = component == "gossip"
 		}
 		if keep {
 			out.WriteString(line)
@@ -34,7 +32,7 @@ func desktopFilterDiagnosticLog(text string, filter int) string {
 	return out.String()
 }
 
-func desktopDiagnosticLogFields(line string) (level, event string) {
+func desktopDiagnosticLogFields(line string) (level, event, component string) {
 	for line != "" {
 		line = strings.TrimLeft(line, " \t\r\n")
 		equal := strings.IndexByte(line, '=')
@@ -61,10 +59,13 @@ func desktopDiagnosticLogFields(line string) (level, event string) {
 		if key == "level" && level == "" {
 			level = value
 		}
-		if key == "msg" && event == "" {
+		if key == "event" && event == "" {
 			event = value
 		}
-		if level != "" && event != "" {
+		if key == "component" && component == "" {
+			component = value
+		}
+		if level != "" && event != "" && component != "" {
 			break
 		}
 	}

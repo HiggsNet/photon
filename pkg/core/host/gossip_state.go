@@ -3,6 +3,7 @@ package host
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"time"
 
@@ -40,16 +41,10 @@ type GossipDriverConfig struct {
 	PeerID    string
 	Limits    corestate.SyncLimits
 	Discovery GossipDiscoveryConfig
-	Log       func(GossipDriverLog)
-}
-
-type GossipDriverLog struct {
-	Level  string
-	Event  string
-	PeerID string
-	Phase  string
-	Err    error
-	Fields map[string]any
+	Log       interface {
+		Enabled(context.Context, slog.Level) bool
+		Handle(context.Context, slog.Record) error
+	}
 }
 
 func cloneGossipDriverConfig(config GossipDriverConfig) GossipDriverConfig {
@@ -75,7 +70,25 @@ func (driver *GossipDriver) UpdateGossipBootstrap(peers map[string]*net.UDPAddr)
 	return nil
 }
 
-func (driver *GossipDriver) logGossip(level, event, peerID, phase string, err error, fields map[string]any) {
+func (driver *GossipDriver) logGossip(level slog.Level, event, peerID, phase string, err error, fields map[string]any) {
+	ctx := context.Background()
+	driver.mu.RLock()
+	log := driver.gossipConfig.Log
+	driver.mu.RUnlock()
+	if log == nil || !log.Enabled(ctx, level) {
+		return
+	}
+	record := slog.NewRecord(time.Now(), level, event, 0)
+	record.AddAttrs(slog.String("component", "gossip"))
+	if peerID != "" {
+		record.AddAttrs(slog.String("peer_id", peerID))
+	}
+	if phase != "" {
+		record.AddAttrs(slog.String("phase", phase))
+	}
+	if err != nil {
+		record.AddAttrs(slog.Any("error", err))
+	}
 	var quotaErr *gossip.QuotaExceededError
 	if errors.As(err, &quotaErr) {
 		if fields == nil {
@@ -92,10 +105,10 @@ func (driver *GossipDriver) logGossip(level, event, peerID, phase string, err er
 		fields["direction"] = quotaErr.Direction
 		fields["message_type"] = quotaErr.MessageType
 	}
-	config := driver.GossipConfig()
-	if config.Log != nil {
-		config.Log(GossipDriverLog{Level: level, Event: event, PeerID: peerID, Phase: phase, Err: err, Fields: fields})
+	for key, value := range fields {
+		record.AddAttrs(slog.Any(key, value))
 	}
+	_ = log.Handle(ctx, record)
 }
 
 func (driver *GossipDriver) reportGossipIssue(issue GossipExecutionIssue) {
@@ -103,14 +116,12 @@ func (driver *GossipDriver) reportGossipIssue(issue GossipExecutionIssue) {
 	switch issue.Phase {
 	case GossipPhaseApply:
 		event = "snapshot_batch_commit_failed"
-	case GossipPhaseInbound:
-		event = "event_dropped"
 	case GossipPhaseTimer:
 		event = "timer_action_failed"
 	case GossipPhasePersistence:
 		event = "save_failed"
 	}
-	driver.logGossip("warn", event, issue.PeerID, issue.Phase, issue.Err, nil)
+	driver.logGossip(slog.LevelWarn, event, issue.PeerID, issue.Phase, issue.Err, nil)
 }
 
 func (driver *GossipDriver) gossipStateView() GossipStateView {
@@ -157,7 +168,7 @@ func (driver *GossipDriver) applyGossipSnapshots(
 			continue
 		}
 		if action.Snapshot.Zone == managedZone {
-			driver.logGossip("debug", "skipping_own_zone_snapshot", peerID, GossipPhaseApply, nil, map[string]any{"zone": action.Snapshot.Zone})
+			driver.logGossip(slog.LevelDebug, "skipping_own_zone_snapshot", peerID, GossipPhaseApply, nil, map[string]any{"zone": action.Snapshot.Zone})
 			continue
 		}
 		limits := driver.GossipConfig().Limits
@@ -198,22 +209,22 @@ func (driver *GossipDriver) applyGossipSnapshots(
 
 func (driver *GossipDriver) logGossipSnapshotOutcome(peerID string, managedZone zone.ZonePath, action gossip.ApplySnapshotAction, outcome corestate.RemoteApplyOutcome) {
 	if outcome.AlreadySatisfied {
-		driver.logGossip("debug", "snapshot_already_satisfied", peerID, GossipPhaseApply, nil, map[string]any{"zone": action.Snapshot.Zone})
+		driver.logGossip(slog.LevelDebug, "snapshot_already_satisfied", peerID, GossipPhaseApply, nil, map[string]any{"zone": action.Snapshot.Zone})
 		return
 	}
 	if outcome.Err != nil {
 		if action.RefreshOnRootMismatch && errors.Is(outcome.Err, corestate.ErrSnapshotRootMismatch) {
-			driver.logGossip("debug", "catalog_changed", peerID, GossipPhaseApply, outcome.Err, map[string]any{"zone": action.Snapshot.Zone})
+			driver.logGossip(slog.LevelDebug, "catalog_changed", peerID, GossipPhaseApply, outcome.Err, map[string]any{"zone": action.Snapshot.Zone})
 			return
 		}
-		driver.logGossip("warn", "zone_apply_failed", peerID, GossipPhaseApply, outcome.Err, map[string]any{"zone": action.Snapshot.Zone, "reason": gossip.RejectReason(outcome.Err)})
+		driver.logGossip(slog.LevelWarn, "zone_apply_failed", peerID, GossipPhaseApply, outcome.Err, map[string]any{"zone": action.Snapshot.Zone, "reason": gossip.RejectReason(outcome.Err)})
 		return
 	}
 	if outcome.ManagedZoneAdopted {
-		driver.logGossip("info", "auto_join_adopted", peerID, GossipPhaseApply, nil, map[string]any{"zone": managedZone})
+		driver.logGossip(slog.LevelInfo, "auto_join_adopted", peerID, GossipPhaseApply, nil, map[string]any{"zone": managedZone})
 	}
 	if outcome.AuthorityRefreshed {
-		driver.logGossip("info", "managed_zone_authority_refreshed", peerID, GossipPhaseApply, nil, map[string]any{"zone": managedZone})
+		driver.logGossip(slog.LevelInfo, "managed_zone_authority_refreshed", peerID, GossipPhaseApply, nil, map[string]any{"zone": managedZone})
 	}
 	if outcome.Result == nil || (!outcome.Result.NetworkChanged && !outcome.ManagedZoneAdopted && !outcome.AuthorityRefreshed) {
 		return
@@ -222,7 +233,7 @@ func (driver *GossipDriver) logGossipSnapshotOutcome(peerID string, managedZone 
 	if via == "" {
 		via = "event_loop"
 	}
-	driver.logGossip("info", "zone_applied", peerID, GossipPhaseApply, nil, map[string]any{
+	driver.logGossip(slog.LevelInfo, "zone_applied", peerID, GossipPhaseApply, nil, map[string]any{
 		"zone": action.Snapshot.Zone, "records": outcome.Result.Records, "delegations": outcome.Result.Delegation, "via": via,
 	})
 }

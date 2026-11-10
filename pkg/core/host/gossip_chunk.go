@@ -2,7 +2,6 @@ package host
 
 import (
 	"bytes"
-	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -16,58 +15,37 @@ const GossipChunkRepairNamespace = "gossip_chunk_repair"
 
 var ErrGossipChunkStoreUnavailable = errors.New("gossip chunk store is unavailable")
 
-type GossipObjectChunkResult struct {
-	PeerID        string
-	Zone          string
-	Complete      bool
-	ChunkFallback bool
-	CheckpointErr error
-	Event         gossip.SyncEvent
-}
-
 // HandleGossipObjectChunk owns bounded assembly, repair scheduling, snapshot
-// decoding/root verification and completion delivery. These are common gossip
-// semantics; platforms only observe the detached result.
-func (driver *GossipDriver) HandleGossipObjectChunk(ctx context.Context, message *gossip.Message, now time.Time) (GossipObjectChunkResult, error) {
-	var result GossipObjectChunkResult
+// decoding/root verification and completion delivery.
+func (driver *GossipDriver) HandleGossipObjectChunk(message *gossip.Message, now time.Time) (*gossip.ObjectChunkEvent, error) {
 	if driver == nil {
-		return result, ErrGossipDriverStopped
+		return nil, ErrGossipDriverStopped
 	}
 	if message == nil || message.ObjectChunk == nil {
-		return result, nil
+		return nil, nil
 	}
 	chunk := message.ObjectChunk
-	result.PeerID = message.PeerID
-	result.Zone = chunk.Zone.String()
 	data, complete, err := driver.AddGossipObjectChunk(message.PeerID, chunk, now)
 	if err != nil {
-		return driver.rejectGossipObjectChunk(ctx, message.PeerID, chunk, result, err, now)
+		return &gossip.ObjectChunkEvent{PeerID: message.PeerID, Zone: chunk.Zone, Err: err}, err
 	}
 	if !complete {
-		return result, driver.ScheduleGossipChunkRepair(message.PeerID, chunk)
+		return nil, driver.ScheduleGossipChunkRepair(message.PeerID, chunk)
 	}
-	result.Complete = true
 	if chunk.Object != gossip.ObjectPullZone {
-		return result, nil
+		return nil, nil
 	}
 	snapshot, err := gossip.DecodeZoneSnapshotObject(data)
+	if err == nil && len(chunk.RootHash) > 0 {
+		actualRoot := corestate.ZoneRoot(corestate.ZoneStateFromSnapshot(snapshot))
+		if !bytes.Equal(chunk.RootHash, actualRoot) {
+			err = fmt.Errorf("chunk snapshot root mismatch for %s: advertised %x, decoded %x", snapshot.Zone, chunk.RootHash, actualRoot)
+		}
+	}
 	if err != nil {
-		return driver.rejectGossipObjectChunk(ctx, message.PeerID, chunk, result, err, now)
+		return &gossip.ObjectChunkEvent{PeerID: message.PeerID, Zone: chunk.Zone, Err: err}, err
 	}
-	actualRoot := corestate.ZoneRoot(corestate.ZoneStateFromSnapshot(snapshot))
-	if len(chunk.RootHash) > 0 && !bytes.Equal(chunk.RootHash, actualRoot) {
-		err = fmt.Errorf("chunk snapshot root mismatch for %s: advertised %x, decoded %x", snapshot.Zone, chunk.RootHash, actualRoot)
-		return driver.rejectGossipObjectChunk(ctx, message.PeerID, chunk, result, err, now)
-	}
-	result.ChunkFallback = true
-	result.Event = &gossip.ObjectChunkEvent{PeerID: message.PeerID, Zone: chunk.Zone, Snapshot: snapshot}
-	return result, nil
-}
-
-func (driver *GossipDriver) rejectGossipObjectChunk(ctx context.Context, peerID string, chunk *gossip.ObjectChunk, result GossipObjectChunkResult, chunkErr error, now time.Time) (GossipObjectChunkResult, error) {
-	result.CheckpointErr = driver.RecordGossipRejectedObject(ctx, peerID, chunk, chunkErr, now)
-	result.Event = &gossip.ObjectChunkEvent{PeerID: peerID, Zone: chunk.Zone, Err: chunkErr}
-	return result, chunkErr
+	return &gossip.ObjectChunkEvent{PeerID: message.PeerID, Zone: chunk.Zone, Snapshot: snapshot}, nil
 }
 
 // AddGossipObjectChunk adds one UDP chunk to this host's bounded in-memory

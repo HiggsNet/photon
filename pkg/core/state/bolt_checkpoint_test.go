@@ -13,7 +13,7 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-func TestObservedPathUpdatesStayInMemory(t *testing.T) {
+func TestObservedPathsAndRejectionsStayInMemory(t *testing.T) {
 	db := openCommonBoltTestDB(t)
 	initial := commonBoltTestCandidate(1)
 	commitCommonBoltTestState(t, db, initial, 1)
@@ -39,6 +39,15 @@ func TestObservedPathUpdatesStayInMemory(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	for _, id := range []string{peerID, "peer-a"} {
+		result, err := store.ApplyRemoteBatch(t.Context(), id, []RemoteSnapshot{{
+			Snapshot:     &ZoneSnapshot{Zone: "untrusted."},
+			ExpectedRoot: []byte("advertised"),
+		}}, time.Unix(110, 0))
+		if err != nil || !result.Committed || !errors.Is(result.Outcomes[0].Err, ErrSnapshotRootMismatch) {
+			t.Fatalf("rejection was not recorded: %+v, %v", result, err)
+		}
+	}
 	view := store.ReadView()
 	live := view.Gossip.Peers[peerID]
 	if live.ObservedEndpoint == "" || live.ObservedLastSeenUnix != 110 || live.ObservedUntilUnix != 290 || len(live.ObservedGraceEndpoints) != 1 {
@@ -56,7 +65,10 @@ func TestObservedPathUpdatesStayInMemory(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, found := loaded.Gossip.Peers[peerID]; found {
-		t.Fatalf("observed-only peer leaked to disk: %+v", loaded.Gossip.Peers[peerID])
+		t.Fatalf("memory-only peer leaked to disk: %+v", loaded.Gossip.Peers[peerID])
+	}
+	if peer := loaded.Gossip.Peers["peer-a"]; peer.FailureCount != 2 || len(peer.RejectedObjects) != 0 {
+		t.Fatalf("expected only durable fields for peer-a: %+v", peer)
 	}
 }
 

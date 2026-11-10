@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/HiggsNet/photon/internal/logoutput"
 )
 
 type logLevel string
@@ -140,22 +142,6 @@ func (l *appLogger) Error(component, event string, fields map[string]any) {
 	l.write(logLevelError, component, event, fields)
 }
 
-// replaceLogAttr preserves public field names and timestamp precision.
-func replaceLogAttr(groups []string, attr slog.Attr) slog.Attr {
-	if len(groups) != 0 {
-		return attr
-	}
-	switch attr.Key {
-	case slog.TimeKey:
-		return slog.String("ts", attr.Value.Time().UTC().Format(time.RFC3339Nano))
-	case slog.LevelKey:
-		return slog.String("level", strings.ToLower(attr.Value.String()))
-	case slog.MessageKey:
-		attr.Key = "component"
-	}
-	return attr
-}
-
 func reservedLogKey(key string) bool {
 	switch key {
 	case "ts", "level", "component", "event", slog.TimeKey, slog.MessageKey:
@@ -177,8 +163,8 @@ func (l *appLogger) write(level logLevel, component, event string, fields map[st
 	if l.now != nil {
 		now = l.now
 	}
-	record := slog.NewRecord(now(), level.slogLevel(), component, 0)
-	record.AddAttrs(slog.String("event", event))
+	record := slog.NewRecord(now(), level.slogLevel(), "", 0)
+	record.AddAttrs(slog.String("component", component), slog.String("event", event))
 	keys := make([]string, 0, len(fields))
 	for key, value := range fields {
 		if value != nil && !reservedLogKey(key) {
@@ -189,16 +175,23 @@ func (l *appLogger) write(level logLevel, component, event string, fields map[st
 	for _, key := range keys {
 		record.AddAttrs(slog.Any(key, fields[key]))
 	}
+	_ = l.Handle(context.Background(), record)
+}
 
+func (l *appLogger) Enabled(_ context.Context, level slog.Level) bool {
+	return l != nil && level >= l.level.slogLevel()
+}
+
+func (l *appLogger) Handle(ctx context.Context, record slog.Record) error {
 	// Protect the reusable buffer and outputs, including non-concurrent writers.
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.handler == nil {
-		l.handler = slog.NewTextHandler(&l.buffer, &slog.HandlerOptions{ReplaceAttr: replaceLogAttr})
+		l.handler = logoutput.TextHandler(&l.buffer, l.level.slogLevel())
 	}
 	l.buffer.Reset()
 	// bytes.Buffer.Write cannot fail. Handle does not call Enabled; filtered above.
-	_ = l.handler.Handle(context.Background(), record)
+	_ = l.handler.Handle(ctx, record)
 	line := l.buffer.Bytes()
 	out := l.out
 	if out == nil {
@@ -213,16 +206,17 @@ func (l *appLogger) write(level logLevel, component, event string, fields map[st
 	case logModeFile, logModeStderrFile:
 		sinkErr = errors.Join(sinkErr, l.writeFileLine(line))
 	case logModeSyslog, logModeStderrSyslog:
-		sinkErr = errors.Join(sinkErr, writeSyslogLine(level, strings.TrimSuffix(string(line), "\n")))
+		sinkErr = errors.Join(sinkErr, writeSyslogLine(record.Level, strings.TrimSuffix(string(line), "\n")))
 	}
 	if sinkErr != nil {
 		// Report directly to stderr instead of recursing into the failing sink.
 		l.buffer.Reset()
-		failure := slog.NewRecord(now(), slog.LevelError, "log", 0)
-		failure.AddAttrs(slog.String("event", "sink_failed"), slog.Any("error", sinkErr))
-		_ = l.handler.Handle(context.Background(), failure)
+		failure := slog.NewRecord(record.Time, slog.LevelError, "", 0)
+		failure.AddAttrs(slog.String("component", "log"), slog.String("event", "sink_failed"), slog.Any("error", sinkErr))
+		_ = l.handler.Handle(ctx, failure)
 		_, _ = out.Write(l.buffer.Bytes())
 	}
+	return sinkErr
 }
 
 func (l *appLogger) writeFileLine(line []byte) error {
@@ -238,18 +232,18 @@ func (l *appLogger) writeFileLine(line []byte) error {
 	return errors.Join(writeErr, file.Close())
 }
 
-func writeSyslogLine(level logLevel, line string) error {
+func writeSyslogLine(level slog.Level, line string) error {
 	writer, err := syslog.New(syslog.LOG_DAEMON|syslog.LOG_INFO, "photon")
 	if err != nil {
 		return err
 	}
 	defer writer.Close()
 	switch level {
-	case logLevelDebug:
+	case slog.LevelDebug:
 		return writer.Debug(line)
-	case logLevelWarn:
+	case slog.LevelWarn:
 		return writer.Warning(line)
-	case logLevelError:
+	case slog.LevelError:
 		return writer.Err(line)
 	default:
 		return writer.Info(line)

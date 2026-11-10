@@ -6,14 +6,14 @@ import (
 )
 
 func TestGossipSlowOperationRateLimitPreservesWorstSample(t *testing.T) {
-	var logs []GossipDriverLog
+	var logs []capturedGossipLog
 	driver := NewGossipDriver(nil, 64, nil, GossipDriverConfig{})
 	defer driver.Stop()
-	driver.gossipConfig.Log = func(event GossipDriverLog) {
+	driver.gossipConfig.Log = gossipLogCapture(func(event capturedGossipLog) {
 		// Logging must not hold the driver lock.
 		_ = driver.GossipConfig()
 		logs = append(logs, event)
-	}
+	})
 	now := time.Unix(100, 0)
 	driver.logSlowOperation("snapshot_apply", 150*time.Millisecond, now, 3)
 	driver.logSlowOperation("snapshot_apply", 2*time.Second, now.Add(time.Second), 64)
@@ -36,8 +36,8 @@ func TestGossipSlowOperationRateLimitPreservesWorstSample(t *testing.T) {
 		t.Fatalf("unexpected event: %#v", got)
 	}
 	want := map[string]any{
-		"elapsed_ms": int64(120), "max_elapsed_ms": int64(2000), "suppressed": 2,
-		"queue_before": 4, "queue_after": 1, "queue_capacity": 64 + DefaultGossipCompletionBuffer, "max_sampled_queue": 64,
+		"elapsed_ms": int64(120), "max_elapsed_ms": int64(2000), "suppressed": int64(2),
+		"queue_before": int64(4), "queue_after": int64(1), "queue_capacity": int64(64 + DefaultGossipCompletionBuffer), "max_sampled_queue": int64(64),
 	}
 	for key, value := range want {
 		if got.Fields[key] != value {
@@ -45,15 +45,15 @@ func TestGossipSlowOperationRateLimitPreservesWorstSample(t *testing.T) {
 		}
 	}
 	driver.logSlowOperation("snapshot_apply", 110*time.Millisecond, now.Add(time.Minute), 2)
-	if logs[3].Fields["suppressed"] != 0 || logs[3].Fields["max_elapsed_ms"] != int64(110) {
+	if logs[3].Fields["suppressed"] != int64(0) || logs[3].Fields["max_elapsed_ms"] != int64(110) {
 		t.Fatalf("aggregation did not reset: %#v", logs[3])
 	}
 }
 
 func TestGossipOperationTimingFastPathDoesNotAllocate(t *testing.T) {
-	driver := NewGossipDriver(nil, 64, nil, GossipDriverConfig{Log: func(event GossipDriverLog) {
+	driver := NewGossipDriver(nil, 64, nil, GossipDriverConfig{Log: gossipLogCapture(func(event capturedGossipLog) {
 		t.Errorf("fast operation logged: %#v", event)
-	}})
+	})})
 	defer driver.Stop()
 	allocs := testing.AllocsPerRun(1000, func() {
 		defer driver.LogSlowOperation("host_event", time.Now(), driver.PendingEventCount())
@@ -64,7 +64,7 @@ func TestGossipOperationTimingFastPathDoesNotAllocate(t *testing.T) {
 }
 
 func BenchmarkGossipOperationTiming(b *testing.B) {
-	driver := NewGossipDriver(nil, 64, nil, GossipDriverConfig{Log: func(GossipDriverLog) {}})
+	driver := NewGossipDriver(nil, 64, nil, GossipDriverConfig{Log: gossipLogCapture(func(capturedGossipLog) {})})
 	defer driver.Stop()
 	b.ReportAllocs()
 	for b.Loop() {

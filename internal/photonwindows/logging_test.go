@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/HiggsNet/photon/internal/logoutput"
+
 	"crypto/ed25519"
 )
 
@@ -35,7 +37,7 @@ func (logKeySecret) String() string { return "FORMATTER-SECRET" }
 func TestRuntimeLoggingErrorsAndCustomScalars(t *testing.T) {
 	var text bytes.Buffer
 	events := &capturedRuntimeSink{}
-	logger := slog.New(&runtimeLogHandler{handlers: []slog.Handler{slog.NewTextHandler(&text, nil)}, event: events})
+	logger := slog.New(&runtimeLogHandler{handlers: []slog.Handler{logoutput.TextHandler(&text, slog.LevelInfo)}, event: events})
 	logger.Error("runtime_start_failed", "error", fmt.Errorf("open adapter: %w", errors.New("access denied")),
 		"scalar", logScalarSecret(7), "string_keys", map[logKeySecret]any{"public": logScalarSecret(9)},
 		"other_keys", map[logScalarSecret]any{1: "value"})
@@ -91,7 +93,7 @@ func (s opaqueLogSecret) String() string { return s.private }
 func TestRuntimeLoggingRedactsBeforeEverySink(t *testing.T) {
 	var text bytes.Buffer
 	events := &capturedRuntimeSink{}
-	logger := slog.New(&runtimeLogHandler{handlers: []slog.Handler{slog.NewTextHandler(&text, nil)}, event: events})
+	logger := slog.New(&runtimeLogHandler{handlers: []slog.Handler{logoutput.TextHandler(&text, slog.LevelInfo)}, event: events})
 	secret := "NEVER-EXPOSE-THIS-KEY"
 	logger.With("private_key", secret).WithGroup("details").Warn("leaf_device_failed",
 		"nested", map[string]any{"private_key": secret, "raw": []byte(secret), "key": ed25519.PrivateKey(secret)},
@@ -101,6 +103,9 @@ func TestRuntimeLoggingRedactsBeforeEverySink(t *testing.T) {
 	}
 	if !strings.Contains(text.String(), "[redacted]") || !strings.Contains(text.String(), "node.catofes.") || events.events[0].level != slog.LevelWarn || events.events[0].id != 502 {
 		t.Fatalf("lost severity, event identity or public context: %q %#v", text.String(), events.events)
+	}
+	if events.events[0].message != text.String() || !strings.Contains(text.String(), "level=warn event=leaf_device_failed") {
+		t.Fatal("runtime file and Event Log use different record formats")
 	}
 	logger.Info("unknown_event", "error", `invalid {"IdentityPrivateKey":"`+secret+`"}`)
 	if strings.Contains(text.String(), secret) || events.events[1].id != 999 {

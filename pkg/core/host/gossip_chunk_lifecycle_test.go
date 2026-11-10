@@ -177,12 +177,12 @@ func TestGossipPermanentChunkSendFailureReleasesCache(t *testing.T) {
 func TestGossipChunkCapacityWarningIsClassifiedThrottledAndHandled(t *testing.T) {
 	driver, clock, paths := chunkLifecycleDriver(t, true)
 	_, datagram := bindMemoryGossipTransport(t, driver, "receiver")
-	var warnings []GossipDriverLog
-	driver.gossipConfig.Log = func(event GossipDriverLog) {
+	var warnings []capturedGossipLog
+	driver.gossipConfig.Log = gossipLogCapture(func(event capturedGossipLog) {
 		if event.Level == "warn" {
 			warnings = append(warnings, event)
 		}
-	}
+	})
 	fill := func() {
 		t.Helper()
 		for _, path := range paths[:4] {
@@ -206,7 +206,7 @@ func TestGossipChunkCapacityWarningIsClassifiedThrottledAndHandled(t *testing.T)
 		t.Fatalf("warnings=%d datagrams before admission=%d", len(warnings), datagram.writeCount())
 	}
 	fields := warnings[0].Fields
-	if fields["reason"] != "resource_limited" || fields["limit"] != "peer_active_transfers" || fields["zone"] != paths[4] || fields["peer_transfers"] != 4 || fields["cache_bytes"].(int) == 0 || fields["cache_byte_limit"] != gossip.MaxChunkSendCacheBytes {
+	if fields["reason"] != "resource_limited" || fields["limit"] != "peer_active_transfers" || fields["zone"] != paths[4] || fields["peer_transfers"] != int64(4) || fields["cache_bytes"].(int64) == 0 || fields["cache_byte_limit"] != int64(gossip.MaxChunkSendCacheBytes) {
 		t.Fatalf("capacity diagnostics=%v", fields)
 	}
 	clock.Advance(30 * time.Second)
@@ -214,7 +214,7 @@ func TestGossipChunkCapacityWarningIsClassifiedThrottledAndHandled(t *testing.T)
 	if _, err := driver.HandleGossipHostEvent(t.Context(), GossipPacketReceived{Packet: packet}, clock.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if len(warnings) != 2 || warnings[1].Fields["suppressed"] != 5 {
+	if len(warnings) != 2 || warnings[1].Fields["suppressed"] != int64(5) {
 		t.Fatalf("suppression summary=%v", warnings)
 	}
 }

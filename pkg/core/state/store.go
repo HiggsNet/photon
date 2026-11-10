@@ -58,7 +58,7 @@ type PeerCheckpoint struct {
 	ObservedUntilUnix       int64                            `json:"-"`
 	ObservedGraceEndpoints  []ObservedGraceEndpoint          `json:"-"`
 	LastFailure             *PeerFailure                     `json:"last_failure,omitempty"`
-	RejectedObjects         map[zone.ZonePath]RejectedObject `json:"rejected_objects,omitempty"`
+	RejectedObjects         map[zone.ZonePath]RejectedObject `json:"-"`
 }
 
 type PeerFailureCode string
@@ -229,8 +229,8 @@ func (store *Store) ZoneDigests() ([]ZoneDigest, VerifiedRevision) {
 }
 
 // ApplyRemoteBatch applies every item with an independent savepoint. A
-// rejected item records a bounded peer checkpoint and does not discard earlier or
-// later successful items. Publication is one serialized commit for the batch.
+// rejected item updates the live retry cache without discarding earlier or
+// later successful items. Verified changes are persisted before publication.
 func (store *Store) ApplyRemoteBatch(ctx context.Context, peerID string, batch []RemoteSnapshot, now time.Time) (RemoteBatchResult, error) {
 	var out RemoteBatchResult
 	if store == nil {
@@ -255,7 +255,7 @@ func (store *Store) ApplyRemoteBatch(ctx context.Context, peerID string, batch [
 	committedNetwork := base.Network
 	gossipCandidate := baseGossip
 	changedZones := make([]zone.ZonePath, 0, len(batch))
-	metadataChanged := false
+	rejectionsChanged := false
 	for _, item := range batch {
 		outcome := RemoteApplyOutcome{}
 		if item.Snapshot != nil {
@@ -305,22 +305,7 @@ func (store *Store) ApplyRemoteBatch(ctx context.Context, peerID string, batch [
 					if managedResult.Adopted || managedResult.Refreshed {
 						changedZones = appendZoneOnce(changedZones, candidate.ManagedZone)
 					}
-					if clearRejectedObject(gossipCandidate, peerID, item.Snapshot.Zone) {
-						metadataChanged = true
-					}
-					// A verified copy from another peer also resolves rejection
-					// of that exact digest. Different roots remain independent.
-					acceptedRoot := item.ExpectedRoot
-					for otherID, metadata := range gossipCandidate.Peers {
-						if rejected, ok := metadata.RejectedObjects[item.Snapshot.Zone]; ok {
-							if len(acceptedRoot) == 0 {
-								acceptedRoot = ZoneRoot(ZoneStateFromSnapshot(item.Snapshot))
-							}
-							if bytes.Equal(rejected.RootHash, acceptedRoot) {
-								metadataChanged = clearRejectedObject(gossipCandidate, otherID, item.Snapshot.Zone) || metadataChanged
-							}
-						}
-					}
+					rejectionsChanged = clearRejectedObject(gossipCandidate, peerID, item.Snapshot.Zone) || rejectionsChanged
 				}
 			}
 		}
@@ -330,41 +315,46 @@ func (store *Store) ApplyRemoteBatch(ctx context.Context, peerID string, batch [
 			// but its digest can become valid without changing. Let the normal
 			// bounded gossip schedule retry instead of suppressing it for ten minutes.
 			var pending photoncrypto.VerificationPendingError
-			if item.Snapshot != nil && !errors.As(outcome.Err, &pending) && recordRejectedObject(gossipCandidate, peerID, item.Snapshot.Zone, rejectedRoot(item), outcome.RejectReason, now) {
-				metadataChanged = true
+			if item.Snapshot != nil && !errors.As(outcome.Err, &pending) && !candidate.Network.IsZoneRevoked(zone.ZonePath(peerID), now) &&
+				recordRejectedObject(gossipCandidate, peerID, item.Snapshot.Zone, rejectedRoot(item), outcome.RejectReason, now) {
+				rejectionsChanged = true
 			}
 		}
 		out.Outcomes = append(out.Outcomes, outcome)
 	}
 
 	networkChanged := len(changedZones) > 0
-	if networkChanged || metadataChanged {
-		metadataChanged = pruneRevokedCheckpoints(gossipCandidate, candidate.Network, now) || metadataChanged
-	}
-	if !networkChanged && !metadataChanged {
+	if !networkChanged && !rejectionsChanged {
 		out.Changes.VerifiedRevision = baseRevision
 		return out, nil
 	}
+	if err := ctx.Err(); err != nil {
+		return RemoteBatchResult{}, err
+	}
 	nextRevision := baseRevision
+	checkpointsPruned := false
 	if networkChanged {
 		nextRevision++
+		checkpointsPruned = pruneRevokedCheckpoints(gossipCandidate, candidate.Network, now)
 	}
 	changes := ChangeSet{
 		VerifiedRevision:        nextRevision,
 		ChangedZones:            append([]zone.ZonePath(nil), changedZones...),
 		NetworkChanged:          networkChanged,
-		GossipCheckpointChanged: metadataChanged,
+		GossipCheckpointChanged: rejectionsChanged || checkpointsPruned,
 	}
 
-	if store.commit != nil {
+	if networkChanged && store.commit != nil {
 		if err := store.commit(ctx, cloneCommitCandidate(candidate, gossipCandidate), changes); err != nil {
 			return RemoteBatchResult{}, err
 		}
 	}
 	store.mu.Lock()
-	store.state = candidate
 	store.gossip = gossipCandidate
-	store.revision.Store(uint64(nextRevision))
+	if networkChanged {
+		store.state = candidate
+		store.revision.Store(uint64(nextRevision))
+	}
 	store.mu.Unlock()
 	out.Committed = true
 	out.Changes = changes

@@ -102,19 +102,18 @@ func TestGossipDriversConvergeCommonStateAndReloadWithoutClientRuntime(t *testin
 		t.Fatalf("rejected checkpoint = %+v, want stable reason", item)
 	}
 
-	wantBytes := canonicalWindowsCommonBytes(t, rejected)
-	wantCatalog := corestate.CatalogSummaryFor(rejected.State.Network)
+	wantBytes := canonicalWindowsVerifiedBytes(t, rejected.State)
 	right.stop(t)
 	reopened := fixture.openState(t, fixture.rightPath, "node-b.catofes.")
 	reloaded, err := reopened.ReadView(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := canonicalWindowsCommonBytes(t, reloaded); !bytes.Equal(got, wantBytes) {
-		t.Fatalf("reloaded common view differs\n got: %s\nwant: %s", got, wantBytes)
+	if reloaded.Revision != beforeReject || !bytes.Equal(canonicalWindowsVerifiedBytes(t, reloaded.State), wantBytes) {
+		t.Fatal("reloaded verified state differs")
 	}
-	if got := corestate.CatalogSummaryFor(reloaded.State.Network); !bytes.Equal(got.CatalogRoot, wantCatalog.CatalogRoot) || got.ZoneCount != wantCatalog.ZoneCount {
-		t.Fatalf("reloaded catalog = %+v, want %+v", got, wantCatalog)
+	if len(reloaded.Gossip.Peers["node-a.catofes."].RejectedObjects) != 0 {
+		t.Fatal("rejected digests survived reopening the store")
 	}
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
@@ -180,9 +179,6 @@ func (node *memoryHostNode) run() {
 
 func (node *memoryHostNode) handleEvent(event corehost.Event) error {
 	hostResult, err := node.runtime.HandleGossipHostEvent(node.ctx, event, time.Now())
-	if errors.Is(err, corehost.ErrGossipSessionNotFound) {
-		return nil
-	}
 	if err == nil && hostResult.Session.PeerID != "" && hostResult.Session.Done {
 		select {
 		case node.completed <- hostResult.Session.PeerID:
@@ -391,9 +387,9 @@ func waitForWindowsState(t *testing.T, timeout time.Duration, ready func() bool)
 	}
 }
 
-func canonicalWindowsCommonBytes(t *testing.T, view corestate.View) []byte {
+func canonicalWindowsVerifiedBytes(t *testing.T, verified *corestate.VerifiedState) []byte {
 	t.Helper()
-	encoded, err := json.Marshal(view)
+	encoded, err := json.Marshal(verified)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -171,8 +171,10 @@ func TestGossipChunkSendRechecksPeerAndClearsPermanentFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	transport.SetPeers(nil)
-	if err := consumeChunkSendTimer(t, driver, clock, time.Second); !errors.Is(err, gossip.ErrUnknownPeer) {
-		t.Fatalf("removed peer still sent: %v", err)
+	var warnings []capturedGossipLog
+	driver.gossipConfig.Log = gossipLogCapture(func(event capturedGossipLog) { warnings = append(warnings, event) })
+	if err := consumeChunkSendTimer(t, driver, clock, time.Second); err != nil || len(warnings) != 1 || !errors.Is(warnings[0].Err, gossip.ErrUnknownPeer) {
+		t.Fatalf("removed peer failure = %v, warnings = %#v", err, warnings)
 	}
 	if len(driver.gossipChunkSends) != 0 {
 		t.Fatal("failed transfer retained")
@@ -183,11 +185,25 @@ func TestGossipChunkSendRechecksPeerAndClearsPermanentFailure(t *testing.T) {
 }
 
 func TestGossipQuotaWarningIncludesDiagnosticsWithoutDebug(t *testing.T) {
-	driver, _, transport, _, chunks := chunkSendFixture(t, gossip.QuotaConfig{ByteBurst: 1})
-	var logs []GossipDriverLog
-	driver.gossipConfig.Log = func(event GossipDriverLog) { logs = append(logs, event) }
-	err := driver.queueGossipChunkSend(context.Background(), "peer", chunks, gossipDriverSender{transport: transport})
-	if !errors.Is(err, gossip.ErrQuotaExceeded) || len(logs) != 1 {
+	driver, clock, paths := chunkLifecycleDriver(t, false)
+	transport, err := gossip.NewTransport(gossip.Config{
+		PeerID:     "sender.catofes.",
+		KnownPeers: map[string]*net.UDPAddr{"peer": {IP: net.IPv4(127, 0, 0, 1), Port: 33435}},
+		Quotas:     gossip.NewPeerQuotas(gossip.QuotaConfig{ByteBurst: 1}),
+	}, &memoryGossipDatagram{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := driver.BindGossipTransport(transport); err != nil {
+		t.Fatal(err)
+	}
+	var logs []capturedGossipLog
+	driver.gossipConfig.Log = gossipLogCapture(func(event capturedGossipLog) { logs = append(logs, event) })
+	packet := GossipPacketReceived{Packet: &gossip.Packet{Message: &gossip.Message{
+		PeerID: "peer", Type: gossip.MessageFetchZone, FetchZone: &gossip.FetchZone{Zone: paths[0]},
+	}}}
+	_, err = driver.HandleGossipHostEvent(t.Context(), packet, clock.Now())
+	if err != nil || len(logs) != 1 || !errors.Is(logs[0].Err, gossip.ErrQuotaExceeded) {
 		t.Fatalf("error/logs = %v/%d", err, len(logs))
 	}
 	fields := logs[0].Fields
