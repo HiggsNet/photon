@@ -148,19 +148,20 @@ func TestSyncSessionCatalogRefreshDrainsOutstandingWork(t *testing.T) {
 			}
 			// Learning the same root through another peer must not reuse a
 			// slot while its earlier transport result can still arrive.
-			if waiting != "page" {
-				s.expectedDigests["waiting.catofes."] = corestate.ZoneDigest{Zone: "waiting.catofes.", RootHash: []byte("known")}
-				s.ReconcilePendingWithDigests([]corestate.ZoneDigest{{Zone: "waiting.catofes.", RootHash: []byte("known")}})
-				if !s.pendingZones["waiting.catofes."] {
-					t.Fatal("reconciled away outstanding work")
-				}
-			}
-			actions, err := s.OnEvent(&SnapshotAppliedEvent{PeerID: "peer-a", Zone: "changed.catofes.", Err: corestate.ErrSnapshotRootMismatch}, now)
+			known := corestate.ZoneDigest{Zone: "waiting.catofes.", RootHash: []byte("known")}
+			s.expectedDigests[known.Zone] = known
+			actions, err := s.OnEvent(&SnapshotAppliedEvent{
+				PeerID: "peer-a", Zone: "changed.catofes.", Err: corestate.ErrSnapshotRootMismatch,
+				LocalEntries: []corestate.ZoneDigest{known},
+			}, now)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if len(actions) != 0 || s.catalogRefreshed || !s.catalogRefreshPending {
 				t.Fatalf("refreshed before draining %s", waiting)
+			}
+			if waiting != "page" && !s.pendingZones[known.Zone] {
+				t.Fatal("pruned outstanding work")
 			}
 			if waiting == "tcp" || waiting == "chunk" {
 				var e SyncEvent = &ObjectPullResultEvent{PeerID: "peer-a", Zone: "waiting.catofes.", Snapshot: &corestate.ZoneSnapshot{Zone: "waiting.catofes."}}

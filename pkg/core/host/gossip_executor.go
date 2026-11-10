@@ -2,14 +2,12 @@ package host
 
 import (
 	"context"
-	"errors"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
 const (
-	GossipPhaseStateRead   = "state_read"
 	GossipPhaseApply       = "snapshot_apply"
 	GossipPhaseSend        = "send"
 	GossipPhaseObjectPull  = "object_pull"
@@ -44,9 +42,8 @@ type GossipExecutionResult struct {
 	Events []gossip.SyncEvent
 }
 
-// ExecuteGossipActions uses the event's catalog for ordered effects:
-// apply, refresh/reconcile, send, object pull, timer and checkpoint
-// persistence. The sender performs only actual datagram I/O.
+// ExecuteGossipActions applies snapshots, sends messages, submits pulls,
+// updates timers and persists the checkpoint in that order.
 func (driver *GossipDriver) ExecuteGossipActions(
 	ctx context.Context,
 	session *gossip.SyncSession,
@@ -79,18 +76,6 @@ func (driver *GossipDriver) ExecuteGossipActions(
 		}
 		result.NetworkChanged = applyResult.NetworkChanged
 		result.Events = applyResult.Events
-	}
-
-	if session != nil && !session.Done() {
-		if result.NetworkChanged {
-			catalog = driver.readGossipCatalog()
-			if catalog == nil {
-				driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseStateRead, PeerID: peerID, Err: errors.New("gossip state unavailable after snapshot apply")})
-				return result
-			}
-		}
-		actions = append(actions, session.ReconcilePendingWithDigests(catalog.Digests)...)
-		plan = PlanGossipActions(actions)
 	}
 
 	for _, outbound := range plan.Outbound {

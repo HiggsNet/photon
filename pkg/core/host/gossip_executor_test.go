@@ -287,8 +287,8 @@ func TestGossipDriverApplySnapshotsOwnsStoreTransactionAndCompletion(t *testing.
 	if !result.NetworkChanged {
 		t.Fatalf("result = %#v", result)
 	}
-	if state.catalogReads != 2 {
-		t.Fatalf("active event read the catalog %d times, want 2", state.catalogReads)
+	if state.catalogReads != 1 {
+		t.Fatalf("snapshot commit read the catalog %d times, want 1", state.catalogReads)
 	}
 	if len(state.batch) != 1 || state.batch[0].Snapshot.Zone != "remote.catofes." || state.batch[0].Limits.MaxBytes != 8<<20 || !state.batch[0].RefreshOnRootMismatch || !state.appliedAt.Equal(now) {
 		t.Fatalf("batch/time = %#v/%v", state.batch, state.appliedAt)

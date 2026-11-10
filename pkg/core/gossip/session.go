@@ -130,9 +130,10 @@ func (*ObjectChunkEvent) SyncEventMarker() {}
 // snapshot itself; a successful merge may retain newer local objects and
 // therefore need not produce that exact root locally.
 type SnapshotAppliedEvent struct {
-	PeerID string
-	Zone   zone.ZonePath
-	Err    error
+	PeerID       string
+	Zone         zone.ZonePath
+	Err          error
+	LocalEntries []corestate.ZoneDigest
 }
 
 func (*SnapshotAppliedEvent) SyncEventMarker() {}
@@ -397,6 +398,7 @@ func (s *SyncSession) onCatalogPageReceived(e *CatalogPageReceivedEvent, now tim
 	}
 	// A parent may be on a later page than its children. Do not start any
 	// object until the complete catalog can be ordered by ancestry.
+	s.pruneSatisfiedPending(e.LocalEntries)
 	actions = append(actions, s.startPendingPulls(e.PeerID)...)
 	if len(s.objectPullInflight) > 0 {
 		s.State = SyncSessionObjectPulling
@@ -419,34 +421,19 @@ func (s *SyncSession) onCatalogPageTimeout(e *CatalogPageTimeoutEvent) ([]SyncAc
 	return nil, nil
 }
 
-func (s *SyncSession) reconcilePendingWithDigests(digests []corestate.ZoneDigest) []SyncAction {
-	local := make(map[zone.ZonePath][]byte, len(digests))
-	for _, digest := range digests {
-		local[digest.Zone] = digest.RootHash
-	}
-	for z := range s.pendingZones {
-		if s.snapshotApplyPending[z] || s.objectPullInflight[z] || s.chunkFallbackZones[z] {
+// pruneSatisfiedPending drops queued work already satisfied by a committed
+// copy. In-flight zones keep their slots until their own results arrive.
+func (s *SyncSession) pruneSatisfiedPending(digests []corestate.ZoneDigest) {
+	for _, local := range digests {
+		path := local.Zone
+		if !s.pendingZones[path] || s.snapshotApplyPending[path] || s.objectPullInflight[path] || s.chunkFallbackZones[path] {
 			continue
 		}
-		expected, ok := s.expectedDigests[z]
-		if !ok {
-			continue
-		}
-		root, ok := local[z]
-		if !ok {
-			continue
-		}
-		if bytes.Equal(expected.RootHash, root) {
-			delete(s.pendingZones, z)
-			delete(s.expectedDigests, z)
+		if expected, ok := s.expectedDigests[path]; ok && bytes.Equal(expected.RootHash, local.RootHash) {
+			delete(s.pendingZones, path)
+			delete(s.expectedDigests, path)
 		}
 	}
-	if s.pendingEmpty() && s.lastCatalogCursor == "" && !s.catalogRefreshPending && (s.State == SyncSessionObjectPulling ||
-		s.State == SyncSessionChunkFallback) {
-		s.State = SyncSessionCompleted
-		return nil
-	}
-	return s.startPendingPulls(s.PeerID)
 }
 
 // startPendingPulls schedules only the shallowest pending layer. A downloaded
@@ -609,6 +596,7 @@ func (s *SyncSession) onSnapshotApplied(e *SnapshotAppliedEvent, now time.Time) 
 	if refresh := s.refreshCatalog(e.PeerID, now); refresh != nil {
 		return refresh, nil
 	}
+	s.pruneSatisfiedPending(e.LocalEntries)
 	actions := s.startPendingPulls(e.PeerID)
 	if len(s.objectPullInflight) > 0 || len(s.snapshotApplyPending) > 0 {
 		s.State = SyncSessionObjectPulling
@@ -699,12 +687,6 @@ func (s *SyncSession) PendingCount() int {
 // InflightCount reports outstanding object-pull operations.
 func (s *SyncSession) InflightCount() int {
 	return len(s.objectPullInflight)
-}
-
-// ReconcilePendingWithDigests completes pending zones whose verified local
-// digest now matches the peer's advertised digest.
-func (s *SyncSession) ReconcilePendingWithDigests(digests []corestate.ZoneDigest) []SyncAction {
-	return s.reconcilePendingWithDigests(digests)
 }
 
 // Fail records an adapter or executor error as a terminal session failure.

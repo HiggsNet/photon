@@ -44,14 +44,12 @@ func TestSyncSessionSchedulesCompleteCatalogAndWaitsForAncestorApply(t *testing.
 	children := []corestate.ZoneDigest{{Zone: "node.a.", RootHash: []byte("child")}}
 	first := event(&CatalogPageReceivedEvent{PeerID: "peer", Page: &corestate.CatalogPage{CatalogRoot: []byte("catalog"), Entries: children, NextCursor: "parents"}})
 	wantPulls(first)
-	// Reconciliation during collection cannot schedule a child whose parent
-	// may still be on a later page, nor complete the unfinished catalog.
-	wantPulls(s.ReconcilePendingWithDigests(children))
 	if s.State != SyncSessionCatalogDiffing {
 		t.Fatalf("unfinished catalog state %s", s.State)
 	}
-	parents := []corestate.ZoneDigest{{Zone: "d.", RootHash: []byte("d")}, {Zone: "b.", RootHash: []byte("b")}, {Zone: "a.", RootHash: []byte("a")}, {Zone: "c.", RootHash: []byte("c")}}
-	last := event(&CatalogPageReceivedEvent{PeerID: "peer", Page: &corestate.CatalogPage{CatalogRoot: []byte("catalog"), Entries: parents}})
+	alreadyLocal := corestate.ZoneDigest{Zone: "e.", RootHash: []byte("e")}
+	parents := []corestate.ZoneDigest{{Zone: "d.", RootHash: []byte("d")}, {Zone: "b.", RootHash: []byte("b")}, {Zone: "a.", RootHash: []byte("a")}, {Zone: "c.", RootHash: []byte("c")}, alreadyLocal}
+	last := event(&CatalogPageReceivedEvent{PeerID: "peer", LocalEntries: children, Page: &corestate.CatalogPage{CatalogRoot: []byte("catalog"), Entries: parents}})
 	wantPulls(last, "a.", "b.")
 	// A's completed download still occupies its slot until the apply ACK.
 	wantPulls(event(&ObjectPullResultEvent{PeerID: "peer", Zone: "a.", Snapshot: &corestate.ZoneSnapshot{Zone: "a."}}))
@@ -62,7 +60,8 @@ func TestSyncSessionSchedulesCompleteCatalogAndWaitsForAncestorApply(t *testing.
 	wantPulls(event(&SnapshotAppliedEvent{PeerID: "peer", Zone: "b."}), "d.")
 	for _, path := range []zone.ZonePath{"c.", "d."} {
 		wantPulls(event(&ObjectPullResultEvent{PeerID: "peer", Zone: path, Snapshot: &corestate.ZoneSnapshot{Zone: path}}))
-		wantPulls(event(&SnapshotAppliedEvent{PeerID: "peer", Zone: path}))
+		// Another event committed E while C and D occupied the pull slots.
+		wantPulls(event(&SnapshotAppliedEvent{PeerID: "peer", Zone: path, LocalEntries: []corestate.ZoneDigest{alreadyLocal}}))
 	}
 	if !s.Done() || s.State != SyncSessionCompleted {
 		t.Fatalf("did not complete known child and parent catalog: %s", s.State)
@@ -92,16 +91,23 @@ func TestSyncSessionQueuedDescendantStartsOnlyAfterParentAck(t *testing.T) {
 	}
 }
 
-func TestSyncSessionReconciledQueuedAncestorUnblocksDescendant(t *testing.T) {
+func TestSyncSessionSkipsAncestorSatisfiedBetweenCatalogPages(t *testing.T) {
 	s := NewSyncSession("peer")
-	s.State = SyncSessionObjectPulling
-	for _, path := range []zone.ZonePath{"catofes.", "node.catofes."} {
-		s.pendingZones[path] = true
-		s.expectedDigests[path] = corestate.ZoneDigest{Zone: path, RootHash: []byte(path)}
+	now := time.Unix(1000, 0)
+	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer"}, now)
+	parent := corestate.ZoneDigest{Zone: "catofes.", RootHash: []byte("parent")}
+	root := []byte("catalog")
+	first, err := s.OnEvent(&CatalogPageReceivedEvent{PeerID: "peer", Page: &corestate.CatalogPage{
+		CatalogRoot: root, Entries: []corestate.ZoneDigest{parent}, NextCursor: "last",
+	}}, now)
+	if err != nil || len(scheduledPulls(first)) != 0 || !s.pendingZones[parent.Zone] {
+		t.Fatalf("first page did not queue the parent: actions=%v error=%v", first, err)
 	}
-	actions := s.ReconcilePendingWithDigests([]corestate.ZoneDigest{{Zone: "catofes.", RootHash: []byte("catofes.")}})
-	if got := scheduledPulls(actions); !reflect.DeepEqual(got, []zone.ZonePath{"node.catofes."}) || s.State != SyncSessionObjectPulling {
-		t.Fatalf("reconciled parent did not unblock child: %v / %s", got, s.State)
+	actions, err := s.OnEvent(&CatalogPageReceivedEvent{PeerID: "peer", LocalEntries: []corestate.ZoneDigest{parent}, Page: &corestate.CatalogPage{
+		CatalogRoot: root, Entries: []corestate.ZoneDigest{{Zone: "node.catofes.", RootHash: []byte("child")}},
+	}}, now)
+	if got := scheduledPulls(actions); err != nil || !reflect.DeepEqual(got, []zone.ZonePath{"node.catofes."}) || s.pendingZones[parent.Zone] {
+		t.Fatalf("last page scheduled %v, parent pending=%t error=%v", got, s.pendingZones[parent.Zone], err)
 	}
 }
 
@@ -115,8 +121,5 @@ func TestSyncSessionRejectedAncestorDoesNotScheduleDescendant(t *testing.T) {
 	actions, err := s.OnEvent(&SnapshotAppliedEvent{PeerID: "peer", Zone: "catofes.", Err: rejected}, now)
 	if err != nil || s.State != SyncSessionFailed || !errors.Is(s.LastError(), rejected) || len(scheduledPulls(actions)) != 0 {
 		t.Fatalf("invalid ancestor did not terminate safely: state=%s actions=%v error=%v", s.State, actions, err)
-	}
-	if len(scheduledPulls(s.ReconcilePendingWithDigests(nil))) != 0 {
-		t.Fatal("terminal session scheduled queued child")
 	}
 }

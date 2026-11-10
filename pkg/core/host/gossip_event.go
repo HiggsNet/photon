@@ -423,6 +423,11 @@ func (driver *GossipDriver) handleGossipSessionEvent(ctx context.Context, event 
 		}
 		typed.Page = filterGossipCatalogPage(managedZone, peer, typed.Page, now)
 		driver.observeCatalogPage(peerID, typed.Page, now)
+	case *gossip.SnapshotAppliedEvent:
+		typed.LocalEntries = nil
+		if catalog != nil {
+			typed.LocalEntries = catalog.Digests
+		}
 	}
 	oldState := session.State
 	actions, protocolErr := session.OnEvent(event, now)
