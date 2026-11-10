@@ -217,7 +217,7 @@ func (driver *GossipDriver) observeObjectPullResult(result GossipObjectPullCompl
 		stats.LastUnreachable = result.Unreachable
 		if result.Err != nil {
 			stats.Failures++
-			stats.LastFailure = result.Err
+			stats.LastFailure = &corestate.PeerFailure{Code: "gossip_object_pull_failed", Message: result.Err.Error(), AtUnix: now.Unix()}
 			if result.Unreachable {
 				stats.LargeObjectUnreachable++
 			}

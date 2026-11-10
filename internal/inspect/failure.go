@@ -11,7 +11,6 @@ const (
 	FailureCodeFirewallReconcile = "firewall_reconcile_failed"
 	FailureCodeFirewallInstance  = "firewall_instance_failed"
 	FailureCodeHealthProbe       = "health_probe_failed"
-	FailureCodeGossipObjectPull  = "gossip_object_pull_failed"
 	FailureCodeBirdFilter        = "bird_filter_failed"
 	FailureCodeServiceRecord     = "service_record_invalid"
 	FailureCodeRevocationCleanup = "revocation_cleanup_failed"

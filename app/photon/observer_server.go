@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/gossipview"
 	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/internal/observability/healthspool"
 	"github.com/HiggsNet/photon/internal/observer"
-	"github.com/HiggsNet/photon/pkg/core/observability"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/health"
@@ -182,33 +182,17 @@ func (p *observerProvider) Zones(zoneFilter string) (any, error) {
 
 func (p *observerProvider) Peers(peerFilter string) (any, error) {
 	d := p.daemon
-	if d == nil || d.State == nil {
-		return inspect.PeersView{Peers: []inspect.PeerView{}}, nil
+	view := gossipview.View{Peers: []gossipview.Peer{}}
+	if d != nil && d.State != nil {
+		view = gossipview.Live(d.State.Common.ReadView(), d.gossipDriver, d.now())
 	}
-	view := d.State.Common.ReadView()
-	if view.State == nil {
-		return inspect.PeersView{Peers: []inspect.PeerView{}}, nil
+	if peerFilter == "" {
+		return view, nil
 	}
-	now := d.now()
-	observabilitySnapshots := d.peerObservabilitySnapshots()
-	peers := inspect.BuildGossipPeersView(view, gossipPeersOptions(d.gossipDriver.GossipConfig(), observabilitySnapshots, now))
-	if peerFilter != "" {
-		for _, peer := range peers.Peers {
-			if peer.PeerID == peerFilter {
-				return peer, nil
-			}
-		}
-		return nil, observer.Errorf(http.StatusNotFound, "peer not found")
+	if peer, ok := view.Find(peerFilter); ok {
+		return peer, nil
 	}
-	return peers, nil
-}
-
-func (d *Daemon) peerObservabilitySnapshots() map[string]observability.PeerDiagnostics {
-	if d.gossipDriver == nil || d.gossipDriver.Observability == nil {
-		return nil
-	}
-	now := d.now()
-	return d.gossipDriver.Observability.Snapshots(now)
+	return nil, observer.Errorf(http.StatusNotFound, "peer not found")
 }
 
 func (p *observerProvider) Links(linkFilter string) (any, error) {

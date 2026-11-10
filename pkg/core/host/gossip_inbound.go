@@ -74,7 +74,9 @@ func (driver *GossipDriver) respondGossipPing(ctx context.Context, action gossip
 		return nil
 	}
 	summary := corestate.CatalogSummaryForDigests(view.Digests)
-	driver.observeCatalogSummary(message.PeerID, summary, driver.schedulerForRead().clock.Now())
+	if !action.ActiveSession {
+		driver.observeCatalogSummary(message.PeerID, message.Ping.Summary, driver.schedulerForRead().clock.Now())
+	}
 	for _, response := range gossip.PlanPingResponse(message.Ping, summary) {
 		// The Ping summary is already delivered to the active session.
 		if action.ActiveSession && response.Type == gossip.MessageFetchCatalogPage {

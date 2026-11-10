@@ -62,10 +62,14 @@ Linux 统一使用 `photon daemon` 运行 Gossip。已删除 `advanced sync serv
 
 Linux 隧道生命周期用内存中的活动时间判断何时暂停重建。达到阈值时保存暂停标记，IPsec 规划和状态展示读取这个标记。Gossip 发现和地址过期仍独立运行。重启后尚未暂停的 peer 从新的观察窗口开始，已暂停的 peer 等到新的认证活动后解除暂停。
 
-签名撤销生效时，公共 Store 删除对应的 Gossip checkpoint，共享 Driver 清理会话、地址和诊断。撤销 Zone 正文和 Gossip checkpoint 由显式的 `advanced recovery purge-revoked --apply` 删除，父区中的签名撤销证明继续保留。
+签名撤销生效时，公共 Store 删除对应的 Gossip checkpoint，共享 Driver 清理会话、地址和诊断。撤销 Zone 正文由显式的 `advanced recovery purge-revoked --apply` 删除，父区中的签名撤销证明继续保留。
 
 Common 数据库锁定在 schema 2。旧整库用 v0.6.6 迁移，旧的整块 Gossip checkpoint 则直接忽略。
 
-## 后续讨论
+## 统一 Gossip 查询模型
 
-- **界面和日志：** 一份公共节点状态供 Dashboard、CLI 和 Web 使用。首页表达最近同步结果和当前阻塞，协议细节放在详情。统一事件类别和错误语义，保留按需追踪、脱敏和轮转。
+Linux CLI、Observer Web 和 Windows 共用 `internal/gossipview`，由已提交的状态和 Driver 的运行快照生成 Gossip 响应。响应包含本机 Gossip 信息、目录摘要和节点列表。每个节点包含身份与授权状态、端点及来源、同步进度、上次成功时间、失败与退避、目录和对象传输诊断。列表和详情使用同一种节点结构。
+
+CLI 将公共结构排版为文本，Web 和 Windows 控制端序列化同一结构为 JSON。首页直接选用同步状态和上次成功时间，详情读同一节点的其余字段。目录根一致时无需拉快照也算一次同步成功。成功时间留在内存，重启后靠下一次同步确认。
+
+Linux 控制 socket、HTTP `/api/v1/peers` 和 Windows IPC `peers` 承载同一个响应。Windows IPC 对节点列表保留报文预算，截断时标记 `peers_truncated`。Web 的 Gossip 页定期刷新，覆盖没有状态提交的会话和退避变化。隧道和健康各有自己的事实来源。结构化日志记录事件，实时节点查询读取状态和诊断快照。

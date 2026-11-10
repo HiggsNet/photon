@@ -13,7 +13,9 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/HiggsNet/photon/internal/gossipview"
 	"github.com/HiggsNet/photon/internal/photonwindows"
+	"github.com/HiggsNet/photon/pkg/core/observability"
 	"golang.org/x/sys/windows"
 )
 
@@ -84,11 +86,11 @@ func TestDesktopNativeDiagnosticsPeerSelectionTracksCurrentSnapshot(t *testing.T
 		w.renderDiagnostics(snapshot, desktopLogTail{}, nil, false)
 	}
 	now := time.Now()
-	observation := &photonwindows.Observation{Running: true, ObservedAt: now, Peers: []photonwindows.PeerObservation{
-		{Peer: "a.example.", PullState: "completed", PullAttempts: 1, PullSuccesses: 1},
-		{Peer: "m.example.", PullState: "failed", PullAttempts: 9, PullFailures: 9},
-		{Peer: "z.example.", PullState: "idle"},
-	}}
+	observation := &photonwindows.Observation{Running: true, ObservedAt: now, View: gossipview.View{Peers: []gossipview.Peer{
+		{PeerID: "a.example.", SyncStatus: "synced", PeerDiagnostics: observability.PeerDiagnostics{ObjectPullStats: &observability.PeerObjectPullStats{Attempts: 1}}},
+		{PeerID: "m.example.", SyncStatus: "retry_pending", PeerDiagnostics: observability.PeerDiagnostics{ObjectPullStats: &observability.PeerObjectPullStats{Attempts: 9}}},
+		{PeerID: "z.example.", SyncStatus: "waiting"},
+	}}}
 	sample(desktopSnapshot{RuntimeState: "running", Observation: observation})
 	if listCount() != 3 || selected() != 0 || w.diagnosticsView.peerID == "" || !strings.Contains(get(guiDiagnosticsTextID), "节点："+w.diagnosticsView.peerID) {
 		t.Fatal("initial live peer list did not select its first real row")
@@ -107,16 +109,16 @@ func TestDesktopNativeDiagnosticsPeerSelectionTracksCurrentSnapshot(t *testing.T
 	if w.diagnosticsView.peerID != "m.example." || !strings.Contains(get(guiDiagnosticsTextID), "节点：m.example.") || strings.Contains(get(guiDiagnosticsTextID), "节点：a.example.") {
 		t.Fatal("native peer selection did not show only the selected peer")
 	}
-	observation = &photonwindows.Observation{Running: true, ObservedAt: now.Add(time.Second), Peers: []photonwindows.PeerObservation{
-		{Peer: "z.example.", PullState: "idle"},
-		{Peer: "m.example.", PullState: "completed", PullAttempts: 10, PullSuccesses: 1, PullFailures: 9},
-		{Peer: "a.example.", PullState: "completed", PullAttempts: 1, PullSuccesses: 1},
-	}}
+	observation = &photonwindows.Observation{Running: true, ObservedAt: now.Add(time.Second), View: gossipview.View{Peers: []gossipview.Peer{
+		{PeerID: "z.example.", SyncStatus: "waiting"},
+		{PeerID: "m.example.", SyncStatus: "synced", PeerDiagnostics: observability.PeerDiagnostics{ObjectPullStats: &observability.PeerObjectPullStats{Attempts: 10}}},
+		{PeerID: "a.example.", SyncStatus: "synced", PeerDiagnostics: observability.PeerDiagnostics{ObjectPullStats: &observability.PeerObjectPullStats{Attempts: 1}}},
+	}}}
 	sample(desktopSnapshot{RuntimeState: "running", Observation: observation})
-	if w.diagnosticsView.peerID != "m.example." || selected() < 0 || w.diagnosticsView.peerIDs[selected()] != "m.example." || !strings.Contains(get(guiDiagnosticsTextID), "尝试 10") {
+	if w.diagnosticsView.peerID != "m.example." || selected() < 0 || w.diagnosticsView.peerIDs[selected()] != "m.example." || !strings.Contains(get(guiDiagnosticsTextID), `"attempts": 10`) {
 		t.Fatal("peer refresh lost selection by identity or failed to refresh its counters")
 	}
-	observation = &photonwindows.Observation{Running: true, ObservedAt: now.Add(2 * time.Second), Peers: []photonwindows.PeerObservation{{Peer: "z.example.", PullState: "completed"}, {Peer: "a.example.", PullState: "idle"}}}
+	observation = &photonwindows.Observation{Running: true, ObservedAt: now.Add(2 * time.Second), View: gossipview.View{Peers: []gossipview.Peer{{PeerID: "z.example.", SyncStatus: "synced"}, {PeerID: "a.example.", SyncStatus: "waiting"}}}}
 	sample(desktopSnapshot{RuntimeState: "running", Observation: observation})
 	if selected() != 0 || w.diagnosticsView.peerID != w.diagnosticsView.peerIDs[0] || strings.Contains(get(guiDiagnosticsTextID), "m.example.") {
 		t.Fatal("disappearing selected peer did not fall back to the first current row")

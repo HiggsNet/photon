@@ -283,13 +283,15 @@ void main() {
         ],
         'peers': [
           {
-            'peer': 'gossip.catofes.',
+            'peer_id': 'gossip.catofes.',
+            'sync_status': 'synced',
             'last_sync_unix': 1735689600,
-            'last_event': 'scan_timer',
+            'active_pull_last_event': 'scan_timer',
           },
           {
-            'peer': 'other-gossip.catofes.',
-            'session_failure': {
+            'peer_id': 'other-gossip.catofes.',
+            'sync_status': 'retry_pending',
+            'last_failure': {
               'code': 'timeout',
               'message': 'round timer timed out',
               'at_unix': 1735689700,
@@ -350,13 +352,13 @@ void main() {
       await tester.tap(find.text('Gossip peers').first);
       await tester.pumpAndSettle();
       expect(find.text('gossip.catofes.'), findsOneWidget);
-      expect(find.text('Synced'), findsOneWidget);
-      expect(find.text('Sync failed'), findsOneWidget);
+      expect(find.text('synced'), findsOneWidget);
+      expect(find.text('retry_pending'), findsOneWidget);
       expect(find.text('scan_timer'), findsNothing);
       expect(find.text('round timer timed out'), findsNothing);
       await tester.tap(find.text('other-gossip.catofes.'));
       await tester.pumpAndSettle();
-      final syncTimeout = find.text('Sync timed out');
+      final syncTimeout = find.text('round timer timed out');
       expect(syncTimeout, findsOneWidget);
       Navigator.of(tester.element(syncTimeout)).pop();
       await tester.pumpAndSettle();

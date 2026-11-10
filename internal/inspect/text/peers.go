@@ -7,24 +7,22 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/HiggsNet/photon/internal/gossipview"
 	"github.com/HiggsNet/photon/internal/inspect"
 )
 
-func WriteGossipPeers(w io.Writer, peers []inspect.PeerDebugView, filter string, verbose bool) error {
+func WriteGossipPeers(w io.Writer, peers []gossipview.Peer, filter string, verbose bool) error {
 	filter = strings.ToLower(strings.TrimSpace(filter))
-	matching := make([]inspect.PeerDebugView, 0, len(peers))
+	matching := make([]gossipview.Peer, 0, len(peers))
 	for _, peer := range peers {
-		if filter == "" && !verbose && peer.Historical {
-			continue
-		}
 		searchable := strings.Join([]string{
 			peer.PeerID,
 			peer.Source,
 			peer.ConfiguredAddr,
-			peer.ResolvedAddr,
-			peer.Status,
-			failureDisplay(peer.LastFailure),
-			peer.KnownEndpoint,
+			peer.SelectedAddr,
+			peer.SyncStatus,
+			gossipFailure(peer.LastFailure),
+			peer.LastSuccessfulAddr,
 			peer.DiscoveredAddr,
 			peer.ObservedAddr,
 			peer.LastUpdateSource,
@@ -66,11 +64,11 @@ func WriteGossipPeers(w io.Writer, peers []inspect.PeerDebugView, filter string,
 		rows = append(rows, []string{
 			peer.PeerID,
 			dash(peer.Source),
-			dash(peer.ResolvedAddr),
-			dash(peer.Status),
-			dash(peer.LastSuccess),
-			dash(peer.NextRetry),
-			escapeTableCell(failureDisplay(peer.LastFailure)),
+			dash(peer.SelectedAddr),
+			dash(peer.SyncStatus),
+			dash(gossipview.FormatTime(peer.LastSyncUnix)),
+			dash(gossipview.FormatTime(peer.BackoffUntilUnix)),
+			escapeTableCell(gossipFailure(peer.LastFailure)),
 		})
 	}
 	writeAlignedRows(out, rows, 0)

@@ -336,7 +336,7 @@ join-smoke: build
 
 zone-sort-smoke:
 	$(GO_ENV) $(GO) test ./internal/inspect -run 'Test(SortZoneStringsGroupsDotAndHyphenSuffixes|BuildRecordsDebugGroupsZonesByDotAndHyphenSuffix)'
-	$(GO_ENV) $(GO) test ./internal/inspect -run '^TestBuildSyncStatusGroupsZonesByDotAndHyphenSuffix$$'
+	$(GO_ENV) $(GO) test ./app/photon -run '^TestObserverPeersAPISortsByZonePath$$'
 	@echo "Zone sort smoke passed"
 
 record-view-smoke:
@@ -658,7 +658,7 @@ discovery-smoke: build
 	done; \
 	sleep 2; \
 	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-c.catofes. --filter identity 2>/dev/null | grep -q 'identity'; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-c.catofes. | grep -q 'resolved_addr:'; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-c.catofes. | grep -Eq '^discovered_addr: .+:43497$$'; \
 	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status --verbose | grep -q 'discovered peer=node-c.catofes.'; \
 	kill "$$a_pid" "$$b_pid" "$$c_pid" >/dev/null 2>&1 || true; \
 	echo "Discovery smoke passed"
@@ -763,7 +763,7 @@ nat-daemon-observed-smoke: build
 		peer="$$(PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug peer node-b.catofes.)" || return 1; \
 		printf '%s\n' "$$peer" | grep -q '^daemon: online ' && \
 		printf '%s\n' "$$peer" | grep -qx 'observed_addr: 127\.0\.0\.1:43563' && \
-		printf '%s\n' "$$peer" | grep -Eq '^observed_status: active( |$$)' && \
+		printf '%s\n' "$$peer" | grep -Fxq 'selected_addr: 127.0.0.1:43563' && \
 		printf '%s\n' "$$peer" | grep -Fxq 'discovered_addr: -' && \
 		printf '%s\n' "$$peer" | grep -Fxq 'last_successful_endpoint: 127.0.0.1:43563'; \
 	}; \

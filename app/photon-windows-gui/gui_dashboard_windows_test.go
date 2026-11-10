@@ -14,6 +14,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/HiggsNet/photon/internal/gossipview"
 	"github.com/HiggsNet/photon/internal/photonwindows"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 )
@@ -44,9 +45,9 @@ func TestDesktopNativeDashboardNavigation(t *testing.T) {
 		<-w.requests
 	}
 	w.refreshing = false
-	o := &photonwindows.Observation{Running: true, ObservedAt: time.Now(), TunnelReady: true, Admission: gossip.AdmissionDiagnosis{Reason: gossip.AdmissionReasonAdopted}, Peers: []photonwindows.PeerObservation{
-		{Peer: "venus.example.", PullState: "completed"}, {Peer: "road.example.", PullState: "completed"}, {Peer: "less.example.", PullState: "failed"},
-	}, Connections: []photonwindows.ConnectionObservation{
+	o := &photonwindows.Observation{Running: true, ObservedAt: time.Now(), TunnelReady: true, Admission: gossip.AdmissionDiagnosis{Reason: gossip.AdmissionReasonAdopted}, View: gossipview.View{Peers: []gossipview.Peer{
+		{PeerID: "venus.example.", SyncStatus: "synced"}, {PeerID: "road.example.", SyncStatus: "synced"}, {PeerID: "less.example.", SyncStatus: "retry_pending"},
+	}}, Connections: []photonwindows.ConnectionObservation{
 		{Peer: "venus.example.", IKE: photonwindows.IKEObservation{Gateway: "venus.example.", Live: true, ChildLive: true}, BabelLive: true, TunnelReady: true},
 		{Peer: "road.example.", IKE: photonwindows.IKEObservation{Gateway: "road.example.", Live: true, ChildLive: true}, BabelLive: true, TunnelReady: true},
 		{Peer: "less.example.", IKE: photonwindows.IKEObservation{AttemptGateway: "less.example.", AttemptActive: true}},
@@ -59,7 +60,7 @@ func TestDesktopNativeDashboardNavigation(t *testing.T) {
 		t.Fatal("native list lost descending order")
 	}
 	guiSendMessage.Call(list, 0x0186, 1, 0)
-	o.Peers = append(o.Peers, photonwindows.PeerObservation{Peer: "zulu.example.", PullState: "completed"})
+	o.Peers = append(o.Peers, gossipview.Peer{PeerID: "zulu.example.", SyncStatus: "synced"})
 	w.render(desktopSnapshot{RuntimeState: "running", Observation: o})
 	selected, _, _ := guiSendMessage.Call(list, 0x0188, 0, 0)
 	if selected >= uintptr(len(w.nodeRows)) || w.nodeRows[selected].Peer != "road.example." {

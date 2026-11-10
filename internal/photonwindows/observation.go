@@ -3,13 +3,13 @@ package photonwindows
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"net"
 	"net/netip"
 	"slices"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/gossipview"
 	"github.com/HiggsNet/photon/internal/photonclient/babel"
 	"github.com/HiggsNet/photon/internal/photonclient/sadr"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
@@ -43,11 +43,10 @@ type Observation struct {
 	Wintun                 WintunObservation         `json:"wintun"`
 	IKE                    IKEObservation            `json:"ike"`
 	Babel                  BabelObservation          `json:"babel"`
-	Peers                  []PeerObservation         `json:"peers"`
-	PeersTruncated         bool                      `json:"peers_truncated"`
-	RoutesTruncated        bool                      `json:"routes_truncated"`
-	ipv4RouteReady         bool
-	ipv6RouteReady         bool
+	gossipview.View
+	RoutesTruncated bool `json:"routes_truncated"`
+	ipv4RouteReady  bool
+	ipv6RouteReady  bool
 }
 type WintunObservation struct {
 	Configured  bool           `json:"configured"`
@@ -90,23 +89,6 @@ type RouteObservation struct {
 	SourcePrefix netip.Prefix `json:"source_prefix"`
 	Origin       string       `json:"origin"` // Unknown for gateway-forwarded Babel routes.
 	Metric       uint16       `json:"metric"`
-}
-type PeerObservation struct {
-	Peer                string                 `json:"peer"`
-	PullState           string                 `json:"pull_state"`
-	UpdatedAt           time.Time              `json:"updated_at"`
-	LastEvent           string                 `json:"last_event,omitempty"`
-	SessionFailure      *corestate.PeerFailure `json:"session_failure,omitempty"`
-	LastSyncUnix        int64                  `json:"last_sync_unix,omitempty"`
-	BackoffUntilUnix    int64                  `json:"backoff_until_unix,omitempty"`
-	PullAttempts        int64                  `json:"pull_attempts"`
-	PullSuccesses       int64                  `json:"pull_successes"`
-	PullFailures        int64                  `json:"pull_failures"`
-	LastPullUnix        int64                  `json:"last_pull_unix,omitempty"`
-	LastPullZone        string                 `json:"last_pull_zone,omitempty"`
-	LastPullError       string                 `json:"last_pull_error,omitempty"`
-	LastPullUnreachable bool                   `json:"last_pull_unreachable,omitempty"`
-	ChunkFallbacks      int64                  `json:"chunk_fallbacks,omitempty"`
 }
 
 // Started closes once the system control plane has initialized successfully.
@@ -269,56 +251,8 @@ outer:
 }
 
 func (out *Observation) observeGossipPeers(view corestate.View, now time.Time, driver *corehost.GossipDriver) {
-	if driver != nil && driver.Observability != nil {
-		peers := driver.Observability.Snapshots(now)
-		ids := make([]string, 0, len(peers))
-		for id := range peers {
-			ids = append(ids, id)
-		}
-		slices.Sort(ids)
-		if len(ids) > 256 {
-			ids = ids[:256]
-			out.PeersTruncated = true
-		}
-		// Rich peer errors remain a bounded sample inside the existing 1 MiB
-		// control frame, including worst-case JSON string escaping.
-		peerBytes := 2
-		for _, id := range ids {
-			p := peers[id]
-			r := PeerObservation{Peer: boundedObservationText(id), PullState: boundedObservationText(p.ActivePullState), LastEvent: boundedObservationText(p.ActivePullLastEvent)}
-			if view.Gossip != nil {
-				checkpoint := view.Gossip.Peers[id]
-				r.LastSyncUnix, r.BackoffUntilUnix = checkpoint.LastSyncUnix, checkpoint.BackoffUntilUnix
-				if failure := checkpoint.LastFailure; failure != nil {
-					r.SessionFailure = &corestate.PeerFailure{Code: corestate.PeerFailureCode(boundedObservationText(string(failure.Code))), Message: boundedObservationText(failure.Message), AtUnix: failure.AtUnix}
-				}
-			}
-			if p.ActivePullUpdatedUnix != 0 {
-				r.UpdatedAt = time.Unix(p.ActivePullUpdatedUnix, 0)
-			}
-			if p.ObjectPullStats != nil {
-				r.PullAttempts = p.ObjectPullStats.Attempts
-				r.PullSuccesses = p.ObjectPullStats.Successes
-				r.PullFailures = p.ObjectPullStats.Failures
-				r.LastPullUnix = p.ObjectPullStats.LastUnix
-				r.LastPullZone = boundedObservationText(p.ObjectPullStats.LastZone)
-				r.LastPullUnreachable = p.ObjectPullStats.LastUnreachable
-				if p.ObjectPullStats.LastFailure != nil {
-					r.LastPullError = boundedObservationText(p.ObjectPullStats.LastFailure.Error())
-				}
-			}
-			if p.DatagramStats != nil {
-				r.ChunkFallbacks = p.DatagramStats.ChunkFallbacks
-			}
-			encoded, err := json.Marshal(r)
-			if err != nil || peerBytes+len(encoded)+1 > 256<<10 {
-				out.PeersTruncated = true
-				break
-			}
-			peerBytes += len(encoded) + 1
-			out.Peers = append(out.Peers, r)
-		}
-	}
+	out.View = gossipview.Live(view, driver, now)
+	out.View.LimitPeers(256, 256<<10)
 }
 
 func boundedObservationText(s string) string {

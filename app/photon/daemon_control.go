@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/gossipview"
 	"github.com/HiggsNet/photon/internal/inspect"
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	pingdebug "github.com/HiggsNet/photon/internal/ping"
@@ -376,7 +377,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
 		}
-		view := inspect.BuildSyncStatus(common, syncStatusOptions(d.Config.ListenAddr, d.gossipDriver.GossipConfig(), d.now(), request.Verbose))
+		view := gossipview.Live(common, d.gossipDriver, d.now())
 		writeCanonicalView(conn, view)
 	case "peer_debug":
 		common := d.State.Common.ReadView()
@@ -384,9 +385,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
 			return
 		}
-		options := gossipPeersOptions(d.gossipDriver.GossipConfig(), d.peerObservabilitySnapshots(), d.now())
-		options.Lifecycle = d.Config.PeerLifecycle
-		view, ok := inspect.BuildGossipPeerDebugView(common, options, request.Zone)
+		view, ok := gossipview.Live(common, d.gossipDriver, d.now()).Find(request.Zone)
 		if !ok {
 			writeControlResponse(conn, controlError(fmt.Errorf("%w: %s", zone.ErrZoneNotFound, request.Zone)))
 			return
@@ -664,8 +663,6 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		links, reconcile := d.linuxObservation.ipsecSnapshot()
 		writeCanonicalView(conn, buildPeerLifecycleDebugView(d.Config, common, d.State.ReadLinux().SuspendedTunnelPeers, links, reconcile, d.now()))
-	case "gossip_peers_view":
-		writeCanonicalView(conn, d.gossipPeerSnapshotForControl())
 	case "revocation_view":
 		observedLinks, _ := d.linuxObservation.ipsecSnapshot()
 		linkStates := observedLinks

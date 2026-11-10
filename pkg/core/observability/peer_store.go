@@ -3,35 +3,37 @@ package observability
 import (
 	"sync"
 	"time"
+
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
 // PeerDiagnostics contains common gossip observations that are safe to lose
 // on daemon restart. Values returned by PeerObservabilityStore are detached.
 type PeerDiagnostics struct {
-	LastAttemptUnix       int64
-	LastUpdateSource      string
-	LastRelaySuppression  string
-	LastRelaySuppressedAt int64
-	ObservedSource        string
-	ActivePullState       string
-	ActivePullLastEvent   string
-	ActivePullUpdatedUnix int64
-	HintAccepted          int64
-	HintSuppressed        int64
-	LastHintUnix          int64
-	LastHintReason        string
-	LastHintSuppression   string
-	ReadOnlyResponder     int64
-	LastResponderUnix     int64
-	LastResponderKind     string
-	LastResponderZone     string
-	DatagramStats         *PeerDatagramStats
-	ObjectPullStats       *PeerObjectPullStats
+	LastAttemptUnix       int64                `json:"last_attempt_unix"`
+	LastUpdateSource      string               `json:"last_update_source,omitempty"`
+	LastRelaySuppression  string               `json:"last_relay_suppression,omitempty"`
+	LastRelaySuppressedAt int64                `json:"last_relay_suppressed_at,omitempty"`
+	ObservedSource        string               `json:"observed_source,omitempty"`
+	ActivePullState       string               `json:"active_pull_state,omitempty"`
+	ActivePullLastEvent   string               `json:"active_pull_last_event,omitempty"`
+	ActivePullUpdatedUnix int64                `json:"active_pull_updated_unix,omitempty"`
+	HintAccepted          int64                `json:"hint_accepted,omitempty"`
+	HintSuppressed        int64                `json:"hint_suppressed,omitempty"`
+	LastHintUnix          int64                `json:"last_hint_unix,omitempty"`
+	LastHintReason        string               `json:"last_hint_reason,omitempty"`
+	LastHintSuppression   string               `json:"last_hint_suppression,omitempty"`
+	ReadOnlyResponder     int64                `json:"read_only_responder,omitempty"`
+	LastResponderUnix     int64                `json:"last_responder_unix,omitempty"`
+	LastResponderKind     string               `json:"last_responder_kind,omitempty"`
+	LastResponderZone     string               `json:"last_responder_zone,omitempty"`
+	DatagramStats         *PeerDatagramStats   `json:"datagram_stats,omitempty"`
+	ObjectPullStats       *PeerObjectPullStats `json:"object_pull_stats,omitempty"`
 }
 
 type PeerDatagramStats struct {
-	TooLargeDropped           int64  `json:"too_large_dropped,omitempty"`
-	DigestOnlyAnnounces       int64  `json:"digest_only_announces,omitempty"`
+	TooLargeDropped int64 `json:"too_large_dropped,omitempty"`
+
 	ChunkFallbacks            int64  `json:"chunk_fallbacks,omitempty"`
 	ChunkRepairNACKs          int64  `json:"chunk_repair_nacks,omitempty"`
 	ChunkRepairChunks         int64  `json:"chunk_repair_chunks,omitempty"`
@@ -52,18 +54,18 @@ type PeerDatagramStats struct {
 }
 
 type PeerObjectPullStats struct {
-	Attempts               int64  `json:"attempts,omitempty"`
-	Successes              int64  `json:"successes,omitempty"`
-	Failures               int64  `json:"failures,omitempty"`
-	LargeObjectUnreachable int64  `json:"large_object_unreachable,omitempty"`
-	LastUnix               int64  `json:"last_unix,omitempty"`
-	LastFailure            error  `json:"-"`
-	LastObject             string `json:"last_object,omitempty"`
-	LastZone               string `json:"last_zone,omitempty"`
-	LastKey                string `json:"last_key,omitempty"`
-	LastBytes              int    `json:"last_bytes,omitempty"`
-	LastSourcePeer         string `json:"last_source_peer,omitempty"`
-	LastUnreachable        bool   `json:"last_unreachable,omitempty"`
+	Attempts               int64                  `json:"attempts,omitempty"`
+	Successes              int64                  `json:"successes,omitempty"`
+	Failures               int64                  `json:"failures,omitempty"`
+	LargeObjectUnreachable int64                  `json:"large_object_unreachable,omitempty"`
+	LastUnix               int64                  `json:"last_unix,omitempty"`
+	LastFailure            *corestate.PeerFailure `json:"last_failure,omitempty"`
+	LastObject             string                 `json:"last_object,omitempty"`
+	LastZone               string                 `json:"last_zone,omitempty"`
+	LastKey                string                 `json:"last_key,omitempty"`
+	LastBytes              int                    `json:"last_bytes,omitempty"`
+	LastSourcePeer         string                 `json:"last_source_peer,omitempty"`
+	LastUnreachable        bool                   `json:"last_unreachable,omitempty"`
 }
 
 type peerEntry struct {
@@ -207,6 +209,10 @@ func clonePeerDiagnostics(in PeerDiagnostics) PeerDiagnostics {
 	}
 	if in.ObjectPullStats != nil {
 		stats := *in.ObjectPullStats
+		if stats.LastFailure != nil {
+			failure := *stats.LastFailure
+			stats.LastFailure = &failure
+		}
 		out.ObjectPullStats = &stats
 	}
 	return out

@@ -1,13 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 	"unicode"
 
 	"github.com/HiggsNet/photon/internal/photonwindows"
-	"github.com/HiggsNet/photon/pkg/core/gossip"
 )
 
 // These views format only the detached public observation. They neither inspect
@@ -66,22 +66,6 @@ func desktopFormatOverview(snapshot desktopSnapshot) string {
 		desktopDebugOptional(text, "已认证网关", observation.IKE.Gateway)
 	}
 	desktopDebugAddresses(text, observation)
-	completed, failed, waiting := 0, 0, 0
-	for _, peer := range observation.Peers {
-		switch gossip.SyncSessionState(peer.PullState) {
-		case gossip.SyncSessionCompleted:
-			completed++
-		case gossip.SyncSessionFailed:
-			failed++
-		default:
-			waiting++
-		}
-	}
-	fmt.Fprintf(text, "\r\n[Gossip 会话样本]\r\n已完成 %d · 失败 %d · 等待或进行中 %d\r\n", completed, failed, waiting)
-	text.WriteString("以上是各节点最新会话状态，不是 TCP 拉取累计，也不代表业务连通。\r\n")
-	if observation.PeersTruncated {
-		text.WriteString("节点样本已截断，以上计数仅覆盖显示的样本。\r\n")
-	}
 	return text.String()
 }
 
@@ -240,81 +224,22 @@ func desktopFormatPeer(snapshot desktopSnapshot, peerID string) string {
 	if observation == nil {
 		return text.String()
 	}
-	var selected *photonwindows.PeerObservation
-	for i := range observation.Peers {
-		if observation.Peers[i].Peer == peerID {
-			selected = &observation.Peers[i]
-			break
-		}
-	}
-	if selected == nil {
+	peer, ok := observation.Find(peerID)
+	if !ok {
 		text.WriteString("\r\n请从当前节点列表选择一项；已移出样本的节点不保留旧详情。\r\n")
 		if observation.PeersTruncated {
 			text.WriteString("节点样本已截断，未显示不代表节点不存在。\r\n")
 		}
 		return text.String()
 	}
-	peer := selected
-	fmt.Fprintf(text, "\r\n节点：%s\r\n\r\n[当前会话]\r\n状态：%s\r\n", desktopDebugCell(peer.Peer, 256), desktopDebugPeerState(peer.PullState))
-	desktopDebugOptional(text, "原始状态", peer.PullState)
-	fmt.Fprintf(text, "会话更新：%s\r\n", desktopDebugTime(peer.UpdatedAt))
-	desktopDebugOptional(text, "最后事件", peer.LastEvent)
-	if peer.LastSyncUnix != 0 {
-		fmt.Fprintf(text, "最近同步成功：%s\r\n", desktopDebugUnix(peer.LastSyncUnix))
-	}
-	if failure := peer.SessionFailure; failure != nil {
-		text.WriteString("\r\n[最近会话失败记录]\r\n")
-		desktopDebugOptional(text, "错误码", string(failure.Code))
-		desktopDebugOptional(text, "原因", failure.Message)
-		fmt.Fprintf(text, "记录时间：%s\r\n", desktopDebugUnix(failure.AtUnix))
-	}
-	if peer.BackoffUntilUnix != 0 {
-		fmt.Fprintf(text, "\r\n退避记录截止：%s\r\n", desktopDebugUnix(peer.BackoffUntilUnix))
-		text.WriteString("是否仍在退避以本页采样时间为准。\r\n")
-	}
-	text.WriteString("\r\n[历史传输统计]\r\n")
-	if peer.PullAttempts == 0 && peer.PullSuccesses == 0 && peer.PullFailures == 0 && peer.LastPullUnix == 0 && peer.LastPullZone == "" && peer.LastPullError == "" && !peer.LastPullUnreachable {
-		text.WriteString("尚无 TCP 对象拉取记录；这不表示当前会话失败。\r\n")
+	data, err := json.MarshalIndent(peer, "", "  ")
+	if err != nil {
+		fmt.Fprintf(text, "\r\n节点诊断不可用：%s\r\n", err)
 	} else {
-		fmt.Fprintf(text, "TCP 累计：尝试 %d · 成功 %d · 失败 %d\r\n", peer.PullAttempts, peer.PullSuccesses, peer.PullFailures)
-		if peer.LastPullUnix != 0 {
-			fmt.Fprintf(text, "最后 TCP 记录：%s\r\n", desktopDebugUnix(peer.LastPullUnix))
-		}
-		desktopDebugOptional(text, "最后 TCP 对象", peer.LastPullZone)
-		if peer.LastPullUnreachable {
-			text.WriteString("最后 TCP 结果：不可达\r\n")
-		}
-		if peer.LastPullError != "" {
-			desktopDebugOptional(text, "最后 TCP 错误（历史，不等于当前失败）", peer.LastPullError)
-		}
+		fmt.Fprintf(text, "\r\n节点：%s\r\n", desktopDebugCell(peer.PeerID, 256))
+		text.WriteString(strings.ReplaceAll(string(data), "\n", "\r\n"))
 	}
-	if peer.ChunkFallbacks != 0 {
-		fmt.Fprintf(text, "UDP 分块回退计数：%d（收发诊断口径，不等于成功对象数）\r\n", peer.ChunkFallbacks)
-	}
-	text.WriteString("累计计数不包含当前会话结论；进程重启或诊断样本淘汰后重置。\r\n")
 	return text.String()
-}
-
-func desktopPeerRow(peer photonwindows.PeerObservation) string {
-	state := "未知"
-	switch gossip.SyncSessionState(peer.PullState) {
-	case gossip.SyncSessionCompleted:
-		state = "已同步"
-	case gossip.SyncSessionFailed:
-		state = "失败"
-
-	case gossip.SyncSessionSummarySent:
-		state = "摘要交换"
-	case gossip.SyncSessionCatalogDiffing:
-		state = "比较中"
-	case gossip.SyncSessionObjectPulling:
-		state = "拉取中"
-	case gossip.SyncSessionChunkFallback:
-		state = "回退中"
-	case gossip.SyncSessionIdle, "":
-		state = "等待"
-	}
-	return state + " · " + desktopDebugCell(peer.Peer, 128)
 }
 
 func desktopDebugStart(title string, snapshot desktopSnapshot) (*strings.Builder, *photonwindows.Observation) {
@@ -350,28 +275,6 @@ func desktopDebugAddresses(text *strings.Builder, observation *photonwindows.Obs
 		text.WriteString("地址条件：等待已授权地址的本机声明同步\r\n")
 	}
 	desktopDebugOptional(text, "地址条件说明", observation.Readiness.Reason)
-}
-
-func desktopDebugPeerState(state string) string {
-	switch gossip.SyncSessionState(state) {
-	case gossip.SyncSessionCompleted:
-		return "本次同步已完成"
-	case gossip.SyncSessionFailed:
-		return "同步失败"
-
-	case gossip.SyncSessionSummarySent:
-		return "交换目录摘要"
-	case gossip.SyncSessionCatalogDiffing:
-		return "比较目录"
-	case gossip.SyncSessionObjectPulling:
-		return "拉取对象"
-	case gossip.SyncSessionChunkFallback:
-		return "分块回退同步"
-	case gossip.SyncSessionIdle, "":
-		return "等待同步"
-	default:
-		return "未知会话状态"
-	}
 }
 
 func desktopDebugIKEPhase(phase string) string {

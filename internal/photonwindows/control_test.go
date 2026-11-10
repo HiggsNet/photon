@@ -13,9 +13,12 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/HiggsNet/photon/internal/gossipview"
 )
 
 type controlTestDaemon struct {
+	gossip      gossipview.View
 	observed    atomic.Int32
 	services    atomic.Int32
 	stopped     atomic.Bool
@@ -25,7 +28,7 @@ type controlTestDaemon struct {
 
 func (d *controlTestDaemon) Observe(context.Context) (Observation, error) {
 	d.observed.Add(1)
-	return Observation{Running: true, Revision: 7}, nil
+	return Observation{Running: true, Revision: 7, View: d.gossip}, nil
 }
 func (d *controlTestDaemon) Services(context.Context) (ServiceDirectory, error) {
 	d.services.Add(1)
@@ -77,7 +80,9 @@ func TestControlFramesBounded(t *testing.T) {
 	}
 }
 func TestControlExchangeUsesOnlyOwner(t *testing.T) {
-	daemon := &controlTestDaemon{}
+	daemon := &controlTestDaemon{gossip: gossipview.View{PeerID: "local.catofes.", CatalogRoot: "test-root", Peers: []gossipview.Peer{
+		{PeerID: "remote.catofes.", SyncStatus: "backoff", LastSyncUnix: 1700000000},
+	}}}
 	for _, method := range []string{"status", "peers", "routes", "diagnostics", "services", "stop"} {
 		client, server := net.Pipe()
 		deadline := time.Now().Add(time.Second)
@@ -92,6 +97,12 @@ func TestControlExchangeUsesOnlyOwner(t *testing.T) {
 		}
 		if err := <-result; err != nil {
 			t.Fatal(err)
+		}
+		if method == "peers" {
+			want, err := json.Marshal(daemon.gossip)
+			if err != nil || !bytes.Equal(response.Result, want) {
+				t.Fatalf("peers IPC changed the shared response: got %s, want %s", response.Result, want)
+			}
 		}
 	}
 	if daemon.observed.Load() != 4 || daemon.services.Load() != 1 || !daemon.stopped.Load() {

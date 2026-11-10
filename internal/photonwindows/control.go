@@ -190,10 +190,7 @@ func controlResult(ctx context.Context, daemon ControlDaemon, method string) Con
 	case "status", "diagnostics":
 		result = observation
 	case "peers":
-		result = struct {
-			Peers     []PeerObservation `json:"peers"`
-			Truncated bool              `json:"truncated"`
-		}{observation.Peers, observation.PeersTruncated}
+		result = observation.View
 	case "routes":
 		result = struct {
 			Routes    []RouteObservation `json:"routes"`

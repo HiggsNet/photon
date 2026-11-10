@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/gossipview"
 	"github.com/HiggsNet/photon/internal/photonclient/babel"
 	"github.com/HiggsNet/photon/internal/photonclient/sadr"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
@@ -157,12 +158,12 @@ func TestRuntimeObservationBoundsPeerDiagnostics(t *testing.T) {
 		})
 	}
 	got := observeRuntime(f.config, f.view, f.plan, f.now, nil, f.p.tunnel, r, driver)
-	if !got.PeersTruncated || len(got.Peers) != 256 || len(got.Peers[0].PullState) != 256 || got.Peers[0].Peer != "peer-000" || got.Peers[0].PullFailures != 1 {
+	if !got.PeersTruncated || len(got.Peers) != 256 || len(got.Peers[0].ActivePullState) != 256 || got.Peers[0].PeerID != "peer-000" || got.Peers[0].ObjectPullStats.Failures != 1 {
 		t.Fatalf("unbounded peer diagnostics: %+v", got.Peers[0])
 	}
-	got.Peers[0].PullAttempts = 99
+	got.Peers[0].ObjectPullStats.Attempts = 99
 	next := observeRuntime(f.config, f.view, f.plan, f.now, nil, f.p.tunnel, r, driver)
-	if next.Peers[0].PullAttempts != 3 {
+	if next.Peers[0].ObjectPullStats.Attempts != 3 {
 		t.Fatal("borrowed peer state")
 	}
 }
@@ -177,7 +178,7 @@ func TestRuntimePeerObservationDistinguishesSessionAndTCPFailures(t *testing.T) 
 	driver.Observability.Update(peer, now, func(p *observability.PeerDiagnostics) {
 		p.ActivePullState, p.ActivePullLastEvent, p.ActivePullUpdatedUnix = "failed", "catalog_page_timeout", now.Unix()
 	})
-	observe := func() PeerObservation {
+	observe := func() gossipview.Peer {
 		t.Helper()
 		out := observeRuntime(config, view, GatewayPlan{}, now, nil, &gatewayTunnel{}, &leafRuntime{}, driver)
 		if len(out.Peers) != 1 {
@@ -186,11 +187,11 @@ func TestRuntimePeerObservationDistinguishesSessionAndTCPFailures(t *testing.T) 
 		return out.Peers[0]
 	}
 	got := observe()
-	if got.PullState != "failed" || got.LastEvent != "catalog_page_timeout" || got.PullAttempts != 0 || got.SessionFailure == nil || *got.SessionFailure != *failure || got.LastSyncUnix != now.Add(-time.Minute).Unix() || got.BackoffUntilUnix != now.Add(time.Second).Unix() {
+	if got.ActivePullState != "failed" || got.ActivePullLastEvent != "catalog_page_timeout" || got.ObjectPullStats != nil || got.LastFailure == nil || *got.LastFailure != *failure || got.LastSyncUnix != now.Add(-time.Minute).Unix() || got.BackoffUntilUnix != now.Add(time.Second).Unix() {
 		t.Fatalf("TCP-before-session distinction lost: %+v", got)
 	}
-	got.SessionFailure.Message = "mutated UI copy"
-	if observe().SessionFailure.Message != "catalog page timeout" || failure.Message != "catalog page timeout" {
+	got.LastFailure.Message = "mutated UI copy"
+	if observe().LastFailure.Message != "catalog page timeout" || failure.Message != "catalog page timeout" {
 		t.Fatal("observation exposed a borrowed checkpoint error")
 	}
 	// A later successful session clears only the session failure. Earlier TCP
@@ -198,15 +199,15 @@ func TestRuntimePeerObservationDistinguishesSessionAndTCPFailures(t *testing.T) 
 	view.Gossip.Peers[peer] = corestate.PeerCheckpoint{LastSyncUnix: now.Unix()}
 	driver.Observability.Update(peer, now, func(p *observability.PeerDiagnostics) {
 		p.ActivePullState, p.ActivePullLastEvent = "completed", "snapshot_applied"
-		p.ObjectPullStats = &observability.PeerObjectPullStats{Attempts: 2, Failures: 2, LastUnix: now.Add(-time.Second).Unix(), LastZone: "catofes.", LastFailure: errors.New("TCP connection refused"), LastUnreachable: true}
+		p.ObjectPullStats = &observability.PeerObjectPullStats{Attempts: 2, Failures: 2, LastUnix: now.Add(-time.Second).Unix(), LastZone: "catofes.", LastFailure: &corestate.PeerFailure{Message: "TCP connection refused"}, LastUnreachable: true}
 		p.DatagramStats = &observability.PeerDatagramStats{ChunkFallbacks: 1}
 	})
 	got = observe()
-	if got.PullState != "completed" || got.SessionFailure != nil || got.BackoffUntilUnix != 0 || got.LastPullError != "TCP connection refused" || !got.LastPullUnreachable || got.LastPullZone != "catofes." || got.LastPullUnix != now.Add(-time.Second).Unix() || got.ChunkFallbacks != 1 {
+	if got.ActivePullState != "completed" || got.LastFailure != nil || got.BackoffUntilUnix != 0 || got.ObjectPullStats.LastFailure.Message != "TCP connection refused" || !got.ObjectPullStats.LastUnreachable || got.ObjectPullStats.LastZone != "catofes." || got.ObjectPullStats.LastUnix != now.Add(-time.Second).Unix() || got.DatagramStats.ChunkFallbacks != 1 {
 		t.Fatalf("successful session latched a previous failure or hid TCP history: %+v", got)
 	}
 	data, err := json.Marshal(got)
-	if err != nil || !json.Valid(data) || strings.Contains(string(data), "session_failure") || !strings.Contains(string(data), `"last_pull_error":"TCP connection refused"`) {
+	if err != nil || !json.Valid(data) || !strings.Contains(string(data), `"message":"TCP connection refused"`) {
 		t.Fatalf("peer JSON failure ownership: %s, %v", data, err)
 	}
 }
@@ -220,11 +221,11 @@ func TestRuntimePeerObservationBoundsEscapedDiagnosticsWithinControlFrame(t *tes
 	text := strings.Repeat("\x00<>&\"\\", 100)
 	plan := GatewayPlan{Revision: view.Revision, EvaluatedAt: now}
 	for i := range 300 {
-		id := fmt.Sprintf("peer-%03d.%s", i, text)
+		id := fmt.Sprintf("peer-%03d.catofes.", i)
 		view.Gossip.Peers[id] = corestate.PeerCheckpoint{LastFailure: &corestate.PeerFailure{Code: corestate.PeerFailureCode(text), Message: text, AtUnix: now.Unix()}}
 		driver.Observability.Update(id, now, func(p *observability.PeerDiagnostics) {
 			p.ActivePullState, p.ActivePullLastEvent, p.ActivePullUpdatedUnix = text, text, now.Unix()
-			p.ObjectPullStats = &observability.PeerObjectPullStats{LastFailure: errors.New(text), LastZone: text, LastUnix: now.Unix()}
+			p.ObjectPullStats = &observability.PeerObjectPullStats{LastFailure: &corestate.PeerFailure{Message: text}, LastZone: text, LastUnix: now.Unix()}
 		})
 		plan.Candidates = append(plan.Candidates, GatewayCandidate{Zone: zone.ZonePath(text), Rejected: text})
 	}
@@ -233,7 +234,7 @@ func TestRuntimePeerObservationBoundsEscapedDiagnosticsWithinControlFrame(t *tes
 		t.Fatalf("rich peer sample did not enforce encoded budget: %d peers, truncated=%t", len(got.Peers), got.PeersTruncated)
 	}
 	for _, peer := range got.Peers {
-		for _, value := range []string{peer.Peer, peer.PullState, peer.LastEvent, peer.LastPullError, peer.LastPullZone, string(peer.SessionFailure.Code), peer.SessionFailure.Message} {
+		for _, value := range []string{peer.PeerID, peer.ActivePullState, peer.ActivePullLastEvent, peer.ObjectPullStats.LastFailure.Message, peer.ObjectPullStats.LastZone, string(peer.LastFailure.Code), peer.LastFailure.Message} {
 			if len(value) > 256 {
 				t.Fatal("unbounded peer diagnostic text")
 			}

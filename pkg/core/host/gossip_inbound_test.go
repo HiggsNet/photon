@@ -95,7 +95,8 @@ func TestGossipDriverExecuteGossipPacketActionsPlansPingResponsesAndHint(t *test
 		t.Fatalf("outbound = %#v, want PONG then FETCH_CATALOG_PAGE", controller.outbound)
 	}
 	diagnostics, ok := driver.Observability.Snapshot("peer-a", time.Unix(100, 0))
-	if !ok || diagnostics.DatagramStats == nil || diagnostics.DatagramStats.LastCatalogRootHex == "" || diagnostics.HintAccepted != 1 {
+	if !ok || diagnostics.DatagramStats == nil || diagnostics.DatagramStats.LastCatalogRootHex != "72656d6f7465" ||
+		diagnostics.DatagramStats.LastCatalogZoneCount != 1 || diagnostics.HintAccepted != 1 {
 		t.Fatalf("diagnostics = %#v", diagnostics)
 	}
 }

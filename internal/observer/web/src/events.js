@@ -85,9 +85,7 @@ function close() {
 function setMode(next) {
     mode = next;
     renderStatus();
-    if (next === 'live') {
-        stopPolling();
-    } else if (next === 'polling') {
+    if (next === 'live' || next === 'polling') {
         startPolling();
     }
 }
@@ -107,13 +105,12 @@ function renderStatus() {
 
 function startPolling() {
     if (pollTimer) return;
-    // Fallback polling only refetches the current page's watched keys.
-    pollTimer = setInterval(() => store.refreshWatched(), POLL_INTERVAL_MS);
-}
-
-function stopPolling() {
-    if (pollTimer) {
-        clearInterval(pollTimer);
-        pollTimer = null;
-    }
+    pollTimer = setInterval(() => {
+        if (mode === 'polling') {
+            store.refreshWatched();
+        } else if (mode === 'live' && store.watched().includes('/peers')) {
+            // Session and retry state can change without a verified commit.
+            store.fetch('/peers');
+        }
+    }, POLL_INTERVAL_MS);
 }

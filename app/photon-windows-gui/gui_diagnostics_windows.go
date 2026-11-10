@@ -9,7 +9,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/HiggsNet/photon/internal/photonwindows"
+	"github.com/HiggsNet/photon/internal/gossipview"
 )
 
 const (
@@ -287,10 +287,10 @@ func (w *desktopWindow) syncDiagnosticsPeerList() {
 			}
 		} else {
 			peers := slices.Clone(v.snapshot.Observation.Peers)
-			slices.SortFunc(peers, func(a, b photonwindows.PeerObservation) int { return strings.Compare(b.Peer, a.Peer) })
+			slices.SortFunc(peers, func(a, b gossipview.Peer) int { return strings.Compare(b.PeerID, a.PeerID) })
 			for _, peer := range peers {
-				ids = append(ids, peer.Peer)
-				rows = append(rows, desktopPeerRow(peer))
+				ids = append(ids, peer.PeerID)
+				rows = append(rows, desktopDebugCell(peer.PeerID, 128))
 			}
 		}
 	}

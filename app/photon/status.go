@@ -7,7 +7,6 @@ import (
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
-	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
@@ -128,14 +127,4 @@ func daemonStatusView(d *Daemon) inspect.DaemonStatusView {
 		IPsecLastRunUnix:   ipsecLastRunUnix,
 		RoutingLastRunUnix: routingLastRunUnix,
 	})
-}
-
-func syncStatusOptions(listenAddr string, config corehost.GossipDriverConfig, now time.Time, verbose bool) inspect.SyncStatusOptions {
-	peers := gossipPeersOptions(config, nil, now)
-	options := inspect.SyncStatusOptions{
-		PeerID: config.PeerID, ListenAddr: listenAddr,
-		MaxDatagramBytes: config.Limits.MaxBytes, MaxSyncZones: config.Limits.MaxZones,
-		MaxSyncRecords: config.Limits.MaxRecords, Bootstrap: peers.Bootstrap, Now: now, Verbose: verbose,
-	}
-	return options
 }

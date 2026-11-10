@@ -45,7 +45,6 @@ type controlRequest struct {
 	Snapshot    *corestate.ZoneSnapshot  `json:"snapshot,omitempty"`
 	Apply       bool                     `json:"apply,omitempty"`
 	IncludeAll  bool                     `json:"include_all,omitempty"`
-	Verbose     bool                     `json:"verbose,omitempty"`
 	Orphans     bool                     `json:"orphans,omitempty"`
 	NetNS       string                   `json:"netns,omitempty"`
 	Host        bool                     `json:"host,omitempty"`

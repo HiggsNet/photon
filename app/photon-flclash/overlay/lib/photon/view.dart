@@ -485,38 +485,36 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
         _list(status['peers'])
             .where(
               (entry) =>
-                  _matches([_text(entry['peer']), _gossipState(l, entry)]),
+                  _matches([_text(entry['peer_id']), _text(entry['sync_status'])]),
             )
             .toList()
-          ..sort((a, b) => _text(b['peer']).compareTo(_text(a['peer'])));
+          ..sort((a, b) => _text(b['peer_id']).compareTo(_text(a['peer_id'])));
     return _PhotonTable(
       columns: [
         TableColumn('peer', l.photonNode, flex: 3),
         TableColumn('state', l.status, flex: 2),
       ],
+      wideColumn: TableColumn('last_sync', l.photonLastSync, flex: 2),
       detailsTitle: l.photonGossipPeers,
       length: peers.length,
       truncated: status['peers_truncated'] == true,
       rowAt: (context, index) {
         final entry = peers[index];
-        final peer = _text(entry['peer']);
-        final state = _gossipState(l, entry);
-        final failure = _map(entry['session_failure']);
+        final peer = _text(entry['peer_id']);
+        final state = _text(entry['sync_status']);
+        final lastSync = _unix(entry['last_sync_unix']);
+        final failure = _map(entry['last_failure']);
         return _PhotonTableRow(
           title: peer,
-          cells: [Text(peer), Text(state)],
+          cells: [Text(peer), Text(state), Text(lastSync)],
           details: [
             (l.status, state),
-            (l.photonLastSync, _unix(entry['last_sync_unix'])),
+            (l.photonIdentity, _text(entry['authorization'])),
+            (l.address, _text(entry['selected_addr'])),
+            (l.photonLastSync, lastSync),
             (
               l.photonLastFailure,
-              failure['code'] == 'timeout'
-                  ? l.photonGossipTimeout
-                  : _text(
-                      failure['message'] ??
-                          failure['code'] ??
-                          entry['last_pull_error'],
-                    ),
+              _text(failure['message'] ?? failure['code']),
             ),
           ],
         );
@@ -935,33 +933,6 @@ Widget _statusMark(String label, Object? value) => Tooltip(
       : Text(value == false ? '—' : '?'),
 );
 
-String _gossipState(AppLocalizations l, Map<String, dynamic> entry) {
-  switch (entry['pull_state']) {
-    case 'ping_sent' ||
-        'summary_sent' ||
-        'catalog_diffing' ||
-        'object_pulling' ||
-        'chunk_fallback':
-      return l.photonGossipSyncing;
-    case 'completed' || 'synced':
-      return l.photonGossipSynced;
-    case 'failed':
-      return l.photonGossipFailed;
-  }
-  final failure = _map(entry['session_failure']);
-  final lastSync = entry['last_sync_unix'];
-  if (failure.isNotEmpty &&
-      (lastSync is! int ||
-          lastSync <= 0 ||
-          failure['at_unix'] is int &&
-              (failure['at_unix'] as int) > lastSync)) {
-    return l.photonGossipFailed;
-  }
-  return lastSync is int && lastSync > 0
-      ? l.photonGossipSynced
-      : l.photonGossipWaiting;
-}
-
 String _tunnelFailure(AppLocalizations l, Object? value) {
   final failure = _map(value);
   final message = _failure(failure);
@@ -1045,13 +1016,10 @@ String _date(dynamic value) {
 }
 
 String _unix(dynamic value) => value is int && value > 0
-    ? _date(
-        DateTime.fromMillisecondsSinceEpoch(
-          value * 1000,
-          isUtc: true,
-        ).toIso8601String(),
-      )
-    : '';
+    ? DateTime.fromMillisecondsSinceEpoch(value * 1000, isUtc: true)
+        .toIso8601String()
+        .replaceFirst('.000Z', 'Z')
+    : 'never';
 String _failure(dynamic value) {
   final data = _map(value);
   return _text(data['message'] ?? data['detail'] ?? data['code']);

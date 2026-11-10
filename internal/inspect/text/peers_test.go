@@ -5,45 +5,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/gossipview"
 	"github.com/HiggsNet/photon/internal/inspect"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
-func TestWriteGossipPeersKeepsHistoryQueryable(t *testing.T) {
-	peers := []inspect.PeerDebugView{{PeerID: "active.catofes.", Status: "online"}, {PeerID: "old.catofes.", Status: "offline", Historical: true}}
-	for _, tc := range []struct {
-		name, filter     string
-		verbose, wantOld bool
-		count            string
-	}{
-		{"default", "", false, false, "peers: 1"},
-		{"explicit", "old.catofes.", false, true, "peers: 1/2"},
-		{"verbose", "", true, true, "peers: 2"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var out strings.Builder
-			if err := WriteGossipPeers(&out, peers, tc.filter, tc.verbose); err != nil {
-				t.Fatal(err)
-			}
-			if strings.Contains(out.String(), "old.catofes.") != tc.wantOld || !strings.Contains(out.String(), tc.count+"\n") {
-				t.Fatalf("unexpected output:\n%s", out.String())
-			}
-			if tc.verbose && !strings.Contains(out.String(), "historical: true") {
-				t.Fatal("missing historical explanation")
-			}
-		})
-	}
-}
-
 func TestWriteGossipPeersUsesGossipRuntimeFields(t *testing.T) {
-	peers := []inspect.PeerDebugView{
+	peers := []gossipview.Peer{
 		{
-			PeerID: "node-a.catofes.", Source: "bootstrap", ResolvedAddr: "192.0.2.10:33434",
-			Status: "online", LastSuccess: "2023-11-14T22:13:20Z", NextRetry: "-",
+			PeerID: "node-a.catofes.", Source: "bootstrap", SelectedAddr: "192.0.2.10:33434",
+			SyncStatus: "synced", LastSyncUnix: 1700000000,
 		},
 		{
-			PeerID: "node-b.catofes.", Source: "discovered", ResolvedAddr: "198.51.100.20:33434",
-			Status: "backoff", LastSuccess: "never", NextRetry: "2023-11-14T22:14:20Z", LastFailure: &inspect.FailureView{Code: "timeout", Message: "ping timeout"},
-			ObservedAddr: "198.51.100.21:33434", ObservedStatus: "active", LastUpdateSource: "pong",
+			PeerID: "node-b.catofes.", Source: "discovered", SelectedAddr: "198.51.100.20:33434",
+			SyncStatus: "backoff", BackoffUntilUnix: 1700000060, LastFailure: &corestate.PeerFailure{Code: "timeout", Message: "ping timeout"},
+			ObservedAddr: "198.51.100.21:33434",
 		},
 	}
 
@@ -66,7 +42,7 @@ func TestWriteGossipPeersUsesGossipRuntimeFields(t *testing.T) {
 	if err := WriteGossipPeers(&verbose, peers, "node-b", true); err != nil {
 		t.Fatalf("WriteGossipPeers verbose: %v", err)
 	}
-	for _, want := range []string{"peers: 1/2", "peer_id: node-b.catofes.", "observed_addr: 198.51.100.21:33434", "last_update_source: pong", "datagram_too_large_dropped:"} {
+	for _, want := range []string{"peers: 1/2", "peer_id: node-b.catofes.", "observed_addr: 198.51.100.21:33434", "status: backoff", "session_diagnostics:"} {
 		if !strings.Contains(verbose.String(), want) {
 			t.Fatalf("verbose output missing %q:\n%s", want, verbose.String())
 		}

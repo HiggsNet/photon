@@ -4,8 +4,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/HiggsNet/photon/internal/gossipview"
 	"github.com/HiggsNet/photon/internal/photonwindows"
-	"github.com/HiggsNet/photon/pkg/core/gossip"
 )
 
 // Dashboard rows use the current detached sample only. A completed Gossip
@@ -29,18 +29,8 @@ func desktopDashboardNodes(snapshot desktopSnapshot) []desktopNodeRow {
 	for _, id := range desktopGatewayNodes(snapshot) {
 		node(id)
 	}
-	for _, p := range o.Peers {
-		r := node(p.Peer)
-		switch gossip.SyncSessionState(p.PullState) {
-		case gossip.SyncSessionCompleted:
-			r.Gossip = "✓ 已同步"
-		case gossip.SyncSessionFailed:
-			r.Gossip = "! 同步异常"
-		case gossip.SyncSessionIdle, "":
-			r.Gossip = "— 等待同步"
-		default:
-			r.Gossip = "… 同步中"
-		}
+	for _, peer := range o.Peers {
+		node(peer.PeerID).Gossip = peer.SyncStatus + " · " + gossipview.FormatTime(peer.LastSyncUnix)
 	}
 	connections := o.Connections
 	if len(connections) == 0 && o.IKE.Gateway != "" {

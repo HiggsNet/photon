@@ -5,16 +5,17 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/HiggsNet/photon/internal/gossipview"
 	"github.com/HiggsNet/photon/internal/photonwindows"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 )
 
 func TestDesktopDashboardNodes(t *testing.T) {
-	o := &photonwindows.Observation{Running: true, Peers: []photonwindows.PeerObservation{
-		{Peer: "alpha.example.", PullState: "completed", PullFailures: 99, LastPullError: "historical"},
-		{Peer: "zulu.example.", PullState: "failed"},
-		{Peer: "middle.example.", PullState: "object_pulling"},
-	}, Connections: []photonwindows.ConnectionObservation{
+	o := &photonwindows.Observation{Running: true, View: gossipview.View{Peers: []gossipview.Peer{
+		{PeerID: "alpha.example.", SyncStatus: "synced"},
+		{PeerID: "zulu.example.", SyncStatus: "retry_pending"},
+		{PeerID: "middle.example.", SyncStatus: "syncing"},
+	}}, Connections: []photonwindows.ConnectionObservation{
 		{Peer: "alpha.example.", IKE: photonwindows.IKEObservation{Live: true, ChildLive: true}, BabelLive: true, TunnelReady: true},
 		{Peer: "zulu.example.", IKE: photonwindows.IKEObservation{Live: true, ChildLive: true}, BabelLive: true, TunnelReady: true},
 		{Peer: "middle.example.", IKE: photonwindows.IKEObservation{AttemptActive: true}},
@@ -28,10 +29,10 @@ func TestDesktopDashboardNodes(t *testing.T) {
 	if len(rows) != 3 || rows[0].Peer != "zulu.example." || rows[1].Peer != "middle.example." || rows[2].Peer != "alpha.example." {
 		t.Fatalf("nodes must be merged, unique and descending: %+v", rows)
 	}
-	if rows[2].Gossip != "✓ 已同步" || rows[2].Tunnel != "✓ IPv4  ✓ IPv6" || rows[2].Health != "✓ Babel 在线" {
+	if rows[2].Gossip != "synced · never" || rows[2].Tunnel != "✓ IPv4  ✓ IPv6" || rows[2].Health != "✓ Babel 在线" {
 		t.Fatalf("current facts were contaminated by historical errors: %+v", rows[2])
 	}
-	if rows[0].Gossip != "! 同步异常" || rows[0].Tunnel != "✓ IPv6" {
+	if rows[0].Gossip != "retry_pending · never" || rows[0].Tunnel != "✓ IPv6" {
 		t.Fatalf("single-stack node borrowed another peer's family: %+v", rows[0])
 	}
 	if rows[1].Tunnel != "… 连接中" || rows[1].Health != "— 未检测" {

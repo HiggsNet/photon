@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/gossipview"
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
@@ -38,10 +39,10 @@ func showPeers(filter string, verbose bool) error {
 	if err != nil {
 		return err
 	}
-	if peers, ok, err := readCanonicalViewViaControl[[]inspect.PeerDebugView](cfg, controlRequest{Method: "gossip_peers_view"}, false); err != nil {
+	if peers, ok, err := readCanonicalViewViaControl[gossipview.View](cfg, controlRequest{Method: "sync_view"}, false); err != nil {
 		return err
 	} else if ok {
-		return inspecttext.WriteGossipPeers(os.Stdout, peers, filter, verbose)
+		return inspecttext.WriteGossipPeers(os.Stdout, peers.Peers, filter, verbose)
 	}
 	common, _, err := loadOfflineOwnerViews(cfg)
 	if err != nil {
@@ -52,9 +53,7 @@ func showPeers(filter string, verbose bool) error {
 	}
 	fmt.Fprintln(os.Stdout, "source: checkpoint (daemon offline; last-known gossip runtime)")
 	config := gossipDriverConfig(cfg, common.State, nil)
-	options := gossipPeersOptions(config, nil, time.Now())
-	options.Lifecycle = cfg.PeerLifecycle
-	return inspecttext.WriteGossipPeers(os.Stdout, inspect.BuildGossipPeerDebugViews(common, options), filter, verbose)
+	return inspecttext.WriteGossipPeers(os.Stdout, gossipview.Build(common, config, cfg.ListenAddr, time.Now()).Peers, filter, verbose)
 }
 
 func buildPeerLifecycleDebugView(config *appConfig, common corestate.View, suspended map[zone.ZonePath]bool, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, now time.Time) inspect.PeerLifecycleDebugView {
@@ -70,17 +69,4 @@ func buildPeerLifecycleDebugView(config *appConfig, common corestate.View, suspe
 
 	statuses := derivePeerStatuses(common.State.ManagedZone, common.State.Network, common.Gossip, suspended, links, reconcile, now, cfg, hasOverlay)
 	return inspect.BuildPeerLifecycleDebug(cfg, statuses)
-}
-
-func (d *Daemon) gossipPeerSnapshotForControl() []inspect.PeerDebugView {
-	if d.State == nil {
-		return nil
-	}
-	view := d.State.Common.ReadView()
-	if view.State == nil {
-		return nil
-	}
-	options := gossipPeersOptions(d.gossipDriver.GossipConfig(), d.peerObservabilitySnapshots(), d.now())
-	options.Lifecycle = d.Config.PeerLifecycle
-	return inspect.BuildGossipPeerDebugViews(view, options)
 }

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/gossipview"
 	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/internal/photonlinux"
 	pingdebug "github.com/HiggsNet/photon/internal/ping"
@@ -316,21 +317,22 @@ func TestDaemonControlCommonReadViews(t *testing.T) {
 	if !peerLifecycle.OK {
 		t.Fatalf("peer_lifecycle_view response = %#v", peerLifecycle)
 	}
-	gossipPeers := controlViewRequestViaPipe[[]inspect.PeerDebugView](t, service, controlRequest{Method: "gossip_peers_view"})
-	if !gossipPeers.OK {
-		t.Fatalf("gossip_peers_view response = %#v", gossipPeers)
-	}
 	healthView := controlViewRequestViaPipe[inspect.HealthView](t, service, controlRequest{Method: "health_status"})
 	if !healthView.OK {
 		t.Fatalf("health_status response = %#v", healthView)
 	}
-	syncView := controlViewRequestViaPipe[inspect.SyncStatusView](t, service, controlRequest{Method: "sync_view", Verbose: true})
+	syncView := controlViewRequestViaPipe[gossipview.View](t, service, controlRequest{Method: "sync_view"})
 	if !syncView.OK || syncView.View.PeerID != config.PeerID {
 		t.Fatalf("sync_view response = %#v", syncView)
 	}
-	peer := controlViewRequestViaPipe[inspect.PeerDebugView](t, service, controlRequest{Method: "peer_debug", Zone: "node-b.catofes."})
+	peer := controlViewRequestViaPipe[gossipview.Peer](t, service, controlRequest{Method: "peer_debug", Zone: "node-b.catofes."})
 	if !peer.OK || peer.View.PeerID != "node-b.catofes." {
 		t.Fatalf("peer_debug response = %#v", peer)
+	}
+	listed, found := syncView.View.Find(peer.View.PeerID)
+	webView, err := (&observerProvider{daemon: service}).Peers(peer.View.PeerID)
+	if err != nil || !found || !reflect.DeepEqual(listed, peer.View) || !reflect.DeepEqual(listed, webView) {
+		t.Fatalf("Gossip list/detail views diverged: list=%+v control=%+v web=%+v err=%v", listed, peer.View, webView, err)
 	}
 	zoneView := controlViewRequestViaPipe[inspect.ZoneInspectionView](t, service, controlRequest{Method: "zone_debug", Zone: "node-b.catofes.", History: 1})
 	if !zoneView.OK || zoneView.View.Detail.Path == "" {

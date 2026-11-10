@@ -32,12 +32,17 @@ type CatalogPage struct {
 // ZoneDigests returns a deterministic detached digest projection of verified
 // state, excluding zones that are currently revoked.
 func ZoneDigests(ns *zone.NetworkState) []ZoneDigest {
+	return ZoneDigestsAt(ns, time.Now())
+}
+
+// ZoneDigestsAt evaluates revocations at the time of the enclosing snapshot.
+func ZoneDigestsAt(ns *zone.NetworkState, now time.Time) []ZoneDigest {
 	if ns == nil {
 		return nil
 	}
 	out := make([]ZoneDigest, 0, len(ns.Zones))
 	for path, zs := range ns.Zones {
-		if zs == nil || ns.IsZoneRevoked(path, time.Now()) {
+		if zs == nil || ns.IsZoneRevoked(path, now) {
 			continue
 		}
 		out = append(out, ZoneDigest{Zone: path, RootHash: ZoneRoot(zs)})

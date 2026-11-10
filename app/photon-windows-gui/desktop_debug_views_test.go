@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/gossipview"
 	"github.com/HiggsNet/photon/internal/photonwindows"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/observability"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
@@ -26,14 +28,8 @@ func TestDesktopDebugOverviewSeparatesBlockerSessionStateAndTransferHistory(t *t
 	snapshot := debugViewFixture()
 	snapshot.Observation.IKE.AttemptActive = true
 	snapshot.Observation.IKE.AttemptGateway = "gateway.catofes."
-	snapshot.Observation.Peers = []photonwindows.PeerObservation{
-		{Peer: "done.", PullState: "completed", PullFailures: 200},
-		{Peer: "failed.", PullState: "failed", PullSuccesses: 200},
-		{Peer: "waiting.", PullState: "catalog_diffing"},
-	}
-	snapshot.Observation.PeersTruncated = true
 	text := desktopFormatOverview(snapshot)
-	for _, want := range []string{"[当前状态]\r\n已入网，网关隧道未建立", "当前阶段：等待 IKE 认证（auth）", "尝试网关：gateway.catofes.", "IKE 认证：否", "等待当前分流范围内可用的授权业务 IP", "已完成 1 · 失败 1 · 等待或进行中 1", "节点样本已截断"} {
+	for _, want := range []string{"[当前状态]\r\n已入网，网关隧道未建立", "当前阶段：等待 IKE 认证（auth）", "尝试网关：gateway.catofes.", "IKE 认证：否", "等待当前分流范围内可用的授权业务 IP"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("overview missing %q:\n%s", want, text)
 		}
@@ -91,23 +87,19 @@ func TestDesktopDebugGatewaySeparatesAttemptFailureAndAuthenticatedFacts(t *test
 func TestDesktopDebugPeerSelectsOneNodeAndLabelsHistoricalFailures(t *testing.T) {
 	snapshot := debugViewFixture()
 	when := snapshot.Observation.ObservedAt
-	snapshot.Observation.Peers = []photonwindows.PeerObservation{
-		{Peer: "other.catofes.", PullState: "failed", SessionFailure: &corestate.PeerFailure{Message: "OTHER_ERROR_SENTINEL"}},
-		{Peer: "gateway.catofes.", PullState: "completed", UpdatedAt: when, LastEvent: "snapshot_applied", LastSyncUnix: when.Unix(), PullAttempts: 2, PullFailures: 2, LastPullUnix: when.Add(-time.Minute).Unix(), LastPullZone: "catofes.", LastPullError: "previous TCP refused", ChunkFallbacks: 1},
+	snapshot.Observation.Peers = []gossipview.Peer{
+		{PeerID: "other.catofes.", SyncStatus: "retry_pending", LastFailure: &corestate.PeerFailure{Message: "OTHER_ERROR_SENTINEL"}},
+		{PeerID: "gateway.catofes.", SyncStatus: "synced", LastSyncUnix: when.Unix(), PeerDiagnostics: observability.PeerDiagnostics{ObjectPullStats: &observability.PeerObjectPullStats{LastFailure: &corestate.PeerFailure{Message: "previous TCP refused"}}}},
 	}
 	before, _ := json.Marshal(snapshot)
 	text := desktopFormatPeer(snapshot, "gateway.catofes.")
-	for _, want := range []string{"节点：gateway.catofes.", "[当前会话]", "状态：本次同步已完成", "原始状态：completed", "TCP 累计：尝试 2 · 成功 0 · 失败 2", "最后 TCP 错误（历史，不等于当前失败）：previous TCP refused", "UDP 分块回退计数：1"} {
+	for _, want := range []string{"节点：gateway.catofes.", `"sync_status": "synced"`, `"object_pull_stats"`, "previous TCP refused"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("single peer missing %q:\n%s", want, text)
 		}
 	}
 	if strings.Contains(text, "other.catofes.") || strings.Contains(text, "OTHER_ERROR_SENTINEL") || strings.Contains(text, "状态：同步失败") {
 		t.Fatal("another peer or a historical TCP failure was confused with the selected current session")
-	}
-	row := desktopPeerRow(snapshot.Observation.Peers[1])
-	if !strings.HasPrefix(row, "已同步 · ") || !strings.Contains(row, "gateway.catofes.") || strings.ContainsAny(row, "\r\n\t") {
-		t.Fatalf("invalid selectable peer row %q", row)
 	}
 	missing := desktopFormatPeer(snapshot, "removed.catofes.")
 	if strings.Contains(missing, "previous TCP refused") || strings.Contains(missing, "removed.catofes.") || !strings.Contains(missing, "请选择") && !strings.Contains(missing, "选择一项") {
@@ -184,14 +176,5 @@ func TestDesktopDebugIKEKeepsRejectedPacketSeparateFromLifecycleFailure(t *testi
 	}
 	if text := desktopFormatOverview(snapshot); !strings.Contains(text, "[当前状态]\r\n已连接") || strings.Contains(text, "AUTH signature rejected") {
 		t.Fatal("a connected overview was displaced by an old packet rejection")
-	}
-}
-
-func TestDesktopPeerRowsKeepCompactStates(t *testing.T) {
-	for state, label := range map[string]string{"completed": "已同步", "failed": "失败", "idle": "等待", "object_pulling": "拉取中", "": "等待"} {
-		row := desktopPeerRow(photonwindows.PeerObservation{Peer: "gateway.catofes.", PullState: state})
-		if row != label+" · gateway.catofes." {
-			t.Fatalf("long or misleading peer row: %q", row)
-		}
 	}
 }

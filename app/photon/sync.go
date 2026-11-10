@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/internal/gossipview"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 )
 
@@ -15,11 +15,11 @@ func syncStatus(verbose bool) error {
 	if err != nil {
 		return err
 	}
-	if view, ok, err := readCanonicalViewViaControl[inspect.SyncStatusView](cfg, controlRequest{Method: "sync_view", Verbose: verbose}, false); err != nil {
+	if view, ok, err := readCanonicalViewViaControl[gossipview.View](cfg, controlRequest{Method: "sync_view"}, false); err != nil {
 		return err
 	} else if ok {
 		fmt.Fprintf(os.Stdout, "daemon: online peer_id=%s\n", view.PeerID)
-		return inspecttext.WriteSyncStatus(os.Stdout, view)
+		return inspecttext.WriteSyncStatus(os.Stdout, view, verbose)
 	}
 	common, _, err := loadOfflineOwnerViews(cfg)
 	if err != nil {
@@ -30,5 +30,5 @@ func syncStatus(verbose bool) error {
 	}
 	fmt.Fprintln(os.Stdout, "source: checkpoint (daemon offline; last-known gossip runtime)")
 	config := gossipDriverConfig(cfg, common.State, nil)
-	return inspecttext.WriteSyncStatus(os.Stdout, inspect.BuildSyncStatus(common, syncStatusOptions(cfg.ListenAddr, config, time.Now(), verbose)))
+	return inspecttext.WriteSyncStatus(os.Stdout, gossipview.Build(common, config, cfg.ListenAddr, time.Now()), verbose)
 }

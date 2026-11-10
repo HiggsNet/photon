@@ -152,8 +152,8 @@ type Provider interface {
 | `GET /api/v1/status` | `Status` | daemon 全局摘要 | `inspect.DaemonStatusView` |
 | `GET /api/v1/zones` | `Zones("")` | Zone 树摘要列表 | `inspect.ZonesView` |
 | `GET /api/v1/zones/{zone}` | `Zones(zone)` | 单 Zone 详情（含 history）；根 zone `.` 无法作为路径段（ServeMux 会重定向），用 `GET /api/v1/zones?zone=.` | `inspect.BuildZoneDetail` 输出 |
-| `GET /api/v1/peers` | `Peers("")` | 全部 peer 同步状态 | `inspect.PeersView` |
-| `GET /api/v1/peers/{peer_id}` | `Peers(peerID)` | 单 peer 详情 | `inspect.PeerView` |
+| `GET /api/v1/peers` | `Peers("")` | 本机 Gossip 信息、目录摘要和节点列表 | `gossipview.View` |
+| `GET /api/v1/peers/{peer_id}` | `Peers(peerID)` | 单节点详情，与列表中的节点结构相同 | `gossipview.Peer` |
 | `GET /api/v1/links` | `Links("")` | link 实例与 reconcile 状态 | `inspect.LinkInspection` |
 | `GET /api/v1/links/{link_id}` | `Links(linkID)` | 单 link 详情 | `inspect.LinkView` |
 | `GET /api/v1/health` | `Health("")` | 全 link 健康 + 上下文 | datasource envelope + `inspect.HealthView` |

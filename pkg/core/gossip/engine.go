@@ -1,11 +1,15 @@
 package gossip
 
-import "time"
+import (
+	"sync"
+	"time"
+)
 
 // Engine owns only mutable per-peer protocol state. It is a synchronous,
 // deterministic protocol machine: the GossipDriver serially supplies events and
 // executes the returned actions.
 type Engine struct {
+	sessionsMu   sync.RWMutex // Protects membership while query readers take a snapshot.
 	sessions     map[string]*SyncSession
 	pendingHints map[string]bool
 }
@@ -22,7 +26,7 @@ func (engine *Engine) NewSession(peerID string) *SyncSession {
 		return nil
 	}
 	session := NewSyncSession(peerID)
-	engine.sessions[peerID] = session
+	engine.SetSession(peerID, session)
 	return session
 }
 
@@ -32,6 +36,8 @@ func (engine *Engine) SetSession(peerID string, session *SyncSession) {
 	if engine == nil || peerID == "" {
 		return
 	}
+	engine.sessionsMu.Lock()
+	defer engine.sessionsMu.Unlock()
 	if session == nil {
 		delete(engine.sessions, peerID)
 		return
@@ -43,7 +49,23 @@ func (engine *Engine) Session(peerID string) *SyncSession {
 	if engine == nil {
 		return nil
 	}
+	engine.sessionsMu.RLock()
+	defer engine.sessionsMu.RUnlock()
 	return engine.sessions[peerID]
+}
+
+// SessionPeers returns the round owners without exposing mutable sessions.
+func (engine *Engine) SessionPeers() map[string]bool {
+	if engine == nil {
+		return nil
+	}
+	engine.sessionsMu.RLock()
+	defer engine.sessionsMu.RUnlock()
+	peers := make(map[string]bool, len(engine.sessions))
+	for id := range engine.sessions {
+		peers[id] = true
+	}
+	return peers
 }
 
 func (engine *Engine) HasActiveSession(peerID string) bool {
@@ -52,15 +74,15 @@ func (engine *Engine) HasActiveSession(peerID string) bool {
 }
 
 func (engine *Engine) RemoveSession(peerID string) {
-	if engine != nil {
-		delete(engine.sessions, peerID)
-	}
+	engine.SetSession(peerID, nil)
 }
 
 func (engine *Engine) PlanInbound(packet *Packet) []InboundAction {
 	if engine == nil {
 		return PlanInboundPacket(packet, nil)
 	}
+	engine.sessionsMu.RLock()
+	defer engine.sessionsMu.RUnlock()
 	return PlanInboundPacket(packet, engine.sessions)
 }
 
