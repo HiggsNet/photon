@@ -1038,8 +1038,9 @@ func (d *Daemon) flushRevocationCleanup() {
 		for peerID, peer := range peers {
 			if revokedZones[zone.ZonePath(peerID)] && peerNeedsRevocationCleanup(peer) {
 				patches[peerID] = corestate.PeerCheckpointPatch{
-					DiscoveredEndpoint: corestate.PatchField[string]{Set: true},
-					ObservedEndpoint:   corestate.PatchField[string]{Set: true}, ObservedFirstUnix: corestate.PatchField[int64]{Set: true},
+					DiscoveredEndpoint:     corestate.PatchField[string]{Set: true},
+					LastSuccessfulEndpoint: corestate.PatchField[string]{Set: true},
+					ObservedEndpoint:       corestate.PatchField[string]{Set: true}, ObservedFirstUnix: corestate.PatchField[int64]{Set: true},
 					ObservedLastUnix:  corestate.PatchField[int64]{Set: true},
 					ObservedUntilUnix: corestate.PatchField[int64]{Set: true},
 					ObservedGrace:     corestate.PatchField[[]corestate.ObservedGraceEndpoint]{Set: true},

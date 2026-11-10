@@ -131,7 +131,6 @@ func TestPlanGossipDiscoveryReplacesAndExpiresEndpoint(t *testing.T) {
 	emptyNetwork, _ := signedDiscoveryNetwork(t, "peer.catofes.", true, nil, now)
 	plan = PlanGossipDiscovery(GossipDiscoveryInput{
 		LocalPeerID: "local.catofes.", ManagedZone: "local.catofes.", Network: emptyNetwork,
-		EndpointGrace: time.Nanosecond,
 		Peers: map[string]corestate.PeerCheckpoint{"peer.catofes.": {
 			DiscoveredEndpoint: "127.0.0.1:10000", LastSyncUnix: now.Add(-time.Hour).Unix(),
 		}},
@@ -358,16 +357,14 @@ func signedDiscoveryNetwork(t testing.TB, peer zone.ZonePath, includePeer bool, 
 	return network, peerPrivate
 }
 
-func TestDiscoveryAddressOrderAndRecentFallback(t *testing.T) {
-	now := time.Unix(1000, 0)
+func TestDiscoveryAddressOrder(t *testing.T) {
 	bootstrap := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 33434}
 	entries := []gossip.EndpointEntry{
 		{Address: "203.0.113.10", Port: 33434, Source: "reflector"},
 		{Address: "198.51.100.2", Port: 33434, Source: "advertise"},
 	}
-	peer := corestate.PeerCheckpoint{LastSyncUnix: now.Add(-time.Minute).Unix(), DiscoveredEndpoint: "192.0.2.9:33434"}
-	addrs := buildDiscoveryAddresses(entries, bootstrap, peer, 10*time.Minute, []string{"bootstrap", "advertise", "reflector", "recent"}, now)
-	want := []string{"127.0.0.1:33434", "198.51.100.2:33434", "203.0.113.10:33434", "192.0.2.9:33434"}
+	addrs := buildDiscoveryAddresses(entries, bootstrap, []string{"bootstrap", "advertise", "reflector"})
+	want := []string{"127.0.0.1:33434", "198.51.100.2:33434", "203.0.113.10:33434"}
 	if len(addrs) != len(want) {
 		t.Fatalf("addresses = %v", addrs)
 	}
@@ -537,7 +534,7 @@ func TestObservedPathVerifierRechecksExpiryAndRevocation(t *testing.T) {
 	defer driver.Stop()
 	check := func(at time.Time, endpoint string, want bool) {
 		t.Helper()
-		verified, committed, err := driver.recordGossipObservedPath(t.Context(), peer.String(), endpoint, nil, at)
+		verified, committed, err := driver.recordGossipObservedPath(t.Context(), peer.String(), endpoint, false, nil, at)
 		if err != nil || verified.valid != want || committed != want {
 			t.Fatalf("at %v: verified=%t committed=%t err=%v, want %t", at, verified.valid, committed, err, want)
 		}
@@ -567,5 +564,44 @@ func TestObservedPathVerifierRechecksExpiryAndRevocation(t *testing.T) {
 	check(now, rejected, false)
 	if got := store.PeerCheckpoints([]string{peer.String()})[peer.String()].ObservedEndpoint; got != original {
 		t.Fatalf("invalid path replaced committed endpoint with %q", got)
+	}
+}
+
+func TestRememberedGossipEndpointIsAStartupCandidateOnlyForVerifiedPeer(t *testing.T) {
+	now := time.Unix(1000, 0)
+	const peerID = "peer.catofes."
+	const unknownID = "unknown.catofes."
+	network, _ := signedDiscoveryNetwork(t, peerID, true, nil, now)
+	input := GossipDiscoveryInput{
+		Network: network,
+		Peers: map[string]corestate.PeerCheckpoint{
+			peerID:    {LastSuccessfulEndpoint: "192.0.2.1:33434"},
+			unknownID: {LastSuccessfulEndpoint: "192.0.2.2:33434"},
+		},
+	}
+	if got := GossipOutboundPeers(input, now); !slices.Equal(got, []string{peerID}) {
+		t.Fatalf("outbound peers = %v, want only the verified peer", got)
+	}
+	plan := PlanGossipDiscovery(input, now)
+	datagram := &memoryGossipDatagram{}
+	transport, err := gossip.NewTransport(gossip.Config{PeerID: "local.catofes."}, datagram)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ApplyGossipDiscoveryPlan(transport, plan)
+	if transport.HasRememberedPeerAddr(unknownID) {
+		t.Fatal("unverified address installed")
+	}
+	if err := transport.Send(peerID, &gossip.Message{Type: gossip.MessagePing, Ping: &gossip.Ping{}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, addr := datagram.lastWrite(); addr.String() != input.Peers[peerID].LastSuccessfulEndpoint {
+		t.Fatalf("probe sent to %v", addr)
+	}
+	input.Suppressed = map[string]bool{peerID: true}
+	plan = PlanGossipDiscovery(input, now)
+	ApplyGossipDiscoveryPlan(transport, plan)
+	if patch := plan.Patches[peerID].LastSuccessfulEndpoint; transport.HasRememberedPeerAddr(peerID) || !patch.Set || patch.Value != "" {
+		t.Fatal("suppressed peer's remembered endpoint was not cleared")
 	}
 }

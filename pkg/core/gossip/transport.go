@@ -48,6 +48,7 @@ type Transport struct {
 	knownPeers      map[string]struct{} // inbound allowlist
 	knownMu         sync.RWMutex
 	outboundAddrs   map[string][]*net.UDPAddr // addresses used for Send
+	rememberedAddrs map[string]*net.UDPAddr   // last confirmed addresses from the peer state owner
 	outboundMu      sync.RWMutex
 	recentInbound   map[string]recentInboundPath // short-lived paths learned from accepted inbound packets
 	recentInboundMu sync.Mutex
@@ -55,13 +56,18 @@ type Transport struct {
 	observedMu      sync.RWMutex
 	addrStates      map[string]map[string]*addrState // per-peer per-address reachability state
 	addrStateMu     sync.RWMutex
-	lastSentAddr    map[string]string // per-peer last successfully-written address
+	lastSentAddr    map[string]peerSentAddresses
 	lastSentMu      sync.RWMutex
 	maxMessageBytes int
 	replay          *ReplayWindow
 	quotas          *PeerQuotas
 	clock           Clock
 	log             func(Event)
+}
+
+type peerSentAddresses struct {
+	last string
+	ping string
 }
 
 type addrState struct {
@@ -198,6 +204,14 @@ func (t *Transport) SetReadDeadline(deadline time.Time) error {
 }
 
 func (t *Transport) Send(peerID string, message *Message) error {
+	if message != nil && message.Type == MessagePing {
+		t.lastSentMu.Lock()
+		if sent, ok := t.lastSentAddr[peerID]; ok {
+			sent.ping = ""
+			t.lastSentAddr[peerID] = sent
+		}
+		t.lastSentMu.Unlock()
+	}
 	addrs := t.sendAddrsFor(peerID)
 	if len(addrs) == 0 {
 		start := t.now()
@@ -292,9 +306,14 @@ func (t *Transport) sendToAddrs(peerID string, message *Message, addrs []*net.UD
 	if sentAddr != nil {
 		t.lastSentMu.Lock()
 		if t.lastSentAddr == nil {
-			t.lastSentAddr = make(map[string]string)
+			t.lastSentAddr = make(map[string]peerSentAddresses)
 		}
-		t.lastSentAddr[peerID] = sentAddr.String()
+		sent := t.lastSentAddr[peerID]
+		sent.last = sentAddr.String()
+		if message.Type == MessagePing {
+			sent.ping = sent.last
+		}
+		t.lastSentAddr[peerID] = sent
 		t.lastSentMu.Unlock()
 		t.logEvent(event, nil, start)
 		return nil
@@ -314,7 +333,8 @@ func (t *Transport) sendAddrsFor(peerID string) []*net.UDPAddr {
 	var preferObservedFirst bool
 
 	t.outboundMu.RLock()
-	outbound = appendUDPAddrCopies(nil, t.outboundAddrs[peerID]...)
+	outbound = appendUDPAddrCopies(nil, t.rememberedAddrs[peerID])
+	outbound = appendUDPAddrCopies(outbound, t.outboundAddrs[peerID]...)
 	t.outboundMu.RUnlock()
 
 	t.observedMu.RLock()
@@ -742,6 +762,37 @@ func (t *Transport) RemovePeerAddrs(peerID string) {
 	t.outboundMu.Unlock()
 }
 
+// SetRememberedPeerAddr updates the last confirmed UDP candidate independently
+// of configured and signed addresses. A nil address removes the candidate.
+func (t *Transport) SetRememberedPeerAddr(peerID string, addr *net.UDPAddr) {
+	t.outboundMu.Lock()
+	defer t.outboundMu.Unlock()
+	if addr == nil {
+		delete(t.rememberedAddrs, peerID)
+		return
+	}
+	if t.rememberedAddrs == nil {
+		t.rememberedAddrs = make(map[string]*net.UDPAddr)
+	}
+	t.rememberedAddrs[peerID] = net.UDPAddrFromAddrPort(addr.AddrPort())
+}
+
+func (t *Transport) HasRememberedPeerAddr(peerID string) bool {
+	t.outboundMu.RLock()
+	defer t.outboundMu.RUnlock()
+	return t.rememberedAddrs[peerID] != nil
+}
+
+// ReplaceRememberedPeerAddrs publishes a complete discovery projection.
+func (t *Transport) ReplaceRememberedPeerAddrs(addrs map[string]*net.UDPAddr) {
+	t.outboundMu.Lock()
+	defer t.outboundMu.Unlock()
+	t.rememberedAddrs = make(map[string]*net.UDPAddr, len(addrs))
+	for id, addr := range addrs {
+		t.rememberedAddrs[id] = net.UDPAddrFromAddrPort(addr.AddrPort())
+	}
+}
+
 func (t *Transport) RemovePeer(peerID string) {
 	t.knownMu.Lock()
 	delete(t.knownPeers, peerID)
@@ -749,6 +800,7 @@ func (t *Transport) RemovePeer(peerID string) {
 
 	t.outboundMu.Lock()
 	delete(t.outboundAddrs, peerID)
+	delete(t.rememberedAddrs, peerID)
 	t.outboundMu.Unlock()
 
 	t.observedMu.Lock()
@@ -798,6 +850,7 @@ func (t *Transport) SetPeers(peers map[string]*net.UDPAddr) {
 
 	t.outboundMu.Lock()
 	t.outboundAddrs = make(map[string][]*net.UDPAddr, len(peers))
+	t.rememberedAddrs = nil
 	for id, addr := range peers {
 		if addr == nil {
 			continue
@@ -827,8 +880,20 @@ func (t *Transport) LastSendAddr(peerID string) *net.UDPAddr {
 		return nil
 	}
 	t.lastSentMu.RLock()
-	addrStr := t.lastSentAddr[peerID]
+	addrStr := t.lastSentAddr[peerID].last
 	t.lastSentMu.RUnlock()
+	return sentUDPAddr(addrStr)
+}
+
+// LastPingAddr is the address actually used for the current summary probe.
+func (t *Transport) LastPingAddr(peerID string) *net.UDPAddr {
+	t.lastSentMu.RLock()
+	addrStr := t.lastSentAddr[peerID].ping
+	t.lastSentMu.RUnlock()
+	return sentUDPAddr(addrStr)
+}
+
+func sentUDPAddr(addrStr string) *net.UDPAddr {
 	if addrStr == "" {
 		return nil
 	}

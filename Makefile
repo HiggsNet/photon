@@ -750,7 +750,7 @@ nat-daemon-observed-smoke: build
 	a_pid=""; b_pid=""; \
 	trap 'status="$$?"; kill "$$catofes_pid" "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; if [ "$$status" != 0 ]; then cat "$$tmp/catofes.log" "$$tmp/a.log" "$tmp/b.log" "$tmp/a-restart.log" "$tmp/record-put.out" 2>/dev/null || true; fi; exit "$$status"' EXIT; \
 	sleep 1; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 1 >"$$tmp/a.log" 2>&1 & a_pid="$$!"; \
 	for i in 1 2 3 4 5 6 7 8; do if PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null 2>&1; then break; fi; sleep 1; done; \
 	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
 	kill "$$catofes_pid" >/dev/null 2>&1 || true; wait "$$catofes_pid" >/dev/null 2>&1 || true; catofes_pid=""; \
@@ -764,7 +764,8 @@ nat-daemon-observed-smoke: build
 		printf '%s\n' "$$peer" | grep -q '^daemon: online ' && \
 		printf '%s\n' "$$peer" | grep -qx 'observed_addr: 127\.0\.0\.1:43563' && \
 		printf '%s\n' "$$peer" | grep -Eq '^observed_status: active( |$$)' && \
-		printf '%s\n' "$$peer" | grep -Fxq 'discovered_addr: -'; \
+		printf '%s\n' "$$peer" | grep -Fxq 'discovered_addr: -' && \
+		printf '%s\n' "$$peer" | grep -Fxq 'last_successful_endpoint: 127.0.0.1:43563'; \
 	}; \
 	check_record() { \
 		PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record get node-a.catofes. identity | grep -Fxq "value: $$1"; \
@@ -779,19 +780,15 @@ nat-daemon-observed-smoke: build
 	grep -q 'via daemon' "$$tmp/record-put.out"; \
 	wait_record node-a-nat-daemon; \
 	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-a.catofes. >/dev/null; \
-	kill "$$b_pid" "$$a_pid"; \
-	wait "$$b_pid" || true; b_pid=""; \
+	kill "$$a_pid"; \
 	wait "$$a_pid" || true; a_pid=""; \
-	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/a-restart.log" 2>&1 & a_pid="$$!"; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 1 >"$$tmp/a-restart.log" 2>&1 & a_pid="$$!"; \
 	for i in 1 2 3 4 5; do \
 		if PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status 2>/dev/null | grep -q '^daemon: online '; then break; fi; \
 		sleep 1; \
 	done; \
 	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status | grep -q '^daemon: online '; \
 	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
-	peer="$$(PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip peer node-b.catofes. --verbose)"; \
-	if printf '%s\n' "$$peer" | grep -Eq '^observed_addr: [^-]'; then printf '%s\n' "$$peer" >&2; exit 1; fi; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >>"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
 	for i in 1 2 3 4 5 6 7 8; do if check_observed 2>/dev/null; then break; fi; sleep 1; done; \
 	check_observed || { printf '%s\n' "$$peer" >&2; exit 1; }; \
 	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put node-a.catofes. identity node-a-nat-relearned | grep -q 'via daemon'; \

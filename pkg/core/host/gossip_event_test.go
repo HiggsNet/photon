@@ -3,6 +3,8 @@ package host
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net"
 	"reflect"
@@ -222,8 +224,13 @@ func TestGossipDriverFinishesSessionAndStartsDeferredHint(t *testing.T) {
 func TestGossipDriverFinishesChangedSessionAndOwnsRelay(t *testing.T) {
 	now := time.Unix(100, 0)
 	view := loadedManagedGossipState("local.catofes.", "remote.catofes.")
-	view.Gossip = &corestate.GossipCheckpoint{Peers: map[string]corestate.PeerCheckpoint{"peer-c": {}, "peer-d": {}, "peer-e": {}}}
-	state := &memoryGossipStateStore{views: []corestate.View{view, view}}
+	writes := 0
+	common := corestate.NewStoreWithCheckpoint(view.State, view.Gossip, nil,
+		func(context.Context, map[string]*corestate.PeerCheckpoint, corestate.VerifiedRevision) error {
+			writes++
+			return nil
+		})
+	state := &countingCheckpointStore{GossipStateStore: common}
 	driver := NewGossipDriver(newFakeClock(now), 2, state, GossipDriverConfig{
 		PeerID: "local.catofes.",
 		Discovery: GossipDiscoveryConfig{
@@ -242,9 +249,10 @@ func TestGossipDriverFinishesChangedSessionAndOwnsRelay(t *testing.T) {
 		t.Fatalf("result=%#v source_session=%#v", result, driver.Gossip.Session("peer-b"))
 	}
 	wantRoot := corestate.CatalogRoot(corestate.ZoneDigests(view.State.Network))
-	if len(state.updates) != 1 || len(state.updates[0]) != 2 {
-		t.Fatalf("relay checkpoint updates = %#v", state.updates)
+	if state.updates != 1 || writes != 0 {
+		t.Fatalf("relay state updates = %d, writes = %d, want 1/0", state.updates, writes)
 	}
+	livePeers := common.PeerCheckpoints([]string{"peer-c", "peer-d", "peer-e"})
 	for _, peerID := range []string{"peer-c", "peer-d"} {
 		select {
 		case queued := <-driver.Events():
@@ -256,17 +264,24 @@ func TestGossipDriverFinishesChangedSessionAndOwnsRelay(t *testing.T) {
 		default:
 			t.Fatalf("missing relay event for %s", peerID)
 		}
-		patch := state.updates[0][peerID]
-		if !patch.LastRelayRootHex.Set || !patch.LastRelayUnix.Set || patch.LastRelayUnix.Value != now.Unix() {
-			t.Fatalf("relay checkpoint for %s = %#v", peerID, patch)
+		peer := livePeers[peerID]
+		if peer.LastRelayCatalogRootHex != hex.EncodeToString(wantRoot) || peer.LastRelayUnix != now.Unix() {
+			t.Fatalf("relay state for %s = %#v", peerID, peer)
 		}
 		diagnostics, ok := driver.Observability.Snapshot(peerID, now)
 		if !ok || diagnostics.LastUpdateSource != "peer-b" || diagnostics.LastRelaySuppression != "" {
 			t.Fatalf("relay diagnostics for %s = %#v", peerID, diagnostics)
 		}
 	}
-	if driver.Gossip.Session("peer-e") != nil {
-		t.Fatal("relay session for the dropped event was not removed")
+	if _, recorded := livePeers["peer-e"]; recorded || driver.Gossip.Session("peer-e") != nil {
+		t.Fatal("relay state was retained for the dropped event")
+	}
+	data, err := json.Marshal(livePeers["peer-c"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "{}" {
+		t.Fatalf("relay-only state appeared in the persistent JSON: %s", data)
 	}
 }
 

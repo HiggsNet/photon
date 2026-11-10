@@ -44,7 +44,6 @@ func gossipDriverConfig(app *appConfig, verified *corestate.VerifiedState, logge
 		Discovery: corehost.GossipDiscoveryConfig{
 			Bootstrap:      configuredKnownPeers(app),
 			BootstrapPeers: bootstrapPeerIDs(app.Bootstrap),
-			EndpointGrace:  app.EndpointGrace,
 			SourceOrder:    append([]string(nil), app.EndpointSourceOrder...),
 		},
 	}

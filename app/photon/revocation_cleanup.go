@@ -124,6 +124,7 @@ func isConfiguredBootstrapPeerWithConfig(config *appConfig, peerID string) bool 
 // would change the runtime-owned fields of one peer.
 func peerNeedsRevocationCleanup(peer corestate.PeerCheckpoint) bool {
 	return peer.DiscoveredEndpoint != "" ||
+		peer.LastSuccessfulEndpoint != "" ||
 		peer.ObservedEndpoint != "" ||
 		peer.ObservedFirstSeenUnix != 0 ||
 		peer.ObservedLastSeenUnix != 0 ||

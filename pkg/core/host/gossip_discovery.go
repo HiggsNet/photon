@@ -34,7 +34,6 @@ type GossipDiscoveryInput struct {
 	Suppressed       map[string]bool
 	Bootstrap        map[string]*net.UDPAddr
 	BootstrapPeers   []string
-	EndpointGrace    time.Duration
 	SourceOrder      []string
 	verifiedRevision corestate.VerifiedRevision
 	observedVerifier *photoncrypto.Verifier
@@ -46,7 +45,6 @@ type GossipDiscoveryInput struct {
 type GossipDiscoveryConfig struct {
 	Bootstrap      map[string]*net.UDPAddr
 	BootstrapPeers []string
-	EndpointGrace  time.Duration
 	SourceOrder    []string
 }
 
@@ -67,7 +65,6 @@ func (driver *GossipDriver) gossipDiscoveryInput(peerID string, suppressed map[s
 	input.LocalPeerID = config.PeerID
 	input.Bootstrap = config.Discovery.Bootstrap
 	input.BootstrapPeers = config.Discovery.BootstrapPeers
-	input.EndpointGrace = config.Discovery.EndpointGrace
 	input.SourceOrder = config.Discovery.SourceOrder
 	if driver.gossipState == nil {
 		return input
@@ -112,8 +109,8 @@ func cloneSuppressedPeers(input map[string]bool) map[string]bool {
 const GossipRelayMinInterval = time.Second
 
 // GossipOutboundPeers returns every peer that common gossip may actively
-// contact: configured bootstrap peers, verified signed endpoints and active
-// verified observed paths. The result is detached and de-duplicated.
+// contact: bootstrap peers, signed endpoints, remembered endpoints and live
+// observed paths. The result is detached and de-duplicated.
 func GossipOutboundPeers(input GossipDiscoveryInput, now time.Time) []string {
 	seen := make(map[string]bool)
 	peers := make([]string, 0, len(input.Bootstrap)+len(input.Peers))
@@ -146,7 +143,9 @@ func GossipOutboundPeers(input GossipDiscoveryInput, now time.Time) []string {
 	}
 	observed := make([]string, 0, len(input.Peers))
 	for peerID, checkpoint := range input.Peers {
-		if discoveryObservedActive(checkpoint, now) && discoveryPeerVerified(input, peerID, now) {
+		if !seen[peerID] && !input.Suppressed[peerID] &&
+			(discoveryObservedActive(checkpoint, now) || parseRememberedAddr(checkpoint.LastSuccessfulEndpoint) != nil) &&
+			discoveryPeerVerified(input, peerID, now) {
 			observed = append(observed, peerID)
 		}
 	}
@@ -195,6 +194,7 @@ type GossipDiscoveryPlan struct {
 	KnownPeerIDs []string
 	Peers        map[string]GossipPeerAddressUpdate
 	Patches      map[string]corestate.PeerCheckpointPatch
+	Remembered   map[string]*net.UDPAddr
 }
 
 // PlanVerifiedObservedCheckpoint validates the peer against verified state
@@ -338,9 +338,13 @@ func (driver *GossipDriver) publishGossipObservedPath(peerID string, suppressed 
 	}
 	if !ok {
 		transport.RemoveObservedPeerAddr(peerID)
+		transport.SetRememberedPeerAddr(peerID, nil)
 		return nil
 	}
 	transport.SetObservedPeerPaths(peerID, paths, prefer)
+	if verification.confirmedChanged {
+		transport.SetRememberedPeerAddr(peerID, parseRememberedAddr(input.Peers[peerID].LastSuccessfulEndpoint))
+	}
 	return nil
 }
 
@@ -354,7 +358,10 @@ func (driver *GossipDriver) gossipDiscoveryAvailable() bool {
 }
 
 func PlanGossipDiscovery(input GossipDiscoveryInput, now time.Time) GossipDiscoveryPlan {
-	plan := GossipDiscoveryPlan{Peers: make(map[string]GossipPeerAddressUpdate), Patches: make(map[string]corestate.PeerCheckpointPatch)}
+	plan := GossipDiscoveryPlan{
+		Peers: make(map[string]GossipPeerAddressUpdate), Patches: make(map[string]corestate.PeerCheckpointPatch),
+		Remembered: make(map[string]*net.UDPAddr),
+	}
 	if input.Network == nil {
 		return plan
 	}
@@ -363,7 +370,7 @@ func PlanGossipDiscovery(input GossipDiscoveryInput, now time.Time) GossipDiscov
 	active := make(map[string]bool)
 
 	for peerID, bootstrap := range input.Bootstrap {
-		addrs := buildDiscoveryAddresses(discovered[peerID], bootstrap, input.Peers[peerID], input.EndpointGrace, input.SourceOrder, now)
+		addrs := buildDiscoveryAddresses(discovered[peerID], bootstrap, input.SourceOrder)
 		if len(addrs) > 0 {
 			update := plan.Peers[peerID]
 			update.SetAddresses = addrs
@@ -375,7 +382,7 @@ func PlanGossipDiscovery(input GossipDiscoveryInput, now time.Time) GossipDiscov
 			continue
 		}
 		current := input.Peers[peerID]
-		addrs := buildDiscoveryAddresses(entries, input.Bootstrap[peerID], current, input.EndpointGrace, input.SourceOrder, now)
+		addrs := buildDiscoveryAddresses(entries, input.Bootstrap[peerID], input.SourceOrder)
 		if len(addrs) == 0 {
 			continue
 		}
@@ -402,6 +409,15 @@ func PlanGossipDiscovery(input GossipDiscoveryInput, now time.Time) GossipDiscov
 	for _, peerID := range peerIDs {
 		peer := input.Peers[peerID]
 		update := plan.Peers[peerID]
+		if peer.LastSuccessfulEndpoint != "" {
+			if input.Suppressed[peerID] || input.Network.IsZoneRevoked(zone.ZonePath(peerID), now) {
+				patch := plan.Patches[peerID]
+				patch.LastSuccessfulEndpoint = corestate.PatchField[string]{Set: true}
+				plan.Patches[peerID] = patch
+			} else if addr := parseRememberedAddr(peer.LastSuccessfulEndpoint); addr != nil && discoveryPeerVerified(input, peerID, now) {
+				plan.Remembered[peerID] = addr
+			}
+		}
 		if peer.ObservedEndpoint != "" && !discoveryObservedActive(peer, now) {
 			update.RemoveObserved = true
 			plan.Patches[peerID] = mergeDiscoveryPatch(plan.Patches[peerID], clearObservedDiscoveryPatch())
@@ -411,8 +427,7 @@ func PlanGossipDiscovery(input GossipDiscoveryInput, now time.Time) GossipDiscov
 			update.RemoveObserved = true
 		}
 		if peer.DiscoveredEndpoint != "" && !active[peerID] && input.Bootstrap[peerID] == nil &&
-			peerID != input.LocalPeerID && peerID != string(input.ManagedZone) && len(discovered[peerID]) == 0 &&
-			len(recentDiscoveryAddresses(nil, peer, input.EndpointGrace, now)) == 0 {
+			peerID != input.LocalPeerID && peerID != string(input.ManagedZone) && len(discovered[peerID]) == 0 {
 			update.RemoveAddresses = true
 			plan.Patches[peerID] = mergeDiscoveryPatch(plan.Patches[peerID], corestate.PeerCheckpointPatch{
 				DiscoveredEndpoint: corestate.PatchField[string]{Set: true},
@@ -427,6 +442,7 @@ func ApplyGossipDiscoveryPlan(transport *gossip.Transport, plan GossipDiscoveryP
 	if transport == nil {
 		return
 	}
+	transport.ReplaceRememberedPeerAddrs(plan.Remembered)
 	for _, peerID := range plan.KnownPeerIDs {
 		transport.AddKnownPeerID(peerID)
 	}
@@ -588,7 +604,7 @@ func mergeDiscoveryPatch(a, b corestate.PeerCheckpointPatch) corestate.PeerCheck
 	return a
 }
 
-func buildDiscoveryAddresses(entries []gossip.EndpointEntry, bootstrap *net.UDPAddr, peer corestate.PeerCheckpoint, grace time.Duration, order []string, now time.Time) []*net.UDPAddr {
+func buildDiscoveryAddresses(entries []gossip.EndpointEntry, bootstrap *net.UDPAddr, order []string) []*net.UDPAddr {
 	if len(order) == 0 {
 		order = []string{"advertise", "bootstrap", "reflector", "interface"}
 	}
@@ -603,7 +619,6 @@ func buildDiscoveryAddresses(entries []gossip.EndpointEntry, bootstrap *net.UDPA
 			bySource[source] = appendDiscoveryAddress(bySource[source], addr)
 		}
 	}
-	bySource["recent"] = recentDiscoveryAddresses(nil, peer, grace, now)
 	var out []*net.UDPAddr
 	seen := make(map[string]bool)
 	appendSource := func(source string) {
@@ -625,7 +640,7 @@ func buildDiscoveryAddresses(entries []gossip.EndpointEntry, bootstrap *net.UDPA
 	for _, source := range order {
 		appendSource(source)
 	}
-	for _, source := range []string{"recent", "bootstrap", "advertise", "reflector", "interface"} {
+	for _, source := range []string{"bootstrap", "advertise", "reflector", "interface"} {
 		appendSource(source)
 	}
 	// Source describes how an endpoint was learned, not whether it is valid.
@@ -641,21 +656,12 @@ func buildDiscoveryAddresses(entries []gossip.EndpointEntry, bootstrap *net.UDPA
 	return out
 }
 
-func recentDiscoveryAddresses(out []*net.UDPAddr, peer corestate.PeerCheckpoint, grace time.Duration, now time.Time) []*net.UDPAddr {
-	if peer.DiscoveredEndpoint == "" || peer.LastSyncUnix == 0 || peer.LastFailure != nil {
-		return out
+func parseRememberedAddr(endpoint string) *net.UDPAddr {
+	addr, err := netip.ParseAddrPort(endpoint)
+	if err != nil || addr.Port() == 0 || addr.Addr().IsUnspecified() || addr.Addr().IsMulticast() {
+		return nil
 	}
-	if grace <= 0 {
-		grace = gossip.DefaultEndpointGrace
-	}
-	if now.After(time.Unix(peer.LastSyncUnix, 0).Add(grace)) {
-		return out
-	}
-	addr, err := netip.ParseAddrPort(peer.DiscoveredEndpoint)
-	if err != nil {
-		return out
-	}
-	return appendDiscoveryAddress(out, net.UDPAddrFromAddrPort(addr))
+	return net.UDPAddrFromAddrPort(addr)
 }
 
 func appendDiscoveryAddress(out []*net.UDPAddr, addr *net.UDPAddr) []*net.UDPAddr {

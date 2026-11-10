@@ -83,6 +83,7 @@ type PeerRuntimeView struct {
 	LastRelaySuppression  string                                    `json:"last_relay_suppression,omitempty"`
 	LastRelaySuppressedAt int64                                     `json:"last_relay_suppressed_at,omitempty"`
 	DiscoveredAddr        string                                    `json:"discovered_addr,omitempty"`
+	LastSuccessfulAddr    string                                    `json:"last_successful_endpoint,omitempty"`
 	ObservedAddr          string                                    `json:"observed_addr,omitempty"`
 	ObservedFirstSeenUnix int64                                     `json:"observed_first_seen_unix,omitempty"`
 	ObservedLastSeenUnix  int64                                     `json:"observed_last_seen_unix,omitempty"`
@@ -125,7 +126,7 @@ func BuildPeerViewFromCheckpoint(id, configuredAddr string, endpoints []PeerEndp
 func buildPeerRuntimeViewFromCheckpoint(checkpoint corestate.PeerCheckpoint, diagnostics observability.PeerDiagnostics, now time.Time) PeerRuntimeView {
 	return PeerRuntimeView{
 		LastSyncUnix:          checkpoint.LastSyncUnix,
-		LastAttemptUnix:       checkpoint.LastAttemptUnix,
+		LastAttemptUnix:       diagnostics.LastAttemptUnix,
 		BackoffUntilUnix:      checkpoint.BackoffUntilUnix,
 		LastRelayUnix:         checkpoint.LastRelayUnix,
 		FailureCount:          checkpoint.FailureCount,
@@ -134,6 +135,7 @@ func buildPeerRuntimeViewFromCheckpoint(checkpoint corestate.PeerCheckpoint, dia
 		LastRelaySuppression:  diagnostics.LastRelaySuppression,
 		LastRelaySuppressedAt: diagnostics.LastRelaySuppressedAt,
 		DiscoveredAddr:        checkpoint.DiscoveredEndpoint,
+		LastSuccessfulAddr:    checkpoint.LastSuccessfulEndpoint,
 		ObservedAddr:          checkpoint.ObservedEndpoint,
 		ObservedFirstSeenUnix: checkpoint.ObservedFirstSeenUnix,
 		ObservedLastSeenUnix:  checkpoint.ObservedLastSeenUnix,
@@ -276,26 +278,27 @@ type PeerStatusInfo struct {
 }
 
 type PeerDebugView struct {
-	Historical       bool `json:",omitempty"`
-	PeerID           string
-	Source           string
-	ConfiguredAddr   string
-	ResolvedAddr     string
-	Status           string
-	LastSuccess      string
-	LastFailure      *FailureView
-	Backoff          string
-	NextRetry        string
-	KnownEndpoint    string
-	DiscoveredAddr   string
-	ObservedAddr     string
-	ObservedStatus   string
-	LastUpdateSource string
-	LastRelay        string
-	RelaySuppression string
-	SyncFlow         PeerSyncFlowView
-	DatagramStats    PeerDatagramStatsView
-	ObjectPullStats  PeerObjectPullStatsView
+	Historical         bool `json:",omitempty"`
+	PeerID             string
+	Source             string
+	ConfiguredAddr     string
+	ResolvedAddr       string
+	Status             string
+	LastSuccess        string
+	LastFailure        *FailureView
+	Backoff            string
+	NextRetry          string
+	KnownEndpoint      string
+	DiscoveredAddr     string
+	LastSuccessfulAddr string
+	ObservedAddr       string
+	ObservedStatus     string
+	LastUpdateSource   string
+	LastRelay          string
+	RelaySuppression   string
+	SyncFlow           PeerSyncFlowView
+	DatagramStats      PeerDatagramStatsView
+	ObjectPullStats    PeerObjectPullStatsView
 }
 
 type PeerDebugInput struct {
@@ -307,6 +310,7 @@ type PeerDebugInput struct {
 	BackoffUntilUnix     int64
 	LastRelayUnix        int64
 	DiscoveredAddr       string
+	LastSuccessfulAddr   string
 	ObservedAddr         string
 	ObservedLastSeenUnix int64
 	ObservedUntilUnix    int64
@@ -377,6 +381,7 @@ func buildPeerDebugFromCheckpoint(peerID, source, configuredAddr, resolvedAddr s
 		BackoffUntilUnix:     checkpoint.BackoffUntilUnix,
 		LastRelayUnix:        checkpoint.LastRelayUnix,
 		DiscoveredAddr:       checkpoint.DiscoveredEndpoint,
+		LastSuccessfulAddr:   checkpoint.LastSuccessfulEndpoint,
 		ObservedAddr:         checkpoint.ObservedEndpoint,
 		ObservedLastSeenUnix: checkpoint.ObservedLastSeenUnix,
 		ObservedUntilUnix:    checkpoint.ObservedUntilUnix,
@@ -388,25 +393,26 @@ func buildPeerDebugFromCheckpoint(peerID, source, configuredAddr, resolvedAddr s
 
 func BuildPeerDebug(input PeerDebugInput) PeerDebugView {
 	return PeerDebugView{
-		PeerID:           input.PeerID,
-		Source:           input.Source,
-		ConfiguredAddr:   input.ConfiguredAddr,
-		ResolvedAddr:     input.ResolvedAddr,
-		Status:           peerDebugStatus(input, input.Now),
-		LastSuccess:      formatPeerDebugLastSuccess(input.LastSyncUnix),
-		LastFailure:      peerFailureView(input.LastFailure),
-		Backoff:          formatPeerDebugBackoff(input.BackoffUntilUnix, input.Now),
-		NextRetry:        formatPeerDebugNextRetry(input.BackoffUntilUnix, input.Now),
-		KnownEndpoint:    input.ResolvedAddr,
-		DiscoveredAddr:   input.DiscoveredAddr,
-		ObservedAddr:     input.ObservedAddr,
-		ObservedStatus:   formatPeerDebugObservedPath(input, input.Now),
-		LastUpdateSource: input.Diagnostics.LastUpdateSource,
-		LastRelay:        formatPeerDebugUnixTime(input.LastRelayUnix),
-		RelaySuppression: formatPeerDebugRelaySuppression(input.Diagnostics.LastRelaySuppression, input.Diagnostics.LastRelaySuppressedAt),
-		SyncFlow:         BuildPeerSyncFlowFromObservability(input.Diagnostics),
-		DatagramStats:    BuildPeerDatagramStats(input.Diagnostics.DatagramStats),
-		ObjectPullStats:  BuildPeerObjectPullStats(input.Diagnostics.ObjectPullStats),
+		PeerID:             input.PeerID,
+		Source:             input.Source,
+		ConfiguredAddr:     input.ConfiguredAddr,
+		ResolvedAddr:       input.ResolvedAddr,
+		Status:             peerDebugStatus(input, input.Now),
+		LastSuccess:        formatPeerDebugLastSuccess(input.LastSyncUnix),
+		LastFailure:        peerFailureView(input.LastFailure),
+		Backoff:            formatPeerDebugBackoff(input.BackoffUntilUnix, input.Now),
+		NextRetry:          formatPeerDebugNextRetry(input.BackoffUntilUnix, input.Now),
+		KnownEndpoint:      input.ResolvedAddr,
+		DiscoveredAddr:     input.DiscoveredAddr,
+		LastSuccessfulAddr: input.LastSuccessfulAddr,
+		ObservedAddr:       input.ObservedAddr,
+		ObservedStatus:     formatPeerDebugObservedPath(input, input.Now),
+		LastUpdateSource:   input.Diagnostics.LastUpdateSource,
+		LastRelay:          formatPeerDebugUnixTime(input.LastRelayUnix),
+		RelaySuppression:   formatPeerDebugRelaySuppression(input.Diagnostics.LastRelaySuppression, input.Diagnostics.LastRelaySuppressedAt),
+		SyncFlow:           BuildPeerSyncFlowFromObservability(input.Diagnostics),
+		DatagramStats:      BuildPeerDatagramStats(input.Diagnostics.DatagramStats),
+		ObjectPullStats:    BuildPeerObjectPullStats(input.Diagnostics.ObjectPullStats),
 	}
 }
 

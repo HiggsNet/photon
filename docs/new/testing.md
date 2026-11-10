@@ -130,7 +130,7 @@ make observer-smoke
 | `discovery-smoke` | 验证 signed endpoint discovery 和 peer 地址更新。 |
 | `reflector-smoke` | 验证 public IP reflector endpoint 路径。 |
 | `bootstrap-join-smoke` | 验证新节点通过 bootstrap admission 加入并同步。 |
-| `nat-daemon-observed-smoke` | 验证 observed UDP 路径能传播记录，重启后由对端的新入站包重新学习地址并继续同步。 |
+| `nat-daemon-observed-smoke` | 验证 observed UDP 路径能传播记录，重启后用上次成功的地址主动探测，重新学习 observed 路径并继续同步。 |
 | `delegation-revoke-smoke` | 验证撤销传播到在线 daemon 后，信任校验失效并清理发现地址。 |
 | `chunk-fallback-smoke` | 验证 TCP object pull 不可达时 UDP chunk fallback 能补齐大对象（以 daemon 的 `via=udp_chunks` apply 日志确认），并先覆盖乱序丢块 NACK、重复 NACK 和过期/错误 transfer。 |
 | `ipsec-policy-smoke` | 验证 IPsec mesh policy URI 解析和 planner rule 匹配。 |

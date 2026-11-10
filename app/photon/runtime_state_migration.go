@@ -28,16 +28,13 @@ type stateMeta struct {
 
 // legacyPeerState decodes only restart hints retained from the old aggregate.
 type legacyPeerState struct {
-	LastSyncUnix            int64                                     `json:"last_sync_unix,omitempty"`
-	LastAttemptUnix         int64                                     `json:"last_attempt_unix,omitempty"`
-	BackoffUntilUnix        int64                                     `json:"backoff_until_unix,omitempty"`
-	LastRelayUnix           int64                                     `json:"last_relay_unix,omitempty"`
-	LastRelayCatalogRootHex string                                    `json:"last_relay_catalog_root_hex,omitempty"`
-	FailureCount            int                                       `json:"failure_count,omitempty"`
-	LastError               string                                    `json:"last_error,omitempty"`
-	DiscoveredAddr          string                                    `json:"discovered_addr,omitempty"`
-	ObservedLastSeenUnix    int64                                     `json:"observed_last_seen_unix,omitempty"`
-	RejectedDigests         map[string]photonstate.PeerRejectedDigest `json:"rejected_digests,omitempty"`
+	LastSyncUnix         int64                                     `json:"last_sync_unix,omitempty"`
+	LastAttemptUnix      int64                                     `json:"last_attempt_unix,omitempty"`
+	BackoffUntilUnix     int64                                     `json:"backoff_until_unix,omitempty"`
+	FailureCount         int                                       `json:"failure_count,omitempty"`
+	LastError            string                                    `json:"last_error,omitempty"`
+	ObservedLastSeenUnix int64                                     `json:"observed_last_seen_unix,omitempty"`
+	RejectedDigests      map[string]photonstate.PeerRejectedDigest `json:"rejected_digests,omitempty"`
 }
 
 var (

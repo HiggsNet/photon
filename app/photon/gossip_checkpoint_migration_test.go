@@ -18,8 +18,6 @@ func TestProjectLegacyGossipCheckpointKeepsOnlyBehaviorHints(t *testing.T) {
 	checkpoint, report := projectLegacyGossipCheckpoint(map[string]legacyPeerState{
 		"peer-a.catofes.": {
 			LastSyncUnix: 10, LastAttemptUnix: 11, BackoffUntilUnix: 20, FailureCount: 2,
-			LastRelayUnix: 12, LastRelayCatalogRootHex: "catalog",
-			DiscoveredAddr: "192.0.2.1:4242",
 			RejectedDigests: map[string]photonstate.PeerRejectedDigest{"zone:bad.catofes.": {
 				Zone: "bad.catofes.", Object: "zone", RootHashHex: hex.EncodeToString(root),
 				Reason: "invalid_snapshot", RejectedAtUnix: 18, UntilUnix: 28,
@@ -31,7 +29,7 @@ func TestProjectLegacyGossipCheckpointKeepsOnlyBehaviorHints(t *testing.T) {
 		t.Fatalf("report = %+v", report)
 	}
 	peer := checkpoint.Peers["peer-a.catofes."]
-	if peer.BackoffUntilUnix != 20 || peer.LastRelayCatalogRootHex != "catalog" || peer.DiscoveredEndpoint != "192.0.2.1:4242" {
+	if peer.BackoffUntilUnix != 20 {
 		t.Fatalf("checkpoint peer = %+v", peer)
 	}
 	if peer.LastFailure == nil || peer.LastFailure.Code != corestate.PeerFailureLegacy || peer.LastFailure.Error() != "diagnostic" || peer.LastFailure.AtUnix != 11 {

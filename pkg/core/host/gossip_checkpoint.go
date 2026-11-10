@@ -13,13 +13,14 @@ import (
 // gossipObservedVerification lives only across one packet's state update
 // and address-book publication, both evaluated at the same time.
 type gossipObservedVerification struct {
-	revision corestate.VerifiedRevision
-	valid    bool
+	revision         corestate.VerifiedRevision
+	valid            bool
+	confirmedChanged bool
 }
 
-// recordGossipObservedPath records an authenticated packet source in memory after
-// validating it against the GossipDriver's current verified state.
-func (driver *GossipDriver) recordGossipObservedPath(ctx context.Context, peerID, endpoint string, suppressed map[string]bool, now time.Time) (gossipObservedVerification, bool, error) {
+// recordGossipObservedPath checks the peer's current authorization before
+// recording the packet source. Only a changed address from a probe is durable.
+func (driver *GossipDriver) recordGossipObservedPath(ctx context.Context, peerID, endpoint string, confirmed bool, suppressed map[string]bool, now time.Time) (gossipObservedVerification, bool, error) {
 	defer driver.LogSlowOperation("observed_path_update", time.Now(), driver.PendingEventCount())
 	if driver == nil || driver.gossipState == nil {
 		return gossipObservedVerification{}, false, ErrGossipDriverStopped
@@ -31,7 +32,11 @@ func (driver *GossipDriver) recordGossipObservedPath(ctx context.Context, peerID
 	if !ok {
 		return verification, false, nil
 	}
+	if confirmed && !input.Suppressed[peerID] && input.Peers[peerID].LastSuccessfulEndpoint != endpoint {
+		patch.LastSuccessfulEndpoint = corestate.PatchField[string]{Set: true, Value: endpoint}
+	}
 	_, err := driver.gossipState.UpdatePeerCheckpoints(ctx, map[string]corestate.PeerCheckpointPatch{peerID: patch})
+	verification.confirmedChanged = err == nil && patch.LastSuccessfulEndpoint.Set
 	return verification, err == nil, err
 }
 
@@ -57,12 +62,7 @@ func (driver *GossipDriver) RecordGossipRejectedObject(ctx context.Context, peer
 	return err
 }
 
-// RecordGossipRelay persists relay throttling state without reading or
-// rewriting unrelated peer checkpoint fields.
-func (driver *GossipDriver) RecordGossipRelay(ctx context.Context, peerID, catalogRoot string, now time.Time) (bool, error) {
-	return driver.recordGossipRelays(ctx, []string{peerID}, catalogRoot, now)
-}
-
+// recordGossipRelays updates the live throttle and catalog deduplication state.
 func (driver *GossipDriver) recordGossipRelays(ctx context.Context, peerIDs []string, catalogRoot string, now time.Time) (bool, error) {
 	if driver == nil || driver.gossipState == nil {
 		return false, ErrGossipDriverStopped
@@ -116,7 +116,6 @@ func (driver *GossipDriver) commitGossipEventCheckpoint(ctx context.Context, ses
 			patches = make(map[string]corestate.PeerCheckpointPatch)
 		}
 		patch := patches[action.PeerID]
-		patch.LastAttemptUnix = corestate.PatchField[int64]{Set: true, Value: peer.LastAttemptUnix}
 		patch.BackoffUntilUnix = corestate.PatchField[int64]{Set: true, Value: peer.BackoffUntilUnix}
 		if action.Err != nil {
 			patch.LastFailure = corestate.PatchField[*corestate.PeerFailure]{Set: true, Value: peer.LastFailure}
@@ -139,7 +138,6 @@ func (driver *GossipDriver) commitGossipEventCheckpoint(ctx context.Context, ses
 			patches = make(map[string]corestate.PeerCheckpointPatch)
 		}
 		patch := patches[session.PeerID]
-		patch.LastAttemptUnix = corestate.PatchField[int64]{Set: true, Value: peer.LastAttemptUnix}
 		patch.BackoffUntilUnix = corestate.PatchField[int64]{Set: true, Value: peer.BackoffUntilUnix}
 		patch.FailureCount = corestate.PatchField[int]{Set: true, Value: peer.FailureCount}
 		patch.LastFailure = corestate.PatchField[*corestate.PeerFailure]{Set: true, Value: peer.LastFailure}
@@ -148,13 +146,17 @@ func (driver *GossipDriver) commitGossipEventCheckpoint(ctx context.Context, ses
 		}
 		patches[session.PeerID] = patch
 	}
-	_, err := driver.gossipState.UpdatePeerCheckpoints(ctx, patches)
-	return err
+	if _, err := driver.gossipState.UpdatePeerCheckpoints(ctx, patches); err != nil {
+		return err
+	}
+	for peerID := range patches {
+		driver.observeSyncAttempt(peerID, now)
+	}
+	return nil
 }
 
 func applyGossipCompletionCheckpoint(peer *corestate.PeerCheckpoint, syncErr error, now time.Time) bool {
 	previous := *peer
-	peer.LastAttemptUnix = now.Unix()
 	if syncErr != nil {
 		peer.FailureCount++
 		peer.BackoffUntilUnix = now.Add(gossipFailureBackoff(peer.FailureCount)).Unix()
@@ -165,13 +167,12 @@ func applyGossipCompletionCheckpoint(peer *corestate.PeerCheckpoint, syncErr err
 	peer.BackoffUntilUnix = 0
 	peer.FailureCount = 0
 	peer.LastFailure = nil
-	return peer.LastAttemptUnix != previous.LastAttemptUnix || peer.LastSyncUnix != previous.LastSyncUnix ||
+	return peer.LastSyncUnix != previous.LastSyncUnix ||
 		peer.BackoffUntilUnix != previous.BackoffUntilUnix || peer.FailureCount != previous.FailureCount ||
 		peer.LastFailure != previous.LastFailure
 }
 
 func applyGossipBackoffCheckpoint(peer *corestate.PeerCheckpoint, actionErr error, now time.Time) {
-	peer.LastAttemptUnix = now.Unix()
 	if actionErr != nil {
 		peer.LastFailure = &corestate.PeerFailure{Code: corestate.PeerFailureUnknown, Message: actionErr.Error(), AtUnix: now.Unix()}
 	}

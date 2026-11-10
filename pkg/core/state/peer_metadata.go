@@ -18,21 +18,21 @@ type PatchField[T any] struct {
 // PeerCheckpointPatch is a replayable, typed restart-hint mutation. It
 // cannot modify verified Network state or install live session resources.
 type PeerCheckpointPatch struct {
-	LastSyncUnix       PatchField[int64]
-	LastAttemptUnix    PatchField[int64]
-	BackoffUntilUnix   PatchField[int64]
-	FailureCount       PatchField[int]
-	LastRelayUnix      PatchField[int64]
-	LastRelayRootHex   PatchField[string]
-	DiscoveredEndpoint PatchField[string]
-	ObservedEndpoint   PatchField[string]
-	ObservedFirstUnix  PatchField[int64]
-	ObservedLastUnix   PatchField[int64]
-	ObservedUntilUnix  PatchField[int64]
-	ObservedGrace      PatchField[[]ObservedGraceEndpoint]
-	LastFailure        PatchField[*PeerFailure]
-	Reject             map[zone.ZonePath]RejectedObject
-	ClearRejected      []zone.ZonePath
+	LastSyncUnix           PatchField[int64]
+	BackoffUntilUnix       PatchField[int64]
+	FailureCount           PatchField[int]
+	LastRelayUnix          PatchField[int64]
+	LastRelayRootHex       PatchField[string]
+	DiscoveredEndpoint     PatchField[string]
+	LastSuccessfulEndpoint PatchField[string]
+	ObservedEndpoint       PatchField[string]
+	ObservedFirstUnix      PatchField[int64]
+	ObservedLastUnix       PatchField[int64]
+	ObservedUntilUnix      PatchField[int64]
+	ObservedGrace          PatchField[[]ObservedGraceEndpoint]
+	LastFailure            PatchField[*PeerFailure]
+	Reject                 map[zone.ZonePath]RejectedObject
+	ClearRejected          []zone.ZonePath
 }
 
 // CheckpointCommitFunc accepts only affected peers before publishing them in memory.
@@ -143,7 +143,9 @@ func (store *Store) changePeerCheckpoints(ctx context.Context, patches map[strin
 
 func restartPeerCheckpoint(peer PeerCheckpoint) PeerCheckpoint {
 	peer.LastSyncUnix = 0
-	peer.LastAttemptUnix = 0
+	peer.LastRelayUnix = 0
+	peer.LastRelayCatalogRootHex = ""
+	peer.DiscoveredEndpoint = ""
 	peer.ObservedEndpoint = ""
 	peer.ObservedFirstSeenUnix = 0
 	peer.ObservedLastSeenUnix = 0
@@ -157,12 +159,12 @@ func applyPeerCheckpointPatch(metadata *PeerCheckpoint, patch PeerCheckpointPatc
 		return
 	}
 	applyPatchField(&metadata.LastSyncUnix, patch.LastSyncUnix)
-	applyPatchField(&metadata.LastAttemptUnix, patch.LastAttemptUnix)
 	applyPatchField(&metadata.BackoffUntilUnix, patch.BackoffUntilUnix)
 	applyPatchField(&metadata.FailureCount, patch.FailureCount)
 	applyPatchField(&metadata.LastRelayUnix, patch.LastRelayUnix)
 	applyPatchField(&metadata.LastRelayCatalogRootHex, patch.LastRelayRootHex)
 	applyPatchField(&metadata.DiscoveredEndpoint, patch.DiscoveredEndpoint)
+	applyPatchField(&metadata.LastSuccessfulEndpoint, patch.LastSuccessfulEndpoint)
 	applyPatchField(&metadata.ObservedEndpoint, patch.ObservedEndpoint)
 	applyPatchField(&metadata.ObservedFirstSeenUnix, patch.ObservedFirstUnix)
 	applyPatchField(&metadata.ObservedLastSeenUnix, patch.ObservedLastUnix)

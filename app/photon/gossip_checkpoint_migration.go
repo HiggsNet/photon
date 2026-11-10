@@ -99,14 +99,10 @@ func projectLegacyGossipCheckpoint(peers map[string]legacyPeerState) (*corestate
 			continue
 		}
 		peer := corestate.PeerCheckpoint{
-			LastSyncUnix:            legacy.LastSyncUnix,
-			LastAttemptUnix:         legacy.LastAttemptUnix,
-			BackoffUntilUnix:        legacy.BackoffUntilUnix,
-			FailureCount:            legacy.FailureCount,
-			LastRelayUnix:           legacy.LastRelayUnix,
-			LastRelayCatalogRootHex: legacy.LastRelayCatalogRootHex,
-			DiscoveredEndpoint:      legacy.DiscoveredAddr,
-			ObservedLastSeenUnix:    legacy.ObservedLastSeenUnix,
+			LastSyncUnix:         legacy.LastSyncUnix,
+			BackoffUntilUnix:     legacy.BackoffUntilUnix,
+			FailureCount:         legacy.FailureCount,
+			ObservedLastSeenUnix: legacy.ObservedLastSeenUnix,
 		}
 		if legacy.LastError != "" {
 			peer.LastFailure = &corestate.PeerFailure{
@@ -157,9 +153,8 @@ func projectLegacyRejectedObjects(rejected map[string]photonstate.PeerRejectedDi
 }
 
 func peerCheckpointEmpty(peer corestate.PeerCheckpoint) bool {
-	return peer.LastSyncUnix == 0 && peer.LastAttemptUnix == 0 && peer.BackoffUntilUnix == 0 &&
-		peer.FailureCount == 0 && peer.LastRelayUnix == 0 && peer.LastRelayCatalogRootHex == "" &&
-		peer.DiscoveredEndpoint == "" &&
+	return peer.LastSyncUnix == 0 && peer.BackoffUntilUnix == 0 &&
+		peer.FailureCount == 0 &&
 		peer.ObservedEndpoint == "" && peer.ObservedFirstSeenUnix == 0 && peer.ObservedLastSeenUnix == 0 &&
 		peer.ObservedUntilUnix == 0 &&
 		len(peer.ObservedGraceEndpoints) == 0 && peer.LastFailure == nil && len(peer.RejectedObjects) == 0

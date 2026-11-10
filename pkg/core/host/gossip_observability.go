@@ -113,6 +113,12 @@ func (driver *GossipDriver) observeObservedSource(peerID string, source gossip.M
 	})
 }
 
+func (driver *GossipDriver) observeSyncAttempt(peerID string, now time.Time) {
+	driver.Observability.Update(peerID, now, func(peer *observability.PeerDiagnostics) {
+		peer.LastAttemptUnix = now.Unix()
+	})
+}
+
 func (driver *GossipDriver) observeActivePull(peerID, event string, session *gossip.SyncSession, now time.Time) {
 	if driver == nil {
 		return

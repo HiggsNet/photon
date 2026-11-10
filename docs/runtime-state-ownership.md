@@ -75,9 +75,8 @@ State
 │   ├── identity 与公共本机 intent
 │   └── VerifiedRevision
 │  └── GossipCheckpoint
-    ├── retry/backoff
-    ├── discovered endpoint
-    ├── relay/session 恢复提示
+│      ├── retry/backoff
+│      ├── last successful UDP endpoint（仅地址变化时保存）
 │      └── rejected object/digest
 └── LinuxState（仅 Linux composition）
    ├── IPsec transport private key
@@ -85,7 +84,7 @@ State
    └── suspended tunnel peers
 ```
 
-`VerifiedState` 是不可随意丢失的权威事实。`GossipCheckpoint` 只保存 gossip 的 loss-tolerant restart hint；损坏时可报告并丢弃，然后重新发现和同步。活动时间、observed 地址及其有效期只在内存中使用，入站包续期不写盘。Gossip 只是 Common 的一个使用者，因此不得把整个 State 改名为 `GossipStore`。
+`VerifiedState` 是不可随意丢失的权威事实。`GossipCheckpoint` 落盘时只保存 gossip 的 loss-tolerant restart hint；损坏时可报告并丢弃，然后重新发现和同步。活动时间、relay 节流和去重、签名记录的选址结果、observed 地址及其有效期只在内存中使用，入站包续期不写盘。Gossip 只是 Common 的一个使用者，因此不得把整个 State 改名为 `GossipStore`。
 
 ## 4. LinuxState / WindowsState
 

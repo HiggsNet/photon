@@ -18,7 +18,6 @@ func TestPeersResponsePreservesObserverSchema(t *testing.T) {
 		[]inspect.PeerEndpointView{{Addr: "192.0.2.10:33434", Source: "bootstrap", Selected: true}},
 		corestate.PeerCheckpoint{
 			LastSyncUnix:     900,
-			LastAttemptUnix:  850,
 			BackoffUntilUnix: 950,
 			LastRelayUnix:    920,
 			FailureCount:     2,
@@ -26,6 +25,7 @@ func TestPeersResponsePreservesObserverSchema(t *testing.T) {
 			LastFailure:      &corestate.PeerFailure{Code: corestate.PeerFailureTimeout, Message: "sync timed out", AtUnix: 940},
 		},
 		observability.PeerDiagnostics{
+			LastAttemptUnix:       850,
 			LastUpdateSource:      "announce",
 			LastRelaySuppression:  "relay_fanout_limited",
 			LastRelaySuppressedAt: 910,
@@ -48,6 +48,9 @@ func TestPeersResponsePreservesObserverSchema(t *testing.T) {
 	peer := peers[0].(map[string]any)
 	if peer["peer_id"] != "node-b.catofes." || peer["configured_addr"] != "192.0.2.10:33434" {
 		t.Fatalf("peer fields missing: %#v", peer)
+	}
+	if peer["last_attempt_unix"] != float64(850) {
+		t.Fatalf("last attempt missing from diagnostics projection: %#v", peer)
 	}
 	if peer["endpoints"] == nil || peer["datagram_stats"] == nil {
 		t.Fatalf("endpoint/diagnostic fields missing: %#v", peer)

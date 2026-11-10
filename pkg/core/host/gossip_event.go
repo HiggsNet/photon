@@ -209,6 +209,13 @@ func (driver *GossipDriver) handleGossipHostStep(ctx context.Context, hostEvent 
 		return out, nil, nil
 	}
 	out.Handled = true
+	if tick, ok := event.(*gossip.SyncTimerEvent); ok && transport != nil && transport.HasRememberedPeerAddr(tick.PeerID) {
+		input := driver.gossipDiscoveryInput(tick.PeerID, suppressedPeers, false, "")
+		input.observedVerifier = &driver.observedPathVerifier
+		if input.Suppressed[tick.PeerID] || !discoveryPeerVerified(input, tick.PeerID, now) {
+			transport.SetRememberedPeerAddr(tick.PeerID, nil)
+		}
+	}
 	result, events, err := driver.handleGossipSessionEvent(ctx, event, now, gossipDriverSender{transport: transport})
 	// Replies and worker completions can already be queued when an earlier
 	// event finishes and removes their session. They are stale work, not a
@@ -225,7 +232,11 @@ func (driver *GossipDriver) handleGossipHostStep(ctx context.Context, hostEvent 
 			timeout = result.OldState == gossip.SyncSessionSummarySent || result.OldState == gossip.SyncSessionCatalogDiffing
 		}
 		if timeout && result.NewState == gossip.SyncSessionFailed {
-			transport.RecordAddrFailure(result.PeerID, transport.LastSendAddr(result.PeerID))
+			addr := transport.LastSendAddr(result.PeerID)
+			if result.OldState == gossip.SyncSessionSummarySent {
+				addr = transport.LastPingAddr(result.PeerID)
+			}
+			transport.RecordAddrFailure(result.PeerID, addr)
 		}
 		driver.finishGossipSession(ctx, &result, now, suppressedPeers)
 		out.NetworkChanged = result.NetworkChanged
@@ -239,7 +250,15 @@ func (driver *GossipDriver) acceptGossipInboundPath(ctx context.Context, packet 
 		return
 	}
 	peerID := packet.Message.PeerID
-	verification, recorded, err := driver.recordGossipObservedPath(ctx, peerID, packet.Addr.String(), suppressedPeers, now)
+	confirmed := false
+	if packet.Message.Type == gossip.MessagePong && packet.Message.Pong != nil && packet.Message.Pong.Summary != nil && transport != nil {
+		session := driver.Gossip.Session(peerID)
+		if session != nil && (session.State == gossip.SyncSessionPingSent || session.State == gossip.SyncSessionSummarySent) {
+			addr := transport.LastPingAddr(peerID)
+			confirmed = addr != nil && addr.String() == packet.Addr.String()
+		}
+	}
+	verification, recorded, err := driver.recordGossipObservedPath(ctx, peerID, packet.Addr.String(), confirmed, suppressedPeers, now)
 	if err != nil {
 		driver.logGossip("warn", "observed_path_update_failed", peerID, "discovery", err, nil)
 	} else if recorded {
@@ -313,13 +332,13 @@ func (driver *GossipDriver) relayGossipUpdate(ctx context.Context, sourcePeerID 
 	if len(queuedPeers) == 0 {
 		return
 	}
-	committed, err := driver.recordGossipRelays(ctx, queuedPeers, root, now)
+	updated, err := driver.recordGossipRelays(ctx, queuedPeers, root, now)
 	for _, peerID := range queuedPeers {
 		if err != nil {
-			driver.logGossip("warn", "relay_checkpoint_commit_failed", peerID, "persistence", err, nil)
+			driver.logGossip("warn", "relay_state_update_failed", peerID, "relay", err, nil)
 			continue
 		}
-		if committed {
+		if updated {
 			driver.observeRelaySuccess(peerID, sourcePeerID, now)
 		}
 	}

@@ -20,6 +20,7 @@ func WritePeerDebug(w io.Writer, view inspect.PeerDebugView) error {
 	out.Linef("next_retry: %s", dash(view.NextRetry))
 	out.Linef("known_endpoint: %s", dash(view.KnownEndpoint))
 	out.Linef("discovered_addr: %s", dash(view.DiscoveredAddr))
+	out.Linef("last_successful_endpoint: %s", dash(view.LastSuccessfulAddr))
 	out.Linef("observed_addr: %s", dash(view.ObservedAddr))
 	out.Linef("observed_status: %s", view.ObservedStatus)
 	out.Linef("last_update_source: %s", dash(view.LastUpdateSource))

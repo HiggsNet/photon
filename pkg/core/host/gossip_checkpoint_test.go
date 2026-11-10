@@ -58,6 +58,10 @@ func TestMatchingPingBurstSkipsAlreadyCommittedCompletion(t *testing.T) {
 	if peer.LastSyncUnix != now.Unix() {
 		t.Fatalf("completion=%+v", peer)
 	}
+	diagnostics, _ := driver.Observability.Snapshot("peer-a", now)
+	if diagnostics.LastAttemptUnix != now.Unix() {
+		t.Fatalf("last attempt diagnostics = %d, want %d", diagnostics.LastAttemptUnix, now.Unix())
+	}
 	now = now.Add(time.Second)
 	clock.Advance(time.Second)
 	if _, err := driver.HandleGossipHostEvent(t.Context(), packet, now, nil); err != nil {
@@ -140,7 +144,11 @@ func TestGossipDriverCommitsBackoffAndCompletionOnceWithoutAdvancingRevision(t *
 		t.Fatalf("checkpoint commits = %d candidate=%#v", commits, committed)
 	}
 	peer := store.ReadView().Gossip.Peers["peer-a"]
-	if peer.FailureCount != 1 || peer.LastAttemptUnix != now.Unix() || peer.BackoffUntilUnix != now.Add(2*time.Second).Unix() {
+	diagnostics, _ := driver.Observability.Snapshot("peer-a", now)
+	if diagnostics.LastAttemptUnix != now.Unix() {
+		t.Fatalf("last attempt diagnostics = %d, want %d", diagnostics.LastAttemptUnix, now.Unix())
+	}
+	if peer.FailureCount != 1 || peer.BackoffUntilUnix != now.Add(2*time.Second).Unix() {
 		t.Fatalf("failed completion checkpoint = %#v", peer)
 	}
 	if peer.LastFailure == nil || peer.LastFailure.Message == "" {

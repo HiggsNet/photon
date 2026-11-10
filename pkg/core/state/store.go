@@ -43,16 +43,16 @@ type GossipCheckpoint struct {
 }
 
 // PeerCheckpoint contains restart hints and live peer state.
-// Activity timestamps and observed UDP paths are published only in memory.
+// Activity timestamps, relay state and observed UDP paths stay in memory.
 // Pure protocol counters and explanatory fields belong in observability stores.
 type PeerCheckpoint struct {
 	LastSyncUnix            int64                            `json:"-"`
-	LastAttemptUnix         int64                            `json:"-"`
 	BackoffUntilUnix        int64                            `json:"backoff_until_unix,omitempty"`
 	FailureCount            int                              `json:"failure_count,omitempty"`
-	LastRelayUnix           int64                            `json:"last_relay_unix,omitempty"`
-	LastRelayCatalogRootHex string                           `json:"last_relay_catalog_root_hex,omitempty"`
-	DiscoveredEndpoint      string                           `json:"discovered_endpoint,omitempty"`
+	LastRelayUnix           int64                            `json:"-"`
+	LastRelayCatalogRootHex string                           `json:"-"`
+	DiscoveredEndpoint      string                           `json:"-"`
+	LastSuccessfulEndpoint  string                           `json:"last_successful_endpoint,omitempty"`
 	ObservedEndpoint        string                           `json:"-"`
 	ObservedFirstSeenUnix   int64                            `json:"-"`
 	ObservedLastSeenUnix    int64                            `json:"-"`

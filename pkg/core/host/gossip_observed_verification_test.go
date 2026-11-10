@@ -109,3 +109,61 @@ func TestInboundObservedVerificationDoesNotSurviveNextPacket(t *testing.T) {
 		t.Fatal("expired authority reused across packets")
 	}
 }
+
+func TestGossipRemembersOnlyMatchedPongEndpointChanges(t *testing.T) {
+	now := time.Unix(1000, 0)
+	const peerID = "peer.catofes."
+	network, _ := signedDiscoveryNetwork(t, peerID, true, nil, now)
+	var saved string
+	writes := 0
+	store := corestate.NewStoreWithCheckpoint(&corestate.VerifiedState{ManagedZone: "local.catofes.", Network: network}, nil, nil,
+		func(_ context.Context, peers map[string]*corestate.PeerCheckpoint, _ corestate.VerifiedRevision) error {
+			writes++
+			saved = peers[peerID].LastSuccessfulEndpoint
+			if peers[peerID].ObservedEndpoint != "" {
+				t.Fatal("live observation was persisted")
+			}
+			return nil
+		})
+	driver := NewGossipDriver(newFakeClock(now), 2, store, GossipDriverConfig{PeerID: "local.catofes."})
+	defer driver.Stop()
+	transport, _ := bindMemoryGossipTransport(t, driver, peerID)
+	first := parseRememberedAddr("192.0.2.1:33434")
+	second := parseRememberedAddr("192.0.2.1:33435")
+	pong := &gossip.Message{Type: gossip.MessagePong, PeerID: peerID, Pong: &gossip.Pong{Summary: corestate.CatalogSummaryFor(network)}}
+	receive := func(addr *net.UDPAddr) {
+		now = now.Add(time.Second)
+		driver.acceptGossipInboundPath(t.Context(), &gossip.Packet{Addr: addr, Message: pong}, now, nil, transport)
+	}
+	ping := func(want *net.UDPAddr) {
+		t.Helper()
+		driver.Gossip.NewSession(peerID).State = gossip.SyncSessionSummarySent
+		if err := transport.Send(peerID, &gossip.Message{Type: gossip.MessagePing, Ping: &gossip.Ping{}}); err != nil {
+			t.Fatal(err)
+		}
+		if got := transport.LastPingAddr(peerID); got.String() != want.String() {
+			t.Fatalf("probe sent to %v, want %v", got, want)
+		}
+	}
+	check := func(wantWrites int, want string) {
+		t.Helper()
+		if writes != wantWrites || saved != want {
+			t.Fatalf("writes = %d, saved = %q, want %d and %q", writes, saved, wantWrites, want)
+		}
+	}
+	receive(first)
+	check(0, "")
+	transport.SetPeerAddrs(peerID, []*net.UDPAddr{first, second})
+	ping(first)
+	receive(second)
+	check(0, "")
+	receive(first)
+	check(1, first.String())
+	receive(first)
+	check(1, first.String())
+	transport.RecordAddrFailure(peerID, first)
+	driver.Gossip.RemoveSession(peerID)
+	ping(second)
+	receive(second)
+	check(2, second.String())
+}

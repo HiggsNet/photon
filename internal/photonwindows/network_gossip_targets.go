@@ -6,6 +6,8 @@ import (
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
 // Reachability hints only. Tracking a public path never authorizes its peer.
@@ -27,7 +29,11 @@ func gossipRouteTargets(view corestate.View, now time.Time) []netip.Addr {
 		}
 	}
 	if view.Gossip != nil {
-		for _, peer := range view.Gossip.Peers {
+		for id, peer := range view.Gossip.Peers {
+			if path := zone.ZonePath(id); peer.LastSuccessfulEndpoint != "" && view.State != nil &&
+				path != view.State.ManagedZone && photoncrypto.VerifyChain(view.State.Network, path, now) == nil {
+				add(peer.LastSuccessfulEndpoint)
+			}
 			add(peer.DiscoveredEndpoint)
 			if peer.ObservedUntilUnix > now.Unix() {
 				add(peer.ObservedEndpoint)

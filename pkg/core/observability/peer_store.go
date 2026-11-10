@@ -8,6 +8,7 @@ import (
 // PeerDiagnostics contains common gossip observations that are safe to lose
 // on daemon restart. Values returned by PeerObservabilityStore are detached.
 type PeerDiagnostics struct {
+	LastAttemptUnix       int64
 	LastUpdateSource      string
 	LastRelaySuppression  string
 	LastRelaySuppressedAt int64
