@@ -10,11 +10,12 @@ import (
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
-func peerLifecycleInput(network *zone.NetworkState, checkpoint *corestate.GossipCheckpoint, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, peerID string, peerZone zone.ZonePath, now time.Time, cfg inspect.PeerLifecycleConfig, hasOverlayConfig bool) inspect.PeerLifecycleInput {
+func peerLifecycleInput(network *zone.NetworkState, checkpoint *corestate.GossipCheckpoint, suspended map[zone.ZonePath]bool, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, peerID string, peerZone zone.ZonePath, now time.Time, cfg inspect.PeerLifecycleConfig, hasOverlayConfig bool) inspect.PeerLifecycleInput {
 	input := inspect.PeerLifecycleInput{
 		PeerID:           peerID,
 		PeerZone:         peerZone,
 		StateAvailable:   true,
+		TunnelSuspended:  suspended[peerZone],
 		HasOverlayConfig: hasOverlayConfig,
 		Now:              now,
 		Config:           cfg,
@@ -65,7 +66,7 @@ func peerLifecycleInput(network *zone.NetworkState, checkpoint *corestate.Gossip
 // derivePeerStatuses computes status for all known peers from the common
 // checkpoint plus Linux link observations. The result is sorted by peer id
 // for stable output.
-func derivePeerStatuses(managedZone zone.ZonePath, network *zone.NetworkState, checkpoint *corestate.GossipCheckpoint, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, now time.Time, cfg inspect.PeerLifecycleConfig, hasOverlayConfig bool) []inspect.PeerStatusInfo {
+func derivePeerStatuses(managedZone zone.ZonePath, network *zone.NetworkState, checkpoint *corestate.GossipCheckpoint, suspended map[zone.ZonePath]bool, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, now time.Time, cfg inspect.PeerLifecycleConfig, hasOverlayConfig bool) []inspect.PeerStatusInfo {
 	seen := make(map[string]bool)
 	var out []inspect.PeerStatusInfo
 
@@ -76,7 +77,7 @@ func derivePeerStatuses(managedZone zone.ZonePath, network *zone.NetworkState, c
 			return
 		}
 		seen[peerID] = true
-		info := inspect.BuildPeerLifecycleStatus(peerLifecycleInput(network, checkpoint, links, reconcile, peerID, peerZone, now, cfg, hasOverlayConfig))
+		info := inspect.BuildPeerLifecycleStatus(peerLifecycleInput(network, checkpoint, suspended, links, reconcile, peerID, peerZone, now, cfg, hasOverlayConfig))
 		out = append(out, info)
 	}
 
@@ -85,6 +86,9 @@ func derivePeerStatuses(managedZone zone.ZonePath, network *zone.NetworkState, c
 			// Derive zone from peer id: peer id is typically the zone FQDN.
 			addPeer(peerID, zone.ZonePath(peerID))
 		}
+	}
+	for peerID := range suspended {
+		addPeer(peerID.String(), peerID)
 	}
 	for _, inst := range links {
 		addPeer(string(inst.PeerZone), inst.PeerZone)

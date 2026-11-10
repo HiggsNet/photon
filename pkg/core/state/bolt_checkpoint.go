@@ -16,28 +16,12 @@ var bucketCheckpointPeers = []byte("peers")
 
 const checkpointRefreshInterval = 5 * time.Second
 
-// Only forward refreshes of an established checkpoint can wait for the batch.
+// Only a forward renewal of an existing observed path can wait for the batch.
 func isCheckpointRefresh(previous, next PeerCheckpoint) bool {
-	if reflect.DeepEqual(previous, next) {
+	if previous.ObservedUntilUnix <= 0 || next.ObservedUntilUnix <= previous.ObservedUntilUnix {
 		return false
 	}
-	fields := [][2]*int64{
-		{&previous.LastAttemptUnix, &next.LastAttemptUnix},
-		{&previous.LastSyncUnix, &next.LastSyncUnix},
-		{&previous.ObservedLastSeenUnix, &next.ObservedLastSeenUnix},
-		{&previous.ObservedLastSyncUnix, &next.ObservedLastSyncUnix},
-		{&previous.ObservedUntilUnix, &next.ObservedUntilUnix},
-	}
-	for _, field := range fields {
-		old, new := *field[0], *field[1]
-		if old == new {
-			continue
-		}
-		if old <= 0 || new < old {
-			return false
-		}
-		*field[0] = new
-	}
+	previous.ObservedUntilUnix = next.ObservedUntilUnix
 	return reflect.DeepEqual(previous, next)
 }
 
@@ -84,7 +68,7 @@ func replaceBoltCheckpoint(bucket *bolt.Bucket, checkpoint *GossipCheckpoint) (b
 	}
 	var remove [][]byte
 	if err := peers.ForEach(func(k, v []byte) error {
-		if _, ok := checkpoint.Peers[string(k)]; !ok {
+		if peerCheckpointEmpty(restartPeerCheckpoint(checkpoint.Peers[string(k)])) {
 			remove = append(remove, append([]byte(nil), k...))
 		}
 		return nil
@@ -98,8 +82,10 @@ func replaceBoltCheckpoint(bucket *bolt.Bucket, checkpoint *GossipCheckpoint) (b
 		changed = true
 	}
 	ids := make([]string, 0, len(checkpoint.Peers))
-	for id := range checkpoint.Peers {
-		ids = append(ids, id)
+	for id, peer := range checkpoint.Peers {
+		if !peerCheckpointEmpty(restartPeerCheckpoint(peer)) {
+			ids = append(ids, id)
+		}
 	}
 	sort.Strings(ids)
 	for _, id := range ids {

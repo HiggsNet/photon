@@ -1,58 +1,101 @@
 package main
 
 import (
+	"maps"
 	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
+	"github.com/HiggsNet/photon/internal/photonlinux"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 const peerCleanupReasonOffline = "cleanup_after_exceeded"
 
+// tunnelPeerActivity is daemon-loop state. A peer without any activity gets
+// a full observation window when its tunnel records first become known.
+type tunnelPeerActivity struct {
+	firstTracked          time.Time
+	suspendedLastActivity int64
+}
+
 func peerLifecycleLastActiveUnix(peer corestate.PeerCheckpoint) int64 {
-	lastActive := peer.LastSyncUnix
-	if peer.ObservedLastSeenUnix > 0 && peer.ObservedLastSeenUnix > lastActive {
-		lastActive = peer.ObservedLastSeenUnix
-	}
-	return lastActive
+	return max(peer.LastSyncUnix, peer.ObservedLastSeenUnix)
 }
 
-func peerLifecycleCleanupDue(peer corestate.PeerCheckpoint, now time.Time, cfg inspect.PeerLifecycleConfig) bool {
-	lastActive := peerLifecycleLastActiveUnix(peer)
-	if lastActive == 0 {
-		return false
+func (d *Daemon) reconcileTunnelPeerSuspensions(common corestate.View, runtime *photonlinux.LinuxState, now time.Time) error {
+	suspended := maps.Clone(runtime.SuspendedTunnelPeers)
+	if suspended == nil {
+		suspended = make(map[zone.ZonePath]bool)
 	}
-	cfg = inspect.NormalizePeerLifecycleConfig(cfg)
-	return !now.Before(time.Unix(lastActive, 0).Add(cfg.CleanupAfter))
-}
-
-// peerLifecycleExcludedPeers returns local data-plane suppressions. An offline
-// peer remains available to gossip so a successful sync can refresh its
-// checkpoint, but IPsec must not recreate its link from stale Zone records.
-func peerLifecycleExcludedPeers(checkpoint *corestate.GossipCheckpoint, now time.Time, cfg inspect.PeerLifecycleConfig) map[zone.ZonePath]string {
-	out := make(map[zone.ZonePath]string)
-	if checkpoint != nil {
-		for peerID, peer := range checkpoint.Peers {
-			if peerLifecycleCleanupDue(peer, now, cfg) {
-				out[zone.ZonePath(peerID)] = peerCleanupReasonOffline
+	tracked := make(map[zone.ZonePath]tunnelPeerActivity)
+	network := common.State.Network
+	cfg := inspect.NormalizePeerLifecycleConfig(d.Config.PeerLifecycle)
+	for peerID, peerZone := range network.Zones {
+		if peerZone == nil || peerID == common.State.ManagedZone || peerID.IsRoot() || network.IsZoneRevoked(peerID, now) || !hasPeerIPsecRecords(peerZone) {
+			continue
+		}
+		activity := d.tunnelPeerActivity[peerID]
+		if activity.firstTracked.IsZero() {
+			activity.firstTracked = now
+		}
+		lastActive := int64(0)
+		if common.Gossip != nil {
+			lastActive = peerLifecycleLastActiveUnix(common.Gossip.Peers[peerID.String()])
+		}
+		if suspended[peerID] {
+			// Only new activity clears a suspension. Merely changing the
+			// inactivity threshold does not constitute activity.
+			if lastActive > activity.suspendedLastActivity {
+				delete(suspended, peerID)
+				activity.suspendedLastActivity = 0
+			}
+		} else {
+			lastSeen := activity.firstTracked
+			if lastActive != 0 {
+				lastSeen = time.Unix(lastActive, 0)
+			}
+			if !now.Before(lastSeen.Add(cfg.CleanupAfter)) {
+				suspended[peerID] = true
+				activity.suspendedLastActivity = lastActive
 			}
 		}
+		tracked[peerID] = activity
 	}
-	return out
+	for peerID := range suspended {
+		if _, ok := tracked[peerID]; !ok {
+			delete(suspended, peerID)
+		}
+	}
+	if !maps.Equal(runtime.SuspendedTunnelPeers, suspended) {
+		if len(suspended) == 0 {
+			suspended = nil
+		}
+		if _, err := d.State.updateLinuxStateIfRevision(common.Revision, func(candidate *photonlinux.LinuxState) {
+			candidate.SuspendedTunnelPeers = suspended
+		}); err != nil {
+			return err
+		}
+		runtime.SuspendedTunnelPeers = suspended
+	}
+	d.tunnelPeerActivity = tracked
+	return nil
 }
 
-func peerLifecycleSuppressions(view corestate.PeerActivityView, now time.Time, cfg inspect.PeerLifecycleConfig) map[string]bool {
-	suppressed := make(map[string]bool)
-	for path := range view.RevokedZones {
+func peerLifecycleExcludedPeers(suspended map[zone.ZonePath]bool) map[zone.ZonePath]string {
+	excluded := make(map[zone.ZonePath]string, len(suspended))
+	for peerID, active := range suspended {
+		if active {
+			excluded[peerID] = peerCleanupReasonOffline
+		}
+	}
+	return excluded
+}
+
+func revokedGossipPeers(revoked map[zone.ZonePath]bool) map[string]bool {
+	suppressed := make(map[string]bool, len(revoked))
+	for path := range revoked {
 		suppressed[path.String()] = true
-	}
-	if len(view.Peers) > 0 {
-		for peerID, peer := range view.Peers {
-			if peerLifecycleCleanupDue(corestate.PeerCheckpoint{LastSyncUnix: peer.LastSyncUnix, ObservedLastSeenUnix: peer.ObservedLastSeenUnix}, now, cfg) {
-				suppressed[peerID] = true
-			}
-		}
 	}
 	return suppressed
 }

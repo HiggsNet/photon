@@ -187,32 +187,3 @@ func (store *Store) zoneDigestsLocked(now time.Time) []ZoneDigest {
 	}
 	return out
 }
-
-// PeerActivity contains only observation times, without applying lifecycle policy.
-type PeerActivity struct {
-	LastSyncUnix         int64
-	ObservedLastSeenUnix int64
-}
-
-type PeerActivityView struct {
-	RevokedZones map[zone.ZonePath]bool
-	Peers        map[string]PeerActivity
-}
-
-// ReadPeerActivity evaluates time-dependent revocations on every read. Results
-// are detached; the application retains ownership of lifecycle suppression policy.
-func (store *Store) ReadPeerActivity(now time.Time) PeerActivityView {
-	if store == nil {
-		return PeerActivityView{}
-	}
-	store.mu.RLock()
-	defer store.mu.RUnlock()
-	out := PeerActivityView{Peers: make(map[string]PeerActivity, len(store.gossip.Peers))}
-	if store.state != nil {
-		out.RevokedZones = store.revokedZonesLocked(now)
-	}
-	for id, peer := range store.gossip.Peers {
-		out.Peers[id] = PeerActivity{LastSyncUnix: peer.LastSyncUnix, ObservedLastSeenUnix: peer.ObservedLastSeenUnix}
-	}
-	return out
-}

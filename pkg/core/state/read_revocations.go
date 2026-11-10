@@ -18,6 +18,17 @@ type revocationSnapshot struct {
 	zones     map[zone.ZonePath]bool
 }
 
+// ReadRevokedZones returns the current verified revocations without reading
+// peer activity or applying a platform lifecycle policy.
+func (store *Store) ReadRevokedZones(now time.Time) map[zone.ZonePath]bool {
+	if store == nil {
+		return nil
+	}
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	return store.revokedZonesLocked(now)
+}
+
 // revokedZonesLocked requires Store.mu to pin the committed verified revision.
 // Return a detached map, just like the uncached NetworkState projection.
 func (store *Store) revokedZonesLocked(now time.Time) map[zone.ZonePath]bool {

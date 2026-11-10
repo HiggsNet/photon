@@ -19,9 +19,9 @@ func TestProjectLegacyGossipCheckpointKeepsOnlyBehaviorHints(t *testing.T) {
 		"peer-a.catofes.": {
 			LastSyncUnix: 10, LastAttemptUnix: 11, BackoffUntilUnix: 20, FailureCount: 2,
 			LastRelayUnix: 12, LastRelayCatalogRootHex: "catalog",
-			DiscoveredAddr: "192.0.2.1:4242", DiscoveredAtUnix: 14,
-			ObservedAddr: "198.51.100.1:4242", ObservedFirstSeenUnix: 15, ObservedLastSeenUnix: 16,
-			ObservedLastSyncUnix: 17, ObservedUntilUnix: 30, ObservedFailureCount: 1,
+			DiscoveredAddr: "192.0.2.1:4242",
+			ObservedAddr:   "198.51.100.1:4242", ObservedFirstSeenUnix: 15, ObservedLastSeenUnix: 16,
+			ObservedUntilUnix:  30,
 			ObservedGraceAddrs: []photonstate.PeerObservedGraceAddrState{{Addr: "198.51.100.2:4242", UntilUnix: 25}},
 			RejectedDigests: map[string]photonstate.PeerRejectedDigest{"zone:bad.catofes.": {
 				Zone: "bad.catofes.", Object: "zone", RootHashHex: hex.EncodeToString(root),
@@ -61,21 +61,13 @@ func TestProjectLegacyPeerCleanupsPreservesSuppressionWithoutOverwritingNewerAct
 		"revoked.catofes.": {LastActiveUnix: 10, CleanupUnix: 15, Reason: "zone_revoked"},
 		"invalid":          {LastActiveUnix: 10, CleanupUnix: 15, Reason: peerCleanupReasonOffline},
 	}
-	report, changed := projectLegacyPeerCleanups(checkpoint, cleanups, legacyGossipCheckpointReport{})
-	if !changed || report.CleanupsMigrated != 1 || report.CleanupsDropped != 4 {
-		t.Fatalf("projection = changed %v report %+v", changed, report)
+	runtime := &photonlinux.LinuxState{}
+	report := projectLegacyPeerCleanups(checkpoint, cleanups, runtime, legacyGossipCheckpointReport{})
+	if report.CleanupsMigrated != 1 || report.CleanupsDropped != 4 || len(runtime.SuspendedTunnelPeers) != 1 || !runtime.SuspendedTunnelPeers["cleaned.catofes."] {
+		t.Fatalf("suspensions = %v report = %+v", runtime.SuspendedTunnelPeers, report)
 	}
-	if got := checkpoint.Peers["cleaned.catofes."]; got.LastSyncUnix != 0 || got.ObservedLastSeenUnix != 10 {
-		t.Fatalf("new cleanup checkpoint = %+v", got)
-	}
-	if got := checkpoint.Peers["stale.catofes."]; got.LastSyncUnix != 5 || got.ObservedLastSeenUnix != 30 {
-		t.Fatalf("newer observation was overwritten: %+v", got)
-	}
-	if got := checkpoint.Peers["fresh.catofes."]; got.LastSyncUnix != 20 || got.ObservedLastSeenUnix != 0 {
-		t.Fatalf("newer successful sync was overwritten: %+v", got)
-	}
-	if _, changed := projectLegacyPeerCleanups(checkpoint, cleanups, legacyGossipCheckpointReport{}); changed {
-		t.Fatal("identical cleanup projection was not idempotent")
+	if len(checkpoint.Peers) != 2 {
+		t.Fatal("suspension migration modified the gossip checkpoint")
 	}
 }
 

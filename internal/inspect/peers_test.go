@@ -201,8 +201,6 @@ func TestBuildPeerDebugFormatsRuntimeDiagnostics(t *testing.T) {
 		ObservedAddr:         "127.0.0.1:3000",
 		ObservedUntilUnix:    now.Add(time.Hour).Unix(),
 		ObservedLastSeenUnix: now.Unix(),
-		ObservedLastSyncUnix: now.Add(-time.Minute).Unix(),
-		ObservedFailureCount: 2,
 		LastRelayUnix:        now.Add(-2 * time.Minute).Unix(),
 		Diagnostics: observability.PeerDiagnostics{
 			ObservedSource:        "PING",
@@ -222,7 +220,7 @@ func TestBuildPeerDebugFormatsRuntimeDiagnostics(t *testing.T) {
 	if got.Status != "backoff" || got.Backoff != "30s" || got.NextRetry == "-" {
 		t.Fatalf("retry fields = status=%q backoff=%q next=%q", got.Status, got.Backoff, got.NextRetry)
 	}
-	if !strings.Contains(got.ObservedStatus, "active until=") || !strings.Contains(got.ObservedStatus, "failures=2 source=PING") {
+	if !strings.Contains(got.ObservedStatus, "active until=") || !strings.Contains(got.ObservedStatus, "source=PING") {
 		t.Fatalf("observed status = %q", got.ObservedStatus)
 	}
 	if !strings.Contains(got.RelaySuppression, "relay_throttled at=") {

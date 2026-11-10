@@ -58,14 +58,11 @@ func TestLegacyLinuxStateMigrationIsAtomicAndIdempotent(t *testing.T) {
 		if !reflect.DeepEqual(candidate.Verified.TrustedRootPublicKey, trustedRoot) || candidate.Gossip.Peers["peer.catofes."].BackoffUntilUnix != 20 {
 			t.Fatalf("common state projection = %+v", candidate)
 		}
-		if got := candidate.Gossip.Peers["cleaned.catofes."].ObservedLastSeenUnix; got != 10 {
-			t.Fatalf("migrated cleanup last active = %d, want 10", got)
-		}
 		linuxState, found, err := photonlinux.LoadLinuxStateTx(tx)
 		if err != nil {
 			return err
 		}
-		if !found {
+		if !found || !linuxState.SuspendedTunnelPeers["cleaned.catofes."] {
 			t.Fatalf("LinuxState = %+v", linuxState)
 		}
 		payload, err := json.Marshal(linuxState)
@@ -101,28 +98,19 @@ func TestLegacyLinuxStateMigrationIsAtomicAndIdempotent(t *testing.T) {
 	}
 }
 
-func TestPartitionedLinuxStateMigratesOfflineCleanupIntoCheckpoint(t *testing.T) {
+func TestPartitionedLinuxStateMigratesOfflineCleanupIntoTunnelSuspension(t *testing.T) {
 	owners, _, _, _ := buildPeerStateTestOwners(t)
 	verified := owners.verified
 	now := time.Unix(500_000, 0)
 	peerID := zone.ZonePath("node-b.catofes.")
-	recentPeerID := zone.ZonePath("recent.catofes.")
-	recentPeer := corestate.PeerCheckpoint{LastSyncUnix: now.Add(-10 * time.Second).Unix(), ObservedLastSeenUnix: now.Unix()}
 	addTestIPsecRecords(t, verified.Network.Zones[peerID], peerID, now, ipsec.RoleIn)
 
 	path := filepath.Join(t.TempDir(), "photon.db")
-	seedPartitionedStateDB(t, path, verified, &corestate.GossipCheckpoint{Peers: map[string]corestate.PeerCheckpoint{
-		recentPeerID.String(): recentPeer,
-	}}, &photonlinux.LinuxState{})
+	seedPartitionedStateDB(t, path, verified, nil, &photonlinux.LinuxState{})
 	legacyPayload, err := json.Marshal(struct {
 		PeerCleanups map[string]photonlinux.LegacyPeerCleanupState `json:"peer_cleanups"`
 	}{PeerCleanups: map[string]photonlinux.LegacyPeerCleanupState{
 		peerID.String(): {
-			LastActiveUnix: now.Add(-4 * time.Second).Unix(),
-			CleanupUnix:    now.Unix(),
-			Reason:         peerCleanupReasonOffline,
-		},
-		recentPeerID.String(): {
 			LastActiveUnix: now.Add(-4 * time.Second).Unix(),
 			CleanupUnix:    now.Unix(),
 			Reason:         peerCleanupReasonOffline,
@@ -160,14 +148,7 @@ func TestPartitionedLinuxStateMigratesOfflineCleanupIntoCheckpoint(t *testing.T)
 		CleanupAfter: 3 * time.Second, KeepSAWhileStale: true,
 	}
 	view := state.Common.ReadView()
-	peer := view.Gossip.Peers[peerID.String()]
-	if peer.LastSyncUnix != 0 || peer.ObservedLastSeenUnix != now.Add(-4*time.Second).Unix() {
-		t.Fatalf("migrated peer checkpoint = %+v", peer)
-	}
-	excluded := peerLifecycleExcludedPeers(view.Gossip, now, cfg)
-	if got := view.Gossip.Peers[recentPeerID.String()]; !reflect.DeepEqual(got, recentPeer) || excluded[recentPeerID] != "" {
-		t.Fatalf("recent peer changed or excluded: checkpoint %+v exclusions %+v", got, excluded)
-	}
+	excluded := peerLifecycleExcludedPeers(state.ReadLinux().SuspendedTunnelPeers)
 	if excluded[peerID] != peerCleanupReasonOffline {
 		t.Fatalf("migrated exclusion = %+v", excluded)
 	}
@@ -192,7 +173,13 @@ func TestPartitionedLinuxStateMigratesOfflineCleanupIntoCheckpoint(t *testing.T)
 		t.Fatalf("record successful sync: %v", err)
 	}
 	view = state.Common.ReadView()
-	if excluded := peerLifecycleExcludedPeers(view.Gossip, now, cfg); excluded[peerID] != "" {
+	config := defaultAppConfig()
+	config.PeerLifecycle = cfg
+	d := &Daemon{Config: config, State: state}
+	if err := d.reconcileTunnelPeerSuspensions(view, state.ReadLinux(), now); err != nil {
+		t.Fatal(err)
+	}
+	if excluded := peerLifecycleExcludedPeers(state.ReadLinux().SuspendedTunnelPeers); excluded[peerID] != "" {
 		t.Fatalf("successful sync retained exclusion = %+v", excluded)
 	}
 	plan, err = ipsec.PlanTransportLinks(context.Background(), view.State.Network, view.State.ManagedZone, groups, ipsec.LinkPlannerOptions{Now: now})
@@ -218,12 +205,9 @@ func TestPartitionedLinuxStateMigratesOfflineCleanupIntoCheckpoint(t *testing.T)
 		t.Fatalf("idempotent partitioned migration: %v", err)
 	}
 	if err := db.View(func(tx *bolt.Tx) error {
-		candidate, _, _, found, err := corestate.LoadBoltState(tx)
-		if err != nil || !found {
-			t.Fatalf("load migrated checkpoint: found %v err %v", found, err)
-		}
-		if got := candidate.Gossip.Peers[recentPeerID.String()]; !reflect.DeepEqual(got, recentPeer) {
-			t.Fatalf("persisted recent activity changed: %+v", got)
+		runtime, found, err := photonlinux.LoadLinuxStateTx(tx)
+		if err != nil || !found || runtime.SuspendedTunnelPeers[peerID] {
+			t.Fatalf("load recovered tunnel state: state %+v found %v err %v", runtime, found, err)
 		}
 		payload := tx.Bucket([]byte(photonlinux.LinuxStateBucketName)).Get([]byte("payload"))
 		if strings.Contains(string(payload), "peer_cleanups") {

@@ -138,7 +138,7 @@ func addRevocationToParent(t *testing.T, network *zone.NetworkState, parentZone,
 
 func peerStatusForTest(owners *peerStateTestOwners, peerID string, peerZone zone.ZonePath, now time.Time, cfg inspect.PeerLifecycleConfig) inspect.PeerStatusInfo {
 	return inspect.BuildPeerLifecycleStatus(peerLifecycleInput(
-		owners.verified.Network, owners.checkpoint, owners.observationLinks, owners.observationReconcile,
+		owners.verified.Network, owners.checkpoint, nil, owners.observationLinks, owners.observationReconcile,
 		peerID, peerZone, now, cfg, false,
 	))
 }
@@ -262,7 +262,8 @@ func TestDerivePeerStatusCleanupAfterThreshold(t *testing.T) {
 		LastSyncUnix: lastSync.Unix(),
 	}
 
-	info := peerStatusForTest(state, "node-b.catofes.", "node-b.catofes.", now, cfg)
+	input := peerLifecycleInput(state.verified.Network, state.checkpoint, map[zone.ZonePath]bool{"node-b.catofes.": true}, state.observationLinks, state.observationReconcile, "node-b.catofes.", "node-b.catofes.", now, cfg, false)
+	info := inspect.BuildPeerLifecycleStatus(input)
 	if info.State != inspect.PeerStateOffline {
 		t.Fatalf("state = %s, want offline", info.State)
 	}
@@ -287,7 +288,8 @@ func TestDerivePeerStatusCleanupAfterOverridesStaleLinkState(t *testing.T) {
 		ActualState: "connecting",
 	}
 
-	info := peerStatusForTest(state, "node-b.catofes.", "node-b.catofes.", now, cfg)
+	input := peerLifecycleInput(state.verified.Network, state.checkpoint, map[zone.ZonePath]bool{"node-b.catofes.": true}, state.observationLinks, state.observationReconcile, "node-b.catofes.", "node-b.catofes.", now, cfg, false)
+	info := inspect.BuildPeerLifecycleStatus(input)
 	if info.State != inspect.PeerStateOffline || info.Reason != "cleanup_after_exceeded" {
 		t.Fatalf("status = %+v, want cleanup_after_exceeded", info)
 	}
@@ -409,7 +411,7 @@ func TestDerivePeerStatusesAllPeers(t *testing.T) {
 		LastSyncUnix: now.Add(-1 * time.Minute).Unix(),
 	}
 
-	peers := derivePeerStatuses(state.verified.ManagedZone, state.verified.Network, state.checkpoint, state.observationLinks, state.observationReconcile, now, cfg, false)
+	peers := derivePeerStatuses(state.verified.ManagedZone, state.verified.Network, state.checkpoint, nil, state.observationLinks, state.observationReconcile, now, cfg, false)
 	if len(peers) == 0 {
 		t.Fatalf("expected at least 1 peer, got 0")
 	}

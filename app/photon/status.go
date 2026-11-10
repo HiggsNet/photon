@@ -9,6 +9,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
@@ -23,14 +24,14 @@ func showStatus() error {
 	} else if online {
 		return inspecttext.WriteStatus(os.Stdout, view)
 	}
-	common, _, err := loadOfflineOwnerViews(config)
+	common, linux, err := loadOfflineOwnerViews(config)
 	if err != nil {
 		return err
 	}
-	return inspecttext.WriteStatus(os.Stdout, statusViewFromOwners(config, common, nil, nil, nil, nil, false, time.Now()))
+	return inspecttext.WriteStatus(os.Stdout, statusViewFromOwners(config, common, linux.SuspendedTunnelPeers, nil, nil, nil, nil, false, time.Now()))
 }
 
-func statusViewFromOwners(config *appConfig, common corestate.View, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, birdInstances map[string]*bird.InstanceObservation, health []inspect.HealthSample, daemonOnline bool, now time.Time) inspect.StatusView {
+func statusViewFromOwners(config *appConfig, common corestate.View, suspended map[zone.ZonePath]bool, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, birdInstances map[string]*bird.InstanceObservation, health []inspect.HealthSample, daemonOnline bool, now time.Time) inspect.StatusView {
 	if common.State == nil {
 		return inspect.BuildStatus(inspect.StatusInput{DaemonOnline: daemonOnline})
 	}
@@ -57,7 +58,7 @@ func statusViewFromOwners(config *appConfig, common corestate.View, links map[st
 		cfg = config.PeerLifecycle
 		hasOverlay = len(config.IPsec.LinkGroups) > 0
 	}
-	input.Peers = derivePeerStatuses(verified.ManagedZone, verified.Network, common.Gossip, links, reconcile, now, cfg, hasOverlay)
+	input.Peers = derivePeerStatuses(verified.ManagedZone, verified.Network, common.Gossip, suspended, links, reconcile, now, cfg, hasOverlay)
 	return inspect.BuildStatus(input)
 }
 

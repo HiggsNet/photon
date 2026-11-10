@@ -206,14 +206,12 @@ func PlanVerifiedObservedCheckpoint(input GossipDiscoveryInput, peerID, endpoint
 	}
 	peer := input.Peers[peerID]
 	firstSeen := peer.ObservedFirstSeenUnix
-	failures := peer.ObservedFailureCount
 	grace := append([]corestate.ObservedGraceEndpoint(nil), peer.ObservedGraceEndpoints...)
 	if peer.ObservedEndpoint != endpoint || firstSeen == 0 {
 		if discoveryObservedActive(peer, now) && peer.ObservedEndpoint != "" && peer.ObservedEndpoint != endpoint {
 			grace = appendObservedGraceEndpoint(grace, peer.ObservedEndpoint, now.Add(GossipObservedPathMigrationGrace), now)
 		}
 		firstSeen = now.Unix()
-		failures = 0
 	}
 	grace = pruneObservedGraceEndpoints(grace, endpoint, now)
 	return corestate.PeerCheckpointPatch{
@@ -221,7 +219,6 @@ func PlanVerifiedObservedCheckpoint(input GossipDiscoveryInput, peerID, endpoint
 		ObservedFirstUnix: corestate.PatchField[int64]{Set: true, Value: firstSeen},
 		ObservedLastUnix:  corestate.PatchField[int64]{Set: true, Value: now.Unix()},
 		ObservedUntilUnix: corestate.PatchField[int64]{Set: true, Value: now.Add(GossipObservedPathTTL).Unix()},
-		ObservedFailures:  corestate.PatchField[int]{Set: true, Value: failures},
 		ObservedGrace:     corestate.PatchField[[]corestate.ObservedGraceEndpoint]{Set: true, Value: grace},
 	}, true
 }
@@ -390,10 +387,9 @@ func PlanGossipDiscovery(input GossipDiscoveryInput, now time.Time) GossipDiscov
 			continue
 		}
 		addr := addrs[0].String()
-		if current.DiscoveredEndpoint != addr || current.DiscoveredAtUnix != now.Unix() {
+		if current.DiscoveredEndpoint != addr {
 			plan.Patches[peerID] = mergeDiscoveryPatch(plan.Patches[peerID], corestate.PeerCheckpointPatch{
 				DiscoveredEndpoint: corestate.PatchField[string]{Set: true, Value: addr},
-				DiscoveredAtUnix:   corestate.PatchField[int64]{Set: true, Value: now.Unix()},
 			})
 		}
 	}
@@ -419,7 +415,7 @@ func PlanGossipDiscovery(input GossipDiscoveryInput, now time.Time) GossipDiscov
 			len(recentDiscoveryAddresses(nil, peer, input.EndpointGrace, now)) == 0 {
 			update.RemoveAddresses = true
 			plan.Patches[peerID] = mergeDiscoveryPatch(plan.Patches[peerID], corestate.PeerCheckpointPatch{
-				DiscoveredEndpoint: corestate.PatchField[string]{Set: true}, DiscoveredAtUnix: corestate.PatchField[int64]{Set: true},
+				DiscoveredEndpoint: corestate.PatchField[string]{Set: true},
 			})
 		}
 		plan.Peers[peerID] = update
@@ -569,19 +565,13 @@ func clearObservedDiscoveryPatch() corestate.PeerCheckpointPatch {
 	return corestate.PeerCheckpointPatch{
 		ObservedEndpoint:  corestate.PatchField[string]{Set: true},
 		ObservedFirstUnix: corestate.PatchField[int64]{Set: true},
-		ObservedLastUnix:  corestate.PatchField[int64]{Set: true},
-		ObservedSyncUnix:  corestate.PatchField[int64]{Set: true},
 		ObservedUntilUnix: corestate.PatchField[int64]{Set: true},
-		ObservedFailures:  corestate.PatchField[int]{Set: true},
 	}
 }
 
 func mergeDiscoveryPatch(a, b corestate.PeerCheckpointPatch) corestate.PeerCheckpointPatch {
 	if b.DiscoveredEndpoint.Set {
 		a.DiscoveredEndpoint = b.DiscoveredEndpoint
-	}
-	if b.DiscoveredAtUnix.Set {
-		a.DiscoveredAtUnix = b.DiscoveredAtUnix
 	}
 	if b.ObservedEndpoint.Set {
 		a.ObservedEndpoint = b.ObservedEndpoint
@@ -592,14 +582,8 @@ func mergeDiscoveryPatch(a, b corestate.PeerCheckpointPatch) corestate.PeerCheck
 	if b.ObservedLastUnix.Set {
 		a.ObservedLastUnix = b.ObservedLastUnix
 	}
-	if b.ObservedSyncUnix.Set {
-		a.ObservedSyncUnix = b.ObservedSyncUnix
-	}
 	if b.ObservedUntilUnix.Set {
 		a.ObservedUntilUnix = b.ObservedUntilUnix
-	}
-	if b.ObservedFailures.Set {
-		a.ObservedFailures = b.ObservedFailures
 	}
 	return a
 }

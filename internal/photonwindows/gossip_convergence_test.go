@@ -62,7 +62,7 @@ func TestGossipDriversConvergeCommonStateAndReloadWithoutClientRuntime(t *testin
 	}
 	waitForWindowsState(t, time.Second, func() bool {
 		peer := right.store.ReadView().Gossip.Peers["node-a.catofes."]
-		return peer.ObservedEndpoint != "" && peer.ObservedLastSyncUnix != 0
+		return peer.ObservedEndpoint != "" && peer.ObservedLastSeenUnix != 0
 	})
 	converged := right.store.ReadView()
 	if converged.Revision != fixture.rightRevision+1 {

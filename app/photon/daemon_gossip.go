@@ -8,7 +8,6 @@ import (
 	"net"
 	"time"
 
-	"github.com/HiggsNet/photon/internal/inspect"
 	photonlinux "github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
@@ -31,12 +30,7 @@ func (d *Daemon) gossipSuppressions() map[string]bool {
 	if d.State == nil {
 		return nil
 	}
-	cfg := inspect.PeerLifecycleConfig{}
-	if d.Config != nil {
-		cfg = d.Config.PeerLifecycle
-	}
-	now := d.now()
-	return peerLifecycleSuppressions(d.State.Common.ReadPeerActivity(now), now, cfg)
+	return revokedGossipPeers(d.State.Common.ReadRevokedZones(d.now()))
 }
 
 func gossipDriverConfig(app *appConfig, verified *corestate.VerifiedState, logger *appLogger) corehost.GossipDriverConfig {

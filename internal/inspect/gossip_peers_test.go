@@ -49,7 +49,7 @@ func TestGossipPeerHistoricalRetention(t *testing.T) {
 		cleanup   time.Duration
 		want      bool
 	}{
-		{name: "cleanup boundary", peer: corestate.PeerCheckpoint{LastSyncUnix: old}, want: true},
+		{name: "past offline threshold", peer: corestate.PeerCheckpoint{LastSyncUnix: old}, want: true},
 		{name: "migrated cleanup timestamp", peer: corestate.PeerCheckpoint{ObservedLastSeenUnix: old}, want: true},
 		{name: "recent sync", peer: corestate.PeerCheckpoint{LastSyncUnix: now.Unix(), ObservedLastSeenUnix: old}},
 		{name: "recent observation", peer: corestate.PeerCheckpoint{LastSyncUnix: old, ObservedLastSeenUnix: now.Unix()}},
@@ -63,7 +63,7 @@ func TestGossipPeerHistoricalRetention(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			id := "old.catofes."
 			common := corestate.View{State: &corestate.VerifiedState{Network: zone.NewNetworkState()}, Gossip: &corestate.GossipCheckpoint{Peers: map[string]corestate.PeerCheckpoint{id: tc.peer}}}
-			options := GossipPeersOptions{Now: now, Lifecycle: PeerLifecycleConfig{CleanupAfter: tc.cleanup}}
+			options := GossipPeersOptions{Now: now, Lifecycle: PeerLifecycleConfig{OfflineAfter: tc.cleanup}}
 			if tc.bootstrap {
 				options.Bootstrap = []PeerBootstrap{{PeerID: id}}
 			}

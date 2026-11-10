@@ -21,7 +21,7 @@ func TestCheckpointTimestampRefreshCoalescesOnlyOnDisk(t *testing.T) {
 		ObservedLastSeenUnix: 100, ObservedUntilUnix: 200,
 		LastSyncUnix: 100, LastAttemptUnix: 100,
 	}
-	initial.Gossip.Peers["peer-b"] = PeerCheckpoint{LastSyncUnix: 100}
+	initial.Gossip.Peers["peer-b"] = PeerCheckpoint{ObservedEndpoint: "192.0.2.3:33434", ObservedUntilUnix: 100}
 	commitCommonBoltTestState(t, db, initial, 1)
 	disk := &BoltStore{db: db}
 	t.Cleanup(func() {
@@ -54,8 +54,8 @@ func TestCheckpointTimestampRefreshCoalescesOnlyOnDisk(t *testing.T) {
 			t.Fatal(err)
 		}
 		persisted := loaded.Gossip.Peers["peer-a"]
-		if persisted.ObservedLastSeenUnix != wantDisk || persisted.ObservedUntilUnix != wantDisk+100 ||
-			persisted.LastSyncUnix != wantDisk || persisted.ObservedEndpoint != live.ObservedEndpoint {
+		if persisted.ObservedLastSeenUnix != 0 || persisted.ObservedUntilUnix != wantDisk+100 ||
+			persisted.LastSyncUnix != 0 || persisted.LastAttemptUnix != 0 || persisted.ObservedEndpoint != live.ObservedEndpoint {
 			t.Fatalf("persisted checkpoint = %+v, want refresh at %d and endpoint %q", persisted, wantDisk, live.ObservedEndpoint)
 		}
 	}
@@ -63,7 +63,7 @@ func TestCheckpointTimestampRefreshCoalescesOnlyOnDisk(t *testing.T) {
 	refresh(104, 100, "")
 	refresh(105, 100, "")
 	if _, err := store.UpdatePeerCheckpoint(context.Background(), "peer-b", PeerCheckpointPatch{
-		LastSyncUnix: PatchField[int64]{Set: true, Value: 102},
+		ObservedUntilUnix: PatchField[int64]{Set: true, Value: 102},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -73,8 +73,8 @@ func TestCheckpointTimestampRefreshCoalescesOnlyOnDisk(t *testing.T) {
 			txID = tx.ID()
 			loaded, _, _, _, err := LoadBoltState(tx)
 			if err == nil {
-				peerA = loaded.Gossip.Peers["peer-a"].LastSyncUnix
-				peerB = loaded.Gossip.Peers["peer-b"].LastSyncUnix
+				peerA = loaded.Gossip.Peers["peer-a"].ObservedUntilUnix - 100
+				peerB = loaded.Gossip.Peers["peer-b"].ObservedUntilUnix
 			}
 			return err
 		}); err != nil {
@@ -105,7 +105,7 @@ func TestCheckpointTimestampRefreshCoalescesOnlyOnDisk(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	if _, err := store.UpdatePeerCheckpoint(context.Background(), "peer-b", PeerCheckpointPatch{
-		LastSyncUnix: PatchField[int64]{Set: true, Value: 103},
+		ObservedUntilUnix: PatchField[int64]{Set: true, Value: 103},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -134,15 +134,15 @@ func TestCheckpointTimestampRefreshCoalescesOnlyOnDisk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := loaded.Gossip.Peers["peer-a"].LastSyncUnix; got != 109 {
-		t.Fatalf("checkpoint after reopen = %d, want 109", got)
+	if got := loaded.Gossip.Peers["peer-a"].ObservedUntilUnix; got != 209 {
+		t.Fatalf("checkpoint after reopen = %d, want 209", got)
 	}
 }
 
 func TestCheckpointNarrowCommitMigrationRollbackAndIsolation(t *testing.T) {
 	db := openCommonBoltTestDB(t)
 	initial := commonBoltTestCandidate(1)
-	initial.Gossip.Peers["untouched"] = PeerCheckpoint{LastSyncUnix: 42}
+	initial.Gossip.Peers["untouched"] = PeerCheckpoint{BackoffUntilUnix: 42}
 	commitCommonBoltTestState(t, db, initial, 1)
 	disk := &BoltStore{db: db}
 	// Simulate v1's monolithic checkpoint, including a stale peer bucket left
@@ -169,11 +169,11 @@ func TestCheckpointNarrowCommitMigrationRollbackAndIsolation(t *testing.T) {
 		untouched = append([]byte(nil), c.Bucket(bucketGossip).Bucket(bucketCheckpointPeers).Get([]byte("untouched"))...)
 		return nil
 	})
-	_, err = store.UpdatePeerCheckpoint(context.Background(), "peer-a", PeerCheckpointPatch{LastSyncUnix: PatchField[int64]{Set: true, Value: 100}})
+	_, err = store.UpdatePeerCheckpoint(context.Background(), "peer-a", PeerCheckpointPatch{BackoffUntilUnix: PatchField[int64]{Set: true, Value: 100}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	check := func(wantSync int64) {
+	check := func(wantBackoff int64) {
 		t.Helper()
 		if err := db.View(func(tx *bolt.Tx) error {
 			c := tx.Bucket(bucketCommonState)
@@ -191,7 +191,7 @@ func TestCheckpointNarrowCommitMigrationRollbackAndIsolation(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if rev != 1 || report.GossipCheckpointDiscarded || loaded.Gossip.Peers["peer-a"].LastSyncUnix != wantSync || loaded.Gossip.Peers["peer-a"].FailureCount != 2 {
+			if rev != 1 || report.GossipCheckpointDiscarded || loaded.Gossip.Peers["peer-a"].BackoffUntilUnix != wantBackoff || loaded.Gossip.Peers["peer-a"].FailureCount != 2 {
 				t.Fatalf("wrong persisted checkpoint/revision: %+v %d", loaded.Gossip, rev)
 			}
 			return nil
@@ -213,7 +213,7 @@ func TestCheckpointNarrowCommitMigrationRollbackAndIsolation(t *testing.T) {
 		}
 		return nil
 	})
-	if err := disk.CommitCheckpoints(context.Background(), map[string]*PeerCheckpoint{"peer-a": {LastSyncUnix: 200}}, 2); !errors.Is(err, ErrBoltRevisionInvalid) {
+	if err := disk.CommitCheckpoints(context.Background(), map[string]*PeerCheckpoint{"peer-a": {BackoffUntilUnix: 200}}, 2); !errors.Is(err, ErrBoltRevisionInvalid) {
 		t.Fatalf("stale revision: %v", err)
 	}
 	check(100)
@@ -221,10 +221,10 @@ func TestCheckpointNarrowCommitMigrationRollbackAndIsolation(t *testing.T) {
 	store.commitCheckpoints = func(context.Context, map[string]*PeerCheckpoint, VerifiedRevision) error {
 		return errors.New("disk failed")
 	}
-	if _, err := store.UpdatePeerCheckpoint(context.Background(), "peer-a", PeerCheckpointPatch{LastSyncUnix: PatchField[int64]{Set: true, Value: 200}}); err == nil {
+	if _, err := store.UpdatePeerCheckpoint(context.Background(), "peer-a", PeerCheckpointPatch{BackoffUntilUnix: PatchField[int64]{Set: true, Value: 200}}); err == nil {
 		t.Fatal("expected write failure")
 	}
-	if store.ReadView().Gossip.Peers["peer-a"].LastSyncUnix != 100 {
+	if store.ReadView().Gossip.Peers["peer-a"].BackoffUntilUnix != 100 {
 		t.Fatal("published failed checkpoint")
 	}
 	store.commitCheckpoints = disk.CommitCheckpoints

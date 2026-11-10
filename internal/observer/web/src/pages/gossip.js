@@ -41,7 +41,6 @@ function diagnostics(peer) {
 	if (lastFailure) rows.push(['Last Error', `<code>${esc(lastFailure)}</code>`]);
     if (peer.last_update_source) rows.push(['Update Source', esc(peer.last_update_source)]);
     if (peer.last_relay_suppression) rows.push(['Relay Suppression', esc(peer.last_relay_suppression)]);
-    if (peer.observed_failure_count) rows.push(['Observed Failures', esc(peer.observed_failure_count)]);
     if (peer.datagram_stats) rows.push(...kvFromObject(peer.datagram_stats));
     if (peer.object_pull_stats) rows.push(...kvFromObject(peer.object_pull_stats));
     if (peer.rejected_digests && Object.keys(peer.rejected_digests).length) rows.push(...kvFromObject(peer.rejected_digests));

@@ -53,6 +53,11 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 	}
 	plan := ipsec.LinkPlan{}
 	if len(groups) > 0 {
+		if err := d.reconcileTunnelPeerSuspensions(common, runtime, now); err != nil {
+			// A failed suspension update leaves the committed policy in
+			// place. Verified revocations still need to reach reconciliation.
+			d.logWarn("ipsec", "tunnel_suspensions_commit_failed", map[string]any{"error": err})
+		}
 		var err error
 		plan, err = ipsec.PlanTransportLinks(ctx, verified.Network, verified.ManagedZone, groups, ipsec.LinkPlannerOptions{
 			Now:                 now,
@@ -60,7 +65,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 			DNSResolver:         dnsResolver,
 			ContactPointQuality: d.buildIPsecContactPointQuality(verified, now),
 			EstablishedSAs:      sas,
-			ExcludedPeers:       peerLifecycleExcludedPeers(common.Gossip, now, d.Config.PeerLifecycle),
+			ExcludedPeers:       peerLifecycleExcludedPeers(runtime.SuspendedTunnelPeers),
 		})
 		if err != nil {
 			d.recordIPsecReconcileError(rev, now.Unix(), err)

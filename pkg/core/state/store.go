@@ -42,24 +42,21 @@ type GossipCheckpoint struct {
 	Peers map[string]PeerCheckpoint `json:"peers,omitempty"`
 }
 
-// PeerCheckpoint contains restart hints that affect retry/discovery efficiency
-// plus the most recent loss-tolerant failure context. Pure protocol counters
-// and explanatory source fields belong in observability stores.
+// PeerCheckpoint contains restart hints and live activity timestamps.
+// Activity timestamps are published in memory and omitted from disk.
+// Pure protocol counters and explanatory fields belong in observability stores.
 type PeerCheckpoint struct {
-	LastSyncUnix            int64                            `json:"last_sync_unix,omitempty"`
-	LastAttemptUnix         int64                            `json:"last_attempt_unix,omitempty"`
+	LastSyncUnix            int64                            `json:"-"`
+	LastAttemptUnix         int64                            `json:"-"`
 	BackoffUntilUnix        int64                            `json:"backoff_until_unix,omitempty"`
 	FailureCount            int                              `json:"failure_count,omitempty"`
 	LastRelayUnix           int64                            `json:"last_relay_unix,omitempty"`
 	LastRelayCatalogRootHex string                           `json:"last_relay_catalog_root_hex,omitempty"`
 	DiscoveredEndpoint      string                           `json:"discovered_endpoint,omitempty"`
-	DiscoveredAtUnix        int64                            `json:"discovered_at_unix,omitempty"`
 	ObservedEndpoint        string                           `json:"observed_endpoint,omitempty"`
 	ObservedFirstSeenUnix   int64                            `json:"observed_first_seen_unix,omitempty"`
-	ObservedLastSeenUnix    int64                            `json:"observed_last_seen_unix,omitempty"`
-	ObservedLastSyncUnix    int64                            `json:"observed_last_sync_unix,omitempty"`
+	ObservedLastSeenUnix    int64                            `json:"-"`
 	ObservedUntilUnix       int64                            `json:"observed_until_unix,omitempty"`
-	ObservedFailureCount    int                              `json:"observed_failure_count,omitempty"`
 	ObservedGraceEndpoints  []ObservedGraceEndpoint          `json:"observed_grace_endpoints,omitempty"`
 	LastFailure             *PeerFailure                     `json:"last_failure,omitempty"`
 	RejectedObjects         map[zone.ZonePath]RejectedObject `json:"rejected_objects,omitempty"`

@@ -145,10 +145,6 @@ func (driver *GossipDriver) commitGossipEventCheckpoint(ctx context.Context, ses
 		patch.LastFailure = corestate.PatchField[*corestate.PeerFailure]{Set: true, Value: peer.LastFailure}
 		if session.LastError() == nil {
 			patch.LastSyncUnix = corestate.PatchField[int64]{Set: true, Value: peer.LastSyncUnix}
-			if peer.ObservedEndpoint != "" && peer.ObservedUntilUnix != 0 && now.Before(time.Unix(peer.ObservedUntilUnix, 0)) {
-				patch.ObservedSyncUnix = corestate.PatchField[int64]{Set: true, Value: peer.ObservedLastSyncUnix}
-				patch.ObservedFailures = corestate.PatchField[int]{Set: true, Value: peer.ObservedFailureCount}
-			}
 		}
 		patches[session.PeerID] = patch
 	}
@@ -169,14 +165,9 @@ func applyGossipCompletionCheckpoint(peer *corestate.PeerCheckpoint, syncErr err
 	peer.BackoffUntilUnix = 0
 	peer.FailureCount = 0
 	peer.LastFailure = nil
-	if peer.ObservedEndpoint != "" && peer.ObservedUntilUnix != 0 && now.Before(time.Unix(peer.ObservedUntilUnix, 0)) {
-		peer.ObservedLastSyncUnix = now.Unix()
-		peer.ObservedFailureCount = 0
-	}
 	return peer.LastAttemptUnix != previous.LastAttemptUnix || peer.LastSyncUnix != previous.LastSyncUnix ||
 		peer.BackoffUntilUnix != previous.BackoffUntilUnix || peer.FailureCount != previous.FailureCount ||
-		peer.LastFailure != previous.LastFailure || peer.ObservedLastSyncUnix != previous.ObservedLastSyncUnix ||
-		peer.ObservedFailureCount != previous.ObservedFailureCount
+		peer.LastFailure != previous.LastFailure
 }
 
 func applyGossipBackoffCheckpoint(peer *corestate.PeerCheckpoint, actionErr error, now time.Time) {

@@ -81,7 +81,8 @@ State
 │      └── rejected object/digest
 └── LinuxState（仅 Linux composition）
    ├── IPsec transport private key
-   └── explicit local Endpoint ACLs
+   ├── explicit local Endpoint ACLs
+   └── suspended tunnel peers
 ```
 
 `VerifiedState` 是不可随意丢失的权威事实。`GossipCheckpoint` 只保存 gossip 的 loss-tolerant restart hint；损坏时可报告并丢弃，然后重新发现和同步。Gossip 只是 Common 的一个使用者，因此不得把整个 State 改名为 `GossipStore`。
@@ -90,10 +91,11 @@ State
 
 平台 State 是 State 内的独立 typed partition，与 Common 共用同一个 StateDB；它不是第二个 Store，也不自行持有 DB handle 或生命周期。平台 codec 只在 State 提供的事务中读写。
 
-平台 State 只允许保存两类数据：
+平台 State 保存下列本机数据。
 
 1. 无法从 VerifiedState、配置、确定性命名或操作系统 observation 重新得到，并且跨重启确有意义的数据，例如没有其他来源的本地 transport private key、显式本地 Endpoint ACL、真实随机且未发布的 generation/resource ID。
 2. 非幂等多阶段操作恢复所需的最小 journal，例如 staged rotation/takeover phase、owner token、待清理资源和 deadline。
+3. 必须跨重启延续的隧道暂停标记。它由 Linux 生命周期在超时或恢复时更新。
 
 能够从配置、签名 record、确定性 ID 或系统现状推导的数据不得重复落盘。ensure/delete 应优先做成幂等；只有无法安全重建的中间态才进入 journal。
 
@@ -142,10 +144,10 @@ Daemon 可以直接持有一个无独立锁/线程的 `LinuxObservation` 或 `Wi
 | `RoutingReconcile` | 已从 LinuxState 删除；只进 Observation |
 | `FirewallReconcile` | 已从 LinuxState 删除；实际状态、诊断与可重建 policy hash/generation 只进 Observation |
 | `BirdInstances` | 已从 LinuxState 删除；desired/路径/RouterID/owner 重新推导，PID/socket/status/exit/backoff 进程内 Observe |
-| `PeerCleanups` | 已删除；离线抑制从 GossipCheckpoint 最后活动时间与 `cleanup_after` 推导，吊销抑制从 VerifiedState 推导，不保存第二份 cleanup tombstone |
+| `SuspendedTunnelPeers` | 只保存本机暂停重建隧道的 peer 集合。活动时间在内存中，只有 Linux 生命周期判定超时；IPsec planner 直接读取已提交标记，签名撤销仍从 VerifiedState 推导。 |
 | `Admission` | 已从 LinuxState 删除；它是由 VerifiedState 与 GossipCheckpoint 即时生成的 inspect diagnosis，不是持久 state。旧 schema 字段解码时直接丢弃 |
 
-审计已经完成：旧 `RuntimeState` 没有整体搬进 `LinuxDriver`，current codec 只编码上述两个明确的 LinuxState 字段；未来新增持久字段仍需逐项证明不可重建且确有跨重启价值。
+审计已经完成：旧 `RuntimeState` 没有整体搬进 `LinuxDriver`，current codec 只编码上述明确的 LinuxState 字段；未来新增持久字段仍需逐项证明不可重建且确有跨重启价值。
 
 ## 7. 持久化与写入边界
 

@@ -38,7 +38,6 @@ func projectLegacyCommonState(meta *stateMeta, legacyNetwork *zone.NetworkState,
 	}
 	network := zone.CloneNetworkState(legacyNetwork)
 	checkpoint, report := projectLegacyGossipCheckpoint(meta.SyncPeers)
-	report, _ = projectLegacyPeerCleanups(checkpoint, meta.PeerCleanups, report)
 	candidate := &corestate.CommitCandidate{
 		Verified: &corestate.VerifiedState{
 			ManagedZone:          meta.ManagedZone,
@@ -68,38 +67,23 @@ func projectLegacyCommonState(meta *stateMeta, legacyNetwork *zone.NetworkState,
 	return candidate, report, nil
 }
 
-// projectLegacyPeerCleanups converts the retired Linux/offline marker into the
-// historical checkpoint evidence used by the current lifecycle policy. The old
-// marker retained only the latest activity time, not whether it came from a
-// sync or an observation, so it is represented as last-observed activity rather
-// than fabricating a successful sync at migration time.
-func projectLegacyPeerCleanups(checkpoint *corestate.GossipCheckpoint, cleanups map[string]photonlinux.LegacyPeerCleanupState, report legacyGossipCheckpointReport) (legacyGossipCheckpointReport, bool) {
-	if checkpoint == nil {
-		return report, false
-	}
-	if checkpoint.Peers == nil {
-		checkpoint.Peers = make(map[string]corestate.PeerCheckpoint)
-	}
-	changed := false
+// projectLegacyPeerCleanups restores the explicit old Linux suspension,
+// skipping stale markers superseded by newer activity in the legacy input.
+func projectLegacyPeerCleanups(checkpoint *corestate.GossipCheckpoint, cleanups map[string]photonlinux.LegacyPeerCleanupState, runtime *photonlinux.LinuxState, report legacyGossipCheckpointReport) legacyGossipCheckpointReport {
 	for peerID, cleanup := range cleanups {
 		path := zone.ZonePath(peerID)
-		if !path.Valid() || path == zone.RootZone || cleanup.Reason != peerCleanupReasonOffline || cleanup.LastActiveUnix <= 0 || cleanup.CleanupUnix <= 0 {
+		if !path.Valid() || path.IsRoot() || cleanup.Reason != peerCleanupReasonOffline || cleanup.LastActiveUnix <= 0 || cleanup.CleanupUnix <= 0 ||
+			peerLifecycleLastActiveUnix(checkpoint.Peers[peerID]) > cleanup.LastActiveUnix {
 			report.CleanupsDropped++
 			continue
 		}
-		peer := checkpoint.Peers[peerID]
-		if peerLifecycleLastActiveUnix(peer) > cleanup.LastActiveUnix {
-			report.CleanupsDropped++
-			continue
+		if runtime.SuspendedTunnelPeers == nil {
+			runtime.SuspendedTunnelPeers = make(map[zone.ZonePath]bool)
 		}
-		if peer.ObservedLastSeenUnix != cleanup.LastActiveUnix {
-			peer.ObservedLastSeenUnix = cleanup.LastActiveUnix
-			checkpoint.Peers[peerID] = peer
-			changed = true
-		}
+		runtime.SuspendedTunnelPeers[path] = true
 		report.CleanupsMigrated++
 	}
-	return report, changed
+	return report
 }
 
 // projectLegacyGossipCheckpoint is used only by the one-way schema migration.
@@ -122,13 +106,10 @@ func projectLegacyGossipCheckpoint(peers map[string]legacyPeerState) (*corestate
 			LastRelayUnix:           legacy.LastRelayUnix,
 			LastRelayCatalogRootHex: legacy.LastRelayCatalogRootHex,
 			DiscoveredEndpoint:      legacy.DiscoveredAddr,
-			DiscoveredAtUnix:        legacy.DiscoveredAtUnix,
 			ObservedEndpoint:        legacy.ObservedAddr,
 			ObservedFirstSeenUnix:   legacy.ObservedFirstSeenUnix,
 			ObservedLastSeenUnix:    legacy.ObservedLastSeenUnix,
-			ObservedLastSyncUnix:    legacy.ObservedLastSyncUnix,
 			ObservedUntilUnix:       legacy.ObservedUntilUnix,
-			ObservedFailureCount:    legacy.ObservedFailureCount,
 		}
 		if legacy.LastError != "" {
 			peer.LastFailure = &corestate.PeerFailure{
@@ -189,8 +170,8 @@ func projectLegacyRejectedObjects(rejected map[string]photonstate.PeerRejectedDi
 func peerCheckpointEmpty(peer corestate.PeerCheckpoint) bool {
 	return peer.LastSyncUnix == 0 && peer.LastAttemptUnix == 0 && peer.BackoffUntilUnix == 0 &&
 		peer.FailureCount == 0 && peer.LastRelayUnix == 0 && peer.LastRelayCatalogRootHex == "" &&
-		peer.DiscoveredEndpoint == "" && peer.DiscoveredAtUnix == 0 &&
+		peer.DiscoveredEndpoint == "" &&
 		peer.ObservedEndpoint == "" && peer.ObservedFirstSeenUnix == 0 && peer.ObservedLastSeenUnix == 0 &&
-		peer.ObservedLastSyncUnix == 0 && peer.ObservedUntilUnix == 0 && peer.ObservedFailureCount == 0 &&
+		peer.ObservedUntilUnix == 0 &&
 		len(peer.ObservedGraceEndpoints) == 0 && peer.LastFailure == nil && len(peer.RejectedObjects) == 0
 }

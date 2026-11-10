@@ -17,7 +17,7 @@ import (
 func TestRestoreStateUpgradesRC6VerifiedLayoutWithoutChangingOwners(t *testing.T) {
 	verified, checkpoint, linux, _ := buildTestRoutingOwners(t)
 	checkpoint = &corestate.GossipCheckpoint{Peers: map[string]corestate.PeerCheckpoint{
-		"node-b.catofes.": {LastSyncUnix: 42, BackoffUntilUnix: 100, ObservedEndpoint: "192.0.2.5:33434"},
+		"node-b.catofes.": {BackoffUntilUnix: 100, ObservedEndpoint: "192.0.2.5:33434"},
 	}}
 	path := filepath.Join(t.TempDir(), "photon.db")
 	seedPartitionedStateDB(t, path, verified, checkpoint, linux)

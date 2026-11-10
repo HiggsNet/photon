@@ -174,7 +174,7 @@ func TestVerifiedZoneDeltaAndRollbackPreserveUnchangedData(t *testing.T) {
 	next := cloneCommitCandidate(candidate.Verified, candidate.Gossip)
 	next.Verified.Network.Zones["node-0.catofes."].Records["record-0"].Value[0] = 1
 	delete(next.Verified.Network.Zones, "node-2.catofes.")
-	next.Gossip.Peers["peer-a"] = PeerCheckpoint{LastSyncUnix: 99}
+	next.Gossip.Peers["peer-a"] = PeerCheckpoint{BackoffUntilUnix: 99}
 	want := errors.New("injected failure after common and platform writes")
 	if err := db.Update(func(tx *bolt.Tx) error {
 		if _, err := CommitBoltState(tx, next, ChangeSet{VerifiedRevision: 2, NetworkChanged: true}); err != nil {

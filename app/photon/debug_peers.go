@@ -9,6 +9,7 @@ import (
 	"github.com/HiggsNet/photon/internal/inspect"
 	inspecttext "github.com/HiggsNet/photon/internal/inspect/text"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
@@ -56,7 +57,7 @@ func showPeers(filter string, verbose bool) error {
 	return inspecttext.WriteGossipPeers(os.Stdout, inspect.BuildGossipPeerDebugViews(common, options), filter, verbose)
 }
 
-func buildPeerLifecycleDebugView(config *appConfig, common corestate.View, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, now time.Time) inspect.PeerLifecycleDebugView {
+func buildPeerLifecycleDebugView(config *appConfig, common corestate.View, suspended map[zone.ZonePath]bool, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, now time.Time) inspect.PeerLifecycleDebugView {
 	if common.State == nil || common.State.Network == nil {
 		return inspect.PeerLifecycleDebugView{}
 	}
@@ -67,7 +68,7 @@ func buildPeerLifecycleDebugView(config *appConfig, common corestate.View, links
 	}
 	hasOverlay := config != nil && len(config.IPsec.LinkGroups) > 0
 
-	statuses := derivePeerStatuses(common.State.ManagedZone, common.State.Network, common.Gossip, links, reconcile, now, cfg, hasOverlay)
+	statuses := derivePeerStatuses(common.State.ManagedZone, common.State.Network, common.Gossip, suspended, links, reconcile, now, cfg, hasOverlay)
 	return inspect.BuildPeerLifecycleDebug(cfg, statuses)
 }
 

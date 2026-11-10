@@ -27,7 +27,7 @@ func TestMatchingPingBurstSkipsAlreadyCommittedCompletion(t *testing.T) {
 	common := corestate.NewStoreWithCheckpoint(
 		&corestate.VerifiedState{ManagedZone: "local.catofes.", Network: zone.NewNetworkState()},
 		&corestate.GossipCheckpoint{Peers: map[string]corestate.PeerCheckpoint{"peer-a": {
-			ObservedEndpoint: "127.0.0.1:33434", ObservedUntilUnix: now.Add(time.Minute).Unix(), ObservedFailureCount: 2,
+			ObservedEndpoint: "127.0.0.1:33434", ObservedUntilUnix: now.Add(time.Minute).Unix(),
 		}}}, nil,
 		func(context.Context, map[string]*corestate.PeerCheckpoint, corestate.VerifiedRevision) error {
 			commits++
@@ -51,11 +51,11 @@ func TestMatchingPingBurstSkipsAlreadyCommittedCompletion(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if store.updates != 1 || commits != 1 {
-		t.Fatalf("updates=%d persisted commits=%d, want 1/1", store.updates, commits)
+	if store.updates != 1 || commits != 0 {
+		t.Fatalf("updates=%d persisted commits=%d, want 1/0", store.updates, commits)
 	}
 	peer := common.PeerCheckpoints([]string{"peer-a"})["peer-a"]
-	if peer.ObservedFailureCount != 0 || peer.ObservedLastSyncUnix != now.Unix() {
+	if peer.LastSyncUnix != now.Unix() {
 		t.Fatalf("completion=%+v", peer)
 	}
 	now = now.Add(time.Second)
@@ -63,14 +63,13 @@ func TestMatchingPingBurstSkipsAlreadyCommittedCompletion(t *testing.T) {
 	if _, err := driver.HandleGossipHostEvent(t.Context(), packet, now, nil); err != nil {
 		t.Fatal(err)
 	}
-	if store.updates != 2 || commits != 2 {
-		t.Fatalf("new second updates=%d commits=%d, want 2/2", store.updates, commits)
+	if store.updates != 2 || commits != 0 {
+		t.Fatalf("new second updates=%d commits=%d, want 2/0", store.updates, commits)
 	}
 	// A same-second failure must still be cleared, even though LastSyncUnix
 	// already matches. Coalescing is based on the actual checkpoint fields.
 	if _, err := common.UpdatePeerCheckpoints(t.Context(), map[string]corestate.PeerCheckpointPatch{"peer-a": {
-		FailureCount:     corestate.PatchField[int]{Set: true, Value: 3},
-		ObservedFailures: corestate.PatchField[int]{Set: true, Value: 2},
+		FailureCount: corestate.PatchField[int]{Set: true, Value: 3},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +77,7 @@ func TestMatchingPingBurstSkipsAlreadyCommittedCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	peer = common.PeerCheckpoints([]string{"peer-a"})["peer-a"]
-	if store.updates != 3 || peer.FailureCount != 0 || peer.ObservedFailureCount != 0 {
+	if store.updates != 3 || commits != 2 || peer.FailureCount != 0 {
 		t.Fatalf("updates=%d recovered=%+v", store.updates, peer)
 	}
 }
@@ -87,7 +86,9 @@ func TestCompletionRetryAfterPersistenceFailureIsNotCoalesced(t *testing.T) {
 	now := time.Unix(1000, 0)
 	wantErr := errors.New("checkpoint write failed")
 	attempts := 0
-	common := corestate.NewStore(&corestate.VerifiedState{ManagedZone: "local.catofes.", Network: zone.NewNetworkState()}, nil,
+	common := corestate.NewStoreWithCheckpoint(
+		&corestate.VerifiedState{ManagedZone: "local.catofes.", Network: zone.NewNetworkState()},
+		&corestate.GossipCheckpoint{Peers: map[string]corestate.PeerCheckpoint{"peer-a": {FailureCount: 1}}}, nil,
 		func(context.Context, map[string]*corestate.PeerCheckpoint, corestate.VerifiedRevision) error {
 			attempts++
 			if attempts == 1 {
@@ -115,7 +116,7 @@ func TestGossipDriverCommitsBackoffAndCompletionOnceWithoutAdvancingRevision(t *
 	var committed map[string]*corestate.PeerCheckpoint
 	store := corestate.NewStoreWithCheckpoint(
 		&corestate.VerifiedState{ManagedZone: "local.catofes.", Network: zone.NewNetworkState()},
-		&corestate.GossipCheckpoint{Peers: map[string]corestate.PeerCheckpoint{"peer-a": {ObservedEndpoint: "127.0.0.1:33434", ObservedUntilUnix: now.Add(time.Minute).Unix(), ObservedFailureCount: 2}}},
+		&corestate.GossipCheckpoint{Peers: map[string]corestate.PeerCheckpoint{"peer-a": {ObservedEndpoint: "127.0.0.1:33434", ObservedUntilUnix: now.Add(time.Minute).Unix()}}},
 		nil, func(_ context.Context, candidate map[string]*corestate.PeerCheckpoint, revision corestate.VerifiedRevision) error {
 			commits++
 			committed = candidate
@@ -142,7 +143,7 @@ func TestGossipDriverCommitsBackoffAndCompletionOnceWithoutAdvancingRevision(t *
 	if peer.FailureCount != 1 || peer.LastAttemptUnix != now.Unix() || peer.BackoffUntilUnix != now.Add(2*time.Second).Unix() {
 		t.Fatalf("failed completion checkpoint = %#v", peer)
 	}
-	if peer.LastFailure == nil || peer.LastFailure.Message == "" || peer.ObservedFailureCount != 2 {
+	if peer.LastFailure == nil || peer.LastFailure.Message == "" {
 		t.Fatalf("failure details = %#v", peer)
 	}
 	if store.VerifiedRevision() != 0 {

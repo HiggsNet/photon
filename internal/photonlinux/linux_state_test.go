@@ -45,7 +45,7 @@ func TestCloneLinuxStatePreservesNilAndEmptyShape(t *testing.T) {
 
 func TestLinuxStateJSONSchemaGuard(t *testing.T) {
 	want := []string{
-		"IPsecTransportKey", "EndpointACLs",
+		"IPsecTransportKey", "EndpointACLs", "SuspendedTunnelPeers",
 	}
 	typ := reflect.TypeOf(LinuxState{})
 	if typ.NumField() != len(want) {

@@ -36,13 +36,10 @@ type legacyPeerState struct {
 	FailureCount            int                                       `json:"failure_count,omitempty"`
 	LastError               string                                    `json:"last_error,omitempty"`
 	DiscoveredAddr          string                                    `json:"discovered_addr,omitempty"`
-	DiscoveredAtUnix        int64                                     `json:"discovered_at_unix,omitempty"`
 	ObservedAddr            string                                    `json:"observed_addr,omitempty"`
 	ObservedFirstSeenUnix   int64                                     `json:"observed_first_seen_unix,omitempty"`
 	ObservedLastSeenUnix    int64                                     `json:"observed_last_seen_unix,omitempty"`
-	ObservedLastSyncUnix    int64                                     `json:"observed_last_sync_unix,omitempty"`
 	ObservedUntilUnix       int64                                     `json:"observed_until_unix,omitempty"`
-	ObservedFailureCount    int                                       `json:"observed_failure_count,omitempty"`
 	ObservedGraceAddrs      []photonstate.PeerObservedGraceAddrState  `json:"observed_grace_addrs,omitempty"`
 	RejectedDigests         map[string]photonstate.PeerRejectedDigest `json:"rejected_digests,omitempty"`
 }
@@ -58,8 +55,7 @@ type legacyStateMigrationReport struct {
 }
 
 // migrateLegacyLinuxStateTx atomically handles both supported one-way upgrades:
-// it moves a retired cleanup marker from an already partitioned Linux payload
-// into GossipCheckpoint, or replaces the older _meta/cli_state plus zone:*
+// it upgrades old Linux cleanup markers in a partitioned payload, or replaces the older _meta/cli_state plus zone:*
 // representation with the common and Linux buckets. The caller owns tx and
 // decides commit/rollback.
 func migrateLegacyLinuxStateTx(tx *bolt.Tx, trustedRoot ed25519.PublicKey) (legacyStateMigrationReport, bool, error) {
@@ -93,18 +89,16 @@ func migrateLegacyLinuxStateTx(tx *bolt.Tx, trustedRoot ed25519.PublicKey) (lega
 		if peerCleanups == nil && !loadReport.RootAuthorityRepaired && !loadReport.LegacyVerifiedLayout {
 			return report, false, nil
 		}
-		var checkpointChanged bool
-		report.Gossip, checkpointChanged = projectLegacyPeerCleanups(candidate.Gossip, peerCleanups, report.Gossip)
+		report.Gossip = projectLegacyPeerCleanups(candidate.Gossip, peerCleanups, linuxState, report.Gossip)
 		commonChanged := false
-		if checkpointChanged || loadReport.RootAuthorityRepaired || loadReport.LegacyVerifiedLayout {
+		if loadReport.RootAuthorityRepaired || loadReport.LegacyVerifiedLayout {
 			if loadReport.RootAuthorityRepaired {
 				revision++
 			}
 			commonChanged, err = corestate.CommitBoltState(tx, candidate, corestate.ChangeSet{
-				VerifiedRevision:        revision,
-				GossipCheckpointChanged: checkpointChanged,
-				NetworkChanged:          loadReport.RootAuthorityRepaired,
-				SecurityPriority:        loadReport.RootAuthorityRepaired,
+				VerifiedRevision: revision,
+				NetworkChanged:   loadReport.RootAuthorityRepaired,
+				SecurityPriority: loadReport.RootAuthorityRepaired,
 			})
 			if err != nil {
 				return report, false, err
@@ -135,10 +129,9 @@ func migrateLegacyLinuxStateTx(tx *bolt.Tx, trustedRoot ed25519.PublicKey) (lega
 	if _, err := corestate.CommitBoltState(tx, candidate, corestate.ChangeSet{}); err != nil {
 		return report, false, err
 	}
-	if _, err := photonlinux.SaveLinuxStateTx(tx, &photonlinux.LinuxState{
-		IPsecTransportKey: meta.IPsecTransportKey,
-		EndpointACLs:      meta.EndpointACLs,
-	}); err != nil {
+	linuxState := &photonlinux.LinuxState{IPsecTransportKey: meta.IPsecTransportKey, EndpointACLs: meta.EndpointACLs}
+	report.Gossip = projectLegacyPeerCleanups(candidate.Gossip, meta.PeerCleanups, linuxState, report.Gossip)
+	if _, err := photonlinux.SaveLinuxStateTx(tx, linuxState); err != nil {
 		return report, false, err
 	}
 	if _, err := zone.DeleteNetworkTx(tx); err != nil {

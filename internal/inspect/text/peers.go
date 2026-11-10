@@ -154,7 +154,7 @@ func peerSeverity(p inspect.PeerStatusInfo) string {
 		return "critical (revoked)"
 	case "offline":
 		if p.Reason == "cleanup_after_exceeded" {
-			return "warning (cleanup due)"
+			return "warning (tunnel suspended)"
 		}
 		return "warning (offline)"
 	case "stale":

@@ -186,7 +186,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		if routingObserved != nil {
 			birdInstances = routingObserved.Instances
 		}
-		writeCanonicalView(conn, statusViewFromOwners(d.Config, common, links, reconcile, birdInstances, d.healthSamples(), true, d.now()))
+		writeCanonicalView(conn, statusViewFromOwners(d.Config, common, d.State.ReadLinux().SuspendedTunnelPeers, links, reconcile, birdInstances, d.healthSamples(), true, d.now()))
 	case "record_put":
 		if err := validateControlRecordPut(request); err != nil {
 			writeControlResponse(conn, controlError(err))
@@ -663,7 +663,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		links, reconcile := d.linuxObservation.ipsecSnapshot()
-		writeCanonicalView(conn, buildPeerLifecycleDebugView(d.Config, common, links, reconcile, d.now()))
+		writeCanonicalView(conn, buildPeerLifecycleDebugView(d.Config, common, d.State.ReadLinux().SuspendedTunnelPeers, links, reconcile, d.now()))
 	case "gossip_peers_view":
 		writeCanonicalView(conn, d.gossipPeerSnapshotForControl())
 	case "revocation_view":

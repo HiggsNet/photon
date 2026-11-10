@@ -108,11 +108,11 @@ func TestBuildPeerLifecycleStatusPriorityAndThresholds(t *testing.T) {
 			reason: "offline_after_exceeded",
 		},
 		{
-			name: "cleanup threshold",
+			name: "committed tunnel suspension",
 			input: PeerLifecycleInput{
-				StateAvailable: true,
-				PeerZoneKnown:  true,
-				LastSyncUnix:   now.Add(-49 * time.Hour).Unix(),
+				StateAvailable:  true,
+				PeerZoneKnown:   true,
+				TunnelSuspended: true,
 			},
 			state:  PeerStateOffline,
 			reason: "cleanup_after_exceeded",

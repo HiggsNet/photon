@@ -102,7 +102,7 @@ func TestPlanGossipDiscoveryRanksEndpointAndPublishesCheckpoint(t *testing.T) {
 		t.Fatalf("addresses = %v, want public reflector first", update.SetAddresses)
 	}
 	patch := plan.Patches["peer.catofes."]
-	if !patch.DiscoveredEndpoint.Set || patch.DiscoveredEndpoint.Value != "203.0.113.10:33434" || !patch.DiscoveredAtUnix.Set {
+	if !patch.DiscoveredEndpoint.Set || patch.DiscoveredEndpoint.Value != "203.0.113.10:33434" {
 		t.Fatalf("checkpoint patch = %#v", patch)
 	}
 
@@ -121,7 +121,7 @@ func TestPlanGossipDiscoveryReplacesAndExpiresEndpoint(t *testing.T) {
 	plan := PlanGossipDiscovery(GossipDiscoveryInput{
 		LocalPeerID: "local.catofes.", ManagedZone: "local.catofes.", Network: network,
 		Peers: map[string]corestate.PeerCheckpoint{"peer.catofes.": {
-			DiscoveredEndpoint: "127.0.0.1:9999", DiscoveredAtUnix: now.Add(-time.Minute).Unix(),
+			DiscoveredEndpoint: "127.0.0.1:9999",
 		}},
 	}, now)
 	if got := plan.Patches["peer.catofes."].DiscoveredEndpoint; !got.Set || got.Value != "127.0.0.1:10000" {
@@ -133,7 +133,7 @@ func TestPlanGossipDiscoveryReplacesAndExpiresEndpoint(t *testing.T) {
 		LocalPeerID: "local.catofes.", ManagedZone: "local.catofes.", Network: emptyNetwork,
 		EndpointGrace: time.Nanosecond,
 		Peers: map[string]corestate.PeerCheckpoint{"peer.catofes.": {
-			DiscoveredEndpoint: "127.0.0.1:10000", DiscoveredAtUnix: now.Add(-time.Hour).Unix(), LastSyncUnix: now.Add(-time.Hour).Unix(),
+			DiscoveredEndpoint: "127.0.0.1:10000", LastSyncUnix: now.Add(-time.Hour).Unix(),
 		}},
 	}, now)
 	update := plan.Peers["peer.catofes."]
@@ -232,14 +232,14 @@ func TestPlanVerifiedObservedCheckpointMovesPreviousPathToGrace(t *testing.T) {
 		LocalPeerID: "local.catofes.", ManagedZone: "local.catofes.", Network: network,
 		Peers: map[string]corestate.PeerCheckpoint{peerID.String(): {
 			ObservedEndpoint: "198.51.100.10:33434", ObservedFirstSeenUnix: now.Add(-time.Minute).Unix(),
-			ObservedUntilUnix: now.Add(time.Minute).Unix(), ObservedFailureCount: 2,
+			ObservedUntilUnix: now.Add(time.Minute).Unix(),
 		}},
 	}
 	patch, ok := PlanVerifiedObservedCheckpoint(input, peerID.String(), "198.51.100.20:33434", now)
 	if !ok {
 		t.Fatal("verified peer did not produce observed checkpoint patch")
 	}
-	if patch.ObservedEndpoint.Value != "198.51.100.20:33434" || patch.ObservedFirstUnix.Value != now.Unix() || patch.ObservedFailures.Value != 0 {
+	if patch.ObservedEndpoint.Value != "198.51.100.20:33434" || patch.ObservedFirstUnix.Value != now.Unix() {
 		t.Fatalf("observed patch = %#v", patch)
 	}
 	if len(patch.ObservedGrace.Value) != 1 || patch.ObservedGrace.Value[0].Endpoint != "198.51.100.10:33434" {
@@ -258,8 +258,8 @@ func TestApplyGossipDiscoveryPlanRepairsTransportWithoutCheckpointPatch(t *testi
 	input := GossipDiscoveryInput{
 		LocalPeerID: "local.catofes.", ManagedZone: "local.catofes.", Network: network,
 		Peers: map[string]corestate.PeerCheckpoint{peerID.String(): {
-			DiscoveredEndpoint: "203.0.113.10:33434", DiscoveredAtUnix: now.Unix(),
-			ObservedEndpoint: "198.51.100.20:33434", ObservedUntilUnix: now.Add(time.Minute).Unix(),
+			DiscoveredEndpoint: "203.0.113.10:33434",
+			ObservedEndpoint:   "198.51.100.20:33434", ObservedUntilUnix: now.Add(time.Minute).Unix(),
 			ObservedGraceEndpoints: []corestate.ObservedGraceEndpoint{
 				{Endpoint: "expired:33434", UntilUnix: now.Add(-time.Minute).Unix()},
 				{Endpoint: "198.51.100.21:33434", UntilUnix: now.Add(time.Minute).Unix()},

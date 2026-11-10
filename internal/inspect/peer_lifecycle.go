@@ -45,6 +45,7 @@ type PeerLifecycleInput struct {
 	StateAvailable       bool
 	PeerZoneKnown        bool
 	ZoneRevoked          bool
+	TunnelSuspended      bool
 	HasIPsecConfig       bool
 	HasOverlayConfig     bool
 	PeerHasIPsecRecords  bool
@@ -133,18 +134,11 @@ func BuildPeerLifecycleStatus(input PeerLifecycleInput) PeerStatusInfo {
 	if input.ObservedLastSeenUnix > 0 && input.ObservedLastSeenUnix > lastActive {
 		lastActive = input.ObservedLastSeenUnix
 	}
-	if lastActive != 0 {
-		lastActiveTime := time.Unix(lastActive, 0)
-		if input.Now.Sub(lastActiveTime) >= cfg.CleanupAfter {
-			// cleanup_after is an owner-resource retention limit, so it must
-			// override stale LinkInstances/desired snapshots that are precisely
-			// the resources the daemon is about to remove.
-			info.State = PeerStateOffline
-			info.Reason = "cleanup_after_exceeded"
-			info.OfflineSinceUnix = lastActive
-			info.NextCleanupUnix = input.Now.Unix()
-			return info
-		}
+	if input.TunnelSuspended {
+		info.State = PeerStateOffline
+		info.Reason = "cleanup_after_exceeded"
+		info.OfflineSinceUnix = lastActive
+		return info
 	}
 	if input.DesiredLinks == 0 && input.HasIPsecConfig {
 		if input.PolicyDeniedReason != "" {

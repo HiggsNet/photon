@@ -29,13 +29,13 @@ func TestRevocationProjectionAcrossTimeIntervals(t *testing.T) {
 		now := time.Unix(second, 0)
 		want := network.RevokedZones(now)
 		got, _ := store.RevokedPeerCheckpoints(now)
-		activity := store.ReadPeerActivity(now)
-		if !reflect.DeepEqual(got, want) || !reflect.DeepEqual(activity.RevokedZones, want) {
-			t.Errorf("at %d: cleanup=%v activity=%v, want %v", second, got, activity.RevokedZones, want)
+		projected := store.ReadRevokedZones(now)
+		if !reflect.DeepEqual(got, want) || !reflect.DeepEqual(projected, want) {
+			t.Errorf("at %d: cleanup=%v projection=%v, want %v", second, got, projected, want)
 		}
 		// Even an empty result must remain detached from the cached projection.
 		clear(got)
-		activity.RevokedZones["caller."] = true
+		projected["caller."] = true
 	}
 	// Includes both sides of activation, purged tombstones, ancestors, negative
 	// timestamps and rollback across more than one scheduled boundary.

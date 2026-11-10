@@ -465,7 +465,7 @@ func TestStoreUpdatePeerCheckpointNoopAndPersistenceFailure(t *testing.T) {
 	wantErr := errors.New("metadata persistence failed")
 	commitSink.err = wantErr
 	_, err = store.UpdatePeerCheckpoint(context.Background(), "peer-a", PeerCheckpointPatch{
-		LastAttemptUnix: PatchField[int64]{Set: true, Value: 100},
+		BackoffUntilUnix: PatchField[int64]{Set: true, Value: 100},
 	})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("UpdatePeerCheckpoint error = %v, want %v", err, wantErr)

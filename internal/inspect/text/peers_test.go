@@ -129,7 +129,7 @@ func TestWritePeerLifecycleDebugSummaryAndSeverity(t *testing.T) {
 		"summary: offline=1, revoked=1",
 		"PEER ZONE STATE LINKS desired/actual/up SEVERITY REASON DETAIL",
 		"node-b.catofes. node-b.catofes. revoked 1/1/0 critical (revoked) zone_revoked revoked by catofes.",
-		"node-c.catofes. node-c.catofes. offline 0/0/0 warning (cleanup due) cleanup_after_exceeded",
+		"node-c.catofes. node-c.catofes. offline 0/0/0 warning (tunnel suspended) cleanup_after_exceeded",
 		"node-b.catofes. 2023-11-14T22:13:20Z 2023-11-14T22:13:21Z 2023-11-14T22:13:22Z",
 		"2023-11-14T22:13:30Z 2023-11-14T22:13:40Z",
 	} {

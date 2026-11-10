@@ -83,14 +83,11 @@ type PeerRuntimeView struct {
 	LastRelaySuppression  string                                    `json:"last_relay_suppression,omitempty"`
 	LastRelaySuppressedAt int64                                     `json:"last_relay_suppressed_at,omitempty"`
 	DiscoveredAddr        string                                    `json:"discovered_addr,omitempty"`
-	DiscoveredAtUnix      int64                                     `json:"discovered_at_unix,omitempty"`
 	ObservedAddr          string                                    `json:"observed_addr,omitempty"`
 	ObservedFirstSeenUnix int64                                     `json:"observed_first_seen_unix,omitempty"`
 	ObservedLastSeenUnix  int64                                     `json:"observed_last_seen_unix,omitempty"`
-	ObservedLastSyncUnix  int64                                     `json:"observed_last_sync_unix,omitempty"`
 	ObservedUntilUnix     int64                                     `json:"observed_until_unix,omitempty"`
 	ObservedSource        string                                    `json:"observed_source,omitempty"`
-	ObservedFailureCount  int                                       `json:"observed_failure_count,omitempty"`
 	ObservedGraceAddrs    []photonstate.PeerObservedGraceAddrState  `json:"observed_grace_addrs,omitempty"`
 	ActivePullState       string                                    `json:"active_pull_state,omitempty"`
 	ActivePullLastEvent   string                                    `json:"active_pull_last_event,omitempty"`
@@ -137,14 +134,11 @@ func buildPeerRuntimeViewFromCheckpoint(checkpoint corestate.PeerCheckpoint, dia
 		LastRelaySuppression:  diagnostics.LastRelaySuppression,
 		LastRelaySuppressedAt: diagnostics.LastRelaySuppressedAt,
 		DiscoveredAddr:        checkpoint.DiscoveredEndpoint,
-		DiscoveredAtUnix:      checkpoint.DiscoveredAtUnix,
 		ObservedAddr:          checkpoint.ObservedEndpoint,
 		ObservedFirstSeenUnix: checkpoint.ObservedFirstSeenUnix,
 		ObservedLastSeenUnix:  checkpoint.ObservedLastSeenUnix,
-		ObservedLastSyncUnix:  checkpoint.ObservedLastSyncUnix,
 		ObservedUntilUnix:     checkpoint.ObservedUntilUnix,
 		ObservedSource:        diagnostics.ObservedSource,
-		ObservedFailureCount:  checkpoint.ObservedFailureCount,
 		ObservedGraceAddrs:    peerObservedGraceState(checkpoint.ObservedGraceEndpoints),
 		ActivePullState:       diagnostics.ActivePullState,
 		ActivePullLastEvent:   diagnostics.ActivePullLastEvent,
@@ -315,9 +309,7 @@ type PeerDebugInput struct {
 	DiscoveredAddr       string
 	ObservedAddr         string
 	ObservedLastSeenUnix int64
-	ObservedLastSyncUnix int64
 	ObservedUntilUnix    int64
-	ObservedFailureCount int
 	LastFailure          *corestate.PeerFailure
 	Diagnostics          observability.PeerDiagnostics
 	Now                  time.Time
@@ -387,9 +379,7 @@ func buildPeerDebugFromCheckpoint(peerID, source, configuredAddr, resolvedAddr s
 		DiscoveredAddr:       checkpoint.DiscoveredEndpoint,
 		ObservedAddr:         checkpoint.ObservedEndpoint,
 		ObservedLastSeenUnix: checkpoint.ObservedLastSeenUnix,
-		ObservedLastSyncUnix: checkpoint.ObservedLastSyncUnix,
 		ObservedUntilUnix:    checkpoint.ObservedUntilUnix,
-		ObservedFailureCount: checkpoint.ObservedFailureCount,
 		LastFailure:          checkpoint.LastFailure,
 		Diagnostics:          diagnostics,
 		Now:                  now,
@@ -591,12 +581,10 @@ func formatPeerDebugObservedPath(input PeerDebugInput, now time.Time) string {
 	if input.ObservedUntilUnix != 0 && now.Before(time.Unix(input.ObservedUntilUnix, 0)) {
 		state = "active"
 	}
-	return fmt.Sprintf("%s until=%s last_seen=%s last_success=%s failures=%d source=%s",
+	return fmt.Sprintf("%s until=%s last_seen=%s source=%s",
 		state,
 		formatPeerDebugUnixTime(input.ObservedUntilUnix),
 		formatPeerDebugUnixTime(input.ObservedLastSeenUnix),
-		formatPeerDebugUnixTime(input.ObservedLastSyncUnix),
-		input.ObservedFailureCount,
 		debugDash(input.Diagnostics.ObservedSource),
 	)
 }

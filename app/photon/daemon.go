@@ -44,6 +44,7 @@ type Daemon struct {
 	ipsecDirty             bool
 	ipsecPrepareStandby    bool
 	ipsecTakeoverNotBefore time.Time
+	tunnelPeerActivity     map[zone.ZonePath]tunnelPeerActivity
 	routingDirty           bool
 	routingForceReload     bool
 	firewallDirty          bool
@@ -1037,12 +1038,12 @@ func (d *Daemon) flushRevocationCleanup() {
 		for peerID, peer := range peers {
 			if revokedZones[zone.ZonePath(peerID)] && peerNeedsRevocationCleanup(peer) {
 				patches[peerID] = corestate.PeerCheckpointPatch{
-					DiscoveredEndpoint: corestate.PatchField[string]{Set: true}, DiscoveredAtUnix: corestate.PatchField[int64]{Set: true},
-					ObservedEndpoint: corestate.PatchField[string]{Set: true}, ObservedFirstUnix: corestate.PatchField[int64]{Set: true},
-					ObservedLastUnix: corestate.PatchField[int64]{Set: true}, ObservedSyncUnix: corestate.PatchField[int64]{Set: true},
-					ObservedUntilUnix: corestate.PatchField[int64]{Set: true}, ObservedFailures: corestate.PatchField[int]{Set: true},
-					ObservedGrace:    corestate.PatchField[[]corestate.ObservedGraceEndpoint]{Set: true},
-					BackoffUntilUnix: corestate.PatchField[int64]{Set: true}, FailureCount: corestate.PatchField[int]{Set: true},
+					DiscoveredEndpoint: corestate.PatchField[string]{Set: true},
+					ObservedEndpoint:   corestate.PatchField[string]{Set: true}, ObservedFirstUnix: corestate.PatchField[int64]{Set: true},
+					ObservedLastUnix:  corestate.PatchField[int64]{Set: true},
+					ObservedUntilUnix: corestate.PatchField[int64]{Set: true},
+					ObservedGrace:     corestate.PatchField[[]corestate.ObservedGraceEndpoint]{Set: true},
+					BackoffUntilUnix:  corestate.PatchField[int64]{Set: true}, FailureCount: corestate.PatchField[int]{Set: true},
 					LastFailure: corestate.PatchField[*corestate.PeerFailure]{Set: true, Value: &corestate.PeerFailure{
 						Code: corestate.PeerFailureLegacy, Message: "zone revoked", AtUnix: now.Unix(),
 					}},

@@ -25,13 +25,10 @@ type PeerCheckpointPatch struct {
 	LastRelayUnix      PatchField[int64]
 	LastRelayRootHex   PatchField[string]
 	DiscoveredEndpoint PatchField[string]
-	DiscoveredAtUnix   PatchField[int64]
 	ObservedEndpoint   PatchField[string]
 	ObservedFirstUnix  PatchField[int64]
 	ObservedLastUnix   PatchField[int64]
-	ObservedSyncUnix   PatchField[int64]
 	ObservedUntilUnix  PatchField[int64]
-	ObservedFailures   PatchField[int]
 	ObservedGrace      PatchField[[]ObservedGraceEndpoint]
 	LastFailure        PatchField[*PeerFailure]
 	Reject             map[zone.ZonePath]RejectedObject
@@ -102,21 +99,35 @@ func (store *Store) changePeerCheckpoints(ctx context.Context, patches map[strin
 	if err := ctx.Err(); err != nil {
 		return CommitResult{}, err
 	}
-	if store.commitCheckpoints != nil {
-		detached := make(map[string]*PeerCheckpoint, len(updates))
+	if store.commitCheckpoints != nil || store.commit != nil {
+		var durable map[string]*PeerCheckpoint
 		for id, peer := range updates {
-			if peer == nil {
-				detached[id] = nil
+			before := restartPeerCheckpoint(peers[id])
+			var next PeerCheckpoint
+			if peer != nil {
+				next = restartPeerCheckpoint(*peer)
+			}
+			if reflect.DeepEqual(before, next) {
+				continue
+			}
+			if durable == nil {
+				durable = make(map[string]*PeerCheckpoint)
+			}
+			if peerCheckpointEmpty(next) {
+				durable[id] = nil
 			} else {
-				value := clonePeerCheckpoint(*peer)
-				detached[id] = &value
+				value := clonePeerCheckpoint(next)
+				durable[id] = &value
 			}
 		}
-		if err := store.commitCheckpoints(ctx, detached, revision); err != nil {
-			return CommitResult{}, err
+		if len(durable) > 0 {
+			if store.commitCheckpoints == nil {
+				return CommitResult{}, errors.New("checkpoint persistence callback is missing")
+			}
+			if err := store.commitCheckpoints(ctx, durable, revision); err != nil {
+				return CommitResult{}, err
+			}
 		}
-	} else if store.commit != nil {
-		return CommitResult{}, errors.New("checkpoint persistence callback is missing")
 	}
 	store.mu.Lock()
 	for id, peer := range updates {
@@ -131,6 +142,13 @@ func (store *Store) changePeerCheckpoints(ctx context.Context, patches map[strin
 	return CommitResult{Committed: true, Changes: changes}, nil
 }
 
+func restartPeerCheckpoint(peer PeerCheckpoint) PeerCheckpoint {
+	peer.LastSyncUnix = 0
+	peer.LastAttemptUnix = 0
+	peer.ObservedLastSeenUnix = 0
+	return peer
+}
+
 func applyPeerCheckpointPatch(metadata *PeerCheckpoint, patch PeerCheckpointPatch) {
 	if metadata == nil {
 		return
@@ -142,13 +160,10 @@ func applyPeerCheckpointPatch(metadata *PeerCheckpoint, patch PeerCheckpointPatc
 	applyPatchField(&metadata.LastRelayUnix, patch.LastRelayUnix)
 	applyPatchField(&metadata.LastRelayCatalogRootHex, patch.LastRelayRootHex)
 	applyPatchField(&metadata.DiscoveredEndpoint, patch.DiscoveredEndpoint)
-	applyPatchField(&metadata.DiscoveredAtUnix, patch.DiscoveredAtUnix)
 	applyPatchField(&metadata.ObservedEndpoint, patch.ObservedEndpoint)
 	applyPatchField(&metadata.ObservedFirstSeenUnix, patch.ObservedFirstUnix)
 	applyPatchField(&metadata.ObservedLastSeenUnix, patch.ObservedLastUnix)
-	applyPatchField(&metadata.ObservedLastSyncUnix, patch.ObservedSyncUnix)
 	applyPatchField(&metadata.ObservedUntilUnix, patch.ObservedUntilUnix)
-	applyPatchField(&metadata.ObservedFailureCount, patch.ObservedFailures)
 	if patch.ObservedGrace.Set {
 		metadata.ObservedGraceEndpoints = append([]ObservedGraceEndpoint(nil), patch.ObservedGrace.Value...)
 	}

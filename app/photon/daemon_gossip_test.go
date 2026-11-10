@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"net"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -41,7 +40,7 @@ func TestGossipDriverLoggerPreservesLevelsAtInfoThreshold(t *testing.T) {
 	}
 }
 
-func TestDaemonDiscoveryPreservesLifecycleSuppressedCheckpoint(t *testing.T) {
+func TestDaemonDiscoveryRefreshesAddressEvenWhenTunnelIsSuspended(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Now().Truncate(time.Second)
 	putVerifiedEndpointRecord(t, verified, "203.0.113.10", 33434, now)
@@ -51,17 +50,17 @@ func TestDaemonDiscoveryPreservesLifecycleSuppressedCheckpoint(t *testing.T) {
 	checkpoint.Peers["node-b.catofes."] = corestate.PeerCheckpoint{
 		LastSyncUnix: now.Add(-inspect.DefaultPeerLifecycleConfig().CleanupAfter - time.Minute).Unix(),
 	}
+	runtime.SuspendedTunnelPeers = map[zone.ZonePath]bool{"node-b.catofes.": true}
 	service := newTestDaemonFromOwners(
 		&testApp{Config: defaultAppConfig(), Clock: func() time.Time { return now }},
 		verified, checkpoint, runtime, config, time.Second,
 	)
 	transport := &gossip.Transport{}
 	setTestGossipTransport(t, service, transport)
-	before := service.State.Common.ReadView().Gossip.Peers["node-b.catofes."]
 	service.refreshGossipDiscovery()
 	after := service.State.Common.ReadView().Gossip.Peers["node-b.catofes."]
-	if !reflect.DeepEqual(after, before) {
-		t.Fatalf("lifecycle-suppressed checkpoint changed: before=%+v after=%+v", before, after)
+	if after.DiscoveredEndpoint != "203.0.113.10:33434" {
+		t.Fatalf("tunnel suspension prevented discovery checkpoint update: %+v", after)
 	}
 	if addr := transport.PeerAddr("node-b.catofes."); addr == nil || addr.String() != "203.0.113.10:33434" {
 		t.Fatalf("lifecycle-suppressed peer is not dialable for recovery: %v", addr)

@@ -41,7 +41,7 @@ func LoadLinuxStateTx(tx *bolt.Tx) (*LinuxState, bool, error) {
 }
 
 // LoadLinuxStateForMigrationTx also exposes the retired peer cleanup field so
-// the process startup transaction can move its history into GossipCheckpoint
+// the process startup transaction can restore the local tunnel suspension
 // before rewriting the current Linux payload.
 func LoadLinuxStateForMigrationTx(tx *bolt.Tx) (*LinuxState, map[string]LegacyPeerCleanupState, bool, error) {
 	state, payload, found, err := loadLinuxStatePayloadTx(tx)

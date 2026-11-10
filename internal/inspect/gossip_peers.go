@@ -54,14 +54,13 @@ func BuildGossipPeerDebugView(common corestate.View, options GossipPeersOptions,
 	return view, true
 }
 
-// Keep the checkpoint for lifecycle suppression and explicit diagnostics;
-// historical peers are omitted only by the default CLI list renderer.
+// Historical is a display filter for inactive peers with no current contact path.
 func gossipPeerHistorical(common corestate.View, options GossipPeersOptions, peerID string, peer corestate.PeerCheckpoint) bool {
 	if _, configured := gossipPeerBootstrap(options.Bootstrap, peerID); configured {
 		return false
 	}
 	lastActive := max(peer.LastSyncUnix, peer.ObservedLastSeenUnix)
-	if lastActive == 0 || options.Now.Before(time.Unix(lastActive, 0).Add(NormalizePeerLifecycleConfig(options.Lifecycle).CleanupAfter)) {
+	if lastActive == 0 || options.Now.Before(time.Unix(lastActive, 0).Add(NormalizePeerLifecycleConfig(options.Lifecycle).OfflineAfter)) {
 		return false
 	}
 	if peer.ObservedEndpoint != "" && options.Now.Before(time.Unix(peer.ObservedUntilUnix, 0)) {
