@@ -127,14 +127,14 @@ func (executor *GossipObjectPullExecutor) PullFrom(ctx context.Context, input Go
 		attempt, stop := context.WithTimeout(ctx, time.Until(deadline)/time.Duration(len(addresses)-i))
 		response, err := executor.config.Client.Exchange(attempt, addr, request)
 		stop()
+		if pullErr := ctx.Err(); pullErr != nil {
+			completion.Err = pullErr
+			break
+		}
 		responseBytes := encodedObjectPullResponseSize(response)
 		completion.Bytes += responseBytes
 		if err != nil {
 			completion.Err = err
-			if ctx.Err() != nil {
-				completion.Err = ctx.Err()
-				break
-			}
 			if !isGossipObjectPullUnreachable(err) {
 				break
 			}

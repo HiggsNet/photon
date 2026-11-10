@@ -37,6 +37,8 @@ func (client GossipObjectPullClient) Exchange(ctx context.Context, addr string, 
 		return nil, err
 	}
 	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 	deadline := time.Now().Add(ioTimeout)
 	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
 		deadline = contextDeadline

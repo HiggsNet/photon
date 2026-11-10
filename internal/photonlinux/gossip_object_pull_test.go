@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -53,6 +54,68 @@ func TestGossipObjectPullClientHonorsExpiredContext(t *testing.T) {
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Exchange error = %v, want context.Canceled", err)
+	}
+}
+
+func TestGossipObjectPullClientCancelClosesConnectedSocket(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	requestRead := make(chan error, 1)
+	closed := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			requestRead <- err
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetReadDeadline(time.Now().Add(4 * time.Second))
+		_, err = gossip.DecodeObjectPullRequest(conn)
+		requestRead <- err
+		if err == nil {
+			var buffer [1]byte
+			_, err = conn.Read(buffer[:])
+			closed <- err
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, err := (GossipObjectPullClient{}).Exchange(ctx, listener.Addr().String(), &gossip.ObjectPullRequest{
+			Type: gossip.ObjectPullZone, Zone: "node-a.",
+		})
+		result <- err
+	}()
+	select {
+	case err := <-requestRead:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not receive the request")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("canceled exchange returned success")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancel did not interrupt the TCP read")
+	}
+	select {
+	case err := <-closed:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("server read = %v, want EOF from client socket closure", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("client socket stayed open after cancellation")
 	}
 }
 

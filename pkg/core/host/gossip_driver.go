@@ -37,7 +37,8 @@ type Event interface {
 
 // GossipEvent carries an externally produced gossip protocol event.
 type GossipEvent struct {
-	Value gossip.SyncEvent
+	Value     gossip.SyncEvent
+	pullRound *gossipObjectPullRound
 }
 
 func (GossipEvent) isHostEvent() {}
@@ -61,6 +62,8 @@ type GossipDriver struct {
 	gossipConfig GossipDriverConfig
 	// Only the single event consumer uses this verifier for inbound paths.
 	observedPathVerifier photoncrypto.Verifier
+	// The event loop owns round lifetimes.
+	objectPullRounds map[string]*gossipObjectPullRound
 
 	events          chan Event
 	completions     chan Event
@@ -74,8 +77,9 @@ type GossipDriver struct {
 	mu                       sync.RWMutex
 	slowOperations           map[string]slowGossipOperation
 	scheduler                *Scheduler
+	objectPullContext        context.Context
 	objectPullCancel         context.CancelFunc
-	objectPullJobs           chan gossip.StartObjectPullAction
+	objectPullJobs           chan gossipObjectPullJob
 	objectPullWG             sync.WaitGroup
 	objectPullServerCancel   context.CancelFunc
 	objectPullServerListener net.Listener

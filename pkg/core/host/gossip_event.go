@@ -57,10 +57,14 @@ func (driver *GossipDriver) SyncGossipPeers(ctx context.Context, now time.Time, 
 		if driver.Gossip.HasActiveSession(peerID) {
 			continue
 		}
+		if driver.gossipObjectPullDraining(peerID) {
+			driver.Gossip.DeferHint(peerID)
+			continue
+		}
 		driver.Gossip.NewSession(peerID)
 		result, err := driver.HandleGossipHostEvent(ctx, GossipEvent{Value: &gossip.SyncTimerEvent{PeerID: peerID, LocalSummary: summary}}, now, suppressedPeers)
 		if err != nil {
-			driver.Gossip.RemoveSession(peerID)
+			driver.removeGossipSession(peerID)
 			errs = append(errs, err)
 		}
 		changed = changed || result.NetworkChanged
@@ -82,6 +86,11 @@ func (driver *GossipDriver) StartGossipSession(peerID, reason string) error {
 		driver.Gossip.DeferHint(peerID)
 		driver.observeSyncHint(peerID, reason, "session_active", false, now)
 		driver.logGossip("debug", "announce_hint_suppressed", peerID, "session", nil, map[string]any{"reason": "session_active"})
+		return nil
+	}
+	if driver.gossipObjectPullDraining(peerID) {
+		driver.Gossip.DeferHint(peerID)
+		driver.observeSyncHint(peerID, reason, "pulls_draining", false, now)
 		return nil
 	}
 	summary := driver.GossipCatalogSummary()
@@ -209,6 +218,9 @@ func (driver *GossipDriver) handleGossipHostStep(ctx context.Context, hostEvent 
 		return out, nil, nil
 	}
 	out.Handled = true
+	if completion, ok := hostEvent.(GossipEvent); ok && completion.pullRound != nil && !driver.completeGossipObjectPull(completion.pullRound) {
+		return out, nil, nil
+	}
 	if tick, ok := event.(*gossip.SyncTimerEvent); ok && transport != nil && transport.HasRememberedPeerAddr(tick.PeerID) {
 		input := driver.gossipDiscoveryInput(tick.PeerID, suppressedPeers, false, "")
 		input.observedVerifier = &driver.observedPathVerifier
@@ -287,12 +299,22 @@ func (driver *GossipDriver) finishGossipSession(ctx context.Context, result *Gos
 	if session.State == gossip.SyncSessionCompleted && result.NetworkChanged {
 		driver.relayGossipUpdate(ctx, peerID, now, suppressedPeers)
 	}
+	driver.removeGossipSession(peerID)
+	result.FollowupQueued = driver.startDeferredGossipSession(peerID)
+}
+
+func (driver *GossipDriver) removeGossipSession(peerID string) {
 	driver.Gossip.RemoveSession(peerID)
-	if driver.Gossip.TakePendingHint(peerID) {
-		if err := driver.StartGossipSession(peerID, "announce_hint_followup"); err == nil {
-			result.FollowupQueued = driver.Gossip.HasActiveSession(peerID)
-		}
+	if round := driver.objectPullRounds[peerID]; round != nil && round.stop() {
+		delete(driver.objectPullRounds, peerID)
 	}
+}
+
+func (driver *GossipDriver) startDeferredGossipSession(peerID string) bool {
+	if driver.Gossip.HasActiveSession(peerID) || driver.gossipObjectPullDraining(peerID) || !driver.Gossip.TakePendingHint(peerID) {
+		return false
+	}
+	return driver.StartGossipSession(peerID, "announce_hint_followup") == nil && driver.Gossip.HasActiveSession(peerID)
 }
 
 func (driver *GossipDriver) relayGossipUpdate(ctx context.Context, sourcePeerID string, now time.Time, suppressedPeers map[string]bool) {
@@ -319,6 +341,10 @@ func (driver *GossipDriver) relayGossipUpdate(ctx context.Context, sourcePeerID 
 		}
 		relayed++
 		if driver.Gossip.HasActiveSession(peerID) {
+			continue
+		}
+		if driver.gossipObjectPullDraining(peerID) {
+			driver.Gossip.DeferHint(peerID)
 			continue
 		}
 		driver.Gossip.NewSession(peerID)

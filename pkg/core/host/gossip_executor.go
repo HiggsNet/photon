@@ -122,7 +122,7 @@ func (driver *GossipDriver) ExecuteGossipActions(
 		}
 	}
 	for _, pull := range plan.ObjectPulls {
-		if err := driver.SubmitGossipObjectPull(pull); err != nil {
+		if err := driver.submitGossipObjectPull(session, pull); err != nil {
 			driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseObjectPull, PeerID: pull.PeerID, Err: err})
 			result.Events = append(result.Events, &gossip.ObjectPullResultEvent{PeerID: pull.PeerID, Zone: pull.Zone, Err: err})
 		}

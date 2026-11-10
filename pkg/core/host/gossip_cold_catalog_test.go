@@ -3,8 +3,11 @@ package host
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"net"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,28 +18,40 @@ import (
 )
 
 type coldCatalogClient struct {
-	source *zone.NetworkState
-	pulls  chan zone.ZonePath
+	source     *zone.NetworkState
+	pulls      chan zone.ZonePath
+	beforeRead func(context.Context, zone.ZonePath)
 }
 
-func (client coldCatalogClient) Exchange(_ context.Context, _ string, request *gossip.ObjectPullRequest) (*gossip.ObjectPullResponse, error) {
+func (client coldCatalogClient) Exchange(ctx context.Context, _ string, request *gossip.ObjectPullRequest) (*gossip.ObjectPullResponse, error) {
 	client.pulls <- request.Zone
+	if client.beforeRead != nil {
+		client.beforeRead(ctx, request.Zone)
+	}
 	snapshot, err := corestate.Snapshot(client.source, request.Zone)
 	return &gossip.ObjectPullResponse{OK: err == nil, Snapshot: snapshot}, err
 }
 
 // The remote catalog puts children on the first page and their authorities on
 // the last. Real workers, signatures, store commits and apply acknowledgements
-// must converge in one session, without a restart or an ANNOUNCE payload.
+// must converge and retain committed ancestors if the first round expires.
 func TestGossipColdCatalogAppliesAncestorsBeforeChildrenAcrossPages(t *testing.T) {
-	for _, expire := range []bool{false, true} {
-		t.Run(fmt.Sprintf("expire-after-parent=%t", expire), func(t *testing.T) {
-			testGossipColdCatalog(t, expire)
+	for _, tc := range []struct {
+		name           string
+		pullsAtTimeout int
+	}{
+		{"without-timeout", 0},
+		{"one-running-one-queued", 1},
+		{"two-running", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testGossipColdCatalog(t, tc.pullsAtTimeout)
 		})
 	}
 }
 
-func testGossipColdCatalog(t *testing.T, expireAfterParent bool) {
+func testGossipColdCatalog(t *testing.T, pullsAtTimeout int) {
+	expireAfterParent := pullsAtTimeout > 0
 	now := time.Unix(1000, 0)
 	public, private, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -69,15 +84,35 @@ func testGossipColdCatalog(t *testing.T, expireAfterParent bool) {
 	defer driver.Stop()
 	bindMemoryGossipTransport(t, driver, "bootstrap")
 	pulls := make(chan zone.ZonePath, 64)
+	client := coldCatalogClient{source: source, pulls: pulls}
+	started, canceled := make(chan struct{}, 2), make(chan struct{}, 2)
+	release := make(chan struct{})
+	releaseWorkers := sync.OnceFunc(func() { close(release) })
+	defer releaseWorkers()
+	if expireAfterParent {
+		var childPulls atomic.Int32
+		client.beforeRead = func(ctx context.Context, path zone.ZonePath) {
+			if path.Parent() == "catofes." && childPulls.Add(1) <= int32(pullsAtTimeout) {
+				started <- struct{}{}
+				<-ctx.Done()
+				canceled <- struct{}{}
+				<-release
+			}
+		}
+	}
 	executor := NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{
-		Client: coldCatalogClient{source: source, pulls: pulls}, Now: clock.Now,
+		Client: client, Now: clock.Now,
 		Discovery: func() GossipDiscoveryInput {
 			return GossipDiscoveryInput{Network: store.ReadView().State.Network, Bootstrap: map[string]*net.UDPAddr{"bootstrap": {IP: net.ParseIP("127.0.0.1"), Port: 1}}}
 		},
 		// This test concerns scheduling rather than the separate traffic quota.
 		Quota: gossip.QuotaConfig{ByteRate: 8 << 20, ByteBurst: 8 << 20, ObjectRate: 1000, ObjectBurst: 1000},
 	})
-	if err := driver.StartGossipObjectPullWorkers(t.Context(), executor, 4, 64); err != nil {
+	workers := 4
+	if pullsAtTimeout == 1 {
+		workers = 1
+	}
+	if err := driver.StartGossipObjectPullWorkers(t.Context(), executor, workers, 64); err != nil {
 		t.Fatal(err)
 	}
 	driver.Gossip.NewSession("bootstrap")
@@ -105,10 +140,11 @@ func testGossipColdCatalog(t *testing.T, expireAfterParent bool) {
 		handle(&gossip.CatalogPageReceivedEvent{PeerID: "bootstrap", Page: &corestate.CatalogPage{CatalogRoot: root, Entries: parents}})
 	}
 	pages()
-	expired := false
+	expired, restarted := false, false
+	var oldRound *gossipObjectPullRound
 	deadline := time.NewTimer(3 * time.Second)
 	defer deadline.Stop()
-	for driver.Gossip.Session("bootstrap") != nil {
+	for driver.Gossip.Session("bootstrap") != nil || (expireAfterParent && !restarted) {
 		var event Event
 		select {
 		case event = <-driver.Events():
@@ -121,18 +157,53 @@ func testGossipColdCatalog(t *testing.T, expireAfterParent bool) {
 		if err != nil || result.Session.TerminalErr != nil {
 			t.Fatalf("cold catalog event %T: result=%+v error=%v", event, result.Session, err)
 		}
+		if queued, ok := event.(GossipEvent); expired && !restarted && ok {
+			if _, ok := queued.Value.(*gossip.SyncTimerEvent); ok {
+				restarted = true
+				pages()
+				stale := GossipEvent{
+					Value: &gossip.ObjectPullResultEvent{
+						PeerID: "bootstrap", Zone: "child-00.catofes.", Err: errors.New("late error from expired round"),
+					},
+					pullRound: oldRound,
+				}
+				result, err := driver.HandleGossipHostEvent(t.Context(), stale, now, nil)
+				if err != nil || result.Session.PeerID != "" {
+					t.Fatalf("old result reached the replacement session: %+v, %v", result, err)
+				}
+			}
+		}
 		if expireAfterParent && !expired && store.ReadView().State.Network.Zones["catofes."] != nil && store.ReadView().State.Network.Zones["catofes."].Authority != nil {
-			// Parent commit survives the finite round deadline. Its queued
-			// apply ACK must not finish a replacement session, which resumes
-			// from the committed catalog without fetching this parent again.
+			for range pullsAtTimeout {
+				select {
+				case <-started:
+				case <-deadline.C:
+					t.Fatal("old round did not start the expected child pulls")
+				}
+			}
+			oldRound = driver.objectPullRounds["bootstrap"]
+			if oldRound == nil {
+				t.Fatal("active worker jobs have no round owner")
+			}
 			timedOut, err := driver.HandleGossipHostEvent(t.Context(), GossipEvent{Value: &gossip.RoundTimeoutEvent{PeerID: "bootstrap"}}, now, nil)
 			if err != nil || !timedOut.Session.Done || timedOut.Session.TerminalErr == nil {
 				t.Fatalf("round did not expire: %+v, %v", timedOut, err)
 			}
-			driver.Gossip.NewSession("bootstrap")
-			handle(&gossip.SyncTimerEvent{PeerID: "bootstrap"})
+			for range pullsAtTimeout {
+				select {
+				case <-canceled:
+				case <-deadline.C:
+					t.Fatal("timeout did not cancel the running child pulls")
+				}
+				if err := driver.StartGossipSession("bootstrap", "announce_hint"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if driver.Gossip.Session("bootstrap") != nil || !driver.Gossip.PendingHint("bootstrap") {
+				t.Fatal("follow-up was not deferred while the old round's workers were still active")
+			}
 			expired = true
-			pages()
+			releaseWorkers()
 		}
 	}
 	view := store.ReadView()
@@ -150,5 +221,8 @@ func testGossipColdCatalog(t *testing.T, expireAfterParent bool) {
 		if counts[path] != 1 {
 			t.Fatalf("committed ancestor %s fetched %d times", path, counts[path])
 		}
+	}
+	if pullsAtTimeout == 1 && counts["child-01.catofes."] != 1 {
+		t.Fatalf("queued child was fetched %d times, want once in the replacement round", counts["child-01.catofes."])
 	}
 }
