@@ -145,7 +145,7 @@ func TestSyncSessionCatalogPageStartsObjectPull(t *testing.T) {
 		t.Fatalf("expected state object_pulling, got %s", s.State)
 	}
 	assertActionTypes(t, actions, []string{"StartObjectPullAction"})
-	if !s.pendingZones["catofes."] || !s.objectPullInflight["catofes."] {
+	if s.pendingZones["catofes."].stage != zoneWaitingTCP {
 		t.Fatalf("catalog diff did not mark zone pending/inflight")
 	}
 	applyActions, err := s.OnEvent(&ObjectPullResultEvent{
@@ -419,9 +419,7 @@ func TestSyncSessionChunkComplete(t *testing.T) {
 func TestSyncSessionSnapshotAppliedCompletesAfterValidatedMerge(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	s.State = SyncSessionObjectPulling
-	s.pendingZones["catofes."] = true
-	s.snapshotApplyPending["catofes."] = true
-	s.expectedDigests["catofes."] = corestate.ZoneDigest{Zone: "catofes.", RootHash: []byte("expected")}
+	s.pendingZones["catofes."] = pendingZone{stage: zoneWaitingApply, expectedRoot: []byte("expected")}
 
 	actions, err := s.OnEvent(&SnapshotAppliedEvent{
 		PeerID: "peer-a",

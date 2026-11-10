@@ -29,7 +29,7 @@ func TestSyncSessionSchedulesCompleteCatalogAndWaitsForAncestorApply(t *testing.
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(s.objectPullInflight)+len(s.snapshotApplyPending)+len(s.chunkFallbackZones) > maxSessionObjectPulls {
+		if s.PendingCount()-s.zoneStageCounts()[zoneQueued] > maxSessionObjectPulls {
 			t.Fatal("exceeded bounded pull/apply/fallback window")
 		}
 		return actions
@@ -55,6 +55,10 @@ func TestSyncSessionSchedulesCompleteCatalogAndWaitsForAncestorApply(t *testing.
 	wantPulls(event(&ObjectPullResultEvent{PeerID: "peer", Zone: "a.", Snapshot: &corestate.ZoneSnapshot{Zone: "a."}}))
 	// B's TCP failure retains its slot while UDP fallback is outstanding.
 	wantPulls(event(&ObjectPullResultEvent{PeerID: "peer", Zone: "b.", Unreachable: true, Err: errors.New("TCP unavailable")}))
+	late := event(&ObjectPullResultEvent{PeerID: "peer", Zone: "b.", Snapshot: &corestate.ZoneSnapshot{Zone: "b."}})
+	if len(late) != 0 || s.pendingZones["b."].stage != zoneWaitingUDP {
+		t.Fatalf("late TCP result advanced the UDP fallback: %v", late)
+	}
 	wantPulls(event(&SnapshotAppliedEvent{PeerID: "peer", Zone: "a."}), "c.")
 	wantPulls(event(&ObjectChunkEvent{PeerID: "peer", Zone: "b.", Snapshot: &corestate.ZoneSnapshot{Zone: "b."}}))
 	wantPulls(event(&SnapshotAppliedEvent{PeerID: "peer", Zone: "b."}), "d.")
@@ -77,7 +81,7 @@ func TestSyncSessionQueuedDescendantStartsOnlyAfterParentAck(t *testing.T) {
 		t.Fatalf("initial ancestor pulls %v", got)
 	}
 	actions, _ = s.OnEvent(&ObjectPullResultEvent{PeerID: "peer", Zone: "catofes.", Snapshot: &corestate.ZoneSnapshot{Zone: "catofes."}}, now)
-	if len(scheduledPulls(actions)) != 0 || s.objectPullInflight["node.catofes."] {
+	if len(scheduledPulls(actions)) != 0 || s.pendingZones["node.catofes."].stage != zoneQueued {
 		t.Fatal("child started before parent apply")
 	}
 	actions, _ = s.OnEvent(&SnapshotAppliedEvent{PeerID: "peer", Zone: "catofes."}, now)
@@ -100,14 +104,15 @@ func TestSyncSessionSkipsAncestorSatisfiedBetweenCatalogPages(t *testing.T) {
 	first, err := s.OnEvent(&CatalogPageReceivedEvent{PeerID: "peer", Page: &corestate.CatalogPage{
 		CatalogRoot: root, Entries: []corestate.ZoneDigest{parent}, NextCursor: "last",
 	}}, now)
-	if err != nil || len(scheduledPulls(first)) != 0 || !s.pendingZones[parent.Zone] {
+	if err != nil || len(scheduledPulls(first)) != 0 || s.pendingZones[parent.Zone].stage != zoneQueued {
 		t.Fatalf("first page did not queue the parent: actions=%v error=%v", first, err)
 	}
 	actions, err := s.OnEvent(&CatalogPageReceivedEvent{PeerID: "peer", LocalEntries: []corestate.ZoneDigest{parent}, Page: &corestate.CatalogPage{
 		CatalogRoot: root, Entries: []corestate.ZoneDigest{{Zone: "node.catofes.", RootHash: []byte("child")}},
 	}}, now)
-	if got := scheduledPulls(actions); err != nil || !reflect.DeepEqual(got, []zone.ZonePath{"node.catofes."}) || s.pendingZones[parent.Zone] {
-		t.Fatalf("last page scheduled %v, parent pending=%t error=%v", got, s.pendingZones[parent.Zone], err)
+	_, parentPending := s.pendingZones[parent.Zone]
+	if got := scheduledPulls(actions); err != nil || !reflect.DeepEqual(got, []zone.ZonePath{"node.catofes."}) || parentPending {
+		t.Fatalf("last page scheduled %v, parent pending=%t error=%v", got, parentPending, err)
 	}
 }
 

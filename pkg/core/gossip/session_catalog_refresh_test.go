@@ -132,24 +132,22 @@ func TestSyncSessionCatalogRefreshDrainsOutstandingWork(t *testing.T) {
 			now := time.Unix(1000, 0)
 			s := NewSyncSession("peer-a")
 			s.State = SyncSessionObjectPulling
-			s.pendingZones["changed.catofes."] = true
-			s.pendingZones["waiting.catofes."] = true
-			s.snapshotApplyPending["changed.catofes."] = true
-			s.expectedDigests["changed.catofes."] = corestate.ZoneDigest{Zone: "changed.catofes.", RootHash: []byte("old")}
+			s.pendingZones["changed.catofes."] = pendingZone{stage: zoneWaitingApply, expectedRoot: []byte("old")}
+			known := corestate.ZoneDigest{Zone: "waiting.catofes.", RootHash: []byte("known")}
+			work := pendingZone{stage: zoneQueued, expectedRoot: known.RootHash}
 			switch waiting {
 			case "tcp":
-				s.objectPullInflight["waiting.catofes."] = true
+				work.stage = zoneWaitingTCP
 			case "apply":
-				s.snapshotApplyPending["waiting.catofes."] = true
+				work.stage = zoneWaitingApply
 			case "chunk":
-				s.chunkFallbackZones["waiting.catofes."] = true
+				work.stage = zoneWaitingUDP
 			case "page":
 				s.lastCatalogCursor = "1"
 			}
+			s.pendingZones[known.Zone] = work
 			// Learning the same root through another peer must not reuse a
 			// slot while its earlier transport result can still arrive.
-			known := corestate.ZoneDigest{Zone: "waiting.catofes.", RootHash: []byte("known")}
-			s.expectedDigests[known.Zone] = known
 			actions, err := s.OnEvent(&SnapshotAppliedEvent{
 				PeerID: "peer-a", Zone: "changed.catofes.", Err: corestate.ErrSnapshotRootMismatch,
 				LocalEntries: []corestate.ZoneDigest{known},
@@ -160,8 +158,8 @@ func TestSyncSessionCatalogRefreshDrainsOutstandingWork(t *testing.T) {
 			if len(actions) != 0 || s.catalogRefreshed || !s.catalogRefreshPending {
 				t.Fatalf("refreshed before draining %s", waiting)
 			}
-			if waiting != "page" && !s.pendingZones[known.Zone] {
-				t.Fatal("pruned outstanding work")
+			if waiting != "page" && s.pendingZones[known.Zone].stage != work.stage {
+				t.Fatal("changed or pruned outstanding work")
 			}
 			if waiting == "tcp" || waiting == "chunk" {
 				var e SyncEvent = &ObjectPullResultEvent{PeerID: "peer-a", Zone: "waiting.catofes.", Snapshot: &corestate.ZoneSnapshot{Zone: "waiting.catofes."}}
@@ -194,8 +192,7 @@ func TestSyncSessionCatalogRefreshKeepsRoundTimeout(t *testing.T) {
 	now := time.Unix(1000, 0)
 	s := NewSyncSession("peer-a")
 	s.State = SyncSessionObjectPulling
-	s.pendingZones["catofes."] = true
-	s.snapshotApplyPending["catofes."] = true
+	s.pendingZones["catofes."] = pendingZone{stage: zoneWaitingApply}
 	refresh, err := s.OnEvent(&SnapshotAppliedEvent{PeerID: "peer-a", Zone: "catofes.", Err: corestate.ErrSnapshotRootMismatch}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -262,8 +259,8 @@ func TestSyncSessionCatalogDeduplicationBoundaries(t *testing.T) {
 		step(t, s, last, "StartObjectPullAction")
 		step(t, s, last)
 		step(t, s, summary)
-		if s.State != SyncSessionObjectPulling || !s.objectPullInflight["changed.catofes."] {
-			t.Fatalf("state = %s, inflight = %v", s.State, s.objectPullInflight)
+		if work := s.pendingZones["changed.catofes."]; s.State != SyncSessionObjectPulling || work.stage != zoneWaitingTCP {
+			t.Fatalf("state = %s, zone stage = %v", s.State, work.stage)
 		}
 		step(t, s, &ObjectPullResultEvent{PeerID: peer, Zone: "changed.catofes.", Snapshot: &corestate.ZoneSnapshot{Zone: "changed.catofes."}}, "ApplySnapshotAction")
 		step(t, s, &SnapshotAppliedEvent{PeerID: peer, Zone: "changed.catofes.", Err: corestate.ErrSnapshotRootMismatch}, "SendFetchCatalogPageAction", "StartTimerAction")
