@@ -274,8 +274,9 @@ func recoveryPullZones(ctx context.Context, paths []zone.ZonePath, peerID string
 
 	deadline := time.Now().Add(timeout)
 	pullExecutor := corehost.NewGossipObjectPullExecutor(corehost.GossipObjectPullExecutorConfig{
-		Client: photonlinux.GossipObjectPullClient{},
-		Now:    time.Now,
+		Client:    photonlinux.GossipObjectPullClient{},
+		Discovery: gossipDriver.GossipPeerDiscoveryInput,
+		Now:       time.Now,
 	})
 	results := make([]*corestate.ApplyResult, 0, len(paths))
 	// Commit each ancestor before validating its child. An interrupted chain
@@ -286,9 +287,8 @@ func recoveryPullZones(ctx context.Context, paths []zone.ZonePath, peerID string
 			return ctx.Err()
 		default:
 		}
-		input := gossipDriver.GossipDiscoveryInput()
 		pullCtx, cancel := context.WithDeadline(ctx, deadline)
-		completion := pullExecutor.PullFrom(pullCtx, input, gossip.StartObjectPullAction{PeerID: peerID, Zone: path})
+		completion := pullExecutor.PullGossipObject(pullCtx, gossip.StartObjectPullAction{PeerID: peerID, Zone: path})
 		cancel()
 		if completion.Err != nil {
 			return fmt.Errorf("recover %s from %s: %w", path, peerID, completion.Err)

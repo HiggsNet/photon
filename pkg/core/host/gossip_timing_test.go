@@ -15,24 +15,24 @@ func TestGossipSlowOperationRateLimitPreservesWorstSample(t *testing.T) {
 		logs = append(logs, event)
 	})
 	now := time.Unix(100, 0)
-	driver.logSlowOperation("snapshot_apply", 150*time.Millisecond, now, 3)
-	driver.logSlowOperation("snapshot_apply", 2*time.Second, now.Add(time.Second), 64)
-	driver.logSlowOperation("snapshot_apply", 200*time.Millisecond, now.Add(2*time.Second), 8)
+	driver.logSlowOperation("gossip", "snapshot_apply", 150*time.Millisecond, now, 3)
+	driver.logSlowOperation("gossip", "snapshot_apply", 2*time.Second, now.Add(time.Second), 64)
+	driver.logSlowOperation("gossip", "snapshot_apply", 200*time.Millisecond, now.Add(2*time.Second), 8)
 	if len(logs) != 1 {
 		t.Fatalf("burst emitted %d logs, want 1", len(logs))
 	}
-	// A slow checkpoint must not hide another stage's slow sample.
-	driver.logSlowOperation("observed_path_update", 300*time.Millisecond, now.Add(2*time.Second), 10)
-	if len(logs) != 2 || logs[1].Phase != "observed_path_update" {
-		t.Fatalf("independent stage logs = %#v", logs)
+	// Another component gets its own budget even when a stage name is shared.
+	driver.logSlowOperation("routing", "snapshot_apply", 300*time.Millisecond, now.Add(2*time.Second), 10)
+	if len(logs) != 2 || logs[1].Fields["component"] != "routing" || logs[1].Fields["queue_before"] != int64(10) {
+		t.Fatalf("independent component logs = %#v", logs)
 	}
 	driver.events <- GossipPacketReceived{}
-	driver.logSlowOperation("snapshot_apply", 120*time.Millisecond, now.Add(30*time.Second), 4)
+	driver.logSlowOperation("gossip", "snapshot_apply", 120*time.Millisecond, now.Add(30*time.Second), 4)
 	if len(logs) != 3 {
 		t.Fatalf("logs = %d, want 3", len(logs))
 	}
 	got := logs[2]
-	if got.Event != "slow_operation" || got.Level != "warn" || got.Phase != "snapshot_apply" {
+	if got.Event != "slow_operation" || got.Level != "warn" || got.Phase != "snapshot_apply" || got.Fields["component"] != "gossip" {
 		t.Fatalf("unexpected event: %#v", got)
 	}
 	want := map[string]any{
@@ -44,7 +44,7 @@ func TestGossipSlowOperationRateLimitPreservesWorstSample(t *testing.T) {
 			t.Errorf("%s = %v, want %v", key, got.Fields[key], value)
 		}
 	}
-	driver.logSlowOperation("snapshot_apply", 110*time.Millisecond, now.Add(time.Minute), 2)
+	driver.logSlowOperation("gossip", "snapshot_apply", 110*time.Millisecond, now.Add(time.Minute), 2)
 	if logs[3].Fields["suppressed"] != int64(0) || logs[3].Fields["max_elapsed_ms"] != int64(110) {
 		t.Fatalf("aggregation did not reset: %#v", logs[3])
 	}
@@ -56,7 +56,7 @@ func TestGossipOperationTimingFastPathDoesNotAllocate(t *testing.T) {
 	})})
 	defer driver.Stop()
 	allocs := testing.AllocsPerRun(1000, func() {
-		defer driver.LogSlowOperation("host_event", time.Now(), driver.PendingEventCount())
+		defer driver.LogSlowOperation("gossip", "host_event", time.Now(), driver.PendingEventCount())
 	})
 	if allocs != 0 || driver.slowOperations != nil {
 		t.Fatalf("fast path allocations=%v, aggregation=%v", allocs, driver.slowOperations)
@@ -69,7 +69,7 @@ func BenchmarkGossipOperationTiming(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		func() {
-			defer driver.LogSlowOperation("host_event", time.Now(), driver.PendingEventCount())
+			defer driver.LogSlowOperation("gossip", "host_event", time.Now(), driver.PendingEventCount())
 		}()
 	}
 }

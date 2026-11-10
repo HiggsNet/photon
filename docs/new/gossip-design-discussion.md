@@ -24,6 +24,10 @@ PONG 携带目录摘要才推进同步。更新通知使用带目录摘要的 PI
 
 当前设计合理，继续用 UDP 交换摘要、目录和变更提示，用短连接 TCP 拉取完整 Zone。当 TCP 拉取不可达而已观察到的 UDP 路径仍可用时，保留 UDP 分块回退。这样空轮无需建连，NAT 映射有效期间也可以通知出站节点。
 
+每次 TCP 拉取只读取被拨号邻居的端点记录、授权链、运行状态和 bootstrap 地址。daemon 和离线恢复共用这条路径。
+
+周期扫描和变更转发读取全网的端点视图来选邻居，摘要由目录读取生成。扫描发现撤销变化时，直接用本轮的端点视图刷新地址簿。
+
 最初使用 UDP 是为了避免为每个邻居维持连接。2026-06-02 的 `67b66261` 为避免在公网依赖 IP 分片，把默认 UDP 报文预算从 64 KiB 降到 1200 字节，并引入短连接 TCP 拉取超预算对象。设计保留 UDP 小包交换，只有发现需要拉取对象才建立 TCP 连接。
 
 引入 UDP 分块的提交（`e1b8d967`，2026-06-04）记录了家庭 NAT、CGNAT 和无端口映射的场景。内网 A 主动向公网 B 发 UDP 后，B 可以沿已观察到的 UDP 路径联系 A。当 B 要拉取 A 的 Zone 时，旧协议要求 B 另开 TCP 连接拨入 A。UDP 分块让 B 可以沿现有路径拿到完整快照。参见[当时的公网测试文档](../refer/public-internet-test.md#6-nat--cgnat-节点)。
@@ -91,3 +95,5 @@ Linux 控制 socket、HTTP `/api/v1/peers` 和 Windows IPC `peers` 承载同一�
 ## Gossip 日志
 
 公共 Driver 生成结构化日志记录。Linux 和 Windows 使用同样的 `ts`、`level`、`component`、`event` 和 `peer_id` 字段。平台各自管理输出目标，Windows 的诊断页按 `component=gossip` 筛选。包处理失败在 Driver 记录一次，TCP 拉取保留结束日志，队列积压和慢操作仍保留独立告警。
+
+Linux 的路由、IPsec 和防火墙慢操作分别使用 `routing`、`ipsec` 和 `firewall`，继续记录操作前后的 Gossip 队列深度，并按组件和阶段限流。

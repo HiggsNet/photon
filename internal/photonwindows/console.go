@@ -183,7 +183,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	}
 	executor := corehost.NewGossipObjectPullExecutor(corehost.GossipObjectPullExecutorConfig{
 		Client:    objectPullClient{routes: packet.outboundRoutes},
-		Discovery: driver.GossipDiscoveryInput,
+		Discovery: driver.GossipPeerDiscoveryInput,
 	})
 	if err := driver.StartGossipObjectPullWorkers(ctx, executor, 0, 0); err != nil {
 		return err

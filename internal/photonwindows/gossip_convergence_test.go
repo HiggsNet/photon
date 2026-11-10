@@ -204,14 +204,10 @@ func (node *memoryHostNode) startObjectPull(t *testing.T, remote *memoryHostNode
 	t.Helper()
 	executor := corehost.NewGossipObjectPullExecutor(corehost.GossipObjectPullExecutorConfig{
 		Client: memoryObjectPullClient{store: remote.store},
-		Discovery: func() corehost.GossipDiscoveryInput {
-			view := node.store.ReadView()
-			return corehost.GossipDiscoveryInput{
-				Network: view.State.Network,
-				Bootstrap: map[string]*net.UDPAddr{
-					remote.transport.PeerID(): {IP: net.ParseIP("127.0.0.1"), Port: 1},
-				},
-			}
+		Discovery: func(peerID string) corehost.GossipDiscoveryInput {
+			input := node.runtime.GossipPeerDiscoveryInput(peerID)
+			input.Bootstrap = map[string]*net.UDPAddr{remote.transport.PeerID(): {IP: net.ParseIP("127.0.0.1"), Port: 1}}
+			return input
 		},
 	})
 	if err := node.runtime.StartGossipObjectPullWorkers(node.ctx, executor, 1, 4); err != nil {

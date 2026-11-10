@@ -98,9 +98,9 @@ func TestGossipTCPFallsBackAndRemembersReachability(t *testing.T) {
 		}
 		return &gossip.ObjectPullResponse{OK: true, Snapshot: &corestate.ZoneSnapshot{Zone: req.Zone}}, nil
 	}}
-	executor := NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{Client: client, Now: func() time.Time { return now }})
+	executor := NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{Client: client, Discovery: func(string) GossipDiscoveryInput { return input }, Now: func() time.Time { return now }})
 	for range 2 {
-		result := executor.PullFrom(t.Context(), input, gossip.StartObjectPullAction{PeerID: "peer.catofes.", Zone: "peer.catofes."})
+		result := executor.PullGossipObject(t.Context(), gossip.StartObjectPullAction{PeerID: "peer.catofes.", Zone: "peer.catofes."})
 		if result.Err != nil || result.Addr != "192.0.2.1:33434" || result.Snapshot == nil || result.Unreachable {
 			t.Fatalf("pull result = %#v", result)
 		}
@@ -126,10 +126,10 @@ func TestGossipTCPTimeoutReservesBudgetForFallback(t *testing.T) {
 		}
 		return &gossip.ObjectPullResponse{OK: true, Snapshot: &corestate.ZoneSnapshot{Zone: req.Zone}}, ctx.Err()
 	}}
-	executor := NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{Client: client})
+	executor := NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{Client: client, Discovery: func(string) GossipDiscoveryInput { return input }})
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
-	result := executor.PullFrom(ctx, input, gossip.StartObjectPullAction{PeerID: "peer.catofes.", Zone: "peer.catofes."})
+	result := executor.PullGossipObject(ctx, gossip.StartObjectPullAction{PeerID: "peer.catofes.", Zone: "peer.catofes."})
 	if result.Err != nil || len(client.attempts) != 2 || ctx.Err() != nil {
 		t.Fatalf("fallback result = %#v, attempts = %v, context = %v", result, client.attempts, ctx.Err())
 	}
@@ -142,7 +142,7 @@ func TestGossipTCPDoesNotRetryProtocolFailuresOrCancellation(t *testing.T) {
 			client := &addressFallbackClient{exchange: func(context.Context, string, *gossip.ObjectPullRequest) (*gossip.ObjectPullResponse, error) {
 				return &gossip.ObjectPullResponse{OK: mode != "rejected", Snapshot: &corestate.ZoneSnapshot{Zone: "other.catofes."}}, nil
 			}}
-			executor := NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{Client: client})
+			executor := NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{Client: client, Discovery: func(string) GossipDiscoveryInput { return input }})
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			wantAttempts := 1
@@ -150,7 +150,7 @@ func TestGossipTCPDoesNotRetryProtocolFailuresOrCancellation(t *testing.T) {
 				cancel()
 				wantAttempts = 0
 			}
-			result := executor.PullFrom(ctx, input, gossip.StartObjectPullAction{PeerID: "peer.catofes.", Zone: "peer.catofes."})
+			result := executor.PullGossipObject(ctx, gossip.StartObjectPullAction{PeerID: "peer.catofes.", Zone: "peer.catofes."})
 			if result.Err == nil || len(client.attempts) != wantAttempts || result.Snapshot != nil {
 				t.Fatalf("result = %#v, attempts = %v", result, client.attempts)
 			}

@@ -58,7 +58,7 @@ func BenchmarkGossipReadPaths(b *testing.B) {
 		name string
 		run  func()
 	}{
-		{"discovery", func() { gossipReadBenchmarkResult = driver.GossipDiscoveryInput() }},
+		{"discovery", func() { gossipReadBenchmarkResult = driver.gossipDiscoveryInput("", true) }},
 		{"inbound_path", func() { driver.acceptGossipInboundPath(b.Context(), packet, now, transport) }},
 		{"tcp_zone", func() { gossipReadBenchmarkResult = driver.GossipObjectPullResponse(zoneRequest, now) }},
 	}

@@ -71,6 +71,10 @@ func (driver *GossipDriver) UpdateGossipBootstrap(peers map[string]*net.UDPAddr)
 }
 
 func (driver *GossipDriver) logGossip(level slog.Level, event, peerID, phase string, err error, fields map[string]any) {
+	driver.logRecord("gossip", level, event, peerID, phase, err, fields)
+}
+
+func (driver *GossipDriver) logRecord(component string, level slog.Level, event, peerID, phase string, err error, fields map[string]any) {
 	ctx := context.Background()
 	driver.mu.RLock()
 	log := driver.gossipConfig.Log
@@ -79,7 +83,7 @@ func (driver *GossipDriver) logGossip(level slog.Level, event, peerID, phase str
 		return
 	}
 	record := slog.NewRecord(time.Now(), level, event, 0)
-	record.AddAttrs(slog.String("component", "gossip"))
+	record.AddAttrs(slog.String("component", component))
 	if peerID != "" {
 		record.AddAttrs(slog.String("peer_id", peerID))
 	}
@@ -156,7 +160,7 @@ func (driver *GossipDriver) applyGossipSnapshots(
 	actions []gossip.ApplySnapshotAction,
 	view GossipStateView,
 ) (GossipSnapshotApplyResult, error) {
-	defer driver.LogSlowOperation("snapshot_apply", time.Now(), driver.PendingEventCount())
+	defer driver.LogSlowOperation("gossip", "snapshot_apply", time.Now(), driver.PendingEventCount())
 	if driver == nil || driver.gossipState == nil {
 		return GossipSnapshotApplyResult{}, errors.New("gossip state store is not configured")
 	}

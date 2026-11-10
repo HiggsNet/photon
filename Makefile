@@ -933,7 +933,7 @@ chunk-fallback-smoke: build
 	for i in 1 2 3 4 5 6 7 8 9 10; do if PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter bigdata 2>/dev/null | grep -q 'bigdata'; then break; fi; sleep 1; done; \
 	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes. --filter bigdata 2>/dev/null | grep -q 'bigdata' || { PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record list node-b.catofes.; exit 1; }; \
 	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
-	grep -q 'event=zone_applied.*via=udp_chunks.*zone=node-b.catofes\.' "$$tmp/a.log"; \
+	grep 'event=zone_applied' "$$tmp/a.log" | grep 'via=udp_chunks' | grep -q 'zone=node-b\.catofes\.'; \
 	kill "$$a_pid" "$$b_pid" >/dev/null 2>&1 || true; \
 	echo "Chunk fallback smoke passed"
 

@@ -22,7 +22,7 @@ func TestDiscoveryProjectionPreservesChainAndTimeChecks(t *testing.T) {
 	store := NewStore(&VerifiedState{ManagedZone: "local.catofes.", Network: network}, nil, nil)
 	for _, now := range []time.Time{time.Unix(100, 0), time.Unix(201, 0)} {
 		for _, peerID := range []string{"", path.String()} {
-			got := store.ReadDiscovery(peerID)
+			got := store.ReadDiscoveryRecords(peerID, "sync/endpoint/")
 			err := photoncrypto.VerifyChain(got.Network, path, now)
 			want := photoncrypto.VerifyChain(network, path, now)
 			if fmt.Sprint(err) != fmt.Sprint(want) || (now.Unix() == 100 && err != nil) || (now.Unix() == 201 && err == nil) {
@@ -59,7 +59,7 @@ func TestPeerAuthorizationOmitsRecordsAndDetachesState(t *testing.T) {
 		t.Fatalf("returned authorization aliases store: %v", err)
 	}
 	if again.Peers[path.String()].ObservedGraceEndpoints[0].Endpoint != "192.0.2.2:33434" ||
-		store.ReadDiscovery(path.String()).Network.Zones[path].Records["unused"] == nil {
+		store.ReadDiscoveryRecords(path.String(), "unused").Network.Zones[path].Records["unused"] == nil {
 		t.Fatal("authorization projection changed committed checkpoints or records")
 	}
 	var absent *Store
@@ -79,7 +79,7 @@ func TestScopedDiscoveryRetainsSignedAncestorRevocations(t *testing.T) {
 	network.Zones["catofes."].Revocations[path] = revocation
 	store := NewStore(&VerifiedState{Network: network}, nil, nil)
 	for _, selected := range []zone.ZonePath{path, "child.node-a.catofes."} {
-		view := store.ReadDiscovery(selected.String())
+		view := store.ReadDiscoveryRecords(selected.String(), "sync/endpoint/")
 		for _, at := range []int64{149, 150} {
 			now := time.Unix(at, 0)
 			if got := view.Network.IsZoneRevoked(selected, now); got != network.IsZoneRevoked(selected, now) || got != (at == 150) {
@@ -97,7 +97,7 @@ func TestScopedDiscoveryRetainsSignedAncestorRevocations(t *testing.T) {
 	}
 }
 
-func TestReadDiscoveryRetainsDigestsAndDetachesCurrentState(t *testing.T) {
+func TestReadDiscoveryRecordsDetachesFilteredState(t *testing.T) {
 	candidate := checkpointBenchmarkCandidate()
 	path := zone.ZonePath("node-0.catofes.")
 	network := candidate.Verified.Network
@@ -114,34 +114,24 @@ func TestReadDiscoveryRetainsDigestsAndDetachesCurrentState(t *testing.T) {
 	}
 	store := NewStoreWithCheckpoint(candidate.Verified, candidate.Gossip, nil, nil)
 	before := store.ReadView()
-	all := store.ReadDiscovery("")
-	if !reflect.DeepEqual(ZoneDigests(all.Network), store.ReadCatalog().Digests) {
-		t.Fatal("discovery without history changed current catalog digests")
-	}
+	all := store.ReadDiscoveryRecords("", "record-0")
 	for _, zs := range all.Network.Zones {
 		if zs.RecordHistory != nil {
 			t.Fatal("discovery retained record history")
 		}
 	}
-	peer := store.ReadDiscovery(path.String())
-	filtered := store.ReadDiscoveryRecords("", "record-0")
-	filteredZone := filtered.Network.Zones[path]
-	if filtered.Revision != all.Revision || len(filteredZone.Records) != 1 ||
-		!reflect.DeepEqual(filteredZone.Records["record-0"], peer.Network.Zones[path].Records["record-0"]) ||
-		!reflect.DeepEqual(filteredZone.ParentProof, peer.Network.Zones[path].ParentProof) {
-		t.Fatal("filtered discovery lost the selected record or verification context")
-	}
-	filteredZone.Records["record-0"].Value[0] ^= 0xff
-	filteredZone.ParentProof[0].Signature[0] ^= 0xff
-	filtered.Peers[path.String()].LastFailure.Message = "changed"
-	if len(peer.Network.Zones) != 3 || len(peer.Peers) != 1 || len(peer.Network.Zones[path].Records) != 10 {
+	peer := store.ReadDiscoveryRecords(path.String(), "record-0")
+	zs := peer.Network.Zones[path]
+	if len(peer.Network.Zones) != 3 || len(peer.Peers) != 1 || len(zs.Records) != 1 {
 		t.Fatalf("scoped discovery copied unrelated data: zones=%d peers=%d", len(peer.Network.Zones), len(peer.Peers))
+	}
+	if peer.Revision != all.Revision || !reflect.DeepEqual(all.Network.Zones[path], zs) {
+		t.Fatal("scoped discovery changed the target zone")
 	}
 	if peer.Network.Zones["catofes."].Records != nil {
 		t.Fatal("ancestor records are not needed to verify the peer chain")
 	}
 	peer.Network.GlobalRoot[0] ^= 0xff
-	zs := peer.Network.Zones[path]
 	zs.Authority.Keys[0].Key[0] ^= 0xff
 	zs.Authority.Keys[0].Capabilities[0].Permissions[0] = zone.PermDelegate
 	zs.ParentProof[0].Signature[0] ^= 0xff
@@ -153,11 +143,11 @@ func TestReadDiscoveryRetainsDigestsAndDetachesCurrentState(t *testing.T) {
 	cp.ObservedGraceEndpoints[0].Endpoint = "changed"
 	cp.RejectedObjects[path].RootHash[0] ^= 0xff
 	delete(peer.Peers, path.String())
-	all.Network.Zones[path].Records["record-1"].Value[0] ^= 0xff
+	all.Network.Zones[path].Records["record-0"].Value[0] ^= 0xff
 	if !reflect.DeepEqual(before, store.ReadView()) {
 		t.Fatal("a retained projection mutation reached committed state")
 	}
-	if unknown := store.ReadDiscovery("missing.catofes."); unknown.Network.Zones["missing.catofes."] != nil || len(unknown.Peers) != 0 {
+	if unknown := store.ReadDiscoveryRecords("missing.catofes.", "record-0"); unknown.Network.Zones["missing.catofes."] != nil || len(unknown.Peers) != 0 {
 		t.Fatal("projection invented a missing peer")
 	}
 }
@@ -217,7 +207,7 @@ func TestProjectedReadsAreDetachedDuringConcurrentCommits(t *testing.T) {
 		}
 	}()
 	for i := 0; i < 80; i++ {
-		view := store.ReadDiscovery(path.String())
+		view := store.ReadDiscoveryRecords(path.String(), "current")
 		view.Network.Zones[path].Records["current"].Value[0] ^= 0xff
 		snapshot, _, err := store.ReadZoneSnapshot(path, time.Unix(1000, 0))
 		if err != nil {
@@ -226,7 +216,7 @@ func TestProjectedReadsAreDetachedDuringConcurrentCommits(t *testing.T) {
 		snapshot.Records["current"].Value[0] ^= 0xff
 	}
 	wg.Wait()
-	if got := string(store.ReadDiscovery(path.String()).Network.Zones[path].Records["current"].Value); got != "value-40" {
+	if got := string(store.ReadDiscoveryRecords(path.String(), "current").Network.Zones[path].Records["current"].Value); got != "value-40" {
 		t.Fatalf("projection mutation damaged committed record: %q", got)
 	}
 }

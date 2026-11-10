@@ -19,10 +19,10 @@ type slowGossipOperation struct {
 
 // LogSlowOperation measures synchronous work that can delay the gossip consumer.
 // Call with defer, passing time.Now() and PendingEventCount() as arguments.
-// Operation must be a fixed stage name, never a peer ID or other unbounded value.
+// Component and operation must be fixed names. Each pair has its own rate limit.
 // Queue lengths are boundary samples, not a continuously measured high-water mark.
 // Fast calls do no allocation, formatting, locking, or logging.
-func (driver *GossipDriver) LogSlowOperation(operation string, started time.Time, queueBefore int) {
+func (driver *GossipDriver) LogSlowOperation(component, operation string, started time.Time, queueBefore int) {
 	if driver == nil {
 		return
 	}
@@ -30,10 +30,10 @@ func (driver *GossipDriver) LogSlowOperation(operation string, started time.Time
 	if elapsed < slowGossipOperationThreshold {
 		return
 	}
-	driver.logSlowOperation(operation, elapsed, started.Add(elapsed), queueBefore)
+	driver.logSlowOperation(component, operation, elapsed, started.Add(elapsed), queueBefore)
 }
 
-func (driver *GossipDriver) logSlowOperation(operation string, elapsed time.Duration, now time.Time, queueBefore int) {
+func (driver *GossipDriver) logSlowOperation(component, operation string, elapsed time.Duration, now time.Time, queueBefore int) {
 	queueAfter := driver.PendingEventCount()
 	driver.mu.Lock()
 	log := driver.gossipConfig.Log
@@ -42,22 +42,23 @@ func (driver *GossipDriver) logSlowOperation(operation string, elapsed time.Dura
 		return
 	}
 	if driver.slowOperations == nil {
-		driver.slowOperations = make(map[string]slowGossipOperation)
+		driver.slowOperations = make(map[[2]string]slowGossipOperation)
 	}
-	state := driver.slowOperations[operation]
+	key := [2]string{component, operation}
+	state := driver.slowOperations[key]
 	state.maxElapsed = max(state.maxElapsed, elapsed)
 	state.maxQueue = max(state.maxQueue, queueBefore, queueAfter)
 	if !state.lastLog.IsZero() && now.Sub(state.lastLog) < slowGossipOperationInterval {
 		state.suppressed++
-		driver.slowOperations[operation] = state
+		driver.slowOperations[key] = state
 		driver.mu.Unlock()
 		return
 	}
-	driver.slowOperations[operation] = slowGossipOperation{lastLog: now}
+	driver.slowOperations[key] = slowGossipOperation{lastLog: now}
 	driver.mu.Unlock()
 	// Invoke the logger outside the driver lock. Only emitted slow samples
 	// construct fields; suppressed samples retain counters for the next log.
-	driver.logGossip(slog.LevelWarn, "slow_operation", "", operation, nil, map[string]any{
+	driver.logRecord(component, slog.LevelWarn, "slow_operation", "", operation, nil, map[string]any{
 		"elapsed_ms": elapsed.Milliseconds(), "max_elapsed_ms": state.maxElapsed.Milliseconds(),
 		"queue_before": queueBefore, "queue_after": queueAfter, "queue_capacity": cap(driver.events) + cap(driver.completions),
 		"input_queue_after": len(driver.events), "completion_queue_after": len(driver.completions),

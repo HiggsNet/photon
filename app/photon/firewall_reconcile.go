@@ -29,7 +29,7 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 		return nil
 	}
 	common := func() corestate.View {
-		defer d.gossipDriver.LogSlowOperation("firewall_state_read", time.Now(), d.gossipDriver.PendingEventCount())
+		defer d.gossipDriver.LogSlowOperation("firewall", "firewall_state_read", time.Now(), d.gossipDriver.PendingEventCount())
 		return d.State.Common.ReadView()
 	}()
 	runtime := d.State.ReadLinux()
@@ -55,7 +55,7 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 
 	// Build authorized route set for prefix inputs.
 	ars, err := func() (*routing.AuthorizedRouteSet, error) {
-		defer d.gossipDriver.LogSlowOperation("firewall_authorized_routes", time.Now(), d.gossipDriver.PendingEventCount())
+		defer d.gossipDriver.LogSlowOperation("firewall", "firewall_authorized_routes", time.Now(), d.gossipDriver.PendingEventCount())
 		return routing.BuildAuthorizedRouteSet(common.State.Network, now)
 	}()
 	if err != nil {
@@ -93,7 +93,7 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 			continue
 		}
 		resolvedBackend, preflight, resolveErr := func() (string, firewall.FirewallPreflight, error) {
-			defer d.gossipDriver.LogSlowOperation("firewall_preflight", time.Now(), d.gossipDriver.PendingEventCount())
+			defer d.gossipDriver.LogSlowOperation("firewall", "firewall_preflight", time.Now(), d.gossipDriver.PendingEventCount())
 			return d.linuxDriver.ResolveFirewallBackend(ctx, spec)
 		}()
 		summary.Backend = preflight.Backend
@@ -121,7 +121,7 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 		}
 
 		result, err := func() (firewall.FirewallApplyResult, error) {
-			defer d.gossipDriver.LogSlowOperation("firewall_apply", time.Now(), d.gossipDriver.PendingEventCount())
+			defer d.gossipDriver.LogSlowOperation("firewall", "firewall_apply", time.Now(), d.gossipDriver.PendingEventCount())
 			return d.linuxDriver.ApplyFirewall(ctx, spec, resolvedBackend, desired)
 		}()
 		entry.Backend = resolvedBackend
@@ -175,7 +175,7 @@ func (d *Daemon) flushFirewallReconcileResult(ctx context.Context) (bool, error)
 	if !d.firewallDirty {
 		return false, nil
 	}
-	defer d.gossipDriver.LogSlowOperation("firewall_reconcile", time.Now(), d.gossipDriver.PendingEventCount())
+	defer d.gossipDriver.LogSlowOperation("firewall", "firewall_reconcile", time.Now(), d.gossipDriver.PendingEventCount())
 	d.firewallDirty = false
 	d.noteReconcileFlush("firewall")
 	reconcileCtx, cancel := boundedReconcileContext(ctx)

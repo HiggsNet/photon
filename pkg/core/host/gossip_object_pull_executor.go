@@ -22,7 +22,7 @@ type GossipObjectPullClient interface {
 
 type GossipObjectPullExecutorConfig struct {
 	Client    GossipObjectPullClient
-	Discovery func() GossipDiscoveryInput
+	Discovery func(peerID string) GossipDiscoveryInput
 	Now       func() time.Time
 	Quota     gossip.QuotaConfig
 }
@@ -62,18 +62,16 @@ func NewGossipObjectPullExecutor(config GossipObjectPullExecutorConfig) *GossipO
 }
 
 func (executor *GossipObjectPullExecutor) PullGossipObject(ctx context.Context, action gossip.StartObjectPullAction) GossipObjectPullCompletion {
-	if executor == nil || executor.config.Discovery == nil {
-		return GossipObjectPullCompletion{PeerID: action.PeerID, Zone: action.Zone, Err: errors.New("gossip object-pull discovery is required")}
-	}
-	return executor.PullFrom(ctx, executor.config.Discovery(), action)
-}
-
-func (executor *GossipObjectPullExecutor) PullFrom(ctx context.Context, input GossipDiscoveryInput, action gossip.StartObjectPullAction) GossipObjectPullCompletion {
 	completion := GossipObjectPullCompletion{PeerID: action.PeerID, Zone: action.Zone}
-	if executor == nil || executor.config.Client == nil {
+	if executor == nil || executor.config.Discovery == nil {
+		completion.Err = errors.New("gossip object-pull discovery is required")
+		return completion
+	}
+	if executor.config.Client == nil {
 		completion.Err = ErrGossipObjectPullClientRequired
 		return completion
 	}
+	input := executor.config.Discovery(action.PeerID)
 	now := executor.config.Now()
 	if input.Network == nil {
 		completion.Err = fmt.Errorf("no committed state for peer %s", action.PeerID)

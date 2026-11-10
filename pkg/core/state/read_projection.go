@@ -18,20 +18,6 @@ type DiscoveryView struct {
 	Revision    VerifiedRevision
 }
 
-// ReadDiscovery reads one coherent discovery input. An empty peerID selects
-// all peers; a specific peer selects its current records and ancestor chain.
-// Ancestors retain authority, parent proofs, delegations and revocations, so
-// callers still verify signatures and time-dependent policy on every use.
-func (store *Store) ReadDiscovery(peerID string) *DiscoveryView {
-	return store.ReadDiscoveryRecords(peerID, "")
-}
-
-// ReadDiscoveryRecords returns the same detached discovery view with current
-// records restricted to keys matching prefix. An empty prefix includes all keys.
-func (store *Store) ReadDiscoveryRecords(peerID, prefix string) *DiscoveryView {
-	return store.readDiscovery(peerID, true, prefix)
-}
-
 // ReadPeerAuthorization reads one peer's authorization chain and committed
 // checkpoint without copying endpoint records that observed-source handling
 // does not use. The same signatures, revocations and time checks remain possible.
@@ -39,10 +25,13 @@ func (store *Store) ReadPeerAuthorization(peerID string) *DiscoveryView {
 	if peerID == "" {
 		return nil
 	}
-	return store.readDiscovery(peerID, false, "")
+	return store.ReadDiscoveryRecords(peerID, "")
 }
 
-func (store *Store) readDiscovery(peerID string, records bool, prefix string) *DiscoveryView {
+// ReadDiscoveryRecords reads discovery records matching prefix. An empty
+// peerID selects all peers. A specific peer retains its authorization chain,
+// with records only from the peer itself. An empty prefix omits records.
+func (store *Store) ReadDiscoveryRecords(peerID, prefix string) *DiscoveryView {
 	if store == nil {
 		return nil
 	}
@@ -65,7 +54,7 @@ func (store *Store) readDiscovery(peerID string, records bool, prefix string) *D
 	}
 	if peerID == "" {
 		for path, zs := range network.Zones {
-			out.Network.Zones[path] = cloneDiscoveryZone(zs, records, prefix)
+			out.Network.Zones[path] = cloneDiscoveryZone(zs, prefix)
 		}
 		for id, peer := range store.gossip.Peers {
 			out.Peers[id] = clonePeerCheckpoint(peer)
@@ -79,7 +68,11 @@ func (store *Store) readDiscovery(peerID string, records bool, prefix string) *D
 	if path.Valid() {
 		for current := path; ; current = current.Parent() {
 			if zs, ok := network.Zones[current]; ok {
-				out.Network.Zones[current] = cloneDiscoveryZone(zs, records && current == path, prefix)
+				recordPrefix := ""
+				if current == path {
+					recordPrefix = prefix
+				}
+				out.Network.Zones[current] = cloneDiscoveryZone(zs, recordPrefix)
 			}
 			if current == zone.RootZone {
 				break
@@ -89,7 +82,7 @@ func (store *Store) readDiscovery(peerID string, records bool, prefix string) *D
 	return out
 }
 
-func cloneDiscoveryZone(zs *zone.ZoneState, records bool, prefix string) *zone.ZoneState {
+func cloneDiscoveryZone(zs *zone.ZoneState, prefix string) *zone.ZoneState {
 	if zs == nil {
 		return nil
 	}
@@ -100,9 +93,7 @@ func cloneDiscoveryZone(zs *zone.ZoneState, records bool, prefix string) *zone.Z
 		Revocations: cloneRevocationMap(zs.Revocations),
 		MerkleRoot:  append([]byte(nil), zs.MerkleRoot...),
 	}
-	if records && prefix == "" {
-		out.Records = cloneRecordMap(zs.Records)
-	} else if records {
+	if prefix != "" {
 		for key, record := range zs.Records {
 			if strings.HasPrefix(key, prefix) {
 				if out.Records == nil {

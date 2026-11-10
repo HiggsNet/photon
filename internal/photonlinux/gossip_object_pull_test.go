@@ -128,13 +128,18 @@ func TestGossipObjectPullExecutorFallsBackThroughLinuxClient(t *testing.T) {
 	}
 	state.Records[gossip.EndpointRecordKeyUDP] = &zone.Record{Value: value}
 	network.Zones[peer] = state
-	executor := host.NewGossipObjectPullExecutor(host.GossipObjectPullExecutorConfig{Client: GossipObjectPullClient{}})
+	executor := host.NewGossipObjectPullExecutor(host.GossipObjectPullExecutorConfig{
+		Client: GossipObjectPullClient{},
+		Discovery: func(string) host.GossipDiscoveryInput {
+			return host.GossipDiscoveryInput{
+				Network:   network,
+				Bootstrap: map[string]*net.UDPAddr{peer.String(): {IP: net.IPv6loopback, Port: listener.Addr().(*net.TCPAddr).Port}},
+			}
+		},
+	})
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
-	result := executor.PullFrom(ctx, host.GossipDiscoveryInput{
-		Network:   network,
-		Bootstrap: map[string]*net.UDPAddr{peer.String(): {IP: net.IPv6loopback, Port: listener.Addr().(*net.TCPAddr).Port}},
-	}, gossip.StartObjectPullAction{PeerID: peer.String(), Zone: peer})
+	result := executor.PullGossipObject(ctx, gossip.StartObjectPullAction{PeerID: peer.String(), Zone: peer})
 	if result.Err != nil || result.Addr != listener.Addr().String() || result.Snapshot == nil {
 		t.Fatalf("Linux fallback result = %#v", result)
 	}

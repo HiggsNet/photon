@@ -109,7 +109,7 @@ func startB4AuthorityPeerAt(t *testing.T, ctx context.Context, config *Config, l
 	if err == nil {
 		err = driver.StartGossipObjectPullServer(peerCtx, gossipListener{socket}, 0, 0)
 	}
-	executor := corehost.NewGossipObjectPullExecutor(corehost.GossipObjectPullExecutorConfig{Client: objectPullClient{}, Discovery: driver.GossipDiscoveryInput})
+	executor := corehost.NewGossipObjectPullExecutor(corehost.GossipObjectPullExecutorConfig{Client: objectPullClient{}, Discovery: driver.GossipPeerDiscoveryInput})
 	if err == nil {
 		err = driver.StartGossipObjectPullWorkers(peerCtx, executor, 0, 0)
 	}
@@ -278,9 +278,10 @@ func (p *b4AuthorityPeer) waitSignedRecords(t *testing.T, parent context.Context
 			lastError = err
 		default:
 		}
-		endpoint := corehost.ResolveGossipObjectPullAddress(p.driver.GossipDiscoveryInput(), string(p.target), time.Now())
-		if endpoint != "" {
-			response, err := (objectPullClient{}).Exchange(ctx, endpoint, &gossip.ObjectPullRequest{Type: gossip.ObjectPullZone, Zone: path})
+		peerID := p.target.String()
+		endpoints := corehost.ResolveGossipObjectPullAddresses(p.driver.GossipPeerDiscoveryInput(peerID), peerID, time.Now())
+		if len(endpoints) > 0 {
+			response, err := (objectPullClient{}).Exchange(ctx, endpoints[0], &gossip.ObjectPullRequest{Type: gossip.ObjectPullZone, Zone: path})
 			if err == nil && response.OK && response.Snapshot != nil && response.Snapshot.Zone == path {
 				matched := true
 				for _, key := range keys {

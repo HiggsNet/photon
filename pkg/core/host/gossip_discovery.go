@@ -42,28 +42,38 @@ type GossipDiscoveryConfig struct {
 	SourceOrder    []string
 }
 
-// GossipDiscoveryInput returns one detached discovery view built from the
-// GossipDriver's committed common Store.
-func (driver *GossipDriver) GossipDiscoveryInput() GossipDiscoveryInput {
-	return driver.gossipDiscoveryInput("", true, "")
+// GossipPeerDiscoveryInput reads the endpoint records and authorization chain
+// of the peer that a TCP pull is about to contact.
+func (driver *GossipDriver) GossipPeerDiscoveryInput(peerID string) GossipDiscoveryInput {
+	if peerID == "" {
+		return GossipDiscoveryInput{}
+	}
+	return driver.gossipDiscoveryInput(peerID, true)
 }
 
-func (driver *GossipDriver) gossipDiscoveryInput(peerID string, records bool, recordPrefix string) GossipDiscoveryInput {
+func (driver *GossipDriver) gossipDiscoveryInput(peerID string, endpoints bool) GossipDiscoveryInput {
 	var input GossipDiscoveryInput
 	if driver == nil {
 		return input
 	}
-	config := driver.GossipConfig()
+	driver.mu.RLock()
+	config := driver.gossipConfig
+	driver.mu.RUnlock()
 	input.LocalPeerID = config.PeerID
-	input.Bootstrap = config.Discovery.Bootstrap
-	input.BootstrapPeers = config.Discovery.BootstrapPeers
-	input.SourceOrder = config.Discovery.SourceOrder
+	if endpoints && peerID == "" {
+		discovery := cloneGossipDriverConfig(config).Discovery
+		input.Bootstrap = discovery.Bootstrap
+		input.BootstrapPeers = discovery.BootstrapPeers
+		input.SourceOrder = discovery.SourceOrder
+	} else if addr, ok := config.Discovery.Bootstrap[peerID]; endpoints && ok {
+		input.Bootstrap = cloneBootstrapPeers(map[string]*net.UDPAddr{peerID: addr})
+	}
 	if driver.gossipState == nil {
 		return input
 	}
 	var view *corestate.DiscoveryView
-	if records {
-		view = driver.gossipState.ReadDiscoveryRecords(peerID, recordPrefix)
+	if endpoints {
+		view = driver.gossipState.ReadDiscoveryRecords(peerID, gossip.EndpointRecordKeyPrefix)
 	} else {
 		view = driver.gossipState.ReadPeerAuthorization(peerID)
 	}
@@ -230,16 +240,6 @@ func filterGossipCatalogPage(managedZone zone.ZonePath, peer corestate.PeerCheck
 	return &filtered
 }
 
-// ResolveGossipObjectPullAddress returns the first TCP candidate for callers
-// that only display an address. Outbound pulls use the complete candidate list.
-func ResolveGossipObjectPullAddress(input GossipDiscoveryInput, peerID string, now time.Time) string {
-	addresses := ResolveGossipObjectPullAddresses(input, peerID, now)
-	if len(addresses) == 0 {
-		return ""
-	}
-	return addresses[0]
-}
-
 // ResolveGossipObjectPullAddresses retains the verified observed paths,
 // bootstrap and signed endpoints. TCP and UDP share the numeric endpoint port,
 // but a working UDP path does not establish TCP reachability.
@@ -284,7 +284,7 @@ func (driver *GossipDriver) RefreshGossipDiscovery(now time.Time, transport *gos
 	if !driver.gossipDiscoveryAvailable() {
 		return ErrGossipDriverStopped
 	}
-	input := driver.gossipDiscoveryInput("", true, gossip.EndpointRecordKeyPrefix)
+	input := driver.gossipDiscoveryInput("", true)
 	ApplyGossipDiscoveryPlan(transport, PlanGossipDiscovery(input, now))
 	return nil
 }
@@ -298,7 +298,7 @@ func (driver *GossipDriver) publishGossipObservedPath(peerID string, now time.Ti
 	if transport == nil || peerID == "" {
 		return nil
 	}
-	input := driver.gossipDiscoveryInput(peerID, false, "")
+	input := driver.gossipDiscoveryInput(peerID, false)
 	var paths []gossip.ObservedPath
 	var ok bool
 	if input.verifiedRevision != verification.revision {

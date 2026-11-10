@@ -102,7 +102,7 @@ func testGossipColdCatalog(t *testing.T, pullsAtTimeout int) {
 	}
 	executor := NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{
 		Client: client, Now: clock.Now,
-		Discovery: func() GossipDiscoveryInput {
+		Discovery: func(string) GossipDiscoveryInput {
 			return GossipDiscoveryInput{Network: store.ReadView().State.Network, Bootstrap: map[string]*net.UDPAddr{"bootstrap": {IP: net.ParseIP("127.0.0.1"), Port: 1}}}
 		},
 		// This test concerns scheduling rather than the separate traffic quota.

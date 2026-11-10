@@ -77,7 +77,7 @@ type GossipDriver struct {
 	nextDropLog     atomic.Int64
 
 	mu                       sync.RWMutex
-	slowOperations           map[string]slowGossipOperation
+	slowOperations           map[[2]string]slowGossipOperation
 	scheduler                *Scheduler
 	objectPullContext        context.Context
 	objectPullCancel         context.CancelFunc

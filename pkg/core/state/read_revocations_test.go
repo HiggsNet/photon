@@ -93,7 +93,7 @@ func TestZoneRevocationFollowsPublication(t *testing.T) {
 			if store.IsZoneRevoked(path, now) == fail {
 				t.Fatal("revocation did not follow committed revision")
 			}
-			if got := store.ReadDiscovery(path.String()); got.Revision != store.VerifiedRevision() {
+			if got := store.ReadPeerAuthorization(path.String()); got.Revision != store.VerifiedRevision() {
 				t.Fatal("discovery revision does not match state")
 			}
 			_, retained := store.PeerCheckpoints([]string{path.String()})[path.String()]

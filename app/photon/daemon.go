@@ -167,7 +167,7 @@ func newDaemon(config *appConfig, state *State, interval time.Duration, clock fu
 	d.gossipDriver = corehost.NewGossipDriver(corehost.NewClock(d.now), corehost.DefaultEventBuffer, commonState, gossipDriverConfig(config, verified, logger))
 	d.objectPullExecutor = corehost.NewGossipObjectPullExecutor(corehost.GossipObjectPullExecutorConfig{
 		Client:    photonlinux.GossipObjectPullClient{},
-		Discovery: d.gossipDriver.GossipDiscoveryInput,
+		Discovery: d.gossipDriver.GossipPeerDiscoveryInput,
 		Now:       d.now,
 	})
 	return d
@@ -1026,7 +1026,7 @@ func (d *Daemon) flushRoutingReconcileResult(ctx context.Context) (bool, error) 
 	if !d.routingDirty {
 		return false, nil
 	}
-	defer d.gossipDriver.LogSlowOperation("routing_reconcile", time.Now(), d.gossipDriver.PendingEventCount())
+	defer d.gossipDriver.LogSlowOperation("routing", "routing_reconcile", time.Now(), d.gossipDriver.PendingEventCount())
 	d.routingDirty = false
 	d.noteReconcileFlush("routing")
 	reconcileCtx, cancel := boundedReconcileContext(ctx)
@@ -1087,7 +1087,7 @@ func (d *Daemon) flushIPsecReconcile(ctx context.Context) bool {
 	if !d.ipsecDirty {
 		return false
 	}
-	defer d.gossipDriver.LogSlowOperation("ipsec_reconcile", time.Now(), d.gossipDriver.PendingEventCount())
+	defer d.gossipDriver.LogSlowOperation("ipsec", "ipsec_reconcile", time.Now(), d.gossipDriver.PendingEventCount())
 	d.ipsecDirty = false
 	d.noteReconcileFlush("ipsec")
 	reconcileCtx, cancel := boundedReconcileContext(ctx)

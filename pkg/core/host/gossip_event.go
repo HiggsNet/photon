@@ -42,19 +42,18 @@ func (sender gossipDriverSender) datagramBudget() int {
 // The first event executes directly: a full queue must not strand an idle session.
 // The returned flag reports completed sessions requiring platform reconciliation.
 func (driver *GossipDriver) SyncGossipPeers(ctx context.Context, now time.Time, force bool) (bool, error) {
-	defer driver.LogSlowOperation("sync_peers", time.Now(), driver.PendingEventCount())
-	if driver == nil {
+	defer driver.LogSlowOperation("gossip", "sync_peers", time.Now(), driver.PendingEventCount())
+	if !driver.gossipDiscoveryAvailable() {
 		return false, ErrGossipDriverStopped
 	}
-	if driver.gossipTransportForRead() == nil {
+	transport := driver.gossipTransportForRead()
+	if transport == nil {
 		return false, ErrGossipTransportRequired
 	}
-	input := driver.GossipDiscoveryInput()
+	input := driver.gossipDiscoveryInput("", true)
 	revoked := gossipDiscoveryRevocations(input, now)
 	if !maps.Equal(driver.revokedPeers, revoked) {
-		if err := driver.RefreshGossipDiscovery(now, driver.gossipTransportForRead()); err != nil {
-			return false, err
-		}
+		ApplyGossipDiscoveryPlan(transport, PlanGossipDiscovery(input, now))
 		for path := range revoked {
 			if !driver.revokedPeers[path] {
 				driver.dropRevokedGossipPeer(path.String())
@@ -62,7 +61,10 @@ func (driver *GossipDriver) SyncGossipPeers(ctx context.Context, now time.Time, 
 		}
 		driver.revokedPeers = revoked
 	}
-	summary := corestate.CatalogSummaryFor(input.Network)
+	summary := driver.GossipCatalogSummary()
+	if summary == nil {
+		summary = corestate.CatalogSummaryForDigests(nil)
+	}
 	changed := false
 	var errs []error
 	// Signed-state commits normally remove these rows. A restored row or a
@@ -168,7 +170,7 @@ type GossipHostEventResult struct {
 // gossip inbound planner or session FSM. A batch executes at most a bounded
 // number of ready steps; object-pull I/O remains on the bounded worker group.
 func (driver *GossipDriver) HandleGossipHostEvent(ctx context.Context, hostEvent Event, now time.Time) (GossipHostEventResult, error) {
-	defer driver.LogSlowOperation("host_event", time.Now(), driver.PendingEventCount())
+	defer driver.LogSlowOperation("gossip", "host_event", time.Now(), driver.PendingEventCount())
 	var out GossipHostEventResult
 	if driver == nil {
 		return out, ErrGossipDriverStopped
@@ -253,7 +255,7 @@ func (driver *GossipDriver) handleGossipHostStep(ctx context.Context, hostEvent 
 		return out, nil, nil
 	}
 	if tick, ok := event.(*gossip.SyncTimerEvent); ok && transport != nil && transport.HasRememberedPeerAddr(tick.PeerID) {
-		input := driver.gossipDiscoveryInput(tick.PeerID, false, "")
+		input := driver.gossipDiscoveryInput(tick.PeerID, false)
 		input.observedVerifier = &driver.observedPathVerifier
 		if !discoveryPeerVerified(input, tick.PeerID, now) {
 			transport.SetRememberedPeerAddr(tick.PeerID, nil)
@@ -360,7 +362,7 @@ func (driver *GossipDriver) startDeferredGossipSession(peerID string) bool {
 // RelayGossipUpdate queues a bounded number of summary PINGs after a verified
 // change. For local changes sourcePeerID is empty.
 func (driver *GossipDriver) RelayGossipUpdate(ctx context.Context, sourcePeerID string, now time.Time) {
-	input := driver.GossipDiscoveryInput()
+	input := driver.gossipDiscoveryInput("", true)
 	summary := driver.GossipCatalogSummary()
 	if summary == nil {
 		return

@@ -175,7 +175,7 @@ func (client successfulObjectPullClient) Exchange(_ context.Context, _ string, r
 func memoryObjectPullExecutor(pulls chan gossip.StartObjectPullAction) *GossipObjectPullExecutor {
 	return NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{
 		Client: successfulObjectPullClient{pulls: pulls},
-		Discovery: func() GossipDiscoveryInput {
+		Discovery: func(string) GossipDiscoveryInput {
 			return GossipDiscoveryInput{
 				Network:   zone.NewNetworkState(),
 				Bootstrap: map[string]*net.UDPAddr{"peer-a": {IP: net.ParseIP("127.0.0.1"), Port: 1}},

@@ -21,11 +21,11 @@ type gossipObservedVerification struct {
 // recordGossipObservedPath checks the peer's current authorization before
 // recording the packet source. Only a changed address from a probe is durable.
 func (driver *GossipDriver) recordGossipObservedPath(ctx context.Context, peerID, endpoint string, confirmed bool, now time.Time) (gossipObservedVerification, bool, error) {
-	defer driver.LogSlowOperation("observed_path_update", time.Now(), driver.PendingEventCount())
+	defer driver.LogSlowOperation("gossip", "observed_path_update", time.Now(), driver.PendingEventCount())
 	if driver == nil || driver.gossipState == nil {
 		return gossipObservedVerification{}, false, ErrGossipDriverStopped
 	}
-	input := driver.gossipDiscoveryInput(peerID, false, "")
+	input := driver.gossipDiscoveryInput(peerID, false)
 	input.observedVerifier = &driver.observedPathVerifier
 	patch, ok := PlanVerifiedObservedCheckpoint(input, peerID, endpoint, now)
 	verification := gossipObservedVerification{revision: input.verifiedRevision, valid: ok}
@@ -65,7 +65,7 @@ func (driver *GossipDriver) commitGossipEventCheckpoint(ctx context.Context, ses
 	if driver == nil || driver.gossipState == nil || session == nil || !session.Done() || session.PeerID == "" {
 		return nil
 	}
-	defer driver.LogSlowOperation("session_checkpoint", time.Now(), driver.PendingEventCount())
+	defer driver.LogSlowOperation("gossip", "session_checkpoint", time.Now(), driver.PendingEventCount())
 	peerID := session.PeerID
 	peer := driver.gossipState.PeerCheckpoints([]string{peerID})[peerID]
 	syncErr := session.LastError()

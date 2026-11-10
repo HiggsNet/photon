@@ -32,7 +32,10 @@ func TestGossipObjectPullExecutorResolvesValidatesAndObserves(t *testing.T) {
 	executor := NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{
 		Client: client,
 		Now:    func() time.Time { return now },
-		Discovery: func() GossipDiscoveryInput {
+		Discovery: func(peerID string) GossipDiscoveryInput {
+			if peerID != "peer-a" {
+				t.Fatalf("discovery peer = %q, want peer-a", peerID)
+			}
 			return GossipDiscoveryInput{
 				Network:   zone.NewNetworkState(),
 				Bootstrap: map[string]*net.UDPAddr{"peer-a": {IP: net.ParseIP("192.0.2.10"), Port: 33434}},
@@ -53,10 +56,16 @@ func TestGossipObjectPullExecutorResolvesValidatesAndObserves(t *testing.T) {
 
 func TestGossipObjectPullExecutorRejectsMissingAddressAndInvalidResponse(t *testing.T) {
 	executor := NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{
-		Client:    &memoryObjectPullClient{},
-		Discovery: func() GossipDiscoveryInput { return GossipDiscoveryInput{Network: zone.NewNetworkState()} },
+		Client: &memoryObjectPullClient{},
+		Discovery: func(peerID string) GossipDiscoveryInput {
+			if peerID == "unknown" {
+				return GossipDiscoveryInput{Network: zone.NewNetworkState()}
+			}
+			return GossipDiscoveryInput{}
+		},
 	})
-	localFailure := executor.PullFrom(t.Context(), GossipDiscoveryInput{}, gossip.StartObjectPullAction{PeerID: "peer-a", Zone: "node-a."})
+	action := gossip.StartObjectPullAction{PeerID: "peer-a", Zone: "node-a."}
+	localFailure := executor.PullGossipObject(t.Context(), action)
 	if localFailure.Err == nil || localFailure.Unreachable {
 		t.Fatalf("missing local state classified as unreachable: %#v", localFailure)
 	}
@@ -67,11 +76,8 @@ func TestGossipObjectPullExecutorRejectsMissingAddressAndInvalidResponse(t *test
 
 	wantErr := errors.New("dial failed")
 	client := &memoryObjectPullClient{err: wantErr}
-	executor = NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{Client: client})
-	completion = executor.PullFrom(t.Context(), GossipDiscoveryInput{
-		Network:   zone.NewNetworkState(),
-		Bootstrap: map[string]*net.UDPAddr{"peer-a": {IP: net.ParseIP("127.0.0.1"), Port: 1}},
-	}, gossip.StartObjectPullAction{PeerID: "peer-a", Zone: "node-a."})
+	executor = NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{Client: client, Discovery: objectPullTestDiscovery})
+	completion = executor.PullGossipObject(t.Context(), action)
 	if !errors.Is(completion.Err, wantErr) {
 		t.Fatalf("error = %v, want %v", completion.Err, wantErr)
 	}
@@ -89,13 +95,18 @@ func TestGossipObjectPullExecutorRejectsWrongZone(t *testing.T) {
 		Client: &memoryObjectPullClient{response: &gossip.ObjectPullResponse{
 			OK: true, Snapshot: &corestate.ZoneSnapshot{Zone: "other."},
 		}},
+		Discovery: objectPullTestDiscovery,
 	})
-	completion := executor.PullFrom(t.Context(), GossipDiscoveryInput{
-		Network:   zone.NewNetworkState(),
-		Bootstrap: map[string]*net.UDPAddr{"peer-a": {IP: net.ParseIP("127.0.0.1"), Port: 1}},
-	}, gossip.StartObjectPullAction{PeerID: "peer-a", Zone: "node-a."})
+	completion := executor.PullGossipObject(t.Context(), gossip.StartObjectPullAction{PeerID: "peer-a", Zone: "node-a."})
 	if completion.Err == nil {
 		t.Fatal("wrong-zone response succeeded")
+	}
+}
+
+func objectPullTestDiscovery(peerID string) GossipDiscoveryInput {
+	return GossipDiscoveryInput{
+		Network:   zone.NewNetworkState(),
+		Bootstrap: map[string]*net.UDPAddr{peerID: {IP: net.ParseIP("127.0.0.1"), Port: 1}},
 	}
 }
 

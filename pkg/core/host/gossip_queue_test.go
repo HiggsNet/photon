@@ -260,7 +260,7 @@ func TestGossipQueueWaitingIODoesNotPauseInputs(t *testing.T) {
 	_, datagram := bindMemoryGossipTransport(t, driver, "peer-a")
 	client := &blockingObjectPullClient{entered: make(chan struct{}, 1)}
 	executor := NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{
-		Client: client, Discovery: func() GossipDiscoveryInput {
+		Client: client, Discovery: func(string) GossipDiscoveryInput {
 			return GossipDiscoveryInput{Network: zone.NewNetworkState(), Bootstrap: map[string]*net.UDPAddr{"peer-a": {IP: net.ParseIP("127.0.0.1"), Port: 1}}}
 		},
 	})

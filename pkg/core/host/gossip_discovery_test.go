@@ -363,46 +363,56 @@ func TestFilterGossipCatalogPageUsesCommonManagedAndRejectedState(t *testing.T) 
 	}
 }
 
-func TestResolveGossipObjectPullAddressUsesBootstrap(t *testing.T) {
+func TestResolveGossipObjectPullAddressesUsesBootstrap(t *testing.T) {
 	input := GossipDiscoveryInput{Bootstrap: map[string]*net.UDPAddr{
 		"peer-a": {IP: net.ParseIP("192.0.2.10"), Port: 33434},
 	}}
-	if got := ResolveGossipObjectPullAddress(input, "peer-a", time.Unix(1000, 0)); got != "192.0.2.10:33434" {
+	if got := ResolveGossipObjectPullAddresses(input, "peer-a", time.Unix(1000, 0)); !slices.Equal(got, []string{"192.0.2.10:33434"}) {
 		t.Fatalf("object-pull address = %q", got)
 	}
-	if got := ResolveGossipObjectPullAddress(input, "unknown", time.Unix(1000, 0)); got != "" {
+	if got := ResolveGossipObjectPullAddresses(input, "unknown", time.Unix(1000, 0)); len(got) != 0 {
 		t.Fatalf("unknown object-pull address = %q", got)
 	}
 }
 
-func TestResolveGossipObjectPullAddressPrefersVerifiedObservedPath(t *testing.T) {
+func TestGossipPeerDiscoveryInputForObjectPull(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	peerID := zone.ZonePath("peer.catofes.")
-	network, _ := signedDiscoveryNetwork(t, peerID, true, nil, now)
-	input := GossipDiscoveryInput{
-		Network:   network,
-		Bootstrap: map[string]*net.UDPAddr{peerID.String(): {IP: net.ParseIP("192.0.2.10"), Port: 33434}},
-		Peers: map[string]corestate.PeerCheckpoint{peerID.String(): {
-			ObservedEndpoint: "198.51.100.10:33434", ObservedUntilUnix: now.Add(time.Minute).Unix(),
-		}},
-	}
-	if got := ResolveGossipObjectPullAddress(input, peerID.String(), now); got != "198.51.100.10:33434" {
-		t.Fatalf("object-pull address = %q", got)
-	}
-	input.Peers["unknown.catofes."] = input.Peers[peerID.String()]
-	if got := ResolveGossipObjectPullAddress(input, "unknown.catofes.", now); got != "" {
-		t.Fatalf("unverified observed address = %q", got)
-	}
-}
-
-func TestResolveGossipObjectPullAddressUsesSignedEndpoint(t *testing.T) {
-	now := time.Now().Truncate(time.Second)
-	peerID := zone.ZonePath("peer.catofes.")
+	otherID := zone.ZonePath("other.catofes.")
 	network, _ := signedDiscoveryNetwork(t, peerID, true, []gossip.EndpointEntry{{
 		Address: "203.0.113.10", Port: 33434, Source: "advertise", LastObserved: now.Unix(),
 	}}, now)
-	if got := ResolveGossipObjectPullAddress(GossipDiscoveryInput{Network: network}, peerID.String(), now); got != "203.0.113.10:33434" {
-		t.Fatalf("object-pull address = %q", got)
+	network.Zones[otherID] = zone.NewZoneState(otherID, nil)
+	network.Zones[peerID].Records["unrelated"] = &zone.Record{Zone: peerID, Key: "unrelated"}
+	observed := corestate.PeerCheckpoint{
+		ObservedEndpoint: "198.51.100.10:33434", ObservedUntilUnix: now.Add(time.Minute).Unix(),
+	}
+	store := corestate.NewStoreWithCheckpoint(&corestate.VerifiedState{Network: network}, &corestate.GossipCheckpoint{
+		Peers: map[string]corestate.PeerCheckpoint{peerID.String(): observed, otherID.String(): observed},
+	}, nil, nil)
+	driver := NewGossipDriver(newFakeClock(now), 1, store, GossipDriverConfig{
+		Discovery: GossipDiscoveryConfig{Bootstrap: map[string]*net.UDPAddr{
+			peerID.String():  {IP: net.ParseIP("192.0.2.10"), Port: 33434},
+			otherID.String(): {IP: net.ParseIP("192.0.2.20"), Port: 33434},
+		}},
+	})
+	defer driver.Stop()
+
+	input := driver.GossipPeerDiscoveryInput(peerID.String())
+	if input.Network.Zones[otherID] != nil || len(input.Peers) != 1 || len(input.Bootstrap) != 1 {
+		t.Fatal("object-pull input retained unrelated peer data")
+	}
+	if input.Network.Zones[peerID].Records["unrelated"] != nil {
+		t.Fatal("object-pull input retained an unrelated record")
+	}
+	want := []string{"198.51.100.10:33434", "192.0.2.10:33434", "203.0.113.10:33434"}
+	if got := ResolveGossipObjectPullAddresses(input, peerID.String(), now); !slices.Equal(got, want) {
+		t.Fatalf("object-pull addresses = %q, want %q", got, want)
+	}
+
+	input.Peers["unknown.catofes."] = observed
+	if got := ResolveGossipObjectPullAddresses(input, "unknown.catofes.", now); len(got) != 0 {
+		t.Fatalf("unverified observed address = %q", got)
 	}
 }
 

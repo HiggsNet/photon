@@ -35,7 +35,7 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 		return nil
 	}
 	common := func() corestate.View {
-		defer d.gossipDriver.LogSlowOperation("routing_state_read", time.Now(), d.gossipDriver.PendingEventCount())
+		defer d.gossipDriver.LogSlowOperation("routing", "routing_state_read", time.Now(), d.gossipDriver.PendingEventCount())
 		return d.State.Common.ReadView()
 	}()
 	if common.State == nil {
@@ -70,7 +70,7 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 	summary := &routingObservation{Instances: birdInstances, LastRunUnix: now.Unix()}
 
 	ars, err := func() (*routing.AuthorizedRouteSet, error) {
-		defer d.gossipDriver.LogSlowOperation("routing_authorized_routes", time.Now(), d.gossipDriver.PendingEventCount())
+		defer d.gossipDriver.LogSlowOperation("routing", "routing_authorized_routes", time.Now(), d.gossipDriver.PendingEventCount())
 		return routing.BuildAuthorizedRouteSet(verified.Network, now)
 	}()
 	if err != nil {
@@ -89,7 +89,7 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 	// transaction. Refresh the common view only in that uncommon case.
 	if autoAnnounceChanged {
 		common = func() corestate.View {
-			defer d.gossipDriver.LogSlowOperation("routing_state_read", time.Now(), d.gossipDriver.PendingEventCount())
+			defer d.gossipDriver.LogSlowOperation("routing", "routing_state_read", time.Now(), d.gossipDriver.PendingEventCount())
 			return d.State.Common.ReadView()
 		}()
 		if common.State == nil {
@@ -98,7 +98,7 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 		rev = uint64(common.Revision)
 		verified = common.State
 		ars, err = func() (*routing.AuthorizedRouteSet, error) {
-			defer d.gossipDriver.LogSlowOperation("routing_authorized_routes", time.Now(), d.gossipDriver.PendingEventCount())
+			defer d.gossipDriver.LogSlowOperation("routing", "routing_authorized_routes", time.Now(), d.gossipDriver.PendingEventCount())
 			return routing.BuildAuthorizedRouteSet(verified.Network, now)
 		}()
 		if err != nil && firstErr == nil {
@@ -173,7 +173,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 		vspec := inst.Upstream.Veth
 		vspec.MeshNetns = netnsName
 		if err := func() error {
-			defer d.gossipDriver.LogSlowOperation("routing_veth", time.Now(), d.gossipDriver.PendingEventCount())
+			defer d.gossipDriver.LogSlowOperation("routing", "routing_veth", time.Now(), d.gossipDriver.PendingEventCount())
 			return d.linuxDriver.EnsureRoutingVeth(ctx, vspec)
 		}(); err != nil {
 			instState.State = birdInstanceStateError
@@ -200,7 +200,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 			MeshIPv6LL:     inst.Upstream.Veth.MeshIPv6LL,
 		}
 		if err := func() error {
-			defer d.gossipDriver.LogSlowOperation("routing_upstream", time.Now(), d.gossipDriver.PendingEventCount())
+			defer d.gossipDriver.LogSlowOperation("routing", "routing_upstream", time.Now(), d.gossipDriver.PendingEventCount())
 			return d.linuxDriver.EnsureUpstreamRoutes(ctx, rspec)
 		}(); err != nil {
 			instState.State = birdInstanceStateError
@@ -236,7 +236,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 	case bird.BirdModeManaged:
 		if configChanged {
 			if err := func() error {
-				defer d.gossipDriver.LogSlowOperation("routing_bird_write", time.Now(), d.gossipDriver.PendingEventCount())
+				defer d.gossipDriver.LogSlowOperation("routing", "routing_bird_write", time.Now(), d.gossipDriver.PendingEventCount())
 				return d.linuxDriver.WriteBirdConfig(spec.ConfigPath, configBytes)
 			}(); err != nil {
 				instState.State = birdInstanceStateError
@@ -261,7 +261,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 		}
 		if !running {
 			if err := func() error {
-				defer d.gossipDriver.LogSlowOperation("routing_bird_start", time.Now(), d.gossipDriver.PendingEventCount())
+				defer d.gossipDriver.LogSlowOperation("routing", "routing_bird_start", time.Now(), d.gossipDriver.PendingEventCount())
 				return d.linuxDriver.StartBird(ctx, spec)
 			}(); err != nil {
 				instState.State = birdInstanceStateError
@@ -277,7 +277,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 			}
 		} else if configChanged {
 			if err := func() error {
-				defer d.gossipDriver.LogSlowOperation("routing_bird_configure", time.Now(), d.gossipDriver.PendingEventCount())
+				defer d.gossipDriver.LogSlowOperation("routing", "routing_bird_configure", time.Now(), d.gossipDriver.PendingEventCount())
 				return d.linuxDriver.ConfigureBird(ctx, spec.ControlSocketPath, spec.ConfigPath)
 			}(); err != nil {
 				instState.State = birdInstanceStateDegraded
@@ -325,7 +325,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 }
 
 func (d *Daemon) observeBirdForHealth(ctx context.Context, instances map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, netnsName string, overlays []string, socketPath string) {
-	defer d.gossipDriver.LogSlowOperation("routing_bird_observe", time.Now(), d.gossipDriver.PendingEventCount())
+	defer d.gossipDriver.LogSlowOperation("routing", "routing_bird_observe", time.Now(), d.gossipDriver.PendingEventCount())
 	if d.health == nil || d.health.Manager == nil || socketPath == "" {
 		return
 	}

@@ -31,7 +31,7 @@ func TestGossipObjectPullWorkersUpdateRuntimeObservability(t *testing.T) {
 	executor := NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{
 		Client: client,
 		Now:    func() time.Time { return now },
-		Discovery: func() GossipDiscoveryInput {
+		Discovery: func(string) GossipDiscoveryInput {
 			return GossipDiscoveryInput{Network: zone.NewNetworkState(), Bootstrap: map[string]*net.UDPAddr{"peer-a": {IP: net.ParseIP("127.0.0.1"), Port: 1}}}
 		},
 	})
@@ -57,7 +57,7 @@ func TestGossipObjectPullWorkersProvideBoundedBackpressureAndStop(t *testing.T) 
 	client := &blockingObjectPullClient{entered: make(chan struct{}, 1)}
 	executor := NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{
 		Client: client,
-		Discovery: func() GossipDiscoveryInput {
+		Discovery: func(string) GossipDiscoveryInput {
 			return GossipDiscoveryInput{
 				Network: zone.NewNetworkState(),
 				Bootstrap: map[string]*net.UDPAddr{
@@ -100,7 +100,7 @@ func TestGossipObjectPullWorkerPreservesReachabilityClassification(t *testing.T)
 			t.Cleanup(driver.Stop)
 			executor := NewGossipObjectPullExecutor(GossipObjectPullExecutorConfig{
 				Client: &memoryObjectPullClient{err: pullErr},
-				Discovery: func() GossipDiscoveryInput {
+				Discovery: func(string) GossipDiscoveryInput {
 					return GossipDiscoveryInput{Network: zone.NewNetworkState(), Bootstrap: map[string]*net.UDPAddr{"peer": {IP: net.ParseIP("127.0.0.1"), Port: 1}}}
 				},
 			})
