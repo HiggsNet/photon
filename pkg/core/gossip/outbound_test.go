@@ -39,7 +39,7 @@ func TestOutboundMessageForAction(t *testing.T) {
 			action:   SendChunkFallbackAction{PeerID: "peer-a", Zone: "node-a.catofes."},
 			wantType: MessageFetchZone,
 			check: func(t *testing.T, message *Message) {
-				if message.FetchZone == nil || message.FetchZone.Zone != "node-a.catofes." || !message.FetchZone.ChunkFallback {
+				if message.FetchZone == nil || message.FetchZone.Zone != "node-a.catofes." {
 					t.Fatalf("fetch zone = %#v, want chunk fallback", message.FetchZone)
 				}
 			},

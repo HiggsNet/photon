@@ -58,16 +58,12 @@ func TestDaemonDiscoveryRefreshesAddressEvenWhenTunnelIsSuspended(t *testing.T) 
 	transport := &gossip.Transport{}
 	setTestGossipTransport(t, service, transport)
 	service.refreshGossipDiscovery()
-	after := service.State.Common.ReadView().Gossip.Peers["node-b.catofes."]
-	if after.DiscoveredEndpoint != "203.0.113.10:33434" {
-		t.Fatalf("tunnel suspension prevented discovery checkpoint update: %+v", after)
-	}
 	if addr := transport.PeerAddr("node-b.catofes."); addr == nil || addr.String() != "203.0.113.10:33434" {
 		t.Fatalf("lifecycle-suppressed peer is not dialable for recovery: %v", addr)
 	}
 }
 
-func TestDaemonUpdateDiscoveredPeersCommitsThenRepairsTransportWithoutNoopRevision(t *testing.T) {
+func TestDaemonDiscoveryRefreshRepairsTransportWithoutAdvancingRevision(t *testing.T) {
 	verified, checkpoint, runtimeState, config := buildTestDaemonOwners(t)
 	now := time.Now().Truncate(time.Second)
 	putVerifiedEndpointRecord(t, verified, "203.0.113.10", 33434, now)
@@ -85,10 +81,7 @@ func TestDaemonUpdateDiscoveredPeersCommitsThenRepairsTransportWithoutNoopRevisi
 	if addr := transport.PeerAddr("node-b.catofes."); addr == nil || addr.String() != "203.0.113.10:33434" {
 		t.Fatalf("transport address = %v", addr)
 	}
-	if got := service.State.Common.ReadView().Gossip.Peers["node-b.catofes."].DiscoveredEndpoint; got != "203.0.113.10:33434" {
-		t.Fatalf("committed DiscoveredEndpoint = %q", got)
-	}
-	transport.RemovePeerAddrs("node-b.catofes.")
+	transport.ReplaceDiscoveryAddrs(nil, nil)
 	service.refreshGossipDiscovery()
 	if got := uint64(service.State.Common.VerifiedRevision()); got != after {
 		t.Fatalf("no-op discovery changed revision: before=%d after=%d", after, got)

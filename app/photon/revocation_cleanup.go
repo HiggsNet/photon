@@ -123,8 +123,7 @@ func isConfiguredBootstrapPeerWithConfig(config *appConfig, peerID string) bool 
 // peerNeedsRevocationCleanup reports whether the typed checkpoint cleanup
 // would change the runtime-owned fields of one peer.
 func peerNeedsRevocationCleanup(peer corestate.PeerCheckpoint) bool {
-	return peer.DiscoveredEndpoint != "" ||
-		peer.LastSuccessfulEndpoint != "" ||
+	return peer.LastSuccessfulEndpoint != "" ||
 		peer.ObservedEndpoint != "" ||
 		peer.ObservedFirstSeenUnix != 0 ||
 		peer.ObservedLastSeenUnix != 0 ||

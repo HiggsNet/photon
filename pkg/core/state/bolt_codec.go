@@ -8,13 +8,10 @@ import (
 	"fmt"
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
-	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	bolt "go.etcd.io/bbolt"
 )
 
 const BoltSchemaVersion uint64 = 2
-
-const legacyBoltSchemaVersion uint64 = 1
 
 var (
 	ErrBoltStateCorrupt      = errors.New("common bbolt state is corrupt")
@@ -40,13 +37,11 @@ var (
 // discarded without weakening trust or eventual convergence.
 type BoltLoadReport struct {
 	GossipCheckpointDiscarded bool
-	RootAuthorityRepaired     bool
-	LegacyVerifiedLayout      bool
 }
 
 type persistedVerifiedState struct {
 	ManagedZone          zone.ZonePath      `json:"managed_zone"`
-	Network              *zone.NetworkState `json:"network,omitempty"` // schema 1 only
+	Network              *zone.NetworkState `json:"network,omitempty"` // reconstructed from zones
 	ZonePaths            []zone.ZonePath    `json:"zone_paths,omitempty"`
 	GlobalRoot           []byte             `json:"global_root"`
 	TrustedRootPublicKey []byte             `json:"trusted_root_public_key,omitempty"`
@@ -55,15 +50,17 @@ type persistedVerifiedState struct {
 }
 
 // LoadBoltState decodes the common state buckets from an existing platform-owned
-// read transaction. found is false only when the common root does not exist;
-// callers may then run their legacy migration in the same platform transaction.
+// read transaction. found is false for an empty database.
 func LoadBoltState(tx *bolt.Tx) (candidate *CommitCandidate, revision VerifiedRevision, report BoltLoadReport, found bool, err error) {
 	if tx == nil {
 		return nil, 0, report, false, fmt.Errorf("%w: transaction is nil", ErrBoltStateCorrupt)
 	}
 	common := tx.Bucket(bucketCommonState)
 	if common == nil {
-		return nil, 0, report, false, nil
+		return nil, 0, report, false, requireEmptyBoltState(tx)
+	}
+	if meta := tx.Bucket([]byte("_meta")); (meta != nil && meta.Get([]byte("cli_state")) != nil) || tx.Bucket([]byte("zone:.")) != nil {
+		return nil, 0, report, true, unsupportedBoltState("legacy and current state coexist")
 	}
 	meta := common.Bucket(bucketCommonMeta)
 	verifiedBucket := common.Bucket(bucketVerified)
@@ -75,15 +72,10 @@ func LoadBoltState(tx *bolt.Tx) (candidate *CommitCandidate, revision VerifiedRe
 		return nil, 0, report, true, err
 	}
 
-	version, err := decodeRequiredUint64(meta, keySchemaVersion)
+	persisted, err := loadBoltVerified(verifiedBucket)
 	if err != nil {
 		return nil, 0, report, true, err
 	}
-	persisted, err := loadBoltVerified(verifiedBucket, version)
-	if err != nil {
-		return nil, 0, report, true, err
-	}
-	report.LegacyVerifiedLayout = version == legacyBoltSchemaVersion
 	verified := &VerifiedState{
 		ManagedZone:          persisted.ManagedZone,
 		Network:              persisted.Network,
@@ -91,7 +83,6 @@ func LoadBoltState(tx *bolt.Tx) (candidate *CommitCandidate, revision VerifiedRe
 		RootPrivateKey:       append([]byte(nil), persisted.RootPrivateKey...),
 		IdentityPrivateKey:   append([]byte(nil), persisted.IdentityPrivateKey...),
 	}
-	report.RootAuthorityRepaired = photoncrypto.RepairLegacyRootAuthority(verified.Network, verified.TrustedRootPublicKey)
 	if err := ValidateStateRoot(verified); err != nil {
 		return nil, 0, report, true, fmt.Errorf("%w: verified payload: %v", ErrBoltStateCorrupt, err)
 	}
@@ -132,10 +123,6 @@ func CommitBoltState(tx *bolt.Tx, candidate *CommitCandidate, changes ChangeSet)
 		if err != nil {
 			return false, err
 		}
-		version, err := decodeRequiredUint64(common.Bucket(bucketCommonMeta), keySchemaVersion)
-		if err != nil {
-			return false, err
-		}
 		var currentPersisted persistedVerifiedState
 		if err := decodeRequiredJSON(verifiedBucket, keyPayload, &currentPersisted); err != nil {
 			return false, err
@@ -143,37 +130,12 @@ func CommitBoltState(tx *bolt.Tx, candidate *CommitCandidate, changes ChangeSet)
 		if !bytes.Equal(currentPersisted.TrustedRootPublicKey, candidate.Verified.TrustedRootPublicKey) {
 			return false, ErrTrustedRootPinChange
 		}
-		var verifiedChanged bool
-		if version == legacyBoltSchemaVersion {
-			// A layout migration alone must not advance VerifiedRevision. Compare
-			// normalized legacy values, not their original JSON whitespace/order.
-			previous, err := loadBoltVerified(verifiedBucket, version)
-			if err != nil {
-				return false, err
-			}
-			previous.Network = zone.CloneNetworkState(previous.Network)
-			before, err := json.Marshal(previous)
-			if err != nil {
-				return false, err
-			}
-			next := persistedVerifiedState{
-				ManagedZone: candidate.Verified.ManagedZone, Network: zone.CloneNetworkState(candidate.Verified.Network),
-				TrustedRootPublicKey: candidate.Verified.TrustedRootPublicKey,
-				RootPrivateKey:       candidate.Verified.RootPrivateKey, IdentityPrivateKey: candidate.Verified.IdentityPrivateKey,
-			}
-			after, err := json.Marshal(next)
-			if err != nil {
-				return false, err
-			}
-			verifiedChanged = !bytes.Equal(before, after)
-		} else {
-			if currentPersisted.Network != nil {
-				return false, fmt.Errorf("%w: unexpected aggregate verified payload", ErrBoltStateCorrupt)
-			}
-			verifiedChanged, err = encoded.differsFrom(verifiedBucket)
-			if err != nil {
-				return false, err
-			}
+		if currentPersisted.Network != nil {
+			return false, fmt.Errorf("%w: unexpected aggregate verified payload", ErrBoltStateCorrupt)
+		}
+		verifiedChanged, err := encoded.differsFrom(verifiedBucket)
+		if err != nil {
+			return false, err
 		}
 		wantRevision := current
 		if verifiedChanged {
@@ -182,6 +144,8 @@ func CommitBoltState(tx *bolt.Tx, candidate *CommitCandidate, changes ChangeSet)
 		if changes.VerifiedRevision != wantRevision {
 			return false, fmt.Errorf("%w: payload change=%v requires %d, got %d", ErrBoltRevisionInvalid, verifiedChanged, wantRevision, changes.VerifiedRevision)
 		}
+	} else if err := requireEmptyBoltState(tx); err != nil {
+		return false, err
 	}
 
 	common, created, err := createBucketIfMissing(tx, bucketCommonState)
@@ -240,14 +204,28 @@ func loadBoltRevision(common *bolt.Bucket) (VerifiedRevision, error) {
 	if err != nil {
 		return 0, err
 	}
-	if version != BoltSchemaVersion && version != legacyBoltSchemaVersion {
-		return 0, fmt.Errorf("%w: got %d, want %d", ErrBoltSchemaUnsupported, version, BoltSchemaVersion)
+	if version < BoltSchemaVersion {
+		return 0, unsupportedBoltState(fmt.Sprintf("schema %d, want %d", version, BoltSchemaVersion))
+	}
+	if version > BoltSchemaVersion {
+		return 0, fmt.Errorf("%w: schema %d, want %d", ErrBoltSchemaUnsupported, version, BoltSchemaVersion)
 	}
 	verified, err := decodeRequiredUint64(meta, keyVerifiedRevision)
 	if err != nil {
 		return 0, err
 	}
 	return VerifiedRevision(verified), nil
+}
+
+func requireEmptyBoltState(tx *bolt.Tx) error {
+	if key, _ := tx.Cursor().First(); key != nil {
+		return unsupportedBoltState("common schema is absent")
+	}
+	return nil
+}
+
+func unsupportedBoltState(detail string) error {
+	return fmt.Errorf("%w: %s; open the database with Photon v0.6.6 to upgrade it first", ErrBoltSchemaUnsupported, detail)
 }
 
 func createBucketIfMissing(tx *bolt.Tx, name []byte) (*bolt.Bucket, bool, error) {

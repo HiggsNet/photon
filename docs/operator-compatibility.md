@@ -7,20 +7,15 @@
 - 离线 admission 和 sync 数据来自 checkpoint / last-known，只表示上次已知状态，不能作为实时在线结果。
 - `photon gossip peer` 默认隐藏超过 `peer_lifecycle.cleanup_after` 且没有有效 Gossip endpoint 的历史节点；配置的 bootstrap 始终保留。按名称或 `--filter` 查询、`--verbose`、`photon debug peer <peer>` 和 `photon debug peers` 仍可诊断历史节点。筛选在线和离线查询均生效，只改变列表展示，不删除 checkpoint、签名 zone 或授权；checkpoint 继续用于防止陈旧记录重建离线链路。有效端点或最近活动恢复后，节点重新进入默认列表。
 - 禁用路由会停止新的 reconcile，不自动拆除之前创建的资源。需要拆除时须显式执行相应运维操作，不能把 disabled 当作资源清理。
-- `debug db dump` 使用通用递归原始 bucket 展示，已删除 `_meta` / `zone:*` 旧布局专用解码；指定 zone 时解码当前 VerifiedState 并只输出该 zone；旧布局不再支持 zone 筛选，启动升级迁移仍保留。`stats` 递归统计叶子键及键值逻辑字节数（不是磁盘分配量）。读取锁等待约一秒后报错；daemon 持有数据库时应停止 daemon 或使用一致的数据库副本。
+- `debug db dump` 使用通用递归原始 bucket 展示，已删除 `_meta` / `zone:*` 旧布局专用解码；指定 zone 时解码当前 VerifiedState 并只输出该 zone；旧布局可查看原始 bucket。`stats` 递归统计叶子键及键值逻辑字节数（不是磁盘分配量）。读取锁等待约一秒后报错；daemon 持有数据库时应停止 daemon 或使用一致的数据库副本。
 - Links/rotate 内部诊断字段 `StoredSAs` 改为 `ReconcileSAs`、`ReplannedDesired` 改为 `LastDesiredCount`：它们来自最近一次 reconcile 的内存观察，不是 DB 持久值或当前重新规划的结果。控制接口直接消费这些诊断字段的客户端也须更新。
 - `debug links` 的链路详情、action/skip，`debug rotate` 的 current/staged 与 SA 对照，以及 `debug peers` 的生命周期与时间信息使用分组表格。原先解析缩进键值文本的脚本需要调整。普通 links 查询只读取 daemon 最近一次观察；`debug rotate` 通过 `links_view` 的 `live_sas: true` 显式补充实时 SA，实时查询失败仍展示缓存及错误。
 - Link routing DTO 和 Observer 已删除始终为占位值的 `bird_neighbors`、`bird_best_routes`，保留 `bird_state`；实际 BIRD 邻居和路由请使用 `debug routing bird` 子命令。诊断不再接受未使用的 planned spec 输入，不根据缺失的计划数据重建 StrongSwan 配置。
 
-## 数据库单向迁移范围
+## 数据库版本边界
 
-启动 daemon 和离线 owner 读取均经 `openState -> restoreState`，在同一个 bbolt 写事务中迁移并加载；离线读取旧库也可能完成升级，并非字节级只读。直接查看原始 DB 使用 debug dump 路径。
+当前版本只接受 Common schema 2，Linux 另读取自己的 schema 1 分区。daemon 启动和离线状态查询都用只读事务打开，遇到旧的整库布局或 Common schema 1 会拒绝加载。若还持有旧库，先备份配置、身份和一致的数据库副本，再用上一版 Photon v0.6.6 打开，确认完成迁移后才切到当前版本。
 
-- `_meta/cli_state` 加 `zone:*` 是旧 aggregate 布局；迁入 `photon:common-state` 与 `photon:linux-runtime` 后删除旧记录，失败时整个事务回滚。新旧表示共存或旧数据不完整时拒绝加载。
-- 已分区 Linux payload 的旧 `peer_cleanups` 标记迁入 GossipCheckpoint，不属于 aggregate 格式升级。
-- 已分区 common state 的 root authority 修复也走这一启动事务，修复发生时更新 verified revision；不能随 aggregate decoder 一起删除。
-- 旧 `identity_key_path` 不是现行身份来源，迁移时忽略；身份私钥、transport key 和 Endpoint ACL 仍按各自 owner 恢复。
+旧的整块 Gossip checkpoint 和 Linux 清理提示不参与恢复。当前按 peer 存储的 checkpoint、已验证的 Zone、身份和平台配置按各自分区读取。
 
-v0.6.0 继续保留旧 aggregate 的事务迁移，Common 存储使用 RC.7 引入的 schema 2，未声明旧 aggregate 直接升级的截止版本。版本号本身不能证明旧库已完成迁移；升级前须保留一致的数据库备份，回退旧版使用升级前数据库。
-
-迁移实现仅在 app 私有 decoder 中保留 legacyPeerState；旧 aggregate 的 stateFile 中转模型已删除。当前在线 inspect 仍使用地址宽限期与拒绝记录 DTO，这些响应字段不随旧库迁移退场。
+混跑新旧版本时，旧节点收到新节点发出的 UDP `FETCH_ZONE` 只会返回摘要。如果节点之间依赖 UDP 分块传输 Zone，需把两端升级到当前协议版本。

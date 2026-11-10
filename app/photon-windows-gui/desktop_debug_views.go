@@ -302,8 +302,7 @@ func desktopPeerRow(peer photonwindows.PeerObservation) string {
 		state = "已同步"
 	case gossip.SyncSessionFailed:
 		state = "失败"
-	case gossip.SyncSessionPingSent:
-		state = "探测中"
+
 	case gossip.SyncSessionSummarySent:
 		state = "摘要交换"
 	case gossip.SyncSessionCatalogDiffing:
@@ -359,8 +358,7 @@ func desktopDebugPeerState(state string) string {
 		return "本次同步已完成"
 	case gossip.SyncSessionFailed:
 		return "同步失败"
-	case gossip.SyncSessionPingSent:
-		return "等待探测响应"
+
 	case gossip.SyncSessionSummarySent:
 		return "交换目录摘要"
 	case gossip.SyncSessionCatalogDiffing:

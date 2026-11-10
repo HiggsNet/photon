@@ -8,83 +8,32 @@ import (
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
-	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 var ErrGossipChunkSendCacheFull = gossip.ErrChunkSendCacheFull
 
-// gossipFetchZoneResponse is detached responder input derived from one
-// committed Store read and consumed inside GossipDriver.
-type gossipFetchZoneResponse struct {
-	Found    bool
-	Plan     gossip.DatagramPlan
-	Snapshot *corestate.ZoneSnapshot
-}
-
-func (driver *GossipDriver) gossipFetchZoneResponse(path zone.ZonePath, budget int, now time.Time) gossipFetchZoneResponse {
-	if driver == nil || driver.gossipState == nil {
-		return gossipFetchZoneResponse{}
-	}
-	snapshot, revoked, err := driver.gossipState.ReadZoneSnapshot(path, now)
-	if err != nil {
-		return gossipFetchZoneResponse{}
-	}
-	if revoked {
-		return gossipFetchZoneResponse{Found: true}
-	}
-	network := &zone.NetworkState{Zones: map[zone.ZonePath]*zone.ZoneState{path: corestate.ZoneStateFromSnapshot(snapshot)}}
-	return gossipFetchZoneResponse{Found: true, Snapshot: snapshot, Plan: gossip.PlanSnapshotDatagrams(network, []zone.ZonePath{path}, budget, now)}
-}
-
 func (driver *GossipDriver) respondGossipFetchZone(ctx context.Context, peerID string, request *gossip.FetchZone, sender GossipSender, budget int) error {
-	if request == nil {
+	if request == nil || driver.gossipState == nil {
 		return nil
 	}
 	now := driver.schedulerForRead().clock.Now()
-	response := driver.gossipFetchZoneResponse(request.Zone, budget, now)
-	kind := "fetch_zone"
-	if request.ChunkFallback {
-		kind = "chunk_fallback"
-	}
-	driver.observeReadOnlyResponder(peerID, kind, request.Zone, now)
-	if !response.Found {
-		driver.logGossip("debug", "fetch_zone_snapshot_missing", peerID, "responder", zone.ErrZoneNotFound, map[string]any{"zone": request.Zone})
+	driver.observeReadOnlyResponder(peerID, "chunk_fallback", request.Zone, now)
+	snapshot, revoked, err := driver.gossipState.ReadZoneSnapshot(request.Zone, now)
+	if err != nil {
+		driver.logGossip("debug", "fetch_zone_snapshot_missing", peerID, "responder", err, map[string]any{"zone": request.Zone})
 		return nil
 	}
-	for _, oversized := range response.Plan.Oversized {
-		driver.observeDatagramTooLarge(peerID, oversized.Object, oversized.Zone, oversized.Key, oversized.Size, budget, now)
-		driver.logGossip("debug", "datagram_too_large", peerID, "responder", nil, map[string]any{
-			"object": oversized.Object, "zone": oversized.Zone, "key": oversized.Key,
-			"bytes": oversized.Size, "limit": budget,
-		})
+	if revoked || snapshot == nil {
+		return nil
 	}
-	var chunks []*gossip.ObjectChunk
-	if request.ChunkFallback && response.Snapshot != nil {
-		var err error
-		chunks, err = driver.buildGossipSnapshotChunks(peerID, response.Snapshot, budget, now)
-		if err != nil {
-			return err
-		}
-		driver.mu.RLock()
-		active := driver.gossipChunkSends[gossipChunkSendTimerID(peerID, chunks[0].TransferID)] != nil
-		driver.mu.RUnlock()
-		if active {
-			return nil
-		}
+	chunks, err := driver.buildGossipSnapshotChunks(peerID, snapshot, budget, now)
+	if err != nil {
+		return err
 	}
-	for _, announce := range response.Plan.Announces {
-		if announce == nil {
-			continue
-		}
-		if err := sender.SendGossip(ctx, gossip.OutboundMessage{PeerID: peerID, Message: &gossip.Message{Type: gossip.MessageAnnounce, Announce: announce}}); err != nil {
-			if len(chunks) > 0 {
-				driver.gossipSentChunks.Drop(peerID, chunks[0].TransferID)
-			}
-			return err
-		}
-		driver.logGossip("info", "sending_announce", peerID, "responder", nil, map[string]any{"digests": len(announce.Zones)})
-	}
-	if len(chunks) == 0 {
+	driver.mu.RLock()
+	active := driver.gossipChunkSends[gossipChunkSendTimerID(peerID, chunks[0].TransferID)] != nil
+	driver.mu.RUnlock()
+	if active {
 		return nil
 	}
 	driver.observeChunkFallback(peerID, len(chunks), now)

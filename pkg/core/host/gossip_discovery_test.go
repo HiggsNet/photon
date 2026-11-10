@@ -87,7 +87,7 @@ func TestPlanGossipDiscoveryIncludesVerifiedZoneAndDelegatedChild(t *testing.T) 
 	}
 }
 
-func TestPlanGossipDiscoveryRanksEndpointAndPublishesCheckpoint(t *testing.T) {
+func TestPlanGossipDiscoveryRanksEndpointWithoutCheckpoint(t *testing.T) {
 	now := time.Unix(1000, 0)
 	entries := []gossip.EndpointEntry{
 		{Address: "10.16.255.8", Port: 33435, Source: "interface", Priority: 200, LastObserved: now.Unix()},
@@ -97,13 +97,11 @@ func TestPlanGossipDiscoveryRanksEndpointAndPublishesCheckpoint(t *testing.T) {
 	plan := PlanGossipDiscovery(GossipDiscoveryInput{
 		LocalPeerID: "local.catofes.", ManagedZone: "local.catofes.", Network: network,
 	}, now)
-	update := plan.Peers["peer.catofes."]
-	if len(update.SetAddresses) != 2 || update.SetAddresses[0].String() != "203.0.113.10:33434" {
-		t.Fatalf("addresses = %v, want public reflector first", update.SetAddresses)
+	if addrs := plan.Addresses["peer.catofes."]; len(addrs) != 2 || addrs[0].String() != "203.0.113.10:33434" {
+		t.Fatalf("addresses = %v, want public reflector first", addrs)
 	}
-	patch := plan.Patches["peer.catofes."]
-	if !patch.DiscoveredEndpoint.Set || patch.DiscoveredEndpoint.Value != "203.0.113.10:33434" {
-		t.Fatalf("checkpoint patch = %#v", patch)
+	if len(plan.Patches) != 0 {
+		t.Fatalf("address selection updated checkpoint: %v", plan.Patches)
 	}
 
 	transport := &gossip.Transport{}
@@ -115,30 +113,20 @@ func TestPlanGossipDiscoveryRanksEndpointAndPublishesCheckpoint(t *testing.T) {
 
 func TestPlanGossipDiscoveryReplacesAndExpiresEndpoint(t *testing.T) {
 	now := time.Unix(1000, 0)
-	network, _ := signedDiscoveryNetwork(t, "peer.catofes.", true, []gossip.EndpointEntry{{
+	const peerID = "peer.catofes."
+	network, _ := signedDiscoveryNetwork(t, peerID, true, []gossip.EndpointEntry{{
 		Address: "127.0.0.1", Port: 10000, Source: "advertise", LastObserved: now.Unix(),
 	}}, now)
-	plan := PlanGossipDiscovery(GossipDiscoveryInput{
-		LocalPeerID: "local.catofes.", ManagedZone: "local.catofes.", Network: network,
-		Peers: map[string]corestate.PeerCheckpoint{"peer.catofes.": {
-			DiscoveredEndpoint: "127.0.0.1:9999",
-		}},
-	}, now)
-	if got := plan.Patches["peer.catofes."].DiscoveredEndpoint; !got.Set || got.Value != "127.0.0.1:10000" {
-		t.Fatalf("replacement patch = %#v", got)
+	transport := &gossip.Transport{}
+	transport.AddPeer(peerID, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9999})
+	ApplyGossipDiscoveryPlan(transport, PlanGossipDiscovery(GossipDiscoveryInput{Network: network}, now))
+	if got := transport.PeerAddr(peerID); got == nil || got.String() != "127.0.0.1:10000" {
+		t.Fatalf("replacement address = %v", got)
 	}
-
-	emptyNetwork, _ := signedDiscoveryNetwork(t, "peer.catofes.", true, nil, now)
-	plan = PlanGossipDiscovery(GossipDiscoveryInput{
-		LocalPeerID: "local.catofes.", ManagedZone: "local.catofes.", Network: emptyNetwork,
-		Peers: map[string]corestate.PeerCheckpoint{"peer.catofes.": {
-			DiscoveredEndpoint: "127.0.0.1:10000", LastSyncUnix: now.Add(-time.Hour).Unix(),
-		}},
-	}, now)
-	update := plan.Peers["peer.catofes."]
-	patch := plan.Patches["peer.catofes."]
-	if !update.RemoveAddresses || !patch.DiscoveredEndpoint.Set || patch.DiscoveredEndpoint.Value != "" {
-		t.Fatalf("expired update/patch = %#v/%#v", update, patch)
+	emptyNetwork, _ := signedDiscoveryNetwork(t, peerID, true, nil, now)
+	ApplyGossipDiscoveryPlan(transport, PlanGossipDiscovery(GossipDiscoveryInput{Network: emptyNetwork}, now))
+	if got := transport.PeerAddr(peerID); got != nil {
+		t.Fatalf("expired address remained installed: %v", got)
 	}
 }
 
@@ -203,9 +191,10 @@ func TestPlanGossipDiscoveryObservedPathPreference(t *testing.T) {
 	input := GossipDiscoveryInput{
 		LocalPeerID: "local.catofes.", ManagedZone: "local.catofes.", Network: network,
 		Peers: map[string]corestate.PeerCheckpoint{"peer.catofes.": {
-			DiscoveredEndpoint: "127.0.0.1:9999", ObservedEndpoint: "127.0.0.1:2000", ObservedUntilUnix: now.Add(time.Minute).Unix(),
+			ObservedEndpoint: "127.0.0.1:2000", ObservedUntilUnix: now.Add(time.Minute).Unix(),
 		}},
 	}
+	input.Bootstrap = map[string]*net.UDPAddr{"peer.catofes.": {IP: net.ParseIP("203.0.113.10"), Port: 9999}}
 	if PlanGossipDiscovery(input, now).Peers["peer.catofes."].PreferObserved {
 		t.Fatal("observed path preferred before direct endpoint failure")
 	}
@@ -216,7 +205,7 @@ func TestPlanGossipDiscoveryObservedPathPreference(t *testing.T) {
 		t.Fatal("observed path not preferred after direct endpoint failure")
 	}
 	peer.LastFailure = nil
-	peer.DiscoveredEndpoint = "10.16.255.8:33435"
+	input.Bootstrap["peer.catofes."] = &net.UDPAddr{IP: net.ParseIP("10.16.255.8"), Port: 33435}
 	input.Peers["peer.catofes."] = peer
 	if !PlanGossipDiscovery(input, now).Peers["peer.catofes."].PreferObserved {
 		t.Fatal("observed path not preferred over private discovered endpoint")
@@ -257,8 +246,7 @@ func TestApplyGossipDiscoveryPlanRepairsTransportWithoutCheckpointPatch(t *testi
 	input := GossipDiscoveryInput{
 		LocalPeerID: "local.catofes.", ManagedZone: "local.catofes.", Network: network,
 		Peers: map[string]corestate.PeerCheckpoint{peerID.String(): {
-			DiscoveredEndpoint: "203.0.113.10:33434",
-			ObservedEndpoint:   "198.51.100.20:33434", ObservedUntilUnix: now.Add(time.Minute).Unix(),
+			ObservedEndpoint: "198.51.100.20:33434", ObservedUntilUnix: now.Add(time.Minute).Unix(),
 			ObservedGraceEndpoints: []corestate.ObservedGraceEndpoint{
 				{Endpoint: "expired:33434", UntilUnix: now.Add(-time.Minute).Unix()},
 				{Endpoint: "198.51.100.21:33434", UntilUnix: now.Add(time.Minute).Unix()},
@@ -363,7 +351,7 @@ func TestDiscoveryAddressOrder(t *testing.T) {
 		{Address: "203.0.113.10", Port: 33434, Source: "reflector"},
 		{Address: "198.51.100.2", Port: 33434, Source: "advertise"},
 	}
-	addrs := buildDiscoveryAddresses(entries, bootstrap, []string{"bootstrap", "advertise", "reflector"})
+	addrs := GossipDiscoveryAddresses(entries, bootstrap, []string{"bootstrap", "advertise", "reflector"})
 	want := []string{"127.0.0.1:33434", "198.51.100.2:33434", "203.0.113.10:33434"}
 	if len(addrs) != len(want) {
 		t.Fatalf("addresses = %v", addrs)

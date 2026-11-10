@@ -27,8 +27,7 @@ type State struct {
 }
 
 // OpenState opens an existing common-state database and restores its exact
-// persisted VerifiedRevision. Linux legacy migration deliberately does not
-// live here; a Windows database must already use the common schema.
+// persisted VerifiedRevision from the current common schema.
 func OpenState(path string, managed zone.ZonePath, trustedRoot ed25519.PublicKey, lockTimeout time.Duration) (*State, error) {
 	if !managed.Valid() || managed.IsRoot() {
 		return nil, errors.New("managed zone must be a valid non-root Photon zone")

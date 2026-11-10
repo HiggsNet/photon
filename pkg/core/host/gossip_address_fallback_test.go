@@ -168,7 +168,7 @@ func TestGossipDiscoveryRetainsGraceAndUnknownSources(t *testing.T) {
 	}, now)
 	input.Network = network
 	plan := PlanGossipDiscovery(input, now)
-	if got := plan.Peers["peer.catofes."].SetAddresses; len(got) != 3 {
+	if got := plan.Addresses["peer.catofes."]; len(got) != 3 {
 		t.Fatalf("UDP candidates = %v, want all valid sources", got)
 	}
 	input.Bootstrap = map[string]*net.UDPAddr{"peer.catofes.": {IP: net.ParseIP("192.0.2.1"), Port: 33434}}

@@ -269,37 +269,6 @@ func LoadNetworkTx(tx *bolt.Tx) (*NetworkState, error) {
 	return ns, nil
 }
 
-// DeleteNetworkTx removes the legacy zone buckets and global-root metadata
-// after an atomic migration has written the replacement representation.
-func DeleteNetworkTx(tx *bolt.Tx) (bool, error) {
-	if tx == nil || !tx.Writable() {
-		return false, errors.New("network delete requires a writable bbolt transaction")
-	}
-	var names [][]byte
-	if err := tx.ForEach(func(name []byte, _ *bolt.Bucket) error {
-		if _, ok := parseZoneBucket(name); ok {
-			names = append(names, append([]byte(nil), name...))
-		}
-		return nil
-	}); err != nil {
-		return false, err
-	}
-	changed := false
-	for _, name := range names {
-		if err := tx.DeleteBucket(name); err != nil {
-			return false, err
-		}
-		changed = true
-	}
-	if meta := tx.Bucket(bucketMeta); meta != nil && meta.Get(metaGlobalRoot) != nil {
-		if err := meta.Delete(metaGlobalRoot); err != nil {
-			return false, err
-		}
-		changed = true
-	}
-	return changed, nil
-}
-
 func zoneBucket(path ZonePath) []byte {
 	return []byte("zone:" + path.String())
 }

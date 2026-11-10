@@ -20,7 +20,6 @@ type SyncSessionState string
 
 const (
 	SyncSessionIdle           SyncSessionState = "idle"
-	SyncSessionPingSent       SyncSessionState = "ping_sent"
 	SyncSessionSummarySent    SyncSessionState = "summary_sent"
 	SyncSessionCatalogDiffing SyncSessionState = "catalog_diffing"
 	SyncSessionObjectPulling  SyncSessionState = "object_pulling"
@@ -60,9 +59,8 @@ type SyncTimerEvent struct {
 func (*SyncTimerEvent) SyncEventMarker() {}
 
 type PongReceivedEvent struct {
-	PeerID       string
-	Pong         *Pong
-	MissingZones []zone.ZonePath // populated by the event loop before OnEvent
+	PeerID string
+	Pong   *Pong
 }
 
 func (*PongReceivedEvent) SyncEventMarker() {}
@@ -313,27 +311,13 @@ func (s *SyncSession) onSyncTimer(e *SyncTimerEvent, now time.Time) ([]SyncActio
 }
 
 func (s *SyncSession) onPongReceived(e *PongReceivedEvent, now time.Time) ([]SyncAction, error) {
-	if s.State != SyncSessionPingSent && s.State != SyncSessionSummarySent {
+	if s.State != SyncSessionSummarySent || e.Pong == nil || e.Pong.Summary == nil || len(e.Pong.Summary.CatalogRoot) == 0 {
 		return nil, nil
 	}
 	if !s.pingSentAt.IsZero() && now.After(s.pingSentAt) {
 		s.updateRTT(now.Sub(s.pingSentAt))
 	}
-	if e.Pong != nil && e.Pong.Summary != nil {
-		return s.handleCatalogSummary(e.PeerID, e.Pong.Summary, now)
-	}
-
-	// We need zones from peer.
-	if len(e.MissingZones) > 0 {
-		s.State = SyncSessionObjectPulling
-		for _, z := range e.MissingZones {
-			s.pendingZones[z] = true
-		}
-		return s.startPendingPulls(e.PeerID), nil
-	}
-
-	s.State = SyncSessionCompleted
-	return nil, nil
+	return s.handleCatalogSummary(e.PeerID, e.Pong.Summary, now)
 }
 
 func (s *SyncSession) onCatalogSummaryReceived(e *CatalogSummaryReceivedEvent, now time.Time) ([]SyncAction, error) {

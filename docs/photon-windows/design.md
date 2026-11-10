@@ -292,14 +292,10 @@ root-key rotation，因此在线 Store/codec 拒绝修改 pin，远端 root snap
 它只能在 authority 完全相同时更新由该 authority 验证的 root Zone 内容。未来若增加 root rotation，必须
 先定义由旧 trust anchor 授权的新 pin 迁移协议，不能复用普通 snapshot apply。
 
-Linux 旧 `_meta/cli_state` 与 `zone:*` 迁移也只接收唯一 `state.BoltStore` 提供的事务：同一事务写完公共
-state bucket 和 `photon:linux-runtime` bucket 后删除旧表示，失败整体回滚，新旧表示同时存在则拒绝启动。
-迁移已接入 Linux 启动和离线打开数据库的入口，是单向旧数据库升级，不提供新 bucket 到旧 aggregate
-的反向 view、双写或字段别名。Windows 不接受 Linux 旧布局，也不复制 Linux 迁移入口。
+Linux 和 Windows 都以只读事务加载 Common schema 2。旧 aggregate 和 Common schema 1 须用 v0.6.6 升级后再打开。
 
 公共 `state.BoltStore` 是唯一持久化 owner，统一持有 bbolt handle、事务顺序和关闭生命周期。Linux 只提供
-自己的 bucket codec 与事务组合函数，不再定义平台专属的持久化 Store。首次加载在同一事务内
-迁移并读取完整 aggregate，公共状态与 Linux runtime 写入均复用该 handle。字节完全相同的提交回滚为空操作；
+自己的 bucket codec 与事务组合函数，不再定义平台专属的持久化 Store。首次加载在同一只读事务内读取当前分区，公共状态与 Linux runtime 写入均复用该 handle。字节完全相同的提交回滚为空操作；
 公共状态校验或提交失败会连同同事务的平台 payload 一起
 回滚。第二个进程/handle 必须在有界超时后因文件锁冲突失败，Close 错误必须返回给生命周期 owner。Linux loader/writer 已完成切换，不保留第二套在线写入路径。
 

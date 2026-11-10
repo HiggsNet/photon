@@ -14,7 +14,7 @@ func TestBuildSyncStatusDoesNotInventEphemeralDiagnostics(t *testing.T) {
 		State: &corestate.VerifiedState{Network: &zone.NetworkState{Zones: map[zone.ZonePath]*zone.ZoneState{}}},
 		Gossip: &corestate.GossipCheckpoint{Peers: map[string]corestate.PeerCheckpoint{
 			"node-b.catofes.": {
-				LastSyncUnix: now.Unix(), DiscoveredEndpoint: "127.0.0.1:2000",
+				LastSyncUnix:          now.Unix(),
 				ObservedEndpoint:      "127.0.0.1:3000",
 				ObservedFirstSeenUnix: now.Unix(), ObservedLastSeenUnix: now.Unix(),
 				ObservedUntilUnix: now.Add(time.Hour).Unix(),

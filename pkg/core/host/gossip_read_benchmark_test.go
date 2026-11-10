@@ -61,9 +61,6 @@ func BenchmarkGossipReadPaths(b *testing.B) {
 		{"discovery", func() { gossipReadBenchmarkResult = driver.GossipDiscoveryInput(nil) }},
 		{"inbound_path", func() { driver.acceptGossipInboundPath(b.Context(), packet, now, nil, transport) }},
 		{"tcp_zone", func() { gossipReadBenchmarkResult = driver.GossipObjectPullResponse(zoneRequest, now) }},
-		{"udp_zone", func() {
-			gossipReadBenchmarkResult = driver.gossipFetchZoneResponse(path, gossip.DefaultDatagramBudget, now)
-		}},
 	}
 	for _, c := range cases {
 		b.Run(c.name, func(b *testing.B) {
@@ -81,10 +78,6 @@ func BenchmarkGossipReadPaths(b *testing.B) {
 			case "tcp_zone":
 				if response := gossipReadBenchmarkResult.(*gossip.ObjectPullResponse); !response.OK {
 					b.Fatalf("object benchmark failed: %s", response.Error)
-				}
-			case "udp_zone":
-				if response := gossipReadBenchmarkResult.(gossipFetchZoneResponse); !response.Found || response.Snapshot == nil || len(response.Plan.Announces) == 0 {
-					b.Fatal("UDP benchmark did not build the requested object")
 				}
 			}
 			b.ReportAllocs()

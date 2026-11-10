@@ -51,7 +51,6 @@ type PeerCheckpoint struct {
 	FailureCount            int                              `json:"failure_count,omitempty"`
 	LastRelayUnix           int64                            `json:"-"`
 	LastRelayCatalogRootHex string                           `json:"-"`
-	DiscoveredEndpoint      string                           `json:"-"`
 	LastSuccessfulEndpoint  string                           `json:"last_successful_endpoint,omitempty"`
 	ObservedEndpoint        string                           `json:"-"`
 	ObservedFirstSeenUnix   int64                            `json:"-"`

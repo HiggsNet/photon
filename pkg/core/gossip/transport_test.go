@@ -147,11 +147,11 @@ func TestSendToUsesExplicitReplyAddressOverConfiguredOutbound(t *testing.T) {
 	}
 }
 
-func TestRemovePeerAddrsKeepsKnownPeerID(t *testing.T) {
+func TestReplaceDiscoveryAddrsKeepsKnownPeerID(t *testing.T) {
 	transport := &Transport{}
 	transport.SetPeerAddrs("peer-a", []*net.UDPAddr{{IP: net.ParseIP("127.0.0.1"), Port: 1234}})
 
-	transport.RemovePeerAddrs("peer-a")
+	transport.ReplaceDiscoveryAddrs(nil, nil)
 
 	if addr := transport.PeerAddr("peer-a"); addr != nil {
 		t.Fatalf("PeerAddr(peer-a) = %v, want nil", addr)

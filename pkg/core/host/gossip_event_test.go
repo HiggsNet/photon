@@ -133,7 +133,7 @@ func TestGossipDriverDrainsQueuedRepliesAfterSessionCompletes(t *testing.T) {
 	// completes it, leaving the second reply queued for a removed session.
 	for i := 0; i < 2; i++ {
 		packet := GossipPacketReceived{Packet: &gossip.Packet{Message: &gossip.Message{
-			Type: gossip.MessagePong, PeerID: "peer-a", Pong: &gossip.Pong{},
+			Type: gossip.MessagePong, PeerID: "peer-a", Pong: &gossip.Pong{Summary: corestate.CatalogSummaryFor(nil)},
 		}}}
 		driver.events <- packet
 	}

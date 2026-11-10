@@ -231,7 +231,7 @@ func (driver *GossipDriver) handleGossipHostStep(ctx context.Context, hostEvent 
 	result, events, err := driver.handleGossipSessionEvent(ctx, event, now, gossipDriverSender{transport: transport})
 	// Replies and worker completions can already be queued when an earlier
 	// event finishes and removes their session. They are stale work, not a
-	// failure of the event consumer (including the sync-once responder loop).
+	// failure of the event consumer.
 	if errors.Is(err, ErrGossipSessionNotFound) {
 		return out, nil, nil
 	}
@@ -263,9 +263,10 @@ func (driver *GossipDriver) acceptGossipInboundPath(ctx context.Context, packet 
 	}
 	peerID := packet.Message.PeerID
 	confirmed := false
-	if packet.Message.Type == gossip.MessagePong && packet.Message.Pong != nil && packet.Message.Pong.Summary != nil && transport != nil {
+	if pong := packet.Message.Pong; packet.Message.Type == gossip.MessagePong &&
+		pong != nil && pong.Summary != nil && len(pong.Summary.CatalogRoot) != 0 && transport != nil {
 		session := driver.Gossip.Session(peerID)
-		if session != nil && (session.State == gossip.SyncSessionPingSent || session.State == gossip.SyncSessionSummarySent) {
+		if session != nil && session.State == gossip.SyncSessionSummarySent {
 			addr := transport.LastPingAddr(peerID)
 			confirmed = addr != nil && addr.String() == packet.Addr.String()
 		}

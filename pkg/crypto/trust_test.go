@@ -1,7 +1,6 @@
 package crypto
 
 import (
-	"bytes"
 	"crypto/ed25519"
 	"strings"
 	"testing"
@@ -41,18 +40,17 @@ func TestPinnedRootRequiresImmutableAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
-		name       string
-		mutate     func(*zone.ZoneAuthority)
-		repairable bool
+		name   string
+		mutate func(*zone.ZoneAuthority)
 	}{
 		{"legacy capabilities", func(a *zone.ZoneAuthority) {
 			a.Keys[0].Capabilities = []zone.Capability{{Permissions: []zone.Permission{zone.PermWrite}}}
-		}, true},
-		{"extra key", func(a *zone.ZoneAuthority) { a.Keys = append(a.Keys, zone.AuthorizedKey{Key: other}) }, false},
-		{"other key", func(a *zone.ZoneAuthority) { a.Keys[0].Key = other }, false},
-		{"epoch", func(a *zone.ZoneAuthority) { a.Epoch++ }, false},
-		{"threshold", func(a *zone.ZoneAuthority) { a.Threshold++ }, false},
-		{"zone", func(a *zone.ZoneAuthority) { a.Zone = "other." }, false},
+		}},
+		{"extra key", func(a *zone.ZoneAuthority) { a.Keys = append(a.Keys, zone.AuthorizedKey{Key: other}) }},
+		{"other key", func(a *zone.ZoneAuthority) { a.Keys[0].Key = other }},
+		{"epoch", func(a *zone.ZoneAuthority) { a.Epoch++ }},
+		{"threshold", func(a *zone.ZoneAuthority) { a.Threshold++ }},
+		{"zone", func(a *zone.ZoneAuthority) { a.Zone = "other." }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ns := zone.NewNetworkState()
@@ -61,14 +59,6 @@ func TestPinnedRootRequiresImmutableAuthority(t *testing.T) {
 			ns.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, a)
 			if err := VerifyPinnedRoot(ns, pub); err == nil {
 				t.Fatal("noncanonical root accepted")
-			}
-			before := AuthorityHash(a)
-			RepairLegacyRootAuthority(ns, pub)
-			if err := VerifyPinnedRoot(ns, pub); (err == nil) != tc.repairable {
-				t.Fatalf("repair result: %v", err)
-			}
-			if !tc.repairable && !bytes.Equal(before, AuthorityHash(ns.Zones[zone.RootZone].Authority)) {
-				t.Fatal("repair changed incompatible root")
 			}
 		})
 	}

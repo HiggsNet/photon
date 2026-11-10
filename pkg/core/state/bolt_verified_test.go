@@ -2,7 +2,7 @@ package state
 
 import (
 	"bytes"
-	"crypto/ed25519"
+
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -46,7 +46,7 @@ func seedSchema1BoltState(t *testing.T, db *bolt.DB, candidate *CommitCandidate,
 		if err != nil {
 			return err
 		}
-		if err := putUint64Raw(meta, keySchemaVersion, legacyBoltSchemaVersion); err != nil {
+		if err := putUint64Raw(meta, keySchemaVersion, 1); err != nil {
 			return err
 		}
 		if err := putUint64Raw(meta, keyVerifiedRevision, uint64(revision)); err != nil {
@@ -61,102 +61,20 @@ func seedSchema1BoltState(t *testing.T, db *bolt.DB, candidate *CommitCandidate,
 	}
 }
 
-func TestVerifiedLayoutMigrationPreservesKeysHistoryCheckpointAndRevision(t *testing.T) {
-	db := openCommonBoltTestDB(t)
-	candidate := checkpointBenchmarkCandidate()
-	_, private, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	candidate.Verified.RootPrivateKey = private
-	candidate.Verified.IdentityPrivateKey = append(ed25519.PrivateKey(nil), private...)
-	candidate.Verified.Network.GlobalRoot = []byte("global root")
-	seedSchema1BoltState(t, db, candidate, 7)
-	writes := db.Stats().TxStats.Write
-	if err := db.View(func(tx *bolt.Tx) error {
-		loaded, revision, report, found, err := LoadBoltState(tx)
-		if err != nil {
-			return err
-		}
-		if !found || revision != 7 || !report.LegacyVerifiedLayout || !reflect.DeepEqual(loaded, cloneCommitCandidate(candidate.Verified, candidate.Gossip)) {
-			t.Fatal("read-only schema-1 load changed state or revision")
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if db.Stats().TxStats.Write != writes {
-		t.Fatal("read-only load wrote the database")
-	}
-	store := &BoltStore{db: db}
-	loaded, revision, report, found, err := store.LoadCommon()
-	if err != nil || !found || !report.LegacyVerifiedLayout || revision != 7 {
-		t.Fatalf("migration revision=%d report=%+v err=%v", revision, report, err)
-	}
-	if !reflect.DeepEqual(loaded, cloneCommitCandidate(candidate.Verified, candidate.Gossip)) {
-		t.Fatal("migration lost keys, history or checkpoint")
-	}
-	writes = db.Stats().TxStats.Write
-	loaded, revision, report, found, err = store.LoadCommon()
-	if err != nil || !found || report.LegacyVerifiedLayout || revision != 7 {
-		t.Fatalf("reload revision=%d report=%+v err=%v", revision, report, err)
-	}
-	if db.Stats().TxStats.Write != writes {
-		t.Fatal("repeated startup wrote the database")
-	}
-	if err := db.View(func(tx *bolt.Tx) error {
-		common := tx.Bucket(bucketCommonState)
-		version, err := decodeRequiredUint64(common.Bucket(bucketCommonMeta), keySchemaVersion)
-		if err != nil {
-			return err
-		}
-		if version != BoltSchemaVersion || common.Bucket(bucketVerified).Bucket(bucketVerifiedZones) == nil {
-			t.Fatal("upgrade did not publish the zone layout")
-		}
-		var root persistedVerifiedState
-		if err := decodeRequiredJSON(common.Bucket(bucketVerified), keyPayload, &root); err != nil {
-			return err
-		}
-		if root.Network != nil {
-			t.Fatal("migration retained aggregate network payload")
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestVerifiedLayoutMigrationRollbackKeepsSchema1Readable(t *testing.T) {
+func TestSchema1DatabaseRejectedWithoutWriting(t *testing.T) {
 	db := openCommonBoltTestDB(t)
 	candidate := commonBoltTestCandidate(1)
 	seedSchema1BoltState(t, db, candidate, 7)
-	want := errors.New("injected failure after layout writes")
-	if err := db.Update(func(tx *bolt.Tx) error {
-		loaded, revision, _, _, err := LoadBoltState(tx)
-		if err != nil {
-			return err
-		}
-		if _, err := CommitBoltState(tx, loaded, ChangeSet{VerifiedRevision: revision}); err != nil {
-			return err
-		}
-		return want
-	}); !errors.Is(err, want) {
-		t.Fatalf("rollback error=%v", err)
+	writes := db.Stats().TxStats.Write
+	store := &BoltStore{db: db}
+	if _, _, _, _, err := store.LoadCommon(); !errors.Is(err, ErrBoltSchemaUnsupported) {
+		t.Fatalf("load schema 1: %v", err)
 	}
-	if err := db.View(func(tx *bolt.Tx) error {
-		loaded, revision, report, found, err := LoadBoltState(tx)
-		if err != nil {
-			return err
-		}
-		if !found || revision != 7 || !report.LegacyVerifiedLayout || !reflect.DeepEqual(loaded, cloneCommitCandidate(candidate.Verified, candidate.Gossip)) {
-			t.Fatal("failed upgrade changed legacy state")
-		}
-		if tx.Bucket(bucketCommonState).Bucket(bucketVerified).Bucket(bucketVerifiedZones) != nil {
-			t.Fatal("failed upgrade retained zone bucket")
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
+	if err := store.CommitCommon(t.Context(), candidate, ChangeSet{VerifiedRevision: 7}); !errors.Is(err, ErrBoltSchemaUnsupported) {
+		t.Fatalf("write schema 1: %v", err)
+	}
+	if db.Stats().TxStats.Write != writes {
+		t.Fatal("unsupported schema was rewritten")
 	}
 }
 

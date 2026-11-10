@@ -32,7 +32,7 @@ func OutboundMessageForAction(action SyncAction) (outbound OutboundMessage, ok b
 			PeerID: typed.PeerID,
 			Message: &Message{
 				Type:      MessageFetchZone,
-				FetchZone: &FetchZone{Zone: typed.Zone, ChunkFallback: true},
+				FetchZone: &FetchZone{Zone: typed.Zone},
 			},
 		}, true
 	default:

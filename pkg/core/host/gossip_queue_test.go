@@ -24,7 +24,7 @@ func TestGossipQueueFullInputCannotDropAcceptedPong(t *testing.T) {
 	bindMemoryGossipTransport(t, driver, "peer-a")
 	driver.Gossip.NewSession("peer-a").State = gossip.SyncSessionSummarySent
 	packet := GossipPacketReceived{Packet: &gossip.Packet{Message: &gossip.Message{
-		Type: gossip.MessagePong, PeerID: "peer-a", Pong: &gossip.Pong{},
+		Type: gossip.MessagePong, PeerID: "peer-a", Pong: &gossip.Pong{Summary: corestate.CatalogSummaryFor(nil)},
 	}}}
 	for range DefaultEventBuffer {
 		driver.events <- packet
@@ -75,7 +75,7 @@ func TestGossipQueueSnapshotResultSurvivesFullQueues(t *testing.T) {
 			bindMemoryGossipTransport(t, driver, "peer-a")
 			session := driver.Gossip.NewSession("peer-a")
 			_, _ = session.OnEvent(&gossip.SyncTimerEvent{PeerID: "peer-a"}, now)
-			_, _ = session.OnEvent(&gossip.PongReceivedEvent{PeerID: "peer-a", Pong: &gossip.Pong{}, MissingZones: []zone.ZonePath{"remote.catofes."}}, now)
+			_, _ = session.OnEvent(&gossip.CatalogPageReceivedEvent{PeerID: "peer-a", Page: &corestate.CatalogPage{CatalogRoot: []byte("catalog"), Entries: []corestate.ZoneDigest{{Zone: "remote.catofes.", RootHash: []byte("root")}}}}, now)
 			driver.events <- GossipPacketReceived{}
 			for range cap(driver.completions) {
 				driver.completions <- TimerFired{}
@@ -118,7 +118,7 @@ func TestGossipQueueInternalBudgetYieldsAndRetainsAllResults(t *testing.T) {
 	for _, peerID := range peerIDs[1:] {
 		session := driver.Gossip.NewSession(peerID)
 		_, _ = session.OnEvent(&gossip.SyncTimerEvent{PeerID: peerID}, now)
-		actions, err := session.OnEvent(&gossip.PongReceivedEvent{PeerID: peerID, Pong: &gossip.Pong{}, MissingZones: []zone.ZonePath{"remote.catofes."}}, now)
+		actions, err := session.OnEvent(&gossip.CatalogPageReceivedEvent{PeerID: peerID, Page: &corestate.CatalogPage{CatalogRoot: []byte("catalog"), Entries: []corestate.ZoneDigest{{Zone: "remote.catofes.", RootHash: []byte("root")}}}}, now)
 		if err != nil || session.InflightCount() != 1 {
 			t.Fatalf("one bounded pull: inflight=%d error=%v", session.InflightCount(), err)
 		}
@@ -157,7 +157,7 @@ func TestGossipQueueInternalBudgetYieldsAndRetainsAllResults(t *testing.T) {
 	other := driver.Gossip.NewSession("peer-b")
 	other.State = gossip.SyncSessionSummarySent
 	other.AccumulateNetworkChanged(true)
-	driver.completions <- GossipEvent{Value: &gossip.PongReceivedEvent{PeerID: "peer-b", Pong: &gossip.Pong{}}}
+	driver.completions <- GossipEvent{Value: &gossip.PongReceivedEvent{PeerID: "peer-b", Pong: &gossip.Pong{Summary: corestate.CatalogSummaryFor(nil)}}}
 	result, err := driver.HandleGossipHostEvent(t.Context(), <-driver.Completions(), now, nil)
 	if err != nil || !result.NetworkChanged || driver.Gossip.Session("peer-b") != nil || result.Session.PeerID != peerIDs[2*(maxGossipEventBatch-1)] {
 		t.Fatalf("interleaved completion result/error = %#v/%v", result, err)

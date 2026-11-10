@@ -25,8 +25,8 @@ func applyOfflineCommonIntent(config *appConfig, intent corestate.LocalIntent, d
 	return state.Common.ApplyLocalIntent(context.Background(), intent, now)
 }
 
-// loadOfflineOwnerViews runs the same one-way schema migration as daemon
-// startup, then closes the shared Bolt handle and returns detached snapshots
+// loadOfflineOwnerViews opens the same schema as daemon startup,
+// then closes the shared Bolt handle and returns detached snapshots
 // of the two persisted owners. This is only the fallback for an unavailable
 // daemon or an explicit direct operation; online readers use command-oriented
 // control views and never contend for the daemon's Bolt handle.
@@ -60,7 +60,7 @@ func openState(config *appConfig) (*State, error) {
 	}
 	if !found {
 		// Only an uninitialized database may enter the pending identity bootstrap
-		// path. Existing legacy databases were already migrated by the first call.
+		// path. The first load rejects an existing unsupported database.
 		// The bootstrap writer initializes the current common/Linux partitions with
 		// an authority-less managed-zone placeholder; no temporary legacy schema is
 		// created for a new node.
@@ -100,7 +100,7 @@ func loadStateTx(tx *bolt.Tx) (*corestate.CommitCandidate, corestate.VerifiedRev
 }
 
 // restoreState performs the complete persistent startup boundary:
-// it upgrades a legacy database when necessary, loads both logical partitions
+// it loads both logical partitions
 // through one BoltStore transaction, restores Common, and returns the complete
 // owner of that Bolt handle. No raw persistent partition escapes this boundary.
 func restoreState(store *corestate.BoltStore, trustedRoot ed25519.PublicKey) (*State, bool, error) {
@@ -111,16 +111,13 @@ func restoreState(store *corestate.BoltStore, trustedRoot ed25519.PublicKey) (*S
 	var revision corestate.VerifiedRevision
 	var linuxState *photonlinux.LinuxState
 	found := false
-	err := store.Update(func(tx *bolt.Tx) (bool, error) {
-		_, migrated, err := migrateLegacyLinuxStateTx(tx, trustedRoot)
-		if err != nil {
-			return false, err
-		}
+	err := store.View(func(tx *bolt.Tx) error {
+		var err error
 		candidate, revision, linuxState, found, err = loadStateTx(tx)
 		if err == nil && found && len(trustedRoot) != 0 && !bytes.Equal(candidate.Verified.TrustedRootPublicKey, trustedRoot) {
-			return false, errors.New("trusted_root_public_key does not match persisted state")
+			return errors.New("trusted_root_public_key does not match persisted state")
 		}
-		return migrated, err
+		return err
 	})
 	if err != nil || !found {
 		return nil, found, err
@@ -145,7 +142,7 @@ func initializeStateDB(store *corestate.BoltStore, candidate *corestate.CommitCa
 		if err != nil {
 			return false, err
 		}
-		if found || tx.Bucket([]byte(photonlinux.LinuxStateBucketName)) != nil || tx.Bucket(bucketLegacyMeta) != nil {
+		if found || tx.Bucket([]byte(photonlinux.LinuxStateBucketName)) != nil {
 			return false, errors.New("daemon state is already initialized")
 		}
 		commonChanged, err := corestate.CommitBoltState(tx, candidate, corestate.ChangeSet{

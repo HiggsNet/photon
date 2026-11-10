@@ -39,21 +39,3 @@ func VerifyPinnedRoot(ns *zone.NetworkState, trusted ed25519.PublicKey) error {
 	}
 	return errors.New("root authority does not match immutable trusted_root_public_key authority")
 }
-
-// RepairLegacyRootAuthority repairs only the old bootstrap capability shape at startup.
-// A different key, epoch, threshold or key count is never adopted.
-func RepairLegacyRootAuthority(ns *zone.NetworkState, trusted ed25519.PublicKey) bool {
-	if ns == nil || len(trusted) != ed25519.PublicKeySize {
-		return false
-	}
-	root := ns.Zones[zone.RootZone]
-	if root == nil || root.Authority == nil {
-		return false
-	}
-	a := root.Authority
-	if a.Zone == zone.RootZone && a.Epoch == 1 && a.Threshold == SupportedThreshold && len(a.Keys) == 1 && bytes.Equal(a.Keys[0].Key, trusted) && len(a.Keys[0].Capabilities) > 0 {
-		root.Authority = ConfiguredRootAuthority(trusted)
-		return true
-	}
-	return false
-}

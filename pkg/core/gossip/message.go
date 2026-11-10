@@ -59,8 +59,7 @@ type FetchCatalogPage struct {
 }
 
 type FetchZone struct {
-	Zone          zone.ZonePath `json:"zone" msgpack:"z"`
-	ChunkFallback bool          `json:"chunk_fallback,omitempty" msgpack:"c,omitempty"`
+	Zone zone.ZonePath `json:"zone" msgpack:"z"`
 }
 
 type Announce struct {

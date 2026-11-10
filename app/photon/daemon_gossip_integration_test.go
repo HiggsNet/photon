@@ -43,7 +43,7 @@ func TestDaemonObjectChunkCompletionNotifiesPlatformOnce(t *testing.T) {
 	peerID := "node-b.catofes."
 	session := gossip.NewSyncSession(peerID)
 	_, _ = session.OnEvent(&gossip.SyncTimerEvent{PeerID: peerID}, now)
-	_, _ = session.OnEvent(&gossip.PongReceivedEvent{PeerID: peerID, Pong: &gossip.Pong{}, MissingZones: []zone.ZonePath{"catofes."}}, now)
+	_, _ = session.OnEvent(&gossip.CatalogPageReceivedEvent{PeerID: peerID, Page: &corestate.CatalogPage{CatalogRoot: []byte("catalog"), Entries: []corestate.ZoneDigest{{Zone: "catofes.", RootHash: rootHash}}}}, now)
 	_, _ = session.OnEvent(&gossip.ObjectPullResultEvent{PeerID: peerID, Zone: "catofes.", Unreachable: true, Err: errors.New("tcp unavailable")}, now)
 	service.gossipDriver.Gossip.SetSession(peerID, session)
 	notifications := 0

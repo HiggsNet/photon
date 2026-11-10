@@ -23,7 +23,6 @@ type PeerCheckpointPatch struct {
 	FailureCount           PatchField[int]
 	LastRelayUnix          PatchField[int64]
 	LastRelayRootHex       PatchField[string]
-	DiscoveredEndpoint     PatchField[string]
 	LastSuccessfulEndpoint PatchField[string]
 	ObservedEndpoint       PatchField[string]
 	ObservedFirstUnix      PatchField[int64]
@@ -145,7 +144,6 @@ func restartPeerCheckpoint(peer PeerCheckpoint) PeerCheckpoint {
 	peer.LastSyncUnix = 0
 	peer.LastRelayUnix = 0
 	peer.LastRelayCatalogRootHex = ""
-	peer.DiscoveredEndpoint = ""
 	peer.ObservedEndpoint = ""
 	peer.ObservedFirstSeenUnix = 0
 	peer.ObservedLastSeenUnix = 0
@@ -163,7 +161,6 @@ func applyPeerCheckpointPatch(metadata *PeerCheckpoint, patch PeerCheckpointPatc
 	applyPatchField(&metadata.FailureCount, patch.FailureCount)
 	applyPatchField(&metadata.LastRelayUnix, patch.LastRelayUnix)
 	applyPatchField(&metadata.LastRelayCatalogRootHex, patch.LastRelayRootHex)
-	applyPatchField(&metadata.DiscoveredEndpoint, patch.DiscoveredEndpoint)
 	applyPatchField(&metadata.LastSuccessfulEndpoint, patch.LastSuccessfulEndpoint)
 	applyPatchField(&metadata.ObservedEndpoint, patch.ObservedEndpoint)
 	applyPatchField(&metadata.ObservedFirstSeenUnix, patch.ObservedFirstUnix)

@@ -257,7 +257,7 @@ photon.gossip.m1\n<msgpack payload with version=1>
 | `pong` | 响应 | 双向 | 响应 ping、携带 CatalogSummary |
 | `fetch_catalog_page` | 请求 | 双向 | 请求 catalog 分页 |
 | `catalog_page` | 响应 | 双向 | 返回 catalog 分页数据 |
-| `fetch_zone` | 请求 | 双向 | UDP chunk fallback 请求；普通 snapshot 请求仅作为只读兼容响应 |
+| `fetch_zone` | 请求 | 双向 | 请求 UDP 分块发送 Zone 快照 |
 | `announce` | 主动 | 双向 | hint ingress；不作为正确性主路径 |
 | `object_chunk` | 主动 | 双向 | UDP 分片传输大对象 |
 
@@ -780,8 +780,7 @@ gossip packet 事件直接以 StateStore committed state 为唯一权威。`hand
 | PING (有 Summary) | 匹配活跃 session 时 → `CatalogSummaryReceivedEvent`；无匹配 session 时 → 按 unsolicited PING 处理 |
 | PING (无 Summary) | 回退到 `PongReceivedEvent` |
 | PONG | `PongReceivedEvent` |
-| FETCH_ZONE (非 chunk) | direct read-only responder；不进入 active `SyncSession` |
-| FETCH_ZONE (chunk) | 走旧 handlePacket 路径 |
+| FETCH_ZONE | 从已提交的 Zone 快照生成 UDP 分块 |
 | FETCH_CATALOG_PAGE | direct read-only responder；不进入 active `SyncSession` |
 | CATALOG_PAGE | `CatalogPageReceivedEvent` |
 | ANNOUNCE | hint ingress：没有活跃 session 时创建 active pull；已有 session 时记录 follow-up hint，不改当前 FSM |

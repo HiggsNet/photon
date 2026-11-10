@@ -4,76 +4,10 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"slices"
-	"time"
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
-
-type DatagramPlan struct {
-	Announces []*Announce
-	Oversized []OversizedDatagramObject
-}
-
-type OversizedDatagramObject struct {
-	Object string
-	Zone   zone.ZonePath
-	Key    string
-	Size   int
-}
-
-// PlanSnapshotDatagrams creates deterministic digest-only ANNOUNCE batches.
-// Snapshot payloads are deliberately excluded and use object chunks instead.
-func PlanSnapshotDatagrams(ns *zone.NetworkState, zones []zone.ZonePath, budget int, now time.Time) DatagramPlan {
-	if ns == nil || budget <= 0 {
-		return DatagramPlan{}
-	}
-	zones = append([]zone.ZonePath(nil), zones...)
-	slices.Sort(zones)
-
-	var digests []corestate.ZoneDigest
-	var oversized []OversizedDatagramObject
-	for _, path := range zones {
-		zs := ns.Zones[path]
-		if zs == nil || ns.IsZoneRevoked(path, now) {
-			continue
-		}
-		digest := corestate.ZoneDigest{Zone: path, RootHash: corestate.ZoneRoot(zs)}
-		digestSize := AnnounceWireSize(&Announce{Zones: []corestate.ZoneDigest{digest}})
-		if digestSize > budget {
-			oversized = append(oversized, OversizedDatagramObject{Object: "announce_digest", Zone: path, Size: digestSize})
-			continue
-		}
-		digests = append(digests, digest)
-	}
-	return DatagramPlan{Announces: PackDigestAnnounces(digests, budget), Oversized: oversized}
-}
-
-func PackDigestAnnounces(digests []corestate.ZoneDigest, budget int) []*Announce {
-	var out []*Announce
-	var current []corestate.ZoneDigest
-	for _, digest := range digests {
-		next := append(append([]corestate.ZoneDigest(nil), current...), digest)
-		if len(current) == 0 && AnnounceWireSize(&Announce{Zones: next}) > budget {
-			continue
-		}
-		if len(current) > 0 && AnnounceWireSize(&Announce{Zones: next}) > budget {
-			out = append(out, &Announce{Zones: current})
-			current = []corestate.ZoneDigest{digest}
-			continue
-		}
-		current = next
-	}
-	if len(current) > 0 {
-		out = append(out, &Announce{Zones: current})
-	}
-	return out
-}
-
-func AnnounceWireSize(announce *Announce) int {
-	return MessageWireSize(&Message{Type: MessageAnnounce, Announce: announce})
-}
 
 func MessageWireSize(message *Message) int {
 	size, err := WireEncodeSize(message)

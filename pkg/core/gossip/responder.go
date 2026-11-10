@@ -4,47 +4,7 @@ import (
 	"bytes"
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
-	"github.com/HiggsNet/photon/pkg/core/zone"
 )
-
-type ReadOnlyRequestKind string
-
-const (
-	ReadOnlyFetchZone     ReadOnlyRequestKind = "fetch_zone"
-	ReadOnlyChunkFallback ReadOnlyRequestKind = "chunk_fallback"
-	ReadOnlyCatalogPage   ReadOnlyRequestKind = "catalog_page"
-)
-
-type ReadOnlyRequest struct {
-	Kind ReadOnlyRequestKind
-	Zone zone.ZonePath
-}
-
-// ClassifyReadOnlyRequest identifies messages that only read local verified
-// state to construct a response. It rejects message types with missing payloads.
-func ClassifyReadOnlyRequest(message *Message) (ReadOnlyRequest, bool) {
-	if message == nil {
-		return ReadOnlyRequest{}, false
-	}
-	switch message.Type {
-	case MessageFetchZone:
-		if message.FetchZone == nil {
-			return ReadOnlyRequest{}, false
-		}
-		kind := ReadOnlyFetchZone
-		if message.FetchZone.ChunkFallback {
-			kind = ReadOnlyChunkFallback
-		}
-		return ReadOnlyRequest{Kind: kind, Zone: message.FetchZone.Zone}, true
-	case MessageFetchCatalogPage:
-		if message.FetchCatalogPage == nil {
-			return ReadOnlyRequest{}, false
-		}
-		return ReadOnlyRequest{Kind: ReadOnlyCatalogPage}, true
-	default:
-		return ReadOnlyRequest{}, false
-	}
-}
 
 // CatalogRootsMatch reports whether two non-nil catalog summaries advertise
 // the same root. ZoneCount is metadata and does not change root identity.

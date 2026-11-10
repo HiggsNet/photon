@@ -73,7 +73,7 @@ func TestSyncSessionQueuedDescendantStartsOnlyAfterParentAck(t *testing.T) {
 	now := time.Unix(1000, 0)
 	s := NewSyncSession("peer")
 	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer"}, now)
-	actions, _ := s.OnEvent(&PongReceivedEvent{PeerID: "peer", Pong: &Pong{}, MissingZones: []zone.ZonePath{"node.catofes.", "catofes."}}, now)
+	actions, _ := s.OnEvent(testCatalogPage("peer", "node.catofes.", "catofes."), now)
 	if got := scheduledPulls(actions); !reflect.DeepEqual(got, []zone.ZonePath{"catofes."}) {
 		t.Fatalf("initial ancestor pulls %v", got)
 	}
@@ -109,7 +109,7 @@ func TestSyncSessionRejectedAncestorDoesNotScheduleDescendant(t *testing.T) {
 	now := time.Unix(1000, 0)
 	s := NewSyncSession("peer")
 	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer"}, now)
-	_, _ = s.OnEvent(&PongReceivedEvent{PeerID: "peer", Pong: &Pong{}, MissingZones: []zone.ZonePath{"node.catofes.", "catofes."}}, now)
+	_, _ = s.OnEvent(testCatalogPage("peer", "node.catofes.", "catofes."), now)
 	_, _ = s.OnEvent(&ObjectPullResultEvent{PeerID: "peer", Zone: "catofes.", Snapshot: &corestate.ZoneSnapshot{Zone: "catofes."}}, now)
 	rejected := errors.New("invalid signature")
 	actions, err := s.OnEvent(&SnapshotAppliedEvent{PeerID: "peer", Zone: "catofes.", Err: rejected}, now)

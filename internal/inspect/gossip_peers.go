@@ -1,9 +1,12 @@
 package inspect
 
 import (
+	"net"
+	"net/netip"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	"github.com/HiggsNet/photon/pkg/core/observability"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
@@ -20,6 +23,7 @@ type PeerBootstrap struct {
 type GossipPeersOptions struct {
 	LocalPeerID string
 	Bootstrap   []PeerBootstrap
+	SourceOrder []string
 	Diagnostics map[string]observability.PeerDiagnostics
 	Now         time.Time
 	Lifecycle   PeerLifecycleConfig
@@ -47,6 +51,7 @@ func BuildGossipPeerDebugView(common corestate.View, options GossipPeersOptions,
 		peerID, facts.source, facts.configuredAddr, facts.resolvedAddr,
 		facts.checkpoint, facts.diagnostics, options.Now,
 	)
+	view.DiscoveredAddr = facts.discoveredAddr
 	view.Historical = gossipPeerHistorical(common, options, peerID, facts.checkpoint)
 	if view.Historical {
 		view.Status = "offline"
@@ -82,9 +87,11 @@ func BuildGossipPeersView(common corestate.View, options GossipPeersOptions) Pee
 	view := PeersView{Peers: make([]PeerView, 0, len(ids))}
 	for _, peerID := range ids {
 		facts := gossipPeerProjection(common, options, peerID)
-		view.Peers = append(view.Peers, BuildPeerViewFromCheckpoint(
+		peer := BuildPeerViewFromCheckpoint(
 			peerID, facts.configuredAddr, facts.endpoints, facts.checkpoint, facts.diagnostics, options.Now,
-		))
+		)
+		peer.DiscoveredAddr = facts.discoveredAddr
+		view.Peers = append(view.Peers, peer)
 	}
 	return view
 }
@@ -95,6 +102,7 @@ type gossipPeerProjectionFacts struct {
 	source         string
 	configuredAddr string
 	resolvedAddr   string
+	discoveredAddr string
 	endpoints      []PeerEndpointView
 }
 
@@ -103,11 +111,21 @@ func gossipPeerProjection(common corestate.View, options GossipPeersOptions, pee
 	diagnostics := options.Diagnostics[peerID]
 	bootstrap, configured := gossipPeerBootstrap(options.Bootstrap, peerID)
 	endpointInput := PeerEndpointInput{
-		BootstrapAddr: bootstrap.Addr, SelectedAddr: checkpoint.DiscoveredEndpoint,
-		ObservedAddr: checkpoint.ObservedEndpoint, ObservedSource: diagnostics.ObservedSource,
+		BootstrapAddr: bootstrap.Addr,
+		ObservedAddr:  checkpoint.ObservedEndpoint, ObservedSource: diagnostics.ObservedSource,
 	}
 	if common.State != nil {
-		for _, endpoint := range gossip.ExtractPeerEndpointsAt(common.State.Network, options.Now)[peerID] {
+		entries := gossip.ExtractPeerEndpointsAt(common.State.Network, options.Now)[peerID]
+		if len(entries) > 0 {
+			var configuredAddr *net.UDPAddr
+			if addr, err := netip.ParseAddrPort(bootstrap.ResolvedAddr); err == nil {
+				configuredAddr = net.UDPAddrFromAddrPort(addr)
+			}
+			if addrs := corehost.GossipDiscoveryAddresses(entries, configuredAddr, options.SourceOrder); len(addrs) > 0 {
+				endpointInput.SelectedAddr = addrs[0].String()
+			}
+		}
+		for _, endpoint := range entries {
 			endpointInput.Signed = append(endpointInput.Signed, PeerSignedEndpoint{
 				Address: endpoint.Address, Port: endpoint.Port, Protocol: endpoint.Protocol,
 				Scope: endpoint.Scope, Source: endpoint.Source, Priority: endpoint.Priority,
@@ -136,7 +154,7 @@ func gossipPeerProjection(common corestate.View, options GossipPeersOptions, pee
 	}
 	return gossipPeerProjectionFacts{
 		checkpoint: checkpoint, diagnostics: diagnostics, source: source,
-		configuredAddr: configuredAddr, resolvedAddr: resolved, endpoints: endpoints,
+		configuredAddr: configuredAddr, resolvedAddr: resolved, discoveredAddr: endpointInput.SelectedAddr, endpoints: endpoints,
 	}
 }
 

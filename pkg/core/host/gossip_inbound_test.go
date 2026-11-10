@@ -222,7 +222,7 @@ func TestGossipDriverOwnsFetchZoneChunkSendAndNACKRepair(t *testing.T) {
 	controller := &memoryInboundController{budget: gossip.DefaultDatagramBudget}
 	fetch := &gossip.Message{
 		Type: gossip.MessageFetchZone, PeerID: "peer-a",
-		FetchZone: &gossip.FetchZone{Zone: "remote.catofes.", ChunkFallback: true},
+		FetchZone: &gossip.FetchZone{Zone: "remote.catofes."},
 	}
 	if _, err := driver.executeGossipPacketActions(context.Background(), driver.Gossip.PlanInbound(&gossip.Packet{Message: fetch}), controller, controller.budget); err != nil {
 		t.Fatalf("execute FETCH_ZONE: %v", err)

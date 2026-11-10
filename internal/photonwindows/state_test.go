@@ -5,7 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/binary"
-	"encoding/json"
+
 	"errors"
 	"os"
 	"path/filepath"
@@ -47,100 +47,33 @@ func TestOpenStateRestoresCommonRevisionAndDetachedView(t *testing.T) {
 	}
 }
 
-func TestOpenStateUpgradesRC6CommonLayoutPreservingRevision(t *testing.T) {
+func TestOpenStateRejectsSchema1WithoutWriting(t *testing.T) {
 	path, _, rootPublic, _ := saveCommonState(t, 7)
 	db, err := bolt.Open(path, 0o600, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var before []byte
-	// Recreate RC.6's aggregate common payload, retaining its signed contents.
-	err = db.Update(func(tx *bolt.Tx) error {
-		candidate, _, _, _, err := corestate.LoadBoltState(tx)
-		if err != nil {
-			return err
-		}
-		before, err = json.Marshal(candidate.Verified)
-		if err != nil {
-			return err
-		}
-		payload, err := json.Marshal(map[string]any{
-			"managed_zone":            candidate.Verified.ManagedZone,
-			"network":                 candidate.Verified.Network,
-			"trusted_root_public_key": candidate.Verified.TrustedRootPublicKey,
-			"root_private_key":        candidate.Verified.RootPrivateKey,
-			"identity_private_key":    candidate.Verified.IdentityPrivateKey,
-		})
-		if err != nil {
-			return err
-		}
-		common := tx.Bucket([]byte("photon:common-state"))
-		verified := common.Bucket([]byte("verified"))
-		if err := verified.DeleteBucket([]byte("zones")); err != nil {
-			return err
-		}
-		if err := verified.Put([]byte("payload"), payload); err != nil {
-			return err
-		}
+	if err := db.Update(func(tx *bolt.Tx) error {
 		var version [8]byte
 		binary.BigEndian.PutUint64(version[:], 1)
-		return common.Bucket([]byte("meta")).Put([]byte("schema-version"), version[:])
-	})
-	closeErr := db.Close()
+		return tx.Bucket([]byte("photon:common-state")).Bucket([]byte("meta")).Put([]byte("schema-version"), version[:])
+	}); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if closeErr != nil {
-		t.Fatal(closeErr)
+	if _, err := OpenState(path, "node-a.catofes.", rootPublic, time.Second); !errors.Is(err, corestate.ErrBoltSchemaUnsupported) {
+		t.Fatalf("schema 1: %v", err)
 	}
-	for startup := 0; startup < 2; startup++ {
-		source, err := OpenState(path, "node-a.catofes.", rootPublic, time.Second)
-		if err != nil {
-			t.Fatalf("startup %d: %v", startup, err)
-		}
-		view := source.Store().ReadView()
-		after, marshalErr := json.Marshal(view.State)
-		if err := source.Close(); err != nil {
-			t.Fatal(err)
-		}
-		if marshalErr != nil {
-			t.Fatal(marshalErr)
-		}
-		if view.Revision != 7 || !bytes.Equal(before, after) {
-			t.Fatal("layout upgrade or reopen changed verified contents or revision")
-		}
-		if startup == 0 {
-			db, err := bolt.Open(path, 0o600, &bolt.Options{ReadOnly: true})
-			if err != nil {
-				t.Fatal(err)
-			}
-			err = db.View(func(tx *bolt.Tx) error {
-				_, revision, report, found, err := corestate.LoadBoltState(tx)
-				if err == nil && (!found || report.LegacyVerifiedLayout || revision != 7) {
-					t.Error("Windows startup did not persist the upgraded common layout")
-				}
-				return err
-			})
-			closeErr := db.Close()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if closeErr != nil {
-				t.Fatal(closeErr)
-			}
-			beforeFile, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() {
-				afterFile, err := os.ReadFile(path)
-				if err != nil {
-					t.Error(err)
-				} else if !bytes.Equal(beforeFile, afterFile) {
-					t.Error("reopening an upgraded Windows state rewrote its database")
-				}
-			})
-		}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("rejected database changed: %v", err)
 	}
 }
 
@@ -171,7 +104,7 @@ func TestOpenStateRejectsLegacyZoneDatabase(t *testing.T) {
 	if err := legacy.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := OpenState(path, "node-a.catofes.", rootPublic, time.Second); err == nil || !strings.Contains(err.Error(), "common schema is absent") {
+	if _, err := OpenState(path, "node-a.catofes.", rootPublic, time.Second); !errors.Is(err, corestate.ErrBoltSchemaUnsupported) {
 		t.Fatalf("legacy database error = %v", err)
 	}
 }

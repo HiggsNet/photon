@@ -225,10 +225,9 @@ func TestObserverPeersAPIIncludesEndpointAndDiagnosticsDetails(t *testing.T) {
 		verified.Network = zone.NewNetworkState()
 		verified.Network.Zones["node-b.catofes."] = zs
 		checkpoint.Peers["node-b.catofes."] = corestate.PeerCheckpoint{
-			LastSyncUnix:       900,
-			LastRelayUnix:      920,
-			DiscoveredEndpoint: "203.0.113.20:33434",
-			ObservedEndpoint:   "198.51.100.9:33434",
+			LastSyncUnix:     900,
+			LastRelayUnix:    920,
+			ObservedEndpoint: "198.51.100.9:33434",
 			ObservedGraceEndpoints: []corestate.ObservedGraceEndpoint{{
 				Endpoint: "198.51.100.8:33434", UntilUnix: 1100,
 			}},

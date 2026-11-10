@@ -56,7 +56,7 @@ func TestGossipPeerHistoricalRetention(t *testing.T) {
 		{name: "never seen"},
 		{name: "bootstrap", peer: corestate.PeerCheckpoint{LastSyncUnix: old}, bootstrap: true},
 		{name: "configured retention", peer: corestate.PeerCheckpoint{LastSyncUnix: old}, cleanup: 72 * time.Hour},
-		{name: "expired cached address", peer: corestate.PeerCheckpoint{LastSyncUnix: old, DiscoveredEndpoint: "192.0.2.1:33434", ObservedEndpoint: "192.0.2.1:33434", ObservedUntilUnix: now.Unix()}, want: true},
+		{name: "expired cached address", peer: corestate.PeerCheckpoint{LastSyncUnix: old, ObservedEndpoint: "192.0.2.1:33434", ObservedUntilUnix: now.Unix()}, want: true},
 		{name: "usable observed address", peer: corestate.PeerCheckpoint{LastSyncUnix: old, ObservedEndpoint: "192.0.2.1:33434", ObservedUntilUnix: now.Add(time.Minute).Unix()}},
 		{name: "usable grace address", peer: corestate.PeerCheckpoint{LastSyncUnix: old, ObservedGraceEndpoints: []corestate.ObservedGraceEndpoint{{Endpoint: "192.0.2.1:33434", UntilUnix: now.Add(time.Minute).Unix()}}}},
 	} {
@@ -88,7 +88,7 @@ func TestBuildGossipPeerViewsProjectOwnersAndLiveDiagnosticsOnce(t *testing.T) {
 		State: &corestate.VerifiedState{ManagedZone: "node-a.catofes.", Network: zone.NewNetworkState()},
 		Gossip: &corestate.GossipCheckpoint{Peers: map[string]corestate.PeerCheckpoint{
 			peerID: {
-				LastSyncUnix: now.Unix(), DiscoveredEndpoint: "203.0.113.10:33434",
+				LastSyncUnix:     now.Unix(),
 				ObservedEndpoint: "198.51.100.10:33434", ObservedUntilUnix: now.Add(time.Minute).Unix(),
 			},
 		}},
@@ -103,7 +103,7 @@ func TestBuildGossipPeerViewsProjectOwnersAndLiveDiagnosticsOnce(t *testing.T) {
 	if !ok {
 		t.Fatal("known peer was not projected")
 	}
-	if debug.Source != "bootstrap" || debug.ConfiguredAddr != "bootstrap.example:33434" || debug.ResolvedAddr != "203.0.113.10:33434" {
+	if debug.Source != "bootstrap" || debug.ConfiguredAddr != "bootstrap.example:33434" || debug.ResolvedAddr != "198.51.100.10:33434" {
 		t.Fatalf("debug identity/endpoints = %#v", debug)
 	}
 	if debug.SyncFlow.HintAccepted != 2 || debug.ObservedStatus == "-" {

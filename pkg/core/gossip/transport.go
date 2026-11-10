@@ -754,14 +754,6 @@ func (t *Transport) SetPeerAddrs(peerID string, addrs []*net.UDPAddr) {
 	t.outboundMu.Unlock()
 }
 
-// RemovePeerAddrs removes outbound addresses for a peer while leaving the
-// inbound allowlist intact.
-func (t *Transport) RemovePeerAddrs(peerID string) {
-	t.outboundMu.Lock()
-	delete(t.outboundAddrs, peerID)
-	t.outboundMu.Unlock()
-}
-
 // SetRememberedPeerAddr updates the last confirmed UDP candidate independently
 // of configured and signed addresses. A nil address removes the candidate.
 func (t *Transport) SetRememberedPeerAddr(peerID string, addr *net.UDPAddr) {
@@ -783,12 +775,16 @@ func (t *Transport) HasRememberedPeerAddr(peerID string) bool {
 	return t.rememberedAddrs[peerID] != nil
 }
 
-// ReplaceRememberedPeerAddrs publishes a complete discovery projection.
-func (t *Transport) ReplaceRememberedPeerAddrs(addrs map[string]*net.UDPAddr) {
+// ReplaceDiscoveryAddrs publishes the current configured, signed and remembered candidates.
+func (t *Transport) ReplaceDiscoveryAddrs(outbound map[string][]*net.UDPAddr, remembered map[string]*net.UDPAddr) {
 	t.outboundMu.Lock()
 	defer t.outboundMu.Unlock()
-	t.rememberedAddrs = make(map[string]*net.UDPAddr, len(addrs))
-	for id, addr := range addrs {
+	t.outboundAddrs = make(map[string][]*net.UDPAddr, len(outbound))
+	for id, addrs := range outbound {
+		t.outboundAddrs[id] = appendUDPAddrCopies(nil, addrs...)
+	}
+	t.rememberedAddrs = make(map[string]*net.UDPAddr, len(remembered))
+	for id, addr := range remembered {
 		t.rememberedAddrs[id] = net.UDPAddrFromAddrPort(addr.AddrPort())
 	}
 }

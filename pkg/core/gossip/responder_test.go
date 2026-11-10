@@ -6,31 +6,6 @@ import (
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
-func TestClassifyReadOnlyRequest(t *testing.T) {
-	tests := []struct {
-		name    string
-		message *Message
-		want    ReadOnlyRequest
-		ok      bool
-	}{
-		{"fetch_zone", &Message{Type: MessageFetchZone, FetchZone: &FetchZone{Zone: "node-a.catofes."}}, ReadOnlyRequest{Kind: ReadOnlyFetchZone, Zone: "node-a.catofes."}, true},
-		{"chunk_fallback", &Message{Type: MessageFetchZone, FetchZone: &FetchZone{Zone: "node-a.catofes.", ChunkFallback: true}}, ReadOnlyRequest{Kind: ReadOnlyChunkFallback, Zone: "node-a.catofes."}, true},
-		{"catalog_page", &Message{Type: MessageFetchCatalogPage, FetchCatalogPage: &FetchCatalogPage{}}, ReadOnlyRequest{Kind: ReadOnlyCatalogPage}, true},
-		{"nil", nil, ReadOnlyRequest{}, false},
-		{"missing_zone_payload", &Message{Type: MessageFetchZone}, ReadOnlyRequest{}, false},
-		{"missing_catalog_payload", &Message{Type: MessageFetchCatalogPage}, ReadOnlyRequest{}, false},
-		{"ping", &Message{Type: MessagePing, Ping: &Ping{}}, ReadOnlyRequest{}, false},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got, ok := ClassifyReadOnlyRequest(test.message)
-			if ok != test.ok || got != test.want {
-				t.Fatalf("ClassifyReadOnlyRequest() = (%#v, %t), want (%#v, %t)", got, ok, test.want, test.ok)
-			}
-		})
-	}
-}
-
 func TestPlanPingResponse(t *testing.T) {
 	local := &corestate.CatalogSummary{CatalogRoot: []byte("local"), ZoneCount: 2}
 	if messages := PlanPingResponse(nil, local); len(messages) != 0 {

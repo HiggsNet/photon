@@ -406,12 +406,11 @@ func TestStoreUpdatePeerCheckpointIsTypedDetachedAndCheckpointOnly(t *testing.T)
 	grace := []ObservedGraceEndpoint{{Endpoint: "192.0.2.2:4242", UntilUnix: 200}}
 	failure := &PeerFailure{Code: "timeout", Message: "round timed out", AtUnix: 99}
 	result, err := store.UpdatePeerCheckpoint(context.Background(), "peer-a", PeerCheckpointPatch{
-		LastSyncUnix:       PatchField[int64]{Set: true, Value: 100},
-		BackoffUntilUnix:   PatchField[int64]{Set: true, Value: 150},
-		FailureCount:       PatchField[int]{Set: true, Value: 2},
-		DiscoveredEndpoint: PatchField[string]{Set: true, Value: "192.0.2.1:4242"},
-		ObservedGrace:      PatchField[[]ObservedGraceEndpoint]{Set: true, Value: grace},
-		LastFailure:        PatchField[*PeerFailure]{Set: true, Value: failure},
+		LastSyncUnix:     PatchField[int64]{Set: true, Value: 100},
+		BackoffUntilUnix: PatchField[int64]{Set: true, Value: 150},
+		FailureCount:     PatchField[int]{Set: true, Value: 2},
+		ObservedGrace:    PatchField[[]ObservedGraceEndpoint]{Set: true, Value: grace},
+		LastFailure:      PatchField[*PeerFailure]{Set: true, Value: failure},
 		Reject: map[zone.ZonePath]RejectedObject{
 			"bad.catofes.": {RootHash: root, Reason: "untrusted_zone", UpdatedUnix: 100},
 		},

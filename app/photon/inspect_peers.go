@@ -9,7 +9,7 @@ import (
 )
 
 func gossipPeersOptions(config corehost.GossipDriverConfig, diagnostics map[string]observability.PeerDiagnostics, now time.Time) inspect.GossipPeersOptions {
-	options := inspect.GossipPeersOptions{LocalPeerID: config.PeerID, Diagnostics: diagnostics, Now: now}
+	options := inspect.GossipPeersOptions{LocalPeerID: config.PeerID, Diagnostics: diagnostics, Now: now, SourceOrder: config.Discovery.SourceOrder}
 	for _, peerID := range config.Discovery.BootstrapPeers {
 		bootstrap := inspect.PeerBootstrap{PeerID: peerID}
 		if addr := config.Discovery.Bootstrap[peerID]; addr != nil {

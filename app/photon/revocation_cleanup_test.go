@@ -74,8 +74,8 @@ func TestComputeRevocationImpactBasic(t *testing.T) {
 	// Set up a SyncPeer for node-b.
 	checkpoint.Peers = map[string]corestate.PeerCheckpoint{
 		"node-b.catofes.": {
-			DiscoveredEndpoint: "192.0.2.1:33434",
-			ObservedEndpoint:   "192.0.2.1:33434",
+			LastSuccessfulEndpoint: "192.0.2.1:33434",
+			ObservedEndpoint:       "192.0.2.1:33434",
 		},
 	}
 
@@ -140,7 +140,7 @@ func TestComputeRevocationImpactSubtree(t *testing.T) {
 	}
 	checkpoint.Peers = map[string]corestate.PeerCheckpoint{
 		string(leafZone): {
-			DiscoveredEndpoint: "192.0.2.2:33434",
+			LastSuccessfulEndpoint: "192.0.2.2:33434",
 		},
 	}
 
@@ -192,10 +192,10 @@ func TestDaemonFlushRevocationCleanup(t *testing.T) {
 	// Set up sync peer with observed path.
 	checkpoint.Peers = map[string]corestate.PeerCheckpoint{
 		"node-b.catofes.": {
-			DiscoveredEndpoint:   "192.0.2.1:33434",
-			ObservedEndpoint:     "192.0.2.1:33434",
-			ObservedLastSeenUnix: now.Unix(),
-			ObservedUntilUnix:    now.Add(5 * time.Minute).Unix(),
+			LastSuccessfulEndpoint: "192.0.2.1:33434",
+			ObservedEndpoint:       "192.0.2.1:33434",
+			ObservedLastSeenUnix:   now.Unix(),
+			ObservedUntilUnix:      now.Add(5 * time.Minute).Unix(),
 		},
 	}
 
@@ -220,8 +220,8 @@ func TestDaemonFlushRevocationCleanup(t *testing.T) {
 	// Verify peer cache is cleared.
 	view := service.State.Common.ReadView()
 	peer := view.Gossip.Peers["node-b.catofes."]
-	if peer.DiscoveredEndpoint != "" || peer.ObservedEndpoint != "" {
-		t.Fatalf("peer cache not cleared: discovered=%s observed=%s", peer.DiscoveredEndpoint, peer.ObservedEndpoint)
+	if peer.LastSuccessfulEndpoint != "" || peer.ObservedEndpoint != "" {
+		t.Fatalf("peer cache not cleared: remembered=%s observed=%s", peer.LastSuccessfulEndpoint, peer.ObservedEndpoint)
 	}
 	if peer.LastFailure == nil || peer.LastFailure.Message != "zone revoked" {
 		t.Fatalf("last failure = %+v, want zone revoked", peer.LastFailure)
@@ -374,10 +374,10 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 	// Set up a sync peer with observed path.
 	checkpoint.Peers = map[string]corestate.PeerCheckpoint{
 		"node-b.catofes.": {
-			DiscoveredEndpoint:   "192.0.2.1:33434",
-			ObservedEndpoint:     "192.0.2.1:33434",
-			ObservedLastSeenUnix: now.Unix(),
-			ObservedUntilUnix:    now.Add(5 * time.Minute).Unix(),
+			LastSuccessfulEndpoint: "192.0.2.1:33434",
+			ObservedEndpoint:       "192.0.2.1:33434",
+			ObservedLastSeenUnix:   now.Unix(),
+			ObservedUntilUnix:      now.Add(5 * time.Minute).Unix(),
 		},
 	}
 
@@ -413,8 +413,8 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 	common = service.State.Common.ReadView()
 	currentLinks, currentReconcile = readTestIPsecObservation(service)
 	peer := common.Gossip.Peers["node-b.catofes."]
-	if peer.DiscoveredEndpoint != "" {
-		t.Fatalf("discovered addr should be cleared: %s", peer.DiscoveredEndpoint)
+	if peer.LastSuccessfulEndpoint != "" {
+		t.Fatalf("last successful addr should be cleared: %s", peer.LastSuccessfulEndpoint)
 	}
 	if peer.ObservedEndpoint != "" {
 		t.Fatalf("observed addr should be cleared: %s", peer.ObservedEndpoint)
@@ -507,10 +507,10 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 	}
 	common.Gossip.Peers = map[string]corestate.PeerCheckpoint{
 		"node-b.catofes.": {
-			DiscoveredEndpoint:   "192.0.2.1:33434",
-			ObservedEndpoint:     "192.0.2.1:33434",
-			ObservedLastSeenUnix: now.Unix(),
-			ObservedUntilUnix:    now.Add(5 * time.Minute).Unix(),
+			LastSuccessfulEndpoint: "192.0.2.1:33434",
+			ObservedEndpoint:       "192.0.2.1:33434",
+			ObservedLastSeenUnix:   now.Unix(),
+			ObservedUntilUnix:      now.Add(5 * time.Minute).Unix(),
 		},
 	}
 	service = newTestDaemonFromOwners(rt, common.State, common.Gossip, currentRuntime, config, time.Second)
@@ -551,7 +551,7 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 	if len(ipsecDriver.Terminated) == 0 || len(ipsecDriver.Unloaded) == 0 || len(ipsecDriver.DeletedIFs) == 0 {
 		t.Fatalf("ipsec teardown incomplete: terminated=%v unloaded=%v deleted_ifs=%v", ipsecDriver.Terminated, ipsecDriver.Unloaded, ipsecDriver.DeletedIFs)
 	}
-	if peer := common.Gossip.Peers["node-b.catofes."]; peer.DiscoveredEndpoint != "" || peer.ObservedEndpoint != "" || peer.LastFailure == nil || peer.LastFailure.Message != "zone revoked" {
+	if peer := common.Gossip.Peers["node-b.catofes."]; peer.LastSuccessfulEndpoint != "" || peer.ObservedEndpoint != "" || peer.LastFailure == nil || peer.LastFailure.Message != "zone revoked" {
 		t.Fatalf("revoked peer cache not cleaned: %+v", peer)
 	}
 

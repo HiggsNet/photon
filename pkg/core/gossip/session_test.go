@@ -46,9 +46,8 @@ func TestSyncSessionPongNoDifferences(t *testing.T) {
 	now = now.Add(100 * time.Millisecond)
 
 	actions, err := s.OnEvent(&PongReceivedEvent{
-		PeerID:       "peer-a",
-		Pong:         &Pong{},
-		MissingZones: nil,
+		PeerID: "peer-a",
+		Pong:   &Pong{Summary: corestate.CatalogSummaryFor(nil)},
 	}, now)
 	if err != nil {
 		t.Fatalf("OnEvent error: %v", err)
@@ -59,7 +58,19 @@ func TestSyncSessionPongNoDifferences(t *testing.T) {
 	assertActionTypes(t, actions, nil)
 }
 
-func TestSyncSessionPongWithMissingZones(t *testing.T) {
+func TestSyncSessionIgnoresPongWithoutSummary(t *testing.T) {
+	s := NewSyncSession("peer-a")
+	now := time.Unix(1000, 0)
+	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: s.PeerID}, now)
+	for _, pong := range []*Pong{{}, {Summary: &corestate.CatalogSummary{}}} {
+		actions, err := s.OnEvent(&PongReceivedEvent{PeerID: s.PeerID, Pong: pong}, now.Add(time.Second))
+		if err != nil || len(actions) != 0 || s.State != SyncSessionSummarySent {
+			t.Fatalf("empty PONG advanced session: %s, %v, %v", s.State, actions, err)
+		}
+	}
+}
+
+func TestSyncSessionPongMeasuresRTT(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
 
@@ -67,17 +78,13 @@ func TestSyncSessionPongWithMissingZones(t *testing.T) {
 	now = now.Add(50 * time.Millisecond)
 
 	actions, err := s.OnEvent(&PongReceivedEvent{
-		PeerID:       "peer-a",
-		Pong:         &Pong{},
-		MissingZones: []zone.ZonePath{"node-a.catofes."},
+		PeerID: "peer-a",
+		Pong:   &Pong{Summary: &corestate.CatalogSummary{CatalogRoot: []byte("remote"), ZoneCount: 1}},
 	}, now)
 	if err != nil {
-		t.Fatalf("OnEvent error: %v", err)
+		t.Fatal(err)
 	}
-	if s.State != SyncSessionObjectPulling {
-		t.Fatalf("expected state object_pulling, got %s", s.State)
-	}
-	assertActionTypes(t, actions, []string{"StartObjectPullAction"})
+	assertActionTypes(t, actions, []string{"SendFetchCatalogPageAction", "StartTimerAction"})
 	// Initial RTT is 1s; a 50ms sample should pull the estimate down toward the sample.
 	if s.EstimatedRTT() >= InitialRTT {
 		t.Fatalf("expected RTT estimate to decrease from initial %v, got %v", InitialRTT, s.EstimatedRTT())
@@ -261,35 +268,12 @@ func TestSyncSessionCatalogPageBeforeTimerDoesNotPanic(t *testing.T) {
 	assertActionTypes(t, actions, []string{"StartObjectPullAction"})
 }
 
-func TestSyncSessionPongMissingZonesStartsObjectPull(t *testing.T) {
-	s := NewSyncSession("peer-a")
-	now := time.Unix(1000, 0)
-
-	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a"}, now)
-	actions, err := s.OnEvent(&PongReceivedEvent{
-		PeerID:       "peer-a",
-		Pong:         &Pong{},
-		MissingZones: []zone.ZonePath{"node-a.catofes.", "node-b.catofes."},
-	}, now)
-	if err != nil {
-		t.Fatalf("OnEvent error: %v", err)
-	}
-	if s.State != SyncSessionObjectPulling {
-		t.Fatalf("expected state object_pulling, got %s", s.State)
-	}
-	assertActionTypes(t, actions, []string{"StartObjectPullAction", "StartObjectPullAction"})
-}
-
 func TestSyncSessionConcurrentObjectPullsComplete(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)
 
 	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a"}, now)
-	_, _ = s.OnEvent(&PongReceivedEvent{
-		PeerID:       "peer-a",
-		Pong:         &Pong{},
-		MissingZones: []zone.ZonePath{"node-b.catofes.", "node-a.catofes."},
-	}, now)
+	_, _ = s.OnEvent(testCatalogPage("peer-a", "node-b.catofes.", "node-a.catofes."), now)
 
 	if s.State != SyncSessionObjectPulling {
 		t.Fatalf("expected state object_pulling, got %s", s.State)
@@ -347,11 +331,7 @@ func TestSyncSessionConcurrentObjectPullsOneError(t *testing.T) {
 	now := time.Unix(1000, 0)
 
 	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a"}, now)
-	_, _ = s.OnEvent(&PongReceivedEvent{
-		PeerID:       "peer-a",
-		Pong:         &Pong{},
-		MissingZones: []zone.ZonePath{"node-b.catofes.", "node-a.catofes."},
-	}, now)
+	_, _ = s.OnEvent(testCatalogPage("peer-a", "node-b.catofes.", "node-a.catofes."), now)
 
 	// First pull fails. We request chunk fallback but stay in object_pulling
 	// because another pull is still in flight.
@@ -389,11 +369,7 @@ func TestSyncSessionObjectPullSuccess(t *testing.T) {
 	now := time.Unix(1000, 0)
 
 	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a"}, now)
-	_, _ = s.OnEvent(&PongReceivedEvent{
-		PeerID:       "peer-a",
-		Pong:         &Pong{},
-		MissingZones: []zone.ZonePath{"node-a.catofes."},
-	}, now)
+	_, _ = s.OnEvent(testCatalogPage("peer-a", "node-a.catofes."), now)
 
 	actions, err := s.OnEvent(&ObjectPullResultEvent{
 		PeerID:   "peer-a",
@@ -425,11 +401,7 @@ func TestSyncSessionObjectPullErrorFallsBackToChunk(t *testing.T) {
 	now := time.Unix(1000, 0)
 
 	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a"}, now)
-	_, _ = s.OnEvent(&PongReceivedEvent{
-		PeerID:       "peer-a",
-		Pong:         &Pong{},
-		MissingZones: []zone.ZonePath{"node-a.catofes."},
-	}, now)
+	_, _ = s.OnEvent(testCatalogPage("peer-a", "node-a.catofes."), now)
 
 	actions, err := s.OnEvent(&ObjectPullResultEvent{
 		PeerID:      "peer-a",
@@ -454,11 +426,7 @@ func TestSyncSessionChunkComplete(t *testing.T) {
 	now := time.Unix(1000, 0)
 
 	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a"}, now)
-	_, _ = s.OnEvent(&PongReceivedEvent{
-		PeerID:       "peer-a",
-		Pong:         &Pong{},
-		MissingZones: []zone.ZonePath{"node-a.catofes."},
-	}, now)
+	_, _ = s.OnEvent(testCatalogPage("peer-a", "node-a.catofes."), now)
 	_, _ = s.OnEvent(&ObjectPullResultEvent{PeerID: "peer-a", Zone: "node-a.catofes.", Unreachable: true, Err: errors.New("tcp unreachable")}, now)
 
 	actions, err := s.OnEvent(&ObjectChunkEvent{
@@ -527,7 +495,7 @@ func TestSyncSessionRTTAwareTimeouts(t *testing.T) {
 
 	_, _ = s.OnEvent(&SyncTimerEvent{PeerID: "peer-a"}, now)
 	// Simulate a 600ms RTT.
-	_, _ = s.OnEvent(&PongReceivedEvent{PeerID: "peer-a", Pong: &Pong{}}, now.Add(600*time.Millisecond))
+	_, _ = s.OnEvent(&PongReceivedEvent{PeerID: "peer-a", Pong: &Pong{Summary: corestate.CatalogSummaryFor(nil)}}, now.Add(600*time.Millisecond))
 
 	catalogPage := s.catalogPageTimeout()
 	expectedMin := time.Duration(kCatalogPageTimeoutMultiplier) * 600 * time.Millisecond
@@ -602,4 +570,12 @@ func actionTypes(actions []SyncAction) []string {
 		out[i] = actionType(a)
 	}
 	return out
+}
+
+func testCatalogPage(peerID string, paths ...zone.ZonePath) *CatalogPageReceivedEvent {
+	page := &corestate.CatalogPage{CatalogRoot: []byte("catalog")}
+	for _, path := range paths {
+		page.Entries = append(page.Entries, corestate.ZoneDigest{Zone: path, RootHash: []byte("root")})
+	}
+	return &CatalogPageReceivedEvent{PeerID: peerID, Page: page}
 }

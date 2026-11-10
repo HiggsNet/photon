@@ -192,11 +192,11 @@ func TestDaemonControlStatus(t *testing.T) {
 
 func TestCanonicalZoneQueryUsesControlWhileBoltOwnedAndMatchesOffline(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "photon.db")
-	legacy, trustedRoot := legacyRuntimeMigrationFixture(t)
-	seedLegacyLinuxState(t, path, legacy)
+	verified, checkpoint, linux, _ := buildTestRoutingOwners(t)
+	seedPartitionedStateDB(t, path, verified, checkpoint, linux)
 	config := defaultAppConfig()
 	config.StatePath = path
-	config.TrustedRootPublicKey = append([]byte(nil), trustedRoot...)
+	config.TrustedRootPublicKey = append([]byte(nil), verified.TrustedRootPublicKey...)
 	rt := &testApp{Config: testConfigWithStatePath(config, path), Clock: func() time.Time { return time.Unix(1000, 0) }}
 
 	state, err := openState(rt.Config)

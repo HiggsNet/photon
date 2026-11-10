@@ -115,7 +115,7 @@ func GossipOutboundPeers(input GossipDiscoveryInput, now time.Time) []string {
 	seen := make(map[string]bool)
 	peers := make([]string, 0, len(input.Bootstrap)+len(input.Peers))
 	add := func(peerID string) {
-		if peerID == "" || peerID == input.LocalPeerID || peerID == input.ManagedZone.String() || seen[peerID] {
+		if peerID == "" || peerID == input.LocalPeerID || peerID == input.ManagedZone.String() || seen[peerID] || input.Suppressed[peerID] {
 			return
 		}
 		seen[peerID] = true
@@ -183,17 +183,16 @@ func ShouldRelayGossipUpdate(peer corestate.PeerCheckpoint, peerID, sourcePeerID
 }
 
 type GossipPeerAddressUpdate struct {
-	SetAddresses    []*net.UDPAddr
-	RemoveAddresses bool
-	ObservedPaths   []gossip.ObservedPath
-	PreferObserved  bool
-	RemoveObserved  bool
+	ObservedPaths  []gossip.ObservedPath
+	PreferObserved bool
+	RemoveObserved bool
 }
 
 type GossipDiscoveryPlan struct {
 	KnownPeerIDs []string
 	Peers        map[string]GossipPeerAddressUpdate
 	Patches      map[string]corestate.PeerCheckpointPatch
+	Addresses    map[string][]*net.UDPAddr
 	Remembered   map[string]*net.UDPAddr
 }
 
@@ -274,7 +273,7 @@ func ResolveGossipObjectPullAddresses(input GossipDiscoveryInput, peerID string,
 		}
 	}
 	peer := input.Peers[peerID]
-	if paths, _, ok := discoveryObservedPaths(input, peerID, peer, now); ok {
+	if paths, ok := discoveryObservedPaths(input, peerID, peer, now); ok {
 		for _, path := range paths {
 			add(discoveryTCPAddressFromUDP(path.Addr))
 		}
@@ -328,20 +327,20 @@ func (driver *GossipDriver) publishGossipObservedPath(peerID string, suppressed 
 	}
 	input := driver.gossipDiscoveryInput(peerID, suppressed, false, "")
 	var paths []gossip.ObservedPath
-	var prefer, ok bool
+	var ok bool
 	if input.verifiedRevision != verification.revision {
-		paths, prefer, ok = discoveryObservedPaths(input, peerID, input.Peers[peerID], now)
+		paths, ok = discoveryObservedPaths(input, peerID, input.Peers[peerID], now)
 	} else if verification.valid && input.Network != nil {
 		// Reuse authorization only within this packet's fixed time and
 		// verified revision. Checkpoint fields still come from committed state.
-		paths, prefer, ok = observedCheckpointPaths(input.Peers[peerID], now)
+		paths, ok = observedCheckpointPaths(input.Peers[peerID], now)
 	}
 	if !ok {
 		transport.RemoveObservedPeerAddr(peerID)
 		transport.SetRememberedPeerAddr(peerID, nil)
 		return nil
 	}
-	transport.SetObservedPeerPaths(peerID, paths, prefer)
+	transport.SetObservedPeerPaths(peerID, paths, preferGossipObserved(input.Peers[peerID], transport.PeerAddr(peerID)))
 	if verification.confirmedChanged {
 		transport.SetRememberedPeerAddr(peerID, parseRememberedAddr(input.Peers[peerID].LastSuccessfulEndpoint))
 	}
@@ -360,44 +359,21 @@ func (driver *GossipDriver) gossipDiscoveryAvailable() bool {
 func PlanGossipDiscovery(input GossipDiscoveryInput, now time.Time) GossipDiscoveryPlan {
 	plan := GossipDiscoveryPlan{
 		Peers: make(map[string]GossipPeerAddressUpdate), Patches: make(map[string]corestate.PeerCheckpointPatch),
-		Remembered: make(map[string]*net.UDPAddr),
+		Addresses: make(map[string][]*net.UDPAddr), Remembered: make(map[string]*net.UDPAddr),
 	}
 	if input.Network == nil {
 		return plan
 	}
 	plan.KnownPeerIDs = verifiedDiscoveryPeers(input, now)
 	discovered := gossip.ExtractPeerEndpointsAt(input.Network, now)
-	active := make(map[string]bool)
-
 	for peerID, bootstrap := range input.Bootstrap {
-		addrs := buildDiscoveryAddresses(discovered[peerID], bootstrap, input.SourceOrder)
-		if len(addrs) > 0 {
-			update := plan.Peers[peerID]
-			update.SetAddresses = addrs
-			plan.Peers[peerID] = update
+		if !input.Suppressed[peerID] {
+			plan.Addresses[peerID] = GossipDiscoveryAddresses(discovered[peerID], bootstrap, input.SourceOrder)
 		}
 	}
 	for peerID, entries := range discovered {
-		if peerID == input.LocalPeerID || peerID == string(input.ManagedZone) || len(entries) == 0 {
-			continue
-		}
-		current := input.Peers[peerID]
-		addrs := buildDiscoveryAddresses(entries, input.Bootstrap[peerID], input.SourceOrder)
-		if len(addrs) == 0 {
-			continue
-		}
-		active[peerID] = true
-		update := plan.Peers[peerID]
-		update.SetAddresses = addrs
-		plan.Peers[peerID] = update
-		if input.Suppressed[peerID] {
-			continue
-		}
-		addr := addrs[0].String()
-		if current.DiscoveredEndpoint != addr {
-			plan.Patches[peerID] = mergeDiscoveryPatch(plan.Patches[peerID], corestate.PeerCheckpointPatch{
-				DiscoveredEndpoint: corestate.PatchField[string]{Set: true, Value: addr},
-			})
+		if peerID != input.LocalPeerID && peerID != input.ManagedZone.String() && !input.Suppressed[peerID] && input.Bootstrap[peerID] == nil {
+			plan.Addresses[peerID] = GossipDiscoveryAddresses(entries, nil, input.SourceOrder)
 		}
 	}
 
@@ -420,18 +396,20 @@ func PlanGossipDiscovery(input GossipDiscoveryInput, now time.Time) GossipDiscov
 		}
 		if peer.ObservedEndpoint != "" && !discoveryObservedActive(peer, now) {
 			update.RemoveObserved = true
-			plan.Patches[peerID] = mergeDiscoveryPatch(plan.Patches[peerID], clearObservedDiscoveryPatch())
-		} else if paths, prefer, ok := discoveryObservedPaths(input, peerID, peer, now); ok {
-			update.ObservedPaths, update.PreferObserved = paths, prefer
+			patch := plan.Patches[peerID]
+			patch.ObservedEndpoint.Set = true
+			patch.ObservedFirstUnix.Set = true
+			patch.ObservedUntilUnix.Set = true
+			plan.Patches[peerID] = patch
+		} else if paths, ok := discoveryObservedPaths(input, peerID, peer, now); ok {
+			update.ObservedPaths = paths
+			var first *net.UDPAddr
+			if addrs := plan.Addresses[peerID]; len(addrs) > 0 {
+				first = addrs[0]
+			}
+			update.PreferObserved = preferGossipObserved(peer, first)
 		} else {
 			update.RemoveObserved = true
-		}
-		if peer.DiscoveredEndpoint != "" && !active[peerID] && input.Bootstrap[peerID] == nil &&
-			peerID != input.LocalPeerID && peerID != string(input.ManagedZone) && len(discovered[peerID]) == 0 {
-			update.RemoveAddresses = true
-			plan.Patches[peerID] = mergeDiscoveryPatch(plan.Patches[peerID], corestate.PeerCheckpointPatch{
-				DiscoveredEndpoint: corestate.PatchField[string]{Set: true},
-			})
 		}
 		plan.Peers[peerID] = update
 	}
@@ -442,7 +420,10 @@ func ApplyGossipDiscoveryPlan(transport *gossip.Transport, plan GossipDiscoveryP
 	if transport == nil {
 		return
 	}
-	transport.ReplaceRememberedPeerAddrs(plan.Remembered)
+	transport.ReplaceDiscoveryAddrs(plan.Addresses, plan.Remembered)
+	for peerID := range plan.Addresses {
+		transport.AddKnownPeerID(peerID)
+	}
 	for _, peerID := range plan.KnownPeerIDs {
 		transport.AddKnownPeerID(peerID)
 	}
@@ -457,11 +438,6 @@ func ApplyGossipDiscoveryPlan(transport *gossip.Transport, plan GossipDiscoveryP
 			transport.RemoveObservedPeerAddr(peerID)
 		} else if len(update.ObservedPaths) > 0 {
 			transport.SetObservedPeerPaths(peerID, update.ObservedPaths, update.PreferObserved)
-		}
-		if update.RemoveAddresses {
-			transport.RemovePeerAddrs(peerID)
-		} else if len(update.SetAddresses) > 0 {
-			transport.SetPeerAddrs(peerID, update.SetAddresses)
 		}
 	}
 }
@@ -495,22 +471,22 @@ func verifiedDiscoveryPeers(input GossipDiscoveryInput, now time.Time) []string 
 	return out
 }
 
-func discoveryObservedPaths(input GossipDiscoveryInput, peerID string, peer corestate.PeerCheckpoint, now time.Time) ([]gossip.ObservedPath, bool, bool) {
-	if !discoveryObservedActive(peer, now) || !discoveryPeerVerified(input, peerID, now) {
-		return nil, false, false
+func discoveryObservedPaths(input GossipDiscoveryInput, peerID string, peer corestate.PeerCheckpoint, now time.Time) ([]gossip.ObservedPath, bool) {
+	if input.Suppressed[peerID] || !discoveryObservedActive(peer, now) || !discoveryPeerVerified(input, peerID, now) {
+		return nil, false
 	}
 	return observedCheckpointPaths(peer, now)
 }
 
 // observedCheckpointPaths builds addresses only after the caller has authorized
 // this peer for the committed verified revision and the supplied time.
-func observedCheckpointPaths(peer corestate.PeerCheckpoint, now time.Time) ([]gossip.ObservedPath, bool, bool) {
+func observedCheckpointPaths(peer corestate.PeerCheckpoint, now time.Time) ([]gossip.ObservedPath, bool) {
 	if !discoveryObservedActive(peer, now) {
-		return nil, false, false
+		return nil, false
 	}
 	endpoint, err := netip.ParseAddrPort(peer.ObservedEndpoint)
 	if err != nil {
-		return nil, false, false
+		return nil, false
 	}
 	addr := net.UDPAddrFromAddrPort(endpoint)
 	paths := []gossip.ObservedPath{{Addr: addr, Until: time.Unix(peer.ObservedUntilUnix, 0)}}
@@ -526,8 +502,11 @@ func observedCheckpointPaths(peer corestate.PeerCheckpoint, now time.Time) ([]go
 		seen[entry.Endpoint] = true
 		paths = append(paths, gossip.ObservedPath{Addr: net.UDPAddrFromAddrPort(grace), Until: time.Unix(entry.UntilUnix, 0)})
 	}
-	prefer := peer.LastFailure != nil || peer.DiscoveredEndpoint == "" || discoveryAddressPrivate(peer.DiscoveredEndpoint)
-	return paths, prefer, true
+	return paths, true
+}
+
+func preferGossipObserved(peer corestate.PeerCheckpoint, candidate *net.UDPAddr) bool {
+	return peer.LastFailure != nil || candidate == nil || discoveryAddressPrivate(candidate.String())
 }
 
 func discoveryPeerVerified(input GossipDiscoveryInput, peerID string, now time.Time) bool {
@@ -577,34 +556,8 @@ func discoveryAddressPrivate(addr string) bool {
 	return ip != nil && (ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast())
 }
 
-func clearObservedDiscoveryPatch() corestate.PeerCheckpointPatch {
-	return corestate.PeerCheckpointPatch{
-		ObservedEndpoint:  corestate.PatchField[string]{Set: true},
-		ObservedFirstUnix: corestate.PatchField[int64]{Set: true},
-		ObservedUntilUnix: corestate.PatchField[int64]{Set: true},
-	}
-}
-
-func mergeDiscoveryPatch(a, b corestate.PeerCheckpointPatch) corestate.PeerCheckpointPatch {
-	if b.DiscoveredEndpoint.Set {
-		a.DiscoveredEndpoint = b.DiscoveredEndpoint
-	}
-	if b.ObservedEndpoint.Set {
-		a.ObservedEndpoint = b.ObservedEndpoint
-	}
-	if b.ObservedFirstUnix.Set {
-		a.ObservedFirstUnix = b.ObservedFirstUnix
-	}
-	if b.ObservedLastUnix.Set {
-		a.ObservedLastUnix = b.ObservedLastUnix
-	}
-	if b.ObservedUntilUnix.Set {
-		a.ObservedUntilUnix = b.ObservedUntilUnix
-	}
-	return a
-}
-
-func buildDiscoveryAddresses(entries []gossip.EndpointEntry, bootstrap *net.UDPAddr, order []string) []*net.UDPAddr {
+// GossipDiscoveryAddresses orders current signed and configured UDP candidates.
+func GossipDiscoveryAddresses(entries []gossip.EndpointEntry, bootstrap *net.UDPAddr, order []string) []*net.UDPAddr {
 	if len(order) == 0 {
 		order = []string{"advertise", "bootstrap", "reflector", "interface"}
 	}

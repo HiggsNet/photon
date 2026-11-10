@@ -34,7 +34,6 @@ func gossipRouteTargets(view corestate.View, now time.Time) []netip.Addr {
 				path != view.State.ManagedZone && photoncrypto.VerifyChain(view.State.Network, path, now) == nil {
 				add(peer.LastSuccessfulEndpoint)
 			}
-			add(peer.DiscoveredEndpoint)
 			if peer.ObservedUntilUnix > now.Unix() {
 				add(peer.ObservedEndpoint)
 			}

@@ -3,7 +3,7 @@ package state
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+
 	"errors"
 	"strings"
 	"testing"
@@ -60,21 +60,16 @@ func TestObservedPathUpdatesStayInMemory(t *testing.T) {
 	}
 }
 
-func TestCheckpointNarrowCommitMigrationRollbackAndIsolation(t *testing.T) {
+func TestCheckpointNarrowCommitIgnoresAggregateAndPreservesOtherPeers(t *testing.T) {
 	db := openCommonBoltTestDB(t)
 	initial := commonBoltTestCandidate(1)
 	initial.Gossip.Peers["untouched"] = PeerCheckpoint{BackoffUntilUnix: 42}
 	commitCommonBoltTestState(t, db, initial, 1)
 	disk := &BoltStore{db: db}
-	// Simulate v1's monolithic checkpoint, including a stale peer bucket left
-	// by a previous upgrade/downgrade. The legacy payload is authoritative.
+	// An old aggregate must never override current per-peer hints.
 	err := db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketCommonState).Bucket(bucketGossip)
-		if err := b.Bucket(bucketCheckpointPeers).Put([]byte("stale"), []byte(`{"failure_count":99}`)); err != nil {
-			return err
-		}
-		payload, _ := json.Marshal(initial.Gossip)
-		return b.Put(keyPayload, payload)
+		return b.Put(keyPayload, []byte(`{"peers":{"retired":{"failure_count":99}}}`))
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -105,15 +100,15 @@ func TestCheckpointNarrowCommitMigrationRollbackAndIsolation(t *testing.T) {
 			if !bytes.Equal(untouched, b.Bucket(bucketCheckpointPeers).Get([]byte("untouched"))) {
 				t.Fatal("unrelated peer changed")
 			}
-			if b.Get(keyPayload) != nil || b.Bucket(bucketCheckpointPeers).Get([]byte("stale")) != nil {
-				t.Fatal("legacy payload/stale peer survived migration")
-			}
 			loaded, rev, report, _, err := LoadBoltState(tx)
 			if err != nil {
 				return err
 			}
-			if rev != 1 || report.GossipCheckpointDiscarded || loaded.Gossip.Peers["peer-a"].BackoffUntilUnix != wantBackoff || loaded.Gossip.Peers["peer-a"].FailureCount != 2 {
+			if rev != 1 || !report.GossipCheckpointDiscarded || loaded.Gossip.Peers["peer-a"].BackoffUntilUnix != wantBackoff || loaded.Gossip.Peers["peer-a"].FailureCount != 2 {
 				t.Fatalf("wrong persisted checkpoint/revision: %+v %d", loaded.Gossip, rev)
+			}
+			if _, found := loaded.Gossip.Peers["retired"]; found {
+				t.Fatal("old aggregate was restored")
 			}
 			return nil
 		}); err != nil {
@@ -187,30 +182,18 @@ func TestRevocationProjectionTracksTimeAndDetachesPeers(t *testing.T) {
 	}
 }
 
-func TestCheckpointMigrationRollsBackOnWriteFailure(t *testing.T) {
+func TestCheckpointBatchRollsBackOnWriteFailure(t *testing.T) {
 	db := openCommonBoltTestDB(t)
 	initial := commonBoltTestCandidate(1)
 	commitCommonBoltTestState(t, db, initial, 1)
-	payload, err := json.Marshal(initial.Gossip)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Update(func(tx *bolt.Tx) error {
-		return tx.Bucket(bucketCommonState).Bucket(bucketGossip).Put(keyPayload, payload)
-	}); err != nil {
-		t.Fatal(err)
-	}
 	disk := &BoltStore{db: db}
-	err = disk.CommitCheckpoints(context.Background(), map[string]*PeerCheckpoint{"a-written-first": {LastSyncUnix: 42}, strings.Repeat("z", bolt.MaxKeySize+1): {LastSyncUnix: 42}}, 1)
+	err := disk.CommitCheckpoints(context.Background(), map[string]*PeerCheckpoint{"a-written-first": {FailureCount: 2}, strings.Repeat("z", bolt.MaxKeySize+1): {FailureCount: 2}}, 1)
 	if !errors.Is(err, bolt.ErrKeyTooLarge) {
 		t.Fatalf("expected transaction write failure, got %v", err)
 	}
 	if err := db.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket(bucketCommonState).Bucket(bucketGossip)
-		if !bytes.Equal(b.Get(keyPayload), payload) {
-			t.Fatal("failed migration removed legacy checkpoint")
-		}
-		if b.Bucket(bucketCheckpointPeers).Get([]byte("a-written-first")) != nil {
+		peers := tx.Bucket(bucketCommonState).Bucket(bucketGossip).Bucket(bucketCheckpointPeers)
+		if peers.Get([]byte("a-written-first")) != nil {
 			t.Fatal("failed batch partially persisted")
 		}
 		return nil

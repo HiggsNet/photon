@@ -12,16 +12,10 @@ import (
 
 // Schema 2 keeps identity/global metadata separate from each zone. The path
 // manifest detects missing or orphaned zone payloads during read-only loads.
-func loadBoltVerified(bucket *bolt.Bucket, version uint64) (*persistedVerifiedState, error) {
+func loadBoltVerified(bucket *bolt.Bucket) (*persistedVerifiedState, error) {
 	var persisted persistedVerifiedState
 	if err := decodeRequiredJSON(bucket, keyPayload, &persisted); err != nil {
 		return nil, err
-	}
-	if version == legacyBoltSchemaVersion {
-		if persisted.Network == nil || bucket.Bucket(bucketVerifiedZones) != nil {
-			return nil, fmt.Errorf("%w: invalid legacy verified layout", ErrBoltStateCorrupt)
-		}
-		return &persisted, nil
 	}
 	zones := bucket.Bucket(bucketVerifiedZones)
 	if persisted.Network != nil || zones == nil || len(persisted.ZonePaths) == 0 {

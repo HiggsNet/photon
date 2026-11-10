@@ -896,7 +896,7 @@ object-pull-smoke: build
 # 4. B 通过 control socket 写入 3000-byte bigdata record。
 # 5. B 的 UDP gossip 向 A 发出 announce/digest；A 尝试 TCP object pull B
 #    失败（connection refused），触发 chunk fallback 路径。
-# 6. A 发送 fetch_zone 带 ChunkFallback=true；B 将 zone snapshot 拆成
+# 6. A 发送 fetch_zone；B 将 zone snapshot 拆成
 #    多个 UDP object_chunk 发给 A。
 # 7. 断言 A 收到 bigdata，且 A 的 daemon 日志确认该 zone 经 UDP chunks apply。
 chunk-fallback-smoke: build

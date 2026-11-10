@@ -132,8 +132,7 @@ func desktopFormatPeers(snapshot desktopSnapshot) string {
 			state = "暂无会话状态"
 		case gossip.SyncSessionIdle:
 			state = "等待同步"
-		case gossip.SyncSessionPingSent:
-			state = "已发送探测"
+
 		case gossip.SyncSessionSummarySent:
 			state = "已发送目录摘要"
 		case gossip.SyncSessionCatalogDiffing:

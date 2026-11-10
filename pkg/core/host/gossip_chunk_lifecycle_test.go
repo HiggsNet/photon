@@ -56,7 +56,7 @@ func TestGossipRepeatedFetchReusesTransferAndPreservesRepair(t *testing.T) {
 	var transferID []byte
 	for range 20 {
 		sender.chunks = nil
-		if err := driver.respondGossipFetchZone(t.Context(), "receiver", &gossip.FetchZone{Zone: paths[0], ChunkFallback: true}, sender, gossip.DefaultDatagramBudget); err != nil {
+		if err := driver.respondGossipFetchZone(t.Context(), "receiver", &gossip.FetchZone{Zone: paths[0]}, sender, gossip.DefaultDatagramBudget); err != nil {
 			t.Fatal(err)
 		}
 		if len(sender.chunks) != 1 || len(driver.gossipChunkSends) != 0 {
@@ -77,7 +77,7 @@ func TestGossipRepeatedFetchReusesTransferAndPreservesRepair(t *testing.T) {
 func TestGossipDuplicateFetchDoesNotRestartActiveSend(t *testing.T) {
 	driver, clock, paths := chunkLifecycleDriver(t, true)
 	sender := &lifecycleChunkSender{failure: &gossip.QuotaExceededError{ByteBurst: 1200, ObjectBurst: 128, ByteRate: 1200, ObjectRate: 128, RequestedBytes: 1200, RequestedObjects: 1}}
-	request := &gossip.FetchZone{Zone: paths[0], ChunkFallback: true}
+	request := &gossip.FetchZone{Zone: paths[0]}
 	if err := driver.respondGossipFetchZone(t.Context(), "receiver", request, sender, gossip.DefaultDatagramBudget); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestGossipDuplicateFetchDoesNotRestartActiveSend(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(sender.chunks) != 1 || sender.announces != 1 || len(driver.gossipChunkSends) != 1 || len(job.indexes) != pending || !job.expires.Equal(expires) {
+	if len(sender.chunks) != 1 || sender.announces != 0 || len(driver.gossipChunkSends) != 1 || len(job.indexes) != pending || !job.expires.Equal(expires) {
 		t.Fatal("duplicate request amplified or prolonged the active send")
 	}
 	clock.Advance(gossip.ChunkTransferTTL)
@@ -118,7 +118,11 @@ func TestGossipBoundedSessionReceivesFiveSequentialFallbacks(t *testing.T) {
 		return actions
 	}
 	on(&gossip.SyncTimerEvent{PeerID: "sender"})
-	work := on(&gossip.PongReceivedEvent{PeerID: "sender", Pong: &gossip.Pong{}, MissingZones: paths})
+	digests := make([]corestate.ZoneDigest, 0, len(paths))
+	for _, path := range paths {
+		digests = append(digests, corestate.ZoneDigest{Zone: path, RootHash: []byte("root")})
+	}
+	work := on(&gossip.CatalogPageReceivedEvent{PeerID: "sender", Page: &corestate.CatalogPage{CatalogRoot: []byte("catalog"), Entries: digests}})
 	completed := 0
 	for len(work) > 0 {
 		action := work[0]
@@ -128,7 +132,7 @@ func TestGossipBoundedSessionReceivesFiveSequentialFallbacks(t *testing.T) {
 			work = append(work, on(&gossip.ObjectPullResultEvent{PeerID: "sender", Zone: action.Zone, Unreachable: true, Err: errors.New("TCP unavailable")})...)
 		case gossip.SendChunkFallbackAction:
 			sender := &lifecycleChunkSender{}
-			if err := driver.respondGossipFetchZone(t.Context(), "receiver", &gossip.FetchZone{Zone: action.Zone, ChunkFallback: true}, sender, gossip.DefaultDatagramBudget); err != nil {
+			if err := driver.respondGossipFetchZone(t.Context(), "receiver", &gossip.FetchZone{Zone: action.Zone}, sender, gossip.DefaultDatagramBudget); err != nil {
 				t.Fatalf("fallback after %d applies: %v", completed, err)
 			}
 			assembly := gossip.NewChunkAssemblyStore()
@@ -160,7 +164,7 @@ func TestGossipPermanentChunkSendFailureReleasesCache(t *testing.T) {
 	failure := errors.New("permanent write failure")
 	sender := &lifecycleChunkSender{failure: failure}
 	for _, path := range paths {
-		if err := driver.respondGossipFetchZone(t.Context(), "receiver", &gossip.FetchZone{Zone: path, ChunkFallback: true}, sender, gossip.DefaultDatagramBudget); !errors.Is(err, failure) {
+		if err := driver.respondGossipFetchZone(t.Context(), "receiver", &gossip.FetchZone{Zone: path}, sender, gossip.DefaultDatagramBudget); !errors.Is(err, failure) {
 			t.Fatalf("send %s: %v", path, err)
 		}
 		if driver.gossipSentChunks.Chunk("receiver", sender.chunks[len(sender.chunks)-1].TransferID, 0, clock.Now()) != nil {
@@ -168,7 +172,7 @@ func TestGossipPermanentChunkSendFailureReleasesCache(t *testing.T) {
 		}
 	}
 	sender.failure = nil
-	if err := driver.respondGossipFetchZone(t.Context(), "receiver", &gossip.FetchZone{Zone: paths[0], ChunkFallback: true}, sender, gossip.DefaultDatagramBudget); err != nil {
+	if err := driver.respondGossipFetchZone(t.Context(), "receiver", &gossip.FetchZone{Zone: paths[0]}, sender, gossip.DefaultDatagramBudget); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -195,7 +199,7 @@ func TestGossipChunkCapacityWarningIsClassifiedThrottledAndHandled(t *testing.T)
 		}
 	}
 	fill()
-	packet := &gossip.Packet{Message: &gossip.Message{PeerID: "receiver", Type: gossip.MessageFetchZone, FetchZone: &gossip.FetchZone{Zone: paths[4], ChunkFallback: true}}}
+	packet := &gossip.Packet{Message: &gossip.Message{PeerID: "receiver", Type: gossip.MessageFetchZone, FetchZone: &gossip.FetchZone{Zone: paths[4]}}}
 	for range 6 {
 		if _, err := driver.HandleGossipHostEvent(t.Context(), GossipPacketReceived{Packet: packet}, clock.Now(), nil); err != nil {
 			t.Fatalf("capacity error escaped to platform logger: %v", err)

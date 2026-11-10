@@ -1,11 +1,10 @@
 package state
 
 import (
-	"context"
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
-	"fmt"
+
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"path/filepath"
 	"testing"
@@ -197,7 +196,7 @@ func TestBoltStateDiscardsOnlyCorruptGossipCheckpoint(t *testing.T) {
 	db := openCommonBoltTestDB(t)
 	commitCommonBoltTestState(t, db, commonBoltTestCandidate(1), 1)
 	if err := db.Update(func(tx *bolt.Tx) error {
-		return tx.Bucket(bucketCommonState).Bucket(bucketGossip).Put(keyPayload, []byte("{"))
+		return tx.Bucket(bucketCommonState).Bucket(bucketGossip).Bucket(bucketCheckpointPeers).Put([]byte("peer-a"), []byte("{"))
 	}); err != nil {
 		t.Fatalf("corrupt checkpoint fixture: %v", err)
 	}
@@ -296,13 +295,13 @@ func putUint64Raw(bucket *bolt.Bucket, key []byte, value uint64) error {
 	return bucket.Put(key, data[:])
 }
 
-func TestLoadBoltStateRepairsOnlyLegacyRootCapabilities(t *testing.T) {
+func TestLoadBoltStateRejectsNoncanonicalRoot(t *testing.T) {
 	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, extraKey := range []bool{false, true} {
-		t.Run(fmt.Sprintf("extra_key_%t", extraKey), func(t *testing.T) {
+		t.Run(map[bool]string{false: "legacy capabilities", true: "extra key"}[extraKey], func(t *testing.T) {
 			db := openCommonBoltTestDB(t)
 			candidate := commonBoltTestCandidate(1)
 			candidate.Verified.TrustedRootPublicKey = pub
@@ -327,43 +326,14 @@ func TestLoadBoltStateRepairsOnlyLegacyRootCapabilities(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			if err := db.View(func(tx *bolt.Tx) error {
-				loaded, revision, _, found, err := LoadBoltState(tx)
-				if extraKey {
-					if !errors.Is(err, ErrBoltStateCorrupt) {
-						t.Fatalf("extra root key error = %v", err)
-					}
-					return nil
-				}
-				if err != nil {
-					return err
-				}
-				if !found || revision != 1 {
-					t.Fatalf("found/revision = %v/%d", found, revision)
-				}
-				if err := photoncrypto.VerifyPinnedRoot(loaded.Verified.Network, pub); err != nil {
-					return err
-				}
-				return nil
-			}); err != nil {
-				t.Fatal(err)
+			writes := db.Stats().TxStats.Write
+			store := &BoltStore{db: db}
+			if _, _, _, _, err := store.LoadCommon(); !errors.Is(err, ErrBoltStateCorrupt) {
+				t.Fatalf("noncanonical root error = %v", err)
 			}
-			if !extraKey {
-				store := &BoltStore{db: db}
-				loaded, revision, report, found, err := store.LoadCommon()
-				if err != nil || !found || !report.RootAuthorityRepaired || revision != 2 {
-					t.Fatalf("startup repair: revision=%d report=%+v err=%v", revision, report, err)
-				}
-				loaded.Gossip.Peers["peer-a"] = PeerCheckpoint{FailureCount: 3}
-				if err := store.CommitCommon(context.Background(), loaded, ChangeSet{VerifiedRevision: revision, GossipCheckpointChanged: true}); err != nil {
-					t.Fatalf("checkpoint after repair: %v", err)
-				}
-				_, againRevision, againReport, _, err := store.LoadCommon()
-				if err != nil || againRevision != 2 || againReport.RootAuthorityRepaired {
-					t.Fatalf("reload: revision=%d report=%+v err=%v", againRevision, againReport, err)
-				}
+			if db.Stats().TxStats.Write != writes {
+				t.Fatal("rejected root was rewritten")
 			}
-
 		})
 	}
 }
