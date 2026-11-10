@@ -230,7 +230,6 @@ type SyncSession struct {
 
 	// RTT estimation.
 	estimatedRTT time.Duration
-	rttVariance  time.Duration
 	pingSentAt   time.Time
 
 	lastError error
@@ -730,15 +729,9 @@ func (s *SyncSession) updateRTT(sample time.Duration) {
 	}
 	if s.estimatedRTT <= 0 {
 		s.estimatedRTT = sample
-		s.rttVariance = sample / 2
 		return
 	}
 	s.estimatedRTT = (7*s.estimatedRTT + sample) / 8
-	diff := sample - s.estimatedRTT
-	if diff < 0 {
-		diff = -diff
-	}
-	s.rttVariance = (3*s.rttVariance + diff) / 4
 }
 
 func (s *SyncSession) pendingEmpty() bool {

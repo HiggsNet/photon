@@ -104,7 +104,7 @@ func TestCatalogSyncMessagesFitDatagramBudget(t *testing.T) {
 		})
 	}
 	summary := corestate.CatalogSummaryForDigests(digests)
-	if size := MessageWireSize(&Message{Type: MessagePing, Ping: &Ping{Summary: summary}}); size > DefaultDatagramBudget {
+	if size, err := WireEncodeSizeForPeer(&Message{Type: MessagePing, Ping: &Ping{Summary: summary}}, "test-peer"); err != nil || size > DefaultDatagramBudget {
 		t.Fatalf("catalog summary ping size=%d exceeds %d", size, DefaultDatagramBudget)
 	}
 	for cursor := ""; ; {
@@ -112,7 +112,7 @@ func TestCatalogSyncMessagesFitDatagramBudget(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CatalogPageForDigests(%q): %v", cursor, err)
 		}
-		if size := MessageWireSize(&Message{Type: MessageCatalogPage, CatalogPage: page}); size > DefaultDatagramBudget {
+		if size, err := WireEncodeSizeForPeer(&Message{Type: MessageCatalogPage, CatalogPage: page}, "test-peer"); err != nil || size > DefaultDatagramBudget {
 			t.Fatalf("catalog page size=%d exceeds %d", size, DefaultDatagramBudget)
 		}
 		if page.NextCursor == "" {

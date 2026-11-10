@@ -30,7 +30,7 @@ func TestBuildZoneSnapshotChunksFitsWireBudgetAndRoundTrips(t *testing.T) {
 			t.Fatalf("chunk[%d] metadata = %#v", i, chunk)
 		}
 		message := &Message{Type: MessageObjectChunk, PeerID: "sender.catofes.", Nonce: ^uint64(0), Timestamp: int64(^uint64(0) >> 1), ObjectChunk: chunk}
-		if size := MessageWireSize(message); size > DefaultDatagramBudget {
+		if size, err := WireEncodeSizeForPeer(message, "test-peer"); err != nil || size > DefaultDatagramBudget {
 			t.Fatalf("chunk[%d] wire size = %d, want <= %d", i, size, DefaultDatagramBudget)
 		}
 		encoded = append(encoded, chunk.Data...)

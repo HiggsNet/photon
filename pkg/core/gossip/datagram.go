@@ -9,14 +9,6 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
-func MessageWireSize(message *Message) int {
-	size, err := WireEncodeSize(message)
-	if err != nil {
-		return 1 << 30
-	}
-	return size
-}
-
 // MaxObjectChunkDataSize returns the largest ObjectChunk.Data payload whose
 // complete worst-case wire message fits budget.
 func MaxObjectChunkDataSize(budget int, senderID string, path zone.ZonePath) int {

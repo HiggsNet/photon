@@ -30,9 +30,7 @@ func SyncEventName(event SyncEvent) string {
 	}
 }
 
-// SyncEventPeerID returns the peer owning a session event. Demux-only packet
-// events intentionally return an empty ID because they have not been decoded
-// into a session event yet.
+// SyncEventPeerID returns the peer owning a session event.
 func SyncEventPeerID(event SyncEvent) string {
 	switch event := event.(type) {
 	case *SyncTimerEvent:

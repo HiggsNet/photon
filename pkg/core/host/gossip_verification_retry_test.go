@@ -57,7 +57,7 @@ func TestGossipCatalogRetriesAfterVerificationDependenciesChange(t *testing.T) {
 	visible := func(store *corestate.Store, snapshot *corestate.ZoneSnapshot, at time.Time) bool {
 		t.Helper()
 		view := store.ReadView()
-		_, filtered := FilterGossipCatalogPage(GossipDiscoveryInput{Network: view.State.Network, Peers: view.Gossip.Peers}, "bootstrap", &corestate.CatalogPage{Entries: []corestate.ZoneDigest{{Zone: snapshot.Zone, RootHash: root(snapshot)}}}, at)
+		filtered := filterGossipCatalogPage(view.State.ManagedZone, view.Gossip.Peers["bootstrap"], &corestate.CatalogPage{Entries: []corestate.ZoneDigest{{Zone: snapshot.Zone, RootHash: root(snapshot)}}}, at)
 		return len(filtered.Entries) == 1
 	}
 	t.Run("missing-parent", func(t *testing.T) {

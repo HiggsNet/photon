@@ -117,44 +117,6 @@ func TestSyncSessionCatalogSummaryFetchesPages(t *testing.T) {
 	assertActionTypes(t, actions, []string{"SendFetchCatalogPageAction", "StartTimerAction"})
 }
 
-func TestSyncSessionResponderPacketsDoNotEnterActivePullFSM(t *testing.T) {
-	s := NewSyncSession("peer-a")
-	now := time.Unix(1000, 0)
-	localRoot := corestate.CatalogRoot([]corestate.ZoneDigest{{Zone: "catofes.", RootHash: []byte("local")}})
-	remoteRoot := corestate.CatalogRoot([]corestate.ZoneDigest{{Zone: "node-a.catofes.", RootHash: []byte("remote")}})
-
-	_, _ = s.OnEvent(&SyncTimerEvent{
-		PeerID:       "peer-a",
-		LocalSummary: &corestate.CatalogSummary{CatalogRoot: localRoot, ZoneCount: 1},
-	}, now)
-	if s.State != SyncSessionSummarySent {
-		t.Fatalf("expected state summary_sent, got %s", s.State)
-	}
-
-	actions, err := s.OnEvent(&PacketEvent{}, now.Add(5*time.Millisecond))
-	if err == nil {
-		t.Fatal("PacketEvent unexpectedly entered SyncSession")
-	}
-	if s.State != SyncSessionSummarySent {
-		t.Fatalf("responder packet changed active pull state to %s", s.State)
-	}
-	if len(actions) != 0 {
-		t.Fatalf("responder packet returned actions: %+v", actions)
-	}
-
-	actions, err = s.OnEvent(&PongReceivedEvent{
-		PeerID: "peer-a",
-		Pong:   &Pong{Summary: &corestate.CatalogSummary{CatalogRoot: remoteRoot, ZoneCount: 1}},
-	}, now.Add(10*time.Millisecond))
-	if err != nil {
-		t.Fatalf("OnEvent(pong): %v", err)
-	}
-	if s.State != SyncSessionCatalogDiffing {
-		t.Fatalf("expected pong to continue active pull into catalog_diffing, got %s", s.State)
-	}
-	assertActionTypes(t, actions, []string{"SendFetchCatalogPageAction", "StartTimerAction"})
-}
-
 func TestSyncSessionCatalogPageStartsObjectPull(t *testing.T) {
 	s := NewSyncSession("peer-a")
 	now := time.Unix(1000, 0)

@@ -10,82 +10,74 @@ import (
 
 const GossipPhaseInbound = "inbound"
 
-// executeGossipPacketActions executes the ordered decisions produced by
-// gossip.PlanInboundPacket and returns ready events even when a later action
-// fails. The dispatcher, not the input queue, owns their delivery.
-func (driver *GossipDriver) executeGossipPacketActions(ctx context.Context, actions []gossip.InboundAction, sender GossipSender, budget int) ([]gossip.SyncEvent, error) {
-	if driver == nil {
-		return nil, ErrGossipDriverStopped
+// handleGossipMessage dispatches an inbound message and returns ready FSM
+// events for the current batch.
+func (driver *GossipDriver) handleGossipMessage(ctx context.Context, message *gossip.Message, sender GossipSender, budget int) ([]gossip.SyncEvent, error) {
+	if message == nil {
+		return nil, nil
 	}
-	if sender == nil {
-		return nil, errGossipSenderRequired
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	var events []gossip.SyncEvent
-	for _, action := range actions {
-		message := action.Message
-		if message == nil {
-			continue
+	peerID := message.PeerID
+	switch message.Type {
+	case gossip.MessagePing:
+		if message.Ping == nil {
+			return nil, nil
 		}
-		switch action.Kind {
-		case gossip.InboundPostSessionEvent:
-			events = append(events, action.Event)
-		case gossip.InboundRespondPing:
-			if err := driver.respondGossipPing(ctx, action, sender); err != nil {
-				return events, err
-			}
-		case gossip.InboundRespondFetchCatalogPage:
-			driver.respondGossipCatalogPage(ctx, message, sender, budget)
-		case gossip.InboundRespondFetchZone:
-			if err := driver.respondGossipFetchZone(ctx, message.PeerID, message.FetchZone, sender, budget); err != nil {
-				return events, err
-			}
-		case gossip.InboundHandleObjectChunk:
-			now := driver.schedulerForRead().clock.Now()
-			event, err := driver.HandleGossipObjectChunk(message, now)
-			if event != nil {
-				events = append(events, event)
-				if event.Snapshot != nil {
-					driver.observeChunkFallback(message.PeerID, 1, now)
-				}
-			}
-			if err != nil {
-				return events, err
-			}
-		case gossip.InboundHandleObjectChunkNACK:
-			if err := driver.handleGossipObjectChunkNACK(ctx, message, sender); err != nil {
-				return events, err
-			}
+		active := driver.Gossip.Session(peerID) != nil
+		var events []gossip.SyncEvent
+		if active && message.Ping.Summary != nil {
+			events = append(events, &gossip.CatalogSummaryReceivedEvent{PeerID: peerID, Summary: message.Ping.Summary})
 		}
+		return events, driver.respondGossipPing(ctx, message, active, sender)
+	case gossip.MessagePong:
+		if message.Pong != nil && driver.Gossip.Session(peerID) != nil {
+			return []gossip.SyncEvent{&gossip.PongReceivedEvent{PeerID: peerID, Pong: message.Pong}}, nil
+		}
+	case gossip.MessageFetchCatalogPage:
+		driver.respondGossipCatalogPage(ctx, message, sender, budget)
+	case gossip.MessageFetchZone:
+		return nil, driver.respondGossipFetchZone(ctx, peerID, message.FetchZone, sender, budget)
+	case gossip.MessageCatalogPage:
+		if message.CatalogPage != nil && driver.Gossip.Session(peerID) != nil {
+			return []gossip.SyncEvent{&gossip.CatalogPageReceivedEvent{PeerID: peerID, Page: message.CatalogPage}}, nil
+		}
+	case gossip.MessageObjectChunk:
+		if driver.Gossip.Session(peerID) == nil {
+			return nil, nil
+		}
+		now := driver.schedulerForRead().clock.Now()
+		event, err := driver.HandleGossipObjectChunk(message, now)
+		if event == nil {
+			return nil, err
+		}
+		if event.Snapshot != nil {
+			driver.observeChunkFallback(peerID, 1, now)
+		}
+		return []gossip.SyncEvent{event}, err
+	case gossip.MessageObjectChunkNACK:
+		return nil, driver.handleGossipObjectChunkNACK(ctx, message, sender)
 	}
-	return events, nil
+	return nil, nil
 }
 
-func (driver *GossipDriver) respondGossipPing(ctx context.Context, action gossip.InboundAction, sender GossipSender) error {
-	message := action.Message
-	if message == nil || message.Ping == nil {
-		return nil
-	}
+func (driver *GossipDriver) respondGossipPing(ctx context.Context, message *gossip.Message, active bool, sender GossipSender) error {
 	view := driver.gossipStateView()
 	if !view.Loaded {
 		return nil
 	}
 	summary := corestate.CatalogSummaryForDigests(view.Digests)
-	if !action.ActiveSession {
+	if !active {
 		driver.observeCatalogSummary(message.PeerID, message.Ping.Summary, driver.schedulerForRead().clock.Now())
 	}
 	for _, response := range gossip.PlanPingResponse(message.Ping, summary) {
 		// The Ping summary is already delivered to the active session.
-		if action.ActiveSession && response.Type == gossip.MessageFetchCatalogPage {
+		if active && response.Type == gossip.MessageFetchCatalogPage {
 			continue
 		}
 		if err := sender.SendGossip(ctx, gossip.OutboundMessage{PeerID: message.PeerID, Message: response}); err != nil {
 			driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseSend, PeerID: message.PeerID, Err: err})
 		}
 	}
-	if action.ActiveSession || message.Ping.Summary == nil {
+	if active || message.Ping.Summary == nil {
 		return nil
 	}
 	if !gossip.CatalogRootsMatch(message.Ping.Summary, summary) {

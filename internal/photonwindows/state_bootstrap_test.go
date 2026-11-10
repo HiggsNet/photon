@@ -276,7 +276,7 @@ func TestAutoJoinCommonGossipRejectsWrongKeyThenAdoptsWithoutRestart(t *testing.
 			case event = <-right.runtime.Completions():
 			case event = <-right.runtime.Continuations():
 			}
-			if err := right.handleEvent(event); err != nil {
+			if _, err := right.runtime.HandleGossipHostEvent(right.ctx, event, time.Now()); err != nil {
 				right.recordError(err)
 				return
 			}
@@ -314,11 +314,9 @@ func TestAutoJoinCommonGossipRejectsWrongKeyThenAdoptsWithoutRestart(t *testing.
 	if _, err := left.store.ApplyLocalIntent(t.Context(), corestate.PutDelegationIntent{Parent: "catofes.", Authority: authority}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-right.completed:
-	case <-time.After(2 * time.Second):
-		t.Fatal("initial mismatch sync did not complete")
-	}
+	waitForWindowsState(t, 2*time.Second, func() bool {
+		return right.runtime.Gossip.Session("catofes.") == nil
+	})
 	beginSync()
 	waitForWindowsState(t, 2*time.Second, func() bool { return !right.runtime.AdmissionDiagnosis(time.Now()).Pending })
 	view := right.store.ReadView()

@@ -192,7 +192,7 @@ func TestDaemonGossipChangeDefersPlatformWorkToEventLoop(t *testing.T) {
 	result, err := service.handleGossipDriverEvent(t.Context(), corehost.GossipEvent{Value: &gossip.ObjectPullResultEvent{
 		PeerID: peerID, Zone: peerID, Snapshot: snapshot,
 	}})
-	if err != nil || result.Session.Done || !result.NetworkChanged {
+	if err != nil || service.gossipDriver.Gossip.Session(peerID) != session || !result {
 		t.Fatalf("Gossip result = %#v, error = %v", result, err)
 	}
 	if flushes != 0 {
@@ -203,7 +203,7 @@ func TestDaemonGossipChangeDefersPlatformWorkToEventLoop(t *testing.T) {
 		t.Fatalf("next batch flushes = %v/%v/%v, count %d", ipsecFlushed, routingFlushed, firewallFlushed, flushes)
 	}
 	result, err = service.handleGossipDriverEvent(t.Context(), corehost.GossipEvent{Value: &gossip.RoundTimeoutEvent{PeerID: peerID}})
-	if err != nil || !result.Session.Done || result.NetworkChanged {
+	if err != nil || service.gossipDriver.Gossip.Session(peerID) != nil || result {
 		t.Fatalf("terminal Gossip result = %#v, error = %v", result, err)
 	}
 }

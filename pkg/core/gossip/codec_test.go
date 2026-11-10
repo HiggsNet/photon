@@ -18,17 +18,16 @@ func TestMsgpackCodecRoundTrip(t *testing.T) {
 			ZoneCount:   1,
 		}},
 	}
-	codec := msgpackCodec{}
-	data, err := encodeMessage(codec, message)
+	data, err := MarshalMessage(message)
 	if err != nil {
-		t.Fatalf("encodeMessage: %v", err)
+		t.Fatalf("MarshalMessage: %v", err)
 	}
 	if !bytes.HasPrefix(data, wireMagicMsgpack) {
 		t.Fatalf("expected msgpack magic prefix, got %q", data[:len(wireMagicMsgpack)])
 	}
-	got, err := decodeMessage(data)
+	got, err := UnmarshalMessage(data)
 	if err != nil {
-		t.Fatalf("decodeMessage: %v", err)
+		t.Fatalf("UnmarshalMessage: %v", err)
 	}
 	if got.Type != MessagePing || got.PeerID != "node-a" || got.Nonce != 42 {
 		t.Fatalf("round-trip mismatch: %+v", got)
@@ -55,13 +54,13 @@ func TestObjectChunkCodecRoundTrip(t *testing.T) {
 			Data:       []byte("chunk-data"),
 		},
 	}
-	data, err := encodeMessage(msgpackCodec{}, message)
+	data, err := MarshalMessage(message)
 	if err != nil {
-		t.Fatalf("encodeMessage(object_chunk): %v", err)
+		t.Fatalf("MarshalMessage(object_chunk): %v", err)
 	}
-	got, err := decodeMessage(data)
+	got, err := UnmarshalMessage(data)
 	if err != nil {
-		t.Fatalf("decodeMessage(object_chunk): %v", err)
+		t.Fatalf("UnmarshalMessage(object_chunk): %v", err)
 	}
 	if got.Type != MessageObjectChunk || got.ObjectChunk == nil {
 		t.Fatalf("decoded message = %#v, want object_chunk", got)
@@ -78,19 +77,13 @@ func TestUnsupportedCodecsRejected(t *testing.T) {
 		"photon.gossip.x9\n", // unknown codec
 	} {
 		data := append([]byte(magic), []byte(`{}`)...)
-		_, err := decodeMessage(data)
+		_, err := UnmarshalMessage(data)
 		if err == nil {
-			t.Fatalf("decodeMessage(%q) succeeded, want error", magic)
+			t.Fatalf("UnmarshalMessage(%q) succeeded, want error", magic)
 		}
 		if RejectReason(err) != "unsupported_codec" {
 			t.Fatalf("RejectReason(%q) = %q, want unsupported_codec; err=%v", magic, RejectReason(err), err)
 		}
-	}
-}
-
-func TestDefaultSendCodecIsMsgpack(t *testing.T) {
-	if _, ok := DefaultSendCodec.(msgpackCodec); !ok {
-		t.Fatalf("DefaultSendCodec should be msgpackCodec, got %T", DefaultSendCodec)
 	}
 }
 
@@ -102,10 +95,9 @@ func BenchmarkPingMsgpack(b *testing.B) {
 		Timestamp: 1717171717,
 		Ping:      &Ping{Summary: &corestate.CatalogSummary{CatalogRoot: make([]byte, 32), ZoneCount: 2}},
 	}
-	codec := msgpackCodec{}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = encodeMessage(codec, message)
+		_, _ = MarshalMessage(message)
 	}
 }
 
@@ -127,7 +119,7 @@ func TestCommonMessageSizesWithinDatagramBudget(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		size, err := WireEncodeSize(tc.message)
+		size, err := WireEncodeSizeForPeer(tc.message, tc.message.PeerID)
 		if err != nil {
 			t.Fatalf("%s WireEncodeSize: %v", tc.name, err)
 		}

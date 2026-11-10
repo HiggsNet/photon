@@ -18,8 +18,6 @@ const (
 	GossipPhasePersistence = "persistence"
 )
 
-var errGossipSenderRequired = errors.New("gossip sender is required")
-
 // GossipStateView is the bounded read projection required by the common
 // executor after snapshot application. It never exposes a live state root.
 type GossipStateView struct {
@@ -49,11 +47,9 @@ type GossipSender interface {
 }
 
 // GossipExecutionResult is the common executor outcome consumed by the host
-// event loop. Aborted means state read/apply failed and later effects were not
-// executed.
+// event loop.
 type GossipExecutionResult struct {
 	NetworkChanged bool
-	Aborted        bool
 	// Events must advance on the consumer after the ordered effects finish.
 	Events []gossip.SyncEvent
 }
@@ -69,7 +65,6 @@ func (driver *GossipDriver) ExecuteGossipActions(
 ) GossipExecutionResult {
 	var result GossipExecutionResult
 	if driver == nil || controller == nil {
-		result.Aborted = true
 		return result
 	}
 	if ctx == nil {
@@ -91,7 +86,6 @@ func (driver *GossipDriver) ExecuteGossipActions(
 		applyResult, err = driver.applyGossipSnapshots(ctx, peerID, plan.Snapshots, view)
 		if err != nil {
 			driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseApply, PeerID: peerID, Err: err})
-			result.Aborted = true
 			for _, snapshot := range plan.Snapshots {
 				if snapshot.ReportResult && snapshot.Snapshot != nil {
 					result.Events = append(result.Events, &gossip.SnapshotAppliedEvent{PeerID: peerID, Zone: snapshot.Snapshot.Zone, Err: err})
@@ -105,7 +99,6 @@ func (driver *GossipDriver) ExecuteGossipActions(
 			view = driver.gossipStateView()
 			if !view.Loaded {
 				driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseStateRead, PeerID: peerID, Err: errors.New("gossip state unavailable after snapshot apply")})
-				result.Aborted = true
 				return result
 			}
 		}

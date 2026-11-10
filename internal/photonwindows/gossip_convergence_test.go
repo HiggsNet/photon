@@ -39,24 +39,15 @@ func TestGossipDriversConvergeCommonStateAndReloadWithoutClientRuntime(t *testin
 	right.beginSync(t, "node-a.catofes.")
 	waitForWindowsState(t, time.Second, func() bool {
 		view := right.store.ReadView()
-		return view.State != nil && view.State.Network.Zones["node-a.catofes."] != nil
+		return view.State.Network.Zones["node-a.catofes."] != nil && view.Gossip.Peers["node-a.catofes."].LastSyncUnix != 0
 	})
-	select {
-	case peerID := <-right.completed:
-		if peerID != "node-a.catofes." {
-			t.Fatalf("completed peer = %q", peerID)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for gossip session completion")
-	}
 	// Complete the reverse TCP pull, then explicitly exercise an authenticated
 	// UDP path with matching catalogs. A TCP-only convergence need not produce
 	// another UDP packet after the remote authority first becomes verified.
-	select {
-	case <-left.completed:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for reverse gossip session completion")
-	}
+	waitForWindowsState(t, time.Second, func() bool {
+		view := left.store.ReadView()
+		return view.State.Network.Zones["node-b.catofes."] != nil && view.Gossip.Peers["node-b.catofes."].LastSyncUnix != 0
+	})
 	if err := left.transport.Send("node-b.catofes.", &gossip.Message{Type: gossip.MessagePing, Ping: &gossip.Ping{Summary: corestate.CatalogSummaryFor(left.store.ReadView().State.Network)}}); err != nil {
 		t.Fatal(err)
 	}
@@ -91,8 +82,8 @@ func TestGossipDriversConvergeCommonStateAndReloadWithoutClientRuntime(t *testin
 		Snapshot:     snapshot,
 		ExpectedRoot: []byte("wrong-root"),
 	}}, right)
-	if execution.Aborted {
-		t.Fatal("individual rejected snapshot aborted the common batch")
+	if execution.NetworkChanged {
+		t.Fatal("individual rejected snapshot changed verified state")
 	}
 	rejected := right.store.ReadView()
 	if rejected.Revision != beforeReject {
@@ -129,7 +120,6 @@ type memoryHostNode struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	done      chan struct{}
-	completed chan string
 
 	errMu sync.Mutex
 	err   error
@@ -147,7 +137,6 @@ func newMemoryHostNode(state *State, transport *gossip.Transport) *memoryHostNod
 		ctx:       ctx,
 		cancel:    cancel,
 		done:      make(chan struct{}),
-		completed: make(chan string, 4),
 	}
 }
 
@@ -170,22 +159,11 @@ func (node *memoryHostNode) run() {
 		case event = <-node.runtime.Completions():
 		case event = <-node.runtime.Continuations():
 		}
-		if err := node.handleEvent(event); err != nil {
+		if _, err := node.runtime.HandleGossipHostEvent(node.ctx, event, time.Now()); err != nil {
 			node.recordError(err)
 			return
 		}
 	}
-}
-
-func (node *memoryHostNode) handleEvent(event corehost.Event) error {
-	hostResult, err := node.runtime.HandleGossipHostEvent(node.ctx, event, time.Now())
-	if err == nil && hostResult.Session.PeerID != "" && hostResult.Session.Done {
-		select {
-		case node.completed <- hostResult.Session.PeerID:
-		default:
-		}
-	}
-	return err
 }
 
 func (node *memoryHostNode) beginSync(t *testing.T, peerID string) {

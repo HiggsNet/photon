@@ -354,7 +354,7 @@ func TestFilterGossipCatalogPageUsesCommonManagedAndRejectedState(t *testing.T) 
 		{Zone: "rejected.catofes.", RootHash: []byte("rejected-root")},
 		{Zone: "accepted.catofes.", RootHash: []byte("accepted-root")},
 	}}
-	_, filtered := FilterGossipCatalogPage(input, "peer-a", page, now)
+	filtered := filterGossipCatalogPage(input.ManagedZone, input.Peers["peer-a"], page, now)
 	if len(filtered.Entries) != 1 || filtered.Entries[0].Zone != "accepted.catofes." {
 		t.Fatalf("filtered entries = %#v", filtered.Entries)
 	}

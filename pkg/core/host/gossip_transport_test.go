@@ -85,15 +85,12 @@ func TestGossipDriverRepliesToUnverifiedPeerAtInboundAddress(t *testing.T) {
 	_, datagram := bindMemoryGossipTransport(t, driver, peerID)
 	inboundAddr := &net.UDPAddr{IP: net.ParseIP("198.51.100.20"), Port: 33434}
 
-	result, err := driver.HandleGossipHostEvent(context.Background(), GossipPacketReceived{Packet: &gossip.Packet{
+	_, err := driver.HandleGossipHostEvent(context.Background(), GossipPacketReceived{Packet: &gossip.Packet{
 		Message: &gossip.Message{Type: gossip.MessagePing, PeerID: peerID, Ping: &gossip.Ping{}},
 		Addr:    inboundAddr,
 	}}, now)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if !result.Handled {
-		t.Fatal("inbound ping was not handled")
 	}
 	payload, addr := datagram.lastWrite()
 	if addr == nil || addr.String() != inboundAddr.String() {

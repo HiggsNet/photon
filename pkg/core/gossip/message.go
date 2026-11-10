@@ -79,16 +79,6 @@ type ObjectChunkNACK struct {
 	Missing    []uint16 `json:"missing" msgpack:"m"`
 }
 
-// MarshalMessage encodes a Message using the default send codec (MessagePack).
-func MarshalMessage(message *Message) ([]byte, error) {
-	return encodeMessage(DefaultSendCodec, message)
-}
-
-// UnmarshalMessage decodes a MessagePack Message from raw wire bytes.
-func UnmarshalMessage(data []byte) (*Message, error) {
-	return decodeMessage(data)
-}
-
 func validateMessage(message *Message) error {
 	if message == nil {
 		return errors.New("gossip message is nil")

@@ -137,7 +137,7 @@ func TestGossipDriverCommitsBackoffAndCompletionOnceWithoutAdvancingRevision(t *
 	controller := &memoryGossipController{}
 
 	result, _, err := driver.handleGossipSessionEvent(context.Background(), &gossip.RoundTimeoutEvent{PeerID: "peer-a"}, now, controller)
-	if err != nil || !result.Done || result.NewState != gossip.SyncSessionFailed {
+	if err != nil || result || session.State != gossip.SyncSessionFailed {
 		t.Fatalf("result/error = %#v/%v", result, err)
 	}
 	if commits != 1 || committed == nil {
@@ -171,7 +171,7 @@ func TestGossipDriverReportsCheckpointCommitFailure(t *testing.T) {
 	session := &gossip.SyncSession{PeerID: "peer-a", State: gossip.SyncSessionCompleted}
 
 	result := driver.ExecuteGossipActions(context.Background(), session, nil, controller)
-	if result.Aborted || len(controller.issues) != 1 || controller.issues[0].Phase != GossipPhasePersistence || !errors.Is(controller.issues[0].Err, wantErr) {
+	if result.NetworkChanged || len(controller.issues) != 1 || controller.issues[0].Phase != GossipPhasePersistence || !errors.Is(controller.issues[0].Err, wantErr) {
 		t.Fatalf("result/issues = %#v/%#v", result, controller.issues)
 	}
 }

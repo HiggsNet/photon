@@ -72,14 +72,14 @@ func (d *Daemon) handleSyncTimerEvent(ctx context.Context, force bool) error {
 	return err
 }
 
-func (d *Daemon) handleGossipDriverEvent(ctx context.Context, hostEvent corehost.Event) (corehost.GossipHostEventResult, error) {
+func (d *Daemon) handleGossipDriverEvent(ctx context.Context, hostEvent corehost.Event) (bool, error) {
 	now := d.now()
-	result, err := d.gossipDriver.HandleGossipHostEvent(ctx, hostEvent, now)
-	if result.NetworkChanged {
+	changed, err := d.gossipDriver.HandleGossipHostEvent(ctx, hostEvent, now)
+	if changed {
 		d.refreshGossipDiscovery()
 		d.notifyStateChanged()
 	}
-	return result, err
+	return changed, err
 }
 
 func (d *Daemon) openGossipTransport() (*gossip.Transport, error) {

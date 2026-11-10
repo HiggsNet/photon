@@ -27,10 +27,7 @@ func TestSyncEventMetadata(t *testing.T) {
 	}
 }
 
-func TestSyncEventMetadataRejectsDemuxAndNilEvents(t *testing.T) {
-	if got := SyncEventPeerID(&PacketEvent{}); got != "" {
-		t.Fatalf("SyncEventPeerID(PacketEvent) = %q, want empty", got)
-	}
+func TestSyncEventMetadataForNil(t *testing.T) {
 	if got := SyncEventPeerID(nil); got != "" {
 		t.Fatalf("SyncEventPeerID(nil) = %q, want empty", got)
 	}

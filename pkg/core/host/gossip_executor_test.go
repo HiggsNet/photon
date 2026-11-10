@@ -60,8 +60,6 @@ func gossipConfigCapturingIssues(config GossipDriverConfig, issues *[]GossipExec
 
 // These adapters intentionally add no behavior: their only purpose is to
 // prove that platform composition selects capabilities, not an executor.
-type memoryLinuxGossipController struct{ memoryGossipController }
-type memoryWindowsGossipController struct{ memoryGossipController }
 
 type memoryGossipStateStore struct {
 	views       []corestate.View
@@ -213,7 +211,7 @@ func TestGossipDriverExecuteGossipActionsUsesCommonOrdering(t *testing.T) {
 	}
 
 	result := driver.ExecuteGossipActions(context.Background(), session, actions, controller)
-	if result.Aborted || !result.NetworkChanged {
+	if !result.NetworkChanged {
 		t.Fatalf("result = %#v", result)
 	}
 	wantTrace := []string{"read", "apply", "read", "send:ping", "read", "checkpoint"}
@@ -251,7 +249,7 @@ func TestGossipDriverExecuteGossipActionsApplyFailureStopsLaterPhases(t *testing
 		gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "node-a.catofes."}},
 		gossip.SendPingAction{PeerID: "peer-a"},
 	}, controller)
-	if !result.Aborted || result.NetworkChanged {
+	if result.NetworkChanged {
 		t.Fatalf("result = %#v", result)
 	}
 	if want := []string{"read", "apply"}; !slices.Equal(controller.trace, want) {
@@ -282,7 +280,7 @@ func TestGossipDriverApplySnapshotsOwnsStoreTransactionAndCompletion(t *testing.
 		gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "local.catofes."}},
 		gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "remote.catofes."}, RelaxedLimits: true, ReportResult: true, RefreshOnRootMismatch: true},
 	}, controller)
-	if result.Aborted || !result.NetworkChanged {
+	if !result.NetworkChanged {
 		t.Fatalf("result = %#v", result)
 	}
 	if len(state.batch) != 1 || state.batch[0].Snapshot.Zone != "remote.catofes." || state.batch[0].Limits.MaxBytes != 8<<20 || !state.batch[0].RefreshOnRootMismatch || !state.appliedAt.Equal(now) {
@@ -295,78 +293,6 @@ func TestGossipDriverApplySnapshotsOwnsStoreTransactionAndCompletion(t *testing.
 	applied, ok := event.(*gossip.SnapshotAppliedEvent)
 	if !ok || applied.Zone != "remote.catofes." || applied.Err != nil {
 		t.Fatalf("completion = %#v", event)
-	}
-}
-
-func TestGossipDriverExecuteGossipActionsMemoryAdaptersAreEquivalent(t *testing.T) {
-	actions := []gossip.SyncAction{
-		gossip.SendFetchCatalogPageAction{PeerID: "peer-a", Cursor: "2"},
-		gossip.StartObjectPullAction{PeerID: "peer-a", Zone: "node-a.catofes."},
-	}
-	type outcome struct {
-		trace   []string
-		failure []string
-		issue   GossipExecutionIssue
-	}
-	adapters := []struct {
-		name string
-		new  func() (GossipSender, *memoryGossipController)
-	}{
-		{
-			name: "linux",
-			new: func() (GossipSender, *memoryGossipController) {
-				controller := &memoryLinuxGossipController{}
-				return controller, &controller.memoryGossipController
-			},
-		},
-		{
-			name: "windows",
-			new: func() (GossipSender, *memoryGossipController) {
-				controller := &memoryWindowsGossipController{}
-				return controller, &controller.memoryGossipController
-			},
-		},
-	}
-	var outcomes []outcome
-	commitErr := errors.New("commit failed")
-	for _, adapter := range adapters {
-		controller, memory := adapter.new()
-		driver := NewGossipDriver(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}, trace: &memory.trace}, GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
-		if err := driver.StartGossipObjectPullWorkers(t.Context(), memoryObjectPullExecutor(nil), 1, 1); err != nil {
-			t.Fatal(err)
-		}
-		driver.ExecuteGossipActions(context.Background(), &gossip.SyncSession{PeerID: "peer-a"}, actions, controller)
-		driver.Stop()
-
-		failureController, failureMemory := adapter.new()
-		failureDriver := NewGossipDriver(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState(), loadedGossipState()}, trace: &failureMemory.trace, applyErr: commitErr}, gossipConfigCapturingIssues(GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()}, &failureMemory.issues))
-		failureDriver.ExecuteGossipActions(context.Background(), &gossip.SyncSession{PeerID: "peer-a"}, []gossip.SyncAction{
-			gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "node-a.catofes."}},
-			gossip.SendPingAction{PeerID: "peer-a"},
-		}, failureController)
-		failureDriver.Stop()
-		if len(failureMemory.issues) != 1 {
-			t.Fatalf("%s issues = %#v, want one", adapter.name, failureMemory.issues)
-		}
-		outcomes = append(outcomes, outcome{
-			trace:   append([]string(nil), memory.trace...),
-			failure: append([]string(nil), failureMemory.trace...),
-			issue:   failureMemory.issues[0],
-		})
-	}
-	left, right := outcomes[0], outcomes[1]
-	if !slices.Equal(left.trace, right.trace) ||
-		!slices.Equal(left.failure, right.failure) ||
-		left.issue.Phase != right.issue.Phase ||
-		left.issue.PeerID != right.issue.PeerID ||
-		!errors.Is(left.issue.Err, right.issue.Err) {
-		t.Fatalf("adapter outcomes differ: %#v", outcomes)
-	}
-	if want := []string{"read", "send:fetch_catalog_page"}; !slices.Equal(outcomes[0].trace, want) {
-		t.Fatalf("trace = %#v, want %#v", outcomes[0].trace, want)
-	}
-	if want := []string{"read", "apply"}; !slices.Equal(outcomes[0].failure, want) || outcomes[0].issue.Phase != GossipPhaseApply {
-		t.Fatalf("failure outcome = %#v", outcomes[0])
 	}
 }
 
@@ -410,8 +336,7 @@ func TestGossipDriverCrossedPingCatalogRequests(t *testing.T) {
 			deliver := func(message *gossip.Message) {
 				t.Helper()
 				message.PeerID = peer
-				actions := driver.Gossip.PlanInbound(&gossip.Packet{Message: message})
-				events, err := driver.executeGossipPacketActions(t.Context(), actions, sender, gossip.DefaultDatagramBudget)
+				events, err := driver.handleGossipMessage(t.Context(), message, sender, gossip.DefaultDatagramBudget)
 				if err != nil {
 					t.Fatal(err)
 				}

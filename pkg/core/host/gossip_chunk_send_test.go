@@ -42,10 +42,7 @@ func consumeChunkSendTimer(t *testing.T, driver *GossipDriver, clock *fakeClock,
 	t.Helper()
 	clock.Advance(after)
 	event := receiveTimer(t, driver.Completions())
-	result, err := driver.HandleGossipHostEvent(context.Background(), event, clock.Now())
-	if !result.Handled {
-		t.Fatalf("send timer not handled: %#v", event)
-	}
+	_, err := driver.HandleGossipHostEvent(context.Background(), event, clock.Now())
 	return err
 }
 

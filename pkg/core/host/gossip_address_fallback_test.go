@@ -59,7 +59,7 @@ func TestGossipUDPTimeoutOverridesRecentSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := driver.HandleGossipHostEvent(t.Context(), GossipEvent{Value: &gossip.RoundTimeoutEvent{PeerID: "peer-a"}}, clock.Now())
-	if err != nil || !result.Session.Done {
+	if err != nil || result || driver.Gossip.Session("peer-a") != nil {
 		t.Fatalf("timeout result = %#v, error = %v", result, err)
 	}
 	if err := transport.Send("peer-a", &gossip.Message{Type: gossip.MessagePing, Ping: &gossip.Ping{}}); err != nil {

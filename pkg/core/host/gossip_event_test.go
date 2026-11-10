@@ -22,14 +22,14 @@ func TestGossipDriverHandleGossipSessionEventOwnsEngineToActionBridge(t *testing
 	controller := &memoryGossipController{}
 	driver := NewGossipDriver(clock, 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}, trace: &controller.trace}, GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
 	defer driver.Stop()
-	driver.Gossip.NewSession("peer-a")
+	session := driver.Gossip.NewSession("peer-a")
 
-	result, _, err := driver.handleGossipSessionEvent(context.Background(), &gossip.SyncTimerEvent{PeerID: "peer-a"}, clock.Now(), controller)
+	changed, _, err := driver.handleGossipSessionEvent(context.Background(), &gossip.SyncTimerEvent{PeerID: "peer-a"}, clock.Now(), controller)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.OldState != gossip.SyncSessionIdle || result.NewState != gossip.SyncSessionSummarySent || result.Done || result.ProtocolErr != nil {
-		t.Fatalf("result = %#v", result)
+	if changed || session.State != gossip.SyncSessionSummarySent {
+		t.Fatalf("changed = %t, state = %s", changed, session.State)
 	}
 	if want := []string{"read", "send:ping"}; !reflect.DeepEqual(controller.trace, want) {
 		t.Fatalf("trace = %#v, want %#v", controller.trace, want)
@@ -54,7 +54,7 @@ func TestGossipDriverCatalogSummaryUpdatesSessionObservability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Session.NetworkChanged {
+	if result {
 		t.Fatal("metadata-only catalog event reported a Network change")
 	}
 	diagnostics, ok := driver.Observability.Snapshot(peerID, clock.Now())
@@ -77,35 +77,41 @@ func TestGossipDriverHandleGossipHostEventOwnsPacketTimerAndCompletionDispatch(t
 	_, datagram := bindMemoryGossipTransport(t, driver, "peer-a", "peer-b")
 
 	packet := &gossip.Packet{Message: &gossip.Message{Type: gossip.MessageFetchCatalogPage, PeerID: "peer-a", FetchCatalogPage: &gossip.FetchCatalogPage{}}}
-	packetResult, err := driver.HandleGossipHostEvent(context.Background(), GossipPacketReceived{Packet: packet}, clock.Now())
+	changed, err := driver.HandleGossipHostEvent(context.Background(), GossipPacketReceived{Packet: packet}, clock.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !packetResult.Handled || packetResult.Session.PeerID != "" || datagram.writeCount() != 1 {
-		t.Fatalf("packet result = %#v, writes = %d", packetResult, datagram.writeCount())
+	if changed || datagram.writeCount() != 1 {
+		t.Fatalf("packet changed state = %t, writes = %d", changed, datagram.writeCount())
 	}
 
-	driver.Gossip.NewSession("peer-a")
+	session := driver.Gossip.NewSession("peer-a")
+	session.State = gossip.SyncSessionSummarySent
 	if _, err := driver.ApplyGossipTimerAction(gossip.StartTimerAction{PeerID: "peer-a", Kind: gossip.TimerKindRound, Deadline: clock.Now().Add(time.Second)}); err != nil {
 		t.Fatal(err)
 	}
 	clock.Advance(time.Second)
-	timerResult, err := driver.HandleGossipHostEvent(context.Background(), <-driver.Completions(), clock.Now())
+	changed, err = driver.HandleGossipHostEvent(context.Background(), <-driver.Completions(), clock.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !timerResult.Handled || timerResult.Session.PeerID != "peer-a" {
-		t.Fatalf("timer result = %#v", timerResult)
+	if changed || !errors.Is(session.LastError(), gossip.ErrPingTimeout) || driver.Gossip.Session("peer-a") != nil {
+		t.Fatalf("timer changed state = %t, session error = %v", changed, session.LastError())
 	}
 
-	driver.Gossip.NewSession("peer-b")
-	completion := &gossip.ObjectPullResultEvent{PeerID: "peer-b", Zone: "remote.catofes.", Err: errors.New("pull failed")}
-	completionResult, err := driver.HandleGossipHostEvent(context.Background(), GossipEvent{Value: completion}, clock.Now())
+	session = driver.Gossip.NewSession("peer-b")
+	_, _ = session.OnEvent(&gossip.SyncTimerEvent{PeerID: "peer-b"}, clock.Now())
+	_, _ = session.OnEvent(&gossip.CatalogPageReceivedEvent{PeerID: "peer-b", Page: &corestate.CatalogPage{
+		Entries: []corestate.ZoneDigest{{Zone: "remote.catofes.", RootHash: []byte("root")}},
+	}}, clock.Now())
+	pullErr := errors.New("pull failed")
+	completion := &gossip.ObjectPullResultEvent{PeerID: "peer-b", Zone: "remote.catofes.", Err: pullErr}
+	changed, err = driver.HandleGossipHostEvent(context.Background(), GossipEvent{Value: completion}, clock.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !completionResult.Handled || completionResult.Session.PeerID != "peer-b" {
-		t.Fatalf("completion result = %#v", completionResult)
+	if changed || !errors.Is(session.LastError(), pullErr) || driver.Gossip.Session("peer-b") != nil {
+		t.Fatalf("completion changed state = %t, session error = %v", changed, session.LastError())
 	}
 }
 
@@ -113,11 +119,11 @@ func TestGossipDriverHandleGossipSessionEventRejectsMissingPeerOrSession(t *test
 	driver := NewGossipDriver(nil, 1, nil, GossipDriverConfig{})
 	defer driver.Stop()
 	controller := &memoryGossipController{}
-	if _, _, err := driver.handleGossipSessionEvent(context.Background(), &gossip.PacketEvent{}, time.Now(), controller); !errors.Is(err, ErrGossipEventPeerRequired) {
+	if _, _, err := driver.handleGossipSessionEvent(context.Background(), &gossip.SyncTimerEvent{}, time.Now(), controller); !errors.Is(err, ErrGossipEventPeerRequired) {
 		t.Fatalf("missing peer error = %v", err)
 	}
-	if _, _, err := driver.handleGossipSessionEvent(context.Background(), &gossip.SyncTimerEvent{PeerID: "missing"}, time.Now(), controller); !errors.Is(err, errGossipSessionNotFound) {
-		t.Fatalf("missing session error = %v", err)
+	if changed, events, err := driver.handleGossipSessionEvent(context.Background(), &gossip.SyncTimerEvent{PeerID: "missing"}, time.Now(), controller); err != nil || changed || len(events) != 0 || len(controller.trace) != 0 {
+		t.Fatalf("missing session produced work: changed=%t events=%v error=%v", changed, events, err)
 	}
 }
 
@@ -140,12 +146,12 @@ func TestGossipDriverDrainsQueuedRepliesAfterSessionCompletes(t *testing.T) {
 		driver.events <- packet
 	}
 	result, err := driver.HandleGossipHostEvent(ctx, <-driver.Events(), now)
-	if err != nil || !result.Session.Done || driver.Gossip.Session("peer-a") != nil {
+	if err != nil || result || driver.Gossip.Session("peer-a") != nil {
 		t.Fatalf("completion = %#v, error = %v", result, err)
 	}
 	writes := datagram.writeCount()
 	result, err = driver.HandleGossipHostEvent(ctx, <-driver.Events(), now)
-	if err != nil || !result.Handled || result.Session != (GossipEventResult{}) {
+	if err != nil || result {
 		t.Fatalf("late reply = %#v, error = %v", result, err)
 	}
 	if driver.PendingEventCount() != 0 || driver.Gossip.Session("peer-a") != nil || datagram.writeCount() != writes {
@@ -208,11 +214,10 @@ func TestGossipDriverFinishesSessionAndStartsDeferredHint(t *testing.T) {
 	session.State = gossip.SyncSessionCompleted
 	driver.Gossip.DeferHint("peer-a")
 
-	result := GossipEventResult{PeerID: "peer-a", Done: true}
-	driver.finishGossipSession(context.Background(), &result, now)
+	driver.finishGossipSession(context.Background(), session, now)
 
-	if !result.FollowupQueued || driver.Gossip.Session("peer-a") == nil {
-		t.Fatalf("result=%#v session=%#v", result, driver.Gossip.Session("peer-a"))
+	if next := driver.Gossip.Session("peer-a"); next == nil || next == session {
+		t.Fatalf("expected replacement session, got %#v", next)
 	}
 	event, ok := driver.GossipSessionEventFor(<-driver.Events())
 	if !ok {
@@ -244,11 +249,10 @@ func TestGossipDriverFinishesChangedSessionAndOwnsRelay(t *testing.T) {
 	session.State = gossip.SyncSessionCompleted
 	session.AccumulateNetworkChanged(true)
 
-	result := GossipEventResult{PeerID: "peer-b", Done: true}
-	driver.finishGossipSession(context.Background(), &result, now)
+	driver.finishGossipSession(context.Background(), session, now)
 
-	if !result.NetworkChanged || driver.Gossip.Session("peer-b") != nil {
-		t.Fatalf("result=%#v source_session=%#v", result, driver.Gossip.Session("peer-b"))
+	if driver.Gossip.Session("peer-b") != nil {
+		t.Fatal("finished source session is still installed")
 	}
 	wantRoot := corestate.CatalogRoot(corestate.ZoneDigests(view.State.Network))
 	if state.updates != 1 || writes != 0 {
@@ -363,7 +367,7 @@ func TestGossipDriverTimeoutAddressHealth(t *testing.T) {
 			}
 			driver.Gossip.Session("peer-a").State = state
 			result, err := driver.HandleGossipHostEvent(context.Background(), GossipEvent{Value: &gossip.RoundTimeoutEvent{PeerID: "peer-a"}}, clock.Now())
-			if err != nil || !result.Session.Done {
+			if err != nil || result || driver.Gossip.Session("peer-a") != nil {
 				t.Fatalf("result = %#v, error = %v", result, err)
 			}
 			want := 0
@@ -394,7 +398,7 @@ func TestGossipBackoffTracksConsecutivePingTimeouts(t *testing.T) {
 			driver.Gossip.NewSession(peerID).State = state
 			result, err := driver.HandleGossipHostEvent(t.Context(), GossipEvent{Value: &gossip.RoundTimeoutEvent{PeerID: peerID}}, now)
 			peer := store.PeerCheckpoints([]string{peerID})[peerID]
-			if err != nil || !result.Session.Done || peer.BackoffUntilUnix-now.Unix() != seconds {
+			if err != nil || result || driver.Gossip.Session(peerID) != nil || peer.BackoffUntilUnix-now.Unix() != seconds {
 				t.Fatalf("bootstrap=%v, %s: result=%+v, err=%v, backoff=%ds, want %ds", bootstrap, state, result, err, peer.BackoffUntilUnix-now.Unix(), seconds)
 			}
 		}
@@ -441,7 +445,7 @@ func TestGossipHostRejectsRevokedPeerBeforeDiscoveryRefresh(t *testing.T) {
 		Message: &gossip.Message{PeerID: peer.String(), Type: gossip.MessagePing, Ping: &gossip.Ping{}},
 	}}
 	for _, event := range []Event{ping, queued} {
-		if result, err := driver.HandleGossipHostEvent(t.Context(), event, clock.Now()); err != nil || !result.Handled {
+		if result, err := driver.HandleGossipHostEvent(t.Context(), event, clock.Now()); err != nil || result {
 			t.Fatalf("result=%+v, error=%v", result, err)
 		}
 	}
