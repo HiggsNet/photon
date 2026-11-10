@@ -5,7 +5,6 @@ import (
 	"log/slog"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
-	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
 const GossipPhaseInbound = "inbound"
@@ -60,11 +59,10 @@ func (driver *GossipDriver) handleGossipMessage(ctx context.Context, message *go
 }
 
 func (driver *GossipDriver) respondGossipPing(ctx context.Context, message *gossip.Message, active bool, sender GossipSender) error {
-	view := driver.gossipStateView()
-	if !view.Loaded {
+	summary := driver.GossipCatalogSummary()
+	if summary == nil {
 		return nil
 	}
-	summary := corestate.CatalogSummaryForDigests(view.Digests)
 	if !active {
 		driver.observeCatalogSummary(message.PeerID, message.Ping.Summary, driver.schedulerForRead().clock.Now())
 	}
@@ -96,12 +94,12 @@ func (driver *GossipDriver) respondGossipCatalogPage(ctx context.Context, messag
 	if message == nil || message.FetchCatalogPage == nil {
 		return
 	}
-	view := driver.gossipStateView()
-	if !view.Loaded {
+	catalog := driver.readGossipCatalog()
+	if catalog == nil {
 		return
 	}
 	cursor := message.FetchCatalogPage.Cursor
-	page, err := gossip.CatalogPageForDigests(view.Digests, cursor, budget, view.SenderPeerID)
+	page, err := gossip.CatalogPageForDigests(catalog.Digests, cursor, budget, driver.gossipConfig.PeerID)
 	if err != nil {
 		driver.observeDatagramTooLarge(message.PeerID, "catalog_page", "", "", 0, budget, driver.schedulerForRead().clock.Now())
 		driver.observeCatalogReject(message.PeerID, cursor, gossip.RejectReason(err), driver.schedulerForRead().clock.Now())

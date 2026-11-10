@@ -128,43 +128,33 @@ func (driver *GossipDriver) reportGossipIssue(issue GossipExecutionIssue) {
 	driver.logGossip(slog.LevelWarn, event, issue.PeerID, issue.Phase, issue.Err, nil)
 }
 
-func (driver *GossipDriver) gossipStateView() GossipStateView {
+func (driver *GossipDriver) readGossipCatalog() *corestate.CatalogView {
 	if driver == nil || driver.gossipState == nil {
-		return GossipStateView{}
+		return nil
 	}
-	view := driver.gossipState.ReadCatalog()
-	if view == nil {
-		return GossipStateView{}
-	}
-	return GossipStateView{
-		Loaded:       true,
-		ManagedZone:  view.ManagedZone,
-		Digests:      view.Digests,
-		SenderPeerID: driver.GossipConfig().PeerID,
-	}
+	return driver.gossipState.ReadCatalog()
 }
 
 // GossipCatalogSummary returns the current committed catalog summary without
 // exposing the verified Network back to platform orchestration.
 func (driver *GossipDriver) GossipCatalogSummary() *corestate.CatalogSummary {
-	view := driver.gossipStateView()
-	if !view.Loaded {
+	catalog := driver.readGossipCatalog()
+	if catalog == nil {
 		return nil
 	}
-	return corestate.CatalogSummaryForDigests(view.Digests)
+	return corestate.CatalogSummaryForDigests(catalog.Digests)
 }
 
 func (driver *GossipDriver) applyGossipSnapshots(
 	ctx context.Context,
 	peerID string,
 	actions []gossip.ApplySnapshotAction,
-	view GossipStateView,
+	managedZone zone.ZonePath,
 ) (GossipSnapshotApplyResult, error) {
 	defer driver.LogSlowOperation("gossip", "snapshot_apply", time.Now(), driver.PendingEventCount())
 	if driver == nil || driver.gossipState == nil {
 		return GossipSnapshotApplyResult{}, errors.New("gossip state store is not configured")
 	}
-	managedZone := view.ManagedZone
 	selected := make([]gossip.ApplySnapshotAction, 0, len(actions))
 	batch := make([]corestate.RemoteSnapshot, 0, len(actions))
 	for _, action := range actions {

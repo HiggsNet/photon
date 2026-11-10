@@ -62,14 +62,15 @@ func gossipConfigCapturingIssues(config GossipDriverConfig, issues *[]GossipExec
 // prove that platform composition selects capabilities, not an executor.
 
 type memoryGossipStateStore struct {
-	views       []corestate.View
-	trace       *[]string
-	applyResult corestate.RemoteBatchResult
-	applyErr    error
-	batch       []corestate.RemoteSnapshot
-	appliedAt   time.Time
-	updates     []map[string]corestate.PeerCheckpointPatch
-	updateErr   error
+	views        []corestate.View
+	trace        *[]string
+	catalogReads int
+	applyResult  corestate.RemoteBatchResult
+	applyErr     error
+	batch        []corestate.RemoteSnapshot
+	appliedAt    time.Time
+	updates      []map[string]corestate.PeerCheckpointPatch
+	updateErr    error
 }
 
 func (reader *memoryGossipStateStore) PruneRevokedPeerCheckpoints(context.Context, time.Time) error {
@@ -191,7 +192,7 @@ func TestGossipDriverExecuteGossipActionsUsesCommonOrdering(t *testing.T) {
 	clock := newFakeClock(time.Unix(100, 0))
 	controller := &memoryGossipController{}
 	state := &memoryGossipStateStore{
-		views:       []corestate.View{loadedGossipState(), loadedGossipState(), loadedGossipState("node-a.catofes.")},
+		views:       []corestate.View{loadedGossipState(), loadedGossipState("node-a.catofes.")},
 		trace:       &controller.trace,
 		applyResult: corestate.RemoteBatchResult{CommitResult: corestate.CommitResult{Committed: true, Changes: corestate.ChangeSet{NetworkChanged: true}}, Outcomes: []corestate.RemoteApplyOutcome{{Zone: "node-a.catofes.", Result: &corestate.ApplyResult{NetworkChanged: true}}}},
 	}
@@ -210,13 +211,16 @@ func TestGossipDriverExecuteGossipActionsUsesCommonOrdering(t *testing.T) {
 		gossip.StartTimerAction{PeerID: "peer-a", Kind: gossip.TimerKindRound, Deadline: deadline},
 	}
 
-	result := driver.ExecuteGossipActions(context.Background(), session, actions, controller)
+	result := driver.ExecuteGossipActions(context.Background(), session, driver.readGossipCatalog(), actions, controller)
 	if !result.NetworkChanged {
 		t.Fatalf("result = %#v", result)
 	}
-	wantTrace := []string{"read", "apply", "read", "send:ping", "read", "checkpoint"}
+	wantTrace := []string{"read", "apply", "send:ping", "read", "checkpoint"}
 	if !slices.Equal(controller.trace, wantTrace) {
 		t.Fatalf("trace = %#v, want %#v", controller.trace, wantTrace)
+	}
+	if state.catalogReads != 1 {
+		t.Fatalf("terminal event read the catalog %d times, want 1", state.catalogReads)
 	}
 	if len(state.updates) != 1 {
 		t.Fatalf("checkpoint updates = %#v", state.updates)
@@ -245,7 +249,7 @@ func TestGossipDriverExecuteGossipActionsApplyFailureStopsLaterPhases(t *testing
 	driver := NewGossipDriver(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState(), loadedGossipState()}, trace: &controller.trace, applyErr: applyErr}, gossipConfigCapturingIssues(GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()}, &controller.issues))
 	defer driver.Stop()
 	session := &gossip.SyncSession{PeerID: "peer-a", State: gossip.SyncSessionObjectPulling}
-	result := driver.ExecuteGossipActions(context.Background(), session, []gossip.SyncAction{
+	result := driver.ExecuteGossipActions(context.Background(), session, driver.readGossipCatalog(), []gossip.SyncAction{
 		gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "node-a.catofes."}},
 		gossip.SendPingAction{PeerID: "peer-a"},
 	}, controller)
@@ -276,12 +280,15 @@ func TestGossipDriverApplySnapshotsOwnsStoreTransactionAndCompletion(t *testing.
 	}
 	driver := NewGossipDriver(clock, 2, state, GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
 	defer driver.Stop()
-	result := driver.ExecuteGossipActions(context.Background(), &gossip.SyncSession{PeerID: "peer-a"}, []gossip.SyncAction{
+	result := driver.ExecuteGossipActions(context.Background(), &gossip.SyncSession{PeerID: "peer-a"}, state.ReadCatalog(), []gossip.SyncAction{
 		gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "local.catofes."}},
 		gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "remote.catofes."}, RelaxedLimits: true, ReportResult: true, RefreshOnRootMismatch: true},
 	}, controller)
 	if !result.NetworkChanged {
 		t.Fatalf("result = %#v", result)
+	}
+	if state.catalogReads != 2 {
+		t.Fatalf("active event read the catalog %d times, want 2", state.catalogReads)
 	}
 	if len(state.batch) != 1 || state.batch[0].Snapshot.Zone != "remote.catofes." || state.batch[0].Limits.MaxBytes != 8<<20 || !state.batch[0].RefreshOnRootMismatch || !state.appliedAt.Equal(now) {
 		t.Fatalf("batch/time = %#v/%v", state.batch, state.appliedAt)
@@ -310,6 +317,7 @@ func (store *memoryGossipStateStore) PeerCheckpoints(ids []string) map[string]co
 }
 
 func (store *memoryGossipStateStore) ReadCatalog() *corestate.CatalogView {
+	store.catalogReads++
 	v := store.ReadView()
 	if v.State == nil || v.State.Network == nil {
 		return nil

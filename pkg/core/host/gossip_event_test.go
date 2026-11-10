@@ -189,7 +189,8 @@ func TestGossipDriverRoundTimeoutDropsOnlyItsPeerChunkAssemblies(t *testing.T) {
 }
 
 func TestGossipDriverHandleGossipSessionEventOwnsCatalogEnrichment(t *testing.T) {
-	driver := NewGossipDriver(nil, 2, &memoryGossipStateStore{views: []corestate.View{loadedManagedGossipState("local.catofes.")}}, GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
+	store := &memoryGossipStateStore{views: []corestate.View{loadedManagedGossipState("local.catofes.")}}
+	driver := NewGossipDriver(nil, 2, store, GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
 	defer driver.Stop()
 	session := driver.Gossip.NewSession("peer-a")
 	session.State = gossip.SyncSessionCatalogDiffing
@@ -203,6 +204,9 @@ func TestGossipDriverHandleGossipSessionEventOwnsCatalogEnrichment(t *testing.T)
 	}
 	if len(event.Page.Entries) != 1 || event.Page.Entries[0].Zone != "remote.catofes." {
 		t.Fatalf("event=%#v", event)
+	}
+	if store.catalogReads != 1 {
+		t.Fatalf("directory page event read the catalog %d times, want 1", store.catalogReads)
 	}
 }
 

@@ -77,7 +77,7 @@ func TestGossipDriversConvergeCommonStateAndReloadWithoutClientRuntime(t *testin
 	// executor check supplies its own detached protocol context instead of
 	// relying on a stale session retained after convergence.
 	rejectSession := gossip.NewSyncSession("node-a.catofes.")
-	execution := right.runtime.ExecuteGossipActions(t.Context(), rejectSession, []gossip.SyncAction{gossip.ApplySnapshotAction{
+	execution := right.runtime.ExecuteGossipActions(t.Context(), rejectSession, right.store.ReadCatalog(), []gossip.SyncAction{gossip.ApplySnapshotAction{
 		PeerID:       "node-a.catofes.",
 		Snapshot:     snapshot,
 		ExpectedRoot: []byte("wrong-root"),

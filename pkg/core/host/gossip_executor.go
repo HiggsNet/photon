@@ -6,7 +6,6 @@ import (
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
-	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 const (
@@ -17,15 +16,6 @@ const (
 	GossipPhaseTimer       = "timer"
 	GossipPhasePersistence = "persistence"
 )
-
-// GossipStateView is the bounded read projection required by the common
-// executor after snapshot application. It never exposes a live state root.
-type GossipStateView struct {
-	Loaded       bool
-	ManagedZone  zone.ZonePath
-	Digests      []corestate.ZoneDigest
-	SenderPeerID string
-}
 
 // GossipSnapshotApplyResult returns committed changes and application results.
 type GossipSnapshotApplyResult struct {
@@ -54,36 +44,30 @@ type GossipExecutionResult struct {
 	Events []gossip.SyncEvent
 }
 
-// ExecuteGossipActions owns the shared effect ordering for one FSM event:
-// read/apply, refresh/reconcile, send, object pull, timer and checkpoint
+// ExecuteGossipActions uses the event's catalog for ordered effects:
+// apply, refresh/reconcile, send, object pull, timer and checkpoint
 // persistence. The sender performs only actual datagram I/O.
 func (driver *GossipDriver) ExecuteGossipActions(
 	ctx context.Context,
 	session *gossip.SyncSession,
+	catalog *corestate.CatalogView,
 	actions []gossip.SyncAction,
 	controller GossipSender,
 ) GossipExecutionResult {
 	var result GossipExecutionResult
-	if driver == nil || controller == nil {
+	if driver == nil || controller == nil || catalog == nil {
 		return result
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	view := driver.gossipStateView()
-	if !view.Loaded {
-		return result
-	}
-
 	plan := PlanGossipActions(actions)
-	applyResult := GossipSnapshotApplyResult{}
+	peerID := ""
+	if session != nil {
+		peerID = session.PeerID
+	}
 	if len(plan.Snapshots) > 0 {
-		peerID := ""
-		if session != nil {
-			peerID = session.PeerID
-		}
-		var err error
-		applyResult, err = driver.applyGossipSnapshots(ctx, peerID, plan.Snapshots, view)
+		applyResult, err := driver.applyGossipSnapshots(ctx, peerID, plan.Snapshots, catalog.ManagedZone)
 		if err != nil {
 			driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseApply, PeerID: peerID, Err: err})
 			for _, snapshot := range plan.Snapshots {
@@ -95,17 +79,17 @@ func (driver *GossipDriver) ExecuteGossipActions(
 		}
 		result.NetworkChanged = applyResult.NetworkChanged
 		result.Events = applyResult.Events
+	}
+
+	if session != nil && !session.Done() {
 		if result.NetworkChanged {
-			view = driver.gossipStateView()
-			if !view.Loaded {
+			catalog = driver.readGossipCatalog()
+			if catalog == nil {
 				driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseStateRead, PeerID: peerID, Err: errors.New("gossip state unavailable after snapshot apply")})
 				return result
 			}
 		}
-	}
-
-	if session != nil && !session.Done() && view.Loaded {
-		actions = append(actions, session.ReconcilePendingWithDigests(view.Digests)...)
+		actions = append(actions, session.ReconcilePendingWithDigests(catalog.Digests)...)
 		plan = PlanGossipActions(actions)
 	}
 
@@ -126,10 +110,6 @@ func (driver *GossipDriver) ExecuteGossipActions(
 		}
 	}
 	if err := driver.commitGossipEventCheckpoint(ctx, session, driver.schedulerForRead().clock.Now()); err != nil {
-		peerID := ""
-		if session != nil {
-			peerID = session.PeerID
-		}
 		driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhasePersistence, PeerID: peerID, Err: err})
 	}
 	return result

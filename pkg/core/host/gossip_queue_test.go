@@ -122,7 +122,7 @@ func TestGossipQueueInternalBudgetYieldsAndRetainsAllResults(t *testing.T) {
 		if err != nil || session.InflightCount() != 1 {
 			t.Fatalf("one bounded pull: inflight=%d error=%v", session.InflightCount(), err)
 		}
-		result := driver.ExecuteGossipActions(t.Context(), session, actions, &memoryGossipController{})
+		result := driver.ExecuteGossipActions(t.Context(), session, driver.readGossipCatalog(), actions, &memoryGossipController{})
 		if result.NetworkChanged || len(result.Events) != 1 {
 			t.Fatalf("local pull failure result = %#v", result)
 		}

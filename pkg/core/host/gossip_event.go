@@ -402,6 +402,7 @@ func (driver *GossipDriver) handleGossipSessionEvent(ctx context.Context, event 
 		driver.observeChunkRepair(peerID, false, 0, now)
 		return false, nil, nil
 	}
+	catalog := driver.readGossipCatalog()
 	switch typed := event.(type) {
 	case *gossip.PongReceivedEvent:
 		if typed.Pong != nil && typed.Pong.Summary != nil {
@@ -410,13 +411,17 @@ func (driver *GossipDriver) handleGossipSessionEvent(ctx context.Context, event 
 	case *gossip.CatalogSummaryReceivedEvent:
 		driver.observeCatalogSummary(peerID, typed.Summary, now)
 	case *gossip.CatalogPageReceivedEvent:
-		view := driver.gossipStateView()
-		typed.LocalEntries = view.Digests
+		var managedZone zone.ZonePath
+		typed.LocalEntries = nil
+		if catalog != nil {
+			managedZone = catalog.ManagedZone
+			typed.LocalEntries = catalog.Digests
+		}
 		var peer corestate.PeerCheckpoint
 		if driver.gossipState != nil {
 			peer = driver.gossipState.PeerCheckpoints([]string{peerID})[peerID]
 		}
-		typed.Page = filterGossipCatalogPage(view.ManagedZone, peer, typed.Page, now)
+		typed.Page = filterGossipCatalogPage(managedZone, peer, typed.Page, now)
 		driver.observeCatalogPage(peerID, typed.Page, now)
 	}
 	oldState := session.State
@@ -424,7 +429,7 @@ func (driver *GossipDriver) handleGossipSessionEvent(ctx context.Context, event 
 	if protocolErr != nil {
 		session.Fail(protocolErr)
 	}
-	execution := driver.ExecuteGossipActions(ctx, session, actions, sender)
+	execution := driver.ExecuteGossipActions(ctx, session, catalog, actions, sender)
 	session.AccumulateNetworkChanged(execution.NetworkChanged)
 	trigger := gossip.SyncEventName(event)
 	driver.observeActivePull(peerID, trigger, session, now)
