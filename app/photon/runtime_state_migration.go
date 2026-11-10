@@ -36,11 +36,7 @@ type legacyPeerState struct {
 	FailureCount            int                                       `json:"failure_count,omitempty"`
 	LastError               string                                    `json:"last_error,omitempty"`
 	DiscoveredAddr          string                                    `json:"discovered_addr,omitempty"`
-	ObservedAddr            string                                    `json:"observed_addr,omitempty"`
-	ObservedFirstSeenUnix   int64                                     `json:"observed_first_seen_unix,omitempty"`
 	ObservedLastSeenUnix    int64                                     `json:"observed_last_seen_unix,omitempty"`
-	ObservedUntilUnix       int64                                     `json:"observed_until_unix,omitempty"`
-	ObservedGraceAddrs      []photonstate.PeerObservedGraceAddrState  `json:"observed_grace_addrs,omitempty"`
 	RejectedDigests         map[string]photonstate.PeerRejectedDigest `json:"rejected_digests,omitempty"`
 }
 

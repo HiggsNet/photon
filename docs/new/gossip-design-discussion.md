@@ -50,11 +50,11 @@ Linux 统一使用 `photon daemon` 运行 Gossip。已删除 `advanced sync serv
 
 - `phase2-run-smoke` 覆盖双节点记录双向同步、Zone 签名校验及重启后收敛。
 - 三节点中间节点重启、bootstrap 授权和在线撤销传播均使用 daemon，直接等待记录、授权和发现结果。
-- `nat-daemon-observed-smoke` 合并两套 observed path 场景，覆盖记录传播与重启后恢复 observed UDP 地址。
+- `nat-daemon-observed-smoke` 合并两套 observed path 场景，覆盖记录传播与重启后从新入站包重新学习 observed UDP 地址。
 
 ## Gossip Checkpoint
 
-删除 observed 路径的上次同步和失败计数。同步结果属于对端会话，无法据此判断本轮走了哪条地址。观察地址、有效期和换址宽限继续服务选址与重启恢复。最近收到包、同步成功和尝试的时间只留内存。
+删除 observed 路径的上次同步和失败计数。同步结果属于对端会话，无法据此判断本轮走了哪条地址。观察地址、有效期、换址宽限和活动时间只留内存。重启后等待对端发来经过验证的包重新学习地址。纯续期不再触发持久化，原有 5 秒续期合批随之删除。
 
 发现地址只在首次选定、发生变化或失效清除时更新 checkpoint。同一地址在后续扫描中继续作为候选，删除只用于展示的发现时间戳。重启后遇到暂时不可达的对端，由现有的发现和重试流程处理。退避、relay 去重和拒绝缓存继续使用现有 checkpoint。
 

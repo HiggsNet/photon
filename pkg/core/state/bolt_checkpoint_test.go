@@ -13,129 +13,50 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-func TestCheckpointTimestampRefreshCoalescesOnlyOnDisk(t *testing.T) {
+func TestObservedPathUpdatesStayInMemory(t *testing.T) {
 	db := openCommonBoltTestDB(t)
 	initial := commonBoltTestCandidate(1)
-	initial.Gossip.Peers["peer-a"] = PeerCheckpoint{
-		ObservedEndpoint:     "192.0.2.1:33434",
-		ObservedLastSeenUnix: 100, ObservedUntilUnix: 200,
-		LastSyncUnix: 100, LastAttemptUnix: 100,
-	}
-	initial.Gossip.Peers["peer-b"] = PeerCheckpoint{ObservedEndpoint: "192.0.2.3:33434", ObservedUntilUnix: 100}
 	commitCommonBoltTestState(t, db, initial, 1)
 	disk := &BoltStore{db: db}
-	t.Cleanup(func() {
-		if err := disk.Close(); err != nil {
-			t.Error(err)
-		}
+	checkpointWrites := 0
+	store, err := RestoreStore(initial, 1, disk.CommitCommon, func(ctx context.Context, updates map[string]*PeerCheckpoint, rev VerifiedRevision) error {
+		checkpointWrites++
+		return disk.CommitCheckpoints(ctx, updates, rev)
 	})
-	store, err := RestoreStore(initial, 1, disk.CommitCommon, disk.CommitCheckpoints)
 	if err != nil {
 		t.Fatal(err)
 	}
-	refresh := func(now, wantDisk int64, endpoint string) {
-		t.Helper()
-		_, err := store.UpdatePeerCheckpoint(context.Background(), "peer-a", PeerCheckpointPatch{
-			ObservedEndpoint:  PatchField[string]{Set: endpoint != "", Value: endpoint},
+	const peerID = "observed-only.catofes."
+	for _, now := range []int64{100, 110} {
+		_, err := store.UpdatePeerCheckpoint(t.Context(), peerID, PeerCheckpointPatch{
+			ObservedEndpoint:  PatchField[string]{Set: true, Value: "192.0.2.1:33434"},
+			ObservedFirstUnix: PatchField[int64]{Set: true, Value: 100},
 			ObservedLastUnix:  PatchField[int64]{Set: true, Value: now},
-			ObservedUntilUnix: PatchField[int64]{Set: true, Value: now + 100},
-			LastAttemptUnix:   PatchField[int64]{Set: true, Value: now},
-			LastSyncUnix:      PatchField[int64]{Set: true, Value: now},
+			ObservedUntilUnix: PatchField[int64]{Set: true, Value: now + 180},
+			ObservedGrace:     PatchField[[]ObservedGraceEndpoint]{Set: true, Value: []ObservedGraceEndpoint{{Endpoint: "192.0.2.2:33434", UntilUnix: 150}}},
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		live := store.PeerCheckpoints([]string{"peer-a"})["peer-a"]
-		if live.ObservedLastSeenUnix != now || live.ObservedUntilUnix != now+100 || live.LastSyncUnix != now {
-			t.Fatalf("live checkpoint = %+v, want refresh at %d", live, now)
-		}
-		loaded, _, _, _, err := disk.LoadCommon()
-		if err != nil {
-			t.Fatal(err)
-		}
-		persisted := loaded.Gossip.Peers["peer-a"]
-		if persisted.ObservedLastSeenUnix != 0 || persisted.ObservedUntilUnix != wantDisk+100 ||
-			persisted.LastSyncUnix != 0 || persisted.LastAttemptUnix != 0 || persisted.ObservedEndpoint != live.ObservedEndpoint {
-			t.Fatalf("persisted checkpoint = %+v, want refresh at %d and endpoint %q", persisted, wantDisk, live.ObservedEndpoint)
-		}
 	}
-	refresh(101, 100, "")
-	refresh(104, 100, "")
-	refresh(105, 100, "")
-	if _, err := store.UpdatePeerCheckpoint(context.Background(), "peer-b", PeerCheckpointPatch{
-		ObservedUntilUnix: PatchField[int64]{Set: true, Value: 102},
-	}); err != nil {
+	view := store.ReadView()
+	live := view.Gossip.Peers[peerID]
+	if live.ObservedEndpoint == "" || live.ObservedLastSeenUnix != 110 || live.ObservedUntilUnix != 290 || len(live.ObservedGraceEndpoints) != 1 {
+		t.Fatalf("live observed path = %+v", live)
+	}
+	if checkpointWrites != 0 {
+		t.Fatalf("observed path updates called the persistence callback %d times", checkpointWrites)
+	}
+	// Even a full checkpoint rewrite stores only durable fields.
+	if err := disk.CommitCommon(t.Context(), &CommitCandidate{Verified: view.State, Gossip: view.Gossip}, ChangeSet{VerifiedRevision: view.Revision, GossipCheckpointChanged: true}); err != nil {
 		t.Fatal(err)
 	}
-	readBatch := func() (txID int, peerA, peerB int64) {
-		t.Helper()
-		if err := disk.View(func(tx *bolt.Tx) error {
-			txID = tx.ID()
-			loaded, _, _, _, err := LoadBoltState(tx)
-			if err == nil {
-				peerA = loaded.Gossip.Peers["peer-a"].ObservedUntilUnix - 100
-				peerB = loaded.Gossip.Peers["peer-b"].ObservedUntilUnix
-			}
-			return err
-		}); err != nil {
-			t.Fatal(err)
-		}
-		return
-	}
-	before, a, b := readBatch()
-	if a != 100 || b != 100 {
-		t.Fatalf("checkpoints persisted before batch: %d, %d", a, b)
-	}
-	disk.mu.Lock()
-	if disk.checkpointTimer == nil {
-		disk.mu.Unlock()
-		t.Fatal("checkpoint batch did not schedule a flush")
-	}
-	disk.checkpointTimer.Reset(0)
-	disk.mu.Unlock()
-	deadline := time.Now().Add(time.Second)
-	for {
-		after, a, b := readBatch()
-		if after != before || time.Now().After(deadline) {
-			if after != before+1 || a != 105 || b != 102 {
-				t.Fatalf("batch = tx %d, checkpoints %d and %d, want tx %d with 105 and 102", after, a, b, before+1)
-			}
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	if _, err := store.UpdatePeerCheckpoint(context.Background(), "peer-b", PeerCheckpointPatch{
-		ObservedUntilUnix: PatchField[int64]{Set: true, Value: 103},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	before, _, b = readBatch()
-	if b != 102 {
-		t.Fatalf("peer-b persisted before an immediate write: %d", b)
-	}
-	refresh(106, 106, "192.0.2.2:33434")
-	after, a, b := readBatch()
-	if after != before+1 || a != 106 || b != 103 {
-		t.Fatalf("immediate batch = tx %d, checkpoints %d and %d, want tx %d with 106 and 103", after, a, b, before+1)
-	}
-	refresh(110, 106, "")
-	refresh(107, 107, "") // Rollback relative to the queued refresh persists immediately.
-	refresh(109, 107, "")
-	path := db.Path()
-	if err := disk.Close(); err != nil {
-		t.Fatal(err)
-	}
-	reopened, err := OpenBoltStore(path, 0o600, time.Second)
+	loaded, _, _, _, err := disk.LoadCommon()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reopened.Close()
-	loaded, _, _, _, err := reopened.LoadCommon()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := loaded.Gossip.Peers["peer-a"].ObservedUntilUnix; got != 209 {
-		t.Fatalf("checkpoint after reopen = %d, want 209", got)
+	if _, found := loaded.Gossip.Peers[peerID]; found {
+		t.Fatalf("observed-only peer leaked to disk: %+v", loaded.Gossip.Peers[peerID])
 	}
 }
 

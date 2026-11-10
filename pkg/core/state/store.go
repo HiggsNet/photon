@@ -42,8 +42,8 @@ type GossipCheckpoint struct {
 	Peers map[string]PeerCheckpoint `json:"peers,omitempty"`
 }
 
-// PeerCheckpoint contains restart hints and live activity timestamps.
-// Activity timestamps are published in memory and omitted from disk.
+// PeerCheckpoint contains restart hints and live peer state.
+// Activity timestamps and observed UDP paths are published only in memory.
 // Pure protocol counters and explanatory fields belong in observability stores.
 type PeerCheckpoint struct {
 	LastSyncUnix            int64                            `json:"-"`
@@ -53,11 +53,11 @@ type PeerCheckpoint struct {
 	LastRelayUnix           int64                            `json:"last_relay_unix,omitempty"`
 	LastRelayCatalogRootHex string                           `json:"last_relay_catalog_root_hex,omitempty"`
 	DiscoveredEndpoint      string                           `json:"discovered_endpoint,omitempty"`
-	ObservedEndpoint        string                           `json:"observed_endpoint,omitempty"`
-	ObservedFirstSeenUnix   int64                            `json:"observed_first_seen_unix,omitempty"`
+	ObservedEndpoint        string                           `json:"-"`
+	ObservedFirstSeenUnix   int64                            `json:"-"`
 	ObservedLastSeenUnix    int64                            `json:"-"`
-	ObservedUntilUnix       int64                            `json:"observed_until_unix,omitempty"`
-	ObservedGraceEndpoints  []ObservedGraceEndpoint          `json:"observed_grace_endpoints,omitempty"`
+	ObservedUntilUnix       int64                            `json:"-"`
+	ObservedGraceEndpoints  []ObservedGraceEndpoint          `json:"-"`
 	LastFailure             *PeerFailure                     `json:"last_failure,omitempty"`
 	RejectedObjects         map[zone.ZonePath]RejectedObject `json:"rejected_objects,omitempty"`
 }

@@ -20,9 +20,6 @@ func TestProjectLegacyGossipCheckpointKeepsOnlyBehaviorHints(t *testing.T) {
 			LastSyncUnix: 10, LastAttemptUnix: 11, BackoffUntilUnix: 20, FailureCount: 2,
 			LastRelayUnix: 12, LastRelayCatalogRootHex: "catalog",
 			DiscoveredAddr: "192.0.2.1:4242",
-			ObservedAddr:   "198.51.100.1:4242", ObservedFirstSeenUnix: 15, ObservedLastSeenUnix: 16,
-			ObservedUntilUnix:  30,
-			ObservedGraceAddrs: []photonstate.PeerObservedGraceAddrState{{Addr: "198.51.100.2:4242", UntilUnix: 25}},
 			RejectedDigests: map[string]photonstate.PeerRejectedDigest{"zone:bad.catofes.": {
 				Zone: "bad.catofes.", Object: "zone", RootHashHex: hex.EncodeToString(root),
 				Reason: "invalid_snapshot", RejectedAtUnix: 18, UntilUnix: 28,
@@ -34,11 +31,8 @@ func TestProjectLegacyGossipCheckpointKeepsOnlyBehaviorHints(t *testing.T) {
 		t.Fatalf("report = %+v", report)
 	}
 	peer := checkpoint.Peers["peer-a.catofes."]
-	if peer.BackoffUntilUnix != 20 || peer.LastRelayCatalogRootHex != "catalog" || peer.DiscoveredEndpoint != "192.0.2.1:4242" || peer.ObservedEndpoint != "198.51.100.1:4242" {
+	if peer.BackoffUntilUnix != 20 || peer.LastRelayCatalogRootHex != "catalog" || peer.DiscoveredEndpoint != "192.0.2.1:4242" {
 		t.Fatalf("checkpoint peer = %+v", peer)
-	}
-	if len(peer.ObservedGraceEndpoints) != 1 || peer.ObservedGraceEndpoints[0].Endpoint != "198.51.100.2:4242" {
-		t.Fatalf("observed grace = %+v", peer.ObservedGraceEndpoints)
 	}
 	if peer.LastFailure == nil || peer.LastFailure.Code != corestate.PeerFailureLegacy || peer.LastFailure.Error() != "diagnostic" || peer.LastFailure.AtUnix != 11 {
 		t.Fatalf("typed legacy failure = %+v", peer.LastFailure)

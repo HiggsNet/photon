@@ -728,7 +728,7 @@ bootstrap-join-smoke: build
 	echo "Bootstrap join smoke passed"
 
 # A 先从 catofes 同步 B 的授权，随后只从 B 的入站包学习地址。
-# 验证 A 写入的记录能传给 B，且 B 停止后 A 重启仍能恢复 observed path。
+# 验证记录传播，以及 A 重启后由 B 的新入站包重新学习 observed path。
 nat-daemon-observed-smoke: build
 	@set -eu; \
 	tmp="$${TMPDIR:-/tmp}/photon-nat-daemon-observed-smoke"; \
@@ -766,19 +766,36 @@ nat-daemon-observed-smoke: build
 		printf '%s\n' "$$peer" | grep -Eq '^observed_status: active( |$$)' && \
 		printf '%s\n' "$$peer" | grep -Fxq 'discovered_addr: -'; \
 	}; \
+	check_record() { \
+		PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record get node-a.catofes. identity | grep -Fxq "value: $$1"; \
+	}; \
+	wait_record() { \
+		for i in 1 2 3 4 5 6 7 8 9 10; do if check_record "$$1" 2>/dev/null; then return 0; fi; sleep 1; done; \
+		check_record "$$1"; \
+	}; \
 	for i in 1 2 3 4 5 6 7 8; do if check_observed 2>/dev/null; then break; fi; sleep 1; done; \
 	check_observed || { printf '%s\n' "$$peer" >&2; exit 1; }; \
 	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put node-a.catofes. identity node-a-nat-daemon >"$$tmp/record-put.out"; \
 	grep -q 'via daemon' "$$tmp/record-put.out"; \
-	for i in 1 2 3 4 5 6 7 8 9 10; do if PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record get node-a.catofes. identity 2>/dev/null | grep -Fxq 'value: node-a-nat-daemon'; then break; fi; sleep 1; done; \
-	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record get node-a.catofes. identity 2>/dev/null | grep -Fxq 'value: node-a-nat-daemon'; \
+	wait_record node-a-nat-daemon; \
 	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-a.catofes. >/dev/null; \
 	kill "$$b_pid" "$$a_pid"; \
 	wait "$$b_pid" || true; b_pid=""; \
 	wait "$$a_pid" || true; a_pid=""; \
 	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >"$$tmp/a-restart.log" 2>&1 & a_pid="$$!"; \
-	for i in 1 2 3 4 5; do if check_observed 2>/dev/null; then break; fi; sleep 1; done; \
+	for i in 1 2 3 4 5; do \
+		if PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status 2>/dev/null | grep -q '^daemon: online '; then break; fi; \
+		sleep 1; \
+	done; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) advanced sync status | grep -q '^daemon: online '; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) debug verify node-b.catofes. >/dev/null; \
+	peer="$$(PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip peer node-b.catofes. --verbose)"; \
+	if printf '%s\n' "$$peer" | grep -Eq '^observed_addr: [^-]'; then printf '%s\n' "$$peer" >&2; exit 1; fi; \
+	PHOTON_CONFIG="$$tmp/b/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) daemon --interval 60 >>"$$tmp/b.log" 2>&1 & b_pid="$$!"; \
+	for i in 1 2 3 4 5 6 7 8; do if check_observed 2>/dev/null; then break; fi; sleep 1; done; \
 	check_observed || { printf '%s\n' "$$peer" >&2; exit 1; }; \
+	PHOTON_CONFIG="$$tmp/a/config.yaml" $(BUILD_DIR)/$(BINARY_NAME) gossip record put node-a.catofes. identity node-a-nat-relearned | grep -q 'via daemon'; \
+	wait_record node-a-nat-relearned; \
 	echo "NAT daemon observed path smoke passed"
 
 # 先让 A/C 同步并信任 B，确认 C 学到 B 的 endpoint。

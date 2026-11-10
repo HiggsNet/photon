@@ -15,25 +15,33 @@ import (
 type observedVerificationStore struct {
 	GossipStateStore
 	reads           int
-	afterCommitRead func(*corestate.DiscoveryView)
+	afterUpdateRead func(*corestate.DiscoveryView)
+	updateErr       error
+}
+
+func (store *observedVerificationStore) UpdatePeerCheckpoints(ctx context.Context, patches map[string]corestate.PeerCheckpointPatch) (corestate.CommitResult, error) {
+	if store.updateErr != nil {
+		return corestate.CommitResult{}, store.updateErr
+	}
+	return store.GossipStateStore.UpdatePeerCheckpoints(ctx, patches)
 }
 
 func (store *observedVerificationStore) ReadPeerAuthorization(peerID string) *corestate.DiscoveryView {
 	view := store.GossipStateStore.ReadPeerAuthorization(peerID)
 	store.reads++
-	if store.reads == 2 && store.afterCommitRead != nil {
-		store.afterCommitRead(view)
+	if store.reads == 2 && store.afterUpdateRead != nil {
+		store.afterUpdateRead(view)
 	}
 	return view
 }
 
-func TestInboundObservedPathUsesCommittedCheckpointAndRechecksChangedRevision(t *testing.T) {
+func TestInboundObservedPathUsesPublishedStateAndRechecksChangedRevision(t *testing.T) {
 	for _, tc := range []struct {
 		name                        string
-		failCommit, changeAuthority bool
+		failUpdate, changeAuthority bool
 	}{
-		{"committed", false, false}, {"failed_commit", true, false},
-		{"changed_authority", false, true}, {"failed_commit_and_changed_authority", true, true},
+		{"updated", false, false}, {"failed_update", true, false},
+		{"changed_authority", false, true}, {"failed_update_and_changed_authority", true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			now := time.Unix(1000, 0)
@@ -42,15 +50,13 @@ func TestInboundObservedPathUsesCommittedCheckpointAndRechecksChangedRevision(t 
 			old := "198.51.100.1:33434"
 			common := corestate.NewStoreWithCheckpoint(&corestate.VerifiedState{ManagedZone: "local.catofes.", Network: network},
 				&corestate.GossipCheckpoint{Peers: map[string]corestate.PeerCheckpoint{peer.String(): {ObservedEndpoint: old, ObservedUntilUnix: now.Add(time.Minute).Unix()}}},
-				nil, func(context.Context, map[string]*corestate.PeerCheckpoint, corestate.VerifiedRevision) error {
-					if tc.failCommit {
-						return errors.New("disk failed")
-					}
-					return nil
-				})
+				nil, nil)
 			store := &observedVerificationStore{GossipStateStore: common}
+			if tc.failUpdate {
+				store.updateErr = errors.New("observed path update failed")
+			}
 			if tc.changeAuthority {
-				store.afterCommitRead = func(view *corestate.DiscoveryView) {
+				store.afterUpdateRead = func(view *corestate.DiscoveryView) {
 					view.Revision++
 					view.Network.Zones[peer.Parent()].Delegations[peer].Signature[0] ^= 0xff
 				}
@@ -70,11 +76,11 @@ func TestInboundObservedPathUsesCommittedCheckpointAndRechecksChangedRevision(t 
 				}
 			} else {
 				want := packet.Addr.String()
-				if tc.failCommit {
+				if tc.failUpdate {
 					want = old
 				}
 				if addr == nil || addr.String() != want {
-					t.Fatalf("observed %v, want committed %s", addr, want)
+					t.Fatalf("observed %v, want published %s", addr, want)
 				}
 			}
 		})

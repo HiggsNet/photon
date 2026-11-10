@@ -10,17 +10,17 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
-// gossipObservedVerification lives only across one packet's checkpoint commit
-// and address-book restore, both evaluated at the same time.
+// gossipObservedVerification lives only across one packet's state update
+// and address-book publication, both evaluated at the same time.
 type gossipObservedVerification struct {
 	revision corestate.VerifiedRevision
 	valid    bool
 }
 
-// recordGossipObservedPath persists one authenticated packet source after
+// recordGossipObservedPath records an authenticated packet source in memory after
 // validating it against the GossipDriver's current verified state.
 func (driver *GossipDriver) recordGossipObservedPath(ctx context.Context, peerID, endpoint string, suppressed map[string]bool, now time.Time) (gossipObservedVerification, bool, error) {
-	defer driver.LogSlowOperation("observed_checkpoint", time.Now(), driver.PendingEventCount())
+	defer driver.LogSlowOperation("observed_path_update", time.Now(), driver.PendingEventCount())
 	if driver == nil || driver.gossipState == nil {
 		return gossipObservedVerification{}, false, ErrGossipDriverStopped
 	}

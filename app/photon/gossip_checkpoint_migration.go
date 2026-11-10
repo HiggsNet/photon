@@ -106,23 +106,12 @@ func projectLegacyGossipCheckpoint(peers map[string]legacyPeerState) (*corestate
 			LastRelayUnix:           legacy.LastRelayUnix,
 			LastRelayCatalogRootHex: legacy.LastRelayCatalogRootHex,
 			DiscoveredEndpoint:      legacy.DiscoveredAddr,
-			ObservedEndpoint:        legacy.ObservedAddr,
-			ObservedFirstSeenUnix:   legacy.ObservedFirstSeenUnix,
 			ObservedLastSeenUnix:    legacy.ObservedLastSeenUnix,
-			ObservedUntilUnix:       legacy.ObservedUntilUnix,
 		}
 		if legacy.LastError != "" {
 			peer.LastFailure = &corestate.PeerFailure{
 				Code: corestate.PeerFailureLegacy, Message: legacy.LastError, AtUnix: legacy.LastAttemptUnix,
 			}
-		}
-		for _, grace := range legacy.ObservedGraceAddrs {
-			if grace.Addr == "" {
-				continue
-			}
-			peer.ObservedGraceEndpoints = append(peer.ObservedGraceEndpoints, corestate.ObservedGraceEndpoint{
-				Endpoint: grace.Addr, UntilUnix: grace.UntilUnix,
-			})
 		}
 		peer.RejectedObjects, report = projectLegacyRejectedObjects(legacy.RejectedDigests, report)
 		if peerCheckpointEmpty(peer) {

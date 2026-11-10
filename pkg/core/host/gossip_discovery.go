@@ -317,9 +317,9 @@ func (driver *GossipDriver) RefreshGossipDiscovery(ctx context.Context, suppress
 	return nil
 }
 
-// restoreGossipObservedPath republishes one already-persisted observed path
-// into the loss-tolerant address book after packet/checkpoint processing.
-func (driver *GossipDriver) restoreGossipObservedPath(peerID string, suppressed map[string]bool, now time.Time, transport *gossip.Transport, verification gossipObservedVerification) error {
+// publishGossipObservedPath copies the current observed path into the
+// transport address book after packet verification and the live update.
+func (driver *GossipDriver) publishGossipObservedPath(peerID string, suppressed map[string]bool, now time.Time, transport *gossip.Transport, verification gossipObservedVerification) error {
 	if !driver.gossipDiscoveryAvailable() {
 		return ErrGossipDriverStopped
 	}

@@ -22,8 +22,8 @@ func TestGossipSlowOperationRateLimitPreservesWorstSample(t *testing.T) {
 		t.Fatalf("burst emitted %d logs, want 1", len(logs))
 	}
 	// A slow checkpoint must not hide another stage's slow sample.
-	driver.logSlowOperation("observed_checkpoint", 300*time.Millisecond, now.Add(2*time.Second), 10)
-	if len(logs) != 2 || logs[1].Phase != "observed_checkpoint" {
+	driver.logSlowOperation("observed_path_update", 300*time.Millisecond, now.Add(2*time.Second), 10)
+	if len(logs) != 2 || logs[1].Phase != "observed_path_update" {
 		t.Fatalf("independent stage logs = %#v", logs)
 	}
 	driver.events <- GossipPacketReceived{}

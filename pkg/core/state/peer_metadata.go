@@ -36,7 +36,6 @@ type PeerCheckpointPatch struct {
 }
 
 // CheckpointCommitFunc accepts only affected peers before publishing them in memory.
-// The persistence owner may batch forward refreshes of established timestamps.
 // A nil peer deletes its checkpoint. Values are detached; no verified data is supplied.
 type CheckpointCommitFunc func(context.Context, map[string]*PeerCheckpoint, VerifiedRevision) error
 
@@ -145,7 +144,11 @@ func (store *Store) changePeerCheckpoints(ctx context.Context, patches map[strin
 func restartPeerCheckpoint(peer PeerCheckpoint) PeerCheckpoint {
 	peer.LastSyncUnix = 0
 	peer.LastAttemptUnix = 0
+	peer.ObservedEndpoint = ""
+	peer.ObservedFirstSeenUnix = 0
 	peer.ObservedLastSeenUnix = 0
+	peer.ObservedUntilUnix = 0
+	peer.ObservedGraceEndpoints = nil
 	return peer
 }
 
