@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
-	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 const GossipChunkSendNamespace = "gossip_chunk_send"
@@ -82,7 +81,7 @@ func (driver *GossipDriver) flushGossipChunkSend(ctx context.Context, id TimerID
 		}
 	}
 	now := driver.schedulerForRead().clock.Now()
-	if !now.Before(job.expires) || driver.revokedPeers[zone.ZonePath(id.Owner)] {
+	if !now.Before(job.expires) || driver.gossipPeerRevoked(id.Owner, now) {
 		finish(false)
 		return nil
 	}

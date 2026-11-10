@@ -18,6 +18,9 @@ import (
 // SyncSessionState is the state of a per-peer sync FSM.
 type SyncSessionState string
 
+// ErrPingTimeout identifies a round that expired while awaiting the peer's summary.
+var ErrPingTimeout = errors.New("ping timeout")
+
 const (
 	SyncSessionIdle           SyncSessionState = "idle"
 	SyncSessionSummarySent    SyncSessionState = "summary_sent"
@@ -492,8 +495,12 @@ func (s *SyncSession) onRoundTimeout(e *RoundTimeoutEvent) ([]SyncAction, error)
 	if s.State == SyncSessionCompleted || s.State == SyncSessionFailed || s.State == SyncSessionIdle {
 		return nil, nil
 	}
+	if s.State == SyncSessionSummarySent {
+		s.lastError = ErrPingTimeout
+	} else {
+		s.lastError = errors.New("round timeout")
+	}
 	s.State = SyncSessionFailed
-	s.lastError = errors.New("round timeout")
 	return []SyncAction{
 		CancelTimerAction{PeerID: e.PeerID, Kind: TimerKindCatalogPage},
 	}, nil

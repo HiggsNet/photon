@@ -47,7 +47,7 @@ func TestMatchingPingBurstSkipsAlreadyCommittedCompletion(t *testing.T) {
 		driver.events <- packet
 	}
 	for driver.PendingEventCount() > 0 {
-		if _, err := driver.HandleGossipHostEvent(t.Context(), <-driver.Events(), now, nil); err != nil {
+		if _, err := driver.HandleGossipHostEvent(t.Context(), <-driver.Events(), now); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -64,7 +64,7 @@ func TestMatchingPingBurstSkipsAlreadyCommittedCompletion(t *testing.T) {
 	}
 	now = now.Add(time.Second)
 	clock.Advance(time.Second)
-	if _, err := driver.HandleGossipHostEvent(t.Context(), packet, now, nil); err != nil {
+	if _, err := driver.HandleGossipHostEvent(t.Context(), packet, now); err != nil {
 		t.Fatal(err)
 	}
 	if store.updates != 2 || commits != 0 {
@@ -77,7 +77,7 @@ func TestMatchingPingBurstSkipsAlreadyCommittedCompletion(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := driver.HandleGossipHostEvent(t.Context(), packet, now, nil); err != nil {
+	if _, err := driver.HandleGossipHostEvent(t.Context(), packet, now); err != nil {
 		t.Fatal(err)
 	}
 	peer = common.PeerCheckpoints([]string{"peer-a"})["peer-a"]

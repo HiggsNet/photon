@@ -14,23 +14,16 @@ import (
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
-// refreshGossipDiscovery supplies detached owner data to GossipDriver. Peer
+// refreshGossipDiscovery runs discovery on the common GossipDriver. Peer
 // selection, endpoint ordering, checkpoint patches and address-book updates
 // are common runtime responsibilities.
 func (d *Daemon) refreshGossipDiscovery() {
 	if d.State == nil || d.gossipDriver == nil || d.gossipDriver.Transport() == nil {
 		return
 	}
-	if err := d.gossipDriver.RefreshGossipDiscovery(context.Background(), d.gossipSuppressions(), d.now(), d.gossipDriver.Transport()); err != nil {
+	if err := d.gossipDriver.RefreshGossipDiscovery(context.Background(), d.now(), d.gossipDriver.Transport()); err != nil {
 		d.logWarn("endpoint", "discovered_peer_commit_failed", map[string]any{"error": err})
 	}
-}
-
-func (d *Daemon) gossipSuppressions() map[string]bool {
-	if d.State == nil {
-		return nil
-	}
-	return revokedGossipPeers(d.State.Common.ReadRevokedZones(d.now()))
 }
 
 func gossipDriverConfig(app *appConfig, verified *corestate.VerifiedState, logger *appLogger) corehost.GossipDriverConfig {
@@ -103,7 +96,7 @@ func startObjectPullServer(ctx context.Context, d *Daemon) error {
 }
 
 func (d *Daemon) handleSyncTimerEvent(ctx context.Context, force bool) error {
-	changed, err := d.gossipDriver.SyncGossipPeers(ctx, d.now(), d.gossipSuppressions(), force)
+	changed, err := d.gossipDriver.SyncGossipPeers(ctx, d.now(), force)
 	if changed {
 		d.refreshGossipDiscovery()
 		d.notifyStateChanged()
@@ -113,7 +106,7 @@ func (d *Daemon) handleSyncTimerEvent(ctx context.Context, force bool) error {
 
 func (d *Daemon) handleGossipDriverEvent(ctx context.Context, hostEvent corehost.Event) (corehost.GossipHostEventResult, error) {
 	now := d.now()
-	result, err := d.gossipDriver.HandleGossipHostEvent(ctx, hostEvent, now, d.gossipSuppressions())
+	result, err := d.gossipDriver.HandleGossipHostEvent(ctx, hostEvent, now)
 	if result.NetworkChanged {
 		d.refreshGossipDiscovery()
 		d.notifyStateChanged()

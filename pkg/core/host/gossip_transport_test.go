@@ -88,7 +88,7 @@ func TestGossipDriverRepliesToUnverifiedPeerAtInboundAddress(t *testing.T) {
 	result, err := driver.HandleGossipHostEvent(context.Background(), GossipPacketReceived{Packet: &gossip.Packet{
 		Message: &gossip.Message{Type: gossip.MessagePing, PeerID: peerID, Ping: &gossip.Ping{}},
 		Addr:    inboundAddr,
-	}}, now, nil)
+	}}, now)
 	if err != nil {
 		t.Fatal(err)
 	}

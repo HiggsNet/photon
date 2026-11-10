@@ -68,7 +68,7 @@ func TestInboundObservedPathUsesPublishedStateAndRechecksChangedRevision(t *test
 				t.Fatal(err)
 			}
 			packet := &gossip.Packet{Addr: &net.UDPAddr{IP: net.ParseIP("198.51.100.2"), Port: 33434}, Message: &gossip.Message{PeerID: peer.String()}}
-			driver.acceptGossipInboundPath(t.Context(), packet, now, nil, transport)
+			driver.acceptGossipInboundPath(t.Context(), packet, now, transport)
 			addr := transport.ObservedPeerAddr(peer.String())
 			if tc.changeAuthority {
 				if addr != nil {
@@ -100,11 +100,11 @@ func TestInboundObservedVerificationDoesNotSurviveNextPacket(t *testing.T) {
 		t.Fatal(err)
 	}
 	packet := &gossip.Packet{Addr: &net.UDPAddr{IP: net.ParseIP("198.51.100.2"), Port: 33434}, Message: &gossip.Message{PeerID: peer.String()}}
-	driver.acceptGossipInboundPath(t.Context(), packet, now, nil, transport)
+	driver.acceptGossipInboundPath(t.Context(), packet, now, transport)
 	if transport.ObservedPeerAddr(peer.String()) == nil {
 		t.Fatal("valid peer not published")
 	}
-	driver.acceptGossipInboundPath(t.Context(), packet, now.Add(2*time.Second), nil, transport)
+	driver.acceptGossipInboundPath(t.Context(), packet, now.Add(2*time.Second), transport)
 	if transport.ObservedPeerAddr(peer.String()) != nil {
 		t.Fatal("expired authority reused across packets")
 	}
@@ -133,7 +133,7 @@ func TestGossipRemembersOnlyMatchedPongEndpointChanges(t *testing.T) {
 	pong := &gossip.Message{Type: gossip.MessagePong, PeerID: peerID, Pong: &gossip.Pong{Summary: corestate.CatalogSummaryFor(network)}}
 	receive := func(addr *net.UDPAddr) {
 		now = now.Add(time.Second)
-		driver.acceptGossipInboundPath(t.Context(), &gossip.Packet{Addr: addr, Message: pong}, now, nil, transport)
+		driver.acceptGossipInboundPath(t.Context(), &gossip.Packet{Addr: addr, Message: pong}, now, transport)
 	}
 	ping := func(want *net.UDPAddr) {
 		t.Helper()

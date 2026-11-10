@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"reflect"
 	"testing"
-	"time"
 )
 
 func TestReadCatalogMatchesSnapshotAndDetachesHashes(t *testing.T) {
@@ -30,7 +29,6 @@ var benchmarkReadResult any
 func BenchmarkReadProjection(b *testing.B) {
 	fixture := checkpointBenchmarkCandidate()
 	store := NewStoreWithCheckpoint(fixture.Verified, fixture.Gossip, nil, nil)
-	now := time.Unix(100, 0)
 	cases := []struct {
 		name string
 		read func() any
@@ -51,8 +49,6 @@ func BenchmarkReadProjection(b *testing.B) {
 			store.catalog.Store(nil)
 			return store.ReadCatalog()
 		}},
-		{"revocations/full", func() any { return store.ReadView().State.Network.RevokedZones(now) }},
-		{"revocations/narrow", func() any { return store.ReadRevokedZones(now) }},
 	}
 	for _, c := range cases {
 		b.Run(c.name, func(b *testing.B) {

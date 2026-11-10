@@ -64,6 +64,10 @@ Linux 隧道生命周期用内存中的活动时间判断何时暂停重建。�
 
 签名撤销生效时，公共 Store 删除对应的 Gossip checkpoint，共享 Driver 清理会话、地址和诊断。撤销 Zone 正文由显式的 `advanced recovery purge-revoked --apply` 删除，父区中的签名撤销证明继续保留。
 
+Linux 和 Windows 共用 Driver 的撤销判定。处理入站 UDP、排队的会话事件和分块发送时，Driver 按公共 Store 中已提交的签名撤销和当前时间判断该节点是否可用。Linux 删除单独构造并转传撤销名单的路径。
+
+保留对长期失联邻居的主动探测，以便全网断开后重新收敛。普通邻居连续等不到 UDP 摘要时，退避从 2 秒逐次翻倍，到 5 分钟封顶。Bootstrap 和收到摘要后失败的同步仍按 64 秒封顶。退避到期后由下一轮扫描重试。Windows 的周期 Gossip 扫描调为 60 秒，启动、网络变化和收到 PING 仍可立即触发同步，网关规划维持原有节奏。
+
 Common 数据库锁定在 schema 2。旧整库用 v0.6.6 迁移，旧的整块 Gossip checkpoint 则直接忽略。
 
 ## 统一 Gossip 查询模型

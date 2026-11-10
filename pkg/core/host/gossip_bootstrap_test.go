@@ -15,18 +15,18 @@ func TestUpdateGossipBootstrapIsDetachedAndPreservesPeerIDs(t *testing.T) {
 	}
 	peers["gateway."].IP[15] = 99
 	delete(peers, "gateway.")
-	input := driver.GossipDiscoveryInput(nil)
+	input := driver.GossipDiscoveryInput()
 	if len(input.BootstrapPeers) != 1 || input.BootstrapPeers[0] != "gateway." || input.Bootstrap["gateway."].String() != "192.0.2.2:33434" {
 		t.Fatalf("discovery: %+v", input)
 	}
 	input.Bootstrap["gateway."].Port = 1
-	if driver.GossipDiscoveryInput(nil).Bootstrap["gateway."].Port != 33434 {
+	if driver.GossipDiscoveryInput().Bootstrap["gateway."].Port != 33434 {
 		t.Fatal("caller modified driver bootstrap state")
 	}
 	if err := driver.UpdateGossipBootstrap(nil); err != nil {
 		t.Fatal(err)
 	}
-	if input := driver.GossipDiscoveryInput(nil); len(input.Bootstrap) != 0 || len(input.BootstrapPeers) != 1 {
+	if input := driver.GossipDiscoveryInput(); len(input.Bootstrap) != 0 || len(input.BootstrapPeers) != 1 {
 		t.Fatal("clearing DNS results changed configured peer IDs")
 	}
 	driver.Stop()

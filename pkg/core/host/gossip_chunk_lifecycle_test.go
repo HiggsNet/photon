@@ -198,7 +198,7 @@ func TestGossipChunkCapacityWarningIsClassifiedThrottledAndHandled(t *testing.T)
 	fill()
 	packet := &gossip.Packet{Message: &gossip.Message{PeerID: "receiver", Type: gossip.MessageFetchZone, FetchZone: &gossip.FetchZone{Zone: paths[4]}}}
 	for range 6 {
-		if _, err := driver.HandleGossipHostEvent(t.Context(), GossipPacketReceived{Packet: packet}, clock.Now(), nil); err != nil {
+		if _, err := driver.HandleGossipHostEvent(t.Context(), GossipPacketReceived{Packet: packet}, clock.Now()); err != nil {
 			t.Fatalf("capacity error escaped to platform logger: %v", err)
 		}
 	}
@@ -211,7 +211,7 @@ func TestGossipChunkCapacityWarningIsClassifiedThrottledAndHandled(t *testing.T)
 	}
 	clock.Advance(30 * time.Second)
 	fill()
-	if _, err := driver.HandleGossipHostEvent(t.Context(), GossipPacketReceived{Packet: packet}, clock.Now(), nil); err != nil {
+	if _, err := driver.HandleGossipHostEvent(t.Context(), GossipPacketReceived{Packet: packet}, clock.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if len(warnings) != 2 || warnings[1].Fields["suppressed"] != 5 {

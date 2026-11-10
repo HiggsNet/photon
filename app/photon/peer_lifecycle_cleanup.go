@@ -91,11 +91,3 @@ func peerLifecycleExcludedPeers(suspended map[zone.ZonePath]bool) map[zone.ZoneP
 	}
 	return excluded
 }
-
-func revokedGossipPeers(revoked map[zone.ZonePath]bool) map[string]bool {
-	suppressed := make(map[string]bool, len(revoked))
-	for path := range revoked {
-		suppressed[path.String()] = true
-	}
-	return suppressed
-}

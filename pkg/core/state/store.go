@@ -64,10 +64,11 @@ type PeerCheckpoint struct {
 type PeerFailureCode string
 
 const (
-	PeerFailureUnknown   PeerFailureCode = "unknown"
-	PeerFailureTimeout   PeerFailureCode = "timeout"
-	PeerFailureTransport PeerFailureCode = "transport"
-	PeerFailureProtocol  PeerFailureCode = "protocol"
+	PeerFailureUnknown     PeerFailureCode = "unknown"
+	PeerFailureTimeout     PeerFailureCode = "timeout"
+	PeerFailurePingTimeout PeerFailureCode = "ping_timeout"
+	PeerFailureTransport   PeerFailureCode = "transport"
+	PeerFailureProtocol    PeerFailureCode = "protocol"
 )
 
 // PeerFailure is a loss-tolerant, serializable error record. Scheduling must
@@ -166,7 +167,6 @@ type Store struct {
 	gossip            *GossipCheckpoint
 	revision          atomic.Uint64
 	catalog           atomic.Pointer[catalogSnapshot]
-	revocations       atomic.Pointer[revocationSnapshot]
 	commit            CommitFunc
 	commitCheckpoints CheckpointCommitFunc
 	closed            bool

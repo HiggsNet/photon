@@ -42,7 +42,7 @@ func consumeChunkSendTimer(t *testing.T, driver *GossipDriver, clock *fakeClock,
 	t.Helper()
 	clock.Advance(after)
 	event := receiveTimer(t, driver.Completions())
-	result, err := driver.HandleGossipHostEvent(context.Background(), event, clock.Now(), nil)
+	result, err := driver.HandleGossipHostEvent(context.Background(), event, clock.Now())
 	if !result.Handled {
 		t.Fatalf("send timer not handled: %#v", event)
 	}
@@ -143,7 +143,7 @@ func TestGossipChunkRepairMergesWithPendingInitialSend(t *testing.T) {
 }
 
 func consumeStaleSendTimer(driver *GossipDriver, clock *fakeClock) error {
-	_, err := driver.HandleGossipHostEvent(context.Background(), TimerFired{ID: TimerID{Namespace: GossipChunkSendNamespace, Owner: "peer", Key: "stale"}, Generation: 1}, clock.Now(), nil)
+	_, err := driver.HandleGossipHostEvent(context.Background(), TimerFired{ID: TimerID{Namespace: GossipChunkSendNamespace, Owner: "peer", Key: "stale"}, Generation: 1}, clock.Now())
 	return err
 }
 

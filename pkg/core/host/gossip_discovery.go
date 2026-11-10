@@ -24,14 +24,12 @@ const (
 )
 
 // GossipDiscoveryInput is the detached common/driver input used to rebuild
-// the in-memory peer address book. Suppressed peers remain dialable but do not
-// refresh discovery-derived checkpoint fields until the suppression clears.
+// the in-memory peer address book.
 type GossipDiscoveryInput struct {
 	LocalPeerID      string
 	ManagedZone      zone.ZonePath
 	Network          *zone.NetworkState
 	Peers            map[string]corestate.PeerCheckpoint
-	Suppressed       map[string]bool
 	Bootstrap        map[string]*net.UDPAddr
 	BootstrapPeers   []string
 	SourceOrder      []string
@@ -49,15 +47,13 @@ type GossipDiscoveryConfig struct {
 }
 
 // GossipDiscoveryInput returns one detached discovery view built from the
-// GossipDriver's committed common Store. suppressed is the only platform-owned
-// overlay: it represents peers temporarily excluded by platform lifecycle
-// policy and is never persisted as gossip protocol state.
-func (driver *GossipDriver) GossipDiscoveryInput(suppressed map[string]bool) GossipDiscoveryInput {
-	return driver.gossipDiscoveryInput("", suppressed, true, "")
+// GossipDriver's committed common Store.
+func (driver *GossipDriver) GossipDiscoveryInput() GossipDiscoveryInput {
+	return driver.gossipDiscoveryInput("", true, "")
 }
 
-func (driver *GossipDriver) gossipDiscoveryInput(peerID string, suppressed map[string]bool, records bool, recordPrefix string) GossipDiscoveryInput {
-	input := GossipDiscoveryInput{Suppressed: cloneSuppressedPeers(suppressed)}
+func (driver *GossipDriver) gossipDiscoveryInput(peerID string, records bool, recordPrefix string) GossipDiscoveryInput {
+	var input GossipDiscoveryInput
 	if driver == nil {
 		return input
 	}
@@ -98,14 +94,6 @@ func cloneBootstrapPeers(input map[string]*net.UDPAddr) map[string]*net.UDPAddr 
 	return out
 }
 
-func cloneSuppressedPeers(input map[string]bool) map[string]bool {
-	out := make(map[string]bool, len(input))
-	for peerID, suppressed := range input {
-		out[peerID] = suppressed
-	}
-	return out
-}
-
 const GossipRelayMinInterval = time.Second
 
 // GossipOutboundPeers returns every peer that common gossip may actively
@@ -115,7 +103,7 @@ func GossipOutboundPeers(input GossipDiscoveryInput, now time.Time) []string {
 	seen := make(map[string]bool)
 	peers := make([]string, 0, len(input.Bootstrap)+len(input.Peers))
 	add := func(peerID string) {
-		if peerID == "" || peerID == input.LocalPeerID || peerID == input.ManagedZone.String() || seen[peerID] || input.Suppressed[peerID] || input.Network.IsZoneRevoked(zone.ZonePath(peerID), now) {
+		if peerID == "" || peerID == input.LocalPeerID || peerID == input.ManagedZone.String() || seen[peerID] || input.Network.IsZoneRevoked(zone.ZonePath(peerID), now) {
 			return
 		}
 		seen[peerID] = true
@@ -143,7 +131,7 @@ func GossipOutboundPeers(input GossipDiscoveryInput, now time.Time) []string {
 	}
 	observed := make([]string, 0, len(input.Peers))
 	for peerID, checkpoint := range input.Peers {
-		if !seen[peerID] && !input.Suppressed[peerID] &&
+		if !seen[peerID] &&
 			(discoveryObservedActive(checkpoint, now) || parseRememberedAddr(checkpoint.LastSuccessfulEndpoint) != nil) &&
 			discoveryPeerVerified(input, peerID, now) {
 			observed = append(observed, peerID)
@@ -262,7 +250,7 @@ func ResolveGossipObjectPullAddress(input GossipDiscoveryInput, peerID string, n
 // bootstrap and signed endpoints. TCP and UDP share the numeric endpoint port,
 // but a working UDP path does not establish TCP reachability.
 func ResolveGossipObjectPullAddresses(input GossipDiscoveryInput, peerID string, now time.Time) []string {
-	if peerID == "" {
+	if peerID == "" || input.Network.IsZoneRevoked(zone.ZonePath(peerID), now) {
 		return nil
 	}
 	var addresses []string
@@ -299,11 +287,11 @@ func discoveryTCPAddressFromUDP(udp *net.UDPAddr) string {
 
 // RefreshGossipDiscovery persists checkpoint changes before publishing the
 // rebuilt, loss-tolerant address book to the live transport.
-func (driver *GossipDriver) RefreshGossipDiscovery(ctx context.Context, suppressed map[string]bool, now time.Time, transport *gossip.Transport) error {
+func (driver *GossipDriver) RefreshGossipDiscovery(ctx context.Context, now time.Time, transport *gossip.Transport) error {
 	if !driver.gossipDiscoveryAvailable() {
 		return ErrGossipDriverStopped
 	}
-	input := driver.gossipDiscoveryInput("", suppressed, true, gossip.EndpointRecordKeyPrefix)
+	input := driver.gossipDiscoveryInput("", true, gossip.EndpointRecordKeyPrefix)
 	plan := PlanGossipDiscovery(input, now)
 	if len(plan.Patches) > 0 {
 		if driver.gossipState == nil {
@@ -320,14 +308,7 @@ func (driver *GossipDriver) RefreshGossipDiscovery(ctx context.Context, suppress
 	}
 	driver.revokedPeers = plan.Revoked
 	for path := range plan.Revoked {
-		peerID := path.String()
-		if driver.Gossip.HasActiveSession(peerID) {
-			driver.CancelGossipTimers(peerID)
-			driver.dropGossipPeerChunks(peerID)
-			driver.removeGossipSession(peerID)
-		}
-		driver.Gossip.TakePendingHint(peerID)
-		driver.Observability.Delete(peerID)
+		driver.dropRevokedGossipPeer(path.String())
 	}
 	driver.Observability.PurgeExpired(now)
 	ApplyGossipDiscoveryPlan(transport, plan)
@@ -336,14 +317,14 @@ func (driver *GossipDriver) RefreshGossipDiscovery(ctx context.Context, suppress
 
 // publishGossipObservedPath copies the current observed path into the
 // transport address book after packet verification and the live update.
-func (driver *GossipDriver) publishGossipObservedPath(peerID string, suppressed map[string]bool, now time.Time, transport *gossip.Transport, verification gossipObservedVerification) error {
+func (driver *GossipDriver) publishGossipObservedPath(peerID string, now time.Time, transport *gossip.Transport, verification gossipObservedVerification) error {
 	if !driver.gossipDiscoveryAvailable() {
 		return ErrGossipDriverStopped
 	}
 	if transport == nil || peerID == "" {
 		return nil
 	}
-	input := driver.gossipDiscoveryInput(peerID, suppressed, false, "")
+	input := driver.gossipDiscoveryInput(peerID, false, "")
 	var paths []gossip.ObservedPath
 	var ok bool
 	if input.verifiedRevision != verification.revision {
@@ -386,12 +367,12 @@ func PlanGossipDiscovery(input GossipDiscoveryInput, now time.Time) GossipDiscov
 	plan.Revoked = gossipDiscoveryRevocations(input, now)
 	discovered := gossip.ExtractPeerEndpointsAt(input.Network, now)
 	for peerID, bootstrap := range input.Bootstrap {
-		if !input.Suppressed[peerID] && !plan.Revoked[zone.ZonePath(peerID)] {
+		if !plan.Revoked[zone.ZonePath(peerID)] {
 			plan.Addresses[peerID] = GossipDiscoveryAddresses(discovered[peerID], bootstrap, input.SourceOrder)
 		}
 	}
 	for peerID, entries := range discovered {
-		if peerID != input.LocalPeerID && peerID != input.ManagedZone.String() && !input.Suppressed[peerID] && input.Bootstrap[peerID] == nil {
+		if peerID != input.LocalPeerID && peerID != input.ManagedZone.String() && input.Bootstrap[peerID] == nil {
 			plan.Addresses[peerID] = GossipDiscoveryAddresses(entries, nil, input.SourceOrder)
 		}
 	}
@@ -407,14 +388,8 @@ func PlanGossipDiscovery(input GossipDiscoveryInput, now time.Time) GossipDiscov
 			continue
 		}
 		update := plan.Peers[peerID]
-		if peer.LastSuccessfulEndpoint != "" {
-			if input.Suppressed[peerID] {
-				patch := plan.Patches[peerID]
-				patch.LastSuccessfulEndpoint = corestate.PatchField[string]{Set: true}
-				plan.Patches[peerID] = patch
-			} else if addr := parseRememberedAddr(peer.LastSuccessfulEndpoint); addr != nil && discoveryPeerVerified(input, peerID, now) {
-				plan.Remembered[peerID] = addr
-			}
+		if addr := parseRememberedAddr(peer.LastSuccessfulEndpoint); addr != nil && discoveryPeerVerified(input, peerID, now) {
+			plan.Remembered[peerID] = addr
 		}
 		if peer.ObservedEndpoint != "" && !discoveryObservedActive(peer, now) {
 			update.RemoveObserved = true
@@ -517,7 +492,7 @@ func verifiedDiscoveryPeers(input GossipDiscoveryInput, now time.Time) []string 
 }
 
 func discoveryObservedPaths(input GossipDiscoveryInput, peerID string, peer corestate.PeerCheckpoint, now time.Time) ([]gossip.ObservedPath, bool) {
-	if input.Suppressed[peerID] || !discoveryObservedActive(peer, now) || !discoveryPeerVerified(input, peerID, now) {
+	if !discoveryObservedActive(peer, now) || !discoveryPeerVerified(input, peerID, now) {
 		return nil, false
 	}
 	return observedCheckpointPaths(peer, now)

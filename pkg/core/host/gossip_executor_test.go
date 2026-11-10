@@ -97,6 +97,10 @@ func (reader *memoryGossipStateStore) ReadPeerAuthorization(peerID string) *core
 	return reader.readDiscovery(peerID, false, "")
 }
 
+func (reader *memoryGossipStateStore) IsZoneRevoked(path zone.ZonePath, now time.Time) bool {
+	return len(reader.views) > 0 && reader.views[0].State != nil && reader.views[0].State.Network.IsZoneRevoked(path, now)
+}
+
 func (reader *memoryGossipStateStore) readDiscovery(peerID string, records bool, prefix string) *corestate.DiscoveryView {
 	view := reader.ReadView()
 	if view.State == nil {

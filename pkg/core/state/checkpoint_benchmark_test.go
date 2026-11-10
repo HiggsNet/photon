@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	bolt "go.etcd.io/bbolt"
@@ -100,21 +99,4 @@ func BenchmarkCheckpointNarrowCommit(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
-}
-
-func BenchmarkRevocationRead(b *testing.B) {
-	candidate := checkpointBenchmarkCandidate()
-	store := NewStoreWithCheckpoint(candidate.Verified, candidate.Gossip, nil, nil)
-	b.Run("full_view", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			store.ReadView().State.Network.RevokedZones(time.Unix(100, 0))
-		}
-	})
-	b.Run("projection", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			store.ReadRevokedZones(time.Unix(100, 0))
-		}
-	})
 }

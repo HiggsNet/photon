@@ -168,11 +168,9 @@ func newDaemon(config *appConfig, state *State, interval time.Duration, clock fu
 	d.ipsecTakeoverNotBefore = d.now().Add(2 * time.Minute)
 	d.gossipDriver = corehost.NewGossipDriver(corehost.NewClock(d.now), corehost.DefaultEventBuffer, commonState, gossipDriverConfig(config, verified, logger))
 	d.objectPullExecutor = corehost.NewGossipObjectPullExecutor(corehost.GossipObjectPullExecutorConfig{
-		Client: photonlinux.GossipObjectPullClient{},
-		Discovery: func() corehost.GossipDiscoveryInput {
-			return d.gossipDriver.GossipDiscoveryInput(d.gossipSuppressions())
-		},
-		Now: d.now,
+		Client:    photonlinux.GossipObjectPullClient{},
+		Discovery: d.gossipDriver.GossipDiscoveryInput,
+		Now:       d.now,
 	})
 	return d
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -12,7 +11,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
-func TestRevocationProjectionAcrossTimeIntervals(t *testing.T) {
+func TestZoneRevocationAcrossTimeIntervals(t *testing.T) {
 	network := zone.NewNetworkState()
 	for _, path := range []zone.ZonePath{zone.RootZone, "parent.", "child.parent.", "other."} {
 		network.Zones[path] = zone.NewZoneState(path, nil)
@@ -27,14 +26,11 @@ func TestRevocationProjectionAcrossTimeIntervals(t *testing.T) {
 	check := func(second int64) {
 		t.Helper()
 		now := time.Unix(second, 0)
-		want := network.RevokedZones(now)
-		got := store.ReadRevokedZones(now)
-		if !reflect.DeepEqual(got, want) {
-			t.Errorf("at %d: projection=%v, want %v", second, got, want)
+		for _, path := range []zone.ZonePath{"parent.", "child.parent.", "purged.", "other.", "nil.", "unknown."} {
+			if got, want := store.IsZoneRevoked(path, now), network.IsZoneRevoked(path, now); got != want {
+				t.Errorf("at %d: %s revoked=%v, want %v", second, path, got, want)
+			}
 		}
-		// Even an empty result must remain detached from the cached projection.
-		clear(got)
-		got["caller."] = true
 	}
 	// Includes both sides of activation, purged tombstones, ancestors, negative
 	// timestamps and rollback across more than one scheduled boundary.
@@ -52,7 +48,7 @@ func TestRevocationProjectionAcrossTimeIntervals(t *testing.T) {
 	readers.Wait()
 }
 
-func TestRevocationProjectionFollowsPublication(t *testing.T) {
+func TestZoneRevocationFollowsPublication(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		t.Run(fmt.Sprintf("fail=%v", fail), func(t *testing.T) {
 			network, _, _, parentPrivate := managedAuthorityFixture(t, true)
@@ -69,8 +65,7 @@ func TestRevocationProjectionFollowsPublication(t *testing.T) {
 					return nil
 				}, func(context.Context, map[string]*PeerCheckpoint, VerifiedRevision) error { return nil })
 			now := time.Unix(1000, 0)
-			before := store.ReadRevokedZones(now)
-			if before[path] {
+			if store.IsZoneRevoked(path, now) {
 				t.Fatal("fixture already revoked")
 			}
 			done := make(chan error, 1)
@@ -84,17 +79,16 @@ func TestRevocationProjectionFollowsPublication(t *testing.T) {
 				close(release)
 				t.Fatal("commit never reached persistence")
 			}
-			pending := store.ReadRevokedZones(now)
+			pending := store.IsZoneRevoked(path, now)
 			close(release)
 			if err := <-done; (fail && !errors.Is(err, wantErr)) || (!fail && err != nil) {
 				t.Fatalf("commit: %v", err)
 			}
-			if pending[path] {
+			if pending {
 				t.Fatal("uncommitted revocation was visible")
 			}
-			after := store.ReadRevokedZones(now)
-			if after[path] == fail {
-				t.Fatal("projection did not follow committed revision")
+			if store.IsZoneRevoked(path, now) == fail {
+				t.Fatal("revocation did not follow committed revision")
 			}
 			if got := store.ReadDiscovery(path.String()); got.Revision != store.VerifiedRevision() {
 				t.Fatal("discovery revision does not match state")
@@ -108,47 +102,6 @@ func TestRevocationProjectionFollowsPublication(t *testing.T) {
 			_, retained := store.PeerCheckpoints([]string{path.String()})[path.String()]
 			if retained != fail {
 				t.Fatal("pruning did not follow committed revocation")
-			}
-		})
-	}
-}
-
-func BenchmarkRevocationZones(b *testing.B) {
-	candidate := checkpointBenchmarkCandidate()
-	network := candidate.Verified.Network
-	network.Zones["catofes."] = zone.NewZoneState("catofes.", nil)
-	for i := range 4 {
-		path := zone.ZonePath(fmt.Sprintf("node-%d.catofes.", i))
-		network.Zones["catofes."].Revocations[path] = &zone.DelegationRevocation{
-			ParentZone: "catofes.", ChildZone: path, RevokedAt: 50,
-		}
-	}
-	network.Zones["child.node-0.catofes."] = zone.NewZoneState("child.node-0.catofes.", nil)
-	network.Zones["catofes."].Revocations["purged.catofes."] = &zone.DelegationRevocation{
-		ParentZone: "catofes.", ChildZone: "purged.catofes.", RevokedAt: 200,
-	}
-	store := NewStore(candidate.Verified, nil, nil)
-	now := time.Unix(100, 0)
-	for _, mode := range []string{"recompute", "warm", "cold"} {
-		b.Run(mode, func(b *testing.B) {
-			read := func() map[zone.ZonePath]bool {
-				store.mu.RLock()
-				defer store.mu.RUnlock()
-				if mode == "recompute" {
-					return store.state.Network.RevokedZones(now)
-				}
-				if mode == "cold" {
-					store.revocations.Store(nil)
-				}
-				return store.revokedZonesLocked(now)
-			}
-			if got := read(); len(got) != 5 || !got["child.node-0.catofes."] || got["purged.catofes."] {
-				b.Fatalf("bad active/future revocation fixture: %v", got)
-			}
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				benchmarkReadResult = read()
 			}
 		})
 	}

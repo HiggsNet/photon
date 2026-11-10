@@ -109,12 +109,12 @@ func startB4AuthorityPeerAt(t *testing.T, ctx context.Context, config *Config, l
 	if err == nil {
 		err = driver.StartGossipObjectPullServer(peerCtx, gossipListener{socket}, 0, 0)
 	}
-	executor := corehost.NewGossipObjectPullExecutor(corehost.GossipObjectPullExecutorConfig{Client: objectPullClient{}, Discovery: func() corehost.GossipDiscoveryInput { return driver.GossipDiscoveryInput(nil) }})
+	executor := corehost.NewGossipObjectPullExecutor(corehost.GossipObjectPullExecutorConfig{Client: objectPullClient{}, Discovery: driver.GossipDiscoveryInput})
 	if err == nil {
 		err = driver.StartGossipObjectPullWorkers(peerCtx, executor, 0, 0)
 	}
 	if err == nil {
-		err = driver.RefreshGossipDiscovery(peerCtx, nil, time.Now(), transport)
+		err = driver.RefreshGossipDiscovery(peerCtx, time.Now(), transport)
 	}
 	if err == nil {
 		err = driver.StartGossipTransport(peerCtx, transport, func(err error) {
@@ -143,7 +143,7 @@ func startB4AuthorityPeerAt(t *testing.T, ctx context.Context, config *Config, l
 				view := source.Store().ReadView()
 				_, err := source.Store().ApplyLocalIntentsAtRevision(peerCtx, command.intents, time.Now(), view.Revision)
 				if err == nil {
-					_, err = driver.SyncGossipPeers(peerCtx, time.Now(), nil, true)
+					_, err = driver.SyncGossipPeers(peerCtx, time.Now(), true)
 				}
 				command.result <- err
 				continue
@@ -151,15 +151,15 @@ func startB4AuthorityPeerAt(t *testing.T, ctx context.Context, config *Config, l
 			case event = <-driver.Completions():
 			case event = <-driver.Continuations():
 			case <-ticker.C:
-				if err := driver.RefreshGossipDiscovery(peerCtx, nil, time.Now(), transport); err != nil && peerCtx.Err() == nil {
+				if err := driver.RefreshGossipDiscovery(peerCtx, time.Now(), transport); err != nil && peerCtx.Err() == nil {
 					peer.recordError(err)
 				}
-				if _, err := driver.SyncGossipPeers(peerCtx, time.Now(), nil, false); err != nil && peerCtx.Err() == nil {
+				if _, err := driver.SyncGossipPeers(peerCtx, time.Now(), false); err != nil && peerCtx.Err() == nil {
 					peer.recordError(err)
 				}
 				continue
 			}
-			if _, err := driver.HandleGossipHostEvent(peerCtx, event, time.Now(), nil); err != nil && !errors.Is(err, corehost.ErrGossipSessionNotFound) && peerCtx.Err() == nil {
+			if _, err := driver.HandleGossipHostEvent(peerCtx, event, time.Now()); err != nil && !errors.Is(err, corehost.ErrGossipSessionNotFound) && peerCtx.Err() == nil {
 				peer.recordError(err)
 			}
 		}
@@ -278,7 +278,7 @@ func (p *b4AuthorityPeer) waitSignedRecords(t *testing.T, parent context.Context
 			lastError = err
 		default:
 		}
-		endpoint := corehost.ResolveGossipObjectPullAddress(p.driver.GossipDiscoveryInput(nil), string(p.target), time.Now())
+		endpoint := corehost.ResolveGossipObjectPullAddress(p.driver.GossipDiscoveryInput(), string(p.target), time.Now())
 		if endpoint != "" {
 			response, err := (objectPullClient{}).Exchange(ctx, endpoint, &gossip.ObjectPullRequest{Type: gossip.ObjectPullZone, Zone: path})
 			if err == nil && response.OK && response.Snapshot != nil && response.Snapshot.Zone == path {

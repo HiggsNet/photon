@@ -63,7 +63,7 @@ func TestGossipDriverInboundOwnsObservedCheckpointAndAddressBookPublication(t *t
 		Addr:    &net.UDPAddr{IP: net.ParseIP("198.51.100.10"), Port: 33434},
 		Message: &gossip.Message{Type: gossip.MessageFetchCatalogPage, PeerID: path.String(), FetchCatalogPage: &gossip.FetchCatalogPage{}},
 	}
-	if _, err := driver.HandleGossipHostEvent(context.Background(), GossipPacketReceived{Packet: packet}, now, nil); err != nil {
+	if _, err := driver.HandleGossipHostEvent(context.Background(), GossipPacketReceived{Packet: packet}, now); err != nil {
 		t.Fatal(err)
 	}
 	if len(state.updates) != 1 || !state.updates[0][path.String()].ObservedEndpoint.Set {
@@ -116,7 +116,7 @@ func TestGossipDriverPingSummaryShortcutOwnsCheckpointAndSkipsSession(t *testing
 		Message: &gossip.Message{
 			Type: gossip.MessagePing, PeerID: peerID.String(), Ping: &gossip.Ping{Summary: summary},
 		},
-	}}, now, nil)
+	}}, now)
 	if err != nil || !result.Handled {
 		t.Fatalf("HandleGossipHostEvent result/error = %#v/%v", result, err)
 	}
@@ -143,7 +143,7 @@ func TestGossipDriverPingSummaryMismatchStartsCommonSession(t *testing.T) {
 
 	_, err := driver.HandleGossipHostEvent(context.Background(), GossipPacketReceived{Packet: &gossip.Packet{Message: &gossip.Message{
 		Type: gossip.MessagePing, PeerID: "peer-a", Ping: &gossip.Ping{Summary: &corestate.CatalogSummary{CatalogRoot: []byte("mismatch"), ZoneCount: 99}},
-	}}}, now, nil)
+	}}}, now)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -17,7 +17,7 @@ type stalledGossipLog struct {
 }
 
 func (l stalledGossipLog) Handle(ctx context.Context, record slog.Record) error {
-	if record.Message == "gateway_candidates_changed" {
+	if record.Message == "session_state_changed" {
 		select {
 		case l.entered <- struct{}{}:
 		default:
@@ -32,10 +32,10 @@ func TestDaemonServesMeshWhileGossipWorkerStalls(t *testing.T) {
 	config := &Config{
 		State: StateConfig{Path: fixture.leftPath}, ManagedZone: "node-a.catofes.",
 		TrustedRootPublicKey: fixture.rootPublic, GossipListen: "127.0.0.1:0",
-		Gateway: GatewayConfig{AllowedZones: []zone.ZonePath{"node-b.catofes."}},
+		Gateway: GatewayConfig{BootstrapHints: []BootstrapHint{{Peer: zone.ZonePath("node-b.catofes."), Address: "127.0.0.1:33434"}}},
 	}
 	log := stalledGossipLog{
-		Handler: slog.NewTextHandler(io.Discard, nil),
+		Handler: slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}),
 		entered: make(chan struct{}, 1), release: make(chan struct{}),
 	}
 	d := NewDaemon(config, slog.New(log))

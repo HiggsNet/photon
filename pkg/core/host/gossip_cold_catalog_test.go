@@ -118,7 +118,7 @@ func testGossipColdCatalog(t *testing.T, pullsAtTimeout int) {
 	driver.Gossip.NewSession("bootstrap")
 	handle := func(event gossip.SyncEvent) GossipHostEventResult {
 		t.Helper()
-		result, err := driver.HandleGossipHostEvent(t.Context(), GossipEvent{Value: event}, now, nil)
+		result, err := driver.HandleGossipHostEvent(t.Context(), GossipEvent{Value: event}, now)
 		if err != nil || result.Session.TerminalErr != nil {
 			t.Fatalf("cold catalog event %T: result=%+v error=%v", event, result.Session, err)
 		}
@@ -153,7 +153,7 @@ func testGossipColdCatalog(t *testing.T, pullsAtTimeout int) {
 		case <-deadline.C:
 			t.Fatal("cold catalog did not finish")
 		}
-		result, err := driver.HandleGossipHostEvent(t.Context(), event, now, nil)
+		result, err := driver.HandleGossipHostEvent(t.Context(), event, now)
 		if err != nil || result.Session.TerminalErr != nil {
 			t.Fatalf("cold catalog event %T: result=%+v error=%v", event, result.Session, err)
 		}
@@ -167,7 +167,7 @@ func testGossipColdCatalog(t *testing.T, pullsAtTimeout int) {
 					},
 					pullRound: oldRound,
 				}
-				result, err := driver.HandleGossipHostEvent(t.Context(), stale, now, nil)
+				result, err := driver.HandleGossipHostEvent(t.Context(), stale, now)
 				if err != nil || result.Session.PeerID != "" {
 					t.Fatalf("old result reached the replacement session: %+v, %v", result, err)
 				}
@@ -185,7 +185,7 @@ func testGossipColdCatalog(t *testing.T, pullsAtTimeout int) {
 			if oldRound == nil {
 				t.Fatal("active worker jobs have no round owner")
 			}
-			timedOut, err := driver.HandleGossipHostEvent(t.Context(), GossipEvent{Value: &gossip.RoundTimeoutEvent{PeerID: "bootstrap"}}, now, nil)
+			timedOut, err := driver.HandleGossipHostEvent(t.Context(), GossipEvent{Value: &gossip.RoundTimeoutEvent{PeerID: "bootstrap"}}, now)
 			if err != nil || !timedOut.Session.Done || timedOut.Session.TerminalErr == nil {
 				t.Fatalf("round did not expire: %+v, %v", timedOut, err)
 			}

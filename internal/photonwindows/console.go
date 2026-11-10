@@ -199,12 +199,13 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		return err
 	}
 	executor := corehost.NewGossipObjectPullExecutor(corehost.GossipObjectPullExecutorConfig{
-		Client: objectPullClient{routes: packet.outboundRoutes}, Discovery: func() corehost.GossipDiscoveryInput { return driver.GossipDiscoveryInput(nil) },
+		Client:    objectPullClient{routes: packet.outboundRoutes},
+		Discovery: driver.GossipDiscoveryInput,
 	})
 	if err := driver.StartGossipObjectPullWorkers(ctx, executor, 0, 0); err != nil {
 		return err
 	}
-	if err := driver.RefreshGossipDiscovery(ctx, nil, time.Now(), transport); err != nil {
+	if err := driver.RefreshGossipDiscovery(ctx, time.Now(), transport); err != nil {
 		return err
 	}
 	if err := driver.StartGossipTransport(ctx, transport, func(err error) { logger.Warn("gossip_receive_failed", "error", err) }); err != nil {
@@ -237,10 +238,21 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	planRequests := make(chan planRequest, 1)
 	plans := make(chan planResult, 1)
 	plannerCtx, stopPlanner := context.WithCancel(ctx)
+	initialView := state.Store().ReadView()
 	var plannerWG sync.WaitGroup
 	plannerWG.Add(1)
 	go func() {
 		defer plannerWG.Done()
+		var lastCandidates []GatewayCandidate
+		observeGateways := func(view corestate.View, now time.Time) {
+			candidates := GatewayCandidates(config, view, now)
+			if !reflect.DeepEqual(lastCandidates, candidates) {
+				logger.Info("gateway_candidates_changed", "revision", view.Revision, "evaluated_at", now,
+					"candidates", candidates, "tunnel_ready", false, "route_authorized", false)
+				lastCandidates = candidates
+			}
+		}
+		observeGateways(initialView, time.Now())
 		for {
 			select {
 			case <-plannerCtx.Done():
@@ -248,7 +260,9 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			case request := <-planRequests:
 				bootstrap, bootstrapErr := d.resolveBootstrap(request.ctx, config, listenAddr)
 				view := state.Store().ReadView()
-				plan := d.planGateway(request.ctx, config, view, time.Now())
+				now := time.Now()
+				observeGateways(view, now)
+				plan := d.planGateway(request.ctx, config, view, now)
 				plan = RevalidateGatewayPlan(config, view, plan, time.Now())
 				paths := networkRouteTargets{splitRoutes: config.Overlay.SplitRoutes}
 				paths.update(plan, bootstrap, gossipRouteTargets(view, time.Now())...)
@@ -538,10 +552,11 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			}
 		case <-ticker.C:
 			if rebindPending != "" {
-				_ = rebind(ctx, rebindPending)
+				if err := rebind(ctx, rebindPending); err == nil {
+					refreshGossip()
+				}
 			}
 			requestPlan()
-			refreshGossip()
 		case <-gossipPublished:
 			mesh.stateMu.Lock()
 			invalidateErr := mesh.invalidate()

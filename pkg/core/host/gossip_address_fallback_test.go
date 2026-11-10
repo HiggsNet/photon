@@ -55,10 +55,10 @@ func TestGossipUDPTimeoutOverridesRecentSuccess(t *testing.T) {
 	transport.SetPeerAddrs("peer-a", []*net.UDPAddr{v6, v4})
 	transport.RecordAddrSuccess("peer-a", v6)
 	driver.Gossip.NewSession("peer-a")
-	if _, err := driver.HandleGossipHostEvent(t.Context(), GossipEvent{Value: &gossip.SyncTimerEvent{PeerID: "peer-a"}}, clock.Now(), nil); err != nil {
+	if _, err := driver.HandleGossipHostEvent(t.Context(), GossipEvent{Value: &gossip.SyncTimerEvent{PeerID: "peer-a"}}, clock.Now()); err != nil {
 		t.Fatal(err)
 	}
-	result, err := driver.HandleGossipHostEvent(t.Context(), GossipEvent{Value: &gossip.RoundTimeoutEvent{PeerID: "peer-a"}}, clock.Now(), nil)
+	result, err := driver.HandleGossipHostEvent(t.Context(), GossipEvent{Value: &gossip.RoundTimeoutEvent{PeerID: "peer-a"}}, clock.Now())
 	if err != nil || !result.Session.Done {
 		t.Fatalf("timeout result = %#v, error = %v", result, err)
 	}

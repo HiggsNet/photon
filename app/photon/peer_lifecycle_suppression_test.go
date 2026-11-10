@@ -80,18 +80,6 @@ func TestTunnelSuspensionSurvivesRestartWithoutActivityTimestamps(t *testing.T) 
 	reconcile(d, now.Add(time.Second), false)
 }
 
-func TestPeerLifecycleSuppressionDerivesRevocationFromVerifiedState(t *testing.T) {
-	state, parentKey, _, _ := buildPeerStateTestOwners(t)
-	now := time.Unix(300_000, 0)
-	peerID := zone.ZonePath("node-b.catofes.")
-	addRevocationToParent(t, state.verified.Network, "catofes.", peerID, parentKey, now)
-	delete(state.verified.Network.Zones, peerID)
-
-	if !revokedGossipPeers(corestate.NewStoreWithCheckpoint(state.verified, state.checkpoint, nil, nil).ReadRevokedZones(now))[peerID.String()] {
-		t.Fatal("revoked peer without ZoneState or checkpoint is not suppressed from discovery")
-	}
-}
-
 func TestPeerLifecycleSuppressionTearsDownAndSuccessfulSyncRestoresLink(t *testing.T) {
 	verified, checkpoint, runtime, syncConfig := buildTestDaemonOwners(t)
 	now := time.Unix(500_000, 0)

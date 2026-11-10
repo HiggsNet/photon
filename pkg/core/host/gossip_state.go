@@ -21,11 +21,16 @@ type GossipStateStore interface {
 	// ReadDiscoveryRecords returns a detached network and its verified Revision.
 	ReadDiscoveryRecords(peerID, prefix string) *corestate.DiscoveryView
 	ReadPeerAuthorization(string) *corestate.DiscoveryView
+	IsZoneRevoked(zone.ZonePath, time.Time) bool
 	ReadCatalog() *corestate.CatalogView
 	PeerCheckpoints([]string) map[string]corestate.PeerCheckpoint
 	ApplyRemoteBatch(context.Context, string, []corestate.RemoteSnapshot, time.Time) (corestate.RemoteBatchResult, error)
 	UpdatePeerCheckpoints(context.Context, map[string]corestate.PeerCheckpointPatch) (corestate.CommitResult, error)
 	PruneRevokedPeerCheckpoints(context.Context, time.Time) error
+}
+
+func (driver *GossipDriver) gossipPeerRevoked(peerID string, now time.Time) bool {
+	return driver.gossipState != nil && driver.gossipState.IsZoneRevoked(zone.ZonePath(peerID), now)
 }
 
 // GossipDriverConfig contains platform-neutral configuration. Resolved bootstrap

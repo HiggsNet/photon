@@ -179,7 +179,7 @@ func (node *memoryHostNode) run() {
 }
 
 func (node *memoryHostNode) handleEvent(event corehost.Event) error {
-	hostResult, err := node.runtime.HandleGossipHostEvent(node.ctx, event, time.Now(), nil)
+	hostResult, err := node.runtime.HandleGossipHostEvent(node.ctx, event, time.Now())
 	if errors.Is(err, corehost.ErrGossipSessionNotFound) {
 		return nil
 	}

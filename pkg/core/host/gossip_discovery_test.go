@@ -31,6 +31,10 @@ func (writer failingDiscoveryWriter) ReadPeerAuthorization(peerID string) *cores
 	return corestate.NewStoreWithCheckpoint(writer.view.State, writer.view.Gossip, nil, nil).ReadPeerAuthorization(peerID)
 }
 
+func (writer failingDiscoveryWriter) IsZoneRevoked(path zone.ZonePath, now time.Time) bool {
+	return writer.view.State != nil && writer.view.State.Network.IsZoneRevoked(path, now)
+}
+
 func (writer failingDiscoveryWriter) ReadZoneSnapshot(path zone.ZonePath, now time.Time) (*corestate.ZoneSnapshot, bool, error) {
 	return corestate.NewStore(writer.view.State, nil, nil).ReadZoneSnapshot(path, now)
 }
@@ -64,7 +68,7 @@ func TestGossipDriverDiscoveryDoesNotPublishAddressBookBeforeCheckpoint(t *testi
 		Gossip: &corestate.GossipCheckpoint{Peers: input.Peers},
 	}}, GossipDriverConfig{Discovery: GossipDiscoveryConfig{Bootstrap: input.Bootstrap}})
 	defer driver.Stop()
-	if err := driver.RefreshGossipDiscovery(context.Background(), nil, now, transport); !errors.Is(err, wantErr) {
+	if err := driver.RefreshGossipDiscovery(context.Background(), now, transport); !errors.Is(err, wantErr) {
 		t.Fatalf("RefreshGossipDiscovery error = %v", err)
 	}
 	if addr := transport.PeerAddr("peer-a"); addr != nil {
@@ -526,7 +530,7 @@ func TestObservedPathVerifierRechecksExpiryAndRevocation(t *testing.T) {
 	defer driver.Stop()
 	check := func(at time.Time, endpoint string, want bool) {
 		t.Helper()
-		verified, committed, err := driver.recordGossipObservedPath(t.Context(), peer.String(), endpoint, false, nil, at)
+		verified, committed, err := driver.recordGossipObservedPath(t.Context(), peer.String(), endpoint, false, at)
 		if err != nil || verified.valid != want || committed != want {
 			t.Fatalf("at %v: verified=%t committed=%t err=%v, want %t", at, verified.valid, committed, err, want)
 		}
@@ -592,11 +596,5 @@ func TestRememberedGossipEndpointIsAStartupCandidateOnlyForVerifiedPeer(t *testi
 	}
 	if _, addr := datagram.lastWrite(); addr.String() != input.Peers[peerID].LastSuccessfulEndpoint {
 		t.Fatalf("probe sent to %v", addr)
-	}
-	input.Suppressed = map[string]bool{peerID: true}
-	plan = PlanGossipDiscovery(input, now)
-	ApplyGossipDiscoveryPlan(transport, plan)
-	if patch := plan.Patches[peerID].LastSuccessfulEndpoint; transport.HasRememberedPeerAddr(peerID) || !patch.Set || patch.Value != "" {
-		t.Fatal("suppressed peer's remembered endpoint was not cleared")
 	}
 }

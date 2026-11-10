@@ -43,7 +43,7 @@ func TestGossipQueueFullInputCannotDropAcceptedPong(t *testing.T) {
 		t.Fatal("waiting producer did not refill input queue")
 	}
 	<-done
-	result, err := driver.HandleGossipHostEvent(t.Context(), event, now, nil)
+	result, err := driver.HandleGossipHostEvent(t.Context(), event, now)
 	if err != nil || !result.Session.Done || driver.Gossip.HasActiveSession("peer-a") {
 		t.Fatalf("PONG result/error = %#v/%v", result, err)
 	}
@@ -82,7 +82,7 @@ func TestGossipQueueSnapshotResultSurvivesFullQueues(t *testing.T) {
 			}
 			result, err := driver.HandleGossipHostEvent(t.Context(), GossipEvent{Value: &gossip.ObjectPullResultEvent{
 				PeerID: "peer-a", Zone: "remote.catofes.", Snapshot: &corestate.ZoneSnapshot{Zone: "remote.catofes."},
-			}}, now, nil)
+			}}, now)
 			if err != nil || !result.Session.Done || driver.Gossip.Session("peer-a") != nil || len(store.batch) != 1 {
 				t.Fatalf("apply result/error/batch = %#v/%v/%d", result, err, len(store.batch))
 			}
@@ -134,7 +134,7 @@ func TestGossipQueueInternalBudgetYieldsAndRetainsAllResults(t *testing.T) {
 		sessions = append(sessions, session)
 	}
 	driver.events <- GossipPacketReceived{}
-	_, err := driver.HandleGossipHostEvent(t.Context(), GossipPacketReceived{}, now, nil)
+	_, err := driver.HandleGossipHostEvent(t.Context(), GossipPacketReceived{}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,14 +158,14 @@ func TestGossipQueueInternalBudgetYieldsAndRetainsAllResults(t *testing.T) {
 	other.State = gossip.SyncSessionSummarySent
 	other.AccumulateNetworkChanged(true)
 	driver.completions <- GossipEvent{Value: &gossip.PongReceivedEvent{PeerID: "peer-b", Pong: &gossip.Pong{Summary: corestate.CatalogSummaryFor(nil)}}}
-	result, err := driver.HandleGossipHostEvent(t.Context(), <-driver.Completions(), now, nil)
+	result, err := driver.HandleGossipHostEvent(t.Context(), <-driver.Completions(), now)
 	if err != nil || result.NetworkChanged || driver.Gossip.Session("peer-b") != nil || result.Session.PeerID != peerIDs[2*(maxGossipEventBatch-1)] {
 		t.Fatalf("interleaved completion result/error = %#v/%v", result, err)
 	}
 	for driver.internalPending.Load() > 0 {
 		select {
 		case event := <-driver.Continuations():
-			if _, err := driver.HandleGossipHostEvent(t.Context(), event, now, nil); err != nil {
+			if _, err := driver.HandleGossipHostEvent(t.Context(), event, now); err != nil {
 				t.Fatal(err)
 			}
 		case <-time.After(time.Second):
@@ -279,7 +279,7 @@ func TestGossipQueueWaitingIODoesNotPauseInputs(t *testing.T) {
 		t.Fatal("waiting on asynchronous I/O paused input admission")
 	}
 	driver.events <- GossipPacketReceived{Packet: &gossip.Packet{Message: &gossip.Message{Type: gossip.MessageFetchCatalogPage, PeerID: "peer-a", FetchCatalogPage: &gossip.FetchCatalogPage{}}}}
-	if _, err := driver.HandleGossipHostEvent(context.Background(), <-driver.Events(), time.Now(), nil); err != nil || datagram.writeCount() != 1 {
+	if _, err := driver.HandleGossipHostEvent(context.Background(), <-driver.Events(), time.Now()); err != nil || datagram.writeCount() != 1 {
 		t.Fatalf("independent responder writes/error = %d/%v", datagram.writeCount(), err)
 	}
 }
