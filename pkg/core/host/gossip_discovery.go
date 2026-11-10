@@ -2,8 +2,6 @@ package host
 
 import (
 	"bytes"
-	"context"
-	"errors"
 	"net"
 	"net/netip"
 	"sort"
@@ -15,8 +13,6 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
-
-var ErrGossipCheckpointWriterRequired = errors.New("gossip checkpoint writer is required")
 
 const (
 	GossipObservedPathTTL            = 3 * time.Minute
@@ -173,14 +169,12 @@ func ShouldRelayGossipUpdate(peer corestate.PeerCheckpoint, peerID, sourcePeerID
 type GossipPeerAddressUpdate struct {
 	ObservedPaths  []gossip.ObservedPath
 	PreferObserved bool
-	RemoveObserved bool
 }
 
 type GossipDiscoveryPlan struct {
 	KnownPeerIDs []string
 	Revoked      map[zone.ZonePath]bool
 	Peers        map[string]GossipPeerAddressUpdate
-	Patches      map[string]corestate.PeerCheckpointPatch
 	Addresses    map[string][]*net.UDPAddr
 	Remembered   map[string]*net.UDPAddr
 }
@@ -195,7 +189,7 @@ func PlanVerifiedObservedCheckpoint(input GossipDiscoveryInput, peerID, endpoint
 	peer := input.Peers[peerID]
 	firstSeen := peer.ObservedFirstSeenUnix
 	grace := append([]corestate.ObservedGraceEndpoint(nil), peer.ObservedGraceEndpoints...)
-	if peer.ObservedEndpoint != endpoint || firstSeen == 0 {
+	if peer.ObservedEndpoint != endpoint || firstSeen == 0 || !discoveryObservedActive(peer, now) {
 		if discoveryObservedActive(peer, now) && peer.ObservedEndpoint != "" && peer.ObservedEndpoint != endpoint {
 			grace = appendObservedGraceEndpoint(grace, peer.ObservedEndpoint, now.Add(GossipObservedPathMigrationGrace), now)
 		}
@@ -285,33 +279,13 @@ func discoveryTCPAddressFromUDP(udp *net.UDPAddr) string {
 	return (&net.TCPAddr{IP: udp.IP, Port: udp.Port, Zone: udp.Zone}).String()
 }
 
-// RefreshGossipDiscovery persists checkpoint changes before publishing the
-// rebuilt, loss-tolerant address book to the live transport.
-func (driver *GossipDriver) RefreshGossipDiscovery(ctx context.Context, now time.Time, transport *gossip.Transport) error {
+// RefreshGossipDiscovery rebuilds the transport's in-memory address book.
+func (driver *GossipDriver) RefreshGossipDiscovery(now time.Time, transport *gossip.Transport) error {
 	if !driver.gossipDiscoveryAvailable() {
 		return ErrGossipDriverStopped
 	}
 	input := driver.gossipDiscoveryInput("", true, gossip.EndpointRecordKeyPrefix)
-	plan := PlanGossipDiscovery(input, now)
-	if len(plan.Patches) > 0 {
-		if driver.gossipState == nil {
-			return ErrGossipCheckpointWriterRequired
-		}
-		if _, err := driver.gossipState.UpdatePeerCheckpoints(ctx, plan.Patches); err != nil {
-			return err
-		}
-	}
-	if len(plan.Revoked) > 0 && driver.gossipState != nil {
-		if err := driver.gossipState.PruneRevokedPeerCheckpoints(ctx, now); err != nil {
-			return err
-		}
-	}
-	driver.revokedPeers = plan.Revoked
-	for path := range plan.Revoked {
-		driver.dropRevokedGossipPeer(path.String())
-	}
-	driver.Observability.PurgeExpired(now)
-	ApplyGossipDiscoveryPlan(transport, plan)
+	ApplyGossipDiscoveryPlan(transport, PlanGossipDiscovery(input, now))
 	return nil
 }
 
@@ -357,7 +331,7 @@ func (driver *GossipDriver) gossipDiscoveryAvailable() bool {
 
 func PlanGossipDiscovery(input GossipDiscoveryInput, now time.Time) GossipDiscoveryPlan {
 	plan := GossipDiscoveryPlan{
-		Peers: make(map[string]GossipPeerAddressUpdate), Patches: make(map[string]corestate.PeerCheckpointPatch),
+		Peers:     make(map[string]GossipPeerAddressUpdate),
 		Addresses: make(map[string][]*net.UDPAddr), Remembered: make(map[string]*net.UDPAddr),
 	}
 	if input.Network == nil {
@@ -377,36 +351,21 @@ func PlanGossipDiscovery(input GossipDiscoveryInput, now time.Time) GossipDiscov
 		}
 	}
 
-	peerIDs := make([]string, 0, len(input.Peers))
-	for peerID := range input.Peers {
-		peerIDs = append(peerIDs, peerID)
-	}
-	sort.Strings(peerIDs)
-	for _, peerID := range peerIDs {
-		peer := input.Peers[peerID]
+	for peerID, peer := range input.Peers {
 		if plan.Revoked[zone.ZonePath(peerID)] {
 			continue
 		}
-		update := plan.Peers[peerID]
+		var update GossipPeerAddressUpdate
 		if addr := parseRememberedAddr(peer.LastSuccessfulEndpoint); addr != nil && discoveryPeerVerified(input, peerID, now) {
 			plan.Remembered[peerID] = addr
 		}
-		if peer.ObservedEndpoint != "" && !discoveryObservedActive(peer, now) {
-			update.RemoveObserved = true
-			patch := plan.Patches[peerID]
-			patch.ObservedEndpoint.Set = true
-			patch.ObservedFirstUnix.Set = true
-			patch.ObservedUntilUnix.Set = true
-			plan.Patches[peerID] = patch
-		} else if paths, ok := discoveryObservedPaths(input, peerID, peer, now); ok {
+		if paths, ok := discoveryObservedPaths(input, peerID, peer, now); ok {
 			update.ObservedPaths = paths
 			var first *net.UDPAddr
 			if addrs := plan.Addresses[peerID]; len(addrs) > 0 {
 				first = addrs[0]
 			}
 			update.PreferObserved = preferGossipObserved(peer, first)
-		} else {
-			update.RemoveObserved = true
 		}
 		plan.Peers[peerID] = update
 	}
@@ -447,16 +406,10 @@ func ApplyGossipDiscoveryPlan(transport *gossip.Transport, plan GossipDiscoveryP
 	for path := range plan.Revoked {
 		transport.RemovePeer(path.String())
 	}
-	peerIDs := make([]string, 0, len(plan.Peers))
-	for peerID := range plan.Peers {
-		peerIDs = append(peerIDs, peerID)
-	}
-	sort.Strings(peerIDs)
-	for _, peerID := range peerIDs {
-		update := plan.Peers[peerID]
-		if update.RemoveObserved {
+	for peerID, update := range plan.Peers {
+		if len(update.ObservedPaths) == 0 {
 			transport.RemoveObservedPeerAddr(peerID)
-		} else if len(update.ObservedPaths) > 0 {
+		} else {
 			transport.SetObservedPeerPaths(peerID, update.ObservedPaths, update.PreferObserved)
 		}
 	}

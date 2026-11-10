@@ -128,7 +128,7 @@ func TestCatalogCacheConcurrentReadersAndCommits(t *testing.T) {
 
 func TestCatalogCacheIdentityRemoteAndRecoveryPublications(t *testing.T) {
 	now := time.Unix(1000, 0)
-	limits := SyncLimits{MaxZones: 16, MaxRecords: 64, MaxBytes: 8 << 20}
+	limits := SyncLimits{MaxRecords: 64, MaxBytes: 8 << 20}
 	install, parentPrivate := identityInstallFixture(t)
 	store := NewStore(nil, nil, nil)
 	check := func() {

@@ -65,6 +65,9 @@ func TestZoneRevocationFollowsPublication(t *testing.T) {
 					return nil
 				}, func(context.Context, map[string]*PeerCheckpoint, VerifiedRevision) error { return nil })
 			now := time.Unix(1000, 0)
+			if _, err := store.UpdatePeerCheckpoint(t.Context(), path.String(), PeerCheckpointPatch{ObservedLastUnix: PatchField[int64]{Set: true, Value: 7}}); err != nil {
+				t.Fatal(err)
+			}
 			if store.IsZoneRevoked(path, now) {
 				t.Fatal("fixture already revoked")
 			}
@@ -92,12 +95,6 @@ func TestZoneRevocationFollowsPublication(t *testing.T) {
 			}
 			if got := store.ReadDiscovery(path.String()); got.Revision != store.VerifiedRevision() {
 				t.Fatal("discovery revision does not match state")
-			}
-			if _, err := store.UpdatePeerCheckpoint(t.Context(), path.String(), PeerCheckpointPatch{ObservedLastUnix: PatchField[int64]{Set: true, Value: 7}}); err != nil {
-				t.Fatal(err)
-			}
-			if err := store.PruneRevokedPeerCheckpoints(t.Context(), now); err != nil {
-				t.Fatal(err)
 			}
 			_, retained := store.PeerCheckpoints([]string{path.String()})[path.String()]
 			if retained != fail {

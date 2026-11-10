@@ -51,7 +51,6 @@ func newPersistedIPsecPublishTestService(
 		rt.Config.ListenAddr = config.ListenAddr
 		rt.Config.Bootstrap = append([]syncConfigPeer(nil), config.Bootstrap...)
 		rt.Config.MaxMessageBytes = config.MaxMessageBytes
-		rt.Config.MaxSyncZones = config.MaxSyncZones
 		rt.Config.MaxSyncRecords = config.MaxSyncRecords
 	}
 	service := newDaemon(rt.Config, state, time.Second, rt.Now)
@@ -259,8 +258,8 @@ func TestDaemonEndpointTimerPublishesRoleProfileFromReloadedState(t *testing.T) 
 	if result.Error != nil {
 		t.Fatalf("handleEvent(endpoint): %v", result.Error)
 	}
-	if !syncNow || shutdown {
-		t.Fatalf("syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
+	if !result.StateCommitted || syncNow || shutdown {
+		t.Fatalf("committed=%v syncNow=%v shutdown=%v", result.StateCommitted, syncNow, shutdown)
 	}
 	latest := service.State.Common.ReadView()
 	record := latest.State.Network.Zones[latest.State.ManagedZone].Records[ipsec.RecordKeyProfile]

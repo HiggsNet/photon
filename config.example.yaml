@@ -39,7 +39,6 @@ gossip:
 
   # Public-internet safe defaults. Photon does not depend on IP fragmentation.
   # max_datagram_bytes: 1200
-  # max_sync_zones: 16
   # max_sync_records: 1024
 
   # Explicit publish addresses are preferred over reflector/interface discovery.

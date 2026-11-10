@@ -35,9 +35,13 @@ func runMeshGossip(ctx context.Context, config *Config, state *State, driver *co
 		case <-ctx.Done():
 			return nil
 		case <-leafIntents:
-			if err := state.EnsureLocalLeafRoutes(ctx, config, time.Now()); err != nil &&
+			now := time.Now()
+			if err := state.EnsureLocalLeafRoutes(ctx, config, now); err != nil &&
 				!errors.Is(err, corestate.ErrVerifiedRevisionStale) && ctx.Err() == nil {
 				logger.Warn("leaf_route_publication_failed", "error", err)
+			}
+			if store.VerifiedRevision() != lastRevision {
+				driver.RelayGossipUpdate(ctx, "", now)
 			}
 		case next := <-refresh:
 			if !reflect.DeepEqual(bootstrap, next) {
@@ -54,7 +58,7 @@ func runMeshGossip(ctx context.Context, config *Config, state *State, driver *co
 		case event = <-driver.Continuations():
 		}
 		if refreshDue {
-			if err := driver.RefreshGossipDiscovery(ctx, time.Now(), transport); err != nil && ctx.Err() == nil {
+			if err := driver.RefreshGossipDiscovery(time.Now(), transport); err != nil && ctx.Err() == nil {
 				return fmt.Errorf("refresh gossip discovery: %w", err)
 			}
 			syncPeers()
@@ -66,7 +70,7 @@ func runMeshGossip(ctx context.Context, config *Config, state *State, driver *co
 		}
 		if revision := store.VerifiedRevision(); revision != lastRevision {
 			lastRevision = revision
-			if err := driver.RefreshGossipDiscovery(ctx, time.Now(), transport); err != nil && ctx.Err() == nil {
+			if err := driver.RefreshGossipDiscovery(time.Now(), transport); err != nil && ctx.Err() == nil {
 				logger.Warn("gossip_discovery_refresh_failed", "error", err)
 			}
 			select {

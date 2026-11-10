@@ -11,68 +11,65 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	"github.com/HiggsNet/photon/pkg/core/observability"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 )
 
-type failingDiscoveryWriter struct {
-	err  error
-	view corestate.View
-}
-
-func (writer failingDiscoveryWriter) ReadView() corestate.View { return writer.view }
-
-func (writer failingDiscoveryWriter) ReadDiscoveryRecords(peerID, prefix string) *corestate.DiscoveryView {
-	return corestate.NewStoreWithCheckpoint(writer.view.State, writer.view.Gossip, nil, nil).ReadDiscoveryRecords(peerID, prefix)
-}
-
-func (writer failingDiscoveryWriter) ReadPeerAuthorization(peerID string) *corestate.DiscoveryView {
-	return corestate.NewStoreWithCheckpoint(writer.view.State, writer.view.Gossip, nil, nil).ReadPeerAuthorization(peerID)
-}
-
-func (writer failingDiscoveryWriter) IsZoneRevoked(path zone.ZonePath, now time.Time) bool {
-	return writer.view.State != nil && writer.view.State.Network.IsZoneRevoked(path, now)
-}
-
-func (writer failingDiscoveryWriter) ReadZoneSnapshot(path zone.ZonePath, now time.Time) (*corestate.ZoneSnapshot, bool, error) {
-	return corestate.NewStore(writer.view.State, nil, nil).ReadZoneSnapshot(path, now)
-}
-
-func (writer failingDiscoveryWriter) ApplyRemoteBatch(context.Context, string, []corestate.RemoteSnapshot, time.Time) (corestate.RemoteBatchResult, error) {
-	return corestate.RemoteBatchResult{}, nil
-}
-
-func (writer failingDiscoveryWriter) PruneRevokedPeerCheckpoints(context.Context, time.Time) error {
-	return writer.err
-}
-
-func (writer failingDiscoveryWriter) UpdatePeerCheckpoints(context.Context, map[string]corestate.PeerCheckpointPatch) (corestate.CommitResult, error) {
-	return corestate.CommitResult{}, writer.err
-}
-
-func TestGossipDriverDiscoveryDoesNotPublishAddressBookBeforeCheckpoint(t *testing.T) {
-	wantErr := errors.New("checkpoint failed")
+func TestGossipDiscoveryPublishesAddressesWithoutPruningCheckpoints(t *testing.T) {
 	now := time.Unix(1000, 0)
-	transport := &gossip.Transport{}
-	input := GossipDiscoveryInput{
-		Network:   zone.NewNetworkState(),
-		Bootstrap: map[string]*net.UDPAddr{"peer-a": {IP: net.ParseIP("192.0.2.1"), Port: 33434}},
-		Peers: map[string]corestate.PeerCheckpoint{"peer-a": {
-			ObservedEndpoint:  "198.51.100.1:33434",
-			ObservedUntilUnix: now.Add(-time.Minute).Unix(),
+	const revoked = "revoked."
+	const healthy = "healthy."
+	network := zone.NewNetworkState()
+	network.Zones[zone.RootZone] = zone.NewZoneState(zone.RootZone, nil)
+	network.Zones[zone.RootZone].Revocations[revoked] = &zone.DelegationRevocation{
+		ParentZone: zone.RootZone, ChildZone: revoked, RevokedAt: now.Unix(),
+	}
+	wantErr := errors.New("checkpoint failed")
+	writes := 0
+	store := corestate.NewStoreWithCheckpoint(&corestate.VerifiedState{Network: network}, &corestate.GossipCheckpoint{
+		Peers: map[string]corestate.PeerCheckpoint{
+			revoked: {LastSuccessfulEndpoint: "192.0.2.1:33434"},
+			healthy: {BackoffUntilUnix: now.Add(time.Minute).Unix()},
+		},
+	}, nil, func(context.Context, map[string]*corestate.PeerCheckpoint, corestate.VerifiedRevision) error {
+		writes++
+		if writes == 1 {
+			return wantErr
+		}
+		return nil
+	})
+	driver := NewGossipDriver(newFakeClock(now), 1, store, GossipDriverConfig{
+		Discovery: GossipDiscoveryConfig{Bootstrap: map[string]*net.UDPAddr{
+			healthy: {IP: net.ParseIP("192.0.2.2"), Port: 33434},
 		}},
-	}
-	driver := NewGossipDriver(nil, 1, failingDiscoveryWriter{err: wantErr, view: corestate.View{
-		State:  &corestate.VerifiedState{Network: input.Network},
-		Gossip: &corestate.GossipCheckpoint{Peers: input.Peers},
-	}}, GossipDriverConfig{Discovery: GossipDiscoveryConfig{Bootstrap: input.Bootstrap}})
+	})
 	defer driver.Stop()
-	if err := driver.RefreshGossipDiscovery(context.Background(), now, transport); !errors.Is(err, wantErr) {
-		t.Fatalf("RefreshGossipDiscovery error = %v", err)
+	transport, _ := bindMemoryGossipTransport(t, driver, revoked)
+	driver.Gossip.NewSession(revoked)
+	driver.Gossip.DeferHint(revoked)
+	driver.Observability.Update(revoked, now, func(peer *observability.PeerDiagnostics) { peer.HintAccepted = 1 })
+	if err := driver.RefreshGossipDiscovery(now, transport); err != nil {
+		t.Fatal(err)
 	}
-	if addr := transport.PeerAddr("peer-a"); addr != nil {
-		t.Fatalf("address book published before checkpoint: %v", addr)
+	if writes != 0 || transport.PeerAddr(revoked) != nil || transport.PeerAddr(healthy) == nil {
+		t.Fatal("refresh wrote checkpoints or published the wrong addresses")
+	}
+	if _, err := driver.SyncGossipPeers(t.Context(), now, false); !errors.Is(err, wantErr) {
+		t.Fatalf("first scan: %v, want checkpoint error", err)
+	}
+	if driver.Gossip.Session(revoked) != nil || driver.Gossip.TakePendingHint(revoked) {
+		t.Fatal("revoked peer retained its session or hint after scanning")
+	}
+	if _, exists := driver.Observability.Snapshot(revoked, now); exists {
+		t.Fatal("revoked peer retained its diagnostics after scanning")
+	}
+	if _, err := driver.SyncGossipPeers(t.Context(), now, false); err != nil {
+		t.Fatalf("second scan: %v", err)
+	}
+	if _, exists := store.PeerCheckpoints([]string{revoked})[revoked]; exists || writes != 2 {
+		t.Fatalf("checkpoint retained=%t, writes=%d", exists, writes)
 	}
 }
 
@@ -108,9 +105,6 @@ func TestPlanGossipDiscoveryRanksEndpointWithoutCheckpoint(t *testing.T) {
 	if addrs := plan.Addresses["peer.catofes."]; len(addrs) != 2 || addrs[0].String() != "203.0.113.10:33434" {
 		t.Fatalf("addresses = %v, want public reflector first", addrs)
 	}
-	if len(plan.Patches) != 0 {
-		t.Fatalf("address selection updated checkpoint: %v", plan.Patches)
-	}
 
 	transport := &gossip.Transport{}
 	ApplyGossipDiscoveryPlan(transport, plan)
@@ -135,31 +129,6 @@ func TestPlanGossipDiscoveryReplacesAndExpiresEndpoint(t *testing.T) {
 	ApplyGossipDiscoveryPlan(transport, PlanGossipDiscovery(GossipDiscoveryInput{Network: emptyNetwork}, now))
 	if got := transport.PeerAddr(peerID); got != nil {
 		t.Fatalf("expired address remained installed: %v", got)
-	}
-}
-
-func TestPlanGossipDiscoveryDoesNotCompactCheckpointGraceInput(t *testing.T) {
-	now := time.Unix(1000, 0)
-	network, _ := signedDiscoveryNetwork(t, "peer.catofes.", true, nil, now)
-	input := GossipDiscoveryInput{
-		LocalPeerID: "local.catofes.", ManagedZone: "local.catofes.", Network: network,
-		Peers: map[string]corestate.PeerCheckpoint{"peer.catofes.": {
-			ObservedEndpoint:  "127.0.0.1:3000",
-			ObservedUntilUnix: now.Add(time.Minute).Unix(),
-			ObservedGraceEndpoints: []corestate.ObservedGraceEndpoint{
-				{Endpoint: "127.0.0.1:1000", UntilUnix: now.Add(-time.Second).Unix()},
-				{Endpoint: "127.0.0.1:2000", UntilUnix: now.Add(time.Minute).Unix()},
-			},
-		}},
-	}
-	plan := PlanGossipDiscovery(input, now)
-	grace := input.Peers["peer.catofes."].ObservedGraceEndpoints
-	if len(grace) != 2 || grace[0].Endpoint != "127.0.0.1:1000" || grace[1].Endpoint != "127.0.0.1:2000" {
-		t.Fatalf("checkpoint grace paths were compacted in place: %#v", grace)
-	}
-	paths := plan.Peers["peer.catofes."].ObservedPaths
-	if len(paths) != 2 || paths[0].Addr.String() != "127.0.0.1:3000" || paths[1].Addr.String() != "127.0.0.1:2000" {
-		t.Fatalf("planned observed paths = %#v", paths)
 	}
 }
 
@@ -241,12 +210,17 @@ func TestPlanVerifiedObservedCheckpointMovesPreviousPathToGrace(t *testing.T) {
 	if len(patch.ObservedGrace.Value) != 1 || patch.ObservedGrace.Value[0].Endpoint != "198.51.100.10:33434" {
 		t.Fatalf("observed grace = %#v", patch.ObservedGrace.Value)
 	}
+	expiredAt := now.Add(time.Minute)
+	reobserved, ok := PlanVerifiedObservedCheckpoint(input, peerID.String(), "198.51.100.10:33434", expiredAt)
+	if !ok || reobserved.ObservedFirstUnix.Value != expiredAt.Unix() {
+		t.Fatalf("expired path did not start a new observation: %#v", reobserved)
+	}
 	if _, ok := PlanVerifiedObservedCheckpoint(input, "unknown.catofes.", "198.51.100.30:33434", now); ok {
 		t.Fatal("unverified peer produced observed checkpoint patch")
 	}
 }
 
-func TestApplyGossipDiscoveryPlanRepairsTransportWithoutCheckpointPatch(t *testing.T) {
+func TestApplyGossipDiscoveryPlanRestoresActiveObservedPaths(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	peerID := zone.ZonePath("peer.catofes.")
 	entries := []gossip.EndpointEntry{{Address: "203.0.113.10", Port: 33434, Source: "reflector", LastObserved: now.Unix()}}
@@ -262,9 +236,6 @@ func TestApplyGossipDiscoveryPlanRepairsTransportWithoutCheckpointPatch(t *testi
 		}},
 	}
 	plan := PlanGossipDiscovery(input, now)
-	if len(plan.Patches) != 0 {
-		t.Fatalf("unchanged discovery produced checkpoint patches: %#v", plan.Patches)
-	}
 	if len(input.Peers[peerID.String()].ObservedGraceEndpoints) != 2 {
 		t.Fatal("planning compacted checkpoint grace input")
 	}
@@ -273,7 +244,8 @@ func TestApplyGossipDiscoveryPlanRepairsTransportWithoutCheckpointPatch(t *testi
 	if addr := transport.PeerAddr(peerID.String()); addr == nil || addr.String() != "203.0.113.10:33434" {
 		t.Fatalf("repaired endpoint = %v", addr)
 	}
-	if paths := transport.ObservedPeerAddrs(peerID.String()); len(paths) != 2 {
+	if paths := transport.ObservedPeerAddrs(peerID.String()); len(paths) != 2 ||
+		paths[0].String() != "198.51.100.20:33434" || paths[1].String() != "198.51.100.21:33434" {
 		t.Fatalf("repaired observed paths = %v", paths)
 	}
 }
@@ -286,9 +258,6 @@ func TestPlanGossipDiscoveryRepairsBootstrapWithoutVerifiedZone(t *testing.T) {
 		Bootstrap:      map[string]*net.UDPAddr{peerID: {IP: net.ParseIP("127.0.0.1"), Port: 33434}},
 		BootstrapPeers: []string{peerID},
 	}, now)
-	if len(plan.Patches) != 0 {
-		t.Fatalf("bootstrap produced checkpoint patches: %#v", plan.Patches)
-	}
 	transport := &gossip.Transport{}
 	ApplyGossipDiscoveryPlan(transport, plan)
 	if addr := transport.PeerAddr(peerID); addr == nil || addr.String() != "127.0.0.1:33434" {
@@ -484,27 +453,6 @@ func TestShouldRelayGossipUpdate(t *testing.T) {
 	if allowed, reason := ShouldRelayGossipUpdate(corestate.PeerCheckpoint{}, "peer", "source", "root", now); !allowed || reason != "" {
 		t.Fatalf("allowed decision = %v %q", allowed, reason)
 	}
-}
-
-func (store failingDiscoveryWriter) PeerCheckpoints(ids []string) map[string]corestate.PeerCheckpoint {
-	view := store.ReadView()
-	out := make(map[string]corestate.PeerCheckpoint)
-	if view.Gossip != nil {
-		for _, id := range ids {
-			if p, ok := view.Gossip.Peers[id]; ok {
-				out[id] = p
-			}
-		}
-	}
-	return out
-}
-
-func (store failingDiscoveryWriter) ReadCatalog() *corestate.CatalogView {
-	v := store.ReadView()
-	if v.State == nil || v.State.Network == nil {
-		return nil
-	}
-	return &corestate.CatalogView{ManagedZone: v.State.ManagedZone, Digests: corestate.ZoneDigests(v.State.Network)}
 }
 
 func TestObservedPathVerifierRechecksExpiryAndRevocation(t *testing.T) {

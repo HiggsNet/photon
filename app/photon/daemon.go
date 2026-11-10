@@ -84,7 +84,6 @@ const (
 	daemonEventRecoveryImportZone    daemonEventType = "recovery_import_zone"
 	daemonEventRecoveryPurgeRevoked  daemonEventType = "recovery_purge_revoked"
 	daemonEventJoinAccept            daemonEventType = "join_accept"
-	daemonEventSyncTimer             daemonEventType = "timer_sync"
 	daemonEventEndpointTimer         daemonEventType = "timer_endpoint_publish"
 	daemonEventSyncTrigger           daemonEventType = "sync_trigger"
 	daemonEventRoutingReload         daemonEventType = "routing_reload"
@@ -111,7 +110,6 @@ type daemonEvent struct {
 	Apply        bool
 	Orphans      bool
 	VICIEvent    ipsec.VICIEvent
-	ForceSync    bool
 	EndpointACL  *photonstate.EndpointACL
 	Context      context.Context
 	Reply        chan daemonEventResult
@@ -366,6 +364,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	var forceSync bool
 	var pendingEvent *daemonEvent
+	lastRevision := d.State.Common.VerifiedRevision()
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -375,6 +374,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 		pendingEvent = nil
 		if shutdown {
 			return nil
+		}
+		if revision := d.State.Common.VerifiedRevision(); revision != lastRevision {
+			lastRevision = revision
+			d.gossipDriver.RelayGossipUpdate(ctx, "", d.now())
 		}
 		if syncNow {
 			forceSync = true
@@ -420,6 +423,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		if d.firewallDirty || d.routingDirty || d.ipsecDirty {
 			continue
 		}
+		var hostEvent corehost.Event
 		select {
 		case <-ctx.Done():
 			return nil
@@ -441,15 +445,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 				now := d.now()
 				switch fired.ID.Key {
 				case daemonTimerEndpoint:
-					result, triggerSync, _ := d.handleEvent(daemonEvent{Type: daemonEventEndpointTimer, Context: ctx})
+					result, _, _ := d.handleEvent(daemonEvent{Type: daemonEventEndpointTimer, Context: ctx})
 					if result.Error != nil {
 						d.logWarn("endpoint", "publish_failed", map[string]any{"error": result.Error})
-					}
-					if triggerSync {
-						forceSync = true
-						if err := d.scheduleDaemonTimer(daemonTimerSync, now); err != nil {
-							return err
-						}
 					}
 					interval := d.Config.ReflectorInterval
 					if interval <= 0 {
@@ -459,10 +457,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 						return err
 					}
 				case daemonTimerSync:
-					result, _, _ := d.handleEvent(daemonEvent{Type: daemonEventSyncTimer, ForceSync: forceSync, Context: ctx})
-					if result.Error != nil {
-						d.logDebug("sync", "timer_completed_with_error", map[string]any{"error": result.Error})
+					if err := d.handleSyncTimerEvent(ctx, forceSync); err != nil {
+						d.logDebug("sync", "timer_completed_with_error", map[string]any{"error": err})
 					}
+					lastRevision = d.State.Common.VerifiedRevision()
 					forceSync = false
 					if err := d.scheduleDaemonTimer(daemonTimerSync, now.Add(d.Interval)); err != nil {
 						return err
@@ -496,12 +494,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 				}
 				continue
 			}
-		case hostEvent := <-d.gossipDriver.Events():
+		case hostEvent = <-d.gossipDriver.Events():
+		case hostEvent = <-d.gossipDriver.Completions():
+		case hostEvent = <-d.gossipDriver.Continuations():
+		}
+		if hostEvent != nil {
 			_, _ = d.handleGossipDriverEvent(ctx, hostEvent)
-		case hostEvent := <-d.gossipDriver.Completions():
-			_, _ = d.handleGossipDriverEvent(ctx, hostEvent)
-		case hostEvent := <-d.gossipDriver.Continuations():
-			_, _ = d.handleGossipDriverEvent(ctx, hostEvent)
+			// Remote changes already use the Driver's relay path.
+			lastRevision = d.State.Common.VerifiedRevision()
 		}
 	}
 }
@@ -591,19 +591,19 @@ func (d *Daemon) handleEvent(event daemonEvent) (daemonEventResult, bool, bool) 
 		if err != nil {
 			return daemonEventResult{Error: err}, false, false
 		}
-		return daemonEventResult{Version: result.Version}, !result.DryRun, false
+		return daemonEventResult{Version: result.Version}, false, false
 	case daemonEventDelegateIssue:
 		result, err := d.handleDelegateIssueEvent(event.JoinRequest, event.Permissions)
 		if err != nil {
 			return daemonEventResult{Error: err}, false, false
 		}
-		return daemonEventResult{Zone: result.Zone, JoinBundle: result}, true, false
+		return daemonEventResult{Zone: result.Zone, JoinBundle: result}, false, false
 	case daemonEventDelegateGrant:
 		bundle, err := d.handleDelegateGrantEvent(event.Zone, event.Permissions)
 		if err != nil {
 			return daemonEventResult{Error: err}, false, false
 		}
-		return daemonEventResult{Zone: event.Zone, JoinBundle: bundle}, true, false
+		return daemonEventResult{Zone: event.Zone, JoinBundle: bundle}, false, false
 	case daemonEventRecoveryImportZone:
 		result, revocations, err := d.handleRecoveryImportZoneEvent(event.Snapshot)
 		if err != nil {
@@ -615,28 +615,25 @@ func (d *Daemon) handleEvent(event daemonEvent) (daemonEventResult, bool, bool) 
 			Delegations:    result.Delegation,
 			Revocations:    revocations,
 			NetworkChanged: result.NetworkChanged,
-		}, result.NetworkChanged, false
+		}, false, false
 	case daemonEventDelegateRevoke:
 		err := d.handleDelegateRevokeEvent(event.Zone, event.Reason)
-		return daemonEventResult{Zone: event.Zone, Error: err}, err == nil, false
+		return daemonEventResult{Zone: event.Zone, Error: err}, false, false
 	case daemonEventRecoveryPurgeRevoked:
 		plan, err := d.handleRecoveryPurgeRevokedEvent(controlContext(event.Context), event.Zone, event.Apply)
 		if err != nil {
 			return daemonEventResult{Error: err}, false, false
 		}
-		// State only changes when applying; dry-run just reports the plan.
-		return daemonEventResult{Purge: plan}, event.Apply, false
+		return daemonEventResult{Purge: plan}, false, false
 	case daemonEventJoinAccept:
 		result, err := d.handleJoinAcceptEvent(event.JoinBundle, event.PrivateKey)
 		if err != nil {
 			return daemonEventResult{Error: err}, false, false
 		}
-		return daemonEventResult{Zone: result.Zone, RootPublicKey: result.RootPublicKey}, true, false
-	case daemonEventSyncTimer:
-		return daemonEventResult{Error: d.handleSyncTimerEvent(controlContext(event.Context), event.ForceSync)}, false, false
+		return daemonEventResult{Zone: result.Zone, RootPublicKey: result.RootPublicKey}, false, false
 	case daemonEventEndpointTimer:
 		changed, err := d.handleEndpointTimerEvent()
-		return daemonEventResult{Error: err}, changed, false
+		return daemonEventResult{StateCommitted: changed, Error: err}, false, false
 	case daemonEventSyncTrigger:
 		return daemonEventResult{}, true, false
 	case daemonEventRoutingReload:
@@ -652,7 +649,7 @@ func (d *Daemon) handleEvent(event daemonEvent) (daemonEventResult, bool, bool) 
 		return daemonEventResult{CleanedLinks: cleaned, CleanedOrphans: orphans, Error: err}, false, false
 	case daemonEventIPsecPortRotate:
 		result, err := d.handleIPsecPortRotateEvent()
-		return daemonEventResult{PortRotate: result, Error: err}, err == nil, false
+		return daemonEventResult{PortRotate: result, Error: err}, false, false
 	case daemonEventIPsecLifecycle:
 		d.handleIPsecLifecycleEvent(event.VICIEvent)
 		return daemonEventResult{}, false, false

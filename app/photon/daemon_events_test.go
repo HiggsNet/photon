@@ -63,8 +63,8 @@ func TestDaemonEventLoopDispatchesRecordPut(t *testing.T) {
 	if result := <-reply; result.Error != nil || result.Version != 1 {
 		t.Fatalf("processEvents(record_put) = %+v, want successful version 1", result)
 	}
-	if !syncNow || shutdown {
-		t.Fatalf("syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
+	if syncNow || shutdown {
+		t.Fatalf("syncNow/shutdown = %v/%v, want false/false", syncNow, shutdown)
 	}
 
 	current := service.State.Common.ReadView()
@@ -102,8 +102,8 @@ func TestDaemonIPsecPortRotateEventTriggersDataPlaneReconcile(t *testing.T) {
 	service.Events <- daemonEvent{Type: daemonEventIPsecPortRotate, Reply: reply}
 
 	syncNow, shutdown, ipsecFlushed, _, firewallFlushed := service.processEvents(context.Background(), nil)
-	if !syncNow || shutdown {
-		t.Fatalf("syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
+	if syncNow || shutdown {
+		t.Fatalf("syncNow/shutdown = %v/%v, want false/false", syncNow, shutdown)
 	}
 	if !firewallFlushed || !ipsecFlushed {
 		t.Fatalf("firewallFlushed/ipsecFlushed = %v/%v, want true/true", firewallFlushed, ipsecFlushed)
@@ -252,8 +252,8 @@ func TestDaemonAdminEventsIssueAcceptAndRevoke(t *testing.T) {
 	if result.Error != nil {
 		t.Fatalf("handleEvent(delegate_issue catofes): %v", result.Error)
 	}
-	if !syncNow || shutdown {
-		t.Fatalf("delegate_issue syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
+	if syncNow || shutdown {
+		t.Fatalf("delegate_issue syncNow/shutdown = %v/%v, want false/false", syncNow, shutdown)
 	}
 	if result.JoinBundle == nil || result.JoinBundle.Zone != "catofes." {
 		t.Fatalf("delegate_issue bundle = %#v", result.JoinBundle)
@@ -271,8 +271,8 @@ func TestDaemonAdminEventsIssueAcceptAndRevoke(t *testing.T) {
 	if result.Error != nil {
 		t.Fatalf("handleEvent(join_accept catofes): %v", result.Error)
 	}
-	if !syncNow || shutdown {
-		t.Fatalf("join_accept syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
+	if syncNow || shutdown {
+		t.Fatalf("join_accept syncNow/shutdown = %v/%v, want false/false", syncNow, shutdown)
 	}
 	if result.Zone != "catofes." {
 		t.Fatalf("join_accept zone = %s, want catofes.", result.Zone)
@@ -299,8 +299,8 @@ func TestDaemonAdminEventsIssueAcceptAndRevoke(t *testing.T) {
 	if result.Error != nil {
 		t.Fatalf("handleEvent(delegate_revoke): %v", result.Error)
 	}
-	if !syncNow || shutdown {
-		t.Fatalf("delegate_revoke syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
+	if syncNow || shutdown {
+		t.Fatalf("delegate_revoke syncNow/shutdown = %v/%v, want false/false", syncNow, shutdown)
 	}
 	latest := service.State.Common.ReadView()
 	parent := latest.State.Network.Zones[zone.ZonePath("catofes.")]
@@ -496,8 +496,8 @@ func TestDaemonEndpointTimerNoChangeSkipsFlushAndSync(t *testing.T) {
 	if result.Error != nil {
 		t.Fatalf("second handleEvent(endpoint): %v", result.Error)
 	}
-	if syncNow {
-		t.Fatalf("syncNow = true, want false on no-op endpoint timer")
+	if result.StateCommitted || syncNow {
+		t.Fatalf("committed=%v force sync=%v on no-op endpoint timer", result.StateCommitted, syncNow)
 	}
 	if shutdown {
 		t.Fatalf("shutdown = true, want false")
@@ -588,12 +588,11 @@ func TestDaemonEndpointTimerRefreshDueStillTriggersSync(t *testing.T) {
 	if shutdown {
 		t.Fatalf("shutdown = true, want false")
 	}
-	if syncNow {
-		t.Fatalf("syncNow = true, want false before refresh interval")
+	if result.StateCommitted || syncNow {
+		t.Fatalf("committed=%v force sync=%v before refresh interval", result.StateCommitted, syncNow)
 	}
 
-	// Third publish after refresh interval: record should be refreshed and sync
-	// should be triggered so gossip can propagate the new lease timestamp.
+	// Third publish after the refresh interval commits a new lease timestamp.
 	clock.Advance(25 * time.Minute)
 	result, syncNow, shutdown = service.handleEvent(daemonEvent{Type: daemonEventEndpointTimer})
 	if result.Error != nil {
@@ -602,8 +601,8 @@ func TestDaemonEndpointTimerRefreshDueStillTriggersSync(t *testing.T) {
 	if shutdown {
 		t.Fatalf("shutdown = true, want false")
 	}
-	if !syncNow {
-		t.Fatalf("syncNow = false, want true after refresh interval")
+	if !result.StateCommitted || syncNow {
+		t.Fatalf("committed=%v force sync=%v after refresh interval", result.StateCommitted, syncNow)
 	}
 	thirdView := service.State.Common.ReadView()
 	third := thirdView.State.Network.Zones[verified.ManagedZone].Records[gossip.EndpointRecordKeyUDP]

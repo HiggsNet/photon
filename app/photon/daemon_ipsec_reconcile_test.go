@@ -403,8 +403,8 @@ func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 				first = &event
 			}
 			syncNow, shutdown, ipsecFlushed, _, _ := service.processEvents(context.Background(), first)
-			if !syncNow || shutdown {
-				t.Fatalf("syncNow/shutdown = %v/%v, want true/false", syncNow, shutdown)
+			if syncNow || shutdown {
+				t.Fatalf("syncNow/shutdown = %v/%v, want false/false", syncNow, shutdown)
 			}
 			if !ipsecFlushed {
 				t.Fatalf("ipsecFlushed = false, want true")

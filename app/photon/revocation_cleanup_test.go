@@ -13,7 +13,6 @@ import (
 	"github.com/HiggsNet/photon/internal/inspect"
 	"github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
-	"github.com/HiggsNet/photon/pkg/core/observability"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/firewall"
@@ -184,45 +183,6 @@ func TestComputeRevocationImpactNilState(t *testing.T) {
 	}
 }
 
-func TestDaemonDiscoveryClearsRevokedPeerHintsAndDiagnostics(t *testing.T) {
-	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	now := time.Unix(4140, 0)
-	const revokedPeer = "node-b.catofes."
-	checkpoint.Peers = map[string]corestate.PeerCheckpoint{
-		revokedPeer: {LastSuccessfulEndpoint: "192.0.2.1:33434"},
-	}
-	parent := verified.Network.Zones["catofes."]
-	delegation := parent.Delegations[revokedPeer]
-	parent.Revocations[revokedPeer] = &zone.DelegationRevocation{
-		ChildZone: revokedPeer, ParentZone: "catofes.",
-		RevokedAuthorityEpoch: delegation.AuthorityEpoch,
-		RevokedAuthorityHash:  delegation.AuthorityHash,
-		RevokedAt:             now.Add(-time.Second).Unix(),
-	}
-	service := newTestDaemonFromOwners(&testApp{Config: defaultAppConfig(), Clock: func() time.Time { return now }}, verified, checkpoint, runtime, config, time.Second)
-	setTestGossipTransport(t, service, &gossip.Transport{})
-	diagnostics := service.gossipDriver.Observability
-	for _, id := range []string{revokedPeer, "node-a.catofes."} {
-		diagnostics.Update(id, now, func(peer *observability.PeerDiagnostics) { peer.HintAccepted = 1 })
-	}
-	service.gossipDriver.Gossip.NewSession(revokedPeer)
-	service.gossipDriver.Gossip.DeferHint(revokedPeer)
-	before := service.State.Common.VerifiedRevision()
-	service.refreshGossipDiscovery()
-	if service.gossipDriver.Gossip.Session(revokedPeer) != nil || service.gossipDriver.Gossip.TakePendingHint(revokedPeer) {
-		t.Fatal("revoked peer session or pending hint survived discovery")
-	}
-	if _, exists := service.State.Common.ReadView().Gossip.Peers[revokedPeer]; exists {
-		t.Fatal("revoked peer checkpoint survived discovery")
-	}
-	if _, exists := diagnostics.Snapshot(revokedPeer, now); exists {
-		t.Fatal("revoked peer diagnostics survived discovery")
-	}
-	if _, exists := diagnostics.Snapshot("node-a.catofes.", now); !exists || service.State.Common.VerifiedRevision() != before {
-		t.Fatal("cleanup changed the healthy peer or verified revision")
-	}
-}
-
 // TestAllRevocationImpact verifies the combined impact for multiple revoked zones.
 func TestAllRevocationImpact(t *testing.T) {
 	verified, checkpoint, _, _ := buildTestDaemonOwners(t)
@@ -310,7 +270,9 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 	service.processEvents(context.Background(), nil)
 
 	setTestGossipTransport(t, service, &gossip.Transport{})
-	service.refreshGossipDiscovery()
+	if err := service.handleSyncTimerEvent(t.Context(), false); err != nil {
+		t.Fatal(err)
+	}
 	common = service.State.Common.ReadView()
 	currentLinks, _ = readTestIPsecObservation(service)
 	if _, ok := common.Gossip.Peers["node-b.catofes."]; ok {
@@ -421,7 +383,9 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 	}
 	firewallDriver.desired = nil
 	setTestGossipTransport(t, service, &gossip.Transport{})
-	service.refreshGossipDiscovery()
+	if err := service.handleSyncTimerEvent(t.Context(), false); err != nil {
+		t.Fatal(err)
+	}
 	service.notifyStateChanged()
 	service.processEvents(context.Background(), nil)
 

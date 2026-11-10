@@ -114,7 +114,7 @@ func startB4AuthorityPeerAt(t *testing.T, ctx context.Context, config *Config, l
 		err = driver.StartGossipObjectPullWorkers(peerCtx, executor, 0, 0)
 	}
 	if err == nil {
-		err = driver.RefreshGossipDiscovery(peerCtx, time.Now(), transport)
+		err = driver.RefreshGossipDiscovery(time.Now(), transport)
 	}
 	if err == nil {
 		err = driver.StartGossipTransport(peerCtx, transport, func(err error) {
@@ -151,7 +151,7 @@ func startB4AuthorityPeerAt(t *testing.T, ctx context.Context, config *Config, l
 			case event = <-driver.Completions():
 			case event = <-driver.Continuations():
 			case <-ticker.C:
-				if err := driver.RefreshGossipDiscovery(peerCtx, time.Now(), transport); err != nil && peerCtx.Err() == nil {
+				if err := driver.RefreshGossipDiscovery(time.Now(), transport); err != nil && peerCtx.Err() == nil {
 					peer.recordError(err)
 				}
 				if _, err := driver.SyncGossipPeers(peerCtx, time.Now(), false); err != nil && peerCtx.Err() == nil {

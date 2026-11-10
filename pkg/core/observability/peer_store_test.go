@@ -59,8 +59,8 @@ func TestPeerStoreBoundsDeletesAndExpiresEntries(t *testing.T) {
 	if _, ok := store.Snapshot("peer-b", base.Add(time.Second)); ok {
 		t.Fatal("deleted peer-b is still present")
 	}
-	if purged := store.PurgeExpired(base.Add(2 * time.Minute)); purged != 1 {
-		t.Fatalf("purged = %d, want 1", purged)
+	if got := store.Len(base.Add(2 * time.Minute)); got != 0 {
+		t.Fatalf("len after expiry = %d, want 0", got)
 	}
 }
 

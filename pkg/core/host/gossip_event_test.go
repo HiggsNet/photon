@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"reflect"
 	"testing"
@@ -286,6 +287,37 @@ func TestGossipDriverFinishesChangedSessionAndOwnsRelay(t *testing.T) {
 	}
 }
 
+func TestGossipLocalRelaySkipsBackoffAndCountsOnlyQueuedPeers(t *testing.T) {
+	now := time.Unix(100, 0)
+	view := loadedManagedGossipState("local.catofes.", "remote.catofes.")
+	view.Gossip = &corestate.GossipCheckpoint{Peers: map[string]corestate.PeerCheckpoint{
+		"offline.": {BackoffUntilUnix: now.Add(time.Minute).Unix()},
+	}}
+	common := corestate.NewStoreWithCheckpoint(view.State, view.Gossip, nil, nil)
+	peers := []string{"offline."}
+	for i := range 2 * DefaultGossipRelayFanout {
+		peers = append(peers, fmt.Sprintf("peer-%d.", i))
+	}
+	driver := NewGossipDriver(newFakeClock(now), len(peers), common, GossipDriverConfig{
+		PeerID: "local.catofes.", Discovery: GossipDiscoveryConfig{BootstrapPeers: peers},
+	})
+	defer driver.Stop()
+	for _, peerID := range peers[1:DefaultGossipRelayFanout] {
+		driver.Gossip.NewSession(peerID).State = gossip.SyncSessionSummarySent
+	}
+
+	driver.RelayGossipUpdate(t.Context(), "", now)
+	if got := len(driver.Events()); got != DefaultGossipRelayFanout {
+		t.Fatalf("queued %d relay events, want %d", got, DefaultGossipRelayFanout)
+	}
+	for _, wantPeer := range peers[DefaultGossipRelayFanout : 2*DefaultGossipRelayFanout] {
+		event := (<-driver.Events()).(GossipEvent).Value
+		if got := gossip.SyncEventPeerID(event); got != wantPeer {
+			t.Fatalf("queued relay for %s, want %s", got, wantPeer)
+		}
+	}
+}
+
 func TestGossipDriverSchedulerDeliversChunkRepairThroughCommonEventBridge(t *testing.T) {
 	clock := newFakeClock(time.Unix(100, 0))
 	driver := NewGossipDriver(clock, 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
@@ -391,7 +423,7 @@ func TestGossipHostRejectsRevokedPeerBeforeDiscoveryRefresh(t *testing.T) {
 	driver := NewGossipDriver(clock, 4, store, GossipDriverConfig{PeerID: "local."})
 	t.Cleanup(driver.Stop)
 	transport, datagram := bindMemoryGossipTransport(t, driver, peer.String())
-	if err := driver.RefreshGossipDiscovery(t.Context(), now, transport); err != nil {
+	if err := driver.RefreshGossipDiscovery(now, transport); err != nil {
 		t.Fatal(err)
 	}
 	if err := driver.StartGossipSession(peer.String(), "test"); err != nil {

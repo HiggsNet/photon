@@ -14,15 +14,13 @@ import (
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
 
-// refreshGossipDiscovery runs discovery on the common GossipDriver. Peer
-// selection, endpoint ordering, checkpoint patches and address-book updates
-// are common runtime responsibilities.
+// refreshGossipDiscovery updates the transport address book through the common Driver.
 func (d *Daemon) refreshGossipDiscovery() {
 	if d.State == nil || d.gossipDriver == nil || d.gossipDriver.Transport() == nil {
 		return
 	}
-	if err := d.gossipDriver.RefreshGossipDiscovery(context.Background(), d.now(), d.gossipDriver.Transport()); err != nil {
-		d.logWarn("endpoint", "discovered_peer_commit_failed", map[string]any{"error": err})
+	if err := d.gossipDriver.RefreshGossipDiscovery(d.now(), d.gossipDriver.Transport()); err != nil {
+		d.logWarn("endpoint", "discovery_refresh_failed", map[string]any{"error": err})
 	}
 }
 
@@ -155,9 +153,6 @@ func syncLimits(config *appConfig) corestate.SyncLimits {
 	limits := corestate.DefaultSyncLimits()
 	if config == nil {
 		return limits
-	}
-	if config.MaxSyncZones > 0 {
-		limits.MaxZones = config.MaxSyncZones
 	}
 	if config.MaxSyncRecords > 0 {
 		limits.MaxRecords = config.MaxSyncRecords

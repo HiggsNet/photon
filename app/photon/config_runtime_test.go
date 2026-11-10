@@ -46,7 +46,6 @@ func TestRuntimeSyncConfigDerivesLimitsAndPeerID(t *testing.T) {
 	configPath := filepath.Join(dir, "config.yaml")
 	writeRuntimeConfig(t, configPath, filepath.Join(dir, "data"), map[string]string{
 		"max_datagram_bytes": "4096",
-		"max_sync_zones":     "8",
 		"max_sync_records":   "64",
 	})
 	t.Setenv("PHOTON_CONFIG", configPath)
@@ -61,7 +60,7 @@ func TestRuntimeSyncConfigDerivesLimitsAndPeerID(t *testing.T) {
 		t.Fatalf("PeerID = %q, want managed zone default %q", peerID, verified.ManagedZone)
 	}
 	limits := syncLimits(config)
-	if limits.MaxBytes != 4096 || limits.MaxZones != 8 || limits.MaxRecords != 64 {
+	if limits.MaxBytes != 4096 || limits.MaxRecords != 64 {
 		t.Fatalf("limits = %#v, want 4096/8/64", limits)
 	}
 }
@@ -103,7 +102,7 @@ func writeRuntimeConfig(t *testing.T, path string, dataDir string, extra map[str
 	lines = append(lines, "data_dir: "+dataDir)
 	lines = append(lines, "gossip:")
 	lines = append(lines, "  listen_addr: 127.0.0.1:0")
-	for _, key := range []string{"max_datagram_bytes", "max_sync_zones", "max_sync_records"} {
+	for _, key := range []string{"max_datagram_bytes", "max_sync_records"} {
 		if value := extra[key]; value != "" {
 			lines = append(lines, "  "+key+": "+value)
 		}

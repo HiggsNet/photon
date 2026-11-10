@@ -205,7 +205,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	if err := driver.StartGossipObjectPullWorkers(ctx, executor, 0, 0); err != nil {
 		return err
 	}
-	if err := driver.RefreshGossipDiscovery(ctx, time.Now(), transport); err != nil {
+	if err := driver.RefreshGossipDiscovery(time.Now(), transport); err != nil {
 		return err
 	}
 	if err := driver.StartGossipTransport(ctx, transport, func(err error) { logger.Warn("gossip_receive_failed", "error", err) }); err != nil {

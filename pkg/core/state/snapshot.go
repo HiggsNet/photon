@@ -38,7 +38,6 @@ type ZoneSnapshot struct {
 }
 
 type SyncLimits struct {
-	MaxZones   int
 	MaxRecords int
 	MaxBytes   int
 }
@@ -54,7 +53,6 @@ type ApplyResult struct {
 
 func DefaultSyncLimits() SyncLimits {
 	return SyncLimits{
-		MaxZones:   16,
 		MaxRecords: 1024,
 		MaxBytes:   DefaultSnapshotMaxBytes,
 	}

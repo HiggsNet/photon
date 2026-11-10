@@ -65,10 +65,11 @@ func (store *Store) InstallIdentity(ctx context.Context, install IdentityInstall
 	changedZones := identityChangedZones(current, candidate)
 	nextRevision := baseRevision + 1
 	changes := ChangeSet{
-		VerifiedRevision: nextRevision,
-		ChangedZones:     changedZones,
-		NetworkChanged:   len(changedZones) > 0,
-		SecurityPriority: true,
+		VerifiedRevision:        nextRevision,
+		ChangedZones:            changedZones,
+		NetworkChanged:          len(changedZones) > 0,
+		GossipCheckpointChanged: pruneRevokedCheckpoints(gossipCandidate, candidate.Network, now),
+		SecurityPriority:        true,
 	}
 	if store.commit != nil {
 		if err := store.commit(ctx, cloneCommitCandidate(candidate, gossipCandidate), changes); err != nil {

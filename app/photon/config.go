@@ -39,7 +39,6 @@ type appConfig struct {
 	Bootstrap            []syncConfigPeer
 	TrustedRootPublicKey ed25519.PublicKey
 	MaxMessageBytes      int
-	MaxSyncZones         int
 	MaxSyncRecords       int
 	Log                  logConfig
 	AdvertiseAddrs       []string
@@ -119,7 +118,6 @@ type gossipConfigYAML struct {
 	Bootstrap []syncConfigPeer `yaml:"bootstrap"`
 
 	MaxDatagramBytes *int `yaml:"max_datagram_bytes"`
-	MaxSyncZones     *int `yaml:"max_sync_zones"`
 	MaxSyncRecords   *int `yaml:"max_sync_records"`
 
 	AdvertiseAddr  string           `yaml:"advertise_addr"`
@@ -193,7 +191,6 @@ func defaultAppConfig() *appConfig {
 		DataDir:             defaultDataDir,
 		ListenAddr:          fmt.Sprintf("[::]:%d", gossip.DefaultPort),
 		MaxMessageBytes:     gossip.DefaultMaxMessage,
-		MaxSyncZones:        corestate.DefaultSyncLimits().MaxZones,
 		MaxSyncRecords:      corestate.DefaultSyncLimits().MaxRecords,
 		ReflectorInterval:   5 * time.Minute,
 		ReflectorTimeout:    3 * time.Second,
@@ -225,9 +222,6 @@ func normalizeAppConfig(config *appConfig) {
 	}
 	if config.MaxMessageBytes <= 0 {
 		config.MaxMessageBytes = defaults.MaxMessageBytes
-	}
-	if config.MaxSyncZones <= 0 {
-		config.MaxSyncZones = defaults.MaxSyncZones
 	}
 	if config.MaxSyncRecords <= 0 {
 		config.MaxSyncRecords = defaults.MaxSyncRecords
@@ -295,9 +289,6 @@ func applyGossipConfigYAML(config *appConfig, file gossipConfigYAML) error {
 	config.ListenAddr = cmp.Or(file.ListenAddr, config.ListenAddr)
 	config.Bootstrap = append(config.Bootstrap, file.Bootstrap...)
 	if err := applyPositiveInt(&config.MaxMessageBytes, file.MaxDatagramBytes, "gossip.max_datagram_bytes"); err != nil {
-		return err
-	}
-	if err := applyPositiveInt(&config.MaxSyncZones, file.MaxSyncZones, "gossip.max_sync_zones"); err != nil {
 		return err
 	}
 	if err := applyPositiveInt(&config.MaxSyncRecords, file.MaxSyncRecords, "gossip.max_sync_records"); err != nil {

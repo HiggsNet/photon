@@ -172,8 +172,12 @@ func build(common corestate.View, config corehost.GossipDriverConfig, listen str
 func projectPeer(id string, checkpoint corestate.PeerCheckpoint, diagnostics observability.PeerDiagnostics, active, revoked bool, now time.Time) Peer {
 	peer := Peer{PeerID: id, Authorization: "unverified", LastSyncUnix: checkpoint.LastSyncUnix, BackoffUntilUnix: checkpoint.BackoffUntilUnix,
 		FailureCount: checkpoint.FailureCount, LastRelayUnix: checkpoint.LastRelayUnix, LastSuccessfulAddr: checkpoint.LastSuccessfulEndpoint,
-		ObservedAddr: checkpoint.ObservedEndpoint, ObservedFirstSeenUnix: checkpoint.ObservedFirstSeenUnix, ObservedLastSeenUnix: checkpoint.ObservedLastSeenUnix,
-		ObservedUntilUnix: checkpoint.ObservedUntilUnix, PeerDiagnostics: diagnostics}
+		ObservedLastSeenUnix: checkpoint.ObservedLastSeenUnix, PeerDiagnostics: diagnostics}
+	if checkpoint.ObservedUntilUnix > now.Unix() {
+		peer.ObservedAddr = checkpoint.ObservedEndpoint
+		peer.ObservedFirstSeenUnix = checkpoint.ObservedFirstSeenUnix
+		peer.ObservedUntilUnix = checkpoint.ObservedUntilUnix
+	}
 	if revoked {
 		peer.Authorization, peer.SyncStatus = "revoked", "revoked"
 	} else {

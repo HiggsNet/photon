@@ -81,7 +81,7 @@ func TestDaemonEventBatchReconcileReply(t *testing.T) {
 					default:
 						t.Fatal("event was not replied to")
 					}
-					if shutdown || syncNow != (layer == "routing") {
+					if shutdown || syncNow {
 						t.Fatalf("sync/shutdown = %v/%v", syncNow, shutdown)
 					}
 					flushed := routingFlushed

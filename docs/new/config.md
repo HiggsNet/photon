@@ -64,7 +64,6 @@ gossip:
     - 203.0.113.10:33434
 
   # max_datagram_bytes: 1200
-  # max_sync_zones: 16
   # max_sync_records: 1024
 
   # endpoint_discovery: all
@@ -89,7 +88,7 @@ gossip:
 
 - `gossip.advertise_addrs`：管理员显式发布的 gossip endpoint，优先级高于 reflector 和接口扫描；它不是 IPsec endpoint，IPsec 地址使用 `ipsec.announce_addrs` / `ipsec.announce_dns`。
 - `gossip.max_datagram_bytes`：单个 gossip UDP datagram 的最大字节预算。公网环境不应依赖 IP fragmentation，大对象和大 snapshot 应通过 object pull 收敛。
-- `gossip.max_sync_zones` / `gossip.max_sync_records`：单次 announce/snapshot 携带的 Zone 和 record 数量上限。
+- `gossip.max_sync_records`：单个 Zone 快照的 record 数量上限。
 - `gossip.endpoint_discovery`：endpoint 发现模式，可设为 `all`、`loopback_only` 或 `advertise_only`。如果未设置且 bootstrap 都是 loopback，daemon 会自动按 `loopback_only` 处理，避免本地 smoke 发布无关接口地址。
 - `gossip.publish_endpoints`：是否发布本节点 signed endpoint record。`false` 适合 outbound-only 或 NAT/CGNAT 节点；禁用发布后，本节点仍可主动连接 bootstrap 或已知 peer。
 - `gossip.reflectors` / `gossip.reflector_interval` / `gossip.reflector_timeout`：公网 IP reflector 来源、刷新间隔和单次请求超时。`reflectors: auto` 使用内置列表；`off` / `none` 禁用公网 reflector。

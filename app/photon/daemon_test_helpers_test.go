@@ -56,7 +56,6 @@ func newTestDaemonFromOwners(
 		rt.Config.ListenAddr = config.ListenAddr
 		rt.Config.Bootstrap = append([]syncConfigPeer(nil), config.Bootstrap...)
 		rt.Config.MaxMessageBytes = config.MaxMessageBytes
-		rt.Config.MaxSyncZones = config.MaxSyncZones
 		rt.Config.MaxSyncRecords = config.MaxSyncRecords
 	}
 	if verified == nil {

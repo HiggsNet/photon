@@ -150,15 +150,6 @@ func (s *PeerObservabilityStore) Delete(peerID string) {
 	s.mu.Unlock()
 }
 
-func (s *PeerObservabilityStore) PurgeExpired(now time.Time) int {
-	if s == nil {
-		return 0
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.purgeExpiredLocked(now)
-}
-
 func (s *PeerObservabilityStore) Len(now time.Time) int {
 	if s == nil {
 		return 0
@@ -173,18 +164,15 @@ func (s *PeerObservabilityStore) expired(entry peerEntry, now time.Time) bool {
 	return s.ttl > 0 && !now.IsZero() && !entry.updatedAt.IsZero() && !now.Before(entry.updatedAt.Add(s.ttl))
 }
 
-func (s *PeerObservabilityStore) purgeExpiredLocked(now time.Time) int {
+func (s *PeerObservabilityStore) purgeExpiredLocked(now time.Time) {
 	if s.ttl <= 0 || now.IsZero() {
-		return 0
+		return
 	}
-	purged := 0
 	for peerID, entry := range s.entries {
 		if s.expired(entry, now) {
 			delete(s.entries, peerID)
-			purged++
 		}
 	}
-	return purged
 }
 
 func (s *PeerObservabilityStore) evictOldestLocked() {

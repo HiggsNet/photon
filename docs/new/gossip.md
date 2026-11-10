@@ -690,7 +690,6 @@ Relay 的 key 约束：
 | 限制 | 默认值 | 说明 |
 |------|--------|------|
 | `max_message_bytes` | 1200 | 单个 UDP datagram 上限 |
-| `max_sync_zones` | 16 | 每次 apply 最多 zone 数 |
 | `max_sync_records` | 1024 | 每次 apply 最多 record 数 |
 | UDP chunk max | 8 MiB | 最大 chunk fallback 对象 |
 | Chunk assembly TTL | 2 min | UDP chunk 重组超时 |
@@ -813,7 +812,6 @@ Gossip 相关配置项（`config.yaml` 中 `gossip:` 及其关联字段）：
 | `gossip.peer_id` | 等于 `managed_zone` | 本节点在 gossip 协议中的标识。未设置时从 managed_zone 自动推导 |
 | `gossip.listen_addr` | `[::]:33434` | UDP 绑定地址，同时接收 IPv4 和 IPv6 |
 | `gossip.max_datagram_bytes` | `1200` | 单个 UDP datagram 的安全预算。超出的消息被拒绝并记录诊断 |
-| `gossip.max_sync_zones` | `16` | 单次 apply snapshot 最多处理的 zone 数量 |
 | `gossip.max_sync_records` | `1024` | 单次 apply snapshot 最多处理的 record 数量 |
 | `gossip.filter_private_ipv4` | `true` | 接口扫描时过滤 RFC1918 地址；私网实验可设为 `false` |
 
@@ -868,6 +866,6 @@ bootstrap 节点同时加入入站白名单和出站地址簿。运行时发现�
 
 默认值定义在代码中：
 - `DefaultPort = 33434`、`DefaultMaxMessage = 1200`（[`pkg/core/gossip/message.go`](pkg/core/gossip/message.go)）
-- `DefaultSyncLimits: MaxZones=16, MaxRecords=1024`（[`pkg/core/gossip/sync.go`](pkg/core/gossip/sync.go)）
+- `DefaultSyncLimits: MaxRecords=1024`（[`pkg/core/state/snapshot.go`](../../pkg/core/state/snapshot.go)）
 - `DefaultEndpointTTL=3h, DefaultEndpointRefresh=30m, DefaultEndpointGrace=10m`（[`pkg/core/gossip/discovery.go`](pkg/core/gossip/discovery.go)）
 - `defaultAppConfig` 中 `ReflectorInterval=5m, ReflectorTimeout=3s, PublishEndpoints=true, FilterPrivateIPv4=true`（[`app/photon/config.go`](app/photon/config.go)）

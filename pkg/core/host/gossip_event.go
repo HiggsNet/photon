@@ -10,6 +10,7 @@ import (
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
 const DefaultGossipRelayFanout = 8
@@ -48,14 +49,31 @@ func (driver *GossipDriver) SyncGossipPeers(ctx context.Context, now time.Time, 
 		return false, ErrGossipTransportRequired
 	}
 	input := driver.GossipDiscoveryInput()
-	if input.Network != nil && !maps.Equal(driver.revokedPeers, gossipDiscoveryRevocations(input, now)) {
-		if err := driver.RefreshGossipDiscovery(ctx, now, driver.gossipTransportForRead()); err != nil {
+	revoked := gossipDiscoveryRevocations(input, now)
+	if !maps.Equal(driver.revokedPeers, revoked) {
+		if err := driver.RefreshGossipDiscovery(now, driver.gossipTransportForRead()); err != nil {
 			return false, err
 		}
+		for path := range revoked {
+			if !driver.revokedPeers[path] {
+				driver.dropRevokedGossipPeer(path.String())
+			}
+		}
+		driver.revokedPeers = revoked
 	}
 	summary := corestate.CatalogSummaryFor(input.Network)
 	changed := false
 	var errs []error
+	// Signed-state commits normally remove these rows. A restored row or a
+	// revocation that became active since the commit can still need pruning.
+	for peerID := range input.Peers {
+		if revoked[zone.ZonePath(peerID)] {
+			if err := driver.gossipState.PruneRevokedPeerCheckpoints(ctx, now); err != nil {
+				errs = append(errs, err)
+			}
+			break
+		}
+	}
 	for _, peerID := range GossipOutboundPeers(input, now) {
 		if !force && GossipBackoffRemaining(input.Peers[peerID], now) > 0 {
 			continue
@@ -312,7 +330,7 @@ func (driver *GossipDriver) finishGossipSession(ctx context.Context, result *Gos
 	result.NetworkChanged = session.NetworkChanged()
 	result.TerminalErr = session.LastError()
 	if session.State == gossip.SyncSessionCompleted && result.NetworkChanged {
-		driver.relayGossipUpdate(ctx, peerID, now)
+		driver.RelayGossipUpdate(ctx, peerID, now)
 	}
 	driver.removeGossipSession(peerID)
 	result.FollowupQueued = driver.startDeferredGossipSession(peerID)
@@ -340,20 +358,21 @@ func (driver *GossipDriver) startDeferredGossipSession(peerID string) bool {
 	return driver.StartGossipSession(peerID, "deferred_sync") == nil && driver.Gossip.HasActiveSession(peerID)
 }
 
-func (driver *GossipDriver) relayGossipUpdate(ctx context.Context, sourcePeerID string, now time.Time) {
+// RelayGossipUpdate queues a bounded number of summary PINGs after a verified
+// change. For local changes sourcePeerID is empty.
+func (driver *GossipDriver) RelayGossipUpdate(ctx context.Context, sourcePeerID string, now time.Time) {
 	input := driver.GossipDiscoveryInput()
 	summary := driver.GossipCatalogSummary()
 	if summary == nil {
 		return
 	}
 	root := hex.EncodeToString(summary.CatalogRoot)
-	relayed := 0
 	var queuedPeers []string
 	for _, peerID := range GossipOutboundPeers(input, now) {
 		if peerID == sourcePeerID {
 			continue
 		}
-		if relayed >= DefaultGossipRelayFanout {
+		if len(queuedPeers) >= DefaultGossipRelayFanout {
 			driver.observeRelaySuppression(peerID, "relay_fanout_limited", now)
 			continue
 		}
@@ -362,7 +381,6 @@ func (driver *GossipDriver) relayGossipUpdate(ctx context.Context, sourcePeerID 
 			driver.observeRelaySuppression(peerID, reason, now)
 			continue
 		}
-		relayed++
 		if driver.Gossip.HasActiveSession(peerID) {
 			continue
 		}

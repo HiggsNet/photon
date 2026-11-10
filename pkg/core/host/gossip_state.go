@@ -161,7 +161,7 @@ func (driver *GossipDriver) applyGossipSnapshots(
 			continue
 		}
 		limits := driver.GossipConfig().Limits
-		if limits.MaxZones <= 0 || limits.MaxRecords <= 0 || limits.MaxBytes <= 0 {
+		if limits.MaxRecords <= 0 || limits.MaxBytes <= 0 {
 			limits = corestate.DefaultSyncLimits()
 		}
 		if action.RelaxedLimits {

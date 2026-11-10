@@ -18,7 +18,6 @@ gossip:
   peer_id: node-a.catofes.
   listen_addr: 0.0.0.0:33434
   max_datagram_bytes: 1200
-  max_sync_zones: 16
   max_sync_records: 1024
   advertise_addrs:
     - 203.0.113.10:33434
@@ -54,8 +53,8 @@ gossip:
 	if len(config.Bootstrap) != 1 || config.Bootstrap[0].ID != "node-b.catofes." || config.Bootstrap[0].Addr != "203.0.113.20:33434" {
 		t.Fatalf("Bootstrap = %#v", config.Bootstrap)
 	}
-	if config.MaxMessageBytes != 1200 || config.MaxSyncZones != 16 || config.MaxSyncRecords != 1024 {
-		t.Fatalf("sync limits = %d/%d/%d", config.MaxMessageBytes, config.MaxSyncZones, config.MaxSyncRecords)
+	if config.MaxMessageBytes != 1200 || config.MaxSyncRecords != 1024 {
+		t.Fatalf("sync limits = %d/%d", config.MaxMessageBytes, config.MaxSyncRecords)
 	}
 	if got := strings.Join(config.AdvertiseAddrs, ","); got != "203.0.113.10:33434" {
 		t.Fatalf("AdvertiseAddrs = %q", got)
@@ -128,7 +127,6 @@ func TestParseConfigYAMLRejectsLegacyTopLevelGossipFields(t *testing.T) {
 func TestParseConfigYAMLRejectsExplicitZeroLimits(t *testing.T) {
 	for _, input := range []string{
 		"gossip:\n  max_datagram_bytes: 0\n",
-		"gossip:\n  max_sync_zones: 0\n",
 		"gossip:\n  max_sync_records: 0\n",
 	} {
 		config := defaultAppConfig()
