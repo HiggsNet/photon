@@ -84,6 +84,8 @@ Linux CLI、Observer Web 和 Windows 共用 `internal/gossipview`，由已提交
 
 CLI 将公共结构排版为文本，Web 和 Windows 控制端序列化同一结构为 JSON。首页直接选用同步状态和上次成功时间，详情读同一节点的其余字段。目录根一致时无需拉快照也算一次同步成功。成功时间留在内存，重启后靠下一次同步确认。
 
+公共响应以 `managed_zone` 标识本机签名状态的所有者，用 `local_endpoints` 列出本机已发布的签名端点。本机仍单独于邻居列表。Linux 的 `debug endpoints` 从同一份响应排版本机和邻居的已发布端点。
+
 Linux 控制 socket、HTTP `/api/v1/peers` 和 Windows IPC `peers` 承载同一个响应。Windows IPC 对节点列表保留报文预算，截断时标记 `peers_truncated`。Web 的 Gossip 页定期刷新，覆盖没有状态提交的会话和退避变化。隧道和健康各有自己的事实来源。结构化日志记录事件，实时节点查询读取状态和诊断快照。
 
 ## Gossip 日志

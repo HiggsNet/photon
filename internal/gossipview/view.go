@@ -21,17 +21,20 @@ import (
 )
 
 type View struct {
-	PeerID           string    `json:"peer_id"`
-	ListenAddr       string    `json:"listen_addr"`
-	CatalogRoot      string    `json:"catalog_root"`
-	ZoneCount        int       `json:"zone_count"`
-	MaxDatagramBytes int       `json:"max_datagram_bytes"`
-	MaxSyncRecords   int       `json:"max_sync_records"`
-	WireVersion      int       `json:"wire_version"`
-	WireCodec        string    `json:"wire_codec"`
-	SampledAt        time.Time `json:"sampled_at"`
-	Peers            []Peer    `json:"peers"`
-	PeersTruncated   bool      `json:"peers_truncated,omitempty"`
+	PeerID                  string                 `json:"peer_id"`
+	ManagedZone             zone.ZonePath          `json:"managed_zone,omitempty"`
+	LocalEndpoints          []gossip.EndpointEntry `json:"local_endpoints,omitempty"`
+	LocalEndpointsTruncated bool                   `json:"local_endpoints_truncated,omitempty"`
+	ListenAddr              string                 `json:"listen_addr"`
+	CatalogRoot             string                 `json:"catalog_root"`
+	ZoneCount               int                    `json:"zone_count"`
+	MaxDatagramBytes        int                    `json:"max_datagram_bytes"`
+	MaxSyncRecords          int                    `json:"max_sync_records"`
+	WireVersion             int                    `json:"wire_version"`
+	WireCodec               string                 `json:"wire_codec"`
+	SampledAt               time.Time              `json:"sampled_at"`
+	Peers                   []Peer                 `json:"peers"`
+	PeersTruncated          bool                   `json:"peers_truncated,omitempty"`
 }
 
 type Peer struct {
@@ -73,17 +76,22 @@ func (view View) Find(id string) (Peer, bool) {
 	return Peer{}, false
 }
 
-// LimitPeers applies an IPC budget without changing any included peer's fields.
-func (view *View) LimitPeers(count, bytes int) {
+// LimitForIPC budgets each endpoint and peer list without changing included entries.
+func (view *View) LimitForIPC(count, bytes int) {
+	view.Peers, view.PeersTruncated = limitEntries(view.Peers, count, bytes)
+	view.LocalEndpoints, view.LocalEndpointsTruncated = limitEntries(view.LocalEndpoints, count, bytes)
+}
+
+func limitEntries[T any](entries []T, count, bytes int) ([]T, bool) {
 	used := 2
-	for i, peer := range view.Peers {
-		data, err := json.Marshal(peer)
+	for i, entry := range entries {
+		data, err := json.Marshal(entry)
 		if i == count || err != nil || used+len(data)+1 > bytes {
-			view.Peers, view.PeersTruncated = view.Peers[:i:i], true
-			return
+			return entries[:i:i], true
 		}
 		used += len(data) + 1
 	}
+	return entries, false
 }
 
 func Live(common corestate.View, driver *corehost.GossipDriver, now time.Time) View {
@@ -111,6 +119,10 @@ func build(common corestate.View, config corehost.GossipDriverConfig, listen str
 	summary := corestate.CatalogSummaryForDigests(corestate.ZoneDigestsAt(network, now))
 	view.CatalogRoot, view.ZoneCount = hex.EncodeToString(summary.CatalogRoot), summary.ZoneCount
 	discovered := gossip.ExtractPeerEndpointsAt(network, now)
+	if common.State != nil {
+		view.ManagedZone = common.State.ManagedZone
+		view.LocalEndpoints = discovered[view.ManagedZone.String()]
+	}
 	revoked := network.RevokedZones(now)
 	ids := make(map[string]bool)
 	for id := range discovered {
@@ -255,7 +267,6 @@ func (peer *Peer) setEndpoints(signed []gossip.EndpointEntry, candidates []*net.
 		}
 		peer.Endpoints = append(peer.Endpoints, Endpoint{Addr: addr, EndpointEntry: entry, Selected: addr == peer.SelectedAddr})
 	}
-	add(peer.ConfiguredAddr, gossip.EndpointEntry{Source: "bootstrap"})
 	for _, entry := range signed {
 		if addr, err := entry.UDPAddr(); err == nil {
 			if peer.DiscoveredAddr == "" {
@@ -267,6 +278,7 @@ func (peer *Peer) setEndpoints(signed []gossip.EndpointEntry, candidates []*net.
 			add(addr.String(), entry)
 		}
 	}
+	add(peer.ConfiguredAddr, gossip.EndpointEntry{Source: "bootstrap"})
 	source := peer.ObservedSource
 	if source == "" {
 		source = "observed"

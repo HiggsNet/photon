@@ -252,7 +252,7 @@ outer:
 
 func (out *Observation) observeGossipPeers(view corestate.View, now time.Time, driver *corehost.GossipDriver) {
 	out.View = gossipview.Live(view, driver, now)
-	out.View.LimitPeers(256, 256<<10)
+	out.View.LimitForIPC(256, 256<<10)
 }
 
 func boundedObservationText(s string) string {

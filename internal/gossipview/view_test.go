@@ -31,11 +31,26 @@ func TestGossipViewUsesCurrentRoundAndKeepsLastSuccess(t *testing.T) {
 			local:  {LastSyncUnix: now.Unix()},
 		}},
 	}
+	common.State.Network.Zones[local] = zone.NewZoneState(local, nil)
+	common.State.Network.Zones[local].Records[gossip.EndpointRecordKeyUDP] = &zone.Record{
+		Zone: local, Key: gossip.EndpointRecordKeyUDP,
+		Value:     []byte(`{"endpoints":[{"address":"198.51.100.1","port":33434}],"ttl_seconds":30}`),
+		Timestamp: now.Unix(),
+	}
 	driver.Observability.Update(remote, now, func(p *observability.PeerDiagnostics) {
 		p.ActivePullState = string(gossip.SyncSessionCompleted) // The last phase is only a diagnostic.
 		p.ObjectPullStats = &observability.PeerObjectPullStats{Failures: 1, LastFailure: &corestate.PeerFailure{Message: "old TCP error"}}
 	})
 	view := Live(common, driver, now)
+	if view.ManagedZone != local || len(view.LocalEndpoints) != 1 || view.LocalEndpoints[0].Address != "198.51.100.1" {
+		t.Fatalf("local publication = %s %+v", view.ManagedZone, view.LocalEndpoints)
+	}
+	if _, ok := view.Find(local); ok {
+		t.Fatal("local endpoint created a neighbor")
+	}
+	if later := Live(common, driver, now.Add(time.Minute)); len(later.LocalEndpoints) != 0 {
+		t.Fatalf("expired local endpoints = %+v", later.LocalEndpoints)
+	}
 	peer, ok := view.Find(remote)
 	if !ok || peer.SyncStatus != "backoff" || peer.LastSyncUnix != now.Add(-time.Hour).Unix() ||
 		peer.SelectedAddr != addr.String() || peer.ActivePullState != "completed" || peer.ObjectPullStats.LastFailure.Message != "old TCP error" {
@@ -67,6 +82,9 @@ func TestGossipViewUsesCurrentRoundAndKeepsLastSuccess(t *testing.T) {
 	var decoded View
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatal(err)
+	}
+	if decoded.ManagedZone != local || len(decoded.LocalEndpoints) != 1 || decoded.LocalEndpoints[0] != view.LocalEndpoints[0] {
+		t.Fatalf("local endpoint did not survive JSON: %+v", decoded.LocalEndpoints)
 	}
 	if got, _ := decoded.Find(remote); got.ObjectPullStats.LastFailure.Message != "old TCP error" || got.ActivePullState != "completed" || got.LastSyncUnix != peer.LastSyncUnix {
 		t.Fatalf("diagnostics did not survive JSON: %+v", got)

@@ -325,14 +325,6 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		writeCanonicalView(conn, *report)
-	case "endpoints_view":
-		view := d.State.Common.ReadView()
-		if view.State == nil {
-			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
-			return
-		}
-		endpoints := inspect.BuildEndpointDebug(view.State, d.now())
-		writeCanonicalView(conn, endpoints)
 	case "ping_view":
 		// One request per connection: EOF means the caller is no longer
 		// waiting. Only this diagnostic follows disconnect cancellation;

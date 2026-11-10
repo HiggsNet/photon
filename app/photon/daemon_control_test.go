@@ -281,10 +281,6 @@ func TestDaemonControlCommonReadViews(t *testing.T) {
 	if !assignments.OK {
 		t.Fatalf("ipam_assignments_view response = %#v", assignments)
 	}
-	endpoints := controlViewRequestViaPipe[inspect.EndpointDebugView](t, service, controlRequest{Method: "endpoints_view"})
-	if !endpoints.OK {
-		t.Fatalf("endpoints_view response = %#v", endpoints)
-	}
 	pingOptions := pingdebug.Options{Count: 2, Timeout: 20 * time.Millisecond}
 	pingView := controlViewRequestViaPipe[inspect.PingDebugView](t, service, controlRequest{Method: "ping_view", Zone: "node-b.catofes.", Ping: &pingOptions})
 	if !pingView.OK || pingView.View.Zone != "node-b.catofes." || len(pingView.View.Targets) != 1 || !pingView.View.Targets[0].Success {
@@ -322,7 +318,7 @@ func TestDaemonControlCommonReadViews(t *testing.T) {
 		t.Fatalf("health_status response = %#v", healthView)
 	}
 	syncView := controlViewRequestViaPipe[gossipview.View](t, service, controlRequest{Method: "sync_view"})
-	if !syncView.OK || syncView.View.PeerID != config.PeerID {
+	if !syncView.OK || syncView.View.PeerID != config.PeerID || syncView.View.ManagedZone != verified.ManagedZone {
 		t.Fatalf("sync_view response = %#v", syncView)
 	}
 	peer := controlViewRequestViaPipe[gossipview.Peer](t, service, controlRequest{Method: "peer_debug", Zone: "node-b.catofes."})

@@ -80,7 +80,7 @@ func cmdDebug() *cli.Command {
 			},
 			{
 				Name:  "endpoints",
-				Usage: "Show local endpoint candidates and discovered peer endpoints",
+				Usage: "Show published Gossip endpoints for this node and its peers",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					return debugEndpoints()
 				},
