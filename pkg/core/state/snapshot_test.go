@@ -494,7 +494,7 @@ func TestApplySnapshotAcceptsAndRejectsByteBoundary(t *testing.T) {
 	now := time.Unix(1000, 0)
 	source, zonePriv := testNetwork(t)
 	source.ConfigureRecordValidation(photoncrypto.VerifyRecord, photoncrypto.RecordHash)
-	if err := source.PutAt(signedRecord(t, zonePriv, "catofes.", "identity", []byte("node-a"), 1, nil, now.Unix()), now); err != nil {
+	if err := source.PutAt(signedRecord(t, zonePriv, "catofes.", "identity", bytes.Repeat([]byte("x"), 4096), 1, nil, now.Unix()), now); err != nil {
 		t.Fatalf("PutAt(identity): %v", err)
 	}
 	snapshot, err := Snapshot(source, "catofes.")
@@ -508,6 +508,10 @@ func TestApplySnapshotAcceptsAndRejectsByteBoundary(t *testing.T) {
 	}
 
 	target := emptySnapshotTarget(source)
+	if _, err := applySnapshotForTest(target, snapshot, now, DefaultSyncLimits()); err != nil {
+		t.Fatalf("ApplySnapshot larger than a UDP datagram: %v", err)
+	}
+	target = emptySnapshotTarget(source)
 	if _, err := applySnapshotForTest(target, snapshot, now, SyncLimits{MaxRecords: 1, MaxBytes: len(data)}); err != nil {
 		t.Fatalf("ApplySnapshot at byte limit: %v", err)
 	}

@@ -28,9 +28,10 @@ func gossipDriverConfig(app *appConfig, verified *corestate.VerifiedState, logge
 		return corehost.GossipDriverConfig{}
 	}
 	return corehost.GossipDriverConfig{
-		PeerID: configuredPeerID(app, verified),
-		Limits: syncLimits(app),
-		Log:    logger,
+		PeerID:           configuredPeerID(app, verified),
+		MaxDatagramBytes: app.MaxMessageBytes,
+		Limits:           syncLimits(app),
+		Log:              logger,
 		Discovery: corehost.GossipDiscoveryConfig{
 			Bootstrap:      configuredKnownPeers(app),
 			BootstrapPeers: bootstrapPeerIDs(app.Bootstrap),
@@ -111,7 +112,7 @@ func gossipTransportConfig(config corehost.GossipDriverConfig, loggerConfig *app
 	return gossip.Config{
 		PeerID:          config.PeerID,
 		KnownPeers:      config.Discovery.Bootstrap,
-		MaxMessageBytes: config.Limits.MaxBytes,
+		MaxMessageBytes: config.MaxDatagramBytes,
 		Replay:          gossip.NewReplayWindow(0),
 		Quotas:          gossip.NewPeerQuotas(gossip.QuotaConfig{}),
 		Clock:           clock,
@@ -126,9 +127,6 @@ func syncLimits(config *appConfig) corestate.SyncLimits {
 	}
 	if config.MaxSyncRecords > 0 {
 		limits.MaxRecords = config.MaxSyncRecords
-	}
-	if config.MaxMessageBytes > 0 {
-		limits.MaxBytes = config.MaxMessageBytes
 	}
 	return limits
 }

@@ -25,7 +25,7 @@ var (
 	ErrDelegationConflict   = errors.New("delegation conflicts at the same authority epoch")
 )
 
-const DefaultSnapshotMaxBytes = 1200
+const DefaultSnapshotMaxBytes = 8 << 20
 
 type ZoneSnapshot struct {
 	Zone          zone.ZonePath                                `json:"zone" msgpack:"z"`

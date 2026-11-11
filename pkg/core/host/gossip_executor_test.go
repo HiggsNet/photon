@@ -262,6 +262,12 @@ func TestGossipDriverExecuteGossipActionsApplyFailureStopsLaterPhases(t *testing
 	if len(controller.issues) != 1 || controller.issues[0].Phase != GossipPhaseApply || !errors.Is(controller.issues[0].Err, applyErr) {
 		t.Fatalf("issues = %#v", controller.issues)
 	}
+	if len(result.Events) != 1 {
+		t.Fatalf("apply failure completions = %#v", result.Events)
+	}
+	if event, ok := result.Events[0].(*gossip.SnapshotAppliedEvent); !ok || event.Zone != "node-a.catofes." || !errors.Is(event.Err, applyErr) {
+		t.Fatalf("apply failure completion = %#v", result.Events[0])
+	}
 }
 
 func TestGossipDriverApplySnapshotsOwnsStoreTransactionAndCompletion(t *testing.T) {
@@ -282,7 +288,7 @@ func TestGossipDriverApplySnapshotsOwnsStoreTransactionAndCompletion(t *testing.
 	defer driver.Stop()
 	result := driver.ExecuteGossipActions(context.Background(), &gossip.SyncSession{PeerID: "peer-a"}, state.ReadCatalog(), []gossip.SyncAction{
 		gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "local.catofes."}},
-		gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "remote.catofes."}, RelaxedLimits: true, ReportResult: true, RefreshOnRootMismatch: true},
+		gossip.ApplySnapshotAction{PeerID: "peer-a", Snapshot: &corestate.ZoneSnapshot{Zone: "remote.catofes."}, RefreshOnRootMismatch: true},
 	}, controller)
 	if !result.NetworkChanged {
 		t.Fatalf("result = %#v", result)

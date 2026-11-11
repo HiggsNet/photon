@@ -195,7 +195,6 @@ func recoveryImportZone(input string, direct bool) error {
 		return errors.New("common state is not initialized")
 	}
 	limits := syncLimits(config)
-	limits.MaxBytes = 8 << 20
 	imported, err := state.Common.ImportRecoverySnapshot(context.Background(), corestate.RecoveryImport{
 		Snapshot: &snapshot,
 		Limits:   limits,
@@ -265,10 +264,7 @@ func recoveryPullZones(ctx context.Context, paths []zone.ZonePath, peerID string
 	if view.State == nil {
 		return errors.New("common state is not initialized")
 	}
-	limits := syncLimits(config)
-	limits.MaxBytes = 8 << 20
 	driverConfig := gossipDriverConfig(config, view.State, newAppLogger(config))
-	driverConfig.Limits = limits
 	gossipDriver := corehost.NewGossipDriver(corehost.NewClock(time.Now), corehost.DefaultEventBuffer, state.Common, driverConfig)
 	defer gossipDriver.Stop()
 
@@ -293,7 +289,7 @@ func recoveryPullZones(ctx context.Context, paths []zone.ZonePath, peerID string
 		if completion.Err != nil {
 			return fmt.Errorf("recover %s from %s: %w", path, peerID, completion.Err)
 		}
-		imported, err := state.Common.ImportRecoverySnapshot(ctx, corestate.RecoveryImport{Snapshot: completion.Snapshot, Limits: limits}, time.Now())
+		imported, err := state.Common.ImportRecoverySnapshot(ctx, corestate.RecoveryImport{Snapshot: completion.Snapshot, Limits: driverConfig.Limits}, time.Now())
 		if err != nil {
 			return fmt.Errorf("recover %s from %s: %w", path, peerID, err)
 		}

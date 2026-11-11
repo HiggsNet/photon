@@ -316,7 +316,6 @@ func applySignedHostAssignment(t *testing.T, f *pipelineFixture, prefix string) 
 		t.Fatal(err)
 	}
 	limits := corestate.DefaultSyncLimits()
-	limits.MaxBytes = 8 << 20 // Match the production object-pull snapshot budget.
 	result, err := store.ApplyRemoteBatch(t.Context(), "gateway", []corestate.RemoteSnapshot{{Snapshot: snapshot, ExpectedRoot: corestate.ZoneRoot(corestate.ZoneStateFromSnapshot(snapshot)), Limits: limits}}, f.now)
 	if err != nil || len(result.Outcomes) != 1 || result.Outcomes[0].Err != nil || !result.Changes.NetworkChanged {
 		t.Fatalf("signed assignment sync: %+v, %v", result, err)

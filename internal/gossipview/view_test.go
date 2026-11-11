@@ -17,7 +17,7 @@ func TestGossipViewUsesCurrentRoundAndKeepsLastSuccess(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	const local, remote, first = "local.catofes.", "remote.catofes.", "first.catofes."
 	addr := &net.UDPAddr{IP: net.ParseIP("192.0.2.1"), Port: 33434}
-	config := corehost.GossipDriverConfig{PeerID: local, Discovery: corehost.GossipDiscoveryConfig{
+	config := corehost.GossipDriverConfig{PeerID: local, MaxDatagramBytes: 4096, Limits: corestate.DefaultSyncLimits(), Discovery: corehost.GossipDiscoveryConfig{
 		BootstrapPeers: []string{first},
 		Bootstrap:      map[string]*net.UDPAddr{remote: addr},
 	}}
@@ -42,6 +42,9 @@ func TestGossipViewUsesCurrentRoundAndKeepsLastSuccess(t *testing.T) {
 		p.ObjectPullStats = &observability.PeerObjectPullStats{Failures: 1, LastFailure: &corestate.PeerFailure{Message: "old TCP error"}}
 	})
 	view := Live(common, driver, now)
+	if view.MaxDatagramBytes != 4096 {
+		t.Fatalf("datagram byte limit = %d, want 4096", view.MaxDatagramBytes)
+	}
 	if view.ManagedZone != local || len(view.LocalEndpoints) != 1 || view.LocalEndpoints[0].Address != "198.51.100.1" {
 		t.Fatalf("local publication = %s %+v", view.ManagedZone, view.LocalEndpoints)
 	}

@@ -68,7 +68,7 @@ func (driver *GossipDriver) ExecuteGossipActions(
 		if err != nil {
 			driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseApply, PeerID: peerID, Err: err})
 			for _, snapshot := range plan.Snapshots {
-				if snapshot.ReportResult && snapshot.Snapshot != nil {
+				if snapshot.Snapshot != nil {
 					result.Events = append(result.Events, &gossip.SnapshotAppliedEvent{PeerID: peerID, Zone: snapshot.Snapshot.Zone, Err: err})
 				}
 			}

@@ -158,7 +158,7 @@ func TestSyncSessionCatalogPageStartsObjectPull(t *testing.T) {
 	}
 	assertActionTypes(t, applyActions, []string{"ApplySnapshotAction"})
 	apply := applyActions[0].(ApplySnapshotAction)
-	if !apply.ReportResult || !bytes.Equal(apply.ExpectedRoot, remote[0].RootHash) || apply.Via != "object_pull" {
+	if !bytes.Equal(apply.ExpectedRoot, remote[0].RootHash) || apply.Via != "object_pull" {
 		t.Fatalf("apply action completion/root binding = %+v, want %x", apply, remote[0].RootHash)
 	}
 }

@@ -589,7 +589,6 @@ func TestMeshHostAdmissionRevalidatesOnSignedPolicyInstallation(t *testing.T) {
 	}
 	store := m.state.Store()
 	limits := corestate.DefaultSyncLimits()
-	limits.MaxBytes = 8 << 20
 	result, err := store.ApplyRemoteBatch(t.Context(), "mesh-signed-withdrawal",
 		[]corestate.RemoteSnapshot{{Snapshot: snapshot, Limits: limits}}, now)
 	if err != nil || !result.Committed || len(result.Outcomes) != 1 || result.Outcomes[0].Err != nil {

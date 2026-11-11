@@ -38,16 +38,20 @@ func (driver *GossipDriver) gossipPeerRevoked(peerID string, now time.Time) bool
 // endpoints may be refreshed by the host; identities and policy remain fixed.
 // Local socket addresses and platform handles do not belong here.
 type GossipDriverConfig struct {
-	PeerID    string
-	Limits    corestate.SyncLimits
-	Discovery GossipDiscoveryConfig
-	Log       interface {
+	PeerID           string
+	MaxDatagramBytes int
+	Limits           corestate.SyncLimits
+	Discovery        GossipDiscoveryConfig
+	Log              interface {
 		Enabled(context.Context, slog.Level) bool
 		Handle(context.Context, slog.Record) error
 	}
 }
 
 func cloneGossipDriverConfig(config GossipDriverConfig) GossipDriverConfig {
+	if config.MaxDatagramBytes <= 0 {
+		config.MaxDatagramBytes = gossip.DefaultDatagramBudget
+	}
 	config.Discovery.Bootstrap = cloneBootstrapPeers(config.Discovery.Bootstrap)
 	config.Discovery.BootstrapPeers = append([]string(nil), config.Discovery.BootstrapPeers...)
 	config.Discovery.SourceOrder = append([]string(nil), config.Discovery.SourceOrder...)
@@ -157,6 +161,10 @@ func (driver *GossipDriver) applyGossipSnapshots(
 	}
 	selected := make([]gossip.ApplySnapshotAction, 0, len(actions))
 	batch := make([]corestate.RemoteSnapshot, 0, len(actions))
+	limits := driver.GossipConfig().Limits
+	if limits.MaxRecords <= 0 || limits.MaxBytes <= 0 {
+		limits = corestate.DefaultSyncLimits()
+	}
 	for _, action := range actions {
 		if action.Snapshot == nil {
 			continue
@@ -164,13 +172,6 @@ func (driver *GossipDriver) applyGossipSnapshots(
 		if action.Snapshot.Zone == managedZone {
 			driver.logGossip(slog.LevelDebug, "skipping_own_zone_snapshot", peerID, GossipPhaseApply, nil, map[string]any{"zone": action.Snapshot.Zone})
 			continue
-		}
-		limits := driver.GossipConfig().Limits
-		if limits.MaxRecords <= 0 || limits.MaxBytes <= 0 {
-			limits = corestate.DefaultSyncLimits()
-		}
-		if action.RelaxedLimits {
-			limits.MaxBytes = 8 << 20
 		}
 		selected = append(selected, action)
 		batch = append(batch, corestate.RemoteSnapshot{
@@ -194,9 +195,7 @@ func (driver *GossipDriver) applyGossipSnapshots(
 			outcome.Err = errors.New("snapshot apply produced no outcome")
 		}
 		driver.logGossipSnapshotOutcome(peerID, managedZone, action, outcome)
-		if action.ReportResult {
-			out.Events = append(out.Events, &gossip.SnapshotAppliedEvent{PeerID: peerID, Zone: action.Snapshot.Zone, Err: outcome.Err})
-		}
+		out.Events = append(out.Events, &gossip.SnapshotAppliedEvent{PeerID: peerID, Zone: action.Snapshot.Zone, Err: outcome.Err})
 	}
 	return out, nil
 }

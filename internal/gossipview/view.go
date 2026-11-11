@@ -110,7 +110,7 @@ func Build(common corestate.View, config corehost.GossipDriverConfig, listen str
 }
 
 func build(common corestate.View, config corehost.GossipDriverConfig, listen string, diagnostics map[string]observability.PeerDiagnostics, active map[string]bool, now time.Time) View {
-	view := View{PeerID: config.PeerID, ListenAddr: listen, MaxDatagramBytes: config.Limits.MaxBytes,
+	view := View{PeerID: config.PeerID, ListenAddr: listen, MaxDatagramBytes: config.MaxDatagramBytes,
 		MaxSyncRecords: config.Limits.MaxRecords, WireVersion: gossip.WireVersion, WireCodec: "msgpack", SampledAt: now, Peers: []Peer{}}
 	var network *zone.NetworkState
 	if common.State != nil {

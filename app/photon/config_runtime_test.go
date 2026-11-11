@@ -60,8 +60,8 @@ func TestRuntimeSyncConfigDerivesLimitsAndPeerID(t *testing.T) {
 		t.Fatalf("PeerID = %q, want managed zone default %q", peerID, verified.ManagedZone)
 	}
 	limits := syncLimits(config)
-	if limits.MaxBytes != 4096 || limits.MaxRecords != 64 {
-		t.Fatalf("limits = %#v, want 4096/8/64", limits)
+	if limits.MaxBytes != 8<<20 || limits.MaxRecords != 64 {
+		t.Fatalf("snapshot limits = %#v, want 8 MiB/64 records", limits)
 	}
 }
 

@@ -16,6 +16,9 @@ func TestDaemonGossipTransportConfigUsesDriverConfig(t *testing.T) {
 		}},
 	}
 	config := gossipDriverConfig(appConfig, nil, nil)
+	if config.Limits.MaxBytes != 8<<20 {
+		t.Fatalf("snapshot byte limit = %d, want 8 MiB", config.Limits.MaxBytes)
+	}
 	now := time.Unix(1234, 0)
 	transportConfig := gossipTransportConfig(config, nil, func() time.Time { return now })
 	if transportConfig.PeerID != config.PeerID || transportConfig.MaxMessageBytes != 4096 {

@@ -177,8 +177,6 @@ type ApplySnapshotAction struct {
 	PeerID                string
 	Snapshot              *corestate.ZoneSnapshot
 	ExpectedRoot          []byte
-	ReportResult          bool
-	RelaxedLimits         bool   // set for object-pull / chunk-fallback snapshots
 	Via                   string // diagnostic source; execution and transaction semantics are shared
 	RefreshOnRootMismatch bool   // first mismatch requests a fresh catalog before rejection
 }
@@ -577,8 +575,6 @@ func (s *SyncSession) snapshotApplyAction(peerID string, snapshot *corestate.Zon
 		PeerID:                peerID,
 		Snapshot:              snapshot,
 		ExpectedRoot:          bytes.Clone(expectedRoot),
-		ReportResult:          true,
-		RelaxedLimits:         true,
 		Via:                   via,
 		RefreshOnRootMismatch: !s.catalogRefreshed,
 	}
