@@ -67,6 +67,7 @@ const (
 	controlConnDeadline                              = 10 * time.Second
 	defaultReconcileOperationTimeout                 = 20 * time.Second
 	defaultDaemonInterval                            = 60 * time.Second
+	maxDaemonEventBatch                              = 16
 	defaultIPsecReconcileInterval                    = time.Minute
 	ipsecLifecycleSubscribeTimeout                   = 10 * time.Second
 	daemonRuntimeNamespace                           = "daemon"
@@ -338,7 +339,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.logDebug("daemon", "startup_recovery_layer_done", map[string]any{"layer": "routing"})
 	d.logDebug("daemon", "startup_recovery_layer_begin", map[string]any{"layer": "firewall"})
 	d.firewallDirty = true
-	d.flushFirewallReconcile(ctx)
+	if _, err := d.flushFirewallReconcile(ctx); err != nil {
+		d.logWarn("firewall", "reconcile_failed", map[string]any{"error": err})
+	}
 	d.logDebug("daemon", "startup_recovery_layer_done", map[string]any{"layer": "firewall"})
 	d.logDebug("daemon", "startup_recovery_done", nil)
 	d.reconcileEpoch = d.now()
@@ -370,7 +373,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			return nil
 		}
 		now := d.now()
-		syncNow, shutdown, ipsecFlushed, routingFlushed, firewallFlushed := d.processEvents(ctx, pendingEvent)
+		syncNow, shutdown := d.processEvents(ctx, pendingEvent)
 		pendingEvent = nil
 		if shutdown {
 			return nil
@@ -385,43 +388,25 @@ func (d *Daemon) Run(ctx context.Context) error {
 				return err
 			}
 		}
-		if ipsecFlushed {
-			if err := d.scheduleDaemonTimer(daemonTimerIPsec, d.nextReconcileTime(daemonTimerIPsec, d.now(), ipsecReconcileInterval)); err != nil {
-				return err
-			}
-		}
-		if interval := d.ipsecReconcileInterval(); interval != ipsecReconcileInterval {
+		// A dirty layer already has an immediate wakeup. Do not replace it
+		// with a periodic deadline when its interval changes during the batch.
+		if interval := d.ipsecReconcileInterval(); interval != ipsecReconcileInterval && !d.ipsecDirty {
 			ipsecReconcileInterval = interval
 			if err := d.scheduleDaemonTimer(daemonTimerIPsec, d.nextReconcileTime(daemonTimerIPsec, d.now(), interval)); err != nil {
 				return err
 			}
 		}
-		if routingFlushed {
-			if err := d.scheduleDaemonTimer(daemonTimerRouting, d.nextReconcileTime(daemonTimerRouting, d.now(), routingReconcileInterval)); err != nil {
-				return err
-			}
-		}
-		if interval := d.routingReconcileInterval(); interval != routingReconcileInterval {
+		if interval := d.routingReconcileInterval(); interval != routingReconcileInterval && !d.routingDirty {
 			routingReconcileInterval = interval
 			if err := d.scheduleDaemonTimer(daemonTimerRouting, d.nextReconcileTime(daemonTimerRouting, d.now(), interval)); err != nil {
 				return err
 			}
 		}
-		if firewallFlushed {
-			if err := d.scheduleDaemonTimer(daemonTimerFirewall, d.nextReconcileTime(daemonTimerFirewall, d.now(), firewallReconcileInterval)); err != nil {
-				return err
-			}
-		}
-		if interval := d.firewallReconcileInterval(); interval != firewallReconcileInterval {
+		if interval := d.firewallReconcileInterval(); interval != firewallReconcileInterval && !d.firewallDirty {
 			firewallReconcileInterval = interval
 			if err := d.scheduleDaemonTimer(daemonTimerFirewall, d.nextReconcileTime(daemonTimerFirewall, d.now(), interval)); err != nil {
 				return err
 			}
-		}
-		// Reconcile can publish new records (for example routing auto-announcement).
-		// Finish the resulting work before waiting for another external event.
-		if d.firewallDirty || d.routingDirty || d.ipsecDirty {
-			continue
 		}
 		var hostEvent corehost.Event
 		select {
@@ -467,25 +452,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 					}
 				case daemonTimerIPsec:
 					d.ipsecDirty = true
-					if d.flushIPsecReconcile(ctx) {
-						if err := d.scheduleDaemonTimer(daemonTimerIPsec, d.nextReconcileTime(daemonTimerIPsec, d.now(), ipsecReconcileInterval)); err != nil {
-							return err
-						}
-					}
 				case daemonTimerRouting:
 					d.routingDirty = true
-					if d.flushRoutingReconcile(ctx) {
-						if err := d.scheduleDaemonTimer(daemonTimerRouting, d.nextReconcileTime(daemonTimerRouting, d.now(), routingReconcileInterval)); err != nil {
-							return err
-						}
-					}
 				case daemonTimerFirewall:
 					d.firewallDirty = true
-					if d.flushFirewallReconcile(ctx) {
-						if err := d.scheduleDaemonTimer(daemonTimerFirewall, d.nextReconcileTime(daemonTimerFirewall, d.now(), firewallReconcileInterval)); err != nil {
-							return err
-						}
-					}
 				case daemonTimerHealth:
 					d.health.TickAsync(ctx, now)
 					if err := d.scheduleDaemonTimer(daemonTimerHealth, now.Add(time.Second)); err != nil {
@@ -524,22 +494,14 @@ func (d *Daemon) enqueueEvent(ctx context.Context, event daemonEvent) daemonEven
 	}
 }
 
-func (d *Daemon) processEvents(ctx context.Context, first *daemonEvent) (syncNow bool, shutdown bool, ipsecFlushed bool, routingFlushed bool, firewallFlushed bool) {
-	defer func() {
-		// Withdraw access before tearing down routes and IPsec links.
-		firewallFlushed = d.flushFirewallReconcile(ctx) || firewallFlushed
-		routingFlushed = d.flushRoutingReconcile(ctx) || routingFlushed
-		ipsecFlushed = d.flushIPsecReconcile(ctx) || ipsecFlushed
-		if routingFlushed {
-			d.notifyObserver("route_changed", nil)
-			d.notifyObserver("bird_updated", nil)
-		}
-		if ipsecFlushed {
-			d.notifyObserver("link_updated", d.observerLinkIDsPayload())
-			d.notifyObserver("health_updated", d.observerHealthLinkIDsPayload())
-		}
-	}()
-	for {
+func (d *Daemon) processEvents(ctx context.Context, first *daemonEvent) (syncNow bool, shutdown bool) {
+	type eventReply struct {
+		event  daemonEvent
+		result daemonEventResult
+	}
+	var pending []eventReply
+collect:
+	for i := 0; i < maxDaemonEventBatch && ctx.Err() == nil && !shutdown; i++ {
 		var event daemonEvent
 		if first != nil {
 			event = *first
@@ -548,37 +510,68 @@ func (d *Daemon) processEvents(ctx context.Context, first *daemonEvent) (syncNow
 			select {
 			case event = <-d.Events:
 			default:
-				return syncNow, shutdown, ipsecFlushed, routingFlushed, firewallFlushed
+				break collect
 			}
 		}
 		result, triggerSync, stop := d.handleEvent(event)
-		if event.Type == daemonEventIPsecCleanup && result.Error == nil {
-			ipsecFlushed = d.flushIPsecReconcile(ctx) || ipsecFlushed
-		}
-		routingMutationCommitted := event.Type == daemonEventCommonMutation && !event.DryRun && commonMutationAffectsRouting(event.CommonIntent)
-		if routingMutationCommitted && result.Error == nil {
-			flushed, err := d.flushRoutingReconcileResult(ctx)
-			routingFlushed = flushed || routingFlushed
-			if err != nil {
-				result.Error = err
-			}
-		}
-		if (event.Type == daemonEventEndpointACLApply || event.Type == daemonEventEndpointACLRemove) && result.Error == nil && result.StateCommitted {
-			flushed, err := d.flushFirewallReconcileResult(ctx)
-			firewallFlushed = flushed || firewallFlushed
-			if err != nil {
-				result.Error = err
-			}
-		}
 		if event.Reply != nil {
-			event.Reply <- result
+			pending = append(pending, eventReply{event, result})
 		}
 		syncNow = syncNow || triggerSync
 		shutdown = shutdown || stop
-		if shutdown {
-			return syncNow, shutdown, ipsecFlushed, routingFlushed, firewallFlushed
+	}
+
+	// Withdraw access before tearing down routes and IPsec links. All events
+	// in this batch observe one ordered application of the final desired state.
+	firewallFlushed, firewallErr := d.flushFirewallReconcile(ctx)
+	routingFlushed, routingErr := d.flushRoutingReconcile(ctx)
+	ipsecFlushed, ipsecErr := d.flushIPsecReconcile(ctx)
+	if routingFlushed {
+		d.notifyObserver("route_changed", nil)
+		d.notifyObserver("bird_updated", nil)
+	}
+	if ipsecFlushed {
+		d.notifyObserver("link_updated", d.observerLinkIDsPayload())
+		d.notifyObserver("health_updated", d.observerHealthLinkIDsPayload())
+	}
+	for _, layer := range []struct {
+		key, component string
+		flushed, dirty bool
+		interval       time.Duration
+		err            error
+	}{
+		{daemonTimerFirewall, "firewall", firewallFlushed, d.firewallDirty, d.firewallReconcileInterval(), firewallErr},
+		{daemonTimerRouting, "routing", routingFlushed, d.routingDirty, d.routingReconcileInterval(), routingErr},
+		{daemonTimerIPsec, "ipsec", ipsecFlushed, d.ipsecDirty, d.ipsecReconcileInterval(), ipsecErr},
+	} {
+		if layer.err != nil {
+			d.logWarn(layer.component, "reconcile_failed", map[string]any{"error": layer.err})
+		}
+		if d.daemonTimers != nil && (layer.flushed || layer.dirty) {
+			deadline := d.nextReconcileTime(layer.key, d.now(), layer.interval)
+			if layer.dirty {
+				deadline = d.now()
+			}
+			if err := d.scheduleDaemonTimer(layer.key, deadline); err != nil {
+				d.logWarn("daemon", "timer_schedule_failed", map[string]any{"timer": layer.key, "error": err})
+			}
 		}
 	}
+	for _, reply := range pending {
+		event, result := reply.event, reply.result
+		if result.Error == nil {
+			switch {
+			case event.Type == daemonEventRoutingReload || (event.Type == daemonEventCommonMutation && !event.DryRun && commonMutationAffectsRouting(event.CommonIntent)):
+				result.Error = routingErr
+			case (event.Type == daemonEventEndpointACLApply || event.Type == daemonEventEndpointACLRemove) && result.StateCommitted:
+				result.Error = firewallErr
+			case event.Type == daemonEventIPsecCleanup:
+				result.Error = ipsecErr
+			}
+		}
+		event.Reply <- result
+	}
+	return syncNow, shutdown
 }
 
 func (d *Daemon) handleEvent(event daemonEvent) (daemonEventResult, bool, bool) {
@@ -639,7 +632,6 @@ func (d *Daemon) handleEvent(event daemonEvent) (daemonEventResult, bool, bool) 
 	case daemonEventRoutingReload:
 		d.routingForceReload = true
 		d.routingDirty = true
-		d.flushRoutingReconcile(controlContext(event.Context))
 		return daemonEventResult{}, false, false
 	case daemonEventIPsecCleanup:
 		cleaned, orphans, err := d.handleIPsecCleanupEvent(controlContext(event.Context), event.Orphans)
@@ -1006,23 +998,19 @@ func (d *Daemon) recoverIPsecLinksOnStart(ctx context.Context) {
 	d.ipsecPrepareStandby = true
 	defer func() { d.ipsecPrepareStandby = false }()
 	d.ipsecDirty = true
-	d.flushIPsecReconcile(ctx)
+	if _, err := d.flushIPsecReconcile(ctx); err != nil {
+		d.logWarn("ipsec", "reconcile_failed", map[string]any{"error": err})
+	}
 }
 
 func (d *Daemon) recoverRoutingOnStart(ctx context.Context) {
 	d.routingDirty = true
-	d.flushRoutingReconcile(ctx)
-}
-
-func (d *Daemon) flushRoutingReconcile(ctx context.Context) bool {
-	flushed, err := d.flushRoutingReconcileResult(ctx)
-	if err != nil {
+	if _, err := d.flushRoutingReconcile(ctx); err != nil {
 		d.logWarn("routing", "reconcile_failed", map[string]any{"error": err})
 	}
-	return flushed
 }
 
-func (d *Daemon) flushRoutingReconcileResult(ctx context.Context) (bool, error) {
+func (d *Daemon) flushRoutingReconcile(ctx context.Context) (bool, error) {
 	if !d.routingDirty {
 		return false, nil
 	}
@@ -1083,23 +1071,21 @@ func boundedReconcileContext(ctx context.Context) (context.Context, context.Canc
 	return context.WithTimeout(ctx, defaultReconcileOperationTimeout)
 }
 
-func (d *Daemon) flushIPsecReconcile(ctx context.Context) bool {
+func (d *Daemon) flushIPsecReconcile(ctx context.Context) (bool, error) {
 	if !d.ipsecDirty {
-		return false
+		return false, nil
 	}
 	defer d.gossipDriver.LogSlowOperation("ipsec", "ipsec_reconcile", time.Now(), d.gossipDriver.PendingEventCount())
 	d.ipsecDirty = false
 	d.noteReconcileFlush("ipsec")
 	reconcileCtx, cancel := boundedReconcileContext(ctx)
 	defer cancel()
-	if err := d.reconcileIPsecLinks(reconcileCtx); err != nil {
-		d.logWarn("ipsec", "reconcile_failed", map[string]any{"error": err})
-	}
+	err := d.reconcileIPsecLinks(reconcileCtx)
 	// Phase 6.6: after IPsec reconcile, refresh health probe targets and
 	// dispatch any due probes. This keeps the probe scheduler in sync with
 	// link create/update/teardown without adding a separate timer path.
 	d.reconcileHealth(reconcileCtx)
-	return true
+	return true, err
 }
 
 func (d *Daemon) startIPsecLifecycleEventWatcher(ctx context.Context) func() {

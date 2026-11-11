@@ -160,18 +160,7 @@ func (d *Daemon) publishFirewallObservation(rev uint64, summary *firewall.Firewa
 	d.linuxObservation.replaceFirewall(summary)
 }
 
-// flushFirewallReconcile runs firewall reconcile if dirty.
-func (d *Daemon) flushFirewallReconcile(ctx context.Context) bool {
-	flushed, err := d.flushFirewallReconcileResult(ctx)
-	if err != nil {
-		d.logWarn("firewall", "reconcile_failed", map[string]any{"error": err})
-	}
-	return flushed
-}
-
-// flushFirewallReconcileResult is used by security-sensitive control writes
-// that must not report success before the new policy reaches the backend.
-func (d *Daemon) flushFirewallReconcileResult(ctx context.Context) (bool, error) {
+func (d *Daemon) flushFirewallReconcile(ctx context.Context) (bool, error) {
 	if !d.firewallDirty {
 		return false, nil
 	}

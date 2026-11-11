@@ -174,7 +174,7 @@ func TestRoutingDisabledInstanceSkipsPlatformEffects(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fixture := newRoutingDisabledFixture(t, tc.enabled, tc.mode, false)
 			fixture.service.routingDirty = true
-			flushed, err := fixture.service.flushRoutingReconcileResult(context.Background())
+			flushed, err := fixture.service.flushRoutingReconcile(context.Background())
 			if err != nil {
 				t.Fatalf("flush routing reconcile: %v", err)
 			}
@@ -201,7 +201,7 @@ func TestRoutingMixedInstancesSkipDisabledPlatformEffects(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fixture := newRoutingDisabledFixture(t, tc.enabled, tc.mode, true)
 			fixture.service.routingDirty = true
-			flushed, err := fixture.service.flushRoutingReconcileResult(context.Background())
+			flushed, err := fixture.service.flushRoutingReconcile(context.Background())
 			if err != nil {
 				t.Fatalf("flush routing reconcile: %v", err)
 			}

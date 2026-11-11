@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
 	photonstate "github.com/HiggsNet/photon/internal/state"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/firewall"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -72,7 +74,7 @@ func TestDaemonEventBatchReconcileReply(t *testing.T) {
 					} else {
 						service.Events <- event
 					}
-					syncNow, shutdown, _, routingFlushed, firewallFlushed := service.processEvents(context.Background(), first)
+					syncNow, shutdown := service.processEvents(context.Background(), first)
 					select {
 					case result := <-event.Reply:
 						if !errors.Is(result.Error, backendErr) {
@@ -84,12 +86,8 @@ func TestDaemonEventBatchReconcileReply(t *testing.T) {
 					if shutdown || syncNow {
 						t.Fatalf("sync/shutdown = %v/%v", syncNow, shutdown)
 					}
-					flushed := routingFlushed
-					if layer == "firewall" {
-						flushed = firewallFlushed
-					}
-					if !flushed || flushes != 1 {
-						t.Fatalf("flushed/count = %v/%d, want true/1", flushed, flushes)
+					if flushes != 1 {
+						t.Fatalf("flush count = %d, want 1", flushes)
 					}
 				})
 			}
@@ -105,8 +103,83 @@ func TestDaemonEventBatchFirstPrecedesQueuedShutdown(t *testing.T) {
 	after := daemonEvent{Type: daemonEventSyncTrigger, Reply: make(chan daemonEventResult, 1)}
 	service.Events <- stop
 	service.Events <- after
-	syncNow, shutdown, _, _, _ := service.processEvents(context.Background(), &first)
+	syncNow, shutdown := service.processEvents(context.Background(), &first)
 	if !syncNow || !shutdown || len(first.Reply) != 1 || len(stop.Reply) != 1 || len(after.Reply) != 0 || len(service.Events) != 1 {
 		t.Fatalf("first/batch shutdown order: sync=%v shutdown=%v replies=%d/%d/%d queued=%d", syncNow, shutdown, len(first.Reply), len(stop.Reply), len(after.Reply), len(service.Events))
+	}
+}
+
+func TestDaemonEventBatchCoalescesReloadsAndRepliesAfterApply(t *testing.T) {
+	fixture := newRoutingDisabledFixture(t, false, ipsec.RoutingModeManaged, true)
+	service := fixture.service
+	backendErr := errors.New("routing backend failed")
+	fixture.enabledBird.startErr = backendErr
+	replies := []chan daemonEventResult{make(chan daemonEventResult, 1), make(chan daemonEventResult, 1)}
+	for _, reply := range replies {
+		service.Events <- daemonEvent{Type: daemonEventRoutingReload, Reply: reply}
+	}
+	flushes := 0
+	service.Hooks.OnReconcileFlush = func(layer string) {
+		if layer == "routing" {
+			flushes++
+		}
+		for _, reply := range replies {
+			if len(reply) != 0 {
+				t.Fatal("command replied before the batch finished applying")
+			}
+		}
+	}
+	service.processEvents(t.Context(), nil)
+	if flushes != 1 {
+		t.Fatalf("reload batch applied %d times, want 1", flushes)
+	}
+	for _, reply := range replies {
+		if result := <-reply; !errors.Is(result.Error, backendErr) {
+			t.Fatalf("reload lost backend error: %v", result.Error)
+		}
+	}
+}
+
+func TestDaemonEventBatchYieldsBeforeQueueIsEmpty(t *testing.T) {
+	service := &Daemon{Events: make(chan daemonEvent, maxDaemonEventBatch+3)}
+	first := daemonEvent{Type: daemonEventSyncTrigger, Reply: make(chan daemonEventResult, 1)}
+	for i := 0; i < cap(service.Events); i++ {
+		service.Events <- daemonEvent{Type: daemonEventSyncTrigger, Reply: make(chan daemonEventResult, 1)}
+	}
+	syncNow, shutdown := service.processEvents(t.Context(), &first)
+	if !syncNow || shutdown || len(first.Reply) != 1 || len(service.Events) != 4 {
+		t.Fatalf("batch did not yield: sync=%v shutdown=%v first=%d queued=%d", syncNow, shutdown, len(first.Reply), len(service.Events))
+	}
+	if next := <-service.Events; len(next.Reply) != 0 {
+		t.Fatal("next batch's request was already replied to")
+	}
+}
+
+func TestDaemonEventBatchSchedulesWorkRaisedDuringApply(t *testing.T) {
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	service := newTestDaemonFromOwners(&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second)
+	service.daemonTimerEvents = make(chan corehost.Event, 4)
+	service.daemonTimers = corehost.NewScheduler(corehost.NewClock(service.now), service.daemonTimerEvents)
+	defer service.daemonTimers.Stop()
+	var order []string
+	service.Hooks.OnReconcileFlush = func(layer string) {
+		order = append(order, layer)
+		if layer == "routing" {
+			service.firewallDirty = true
+		}
+	}
+	service.notifyStateChanged()
+	service.processEvents(t.Context(), nil)
+	if !reflect.DeepEqual(order, []string{"firewall", "routing", "ipsec"}) {
+		t.Fatalf("batch apply order = %v", order)
+	}
+	select {
+	case event := <-service.daemonTimerEvents:
+		fired, ok := event.(corehost.TimerFired)
+		if !ok || fired.ID.Key != daemonTimerFirewall || !service.daemonTimers.Accept(fired) {
+			t.Fatalf("follow-up work was not scheduled: %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("new work had no wakeup after yielding")
 	}
 }

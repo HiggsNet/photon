@@ -59,7 +59,7 @@ func TestDaemonEventLoopDispatchesRecordPut(t *testing.T) {
 		},
 		Reply: reply,
 	}
-	syncNow, shutdown, _, _, _ := service.processEvents(context.Background(), nil)
+	syncNow, shutdown := service.processEvents(context.Background(), nil)
 	if result := <-reply; result.Error != nil || result.Version != 1 {
 		t.Fatalf("processEvents(record_put) = %+v, want successful version 1", result)
 	}
@@ -101,12 +101,9 @@ func TestDaemonIPsecPortRotateEventTriggersDataPlaneReconcile(t *testing.T) {
 	reply := make(chan daemonEventResult, 1)
 	service.Events <- daemonEvent{Type: daemonEventIPsecPortRotate, Reply: reply}
 
-	syncNow, shutdown, ipsecFlushed, _, firewallFlushed := service.processEvents(context.Background(), nil)
+	syncNow, shutdown := service.processEvents(context.Background(), nil)
 	if syncNow || shutdown {
 		t.Fatalf("syncNow/shutdown = %v/%v, want false/false", syncNow, shutdown)
-	}
-	if !firewallFlushed || !ipsecFlushed {
-		t.Fatalf("firewallFlushed/ipsecFlushed = %v/%v, want true/true", firewallFlushed, ipsecFlushed)
 	}
 	result := <-reply
 	if result.Error != nil {
@@ -491,7 +488,7 @@ func TestDaemonEndpointTimerNoChangeSkipsFlushAndSync(t *testing.T) {
 	// trigger a sync, layer flush, or state-store revision bump.
 	reply := make(chan daemonEventResult, 1)
 	event := daemonEvent{Type: daemonEventEndpointTimer, Reply: reply}
-	syncNow, shutdown, ipsecFlushed, routingFlushed, firewallFlushed := service.processEvents(context.Background(), &event)
+	syncNow, shutdown := service.processEvents(context.Background(), &event)
 	result := <-reply
 	if result.Error != nil {
 		t.Fatalf("second handleEvent(endpoint): %v", result.Error)
@@ -502,7 +499,7 @@ func TestDaemonEndpointTimerNoChangeSkipsFlushAndSync(t *testing.T) {
 	if shutdown {
 		t.Fatalf("shutdown = true, want false")
 	}
-	if ipsecFlushed || routingFlushed || firewallFlushed || len(flushed) != 0 {
+	if len(flushed) != 0 {
 		t.Fatalf("layer flushes on no-op endpoint timer: %v", flushed)
 	}
 	if service.ipsecDirty || service.routingDirty || service.firewallDirty {

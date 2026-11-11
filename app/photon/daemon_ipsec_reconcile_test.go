@@ -402,12 +402,9 @@ func TestDaemonProcessEventsCoalescesIPsecReconcile(t *testing.T) {
 				event := <-service.Events
 				first = &event
 			}
-			syncNow, shutdown, ipsecFlushed, _, _ := service.processEvents(context.Background(), first)
+			syncNow, shutdown := service.processEvents(context.Background(), first)
 			if syncNow || shutdown {
 				t.Fatalf("syncNow/shutdown = %v/%v, want false/false", syncNow, shutdown)
-			}
-			if !ipsecFlushed {
-				t.Fatalf("ipsecFlushed = false, want true")
 			}
 			if driver.listCalls != 1 {
 				t.Fatalf("ListSAs calls = %d, want 1", driver.listCalls)
@@ -450,12 +447,9 @@ func TestDaemonVICILifecycleEventsOnlyTriggerCoalescedIPsecReconcile(t *testing.
 	service.Events <- daemonEvent{Type: daemonEventIPsecLifecycle, VICIEvent: ipsec.VICIEvent{Name: "child-updown", Connection: "ipsec-main-ab", ChildSA: "ipsec-main-ab-child", Up: true, XFRMIfID: 77}}
 	service.Events <- daemonEvent{Type: daemonEventIPsecLifecycle, VICIEvent: ipsec.VICIEvent{Name: "child-updown", Connection: "ipsec-main-ab", ChildSA: "ipsec-main-ab-child", Up: false, XFRMIfID: 77}}
 
-	syncNow, shutdown, ipsecFlushed, _, _ := service.processEvents(context.Background(), nil)
+	syncNow, shutdown := service.processEvents(context.Background(), nil)
 	if syncNow || shutdown {
 		t.Fatalf("syncNow/shutdown = %v/%v, want false/false", syncNow, shutdown)
-	}
-	if !ipsecFlushed {
-		t.Fatalf("ipsecFlushed = false, want true")
 	}
 	if driver.listCalls != 1 {
 		t.Fatalf("ListSAs calls = %d, want one coalesced reconcile", driver.listCalls)

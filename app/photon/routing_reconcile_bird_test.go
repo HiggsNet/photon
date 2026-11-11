@@ -357,12 +357,12 @@ func TestFlushRoutingReconcileCoalesces(t *testing.T) {
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestBirdDrivers(service, pm, nil)
 
-	if service.flushRoutingReconcile(context.Background()) {
+	if flushed, _ := service.flushRoutingReconcile(context.Background()); flushed {
 		t.Fatalf("flushRoutingReconcile should return false when not dirty")
 	}
 
 	service.routingDirty = true
-	if !service.flushRoutingReconcile(context.Background()) {
+	if flushed, _ := service.flushRoutingReconcile(context.Background()); !flushed {
 		t.Fatalf("flushRoutingReconcile should return true when dirty")
 	}
 
@@ -379,7 +379,7 @@ func TestFlushRoutingReconcileCoalesces(t *testing.T) {
 	clock.Advance(defaultRoutingReconcileInterval)
 	now := clock.Now()
 	service.routingDirty = true
-	if !service.flushRoutingReconcile(context.Background()) {
+	if flushed, _ := service.flushRoutingReconcile(context.Background()); !flushed {
 		t.Fatal("second routing reconcile was not flushed")
 	}
 	if afterNoopRev := uint64(service.State.Common.VerifiedRevision()); afterNoopRev != beforeNoopRev {

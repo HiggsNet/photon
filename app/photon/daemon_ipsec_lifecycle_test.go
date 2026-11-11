@@ -633,16 +633,13 @@ func TestDaemonIPsecCleanupEventTearsDownManagedLinks(t *testing.T) {
 
 	reply := make(chan daemonEventResult, 1)
 	service.Events <- daemonEvent{Type: daemonEventIPsecCleanup, Reply: reply}
-	syncNow, shutdown, ipsecFlushed, _, _ := service.processEvents(context.Background(), nil)
+	syncNow, shutdown := service.processEvents(context.Background(), nil)
 	result := <-reply
 	if result.Error != nil {
 		t.Fatalf("processEvents(ipsec_cleanup): %v", result.Error)
 	}
 	if result.CleanedLinks != 1 || syncNow || shutdown {
 		t.Fatalf("result=%+v syncNow=%v shutdown=%v, want one cleaned and no sync/shutdown", result, syncNow, shutdown)
-	}
-	if !ipsecFlushed {
-		t.Fatal("ipsec cleanup did not flush reconcile")
 	}
 	latestLinks, _ := readTestIPsecObservation(service)
 	if len(latestLinks) != 1 {
@@ -674,16 +671,13 @@ func TestDaemonIPsecCleanupEventCanCleanOrphanConnections(t *testing.T) {
 
 	reply := make(chan daemonEventResult, 1)
 	service.Events <- daemonEvent{Type: daemonEventIPsecCleanup, Orphans: true, Reply: reply}
-	_, _, ipsecFlushed, _, _ := service.processEvents(context.Background(), nil)
+	service.processEvents(context.Background(), nil)
 	result := <-reply
 	if result.Error != nil {
 		t.Fatalf("processEvents(ipsec_cleanup --orphans): %v", result.Error)
 	}
 	if result.CleanedLinks != 0 || result.CleanedOrphans != 1 {
 		t.Fatalf("result = %+v, want one orphan only", result)
-	}
-	if !ipsecFlushed {
-		t.Fatal("ipsec cleanup did not flush reconcile")
 	}
 	if len(driver.Terminated) != 1 || driver.Terminated[0] != "ipsec-orphan-r3" || len(driver.Unloaded) != 1 || driver.Unloaded[0] != "ipsec-orphan-r3" {
 		t.Fatalf("driver cleanup: terminated=%+v unloaded=%+v", driver.Terminated, driver.Unloaded)

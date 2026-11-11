@@ -52,6 +52,8 @@ PING 和 PONG 携带的目录摘要都可以推进同步。收到 PING 后回复
 
 Linux 统一使用 `photon daemon` 运行 Gossip。已删除 `advanced sync serve` 和 `advanced sync once` 的 CLI 入口、独立启动流程和事件循环。它们原先和 daemon 共用 GossipDriver 和协议状态机，但各自启动 UDP、TCP 对象服务和拉取 worker，并消费同样的输入、完成和续处理事件。
 
+daemon 每批最多处理 16 个控制或生命周期事件，定时器和 reload 命令只标记待处理工作。批次统一按防火墙、路由、IPsec 的顺序执行一次系统调整，再回复命令；需要确认系统生效的操作返回对应后端错误。执行中再次产生的工作通过现有定时器立即唤醒后续批次，主循环仍可消费 Gossip。三个系统层统一返回执行情况和错误，已删除只记录错误的包装函数及批次向外传递的执行标记。系统 I/O 仍同步执行。
+
 `advanced sync status` 仍可查询在线 daemon 或离线 checkpoint。内部 `sync_trigger` 仍只确认已调度。如果以后需要立即同步并等待结果，应在在线 daemon 中按指定 peer 的会话结果区分成功、失败和超时。
 
 - `phase2-run-smoke` 覆盖双节点记录双向同步、Zone 签名校验及重启后收敛。

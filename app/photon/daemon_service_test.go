@@ -134,18 +134,18 @@ func TestEmptyFirewallAndRoutingFlushDoNotRepublishLegacyState(t *testing.T) {
 	beforeRevision := uint64(service.State.Common.VerifiedRevision())
 
 	service.firewallDirty = true
-	flushed, err := service.flushFirewallReconcileResult(context.Background())
+	flushed, err := service.flushFirewallReconcile(context.Background())
 	if err != nil {
-		t.Fatalf("flushFirewallReconcileResult: %v", err)
+		t.Fatalf("flushFirewallReconcile: %v", err)
 	}
 	if !flushed {
 		t.Fatal("firewall reconcile was not flushed")
 	}
 
 	service.routingDirty = true
-	flushed, err = service.flushRoutingReconcileResult(context.Background())
+	flushed, err = service.flushRoutingReconcile(context.Background())
 	if err != nil {
-		t.Fatalf("flushRoutingReconcileResult: %v", err)
+		t.Fatalf("flushRoutingReconcile: %v", err)
 	}
 	if !flushed {
 		t.Fatal("routing reconcile was not flushed")
@@ -198,9 +198,9 @@ func TestDaemonGossipChangeDefersPlatformWorkToEventLoop(t *testing.T) {
 	if flushes != 0 {
 		t.Fatalf("Gossip callback performed %d reconciles", flushes)
 	}
-	_, _, ipsecFlushed, routingFlushed, firewallFlushed := service.processEvents(context.Background(), nil)
-	if !ipsecFlushed || !routingFlushed || !firewallFlushed || flushes != 3 {
-		t.Fatalf("next batch flushes = %v/%v/%v, count %d", ipsecFlushed, routingFlushed, firewallFlushed, flushes)
+	service.processEvents(context.Background(), nil)
+	if flushes != 3 {
+		t.Fatalf("next batch flush count = %d, want 3", flushes)
 	}
 	result, err = service.handleGossipDriverEvent(t.Context(), corehost.GossipEvent{Value: &gossip.RoundTimeoutEvent{PeerID: peerID}})
 	if err != nil || service.gossipDriver.Gossip.Session(peerID) != nil || result {

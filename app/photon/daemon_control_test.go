@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -397,21 +398,22 @@ func TestPrepareControlSocketPathPreservesRegularFile(t *testing.T) {
 }
 
 func TestDaemonControlRoutingReload(t *testing.T) {
-	verified, checkpoint, runtime, config := buildTestRoutingOwners(t)
-	appConfig := defaultAppConfig()
-	appConfig.DataDir = t.TempDir()
-	rt := &testApp{Config: testConfigWithStatePath(appConfig, filepath.Join(t.TempDir(), "photon.db"))}
-	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-	service.routingDirty = false
-	ctx := t.Context()
-	go pumpDaemonEvents(ctx, service)
-
-	response := controlRequestViaPipe(t, service, controlRequest{Method: "routing_reload"})
-	if !response.OK || response.Message != "routing reloaded" {
-		t.Fatalf("routing_reload response = %#v", response)
-	}
-	if service.routingDirty {
-		t.Fatalf("routingDirty should be cleared after synchronous routing_reload")
+	for _, failed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("failed=%t", failed), func(t *testing.T) {
+			fixture := newRoutingDisabledFixture(t, false, ipsec.RoutingModeManaged, true)
+			if failed {
+				fixture.enabledBird.startErr = errors.New("routing backend unavailable")
+			}
+			service := fixture.service
+			go pumpDaemonEvents(t.Context(), service)
+			response := controlRequestViaPipe(t, service, controlRequest{Method: "routing_reload"})
+			if response.OK == failed || (!failed && response.Message != "routing reloaded") || (failed && !strings.Contains(response.Error, "routing backend unavailable")) {
+				t.Fatalf("routing_reload response = %#v", response)
+			}
+			if service.routingDirty {
+				t.Fatal("routing reload returned before the batch applied")
+			}
+		})
 	}
 }
 
