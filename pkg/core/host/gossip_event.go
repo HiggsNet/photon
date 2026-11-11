@@ -92,8 +92,8 @@ func (driver *GossipDriver) SyncGossipPeers(ctx context.Context, now time.Time, 
 	return changed, errors.Join(errs...)
 }
 
-// StartGossipSession creates and queues one common gossip pull session. It is
-// also the only announce-hint suppression/defer boundary.
+// StartGossipSession queues a locally triggered session, deferring the hint
+// while a session or its canceled object pulls are still active.
 func (driver *GossipDriver) StartGossipSession(peerID, reason string) error {
 	if driver == nil {
 		return ErrGossipDriverStopped

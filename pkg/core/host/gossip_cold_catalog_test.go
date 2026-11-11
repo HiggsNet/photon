@@ -82,7 +82,7 @@ func testGossipColdCatalog(t *testing.T, pullsAtTimeout int) {
 	clock := newFakeClock(now)
 	driver := NewGossipDriver(clock, 128, store, GossipDriverConfig{PeerID: managed.String(), Limits: corestate.DefaultSyncLimits()})
 	defer driver.Stop()
-	bindMemoryGossipTransport(t, driver, "bootstrap")
+	_, datagram := bindMemoryGossipTransport(t, driver, "bootstrap")
 	pulls := make(chan zone.ZonePath, 64)
 	client := coldCatalogClient{source: source, pulls: pulls}
 	started, canceled := make(chan struct{}, 2), make(chan struct{}, 2)
@@ -196,8 +196,18 @@ func testGossipColdCatalog(t *testing.T, pullsAtTimeout int) {
 				case <-deadline.C:
 					t.Fatal("timeout did not cancel the running child pulls")
 				}
-				if err := driver.StartGossipSession("bootstrap", "ping_summary"); err != nil {
+				writes := datagram.writeCount()
+				if _, err := driver.HandleGossipHostEvent(t.Context(), GossipPacketReceived{Packet: &gossip.Packet{Message: &gossip.Message{
+					Type: gossip.MessagePing, PeerID: "bootstrap", Ping: &gossip.Ping{Summary: &corestate.CatalogSummary{
+						CatalogRoot: root, ZoneCount: len(digests),
+					}},
+				}}}, now); err != nil {
 					t.Fatal(err)
+				}
+				payload, _ := datagram.lastWrite()
+				response, err := gossip.UnmarshalMessage(payload)
+				if err != nil || datagram.writeCount() != writes+1 || response.Type != gossip.MessagePong {
+					t.Fatalf("draining round emitted more than PONG: response=%#v error=%v", response, err)
 				}
 			}
 			if driver.Gossip.Session("bootstrap") != nil || !driver.Gossip.PendingHint("bootstrap") {

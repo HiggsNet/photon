@@ -18,7 +18,7 @@
 
 已移除 `FirstPage`、摘要内的 `NextCursor` 和相应的接收处理。摘要只携带根摘要和 Zone 数量。摘要不一致时，用空 `cursor` 的 `FetchCatalogPage` 请求目录第一页，再用目录页返回的游标请求后续页。
 
-PONG 携带目录摘要才推进同步。更新通知使用带目录摘要的 PING，旧 ANNOUNCE 消息已删除。UDP `FETCH_ZONE` 只请求 Zone 快照分块，接收端直接发送分块。
+PING 和 PONG 携带的目录摘要都可以推进同步。收到 PING 后回复 PONG；若需要启动同步，直接用 PING 中的摘要初始化正式会话，由状态机请求目录并设置超时。已存在的会话继续消费该摘要。已删除收包回复中直接请求目录的旁路，也无需反向再发一次 PING。更新通知使用带目录摘要的 PING，旧 ANNOUNCE 消息已删除。UDP `FETCH_ZONE` 只请求 Zone 快照分块，接收端直接发送分块。
 
 ## 公共 Gossip 传输：保留现有设计
 

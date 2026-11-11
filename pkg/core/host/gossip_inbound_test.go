@@ -3,6 +3,7 @@ package host
 import (
 	"context"
 	"crypto/ed25519"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -78,7 +79,7 @@ func TestGossipDriverInboundOwnsObservedCheckpointAndAddressBookPublication(t *t
 	}
 }
 
-func TestGossipDriverExecuteGossipPacketActionsPlansPingResponsesAndHint(t *testing.T) {
+func TestGossipDriverPingRepliesBeforeSessionFetchesCatalog(t *testing.T) {
 	driver := NewGossipDriver(newFakeClock(time.Unix(100, 0)), 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState("local.catofes.")}}, GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
 	defer driver.Stop()
 	controller := &memoryInboundController{}
@@ -87,8 +88,17 @@ func TestGossipDriverExecuteGossipPacketActionsPlansPingResponsesAndHint(t *test
 		PeerID: "peer-a",
 		Ping:   &gossip.Ping{Summary: &corestate.CatalogSummary{CatalogRoot: []byte("remote"), ZoneCount: 1}},
 	}}
-	if _, err := driver.handleGossipMessage(context.Background(), packet.Message, controller, controller.budget); err != nil {
+	events, err := driver.handleGossipMessage(context.Background(), packet.Message, controller, controller.budget)
+	if err != nil {
 		t.Fatalf("handleGossipMessage: %v", err)
+	}
+	if len(controller.outbound) != 1 || controller.outbound[0].Message.Type != gossip.MessagePong {
+		t.Fatalf("responder outbound = %#v, want only PONG", controller.outbound)
+	}
+	for _, event := range events {
+		if _, _, err := driver.handleGossipSessionEvent(t.Context(), event, time.Unix(100, 0), controller); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if len(controller.outbound) != 2 || controller.outbound[0].Message.Type != gossip.MessagePong || controller.outbound[1].Message.Type != gossip.MessageFetchCatalogPage {
 		t.Fatalf("outbound = %#v, want PONG then FETCH_CATALOG_PAGE", controller.outbound)
@@ -134,23 +144,68 @@ func TestGossipDriverPingSummaryShortcutOwnsCheckpointAndSkipsSession(t *testing
 }
 
 func TestGossipDriverPingSummaryMismatchStartsCommonSession(t *testing.T) {
-	now := time.Unix(1000, 0)
-	store := corestate.NewStore(&corestate.VerifiedState{ManagedZone: "local.catofes.", Network: zone.NewNetworkState()}, nil, nil)
-	driver := NewGossipDriver(newFakeClock(now), 2, store, GossipDriverConfig{PeerID: "local.catofes."})
-	defer driver.Stop()
-	bindMemoryGossipTransport(t, driver, "peer-a")
-
-	_, err := driver.HandleGossipHostEvent(context.Background(), GossipPacketReceived{Packet: &gossip.Packet{Message: &gossip.Message{
-		Type: gossip.MessagePing, PeerID: "peer-a", Ping: &gossip.Ping{Summary: &corestate.CatalogSummary{CatalogRoot: []byte("mismatch"), ZoneCount: 99}},
-	}}}, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if session := driver.Gossip.Session("peer-a"); session == nil || session.State != gossip.SyncSessionIdle {
-		t.Fatalf("mismatch session = %#v", session)
-	}
-	if driver.PendingEventCount() != 1 {
-		t.Fatalf("pending events = %d, want 1", driver.PendingEventCount())
+	for _, queuedStart := range []bool{false, true} {
+		t.Run(fmt.Sprintf("queued_start=%t", queuedStart), func(t *testing.T) {
+			now := time.Unix(1000, 0)
+			clock := newFakeClock(now)
+			store := corestate.NewStore(&corestate.VerifiedState{ManagedZone: "local.catofes.", Network: zone.NewNetworkState()}, nil, nil)
+			driver := NewGossipDriver(clock, 1, store, GossipDriverConfig{PeerID: "local.catofes."})
+			defer driver.Stop()
+			_, datagram := bindMemoryGossipTransport(t, driver, "peer-a")
+			if queuedStart {
+				if err := driver.StartGossipSession("peer-a", "test"); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := driver.PostGossip(&gossip.SyncTimerEvent{PeerID: "occupy"}); err != nil {
+				t.Fatal(err)
+			}
+			ping := GossipPacketReceived{Packet: &gossip.Packet{Message: &gossip.Message{
+				Type: gossip.MessagePing, PeerID: "peer-a", Ping: &gossip.Ping{Summary: &corestate.CatalogSummary{CatalogRoot: []byte("mismatch"), ZoneCount: 99}},
+			}}}
+			if _, err := driver.HandleGossipHostEvent(t.Context(), ping, now); err != nil {
+				t.Fatal(err)
+			}
+			session := driver.Gossip.Session("peer-a")
+			if session == nil || session.State != gossip.SyncSessionCatalogDiffing {
+				t.Fatalf("mismatch session = %#v", session)
+			}
+			if diagnostics, ok := driver.Observability.Snapshot("peer-a", now); !ok || diagnostics.DatagramStats == nil || diagnostics.DatagramStats.LastCatalogZoneCount != 99 {
+				t.Fatalf("PING-started session summary = %#v", diagnostics)
+			}
+			if driver.PendingEventCount() != 1 || datagram.writeCount() != 2 {
+				t.Fatalf("pending events=%d writes=%d, want 1/2", driver.PendingEventCount(), datagram.writeCount())
+			}
+			wantTypes := []gossip.MessageType{gossip.MessagePong, gossip.MessageFetchCatalogPage}
+			for i, payload := range datagram.writes {
+				message, err := gossip.UnmarshalMessage(payload)
+				if err != nil || message.Type != wantTypes[i] {
+					t.Fatalf("outbound %d = %#v, error=%v", i, message, err)
+				}
+			}
+			// A queued active start and subsequent PING cannot restart the
+			// round or issue a duplicate catalog request.
+			if _, err := driver.HandleGossipHostEvent(t.Context(), <-driver.Events(), now); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := driver.HandleGossipHostEvent(t.Context(), ping, now); err != nil {
+				t.Fatal(err)
+			}
+			if driver.Gossip.Session("peer-a") != session || datagram.writeCount() != 3 {
+				t.Fatal("queued start or repeated PING restarted the round")
+			}
+			clock.Advance(30 * time.Second)
+			pageTimer := receiveTimer(t, driver.Completions())
+			roundTimer := receiveTimer(t, driver.Completions())
+			if pageTimer.ID.Key != gossip.TimerKindCatalogPage || roundTimer.ID.Key != gossip.TimerKindRound {
+				t.Fatalf("session timers = %#v, %#v", pageTimer.ID, roundTimer.ID)
+			}
+			if _, err := driver.HandleGossipHostEvent(t.Context(), roundTimer, clock.Now()); err != nil {
+				t.Fatal(err)
+			}
+			if driver.Gossip.Session("peer-a") != nil || session.State != gossip.SyncSessionFailed {
+				t.Fatal("PING-started session escaped its round deadline")
+			}
+		})
 	}
 }
 
@@ -227,7 +282,7 @@ func TestGossipDriverExecuteGossipPacketActionsRespondsToActivePingWhenQueueFull
 	controller := &memoryInboundController{}
 	driver := NewGossipDriver(newFakeClock(time.Unix(100, 0)), 1, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, gossipConfigCapturingIssues(GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()}, &controller.issues))
 	defer driver.Stop()
-	driver.Gossip.NewSession("peer-a")
+	driver.Gossip.NewSession("peer-a").State = gossip.SyncSessionSummarySent
 	if err := driver.PostGossip(&gossip.SyncTimerEvent{PeerID: "occupy"}); err != nil {
 		t.Fatalf("fill queue: %v", err)
 	}

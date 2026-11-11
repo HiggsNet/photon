@@ -57,6 +57,8 @@ type SyncEvent interface {
 type SyncTimerEvent struct {
 	PeerID       string
 	LocalSummary *corestate.CatalogSummary
+	// RemoteSummary starts a session from an inbound PING without sending another PING.
+	RemoteSummary *corestate.CatalogSummary
 }
 
 func (*SyncTimerEvent) SyncEventMarker() {}
@@ -295,10 +297,13 @@ func (s *SyncSession) onSyncTimer(e *SyncTimerEvent, now time.Time) ([]SyncActio
 	s.catalogRefreshPending = false
 	s.catalogRefreshed = false
 
-	return []SyncAction{
-		SendPingAction{PeerID: e.PeerID, Summary: e.LocalSummary},
-		StartTimerAction{PeerID: e.PeerID, Kind: TimerKindRound, Deadline: now.Add(s.roundTimeout())},
-	}, nil
+	var actions []SyncAction
+	if e.RemoteSummary != nil {
+		actions = s.handleCatalogSummary(e.PeerID, e.RemoteSummary, now)
+	} else {
+		actions = append(actions, SendPingAction{PeerID: e.PeerID, Summary: e.LocalSummary})
+	}
+	return append(actions, StartTimerAction{PeerID: e.PeerID, Kind: TimerKindRound, Deadline: now.Add(s.roundTimeout())}), nil
 }
 
 func (s *SyncSession) onPongReceived(e *PongReceivedEvent, now time.Time) ([]SyncAction, error) {
@@ -308,43 +313,43 @@ func (s *SyncSession) onPongReceived(e *PongReceivedEvent, now time.Time) ([]Syn
 	if !s.pingSentAt.IsZero() && now.After(s.pingSentAt) {
 		s.updateRTT(now.Sub(s.pingSentAt))
 	}
-	return s.handleCatalogSummary(e.PeerID, e.Pong.Summary, now)
+	return s.handleCatalogSummary(e.PeerID, e.Pong.Summary, now), nil
 }
 
 func (s *SyncSession) onCatalogSummaryReceived(e *CatalogSummaryReceivedEvent, now time.Time) ([]SyncAction, error) {
 	if e.Summary == nil {
 		return nil, nil
 	}
-	return s.handleCatalogSummary(e.PeerID, e.Summary, now)
+	return s.handleCatalogSummary(e.PeerID, e.Summary, now), nil
 }
 
-func (s *SyncSession) handleCatalogSummary(peerID string, summary *corestate.CatalogSummary, now time.Time) ([]SyncAction, error) {
+func (s *SyncSession) handleCatalogSummary(peerID string, summary *corestate.CatalogSummary, now time.Time) []SyncAction {
 	if summary == nil {
-		return nil, nil
+		return nil
 	}
 	// Keep the catalog pinned until its pages and objects are processed.
 	// A mismatching page or snapshot can still trigger the bounded refresh.
 	if s.State == SyncSessionCatalogDiffing || len(s.acceptedCatalogPages) > 0 {
-		return nil, nil
+		return nil
 	}
 	if bytes.Equal(summary.CatalogRoot, s.remoteCatalogRoot) && s.State == SyncSessionCompleted {
-		return nil, nil
+		return nil
 	}
 	s.remoteCatalogRoot = append([]byte(nil), summary.CatalogRoot...)
 	if len(s.localCatalogRoot) > 0 && bytes.Equal(summary.CatalogRoot, s.localCatalogRoot) {
 		s.State = SyncSessionCompleted
-		return nil, nil
+		return nil
 	}
 	if summary.ZoneCount == 0 || bytes.Equal(summary.CatalogRoot, corestate.CatalogRoot(nil)) {
 		s.State = SyncSessionCompleted
-		return nil, nil
+		return nil
 	}
 	s.State = SyncSessionCatalogDiffing
 	s.lastCatalogCursor = ""
 	return []SyncAction{
 		SendFetchCatalogPageAction{PeerID: peerID},
 		StartTimerAction{PeerID: peerID, Kind: TimerKindCatalogPage, Deadline: now.Add(s.catalogPageTimeout())},
-	}, nil
+	}
 }
 
 func (s *SyncSession) onCatalogPageReceived(e *CatalogPageReceivedEvent, now time.Time) ([]SyncAction, error) {

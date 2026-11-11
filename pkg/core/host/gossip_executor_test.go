@@ -383,12 +383,15 @@ func TestGossipDriverCrossedPingCatalogRequests(t *testing.T) {
 				t.Fatalf("send trace = %v, want %v", sender.trace, want)
 			}
 
-			// A legacy peer can still use the unsolicited Ping responder.
+			// An unsolicited PING starts the same timed session immediately.
 			driver.Gossip.RemoveSession(peer)
 			sender.trace = nil
 			deliver(ping)
 			if want := []string{"send:pong", "send:fetch_catalog_page"}; !slices.Equal(sender.trace, want) {
 				t.Fatalf("unsolicited send trace = %v, want %v", sender.trace, want)
+			}
+			if session := driver.Gossip.Session(peer); session == nil || session.State != gossip.SyncSessionCatalogDiffing || driver.PendingEventCount() != 0 {
+				t.Fatalf("PING-started session = %#v, pending=%d", session, driver.PendingEventCount())
 			}
 		})
 	}

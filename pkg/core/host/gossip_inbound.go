@@ -1,6 +1,7 @@
 package host
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 
@@ -21,12 +22,7 @@ func (driver *GossipDriver) handleGossipMessage(ctx context.Context, message *go
 		if message.Ping == nil {
 			return nil, nil
 		}
-		active := driver.Gossip.Session(peerID) != nil
-		var events []gossip.SyncEvent
-		if active && message.Ping.Summary != nil {
-			events = append(events, &gossip.CatalogSummaryReceivedEvent{PeerID: peerID, Summary: message.Ping.Summary})
-		}
-		return events, driver.respondGossipPing(ctx, message, active, sender)
+		return driver.respondGossipPing(ctx, message, sender)
 	case gossip.MessagePong:
 		if message.Pong != nil && driver.Gossip.Session(peerID) != nil {
 			return []gossip.SyncEvent{&gossip.PongReceivedEvent{PeerID: peerID, Pong: message.Pong}}, nil
@@ -58,36 +54,45 @@ func (driver *GossipDriver) handleGossipMessage(ctx context.Context, message *go
 	return nil, nil
 }
 
-func (driver *GossipDriver) respondGossipPing(ctx context.Context, message *gossip.Message, active bool, sender GossipSender) error {
+func (driver *GossipDriver) respondGossipPing(ctx context.Context, message *gossip.Message, sender GossipSender) ([]gossip.SyncEvent, error) {
 	summary := driver.GossipCatalogSummary()
 	if summary == nil {
-		return nil
+		return nil, nil
 	}
-	if !active {
-		driver.observeCatalogSummary(message.PeerID, message.Ping.Summary, driver.schedulerForRead().clock.Now())
+	peerID := message.PeerID
+	if err := sender.SendGossip(ctx, gossip.OutboundMessage{PeerID: peerID, Message: &gossip.Message{
+		Type: gossip.MessagePong, Pong: &gossip.Pong{Summary: summary},
+	}}); err != nil {
+		driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseSend, PeerID: peerID, Err: err})
 	}
-	for _, response := range gossip.PlanPingResponse(message.Ping, summary) {
-		// The Ping summary is already delivered to the active session.
-		if active && response.Type == gossip.MessageFetchCatalogPage {
-			continue
+	remote := message.Ping.Summary
+	if remote == nil {
+		return nil, nil
+	}
+	session := driver.Gossip.Session(peerID)
+	if session != nil && session.State != gossip.SyncSessionIdle {
+		return []gossip.SyncEvent{&gossip.CatalogSummaryReceivedEvent{PeerID: peerID, Summary: remote}}, nil
+	}
+	now := driver.schedulerForRead().clock.Now()
+	driver.observeCatalogSummary(peerID, remote, now)
+	if session == nil {
+		if bytes.Equal(remote.CatalogRoot, summary.CatalogRoot) {
+			if err := driver.commitGossipEventCheckpoint(ctx, &gossip.SyncSession{PeerID: peerID, State: gossip.SyncSessionCompleted}, now); err != nil {
+				return nil, err
+			}
+			driver.observeSyncHint(peerID, "ping_summary_match", "", true, now)
+			driver.logGossip(slog.LevelDebug, "ping_summary_shortcut", peerID, "session", nil, map[string]any{"reason": "catalog_root_match"})
+			return nil, nil
 		}
-		if err := sender.SendGossip(ctx, gossip.OutboundMessage{PeerID: message.PeerID, Message: response}); err != nil {
-			driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseSend, PeerID: message.PeerID, Err: err})
+		if driver.gossipObjectPullDraining(peerID) {
+			driver.Gossip.DeferHint(peerID)
+			driver.observeSyncHint(peerID, "ping_summary", "pulls_draining", false, now)
+			return nil, nil
 		}
+		driver.Gossip.NewSession(peerID)
 	}
-	if active || message.Ping.Summary == nil {
-		return nil
-	}
-	if !gossip.CatalogRootsMatch(message.Ping.Summary, summary) {
-		_ = driver.StartGossipSession(message.PeerID, "ping_summary")
-		return nil
-	}
-	if err := driver.commitGossipEventCheckpoint(ctx, &gossip.SyncSession{PeerID: message.PeerID, State: gossip.SyncSessionCompleted}, driver.schedulerForRead().clock.Now()); err != nil {
-		return err
-	}
-	driver.observeSyncHint(message.PeerID, "ping_summary_match", "", true, driver.schedulerForRead().clock.Now())
-	driver.logGossip(slog.LevelDebug, "ping_summary_shortcut", message.PeerID, "session", nil, map[string]any{"reason": "catalog_root_match"})
-	return nil
+	driver.observeSyncHint(peerID, "ping_summary", "", true, now)
+	return []gossip.SyncEvent{&gossip.SyncTimerEvent{PeerID: peerID, LocalSummary: summary, RemoteSummary: remote}}, nil
 }
 
 func (driver *GossipDriver) respondGossipCatalogPage(ctx context.Context, message *gossip.Message, sender GossipSender, budget int) {
