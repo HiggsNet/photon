@@ -15,7 +15,7 @@ func testSentChunks(transferID []byte) []*ObjectChunk {
 	return chunks
 }
 
-func TestSentChunkCacheRepairsMissingWithoutDuplicateAmplification(t *testing.T) {
+func TestSentChunkCacheRetriesMissingChunksWithinRoundLimit(t *testing.T) {
 	now := time.Unix(100, 0)
 	id := []byte("0123456789abcdef")
 	cache := NewSentChunkCache()
@@ -27,8 +27,13 @@ func TestSentChunkCacheRepairsMissingWithoutDuplicateAmplification(t *testing.T)
 	if len(got) != 2 || got[0].Index != 0 || got[1].Index != 2 {
 		t.Fatalf("repair = %#v", got)
 	}
-	if duplicate := cache.Repair("peer-a", nack, now); len(duplicate) != 0 {
-		t.Fatalf("duplicate repair sent %d chunks", len(duplicate))
+	for retry := 1; retry < MaxChunkRepairRounds; retry++ {
+		if got := cache.Repair("peer-a", nack, now.Add(time.Duration(retry)*time.Second)); len(got) != 2 {
+			t.Fatalf("lost repair could not be retried: %d chunks", len(got))
+		}
+	}
+	if excess := cache.Repair("peer-a", nack, now); len(excess) != 0 {
+		t.Fatalf("repair exceeded retry limit: %d chunks", len(excess))
 	}
 }
 
@@ -75,10 +80,10 @@ func TestChunkAssemblyQuietNACKRepairsOutOfOrderLoss(t *testing.T) {
 			t.Fatalf("add[%d]: complete=%t err=%v", index, complete, err)
 		}
 	}
-	if deadline, ok := store.RepairDeadline("peer-a", chunks[0]); !ok || !deadline.Equal(now.Add(ChunkRepairQuiet)) {
+	if deadline, ok := store.RepairDeadline("peer-a", id); !ok || !deadline.Equal(now.Add(ChunkRepairQuiet)) {
 		t.Fatalf("repair deadline = %v, %t", deadline, ok)
 	}
-	nack := store.BuildRepairNACK("peer-a", id)
+	nack := store.BuildRepairNACK("peer-a", id, now)
 	if nack == nil || len(nack.Missing) != 1 || nack.Missing[0] != 1 {
 		t.Fatalf("nack = %#v", nack)
 	}
@@ -112,7 +117,7 @@ func TestChunkAssemblyCloseDiscardsPendingRepair(t *testing.T) {
 	}
 	store.Close()
 	store.Close()
-	if nack := store.BuildRepairNACK("peer-a", id); nack != nil {
+	if nack := store.BuildRepairNACK("peer-a", id, time.Now()); nack != nil {
 		t.Fatalf("repair remains after close: %#v", nack)
 	}
 }

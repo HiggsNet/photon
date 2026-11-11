@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -202,6 +203,9 @@ func (driver *GossipDriver) GossipSessionEventFor(event Event) (gossip.SyncEvent
 		case gossip.TimerKindCatalogPage:
 			return &gossip.CatalogPageTimeoutEvent{PeerID: typed.ID.Owner}, true
 		default:
+			if path, ok := strings.CutPrefix(typed.ID.Key, gossip.TimerKindChunkPrefix); ok {
+				return &gossip.ObjectChunkEvent{PeerID: typed.ID.Owner, Zone: zone.ZonePath(path), Err: errors.New("chunk transfer timeout")}, true
+			}
 			return nil, false
 		}
 	default:

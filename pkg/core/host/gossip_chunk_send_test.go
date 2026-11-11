@@ -46,6 +46,32 @@ func consumeChunkSendTimer(t *testing.T, driver *GossipDriver, clock *fakeClock,
 	return err
 }
 
+func TestGossipChunkSendLargeObjectSurvivesRepairCacheTTL(t *testing.T) {
+	driver, clock, transport, datagram, _ := chunkSendFixture(t, gossip.QuotaConfig{})
+	snapshot := &corestate.ZoneSnapshot{Zone: "large.catofes.", Records: map[string]*zone.Record{
+		"large": {Zone: "large.catofes.", Key: "large", Value: bytes.Repeat([]byte("x"), 6<<20)},
+	}}
+	chunks, err := driver.buildGossipSnapshotChunks("peer", snapshot, gossip.DefaultDatagramBudget, clock.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := clock.Now()
+	if err := driver.queueGossipChunkSend(t.Context(), "peer", chunks, gossipDriverSender{transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	for steps := 0; len(driver.gossipChunkSends) > 0; steps++ {
+		if steps > 1000 {
+			t.Fatal("large paced object did not finish")
+		}
+		if err := consumeChunkSendTimer(t, driver, clock, 125*time.Millisecond); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if datagram.writeCount() != len(chunks) || clock.Now().Sub(started) <= gossip.ChunkTransferTTL {
+		t.Fatalf("large transfer sent %d/%d parts in %v", datagram.writeCount(), len(chunks), clock.Now().Sub(started))
+	}
+}
+
 func TestGossipChunkSendResumesAfterQuotaWithoutBlockingOtherPeers(t *testing.T) {
 	driver, clock, transport, datagram, chunks := chunkSendFixture(t, gossip.QuotaConfig{ObjectRate: 16, ObjectBurst: 8})
 	reply := &net.UDPAddr{IP: net.ParseIP("198.51.100.2"), Port: 45678}
@@ -150,7 +176,7 @@ func TestGossipChunkSendExpiresAndStops(t *testing.T) {
 		t.Fatal(err)
 	}
 	writes := datagram.writeCount()
-	if err := consumeChunkSendTimer(t, driver, clock, gossip.ChunkTransferTTL); err != nil {
+	if err := consumeChunkSendTimer(t, driver, clock, transport.ChunkSendBudget(len(chunks))); err != nil {
 		t.Fatal(err)
 	}
 	if len(driver.gossipChunkSends) != 0 || datagram.writeCount() != writes {

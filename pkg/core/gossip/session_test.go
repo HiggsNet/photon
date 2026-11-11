@@ -144,7 +144,7 @@ func TestSyncSessionCatalogPageStartsObjectPull(t *testing.T) {
 	if s.State != SyncSessionObjectPulling {
 		t.Fatalf("expected state object_pulling, got %s", s.State)
 	}
-	assertActionTypes(t, actions, []string{"StartObjectPullAction"})
+	assertActionTypes(t, actions, []string{"StartObjectPullAction", "CancelTimerAction", "StartTimerAction"})
 	if s.pendingZones["catofes."].stage != zoneWaitingTCP {
 		t.Fatalf("catalog diff did not mark zone pending/inflight")
 	}
@@ -190,12 +190,12 @@ func TestSyncSessionCatalogPageRefreshesOnceOnRootMismatch(t *testing.T) {
 	if s.State != SyncSessionCatalogDiffing {
 		t.Fatalf("expected catalog refresh, got %s", s.State)
 	}
-	assertActionTypes(t, actions, []string{"SendFetchCatalogPageAction", "StartTimerAction"})
+	assertActionTypes(t, actions, []string{"SendFetchCatalogPageAction", "StartTimerAction", "StartTimerAction"})
 	actions, err = s.OnEvent(&CatalogPageReceivedEvent{PeerID: "peer-a", Page: &corestate.CatalogPage{CatalogRoot: []byte("wrong-root"), Entries: remote, NextCursor: "1"}}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertActionTypes(t, actions, []string{"SendFetchCatalogPageAction", "StartTimerAction"})
+	assertActionTypes(t, actions, []string{"SendFetchCatalogPageAction", "StartTimerAction", "StartTimerAction"})
 	actions, err = s.OnEvent(&CatalogPageReceivedEvent{PeerID: "peer-a", Page: &corestate.CatalogPage{CatalogRoot: []byte("wrong-again")}}, now)
 	if err != nil {
 		t.Fatal(err)
@@ -227,7 +227,7 @@ func TestSyncSessionCatalogPageBeforeTimerDoesNotPanic(t *testing.T) {
 	if s.State != SyncSessionObjectPulling {
 		t.Fatalf("expected state object_pulling, got %s", s.State)
 	}
-	assertActionTypes(t, actions, []string{"StartObjectPullAction"})
+	assertActionTypes(t, actions, []string{"StartObjectPullAction", "CancelTimerAction", "StartTimerAction"})
 }
 
 func TestSyncSessionConcurrentObjectPullsComplete(t *testing.T) {
@@ -308,7 +308,7 @@ func TestSyncSessionConcurrentObjectPullsOneError(t *testing.T) {
 	if s.State != SyncSessionObjectPulling {
 		t.Fatalf("expected state object_pulling after first error with in-flight pull, got %s", s.State)
 	}
-	assertActionTypes(t, actions1, []string{"SendChunkFallbackAction"})
+	assertActionTypes(t, actions1, []string{"SendChunkFallbackAction", "StartTimerAction"})
 
 	// Second pull succeeds. Because a zone needs chunk fallback, we transition
 	// to chunk_fallback instead of completed.
@@ -376,7 +376,7 @@ func TestSyncSessionObjectPullErrorFallsBackToChunk(t *testing.T) {
 	if s.State != SyncSessionChunkFallback {
 		t.Fatalf("expected state chunk_fallback, got %s", s.State)
 	}
-	assertActionTypes(t, actions, []string{"SendChunkFallbackAction"})
+	assertActionTypes(t, actions, []string{"SendChunkFallbackAction", "StartTimerAction"})
 	fz := actions[0].(SendChunkFallbackAction)
 	if fz.Zone != "node-a.catofes." {
 		t.Fatalf("unexpected fetch zone action: %+v", fz)
@@ -402,7 +402,7 @@ func TestSyncSessionChunkComplete(t *testing.T) {
 	if s.State != SyncSessionChunkFallback {
 		t.Fatalf("expected state chunk_fallback while apply is pending, got %s", s.State)
 	}
-	assertActionTypes(t, actions, []string{"ApplySnapshotAction"})
+	assertActionTypes(t, actions, []string{"ApplySnapshotAction", "CancelTimerAction"})
 	if apply := actions[0].(ApplySnapshotAction); apply.Via != "udp_chunks" {
 		t.Fatalf("chunk apply via = %q, want udp_chunks", apply.Via)
 	}

@@ -30,7 +30,7 @@ func (driver *GossipDriver) HandleGossipObjectChunk(message *gossip.Message, now
 		return &gossip.ObjectChunkEvent{PeerID: message.PeerID, Zone: chunk.Zone, Err: err}, err
 	}
 	if !complete {
-		return nil, driver.ScheduleGossipChunkRepair(message.PeerID, chunk)
+		return nil, driver.ScheduleGossipChunkRepair(message.PeerID, chunk.TransferID)
 	}
 	if chunk.Object != gossip.ObjectPullZone {
 		return nil, nil
@@ -69,7 +69,7 @@ func (driver *GossipDriver) AddGossipObjectChunk(peerID string, chunk *gossip.Ob
 
 // ScheduleGossipChunkRepair puts the gossip-selected quiet deadline onto the
 // one GossipDriver scheduler. No protocol package creates a timer or goroutine.
-func (driver *GossipDriver) ScheduleGossipChunkRepair(peerID string, chunk *gossip.ObjectChunk) error {
+func (driver *GossipDriver) ScheduleGossipChunkRepair(peerID string, transferID []byte) error {
 	if driver == nil || driver.gossipChunks == nil {
 		return ErrGossipChunkStoreUnavailable
 	}
@@ -79,11 +79,11 @@ func (driver *GossipDriver) ScheduleGossipChunkRepair(peerID string, chunk *goss
 		return ErrGossipDriverStopped
 	}
 	scheduler := driver.scheduler
-	deadline, ok := driver.gossipChunks.RepairDeadline(peerID, chunk)
+	deadline, ok := driver.gossipChunks.RepairDeadline(peerID, transferID)
 	if !ok {
 		return nil
 	}
-	_, err := scheduler.Schedule(gossipChunkRepairTimerID(peerID, chunk.TransferID), deadline)
+	_, err := scheduler.Schedule(gossipChunkRepairTimerID(peerID, transferID), deadline)
 	return err
 }
 

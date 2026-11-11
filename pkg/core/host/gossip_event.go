@@ -249,12 +249,10 @@ func (driver *GossipDriver) acceptGossipInboundPath(ctx context.Context, packet 
 	}
 }
 
-func (driver *GossipDriver) finishGossipSession(ctx context.Context, session *gossip.SyncSession, now time.Time) {
+func (driver *GossipDriver) finishGossipSession(session *gossip.SyncSession) {
 	peerID := session.PeerID
 	driver.CancelGossipTimers(peerID)
-	if session.State == gossip.SyncSessionCompleted && session.NetworkChanged() {
-		driver.RelayGossipUpdate(ctx, peerID, now)
-	}
+	driver.dropGossipPeerChunks(peerID)
 	driver.removeGossipSession(peerID)
 	driver.startDeferredGossipSession(peerID)
 }
@@ -386,15 +384,15 @@ func (driver *GossipDriver) handleGossipSessionEvent(ctx context.Context, event 
 		driver.logGossip(slog.LevelDebug, "event_dropped", peerID, "session", errGossipSessionNotFound, nil)
 		return false, nil, nil
 	}
-	if _, ok := event.(*gossip.RoundTimeoutEvent); ok {
-		driver.dropGossipPeerChunks(peerID)
-	}
 	if typed, ok := event.(*gossip.ChunkRepairTimeoutEvent); ok {
-		nack := driver.gossipChunks.BuildRepairNACK(peerID, typed.TransferID)
+		nack := driver.gossipChunks.BuildRepairNACK(peerID, typed.TransferID, now)
 		if nack == nil {
 			return false, nil, nil
 		}
 		err := sender.SendGossip(ctx, gossip.OutboundMessage{PeerID: peerID, Message: &gossip.Message{Type: gossip.MessageObjectChunkNACK, ObjectChunkNACK: nack}})
+		if scheduleErr := driver.ScheduleGossipChunkRepair(peerID, typed.TransferID); scheduleErr != nil {
+			driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseTimer, PeerID: peerID, Err: scheduleErr})
+		}
 		if err != nil {
 			driver.reportGossipIssue(GossipExecutionIssue{Phase: GossipPhaseSend, PeerID: peerID, Err: err})
 			return false, nil, nil
@@ -404,6 +402,8 @@ func (driver *GossipDriver) handleGossipSessionEvent(ctx context.Context, event 
 	}
 	catalog := driver.readGossipCatalog()
 	switch typed := event.(type) {
+	case *gossip.SyncTimerEvent:
+		typed.DatagramBudget = driver.Transport().MaxMessageBytes()
 	case *gossip.PongReceivedEvent:
 		if typed.Pong != nil && typed.Pong.Summary != nil {
 			driver.observeCatalogSummary(peerID, typed.Pong.Summary, now)
@@ -435,7 +435,9 @@ func (driver *GossipDriver) handleGossipSessionEvent(ctx context.Context, event 
 		session.Fail(protocolErr)
 	}
 	execution := driver.ExecuteGossipActions(ctx, session, catalog, actions, sender)
-	session.AccumulateNetworkChanged(execution.NetworkChanged)
+	if execution.NetworkChanged {
+		driver.RelayGossipUpdate(ctx, peerID, now)
+	}
 	trigger := gossip.SyncEventName(event)
 	driver.observeActivePull(peerID, trigger, session, now)
 	if protocolErr != nil {
@@ -460,7 +462,7 @@ func (driver *GossipDriver) handleGossipSessionEvent(ctx context.Context, event 
 				}
 			}
 		}
-		driver.finishGossipSession(ctx, session, now)
+		driver.finishGossipSession(session)
 	}
 	return execution.NetworkChanged, execution.Events, nil
 }

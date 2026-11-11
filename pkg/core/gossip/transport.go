@@ -174,6 +174,14 @@ func (t *Transport) MaxMessageBytes() int {
 	return t.maxMessageBytes
 }
 
+// ChunkSendBudget uses this transport's actual limiter, including custom rates.
+func (t *Transport) ChunkSendBudget(chunks int) time.Duration {
+	if t == nil || t.quotas == nil {
+		return ChunkTransferTTL
+	}
+	return t.quotas.config.TransferBudget(int64(chunks)*int64(t.maxMessageBytes), int64(chunks))
+}
+
 // PeerID returns the local peer ID attached to outbound messages.
 func (t *Transport) PeerID() string {
 	if t == nil {

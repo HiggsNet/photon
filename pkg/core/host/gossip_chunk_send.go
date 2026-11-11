@@ -31,6 +31,10 @@ func (driver *GossipDriver) queueGossipChunkSend(ctx context.Context, peerID str
 		return nil
 	}
 	id := gossipChunkSendTimerID(peerID, chunks[0].TransferID)
+	budget := gossip.ChunkTransferTTL
+	if transport := driver.gossipTransportForRead(); transport != nil {
+		budget = transport.ChunkSendBudget(len(chunks))
+	}
 	driver.mu.Lock()
 	if driver.stopped {
 		driver.mu.Unlock()
@@ -39,11 +43,13 @@ func (driver *GossipDriver) queueGossipChunkSend(ctx context.Context, peerID str
 	}
 	job := driver.gossipChunkSends[id]
 	if job == nil {
-		if !driver.gossipSentChunks.Activate(peerID, chunks[0].TransferID, driver.scheduler.clock.Now()) {
+		now := driver.scheduler.clock.Now()
+		expires := now.Add(budget)
+		if !driver.gossipSentChunks.Activate(peerID, chunks[0].TransferID, now, expires) {
 			driver.mu.Unlock()
 			return nil
 		}
-		job = &gossipChunkSend{sender: sender, transferID: append([]byte(nil), chunks[0].TransferID...), expires: driver.scheduler.clock.Now().Add(gossip.ChunkTransferTTL)}
+		job = &gossipChunkSend{sender: sender, transferID: append([]byte(nil), chunks[0].TransferID...), expires: expires}
 		driver.gossipChunkSends[id] = job
 	}
 	driver.mu.Unlock()

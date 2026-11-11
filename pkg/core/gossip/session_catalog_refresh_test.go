@@ -64,7 +64,7 @@ func TestSyncSessionCatalogDriftWithVerifiedSnapshots(t *testing.T) {
 				return result.Outcomes[0].Err
 			}
 			event(&SyncTimerEvent{PeerID: "peer-a"})
-			assertActionTypes(t, page(snapshots[0]), []string{"StartObjectPullAction"})
+			assertActionTypes(t, page(snapshots[0]), []string{"StartObjectPullAction", "CancelTimerAction", "StartTimerAction"})
 			// The sender updates its endpoint after advertising v1, so the TCP
 			// read returns v2. No snapshot is accepted on this mismatch.
 			firstErr := apply(snapshots[1])
@@ -76,7 +76,7 @@ func TestSyncSessionCatalogDriftWithVerifiedSnapshots(t *testing.T) {
 				t.Fatal("first drift changed state or recorded rejection")
 			}
 			refresh := event(&SnapshotAppliedEvent{PeerID: "peer-a", Zone: "catofes.", Err: firstErr})
-			assertActionTypes(t, refresh, []string{"SendFetchCatalogPageAction", "StartTimerAction"})
+			assertActionTypes(t, refresh, []string{"SendFetchCatalogPageAction", "StartTimerAction", "StartTimerAction"})
 			if timer := refresh[1].(StartTimerAction); timer.Kind != TimerKindCatalogPage || !timer.Deadline.Equal(now.Add(s.catalogPageTimeout())) {
 				t.Fatalf("refresh timer = %#v", timer)
 			}
@@ -84,7 +84,7 @@ func TestSyncSessionCatalogDriftWithVerifiedSnapshots(t *testing.T) {
 			if outcome == "invalid signature" {
 				fetched.Records[EndpointRecordKeyUDP].Signature[0] ^= 1
 			}
-			assertActionTypes(t, page(fetched), []string{"StartObjectPullAction"})
+			assertActionTypes(t, page(fetched), []string{"StartObjectPullAction", "CancelTimerAction", "StartTimerAction"})
 			if outcome == "already committed through another peer" {
 				// Replay the LAX sequence: the relay still expects v2 while
 				// the owner independently commits v3 before the pull returns.
@@ -170,7 +170,11 @@ func TestSyncSessionCatalogRefreshDrainsOutstandingWork(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				assertActionTypes(t, actions, []string{"ApplySnapshotAction"})
+				want := []string{"ApplySnapshotAction"}
+				if waiting == "chunk" {
+					want = append(want, "CancelTimerAction")
+				}
+				assertActionTypes(t, actions, want)
 			}
 			var e SyncEvent = &SnapshotAppliedEvent{PeerID: "peer-a", Zone: "waiting.catofes."}
 			if waiting == "page" {
@@ -180,7 +184,7 @@ func TestSyncSessionCatalogRefreshDrainsOutstandingWork(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			assertActionTypes(t, actions, []string{"SendFetchCatalogPageAction", "StartTimerAction"})
+			assertActionTypes(t, actions, []string{"SendFetchCatalogPageAction", "StartTimerAction", "StartTimerAction"})
 			if !s.catalogRefreshed || s.State != SyncSessionCatalogDiffing {
 				t.Fatal("did not refresh after draining")
 			}
@@ -188,7 +192,7 @@ func TestSyncSessionCatalogRefreshDrainsOutstandingWork(t *testing.T) {
 	}
 }
 
-func TestSyncSessionCatalogRefreshKeepsRoundTimeout(t *testing.T) {
+func TestSyncSessionCatalogRefreshHasControlDeadline(t *testing.T) {
 	now := time.Unix(1000, 0)
 	s := NewSyncSession("peer-a")
 	s.State = SyncSessionObjectPulling
@@ -197,14 +201,14 @@ func TestSyncSessionCatalogRefreshKeepsRoundTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertActionTypes(t, refresh, []string{"SendFetchCatalogPageAction", "StartTimerAction"})
+	assertActionTypes(t, refresh, []string{"SendFetchCatalogPageAction", "StartTimerAction", "StartTimerAction"})
 	actions, err := s.OnEvent(&RoundTimeoutEvent{PeerID: "peer-a"}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertActionTypes(t, actions, []string{"CancelTimerAction"})
 	if s.State != SyncSessionFailed {
-		t.Fatal("refresh escaped original round deadline")
+		t.Fatal("refresh escaped its control deadline")
 	}
 }
 
@@ -240,11 +244,11 @@ func TestSyncSessionCatalogDeduplicationBoundaries(t *testing.T) {
 		step(t, s, start, "SendPingAction", "StartTimerAction")
 		step(t, s, summary, "SendFetchCatalogPageAction", "StartTimerAction")
 		first := page(oldRoot, "18")
-		step(t, s, first, "SendFetchCatalogPageAction", "StartTimerAction")
-		step(t, s, page(newRoot, ""), "SendFetchCatalogPageAction", "StartTimerAction")
+		step(t, s, first, "SendFetchCatalogPageAction", "StartTimerAction", "StartTimerAction")
+		step(t, s, page(newRoot, ""), "SendFetchCatalogPageAction", "StartTimerAction", "StartTimerAction")
 		step(t, s, first)
 		step(t, s, summary)
-		step(t, s, page(newRoot, "18"), "SendFetchCatalogPageAction", "StartTimerAction")
+		step(t, s, page(newRoot, "18"), "SendFetchCatalogPageAction", "StartTimerAction", "StartTimerAction")
 		step(t, s, page(oldRoot, ""))
 		step(t, s, page(newRoot, ""))
 		if s.State != SyncSessionCompleted {
@@ -256,15 +260,15 @@ func TestSyncSessionCatalogDeduplicationBoundaries(t *testing.T) {
 		step(t, s, start, "SendPingAction", "StartTimerAction")
 		step(t, s, summary, "SendFetchCatalogPageAction", "StartTimerAction")
 		last := page(oldRoot, "", corestate.ZoneDigest{Zone: "changed.catofes.", RootHash: []byte("record root")})
-		step(t, s, last, "StartObjectPullAction")
+		step(t, s, last, "StartObjectPullAction", "CancelTimerAction", "StartTimerAction")
 		step(t, s, last)
 		step(t, s, summary)
 		if work := s.pendingZones["changed.catofes."]; s.State != SyncSessionObjectPulling || work.stage != zoneWaitingTCP {
 			t.Fatalf("state = %s, zone stage = %v", s.State, work.stage)
 		}
 		step(t, s, &ObjectPullResultEvent{PeerID: peer, Zone: "changed.catofes.", Snapshot: &corestate.ZoneSnapshot{Zone: "changed.catofes."}}, "ApplySnapshotAction")
-		step(t, s, &SnapshotAppliedEvent{PeerID: peer, Zone: "changed.catofes.", Err: corestate.ErrSnapshotRootMismatch}, "SendFetchCatalogPageAction", "StartTimerAction")
+		step(t, s, &SnapshotAppliedEvent{PeerID: peer, Zone: "changed.catofes.", Err: corestate.ErrSnapshotRootMismatch}, "SendFetchCatalogPageAction", "StartTimerAction", "StartTimerAction")
 		// Snapshot drift alone does not establish that the catalog changed.
-		step(t, s, last, "StartObjectPullAction")
+		step(t, s, last, "StartObjectPullAction", "CancelTimerAction", "StartTimerAction")
 	})
 }

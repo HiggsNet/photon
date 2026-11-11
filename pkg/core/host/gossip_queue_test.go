@@ -156,7 +156,6 @@ func TestGossipQueueInternalBudgetYieldsAndRetainsAllResults(t *testing.T) {
 	// Finishing a round does not report its earlier commit a second time.
 	other := driver.Gossip.NewSession("peer-b")
 	other.State = gossip.SyncSessionSummarySent
-	other.AccumulateNetworkChanged(true)
 	driver.completions <- GossipEvent{Value: &gossip.PongReceivedEvent{PeerID: "peer-b", Pong: &gossip.Pong{Summary: corestate.CatalogSummaryFor(nil)}}}
 	result, err := driver.HandleGossipHostEvent(t.Context(), <-driver.Completions(), now)
 	if err != nil || result || driver.Gossip.Session("peer-b") != nil || driver.Gossip.Session(peerIDs[2*(maxGossipEventBatch-1)]) != nil || driver.Gossip.Session(peerIDs[2*(maxGossipEventBatch-1)+1]) == nil {

@@ -2,6 +2,7 @@ package host
 
 import (
 	"crypto/sha256"
+	"errors"
 	"testing"
 	"time"
 
@@ -38,7 +39,7 @@ func TestGossipDriverHandleGossipObjectChunkReturnsCompletion(t *testing.T) {
 	}
 }
 
-func TestGossipDriverReportsChunkDecodeFailureWithoutCheckpoint(t *testing.T) {
+func TestGossipDriverOnlyDecodesRequestedChunks(t *testing.T) {
 	now := time.Unix(100, 0)
 	store := &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}
 	driver := NewGossipDriver(nil, 2, store, GossipDriverConfig{})
@@ -50,19 +51,29 @@ func TestGossipDriverReportsChunkDecodeFailureWithoutCheckpoint(t *testing.T) {
 		Zone: "remote.catofes.", RootHash: []byte("advertised-root"), ObjectHash: hash[:], Index: 0, Total: 1, Data: data,
 	}
 	var logs []capturedGossipLog
-	driver.gossipConfig.Log = gossipLogCapture(func(record capturedGossipLog) { logs = append(logs, record) })
+	driver.gossipConfig.Log = gossipLogCapture(func(record capturedGossipLog) {
+		if record.Level == "warn" {
+			logs = append(logs, record)
+		}
+	})
 	bindMemoryGossipTransport(t, driver, "peer-a")
-	driver.Gossip.NewSession("peer-a").State = gossip.SyncSessionSummarySent
+	session := driver.Gossip.NewSession("peer-a")
 	packet := GossipPacketReceived{Packet: &gossip.Packet{Message: &gossip.Message{
 		Type: gossip.MessageObjectChunk, PeerID: "peer-a", ObjectChunk: chunk,
 	}}}
+	if _, err := driver.HandleGossipHostEvent(t.Context(), packet, now); err != nil || len(logs) != 0 || len(store.updates) != 0 {
+		t.Fatalf("unsolicited chunk produced work: error=%v logs=%v updates=%v", err, logs, store.updates)
+	}
+	_, _ = session.OnEvent(&gossip.SyncTimerEvent{PeerID: "peer-a"}, now)
+	_, _ = session.OnEvent(&gossip.CatalogPageReceivedEvent{PeerID: "peer-a", Page: &corestate.CatalogPage{Entries: []corestate.ZoneDigest{{Zone: chunk.Zone, RootHash: chunk.RootHash}}}}, now)
+	_, _ = session.OnEvent(&gossip.ObjectPullResultEvent{PeerID: "peer-a", Zone: chunk.Zone, Unreachable: true, Err: errors.New("unreachable")}, now)
 	if _, err := driver.HandleGossipHostEvent(t.Context(), packet, now); err != nil {
 		t.Fatalf("packet error escaped the Driver: %v", err)
 	}
 	if len(logs) != 1 || logs[0].Event != "packet_failed" || logs[0].Err == nil || logs[0].PeerID != "peer-a" || logs[0].Fields["component"] != "gossip" {
 		t.Fatalf("packet warnings = %#v", logs)
 	}
-	if len(store.updates) != 0 {
+	if len(store.updates) != 1 || session.State != gossip.SyncSessionFailed {
 		t.Fatalf("checkpoint updates = %#v", store.updates)
 	}
 }

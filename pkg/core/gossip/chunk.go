@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -55,9 +54,9 @@ type chunkAssembly struct {
 	chunks       [][]byte
 	received     int
 	bytes        int
-	created      time.Time
 	updated      time.Time
 	repairRounds int
+	lastRepair   time.Time
 }
 
 // ChunkAssemblyStore verifies and assembles bounded out-of-order object
@@ -109,7 +108,6 @@ func (s *ChunkAssemblyStore) Add(peerID string, chunk *ObjectChunk, now time.Tim
 			transferID: append([]byte(nil), chunk.TransferID...),
 			total:      chunk.Total,
 			chunks:     make([][]byte, chunk.Total),
-			created:    now,
 		}
 		s.entries[key] = entry
 	}
@@ -124,12 +122,12 @@ func (s *ChunkAssemblyStore) Add(peerID string, chunk *ObjectChunk, now time.Tim
 		entry.chunks[chunk.Index] = append([]byte(nil), chunk.Data...)
 		entry.received++
 		entry.bytes += len(chunk.Data)
+		entry.updated = now
 		if entry.bytes > MaxChunkObjectBytes {
 			delete(s.entries, key)
 			return nil, false, fmt.Errorf("chunk object exceeds max %d bytes", MaxChunkObjectBytes)
 		}
 	}
-	entry.updated = now
 	if entry.received != int(entry.total) {
 		return nil, false, nil
 	}
@@ -151,22 +149,26 @@ func (s *ChunkAssemblyStore) Add(peerID string, chunk *ObjectChunk, now time.Tim
 
 // RepairDeadline returns the quiet-period deadline for an incomplete transfer.
 // Scheduling resources are owned by GossipDriver.
-func (s *ChunkAssemblyStore) RepairDeadline(peerID string, chunk *ObjectChunk) (time.Time, bool) {
-	if s == nil || chunk == nil {
+func (s *ChunkAssemblyStore) RepairDeadline(peerID string, transferID []byte) (time.Time, bool) {
+	if s == nil {
 		return time.Time{}, false
 	}
-	key := chunkAssemblyKey(peerID, chunk)
+	key := peerID + "|" + hex.EncodeToString(transferID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entry := s.entries[key]
 	if entry == nil || entry.received == int(entry.total) || entry.repairRounds >= MaxChunkRepairRounds {
 		return time.Time{}, false
 	}
-	return entry.updated.Add(ChunkRepairQuiet), true
+	latest := entry.updated
+	if entry.lastRepair.After(latest) {
+		latest = entry.lastRepair
+	}
+	return latest.Add(ChunkRepairQuiet), true
 }
 
 // BuildRepairNACK consumes one repair round at a GossipDriver timer fire.
-func (s *ChunkAssemblyStore) BuildRepairNACK(peerID string, transferID []byte) *ObjectChunkNACK {
+func (s *ChunkAssemblyStore) BuildRepairNACK(peerID string, transferID []byte, now time.Time) *ObjectChunkNACK {
 	if s == nil || peerID == "" || len(transferID) == 0 {
 		return nil
 	}
@@ -182,12 +184,13 @@ func (s *ChunkAssemblyStore) BuildRepairNACK(peerID string, transferID []byte) *
 		return nil
 	}
 	entry.repairRounds++
+	entry.lastRepair = now
 	return &ObjectChunkNACK{TransferID: append([]byte(nil), entry.transferID...), Missing: missing}
 }
 
 func (s *ChunkAssemblyStore) pruneLocked(now time.Time) {
 	for key, entry := range s.entries {
-		if entry == nil || now.Sub(entry.updated) > ChunkAssemblyTTL && now.Sub(entry.created) > ChunkAssemblyTTL {
+		if entry == nil || now.Sub(entry.updated) > ChunkAssemblyTTL {
 			delete(s.entries, key)
 		}
 	}
@@ -224,10 +227,8 @@ type sentChunkTransfer struct {
 	transferID   []byte
 	chunks       []*ObjectChunk
 	bytes        int
-	created      time.Time
 	expires      time.Time
 	repairRounds int
-	lastRequest  string
 	active       bool
 	lastUsed     time.Time
 }
@@ -318,7 +319,7 @@ func (c *SentChunkCache) Put(peerID string, transferID []byte, chunks []*ObjectC
 			peerCount--
 		}
 	}
-	entry := &sentChunkTransfer{peerID: peerID, transferID: append([]byte(nil), transferID...), created: now, expires: now.Add(ChunkTransferTTL), active: true, lastUsed: now}
+	entry := &sentChunkTransfer{peerID: peerID, transferID: append([]byte(nil), transferID...), expires: now.Add(ChunkTransferTTL), active: true, lastUsed: now}
 	for _, chunk := range chunks {
 		copyChunk := cloneObjectChunk(chunk)
 		entry.bytes += len(copyChunk.Data)
@@ -347,9 +348,8 @@ func cloneObjectChunks(chunks []*ObjectChunk) []*ObjectChunk {
 	return out
 }
 
-// Activate pins an idle transfer before a resend or repair job starts. Repeated
-// requests cannot extend an already active job's lifetime.
-func (c *SentChunkCache) Activate(peerID string, transferID []byte, now time.Time) bool {
+// Activate pins a transfer for the finite deadline chosen by its send job.
+func (c *SentChunkCache) Activate(peerID string, transferID []byte, now, expires time.Time) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.pruneLocked(now)
@@ -357,9 +357,9 @@ func (c *SentChunkCache) Activate(peerID string, transferID []byte, now time.Tim
 	if entry == nil {
 		return false
 	}
-	if !entry.active {
-		entry.active = true
-		entry.expires = now.Add(ChunkTransferTTL)
+	entry.active = true
+	if expires.After(entry.expires) {
+		entry.expires = expires
 	}
 	entry.lastUsed = now
 	return true
@@ -402,19 +402,10 @@ func (c *SentChunkCache) Repair(peerID string, nack *ObjectChunkNACK, now time.T
 	}
 	indexes := append([]uint16(nil), nack.Missing...)
 	slices.Sort(indexes)
-	parts := make([]string, 0, len(indexes))
-	for _, index := range indexes {
-		parts = append(parts, string(rune(index)))
-	}
-	signature := strings.Join(parts, ",")
-	if signature == entry.lastRequest {
-		return nil
-	}
-	entry.lastRequest = signature
 	entry.repairRounds++
 	entry.lastUsed = now
 	result := make([]*ObjectChunk, 0, len(indexes))
-	for _, index := range indexes {
+	for _, index := range slices.Compact(indexes) {
 		if int(index) >= len(entry.chunks) || entry.chunks[index] == nil {
 			continue
 		}

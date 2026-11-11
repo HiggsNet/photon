@@ -172,7 +172,8 @@ func TestGossipDriverDrainsQueuedRepliesAfterSessionCompletes(t *testing.T) {
 func TestGossipDriverRoundTimeoutDropsOnlyItsPeerChunkAssemblies(t *testing.T) {
 	driver := NewGossipDriver(nil, 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState("local.catofes.")}}, GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
 	defer driver.Stop()
-	driver.Gossip.NewSession("peer-a")
+	session := driver.Gossip.NewSession("peer-a")
+	_, _ = session.OnEvent(&gossip.SyncTimerEvent{PeerID: "peer-a"}, time.Now())
 	id := []byte("0123456789abcdef")
 	first := &gossip.ObjectChunk{TransferID: id, Object: gossip.ObjectPullZone, Zone: "catofes.", ObjectHash: make([]byte, 32), Index: 0, Total: 2, Data: []byte("first")}
 	if _, complete, err := driver.AddGossipObjectChunk("peer-a", first, time.Now()); err != nil || complete {
@@ -218,7 +219,7 @@ func TestGossipDriverFinishesSessionAndStartsDeferredHint(t *testing.T) {
 	session.State = gossip.SyncSessionCompleted
 	driver.Gossip.DeferHint("peer-a")
 
-	driver.finishGossipSession(context.Background(), session, now)
+	driver.finishGossipSession(session)
 
 	if next := driver.Gossip.Session("peer-a"); next == nil || next == session {
 		t.Fatalf("expected replacement session, got %#v", next)
@@ -232,7 +233,7 @@ func TestGossipDriverFinishesSessionAndStartsDeferredHint(t *testing.T) {
 	}
 }
 
-func TestGossipDriverFinishesChangedSessionAndOwnsRelay(t *testing.T) {
+func TestGossipDriverRelayRecordsOnlyQueuedPeers(t *testing.T) {
 	now := time.Unix(100, 0)
 	view := loadedManagedGossipState("local.catofes.", "remote.catofes.")
 	writes := 0
@@ -249,15 +250,7 @@ func TestGossipDriverFinishesChangedSessionAndOwnsRelay(t *testing.T) {
 		},
 	})
 	defer driver.Stop()
-	session := driver.Gossip.NewSession("peer-b")
-	session.State = gossip.SyncSessionCompleted
-	session.AccumulateNetworkChanged(true)
-
-	driver.finishGossipSession(context.Background(), session, now)
-
-	if driver.Gossip.Session("peer-b") != nil {
-		t.Fatal("finished source session is still installed")
-	}
+	driver.RelayGossipUpdate(context.Background(), "peer-b", now)
 	wantRoot := corestate.CatalogRoot(corestate.ZoneDigests(view.State.Network))
 	if state.updates != 1 || writes != 0 {
 		t.Fatalf("relay state updates = %d, writes = %d, want 1/0", state.updates, writes)
@@ -295,6 +288,45 @@ func TestGossipDriverFinishesChangedSessionAndOwnsRelay(t *testing.T) {
 	}
 }
 
+func TestGossipDriverRelaysCommittedPrefixBeforeLaterPullFails(t *testing.T) {
+	now := time.Unix(1000, 0)
+	state := &memoryGossipStateStore{
+		views: []corestate.View{loadedManagedGossipState("local.catofes.", "a.")},
+		applyResult: corestate.RemoteBatchResult{
+			CommitResult: corestate.CommitResult{Committed: true, Changes: corestate.ChangeSet{NetworkChanged: true}},
+			Outcomes:     []corestate.RemoteApplyOutcome{{Zone: "a."}},
+		},
+	}
+	driver := NewGossipDriver(newFakeClock(now), 4, state, GossipDriverConfig{
+		PeerID: "local.catofes.", Discovery: GossipDiscoveryConfig{BootstrapPeers: []string{"neighbor"}},
+	})
+	defer driver.Stop()
+	session := driver.Gossip.NewSession("source")
+	_, _ = session.OnEvent(&gossip.SyncTimerEvent{PeerID: "source"}, now)
+	_, _ = session.OnEvent(&gossip.CatalogPageReceivedEvent{PeerID: "source", Page: &corestate.CatalogPage{
+		Entries: []corestate.ZoneDigest{{Zone: "a.", RootHash: []byte("a")}, {Zone: "b.", RootHash: []byte("b")}},
+	}}, now)
+	changed, events, err := driver.handleGossipSessionEvent(t.Context(), &gossip.ObjectPullResultEvent{
+		PeerID: "source", Zone: "a.", Snapshot: &corestate.ZoneSnapshot{Zone: "a."},
+	}, now, &memoryGossipController{})
+	if err != nil || !changed || session.Done() || driver.Gossip.Session("neighbor") == nil || driver.PendingEventCount() != 1 {
+		t.Fatalf("committed prefix waited for the round: changed=%t error=%v state=%s", changed, err, session.State)
+	}
+	for _, event := range events {
+		if _, _, err := driver.handleGossipSessionEvent(t.Context(), event, now, &memoryGossipController{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := driver.handleGossipSessionEvent(t.Context(), &gossip.ObjectPullResultEvent{
+		PeerID: "source", Zone: "b.", Err: errors.New("later pull failed"),
+	}, now, &memoryGossipController{}); err != nil {
+		t.Fatal(err)
+	}
+	if session.State != gossip.SyncSessionFailed || driver.Gossip.Session("source") != nil || driver.PendingEventCount() != 1 {
+		t.Fatal("round failure changed or repeated the already queued relay")
+	}
+}
+
 func TestGossipLocalRelaySkipsBackoffAndCountsOnlyQueuedPeers(t *testing.T) {
 	now := time.Unix(100, 0)
 	view := loadedManagedGossipState("local.catofes.", "remote.catofes.")
@@ -326,7 +358,7 @@ func TestGossipLocalRelaySkipsBackoffAndCountsOnlyQueuedPeers(t *testing.T) {
 	}
 }
 
-func TestGossipDriverSchedulerDeliversChunkRepairThroughCommonEventBridge(t *testing.T) {
+func TestGossipDriverRetriesLostChunkRepairThroughCommonEventBridge(t *testing.T) {
 	clock := newFakeClock(time.Unix(100, 0))
 	driver := NewGossipDriver(clock, 2, &memoryGossipStateStore{views: []corestate.View{loadedGossipState()}}, GossipDriverConfig{PeerID: "local.catofes.", Limits: corestate.DefaultSyncLimits()})
 	defer driver.Stop()
@@ -336,21 +368,26 @@ func TestGossipDriverSchedulerDeliversChunkRepairThroughCommonEventBridge(t *tes
 	if _, complete, err := driver.AddGossipObjectChunk("peer-a", chunk, clock.Now()); err != nil || complete {
 		t.Fatalf("add chunk: complete=%t err=%v", complete, err)
 	}
-	if err := driver.ScheduleGossipChunkRepair("peer-a", chunk); err != nil {
+	if err := driver.ScheduleGossipChunkRepair("peer-a", chunk.TransferID); err != nil {
 		t.Fatal(err)
-	}
-	clock.Advance(gossip.ChunkRepairQuiet)
-	hostEvent := <-driver.Completions()
-	event, ok := driver.GossipSessionEventFor(hostEvent)
-	if !ok {
-		t.Fatalf("host event %#v was not a gossip event", hostEvent)
 	}
 	controller := &memoryGossipController{}
-	if _, _, err := driver.handleGossipSessionEvent(context.Background(), event, clock.Now(), controller); err != nil {
-		t.Fatal(err)
+	for i := 0; i < gossip.MaxChunkRepairRounds; i++ {
+		clock.Advance(gossip.ChunkRepairQuiet)
+		hostEvent := receiveTimer(t, driver.Completions())
+		event, ok := driver.GossipSessionEventFor(hostEvent)
+		if !ok {
+			t.Fatalf("host event %#v was not a gossip event", hostEvent)
+		}
+		if _, _, err := driver.handleGossipSessionEvent(t.Context(), event, clock.Now(), controller); err != nil {
+			t.Fatal(err)
+		}
+		if len(controller.trace) != i+1 || controller.trace[i] != "send:object_chunk_nack" {
+			t.Fatalf("lost NACK was not retried: %v", controller.trace)
+		}
 	}
-	if want := []string{"send:object_chunk_nack"}; !reflect.DeepEqual(controller.trace, want) {
-		t.Fatalf("trace = %#v, want %#v", controller.trace, want)
+	if _, ok := driver.gossipChunks.RepairDeadline("peer-a", id); ok {
+		t.Fatal("exhausted repair kept scheduling requests")
 	}
 }
 

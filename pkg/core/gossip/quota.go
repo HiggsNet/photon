@@ -9,12 +9,32 @@ import (
 
 var ErrQuotaExceeded = errors.New("gossip peer quota exceeded")
 
+const (
+	defaultQuotaByteRate   = 256 << 10
+	defaultQuotaObjectRate = 128
+)
+
 type QuotaConfig struct {
 	ByteRate    int64
 	ByteBurst   int64
 	ObjectRate  int64
 	ObjectBurst int64
 	PeerTTL     time.Duration
+}
+
+// TransferBudget allows a paced transfer to drain at the configured rates,
+// allowing both peers' bounded pull windows to share the bidirectional quota,
+// followed by the ordinary repair retention window.
+func (config QuotaConfig) TransferBudget(bytes, objects int64) time.Duration {
+	byteRate, objectRate := config.ByteRate, config.ObjectRate
+	if byteRate <= 0 {
+		byteRate = defaultQuotaByteRate
+	}
+	if objectRate <= 0 {
+		objectRate = defaultQuotaObjectRate
+	}
+	seconds := max((bytes+byteRate-1)/byteRate, (objects+objectRate-1)/objectRate)
+	return 2*maxSessionObjectPulls*time.Duration(seconds)*time.Second + ChunkTransferTTL
 }
 
 type QuotaExceededError struct {
@@ -56,13 +76,13 @@ type quotaBucket struct {
 
 func NewPeerQuotas(config QuotaConfig) *PeerQuotas {
 	if config.ByteRate <= 0 {
-		config.ByteRate = 256 << 10
+		config.ByteRate = defaultQuotaByteRate
 	}
 	if config.ByteBurst <= 0 {
 		config.ByteBurst = config.ByteRate
 	}
 	if config.ObjectRate <= 0 {
-		config.ObjectRate = 128
+		config.ObjectRate = defaultQuotaObjectRate
 	}
 	if config.ObjectBurst <= 0 {
 		config.ObjectBurst = config.ObjectRate

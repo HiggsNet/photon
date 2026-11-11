@@ -39,6 +39,7 @@ const (
 	InitialRTT            = 1 * time.Second
 	TimerKindRound        = "round"
 	TimerKindCatalogPage  = "catalog_page"
+	TimerKindChunkPrefix  = "chunk:"
 
 	kCatalogPageTimeoutMultiplier = 3
 	kRoundMultiplier              = 5
@@ -58,7 +59,8 @@ type SyncTimerEvent struct {
 	PeerID       string
 	LocalSummary *corestate.CatalogSummary
 	// RemoteSummary starts a session from an inbound PING without sending another PING.
-	RemoteSummary *corestate.CatalogSummary
+	RemoteSummary  *corestate.CatalogSummary
+	DatagramBudget int
 }
 
 func (*SyncTimerEvent) SyncEventMarker() {}
@@ -233,13 +235,11 @@ type SyncSession struct {
 	catalogRefreshed      bool
 
 	// RTT estimation.
-	estimatedRTT time.Duration
-	pingSentAt   time.Time
+	estimatedRTT   time.Duration
+	pingSentAt     time.Time
+	datagramBudget int
 
 	lastError error
-	// networkChanged accumulates runtime-confirmed Network changes across the
-	// multi-event session so completion can save/notify/relay exactly once.
-	networkChanged bool
 }
 
 // NewSyncSession creates a new sync session for peerID.
@@ -284,6 +284,10 @@ func (s *SyncSession) onSyncTimer(e *SyncTimerEvent, now time.Time) ([]SyncActio
 	}
 	s.State = SyncSessionSummarySent
 	s.pingSentAt = now
+	s.datagramBudget = e.DatagramBudget
+	if s.datagramBudget <= 0 {
+		s.datagramBudget = DefaultDatagramBudget
+	}
 	s.pendingZones = make(map[zone.ZonePath]pendingZone)
 	s.localCatalogRoot = nil
 	if e.LocalSummary != nil {
@@ -291,7 +295,6 @@ func (s *SyncSession) onSyncTimer(e *SyncTimerEvent, now time.Time) ([]SyncActio
 	}
 	s.remoteCatalogRoot = nil
 	s.lastCatalogCursor = ""
-	s.networkChanged = false
 	s.catalogRefreshPending = false
 	s.catalogRefreshed = false
 
@@ -393,6 +396,7 @@ func (s *SyncSession) onCatalogPageReceived(e *CatalogPageReceivedEvent, now tim
 	if e.Page.NextCursor != "" {
 		actions = append(actions, SendFetchCatalogPageAction{PeerID: e.PeerID, Cursor: e.Page.NextCursor})
 		actions = append(actions, StartTimerAction{PeerID: e.PeerID, Kind: TimerKindCatalogPage, Deadline: now.Add(s.catalogPageTimeout())})
+		actions = append(actions, StartTimerAction{PeerID: e.PeerID, Kind: TimerKindRound, Deadline: now.Add(s.roundTimeout())})
 		return actions, nil
 	}
 	if refresh := s.refreshCatalog(e.PeerID, now); refresh != nil {
@@ -407,6 +411,15 @@ func (s *SyncSession) onCatalogPageReceived(e *CatalogPageReceivedEvent, now tim
 		return actions, nil
 	}
 	s.State = SyncSessionObjectPulling
+	// Size the finite round budget for every pending object, including a
+	// sequential ancestor chain. Each TCP exchange and UDP fallback has its
+	// own shorter deadline; a successful wave does not restart this clock.
+	budget := s.roundTimeout()
+	for path := range s.pendingZones {
+		budget += ObjectPullBudget + s.chunkTimeout(path)
+	}
+	actions = append(actions, CancelTimerAction{PeerID: e.PeerID, Kind: TimerKindCatalogPage},
+		StartTimerAction{PeerID: e.PeerID, Kind: TimerKindRound, Deadline: now.Add(budget)})
 	return actions, nil
 }
 
@@ -507,6 +520,7 @@ func (s *SyncSession) onObjectPullResult(e *ObjectPullResultEvent, now time.Time
 		if e.Unreachable {
 			work.stage = zoneWaitingUDP
 			actions = append(actions, SendChunkFallbackAction{PeerID: e.PeerID, Zone: e.Zone})
+			actions = append(actions, StartTimerAction{PeerID: e.PeerID, Kind: TimerKindChunkPrefix + e.Zone.String(), Deadline: now.Add(s.chunkTimeout(e.Zone))})
 		} else {
 			s.Fail(e.Err)
 		}
@@ -567,7 +581,8 @@ func (s *SyncSession) onObjectChunk(e *ObjectChunkEvent) ([]SyncAction, error) {
 	}
 	work.stage = zoneWaitingApply
 	s.pendingZones[e.Zone] = work
-	return []SyncAction{s.snapshotApplyAction(e.PeerID, e.Snapshot, work.expectedRoot, "udp_chunks")}, nil
+	return []SyncAction{s.snapshotApplyAction(e.PeerID, e.Snapshot, work.expectedRoot, "udp_chunks"),
+		CancelTimerAction{PeerID: e.PeerID, Kind: TimerKindChunkPrefix + e.Zone.String()}}, nil
 }
 
 func (s *SyncSession) snapshotApplyAction(peerID string, snapshot *corestate.ZoneSnapshot, expectedRoot []byte, via string) ApplySnapshotAction {
@@ -633,11 +648,12 @@ func (s *SyncSession) refreshCatalog(peerID string, now time.Time) []SyncAction 
 	s.lastCatalogCursor = ""
 	s.acceptedCatalogPages = nil
 	s.State = SyncSessionCatalogDiffing
-	// Keep the original round deadline so repeated updates cannot prolong a
-	// session indefinitely. Existing v0.5 peers understand this same request.
+	// Only one catalog refresh is allowed. It gets the control-message budget;
+	// the complete replacement catalog determines the next finite object budget.
 	return []SyncAction{
 		SendFetchCatalogPageAction{PeerID: peerID},
 		StartTimerAction{PeerID: peerID, Kind: TimerKindCatalogPage, Deadline: now.Add(s.catalogPageTimeout())},
+		StartTimerAction{PeerID: peerID, Kind: TimerKindRound, Deadline: now.Add(s.roundTimeout())},
 	}
 }
 
@@ -646,14 +662,24 @@ func (s *SyncSession) Done() bool {
 	return s.State == SyncSessionCompleted || s.State == SyncSessionFailed
 }
 
-// AccumulateNetworkChanged records that at least one applied snapshot in this
-// session changed verified network state.
-func (s *SyncSession) AccumulateNetworkChanged(changed bool) {
-	s.networkChanged = s.networkChanged || changed
+// ExpectsUDPZone allows the host to reject unsolicited and late chunks before
+// allocating assembly state or scheduling repair.
+func (s *SyncSession) ExpectsUDPZone(path zone.ZonePath) bool {
+	return !s.Done() && s.pendingZones[path].stage == zoneWaitingUDP
 }
 
-// NetworkChanged reports whether this session changed verified network state.
-func (s *SyncSession) NetworkChanged() bool { return s.networkChanged }
+func (s *SyncSession) chunkTimeout(path zone.ZonePath) time.Duration {
+	budget := s.datagramBudget
+	if budget <= 0 {
+		budget = DefaultDatagramBudget
+	}
+	payload := MaxObjectChunkDataSize(budget, s.PeerID, path)
+	if payload <= 0 {
+		return ChunkTransferTTL
+	}
+	chunks := int64((MaxChunkObjectBytes + payload - 1) / payload)
+	return (QuotaConfig{}).TransferBudget(chunks*int64(budget), chunks)
+}
 
 // EstimatedRTT returns the current estimated RTT for this peer.
 func (s *SyncSession) EstimatedRTT() time.Duration {

@@ -36,7 +36,8 @@ func (driver *GossipDriver) handleGossipMessage(ctx context.Context, message *go
 			return []gossip.SyncEvent{&gossip.CatalogPageReceivedEvent{PeerID: peerID, Page: message.CatalogPage}}, nil
 		}
 	case gossip.MessageObjectChunk:
-		if driver.Gossip.Session(peerID) == nil {
+		session := driver.Gossip.Session(peerID)
+		if message.ObjectChunk == nil || session == nil || !session.ExpectsUDPZone(message.ObjectChunk.Zone) {
 			return nil, nil
 		}
 		now := driver.schedulerForRead().clock.Now()
