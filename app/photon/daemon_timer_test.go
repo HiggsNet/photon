@@ -1,11 +1,35 @@
 package main
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 )
+
+func TestReconcileContextRespectsBothDeadlines(t *testing.T) {
+	for _, parentLimit := range []time.Duration{0, time.Hour, 5 * time.Second} {
+		t.Run(parentLimit.String(), func(t *testing.T) {
+			parent := t.Context()
+			if parentLimit > 0 {
+				var cancel context.CancelFunc
+				parent, cancel = context.WithTimeout(parent, parentLimit)
+				defer cancel()
+			}
+			started := time.Now()
+			child, cancel := boundedReconcileContext(parent)
+			defer cancel()
+			deadline, ok := child.Deadline()
+			if !ok || deadline.Before(started) || deadline.After(time.Now().Add(defaultReconcileOperationTimeout)) {
+				t.Fatalf("operation deadline = %v, present = %v", deadline, ok)
+			}
+			if parentDeadline, ok := parent.Deadline(); ok && deadline.After(parentDeadline) {
+				t.Fatal("operation outlives its parent")
+			}
+		})
+	}
+}
 
 func TestScheduleDaemonTimerUsesDaemonQueue(t *testing.T) {
 	events := make(chan corehost.Event, 1)

@@ -201,10 +201,12 @@ func (d *Daemon) Close() error {
 	if d == nil {
 		return nil
 	}
+	d.gossipDriver.Stop()
+	driverErr := d.closeLinuxDriver()
 	if d.State != nil {
-		return d.State.Close()
+		return errors.Join(driverErr, d.State.Close())
 	}
-	return nil
+	return driverErr
 }
 
 // configureHealthManager initializes the health probe manager from app config.
@@ -236,6 +238,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 	if d == nil || d.State == nil || d.gossipDriver == nil {
 		return errors.New("daemon service is not initialized")
 	}
+	defer d.gossipDriver.Stop()
+	defer d.closeLinuxDriver()
 	if initial := d.State.Common.ReadView(); initial.State == nil {
 		return errors.New("daemon committed state is not initialized")
 	}
@@ -244,9 +248,6 @@ func (d *Daemon) Run(ctx context.Context) error {
 			return err
 		}
 	}
-	if d.gossipDriver != nil {
-		defer d.gossipDriver.Stop()
-	}
 	d.daemonTimerEvents = make(chan corehost.Event, corehost.DefaultEventBuffer)
 	d.daemonTimers = corehost.NewScheduler(corehost.NewClock(d.now), d.daemonTimerEvents)
 	defer func() {
@@ -254,7 +255,6 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.daemonTimers = nil
 		d.daemonTimerEvents = nil
 	}()
-	defer d.closeLinuxDriver()
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -480,6 +480,10 @@ func (d *Daemon) enqueueEvent(ctx context.Context, event daemonEvent) daemonEven
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := ctx.Err(); err != nil {
+		return daemonEventResult{Error: err}
+	}
+	event.Context = ctx
 	event.Reply = make(chan daemonEventResult, 1)
 	select {
 	case d.Events <- event:
@@ -490,6 +494,12 @@ func (d *Daemon) enqueueEvent(ctx context.Context, event daemonEvent) daemonEven
 	case result := <-event.Reply:
 		return result
 	case <-ctx.Done():
+		// The batch may have completed concurrently with server shutdown.
+		select {
+		case result := <-event.Reply:
+			return result
+		default:
+		}
 		return daemonEventResult{Error: ctx.Err()}
 	}
 }
@@ -575,6 +585,9 @@ collect:
 }
 
 func (d *Daemon) handleEvent(event daemonEvent) (daemonEventResult, bool, bool) {
+	if event.Context != nil && event.Context.Err() != nil {
+		return daemonEventResult{Error: event.Context.Err()}, false, false
+	}
 	switch event.Type {
 	case daemonEventCommonMutation:
 		if event.CommonIntent == nil {
@@ -1064,9 +1077,6 @@ func (d *Daemon) nextReconcileTime(key string, now time.Time, interval time.Dura
 func boundedReconcileContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	if ctx == nil {
 		ctx = context.Background()
-	}
-	if _, ok := ctx.Deadline(); ok {
-		return ctx, func() {}
 	}
 	return context.WithTimeout(ctx, defaultReconcileOperationTimeout)
 }

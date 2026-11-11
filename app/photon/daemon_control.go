@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"syscall"
 	"time"
 
@@ -48,11 +49,15 @@ func (d *Daemon) startControlServer(ctx context.Context) (func(), error) {
 		_ = os.Remove(d.ControlSocketPath)
 		return nil, err
 	}
+	ctx, cancel := context.WithCancel(controlContext(ctx))
+	stopListener := context.AfterFunc(ctx, func() { _ = listener.Close() })
 	done := make(chan struct{})
-	go d.serveControl(controlContext(ctx), listener, done)
+	go d.serveControl(ctx, listener, done)
 	return func() {
+		cancel()
 		_ = listener.Close()
 		<-done
+		stopListener()
 		_ = os.Remove(d.ControlSocketPath)
 	}, nil
 }
@@ -92,6 +97,8 @@ func prepareControlSocketPath(path string) error {
 
 func (d *Daemon) serveControl(ctx context.Context, listener net.Listener, done chan<- struct{}) {
 	defer close(done)
+	var requests sync.WaitGroup
+	defer requests.Wait()
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -101,7 +108,11 @@ func (d *Daemon) serveControl(ctx context.Context, listener net.Listener, done c
 			d.logWarn("daemon", "control_accept_failed", map[string]any{"error": err})
 			continue
 		}
-		go d.handleControlConn(ctx, conn)
+		requests.Add(1)
+		go func() {
+			defer requests.Done()
+			d.handleControlConn(ctx, conn)
+		}()
 	}
 }
 
@@ -158,11 +169,38 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 	var request controlRequest
 	_ = conn.SetReadDeadline(time.Now().Add(controlConnDeadline))
+	stopRead := context.AfterFunc(ctx, func() { _ = conn.SetReadDeadline(time.Now()) })
+	defer stopRead()
 	if err := json.NewDecoder(conn).Decode(&request); err != nil {
 		writeControlResponse(conn, controlError(err))
 		return
 	}
-	_ = conn.SetReadDeadline(time.Time{})
+	timeout := controlRequestDeadline
+	if request.Method == "ping_view" {
+		timeout = controlPingMaxDuration
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	deadline, _ := ctx.Deadline()
+	_ = conn.SetReadDeadline(deadline)
+	// Cancellation may have interrupted Decode just before this deadline reset.
+	// Keep writes available for completed commands, including shutdown's reply.
+	if err := ctx.Err(); err != nil {
+		writeControlResponse(conn, controlError(err))
+		return
+	}
+	// One request per connection: EOF cancels work that has not started yet,
+	// as well as diagnostics. Already committed mutations are not rolled back.
+	disconnected := make(chan struct{})
+	go func() {
+		defer close(disconnected)
+		_, _ = io.Copy(io.Discard, conn)
+		cancel()
+	}()
+	defer func() {
+		_ = conn.Close()
+		<-disconnected
+	}()
 	switch request.Method {
 	case "daemon_status_view":
 		writeCanonicalView(conn, daemonStatusView(d))
@@ -326,15 +364,6 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		}
 		writeCanonicalView(conn, *report)
 	case "ping_view":
-		// One request per connection: EOF means the caller is no longer
-		// waiting. Only this diagnostic follows disconnect cancellation;
-		// submitted mutations retain the daemon context.
-		pingCtx, cancelPing := context.WithTimeout(ctx, controlPingMaxDuration)
-		defer cancelPing()
-		go func() {
-			_, _ = io.Copy(io.Discard, conn)
-			cancelPing()
-		}()
 		common := d.State.Common.ReadView()
 		if common.State == nil {
 			writeControlResponse(conn, controlError(errors.New("daemon state is not initialized")))
@@ -356,8 +385,8 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		if d.linuxDriver != nil {
 			prober = d.linuxDriver.HealthProber()
 		}
-		outcomes := pingdebug.Run(pingCtx, prober, selected, resolved.ProbeConfig())
-		if err := pingCtx.Err(); err != nil {
+		outcomes := pingdebug.Run(ctx, prober, selected, resolved.ProbeConfig())
+		if err := ctx.Err(); err != nil {
 			writeControlResponse(conn, controlError(err))
 			return
 		}

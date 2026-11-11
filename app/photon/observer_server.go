@@ -52,7 +52,7 @@ func newObserverServer(d *Daemon, cfg observerConfig) *observer.Server {
 
 // startObserverServer starts the HTTP observer if enabled. It returns a
 // cleanup function that gracefully shuts down the server.
-func (d *Daemon) startObserverServer(_ context.Context) (func(), error) {
+func (d *Daemon) startObserverServer(ctx context.Context) (func(), error) {
 	if d.Config == nil {
 		return func() {}, nil
 	}
@@ -64,16 +64,21 @@ func (d *Daemon) startObserverServer(_ context.Context) (func(), error) {
 	if srv == nil {
 		return func() {}, nil
 	}
-	// Wire the observer hub so notifyObserver can broadcast events.
-	d.observerHub = srv.Hub()
 	addr := cfg.listenAddr()
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("observer listen %s: %w", addr, err)
 	}
+	d.observerHub = srv.Hub()
+	ctx, cancel := context.WithCancel(ctx)
 	httpServer := observer.DefaultHTTPServer(srv.Handler())
+	httpServer.BaseContext = func(net.Listener) context.Context { return ctx }
+	done := make(chan struct{})
 	go func() {
-		_ = httpServer.Serve(ln)
+		defer close(done)
+		if err := httpServer.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			d.logWarn("observer", "serve_failed", map[string]any{"error": err})
+		}
 	}()
 	if !cfg.isLoopbackBind() {
 		d.logWarn("observer", "non_loopback_bind", map[string]any{
@@ -83,9 +88,15 @@ func (d *Daemon) startObserverServer(_ context.Context) (func(), error) {
 	}
 	d.logInfo("observer", "started", map[string]any{"addr": addr})
 	return func() {
+		// SSE requests must finish before graceful shutdown can complete.
+		cancel()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = httpServer.Shutdown(shutdownCtx)
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			d.logWarn("observer", "shutdown_failed", map[string]any{"error": err})
+			_ = httpServer.Close()
+		}
+		<-done
 	}, nil
 }
 

@@ -345,11 +345,13 @@ Daemon 通过 Unix domain socket 暴露控制接口。
 
 CLI 通过 `sendControlRequest()` 与 daemon 通信。daemon 在线时，写操作进入事件循环由单 writer 串行执行；读操作从当前状态快照返回。
 
+每个连接处理一个请求。客户端断开或请求到期会取消对应上下文，尚未执行的队列事件跳过提交；已经提交的修改不回滚。普通请求的等待上限是 70 秒，ping 诊断为 5 分钟。单次防火墙、路由或 IPsec 调整仍各自最多等待 20 秒，父上下文更早到期时提前结束。服务停止时取消并等待所有已接入请求收尾，再释放它们使用的状态和驱动；写响应保留 10 秒上限。
+
 当 socket 不存在或连接被拒绝（`ECONNREFUSED`）时，只读诊断命令可回退到本地 DB 离线视图，持久状态写入命令可走 direct/recovery 路径。超时、权限错误、连接重置、协议错误等不会触发 fallback，因为这些错误可能来自仍在线但异常的 daemon。
 
 状态写入类命令和恢复类命令支持显式 `--direct`，跳过 control socket 直接写本地 DB。使用 direct 时调用者需自行保证没有 daemon 在管理同一状态文件或 IPsec/XFRM 对象；direct 只持久化 signed record，不会触发 routing reconcile。
 
-控制方法覆盖状态读写、delegation 管理、节点加入、恢复操作、runtime 触发（`sync_trigger`/`routing_reload`/`shutdown`）以及各类诊断接口。`config.yaml` 只在进程启动时读取，修改后需要重启 daemon。完整列表见 `app/photon/daemon.go` 中 `handleControlConn` 的 switch。
+控制方法覆盖状态读写、delegation 管理、节点加入、恢复操作、runtime 触发（`sync_trigger`/`routing_reload`/`shutdown`）以及各类诊断接口。`config.yaml` 只在进程启动时读取，修改后需要重启 daemon。完整列表见 `app/photon/daemon_control.go` 中 `handleControlConn` 的 switch。
 
 ### 5.1 systemd 运行约定
 
@@ -365,6 +367,8 @@ CLI 通过 `sendControlRequest()` 与 daemon 通信。daemon 在线时，写操�
 示例使用 `Restart=on-failure`、`RestartSec=2s` 和 `TimeoutStopSec=30s`：异常退出会重启；正常 shutdown 或 `SIGTERM` 不会重启；停止超过 30 秒后才强制结束。
 
 control socket 先启动、后于 Observer 停止。任一服务启动失败都会终止启动并清理已有 listener。control socket 使用父目录 `0700`、socket `0600`，只允许 root 管理，不做方法级鉴权。
+
+Observer 请求继承 daemon 的取消上下文。关闭时先取消 SSE 事件流，再等待 HTTP 服务退出；优雅关闭超时则关闭剩余连接。Daemon 的 `Close()` 同时释放 Gossip 定时器、Linux 驱动和数据库，Linux 驱动初始化失败也会停止已创建的 Gossip 定时器。
 
 ### 5.2 同机双实例
 

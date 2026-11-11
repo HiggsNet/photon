@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/HiggsNet/photon/internal/photonlinux"
+	"io"
 	"net"
 	"net/http"
 	"testing"
@@ -68,6 +69,55 @@ func TestObserverStartObserverServerEnabledServesHTTP(t *testing.T) {
 	}
 	if d.observerHub == nil {
 		t.Fatal("observerHub should be wired after start")
+	}
+}
+
+func TestObserverShutdownClosesEventStreams(t *testing.T) {
+	for _, mode := range []string{"stop", "parent_cancel"} {
+		t.Run(mode, func(t *testing.T) {
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			port := listener.Addr().(*net.TCPAddr).Port
+			_ = listener.Close()
+			d := &Daemon{Config: &appConfig{Observer: observerConfig{Enabled: true, BindAddr: "127.0.0.1", Port: port}}}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			stop, err := d.startObserverServer(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stop()
+			client := &http.Client{Timeout: 3 * time.Second}
+			response, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v1/events", port))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusOK {
+				t.Fatalf("SSE status = %d", response.StatusCode)
+			}
+			if mode == "parent_cancel" {
+				cancel()
+				if _, err := io.ReadAll(response.Body); err != nil {
+					t.Fatalf("SSE did not end on parent cancellation: %v", err)
+				}
+			}
+			done := make(chan struct{})
+			go func() { stop(); close(done) }()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("observer waited for shutdown timeout with an open event stream")
+			}
+			if _, err := io.ReadAll(response.Body); err != nil {
+				t.Fatalf("SSE did not finish cleanly: %v", err)
+			}
+			if count := d.observerHub.SubscriberCount(); count != 0 {
+				t.Fatalf("SSE subscribers left after shutdown = %d", count)
+			}
+		})
 	}
 }
 

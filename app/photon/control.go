@@ -21,9 +21,10 @@ import (
 )
 
 const (
-	controlSocketName      = "photon.sock"
-	controlDialTimeout     = time.Second
-	controlRequestDeadline = 10 * time.Second
+	controlSocketName  = "photon.sock"
+	controlDialTimeout = time.Second
+	// A mutation can wait for firewall, routing, and IPsec before its reply.
+	controlRequestDeadline = 3*defaultReconcileOperationTimeout + controlConnDeadline
 	// Bound the whole diagnostic, regardless of target count or probe options.
 	controlPingMaxDuration = 5 * time.Minute
 )

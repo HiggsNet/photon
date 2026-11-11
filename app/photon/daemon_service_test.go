@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -73,6 +74,50 @@ func TestDaemonReplacesAndClosesSingleLinuxDriver(t *testing.T) {
 	}
 	if service.linuxDriver != nil {
 		t.Fatal("Linux driver remains installed after close")
+	}
+}
+
+func TestDaemonCloseReleasesOwnedResources(t *testing.T) {
+	common := corestate.NewStoreWithCheckpoint(&corestate.VerifiedState{}, nil, nil, nil)
+	service := newDaemon(defaultAppConfig(), newState(nil, common, nil), time.Second, time.Now)
+	defer service.gossipDriver.Stop()
+	driverErr := errors.New("driver close failed")
+	closed := 0
+	dryRun := &ipsec.DryRunDriver{}
+	driver := newTestLinuxDriverWithOptions(photonlinux.LinuxDriverOptions{
+		IPsecDriver: dryRun, XFRMDriver: dryRun,
+		Close: func() error { closed++; return driverErr },
+	})
+	if err := service.installLinuxDriver(driver); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Close(); !errors.Is(err, driverErr) {
+		t.Fatalf("close error = %v", err)
+	}
+	if closed != 1 || service.linuxDriver != nil {
+		t.Fatalf("Linux driver was not released: close calls=%d", closed)
+	}
+	_, err := service.gossipDriver.ApplyGossipTimerAction(gossip.StartTimerAction{PeerID: "peer", Kind: "round", Deadline: time.Now().Add(time.Hour)})
+	if !errors.Is(err, corehost.ErrSchedulerStopped) {
+		t.Fatalf("Gossip scheduler still accepts work: %v", err)
+	}
+	if _, err := common.ApplyRemoteBatch(t.Context(), "peer", nil, time.Now()); !errors.Is(err, corestate.ErrVerifiedStoreClosed) {
+		t.Fatalf("state remained open after driver close failed: %v", err)
+	}
+}
+
+func TestDaemonStartupFailureStopsGossipScheduler(t *testing.T) {
+	config := defaultAppConfig()
+	config.IPsec.Driver = "invalid-driver"
+	common := corestate.NewStoreWithCheckpoint(&corestate.VerifiedState{}, nil, nil, nil)
+	service := newDaemon(config, newState(nil, common, nil), time.Second, time.Now)
+	defer service.Close()
+	if err := service.Run(t.Context()); err == nil {
+		t.Fatal("expected Linux driver initialization to fail")
+	}
+	_, err := service.gossipDriver.ApplyGossipTimerAction(gossip.StartTimerAction{PeerID: "peer", Kind: "round", Deadline: time.Now().Add(time.Hour)})
+	if !errors.Is(err, corehost.ErrSchedulerStopped) {
+		t.Fatalf("startup failure left Gossip scheduler running: %v", err)
 	}
 }
 

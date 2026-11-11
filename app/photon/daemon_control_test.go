@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -44,7 +45,7 @@ func (p *blockingControlPingProber) Probe(ctx context.Context, target health.Pro
 func (*blockingControlPingProber) Type() string { return health.ProbeTypeICMP }
 
 func TestDaemonControlPingCancellation(t *testing.T) {
-	for _, mode := range []string{"client_cancel", "disconnect", "daemon_cancel"} {
+	for _, mode := range []string{"client_cancel", "disconnect", "daemon_cancel", "server_stop"} {
 		t.Run(mode, func(t *testing.T) {
 			verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 			service := newTestDaemonFromOwners(&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second)
@@ -96,6 +97,8 @@ func TestDaemonControlPingCancellation(t *testing.T) {
 				cancelClient()
 			case "daemon_cancel":
 				cancelDaemon()
+			case "server_stop":
+				stop()
 			}
 			select {
 			case err := <-prober.stopped:
@@ -115,7 +118,7 @@ func TestDaemonControlPingCancellation(t *testing.T) {
 					t.Fatal("client did not finish")
 				}
 			}
-			if mode != "daemon_cancel" {
+			if mode != "daemon_cancel" && mode != "server_stop" {
 				if daemonCtx.Err() != nil {
 					t.Fatalf("daemon canceled: %v", daemonCtx.Err())
 				}
@@ -127,6 +130,123 @@ func TestDaemonControlPingCancellation(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDaemonControlCanceledQueuedMutation(t *testing.T) {
+	for _, mode := range []string{"disconnect", "server_stop"} {
+		t.Run(mode, func(t *testing.T) {
+			verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+			service := newTestDaemonFromOwners(&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second)
+			service.ControlSocketPath = filepath.Join(t.TempDir(), "c.sock")
+			stop, err := service.startControlServer(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stop()
+			conn, err := net.Dial("unix", service.ControlSocketPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			if err := json.NewEncoder(conn).Encode(controlRequest{Method: "record_put", Zone: "node-b.catofes.", Key: "canceled-write", Type: "policy.string", Value: []byte("value")}); err != nil {
+				t.Fatal(err)
+			}
+			var event daemonEvent
+			select {
+			case event = <-service.Events:
+			case <-time.After(time.Second):
+				t.Fatal("request never queued")
+			}
+			if event.Context == nil {
+				t.Fatal("queued request lost its context")
+			}
+			if mode == "disconnect" {
+				_ = conn.Close()
+			} else {
+				stop()
+				_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+				var response controlResponse
+				if err := json.NewDecoder(conn).Decode(&response); err != nil || response.OK || response.Error == "" {
+					t.Fatalf("canceled response = %+v, %v", response, err)
+				}
+				if _, err := conn.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+					t.Fatalf("stopped server left request open: %v", err)
+				}
+			}
+			select {
+			case <-event.Context.Done():
+			case <-time.After(time.Second):
+				t.Fatal("request did not receive cancellation")
+			}
+			service.processEvents(t.Context(), &event)
+			if result := <-event.Reply; !errors.Is(result.Error, context.Canceled) {
+				t.Fatalf("queued mutation result = %v", result.Error)
+			}
+			if got := service.State.Common.ReadView().State.Network.Zones["node-b.catofes."].Records["canceled-write"]; got != nil {
+				t.Fatal("canceled queued mutation was committed")
+			}
+		})
+	}
+}
+
+func TestDaemonControlStopDuringRequestRead(t *testing.T) {
+	service := &Daemon{ControlSocketPath: filepath.Join(t.TempDir(), "c.sock")}
+	stop, err := service.startControlServer(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	conn, err := net.Dial("unix", service.ControlSocketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	// An incomplete JSON request keeps the handler blocked in Decode.
+	if _, err := conn.Write([]byte(`{"method":`)); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() { stop(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("control server did not stop an incomplete request")
+	}
+}
+
+func TestDaemonControlShutdownAcknowledgement(t *testing.T) {
+	service := &Daemon{ControlSocketPath: filepath.Join(t.TempDir(), "c.sock"), Events: make(chan daemonEvent, 1)}
+	stop, err := service.startControlServer(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	done := make(chan error, 1)
+	go func() {
+		var response controlResponse
+		err := exchangeControl(t.Context(), service.ControlSocketPath, controlRequest{Method: "shutdown"}, &response)
+		if err == nil && !response.OK {
+			err = fmt.Errorf("shutdown response: %s", response.Error)
+		}
+		done <- err
+	}()
+	select {
+	case event := <-service.Events:
+		if _, shutdown := service.processEvents(t.Context(), &event); !shutdown {
+			t.Fatal("shutdown request did not stop the daemon")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shutdown request never queued")
+	}
+	stop()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shutdown client did not finish")
 	}
 }
 
