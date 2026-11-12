@@ -59,10 +59,10 @@ func TestDaemonABPublishesGossipsAndReconcilesIPsecRecords(t *testing.T) {
 		t.Fatalf("startObjectPullServer(B): %v", err)
 	}
 
-	if _, err := serviceA.handleEndpointTimerEvent(); err != nil {
+	if _, err := serviceA.handleEndpointTimerEvent(t.Context()); err != nil {
 		t.Fatalf("publish node-a ipsec records: %v", err)
 	}
-	if _, err := serviceB.handleEndpointTimerEvent(); err != nil {
+	if _, err := serviceB.handleEndpointTimerEvent(t.Context()); err != nil {
 		t.Fatalf("publish node-b ipsec records: %v", err)
 	}
 

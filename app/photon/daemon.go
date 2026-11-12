@@ -51,6 +51,8 @@ type Daemon struct {
 	reconcileEpoch         time.Time
 	daemonTimers           *corehost.Scheduler
 	daemonTimerEvents      chan corehost.Event
+	endpointResults        chan endpointDiscoveryResult
+	endpointCancel         context.CancelFunc
 
 	gossipDriver       *corehost.GossipDriver
 	objectPullExecutor *corehost.GossipObjectPullExecutor
@@ -201,6 +203,7 @@ func (d *Daemon) Close() error {
 	if d == nil {
 		return nil
 	}
+	d.stopEndpointDiscovery()
 	d.gossipDriver.Stop()
 	driverErr := d.closeLinuxDriver()
 	if d.State != nil {
@@ -240,6 +243,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	defer d.gossipDriver.Stop()
 	defer d.closeLinuxDriver()
+	defer d.stopEndpointDiscovery()
 	if initial := d.State.Common.ReadView(); initial.State == nil {
 		return errors.New("daemon committed state is not initialized")
 	}
@@ -319,7 +323,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	maps.Copy(startFields, buildInfoFields())
 	d.logInfo("daemon", "started", startFields)
 	d.logDebug("daemon", "startup_publish_begin", nil)
-	if _, err := d.prepareStartupState(); err != nil {
+	if _, err := d.prepareStartupState(ctx); err != nil {
 		d.logWarn("daemon", "startup_publish_failed", map[string]any{"error": err})
 	}
 	d.logDebug("daemon", "startup_publish_done", nil)
@@ -345,7 +349,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.logDebug("daemon", "startup_recovery_layer_done", map[string]any{"layer": "firewall"})
 	d.logDebug("daemon", "startup_recovery_done", nil)
 	d.reconcileEpoch = d.now()
-	if err := d.scheduleDaemonTimer(daemonTimerEndpoint, startupNow); err != nil {
+	if err := d.scheduleDaemonTimer(daemonTimerEndpoint, startupNow.Add(d.endpointRefreshInterval())); err != nil {
 		return err
 	}
 	if err := d.scheduleDaemonTimer(daemonTimerSync, startupNow); err != nil {
@@ -412,6 +416,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
+		case result := <-d.endpointResults:
+			if _, err := d.handleEndpointDiscoveryResult(ctx, result); err != nil {
+				d.logWarn("endpoint", "publish_failed", map[string]any{"error": err})
+			}
 		case event := <-d.Events:
 			// Process this event first in the next batch, using the same
 			// reconcile and reply rules as events already queued.
@@ -434,11 +442,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 					if result.Error != nil {
 						d.logWarn("endpoint", "publish_failed", map[string]any{"error": result.Error})
 					}
-					interval := d.Config.ReflectorInterval
-					if interval <= 0 {
-						interval = 5 * time.Minute
-					}
-					if err := d.scheduleDaemonTimer(daemonTimerEndpoint, now.Add(interval)); err != nil {
+					if err := d.scheduleDaemonTimer(daemonTimerEndpoint, now.Add(d.endpointRefreshInterval())); err != nil {
 						return err
 					}
 				case daemonTimerSync:
@@ -638,7 +642,7 @@ func (d *Daemon) handleEvent(event daemonEvent) (daemonEventResult, bool, bool) 
 		}
 		return daemonEventResult{Zone: result.Zone, RootPublicKey: result.RootPublicKey}, false, false
 	case daemonEventEndpointTimer:
-		changed, err := d.handleEndpointTimerEvent()
+		changed, err := d.handleEndpointTimerEvent(controlContext(event.Context))
 		return daemonEventResult{StateCommitted: changed, Error: err}, false, false
 	case daemonEventSyncTrigger:
 		return daemonEventResult{}, true, false
@@ -852,17 +856,17 @@ func (d *Daemon) handleJoinAcceptEvent(bundle *joinBundle, key *privateKeyFile) 
 	return &joinAcceptResult{Zone: bundle.Zone, RootPublicKey: append([]byte(nil), bundle.RootPublicKey...)}, nil
 }
 
-func (d *Daemon) handleEndpointTimerEvent() (bool, error) {
-	d.logDebug("endpoint", "timer_begin", nil)
-	changed, err := d.publishLocalProtocols()
-	if err != nil {
+func (d *Daemon) handleEndpointTimerEvent(ctx context.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	d.logDebug("endpoint", "timer_done", map[string]any{"changed": changed})
-	return changed, nil
+	if d.startEndpointDiscovery(ctx) {
+		return false, nil
+	}
+	return d.handleEndpointDiscoveryResult(ctx, endpointDiscoveryResult{})
 }
 
-func (d *Daemon) prepareStartupState() (bool, error) {
+func (d *Daemon) prepareStartupState(ctx context.Context) (bool, error) {
 	commit, authority, err := d.State.Common.RefreshManagedAuthority(context.Background(), d.now())
 	if err != nil {
 		return false, err
@@ -873,8 +877,13 @@ func (d *Daemon) prepareStartupState() (bool, error) {
 			d.logInfo("authority", "managed_zone_refreshed", map[string]any{"zone": view.State.ManagedZone})
 		}
 	}
+	endpointsChanged, err := d.publishLocalEndpoints(d.localEndpointCandidates(nil))
+	if err != nil {
+		return commit.Committed || endpointsChanged, err
+	}
+	d.startEndpointDiscovery(ctx)
 	published, err := d.publishLocalProtocols()
-	return commit.Committed || published, err
+	return commit.Committed || endpointsChanged || published, err
 }
 
 func (d *Daemon) publishLocalProtocols() (bool, error) {
@@ -888,13 +897,6 @@ func (d *Daemon) publishLocalProtocols() (bool, error) {
 	}
 	revision := uint64(common.Revision)
 	var intents []corestate.LocalIntent
-	endpoint, err := d.endpointProtocolIntent(common.State)
-	if err != nil {
-		return false, fmt.Errorf("plan endpoint record: %w", err)
-	}
-	if endpoint != nil {
-		intents = append(intents, *endpoint)
-	}
 	ipsecPlan, err := d.ipsecProtocolPlan(common.State, runtime)
 	if err != nil {
 		return false, fmt.Errorf("plan IPsec records: %w", err)
@@ -1032,6 +1034,7 @@ func (d *Daemon) flushRoutingReconcile(ctx context.Context) (bool, error) {
 	d.noteReconcileFlush("routing")
 	reconcileCtx, cancel := boundedReconcileContext(ctx)
 	defer cancel()
+	defer d.linuxObservation.beginOperation(reconcileCtx, "routing", "reconcile")()
 	return true, d.reconcileRouting(reconcileCtx)
 }
 
@@ -1090,6 +1093,7 @@ func (d *Daemon) flushIPsecReconcile(ctx context.Context) (bool, error) {
 	d.noteReconcileFlush("ipsec")
 	reconcileCtx, cancel := boundedReconcileContext(ctx)
 	defer cancel()
+	defer d.linuxObservation.beginOperation(reconcileCtx, "ipsec", "reconcile")()
 	err := d.reconcileIPsecLinks(reconcileCtx)
 	// Phase 6.6: after IPsec reconcile, refresh health probe targets and
 	// dispatch any due probes. This keeps the probe scheduler in sync with

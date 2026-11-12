@@ -1,14 +1,16 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"net"
+	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
-	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
 
@@ -24,29 +26,108 @@ func listenPortFromAddr(addr string) uint16 {
 	return uint16(port)
 }
 
-func (d *Daemon) endpointProtocolIntent(verified *corestate.VerifiedState) (*corestate.PutProtocolRecordIntent, error) {
-	config := d.Config
+type endpointDiscoveryResult struct {
+	PublicIPs []net.IP
+	Error     error
+}
+
+// All lifecycle fields are owned by the main loop. The worker only collects
+// candidates and sends one result, without retaining a state snapshot.
+func (d *Daemon) startEndpointDiscovery(ctx context.Context) bool {
+	if d.endpointResults != nil {
+		return true
+	}
+	if d.Config == nil || !d.Config.PublishEndpoints || ctx.Err() != nil {
+		return false
+	}
+	verified := d.State.Common.ReadView().State
 	if verified == nil || verified.Network == nil || verified.ManagedZone == zone.RootZone || len(verified.IdentityPrivateKey) == 0 || gossip.AutoJoinPending(verified) {
-		return nil, nil
+		return false
 	}
+	port := listenPortFromAddr(d.Config.ListenAddr)
+	_, reflectors := filterEndpointDiscoveryInputs(d.Config, port)
+	if len(reflectors) == 0 {
+		return false
+	}
+	reflectors = append([]string(nil), reflectors...)
+	timeout := d.Config.ReflectorTimeout
+	if timeout <= 0 {
+		timeout = 3 * time.Second
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, timeout)
+	results := make(chan endpointDiscoveryResult, 1)
+	d.endpointResults, d.endpointCancel = results, cancel
+	go func() {
+		defer close(results)
+		defer cancel()
+		ips, err := gossip.QueryPublicIPs(queryCtx, reflectors, http.DefaultClient)
+		results <- endpointDiscoveryResult{PublicIPs: ips, Error: err}
+	}()
+	return true
+}
+
+func (d *Daemon) stopEndpointDiscovery() {
+	if d.endpointResults == nil {
+		return
+	}
+	d.endpointCancel()
+	for range d.endpointResults {
+	}
+	d.endpointResults, d.endpointCancel = nil, nil
+}
+
+func (d *Daemon) endpointRefreshInterval() time.Duration {
+	if d.Config != nil && d.Config.ReflectorInterval > 0 {
+		return d.Config.ReflectorInterval
+	}
+	return 5 * time.Minute
+}
+
+func (d *Daemon) localEndpointCandidates(publicIPs []net.IP) []gossip.LocalEndpoint {
+	port := listenPortFromAddr(d.Config.ListenAddr)
+	advertiseAddrs, reflectors := filterEndpointDiscoveryInputs(d.Config, port)
+	if len(reflectors) == 0 {
+		publicIPs = nil
+	}
+	return gossip.CollectLocalEndpoints(port, advertiseAddrs, publicIPs, d.Config.FilterPrivateIPv4)
+}
+
+func (d *Daemon) handleEndpointDiscoveryResult(ctx context.Context, result endpointDiscoveryResult) (bool, error) {
+	d.stopEndpointDiscovery()
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if result.Error != nil {
+		d.logWarn("endpoint", "reflector_failed", map[string]any{"error": result.Error})
+	}
+	changed, err := d.publishLocalEndpoints(d.localEndpointCandidates(result.PublicIPs))
+	if err != nil {
+		return changed, err
+	}
+	// IPsec consumes the newly committed endpoint record in this same event.
+	published, err := d.publishLocalProtocols()
+	return changed || published, err
+}
+
+func (d *Daemon) publishLocalEndpoints(endpoints []gossip.LocalEndpoint) (bool, error) {
+	config := d.Config
 	if config == nil {
-		return nil, errors.New("gossip configuration is not initialized")
+		return false, errors.New("gossip configuration is not initialized")
 	}
-	if !config.PublishEndpoints {
-		return corehost.PlanGossipEndpointIntent(corehost.GossipEndpointIntentInput{
-			Verified: verified, Disabled: true, Now: d.now(), TTL: config.EndpointTTL,
-		})
-	}
-	port := listenPortFromAddr(config.ListenAddr)
-	advertiseAddrs, reflectors := filterEndpointDiscoveryInputs(config, port)
-	endpoints, reflectorErr := gossip.CollectLocalEndpointsWithReflectors(port, advertiseAddrs, reflectors, config.ReflectorTimeout, config.FilterPrivateIPv4)
-	if reflectorErr != nil && len(gossip.ResolvePublicIPReflectors(reflectors)) > 0 {
-		d.logWarn("endpoint", "reflector_failed", map[string]any{"error": reflectorErr})
-	}
-	return corehost.PlanGossipEndpointIntent(corehost.GossipEndpointIntentInput{
-		Verified: verified, Endpoints: endpoints, Now: d.now(),
+	intent, err := corehost.PlanGossipEndpointIntent(corehost.GossipEndpointIntentInput{
+		Verified: d.State.Common.ReadView().State, Disabled: !config.PublishEndpoints,
+		Endpoints: endpoints, Now: d.now(),
 		TTL: config.EndpointTTL, Grace: config.EndpointGrace, Refresh: config.EndpointRefresh,
 	})
+	if err != nil || intent == nil {
+		return false, err
+	}
+	result, err := d.State.Common.ApplyLocalIntent(context.Background(), *intent, d.now())
+	if result.Committed {
+		d.refreshGossipDiscovery()
+		d.notifyStateChanged()
+	}
+	return result.Committed, err
 }
 
 // filterEndpointDiscoveryInputs returns the advertise addresses and reflectors

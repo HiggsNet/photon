@@ -93,6 +93,7 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 			continue
 		}
 		resolvedBackend, preflight, resolveErr := func() (string, firewall.FirewallPreflight, error) {
+			d.linuxObservation.setOperationPhase("preflight")
 			defer d.gossipDriver.LogSlowOperation("firewall", "firewall_preflight", time.Now(), d.gossipDriver.PendingEventCount())
 			return d.linuxDriver.ResolveFirewallBackend(ctx, spec)
 		}()
@@ -121,6 +122,7 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 		}
 
 		result, err := func() (firewall.FirewallApplyResult, error) {
+			d.linuxObservation.setOperationPhase("apply")
 			defer d.gossipDriver.LogSlowOperation("firewall", "firewall_apply", time.Now(), d.gossipDriver.PendingEventCount())
 			return d.linuxDriver.ApplyFirewall(ctx, spec, resolvedBackend, desired)
 		}()
@@ -169,6 +171,7 @@ func (d *Daemon) flushFirewallReconcile(ctx context.Context) (bool, error) {
 	d.noteReconcileFlush("firewall")
 	reconcileCtx, cancel := boundedReconcileContext(ctx)
 	defer cancel()
+	defer d.linuxObservation.beginOperation(reconcileCtx, "firewall", "reconcile")()
 	err := d.reconcileFirewall(reconcileCtx)
 	return true, err
 }

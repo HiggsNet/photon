@@ -2,10 +2,13 @@ package gossip
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -103,7 +106,7 @@ func TestQueryPublicIPParsesTextAndJSONReflectors(t *testing.T) {
 		return httpResponse(http.StatusOK, "203.0.113.44\n"), nil
 	})}
 
-	ips, err := queryPublicIPsWithClient([]string{"https://reflector.example/text"}, textClient)
+	ips, err := QueryPublicIPs(t.Context(), []string{"https://reflector.example/text"}, textClient)
 	if err != nil {
 		t.Fatalf("QueryPublicIP(text): %v", err)
 	}
@@ -116,7 +119,7 @@ func TestQueryPublicIPParsesTextAndJSONReflectors(t *testing.T) {
 		return httpResponse(http.StatusOK, `{"origin":"2001:db8::12"}`), nil
 	})}
 
-	ips, err = queryPublicIPsWithClient([]string{"https://reflector.example/json"}, jsonClient)
+	ips, err = QueryPublicIPs(t.Context(), []string{"https://reflector.example/json"}, jsonClient)
 	if err != nil {
 		t.Fatalf("QueryPublicIP(json): %v", err)
 	}
@@ -151,7 +154,7 @@ func TestQueryPublicIPFallsBackAcrossReflectors(t *testing.T) {
 		return httpResponse(http.StatusOK, `{"ip":"198.51.100.7"}`), nil
 	})}
 
-	ips, err := queryPublicIPsWithClient([]string{"https://bad.example", "https://good.example"}, client)
+	ips, err := QueryPublicIPs(t.Context(), []string{"https://bad.example", "https://good.example"}, client)
 	if err != nil {
 		t.Fatalf("QueryPublicIP(fallback): %v", err)
 	}
@@ -173,7 +176,7 @@ func TestQueryPublicIPsReturnsOneAddressPerFamily(t *testing.T) {
 		}
 	})}
 
-	ips, err := queryPublicIPsWithClient([]string{"https://bad.example", "https://v4.example", "https://v6.example"}, client)
+	ips, err := QueryPublicIPs(t.Context(), []string{"https://bad.example", "https://v4.example", "https://v6.example"}, client)
 	if err != nil {
 		t.Fatalf("QueryPublicIPs: %v", err)
 	}
@@ -199,25 +202,84 @@ func TestResolvePublicIPReflectorsExpandsAutoPreset(t *testing.T) {
 	}
 }
 
-func TestCollectLocalEndpointsWithReflectorsAddsReflectorCandidate(t *testing.T) {
-	oldQuery := queryPublicIPForCollect
-	queryPublicIPForCollect = func(reflectors []string, timeout time.Duration) (net.IP, error) {
-		return net.ParseIP("198.51.100.9"), nil
-	}
-	defer func() { queryPublicIPForCollect = oldQuery }()
-
-	endpoints, err := CollectLocalEndpointsWithReflectors(33434, nil, []string{"https://reflector.example"}, time.Second, false)
-	if err != nil {
-		t.Fatalf("CollectLocalEndpointsWithReflectors: %v", err)
-	}
-	var found bool
-	for _, ep := range endpoints {
-		if ep.Source == SourceReflector && ep.IP.String() == "198.51.100.9" && ep.Port == 33434 {
-			found = true
+func TestCollectLocalEndpointsPrefersExplicitAddress(t *testing.T) {
+	endpoints := CollectLocalEndpoints(33434, []string{"198.51.100.9:33434"}, []net.IP{net.ParseIP("198.51.100.9")}, true)
+	count := 0
+	for _, endpoint := range endpoints {
+		if endpoint.IP.String() == "198.51.100.9" && endpoint.Port == 33434 {
+			count++
+			if endpoint.Source != SourceAdvertise {
+				t.Fatalf("public discovery overrode the explicit address: %+v", endpoint)
+			}
 		}
 	}
-	if !found {
-		t.Fatalf("reflector endpoint not found in %#v", endpoints)
+	if count != 1 {
+		t.Fatalf("duplicate or missing candidate: %d", count)
+	}
+}
+
+func TestQueryPublicIPsUsesHTTPReflector(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "198.51.100.9")
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	ips, err := QueryPublicIPs(ctx, []string{server.URL}, http.DefaultClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ips) != 1 || ips[0].String() != "198.51.100.9" {
+		t.Fatalf("reflector IPs = %v", ips)
+	}
+}
+
+func TestReflectorQueryCancelsAllPendingRequests(t *testing.T) {
+	for _, mode := range []string{"cancel", "deadline"} {
+		t.Run(mode, func(t *testing.T) {
+			started, stopped := make(chan struct{}, 2), make(chan struct{}, 2)
+			client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				started <- struct{}{}
+				<-req.Context().Done()
+				stopped <- struct{}{}
+				return nil, req.Context().Err()
+			})}
+			ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				_, err := QueryPublicIPs(ctx, []string{"https://a.example", "https://b.example"}, client)
+				done <- err
+			}()
+			for range 2 {
+				select {
+				case <-started:
+				case <-time.After(time.Second):
+					t.Fatal("reflector request did not start")
+				}
+			}
+			want := context.DeadlineExceeded
+			if mode == "cancel" {
+				cancel()
+				want = context.Canceled
+			}
+			select {
+			case err := <-done:
+				if !errors.Is(err, want) {
+					t.Fatalf("query error = %v, want %v", err, want)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("query ignored its caller's deadline or cancellation")
+			}
+			for range 2 {
+				select {
+				case <-stopped:
+				case <-time.After(time.Second):
+					t.Fatal("HTTP request survived query cancellation")
+				}
+			}
+		})
 	}
 }
 

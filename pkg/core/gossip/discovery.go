@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -28,8 +29,6 @@ const (
 	// DefaultEndpointGrace is the old-address retention window after an endpoint changes.
 	DefaultEndpointGrace = 10 * time.Minute
 )
-
-var queryPublicIPForCollect = QueryPublicIP
 
 var ipCandidatePattern = regexp.MustCompile(`[0-9A-Fa-f:.]{3,}`)
 
@@ -165,10 +164,6 @@ type LocalEndpoint struct {
 	Source   LocalEndpointSource
 }
 
-var publicIPHTTPClient = func(timeout time.Duration) *http.Client {
-	return &http.Client{Timeout: timeout}
-}
-
 // ResolvePublicIPReflectors expands the "auto" preset while preserving
 // explicitly configured reflector order. Values "none", "off", and "disabled"
 // are ignored so callers can disable an inherited preset.
@@ -198,11 +193,11 @@ func ResolvePublicIPReflectors(reflectors []string) []string {
 	return out
 }
 
-// CollectLocalEndpointsWithReflectors gathers candidate endpoints from explicit
-// advertise addresses, public IP reflectors, and local interface scanning.
+// CollectLocalEndpoints combines explicit addresses, previously discovered
+// public IPs, and local interfaces. It performs no external query.
 // When filterPrivateIPv4 is true, RFC1918 IPv4 addresses from local interfaces
 // are excluded.
-func CollectLocalEndpointsWithReflectors(listenPort uint16, advertiseAddrs []string, reflectors []string, timeout time.Duration, filterPrivateIPv4 bool) ([]LocalEndpoint, error) {
+func CollectLocalEndpoints(listenPort uint16, advertiseAddrs []string, publicIPs []net.IP, filterPrivateIPv4 bool) []LocalEndpoint {
 	var out []LocalEndpoint
 	for _, addr := range advertiseAddrs {
 		ip, port, err := parseHostPortDefault(addr, listenPort)
@@ -217,18 +212,11 @@ func CollectLocalEndpointsWithReflectors(listenPort uint16, advertiseAddrs []str
 			Source:   SourceAdvertise,
 		})
 	}
-	reflectorIPs, reflectorErr := QueryPublicIPsWithQuery(reflectors, timeout, queryPublicIPForCollect)
-	for _, reflectorIP := range reflectorIPs {
-		out = append(out, LocalEndpoint{
-			IP:       reflectorIP,
-			Port:     listenPort,
-			Scope:    "global",
-			Priority: 50,
-			Source:   SourceReflector,
-		})
+	for _, ip := range publicIPs {
+		out = append(out, LocalEndpoint{IP: ip, Port: listenPort, Scope: "global", Priority: 50, Source: SourceReflector})
 	}
 	out = append(out, scanInterfaceEndpoints(listenPort, filterPrivateIPv4)...)
-	return dedupLocalEndpoints(out), reflectorErr
+	return dedupLocalEndpoints(out)
 }
 
 func parseHostPortDefault(addr string, defaultPort uint16) (net.IP, uint16, error) {
@@ -327,36 +315,22 @@ func dedupLocalEndpoints(in []LocalEndpoint) []LocalEndpoint {
 	return out
 }
 
-// QueryPublicIP attempts to discover the public IP via external reflector services.
-func QueryPublicIP(reflectors []string, timeout time.Duration) (net.IP, error) {
-	ips, err := QueryPublicIPs(reflectors, timeout)
-	if len(ips) > 0 {
-		return ips[0], nil
+// QueryPublicIPs uses one caller-owned budget for all reflector HTTP requests.
+func QueryPublicIPs(ctx context.Context, reflectors []string, client *http.Client) ([]net.IP, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	return nil, err
-}
-
-// QueryPublicIPs attempts to discover public IPv4 and IPv6 addresses via
-// reflector services. It returns at most one address per IP family.
-func QueryPublicIPs(reflectors []string, timeout time.Duration) ([]net.IP, error) {
-	if len(reflectors) == 0 {
-		return nil, errors.New("no reflectors configured")
-	}
-	if timeout <= 0 {
-		timeout = 3 * time.Second
-	}
-	client := publicIPHTTPClient(timeout)
-	return queryPublicIPsWithClient(reflectors, client)
-}
-
-func QueryPublicIPsWithQuery(reflectors []string, timeout time.Duration, query func([]string, time.Duration) (net.IP, error)) ([]net.IP, error) {
 	reflectors = ResolvePublicIPReflectors(reflectors)
 	if len(reflectors) == 0 {
 		return nil, errors.New("no reflectors configured")
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, cancel := context.WithCancel(ctx)
+	var requests sync.WaitGroup
+	defer func() {
+		cancel()
+		requests.Wait()
+	}()
 
 	type result struct {
 		ip  net.IP
@@ -365,57 +339,9 @@ func QueryPublicIPsWithQuery(reflectors []string, timeout time.Duration, query f
 	outCh := make(chan result, len(reflectors))
 
 	for _, r := range reflectors {
+		requests.Add(1)
 		go func() {
-			ip, err := query([]string{r}, timeout)
-			select {
-			case outCh <- result{ip, err}:
-			case <-ctx.Done():
-			}
-		}()
-	}
-
-	var out []net.IP
-	var have4, have6 bool
-	var lastErr error
-
-	for i := 0; i < len(reflectors); i++ {
-		res := <-outCh
-		if res.err != nil {
-			lastErr = res.err
-			continue
-		}
-		if appendIPByFamily(&out, res.ip, &have4, &have6) && have4 && have6 {
-			cancel()
-			return out, nil
-		}
-	}
-
-	if len(out) > 0 {
-		return out, nil
-	}
-	if lastErr == nil {
-		lastErr = errors.New("all reflectors failed")
-	}
-	return nil, lastErr
-}
-
-func queryPublicIPsWithClient(reflectors []string, client *http.Client) ([]net.IP, error) {
-	reflectors = ResolvePublicIPReflectors(reflectors)
-	if len(reflectors) == 0 {
-		return nil, errors.New("no reflectors configured")
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	type result struct {
-		ip  net.IP
-		err error
-	}
-	outCh := make(chan result, len(reflectors))
-
-	for _, r := range reflectors {
-		go func() {
+			defer requests.Done()
 			ip, err := queryPublicIPCtx(ctx, client, r)
 			select {
 			case outCh <- result{ip, err}:
@@ -429,13 +355,17 @@ func queryPublicIPsWithClient(reflectors []string, client *http.Client) ([]net.I
 	var lastErr error
 
 	for i := 0; i < len(reflectors); i++ {
-		res := <-outCh
+		var res result
+		select {
+		case <-ctx.Done():
+			return out, ctx.Err()
+		case res = <-outCh:
+		}
 		if res.err != nil {
 			lastErr = res.err
 			continue
 		}
 		if appendIPByFamily(&out, res.ip, &have4, &have6) && have4 && have6 {
-			cancel()
 			return out, nil
 		}
 	}

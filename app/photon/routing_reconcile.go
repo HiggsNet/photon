@@ -173,6 +173,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 		vspec := inst.Upstream.Veth
 		vspec.MeshNetns = netnsName
 		if err := func() error {
+			d.linuxObservation.setOperationPhase("veth")
 			defer d.gossipDriver.LogSlowOperation("routing", "routing_veth", time.Now(), d.gossipDriver.PendingEventCount())
 			return d.linuxDriver.EnsureRoutingVeth(ctx, vspec)
 		}(); err != nil {
@@ -200,6 +201,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 			MeshIPv6LL:     inst.Upstream.Veth.MeshIPv6LL,
 		}
 		if err := func() error {
+			d.linuxObservation.setOperationPhase("upstream")
 			defer d.gossipDriver.LogSlowOperation("routing", "routing_upstream", time.Now(), d.gossipDriver.PendingEventCount())
 			return d.linuxDriver.EnsureUpstreamRoutes(ctx, rspec)
 		}(); err != nil {
@@ -236,6 +238,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 	case bird.BirdModeManaged:
 		if configChanged {
 			if err := func() error {
+				d.linuxObservation.setOperationPhase("bird_write")
 				defer d.gossipDriver.LogSlowOperation("routing", "routing_bird_write", time.Now(), d.gossipDriver.PendingEventCount())
 				return d.linuxDriver.WriteBirdConfig(spec.ConfigPath, configBytes)
 			}(); err != nil {
@@ -261,6 +264,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 		}
 		if !running {
 			if err := func() error {
+				d.linuxObservation.setOperationPhase("bird_start")
 				defer d.gossipDriver.LogSlowOperation("routing", "routing_bird_start", time.Now(), d.gossipDriver.PendingEventCount())
 				return d.linuxDriver.StartBird(ctx, spec)
 			}(); err != nil {
@@ -277,6 +281,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 			}
 		} else if configChanged {
 			if err := func() error {
+				d.linuxObservation.setOperationPhase("bird_configure")
 				defer d.gossipDriver.LogSlowOperation("routing", "routing_bird_configure", time.Now(), d.gossipDriver.PendingEventCount())
 				return d.linuxDriver.ConfigureBird(ctx, spec.ControlSocketPath, spec.ConfigPath)
 			}(); err != nil {
@@ -325,6 +330,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 }
 
 func (d *Daemon) observeBirdForHealth(ctx context.Context, instances map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, netnsName string, overlays []string, socketPath string) {
+	d.linuxObservation.setOperationPhase("bird_observe")
 	defer d.gossipDriver.LogSlowOperation("routing", "routing_bird_observe", time.Now(), d.gossipDriver.PendingEventCount())
 	if d.health == nil || d.health.Manager == nil || socketPath == "" {
 		return

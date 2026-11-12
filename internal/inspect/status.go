@@ -2,6 +2,7 @@ package inspect
 
 import (
 	"sort"
+	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -12,6 +13,15 @@ const (
 	StatusModeAutoJoin = "auto-join"
 	StatusModeNoState  = "no-state"
 )
+
+// RuntimeOperation is a process-local diagnostic, shared by text and JSON views.
+type RuntimeOperation struct {
+	Component     string    `json:"component"`
+	Phase         string    `json:"phase"`
+	StartedAt     time.Time `json:"started_at"`
+	Deadline      time.Time `json:"deadline"`
+	ElapsedMillis int64     `json:"elapsed_ms"`
+}
 
 type StatusInput struct {
 	DaemonOnline   bool
@@ -44,33 +54,35 @@ type StatusLinkSummary struct {
 }
 
 type StatusView struct {
-	DaemonOnline   bool
-	GossipSource   string
-	PlatformSource string
-	ManagedZone    zone.ZonePath
-	Mode           string
-	AutoJoinStage  string
-	Admission      gossip.AdmissionDiagnosis
-	Peers          StatusPeerSummary
-	Links          StatusLinkSummary
+	CurrentOperation *RuntimeOperation `json:"current_operation,omitempty"`
+	DaemonOnline     bool
+	GossipSource     string
+	PlatformSource   string
+	ManagedZone      zone.ZonePath
+	Mode             string
+	AutoJoinStage    string
+	Admission        gossip.AdmissionDiagnosis
+	Peers            StatusPeerSummary
+	Links            StatusLinkSummary
 }
 
 // DaemonStatusView is the canonical operational status read model used by the
 // Observer API. It is distinct from StatusView, the human CLI summary.
 type DaemonStatusView struct {
-	PeerID             string       `json:"peer_id,omitempty"`
-	ManagedZone        string       `json:"managed_zone,omitempty"`
-	ListenAddr         string       `json:"listen_addr,omitempty"`
-	DaemonOnline       bool         `json:"daemon_online"`
-	StateRevision      uint64       `json:"state_revision"`
-	KnownZones         int          `json:"known_zones,omitempty"`
-	KnownPeers         int          `json:"known_peers,omitempty"`
-	LinkInstances      int          `json:"link_instances,omitempty"`
-	DesiredLinks       int          `json:"desired_links,omitempty"`
-	LastLinkFailure    *FailureView `json:"last_link_failure,omitempty"`
-	LastRoutingFailure *FailureView `json:"last_routing_failure,omitempty"`
-	LastSyncUnix       int64        `json:"last_sync_unix,omitempty"`
-	LastReconcileUnix  int64        `json:"last_reconcile_unix,omitempty"`
+	CurrentOperation   *RuntimeOperation `json:"current_operation,omitempty"`
+	PeerID             string            `json:"peer_id,omitempty"`
+	ManagedZone        string            `json:"managed_zone,omitempty"`
+	ListenAddr         string            `json:"listen_addr,omitempty"`
+	DaemonOnline       bool              `json:"daemon_online"`
+	StateRevision      uint64            `json:"state_revision"`
+	KnownZones         int               `json:"known_zones,omitempty"`
+	KnownPeers         int               `json:"known_peers,omitempty"`
+	LinkInstances      int               `json:"link_instances,omitempty"`
+	DesiredLinks       int               `json:"desired_links,omitempty"`
+	LastLinkFailure    *FailureView      `json:"last_link_failure,omitempty"`
+	LastRoutingFailure *FailureView      `json:"last_routing_failure,omitempty"`
+	LastSyncUnix       int64             `json:"last_sync_unix,omitempty"`
+	LastReconcileUnix  int64             `json:"last_reconcile_unix,omitempty"`
 }
 
 type DaemonStatusInput struct {

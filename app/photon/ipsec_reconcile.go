@@ -41,11 +41,13 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		return err
 	}
 	platformDriver := d.linuxDriver
+	d.linuxObservation.setOperationPhase("observe_connections")
 	connections, err := platformDriver.ListIPsecConnections(ctx)
 	if err != nil {
 		d.recordIPsecReconcileError(rev, now.Unix(), err)
 		return fmt.Errorf("list ipsec connections: %w", err)
 	}
+	d.linuxObservation.setOperationPhase("observe_sas")
 	sas, err := platformDriver.ListIPsecSAs(ctx)
 	if err != nil {
 		d.recordIPsecReconcileError(rev, now.Unix(), err)
@@ -59,6 +61,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 			d.logWarn("ipsec", "tunnel_suspensions_commit_failed", map[string]any{"error": err})
 		}
 		var err error
+		d.linuxObservation.setOperationPhase("plan_links")
 		plan, err = ipsec.PlanTransportLinks(ctx, verified.Network, verified.ManagedZone, groups, ipsec.LinkPlannerOptions{
 			Now:                 now,
 			MOBIKE:              d.Config.IPsec.MOBIKE,
@@ -89,6 +92,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		"connections":  len(connections),
 		"sas":          len(sas),
 	})
+	d.linuxObservation.setOperationPhase("observe_xfrm")
 	xfrmObservations, err := platformDriver.ObserveXFRMLinks(ctx, plan.Desired, instances, groups)
 	if err != nil {
 		d.recordIPsecReconcileError(rev, now.Unix(), err)
@@ -169,6 +173,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 	}
 	result.Actions = append(result.Actions, ipsec.PlanDuplicateSAGC(plan.Desired, result.Instances, sas, plan.Roles)...)
 	diagnosticPrefixes := d.localIPv6DiagnosticPrefixes(verified, now)
+	d.linuxObservation.setOperationPhase("apply_links")
 	for _, action := range result.Actions {
 		d.logDebug("ipsec", "reconcile_action", ipsecReconcileActionLogFields(action))
 		switch action.Action {

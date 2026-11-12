@@ -97,6 +97,11 @@ export function render(container) {
             ['Peer ID', copyable(s.peer_id, s.peer_id || '-')],
             ['Managed Zone', esc(s.managed_zone || '-')],
             ['Listen Addr', `<code>${esc(s.listen_addr || '-')}</code>`],
+            ...(s.current_operation ? [
+                ['Current Operation', esc(`${s.current_operation.component} / ${s.current_operation.phase}`)],
+                ['Operation Elapsed', esc(`${(s.current_operation.elapsed_ms / 1000).toFixed(1)}s`)],
+                ['Operation Deadline', esc(s.current_operation.deadline)],
+            ] : []),
             ['Last Sync', relTime(s.last_sync_unix)],
             ['Last Reconcile', relTime(s.last_reconcile_unix)],
             ['Snapshot', esc(`${s.known_zones || 0} zones · ${s.known_peers || 0} peers · ${s.link_instances || 0} link instances`)],

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/HiggsNet/photon/internal/inspect"
 )
@@ -16,6 +17,10 @@ func WriteStatus(w io.Writer, view inspect.StatusView) error {
 	}
 	out.Linef("Photon status:")
 	out.Linef("  daemon: %s", daemon)
+	if operation := view.CurrentOperation; operation != nil {
+		out.Linef("  current_operation: %s / %s (elapsed %s)", operation.Component, operation.Phase, time.Duration(operation.ElapsedMillis)*time.Millisecond)
+		out.Linef("  operation_deadline: %s", operation.Deadline.Format(time.RFC3339))
+	}
 	out.Linef("  gossip_source: %s", dash(view.GossipSource))
 	out.Linef("  platform_source: %s", dash(view.PlatformSource))
 	out.Linef("  zone: %s", dash(string(view.ManagedZone)))

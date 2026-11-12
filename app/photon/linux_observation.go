@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
 	"maps"
 	"sync"
+	"time"
+
+	"github.com/HiggsNet/photon/internal/inspect"
 
 	photonstate "github.com/HiggsNet/photon/internal/state"
 
@@ -19,6 +23,40 @@ type linuxObservation struct {
 	ipsecReconcile    *ipsecObservationSummary
 	routingReconcile  *routingObservation
 	firewallReconcile *firewall.FirewallObservation
+	currentOperation  *inspect.RuntimeOperation
+}
+
+// The single writer runs one platform operation at a time. Queries only copy
+// this diagnostic entry; the lock never covers the operation itself.
+func (o *linuxObservation) beginOperation(ctx context.Context, component, phase string) func() {
+	deadline, _ := ctx.Deadline()
+	o.mu.Lock()
+	o.currentOperation = &inspect.RuntimeOperation{Component: component, Phase: phase, StartedAt: time.Now(), Deadline: deadline}
+	o.mu.Unlock()
+	return func() {
+		o.mu.Lock()
+		o.currentOperation = nil
+		o.mu.Unlock()
+	}
+}
+
+func (o *linuxObservation) operationSnapshot() *inspect.RuntimeOperation {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	if o.currentOperation == nil {
+		return nil
+	}
+	operation := *o.currentOperation
+	operation.ElapsedMillis = time.Since(operation.StartedAt).Milliseconds()
+	return &operation
+}
+
+func (o *linuxObservation) setOperationPhase(phase string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.currentOperation != nil {
+		o.currentOperation.Phase = phase
+	}
 }
 
 // routingObservation is online diagnostic state. It is rebuilt after

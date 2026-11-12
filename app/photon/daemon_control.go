@@ -225,7 +225,9 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 		if routingObserved != nil {
 			birdInstances = routingObserved.Instances
 		}
-		writeCanonicalView(conn, statusViewFromOwners(d.Config, common, d.State.ReadLinux().SuspendedTunnelPeers, links, reconcile, birdInstances, d.healthSamples(), true, d.now()))
+		view := statusViewFromOwners(d.Config, common, d.State.ReadLinux().SuspendedTunnelPeers, links, reconcile, birdInstances, d.healthSamples(), true, d.now())
+		view.CurrentOperation = d.linuxObservation.operationSnapshot()
+		writeCanonicalView(conn, view)
 	case "record_put":
 		if err := validateControlRecordPut(request); err != nil {
 			writeControlResponse(conn, controlError(err))

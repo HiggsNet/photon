@@ -469,7 +469,7 @@ func TestDaemonEndpointTimerNoChangeSkipsFlushAndSync(t *testing.T) {
 
 	// Finish the initial publication and its deferred platform work before
 	// measuring the next endpoint event.
-	if _, err := service.handleEndpointTimerEvent(); err != nil {
+	if _, err := service.handleEndpointTimerEvent(t.Context()); err != nil {
 		t.Fatalf("first handleEndpointTimerEvent: %v", err)
 	}
 	service.processEvents(context.Background(), nil)
@@ -524,7 +524,7 @@ func TestPrepareStartupStateDoesNotPersistDerivedAdmission(t *testing.T) {
 	)
 	beforeRev := uint64(service.State.Common.VerifiedRevision())
 
-	changed, err := service.prepareStartupState()
+	changed, err := service.prepareStartupState(t.Context())
 	if err != nil {
 		t.Fatalf("prepareStartupState: %v", err)
 	}
@@ -536,7 +536,7 @@ func TestPrepareStartupStateDoesNotPersistDerivedAdmission(t *testing.T) {
 	if rev != beforeRev {
 		t.Fatalf("verified revision = %d, want runtime-only startup to keep %d", rev, beforeRev)
 	}
-	changed, err = service.prepareStartupState()
+	changed, err = service.prepareStartupState(t.Context())
 	if err != nil {
 		t.Fatalf("prepareStartupState(second): %v", err)
 	}
@@ -567,7 +567,7 @@ func TestDaemonEndpointTimerRefreshDueStillTriggersSync(t *testing.T) {
 	defer service.gossipDriver.Stop()
 
 	// First publish: record is created.
-	if _, err := service.handleEndpointTimerEvent(); err != nil {
+	if _, err := service.handleEndpointTimerEvent(t.Context()); err != nil {
 		t.Fatalf("first handleEndpointTimerEvent: %v", err)
 	}
 	firstView := service.State.Common.ReadView()

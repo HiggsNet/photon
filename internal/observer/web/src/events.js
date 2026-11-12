@@ -108,9 +108,11 @@ function startPolling() {
     pollTimer = setInterval(() => {
         if (mode === 'polling') {
             store.refreshWatched();
-        } else if (mode === 'live' && store.watched().includes('/peers')) {
-            // Session and retry state can change without a verified commit.
-            store.fetch('/peers');
+        } else if (mode === 'live') {
+            // Runtime operations and peer retries change without a commit.
+            for (const key of ['/status', '/peers']) {
+                if (store.watched().includes(key)) store.fetch(key);
+            }
         }
     }, POLL_INTERVAL_MS);
 }

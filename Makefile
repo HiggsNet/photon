@@ -669,7 +669,7 @@ discovery-smoke: build
 # 3. 验证 reflector 结果进入本地 endpoint candidate 收集。
 # 4. 验证 reflector-derived endpoint 可被签名发布。
 reflector-smoke:
-	$(GO_ENV) $(GO) test -v ./pkg/core/gossip -run '^Test(QueryPublicIP|CollectLocalEndpointsWithReflectors)'
+	$(GO_ENV) $(GO) test -v ./pkg/core/gossip -run '^Test(QueryPublicIP|CollectLocalEndpoints|ReflectorQuery)'
 	$(GO_ENV) $(GO) test -v ./pkg/core/host -run '^TestPlanGossipEndpointIntentRefreshAndGrace$$'
 
 # bootstrap-join-smoke 流程：

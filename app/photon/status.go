@@ -111,7 +111,7 @@ func daemonStatusView(d *Daemon) inspect.DaemonStatusView {
 	if d.Config != nil {
 		listenAddr = d.Config.ListenAddr
 	}
-	return inspect.BuildDaemonStatus(inspect.DaemonStatusInput{
+	status := inspect.BuildDaemonStatus(inspect.DaemonStatusInput{
 		PeerID:             peerID,
 		ManagedZone:        string(view.State.ManagedZone),
 		ListenAddr:         listenAddr,
@@ -127,4 +127,6 @@ func daemonStatusView(d *Daemon) inspect.DaemonStatusView {
 		IPsecLastRunUnix:   ipsecLastRunUnix,
 		RoutingLastRunUnix: routingLastRunUnix,
 	})
+	status.CurrentOperation = d.linuxObservation.operationSnapshot()
+	return status
 }
