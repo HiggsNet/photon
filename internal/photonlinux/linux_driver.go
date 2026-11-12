@@ -154,18 +154,21 @@ func (r *LinuxDriver) SubscribeIPsecLifecycle(ctx context.Context) (<-chan trans
 	return events, stop, true, err
 }
 
-// Close releases dependencies created for this driver. Dependencies injected
-// from a long-lived daemon can omit LinuxDriverOptions.Close and remain daemon-owned.
+// Close stops IPsec background work before releasing the other capabilities.
+// Options.Close releases shared connections after their background users exit.
 func (r *LinuxDriver) Close() error {
 	if r == nil {
 		return nil
 	}
 	r.closeOnce.Do(func() {
+		if closer, ok := r.ipsecDriver.(interface{ Close() error }); ok {
+			r.closeErr = closer.Close()
+		}
 		if closer, ok := r.healthProber.(interface{ Close() }); ok {
 			closer.Close()
 		}
 		if r.close != nil {
-			r.closeErr = r.close()
+			r.closeErr = errors.Join(r.closeErr, r.close())
 		}
 	})
 	return r.closeErr
@@ -199,8 +202,8 @@ func NewDaemonDriver(config IPsecConfig, networkNamespaces map[string]transporti
 	if err != nil {
 		return nil, fmt.Errorf("initialize strongswan vici client: %w", err)
 	}
-	initiateClientFactory := func() (transportipsec.VICIClient, func() error, error) {
-		client, err := transportipsec.NewGoviciClient(config.VICISocket)
+	initiateClientFactory := func(ctx context.Context) (transportipsec.VICIClient, func() error, error) {
+		client, err := transportipsec.NewGoviciClient(ctx, config.VICISocket)
 		if err != nil {
 			return nil, nil, err
 		}

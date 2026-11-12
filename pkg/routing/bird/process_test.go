@@ -2,6 +2,7 @@ package bird
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -179,29 +180,42 @@ func TestExecProcessManagerStartRejectsOverlongControlSocketPath(t *testing.T) {
 }
 
 func TestExecProcessManagerStartAdoptsExistingPidfile(t *testing.T) {
-	tmp := t.TempDir()
-	mr := &mockRunner{}
-	pm := NewExecProcessManager(fakeBirdBinary(t))
-	pm.runner = mr.run
-
-	spec := managedSpec(tmp)
-	spec.NetNS = NetNSSpec{Kind: "host"}
-
-	if err := os.WriteFile(spec.ControlSocketPath, []byte{}, 0o644); err != nil {
-		t.Fatalf("write socket: %v", err)
-	}
-	if err := os.WriteFile(spec.PIDFilePath, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o644); err != nil {
-		t.Fatalf("write pidfile: %v", err)
-	}
-
-	if err := pm.Start(context.Background(), spec); err != nil {
-		t.Fatalf("Start failed: %v", err)
-	}
-	if pm.pid != os.Getpid() {
-		t.Fatalf("adopted pid = %d, want %d", pm.pid, os.Getpid())
-	}
-	if len(mr.cmds) != 0 {
-		t.Fatalf("expected no process spawn after adopt, got %+v", mr.cmds)
+	for _, rejected := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reload_rejected=%v", rejected), func(t *testing.T) {
+			commands := make(chan string, 1)
+			server := newFakeServer(t, func(cmd string) string {
+				commands <- cmd
+				if rejected {
+					return "8002 Configuration rejected\n0000 \n"
+				}
+				return "0002 Configuration OK\n0000 \n"
+			})
+			defer server.close()
+			mr := &mockRunner{}
+			pm := NewExecProcessManager(fakeBirdBinary(t))
+			pm.runner = mr.run
+			spec := managedSpec(t.TempDir())
+			spec.NetNS = NetNSSpec{Kind: "host"}
+			spec.ControlSocketPath = server.socket
+			if err := os.WriteFile(spec.PIDFilePath, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			err := pm.Start(context.Background(), spec)
+			if (err != nil) != rejected {
+				t.Fatalf("Start error = %v, rejected=%v", err, rejected)
+			}
+			select {
+			case got := <-commands:
+				if got != fmt.Sprintf("configure %q", spec.ConfigPath) {
+					t.Fatalf("adopt command = %q", got)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("adopted BIRD did not reload configuration")
+			}
+			if pm.pid != os.Getpid() || len(mr.cmds) != 0 {
+				t.Fatalf("adoption spawned a process or lost PID: pid=%d commands=%+v", pm.pid, mr.cmds)
+			}
+		})
 	}
 }
 

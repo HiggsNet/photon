@@ -652,9 +652,6 @@ func (d *Daemon) handleEvent(event daemonEvent) (daemonEventResult, bool, bool) 
 		return daemonEventResult{}, false, false
 	case daemonEventIPsecCleanup:
 		cleaned, orphans, err := d.handleIPsecCleanupEvent(controlContext(event.Context), event.Orphans)
-		if err == nil {
-			d.ipsecDirty = true
-		}
 		return daemonEventResult{CleanedLinks: cleaned, CleanedOrphans: orphans, Error: err}, false, false
 	case daemonEventIPsecPortRotate:
 		result, err := d.handleIPsecPortRotateEvent()
@@ -785,12 +782,12 @@ func (d *Daemon) handleRecoveryPurgeRevokedEvent(ctx context.Context, target zon
 	if common.State == nil {
 		return nil, errors.New("daemon state is not loaded")
 	}
-	links, reconcile := d.linuxObservation.ipsecSnapshot()
+	links, _ := d.linuxObservation.ipsecSnapshot()
 	plan := mergePurgePlan(commonPlan, links)
 	if !apply {
 		return plan, nil
 	}
-	if err := d.cleanupPurgePlanIPsecLinks(ctx, links, reconcile, plan); err != nil {
+	if err := d.cleanupPurgePlanIPsecLinks(ctx, links, plan); err != nil {
 		return nil, err
 	}
 	result, err := d.State.Common.PurgeRevoked(ctx, now, target)
@@ -807,7 +804,7 @@ func (d *Daemon) handleRecoveryPurgeRevokedEvent(ctx context.Context, target zon
 	return plan, nil
 }
 
-func (d *Daemon) cleanupPurgePlanIPsecLinks(ctx context.Context, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, plan *purgePlan) error {
+func (d *Daemon) cleanupPurgePlanIPsecLinks(ctx context.Context, links map[string]ipsec.LinkInstance, plan *purgePlan) error {
 	if plan == nil || len(plan.LinkInstances) == 0 {
 		return nil
 	}
@@ -819,9 +816,7 @@ func (d *Daemon) cleanupPurgePlanIPsecLinks(ctx context.Context, links map[strin
 		return errors.New("linux driver is not initialized")
 	}
 	remaining, _, err := platformDriver.CleanupIPsecLinks(ctx, links, plan.LinkInstances)
-	if err == nil {
-		d.linuxObservation.replaceIPsec(remaining, markIPsecCleanupReconcile(reconcile, d.now()))
-	}
+	d.recordIPsecCleanup(remaining, err)
 	return err
 }
 

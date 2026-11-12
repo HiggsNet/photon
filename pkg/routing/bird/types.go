@@ -317,8 +317,6 @@ type BirdObservation struct {
 	Neighbors  []BirdNeighbor
 
 	FetchedAt time.Time
-	Stale     bool     // true if the snapshot timed out or used cached data
-	Warnings  []string // non-fatal parse warnings
 }
 
 // InstanceObservation summarizes one configured BIRD instance for daemon

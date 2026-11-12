@@ -19,8 +19,8 @@ import (
 // ProcessManager owns the BIRD child process in managed mode.
 type ProcessManager interface {
 	// Start ensures the target netns exists and starts BIRD inside it.
-	// If a compatible BIRD process is already running (matching router id,
-	// table, and control socket), Start adopts it instead of spawning a new one.
+	// If the instance's PID and control socket still exist, Start adopts the
+	// process and applies the current configuration instead of spawning another.
 	Start(ctx context.Context, spec BirdInstanceSpec) error
 
 	// Stop gracefully stops the BIRD process and removes Photon-owned
@@ -88,7 +88,7 @@ func (pm *ExecProcessManager) Start(ctx context.Context, spec BirdInstanceSpec) 
 	}
 
 	if pm.adoptExisting(spec) {
-		return nil
+		return NewClient(spec.ControlSocketPath, 10*time.Second).Configure(ctx, spec.ConfigPath)
 	}
 	if err := os.MkdirAll(filepath.Dir(spec.ControlSocketPath), 0o700); err != nil {
 		return fmt.Errorf("create BIRD control socket directory: %w", err)

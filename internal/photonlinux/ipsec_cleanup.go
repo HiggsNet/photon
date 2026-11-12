@@ -23,10 +23,10 @@ func (r *LinuxDriver) CleanupIPsecLinks(ctx context.Context, instances map[strin
 		return remaining, 0, nil
 	}
 	if r == nil || r.ipsecDriver == nil {
-		return nil, 0, errors.New("ipsec driver is nil")
+		return remaining, 0, errors.New("ipsec driver is nil")
 	}
 	if r.xfrmDriver == nil {
-		return nil, 0, errors.New("xfrm driver is nil")
+		return remaining, 0, errors.New("xfrm driver is nil")
 	}
 	sortedIDs := append([]string(nil), ids...)
 	sort.Strings(sortedIDs)
@@ -37,11 +37,11 @@ func (r *LinuxDriver) CleanupIPsecLinks(ctx context.Context, instances map[strin
 			continue
 		}
 		if err := instance.Owner.Validate(instance); err != nil {
-			return nil, cleaned, fmt.Errorf("refuse cleanup of unmanaged ipsec link %s: %w", id, err)
+			return remaining, cleaned, fmt.Errorf("refuse cleanup of unmanaged ipsec link %s: %w", id, err)
 		}
 		action := transportipsec.ReconcileAction{Action: transportipsec.ReconcileActionTeardown, Instance: &instance}
 		if _, err := transportipsec.ApplyReconcileAction(ctx, r.ipsecDriver, r.xfrmDriver, action, transportipsec.NetNSSpec{}); err != nil {
-			return nil, cleaned, fmt.Errorf("cleanup ipsec link %s: %w", id, err)
+			return remaining, cleaned, fmt.Errorf("cleanup ipsec link %s: %w", id, err)
 		}
 		delete(remaining, id)
 		cleaned++
@@ -89,7 +89,7 @@ func NewIPsecCleanupDriver(config IPsecConfig) (*LinuxDriver, error) {
 		dryRun := &transportipsec.DryRunDriver{}
 		return NewLinuxDriver(LinuxDriverOptions{IPsecDriver: dryRun, XFRMDriver: dryRun})
 	case IPsecDriverStrongSwan:
-		client, err := transportipsec.NewGoviciClient(config.VICISocket)
+		client, err := transportipsec.NewGoviciClient(context.Background(), config.VICISocket)
 		if err != nil {
 			return nil, fmt.Errorf("initialize strongswan vici client: %w", err)
 		}

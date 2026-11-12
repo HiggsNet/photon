@@ -29,7 +29,7 @@ func TestFirewallObservationDoesNotAdvancePersistentRevision(t *testing.T) {
 	rt := &testApp{Config: defaultAppConfig()}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	rev := uint64(service.State.Common.VerifiedRevision())
-	service.publishFirewallObservation(rev, summary)
+	service.linuxObservation.replaceFirewall(summary)
 	if got := uint64(service.State.Common.VerifiedRevision()); got != rev {
 		t.Fatalf("firewall observation revision = %d, want unchanged %d", got, rev)
 	}
@@ -245,14 +245,10 @@ func TestReconcileFirewall_NoInstances(t *testing.T) {
 type captureFirewallInstanceDriver struct {
 	firewall.DryRunDriver
 	instances []firewall.FirewallInstanceSpec
-	onApply   func()
 }
 
 func (d *captureFirewallInstanceDriver) Apply(ctx context.Context, desired *firewall.FirewallDesiredState) (firewall.FirewallApplyResult, error) {
 	d.instances = append(d.instances, desired.Instance)
-	if d.onApply != nil {
-		d.onApply()
-	}
 	return d.DryRunDriver.Apply(ctx, desired)
 }
 
@@ -391,45 +387,6 @@ func TestLongFirewallReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 	close(driver.unblock)
 	if err := <-done; err != nil {
 		t.Fatalf("reconcileFirewall: %v", err)
-	}
-}
-
-func TestReconcileFirewallStaleCommitPreservesNewRevision(t *testing.T) {
-	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	appConfig := defaultAppConfig()
-	appConfig.Firewall.Instances = []firewall.FirewallInstanceSpec{{
-		ID:            "photontesth2",
-		NetNS:         "photontesth2",
-		Enabled:       true,
-		Mode:          firewall.ModeManaged,
-		Backend:       firewall.BackendNone,
-		DefaultPolicy: firewall.DefaultPolicyDrop,
-	}}
-	rt := &testApp{Config: appConfig, Clock: func() time.Time { return time.Unix(7010, 0) }}
-	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-	baseRev := uint64(service.State.Common.VerifiedRevision())
-	driver := &captureFirewallInstanceDriver{}
-	driver.onApply = func() {
-		if _, err := advanceTestVerifiedRevision(service.State.Common, time.Unix(7010, 1)); err != nil {
-			t.Fatalf("advance state revision during firewall apply: %v", err)
-		}
-		driver.onApply = nil
-	}
-	installTestFirewallDriver(service, driver)
-
-	if err := service.reconcileFirewall(context.Background()); err != nil {
-		t.Fatalf("reconcileFirewall: %v", err)
-	}
-	if !service.firewallDirty {
-		t.Fatal("firewallDirty = false, want stale firewall summary commit to schedule another reconcile")
-	}
-	common := service.State.Common.ReadView()
-	rev := uint64(common.Revision)
-	if rev != baseRev+1 {
-		t.Fatalf("state revision = %d, want only external update at %d", rev, baseRev+1)
-	}
-	if observation := service.linuxObservation.firewallSnapshot(); observation != nil {
-		t.Fatalf("firewall observation = %+v, want stale summary discarded", observation)
 	}
 }
 

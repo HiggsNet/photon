@@ -309,7 +309,7 @@ Phase 4 只做到 peer-to-peer tunnel link 可用。Babel routing 和 prefix aut
 
 2. **VICI 操作超时**：所有 VICI call 默认带 10s 超时，避免 charon 无响应时 reconcile 挂起。`load-conn` 等调用会输出结构化 debug 日志，敏感 key material 会被脱敏。
 
-3. **有界异步 CHILD_SA 发起**：`InitiateChild` 默认在后台通过独立 VICI client 异步执行，reconcile 主路径不等待 IKE 协商完成；后台任务不继承单次 reconcile 的取消信号，同一 CHILD_SA 的并发请求会合并。VICI `initiate` 请求显式携带 15s charon 端 timeout，本地调用使用稍长的 20s 兜底；每个 driver 默认最多同时向 charon 提交 4 个 initiate，其余请求先在本地排队且不打开 VICI socket。这样不可达 peer 不会通过残留的 blocking initiate callback 耗尽 charon worker。若需要同步发起可关闭 `InitiateAsync`。
+3. **有界异步 CHILD_SA 发起**：Linux daemon 在后台通过独立 VICI client 异步执行 `InitiateChild`，reconcile 主路径不等待 IKE 协商完成；后台任务不继承单次 reconcile 的取消信号，同一 CHILD_SA 的并发请求会合并。VICI `initiate` 请求显式携带 15s charon 端 timeout，打开连接和本地调用共用稍长的 20s 预算；每个 driver 默认最多同时向 charon 提交 4 个 initiate，其余请求先在本地排队且不打开 VICI socket。驱动关闭时取消并等待所有后台任务退出，排队任务不再打开连接。这样不可达 peer 不会通过残留的 blocking initiate callback 耗尽 charon worker。若需要同步发起可关闭 `InitiateAsync`。
 
 4. **SA 建立宽限期**：`LinkInstance` 进入 `connecting` 后，如果已观测到部分 SA 状态或在 3 分钟宽限期内，reconcile 不会立即标记为 error/backoff；宽限期结束后仍未 established 才进入 repair。
 

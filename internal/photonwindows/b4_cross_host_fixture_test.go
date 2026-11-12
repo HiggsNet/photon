@@ -3,6 +3,7 @@
 package photonwindows
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/x509"
 	"encoding/hex"
@@ -244,7 +245,7 @@ protocol babel %s {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vici, err := ipsec.NewGoviciClient("/tmp/ike-auth.vici")
+	vici, err := ipsec.NewGoviciClient(context.Background(), "/tmp/ike-auth.vici")
 	if err != nil {
 		t.Fatal(err)
 	}

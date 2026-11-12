@@ -3,6 +3,7 @@ package bird
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -184,9 +185,6 @@ func TestStatusParsing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status failed: %v", err)
 	}
-	if state.Stale {
-		t.Fatalf("unexpected stale state, warnings: %v", state.Warnings)
-	}
 
 	if state.Status.Version != "2.15.1" {
 		t.Errorf("version = %q, want %q", state.Status.Version, "2.15.1")
@@ -282,9 +280,6 @@ func TestStatusParsesInternalTablesAndBIRD219Neighbors(t *testing.T) {
 	state, err := client.Status(context.Background())
 	if err != nil {
 		t.Fatalf("Status failed: %v", err)
-	}
-	if state.Stale {
-		t.Fatalf("unexpected stale state, warnings: %v", state.Warnings)
 	}
 	if len(state.Neighbors) != 1 || state.Neighbors[0].Interface != "phx1d556624" || state.Neighbors[0].Routes != 1 {
 		t.Fatalf("neighbors = %#v", state.Neighbors)
@@ -526,17 +521,25 @@ func TestSocketNotFound(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	state, err := client.Status(ctx)
-	if err != nil {
-		t.Fatalf("Status returned unexpected hard error: %v", err)
-	}
-	if !state.Stale {
-		t.Fatal("expected stale state when socket is missing")
-	}
-	if len(state.Warnings) == 0 {
-		t.Fatal("expected warnings when socket is missing")
+	if !errors.Is(err, os.ErrNotExist) || state != nil {
+		t.Fatalf("Status = (%+v, %v), want no snapshot and missing socket error", state, err)
 	}
 }
 
-func TestMain(m *testing.M) {
-	os.Exit(m.Run())
+func TestStatusReportsCommandFailures(t *testing.T) {
+	for _, command := range []string{"show status", "show protocols all", "show interfaces", "show babel neighbors", "show route all"} {
+		t.Run(command, func(t *testing.T) {
+			server := newFakeServer(t, func(cmd string) string {
+				if cmd == command {
+					return "8001 Query unavailable\n0000 \n"
+				}
+				return defaultHandler(cmd)
+			})
+			defer server.close()
+			state, err := NewClient(server.socket, time.Second).Status(context.Background())
+			if state != nil || err == nil || !strings.Contains(err.Error(), command) {
+				t.Fatalf("Status = (%+v, %v), want failed command without partial snapshot", state, err)
+			}
+		})
+	}
 }

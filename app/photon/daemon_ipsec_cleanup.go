@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"time"
 
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
@@ -13,11 +12,10 @@ func (d *Daemon) handleIPsecCleanupEvent(ctx context.Context, includeOrphans boo
 		return 0, 0, errors.New("daemon service is not initialized")
 	}
 	common := d.State.Common.ReadView()
-	runtime := d.State.ReadLinux()
-	if common.State == nil || runtime == nil {
+	if common.State == nil {
 		return 0, 0, errors.New("daemon state is not loaded")
 	}
-	links, reconcile := d.linuxObservation.ipsecSnapshot()
+	links, _ := d.linuxObservation.ipsecSnapshot()
 	platformDriver := d.linuxDriver
 	if len(links) > 0 || includeOrphans {
 		if platformDriver == nil {
@@ -27,7 +25,6 @@ func (d *Daemon) handleIPsecCleanupEvent(ctx context.Context, includeOrphans boo
 
 	cleaned := 0
 	orphans := 0
-	now := d.now()
 	var err error
 	if len(links) > 0 {
 		ids := make([]string, 0, len(links))
@@ -35,23 +32,12 @@ func (d *Daemon) handleIPsecCleanupEvent(ctx context.Context, includeOrphans boo
 			ids = append(ids, id)
 		}
 		links, cleaned, err = platformDriver.CleanupIPsecLinks(ctx, links, ids)
-		if err != nil {
-			return cleaned, orphans, err
-		}
 	}
-	reconcile = markIPsecCleanupReconcile(reconcile, now)
-	if includeOrphans {
+	if err == nil && includeOrphans {
 		orphans, err = platformDriver.CleanupIPsecOrphans(ctx, managedIPsecConnectionNamesFromLinks(links))
-		if err != nil {
-			return cleaned, orphans, err
-		}
 	}
-	if uint64(d.State.Common.VerifiedRevision()) != uint64(common.Revision) {
-		return cleaned, orphans, errStateRevisionStale
-	}
-	d.linuxObservation.replaceIPsec(links, reconcile)
-	d.notifyStateChanged()
-	return cleaned, orphans, nil
+	d.recordIPsecCleanup(links, err)
+	return cleaned, orphans, err
 }
 
 func managedIPsecConnectionNamesFromLinks(links map[string]ipsec.LinkInstance) map[string]bool {
@@ -66,15 +52,7 @@ func managedIPsecConnectionNamesFromLinks(links map[string]ipsec.LinkInstance) m
 	return out
 }
 
-func markIPsecCleanupReconcile(reconcile *ipsecObservationSummary, now time.Time) *ipsecObservationSummary {
-	if reconcile == nil {
-		reconcile = &ipsecObservationSummary{}
-	}
-	reconcile.LastRunUnix = now.Unix()
-	reconcile.LastFailure = nil
-	reconcile.Desired = nil
-	reconcile.Actions = nil
-	reconcile.ActualSAs = nil
-	reconcile.Skipped = nil
-	return reconcile
+func (d *Daemon) recordIPsecCleanup(links map[string]ipsec.LinkInstance, err error) {
+	d.linuxObservation.replaceIPsec(links, &ipsecObservationSummary{LastRunUnix: d.now().Unix(), LastFailure: err})
+	d.notifyStateChanged()
 }

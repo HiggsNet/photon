@@ -18,7 +18,6 @@ func TestPublishIPsecObservationRefreshesLiveSACounters(t *testing.T) {
 	service := newTestDaemonFromOwners(
 		&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
-	rev := uint64(service.State.Common.VerifiedRevision())
 	instances := map[string]ipsec.LinkInstance{
 		"link-a": {ID: "link-a", IKEName: "ike-a", ActualState: ipsec.LinkStateUp},
 	}
@@ -27,7 +26,7 @@ func TestPublishIPsecObservationRefreshesLiveSACounters(t *testing.T) {
 		IKEAgeSeconds: 10, ChildAgeSeconds: 8,
 		InboundBytes: 100, InboundPackets: 4, InboundIdleSecs: 3, InboundKnown: true,
 	}
-	service.publishIPsecObservation(rev, 100, instances, nil, []ipsec.SAState{first}, nil, nil, nil)
+	service.publishIPsecObservation(100, instances, nil, []ipsec.SAState{first}, nil, nil, nil)
 
 	second := first
 	second.IKEAgeSeconds = 70
@@ -35,7 +34,7 @@ func TestPublishIPsecObservationRefreshesLiveSACounters(t *testing.T) {
 	second.InboundBytes = 1000
 	second.InboundPackets = 40
 	second.InboundIdleSecs = 1
-	service.publishIPsecObservation(rev, 160, instances, nil, []ipsec.SAState{second}, nil, nil, nil)
+	service.publishIPsecObservation(160, instances, nil, []ipsec.SAState{second}, nil, nil, nil)
 
 	response := controlViewRequestViaPipe[inspect.LinksDebugView](t, service, controlRequest{Method: "links_view"})
 	if !response.OK {
@@ -64,14 +63,14 @@ func TestRecordIPsecReconcileErrorRefreshesRepeatedObservation(t *testing.T) {
 	}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	firstRev := uint64(service.State.Common.VerifiedRevision())
-	service.recordIPsecReconcileError(firstRev, now.Unix(), errors.New("vici unavailable"))
+	service.recordIPsecReconcileError(now.Unix(), errors.New("vici unavailable"))
 	committedRev := uint64(service.State.Common.VerifiedRevision())
 	if committedRev != firstRev {
 		t.Fatalf("first error verified revision = %d, want %d", committedRev, firstRev)
 	}
 
 	later := now.Add(time.Minute)
-	service.recordIPsecReconcileError(committedRev, later.Unix(), errors.New("vici unavailable"))
+	service.recordIPsecReconcileError(later.Unix(), errors.New("vici unavailable"))
 	if got := uint64(service.State.Common.VerifiedRevision()); got != committedRev {
 		t.Fatalf("repeated identical error revision = %d, want unchanged %d", got, committedRev)
 	}
@@ -80,7 +79,7 @@ func TestRecordIPsecReconcileErrorRefreshesRepeatedObservation(t *testing.T) {
 		t.Fatalf("repeated IPsec failure observation = %+v, want refreshed timestamp and unchanged failure", repeated)
 	}
 
-	service.recordIPsecReconcileError(committedRev, later.Unix(), errors.New("vici timeout"))
+	service.recordIPsecReconcileError(later.Unix(), errors.New("vici timeout"))
 	if got := uint64(service.State.Common.VerifiedRevision()); got != committedRev {
 		t.Fatalf("changed runtime error verified revision = %d, want %d", got, committedRev)
 	}
@@ -91,36 +90,6 @@ func TestRecordIPsecReconcileErrorRefreshesRepeatedObservation(t *testing.T) {
 	inspection := buildStoredLinkInspection(service.Config, nil, observation, nil, nil)
 	if inspection.Inspection.LastFailure == nil || inspection.Inspection.LastFailure.Code != inspect.FailureCodeIPsecReconcile || inspection.Inspection.LastFailure.Message != "vici timeout" {
 		t.Fatalf("inspect failure = %+v", inspection.Inspection.LastFailure)
-	}
-}
-
-func TestPublishIPsecObservationRejectsEquivalentStaleResult(t *testing.T) {
-	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	now := time.Unix(4040, 0)
-	service := newTestDaemonFromOwners(
-		&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
-	)
-	rev := uint64(service.State.Common.VerifiedRevision())
-	instances := map[string]ipsec.LinkInstance{
-		"link-a": {ID: "link-a", IKEName: "ike-a", ActualState: ipsec.LinkStateUp},
-	}
-	sa := ipsec.SAState{Name: "ike-a", IKEState: "ESTABLISHED", Established: true, InboundPackets: 4, InboundKnown: true}
-	service.publishIPsecObservation(rev, now.Unix(), instances, nil, []ipsec.SAState{sa}, nil, nil, nil)
-	if _, err := advanceTestVerifiedRevision(service.State.Common, now.Add(time.Nanosecond)); err != nil {
-		t.Fatalf("advance state revision: %v", err)
-	}
-	service.ipsecDirty = false
-
-	staleSA := sa
-	staleSA.InboundPackets++
-	service.publishIPsecObservation(rev, now.Add(time.Minute).Unix(), instances, nil, []ipsec.SAState{staleSA}, nil, nil, nil)
-	if !service.ipsecDirty {
-		t.Fatal("ipsecDirty = false, want stale equivalent observation to be retried")
-	}
-	_, observation := service.linuxObservation.ipsecSnapshot()
-	if observation == nil || observation.LastRunUnix != now.Unix() ||
-		len(observation.ActualSAs) != 1 || observation.ActualSAs[0].InboundPackets != sa.InboundPackets {
-		t.Fatalf("IPsec observation = %+v, want initial snapshot preserved", observation)
 	}
 }
 
@@ -172,47 +141,6 @@ func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 	}
 }
 
-func TestDaemonIPsecReconcileDiscardsResultWhenRevisionChanged(t *testing.T) {
-	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
-	now := time.Unix(4050, 0)
-	addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
-	group := testIPsecLinkGroup()
-	setTestIPsecOverlayIntent(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", group, now)
-	appConfig := defaultAppConfig()
-	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{group}
-	rt := &testApp{Config: testConfigWithStatePath(appConfig,
-		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
-	}
-	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-	baseRev := uint64(service.State.Common.VerifiedRevision())
-	driver := &staleCommitIPsecDriver{}
-	driver.onLoadConnection = func(ipsec.TransportLinkSpec) {
-		if _, err := advanceTestVerifiedRevision(service.State.Common, now.Add(time.Nanosecond)); err != nil {
-			t.Fatalf("advance state revision during apply: %v", err)
-		}
-	}
-	installTestIPsecDrivers(service, driver, driver)
-
-	if err := service.reconcileIPsecLinks(context.Background()); err != nil {
-		t.Fatalf("reconcileIPsecLinks: %v", err)
-	}
-	if !service.ipsecDirty {
-		t.Fatal("ipsecDirty = false, want stale reconcile to be retried")
-	}
-	common := service.State.Common.ReadView()
-	observationLinks, observationReconcile := readTestIPsecObservation(service)
-	rev := uint64(common.Revision)
-	if rev != baseRev+1 {
-		t.Fatalf("state revision = %d, want only external update at %d", rev, baseRev+1)
-	}
-	if len(observationLinks) != 0 {
-		t.Fatalf("link instances = %+v, want stale result discarded", observationLinks)
-	}
-	if observationReconcile != nil {
-		t.Fatalf("ipsec reconcile summary = %+v, want stale summary discarded", observationReconcile)
-	}
-}
-
 func TestLongIPsecReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	now := time.Unix(4060, 0)
@@ -227,7 +155,7 @@ func TestLongIPsecReconcileDoesNotBlockCommittedReaders(t *testing.T) {
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	started := make(chan struct{})
 	unblock := make(chan struct{})
-	driver := &staleCommitIPsecDriver{}
+	driver := &loadHookIPsecDriver{}
 	driver.onLoadConnection = func(ipsec.TransportLinkSpec) {
 		close(started)
 		<-unblock

@@ -13,6 +13,13 @@ type closeTrackingHealthProber struct {
 	closed int
 }
 
+type closeTrackingIPsecDriver struct {
+	transportipsec.DryRunDriver
+	closed int
+}
+
+func (d *closeTrackingIPsecDriver) Close() error { d.closed++; return nil }
+
 func (*closeTrackingHealthProber) Type() string { return health.ProbeTypeICMP }
 
 func (*closeTrackingHealthProber) Probe(context.Context, health.ProbeTarget, health.ProbeConfig) health.ProbeResult {
@@ -54,8 +61,11 @@ func TestLinuxDriverOwnsIPsecCleanupDependencies(t *testing.T) {
 func TestLinuxDriverClosesOwnedDependenciesOnce(t *testing.T) {
 	closed := 0
 	prober := &closeTrackingHealthProber{}
-	driver := &transportipsec.DryRunDriver{}
+	driver := &closeTrackingIPsecDriver{}
 	linuxDriver := mustNewLinuxDriver(t, LinuxDriverOptions{IPsecDriver: driver, XFRMDriver: driver, HealthProber: prober, Close: func() error {
+		if driver.closed != 1 {
+			t.Error("shared VICI connection closed before IPsec tasks stopped")
+		}
 		closed++
 		return nil
 	}})
@@ -65,8 +75,8 @@ func TestLinuxDriverClosesOwnedDependenciesOnce(t *testing.T) {
 	if err := linuxDriver.Close(); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
-	if closed != 1 {
-		t.Fatalf("close calls = %d, want 1", closed)
+	if closed != 1 || driver.closed != 1 {
+		t.Fatalf("close calls = %d, IPsec closes=%d, want 1 each", closed, driver.closed)
 	}
 	if prober.closed != 1 {
 		t.Fatalf("health prober close calls = %d, want 1", prober.closed)

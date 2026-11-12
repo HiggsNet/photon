@@ -39,8 +39,12 @@ type ReconnectingVICIClient struct {
 	closed  bool
 }
 
-func NewGoviciClient(socketPath string) (*GoviciClient, error) {
-	var opts []vici.SessionOption
+func NewGoviciClient(ctx context.Context, socketPath string) (*GoviciClient, error) {
+	// govici invokes its dialer with Background. Bind the caller's context
+	// here so opening a dedicated initiate session can be canceled as well.
+	opts := []vici.SessionOption{vici.WithDialContext(func(_ context.Context, network, addr string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, addr)
+	})}
 	if socketPath != "" {
 		opts = append(opts, vici.WithSocketPath(socketPath))
 	}
@@ -53,7 +57,7 @@ func NewGoviciClient(socketPath string) (*GoviciClient, error) {
 
 func NewReconnectingGoviciClient(socketPath string) (*ReconnectingVICIClient, error) {
 	factory := func() (VICIClient, func() error, error) {
-		client, err := NewGoviciClient(socketPath)
+		client, err := NewGoviciClient(context.Background(), socketPath)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -299,14 +303,34 @@ func (c *GoviciClient) SubscribeEvents(ctx context.Context, events ...string) (<
 	}
 	raw := make(chan vici.Event, 16)
 	out := make(chan VICIEvent, 16)
+	stopping := make(chan struct{})
+	done := make(chan struct{})
 	session.NotifyEvents(raw)
+	var stopOnce sync.Once
 	stop := func() {
-		session.StopEvents(raw)
+		stopOnce.Do(func() {
+			session.StopEvents(raw)
+			close(stopping)
+		})
+		<-done
 	}
 	go func() {
+		defer close(done)
 		defer close(out)
-		for ev := range raw {
-			out <- parseVICIEvent(ev.Name, goviciMessageToMap(ev.Message))
+		for {
+			select {
+			case <-stopping:
+				return
+			case ev, ok := <-raw:
+				if !ok {
+					return
+				}
+				select {
+				case <-stopping:
+					return
+				case out <- parseVICIEvent(ev.Name, goviciMessageToMap(ev.Message)):
+				}
+			}
 		}
 	}()
 	return out, stop, nil

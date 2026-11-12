@@ -133,13 +133,13 @@ func (d *countingIPsecDriver) ListSAs(context.Context) ([]ipsec.SAState, error) 
 	return d.DryRunDriver.ListSAs(context.Background())
 }
 
-type staleCommitIPsecDriver struct {
+type loadHookIPsecDriver struct {
 	ipsec.DryRunDriver
 	onLoadConnection func(ipsec.TransportLinkSpec)
 	loadedOnce       bool
 }
 
-func (d *staleCommitIPsecDriver) LoadConnection(ctx context.Context, spec ipsec.TransportLinkSpec) error {
+func (d *loadHookIPsecDriver) LoadConnection(ctx context.Context, spec ipsec.TransportLinkSpec) error {
 	if !d.loadedOnce {
 		d.loadedOnce = true
 		if d.onLoadConnection != nil {

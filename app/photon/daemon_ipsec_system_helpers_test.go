@@ -125,7 +125,7 @@ func waitDaemonTestVICI(ctx context.Context, socket string) (*ipsec.GoviciClient
 	}
 	var lastErr error
 	for {
-		client, err := ipsec.NewGoviciClient(socket)
+		client, err := ipsec.NewGoviciClient(ctx, socket)
 		if err == nil {
 			return client, nil
 		}
@@ -310,8 +310,8 @@ func newDaemonTestStrongSwanDriver(t *testing.T, viciSocket string, client ipsec
 		VICI:          client,
 		KeyDir:        t.TempDir(),
 		InitiateAsync: true,
-		InitiateClientFactory: func() (ipsec.VICIClient, func() error, error) {
-			initiateClient, err := ipsec.NewGoviciClient(viciSocket)
+		InitiateClientFactory: func(ctx context.Context) (ipsec.VICIClient, func() error, error) {
+			initiateClient, err := ipsec.NewGoviciClient(ctx, viciSocket)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -392,7 +392,7 @@ func dumpDaemonSystemState(t *testing.T, ctx context.Context, namespaces ...stri
 
 func dumpDaemonVICISAs(t *testing.T, ctx context.Context, viciSocket, label string) {
 	t.Helper()
-	client, err := ipsec.NewGoviciClient(viciSocket)
+	client, err := ipsec.NewGoviciClient(ctx, viciSocket)
 	if err != nil {
 		t.Logf("vici connect %s: %v", label, err)
 		return

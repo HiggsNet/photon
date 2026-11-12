@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -202,7 +203,7 @@ type StrongSwanDriver struct {
 	// InitiateConcurrency limits blocking initiate callbacks submitted to one
 	// charon process.  Zero selects the conservative default.
 	InitiateConcurrency   int
-	InitiateClientFactory func() (VICIClient, func() error, error)
+	InitiateClientFactory func(context.Context) (VICIClient, func() error, error)
 
 	privateKeyBindings map[string]string
 	privateKeys        map[string]*strongSwanPrivateKeyRef
@@ -210,6 +211,10 @@ type StrongSwanDriver struct {
 	initiateMu         sync.Mutex
 	initiateBusy       map[string]struct{}
 	initiateSlots      chan struct{}
+	initiateContext    context.Context
+	initiateCancel     context.CancelFunc
+	initiateClosed     bool
+	initiateWG         sync.WaitGroup
 }
 
 type strongSwanPrivateKeyRef struct {
@@ -472,7 +477,7 @@ func (d *StrongSwanDriver) InitiateChild(ctx context.Context, child string) erro
 		return fmt.Errorf("child sa name is required")
 	}
 	if d.InitiateAsync {
-		return d.initiateChildAsync(ctx, child)
+		return d.initiateChildAsync(child)
 	}
 	ctx, cancel := d.viciInitiateContext(ctx)
 	defer cancel()
@@ -480,28 +485,59 @@ func (d *StrongSwanDriver) InitiateChild(ctx context.Context, child string) erro
 	return err
 }
 
-func (d *StrongSwanDriver) initiateChildAsync(ctx context.Context, child string) error {
-	if ctx == nil {
-		ctx = context.Background()
+func (d *StrongSwanDriver) initiateChildAsync(child string) error {
+	d.initiateMu.Lock()
+	if d.initiateClosed {
+		d.initiateMu.Unlock()
+		return net.ErrClosed
 	}
-	if d.markInitiateBusy(child) {
+	if _, busy := d.initiateBusy[child]; busy {
+		d.initiateMu.Unlock()
 		return nil
 	}
-	slots := d.asyncInitiateSlots()
+	if d.initiateContext == nil {
+		d.initiateContext, d.initiateCancel = context.WithCancel(context.Background())
+		concurrency := d.InitiateConcurrency
+		if concurrency <= 0 {
+			concurrency = defaultVICIInitiateConcurrency
+		}
+		d.initiateSlots = make(chan struct{}, concurrency)
+		d.initiateBusy = make(map[string]struct{})
+	}
+	ctx, slots := d.initiateContext, d.initiateSlots
+	d.initiateBusy[child] = struct{}{}
+	d.initiateWG.Add(1)
+	d.initiateMu.Unlock()
 	go func() {
-		defer d.clearInitiateBusy(child)
+		defer d.initiateWG.Done()
+		defer func() {
+			d.initiateMu.Lock()
+			delete(d.initiateBusy, child)
+			d.initiateMu.Unlock()
+		}()
 
 		// Do not open a VICI socket until a charon worker slot is available.
 		// Waiting locally is cheap; submitting every desired child at once can
 		// exhaust charon's worker pool when peers are unreachable.
-		slots <- struct{}{}
+		select {
+		case <-ctx.Done():
+			return
+		case slots <- struct{}{}:
+		}
 		defer func() { <-slots }()
+		if ctx.Err() != nil {
+			return
+		}
+		// Negotiation may outlive one reconcile, but not this driver. Include
+		// opening its dedicated VICI session in the same bounded operation.
+		callCtx, cancel := d.viciInitiateContext(ctx)
+		defer cancel()
 
 		client := d.VICI
 		var closeFn func() error
 		if d.InitiateClientFactory != nil {
 			var err error
-			client, closeFn, err = d.InitiateClientFactory()
+			client, closeFn, err = d.InitiateClientFactory(callCtx)
 			if err != nil {
 				d.logAsyncInitiateFailure(child, err)
 				return
@@ -511,14 +547,11 @@ func (d *StrongSwanDriver) initiateChildAsync(ctx context.Context, child string)
 			d.logAsyncInitiateFailure(child, fmt.Errorf("vici client is required"))
 			return
 		}
-		// The reconcile context is canceled as soon as a reconcile pass
-		// returns.  This operation intentionally outlives that pass, but is
-		// still bounded by both the charon-side timeout in the request and the
-		// slightly longer local timeout applied here.
-		callCtx, cancel := d.viciInitiateContext(context.WithoutCancel(ctx))
-		defer cancel()
 		if closeFn != nil {
 			defer func() { _ = closeFn() }()
+		}
+		if callCtx.Err() != nil {
+			return
 		}
 		if _, err := client.Call(callCtx, "initiate", d.viciInitiateRequest(child)); err != nil {
 			d.logAsyncInitiateFailure(child, err)
@@ -527,36 +560,17 @@ func (d *StrongSwanDriver) initiateChildAsync(ctx context.Context, child string)
 	return nil
 }
 
-func (d *StrongSwanDriver) asyncInitiateSlots() chan struct{} {
+// Close cancels and joins background initiates. The VICI client itself remains
+// owned by the caller that installed it, after these dedicated sessions exit.
+func (d *StrongSwanDriver) Close() error {
 	d.initiateMu.Lock()
-	defer d.initiateMu.Unlock()
-	if d.initiateSlots == nil {
-		concurrency := d.InitiateConcurrency
-		if concurrency <= 0 {
-			concurrency = defaultVICIInitiateConcurrency
-		}
-		d.initiateSlots = make(chan struct{}, concurrency)
+	d.initiateClosed = true
+	if d.initiateCancel != nil {
+		d.initiateCancel()
 	}
-	return d.initiateSlots
-}
-
-func (d *StrongSwanDriver) markInitiateBusy(child string) bool {
-	d.initiateMu.Lock()
-	defer d.initiateMu.Unlock()
-	if d.initiateBusy == nil {
-		d.initiateBusy = make(map[string]struct{})
-	}
-	if _, ok := d.initiateBusy[child]; ok {
-		return true
-	}
-	d.initiateBusy[child] = struct{}{}
-	return false
-}
-
-func (d *StrongSwanDriver) clearInitiateBusy(child string) {
-	d.initiateMu.Lock()
-	defer d.initiateMu.Unlock()
-	delete(d.initiateBusy, child)
+	d.initiateMu.Unlock()
+	d.initiateWG.Wait()
+	return nil
 }
 
 func (d *StrongSwanDriver) ListSAs(ctx context.Context) ([]SAState, error) {

@@ -18,7 +18,7 @@ func TestStrongSwanDriverLoadsKeyAndConnection(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	client, err := NewGoviciClient("")
+	client, err := NewGoviciClient(ctx, "")
 	if err != nil {
 		t.Fatalf("connect to charon VICI: %v", err)
 	}

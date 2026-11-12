@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -128,9 +130,6 @@ func TestReconcileRoutingConfigChangeUsesFullBirdConfigure(t *testing.T) {
 	if client.configureCalls != 1 {
 		t.Fatalf("Configure calls = %d, want 1", client.configureCalls)
 	}
-	if client.configureSoftCalls != 0 {
-		t.Fatalf("ConfigureSoft calls = %d, want 0", client.configureSoftCalls)
-	}
 	if client.configurePath == "" {
 		t.Fatalf("Configure path is empty")
 	}
@@ -166,7 +165,6 @@ func TestReconcileRoutingForceReloadUsesFullBirdConfigureWhenHashUnchanged(t *te
 	pm.running = true
 	pm.started = false
 	client.configureCalls = 0
-	client.configureSoftCalls = 0
 	service.routingForceReload = true
 	if err := service.reconcileRouting(context.Background()); err != nil {
 		t.Fatalf("force reconcileRouting: %v", err)
@@ -177,78 +175,70 @@ func TestReconcileRoutingForceReloadUsesFullBirdConfigureWhenHashUnchanged(t *te
 	if client.configureCalls != 1 {
 		t.Fatalf("Configure calls = %d, want 1", client.configureCalls)
 	}
-	if client.configureSoftCalls != 0 {
-		t.Fatalf("ConfigureSoft calls = %d, want 0", client.configureSoftCalls)
+
+	// A failed forced reload must remain pending even though its configuration
+	// hash matched the last successful apply. Periodic reconciles must retry it.
+	failure := errors.New("dial unix /tmp/bird.sock: connect: connection refused")
+	client.configureErr = failure
+	service.routingForceReload = true
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := service.reconcileRouting(context.Background()); !errors.Is(err, failure) {
+			t.Fatalf("failed reload %d: %v", attempt, err)
+		}
+		inst := service.linuxObservation.routingSnapshot().Instances["photontesth2"]
+		if inst.State != birdInstanceStateDegraded || !errors.Is(inst.LastFailure, failure) || inst.LastConfigHash != "" {
+			t.Fatalf("failed reload observation: %+v", inst)
+		}
+	}
+	client.configureErr = nil
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("recovered reload: %v", err)
+	}
+	inst := service.linuxObservation.routingSnapshot().Instances["photontesth2"]
+	if client.configureCalls != 4 || inst.State != birdInstanceStateRunning || inst.LastFailure != nil || inst.LastConfigHash == "" {
+		t.Fatalf("reload recovery: calls=%d observation=%+v", client.configureCalls, inst)
+	}
+	// Start may adopt an existing process and fail its reload. Its failed
+	// forced apply must also be retried after the process becomes observable.
+	pm.running, pm.startErr = false, failure
+	service.routingForceReload = true
+	if err := service.reconcileRouting(context.Background()); !errors.Is(err, failure) {
+		t.Fatalf("failed adoption reload: %v", err)
+	}
+	pm.running, pm.startErr = true, nil
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("retry adopted process: %v", err)
+	}
+	if client.configureCalls != 5 {
+		t.Fatalf("adoption failure was not retried: configure calls=%d", client.configureCalls)
 	}
 }
 
-func TestReconcileRoutingStaleRevisionDoesNotCommitBirdInstance(t *testing.T) {
-	verified, checkpoint, runtime, config := buildTestRoutingOwners(t)
-	now := time.Unix(4010, 0)
-
-	appConfig := defaultAppConfig()
-	appConfig.DataDir = t.TempDir()
-	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{{
-		ID:              "main",
-		Provider:        ipsec.ProviderStrongSwan,
-		NetNS:           ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "photontesth2", Create: true},
-		DefaultPathMode: ipsec.PathModeFamilyRedundant,
-	}}
-	appConfig.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true}}}
-	appConfig.Routing, _ = photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{{ID: "main", NetNS: "photontesth2", Enabled: boolPtr(true), Mode: ipsec.RoutingModeManaged}}, appConfig.Netns, appConfig.DataDir)
-
-	rt := &testApp{Config: appConfig, Clock: func() time.Time { return now }}
-
-	pm := &blockingBirdProcessManager{
-		startedCh: make(chan struct{}),
-		unblock:   make(chan struct{}),
-	}
-	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-	installTestBirdDrivers(service, pm, func(socketPath string, timeout time.Duration) birdClient {
-		return &fakeBirdClient{}
-	})
-	var logs strings.Builder
-	service.Log = &appLogger{level: logLevelDebug, out: &logs, now: func() time.Time { return now }}
-
-	initialRev := uint64(service.State.Common.VerifiedRevision())
-	done := make(chan error, 1)
-	go func() {
-		done <- service.reconcileRouting(context.Background())
-	}()
-	select {
-	case <-pm.startedCh:
-	case <-time.After(time.Second):
-		close(pm.unblock)
-		t.Fatal("routing reconcile did not enter blocking BIRD start")
-	}
-
-	newerRev, err := advanceTestVerifiedRevision(service.State.Common, now.Add(time.Nanosecond))
-	if err != nil {
-		close(pm.unblock)
-		t.Fatalf("advance state revision during routing apply: %v", err)
-	}
-	if newerRev != initialRev+1 {
-		close(pm.unblock)
-		t.Fatalf("newer revision = %d, want %d", newerRev, initialRev+1)
-	}
-	close(pm.unblock)
-	if err := <-done; err != nil {
-		t.Fatalf("reconcileRouting: %v", err)
-	}
-	if !service.routingDirty {
-		t.Fatal("routingDirty = false, want stale reconcile to be retried")
-	}
-	if revision := uint64(service.State.Common.VerifiedRevision()); revision != newerRev {
-		t.Fatalf("stale reconcile advanced revision: got %d want %d", revision, newerRev)
-	}
-	if observation := service.linuxObservation.routingSnapshot(); observation != nil {
-		t.Fatalf("routing observation = %+v, want stale summary discarded", observation)
-	}
-	logOutput := logs.String()
-	if !strings.Contains(logOutput, "event=stale_reconcile_result") ||
-		!strings.Contains(logOutput, "source_revision="+fmt.Sprint(initialRev)) ||
-		!strings.Contains(logOutput, "current_revision="+fmt.Sprint(newerRev)) {
-		t.Fatalf("stale reconcile log lacks revision diagnostics: %s", logOutput)
+func TestReconcileRoutingReportsBackendFailures(t *testing.T) {
+	for _, mode := range []string{ipsec.RoutingModeManaged, ipsec.RoutingModeExternal} {
+		t.Run(mode, func(t *testing.T) {
+			fixture := newRoutingDisabledFixture(t, true, mode, false)
+			failure := errors.New("bird binary not found")
+			var client birdClient = &fakeBirdClient{}
+			if mode == ipsec.RoutingModeManaged {
+				fixture.disabledBird.startErr = failure
+			} else {
+				failure = os.ErrNotExist
+				client = bird.NewClient(filepath.Join(t.TempDir(), "missing.sock"), time.Second)
+			}
+			installTestLinuxDrivers(fixture.service, testLinuxDrivers{
+				veth: fixture.veth, upstreamRoutes: fixture.routes,
+				birdProcesses:     map[string]bird.ProcessManager{"photontest-disabled": fixture.disabledBird},
+				birdClientFactory: func(string, time.Duration) birdClient { return client },
+			})
+			if err := fixture.service.reconcileRouting(context.Background()); !errors.Is(err, failure) {
+				t.Fatalf("backend failure: %v", err)
+			}
+			inst := fixture.service.linuxObservation.routingSnapshot().Instances["photontest-disabled"]
+			if inst.State != birdInstanceStateError || !errors.Is(inst.LastFailure, failure) || inst.LastConfigHash != "" {
+				t.Fatalf("failure observation: %+v", inst)
+			}
+		})
 	}
 }
 

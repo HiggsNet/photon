@@ -39,7 +39,7 @@ func TestStrongSwanWindowsTunnel(t *testing.T) {
 func runStrongSwanWindowsTunnel(t *testing.T, gateway, local string, mobike bool) {
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
-	vici, err := ipsec.NewGoviciClient("/tmp/ike-auth.vici")
+	vici, err := ipsec.NewGoviciClient(context.Background(), "/tmp/ike-auth.vici")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -402,7 +402,7 @@ func TestRoutingObservationDoesNotAdvancePersistentRevision(t *testing.T) {
 		},
 		LastRunUnix: 20,
 	}
-	service.publishRoutingObservation(rev, observation)
+	service.linuxObservation.replaceRouting(observation)
 	observation.Instances["mesh"].State = birdInstanceStateError
 	observation.Instances["mesh"].Overlays[0] = "changed"
 	if got := uint64(service.State.Common.VerifiedRevision()); got != rev {

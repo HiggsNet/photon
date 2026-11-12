@@ -458,7 +458,7 @@ A5 BIRD 轮换策略下沉（2026-09-17）：BirdRotateInterfacePolicies 归现�
 | routingCrashBackoff | 保留；属于 Daemon 重试时序，不是 BIRD 配置语法。 |
 | formatBirdProcessExit | 保留；为 app 运行观测生成失败描述，无需新增导出接口。 |
 | rootTrustHash | 保留；提取 Photon Network 根身份并用于稳定 router ID，通用 BIRD 包只接收身份字节。 |
-| isDryRunMissingBirdError / isDryRunConnectError | 暂保留行为；命名有误导，实际仅按错误文本分类，没有检查 dry-run 开关。是否收紧错误传播应另做行为变更及回归，不混入本轮移动。 |
+| isDryRunMissingBirdError / isDryRunConnectError | 后续 Linux daemon 清理中已删除；真实后端错误直接回报，重载失败保留下一轮重试。 |
 | autoAnnounceAssignedIPsResult | 保留；纯决策已归 routing.AutoAnnounceChanges，这里负责事务、日志和变更通知。 |
 | routingNetnsProtocolIntent | 保留；发布 namespace 信息，供未来 Router-ID 来源审计使用。当前没有业务读取方，但属于明确保留的协议设计。本地 Router-ID 从 Zone、trusted root 和 namespace/显式标签直接派生，不读取该记录；来源约束尚未实现。 |
 | bytesEqual | 删除，使用标准库 bytes.Equal。 |

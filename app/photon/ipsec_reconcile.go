@@ -27,7 +27,6 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 	if common.State == nil || runtime == nil {
 		return nil
 	}
-	rev := uint64(common.Revision)
 	verified := common.State
 	groups := append([]ipsec.LinkGroupSpec(nil), d.Config.IPsec.LinkGroups...)
 	if verified.ManagedZone.IsRoot() || !verified.ManagedZone.Valid() {
@@ -37,20 +36,20 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 	dnsResolver := d.ipsecReconcileDNSResolver()
 	if d.linuxDriver == nil {
 		err := errors.New("linux driver is not configured")
-		d.recordIPsecReconcileError(rev, now.Unix(), err)
+		d.recordIPsecReconcileError(now.Unix(), err)
 		return err
 	}
 	platformDriver := d.linuxDriver
 	d.linuxObservation.setOperationPhase("observe_connections")
 	connections, err := platformDriver.ListIPsecConnections(ctx)
 	if err != nil {
-		d.recordIPsecReconcileError(rev, now.Unix(), err)
+		d.recordIPsecReconcileError(now.Unix(), err)
 		return fmt.Errorf("list ipsec connections: %w", err)
 	}
 	d.linuxObservation.setOperationPhase("observe_sas")
 	sas, err := platformDriver.ListIPsecSAs(ctx)
 	if err != nil {
-		d.recordIPsecReconcileError(rev, now.Unix(), err)
+		d.recordIPsecReconcileError(now.Unix(), err)
 		return fmt.Errorf("list ipsec sas: %w", err)
 	}
 	plan := ipsec.LinkPlan{}
@@ -71,7 +70,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 			ExcludedPeers:       peerLifecycleExcludedPeers(runtime.SuspendedTunnelPeers),
 		})
 		if err != nil {
-			d.recordIPsecReconcileError(rev, now.Unix(), err)
+			d.recordIPsecReconcileError(now.Unix(), err)
 			return err
 		}
 		plan.Desired = photonlinux.InjectIPsecKeyMaterial(verified.Network, runtime.IPsecTransportKey, plan.Desired)
@@ -95,12 +94,12 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 	d.linuxObservation.setOperationPhase("observe_xfrm")
 	xfrmObservations, err := platformDriver.ObserveXFRMLinks(ctx, plan.Desired, instances, groups)
 	if err != nil {
-		d.recordIPsecReconcileError(rev, now.Unix(), err)
+		d.recordIPsecReconcileError(now.Unix(), err)
 		return err
 	}
 	sas, missingXFRMLinks, err := platformDriver.FilterSAsWithMissingXFRMLinks(ctx, plan.Desired, instances, sas, xfrmObservations)
 	if err != nil {
-		d.recordIPsecReconcileError(rev, now.Unix(), err)
+		d.recordIPsecReconcileError(now.Unix(), err)
 		return fmt.Errorf("inspect xfrm links: %w", err)
 	}
 	for id := range missingXFRMLinks {
@@ -143,7 +142,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		}
 		instance, ok, err := ipsec.RecoverObservedLinkInstance(spec, groupSpecs[spec.OverlayID], generations, connections, sas, xfrmLinks, now)
 		if err != nil {
-			d.recordIPsecReconcileError(rev, now.Unix(), err)
+			d.recordIPsecReconcileError(now.Unix(), err)
 			return fmt.Errorf("derive observed ipsec runtime: %w", err)
 		}
 		if ok {
@@ -168,7 +167,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		ForceUpdates:          forceUpdates,
 	})
 	if result.Err != nil {
-		d.recordIPsecReconcileError(rev, now.Unix(), result.Err)
+		d.recordIPsecReconcileError(now.Unix(), result.Err)
 		return fmt.Errorf("derive ipsec runtime: %w", result.Err)
 	}
 	result.Actions = append(result.Actions, ipsec.PlanDuplicateSAGC(plan.Desired, result.Instances, sas, plan.Roles)...)
@@ -191,16 +190,16 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 			_, err := platformDriver.ApplyIPsecAction(ctx, action, group.NetNS, diagnosticPrefixes)
 			ipsec.RecordActionResult(result.Instances, action, group.Reconcile.Backoff, now, err)
 			if err != nil {
-				d.publishIPsecObservation(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err)
+				d.publishIPsecObservation(now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err)
 				return err
 			}
 		}
 	}
 	if err := platformDriver.MaintainXFRMInterfaces(ctx, plan.Desired, result.Instances, result.Actions, groups, diagnosticPrefixes, xfrmObservations); err != nil {
-		d.publishIPsecObservation(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err)
+		d.publishIPsecObservation(now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, err)
 		return err
 	}
-	d.publishIPsecObservation(rev, now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, nil)
+	d.publishIPsecObservation(now.Unix(), result.Instances, plan.Desired, sas, result.Actions, plan.Skipped, nil)
 	return nil
 }
 
@@ -295,37 +294,15 @@ func ipsecReconcileActionLogFields(action ipsec.ReconcileAction) map[string]any 
 	return fields
 }
 
-func (d *Daemon) publishIPsecObservation(rev uint64, unix int64, instances map[string]ipsec.LinkInstance, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError error) {
-	if d.State == nil {
-		return
-	}
-	currentRev := uint64(d.State.Common.VerifiedRevision())
-	if currentRev != rev {
-		d.ipsecDirty = true
-		d.logWarn("ipsec", "stale_reconcile_result", map[string]any{
-			"source_revision":  rev,
-			"current_revision": currentRev,
-		})
-		return
-	}
+func (d *Daemon) publishIPsecObservation(unix int64, instances map[string]ipsec.LinkInstance, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError error) {
 	summary := summarizeIPsecReconcile(unix, desired, sas, actions, skips, lastError)
 	previous, _ := d.linuxObservation.ipsecSnapshot()
 	d.observeIPsecContactOutcomes(previous, instances, time.Unix(unix, 0))
 	d.linuxObservation.replaceIPsec(instances, summary)
 }
 
-func (d *Daemon) recordIPsecReconcileError(rev uint64, unix int64, err error) {
-	if d.State == nil || err == nil {
-		return
-	}
-	currentRev := uint64(d.State.Common.VerifiedRevision())
-	if currentRev != rev {
-		d.ipsecDirty = true
-		d.logWarn("ipsec", "stale_reconcile_error", map[string]any{
-			"source_revision":  rev,
-			"current_revision": currentRev,
-			"error":            err,
-		})
+func (d *Daemon) recordIPsecReconcileError(unix int64, err error) {
+	if err == nil {
 		return
 	}
 	links, reconcile := d.linuxObservation.ipsecSnapshot()

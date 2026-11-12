@@ -42,7 +42,6 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 		return nil
 	}
 	links, ipsecReconcile := d.linuxObservation.ipsecSnapshot()
-	rev := uint64(common.Revision)
 	verified := common.State
 	routingObserved := d.linuxObservation.routingSnapshot()
 	config := d.Config
@@ -75,7 +74,7 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 	}()
 	if err != nil {
 		summary.LastFailure = err
-		d.publishRoutingObservation(rev, summary)
+		d.linuxObservation.replaceRouting(summary)
 		return fmt.Errorf("build authorized route set: %w", err)
 	}
 
@@ -95,7 +94,6 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 		if common.State == nil {
 			return firstErr
 		}
-		rev = uint64(common.Revision)
 		verified = common.State
 		ars, err = func() (*routing.AuthorizedRouteSet, error) {
 			defer d.gossipDriver.LogSlowOperation("routing", "routing_authorized_routes", time.Now(), d.gossipDriver.PendingEventCount())
@@ -116,24 +114,8 @@ func (d *Daemon) reconcileRouting(ctx context.Context) error {
 		summary.LastFailure = firstErr
 	}
 
-	d.publishRoutingObservation(rev, summary)
-	return firstErr
-}
-
-func (d *Daemon) publishRoutingObservation(rev uint64, summary *routingObservation) {
-	if d.State == nil || summary == nil {
-		return
-	}
-	currentRev := uint64(d.State.Common.VerifiedRevision())
-	if currentRev != rev {
-		d.routingDirty = true
-		d.logWarn("routing", "stale_reconcile_result", map[string]any{
-			"source_revision":  rev,
-			"current_revision": currentRev,
-		})
-		return
-	}
 	d.linuxObservation.replaceRouting(summary)
+	return firstErr
 }
 
 func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *corestate.VerifiedState, birdInstances map[string]*bird.InstanceObservation, links map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, inst photonlinux.RoutingInstance, ars *routing.AuthorizedRouteSet, config *appConfig, now time.Time, forceReload bool) error {
@@ -237,6 +219,9 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 	switch mode {
 	case bird.BirdModeManaged:
 		if configChanged {
+			// Writing the file is not an apply. This also keeps a failed forced
+			// reload pending when its contents match the last successful config.
+			instState.LastConfigHash = ""
 			if err := func() error {
 				d.linuxObservation.setOperationPhase("bird_write")
 				defer d.gossipDriver.LogSlowOperation("routing", "routing_bird_write", time.Now(), d.gossipDriver.PendingEventCount())
@@ -270,9 +255,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 			}(); err != nil {
 				instState.State = birdInstanceStateError
 				instState.LastFailure = err
-				if !isDryRunMissingBirdError(err) {
-					return fmt.Errorf("start bird for netns %q: %w", netnsName, err)
-				}
+				return fmt.Errorf("start bird for netns %q: %w", netnsName, err)
 			} else {
 				instState.State = birdInstanceStateRunning
 				instState.FailureCount = 0
@@ -287,9 +270,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 			}(); err != nil {
 				instState.State = birdInstanceStateDegraded
 				instState.LastFailure = err
-				if !isDryRunConnectError(err) {
-					return fmt.Errorf("configure bird for netns %q: %w", netnsName, err)
-				}
+				return fmt.Errorf("configure bird for netns %q: %w", netnsName, err)
 			} else {
 				instState.State = birdInstanceStateRunning
 			}
@@ -310,9 +291,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 			instState.State = birdInstanceStateError
 			instState.LastFailure = err
 			d.recordBirdHealthObservationForLinks(links, reconcile, netnsName, instState.Overlays, &bird.BirdObservation{})
-			if !isDryRunConnectError(err) {
-				return fmt.Errorf("bird status for netns %q: %w", netnsName, err)
-			}
+			return fmt.Errorf("bird status for netns %q: %w", netnsName, err)
 		} else {
 			instState.State = birdInstanceStateRunning
 			d.recordBirdHealthObservationForLinks(links, reconcile, netnsName, instState.Overlays, observed)
@@ -475,22 +454,6 @@ func rootTrustHash(ns *zone.NetworkState) []byte {
 		return root.Authority.Keys[0].Key
 	}
 	return nil
-}
-
-func isDryRunMissingBirdError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "bird binary not found") || strings.Contains(msg, "no such file") || strings.Contains(msg, "executable file not found")
-}
-
-func isDryRunConnectError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "dial") || strings.Contains(msg, "no such file") || strings.Contains(msg, "connection refused")
 }
 
 // autoAnnounceAssignedIPsResult publishes or withdraws routes/announcements/*

@@ -92,28 +92,26 @@ func (c *birdcClient) Status(ctx context.Context) (*BirdObservation, error) {
 	state := &BirdObservation{
 		FetchedAt: time.Now(),
 	}
+	out, err := c.command(ctx, "show status")
+	if err != nil {
+		return nil, fmt.Errorf("show status: %w", err)
+	}
+	state.Status, err = parseStatus(out)
+	if err != nil {
+		return nil, fmt.Errorf("parse status: %w", err)
+	}
 
 	commands := []struct {
-		name  string
 		cmd   string
 		parse func(string, *BirdObservation)
 	}{
-		{"status", "show status", func(out string, s *BirdObservation) {
-			status, err := parseStatus(out)
-			if err != nil {
-				s.Warnings = append(s.Warnings, fmt.Sprintf("parse status: %v", err))
-				s.Stale = true
-				return
-			}
-			s.Status = status
-		}},
-		{"protocols", "show protocols all", func(out string, s *BirdObservation) {
+		{"show protocols all", func(out string, s *BirdObservation) {
 			s.Protocols = parseProtocols(out)
 		}},
-		{"interfaces", "show interfaces", func(out string, s *BirdObservation) {
+		{"show interfaces", func(out string, s *BirdObservation) {
 			s.Interfaces = parseInterfaces(out)
 		}},
-		{"neighbors", "show babel neighbors", func(out string, s *BirdObservation) {
+		{"show babel neighbors", func(out string, s *BirdObservation) {
 			s.Neighbors = parseBabelNeighbors(out)
 		}},
 	}
@@ -121,18 +119,14 @@ func (c *birdcClient) Status(ctx context.Context) (*BirdObservation, error) {
 	for _, item := range commands {
 		out, err := c.command(ctx, item.cmd)
 		if err != nil {
-			state.Warnings = append(state.Warnings, fmt.Sprintf("%s command failed: %v", item.name, err))
-			state.Stale = true
-			continue
+			return nil, fmt.Errorf("%s: %w", item.cmd, err)
 		}
 		item.parse(out, state)
 	}
 	for _, cmd := range c.routeCommands() {
 		out, err := c.command(ctx, cmd)
 		if err != nil {
-			state.Warnings = append(state.Warnings, fmt.Sprintf("routes command %q failed: %v", cmd, err))
-			state.Stale = true
-			continue
+			return nil, fmt.Errorf("%s: %w", cmd, err)
 		}
 		state.Routes = append(state.Routes, parseRoutes(out)...)
 	}
@@ -185,16 +179,10 @@ func (c *birdcClient) Raw(ctx context.Context, cmd string) (string, error) {
 	return c.command(ctx, cmd)
 }
 
-// commandCheck runs a command and returns an error if BIRD reports a failure.
+// commandCheck discards the response body for commands that only report success.
 func (c *birdcClient) commandCheck(ctx context.Context, cmd string) error {
-	out, err := c.command(ctx, cmd)
-	if err != nil {
-		return err
-	}
-	if isErrorResponse(out) {
-		return fmt.Errorf("birdc error: %s", summarizeError(out))
-	}
-	return nil
+	_, err := c.command(ctx, cmd)
+	return err
 }
 
 // command sends a single birdc command and returns the cleaned response body.
@@ -234,6 +222,9 @@ func (c *birdcClient) command(ctx context.Context, cmd string) (string, error) {
 	body, err := readResponse(reader)
 	if err != nil {
 		return body, fmt.Errorf("read response: %w", err)
+	}
+	if isErrorResponse(body) {
+		return body, fmt.Errorf("birdc error: %s", summarizeError(body))
 	}
 	return body, nil
 }

@@ -45,7 +45,7 @@ func runStrongSwanWindowsMeshTunnels(t *testing.T, timed, dualOuter bool) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), limit)
 	defer cancel()
-	vici, err := ipsec.NewGoviciClient("/tmp/ike-auth.vici")
+	vici, err := ipsec.NewGoviciClient(context.Background(), "/tmp/ike-auth.vici")
 	if err != nil {
 		t.Fatal(err)
 	}

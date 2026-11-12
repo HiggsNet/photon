@@ -37,7 +37,6 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 		return nil
 	}
 	links, ipsecReconcile := d.linuxObservation.ipsecSnapshot()
-	rev := uint64(common.Revision)
 	config := d.Config
 	instances := config.Firewall.ManagedInstances()
 	if len(instances) == 0 {
@@ -60,7 +59,7 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 	}()
 	if err != nil {
 		summary.LastFailure = err
-		d.publishFirewallObservation(rev, summary)
+		d.linuxObservation.replaceFirewall(summary)
 		return fmt.Errorf("firewall build authorized route set: %w", err)
 	}
 
@@ -142,24 +141,8 @@ func (d *Daemon) reconcileFirewall(ctx context.Context) error {
 
 	summary.LastFailure = firstErr
 
-	d.publishFirewallObservation(rev, summary)
-	return firstErr
-}
-
-func (d *Daemon) publishFirewallObservation(rev uint64, summary *firewall.FirewallObservation) {
-	if d.State == nil || summary == nil {
-		return
-	}
-	currentRev := uint64(d.State.Common.VerifiedRevision())
-	if currentRev != rev {
-		d.firewallDirty = true
-		d.logWarn("firewall", "stale_reconcile_result", map[string]any{
-			"source_revision":  rev,
-			"current_revision": currentRev,
-		})
-		return
-	}
 	d.linuxObservation.replaceFirewall(summary)
+	return firstErr
 }
 
 func (d *Daemon) flushFirewallReconcile(ctx context.Context) (bool, error) {

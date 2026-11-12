@@ -43,7 +43,7 @@ func TestPrepareWindowsTunnelCrossHost(t *testing.T) {
 	ikePort, nattPort := parsePort("PHOTON_WINDOWS_TUNNEL_IKE_PORT"), parsePort("PHOTON_WINDOWS_TUNNEL_NATT_PORT")
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	vici, err := ipsec.NewGoviciClient("/tmp/ike-auth.vici")
+	vici, err := ipsec.NewGoviciClient(context.Background(), "/tmp/ike-auth.vici")
 	if err != nil {
 		t.Fatal(err)
 	}

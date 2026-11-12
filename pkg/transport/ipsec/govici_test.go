@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"net"
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -319,6 +321,7 @@ func TestStrongSwanDriverInitiateChildAsyncReturnsAndCoalesces(t *testing.T) {
 		VICI:          client,
 		InitiateAsync: true,
 	}
+	defer driver.Close()
 
 	start := time.Now()
 	if err := driver.InitiateChild(context.Background(), "ipsec-main-child"); err != nil {
@@ -353,6 +356,7 @@ func TestStrongSwanDriverAsyncInitiateUsesServerTimeoutAndOutlivesReconcileConte
 		InitiateAsync:         true,
 		InitiateClientTimeout: time.Second,
 	}
+	defer driver.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	if err := driver.InitiateChild(ctx, "ipsec-main-child"); err != nil {
 		t.Fatalf("InitiateChild: %v", err)
@@ -400,6 +404,7 @@ func TestStrongSwanDriverLimitsConcurrentAsyncInitiates(t *testing.T) {
 		InitiateAsync:         true,
 		InitiateClientTimeout: time.Second,
 	}
+	defer driver.Close()
 	for i := range callCount {
 		child := fmt.Sprintf("ipsec-child-%d", i)
 		if err := driver.InitiateChild(context.Background(), child); err != nil {
@@ -441,6 +446,79 @@ func TestStrongSwanDriverLimitsConcurrentAsyncInitiates(t *testing.T) {
 	}
 	if got := client.peakActive(); got > concurrency {
 		t.Fatalf("peak concurrent initiates = %d, want <= %d", got, concurrency)
+	}
+}
+
+func TestStrongSwanDriverCloseCancelsAsyncInitiates(t *testing.T) {
+	for _, stage := range []string{"dial", "call"} {
+		t.Run(stage, func(t *testing.T) {
+			client := newControlledInitiateClient(2)
+			var opened, closed atomic.Int32
+			dialing := make(chan struct{})
+			driver := &StrongSwanDriver{
+				VICI: client, InitiateAsync: true, InitiateConcurrency: 1,
+				InitiateClientFactory: func(ctx context.Context) (VICIClient, func() error, error) {
+					opened.Add(1)
+					if stage == "dial" {
+						close(dialing)
+						<-ctx.Done()
+						return nil, nil, ctx.Err()
+					}
+					return client, func() error { closed.Add(1); return nil }, nil
+				},
+			}
+			defer driver.Close()
+			if err := driver.InitiateChild(context.Background(), "active"); err != nil {
+				t.Fatal(err)
+			}
+			if stage == "call" {
+				select {
+				case <-client.started:
+				case <-time.After(time.Second):
+					t.Fatal("initiate did not start")
+				}
+			} else {
+				select {
+				case <-dialing:
+				case <-time.After(time.Second):
+					t.Fatal("session dial did not start")
+				}
+			}
+			if err := driver.InitiateChild(context.Background(), "queued"); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan struct{})
+			go func() { _ = driver.Close(); close(done) }()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("Close did not cancel and join initiates")
+			}
+			if opened.Load() != 1 || (stage == "call" && closed.Load() != 1) {
+				t.Fatalf("session opens=%d closes=%d; queued initiate must not dial", opened.Load(), closed.Load())
+			}
+			if err := driver.InitiateChild(context.Background(), "after-close"); !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("initiate after Close: %v", err)
+			}
+		})
+	}
+	// Closing before the first initiate must also prevent lazy startup.
+	driver := &StrongSwanDriver{VICI: newControlledInitiateClient(1), InitiateAsync: true}
+	_ = driver.Close()
+	if err := driver.InitiateChild(context.Background(), "after-close"); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("initiate after unused driver Close: %v", err)
+	}
+}
+
+func TestGoviciClientDialHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	client, err := NewGoviciClient(ctx, t.TempDir()+"/missing.vici")
+	if !errors.Is(err, context.Canceled) {
+		if client != nil {
+			_ = client.Close()
+		}
+		t.Fatalf("dial error = %v, want context cancellation", err)
 	}
 }
 
@@ -777,11 +855,14 @@ func TestGoviciClientStreamsListConnections(t *testing.T) {
 func TestGoviciClientSubscribesAndParsesLifecycleEvents(t *testing.T) {
 	session := &fakeGoviciSession{}
 	client := &GoviciClient{Session: session}
-	events, stop, err := client.SubscribeEvents(context.Background(), "child-updown", "ike-updown")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events, stop, err := client.SubscribeEvents(ctx, "child-updown", "ike-updown")
 	if err != nil {
 		t.Fatalf("SubscribeEvents: %v", err)
 	}
 	defer stop()
+	cancel() // The setup context does not own the established event stream.
 	if !reflect.DeepEqual(session.subscribed, []string{"child-updown", "ike-updown"}) {
 		t.Fatalf("subscribed = %+v", session.subscribed)
 	}
@@ -812,6 +893,65 @@ func TestGoviciClientSubscribesAndParsesLifecycleEvents(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for lifecycle event")
+	}
+	close(session.eventCh) // Session disconnect also ends the bridge.
+	select {
+	case _, ok := <-events:
+		if ok {
+			t.Fatal("event stream still open after session disconnect")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("bridge did not exit after session disconnect")
+	}
+}
+
+func TestGoviciClientSubscriptionStopJoinsBridge(t *testing.T) {
+	for _, full := range []bool{false, true} {
+		t.Run(fmt.Sprintf("output_full=%v", full), func(t *testing.T) {
+			session := &fakeGoviciSession{}
+			out, stop, err := (&GoviciClient{Session: session}).SubscribeEvents(context.Background(), "child-updown")
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw := session.eventCh
+			defer close(raw)
+			if full {
+				for i := 0; i <= cap(out); i++ {
+					raw <- vici.Event{Name: "child-updown"}
+				}
+				deadline := time.Now().Add(time.Second)
+				for len(out) < cap(out) || len(raw) != 0 {
+					if time.Now().After(deadline) {
+						t.Fatal("bridge did not reach blocked output")
+					}
+					time.Sleep(time.Millisecond)
+				}
+			}
+			stopped := make(chan struct{})
+			go func() {
+				stop()
+				stop() // Repeated shutdown is safe.
+				close(stopped)
+			}()
+			select {
+			case <-stopped:
+			case <-time.After(time.Second):
+				t.Fatal("stop did not join the bridge")
+			}
+			if session.eventCh != nil {
+				t.Fatal("subscription still registered after stop")
+			}
+			for {
+				select {
+				case _, ok := <-out:
+					if !ok {
+						return
+					}
+				default:
+					t.Fatal("output still open after stop returned")
+				}
+			}
+		})
 	}
 }
 

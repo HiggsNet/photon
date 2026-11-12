@@ -38,7 +38,7 @@ func testStrongSwanPostAuth(t *testing.T, rekey, pfs bool) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	vici, err := ipsec.NewGoviciClient("/tmp/ike-auth.vici")
+	vici, err := ipsec.NewGoviciClient(context.Background(), "/tmp/ike-auth.vici")
 	if err != nil {
 		t.Fatal(err)
 	}
