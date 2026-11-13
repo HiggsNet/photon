@@ -543,20 +543,20 @@ collect:
 	for _, layer := range []struct {
 		key, component string
 		flushed, dirty bool
-		interval       time.Duration
+		interval       func() time.Duration
 		err            error
 	}{
-		{daemonTimerFirewall, "firewall", firewallFlushed, d.firewallDirty, d.firewallReconcileInterval(), firewallErr},
-		{daemonTimerRouting, "routing", routingFlushed, d.routingDirty, d.routingReconcileInterval(), routingErr},
-		{daemonTimerIPsec, "ipsec", ipsecFlushed, d.ipsecDirty, d.ipsecReconcileInterval(), ipsecErr},
+		{daemonTimerFirewall, "firewall", firewallFlushed, d.firewallDirty, d.firewallReconcileInterval, firewallErr},
+		{daemonTimerRouting, "routing", routingFlushed, d.routingDirty, d.routingReconcileInterval, routingErr},
+		{daemonTimerIPsec, "ipsec", ipsecFlushed, d.ipsecDirty, d.ipsecReconcileInterval, ipsecErr},
 	} {
 		if layer.err != nil {
 			d.logWarn(layer.component, "reconcile_failed", map[string]any{"error": layer.err})
 		}
 		if d.daemonTimers != nil && (layer.flushed || layer.dirty) {
-			deadline := d.nextReconcileTime(layer.key, d.now(), layer.interval)
-			if layer.dirty {
-				deadline = d.now()
+			deadline := d.now()
+			if !layer.dirty {
+				deadline = d.nextReconcileTime(layer.key, deadline, layer.interval())
 			}
 			if err := d.scheduleDaemonTimer(layer.key, deadline); err != nil {
 				d.logWarn("daemon", "timer_schedule_failed", map[string]any{"timer": layer.key, "error": err})

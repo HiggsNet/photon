@@ -136,12 +136,12 @@ func (d *Daemon) observerPeerIDsPayload() any {
 	if d.State == nil {
 		return nil
 	}
-	view := d.State.Common.ReadView()
-	if view.Gossip == nil {
+	checkpoint := d.State.Common.ReadGossipCheckpoint()
+	if checkpoint == nil {
 		return nil
 	}
-	ids := make([]string, 0, len(view.Gossip.Peers))
-	for id := range view.Gossip.Peers {
+	ids := make([]string, 0, len(checkpoint.Peers))
+	for id := range checkpoint.Peers {
 		ids = append(ids, id)
 	}
 	return observerIDsPayload("peer_ids", ids)
