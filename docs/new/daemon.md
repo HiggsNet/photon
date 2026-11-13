@@ -262,12 +262,23 @@ IPsec、routing、firewall 的 desired 来自 VerifiedState、配置和最小 Li
 
 ### 4.6 状态变化通知
 
-`notifyStateChanged()`：
+`notifyStateChanged(affected)`：
 
 当状态变化时（sync 成功应用了 Zone snapshot、admin 写入 record 等），daemon 会：
 1. 调用 `OnStateChanged` hook（测试用）
 2. 通知 observer 推送 SSE 事件
-3. 配置了 Linux driver 时设置所有 dirty 标记
+3. 配置了 Linux driver 时，只合并调用者显式指定的 dirty 标记，不清除已有待办
+
+本地变更的依赖由 `reconcile_dependencies.go` 集中声明：
+
+| 变更 | 直接标脏 |
+|---|---|
+| 路由公告/撤回、IPAM pool/assignment 增删 | routing、firewall |
+| Gossip endpoint、IPsec 协议记录、端口轮换、私有 transport key | IPsec |
+| routing/netns 本地公告、SOCKS5 服务发现公告/撤回 | 无 Linux 系统层 |
+| 远端同步、授权/撤销、身份安装、恢复、通用或未知本地 intent | 全部 |
+
+本地协议批次取依赖并集。IPsec 输出变化再独立标脏 routing/firewall，避免把公告刷新直接当成链路变化。routing 自动公告仅标脏 routing/firewall；周期检查继续处理授权到期和系统漂移，不依赖新的签名提交。
 
 该函数不直接执行系统调整。下一次批次统一 flush，主循环按 verified revision 合并本地摘要转发。IPsec 运行变化只通知实际依赖者，不冒充签名状态变化。
 
@@ -422,7 +433,7 @@ Daemon 使用**三级调度策略**：事件驱动 + 周期性 + 标记脏。
 - `firewallDirty` — 防火墙需要刷新
 
 标记在以下情况被设置：
-1. `notifyStateChanged()` — 任何状态变化后
+1. `notifyStateChanged(affected)` — 状态变化后按显式依赖标脏
 2. 周期 timer 到期
 3. IPsec lifecycle 事件到达时
 

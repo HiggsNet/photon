@@ -246,7 +246,7 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 	installTestIPsecDrivers(service, driver, driver)
 
 	// Create the link first.
-	service.notifyStateChanged()
+	service.notifyStateChanged(reconcileAll)
 	service.processEvents(context.Background(), nil)
 
 	// Now revoke node-b.catofes.
@@ -266,7 +266,7 @@ func TestDaemonRevocationCleanupPeerCache(t *testing.T) {
 	service = newTestDaemonFromOwners(rt, common.State, common.Gossip, currentRuntime, config, time.Second)
 	setTestIPsecObservation(service, currentLinks, currentReconcile)
 	installTestIPsecDrivers(service, driver, driver)
-	service.notifyStateChanged()
+	service.notifyStateChanged(reconcileAll)
 	service.processEvents(context.Background(), nil)
 
 	setTestGossipTransport(t, service, &gossip.Transport{})
@@ -334,7 +334,7 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 		birdClientFactory: func(socketPath string, timeout time.Duration) birdClient { return &fakeBirdClient{} },
 	})
 
-	service.notifyStateChanged()
+	service.notifyStateChanged(reconcileAll)
 	service.processEvents(context.Background(), nil)
 	common := service.State.Common.ReadView()
 	currentRuntime := service.State.ReadLinux()
@@ -386,7 +386,7 @@ func TestRevocationDenyFirstCombinedSmoke(t *testing.T) {
 	if err := service.handleSyncTimerEvent(t.Context(), false); err != nil {
 		t.Fatal(err)
 	}
-	service.notifyStateChanged()
+	service.notifyStateChanged(reconcileAll)
 	service.processEvents(context.Background(), nil)
 
 	wantOrder := []string{"firewall", "routing", "ipsec"}

@@ -68,7 +68,7 @@ func (d *Daemon) handleSyncTimerEvent(ctx context.Context, force bool) error {
 	changed, err := d.gossipDriver.SyncGossipPeers(ctx, d.now(), force)
 	if changed {
 		d.refreshGossipDiscovery()
-		d.notifyStateChanged()
+		d.notifyStateChanged(reconcileAll)
 	}
 	return err
 }
@@ -78,7 +78,7 @@ func (d *Daemon) handleGossipDriverEvent(ctx context.Context, hostEvent corehost
 	changed, err := d.gossipDriver.HandleGossipHostEvent(ctx, hostEvent, now)
 	if changed {
 		d.refreshGossipDiscovery()
-		d.notifyStateChanged()
+		d.notifyStateChanged(reconcileAll)
 	}
 	return changed, err
 }

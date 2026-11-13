@@ -32,7 +32,7 @@ func TestDaemonStateChangedRemovesTeardownIPsecLinks(t *testing.T) {
 	}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
-	service.notifyStateChanged()
+	service.notifyStateChanged(reconcileAll)
 	service.processEvents(context.Background(), nil)
 	latestLinks, _ := readTestIPsecObservation(service)
 	if len(latestLinks) != 1 {
@@ -40,7 +40,7 @@ func TestDaemonStateChangedRemovesTeardownIPsecLinks(t *testing.T) {
 	}
 
 	service.Config.IPsec.LinkGroups = nil
-	service.notifyStateChanged()
+	service.notifyStateChanged(reconcileAll)
 	service.processEvents(context.Background(), nil)
 	removedLinks, removedReconcile := readTestIPsecObservation(service)
 	if len(removedLinks) != 0 {
@@ -50,7 +50,7 @@ func TestDaemonStateChangedRemovesTeardownIPsecLinks(t *testing.T) {
 		t.Fatalf("teardown actions = %+v, want one teardown", removedReconcile.Actions)
 	}
 
-	service.notifyStateChanged()
+	service.notifyStateChanged(reconcileAll)
 	service.processEvents(context.Background(), nil)
 	stableLinks, stableReconcile := readTestIPsecObservation(service)
 	if len(stableLinks) != 0 {
@@ -423,7 +423,7 @@ func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 	installTestIPsecDrivers(service, driver, driver)
 
-	service.notifyStateChanged()
+	service.notifyStateChanged(reconcileAll)
 	service.processEvents(context.Background(), nil)
 	common := service.State.Common.ReadView()
 	persistedRuntime := service.State.ReadLinux()
@@ -446,7 +446,7 @@ func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
 	service = newTestDaemonFromOwners(rt, common.State, common.Gossip, persistedRuntime, config, time.Second)
 	service.linuxObservation.replaceIPsec(latestLinks, latestReconcile)
 	installTestIPsecDrivers(service, driver, driver)
-	service.notifyStateChanged()
+	service.notifyStateChanged(reconcileAll)
 	service.processEvents(context.Background(), nil)
 
 	revokedLinks, revokedReconcile := readTestIPsecObservation(service)
@@ -463,7 +463,7 @@ func TestDaemonRevocationTearsDownIPsecLinkAndBlocksRecreate(t *testing.T) {
 		t.Fatalf("skips = %+v, want revoked zone", revokedReconcile.Skipped)
 	}
 
-	service.notifyStateChanged()
+	service.notifyStateChanged(reconcileAll)
 	service.processEvents(context.Background(), nil)
 	stableLinks, stableReconcile := readTestIPsecObservation(service)
 	if len(stableLinks) != 0 || len(stableReconcile.Actions) != 0 || len(stableReconcile.Desired) != 0 {

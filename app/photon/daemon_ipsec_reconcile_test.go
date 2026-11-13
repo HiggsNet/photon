@@ -175,7 +175,7 @@ func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 	}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
 
-	service.notifyStateChanged()
+	service.notifyStateChanged(reconcileAll)
 	service.processEvents(context.Background(), nil)
 
 	latestLinks, latestReconcile := readTestIPsecObservation(service)
@@ -194,7 +194,7 @@ func TestDaemonStateChangedReconcilesIPsecLinks(t *testing.T) {
 		}
 	}
 
-	service.notifyStateChanged()
+	service.notifyStateChanged(reconcileAll)
 	service.processEvents(context.Background(), nil)
 	reloadedLinks, reloadedReconcile := readTestIPsecObservation(service)
 	if len(reloadedLinks) != 1 {
@@ -293,7 +293,7 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 		filepath.Join(t.TempDir(), "photon.db")), Clock: func() time.Time { return now },
 	}
 	service := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, config, time.Second)
-	service.notifyStateChanged()
+	service.notifyStateChanged(reconcileAll)
 	service.processEvents(context.Background(), nil)
 
 	common := service.State.Common.ReadView()
@@ -321,7 +321,7 @@ func TestDaemonStateChangedReconcilesIPsecPortRotation(t *testing.T) {
 	})
 	service = newTestDaemonFromOwners(rt, common.State, common.Gossip, persistedRuntime, config, time.Second)
 	service.linuxObservation.replaceIPsec(latestLinks, latestReconcile)
-	service.notifyStateChanged()
+	service.notifyStateChanged(reconcileAll)
 	service.processEvents(context.Background(), nil)
 
 	rotatedLinks, rotatedReconcile := readTestIPsecObservation(service)

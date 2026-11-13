@@ -54,5 +54,7 @@ func managedIPsecConnectionNamesFromLinks(links map[string]ipsec.LinkInstance) m
 
 func (d *Daemon) recordIPsecCleanup(links map[string]ipsec.LinkInstance, err error) {
 	d.linuxObservation.replaceIPsec(links, &ipsecObservationSummary{LastRunUnix: d.now().Unix(), LastFailure: err})
-	d.notifyStateChanged()
+	// Cleanup changes live platform state, including partial progress on error.
+	// Rebuild desired links and their consumers without a signed-state notice.
+	d.markReconcileDirty(reconcileAll)
 }

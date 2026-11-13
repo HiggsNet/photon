@@ -168,7 +168,7 @@ func TestDaemonEventBatchSchedulesWorkRaisedDuringApply(t *testing.T) {
 			service.firewallDirty = true
 		}
 	}
-	service.notifyStateChanged()
+	service.notifyStateChanged(reconcileAll)
 	service.processEvents(t.Context(), nil)
 	if !reflect.DeepEqual(order, []string{"firewall", "routing", "ipsec"}) {
 		t.Fatalf("batch apply order = %v", order)

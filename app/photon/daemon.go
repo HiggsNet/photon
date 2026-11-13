@@ -680,7 +680,7 @@ func (d *Daemon) handleDelegateIssueEvent(request *gossip.JoinRequest, permissio
 	}
 	if result.Committed {
 		d.refreshGossipDiscovery()
-		d.notifyStateChanged()
+		d.notifyStateChanged(reconcileAll)
 	}
 	return joinBundleFromNetwork(d.State.Common.ReadView().State.Network, request.Zone, now)
 }
@@ -693,7 +693,7 @@ func (d *Daemon) handleDelegateGrantEvent(path zone.ZonePath, permissions []zone
 	}
 	if result.Committed {
 		d.refreshGossipDiscovery()
-		d.notifyStateChanged()
+		d.notifyStateChanged(reconcileAll)
 	}
 	return joinBundleFromNetwork(d.State.Common.ReadView().State.Network, path, d.now())
 }
@@ -727,7 +727,7 @@ func (d *Daemon) handleRecoveryImportZoneEvent(snapshot *corestate.ZoneSnapshot)
 	}
 	if result.Committed {
 		d.refreshGossipDiscovery()
-		d.notifyStateChanged()
+		d.notifyStateChanged(reconcileAll)
 	}
 	revocations := 0
 	if result.Apply != nil {
@@ -749,7 +749,7 @@ func (d *Daemon) handleDelegateRevokeEvent(path zone.ZonePath, reason string) er
 	}
 	if result.Committed {
 		d.refreshGossipDiscovery()
-		d.notifyStateChanged()
+		d.notifyStateChanged(reconcileAll)
 	}
 	return nil
 }
@@ -788,7 +788,7 @@ func (d *Daemon) handleRecoveryPurgeRevokedEvent(ctx context.Context, target zon
 	}
 	d.refreshGossipDiscovery()
 	if result.Committed || len(plan.LinkInstances) > 0 {
-		d.notifyStateChanged()
+		d.notifyStateChanged(reconcileAll)
 	}
 	return plan, nil
 }
@@ -836,7 +836,7 @@ func (d *Daemon) handleJoinAcceptEvent(bundle *joinBundle, key *privateKeyFile) 
 	if commit.Committed {
 		d.publishOnAdmission = true
 		d.refreshGossipDiscovery()
-		d.notifyStateChanged()
+		d.notifyStateChanged(reconcileAll)
 	}
 	return &joinAcceptResult{Zone: bundle.Zone, RootPublicKey: append([]byte(nil), bundle.RootPublicKey...)}, nil
 }
@@ -901,7 +901,14 @@ func (d *Daemon) publishLocalProtocols() (bool, error) {
 	changed := result.LinuxStateCommitted || result.Common.Committed
 	if changed {
 		d.refreshGossipDiscovery()
-		d.notifyStateChanged()
+		var affected reconcileLayers
+		if result.LinuxStateCommitted {
+			affected |= reconcileIPsec
+		}
+		for _, intent := range intents {
+			affected |= localIntentReconcileLayers(intent)
+		}
+		d.notifyStateChanged(affected)
 	}
 	return changed, nil
 }
@@ -926,7 +933,7 @@ func (d *Daemon) handleCommonRecordMutationEvent(intent corestate.LocalIntent, d
 	}
 	if result.Committed {
 		d.refreshGossipDiscovery()
-		d.notifyStateChanged()
+		d.notifyStateChanged(localIntentReconcileLayers(intent))
 	}
 	return out, nil
 }
@@ -967,15 +974,16 @@ func (d *Daemon) handleIPsecPortRotateEvent() (*manualPortRotateResult, error) {
 		return nil, err
 	}
 	if committed.LinuxStateCommitted || committed.Common.Committed {
-		d.notifyStateChanged()
+		d.notifyStateChanged(reconcileIPsec)
 	}
 	return result, nil
 }
 
-// notifyStateChanged publishes the committed change and marks platform work.
+// notifyStateChanged publishes the committed change. The caller explicitly
+// identifies its platform dependencies; notification alone implies no work.
 // The event loop owns cleanup and reconciliation, including changes made by
 // startup publication, Gossip, and routing auto-announcement.
-func (d *Daemon) notifyStateChanged() {
+func (d *Daemon) notifyStateChanged(affected reconcileLayers) {
 	if d.Hooks.OnStateChanged != nil {
 		d.Hooks.OnStateChanged()
 	}
@@ -983,11 +991,7 @@ func (d *Daemon) notifyStateChanged() {
 		d.notifyObserver("state_changed", nil)
 		d.notifyObserver("peer_updated", d.observerPeerIDsPayload())
 	}
-	if d.linuxDriver != nil {
-		d.ipsecDirty = true
-		d.routingDirty = true
-		d.firewallDirty = true
-	}
+	d.markReconcileDirty(affected)
 }
 
 func (d *Daemon) noteReconcileFlush(layer string) {

@@ -63,6 +63,8 @@ func TestIPsecCleanupFailurePreservesCompletedProgress(t *testing.T) {
 			installTestIPsecDrivers(service, driver, driver)
 			service.linuxObservation.replaceIPsec(instances, &ipsecObservationSummary{ActualSAs: []photonstate.LinkSAObservation{{Name: "old-sa"}}})
 			revision := service.State.Common.VerifiedRevision()
+			stateNotices := 0
+			service.Hooks.OnStateChanged = func() { stateNotices++ }
 			var err error
 			if mode == "purge" {
 				err = service.cleanupPurgePlanIPsecLinks(t.Context(), instances, &purgePlan{LinkInstances: ids})
@@ -91,6 +93,9 @@ func TestIPsecCleanupFailurePreservesCompletedProgress(t *testing.T) {
 			}
 			if service.State.Common.VerifiedRevision() != revision {
 				t.Fatal("recording cleanup progress changed signed state")
+			}
+			if stateNotices != 0 {
+				t.Fatal("runtime cleanup emitted a signed-state notification")
 			}
 			response := controlViewRequestViaPipe[inspect.LinksDebugView](t, service, controlRequest{Method: "links_view"})
 			if !response.OK || response.View.Inspection.LinkInstances != wantRemaining || response.View.Inspection.LastFailure == nil {

@@ -125,7 +125,7 @@ func (d *Daemon) publishLocalEndpoints(endpoints []gossip.LocalEndpoint) (bool, 
 	result, err := d.State.Common.ApplyLocalIntent(context.Background(), *intent, d.now())
 	if result.Committed {
 		d.refreshGossipDiscovery()
-		d.notifyStateChanged()
+		d.notifyStateChanged(reconcileIPsec)
 	}
 	return result.Committed, err
 }

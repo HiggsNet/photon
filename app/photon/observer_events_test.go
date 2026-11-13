@@ -105,7 +105,7 @@ func TestNotifyStateChangedBroadcastsIDPayloads(t *testing.T) {
 	}
 	ch, unsubscribe := hub.Subscribe()
 	defer unsubscribe()
-	d.notifyStateChanged()
+	d.notifyStateChanged(reconcileAll)
 	var linkEvent, peerEvent *observer.Event
 	for range 6 {
 		select {

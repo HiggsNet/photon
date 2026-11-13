@@ -490,7 +490,7 @@ func (d *Daemon) autoAnnounceAssignedIPsResult(verified *corestate.VerifiedState
 	for _, prefix := range withdraw {
 		d.logInfo("routing", "auto_withdraw_assigned_ip", map[string]any{"zone": managedZone, "prefix": prefix.String()})
 	}
-	d.notifyStateChanged()
+	d.notifyStateChanged(reconcileRoutes | reconcileFirewall)
 	return true, nil
 }
 

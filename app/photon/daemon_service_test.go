@@ -134,7 +134,7 @@ func TestDaemonStateChangedWithoutLinuxDriverSkipsPlatformReconcile(t *testing.T
 		flushed = append(flushed, layer)
 	}
 
-	service.notifyStateChanged()
+	service.notifyStateChanged(reconcileAll)
 
 	if len(flushed) != 0 {
 		t.Fatalf("platform reconcile flushed without Linux driver: %v", flushed)
@@ -154,7 +154,7 @@ func TestDaemonNotifyStateChangedDefersReconcileToEventLoop(t *testing.T) {
 		flushed = append(flushed, layer)
 	}
 
-	service.notifyStateChanged()
+	service.notifyStateChanged(reconcileAll)
 
 	if len(flushed) != 0 {
 		t.Fatalf("reconcile flushed while draining events: %v", flushed)
