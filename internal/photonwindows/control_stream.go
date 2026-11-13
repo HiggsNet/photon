@@ -79,6 +79,10 @@ func RunControlStream(ctx context.Context, daemon *Daemon, configSHA256 string, 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer stream.Close()
+	// Cover startup writes as well as request reads. The stream may have been
+	// created with a different context, so cancellation must close it explicitly.
+	stopClose := context.AfterFunc(ctx, func() { _ = stream.Close() })
+	defer stopClose()
 	running := make(chan error, 1)
 	go func() { running <- RunControlled(ctx, daemon, daemon.config.State.Path) }()
 	var startupErr error

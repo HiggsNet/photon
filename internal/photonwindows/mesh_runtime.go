@@ -209,7 +209,9 @@ func (m *meshRuntime) stopPeer(p *meshPeer, reason string) {
 	m.stopPeerWithEvent(p, "attempt_failed", reason)
 }
 
-func (m *meshRuntime) stopPeerWithEvent(p *meshPeer, event, reason string) {
+// cancelWork releases owner-held results. In-flight response inputs remain
+// worker-owned until completion; clearing them here would race the worker.
+func (p *meshPeer) cancelWork() {
 	if p.heldResponse != nil {
 		clear(p.heldResponse.request.input.private)
 		p.heldResponse = nil
@@ -220,6 +222,10 @@ func (m *meshRuntime) stopPeerWithEvent(p *meshPeer, event, reason string) {
 		p.starting.cancel()
 		p.starting = nil
 	}
+}
+
+func (m *meshRuntime) stopPeerWithEvent(p *meshPeer, event, reason string) {
+	p.cancelWork()
 	if err := p.leaf.stop(); err != nil {
 		m.logger.Warn("leaf_cleanup_failed", "peer", p.config.Gateway.AllowedZones[0], "error", err)
 	}
@@ -245,6 +251,7 @@ func (m *meshRuntime) close() error {
 	var err error
 	// All opens must join before draining the shared completion queue.
 	for _, p := range m.ordered() {
+		p.cancelWork()
 		err = errors.Join(err, p.leaf.close())
 		p.tunnel.stop()
 		p.tunnel.data.close()

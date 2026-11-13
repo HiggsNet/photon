@@ -10,10 +10,57 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
 )
+
+type startupWriteStream struct {
+	net.Conn
+	writing chan struct{}
+	once    sync.Once
+}
+
+func (s *startupWriteStream) Write(p []byte) (int, error) {
+	s.once.Do(func() { close(s.writing) })
+	return s.Conn.Write(p)
+}
+
+func TestControlStreamCancellationUnblocksStartupWrite(t *testing.T) {
+	config := autoJoinConfig(t)
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	stream := &startupWriteStream{Conn: server, writing: make(chan struct{})}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	daemon := NewDaemon(config, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	done := make(chan error, 1)
+	go func() { done <- RunControlStream(ctx, daemon, strings.Repeat("0", 64), stream) }()
+	// The frontend stays connected but never reads the ready response.
+	select {
+	case <-stream.writing:
+	case err := <-done:
+		t.Fatalf("startup: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("backend never attempted its startup response")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected interrupted startup write")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancellation did not interrupt the startup response")
+	}
+	state, err := OpenState(config.State.Path, config.ManagedZone, config.TrustedRootPublicKey, 100*time.Millisecond)
+	if err != nil {
+		t.Fatalf("database still owned: %v", err)
+	}
+	state.Close()
+}
 
 func TestControlStreamStopsAndReleasesState(t *testing.T) {
 	for _, stop := range []bool{false, true} {

@@ -10,7 +10,6 @@ import (
 	"net/netip"
 	"reflect"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
@@ -34,7 +33,7 @@ type Daemon struct {
 	instanceID       string
 	config           *Config
 	logger           *slog.Logger
-	started          atomic.Bool
+	started          bool // Guarded by lifecycle; each Daemon owns exactly one run.
 	ready            chan struct{}
 	observations     chan meshObservationRequest
 	lifecycle        sync.Mutex
@@ -111,10 +110,11 @@ func (d *Daemon) Rebind(ctx context.Context) error {
 
 func (d *Daemon) Run(ctx context.Context) (err error) {
 	d.lifecycle.Lock()
-	if !d.started.CompareAndSwap(false, true) {
+	if d.started {
 		d.lifecycle.Unlock()
 		return errors.New("Windows daemon already started")
 	}
+	d.started = true
 	ctx, runCancel := context.WithCancel(ctx)
 	d.runCancel = runCancel
 	d.lifecycle.Unlock()
@@ -276,26 +276,13 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	mesh := newMeshRuntime(ctx, config, state, packet, d.deviceFactory, logger, requestPlan)
 	defer func() { err = errors.Join(err, mesh.close()) }()
 	ikeCtx, stopIKE := context.WithCancel(ctx)
-	ikeDone := make(chan struct{})
-	go func() {
-		defer close(ikeDone)
-		mesh.runIKEStarts(ikeCtx)
-	}()
-	ikeWritesDone := make(chan struct{})
-	go func() {
-		defer close(ikeWritesDone)
-		mesh.runIKEWrites(ikeCtx)
-	}()
-	ikeResponsesDone := make(chan struct{})
-	go func() {
-		defer close(ikeResponsesDone)
-		mesh.runIKEResponses(ikeCtx)
-	}()
+	var ikeWorkers sync.WaitGroup
+	ikeWorkers.Go(func() { mesh.runIKEStarts(ikeCtx) })
+	ikeWorkers.Go(func() { mesh.runIKEWrites(ikeCtx) })
+	ikeWorkers.Go(func() { mesh.runIKEResponses(ikeCtx) })
 	defer func() {
 		stopIKE()
-		<-ikeDone
-		<-ikeResponsesDone
-		<-ikeWritesDone
+		ikeWorkers.Wait()
 	}()
 	policyCtx, stopPolicy := context.WithCancel(ctx)
 	policyDone := make(chan struct{})

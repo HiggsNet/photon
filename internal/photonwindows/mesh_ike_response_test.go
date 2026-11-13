@@ -2,8 +2,44 @@ package photonwindows
 
 import (
 	"bytes"
+	"context"
 	"testing"
 )
+
+func TestMeshCloseReleasesPendingIKEWork(t *testing.T) {
+	m, _ := meshRouteFixture(t)
+	var contexts []context.Context
+	var keys [][]byte
+	for _, p := range m.peers {
+		ctx, cancel := context.WithCancel(t.Context())
+		contexts = append(contexts, ctx)
+		p.starting = &meshIKEStart{ctx: ctx, cancel: cancel, peer: p}
+		key := bytes.Repeat([]byte{7}, 64)
+		keys = append(keys, key)
+		request := &meshIKEResponse{peer: p, input: ikeHandshakeInput{private: key}}
+		p.responding = request
+		p.heldResponse = &meshIKEResponseResult{request: request}
+	}
+	if len(keys) == 0 {
+		t.Fatal("fixture has no peers")
+	}
+	if err := m.close(); err != nil {
+		t.Fatal(err)
+	}
+	for i, ctx := range contexts {
+		if ctx.Err() == nil {
+			t.Fatal("shutdown left an IKE start active")
+		}
+		if !bytes.Equal(keys[i], make([]byte, 64)) {
+			t.Fatal("shutdown retained a held handshake private key")
+		}
+	}
+	for _, p := range m.peers {
+		if p.starting != nil || p.responding != nil || p.heldResponse != nil {
+			t.Fatal("shutdown retained pending IKE work")
+		}
+	}
+}
 
 func TestMeshIKEIgnoresResponseFromCanceledExchange(t *testing.T) {
 	p := &meshPeer{tunnel: &gatewayTunnel{phase: 1, generation: 2}}
