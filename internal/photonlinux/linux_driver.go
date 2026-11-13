@@ -76,7 +76,7 @@ func NewLinuxDriver(options LinuxDriverOptions) (*LinuxDriver, error) {
 	}
 	upstreamRoutes := options.UpstreamRoutes
 	if upstreamRoutes == nil {
-		upstreamRoutes = newExecUpstreamRouteManager()
+		upstreamRoutes = newUpstreamRouteManager()
 	}
 	driver := &LinuxDriver{
 		ipsecDriver:       options.IPsecDriver,

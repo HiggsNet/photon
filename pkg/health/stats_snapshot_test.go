@@ -79,7 +79,7 @@ func BenchmarkManagerSnapshot38(b *testing.B) {
 				ids[i] = "link-" + strconv.Itoa(i)
 				m.UpsertTarget(ProbeTarget{InstanceID: ids[i], State: "up"}, now)
 				for j := range 20 {
-					m.applyResult(ids[i], ProbeResult{Sent: 3, Received: 3, RTT: time.Duration((j*37)%101+1) * time.Millisecond, Success: true}, now)
+					m.applyResult(probeDispatch{id: ids[i], window: m.windows[ids[i]]}, ProbeResult{Sent: 3, Received: 3, RTT: time.Duration((j*37)%101+1) * time.Millisecond, Success: true}, now)
 				}
 			}
 			m.Snapshot(now)
@@ -87,7 +87,8 @@ func BenchmarkManagerSnapshot38(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				if update {
-					m.applyResult(ids[i%len(ids)], ProbeResult{Sent: 3, Received: 3, RTT: time.Duration(i%37+1) * time.Millisecond, Success: true}, now)
+					id := ids[i%len(ids)]
+					m.applyResult(probeDispatch{id: id, window: m.windows[id]}, ProbeResult{Sent: 3, Received: 3, RTT: time.Duration(i%37+1) * time.Millisecond, Success: true}, now)
 				}
 				managerSnapshotResult = m.Snapshot(now)
 			}

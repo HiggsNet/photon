@@ -538,6 +538,14 @@ func TestExternalUpstreamCanInstallSourceAddressesWithoutStaticRoutes(t *testing
 	if !prefixesContain(fakeRM.ensureSpec.SourcePrefixes, "10.0.0.1/16") {
 		t.Fatalf("external source addresses = %+v, want 10.0.0.1/16", fakeRM.ensureSpec.SourcePrefixes)
 	}
+	service.Config.Routing.Instances[0].Upstream.InstallSourceAddresses = false
+	fakeRM.ensureCalled = false
+	if err := service.reconcileRouting(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !fakeRM.ensureCalled || len(fakeRM.ensureSpec.Prefixes) != 0 || len(fakeRM.ensureSpec.SourcePrefixes) != 0 {
+		t.Fatalf("disabling source installation did not request owned cleanup: %+v", fakeRM)
+	}
 }
 
 // fakeVethManager is a no-op VethManager for testing.

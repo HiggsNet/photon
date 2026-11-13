@@ -80,7 +80,7 @@ func TestEndpointDiscoveryDoesNotBlockStartupOrWriteFromWorker(t *testing.T) {
 	service := newEndpointDiscoveryDaemon(t, server.URL, time.Now)
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	if _, err := service.prepareStartupState(ctx); err != nil {
+	if _, err := service.prepareLocalState(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if ctx.Err() != nil || service.endpointResults == nil {
@@ -260,6 +260,7 @@ func TestDaemonRunConsumesDiscoveryResultsAndStopsQueryOnShutdown(t *testing.T) 
 	config.EndpointDiscovery = "all"
 	config.Reflectors = []string{server.URL}
 	config.ReflectorTimeout = time.Minute
+	config.ReflectorInterval = 100 * time.Millisecond
 	config.IPsec.Driver = "dry-run"
 	service := newDaemon(config, newState(nil, corestate.NewStoreWithCheckpoint(verified, checkpoint, nil, nil), runtime), time.Hour, time.Now)
 	service.ControlSocketPath = ""
@@ -288,9 +289,6 @@ func TestDaemonRunConsumesDiscoveryResultsAndStopsQueryOnShutdown(t *testing.T) 
 			t.Fatal("daemon did not consume its discovery completion")
 		}
 		time.Sleep(time.Millisecond)
-	}
-	if result := service.enqueueEvent(ctx, daemonEvent{Type: daemonEventEndpointTimer}); result.Error != nil {
-		t.Fatal(result.Error)
 	}
 	select {
 	case <-started:

@@ -53,6 +53,8 @@ type Daemon struct {
 	daemonTimerEvents      chan corehost.Event
 	endpointResults        chan endpointDiscoveryResult
 	endpointCancel         context.CancelFunc
+	publishOnAdmission     bool
+	admissionRevision      corestate.VerifiedRevision
 
 	gossipDriver       *corehost.GossipDriver
 	objectPullExecutor *corehost.GossipObjectPullExecutor
@@ -87,7 +89,6 @@ const (
 	daemonEventRecoveryImportZone    daemonEventType = "recovery_import_zone"
 	daemonEventRecoveryPurgeRevoked  daemonEventType = "recovery_purge_revoked"
 	daemonEventJoinAccept            daemonEventType = "join_accept"
-	daemonEventEndpointTimer         daemonEventType = "timer_endpoint_publish"
 	daemonEventSyncTrigger           daemonEventType = "sync_trigger"
 	daemonEventRoutingReload         daemonEventType = "routing_reload"
 	daemonEventIPsecCleanup          daemonEventType = "ipsec_cleanup"
@@ -153,15 +154,16 @@ func newDaemon(config *appConfig, state *State, interval time.Duration, clock fu
 		verified = commonState.ReadView().State
 	}
 	d := &Daemon{
-		Config:            config,
-		clock:             clock,
-		Interval:          interval,
-		ControlSocketPath: controlSocketPath(config),
-		Events:            make(chan daemonEvent, 64),
-		Log:               logger,
-		LogLimiter:        newRepeatedLogLimiter(30 * time.Second),
-		State:             state,
-		health:            &healthDriver{spool: healthspool.New(spoolConfig)},
+		Config:             config,
+		clock:              clock,
+		Interval:           interval,
+		ControlSocketPath:  controlSocketPath(config),
+		Events:             make(chan daemonEvent, 64),
+		Log:                logger,
+		LogLimiter:         newRepeatedLogLimiter(30 * time.Second),
+		State:              state,
+		health:             &healthDriver{spool: healthspool.New(spoolConfig)},
+		publishOnAdmission: gossip.AutoJoinPending(verified),
 	}
 	d.ipsecDNSResolver = ipsec.NewDNSFamilyHoldDownResolver(net.DefaultResolver, ipsec.DNSFamilyHoldDownOptions{
 		Now: d.now,
@@ -323,16 +325,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 	maps.Copy(startFields, buildInfoFields())
 	d.logInfo("daemon", "started", startFields)
 	d.logDebug("daemon", "startup_publish_begin", nil)
-	if _, err := d.prepareStartupState(ctx); err != nil {
+	if _, err := d.prepareLocalState(ctx); err != nil {
 		d.logWarn("daemon", "startup_publish_failed", map[string]any{"error": err})
 	}
 	d.logDebug("daemon", "startup_publish_done", nil)
 	logAutoJoinPending(d.Log, d.gossipDriver.AdmissionDiagnosis(d.now()))
 
 	startupNow := d.now()
-	ipsecReconcileInterval := d.ipsecReconcileInterval()
-	routingReconcileInterval := d.routingReconcileInterval()
-	firewallReconcileInterval := d.firewallReconcileInterval()
 	d.refreshGossipDiscovery()
 	d.logDebug("daemon", "startup_recovery_begin", nil)
 	d.logDebug("daemon", "startup_recovery_layer_begin", map[string]any{"layer": "ipsec"})
@@ -355,13 +354,13 @@ func (d *Daemon) Run(ctx context.Context) error {
 	if err := d.scheduleDaemonTimer(daemonTimerSync, startupNow); err != nil {
 		return err
 	}
-	if err := d.scheduleDaemonTimer(daemonTimerIPsec, d.nextReconcileTime(daemonTimerIPsec, d.now(), ipsecReconcileInterval)); err != nil {
+	if err := d.scheduleDaemonTimer(daemonTimerIPsec, d.nextReconcileTime(daemonTimerIPsec, d.now(), d.ipsecReconcileInterval())); err != nil {
 		return err
 	}
-	if err := d.scheduleDaemonTimer(daemonTimerRouting, d.nextReconcileTime(daemonTimerRouting, d.now(), routingReconcileInterval)); err != nil {
+	if err := d.scheduleDaemonTimer(daemonTimerRouting, d.nextReconcileTime(daemonTimerRouting, d.now(), d.routingReconcileInterval())); err != nil {
 		return err
 	}
-	if err := d.scheduleDaemonTimer(daemonTimerFirewall, d.nextReconcileTime(daemonTimerFirewall, d.now(), firewallReconcileInterval)); err != nil {
+	if err := d.scheduleDaemonTimer(daemonTimerFirewall, d.nextReconcileTime(daemonTimerFirewall, d.now(), d.firewallReconcileInterval())); err != nil {
 		return err
 	}
 	if d.health != nil && d.health.Manager != nil {
@@ -392,26 +391,6 @@ func (d *Daemon) Run(ctx context.Context) error {
 				return err
 			}
 		}
-		// A dirty layer already has an immediate wakeup. Do not replace it
-		// with a periodic deadline when its interval changes during the batch.
-		if interval := d.ipsecReconcileInterval(); interval != ipsecReconcileInterval && !d.ipsecDirty {
-			ipsecReconcileInterval = interval
-			if err := d.scheduleDaemonTimer(daemonTimerIPsec, d.nextReconcileTime(daemonTimerIPsec, d.now(), interval)); err != nil {
-				return err
-			}
-		}
-		if interval := d.routingReconcileInterval(); interval != routingReconcileInterval && !d.routingDirty {
-			routingReconcileInterval = interval
-			if err := d.scheduleDaemonTimer(daemonTimerRouting, d.nextReconcileTime(daemonTimerRouting, d.now(), interval)); err != nil {
-				return err
-			}
-		}
-		if interval := d.firewallReconcileInterval(); interval != firewallReconcileInterval && !d.firewallDirty {
-			firewallReconcileInterval = interval
-			if err := d.scheduleDaemonTimer(daemonTimerFirewall, d.nextReconcileTime(daemonTimerFirewall, d.now(), interval)); err != nil {
-				return err
-			}
-		}
 		var hostEvent corehost.Event
 		select {
 		case <-ctx.Done():
@@ -438,9 +417,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 				now := d.now()
 				switch fired.ID.Key {
 				case daemonTimerEndpoint:
-					result, _, _ := d.handleEvent(daemonEvent{Type: daemonEventEndpointTimer, Context: ctx})
-					if result.Error != nil {
-						d.logWarn("endpoint", "publish_failed", map[string]any{"error": result.Error})
+					if _, err := d.handleEndpointTimerEvent(ctx); err != nil {
+						d.logWarn("endpoint", "publish_failed", map[string]any{"error": err})
 					}
 					if err := d.scheduleDaemonTimer(daemonTimerEndpoint, now.Add(d.endpointRefreshInterval())); err != nil {
 						return err
@@ -534,6 +512,18 @@ collect:
 		syncNow = syncNow || triggerSync
 		shutdown = shutdown || stop
 	}
+	// Admission can materialize the managed zone after startup. Publish before
+	// applying platform state; the periodic endpoint timer retries any failure.
+	if !shutdown && ctx.Err() == nil && d.publishOnAdmission && d.admissionRevision != d.State.Common.VerifiedRevision() {
+		// Unchanged packets and runtime events need no detached network copy.
+		d.admissionRevision = d.State.Common.VerifiedRevision()
+		if !gossip.AutoJoinPending(d.State.Common.ReadView().State) {
+			d.publishOnAdmission = false
+			if _, err := d.prepareLocalState(ctx); err != nil {
+				d.logWarn("daemon", "admission_publish_failed", map[string]any{"error": err})
+			}
+		}
+	}
 
 	// Withdraw access before tearing down routes and IPsec links. All events
 	// in this batch observe one ordered application of the final desired state.
@@ -544,10 +534,12 @@ collect:
 		d.notifyObserver("route_changed", nil)
 		d.notifyObserver("bird_updated", nil)
 	}
-	if ipsecFlushed {
+	if ipsecFlushed && d.observerHub != nil {
 		d.notifyObserver("link_updated", d.observerLinkIDsPayload())
 		d.notifyObserver("health_updated", d.observerHealthLinkIDsPayload())
 	}
+	// Config is fixed for this run. Dynamic IPsec intervals depend on the
+	// links just reconciled, so this is also their only rescheduling point.
 	for _, layer := range []struct {
 		key, component string
 		flushed, dirty bool
@@ -641,9 +633,6 @@ func (d *Daemon) handleEvent(event daemonEvent) (daemonEventResult, bool, bool) 
 			return daemonEventResult{Error: err}, false, false
 		}
 		return daemonEventResult{Zone: result.Zone, RootPublicKey: result.RootPublicKey}, false, false
-	case daemonEventEndpointTimer:
-		changed, err := d.handleEndpointTimerEvent(controlContext(event.Context))
-		return daemonEventResult{StateCommitted: changed, Error: err}, false, false
 	case daemonEventSyncTrigger:
 		return daemonEventResult{}, true, false
 	case daemonEventRoutingReload:
@@ -845,6 +834,7 @@ func (d *Daemon) handleJoinAcceptEvent(bundle *joinBundle, key *privateKeyFile) 
 		return nil, err
 	}
 	if commit.Committed {
+		d.publishOnAdmission = true
 		d.refreshGossipDiscovery()
 		d.notifyStateChanged()
 	}
@@ -861,7 +851,7 @@ func (d *Daemon) handleEndpointTimerEvent(ctx context.Context) (bool, error) {
 	return d.handleEndpointDiscoveryResult(ctx, endpointDiscoveryResult{})
 }
 
-func (d *Daemon) prepareStartupState(ctx context.Context) (bool, error) {
+func (d *Daemon) prepareLocalState(ctx context.Context) (bool, error) {
 	commit, authority, err := d.State.Common.RefreshManagedAuthority(context.Background(), d.now())
 	if err != nil {
 		return false, err
@@ -989,8 +979,10 @@ func (d *Daemon) notifyStateChanged() {
 	if d.Hooks.OnStateChanged != nil {
 		d.Hooks.OnStateChanged()
 	}
-	d.notifyObserver("state_changed", nil)
-	d.notifyObserver("peer_updated", d.observerPeerIDsPayload())
+	if d.observerHub != nil {
+		d.notifyObserver("state_changed", nil)
+		d.notifyObserver("peer_updated", d.observerPeerIDsPayload())
+	}
 	if d.linuxDriver != nil {
 		d.ipsecDirty = true
 		d.routingDirty = true

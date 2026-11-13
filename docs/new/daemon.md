@@ -1,6 +1,6 @@
 # Photon Daemon 设计与实现
 
-> **本文档状态：2026-07**
+> **本文档状态：2026-11-13**
 > 描述 `photon daemon` 的架构、事件循环、单 writer 模式、control socket、reconcile 调度和本机状态管理。不展开 transport、routing、firewall、health 等子模块的内部细节——那些在各自的文档中说明。
 
 Photon daemon 是长期运行的控制循环。它把所有子系统——gossip、admin 写入、端点发布、object pull、transport reconcile、routing reconcile、firewall reconcile、health 和 observer——放在同一个本机控制边界内。
@@ -13,17 +13,17 @@ Photon daemon 是长期运行的控制循环。它把所有子系统——gossip
 2. [Daemon 结构](#2-daemon-结构)
 3. [事件循环](#3-事件循环)
    - 3.1 [Packet Demuxer](#31-packet-demuxer)
-   - 3.2 [Timer Manager](#32-timer-manager)
+   - 3.2 [GossipDriver Scheduler](#32-gossipdriver-scheduler)
    - 3.3 [Async Object Pull](#33-async-object-pull)
 4. [单 Writer 模式与状态管理](#4-单-writer-模式与状态管理)
    - 4.1 [核心原则](#41-核心原则)
    - 4.2 [当前状态 owner](#42-当前状态-owner)
    - 4.3 [写路径](#43-写路径)
-   - 4.4 [Reconcile 与 State](#44-reconcile-与-statestore)
-   - 4.5 [状态文件](#45-状态文件)
+   - 4.4 [Reconcile 与 Observation](#44-reconcile-与-observation)
+   - 4.5 [持久化分区](#45-持久化分区)
    - 4.6 [状态变化通知](#46-状态变化通知)
    - 4.7 [状态变更边界](#47-状态变更边界)
-   - 4.8 [外部 state 文件监控](#48-外部-state-文件监控)
+   - 4.8 [离线写入边界](#48-离线写入边界)
    - 4.9 [状态持久化边界](#49-状态持久化边界)
 5. [Control Socket](#5-control-socket)
    - 5.1 [systemd 运行约定](#51-systemd-运行约定)
@@ -86,39 +86,37 @@ Daemon 是 Photon 中唯一长期运行的系统进程。它不在每次 CLI 调
 | `Config` | `*appConfig` | 加载后的有效配置；`StatePath` 已包含环境变量覆盖 |
 | `clock` | `func() time.Time` | Daemon 自己的时钟依赖，通过 `d.now` 供协议和调度使用 |
 | `gossipDriver` | `*corehost.GossipDriver` | 持有 detached gossip 协议配置、transport/address book 和协议执行闭环；Daemon 不再重复保存 GossipConfig/transport |
-| `gossipTransport` | `*gossip.Transport` | 当前 gossip UDP transport |
 | `State` | `*State` | 唯一进程内持久状态边界；内部管理 StateDB、Common 与 LinuxState |
 | `Events` | `chan daemonEvent` | 统一事件入口（64 buffer） |
 | `Interval` | `time.Duration` | 出站 sync 周期（默认 60s） |
 | `ControlSocketPath` | `string` | Unix domain socket 路径 |
 | `linuxDriver` | `*photonlinux.LinuxDriver` | 持有 IPsec/XFRM/BIRD/firewall/health 平台实现 |
-| `health` | `*health.Manager` | 链路健康探测管理器 |
+| `health` | `*healthDriver` | 可选的健康探测 manager、spool 和运行标志 |
 | `observerHub` | `*observer.Hub` | Observer SSE 事件广播 |
 | `ipsecDirty` | `bool` | IPsec reconcile 待调度标记 |
 | `routingDirty` | `bool` | Routing reconcile 待调度标记 |
 | `firewallDirty` | `bool` | Firewall reconcile 待调度标记 |
-| `gossipDriver` | `*host.GossipDriver` | 当前 GossipDriver：协议 queue/scheduler/Engine/transport/object-pull owner |
 | `objectPullExecutor` | `*host.GossipObjectPullExecutor` | Linux TCP exchange 注入点；worker 生命周期由 GossipDriver 管理 |
 
-**DaemonEvent 类型**（[`daemon.go:70-95`](../../app/photon/daemon.go#L70-L95)）：
+**DaemonEvent 类型**（[`daemon.go`](../../app/photon/daemon.go)）：
 
 事件通过 `daemonEvent` 结构体传递，主要字段包括 `Type`（事件类型）、`Context`（上下文）和 `Reply`（结果通道）。`enqueueEvent()` 把事件放进 `Events` 通道，然后阻塞等待 `Reply` 返回结果。这样，control socket 侧的 admin 操作能拿到明确的完成或失败信号。
 
 主要事件类型：
-- `record_put` / `delegate_issue` / `delegate_revoke` — 状态写入
+- `common_mutation` / `delegate_issue` / `delegate_revoke` — 状态写入；control 的 `record_put` 转成 typed intent
 - `delegate_grant` / `recovery_import_zone` / `recovery_purge_revoked` — 权限变更
 - `join_accept` — 节点加入；`root_init` 只保留 daemon 侧拒绝入口，用来提示停止 daemon 后执行 direct/recovery 初始化
-- `packet` — 收到 UDP gossip 包
-- `timer_sync` / `timer_endpoint_publish` — 定时 sync 和端点发布
 - `sync_trigger` / `routing_reload` — 手动触发
 - `ipsec_cleanup` / `ipsec_port_rotate` / `ipsec_lifecycle` — IPsec 生命周期
 - `shutdown` — 优雅退出
+
+UDP 包、协议 timer 和 object-pull 完成结果由 GossipDriver 的入口交付；平台周期任务使用 daemon 自己的 Scheduler。端点定时器直接调用刷新入口，不再包装成 `daemonEvent`。
 
 ---
 
 ## 3. 事件循环
 
-Daemon 启动流程（[`daemonRun()`](../../app/photon/daemon.go#L1522-L1540)）：
+Daemon 启动流程（[`daemonRun()`](../../app/photon/daemon.go)）：
 
 ```
 daemonRun()
@@ -127,11 +125,11 @@ daemonRun()
  └─ service.Run()         进入事件循环
 ```
 
-`Run()` 方法（[`daemon.go:183-417`](../../app/photon/daemon.go#L183-L417)）：
+`Run()` 方法：
 
 1. **初始化驱动**：配置 IPsec (StrongSwan VICI + XFRM) 驱动
 2. **启动子服务**：
-   - `openTransport()` — 开启 UDP gossip 监听
+   - `openGossipTransport()` — 开启 UDP gossip 监听
    - `startObjectPullServer()` — 启动 TCP object pull 服务
    - `startControlServer()` — 启动 Unix domain socket 控制服务器
    - `startObserverServer()` — 启动 HTTP observer 服务器
@@ -140,61 +138,49 @@ daemonRun()
 
 ```
 // 1. GossipDriver 直接持有 common State owner
-d.gossipDriver = corehost.NewGossipDriver(..., d.State, ...)
+d.gossipDriver = corehost.NewGossipDriver(..., d.State.Common, ...)
 
 // 2. 本机 endpoint/IPsec/routing 记录通过 typed common mutation 发布
-d.prepareStartupState()
+d.prepareLocalState()
 d.refreshGossipDiscovery()
 
 // 3. 数据面从 detached common view、LinuxState 和重新 observation 恢复
 d.recoverIPsecLinksOnStart(ctx)
 d.recoverRoutingOnStart(ctx)
-d.recoverFirewallOnStart(ctx)
+d.firewallDirty = true
+d.flushFirewallReconcile(ctx)
 ```
 
-提前释放写锁可避免恢复阶段长时间阻塞 control socket 与 Observer
+系统操作不持有状态写锁。控制和 Observer 读请求可读取已提交快照；写请求仍需等待主循环完成启动恢复。
 
 4. **进入主循环**：
 
 ```
 for {
-    // 1. 处理所有已排队的事件（非阻塞 drain）
-    processEvents(ctx)
-    
-    // 2. 检查磁盘状态文件是否被外部修改
-    reloadStateIfChanged()
-    
-    // 3. 检查端点发布定时器；记录无变更时跳过下游 flush
-    handleEvent(endpointTimer)
-    
-    // 4. 检查 sync 定时器
-    handleEvent(syncTimer) + flush IPsec + flush Routing
-    
-    // 5. 检查 IPsec reconcile 定时器
-    flushIPsecReconcile()
-    
-    // 6. 检查 Routing reconcile 定时器
-    flushRoutingReconcile()
-    
-    // 7. 阻塞等待：事件 / UDP packet / sync event / object pull result / 定时器超时
+    // 最多处理 16 个控制/生命周期事件，统一 flush 后回复
+    processEvents(ctx, pendingEvent)
+    // 本地签名变更按 revision 合并转发摘要
     select {
-        case event:  handleEvent(event)
-        case packet: handlePacketEvent → SyncSession FSM
-        case syncEvent: handleSyncEvent
-        case pullResult: enqueueObjectPullResult
-        case timer.C: 继续循环
+        case ctx.Done(): 退出
+        case daemonEvent: 留作下一批的首事件
+        case endpointResult: 按最新状态发布端点及协议记录
+        case healthUpdate: 更新探测记录和 Observer
+        case daemonTimer: 验证 generation，触发刷新或标记对应系统层 dirty
+        case GossipDriver.Events/Completions/Continuations: 处理一批协议事件
     }
 }
 ```
 
-**processEvents() 阶段**（[`daemon.go:860-895`](../../app/photon/daemon.go#L860-L895)）：
+**processEvents() 阶段**：
 
-非阻塞 drain 所有已排队事件，处理完后以 **Phase 6.5 拒绝优先顺序**执行 flush：
+每批最多处理 16 个已排队事件，处理完后以拒绝优先顺序执行一次 flush：
 1. `flushFirewallReconcile()` — 刷新防火墙规则
 2. `flushRoutingReconcile()` — 刷新路由
 3. `flushIPsecReconcile()` — 刷新 IPsec 链路
 
 签名撤销提交时清除对应的 Gossip checkpoint，共享 GossipDriver 负责清理活动会话、地址和诊断。数据面先撤销防火墙授权，再回收路由和 IPsec 链路。
+
+IPsec 的接口、地址、可用状态或轮换阶段发生变化时，标记路由和防火墙 dirty，通过现有 Scheduler 立即唤醒下一批。后续批次仍按防火墙、路由的顺序执行；流量计数、外层端点和诊断时间变化不触发系统调整。部分应用失败也传递已经发生的有效变化。
 
 ### 3.1 Packet Demuxer
 
@@ -232,8 +218,8 @@ Scheduler 支持 fake clock 注入，稳定覆盖同 deadline 顺序、replace/c
 TCP object pull 在独立的 worker pool 中执行，避免阻塞事件循环：
 
 1. `SyncSession` 进入 `ObjectPulling` 后，生成 `StartObjectPull` action。
-2. 事件循环把请求塞进 `objectPullPool`。
-3. Worker 完成 TCP 连接、读取 MessagePack 响应后，把结果发回 `objectPullResults` channel。
+2. GossipDriver 将请求交给自己拥有的有界 worker 队列。
+3. Worker 完成 TCP 连接、读取 MessagePack 响应后，把结果发回可靠完成队列。
 4. 事件循环将结果转成 `ObjectPullResultEvent`，交给对应 session。
 
 `SyncSession` 跟踪每个 zone 的 inflight pull，避免对同一个对象重复请求。
@@ -253,14 +239,14 @@ Daemon 是在线进程唯一的平台 mutation 编排者。CLI admin 操作（�
 Daemon 当前只组合一个具体 `State`；其内部边界为：
 
 - `Common`（`pkg/core/state.Store`）：VerifiedState 与 loss-tolerant GossipCheckpoint；
-- `LinuxState`（`internal/photonlinux.LinuxState`）：IPsec transport 私钥与显式本机 Endpoint ACL；
+- `LinuxState`（`internal/photonlinux.LinuxState`）：IPsec transport 私钥、显式本机 Endpoint ACL 和隧道暂停标记；
 - `StateDB`（实现为唯一 `state.BoltStore`）：同一进程的 bbolt handle 和事务边界。
 
 旧 `DaemonStateStore` 的 aggregate snapshot/forwarding API 已删除。新的 `State` 不伪装成 common Store：common 调用显式进入 `State.Common`，LinuxState 只通过 typed mutation 在 verified revision 护栏下持久化。Daemon 仍直接持有在线 `LinuxObservation` 与 `LinuxDriver`。完整边界见 [`runtime-state-ownership.md`](../runtime-state-ownership.md)。
 
 ### 4.3 写路径
 
-本地 admin intent 和 GossipDriver 接受的远端 verified state 进入公共 State；平台 reconcile completion 只更新 LinuxState。两者都必须先由唯一 BoltStore 持久化，再发布对应内存状态。耗时 Observe/Plan/Apply 可在状态锁外执行，但 completion 要回到 Daemon owner；磁盘中的上次平台结果不能冒充当前 observation。
+本地 admin intent 和 GossipDriver 接受的远端 verified state 进入公共 Store；需要保留的本机配置通过 State 的 typed mutation 更新 LinuxState。持久变更先由唯一 BoltStore 提交，再发布内存状态。平台 Observe/Plan/Apply 在主循环、状态锁外同步执行，只更新在线 observation；系统操作结果不写成持久状态。
 
 纯 GossipCheckpoint 更新使用独立的 `CommitCheckpoints` 回调：只复制发生变化的 peer，应用指定字段后，先提交磁盘事务，再在短读写锁内发布内存字段；不复制、编码或写入 VerifiedState，也不推进 VerifiedRevision。涉及 verified facts 和 checkpoint 的联合修改仍使用完整候选和同一个原子事务。
 
@@ -268,23 +254,22 @@ Daemon 当前只组合一个具体 `State`；其内部边界为：
 
 ### 4.4 Reconcile 与 Observation
 
-IPsec、routing、firewall 使用 `Observe -> Plan -> Apply -> Re-observe`：desired 来自 VerifiedState、配置和最小 LinuxState，实际 SA/route/BIRD/firewall/health 状态只存在于在线 Daemon 的 LinuxObservation。CLI/HTTP 查询平台运行状态必须经过在线 Daemon；离线只允许读取 verified/common 与明确标记的 GossipCheckpoint last-known 数据。
+IPsec、routing、firewall 的 desired 来自 VerifiedState、配置和最小 LinuxState。系统观察和应用结果留在在线 Daemon 中：IPsec、routing、firewall 使用 LinuxObservation，health manager 持有探测结果。应用动作后不保证同轮完整重查系统，后续事件和周期检查继续确认实际状态。CLI/HTTP 查询平台运行状态必须经过在线 Daemon；离线只读取持久事实和明确标记为重启提示的 GossipCheckpoint。
 
 ### 4.5 持久化分区
 
-状态持久化在唯一 BoltDB 文件中：common verified、common gossip-checkpoint 与 linux/state 使用不同 bucket，但共享一个 handle。旧 `stateFile/stateMeta` 仅供旧库单向 migration 和 legacy dump；不再参与在线读写，停止支持旧 schema 时整组删除。
-
-Checkpoint 在 `gossip-checkpoint/peers` 下按 peer ID 保存小型 JSON；字段 patch 保留未指定字段，持久化仅替换变化 peer 的值。旧的整块 `payload` 在第一次写入时于同一事务迁移。若旧版回滚后再次写入 `payload`，重新升级时以它为准，清除旧 peer 索引中的残留项。common schema 和 verified 数据格式保持不变；回滚到不认识 peer bucket 的版本会丢弃这些可恢复的同步提示，从空 checkpoint 重新同步，不应将其当作无损 checkpoint 降级。
+状态持久化在唯一 BoltDB 文件中：common verified、common gossip-checkpoint 与 linux/state 使用不同 bucket，但共享一个 handle。当前 common schema 为 2，旧整库需先使用支持迁移的 v0.6.6 升级；旧整块 Gossip checkpoint 不再加载。Checkpoint 按 peer 保存可恢复的退避、上次成功探通地址等提示，活跃会话、观测地址有效期、最近同步结果与 relay 节流保留在内存。
 
 ### 4.6 状态变化通知
 
-`notifyStateChanged()`（[`daemon.go:1426-1462`](../../app/photon/daemon.go#L1426-L1462)）：
+`notifyStateChanged()`：
 
 当状态变化时（sync 成功应用了 Zone snapshot、admin 写入 record 等），daemon 会：
 1. 调用 `OnStateChanged` hook（测试用）
 2. 通知 observer 推送 SSE 事件
-4. 设置所有 dirty 标记并依次 flush：firewall → routing → IPsec
-5. 完成后再次清理 gossip peer cache
+3. 配置了 Linux driver 时设置所有 dirty 标记
+
+该函数不直接执行系统调整。下一次批次统一 flush，主循环按 verified revision 合并本地摘要转发。IPsec 运行变化只通知实际依赖者，不冒充签名状态变化。
 
 ### 4.7 状态变更边界
 
@@ -294,44 +279,28 @@ Checkpoint 在 `gossip-checkpoint/peers` 下按 peer ID 保存小型 JSON；字�
 
 - `NetworkState` apply：`ApplySnapshot`
 - peer runtime 更新：sync 状态、观测地址、backoff、last error
-- `saveState()` 落盘
-- `Transport` 运行时表更新：`AddKnownPeerID`、`SetPeerAddrs`、`SetObservedPeerPaths`
+- typed Store mutation 和持久配置提交
+- Transport 地址簿和协议运行时的更新
 - IPsec / routing / firewall 的 desired-state 计算与 reconcile 触发
-- `udpChunkAssemblies`、`rejectedDigests` 等运行时缓存
+- 分块组装、拒绝摘要等协议缓存
 
 可以在 worker goroutine 中执行、但结果必须以事件回注的：
 
 - UDP 读包（单 reader，已在事件循环入口）
 - TCP object pull 的网络 I/O
-- DNS 解析
-- 较重的批量 crypto verify（结果以事件回注）
+- reflector HTTP 查询
+- health probe I/O
+- VICI 生命周期事件订阅
 
-任何 worker 都不应直接持有 `stateFile`、`NetworkState` 或 `Transport` 的可变引用。
+worker 不修改共享 NetworkState 或协议 FSM。当前 IPsec 规划中的 DNS 解析仍同步执行；将来若移到 worker，必须通过完成事件回到单写者提交。
 
-### 4.8 外部 state 文件监控
+### 4.8 离线写入边界
 
-Daemon 运行期间，推荐所有写操作都通过 control socket。如果外部程序直接修改了 BoltDB 文件，daemon 通过 `fsnotify` / `inotify` 监控该路径：
-
-- 文件内容变化（mtime / size / digest 任一变化）→ post `StateFileChangedEvent` 到事件循环。
-- 事件循环收到后 `loadState()`；若 digest 变化则 `ReplaceCommitted()` 并 `notifyStateChanged()`，立即触发 outbound sync 和 relay。
-
-`saveState()` 写盘前会对 state 文件加 `flock`（互斥锁）。外部工具若也遵守 `flock`，可避免并发写；不遵守则至少 daemon 写期间不会被覆盖。多个 writer 同时绕过 control socket 直接写 state DB 是未定义行为。
+daemon 运行时持有唯一数据库 owner，在线写入通过 control socket。当前实现没有外部文件监控、状态热重载或外部写入合并路径。直接恢复或替换数据库前必须停止使用它的 daemon；不得依赖文件时间变化使运行中的内存状态更新。
 
 ### 4.9 状态持久化边界
 
-旧代码在收包路径里用 `defer saveState()`，落盘时机隐式。当前设计明确只在以下时机落盘：
-
-- `SyncSession` 进入 `Completed` 或 `Failed`
-- 应用通过验证的 Zone 快照后目录发生变化
-- control / admin 事件处理完成后
-
-以下情况不落盘：
-
-- 单纯收到 `PING` / `PONG` 且状态未变
-- chunk 接收但未完整重组
-- timer 触发但状态未变
-
-所有落盘都在 daemon 主 goroutine 串行执行。
+签名变更和本机持久配置在对应 typed mutation 中提交；协议只在 checkpoint 的实际持久字段变化时写入，独立于诊断日志和 Observer 通知。单纯刷新流量计数、同步成功时间、分块进度或 timer 不推进 VerifiedRevision。所有协议和配置写入都由主循环串行发起。
 
 ---
 
@@ -348,6 +317,8 @@ CLI 通过 `sendControlRequest()` 与 daemon 通信。daemon 在线时，写操�
 必要的系统调整仍同步执行。运行中只在 `linuxObservation` 保存一条当前操作，记录组件、阶段、开始时间和期限，结束即清空，不写数据库。CLI 状态与 Web 状态使用同一个 `RuntimeOperation` 结构，查询时计算已等待时长；Web 每 5 秒刷新可见页面的运行状态。
 
 公网 IP 由后台采集，启动先发布配置和接口地址。每次只保留一轮采集或待处理结果，主循环消费完成结果后按最新状态签名和发布，随后更新依赖这些端点的 IPsec 地址。采集继承 daemon 的取消信号，所有 reflector 共用一次查询预算，默认 3 秒；退出时取消并等待请求结束。没有 reflector 时只同步刷新本地候选。
+
+启动时尚未获准加入的节点，在 Gossip 自动接纳或 `join_accept` 成功后的下一批事件中，先补发本机端点和 IPsec/routing 公告，再执行系统配置，无需等待默认五分钟的端点定时器。公网 IP 采集仍在后台完成；公告失败会记录错误，后续端点定时器继续重试。
 
 每个连接处理一个请求。客户端断开或请求到期会取消对应上下文，尚未执行的队列事件跳过提交；已经提交的修改不回滚。普通请求的等待上限是 70 秒，ping 诊断为 5 分钟。单次防火墙、路由或 IPsec 调整仍各自最多等待 20 秒，父上下文更早到期时提前结束。服务停止时取消并等待所有已接入请求收尾，再释放它们使用的状态和驱动；写响应保留 10 秒上限。
 
@@ -370,7 +341,7 @@ CLI 通过 `sendControlRequest()` 与 daemon 通信。daemon 在线时，写操�
 
 示例使用 `Restart=on-failure`、`RestartSec=2s` 和 `TimeoutStopSec=30s`：异常退出会重启；正常 shutdown 或 `SIGTERM` 不会重启；停止超过 30 秒后才强制结束。
 
-control socket 先启动、后于 Observer 停止。任一服务启动失败都会终止启动并清理已有 listener。control socket 使用父目录 `0700`、socket `0600`，只允许 root 管理，不做方法级鉴权。
+control socket 先启动、后于 Observer 停止。control 或 Observer 启动失败会终止启动并清理已有 listener；TCP object-pull 监听失败则记录错误，继续使用 UDP 回退。control socket 创建父目录时使用 `0700`，socket 使用 `0600`，不做方法级鉴权。
 
 Observer 请求继承 daemon 的取消上下文。关闭时先取消 SSE 事件流，再等待 HTTP 服务退出；优雅关闭超时则关闭剩余连接。Daemon 的 `Close()` 同时释放 Gossip 定时器、Linux 驱动和数据库，Linux 驱动初始化失败也会停止已创建的 Gossip 定时器。
 
@@ -426,7 +397,7 @@ authority/gossip 管理身份，不配置 overlays、routing instance 或 firewa
 
 ### 5.3 状态持久化、停止与崩溃恢复
 
-签名状态、peer sync 状态和 reconcile 快照写入 BoltDB；socket、连接、内存事件和进行中的 sync session 不持久化。正常关闭使用 `photon daemon --shutdown` 或 `SIGTERM`。
+签名状态、最小 Gossip checkpoint 和 LinuxState 写入 BoltDB；系统 reconcile 观察、最近同步诊断、socket、连接、内存事件和进行中的 sync session 不持久化。正常关闭使用 `photon daemon --shutdown` 或 `SIGTERM`。
 
 崩溃后，daemon 从最后一次成功提交的状态启动，重新发布本机记录并 reconcile 数据面；未完成的同步由定时任务重试。状态库无法打开时启动失败，不会用空状态覆盖原文件。
 
@@ -452,7 +423,7 @@ Daemon 使用**三级调度策略**：事件驱动 + 周期性 + 标记脏。
 
 标记在以下情况被设置：
 1. `notifyStateChanged()` — 任何状态变化后
-2. `processEvents()` — 处理完事件队列后
+2. 周期 timer 到期
 3. IPsec lifecycle 事件到达时
 
 ### 6.2 Flush 方法
@@ -464,6 +435,10 @@ Daemon 使用**三级调度策略**：事件驱动 + 周期性 + 标记脏。
 - `flushFirewallReconcile(ctx)` — 检查 `firewallDirty`，调用 `reconcileFirewall(ctx)`
 
 Flush 方法返回 `bool` 表示是否确实执行了 reconcile。
+
+周期任务在启动恢复完成后首次安排，之后只在批次 flush 后按当前结果重排。配置在单次运行中固定；IPsec 是否还需周期检查取决于刚更新的链路实例，不再由主循环每次唤醒时重复比较三份 interval 缓存。
+
+三个系统层各有 20 秒操作预算。它们同步占用主循环，连续耗尽预算时会推迟 Gossip、timer 消费和后续写请求。控制/Observer 读请求可并发读取已提交快照和当前操作。若要异步化系统调整，需要另行设计互斥执行、过期结果处理和撤销顺序；不能仅把现有方法放进 goroutine。
 
 ### 6.3 周期性定时器
 
@@ -488,15 +463,14 @@ Store 在提交生效的撤销时删除相关 Gossip checkpoint，共享 Gossip 
 
 ```
 record_put
-  → handleRecordPutEvent: 写入签名 record
-  → notifyStateChanged: 设置 dirty 标记 + flush 子系统
+  → common_mutation: 提交 typed intent
+  → notifyStateChanged: 设置 dirty 标记
   → processEvents drain 中: flush firewall → routing → ipsec
 
 sync timer
-  → handleSyncTimerEvent: 加载新状态 + 为每个出站 peer 启动 SyncSession
-  → SyncSession FSM 完成 → completeSyncSession
-    → notifyStateChanged（如果有变化）
-    → GossipDriver 向其他 peer 发送带新目录摘要的 PING
+  → handleSyncTimerEvent: 为符合退避规则的 peer 启动 SyncSession
+  → GossipDriver 验证并提交远端快照，立即转发摘要
+  → notifyStateChanged（如果有变化）
 
 endpoint publish timer
   → handleEndpointTimerEvent: 发布 endpoint、IPsec transport、routing netns 记录
@@ -517,7 +491,7 @@ Daemon 作为编排器，各子模块通过清晰的接口与 daemon 集成：
 - **集成点**：`pkg/core/host.GossipDriver` 是当前 GossipDriver，拥有 Engine、协议 queue/scheduler、transport、object-pull、chunk/session runtime 和 gossip observability；Daemon 只消费其事件并接收需要触发平台 reconcile 的终态结果
 - **状态范围**：verified signed facts 进入 VerifiedState；retry/backoff/observed endpoint 等 restart hint 进入 GossipCheckpoint；session/chunk/address book 等只在内存
 
-**稳态 unsolicited ping 短路**：收到对端主动发来的 `MessagePing` 时，如果 ping 携带的 catalog root 与本端一致，`maybeShortcutSyncFromPingSummary` 直接记录 peer sync 状态并返回，不再创建 SyncSession。只有 root 不一致或 summary 生成失败时，才回退到完整 sync round。respondPing 仍正常回复 PONG，让对端拿到本端 summary。
+目录根一致时无需拉取 Zone 快照也可完成同步；具体 PING/PONG 分流、会话生命周期和诊断由公共 GossipDriver 管理。
 
 ### 7.2 IPsec Transport
 
@@ -548,6 +522,8 @@ Daemon 作为编排器，各子模块通过清晰的接口与 daemon 集成：
 - **输出**：ICMP/UDP probe、RTT/loss/jitter 指标；后续可作为 rotate cutover gate 的输入
 - **集成点**：`flushIPsecReconcile()` 完成后调用 `reconcileHealth(ctx)`，刷新 health manager 的 probe target 并触发到期的 probe
 - **状态范围**：health 结果不写入 gossip active state；后续如需要 signed health hint 需单独设计
+
+探测结果属于派发时的目标实例。同一个 ProbeID 换接口、地址或 generation 后使用新统计窗口，旧结果不能更新新目标的健康状态或轮换门槛。删除目标时，正在运行的探测继续占用并发名额直至结束；同一路径的普通链路状态变化不清空历史。
 
 ### 7.6 Observer
 

@@ -296,9 +296,15 @@ func ipsecReconcileActionLogFields(action ipsec.ReconcileAction) map[string]any 
 
 func (d *Daemon) publishIPsecObservation(unix int64, instances map[string]ipsec.LinkInstance, desired []ipsec.TransportLinkSpec, sas []ipsec.SAState, actions []ipsec.ReconcileAction, skips []ipsec.PlanSkip, lastError error) {
 	summary := summarizeIPsecReconcile(unix, desired, sas, actions, skips, lastError)
-	previous, _ := d.linuxObservation.ipsecSnapshot()
+	previous, previousSummary := d.linuxObservation.ipsecSnapshot()
 	d.observeIPsecContactOutcomes(previous, instances, time.Unix(unix, 0))
 	d.linuxObservation.replaceIPsec(instances, summary)
+	if !linkConsumerInputsEqual(previous, previousSummary, instances, summary) {
+		// The deny-first batch has already visited these consumers. Wake them
+		// on the next pass rather than leaving new interfaces/costs to a timer.
+		d.routingDirty = true
+		d.firewallDirty = true
+	}
 }
 
 func (d *Daemon) recordIPsecReconcileError(unix int64, err error) {

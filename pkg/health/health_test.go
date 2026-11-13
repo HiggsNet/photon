@@ -408,7 +408,8 @@ func TestManagerKeepsRawErrorSeparateFromStateReason(t *testing.T) {
 	now := time.Now()
 	m.UpsertTarget(ProbeTarget{InstanceID: "link1", State: "up"}, now)
 
-	m.applyResult("link1", ProbeResult{Err: errors.New("netns interface missing: phx0")}, now)
+	job := probeDispatch{id: "link1", window: m.windows["link1"]}
+	m.applyResult(job, ProbeResult{Err: errors.New("netns interface missing: phx0")}, now)
 	snapshot := m.Snapshot(now)
 	if got := snapshot[0].LastFailure; got == nil || got.Error() != "netns interface missing: phx0" {
 		t.Fatalf("last failure = %v, want raw probe failure", got)
@@ -417,7 +418,7 @@ func TestManagerKeepsRawErrorSeparateFromStateReason(t *testing.T) {
 		t.Fatalf("last reason = %q, want stable reason", got)
 	}
 
-	m.applyResult("link1", ProbeResult{}, now.Add(time.Second))
+	m.applyResult(job, ProbeResult{}, now.Add(time.Second))
 	snapshot = m.Snapshot(now)
 	if got := snapshot[0].LastFailure; got != nil {
 		t.Fatalf("last failure after ordinary packet loss = %v, want nil", got)

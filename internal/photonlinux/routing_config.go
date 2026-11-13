@@ -302,10 +302,22 @@ const (
 // ParseRoutingConfig parses `routing.instances[]` into RoutingConfig.
 func ParseRoutingConfig(yamlInstances []RoutingInstanceYAML, netnsCfg NetNSConfig, dataDir string) (RoutingConfig, error) {
 	var instances []RoutingInstance
+	upstreamOwners := make(map[[2]string]string)
 	for i, yi := range yamlInstances {
 		inst, err := parseRoutingInstance(yi, netnsCfg, dataDir)
 		if err != nil {
 			return RoutingConfig{}, fmt.Errorf("routing.instances[%d]: %w", i, err)
+		}
+		if inst.Enabled && inst.Bird.Mode != ipsec.RoutingModeDisabled && inst.Upstream != nil && inst.Upstream.Enabled {
+			namespace := inst.Upstream.Veth.PeerNetns
+			if namespace == "host" {
+				namespace = ""
+			}
+			endpoint := [2]string{namespace, inst.Upstream.Veth.PeerInterface}
+			if owner, exists := upstreamOwners[endpoint]; exists {
+				return RoutingConfig{}, fmt.Errorf("routing.instances[%d]: upstream interface %q in namespace %q is already managed by %q", i, endpoint[1], endpoint[0], owner)
+			}
+			upstreamOwners[endpoint] = inst.ID
 		}
 		instances = append(instances, inst)
 	}

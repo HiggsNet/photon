@@ -254,12 +254,12 @@ func TestDaemonEndpointTimerPublishesRoleProfileFromReloadedState(t *testing.T) 
 	}
 	service, _ := newPersistedIPsecPublishTestService(t, rt, verified, checkpoint, runtime, config)
 
-	result, syncNow, shutdown := service.handleEvent(daemonEvent{Type: daemonEventEndpointTimer})
-	if result.Error != nil {
-		t.Fatalf("handleEvent(endpoint): %v", result.Error)
+	changed, err := service.handleEndpointTimerEvent(t.Context())
+	if err != nil {
+		t.Fatalf("handleEndpointTimerEvent: %v", err)
 	}
-	if !result.StateCommitted || syncNow || shutdown {
-		t.Fatalf("committed=%v syncNow=%v shutdown=%v", result.StateCommitted, syncNow, shutdown)
+	if !changed {
+		t.Fatal("endpoint refresh did not commit the updated protocol")
 	}
 	latest := service.State.Common.ReadView()
 	record := latest.State.Network.Zones[latest.State.ManagedZone].Records[ipsec.RecordKeyProfile]

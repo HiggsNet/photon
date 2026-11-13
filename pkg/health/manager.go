@@ -48,6 +48,7 @@ type probeDispatch struct {
 	ctx    context.Context
 	id     string
 	target ProbeTarget
+	window *RollingWindow // identity of this target installation, including ID reuse
 }
 
 // NewManager creates a Manager. The Prober may be nil, in which case a no-op
@@ -89,22 +90,15 @@ func (m *Manager) SetTargets(targets []ProbeTarget, now time.Time) {
 		}
 		id := targetKey(t)
 		newMap[id] = t
-		if _, ok := m.targets[id]; !ok {
+		if previous, ok := m.targets[id]; !ok || !sameProbeTarget(previous, t) {
+			m.removeTargetLocked(id)
 			m.windows[id] = NewRollingWindow(m.lossWindow())
 			m.nextProbe[id] = now.Add(m.jitteredInterval())
 		}
 	}
 	for id := range m.targets {
 		if _, ok := newMap[id]; !ok {
-			m.releaseInFlightLocked(id)
-			delete(m.targets, id)
-			delete(m.windows, id)
-			delete(m.nextProbe, id)
-			delete(m.lastFailure, id)
-			delete(m.lastReason, id)
-			delete(m.errorsTotal, id)
-			delete(m.babelObs, id)
-			m.states.Reset(id)
+			m.removeTargetLocked(id)
 		}
 	}
 	m.targets = newMap
@@ -118,7 +112,8 @@ func (m *Manager) UpsertTarget(t ProbeTarget, now time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	id := targetKey(t)
-	if _, ok := m.targets[id]; !ok {
+	if previous, ok := m.targets[id]; !ok || !sameProbeTarget(previous, t) {
+		m.removeTargetLocked(id)
 		m.windows[id] = NewRollingWindow(m.lossWindow())
 		m.nextProbe[id] = now.Add(m.jitteredInterval())
 	}
@@ -129,7 +124,12 @@ func (m *Manager) UpsertTarget(t ProbeTarget, now time.Time) {
 func (m *Manager) RemoveTarget(instanceID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.releaseInFlightLocked(instanceID)
+	m.removeTargetLocked(instanceID)
+}
+
+func (m *Manager) removeTargetLocked(instanceID string) {
+	// A removed target's dispatched probe still owns its concurrency slot.
+	// Its completion will release it, but cannot update a replacement window.
 	delete(m.targets, instanceID)
 	delete(m.windows, instanceID)
 	delete(m.nextProbe, instanceID)
@@ -138,6 +138,12 @@ func (m *Manager) RemoveTarget(instanceID string) {
 	delete(m.errorsTotal, instanceID)
 	delete(m.babelObs, instanceID)
 	m.states.Reset(instanceID)
+}
+
+func sameProbeTarget(a, b ProbeTarget) bool {
+	// Connecting/up/degraded describe the same path; keep its useful samples.
+	a.State, b.State = "", ""
+	return a == b
 }
 
 // SetBabelObservation stores passive Babel data for a link.
@@ -184,8 +190,8 @@ func (m *Manager) Tick(ctx context.Context, now time.Time) int {
 	}
 	for _, job := range pending {
 		id := job.id
-		m.applyResult(id, byID[id], now)
-		m.finishProbe(id, now)
+		m.applyResult(job, byID[id], now)
+		m.finishProbe(job, now)
 	}
 	return len(pending)
 }
@@ -235,8 +241,8 @@ func (m *Manager) runAsyncWorker(ctx context.Context) {
 		case job := <-m.asyncJobs:
 			result := m.runAsyncProbe(job)
 			now := time.Now()
-			m.applyResult(job.id, result, now)
-			m.finishProbe(job.id, now)
+			m.applyResult(job, result, now)
+			m.finishProbe(job, now)
 			m.notifyAsyncUpdate()
 		}
 	}
@@ -305,21 +311,22 @@ func (m *Manager) reserveDue(ctx context.Context, now time.Time) []probeDispatch
 	}
 	pending := make([]probeDispatch, 0, len(due))
 	for _, id := range due {
-		pending = append(pending, probeDispatch{ctx: ctx, id: id, target: m.targets[id]})
+		pending = append(pending, probeDispatch{ctx: ctx, id: id, target: m.targets[id], window: m.windows[id]})
 		m.inFlight++
 		m.inFlightIDs[id] = true
 	}
 	return pending
 }
 
-func (m *Manager) finishProbe(id string, now time.Time) {
+func (m *Manager) finishProbe(job probeDispatch, now time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	id := job.id
 	if !m.inFlightIDs[id] {
 		return
 	}
 	m.releaseInFlightLocked(id)
-	if _, ok := m.targets[id]; ok {
+	if m.windows[id] == job.window {
 		m.nextProbe[id] = now.Add(m.jitteredInterval())
 	}
 }
@@ -352,11 +359,12 @@ func (m *Manager) NextDue(now time.Time) (time.Time, bool) {
 	return earliest, !earliest.IsZero()
 }
 
-func (m *Manager) applyResult(instanceID string, result ProbeResult, now time.Time) {
+func (m *Manager) applyResult(job probeDispatch, result ProbeResult, now time.Time) {
+	instanceID := job.id
 	m.mu.Lock()
-	window, ok := m.windows[instanceID]
+	window := m.windows[instanceID]
 	m.mu.Unlock()
-	if !ok {
+	if window == nil || window != job.window {
 		return
 	}
 	window.RecordProbe(now, result)
@@ -364,7 +372,7 @@ func (m *Manager) applyResult(instanceID string, result ProbeResult, now time.Ti
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.targets[instanceID]; !ok {
+	if m.windows[instanceID] != job.window {
 		return
 	}
 	if result.Err != nil {

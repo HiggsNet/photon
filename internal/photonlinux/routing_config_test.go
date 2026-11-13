@@ -82,6 +82,26 @@ instances:
 	}
 }
 
+func TestRoutingInstancesCannotShareUpstreamOwnership(t *testing.T) {
+	netns := NetNSConfig{Names: map[string]ipsec.NetNSSpec{"mesh": {Kind: ipsec.NetNSName, Name: "mesh"}}}
+	instances := []RoutingInstanceYAML{
+		{ID: "one", NetNS: "mesh", Upstream: &UpstreamConfigYAML{}},
+		{ID: "two", NetNS: "mesh", Upstream: &UpstreamConfigYAML{External: UpstreamEndpointYAML{NetNS: "host"}}},
+	}
+	if _, err := ParseRoutingConfig(instances, netns, t.TempDir()); err == nil || !strings.Contains(err.Error(), "already managed") {
+		t.Fatalf("shared upstream ownership was accepted: %v", err)
+	}
+	instances[1].Upstream.External.NetNS = "other"
+	if _, err := ParseRoutingConfig(instances, netns, t.TempDir()); err != nil {
+		t.Fatalf("same interface name in different namespaces: %v", err)
+	}
+	instances[1].Upstream.External.NetNS = "host"
+	instances[1].Mode = ipsec.RoutingModeDisabled
+	if _, err := ParseRoutingConfig(instances, netns, t.TempDir()); err != nil {
+		t.Fatalf("disabled instance claimed upstream ownership: %v", err)
+	}
+}
+
 func TestParseUpstreamConfigExternalMode(t *testing.T) {
 	yamlInput := `
 instances:

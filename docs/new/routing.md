@@ -425,6 +425,16 @@ routing:
 
 external 模式可显式设置 `install_source_addresses: true`，让 Photon 在自己管理的 external veth endpoint 上安装从本节点非 shared assignment 派生的源地址。shared/Anycast assignment 不会安装到 veth。地址保留 assignment 的 prefix length，因此会在 external endpoint 上生成对应的 connected route；管理员必须移除其他接口上冲突的 connected prefix。该选项不会添加远端业务静态路由，也不会接管 external 路由守护进程。
 
+Upstream 路由和源地址通过 rtnetlink 直接观察与调整，保持主循环同步执行。新安装的条目使用内核 protocol `242` 标记 Photon 归属。每次只检查当前 external 网络命名空间和接口：先撤掉已失效的自有路由，再安装新源地址及路由，最后回收不再使用的自有源地址。IPv6 首选源地址尚在 DAD 检测中时，在父操作预算内最多等待 3 秒，检测失败则回报错误。部分失败立即回报，下一轮从内核实际状态继续；daemon 重启不需要恢复另一份运行快照。切换到 `external` 或关闭 `install_source_addresses` 时，仍以空的期望集合回收已有自有条目。
+
+同一网络命名空间中的一个 upstream 接口只能由一个启用的 routing instance 管理；重复配置在启动时拒绝。protocol `242` 在该接口上保留给 Photon。手工路由、link-local 地址及其他接口上的标记条目不在回收范围内。移除 IPv4 主源地址时临时启用接口的 `promote_secondaries`，操作后恢复原值，避免内核连带删除同网段的手工次要地址。
+
+旧版的 `proto static` 路由和无归属标记的地址不自动认领或删除。若现有条目与期望值完全一致，继续借用；若存在冲突的手工路由，返回错误并保留它。旧版遗留条目需要在独立盘点后显式处理。源地址标记依赖 Linux 5.18 起提供的 `IFA_PROTO`；若新地址无法确认标记，撤回本次新建的地址并报错，不静默安装无法安全回收的地址，也不要求 iproute2 支持 `address proto` 语法。
+
+Ubuntu 24.04 自带的 iproute2 6.1.0 不支持 `ip address ... proto` 语法；[旧 OpenWrt 分支的兼容性检查](https://github.com/HiggsNet/photon/actions/runs/41983179520/job/127097745880) 曾因此在 daemon upstream 冒烟中失败。当前实现直接使用 rtnetlink 写入和读取归属标记，Ubuntu 工作流额外运行 `TestUpstreamOwnedObjectsNetNS`，覆盖实际内核中的换代、撤销和手工条目保留。
+
+2026-11-13，本地 Ubuntu 24.04.4 容器使用 Go 1.25.0、BIRD 2.14、iproute2 6.1.0，通过完整 Go 测试、安装脚本检查、上游归属内核验收和整套 BIRD/Babel 冒烟，包含原先失败的 daemon upstream 测试。容器的命名空间执行沿用仓库测试脚本中的 `nsenter` 适配，避开嵌套容器的 `/sys` 挂载限制；容器共享宿主内核，这不等于独立 Ubuntu 内核启动或生产节点验收。
+
 ### 6.5 边界
 
 - 业务 prefix 仍由 IPAM + announcement 决定；veth 不会让 host 自动获得未授权前缀。

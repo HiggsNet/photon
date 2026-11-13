@@ -486,19 +486,14 @@ func TestDaemonEndpointTimerNoChangeSkipsFlushAndSync(t *testing.T) {
 
 	// Second publish at the same timestamp: nothing changed, so it should not
 	// trigger a sync, layer flush, or state-store revision bump.
-	reply := make(chan daemonEventResult, 1)
-	event := daemonEvent{Type: daemonEventEndpointTimer, Reply: reply}
-	syncNow, shutdown := service.processEvents(context.Background(), &event)
-	result := <-reply
-	if result.Error != nil {
-		t.Fatalf("second handleEvent(endpoint): %v", result.Error)
+	changed, err := service.handleEndpointTimerEvent(t.Context())
+	if err != nil {
+		t.Fatalf("second handleEndpointTimerEvent: %v", err)
 	}
-	if result.StateCommitted || syncNow {
-		t.Fatalf("committed=%v force sync=%v on no-op endpoint timer", result.StateCommitted, syncNow)
+	if changed {
+		t.Fatal("no-op endpoint timer committed state")
 	}
-	if shutdown {
-		t.Fatalf("shutdown = true, want false")
-	}
+	service.processEvents(t.Context(), nil)
 	if len(flushed) != 0 {
 		t.Fatalf("layer flushes on no-op endpoint timer: %v", flushed)
 	}
@@ -524,31 +519,31 @@ func TestPrepareStartupStateDoesNotPersistDerivedAdmission(t *testing.T) {
 	)
 	beforeRev := uint64(service.State.Common.VerifiedRevision())
 
-	changed, err := service.prepareStartupState(t.Context())
+	changed, err := service.prepareLocalState(t.Context())
 	if err != nil {
-		t.Fatalf("prepareStartupState: %v", err)
+		t.Fatalf("prepareLocalState: %v", err)
 	}
 	if changed {
-		t.Fatal("prepareStartupState changed = true for derived admission-only state")
+		t.Fatal("prepareLocalState changed = true for derived admission-only state")
 	}
 	common := service.State.Common.ReadView()
 	rev := uint64(common.Revision)
 	if rev != beforeRev {
 		t.Fatalf("verified revision = %d, want runtime-only startup to keep %d", rev, beforeRev)
 	}
-	changed, err = service.prepareStartupState(t.Context())
+	changed, err = service.prepareLocalState(t.Context())
 	if err != nil {
-		t.Fatalf("prepareStartupState(second): %v", err)
+		t.Fatalf("prepareLocalState(second): %v", err)
 	}
 	if changed {
-		t.Fatal("prepareStartupState(second) changed = true, want no-op")
+		t.Fatal("prepareLocalState(second) changed = true, want no-op")
 	}
 	if got := uint64(service.State.Common.VerifiedRevision()); got != rev {
 		t.Fatalf("state revision after no-op = %d, want %d", got, rev)
 	}
 }
 
-func TestDaemonEndpointTimerRefreshDueStillTriggersSync(t *testing.T) {
+func TestDaemonEndpointTimerRefreshesLeaseOnlyWhenDue(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
 	verified.ManagedZone = "node-b.catofes."
 	config.PeerID = string(verified.ManagedZone)
@@ -578,28 +573,22 @@ func TestDaemonEndpointTimerRefreshDueStillTriggersSync(t *testing.T) {
 
 	// Second publish before refresh interval: no-op, no sync trigger.
 	clock.Advance(5 * time.Minute)
-	result, syncNow, shutdown := service.handleEvent(daemonEvent{Type: daemonEventEndpointTimer})
-	if result.Error != nil {
-		t.Fatalf("second handleEvent(endpoint): %v", result.Error)
+	changed, err := service.handleEndpointTimerEvent(t.Context())
+	if err != nil {
+		t.Fatalf("second handleEndpointTimerEvent: %v", err)
 	}
-	if shutdown {
-		t.Fatalf("shutdown = true, want false")
-	}
-	if result.StateCommitted || syncNow {
-		t.Fatalf("committed=%v force sync=%v before refresh interval", result.StateCommitted, syncNow)
+	if changed {
+		t.Fatal("endpoint lease refreshed before its interval")
 	}
 
 	// Third publish after the refresh interval commits a new lease timestamp.
 	clock.Advance(25 * time.Minute)
-	result, syncNow, shutdown = service.handleEvent(daemonEvent{Type: daemonEventEndpointTimer})
-	if result.Error != nil {
-		t.Fatalf("third handleEvent(endpoint): %v", result.Error)
+	changed, err = service.handleEndpointTimerEvent(t.Context())
+	if err != nil {
+		t.Fatalf("third handleEndpointTimerEvent: %v", err)
 	}
-	if shutdown {
-		t.Fatalf("shutdown = true, want false")
-	}
-	if !result.StateCommitted || syncNow {
-		t.Fatalf("committed=%v force sync=%v after refresh interval", result.StateCommitted, syncNow)
+	if !changed {
+		t.Fatal("endpoint lease did not refresh after its interval")
 	}
 	thirdView := service.State.Common.ReadView()
 	third := thirdView.State.Network.Zones[verified.ManagedZone].Records[gossip.EndpointRecordKeyUDP]

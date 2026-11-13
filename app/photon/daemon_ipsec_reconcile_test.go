@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"maps"
+	"net/netip"
 	"path/filepath"
 	"testing"
 	"time"
@@ -12,6 +14,68 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
+
+func TestIPsecObservationInvalidatesOnlyChangedConsumerInputs(t *testing.T) {
+	for _, scenario := range []string{"create", "remove", "interface", "namespace", "staged", "rotate_cost", "partial_failure", "diagnostics"} {
+		t.Run(scenario, func(t *testing.T) {
+			verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+			service := newTestDaemonFromOwners(&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second)
+			defer service.Close()
+			previous := map[string]ipsec.LinkInstance{"link-a": {
+				ID: "link-a", InterfaceName: "old", ActualState: ipsec.LinkStateUp,
+				LocalTunnelAddr: netip.MustParseAddr("fe80::1"), PeerTunnelAddr: netip.MustParseAddr("fe80::2"),
+				StagedInterfaceName: "new", RotatePhase: ipsec.RotatePhaseDualRunning,
+			}}
+			if scenario == "create" {
+				previous = nil
+			}
+			service.publishIPsecObservation(100, previous, nil, nil, nil, nil, nil)
+			service.processEvents(t.Context(), nil)
+			revision := service.State.Common.VerifiedRevision()
+			current := maps.Clone(previous)
+			link := current["link-a"]
+			var desired []ipsec.TransportLinkSpec
+			var applyErr error
+			switch scenario {
+			case "create":
+				current = map[string]ipsec.LinkInstance{"link-a": {ID: "link-a", InterfaceName: "created", ActualState: ipsec.LinkStateConnecting}}
+			case "remove":
+				delete(current, "link-a")
+			case "interface", "partial_failure":
+				link.InterfaceName = "replacement"
+			case "namespace":
+				desired = []ipsec.TransportLinkSpec{{LinkID: "link-a", InterfaceName: "old", LocalTunnelAddr: link.LocalTunnelAddr, NetNS: "other"}}
+			case "staged":
+				link.StagedInterfaceName = "next"
+			case "rotate_cost":
+				link.RotatePhase = ipsec.RotatePhaseDraining
+			case "diagnostics":
+				link.LastTransition = 101
+				link.Endpoint = "198.51.100.2:4500"
+			}
+			if scenario != "create" && scenario != "remove" {
+				current["link-a"] = link
+			}
+			if scenario == "partial_failure" {
+				applyErr = errors.New("later interface failed")
+			}
+			service.publishIPsecObservation(101, current, desired, []ipsec.SAState{{InboundBytes: 1000}}, nil, nil, applyErr)
+			changed := scenario != "diagnostics"
+			if service.routingDirty != changed || service.firewallDirty != changed || service.ipsecDirty {
+				t.Fatalf("consumer invalidation = routing:%v firewall:%v ipsec:%v, want changed=%v", service.routingDirty, service.firewallDirty, service.ipsecDirty, changed)
+			}
+			if service.State.Common.VerifiedRevision() != revision {
+				t.Fatal("runtime observation changed signed state")
+			}
+			var flushed []string
+			service.Hooks.OnReconcileFlush = func(layer string) { flushed = append(flushed, layer) }
+			service.processEvents(t.Context(), nil)
+			if changed && (len(flushed) != 2 || flushed[0] != "firewall" || flushed[1] != "routing") || !changed && len(flushed) != 0 {
+				t.Fatalf("follow-up flush order = %v", flushed)
+			}
+		})
+	}
+}
 
 func TestPublishIPsecObservationRefreshesLiveSACounters(t *testing.T) {
 	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)

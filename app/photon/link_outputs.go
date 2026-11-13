@@ -2,13 +2,31 @@ package main
 
 import (
 	"cmp"
+	"maps"
 	"net/netip"
+	"slices"
 	"sort"
 	"strconv"
 
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
+
+// linkConsumerInputsEqual ignores diagnostics that cannot affect routing or
+// firewall policy. Rotation phase is separate from LinkOutput but controls
+// BIRD's old/staged interface costs even when both interfaces stay unchanged.
+func linkConsumerInputsEqual(previous map[string]ipsec.LinkInstance, previousSummary *ipsecObservationSummary, current map[string]ipsec.LinkInstance, currentSummary *ipsecObservationSummary) bool {
+	if !maps.EqualFunc(previous, current, func(a, b ipsec.LinkInstance) bool {
+		return a.RotatePhase == b.RotatePhase
+	}) {
+		return false
+	}
+	return slices.EqualFunc(buildLinkOutputs(previous, previousSummary), buildLinkOutputs(current, currentSummary), func(a, b photonstate.LinkOutput) bool {
+		a.LastTransition, b.LastTransition = 0, 0
+		a.Endpoint, b.Endpoint = "", ""
+		return a == b
+	})
+}
 
 // buildLinkOutputs projects provider-owned runtime state into the common
 // Babel-facing consumer contract. It deliberately carries no owner, SA name,

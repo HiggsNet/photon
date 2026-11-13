@@ -7,8 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/routing/bird"
@@ -219,92 +217,6 @@ func (r *LinuxDriver) birdClient(socketPath string, routeTables []string) BirdCl
 	return bird.NewClientWithRouteTables(socketPath, 10*time.Second, routeTables)
 }
 
-type execUpstreamRouteManager struct {
-	runner func(ctx context.Context, name string, args ...string) *exec.Cmd
-}
-
-func newExecUpstreamRouteManager() *execUpstreamRouteManager {
-	return &execUpstreamRouteManager{runner: exec.CommandContext}
-}
-
-func (m *execUpstreamRouteManager) EnsureRoutes(ctx context.Context, spec UpstreamRouteSpec) error {
-	if spec.Interface == "" {
-		return fmt.Errorf("upstream route interface is required")
-	}
-	commands := make([][]string, 0, len(spec.SourcePrefixes)+len(spec.Prefixes))
-	sourcePrefixes := append([]netip.Prefix(nil), spec.SourcePrefixes...)
-	sort.Slice(sourcePrefixes, func(i, j int) bool { return prefixLess(sourcePrefixes[i], sourcePrefixes[j]) })
-	for _, source := range sourcePrefixes {
-		family := "-6"
-		if source.Addr().Is4() {
-			family = "-4"
-		}
-		commands = append(commands, []string{family, "addr", "replace", source.String(), "dev", spec.Interface})
-	}
-	nextHopByFamily, err := upstreamNextHopByFamily(spec.MeshIPv4LL, spec.MeshIPv6LL)
-	if err != nil {
-		return err
-	}
-	sourceByFamily := upstreamSourceByFamily(sourcePrefixes)
-	prefixes := append([]netip.Prefix(nil), spec.Prefixes...)
-	sort.Slice(prefixes, func(i, j int) bool { return prefixLess(prefixes[i], prefixes[j]) })
-	for _, prefix := range prefixes {
-		is4 := prefix.Addr().Is4()
-		family := "-6"
-		if is4 {
-			family = "-4"
-		}
-		args := []string{family, "route", "replace", prefix.String(), "dev", spec.Interface, "proto", "static"}
-		if nextHop := nextHopByFamily[is4]; nextHop.IsValid() {
-			args = append(args, "via", nextHop.String())
-		}
-		if source := sourceByFamily[is4]; source.IsValid() {
-			args = append(args, "src", source.String())
-		}
-		commands = append(commands, args)
-	}
-	// ip batch strips comments before splitting arguments and has limited quote
-	// handling. Preserve argv execution for names it cannot represent literally.
-	batchable := !strings.ContainsAny(spec.Interface, " \t\r\n\x00#'\"\\")
-	for len(commands) > 0 {
-		args, input, count := commands[0], "", 1
-		if batchable {
-			// Family flags are process options, not batch commands. Group only
-			// adjacent families to retain address-before-route and failure order.
-			for count < len(commands) && commands[count][0] == args[0] {
-				count++
-			}
-			var script strings.Builder
-			for _, command := range commands[:count] {
-				script.WriteString(strings.Join(command[1:], " "))
-				script.WriteByte('\n')
-			}
-			input = script.String()
-			args = []string{args[0], "-batch", "-"}
-		}
-		if err := m.runIP(ctx, spec.NetNS, args, input); err != nil {
-			return err
-		}
-		commands = commands[count:]
-	}
-	return nil
-}
-
-func (m *execUpstreamRouteManager) runIP(ctx context.Context, netnsName string, args []string, input string) error {
-	if netnsName != "" && netnsName != transportipsec.NetNSHost {
-		args = append([]string{"netns", "exec", netnsName, "ip"}, args...)
-	}
-	cmd := m.runner(ctx, "ip", args...)
-	if input != "" {
-		cmd.Stdin = strings.NewReader(input)
-	}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("ip %s: %w (%s)", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
 func upstreamSourceByFamily(prefixes []netip.Prefix) map[bool]netip.Addr {
 	out := make(map[bool]netip.Addr, 2)
 	for _, prefix := range prefixes {
@@ -320,15 +232,15 @@ func upstreamNextHopByFamily(ipv4LL, ipv6LL string) (map[bool]netip.Addr, error)
 	out := make(map[bool]netip.Addr, 2)
 	if ipv4LL != "" {
 		prefix, err := netip.ParsePrefix(ipv4LL)
-		if err != nil {
-			return nil, fmt.Errorf("invalid mesh ipv4_ll %q: %w", ipv4LL, err)
+		if err != nil || !prefix.Addr().Is4() {
+			return nil, fmt.Errorf("invalid mesh ipv4_ll %q", ipv4LL)
 		}
 		out[true] = prefix.Addr()
 	}
 	if ipv6LL != "" {
 		prefix, err := netip.ParsePrefix(ipv6LL)
-		if err != nil {
-			return nil, fmt.Errorf("invalid mesh ipv6_ll %q: %w", ipv6LL, err)
+		if err != nil || !prefix.Addr().Is6() || prefix.Addr().Is4In6() {
+			return nil, fmt.Errorf("invalid mesh ipv6_ll %q", ipv6LL)
 		}
 		out[false] = prefix.Addr()
 	}

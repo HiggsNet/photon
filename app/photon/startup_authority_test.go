@@ -41,10 +41,10 @@ func TestPrepareStartupStateRefreshesCachedManagedAuthority(t *testing.T) {
 	}
 	rt.Config = testConfigWithStatePath(config, rt.Config.StatePath)
 	service := newDaemon(rt.Config, owner, defaultDaemonInterval, rt.Now)
-	if changed, err := service.prepareStartupState(t.Context()); err != nil {
-		t.Fatalf("prepareStartupState: %v", err)
+	if changed, err := service.prepareLocalState(t.Context()); err != nil {
+		t.Fatalf("prepareLocalState: %v", err)
 	} else if !changed {
-		t.Fatal("prepareStartupState did not refresh cached managed authority")
+		t.Fatal("prepareLocalState did not refresh cached managed authority")
 	}
 
 	committed := service.State.Common.ReadView()

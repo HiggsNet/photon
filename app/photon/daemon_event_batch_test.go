@@ -183,3 +183,43 @@ func TestDaemonEventBatchSchedulesWorkRaisedDuringApply(t *testing.T) {
 		t.Fatal("new work had no wakeup after yielding")
 	}
 }
+
+func TestDaemonIPsecApplyWakesConsumersWithoutPeriodicTimers(t *testing.T) {
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	now := time.Unix(4000, 0)
+	addTestIPsecRecords(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", now, ipsec.RoleIn)
+	appConfig := defaultAppConfig()
+	appConfig.IPsec.LinkGroups = []ipsec.LinkGroupSpec{testIPsecLinkGroup()}
+	setTestIPsecOverlayIntent(t, verified.Network.Zones["node-b.catofes."], "node-b.catofes.", appConfig.IPsec.LinkGroups[0], now)
+	service := newTestDaemonFromOwners(&testApp{Config: appConfig, Clock: func() time.Time { return now }}, verified, checkpoint, runtime, config, time.Second)
+	defer service.Close()
+	if service.routingReconcileInterval() != 0 || service.firewallReconcileInterval() != 0 {
+		t.Fatal("fixture must have no periodic consumer timers")
+	}
+	service.daemonTimerEvents = make(chan corehost.Event, 4)
+	service.daemonTimers = corehost.NewScheduler(corehost.NewClock(service.now), service.daemonTimerEvents)
+	defer service.daemonTimers.Stop()
+	var order []string
+	service.Hooks.OnReconcileFlush = func(layer string) { order = append(order, layer) }
+	service.ipsecDirty = true
+	service.processEvents(t.Context(), nil)
+	if !reflect.DeepEqual(order, []string{"ipsec"}) || !service.routingDirty || !service.firewallDirty {
+		t.Fatalf("new IPsec link did not invalidate consumers: order=%v dirty=%v/%v", order, service.routingDirty, service.firewallDirty)
+	}
+	for pending := map[string]bool{daemonTimerRouting: true, daemonTimerFirewall: true}; len(pending) > 0; {
+		select {
+		case event := <-service.daemonTimerEvents:
+			fired, ok := event.(corehost.TimerFired)
+			if !ok || !pending[fired.ID.Key] || !service.daemonTimers.Accept(fired) {
+				t.Fatalf("unexpected follow-up timer: %#v", event)
+			}
+			delete(pending, fired.ID.Key)
+		case <-time.After(time.Second):
+			t.Fatalf("consumer work has no wakeup: %v", pending)
+		}
+	}
+	service.processEvents(t.Context(), nil)
+	if !reflect.DeepEqual(order, []string{"ipsec", "firewall", "routing"}) || service.routingDirty || service.firewallDirty || service.ipsecDirty {
+		t.Fatalf("follow-up did not settle: order=%v dirty=%v/%v/%v", order, service.routingDirty, service.firewallDirty, service.ipsecDirty)
+	}
+}

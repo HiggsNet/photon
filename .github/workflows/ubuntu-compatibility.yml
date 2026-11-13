@@ -32,6 +32,15 @@ jobs:
       - name: Check native installer
         run: make install-script-check
 
+      - name: Test upstream route and source-address ownership
+        run: |
+          sudo env "PATH=$PATH" \
+            "GOCACHE=$(go env GOCACHE)" \
+            "GOMODCACHE=$(go env GOMODCACHE)" \
+            PHOTON_RUN_NETNS_TESTS=1 \
+            "$(command -v go)" test ./internal/photonlinux \
+            -run '^TestUpstreamOwnedObjectsNetNS$' -count=1 -v
+
       - name: Run BIRD/Babel root smoke
         run: sudo env "PATH=$PATH" make GO="$(command -v go)" bird-babel-smoke
 
