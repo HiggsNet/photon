@@ -1,6 +1,8 @@
 # 操作与兼容性说明
 
 - 修改配置文件后须重启 daemon。`routing_reload` 仍可强制路由 reconcile/reload，但不会重新读取整份配置文件。
+- 已移除未实际约束快照验证的 `gossip.max_sync_zones`，旧配置中若保留该字段会被严格配置解析拒绝，升级前应删除。`gossip.max_sync_records` 继续限制单个 Zone 快照的记录数；UDP 单包预算与完整快照字节预算分别生效。
+- 已移除独立运行的 `advanced sync serve` / `advanced sync once`。长时间同步统一由 `photon daemon` 管理，`advanced sync status` 保留用于诊断；依赖旧命令的脚本需调整。
 - `health.metrics.remote_write_url`、`remote_write_queue_capacity` 和 `observer.ui_path` 尚未实现，现在配置这些字段会明确报错（包括空字符串或默认队列容量）。删除这些字段；本地 metrics spool 仍可使用，Observer 使用根路径内置 UI。
 - debug ping 和内核路由查看要求 daemon 在线。CLI 通过控制接口请求 daemon 执行；系统命令的权限和网络 namespace 取决于 daemon 的运行环境。
 - HealthView 已从 Targets/Samples 分列改为统一 `links` 行；Links 查询使用扁平摘要和统一 JSON 名称。Health 不再附带原始 instance，Links 不再输出 owner token。仓库前端已同步；外部客户端必须更新字段映射。

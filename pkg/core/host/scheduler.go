@@ -234,6 +234,13 @@ func (scheduler *Scheduler) run() {
 		}
 		after := max(next.Sub(scheduler.clock.Now()), 0)
 		timer := scheduler.clock.NewTimer(after)
+		// Clock time can pass the deadline between computing the duration
+		// and arming the timer. Recheck after arming rather than waiting for
+		// an extra relative delay (or another Advance with a virtual clock).
+		if !scheduler.clock.Now().Before(next) {
+			timer.Stop()
+			continue
+		}
 		select {
 		case <-timer.C():
 		case <-scheduler.wake:

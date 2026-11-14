@@ -116,6 +116,10 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 	if xfrmObservations != nil {
 		xfrmLinks = xfrmObservations.Interfaces
 	}
+	if err := recoverRevokedIPsecInstances(verified, groups, connections, sas, xfrmLinks, instances, now); err != nil {
+		d.recordIPsecReconcileError(now.Unix(), err)
+		return fmt.Errorf("recover revoked ipsec resources: %w", err)
+	}
 	groupSpecs := make(map[string]ipsec.LinkGroupSpec, len(groups))
 	groupBackoff := make(map[string]ipsec.BackoffPolicy, len(groups))
 	groupRetention := make(map[string]int, len(groups))

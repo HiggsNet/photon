@@ -518,6 +518,8 @@ Daemon 作为编排器，各子模块通过清晰的接口与 daemon 集成：
 
 **XFRM 维护短路**：在 `maintainExistingXFRMInterfaces` 中，如果 observed 状态与期望状态已经匹配，则跳过 `EnsureInterface`/`AssignAddress` 等冗余命令，只保留诊断地址分配。这减少了 reconcile 周期中对已有接口的无意义重写。
 
+已撤销 peer 不进入 desired，但重启前留下的连接和 XFRM 资源仍需拆除。Daemon 结合本机/对端身份、配置中的 overlay/namespace、端口 generation 和确定性资源名称重建仅供 teardown 的实例；连接与接口必须匹配，不能仅凭 `ipsec-` 前缀接管资源。旧端口记录仅作为清理线索，不恢复授权或发起连接，轮换中的两代资源一起进入拆除流程。
+
 ### 7.3 Routing
 
 - **输入**：common `State.ReadView()` 中的 route announcement / authorization 记录

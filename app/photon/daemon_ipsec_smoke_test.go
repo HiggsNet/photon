@@ -793,11 +793,16 @@ func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
 	configA.Bootstrap = []syncConfigPeer{{ID: configB.PeerID, Addr: gossipB}}
 	configB.Bootstrap = []syncConfigPeer{{ID: configA.PeerID, Addr: gossipA}}
 
+	// The fixture provides an IPv4 underlay. Outbound profiles advertise
+	// dual-stack capability, so constrain this single-path smoke explicitly;
+	// the tunnel addresses below remain IPv6.
 	groupA := testIPsecLinkGroup()
+	groupA.AllowedAddressFamilies = []string{ipsec.FamilyIPv4}
 	groupA.ConnectRules = nil
 	groupA.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsA, Create: false}
 	groupA.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}
 	groupB := testIPsecLinkGroup()
+	groupB.AllowedAddressFamilies = []string{ipsec.FamilyIPv4}
 	groupB.ConnectRules = nil
 	groupB.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsB, Create: false}
 	groupB.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}
