@@ -198,7 +198,7 @@ function Check-Business([string]$Phase, [string]$ControlConfig = $Config) {
         $response = $text | ConvertFrom-Json
         if ($response.version -ne 1 -or $response.method -ne $method -or $response.error -or $null -eq $response.result) { throw "Invalid $method response" }
         if ($method -eq 'peers' -and $gossipEvidence -and $null -eq $script:gossipConvergedRevision) {
-            $synchronizedPeer = @($response.result.peers | Where-Object { $_.peer -eq $gossipEvidence.gateway -and $_.pull_successes -gt 0 })
+            $synchronizedPeer = @($response.result.peers | Where-Object { $_.peer_id -eq $gossipEvidence.gateway -and $_.object_pull_stats.successes -gt 0 })
             if ($synchronizedPeer.Count -ne 1) { throw 'Initial business readiness lacks a successful real gateway Gossip pull' }
             $script:gossipConvergedRevision = [uint64]$status.revision
             [pscustomobject]@{
@@ -208,7 +208,7 @@ function Check-Business([string]$Phase, [string]$ControlConfig = $Config) {
                 ConvergedRevision = $script:gossipConvergedRevision
                 Peer = $synchronizedPeer[0]
             } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $FixtureDirectory 'gossip-convergence.json')
-            Write-Output "remote Gossip convergence passed: peer=$($gossipEvidence.gateway) revision=$($gossipEvidence.initial_revision) -> $script:gossipConvergedRevision pulls=$($synchronizedPeer[0].pull_successes)"
+            Write-Output "remote Gossip convergence passed: peer=$($gossipEvidence.gateway) revision=$($gossipEvidence.initial_revision) -> $script:gossipConvergedRevision pulls=$($synchronizedPeer[0].object_pull_stats.successes)"
         }
         [IO.File]::WriteAllText((Join-Path $FixtureDirectory ($Phase + '-' + $method + '.json')), ($text -join "`n"))
     }
@@ -236,20 +236,21 @@ function Close-OwnedForeignAdapter {
     } while ([DateTime]::UtcNow -lt $deadline)
     throw 'PS-owned foreign adapter remains after closing its exact handle'
 }
-function Wait-NetworkRecovery([string]$Phase, $Before, [int]$ServiceProcessId, [DateTime]$TriggeredAt) {
-    $deadline = [DateTime]::UtcNow.AddSeconds(40)
+function Check-UnrelatedNetworkChange([string]$Phase, $Before, [int]$ServiceProcessId, [DateTime]$TriggeredAt) {
+    # The route-target watcher deliberately ignores unrelated interface changes.
+    # Observe beyond its debounce interval and require the actual SA to survive.
+    $deadline = [DateTime]::UtcNow.AddSeconds(3)
     do {
         $process = Read-OwnedProcess
-        if ($process.Id -ne $ServiceProcessId) { throw 'Network notification restarted SCM instead of rebinding the existing daemon' }
+        if ($process.Id -ne $ServiceProcessId) { throw 'Unrelated network notification restarted SCM' }
         $status = Read-Status
-        if ($status.tunnel_ready -and $status.ike.live -and $status.ike.child_live -and [uint64]$status.ike.generation -gt [uint64]$Before.ike.generation -and $status.ike.expires_at -ne $Before.ike.expires_at -and $status.ike.child_expires_at -ne $Before.ike.child_expires_at) { break }
+        if (!$status.tunnel_ready -or !$status.ike.live -or !$status.ike.child_live -or [uint64]$status.ike.generation -ne [uint64]$Before.ike.generation -or $status.ike.expires_at -ne $Before.ike.expires_at -or $status.ike.child_expires_at -ne $Before.ike.child_expires_at) { throw "Unrelated network notification disrupted live IKE/CHILD: $Phase" }
         Start-Sleep -Milliseconds 100
     } while ([DateTime]::UtcNow -lt $deadline)
-    if (!$status.tunnel_ready -or !$status.ike.live -or !$status.ike.child_live -or [uint64]$status.ike.generation -le [uint64]$Before.ike.generation -or $status.ike.expires_at -eq $Before.ike.expires_at -or $status.ike.child_expires_at -eq $Before.ike.child_expires_at) { throw "Network notification did not rebuild live IKE/CHILD within the observation timeout: $Phase" }
     Check-Business $Phase | Out-Host
     $script:ownedIndices += (Get-NetAdapter -Name $name).ifIndex
     $completed = [DateTime]::UtcNow
-    Write-Host "network change recovered: $Phase pid=$ServiceProcessId generation=$($Before.ike.generation) -> $($status.ike.generation) observed_ms=$(($completed - $TriggeredAt).TotalMilliseconds)"
+    Write-Host "unrelated network change preserved IKE/CHILD: $Phase pid=$ServiceProcessId generation=$($status.ike.generation) observed_ms=$(($completed - $TriggeredAt).TotalMilliseconds)"
     return [pscustomobject]@{
         Phase = $Phase
         ProcessId = $ServiceProcessId
@@ -343,7 +344,7 @@ try {
     } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $FixtureDirectory 'crash-recovery.json')
     Write-Output "crash recovery passed: pid=$crashProcessId -> $($recoveredProcess.Id), fresh IKE/CHILD, same Bolt file, dual-stack business"
 
-    # Trigger actual IPHelper notifications without changing the management
+    # Trigger unrelated IPHelper notifications without changing the management
     # NIC or a default route. .NET's loopback type is the native type 24; reject
     # ambiguity before selecting its IPv4 index. The host address is never a
     # source candidate and lives only in ActiveStore for this test.
@@ -362,11 +363,11 @@ try {
     $triggeredAt = [DateTime]::UtcNow
     $networkAddressOwned = $true # Also clean up a partially applied cmdlet.
     New-NetIPAddress -InterfaceIndex $networkIndex -IPAddress $networkAddress -PrefixLength 32 -SkipAsSource $true -PolicyStore ActiveStore | Out-Null
-    $added = Wait-NetworkRecovery 'network-address-added' $beforeNetwork $networkProcess.Id $triggeredAt
+    $added = Check-UnrelatedNetworkChange 'network-address-added' $beforeNetwork $networkProcess.Id $triggeredAt
     $beforeRemoval = Read-Status
     $removedAt = [DateTime]::UtcNow
     Remove-OwnedNetworkAddress
-    $removed = Wait-NetworkRecovery 'network-address-removed' $beforeRemoval $networkProcess.Id $removedAt
+    $removed = Check-UnrelatedNetworkChange 'network-address-removed' $beforeRemoval $networkProcess.Id $removedAt
     [pscustomobject]@{
         InterfaceType = 24
         InterfaceIndex = $networkIndex

@@ -103,7 +103,7 @@ func TestPacketSocketReceiveDuringBlockedWrite(t *testing.T) {
 					written <- err
 				}
 			}()
-			nativeControl := kind == "Gossip" && runtime.GOOS == "windows"
+			nativeControl := runtime.GOOS == "windows"
 			if nativeControl {
 				select {
 				case err := <-written:
@@ -111,7 +111,7 @@ func TestPacketSocketReceiveDuringBlockedWrite(t *testing.T) {
 						t.Fatal(err)
 					}
 				case <-time.After(500 * time.Millisecond):
-					t.Fatal("Gossip send waited for the ESP descriptor writer")
+					t.Fatalf("%s send waited for the Go descriptor writer", kind)
 				}
 			} else {
 				waitPacketSocketWriter(t, s)
@@ -178,7 +178,7 @@ func TestPacketSocketReceiveDuringBlockedWrite(t *testing.T) {
 	}
 }
 
-func TestPacketSocketReplacementWaitsForWrite(t *testing.T) {
+func TestPacketSocketReplacementPreservesWriteAndRetiresGeneration(t *testing.T) {
 	for _, change := range []string{"select", "rebind", "invalidate", "close"} {
 		t.Run(change, func(t *testing.T) {
 			s, err := openPacketSockets(t.Context(), "127.0.0.1:0")
@@ -197,8 +197,23 @@ func TestPacketSocketReplacementWaitsForWrite(t *testing.T) {
 			unblock := holdPacketSocketWrite(t, old)
 			packet := []byte{0x12, 0x34, 0x56, 0x78, 0, 0, 0, 1}
 			written := make(chan error, 1)
-			go func() { written <- s.WriteTunnel(generation, packet, endpoint) }()
-			waitPacketSocketWriter(t, s)
+			finished := make(chan struct{})
+			go func() {
+				written <- s.WriteTunnel(generation, packet, endpoint)
+				close(finished)
+			}()
+			if runtime.GOOS == "windows" {
+				// Native overlapped sends bypass the Go descriptor lock. The
+				// submitted packet must survive retirement, while later writes
+				// from the old generation must be rejected below.
+				select {
+				case <-finished:
+				case <-time.After(time.Second):
+					t.Fatal("native send waited for the Go descriptor writer")
+				}
+			} else {
+				waitPacketSocketWriter(t, s)
+			}
 			changed := make(chan error, 1)
 			changing := make(chan struct{})
 			go func() {
@@ -217,10 +232,12 @@ func TestPacketSocketReplacementWaitsForWrite(t *testing.T) {
 				changed <- err
 			}()
 			<-changing
-			select {
-			case err := <-changed:
-				t.Fatalf("%s crossed an unfinished write: %v", change, err)
-			case <-time.After(20 * time.Millisecond):
+			if runtime.GOOS != "windows" {
+				select {
+				case err := <-changed:
+					t.Fatalf("%s crossed an unfinished write: %v", change, err)
+				case <-time.After(20 * time.Millisecond):
+				}
 			}
 			unblock()
 			if err := <-written; err != nil {
