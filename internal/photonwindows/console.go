@@ -40,7 +40,7 @@ type Daemon struct {
 	runCancel        context.CancelFunc
 	runErr           error
 	rebind           chan rebindRequest
-	plans            chan chan gatewayPlanSample
+	serviceInputs    chan chan serviceInputs
 	done             chan struct{}
 	planGateway      func(context.Context, *Config, corestate.View, time.Time) GatewayPlan
 	deviceFactory    packetDeviceFactory
@@ -54,36 +54,7 @@ type rebindRequest struct {
 }
 
 func NewDaemon(config *Config, logger *slog.Logger) *Daemon {
-	return &Daemon{instanceID: rand.Text(), config: config, logger: logger, ready: make(chan struct{}), observations: make(chan meshObservationRequest), rebind: make(chan rebindRequest), plans: make(chan chan gatewayPlanSample), done: make(chan struct{}), planGateway: PlanGateway, deviceFactory: openConfiguredPacketDevice, watchResume: watchPowerResume, resolveBootstrap: resolveGossipBootstrap}
-}
-
-type gatewayPlanSample struct {
-	plan     GatewayPlan
-	store    *corestate.Store
-	underlay bool
-}
-
-// GatewayPlan returns a detached, freshly revalidated connection plan. It does
-// not report an established tunnel or authorize route installation.
-func (d *Daemon) GatewayPlan(ctx context.Context) (GatewayPlan, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	result := make(chan gatewayPlanSample, 1)
-	select {
-	case d.plans <- result:
-	case <-d.done:
-		return GatewayPlan{}, net.ErrClosed
-	case <-ctx.Done():
-		return GatewayPlan{}, ctx.Err()
-	}
-	select {
-	case sample := <-result:
-		return RevalidateGatewayPlan(d.config, sample.store.ReadView(), sample.plan, time.Now()), nil
-	case <-d.done:
-		return GatewayPlan{}, net.ErrClosed
-	case <-ctx.Done():
-		return GatewayPlan{}, ctx.Err()
-	}
+	return &Daemon{instanceID: rand.Text(), config: config, logger: logger, ready: make(chan struct{}), observations: make(chan meshObservationRequest), rebind: make(chan rebindRequest), serviceInputs: make(chan chan serviceInputs), done: make(chan struct{}), planGateway: PlanGateway, deviceFactory: openConfiguredPacketDevice, watchResume: watchPowerResume, resolveBootstrap: resolveGossipBootstrap}
 }
 
 // Rebind waits for a local socket replacement, bounded by the caller's context.
@@ -395,8 +366,8 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		select {
 		case <-ctx.Done():
 			return nil
-		case result := <-d.plans:
-			result <- gatewayPlanSample{plan: lastPlan, store: state.Store(), underlay: packet.outboundRoutes != nil}
+		case result := <-d.serviceInputs:
+			result <- serviceInputs{plan: lastPlan, store: state.Store(), underlay: packet.outboundRoutes != nil}
 		case sampled := <-observationSnapshots:
 			mesh.stateMu.Lock()
 			snapshot := mesh.observationSnapshot(lastPlan)

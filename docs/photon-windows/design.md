@@ -522,8 +522,10 @@ console 复用同一候选校验：启动时、Gossip 事件推进 verified revi
 `Targets` 列出全部目标，`Selected` 保留首项作为旧诊断兼容摘要，不控制唯一连接。
 唯一 worker 每轮最多 3 秒（bootstrap 部分最多 1 秒），不阻塞 Gossip event loop；新 revision、
 重绑或新一轮请求取消旧计划，完成时以 generation/revision 丢弃旧结果，再按当前时间复验。
-`Daemon.GatewayPlan` 返回 detached 且重新校验的当前结果；计划内容相同也更新 revision，
-不能把日志去重误当成状态不更新。DNS 失败保留最后可用 bootstrap hint 重试，它仍不授予信任。
+在线规划诊断统一通过 `Daemon.Observe` 返回 detached 且重新校验的观察结果；计划内容相同也更新 revision，
+不能把日志去重误当成状态不更新。IKE 启动结果按目标和授权内容检查是否仍适用，
+仅刷新规划时间不丢弃已准备的结果，也不延长原请求的 DNS 有效期。
+DNS 失败保留最后可用 bootstrap hint 重试，它仍不授予信任。
 
 路由规划先对当前网络的每个相关 zone chain/record 签名重验，再复用 `BuildAuthorizedRouteSet`，
 保留真实 origin，限制在 split aggregate 内。Selected 是待连接目标，Routes 是授权事实；

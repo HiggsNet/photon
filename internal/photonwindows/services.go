@@ -51,14 +51,20 @@ type ServiceEndpoint struct {
 	Port    uint16 `json:"port"`
 }
 
+type serviceInputs struct {
+	plan     GatewayPlan
+	store    *corestate.Store
+	underlay bool
+}
+
 // Services borrows the owner's store handle, then detaches and verifies outside
 // the packet-owner loop. No database handle or signing material crosses IPC.
 func (d *Daemon) Services(ctx context.Context) (ServiceDirectory, error) {
 	ctx, cancel := context.WithTimeout(ctx, controlTimeout)
 	defer cancel()
-	result := make(chan gatewayPlanSample, 1)
+	result := make(chan serviceInputs, 1)
 	select {
-	case d.plans <- result:
+	case d.serviceInputs <- result:
 	case <-d.done:
 		return ServiceDirectory{}, net.ErrClosed
 	case <-ctx.Done():

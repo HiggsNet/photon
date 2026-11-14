@@ -120,9 +120,9 @@ func TestDaemonDiscardsPlannerCompletionAfterRebind(t *testing.T) {
 		t.Fatal("replacement plan did not start")
 	}
 	// Querying while DNS is blocked must remain responsive and fail closed.
-	plan, err := daemon.GatewayPlan(t.Context())
-	if err != nil || plan.Selected != nil || plan.Rejected == "" {
-		t.Fatalf("pending plan: %+v, %v", plan, err)
+	observation, err := daemon.Observe(t.Context())
+	if err != nil || observation.Gateway.Selected != "" || observation.Gateway.RevalidationRejected == "" {
+		t.Fatalf("pending plan: %+v, %v", observation.Gateway, err)
 	}
 	select {
 	case <-logs.plans:

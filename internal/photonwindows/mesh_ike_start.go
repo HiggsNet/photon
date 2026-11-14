@@ -108,11 +108,13 @@ func (m *meshRuntime) finishIKEStart(result meshIKEStartResult) {
 		return
 	}
 	p.starting = nil
-	if result.published || result.revision != m.state.Store().VerifiedRevision() || !packetGatewayHintEqual(p.plan, result.request.hint) || result.plan.Selected == nil {
+	if result.published || result.revision != m.state.Store().VerifiedRevision() || !plannerPolicyEqual(p.plan, result.request.hint) || result.plan.Selected == nil {
 		return
 	}
 	now := time.Now()
-	if !packetGatewayHintCurrent(p.plan, now) {
+	// A metadata-only planner refresh must not discard prepared work, but it
+	// must not extend the original request's DNS lifetime either.
+	if !packetGatewayHintCurrent(p.plan, now) || !packetGatewayHintCurrent(result.request.hint, now) {
 		return
 	}
 	wall := now.Round(0)
