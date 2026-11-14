@@ -161,8 +161,14 @@ func (r *LinuxDriver) Close() error {
 		return nil
 	}
 	r.closeOnce.Do(func() {
-		if closer, ok := r.ipsecDriver.(interface{ Close() error }); ok {
+		if closer, ok := r.xfrmDriver.(interface {
+			CheckAvailable() error
+			Close() error
+		}); ok {
 			r.closeErr = closer.Close()
+		}
+		if closer, ok := r.ipsecDriver.(interface{ Close() error }); ok {
+			r.closeErr = errors.Join(r.closeErr, closer.Close())
 		}
 		if closer, ok := r.healthProber.(interface{ Close() }); ok {
 			closer.Close()
@@ -172,6 +178,13 @@ func (r *LinuxDriver) Close() error {
 		}
 	})
 	return r.closeErr
+}
+
+func (r *LinuxDriver) checkXFRMAvailable() error {
+	if driver, ok := r.xfrmDriver.(interface{ CheckAvailable() error }); ok {
+		return driver.CheckAvailable()
+	}
+	return nil
 }
 
 // NewDaemonDriver assembles the long-lived platform dependencies for a daemon.

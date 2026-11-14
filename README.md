@@ -2,7 +2,7 @@
 
 Photon 是一个实验性的“信任优先” mesh VPN 控制平面。它不把任何单节点的本地配置当成全网真相，而是先维护一份可验证、最终一致的 Zone 状态数据库，再由每个节点的 daemon 把已验证状态收敛成本机的 gossip、IPsec/XFRM、BIRD/Babel、firewall、health 和 observer 等运行时配置。
 
-当前 Linux 正式版为 [v0.7.0](https://github.com/HiggsNet/photon/releases/tag/v0.7.0)，提供 amd64/arm64 归档和双架构容器镜像。升级旧版前先备份配置、身份和数据库，参见 [升级与回退说明](docs/new/linux-release-testing.md)；本版重构 Gossip 和两平台 daemon，升级前须核对 [兼容性说明](docs/operator-compatibility.md) 与 [发布说明](docs/releases/v0.7.0.md)。
+当前 Linux 正式版为 [v0.7.1](https://github.com/HiggsNet/photon/releases/tag/v0.7.1)，提供 amd64/arm64 归档和双架构容器镜像。本版增加 XFRM 内核操作挂起保护，避免接口清理永久阻塞 Photon 事件循环。升级旧版前先备份配置、身份和数据库，参见 [升级与回退说明](docs/new/linux-release-testing.md)、[兼容性说明](docs/operator-compatibility.md) 与 [发布说明](docs/releases/v0.7.1.md)。
 
 - 整体架构与模块划分：[docs/new/overall.md](docs/new/overall.md)
 - 详细设计文档：[docs/design.md](docs/design.md)
@@ -13,13 +13,13 @@ Linux `amd64` / `arm64` 可直接从最新 GitHub Release 安装（默认安装 
 `photon-services` 和 `photon.service`）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/HiggsNet/photon/v0.7.0/contrib/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/HiggsNet/photon/v0.7.1/contrib/install.sh | sh
 ```
 
 更新到最新 Release：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/HiggsNet/photon/v0.7.0/contrib/update.sh | sh
+curl -fsSL https://raw.githubusercontent.com/HiggsNet/photon/v0.7.1/contrib/update.sh | sh
 ```
 
 安装和更新会在替换二进制前检查完整数据面依赖，包括 `ip`、`ping`、
@@ -34,7 +34,7 @@ BIRD 2.14+、nftables、iptables/IPv6、`ipset` 和 StrongSwan。缺少依赖时
 需要在同一主机额外运行一个管理节点时，显式传入 `--admin`：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/HiggsNet/photon/v0.7.0/contrib/install.sh | \
+curl -fsSL https://raw.githubusercontent.com/HiggsNet/photon/v0.7.1/contrib/install.sh | \
   sudo sh -s -- --admin
 ```
 
@@ -49,7 +49,7 @@ authority/gossip 控制面，不配置 overlays、routing 或 firewall。详细�
 `update.sh` 会检测已有的 `photon-admin`：已安装 admin 的节点会自动一起更新，普通节点
 仍只更新普通组件。
 
-Windows 11 amd64 可下载 [v0.7.0 便携包](https://github.com/HiggsNet/photon/releases/download/v0.7.0/photon-v0.7.0-windows-amd64.zip)，完整解压后以管理员身份运行。首次配置、入网和升级步骤见 [Windows 使用说明](docs/photon-windows/README.zh-CN.txt)。
+Windows 11 amd64 可下载 [v0.7.1 便携包](https://github.com/HiggsNet/photon/releases/download/v0.7.1/photon-v0.7.1-windows-amd64.zip)，完整解压后以管理员身份运行。首次配置、入网和升级步骤见 [Windows 使用说明](docs/photon-windows/README.zh-CN.txt)。
 
 便携包同时提供独立后台 `photon-windows.exe` 与原生界面 `photon-windows-gui.exe`。从原生界面启动并管理后台，升级时保留原有配置与数据库。
 

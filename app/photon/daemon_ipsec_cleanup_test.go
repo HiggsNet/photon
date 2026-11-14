@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,6 +14,71 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
+
+func TestDaemonHungXFRMCleanupKeepsSyncAndControlAvailable(t *testing.T) {
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	service := newTestDaemonFromOwners(&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second)
+	// A slash makes the native namespace lookup fail validation. All exec
+	// fallback commands are intercepted below; no host device is touched.
+	xfrm := ipsec.NewSystemXFRMDriver(ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "test/blocked"})
+	ipsecDriver := &ipsec.DryRunDriver{}
+	release := make(chan struct{})
+	defer close(release)
+	var deletions atomic.Int32
+	xfrm.Command = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		if strings.Contains(strings.Join(args, " "), "link delete") {
+			deletions.Add(1)
+			<-release
+		}
+		return nil, nil
+	}
+	installTestIPsecDrivers(service, ipsecDriver, xfrm)
+	spec := ipsec.TransportLinkSpec{
+		LocalZone: "node-a.catofes.", PeerZone: "node-b.catofes.", OverlayID: "main",
+		TransportID: "ipsec-blocked", InterfaceName: "phx-blocked", XFRMIfID: 5100,
+	}
+	instance := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, time.Now())
+	service.linuxObservation.replaceIPsec(map[string]ipsec.LinkInstance{instance.ID: instance}, nil)
+	revision := service.State.Common.VerifiedRevision()
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	reply := make(chan daemonEventResult, 1)
+	service.Events <- daemonEvent{Type: daemonEventIPsecCleanup, Context: ctx, Reply: reply}
+	service.processEvents(t.Context(), nil)
+	if result := <-reply; !errors.Is(result.Error, ipsec.ErrXFRMOperationPending) || result.CleanedLinks != 0 {
+		t.Fatalf("cleanup result = %+v", result)
+	}
+	remaining, summary := service.linuxObservation.ipsecSnapshot()
+	if len(remaining) != 1 || summary == nil || !errors.Is(summary.LastFailure, ipsec.ErrXFRMOperationPending) {
+		t.Fatalf("pending resource lost: %v, %+v", remaining, summary)
+	}
+	start := time.Now()
+	for range 5 {
+		service.Events <- daemonEvent{Type: daemonEventIPsecCleanup, Reply: reply}
+		service.processEvents(t.Context(), nil)
+		if result := <-reply; !errors.Is(result.Error, ipsec.ErrXFRMOperationPending) {
+			t.Fatalf("retry = %+v", result)
+		}
+	}
+	service.Events <- daemonEvent{Type: daemonEventSyncTrigger, Reply: reply}
+	syncNow, shutdown := service.processEvents(t.Context(), nil)
+	if result := <-reply; result.Error != nil || !syncNow || shutdown {
+		t.Fatalf("sync unavailable: %+v, sync=%v, shutdown=%v", result, syncNow, shutdown)
+	}
+	view := controlViewRequestViaPipe[inspect.LinksDebugView](t, service, controlRequest{Method: "links_view"})
+	if !view.OK || view.View.Inspection.LastFailure == nil {
+		t.Fatalf("control view unavailable or hides pending operation: %+v", view)
+	}
+	if service.State.Common.VerifiedRevision() != revision || deletions.Load() != 1 || len(ipsecDriver.Terminated) != 1 {
+		t.Fatalf("retries changed state or repeated teardown: deletions=%d, terminated=%v", deletions.Load(), ipsecDriver.Terminated)
+	}
+	if err := service.Close(); !errors.Is(err, ipsec.ErrXFRMOperationPending) {
+		t.Fatalf("close = %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("retries/control/close waited for hung worker: %s", elapsed)
+	}
+}
 
 type partialCleanupIPsecDriver struct {
 	ipsec.DryRunDriver

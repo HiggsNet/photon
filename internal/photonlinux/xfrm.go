@@ -2,6 +2,7 @@ package photonlinux
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -59,6 +60,11 @@ func (r *LinuxDriver) ObserveXFRMLinks(ctx context.Context, desired []transporti
 	}
 	states, inventory, err := inspector.InspectLinks(ctx, specs, namespaces)
 	if err != nil {
+		// An outstanding kernel operation is not a reason to try the same
+		// namespace again through individual queries or command fallbacks.
+		if errors.Is(err, transportipsec.ErrXFRMOperationPending) || ctx.Err() != nil {
+			return nil, err
+		}
 		logWarn(r.logger, "xfrm_batch_observe_fallback", map[string]any{"candidates": len(specs), "error": err.Error()})
 		return nil, nil
 	}

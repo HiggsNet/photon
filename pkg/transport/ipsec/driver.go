@@ -368,6 +368,11 @@ func TeardownTransportLink(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriv
 	if xfrm == nil {
 		return ApplyPlan{}, fmt.Errorf("xfrm driver is required")
 	}
+	if driver, ok := xfrm.(interface{ CheckAvailable() error }); ok {
+		if err := driver.CheckAvailable(); err != nil {
+			return ApplyPlan{}, err
+		}
+	}
 	plan := PlanTeardown(spec)
 	if err := ipsec.TerminateSA(ctx, spec.TransportID); err != nil {
 		return plan, fmt.Errorf("terminate sa: %w", err)

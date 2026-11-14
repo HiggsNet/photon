@@ -28,6 +28,9 @@ func (r *LinuxDriver) CleanupIPsecLinks(ctx context.Context, instances map[strin
 	if r.xfrmDriver == nil {
 		return remaining, 0, errors.New("xfrm driver is nil")
 	}
+	if err := r.checkXFRMAvailable(); err != nil {
+		return remaining, 0, err
+	}
 	sortedIDs := append([]string(nil), ids...)
 	sort.Strings(sortedIDs)
 	cleaned := 0

@@ -33,6 +33,7 @@ type xfrmMutation struct {
 }
 
 type SystemXFRMDriver struct {
+	executor       *xfrmExecutor
 	Command        CommandRunner
 	Stat           func(string) error
 	DefaultNetNS   NetNSSpec
@@ -49,6 +50,7 @@ type SystemXFRMDriver struct {
 
 func NewSystemXFRMDriver(defaultNetNS NetNSSpec) SystemXFRMDriver {
 	return SystemXFRMDriver{
+		executor:       &xfrmExecutor{},
 		Command:        execCommand,
 		Stat:           statPath,
 		DefaultNetNS:   defaultNetNS.Normalized(),
@@ -64,7 +66,7 @@ func NewSystemXFRMDriver(defaultNetNS NetNSSpec) SystemXFRMDriver {
 	}
 }
 
-func (d SystemXFRMDriver) EnsureNamespace(ctx context.Context, spec NetNSSpec) error {
+func (d SystemXFRMDriver) ensureNamespace(ctx context.Context, spec NetNSSpec) error {
 	spec = spec.Normalized()
 	if err := spec.Validate(); err != nil {
 		return err
@@ -101,7 +103,7 @@ func (d SystemXFRMDriver) EnsureNamespace(ctx context.Context, spec NetNSSpec) e
 	}
 }
 
-func (d SystemXFRMDriver) EnsureInterface(ctx context.Context, spec TransportLinkSpec) error {
+func (d SystemXFRMDriver) ensureInterface(ctx context.Context, spec TransportLinkSpec) error {
 	if spec.InterfaceName == "" {
 		return errors.New("interface name is required")
 	}
@@ -152,7 +154,7 @@ func (d SystemXFRMDriver) EnsureInterface(ctx context.Context, spec TransportLin
 	return d.enableInterfaceForwarding(ctx, netns, spec.InterfaceName)
 }
 
-func (d SystemXFRMDriver) InspectLink(ctx context.Context, spec TransportLinkSpec) (XFRMLinkState, error) {
+func (d SystemXFRMDriver) inspectLink(ctx context.Context, spec TransportLinkSpec) (XFRMLinkState, error) {
 	if spec.InterfaceName == "" {
 		return XFRMLinkState{}, errors.New("interface name is required")
 	}
@@ -195,7 +197,7 @@ func (d SystemXFRMDriver) InspectLink(ctx context.Context, spec TransportLinkSpe
 	return state, nil
 }
 
-func (d SystemXFRMDriver) FilterSAsWithMissingLinks(ctx context.Context, desired []TransportLinkSpec, sas []SAState) ([]SAState, map[string]TransportLinkSpec, error) {
+func (d SystemXFRMDriver) filterSAsWithMissingLinks(ctx context.Context, desired []TransportLinkSpec, sas []SAState) ([]SAState, map[string]TransportLinkSpec, error) {
 	if len(desired) == 0 {
 		return sas, nil, nil
 	}
@@ -268,7 +270,7 @@ func saMatchesAnyMissingLink(sa SAState, missing map[string]TransportLinkSpec) b
 	return false
 }
 
-func (d SystemXFRMDriver) DeleteInterface(ctx context.Context, name string) error {
+func (d SystemXFRMDriver) deleteInterface(ctx context.Context, name string) error {
 	if name == "" {
 		return errors.New("interface name is required")
 	}
@@ -282,7 +284,7 @@ func (d SystemXFRMDriver) DeleteInterface(ctx context.Context, name string) erro
 	return nil
 }
 
-func (d SystemXFRMDriver) AssignAddress(ctx context.Context, spec TransportLinkSpec, address string) error {
+func (d SystemXFRMDriver) assignAddress(ctx context.Context, spec TransportLinkSpec, address string) error {
 	if spec.InterfaceName == "" {
 		return errors.New("interface name is required")
 	}
@@ -299,7 +301,7 @@ func (d SystemXFRMDriver) AssignAddress(ctx context.Context, spec TransportLinkS
 	return d.replaceAddress(ctx, netns, spec.InterfaceName, address)
 }
 
-func (d SystemXFRMDriver) AssignExtraAddress(ctx context.Context, spec TransportLinkSpec, address string) error {
+func (d SystemXFRMDriver) assignExtraAddress(ctx context.Context, spec TransportLinkSpec, address string) error {
 	if spec.InterfaceName == "" {
 		return errors.New("interface name is required")
 	}

@@ -82,7 +82,7 @@ type ipJSONNetNS struct {
 // InspectLinks performs one link/address read per namespace and, when desired
 // interfaces are present, one forwarding read. Named namespace existence is
 // discovered once for the whole batch.
-func (d SystemXFRMDriver) InspectLinks(ctx context.Context, specs []TransportLinkSpec, namespaces []NetNSSpec) ([]XFRMLinkState, []XFRMLinkState, error) {
+func (d SystemXFRMDriver) inspectLinks(ctx context.Context, specs []TransportLinkSpec, namespaces []NetNSSpec) ([]XFRMLinkState, []XFRMLinkState, error) {
 	states := make([]XFRMLinkState, len(specs))
 	groups := make(map[string]*xfrmBatchGroup)
 	needNamedNamespaces := false
@@ -392,7 +392,7 @@ func (d SystemXFRMDriver) outputSysctl(ctx context.Context, netns NetNSSpec, arg
 
 // EnsureObservedInterfaces repairs only properties proven missing by a batch
 // observation. Namespace forwarding is repaired at most once per namespace.
-func (d SystemXFRMDriver) EnsureObservedInterfaces(ctx context.Context, observed []XFRMObservedInterface) error {
+func (d SystemXFRMDriver) ensureObservedInterfaces(ctx context.Context, observed []XFRMObservedInterface) error {
 	groups := make(map[string][]XFRMObservedInterface)
 	for _, item := range observed {
 		netns, err := d.specNetNS(item.Spec)

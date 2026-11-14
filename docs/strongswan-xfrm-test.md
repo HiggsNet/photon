@@ -60,6 +60,29 @@ Docker/LXC 的 `--privileged` 不一定等价于真实宿主 root。外层 LXC �
 create/delete、XFRM interface 或 VICI socket 检查失败，应换 root VM/裸机测试机，
 或调整外层 LXC 配置后再跑。
 
+### 内核操作永久挂起时的行为
+
+通过 `NewSystemXFRMDriver` 构造的驱动将 XFRM 查询和修改放到后台执行，
+每次调用最多等待 2 秒（调用者的 deadline 更早时以它为准）。每个驱动及其值副本
+共用一个执行名额。超时只结束调用者的等待，不能中止卡在内核中的系统调用；
+名额会保留到该操作真正返回。此期间，后续 XFRM 操作及依赖它的连接变更立即
+返回包含原操作和开始时间的 `xfrm operation still running; result unknown` 错误，
+不会不断创建后台任务或改用命令行重试。
+
+超时不能视为清理成功。Photon 保留相应连接实例、报告错误，并在后续调和时重新
+观察实际状态；超时任务的迟到结果不会写回主循环。驱动退出时取消可取消的操作，
+但不无限等待内核返回，仍有任务挂起时返回错误。已损坏的内核状态可能需要整机
+重启清除，这项保护不保证受影响隧道恢复，也不保证进程里的 D 状态线程能退出。
+
+无需触碰宿主机网络的回归验证：
+
+```sh
+go test -race ./pkg/transport/ipsec ./app/photon -run 'TestXFRM(Hung|OperationHas|QueryOwns|CompletedResult|ObservedMaintenance)|TestDaemonHungXFRM'
+```
+
+这些用例模拟不响应取消的删除和查询，验证等待上限、挂起名额、迟到结果隔离，
+以及挂起期间的同步事件、管理查询和关闭请求；不在生产节点主动复现内核缺陷。
+
 ## 1. 前置检查
 
 运行：

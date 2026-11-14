@@ -1431,6 +1431,11 @@ func suppressTakeoverDuringRotate(inst LinkInstance, now time.Time) (bool, strin
 }
 
 func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDriver, action ReconcileAction, netns NetNSSpec) (ApplyPlan, error) {
+	if driver, ok := xfrm.(interface{ CheckAvailable() error }); ok {
+		if err := driver.CheckAvailable(); err != nil {
+			return ApplyPlan{}, err
+		}
+	}
 	switch action.Action {
 	case ReconcileActionPrepareStandby:
 		if action.Spec == nil {

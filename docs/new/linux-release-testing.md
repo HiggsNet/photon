@@ -1,5 +1,16 @@
 # Linux / Windows 发布与测试记录
 
+## v0.7.1 发布验收
+
+本版在 v0.7.0 基础上增加 Linux XFRM 操作挂起保护，详细行为见
+[v0.7.1 发布说明](../releases/v0.7.1.md) 和
+[内核操作挂起回归](../strongswan-xfrm-test.md#内核操作永久挂起时的行为)。
+发布检查覆盖最低 Go 1.25.0、常规 smoke、相关包 race、Linux 构建与 Windows
+交叉构建；正式标签另由发布流水线验证双架构产物和 Windows 原生回归。
+永久阻塞采用模拟调用验证，不在生产节点主动复现内核缺陷；不包含节点升级、
+内核修复或整机重启。数据库与协议兼容边界沿用 v0.7.0，旧 aggregate 或
+Common schema 1 仍须先经过 v0.6.6 迁移。
+
 ## v0.7.0 发布验收
 
 本版包含 Gossip、Linux daemon 和 Windows 客户端的较大重构。升级步骤、配置删除项与混跑限制见 [v0.7.0 发布说明](../releases/v0.7.0.md) 和 [兼容性说明](../operator-compatibility.md)。先备份配置、身份及一致的数据库副本；旧 aggregate 或 Common schema 1 必须先用 v0.6.6 迁移到 Common schema 2。
