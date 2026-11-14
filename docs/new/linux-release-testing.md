@@ -1,4 +1,14 @@
-# Linux / Windows v0.6.1 发布与测试记录
+# Linux / Windows 发布与测试记录
+
+## v0.7.0 发布验收
+
+本版包含 Gossip、Linux daemon 和 Windows 客户端的较大重构。升级步骤、配置删除项与混跑限制见 [v0.7.0 发布说明](../releases/v0.7.0.md) 和 [兼容性说明](../operator-compatibility.md)。先备份配置、身份及一致的数据库副本；旧 aggregate 或 Common schema 1 必须先用 v0.6.6 迁移到 Common schema 2。
+
+发布前已完成最低 Go 1.25.0 的完整检查、全量 race、常规 smoke，以及隔离容器中的真实 StrongSwan/XFRM、BIRD/Babel、防火墙、故障丢包和 SOCKS5 服务测试。另验证了撤销节点重启清理、调度器到期竞争、旧版数据库升级与普通新旧节点同步。Windows 已完成原生后台、服务端到端与交互桌面 GUI 验收；正式标签还须通过发布流水线的 Windows 原生检查。
+
+v0.6.6 与新版之间，普通同步及 TCP 大对象拉取已双向验证；阻断 TCP 后依赖旧版 UDP 分块回退的路径仍不兼容。依赖该路径的节点应一起升级。未完成 24–72 小时实网观察或生产灰度；发布不包含节点部署。原有发布与 RC 记录保留如下。
+
+## v0.6.1 历史发布基线
 
 `v0.6.1` 以 Linux v0.6.0 为基线，合并已提交的 Windows 客户端与两项共享 Gossip 修复：多地址回退、分片发送缓存生命周期和回退错误分类。Linux amd64/arm64 与 Windows 11 amd64 使用统一版本号；详细变化、校验与验收边界见 [v0.6.1 发布说明](../releases/v0.6.1.md)。
 

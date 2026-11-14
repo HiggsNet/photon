@@ -47,7 +47,7 @@
 
             ldflags = [
               "-X main.buildCommit=${self.shortRev or "unknown"}"
-              "-X main.buildDescribe=${self.shortRev or "dirty"}"
+              "-X main.buildDescribe=v${version}"
               "-X main.buildDirty=${if self ? rev then "false" else "true"}"
               "-X main.buildTime=unknown"
             ];

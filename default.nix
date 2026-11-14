@@ -37,7 +37,7 @@
         "-s"
         "-w"
         "-X main.buildCommit=unknown"
-        "-X main.buildDescribe=dirty"
+        "-X main.buildDescribe=v${version}"
         "-X main.buildDirty=true"
         "-X main.buildTime=unknown"
       ];
