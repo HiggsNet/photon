@@ -7,8 +7,56 @@ import (
 
 	"github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
+	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 )
+
+func TestDaemonSyncTriggerDoesNotWaitForTimerQueue(t *testing.T) {
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	verified.ManagedZone = "node-b.catofes."
+	peerID := "bootstrap.catofes."
+	config.Bootstrap = []syncConfigPeer{{ID: peerID, Addr: "127.0.0.1:33435"}}
+	config.IPsec.Driver = "dry-run"
+	config.PublishEndpoints = false
+	// The ordinary startup timer must respect backoff; only the explicit
+	// request is allowed to start this peer's session.
+	checkpoint.Peers = map[string]corestate.PeerCheckpoint{peerID: {BackoffUntilUnix: time.Now().Add(time.Hour).Unix()}}
+	d := newDaemon(config, newState(nil, corestate.NewStoreWithCheckpoint(verified, checkpoint, nil, nil), runtime), time.Hour, time.Now)
+	defer d.Close()
+	d.ControlSocketPath = ""
+	// Model queued timer deliveries while the main loop is occupied with
+	// startup recovery. Stale events must not delay an explicit sync round.
+	d.Hooks.OnReconcileFlush = func(layer string) {
+		if layer != "firewall" {
+			return
+		}
+		for {
+			select {
+			case d.daemonTimerEvents <- corehost.TimerFired{}:
+			default:
+				return
+			}
+		}
+	}
+	for range maxDaemonEventBatch {
+		d.Events <- daemonEvent{Type: daemonEventSyncTrigger}
+	}
+	// The next batch stops the service. The preceding batch must have
+	// started synchronization before yielding to another event delivery.
+	d.Events <- daemonEvent{Type: daemonEventShutdown}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	if err := d.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("daemon failed to handle its queued shutdown")
+	}
+	session := d.gossipDriver.Gossip.Session(peerID)
+	if session == nil || session.State != gossip.SyncSessionSummarySent {
+		t.Fatalf("explicit sync was left waiting for its timer: %#v", session)
+	}
+}
 
 // This remains an app-level test because it validates the complete Linux
 // composition: UDP datagrams, TCP object-pull, daemon event pumping and the

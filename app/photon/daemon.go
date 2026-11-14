@@ -338,7 +338,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 	d.recoverIPsecLinksOnStart(ctx)
 	d.logDebug("daemon", "startup_recovery_layer_done", map[string]any{"layer": "ipsec"})
 	d.logDebug("daemon", "startup_recovery_layer_begin", map[string]any{"layer": "routing"})
-	d.recoverRoutingOnStart(ctx)
+	d.routingDirty = true
+	if _, err := d.flushRoutingReconcile(ctx); err != nil {
+		d.logWarn("routing", "reconcile_failed", map[string]any{"error": err})
+	}
 	d.logDebug("daemon", "startup_recovery_layer_done", map[string]any{"layer": "routing"})
 	d.logDebug("daemon", "startup_recovery_layer_begin", map[string]any{"layer": "firewall"})
 	d.firewallDirty = true
@@ -368,14 +371,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 			return err
 		}
 	}
-	var forceSync bool
 	var pendingEvent *daemonEvent
 	lastRevision := d.State.Common.VerifiedRevision()
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
-		now := d.now()
 		syncNow, shutdown := d.processEvents(ctx, pendingEvent)
 		pendingEvent = nil
 		if shutdown {
@@ -386,10 +387,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 			d.gossipDriver.RelayGossipUpdate(ctx, "", d.now())
 		}
 		if syncNow {
-			forceSync = true
-			if err := d.scheduleDaemonTimer(daemonTimerSync, now); err != nil {
-				return err
+			// The request is already on the event loop. Start one forced round
+			// for the batch without re-enqueueing it through the timer queue.
+			if err := d.handleSyncTimerEvent(ctx, true); err != nil {
+				d.logDebug("sync", "trigger_completed_with_error", map[string]any{"error": err})
 			}
+			lastRevision = d.State.Common.VerifiedRevision()
 		}
 		var hostEvent corehost.Event
 		select {
@@ -424,11 +427,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 						return err
 					}
 				case daemonTimerSync:
-					if err := d.handleSyncTimerEvent(ctx, forceSync); err != nil {
+					if err := d.handleSyncTimerEvent(ctx, false); err != nil {
 						d.logDebug("sync", "timer_completed_with_error", map[string]any{"error": err})
 					}
 					lastRevision = d.State.Common.VerifiedRevision()
-					forceSync = false
 					if err := d.scheduleDaemonTimer(daemonTimerSync, now.Add(d.Interval)); err != nil {
 						return err
 					}
@@ -1009,13 +1011,6 @@ func (d *Daemon) recoverIPsecLinksOnStart(ctx context.Context) {
 	}
 }
 
-func (d *Daemon) recoverRoutingOnStart(ctx context.Context) {
-	d.routingDirty = true
-	if _, err := d.flushRoutingReconcile(ctx); err != nil {
-		d.logWarn("routing", "reconcile_failed", map[string]any{"error": err})
-	}
-}
-
 func (d *Daemon) flushRoutingReconcile(ctx context.Context) (bool, error) {
 	if !d.routingDirty {
 		return false, nil
@@ -1086,9 +1081,8 @@ func (d *Daemon) flushIPsecReconcile(ctx context.Context) (bool, error) {
 	defer cancel()
 	defer d.linuxObservation.beginOperation(reconcileCtx, "ipsec", "reconcile")()
 	err := d.reconcileIPsecLinks(reconcileCtx)
-	// Phase 6.6: after IPsec reconcile, refresh health probe targets and
-	// dispatch any due probes. This keeps the probe scheduler in sync with
-	// link create/update/teardown without adding a separate timer path.
+	// Refresh targets after link changes. During Run, the independent health
+	// timer dispatches probes through the asynchronous manager.
 	d.reconcileHealth(reconcileCtx)
 	return true, err
 }

@@ -146,7 +146,8 @@ d.refreshGossipDiscovery()
 
 // 3. 数据面从 detached common view、LinuxState 和重新 observation 恢复
 d.recoverIPsecLinksOnStart(ctx)
-d.recoverRoutingOnStart(ctx)
+d.routingDirty = true
+d.flushRoutingReconcile(ctx)
 d.firewallDirty = true
 d.flushFirewallReconcile(ctx)
 ```
@@ -482,6 +483,10 @@ sync timer
   → handleSyncTimerEvent: 为符合退避规则的 peer 启动 SyncSession
   → GossipDriver 验证并提交远端快照，立即转发摘要
   → notifyStateChanged（如果有变化）
+
+sync_trigger
+  → 同批请求合并，在主循环内直接启动一次强制同步（绕过退避）
+  → 不经过立即 timer 二次排队，不重置周期同步的时间
 
 endpoint publish timer
   → handleEndpointTimerEvent: 发布 endpoint、IPsec transport、routing netns 记录
