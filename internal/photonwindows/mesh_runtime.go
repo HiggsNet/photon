@@ -21,6 +21,9 @@ import (
 // validate live state, and run crypto and I/O separately.
 type meshRuntime struct {
 	stateMu          sync.Mutex
+	cleanupWG        sync.WaitGroup
+	cleanupMu        sync.Mutex
+	cleanupErr       error
 	ctx              context.Context
 	config           *Config
 	state            *State
@@ -167,7 +170,9 @@ func (m *meshRuntime) update(plan GatewayPlan) {
 			continue
 		}
 		m.stopPeer(p, "peer authorization or signed contact withdrawn")
-		_ = p.leaf.close()
+		// stopPeer already detached/cancelled this leaf. Join its platform
+		// opener outside stateMu, retaining ownership until daemon shutdown.
+		m.retire(func() error { p.leaf.openWG.Wait(); return nil })
 		p.tunnel.data.close()
 		delete(m.byData, p.tunnel.data)
 		delete(m.peers, key)
@@ -187,6 +192,7 @@ func (m *meshRuntime) updatePath(plan GatewayPlan, candidate GatewayCandidate, k
 		leaf := newLeafRuntime(m.device.acquire)
 		leaf.opened = m.opened
 		leaf.sharedCompletions = true
+		leaf.retireDevice = m.retireDevice
 		p = &meshPeer{config: config, tunnel: &gatewayTunnel{socket: m.socket, data: data, offerMOBIKE: config.Gateway.MOBIKE}, leaf: leaf, backoff: m.initial}
 		if m.ikeWrites != nil {
 			p.tunnel.queueIKE = m.queueIKEWrite
@@ -256,6 +262,10 @@ func (m *meshRuntime) close() error {
 		p.tunnel.stop()
 		p.tunnel.data.close()
 	}
+	// Removed peers may still have openers publishing into the shared queue.
+	// Join those as well as deferred closes before its final drain.
+	m.cleanupWG.Wait()
+	err = errors.Join(err, m.cleanupErr)
 	for {
 		select {
 		case result := <-m.opened:
@@ -475,7 +485,7 @@ func (m *meshRuntime) completeOpen(result leafOpenResult) error {
 		return nil
 	}
 	if result.device != nil {
-		return result.device.Close()
+		m.retireDevice(result.device)
 	}
 	return nil
 }

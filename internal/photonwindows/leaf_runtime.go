@@ -46,6 +46,7 @@ type leafDevicePacket struct {
 type leafRuntime struct {
 	sharedCompletions    bool
 	factory              packetDeviceFactory
+	retireDevice         func(ownedPacketDevice)
 	pipeline             *gatewayBabelPipeline
 	device               ownedPacketDevice
 	attachment           leafAttachment
@@ -63,6 +64,16 @@ type leafRuntime struct {
 
 func newLeafRuntime(factory packetDeviceFactory) *leafRuntime {
 	return &leafRuntime{factory: factory, opened: make(chan leafOpenResult, 1), packets: make(chan leafDevicePacket, 64)}
+}
+
+// Mesh detaches authorization on the owner turn and joins platform cleanup at
+// shutdown. Standalone runtimes retain synchronous device ownership.
+func (r *leafRuntime) closeDevice(device ownedPacketDevice) error {
+	if r.retireDevice != nil {
+		r.retireDevice(device)
+		return nil
+	}
+	return device.Close()
 }
 
 func desiredLeafAttachment(config *Config, view corestate.View, plan GatewayPlan, tunnel *gatewayTunnel, id [8]byte, now time.Time) (leafAttachment, error) {
@@ -116,7 +127,7 @@ func (r *leafRuntime) stopDevice() error {
 	}
 	var err error
 	if r.device != nil {
-		err = r.device.Close()
+		err = r.closeDevice(r.device)
 		r.device = nil
 	}
 	r.readWG.Wait()
@@ -206,7 +217,7 @@ func (r *leafRuntime) reconcilePrepared(ctx context.Context, config *Config, rev
 		result := leafOpenResult{owner: r, request: request, revision: revision, want: want, device: device, err: err}
 		if openCtx.Err() != nil {
 			if device != nil {
-				_ = device.Close()
+				_ = r.closeDevice(device)
 			}
 			return
 		}
@@ -214,7 +225,7 @@ func (r *leafRuntime) reconcilePrepared(ctx context.Context, config *Config, rev
 		case r.opened <- result:
 		case <-openCtx.Done():
 			if device != nil {
-				_ = device.Close()
+				_ = r.closeDevice(device)
 			}
 		}
 	}()
@@ -229,21 +240,21 @@ func (r *leafRuntime) complete(ctx context.Context, config *Config, view coresta
 func (r *leafRuntime) completePrepared(ctx context.Context, config *Config, revision corestate.VerifiedRevision, tunnel *gatewayTunnel, id [8]byte, now time.Time, result leafOpenResult, want leafAttachment, err error) error {
 	if result.request != r.request {
 		if result.device != nil {
-			return result.device.Close()
+			return r.closeDevice(result.device)
 		}
 		return nil
 	}
 	r.pending = false
 	if result.revision != revision || err != nil || !want.equal(result.want) {
 		if result.device != nil {
-			return errors.Join(err, result.device.Close())
+			return errors.Join(err, r.closeDevice(result.device))
 		}
 		return err
 	}
 	if !r.nameRecoveryDeadline.IsZero() && !now.Before(r.nameRecoveryDeadline) {
 		err := fmt.Errorf("%w: %q", errPacketDeviceRecoveryExpired, config.Wintun.AdapterName)
 		if result.device != nil {
-			err = errors.Join(err, result.device.Close())
+			err = errors.Join(err, r.closeDevice(result.device))
 		}
 		return err
 	}
@@ -253,7 +264,7 @@ func (r *leafRuntime) completePrepared(ctx context.Context, config *Config, revi
 		}
 		r.retryAt = now.Add(5 * time.Second)
 		if result.device != nil {
-			return errors.Join(result.err, result.device.Close())
+			return errors.Join(result.err, r.closeDevice(result.device))
 		}
 		return result.err
 	}
@@ -266,7 +277,7 @@ func (r *leafRuntime) completePrepared(ctx context.Context, config *Config, revi
 	}
 	pipeline, err := newGatewayBabelPipeline(tunnel, result.device, want.local, want.peer, id, addresses)
 	if err != nil {
-		return errors.Join(err, result.device.Close())
+		return errors.Join(err, r.closeDevice(result.device))
 	}
 	r.device, r.pipeline, r.attachment = result.device, pipeline, want
 	r.nameRecoveryDeadline = time.Time{}
