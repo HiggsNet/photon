@@ -30,6 +30,7 @@ void main() {
         containsAll([
           'My Proxy',
           'JP',
+          'OpenAI',
           'Photon',
           'Photon Auto',
           'Photon Balance',
@@ -39,6 +40,14 @@ void main() {
         'photon-services',
       ]);
       expect(preview['rules'], contains('DOMAIN-SUFFIX,example.com,My Proxy'));
+      expect((preview['rules'] as List).first, 'RULE-SET,openai,OpenAI');
+      expect(
+        (preview['rule-providers'] as Map)['openai'],
+        containsPair('behavior', 'domain'),
+      );
+      expect(groups.singleWhere((group) => group['name'] == 'OpenAI')['use'], [
+        'photon-services',
+      ]);
       expect((preview['proxy-providers'] as Map)['photon-services'], isNotNull);
     },
   );

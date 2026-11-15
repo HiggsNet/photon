@@ -86,6 +86,27 @@ final class PhotonDirectory {
   Iterable<PhotonEndpoint> get endpoints => services
       .where((entry) => entry.status == 'active')
       .expand((entry) => entry.endpoints);
+
+  /// A signed publication identifies an owner; an Anycast proxy identifies a
+  /// destination. Keep the publications for diagnostics, but inject each shared
+  /// destination only once, with a name that survives publisher changes.
+  List<PhotonEndpoint> get proxyEndpoints {
+    final available = endpoints.toList()
+      ..sort((a, b) {
+        final name = a.name.compareTo(b.name);
+        return name != 0 ? name : a.id.compareTo(b.id);
+      });
+    final seen = <String>{};
+    return [
+      for (final endpoint in available)
+        if (seen.add(
+          endpoint.region == 'local'
+              ? '${endpoint.owner}\u0000${endpoint.authority}'
+              : endpoint.authority,
+        ))
+          endpoint,
+    ];
+  }
 }
 
 final class PhotonService {
@@ -174,7 +195,7 @@ final class PhotonEndpoint {
   final int port;
 
   String get name =>
-      '${owner.replaceFirst(RegExp(r'\.$'), '')} / $region / $authority';
+      '${region == 'local' ? owner.replaceFirst(RegExp(r'\.$'), '') : 'Anycast'} / $region / $authority';
   String get authority =>
       address.contains(':') ? '[$address]:$port' : '$address:$port';
 }
@@ -238,8 +259,7 @@ Map<String, dynamic> photonProxyProfile({
   if (!directory.fresh(now)) {
     throw StateError('Photon service information expired');
   }
-  final endpoints = directory.endpoints.toList()
-    ..sort((a, b) => a.id.compareTo(b.id));
+  final endpoints = directory.proxyEndpoints;
   if (endpoints.isEmpty || adapter.isEmpty) {
     throw StateError('No authorized Photon proxy endpoints are available');
   }

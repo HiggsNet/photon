@@ -24,9 +24,23 @@ proxy-groups:
     empty-fallback: REJECT
     url: https://www.gstatic.com/generate_204
     interval: 300
+  - name: OpenAI
+    type: select
+    proxies: [Photon, JP]
+    use: [photon-services]
+    empty-fallback: REJECT
 rules:
+  - RULE-SET,openai,OpenAI
   - DOMAIN-SUFFIX,example.com,My Proxy
   - MATCH,Photon
+rule-providers:
+  openai:
+    type: http
+    behavior: domain
+    format: yaml
+    url: https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/openai.yaml
+    path: ./ruleset/openai.yaml
+    interval: 86400
 ''';
 
 Future<void> showPhotonTemplateHelp(BuildContext context) => showSheet<void>(

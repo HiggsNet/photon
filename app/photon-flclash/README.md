@@ -29,6 +29,8 @@ rules:
 
 `Photon`、`Photon Auto`、`Photon Balance` 和 `photon-services` 由 Photon 提供。自定义组也可以用 `use: [photon-services]` 引入所有节点，再用 Mihomo 的 `filter` 筛选地区。建议为这类组设置 `empty-fallback: REJECT`，让筛选后为空的组拒绝连接。模板由用户编辑，生成的配置由 FlClash 管理。模板启用后，Photon 断开时只停用 Photon 出口，用户规则和其他出口继续可用。
 
+注入代理时，相同地址和端口的 Global、地区任播入口会合并为一个，名称为 `Anycast / global / 地址:端口` 或 `Anycast / jp / 地址:端口`，不随发布节点变化。`local` 入口保留节点名，便于选择固定出口；原始服务发布记录仍按节点保留供诊断。完整示例和界面内示例均包含 `OpenAI` 选择组，通过 MetaCubeX 的 OpenAI 域名规则集单独分流，可在代理页为该组选择出口。
+
 完整示例见 [examples/photon.proxy.yaml](examples/photon.proxy.yaml)，包含按应用分组、规则集和 DNS 策略。支持底层选路的后台不修改模板的 Fake-IP 过滤及域名 DNS 策略；旧后台仍需为网关域名补充真实 IP 解析和直连 DNS。旧后台使用 Fake-IP 白名单时会转换为等价规则模式，为网关域名添加例外。Windows 的 `strict-route` 配合 `dns-mode: hijack` 可能由防火墙阻断 Photon 的底层 DNS，绑定接口无法绕过该限制；这类配置应验证 `dns-mode: native` 的兼容性。
 
 ## 数据与网络边界

@@ -60,7 +60,149 @@ class MemoryPhotonPreferences implements PhotonPreferences {
   }
 }
 
+Map<String, dynamic> anycastDirectoryFixture({bool local = true}) => {
+  ...directoryFixture(),
+  'services': [
+    for (var node = 1; node <= 3; node++)
+      {
+        'id': 'node-$node/services/socks5',
+        'owner': 'node-$node.catofes.',
+        'status': 'active',
+        'endpoints': [
+          {
+            'id': (node * 3).toRadixString(16).padLeft(32, '0'),
+            'region': 'global',
+            'address': 'fd42:ffff::1',
+            'port': 3128,
+          },
+          {
+            'id': (node * 3 + 1).toRadixString(16).padLeft(32, '0'),
+            'region': 'jp',
+            'address': 'fd42:ff01::1',
+            'port': 3128,
+          },
+          if (local)
+            {
+              'id': (node * 3 + 2).toRadixString(16).padLeft(32, '0'),
+              'region': 'local',
+              'address': 'fd42:1::$node',
+              'port': 3128,
+            },
+        ],
+      },
+  ],
+};
+
 void main() {
+  test(
+    'proxy injection merges Anycast destinations and retains local exits',
+    () {
+      final directory = PhotonDirectory.fromJson(anycastDirectoryFixture());
+      expect(directory.endpoints, hasLength(9));
+      expect(directory.proxyEndpoints, hasLength(5));
+      for (final template in <Map<String, dynamic>?>[
+        null,
+        {
+          'rules': ['MATCH,Photon'],
+        },
+      ]) {
+        final profile = photonProxyProfile(
+          directory: directory,
+          now: DateTime.now(),
+          splitRoutes: [],
+          adapter: directory.adapterName,
+          backendPath: 'backend',
+          template: template,
+        );
+        final proxies = template == null
+            ? profile['proxies'] as List
+            : (profile['proxy-providers'] as Map)['photon-services']['payload']
+                  as List;
+        final names = proxies.map((proxy) => proxy['name']).toList();
+        expect(names, [
+          'Anycast / global / [fd42:ffff::1]:3128',
+          'Anycast / jp / [fd42:ff01::1]:3128',
+          'node-1.catofes / local / [fd42:1::1]:3128',
+          'node-2.catofes / local / [fd42:1::2]:3128',
+          'node-3.catofes / local / [fd42:1::3]:3128',
+        ]);
+        expect(
+          proxies.map((proxy) => proxy['interface-name']),
+          everyElement('Photon Test'),
+        );
+        expect(
+          (profile['tun'] as Map)['route-exclude-address'],
+          containsAll([
+            'fd42:ffff::1/128',
+            'fd42:ff01::1/128',
+            'fd42:1::1/128',
+            'fd42:1::2/128',
+            'fd42:1::3/128',
+          ]),
+        );
+        for (final group in profile['proxy-groups'] as List) {
+          if (template == null) {
+            final members = group['proxies'] as List;
+            expect(members.where((name) => name == names.first), hasLength(1));
+          } else {
+            expect(group['use'], ['photon-services']);
+          }
+        }
+      }
+    },
+  );
+
+  test('shared proxy profiles survive publisher changes and disappear only after the last valid publication', () {
+    Map<String, dynamic> render(Map<String, dynamic> data) {
+      final directory = PhotonDirectory.fromJson(data);
+      return photonProxyProfile(
+        directory: directory,
+        now: DateTime.now(),
+        splitRoutes: [],
+        adapter: directory.adapterName,
+        backendPath: 'backend',
+        template: {
+          'rules': ['MATCH,Photon'],
+        },
+      );
+    }
+
+    final data = anycastDirectoryFixture(local: false);
+    final before = encodePhotonProfile(render(data));
+    final services = data['services'] as List;
+    data['services'] = services.reversed.toList();
+    for (final service in services) {
+      service['endpoints'] = (service['endpoints'] as List).reversed.toList();
+    }
+    expect(encodePhotonProfile(render(data)), before);
+    services.first['status'] = 'withdrawn';
+    services.first['endpoints'] = [];
+    services[1]['status'] = 'unauthorized';
+    services[1]['endpoints'] = [];
+    expect(encodePhotonProfile(render(data)), before);
+    services.last['status'] = 'untrusted';
+    services.last['endpoints'] = [];
+    expect(PhotonDirectory.fromJson(data).proxyEndpoints, isEmpty);
+    expect(() => render(data), throwsStateError);
+  });
+
+  test(
+    'Anycast merging retains different addresses and ports in the same region',
+    () {
+      final data = anycastDirectoryFixture(local: false);
+      final services = data['services'] as List;
+      services[1]['endpoints'][0]['port'] = 4128;
+      services[2]['endpoints'][0]['address'] = 'fd42:ffff::2';
+      final endpoints = PhotonDirectory.fromJson(data).proxyEndpoints;
+      expect(endpoints, hasLength(4));
+      expect(
+        endpoints.where((endpoint) => endpoint.region == 'global'),
+        hasLength(3),
+      );
+      expect(endpoints.map((endpoint) => endpoint.name).toSet(), hasLength(4));
+    },
+  );
+
   test(
     'a gateway IP or hostname change leaves the socket-routed profile stable',
     () {
