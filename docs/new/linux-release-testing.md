@@ -1,5 +1,12 @@
 # Linux / Windows 发布与测试记录
 
+## v0.7.2 发布验收
+
+`v0.7.2` 主要更新 Photon-FlClash，Linux 沿用 v0.7.1 的 XFRM 挂起保护。
+新增的 Windows 路由观测字段不改变数据库或 Gossip 协议；下载、升级与
+验证范围见 [v0.7.2 发布说明](../releases/v0.7.2.md)。Windows 原生客户端和
+Photon-FlClash 由同一发布流水线打包，实际桌面与数据面仍需安装后验收。
+
 ## v0.7.1 发布验收
 
 本版在 v0.7.0 基础上增加 Linux XFRM 操作挂起保护，详细行为见
