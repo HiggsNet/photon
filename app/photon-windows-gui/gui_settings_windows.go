@@ -88,7 +88,7 @@ func (w *desktopWindow) createSettingsWindow() error {
 		{guiRouteInputID, "网段地址"},
 		{guiBootstrapListID, "引导节点 · 节点身份 / 地址"},
 		{guiBootstrapPeerID, "节点身份"}, {guiBootstrapAddressID, "主机地址与端口"},
-		{guiStateFieldID, "身份数据库 · 绝对路径"},
+		{guiStateFieldID, "身份数据库 · 相对配置文件或绝对路径"},
 		{guiOverlayFieldID, "Overlay ID"}, {guiListenFieldID, "Gossip 监听地址"},
 		{guiAdapterFieldID, "虚拟网卡名称"}, {guiMTUFieldID, "MTU"}, {guiLogFieldID, "日志级别"},
 		{guiInitialFieldID, "重连初始间隔"}, {guiMaxFieldID, "重连最大间隔"},

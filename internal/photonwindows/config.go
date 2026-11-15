@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -125,7 +126,23 @@ func LoadConfig(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Photon Windows config %s: %w", path, err)
 	}
+	if err := config.ResolvePaths(path); err != nil {
+		return nil, err
+	}
 	return config, nil
+}
+
+// ResolvePaths anchors state to the YAML, independently of the working directory.
+func (config *Config) ResolvePaths(configPath string) error {
+	absolute, err := filepath.Abs(configPath)
+	if err != nil {
+		return err
+	}
+	if !filepath.IsAbs(config.State.Path) {
+		config.State.Path = filepath.Join(filepath.Dir(absolute), config.State.Path)
+	}
+	config.State.Path = filepath.Clean(config.State.Path)
+	return nil
 }
 
 func ParseConfig(r io.Reader) (*Config, error) {

@@ -56,12 +56,15 @@ final class PhotonProcess implements PhotonBackend {
     final bytes = await config.readAsBytes();
     if (bytes.length > 1 << 20) throw const FormatException('Config too large');
     final yaml = loadYaml(utf8.decode(bytes));
-    final statePath = yaml is YamlMap && yaml['state'] is YamlMap
+    final configuredState = yaml is YamlMap && yaml['state'] is YamlMap
         ? yaml['state']['path']
         : null;
-    if (statePath is! String || !path.isAbsolute(statePath)) {
-      throw const FormatException('Photon state.path must be absolute');
+    if (configuredState is! String || configuredState.trim().isEmpty) {
+      throw const FormatException('Photon state.path is required');
     }
+    final statePath = path.normalize(
+      path.join(config.parent.path, configuredState.trim()),
+    );
     final process = await Process.start(executable, [
       ...arguments,
       'run',

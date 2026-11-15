@@ -1,5 +1,12 @@
 # Linux / Windows 发布与测试记录
 
+## v0.7.4 发布验收
+
+`v0.7.4` 更新双方 IPsec 策略匹配、Windows Babel ETX、任播代理入口及
+Photon-FlClash 配置导入与数据目录迁移。下载、升级和验证范围见
+[v0.7.4 发布说明](../releases/v0.7.4.md)。本版不新增数据库迁移；Windows
+实际桌面迁移和长期数据面仍需安装后验收，发布不包含生产节点部署。
+
 ## v0.7.3 发布验收
 
 `v0.7.3` 包含下述 Photon-FlClash 更新，并修复 Windows 首次初始化 Flutter

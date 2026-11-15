@@ -43,9 +43,9 @@ func DefaultForm(configPath string) Form {
 	if base == "" {
 		base = "photon"
 	}
-	statePath := filepath.Join(filepath.Dir(configPath), base+".db")
-	if strings.EqualFold(statePath, configPath) {
-		statePath = filepath.Join(filepath.Dir(configPath), base+".state.db")
+	statePath := base + ".db"
+	if strings.EqualFold(statePath, filepath.Base(configPath)) {
+		statePath = base + ".state.db"
 	}
 	return Form{
 		AllowedGateways: "*",

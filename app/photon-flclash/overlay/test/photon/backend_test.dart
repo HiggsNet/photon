@@ -57,6 +57,18 @@ void main() {
     });
   }
 
+  test(
+    'relative identity path is resolved against YAML before handshake',
+    () async {
+      await config.writeAsString(
+        'fixture: normal\nstate:\n  path: identity.db\n',
+      );
+      await backend.start(config.path);
+      expect(backend.hasProcess, isTrue);
+      await backend.stop();
+    },
+  );
+
   test('crashed child cannot leave stale usable state', () async {
     await configure('crash');
     await backend.start(config.path);

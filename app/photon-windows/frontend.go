@@ -61,8 +61,11 @@ func runFrontendBackend(ctx context.Context, path string, stream io.ReadWriteClo
 	if err != nil {
 		return fail(err)
 	}
-	if !filepath.IsAbs(path) || !filepath.IsAbs(config.State.Path) {
-		return fail(errors.New("frontend backend requires absolute config and state paths"))
+	if !filepath.IsAbs(path) {
+		return fail(errors.New("frontend backend requires an absolute config path"))
+	}
+	if err := config.ResolvePaths(path); err != nil {
+		return fail(err)
 	}
 	logger, closer, err := photonwindows.NewRuntimeLogger(config, nil, "")
 	if err != nil {

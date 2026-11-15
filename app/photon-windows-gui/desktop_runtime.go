@@ -132,6 +132,9 @@ func (b *desktopBackend) startRuntime() error {
 	if err != nil {
 		return fail(err)
 	}
+	if err := config.ResolvePaths(b.options.ConfigPath); err != nil {
+		return fail(err)
+	}
 	executable := b.options.BackendPath
 	if executable == "" {
 		own, err := os.Executable()

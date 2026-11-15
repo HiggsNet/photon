@@ -34,7 +34,7 @@ func TestDesktopConfigSaveValidationConflictAndRecovery(t *testing.T) {
 	if _, err := b.LoadConfigText(); err != nil {
 		t.Fatal(err)
 	}
-	for _, invalid := range []string{text + "unknown_field: true\n", strings.ReplaceAll(text, filepath.Join(dir, "state.db"), "relative.db"), text + "---\nschema_version: 1\n"} {
+	for _, invalid := range []string{text + "unknown_field: true\n", strings.ReplaceAll(text, filepath.Join(dir, "state.db"), ""), text + "---\nschema_version: 1\n"} {
 		if err := b.SaveConfigText(invalid); err == nil {
 			t.Fatal("invalid config saved")
 		}

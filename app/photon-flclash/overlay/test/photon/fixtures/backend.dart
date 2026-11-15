@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
+import 'package:path/path.dart' as path;
 import 'package:yaml/yaml.dart';
 
 Future<void> main(List<String> arguments) async {
@@ -38,7 +39,14 @@ Future<void> main(List<String> arguments) async {
   }
   await send('ready', {
     'pid': mode == 'wrong-pid' ? pid + 1 : pid,
-    'state_path': mode == 'wrong-path' ? '/wrong' : yaml['state']['path'],
+    'state_path': mode == 'wrong-path'
+        ? '/wrong'
+        : path.normalize(
+            path.join(
+              config.absolute.parent.path,
+              yaml['state']['path'] as String,
+            ),
+          ),
     'config_sha256': mode == 'wrong-config'
         ? '0' * 64
         : sha256.convert(bytes).toString(),

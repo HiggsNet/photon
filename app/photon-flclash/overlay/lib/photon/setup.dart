@@ -108,3 +108,19 @@ Future<void> importPhotonIdentity({
     );
   }
 }
+
+Future<void> copyPhotonConfiguration(String source, String destination) async {
+  final backend = photonExecutable;
+  final result = await Process.run(backend, [
+    'config',
+    'copy',
+    '--config',
+    source,
+    '--destination',
+    destination,
+    '--elevate',
+  ], workingDirectory: File(backend).parent.path);
+  if (result.exitCode != 0) {
+    throw PhotonSetupException((result.stderr as String).trim());
+  }
+}

@@ -15,6 +15,19 @@ Future<String?> choosePhotonConfig() async {
   return uri != null && uri.scheme == 'file' ? uri.toFilePath() : null;
 }
 
+Future<String?> importPhotonConfig() async {
+  final source = await choosePhotonConfig();
+  if (source == null) return null;
+  final destination = path.join(
+    await appPath.homeDirPath,
+    'photon',
+    'import-${DateTime.now().microsecondsSinceEpoch}',
+    'photon.yaml',
+  );
+  await copyPhotonConfiguration(source, destination);
+  return destination;
+}
+
 Future<String?> editPhotonSettings(
   BuildContext context, {
   String? config,

@@ -8,7 +8,7 @@ Windows 继续作为接入节点，仅一个 active gateway，不转发其他节
 
 在管理员管理的目录准备可执行文件、相邻的固定版本 `wintun.dll` 和配置。
 已有数据库继续恢复；数据库不存在时，服务首次启动生成本机身份并进入 [自动入网](autojoin-testing.md)，等待上级授权。
-服务安装要求配置及 `state.path` 使用绝对路径，启动账号为 LocalSystem，默认手动启动。
+服务安装要求配置使用绝对路径，`state.path` 可为绝对路径或相对该 YAML 所在目录的路径；加载后统一解析为绝对路径。启动账号为 LocalSystem，默认手动启动。
 
 ```powershell
 .\photon-windows.exe service install --config C:\Photon\config.yaml

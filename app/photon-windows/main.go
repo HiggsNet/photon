@@ -43,6 +43,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runConsole(ctx, args[1:], stdout, stderr)
 	case "frontend-worker":
 		return runFrontendWorker(context.Background(), args[1:], stderr)
+	case "config-copy-worker":
+		return runConfigCopyWorker(args[1:], stderr)
 	case "version", "--version", "-version":
 		if len(args) != 1 {
 			fmt.Fprintln(stderr, "photon-windows version accepts no arguments")
@@ -131,6 +133,9 @@ func runConsole(ctx context.Context, args []string, stdout, stderr io.Writer) (c
 }
 
 func runConfig(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "copy" {
+		return runConfigCopy(args[1:], stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == "edit" {
 		return runConfigEdit(args[1:], os.Stdin, stdout, stderr)
 	}

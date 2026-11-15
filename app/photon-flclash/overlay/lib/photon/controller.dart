@@ -57,8 +57,9 @@ final class PhotonController extends ChangeNotifier {
         if (_closed || hasLease) return;
         final selected = await pick();
         if (selected != null && !_closed) {
-          _configPath = File(selected).absolute.path;
-          await preferences?.saveConfigPath(_configPath!);
+          final absolute = File(selected).absolute.path;
+          await preferences?.saveConfigPath(absolute);
+          _configPath = absolute;
         }
       }, cleanupOnError: false);
 

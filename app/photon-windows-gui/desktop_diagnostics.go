@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
@@ -43,6 +44,9 @@ func (b *desktopBackend) LogTail() (desktopLogTail, error) {
 			}
 			statePath = config.State.Path
 		}
+	}
+	if !filepath.IsAbs(statePath) {
+		statePath = filepath.Join(filepath.Dir(b.options.ConfigPath), statePath)
 	}
 	out := desktopLogTail{Path: statePath + ".log"}
 	file, err := desktopOpenConfig(out.Path) // Windows shares delete access for rotation.

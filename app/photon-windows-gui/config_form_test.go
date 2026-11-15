@@ -101,7 +101,7 @@ func TestDesktopConfigFormMissingDefaultsRequireRealTrustAndDoNotCreateIdentity(
 	if form.AllowedGateways != "*" {
 		t.Fatal("new configuration does not discover all verified peers")
 	}
-	if form.StatePath != filepath.Join(dir, "laptop-one.db") || !filepath.IsAbs(form.StatePath) || form.OverlayID != "ipsec-main" || form.GossipListen != "0.0.0.0:33434" || form.AdapterName != "Photon Windows" || form.MTU != "1400" || form.LogLevel != "info" || form.InitialBackoff != "1s" || form.MaxBackoff != "1m" {
+	if form.StatePath != "laptop-one.db" || form.OverlayID != "ipsec-main" || form.GossipListen != "0.0.0.0:33434" || form.AdapterName != "Photon Windows" || form.MTU != "1400" || form.LogLevel != "info" || form.InitialBackoff != "1s" || form.MaxBackoff != "1m" {
 		t.Fatalf("unexpected defaults: %+v", form)
 	}
 	if err := b.SaveForm(form); err == nil {
@@ -231,7 +231,7 @@ func TestDesktopConfigFormInvalidFieldsAndExternalChangesLeaveOriginalUntouched(
 	for _, mutate := range []func(*desktopConfigForm){
 		func(f *desktopConfigForm) { f.RootPublicKey = "" },
 		func(f *desktopConfigForm) { f.ManagedZone = "missing-dot" },
-		func(f *desktopConfigForm) { f.StatePath = "relative.db" },
+		func(f *desktopConfigForm) { f.StatePath = "" },
 		func(f *desktopConfigForm) { f.MTU = "not an integer" },
 		func(f *desktopConfigForm) { f.MTU = "1279" },
 		func(f *desktopConfigForm) { f.SplitRoutes = "0.0.0.0/0" },

@@ -2,7 +2,7 @@ diff --git a/arb/intl_en.arb b/arb/intl_en.arb
 index cbda0e3..3917df7 100644
 --- a/arb/intl_en.arb
 +++ b/arb/intl_en.arb
-@@ -1076,5 +1076,107 @@
+@@ -1076,5 +1076,112 @@
    "fakeipFilterDesc": "These domains get real IPs instead of Fake-IPs. In whitelist mode, only they get Fake-IPs.",
    "fallbackFilterGeositeDesc": "Domains in these GeoSite categories are resolved by Fallback directly.",
    "fallbackFilterIpcidrDesc": "When Nameserver returns an IP in these ranges, the Fallback answer is used.",
@@ -93,7 +93,12 @@ index cbda0e3..3917df7 100644
 +  "photonCreateConfig": "Create Photon configuration",
 +  "photonSettings": "Photon settings",
 +  "photonSetupHint": "Enter your network details in Photon settings to get started.",
-+  "photonUseConfigFile": "Use existing Photon YAML",
++  "photonUseConfigFile": "Reference external Photon YAML",
++  "photonDataDirectory": "Photon data directory",
++  "photonOpenDirectory": "Open directory",
++  "photonMigrateDirectory": "Copy to another directory",
++  "photonStorageHint": "Copies YAML, rules and identity to an empty directory, then switches to the copy. Originals are kept. Stop Photon first. Copying identity may request administrator access.",
++  "photonImportConfig": "Import Photon YAML",
 +  "photonStopToEdit": "Stop Photon before changing its settings.",
 +  "photonManagedZone": "Node zone",
 +  "photonRootKey": "Trusted root public key",
@@ -115,7 +120,7 @@ diff --git a/arb/intl_es.arb b/arb/intl_es.arb
 index 417db6b..f98f6e8 100644
 --- a/arb/intl_es.arb
 +++ b/arb/intl_es.arb
-@@ -1076,5 +1076,107 @@
+@@ -1076,5 +1076,112 @@
    "fakeipFilterDesc": "Estos dominios reciben su IP real en lugar de una Fake-IP. En modo whitelist, solo ellos reciben Fake-IP.",
    "fallbackFilterGeositeDesc": "Los dominios de estas categorías GeoSite se resuelven directamente con Fallback.",
    "fallbackFilterIpcidrDesc": "Si Nameserver devuelve una IP de estos rangos, se usa la respuesta de Fallback.",
@@ -206,7 +211,12 @@ index 417db6b..f98f6e8 100644
 +  "photonCreateConfig": "Crear configuración de Photon",
 +  "photonSettings": "Ajustes de Photon",
 +  "photonSetupHint": "Para empezar, introduce los datos de red en los ajustes de Photon.",
-+  "photonUseConfigFile": "Usar un YAML existente de Photon",
++  "photonUseConfigFile": "Referenciar YAML externo de Photon",
++  "photonDataDirectory": "Carpeta de datos de Photon",
++  "photonOpenDirectory": "Abrir carpeta",
++  "photonMigrateDirectory": "Copiar a otra carpeta",
++  "photonStorageHint": "Detén Photon. Copia la configuración, reglas e identidad a una carpeta vacía y usa la copia. Se conservan los originales. Puede requerir permisos de administrador.",
++  "photonImportConfig": "Importar YAML de Photon",
 +  "photonStopToEdit": "Detén Photon antes de cambiar sus ajustes.",
 +  "photonManagedZone": "Zona del nodo",
 +  "photonRootKey": "Clave pública raíz de confianza",
@@ -228,7 +238,7 @@ diff --git a/arb/intl_fr.arb b/arb/intl_fr.arb
 index aa4e778..a8781d8 100644
 --- a/arb/intl_fr.arb
 +++ b/arb/intl_fr.arb
-@@ -1076,5 +1076,107 @@
+@@ -1076,5 +1076,112 @@
    "fakeipFilterDesc": "Ces domaines reçoivent leur vraie IP au lieu d’une Fake-IP. En mode whitelist, eux seuls reçoivent une Fake-IP.",
    "fallbackFilterGeositeDesc": "Les domaines de ces catégories GeoSite sont résolus directement par Fallback.",
    "fallbackFilterIpcidrDesc": "Si Nameserver renvoie une IP de ces plages, la réponse de Fallback est utilisée.",
@@ -319,7 +329,12 @@ index aa4e778..a8781d8 100644
 +  "photonCreateConfig": "Créer une configuration Photon",
 +  "photonSettings": "Réglages Photon",
 +  "photonSetupHint": "Pour commencer, saisissez les paramètres réseau dans les réglages de Photon.",
-+  "photonUseConfigFile": "Utiliser un fichier YAML Photon existant",
++  "photonUseConfigFile": "Référencer un YAML Photon externe",
++  "photonDataDirectory": "Dossier de données Photon",
++  "photonOpenDirectory": "Ouvrir le dossier",
++  "photonMigrateDirectory": "Copier vers un autre dossier",
++  "photonStorageHint": "Arrêtez Photon. Copiez la configuration, les règles et l’identité vers un dossier vide, puis utilisez la copie. Les originaux sont conservés. Des droits administrateur peuvent être demandés.",
++  "photonImportConfig": "Importer un YAML Photon",
 +  "photonStopToEdit": "Arrêtez Photon avant de modifier ses réglages.",
 +  "photonManagedZone": "Zone du nœud",
 +  "photonRootKey": "Clé publique racine de confiance",
@@ -341,7 +356,7 @@ diff --git a/arb/intl_ja.arb b/arb/intl_ja.arb
 index d6ff2b3..f7632bc 100644
 --- a/arb/intl_ja.arb
 +++ b/arb/intl_ja.arb
-@@ -1076,5 +1076,107 @@
+@@ -1076,5 +1076,112 @@
    "fakeipFilterDesc": "これらのドメインには Fake-IP ではなく実際の IP を返します。whitelist モードでは、これらだけが Fake-IP を使います。",
    "fallbackFilterGeositeDesc": "これらの GeoSite カテゴリのドメインは、直接 Fallback で解決します。",
    "fallbackFilterIpcidrDesc": "Nameserver がこれらの範囲の IP を返したときは、Fallback の結果を使います。",
@@ -432,7 +447,12 @@ index d6ff2b3..f7632bc 100644
 +  "photonCreateConfig": "Photon 設定を作成",
 +  "photonSettings": "Photon 設定",
 +  "photonSetupHint": "Photon 設定でネットワーク情報を入力して開始します。",
-+  "photonUseConfigFile": "既存の Photon YAML を使用",
++  "photonUseConfigFile": "外部 Photon YAML を参照",
++  "photonDataDirectory": "Photon データフォルダー",
++  "photonOpenDirectory": "フォルダーを開く",
++  "photonMigrateDirectory": "別のフォルダーへコピー",
++  "photonStorageHint": "Photon を停止してから、設定・ルール・ID を空のフォルダーへコピーして切り替えます。元のファイルは保持されます。管理者権限が必要な場合があります。",
++  "photonImportConfig": "Photon YAML をインポート",
 +  "photonStopToEdit": "設定を変更する前に Photon を停止してください。",
 +  "photonManagedZone": "ノードゾーン",
 +  "photonRootKey": "信頼するルート公開鍵",
@@ -454,7 +474,7 @@ diff --git a/arb/intl_ko.arb b/arb/intl_ko.arb
 index ead8d29..2ebd9f1 100644
 --- a/arb/intl_ko.arb
 +++ b/arb/intl_ko.arb
-@@ -1076,5 +1076,107 @@
+@@ -1076,5 +1076,112 @@
    "fakeipFilterDesc": "이 도메인에는 Fake-IP 대신 실제 IP를 반환합니다. whitelist 모드에서는 이 도메인만 Fake-IP를 사용합니다.",
    "fallbackFilterGeositeDesc": "이 GeoSite 분류의 도메인은 바로 Fallback으로 확인합니다.",
    "fallbackFilterIpcidrDesc": "Nameserver가 이 범위의 IP를 반환하면 Fallback 결과를 사용합니다.",
@@ -545,7 +565,12 @@ index ead8d29..2ebd9f1 100644
 +  "photonCreateConfig": "Photon 설정 만들기",
 +  "photonSettings": "Photon 설정",
 +  "photonSetupHint": "Photon 설정에서 네트워크 정보를 입력하여 시작하세요.",
-+  "photonUseConfigFile": "기존 Photon YAML 사용",
++  "photonUseConfigFile": "외부 Photon YAML 참조",
++  "photonDataDirectory": "Photon 데이터 폴더",
++  "photonOpenDirectory": "폴더 열기",
++  "photonMigrateDirectory": "다른 폴더로 복사",
++  "photonStorageHint": "Photon을 중지한 후 설정, 규칙, ID를 빈 폴더로 복사하고 전환합니다. 원본은 유지됩니다. 관리자 권한이 필요할 수 있습니다.",
++  "photonImportConfig": "Photon YAML 가져오기",
 +  "photonStopToEdit": "설정을 변경하기 전에 Photon을 중지하세요.",
 +  "photonManagedZone": "노드 영역",
 +  "photonRootKey": "신뢰하는 루트 공개 키",
@@ -567,7 +592,7 @@ diff --git a/arb/intl_ru.arb b/arb/intl_ru.arb
 index 58e77e7..442cef8 100644
 --- a/arb/intl_ru.arb
 +++ b/arb/intl_ru.arb
-@@ -1076,5 +1076,107 @@
+@@ -1076,5 +1076,112 @@
    "fakeipFilterDesc": "Эти домены получают реальные IP вместо Fake-IP. В режиме whitelist Fake-IP получают только они.",
    "fallbackFilterGeositeDesc": "Домены из этих категорий GeoSite сразу разрешаются через Fallback.",
    "fallbackFilterIpcidrDesc": "Если Nameserver возвращает IP из этих диапазонов, используется ответ Fallback.",
@@ -658,7 +683,12 @@ index 58e77e7..442cef8 100644
 +  "photonCreateConfig": "Создать конфигурацию Photon",
 +  "photonSettings": "Настройки Photon",
 +  "photonSetupHint": "Чтобы начать, укажите параметры сети в настройках Photon.",
-+  "photonUseConfigFile": "Использовать существующий YAML Photon",
++  "photonUseConfigFile": "Использовать внешний YAML Photon",
++  "photonDataDirectory": "Каталог данных Photon",
++  "photonOpenDirectory": "Открыть каталог",
++  "photonMigrateDirectory": "Копировать в другой каталог",
++  "photonStorageHint": "Остановите Photon. Настройки, правила и удостоверение копируются в пустой каталог, затем используется копия. Оригиналы сохраняются. Могут потребоваться права администратора.",
++  "photonImportConfig": "Импортировать YAML Photon",
 +  "photonStopToEdit": "Остановите Photon, прежде чем менять его настройки.",
 +  "photonManagedZone": "Зона узла",
 +  "photonRootKey": "Доверенный открытый ключ корня",
@@ -680,7 +710,7 @@ diff --git a/arb/intl_zh_CN.arb b/arb/intl_zh_CN.arb
 index b44010c..2c0e8eb 100644
 --- a/arb/intl_zh_CN.arb
 +++ b/arb/intl_zh_CN.arb
-@@ -1076,5 +1076,107 @@
+@@ -1076,5 +1076,112 @@
    "fakeipFilterDesc": "这些域名不使用 Fake-IP，返回真实 IP；过滤模式为 whitelist 时则只有它们使用 Fake-IP。",
    "fallbackFilterGeositeDesc": "属于这些 GeoSite 分类的域名直接使用 Fallback 解析。",
    "fallbackFilterIpcidrDesc": "Nameserver 返回这些网段内的 IP 时，改用 Fallback 的结果。",
@@ -771,7 +801,12 @@ index b44010c..2c0e8eb 100644
 +  "photonCreateConfig": "新建 Photon 配置",
 +  "photonSettings": "Photon 设置",
 +  "photonSetupHint": "打开 Photon 设置，填写网络信息即可开始使用。",
-+  "photonUseConfigFile": "选用已有 Photon YAML",
++  "photonUseConfigFile": "引用外部 Photon YAML",
++  "photonDataDirectory": "Photon 数据目录",
++  "photonOpenDirectory": "打开目录",
++  "photonMigrateDirectory": "迁移数据目录",
++  "photonStorageHint": "将配置、规则和身份复制到空目录后切换使用，原文件保留。请先停止 Photon；复制身份时可能请求管理员权限。",
++  "photonImportConfig": "导入 Photon YAML",
 +  "photonStopToEdit": "停止 Photon 后即可修改设置。",
 +  "photonManagedZone": "节点域名",
 +  "photonRootKey": "受信任的根公钥",
@@ -1120,3 +1155,24 @@ index 212e6ff..d73d8f3 100644
    flutter_test:
      sdk: flutter
    flutter_lints: ^6.0.0
+diff --git a/lib/common/path.dart b/lib/common/path.dart
+--- a/lib/common/path.dart
++++ b/lib/common/path.dart
+@@ -6,6 +6,8 @@
+ import 'package:path/path.dart';
+ import 'package:path_provider/path_provider.dart';
+ 
++import 'portable_data.dart';
++
+ class AppPath {
+   static AppPath? _instance;
+   late ResolveOnce<Directory> _dataDir;
+@@ -15,7 +17,7 @@
+ 
+   @visibleForTesting
+   static Future<Directory> Function() supportDirectory =
+-      getApplicationSupportDirectory;
++      photonApplicationDataDirectory;
+ 
+   @visibleForTesting
+   static Future<Directory> Function() temporaryDirectory =

@@ -50,7 +50,8 @@ void main() {
       find.widgetWithText(FilledButton, 'Photon settings'),
     );
     expect(settings.onPressed, isNotNull);
-    expect(find.text('Use existing Photon YAML'), findsOneWidget);
+    expect(find.text('Reference external Photon YAML'), findsOneWidget);
+    expect(find.text('Import Photon YAML'), findsOneWidget);
     expect(find.text('Start'), findsNothing);
     await tester.pumpWidget(const SizedBox());
     await controller.close();

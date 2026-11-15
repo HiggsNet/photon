@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:fl_clash/photon/backend.dart';
 import 'package:fl_clash/photon/controller.dart';
+import 'package:fl_clash/photon/preferences.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class FakeBackend implements PhotonBackend {
@@ -56,6 +57,16 @@ class FakeBackend implements PhotonBackend {
   }
 }
 
+class FailingPreferences implements PhotonPreferences {
+  @override
+  Future<String?> configPath() async => null;
+
+  @override
+  Future<void> saveConfigPath(String value) async {
+    throw StateError('Storage is unavailable');
+  }
+}
+
 void main() {
   late List<FakeBackend> backends;
   late PhotonController controller;
@@ -74,6 +85,21 @@ void main() {
     await controller.close();
     controller.dispose();
   });
+
+  test(
+    'failed persistence retains the original active configuration',
+    () async {
+      final owner = PhotonController(
+        createBackend: FakeBackend.new,
+        preferences: FailingPreferences(),
+      )..selectConfig('/original/config.yaml');
+      await owner.pickConfig(() async => '/copy/config.yaml');
+      expect(owner.configPath, '/original/config.yaml');
+      expect(owner.error, isA<StateError>());
+      await owner.close();
+      owner.dispose();
+    },
+  );
 
   test('safe mode does not create a backend', () async {
     await controller.start(allowed: false);

@@ -70,9 +70,6 @@ func Parse(text string) (*photonwindows.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !filepath.IsAbs(config.State.Path) {
-		return nil, errors.New("desktop configuration requires an absolute state.path")
-	}
 	return config, nil
 }
 

@@ -15,6 +15,7 @@ import 'controller.dart';
 import 'proxy_bridge.dart';
 import 'services.dart';
 import 'setup_view.dart';
+import 'storage_view.dart';
 import 'template_help.dart';
 
 enum _Page { overview, tunnels, peers, routes, services, diagnostics }
@@ -141,6 +142,8 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
                                     config,
                                     style: AppTextStyle.caption1.of(context),
                                   ),
+                                if (_page == _Page.overview)
+                                  PhotonStorage(owner: owner),
                                 if (config == null && !owner.hasLease)
                                   Text(l.photonSetupHint),
                                 if (owner.hasLease && _page == _Page.overview)
@@ -160,6 +163,14 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
                                         child: Text(l.photonSettings),
                                       ),
                                     if (!owner.hasLease) ...[
+                                      TextButton(
+                                        onPressed: canEdit
+                                            ? () => owner.pickConfig(
+                                                importPhotonConfig,
+                                              )
+                                            : null,
+                                        child: Text(l.photonImportConfig),
+                                      ),
                                       TextButton(
                                         onPressed: canEdit
                                             ? () => owner.pickConfig(
