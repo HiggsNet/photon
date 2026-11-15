@@ -35,6 +35,7 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
   bool _advanced = false;
   String? _templateConfig;
   Future<bool>? _hasTemplate;
+  final _expandedRoutes = <({String prefix, String source})>{};
 
   PhotonController get owner => widget.controller ?? photonController;
 
@@ -407,7 +408,7 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
     }).toList()..sort(_compareGatewayNames);
     return _PhotonTable(
       columns: [
-        TableColumn('gateway', l.photonGateway, flex: 2.6),
+        TableColumn('gateway', l.photonGateway, flex: 2.6, end: true),
         TableColumn('ready', l.status, flex: 1.15),
         const TableColumn('ike', 'IKE', flex: 1.4),
         const TableColumn('esp', 'ESP', flex: 0.7),
@@ -514,7 +515,7 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
           );
     return _PhotonTable(
       columns: [
-        TableColumn('peer', l.photonNode, flex: 3),
+        TableColumn('peer', l.photonNode, flex: 3, end: true),
         TableColumn('state', l.status, flex: 2),
       ],
       wideColumn: TableColumn('last_sync', l.photonLastSync, flex: 2),
@@ -567,6 +568,10 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
           child: Text(l.photonApply),
         ),
         Text(l.photonMultiTip),
+        Text(
+          l.photonServiceKindsHint,
+          style: AppTextStyle.caption1.of(context),
+        ),
         if (config != null && allowed) _templateControls(l, config),
         if (!ready) Text(l.photonProxyRequiresTunnel),
         if (ready && !owner.directoryFresh) Text(l.photonStale),
@@ -719,36 +724,52 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
 
   Widget _proxyTable(AppLocalizations l) {
     final endpoints = owner.directoryFresh ? owner.directory?.endpoints : null;
-    final byNode = <String, ({Set<String> regions, int count})>{};
+    final byNode = <String, Set<String>>{};
     for (final endpoint in endpoints ?? const <PhotonEndpoint>[]) {
-      final previous = byNode[endpoint.owner];
-      byNode[endpoint.owner] = (
-        regions: {...?previous?.regions, endpoint.region},
-        count: (previous?.count ?? 0) + 1,
-      );
+      (byNode[endpoint.owner] ??= {}).add(endpoint.region);
     }
+    final regions =
+        {
+          'local',
+          for (final published in byNode.values) ...published,
+          'global',
+        }.toList()..sort((a, b) {
+          if (a == b) return 0;
+          if (a == 'local' || b == 'global') return -1;
+          if (b == 'local' || a == 'global') return 1;
+          return a.compareTo(b);
+        });
     final nodes =
         byNode.keys
-            .where((node) => _matches([node, ...byNode[node]!.regions]))
+            .where(
+              (node) => _matches([
+                node,
+                ...byNode[node]!,
+                for (final region in byNode[node]!)
+                  _proxyRegionLabel(l, region),
+              ]),
+            )
             .toList()
-          ..sort((a, b) => b.compareTo(a));
+          ..sort(_compareGatewayNames);
     return _PhotonTable(
       columns: [
-        TableColumn('node', l.photonNode, flex: 3),
-        TableColumn('region', l.photonRegion, flex: 2),
-        TableColumn('count', l.photonEndpointCount, flex: 1),
+        TableColumn('node', l.photonNode, flex: 3, end: true),
+        for (final region in regions)
+          TableColumn('region-$region', _proxyRegionLabel(l, region), flex: 1),
       ],
       length: nodes.length,
       rowAt: (context, index) {
         final node = nodes[index];
-        final entry = byNode[node]!;
-        final regions = entry.regions.toList()..sort();
+        final published = byNode[node]!;
         return _PhotonTableRow(
           title: node,
           cells: [
             Text(node),
-            Text(regions.join(' · ')),
-            Text('${entry.count}'),
+            for (final region in regions)
+              _statusMark(
+                _proxyRegionLabel(l, region),
+                published.contains(region),
+              ),
           ],
         );
       },
@@ -769,6 +790,7 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
       );
       (routes[key] ??= []).add(route);
     }
+    _expandedRoutes.retainAll(routes.keys);
     final visible =
         routes.entries.where((group) {
           return group.value.any(
@@ -785,51 +807,64 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
           final prefix = a.key.prefix.compareTo(b.key.prefix);
           return prefix != 0 ? prefix : a.key.source.compareTo(b.key.source);
         });
-    return _PhotonTable(
-      columns: [
-        TableColumn('prefix', l.routeAddress, flex: 2.5),
-        TableColumn('next_hop', l.photonNextHop, flex: 3),
-        TableColumn('metric', l.photonMetric, flex: 1.2),
-        TableColumn('delay', l.delay, flex: 0.8),
-        TableColumn('paths', l.photonNextHopCount, flex: 1),
+    return SliverMainAxisGroup(
+      slivers: [
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Text(
+              l.photonRouteMetricHint,
+              style: AppTextStyle.caption1.of(context),
+            ),
+          ),
+        ),
+        _PhotonTable(
+          columns: [
+            TableColumn('prefix', l.routeAddress, flex: 2.5),
+            TableColumn('next_hop', l.photonNextHop, flex: 3),
+            TableColumn('metric', l.photonMetric, flex: 1.2, end: true),
+            TableColumn('paths', l.photonNextHopCount, flex: 1),
+          ],
+          wideColumn: TableColumn('source', l.source, flex: 2),
+          detailsTitle: l.photonRoutes,
+          truncated: status['routes_truncated'] == true,
+          length: visible.length,
+          rowAt: (context, index) {
+            final group = visible[index];
+            final paths = group.value..sort(_compareRoutePaths);
+            final bestMetric = _routeMetric(paths.first);
+            final nextHops = paths
+                .where((path) => _routeMetric(path) == bestMetric)
+                .map(_routeNextHop)
+                .toSet()
+                .join(' / ');
+            return _PhotonTableRow(
+              title: group.key.prefix,
+              id: group.key,
+              onPressed: () => setState(() {
+                if (!_expandedRoutes.add(group.key)) {
+                  _expandedRoutes.remove(group.key);
+                }
+              }),
+              expanded: _expandedRoutes.contains(group.key)
+                  ? _RoutePathsTable(
+                      key: ValueKey(('route-paths', group.key)),
+                      prefix: group.key.prefix,
+                      source: group.key.source,
+                      paths: paths,
+                    )
+                  : null,
+              cells: [
+                Text(group.key.prefix),
+                Tooltip(message: nextHops, child: Text(nextHops)),
+                Text(_text(paths.first['metric'])),
+                Text('${paths.length}'),
+                Text(group.key.source.isEmpty ? '—' : group.key.source),
+              ],
+            );
+          },
+        ),
       ],
-      wideColumn: TableColumn('source', l.source, flex: 2),
-      detailsTitle: l.photonRoutes,
-      truncated: status['routes_truncated'] == true,
-      length: visible.length,
-      rowAt: (context, index) {
-        final group = visible[index];
-        final paths = group.value..sort(_compareRoutePaths);
-        final bestMetric = _routeMetric(paths.first);
-        final nextHops = paths
-            .where((path) => _routeMetric(path) == bestMetric)
-            .map(_routeNextHop)
-            .toSet()
-            .join(' / ');
-        return _PhotonTableRow(
-          title: group.key.prefix,
-          id: group.key,
-          cells: [
-            Text(group.key.prefix),
-            Tooltip(message: nextHops, child: Text(nextHops)),
-            Text(_text(paths.first['metric'])),
-            Tooltip(message: l.photonUnprobed, child: const Text('—')),
-            Text('${paths.length}'),
-            Text(group.key.source.isEmpty ? '—' : group.key.source),
-          ],
-          details: [
-            (l.source, group.key.source),
-            for (var i = 0; i < paths.length; i++) ...[
-              ('${i + 1} · ${l.photonNextHop}', _routeNextHop(paths[i])),
-              ('${i + 1} · ${l.address}', _text(paths[i]['next_hop'])),
-              ('${i + 1} · ${l.photonOuter}', _outerFamily(paths[i])),
-              ('${i + 1} · ${l.photonMetric}', _text(paths[i]['metric'])),
-              ('${i + 1} · ${l.delay}', l.photonUnprobed),
-              ('${i + 1} · ${l.photonIdentity}', _text(paths[i]['origin'])),
-            ],
-          ],
-        );
-      },
     );
   }
 }
@@ -840,12 +875,16 @@ class _PhotonTableRow {
     required this.cells,
     this.id,
     this.details = const [],
+    this.onPressed,
+    this.expanded,
   });
 
   final String title;
   final Object? id;
   final List<Widget> cells;
   final List<(String, String)> details;
+  final VoidCallback? onPressed;
+  final Widget? expanded;
 }
 
 class _PhotonTable extends StatelessWidget {
@@ -906,7 +945,13 @@ class _PhotonTable extends StatelessWidget {
                 ),
                 child: cells([
                   for (final column in headers)
-                    Semantics(header: true, child: Text(column.label)),
+                    Semantics(
+                      header: true,
+                      child: Tooltip(
+                        message: column.label,
+                        child: Text(column.label),
+                      ),
+                    ),
                 ], header: true),
               ),
             ),
@@ -928,31 +973,52 @@ class _PhotonTable extends StatelessWidget {
                 final content = cells([
                   ...row.cells.take(columns.length + (showWide ? 1 : 0)),
                   if (title != null)
-                    const GlyphIcon(AppGlyphs.chevronForward, size: 14),
+                    GlyphIcon(
+                      row.onPressed == null
+                          ? AppGlyphs.chevronForward
+                          : row.expanded == null
+                          ? AppGlyphs.chevronDown
+                          : AppGlyphs.chevronUp,
+                      size: 14,
+                    ),
                 ]);
                 if (title == null) {
                   return ColoredBox(color: fill, child: content);
                 }
-                return PressSurface(
+                final button = PressSurface(
                   key: ValueKey(row.id ?? row.title),
                   fill: fill,
                   shape: AppShape.none,
-                  onPressed: () => showSheet<void>(
-                    context: context,
-                    builder: (context) => Scaffold(
-                      title: row.title,
-                      body: SingleChildScrollView(
-                        padding: EdgeInsets.fromLTRB(
-                          16,
-                          context.sectionsTopPadding,
-                          16,
-                          16,
+                  onPressed:
+                      row.onPressed ??
+                      () => showSheet<void>(
+                        context: context,
+                        builder: (context) => Scaffold(
+                          title: row.title,
+                          body: SingleChildScrollView(
+                            padding: EdgeInsets.fromLTRB(
+                              16,
+                              context.sectionsTopPadding,
+                              16,
+                              16,
+                            ),
+                            child: _DetailCard(
+                              title: title,
+                              lines: row.details,
+                            ),
+                          ),
                         ),
-                        child: _DetailCard(title: title, lines: row.details),
                       ),
-                    ),
-                  ),
                   child: content,
+                );
+                if (row.onPressed == null) return button;
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Semantics(expanded: row.expanded != null, child: button),
+                    if (row.expanded case final expanded?)
+                      ColoredBox(color: fill, child: expanded),
+                  ],
                 );
               },
             ),
@@ -962,6 +1028,97 @@ class _PhotonTable extends StatelessWidget {
     );
   }
 }
+
+class _RoutePathsTable extends StatelessWidget {
+  const _RoutePathsTable({
+    super.key,
+    required this.prefix,
+    required this.source,
+    required this.paths,
+  });
+
+  final String prefix;
+  final String source;
+  final List<Map<String, dynamic>> paths;
+
+  @override
+  Widget build(BuildContext context) {
+    final l = context.appLocalizations;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        spacing: 8,
+        children: [
+          Text(
+            '${l.routeAddress}: $prefix\n${l.source}: ${source.isEmpty ? '—' : source}',
+            style: AppTextStyle.caption1.of(context),
+          ),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final columns = [
+                TableColumn('peer', l.photonNode, flex: 3, end: true),
+                TableColumn('next_hop', l.photonNextHop, flex: 2.5),
+                TableColumn('outer', l.photonOuter, flex: 1),
+                TableColumn('metric', l.photonMetric, flex: 1, end: true),
+              ];
+              final widths = tableColumnWidths(columns, constraints.maxWidth);
+              final scale = MediaQuery.textScalerOf(context);
+              Widget cells(List<Widget> values, {bool header = false}) =>
+                  DefaultTextStyle.merge(
+                    style: AppTextStyle.caption1.of(
+                      context,
+                      emphasized: header,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    child: TableCells(
+                      columns: columns,
+                      widths: widths,
+                      height: scale.scale(header ? 32 : 36),
+                      inset: 6,
+                      cells: values,
+                    ),
+                  );
+              return Column(
+                children: [
+                  cells([
+                    for (final column in columns)
+                      Semantics(header: true, child: Text(column.label)),
+                  ], header: true),
+                  for (final path in paths)
+                    cells([
+                      Tooltip(
+                        message: _routeNextHop(path),
+                        child: Text(_routeNextHop(path)),
+                      ),
+                      Tooltip(
+                        message: _text(path['next_hop']),
+                        child: Text(_text(path['next_hop'])),
+                      ),
+                      Text(_outerFamily(path)),
+                      Text(_text(path['metric'])),
+                    ]),
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _proxyRegionLabel(AppLocalizations l, String region) => switch (region) {
+  'local' => l.local,
+  'cn' => l.photonChina,
+  'hk' => l.photonHongKong,
+  'jp' => l.photonJapan,
+  'sg' => l.photonSingapore,
+  'us' => l.photonUnitedStates,
+  'global' => l.global,
+  _ => region,
+};
 
 String _routeNextHop(Map<String, dynamic> route) =>
     _text(route['peer']).isNotEmpty

@@ -3,6 +3,7 @@ import 'package:fl_clash/photon/setup.dart';
 import 'package:fl_clash/photon/setup_view.dart';
 import 'package:fl_clash/photon/view.dart';
 import 'package:fl_clash/providers/app.dart';
+import 'package:fl_clash/ui/icons/icons.dart';
 import 'package:fl_clash/widgets/widgets.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -350,6 +351,10 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('gateway.catofes.'), findsOneWidget);
       expect(
+        tester.getTopRight(find.text('gateway.catofes.')).dx,
+        closeTo(tester.getTopRight(find.text('Gateway')).dx, 0.01),
+      );
+      expect(
         find.byKey(const ValueKey<Object>('gateway.catofes.')),
         findsOneWidget,
       );
@@ -404,6 +409,10 @@ void main() {
       await tester.tap(find.text('Gossip peers').first);
       await tester.pumpAndSettle();
       expect(find.text('gossip.catofes.'), findsOneWidget);
+      expect(
+        tester.getTopRight(find.text('gossip.catofes.')).dx,
+        closeTo(tester.getTopRight(find.text('Node')).dx, 0.01),
+      );
       expect(find.text('synced'), findsOneWidget);
       expect(find.text('retry_pending'), findsOneWidget);
       expect(find.text('revoked-sync.catofes.'), findsNothing);
@@ -482,7 +491,11 @@ void main() {
     expect(find.text('gateway-c.catofes.'), findsOneWidget);
     expect(find.text('gateway-b.catofes.'), findsNothing);
     expect(find.text('This sample is incomplete.'), findsOneWidget);
-    expect(find.byTooltip('Reachability not tested'), findsNWidgets(2));
+    expect(find.text('Delay'), findsNothing);
+    expect(
+      find.textContaining('Babel cost is a routing weight'),
+      findsOneWidget,
+    );
     await tester.enterText(find.byType(TextField), 'fe80::2');
     await tester.pumpAndSettle();
     expect(find.text('fd42:1::/64'), findsOneWidget);
@@ -490,11 +503,50 @@ void main() {
     expect(find.text('2'), findsOneWidget);
     await tester.tap(find.text('fd42:1::/64'));
     await tester.pumpAndSettle();
+    const routeKey = ValueKey<Object>((prefix: 'fd42:1::/64', source: '::/0'));
+    final expansion = find.byKey(
+      const ValueKey(('route-paths', (prefix: 'fd42:1::/64', source: '::/0'))),
+    );
+    expect(expansion, findsOneWidget);
+    expect(find.byType(Scaffold), findsOneWidget);
+    expect(
+      tester.getTopLeft(expansion).dy,
+      greaterThanOrEqualTo(tester.getBottomLeft(find.byKey(routeKey)).dy),
+    );
+    final rows = find.descendant(
+      of: expansion,
+      matching: find.byType(TableCells),
+    );
+    expect(rows, findsNWidgets(3));
     expect(find.text('gateway-a.catofes.'), findsNWidgets(2));
     expect(find.text('gateway-b.catofes.'), findsOneWidget);
-    expect(find.widgetWithText(SelectableText, 'fe80::2'), findsOneWidget);
+    expect(find.text('fe80::2'), findsNWidgets(2));
     expect(find.text('fe80::3'), findsOneWidget);
     expect(find.text('200'), findsOneWidget);
+    final routes = (backend.sample['babel'] as Map)['routes'] as List;
+    (routes[0] as Map)['metric'] = 90;
+    await controller.refresh();
+    await tester.pumpAndSettle();
+    expect(expansion, findsOneWidget);
+    expect(
+      (tester.widget<TableCells>(rows.at(1)).cells.last as Text).data,
+      '90',
+    );
+    expect(
+      (tester.widget<TableCells>(rows.at(2)).cells.last as Text).data,
+      '100',
+    );
+    tester.view.physicalSize = const Size(640, 900);
+    await tester.pumpAndSettle();
+    await Scrollable.ensureVisible(
+      tester.element(find.byKey(routeKey)),
+      alignment: 0.5,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(routeKey));
+    await tester.pumpAndSettle();
+    expect(expansion, findsNothing);
+    expect(find.byType(Scaffold), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -505,22 +557,102 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    backend.serviceSample = directoryFixture();
+    final publishers = {
+      'b-aws-hnd.catofes.': ['local', 'hk', 'global', 'sg', 'us', 'custom'],
+      'z-aws-hnd.catofes.': ['local', 'global'],
+      'a-aws-pek.catofes.': ['local', 'cn'],
+      'short.other.': ['local', 'hk'],
+      'q-aws-hnd.catofes.': ['jp'],
+    };
+    var endpointId = 0;
+    backend.serviceSample = {
+      ...directoryFixture(),
+      'services': [
+        for (final publisher in publishers.entries)
+          {
+            'id': '${publisher.key}/services/socks5',
+            'owner': publisher.key,
+            'status': 'active',
+            'endpoints': [
+              for (final region in publisher.value)
+                {
+                  'id': (++endpointId).toRadixString(16).padLeft(32, '0'),
+                  'region': region,
+                  'address': 'fd42:1::${endpointId.toRadixString(16)}',
+                  'port': 1080,
+                },
+            ],
+          },
+      ],
+    };
     await tester.pumpWidget(view());
     await tester.tap(find.text('Start'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Proxy services').first);
     await tester.pumpAndSettle();
-    expect(find.text('Endpoints'), findsOneWidget);
+    expect(find.text('Endpoints'), findsNothing);
+    expect(find.text('Local'), findsOneWidget);
+    expect(find.text('Hong Kong'), findsOneWidget);
+    expect(find.text('Mainland China'), findsOneWidget);
+    expect(find.text('Japan'), findsOneWidget);
+    expect(find.text('Singapore'), findsOneWidget);
+    expect(find.text('United States'), findsOneWidget);
+    expect(find.text('custom'), findsOneWidget);
+    expect(find.text('Global'), findsOneWidget);
     expect(find.text('Switch to Photon profile'), findsOneWidget);
     expect(find.text('Import YAML template'), findsOneWidget);
     expect(find.text('Edit YAML template'), findsOneWidget);
     final help = find.text('How templates work');
     expect(help, findsOneWidget);
     expect(find.byType(Checkbox), findsNothing);
-    expect(find.text('owner.catofes.'), findsOneWidget);
-    expect(find.text('cn · jp'), findsOneWidget);
-    expect(find.text('2'), findsOneWidget);
+    const ordered = [
+      'short.other.',
+      'a-aws-pek.catofes.',
+      'z-aws-hnd.catofes.',
+      'q-aws-hnd.catofes.',
+      'b-aws-hnd.catofes.',
+    ];
+    for (var i = 0; i < ordered.length; i++) {
+      final name = find.text(ordered[i]);
+      expect(name, findsOneWidget);
+      expect(
+        tester.getTopRight(name).dx,
+        closeTo(tester.getTopRight(find.text('Node')).dx, 0.01),
+      );
+      if (i > 0) {
+        expect(
+          tester.getCenter(name).dy,
+          greaterThan(tester.getCenter(find.text(ordered[i - 1])).dy),
+        );
+      }
+      final row = find.ancestor(of: name, matching: find.byType(TableCells));
+      final cells = tester.widget<TableCells>(row).cells;
+      expect(cells, hasLength(9));
+      for (final (index, region) in [
+        'local',
+        'cn',
+        'custom',
+        'hk',
+        'jp',
+        'sg',
+        'us',
+        'global',
+      ].indexed) {
+        final marker = cells[index + 1] as Tooltip;
+        expect(
+          marker.child is GlyphIcon,
+          publishers[ordered[i]]!.contains(region),
+        );
+      }
+    }
+    await tester.enterText(find.byType(TextField), 'Singapore');
+    await tester.pumpAndSettle();
+    expect(find.text('b-aws-hnd.catofes.'), findsOneWidget);
+    for (final node in ordered.take(ordered.length - 1)) {
+      expect(find.text(node), findsNothing);
+    }
+    await tester.enterText(find.byType(TextField), '');
+    await tester.pumpAndSettle();
     expect(find.textContaining('fd42:1::2'), findsNothing);
     await tester.tap(help);
     await tester.pumpAndSettle();
