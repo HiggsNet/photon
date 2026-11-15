@@ -1,0 +1,57 @@
+name: Prepare locked FlClash toolchain
+description: Prepare Photon overlays and install the Flutter, Go and Rust versions from upstream.env.
+runs:
+  using: composite
+  steps:
+    - name: Read locked toolchain versions
+      id: lock
+      shell: bash
+      run: |
+        set -euo pipefail
+        source app/photon-flclash/upstream.env
+        echo "go=$FLCLASH_GO_VERSION" >> "$GITHUB_OUTPUT"
+        echo "rust=$FLCLASH_RUST_VERSION" >> "$GITHUB_OUTPUT"
+        echo "flutter=$FLCLASH_FLUTTER_VERSION" >> "$GITHUB_OUTPUT"
+        echo "flutter-commit=$FLCLASH_FLUTTER_COMMIT" >> "$GITHUB_OUTPUT"
+        echo "PUB_CACHE=$RUNNER_TEMP/pub-cache" >> "$GITHUB_ENV"
+    - name: Prepare locked FlClash sources
+      shell: bash
+      run: bash app/photon-flclash/prepare.sh
+    - uses: actions/setup-go@v5
+      with:
+        go-version: ${{ steps.lock.outputs.go }}
+        cache: true
+        cache-dependency-path: |
+          build/photon-flclash/upstream/core/go.sum
+          build/photon-flclash/upstream/core/Clash.Meta/go.sum
+    - name: Cache Dart and Rust dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ${{ env.PUB_CACHE }}
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: flclash-deps-${{ runner.os }}-${{ hashFiles('app/photon-flclash/upstream.env', 'build/photon-flclash/upstream/pubspec.lock', 'build/photon-flclash/upstream/**/Cargo.lock') }}
+        restore-keys: flclash-deps-${{ runner.os }}-
+    - name: Install locked Rust toolchain
+      shell: bash
+      env:
+        FLCLASH_RUST_VERSION: ${{ steps.lock.outputs.rust }}
+      run: |
+        set -euo pipefail
+        rustup toolchain install "$FLCLASH_RUST_VERSION" --profile minimal
+        rustup default "$FLCLASH_RUST_VERSION"
+    - name: Install locked Flutter SDK
+      shell: bash
+      env:
+        FLCLASH_FLUTTER_VERSION: ${{ steps.lock.outputs.flutter }}
+        FLCLASH_FLUTTER_COMMIT: ${{ steps.lock.outputs.flutter-commit }}
+      run: |
+        set -euo pipefail
+        sdk="$RUNNER_TEMP/photon-flutter"
+        git clone --depth 1 --branch "$FLCLASH_FLUTTER_VERSION" https://github.com/flutter/flutter.git "$sdk"
+        test "$(git -C "$sdk" rev-parse HEAD)" = "$FLCLASH_FLUTTER_COMMIT"
+        echo "$sdk/bin" >> "$GITHUB_PATH"
+        dart="$sdk/bin/cache/dart-sdk/bin/dart"
+        if [[ $RUNNER_OS == Windows ]]; then dart="$dart.exe"; fi
+        echo "PHOTON_DART=$dart" >> "$GITHUB_ENV"

@@ -1,0 +1,181 @@
+name: Windows packages
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  metadata:
+    name: Validate version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select package version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="snapshot-$(git rev-parse --short=12 HEAD)"
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            version="v$(tr -d '\r\n' < VERSION)"
+            test "$GITHUB_REF_NAME" = "$version"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  portable:
+    name: Build native Windows amd64 ZIP
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PACKAGE_VERSION: ${{ needs.metadata.outputs.version }}
+      GOFLAGS: -trimpath
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build and test portable package
+        shell: bash
+        run: |
+          set -euo pipefail
+          make photon-windows-build GO_CACHE="$(go env GOCACHE)" WINDOWS_GO_MOD_CACHE="$(go env GOMODCACHE)"
+          PHOTON_WINDOWS_EXE="$PWD/build/windows-amd64/photon-windows.exe" \
+            WINTUN_DLL="$PWD/build/windows-amd64/wintun.dll" \
+            bash docs/scripts/windows-portable-build-test.sh
+          mkdir -p dist
+          cp build/photon-windows-amd64.zip "dist/photon-${PACKAGE_VERSION}-windows-amd64.zip"
+          cd dist
+          sha256sum *.zip > photon-windows-amd64.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: photon-windows-amd64
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            dist/*.zip
+            dist/*.sha256
+
+  native-tests:
+    name: Test Windows backend and native GUI
+    needs: [metadata, portable]
+    runs-on: windows-2022
+    timeout-minutes: 20
+    env:
+      PACKAGE_VERSION: ${{ needs.metadata.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: photon-windows-amd64
+          path: dist
+      - name: Test package verifier
+        shell: pwsh
+        run: ./docs/scripts/windows-portable-verify-test.ps1
+      - name: Verify and run portable executables
+        shell: pwsh
+        run: |
+          ./docs/scripts/windows-portable-verify.ps1 `
+            -Archive "dist/photon-$env:PACKAGE_VERSION-windows-amd64.zip" `
+            -Checksum dist/photon-windows-amd64.sha256 `
+            -OutputDirectory portable -RunVersionChecks
+      - name: Run Windows native tests
+        run: go test -count=1 ./pkg/core/gossip ./pkg/core/host ./internal/photonwindows ./app/photon-windows ./app/photon-windows-gui
+
+  frontend-tests:
+    name: Test Photon frontend on Linux
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: '4'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Flutter Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev libayatana-appindicator3-dev libglu1-mesa
+      - uses: ./.github/actions/setup-flclash
+      - name: Analyze and test Photon frontend
+        shell: bash
+        working-directory: build/photon-flclash/upstream
+        run: |
+          set -euo pipefail
+          flutter pub get
+          dart run intl_utils:generate
+          flutter analyze --no-fatal-infos
+          flutter test test/photon test/providers/action_test.dart test/providers/system_action_test.dart test/l10n test/lint
+
+  flclash:
+    name: Build and test Photon-FlClash amd64 ZIP
+    needs: [metadata, portable]
+    runs-on: windows-2022
+    timeout-minutes: 45
+    env:
+      PACKAGE_VERSION: ${{ needs.metadata.outputs.version }}
+      CARGO_BUILD_JOBS: '4'
+    steps:
+      - name: Configure Git for Windows sources
+        shell: bash
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.longpaths true
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-flclash
+      - uses: actions/download-artifact@v4
+        with:
+          name: photon-windows-amd64
+          path: backend-artifact
+      - name: Verify shared Photon backend
+        shell: pwsh
+        run: |
+          ./docs/scripts/windows-portable-verify.ps1 `
+            -Archive "backend-artifact/photon-$env:PACKAGE_VERSION-windows-amd64.zip" `
+            -Checksum backend-artifact/photon-windows-amd64.sha256 `
+            -OutputDirectory build/windows-amd64
+      - name: Build Photon-FlClash portable package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist | Out-Null
+          ./app/photon-flclash/build-windows.ps1 `
+            -Checkout build/photon-flclash/upstream `
+            -BackendDirectory build/windows-amd64 `
+            -ArchivePath "dist/photon-flclash-$env:PACKAGE_VERSION-windows-amd64.zip"
+          $archive = Get-Item "dist/photon-flclash-$env:PACKAGE_VERSION-windows-amd64.zip"
+          $hash = (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $($archive.Name)" | Set-Content -Encoding ascii dist/photon-flclash-windows-amd64.sha256
+      - name: Analyze Windows frontend
+        shell: bash
+        working-directory: build/photon-flclash/upstream
+        run: |
+          set -euo pipefail
+          flutter analyze --no-fatal-infos
+      - name: Verify FlClash package and backend identity
+        shell: pwsh
+        run: |
+          ./docs/scripts/windows-portable-verify.ps1 `
+            -Archive "dist/photon-flclash-$env:PACKAGE_VERSION-windows-amd64.zip" `
+            -Checksum dist/photon-flclash-windows-amd64.sha256 `
+            -OutputDirectory verified-flclash -BackendDirectory build/windows-amd64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: photon-flclash-windows-amd64
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            dist/*.zip
+            dist/*.sha256

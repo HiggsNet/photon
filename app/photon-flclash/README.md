@@ -62,6 +62,10 @@ flutter test test/photon test/providers/action_test.dart test/providers/system_a
 
 版本要求见 `upstream.env`：Flutter 3.47.6、FlClash Go 1.27.1、Rust 1.99.0；Photon 后台使用 Go 1.25。Windows 还需要 Visual Studio C++ 构建工具和 Windows SDK。
 
+GitHub Actions 的 **Windows packages** 可以手动运行，构建并上传原生客户端和 Photon-FlClash 两个 ZIP 及各自的 SHA256 校验文件。手动构建名称包含提交短 SHA，不发布 Release 或 Docker 镜像。推送版本标签时，**Release** 复用同一流程，在两个客户端及相关测试通过后将两个 ZIP 一起发布到 GitHub Release。
+
+FlClash 使用原生客户端产物中的同一份 Photon 后台和 Wintun，并在打包后核对二者摘要。工具链与上游版本均取自 `upstream.env`；流水线执行 Windows 后台/原生 GUI 测试、Flutter 静态检查和 Photon 前端回归。目前流水线生成未签名包。
+
 在具备工具链的 Windows 上执行：
 
 ```powershell

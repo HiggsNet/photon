@@ -7,8 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 jobs:
   tests:
@@ -24,82 +23,8 @@ jobs:
       - run: go vet ./...
 
   windows:
-    name: Build Windows amd64 portable archive
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Validate release tag
-        if: startsWith(github.ref, 'refs/tags/')
-        run: test "$GITHUB_REF_NAME" = "v$(tr -d '\r\n' < VERSION)"
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Build and validate portable archive
-        env:
-          GOOS: windows
-          GOARCH: amd64
-          CGO_ENABLED: "0"
-        run: |
-          set -eu
-          version=snapshot
-          if [ "${GITHUB_REF_TYPE:-}" = tag ]; then version="$GITHUB_REF_NAME"; fi
-          commit="$(git rev-parse --short=12 HEAD)"
-          describe="$(git describe --tags --always --dirty)"
-          built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          ldflags="-s -w -X main.buildCommit=${commit} -X main.buildDescribe=${describe} -X main.buildDirty=false -X main.buildTime=${built_at}"
-          mkdir -p build/windows-amd64 dist
-          go build -trimpath -ldflags "$ldflags" -o build/windows-amd64/photon-windows.exe ./app/photon-windows
-          go build -trimpath -ldflags "$ldflags" -o build/windows-amd64/photon-windows-gui.exe ./app/photon-windows-gui
-          bash docs/scripts/windows-portable-build.sh
-          PHOTON_WINDOWS_EXE="$PWD/build/windows-amd64/photon-windows.exe" WINTUN_DLL="$PWD/build/windows-amd64/wintun.dll" bash docs/scripts/windows-portable-build-test.sh
-          cp build/photon-windows-amd64.zip "dist/photon-${version}-windows-amd64.zip"
-          cd dist
-          sha256sum *.zip > photon-windows-amd64.sha256
-      - uses: actions/upload-artifact@v4
-        with:
-          name: photon-windows-amd64
-          path: |
-            dist/*.zip
-            dist/*.sha256
-
-  windows-native:
-    name: Test Windows amd64 natively
-    needs: windows
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      - uses: actions/download-artifact@v4
-        with:
-          name: photon-windows-amd64
-          path: dist
-      - name: Verify and run portable executable
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $checksum = (Get-Content dist/photon-windows-amd64.sha256 -Raw).Trim() -split '\s+', 2
-          $archive = Join-Path dist $checksum[1]
-          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $checksum[0]) { throw 'Archive checksum mismatch' }
-          Expand-Archive -LiteralPath $archive -DestinationPath portable
-          Push-Location portable
-          try {
-            foreach ($line in Get-Content SHA256SUMS) {
-              $parts = $line -split '\s+', 2
-              if ((Get-FileHash -LiteralPath $parts[1] -Algorithm SHA256).Hash.ToLowerInvariant() -ne $parts[0]) { throw "Checksum mismatch: $($parts[1])" }
-            }
-            & .\photon-windows.exe version
-            if ($LASTEXITCODE -ne 0) { throw 'Portable executable failed' }
-            & .\photon-windows-gui.exe version
-            if ($LASTEXITCODE -ne 0) { throw 'Portable GUI executable failed' }
-          } finally { Pop-Location }
-      - name: Run common and Windows native tests
-        run: go test -count=1 ./pkg/core/gossip ./pkg/core/host ./internal/photonwindows ./app/photon-windows ./app/photon-windows-gui
+    name: Build and test both Windows clients
+    uses: ./.github/workflows/windows.yml
 
   build:
     name: Build linux-${{ matrix.goarch }}
@@ -173,6 +98,9 @@ jobs:
 
   docker:
     name: Build Docker linux-${{ matrix.goarch }}
+    permissions:
+      contents: read
+      packages: write
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -246,8 +174,11 @@ jobs:
 
   docker-manifest:
     name: Publish Docker manifest
-    needs: [docker, tests, windows-native]
+    needs: [docker, tests, windows]
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Prepare image metadata
         id: meta
@@ -298,10 +229,12 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     needs:
       - tests
-      - windows-native
+      - windows
       - build
       - docker-manifest
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout release notes
         uses: actions/checkout@v4
@@ -319,7 +252,7 @@ jobs:
           if [ -f "$notes" ]; then
             cp "$notes" dist/RELEASE_NOTES.md
           else
-            printf '%s\n' 'Linux amd64/arm64、Windows amd64 安装包及 SHA256 校验文件见附件。' '含 -rc.N 的版本为预发布，不更新正式版或 Docker latest。' > dist/RELEASE_NOTES.md
+            printf '%s\n' 'Linux amd64/arm64、Windows 原生客户端、Photon-FlClash amd64 安装包及 SHA256 校验文件见附件。' '含 -rc.N 的版本为预发布，不更新正式版或 Docker latest。' > dist/RELEASE_NOTES.md
           fi
 
       - name: Publish release

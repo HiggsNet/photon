@@ -53,6 +53,8 @@ Windows 11 amd64 可下载 [v0.7.1 便携包](https://github.com/HiggsNet/photon
 
 便携包同时提供独立后台 `photon-windows.exe` 与原生界面 `photon-windows-gui.exe`。从原生界面启动并管理后台，升级时保留原有配置与数据库。
 
+需要测试当前源码时，可在 GitHub Actions 手动运行 **Windows packages**，下载原生客户端和 Photon-FlClash 两个 ZIP 及校验文件。版本标签的 Release 流程会复用该构建，在检查通过后发布两个包。FlClash 的本地构建和使用方式见 [客户端说明](app/photon-flclash/README.md)。
+
 其他安装方式：
 
 - **Docker**：`make docker-build` 构建基于 Ubuntu 24.04 的运行时镜像，镜像同时包含 `photon` 与 `photon-services`；真实数据面（IPsec/XFRM、BIRD、firewall、netns）仍需要 `--privileged --network host` 和兼容的宿主 Linux 内核。
