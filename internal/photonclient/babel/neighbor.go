@@ -1,11 +1,15 @@
 package babel
 
 import (
+	"math/bits"
 	"net/netip"
 	"time"
 )
 
-const helloInterval = 4 * time.Second
+const (
+	helloInterval = 4 * time.Second
+	helloWindow   = 16
+)
 
 // Neighbor is the Babel control state of one authenticated point-to-point peer.
 // The daemon owns it serially. Its lifetime is the logical gateway attachment:
@@ -23,6 +27,24 @@ type helloState struct {
 	seqno    uint16
 	expires  time.Time
 	interval time.Duration
+	received time.Time
+	history  uint16
+	count    uint16
+}
+
+// reception estimates beta from at most 16 sequence positions. Project missed
+// Hellos after 1.5 intervals, allowing sender jitter, without mutating the stored
+// sequence history. The next received sequence accounts for the actual gaps,
+// so timer losses cannot be counted twice or repaired by duplicate packets.
+func (h *helloState) reception(now time.Time) (received, expected uint32) {
+	if h.count == 0 || h.interval == 0 || !now.Before(h.expires) {
+		return 0, 0
+	}
+	missed := time.Duration(0)
+	if elapsed := now.Sub(h.received); elapsed >= h.interval+h.interval/2 {
+		missed = min(helloWindow, (elapsed-h.interval/2)/h.interval)
+	}
+	return uint32(bits.OnesCount16(h.history << uint(missed))), uint32(min(helloWindow, h.count+uint16(missed)))
 }
 
 // NeighborBatch contains only observations requiring the caller's current
@@ -52,7 +74,7 @@ func (n *Neighbor) Tick(now time.Time) []Message {
 	n.seqno++
 	out := []Message{{Type: TLVHello, Seqno: n.seqno, Interval: uint16(helloInterval / (10 * time.Millisecond))}}
 	if n.heard(now) {
-		out = append(out, n.ihu())
+		out = append(out, n.ihu(now))
 	}
 	if n.Cost(now) == MetricInfinity {
 		out = append(out, Message{Type: TLVRouteRequest, Wildcard: true})
@@ -66,13 +88,32 @@ func (n *Neighbor) Cost(now time.Time) uint16 {
 	if !n.heard(now) || !now.Before(n.ihuUntil) || n.txCost == MetricInfinity {
 		return MetricInfinity
 	}
-	return max(n.rxCost, n.txCost)
+	received, expected := n.reception(now)
+	if received == 0 {
+		return MetricInfinity
+	}
+	// As in BIRD's wireless ETX mode, IHU already includes the reverse
+	// direction's loss estimate. Divide by our reception probability once.
+	return uint16(min(uint32(MetricInfinity), uint32(max(1, n.txCost))*expected/received))
 }
 func (n *Neighbor) heard(now time.Time) bool {
 	return now.Before(n.hello[0].expires) || now.Before(n.hello[1].expires)
 }
-func (n *Neighbor) ihu() Message {
-	return Message{Type: TLVIHU, Address: n.peer, Metric: n.rxCost, Interval: uint16(helloInterval / (10 * time.Millisecond))}
+func (n *Neighbor) reception(now time.Time) (received, expected uint32) {
+	// Multicast-sequence Hellos remain the ETX signal even when transported
+	// by unicast inside ESP. Separate unicast-sequence Hellos must not hide
+	// their loss. Retain support for peers that only send unicast Hellos.
+	if n.hello[0].count != 0 {
+		return n.hello[0].reception(now)
+	}
+	return n.hello[1].reception(now)
+}
+func (n *Neighbor) ihu(now time.Time) Message {
+	metric := MetricInfinity
+	if received, expected := n.reception(now); received != 0 {
+		metric = uint16(min(uint32(MetricInfinity), uint32(n.rxCost)*expected/received))
+	}
+	return Message{Type: TLVIHU, Address: n.peer, Metric: metric, Interval: uint16(helloInterval / (10 * time.Millisecond))}
 }
 func hold(interval uint16) time.Duration {
 	return time.Duration(interval) * 10 * time.Millisecond * 7 / 2
@@ -107,7 +148,18 @@ func (n *Neighbor) Receive(packet []byte, now time.Time) (NeighborBatch, error) 
 			if now.Before(h.expires) && int16(m.Seqno-h.seqno) <= 0 {
 				continue
 			}
+			if !now.Before(h.expires) {
+				*h = helloState{}
+			}
+			if h.count == 0 {
+				h.history, h.count = 1, 1
+			} else {
+				gap := m.Seqno - h.seqno
+				h.history = h.history<<gap | 1
+				h.count = min(helloWindow, h.count+min(gap, helloWindow))
+			}
 			h.seqno = m.Seqno
+			h.received = now
 			if m.Interval != 0 {
 				h.interval = time.Duration(m.Interval) * 10 * time.Millisecond
 				h.expires = now.Add(h.interval * 7 / 2)
@@ -128,7 +180,7 @@ func (n *Neighbor) Receive(packet []byte, now time.Time) (NeighborBatch, error) 
 		}
 	}
 	if heardHello {
-		batch.Replies = append(batch.Replies, n.ihu())
+		batch.Replies = append(batch.Replies, n.ihu(now))
 	}
 	isUp := n.Cost(now) != MetricInfinity
 	if isUp && !wasUp {

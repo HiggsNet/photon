@@ -80,8 +80,8 @@ func TestNeighborLeasesHelloWrapAndUnscheduled(t *testing.T) {
 		t.Fatal("hello boundary not expired")
 	}
 	send(deadline, Message{Type: TLVHello, Unicast: true, Seqno: 7, Interval: 100})
-	if n.Cost(deadline) != 200 {
-		t.Fatal("unicast hello did not establish reachability")
+	if !n.heard(deadline) || n.Cost(deadline) != MetricInfinity {
+		t.Fatal("unicast reachability masked expired multicast ETX history")
 	}
 	if n.Cost(now.Add(6500*time.Millisecond)) != MetricInfinity {
 		t.Fatal("IHU exact deadline retained")

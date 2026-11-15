@@ -42,13 +42,17 @@ fi
   ip netns add bird
   ip link add leafph type veth peer name birdph
   ip link set birdph netns bird
+  ip link set leafph addrgenmode none
   ip link set leafph up
   ip -6 addr flush dev leafph scope link
   ip -6 addr add fe80::1/64 dev leafph nodad
-  ip netns exec bird ip link set lo up
-  ip netns exec bird ip link set birdph up
-  ip netns exec bird ip -6 addr flush dev birdph scope link
-  ip netns exec bird ip -6 addr add fe80::2/64 dev birdph nodad
+  # Only switch the network namespace. ip netns exec also remounts /sys,
+  # which some container environments disallow even for privileged fixtures.
+  nsenter --net=/run/netns/bird -- ip link set lo up
+  nsenter --net=/run/netns/bird -- ip link set birdph addrgenmode none
+  nsenter --net=/run/netns/bird -- ip link set birdph up
+  nsenter --net=/run/netns/bird -- ip -6 addr flush dev birdph scope link
+  nsenter --net=/run/netns/bird -- ip -6 addr add fe80::2/64 dev birdph nodad
   cat >/tmp/bird.conf <<CONF
 log stderr all;
 router id 10.0.0.2;
@@ -59,12 +63,12 @@ protocol babel leaf_interop {
  randomize router id yes;
  ipv4 { import all; export all; };
  ipv6 { import all; export all; };
- interface "birdph" { type wired; hello interval 1 s; update interval 4 s; rtt cost 0; };
+ interface "birdph" { type wireless; rxcost 100; hello interval 1 s; update interval 4 s; rtt cost 0; };
 }
 CONF
   "$BIRD_BIN" -p -c /tmp/bird.conf
-  ip netns exec bird "$BIRD_BIN" -f -c /tmp/bird.conf -s /tmp/bird.ctl &
+  nsenter --net=/run/netns/bird -- "$BIRD_BIN" -f -c /tmp/bird.conf -s /tmp/bird.ctl &
   bird_pid=$!
   trap '\''kill "$bird_pid" 2>/dev/null || true; wait "$bird_pid" 2>/dev/null || true; ip netns del bird; ip link del leafph 2>/dev/null || true'\'' EXIT
-  BIRD_PID="$bird_pid" PHOTON_BABEL_INTEROP=1 /babel.test -test.run "^TestBIRDLeafInterop$" -test.v -test.timeout 75s
+  BIRD_PID="$bird_pid" PHOTON_BABEL_INTEROP=1 /babel.test -test.run "^TestBIRDLeafInterop$" -test.v -test.timeout 125s
   '

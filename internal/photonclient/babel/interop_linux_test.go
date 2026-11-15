@@ -83,6 +83,8 @@ func TestBIRDLeafInterop(t *testing.T) {
 		}
 		return string(out)
 	}
+	dropHellos := false
+	helloCount := 0
 	pump := func(until time.Time, ready func() bool) bool {
 		t.Helper()
 		buf := make([]byte, MaxPacket)
@@ -97,6 +99,22 @@ func TestBIRDLeafInterop(t *testing.T) {
 				source, ok := netip.AddrFromSlice(from.IP)
 				if !ok {
 					t.Fatal(from)
+				}
+				if dropHellos {
+					messages, e := Decode(buf[:n], source)
+					if e != nil {
+						t.Fatal(e)
+					}
+					drop := false
+					for _, m := range messages {
+						if m.Type == TLVHello && !m.Unicast {
+							helloCount++
+							drop = helloCount%4 == 0
+						}
+					}
+					if drop {
+						continue
+					}
 				}
 				packet, e := BuildPacket(source, neighborLocal, buf[:n])
 				if e != nil {
@@ -159,6 +177,43 @@ func TestBIRDLeafInterop(t *testing.T) {
 		t.Fatalf("production observer did not bind local BIRD identity: %q %v", identity, err)
 	}
 	t.Log("BIRD Babel entries:\n" + entries)
+	// Lose one in four BIRD Hellos without touching the host network. Both
+	// directions must reflect this loss: the leaf divides by beta, while BIRD
+	// consumes the leaf's inflated IHU. RTT is disabled in this fixture.
+	dropHellos = true
+	if !pump(time.Now().Add(30*time.Second), func() bool {
+		if helloCount < 17 || leaf.neighbor.Cost(time.Now()) < 125 || leaf.neighbor.Cost(time.Now()) == MetricInfinity {
+			return false
+		}
+		for _, line := range strings.Split(birdc("show babel neighbors leaf_interop"), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 3 || fields[0] != neighborLocal.String() {
+				continue
+			}
+			metric, e := strconv.Atoi(fields[2])
+			return e == nil && metric >= 125 && metric < int(MetricInfinity)
+		}
+		return false
+	}) {
+		t.Fatalf("ETX did not propagate across real BIRD: leaf=%d IHU=%d\n%s", leaf.neighbor.Cost(time.Now()), leaf.neighbor.ihu(time.Now()).Metric, birdc("show babel neighbors leaf_interop"))
+	}
+	t.Logf("25%% Hello loss: leaf cost=%d IHU=%d\n%s", leaf.neighbor.Cost(time.Now()), leaf.neighbor.ihu(time.Now()).Metric, birdc("show babel neighbors leaf_interop"))
+	dropHellos = false
+	if !pump(time.Now().Add(25*time.Second), func() bool {
+		if leaf.neighbor.Cost(time.Now()) != 100 || leaf.neighbor.ihu(time.Now()).Metric != 100 {
+			return false
+		}
+		for _, line := range strings.Split(birdc("show babel neighbors leaf_interop"), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) >= 3 && fields[0] == neighborLocal.String() && fields[2] == "100" {
+				return true
+			}
+		}
+		return false
+	}) {
+		t.Fatalf("ETX did not recover after loss stopped: leaf=%d\n%s", leaf.neighbor.Cost(time.Now()), birdc("show babel neighbors leaf_interop"))
+	}
+	t.Log("ETX recovered to 100 in both directions")
 	// Explicit requests for learned destinations must produce only retractions.
 	req := Message{Type: TLVRouteRequest, Prefix: netip.MustParsePrefix("198.51.100.0/24")}
 	payload, _ := Encode([]Message{req})

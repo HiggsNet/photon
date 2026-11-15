@@ -31,6 +31,38 @@ source prefix 不授权额外本机地址，也不允许转发。双栈、fallba
 周期更新、请求应答、路由刷新/撤回和当前授权。最多 256 个本地 origin、4096 条 learned route。
 不导出 learned route，不做 transit。网关 attachment 变化时重建，普通 SA rekey 保留邻居状态。
 
+#### ETX 丢包代价（2026-11-15）
+
+Windows leaf 使用最近 16 个 Hello 序号位置估算接收成功率 `beta`。初始窗口只包含
+实际可观察的位置，不把启动前的 Hello 当作丢包。与 BIRD `type wireless` 相同，
+发出的 IHU 代价为 `本地基础接收代价 / beta`，本跳选路代价为 `对端 IHU 代价 / beta`，
+采用整数除法并在 65535 饱和；不再取本地与对端代价的最大值。对端 IHU 已包含反向
+丢包估计，因此只需再计入本地接收方向。双方基础代价均为 100 时，无丢包仍为 100；
+单向接收成功率 75% 时约为 133，双方均为 75% 时约为 177（有整数舍入）。
+
+丢失的序号会降低评分；静默超过 1.5 个 Hello 间隔后，即使没有收到下一包、没有执行
+Tick，路由查询也会计入预计丢失的位置。预计丢包不修改实际序号历史，迟到的连续序号
+不会重复计算丢包。Hello/IHU 的既有 3.5 倍间隔硬过期边界保持；重复/旧序号不刷新
+租约、不改善历史，过期后重新建立历史。非周期 Hello（interval 0）不延长 Hello 租约。
+
+以 multicast 序号流估算 ETX，即使报文实际在 ESP 内单播传输；独立 unicast 序号流
+不能掩盖 multicast 丢包或过期。仅发送 unicast Hello 的对端使用独立历史作为兼容回退。
+不引入 RTT 测量、时间戳或 RTT 附加代价。metric 仍累加对端公告，健康链路上的
+100/200 属于正常结果，并非毫秒数或严格跳数。
+
+确定性回归覆盖双向不对称丢包、16 位回绕、静默丢包、迟到/间隔变化、恢复、
+重复包、窗口上限、饱和、过期重启及不经新 Update 的候选/已安装路由代价变化。
+下述隔离 BIRD 互通脚本使用 wireless ETX、基础值 100、RTT 关闭；额外注入 25% 的
+BIRD Hello 丢包，检查双方代价升高及停止丢包后的恢复。此前的验收结果仍是历史证据。
+
+本次 BIRD 2.19.3 隔离互通通过（51.11 秒）：25% Hello 丢包时 leaf 本跳代价、
+发出 IHU 和 BIRD 邻居代价均为 133；恢复后双方回到 100。本地双栈公告、撤回与
+静默超时也通过。日志：`/tmp/photon-etx-bird-interop.log`。使用本机已有的
+`PHOTON_BIRD_IMAGE=photon-ubuntu-compat:local-20261113-tools` 和
+`PHOTON_BIRD_NIX_PACKAGE=/nix/store/zc8bz6xav8gk7dawqy15csvj5npqalhd-bird-2.19.3`。
+相关 `internal/photonclient/...`、`internal/photonwindows` race 回归、vet 及 Windows
+console/GUI amd64 交叉构建通过；未部署或执行本次改动后的 Windows 原生验收。
+
 包测试、race 和 vet 已通过，覆盖单向链路、过期、撤回、无授权、伪造本机 ID、上限和请求限频。
 
 真实 BIRD 2.19.1 在 `--network none` 隔离容器的 veth/netns 中通过：Hello/IHU 收敛、
@@ -59,7 +91,7 @@ StrongSwan 的 link-local 控制地址现允许同一 CHILD SA 的 IPv4/IPv6 业
 往返验收，日志为 `/tmp/photon-linklocal-dual-esp.log` 与 `-nix.log`。
 
 本次复验命令如下，需要隔离容器所需权限；Nix 包路径和镜像可换为具备 `bird`、`birdc`、
-`ip`、`bash` 的测试环境。脚本不修改宿主机路由，退出检查容器已清理。
+`ip`、`nsenter`、`bash` 的测试环境。脚本不修改宿主机路由，退出检查容器已清理。
 
 ```sh
 GOCACHE=/tmp/photon-gocache GOMODCACHE=/home/herbertqiao/go/pkg/mod \
