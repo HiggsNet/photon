@@ -1,5 +1,11 @@
 # Linux / Windows 发布与测试记录
 
+## v0.7.3 发布验收
+
+`v0.7.3` 包含下述 Photon-FlClash 更新，并修复 Windows 首次初始化 Flutter
+时的版本 JSON 解析失败。`v0.7.2` 的正式发布流程未完成；下载与验证范围见
+[v0.7.3 发布说明](../releases/v0.7.3.md)。
+
 ## v0.7.2 发布验收
 
 `v0.7.2` 主要更新 Photon-FlClash，Linux 沿用 v0.7.1 的 XFRM 挂起保护。

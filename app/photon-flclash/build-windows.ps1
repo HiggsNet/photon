@@ -73,8 +73,11 @@ foreach ($file in @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'overlay
     $staged = Join-Path $Checkout $relative
     if (!(Test-Path -LiteralPath $staged) -or (Get-FileHash -LiteralPath $staged).Hash -cne (Get-FileHash -LiteralPath $file.FullName).Hash) { throw "Integration source mismatch: $relative" }
 }
-$version = (& flutter --version --machine | Out-String | ConvertFrom-Json)
+# A fresh Windows SDK prints pub-upgrade progress on stdout during bootstrap.
+Invoke-BuildTool 'flutter' @('--version')
+$versionText = & flutter --version --machine | Out-String
 Check-Exit 'Read Flutter version'
+$version = $versionText | ConvertFrom-Json
 if ($version.frameworkVersion -cne $lock.FLCLASH_FLUTTER_VERSION -or $version.frameworkRevision -cne $lock.FLCLASH_FLUTTER_COMMIT) { throw 'Flutter version mismatch' }
 $goVersion = & go env GOVERSION
 Check-Exit 'Read Go version'
