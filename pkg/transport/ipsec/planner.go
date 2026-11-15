@@ -27,6 +27,7 @@ const (
 	SkipOverlayIntentMismatch = "overlay_intent_mismatch"
 	SkipPolicyDenied          = "policy_denied"
 	SkipPolicyNoMatch         = "policy_no_match"
+	SkipRemotePolicy          = "remote_policy"
 	SkipMaxPeers              = "max_peers"
 	SkipPlannerError          = "planner_error"
 )
@@ -157,6 +158,15 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 	intent := records.OverlayIntents[group.ID]
 	if intent == nil {
 		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipMissingOverlayIntent, Detail: group.ID}, linkIndex, nil
+	}
+	if len(intent.Connect) > 0 || len(intent.Deny) > 0 {
+		localRecords, err := ExtractNodeRecords(ns, local, now)
+		if err != nil {
+			return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipMissingRecords, Detail: "local policy identity: " + err.Error()}, linkIndex, nil
+		}
+		if err := intent.CheckPeerPolicy(local, localRecords); err != nil {
+			return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipRemotePolicy, Detail: err.Error()}, linkIndex, nil
+		}
 	}
 	if intent.Provider != "" && intent.Provider != group.Provider {
 		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipOverlayIntentMismatch, Detail: fmt.Sprintf("provider=%s", intent.Provider)}, linkIndex, nil
@@ -559,25 +569,36 @@ func filterContactPointsByFamily(points []ContactPoint, allowedFamilies []string
 }
 
 func applyMeshPolicyRules(group LinkGroupSpec, peer zone.ZonePath, records *NodeRecords, connectRules, denyRules []MeshPolicyRule) (LinkGroupSpec, bool, PlanSkip, error) {
+	rule, reason, detail := selectMeshPolicyRule(peer, records, connectRules, denyRules)
+	if reason != "" {
+		return LinkGroupSpec{}, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: reason, Detail: detail}, nil
+	}
+	if rule == nil {
+		return group, true, PlanSkip{}, nil
+	}
+	effective := applyMeshRuleToGroup(group, *rule)
+	if err := effective.Validate(); err != nil {
+		return LinkGroupSpec{}, false, PlanSkip{}, err
+	}
+	return effective.Normalized(), true, PlanSkip{}, nil
+}
+
+func selectMeshPolicyRule(peer zone.ZonePath, records *NodeRecords, connectRules, denyRules []MeshPolicyRule) (*MeshPolicyRule, string, string) {
 	for _, rule := range denyRules {
 		if meshRuleMatchesPeer(rule, peer, records) {
-			return LinkGroupSpec{}, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipPolicyDenied, Detail: rule.Raw}, nil
+			return nil, SkipPolicyDenied, rule.Raw
 		}
 	}
 	if len(connectRules) == 0 {
-		return group, true, PlanSkip{}, nil
+		return nil, "", ""
 	}
 	for _, rule := range connectRules {
 		if !meshRuleMatchesPeer(rule, peer, records) {
 			continue
 		}
-		effective := applyMeshRuleToGroup(group, rule)
-		if err := effective.Validate(); err != nil {
-			return LinkGroupSpec{}, false, PlanSkip{}, err
-		}
-		return effective.Normalized(), true, PlanSkip{}, nil
+		return &rule, "", ""
 	}
-	return LinkGroupSpec{}, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipPolicyNoMatch}, nil
+	return nil, SkipPolicyNoMatch, ""
 }
 
 func meshRuleMatchesPeer(rule MeshPolicyRule, peer zone.ZonePath, records *NodeRecords) bool {

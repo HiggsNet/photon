@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,37 @@ import (
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
+
+func TestGatewayPlanHonorsAdvertisedPeerPolicyBeforeLeafPublication(t *testing.T) {
+	config, view, now, put := gatewayPlanFixture(t)
+	peer := config.Gateway.AllowedZones[0]
+	intent, err := ipsec.ParseOverlayIntentRecord(view.State.Network.Zones[peer].Records[ipsec.OverlayIntentRecordKey("main")])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []struct {
+		connect, deny []string
+		rejected      bool
+	}{
+		{},
+		{connect: []string{"strongswan://other.catofes."}, rejected: true},
+		{connect: []string{"strongswan://windows.catofes.?role=out&family=ipv4"}},
+		{connect: []string{"strongswan://windows.catofes.?role=in"}, rejected: true},
+		{connect: []string{"strongswan://*.catofes."}, deny: []string{"strongswan://windows.catofes."}, rejected: true},
+		{},
+	} {
+		intent.Connect, intent.Deny = step.connect, step.deny
+		put(peer, ipsec.OverlayIntentRecordKey("main"), ipsec.RecordTypeOverlayIntent, intent)
+		plan := planGateway(t.Context(), config, view, now, gatewayResolvedHosts{"gateway.example": {{IP: net.ParseIP("192.0.2.4")}}})
+		if step.rejected {
+			if plan.Selected != nil || len(plan.Candidates) != 1 || !strings.Contains(plan.Candidates[0].Rejected, "gateway policy:") {
+				t.Fatalf("policy not rejected: %+v", plan)
+			}
+		} else if plan.Selected == nil {
+			t.Fatalf("allowed gateway rejected: %+v", plan)
+		}
+	}
+}
 
 func gatewayPlanFixture(t testing.TB) (*Config, corestate.View, time.Time, func(zone.ZonePath, string, string, any)) {
 	t.Helper()

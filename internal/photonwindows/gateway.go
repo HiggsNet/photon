@@ -127,6 +127,14 @@ func gatewayContacts(ctx context.Context, config *Config, view corestate.View, p
 		return fail(err.Error())
 	}
 	profile, key := records.Profile, records.TransportKey
+	// Check before resolving contacts, including before this leaf has published
+	// its transport identity. Windows leaves always advertise this capability.
+	localRecords := &ipsec.NodeRecords{Profile: &ipsec.ProfileRecord{
+		Role: ipsec.RoleOut, AddressFamilies: []string{ipsec.FamilyIPv4, ipsec.FamilyIPv6},
+	}}
+	if err := records.OverlayIntents[config.Overlay.ID].CheckPeerPolicy(config.ManagedZone, localRecords); err != nil {
+		return fail("gateway policy: " + err.Error())
+	}
 	if !profile.Enabled || (profile.Role != ipsec.RoleIn && profile.Role != ipsec.RoleBoth) {
 		return fail("gateway does not accept inbound connections")
 	}

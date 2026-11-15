@@ -9,6 +9,64 @@ import (
 	"time"
 )
 
+func TestPlanTransportLinksHonorsRemotePolicyUpdates(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	local, peer := zone.ZonePath("node-a.catofes."), zone.ZonePath("node-b.catofes.")
+	for _, role := range []string{RoleOut, RoleIn, RoleBoth} {
+		t.Run(role, func(t *testing.T) {
+			ns := zone.NewNetworkState()
+			for _, path := range []zone.ZonePath{local, peer} {
+				addIPsecNode(t, ns, path, RoleBoth, []AddressAdvertisement{{ID: "public", Source: SourceManualAddress, Address: "198.51.100.10"}}, now)
+			}
+			setIPsecNATProfile(t, ns, local, role, NATProfile{}, now)
+			group := LinkGroupSpec{ID: "ipsec-main"}
+			otherRole := RoleOut
+			if role == RoleOut {
+				otherRole = RoleIn
+			}
+			intent, err := ParseOverlayIntentRecord(ns.Zones[peer].Records[OverlayIntentRecordKey(group.ID)])
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, step := range []struct {
+				name          string
+				connect, deny []string
+				localDeny     bool
+				wantSkip      string
+			}{
+				{name: "legacy"},
+				{name: "remote excludes local", connect: []string{"strongswan://node-c.catofes."}, wantSkip: SkipRemotePolicy},
+				{name: "remote permits local role", connect: []string{"strongswan://node-a.catofes.?role=" + role + "&family=ipv4"}},
+				{name: "remote role mismatch", connect: []string{"strongswan://node-a.catofes.?role=" + otherRole}, wantSkip: SkipRemotePolicy},
+				{name: "invalid remote policy", connect: []string{"strongswan://node-a.catofes.?role=invalid"}, wantSkip: SkipMissingRecords},
+				{name: "deny takes precedence", connect: []string{"strongswan://*.catofes."}, deny: []string{"strongswan://node-a.catofes."}, wantSkip: SkipRemotePolicy},
+				{name: "policy removed"},
+				{name: "local still denies", connect: []string{"strongswan://node-a.catofes."}, localDeny: true, wantSkip: SkipPolicyDenied},
+			} {
+				t.Run(step.name, func(t *testing.T) {
+					intent.Connect, intent.Deny = step.connect, step.deny
+					ns.Zones[peer].Records[OverlayIntentRecordKey(group.ID)] = record(t, peer, OverlayIntentRecordKey(group.ID), RecordTypeOverlayIntent, intent)
+					group.DenyRules = nil
+					if step.localDeny {
+						group.DenyRules = []string{"strongswan://node-b.catofes."}
+					}
+					plan, err := PlanTransportLinks(t.Context(), ns, local, []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if step.wantSkip == "" {
+						if len(plan.Desired) == 0 {
+							t.Fatalf("no link: %+v", plan.Skipped)
+						}
+					} else if len(plan.Desired) != 0 || !hasSkip(plan.Skipped, peer, step.wantSkip) {
+						t.Fatalf("plan = %+v, want %s", plan, step.wantSkip)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestPlanTransportLinksBuildsDesiredSpecsFromActiveState(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()

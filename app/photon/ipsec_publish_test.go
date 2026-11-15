@@ -644,6 +644,9 @@ func TestPublishIPsecOverlayIntentStableWhenUnchanged(t *testing.T) {
 	if secondIntent.UpdatedAt != firstIntent.UpdatedAt {
 		t.Fatalf("overlay intent updated_at changed from %d to %d", firstIntent.UpdatedAt, secondIntent.UpdatedAt)
 	}
+	if !reflect.DeepEqual(first, second) {
+		t.Fatal("unchanged overlay changed its version, signature or content")
+	}
 
 	appConfig.IPsec.LinkGroups[0].TunnelAddressSpec.Pool = netip.MustParsePrefix("10.45.0.0/29")
 	rt.Clock = func() time.Time { return now.Add(10 * time.Minute) }
@@ -664,6 +667,41 @@ func TestPublishIPsecOverlayIntentStableWhenUnchanged(t *testing.T) {
 	}
 	if thirdIntent.UpdatedAt <= secondIntent.UpdatedAt {
 		t.Fatalf("overlay intent updated_at did not advance after config change: %d -> %d", secondIntent.UpdatedAt, thirdIntent.UpdatedAt)
+	}
+	previous := third
+	for i, policy := range []struct{ connect, deny []string }{
+		{connect: []string{"strongswan://*.catofes."}},
+		{connect: []string{"strongswan://*.catofes."}, deny: []string{"strongswan://blocked.catofes."}},
+		{},
+	} {
+		appConfig.IPsec.LinkGroups[0].ConnectRules = policy.connect
+		appConfig.IPsec.LinkGroups[0].DenyRules = policy.deny
+		rt.Clock = func() time.Time { return now.Add(time.Duration(20+i) * time.Minute) }
+		if _, err := service.publishLocalProtocols(); err != nil {
+			t.Fatal(err)
+		}
+		view := service.State.Common.ReadView()
+		current := view.State.Network.Zones[view.State.ManagedZone].Records[key]
+		if current.Version != previous.Version+1 {
+			t.Fatalf("policy update version = %d, previous = %d", current.Version, previous.Version)
+		}
+		parsed, err := ipsec.ParseOverlayIntentRecord(current)
+		if err != nil || !reflect.DeepEqual(parsed.Connect, policy.connect) || !reflect.DeepEqual(parsed.Deny, policy.deny) {
+			t.Fatalf("published policy = %+v, err = %v", parsed, err)
+		}
+		revision := view.Revision
+		rt.Clock = func() time.Time { return now.Add(time.Duration(20+i)*time.Minute + time.Second) }
+		if _, err := service.publishLocalProtocols(); err != nil {
+			t.Fatal(err)
+		}
+		view = service.State.Common.ReadView()
+		if view.Revision != revision {
+			t.Fatal("unchanged publication advanced verified state revision")
+		}
+		if !reflect.DeepEqual(current, view.State.Network.Zones[view.State.ManagedZone].Records[key]) {
+			t.Fatal("unchanged policy rewrote signed record")
+		}
+		previous = current
 	}
 }
 

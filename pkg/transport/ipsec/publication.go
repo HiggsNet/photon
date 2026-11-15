@@ -51,12 +51,14 @@ func BuildOverlayIntentRecords(groups []LinkGroupSpec, families []string, existi
 		intent := OverlayIntentRecord{
 			Version: 1, OverlayID: group.ID, Provider: group.Provider,
 			PathKeys: pathKeys, TunnelAddress: group.TunnelAddressSpec, UpdatedAt: now.Unix(),
+			Connect: slices.Clone(group.ConnectRules), Deny: slices.Clone(group.DenyRules),
 		}
 		if record := existing[OverlayIntentRecordKey(group.ID)]; record != nil {
 			if previous, err := ParseOverlayIntentRecord(record); err == nil && previous.Version == intent.Version &&
 				previous.OverlayID == intent.OverlayID && previous.Provider == intent.Provider &&
 				slices.Equal(previous.PathKeys, intent.PathKeys) && previous.TunnelAddress == intent.TunnelAddress &&
-				slices.Equal(previous.PolicyTags, intent.PolicyTags) {
+				slices.Equal(previous.PolicyTags, intent.PolicyTags) &&
+				slices.Equal(previous.Connect, intent.Connect) && slices.Equal(previous.Deny, intent.Deny) {
 				intent.UpdatedAt = previous.UpdatedAt
 			}
 		}

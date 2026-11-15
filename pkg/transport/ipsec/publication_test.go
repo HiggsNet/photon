@@ -1,6 +1,7 @@
 package ipsec
 
 import (
+	"bytes"
 	"encoding/json"
 	"slices"
 	"testing"
@@ -8,6 +9,49 @@ import (
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
 )
+
+func TestOverlayPolicyPublicationStableUntilConfigurationChanges(t *testing.T) {
+	now := time.Unix(5000, 0)
+	groups := []LinkGroupSpec{{ID: "main"}}
+	families := []string{FamilyIPv4}
+	existing := map[string]*zone.Record{}
+	var previous []byte
+	var stamp int64
+	for i, step := range []struct {
+		connect, deny []string
+		changed       bool
+	}{
+		{changed: true}, // legacy wire representation remains unchanged
+		{},
+		{connect: []string{"strongswan://*.catofes."}, changed: true},
+		{connect: []string{"strongswan://*.catofes."}},
+		{connect: []string{"strongswan://*.catofes."}, deny: []string{"strongswan://blocked.catofes."}, changed: true},
+		{connect: []string{"strongswan://*.catofes."}, deny: []string{"strongswan://blocked.catofes."}},
+		{changed: true}, // removing policy is also a real update
+		{},
+	} {
+		groups[0].ConnectRules, groups[0].DenyRules = step.connect, step.deny
+		at := now.Add(time.Duration(i) * time.Minute)
+		intent := BuildOverlayIntentRecords(groups, families, existing, at)[0]
+		value, err := json.Marshal(intent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if step.changed {
+			if bytes.Equal(value, previous) || intent.UpdatedAt != at.Unix() {
+				t.Fatalf("step %d: missing update", i)
+			}
+		} else if !bytes.Equal(value, previous) || intent.UpdatedAt != stamp {
+			t.Fatalf("step %d: unchanged policy caused republication", i)
+		}
+		if len(step.connect) == 0 && len(step.deny) == 0 && (bytes.Contains(value, []byte(`"connect"`)) || bytes.Contains(value, []byte(`"deny"`))) {
+			t.Fatal("empty policy changed legacy wire representation")
+		}
+		key := OverlayIntentRecordKey(intent.OverlayID)
+		existing[key] = &zone.Record{Key: key, Type: RecordTypeOverlayIntent, Value: value}
+		previous, stamp = value, intent.UpdatedAt
+	}
+}
 
 func TestProfilePublicationFamiliesAndConservativeNAT(t *testing.T) {
 	addresses := AddressRecord{Addresses: []AddressAdvertisement{

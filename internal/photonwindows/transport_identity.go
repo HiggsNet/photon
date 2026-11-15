@@ -114,6 +114,8 @@ func (source *State) EnsureLocalTransport(ctx context.Context, config *Config, n
 		return out, errors.New("local transport: gateway tunnel mode requires explicit allocation")
 	}
 	overlay.PolicyTags = nil
+	// The gateway's admission policy belongs to the gateway, not this leaf.
+	overlay.Connect, overlay.Deny = nil, nil
 	overlay.UpdatedAt = disk.Record.UpdatedAt
 	// The Windows leaf supports both underlay families and the existing
 	// family-redundant profile; it advertises no listener/address ownership.
@@ -176,6 +178,7 @@ func (source *State) EnsureLocalTransport(ctx context.Context, config *Config, n
 				}
 				comparable := *previous
 				comparable.PolicyTags, comparable.UpdatedAt = nil, overlay.UpdatedAt
+				comparable.Connect, comparable.Deny = nil, nil
 				value, _ := json.Marshal(comparable)
 				if !bytes.Equal(value, encoded) {
 					return out, errors.New("local transport: existing overlay differs from selected gateway")

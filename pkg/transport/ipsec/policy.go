@@ -26,6 +26,24 @@ type MeshPolicyRule struct {
 	MaxPeers    int
 }
 
+// CheckPeerPolicy evaluates an advertised policy from its owner's perspective.
+// Only peer admission is shared; dial preferences and limits stay local.
+func (r OverlayIntentRecord) CheckPeerPolicy(peer zone.ZonePath, records *NodeRecords) error {
+	connect, err := ParseMeshPolicyRules(r.Connect)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+	deny, err := ParseMeshPolicyRules(r.Deny)
+	if err != nil {
+		return fmt.Errorf("deny: %w", err)
+	}
+	_, reason, detail := selectMeshPolicyRule(peer, records, connect, deny)
+	if reason != "" {
+		return fmt.Errorf("%s: %s", reason, detail)
+	}
+	return nil
+}
+
 func ParseMeshPolicyRule(raw string) (MeshPolicyRule, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

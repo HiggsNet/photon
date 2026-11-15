@@ -47,7 +47,7 @@ func transportIdentityFixture(t *testing.T) (*State, *Config, GatewayPlan, time.
 	put(ipsec.RecordKeyProfile, ipsec.RecordTypeProfile, ipsec.ProfileRecord{Version: 1, Enabled: true, Provider: ipsec.ProviderStrongSwan, Role: ipsec.RoleIn, IKEIdentity: string(peer), TransportKeyFingerprint: key.Fingerprint, AddressFamilies: []string{ipsec.FamilyIPv4}, PathModes: []string{ipsec.PathModeFamilyRedundant}})
 	put(ipsec.RecordKeyAddresses, ipsec.RecordTypeAddresses, ipsec.AddressRecord{Version: 1, Addresses: []ipsec.AddressAdvertisement{{ID: "public", Source: ipsec.SourceManualAddress, Address: "192.0.2.10", Family: ipsec.FamilyIPv4}}})
 	put(ipsec.RecordKeyPorts, ipsec.RecordTypePorts, ipsec.PortRecord{Version: 1, Mode: ipsec.PortModeFixed, Current: &ipsec.PortSelection{Generation: 1, IKE: ipsec.PortBinding{Advertised: 500}, NATT: ipsec.PortBinding{Advertised: 4500}}})
-	put(ipsec.OverlayIntentRecordKey("main"), ipsec.RecordTypeOverlayIntent, ipsec.OverlayIntentRecord{Version: 1, OverlayID: "main", Provider: ipsec.ProviderStrongSwan, PathKeys: []string{"family:ipv4"}, TunnelAddress: ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDisabled, Family: ipsec.FamilyIPv6}})
+	put(ipsec.OverlayIntentRecordKey("main"), ipsec.RecordTypeOverlayIntent, ipsec.OverlayIntentRecord{Version: 1, OverlayID: "main", Provider: ipsec.ProviderStrongSwan, PathKeys: []string{"family:ipv4"}, TunnelAddress: ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDisabled, Family: ipsec.FamilyIPv6}, Connect: []string{"strongswan://*.catofes.?role=out"}, Deny: []string{"strongswan://blocked.catofes."}})
 	store, err := corestate.OpenBoltStore(path, 0o600, time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -81,6 +81,10 @@ func TestLocalTransportPersistsSignsAndRestarts(t *testing.T) {
 		t.Fatal("transport reused signing identity")
 	}
 	local := view.State.Network.Zones[config.ManagedZone]
+	overlay, err := ipsec.ParseOverlayIntentRecord(local.Records[ipsec.OverlayIntentRecordKey("main")])
+	if err != nil || len(overlay.Connect) != 0 || len(overlay.Deny) != 0 {
+		t.Fatalf("leaf inherited gateway policy: %+v, err = %v", overlay, err)
+	}
 	for _, key := range []string{ipsec.RecordKeyProfile, ipsec.RecordKeyTransportKey, ipsec.OverlayIntentRecordKey("main")} {
 		if err := photoncrypto.VerifyRecord(local.Records[key], local.Authority, now); err != nil {
 			t.Fatal(err)

@@ -65,7 +65,7 @@ Routing / Firewall / Health 消费       ← phx* interface + tunnel address
 | `ipsec/addresses` | 候选地址列表，每个来源（manual-address/manual-dns/discovery/reflector/local）、优先级、TTL |
 | `ipsec/ports` | 当前端口 generation、IKE/NAT-T 端口（local=本地绑定, advertised=对外公告, observed=外部观测选填）、previous grace 窗口 |
 | `ipsec/transport-key` | 独立于 Zone signing key 的 IPsec 传输密钥；持久化到本地 state meta，防止 daemon 重启后 fingerprint 抖动 |
-| `ipsec/overlays/<overlay_id>` | 节点级 IPsec 能力用于某个 overlay/path 的意图声明；planner 必须同时满足三层条件：远端 profile 完整可信 + 本地 connect 选中 + 远端发布了兼容同一 overlay_id/path_key 和 tunnel address 策略的 intent |
+| `ipsec/overlays/<overlay_id>` | 节点级 IPsec 能力用于某个 overlay/path 的意图声明；planner 要求远端 profile 完整可信、双方 connect/deny 均允许，以及远端 intent 的 overlay_id/path_key 和 tunnel address 策略兼容 |
 
 ### Record 示例
 
@@ -213,6 +213,10 @@ overlays:
 - 远端 `ipsec/profile.role` 是远端发布的能力声明，planner 用“本机 role + 远端 role”推导本机 `InitiatorRole`。
 - `overlays[].connect` URI 里的 `role=...` 是本机策略过滤条件，只匹配远端 profile 的 `role`；它不改写本机 `ipsec.role`，也不改写远端 record。
 
+`overlays[].connect / deny` 选择允许建立连接关系的 peer，同时约束主动发起和被动接入；发起方仍由上述 role 规则决定。配置作为可选 `connect / deny` 字段发布到签名 `ipsec/overlays/<overlay_id>` 记录，经 Gossip 同步。双方策略都允许才规划链路，deny 优先；connect 为空表示不限制允许范围。评估远端策略时，规则中的 zone、role、family 匹配本机身份与能力；source、mode、max_peers 等拨号偏好和限额仍由规则所属节点本地执行。
+
+远端策略拒绝时，Linux planner 输出 `remote_policy` 并附带 `policy_denied / policy_no_match` 原因；Windows 网关选择同样提前跳过。策略放开后随记录更新重新规划，IPsec 策略不限制 Gossip 同步。旧记录省略这些字段时沿用原有行为，旧版本节点仍需依靠对端本地策略执行限制。规则内容不变时保留记录的 `updated_at`，发布层不改写版本、时间戳或签名；只有策略或其他声明内容实际变化才发布新版本。
+
 无公网入站映射的 NAT 节点应显式使用 `ipsec.role: out`，可以省略所有 announce 项。`out` 发布空的入站地址集合，并独立声明 IPv4/IPv6 能力及 overlay path keys；对端仍能准备双栈 responder，本节点主动拨号。仅省略 announce 不会改变默认的 `both` 角色。
 
 IPsec 宣告支持固定 IP、DNS、接口三种显式来源，默认 priority 均为 100；配置与过滤规则见 [配置说明](config.md)。地址项的可选 `fallback: true` 表示继承的 Gossip/旧配置兜底来源，保留原 `source` 供本地来源策略筛选。新 planner 把兜底放到显式项之后，失败退避允许跨来源选择；旧节点可以读取该记录，但不会执行新增的兜底排序语义。协议仍使用 version 1，未增加记录类型。
@@ -251,7 +255,7 @@ Planner 会逐项检查：
 - 地址族、path mode、地址来源是否支持
 - 是否有可用的 ContactPoint（AddressCandidate + PortAdvertisement 组合）
 - NAT 后是否缺少可验证公网证据
-- connect/deny rule 是否匹配
+- 本地 connect/deny 是否允许远端，以及远端 overlay 的 connect/deny 是否允许本机
 - 是否处于 revocation/tombstone 状态
 
 缺少任何一项都会输出结构化 skip reason（如 `missing_overlay_intent`、`overlay_intent_mismatch`、`no_contact_point`），而不是静默跳过。

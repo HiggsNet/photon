@@ -150,7 +150,11 @@ type OverlayIntentRecord struct {
 	PathKeys      []string          `json:"path_keys"`
 	TunnelAddress TunnelAddressSpec `json:"tunnel_address,omitempty"`
 	PolicyTags    []string          `json:"policy_tags,omitempty"`
-	UpdatedAt     int64             `json:"updated_at,omitempty"`
+	// Connect and Deny select permitted peers, independently of initiator roles.
+	// Absent rules retain the unrestricted behavior of older advertisements.
+	Connect   []string `json:"connect,omitempty"`
+	Deny      []string `json:"deny,omitempty"`
+	UpdatedAt int64    `json:"updated_at,omitempty"`
 }
 
 type NodeRecords struct {
@@ -503,6 +507,12 @@ func (k TransportKeyRecord) Validate() error {
 }
 
 func (r OverlayIntentRecord) Validate(keyOverlayID string) error {
+	if _, err := ParseMeshPolicyRules(r.Connect); err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+	if _, err := ParseMeshPolicyRules(r.Deny); err != nil {
+		return fmt.Errorf("deny: %w", err)
+	}
 	if r.Version != 1 {
 		return fmt.Errorf("unsupported ipsec overlay intent version %d", r.Version)
 	}
