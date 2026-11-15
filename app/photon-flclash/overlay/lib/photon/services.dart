@@ -3,6 +3,7 @@ import 'dart:io';
 
 const _photonProvider = 'photon-services';
 const _photonGroups = ['Photon', 'Photon Auto', 'Photon Balance'];
+const _photonProtection = 'x-photon-protection';
 
 final class PhotonDirectory {
   PhotonDirectory._({
@@ -206,7 +207,13 @@ void validatePhotonProxyTemplate(Map<String, dynamic> template) {
       );
     }
   }
-  for (final section in ['proxy-providers', 'rule-providers', 'sub-rules']) {
+  for (final section in [
+    'proxy-providers',
+    'rule-providers',
+    'sub-rules',
+    'dns',
+    'tun',
+  ]) {
     final value = template[section];
     if (value != null && value is! Map) {
       throw FormatException('Invalid Photon proxy template section: $section');
@@ -304,7 +311,12 @@ Map<String, dynamic> _renderPhotonProxyProfile({
           'use': [_photonProvider],
           'empty-fallback': 'REJECT',
         };
-  return {
+  final protection = {
+    'route-exclude-address': exclusions,
+    'rules': bypassRules,
+    'bypass-domains': bypassDomains,
+  };
+  return protectPhotonProxyProfile({
     'ipv6': true,
     'mode': 'rule',
     'allow-lan': false,
@@ -313,25 +325,20 @@ Map<String, dynamic> _renderPhotonProxyProfile({
       'ipv6': true,
       'enhanced-mode': 'fake-ip',
       'fake-ip-filter-mode': 'blacklist',
-      'fake-ip-filter': bypassDomains,
+      'fake-ip-filter': <String>[],
       'default-nameserver': ['223.5.5.5', '1.1.1.1'],
       'nameserver': [
         'https://doh.pub/dns-query',
         'https://dns.alidns.com/dns-query',
       ],
-      'nameserver-policy': {
-        for (final domain in bypassDomains)
-          domain: [
-            'https://223.5.5.5/dns-query#DIRECT',
-            'https://1.1.1.1/dns-query#DIRECT',
-          ],
-      },
+      ...?template?['dns'] as Map?,
     },
     'tun': {
       'enable': false,
       'auto-route': true,
       'auto-detect-interface': true,
       'route-exclude-address': exclusions,
+      ...?template?['tun'] as Map?,
     },
     'proxies': template == null ? proxies : templateProxies,
     if (template != null)
@@ -383,7 +390,115 @@ Map<String, dynamic> _renderPhotonProxyProfile({
       ...bypassRules,
       ...(templateRules ?? ['MATCH,Photon']),
     ],
+    // Persist only the required safeguards, separately from user policy. They
+    // must survive a restart/offline profile and be restored after app overrides.
+    _photonProtection: protection,
+  });
+}
+
+/// Runs again after FlClash's overrides, without changing app-owned TUN fields.
+/// [source] is the generated profile before those overrides were applied.
+Map<String, dynamic> protectPhotonProxyProfile(
+  Map<String, dynamic> profile, {
+  Map<String, dynamic>? source,
+  bool stripMetadata = false,
+}) {
+  source ??= profile;
+  final protection = source[_photonProtection] as Map?;
+  // Compatibility with already generated profiles from older clients. Those
+  // clients did not accept template DNS/TUN sections, so these are safeguards.
+  final routes =
+      protection?['route-exclude-address'] as List? ??
+      (source['tun'] as Map?)?['route-exclude-address'] as List? ??
+      const [];
+  final requiredRules =
+      protection?['rules'] as List? ??
+      [
+        for (final rule in source['rules'] as List? ?? const [])
+          if (rule is String &&
+              ((rule.startsWith('IP-CIDR,') || rule.startsWith('IP-CIDR6,')) &&
+                      rule.endsWith(',DIRECT,no-resolve') ||
+                  rule.startsWith('PROCESS-PATH-REGEX,') &&
+                      rule.endsWith(',DIRECT')))
+            rule,
+      ];
+  final domains =
+      protection?['bypass-domains'] as List? ??
+      (source['dns'] as Map?)?['fake-ip-filter'] as List? ??
+      const [];
+  final tun = profile['tun'] as Map? ?? const {};
+  final dns = <String, dynamic>{...?profile['dns'] as Map?};
+  if (domains.isNotEmpty) {
+    final filter = dns['fake-ip-filter'] as List? ?? const [];
+    switch (dns['fake-ip-filter-mode'] ?? 'blacklist') {
+      case 'rule':
+        dns['fake-ip-filter'] = {
+          for (final domain in domains) 'DOMAIN,$domain,real-ip',
+          ...filter,
+        }.toList();
+      case 'whitelist':
+        // A whitelist has the opposite meaning. Keep its matching semantics
+        // while giving legacy gateway domains an explicit real-IP exception.
+        dns['fake-ip-filter-mode'] = 'rule';
+        dns['fake-ip-filter'] = [
+          for (final domain in domains) 'DOMAIN,$domain,real-ip',
+          for (final pattern in filter.cast<String>())
+            ..._whitelistFakeIPRules(pattern),
+          'MATCH,real-ip',
+        ];
+      default:
+        dns['fake-ip-filter'] = {...filter, ...domains}.toList();
+    }
+    dns['nameserver-policy'] = {
+      ...?dns['nameserver-policy'] as Map?,
+      for (final domain in domains)
+        domain: [
+          'https://223.5.5.5/dns-query#DIRECT',
+          'https://1.1.1.1/dns-query#DIRECT',
+        ],
+    };
+  }
+  return {
+    for (final entry in profile.entries)
+      if (!stripMetadata || entry.key != _photonProtection)
+        entry.key: entry.value,
+    'dns': dns,
+    'tun': {
+      ...tun,
+      'route-exclude-address': {
+        ...?tun['route-exclude-address'] as List?,
+        ...routes,
+      }.toList(),
+    },
+    'rules': [
+      ...requiredRules,
+      for (final rule in profile['rules'] as List? ?? const [])
+        if (!requiredRules.contains(rule)) rule,
+    ],
   };
+}
+
+Iterable<String> _whitelistFakeIPRules(String pattern) sync* {
+  for (final prefix in ['geosite:', 'rule-set:']) {
+    if (pattern.toLowerCase().startsWith(prefix)) {
+      for (final name in pattern.substring(prefix.length).split(',')) {
+        yield '${prefix == 'geosite:' ? 'GEOSITE' : 'RULE-SET'},${name.trim()},fake-ip';
+      }
+      return;
+    }
+  }
+  final suffix = pattern.startsWith('+.') || pattern.startsWith('.');
+  final domain = suffix ? pattern.substring(pattern.indexOf('.') + 1) : pattern;
+  final labels = domain
+      .split('.')
+      .map((label) => label == '*' ? r'[^.]+' : RegExp.escape(label))
+      .join(r'\.');
+  final subdomains = suffix
+      ? pattern.startsWith('+.')
+            ? r'([^.]+\.)*'
+            : r'([^.]+\.)+'
+      : '';
+  yield 'DOMAIN-REGEX,^$subdomains$labels\$,fake-ip';
 }
 
 String encodePhotonProfile(Map<String, dynamic> profile) =>
@@ -418,6 +533,7 @@ Map<String, dynamic> blockedPhotonProfile(Map<String, dynamic> profile) {
   }
   return {
     'ipv6': true,
+    _photonProtection: ?profile[_photonProtection],
     'dns': ?profile['dns'],
     'tun': ?profile['tun'],
     'rules': [

@@ -1,0 +1,254 @@
+# Import through Photon > Proxy services > Import YAML template.
+# Based on system/photon-trusttunnel/android.sops.yaml.
+# Photon supplies photon-services dynamically; no credentials are needed here.
+# Auto keeps fallback mode, but now considers all available Photon endpoints,
+# rather than the original fixed Anycast list.
+# DNS follows the source policy. FlClash settings can override individual keys.
+# Photon adds required route exclusions after FlClash applies its overrides.
+
+dns:
+    enable: true
+    listen: 0.0.0.0:1053
+    ipv6: true
+    enhanced-mode: fake-ip
+    fake-ip-range: 198.18.0.1/16
+    default-nameserver:
+        - 223.5.5.5
+        - 119.29.29.29
+    nameserver:
+        - https://dns.alidns.com/dns-query
+        - https://doh.pub/dns-query
+    proxy-server-nameserver:
+        - https://dns.alidns.com/dns-query
+        - https://doh.pub/dns-query
+    fallback:
+        - https://1.1.1.1/dns-query
+        - https://dns.cloudflare.com/dns-query
+        - tls://8.8.8.8:853
+    fallback-filter:
+        geoip: false
+        ipcidr:
+            - 0.0.0.0/8
+            - 10.0.0.0/8
+            - 100.64.0.0/10
+            - 127.0.0.0/8
+            - 169.254.0.0/16
+            - 172.16.0.0/12
+            - 192.0.0.0/24
+            - 192.0.2.0/24
+            - 192.88.99.0/24
+            - 192.168.0.0/16
+            - 198.18.0.0/15
+            - 198.51.100.0/24
+            - 203.0.113.0/24
+            - 224.0.0.0/4
+            - 240.0.0.0/4
+        domain:
+            - +.google.com
+            - +.googlevideo.com
+            - +.youtube.com
+            - +.facebook.com
+            - +.githubusercontent.com
+    fake-ip-filter:
+        - '*.lan'
+        - '*.local'
+        - '*.localdomain'
+        - '*.localhost'
+        - '*.home.arpa'
+        - time.*.com
+        - time.*.edu.cn
+        - time.*.apple.com
+        - ntp.*.com
+        - +.pool.ntp.org
+        - +.msftconnecttest.com
+        - +.msftncsi.com
+        - +.stun.*.*
+        - +.stun.*.*.*
+        - +.catofes.com
+        - +.root.wf
+        - +.sni.app
+    respect-rules: true
+
+proxy-groups:
+  - empty-fallback: REJECT
+    name: Nodes
+    proxies:
+      - Auto
+    type: select
+    use:
+      - photon-services
+  - empty-fallback: REJECT
+    interval: 300
+    lazy: true
+    name: Auto
+    type: fallback
+    url: https://cp.cloudflare.com/generate_204
+    use:
+      - photon-services
+  - empty-fallback: REJECT
+    name: Steam
+    proxies:
+      - Nodes
+      - Directed
+    type: select
+    use:
+      - photon-services
+  - empty-fallback: REJECT
+    name: Telegram
+    proxies:
+      - Nodes
+      - Directed
+    type: select
+    use:
+      - photon-services
+  - empty-fallback: REJECT
+    name: Microsoft
+    proxies:
+      - Nodes
+      - Directed
+    type: select
+    use:
+      - photon-services
+  - empty-fallback: REJECT
+    name: Apple
+    proxies:
+      - Directed
+      - Nodes
+    type: select
+    use:
+      - photon-services
+  - empty-fallback: REJECT
+    name: Google
+    proxies:
+      - Nodes
+      - Directed
+    type: select
+    use:
+      - photon-services
+  - name: Directed
+    proxies:
+      - DIRECT
+      - Nodes
+      - Auto
+    type: select
+  - name: AD
+    proxies:
+      - REJECT
+      - DIRECT
+    type: select
+  - empty-fallback: REJECT
+    name: Others
+    proxies:
+      - Nodes
+      - Directed
+    type: select
+    use:
+      - photon-services
+rules:
+  - RULE-SET,private,DIRECT
+  - RULE-SET,reject,AD
+  - RULE-SET,icloud,Apple
+  - RULE-SET,apple,Apple
+  - RULE-SET,google,Google
+  - RULE-SET,steam-direct,Directed
+  - RULE-SET,steam,Steam
+  - RULE-SET,microsoft,Microsoft
+  - RULE-SET,telegramcidr,Telegram,no-resolve
+  - RULE-SET,gfw,Nodes
+  - RULE-SET,proxy,Nodes
+  - RULE-SET,direct,Directed
+  - RULE-SET,lancidr,DIRECT,no-resolve
+  - RULE-SET,cncidr,Directed,no-resolve
+  - RULE-SET,tld-not-cn,Others
+  - MATCH,Others
+rule-providers:
+  apple:
+    behavior: domain
+    interval: 86400
+    path: ./ruleset/apple.yaml
+    type: http
+    url: https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/apple.txt
+  cncidr:
+    behavior: ipcidr
+    interval: 86400
+    path: ./ruleset/cncidr.yaml
+    type: http
+    url: https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/cncidr.txt
+  direct:
+    behavior: domain
+    interval: 86400
+    path: ./ruleset/direct.yaml
+    type: http
+    url: https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/direct.txt
+  gfw:
+    behavior: domain
+    interval: 86400
+    path: ./ruleset/gfw.yaml
+    type: http
+    url: https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/gfw.txt
+  google:
+    behavior: domain
+    interval: 86400
+    path: ./ruleset/google.yaml
+    type: http
+    url: https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/google.txt
+  icloud:
+    behavior: domain
+    interval: 86400
+    path: ./ruleset/icloud.yaml
+    type: http
+    url: https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/icloud.txt
+  lancidr:
+    behavior: ipcidr
+    interval: 86400
+    path: ./ruleset/lancidr.yaml
+    type: http
+    url: https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/lancidr.txt
+  microsoft:
+    behavior: classical
+    interval: 86400
+    path: ./ruleset/microsoft.yaml
+    type: http
+    url: https://cdn.jsdelivr.net/gh/Semporia/Clash@master/Rule/Microsoft.yaml
+  private:
+    behavior: domain
+    interval: 86400
+    path: ./ruleset/private.yaml
+    type: http
+    url: https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/private.txt
+  proxy:
+    behavior: domain
+    interval: 86400
+    path: ./ruleset/proxy.yaml
+    type: http
+    url: https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/proxy.txt
+  reject:
+    behavior: domain
+    interval: 86400
+    path: ./ruleset/reject.yaml
+    type: http
+    url: https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/reject.txt
+  steam:
+    behavior: classical
+    interval: 86400
+    path: ./ruleset/steam.yaml
+    type: http
+    url: https://cdn.jsdelivr.net/gh/ACL4SSR/ACL4SSR@master/Clash/Providers/Ruleset/Steam.yaml
+  steam-direct:
+    behavior: classical
+    interval: 86400
+    path: ./ruleset/steam-direct.yaml
+    type: http
+    url: https://cdn.jsdelivr.net/gh/Femoon/clash-rules@master/steam.yaml
+  telegramcidr:
+    behavior: ipcidr
+    interval: 86400
+    path: ./ruleset/telegramcidr.yaml
+    type: http
+    url: https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/telegramcidr.txt
+  tld-not-cn:
+    behavior: domain
+    interval: 86400
+    path: ./ruleset/tld-not-cn.yaml
+    type: http
+    url: https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/tld-not-cn.txt

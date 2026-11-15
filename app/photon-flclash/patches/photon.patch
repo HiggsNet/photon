@@ -642,11 +642,12 @@ diff --git a/lib/providers/action.dart b/lib/providers/action.dart
 index 3a2f9df..5ca6dee 100644
 --- a/lib/providers/action.dart
 +++ b/lib/providers/action.dart
-@@ -14,6 +14,9 @@ import 'package:fl_clash/enum/enum.dart';
+@@ -14,6 +14,10 @@ import 'package:fl_clash/enum/enum.dart';
  import 'package:fl_clash/models/models.dart';
  import 'package:fl_clash/plugins/app.dart';
  import 'package:fl_clash/plugins/service.dart';
 +import 'package:fl_clash/photon/controller.dart';
++import 'package:fl_clash/photon/profile.dart';
 +import 'package:fl_clash/photon/proxy_bridge.dart';
 +import 'package:fl_clash/photon/services.dart' show blockedPhotonProfile;
  import 'package:fl_clash/providers/actions/system_exit.dart';
@@ -714,6 +715,16 @@ index 3f1e2c6..e75bb72 100644
      final directory = await appPath.profilesPath;
      final injected = await _resolveInjectedProviders(
        setupState,
+@@ -527,7 +536,8 @@ class SetupAction extends _$SetupAction {
+       proxyGroups: proxyGroups,
+       rules: rules,
+     );
+-    final res = await makeRealProfileTask(
++    final makeProfile = photon ? makePhotonProfileTask : makeRealProfileTask;
++    final res = await makeProfile(
+       MakeRealProfileState(
+         rules: rules,
+         proxyGroups: proxyGroups,
 @@ -536,21 +545,24 @@ class SetupAction extends _$SetupAction {
          profilesPath: directory,
          profileId: profileId,

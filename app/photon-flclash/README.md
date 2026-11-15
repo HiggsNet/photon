@@ -15,7 +15,7 @@
 
 ## 自定义代理规则
 
-打开 **Photon → 代理服务 → 规则模板**。用 **导入 YAML 模板** 选择已有的 Mihomo YAML，或用 **编辑 YAML 模板** 打开 FlClash 自带的编辑器。验证通过后，模板保存为 Photon 配置旁的同名 `.proxy.yaml`，例如 `photon.yaml` 对应 `photon.proxy.yaml`。也可直接编辑这个文件。Photon 读取其中的 `proxies`、`proxy-providers`、`proxy-groups`、`rules`、`rule-providers` 和 `sub-rules`，把防回环所需规则放在用户规则之前。DNS 和 TUN 继续由 FlClash 与 Photon 管理。模板需要至少一条规则，最多 4 MiB。点击 **使用内置规则** 可以移除模板。
+打开 **Photon → 代理服务 → 规则模板**。用 **导入 YAML 模板** 选择已有的 Mihomo YAML，或用 **编辑 YAML 模板** 打开 FlClash 自带的编辑器。验证通过后，模板保存为 Photon 配置旁的同名 `.proxy.yaml`，例如 `photon.yaml` 对应 `photon.proxy.yaml`。也可直接编辑这个文件。Photon 读取其中的 `proxies`、`proxy-providers`、`proxy-groups`、`rules`、`rule-providers`、`sub-rules`、`dns` 和 `tun`。DNS、TUN 缺少的字段使用内置默认值，再应用 FlClash 选定的覆写项；TUN 开关、设备和协议栈等仍由 FlClash 界面控制。最后合并 Photon 必需的内网及端点路由排除，并把防回环直连规则放在其他规则之前，避免被覆写移除。模板需要至少一条规则，最多 4 MiB。点击 **使用内置规则** 可以移除模板。
 
 ```yaml
 proxy-groups:
@@ -28,6 +28,8 @@ rules:
 ```
 
 `Photon`、`Photon Auto`、`Photon Balance` 和 `photon-services` 由 Photon 提供。自定义组也可以用 `use: [photon-services]` 引入所有节点，再用 Mihomo 的 `filter` 筛选地区。建议为这类组设置 `empty-fallback: REJECT`，让筛选后为空的组拒绝连接。模板由用户编辑，生成的配置由 FlClash 管理。模板启用后，Photon 断开时只停用 Photon 出口，用户规则和其他出口继续可用。
+
+完整示例见 [examples/photon.proxy.yaml](examples/photon.proxy.yaml)，包含按应用分组、规则集和 DNS 策略。支持底层选路的后台不修改模板的 Fake-IP 过滤及域名 DNS 策略；旧后台仍需为网关域名补充真实 IP 解析和直连 DNS。旧后台使用 Fake-IP 白名单时会转换为等价规则模式，为网关域名添加例外。Windows 的 `strict-route` 配合 `dns-mode: hijack` 可能由防火墙阻断 Photon 的底层 DNS，绑定接口无法绕过该限制；这类配置应验证 `dns-mode: native` 的兼容性。
 
 ## 数据与网络边界
 
