@@ -151,6 +151,7 @@ func (s meshObservationSnapshot) render(config *Config, view corestate.View, dri
 				break
 			}
 			route.Peer = peer
+			route.OuterFamily = p.plan.outerFamily
 			out.Babel.Routes = append(out.Babel.Routes, route)
 		}
 	}

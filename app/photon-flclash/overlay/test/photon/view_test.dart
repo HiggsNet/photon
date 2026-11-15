@@ -109,15 +109,32 @@ void main() {
     );
     await tester.tap(find.text('Edit'));
     await tester.pumpAndSettle();
-    expect(find.text('Bootstrap nodes'), findsOneWidget);
     expect(find.text('Identity database path'), findsNothing);
     await tester.tap(find.byTooltip('Save'));
     await tester.pumpAndSettle();
     expect(find.text('Node zone is required'), findsOneWidget);
     expect(saved, isNull);
     final zone = find.byKey(const ValueKey('managed_zone'));
-    await tester.ensureVisible(zone);
+    await tester.scrollUntilVisible(
+      zone,
+      100,
+      scrollable: find.byType(Scrollable).first,
+    );
     await tester.enterText(zone, 'client.example.');
+    await tester.scrollUntilVisible(
+      find.text('Local node identity'),
+      100,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(
+      find.textContaining('Photon generates this node’s key locally'),
+      findsOneWidget,
+    );
+    await tester.scrollUntilVisible(
+      find.text('Bootstrap nodes'),
+      100,
+      scrollable: find.byType(Scrollable).first,
+    );
     final routes = find.byKey(const ValueKey('split_routes'));
     await tester.scrollUntilVisible(
       routes,
@@ -228,7 +245,7 @@ void main() {
   });
 
   photonTest(
-    'the tunnel table separates readiness from IKE and keeps details accessible',
+    'the tunnel table groups outer families and keeps their details accessible',
     (tester) async {
       tester.view.physicalSize = const Size(1400, 1100);
       tester.view.devicePixelRatio = 1;
@@ -264,6 +281,15 @@ void main() {
             'peer': 'gateway.catofes.',
             'outer_family': 'ipv6',
             'tunnel_ready': true,
+            'babel_live': true,
+            'ipv4_route_ready': false,
+            'ipv6_route_ready': true,
+            'ike': {
+              'live': true,
+              'child_live': true,
+              'phase': 'established',
+              'attempt_remote_endpoint': '[2001:db8::1]:4500',
+            },
           },
           {
             'peer': 'second.catofes.',
@@ -297,6 +323,12 @@ void main() {
               'at_unix': 1735689700,
             },
           },
+          {'peer_id': 'revoked-sync.catofes.', 'sync_status': 'revoked'},
+          {
+            'peer_id': 'revoked-auth.catofes.',
+            'authorization': 'revoked',
+            'sync_status': 'waiting',
+          },
         ],
         'babel': {
           'live': true,
@@ -316,16 +348,18 @@ void main() {
       expect(find.text('fd42::1/128'), findsOneWidget);
       await tester.tap(find.text('Tunnels').first);
       await tester.pumpAndSettle();
-      expect(find.text('gateway.catofes.'), findsNWidgets(2));
+      expect(find.text('gateway.catofes.'), findsOneWidget);
       expect(
-        find.byKey(const ValueKey<Object>(('gateway.catofes.', 'IPv6'))),
+        find.byKey(const ValueKey<Object>('gateway.catofes.')),
         findsOneWidget,
       );
-      expect(find.text('192.0.2.1:4500'), findsOneWidget);
+      expect(find.textContaining('192.0.2.1:4500'), findsOneWidget);
+      expect(find.byTooltip('IPv4 · Tunnel ready'), findsOneWidget);
+      expect(find.byTooltip('IPv6 · Tunnel ready'), findsOneWidget);
       expect(find.text('IKE'), findsOneWidget);
       expect(find.text('ESP'), findsOneWidget);
       expect(find.text('Babel'), findsOneWidget);
-      expect(find.text('Outer'), findsOneWidget);
+      expect(find.text('Outer 4/6'), findsOneWidget);
       expect(find.byTooltip('Route ready'), findsOneWidget);
       expect(find.byTooltip('No usable route'), findsOneWidget);
       expect(find.text('Initializing'), findsOneWidget);
@@ -334,6 +368,24 @@ void main() {
         tester.getCenter(find.text('second.catofes.')).dy,
         lessThan(tester.getCenter(find.text('gateway.catofes.').first).dy),
       );
+      final connections = backend.sample['connections'] as List;
+      connections[1]['tunnel_ready'] = false;
+      await controller.refresh();
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('IPv4 · Tunnel ready'), findsOneWidget);
+      expect(find.byTooltip('IPv6 · Tunnel ready'), findsNothing);
+      expect(find.byTooltip('IPv6 · Tunnel not ready'), findsNWidgets(2));
+      await tester.enterText(find.byType(TextField), '192.0.2.1');
+      await tester.pumpAndSettle();
+      expect(find.text('gateway.catofes.'), findsOneWidget);
+      expect(find.byTooltip('IPv6 · Tunnel not ready'), findsOneWidget);
+      await tester.tap(find.text('gateway.catofes.'));
+      await tester.pumpAndSettle();
+      expect(find.text('192.0.2.1:4500'), findsOneWidget);
+      final ipv6Remote = find.text('[2001:db8::1]:4500');
+      expect(ipv6Remote, findsOneWidget);
+      Navigator.of(tester.element(ipv6Remote)).pop();
+      await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField), '2001:db8::2');
       await tester.pumpAndSettle();
       expect(find.text('gateway.catofes.'), findsNothing);
@@ -354,6 +406,8 @@ void main() {
       expect(find.text('gossip.catofes.'), findsOneWidget);
       expect(find.text('synced'), findsOneWidget);
       expect(find.text('retry_pending'), findsOneWidget);
+      expect(find.text('revoked-sync.catofes.'), findsNothing);
+      expect(find.text('revoked-auth.catofes.'), findsNothing);
       expect(find.text('scan_timer'), findsNothing);
       expect(find.text('round timer timed out'), findsNothing);
       await tester.tap(find.text('other-gossip.catofes.'));
@@ -376,6 +430,74 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+  photonTest('route rows group next hops and preserve source conditions', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1400, 1100);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    backend.sample = {
+      'running': true,
+      'tunnel_ready': true,
+      'routes_truncated': true,
+      'babel': {
+        'routes': [
+          {
+            'prefix': 'fd42:1::/64',
+            'source_prefix': '::/0',
+            'peer': 'gateway-b.catofes.',
+            'next_hop': 'fe80::2',
+            'outer_family': 'ipv4',
+            'metric': 200,
+          },
+          {
+            'prefix': 'fd42:1::/64',
+            'source_prefix': '::/0',
+            'peer': 'gateway-a.catofes.',
+            'next_hop': 'fe80::3',
+            'outer_family': 'ipv6',
+            'metric': 100,
+          },
+          {
+            'prefix': 'fd42:1::/64',
+            'source_prefix': 'fd00::/64',
+            'peer': 'gateway-c.catofes.',
+            'next_hop': 'fe80::4',
+            'outer_family': 'ipv4',
+            'metric': 50,
+          },
+        ],
+      },
+    };
+    await tester.pumpWidget(view());
+    await tester.tap(find.text('Start'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Routes').first);
+    await tester.pumpAndSettle();
+    expect(find.text('fd42:1::/64'), findsNWidgets(2));
+    expect(find.text('Next hop'), findsOneWidget);
+    expect(find.text('Paths'), findsOneWidget);
+    expect(find.text('gateway-a.catofes.'), findsOneWidget);
+    expect(find.text('gateway-c.catofes.'), findsOneWidget);
+    expect(find.text('gateway-b.catofes.'), findsNothing);
+    expect(find.text('This sample is incomplete.'), findsOneWidget);
+    expect(find.byTooltip('Reachability not tested'), findsNWidgets(2));
+    await tester.enterText(find.byType(TextField), 'fe80::2');
+    await tester.pumpAndSettle();
+    expect(find.text('fd42:1::/64'), findsOneWidget);
+    expect(find.text('gateway-a.catofes.'), findsOneWidget);
+    expect(find.text('2'), findsOneWidget);
+    await tester.tap(find.text('fd42:1::/64'));
+    await tester.pumpAndSettle();
+    expect(find.text('gateway-a.catofes.'), findsNWidgets(2));
+    expect(find.text('gateway-b.catofes.'), findsOneWidget);
+    expect(find.widgetWithText(SelectableText, 'fe80::2'), findsOneWidget);
+    expect(find.text('fe80::3'), findsOneWidget);
+    expect(find.text('200'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   photonTest('proxy services group all authorized endpoints by publisher', (
     tester,
   ) async {
@@ -393,11 +515,16 @@ void main() {
     expect(find.text('Switch to Photon profile'), findsOneWidget);
     expect(find.text('Import YAML template'), findsOneWidget);
     expect(find.text('Edit YAML template'), findsOneWidget);
+    final help = find.text('How templates work');
+    expect(help, findsOneWidget);
     expect(find.byType(Checkbox), findsNothing);
     expect(find.text('owner.catofes.'), findsOneWidget);
     expect(find.text('cn · jp'), findsOneWidget);
     expect(find.text('2'), findsOneWidget);
     expect(find.textContaining('fd42:1::2'), findsNothing);
+    await tester.tap(help);
+    await tester.pumpAndSettle();
+    expect(find.text('Generated by Photon'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

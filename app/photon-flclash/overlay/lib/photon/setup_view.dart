@@ -179,9 +179,15 @@ class _PhotonSettingsFormState extends State<_PhotonSettingsForm> {
               _field('root_public_key', l.photonRootKey),
             ],
           ),
+          if (create)
+            generateSection(
+              title: l.photonLocalIdentity,
+              items: [Text(l.photonLocalIdentityHint)],
+            ),
           generateSection(
             title: l.photonBootstrap,
             items: [
+              if (create) Text(l.photonBootstrapHint),
               for (final hint in _hints)
                 Column(
                   key: ObjectKey(hint),

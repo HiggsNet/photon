@@ -85,6 +85,8 @@ type BabelObservation struct {
 }
 type RouteObservation struct {
 	Peer         string       `json:"peer,omitempty"`
+	OuterFamily  string       `json:"outer_family,omitempty"`
+	NextHop      netip.Addr   `json:"next_hop,omitempty"`
 	Prefix       netip.Prefix `json:"prefix"`
 	SourcePrefix netip.Prefix `json:"source_prefix"`
 	Origin       string       `json:"origin"` // Unknown for gateway-forwarded Babel routes.
@@ -236,7 +238,7 @@ outer:
 				}
 			}
 			for _, route := range selected {
-				r := RouteObservation{Prefix: route.Destination, SourcePrefix: route.Source, Metric: route.Metric}
+				r := RouteObservation{Prefix: route.Destination, SourcePrefix: route.Source, Metric: route.Metric, NextHop: route.NextHop}
 				if !seen[r] {
 					if len(out.Babel.Routes) == 256 {
 						out.RoutesTruncated = true

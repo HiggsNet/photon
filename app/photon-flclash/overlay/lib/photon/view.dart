@@ -15,6 +15,7 @@ import 'controller.dart';
 import 'proxy_bridge.dart';
 import 'services.dart';
 import 'setup_view.dart';
+import 'template_help.dart';
 
 enum _Page { overview, tunnels, peers, routes, services, diagnostics }
 
@@ -263,6 +264,7 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
                       connections,
                     ),
                     _Page.peers when status != null => _gossipTable(l, status),
+                    _Page.routes when status != null => _routeTable(l, status),
                     _Page.services when status != null => _proxyTable(l),
                     _ => SliverPrismList(
                       itemCount: items.length,
@@ -291,8 +293,6 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
     if (status == null) return [];
     final admission = _map(status['admission']);
     final wintun = _map(status['wintun']);
-    final babel = _map(status['babel']);
-    final routes = _list(babel['routes']);
     switch (_page) {
       case _Page.overview:
         return [
@@ -336,22 +336,8 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
       case _Page.tunnels:
       case _Page.peers:
       case _Page.services:
-        return [];
       case _Page.routes:
-        return _rows(
-          routes,
-          l,
-          (entry) => _DetailCard(
-            title: _text(entry['prefix']),
-            lines: [
-              (l.peers, _text(entry['peer'])),
-              (l.photonMetric, _text(entry['metric'])),
-              (l.photonIdentity, _text(entry['origin'])),
-              (l.address, _text(entry['source_prefix'])),
-            ],
-          ),
-          truncated: status['routes_truncated'] == true,
-        );
+        return [];
       case _Page.diagnostics:
         final readiness = _map(status['readiness']);
         return [
@@ -404,15 +390,21 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
     Map<String, dynamic> status,
     List<Map<String, dynamic>> connections,
   ) {
-    final visible = connections.where((entry) {
-      final ike = _map(entry['ike']);
-      return _matches([
-        _text(entry['peer']),
-        _outerFamily(entry),
-        _text(ike['attempt_remote_endpoint']),
-        _ikeState(l, ike),
-      ]);
-    }).toList()..sort((a, b) => _text(b['peer']).compareTo(_text(a['peer'])));
+    final gateways = <String, List<Map<String, dynamic>>>{};
+    for (final entry in connections) {
+      (gateways[_text(entry['peer'])] ??= []).add(entry);
+    }
+    final visible = gateways.keys.where((peer) {
+      return gateways[peer]!.any((entry) {
+        final ike = _map(entry['ike']);
+        return _matches([
+          peer,
+          _outerFamily(entry),
+          _text(ike['attempt_remote_endpoint']),
+          _ikeState(l, ike),
+        ]);
+      });
+    }).toList()..sort(_compareGatewayNames);
     return _PhotonTable(
       columns: [
         TableColumn('gateway', l.photonGateway, flex: 2.6),
@@ -422,25 +414,40 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
         const TableColumn('babel', 'Babel', flex: 0.8),
         const TableColumn('ipv4', 'IPv4', flex: 0.75),
         const TableColumn('ipv6', 'IPv6', flex: 0.75),
-        TableColumn('outer', l.photonOuter, flex: 0.9),
+        TableColumn('outer', '${l.photonOuter} 4/6', flex: 1.1),
       ],
       wideColumn: TableColumn('remote', l.remote, flex: 1.9),
       detailsTitle: l.photonTunnel,
       truncated: status['connections_truncated'] == true,
       length: visible.length,
       rowAt: (context, index) {
-        final entry = visible[index];
-        final peer = _text(entry['peer']);
-        final ready = entry['tunnel_ready'] == true;
-        final ike = _map(entry['ike']);
-        final remote = _text(ike['attempt_remote_endpoint']);
-        final outer = _outerFamily(entry);
-        final ipv4 = _routeReady(entry, 'ipv4_route_ready');
-        final ipv6 = _routeReady(entry, 'ipv6_route_ready');
+        final peer = visible[index];
+        final entries = gateways[peer]!;
+        final ready = entries.any((entry) => entry['tunnel_ready'] == true);
+        final ikes = entries.map((entry) => _map(entry['ike']));
+        final ikeState = ikes.any((ike) => ike['live'] == true)
+            ? l.connected
+            : ikes.map((ike) => _ikeState(l, ike)).toSet().join(' / ');
+        final esp = _combinedState(ikes.map((ike) => ike['child_live']));
+        final babel = _combinedState(
+          entries.map((entry) => entry['babel_live']),
+        );
+        final ipv4 = _combinedState(
+          entries.map((entry) => _routeReady(entry, 'ipv4_route_ready')),
+        );
+        final ipv6 = _combinedState(
+          entries.map((entry) => _routeReady(entry, 'ipv6_route_ready')),
+        );
+        final remote = entries
+            .map(
+              (entry) => _text(_map(entry['ike'])['attempt_remote_endpoint']),
+            )
+            .where((value) => value.isNotEmpty)
+            .join(' / ');
         final colors = context.colorScheme;
         return _PhotonTableRow(
           title: peer,
-          id: (peer, outer),
+          id: peer,
           cells: [
             Text(peer),
             Text(
@@ -449,31 +456,39 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
                 color: ready ? colors.primary : colors.onSurfaceVariant,
               ),
             ),
-            Text(_ikeState(l, ike)),
-            _statusMark(_linkState(l, ike['child_live']), ike['child_live']),
-            _statusMark(
-              _linkState(l, entry['babel_live']),
-              entry['babel_live'],
-            ),
+            Text(ikeState),
+            _statusMark(_linkState(l, esp), esp),
+            _statusMark(_linkState(l, babel), babel),
             _statusMark(_routeState(l, ipv4), ipv4),
             _statusMark(_routeState(l, ipv6), ipv6),
-            Text(outer.isEmpty ? '—' : outer),
+            Row(
+              spacing: 6,
+              children: [
+                for (final family in ['IPv4', 'IPv6'])
+                  () {
+                    final tunnels = entries.where(
+                      (entry) => _outerFamily(entry) == family,
+                    );
+                    final Object? live =
+                        tunnels.isEmpty &&
+                            status['connections_truncated'] == true
+                        ? null
+                        : tunnels.any((entry) => entry['tunnel_ready'] == true);
+                    final label = live == null
+                        ? l.unknown
+                        : live == true
+                        ? l.photonTunnelReady
+                        : l.photonTunnelNotReady;
+                    return _statusMark('$family · $label', live);
+                  }(),
+              ],
+            ),
             Text(remote.isEmpty ? '—' : remote),
           ],
           details: [
-            (l.status, ready ? l.photonTunnelReady : l.photonTunnelNotReady),
-            (l.photonOuter, outer),
-            (l.remote, remote),
-            ('IKE', _ikeState(l, ike)),
-            ('ESP', _linkState(l, ike['child_live'])),
-            ('Babel', _linkState(l, entry['babel_live'])),
-            ('IPv4', _routeState(l, ipv4)),
-            ('IPv6', _routeState(l, ipv6)),
-            if (ike['live'] == true && ike['mobike'] != null)
-              ('MOBIKE', ike['mobike'] == true ? l.enabled : l.disabled),
-            (l.expireTime, _date(ike['child_expires_at'])),
-            (l.photonLastFailure, _tunnelFailure(l, ike['last_failure'])),
-            (l.time, _date(_map(ike['last_failure'])['at'])),
+            for (final entry in entries)
+              for (final (label, value) in _tunnelDetails(l, entry))
+                ('${_outerFamily(entry)} · $label', value),
           ],
         );
       },
@@ -485,10 +500,18 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
         _list(status['peers'])
             .where(
               (entry) =>
-                  _matches([_text(entry['peer_id']), _text(entry['sync_status'])]),
+                  entry['authorization'] != 'revoked' &&
+                  entry['sync_status'] != 'revoked' &&
+                  _matches([
+                    _text(entry['peer_id']),
+                    _text(entry['sync_status']),
+                  ]),
             )
             .toList()
-          ..sort((a, b) => _text(b['peer_id']).compareTo(_text(a['peer_id'])));
+          ..sort(
+            (a, b) =>
+                _compareGatewayNames(_text(a['peer_id']), _text(b['peer_id'])),
+          );
     return _PhotonTable(
       columns: [
         TableColumn('peer', l.photonNode, flex: 3),
@@ -512,10 +535,7 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
             (l.photonIdentity, _text(entry['authorization'])),
             (l.address, _text(entry['selected_addr'])),
             (l.photonLastSync, lastSync),
-            (
-              l.photonLastFailure,
-              _text(failure['message'] ?? failure['code']),
-            ),
+            (l.photonLastFailure, _text(failure['message'] ?? failure['code'])),
           ],
         );
       },
@@ -584,6 +604,10 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
             Wrap(
               spacing: 8,
               children: [
+                TextButton(
+                  onPressed: () => showPhotonTemplateHelp(context),
+                  child: Text(l.photonTemplateHelp),
+                ),
                 TextButton(
                   onPressed: editable ? () => _importTemplate(config) : null,
                   child: Text(l.photonImportTemplate),
@@ -735,26 +759,78 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
       _filter.isEmpty ||
       values.any((value) => value.toLowerCase().contains(_filter));
 
-  List<Widget Function()> _rows(
-    List<Map<String, dynamic>> rows,
-    AppLocalizations l,
-    Widget Function(Map<String, dynamic>) builder, {
-    bool truncated = false,
-  }) {
-    final visible = rows
-        .where(
-          (row) =>
-              _filter.isEmpty ||
-              row.values.whereType<String>().any(
-                (value) => value.toLowerCase().contains(_filter),
-              ),
-        )
-        .toList();
-    return [
-      if (truncated) () => _DetailCard(title: l.photonTruncated, lines: []),
-      if (visible.isEmpty) () => _DetailCard(title: l.photonEmpty, lines: []),
-      for (final row in visible) () => builder(row),
-    ];
+  Widget _routeTable(AppLocalizations l, Map<String, dynamic> status) {
+    final routes =
+        <({String prefix, String source}), List<Map<String, dynamic>>>{};
+    for (final route in _list(_map(status['babel'])['routes'])) {
+      final key = (
+        prefix: _text(route['prefix']),
+        source: _text(route['source_prefix']),
+      );
+      (routes[key] ??= []).add(route);
+    }
+    final visible =
+        routes.entries.where((group) {
+          return group.value.any(
+            (route) => _matches([
+              group.key.prefix,
+              group.key.source,
+              _text(route['peer']),
+              _text(route['next_hop']),
+              _text(route['outer_family']),
+              _text(route['origin']),
+            ]),
+          );
+        }).toList()..sort((a, b) {
+          final prefix = a.key.prefix.compareTo(b.key.prefix);
+          return prefix != 0 ? prefix : a.key.source.compareTo(b.key.source);
+        });
+    return _PhotonTable(
+      columns: [
+        TableColumn('prefix', l.routeAddress, flex: 2.5),
+        TableColumn('next_hop', l.photonNextHop, flex: 3),
+        TableColumn('metric', l.photonMetric, flex: 1.2),
+        TableColumn('delay', l.delay, flex: 0.8),
+        TableColumn('paths', l.photonNextHopCount, flex: 1),
+      ],
+      wideColumn: TableColumn('source', l.source, flex: 2),
+      detailsTitle: l.photonRoutes,
+      truncated: status['routes_truncated'] == true,
+      length: visible.length,
+      rowAt: (context, index) {
+        final group = visible[index];
+        final paths = group.value..sort(_compareRoutePaths);
+        final bestMetric = _routeMetric(paths.first);
+        final nextHops = paths
+            .where((path) => _routeMetric(path) == bestMetric)
+            .map(_routeNextHop)
+            .toSet()
+            .join(' / ');
+        return _PhotonTableRow(
+          title: group.key.prefix,
+          id: group.key,
+          cells: [
+            Text(group.key.prefix),
+            Tooltip(message: nextHops, child: Text(nextHops)),
+            Text(_text(paths.first['metric'])),
+            Tooltip(message: l.photonUnprobed, child: const Text('—')),
+            Text('${paths.length}'),
+            Text(group.key.source.isEmpty ? '—' : group.key.source),
+          ],
+          details: [
+            (l.source, group.key.source),
+            for (var i = 0; i < paths.length; i++) ...[
+              ('${i + 1} · ${l.photonNextHop}', _routeNextHop(paths[i])),
+              ('${i + 1} · ${l.address}', _text(paths[i]['next_hop'])),
+              ('${i + 1} · ${l.photonOuter}', _outerFamily(paths[i])),
+              ('${i + 1} · ${l.photonMetric}', _text(paths[i]['metric'])),
+              ('${i + 1} · ${l.delay}', l.photonUnprobed),
+              ('${i + 1} · ${l.photonIdentity}', _text(paths[i]['origin'])),
+            ],
+          ],
+        );
+      },
+    );
   }
 }
 
@@ -887,6 +963,74 @@ class _PhotonTable extends StatelessWidget {
   }
 }
 
+String _routeNextHop(Map<String, dynamic> route) =>
+    _text(route['peer']).isNotEmpty
+    ? _text(route['peer'])
+    : _text(route['next_hop']).isNotEmpty
+    ? _text(route['next_hop'])
+    : '—';
+
+int _routeMetric(Map<String, dynamic> route) =>
+    int.tryParse(_text(route['metric'])) ?? 65535;
+
+int _compareRoutePaths(Map<String, dynamic> a, Map<String, dynamic> b) {
+  final metric = _routeMetric(a).compareTo(_routeMetric(b));
+  if (metric != 0) return metric;
+  final peer = _compareGatewayNames(_routeNextHop(a), _routeNextHop(b));
+  if (peer != 0) return peer;
+  final family = _text(a['outer_family']).compareTo(_text(b['outer_family']));
+  return family != 0
+      ? family
+      : _text(a['next_hop']).compareTo(_text(b['next_hop']));
+}
+
+int _compareGatewayNames(String a, String b) {
+  final aLabels = a.split('.').reversed.toList();
+  final bLabels = b.split('.').reversed.toList();
+  for (var i = 0; i < aLabels.length && i < bLabels.length; i++) {
+    final aParts = aLabels[i].split('-').reversed.toList();
+    final bParts = bLabels[i].split('-').reversed.toList();
+    for (var j = 0; j < aParts.length && j < bParts.length; j++) {
+      final order = bParts[j].compareTo(aParts[j]);
+      if (order != 0) return order;
+    }
+    final order = bParts.length.compareTo(aParts.length);
+    if (order != 0) return order;
+  }
+  return bLabels.length.compareTo(aLabels.length);
+}
+
+Object? _combinedState(Iterable<Object?> values) {
+  if (values.any((value) => value == true)) return true;
+  return values.any((value) => value == null) ? null : false;
+}
+
+List<(String, String)> _tunnelDetails(
+  AppLocalizations l,
+  Map<String, dynamic> entry,
+) {
+  final ike = _map(entry['ike']);
+  return [
+    (
+      l.status,
+      entry['tunnel_ready'] == true
+          ? l.photonTunnelReady
+          : l.photonTunnelNotReady,
+    ),
+    (l.remote, _text(ike['attempt_remote_endpoint'])),
+    ('IKE', _ikeState(l, ike)),
+    ('ESP', _linkState(l, ike['child_live'])),
+    ('Babel', _linkState(l, entry['babel_live'])),
+    ('IPv4', _routeState(l, _routeReady(entry, 'ipv4_route_ready'))),
+    ('IPv6', _routeState(l, _routeReady(entry, 'ipv6_route_ready'))),
+    if (ike['live'] == true && ike['mobike'] != null)
+      ('MOBIKE', ike['mobike'] == true ? l.enabled : l.disabled),
+    (l.expireTime, _date(ike['child_expires_at'])),
+    (l.photonLastFailure, _tunnelFailure(l, ike['last_failure'])),
+    (l.time, _date(_map(ike['last_failure'])['at'])),
+  ];
+}
+
 String _outerFamily(Map<String, dynamic> entry) {
   switch (entry['outer_family']) {
     case 'ipv4':
@@ -1016,9 +1160,10 @@ String _date(dynamic value) {
 }
 
 String _unix(dynamic value) => value is int && value > 0
-    ? DateTime.fromMillisecondsSinceEpoch(value * 1000, isUtc: true)
-        .toIso8601String()
-        .replaceFirst('.000Z', 'Z')
+    ? DateTime.fromMillisecondsSinceEpoch(
+        value * 1000,
+        isUtc: true,
+      ).toIso8601String().replaceFirst('.000Z', 'Z')
     : 'never';
 String _failure(dynamic value) {
   final data = _map(value);

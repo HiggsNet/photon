@@ -127,6 +127,8 @@ func TestRouteObservationReportsFamiliesIndependently(t *testing.T) {
 		{Destination: netip.MustParsePrefix("10.1.0.0/16"), NextHop: netip.MustParseAddr("fe80::1"), RouterID: [8]byte{1}, ExpiresAt: now.Add(time.Minute), Metric: 10},
 		{Destination: netip.MustParsePrefix("fd12::/32"), NextHop: netip.MustParseAddr("fe80::1"), RouterID: [8]byte{1}, ExpiresAt: now.Add(time.Minute), Metric: 10},
 	}
+	otherHop := routes[0]
+	otherHop.NextHop = netip.MustParseAddr("fe80::2")
 	for _, tc := range []struct {
 		name       string
 		routes     []sadr.Route
@@ -137,12 +139,25 @@ func TestRouteObservationReportsFamiliesIndependently(t *testing.T) {
 		{"IPv4 only", routes[:1], true, true, false},
 		{"IPv6 only", routes[1:], true, false, true},
 		{"device down", routes, false, false, false},
+		{"equal cost next hops", []sadr.Route{routes[0], otherHop}, true, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			out := Observation{Wintun: WintunObservation{Configured: tc.configured}}
 			out.observeRoutes(tc.routes, origins, hosts, now)
 			if out.ipv4RouteReady != tc.ipv4 || out.ipv6RouteReady != tc.ipv6 || out.TunnelReady != (tc.ipv4 || tc.ipv6) {
 				t.Fatalf("unexpected IPv4, IPv6, aggregate readiness: %t, %t, %t", out.ipv4RouteReady, out.ipv6RouteReady, out.TunnelReady)
+			}
+			if len(out.Babel.Routes) != len(tc.routes) {
+				t.Fatalf("lost route next hops: %+v", out.Babel.Routes)
+			}
+			for _, route := range tc.routes {
+				found := false
+				for _, observed := range out.Babel.Routes {
+					found = found || observed.Prefix == route.Destination && observed.NextHop == route.NextHop
+				}
+				if !found {
+					t.Fatalf("missing next hop %s for %s", route.NextHop, route.Destination)
+				}
 			}
 		})
 	}
