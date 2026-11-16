@@ -1176,3 +1176,32 @@ diff --git a/lib/common/path.dart b/lib/common/path.dart
  
    @visibleForTesting
    static Future<Directory> Function() temporaryDirectory =
+diff --git a/lib/common/app_update.dart b/lib/common/app_update.dart
+--- a/lib/common/app_update.dart
++++ b/lib/common/app_update.dart
+@@ -40,7 +40,10 @@
+   windowsInstalled: system.isWindows && isInstalledWindowsBuild,
+ );
+ 
+-String? get selfUpdateSuffix => resolveSelfUpdateSuffix();
++// Photon installers must never replace themselves with an upstream binary.
++String? get selfUpdateSuffix => const bool.fromEnvironment('PHOTON_BUILD')
++    ? null
++    : resolveSelfUpdateSuffix();
+ 
+ // The names follow the release matrix in .github/workflows/build.yaml.
+ String? selfUpdateAssetSuffix(Abi abi, {required bool windowsInstalled}) {
+diff --git a/lib/common/constant.dart b/lib/common/constant.dart
+--- a/lib/common/constant.dart
++++ b/lib/common/constant.dart
+@@ -129,7 +129,9 @@
+ const bootRecordKey = 'boot_record';
+ const appliedConfigMd5Key = 'applied_config_md5';
+ const defaultSystemDnsFallback = '223.5.5.5';
+-const repository = 'chen08209/FlClash';
++const repository = bool.fromEnvironment('PHOTON_BUILD')
++    ? 'HiggsNet/photon'
++    : 'chen08209/FlClash';
+ const maxMobileWidth = 600;
+ const maxLaptopWidth = 840;
+ const defaultTestUrl = 'https://www.gstatic.com/generate_204';

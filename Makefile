@@ -112,6 +112,21 @@ photon-flclash-build:
 		-BackendDirectory "$$win_build\windows-amd64" \
 		-ArchivePath "$$win_build\photon-flclash\dist\photon-flclash-windows-amd64.zip" "$$@"
 
+.PHONY: photon-flclash-installer
+photon-flclash-installer: photon-flclash-build
+	@set -eu; \
+	case "$$(uname -s)" in \
+		MINGW*|MSYS*|CYGWIN*) path_tool=cygpath ;; \
+		*) path_tool=wslpath ;; \
+	esac; \
+	win_script=$$("$$path_tool" -a -w app/photon-flclash/build-installer.ps1); \
+	win_build=$$("$$path_tool" -a -w "$(BUILD_DIR)"); \
+	MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$$win_script" \
+		-Archive "$$win_build\photon-flclash\dist\photon-flclash-windows-amd64.zip" \
+		-Checksum "$$win_build\photon-flclash\dist\photon-flclash-windows-amd64.zip.sha256" \
+		-OutputPath "$$win_build\photon-flclash\dist\photon-flclash-windows-amd64-setup.exe" \
+		-PackageVersion "$(RELEASE_VERSION)"
+
 photon-windows-cross-build:
 	@mkdir -p "$(BUILD_DIR)/windows-amd64"
 	$(WINDOWS_AMD64_GO_ENV) $(GO) build -ldflags "$(LDFLAGS)" -o "$(BUILD_DIR)/windows-amd64/$(PHOTON_WINDOWS_BINARY_NAME)" $(PHOTON_WINDOWS_MAIN_PACKAGE)
@@ -947,6 +962,7 @@ help:
 	@echo "  check   - Run fmt, vet, test, and build"
 	@echo "  photon-windows-build - Build Windows amd64 portable directory + ZIP (official Wintun; offline: WINTUN_DLL=/path/wintun.dll)"
 	@echo "  photon-flclash-build - Build the FlClash + Photon Windows amd64 ZIP on Windows or WSL"
+	@echo "  photon-flclash-installer - Build the FlClash + Photon ZIP and Setup.exe (requires Inno Setup 6)"
 	@echo "  photon-windows-cross-build - Compile Windows amd64 only, without downloading or packaging Wintun"
 	@echo "  photon-windows-test - Run Photon Windows portable tests"
 	@echo "  release-check - Validate VERSION/repository state and run release tests"

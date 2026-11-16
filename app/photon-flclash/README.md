@@ -51,11 +51,33 @@ rules:
 
 ## 准备与构建
 
+Windows amd64 同时提供 ZIP 便携版和 `photon-flclash-<版本>-windows-amd64-setup.exe` 安装版。安装版需要管理员权限，默认安装到 `Program Files\Photon-FlClash`，提供开始菜单、可选桌面快捷方式和系统卸载入口。安装与升级前先从托盘退出客户端；运行中的客户端或后台会阻止替换文件。卸载只清理本安装的程序、快捷方式及注册项，保留 AppData 中的订阅、设置、Photon 配置和身份。安装程序不会自动迁移便携版的 `data`；可在 Photon 页面导入或引用原配置。
+
+安装版与便携版沿用相同的 AppData 兼容逻辑，不应同时打开。Photon 构建的更新入口指向 Photon Release 页面，更新时下载新的 Photon 安装程序覆盖安装；禁用上游 FlClash 的自动二进制替换，避免丢失 Photon 集成。
+
 在 Windows 上用带 GNU Make、Bash 和 `zip` 的终端运行，或在启用了 Windows 互操作的 WSL 中从 Windows 磁盘上的检出运行，例如 `/mnt/c/photon`。
 
 ```sh
 make photon-flclash-build
 ```
+
+安装 [Inno Setup 6](https://jrsoftware.org/inno-setup/downloads) 后，可以同时构建 ZIP 和安装版：
+
+```sh
+make photon-flclash-installer
+```
+
+安装包默认位于 `build/photon-flclash/dist/photon-flclash-windows-amd64-setup.exe`，旁边生成 `.sha256`。已有经过校验的 ZIP 可直接打包，无需重新编译 Flutter：
+
+```powershell
+.\app\photon-flclash\build-installer.ps1 `
+  -Archive .\build\photon-flclash\dist\photon-flclash-windows-amd64.zip `
+  -Checksum .\build\photon-flclash\dist\photon-flclash-windows-amd64.zip.sha256 `
+  -OutputPath .\build\photon-flclash\dist\photon-flclash-windows-amd64-setup.exe `
+  -PackageVersion 0.7.4
+```
+
+编译器默认从 PATH 或 Inno Setup 6 的标准安装目录查找，也可用 `-Compiler` 指定。安装包复用 ZIP 中的完整目录、许可证和逐文件校验清单，不重新选择后台或驱动。`PHOTON_FLCLASH_SIGNING_THUMBPRINT` 也用于签名安装程序。
 
 目标会编译 Photon 后台、准备锁定的 FlClash 源码并调用 Windows Flutter 打包。ZIP 默认位于 `build/photon-flclash/dist/photon-flclash-windows-amd64.zip`，内含 `SHA256SUMS`。Windows 的 `PATH` 需要包含锁定版本的 Flutter、Go 和 Rust，并安装 Visual Studio C++ 构建工具及 Windows SDK。Photon 后台要求 Go 1.25 或更新版本，WSL 中用 Linux Go 编译。独立 Linux 主机可以用 `make photon-windows-build` 交叉编译 Photon 原生便携包。Flutter 的 Windows 界面编译需要 Windows 主机。
 
@@ -74,7 +96,7 @@ flutter test test/photon test/providers/action_test.dart test/providers/system_a
 
 版本要求见 `upstream.env`：Flutter 3.47.6、FlClash Go 1.27.1、Rust 1.99.0；Photon 后台使用 Go 1.25。Windows 还需要 Visual Studio C++ 构建工具和 Windows SDK。
 
-GitHub Actions 的 **Windows packages** 可以手动运行，构建并上传原生客户端和 Photon-FlClash 两个 ZIP 及各自的 SHA256 校验文件。手动构建名称包含提交短 SHA，不发布 Release 或 Docker 镜像。推送版本标签时，**Release** 复用同一流程，在两个客户端及相关测试通过后将两个 ZIP 一起发布到 GitHub Release。
+GitHub Actions 的 **Windows packages** 可以手动运行，构建并上传原生客户端 ZIP、Photon-FlClash ZIP 和 EXE 安装版及各自的 SHA256 校验文件。安装版还会执行静默安装、逐文件校验、运行中拒绝更新/卸载、覆盖安装、卸载及数据保留检查。手动构建名称包含提交短 SHA，不发布 Release 或 Docker 镜像。推送版本标签时，**Release** 复用同一流程，在两个客户端及相关测试通过后将 ZIP 和 EXE 一起发布到 GitHub Release。
 
 FlClash 使用原生客户端产物中的同一份 Photon 后台和 Wintun，并在打包后核对二者摘要。工具链与上游版本均取自 `upstream.env`；流水线执行 Windows 后台/原生 GUI 测试、Flutter 静态检查和 Photon 前端回归。目前流水线生成未签名包。
 
