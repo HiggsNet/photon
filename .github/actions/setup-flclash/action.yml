@@ -14,6 +14,11 @@ runs:
         echo "flutter=$FLCLASH_FLUTTER_VERSION" >> "$GITHUB_OUTPUT"
         echo "flutter-commit=$FLCLASH_FLUTTER_COMMIT" >> "$GITHUB_OUTPUT"
         echo "PUB_CACHE=$RUNNER_TEMP/pub-cache" >> "$GITHUB_ENV"
+        echo "FLCLASH_FLUTTER_SDK=$RUNNER_TEMP/photon-flutter" >> "$GITHUB_ENV"
+    - name: Locate native build caches
+      shell: pwsh
+      run: |
+        "FLCLASH_SYSTEM_TEMP=$([IO.Path]::GetTempPath().TrimEnd('\', '/'))" >> $env:GITHUB_ENV
     - name: Prepare locked FlClash sources
       shell: bash
       run: bash app/photon-flclash/prepare.sh
@@ -41,6 +46,20 @@ runs:
         set -euo pipefail
         rustup toolchain install "$FLCLASH_RUST_VERSION" --profile minimal
         rustup default "$FLCLASH_RUST_VERSION"
+    - name: Cache Flutter SDK and engine artifacts
+      uses: actions/cache@v4
+      with:
+        path: ${{ env.FLCLASH_FLUTTER_SDK }}
+        key: flclash-sdk-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.lock.outputs.flutter-commit }}
+    - name: Cache native Rust compilation
+      uses: actions/cache@v4
+      with:
+        path: |
+          build/photon-flclash/upstream/services/helper/target
+          build/photon-flclash/upstream/.dart_tool/**/target
+          ${{ env.FLCLASH_SYSTEM_TEMP }}/frb_native_assets_*/**/target
+        key: flclash-native-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('app/photon-flclash/upstream.env', 'build/photon-flclash/upstream/**/Cargo.lock', 'build/photon-flclash/upstream/**/Cargo.toml', 'build/photon-flclash/upstream/**/rust-toolchain.toml') }}-${{ hashFiles('build/photon-flclash/upstream/**/*.rs', 'build/photon-flclash/upstream/plugins/rust_api/hook/*.dart', 'build/photon-flclash/upstream/plugins/setup/**/*.dart') }}
+        restore-keys: flclash-native-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('app/photon-flclash/upstream.env', 'build/photon-flclash/upstream/**/Cargo.lock', 'build/photon-flclash/upstream/**/Cargo.toml', 'build/photon-flclash/upstream/**/rust-toolchain.toml') }}-
     - name: Install locked Flutter SDK
       shell: bash
       env:
@@ -48,8 +67,10 @@ runs:
         FLCLASH_FLUTTER_COMMIT: ${{ steps.lock.outputs.flutter-commit }}
       run: |
         set -euo pipefail
-        sdk="$RUNNER_TEMP/photon-flutter"
-        git clone --depth 1 --branch "$FLCLASH_FLUTTER_VERSION" https://github.com/flutter/flutter.git "$sdk"
+        sdk="$FLCLASH_FLUTTER_SDK"
+        if [[ ! -d "$sdk/.git" ]]; then
+          git clone --depth 1 --branch "$FLCLASH_FLUTTER_VERSION" https://github.com/flutter/flutter.git "$sdk"
+        fi
         test "$(git -C "$sdk" rev-parse HEAD)" = "$FLCLASH_FLUTTER_COMMIT"
         echo "$sdk/bin" >> "$GITHUB_PATH"
         dart="$sdk/bin/cache/dart-sdk/bin/dart"

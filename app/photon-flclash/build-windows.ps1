@@ -47,11 +47,17 @@ function Check-Exit([string]$Operation) {
 function Invoke-BuildTool([string]$Program, [string[]]$ToolArguments) {
     # Windows PowerShell 5 can promote successful native stderr progress to an error.
     $previous = $ErrorActionPreference
+    $elapsed = [Diagnostics.Stopwatch]::StartNew()
+    Write-Output "Starting: $Program $($ToolArguments -join ' ')"
     try {
         $ErrorActionPreference = 'Continue'
         & $Program @ToolArguments
         $code = $LASTEXITCODE
-    } finally { $ErrorActionPreference = $previous }
+    } finally {
+        $ErrorActionPreference = $previous
+        $elapsed.Stop()
+        Write-Output ("Finished: {0} ({1:N1}s)" -f $Program, $elapsed.Elapsed.TotalSeconds)
+    }
     if ($code -ne 0) { throw "$Program failed: $code" }
 }
 if (Test-Path -LiteralPath $OutputDirectory) { throw 'Output directory must be new' }
@@ -97,7 +103,7 @@ Push-Location $Checkout
 try {
     Invoke-BuildTool 'flutter' @('pub', 'get')
     Invoke-BuildTool 'dart' @('run', 'intl_utils:generate')
-    Invoke-BuildTool 'flutter' @('build', 'windows', '--release', '--dart-define=PHOTON_BUILD=true')
+    Invoke-BuildTool 'flutter' @('build', 'windows', '--release', '--dart-define=PHOTON_BUILD=true', '--verbose')
     $bundle = Join-Path $Checkout 'build\windows\x64\runner\Release'
     if (!(Test-Path -LiteralPath (Join-Path $bundle 'FlClash.exe'))) { throw 'Windows x64 bundle missing' }
     if ($stage) { [IO.Directory]::CreateDirectory($stage) | Out-Null }

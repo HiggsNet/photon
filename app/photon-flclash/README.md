@@ -98,6 +98,12 @@ flutter test test/photon test/providers/action_test.dart test/providers/system_a
 
 GitHub Actions 的 **Windows packages** 可以手动运行，构建并上传原生客户端 ZIP、Photon-FlClash ZIP 和 EXE 安装版及各自的 SHA256 校验文件。安装版还会执行静默安装、逐文件校验、运行中拒绝更新/卸载、覆盖安装、卸载及数据保留检查。手动构建名称包含提交短 SHA，不发布 Release 或 Docker 镜像。推送版本标签时，**Release** 复用同一流程，在两个客户端及相关测试通过后将 ZIP 和 EXE 一起发布到 GitHub Release。
 
+`master` 上的 FlClash 接入或 Windows 流水线变更也会运行 **Windows packages**，为发布预热默认分支缓存。GitHub 的缓存按分支或标签隔离：不同版本标签不能互相读取缓存，但都能读取默认分支缓存；仅添加 `restore-keys` 无法解决标签间缓存未命中。
+
+缓存包括 Go 模块和编译缓存、Dart/Rust 下载依赖、锁定提交的 Flutter SDK 和引擎文件，以及 Rust helper/native-assets 的 Cargo 编译目录。Windows 的 Rust bridge 使用系统临时目录中的短路径，需与 `.dart_tool` 下的 Cargo 目录一起缓存。SDK 按系统、架构和 Flutter 提交隔离；Rust 产物还按上游工具链、Cargo 配置/锁文件和原生源码区分，源码变化时可回退复用相同工具链和依赖的编译缓存，由 Cargo 重新检查输入。最终 Windows 应用、安装包及 Photon 后台身份校验仍每次执行。
+
+比较性能时，在同一分支、同一提交上手动运行两次 **Windows packages**，分别记录缓存恢复/保存与编译耗时；发布能否复用缓存则查看标签构建的命中日志。`build-windows.ps1` 输出每个构建命令的耗时和 Flutter 详细日志，可进一步区分 Go core、Rust helper、Rust bridge 与 Flutter/C++ 编译。v0.7.5 的冷缓存基线：便携包步骤 8 分 11 秒，其中 Windows 应用构建 416.4 秒，其余约 75 秒为工具链初始化、依赖、引擎下载和打包；整个 FlClash job（含安装包及测试）11 分 23 秒。该基线不能当作优化后的实测结果。
+
 FlClash 使用原生客户端产物中的同一份 Photon 后台和 Wintun，并在打包后核对二者摘要。工具链与上游版本均取自 `upstream.env`；流水线执行 Windows 后台/原生 GUI 测试、Flutter 静态检查和 Photon 前端回归。目前流水线生成未签名包。
 
 在具备工具链的 Windows 上执行：

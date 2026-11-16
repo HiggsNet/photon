@@ -1,6 +1,14 @@
 name: Windows packages
 
 on:
+  # Default-branch caches can be reused by releases; tag caches cannot.
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/windows.yml'
+      - '.github/actions/setup-flclash/**'
+      - 'app/photon-flclash/**'
+      - 'docs/scripts/windows-*.ps1'
   workflow_call:
   workflow_dispatch:
 
