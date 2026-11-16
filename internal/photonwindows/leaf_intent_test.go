@@ -112,6 +112,57 @@ func TestLeafAssignedHostsSubnetBoundaries(t *testing.T) {
 	}
 }
 
+func TestLeafLinkLocalUsesSharedOverlayPath(t *testing.T) {
+	for _, tc := range []struct {
+		name, address, path string
+		local, peer         []string
+		mismatch            bool
+	}{
+		{name: "local superset", address: "192.0.2.1", local: []string{"family:ipv4", "family:ipv6"}, peer: []string{"family:ipv4"}, path: "family:ipv4"},
+		{name: "peer superset", address: "192.0.2.1", local: []string{"family:ipv4"}, peer: []string{"family:ipv4", "family:ipv6"}, path: "family:ipv4"},
+		{name: "ipv6", address: "2001:db8::1", local: []string{"family:ipv6", "family:ipv4"}, peer: []string{"family:ipv4", "family:ipv6"}, path: "family:ipv6"},
+		{name: "default fallback", address: "192.0.2.1", local: []string{"family:ipv4", ipsec.DefaultPathKey}, peer: []string{ipsec.DefaultPathKey}, path: ipsec.DefaultPathKey},
+		{name: "disjoint", address: "192.0.2.1", local: []string{"family:ipv6"}, peer: []string{"family:ipv4"}},
+		{name: "other family overlap", address: "192.0.2.1", local: []string{"family:ipv6"}, peer: []string{"family:ipv4", "family:ipv6"}},
+		{name: "different path identity", address: "192.0.2.1", local: []string{ipsec.DefaultPathKey}, peer: []string{"family:ipv4"}},
+		{name: "tunnel mismatch", address: "192.0.2.1", local: []string{"family:ipv4", "family:ipv6"}, peer: []string{"family:ipv4"}, mismatch: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config, view, now, put := gatewayPlanFixture(t)
+			config.ManagedZone = "catofes."
+			spec := ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}
+			for i, path := range []zone.ZonePath{config.ManagedZone, "node-a.catofes."} {
+				paths := tc.local
+				if i == 1 {
+					paths = tc.peer
+				}
+				overlay := ipsec.OverlayIntentRecord{Version: 1, OverlayID: config.Overlay.ID, Provider: ipsec.ProviderStrongSwan, PathKeys: paths, TunnelAddress: spec}
+				if tc.mismatch && i == 1 {
+					overlay.TunnelAddress.Family = ipsec.FamilyIPv4
+				}
+				put(path, ipsec.OverlayIntentRecordKey(config.Overlay.ID), ipsec.RecordTypeOverlayIntent, overlay)
+			}
+			plan := GatewayPlan{Selected: &GatewaySelection{Zone: "node-a.catofes.", Contact: ipsec.ContactPoint{Address: tc.address, Generation: 2}}}
+			local, peer, err := leafLinkLocalAddresses(config, view, plan, now)
+			if tc.path == "" {
+				if err == nil {
+					t.Fatal("incompatible overlay accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			group := ipsec.LinkGroupSpec{ID: config.Overlay.ID, TunnelAddressSpec: spec}
+			base := ipsec.TransportLinkSpec{LocalZone: plan.Selected.Zone, PeerZone: config.ManagedZone, LinkID: ipsec.StableLinkID(config.ManagedZone, plan.Selected.Zone, group.ID, tc.path), PathKey: tc.path}
+			linux, err := ipsec.RuntimeSpecForPortGeneration(base, group, plan.Selected.Contact.Generation)
+			if err != nil || local != linux.PeerTunnelAddr || peer != linux.LocalTunnelAddr {
+				t.Fatal("shared path does not mirror Linux addresses", local, peer, err)
+			}
+		})
+	}
+}
+
 func TestLeafLinkLocalMatchesLinuxEpoch(t *testing.T) {
 	config, view, now, put := gatewayPlanFixture(t)
 	config.ManagedZone = "catofes."

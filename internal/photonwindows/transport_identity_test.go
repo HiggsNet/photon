@@ -253,6 +253,63 @@ func TestLocalTransportDerivedTunnelAndPreservedIntent(t *testing.T) {
 	}
 }
 
+func TestLocalTransportCompatibleOverlayPaths(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		local, peer []string
+		mismatch    bool
+		wantErr     bool
+	}{
+		{name: "local superset", local: []string{"family:ipv4", "family:ipv6"}, peer: []string{"family:ipv4"}},
+		{name: "peer superset", local: []string{"family:ipv4"}, peer: []string{"family:ipv4", "family:ipv6"}},
+		{name: "order", local: []string{"family:ipv6", "family:ipv4"}, peer: []string{"family:ipv4", "family:ipv6"}},
+		{name: "wrong family", local: []string{"family:ipv6"}, peer: []string{"family:ipv4", "family:ipv6"}, wantErr: true},
+		{name: "tunnel mismatch", local: []string{"family:ipv4", "family:ipv6"}, peer: []string{"family:ipv4"}, mismatch: true, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source, config, plan, now := transportIdentityFixture(t)
+			endpoint := netip.MustParseAddrPort("127.0.0.1:12345")
+			identity, err := source.EnsureLocalTransport(t.Context(), config, now, plan, endpoint)
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := ipsec.OverlayIntentRecordKey(config.Overlay.ID)
+			put := func(path zone.ZonePath, paths []string) {
+				t.Helper()
+				overlay, err := ipsec.ParseOverlayIntentRecord(source.Store().ReadView().State.Network.Zones[path].Records[key])
+				if err != nil {
+					t.Fatal(err)
+				}
+				overlay.PathKeys = paths
+				if tc.mismatch && path == config.ManagedZone {
+					overlay.TunnelAddress = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}
+				}
+				encoded, _ := json.Marshal(overlay)
+				if _, err := source.Store().ApplyLocalIntent(t.Context(), corestate.PutProtocolRecordIntent{Kind: corestate.ProtocolRecordIPsec, Zone: path, Key: key, Type: ipsec.RecordTypeOverlayIntent, Value: encoded}, now); err != nil {
+					t.Fatal(err)
+				}
+			}
+			put(config.ManagedZone, tc.local)
+			put(plan.Selected.Zone, tc.peer)
+			before := source.Store().ReadView()
+			plan = PlanGateway(t.Context(), config, before, now)
+			if plan.Selected == nil {
+				t.Fatal("fixture lost gateway", plan.Rejected)
+			}
+			got, err := source.EnsureLocalTransport(t.Context(), config, now, plan, endpoint)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("EnsureLocalTransport error = %v, wantErr = %t", err, tc.wantErr)
+			}
+			if !tc.wantErr && !bytes.Equal(got.PrivateKey, identity.PrivateKey) {
+				t.Fatal("compatible path changed transport identity")
+			}
+			if source.Store().VerifiedRevision() != before.Revision {
+				t.Fatal("compatibility check rewrote public records")
+			}
+		})
+	}
+}
+
 func TestLocalTransportActualEndpointProducesLinuxResponder(t *testing.T) {
 	source, config, plan, now := transportIdentityFixture(t)
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})

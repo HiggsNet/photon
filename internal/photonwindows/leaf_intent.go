@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"net/netip"
 	"slices"
 	"strings"
@@ -180,6 +179,7 @@ func leafLinkLocalAddressesWithVerifier(config *Config, view corestate.View, pla
 	}
 	key := ipsec.OverlayIntentRecordKey(config.Overlay.ID)
 	var overlay *ipsec.OverlayIntentRecord
+	var localOverlay *ipsec.OverlayIntentRecord
 	for _, path := range []zone.ZonePath{config.ManagedZone, plan.Selected.Zone} {
 		zs := view.State.Network.Zones[path]
 		if zs == nil {
@@ -202,25 +202,17 @@ func leafLinkLocalAddressesWithVerifier(config *Config, view corestate.View, pla
 		if current.TunnelAddress.Mode != ipsec.TunnelAddressDerivedLinkLocal {
 			return fail(errors.New("leaf: Babel requires derived-link-local overlay"))
 		}
-		if overlay != nil && (overlay.TunnelAddress != current.TunnelAddress || !slices.Equal(overlay.PathKeys, current.PathKeys)) {
+		if overlay != nil && overlay.TunnelAddress != current.TunnelAddress {
 			return fail(errors.New("leaf: overlay path mismatch"))
+		}
+		if localOverlay == nil {
+			localOverlay = current
 		}
 		overlay = current
 	}
-	address, err := netip.ParseAddr(plan.Selected.Contact.Address)
+	pathKey, err := sharedOverlayPathKey(localOverlay, overlay, plan.Selected.Contact)
 	if err != nil {
 		return fail(err)
-	}
-	family := ipsec.FamilyIPv6
-	if address.Is4() {
-		family = ipsec.FamilyIPv4
-	}
-	pathKey := "family:" + family
-	if !slices.Contains(overlay.PathKeys, pathKey) {
-		pathKey = ipsec.DefaultPathKey
-		if !slices.Contains(overlay.PathKeys, pathKey) {
-			return fail(fmt.Errorf("leaf: overlay has no %s path", family))
-		}
 	}
 	group := ipsec.LinkGroupSpec{ID: config.Overlay.ID, TunnelAddressSpec: overlay.TunnelAddress}
 	base := ipsec.TransportLinkSpec{LocalZone: config.ManagedZone, PeerZone: plan.Selected.Zone, LinkID: ipsec.StableLinkID(config.ManagedZone, plan.Selected.Zone, group.ID, pathKey), PathKey: pathKey}

@@ -82,6 +82,35 @@ func TestGatewayNodeDistinguishesAttemptAuthenticationAndReadiness(t *testing.T)
 	}
 }
 
+func TestGatewayNodeHidesRecoveredFailuresButKeepsDebugEvidence(t *testing.T) {
+	s := debugViewFixture()
+	ike := &s.Observation.IKE
+	ike.Gateway, ike.Live, ike.ChildLive = "gateway.catofes.", true, true
+	ike.LastFailure = &photonwindows.IKEFailureObservation{Gateway: ike.Gateway, Message: "previous timeout", Historical: true}
+	ike.LastRejection = &photonwindows.IKEFailureObservation{Gateway: ike.Gateway, Event: "packet_rejected", Message: "previous AUTH failure", Historical: true}
+	before, _ := json.Marshal(s)
+	for _, ready := range []bool{false, true} {
+		s.Observation.TunnelReady = ready
+		text := desktopFormatGatewayNode(s, ike.Gateway)
+		if strings.Contains(text, "previous timeout") || strings.Contains(text, "previous AUTH failure") {
+			t.Fatal("established tunnel displayed a recovered failure", text)
+		}
+		debug := desktopFormatGateway(s)
+		if !strings.Contains(debug, "previous timeout") || !strings.Contains(debug, "previous AUTH failure") {
+			t.Fatal("debug view lost historical diagnostics", debug)
+		}
+	}
+	s.Observation.TunnelReady = false
+	after, _ := json.Marshal(s)
+	if string(before) != string(after) {
+		t.Fatal("display changed diagnostic evidence")
+	}
+	ike.Live, ike.ChildLive = false, false
+	if text := desktopFormatGatewayNode(s, ike.Gateway); !strings.Contains(text, "previous timeout") {
+		t.Fatal("disconnected tunnel lost failure details", text)
+	}
+}
+
 func TestGatewayNodeUsesItsOwnMeshConnection(t *testing.T) {
 	s := debugViewFixture()
 	o := s.Observation

@@ -1178,6 +1178,7 @@ List<(String, String)> _tunnelDetails(
   Map<String, dynamic> entry,
 ) {
   final ike = _map(entry['ike']);
+  final failure = _map(ike['last_failure']);
   return [
     (
       l.status,
@@ -1194,8 +1195,11 @@ List<(String, String)> _tunnelDetails(
     if (ike['live'] == true && ike['mobike'] != null)
       ('MOBIKE', ike['mobike'] == true ? l.enabled : l.disabled),
     (l.expireTime, _date(ike['child_expires_at'])),
-    (l.photonLastFailure, _tunnelFailure(l, ike['last_failure'])),
-    (l.time, _date(_map(ike['last_failure'])['at'])),
+    if (!(ike['live'] == true && ike['child_live'] == true) &&
+        failure.isNotEmpty) ...[
+      (l.photonLastFailure, _tunnelFailure(l, failure)),
+      (l.time, _date(failure['at'])),
+    ],
   ];
 }
 

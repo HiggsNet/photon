@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"time"
 
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
@@ -170,7 +171,7 @@ func (source *State) EnsureLocalTransport(ctx context.Context, config *Config, n
 				continue
 			}
 			// Existing overlays can carry user-owned policy tags or timestamp.
-			// Preserve them if their actual tunnel/path configuration matches.
+			// Preserve them if the tunnel configuration and selected path agree.
 			if record.kind == ipsec.RecordTypeOverlayIntent {
 				previous, err := ipsec.ParseOverlayIntentRecord(existing)
 				if err != nil {
@@ -179,9 +180,13 @@ func (source *State) EnsureLocalTransport(ctx context.Context, config *Config, n
 				comparable := *previous
 				comparable.PolicyTags, comparable.UpdatedAt = nil, overlay.UpdatedAt
 				comparable.Connect, comparable.Deny = nil, nil
+				comparable.PathKeys = overlay.PathKeys
 				value, _ := json.Marshal(comparable)
 				if !bytes.Equal(value, encoded) {
 					return out, errors.New("local transport: existing overlay differs from selected gateway")
+				}
+				if _, err := sharedOverlayPathKey(previous, &overlay, plan.Selected.Contact); err != nil {
+					return out, err
 				}
 				continue
 			}
@@ -235,6 +240,20 @@ func (source *State) EnsureLocalTransport(ctx context.Context, config *Config, n
 		return out, corestate.ErrVerifiedRevisionStale
 	}
 	return LocalTransportIdentity{ID: string(config.ManagedZone), PrivateKey: bytes.Clone(private)}, nil
+}
+
+func sharedOverlayPathKey(local, peer *ipsec.OverlayIntentRecord, contact ipsec.ContactPoint) (string, error) {
+	address, err := netip.ParseAddr(contact.Address)
+	if err != nil {
+		return "", err
+	}
+	family := outerFamily(address.Unmap())
+	for _, key := range []string{"family:" + family, ipsec.DefaultPathKey} {
+		if slices.Contains(local.PathKeys, key) && slices.Contains(peer.PathKeys, key) {
+			return key, nil
+		}
+	}
+	return "", fmt.Errorf("overlay: no shared %s path", family)
 }
 
 func windowsSharedPortRecord(record *ipsec.PortRecord) bool {

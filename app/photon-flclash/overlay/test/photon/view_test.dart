@@ -247,6 +247,81 @@ void main() {
   });
 
   photonTest(
+    'established tunnels hide failures while diagnostics retain them',
+    (tester) async {
+      final failure = <String, dynamic>{
+        'message': 'tunnel: IKE retransmission budget exhausted',
+        'at': '2026-11-16T07:18:40Z',
+        'historical': true,
+      };
+      final ike = <String, dynamic>{
+        'live': true,
+        'child_live': true,
+        'phase': 'established',
+        'attempt_remote_endpoint': '192.0.2.1:4500',
+        'last_failure': failure,
+      };
+      final connection = <String, dynamic>{
+        'peer': 'gateway.catofes.',
+        'outer_family': 'ipv4',
+        'tunnel_ready': true,
+        'babel_live': true,
+        'ike': ike,
+      };
+      backend.sample = {
+        'running': true,
+        'tunnel_ready': true,
+        'connections': [connection],
+      };
+      await controller.start(allowed: true);
+      await tester.pumpWidget(view());
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Tunnels').first);
+      await tester.pumpAndSettle();
+
+      for (final ready in [true, false]) {
+        connection['tunnel_ready'] = ready;
+        await controller.refresh();
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('gateway.catofes.'));
+        await tester.pumpAndSettle();
+        expect(find.text('Last failure'), findsNothing);
+        expect(find.text(failure['message'] as String), findsNothing);
+        Navigator.of(tester.element(find.text('192.0.2.1:4500'))).pop();
+        await tester.pumpAndSettle();
+      }
+
+      ike['live'] = false;
+      ike['child_live'] = false;
+      ike['phase'] = 'idle';
+      failure['historical'] = false;
+      await controller.refresh();
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('gateway.catofes.'));
+      await tester.pumpAndSettle();
+      expect(find.text(failure['message'] as String), findsOneWidget);
+      Navigator.of(tester.element(find.text('192.0.2.1:4500'))).pop();
+      await tester.pumpAndSettle();
+
+      ike['live'] = true;
+      ike['child_live'] = true;
+      ike['phase'] = 'established';
+      failure['historical'] = true;
+      await controller.refresh();
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Diagnostics').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Advanced details'));
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('tunnel: IKE retransmission budget exhausted'),
+        findsOneWidget,
+      );
+      expect(ike['last_failure'], same(failure));
+    },
+  );
+
+  photonTest(
     'the tunnel table groups outer families and keeps their details accessible',
     (tester) async {
       tester.view.physicalSize = const Size(1400, 1100);

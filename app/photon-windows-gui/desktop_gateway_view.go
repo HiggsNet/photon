@@ -149,10 +149,10 @@ func desktopFormatGatewayNode(snapshot desktopSnapshot, id string) string {
 			fmt.Fprintf(text, "生命周期重试记录：%s\r\n", desktopDebugTime(ike.RetryAt))
 		}
 	}
-	if rejection := ike.LastRejection; rejection != nil && rejection.Gateway == id {
+	if rejection := ike.LastRejection; !(live && ike.ChildLive) && rejection != nil && rejection.Gateway == id {
 		desktopDebugIKERecord(text, rejection, true)
 	}
-	if failure := ike.LastFailure; failure != nil && failure.Gateway == id && !desktopDebugSameIKERecord(failure, ike.LastRejection) {
+	if failure := ike.LastFailure; !(live && ike.ChildLive) && failure != nil && failure.Gateway == id && !desktopDebugSameIKERecord(failure, ike.LastRejection) {
 		desktopDebugIKERecord(text, failure, desktopDebugIKERejected(failure.Event))
 	}
 	text.WriteString("\r\n[候选与选择]\r\n")
