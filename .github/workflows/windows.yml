@@ -3,7 +3,7 @@ name: Windows packages
 on:
   # Default-branch caches can be reused by releases; tag caches cannot.
   push:
-    branches: [master]
+    branches: [master, windows]
     paths:
       - '.github/workflows/windows.yml'
       - '.github/actions/setup-flclash/**'

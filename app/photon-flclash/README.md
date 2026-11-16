@@ -98,7 +98,7 @@ flutter test test/photon test/providers/action_test.dart test/providers/system_a
 
 GitHub Actions 的 **Windows packages** 可以手动运行，构建并上传原生客户端 ZIP、Photon-FlClash ZIP 和 EXE 安装版及各自的 SHA256 校验文件。安装版还会执行静默安装、逐文件校验、运行中拒绝更新/卸载、覆盖安装、卸载及数据保留检查。手动构建名称包含提交短 SHA，不发布 Release 或 Docker 镜像。推送版本标签时，**Release** 复用同一流程，在两个客户端及相关测试通过后将 ZIP 和 EXE 一起发布到 GitHub Release。
 
-`master` 上的 FlClash 接入或 Windows 流水线变更也会运行 **Windows packages**，为发布预热默认分支缓存。GitHub 的缓存按分支或标签隔离：不同版本标签不能互相读取缓存，但都能读取默认分支缓存；仅添加 `restore-keys` 无法解决标签间缓存未命中。
+`master` 和 `windows` 上的 FlClash 接入或 Windows 流水线变更也会运行 **Windows packages**。`master` 构建为发布预热默认分支缓存；`windows` 构建用于开发分支检查和同分支缓存复用。GitHub 的缓存按分支或标签隔离：不同版本标签不能互相读取缓存，但都能读取默认分支缓存；仅添加 `restore-keys` 无法解决标签间缓存未命中。工作流尚未合入默认分支时，可通过推送 `windows` 分支启动构建并重跑，以对比冷、热缓存。
 
 缓存包括 Go 模块和编译缓存、Dart/Rust 下载依赖、锁定提交的 Flutter SDK 和引擎文件，以及 Rust helper/native-assets 的 Cargo 编译目录。Windows 的 Rust bridge 使用系统临时目录中的短路径，需与 `.dart_tool` 下的 Cargo 目录一起缓存。SDK 按系统、架构和 Flutter 提交隔离；Rust 产物还按上游工具链、Cargo 配置/锁文件和原生源码区分，源码变化时可回退复用相同工具链和依赖的编译缓存，由 Cargo 重新检查输入。最终 Windows 应用、安装包及 Photon 后台身份校验仍每次执行。
 
