@@ -4,26 +4,26 @@
 
 ## 使用
 
-1. 打开 FlClash，进入侧栏 **Photon**。首次使用点 **Photon 设置**，填写管理员提供的节点名、可信根公钥和至少一条内网路由。首次自动入网还需要引导地址。保存后应用会在数据目录下管理 `photon/photon.yaml`。已有配置可用 **导入 Photon YAML** 复制配置、规则模板及已有身份；要继续直接读取原文件，选择 **引用外部 Photon YAML**。
-2. 在 **概览、隧道、Gossip 节点、路由、代理服务、诊断** 中查看实时状态。网关同时提供已授权的 IPv4、IPv6 地址且本地支持双栈时，Photon 分别尝试建立两条隧道，单条也能承载内层双栈。隧道表按外层连接显示，每行的 IPv4 和 IPv6 分别表示内层是否已有可用路由，「外层」表示连网关使用的地址族。点击一行可查看完整远端地址、ESP 到期时间和最近一次失败或重连原因。Gossip 节点表显示同步状态，代理服务表按发布节点汇总地区和端点数。数据采样被截断时会显示提示。
+1. 打开 FlClash，进入侧栏 **Photon**。首次使用进入 **设置** 标签，点 **新建 Photon 配置**，填写管理员提供的节点名、可信根公钥和至少一条内网路由。首次自动入网还需要引导地址。保存后应用会在数据目录下管理 `photon/photon.yaml`。已有配置可用 **导入 Photon YAML** 复制配置、规则模板及已有身份；要继续直接读取原文件，选择 **引用外部 Photon YAML**。
+2. 顶部显示隧道数量，使用 **连接**、**断开** 控制 Photon。在 **概览、隧道、Gossip 节点、路由、代理服务、诊断** 中查看实时状态。网关同时提供已授权的 IPv4、IPv6 地址且本地支持双栈时，Photon 分别尝试建立两条隧道，单条也能承载内层双栈。隧道表按外层连接显示，每行的 IPv4 和 IPv6 分别表示内层是否已有可用路由，「外层」表示连网关使用的地址族。点击一行可查看完整远端地址、ESP 到期时间和最近一次失败或重连原因。Gossip 节点表显示同步状态，代理服务表按发布节点汇总地区和端点数。数据采样被截断时会显示提示。
 3. Photon 自动将当前有效、已授权的 SOCKS5 端点加入代理组。在代理服务中点击 **切换到 Photon 配置**，FlClash 会生成并选用独立的 Photon 配置；无需先导入其他配置。前往 **代理** 页使用 `Photon` 手选组、`Photon Auto` 自动择优或 `Photon Balance` 负载均衡，再按需要开启 FlClash 的代理接管。已有配置和订阅不会被覆盖，可以在 **配置** 页随时切回。
 4. Photon 连接、代理接管、系统代理和 TUN 通过各自的入口控制。仅连接 Photon 可以访问内网。关闭 Photon 后，普通代理配置继续运行。使用 Photon 配置时，接管保持开启，无法经 Photon 转发的代理流量会被拒绝，节点在隧道重连后自动恢复。
 
 首次连接后可在概览复制待授权的入网请求。如果管理员已提供离线授权包和与之匹配的现有密钥，可以在连接前用 **导入授权** 安装，目标配置须指向尚无数据库的状态目录。已有身份直接使用原配置即可。
 
-停止 Photon 后可打开 **Photon 设置**，修改引导节点、路由或允许的网关，网卡、MTU 和日志级别等选项位于 **高级配置**。保存后的参数在下次连接时生效。配置路径自动保存。客户端可用普通权限打开，连接 Photon 时会由 Windows 请求批准本次后台启动。Mihomo 的 TUN 授权仍由 FlClash helper 处理。离线导入身份需要能创建受保护状态库的管理员权限。安全模式禁止启动 Photon。
+断开 Photon 后可进入 **设置** 标签编辑当前配置，修改引导节点、路由或允许的网关，网卡、MTU 和日志级别等选项位于 **高级配置**。保存后的参数在下次连接时生效。配置路径自动保存。客户端可用普通权限打开，连接 Photon 时会由 Windows 请求批准本次后台启动。Mihomo 的 TUN 授权仍由 FlClash helper 处理。离线导入身份需要能创建受保护状态库的管理员权限。安全模式禁止启动 Photon。
 
 ## 配置与数据目录
 
 全新 Windows 便携版使用 EXE 所在目录下的 `data`，安装版使用 AppData。便携目录必须可写；路径始终以 EXE 位置为准，不随快捷方式的工作目录变化。已有 AppData 中的应用设置会继续读取，避免升级后丢失原配置；已初始化的便携 `data` 优先于旧 AppData。
 
-Photon 概览显示当前配置和数据目录，提供 **打开目录**。停止 Photon 后可用 **迁移数据目录**，选一个空目录，把 YAML、同名 `.proxy.yaml` 和已有身份数据库复制过去并切换使用。原文件保留；数据库正在使用、身份验证失败或目标目录非空时拒绝迁移。复制受保护身份时会请求 Windows 管理员授权。这个入口迁移当前 Photon 配置，不迁移 FlClash 的其他订阅和设置。
+**设置** 标签集中展示当前配置、配置管理和数据目录，提供 **打开目录**。断开 Photon 后可用 **迁移数据目录**，选一个空目录，把 YAML、同名 `.proxy.yaml` 和已有身份数据库复制过去并切换使用。原文件保留；数据库正在使用、身份验证失败或目标目录非空时拒绝迁移。复制受保护身份时会请求 Windows 管理员授权。这个入口迁移当前 Photon 配置，不迁移 FlClash 的其他订阅和设置。
 
 新建及导入后的 `state.path` 默认相对 YAML 所在目录解析，内部配置选择也保存为相对应用数据目录的路径。因此全新便携版可以整体移动程序和 `data`。外部引用及手工设置的绝对路径继续按原位置读取；修改数据库路径只改变引用，不会自动搬迁身份。导入的配置分别放入 `photon/import-时间戳/`，不会覆盖当前配置。
 
 ## 自定义代理规则
 
-打开 **Photon → 代理服务 → 规则模板**。用 **导入 YAML 模板** 选择已有的 Mihomo YAML，或用 **编辑 YAML 模板** 打开 FlClash 自带的编辑器。验证通过后，模板保存为 Photon 配置旁的同名 `.proxy.yaml`，例如 `photon.yaml` 对应 `photon.proxy.yaml`。也可直接编辑这个文件。Photon 读取其中的 `proxies`、`proxy-providers`、`proxy-groups`、`rules`、`rule-providers`、`sub-rules`、`dns` 和 `tun`。DNS、TUN 缺少的字段使用内置默认值，再应用 FlClash 选定的覆写项；TUN 开关、设备和协议栈等仍由 FlClash 界面控制。最后合并 Photon 必需的内网及端点路由排除，并把防回环直连规则放在其他规则之前，避免被覆写移除。模板需要至少一条规则，最多 4 MiB。点击 **使用内置规则** 可以移除模板。
+打开 **Photon → 代理服务 → 规则模板 → 编辑** 菜单。用 **导入 YAML 模板** 选择已有的 Mihomo YAML，或用 **编辑 YAML 模板** 打开 FlClash 自带的编辑器。验证通过后，模板保存为 Photon 配置旁的同名 `.proxy.yaml`，例如 `photon.yaml` 对应 `photon.proxy.yaml`。也可直接编辑这个文件。Photon 读取其中的 `proxies`、`proxy-providers`、`proxy-groups`、`rules`、`rule-providers`、`sub-rules`、`dns` 和 `tun`。DNS、TUN 缺少的字段使用内置默认值，再应用 FlClash 选定的覆写项；TUN 开关、设备和协议栈等仍由 FlClash 界面控制。最后合并 Photon 必需的内网及端点路由排除，并把防回环直连规则放在其他规则之前，避免被覆写移除。模板需要至少一条规则，最多 4 MiB。点击 **使用内置规则** 可以移除模板。
 
 ```yaml
 proxy-groups:
@@ -74,7 +74,7 @@ make photon-flclash-installer
   -Archive .\build\photon-flclash\dist\photon-flclash-windows-amd64.zip `
   -Checksum .\build\photon-flclash\dist\photon-flclash-windows-amd64.zip.sha256 `
   -OutputPath .\build\photon-flclash\dist\photon-flclash-windows-amd64-setup.exe `
-  -PackageVersion 0.7.4
+  -PackageVersion 0.7.5
 ```
 
 编译器默认从 PATH 或 Inno Setup 6 的标准安装目录查找，也可用 `-Compiler` 指定。安装包复用 ZIP 中的完整目录、许可证和逐文件校验清单，不重新选择后台或驱动。`PHOTON_FLCLASH_SIGNING_THUMBPRINT` 也用于签名安装程序。

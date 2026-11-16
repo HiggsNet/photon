@@ -80,6 +80,8 @@ class _PhotonTemplateHelpState extends State<_PhotonTemplateHelp> {
   Widget build(BuildContext context) {
     final l = context.appLocalizations;
     final sections = [
+      (l.photonServices, '${l.photonMultiTip}\n${l.photonServiceKindsHint}'),
+      (l.photonProxyTemplate, l.photonTemplateHint),
       (l.photonTemplateKept, l.photonTemplateKeptHint),
       (l.photonTemplateManaged, l.photonTemplateManagedHint),
       (l.photonTemplateSafeguards, l.photonTemplateSafeguardsHint),

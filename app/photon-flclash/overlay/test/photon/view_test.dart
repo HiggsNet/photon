@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:fl_clash/photon/controller.dart';
 import 'package:fl_clash/photon/setup.dart';
 import 'package:fl_clash/photon/setup_view.dart';
@@ -46,13 +48,19 @@ void main() {
     controller = PhotonController(createBackend: FakeBackend.new);
     await tester.pumpWidget(view());
     await tester.pumpAndSettle();
-    final settings = tester.widget<FilledButton>(
-      find.widgetWithText(FilledButton, 'Photon settings'),
+    expect(find.text('Connect'), findsOneWidget);
+    expect(
+      tester
+          .widget<TextButton>(find.widgetWithText(TextButton, 'Connect'))
+          .onPressed,
+      isNull,
     );
-    expect(settings.onPressed, isNotNull);
+    expect(find.text('Import Photon YAML'), findsNothing);
+    await tester.tap(find.text('Settings'));
+    await tester.pumpAndSettle();
     expect(find.text('Reference external Photon YAML'), findsOneWidget);
     expect(find.text('Import Photon YAML'), findsOneWidget);
-    expect(find.text('Start'), findsNothing);
+    expect(find.text('Create Photon configuration'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
     await controller.close();
     controller.dispose();
@@ -176,36 +184,64 @@ void main() {
   ) async {
     await tester.pumpWidget(view());
     expect(
-      tester.widget<Text>(find.byKey(const ValueKey('photon-status'))).data,
+      tester
+          .widget<Tooltip>(find.byKey(const ValueKey('photon-status')))
+          .message,
       'Disconnected',
     );
-    await tester.tap(find.text('Start'));
+    await tester.tap(find.text('Connect'));
     await tester.pumpAndSettle();
     expect(
-      tester.widget<Text>(find.byKey(const ValueKey('photon-status'))).data,
+      tester
+          .widget<Tooltip>(find.byKey(const ValueKey('photon-status')))
+          .message,
       'Tunnel ready',
     );
-    expect(find.text('Stop'), findsOneWidget);
+    expect(find.text('Disconnect'), findsOneWidget);
+    expect(find.text('Photon settings'), findsNothing);
+    expect(find.text('/test/config.yaml'), findsNothing);
+    expect(find.text('Reconnect Photon'), findsNothing);
+    final count = find.byKey(const ValueKey('photon-tunnel-count'));
+    expect(
+      tester.getCenter(count).dy,
+      closeTo(tester.getCenter(find.text('Connect')).dy, 1),
+    );
+    expect(
+      tester.getCenter(count).dy,
+      closeTo(tester.getCenter(find.text('Disconnect')).dy, 1),
+    );
     expect(
       tester
-          .widget<TextButton>(
-            find.widgetWithText(TextButton, 'Photon settings'),
-          )
+          .getSize(find.byKey(const ValueKey('photon-connection-bar')))
+          .height,
+      lessThan(100),
+    );
+    expect(
+      tester
+          .widget<TextButton>(find.widgetWithText(TextButton, 'Connect'))
           .onPressed,
       isNull,
     );
-    await tester.tap(find.text('Stop'));
+    await tester.tap(find.text('Settings'));
     await tester.pumpAndSettle();
     expect(
-      tester.widget<Text>(find.byKey(const ValueKey('photon-status'))).data,
+      tester
+          .widget<TextButton>(find.widgetWithText(TextButton, 'Edit'))
+          .onPressed,
+      isNull,
+    );
+    await tester.tap(find.text('Disconnect'));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<Tooltip>(find.byKey(const ValueKey('photon-status')))
+          .message,
       'Disconnected',
     );
     expect(controller.observation, isNull);
     expect(
       tester
-          .widget<TextButton>(
-            find.widgetWithText(TextButton, 'Photon settings'),
-          )
+          .widget<TextButton>(find.widgetWithText(TextButton, 'Edit'))
           .onPressed,
       isNotNull,
     );
@@ -215,7 +251,7 @@ void main() {
     tester,
   ) async {
     await tester.pumpWidget(view());
-    await tester.tap(find.text('Start'));
+    await tester.tap(find.text('Connect'));
     await tester.pumpAndSettle();
     await tester.pumpWidget(const SizedBox());
     expect(backend.hasProcess, isTrue);
@@ -225,7 +261,7 @@ void main() {
 
   photonTest('safe mode cannot start Photon', (tester) async {
     await tester.pumpWidget(view(safe: true));
-    await tester.tap(find.text('Start'));
+    await tester.tap(find.text('Connect'));
     await tester.pumpAndSettle();
     expect(backend.calls, isEmpty);
   });
@@ -235,11 +271,13 @@ void main() {
   ) async {
     backend.statusError = StateError('IPC lost');
     await tester.pumpWidget(view());
-    await tester.tap(find.text('Start'));
+    await tester.tap(find.text('Connect'));
     await tester.pumpAndSettle();
     expect(find.textContaining('IPC lost'), findsOneWidget);
     expect(
-      tester.widget<Text>(find.byKey(const ValueKey('photon-status'))).data,
+      tester
+          .widget<Tooltip>(find.byKey(const ValueKey('photon-status')))
+          .message,
       'Disconnected',
     );
     expect(controller.observation, isNull);
@@ -420,7 +458,7 @@ void main() {
         },
       };
       await tester.pumpWidget(view());
-      await tester.tap(find.text('Start'));
+      await tester.tap(find.text('Connect'));
       await tester.pumpAndSettle();
       expect(find.text('fd42::1/128'), findsOneWidget);
       await tester.tap(find.text('Tunnels').first);
@@ -441,8 +479,11 @@ void main() {
       expect(find.text('ESP'), findsOneWidget);
       expect(find.text('Babel'), findsOneWidget);
       expect(find.text('Outer 4/6'), findsOneWidget);
-      expect(find.byTooltip('Route ready'), findsOneWidget);
-      expect(find.byTooltip('No usable route'), findsOneWidget);
+      expect(find.byTooltip('Inner IPv6 route · Route ready'), findsOneWidget);
+      expect(
+        find.byTooltip('Inner IPv4 route · No usable route'),
+        findsOneWidget,
+      );
       expect(find.text('Initializing'), findsOneWidget);
       expect(find.text('Not ready'), findsOneWidget);
       expect(
@@ -462,6 +503,11 @@ void main() {
       expect(find.byTooltip('IPv6 · Tunnel not ready'), findsOneWidget);
       await tester.tap(find.text('gateway.catofes.'));
       await tester.pumpAndSettle();
+      expect(find.text('Outer tunnel · IPv4'), findsOneWidget);
+      expect(find.text('Outer tunnel · IPv6'), findsOneWidget);
+      expect(find.text('IPv4 · IKE'), findsNothing);
+      expect(find.text('Inner IPv4 route'), findsNWidgets(2));
+      expect(find.text('Inner IPv6 route'), findsNWidgets(2));
       expect(find.text('192.0.2.1:4500'), findsOneWidget);
       final ipv6Remote = find.text('[2001:db8::1]:4500');
       expect(ipv6Remote, findsOneWidget);
@@ -556,7 +602,7 @@ void main() {
       },
     };
     await tester.pumpWidget(view());
-    await tester.tap(find.text('Start'));
+    await tester.tap(find.text('Connect'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Routes').first);
     await tester.pumpAndSettle();
@@ -662,7 +708,7 @@ void main() {
       ],
     };
     await tester.pumpWidget(view());
-    await tester.tap(find.text('Start'));
+    await tester.tap(find.text('Connect'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Proxy services').first);
     await tester.pumpAndSettle();
@@ -676,9 +722,31 @@ void main() {
     expect(find.text('custom'), findsOneWidget);
     expect(find.text('Global'), findsOneWidget);
     expect(find.text('Switch to Photon profile'), findsOneWidget);
-    expect(find.text('Import YAML template'), findsOneWidget);
-    expect(find.text('Edit YAML template'), findsOneWidget);
-    final help = find.text('How templates work');
+    expect(find.text('Import YAML template'), findsNothing);
+    expect(find.text('Edit YAML template'), findsNothing);
+    expect(
+      find.textContaining('Checks indicate supported exit types'),
+      findsNothing,
+    );
+    await tester.runAsync(() => File('/test/config.proxy.yaml').exists());
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<TextButton>(find.widgetWithText(TextButton, 'Edit'))
+          .onPressed,
+      isNotNull,
+    );
+    await tester.tap(find.widgetWithText(TextButton, 'Edit'));
+    await tester.pumpAndSettle();
+    expect(find.byType(PopupMenu), findsOneWidget);
+    expect(
+      find.text('Import YAML template', findRichText: true),
+      findsOneWidget,
+    );
+    expect(find.text('Edit YAML template', findRichText: true), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('photon-tunnel-count')));
+    await tester.pumpAndSettle();
+    final help = find.byTooltip('How templates work');
     expect(help, findsOneWidget);
     expect(find.byType(Checkbox), findsNothing);
     const ordered = [

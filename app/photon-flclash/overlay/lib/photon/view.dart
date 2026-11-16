@@ -15,10 +15,10 @@ import 'controller.dart';
 import 'proxy_bridge.dart';
 import 'services.dart';
 import 'setup_view.dart';
-import 'storage_view.dart';
+import 'settings_view.dart';
 import 'template_help.dart';
 
-enum _Page { overview, tunnels, peers, routes, services, diagnostics }
+enum _Page { overview, tunnels, peers, routes, services, diagnostics, settings }
 
 class PhotonView extends ConsumerStatefulWidget {
   const PhotonView({super.key, this.controller, this.isWindows});
@@ -56,12 +56,6 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
       listenable: owner,
       builder: (context, _) {
         final config = owner.configPath;
-        final canEdit =
-            allowed && !owner.busy && !owner.closed && !owner.hasLease;
-        void openSettings() {
-          owner.pickConfig(() => editPhotonSettings(context, config: config));
-        }
-
         final status = owner.observation;
         final connected = status?['tunnel_ready'] == true;
         final connections = _list(status?['connections']);
@@ -97,127 +91,55 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
                       spacing: 16,
                       children: [
                         Card(
+                          key: const ValueKey('photon-connection-bar'),
                           child: Padding(
-                            padding: const EdgeInsets.all(20),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 20,
+                              vertical: 12,
+                            ),
+                            child: Row(
                               spacing: 12,
                               children: [
-                                Row(
-                                  spacing: 12,
-                                  children: [
-                                    const GlyphIcon(AppGlyphs.vpn, size: 32),
-                                    Expanded(
-                                      child: Text(
-                                        label,
-                                        key: const ValueKey('photon-status'),
-                                        style: AppTextStyle.title2.of(
-                                          context,
-                                          emphasized: true,
-                                        ),
-                                      ),
-                                    ),
-                                    FilledButton(
-                                      onPressed: owner.busy || owner.closed
-                                          ? null
-                                          : owner.hasLease
-                                          ? owner.stop
-                                          : !allowed
-                                          ? null
-                                          : config == null
-                                          ? openSettings
-                                          : () => owner.start(allowed: allowed),
-                                      child: Text(
-                                        owner.hasLease
-                                            ? l.stop
-                                            : config == null
-                                            ? l.photonSettings
-                                            : l.start,
-                                      ),
-                                    ),
-                                  ],
+                                Tooltip(
+                                  key: const ValueKey('photon-status'),
+                                  message: label,
+                                  child: GlyphIcon(
+                                    AppGlyphs.vpn,
+                                    size: 24,
+                                    color: connected
+                                        ? context.colorScheme.primary
+                                        : context.colorScheme.onSurfaceVariant,
+                                  ),
                                 ),
-                                if (config != null && _page == _Page.overview)
-                                  Text(
-                                    config,
-                                    style: AppTextStyle.caption1.of(context),
+                                Expanded(
+                                  child: Text(
+                                    '${l.photonTunnel}  $live / ${connections.length}',
+                                    key: const ValueKey('photon-tunnel-count'),
+                                    style: AppTextStyle.callout.of(
+                                      context,
+                                      emphasized: true,
+                                    ),
                                   ),
-                                if (_page == _Page.overview)
-                                  PhotonStorage(owner: owner),
-                                if (config == null && !owner.hasLease)
-                                  Text(l.photonSetupHint),
-                                if (owner.hasLease && _page == _Page.overview)
-                                  Text(
-                                    l.photonStopToEdit,
-                                    style: AppTextStyle.caption1.of(context),
-                                  ),
-                                Wrap(
-                                  spacing: 12,
-                                  runSpacing: 8,
-                                  children: [
-                                    if (config != null)
-                                      TextButton(
-                                        onPressed: canEdit
-                                            ? openSettings
-                                            : null,
-                                        child: Text(l.photonSettings),
-                                      ),
-                                    if (!owner.hasLease) ...[
-                                      TextButton(
-                                        onPressed: canEdit
-                                            ? () => owner.pickConfig(
-                                                importPhotonConfig,
-                                              )
-                                            : null,
-                                        child: Text(l.photonImportConfig),
-                                      ),
-                                      TextButton(
-                                        onPressed: canEdit
-                                            ? () => owner.pickConfig(
-                                                choosePhotonConfig,
-                                              )
-                                            : null,
-                                        child: Text(l.photonUseConfigFile),
-                                      ),
-                                      if (config != null) ...[
-                                        TextButton(
-                                          onPressed: canEdit
-                                              ? () => owner.pickConfig(
-                                                  () => editPhotonSettings(
-                                                    context,
-                                                    chooseLocation: true,
-                                                  ),
-                                                )
-                                              : null,
-                                          child: Text(l.photonCreateConfig),
-                                        ),
-                                        TextButton(
-                                          onPressed: canEdit
-                                              ? () => owner.pickConfig(
-                                                  () => showPhotonImport(
-                                                    context,
-                                                    config,
-                                                  ),
-                                                )
-                                              : null,
-                                          child: Text(l.photonImportIdentity),
-                                        ),
-                                      ],
-                                    ],
-                                    if (owner.hasLease)
-                                      TextButton(
-                                        onPressed: owner.busy
-                                            ? null
-                                            : () => owner.restart(
-                                                allowed: allowed,
-                                              ),
-                                        child: Text(l.photonRestart),
-                                      ),
-                                    if (status != null)
-                                      Text(
-                                        '${l.photonTunnelReady}  $live / ${connections.length}',
-                                      ),
-                                  ],
+                                ),
+                                TextButton(
+                                  onPressed:
+                                      !allowed ||
+                                          owner.busy ||
+                                          owner.closed ||
+                                          owner.hasLease ||
+                                          config == null
+                                      ? null
+                                      : () => owner.start(allowed: allowed),
+                                  child: Text(l.photonConnect),
+                                ),
+                                FilledButton(
+                                  onPressed:
+                                      owner.busy ||
+                                          owner.closed ||
+                                          !owner.hasLease
+                                      ? null
+                                      : owner.stop,
+                                  child: Text(l.photonDisconnect),
                                 ),
                               ],
                             ),
@@ -236,6 +158,7 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
                             (_Page.routes, l.photonRoutes),
                             (_Page.services, l.photonServices),
                             (_Page.diagnostics, l.photonDiagnostics),
+                            (_Page.settings, l.settings),
                           ],
                           value: _page,
                           onChanged: (page) => setState(() {
@@ -258,7 +181,21 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
                           ),
                         if (_page == _Page.services && status != null)
                           _proxyControls(l, status, config, allowed),
-                        if (status == null && config != null)
+                        if (_page == _Page.overview && config == null)
+                          Card(
+                            onPressed: () =>
+                                setState(() => _page = _Page.settings),
+                            child: ListRow(
+                              title: Text(l.photonSettings),
+                              subtitle: Text(l.photonSetupHint),
+                              trailing: const GlyphIcon(
+                                AppGlyphs.chevronForward,
+                              ),
+                            ),
+                          ),
+                        if (_page == _Page.overview &&
+                            status == null &&
+                            config != null)
                           _DetailCard(
                             title: l.disconnected,
                             lines: [(l.photonName, l.photonOffline)],
@@ -270,6 +207,9 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
                 SliverPadding(
                   padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
                   sliver: switch (_page) {
+                    _Page.settings => SliverToBoxAdapter(
+                      child: PhotonSettings(owner: owner, allowed: allowed),
+                    ),
                     _Page.tunnels when status != null => _tunnelTable(
                       l,
                       status,
@@ -345,6 +285,7 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
               ),
             ),
         ];
+      case _Page.settings:
       case _Page.tunnels:
       case _Page.peers:
       case _Page.services:
@@ -471,8 +412,14 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
             Text(ikeState),
             _statusMark(_linkState(l, esp), esp),
             _statusMark(_linkState(l, babel), babel),
-            _statusMark(_routeState(l, ipv4), ipv4),
-            _statusMark(_routeState(l, ipv6), ipv6),
+            _statusMark(
+              '${l.photonInnerIPv4Route} · ${_routeState(l, ipv4)}',
+              ipv4,
+            ),
+            _statusMark(
+              '${l.photonInnerIPv6Route} · ${_routeState(l, ipv6)}',
+              ipv6,
+            ),
             Row(
               spacing: 6,
               children: [
@@ -497,10 +444,12 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
             ),
             Text(remote.isEmpty ? '—' : remote),
           ],
-          details: [
+          detailSections: [
             for (final entry in entries)
-              for (final (label, value) in _tunnelDetails(l, entry))
-                ('${_outerFamily(entry)} · $label', value),
+              (
+                title: '${l.photonOuterTunnel} · ${_outerFamily(entry)}',
+                lines: _tunnelDetails(l, entry),
+              ),
           ],
         );
       },
@@ -563,30 +512,48 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
     final directory = owner.directory;
     final hasEndpoints = directory?.endpoints.isNotEmpty == true;
     final ready = status['tunnel_ready'] == true;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      spacing: 8,
-      children: [
-        FilledButton(
-          onPressed:
-              widget.controller != null ||
-                  owner.busy ||
-                  !owner.directoryFresh ||
-                  !hasEndpoints ||
-                  !ready
-              ? null
-              : () => owner.applyProxies(photonProxyBridge.apply),
-          child: Text(l.photonApply),
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          spacing: 16,
+          children: [
+            Row(
+              spacing: 12,
+              children: [
+                Expanded(
+                  child: Text(
+                    !ready
+                        ? l.photonProxyRequiresTunnel
+                        : !owner.directoryFresh
+                        ? l.photonStale
+                        : l.photonMultiTip,
+                    style: AppTextStyle.caption1.of(context),
+                  ),
+                ),
+                IconButton(
+                  tooltip: l.photonTemplateHelp,
+                  onPressed: () => showPhotonTemplateHelp(context),
+                  icon: const GlyphIcon(AppGlyphs.info, size: 20),
+                ),
+                FilledButton(
+                  onPressed:
+                      widget.controller != null ||
+                          owner.busy ||
+                          !owner.directoryFresh ||
+                          !hasEndpoints ||
+                          !ready
+                      ? null
+                      : () => owner.applyProxies(photonProxyBridge.apply),
+                  child: Text(l.photonApply),
+                ),
+              ],
+            ),
+            if (config != null && allowed) _templateControls(l, config),
+          ],
         ),
-        Text(l.photonMultiTip),
-        Text(
-          l.photonServiceKindsHint,
-          style: AppTextStyle.caption1.of(context),
-        ),
-        if (config != null && allowed) _templateControls(l, config),
-        if (!ready) Text(l.photonProxyRequiresTunnel),
-        if (ready && !owner.directoryFresh) Text(l.photonStale),
-      ],
+      ),
     );
   }
 
@@ -605,41 +572,60 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
             !owner.busy &&
             !owner.closed &&
             snapshot.connectionState == ConnectionState.done;
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          spacing: 4,
+        return Row(
+          spacing: 16,
           children: [
-            Text(
-              l.photonProxyTemplate,
-              style: AppTextStyle.headline.of(context),
-            ),
-            Text(
-              hasTemplate ? file.uri.pathSegments.last : l.photonBuiltinRules,
-            ),
-            Text(l.photonTemplateHint),
-            Wrap(
-              spacing: 8,
-              children: [
-                TextButton(
-                  onPressed: () => showPhotonTemplateHelp(context),
-                  child: Text(l.photonTemplateHelp),
-                ),
-                TextButton(
-                  onPressed: editable ? () => _importTemplate(config) : null,
-                  child: Text(l.photonImportTemplate),
-                ),
-                TextButton(
-                  onPressed: editable
-                      ? () => _editTemplate(config, file)
-                      : null,
-                  child: Text(l.photonEditTemplate),
-                ),
-                if (hasTemplate)
-                  TextButton(
-                    onPressed: editable ? () => _resetTemplate(config) : null,
-                    child: Text(l.photonBuiltinRules),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                spacing: 4,
+                children: [
+                  Text(
+                    l.photonProxyTemplate,
+                    style: AppTextStyle.callout.of(context, emphasized: true),
                   ),
-              ],
+                  Text(
+                    hasTemplate
+                        ? file.uri.pathSegments.last
+                        : l.photonBuiltinRules,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTextStyle.caption1.of(context),
+                  ),
+                ],
+              ),
+            ),
+            PopupAnchor(
+              targetBuilder: (open) => TextButton(
+                onPressed: editable ? open : null,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  spacing: 6,
+                  children: [
+                    Text(l.edit),
+                    const GlyphIcon(AppGlyphs.chevronDown, size: 14),
+                  ],
+                ),
+              ),
+              popupBuilder: (_) => PopupMenu(
+                items: [
+                  PopupMenuItem(
+                    label: l.photonImportTemplate,
+                    glyph: AppGlyphs.importFile,
+                    onPressed: () => _importTemplate(config),
+                  ),
+                  PopupMenuItem(
+                    label: l.photonEditTemplate,
+                    glyph: AppGlyphs.edit,
+                    onPressed: () => _editTemplate(config, file),
+                  ),
+                  if (hasTemplate)
+                    PopupMenuItem(
+                      label: l.photonBuiltinRules,
+                      onPressed: () => _resetTemplate(config),
+                    ),
+                ],
+              ),
             ),
           ],
         );
@@ -886,6 +872,7 @@ class _PhotonTableRow {
     required this.cells,
     this.id,
     this.details = const [],
+    this.detailSections = const [],
     this.onPressed,
     this.expanded,
   });
@@ -894,6 +881,7 @@ class _PhotonTableRow {
   final Object? id;
   final List<Widget> cells;
   final List<(String, String)> details;
+  final List<({String title, List<(String, String)> lines})> detailSections;
   final VoidCallback? onPressed;
   final Widget? expanded;
 }
@@ -1013,9 +1001,18 @@ class _PhotonTable extends StatelessWidget {
                               16,
                               16,
                             ),
-                            child: _DetailCard(
-                              title: title,
-                              lines: row.details,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              spacing: 16,
+                              children: [
+                                if (row.detailSections.isEmpty)
+                                  _DetailCard(title: title, lines: row.details),
+                                for (final section in row.detailSections)
+                                  _DetailCard(
+                                    title: section.title,
+                                    lines: section.lines,
+                                  ),
+                              ],
                             ),
                           ),
                         ),
@@ -1190,8 +1187,14 @@ List<(String, String)> _tunnelDetails(
     ('IKE', _ikeState(l, ike)),
     ('ESP', _linkState(l, ike['child_live'])),
     ('Babel', _linkState(l, entry['babel_live'])),
-    ('IPv4', _routeState(l, _routeReady(entry, 'ipv4_route_ready'))),
-    ('IPv6', _routeState(l, _routeReady(entry, 'ipv6_route_ready'))),
+    (
+      l.photonInnerIPv4Route,
+      _routeState(l, _routeReady(entry, 'ipv4_route_ready')),
+    ),
+    (
+      l.photonInnerIPv6Route,
+      _routeState(l, _routeReady(entry, 'ipv6_route_ready')),
+    ),
     if (ike['live'] == true && ike['mobike'] != null)
       ('MOBIKE', ike['mobike'] == true ? l.enabled : l.disabled),
     (l.expireTime, _date(ike['child_expires_at'])),
