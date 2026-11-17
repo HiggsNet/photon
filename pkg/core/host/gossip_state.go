@@ -3,6 +3,7 @@ package host
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"time"
@@ -218,6 +219,19 @@ func (driver *GossipDriver) logGossipSnapshotOutcome(peerID string, managedZone 
 	}
 	if outcome.AuthorityRefreshed {
 		driver.logGossip(slog.LevelInfo, "managed_zone_authority_refreshed", peerID, GossipPhaseApply, nil, map[string]any{"zone": managedZone})
+	}
+	if outcome.Result != nil {
+		for _, conflict := range outcome.Result.RecordConflicts {
+			reason := "previous_hash_mismatch"
+			if conflict.CurrentVersion == conflict.IncomingVersion {
+				reason = "same_version"
+			}
+			driver.logGossip(slog.LevelWarn, "record_conflict", peerID, GossipPhaseApply, zone.ErrRecordConflict, map[string]any{
+				"zone": action.Snapshot.Zone, "key": conflict.Key, "reason": reason,
+				"current_version": conflict.CurrentVersion, "incoming_version": conflict.IncomingVersion,
+				"current_hash": fmt.Sprintf("%x", conflict.CurrentHash), "incoming_hash": fmt.Sprintf("%x", conflict.IncomingHash),
+			})
+		}
 	}
 	if outcome.Result == nil || (!outcome.Result.NetworkChanged && !outcome.ManagedZoneAdopted && !outcome.AuthorityRefreshed) {
 		return

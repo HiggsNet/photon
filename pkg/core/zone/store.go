@@ -93,6 +93,12 @@ func (ns *NetworkState) PutAt(record *Record, now time.Time) error {
 	}
 
 	current := zs.Records[record.Key]
+	// A record left behind by an earlier authority cannot impose its version
+	// or hash chain on a record authorized by the current authority. Verify the
+	// incoming record first so an invalid update never changes active state.
+	if current != nil && ns.RecordVerifier != nil && ns.RecordVerifier(current, zs.Authority, now) != nil {
+		current = nil
+	}
 	if current == nil {
 		zs.Records[record.Key] = record
 		return nil

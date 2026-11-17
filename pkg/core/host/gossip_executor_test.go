@@ -49,6 +49,56 @@ func (capture gossipLogCapture) Handle(_ context.Context, record slog.Record) er
 	return nil
 }
 
+func TestGossipSnapshotConflictsWarnEvenWithoutNetworkChanges(t *testing.T) {
+	for _, scenario := range []struct {
+		name            string
+		incomingVersion uint64
+		reason          string
+	}{
+		{"same version", 1, "same_version"},
+		{"previous hash", 2, "previous_hash_mismatch"},
+		{"no conflict", 0, ""},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			apply := &corestate.ApplyResult{}
+			if scenario.incomingVersion != 0 {
+				apply.RecordConflicts = []corestate.RecordConflict{{
+					Key: "ipsec/transport-key", CurrentVersion: 1, IncomingVersion: scenario.incomingVersion,
+					CurrentHash: []byte{0xaa}, IncomingHash: []byte{0xbb},
+				}}
+			}
+			state := &memoryGossipStateStore{applyResult: corestate.RemoteBatchResult{
+				Outcomes: []corestate.RemoteApplyOutcome{{Zone: "remote.", Result: apply}},
+			}}
+			var logs []capturedGossipLog
+			driver := NewGossipDriver(nil, 2, state, GossipDriverConfig{
+				Log: gossipLogCapture(func(log capturedGossipLog) { logs = append(logs, log) }),
+			})
+			defer driver.Stop()
+			result, err := driver.applyGossipSnapshots(t.Context(), "relay.", []gossip.ApplySnapshotAction{{Snapshot: &corestate.ZoneSnapshot{Zone: "remote."}}}, "local.")
+			if err != nil || result.NetworkChanged || len(result.Events) != 1 {
+				t.Fatalf("conflict changed snapshot completion: %+v, %v", result, err)
+			}
+			if scenario.incomingVersion == 0 {
+				if len(logs) != 0 {
+					t.Fatalf("non-conflicting no-op produced logs: %+v", logs)
+				}
+				return
+			}
+			if len(logs) != 1 {
+				t.Fatalf("conflict logs = %+v", logs)
+			}
+			log := logs[0]
+			if log.Level != "warn" || log.Event != "record_conflict" || log.PeerID != "relay." || log.Phase != GossipPhaseApply || !errors.Is(log.Err, zone.ErrRecordConflict) ||
+				log.Fields["zone"] != zone.ZonePath("remote.") || log.Fields["key"] != "ipsec/transport-key" || log.Fields["reason"] != scenario.reason ||
+				log.Fields["current_version"] != uint64(1) || log.Fields["incoming_version"] != scenario.incomingVersion ||
+				log.Fields["current_hash"] != "aa" || log.Fields["incoming_hash"] != "bb" {
+				t.Fatalf("incomplete conflict warning: %+v", log)
+			}
+		})
+	}
+}
+
 func gossipConfigCapturingIssues(config GossipDriverConfig, issues *[]GossipExecutionIssue) GossipDriverConfig {
 	config.Log = gossipLogCapture(func(event capturedGossipLog) {
 		if event.Err != nil {

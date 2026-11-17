@@ -49,6 +49,17 @@ type ApplyResult struct {
 	ZoneRootChanged  bool
 	AuthorityChanged bool
 	NetworkChanged   bool
+	RecordConflicts  []RecordConflict
+}
+
+// RecordConflict describes two currently authorized records that cannot be
+// merged. It contains diagnostics only, never record values or private keys.
+type RecordConflict struct {
+	Key             string
+	CurrentVersion  uint64
+	IncomingVersion uint64
+	CurrentHash     []byte
+	IncomingHash    []byte
 }
 
 func DefaultSyncLimits() SyncLimits {
@@ -178,13 +189,20 @@ func applySnapshot(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time,
 	}
 
 	var applied int
+	var conflicts []RecordConflict
 	for _, record := range orderedSnapshotRecords(snapshot) {
 		err := candidate.PutAt(record, now)
 		switch {
 		case err == nil:
 			applied++
-		case errors.Is(err, zone.ErrStaleRecord), errors.Is(err, zone.ErrRecordConflict):
+		case errors.Is(err, zone.ErrStaleRecord):
 			continue
+		case errors.Is(err, zone.ErrRecordConflict):
+			current := active.Records[record.Key]
+			conflicts = append(conflicts, RecordConflict{
+				Key: record.Key, CurrentVersion: current.Version, IncomingVersion: record.Version,
+				CurrentHash: photoncrypto.RecordHash(current), IncomingHash: photoncrypto.RecordHash(record),
+			})
 		default:
 			return nil, nil, err
 		}
@@ -201,6 +219,7 @@ func applySnapshot(ns *zone.NetworkState, snapshot *ZoneSnapshot, now time.Time,
 		ZoneRootChanged:  rootChanged,
 		AuthorityChanged: authorityChanged,
 		NetworkChanged:   rootChanged || authorityChanged,
+		RecordConflicts:  conflicts,
 	}
 	return candidate, result, nil
 }

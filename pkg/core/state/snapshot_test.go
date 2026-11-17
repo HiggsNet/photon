@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -221,6 +222,100 @@ func TestApplySnapshotSkipsStaleAndConflictingRecords(t *testing.T) {
 	}
 	if got := string(target.Zones["catofes."].Records["conflict"].Value); got != "local" {
 		t.Fatalf("conflicting record = %q, want local", got)
+	}
+	if len(result.RecordConflicts) != 1 {
+		t.Fatalf("record conflicts = %+v, want only the same-version conflict", result.RecordConflicts)
+	}
+	diagnostic := result.RecordConflicts[0]
+	if diagnostic.Key != "conflict" || diagnostic.CurrentVersion != 1 || diagnostic.IncomingVersion != 1 ||
+		!bytes.Equal(diagnostic.CurrentHash, photoncrypto.RecordHash(target.Zones["catofes."].Records["conflict"])) ||
+		!bytes.Equal(diagnostic.IncomingHash, photoncrypto.RecordHash(conflict)) {
+		t.Fatalf("conflict diagnostic = %+v", diagnostic)
+	}
+}
+
+func TestApplySnapshotReassignedAuthorityReplacesInvalidRecord(t *testing.T) {
+	for _, scenario := range []struct {
+		oldVersion       uint64
+		authorityAdopted bool
+	}{{1, false}, {100, false}, {1, true}, {100, true}} {
+		for _, invalidIncoming := range []bool{false, true} {
+			t.Run(fmt.Sprintf("old_version=%d/authority_adopted=%t/invalid_incoming=%t", scenario.oldVersion, scenario.authorityAdopted, invalidIncoming), func(t *testing.T) {
+				now := time.Unix(1000, 0)
+				target, rootPrivate, oldPrivate := testNetworkWithKeys(t)
+				path := zone.ZonePath("catofes.")
+				old := signedRecord(t, oldPrivate, path, "ipsec/transport-key", []byte("old-public-key"), scenario.oldVersion, nil, now.Unix()-100)
+				target.Zones[path].Records[old.Key] = old
+				public, private, err := ed25519.GenerateKey(nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				authority := cloneAuthority(target.Zones[path].Authority)
+				authority.Epoch++
+				authority.Keys[0].Key = public
+				delegation := &zone.Delegation{ZoneName: path, Scope: zone.DelegationScopeDirectChild, Authority: *authority}
+				if err := photoncrypto.SignDelegation(delegation, zone.RootZone, rootPrivate); err != nil {
+					t.Fatal(err)
+				}
+				target.Zones[zone.RootZone].Delegations[path] = delegation
+				if scenario.authorityAdopted {
+					// Existing nodes may already have committed the new authority
+					// while retaining records signed by its predecessor.
+					target.Zones[path].Authority = cloneAuthority(authority)
+				}
+				incoming := signedRecord(t, private, path, old.Key, []byte("new-public-key"), 1, nil, now.Unix())
+				if invalidIncoming {
+					incoming.Signature[0] ^= 1
+				}
+				snapshot := &ZoneSnapshot{Zone: path, Authority: authority, ParentProof: []*zone.Delegation{delegation}, Records: map[string]*zone.Record{incoming.Key: incoming}}
+				before := captureNetworkState(t, target)
+				candidate, result, err := ApplySnapshot(target, snapshot, now, DefaultSyncLimits())
+				assertNetworkStateUnchanged(t, target, before)
+				if invalidIncoming {
+					if err == nil || candidate != nil || result != nil {
+						t.Fatal("invalid incoming record changed active state")
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				got := candidate.Zones[path].Records[incoming.Key]
+				if result.Records != 1 || len(result.RecordConflicts) != 0 || !bytes.Equal(got.Value, incoming.Value) {
+					t.Fatalf("new authority did not replace invalid old record: %+v, record=%+v", result, got)
+				}
+				if err := photoncrypto.VerifyRecord(got, authority, now); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+}
+
+func TestApplySnapshotReportsPreviousHashConflictWithoutChangingState(t *testing.T) {
+	now := time.Unix(1000, 0)
+	target, private := testNetwork(t)
+	current := signedRecord(t, private, "catofes.", "identity", []byte("current"), 1, nil, now.Unix())
+	target.Zones["catofes."].Records[current.Key] = current
+	snapshot, err := Snapshot(target, "catofes.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.Records[current.Key] = signedRecord(t, private, "catofes.", current.Key, []byte("incoming"), 2, []byte("wrong predecessor"), now.Unix())
+	candidate, result, err := ApplySnapshot(target, snapshot, now, DefaultSyncLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.NetworkChanged || result.Records != 0 || len(result.RecordConflicts) != 1 ||
+		result.RecordConflicts[0].CurrentVersion != 1 || result.RecordConflicts[0].IncomingVersion != 2 ||
+		!bytes.Equal(candidate.Zones["catofes."].Records[current.Key].Value, current.Value) {
+		t.Fatalf("conflicting predecessor changed state or was not reported: %+v", result)
+	}
+	// An identical snapshot is a no-op, not a conflict.
+	snapshot.Records[current.Key] = cloneRecord(current)
+	_, result, err = ApplySnapshot(target, snapshot, now, DefaultSyncLimits())
+	if err != nil || result.NetworkChanged || len(result.RecordConflicts) != 0 {
+		t.Fatalf("identical record reported a conflict: %+v, %v", result, err)
 	}
 }
 
