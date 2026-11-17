@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'proxy_selection.dart';
+
 const _photonProvider = 'photon-services';
 const _photonGroups = ['Photon', 'Photon Auto', 'Photon Balance'];
 const _photonProtection = 'x-photon-protection';
@@ -283,12 +285,20 @@ Map<String, dynamic> photonProxyProfile({
   required String adapter,
   required String backendPath,
   Map<String, dynamic>? template,
+  PhotonProxySelection? selection,
 }) {
   if (!directory.fresh(now)) {
     throw StateError('Photon service information expired');
   }
-  final endpoints = directory.proxyEndpoints;
-  if (endpoints.isEmpty || adapter.isEmpty) {
+  final available = directory.proxyEndpoints;
+  final endpoints = available
+      .where(
+        (e) =>
+            selection == null ||
+            selection.allows(type: e.type, region: e.region, owner: e.owner),
+      )
+      .toList();
+  if (available.isEmpty || adapter.isEmpty) {
     throw StateError('No authorized Photon proxy endpoints are available');
   }
   final exclusions = <String>{
@@ -296,7 +306,7 @@ Map<String, dynamic> photonProxyProfile({
         ? directory.overlayPrefixes
         : directory.bypassPrefixes,
     ...splitRoutes,
-    for (final endpoint in endpoints)
+    for (final endpoint in available)
       '${endpoint.address}/${endpoint.address.contains(':') ? 128 : 32}',
   };
   final orderedExclusions = exclusions.toList()..sort();
@@ -306,6 +316,8 @@ Map<String, dynamic> photonProxyProfile({
     'PROCESS-PATH-REGEX,${RegExp.escape(backendPath).replaceAll(',', r'\x2c')},DIRECT',
   ];
   final proxies = [
+    if (endpoints.isEmpty)
+      {'name': 'Photon No selected exits', 'type': 'reject'},
     for (final endpoint in endpoints)
       {
         'name': endpoint.name,

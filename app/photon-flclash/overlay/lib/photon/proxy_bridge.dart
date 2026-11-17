@@ -10,6 +10,9 @@ import 'package:fl_clash/state.dart';
 import 'package:flutter/foundation.dart' show compute;
 import 'package:path/path.dart' as path;
 import 'package:yaml/yaml.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'proxy_selection.dart';
 
 import 'controller.dart';
 import 'services.dart';
@@ -40,6 +43,43 @@ Map<String, dynamic> _parseTemplate(String text) {
 }
 
 final class PhotonProxyBridge {
+  PhotonProxySelection _selection = PhotonProxySelection();
+  Future<void>? _selectionFuture;
+
+  Future<PhotonProxySelection> loadSelection() async {
+    await (_selectionFuture ??= () async {
+      final stored = (await SharedPreferences.getInstance()).getString(
+        'photon.v1.proxy_selection',
+      );
+      if (stored != null) {
+        _selection = PhotonProxySelection.fromJson(
+          Map<String, dynamic>.from(jsonDecode(stored) as Map),
+        );
+      }
+    }());
+    return _selection;
+  }
+
+  Future<void> saveSelection(PhotonProxySelection selection) async {
+    await loadSelection();
+    if (!await (await SharedPreferences.getInstance()).setString(
+      'photon.v1.proxy_selection',
+      jsonEncode(selection.toJson()),
+    )) {
+      throw StateError('Photon proxy selection could not be saved');
+    }
+    _selection = selection;
+    final directory = photonController.directory;
+    try {
+      if (directory != null && photonController.directoryFresh) {
+        await _refresh(directory);
+      }
+    } catch (_) {
+      await _invalidate();
+      rethrow;
+    }
+  }
+
   bool _attached = false;
   String? _published;
   String? _profileDigest;
@@ -78,6 +118,7 @@ final class PhotonProxyBridge {
       'photon-windows.exe',
     ),
     template: template,
+    selection: _selection,
   );
 
   Future<Map<String, dynamic>?> _readTemplate() async {
@@ -137,7 +178,7 @@ final class PhotonProxyBridge {
     final directory = photonController.directory;
     if (directory == null ||
         !photonController.directoryFresh ||
-        directory.endpoints.isEmpty ||
+        directory.proxyEndpoints.isEmpty ||
         directory.adapterName.isEmpty) {
       return null;
     }
@@ -205,7 +246,7 @@ final class PhotonProxyBridge {
 
   Future<void> _refresh(PhotonDirectory directory) async {
     if (_managed() == null) return;
-    if (directory.endpoints.isEmpty ||
+    if (directory.proxyEndpoints.isEmpty ||
         photonController.observation?['tunnel_ready'] != true) {
       await _invalidate();
       return;
@@ -217,6 +258,7 @@ final class PhotonProxyBridge {
     PhotonDirectory directory, {
     bool create = false,
   }) async {
+    await loadSelection();
     final template = await _readTemplate();
     final networkContent = encodePhotonProfile(_profile(directory));
     final networkDigest = sha256

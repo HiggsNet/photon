@@ -2,7 +2,7 @@ diff --git a/arb/intl_en.arb b/arb/intl_en.arb
 index cbda0e3..3917df7 100644
 --- a/arb/intl_en.arb
 +++ b/arb/intl_en.arb
-@@ -1076,5 +1076,119 @@
+@@ -1076,5 +1076,126 @@
    "fakeipFilterDesc": "These domains get real IPs instead of Fake-IPs. In whitelist mode, only they get Fake-IPs.",
    "fallbackFilterGeositeDesc": "Domains in these GeoSite categories are resolved by Fallback directly.",
    "fallbackFilterIpcidrDesc": "When Nameserver returns an IP in these ranges, the Fallback answer is used.",
@@ -74,7 +74,14 @@ index cbda0e3..3917df7 100644
 +  "photonImportTemplate": "Import YAML template",
 +  "photonEditTemplate": "Edit YAML template",
 +  "photonRemoveTemplate": "Delete the custom template for this Photon configuration and use the built-in rules?",
-+  "photonMultiTip": "Available nodes are added automatically. Your other profiles are kept.",
++  "photonMultiTip": "Only selected exits are added. Your other profiles are kept.",
++  "photonProxyProtocols": "Protocols",
++  "photonProxyRegions": "Regions / Anycast",
++  "photonProxyLocalNodes": "Fixed nodes (local exits only)",
++  "photonProxySelected": "Selected exits",
++  "photonProxySaveSelection": "Save exit selection",
++  "photonProxySelectionEmpty": "No exits selected. Photon proxy traffic will be rejected.",
++  "photonProxySelectionTip": "Choose protocols, regions and fixed exits. Choices are saved for this app. New regions and nodes are included unless excluded. Anycast is controlled by region.",
 +  "photonSearch": "Filter nodes, addresses or routes",
 +  "photonRekey": "Security association",
 +  "photonMetric": "Route metric",
@@ -127,7 +134,7 @@ diff --git a/arb/intl_es.arb b/arb/intl_es.arb
 index 417db6b..f98f6e8 100644
 --- a/arb/intl_es.arb
 +++ b/arb/intl_es.arb
-@@ -1076,5 +1076,119 @@
+@@ -1076,5 +1076,126 @@
    "fakeipFilterDesc": "Estos dominios reciben su IP real en lugar de una Fake-IP. En modo whitelist, solo ellos reciben Fake-IP.",
    "fallbackFilterGeositeDesc": "Los dominios de estas categorías GeoSite se resuelven directamente con Fallback.",
    "fallbackFilterIpcidrDesc": "Si Nameserver devuelve una IP de estos rangos, se usa la respuesta de Fallback.",
@@ -200,6 +207,13 @@ index 417db6b..f98f6e8 100644
 +  "photonEditTemplate": "Editar plantilla YAML",
 +  "photonRemoveTemplate": "¿Eliminar la plantilla de esta configuración de Photon y usar las reglas integradas?",
 +  "photonMultiTip": "Los nodos disponibles se añaden automáticamente. Se conservan los demás perfiles.",
++  "photonProxyProtocols": "Protocols",
++  "photonProxyRegions": "Regions / Anycast",
++  "photonProxyLocalNodes": "Fixed nodes (local exits only)",
++  "photonProxySelected": "Selected exits",
++  "photonProxySaveSelection": "Save exit selection",
++  "photonProxySelectionEmpty": "No exits selected. Photon proxy traffic will be rejected.",
++  "photonProxySelectionTip": "Choose protocols, regions and fixed exits. Choices are saved for this app. New regions and nodes are included unless excluded. Anycast is controlled by region.",
 +  "photonSearch": "Filtrar nodos, direcciones o rutas",
 +  "photonRekey": "Asociación de seguridad",
 +  "photonMetric": "Métrica de ruta",
@@ -252,7 +266,7 @@ diff --git a/arb/intl_fr.arb b/arb/intl_fr.arb
 index aa4e778..a8781d8 100644
 --- a/arb/intl_fr.arb
 +++ b/arb/intl_fr.arb
-@@ -1076,5 +1076,119 @@
+@@ -1076,5 +1076,126 @@
    "fakeipFilterDesc": "Ces domaines reçoivent leur vraie IP au lieu d’une Fake-IP. En mode whitelist, eux seuls reçoivent une Fake-IP.",
    "fallbackFilterGeositeDesc": "Les domaines de ces catégories GeoSite sont résolus directement par Fallback.",
    "fallbackFilterIpcidrDesc": "Si Nameserver renvoie une IP de ces plages, la réponse de Fallback est utilisée.",
@@ -325,6 +339,13 @@ index aa4e778..a8781d8 100644
 +  "photonEditTemplate": "Modifier le modèle YAML",
 +  "photonRemoveTemplate": "Supprimer le modèle de cette configuration Photon et utiliser les règles intégrées ?",
 +  "photonMultiTip": "Les nœuds disponibles sont ajoutés automatiquement. Les autres profils sont conservés.",
++  "photonProxyProtocols": "Protocols",
++  "photonProxyRegions": "Regions / Anycast",
++  "photonProxyLocalNodes": "Fixed nodes (local exits only)",
++  "photonProxySelected": "Selected exits",
++  "photonProxySaveSelection": "Save exit selection",
++  "photonProxySelectionEmpty": "No exits selected. Photon proxy traffic will be rejected.",
++  "photonProxySelectionTip": "Choose protocols, regions and fixed exits. Choices are saved for this app. New regions and nodes are included unless excluded. Anycast is controlled by region.",
 +  "photonSearch": "Filtrer les nœuds, adresses ou routes",
 +  "photonRekey": "Association de sécurité",
 +  "photonMetric": "Métrique de route",
@@ -377,7 +398,7 @@ diff --git a/arb/intl_ja.arb b/arb/intl_ja.arb
 index d6ff2b3..f7632bc 100644
 --- a/arb/intl_ja.arb
 +++ b/arb/intl_ja.arb
-@@ -1076,5 +1076,119 @@
+@@ -1076,5 +1076,126 @@
    "fakeipFilterDesc": "これらのドメインには Fake-IP ではなく実際の IP を返します。whitelist モードでは、これらだけが Fake-IP を使います。",
    "fallbackFilterGeositeDesc": "これらの GeoSite カテゴリのドメインは、直接 Fallback で解決します。",
    "fallbackFilterIpcidrDesc": "Nameserver がこれらの範囲の IP を返したときは、Fallback の結果を使います。",
@@ -450,6 +471,13 @@ index d6ff2b3..f7632bc 100644
 +  "photonEditTemplate": "YAML テンプレートを編集",
 +  "photonRemoveTemplate": "この Photon 設定のテンプレートを削除して組み込みルールを使用しますか？",
 +  "photonMultiTip": "利用可能なノードを自動追加します。他のプロファイルは保持されます。",
++  "photonProxyProtocols": "Protocols",
++  "photonProxyRegions": "Regions / Anycast",
++  "photonProxyLocalNodes": "Fixed nodes (local exits only)",
++  "photonProxySelected": "Selected exits",
++  "photonProxySaveSelection": "Save exit selection",
++  "photonProxySelectionEmpty": "No exits selected. Photon proxy traffic will be rejected.",
++  "photonProxySelectionTip": "Choose protocols, regions and fixed exits. Choices are saved for this app. New regions and nodes are included unless excluded. Anycast is controlled by region.",
 +  "photonSearch": "ノード・アドレス・ルートを検索",
 +  "photonRekey": "セキュリティアソシエーション",
 +  "photonMetric": "ルートメトリック",
@@ -502,7 +530,7 @@ diff --git a/arb/intl_ko.arb b/arb/intl_ko.arb
 index ead8d29..2ebd9f1 100644
 --- a/arb/intl_ko.arb
 +++ b/arb/intl_ko.arb
-@@ -1076,5 +1076,119 @@
+@@ -1076,5 +1076,126 @@
    "fakeipFilterDesc": "이 도메인에는 Fake-IP 대신 실제 IP를 반환합니다. whitelist 모드에서는 이 도메인만 Fake-IP를 사용합니다.",
    "fallbackFilterGeositeDesc": "이 GeoSite 분류의 도메인은 바로 Fallback으로 확인합니다.",
    "fallbackFilterIpcidrDesc": "Nameserver가 이 범위의 IP를 반환하면 Fallback 결과를 사용합니다.",
@@ -575,6 +603,13 @@ index ead8d29..2ebd9f1 100644
 +  "photonEditTemplate": "YAML 템플릿 편집",
 +  "photonRemoveTemplate": "이 Photon 구성의 사용자 템플릿을 삭제하고 기본 규칙을 사용할까요?",
 +  "photonMultiTip": "사용 가능한 노드를 자동으로 추가합니다. 다른 프로필은 유지됩니다.",
++  "photonProxyProtocols": "Protocols",
++  "photonProxyRegions": "Regions / Anycast",
++  "photonProxyLocalNodes": "Fixed nodes (local exits only)",
++  "photonProxySelected": "Selected exits",
++  "photonProxySaveSelection": "Save exit selection",
++  "photonProxySelectionEmpty": "No exits selected. Photon proxy traffic will be rejected.",
++  "photonProxySelectionTip": "Choose protocols, regions and fixed exits. Choices are saved for this app. New regions and nodes are included unless excluded. Anycast is controlled by region.",
 +  "photonSearch": "노드, 주소 또는 경로 검색",
 +  "photonRekey": "보안 연결",
 +  "photonMetric": "경로 메트릭",
@@ -627,7 +662,7 @@ diff --git a/arb/intl_ru.arb b/arb/intl_ru.arb
 index 58e77e7..442cef8 100644
 --- a/arb/intl_ru.arb
 +++ b/arb/intl_ru.arb
-@@ -1076,5 +1076,119 @@
+@@ -1076,5 +1076,126 @@
    "fakeipFilterDesc": "Эти домены получают реальные IP вместо Fake-IP. В режиме whitelist Fake-IP получают только они.",
    "fallbackFilterGeositeDesc": "Домены из этих категорий GeoSite сразу разрешаются через Fallback.",
    "fallbackFilterIpcidrDesc": "Если Nameserver возвращает IP из этих диапазонов, используется ответ Fallback.",
@@ -700,6 +735,13 @@ index 58e77e7..442cef8 100644
 +  "photonEditTemplate": "Изменить шаблон YAML",
 +  "photonRemoveTemplate": "Удалить шаблон этой конфигурации Photon и использовать встроенные правила?",
 +  "photonMultiTip": "Доступные узлы добавляются автоматически. Другие профили сохраняются.",
++  "photonProxyProtocols": "Protocols",
++  "photonProxyRegions": "Regions / Anycast",
++  "photonProxyLocalNodes": "Fixed nodes (local exits only)",
++  "photonProxySelected": "Selected exits",
++  "photonProxySaveSelection": "Save exit selection",
++  "photonProxySelectionEmpty": "No exits selected. Photon proxy traffic will be rejected.",
++  "photonProxySelectionTip": "Choose protocols, regions and fixed exits. Choices are saved for this app. New regions and nodes are included unless excluded. Anycast is controlled by region.",
 +  "photonSearch": "Поиск узлов, адресов и маршрутов",
 +  "photonRekey": "Ассоциация безопасности",
 +  "photonMetric": "Метрика маршрута",
@@ -752,7 +794,7 @@ diff --git a/arb/intl_zh_CN.arb b/arb/intl_zh_CN.arb
 index b44010c..2c0e8eb 100644
 --- a/arb/intl_zh_CN.arb
 +++ b/arb/intl_zh_CN.arb
-@@ -1076,5 +1076,119 @@
+@@ -1076,5 +1076,126 @@
    "fakeipFilterDesc": "这些域名不使用 Fake-IP，返回真实 IP；过滤模式为 whitelist 时则只有它们使用 Fake-IP。",
    "fallbackFilterGeositeDesc": "属于这些 GeoSite 分类的域名直接使用 Fallback 解析。",
    "fallbackFilterIpcidrDesc": "Nameserver 返回这些网段内的 IP 时，改用 Fallback 的结果。",
@@ -824,7 +866,14 @@ index b44010c..2c0e8eb 100644
 +  "photonImportTemplate": "导入 YAML 模板",
 +  "photonEditTemplate": "编辑 YAML 模板",
 +  "photonRemoveTemplate": "删除当前 Photon 配置的自定义模板，恢复内置规则？",
-+  "photonMultiTip": "自动汇集可用节点，原有配置保留。",
++  "photonMultiTip": "仅汇集已选择的出口，原有配置保留。",
++  "photonProxyProtocols": "代理协议",
++  "photonProxyRegions": "地区 / 任播",
++  "photonProxyLocalNodes": "固定节点（仅 local 出口）",
++  "photonProxySelected": "已选出口",
++  "photonProxySaveSelection": "保存出口选择",
++  "photonProxySelectionEmpty": "未选中出口，Photon 代理流量将被拒绝。",
++  "photonProxySelectionTip": "按协议、地区及固定节点筛选，选择保存在本应用中。新发现的地区和节点默认纳入，任播入口按地区控制。",
 +  "photonSearch": "搜索节点、地址或路由",
 +  "photonRekey": "安全关联",
 +  "photonMetric": "路由代价",

@@ -13,6 +13,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'controller.dart';
 import 'proxy_bridge.dart';
+import 'proxy_selection_view.dart';
 import 'services.dart';
 import 'setup_view.dart';
 import 'settings_view.dart';
@@ -550,7 +551,17 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
                 ),
               ],
             ),
-            if (config != null && allowed) _templateControls(l, config),
+            if (config != null && allowed) ...[
+              PhotonProxySelectionView(
+                directory: directory,
+                load: photonProxyBridge.loadSelection,
+                onSave: (selection) => owner.applyProxies(
+                  () => photonProxyBridge.saveSelection(selection),
+                ),
+                enabled: !owner.busy && !owner.closed,
+              ),
+              _templateControls(l, config),
+            ],
           ],
         ),
       ),
