@@ -38,9 +38,13 @@ func showServices(filter string, includeAll, localOnly, verbose bool) error {
 }
 
 type serviceMutationRequest struct {
-	Operation string                         `json:"operation"`
-	Endpoints []photonservice.SOCKS5Endpoint `json:"endpoints,omitempty"`
-	DryRun    bool                           `json:"dry_run,omitempty"`
+	Operation    string                         `json:"operation"`
+	Endpoints    []photonservice.SOCKS5Endpoint `json:"endpoints,omitempty"`
+	Type         string                         `json:"type,omitempty"`
+	ServerName   string                         `json:"server_name,omitempty"`
+	Fingerprint  string                         `json:"fingerprint,omitempty"`
+	AuthRequired bool                           `json:"auth_required,omitempty"`
+	DryRun       bool                           `json:"dry_run,omitempty"`
 }
 
 const (
@@ -49,6 +53,25 @@ const (
 )
 
 func commonServiceIntent(request serviceMutationRequest) (corestate.LocalIntent, error) {
+	if request.Type == photonservice.TypeHTTP {
+		switch request.Operation {
+		case serviceOperationPublish:
+			return corestate.PublishHTTPIntent{Service: photonservice.HTTPRecord{Type: request.Type, Endpoints: append([]photonservice.SOCKS5Endpoint(nil), request.Endpoints...), AuthRequired: request.AuthRequired}}, nil
+		case serviceOperationWithdraw:
+			return corestate.WithdrawHTTPIntent{}, nil
+		}
+	}
+	if request.Type == photonservice.TypeTrustTunnel {
+		switch request.Operation {
+		case serviceOperationPublish:
+			return corestate.PublishTrustTunnelIntent{Service: photonservice.TrustTunnelRecord{Type: request.Type, Endpoints: append([]photonservice.SOCKS5Endpoint(nil), request.Endpoints...), ServerName: request.ServerName, Fingerprint: request.Fingerprint}}, nil
+		case serviceOperationWithdraw:
+			return corestate.WithdrawTrustTunnelIntent{}, nil
+		}
+	}
+	if request.Type != "" && request.Type != photonservice.TypeSOCKS5 {
+		return nil, fmt.Errorf("unsupported service type %q", request.Type)
+	}
 	switch request.Operation {
 	case serviceOperationPublish:
 		return corestate.PublishSOCKS5Intent{Endpoints: append([]photonservice.SOCKS5Endpoint(nil), request.Endpoints...)}, nil
@@ -106,6 +129,10 @@ func withdrawSOCKS5Service(direct bool) error {
 }
 
 func submitServiceMutation(config *appConfig, request serviceMutationRequest, now time.Time, direct bool) error {
+	name := socks5RecordName
+	if request.Type != "" {
+		name = request.Type
+	}
 	var operation string
 	switch request.Operation {
 	case serviceOperationPublish:
@@ -115,11 +142,12 @@ func submitServiceMutation(config *appConfig, request serviceMutationRequest, no
 	default:
 		return fmt.Errorf("unsupported service operation %q", request.Operation)
 	}
-	if version, ok, err := sendVersionedMutationViaControl(config, controlRequest{Method: "service_mutate", Service: &request}, direct); ok {
+	method := serviceMutationMethod(request.Type)
+	if version, ok, err := sendVersionedMutationViaControl(config, controlRequest{Method: method, Service: &request}, direct); ok {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("%s service %s version %d via daemon\n", operation, socks5RecordName, version)
+		fmt.Printf("%s service %s version %d via daemon\n", operation, name, version)
 		return nil
 	}
 	intent, err := commonServiceIntent(request)
@@ -133,6 +161,17 @@ func submitServiceMutation(config *appConfig, request serviceMutationRequest, no
 	if result.Record == nil {
 		return errors.New("service mutation did not return a record")
 	}
-	fmt.Printf("%s service %s version %d\n", operation, socks5RecordName, result.Record.Version)
+	fmt.Printf("%s service %s version %d\n", operation, name, result.Record.Version)
 	return nil
+}
+
+func serviceMutationMethod(kind string) string {
+	switch kind {
+	case photonservice.TypeHTTP:
+		return "http_service_mutate"
+	case photonservice.TypeTrustTunnel:
+		return "trusttunnel_service_mutate"
+	default:
+		return "service_mutate"
+	}
 }

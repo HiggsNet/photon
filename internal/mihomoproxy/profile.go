@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/photonwindows"
+	photonservice "github.com/HiggsNet/photon/pkg/service"
 	"gopkg.in/yaml.v3"
 )
 
@@ -177,6 +178,11 @@ func directoryConfig(directory *photonwindows.ServiceDirectory, now time.Time) (
 			continue
 		}
 		for _, endpoint := range service.Endpoints {
+			// HTTP passwords are never distributed through the public directory.
+			// Authenticated HTTP endpoints require explicit user configuration.
+			if endpoint.Type == photonservice.TypeHTTP && endpoint.AuthRequired {
+				continue
+			}
 			address, err := netip.ParseAddr(endpoint.Address)
 			if err != nil || address.Zone() != "" || address.IsUnspecified() || endpoint.Port == 0 ||
 				service.Owner == "" || endpoint.Region == "" {
@@ -184,14 +190,34 @@ func directoryConfig(directory *photonwindows.ServiceDirectory, now time.Time) (
 			}
 			name := fmt.Sprintf("%s / %s / %s", strings.TrimSuffix(string(service.Owner), "."), endpoint.Region,
 				net.JoinHostPort(address.String(), strconv.Itoa(int(endpoint.Port))))
+			if endpoint.Type == photonservice.TypeTrustTunnel {
+				name = "TrustTunnel / " + name
+			}
+			if endpoint.Type == photonservice.TypeHTTP {
+				name = "HTTP / " + name
+			}
 			if seen[name] {
 				continue
 			}
 			seen[name] = true
-			endpoints = append(endpoints, namedItem{
+			proxy := namedItem{
 				"name": name, "type": "socks5", "server": address.String(),
 				"port": endpoint.Port, "udp": true, "interface-name": directory.AdapterName,
-			})
+			}
+			switch endpoint.Type {
+			case "", photonservice.TypeSOCKS5:
+			case photonservice.TypeHTTP:
+				proxy["type"], proxy["udp"] = photonservice.TypeHTTP, false
+			case photonservice.TypeTrustTunnel:
+				if err := (photonservice.TrustTunnelRecord{Type: endpoint.Type, Endpoints: []photonservice.SOCKS5Endpoint{{Region: endpoint.Region, Address: endpoint.Address, Port: endpoint.Port}}, ServerName: endpoint.ServerName, Fingerprint: endpoint.Fingerprint}).Validate(); err != nil {
+					return nil, nil, err
+				}
+				proxy["type"], proxy["quic"], proxy["username"], proxy["password"] = endpoint.Type, true, photonservice.TrustTunnelUser, ""
+				proxy["sni"], proxy["fingerprint"] = endpoint.ServerName, endpoint.Fingerprint
+			default:
+				return nil, nil, errors.New("unsupported Photon service protocol")
+			}
+			endpoints = append(endpoints, proxy)
 			prefixes = append(prefixes, netip.PrefixFrom(address, address.BitLen()))
 		}
 	}

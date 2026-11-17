@@ -25,17 +25,21 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: photon-services <validate|render|publish|withdraw> [options]")
+		return errors.New("usage: photon-services <validate|render|prepare|publish|withdraw> [options]")
 	}
 	command := args[0]
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
 	configPath := flags.String("config", defaultManifestPath, "service manifest path")
 	photonBinary := flags.String("photon", "photon", "photon CLI path")
 	outputDir := flags.String("output", "", "override artifact output directory")
+	only := flags.String("only", "", "comma-separated protocols: http,socks5,trusttunnel; none for network-only")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
 	if command == "withdraw" {
+		if *only != "" {
+			return errors.New("withdraw uses all published state; --only applies to validate/render/prepare/publish")
+		}
 		if flags.NArg() != 0 {
 			return errors.New("usage: photon-services withdraw [options]")
 		}
@@ -43,34 +47,10 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		if !manifest.SOCKS5.configured() {
-			return errors.New("service manifest does not configure socks5")
-		}
 		if *outputDir != "" {
 			manifest.OutputDir = *outputDir
 		}
-		lock, err := loadPublishedSOCKS5(manifest.OutputDir)
-		if err != nil {
-			return err
-		}
-		if err := runPhoton(*photonBinary, "service", "withdraw"); err != nil {
-			return err
-		}
-		for _, endpoint := range lock.Endpoints {
-			if serviceControlsRoute(endpoint) {
-				if err := runPhoton(*photonBinary, "route", "withdraw", lock.ManagedZone, endpoint.Assignment); err != nil {
-					return err
-				}
-			}
-			if err := runPhoton(*photonBinary, "firewall", "endpoint", "remove", endpointACLName(endpoint.Network)); err != nil {
-				return err
-			}
-			if err := runPhoton(*photonBinary, "firewall", "endpoint", "remove", httpEndpointACLName(endpoint.Network)); err != nil {
-				return err
-			}
-		}
-		lock.Endpoints = nil
-		return writeSOCKS5Lock(filepath.Join(manifest.OutputDir, "socks5", "published.json"), lock)
+		return withdrawServices(*photonBinary, manifest)
 	}
 	manifest, err := loadManifest(*configPath)
 	if err != nil {
@@ -78,6 +58,9 @@ func run(args []string) error {
 	}
 	if *outputDir != "" {
 		manifest.OutputDir = *outputDir
+	}
+	if err := selectProxyServices(&manifest, *only); err != nil {
+		return err
 	}
 	report, err := queryAssignments(*photonBinary)
 	if err != nil {
@@ -97,11 +80,29 @@ func run(args []string) error {
 		}
 		fmt.Printf("rendered service artifacts under %s\n", resolved.OutputDir)
 		return nil
+	case "prepare":
+		return prepareProxyACLs(*photonBinary, resolved)
 	case "publish":
 		if flags.NArg() != 0 {
 			return errors.New("usage: photon-services publish [options]")
 		}
-		return publishResolvedService(*photonBinary, resolved)
+		if resolved.SOCKS5.configured() {
+			if err := publishResolvedService(*photonBinary, resolved); err != nil {
+				return err
+			}
+		}
+		if resolved.HTTP.configured() {
+			if err := publishHTTP(*photonBinary, resolved); err != nil {
+				return err
+			}
+		}
+		if resolved.TrustTunnel.configured() {
+			return publishTrustTunnel(*photonBinary, resolved)
+		}
+		if !resolved.SOCKS5.configured() && !resolved.HTTP.configured() {
+			return errors.New("service manifest does not configure a proxy")
+		}
+		return nil
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}
@@ -148,6 +149,9 @@ func publishResolvedService(photonBinary string, manifest resolvedManifest) erro
 			{role: "socks", address: roles.SOCKS},
 			{role: "http", address: roles.H2},
 		} {
+			if target.address == "" {
+				continue
+			}
 			connection, err := net.DialTimeout("tcp", net.JoinHostPort(target.address, fmt.Sprint(endpoint.Port)), 3*time.Second)
 			if err != nil {
 				return fmt.Errorf("socks5 endpoint %s %s TCP readiness check failed: %w", endpoint.Network, target.role, err)
@@ -168,6 +172,9 @@ func publishResolvedService(photonBinary string, manifest resolvedManifest) erro
 				{name: endpointACLName(endpoint.Network), destination: roles.SOCKS},
 				{name: httpEndpointACLName(endpoint.Network), destination: roles.H2},
 			} {
+				if acl.destination == "" {
+					continue
+				}
 				args := []string{"firewall", "endpoint", "apply", acl.name, "--destination", acl.destination, "--scope", "ip"}
 				for _, selector := range service.AllowZones {
 					args = append(args, "--allow-zone", selector)
@@ -177,7 +184,11 @@ func publishResolvedService(photonBinary string, manifest resolvedManifest) erro
 				}
 			}
 		} else {
-			for _, aclName := range []string{endpointACLName(endpoint.Network), httpEndpointACLName(endpoint.Network)} {
+			acls := []string{endpointACLName(endpoint.Network)}
+			if roles.H2 != "" {
+				acls = append(acls, httpEndpointACLName(endpoint.Network))
+			}
+			for _, aclName := range acls {
 				if err := runPhoton(photonBinary, "firewall", "endpoint", "remove", aclName); err != nil {
 					return fmt.Errorf("remove stale endpoint ACL before unrestricted publish: %w", err)
 				}
@@ -199,19 +210,30 @@ func publishResolvedService(photonBinary string, manifest resolvedManifest) erro
 	previous, _ := loadPublishedSOCKS5(manifest.OutputDir)
 	current := renderedSOCKS5Lock{resolvedSOCKS5: service, ManagedZone: manifest.ManagedZone}
 	for _, old := range previous.Endpoints {
+		sameName := false
+		for _, endpoint := range service.Endpoints {
+			if endpoint.Network == old.Network {
+				sameName = true
+				break
+			}
+		}
+		if previous.Networks[old.Network].H2 != "" && (!sameName || service.Networks[old.Network].H2 == "") {
+			if err := runPhoton(photonBinary, "firewall", "endpoint", "remove", httpEndpointACLName(old.Network)); err != nil {
+				return err
+			}
+		}
 		if endpointStillPublished(old, service.Endpoints) {
 			continue
 		}
-		if serviceControlsRoute(old) {
+		if serviceControlsRoute(old) && !manifestUsesSharedRoute(manifest, old.Assignment) {
 			if err := runPhoton(photonBinary, "route", "withdraw", previous.ManagedZone, old.Assignment); err != nil {
 				return err
 			}
 		}
-		if err := runPhoton(photonBinary, "firewall", "endpoint", "remove", endpointACLName(old.Network)); err != nil {
-			return err
-		}
-		if err := runPhoton(photonBinary, "firewall", "endpoint", "remove", httpEndpointACLName(old.Network)); err != nil {
-			return err
+		if !sameName {
+			if err := runPhoton(photonBinary, "firewall", "endpoint", "remove", endpointACLName(old.Network)); err != nil {
+				return err
+			}
 		}
 	}
 	return writeSOCKS5Lock(filepath.Join(manifest.OutputDir, "socks5", "published.json"), current)

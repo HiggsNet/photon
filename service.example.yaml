@@ -1,70 +1,60 @@
-# Install as /etc/photon/service.yaml. This file belongs to the standalone
-# photon-services renderer, not to the Photon daemon.
-version: 1
+# Standalone photon-services manifest, normally /etc/photon/service.yaml.
+# v2 treats http, socks5 and trusttunnel independently. Omit any block to
+# disable it; omit all three for network-only operation.
+version: 2
 
-# Defaults inherited by every network. A network-level value overrides this
-# list. The default upstream veth's host-side name is phv2mesh; use the actual
-# stable host ingress interface (for example phx0 when the overlay itself runs
-# in the host namespace). For the address family used by a service endpoint,
-# render also sets Docker gateway_mode to nat-unprotected. In that family
-# trusted_host_interfaces is not a security boundary; Photon' IP-scoped endpoint
-# ACL is the access boundary.
-# network_defaults:
-#   trusted_host_interfaces: [phv2mesh]
+# output_dir: /etc/photon/services
+images:
+  mihomo: metacubex/mihomo:v1.19.34
+
+# Use the actual host-side overlay ingress interface on this node.
+network_defaults:
+  trusted_host_interfaces: [phv2mesh]
 
 networks:
   main:
     ipv4: "local;172.30.0.0/24;172.30.0.128/28;172.30.0.1"
     ipv6: "auto;::/112;::100/120;::1"
-    # Optional per-network override:
-    # trusted_host_interfaces: [phv2mesh]
-  # The main non-shared assignment is normally kept reachable by
-  # config.yaml: ipam.announce: [non-shared]. photon-services does not own it.
-  # Shared Anycast networks use stable IPAM tags. The local main network does
-  # not need a tag: auto intentionally selects the node's unique assignment.
   # cn:
   #   ipv6: "tag:socks5.cn;::/112;::100/120;::1"
-  # asia:
-  #   ipv6: "tag:socks5.asia;::/112;::100/120;::1"
 
-# The entire socks5 block is optional. Omit it when photon-services should only
-# render/manage the Docker networks for other applications.
-socks5:
-  networks:
-    # Base address: socks=::20, h2=::21.
-    main: "::20"
-    # cn: "::20"
-    # asia: "::20"
-  # Each entry maps an attached network to the endpoint's discovery region.
-  # The local endpoint and any number of Anycast endpoints may be published
-  # together.
-  publish:
-    main: local
-    # cn: cn
-    # asia: asia
-  # Optional local endpoint ACL. publish installs one IP-scoped ACL for each
-  # of the socks (::20) and HTTP (::21) addresses through the running Photon
-  # daemon before publishing the signed service record.
-  # allow_zones:
-  #   - clients.catofes.
-  #   - "*.partners.catofes."
-  # GOST v3's built-in resolver defaults to IPv4-first. Other modes:
-  # ipv6_first, ipv4_only, ipv6_only.
-  # resolver:
-  #   mode: ipv4_first
-  #   servers: [8.8.8.8, 1.1.1.1]
-  # The HTTP proxy keeps the legacy Basic authentication defaults shown below.
-  # SOCKS5 intentionally remains NO AUTH and enables TCP CONNECT plus UDP
-  # ASSOCIATE. Its UDP relay uses dynamically allocated container ports, which
-  # is why access control is scoped to the whole service IP.
-  # http_auth:
+http:
+  networks: {main: "::21"}
+  publish: {main: local}
+  port: 3128
+  allow_zones: ["*.catofes."]
+  resolver:
+    mode: ipv4_first
+    servers: [8.8.8.8, 1.1.1.1]
+  # Optional Basic auth; without it, the Zone ACL controls access.
+  # Credentials stay local. Authenticated HTTP nodes need explicit client
+  # credentials and are not selected by the automatic client profile.
+  # auth:
   #   username: photon
-  #   password: 2a0d
+  #   password: replace-me
 
-# Defaults are pinned to a stable image.
-# Override globally only when required.
-# images:
-#   gost: gogost/gost:3.2.6
+socks5:
+  networks: {main: "::20"}
+  publish: {main: local}
+  # Optional Anycast publication if cn is configured above:
+  # networks: {main: "::20", cn: "::20"}
+  # publish: {main: local, cn: cn}
+  port: 3128
+  allow_zones: ["*.catofes."]
+  resolver:
+    mode: ipv4_first
+    servers: [8.8.8.8, 1.1.1.1]
 
-# Artifact root defaults to /etc/photon/services.
-# output_dir: /etc/photon/services
+trusttunnel:
+  networks: {main: "::22"}
+  publish: {main: local}
+  port: 4433
+  allow_zones: ["*.catofes."]
+  resolver:
+    mode: ipv4_first
+    servers: [8.8.8.8, 1.1.1.1]
+
+# main's non-shared route normally remains managed by the daemon:
+# config.yaml: ipam.announce: [non-shared]
+# HTTP/SOCKS5 shared routes are managed by photon-services.
+# TrustTunnel certificates and fingerprints are generated automatically.

@@ -274,9 +274,13 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		writeControlResponse(conn, controlResponse{OK: true, Version: result.Version})
-	case "service_mutate":
+	case "service_mutate", "trusttunnel_service_mutate", "http_service_mutate":
 		if request.Service == nil {
 			writeControlResponse(conn, controlError(errors.New("service_mutate requires service request")))
+			return
+		}
+		if request.Method != serviceMutationMethod(request.Service.Type) {
+			writeControlResponse(conn, controlError(errors.New("service type does not match control method")))
 			return
 		}
 		intent, err := commonServiceIntent(*request.Service)

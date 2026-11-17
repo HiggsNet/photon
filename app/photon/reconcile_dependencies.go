@@ -19,7 +19,7 @@ func localIntentReconcileLayers(intent corestate.LocalIntent) reconcileLayers {
 		return reconcileRoutes | reconcileFirewall
 	}
 	switch intent := intent.(type) {
-	case corestate.PublishSOCKS5Intent, corestate.WithdrawSOCKS5Intent:
+	case corestate.PublishSOCKS5Intent, corestate.WithdrawSOCKS5Intent, corestate.PublishTrustTunnelIntent, corestate.WithdrawTrustTunnelIntent, corestate.PublishHTTPIntent, corestate.WithdrawHTTPIntent:
 		// Service discovery has no Linux platform consumer.
 		return 0
 	case corestate.PutProtocolRecordIntent:

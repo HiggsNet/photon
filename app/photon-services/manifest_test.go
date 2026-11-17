@@ -70,7 +70,7 @@ func TestResolveAndRenderManifest(t *testing.T) {
 		}
 	}
 	serviceCompose := readTestFile(t, filepath.Join(output, "socks5", "docker-compose.yml"))
-	for _, want := range []string{"name: photon-socks5", "socks-main:", "socks-cn:", "h2:", "gogost/gost:3.2.6", "ipv6_address: fd42:1::20", "ipv6_address: fd42:1::21", "./config/socks.yaml:/etc/gost/gost.yaml:ro", "./config/h2.yaml:/etc/gost/gost.yaml:ro"} {
+	for _, want := range []string{"name: photon-socks5", "socks-main:", "socks-cn:", "h2:", "metacubex/mihomo:v1.19.34", "ipv6_address: fd42:1::20", "ipv6_address: fd42:1::21", "./config/socks.yaml:/etc/mihomo/config.yaml:ro", "./config/h2.yaml:/etc/mihomo/config.yaml:ro"} {
 		if !strings.Contains(serviceCompose, want) {
 			t.Fatalf("service compose missing %q:\n%s", want, serviceCompose)
 		}
@@ -101,18 +101,18 @@ func TestResolveAndRenderManifest(t *testing.T) {
 		t.Fatalf("service compose still contains SmartDNS dependency:\n%s", serviceCompose)
 	}
 	socksConfig := readTestFile(t, filepath.Join(output, "socks5", "config", "socks.yaml"))
-	for _, want := range []string{"name: socks", "addr: '[::]:3128'", "resolver: service-resolver", "type: socks5", "metadata:", "udp: true", "udpBufferSize: 65535", "prefer: ipv4"} {
+	for _, want := range []string{"name: photon-socks", "listen: '::'", "port: 3128", "type: socks", "users: []", "udp: true", "ip-version: ipv4-prefer"} {
 		if !strings.Contains(socksConfig, want) {
-			t.Fatalf("SOCKS GOST config missing %q:\n%s", want, socksConfig)
+			t.Fatalf("SOCKS Mihomo config missing %q:\n%s", want, socksConfig)
 		}
 	}
 	if strings.Contains(socksConfig, "auth:") {
 		t.Fatalf("SOCKS5 must remain NO AUTH:\n%s", socksConfig)
 	}
 	h2Config := readTestFile(t, filepath.Join(output, "socks5", "config", "h2.yaml"))
-	for _, want := range []string{"name: h2", "type: http", "auth:", "username: photon", "password: 2a0d", "prefer: ipv4"} {
+	for _, want := range []string{"name: photon-http", "type: http", "users:", "username: photon", "password: 2a0d", "ip-version: ipv4-prefer"} {
 		if !strings.Contains(h2Config, want) {
-			t.Fatalf("H2 GOST config missing %q:\n%s", want, h2Config)
+			t.Fatalf("legacy HTTP Mihomo config missing %q:\n%s", want, h2Config)
 		}
 	}
 	if strings.Contains(h2Config, "udp:") {

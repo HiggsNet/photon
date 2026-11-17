@@ -92,6 +92,7 @@ final class PhotonDirectory {
   /// destination only once, with a name that survives publisher changes.
   List<PhotonEndpoint> get proxyEndpoints {
     final available = endpoints.toList()
+      ..removeWhere((e) => e.type == 'http' && e.authRequired)
       ..sort((a, b) {
         final name = a.name.compareTo(b.name);
         return name != 0 ? name : a.id.compareTo(b.id);
@@ -101,8 +102,8 @@ final class PhotonDirectory {
       for (final endpoint in available)
         if (seen.add(
           endpoint.region == 'local'
-              ? '${endpoint.owner}\u0000${endpoint.authority}'
-              : endpoint.authority,
+              ? '${endpoint.type}\u0000${endpoint.owner}\u0000${endpoint.authority}'
+              : '${endpoint.type}\u0000${endpoint.authority}',
         ))
           endpoint,
     ];
@@ -166,12 +167,19 @@ final class PhotonEndpoint {
     required this.region,
     required this.address,
     required this.port,
+    this.type = 'socks5',
+    this.serverName = '',
+    this.fingerprint = '',
+    this.authRequired = false,
   });
 
   factory PhotonEndpoint.fromJson(String owner, Map<String, dynamic> data) {
     final id = _string(data, 'id');
     final address = _string(data, 'address');
     final port = data['port'];
+    final type = data['type'] as String? ?? 'socks5';
+    final serverName = data['server_name'] as String? ?? '';
+    final fingerprint = data['fingerprint'] as String? ?? '';
     if (!RegExp(r'^[0-9a-f]{32}$').hasMatch(id) ||
         InternetAddress.tryParse(address) == null ||
         port is! int ||
@@ -179,12 +187,24 @@ final class PhotonEndpoint {
         port > 65535) {
       throw const FormatException('Invalid Photon proxy endpoint');
     }
+    if (!const {'socks5', 'trusttunnel', 'http'}.contains(type) ||
+        (type == 'trusttunnel' &&
+            (data['region'] != 'local' ||
+                !RegExp(r'^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$')
+                    .hasMatch(serverName) ||
+                !RegExp(r'^[0-9a-f]{64}$').hasMatch(fingerprint)))) {
+      throw const FormatException('Invalid Photon proxy transport');
+    }
     return PhotonEndpoint(
       id: id,
       owner: owner,
       region: _string(data, 'region'),
       address: address,
       port: port,
+      type: type,
+      serverName: serverName,
+      fingerprint: fingerprint,
+      authRequired: data['auth_required'] as bool? ?? false,
     );
   }
 
@@ -193,9 +213,17 @@ final class PhotonEndpoint {
   final String region;
   final String address;
   final int port;
+  final String type;
+  final String serverName;
+  final String fingerprint;
+  final bool authRequired;
 
   String get name =>
-      '${region == 'local' ? owner.replaceFirst(RegExp(r'\.$'), '') : 'Anycast'} / $region / $authority';
+      '${type == 'trusttunnel'
+          ? 'TrustTunnel / '
+          : type == 'http'
+          ? 'HTTP / '
+          : ''}${region == 'local' ? owner.replaceFirst(RegExp(r'\.$'), '') : 'Anycast'} / $region / $authority';
   String get authority =>
       address.contains(':') ? '[$address]:$port' : '$address:$port';
 }
@@ -281,11 +309,18 @@ Map<String, dynamic> photonProxyProfile({
     for (final endpoint in endpoints)
       {
         'name': endpoint.name,
-        'type': 'socks5',
+        'type': endpoint.type,
         'server': endpoint.address,
         'port': endpoint.port,
-        'udp': true,
+        'udp': endpoint.type != 'http',
         'interface-name': adapter,
+        if (endpoint.type == 'trusttunnel') ...{
+          'quic': true,
+          'username': 'photon',
+          'password': '',
+          'sni': endpoint.serverName,
+          'fingerprint': endpoint.fingerprint,
+        },
       },
   ];
   return _renderPhotonProxyProfile(

@@ -66,7 +66,7 @@ func BuildServiceInspection(state *corestate.VerifiedState, now time.Time) Servi
 		sort.Strings(keys)
 		for _, key := range keys {
 			record := zoneState.Records[key]
-			if record == nil || record.Type != photonservice.RecordTypeSOCKS5 {
+			if record == nil || !photonservice.IsProxyRecordType(record.Type) {
 				continue
 			}
 			serviceView := ServiceView{
@@ -78,7 +78,13 @@ func BuildServiceInspection(state *corestate.VerifiedState, now time.Time) Servi
 				UpdatedUnix: record.Timestamp,
 				RecordKey:   record.Key,
 			}
-			value, err := photonservice.ParseSOCKS5Record(record)
+			if record.Type == photonservice.RecordTypeTrustTunnel {
+				serviceView.Type = photonservice.TypeTrustTunnel
+			}
+			if record.Type == photonservice.RecordTypeHTTP {
+				serviceView.Type = photonservice.TypeHTTP
+			}
+			value, err := photonservice.ParseProxyRecord(record)
 			if err != nil {
 				serviceView.Status = "invalid"
 				serviceView.Failure = BuildFailure(FailureCodeServiceRecord, err)

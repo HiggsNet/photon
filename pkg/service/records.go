@@ -154,8 +154,12 @@ func AuthorizeSOCKS5Record(record *zone.Record, authorized *routing.AuthorizedRo
 	if !value.IsActive() {
 		return nil, errors.New("service record is withdrawn")
 	}
+	return authorizeEndpoints(record, value.EffectiveEndpoints(), authorized)
+}
+
+func authorizeEndpoints(record *zone.Record, endpoints []SOCKS5Endpoint, authorized *routing.AuthorizedRouteSet) (*routing.AssignmentEntry, error) {
 	var first *routing.AssignmentEntry
-	for _, endpoint := range value.EffectiveEndpoints() {
+	for _, endpoint := range endpoints {
 		addr := netip.MustParseAddr(endpoint.Address)
 		var best *routing.AssignmentEntry
 		for _, assignment := range authorized.AllAssignments {

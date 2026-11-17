@@ -45,10 +45,14 @@ type ServiceEntry struct {
 }
 
 type ServiceEndpoint struct {
-	ID      string `json:"id"`
-	Region  string `json:"region"`
-	Address string `json:"address"`
-	Port    uint16 `json:"port"`
+	ID           string `json:"id"`
+	Region       string `json:"region"`
+	Address      string `json:"address"`
+	Port         uint16 `json:"port"`
+	Type         string `json:"type,omitempty"`
+	ServerName   string `json:"server_name,omitempty"`
+	Fingerprint  string `json:"fingerprint,omitempty"`
+	AuthRequired bool   `json:"auth_required,omitempty"`
 }
 
 type serviceInputs struct {
@@ -176,7 +180,7 @@ func buildServiceDirectory(ctx context.Context, config *Config, view corestate.V
 		}
 		keys := make([]string, 0)
 		for key, record := range zs.Records {
-			if strings.HasPrefix(key, photonservice.RecordKeyPrefix) && record != nil && record.Type == photonservice.RecordTypeSOCKS5 {
+			if strings.HasPrefix(key, photonservice.RecordKeyPrefix) && record != nil && photonservice.IsProxyRecordType(record.Type) {
 				keys = append(keys, key)
 			}
 		}
@@ -188,7 +192,7 @@ func buildServiceDirectory(ctx context.Context, config *Config, view corestate.V
 			}
 			record := zs.Records[key]
 			entry := ServiceEntry{ID: string(path) + "/" + key, Owner: path, RecordKey: key, Version: record.Version, Status: "invalid", Endpoints: []ServiceEndpoint{}}
-			value, parseErr := photonservice.ParseSOCKS5Record(record)
+			value, parseErr := photonservice.ParseProxyRecord(record)
 			switch {
 			case chainErr != nil:
 				entry.Status, entry.Diagnostic = "untrusted", "owner_authority_invalid"
@@ -199,13 +203,13 @@ func buildServiceDirectory(ctx context.Context, config *Config, view corestate.V
 			case !value.IsActive():
 				entry.Status = "withdrawn"
 			default:
-				if _, err := photonservice.AuthorizeSOCKS5Record(record, authorized); err != nil {
+				if _, err := photonservice.AuthorizeProxyRecord(record, authorized); err != nil {
 					entry.Status, entry.Diagnostic = "unauthorized", "endpoint_assignment_invalid"
 				} else {
 					entry.Status = "active"
 					for _, endpoint := range value.EffectiveEndpoints() {
 						id := sha256.Sum256([]byte(entry.ID + "\x00" + endpoint.Region + "\x00" + net.JoinHostPort(endpoint.Address, strconv.Itoa(int(endpoint.Port)))))
-						entry.Endpoints = append(entry.Endpoints, ServiceEndpoint{ID: hex.EncodeToString(id[:16]), Region: endpoint.Region, Address: endpoint.Address, Port: endpoint.Port})
+						entry.Endpoints = append(entry.Endpoints, ServiceEndpoint{ID: hex.EncodeToString(id[:16]), Region: endpoint.Region, Address: endpoint.Address, Port: endpoint.Port, Type: value.Type, ServerName: value.ServerName, Fingerprint: value.Fingerprint, AuthRequired: value.AuthRequired})
 					}
 					slices.SortFunc(entry.Endpoints, func(a, b ServiceEndpoint) int { return strings.Compare(a.ID, b.ID) })
 				}

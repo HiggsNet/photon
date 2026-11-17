@@ -48,4 +48,21 @@ func TestCommonControlIntentAdaptersAreTypedAndDetached(t *testing.T) {
 	if typed.Endpoints[0].Address != "10.0.1.1" {
 		t.Fatal("service intent retained control request endpoints")
 	}
+
+	request.Type = photonservice.TypeTrustTunnel
+	request.Endpoints[0].Address = "fd42:1::22"
+	request.ServerName = "trusttunnel.node.catofes"
+	request.Fingerprint = "pin"
+	trust, err := commonServiceIntent(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tunnel, ok := trust.(corestate.PublishTrustTunnelIntent)
+	if !ok || tunnel.Service.ServerName != request.ServerName || tunnel.Service.Fingerprint != request.Fingerprint {
+		t.Fatalf("TrustTunnel intent = %#v", trust)
+	}
+	request.Endpoints[0].Address = "mutated"
+	if tunnel.Service.Endpoints[0].Address != "fd42:1::22" {
+		t.Fatal("TrustTunnel intent retained control request endpoints")
+	}
 }

@@ -263,6 +263,17 @@ func TestDaemonControlErrorResponses(t *testing.T) {
 	service := newTestDaemonFromOwners(
 		&testApp{Config: defaultAppConfig()}, verified, checkpoint, runtime, config, time.Second,
 	)
+	for _, request := range []controlRequest{
+		{Method: "service_mutate", Service: &serviceMutationRequest{Type: "trusttunnel", Operation: serviceOperationPublish}},
+		{Method: "trusttunnel_service_mutate", Service: &serviceMutationRequest{Type: "socks5", Operation: serviceOperationPublish}},
+		{Method: "service_mutate", Service: &serviceMutationRequest{Type: "http", Operation: serviceOperationPublish}},
+		{Method: "http_service_mutate", Service: &serviceMutationRequest{Type: "socks5", Operation: serviceOperationPublish}},
+	} {
+		response := controlRequestViaPipe(t, service, request)
+		if response.OK || !strings.Contains(response.Error, "service type does not match control method") {
+			t.Fatalf("protocol mismatch response = %#v", response)
+		}
+	}
 
 	response := controlRequestViaPipe(t, service, controlRequest{Method: "record_put", Zone: "node-b.catofes."})
 	if response.OK || response.Error == "" {

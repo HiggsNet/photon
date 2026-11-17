@@ -116,6 +116,24 @@ type WithdrawSOCKS5Intent struct{}
 
 func (WithdrawSOCKS5Intent) isLocalIntent() {}
 
+type PublishTrustTunnelIntent struct {
+	Service photonservice.TrustTunnelRecord
+}
+
+type PublishHTTPIntent struct{ Service photonservice.HTTPRecord }
+
+func (PublishHTTPIntent) isLocalIntent() {}
+
+type WithdrawHTTPIntent struct{}
+
+func (WithdrawHTTPIntent) isLocalIntent() {}
+
+func (PublishTrustTunnelIntent) isLocalIntent() {}
+
+type WithdrawTrustTunnelIntent struct{}
+
+func (WithdrawTrustTunnelIntent) isLocalIntent() {}
+
 type PutDelegationIntent struct {
 	Parent    zone.ZonePath
 	Authority *zone.ZoneAuthority
@@ -338,6 +356,14 @@ func applyLocalIntentCandidate(candidate *VerifiedState, intent LocalIntent, now
 		out.Record, changed, err = applyPublishSOCKS5Intent(candidate, typed, now)
 	case WithdrawSOCKS5Intent:
 		out.Record, changed, err = applyWithdrawSOCKS5Intent(candidate, now)
+	case PublishTrustTunnelIntent:
+		out.Record, changed, err = applyPublishTrustTunnelIntent(candidate, typed, now)
+	case PublishHTTPIntent:
+		out.Record, changed, err = applyPublishHTTPIntent(candidate, typed, now)
+	case WithdrawHTTPIntent:
+		out.Record, changed, err = applyWithdrawHTTPIntent(candidate, now)
+	case WithdrawTrustTunnelIntent:
+		out.Record, changed, err = applyWithdrawTrustTunnelIntent(candidate, now)
 	case PutDelegationIntent:
 		out.Delegation, changed, err = applyPutDelegationIntent(candidate, typed, now)
 		if changed != "" {

@@ -79,7 +79,7 @@ func applyWithdrawSOCKS5Intent(state *VerifiedState, now time.Time) (*zone.Recor
 		return nil, "", fmt.Errorf("current service record is invalid: %w", err)
 	}
 	if !value.IsActive() {
-		return nil, "", fmt.Errorf("service %q is already withdrawn", socks5ServiceID)
+		return current, "", nil
 	}
 	active := false
 	value.Active = &active

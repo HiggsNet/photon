@@ -230,11 +230,15 @@ func cmdService() *cli.Command {
 			},
 			{
 				Name:                      "publish",
-				Usage:                     "Publish a SOCKS5 endpoint owned by the managed zone",
+				Usage:                     "Publish an HTTP, SOCKS5 or TrustTunnel service owned by the managed zone",
 				UsageText:                 "photon service publish --endpoint <region,address,port>... [--direct]",
 				DisableSliceFlagSeparator: true,
 				Flags: []cli.Flag{
 					&cli.StringSliceFlag{Name: "endpoint", Usage: "Endpoint as region,address,port; repeat for multiple networks"},
+					&cli.StringFlag{Name: "type", Value: "socks5", Usage: "Service protocol: http, socks5 or trusttunnel (HTTP/3 only)"},
+					&cli.BoolFlag{Name: "auth-required", Usage: "HTTP service requires separately configured credentials"},
+					&cli.StringFlag{Name: "server-name", Usage: "TrustTunnel TLS server name"},
+					&cli.StringFlag{Name: "fingerprint", Usage: "TrustTunnel SHA256 certificate fingerprint"},
 					&cli.StringFlag{Name: "region", Usage: "Legacy single-endpoint region"},
 					&cli.StringFlag{Name: "address", Usage: "Legacy single-endpoint address"},
 					&cli.UintFlag{Name: "port", Value: 3128},
@@ -251,17 +255,50 @@ func cmdService() *cli.Command {
 					if err != nil {
 						return err
 					}
+					if cmd.Bool("auth-required") && cmd.String("type") != "http" {
+						return cli.Exit("--auth-required requires --type http", 1)
+					}
+					if cmd.String("type") == "http" {
+						if cmd.String("server-name") != "" || cmd.String("fingerprint") != "" {
+							return cli.Exit("TLS options require --type trusttunnel", 1)
+						}
+						config, err := loadAppConfig()
+						if err != nil {
+							return err
+						}
+						return submitServiceMutation(config, serviceMutationRequest{Operation: serviceOperationPublish, Type: "http", Endpoints: endpoints, AuthRequired: cmd.Bool("auth-required")}, time.Now(), cmd.Bool("direct"))
+					}
+					if cmd.String("type") != "socks5" || cmd.String("server-name") != "" || cmd.String("fingerprint") != "" {
+						if cmd.String("type") != "trusttunnel" {
+							return cli.Exit("TLS options require --type trusttunnel", 1)
+						}
+						config, err := loadAppConfig()
+						if err != nil {
+							return err
+						}
+						return submitServiceMutation(config, serviceMutationRequest{Operation: serviceOperationPublish, Type: cmd.String("type"), Endpoints: endpoints, ServerName: cmd.String("server-name"), Fingerprint: cmd.String("fingerprint")}, time.Now(), cmd.Bool("direct"))
+					}
 					return publishSOCKS5Endpoints(endpoints, cmd.Bool("direct"))
 				},
 			},
 			{
 				Name:      "withdraw",
-				Usage:     "Withdraw a previously published SOCKS5 endpoint",
+				Usage:     "Withdraw a previously published proxy service",
 				UsageText: "photon service withdraw [--direct]",
-				Flags:     []cli.Flag{&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly"}},
+				Flags:     []cli.Flag{&cli.BoolFlag{Name: "direct", Usage: "Write the local DB directly"}, &cli.StringFlag{Name: "type", Value: "socks5", Usage: "Service protocol to withdraw"}},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.Args().Len() != 0 {
 						return cli.Exit("usage: photon service withdraw [--direct]", 1)
+					}
+					if cmd.String("type") != "socks5" {
+						if cmd.String("type") != "trusttunnel" && cmd.String("type") != "http" {
+							return cli.Exit("unsupported service type", 1)
+						}
+						config, err := loadAppConfig()
+						if err != nil {
+							return err
+						}
+						return submitServiceMutation(config, serviceMutationRequest{Operation: serviceOperationWithdraw, Type: cmd.String("type")}, time.Now(), cmd.Bool("direct"))
 					}
 					return withdrawSOCKS5Service(cmd.Bool("direct"))
 				},

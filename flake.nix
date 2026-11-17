@@ -78,13 +78,10 @@
           cfg = config.services.photon;
           settingsFormat = pkgs.formats.yaml { };
           generatedConfig = settingsFormat.generate "photon-config.yaml" cfg.settings;
-          configFile =
-            if cfg.configFile != null then
-              cfg.configFile
-            else
-              "/etc/photon/config.yaml";
-          generatedConfigRestartTriggers =
-            lib.optional (cfg.configFile == null && cfg.settings != { }) generatedConfig;
+          configFile = if cfg.configFile != null then cfg.configFile else "/etc/photon/config.yaml";
+          generatedConfigRestartTriggers = lib.optional (
+            cfg.configFile == null && cfg.settings != { }
+          ) generatedConfig;
           settingsIPsecConfigured = cfg.settings ? ipsec;
           settingsIPsec = cfg.settings.ipsec or { };
           settingsIPsecDriver = settingsIPsec.driver or "strongswan";
@@ -111,18 +108,69 @@
           deploymentCfg = cfg.serviceDeployment;
           generatedServiceManifest = settingsFormat.generate "photon-service.yaml" deploymentCfg.settings;
           serviceManifestFile =
-            if deploymentCfg.configFile != null then
-              deploymentCfg.configFile
-            else
-              "/etc/photon/service.yaml";
-          generatedServiceManifestRestartTriggers =
-            lib.optional (deploymentCfg.configFile == null && deploymentCfg.settings != { })
-              generatedServiceManifest;
+            if deploymentCfg.configFile != null then deploymentCfg.configFile else "/etc/photon/service.yaml";
+          generatedServiceManifestRestartTriggers = lib.optional (
+            deploymentCfg.configFile == null && deploymentCfg.settings != { }
+          ) generatedServiceManifest;
           photonServices = lib.getExe' deploymentCfg.package "photon-services";
           photonCLI = lib.getExe deploymentCfg.package;
           dockerCLI = lib.getExe deploymentCfg.dockerPackage;
           networkComposeFile = "${deploymentCfg.outputDirectory}/networks/docker-compose.yml";
-          socks5ComposeFile = "${deploymentCfg.outputDirectory}/socks5/docker-compose.yml";
+          proxyKinds = builtins.filter (kind: deploymentCfg.${kind}.enable) [
+            "http"
+            "socks5"
+            "trusttunnel"
+          ];
+          hasProxies = proxyKinds != [ ];
+          proxyUnits = map (kind: "photon-services-${kind}.service") proxyKinds;
+          proxySelection = if hasProxies then lib.concatStringsSep "," proxyKinds else "none";
+          proxyServices = lib.genAttrs (map (kind: "photon-services-${kind}") proxyKinds) (
+            name:
+            let
+              kind = lib.removePrefix "photon-services-" name;
+              compose = "${deploymentCfg.outputDirectory}/${kind}/docker-compose.yml";
+            in
+            {
+              description = "Manage Photon ${kind} containers";
+              partOf = [ "photon-services.target" ];
+              restartTriggers = generatedServiceManifestRestartTriggers;
+              requires = [
+                deploymentCfg.dockerService
+                "photon-services-prepare.service"
+              ];
+              after = [
+                deploymentCfg.dockerService
+                "photon-services-prepare.service"
+              ];
+              before = [ "photon-services-publish.service" ];
+              environment = deploymentCfg.environment;
+              path = [ deploymentCfg.dockerPackage ];
+              script = ''
+                set -euo pipefail
+                ${dockerCLI} compose --file ${lib.escapeShellArg compose} up --detach --remove-orphans || {
+                  ${dockerCLI} compose --file ${lib.escapeShellArg compose} down || true
+                  exit 1
+                }
+              '';
+              preStop = lib.optionalString deploymentCfg.stopContainersOnStop ''
+                ${dockerCLI} compose --file ${lib.escapeShellArg compose} down
+              '';
+              serviceConfig = {
+                Type = "oneshot";
+                RemainAfterExit = true;
+                User = "root";
+                Group = "root";
+                Restart = "on-failure";
+                RestartMode = "direct";
+                RestartSec = deploymentCfg.restartSec;
+                TimeoutStartSec = 300;
+                TimeoutStopSec = 120;
+                UMask = "0027";
+                EnvironmentFile = deploymentCfg.environmentFiles;
+              }
+              // deploymentCfg.extraServiceConfig;
+            }
+          );
         in
         {
           options.services.photon = {
@@ -367,7 +415,7 @@
                 default = { };
                 example = lib.literalExpression ''
                   {
-                    version = 1;
+                    version = 2;
                     networks.main = {
                       ipv4 = "local;172.30.0.0/24;172.30.0.128/28;172.30.0.1";
                       ipv6 = "auto;::/112;::100/120;::1";
@@ -376,6 +424,15 @@
                       networks.main = "::20";
                       publish.main = "local";
                     };
+                    http = {
+                      networks.main = "::21";
+                      publish.main = "local";
+                    };
+                    trusttunnel = {
+                      networks.main = "::22";
+                      publish.main = "local";
+                      allow_zones = [ "*.catofes." ];
+                    };
                   }
                 '';
                 description = ''
@@ -383,7 +440,7 @@
                   map directly to service.yaml. The generated file is available
                   as /etc/photon/service.yaml and backed by the world-readable
                   Nix store; use configFile when the manifest contains
-                  credentials such as socks5.http_auth.password.
+                  credentials such as http.auth.password.
                 '';
               };
 
@@ -391,7 +448,7 @@
                 type = lib.types.str;
                 default = "/var/lib/photon/services";
                 description = ''
-                  Writable directory for generated Compose files, GOST
+                  Writable directory for generated Compose files, Mihomo
                   configuration, and resolved/published state. This overrides
                   output_dir in the manifest.
                 '';
@@ -412,13 +469,28 @@
 
               socks5.enable = lib.mkOption {
                 type = lib.types.bool;
-                default = true;
+                default =
+                  if deploymentCfg.settings == { } then
+                    true
+                  else
+                    deploymentCfg.settings ? socks5 && deploymentCfg.settings.socks5 != { };
                 description = ''
                   Whether to start the generated SOCKS5 Compose project and
-                  publish its service record. Set this to false for a
-                  network-only deployment; the systemd target then stops after
-                  creating the generated Docker networks.
+                  publish its service record. Generated manifests infer this
+                  from settings.socks5; external manifests default to true.
                 '';
+              };
+
+              http.enable = lib.mkOption {
+                type = lib.types.bool;
+                default = deploymentCfg.settings ? http && deploymentCfg.settings.http != { };
+                description = "Start and publish the independent HTTP proxy. Set explicitly for an external manifest.";
+              };
+
+              trusttunnel.enable = lib.mkOption {
+                type = lib.types.bool;
+                default = deploymentCfg.settings ? trusttunnel && deploymentCfg.settings.trusttunnel != { };
+                description = "Start and publish TrustTunnel over HTTP/3. Set explicitly for an external manifest.";
               };
 
               withdrawOnStop = lib.mkOption {
@@ -666,34 +738,40 @@
                     configure settings.socks5 or set socks5.enable to false.
                   '';
                 }
+                {
+                  assertion =
+                    deploymentCfg.configFile != null
+                    || deploymentCfg.settings == { }
+                    || !deploymentCfg.http.enable
+                    || (deploymentCfg.settings ? http && deploymentCfg.settings.http != { });
+                  message = "serviceDeployment.http.enable requires settings.http or an external manifest.";
+                }
+                {
+                  assertion =
+                    deploymentCfg.configFile != null
+                    || deploymentCfg.settings == { }
+                    || !deploymentCfg.trusttunnel.enable
+                    || (deploymentCfg.settings ? trusttunnel && deploymentCfg.settings.trusttunnel != { });
+                  message = "serviceDeployment.trusttunnel.enable requires settings.trusttunnel or an external manifest.";
+                }
               ];
 
               virtualisation.docker.enable = lib.mkDefault true;
 
-              environment.etc."photon/service.yaml" = lib.mkIf (
-                deploymentCfg.configFile == null && deploymentCfg.settings != { }
-              ) {
-                source = generatedServiceManifest;
-              };
+              environment.etc."photon/service.yaml" =
+                lib.mkIf (deploymentCfg.configFile == null && deploymentCfg.settings != { })
+                  {
+                    source = generatedServiceManifest;
+                  };
 
               systemd.targets.photon-services = {
                 description = "Photon application services";
                 wantedBy = [ "multi-user.target" ];
                 requires = [
-                  (
-                    if deploymentCfg.socks5.enable then
-                      "photon-services-publish.service"
-                    else
-                      "photon-services-networks.service"
-                  )
+                  (if hasProxies then "photon-services-publish.service" else "photon-services-networks.service")
                 ];
                 after = [
-                  (
-                    if deploymentCfg.socks5.enable then
-                      "photon-services-publish.service"
-                    else
-                      "photon-services-networks.service"
-                  )
+                  (if hasProxies then "photon-services-publish.service" else "photon-services-networks.service")
                 ];
               };
 
@@ -718,6 +796,7 @@
                     ${photonServices} render \
                       --config ${lib.escapeShellArg serviceManifestFile} \
                       --photon ${lib.escapeShellArg photonCLI} \
+                      --only ${lib.escapeShellArg proxySelection} \
                       --output ${lib.escapeShellArg deploymentCfg.outputDirectory}
                   '';
                   serviceConfig = {
@@ -747,7 +826,7 @@
                     deploymentCfg.dockerService
                     "photon-services-render.service"
                   ];
-                  before = lib.optional deploymentCfg.socks5.enable "photon-services-socks5.service";
+                  before = lib.optional hasProxies "photon-services-prepare.service";
                   environment = deploymentCfg.environment;
                   path = [ deploymentCfg.dockerPackage ];
                   script = ''
@@ -776,32 +855,32 @@
                   // deploymentCfg.extraServiceConfig;
                 };
               }
-              // lib.optionalAttrs deploymentCfg.socks5.enable {
-
-                photon-services-socks5 = {
-                  description = "Manage Photon SOCKS5 containers";
+              // proxyServices
+              // lib.optionalAttrs hasProxies {
+                photon-services-prepare = {
+                  description = "Prepare Photon proxy endpoint ACLs";
                   partOf = [ "photon-services.target" ];
                   restartTriggers = generatedServiceManifestRestartTriggers;
                   requires = [
-                    deploymentCfg.dockerService
+                    "photon.service"
                     "photon-services-networks.service"
                   ];
                   after = [
-                    deploymentCfg.dockerService
+                    "photon.service"
                     "photon-services-networks.service"
                   ];
-                  before = [ "photon-services-publish.service" ];
-                  environment = deploymentCfg.environment;
-                  path = [ deploymentCfg.dockerPackage ];
+                  before = proxyUnits;
+                  environment = deploymentCfg.environment // {
+                    PHOTON_CONFIG = configFile;
+                  };
+                  path = [ deploymentCfg.package ];
                   script = ''
                     set -euo pipefail
-                    ${dockerCLI} compose --file ${lib.escapeShellArg socks5ComposeFile} up --detach --remove-orphans || {
-                      ${dockerCLI} compose --file ${lib.escapeShellArg socks5ComposeFile} down || true
-                      exit 1
-                    }
-                  '';
-                  preStop = lib.optionalString deploymentCfg.stopContainersOnStop ''
-                    ${dockerCLI} compose --file ${lib.escapeShellArg socks5ComposeFile} down
+                    ${photonServices} prepare \
+                      --config ${lib.escapeShellArg serviceManifestFile} \
+                      --photon ${lib.escapeShellArg photonCLI} \
+                      --only ${lib.escapeShellArg proxySelection} \
+                      --output ${lib.escapeShellArg deploymentCfg.outputDirectory}
                   '';
                   serviceConfig = {
                     Type = "oneshot";
@@ -811,35 +890,31 @@
                     Restart = "on-failure";
                     RestartMode = "direct";
                     RestartSec = deploymentCfg.restartSec;
-                    TimeoutStartSec = 300;
-                    TimeoutStopSec = 120;
+                    TimeoutStartSec = 120;
                     UMask = "0027";
                     EnvironmentFile = deploymentCfg.environmentFiles;
                   }
                   // deploymentCfg.extraServiceConfig;
                 };
-
                 photon-services-publish = {
                   description = "Publish Photon application services";
                   partOf = [ "photon-services.target" ];
                   restartTriggers = generatedServiceManifestRestartTriggers;
-                  requires = [
-                    "photon.service"
-                    "photon-services-socks5.service"
-                  ];
-                  after = [
-                    "photon.service"
-                    "photon-services-socks5.service"
-                  ];
+                  requires = [ "photon.service" ] ++ proxyUnits;
+                  after = [ "photon.service" ] ++ proxyUnits;
                   environment = deploymentCfg.environment // {
                     PHOTON_CONFIG = configFile;
                   };
-                  path = [ deploymentCfg.package ];
+                  path = [
+                    deploymentCfg.package
+                    (pkgs.curlHTTP3 or pkgs.curl)
+                  ];
                   script = ''
                     set -euo pipefail
                     ${photonServices} publish \
                       --config ${lib.escapeShellArg serviceManifestFile} \
                       --photon ${lib.escapeShellArg photonCLI} \
+                      --only ${lib.escapeShellArg proxySelection} \
                       --output ${lib.escapeShellArg deploymentCfg.outputDirectory}
                   '';
                   preStop = lib.optionalString deploymentCfg.withdrawOnStop ''

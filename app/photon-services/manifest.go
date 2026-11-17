@@ -27,11 +27,14 @@ type manifest struct {
 	Images          imageConfig              `yaml:"images,omitempty"`
 	NetworkDefaults networkDefaults          `yaml:"network_defaults,omitempty"`
 	Networks        map[string]networkConfig `yaml:"networks"`
+	HTTP            *httpConfig              `yaml:"http,omitempty"`
 	SOCKS5          socks5Config             `yaml:"socks5"`
+	TrustTunnel     trustTunnelConfig        `yaml:"trusttunnel,omitempty"`
 }
 
 type imageConfig struct {
-	Gost string `yaml:"gost,omitempty"`
+	Gost   string `yaml:"gost,omitempty"`
+	Mihomo string `yaml:"mihomo,omitempty"`
 }
 
 type networkConfig struct {
@@ -127,6 +130,8 @@ type resolvedManifest struct {
 	Images      imageConfig                `json:"images"`
 	Networks    map[string]resolvedNetwork `json:"networks"`
 	SOCKS5      resolvedSOCKS5             `json:"socks5"`
+	HTTP        resolvedHTTP               `json:"http,omitempty"`
+	TrustTunnel resolvedTrustTunnel        `json:"trusttunnel,omitempty"`
 }
 
 type resolvedNetwork struct {
@@ -192,14 +197,14 @@ func loadManifest(path string) (manifest, error) {
 	if value.Version == 0 {
 		value.Version = 1
 	}
-	if value.Version != 1 {
+	if value.Version != 1 && value.Version != 2 {
 		return manifest{}, fmt.Errorf("unsupported service manifest version %d", value.Version)
 	}
 	if value.OutputDir == "" {
 		value.OutputDir = defaultOutputDir
 	}
-	if value.Images.Gost == "" {
-		value.Images.Gost = defaultGostImage
+	if value.Images.Mihomo == "" {
+		value.Images.Mihomo = defaultMihomoImage
 	}
 	if len(value.Networks) == 0 {
 		return manifest{}, fmt.Errorf("networks is required")
@@ -208,6 +213,9 @@ func loadManifest(path string) (manifest, error) {
 }
 
 func resolveManifest(value manifest, rawAssignments []runtimeAssignment) (resolvedManifest, error) {
+	if value.Version >= 2 && value.Images.Gost != "" {
+		return resolvedManifest{}, fmt.Errorf("images.gost is legacy; configure images.mihomo")
+	}
 	assignments := make([]assignmentCandidate, 0, len(rawAssignments))
 	for _, raw := range rawAssignments {
 		prefix, err := netip.ParsePrefix(raw.Prefix)
@@ -261,10 +269,28 @@ func resolveManifest(value manifest, rawAssignments []runtimeAssignment) (resolv
 		}
 		result.Networks[name] = network
 	}
-	if !value.SOCKS5.configured() {
-		return result, nil
+	if value.TrustTunnel.configured() {
+		service, err := resolveTrustTunnel(value.TrustTunnel, result.Networks)
+		if err != nil {
+			return resolvedManifest{}, err
+		}
+		result.TrustTunnel = service
 	}
+	if value.HTTP.configured() {
+		service, err := resolveHTTP(*value.HTTP, result.Networks)
+		if err != nil {
+			return resolvedManifest{}, err
+		}
+		result.HTTP = service
+	}
+	if !value.SOCKS5.configured() {
+		return result, validateProxyAddressConflicts(result)
+	}
+	legacyHTTP := value.Version < 2 && value.HTTP == nil
 	configured := value.SOCKS5
+	if !legacyHTTP && configured.HTTPAuth != (proxyAuthConfig{}) {
+		return resolvedManifest{}, fmt.Errorf("socks5.http_auth is legacy; move credentials to http.auth")
+	}
 	if configured.Port == 0 {
 		configured.Port = 3128
 	}
@@ -279,12 +305,14 @@ func resolveManifest(value manifest, rawAssignments []runtimeAssignment) (resolv
 		return resolvedManifest{}, fmt.Errorf("socks5.resolver: %w", err)
 	}
 	configured.Resolver = resolver
-	httpAuth, err := normalizeHTTPAuth(configured.HTTPAuth)
-	if err != nil {
-		return resolvedManifest{}, fmt.Errorf("socks5.http_auth: %w", err)
+	if legacyHTTP {
+		httpAuth, err := normalizeHTTPAuth(configured.HTTPAuth)
+		if err != nil {
+			return resolvedManifest{}, fmt.Errorf("socks5.http_auth: %w", err)
+		}
+		configured.HTTPAuth = httpAuth
 	}
-	configured.HTTPAuth = httpAuth
-	service := resolvedSOCKS5{Port: configured.Port, Resolver: resolver, HTTPAuth: httpAuth, Networks: map[string]resolvedRoleAddrs{}}
+	service := resolvedSOCKS5{Port: configured.Port, Resolver: resolver, HTTPAuth: configured.HTTPAuth, Networks: map[string]resolvedRoleAddrs{}}
 	for _, raw := range configured.AllowZones {
 		selector, err := photonservice.ParseZoneSelector(raw)
 		if err != nil {
@@ -301,7 +329,7 @@ func resolveManifest(value manifest, rawAssignments []runtimeAssignment) (resolv
 		if err != nil {
 			return resolvedManifest{}, fmt.Errorf("socks5 network %s: %w", networkName, err)
 		}
-		roles, err := resolveRoleAddresses(base, *familyIPAM)
+		roles, err := resolveProxyAddresses(base, *familyIPAM, legacyHTTP)
 		if err != nil {
 			return resolvedManifest{}, fmt.Errorf("socks5 network %s: %w", networkName, err)
 		}
@@ -339,13 +367,14 @@ func resolveManifest(value manifest, rawAssignments []runtimeAssignment) (resolv
 	}
 	sort.Slice(service.Endpoints, func(i, j int) bool { return service.Endpoints[i].Network < service.Endpoints[j].Network })
 	hashInput, _ := json.Marshal(struct {
-		Config   socks5Config
-		Networks map[string]resolvedNetwork
-	}{configured, result.Networks})
+		Config     socks5Config
+		Networks   map[string]resolvedNetwork
+		LegacyHTTP bool
+	}{configured, result.Networks, legacyHTTP})
 	hash := sha256.Sum256(hashInput)
 	service.ConfigHash = hex.EncodeToString(hash[:])
 	result.SOCKS5 = service
-	return result, nil
+	return result, validateProxyAddressConflicts(result)
 }
 
 func normalizeTrustedHostInterfaces(values []string) ([]string, error) {
@@ -523,20 +552,32 @@ func resolveServiceBase(raw string, network resolvedNetwork) (netip.Addr, *resol
 }
 
 func resolveRoleAddresses(base netip.Addr, ipam resolvedIPAM) (resolvedRoleAddrs, error) {
+	return resolveProxyAddresses(base, ipam, true)
+}
+
+func resolveProxyAddresses(base netip.Addr, ipam resolvedIPAM, legacyHTTP bool) (resolvedRoleAddrs, error) {
 	subnet, dynamic := netip.MustParsePrefix(ipam.Subnet), netip.MustParsePrefix(ipam.IPRange)
 	gateway := netip.MustParseAddr(ipam.Gateway)
-	values := make([]netip.Addr, 2)
+	count := 1
+	if legacyHTTP {
+		count = 2
+	}
+	values := make([]netip.Addr, count)
 	for i := range values {
 		addr, err := addSmallOffset(base, i)
 		if err != nil {
 			return resolvedRoleAddrs{}, err
 		}
-		if !subnet.Contains(addr) || addr == gateway || dynamic.Contains(addr) {
+		if !subnet.Contains(addr) || addr == subnet.Addr() || (addr.Is4() && !subnet.Contains(addr.Next())) || addr == gateway || dynamic.Contains(addr) {
 			return resolvedRoleAddrs{}, fmt.Errorf("role address %s conflicts with subnet, gateway or dynamic range", addr)
 		}
 		values[i] = addr
 	}
-	return resolvedRoleAddrs{SOCKS: values[0].String(), H2: values[1].String()}, nil
+	roles := resolvedRoleAddrs{SOCKS: values[0].String()}
+	if legacyHTTP {
+		roles.H2 = values[1].String()
+	}
+	return roles, nil
 }
 
 func resolvePrefix(raw string, family int, base netip.Prefix) (netip.Prefix, error) {

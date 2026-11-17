@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -51,47 +50,22 @@ type composeServiceAttachment struct {
 	IPv6Address string `yaml:"ipv6_address,omitempty"`
 }
 
-type gostConfig struct {
-	Services  []gostService  `yaml:"services"`
-	Resolvers []gostResolver `yaml:"resolvers"`
-}
-
-type gostService struct {
-	Name     string         `yaml:"name"`
-	Addr     string         `yaml:"addr"`
-	Resolver string         `yaml:"resolver"`
-	Handler  gostPluginType `yaml:"handler"`
-	Listener gostPluginType `yaml:"listener"`
-}
-
-type gostPluginType struct {
-	Type     string         `yaml:"type"`
-	Auth     *gostAuth      `yaml:"auth,omitempty"`
-	Metadata map[string]any `yaml:"metadata,omitempty"`
-}
-
-type gostAuth struct {
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
-}
-
-type gostResolver struct {
-	Name        string           `yaml:"name"`
-	Nameservers []gostNameserver `yaml:"nameservers"`
-}
-
-type gostNameserver struct {
-	Addr   string `yaml:"addr"`
-	Prefer string `yaml:"prefer,omitempty"`
-	Only   string `yaml:"only,omitempty"`
-}
-
 func renderArtifacts(manifest resolvedManifest) error {
 	if err := renderNetworkCompose(manifest); err != nil {
 		return err
 	}
 	if manifest.SOCKS5.configured() {
 		if err := renderSOCKS5Compose(manifest, manifest.SOCKS5); err != nil {
+			return err
+		}
+	}
+	if manifest.TrustTunnel.configured() {
+		if err := renderTrustTunnel(manifest); err != nil {
+			return err
+		}
+	}
+	if manifest.HTTP.configured() {
+		if err := renderHTTP(manifest); err != nil {
 			return err
 		}
 	}
@@ -112,7 +86,7 @@ func renderNetworkCompose(manifest resolvedManifest) error {
 		Networks: map[string]composeNetwork{},
 		Services: map[string]composeService{
 			"owner": {
-				Image:    manifest.Images.Gost,
+				Image:    mihomoImage(manifest.Images),
 				Scale:    &scaleZero,
 				Networks: map[string]composeServiceAttachment{},
 			},
@@ -120,7 +94,17 @@ func renderNetworkCompose(manifest resolvedManifest) error {
 	}
 	for _, id := range sortedKeys(manifest.Networks) {
 		network := manifest.Networks[id]
-		serviceAddress := publishedServiceAddress(manifest.SOCKS5, id)
+		addresses := []string{publishedServiceAddress(manifest.SOCKS5, id)}
+		for _, endpoint := range manifest.HTTP.Endpoints {
+			if endpoint.Network == id {
+				addresses = append(addresses, endpoint.Address)
+			}
+		}
+		for _, endpoint := range manifest.TrustTunnel.Endpoints {
+			if endpoint.Network == id {
+				addresses = append(addresses, endpoint.Address)
+			}
+		}
 		configs := make([]composeNetworkIPAMConfig, 0, 2)
 		if network.IPv4 != nil {
 			configs = append(configs, composeNetworkIPAMConfig{Subnet: network.IPv4.Subnet, IPRange: network.IPv4.IPRange, Gateway: network.IPv4.Gateway})
@@ -130,7 +114,7 @@ func renderNetworkCompose(manifest resolvedManifest) error {
 		}
 		file.Networks[id] = composeNetwork{
 			Name: network.Name, Driver: "bridge", EnableIPv6: network.IPv6 != nil,
-			DriverOpts: composeBridgeDriverOpts(network.TrustedHostInterfaces, serviceAddress),
+			DriverOpts: composeBridgeDriverOpts(network.TrustedHostInterfaces, addresses...),
 			IPAM:       &composeNetworkIPAM{Driver: "default", Config: configs},
 		}
 		file.Services["owner"].Networks[id] = composeServiceAttachment{}
@@ -147,107 +131,19 @@ func publishedServiceAddress(service resolvedSOCKS5, network string) string {
 	return ""
 }
 
-func renderSOCKS5Compose(manifest resolvedManifest, service resolvedSOCKS5) error {
-	networks := map[string]composeNetwork{}
-	h2Networks := map[string]composeServiceAttachment{}
-	for _, id := range sortedKeys(service.Networks) {
-		network := manifest.Networks[id]
-		roles := service.Networks[id]
-		networks[id] = composeNetwork{Name: network.Name, External: true}
-		h2Networks[id] = attachmentForAddress(roles.H2)
-	}
-	file := composeFile{
-		Name:     "photon-socks5",
-		Networks: networks,
-		Services: map[string]composeService{
-			"h2": {
-				Image: manifest.Images.Gost, Restart: "unless-stopped", Networks: h2Networks,
-				Command: []string{"-C", "/etc/gost/gost.yaml"},
-				Volumes: []string{"./config/h2.yaml:/etc/gost/gost.yaml:ro"},
-			},
-		},
-	}
-	// A SOCKS5 UDP relay must reply from the address to which the client sent
-	// its datagram. GOST does not retain that ingress address when a wildcard
-	// listener is attached to multiple Docker networks: its dynamic UDP socket
-	// follows the container's default route instead. Give every published
-	// endpoint a single-homed GOST process so the kernel's only eligible service
-	// address is the endpoint address.
-	for _, endpoint := range service.Endpoints {
-		roles := service.Networks[endpoint.Network]
-		file.Services["socks-"+endpoint.Network] = composeService{
-			Image: manifest.Images.Gost, Restart: "unless-stopped",
-			Networks: map[string]composeServiceAttachment{
-				endpoint.Network: attachmentForAddress(roles.SOCKS),
-			},
-			Command: []string{"-C", "/etc/gost/gost.yaml"},
-			Volumes: []string{"./config/socks.yaml:/etc/gost/gost.yaml:ro"},
-		}
-	}
-	dir := filepath.Join(manifest.OutputDir, "socks5")
-	if err := writeYAML(filepath.Join(dir, "docker-compose.yml"), file); err != nil {
-		return err
-	}
-	if err := renderGOSTConfig(filepath.Join(dir, "config", "socks.yaml"), "socks", "socks5", service.Port, service.Resolver, nil); err != nil {
-		return err
-	}
-	if err := renderGOSTConfig(filepath.Join(dir, "config", "h2.yaml"), "h2", "http", service.Port, service.Resolver, &service.HTTPAuth); err != nil {
-		return err
-	}
-	if err := os.Remove(filepath.Join(dir, "config", "smartdns.conf")); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	data, err := json.MarshalIndent(renderedSOCKS5Lock{resolvedSOCKS5: service, ManagedZone: manifest.ManagedZone}, "", "  ")
-	if err != nil {
-		return err
-	}
-	return atomicWrite(filepath.Join(dir, "resolved.json"), append(data, '\n'), 0o644)
-}
-
-func renderGOSTConfig(path, name, handler string, port uint16, resolver resolverConfig, auth *proxyAuthConfig) error {
-	nameservers := make([]gostNameserver, 0, len(resolver.Servers))
-	for _, server := range resolver.Servers {
-		nameserver := gostNameserver{Addr: server}
-		switch resolver.Mode {
-		case "ipv4_first":
-			nameserver.Prefer = "ipv4"
-		case "ipv6_first":
-			nameserver.Prefer = "ipv6"
-		case "ipv4_only":
-			nameserver.Only = "ipv4"
-		case "ipv6_only":
-			nameserver.Only = "ipv6"
-		}
-		nameservers = append(nameservers, nameserver)
-	}
-	handlerConfig := gostPluginType{Type: handler}
-	if handler == "socks5" {
-		handlerConfig.Metadata = map[string]any{"udp": true, "udpBufferSize": 65535}
-	}
-	if auth != nil {
-		handlerConfig.Auth = &gostAuth{Username: auth.Username, Password: auth.Password}
-	}
-	config := gostConfig{
-		Services: []gostService{{
-			Name: name, Addr: fmt.Sprintf("[::]:%d", port), Resolver: "service-resolver",
-			Handler: handlerConfig, Listener: gostPluginType{Type: "tcp"},
-		}},
-		Resolvers: []gostResolver{{Name: "service-resolver", Nameservers: nameservers}},
-	}
-	return writeYAMLMode(path, config, 0o600)
-}
-
-func composeBridgeDriverOpts(interfaces []string, serviceAddress string) map[string]string {
+func composeBridgeDriverOpts(interfaces []string, serviceAddresses ...string) map[string]string {
 	options := map[string]string{}
 	if len(interfaces) > 0 {
 		options["com.docker.network.bridge.trusted_host_interfaces"] = strings.Join(interfaces, ":")
 	}
-	if address, err := netip.ParseAddr(serviceAddress); err == nil {
-		family := "ipv6"
-		if address.Is4() {
-			family = "ipv4"
+	for _, serviceAddress := range serviceAddresses {
+		if address, err := netip.ParseAddr(serviceAddress); err == nil {
+			family := "ipv6"
+			if address.Is4() {
+				family = "ipv4"
+			}
+			options["com.docker.network.bridge.gateway_mode_"+family] = "nat-unprotected"
 		}
-		options["com.docker.network.bridge.gateway_mode_"+family] = "nat-unprotected"
 	}
 	if len(options) == 0 {
 		return nil
