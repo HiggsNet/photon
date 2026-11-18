@@ -82,6 +82,46 @@ func TestMeshPlanConnectsEveryAuthorizedPeer(t *testing.T) {
 	}
 }
 
+func TestMeshNetworkResetStartsFreshBackoff(t *testing.T) {
+	f := newGatewayPatternFixture(t)
+	f.config.Reconnect.MaxBackoff = 5 * time.Minute
+	socket, err := openPacketSockets(t.Context(), "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer socket.Close()
+	mesh := newMeshRuntime(t.Context(), f.config, nil, socket, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), func() {})
+	defer mesh.close()
+	plan := planGateway(t.Context(), f.config, f.view, f.now, nil)
+	mesh.update(plan)
+	peer := mesh.peers[meshPath{"node-a.catofes.", ipsec.FamilyIPv4}]
+	if peer == nil {
+		t.Fatal("missing planned peer")
+	}
+	for range 10 {
+		mesh.stopPeer(peer, "previous network unavailable")
+	}
+	if peer.backoff != f.config.Reconnect.MaxBackoff {
+		t.Fatalf("failed to reach maximum backoff: %v", peer.backoff)
+	}
+	contact := peer.contact
+	for _, reason := range []string{"system_resumed", "outer_path_changed"} {
+		mesh.reset(reason)
+		if got := peer.next.Sub(peer.tunnel.diagnostic.lastEventAt); got != mesh.initial ||
+			peer.backoff != mesh.initial || peer.tunnel.diagnostic.retryAt != peer.next {
+			t.Fatalf("%s carried old backoff: delay=%v, backoff=%v", reason, got, peer.backoff)
+		}
+		if peer.plan.Selected != nil || peer.contact != contact {
+			t.Fatalf("%s did not clear old plan or advanced contact priority", reason)
+		}
+	}
+	mesh.update(plan)
+	mesh.stopPeer(peer, "new attempt timed out")
+	if got := peer.next.Sub(peer.tunnel.diagnostic.lastEventAt); got != mesh.initial || peer.backoff != 2*mesh.initial {
+		t.Fatalf("normal backoff after reset: delay=%v, backoff=%v", got, peer.backoff)
+	}
+}
+
 func TestMeshSocketReservationsSurviveOtherPeerRetirement(t *testing.T) {
 	s, err := openPacketSockets(t.Context(), "127.0.0.1:0")
 	if err != nil {

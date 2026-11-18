@@ -70,8 +70,11 @@ Future<void> main(List<String> arguments) async {
         await File(marker).writeAsString('$method\n', mode: FileMode.append);
       }
       if (mode == 'crash') exit(23);
-      if (mode == 'timeout') {
-        await Future<void>.delayed(const Duration(seconds: 2));
+      if (mode == 'timeout' && method == 'status') {
+        final release = File('$marker.release');
+        while (!await release.exists()) {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
       }
       await send(
         method,

@@ -36,13 +36,13 @@ void main() {
     () async {
       await configure('normal');
       await backend.start(config.path);
-      final samples = await Future.wait([backend.status(), backend.status()]);
+      final samples = await Future.wait([backend.status(), backend.services()]);
       expect(samples.every((sample) => sample['tunnel_ready'] == true), isTrue);
       await backend.stop();
       expect(backend.hasProcess, isFalse);
       expect(await marker.readAsLines(), [
         'status',
-        'status',
+        'services',
         'stop',
         'exited',
       ]);
@@ -78,21 +78,42 @@ void main() {
     expect(backend.hasProcess, isFalse);
   });
 
-  test(
-    'timed out request poisons the stream and EOF reclaims the child',
-    () async {
-      await configure('timeout');
-      backend = PhotonProcess(
-        executable: Platform.environment['PHOTON_DART'] ?? 'dart',
-        arguments: [File('test/photon/fixtures/backend.dart').absolute.path],
-        timeout: const Duration(seconds: 1),
-      );
-      await backend.start(config.path);
-      final request = backend.status();
-      await expectLater(request, throwsA(isA<TimeoutException>()));
-      await expectLater(backend.status(), throwsStateError);
-      await backend.stop();
-      expect(backend.hasProcess, isFalse);
-    },
-  );
+  for (final recover in [true, false]) {
+    test(
+      recover
+          ? 'late status reply recovers the same child'
+          : 'stop reclaims a child stuck on status',
+      () async {
+        await configure('timeout');
+        backend = PhotonProcess(
+          executable: Platform.environment['PHOTON_DART'] ?? 'dart',
+          arguments: [File('test/photon/fixtures/backend.dart').absolute.path],
+          timeout: const Duration(seconds: 1),
+          shutdownTimeout: const Duration(seconds: 1),
+        );
+        await backend.start(config.path);
+        final exit = backend.exitCode;
+        await expectLater(backend.status(), throwsA(isA<TimeoutException>()));
+        expect(backend.exitCode, same(exit));
+        if (recover) {
+          await expectLater(backend.status(), throwsA(isA<TimeoutException>()));
+          expect(await marker.readAsLines(), ['status']);
+          await File('${marker.path}.release').create();
+          expect((await backend.status())['tunnel_ready'], isTrue);
+          expect((await backend.services())['running'], isTrue);
+          expect(backend.exitCode, same(exit));
+        }
+        await backend.stop().timeout(const Duration(seconds: 5));
+        expect(backend.hasProcess, isFalse);
+        if (recover) {
+          expect(await marker.readAsLines(), [
+            'status',
+            'services',
+            'stop',
+            'exited',
+          ]);
+        }
+      },
+    );
+  }
 }

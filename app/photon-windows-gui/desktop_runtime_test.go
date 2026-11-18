@@ -2,16 +2,74 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/HiggsNet/photon/internal/photonwindows"
 )
+
+func TestDesktopStatusTimeoutDrainsLateReplyWithoutClosingStream(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		client, server := net.Pipe()
+		defer client.Close()
+		defer server.Close()
+		run := &desktopRun{
+			stream:   &desktopControlStream{ReadCloser: client, WriteCloser: client},
+			requests: make(chan struct{}, 1),
+			done:     make(chan struct{}),
+		}
+		release := make(chan struct{})
+		serve := make(chan error, 1)
+		go func() {
+			body := []byte(`{"version":1,"method":"status","result":{"running":true}}`)
+			for i := range 2 {
+				var size [4]byte
+				if _, err := io.ReadFull(server, size[:]); err != nil {
+					serve <- err
+					return
+				}
+				if _, err := io.CopyN(io.Discard, server, int64(binary.BigEndian.Uint32(size[:]))); err != nil {
+					serve <- err
+					return
+				}
+				if i == 0 {
+					<-release
+				}
+				if _, err := server.Write(append(binary.BigEndian.AppendUint32(nil, uint32(len(body))), body...)); err != nil {
+					serve <- err
+					return
+				}
+				var ack [1]byte
+				if _, err := io.ReadFull(server, ack[:]); err != nil {
+					serve <- err
+					return
+				}
+			}
+			serve <- nil
+		}()
+
+		_, err := run.call(t.Context(), "status")
+		close(release)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("first status = %v, want a polling timeout", err)
+		}
+		if _, err := run.call(t.Context(), "status"); err != nil {
+			t.Fatalf("status after the late reply: %v", err)
+		}
+		if err := <-serve; err != nil {
+			t.Fatal(err)
+		}
+	})
+}
 
 func desktopRuntimeFixture(t *testing.T) (*desktopBackend, *photonwindows.Config) {
 	t.Helper()

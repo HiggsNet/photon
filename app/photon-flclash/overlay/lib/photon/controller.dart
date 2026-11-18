@@ -74,12 +74,12 @@ final class PhotonController extends ChangeNotifier {
     final exited = backend.exitCode;
     if (exited != null) {
       unawaited(
-        exited.then((_) async {
+        exited.then((exitCode) async {
           if (_backend != backend || _closed) return;
           await _enqueue(() async {
             if (_backend != backend) return;
             await _release();
-            throw StateError('Photon backend exited');
+            throw StateError('Photon backend exited (code $exitCode)');
           }, clearError: false);
         }),
       );
@@ -88,8 +88,7 @@ final class PhotonController extends ChangeNotifier {
       await _release();
       return;
     }
-    _observation = await backend.status();
-    await _refreshServices(backend);
+    await _refreshStatus(backend);
     _timer = Timer.periodic(const Duration(seconds: 2), (_) {
       unawaited(refresh());
     });
@@ -99,10 +98,7 @@ final class PhotonController extends ChangeNotifier {
     if (_closed || !hasLease || _busy) return Future.value();
     return _refresh ??= _enqueue(() async {
       final backend = _backend;
-      if (backend != null) {
-        _observation = await backend.status();
-        await _refreshServices(backend);
-      }
+      if (backend != null) await _refreshStatus(backend);
     }, showBusy: false).whenComplete(() => _refresh = null);
   }
 
@@ -111,6 +107,25 @@ final class PhotonController extends ChangeNotifier {
   Future<void> restart({required bool allowed}) async {
     await stop();
     if (!hasLease && !_closed) await start(allowed: allowed);
+  }
+
+  Future<void> _refreshStatus(PhotonBackend backend) async {
+    try {
+      _observation = await backend.status();
+    } catch (error) {
+      final unavailable =
+          error is PhotonControlException && error.code == 'unavailable';
+      if (error is! TimeoutException && !unavailable) rethrow;
+      _observation = null;
+      _error = error;
+      try {
+        await _invalidateServices();
+      } catch (cleanupError) {
+        _error = StateError('Proxy cleanup failed: $cleanupError');
+      }
+      return;
+    }
+    await _refreshServices(backend);
   }
 
   Future<void> _refreshServices(PhotonBackend backend) async {

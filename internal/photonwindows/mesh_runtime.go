@@ -235,15 +235,22 @@ func (m *meshRuntime) stopPeerWithEvent(p *meshPeer, event, reason string) {
 	if err := p.leaf.stop(); err != nil {
 		m.logger.Warn("leaf_cleanup_failed", "peer", p.config.Gateway.AllowedZones[0], "error", err)
 	}
-	p.tunnel.observeEvent(event, time.Now(), errors.New(reason))
+	now := time.Now()
+	p.tunnel.observeEvent(event, now, errors.New(reason))
 	p.tunnel.stop()
-	p.next = time.Now().Add(p.backoff)
-	p.tunnel.diagnostic.retryAt = p.next
-	p.backoff = min(p.backoff*2, m.maximum)
-	p.contact++
-	if len(p.plan.Candidates) > 0 && len(p.plan.Candidates[0].Contacts) > 0 {
-		p.setPlan(peerGatewayPlan(p.plan, p.plan.Candidates[0], p.contact))
+	if event == "network_rebind" {
+		// A different network gets a fresh attempt. Repeated notifications
+		// during wake must not count as failed handshakes on that network.
+		p.next, p.backoff = now.Add(m.initial), m.initial
+	} else {
+		p.next = now.Add(p.backoff)
+		p.backoff = min(p.backoff*2, m.maximum)
+		p.contact++
+		if len(p.plan.Candidates) > 0 && len(p.plan.Candidates[0].Contacts) > 0 {
+			p.setPlan(peerGatewayPlan(p.plan, p.plan.Candidates[0], p.contact))
+		}
 	}
+	p.tunnel.diagnostic.retryAt = p.next
 	m.logger.Info("tunnel_stopped", "peer", p.config.Gateway.AllowedZones[0], "outer_family", p.plan.outerFamily, "reason", reason, "retry_at", p.next)
 }
 
@@ -638,7 +645,7 @@ func (m *meshRuntime) roam(now time.Time) bool {
 	for _, p := range peers {
 		if p.tunnel.mobike {
 			p.tunnel.requestMOBIKE(now)
-		} else if p.tunnel.phase != 0 || p.starting != nil {
+		} else {
 			m.stopPeerWithEvent(p, "network_rebind", "mobike_not_negotiated")
 		}
 	}

@@ -42,6 +42,11 @@ type desktopRun struct {
 }
 
 func (r *desktopRun) call(ctx context.Context, method string) (photonwindows.ControlResponse, error) {
+	if method != "stop" {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+	}
 	select {
 	case r.requests <- struct{}{}:
 	case <-ctx.Done():
@@ -55,11 +60,13 @@ func (r *desktopRun) call(ctx context.Context, method string) (photonwindows.Con
 	}
 	completed := make(chan result, 1)
 	go func() {
-		// A caller may abandon a query; its reply still has to be drained before
-		// another request uses the stream. Only a stuck transport poisons the run.
-		timer := time.AfterFunc(10*time.Second, func() { _ = r.stream.Close() })
+		// A poll can time out during resume. Drain its reply before admitting
+		// another request. Explicit shutdown can still close the stream.
 		response, err := photonwindows.ExchangeControl(r.stream, method)
-		timer.Stop()
+		var rejected *photonwindows.ControlError
+		if err != nil && !errors.As(err, &rejected) {
+			_ = r.stream.Close()
+		}
 		<-r.requests
 		completed <- result{response, err}
 	}()

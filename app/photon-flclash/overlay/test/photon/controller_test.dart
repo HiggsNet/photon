@@ -10,7 +10,7 @@ class FakeBackend implements PhotonBackend {
   final exited = Completer<int>();
   Completer<void>? starting;
   Completer<void>? servicesWait;
-  StateError? statusError;
+  Object? statusError;
   Map<String, dynamic> sample = {'running': true, 'tunnel_ready': true};
   bool failStop = false;
   Map<String, dynamic>? serviceSample;
@@ -143,18 +143,47 @@ void main() {
   );
 
   test(
-    'IPC failure clears observation, joins the backend and allows explicit restart',
+    'temporary status failures invalidate proxies and recover the same backend',
     () async {
+      var invalidations = 0;
+      controller.onServicesInvalidated = () async {
+        invalidations++;
+      };
       await controller.start(allowed: true);
-      backends.single.statusError = StateError('IPC lost');
+      expect(controller.directoryFresh, isTrue);
+      final backend = backends.single;
+      for (final error in [
+        TimeoutException('Photon control request timed out'),
+        const PhotonControlException('unavailable', 'status is unavailable'),
+      ]) {
+        backend.statusError = error;
+        await controller.refresh();
+        expect(controller.error, same(error));
+        expect(controller.observation, isNull);
+        expect(controller.directory, isNull);
+        expect(controller.hasLease, isTrue);
+        expect(backend.calls, isNot(contains('stop')));
+      }
+      expect(invalidations, 2);
+      backend.statusError = null;
       await controller.refresh();
-      expect(controller.observation, isNull);
-      expect(controller.error, isNotNull);
-      expect(controller.hasLease, isFalse);
-      await controller.start(allowed: true);
-      expect(backends, hasLength(2));
+      expect(backends, hasLength(1));
+      expect(controller.observation?['tunnel_ready'], isTrue);
+      expect(controller.directoryFresh, isTrue);
+      expect(controller.error, isNull);
     },
   );
+
+  test('IPC failure clears observation, joins the backend and allows explicit restart', () async {
+    await controller.start(allowed: true);
+    backends.single.statusError = StateError('IPC lost');
+    await controller.refresh();
+    expect(controller.observation, isNull);
+    expect(controller.error, isNotNull);
+    expect(controller.hasLease, isFalse);
+    await controller.start(allowed: true);
+    expect(backends, hasLength(2));
+  });
 
   test(
     'unconfirmed cleanup retains ownership and blocks another launch',

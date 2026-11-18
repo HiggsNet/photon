@@ -41,6 +41,7 @@ final class PhotonProcess implements PhotonBackend {
   _FrameReader? _reader;
   StreamSubscription<List<int>>? _stderr;
   Future<void> _tail = Future.value();
+  final _queries = <String, Future<Map<String, dynamic>>>{};
   bool _broken = false;
 
   @override
@@ -109,38 +110,48 @@ final class PhotonProcess implements PhotonBackend {
   Future<Map<String, dynamic>> services() => _request('services');
 
   Future<Map<String, dynamic>> _request(String method) {
-    final operation = _tail
-        .then((_) async {
-          final process = _process;
-          if (process == null || _broken) {
-            throw StateError('Photon backend is unavailable');
-          }
-          try {
-            final bytes = utf8.encode(
-              jsonEncode({'version': 1, 'method': method}),
-            );
-            final header = ByteData(4)..setUint32(0, bytes.length);
-            process.stdin.add(header.buffer.asUint8List());
-            process.stdin.add(bytes);
-            await process.stdin.flush();
-            final response = await _reader!.read();
-            process.stdin.add(const [1]);
-            await process.stdin.flush();
-            return _result(response, method);
-          } on PhotonControlException {
-            rethrow;
-          } catch (_) {
-            _broken = true;
-            rethrow;
-          }
-        })
-        .timeout(
-          timeout,
-          onTimeout: () {
-            _broken = true;
-            throw TimeoutException('Photon control request timed out');
-          },
-        );
+    // A delayed reply still belongs to its original exchange. Keep draining
+    // and acknowledging it, and let repeated polls share the outstanding read.
+    final operation = method == 'stop'
+        ? _exchange(method)
+        : _queries.putIfAbsent(method, () {
+            late final Future<Map<String, dynamic>> query;
+            query = _exchange(method).whenComplete(() {
+              if (identical(_queries[method], query)) _queries.remove(method);
+            });
+            return query;
+          });
+    return operation.timeout(
+      timeout,
+      onTimeout: () =>
+          throw TimeoutException('Photon control request timed out'),
+    );
+  }
+
+  Future<Map<String, dynamic>> _exchange(String method) {
+    final process = _process;
+    final reader = _reader;
+    final operation = _tail.then((_) async {
+      if (process == null || reader == null || _process != process || _broken) {
+        throw StateError('Photon backend is unavailable');
+      }
+      try {
+        final bytes = utf8.encode(jsonEncode({'version': 1, 'method': method}));
+        final header = ByteData(4)..setUint32(0, bytes.length);
+        process.stdin.add(header.buffer.asUint8List());
+        process.stdin.add(bytes);
+        await process.stdin.flush();
+        final response = await reader.read();
+        process.stdin.add(const [1]);
+        await process.stdin.flush();
+        return _result(response, method);
+      } on PhotonControlException {
+        rethrow;
+      } catch (_) {
+        if (_process == process) _broken = true;
+        rethrow;
+      }
+    });
     _tail = operation.then<void>((_) {}, onError: (Object _, StackTrace _) {});
     return operation;
   }
@@ -175,6 +186,7 @@ final class PhotonProcess implements PhotonBackend {
     } catch (_) {
       // EOF on the private pipe also cancels the backend's owned run.
     } finally {
+      _broken = true;
       unawaited(process.stdin.close().catchError((Object _) {}));
       await _reader?.close();
       await _stderr?.cancel();
@@ -188,6 +200,8 @@ final class PhotonProcess implements PhotonBackend {
     _process = null;
     _reader = null;
     _stderr = null;
+    _queries.clear();
+    _tail = Future.value();
   }
 }
 
