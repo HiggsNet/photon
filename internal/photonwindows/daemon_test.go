@@ -6,11 +6,15 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func TestDaemonRebindKeepsStateAndObjectPull(t *testing.T) {
@@ -81,7 +85,7 @@ func TestDaemonDiscardsPlannerCompletionAfterRebind(t *testing.T) {
 	daemon := NewDaemon(config, slog.New(slog.NewJSONHandler(logs, nil)))
 	entered := make(chan context.Context, 2)
 	release := make(chan struct{})
-	daemon.planGateway = func(ctx context.Context, _ *Config, view corestate.View, now time.Time) GatewayPlan {
+	daemon.planGateway = func(ctx context.Context, _ *Config, view corestate.View, now time.Time, _ ipsec.DNSResolver) GatewayPlan {
 		entered <- ctx
 		// Model a resolver completion racing with cancellation: it returns an old
 		// result even though its request has been superseded by network rebind.
@@ -146,16 +150,47 @@ func TestDaemonDiscardsPlannerCompletionAfterRebind(t *testing.T) {
 	}
 }
 
-func TestDaemonReportsPlannerTimeout(t *testing.T) {
-	fixture := newWindowsGossipFixture(t)
-	config := &Config{State: StateConfig{Path: fixture.leftPath}, ManagedZone: "node-a.catofes.", TrustedRootPublicKey: fixture.rootPublic, GossipListen: "127.0.0.1:0"}
-	logs := daemonPlanLog{consoleLog: consoleLog{ready: make(chan string, 1)}, plans: make(chan struct{}, 16)}
-	daemon := NewDaemon(config, slog.New(slog.NewJSONHandler(logs, nil)))
-	daemon.planGateway = func(ctx context.Context, _ *Config, view corestate.View, now time.Time) GatewayPlan {
-		<-ctx.Done()
-		return GatewayPlan{Revision: view.Revision, EvaluatedAt: now, Rejected: ctx.Err().Error()}
+type fixtureGatewayDNS struct {
+	outboundDNS
+	lookup func(context.Context, string) ([]net.IPAddr, error)
+}
+
+func (d fixtureGatewayDNS) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
+	return d.lookup(ctx, host)
+}
+
+func TestDaemonPlansOtherGatewaysWhileDNSIsBlocked(t *testing.T) {
+	f := newGatewayPatternFixture(t)
+	f.ensureAuthority(t, f.config.ManagedZone)
+	for _, peer := range []zone.ZonePath{"node-a.catofes.", "node-b.catofes."} {
+		f.addGateway(t, peer)
+		f.put(t, peer, ipsec.RecordKeyAddresses, ipsec.RecordTypeAddresses, ipsec.AddressRecord{
+			Version: 1, UpdatedAt: f.now.Unix(), Addresses: []ipsec.AddressAdvertisement{
+				{ID: "dns", Source: ipsec.SourceManualDNS, Host: string(peer) + "example", Family: ipsec.FamilyIPv4, TTLSeconds: 60},
+			},
+		})
 	}
-	ctx, cancel := context.WithCancel(t.Context())
+	f.config.State.Path = filepath.Join(t.TempDir(), "state.db")
+	f.config.GossipListen = "127.0.0.1:0"
+	f.view.State.ManagedZone = f.config.ManagedZone
+	f.view.State.TrustedRootPublicKey = f.config.TrustedRootPublicKey
+	f.view.State.IdentityPrivateKey = f.private
+	writeWindowsCommon(t, f.config.State.Path, f.view.State, f.view.Revision)
+	logs := consoleLog{ready: make(chan string, 1)}
+	daemon := NewDaemon(f.config, slog.New(slog.NewJSONHandler(logs, nil)))
+	unblock := make(chan struct{})
+	resolver := fixtureGatewayDNS{net.DefaultResolver, func(ctx context.Context, name string) ([]net.IPAddr, error) {
+		if name == "node-a.catofes.example" {
+			select {
+			case <-unblock:
+				return nil, errors.New("fixture DNS server timed out")
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		return []net.IPAddr{{IP: net.IPv4(192, 0, 2, 44)}}, nil
+	}}
+	ctx, cancel := context.WithCancel(context.WithValue(t.Context(), outboundDNSKey{}, resolver))
 	done := make(chan error, 1)
 	go func() { done <- daemon.Run(ctx) }()
 	defer cancel()
@@ -164,13 +199,18 @@ func TestDaemonReportsPlannerTimeout(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("startup timeout")
 	}
-	// A request deadline must not discard its completion (including already
-	// resolved bootstrap hints); only the daemon's lifetime cancels delivery.
-	select {
-	case <-logs.plans:
-	case <-time.After(4 * time.Second):
-		t.Fatal("timed out plan completion discarded")
-	}
+	waitForWindowsState(t, 2*time.Second, func() bool {
+		out, err := daemon.Observe(ctx)
+		return err == nil && out.Gateway.Selected == "node-b.catofes." &&
+			len(out.Gateway.Candidates) == 2 && strings.Contains(out.Gateway.Candidates[0].Rejected, errGatewayDNSPending.Error()) &&
+			len(out.Connections) == 1 && out.Connections[0].Peer == "node-b.catofes."
+	})
+	close(unblock)
+	waitForWindowsState(t, 2*time.Second, func() bool {
+		out, err := daemon.Observe(ctx)
+		return err == nil && out.Gateway.Selected == "node-b.catofes." &&
+			len(out.Gateway.Candidates) == 2 && strings.Contains(out.Gateway.Candidates[0].Rejected, "fixture DNS server timed out")
+	})
 	cancel()
 	select {
 	case err := <-done:

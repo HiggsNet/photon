@@ -15,6 +15,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 // RunConsole owns the common state and gossip resources until cancellation.
@@ -42,7 +43,7 @@ type Daemon struct {
 	rebind           chan rebindRequest
 	serviceInputs    chan chan serviceInputs
 	done             chan struct{}
-	planGateway      func(context.Context, *Config, corestate.View, time.Time) GatewayPlan
+	planGateway      func(context.Context, *Config, corestate.View, time.Time, ipsec.DNSResolver) GatewayPlan
 	deviceFactory    packetDeviceFactory
 	watchResume      func(context.Context) (<-chan struct{}, func() error, error)
 	resolveBootstrap func(context.Context, *Config, netip.AddrPort) (map[string]*net.UDPAddr, error)
@@ -54,7 +55,7 @@ type rebindRequest struct {
 }
 
 func NewDaemon(config *Config, logger *slog.Logger) *Daemon {
-	return &Daemon{instanceID: rand.Text(), config: config, logger: logger, ready: make(chan struct{}), observations: make(chan meshObservationRequest), rebind: make(chan rebindRequest), serviceInputs: make(chan chan serviceInputs), done: make(chan struct{}), planGateway: PlanGateway, deviceFactory: openConfiguredPacketDevice, watchResume: watchPowerResume, resolveBootstrap: resolveGossipBootstrap}
+	return &Daemon{instanceID: rand.Text(), config: config, logger: logger, ready: make(chan struct{}), observations: make(chan meshObservationRequest), rebind: make(chan rebindRequest), serviceInputs: make(chan chan serviceInputs), done: make(chan struct{}), planGateway: planGateway, deviceFactory: openConfiguredPacketDevice, watchResume: watchPowerResume, resolveBootstrap: resolveGossipBootstrap}
 }
 
 // Rebind waits for a local socket replacement, bounded by the caller's context.
@@ -118,7 +119,9 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	defer func() { err = errors.Join(err, state.Close()) }()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	ctx = context.WithValue(ctx, outboundDNSKey{}, newControlDNS())
+	if _, ok := ctx.Value(outboundDNSKey{}).(outboundDNS); !ok {
+		ctx = context.WithValue(ctx, outboundDNSKey{}, newControlDNS())
+	}
 	bootstrap, err := d.resolveBootstrap(ctx, config, listenAddr)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -181,6 +184,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	type planRequest struct {
 		ctx        context.Context
 		generation uint64
+		network    uint64
 	}
 	type planResult struct {
 		generation   uint64
@@ -193,9 +197,14 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	plans := make(chan planResult, 1)
 	plannerCtx, stopPlanner := context.WithCancel(ctx)
 	initialView := state.Store().ReadView()
+	dns := newGatewayDNS()
+	dns.reset(plannerCtx)
 	var plannerWG sync.WaitGroup
+	for range gatewayDNSWorkers {
+		plannerWG.Go(func() { dns.resolve(plannerCtx, controlDNS(plannerCtx)) })
+	}
 	plannerWG.Add(1)
-	go func() {
+	go func(initialBootstrap map[string]*net.UDPAddr) {
 		defer plannerWG.Done()
 		var lastCandidates []GatewayCandidate
 		observeGateways := func(view corestate.View, now time.Time) {
@@ -207,36 +216,62 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			}
 		}
 		observeGateways(initialView, time.Now())
+		var request planRequest
+		var dnsChanged <-chan time.Time
+		bootstrap := initialBootstrap
+		publishPlan := func(bootstrapErr error) {
+			view := state.Store().ReadView()
+			now := time.Now()
+			dns.beginPlan(now)
+			plan := d.planGateway(request.ctx, config, view, now, dns)
+			dns.endPlan()
+			paths := networkRouteTargets{splitRoutes: config.Overlay.SplitRoutes}
+			paths.update(plan, bootstrap, gossipRouteTargets(view, now)...)
+			select {
+			case plans <- planResult{request.generation, plan, bootstrap, bootstrapErr, paths.load()}:
+			case <-plannerCtx.Done():
+			}
+		}
 		for {
+			jobs, job := dns.next()
 			select {
 			case <-plannerCtx.Done():
 				return
-			case request := <-planRequests:
-				bootstrap, bootstrapErr := d.resolveBootstrap(request.ctx, config, listenAddr)
-				view := state.Store().ReadView()
-				now := time.Now()
-				observeGateways(view, now)
-				plan := d.planGateway(request.ctx, config, view, now)
-				plan = RevalidateGatewayPlan(config, view, plan, time.Now())
-				paths := networkRouteTargets{splitRoutes: config.Overlay.SplitRoutes}
-				paths.update(plan, bootstrap, gossipRouteTargets(view, time.Now())...)
-				select {
-				case plans <- planResult{request.generation, plan, bootstrap, bootstrapErr, paths.load()}:
-				case <-plannerCtx.Done():
+			case next := <-planRequests:
+				if next.network != request.network {
+					dns.reset(plannerCtx)
+				}
+				request = next
+				nextBootstrap, err := d.resolveBootstrap(request.ctx, config, listenAddr)
+				if err == nil {
+					bootstrap = nextBootstrap
+				}
+				observeGateways(state.Store().ReadView(), time.Now())
+				publishPlan(err)
+			case jobs <- job:
+				dns.dispatched()
+			case result := <-dns.results:
+				if dns.complete(result, time.Now()) && dnsChanged == nil {
+					dnsChanged = time.After(gatewayDNSPlanDelay)
+				}
+			case <-dnsChanged:
+				dnsChanged = nil
+				if request.ctx.Err() == nil {
+					publishPlan(nil)
 				}
 			}
 		}
-	}()
+	}(bootstrap)
 	var generation uint64
+	var networkGeneration uint64
 	cancelPlan := func() {}
 	defer func() { cancelPlan(); stopPlanner(); plannerWG.Wait() }()
 	requestPlan := func() {
 		cancelPlan()
 		generation++
 		var requestCtx context.Context
-		// Finish before the five-second periodic refresh, including slow DNS.
-		requestCtx, cancelPlan = context.WithTimeout(plannerCtx, 3*time.Second)
-		request := planRequest{requestCtx, generation}
+		requestCtx, cancelPlan = context.WithCancel(plannerCtx)
+		request := planRequest{requestCtx, generation, networkGeneration}
 		select {
 		case <-planRequests:
 		default:
@@ -295,6 +330,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		} else {
 			gossipLog.Info("gossip_rebound", "reason", reason, "address", packet.LocalAddr().String())
 		}
+		networkGeneration++
 		requestPlan()
 		return err
 	}
@@ -308,6 +344,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		}
 		mesh.stateMu.Unlock()
 		if preserved {
+			networkGeneration++
 			requestPlan()
 		} else {
 			_ = rebind(ctx, reason)

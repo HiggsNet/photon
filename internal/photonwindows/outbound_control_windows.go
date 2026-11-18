@@ -134,6 +134,7 @@ func (windowsControlDNS) LookupNetIP(ctx context.Context, family, host string) (
 		if err == nil {
 			return ips, nil
 		}
+		err = fmt.Errorf("DNS server %s on interface %d: %w", server.peer, server.index, err)
 		var dnsErr *net.DNSError
 		if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
 			return nil, err
