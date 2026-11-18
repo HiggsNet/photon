@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:fl_clash/photon/controller.dart';
 import 'package:fl_clash/photon/preferences.dart';
+import 'package:fl_clash/photon/proxy_selection.dart';
 import 'package:fl_clash/photon/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:yaml/yaml.dart';
@@ -66,7 +67,7 @@ Map<String, dynamic> anycastDirectoryFixture({bool local = true}) => {
     for (var node = 1; node <= 3; node++)
       {
         'id': 'node-$node/services/socks5',
-        'owner': 'node-$node.catofes.',
+        'owner': node == 1 ? 'node-1-hnd.catofes.' : 'node-$node.catofes.',
         'status': 'active',
         'endpoints': [
           {
@@ -120,11 +121,11 @@ void main() {
                   as List;
         final names = proxies.map((proxy) => proxy['name']).toList();
         expect(names, [
-          'Anycast / global / [fd42:ffff::1]:3128',
-          'Anycast / jp / [fd42:ff01::1]:3128',
-          'node-1.catofes / local / [fd42:1::1]:3128',
-          'node-2.catofes / local / [fd42:1::2]:3128',
-          'node-3.catofes / local / [fd42:1::3]:3128',
+          '🌐 global',
+          '🇯🇵 jp',
+          '🇯🇵 node-1-hnd',
+          'node-2',
+          'node-3',
         ]);
         expect(
           proxies.map((proxy) => proxy['interface-name']),
@@ -193,13 +194,114 @@ void main() {
       final services = data['services'] as List;
       services[1]['endpoints'][0]['port'] = 4128;
       services[2]['endpoints'][0]['address'] = 'fd42:ffff::2';
-      final endpoints = PhotonDirectory.fromJson(data).proxyEndpoints;
-      expect(endpoints, hasLength(4));
+      final directory = PhotonDirectory.fromJson(data);
+      final profile = photonProxyProfile(
+        directory: directory,
+        now: DateTime.now(),
+        splitRoutes: [],
+        adapter: directory.adapterName,
+        backendPath: 'backend',
+      );
+      final proxies = profile['proxies'] as List;
+      expect(proxies, hasLength(4));
+      final names = proxies.map((proxy) => proxy['name'] as String).toSet();
+      expect(names, hasLength(4));
       expect(
-        endpoints.where((endpoint) => endpoint.region == 'global'),
+        names.where((name) => name.startsWith('🌐 global · ')),
         hasLength(3),
       );
-      expect(endpoints.map((endpoint) => endpoint.name).toSet(), hasLength(4));
+      expect(names, contains('🇯🇵 jp'));
+    },
+  );
+
+  test(
+    'short names get a protocol suffix only when enabled proxies collide',
+    () {
+      final data = anycastDirectoryFixture();
+      final first = (data['services'] as List).first;
+      final endpoints = first['endpoints'] as List;
+      endpoints.add(<String, Object>{
+        ...endpoints.last as Map<String, Object>,
+        'id': 'f' * 32,
+        'type': 'http',
+        'port': 8080,
+      });
+      endpoints[1]['region'] = 'custom-region';
+      endpoints[1]['address'] = 'fd42:ff02::1';
+      List<dynamic> names({
+        PhotonProxySelection? selection,
+        Map<String, dynamic>? template,
+        PhotonProxyCardTitles? cardTitles,
+      }) {
+        final directory = PhotonDirectory.fromJson(data);
+        final profile = photonProxyProfile(
+          directory: directory,
+          now: DateTime.now(),
+          splitRoutes: [],
+          adapter: directory.adapterName,
+          backendPath: 'backend',
+          selection: selection,
+          template: template,
+          cardTitles: cardTitles,
+        );
+        final proxies = template == null
+            ? profile['proxies'] as List
+            : (profile['proxy-providers'] as Map)['photon-services']['payload']
+                  as List;
+        return [for (final proxy in proxies) proxy['name']];
+      }
+
+      expect(
+        names(selection: PhotonProxySelection()),
+        contains('🇯🇵 node-1-hnd'),
+      );
+      final cardTitles = PhotonProxyCardTitles();
+      expect(
+        names(cardTitles: cardTitles),
+        containsAll([
+          'custom-region',
+          '🇯🇵 node-1-hnd · SOCKS5',
+          '🇯🇵 node-1-hnd · HTTP',
+        ]),
+      );
+      expect(cardTitles, {
+        (provider: null, name: '🇯🇵 node-1-hnd · HTTP'): '🇯🇵 node-1-hnd',
+        (provider: null, name: '🇯🇵 node-1-hnd · SOCKS5'): '🇯🇵 node-1-hnd',
+      });
+      endpoints.add(<String, Object>{
+        ...endpoints.last as Map<String, Object>,
+        'id': 'e' * 32,
+        'port': 8081,
+      });
+      final providerTitles = PhotonProxyCardTitles();
+      expect(
+        names(
+          template: {
+            'proxies': [
+              {'name': '🌐 global', 'type': 'direct'},
+            ],
+            'rules': ['MATCH,Photon'],
+          },
+          cardTitles: providerTitles,
+        ).where((name) => (name as String).startsWith('🌐 global')),
+        [startsWith('🌐 global · ')],
+      );
+      expect(providerTitles, hasLength(3));
+      expect(
+        providerTitles[(
+          provider: 'photon-services',
+          name: '🇯🇵 node-1-hnd · SOCKS5',
+        )],
+        '🇯🇵 node-1-hnd',
+      );
+      final httpTitles = providerTitles.entries.where(
+        (entry) => entry.key.name.contains(' · HTTP · '),
+      );
+      expect(httpTitles, hasLength(2));
+      for (final entry in httpTitles) {
+        expect(entry.key.provider, 'photon-services');
+        expect(entry.value, entry.key.name.replaceFirst(' · HTTP', ''));
+      }
     },
   );
 

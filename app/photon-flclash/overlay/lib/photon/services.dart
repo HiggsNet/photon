@@ -1,11 +1,16 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
+import 'package:fl_clash/common/string.dart' show StringExtension;
+
 import 'proxy_selection.dart';
 
 const _photonProvider = 'photon-services';
 const _photonGroups = ['Photon', 'Photon Auto', 'Photon Balance'];
 const _photonProtection = 'x-photon-protection';
+
+typedef PhotonProxyCardTitles = Map<({String? provider, String name}), String>;
 
 final class PhotonDirectory {
   PhotonDirectory._({
@@ -96,18 +101,13 @@ final class PhotonDirectory {
     final available = endpoints.toList()
       ..removeWhere((e) => e.type == 'http' && e.authRequired)
       ..sort((a, b) {
-        final name = a.name.compareTo(b.name);
-        return name != 0 ? name : a.id.compareTo(b.id);
+        final order = a._proxyOrder.compareTo(b._proxyOrder);
+        return order != 0 ? order : a.id.compareTo(b.id);
       });
     final seen = <String>{};
     return [
       for (final endpoint in available)
-        if (seen.add(
-          endpoint.region == 'local'
-              ? '${endpoint.type}\u0000${endpoint.owner}\u0000${endpoint.authority}'
-              : '${endpoint.type}\u0000${endpoint.authority}',
-        ))
-          endpoint,
+        if (seen.add(endpoint._destinationKey)) endpoint,
     ];
   }
 }
@@ -220,14 +220,106 @@ final class PhotonEndpoint {
   final String fingerprint;
   final bool authRequired;
 
-  String get name =>
-      '${type == 'trusttunnel'
-          ? 'TrustTunnel / '
-          : type == 'http'
-          ? 'HTTP / '
-          : ''}${region == 'local' ? owner.replaceFirst(RegExp(r'\.$'), '') : 'Anycast'} / $region / $authority';
+  String get _proxyOrder =>
+      '${region == 'local' ? '1$owner' : '0$region'}\u0000$type\u0000$authority';
+  String get _destinationKey => region == 'local'
+      ? '$type\u0000$owner\u0000$authority'
+      : '$type\u0000$authority';
+
+  String get _proxyLabel {
+    if (region == 'global') return '🌐 global';
+    if (region != 'local') {
+      final flag = region.countryFlagEmoji;
+      return flag == region ? region : '$flag $region';
+    }
+    final node = owner.split('.').first;
+    if (node.isEmpty) return owner;
+    final regionCode = switch (node.split('-').last.toLowerCase()) {
+      'pek' || 'sha' => 'cn',
+      'hkg' => 'hk',
+      'hnd' || 'kix' => 'jp',
+      'sin' => 'sg',
+      'lax' || 'sfo' => 'us',
+      _ => null,
+    };
+    return regionCode == null ? node : '${regionCode.countryFlagEmoji} $node';
+  }
+
   String get authority =>
       address.contains(':') ? '[$address]:$port' : '$address:$port';
+}
+
+Map<PhotonEndpoint, String> _proxyNames(
+  List<PhotonEndpoint> endpoints,
+  Map<String, dynamic>? template, {
+  PhotonProxyCardTitles? cardTitles,
+}) {
+  final provider = template == null ? null : _photonProvider;
+  final byLabel = <String, List<PhotonEndpoint>>{};
+  for (final endpoint in endpoints) {
+    (byLabel[endpoint._proxyLabel] ??= []).add(endpoint);
+  }
+  final used = {
+    ..._photonGroups,
+    'GLOBAL',
+    'DIRECT',
+    'REJECT',
+    'REJECT-DROP',
+    'COMPATIBLE',
+    'PASS',
+    'PASS-RULE',
+    for (final section in ['proxies', 'proxy-groups'])
+      for (final item in template?[section] as List? ?? const [])
+        (item as Map)['name'] as String,
+  };
+  final names = <PhotonEndpoint, String>{};
+  for (final MapEntry(key: label, value: matches) in byLabel.entries) {
+    if (matches.length == 1 && used.add(label)) {
+      names[matches.single] = label;
+      continue;
+    }
+    final counts = <String, int>{};
+    for (final endpoint in matches) {
+      counts.update(endpoint.type, (count) => count + 1, ifAbsent: () => 1);
+    }
+    for (final endpoint in matches) {
+      final protocol = switch (endpoint.type) {
+        'trusttunnel' => 'TT',
+        'http' => 'HTTP',
+        _ => 'SOCKS5',
+      };
+      final qualified = counts.length > 1 ? '$label · $protocol' : label;
+      if (qualified != label &&
+          counts[endpoint.type] == 1 &&
+          !byLabel.containsKey(qualified) &&
+          used.add(qualified)) {
+        names[endpoint] = qualified;
+        cardTitles?[(provider: provider, name: qualified)] = label;
+        continue;
+      }
+      // Derive the suffix from the destination so a shared Anycast proxy
+      // keeps its name when its publisher changes.
+      final token = sha256
+          .convert(utf8.encode(endpoint._destinationKey))
+          .toString()
+          .substring(0, 6);
+      var suffix = token;
+      var name = '$qualified · $suffix';
+      for (
+        var index = 2;
+        byLabel.containsKey(name) || !used.add(name);
+        index++
+      ) {
+        suffix = '$token $index';
+        name = '$qualified · $suffix';
+      }
+      names[endpoint] = name;
+      if (qualified != label) {
+        cardTitles?[(provider: provider, name: name)] = '$label · $suffix';
+      }
+    }
+  }
+  return names;
 }
 
 String _string(Map<String, dynamic> data, String key) {
@@ -286,6 +378,7 @@ Map<String, dynamic> photonProxyProfile({
   required String backendPath,
   Map<String, dynamic>? template,
   PhotonProxySelection? selection,
+  PhotonProxyCardTitles? cardTitles,
 }) {
   if (!directory.fresh(now)) {
     throw StateError('Photon service information expired');
@@ -315,12 +408,14 @@ Map<String, dynamic> photonProxyProfile({
       '${prefix.contains(':') ? 'IP-CIDR6' : 'IP-CIDR'},$prefix,DIRECT,no-resolve',
     'PROCESS-PATH-REGEX,${RegExp.escape(backendPath).replaceAll(',', r'\x2c')},DIRECT',
   ];
+  if (template != null) validatePhotonProxyTemplate(template);
+  final names = _proxyNames(endpoints, template, cardTitles: cardTitles);
   final proxies = [
     if (endpoints.isEmpty)
       {'name': 'Photon No selected exits', 'type': 'reject'},
     for (final endpoint in endpoints)
       {
-        'name': endpoint.name,
+        'name': names[endpoint]!,
         'type': endpoint.type,
         'server': endpoint.address,
         'port': endpoint.port,
@@ -347,17 +442,18 @@ Map<String, dynamic> photonProxyProfile({
 }
 
 /// Used only by Mihomo's validator when no signed service directory is live.
-Map<String, dynamic> photonProxyTemplatePreview(
-  Map<String, dynamic> template,
-) => _renderPhotonProxyProfile(
-  proxies: const [
-    {'name': 'Photon Offline', 'type': 'reject'},
-  ],
-  exclusions: const [],
-  bypassDomains: const [],
-  bypassRules: const [],
-  template: template,
-);
+Map<String, dynamic> photonProxyTemplatePreview(Map<String, dynamic> template) {
+  validatePhotonProxyTemplate(template);
+  return _renderPhotonProxyProfile(
+    proxies: const [
+      {'name': 'Photon Offline', 'type': 'reject'},
+    ],
+    exclusions: const [],
+    bypassDomains: const [],
+    bypassRules: const [],
+    template: template,
+  );
+}
 
 Map<String, dynamic> _renderPhotonProxyProfile({
   required List<Map<String, dynamic>> proxies,
@@ -367,7 +463,6 @@ Map<String, dynamic> _renderPhotonProxyProfile({
   required Map<String, dynamic>? template,
 }) {
   final names = proxies.map((proxy) => proxy['name']).toList();
-  if (template != null) validatePhotonProxyTemplate(template);
   final templateProxies = template?['proxies'] as List? ?? const [];
   final templateGroups = template?['proxy-groups'] as List? ?? const [];
   final templateProviders = template?['proxy-providers'] as Map? ?? const {};

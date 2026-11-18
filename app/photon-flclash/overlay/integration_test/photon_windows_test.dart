@@ -7,6 +7,7 @@ import 'package:fl_clash/features/form/form.dart' show FormPage;
 import 'package:fl_clash/main.dart' as application;
 import 'package:fl_clash/photon/controller.dart';
 import 'package:fl_clash/photon/proxy_bridge.dart';
+import 'package:fl_clash/photon/services.dart';
 import 'package:fl_clash/photon/view.dart';
 import 'package:fl_clash/providers/providers.dart';
 import 'package:fl_clash/state.dart';
@@ -152,15 +153,27 @@ void main() {
           await phase('tab-$label');
         }
         final directory = photonController.directory!;
+        final selection = await photonProxyBridge.loadSelection();
+        final available = directory.proxyEndpoints
+            .where(
+              (endpoint) => selection.allows(
+                type: endpoint.type,
+                region: endpoint.region,
+                owner: endpoint.owner,
+              ),
+            )
+            .toList();
         final wanted = {
           'bgp-vultr-lax.catofes.',
           'chair-misaka-sin.catofes.',
           'neutron-linode-hnd.catofes.',
         };
-        final endpoints = directory.endpoints
+        final endpoints = available
             .where(
               (endpoint) =>
-                  endpoint.region == 'local' && wanted.contains(endpoint.owner),
+                  endpoint.type == 'socks5' &&
+                  endpoint.region == 'local' &&
+                  wanted.contains(endpoint.owner),
             )
             .toList();
         expect(endpoints, hasLength(3));
@@ -200,9 +213,23 @@ void main() {
         final generated = await container
             .read(coreHandlerProvider)
             .readConfig(container.read(currentProfileIdProvider)!);
+        final proxies = (generated['proxies'] as List).cast<Map>();
+        (Object?, Object?, Object?) destination(Map proxy) =>
+            (proxy['type'], proxy['server'], proxy['port']);
+        String proxyName(PhotonEndpoint endpoint) =>
+            proxies.singleWhere(
+                  (proxy) =>
+                      destination(proxy) ==
+                      (endpoint.type, endpoint.address, endpoint.port),
+                )['name']
+                as String;
         expect(
-          (generated['proxies'] as List).map((proxy) => (proxy as Map)['name']),
-          unorderedEquals(directory.endpoints.map((endpoint) => endpoint.name)),
+          proxies.map(destination),
+          unorderedEquals(
+            available.map(
+              (endpoint) => (endpoint.type, endpoint.address, endpoint.port),
+            ),
+          ),
         );
         await phase('all-authorized-proxies');
         final port = container.read(patchClashConfigProvider).mixedPort;
@@ -210,7 +237,7 @@ void main() {
         for (final endpoint in endpoints) {
           await container
               .read(proxiesActionProvider.notifier)
-              .changeProxy(groupName: 'Photon', proxyName: endpoint.name);
+              .changeProxy(groupName: 'Photon', proxyName: proxyName(endpoint));
           final result = await Process.run('curl.exe', [
             '--silent',
             '--show-error',
@@ -269,7 +296,10 @@ void main() {
         results['group_traces'] = groupTraces;
         await container
             .read(proxiesActionProvider.notifier)
-            .changeProxy(groupName: 'Photon', proxyName: endpoints.first.name);
+            .changeProxy(
+              groupName: 'Photon',
+              proxyName: proxyName(endpoints.first),
+            );
         container
             .read(patchClashConfigProvider.notifier)
             .update((state) => state.copyWith.tun(enable: true));

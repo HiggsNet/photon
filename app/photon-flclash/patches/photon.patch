@@ -1303,3 +1303,56 @@ diff --git a/lib/common/constant.dart b/lib/common/constant.dart
  const maxMobileWidth = 600;
  const maxLaptopWidth = 840;
  const defaultTestUrl = 'https://www.gstatic.com/generate_204';
+diff --git a/lib/views/proxies/card.dart b/lib/views/proxies/card.dart
+index 6e309a8f..c7e83a87 100644
+--- a/lib/views/proxies/card.dart
++++ b/lib/views/proxies/card.dart
+@@ -1,6 +1,8 @@
+ import 'package:fl_clash/common/common.dart';
+ import 'package:fl_clash/enum/enum.dart';
+ import 'package:fl_clash/models/models.dart';
++import 'package:fl_clash/photon/proxy_bridge.dart'
++    show photonProxyCardTitlesProvider;
+ import 'package:fl_clash/providers/providers.dart';
+ import 'package:fl_clash/state.dart';
+ import 'package:fl_clash/ui/icons/icons.dart';
+@@ -58,12 +60,12 @@ class ProxyCard extends ConsumerWidget {
+
+   Measure get measure => globalState.measure;
+
+-  Widget _buildProxyNameText(BuildContext context) {
++  Widget _buildProxyNameText(BuildContext context, String title) {
+     if (type == ProxyCardType.compact) {
+       return SizedBox(
+         height: measure.textHeight(AppTextStyle.subheadline) * 1,
+         child: EmojiText(
+-          proxy.name,
++          title,
+           maxLines: 1,
+           overflow: TextOverflow.ellipsis,
+           style: AppTextStyle.subheadline.of(context),
+@@ -73,7 +75,7 @@ class ProxyCard extends ConsumerWidget {
+       return SizedBox(
+         height: measure.textHeight(AppTextStyle.subheadline) * 2,
+         child: EmojiText(
+-          proxy.name,
++          title,
+           maxLines: 2,
+           overflow: TextOverflow.ellipsis,
+           style: AppTextStyle.subheadline.of(context),
+@@ -137,7 +139,14 @@ class ProxyCard extends ConsumerWidget {
+       testUrl: testUrl,
+       alignment: isLoose ? Alignment.centerLeft : Alignment.centerRight,
+     );
+-    final proxyNameText = _buildProxyNameText(context);
++    final title = ref.watch(
++      photonProxyCardTitlesProvider.select(
++        (titles) =>
++            titles[(provider: proxy.providerName, name: proxy.name)] ??
++            proxy.name,
++      ),
++    );
++    final proxyNameText = _buildProxyNameText(context, title);
+     final typeStyle = AppTextStyle.footnote
+         .of(context)
+         .copyWith(

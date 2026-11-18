@@ -8,6 +8,7 @@ import 'package:fl_clash/models/models.dart';
 import 'package:fl_clash/providers/providers.dart';
 import 'package:fl_clash/state.dart';
 import 'package:flutter/foundation.dart' show compute;
+import 'package:flutter_riverpod/flutter_riverpod.dart' show Provider;
 import 'package:path/path.dart' as path;
 import 'package:yaml/yaml.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -85,6 +86,7 @@ final class PhotonProxyBridge {
   String? _profileDigest;
   String? _templateText;
   Map<String, dynamic>? _template;
+  ({int profileId, PhotonProxyCardTitles titles})? _cardTitles;
   bool _applying = false;
   int? _blockedProfileId;
 
@@ -104,6 +106,7 @@ final class PhotonProxyBridge {
   Map<String, dynamic> _profile(
     PhotonDirectory directory, {
     Map<String, dynamic>? template,
+    PhotonProxyCardTitles? cardTitles,
   }) => photonProxyProfile(
     directory: directory,
     now: DateTime.now(),
@@ -119,6 +122,7 @@ final class PhotonProxyBridge {
     ),
     template: template,
     selection: _selection,
+    cardTitles: cardTitles,
   );
 
   Future<Map<String, dynamic>?> _readTemplate() async {
@@ -260,13 +264,18 @@ final class PhotonProxyBridge {
   }) async {
     await loadSelection();
     final template = await _readTemplate();
-    final networkContent = encodePhotonProfile(_profile(directory));
+    final cardTitles = PhotonProxyCardTitles();
+    final networkContent = encodePhotonProfile(
+      _profile(directory, cardTitles: template == null ? cardTitles : null),
+    );
     final networkDigest = sha256
         .convert(utf8.encode(networkContent))
         .toString();
     final content = template == null
         ? networkContent
-        : encodePhotonProfile(_profile(directory, template: template));
+        : encodePhotonProfile(
+            _profile(directory, template: template, cardTitles: cardTitles),
+          );
     final digest = sha256.convert(utf8.encode(content)).toString();
     final container = globalState.container;
     var profile = _managed();
@@ -282,6 +291,7 @@ final class PhotonProxyBridge {
     await (await profile.file).writeAsStringAtomically(content);
     final latest =
         container.read(profilesProvider).getProfile(profile.id) ?? profile;
+    _cardTitles = (profileId: profile.id, titles: cardTitles);
     container
         .read(profilesActionProvider.notifier)
         .putProfile(latest.copyWith(lastUpdateDate: DateTime.now()));
@@ -321,3 +331,14 @@ final class PhotonProxyBridge {
 }
 
 final photonProxyBridge = PhotonProxyBridge();
+
+final photonProxyCardTitlesProvider = Provider<PhotonProxyCardTitles>((ref) {
+  final profile = ref.watch(currentProfileProvider);
+  final cardTitles = photonProxyBridge._cardTitles;
+  if (profile?.url != photonProfileSource ||
+      cardTitles == null ||
+      profile?.id != cardTitles.profileId) {
+    return const {};
+  }
+  return cardTitles.titles;
+});
