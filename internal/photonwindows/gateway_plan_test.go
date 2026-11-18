@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -110,6 +111,20 @@ func TestGatewayPlanDNSSelectionAndRevalidation(t *testing.T) {
 	view.Revision++
 	if stale := RevalidateGatewayPlan(config, view, plan, now); stale.Selected != nil {
 		t.Fatal("old revision accepted")
+	}
+}
+
+func TestGatewayPlanWaitsForDNSOnlyWhileSignedContactIsCurrent(t *testing.T) {
+	config, view, now, _ := gatewayPlanFixture(t)
+	missing := gatewayResolvedHosts{}
+	plan := planGateway(t.Context(), config, view, now, missing)
+	if plan.Selected != nil || len(plan.Targets) != 0 || len(plan.Candidates) != 1 ||
+		len(plan.Candidates[0].Contacts) != 0 || !slices.Equal(plan.Candidates[0].WaitingDNSFamilies, []string{ipsec.FamilyIPv4}) {
+		t.Fatalf("DNS-only gateway should wait without a dial target: %+v", plan)
+	}
+	expired := planGateway(t.Context(), config, view, now.Add(61*time.Second), missing)
+	if len(expired.Candidates) != 1 || len(expired.Candidates[0].WaitingDNSFamilies) != 0 {
+		t.Fatalf("expired signed advertisement still waiting for DNS: %+v", expired)
 	}
 }
 

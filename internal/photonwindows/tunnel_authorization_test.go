@@ -37,6 +37,32 @@ func TestActiveGatewayRevalidatesCurrentRecordsAcrossRevision(t *testing.T) {
 	}
 }
 
+func TestEstablishedGatewayRevalidatesSignedDNSContactWithoutFreshLookup(t *testing.T) {
+	config, view, now, put := gatewayPlanFixture(t)
+	plan := planGateway(t.Context(), config, view, now, meshPolicyFixtureResolver())
+	if plan.Selected == nil {
+		t.Fatal(plan.Rejected)
+	}
+	pinned := plan.Selected
+	view.Revision++
+	later := now.Add(11 * time.Second)
+	current := revalidateEstablishedGateway(config, view, pinned, later, nil)
+	if current.Selected == nil || !dataplaneGatewayEqual(*current.Selected, *pinned) {
+		t.Fatalf("unchanged signed contact lost its authenticated address: %+v", current)
+	}
+	if current := revalidateEstablishedGateway(config, view, pinned, now.Add(61*time.Second), nil); current.Selected != nil {
+		t.Fatal("expired signed contact retained the tunnel")
+	}
+	put(pinned.Zone, ipsec.RecordKeyAddresses, ipsec.RecordTypeAddresses, ipsec.AddressRecord{
+		Version: 1, UpdatedAt: later.Unix(), Addresses: []ipsec.AddressAdvertisement{{
+			ID: pinned.Contact.AddressID, Host: "replacement.example", Source: ipsec.SourceManualDNS, Family: ipsec.FamilyIPv4, TTLSeconds: 60,
+		}},
+	})
+	if current := revalidateEstablishedGateway(config, view, pinned, later, nil); current.Selected != nil {
+		t.Fatal("replaced signed hostname retained the old endpoint")
+	}
+}
+
 func TestActiveLocalTransportBindingRejectsWithdrawal(t *testing.T) {
 	state, config, plan, now := transportIdentityFixture(t)
 	defer state.Close()

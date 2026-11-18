@@ -3,7 +3,6 @@ package photonwindows
 import (
 	"context"
 	"crypto/ed25519"
-	"errors"
 	"net/netip"
 	"slices"
 	"time"
@@ -16,12 +15,13 @@ import (
 
 // GatewayCandidate is an offline transport diagnosis, never a route or SA grant.
 type GatewayCandidate struct {
-	Zone        zone.ZonePath        `json:"zone"`
-	Contacts    []ipsec.ContactPoint `json:"contacts,omitempty"`
-	Fingerprint string               `json:"fingerprint,omitempty"`
-	Identity    string               `json:"identity,omitempty"`
-	PublicKey   ed25519.PublicKey    `json:"public_key,omitempty"`
-	Rejected    string               `json:"rejected,omitempty"`
+	Zone               zone.ZonePath        `json:"zone"`
+	Contacts           []ipsec.ContactPoint `json:"contacts,omitempty"`
+	WaitingDNSFamilies []string             `json:"waiting_dns_families,omitempty"`
+	Fingerprint        string               `json:"fingerprint,omitempty"`
+	Identity           string               `json:"identity,omitempty"`
+	PublicKey          ed25519.PublicKey    `json:"public_key,omitempty"`
+	Rejected           string               `json:"rejected,omitempty"`
 }
 
 // GatewayCandidates rechecks authority and key lifetimes at now, even when the
@@ -35,20 +35,7 @@ func gatewayCandidates(ctx context.Context, config *Config, view corestate.View,
 	peers := gatewayCandidateZones(config, view)
 	out := make([]GatewayCandidate, 0, len(peers))
 	for _, peer := range peers {
-		candidate := GatewayCandidate{Zone: peer}
-		contacts, fingerprint, err := gatewayContacts(ctx, config, view, peer, now, resolver, verifier)
-		if err != nil {
-			candidate.Rejected = err.Error()
-		} else {
-			candidate.Contacts, candidate.Fingerprint = contacts, fingerprint
-			zs := view.State.Network.Zones[peer]
-			profile, _ := ipsec.ParseProfileRecord(zs.Records[ipsec.RecordKeyProfile])
-			key, _ := ipsec.ParseTransportKeyRecord(zs.Records[ipsec.RecordKeyTransportKey])
-			public, _ := ipsec.DecodeTransportPublicKey(*key)
-			candidate.Identity = profile.IKEIdentity
-			candidate.PublicKey = append(ed25519.PublicKey(nil), public...)
-		}
-		out = append(out, candidate)
+		out = append(out, gatewayCandidate(ctx, config, view, peer, now, resolver, verifier))
 	}
 	return out
 }
@@ -92,8 +79,12 @@ func gatewayCandidateZones(config *Config, view corestate.View) []zone.ZonePath 
 	return peers
 }
 
-func gatewayContacts(ctx context.Context, config *Config, view corestate.View, peer zone.ZonePath, now time.Time, resolver ipsec.DNSResolver, verifier *photoncrypto.Verifier) ([]ipsec.ContactPoint, string, error) {
-	fail := func(reason string) ([]ipsec.ContactPoint, string, error) { return nil, "", errors.New(reason) }
+func gatewayCandidate(ctx context.Context, config *Config, view corestate.View, peer zone.ZonePath, now time.Time, resolver ipsec.DNSResolver, verifier *photoncrypto.Verifier) GatewayCandidate {
+	candidate := GatewayCandidate{Zone: peer}
+	fail := func(reason string) GatewayCandidate {
+		candidate.Rejected = reason
+		return candidate
+	}
 	if view.State == nil || view.State.Network == nil {
 		return fail("verified state is absent")
 	}
@@ -155,34 +146,50 @@ func gatewayContacts(ctx context.Context, config *Config, view corestate.View, p
 		return fail("profile and transport key do not match")
 	}
 	contacts, err := ipsec.ResolveContactPoints(ctx, records.Addresses, records.Ports, now, ipsec.AddressCandidateOptions{Now: now, AllowPrivateLocal: true, DNSResolver: resolver})
-	if err != nil {
-		return fail(err.Error())
-	}
 	intent := records.OverlayIntents[config.Overlay.ID]
-	var accepted []ipsec.ContactPoint
+	supportsFamily := func(family string) bool {
+		return slices.Contains(profile.AddressFamilies, family) &&
+			(slices.Contains(intent.PathKeys, ipsec.DefaultPathKey) || slices.Contains(intent.PathKeys, "family:"+family))
+	}
+	if profile.NAT.InboundReachable == ipsec.NATReachableFalse {
+		return fail("gateway is not reachable inbound")
+	}
 	for _, contact := range contacts {
 		addr, err := netip.ParseAddr(contact.Address)
 		if err != nil || addr.IsUnspecified() || addr.IsMulticast() || addr.IsLoopback() || addr.IsLinkLocalUnicast() {
 			continue
 		}
-		if !slices.Contains(profile.AddressFamilies, contact.Family) {
-			continue
+		if supportsFamily(contact.Family) {
+			candidate.Contacts = append(candidate.Contacts, contact)
 		}
-		if !slices.Contains(intent.PathKeys, ipsec.DefaultPathKey) && !slices.Contains(intent.PathKeys, "family:"+contact.Family) {
-			continue
-		}
-		if profile.NAT.InboundReachable == ipsec.NATReachableFalse {
-			continue
-		}
-		accepted = append(accepted, contact)
 	}
-	if len(accepted) == 0 {
+	if resolver != nil && len(ipsec.PortAdvertisements(records.Ports, now)) != 0 {
+		// Enumerate the families of current signed DNS advertisements even
+		// when lookup fails. The documentation addresses are for this check
+		// only and never enter the connection plan.
+		addresses, _ := ipsec.ResolveAddressCandidates(ctx, records.Addresses, now, ipsec.AddressCandidateOptions{
+			AllowPrivateLocal: true, DNSResolver: packetDeadlineResolver{},
+			AllowedSources: []string{ipsec.SourceManualDNS, ipsec.SourceDiscovery},
+		})
+		for _, address := range addresses {
+			if address.Host != "" && supportsFamily(address.Family) &&
+				!slices.Contains(candidate.WaitingDNSFamilies, address.Family) &&
+				!slices.ContainsFunc(candidate.Contacts, func(contact ipsec.ContactPoint) bool { return contact.Family == address.Family }) {
+				candidate.WaitingDNSFamilies = append(candidate.WaitingDNSFamilies, address.Family)
+			}
+		}
+	}
+	if len(candidate.Contacts) == 0 {
+		if err != nil {
+			return fail(err.Error())
+		}
 		if resolver != nil {
 			return fail("no usable signed contact")
 		}
 		return fail("no usable signed IP contact (DNS resolution is not performed offline)")
 	}
-	return accepted, key.Fingerprint, nil
+	candidate.Fingerprint, candidate.Identity, candidate.PublicKey = key.Fingerprint, profile.IKEIdentity, public
+	return candidate
 }
 
 // PlanGateway resolves signed DNS advertisements within a single bounded budget.

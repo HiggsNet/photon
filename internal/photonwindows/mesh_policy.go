@@ -29,12 +29,13 @@ type meshPeerPolicy struct {
 }
 
 type meshPolicyRequest struct {
-	peer      *meshPeer // Opaque completion identity. The worker never reads it.
-	revision  corestate.VerifiedRevision
-	at        time.Time
-	config    Config
-	hint      GatewayPlan
-	planEpoch uint64
+	peer        *meshPeer // Opaque completion identity. The worker never reads it.
+	revision    corestate.VerifiedRevision
+	at          time.Time
+	config      Config
+	hint        GatewayPlan
+	planEpoch   uint64
+	established *GatewaySelection // Immutable selection from the IKE start.
 }
 
 type meshPolicyProjection struct {
@@ -79,8 +80,10 @@ func plannerPolicyEqual(a, b GatewayPlan) bool {
 }
 
 func (r *meshPolicyRequest) matchesHint(p *meshPeer) bool {
-	return packetPolicyConfigEqual(&p.config, &r.config) &&
-		(r.planEpoch != 0 && p.planEpoch == r.planEpoch || plannerPolicyEqual(p.plan, r.hint))
+	if !packetPolicyConfigEqual(&p.config, &r.config) || r.established != p.establishedGateway() {
+		return false
+	}
+	return r.established != nil || (r.planEpoch != 0 && p.planEpoch == r.planEpoch) || plannerPolicyEqual(p.plan, r.hint)
 }
 
 func (p *meshPolicyProjection) validAt(now time.Time) bool {
@@ -91,7 +94,7 @@ func (p *meshPolicyProjection) validAt(now time.Time) bool {
 
 func (p *meshPolicyProjection) current(peer *meshPeer, revision corestate.VerifiedRevision, now time.Time) bool {
 	return p.request.revision == revision && p.request.matchesHint(peer) &&
-		p.validAt(now) && packetGatewayHintCurrent(peer.plan, now)
+		p.validAt(now) && (p.request.established != nil || packetGatewayHintCurrent(peer.plan, now))
 }
 
 func (p *meshPeerPolicy) accepts(projection *meshPolicyProjection, now time.Time) bool {
@@ -104,7 +107,8 @@ func (p *meshPeerPolicy) accepts(projection *meshPolicyProjection, now time.Time
 // IKE and device attachment must wait for a settled current projection.
 func (w *meshPolicyWorker) project(p *meshPeer, revision corestate.VerifiedRevision, now time.Time) (*meshPolicyProjection, bool) {
 	policy := &p.policy
-	if !packetGatewayHintCurrent(p.plan, now) {
+	established := p.establishedGateway()
+	if established == nil && !packetGatewayHintCurrent(p.plan, now) {
 		*policy = meshPeerPolicy{}
 		return nil, false
 	}
@@ -138,7 +142,10 @@ func (w *meshPolicyWorker) project(p *meshPeer, revision corestate.VerifiedRevis
 	}
 	if policy.pending == nil && len(w.requests) < cap(w.requests) {
 		request := &meshPolicyRequest{
-			peer: p, revision: revision, at: wall, config: clonePacketPolicyConfig(&p.config), hint: clonePacketGatewayHint(p.plan), planEpoch: p.planEpoch,
+			peer: p, revision: revision, at: wall, config: clonePacketPolicyConfig(&p.config), established: established,
+		}
+		if established == nil {
+			request.hint, request.planEpoch = clonePacketGatewayHint(p.plan), p.planEpoch
 		}
 		select {
 		case w.requests <- request:
@@ -216,7 +223,7 @@ func (w *meshPolicyWorker) run(ctx context.Context) {
 			now := time.Now()
 			view := inputs.view.read(w.store)
 			result := meshPolicyResult{request: request}
-			if request.revision == view.Revision && packetGatewayHintCurrent(request.hint, now) {
+			if request.revision == view.Revision && (request.established != nil || packetGatewayHintCurrent(request.hint, now)) {
 				result.projection = inputs.project(request, view, now)
 			}
 			select {
@@ -250,7 +257,11 @@ func (s *meshPolicyInputs) project(request *meshPolicyRequest, view corestate.Vi
 		return projection
 	}
 	projection.binding = binding
-	projection.plan = revalidateActiveGatewaySelection(config, view, request.hint, now, &s.verifier)
+	if request.established != nil {
+		projection.plan = revalidateEstablishedGateway(config, view, request.established, now, &s.verifier)
+	} else {
+		projection.plan = revalidateActiveGatewaySelection(config, view, request.hint, now, &s.verifier)
+	}
 	if projection.plan.Selected == nil {
 		return projection
 	}

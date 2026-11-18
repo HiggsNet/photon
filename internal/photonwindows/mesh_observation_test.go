@@ -12,7 +12,7 @@ func TestMeshObservationRendersDetachedPeer(t *testing.T) {
 	f, leaf := observationFixture(t)
 	peer := &meshPeer{config: *f.config, plan: f.plan, tunnel: f.p.tunnel, leaf: leaf}
 	peer.config.Gateway.AllowedZones = []zone.ZonePath{f.plan.Selected.Zone}
-	peer.plan.outerFamily = "ipv4"
+	peer.plan = GatewayPlan{outerFamily: "ipv4", Rejected: "no authorized gateway contact"}
 	view := detachedPacketPolicyView(f.view)
 	snapshot := meshObservationSnapshot{at: f.now, revision: view.Revision, plan: f.plan,
 		peers: []meshPeerSnapshot{captureMeshPeer(peer, f.now)}}

@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"reflect"
+	"slices"
 	"sync"
 	"time"
 
@@ -491,11 +492,25 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				logger.Info("gateway_plan_changed", "plan", result.plan, "tunnel_ready", false)
 			}
 			lastPlan = result.plan
-			networkTargets.publish(result.paths)
+			paths := result.paths
 			mesh.stateMu.Lock()
 			mesh.update(lastPlan)
+			// Keep watching authenticated endpoints during a DNS outage or
+			// after a fresh lookup returns a different address.
+			for _, peer := range mesh.peers {
+				if pinned := peer.establishedGateway(); pinned != nil {
+					if addr, err := netip.ParseAddr(pinned.Contact.Address); err == nil {
+						paths = append(paths, addr.Unmap())
+					}
+				}
+			}
 			observeReady()
 			mesh.stateMu.Unlock()
+			if len(paths) != len(result.paths) {
+				slices.SortFunc(paths, netip.Addr.Compare)
+				paths = slices.Compact(paths)
+			}
+			networkTargets.publish(paths)
 		case request := <-d.rebind:
 			request.result <- rebind(request.ctx, "manual_rebind")
 			refreshGossip()

@@ -31,10 +31,17 @@ func desktopGatewayNodes(snapshot desktopSnapshot) []string {
 }
 
 func desktopGatewayConnection(o *photonwindows.Observation, id string) (photonwindows.ConnectionObservation, bool) {
+	var waiting *photonwindows.ConnectionObservation
 	for _, connection := range o.Connections {
 		if connection.Peer == id {
-			return connection, true
+			if !connection.WaitingForDNS {
+				return connection, true
+			}
+			waiting = &connection
 		}
+	}
+	if waiting != nil {
+		return *waiting, true
 	}
 	return photonwindows.ConnectionObservation{IKE: o.IKE, BabelLive: o.Babel.Live, TunnelReady: o.TunnelReady}, false
 }
@@ -51,6 +58,8 @@ func desktopGatewayState(o *photonwindows.Observation, id string) string {
 		return "已认证"
 	case ike.AttemptActive && ike.AttemptGateway == id:
 		return "连接中"
+	case connection.WaitingForDNS:
+		return "等待 DNS 解析"
 	}
 	if f := ike.LastFailure; f != nil && f.Gateway == id && !f.Historical && !desktopDebugIKERejected(f.Event) {
 		return "连接失败"
@@ -88,13 +97,17 @@ func desktopFormatGatewayNode(snapshot desktopSnapshot, id string) string {
 	// the connection facts, rather than pushing them below the first viewport.
 	text.Reset()
 	fmt.Fprintf(text, "\r\n节点：%s\r\n状态：%s\r\n", desktopDebugCell(id, 256), desktopGatewayState(o, id))
+	connection, meshPeer := desktopGatewayConnection(o, id)
 	for _, candidate := range o.Gateway.Candidates {
 		if candidate.Zone == id && candidate.Rejected != "" {
-			desktopDebugOptional(text, "计划拒因", candidate.Rejected)
+			label := "计划拒因"
+			if connection.WaitingForDNS {
+				label = "DNS 解析"
+			}
+			desktopDebugOptional(text, label, candidate.Rejected)
 			break
 		}
 	}
-	connection, meshPeer := desktopGatewayConnection(o, id)
 	ike := connection.IKE
 	live := ike.Live && ike.Gateway == id
 	attempt := ike.AttemptActive && ike.AttemptGateway == id

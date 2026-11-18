@@ -117,8 +117,10 @@ func TestGatewayNodeUsesItsOwnMeshConnection(t *testing.T) {
 	o.IKE = photonwindows.IKEObservation{Gateway: "gateway.catofes.", Live: true, ChildLive: true}
 	o.TunnelReady = true
 	o.Connections = []photonwindows.ConnectionObservation{
+		{Peer: "second.example.", OuterFamily: "ipv4", WaitingForDNS: true},
 		{Peer: "second.example.", IKE: photonwindows.IKEObservation{Gateway: "second.example.", Live: true, ChildLive: true}, BabelLive: true, TunnelReady: true},
 		{Peer: "offline.example."},
+		{Peer: "pending.example.", OuterFamily: "ipv4", WaitingForDNS: true},
 	}
 	if !slices.Contains(desktopGatewayNodes(s), "second.example.") {
 		t.Fatal("live Mesh peer missing from node list")
@@ -126,6 +128,7 @@ func TestGatewayNodeUsesItsOwnMeshConnection(t *testing.T) {
 	for id, want := range map[string]string{
 		"second.example.":  "状态：业务就绪",
 		"offline.example.": "状态：未建立隧道",
+		"pending.example.": "状态：等待 DNS 解析",
 	} {
 		if got := desktopFormatGatewayNode(s, id); !strings.Contains(got, want) {
 			t.Fatalf("node %s missing %q:\n%s", id, want, got)

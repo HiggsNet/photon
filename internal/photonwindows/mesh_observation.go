@@ -21,6 +21,7 @@ import (
 type ConnectionObservation struct {
 	Peer            string         `json:"peer"`
 	OuterFamily     string         `json:"outer_family,omitempty"`
+	WaitingForDNS   bool           `json:"waiting_for_dns,omitempty"`
 	IKE             IKEObservation `json:"ike"`
 	BabelLive       bool           `json:"babel_live"`
 	TunnelReady     bool           `json:"tunnel_ready"`
@@ -114,7 +115,7 @@ func (s meshObservationSnapshot) render(config *Config, view corestate.View, dri
 	for i, p := range s.peers {
 		sample := Observation{IKE: p.ike, Wintun: p.wintun}
 		if p.pinned != nil && bindingErr == nil && binding == p.binding {
-			selected := revalidateActiveGatewaySelection(p.config, view, p.plan, now, verifier).Selected
+			selected := revalidateEstablishedGateway(p.config, view, p.pinned, now, verifier).Selected
 			if selected != nil && dataplaneGatewayEqual(*selected, *p.pinned) {
 				sample.IKE.Live, sample.IKE.Gateway = true, string(p.pinned.Zone)
 				sample.IKE.Generation, sample.IKE.ExpiresAt = p.ike.AttemptGeneration, p.ikeExpires
@@ -135,6 +136,7 @@ func (s meshObservationSnapshot) render(config *Config, view corestate.View, dri
 		peer := boundedObservationText(string(p.config.Gateway.AllowedZones[0]))
 		connection := ConnectionObservation{
 			Peer: peer, OuterFamily: p.plan.outerFamily, IKE: sample.IKE, BabelLive: sample.Babel.Live, TunnelReady: sample.TunnelReady,
+			WaitingForDNS:  p.plan.waitingDNS && !sample.IKE.Live && !sample.IKE.AttemptActive,
 			IPv4RouteReady: sample.ipv4RouteReady, IPv6RouteReady: sample.ipv6RouteReady, RoutesTruncated: sample.RoutesTruncated,
 		}
 		encoded, _ := json.Marshal(connection)

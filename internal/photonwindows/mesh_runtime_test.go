@@ -649,3 +649,76 @@ func TestMeshHostAdmissionRevalidatesOnSignedPolicyInstallation(t *testing.T) {
 		t.Fatal("next host packet used a route revoked by the installed signed policy")
 	}
 }
+
+func TestMeshEstablishedTunnelSurvivesDiscoveryLossUntilSignedWithdrawal(t *testing.T) {
+	m, f, p, event := meshHostRouteFixture(t)
+	tunnel := p.tunnel
+	generation := tunnel.generation
+
+	// Simulate a previously installed plan aging out and then a DNS refresh
+	// returning no eligible contact, without changing the verified records.
+	stale := p.plan
+	stale.EvaluatedAt = f.now.Add(-11 * time.Second)
+	p.setPlan(stale)
+	if _, ok := m.prepareHost(event); !ok {
+		t.Fatal("planner age interrupted traffic on an authenticated tunnel")
+	}
+	m.update(GatewayPlan{Rejected: "no authorized gateway contact"})
+	if m.peers[meshPath{p.config.Gateway.AllowedZones[0], ipsec.FamilyIPv4}] != p ||
+		p.plan.Selected != nil || tunnel.phase != 3 || tunnel.generation != generation {
+		t.Fatal("discovery loss replaced the tunnel or left a stale target for new attempts")
+	}
+	if _, ok := m.prepareHost(event); !ok {
+		t.Fatal("missing discovery target interrupted traffic on an authenticated tunnel")
+	}
+
+	// Publish a genuine signed withdrawal of this gateway's ability to
+	// accept connections while discovery is still unavailable.
+	peer := tunnel.plan.Selected.Zone
+	records := f.view.State.Network.Zones[peer].Records
+	previous := records[ipsec.RecordKeyProfile]
+	profile, err := ipsec.ParseProfileRecord(previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile.Enabled = false
+	value, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	withdrawal := &zone.Record{Zone: peer, Key: previous.Key, Type: previous.Type, Value: value,
+		Version: previous.Version + 1, PrevHash: photoncrypto.RecordHash(previous), Timestamp: now.Unix()}
+	if err := photoncrypto.SignRecord(withdrawal, f.private); err != nil {
+		t.Fatal(err)
+	}
+	records[withdrawal.Key] = withdrawal
+	snapshot, err := corestate.Snapshot(f.view.State.Network, peer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := m.state.Store()
+	result, err := store.ApplyRemoteBatch(t.Context(), "mesh-gateway-withdrawal", []corestate.RemoteSnapshot{{
+		Snapshot: snapshot, Limits: corestate.DefaultSyncLimits(),
+	}}, now)
+	if err != nil || !result.Committed || len(result.Outcomes) != 1 || result.Outcomes[0].Err != nil {
+		t.Fatalf("signed withdrawal did not publish: %+v, %v", result, err)
+	}
+	view := store.ReadView()
+	now = time.Now()
+	if _, pending := m.policy.project(p, view.Revision, now); !pending {
+		t.Fatal("signed withdrawal did not queue revalidation of the pinned peer")
+	}
+	request := <-m.policy.requests
+	var inputs meshPolicyInputs
+	m.policy.finish(meshPolicyResult{request: request, projection: inputs.project(request, view, now)}, view.Revision, now)
+	if _, ok := m.prepareHost(event); ok {
+		t.Fatal("traffic still admitted after the signed withdrawal settled")
+	}
+	if err := m.invalidate(); err != nil {
+		t.Fatal(err)
+	}
+	if tunnel.phase != 0 || tunnel.generation != 0 || tunnel.data.active != nil {
+		t.Fatal("signed withdrawal did not retire the authenticated tunnel")
+	}
+}

@@ -179,11 +179,17 @@ func TestDaemonPlansOtherGatewaysWhileDNSIsBlocked(t *testing.T) {
 	logs := consoleLog{ready: make(chan string, 1)}
 	daemon := NewDaemon(f.config, slog.New(slog.NewJSONHandler(logs, nil)))
 	unblock := make(chan struct{})
+	recoverDNS := make(chan struct{})
 	resolver := fixtureGatewayDNS{net.DefaultResolver, func(ctx context.Context, name string) ([]net.IPAddr, error) {
 		if name == "node-a.catofes.example" {
 			select {
 			case <-unblock:
-				return nil, errors.New("fixture DNS server timed out")
+				select {
+				case <-recoverDNS:
+					return []net.IPAddr{{IP: net.IPv4(192, 0, 2, 45)}}, nil
+				default:
+					return nil, errors.New("fixture DNS server timed out")
+				}
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
@@ -203,13 +209,23 @@ func TestDaemonPlansOtherGatewaysWhileDNSIsBlocked(t *testing.T) {
 		out, err := daemon.Observe(ctx)
 		return err == nil && out.Gateway.Selected == "node-b.catofes." &&
 			len(out.Gateway.Candidates) == 2 && strings.Contains(out.Gateway.Candidates[0].Rejected, errGatewayDNSPending.Error()) &&
-			len(out.Connections) == 1 && out.Connections[0].Peer == "node-b.catofes."
+			len(out.Connections) == 2 && out.Connections[0].Peer == "node-a.catofes." &&
+			out.Connections[0].WaitingForDNS && !out.Connections[0].IKE.AttemptActive &&
+			out.Connections[1].Peer == "node-b.catofes." && !out.Connections[1].WaitingForDNS
 	})
 	close(unblock)
 	waitForWindowsState(t, 2*time.Second, func() bool {
 		out, err := daemon.Observe(ctx)
 		return err == nil && out.Gateway.Selected == "node-b.catofes." &&
-			len(out.Gateway.Candidates) == 2 && strings.Contains(out.Gateway.Candidates[0].Rejected, "fixture DNS server timed out")
+			len(out.Gateway.Candidates) == 2 && strings.Contains(out.Gateway.Candidates[0].Rejected, "fixture DNS server timed out") &&
+			len(out.Connections) == 2 && out.Connections[0].WaitingForDNS
+	})
+	close(recoverDNS)
+	waitForWindowsState(t, 12*time.Second, func() bool {
+		out, err := daemon.Observe(ctx)
+		return err == nil && out.Gateway.Selected == "node-a.catofes." &&
+			len(out.Connections) == 2 && out.Connections[0].Peer == "node-a.catofes." && !out.Connections[0].WaitingForDNS &&
+			out.Connections[0].IKE.AttemptGateway == "node-a.catofes."
 	})
 	cancel()
 	select {

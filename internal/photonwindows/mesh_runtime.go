@@ -138,6 +138,13 @@ func (p *meshPeer) setPlan(next GatewayPlan) {
 	p.plan = next
 }
 
+func (p *meshPeer) establishedGateway() *GatewaySelection {
+	if p.tunnel != nil && p.tunnel.phase == 3 {
+		return p.tunnel.plan.Selected
+	}
+	return nil
+}
+
 func (m *meshRuntime) update(plan GatewayPlan) {
 	local := m.socket.LocalAddr()
 	if local == nil {
@@ -146,9 +153,6 @@ func (m *meshRuntime) update(plan GatewayPlan) {
 	address := local.AddrPort().Addr().Unmap()
 	seen := make(map[meshPath]bool)
 	for _, candidate := range plan.Candidates {
-		if candidate.Rejected != "" || plan.Rejected != "" {
-			continue
-		}
 		for _, family := range []string{ipsec.FamilyIPv4, ipsec.FamilyIPv6} {
 			// Go's IPv6 wildcard UDP socket accepts both families. A specific
 			// bind, or a wildcard on a host with only IPv4, is single-family.
@@ -156,8 +160,11 @@ func (m *meshRuntime) update(plan GatewayPlan) {
 				continue
 			}
 			familyCandidate := candidate
-			familyCandidate.Contacts = contactsForFamily(candidate.Contacts, family)
-			if len(familyCandidate.Contacts) == 0 {
+			familyCandidate.Contacts = nil
+			if candidate.Rejected == "" && plan.Rejected == "" {
+				familyCandidate.Contacts = contactsForFamily(candidate.Contacts, family)
+			}
+			if len(familyCandidate.Contacts) == 0 && !slices.Contains(candidate.WaitingDNSFamilies, family) {
 				continue
 			}
 			key := meshPath{zone: candidate.Zone, family: family}
@@ -167,6 +174,12 @@ func (m *meshRuntime) update(plan GatewayPlan) {
 	}
 	for key, p := range m.peers {
 		if seen[key] {
+			continue
+		}
+		if m.policy != nil && p.establishedGateway() != nil {
+			// Discovery can lose a candidate during a DNS failure. The policy
+			// worker separately verifies the signed facts pinned by this SA.
+			p.setPlan(GatewayPlan{outerFamily: key.family})
 			continue
 		}
 		m.stopPeer(p, "peer authorization or signed contact withdrawn")
@@ -199,6 +212,10 @@ func (m *meshRuntime) updatePath(plan GatewayPlan, candidate GatewayCandidate, k
 		}
 		m.peers[key], m.byData[data] = p, p
 		m.peerOrder = nil
+	}
+	if len(candidate.Contacts) == 0 {
+		p.setPlan(GatewayPlan{outerFamily: key.family, waitingDNS: true})
+		return
 	}
 	if p.tunnel.phase != 0 && p.plan.Selected != nil {
 		for i, contact := range candidate.Contacts {
@@ -384,7 +401,7 @@ func (m *meshRuntime) tick() error {
 		}
 		// Bound work per owner turn without serializing peer lifetimes. A dead
 		// first peer never blocks attempts to the other authorized peers.
-		if p.tunnel.phase == 0 && p.starting == nil && !now.Before(p.next) && starts < 4 {
+		if p.tunnel.phase == 0 && p.starting == nil && !now.Before(p.next) && starts < 4 && packetGatewayHintCurrent(p.plan, now) {
 			m.attempt(p)
 			starts++
 		}

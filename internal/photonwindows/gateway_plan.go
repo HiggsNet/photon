@@ -44,6 +44,7 @@ type GatewayPlan struct {
 	Routes      []AuthorizedGatewayRoute   `json:"route_authorizations,omitempty"`
 	Rejected    string                     `json:"rejected,omitempty"`
 	outerFamily string
+	waitingDNS  bool
 }
 
 func planGateway(ctx context.Context, config *Config, view corestate.View, now time.Time, resolver ipsec.DNSResolver) GatewayPlan {
@@ -97,11 +98,9 @@ func RevalidateGatewayPlan(config *Config, view corestate.View, plan GatewayPlan
 	return revalidateResolvedGateway(config, view, plan, now)
 }
 
-// Established SAs can survive unrelated verified revisions. Cached DNS is only
-// a short-lived reachability hint: all signed records, chains and route facts
-// are reconstructed from the current view, then the caller compares the result
-// with the authenticated SA's pinned identity and endpoint. Packet processing
-// must never replace the original planner timestamp with this result's time.
+// Revalidate a recent planner hint across verified revisions without DNS I/O.
+// Always reconstruct signed facts from the current view. Callers using a
+// planner hint must retain its original timestamp for future freshness checks.
 func revalidateActiveGateway(config *Config, view corestate.View, plan GatewayPlan, now time.Time) GatewayPlan {
 	current := revalidateActiveGatewaySelection(config, view, plan, now, nil)
 	if current.Selected != nil {
@@ -115,6 +114,37 @@ func revalidateActiveGatewaySelection(config *Config, view corestate.View, plan 
 		return GatewayPlan{Rejected: "active gateway DNS hint expired"}
 	}
 	return revalidateResolvedGatewaySelection(config, view, plan, now, verifier)
+}
+
+// An established SA pins the address used for authenticated IKE. For a signed DNS
+// advertisement, use that address to verify the original host and contact
+// against the current signed records without making a new DNS query.
+func revalidateEstablishedGateway(config *Config, view corestate.View, pinned *GatewaySelection, now time.Time, verifier *photoncrypto.Verifier) GatewayPlan {
+	addr, err := netip.ParseAddr(pinned.Contact.Address)
+	if err != nil {
+		return GatewayPlan{Rejected: "invalid authenticated gateway address"}
+	}
+	resolved := gatewayResolvedHosts{}
+	if pinned.Contact.Host != "" {
+		resolved[pinned.Contact.Host] = []net.IPAddr{{IP: net.IP(addr.AsSlice())}}
+	}
+	for _, candidate := range gatewayCandidates(context.Background(), config, view, now, resolved, verifier) {
+		if candidate.Zone != pinned.Zone || candidate.Rejected != "" {
+			continue
+		}
+		for _, contact := range candidate.Contacts {
+			if contact.AddressID != pinned.Contact.AddressID || contact.Host != pinned.Contact.Host ||
+				contact.Source != pinned.Contact.Source {
+				continue
+			}
+			current := GatewaySelection{Zone: candidate.Zone, Identity: candidate.Identity, PublicKey: candidate.PublicKey,
+				Fingerprint: candidate.Fingerprint, Contact: contact}
+			if dataplaneGatewayEqual(current, *pinned) {
+				return GatewayPlan{Revision: view.Revision, EvaluatedAt: now, Selected: &current, outerFamily: contact.Family}
+			}
+		}
+	}
+	return GatewayPlan{Rejected: "authenticated gateway contact or identity withdrawn"}
 }
 
 func revalidateResolvedGateway(config *Config, view corestate.View, plan GatewayPlan, now time.Time) GatewayPlan {
