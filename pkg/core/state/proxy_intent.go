@@ -5,13 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/service"
 )
 
-type ProxyCapabilityIntent struct{ Mutation service.ProxyMutation }
+type ProxyCapabilityIntent struct {
+	Mutation service.ProxyMutation
+	Renew    bool
+}
 
 func (ProxyCapabilityIntent) isLocalIntent() {}
 
@@ -21,6 +25,9 @@ func applyProxyCapabilityIntent(state *VerifiedState, intent ProxyCapabilityInte
 	}
 	current := recordAt(state, state.ManagedZone, service.RecordKeyProxy)
 	mutation := intent.Mutation
+	if intent.Renew && mutation.Record == nil {
+		return nil, "", errors.New("proxy renewal needs a capability")
+	}
 	if mutation.AnnouncePort != 0 {
 		return nil, "", errors.New("proxy announce host must be resolved before committing")
 	}
@@ -46,6 +53,25 @@ func applyProxyCapabilityIntent(state *VerifiedState, intent ProxyCapabilityInte
 		}
 		if err := record.Validate(); err != nil {
 			return nil, "", err
+		}
+	}
+	if intent.Renew {
+		if current == nil {
+			return nil, "", nil
+		}
+		prior, err := service.ParseProxyCapability(current)
+		if err != nil {
+			return nil, "", err
+		}
+		expiry := prior.ExpiresAt
+		prior.ExpiresAt = record.ExpiresAt
+		// A timer may run after a withdrawal, after a port or identity change,
+		// or alongside another renewal. It can only extend the matching record.
+		if !reflect.DeepEqual(prior, record) || !expiry.After(now) {
+			return nil, "", nil
+		}
+		if !record.ExpiresAt.After(expiry) || expiry.Sub(now) > record.ExpiresAt.Sub(now)/2 {
+			return cloneRecord(current), "", nil
 		}
 	}
 	value, err := json.Marshal(record)

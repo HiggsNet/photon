@@ -51,7 +51,7 @@ UDP 业务经可靠流跨站传输。`photon-proxy` 为 TCP 和 UDP 业务使用
 proxy_directory_socket: /run/photon-proxy/directory.sock
 ```
 
-目录 socket 权限为 `0660`。代理使用独立系统用户时，可以预建管理员拥有、代理组可遍历的 setgid 父目录，例如 `root:photon-proxy`、模式 `2750`。发布和撤销使用原有管理 socket，运行转发的进程只需访问目录 socket。
+目录 socket 权限为 `0660`。代理使用独立系统用户时，可以预建管理员拥有、代理组可遍历的 setgid 父目录，例如 `root:photon-proxy`、模式 `2750`。发布、续期和撤销使用原有管理 socket，运行转发的进程只需访问目录 socket。
 
 两端管理员分别发布自己的代理证书公钥。发起方省略 `-endpoint`，出口填写实际可拨通的 TCP 地址。`-control-socket` 可指定管理 socket，默认读取 `PHOTON_CONTROL_SOCKET` 或使用 `/run/photon/photon.sock`。
 
@@ -68,6 +68,16 @@ photon-proxy publish -tls-cert egress.pem -endpoint proxy.example.net:8443
 出口在上一节 `serve` 命令上增加 `-directory-socket /run/photon-proxy/directory.sock -allow-zones client.example.`。入口在上一节 `socks5` 命令上用 `-server-zone exit.example. -directory-socket /run/photon-proxy/directory.sock` 替换 `-server`。示例 Zone 要换成实际 Zone。证书 CA 和证书名称验证仍生效，代理再校验已签名的公钥绑定。出口允许的 Zone 共享本机 `-allow` 目的前缀规则。
 
 代理约每秒刷新本机目录。撤销命令为 `photon-proxy withdraw`，可加 `-expect-version` 避免旧操作覆盖新公告。撤销或者公钥绑定变化被本机目录观察到后，代理拒绝新会话并关闭关联的现有会话。本机目录失联时，最后一次获取的快照有五秒有效期。快照到期后拒绝新会话，并在下一次目录检查时关闭关联的旧会话。各站点看到更新的时间仍取决于 Gossip 收敛。
+
+### 自动续期
+
+首次用 `publish` 发布。用相同的证书、端点、角色和委托公钥参数运行 `renew`，可为正在使用的公告续期。默认检查一次，以下示例每小时检查一次：
+
+```sh
+photon-proxy renew -tls-cert egress.pem -endpoint proxy.example.net:8443 -interval 1h
+```
+
+对于默认 24 小时有效期的公告，剩余 12 小时以内才签发下一版，并受证书到期时间限制。续期只改有效期，已有会话继续使用。撤回或到期后，需显式重新发布。切换端口或公钥时，也要更新续期命令的参数。
 
 ### 更换出口端口
 
@@ -112,3 +122,46 @@ photon-proxy publish -tls-cert client.pem -delegation-pubkey delegation.pub.pem
 - C 在原有出口 `serve` 命令上增加 `-allow-delegates relay.example. -delegation-endpoint egress.example.net:8443`。继续在 `-allow-zones` 配置允许的原始来源，并通过 `-client-ca` 信任 B 的证书。每个监听的 `-delegation-endpoint` 使用自己的公告地址；换端口时给新监听器配置新的地址。
 
 Gossip 同步 32 字节的授权公钥。请求头值最多 512 字节。A 每次建立 TCP 流或 UDP association 时签一次，签名覆盖来源、中转、出口、出口端点和实际 TCP 目标或 UDP 前缀范围。C 对每个 UDP 目的地址同时检查本机规则和签名范围。凭证从签发起有效 30 秒，出口只接受签发时间介于本次监听器启动与当前时刻之间的凭证，并记住已经使用的一次性编号。参与节点需要同步系统时间。每个公告端点由一个验签监听器负责，防重放记录在该进程内维护。
+
+## 签名多跳链
+
+入口按顺序选择每一跳的 Zone 和端点名，最后一跳是出口，一条链最多八跳。节点可为自己的代理同时公告以下端点：
+
+| 端点名 | 拨号方式 |
+| --- | --- |
+| `public-v4` | 公网地址或域名，仅拨 IPv4 |
+| `public-v6` | 公网地址或域名，仅拨 IPv6 |
+| `photon` | 节点固定的 Photon 内网 IPv4 或 IPv6，沿本机现有 Mesh 路由拨号 |
+
+在 Linux 上可用 `-chain-public-device` 和 `-chain-photon-device` 约束出接口，例如宿主机接入 Mesh 的 veth。没有指定接口时，进程使用所在网络命名空间的路由。每跳只拨选中的端点。现有直接连接和一跳中转仍用各自的命令选项。
+
+在入口 A 用 `publish -delegation-pubkey authorization.pub.pem` 发布签名公钥。专用入口只需签名密钥。每个中转或出口的证书 SAN 需要覆盖该监听器的公告主机，拨号方还会校验公告里的证书公钥指纹。示例中 B 用公网 IPv6 提供中转，然后通过 Photon 内网连 C：
+
+```sh
+photon-proxy publish -tls-cert b.pem -relay \
+  -endpoint-choice 'public-v6=[2001:db8:1234::b]:24400'
+
+photon-proxy serve -listen '[::]:24400' -tls-cert b.pem -tls-key b.key \
+  -directory-socket /run/photon-proxy/directory.sock -allow-zones a.example. \
+  -chain-endpoint 'public-v6=[2001:db8:1234::b]:24400' \
+  -chain-next c.example./photon -chain-server-ca proxy-ca.pem
+```
+
+C 用 `-endpoint-choice 'photon=[fd42:1234::c]:24401'` 公告自己的 Mesh 地址，监听时配置对应的 `-chain-endpoint`，用 `-allow` 指定可访问的目标前缀。A 的 SOCKS5 入口配置如下：
+
+```sh
+photon-proxy socks5 -listen 127.0.0.1:1080 \
+  -directory-socket /run/photon-proxy/directory.sock -server-ca proxy-ca.pem \
+  -delegation-key authorization.key -delegation-udp-prefixes 10.42.1.0/24 \
+  -chain-hop b.example./public-v6 -chain-hop c.example./photon
+```
+
+每个中转允许的 `-allow-zones` 指原始入口 Zone，`-chain-next` 列出允许的下一跳及端点。A 对完整的有序路径、每跳具体公告地址和业务目标签名。各跳验证 A 的签名，再通过独立的服务端 TLS 和 HTTP/2 连接转发原始请求，出口拒绝重复使用的凭证。中转能看见转发内容，路径校验依赖中转履行转发规则。撤回路径上任一节点的公告或更改其公钥后，看到更新的代理会关闭相关流。
+
+### 代理端口规划和切换
+
+给代理预留独立的 TCP 端口段。示例使用 `24400–24431`，实际范围由部署配置和防火墙决定。签名链端点用 `-endpoint-choice` 显式发布。IPv4、IPv6 和 Photon 内网端点可使用同一个 TCP 端口，也可分别配置。
+
+1. **准备。** 在预留段中挑一个空闲端口，启动新监听，用原证书和授权规则先验证 TCP/TLS 可达。保持旧监听运行。
+2. **切换。** 用 `publish -expect-version` 发布完整端点列表，只替换要切换的地址端口。每跳的配置继续选择原端点名。收到新版后，新流签名使用新地址。同步期间，目录版本暂时不一致可能使新连接短暂失败。
+3. **排空。** 旧流已经绑定原来的连接。保持旧监听，等旧流结束后再停止它。续期进程也使用新版完整端点列表，旧配置会被跳过。自动选端口、预公告和定时轮换尚未启用。

@@ -37,7 +37,7 @@ func main() {
 
 func run(ctx context.Context, args []string) error {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
-		fmt.Fprintln(os.Stderr, "Usage: photon-proxy serve|socks5|publish|withdraw [options]")
+		fmt.Fprintln(os.Stderr, "Usage: photon-proxy serve|socks5|publish|renew|withdraw [options]")
 		return flag.ErrHelp
 	}
 	switch args[0] {
@@ -45,7 +45,7 @@ func run(ctx context.Context, args []string) error {
 		return runServer(ctx, args[1:])
 	case "socks5":
 		return runSOCKS(ctx, args[1:])
-	case "publish", "withdraw":
+	case "publish", "renew", "withdraw":
 		return runPublication(ctx, args[0], args[1:])
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
@@ -64,10 +64,54 @@ func runServer(ctx context.Context, args []string) error {
 	delegates := flags.String("allow-delegates", "", "comma-separated relay Zones allowed to present signed grants")
 	delegationEndpoint := flags.String("delegation-endpoint", "", "this exit's advertised host:port for signed grants")
 	relayServerCA := flags.String("relay-server-ca", "", "enable signed forwarding from this relay; PEM CA for its exits")
+	chainCA := flags.String("chain-server-ca", "", "PEM roots for dialing the next node in a signed chain")
+	publicDevice := flags.String("chain-public-device", "", "Linux interface for outgoing public chain hops")
+	photonDevice := flags.String("chain-photon-device", "", "Linux interface for outgoing Photon chain hops")
+	chainEndpoints := make(map[string]string)
+	chainNext := make(map[chainSelector]struct{})
+	flags.Func("chain-endpoint", "serve a signed chain endpoint as name=host:port (repeatable)", func(value string) error {
+		return addEndpointChoice(chainEndpoints, value)
+	})
+	flags.Func("chain-next", "permit dialing this next Zone/endpoint (repeatable)", func(value string) error {
+		hop, err := parseChainSelector(value)
+		if err != nil {
+			return err
+		}
+		chainNext[hop] = struct{}{}
+		return nil
+	})
 	relay := make(relayTargets)
 	flags.Func("relay-target", "run as relay; permitted next hop as Zone=host:port (repeatable)", relay.add)
 	if err := parseFlags(flags, args); err != nil {
 		return err
+	}
+	if len(chainEndpoints) != 0 {
+		if *ca != "" || *delegates != "" || *delegationEndpoint != "" || *relayServerCA != "" || len(relay) != 0 {
+			return errors.New("signed chain listeners use -chain-* options and do not accept legacy relay or client CA options")
+		}
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		s, allowed, err := configureChainServer(ctx, *socket, *zones, *allow, *chainCA, *publicDevice, *photonDevice, chainEndpoints, chainNext)
+		if err != nil {
+			return err
+		}
+		if s.pool != nil {
+			defer s.pool.closeIdleConnections()
+		}
+		certificates, err := tls.LoadX509KeyPair(*cert, *key)
+		if err != nil {
+			return err
+		}
+		config := &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificates}}
+		listener, err := net.Listen("tcp", *listen)
+		if err != nil {
+			return err
+		}
+		s.replay.started = time.Now()
+		return serveTunnel(ctx, listener, config, &tunnelHandler{allowed: allowed, chain: s})
+	}
+	if len(chainNext) != 0 || *chainCA != "" || *publicDevice != "" || *photonDevice != "" {
+		return errors.New("chain settings require -chain-endpoint")
 	}
 	if (*delegates == "") != (*delegationEndpoint == "") || (*delegates != "" && (len(relay) != 0 || *socket == "")) {
 		return errors.New("an exit needs both -allow-delegates and -delegation-endpoint with a directory socket")
@@ -153,17 +197,44 @@ func runSOCKS(ctx context.Context, args []string) error {
 	authFile := flags.String("auth-file", "", "optional TrustTunnel Basic credentials (username:password file)")
 	delegationKey := flags.String("delegation-key", "", "PEM Ed25519 private key for signed forwarding through -via-zone")
 	udpScope := flags.String("delegation-udp-prefixes", "", "comma-separated destinations for each signed UDP association")
+	publicDevice := flags.String("chain-public-device", "", "Linux interface for outgoing public chain hops")
+	photonDevice := flags.String("chain-photon-device", "", "Linux interface for outgoing Photon chain hops")
+	var hops []chainHop
+	flags.Func("chain-hop", "next Zone/endpoint in order, ending at the exit (repeatable)", func(value string) error {
+		hop, err := parseChainSelector(value)
+		if err != nil {
+			return err
+		}
+		for _, existing := range hops {
+			if existing.zone == hop.zone {
+				return fmt.Errorf("repeated Zone %q in proxy chain", hop.zone)
+			}
+		}
+		if len(hops) == chainHopLimit {
+			return fmt.Errorf("proxy chains support at most %d hops", chainHopLimit)
+		}
+		hops = append(hops, chainHop{chainSelector: hop})
+		return nil
+	})
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
-	if (*server == "") == (*serverZone == "") || (*serverZone == "") != (*socket == "") {
+	chain := len(hops) != 0
+	if chain {
+		if *socket == "" || *delegationKey == "" || *server != "" || *serverZone != "" || *viaZone != "" ||
+			*relayServerName != "" || *serverName != "" || *cert != "" || *key != "" || *authFile != "" {
+			return errors.New("-chain-hop requires -directory-socket and -delegation-key and cannot be combined with legacy connection options")
+		}
+	} else if (*server == "") == (*serverZone == "") || (*serverZone == "") != (*socket == "") {
 		return errors.New("use -server or -server-zone with -directory-socket")
+	} else if *publicDevice != "" || *photonDevice != "" {
+		return errors.New("chain devices require -chain-hop")
 	}
 	via := zone.ZonePath(*viaZone)
 	if (via != "" && (!via.Valid() || *serverZone == "" || *viaZone == *serverZone)) || (*relayServerName != "" && via == "") {
 		return errors.New("-via-zone must name a relay Zone different from -server-zone")
 	}
-	if (*delegationKey != "" && (via == "" || *authFile != "" || *serverName != "")) || (*udpScope != "" && *delegationKey == "") {
+	if !chain && ((*delegationKey != "" && (via == "" || *authFile != "" || *serverName != "")) || (*udpScope != "" && *delegationKey == "")) {
 		return errors.New("signed delegation requires -via-zone and is configured through the advertised exit endpoint")
 	}
 	var signingKey ed25519.PrivateKey
@@ -193,6 +264,24 @@ func runSOCKS(ctx context.Context, args []string) error {
 	listenIP, err := netip.ParseAddr(listenHost)
 	if err != nil || !listenIP.IsLoopback() {
 		return errors.New("SOCKS5 -listen must use a loopback IP")
+	}
+	if chain {
+		pool, err := newChainPool(*ca, *publicDevice, *photonDevice)
+		if err != nil {
+			return err
+		}
+		defer pool.closeIdleConnections()
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		directory, err := openProxyDirectory(ctx, *socket)
+		if err != nil {
+			return fmt.Errorf("read proxy directory: %w", err)
+		}
+		listener, err := net.Listen("tcp", *listen)
+		if err != nil {
+			return err
+		}
+		return serveSOCKS(ctx, listener, &chainClient{directory: directory, hops: hops, key: signingKey, udp: udpPrefixes, pool: pool})
 	}
 	config, roots, err := loadTLS(*cert, *key, *ca)
 	if err != nil {

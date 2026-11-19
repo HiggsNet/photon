@@ -142,6 +142,7 @@ type tunnelHandler struct {
 	relay          relayTargets
 	verifier       *delegationVerifier
 	delegatedRelay *delegatedRelay
+	chain          *chainServer
 }
 
 func serveTunnel(ctx context.Context, listener net.Listener, config *tls.Config, handler *tunnelHandler) error {
@@ -169,6 +170,10 @@ func (h *tunnelHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	if r.ProtoMajor != 2 || r.Method != http.MethodConnect {
 		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if h.chain != nil {
+		h.serveChain(w, r)
 		return
 	}
 	if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 {
@@ -244,16 +249,20 @@ func (h *tunnelHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
-	if r.Host == trusttunnel.UDPAuthority {
+	h.serveDestination(w, r, r.Host, udpScope)
+}
+
+func (h *tunnelHandler) serveDestination(w http.ResponseWriter, r *http.Request, target string, udpScope []netip.Prefix) {
+	if target == trusttunnel.UDPAuthority {
 		h.serveUDP(w, r, udpScope)
 		return
 	}
-	if _, err := splitTarget(r.Host); err != nil {
+	if _, err := splitTarget(target); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 	dialCtx, cancel := context.WithTimeout(r.Context(), setupTimeout)
-	conn, err := h.dialTCP(dialCtx, r.Host)
+	conn, err := h.dialTCP(dialCtx, target)
 	cancel()
 	if err != nil {
 		status := http.StatusBadGateway

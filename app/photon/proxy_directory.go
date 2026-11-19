@@ -21,7 +21,7 @@ func prepareProxyCapability(config *appConfig, mutation service.ProxyMutation) (
 	if mutation.AnnouncePort == 0 {
 		return mutation, nil
 	}
-	if config == nil || mutation.Record == nil || mutation.Record.Address != "" || mutation.Record.Transport != "" {
+	if config == nil || mutation.Record == nil || mutation.Record.Address != "" || len(mutation.Record.Endpoints) != 0 || mutation.Record.Transport != "" {
 		return mutation, errors.New("proxy announce port requires a publication without an explicit endpoint")
 	}
 	hosts := make(map[string]struct{})
@@ -125,11 +125,13 @@ func buildProxyDirectory(network *zone.NetworkState, now time.Time) service.Prox
 			verifier.VerifyChain(network, owner, now) != nil || verifier.VerifyRecord(raw, zs.Authority, now) != nil {
 			continue
 		}
-		if previous, ok := seen[record.SPKI]; ok {
-			delete(view.Peers, previous)
-			continue
+		if record.SPKI != "" {
+			if previous, ok := seen[record.SPKI]; ok {
+				delete(view.Peers, previous)
+				continue
+			}
+			seen[record.SPKI] = owner
 		}
-		seen[record.SPKI] = owner
 		view.Peers[owner] = record
 	}
 	return view

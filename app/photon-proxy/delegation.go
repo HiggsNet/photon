@@ -46,9 +46,15 @@ type delegationBinding struct {
 	relay, exit zone.ZonePath
 	endpoint    string
 	target      string
+	route       string
 }
 
 func (binding delegationBinding) input(payload []byte) []byte {
+	if binding.route != "" {
+		return bytes.Join([][]byte{
+			[]byte("photon.proxy.chain.v1"), []byte(binding.route), []byte(binding.target), payload,
+		}, []byte{0})
+	}
 	return bytes.Join([][]byte{
 		[]byte("photon.proxy.delegation.v1"), []byte(binding.relay), []byte(binding.exit),
 		[]byte(binding.endpoint), []byte(binding.target), payload,

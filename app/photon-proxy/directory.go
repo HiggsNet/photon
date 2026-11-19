@@ -43,7 +43,7 @@ func (p proxyPeer) matches(value service.ProxyCapability) bool {
 	if p.role == proxyIdentity {
 		return true
 	}
-	return value.Address != "" && value.Transport == service.ProxyTransport && value.Relay == (p.role == proxyRelay)
+	return (value.Address != "" || len(value.Endpoints) != 0) && value.Transport == service.ProxyTransport && value.Relay == (p.role == proxyRelay)
 }
 
 type watchedSession struct {

@@ -245,7 +245,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		writeControlResponse(conn, controlResponse{OK: true, Version: result.Version})
-	case "proxy_capability":
+	case "proxy_capability", "proxy_renew":
 		if request.Proxy == nil {
 			writeControlResponse(conn, controlError(errors.New("proxy_capability requires a proxy mutation")))
 			return
@@ -256,7 +256,9 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		result := d.enqueueEvent(ctx, daemonEvent{
-			Type: daemonEventCommonMutation, CommonIntent: corestate.ProxyCapabilityIntent{Mutation: mutation},
+			Type: daemonEventCommonMutation, CommonIntent: corestate.ProxyCapabilityIntent{
+				Mutation: mutation, Renew: request.Method == "proxy_renew",
+			},
 		})
 		if result.Error != nil {
 			writeControlResponse(conn, controlError(result.Error))
