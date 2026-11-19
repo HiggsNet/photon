@@ -301,6 +301,9 @@ routing:
       rtt_min: 10ms
       rtt_max: 500ms
       rtt_decay: 12
+      # 可选，仅由配套的 BIRD 2.19.3 补丁识别
+      # etx_loss_scale: 128
+      # hysteresis_margin: 24
       hello_interval: 4s
       update_interval: 16s
       interface_pattern: phx*
@@ -318,6 +321,8 @@ routing:
 - `rtt_cost`：mesh 接口的最大 RTT 附加 cost，默认 `1024`。配合默认 `rtt_min=10ms`、`rtt_max=500ms` 和 `rxcost=100`，relay 的总 RTT 每降低约 `48ms` 即可抵消多一跳的基础 cost；必须小于 `65535`。
 - `rtt_min` / `rtt_max`：RTT 附加 cost 的线性区间，默认 `10ms` / `500ms`。低于 min 不加 cost，高于 max 使用完整 `rtt_cost`。
 - `rtt_decay`：BIRD RTT 指数移动平均的衰减因子，范围 `1..256`，默认 `12`；数值越小，保留历史越久、对短时抖动越不敏感。
+- `etx_loss_scale`：无线模式 ETX 丢包惩罚的最低权重，与 `metric_base` 独立。使用 BIRD 原有的 16 包 Hello 窗口，补丁默认 `128`，设为 `0` 时恢复原版的 ETX 权重算法。
+- `hysteresis_margin`：候选路需持续 30 秒至少优于当前路的 metric 差值。补丁默认 `24`，设为 `0` 时任何严格改善都可开始计时。当前路失效时立即选备路。这两个字段范围都是 `0..65534`，省略时 Photon 不生成补丁专用指令。
 - `hello_interval`：Babel Hello 周期，默认 `4s`，同时影响邻居故障检测速度。
 - `update_interval`：周期性全量路由更新间隔，默认 `16s`，即默认 Hello 周期的 4 倍；路由变化仍通过 triggered update 传播，不会等待下一次周期更新。
 - Photon 始终为 Babel protocol 生成 `randomize router id`。全局 32-bit BIRD router ID 仍保持稳定；Babel 每次协议实例启动时只随机化其 64-bit origin ID 的高 32 位，避免 sequence number 重置后的 announce 被邻居当作旧更新。

@@ -239,31 +239,33 @@ type RoutingConfigYAML struct {
 }
 
 type RoutingInstanceYAML struct {
-	ID             string              `yaml:"id"`
-	NetNS          string              `yaml:"netns"`
-	Enabled        *bool               `yaml:"enabled"`
-	Disabled       *bool               `yaml:"disabled"`
-	Provider       string              `yaml:"provider"`
-	Mode           string              `yaml:"mode"`
-	ShutdownPolicy string              `yaml:"shutdown_policy"`
-	ControlSocket  string              `yaml:"control_socket"`
-	PIDFile        string              `yaml:"pid_file"`
-	ConfigFile     string              `yaml:"config_file"`
-	TableID        string              `yaml:"table"`
-	MetricBase     uint                `yaml:"metric_base"`
-	MetricStaged   uint                `yaml:"metric_staged"`
-	MetricDraining uint                `yaml:"metric_draining"`
-	RTTCost        uint                `yaml:"rtt_cost"`
-	RTTMin         string              `yaml:"rtt_min"`
-	RTTMax         string              `yaml:"rtt_max"`
-	RTTDecay       uint                `yaml:"rtt_decay"`
-	HelloInterval  string              `yaml:"hello_interval"`
-	UpdateInterval string              `yaml:"update_interval"`
-	ECMP           *bool               `yaml:"ecmp"`
-	ECMPLimit      uint                `yaml:"ecmp_limit"`
-	InterfacePat   string              `yaml:"interface_pattern"`
-	RouterIDLabel  string              `yaml:"router_id_label"`
-	Upstream       *UpstreamConfigYAML `yaml:"upstream"`
+	ID               string              `yaml:"id"`
+	NetNS            string              `yaml:"netns"`
+	Enabled          *bool               `yaml:"enabled"`
+	Disabled         *bool               `yaml:"disabled"`
+	Provider         string              `yaml:"provider"`
+	Mode             string              `yaml:"mode"`
+	ShutdownPolicy   string              `yaml:"shutdown_policy"`
+	ControlSocket    string              `yaml:"control_socket"`
+	PIDFile          string              `yaml:"pid_file"`
+	ConfigFile       string              `yaml:"config_file"`
+	TableID          string              `yaml:"table"`
+	MetricBase       uint                `yaml:"metric_base"`
+	MetricStaged     uint                `yaml:"metric_staged"`
+	MetricDraining   uint                `yaml:"metric_draining"`
+	RTTCost          uint                `yaml:"rtt_cost"`
+	RTTMin           string              `yaml:"rtt_min"`
+	RTTMax           string              `yaml:"rtt_max"`
+	RTTDecay         uint                `yaml:"rtt_decay"`
+	ETXLossScale     *uint               `yaml:"etx_loss_scale"`
+	HysteresisMargin *uint               `yaml:"hysteresis_margin"`
+	HelloInterval    string              `yaml:"hello_interval"`
+	UpdateInterval   string              `yaml:"update_interval"`
+	ECMP             *bool               `yaml:"ecmp"`
+	ECMPLimit        uint                `yaml:"ecmp_limit"`
+	InterfacePat     string              `yaml:"interface_pattern"`
+	RouterIDLabel    string              `yaml:"router_id_label"`
+	Upstream         *UpstreamConfigYAML `yaml:"upstream"`
 }
 
 // UpstreamConfigYAML is the raw YAML model for routing.instances[].upstream.
@@ -408,6 +410,12 @@ func parseRoutingInstance(yi RoutingInstanceYAML, netnsCfg NetNSConfig, dataDir 
 	if rttDecay > 256 {
 		return RoutingInstance{}, fmt.Errorf("rtt_decay must be between 1 and 256")
 	}
+	if yi.ETXLossScale != nil && *yi.ETXLossScale >= 65535 {
+		return RoutingInstance{}, fmt.Errorf("etx_loss_scale must be less than 65535")
+	}
+	if yi.HysteresisMargin != nil && *yi.HysteresisMargin >= 65535 {
+		return RoutingInstance{}, fmt.Errorf("hysteresis_margin must be less than 65535")
+	}
 	helloInterval, err := parseRoutingBabelDuration(yi.HelloInterval, bird.DefaultBabelHelloInterval, "hello_interval")
 	if err != nil {
 		return RoutingInstance{}, err
@@ -492,6 +500,8 @@ func parseRoutingInstance(yi RoutingInstanceYAML, netnsCfg NetNSConfig, dataDir 
 			BabelRTTMin:             rttMin,
 			BabelRTTMax:             rttMax,
 			BabelRTTDecay:           rttDecay,
+			BabelETXLossScale:       yi.ETXLossScale,
+			BabelHysteresisMargin:   yi.HysteresisMargin,
 			BabelHelloInterval:      helloInterval,
 			BabelUpdateInterval:     updateInterval,
 			ECMP:                    ecmp,

@@ -74,6 +74,9 @@ func TestGenerateManagedConfig(t *testing.T) {
 	if cnt := strings.Count(s, "randomize router id;"); cnt != 1 {
 		t.Errorf("expected exactly one Babel router ID randomization directive, got %d", cnt)
 	}
+	if strings.Contains(s, "etx loss scale") || strings.Contains(s, "hysteresis margin") {
+		t.Error("default config must remain compatible with stock BIRD")
+	}
 	if !strings.Contains(s, "interface \"phx*\"") {
 		t.Error("missing interface pattern")
 	}
@@ -289,6 +292,9 @@ func TestRenderConcreteInterfacePoliciesBeforeCatchAll(t *testing.T) {
 
 func TestRenderCustomBabelTuningOnWirelessMeshInterfaces(t *testing.T) {
 	spec := testBirdInstanceSpec()
+	etxLossScale, hysteresisMargin := uint(192), uint(0)
+	spec.BabelETXLossScale = &etxLossScale
+	spec.BabelHysteresisMargin = &hysteresisMargin
 	spec.BabelRTTCost = 80
 	spec.BabelRTTMin = 5 * time.Millisecond
 	spec.BabelRTTMax = 450 * time.Millisecond
@@ -302,6 +308,9 @@ func TestRenderCustomBabelTuningOnWirelessMeshInterfaces(t *testing.T) {
 		t.Fatalf("Generate failed: %v", err)
 	}
 	s := string(cfg)
+	if !strings.Contains(s, "\n    etx loss scale 192;\n    hysteresis margin 0;\n") {
+		t.Fatalf("missing protocol-level patched Babel settings:\n%s", s)
+	}
 	for _, blockStart := range []string{`interface "phx-live" {`, `interface "phx*" {`} {
 		start := strings.Index(s, blockStart)
 		if start < 0 {

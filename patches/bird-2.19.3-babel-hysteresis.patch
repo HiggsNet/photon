@@ -1,0 +1,360 @@
+Subject: [PATCH] Babel: add route hysteresis and independent ETX loss weight
+
+Keep a usable selected route until a feasible alternative has been better
+by the configured margin for 30 seconds. Reevaluate using the existing
+Babel timer, even when subsequent Updates carry the same metric. A route
+that becomes unusable still fails over immediately.
+
+On wireless interfaces, retain the existing 16-Hello loss estimator and
+apply a floor to its ETX excess weight. Lossless costs and reachability
+checks are unchanged. This keeps loss significant even with a low base
+metric.
+
+Optional directives in the Babel protocol block:
+  etx loss scale 128;    # minimum loss weight, 0..65534
+  hysteresis margin 24;  # required improvement, 0..65534
+
+These defaults apply when the directives are omitted. A zero loss scale
+uses the original ETX weight. A zero margin still requires a strictly
+better metric and the 30-second hold. Photon can set the lossless base
+to 32 on both peers via routing.instances[].metric_base.
+
+Applies to BIRD 2.19.3 with patch -p1.
+
+diff --git a/proto/babel/babel.c b/proto/babel/babel.c
+--- a/proto/babel/babel.c
++++ b/proto/babel/babel.c
+@@ -43,6 +43,8 @@
+ #include <stdlib.h>
+ #include "babel.h"
+
++#define BABEL_SWITCH_DELAY (30 S)
++
+ #define LOG_PKT_AUTH(msg, args...) \
+   log_rl(&p->log_pkt_tbf, L_AUTH "%s: " msg, p->p.name, args)
+
+@@ -178,6 +180,7 @@
+ babel_retract_route(struct babel_proto *p, struct babel_route *r)
+ {
+   r->metric = r->advert_metric = BABEL_INFINITY;
++  r->better_since = 0;
+
+   if (r == r->e->selected)
+     babel_select_route(p, r->e, r);
+@@ -209,6 +212,7 @@
+   if (r->metric < BABEL_INFINITY)
+   {
+     r->metric = r->advert_metric = BABEL_INFINITY;
++    r->better_since = 0;
+     r->expires = current_time() + cf->hold_time;
+   }
+   else
+@@ -253,7 +257,7 @@
+       }
+     }
+
+-    if (changed)
++    if (changed || (e->switch_due && (e->switch_due <= now_)))
+     {
+       /*
+        * We have to restart the iteration because there may be a cascade of
+@@ -580,11 +584,23 @@
+   return MIN(metric + n->cost, BABEL_INFINITY);
+ }
+
++/*
++ * Keep the advertised base cost on a lossless link. Scale only the
++ * ETX excess, with a floor so that a cheap hop still penalizes loss.
++ */
++static inline uint
++babel_etx_cost(uint cost, uint scale, uint received, uint expected)
++{
++  uint penalty = MAX(cost, scale) * (expected - received) / received;
++  return MIN(cost + penalty, BABEL_INFINITY);
++}
++
+ static void
+ babel_update_cost(struct babel_neighbor *nbr)
+ {
+   struct babel_proto *p = nbr->ifa->proto;
+   struct babel_iface_config *cf = nbr->ifa->cf;
++  struct babel_config *pc = (void *) p->p.cf;
+   uint rcv = u32_popcount(nbr->hello_map); // number of bits set
+   uint max = nbr->hello_cnt;
+   uint rxcost = BABEL_INFINITY;	/* Cost to announce in IHU */
+@@ -609,19 +625,11 @@
+
+   case BABEL_IFACE_TYPE_WIRELESS:
+     /*
+-     * ETX - Appendix 2.2 in the RFC.
+-     *
+-     * alpha  = prob. of successful transmission estimated by the neighbor
+-     * beta   = prob. of successful transmission estimated by the router
+-     * rxcost = nominal rxcost of the router / beta
+-     * txcost = nominal rxcost of the neighbor / (alpha * beta)
+-     *        = received txcost / beta
+-     *
+-     * Note that received txcost is just neighbor's rxcost. Beta is rcv/max,
+-     * we use inverse values of beta (i.e. max/rcv) to stay in integers.
++     * Apply the local Hello loss to the advertised transmit cost and
++     * to our receive cost. The latter is sent back in the next IHU.
+      */
+-    rxcost = MIN( cf->rxcost * max / rcv, BABEL_INFINITY);
+-    txcost = MIN(nbr->txcost * max / rcv, BABEL_INFINITY);
++    rxcost = babel_etx_cost(cf->rxcost, pc->etx_loss_scale, rcv, max);
++    txcost = babel_etx_cost(nbr->txcost, pc->etx_loss_scale, rcv, max);
+     break;
+   }
+
+@@ -766,59 +774,88 @@
+ }
+
+
++static void
++babel_reset_hysteresis(struct babel_entry *e)
++{
++  struct babel_route *r;
++
++  e->switch_due = 0;
++  WALK_LIST(r, e->routes)
++    r->better_since = 0;
++}
++
++/*
++ * Keep a usable incumbent until a feasible alternative has maintained a
++ * meaningful metric advantage. This is a time-based hysteresis policy
++ * (RFC 8966 section 3.6). Track each alternative independently so that two
++ * good alternatives trading places do not restart each other's timer.
++ */
++static struct babel_route *
++babel_hysteresis_candidate(struct babel_entry *e, struct babel_route *current, uint margin, btime now_)
++{
++  struct babel_route *r, *best = current;
++
++  e->switch_due = 0;
++  WALK_LIST(r, e->routes)
++  {
++    if (!r->feasible || (r->metric + MAX(margin, 1) > current->metric))
++    {
++      r->better_since = 0;
++      continue;
++    }
++
++    if (!r->better_since)
++      r->better_since = now_;
++
++    btime due = r->better_since + BABEL_SWITCH_DELAY;
++    if (due <= now_)
++    {
++      if (r->metric < best->metric)
++        best = r;
++    }
++    else if (!e->switch_due || (due < e->switch_due))
++      e->switch_due = due;
++  }
++
++  return best;
++}
++
+ /**
+  * babel_select_route - select best route for given route entry
+  * @p: Babel protocol instance
+  * @e: Babel entry to select the best route for
+  * @mod: Babel route that was modified or NULL if unspecified
+  *
+- * Select the best reachable and feasible route for a given prefix among the
+- * routes received from peers, and propagate it to the nest. This just selects
+- * the reachable and feasible route with the lowest metric, but keeps selected
+- * the old one in case of tie.
++ * Retain a usable route until a feasible challenger passes the local
++ * hysteresis policy. When the incumbent is unusable, select the lowest
++ * feasible metric immediately. Always announce the original Babel metric.
+  *
+  * If no feasible route is available for a prefix that previously had a route
+  * selected, a seqno request is sent to try to get a valid route. If the entry
+- * is valid and not owned by us, the unreachable route is announced to the nest
+- * (to blackhole packets going to it, as per section 2.8). It is later removed
+- * by babel_expire_routes(). Otherwise, the route is just removed from the nest.
+- *
+- * Argument @mod is used to optimize best route calculation. When specified, the
+- * function can assume that only the @mod route was modified to avoid full best
+- * route selection and announcement when non-best route was modified in minor
+- * way. The caller is advised to not call babel_select_route() when no change is
+- * done (e.g. periodic route updates) to avoid unnecessary announcements of the
+- * same best route. The caller is not required to call the function in case of a
+- * retraction of a non-best route.
+- *
+- * Note that the function does not active triggered updates. That is done by
+- * babel_rt_notify() when the change is propagated back to Babel.
++ * is valid and not owned by us, the unreachable route is announced instead.
+  */
+ static void
+ babel_select_route(struct babel_proto *p, struct babel_entry *e, struct babel_route *mod)
+ {
+-  struct babel_route *r, *best = e->selected;
++  struct babel_route *r, *current = e->selected, *best = NULL;
++  struct babel_config *cf = (void *) p->p.cf;
++  btime now_ = current_time();
+
+-  /* Shortcut if only non-best was modified */
+-  if (mod && (mod != best))
+-  {
+-    /* Either select modified route, or keep old best route */
+-    if ((mod->metric < (best ? best->metric : BABEL_INFINITY)) && mod->feasible)
+-      best = mod;
+-    else
+-      return;
+-  }
++  if (current && current->feasible && (current->metric < BABEL_INFINITY))
++    best = babel_hysteresis_candidate(e, current, cf->hysteresis_margin, now_);
+   else
+-  {
+-    /* Selected route may be modified and no longer admissible */
+-    if (!best || (best->metric == BABEL_INFINITY) || !best->feasible)
+-      best = NULL;
+-
+-    /* Find the best feasible route from all routes */
+     WALK_LIST(r, e->routes)
+-      if ((r->metric < (best ? best->metric : BABEL_INFINITY)) && r->feasible)
+-	best = r;
++      if (r->feasible && (r->metric < (best ? best->metric : BABEL_INFINITY)))
++        best = r;
++
++  if (best != current)
++  {
++    babel_reset_hysteresis(e);
++    if (best)
++      babel_hysteresis_candidate(e, best, cf->hysteresis_margin, now_);
+   }
++  else if (best && mod && (mod != best))
++    return;
+
+   if (best)
+   {
+@@ -1429,6 +1466,15 @@
+       (r->router_id == msg->router_id) && ipa_equal(r->next_hop, msg->next_hop))
+     return;
+
++  /* A replacement from the same neighbour starts a new history. */
++  if ((r->router_id != msg->router_id) || !ipa_equal(r->next_hop, msg->next_hop))
++  {
++    if (r == best)
++      babel_reset_hysteresis(e);
++    else
++      r->better_since = 0;
++  }
++
+   /* Last paragraph above - update the entry */
+   r->feasible = feasible;
+   r->seqno = msg->seqno;
+@@ -2621,11 +2667,26 @@
+   return PS_DOWN;
+ }
+
++static void
++babel_recheck_hysteresis(struct fib *table)
++{
++  btime now_ = current_time();
++
++  FIB_WALK(table, struct babel_entry, e)
++  {
++    babel_reset_hysteresis(e);
++    if (e->selected)
++      e->switch_due = now_;
++  }
++  FIB_WALK_END;
++}
++
+ static int
+ babel_reconfigure(struct proto *P, struct proto_config *CF)
+ {
+   struct babel_proto *p = (void *) P;
+   struct babel_config *new = (void *) CF;
++  struct babel_config *old = (void *) P->cf;
+   u8 ip6_type = new->ip6_channel ? new->ip6_channel->net_type : NET_IP6;
+
+   TRACE(D_EVENTS, "Reconfiguring");
+@@ -2640,6 +2701,13 @@
+   p->p.cf = CF;
+   babel_reconfigure_ifaces(p, new);
+
++  if ((new->hysteresis_margin != old->hysteresis_margin) ||
++      (new->etx_loss_scale != old->etx_loss_scale))
++  {
++    babel_recheck_hysteresis(&p->ip4_rtable);
++    babel_recheck_hysteresis(&p->ip6_rtable);
++  }
++
+   babel_trigger_update(p);
+   babel_kick_timer(p);
+
+diff --git a/proto/babel/babel.h b/proto/babel/babel.h
+--- a/proto/babel/babel.h
++++ b/proto/babel/babel.h
+@@ -54,6 +54,8 @@
+ #define BABEL_RXCOST_WIRED		96
+ #define BABEL_RXCOST_WIRELESS		256
+ #define BABEL_RXCOST_RTT		96
++#define BABEL_ETX_LOSS_SCALE		128
++#define BABEL_HYSTERESIS_MARGIN		24
+ #define BABEL_INITIAL_HOP_COUNT		255
+ #define BABEL_MAX_SEND_INTERVAL		5	/* Unused ? */
+ #define BABEL_INITIAL_NEIGHBOR_TIMEOUT	(60 S_)
+@@ -138,6 +140,8 @@
+   list iface_list;			/* List of iface configs (struct babel_iface_config) */
+   uint hold_time;			/* Time to hold stale entries and unreachable routes */
+   u8 randomize_router_id;
++  u16 etx_loss_scale;
++  u16 hysteresis_margin;
+
+   struct channel_config *ip4_channel;
+   struct channel_config *ip6_channel;
+@@ -295,6 +299,7 @@
+   ip_addr next_hop;
+   btime refresh_time;
+   btime expires;
++  btime better_since;			/* Start of continuous advantage over selected */
+ };
+
+ struct babel_seqno_request {
+@@ -310,6 +315,7 @@
+
+ struct babel_entry {
+   struct babel_route *selected;
++  btime switch_due;			/* Next pending hysteresis deadline, or zero */
+
+   list routes;				/* Routes for this prefix (struct babel_route) */
+   list sources;				/* Source entries for this prefix (struct babel_source). */
+diff --git a/proto/babel/config.Y b/proto/babel/config.Y
+--- a/proto/babel/config.Y
++++ b/proto/babel/config.Y
+@@ -30,4 +30,4 @@
+-	PREFER, NATIVE)
++	PREFER, NATIVE, ETX, LOSS, SCALE, HYSTERESIS, MARGIN)
+
+ CF_GRAMMAR
+
+@@ -38,6 +38,8 @@
+   this_proto = proto_config_new(&proto_babel, $1);
+   init_list(&BABEL_CFG->iface_list);
+   BABEL_CFG->hold_time = 1 S_;
++  BABEL_CFG->etx_loss_scale = BABEL_ETX_LOSS_SCALE;
++  BABEL_CFG->hysteresis_margin = BABEL_HYSTERESIS_MARGIN;
+ };
+
+ babel_proto_item:
+@@ -45,6 +47,14 @@
+  | proto_channel
+  | INTERFACE babel_iface
+  | RANDOMIZE ROUTER ID bool { BABEL_CFG->randomize_router_id = $4; }
++ | ETX LOSS SCALE expr {
++     if (($4 < 0) || ($4 >= BABEL_INFINITY)) cf_error("ETX loss scale must be in range 0-65534");
++     BABEL_CFG->etx_loss_scale = $4;
++   }
++ | HYSTERESIS MARGIN expr {
++     if (($3 < 0) || ($3 >= BABEL_INFINITY)) cf_error("Hysteresis margin must be in range 0-65534");
++     BABEL_CFG->hysteresis_margin = $3;
++   }
+  ;
+
+ babel_proto_opts:

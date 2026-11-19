@@ -105,6 +105,10 @@ type BirdInstanceSpec struct {
 	BabelHelloInterval  time.Duration `yaml:"babel_hello_interval,omitempty" json:"babel_hello_interval,omitempty"`
 	BabelUpdateInterval time.Duration `yaml:"babel_update_interval,omitempty" json:"babel_update_interval,omitempty"`
 
+	// Optional settings understood by BIRD with the Photon Babel patch.
+	BabelETXLossScale     *uint `yaml:"babel_etx_loss_scale,omitempty" json:"babel_etx_loss_scale,omitempty"`
+	BabelHysteresisMargin *uint `yaml:"babel_hysteresis_margin,omitempty" json:"babel_hysteresis_margin,omitempty"`
+
 	// InterfacePolicies override the metric for concrete runtime interfaces.
 	// They are rendered before the catch-all interface patterns because BIRD
 	// applies the first matching interface definition.
@@ -267,6 +271,8 @@ type BabelProtocolBlock struct {
 	HelloInterval    time.Duration
 	UpdateInterval   time.Duration
 	InterfaceBlocks  []BabelInterfaceBlock
+	ETXLossScale     *uint
+	HysteresisMargin *uint
 	Auth             *BabelAuthSpec
 	UpstreamBlock    *BabelInterfaceBlock // optional second interface block for veth upstream
 }

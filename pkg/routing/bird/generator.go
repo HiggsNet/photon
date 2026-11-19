@@ -153,6 +153,12 @@ func validateSpec(spec BirdInstanceSpec) error {
 	if spec.BabelRTTDecay < 1 || spec.BabelRTTDecay > 256 {
 		return fmt.Errorf("bird: Babel RTT decay must be between 1 and 256")
 	}
+	if spec.BabelETXLossScale != nil && *spec.BabelETXLossScale >= 65535 {
+		return fmt.Errorf("bird: Babel ETX loss scale must be less than 65535")
+	}
+	if spec.BabelHysteresisMargin != nil && *spec.BabelHysteresisMargin >= 65535 {
+		return fmt.Errorf("bird: Babel hysteresis margin must be less than 65535")
+	}
 	if err := validateBabelDuration("RTT min", spec.BabelRTTMin); err != nil {
 		return err
 	}
@@ -317,6 +323,8 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 			HelloInterval:    spec.BabelHelloInterval,
 			UpdateInterval:   spec.BabelUpdateInterval,
 			InterfaceBlocks:  interfaceBlocks,
+			ETXLossScale:     spec.BabelETXLossScale,
+			HysteresisMargin: spec.BabelHysteresisMargin,
 			Auth:             spec.BabelAuth,
 			UpstreamBlock:    upstreamBlock,
 		},
@@ -395,6 +403,12 @@ func renderConfig(cfg BirdConfig) ([]byte, error) {
 	// rejecting post-restart announcements as stale while preserving Photon's
 	// stable 32-bit BIRD router ID in the low half.
 	fmt.Fprintln(&b, "    randomize router id;")
+	if cfg.Babel.ETXLossScale != nil {
+		fmt.Fprintf(&b, "    etx loss scale %d;\n", *cfg.Babel.ETXLossScale)
+	}
+	if cfg.Babel.HysteresisMargin != nil {
+		fmt.Fprintf(&b, "    hysteresis margin %d;\n", *cfg.Babel.HysteresisMargin)
+	}
 	if cfg.Babel.IPv4Table != "" {
 		fmt.Fprintln(&b, "    ipv4 {")
 		fmt.Fprintf(&b, "        table %s;\n", cfg.Babel.IPv4Table)

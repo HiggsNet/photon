@@ -474,6 +474,8 @@ instances:
     rtt_min: 5ms
     rtt_max: 450ms
     rtt_decay: 9
+    etx_loss_scale: 192
+    hysteresis_margin: 0
     hello_interval: 2s
     update_interval: 20s
     ecmp: false
@@ -534,6 +536,10 @@ instances:
 	}
 	if inst.Bird.BabelRTTCost != 80 || inst.Bird.BabelRTTMin != 5*time.Millisecond || inst.Bird.BabelRTTMax != 450*time.Millisecond || inst.Bird.BabelRTTDecay != 9 {
 		t.Fatalf("inst RTT tuning = cost %d min %s max %s decay %d", inst.Bird.BabelRTTCost, inst.Bird.BabelRTTMin, inst.Bird.BabelRTTMax, inst.Bird.BabelRTTDecay)
+	}
+	if inst.Bird.BabelETXLossScale == nil || *inst.Bird.BabelETXLossScale != 192 ||
+		inst.Bird.BabelHysteresisMargin == nil || *inst.Bird.BabelHysteresisMargin != 0 {
+		t.Fatalf("patched Babel options did not preserve explicit values: %+v", inst.Bird)
 	}
 	if inst.Bird.BabelHelloInterval != 2*time.Second || inst.Bird.BabelUpdateInterval != 20*time.Second {
 		t.Fatalf("inst Babel intervals = hello %s update %s", inst.Bird.BabelHelloInterval, inst.Bird.BabelUpdateInterval)
@@ -637,6 +643,8 @@ func TestParseRoutingInstancesRejectsInvalidBabelTuning(t *testing.T) {
 		{name: "RTT cost too large", config: "rtt_cost: 65535"},
 		{name: "RTT max before min", config: "rtt_min: 20ms\n    rtt_max: 10ms"},
 		{name: "RTT decay too large", config: "rtt_decay: 257"},
+		{name: "ETX loss scale too large", config: "etx_loss_scale: 65535"},
+		{name: "hysteresis margin too large", config: "hysteresis_margin: 65535"},
 		{name: "sub-millisecond interval", config: "hello_interval: 500us"},
 		{name: "negative update interval", config: "update_interval: -1s"},
 	} {
