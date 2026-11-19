@@ -37,12 +37,14 @@ func main() {
 
 func run(ctx context.Context, args []string) error {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
-		fmt.Fprintln(os.Stderr, "Usage: photon-proxy serve|socks5|publish|renew|withdraw [options]")
+		fmt.Fprintln(os.Stderr, "Usage: photon-proxy serve|client|socks5|publish|renew|withdraw [options]")
 		return flag.ErrHelp
 	}
 	switch args[0] {
 	case "serve":
 		return runServer(ctx, args[1:])
+	case "client":
+		return runClient(ctx, args[1:])
 	case "socks5":
 		return runSOCKS(ctx, args[1:])
 	case "publish", "renew", "withdraw":
@@ -195,27 +197,12 @@ func runSOCKS(ctx context.Context, args []string) error {
 	cert := flags.String("tls-cert", "", "PEM client certificate chain")
 	key := flags.String("tls-key", "", "PEM client private key")
 	authFile := flags.String("auth-file", "", "optional TrustTunnel Basic credentials (username:password file)")
-	delegationKey := flags.String("delegation-key", "", "PEM Ed25519 private key for signed forwarding through -via-zone")
+	delegationKey := flags.String("delegation-key", "", "PEM Ed25519 private key for signed forwarding")
 	udpScope := flags.String("delegation-udp-prefixes", "", "comma-separated destinations for each signed UDP association")
 	publicDevice := flags.String("chain-public-device", "", "Linux interface for outgoing public chain hops")
 	photonDevice := flags.String("chain-photon-device", "", "Linux interface for outgoing Photon chain hops")
-	var hops []chainHop
-	flags.Func("chain-hop", "next Zone/endpoint in order, ending at the exit (repeatable)", func(value string) error {
-		hop, err := parseChainSelector(value)
-		if err != nil {
-			return err
-		}
-		for _, existing := range hops {
-			if existing.zone == hop.zone {
-				return fmt.Errorf("repeated Zone %q in proxy chain", hop.zone)
-			}
-		}
-		if len(hops) == chainHopLimit {
-			return fmt.Errorf("proxy chains support at most %d hops", chainHopLimit)
-		}
-		hops = append(hops, chainHop{chainSelector: hop})
-		return nil
-	})
+	var hops chainPath
+	flags.Func("chain-hop", "next Zone/endpoint in order, ending at the exit (repeatable)", hops.add)
 	if err := parseFlags(flags, args); err != nil {
 		return err
 	}
@@ -245,17 +232,9 @@ func runSOCKS(ctx context.Context, args []string) error {
 			return err
 		}
 	}
-	var udpPrefixes string
-	if *udpScope != "" {
-		prefixes, err := parseAllowed(*udpScope)
-		if err != nil {
-			return err
-		}
-		parts := make([]string, 0, len(prefixes))
-		for _, prefix := range prefixes {
-			parts = append(parts, prefix.String())
-		}
-		udpPrefixes = strings.Join(parts, ",")
+	udpPrefixes, err := normalizeUDPScope(*udpScope)
+	if err != nil {
+		return err
 	}
 	listenHost, _, err := net.SplitHostPort(*listen)
 	if err != nil {

@@ -158,6 +158,51 @@ photon-proxy socks5 -listen 127.0.0.1:1080 \
 
 每个中转允许的 `-allow-zones` 指原始入口 Zone，`-chain-next` 列出允许的下一跳及端点。A 对完整的有序路径、每跳具体公告地址和业务目标签名。各跳验证 A 的签名，再通过独立的服务端 TLS 和 HTTP/2 连接转发原始请求，出口拒绝重复使用的凭证。中转能看见转发内容，路径校验依赖中转履行转发规则。撤回路径上任一节点的公告或更改其公钥后，看到更新的代理会关闭相关流。
 
+### 客户端通过 SOCKS5 端口选路
+
+用 `photon-proxy client -config client.yaml` 在一个进程里启动多条签名路径。每条路径有自己的名字和本机 SOCKS5 端口。代理客户端选择对应的端口，并像平时一样发送 SOCKS5 目标。端点地址由 Photon Proxy 从本机 Gossip 目录读取。
+
+```yaml
+directory_socket: /run/photon-proxy/directory.sock
+server_ca: proxy-ca.pem
+delegation_key: authorization.key
+routes:
+  via-b:
+    listen: 127.0.0.1:1080
+    hops: [b.example./public-v6, c.example./photon]
+    udp_prefixes: [10.42.1.0/24]
+  via-d:
+    listen: 127.0.0.1:1081
+    hops: [d.example./public-v4, c.example./photon]
+```
+
+上例的 `via-b` 可转发 TCP 和允许网段内的 UDP，`via-d` 转发 TCP。可用顶层 `public_device` 和 `photon_device` 指定本机拨号使用的接口。相对文件路径以配置文件所在目录解析。两条入口都是本机回环地址，应用或路由器客户端需要和 Photon Proxy 运行在同一台主机。
+
+### 运行中管理客户端路径
+
+在客户端配置中加入下面两个字段来启用本机管理 API。`admin_socket` 放在当前用户的私有目录，Unix socket 权限为 `0600`。`route_state` 指向独立的持久化数据库。首次启动用 YAML 的 `routes` 初始化，之后从数据库恢复，包括 API 分配的端口。可以用空的 `routes: {}` 启动，再用 API 添加。
+
+```yaml
+admin_socket: proxy-runtime/client.sock
+route_state: proxy-state/client.db
+```
+
+| HTTP 请求 | 行为 |
+| --- | --- |
+| `GET /v1/routes` | 返回每条路径的名字、监听地址、各跳和 UDP 前缀 |
+| `POST /v1/routes` | 接收 `name`、`hops`、可选的 `listen` 和 `udp_prefixes`，监听成功并保存后返回路径及地址 |
+| `PUT /v1/routes/{name}` | 替换 `hops` 和可选的 `udp_prefixes`，保留当前端口，新连接走新版路径 |
+| `DELETE /v1/routes/{name}` | 停止接受新连接并删除保存的路径，已接受的连接继续排空 |
+
+```sh
+curl --unix-socket proxy-runtime/client.sock \
+  -H 'Content-Type: application/json' \
+  --data '{"name":"via-b","hops":["b.example./public-v6","c.example./photon"]}' \
+  http://localhost/v1/routes
+```
+
+省略 `listen` 时，由系统分配一个回环端口。返回成功表示本机 SOCKS5 已监听，远端可达性在业务拨号时检查。路径变更不影响已有 TCP 流或 UDP 会话，Gossip 撤回和证书授权变更仍会使受影响的连接关闭。
+
 ### 代理端口规划和切换
 
 给代理预留独立的 TCP 端口段。示例使用 `24400–24431`，实际范围由部署配置和防火墙决定。签名链端点用 `-endpoint-choice` 显式发布。IPv4、IPv6 和 Photon 内网端点可使用同一个 TCP 端口，也可分别配置。

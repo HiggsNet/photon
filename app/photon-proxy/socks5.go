@@ -36,24 +36,30 @@ type tunnelOpener interface {
 }
 
 func serveSOCKS(ctx context.Context, listener net.Listener, client tunnelOpener) error {
+	return serveSOCKSListener(ctx, listener, func() tunnelOpener { return client })
+}
+
+func serveSOCKSListener(ctx context.Context, listener net.Listener, selectClient func() tunnelOpener) error {
 	defer listener.Close()
 	stop := context.AfterFunc(ctx, func() { _ = listener.Close() })
 	defer stop()
 	slots := make(chan struct{}, sessionLimit)
-	var workers sync.WaitGroup
-	defer workers.Wait()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	var workers sync.WaitGroup
+	defer workers.Wait()
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			if ctx.Err() != nil {
+			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				return nil
 			}
+			cancel()
 			return err
 		}
 		select {
 		case slots <- struct{}{}:
+			client := selectClient()
 			workers.Go(func() {
 				defer func() { <-slots }()
 				handleSOCKS(ctx, conn.(*net.TCPConn), client)

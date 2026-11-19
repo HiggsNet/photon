@@ -45,6 +45,38 @@ type chainHop struct {
 	address string
 }
 
+type chainPath []chainHop
+
+func (p *chainPath) add(value string) error {
+	hop, err := parseChainSelector(value)
+	if err != nil {
+		return err
+	}
+	if slices.ContainsFunc(*p, func(existing chainHop) bool { return existing.zone == hop.zone }) {
+		return fmt.Errorf("repeated Zone %q in proxy chain", hop.zone)
+	}
+	if len(*p) == chainHopLimit {
+		return fmt.Errorf("proxy chains support at most %d hops", chainHopLimit)
+	}
+	*p = append(*p, chainHop{chainSelector: hop})
+	return nil
+}
+
+func normalizeUDPScope(value string) (string, error) {
+	if value == "" {
+		return "", nil
+	}
+	prefixes, err := parseAllowed(value)
+	if err != nil {
+		return "", err
+	}
+	parts := make([]string, 0, len(prefixes))
+	for _, prefix := range prefixes {
+		parts = append(parts, prefix.String())
+	}
+	return strings.Join(parts, ","), nil
+}
+
 func parseChainRoute(value string) ([]chainHop, error) {
 	if value == "" || len(value) > chainRouteLimit || strings.Count(value, ",") >= chainHopLimit {
 		return nil, errDenied
