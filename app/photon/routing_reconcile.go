@@ -231,15 +231,19 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 			instState.LastFailure = fmt.Errorf("bird restart backoff active until %s", time.Unix(instState.BackoffUntilUnix, 0).Format(time.RFC3339))
 			return nil
 		}
+		optionsOmitted := instState.BabelOptionsOmitted
 		if configChanged || !running {
 			// Keep a failed forced reload pending even if its contents matched
 			// the last successful configuration.
 			instState.LastConfigHash = ""
-			if err := func() error {
+			omitBabelOptions := running && !forceReload && instState.BabelOptionsOmitted
+			var err error
+			optionsOmitted, err = func() (bool, error) {
 				d.linuxObservation.setOperationPhase("bird_write")
 				defer d.gossipDriver.LogSlowOperation("routing", "routing_bird_write", time.Now(), d.gossipDriver.PendingEventCount())
-				return d.linuxDriver.WriteBirdConfig(ctx, spec, configBytes)
-			}(); err != nil {
+				return d.writeManagedBirdConfig(ctx, spec, configBytes, importSet, exportSet, omitBabelOptions)
+			}()
+			if err != nil {
 				instState.State = birdInstanceStateError
 				if running {
 					instState.State = birdInstanceStateDegraded
@@ -284,6 +288,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 			instState.BackoffUntilUnix = 0
 			instState.LastExit = ""
 		}
+		instState.BabelOptionsOmitted = optionsOmitted
 		d.observeBirdForHealth(ctx, links, reconcile, netnsName, instState.Overlays, spec.ControlSocketPath)
 
 	case bird.BirdModeExternal:
@@ -307,6 +312,37 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 		instState.LastFailure = nil
 	}
 	return nil
+}
+
+func (d *Daemon) writeManagedBirdConfig(ctx context.Context, spec bird.BirdInstanceSpec, config []byte, importSet, exportSet []netip.Prefix, omitBabelOptions bool) (bool, error) {
+	if spec.BabelETXLossScale == nil && spec.BabelHysteresisMargin == nil {
+		return false, d.linuxDriver.WriteBirdConfig(ctx, spec, config)
+	}
+
+	var checkErr error
+	if !omitBabelOptions {
+		checkErr = d.linuxDriver.WriteBirdConfig(ctx, spec, config)
+		if !errors.Is(checkErr, photonlinux.ErrBirdConfigCheck) {
+			return false, checkErr
+		}
+	}
+
+	spec.BabelETXLossScale = nil
+	spec.BabelHysteresisMargin = nil
+	fallback, err := (bird.DefaultConfigGenerator{}).Generate(spec, importSet, exportSet)
+	if err != nil {
+		return false, errors.Join(checkErr, fmt.Errorf("generate BIRD config without patch options: %w", err))
+	}
+	if err := d.linuxDriver.WriteBirdConfig(ctx, spec, fallback); err != nil {
+		return false, errors.Join(checkErr, fmt.Errorf("prepare BIRD config without patch options: %w", err))
+	}
+	if checkErr != nil {
+		d.Log.Warn("routing", "bird_patch_options_omitted", map[string]any{
+			"netns": spec.NetNSName,
+			"error": checkErr.Error(),
+		})
+	}
+	return true, nil
 }
 
 func (d *Daemon) observeBirdForHealth(ctx context.Context, instances map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary, netnsName string, overlays []string, socketPath string) {

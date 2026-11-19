@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +12,8 @@ import (
 	"time"
 
 	"github.com/HiggsNet/photon/internal/photonlinux"
+	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
@@ -151,16 +155,93 @@ func TestReconcileRoutingConfigChangeUsesFullBirdConfigure(t *testing.T) {
 	if err := service.reconcileRouting(context.Background()); !errors.Is(err, pm.checkErr) {
 		t.Fatalf("preflight rejection: %v", err)
 	}
-	if !strings.Contains(pm.checkedConfig, "hysteresis margin 24;") {
-		t.Fatalf("preflight did not receive the new configuration: %s", pm.checkedConfig)
+	if strings.Contains(pm.checkedConfig, "hysteresis margin") {
+		t.Fatalf("fallback preflight still contains the patch option: %s", pm.checkedConfig)
 	}
-	if pm.checkCalls != 2 || client.configureCalls != 1 || pm.started || pm.stopped {
+	if pm.checkCalls != 3 || client.configureCalls != 1 || pm.started || pm.stopped {
 		t.Fatalf("rejected config reached the running instance: %d checks, %d applies, started=%v, stopped=%v",
 			pm.checkCalls, client.configureCalls, pm.started, pm.stopped)
 	}
 	active, err := readFileString(client.configurePath)
 	if err != nil || active != previous {
 		t.Fatalf("active config was replaced after preflight rejection: %v", err)
+	}
+}
+
+func TestReconcileRoutingUpdatesPrefixesWithoutUnsupportedBabelOptions(t *testing.T) {
+	verified, checkpoint, runtime, syncConfig := buildTestRoutingOwners(t)
+	now := time.Unix(4000, 0)
+	config := defaultAppConfig()
+	config.DataDir = t.TempDir()
+	config.Netns = photonlinux.NetNSConfig{Names: map[string]ipsec.NetNSSpec{
+		"photontesth2": {Kind: ipsec.NetNSName, Name: "photontesth2", Create: true},
+	}}
+	scale, margin := uint(128), uint(24)
+	routingConfig, err := photonlinux.ParseRoutingConfig([]photonlinux.RoutingInstanceYAML{{
+		ID: "main", NetNS: "photontesth2", ETXLossScale: &scale, HysteresisMargin: &margin,
+	}}, config.Netns, config.DataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.Routing = routingConfig
+	inst := routingConfig.Instances[0]
+	rt := &testApp{Config: config, Clock: func() time.Time { return now }}
+	daemon := newTestDaemonFromOwners(rt, verified, checkpoint, runtime, syncConfig, time.Second)
+	var logs bytes.Buffer
+	daemon.Log = (&appLogger{}).setLevel(logLevelWarn).withOutput(&logs)
+	pm := &fakeBirdProcessManager{onCheck: func(candidate string) error {
+		if strings.Contains(candidate, "etx loss scale") || strings.Contains(candidate, "hysteresis margin") {
+			return errors.New("stock BIRD: unknown Babel option")
+		}
+		return nil
+	}}
+	client := &fakeBirdClient{}
+	installTestBirdDrivers(daemon, pm, func(string, time.Duration) birdClient { return client })
+
+	observed := make(map[string]*bird.InstanceObservation)
+	routes := &routing.AuthorizedRouteSet{
+		Announced: map[zone.ZonePath]map[netip.Prefix]*routing.RouteEntry{},
+	}
+	reconcile := func(force bool) {
+		t.Helper()
+		if err := daemon.reconcileRoutingForInstance(t.Context(), verified, observed, nil, nil, inst, routes, config, now, force); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reconcile(false)
+	state := observed[inst.Bird.NetNSName]
+	if !pm.started || pm.checkCalls != 2 || !state.BabelOptionsOmitted || state.State != birdInstanceStateRunning {
+		t.Fatalf("startup without the unsupported options failed: %d checks, observation=%+v", pm.checkCalls, state)
+	}
+
+	pm.running, pm.started = true, false
+	reconcile(false)
+	if pm.checkCalls != 2 || client.configureCalls != 0 {
+		t.Fatalf("unchanged config was checked or applied: %d checks, %d applies", pm.checkCalls, client.configureCalls)
+	}
+	peer := zone.ZonePath("new.catofes.")
+	prefix := netip.MustParsePrefix("10.99.0.0/24")
+	routes.Announced[peer] = map[netip.Prefix]*routing.RouteEntry{prefix: {Source: peer, Prefix: prefix}}
+	reconcile(false)
+	active, err := readFileString(inst.Bird.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(active, prefix.String()) || strings.Contains(active, "etx loss scale") || strings.Contains(active, "hysteresis margin") {
+		t.Fatalf("new prefix did not reach the compatible config:\n%s", active)
+	}
+	if pm.checkCalls != 3 || client.configureCalls != 1 || pm.started || pm.stopped {
+		t.Fatalf("prefix update: %d checks, %d applies, started=%v stopped=%v", pm.checkCalls, client.configureCalls, pm.started, pm.stopped)
+	}
+	if count := strings.Count(logs.String(), "bird_patch_options_omitted"); count != 1 {
+		t.Fatalf("wanted one fallback warning, got %d:\n%s", count, logs.String())
+	}
+
+	pm.onCheck = nil
+	reconcile(true)
+	if pm.checkCalls != 4 || client.configureCalls != 2 || state.BabelOptionsOmitted ||
+		!strings.Contains(pm.checkedConfig, "etx loss scale 128;") || !strings.Contains(pm.checkedConfig, "hysteresis margin 24;") {
+		t.Fatalf("explicit reload did not recheck patch support: %d checks, %d applies, observation=%+v", pm.checkCalls, client.configureCalls, state)
 	}
 }
 

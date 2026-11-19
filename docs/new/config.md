@@ -336,7 +336,7 @@ routing:
 - 未匹配的 assignment 不由配置管理，可由 `photon route announce/withdraw` 或服务控制；配置 reconcile 只撤销自己以 `controller:auto` 创建的记录。
 - 旧字段 `ipam.auto_announce_assigned_ips: true` 仍兼容，含义是自动管理全部本地 assignment；不能与 `ipam.announce` 同时使用。
 
-在 managed 模式下，Photon 先验证候选配置，再替换磁盘上的配置。已有 BIRD 通过控制 socket 执行 `configure check`，新实例由即将使用的 BIRD 二进制执行 `-p -c`。这两个命令只解析配置。预检失败时保留当前配置和运行中的实例，并报告 BIRD 返回的错误。Babel 自己进行的路由切换不会触发配置预检。
+在 managed 模式下，Photon 先验证候选配置，再替换磁盘上的配置。已有 BIRD 通过控制 socket 执行 `configure check`，新实例由即将使用的 BIRD 二进制执行 `-p -c`。这两个命令只解析配置。若配置包含 `etx_loss_scale` 或 `hysteresis_margin` 且预检失败，Photon 只省略这两项，再验证候选配置。通过后记录 warning 并照常应用其余配置；仍然失败时保留当前配置和运行中的实例。当前实例的后续更新继续省略这两项，显式重载或启动实例时会重新检查。Babel 自己进行的路由切换不会触发配置预检。
 
 ## Firewall
 

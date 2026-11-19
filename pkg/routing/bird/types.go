@@ -332,19 +332,22 @@ type BirdObservation struct {
 // InstanceObservation summarizes one configured BIRD instance for daemon
 // diagnostics and restart backoff. It is safe to discard on daemon restart.
 type InstanceObservation struct {
-	NetNSName        string            `json:"netns_name"`
-	Overlays         []string          `json:"overlays,omitempty"`
-	ConfigPath       string            `json:"config_path"`
-	ControlSocket    string            `json:"control_socket"`
-	PIDFile          string            `json:"pid_file"`
-	RouterID         uint32            `json:"router_id"`
-	Owner            BirdResourceOwner `json:"-"`
-	LastConfigHash   string            `json:"last_config_hash"`
-	LastFailure      error             `json:"-"`
-	LastExit         string            `json:"last_exit,omitempty"`
-	FailureCount     int               `json:"failure_count,omitempty"`
-	BackoffUntilUnix int64             `json:"backoff_until_unix,omitempty"`
-	State            string            `json:"state"`
+	NetNSName     string            `json:"netns_name"`
+	Overlays      []string          `json:"overlays,omitempty"`
+	ConfigPath    string            `json:"config_path"`
+	ControlSocket string            `json:"control_socket"`
+	PIDFile       string            `json:"pid_file"`
+	RouterID      uint32            `json:"router_id"`
+	Owner         BirdResourceOwner `json:"-"`
+	// LastConfigHash identifies the last successfully reconciled requested
+	// config, before optional patched-BIRD directives are omitted.
+	LastConfigHash      string `json:"last_config_hash"`
+	BabelOptionsOmitted bool   `json:"babel_options_omitted,omitempty"`
+	LastFailure         error  `json:"-"`
+	LastExit            string `json:"last_exit,omitempty"`
+	FailureCount        int    `json:"failure_count,omitempty"`
+	BackoffUntilUnix    int64  `json:"backoff_until_unix,omitempty"`
+	State               string `json:"state"`
 }
 
 // BirdStatus is the parsed output of "show status".

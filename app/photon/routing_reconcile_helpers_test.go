@@ -29,6 +29,7 @@ func (successfulHealthProber) Type() string { return health.ProbeTypeICMP }
 type fakeBirdProcessManager struct {
 	checkCalls    int
 	checkErr      error
+	onCheck       func(string) error
 	checkedConfig string
 	started       bool
 	startSpec     bird.BirdInstanceSpec
@@ -48,6 +49,9 @@ func (f *fakeBirdProcessManager) CheckConfig(_ context.Context, _ bird.BirdInsta
 		return err
 	}
 	f.checkedConfig = string(config)
+	if f.onCheck != nil {
+		return f.onCheck(f.checkedConfig)
+	}
 	return f.checkErr
 }
 

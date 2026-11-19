@@ -2,6 +2,7 @@ package photonlinux
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -12,6 +13,9 @@ import (
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	transportipsec "github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
+
+// ErrBirdConfigCheck identifies a failed preflight before any config is installed.
+var ErrBirdConfigCheck = errors.New("BIRD configuration preflight failed")
 
 type UpstreamRouteSpec struct {
 	NetNS          string
@@ -70,7 +74,7 @@ func (r *LinuxDriver) WriteBirdConfig(ctx context.Context, spec bird.BirdInstanc
 		return fmt.Errorf("close candidate BIRD config: %w", closeErr)
 	}
 	if err := manager.CheckConfig(ctx, spec, candidate.Name()); err != nil {
-		return fmt.Errorf("preflight BIRD config %s: %w", spec.ConfigPath, err)
+		return fmt.Errorf("%w for %s: %w", ErrBirdConfigCheck, spec.ConfigPath, err)
 	}
 	if err := os.Rename(candidate.Name(), spec.ConfigPath); err != nil {
 		return fmt.Errorf("install BIRD config: %w", err)
