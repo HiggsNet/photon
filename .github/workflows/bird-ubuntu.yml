@@ -1,0 +1,72 @@
+name: Ubuntu BIRD packages
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/bird-ubuntu.yml
+      - contrib/packaging/build-bird2-ubuntu.sh
+      - patches/bird2-babel-hysteresis.patch
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: BIRD on Ubuntu ${{ matrix.ubuntu }} / ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { ubuntu: '24.04', runner: ubuntu-24.04, arch: amd64 }
+          - { ubuntu: '24.04', runner: ubuntu-24.04-arm, arch: arm64 }
+          - { ubuntu: '26.04', runner: ubuntu-26.04, arch: amd64 }
+          - { ubuntu: '26.04', runner: ubuntu-26.04-arm, arch: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install BIRD build dependencies
+        run: |
+          sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential fakeroot
+          sudo apt-get build-dep -y --arch-only --no-install-recommends bird2
+
+      - name: Build Ubuntu packages
+        run: bash contrib/packaging/build-bird2-ubuntu.sh dist
+
+      - name: Install and verify the patched BIRD parser
+        run: |
+          sudo apt-get install -y ./dist/bird2-photon-ubuntu-${{ matrix.ubuntu }}-${{ matrix.arch }}.deb
+          bird --version
+          config=$(mktemp)
+          cat > "$config" <<'EOF'
+          router id 192.0.2.1;
+          protocol babel {
+            etx loss scale 128;
+            hysteresis margin 24;
+            ipv6 { import all; export none; };
+          }
+          EOF
+          bird -p -c "$config"
+
+      - name: Upload binary package
+        uses: actions/upload-artifact@v4
+        with:
+          name: photon-bird2-${{ matrix.ubuntu }}-${{ matrix.arch }}
+          if-no-files-found: error
+          path: |
+            dist/bird2-photon-ubuntu-${{ matrix.ubuntu }}-${{ matrix.arch }}.deb
+            dist/bird2-photon-ubuntu-${{ matrix.ubuntu }}-${{ matrix.arch }}.sha256
+
+      - name: Upload matching source
+        if: matrix.arch == 'amd64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: photon-bird2-${{ matrix.ubuntu }}-source
+          if-no-files-found: error
+          path: |
+            dist/bird2-photon-ubuntu-${{ matrix.ubuntu }}-source.tar.gz
+            dist/bird2-photon-ubuntu-${{ matrix.ubuntu }}-source.sha256

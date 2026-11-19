@@ -64,6 +64,7 @@
         {
           default = photon;
           photon = photon;
+          bird2-photon = pkgs.callPackage ./nix/bird2-photon.nix { };
         }
       );
 
@@ -273,10 +274,20 @@
               '';
             };
 
+            birdPackage = lib.mkOption {
+              type = lib.types.package;
+              default = pkgs.bird2;
+              defaultText = lib.literalExpression "pkgs.bird2";
+              description = ''
+                BIRD package used by Photon. Select the bird2-photon flake
+                package to enable its Babel ETX and hysteresis options.
+              '';
+            };
+
             runtimePackages = lib.mkOption {
               type = lib.types.listOf lib.types.package;
               default = with pkgs; [
-                bird2
+                cfg.birdPackage
                 iproute2
                 iputils
                 ipset
@@ -286,7 +297,7 @@
                 strongswan
               ];
               defaultText = lib.literalExpression ''
-                with pkgs; [ bird2 iproute2 iputils ipset iptables nftables procps strongswan ]
+                with pkgs; [ config.services.photon.birdPackage iproute2 iputils ipset iptables nftables procps strongswan ]
               '';
               description = ''
                 Packages added to the daemon's PATH for data-plane operations.

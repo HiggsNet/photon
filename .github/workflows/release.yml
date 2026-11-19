@@ -26,6 +26,10 @@ jobs:
     name: Build and test both Windows clients
     uses: ./.github/workflows/windows.yml
 
+  bird-ubuntu:
+    name: Build patched BIRD for Ubuntu
+    uses: ./.github/workflows/bird-ubuntu.yml
+
   build:
     name: Build linux-${{ matrix.goarch }}
     runs-on: ${{ matrix.runner }}
@@ -231,6 +235,7 @@ jobs:
       - tests
       - windows
       - build
+      - bird-ubuntu
       - docker-manifest
     runs-on: ubuntu-latest
     permissions:
@@ -265,4 +270,5 @@ jobs:
             dist/*.tar.gz
             dist/*.zip
             dist/*.exe
+            dist/*.deb
             dist/*.sha256

@@ -19,7 +19,7 @@ uses the original ETX weight. A zero margin still requires a strictly
 better metric and the 30-second hold. Photon can set the lossless base
 to 32 on both peers via routing.instances[].metric_base.
 
-Applies to BIRD 2.19.3 with patch -p1.
+Applies to BIRD 2.14, 2.18, 2.19.3 and 2.20.0 with patch -p1.
 
 diff --git a/proto/babel/babel.c b/proto/babel/babel.c
 --- a/proto/babel/babel.c
@@ -328,13 +328,14 @@ diff --git a/proto/babel/babel.h b/proto/babel/babel.h
 diff --git a/proto/babel/config.Y b/proto/babel/config.Y
 --- a/proto/babel/config.Y
 +++ b/proto/babel/config.Y
-@@ -30,4 +30,4 @@
--	PREFER, NATIVE)
-+	PREFER, NATIVE, ETX, LOSS, SCALE, HYSTERESIS, MARGIN)
+@@ -31,4 +31,6 @@
 
++CF_KEYWORDS(ETX, LOSS, SCALE, HYSTERESIS, MARGIN)
++
  CF_GRAMMAR
 
-@@ -38,6 +38,8 @@
+ proto: babel_proto ;
+@@ -38,6 +40,8 @@
    this_proto = proto_config_new(&proto_babel, $1);
    init_list(&BABEL_CFG->iface_list);
    BABEL_CFG->hold_time = 1 S_;
@@ -343,7 +344,7 @@ diff --git a/proto/babel/config.Y b/proto/babel/config.Y
  };
 
  babel_proto_item:
-@@ -45,6 +47,14 @@
+@@ -45,6 +49,14 @@
   | proto_channel
   | INTERFACE babel_iface
   | RANDOMIZE ROUTER ID bool { BABEL_CFG->randomize_router_id = $4; }
