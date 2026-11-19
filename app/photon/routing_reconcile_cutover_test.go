@@ -77,7 +77,15 @@ func TestReconcileRoutingFeedsBirdObservationToRotateCutoverGate(t *testing.T) {
 
 	client.status = &bird.BirdObservation{
 		Neighbors: []bird.BirdNeighbor{{Interface: "phx-new", Metric: 96, Routes: 1}},
+		Routes:    []bird.BirdRoute{{Iface: "phx-old", Protocol: "babel1", Selected: true, Metric: 64}},
 	}
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("reconcileRouting with old route selected: %v", err)
+	}
+	if ready := service.ipsecRotateCutoverReady()["link-1"]; ready {
+		t.Fatalf("cutover should retain the old interface while a route still uses it")
+	}
+	client.status.Routes[0].Selected = false
 	if err := service.reconcileRouting(context.Background()); err != nil {
 		t.Fatalf("reconcileRouting with staged neighbor route: %v", err)
 	}

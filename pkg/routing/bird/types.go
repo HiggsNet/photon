@@ -89,7 +89,8 @@ type BirdInstanceSpec struct {
 	// generator derives a stable name from the overlay id.
 	InternalTableName string `yaml:"internal_table_name,omitempty" json:"internal_table_name,omitempty"`
 
-	// Metrics applied to Babel interfaces of different generations.
+	// MetricStaged and MetricDraining are explicit legacy receive-cost overrides.
+	// Zero uses the default rotation receive cost derived from MetricBase.
 	MetricBase     uint `yaml:"metric_base" json:"metric_base"`
 	MetricStaged   uint `yaml:"metric_staged" json:"metric_staged"`
 	MetricDraining uint `yaml:"metric_draining" json:"metric_draining"`

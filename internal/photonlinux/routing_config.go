@@ -377,13 +377,8 @@ func parseRoutingInstance(yi RoutingInstanceYAML, netnsCfg NetNSConfig, dataDir 
 	if metricBase == 0 {
 		metricBase = ipsec.DefaultMetricBase
 	}
-	metricStaged := yi.MetricStaged
-	if metricStaged == 0 {
-		metricStaged = ipsec.DefaultMetricStaged
-	}
-	metricDraining := yi.MetricDraining
-	if metricDraining == 0 {
-		metricDraining = ipsec.DefaultMetricDrained
+	if metricBase > bird.BabelInfinity || yi.MetricStaged > bird.BabelInfinity || yi.MetricDraining > bird.BabelInfinity {
+		return RoutingInstance{}, fmt.Errorf("metric_base, metric_staged, and metric_draining cannot exceed %d", bird.BabelInfinity)
 	}
 	rttCost := yi.RTTCost
 	if rttCost == 0 {
@@ -494,8 +489,8 @@ func parseRoutingInstance(yi RoutingInstanceYAML, netnsCfg NetNSConfig, dataDir 
 			LegacyPIDFilePath:       legacyPIDFile,
 			TableID:                 tableID,
 			MetricBase:              metricBase,
-			MetricStaged:            metricStaged,
-			MetricDraining:          metricDraining,
+			MetricStaged:            yi.MetricStaged,
+			MetricDraining:          yi.MetricDraining,
 			BabelRTTCost:            rttCost,
 			BabelRTTMin:             rttMin,
 			BabelRTTMax:             rttMax,

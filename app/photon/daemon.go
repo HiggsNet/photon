@@ -140,11 +140,24 @@ func newDaemon(config *appConfig, state *State, interval time.Duration, clock fu
 	if interval <= 0 {
 		interval = defaultDaemonInterval
 	}
+	logger := newAppLogger(config)
 	spoolConfig := healthspool.Config{}
 	if config != nil {
 		spoolConfig = config.Health.Spool
+		for _, instance := range config.Routing.Instances {
+			spec := instance.Bird
+			if spec.MetricStaged == 0 && spec.MetricDraining == 0 {
+				continue
+			}
+			logger.Warn("routing", "rotation_metric_override", map[string]any{
+				"instance":        instance.ID,
+				"metric_base":     spec.MetricBase,
+				"metric_staged":   spec.MetricStaged,
+				"metric_draining": spec.MetricDraining,
+				"hint":            "Remove metric_staged and metric_draining from this routing.instances entry to use twice metric_base during rotation.",
+			})
+		}
 	}
-	logger := newAppLogger(config)
 	var commonState *corestate.Store
 	if state != nil {
 		commonState = state.Common

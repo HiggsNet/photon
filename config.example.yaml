@@ -249,8 +249,8 @@ routing:
       # shutdown_policy: persist  # persist keeps BIRD running across Photon restarts; use stop for lab teardown.
       # table: main
       # metric_base: 32
-      # metric_staged: 1200
-      # metric_draining: 2400
+      # Rotation uses 2 × metric_base on the interface being deprioritized.
+      # Optional metric_staged and metric_draining override that receive cost.
       # Optional overrides for BIRD builds with the Photon Babel patch.
       # etx_loss_scale: 128
       # hysteresis_margin: 24

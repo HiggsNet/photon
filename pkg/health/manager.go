@@ -574,7 +574,7 @@ func (m *Manager) cutoverBlockingLocked(instanceID string) bool {
 	if m.activationBlockingLocked(instanceID) {
 		return true
 	}
-	if obs, ok := m.babelObs[instanceID]; ok && (!obs.Neighbor || !obs.Route) {
+	if obs, ok := m.babelObs[instanceID]; ok && (!obs.Neighbor || !obs.Route || obs.OldRouteSelected) {
 		return true
 	}
 	return false

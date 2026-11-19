@@ -295,8 +295,6 @@ routing:
       shutdown_policy: persist
       table: main
       metric_base: 32
-      metric_staged: 1200
-      metric_draining: 2400
       rtt_cost: 1024
       rtt_min: 10ms
       rtt_max: 500ms
@@ -317,7 +315,8 @@ routing:
 - `enabled: false`（或 `disabled: true`）以及 `mode: disabled` 都会保留配置块但停止该实例的 reconcile；Photon 不会为它生成配置、创建 veth、安装上联路由或触碰 BIRD 进程。切换为禁用时也不会自动清理此前创建的 BIRD、veth、地址和路由，需要运维方按需清理。
 - `shutdown_policy` 可为 `persist` 或 `stop`，默认 `persist`。`managed` BIRD 由 Photon 启动和配置，但默认不会随 Photon daemon 退出而停止；daemon 重启后通过 pid/control socket adopt 现有 BIRD，减少 Babel 邻居和路由静默期。只有显式设置 `stop` 时，daemon 优雅退出才会停止该 BIRD 实例。
 - `table`：BIRD 主路由表名。
-- `metric_base` / `metric_staged` / `metric_draining`：Babel 路由 metric 基值，默认 `32` / `1200` / `2400`，分别用于正常、staged rotate、draining 状态。默认间距大于最大 RTT penalty，避免低延迟的旧 tunnel 反转轮换优先级。
+- `metric_base`：Babel 每跳基础接收 cost，默认 `32`。轮换期间，验证中的新隧道或排空中的旧隧道默认使用 `2 × metric_base`，默认即 `64`。BIRD 通过 IHU 把接收 cost 告知对端，链路实际 cost 仍受 ETX 和 RTT 影响。此轮换行为使用 BIRD 原生 `rxcost`。
+- `metric_staged` / `metric_draining`：可选的 `rxcost` 覆盖。非零值继续生效，Photon 启动时会记录包含实例名称的 warning。移除这两项或设为 `0` 即可使用两倍基础值。
 - `rtt_cost`：mesh 接口的最大 RTT 附加 cost，默认 `1024`，必须小于 `65535`。按默认参数，在 RTT 线性区间内，约 `15ms` 的 RTT 改善可抵消一跳无丢包链路的基础 cost。
 - `rtt_min` / `rtt_max`：RTT 附加 cost 的线性区间，默认 `10ms` / `500ms`。低于 min 不加 cost，高于 max 使用完整 `rtt_cost`。
 - `rtt_decay`：BIRD RTT 指数移动平均的衰减因子，范围 `1..256`，默认 `12`；数值越小，保留历史越久、对短时抖动越不敏感。

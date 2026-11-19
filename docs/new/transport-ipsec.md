@@ -508,13 +508,13 @@ Staged connection 的 apply 有两个额外边界：复用已加载的 transport
 Idle → Preparing（加载独立 staged connection/SA/XFRM interface）
      → TestingNew（观测 staged SA 是否 established）
          → DualRunning（新旧两条链路并行，保留窗口默认 1h）
-             → Draining（staged 健康且 Babel neighbor 就绪；new 使用正常 cost，old 调高为 draining cost）
-                 → Cutover（保留到期且 staged 接口已学到 Babel route 后 promote staged）
+             → Draining（staged 健康且 Babel 邻居可用；优先新接口）
+                 → Cutover（保留期到期，staged 已学到路由，且已无路由选择旧接口）
                  → DualRunning（staged 健康或邻居回退，恢复 old 优先）
              → Rollback（staged SA 在规定时限内未建立，清理 staged 保留旧链路）
 ```
 
-staged generation 使用独立的 `TransportID`、XFRM `if_id` 和 interface name，dual_running/draining 期间 overlay netns 同时有两个 `phx*` interface。BIRD 为具体 runtime interface 生成优先于通配规则的精确 policy：验证阶段 old=`metric_base`、staged=`metric_staged`；迁流量阶段 old=`metric_draining`、staged=`metric_base`。
+staged generation 使用独立的 `TransportID`、XFRM `if_id` 和 interface name，dual_running/draining 期间 overlay netns 同时有两个 `phx*` interface。验证阶段新接口使用两倍 `metric_base`，排空阶段旧接口使用两倍 `metric_base`。另一端通过 Babel IHU 收到这份接收 cost，再按链路质量选路。显式的 `metric_staged` 和 `metric_draining` 继续覆盖对应接口的 `rxcost`。
 
 ### Bidirectional Takeover（4.5）
 

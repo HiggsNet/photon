@@ -136,6 +136,15 @@ func TestBirdRotateInterfacePoliciesPromoteStagedAndDrainOld(t *testing.T) {
 
 	wantPolicies(ipsec.RotatePhaseDualRunning, map[string]uint{"phx-old": 100, "phx-new": 200})
 	wantPolicies(ipsec.RotatePhaseDraining, map[string]uint{"phx-old": 500, "phx-new": 100})
+
+	routingInst.Bird.MetricStaged, routingInst.Bird.MetricDraining = 0, 0
+	for _, base := range []uint{32, 64} {
+		routingInst.Bird.MetricBase = base
+		wantPolicies(ipsec.RotatePhaseDualRunning, map[string]uint{"phx-old": base, "phx-new": 2 * base})
+		wantPolicies(ipsec.RotatePhaseDraining, map[string]uint{"phx-old": 2 * base, "phx-new": base})
+	}
+	routingInst.Bird.MetricBase = 40000
+	wantPolicies(ipsec.RotatePhaseDraining, map[string]uint{"phx-old": bird.BabelInfinity - 1, "phx-new": 40000})
 }
 
 func TestBirdRotateInterfacePoliciesFiltersAndMerges(t *testing.T) {

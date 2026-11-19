@@ -14,8 +14,7 @@ import (
 const (
 	defaultTableID        = "main"
 	defaultMetricBase     = 32
-	defaultMetricStaged   = 1200
-	defaultMetricDraining = 2400
+	BabelInfinity         = 65535
 	defaultDeviceScanTime = 5 * time.Second
 	defaultLogTarget      = "log syslog all"
 
@@ -50,12 +49,6 @@ func applyDefaults(spec BirdInstanceSpec) BirdInstanceSpec {
 	}
 	if spec.MetricBase == 0 {
 		spec.MetricBase = defaultMetricBase
-	}
-	if spec.MetricStaged == 0 {
-		spec.MetricStaged = defaultMetricStaged
-	}
-	if spec.MetricDraining == 0 {
-		spec.MetricDraining = defaultMetricDraining
 	}
 	if spec.DeviceScanTime == 0 {
 		spec.DeviceScanTime = defaultDeviceScanTime
@@ -138,8 +131,8 @@ func validateSpec(spec BirdInstanceSpec) error {
 		if strings.TrimSpace(policy.InterfaceName) == "" {
 			return fmt.Errorf("bird: interface policy name is required")
 		}
-		if policy.Metric == 0 {
-			return fmt.Errorf("bird: interface policy metric for %q must be positive", policy.InterfaceName)
+		if policy.Metric == 0 || policy.Metric > BabelInfinity {
+			return fmt.Errorf("bird: Babel receive cost for %q must be in 1..%d", policy.InterfaceName, BabelInfinity)
 		}
 		if _, exists := seenInterfaces[policy.InterfaceName]; exists {
 			return fmt.Errorf("bird: duplicate interface policy for %q", policy.InterfaceName)

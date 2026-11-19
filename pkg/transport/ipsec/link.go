@@ -596,14 +596,12 @@ func (n NetNSSpec) Normalized() NetNSSpec {
 }
 
 const (
-	RoutingModeManaged   = "managed"
-	RoutingModeExternal  = "external"
-	RoutingModeDisabled  = "disabled"
-	DefaultRoutingMode   = RoutingModeManaged
-	DefaultRoutingTable  = "main"
-	DefaultMetricBase    = 32
-	DefaultMetricStaged  = 1200
-	DefaultMetricDrained = 2400
+	RoutingModeManaged  = "managed"
+	RoutingModeExternal = "external"
+	RoutingModeDisabled = "disabled"
+	DefaultRoutingMode  = RoutingModeManaged
+	DefaultRoutingTable = "main"
+	DefaultMetricBase   = 32
 )
 
 func (n NetNSSpec) Target() string {

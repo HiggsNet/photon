@@ -168,8 +168,7 @@ Defaults the generator should apply:
 |-------|---------|
 | `TableID` | `"main"` |
 | `MetricBase` | `32` |
-| `MetricStaged` | `1200` |
-| `MetricDraining` | `2400` |
+| `MetricStaged` / `MetricDraining` | Photon 轮换时使用两倍 `MetricBase`，可显式覆盖 |
 | `BabelRTTCost` | `1024` |
 | `BabelRTTMin` | `10ms` |
 | `BabelRTTMax` | `500ms` |

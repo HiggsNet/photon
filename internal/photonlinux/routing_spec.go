@@ -69,6 +69,19 @@ func BuildBirdInstanceSpec(inst RoutingInstance, routerID uint32, groups []ipsec
 
 // BirdRotateInterfacePolicies selects interface costs while old and staged links coexist.
 func BirdRotateInterfacePolicies(instances map[string]ipsec.LinkInstance, outputs []photonstate.LinkOutput, spec bird.BirdInstanceSpec) []bird.BabelInterfacePolicy {
+	// The receive cost advertised in IHU influences the peer's outgoing route.
+	base := spec.MetricBase
+	deprioritized := base
+	if base < bird.BabelInfinity {
+		deprioritized = min(2*base, bird.BabelInfinity-1)
+	}
+	stagedMetric, drainingMetric := spec.MetricStaged, spec.MetricDraining
+	if stagedMetric == 0 {
+		stagedMetric = deprioritized
+	}
+	if drainingMetric == 0 {
+		drainingMetric = deprioritized
+	}
 	metrics := make(map[string]uint)
 	for _, link := range outputs {
 		if link.InterfaceName == "" || !LinkOutputBelongsToBirdInstance(link, spec.NetNSName, spec.Overlays) {
@@ -91,15 +104,15 @@ func BirdRotateInterfacePolicies(instances map[string]ipsec.LinkInstance, output
 		if !ok || instance.StagedInterfaceName == "" {
 			continue
 		}
-		metric := spec.MetricBase
+		metric := base
 		if link.RuntimeRole == photonstate.LinkRuntimeStaged {
-			metric = spec.MetricStaged
+			metric = stagedMetric
 		}
 		if instance.RotatePhase == ipsec.RotatePhaseDraining {
 			if link.RuntimeRole == photonstate.LinkRuntimeStaged {
-				metric = spec.MetricBase
+				metric = base
 			} else {
-				metric = spec.MetricDraining
+				metric = drainingMetric
 			}
 		}
 		if previous := metrics[link.InterfaceName]; metric > previous {

@@ -14,7 +14,7 @@ func BirdObservationForInterface(instanceID, probeID, iface string, observed *bi
 		return obs
 	}
 	for _, n := range observed.Neighbors {
-		if n.Interface != iface {
+		if n.Interface != iface || n.Metric >= bird.BabelInfinity {
 			continue
 		}
 		obs.Neighbor = true
@@ -26,7 +26,7 @@ func BirdObservationForInterface(instanceID, probeID, iface string, observed *bi
 		}
 	}
 	for _, r := range observed.Routes {
-		if r.Iface == iface && (strings.Contains(strings.ToLower(r.Protocol), "babel") || strings.Contains(strings.ToLower(r.Source), "babel")) {
+		if r.Iface == iface && r.Metric < bird.BabelInfinity && (strings.Contains(strings.ToLower(r.Protocol), "babel") || strings.Contains(strings.ToLower(r.Source), "babel")) {
 			obs.Route = true
 			if r.Metric > 0 && (obs.Metric == 0 || int(r.Metric) < obs.Metric) {
 				obs.Metric = int(r.Metric)

@@ -390,7 +390,7 @@ Phase 4 当前把端口作为独立公告对象建模，并支持固定/范围/c
 
 1. **入口端口公告层**：`ipsec/ports.current.generation` 表示远端应优先尝试的新入口端口；`previous[].valid_until` 只表示远端还能尝试旧入口端口，不保证本机 StrongSwan 单实例已经同时监听 old/current。真正的 inbound 入口无断切换仍需要后续 DNAT/redirect grace 或多 listener 能力。
 2. **XFRM 数据面预备层**：reconcile 发现远端 generation 变化后，派生 staged connection/CHILD_SA/interface，也就是“先并排试建的新链路”。primary/outbound 或 secondary-takeover owner 会主动建立 staged generation；`inbound` / `secondary-standby` 只加载 responder/trap staged config，不主动拨号。
-3. **双 running 与迁流量层**：下一轮 reconcile 通过 VICI `list-sas` 观测到 staged SA established 后进入 `dual_running`。此时 old 使用 `metric_base`、staged 使用 `metric_staged`，仍优先旧路径；当 staged 健康探测与 Babel neighbor 就绪后进入 `draining`，切换为 old=`metric_draining`、staged=`metric_base`。旧 generation 默认按 `overlays[].reconcile.rotate_retention` 保留 1h；保留窗口内 secondary-standby 不会因 takeover delay 到期而抢拨。最终 `RotateCutoverReady` 仍要求 staged selected route 已收敛，即使 retention 到期也不会提前清旧 generation；若 staged 健康或 neighbor 回退，状态返回 `dual_running` 并恢复旧路径优先。
+3. **双 running 与迁流量层**：下一轮 reconcile 通过 VICI `list-sas` 观测到 staged SA established 后进入 `dual_running`。此时新接口默认使用两倍 `metric_base`。当 staged 健康探测与 Babel neighbor 就绪后进入 `draining`，改由旧接口使用两倍基础值。实际选路仍受 ETX 和 RTT 影响。旧 generation 默认按 `overlays[].reconcile.rotate_retention` 保留 1h，保留窗口内 secondary-standby 不会因 takeover delay 到期而抢拨。保留期到期后，`RotateCutoverReady` 还要求 staged 已学到路由且本机没有路由继续选择旧接口。若 staged 健康或 neighbor 回退，状态返回 `dual_running`。
 4. **回滚和清理层**：staged SA 在 prepare deadline 前未建立则 `rollback_rotate`，只清 staged artifacts、保留旧 generation 并进入 backoff；retention 到期且 route manager 已允许 cutover，或旧 SA 已不存在且 staged SA 已 established，则 `commit_rotate` promote staged generation 并清理旧 connection/interface。
 
 endpoint 改变由外层 reconcile 先归类：如果 ContactPoint 地址/DNS 解析结果变化但 port generation 不变，它是普通 desired spec 变化，走 `update` / `repair`，不进入 rotate 子状态机；如果 endpoint 改变同时伴随 `ipsec/ports.current.generation` 改变，则新的 endpoint 会进入 staged spec，rotate 子状态机用这条候选新链路测试新地址/端口，旧链路在 testing/retention 窗口内保持可用。
@@ -437,8 +437,6 @@ routing:
       pid_file: /run/photon/bird-photon.pid
       table: main
       metric_base: 32
-      metric_staged: 1200
-      metric_draining: 2400
       rtt_cost: 1024
       rtt_min: 10ms
       rtt_max: 500ms

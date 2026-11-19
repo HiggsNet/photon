@@ -58,6 +58,47 @@ func TestParseConfigExampleYAML(t *testing.T) {
 	}
 }
 
+func TestDaemonWarnsAboutRotationMetricOverrides(t *testing.T) {
+	t.Setenv("PHOTON_LOG_LEVEL", "warn")
+	config := defaultAppConfig()
+	if err := parseConfigYAML(`
+routing:
+  instances:
+    - id: staged-override
+      metric_staged: 1200
+    - id: draining-override
+      metric_draining: 2400
+    - id: automatic
+    - id: automatic-explicit
+      metric_staged: 0
+      metric_draining: 0
+`, config); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(t.TempDir(), "photon.log")
+	config.Log = logConfig{Mode: "file", File: logPath}
+	daemon := newDaemon(config, nil, 0, nil)
+	t.Cleanup(func() { _ = daemon.Close() })
+
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs := string(logData)
+	if strings.Count(logs, "event=rotation_metric_override") != 2 || strings.Contains(logs, "instance=automatic") {
+		t.Fatalf("expected warnings only for explicit nonzero overrides:\n%s", logs)
+	}
+	for _, field := range []string{
+		"instance=staged-override", "metric_staged=1200",
+		"instance=draining-override", "metric_draining=2400",
+		"Remove metric_staged and metric_draining",
+	} {
+		if !strings.Contains(logs, field) {
+			t.Errorf("warnings omit %q:\n%s", field, logs)
+		}
+	}
+}
+
 func TestLoadAppConfigRejectsMissingExplicitConfig(t *testing.T) {
 	missingPath := filepath.Join(t.TempDir(), "missing.yaml")
 	t.Setenv("PHOTON_CONFIG", missingPath)

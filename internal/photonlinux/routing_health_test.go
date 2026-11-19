@@ -21,3 +21,14 @@ func TestBirdObservationAcceptsUnselectedBabelRouteOnStagedInterface(t *testing.
 		t.Fatalf("observation = %+v, want neighbor and unselected staged route", obs)
 	}
 }
+
+func TestBirdObservationRejectsUnreachableNeighborAndRoute(t *testing.T) {
+	observed := &bird.BirdObservation{
+		Neighbors: []bird.BirdNeighbor{{Interface: "phx-new", Metric: bird.BabelInfinity, Routes: 1}},
+		Routes:    []bird.BirdRoute{{Iface: "phx-new", Protocol: "babel1", Metric: bird.BabelInfinity}},
+	}
+	obs := BirdObservationForInterface("link-1", "link-1#staged", "phx-new", observed)
+	if obs.Neighbor || obs.Route {
+		t.Fatalf("unreachable staged link reported ready: %+v", obs)
+	}
+}

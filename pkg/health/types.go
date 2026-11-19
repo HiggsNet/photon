@@ -160,4 +160,6 @@ type BabelObservation struct {
 	RTT        time.Duration
 	Metric     int
 	Route      bool
+	// OldRouteSelected is set while the current generation still carries a route.
+	OldRouteSelected bool
 }

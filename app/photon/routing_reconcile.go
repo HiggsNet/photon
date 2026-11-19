@@ -365,12 +365,28 @@ func (d *Daemon) recordBirdHealthObservationForLinks(instances map[string]ipsec.
 	if d.health == nil || d.health.Manager == nil || observed == nil {
 		return
 	}
+	retiringInterfaces := make(map[string]string)
+	for _, inst := range instances {
+		if inst.StagedInterfaceName != "" {
+			retiringInterfaces[inst.StagedInterfaceName] = inst.InterfaceName
+		}
+	}
+	if len(retiringInterfaces) == 0 {
+		return
+	}
+	selectedInterfaces := make(map[string]bool)
+	for _, route := range observed.Routes {
+		if route.Selected && route.Iface != "" && route.Metric < bird.BabelInfinity {
+			selectedInterfaces[route.Iface] = true
+		}
+	}
 	for _, link := range buildLinkOutputs(instances, reconcile) {
 		if link.RuntimeRole != "staged" || link.InterfaceName == "" || !photonlinux.LinkOutputBelongsToBirdInstance(link, netnsName, overlays) {
 			continue
 		}
 		instanceID := strings.TrimSuffix(link.ID, "#staged")
 		obs := photonlinux.BirdObservationForInterface(instanceID, healthProbeID(instanceID, "staged"), link.InterfaceName, observed)
+		obs.OldRouteSelected = selectedInterfaces[retiringInterfaces[link.InterfaceName]]
 		d.health.SetBabelObservation(obs)
 	}
 }

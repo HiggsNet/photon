@@ -589,20 +589,11 @@ instances:
 	if inst.Bird.MetricBase != 32 {
 		t.Fatalf("inst.MetricBase = %d, want 32", inst.Bird.MetricBase)
 	}
-	if inst.Bird.MetricStaged != 1200 {
-		t.Fatalf("inst.MetricStaged = %d, want 1200", inst.Bird.MetricStaged)
-	}
-	if inst.Bird.MetricDraining != 2400 {
-		t.Fatalf("inst.MetricDraining = %d, want 2400", inst.Bird.MetricDraining)
+	if inst.Bird.MetricStaged != 0 || inst.Bird.MetricDraining != 0 {
+		t.Fatalf("default rotation should leave both receive-cost overrides unset: %+v", inst.Bird)
 	}
 	if inst.Bird.BabelRTTCost != bird.DefaultBabelRTTCost || inst.Bird.BabelRTTMin != bird.DefaultBabelRTTMin || inst.Bird.BabelRTTMax != bird.DefaultBabelRTTMax || inst.Bird.BabelRTTDecay != bird.DefaultBabelRTTDecay {
 		t.Fatalf("inst default RTT tuning = cost %d min %s max %s decay %d", inst.Bird.BabelRTTCost, inst.Bird.BabelRTTMin, inst.Bird.BabelRTTMax, inst.Bird.BabelRTTDecay)
-	}
-	if inst.Bird.MetricBase+inst.Bird.BabelRTTCost >= inst.Bird.MetricStaged {
-		t.Fatalf("normal metric plus max RTT penalty must stay below staged metric")
-	}
-	if inst.Bird.MetricStaged+inst.Bird.BabelRTTCost >= inst.Bird.MetricDraining {
-		t.Fatalf("staged metric plus max RTT penalty must stay below draining metric")
 	}
 	if inst.Bird.BabelHelloInterval != bird.DefaultBabelHelloInterval || inst.Bird.BabelUpdateInterval != bird.DefaultBabelUpdateInterval {
 		t.Fatalf("inst default Babel intervals = hello %s update %s", inst.Bird.BabelHelloInterval, inst.Bird.BabelUpdateInterval)
