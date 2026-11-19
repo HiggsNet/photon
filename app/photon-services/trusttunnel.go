@@ -28,6 +28,7 @@ import (
 )
 
 const defaultMihomoImage = "metacubex/mihomo:v1.19.34"
+const trustTunnelCongestionController = "bbr"
 
 type trustTunnelConfig struct {
 	Publish    publishConfig     `yaml:"publish"`
@@ -203,12 +204,30 @@ func renderTrustTunnel(manifest resolvedManifest) error {
 	}
 	for _, endpoint := range s.Endpoints {
 		compose.Networks[endpoint.Network] = composeNetwork{Name: manifest.Networks[endpoint.Network].Name, External: true}
-		compose.Services[endpoint.Network] = composeService{Image: image, Restart: "unless-stopped", Networks: map[string]composeServiceAttachment{endpoint.Network: attachmentForAddress(endpoint.Address)}, Command: []string{"-d", "/etc/mihomo", "-f", "/etc/mihomo/config.yaml"}, Volumes: []string{"./config.yaml:/etc/mihomo/config.yaml:ro", "./tls:/etc/mihomo/tls:ro"}}
+		compose.Services[endpoint.Network] = composeService{
+			Image:    image,
+			Restart:  "unless-stopped",
+			Networks: map[string]composeServiceAttachment{endpoint.Network: attachmentForAddress(endpoint.Address)},
+			Command:  []string{"-d", "/etc/mihomo", "-f", "/etc/mihomo/config.yaml"},
+			Volumes:  []string{"./config.yaml:/etc/mihomo/config.yaml:ro", "./tls:/etc/mihomo/tls:ro"},
+			// Compose recreates the service when the algorithm in the mounted config changes.
+			Labels: map[string]string{"io.photon.trusttunnel.congestion-controller": trustTunnelCongestionController},
+		}
 	}
 	if err := writeYAML(filepath.Join(dir, "docker-compose.yml"), compose); err != nil {
 		return err
 	}
-	config := mihomoProxyConfig(s.Resolver, map[string]any{"name": "photon-trusttunnel", "type": "trusttunnel", "listen": "::", "port": s.Port, "network": []string{"udp"}, "certificate": "/etc/mihomo/tls/server.crt", "private-key": "/etc/mihomo/tls/server.key", "users": []any{map[string]string{"username": service.TrustTunnelUser, "password": ""}}})
+	config := mihomoProxyConfig(s.Resolver, map[string]any{
+		"name":                  "photon-trusttunnel",
+		"type":                  "trusttunnel",
+		"listen":                "::",
+		"port":                  s.Port,
+		"network":               []string{"udp"},
+		"certificate":           "/etc/mihomo/tls/server.crt",
+		"private-key":           "/etc/mihomo/tls/server.key",
+		"users":                 []any{map[string]string{"username": service.TrustTunnelUser, "password": ""}},
+		"congestion-controller": trustTunnelCongestionController,
+	})
 	if err := writeYAMLMode(filepath.Join(dir, "config.yaml"), config, 0o600); err != nil {
 		return err
 	}

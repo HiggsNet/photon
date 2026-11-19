@@ -43,6 +43,7 @@ type composeService struct {
 	Networks map[string]composeServiceAttachment `yaml:"networks"`
 	Command  []string                            `yaml:"command,omitempty"`
 	Volumes  []string                            `yaml:"volumes,omitempty"`
+	Labels   map[string]string                   `yaml:"labels,omitempty"`
 }
 
 type composeServiceAttachment struct {

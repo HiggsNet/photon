@@ -129,6 +129,8 @@ HTTP/SOCKS5 省略 `allow_zones` 表示显式 unrestricted；TrustTunnel 必须�
 
 用户名 `photon`、空密码是公开协议标识，入口权限依靠 Photon/IPsec 和 endpoint ACL。客户端固定 `quic:true`、`udp:true`，校验指纹并绑定 Photon 适配器。HTTP/3 仍使用 TLS；UDP 采用可靠 stream 封装，不是 QUIC DATAGRAM，丢包可能等待重传。路径须放行 UDP，当前没有 HTTP/2 回退。
 
+TrustTunnel 监听器默认使用 Mihomo 的 QUIC BBR 拥塞控制，作用于服务端发往客户端的流量。已有部署重新生成配置并执行 Compose `up` 时会重建 TrustTunnel 容器，沿用原来的证书和指纹。
+
 ## NixOS 部署
 
 `services.photon.serviceDeployment.settings` 直接映射 YAML。三个 `enable` 默认从非空 block 推断，也可分别设置 `http.enable`、`socks5.enable`、`trusttunnel.enable`；全部关闭时仅管理网络。

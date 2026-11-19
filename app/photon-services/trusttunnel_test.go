@@ -42,6 +42,20 @@ func TestTrustTunnelRenderPreservesTLSIdentity(t *testing.T) {
 	if len(network) != 1 || network[0] != "udp" || listener["type"] != "trusttunnel" {
 		t.Fatal(listener)
 	}
+	if listener["congestion-controller"] != "bbr" {
+		t.Fatalf("TrustTunnel listener must use BBR: %v", listener)
+	}
+	data, err = os.ReadFile(filepath.Join(v.OutputDir, "trusttunnel", "docker-compose.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var compose composeFile
+	if err := yaml.Unmarshal(data, &compose); err != nil {
+		t.Fatal(err)
+	}
+	if compose.Services["main"].Labels["io.photon.trusttunnel.congestion-controller"] != "bbr" {
+		t.Fatal("Compose service must detect the switch to BBR")
+	}
 	if config["proxies"].([]any)[0].(map[string]any)["ip-version"] != "ipv4-prefer" || config["dns"].(map[string]any)["ipv6"] != true {
 		t.Fatal("IPv4 preference must preserve IPv6 fallback", config)
 	}
