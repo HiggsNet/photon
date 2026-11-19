@@ -18,6 +18,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
+	"github.com/HiggsNet/photon/pkg/service"
 )
 
 const (
@@ -55,6 +56,7 @@ type controlRequest struct {
 	IPAM        *ipamMutationRequest     `json:"ipam,omitempty"`
 	Route       *routeMutationRequest    `json:"route,omitempty"`
 	Service     *serviceMutationRequest  `json:"service,omitempty"`
+	Proxy       *service.ProxyMutation   `json:"proxy,omitempty"`
 	Ping        *pingdebug.Options       `json:"ping,omitempty"`
 }
 

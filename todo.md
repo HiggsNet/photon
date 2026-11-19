@@ -427,7 +427,7 @@ B6 仍单独覆盖睡眠恢复、物理断网、崩溃恢复、长时间稳定�
 - Photon 唯一拥有 Gossip、身份、可信状态和 bbolt；代理核心与前端不直接打开 Photon 数据库，不另建 Gossip 或并行连接状态机。代理业务不经过控制 IPC 或 Photon 控制事件循环。
 - Photon TUN 承载授权内网 IPv4/IPv6，Mihomo TUN 承接需要代理分流的应用流量；到内网 SOCKS5 endpoint 的连接经 Photon，到 Photon 公网对端的外层通信经实际网络出口。代理可以依赖 Photon，Photon 引导及建隧道不能反向依赖该代理。
 - `photon-services` 继续生成服务端 GOST/Compose 部署 artifact 并发布服务；客户端消费现有 `service.socks5.v1` 生成 Mihomo 配置，不把服务端 manifest 直接作为客户端订阅。
-- [Photon Proxy 草案](docs/photon-proxy-design.md) 的独立七层转发与代理链仍是另一项尚未实现的能力；本节先直接使用已发布的 SOCKS5 服务，不以该草案落地为前提。
+- [Photon Proxy](docs/photon-proxy.md) 已有七层转发和可信端点目录，多跳代理链仍见 [设计草案](docs/photon-proxy-design.md)。本节直接使用已发布的 SOCKS5 服务。
 - 首版面向 Windows；单 TUN 数据面融合、Android、多级应用层代理链与 Windows SRv6 不作为首版前置条件。原 B6 的未完成验收继续保留。
 
 ### D0. 先拆分 Windows 后台与原生 GUI

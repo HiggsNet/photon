@@ -1,18 +1,18 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"net"
+	"net/netip"
 	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/trusttunnel"
 	service "github.com/HiggsNet/photon/pkg/service"
 )
 
@@ -23,15 +23,8 @@ func trustTunnelUDPExchange(endpoint resolvedEndpoint, name, cert string, target
 	if len(payload) > 65535 || target.IP.To16() == nil || target.Port < 1 || target.Port > 65535 {
 		return nil, errors.New("invalid trusttunnel UDP target or payload")
 	}
-	frame := make([]byte, 41+len(payload))
-	binary.BigEndian.PutUint32(frame, uint32(len(frame)-4))
-	if v4 := target.IP.To4(); v4 != nil {
-		copy(frame[34:38], v4)
-	} else {
-		copy(frame[22:38], target.IP.To16())
-	}
-	binary.BigEndian.PutUint16(frame[38:40], uint16(target.Port))
-	copy(frame[41:], payload)
+	targetIP, _ := netip.AddrFromSlice(target.IP)
+	destination := netip.AddrPortFrom(targetIP.Unmap(), uint16(target.Port))
 	address := endpoint.Address
 	if strings.Contains(address, ":") {
 		address = "[" + address + "]"
@@ -39,7 +32,7 @@ func trustTunnelUDPExchange(endpoint resolvedEndpoint, name, cert string, target
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	auth := base64.StdEncoding.EncodeToString([]byte(service.TrustTunnelUser + ":"))
-	cmd := exec.CommandContext(ctx, "curl", "--noproxy", "*", "--http3-only", "--silent", "--show-error", "--fail", "--no-buffer", "--cacert", cert, "--resolve", fmt.Sprintf("%s:%d:%s", name, endpoint.Port, address), "--request", "CONNECT", "--request-target", "_udp2", "--header", "Proxy-Authorization: Basic "+auth, "--upload-file", ".", fmt.Sprintf("https://%s:%d/", name, endpoint.Port))
+	cmd := exec.CommandContext(ctx, "curl", "--noproxy", "*", "--http3-only", "--silent", "--show-error", "--fail", "--no-buffer", "--cacert", cert, "--resolve", fmt.Sprintf("%s:%d:%s", name, endpoint.Port, address), "--request", "CONNECT", "--request-target", trusttunnel.UDPAuthority, "--header", "Proxy-Authorization: Basic "+auth, "--upload-file", ".", fmt.Sprintf("https://%s:%d/", name, endpoint.Port))
 	input, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -52,27 +45,19 @@ func trustTunnelUDPExchange(endpoint resolvedEndpoint, name, cert string, target
 		return nil, err
 	}
 	defer func() { input.Close(); cancel(); _ = cmd.Wait() }()
-	if _, err := input.Write(frame); err != nil {
+	if err := trusttunnel.WriteRequest(input, trusttunnel.Datagram{
+		Source: netip.AddrPortFrom(netip.IPv4Unspecified(), 0), Destination: destination, Payload: payload,
+	}); err != nil {
 		return nil, err
 	}
-	header := make([]byte, 40)
-	if _, err := io.ReadFull(output, header); err != nil {
+	response, err := trusttunnel.ReadResponse(output)
+	if err != nil {
 		return nil, fmt.Errorf("HTTP/3 UDP response: %w (context: %v)", err, ctx.Err())
 	}
-	length := int(binary.BigEndian.Uint32(header[:4])) - 36
-	if length < 0 || length > 65535 {
-		return nil, errors.New("invalid trusttunnel UDP response length")
-	}
-	source := net.IP(header[4:20])
-	if bytes.Equal(header[4:16], make([]byte, 12)) {
-		source = net.IP(header[16:20])
-	}
-	if !source.Equal(target.IP) || int(binary.BigEndian.Uint16(header[20:22])) != target.Port {
+	if response.Source != destination {
 		return nil, errors.New("trusttunnel UDP response source mismatch")
 	}
-	response := make([]byte, length)
-	_, err = io.ReadFull(output, response)
-	return response, err
+	return response.Payload, nil
 }
 
 func checkTrustTunnelUDPDNS(endpoint resolvedEndpoint, name, cert string, resolver resolverConfig) error {

@@ -364,6 +364,9 @@ func applyLocalIntentCandidate(candidate *VerifiedState, intent LocalIntent, now
 		out.Record, changed, err = applyWithdrawHTTPIntent(candidate, now)
 	case WithdrawTrustTunnelIntent:
 		out.Record, changed, err = applyWithdrawTrustTunnelIntent(candidate, now)
+	case ProxyCapabilityIntent:
+		out.Record, changed, err = applyProxyCapabilityIntent(candidate, typed, now)
+		securityPriority = typed.Mutation.Record == nil
 	case PutDelegationIntent:
 		out.Delegation, changed, err = applyPutDelegationIntent(candidate, typed, now)
 		if changed != "" {

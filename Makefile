@@ -4,6 +4,8 @@ BINARY_NAME := photon
 MAIN_PACKAGE := ./app/photon
 SERVICES_BINARY_NAME := photon-services
 SERVICES_MAIN_PACKAGE := ./app/photon-services
+PROXY_BINARY_NAME := photon-proxy
+PROXY_MAIN_PACKAGE := ./app/photon-proxy
 PHOTON_WINDOWS_BINARY_NAME := photon-windows.exe
 PHOTON_WINDOWS_MAIN_PACKAGE := ./app/photon-windows
 PHOTON_WINDOWS_GUI_BINARY_NAME := photon-windows-gui.exe
@@ -55,7 +57,8 @@ build:
 	@mkdir -p $(BUILD_DIR)
 	$(GO_ENV) $(GO) build -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME) $(MAIN_PACKAGE)
 	$(GO_ENV) $(GO) build -o $(BUILD_DIR)/$(SERVICES_BINARY_NAME) $(SERVICES_MAIN_PACKAGE)
-	@echo "Built: $(BUILD_DIR)/$(BINARY_NAME) and $(BUILD_DIR)/$(SERVICES_BINARY_NAME)"
+	$(GO_ENV) $(GO) build -o $(BUILD_DIR)/$(PROXY_BINARY_NAME) $(PROXY_MAIN_PACKAGE)
+	@echo "Built: $(BUILD_DIR)/$(BINARY_NAME), $(BUILD_DIR)/$(SERVICES_BINARY_NAME), $(BUILD_DIR)/$(PROXY_BINARY_NAME)"
 
 clean:
 	@rm -rf $(BUILD_DIR)
@@ -140,6 +143,7 @@ photon-windows-test:
 install:
 	$(GO_ENV) $(GO) install $(MAIN_PACKAGE)
 	$(GO_ENV) $(GO) install $(SERVICES_MAIN_PACKAGE)
+	$(GO_ENV) $(GO) install $(PROXY_MAIN_PACKAGE)
 
 install-script-check:
 	@sh -n contrib/install.sh contrib/update.sh contrib/photon-admin
@@ -954,7 +958,7 @@ chunk-fallback-smoke: build
 
 help:
 	@echo "Available targets:"
-	@echo "  build   - Build the photon binary to $(BUILD_DIR)/"
+	@echo "  build   - Build photon, photon-services, and photon-proxy to $(BUILD_DIR)/"
 	@echo "  clean   - Remove build artifacts"
 	@echo "  test    - Run all tests"
 	@echo "  fmt     - Format Go source code"

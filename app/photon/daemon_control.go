@@ -245,6 +245,24 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		writeControlResponse(conn, controlResponse{OK: true, Version: result.Version})
+	case "proxy_capability":
+		if request.Proxy == nil {
+			writeControlResponse(conn, controlError(errors.New("proxy_capability requires a proxy mutation")))
+			return
+		}
+		mutation, err := prepareProxyCapability(d.Config, *request.Proxy)
+		if err != nil {
+			writeControlResponse(conn, controlError(err))
+			return
+		}
+		result := d.enqueueEvent(ctx, daemonEvent{
+			Type: daemonEventCommonMutation, CommonIntent: corestate.ProxyCapabilityIntent{Mutation: mutation},
+		})
+		if result.Error != nil {
+			writeControlResponse(conn, controlError(result.Error))
+			return
+		}
+		writeControlResponse(conn, controlResponse{OK: true, Version: result.Version})
 	case "ipam_mutate":
 		if request.IPAM == nil {
 			writeControlResponse(conn, controlError(errors.New("ipam_mutate requires ipam request")))

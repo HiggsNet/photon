@@ -38,6 +38,7 @@ func validateGenericRecordIntent(intent PutRecordIntent) error {
 		"service.socks5.v1",
 		"service.trusttunnel.v1",
 		"service.http.v1",
+		"service.proxy.v1",
 		"ipsec.profile.v1",
 		"ipsec.addresses.v1",
 		"ipsec.ports.v1",

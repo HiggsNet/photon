@@ -2,6 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"net"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,6 +13,7 @@ import (
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
+	"github.com/HiggsNet/photon/pkg/service"
 )
 
 func TestDaemonSyncTriggerDoesNotWaitForTimerQueue(t *testing.T) {
@@ -101,8 +106,18 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 	rtB := &testApp{Config: defaultAppConfig(), Clock: func() time.Time { return now }}
 
 	serviceA := newTestDaemonFromOwners(rtA, verifiedA, nil, &photonlinux.LinuxState{}, configA, time.Second)
+	capability := service.ProxyCapability{
+		Active: true, ExpiresAt: now.Add(time.Hour), SPKI: strings.Repeat("0b", 32),
+		Address: "[2001:db8::7]:8443", Transport: service.ProxyTransport,
+	}
+	if _, err := serviceA.handleCommonRecordMutationEvent(corestate.ProxyCapabilityIntent{
+		Mutation: service.ProxyMutation{Record: &capability},
+	}, false); err != nil {
+		t.Fatal(err)
+	}
 	setTestGossipTransport(t, serviceA, transportA)
 	serviceB := newTestDaemonFromOwners(rtB, verifiedB, nil, &photonlinux.LinuxState{}, configB, time.Second)
+	serviceB.Config.ProxyDirectorySocket = filepath.Join(t.TempDir(), "proxy.sock")
 	setTestGossipTransport(t, serviceB, transportB)
 	clock := newFakeClock(now)
 	serviceA.gossipDriver.ResetScheduler(clock)
@@ -152,6 +167,24 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 	}
 	if latestB.State.Network.Zones["node-a.catofes."] == nil || latestB.State.Network.Zones["node-a.catofes."].Records["event-loop-test"] == nil {
 		t.Fatal("record from A did not appear on B")
+	}
+	stopDirectory, err := serviceB.startProxyDirectory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopDirectory()
+	conn, err := net.DialTimeout("unix", serviceB.Config.ProxyDirectorySocket, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(time.Second))
+	var directory service.ProxyDirectory
+	if err := json.NewDecoder(conn).Decode(&directory); err != nil {
+		t.Fatal(err)
+	}
+	if got := directory.Peers["node-a.catofes."]; got.Address != capability.Address || got.SPKI != capability.SPKI {
+		t.Fatalf("remote proxy discovery = %+v", got)
 	}
 }
 
