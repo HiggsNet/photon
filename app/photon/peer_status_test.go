@@ -209,6 +209,14 @@ func TestDerivePeerStatusConnectingWithNonUpLink(t *testing.T) {
 	if info.State != inspect.PeerStateConnecting {
 		t.Fatalf("state = %s, want connecting", info.State)
 	}
+
+	link := state.observationLinks["link-node-b"]
+	link.ActualState = ipsec.LinkStateWaitingInbound
+	state.observationLinks["link-node-b"] = link
+	info = peerStatusForTest(state, "node-b.catofes.", "node-b.catofes.", now, cfg)
+	if info.State != inspect.PeerStateWaitingInbound {
+		t.Fatalf("state = %s, want waiting_inbound", info.State)
+	}
 }
 
 func TestDerivePeerStatusStaleAfterThreshold(t *testing.T) {

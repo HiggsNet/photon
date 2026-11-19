@@ -348,8 +348,10 @@ func parseConnectionStates(event map[string]any) []ConnectionState {
 		state := ConnectionState{Name: name}
 		local, _ := body["local"].(map[string]any)
 		remote, _ := body["remote"].(map[string]any)
-		state.LocalIdentity = firstString(body["local-id"], body["local_id"], local["id"])
-		state.RemoteIdentity = firstString(body["remote-id"], body["remote_id"], remote["id"])
+		localAuth, _ := body["local-1"].(map[string]any)
+		remoteAuth, _ := body["remote-1"].(map[string]any)
+		state.LocalIdentity = firstString(body["local-id"], body["local_id"], localAuth["id"], local["id"])
+		state.RemoteIdentity = firstString(body["remote-id"], body["remote_id"], remoteAuth["id"], remote["id"])
 		state.RemoteEndpoint = firstConnectionRemoteEndpoint(body)
 		state.DPDDelay = uint32Value(body["dpd_delay"])
 		states = append(states, state)

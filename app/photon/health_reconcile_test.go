@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	photonstate "github.com/HiggsNet/photon/internal/state"
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/health"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -29,7 +31,7 @@ func TestHealthTargetsParseScopedNetNS(t *testing.T) {
 		}},
 	}
 
-	targets := healthTargets(buildLinkOutputs(links, reconcile), string(managedZone))
+	targets := healthTargets(buildLinkOutputs(links, reconcile), string(managedZone), false)
 	if len(targets) != 1 {
 		t.Fatalf("targets = %d, want 1", len(targets))
 	}
@@ -71,7 +73,7 @@ func TestHealthTargetsUseRotatedRuntimeInterface(t *testing.T) {
 		}},
 	}
 
-	targets := healthTargets(buildLinkOutputs(links, reconcile), string(managedZone))
+	targets := healthTargets(buildLinkOutputs(links, reconcile), string(managedZone), false)
 	if len(targets) != 2 {
 		t.Fatalf("targets = %d, want 2", len(targets))
 	}
@@ -121,7 +123,7 @@ func TestHealthTargetsUseObservedDesiredTunnelAddressesForActive(t *testing.T) {
 		}},
 	}
 
-	targets := healthTargets(buildLinkOutputs(links, reconcile), string(local))
+	targets := healthTargets(buildLinkOutputs(links, reconcile), string(local), false)
 	if len(targets) != 1 {
 		t.Fatalf("targets = %d, want 1", len(targets))
 	}
@@ -174,10 +176,58 @@ func TestHealthTargetsSkipRotateProbeWithoutObservedRuntimeTunnelAddresses(t *te
 		}},
 	}
 
-	targets := healthTargets(buildLinkOutputs(links, reconcile), string(local))
+	targets := healthTargets(buildLinkOutputs(links, reconcile), string(local), false)
 	if len(targets) != 0 {
 		t.Fatalf("targets = %+v, want no guessed rotate probes without observed runtime tunnel addrs", targets)
 	}
+}
+
+func TestReconcileHealthWaitsForEachInstalledChild(t *testing.T) {
+	now := time.Unix(100, 0)
+	d := &Daemon{
+		State: newState(nil, corestate.NewStoreWithCheckpoint(&corestate.VerifiedState{}, nil, nil, nil), nil),
+		clock: func() time.Time { return now },
+		health: &healthDriver{Manager: health.NewManager(
+			health.ProbeConfig{Interval: -time.Second, Burst: 1}, health.DefaultHysteresisConfig(), packetCountHealthProber{},
+		)},
+	}
+	link := ipsec.LinkInstance{
+		ID: "link-1", IKEName: "ike-old", XFRMIfID: 11, InterfaceName: "phx-old",
+		ActualState: ipsec.LinkStateConnecting, RemoteGeneration: 1,
+		LocalTunnelAddr: netip.MustParseAddr("fe80::1"), PeerTunnelAddr: netip.MustParseAddr("fe80::2"),
+	}
+	old := photonstate.LinkSAObservation{Name: "ike-old", IKEState: "ESTABLISHED", Established: true}
+	checkProbes := func(want []string, sas ...photonstate.LinkSAObservation) {
+		t.Helper()
+		d.linuxObservation.replaceIPsec(map[string]ipsec.LinkInstance{link.ID: link}, &ipsecObservationSummary{ActualSAs: sas})
+		if got := d.reconcileHealth(t.Context()); got != len(want) {
+			t.Fatalf("dispatched %d probes, want %v", got, want)
+		}
+		var got []string
+		for _, probe := range d.health.Snapshot(now) {
+			got = append(got, probe.ProbeID)
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("probes = %v, want %v", got, want)
+		}
+	}
+
+	checkProbes(nil, old)
+	link.ActualState = ipsec.LinkStateUp
+	checkProbes(nil, old) // IKE alone can already mark the link up.
+	old.ChildState, old.XFRMIfID = "INSTALLED", 11
+	checkProbes([]string{"link-1"}, old)
+
+	link.ActualState = ipsec.LinkStateConnecting // Preparing the new generation keeps the old SA.
+	link.StagedGeneration, link.StagedIKEName, link.StagedXFRMIfID = 2, "ike-new", 22
+	link.StagedInterfaceName = "phx-new"
+	link.StagedLocalTunnelAddr, link.StagedPeerTunnelAddr = netip.MustParseAddr("fe80::3"), netip.MustParseAddr("fe80::4")
+	staged := photonstate.LinkSAObservation{Name: "ike-new", XFRMIfID: 11, ChildState: "INSTALLED"}
+	checkProbes([]string{"link-1#old"}, old, staged)
+	staged.XFRMIfID = 22
+	checkProbes([]string{"link-1#old", "link-1#staged"}, old, staged)
+	checkProbes([]string{"link-1#staged"}, staged)
+	checkProbes(nil)
 }
 
 func TestConfigureHealthManagerUsesRealProber(t *testing.T) {

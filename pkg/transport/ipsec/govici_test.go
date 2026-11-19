@@ -820,10 +820,10 @@ func TestGoviciClientStreamsListConnections(t *testing.T) {
 		"ipsec-main-ab": map[string]any{
 			"remote_addrs": []string{"198.51.100.20"},
 			"remote_port":  "4500",
-			"local": map[string]any{
+			"local-1": map[string]any{
 				"id": "node-a.catofes.",
 			},
-			"remote": map[string]any{
+			"remote-1": map[string]any{
 				"id": "node-b.catofes.",
 			},
 		},

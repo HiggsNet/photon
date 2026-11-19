@@ -350,6 +350,8 @@ type LinkInstance struct {
 }
 ```
 
+纯被动接入的链路在 StrongSwan 配置和 XFRM 接口就绪后显示 `waiting_inbound`。周期检查在等待对端发起的同时验证本机资源。配置不匹配或本机资源缺失会触发更新或修复。
+
 ### Reconcile 主循环
 
 一次完整的 IPsec reconcile 由 `reconcileIPsecLinks`（`app/photon/ipsec_reconcile.go`）驱动。

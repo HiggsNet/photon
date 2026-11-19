@@ -7,15 +7,16 @@ import (
 )
 
 const (
-	PeerStateEligible     = "eligible"
-	PeerStateDiscovered   = "discovered"
-	PeerStateConnecting   = "connecting"
-	PeerStateActive       = "active"
-	PeerStateStale        = "stale"
-	PeerStateOffline      = "offline"
-	PeerStatePolicyDenied = "policy_denied"
-	PeerStateConfigError  = "config_error"
-	PeerStateRevoked      = "revoked"
+	PeerStateEligible       = "eligible"
+	PeerStateDiscovered     = "discovered"
+	PeerStateConnecting     = "connecting"
+	PeerStateWaitingInbound = "waiting_inbound"
+	PeerStateActive         = "active"
+	PeerStateStale          = "stale"
+	PeerStateOffline        = "offline"
+	PeerStatePolicyDenied   = "policy_denied"
+	PeerStateConfigError    = "config_error"
+	PeerStateRevoked        = "revoked"
 )
 
 // PeerLifecycleConfig holds stale/offline/cleanup thresholds. Zero values use
@@ -55,6 +56,7 @@ type PeerLifecycleInput struct {
 	ObservedLastSeenUnix int64
 	UpLinks              int
 	ActualLinks          int
+	WaitingInboundLinks  int
 	DesiredLinks         int
 	LastTransitionUnix   int64
 	Now                  time.Time
@@ -161,8 +163,13 @@ func BuildPeerLifecycleStatus(input PeerLifecycleInput) PeerStatusInfo {
 		return info
 	}
 	if input.ActualLinks > 0 {
-		info.State = PeerStateConnecting
-		info.Reason = "link_connecting"
+		if input.WaitingInboundLinks == input.ActualLinks {
+			info.State = PeerStateWaitingInbound
+			info.Reason = "awaiting_inbound_negotiation"
+		} else {
+			info.State = PeerStateConnecting
+			info.Reason = "link_connecting"
+		}
 		return info
 	}
 	if input.DesiredLinks > 0 {

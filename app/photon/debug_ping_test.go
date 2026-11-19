@@ -37,7 +37,7 @@ func pingDebugTargets(t *testing.T) []health.ProbeTarget {
 			{InstanceID: "link-c", GroupID: "g", PeerZone: zone.ZonePath("node-c."), LocalTunnelAddr: "fd00::1", PeerTunnelAddr: "fd00::2"},
 		},
 	}
-	return healthTargets(buildLinkOutputs(links, reconcile), string(managedZone))
+	return healthTargets(buildLinkOutputs(links, reconcile), string(managedZone), false)
 }
 
 func TestPingDebugTargetsIncludeActiveOldAndStagedRoles(t *testing.T) {

@@ -7,10 +7,16 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
+
+type ipsecChildSession struct {
+	ikeName  string
+	xfrmIfID uint32
+}
 
 // linkConsumerInputsEqual ignores diagnostics that cannot affect routing or
 // firewall policy. Rotation phase is separate from LinkOutput but controls
@@ -24,6 +30,7 @@ func linkConsumerInputsEqual(previous map[string]ipsec.LinkInstance, previousSum
 	return slices.EqualFunc(buildLinkOutputs(previous, previousSummary), buildLinkOutputs(current, currentSummary), func(a, b photonstate.LinkOutput) bool {
 		a.LastTransition, b.LastTransition = 0, 0
 		a.Endpoint, b.Endpoint = "", ""
+		a.Readiness.Session, b.Readiness.Session = "", ""
 		return a == b
 	})
 }
@@ -33,9 +40,15 @@ func linkConsumerInputsEqual(previous map[string]ipsec.LinkInstance, previousSum
 // action, rotate phase, or other lifecycle input.
 func buildLinkOutputs(instances map[string]ipsec.LinkInstance, reconcile *ipsecObservationSummary) []photonstate.LinkOutput {
 	desired := make(map[string][]photonstate.DesiredLinkObservation)
+	installedSessions := make(map[ipsecChildSession]string)
 	if reconcile != nil {
 		for _, item := range reconcile.Desired {
 			desired[item.InstanceID] = append(desired[item.InstanceID], item)
+		}
+		for _, sa := range reconcile.ActualSAs {
+			if sa.Name != "" && sa.XFRMIfID != 0 && strings.EqualFold(sa.ChildState, "INSTALLED") {
+				installedSessions[ipsecChildSession{sa.Name, sa.XFRMIfID}] = photonstate.LinkReadyReady
+			}
 		}
 	}
 	ids := sortedLinkInstanceIDs(instances)
@@ -48,6 +61,12 @@ func buildLinkOutputs(instances map[string]ipsec.LinkInstance, reconcile *ipsecO
 		}
 		for i, want := range wants {
 			base := newIPsecLinkOutput(inst, want)
+			// The SA snapshot precedes apply. A single runtime just put back into
+			// connecting may have replaced the SA that was in that snapshot.
+			// Staging preserves the old runtime, so check its own SA separately.
+			if inst.ActualState != ipsec.LinkStateConnecting || inst.StagedInterfaceName != "" {
+				base.Readiness.Session = cmp.Or(installedSessions[ipsecChildSession{inst.IKEName, inst.XFRMIfID}], photonstate.LinkReadyNotReady)
+			}
 			if len(wants) > 1 && base.PathKey == "" {
 				base.ID += "#path-" + strconv.Itoa(i)
 			}
@@ -72,6 +91,7 @@ func buildLinkOutputs(instances map[string]ipsec.LinkInstance, reconcile *ipsecO
 			staged.Generation = inst.StagedGeneration
 			staged.RuntimeRole = photonstate.LinkRuntimeStaged
 			staged.Endpoint = ""
+			staged.Readiness.Session = cmp.Or(installedSessions[ipsecChildSession{inst.StagedIKEName, inst.StagedXFRMIfID}], photonstate.LinkReadyNotReady)
 			staged.Readiness.Interface = interfaceReadiness(staged.InterfaceName, staged.State)
 			out = append(out, staged)
 		}
@@ -93,19 +113,24 @@ func newIPsecLinkOutput(inst ipsec.LinkInstance, desired photonstate.DesiredLink
 	}
 	netns := cmp.Or(scopedNetNS(desired.LocalTunnelAddr), scopedNetNS(desired.PeerTunnelAddr))
 	return photonstate.LinkOutput{
-		ID:             id,
-		GroupID:        cmp.Or(inst.GroupID, desired.GroupID),
-		PeerZone:       cmp.Or(inst.PeerZone, desired.PeerZone),
-		Provider:       cmp.Or(inst.TransportKind, ipsec.ProviderStrongSwan),
-		PathKey:        cmp.Or(inst.PathKey, desired.PathKey),
-		NetNS:          netns,
-		InterfaceName:  iface,
-		LocalAddr:      local,
-		PeerAddr:       peer,
-		Generation:     inst.RemoteGeneration,
-		RuntimeRole:    photonstate.LinkRuntimeActive,
-		State:          inst.ActualState,
-		Readiness:      baseLinkReadiness(inst.ActualState, iface),
+		ID:            id,
+		GroupID:       cmp.Or(inst.GroupID, desired.GroupID),
+		PeerZone:      cmp.Or(inst.PeerZone, desired.PeerZone),
+		Provider:      cmp.Or(inst.TransportKind, ipsec.ProviderStrongSwan),
+		PathKey:       cmp.Or(inst.PathKey, desired.PathKey),
+		NetNS:         netns,
+		InterfaceName: iface,
+		LocalAddr:     local,
+		PeerAddr:      peer,
+		Generation:    inst.RemoteGeneration,
+		RuntimeRole:   photonstate.LinkRuntimeActive,
+		State:         inst.ActualState,
+		Readiness: photonstate.LinkReadiness{
+			Session:   photonstate.LinkReadyNotReady,
+			Interface: interfaceReadiness(iface, inst.ActualState),
+			Routing:   photonstate.LinkReadyUnknown,
+			Health:    photonstate.LinkReadyUnknown,
+		},
 		Endpoint:       cmp.Or(inst.Endpoint, desired.Endpoint),
 		LastTransition: inst.LastTransition,
 	}
@@ -114,14 +139,6 @@ func newIPsecLinkOutput(inst ipsec.LinkInstance, desired photonstate.DesiredLink
 func parseScopedAddr(value string) netip.Addr {
 	addr, _ := netip.ParseAddr(stripScope(value))
 	return addr
-}
-
-func baseLinkReadiness(state, iface string) photonstate.LinkReadiness {
-	ready := photonstate.LinkReadiness{Session: photonstate.LinkReadyNotReady, Interface: interfaceReadiness(iface, state), Routing: photonstate.LinkReadyUnknown, Health: photonstate.LinkReadyUnknown}
-	if state == "up" {
-		ready.Session = photonstate.LinkReadyReady
-	}
-	return ready
 }
 
 func interfaceReadiness(iface, state string) string {

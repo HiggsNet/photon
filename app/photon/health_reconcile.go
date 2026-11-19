@@ -29,9 +29,12 @@ type healthDriver struct {
 
 // healthTargets derives health probe inputs from provider-neutral link
 // outputs. Linux-specific probe execution remains owned by photonlinux.
-func healthTargets(outputs []photonstate.LinkOutput, localZone string) []health.ProbeTarget {
+func healthTargets(outputs []photonstate.LinkOutput, localZone string, requireEstablished bool) []health.ProbeTarget {
 	targets := make([]health.ProbeTarget, 0, len(outputs))
 	for _, output := range outputs {
+		if requireEstablished && output.Readiness.Session != photonstate.LinkReadyReady {
+			continue
+		}
 		if !output.LocalAddr.IsValid() || !output.PeerAddr.IsValid() {
 			continue
 		}
@@ -121,7 +124,7 @@ func (d *Daemon) reconcileHealth(ctx context.Context) int {
 		localZone = view.State.ManagedZone.String()
 	}
 	links, reconcile := d.linuxObservation.ipsecSnapshot()
-	targets := healthTargets(buildLinkOutputs(links, reconcile), localZone)
+	targets := healthTargets(buildLinkOutputs(links, reconcile), localZone, true)
 	now := d.now()
 	d.health.SetTargets(targets, now)
 	return d.tickHealth(ctx, now)
@@ -260,7 +263,7 @@ func healthViewFromOwners(common corestate.View, links map[string]ipsec.LinkInst
 		}
 	}
 	if common.State != nil {
-		input.Targets = healthTargets(buildLinkOutputs(links, reconcile), string(common.State.ManagedZone))
+		input.Targets = healthTargets(buildLinkOutputs(links, reconcile), string(common.State.ManagedZone), false)
 	}
 	return inspect.BuildHealthView(input)
 }

@@ -17,15 +17,16 @@ import (
 )
 
 const (
-	LinkStatePending     = "pending"
-	LinkStateConfiguring = "configuring"
-	LinkStateConnecting  = "connecting"
-	LinkStateUp          = "up"
-	LinkStateDegraded    = "degraded"
-	LinkStateStale       = "stale"
-	LinkStateRemoving    = "removing"
-	LinkStateDown        = "down"
-	LinkStateError       = "error"
+	LinkStatePending        = "pending"
+	LinkStateConfiguring    = "configuring"
+	LinkStateConnecting     = "connecting"
+	LinkStateWaitingInbound = "waiting_inbound"
+	LinkStateUp             = "up"
+	LinkStateDegraded       = "degraded"
+	LinkStateStale          = "stale"
+	LinkStateRemoving       = "removing"
+	LinkStateDown           = "down"
+	LinkStateError          = "error"
 
 	ReconcileActionAdopt              = "adopt"
 	ReconcileActionCreate             = "create"
@@ -122,6 +123,7 @@ type ReconcileInputs struct {
 	Instances             map[string]LinkInstance
 	Connections           []ConnectionState
 	SAs                   []SAState
+	MissingXFRMLinks      map[string]TransportLinkSpec
 	Now                   time.Time
 	Revoked               map[zone.ZonePath]bool
 	Roles                 map[string]string
@@ -154,24 +156,25 @@ func NewLinkInstance(spec TransportLinkSpec, state string, now time.Time) LinkIn
 		state = LinkStatePending
 	}
 	inst := LinkInstance{
-		ID:              LinkInstanceID(spec),
-		GroupID:         spec.OverlayID,
-		PeerZone:        spec.PeerZone,
-		TransportKind:   spec.Provider,
-		LinkID:          LinkInstanceID(spec),
-		PathKey:         spec.PathKey,
-		TransportID:     spec.TransportID,
-		DesiredSpecHash: TransportLinkSpecHash(spec),
-		ActualState:     state,
-		InterfaceName:   spec.InterfaceName,
-		XFRMIfID:        spec.XFRMIfID,
-		LocalTunnelAddr: spec.LocalTunnelAddr,
-		PeerTunnelAddr:  spec.PeerTunnelAddr,
-		IKEName:         spec.TransportID,
-		ChildSAName:     ChildSAName(spec),
-		Endpoint:        endpointForSpec(spec),
-		LastTransition:  now.Unix(),
-		InitiatorRole:   spec.InitiatorRole,
+		ID:               LinkInstanceID(spec),
+		GroupID:          spec.OverlayID,
+		PeerZone:         spec.PeerZone,
+		TransportKind:    spec.Provider,
+		LinkID:           LinkInstanceID(spec),
+		PathKey:          spec.PathKey,
+		TransportID:      spec.TransportID,
+		DesiredSpecHash:  TransportLinkSpecHash(spec),
+		ActualState:      state,
+		InterfaceName:    spec.InterfaceName,
+		XFRMIfID:         spec.XFRMIfID,
+		LocalTunnelAddr:  spec.LocalTunnelAddr,
+		PeerTunnelAddr:   spec.PeerTunnelAddr,
+		IKEName:          spec.TransportID,
+		ChildSAName:      ChildSAName(spec),
+		Endpoint:         endpointForSpec(spec),
+		RemoteGeneration: spec.Generation,
+		LastTransition:   now.Unix(),
+		InitiatorRole:    spec.InitiatorRole,
 		Owner: ResourceOwner{
 			Manager:     "photon",
 			GroupID:     spec.OverlayID,
@@ -379,9 +382,9 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 	for _, spec := range in.Desired {
 		desiredByID[LinkInstanceID(spec)] = spec
 	}
-	connectionDPD := make(map[string]uint32, len(in.Connections))
+	connectionsByName := make(map[string]ConnectionState, len(in.Connections))
 	for _, conn := range in.Connections {
-		connectionDPD[conn.Name] = conn.DPDDelay
+		connectionsByName[conn.Name] = conn
 	}
 	for id, spec := range desiredByID {
 		existing, exists := result.Instances[id]
@@ -425,8 +428,10 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			}
 			continue
 		}
-		// Primary / outbound initiator path.
 		desiredGen := contactGeneration(spec)
+		connection := connectionsByName[spec.TransportID]
+		loaded := connectionMatchesSpec(connection, spec)
+		_, xfrmMissing := in.MissingXFRMLinks[id]
 		if !exists {
 			sa := findMatchingSA(in.SAs, spec)
 			inst := NewLinkInstance(spec, LinkStatePending, now)
@@ -434,7 +439,13 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 				inst.ActualState = LinkStateUp
 				inst.Endpoint = sa.Endpoint
 				result.add(ReconcileActionAdopt, &spec, &inst, "driver state already exists")
-			} else if hasMatchingConnection(in.Connections, spec) {
+			} else if role == "" && loaded && !xfrmMissing && connection.DPDDelay == mobikeDPDDelay(spec) {
+				inst.ActualState = LinkStateWaitingInbound
+				result.add(ReconcileActionAdopt, &spec, &inst, "responder configuration already loaded")
+			} else if role == "" && loaded {
+				inst.ActualState = LinkStateDegraded
+				result.add(ReconcileActionRepair, &spec, &inst, "responder local configuration incomplete")
+			} else if loaded {
 				inst.ActualState = LinkStateDegraded
 				result.add(ReconcileActionRepair, &spec, &inst, "loaded connection has no established sa")
 			} else {
@@ -478,8 +489,8 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 		specHash := TransportLinkSpecHash(spec)
 		// VICI reports DPD but not MOBIKE in list-conns. They are set together
 		// for managed connections, so a restart can detect an old policy.
-		dpd, observed := connectionDPD[existing.IKEName]
-		if existing.DesiredSpecHash != specHash || !rotateActive && observed && dpd != mobikeDPDDelay(spec) {
+		observedConn, observed := connectionsByName[existing.IKEName]
+		if existing.DesiredSpecHash != specHash || !rotateActive && observed && observedConn.DPDDelay != mobikeDPDDelay(spec) {
 			if inLinkBackoff(existing, now) {
 				result.add(ReconcileActionNoop, &spec, &existing, "apply backoff active")
 				continue
@@ -554,6 +565,29 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 		}
 		if inLinkBackoff(existing, now) {
 			result.add(ReconcileActionNoop, &spec, &existing, "apply backoff active")
+			continue
+		}
+		if role == "" && !sa.Established {
+			// An idle responder is healthy as long as its local configuration
+			// is loaded and its XFRM interface is intact.
+			inst := existing
+			if loaded && !xfrmMissing {
+				if inst.ActualState != LinkStateWaitingInbound {
+					inst = MarkLinkApplySuccess(inst, now)
+					inst.ActualState = LinkStateWaitingInbound
+					inst.Endpoint = ""
+				}
+				result.add(ReconcileActionNoop, &spec, &inst, "awaiting inbound negotiation")
+			} else {
+				inst.ActualState = LinkStateDegraded
+				inst.LastTransition = now.Unix()
+				reason := "responder connection configuration missing or mismatched"
+				if xfrmMissing {
+					reason = "responder xfrm interface missing or mismatched"
+				}
+				result.add(ReconcileActionRepair, &spec, &inst, reason)
+			}
+			result.Instances[id] = inst
 			continue
 		}
 		if (existing.ActualState == LinkStateConfiguring || existing.ActualState == LinkStateConnecting) && !sa.Established {
@@ -927,6 +961,17 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 			return
 		}
 		if !IsActiveInitiatorRole(stagedSpec.InitiatorRole) {
+			if initiatorRole == "" {
+				state, endpoint := LinkStateWaitingInbound, ""
+				if oldSA := findInstanceSA(sas, existing); oldSA.Established {
+					state, endpoint = LinkStateUp, oldSA.Endpoint
+				}
+				if existing.ActualState != state {
+					existing.ActualState, existing.Endpoint = state, endpoint
+					existing.LastTransition = now.Unix()
+					r.Instances[id] = existing
+				}
+			}
 			r.add(ReconcileActionNoop, &stagedSpec, &existing, "awaiting staged sa")
 			return
 		}
@@ -1107,6 +1152,11 @@ func RecordActionResult(instances map[string]LinkInstance, action ReconcileActio
 		if inst.InitiatorRole == InitiatorRoleSecondaryStandby ||
 			(action.Spec != nil && action.Spec.InitiatorRole == InitiatorRoleSecondaryStandby) {
 			inst.ActualState = LinkStateDown
+		} else if action.Spec != nil && action.Spec.InitiatorRole == "" {
+			if action.Action != ReconcileActionPrepareRotate || inst.ActualState != LinkStateUp {
+				inst.ActualState = LinkStateWaitingInbound
+				inst.Endpoint = ""
+			}
 		} else {
 			inst.ActualState = LinkStateConnecting
 		}
@@ -1123,6 +1173,9 @@ func RecordActionResult(instances map[string]LinkInstance, action ReconcileActio
 	case ReconcileActionRollbackRotate, ReconcileActionCleanupRotate:
 		if action.Action == ReconcileActionRollbackRotate {
 			inst.ActualState = LinkStateConnecting
+			if action.Spec != nil && action.Spec.InitiatorRole == "" && inst.InitiatorRole == "" {
+				inst.ActualState = LinkStateConfiguring
+			}
 			inst.LastTransition = now.Unix()
 		}
 		inst.clearStaged(RotatePhaseIdle)
@@ -1642,13 +1695,16 @@ func findMatchingSA(states []SAState, spec TransportLinkSpec) SAState {
 
 func hasMatchingConnection(states []ConnectionState, spec TransportLinkSpec) bool {
 	for _, state := range states {
-		if state.Name == spec.TransportID &&
-			state.LocalIdentity == string(spec.LocalZone) &&
-			state.RemoteIdentity == string(spec.PeerZone) {
+		if connectionMatchesSpec(state, spec) {
 			return true
 		}
 	}
 	return false
+}
+
+func connectionMatchesSpec(state ConnectionState, spec TransportLinkSpec) bool {
+	return state.Name != "" && state.Name == spec.TransportID &&
+		state.LocalIdentity == string(spec.LocalZone) && state.RemoteIdentity == string(spec.PeerZone)
 }
 
 // RecoverObservedLinkInstance reconstructs an in-memory instance only when an
@@ -1690,7 +1746,11 @@ func RecoverObservedLinkInstance(spec TransportLinkSpec, group LinkGroupSpec, ge
 			continue
 		}
 		if hasMatchingConnection(connections, candidate) {
-			instance := NewLinkInstance(candidate, LinkStateConnecting, now)
+			linkState := LinkStateConnecting
+			if candidate.InitiatorRole == "" {
+				linkState = LinkStateWaitingInbound
+			}
+			instance := NewLinkInstance(candidate, linkState, now)
 			instance.RemoteGeneration = candidate.Generation
 			observed = append(observed, observedRuntime{spec: candidate, instance: instance})
 		}

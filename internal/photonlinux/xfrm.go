@@ -380,7 +380,7 @@ func shouldMaintainXFRMInstance(instance transportipsec.LinkInstance) bool {
 		return false
 	}
 	switch instance.ActualState {
-	case transportipsec.LinkStateUp, transportipsec.LinkStateConnecting, transportipsec.LinkStateConfiguring:
+	case transportipsec.LinkStateUp, transportipsec.LinkStateConnecting, transportipsec.LinkStateConfiguring, transportipsec.LinkStateWaitingInbound:
 		return true
 	default:
 		return false

@@ -140,7 +140,7 @@ func cmdDebug() *cli.Command {
 				Name:  "peers",
 				Usage: "Show dynamic peer management lifecycle status",
 				Description: "Display the derived lifecycle state of every known peer.\n" +
-					"States include: eligible, discovered, connecting, active, stale, offline, policy_denied, config_error, revoked.",
+					"States include: eligible, discovered, connecting, waiting_inbound, active, stale, offline, policy_denied, config_error, revoked.",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					return debugPeers(ctx)
 				},

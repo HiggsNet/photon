@@ -158,6 +158,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		Instances:             instances,
 		Connections:           connections,
 		SAs:                   sas,
+		MissingXFRMLinks:      missingXFRMLinks,
 		Now:                   now,
 		Revoked:               collectRevokedPeerZones(verified.Network, instances, common.Gossip, now),
 		Roles:                 plan.Roles,

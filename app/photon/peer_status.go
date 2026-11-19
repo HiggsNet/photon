@@ -39,8 +39,11 @@ func peerLifecycleInput(network *zone.NetworkState, checkpoint *corestate.Gossip
 			continue
 		}
 		input.ActualLinks++
-		if inst.ActualState == "up" {
+		switch inst.ActualState {
+		case ipsec.LinkStateUp:
 			input.UpLinks++
+		case ipsec.LinkStateWaitingInbound:
+			input.WaitingInboundLinks++
 		}
 		if inst.LastTransition > input.LastTransitionUnix {
 			input.LastTransitionUnix = inst.LastTransition

@@ -19,6 +19,8 @@ func TestLinkOutputsProjectIPsecRuntimeWithoutLifecycleState(t *testing.T) {
 			TransportKind:    ipsec.ProviderStrongSwan,
 			PathKey:          "family:ipv6",
 			ActualState:      "up",
+			IKEName:          "ike-a",
+			XFRMIfID:         42,
 			InterfaceName:    "phx0",
 			LocalTunnelAddr:  netip.MustParseAddr("fe80::1"),
 			PeerTunnelAddr:   netip.MustParseAddr("fe80::2"),
@@ -29,10 +31,13 @@ func TestLinkOutputsProjectIPsecRuntimeWithoutLifecycleState(t *testing.T) {
 		},
 	}
 
-	got := buildLinkOutputs(links, &ipsecObservationSummary{Desired: []photonstate.DesiredLinkObservation{{
-		InstanceID: "instance-a", LocalTunnelAddr: "fe80::1%phx0 netns=photon",
-		PeerTunnelAddr: "fe80::2%phx0 netns=photon",
-	}}})
+	got := buildLinkOutputs(links, &ipsecObservationSummary{
+		Desired: []photonstate.DesiredLinkObservation{{
+			InstanceID: "instance-a", LocalTunnelAddr: "fe80::1%phx0 netns=photon",
+			PeerTunnelAddr: "fe80::2%phx0 netns=photon",
+		}},
+		ActualSAs: []photonstate.LinkSAObservation{{Name: "ike-a", XFRMIfID: 42, ChildState: "INSTALLED"}},
+	})
 	if len(got) != 1 {
 		t.Fatalf("outputs = %d, want 1", len(got))
 	}

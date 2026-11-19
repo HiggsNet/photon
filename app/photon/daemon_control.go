@@ -396,7 +396,7 @@ func (d *Daemon) handleControlConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		links, reconcile := d.linuxObservation.ipsecSnapshot()
-		targets := healthTargets(buildLinkOutputs(links, reconcile), string(common.State.ManagedZone))
+		targets := healthTargets(buildLinkOutputs(links, reconcile), string(common.State.ManagedZone), false)
 		opts := pingdebug.Options{}
 		if request.Ping != nil {
 			opts = *request.Ping

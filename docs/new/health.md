@@ -100,14 +100,16 @@ rotate 期间同一条 link 存在两个 runtime 视角，health 用 `ProbeID` �
 
 ### 2.3 可探测状态
 
-`ProbeTarget.ShouldProbe()`（`pkg/health/types.go`）决定哪些 link 进入探测集合：
+Linux 后台探测要求 StrongSwan 观测到对应连接及 XFRM 接口 ID 的 `CHILD_SA` 已经 `INSTALLED`。轮换期间分别检查旧隧道和新隧道。健康状态页仍可显示尚未建立的链路，运维也可以显式执行 `photon debug ping`。
+
+满足上述条件的后台目标还要通过 `ProbeTarget.ShouldProbe()`（`pkg/health/types.go`）的状态检查。
 
 | LinkInstance 状态 | 可探测 |
 |---|---|
 | `connecting` / `up` / `degraded` / `stale` / `dual_running` / `staged` | 是 |
 | `pending` / `configuring` / `down` / `error` / `policy_denied` / `revoked` / `removing` 等 | 否 |
 
-不可探测的 target 在 `SetTargets` 时被直接剔除，其 window 与状态机记录全部重置。
+探测目标失去资格后，`SetTargets` 会移除其窗口和状态机记录。
 
 ### 2.4 健康状态
 

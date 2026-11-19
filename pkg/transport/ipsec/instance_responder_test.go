@@ -31,6 +31,84 @@ func TestRoleForSpecPreservesExplicitResponder(t *testing.T) {
 	}
 }
 
+func TestReconcileResponderWaitsForPeerWithoutReapplying(t *testing.T) {
+	now := time.Unix(1717171717, 0)
+	spec := TransportLinkSpec{
+		LocalZone: "gateway.catofes.", PeerZone: "client.catofes.", OverlayID: "ipsec-main",
+		TransportID: "ipsec-mobile", InterfaceName: "phx-mobile", XFRMIfID: 12, Generation: 1,
+	}
+	id := LinkInstanceID(spec)
+	inputs := ReconcileInputs{Desired: []TransportLinkSpec{spec}, Roles: map[string]string{id: ""}, Now: now}
+	driver := &DryRunDriver{}
+	created := ReconcileLinkInstances(inputs)
+	create := firstAction(created, ReconcileActionCreate)
+	if create == nil {
+		t.Fatalf("first pass = %+v, want create", created.Actions)
+	}
+	if _, err := ApplyReconcileAction(t.Context(), driver, driver, *create, NetNSSpec{}); err != nil {
+		t.Fatal(err)
+	}
+	RecordActionResult(created.Instances, *create, BackoffPolicy{}, now, nil)
+	initial := created.Instances[id]
+	if initial.ActualState != LinkStateWaitingInbound || len(driver.Initiated) != 0 {
+		t.Fatalf("after loading responder: state=%q initiated=%v", initial.ActualState, driver.Initiated)
+	}
+	inputs.Connections, _ = driver.ListConnections(t.Context())
+	inputs.Instances = created.Instances
+	inputs.Now = now.Add(24 * time.Hour)
+
+	waiting := ReconcileLinkInstances(inputs)
+	if len(waiting.Actions) != 1 || waiting.Actions[0].Action != ReconcileActionNoop || waiting.Instances[id] != initial {
+		t.Fatalf("offline responder changed after 24h: instance=%+v actions=%+v", waiting.Instances[id], waiting.Actions)
+	}
+
+	// An instance left in connecting by the old lifecycle converges to waiting.
+	legacy := initial
+	legacy.ActualState = LinkStateConnecting
+	inputs.Instances[id] = legacy
+	waiting = ReconcileLinkInstances(inputs)
+	if firstAction(waiting, ReconcileActionNoop) == nil || waiting.Instances[id].ActualState != LinkStateWaitingInbound {
+		t.Fatalf("legacy connecting responder = %+v actions=%+v", waiting.Instances[id], waiting.Actions)
+	}
+
+	// A restart can adopt the already loaded responder without a peer SA.
+	inputs.Instances = nil
+	recovered := ReconcileLinkInstances(inputs)
+	if firstAction(recovered, ReconcileActionAdopt) == nil || recovered.Instances[id].ActualState != LinkStateWaitingInbound {
+		t.Fatalf("recovered responder = %+v actions=%+v", recovered.Instances[id], recovered.Actions)
+	}
+
+	inputs.Instances = recovered.Instances
+	inputs.SAs = []SAState{{Name: spec.TransportID, Established: true, Endpoint: "192.0.2.2:4500"}}
+	connected := ReconcileLinkInstances(inputs)
+	if firstAction(connected, ReconcileActionAdopt) == nil || connected.Instances[id].ActualState != LinkStateUp {
+		t.Fatalf("inbound SA = %+v actions=%+v", connected.Instances[id], connected.Actions)
+	}
+	inputs.Instances, inputs.SAs = connected.Instances, nil
+	disconnected := ReconcileLinkInstances(inputs)
+	if got := disconnected.Instances[id]; firstAction(disconnected, ReconcileActionNoop) == nil || got.ActualState != LinkStateWaitingInbound || got.Endpoint != "" {
+		t.Fatalf("SA disappeared: instance=%+v actions=%+v", got, disconnected.Actions)
+	}
+
+	inputs.Instances = disconnected.Instances
+	for _, change := range []struct {
+		name string
+		edit func(*ReconcileInputs)
+	}{
+		{"missing configuration", func(in *ReconcileInputs) { in.Connections = nil }},
+		{"missing xfrm", func(in *ReconcileInputs) { in.MissingXFRMLinks = map[string]TransportLinkSpec{id: spec} }},
+	} {
+		t.Run(change.name, func(t *testing.T) {
+			broken := inputs
+			change.edit(&broken)
+			result := ReconcileLinkInstances(broken)
+			if repair := firstAction(result, ReconcileActionRepair); repair == nil || IsActiveInitiatorRole(repair.Spec.InitiatorRole) {
+				t.Fatalf("actions = %+v, want passive repair", result.Actions)
+			}
+		})
+	}
+}
+
 func TestReconcileResponderPortRotation(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
@@ -98,16 +176,21 @@ func TestReconcileResponderPortRotation(t *testing.T) {
 			if len(driver.Connections) != 1 || len(driver.Initiated) != 0 {
 				t.Fatalf("loaded = %d, initiated = %v, want one passive connection", len(driver.Connections), driver.Initiated)
 			}
+			RecordActionResult(result.Instances, *action, BackoffPolicy{}, now, nil)
 			staged := result.Instances[existing.ID]
-			if staged.IKEName != existing.IKEName || staged.StagedGeneration != 2 {
+			if staged.IKEName != existing.IKEName || staged.StagedGeneration != 2 || staged.ActualState != LinkStateUp {
 				t.Fatalf("instance = %+v, want old runtime retained and generation 2 staged", staged)
 			}
-			staged.RotatePhase = RotatePhaseTestingNew
 			inputs.Instances[existing.ID] = staged
 			inputs.Now = now.Add(10 * time.Second)
 			waiting := ReconcileLinkInstances(inputs)
 			if len(waiting.Actions) != 1 || waiting.Actions[0].Action != ReconcileActionNoop || waiting.Actions[0].Reason != "awaiting staged sa" {
 				t.Fatalf("actions = %+v, want responder to await peer negotiation", waiting.Actions)
+			}
+			inputs.SAs = nil
+			waiting = ReconcileLinkInstances(inputs)
+			if firstAction(waiting, ReconcileActionNoop) == nil || waiting.Instances[existing.ID].ActualState != LinkStateWaitingInbound {
+				t.Fatalf("old SA disappeared: instance=%+v actions=%+v", waiting.Instances[existing.ID], waiting.Actions)
 			}
 		})
 	}
