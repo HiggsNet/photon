@@ -101,6 +101,7 @@ func (m *meshRuntime) prepareRXDelivery(completion *dataplaneCompletion) (packet
 		m.failDelivery(p, err)
 	} else if accepted && device == nil {
 		m.noteSequence(p)
+		m.refreshRouteSelections(corestate.View{}, facts.now)
 	}
 	return device, pipeline
 }

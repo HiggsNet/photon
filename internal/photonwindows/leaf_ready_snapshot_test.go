@@ -36,7 +36,7 @@ func leafReadyPair(t *testing.T, f *pipelineFixture, messages []babel.Message) (
 	}
 	reference := *f.p
 	reference.policy = nil
-	reference.leaf, err = babel.NewLeaf(f.p.local, f.p.peer, f.p.routerID, 100)
+	reference.leaf, err = babel.NewLeaf(f.p.local, f.p.peer, f.p.routerID, babelReceiveCost)
 	if err != nil {
 		t.Fatal(err)
 	}

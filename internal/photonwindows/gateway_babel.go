@@ -15,6 +15,8 @@ import (
 
 var errPacketDeviceFull = errors.New("packet device receive ring full")
 
+const babelReceiveCost = 32
+
 // packetDevice is the delivery half of a packet device. Its bounded reader is
 // pumped by the same event loop through SubmitPacket; this owner starts no I/O
 // goroutine and never lets control packets enter the host stack.
@@ -48,7 +50,7 @@ func newGatewayBabelPipeline(tunnel *gatewayTunnel, device packetDevice, local, 
 			return nil, errors.New("Babel pipeline: invalid local address")
 		}
 	}
-	leaf, err := babel.NewLeaf(local, peer, id, 100)
+	leaf, err := babel.NewLeaf(local, peer, id, babelReceiveCost)
 	if err != nil {
 		return nil, err
 	}

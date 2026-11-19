@@ -63,7 +63,7 @@ protocol babel leaf_interop {
  randomize router id yes;
  ipv4 { import all; export all; };
  ipv6 { import all; export all; };
- interface "birdph" { type wireless; rxcost 100; hello interval 1 s; update interval 4 s; rtt cost 0; };
+ interface "birdph" { type wireless; rxcost 32; hello interval 1 s; update interval 4 s; rtt cost 0; };
 }
 CONF
   "$BIRD_BIN" -p -c /tmp/bird.conf

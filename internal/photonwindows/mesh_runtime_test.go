@@ -362,12 +362,17 @@ func meshRouteFixture(t *testing.T) (*meshRuntime, *gatewayPatternFixture) {
 
 func meshLearn(t *testing.T, p *meshPeer, view corestate.View, now time.Time, prefix string, metric uint16, source ...netip.Prefix) {
 	t.Helper()
+	meshLearnWithHello(t, p, view, now, prefix, metric, 1, 400, source...)
+}
+
+func meshLearnWithHello(t *testing.T, p *meshPeer, view corestate.View, now time.Time, prefix string, metric, seqno, interval uint16, source ...netip.Prefix) {
+	t.Helper()
 	pipeline := p.leaf.pipeline
 	update := babel.Message{Type: babel.TLVUpdate, Prefix: netip.MustParsePrefix(prefix), RouterID: [8]byte{2}, NextHop: pipeline.peer, Seqno: 7, Metric: metric, Interval: 1600}
 	if len(source) > 0 {
 		update.SourcePrefix = source[0]
 	}
-	payload, err := babel.Encode([]babel.Message{{Type: babel.TLVHello, Seqno: 1, Interval: 400}, {Type: babel.TLVIHU, Address: pipeline.local, Metric: 100, Interval: 400}, update})
+	payload, err := babel.Encode([]babel.Message{{Type: babel.TLVHello, Seqno: seqno, Interval: interval}, {Type: babel.TLVIHU, Address: pipeline.local, Metric: 100, Interval: interval}, update})
 	if err != nil {
 		t.Fatal(err)
 	}

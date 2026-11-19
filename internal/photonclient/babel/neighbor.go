@@ -9,6 +9,7 @@ import (
 const (
 	helloInterval = 4 * time.Second
 	helloWindow   = 16
+	etxLossScale  = 128
 )
 
 // Neighbor is the Babel control state of one authenticated point-to-point peer.
@@ -54,6 +55,7 @@ type NeighborBatch struct {
 	Replies  []Message
 	Updates  []Message
 	Requests []Message
+	cameUp   bool
 }
 
 func NewNeighbor(local, peer netip.Addr, receiveCost uint16) (*Neighbor, error) {
@@ -92,9 +94,8 @@ func (n *Neighbor) Cost(now time.Time) uint16 {
 	if received == 0 {
 		return MetricInfinity
 	}
-	// As in BIRD's wireless ETX mode, IHU already includes the reverse
-	// direction's loss estimate. Divide by our reception probability once.
-	return uint16(min(uint32(MetricInfinity), uint32(max(1, n.txCost))*expected/received))
+	// The peer's IHU already includes loss in the reverse direction.
+	return etxCost(max(1, n.txCost), received, expected)
 }
 func (n *Neighbor) heard(now time.Time) bool {
 	return now.Before(n.hello[0].expires) || now.Before(n.hello[1].expires)
@@ -111,10 +112,17 @@ func (n *Neighbor) reception(now time.Time) (received, expected uint32) {
 func (n *Neighbor) ihu(now time.Time) Message {
 	metric := MetricInfinity
 	if received, expected := n.reception(now); received != 0 {
-		metric = uint16(min(uint32(MetricInfinity), uint32(n.rxCost)*expected/received))
+		metric = etxCost(n.rxCost, received, expected)
 	}
 	return Message{Type: TLVIHU, Address: n.peer, Metric: metric, Interval: uint16(helloInterval / (10 * time.Millisecond))}
 }
+
+// Apply the loss weight only to excess ETX, as in patched BIRD wireless mode.
+func etxCost(cost uint16, received, expected uint32) uint16 {
+	penalty := uint32(max(cost, etxLossScale)) * (expected - received) / received
+	return uint16(min(uint32(MetricInfinity), uint32(cost)+penalty))
+}
+
 func hold(interval uint16) time.Duration {
 	return time.Duration(interval) * 10 * time.Millisecond * 7 / 2
 }
@@ -183,7 +191,8 @@ func (n *Neighbor) Receive(packet []byte, now time.Time) (NeighborBatch, error) 
 		batch.Replies = append(batch.Replies, n.ihu(now))
 	}
 	isUp := n.Cost(now) != MetricInfinity
-	if isUp && !wasUp {
+	batch.cameUp = isUp && !wasUp
+	if batch.cameUp {
 		batch.Replies = append(batch.Replies, Message{Type: TLVRouteRequest, Wildcard: true})
 	}
 	for _, m := range messages {

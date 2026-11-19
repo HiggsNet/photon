@@ -3,7 +3,6 @@ package photonwindows
 import (
 	"context"
 	"errors"
-	"hash/fnv"
 	"log/slog"
 	"slices"
 	"strings"
@@ -31,6 +30,7 @@ type meshRuntime struct {
 	logger           *slog.Logger
 	peers            map[meshPath]*meshPeer
 	peerOrder        []*meshPeer
+	routeSelections  map[meshRouteKey]*meshRouteSelection
 	seqno            uint16
 	byData           map[*gatewayDataplane]*meshPeer
 	device           *meshDevice
@@ -419,6 +419,7 @@ func (m *meshRuntime) tick() error {
 			m.noteSequence(p)
 		}
 	}
+	m.refreshRouteSelections(corestate.View{}, time.Now())
 	return nil
 }
 
@@ -522,15 +523,16 @@ type meshChoice struct {
 }
 
 // Only locally originated packets enter selection. RFC 9079 destination then
-// source specificity precedes cost; a stable address hash spreads equal paths.
+// source specificity precedes metric and route hysteresis.
 func (m *meshRuntime) selectRoute(packet []byte, view corestate.View, now time.Time) meshChoice {
 	flow, ok := parseDataplaneFlow(packet)
 	source, destination := flow.source, flow.destination
 	if !ok || !businessAddress(source) || !businessAddress(destination) {
 		return meshChoice{}
 	}
-	var best meshChoice
-	var ties []meshChoice
+	var buf [4]meshChoice
+	choices := buf[:0]
+	bestDestination, bestSource := -1, -1
 	for _, p := range m.ordered() {
 		pipeline := p.leaf.pipeline
 		if pipeline == nil {
@@ -552,32 +554,20 @@ func (m *meshRuntime) selectRoute(packet []byte, view corestate.View, now time.T
 		if !ok {
 			continue
 		}
-		candidate := meshChoice{peer: p, facts: facts, route: route, flow: flow}
-		if best.peer == nil {
-			best = candidate
+		d, s := route.Destination.Bits(), max(0, route.Source.Bits())
+		if d < bestDestination || d == bestDestination && s < bestSource {
 			continue
 		}
-		r, b := route, best.route
-		d, s, bd, bs := r.Destination.Bits(), max(0, r.Source.Bits()), b.Destination.Bits(), max(0, b.Source.Bits())
-		if d < bd || d == bd && s < bs || d == bd && s == bs && r.Metric > b.Metric {
-			continue
+		if d > bestDestination || s > bestSource {
+			bestDestination, bestSource = d, s
+			choices = choices[:0]
 		}
-		if d > bd || s > bs || r.Metric < b.Metric {
-			best, ties = candidate, ties[:0]
-			continue
-		}
-		if len(ties) == 0 {
-			ties = append(ties, best)
-		}
-		ties = append(ties, candidate)
+		choices = append(choices, meshChoice{peer: p, facts: facts, route: route, flow: flow})
 	}
-	if len(ties) == 0 {
-		return best
+	if len(choices) == 0 {
+		return meshChoice{}
 	}
-	hash := fnv.New32a()
-	_, _ = hash.Write(source.AsSlice())
-	_, _ = hash.Write(destination.AsSlice())
-	return ties[int(hash.Sum32()%uint32(len(ties)))]
+	return m.chooseMeshRoute(choices, now)
 }
 
 // Recheck the attachment, SA and policy across concurrent control updates.

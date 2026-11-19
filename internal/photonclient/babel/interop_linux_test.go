@@ -49,7 +49,8 @@ func TestBIRDLeafInterop(t *testing.T) {
 	if err != nil || socketErr != nil {
 		t.Fatal(err, socketErr)
 	}
-	leaf, err := NewLeaf(neighborLocal, neighborPeer, [8]byte{0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0}, 100)
+	const baseCost, lossCost = 32, 74 // 32 + floor(128 * 4 / 12)
+	leaf, err := NewLeaf(neighborLocal, neighborPeer, [8]byte{0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0}, baseCost)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,11 +179,12 @@ func TestBIRDLeafInterop(t *testing.T) {
 	}
 	t.Log("BIRD Babel entries:\n" + entries)
 	// Lose one in four BIRD Hellos without touching the host network. Both
-	// directions must reflect this loss: the leaf divides by beta, while BIRD
-	// consumes the leaf's inflated IHU. RTT is disabled in this fixture.
+	// directions must reflect the leaf's loss penalty. BIRD consumes the
+	// inflated IHU while its own reception stays lossless. RTT is disabled.
 	dropHellos = true
 	if !pump(time.Now().Add(30*time.Second), func() bool {
-		if helloCount < 17 || leaf.neighbor.Cost(time.Now()) < 125 || leaf.neighbor.Cost(time.Now()) == MetricInfinity {
+		now := time.Now()
+		if helloCount < 17 || leaf.neighbor.Cost(now) != lossCost || leaf.neighbor.ihu(now).Metric != lossCost {
 			return false
 		}
 		for _, line := range strings.Split(birdc("show babel neighbors leaf_interop"), "\n") {
@@ -191,7 +193,7 @@ func TestBIRDLeafInterop(t *testing.T) {
 				continue
 			}
 			metric, e := strconv.Atoi(fields[2])
-			return e == nil && metric >= 125 && metric < int(MetricInfinity)
+			return e == nil && metric == lossCost
 		}
 		return false
 	}) {
@@ -200,12 +202,12 @@ func TestBIRDLeafInterop(t *testing.T) {
 	t.Logf("25%% Hello loss: leaf cost=%d IHU=%d\n%s", leaf.neighbor.Cost(time.Now()), leaf.neighbor.ihu(time.Now()).Metric, birdc("show babel neighbors leaf_interop"))
 	dropHellos = false
 	if !pump(time.Now().Add(25*time.Second), func() bool {
-		if leaf.neighbor.Cost(time.Now()) != 100 || leaf.neighbor.ihu(time.Now()).Metric != 100 {
+		if leaf.neighbor.Cost(time.Now()) != baseCost || leaf.neighbor.ihu(time.Now()).Metric != baseCost {
 			return false
 		}
 		for _, line := range strings.Split(birdc("show babel neighbors leaf_interop"), "\n") {
 			fields := strings.Fields(line)
-			if len(fields) >= 3 && fields[0] == neighborLocal.String() && fields[2] == "100" {
+			if len(fields) >= 3 && fields[0] == neighborLocal.String() && fields[2] == strconv.Itoa(baseCost) {
 				return true
 			}
 		}
@@ -213,7 +215,7 @@ func TestBIRDLeafInterop(t *testing.T) {
 	}) {
 		t.Fatalf("ETX did not recover after loss stopped: leaf=%d\n%s", leaf.neighbor.Cost(time.Now()), birdc("show babel neighbors leaf_interop"))
 	}
-	t.Log("ETX recovered to 100 in both directions")
+	t.Logf("ETX recovered to %d in both directions", baseCost)
 	// Explicit requests for learned destinations must produce only retractions.
 	req := Message{Type: TLVRouteRequest, Prefix: netip.MustParsePrefix("198.51.100.0/24")}
 	payload, _ := Encode([]Message{req})

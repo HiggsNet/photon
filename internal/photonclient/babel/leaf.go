@@ -21,6 +21,7 @@ type learnedRoute struct {
 	message          Message
 	expires, refresh time.Time
 	requested        bool
+	incarnation      uint64
 }
 
 // Leaf is one adjacency of a non-transit Babel speaker. It never advertises
@@ -35,6 +36,8 @@ type Leaf struct {
 	seqno                uint16
 	origins              []Origin
 	routes               map[Origin]learnedRoute
+	routeSerial          uint64
+	neighborEpoch        uint64
 	forwarding           *forwardingTable
 	nextUpdate, nextDump time.Time
 }
@@ -149,6 +152,9 @@ func (l *Leaf) Receive(packet []byte, now time.Time, authorize func(sadr.Route) 
 	if err != nil {
 		return nil, err
 	}
+	if batch.cameUp {
+		l.neighborEpoch++
+	}
 	defer l.refreshForwarding()
 	// Prune before insertion so expired or newly unauthorized entries cannot
 	// exhaust the bounded table.
@@ -181,8 +187,13 @@ func (l *Leaf) Receive(packet []byte, now time.Time, authorize func(sadr.Route) 
 		if !exists && len(l.routes) >= sadr.MaxRoutes {
 			continue
 		}
+		incarnation := old.incarnation
+		if !exists {
+			l.routeSerial++
+			incarnation = l.routeSerial
+		}
 		l.forwarding = nil
-		l.routes[o] = learnedRoute{message: m, expires: expires, refresh: now.Add(time.Duration(m.Interval) * 30 * time.Millisecond)}
+		l.routes[o] = learnedRoute{message: m, expires: expires, refresh: now.Add(time.Duration(m.Interval) * 30 * time.Millisecond), incarnation: incarnation}
 	}
 	out := batch.Replies
 	// Requests cannot turn learned routes into transit advertisements.
@@ -231,6 +242,27 @@ func (l *Leaf) pruneRoutes(now time.Time, authorize func(sadr.Route) bool) {
 func (l *Leaf) candidate(m Message, expires time.Time, now time.Time) sadr.Route {
 	metric := uint16(min(uint32(MetricInfinity), uint32(m.Metric)+uint32(l.neighbor.Cost(now))))
 	return sadr.Route{Destination: m.Prefix, Source: m.SourcePrefix, RouterID: m.RouterID, NextHop: m.NextHop, Metric: metric, ExpiresAt: expires}
+}
+
+// CandidateForOrigin reads one exact prefix pair from the installed table.
+// The owner still has to validate the attachment and its current policy.
+func (l *Leaf) CandidateForOrigin(origin Origin, now time.Time) (sadr.Route, bool) {
+	r, ok := l.routes[origin]
+	if !ok || !now.Before(r.expires) {
+		return sadr.Route{}, false
+	}
+	candidate := l.candidate(r.message, r.expires, now)
+	return candidate, candidate.Metric != MetricInfinity
+}
+
+// RouteIdentity identifies a continuous learned route on a live adjacency.
+type RouteIdentity struct {
+	neighborEpoch, incarnation uint64
+}
+
+// RouteIdentity changes when the route is relearned or the neighbor revives.
+func (l *Leaf) RouteIdentity(origin Origin) RouteIdentity {
+	return RouteIdentity{l.neighborEpoch, l.routes[origin].incarnation}
 }
 
 // Candidates returns detached feasible routes with current link cost and
