@@ -112,11 +112,13 @@ routing:
 	if inst.Bird.NetNSName != "photontesth2" {
 		t.Fatalf("inst.NetNS = %q, want resolved default photontesth2", inst.Bird.NetNSName)
 	}
-	if inst.Bird.ControlSocketPath != filepath.Join(config.DataDir, "bird", "bird-photontesth2.ctl") {
-		t.Fatalf("inst.ControlSocket = %q, want resolved-netns-derived path", inst.Bird.ControlSocketPath)
+	if filepath.Dir(inst.Bird.ControlSocketPath) != "/run/photon/bird" ||
+		inst.Bird.LegacyControlSocketPath != filepath.Join(config.DataDir, "bird", "bird-photontesth2.ctl") {
+		t.Fatalf("unexpected control paths: current=%q legacy=%q", inst.Bird.ControlSocketPath, inst.Bird.LegacyControlSocketPath)
 	}
-	if inst.Bird.PIDFilePath != filepath.Join(config.DataDir, "bird", "bird-photontesth2.pid") {
-		t.Fatalf("inst.PIDFile = %q, want resolved-netns-derived path", inst.Bird.PIDFilePath)
+	if filepath.Dir(inst.Bird.PIDFilePath) != "/run/photon/bird" ||
+		inst.Bird.LegacyPIDFilePath != filepath.Join(config.DataDir, "bird", "bird-photontesth2.pid") {
+		t.Fatalf("unexpected PID paths: current=%q legacy=%q", inst.Bird.PIDFilePath, inst.Bird.LegacyPIDFilePath)
 	}
 	if inst.Bird.ConfigPath != filepath.Join(config.DataDir, "bird", "bird-photontesth2.conf") {
 		t.Fatalf("inst.ConfigFile = %q, want resolved-netns-derived path", inst.Bird.ConfigPath)

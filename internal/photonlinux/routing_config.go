@@ -431,17 +431,29 @@ func parseRoutingInstance(yi RoutingInstanceYAML, netnsCfg NetNSConfig, dataDir 
 
 	configDir := filepath.Join(dataDir, "bird")
 	controlSocket := yi.ControlSocket
+	pidFile := yi.PIDFile
 	if controlSocket == "" {
 		controlSocket, err = defaultBirdControlSocketPath(configDir, netnsName)
 		if err != nil {
 			return RoutingInstance{}, err
 		}
-	} else if err := validateBirdControlSocketPath(controlSocket); err != nil {
-		return RoutingInstance{}, err
 	}
-	pidFile := yi.PIDFile
 	if pidFile == "" {
 		pidFile = filepath.Join(configDir, fmt.Sprintf("bird-%s.pid", netnsName))
+	}
+	var legacyControlSocket, legacyPIDFile string
+	if mode == ipsec.RoutingModeManaged && (yi.ControlSocket == "" || yi.PIDFile == "") {
+		legacyControlSocket, legacyPIDFile = controlSocket, pidFile
+		runtimeBase := defaultBirdRuntimeBase(configDir, netnsName)
+		if yi.ControlSocket == "" {
+			controlSocket = runtimeBase + ".ctl"
+		}
+		if yi.PIDFile == "" {
+			pidFile = runtimeBase + ".pid"
+		}
+	}
+	if err := validateBirdControlSocketPath(controlSocket); err != nil {
+		return RoutingInstance{}, err
 	}
 	configFile := yi.ConfigFile
 	if configFile == "" {
@@ -464,25 +476,27 @@ func parseRoutingInstance(yi RoutingInstanceYAML, netnsCfg NetNSConfig, dataDir 
 		RouterIDLabel:  yi.RouterIDLabel,
 		Upstream:       upstream,
 		Bird: bird.BirdInstanceSpec{
-			NetNS:               bird.NetNSSpec{Kind: spec.Kind, Name: spec.Name, Path: spec.Path, Create: spec.Create},
-			NetNSName:           netnsName,
-			Mode:                bird.BirdMode(mode),
-			ControlSocketPath:   controlSocket,
-			PIDFilePath:         pidFile,
-			ConfigPath:          configFile,
-			TableID:             tableID,
-			MetricBase:          metricBase,
-			MetricStaged:        metricStaged,
-			MetricDraining:      metricDraining,
-			BabelRTTCost:        rttCost,
-			BabelRTTMin:         rttMin,
-			BabelRTTMax:         rttMax,
-			BabelRTTDecay:       rttDecay,
-			BabelHelloInterval:  helloInterval,
-			BabelUpdateInterval: updateInterval,
-			ECMP:                ecmp,
-			ECMPLimit:           ecmpLimit,
-			InterfacePatterns:   []string{ifacePat},
+			NetNS:                   bird.NetNSSpec{Kind: spec.Kind, Name: spec.Name, Path: spec.Path, Create: spec.Create},
+			NetNSName:               netnsName,
+			Mode:                    bird.BirdMode(mode),
+			ControlSocketPath:       controlSocket,
+			PIDFilePath:             pidFile,
+			ConfigPath:              configFile,
+			LegacyControlSocketPath: legacyControlSocket,
+			LegacyPIDFilePath:       legacyPIDFile,
+			TableID:                 tableID,
+			MetricBase:              metricBase,
+			MetricStaged:            metricStaged,
+			MetricDraining:          metricDraining,
+			BabelRTTCost:            rttCost,
+			BabelRTTMin:             rttMin,
+			BabelRTTMax:             rttMax,
+			BabelRTTDecay:           rttDecay,
+			BabelHelloInterval:      helloInterval,
+			BabelUpdateInterval:     updateInterval,
+			ECMP:                    ecmp,
+			ECMPLimit:               ecmpLimit,
+			InterfacePatterns:       []string{ifacePat},
 		},
 	}, nil
 }
@@ -513,13 +527,16 @@ func defaultBirdControlSocketPath(configDir, netnsName string) (string, error) {
 		return path, nil
 	}
 
-	// A long data_dir can consume the entire sockaddr_un budget even after the
-	// filename is hashed. Managed BIRD already needs a runtime socket, so use a
-	// stable path below /run keyed by the complete desired path. Including the
-	// data-dir-derived path keeps concurrent isolated smoke runs distinct.
-	sum = sha256.Sum256([]byte(path))
-	path = filepath.Join("/run/photon/bird", fmt.Sprintf("bird-%x.ctl", sum[:8]))
-	return path, validateBirdControlSocketPath(path)
+	return defaultBirdRuntimeBase(configDir, netnsName) + ".ctl", nil
+}
+
+func defaultBirdRuntimeBase(configDir, netnsName string) string {
+	// Use the previous long-path fallback key to keep instances with distinct
+	// data directories isolated and to preserve that fallback's socket path.
+	nameHash := sha256.Sum256([]byte(netnsName))
+	path := filepath.Join(configDir, fmt.Sprintf("bird-%x.ctl", nameHash[:8]))
+	sum := sha256.Sum256([]byte(path))
+	return filepath.Join("/run/photon/bird", fmt.Sprintf("bird-%x", sum[:8]))
 }
 
 func validateBirdControlSocketPath(path string) error {

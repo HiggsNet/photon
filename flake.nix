@@ -687,8 +687,11 @@
                   RestartMode = "direct";
                   RestartSec = cfg.restartSec;
                   TimeoutStopSec = 30;
+                  # Photon owns the shutdown policy for managed BIRD instances.
+                  KillMode = "process";
                   RuntimeDirectory = "photon";
                   RuntimeDirectoryMode = "0700";
+                  RuntimeDirectoryPreserve = "yes";
                   UMask = "0077";
                   LimitNOFILE = 65536;
                   EnvironmentFile = cfg.environmentFiles;

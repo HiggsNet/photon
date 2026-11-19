@@ -2,7 +2,8 @@ package bird
 
 import (
 	"context"
-	"fmt"
+	"errors"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 type recordedCmd struct {
@@ -138,22 +141,19 @@ func TestExecProcessManagerStartNamedNetNS(t *testing.T) {
 	}
 }
 
-func TestExecProcessManagerStartRejectsExitAfterSocketAppears(t *testing.T) {
-	tmp := t.TempDir()
+func TestExecProcessManagerRequiresReadyDaemon(t *testing.T) {
 	pm := NewExecProcessManager(fakeBirdBinary(t))
 	pm.socketWaitTimeout = 100 * time.Millisecond
-
-	spec := managedSpec(tmp)
+	spec := managedSpec(t.TempDir())
 	spec.NetNS = NetNSSpec{Kind: "host"}
-	// Simulate BIRD creating its control socket before failing to parse the
-	// configuration. Start must not report this as a healthy daemon.
-	if err := os.WriteFile(spec.ControlSocketPath, []byte{}, 0o644); err != nil {
-		t.Fatalf("write socket: %v", err)
-	}
 
-	err := pm.Start(context.Background(), spec)
-	if err == nil || !strings.Contains(err.Error(), "exited during startup") {
-		t.Fatalf("Start error = %v, want startup exit", err)
+	// A successful launcher is insufficient. The daemon must be identified
+	// and answer on its own control socket.
+	if err := pm.Start(t.Context(), spec); err == nil || !strings.Contains(err.Error(), "readiness") {
+		t.Fatalf("Start error = %v, want readiness failure", err)
+	}
+	if pm.IsRunning(t.Context()) {
+		t.Fatal("successful launcher was reported as a managed BIRD")
 	}
 }
 
@@ -179,44 +179,44 @@ func TestExecProcessManagerStartRejectsOverlongControlSocketPath(t *testing.T) {
 	}
 }
 
-func TestExecProcessManagerStartAdoptsExistingPidfile(t *testing.T) {
-	for _, rejected := range []bool{false, true} {
-		t.Run(fmt.Sprintf("reload_rejected=%v", rejected), func(t *testing.T) {
-			commands := make(chan string, 1)
-			server := newFakeServer(t, func(cmd string) string {
-				commands <- cmd
-				if rejected {
-					return "8002 Configuration rejected\n0000 \n"
-				}
-				return "0002 Configuration OK\n0000 \n"
-			})
-			defer server.close()
-			mr := &mockRunner{}
-			pm := NewExecProcessManager(fakeBirdBinary(t))
-			pm.runner = mr.run
-			spec := managedSpec(t.TempDir())
-			spec.NetNS = NetNSSpec{Kind: "host"}
-			spec.ControlSocketPath = server.socket
-			if err := os.WriteFile(spec.PIDFilePath, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			err := pm.Start(context.Background(), spec)
-			if (err != nil) != rejected {
-				t.Fatalf("Start error = %v, rejected=%v", err, rejected)
-			}
-			select {
-			case got := <-commands:
-				if got != fmt.Sprintf("configure %q", spec.ConfigPath) {
-					t.Fatalf("adopt command = %q", got)
-				}
-			case <-time.After(time.Second):
-				t.Fatal("adopted BIRD did not reload configuration")
-			}
-			if pm.pid != os.Getpid() || len(mr.cmds) != 0 {
-				t.Fatalf("adoption spawned a process or lost PID: pid=%d commands=%+v", pm.pid, mr.cmds)
-			}
-		})
+func TestExecProcessManagerRejectsReusedPID(t *testing.T) {
+	spec := managedSpec(shortBirdTestDir(t))
+	spec.NetNS = NetNSSpec{Kind: "host"}
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: spec.ControlSocketPath, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
 	}
+	defer listener.Close()
+
+	if err := os.WriteFile(spec.PIDFilePath, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pm := NewExecProcessManager(fakeBirdBinary(t))
+	runner := &mockRunner{}
+	pm.runner = runner.run
+
+	if err := pm.Start(t.Context(), spec); err == nil || !strings.Contains(err.Error(), "without a matching PID file") {
+		t.Fatalf("Start error = %v, want active socket conflict", err)
+	}
+	if pm.IsRunning(t.Context()) || len(runner.cmds) != 0 {
+		t.Fatal("Start adopted the reused PID or launched a replacement over a live socket")
+	}
+	if err := pm.Stop(t.Context(), spec); err == nil {
+		t.Fatal("Stop accepted an unrelated process and socket")
+	}
+	if _, err := os.Stat(spec.PIDFilePath); err != nil {
+		t.Fatalf("Stop removed the PID file beside a live socket: %v", err)
+	}
+}
+
+func shortBirdTestDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "ph-bird-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
 }
 
 func TestEnsureNamedNetNSAcceptsExistingNamespace(t *testing.T) {
@@ -243,55 +243,75 @@ func TestEnsureNamedNetNSIncludesCommandOutputOnFailure(t *testing.T) {
 	}
 }
 
-func TestExecProcessManagerStopIssuesCorrectCommands(t *testing.T) {
-	tmp := t.TempDir()
-	spec := managedSpec(tmp)
-
-	// Create the managed files so Stop tries graceful shutdown and cleans up.
-	if err := os.WriteFile(spec.ConfigPath, []byte("# config"), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
+func TestExecProcessManagerStopPreservesLiveProcess(t *testing.T) {
+	spec := managedSpec(shortBirdTestDir(t))
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: spec.ControlSocketPath, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := os.WriteFile(spec.ControlSocketPath, []byte{}, 0o644); err != nil {
-		t.Fatalf("write socket: %v", err)
-	}
-	if err := os.WriteFile(spec.PIDFilePath, []byte("99999\n"), 0o644); err != nil {
-		t.Fatalf("write pidfile: %v", err)
+	listener.SetUnlinkOnClose(false)
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
 	}
 
-	mr := &mockRunner{
-		fallback: func(ctx context.Context, name string, args ...string) *exec.Cmd {
-			if name == "birdc" {
-				// Graceful shutdown fails.
-				return exec.CommandContext(ctx, "false")
-			}
-			return exec.CommandContext(ctx, "false")
-		},
+	cmd := exec.Command("sh", "-c", "kill -STOP $$; exec sleep 30")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	var status unix.WaitStatus
+	if _, err := unix.Wait4(cmd.Process.Pid, &status, unix.WUNTRACED, nil); err != nil || !status.Stopped() {
+		t.Fatalf("wait for process to stop: %v, status=%v", err, status)
+	}
+	pidfd, err := unix.PidfdOpen(cmd.Process.Pid, 0)
+	if err != nil {
+		t.Fatal(err)
 	}
 	pm := NewExecProcessManager("")
-	pm.runner = mr.run
-	pm.pid = 99999
-
-	if err := pm.Stop(context.Background(), spec); err != nil {
-		t.Fatalf("Stop failed: %v", err)
-	}
-
-	var foundShutdown bool
-	for _, cmd := range mr.cmds {
-		if cmd.name == "birdc" {
-			foundShutdown = true
-			want := []string{"-s", spec.ControlSocketPath, "down"}
-			if !slices.Equal(cmd.args, want) {
-				t.Errorf("expected birdc args %v, got %v", want, cmd.args)
-			}
+	pm.rememberProcess(spec, &birdProcess{pid: cmd.Process.Pid, pidfd: pidfd})
+	t.Cleanup(func() {
+		if pm.process != nil {
+			pm.process.close()
+		}
+	})
+	for path, contents := range map[string]string{
+		spec.ConfigPath:  "# config",
+		spec.PIDFilePath: strconv.Itoa(cmd.Process.Pid),
+	} {
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if !foundShutdown {
-		t.Errorf("expected birdc shutdown command, got %+v", mr.cmds)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	if err := pm.Stop(ctx, spec); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Stop error = %v, want deadline", err)
+	}
+	if !pm.IsRunning(t.Context()) {
+		t.Fatal("lost live process after Stop timeout")
+	}
+	for _, path := range []string{spec.ConfigPath, spec.ControlSocketPath, spec.PIDFilePath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("Stop timeout lost %s: %v", path, err)
+		}
 	}
 
-	for _, p := range []string{spec.ConfigPath, spec.ControlSocketPath, spec.PIDFilePath} {
-		if _, err := os.Stat(p); !os.IsNotExist(err) {
-			t.Errorf("expected %s to be removed", p)
+	if err := cmd.Process.Signal(unix.SIGCONT); err != nil {
+		t.Fatal(err)
+	}
+	if err := pm.Stop(t.Context(), spec); err != nil {
+		t.Fatalf("retry Stop: %v", err)
+	}
+	if pm.IsRunning(t.Context()) {
+		t.Fatal("process is still reported as running after Stop")
+	}
+	for _, path := range []string{spec.ConfigPath, spec.ControlSocketPath, spec.PIDFilePath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("expected %s to be removed after exit: %v", path, err)
 		}
 	}
 }
@@ -312,10 +332,6 @@ func TestExecProcessManagerStopSkipsCleanupWithoutOwnerTokens(t *testing.T) {
 	}
 
 	pm := NewExecProcessManager("")
-	pm.runner = (&mockRunner{fallback: func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, "false")
-	}}).run
-	pm.pid = 99999
 
 	if err := pm.Stop(context.Background(), spec); err != nil {
 		t.Fatalf("Stop failed: %v", err)
@@ -327,61 +343,74 @@ func TestExecProcessManagerStopSkipsCleanupWithoutOwnerTokens(t *testing.T) {
 	}
 }
 
-func TestExecProcessManagerIsRunning(t *testing.T) {
-	tmp := t.TempDir()
-	mr := &mockRunner{
-		fallback: func(ctx context.Context, name string, args ...string) *exec.Cmd {
-			if filepath.Base(name) == "bird" {
-				return exec.CommandContext(ctx, "sleep", "30")
-			}
-			return exec.CommandContext(ctx, "false")
-		},
+func TestExecProcessManagerDaemonLifecycle(t *testing.T) {
+	if os.Getenv("PHOTON_BIRD_SMOKE") != "1" {
+		t.Skip("set PHOTON_BIRD_SMOKE=1 to run the BIRD lifecycle smoke")
 	}
-	pm := NewExecProcessManager(fakeBirdBinary(t))
-	pm.runner = mr.run
-	pm.socketWaitTimeout = 100 * time.Millisecond
-
-	spec := managedSpec(tmp)
+	if _, err := exec.LookPath("bird"); err != nil {
+		t.Skip("BIRD is not installed")
+	}
+	spec := managedSpec(shortBirdTestDir(t))
 	spec.NetNS = NetNSSpec{Kind: "host"}
-
-	// Pre-create the socket so Start succeeds without a real BIRD daemon.
-	if err := os.WriteFile(spec.ControlSocketPath, []byte{}, 0o644); err != nil {
-		t.Fatalf("write socket: %v", err)
+	validConfig := []byte("router id 192.0.2.1;\nprotocol device {}\n")
+	if err := os.WriteFile(spec.ConfigPath, validConfig, 0o600); err != nil {
+		t.Fatal(err)
 	}
+	legacy := spec
+	legacy.PIDFilePath = filepath.Join(shortBirdTestDir(t), "old.pid")
+	legacy.ControlSocketPath = filepath.Join(filepath.Dir(legacy.PIDFilePath), "old.ctl")
 
-	if err := pm.Start(context.Background(), spec); err != nil {
-		t.Fatalf("Start failed: %v", err)
+	previous := NewExecProcessManager("")
+	t.Cleanup(func() { _ = previous.Stop(context.Background(), legacy) })
+	if err := previous.Start(t.Context(), legacy); err != nil {
+		t.Fatalf("start BIRD at legacy paths: %v", err)
 	}
-
-	managedPID := func() int {
-		pm.mu.Lock()
-		defer pm.mu.Unlock()
-		return pm.pid
-	}
-	t.Cleanup(func() {
-		if pid := managedPID(); pid > 0 {
-			if p, err := os.FindProcess(pid); err == nil {
-				_ = p.Kill()
-			}
-		}
-	})
-
-	if !pm.IsRunning(context.Background()) {
-		t.Fatal("expected process to be running")
-	}
-
-	proc, err := os.FindProcess(managedPID())
+	oldPID, err := readPidFile(legacy.PIDFilePath)
 	if err != nil {
-		t.Fatalf("find process: %v", err)
-	}
-	if err := proc.Kill(); err != nil {
-		t.Fatalf("kill process: %v", err)
+		t.Fatal(err)
 	}
 
-	// Wait for the goroutine that reaps the child process.
-	time.Sleep(100 * time.Millisecond)
+	spec.LegacyPIDFilePath = legacy.PIDFilePath
+	spec.LegacyControlSocketPath = legacy.ControlSocketPath
+	manager := NewExecProcessManager("")
+	t.Cleanup(func() { _ = manager.Stop(context.Background(), spec) })
+	if err := manager.Start(t.Context(), spec); err != nil {
+		t.Fatalf("start BIRD at new paths: %v", err)
+	}
+	if previous.IsRunning(t.Context()) {
+		t.Fatal("legacy BIRD survived migration")
+	}
+	pid, err := readPidFile(spec.PIDFilePath)
+	if err != nil || !manager.IsRunning(t.Context()) || pid == oldPID {
+		t.Fatalf("BIRD after migration: pid=%d, old PID=%d, error=%v", pid, oldPID, err)
+	}
+	for _, path := range []string{legacy.PIDFilePath, legacy.ControlSocketPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("legacy runtime path %s still exists: %v", path, err)
+		}
+	}
 
-	if pm.IsRunning(context.Background()) {
-		t.Fatal("expected process to be stopped")
+	restarted := NewExecProcessManager("")
+	t.Cleanup(func() { _ = restarted.Stop(context.Background(), spec) })
+	if err := os.WriteFile(spec.ConfigPath, []byte("invalid config\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.Start(t.Context(), spec); err == nil || restarted.IsRunning(t.Context()) {
+		t.Fatalf("rejected configuration was treated as a successful adoption: %v", err)
+	}
+	if err := os.WriteFile(spec.ConfigPath, validConfig, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.Start(t.Context(), spec); err != nil {
+		t.Fatalf("adopt after fixing configuration: %v", err)
+	}
+	if !restarted.IsRunning(t.Context()) || restarted.process.pid != pid {
+		t.Fatalf("restart failed to adopt the original BIRD process %d", pid)
+	}
+	if err := restarted.Stop(t.Context(), spec); err != nil {
+		t.Fatalf("stop adopted BIRD: %v", err)
+	}
+	if manager.IsRunning(t.Context()) {
+		t.Fatal("adopted BIRD did not exit")
 	}
 }

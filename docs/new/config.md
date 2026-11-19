@@ -323,7 +323,7 @@ routing:
 - Photon 始终为 Babel protocol 生成 `randomize router id`。全局 32-bit BIRD router ID 仍保持稳定；Babel 每次协议实例启动时只随机化其 64-bit origin ID 的高 32 位，避免 sequence number 重置后的 announce 被邻居当作旧更新。
 - 上述时长字段接受 Go duration 格式，精度至少为 `1ms` 且必须为整毫秒；ETX/RTT 参数只用于 mesh 接口，upstream veth 仅使用 Hello/Update 间隔。
 - `interface_pattern`：匹配本 instance 内 XFRM tunnel interface 的模式，默认 `phx*`。
-- 未指定 `control_socket`、`pid_file`、`config_file` 时，默认写到 `<data_dir>/bird/`。
+- 托管 BIRD 默认将 `control_socket` 和 `pid_file` 写入 `/run/photon/bird/`，文件名按数据目录和网络命名空间生成。`config_file` 默认写入 `<data_dir>/bird/`。显式指定的路径继续有效，`external` 实例的默认路径沿用原规则。
 - `upstream` 可让 Photon 创建 veth，把 routing instance 的 mesh netns 接到主网络或另一个 namespace。启用 `upstream` 后 `create_veth` 默认 true；`mesh.*` 描述 routing instance netns 端，`external.*` 描述 host/upstream 网络端，`external.netns` 省略或为空表示 init/main host netns。
 - `upstream.mode: static` 是默认模式；Photon 会在 mesh 侧把本节点 assigned prefix 指向 `mesh.interface`，并在 external/host 侧把远端授权 mesh 前缀指向 `external.interface`，使用本节点非 shared assigned prefix 的首个可用地址作为 route source；shared/Anycast prefix 不配置到 veth。
 - 默认接口名前缀按角色分离：StrongSwan/XFRM 使用 `phx*`，WireGuard device 使用 `phw*`，WG 路径 GRE 使用 `phg*`，veth 使用 `phv*`；默认 upstream 两端为 `phv2host` / `phv2mesh`。

@@ -76,7 +76,7 @@ func (r *LinuxDriver) StartBird(ctx context.Context, spec bird.BirdInstanceSpec)
 }
 
 func (r *LinuxDriver) StopBird(ctx context.Context, spec bird.BirdInstanceSpec) error {
-	manager := r.existingBirdProcessManager(spec.NetNSName)
+	manager := r.birdProcessManager(spec.NetNSName)
 	if manager == nil {
 		return nil
 	}
@@ -196,18 +196,6 @@ func (r *LinuxDriver) birdProcessManager(netns string) bird.ProcessManager {
 	manager := bird.NewExecProcessManager("")
 	r.birdProcesses[netns] = manager
 	return manager
-}
-
-func (r *LinuxDriver) existingBirdProcessManager(netns string) bird.ProcessManager {
-	if r == nil {
-		return nil
-	}
-	r.birdMu.Lock()
-	defer r.birdMu.Unlock()
-	if r.birdProcess != nil {
-		return r.birdProcess
-	}
-	return r.birdProcesses[netns]
 }
 
 func (r *LinuxDriver) birdClient(socketPath string, routeTables []string) BirdClient {

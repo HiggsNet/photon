@@ -415,10 +415,14 @@ authority/gossip 管理身份，不配置 overlays、routing instance 或 firewa
 
 managed BIRD 的退出行为由每个 routing instance 的 `shutdown_policy` 决定：
 
-- `persist`（默认）：保留 BIRD，重启后 adopt，减少路由中断。
+- `persist`（默认）：保留后台运行的 BIRD，重启后核对进程和控制 socket，应用当前配置后继续管理同一进程。
 - `stop`：优雅退出时停止 BIRD，适合实验环境。
 
-强制结束或崩溃时不保证执行 `stop`；遗留对象由下次启动按 ownership 检查和收敛。
+Photon 自带的 systemd unit 和 NixOS 模块使用 `KillMode=process` 和 `RuntimeDirectoryPreserve=yes`。systemd 只向 Photon 主进程发送停止信号，并保留 `/run/photon`，因此 `persist` 在服务重启和手动停止后都保留 BIRD。宿主机重启时 `/run` 会清空。自定义 unit 如需保留 BIRD，进程和运行目录需要使用相同的生命周期。
+
+仍在旧默认路径运行的托管实例在升级时会停启一次，以迁移 PID 文件和控制 socket。强制结束或崩溃时可能跳过 `stop`。优雅停止超时会保留仍在运行的 BIRD 和管理文件，供后续重试。
+
+托管 BIRD 使用 Linux pidfd 跟踪进程并发送停止信号，要求宿主内核支持 `pidfd_open` 和 `pidfd_send_signal`。
 
 ---
 

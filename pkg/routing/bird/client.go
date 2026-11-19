@@ -242,7 +242,7 @@ func readResponse(reader io.Reader) (string, error) {
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return string(data), nil
+				return string(data), io.ErrUnexpectedEOF
 			}
 			return string(data), err
 		}

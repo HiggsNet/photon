@@ -71,6 +71,10 @@ type BirdInstanceSpec struct {
 	PIDFilePath       string `yaml:"pid_file" json:"pid_file"`
 	ConfigPath        string `yaml:"config_path" json:"config_path"`
 
+	// Previous default runtime paths used to retire a persisted BIRD on upgrade.
+	LegacyControlSocketPath string `yaml:"-" json:"-"`
+	LegacyPIDFilePath       string `yaml:"-" json:"-"`
+
 	// Owner proves which Photon-managed runtime resources may be cleaned up
 	// during teardown. Empty tokens retain legacy process teardown but skip
 	// path/resource cleanup.

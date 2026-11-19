@@ -383,30 +383,33 @@ func TestParseRoutingInstanceShortensLongDefaultControlSocket(t *testing.T) {
 	if again.Bird.ControlSocketPath != instance.Bird.ControlSocketPath {
 		t.Fatalf("shortened control socket is not stable: %q != %q", again.Bird.ControlSocketPath, instance.Bird.ControlSocketPath)
 	}
-	if instance.Bird.PIDFilePath != filepath.Join(dataDir, "bird", "bird-"+netnsName+".pid") ||
+	if instance.Bird.LegacyPIDFilePath != filepath.Join(dataDir, "bird", "bird-"+netnsName+".pid") ||
 		instance.Bird.ConfigPath != filepath.Join(dataDir, "bird", "bird-"+netnsName+".conf") {
-		t.Fatal("non-socket BIRD paths were unexpectedly shortened")
+		t.Fatal("legacy PID and BIRD config paths changed")
 	}
 }
 
-func TestParseRoutingInstanceUsesRuntimeSocketWhenDataDirIsTooLong(t *testing.T) {
+func TestParseRoutingInstanceUsesRunForDefaultRuntimeFiles(t *testing.T) {
 	netns := NetNSConfig{Names: map[string]ipsec.NetNSSpec{
 		"default": {Kind: ipsec.NetNSName, Name: "photon-test"},
 	}}
-	longDataDir := filepath.Join("/tmp", strings.Repeat("d", bird.MaxControlSocketPathBytes))
-	instance, err := parseRoutingInstance(RoutingInstanceYAML{ID: "main"}, netns, longDataDir)
+	dataDir := "/var/lib/photon"
+	instance, err := parseRoutingInstance(RoutingInstanceYAML{ID: "main"}, netns, dataDir)
 	if err != nil {
-		t.Fatalf("parseRoutingInstance long data dir: %v", err)
+		t.Fatal(err)
 	}
-	if !strings.HasPrefix(instance.Bird.ControlSocketPath, "/run/photon/bird/bird-") || len(instance.Bird.ControlSocketPath) > bird.MaxControlSocketPathBytes {
-		t.Fatalf("runtime control socket = %q", instance.Bird.ControlSocketPath)
+	spec := instance.Bird
+	if filepath.Dir(spec.ControlSocketPath) != "/run/photon/bird" || len(spec.ControlSocketPath) > bird.MaxControlSocketPathBytes ||
+		spec.PIDFilePath != strings.TrimSuffix(spec.ControlSocketPath, ".ctl")+".pid" ||
+		spec.ConfigPath != "/var/lib/photon/bird/bird-photon-test.conf" {
+		t.Fatalf("unexpected BIRD paths: socket=%s pid=%s config=%s", spec.ControlSocketPath, spec.PIDFilePath, spec.ConfigPath)
 	}
-	other, err := parseRoutingInstance(RoutingInstanceYAML{ID: "main"}, netns, longDataDir+"-other")
+	other, err := parseRoutingInstance(RoutingInstanceYAML{ID: "main"}, netns, dataDir+"-other")
 	if err != nil {
 		t.Fatalf("parseRoutingInstance other long data dir: %v", err)
 	}
-	if other.Bird.ControlSocketPath == instance.Bird.ControlSocketPath {
-		t.Fatal("different data dirs produced the same runtime control socket")
+	if other.Bird.ControlSocketPath == spec.ControlSocketPath || other.Bird.PIDFilePath == spec.PIDFilePath {
+		t.Fatal("different data dirs produced overlapping BIRD runtime paths")
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,13 +42,12 @@ type ExecProcessManager struct {
 	birdBinary string
 	runner     func(ctx context.Context, cmd string, args ...string) *exec.Cmd
 
-	mu   sync.Mutex
-	pid  int
-	spec BirdInstanceSpec
-	exit *ProcessExit
+	mu      sync.Mutex
+	process *birdProcess
+	spec    BirdInstanceSpec
+	exit    *ProcessExit
 
-	// socketWaitTimeout is the maximum time to wait for the BIRD control
-	// socket to appear after Start. Exported for tests.
+	// socketWaitTimeout bounds the BIRD launch and readiness checks.
 	socketWaitTimeout time.Duration
 }
 
@@ -63,16 +63,16 @@ func NewExecProcessManager(birdBinary string) *ExecProcessManager {
 
 var _ ProcessManager = (*ExecProcessManager)(nil)
 
+const gracefulTimeout = 5 * time.Second
+
 // Start ensures the target netns exists and starts BIRD inside it.
 func (pm *ExecProcessManager) Start(ctx context.Context, spec BirdInstanceSpec) error {
 	if spec.Mode != BirdModeManaged {
 		return fmt.Errorf("bird process manager only supports mode %q, got %q", BirdModeManaged, spec.Mode)
 	}
-
 	if spec.NetNSName == "" {
 		return errors.New("bird instance netns_name is required")
 	}
-
 	for _, p := range []string{spec.ConfigPath, spec.ControlSocketPath, spec.PIDFilePath} {
 		if !filepath.IsAbs(p) {
 			return fmt.Errorf("bird path must be absolute: %s", p)
@@ -82,29 +82,48 @@ func (pm *ExecProcessManager) Start(ctx context.Context, spec BirdInstanceSpec) 
 		return fmt.Errorf("BIRD control socket path is %d bytes, exceeds Linux limit %d: %s", len(spec.ControlSocketPath), MaxControlSocketPathBytes, spec.ControlSocketPath)
 	}
 
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.observeExit()
+	if pm.process != nil {
+		if !sameBirdPaths(pm.spec, spec) {
+			return errors.New("another BIRD instance is already managed")
+		}
+		return pm.process.applyConfig(ctx, spec)
+	}
+
+	existing, err := pm.findProcess(spec)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		if err := existing.applyConfig(ctx, spec); err != nil {
+			existing.close()
+			return err
+		}
+		pm.rememberProcess(spec, existing)
+		return nil
+	}
 	binary, err := pm.resolveBinary()
 	if err != nil {
 		return err
 	}
 
-	if pm.adoptExisting(spec) {
-		return NewClient(spec.ControlSocketPath, 10*time.Second).Configure(ctx, spec.ConfigPath)
+	if legacy, ok := legacyBirdSpec(spec); ok {
+		if err := pm.retireLegacy(ctx, legacy); err != nil {
+			return err
+		}
 	}
-	if err := os.MkdirAll(filepath.Dir(spec.ControlSocketPath), 0o700); err != nil {
-		return fmt.Errorf("create BIRD control socket directory: %w", err)
+	if err := prepareBirdSocket(ctx, spec, true); err != nil {
+		return err
+	}
+	for _, path := range []string{spec.ControlSocketPath, spec.PIDFilePath} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return fmt.Errorf("create BIRD runtime directory: %w", err)
+		}
 	}
 
-	args := []string{
-		"-c", spec.ConfigPath,
-		"-s", spec.ControlSocketPath,
-		"-P", spec.PIDFilePath,
-	}
-
-	var cmd *exec.Cmd
-	switch spec.NetNS.Kind {
-	case "host":
-		cmd = pm.runner(ctx, binary, args...)
-	case "name":
+	if spec.NetNS.Kind == "name" {
 		if spec.NetNS.Name == "" {
 			return errors.New("netns name is required for named netns")
 		}
@@ -113,110 +132,150 @@ func (pm *ExecProcessManager) Start(ctx context.Context, spec BirdInstanceSpec) 
 				return fmt.Errorf("ensure netns %q: %w", spec.NetNS.Name, err)
 			}
 		}
+	}
+	startCtx, cancel := context.WithTimeout(ctx, pm.socketWaitTimeout)
+	defer cancel()
+	args := birdArgs(spec)
+	var cmd *exec.Cmd
+	switch spec.NetNS.Kind {
+	case "host":
+		cmd = pm.runner(startCtx, binary, args...)
+	case "name":
 		wrapped := append([]string{"netns", "exec", spec.NetNS.Name, binary}, args...)
-		cmd = pm.runner(ctx, "ip", wrapped...)
+		cmd = pm.runner(startCtx, "ip", wrapped...)
 	case "path":
 		return errors.New("path netns is not yet supported")
 	default:
 		return fmt.Errorf("unsupported netns kind %q", spec.NetNS.Kind)
 	}
 
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start bird: %w", err)
+	// Wait for the launcher. BIRD daemonizes, so only the process identified
+	// by the PID file and control socket is eligible to become ready.
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("BIRD launcher exited during startup: %w", err)
 	}
-
-	pm.mu.Lock()
-	pm.pid = cmd.Process.Pid
-	pm.spec = spec
-	pm.mu.Unlock()
-
-	startedPID := cmd.Process.Pid
-	go func() {
-		err := cmd.Wait()
-		pm.recordExitIfCurrent(startedPID, err)
-	}()
-
-	if err := pm.waitForSocket(ctx, spec.ControlSocketPath); err != nil {
-		_ = cmd.Process.Kill()
-		pm.resetState()
-		return fmt.Errorf("waiting for control socket: %w", err)
+	process, err := pm.waitForReady(startCtx, spec)
+	if err != nil {
+		return fmt.Errorf("waiting for BIRD readiness: %w", err)
 	}
-
-	// BIRD daemonizes and the original process (or the ip netns exec wrapper)
-	// exits. Read the real daemon PID from BIRD's pidfile so IsRunning/Stop
-	// target the correct process. The pidfile may be created empty before BIRD
-	// writes the PID, so retry briefly.
-	if daemonPID := pm.waitForPidFile(ctx, spec.PIDFilePath); daemonPID > 0 {
-		pm.mu.Lock()
-		pm.pid = daemonPID
-		pm.mu.Unlock()
-	}
-	if !pm.IsRunning(ctx) {
-		if exit := pm.LastExit(); exit != nil {
-			return fmt.Errorf("bird exited during startup: pid %d: %w", exit.PID, exit.Failure)
-		}
-		return errors.New("bird exited during startup")
-	}
-
+	pm.rememberProcess(spec, process)
 	return nil
+}
+
+func birdArgs(spec BirdInstanceSpec) []string {
+	return []string{"-c", spec.ConfigPath, "-s", spec.ControlSocketPath, "-P", spec.PIDFilePath}
+}
+
+func sameBirdPaths(a, b BirdInstanceSpec) bool {
+	return a.ConfigPath == b.ConfigPath && a.ControlSocketPath == b.ControlSocketPath && a.PIDFilePath == b.PIDFilePath
+}
+
+func legacyBirdSpec(spec BirdInstanceSpec) (BirdInstanceSpec, bool) {
+	if spec.LegacyControlSocketPath == "" || spec.LegacyPIDFilePath == "" {
+		return BirdInstanceSpec{}, false
+	}
+	spec.ControlSocketPath = spec.LegacyControlSocketPath
+	spec.PIDFilePath = spec.LegacyPIDFilePath
+	return spec, true
+}
+
+func (process *birdProcess) applyConfig(ctx context.Context, spec BirdInstanceSpec) error {
+	if err := process.verifyControlSocket(spec.ControlSocketPath); err != nil {
+		return err
+	}
+	if err := NewClient(spec.ControlSocketPath, 10*time.Second).Configure(ctx, spec.ConfigPath); err != nil {
+		return fmt.Errorf("configure existing BIRD process %d: %w", process.pid, err)
+	}
+	if process.exited() {
+		return fmt.Errorf("BIRD process %d exited during adoption", process.pid)
+	}
+	return nil
+}
+
+func (pm *ExecProcessManager) rememberProcess(spec BirdInstanceSpec, process *birdProcess) {
+	pm.process = process
+	pm.spec = spec
+	pm.exit = nil
+}
+
+func (pm *ExecProcessManager) retireLegacy(ctx context.Context, spec BirdInstanceSpec) error {
+	process, err := pm.findProcess(spec)
+	if err != nil {
+		return err
+	}
+	if process == nil {
+		return prepareBirdSocket(ctx, spec, false)
+	}
+	defer process.close()
+	if err := process.stop(ctx); err != nil {
+		return fmt.Errorf("stop legacy BIRD before moving runtime files: %w", err)
+	}
+	return cleanBirdFiles(ctx, spec, false)
 }
 
 // Stop gracefully stops the BIRD process and removes Photon-owned files.
 func (pm *ExecProcessManager) Stop(ctx context.Context, spec BirdInstanceSpec) error {
 	pm.mu.Lock()
-	pid := pm.pid
-	pm.mu.Unlock()
+	defer pm.mu.Unlock()
+	pm.observeExit()
+	if pm.process != nil && !sameBirdPaths(pm.spec, spec) {
+		return errors.New("cannot stop a different BIRD instance")
+	}
 
-	const gracefulTimeout = 5 * time.Second
-
-	// Graceful shutdown via birdc if the socket exists.
-	if fileExists(spec.ControlSocketPath) {
-		shutdownCtx, cancel := context.WithTimeout(ctx, gracefulTimeout)
-		defer cancel()
-
-		graceful := pm.runner(shutdownCtx, "birdc", "-s", spec.ControlSocketPath, "down")
-		if err := graceful.Run(); err == nil {
-			if waitForProcessExit(shutdownCtx, pid, gracefulTimeout) {
-				pm.clearManagedState(spec)
-				return nil
+	process := pm.process
+	if process == nil {
+		var err error
+		process, err = pm.findProcess(spec)
+		if err != nil {
+			return err
+		}
+		if process != nil {
+			defer process.close()
+		} else if legacy, ok := legacyBirdSpec(spec); ok {
+			if err := pm.retireLegacy(ctx, legacy); err != nil {
+				return err
 			}
 		}
 	}
-
-	// Fallback to SIGTERM if the process is still running.
-	if pid > 0 && processIsRunning(pid) {
-		proc, err := os.FindProcess(pid)
-		if err == nil {
-			_ = proc.Signal(syscall.SIGTERM)
-			_ = waitForProcessExit(ctx, pid, gracefulTimeout)
+	if process != nil {
+		if err := process.stop(ctx); err != nil {
+			return err
 		}
 	}
-
-	stillRunning := pid > 0 && processIsRunning(pid)
-	pm.clearManagedState(spec)
-	if stillRunning {
-		return fmt.Errorf("failed to stop bird process %d", pid)
+	if pm.process != nil {
+		pm.process.close()
+		pm.process = nil
+		pm.spec = BirdInstanceSpec{}
 	}
-	return nil
+	pm.exit = nil
+	return cleanBirdFiles(ctx, spec, true)
 }
 
 // IsRunning reports whether the currently managed BIRD process is alive.
-func (pm *ExecProcessManager) IsRunning(ctx context.Context) bool {
+func (pm *ExecProcessManager) IsRunning(_ context.Context) bool {
 	pm.mu.Lock()
-	pm.reapManagedProcessLocked()
-	pid := pm.pid
-	pm.mu.Unlock()
-	return pid > 0 && processIsRunning(pid)
+	defer pm.mu.Unlock()
+	pm.observeExit()
+	return pm.process != nil
 }
 
 // LastExit returns and clears the latest observed managed BIRD process exit.
 func (pm *ExecProcessManager) LastExit() *ProcessExit {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
-	pm.reapManagedProcessLocked()
+	pm.observeExit()
 	exit := pm.exit
 	pm.exit = nil
 	return exit
+}
+
+func (pm *ExecProcessManager) observeExit() {
+	if pm.process != nil && pm.process.exited() {
+		pm.exit = &ProcessExit{PID: pm.process.pid, Failure: errors.New("exited")}
+		pm.process.close()
+		pm.process = nil
+		pm.spec = BirdInstanceSpec{}
+	}
 }
 
 func (pm *ExecProcessManager) resolveBinary() (string, error) {
@@ -229,84 +288,88 @@ func (pm *ExecProcessManager) resolveBinary() (string, error) {
 	return findBirdBinary()
 }
 
-func (pm *ExecProcessManager) adoptExisting(spec BirdInstanceSpec) bool {
-	pid, err := readPidFile(spec.PIDFilePath)
-	if err != nil || pid <= 0 {
-		return false
+func cleanBirdFiles(ctx context.Context, spec BirdInstanceSpec, config bool) error {
+	removePID := birdResourceCleanupAllowed(spec.Owner, "pid_file")
+	removeSocket := birdResourceCleanupAllowed(spec.Owner, "control_socket")
+	removeConfig := config && birdResourceCleanupAllowed(spec.Owner, "config_file")
+	if !removePID && !removeSocket && !removeConfig {
+		return nil
 	}
-	if !processIsRunning(pid) || !fileExists(spec.ControlSocketPath) {
-		return false
+	if err := prepareBirdSocket(ctx, spec, true); err != nil {
+		return err
 	}
-	pm.mu.Lock()
-	pm.pid = pid
-	pm.spec = spec
-	pm.mu.Unlock()
-	return true
-}
-
-func (pm *ExecProcessManager) resetState() {
-	pm.mu.Lock()
-	pm.pid = 0
-	pm.spec = BirdInstanceSpec{}
-	pm.mu.Unlock()
-}
-
-func (pm *ExecProcessManager) clearManagedState(spec BirdInstanceSpec) {
-	pm.resetState()
-
-	if birdResourceCleanupAllowed(spec.Owner, "pid_file") {
-		_ = os.Remove(spec.PIDFilePath)
+	var err error
+	if removePID {
+		err = removeBirdFile(spec.PIDFilePath)
 	}
-	if birdResourceCleanupAllowed(spec.Owner, "control_socket") {
-		_ = os.Remove(spec.ControlSocketPath)
-	}
-	if birdResourceCleanupAllowed(spec.Owner, "config_file") {
-		_ = os.Remove(spec.ConfigPath)
-	}
-}
-
-func (pm *ExecProcessManager) recordExitIfCurrent(pid int, err error) {
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
-	if pm.pid != pid {
-		return
-	}
-	pm.pid = 0
-	pm.exit = &ProcessExit{PID: pid, Failure: exitFailure(err)}
-}
-
-func (pm *ExecProcessManager) reapManagedProcessLocked() {
-	if pm.pid <= 0 {
-		return
-	}
-	var status syscall.WaitStatus
-	var usage syscall.Rusage
-	pid, err := syscall.Wait4(pm.pid, &status, syscall.WNOHANG, &usage)
-	if pid == 0 || err == syscall.ECHILD {
-		return
-	}
-	if err != nil {
-		return
-	}
-	pm.pid = 0
-	pm.exit = &ProcessExit{PID: pid, Failure: waitStatusFailure(status)}
-}
-
-func exitFailure(err error) error {
-	if err == nil {
-		return errors.New("exited")
+	if removeConfig {
+		err = errors.Join(err, removeBirdFile(spec.ConfigPath))
 	}
 	return err
 }
 
-func waitStatusFailure(status syscall.WaitStatus) error {
-	switch {
-	case status.Exited():
-		return fmt.Errorf("exit status %d", status.ExitStatus())
-	case status.Signaled():
-		return fmt.Errorf("signal: %s", status.Signal())
-	default:
-		return errors.New("exited")
+func removeBirdFile(path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove BIRD file %s: %w", path, err)
+	}
+	return nil
+}
+
+func prepareBirdSocket(ctx context.Context, spec BirdInstanceSpec, remove bool) error {
+	path := spec.ControlSocketPath
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSocket == 0 {
+		return fmt.Errorf("BIRD control path %s is not a Unix socket", path)
+	}
+	dialer := net.Dialer{Timeout: time.Second}
+	conn, err := dialer.DialContext(context.WithoutCancel(ctx), "unix", path)
+	if err == nil {
+		conn.Close()
+		return fmt.Errorf("BIRD control socket %s already has a listener without a matching PID file", path)
+	}
+	if !errors.Is(err, syscall.ECONNREFUSED) && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("probe BIRD control socket %s: %w", path, err)
+	}
+	if remove && birdResourceCleanupAllowed(spec.Owner, "control_socket") {
+		return removeBirdFile(path)
+	}
+	return nil
+}
+
+func (pm *ExecProcessManager) waitForReady(ctx context.Context, spec BirdInstanceSpec) (*birdProcess, error) {
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	var readinessErr error
+	for {
+		process, err := pm.findProcess(spec)
+		if err != nil {
+			return nil, err
+		}
+		if process != nil {
+			readinessErr = process.verifyControlSocket(spec.ControlSocketPath)
+			if readinessErr == nil {
+				var response string
+				response, readinessErr = NewClient(spec.ControlSocketPath, pm.socketWaitTimeout).Raw(ctx, "show status")
+				if readinessErr == nil && !strings.Contains(response, "\n0013 ") {
+					readinessErr = errors.New("BIRD has not reported that the daemon is running")
+				}
+			}
+			if readinessErr == nil && !process.exited() {
+				return process, nil
+			}
+			process.close()
+		}
+		select {
+		case <-ctx.Done():
+			return nil, errors.Join(ctx.Err(), readinessErr)
+		case <-ticker.C:
+		}
 	}
 }
 
@@ -357,60 +420,6 @@ func (pm *ExecProcessManager) ensureNamedNetNS(ctx context.Context, name string)
 	return ensureNamedNetNSWithRunner(ctx, name, pm.runner)
 }
 
-func (pm *ExecProcessManager) waitForSocket(ctx context.Context, path string) error {
-	deadline := time.Now().Add(pm.socketWaitTimeout)
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		if fileExists(path) {
-			return nil
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("control socket %s did not appear within %s", path, pm.socketWaitTimeout)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-	}
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
-func waitForProcessExit(ctx context.Context, pid int, timeout time.Duration) bool {
-	if pid <= 0 {
-		return true
-	}
-	deadline := time.Now().Add(timeout)
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		if !processIsRunning(pid) {
-			return true
-		}
-		if err := ctx.Err(); err != nil {
-			return false
-		}
-		if time.Now().After(deadline) {
-			return false
-		}
-		select {
-		case <-ctx.Done():
-			return false
-		case <-ticker.C:
-		}
-	}
-}
-
 // findBirdBinary locates the BIRD binary on PATH.
 func findBirdBinary() (string, error) {
 	path, err := exec.LookPath("bird")
@@ -453,39 +462,4 @@ func readPidFile(path string) (int, error) {
 		return 0, err
 	}
 	return pid, nil
-}
-
-func (pm *ExecProcessManager) waitForPidFile(ctx context.Context, path string) int {
-	deadline := time.Now().Add(pm.socketWaitTimeout)
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		if pid, err := readPidFile(path); err == nil && pid > 0 {
-			return pid
-		}
-		if err := ctx.Err(); err != nil {
-			return 0
-		}
-		if time.Now().After(deadline) {
-			return 0
-		}
-		select {
-		case <-ctx.Done():
-			return 0
-		case <-ticker.C:
-		}
-	}
-}
-
-func processIsRunning(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	// Signal 0 performs error checking without sending a signal.
-	return proc.Signal(syscall.Signal(0)) == nil
 }

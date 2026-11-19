@@ -14,8 +14,11 @@ ExecStart=/usr/local/bin/photon daemon
 Restart=on-failure
 RestartSec=2s
 TimeoutStopSec=30s
+# Photon owns the shutdown policy for managed BIRD instances.
+KillMode=process
 RuntimeDirectory=photon
 RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 UMask=0077
 LimitNOFILE=65536
 

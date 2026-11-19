@@ -29,7 +29,7 @@ PHOTON_BIRD_SMOKE=1 \
   GOCACHE="$go_cache" \
   GOMODCACHE="$go_mod_cache" \
   CGO_ENABLED="${CGO_ENABLED:-0}" \
-  "$go_cmd" test ./pkg/routing/bird -run '^TestExecProcessManagerRootSmoke$' -count=1 -v
+  "$go_cmd" test ./pkg/routing/bird -run '^TestExecProcessManager(RootSmoke|DaemonLifecycle)$' -count=1 -v
 
 # Test 2: Two-node BIRD Babel neighbor + route exchange via veth
 PHOTON_BIRD_SMOKE=1 \
