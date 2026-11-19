@@ -13,15 +13,14 @@ import (
 
 const (
 	defaultTableID        = "main"
-	defaultMetricBase     = 100
+	defaultMetricBase     = 32
 	defaultMetricStaged   = 1200
 	defaultMetricDraining = 2400
 	defaultDeviceScanTime = 5 * time.Second
 	defaultLogTarget      = "log syslog all"
 
-	// Default Babel mesh tuning makes roughly 48 ms of total RTT improvement
-	// worth one additional lossless hop. The slow RTT EMA limits reactions to
-	// millisecond-scale jitter.
+	// In the linear RTT range, roughly 15 ms of improvement offsets one
+	// additional lossless hop. The slow RTT EMA limits reactions to jitter.
 	DefaultBabelRTTCost        = 1024
 	DefaultBabelRTTMin         = 10 * time.Millisecond
 	DefaultBabelRTTMax         = 500 * time.Millisecond

@@ -19,6 +19,9 @@ import (
 
 // ProcessManager owns the BIRD child process in managed mode.
 type ProcessManager interface {
+	// CheckConfig validates a candidate with the instance that will load it.
+	CheckConfig(ctx context.Context, spec BirdInstanceSpec, candidatePath string) error
+
 	// Start ensures the target netns exists and starts BIRD inside it.
 	// If the instance's PID and control socket still exist, Start adopts the
 	// process and applies the current configuration instead of spawning another.
@@ -64,6 +67,53 @@ func NewExecProcessManager(birdBinary string) *ExecProcessManager {
 var _ ProcessManager = (*ExecProcessManager)(nil)
 
 const gracefulTimeout = 5 * time.Second
+
+// CheckConfig uses the live parser when Start would adopt an existing instance.
+func (pm *ExecProcessManager) CheckConfig(ctx context.Context, spec BirdInstanceSpec, candidatePath string) error {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.observeExit()
+
+	process := pm.process
+	if process != nil {
+		if !sameBirdPaths(pm.spec, spec) {
+			return errors.New("another BIRD instance is already managed")
+		}
+	} else {
+		var err error
+		process, err = pm.findProcess(spec)
+		if err != nil {
+			return err
+		}
+		if process != nil {
+			defer process.close()
+		}
+	}
+	if process != nil {
+		if err := process.verifyControlSocket(spec.ControlSocketPath); err != nil {
+			return err
+		}
+		return NewClient(spec.ControlSocketPath, 10*time.Second).CheckConfig(ctx, candidatePath)
+	}
+
+	binary, err := pm.resolveBinary()
+	if err != nil {
+		return err
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	output, err := pm.runner(checkCtx, binary, "-p", "-c", candidatePath).CombinedOutput()
+	if err != nil {
+		if checkCtx.Err() != nil {
+			return checkCtx.Err()
+		}
+		if message := strings.TrimSpace(string(output)); message != "" {
+			return fmt.Errorf("parse config with %s: %s: %w", binary, message, err)
+		}
+		return fmt.Errorf("parse config with %s: %w", binary, err)
+	}
+	return nil
+}
 
 // Start ensures the target netns exists and starts BIRD inside it.
 func (pm *ExecProcessManager) Start(ctx context.Context, spec BirdInstanceSpec) error {

@@ -294,7 +294,7 @@ routing:
       mode: managed
       shutdown_policy: persist
       table: main
-      metric_base: 100
+      metric_base: 32
       metric_staged: 1200
       metric_draining: 2400
       rtt_cost: 1024
@@ -317,8 +317,8 @@ routing:
 - `enabled: false`（或 `disabled: true`）以及 `mode: disabled` 都会保留配置块但停止该实例的 reconcile；Photon 不会为它生成配置、创建 veth、安装上联路由或触碰 BIRD 进程。切换为禁用时也不会自动清理此前创建的 BIRD、veth、地址和路由，需要运维方按需清理。
 - `shutdown_policy` 可为 `persist` 或 `stop`，默认 `persist`。`managed` BIRD 由 Photon 启动和配置，但默认不会随 Photon daemon 退出而停止；daemon 重启后通过 pid/control socket adopt 现有 BIRD，减少 Babel 邻居和路由静默期。只有显式设置 `stop` 时，daemon 优雅退出才会停止该 BIRD 实例。
 - `table`：BIRD 主路由表名。
-- `metric_base` / `metric_staged` / `metric_draining`：Babel 路由 metric 基值，默认 `100` / `1200` / `2400`，分别用于正常、staged rotate、draining 状态。默认间距大于最大 RTT penalty，避免低延迟的旧 tunnel 反转轮换优先级。
-- `rtt_cost`：mesh 接口的最大 RTT 附加 cost，默认 `1024`。配合默认 `rtt_min=10ms`、`rtt_max=500ms` 和 `rxcost=100`，relay 的总 RTT 每降低约 `48ms` 即可抵消多一跳的基础 cost；必须小于 `65535`。
+- `metric_base` / `metric_staged` / `metric_draining`：Babel 路由 metric 基值，默认 `32` / `1200` / `2400`，分别用于正常、staged rotate、draining 状态。默认间距大于最大 RTT penalty，避免低延迟的旧 tunnel 反转轮换优先级。
+- `rtt_cost`：mesh 接口的最大 RTT 附加 cost，默认 `1024`，必须小于 `65535`。按默认参数，在 RTT 线性区间内，约 `15ms` 的 RTT 改善可抵消一跳无丢包链路的基础 cost。
 - `rtt_min` / `rtt_max`：RTT 附加 cost 的线性区间，默认 `10ms` / `500ms`。低于 min 不加 cost，高于 max 使用完整 `rtt_cost`。
 - `rtt_decay`：BIRD RTT 指数移动平均的衰减因子，范围 `1..256`，默认 `12`；数值越小，保留历史越久、对短时抖动越不敏感。
 - `etx_loss_scale`：无线模式 ETX 丢包惩罚的最低权重，与 `metric_base` 独立。使用 BIRD 原有的 16 包 Hello 窗口，补丁默认 `128`，设为 `0` 时恢复原版的 ETX 权重算法。
@@ -335,6 +335,8 @@ routing:
 - `ipam.announce` 选择由 daemon 持续发布的本节点 assignment。支持 `all`、`non-shared`、`shared`、`tag:<tag>` 和 `assignment:<CIDR>`。
 - 未匹配的 assignment 不由配置管理，可由 `photon route announce/withdraw` 或服务控制；配置 reconcile 只撤销自己以 `controller:auto` 创建的记录。
 - 旧字段 `ipam.auto_announce_assigned_ips: true` 仍兼容，含义是自动管理全部本地 assignment；不能与 `ipam.announce` 同时使用。
+
+在 managed 模式下，Photon 先验证候选配置，再替换磁盘上的配置。已有 BIRD 通过控制 socket 执行 `configure check`，新实例由即将使用的 BIRD 二进制执行 `-p -c`。这两个命令只解析配置。预检失败时保留当前配置和运行中的实例，并报告 BIRD 返回的错误。Babel 自己进行的路由切换不会触发配置预检。
 
 ## Firewall
 

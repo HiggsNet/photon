@@ -19,6 +19,9 @@ type Client interface {
 	// interfaces and neighbors.
 	Status(ctx context.Context) (*BirdObservation, error)
 
+	// CheckConfig parses a candidate using the running daemon without applying it.
+	CheckConfig(ctx context.Context, path string) error
+
 	// Configure performs a full "birdc configure" using the file at path.
 	Configure(ctx context.Context, path string) error
 
@@ -145,6 +148,11 @@ func (c *birdcClient) routeCommands() []string {
 		}
 	}
 	return commands
+}
+
+// CheckConfig parses a candidate without changing the running configuration.
+func (c *birdcClient) CheckConfig(ctx context.Context, path string) error {
+	return c.commandCheck(ctx, fmt.Sprintf("configure check %q", path))
 }
 
 // Configure performs a full "birdc configure" using the file at path.

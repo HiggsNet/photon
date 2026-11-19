@@ -586,8 +586,8 @@ instances:
 	if inst.Bird.TableID != "main" {
 		t.Fatalf("inst.TableID = %q, want main", inst.Bird.TableID)
 	}
-	if inst.Bird.MetricBase != 100 {
-		t.Fatalf("inst.MetricBase = %d, want 100", inst.Bird.MetricBase)
+	if inst.Bird.MetricBase != 32 {
+		t.Fatalf("inst.MetricBase = %d, want 32", inst.Bird.MetricBase)
 	}
 	if inst.Bird.MetricStaged != 1200 {
 		t.Fatalf("inst.MetricStaged = %d, want 1200", inst.Bird.MetricStaged)

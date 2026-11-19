@@ -167,7 +167,7 @@ Defaults the generator should apply:
 | field | default |
 |-------|---------|
 | `TableID` | `"main"` |
-| `MetricBase` | `100` |
+| `MetricBase` | `32` |
 | `MetricStaged` | `1200` |
 | `MetricDraining` | `2400` |
 | `BabelRTTCost` | `1024` |
@@ -506,7 +506,7 @@ protocol babel photon_babel_ipsec_main {
 
     interface "phx*" {
         type wireless;
-        rxcost 100;
+        rxcost 32;
         rtt cost 1024;
         rtt min 10 ms;
         rtt max 500 ms;

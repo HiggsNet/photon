@@ -22,6 +22,10 @@ type blockingBirdProcessManager struct {
 	startErr  error
 }
 
+func (f *blockingBirdProcessManager) CheckConfig(context.Context, bird.BirdInstanceSpec, string) error {
+	return nil
+}
+
 func (f *blockingBirdProcessManager) Start(ctx context.Context, spec bird.BirdInstanceSpec) error {
 	f.started = true
 	f.startSpec = spec

@@ -133,6 +133,35 @@ func TestReconcileRoutingConfigChangeUsesFullBirdConfigure(t *testing.T) {
 	if client.configurePath == "" {
 		t.Fatalf("Configure path is empty")
 	}
+	if err := service.reconcileRouting(context.Background()); err != nil {
+		t.Fatalf("unchanged reconcileRouting: %v", err)
+	}
+	if pm.checkCalls != 1 || client.configureCalls != 1 {
+		t.Fatalf("unchanged config was checked or applied again: %d checks, %d applies", pm.checkCalls, client.configureCalls)
+	}
+
+	previous, err := readFileString(client.configurePath)
+	if err != nil {
+		t.Fatalf("read active config: %v", err)
+	}
+	margin := uint(24)
+	appConfig.Routing.Instances[0].Bird.BabelHysteresisMargin = &margin
+	pm.checkErr = errors.New("stock BIRD rejected hysteresis margin")
+	service.routingForceReload = true
+	if err := service.reconcileRouting(context.Background()); !errors.Is(err, pm.checkErr) {
+		t.Fatalf("preflight rejection: %v", err)
+	}
+	if !strings.Contains(pm.checkedConfig, "hysteresis margin 24;") {
+		t.Fatalf("preflight did not receive the new configuration: %s", pm.checkedConfig)
+	}
+	if pm.checkCalls != 2 || client.configureCalls != 1 || pm.started || pm.stopped {
+		t.Fatalf("rejected config reached the running instance: %d checks, %d applies, started=%v, stopped=%v",
+			pm.checkCalls, client.configureCalls, pm.started, pm.stopped)
+	}
+	active, err := readFileString(client.configurePath)
+	if err != nil || active != previous {
+		t.Fatalf("active config was replaced after preflight rejection: %v", err)
+	}
 }
 
 func TestReconcileRoutingForceReloadUsesFullBirdConfigureWhenHashUnchanged(t *testing.T) {

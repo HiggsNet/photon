@@ -436,7 +436,7 @@ routing:
       control_socket: /run/photon/bird-photon.ctl
       pid_file: /run/photon/bird-photon.pid
       table: main
-      metric_base: 100
+      metric_base: 32
       metric_staged: 1200
       metric_draining: 2400
       rtt_cost: 1024

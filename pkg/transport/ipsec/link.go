@@ -601,7 +601,7 @@ const (
 	RoutingModeDisabled  = "disabled"
 	DefaultRoutingMode   = RoutingModeManaged
 	DefaultRoutingTable  = "main"
-	DefaultMetricBase    = 100
+	DefaultMetricBase    = 32
 	DefaultMetricStaged  = 1200
 	DefaultMetricDrained = 2400
 )

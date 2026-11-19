@@ -27,15 +27,28 @@ func (successfulHealthProber) Probe(ctx context.Context, target health.ProbeTarg
 func (successfulHealthProber) Type() string { return health.ProbeTypeICMP }
 
 type fakeBirdProcessManager struct {
-	started   bool
-	startSpec bird.BirdInstanceSpec
-	onStart   func(bird.BirdInstanceSpec)
-	startErr  error
-	stopped   bool
-	stopSpec  bird.BirdInstanceSpec
-	stopErr   error
-	running   bool
-	lastExit  *bird.ProcessExit
+	checkCalls    int
+	checkErr      error
+	checkedConfig string
+	started       bool
+	startSpec     bird.BirdInstanceSpec
+	onStart       func(bird.BirdInstanceSpec)
+	startErr      error
+	stopped       bool
+	stopSpec      bird.BirdInstanceSpec
+	stopErr       error
+	running       bool
+	lastExit      *bird.ProcessExit
+}
+
+func (f *fakeBirdProcessManager) CheckConfig(_ context.Context, _ bird.BirdInstanceSpec, path string) error {
+	f.checkCalls++
+	config, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	f.checkedConfig = string(config)
+	return f.checkErr
 }
 
 func (f *fakeBirdProcessManager) Start(ctx context.Context, spec bird.BirdInstanceSpec) error {

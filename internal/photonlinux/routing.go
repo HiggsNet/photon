@@ -46,15 +46,34 @@ func (r *LinuxDriver) EnsureUpstreamRoutes(ctx context.Context, spec UpstreamRou
 	return r.upstreamRoutes.EnsureRoutes(ctx, spec)
 }
 
-func (r *LinuxDriver) WriteBirdConfig(path string, config []byte) error {
-	if r == nil {
-		return fmt.Errorf("linux routing driver is not configured")
+// WriteBirdConfig installs a candidate only after the target BIRD accepts it.
+func (r *LinuxDriver) WriteBirdConfig(ctx context.Context, spec bird.BirdInstanceSpec, config []byte) error {
+	manager := r.birdProcessManager(spec.NetNSName)
+	if manager == nil {
+		return fmt.Errorf("linux BIRD driver is not configured")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(spec.ConfigPath)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create BIRD config directory: %w", err)
 	}
-	if err := os.WriteFile(path, config, 0o600); err != nil {
-		return fmt.Errorf("write BIRD config: %w", err)
+	candidate, err := os.CreateTemp(dir, ".bird-config-*")
+	if err != nil {
+		return fmt.Errorf("create candidate BIRD config: %w", err)
+	}
+	defer os.Remove(candidate.Name())
+	_, writeErr := candidate.Write(config)
+	closeErr := candidate.Close()
+	if writeErr != nil {
+		return fmt.Errorf("write candidate BIRD config: %w", writeErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close candidate BIRD config: %w", closeErr)
+	}
+	if err := manager.CheckConfig(ctx, spec, candidate.Name()); err != nil {
+		return fmt.Errorf("preflight BIRD config %s: %w", spec.ConfigPath, err)
+	}
+	if err := os.Rename(candidate.Name(), spec.ConfigPath); err != nil {
+		return fmt.Errorf("install BIRD config: %w", err)
 	}
 	return nil
 }

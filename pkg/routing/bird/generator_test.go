@@ -86,7 +86,7 @@ func TestGenerateManagedConfig(t *testing.T) {
 	if strings.Contains(s, "type tunnel;") {
 		t.Error("mesh interfaces must not use binary tunnel reachability")
 	}
-	if !strings.Contains(s, "rxcost 100;") {
+	if !strings.Contains(s, "rxcost 32;") {
 		t.Error("missing default rxcost")
 	}
 	for _, want := range []string{
@@ -240,7 +240,7 @@ func TestDefaultsApplied(t *testing.T) {
 	}
 	s := string(cfg)
 
-	if !strings.Contains(s, "rxcost 100;") {
+	if !strings.Contains(s, "rxcost 32;") {
 		t.Error("default metric base not applied")
 	}
 	if !strings.Contains(s, "scan time 5;") {

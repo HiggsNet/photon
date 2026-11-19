@@ -2,10 +2,12 @@ package photonlinux
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/HiggsNet/photon/pkg/routing/bird"
 	transportipsec "github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
@@ -36,13 +38,22 @@ func TestKernelRouteCommandScopesNamespace(t *testing.T) {
 
 func TestWriteBirdConfigCreatesPrivateFile(t *testing.T) {
 	dryRun := &transportipsec.DryRunDriver{}
-	driver, err := NewLinuxDriver(LinuxDriverOptions{IPsecDriver: dryRun, XFRMDriver: dryRun})
+	binary, err := exec.LookPath("true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver, err := NewLinuxDriver(LinuxDriverOptions{
+		IPsecDriver: dryRun,
+		XFRMDriver:  dryRun,
+		BirdProcess: bird.NewExecProcessManager(binary),
+	})
 	if err != nil {
 		t.Fatalf("NewLinuxDriver: %v", err)
 	}
 	path := filepath.Join(t.TempDir(), "bird", "bird.conf")
 	want := []byte("router id 10.0.0.1;\n")
-	if err := driver.WriteBirdConfig(path, want); err != nil {
+	spec := bird.BirdInstanceSpec{ConfigPath: path, PIDFilePath: path + ".pid"}
+	if err := driver.WriteBirdConfig(t.Context(), spec, want); err != nil {
 		t.Fatalf("WriteBirdConfig: %v", err)
 	}
 	got, err := os.ReadFile(path)

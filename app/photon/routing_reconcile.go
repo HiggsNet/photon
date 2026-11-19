@@ -217,21 +217,6 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 
 	switch mode {
 	case bird.BirdModeManaged:
-		if configChanged {
-			// Writing the file is not an apply. This also keeps a failed forced
-			// reload pending when its contents match the last successful config.
-			instState.LastConfigHash = ""
-			if err := func() error {
-				d.linuxObservation.setOperationPhase("bird_write")
-				defer d.gossipDriver.LogSlowOperation("routing", "routing_bird_write", time.Now(), d.gossipDriver.PendingEventCount())
-				return d.linuxDriver.WriteBirdConfig(spec.ConfigPath, configBytes)
-			}(); err != nil {
-				instState.State = birdInstanceStateError
-				instState.LastFailure = err
-				return fmt.Errorf("write bird config for netns %q: %w", netnsName, err)
-			}
-		}
-
 		running, exit := d.linuxDriver.BirdProcessStatus(ctx, netnsName)
 		if exit != nil {
 			instState.LastExit = formatBirdProcessExit(exit)
@@ -245,6 +230,23 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 			instState.State = birdInstanceStateDegraded
 			instState.LastFailure = fmt.Errorf("bird restart backoff active until %s", time.Unix(instState.BackoffUntilUnix, 0).Format(time.RFC3339))
 			return nil
+		}
+		if configChanged || !running {
+			// Keep a failed forced reload pending even if its contents matched
+			// the last successful configuration.
+			instState.LastConfigHash = ""
+			if err := func() error {
+				d.linuxObservation.setOperationPhase("bird_write")
+				defer d.gossipDriver.LogSlowOperation("routing", "routing_bird_write", time.Now(), d.gossipDriver.PendingEventCount())
+				return d.linuxDriver.WriteBirdConfig(ctx, spec, configBytes)
+			}(); err != nil {
+				instState.State = birdInstanceStateError
+				if running {
+					instState.State = birdInstanceStateDegraded
+				}
+				instState.LastFailure = err
+				return fmt.Errorf("prepare bird config for netns %q: %w", netnsName, err)
+			}
 		}
 		if !running {
 			if err := func() error {
