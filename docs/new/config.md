@@ -301,7 +301,7 @@ routing:
       rtt_min: 10ms
       rtt_max: 500ms
       rtt_decay: 12
-      # 可选，仅由配套的 BIRD 2.19.3 补丁识别
+      # 可选，仅由带 Photon Babel 补丁的 BIRD 识别
       # etx_loss_scale: 128
       # hysteresis_margin: 24
       hello_interval: 4s

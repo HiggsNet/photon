@@ -251,7 +251,7 @@ routing:
       # metric_base: 32
       # metric_staged: 1200
       # metric_draining: 2400
-      # Optional overrides for the patched BIRD 2.19.3 defaults.
+      # Optional overrides for BIRD builds with the Photon Babel patch.
       # etx_loss_scale: 128
       # hysteresis_margin: 24
       # interface_pattern: phx*
