@@ -316,7 +316,7 @@ func TestDesktopNativeMissingFormCreatesConfigThroughWorker(t *testing.T) {
 		guiSendMessage.Call(w.controls[id], 0xc2, 1, uintptr(unsafe.Pointer(guiUTF16(text))))
 	}
 	click := func(id int) { guiSendMessage.Call(w.settings, guiWMCommand, uintptr(id), 0) }
-	if !w.formLoaded || !w.newConfig || w.dirty || get(guiRootFieldID) != "" || get(guiManagedFieldID) != "" || !filepath.IsAbs(get(guiStateFieldID)) {
+	if !w.formLoaded || !w.newConfig || w.dirty || get(guiRootFieldID) != "" || get(guiManagedFieldID) != "" || get(guiStateFieldID) != "first-setup.db" {
 		t.Fatal("missing config did not load clean, safe, editable defaults")
 	}
 	if enabled, _, _ := guiUser32.NewProc("IsWindowEnabled").Call(w.controls[guiSaveID]); enabled == 0 {
@@ -364,6 +364,19 @@ func TestDesktopNativeMissingFormCreatesConfigThroughWorker(t *testing.T) {
 	config, err := desktopParseConfig(desktopTestConfig(get(guiStateFieldID)))
 	if err != nil {
 		t.Fatal(err)
+	}
+	w.openSettings()
+	click(guiGatewayPageID)
+	mobikeChecked := func() bool {
+		state, _, _ := guiSendMessage.Call(w.controls[guiMOBIKEFieldID], guiBMGetCheck, 0, 0)
+		return state == guiBSTChecked
+	}
+	if mobikeChecked() {
+		t.Fatal("MOBIKE was enabled by default")
+	}
+	guiSendMessage.Call(w.controls[guiMOBIKEFieldID], 0x00f5, 0, 0) // BM_CLICK
+	if !mobikeChecked() || !w.dirty {
+		t.Fatal("clicking MOBIKE did not check the box and mark settings dirty")
 	}
 	form := desktopFormFromConfig(config)
 	for id, value := range map[int]string{guiRootFieldID: form.RootPublicKey, guiManagedFieldID: form.ManagedZone} {
@@ -479,7 +492,7 @@ func TestDesktopNativeMissingFormCreatesConfigThroughWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.ManagedZone != config.ManagedZone || saved.Wintun.MTU != 1360 || saved.Reconnect.MaxBackoff != 31*time.Second || len(saved.Gateway.BootstrapHints) != 1 || w.dirty || w.newConfig {
+	if saved.ManagedZone != config.ManagedZone || !saved.Gateway.MOBIKE || saved.Wintun.MTU != 1360 || saved.Reconnect.MaxBackoff != 31*time.Second || len(saved.Gateway.BootstrapHints) != 1 || w.dirty || w.newConfig {
 		t.Fatal("native worker save did not persist the complete form")
 	}
 	if _, err := os.Stat(saved.State.Path); !os.IsNotExist(err) {
@@ -487,8 +500,15 @@ func TestDesktopNativeMissingFormCreatesConfigThroughWorker(t *testing.T) {
 	}
 	w.command(guiReloadID)
 	awaitDesktopNativeResult(t, w)
-	if get(guiMTUFieldID) != "1360" || get(guiMaxFieldID) != "31s" || len(w.bootstrapRows) != 1 || w.dirty {
+	if get(guiMTUFieldID) != "1360" || get(guiMaxFieldID) != "31s" || len(w.bootstrapRows) != 1 || !mobikeChecked() || w.dirty {
 		t.Fatal("native worker reload lost settings or marked programmatic changes dirty")
+	}
+	click(guiGatewayPageID)
+	guiSendMessage.Call(w.controls[guiMOBIKEFieldID], 0x00f5, 0, 0) // BM_CLICK
+	w.command(guiSaveID)
+	awaitDesktopNativeResult(t, w)
+	if saved, err := photonwindows.LoadConfig(path); err != nil || saved.Gateway.MOBIKE {
+		t.Fatalf("native worker did not save disabled MOBIKE: %v", err)
 	}
 	w.openSettings()
 	guiSendMessage.Call(w.settings, guiWMClose, 0, 0)

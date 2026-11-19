@@ -152,6 +152,16 @@ void main() {
       scrollable: find.byType(Scrollable).first,
     );
     await tester.enterText(routes, 'fd42::/16\nfd43::/16');
+    final mobike = find.byKey(const ValueKey('mobike'));
+    await tester.scrollUntilVisible(
+      mobike,
+      100,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(tester.widget<Switch>(mobike).value, isFalse);
+    await tester.tap(mobike);
+    await tester.pumpAndSettle();
+    expect(tester.widget<Switch>(mobike).value, isTrue);
     final advanced = find.text('Advanced configuration');
     await tester.scrollUntilVisible(
       advanced,
@@ -173,6 +183,7 @@ void main() {
     expect(attempts, hasLength(2));
     expect(attempts.last, containsPair('managed_zone', 'client.example.'));
     expect(attempts.last, containsPair('split_routes', 'fd42::/16\nfd43::/16'));
+    expect(attempts.last, containsPair('mobike', true));
     expect(attempts.last, containsPair('mtu', '1420'));
     expect(attempts.last, containsPair('state_path', '/app/photon/photon.db'));
     expect(attempts.last, containsPair('bootstrap_hints', [{}]));

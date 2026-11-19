@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestSaveFormPreservesMOBIKEWhenClientOmitsIt(t *testing.T) {
+func TestSaveFormPreservesMOBIKEUnlessClientDisablesIt(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "photon.yaml")
 	editor := New(path)
 	form, err := editor.LoadForm()
@@ -37,5 +37,14 @@ func TestSaveFormPreservesMOBIKEWhenClientOmitsIt(t *testing.T) {
 	saved, err := editor.LoadForm()
 	if err != nil || saved.MOBIKE == nil || !*saved.MOBIKE {
 		t.Fatalf("saved MOBIKE = %v, %v", saved.MOBIKE, err)
+	}
+	mobike = false
+	saved.MOBIKE = &mobike
+	if err := editor.SaveForm(saved); err != nil {
+		t.Fatal(err)
+	}
+	saved, err = editor.LoadForm()
+	if err != nil || saved.MOBIKE != nil {
+		t.Fatalf("disabled MOBIKE = %v, %v", saved.MOBIKE, err)
 	}
 }

@@ -9,6 +9,11 @@ import "unsafe"
 func (w *desktopWindow) styleSettingsControls() {
 	for _, fields := range [][]int{guiBasicFields, guiGatewayFields, guiRouteFields, guiAdvancedFields} {
 		for _, id := range fields {
+			if id == guiMOBIKEFieldID {
+				// The button styling replaces native button types, including checkboxes.
+				w.guiApplyFont(w.controls[id], "body")
+				continue
+			}
 			kind := "body"
 			if id < 2100 {
 				kind = "edit"
@@ -86,6 +91,8 @@ func (w *desktopWindow) layoutSettings() {
 	extra := max(0, height-661)
 	rulesHeight := 68 + extra/4
 	field(guiAllowedFieldID, margin, 154, content, rulesHeight)
+	move(w.formLabels[guiAllowedFieldID], margin, 154, half, 22)
+	move(w.controls[guiMOBIKEFieldID], margin+half+gap, 151, half, 26)
 	ruleInputY := 154 + 26 + rulesHeight + 12
 	move(w.formLabels[guiAllowedInputID], 0, 0, 0, 0)
 	move(w.controls[guiAllowedInputID], margin, ruleInputY, content-326, 32)

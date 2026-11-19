@@ -241,6 +241,19 @@ class _PhotonSettingsFormState extends State<_PhotonSettingsForm> {
           _lines('split_routes', l.photonRoutes, example: 'fd42::/16'),
           _lines('allowed_gateways', l.photonAllowedGateways, example: '*'),
           FormRow(
+            title: 'MOBIKE',
+            trailing: Semantics(
+              label: 'MOBIKE',
+              child: Switch(
+                key: const ValueKey('mobike'),
+                value: _form['mobike'] == true,
+                onChanged: _saving
+                    ? null
+                    : (value) => setState(() => _form['mobike'] = value),
+              ),
+            ),
+          ),
+          FormRow(
             title: l.advancedConfig,
             onPressed: _saving
                 ? null

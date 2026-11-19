@@ -31,6 +31,7 @@ const (
 	guiInitialFieldID     = 2017
 	guiMaxFieldID         = 2018
 	guiSettingsNoteID     = 2019
+	guiMOBIKEFieldID      = 2020
 	guiBasicPageID        = 2101
 	guiAdvancedPageID     = 2102
 	guiGatewayPageID      = 2103
@@ -44,8 +45,15 @@ const (
 	guiBootstrapClearID   = 2114
 )
 
+const (
+	guiBSAutoCheckbox = 0x0003
+	guiBMGetCheck     = 0x00f0
+	guiBMSetCheck     = 0x00f1
+	guiBSTChecked     = 1
+)
+
 var guiBasicFields = []int{guiRootFieldID, guiManagedFieldID}
-var guiGatewayFields = []int{guiAllowedFieldID, guiAllowedInputID, guiAllowedAddID, guiAllowedUpdateID, guiAllowedDeleteID, guiAllowedClearID, guiBootstrapListID, guiBootstrapPeerID, guiBootstrapAddressID, guiBootstrapAddID, guiBootstrapUpdateID, guiBootstrapDeleteID, guiBootstrapClearID}
+var guiGatewayFields = []int{guiMOBIKEFieldID, guiAllowedFieldID, guiAllowedInputID, guiAllowedAddID, guiAllowedUpdateID, guiAllowedDeleteID, guiAllowedClearID, guiBootstrapListID, guiBootstrapPeerID, guiBootstrapAddressID, guiBootstrapAddID, guiBootstrapUpdateID, guiBootstrapDeleteID, guiBootstrapClearID}
 var guiRouteFields = []int{guiSplitFieldID, guiRouteInputID, guiRouteAddID, guiRouteUpdateID, guiRouteDeleteID, guiRouteClearID}
 var guiAdvancedFields = []int{guiStateFieldID, guiOverlayFieldID, guiListenFieldID, guiAdapterFieldID, guiMTUFieldID, guiLogFieldID, guiInitialFieldID, guiMaxFieldID}
 
@@ -75,6 +83,9 @@ func (w *desktopWindow) createSettingsWindow() error {
 		if err := create(spec.id, "BUTTON", spec.text, button, 0); err != nil {
 			return err
 		}
+	}
+	if err := create(guiMOBIKEFieldID, "BUTTON", "MOBIKE", button|guiBSAutoCheckbox, 0); err != nil {
+		return err
 	}
 	specs := []struct {
 		id    int
@@ -176,6 +187,8 @@ func (w *desktopWindow) settingsWindowProc(hwnd uintptr, message uint32, wp, lp 
 			switch id {
 			case guiBasicPageID, guiAdvancedPageID, guiGatewayPageID, guiRoutePageID:
 				w.showSettingsPage(id)
+			case guiMOBIKEFieldID:
+				w.markFormDirty()
 			case guiBootstrapAddID, guiBootstrapUpdateID, guiBootstrapDeleteID, guiBootstrapClearID:
 				w.changeBootstrap(id)
 			default:
@@ -272,6 +285,11 @@ func guiControlText(hwnd uintptr) (string, error) {
 func (w *desktopWindow) fillForm(form desktopConfigForm) {
 	w.settingConfig = true
 	defer func() { w.settingConfig = false }()
+	var mobikeCheck uintptr
+	if form.MOBIKE != nil && *form.MOBIKE {
+		mobikeCheck = guiBSTChecked
+	}
+	guiSendMessage.Call(w.controls[guiMOBIKEFieldID], guiBMSetCheck, mobikeCheck, 0)
 	values := map[int]string{guiRootFieldID: form.RootPublicKey, guiManagedFieldID: form.ManagedZone, guiStateFieldID: form.StatePath, guiOverlayFieldID: form.OverlayID, guiListenFieldID: form.GossipListen, guiAdapterFieldID: form.AdapterName, guiMTUFieldID: form.MTU, guiLogFieldID: form.LogLevel, guiInitialFieldID: form.InitialBackoff, guiMaxFieldID: form.MaxBackoff}
 	for id, text := range values {
 		guiSetWindowText.Call(w.controls[id], uintptr(unsafe.Pointer(guiUTF16(text))))
@@ -296,6 +314,9 @@ func (w *desktopWindow) collectForm() (desktopConfigForm, error) {
 		}
 		*target = text
 	}
+	mobikeCheck, _, _ := guiSendMessage.Call(w.controls[guiMOBIKEFieldID], guiBMGetCheck, 0, 0)
+	mobike := mobikeCheck == guiBSTChecked
+	form.MOBIKE = &mobike
 	// A save owns a detached row snapshot while further UI editing continues.
 	form.BootstrapHints = append([]desktopBootstrapRow(nil), w.bootstrapRows...)
 	form.AllowedGateways = strings.Join(w.optionLists[guiAllowedFieldID].Rows, "\r\n")
