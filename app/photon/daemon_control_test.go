@@ -26,6 +26,53 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
+func TestDaemonNotifiesSystemdWhenIPAMIsAvailable(t *testing.T) {
+	dir := t.TempDir()
+	notifySocket := filepath.Join(dir, "notify.sock")
+	listener, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: notifySocket, Net: "unixgram"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	t.Setenv("NOTIFY_SOCKET", notifySocket)
+
+	verified, checkpoint, runtime, config := buildTestDaemonOwners(t)
+	config.ListenAddr = "127.0.0.1:0"
+	config.Bootstrap = nil
+	config.IPsec.Driver = "dry-run"
+	config.PublishEndpoints = false
+	state := newState(nil, corestate.NewStoreWithCheckpoint(verified, checkpoint, nil, nil), runtime)
+	daemon := newDaemon(config, state, time.Hour, time.Now)
+	daemon.ControlSocketPath = filepath.Join(dir, "control.sock")
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	done := make(chan error, 1)
+	go func() { done <- daemon.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+		if err := daemon.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+
+	deadline, _ := ctx.Deadline()
+	if err := listener.SetReadDeadline(deadline); err != nil {
+		t.Fatal(err)
+	}
+	var message [32]byte
+	n, err := listener.Read(message[:])
+	if err != nil || string(message[:n]) != "READY=1" {
+		t.Fatalf("systemd notification = %q, %v", message[:n], err)
+	}
+	var response controlViewResponse[inspect.IPAMMineReport]
+	err = exchangeControl(ctx, daemon.ControlSocketPath, controlRequest{Method: "ipam_mine_view"}, &response)
+	if err != nil || !response.OK || response.View.ManagedZone != verified.ManagedZone.String() {
+		t.Fatalf("IPAM immediately after readiness = %+v, %v", response, err)
+	}
+}
+
 type controlPingProber struct {
 	target health.ProbeTarget
 	config health.ProbeConfig

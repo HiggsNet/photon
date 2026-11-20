@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"net"
+	"os"
 	"time"
 
 	"github.com/HiggsNet/photon/internal/observability/healthspool"
@@ -214,6 +215,23 @@ func openDaemon(config *appConfig, interval time.Duration) (*Daemon, error) {
 	return newDaemon(config, state, interval, time.Now), nil
 }
 
+func notifySystemdReady() error {
+	socket := os.Getenv("NOTIFY_SOCKET")
+	if socket == "" {
+		return nil
+	}
+	conn, err := net.DialTimeout("unixgram", socket, time.Second)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if err := conn.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
+		return err
+	}
+	_, err = conn.Write([]byte("READY=1"))
+	return err
+}
+
 func (d *Daemon) Close() error {
 	if d == nil {
 		return nil
@@ -314,6 +332,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return err
 	}
 	defer stopObserver()
+	if err := notifySystemdReady(); err != nil {
+		return fmt.Errorf("notify systemd that Photon is ready: %w", err)
+	}
 	subsystemCtx, stopSubsystems := context.WithCancel(ctx)
 	stopIPsecEvents := d.startIPsecLifecycleEventWatcher(subsystemCtx)
 	var healthUpdates <-chan struct{}

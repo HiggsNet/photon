@@ -690,7 +690,8 @@
                   };
                 path = cfg.runtimePackages ++ cfg.extraPackages;
                 serviceConfig = {
-                  Type = "simple";
+                  # Service rendering queries IPAM through the daemon's control socket.
+                  Type = "notify";
                   User = cfg.user;
                   Group = cfg.group;
                   ExecStart = "${lib.getExe cfg.package} daemon";
