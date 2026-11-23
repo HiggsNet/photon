@@ -51,6 +51,10 @@ func newTunnelClientWithRelay(server string, config *tls.Config, connect func(co
 			return secure, nil
 		}
 	}
+	return newTunnelClientWithDial(server, dial)
+}
+
+func newTunnelClientWithDial(server string, dial func(context.Context, string, string) (net.Conn, error)) *tunnelClient {
 	protocols := new(http.Protocols)
 	// Use HTTP/2 framing over the TLS connection established by the dialer.
 	// This also handles peers that expect HTTP/2 but omit ALPN in their reply.
@@ -127,6 +131,13 @@ func (c *tunnelClient) connect(ctx context.Context, target string, headers http.
 		return nil, err
 	}
 	_ = response.Body.Close()
+	if code := response.Header.Get(v2ErrorHeader); target == v2Authority && code != "" {
+		index, parseErr := strconv.Atoi(response.Header.Get(v2FailedHopHeader))
+		if parseErr != nil {
+			index = -1
+		}
+		return nil, &v2HopError{code: code, index: index}
+	}
 	if response.StatusCode == http.StatusForbidden {
 		return nil, errDenied
 	}
@@ -137,6 +148,7 @@ var errDenied = errors.New("destination is outside the permitted prefixes")
 
 type tunnelHandler struct {
 	allowed        []netip.Prefix
+	allowTarget    func(string, netip.AddrPort) bool
 	slots          chan struct{}
 	access         *zoneAccess
 	relay          relayTargets
@@ -305,13 +317,14 @@ func serveTCPStream(w http.ResponseWriter, r *http.Request, conn duplexStream) {
 
 func (h *tunnelHandler) dialTCP(ctx context.Context, target string) (*net.TCPConn, error) {
 	host, port, _ := net.SplitHostPort(target)
+	portNumber, _ := strconv.ParseUint(port, 10, 16)
 	addresses, err := resolveAddresses(ctx, host)
 	if err != nil {
 		return nil, err
 	}
 	var failures []error
 	for _, ip := range addresses {
-		if !h.permits(ip) {
+		if !h.permitsTarget("tcp", netip.AddrPortFrom(ip, uint16(portNumber))) {
 			continue
 		}
 		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort(ip.String(), port))
@@ -324,6 +337,13 @@ func (h *tunnelHandler) dialTCP(ctx context.Context, target string) (*net.TCPCon
 		return nil, errDenied
 	}
 	return nil, errors.Join(failures...)
+}
+
+func (h *tunnelHandler) permitsTarget(protocol string, target netip.AddrPort) bool {
+	if h.allowTarget != nil {
+		return h.allowTarget(protocol, target)
+	}
+	return h.permits(target.Addr())
 }
 
 func (h *tunnelHandler) permits(ip netip.Addr) bool {

@@ -43,7 +43,7 @@ func (h *tunnelHandler) serveUDP(w http.ResponseWriter, r *http.Request, delegat
 			if err != nil || ctx.Err() != nil {
 				return
 			}
-			if packet.Destination.Port() != 0 && h.permits(packet.Destination.Addr()) && (delegatedScope == nil || withinPrefixes(packet.Destination.Addr(), delegatedScope)) {
+			if packet.Destination.Port() != 0 && h.permitsTarget("udp", packet.Destination) && (delegatedScope == nil || withinPrefixes(packet.Destination.Addr(), delegatedScope)) {
 				flows.send(ctx, packet, replies)
 			}
 		}

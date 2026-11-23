@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Photon Proxy</title>
+<link rel="stylesheet" href="/ui/style.css">
+<script type="module" src="/ui/app.js"></script>
+<header>
+  <div>
+    <h1>Photon Proxy</h1>
+    <p>管理 SOCKS5 入口和代理路径</p>
+  </div>
+  <form id="auth" class="line">
+    <label>管理令牌 <input id="token" type="password" autocomplete="off"></label>
+    <button>连接</button>
+  </form>
+</header>
+<main>
+  <p id="status" role="status" aria-live="polite"></p>
+  <section aria-labelledby="routes-title">
+    <div class="line section-head"><h2 id="routes-title">SOCKS5 路径</h2><button type="button" id="refresh">刷新</button></div>
+    <div class="table-wrap">
+      <table><thead><tr><th>名称</th><th>监听地址</th><th>路径</th><th>操作</th></tr></thead><tbody id="routes"></tbody></table>
+    </div>
+  </section>
+  <div class="panels">
+    <section aria-labelledby="edit-title">
+      <h2 id="edit-title">新建路径</h2>
+      <form id="route-form">
+        <div class="fields">
+          <label>路径名 <input id="name" required maxlength="80"></label>
+          <label>监听地址 <input id="listen" placeholder="留空自动分配"></label>
+        </div>
+        <fieldset><legend>源站选路</legend><div id="hops"></div><button type="button" id="add-hop">添加一跳</button></fieldset>
+        <label>UDP 目标前缀 <input id="udp-prefixes" placeholder="例如 192.168.50.0/24"></label>
+        <div class="line"><button class="primary" id="save">创建路径</button><button type="button" id="reset">清空</button></div>
+      </form>
+    </section>
+    <section aria-labelledby="test-title">
+      <h2 id="test-title">发现与测试</h2>
+      <form id="discover">
+        <div class="fields">
+          <label>业务协议 <select id="protocol"><option value="tcp">TCP</option><option value="udp">UDP · DNS</option></select></label>
+          <label>业务目标 <input id="target" placeholder="例如 192.168.50.10:443"></label>
+        </div>
+        <div class="line"><button>查询候选</button><button type="button" id="probe">测试当前编辑路径</button></div>
+      </form>
+      <p id="result" role="status" aria-live="polite"></p>
+      <ol id="candidates"></ol>
+    </section>
+  </div>
+</main>
+</html>

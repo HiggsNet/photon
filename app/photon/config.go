@@ -61,6 +61,7 @@ type appConfig struct {
 	Health               healthConfig
 	Observer             observerConfig
 	ProxyDirectorySocket string
+	ProxyPublishSocket   string
 }
 
 type syncConfigPeer struct {
@@ -73,6 +74,7 @@ type configYAML struct {
 
 	StatePath            string `yaml:"state_path"`
 	ProxyDirectorySocket string `yaml:"proxy_directory_socket"`
+	ProxyPublishSocket   string `yaml:"proxy_publish_socket"`
 
 	TrustedRootPublicKey string `yaml:"trusted_root_public_key"`
 	RootPublicKey        string `yaml:"root_public_key"`
@@ -367,6 +369,12 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 			return errors.New("proxy_directory_socket must be an absolute path")
 		}
 		config.ProxyDirectorySocket = file.ProxyDirectorySocket
+	}
+	if topLevelKeys["proxy_publish_socket"] {
+		if file.ProxyPublishSocket != "" && !filepath.IsAbs(file.ProxyPublishSocket) {
+			return errors.New("proxy_publish_socket must be an absolute path")
+		}
+		config.ProxyPublishSocket = file.ProxyPublishSocket
 	}
 	if value := cmp.Or(file.TrustedRootPublicKey, file.RootPublicKey, file.TrustedRootKey); value != "" {
 		key, err := decodePublicKey(value)

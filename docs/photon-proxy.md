@@ -1,5 +1,7 @@
 # Photon Proxy
 
+多角色进程、动态端口轮换和 Web 管理使用 [Photon Proxy v2](photon-proxy-v2.md)。
+
 `photon-proxy` 提供一个本地 SOCKS5 入口和一个远端 TrustTunnel HTTP/2 出口。节点之间使用 TCP 和双向 TLS，转发 TCP 连接和 UDP 数据报。固定端点模式可以独立运行，部署时直接使用入口节点可通过 TCP 拨通的出口地址。
 
 ## 构建

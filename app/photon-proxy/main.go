@@ -37,10 +37,14 @@ func main() {
 
 func run(ctx context.Context, args []string) error {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
-		fmt.Fprintln(os.Stderr, "Usage: photon-proxy serve|client|socks5|publish|renew|withdraw [options]")
+		fmt.Fprintln(os.Stderr, "Usage: photon-proxy run|rotate|serve|client|socks5|publish|renew|withdraw [options]")
 		return flag.ErrHelp
 	}
 	switch args[0] {
+	case "run":
+		return runV2(ctx, args[1:])
+	case "rotate":
+		return rotateV2(args[1:])
 	case "serve":
 		return runServer(ctx, args[1:])
 	case "client":

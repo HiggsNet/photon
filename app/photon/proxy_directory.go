@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -12,9 +13,12 @@ import (
 	"sync"
 	"time"
 
+	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
+	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/service"
+	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
 func prepareProxyCapability(config *appConfig, mutation service.ProxyMutation) (service.ProxyMutation, error) {
@@ -48,7 +52,41 @@ func (d *Daemon) startProxyDirectory(ctx context.Context) (func(), error) {
 	if d.Config == nil || d.Config.ProxyDirectorySocket == "" {
 		return func() {}, nil
 	}
-	path := d.Config.ProxyDirectorySocket
+	return startProxySocket(ctx, d.Config.ProxyDirectorySocket, d.writeProxyDirectory)
+}
+
+func (d *Daemon) startProxyPublisher(ctx context.Context) (func(), error) {
+	if d.Config == nil || d.Config.ProxyPublishSocket == "" {
+		return func() {}, nil
+	}
+	if d.Config.ProxyDirectorySocket == "" || d.Config.ProxyDirectorySocket == d.Config.ProxyPublishSocket {
+		return nil, errors.New("proxy_publish_socket needs a distinct proxy_directory_socket")
+	}
+	return startProxySocket(ctx, d.Config.ProxyPublishSocket, func(conn net.Conn) {
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+		var publication service.ProxyV2Publication
+		decoder := json.NewDecoder(io.LimitReader(conn, service.ProxyDirectoryMaxBytes))
+		decoder.DisallowUnknownFields()
+		result := service.ProxyV2PublicationResult{}
+		if err := decoder.Decode(&publication); err != nil {
+			result.Error = err.Error()
+		} else {
+			requestCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+			defer cancel()
+			outcome := d.enqueueEvent(requestCtx, daemonEvent{
+				Type: daemonEventCommonMutation, CommonIntent: corestate.ProxyV2Intent{Publication: publication},
+			})
+			result.OK = outcome.Error == nil
+			if outcome.Error != nil {
+				result.Error = outcome.Error.Error()
+			}
+		}
+		_ = json.NewEncoder(conn).Encode(result)
+	})
+}
+
+func startProxySocket(ctx context.Context, path string, serve func(net.Conn)) (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
@@ -57,7 +95,7 @@ func (d *Daemon) startProxyDirectory(ctx context.Context) (func(), error) {
 	}
 	listener, err := net.Listen("unix", path)
 	if err != nil {
-		return nil, fmt.Errorf("listen on proxy directory socket: %w", err)
+		return nil, fmt.Errorf("listen on proxy socket %q: %w", path, err)
 	}
 	if err := os.Chmod(path, 0o660); err != nil {
 		_ = listener.Close()
@@ -79,7 +117,7 @@ func (d *Daemon) startProxyDirectory(ctx context.Context) (func(), error) {
 			case slots <- struct{}{}:
 				workers.Go(func() {
 					defer func() { <-slots }()
-					d.writeProxyDirectory(conn)
+					serve(conn)
 				})
 			default:
 				_ = conn.Close()
@@ -96,11 +134,19 @@ func (d *Daemon) startProxyDirectory(ctx context.Context) (func(), error) {
 func (d *Daemon) writeProxyDirectory(conn net.Conn) {
 	defer conn.Close()
 	_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
-	view := d.State.Common.ReadDiscoveryRecords("", service.RecordKeyProxy)
+	prefixes := []string{service.RecordKeyProxy}
+	if d.Config.ProxyPublishSocket != "" {
+		prefixes = append(prefixes, routing.RecordKeyPrefixRoutes, routing.RecordKeyPrefixIPAMAssignments,
+			routing.RecordKeyPrefixIPAMPools, ipsec.RecordKeyAddresses)
+	}
+	view := d.State.Common.ReadDiscoveryRecordPrefixes("", prefixes...)
 	if view == nil {
 		return
 	}
 	directory := buildProxyDirectory(view.Network, d.now())
+	if d.Config.ProxyPublishSocket != "" {
+		directory.V2, directory.MeshPrefixes = buildProxyV2Directory(view.Network, view.ManagedZone, d.now())
+	}
 	directory.ManagedZone = view.ManagedZone
 	data, err := json.Marshal(directory)
 	if err == nil && len(data) < service.ProxyDirectoryMaxBytes {

@@ -52,9 +52,10 @@ type watchedSession struct {
 }
 
 type proxyDirectory struct {
-	mu       sync.Mutex
-	view     service.ProxyDirectory
-	sessions map[*watchedSession]struct{}
+	mu         sync.Mutex
+	view       service.ProxyDirectory
+	sessions   map[*watchedSession]struct{}
+	v2Sessions map[*watchedV2Session]struct{}
 }
 
 func openProxyDirectory(ctx context.Context, socket string) (*proxyDirectory, error) {
@@ -160,6 +161,12 @@ func (d *proxyDirectory) update(view *service.ProxyDirectory, now time.Time) {
 		value, ok := d.record(session.peer.zone, now)
 		if !ok || !session.peer.matches(value) {
 			delete(d.sessions, session)
+			session.cancel()
+		}
+	}
+	for session := range d.v2Sessions {
+		if !d.view.ValidUntil.After(now) || !session.valid(d.view, now) {
+			delete(d.v2Sessions, session)
 			session.cancel()
 		}
 	}

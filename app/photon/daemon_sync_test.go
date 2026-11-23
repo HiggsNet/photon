@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net"
 	"path/filepath"
@@ -115,9 +116,25 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 	}, false); err != nil {
 		t.Fatal(err)
 	}
+	identity := service.ProxyV2Identity{
+		ProxyV2Lease: service.ProxyV2Lease{Active: true, ExpiresAt: now.Add(time.Hour).Unix()},
+		PublicKey:    base64.RawURLEncoding.EncodeToString(make([]byte, 32)),
+	}
+	value, err := json.Marshal(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := serviceA.handleCommonRecordMutationEvent(corestate.ProxyV2Intent{
+		Publication: service.ProxyV2Publication{Records: []service.ProxyV2Record{
+			{Key: service.ProxyV2IdentityKey, Type: service.ProxyV2IdentityType, Value: value},
+		}},
+	}, false); err != nil {
+		t.Fatal(err)
+	}
 	setTestGossipTransport(t, serviceA, transportA)
 	serviceB := newTestDaemonFromOwners(rtB, verifiedB, nil, &photonlinux.LinuxState{}, configB, time.Second)
 	serviceB.Config.ProxyDirectorySocket = filepath.Join(t.TempDir(), "proxy.sock")
+	serviceB.Config.ProxyPublishSocket = filepath.Join(t.TempDir(), "proxy-publish.sock")
 	setTestGossipTransport(t, serviceB, transportB)
 	clock := newFakeClock(now)
 	serviceA.gossipDriver.ResetScheduler(clock)
@@ -185,6 +202,9 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 	}
 	if got := directory.Peers["node-a.catofes."]; got.Address != capability.Address || got.SPKI != capability.SPKI {
 		t.Fatalf("remote proxy discovery = %+v", got)
+	}
+	if got := directory.V2["node-a.catofes."].Identity; got == nil || *got != identity {
+		t.Fatalf("remote v2 proxy identity = %+v", got)
 	}
 }
 

@@ -1,0 +1,42 @@
+:root {
+  color-scheme: light;
+  font: 15px/1.55 system-ui, sans-serif;
+  color: #0f2025;
+  background: #edf4f4;
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+header, main { width: min(1100px, 100% - 2rem); margin-inline: auto; }
+header { display: flex; justify-content: space-between; align-items: end; gap: 1rem; padding-block: 2rem 1rem; border-bottom: 1px solid #adbfc0; }
+h1, h2, p { margin: 0; }
+h1 { font-size: clamp(1.6rem, 4vw, 2.7rem); letter-spacing: -.025em; }
+h2 { font-size: 1.1rem; }
+header p, .empty { color: #4b6266; }
+main { display: grid; gap: 1rem; padding-block: 1rem 2.5rem; }
+#status:empty, #result:empty { display: none; }
+#status, #result { color: #234e56; }
+section { background: #fff; padding: 1rem; border: 1px solid #c3d2d2; border-radius: .75rem; min-width: 0; }
+.line { display: flex; flex-wrap: wrap; align-items: end; gap: .65rem; }
+.section-head { align-items: center; justify-content: space-between; margin-bottom: .6rem; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; text-align: left; }
+td, th { padding: .6rem .4rem; border-bottom: 1px solid #dfe8e8; vertical-align: top; }
+th { color: #4b6266; font-weight: 600; }
+td:last-child { min-width: 8rem; }
+td code { overflow-wrap: anywhere; }
+.panels, .fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+form { display: grid; gap: .8rem; margin-top: .7rem; }
+label { display: grid; gap: .25rem; color: #37575d; font-size: .9rem; }
+input, select, button { font: inherit; border: 1px solid #aabfc0; border-radius: .4rem; padding: .42rem .65rem; color: #0f2025; background: #fff; min-width: 0; }
+button { cursor: pointer; }
+button:hover { background: #e7f3f1; }
+:focus-visible { outline: 2px solid #067c6d; outline-offset: 2px; }
+button.primary { background: #125952; border-color: #125952; color: #fff; }
+fieldset { border: 1px solid #c3d2d2; border-radius: .45rem; min-width: 0; }
+.hop { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)) auto; align-items: end; gap: .4rem; padding-bottom: .6rem; }
+#result { margin-top: .7rem; overflow-wrap: anywhere; }
+#candidates { max-height: 18rem; overflow: auto; margin: .65rem 0 0; padding-left: 1.4rem; }
+#candidates li + li { margin-top: .35rem; }
+#candidates button { text-align: left; overflow-wrap: anywhere; }
+@media (max-width: 720px) { header { align-items: start; flex-direction: column; } .panels { grid-template-columns: 1fr; } }
+@media (max-width: 440px) { .fields, .hop { grid-template-columns: 1fr; } }

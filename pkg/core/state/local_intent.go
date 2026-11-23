@@ -367,6 +367,8 @@ func applyLocalIntentCandidate(candidate *VerifiedState, intent LocalIntent, now
 	case ProxyCapabilityIntent:
 		out.Record, changed, err = applyProxyCapabilityIntent(candidate, typed, now)
 		securityPriority = typed.Mutation.Record == nil
+	case ProxyV2Intent:
+		out.Record, changed, err = applyProxyV2Intent(candidate, typed, now)
 	case PutDelegationIntent:
 		out.Delegation, changed, err = applyPutDelegationIntent(candidate, typed, now)
 		if changed != "" {

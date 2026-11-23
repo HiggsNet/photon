@@ -35,10 +35,11 @@ type clientRoute struct {
 }
 
 type clientEntry struct {
-	name   string
-	listen netip.AddrPort
-	hops   chainPath
-	udp    string
+	name    string
+	listen  netip.AddrPort
+	hops    chainPath
+	udp     string
+	v2Route string
 }
 
 func runClient(ctx context.Context, args []string) error {

@@ -327,6 +327,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return err
 	}
 	defer stopProxyDirectory()
+	stopProxyPublisher, err := d.startProxyPublisher(ctx)
+	if err != nil {
+		return err
+	}
+	defer stopProxyPublisher()
 	stopObserver, err := d.startObserverServer(ctx)
 	if err != nil {
 		return err

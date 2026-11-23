@@ -143,9 +143,11 @@ func ParseProxyCapability(record *zone.Record) (ProxyCapability, error) {
 
 // ProxyDirectory is a bounded-lifetime projection from the local daemon.
 type ProxyDirectory struct {
-	ManagedZone zone.ZonePath                     `json:"managed_zone"`
-	ValidUntil  time.Time                         `json:"valid_until"`
-	Peers       map[zone.ZonePath]ProxyCapability `json:"peers"`
+	ManagedZone  zone.ZonePath                     `json:"managed_zone"`
+	ValidUntil   time.Time                         `json:"valid_until"`
+	Peers        map[zone.ZonePath]ProxyCapability `json:"peers"`
+	V2           map[zone.ZonePath]ProxyV2Peer     `json:"v2,omitempty"`
+	MeshPrefixes []string                          `json:"mesh_prefixes,omitempty"`
 }
 
 type ProxyMutation struct {

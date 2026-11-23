@@ -22,7 +22,7 @@ func localIntentReconcileLayers(intent corestate.LocalIntent) reconcileLayers {
 	case corestate.PublishSOCKS5Intent, corestate.WithdrawSOCKS5Intent, corestate.PublishTrustTunnelIntent, corestate.WithdrawTrustTunnelIntent, corestate.PublishHTTPIntent, corestate.WithdrawHTTPIntent:
 		// Service discovery has no Linux platform consumer.
 		return 0
-	case corestate.ProxyCapabilityIntent:
+	case corestate.ProxyCapabilityIntent, corestate.ProxyV2Intent:
 		return 0
 	case corestate.PutProtocolRecordIntent:
 		switch intent.Kind {

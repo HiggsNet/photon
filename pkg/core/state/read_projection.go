@@ -32,6 +32,11 @@ func (store *Store) ReadPeerAuthorization(peerID string) *DiscoveryView {
 // peerID selects all peers. A specific peer retains its authorization chain,
 // with records only from the peer itself. An empty prefix omits records.
 func (store *Store) ReadDiscoveryRecords(peerID, prefix string) *DiscoveryView {
+	return store.ReadDiscoveryRecordPrefixes(peerID, prefix)
+}
+
+// ReadDiscoveryRecordPrefixes filters several record families in one revision.
+func (store *Store) ReadDiscoveryRecordPrefixes(peerID string, prefixes ...string) *DiscoveryView {
 	if store == nil {
 		return nil
 	}
@@ -54,7 +59,7 @@ func (store *Store) ReadDiscoveryRecords(peerID, prefix string) *DiscoveryView {
 	}
 	if peerID == "" {
 		for path, zs := range network.Zones {
-			out.Network.Zones[path] = cloneDiscoveryZone(zs, prefix)
+			out.Network.Zones[path] = cloneDiscoveryZone(zs, prefixes)
 		}
 		for id, peer := range store.gossip.Peers {
 			out.Peers[id] = clonePeerCheckpoint(peer)
@@ -68,11 +73,11 @@ func (store *Store) ReadDiscoveryRecords(peerID, prefix string) *DiscoveryView {
 	if path.Valid() {
 		for current := path; ; current = current.Parent() {
 			if zs, ok := network.Zones[current]; ok {
-				recordPrefix := ""
+				var recordPrefixes []string
 				if current == path {
-					recordPrefix = prefix
+					recordPrefixes = prefixes
 				}
-				out.Network.Zones[current] = cloneDiscoveryZone(zs, recordPrefix)
+				out.Network.Zones[current] = cloneDiscoveryZone(zs, recordPrefixes)
 			}
 			if current == zone.RootZone {
 				break
@@ -82,7 +87,7 @@ func (store *Store) ReadDiscoveryRecords(peerID, prefix string) *DiscoveryView {
 	return out
 }
 
-func cloneDiscoveryZone(zs *zone.ZoneState, prefix string) *zone.ZoneState {
+func cloneDiscoveryZone(zs *zone.ZoneState, prefixes []string) *zone.ZoneState {
 	if zs == nil {
 		return nil
 	}
@@ -93,13 +98,17 @@ func cloneDiscoveryZone(zs *zone.ZoneState, prefix string) *zone.ZoneState {
 		Revocations: cloneRevocationMap(zs.Revocations),
 		MerkleRoot:  append([]byte(nil), zs.MerkleRoot...),
 	}
-	if prefix != "" {
+	if len(prefixes) != 0 {
 		for key, record := range zs.Records {
-			if strings.HasPrefix(key, prefix) {
+			for _, prefix := range prefixes {
+				if prefix == "" || !strings.HasPrefix(key, prefix) {
+					continue
+				}
 				if out.Records == nil {
 					out.Records = make(map[string]*zone.Record)
 				}
 				out.Records[key] = cloneRecord(record)
+				break
 			}
 		}
 	}

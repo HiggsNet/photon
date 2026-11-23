@@ -40,6 +40,10 @@ func serveSOCKS(ctx context.Context, listener net.Listener, client tunnelOpener)
 }
 
 func serveSOCKSListener(ctx context.Context, listener net.Listener, selectClient func() tunnelOpener) error {
+	return serveRestrictedSOCKSListener(ctx, listener, selectClient, nil)
+}
+
+func serveRestrictedSOCKSListener(ctx context.Context, listener net.Listener, selectClient func() tunnelOpener, allowSource func(netip.Addr) bool) error {
 	defer listener.Close()
 	stop := context.AfterFunc(ctx, func() { _ = listener.Close() })
 	defer stop()
@@ -56,6 +60,10 @@ func serveSOCKSListener(ctx context.Context, listener net.Listener, selectClient
 			}
 			cancel()
 			return err
+		}
+		if allowSource != nil && !allowSource(conn.RemoteAddr().(*net.TCPAddr).AddrPort().Addr().Unmap()) {
+			_ = conn.Close()
+			continue
 		}
 		select {
 		case slots <- struct{}{}:

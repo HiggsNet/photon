@@ -8,6 +8,7 @@ import (
 	"log"
 	"maps"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -71,8 +72,10 @@ func (s *routeState) save(routes map[string]clientRoute) error {
 
 type listeningRoute struct {
 	listener net.Listener
-	client   atomic.Pointer[chainClient]
+	client   atomic.Pointer[routeOpener]
 }
+
+type routeOpener struct{ client tunnelOpener }
 
 type routeInfo struct {
 	Name string `json:"name"`
@@ -80,22 +83,26 @@ type routeInfo struct {
 }
 
 type routeManager struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	state     *routeState
-	newClient func(clientEntry) *chainClient
-	errors    chan error
-	workers   sync.WaitGroup
+	ctx           context.Context
+	cancel        context.CancelFunc
+	state         *routeState
+	newClient     func(clientEntry) tunnelOpener
+	prepare       func(string, clientRoute, bool) (clientEntry, error)
+	allowSource   func(netip.Addr) bool
+	defaultListen string
+	errors        chan error
+	workers       sync.WaitGroup
 
 	mu        sync.Mutex
 	routes    map[string]clientRoute
 	listeners map[string]*listeningRoute
 }
 
-func newRouteManager(ctx context.Context, state *routeState, newClient func(clientEntry) *chainClient) *routeManager {
+func newRouteManager[T tunnelOpener](ctx context.Context, state *routeState, newClient func(clientEntry) T) *routeManager {
 	ctx, cancel := context.WithCancel(ctx)
 	return &routeManager{
-		ctx: ctx, cancel: cancel, state: state, newClient: newClient, errors: make(chan error, 1),
+		ctx: ctx, cancel: cancel, state: state, newClient: func(entry clientEntry) tunnelOpener { return newClient(entry) }, errors: make(chan error, 1),
+		prepare: prepareClientEntry, defaultListen: "127.0.0.1:0",
 		routes: make(map[string]clientRoute), listeners: make(map[string]*listeningRoute),
 	}
 }
@@ -113,7 +120,7 @@ func (m *routeManager) start(routes map[string]clientRoute, entries []clientEntr
 		route.Listen = listener.Addr().String()
 		m.routes[entry.name] = route
 		binding := &listeningRoute{listener: listener}
-		binding.client.Store(m.newClient(entry))
+		binding.client.Store(&routeOpener{m.newClient(entry)})
 		m.listeners[entry.name] = binding
 	}
 	if err := m.state.save(m.routes); err != nil {
@@ -129,7 +136,7 @@ func (m *routeManager) start(routes map[string]clientRoute, entries []clientEntr
 func (m *routeManager) serve(name string, binding *listeningRoute) {
 	log.Printf("SOCKS5 route %q listening on %s", name, binding.listener.Addr())
 	m.workers.Go(func() {
-		err := serveSOCKSListener(m.ctx, binding.listener, func() tunnelOpener { return binding.client.Load() })
+		err := serveRestrictedSOCKSListener(m.ctx, binding.listener, func() tunnelOpener { return binding.client.Load().client }, m.allowSource)
 		if err != nil {
 			select {
 			case m.errors <- fmt.Errorf("route %q: %w", name, err):
@@ -173,9 +180,9 @@ func (m *routeManager) create(name string, route clientRoute) (routeInfo, error)
 		return routeInfo{}, fmt.Errorf("%w: %q already exists", errRouteConflict, name)
 	}
 	if route.Listen == "" {
-		route.Listen = "127.0.0.1:0"
+		route.Listen = m.defaultListen
 	}
-	entry, err := prepareClientEntry(name, route, true)
+	entry, err := m.prepare(name, route, true)
 	if err != nil {
 		return routeInfo{}, fmt.Errorf("%w: %w", errRouteInvalid, err)
 	}
@@ -189,7 +196,7 @@ func (m *routeManager) create(name string, route clientRoute) (routeInfo, error)
 		return routeInfo{}, err
 	}
 	binding := &listeningRoute{listener: listener}
-	binding.client.Store(m.newClient(entry))
+	binding.client.Store(&routeOpener{m.newClient(entry)})
 	m.listeners[name] = binding
 	m.serve(name, binding)
 	return routeInfo{Name: name, clientRoute: route}, nil
@@ -209,14 +216,14 @@ func (m *routeManager) replace(name string, route clientRoute) (routeInfo, error
 		return routeInfo{}, fmt.Errorf("%w: replacement must keep listen address %s", errRouteInvalid, previous.Listen)
 	}
 	route.Listen = previous.Listen
-	entry, err := prepareClientEntry(name, route, false)
+	entry, err := m.prepare(name, route, false)
 	if err != nil {
 		return routeInfo{}, fmt.Errorf("%w: %w", errRouteInvalid, err)
 	}
 	if err := m.set(name, route); err != nil {
 		return routeInfo{}, err
 	}
-	m.listeners[name].client.Store(m.newClient(entry))
+	m.listeners[name].client.Store(&routeOpener{m.newClient(entry)})
 	return routeInfo{Name: name, clientRoute: route}, nil
 }
 
