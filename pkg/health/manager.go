@@ -32,6 +32,7 @@ type Manager struct {
 	nextProbe   map[string]time.Time
 	errorsTotal map[string]int
 	babelObs    map[string]BabelObservation
+	largeProbes map[string]*largeProbe
 
 	// inFlight tracks concurrent probe dispatch.
 	inFlight    int
@@ -49,6 +50,7 @@ type probeDispatch struct {
 	id     string
 	target ProbeTarget
 	window *RollingWindow // identity of this target installation, including ID reuse
+	large  bool
 }
 
 // NewManager creates a Manager. The Prober may be nil, in which case a no-op
@@ -60,6 +62,18 @@ func NewManager(cfg ProbeConfig, hyst HysteresisConfig, prober Prober) *Manager 
 	max := cfg.MaxConcurrent
 	if max <= 0 {
 		max = 8
+	}
+	if cfg.Large.Enabled {
+		defaults := DefaultLargeProbeConfig()
+		if cfg.Large.Interval <= 0 {
+			cfg.Large.Interval = defaults.Interval
+		}
+		if cfg.Large.PacketSize == 0 {
+			cfg.Large.PacketSize = defaults.PacketSize
+		}
+		if cfg.Large.LossWindow <= 0 {
+			cfg.Large.LossWindow = defaults.LossWindow
+		}
 	}
 	return &Manager{
 		cfg:         cfg,
@@ -73,6 +87,7 @@ func NewManager(cfg ProbeConfig, hyst HysteresisConfig, prober Prober) *Manager 
 		nextProbe:   map[string]time.Time{},
 		errorsTotal: map[string]int{},
 		babelObs:    map[string]BabelObservation{},
+		largeProbes: map[string]*largeProbe{},
 		inFlightIDs: map[string]bool{},
 		maxInflight: max,
 	}
@@ -94,6 +109,7 @@ func (m *Manager) SetTargets(targets []ProbeTarget, now time.Time) {
 			m.removeTargetLocked(id)
 			m.windows[id] = NewRollingWindow(m.lossWindow())
 			m.nextProbe[id] = now.Add(m.jitteredInterval())
+			m.installLargeProbe(id, now)
 		}
 	}
 	for id := range m.targets {
@@ -116,6 +132,7 @@ func (m *Manager) UpsertTarget(t ProbeTarget, now time.Time) {
 		m.removeTargetLocked(id)
 		m.windows[id] = NewRollingWindow(m.lossWindow())
 		m.nextProbe[id] = now.Add(m.jitteredInterval())
+		m.installLargeProbe(id, now)
 	}
 	m.targets[id] = t
 }
@@ -137,6 +154,7 @@ func (m *Manager) removeTargetLocked(instanceID string) {
 	delete(m.lastReason, instanceID)
 	delete(m.errorsTotal, instanceID)
 	delete(m.babelObs, instanceID)
+	delete(m.largeProbes, instanceID)
 	m.states.Reset(instanceID)
 }
 
@@ -179,7 +197,7 @@ func (m *Manager) Tick(ctx context.Context, now time.Time) int {
 		wg.Add(1)
 		go func(job probeDispatch) {
 			defer wg.Done()
-			results <- outcome{id: job.id, result: m.prober.Probe(job.ctx, job.target, m.cfg)}
+			results <- outcome{id: job.id, result: m.prober.Probe(job.ctx, job.target, m.probeConfig(job))}
 		}(job)
 	}
 	wg.Wait()
@@ -254,11 +272,12 @@ const asyncProbeDeadlineGrace = 250 * time.Millisecond
 // probers honor context cancellation, while the buffered result channel also
 // lets the worker move on if an implementation fails to return after cancel.
 func (m *Manager) runAsyncProbe(job probeDispatch) ProbeResult {
-	timeout := m.cfg.Timeout
+	cfg := m.probeConfig(job)
+	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = time.Second
 	}
-	burst := m.cfg.Burst
+	burst := cfg.Burst
 	if burst <= 0 {
 		burst = 3
 	}
@@ -266,7 +285,7 @@ func (m *Manager) runAsyncProbe(job probeDispatch) ProbeResult {
 	defer cancel()
 	results := make(chan ProbeResult, 1)
 	go func() {
-		results <- m.prober.Probe(probeCtx, job.target, m.cfg)
+		results <- m.prober.Probe(probeCtx, job.target, cfg)
 	}()
 	select {
 	case result := <-results:
@@ -293,25 +312,42 @@ func (m *Manager) reserveDue(ctx context.Context, now time.Time) []probeDispatch
 		return nil
 	}
 	available := m.maxInflight - m.inFlight
-	due := make([]string, 0, len(m.targets))
+	type candidate struct {
+		id    string
+		next  time.Time
+		large bool
+	}
+	due := make([]candidate, 0, len(m.targets)*2)
 	for id, next := range m.nextProbe {
 		if !m.inFlightIDs[id] && !next.IsZero() && !now.Before(next) {
-			due = append(due, id)
+			due = append(due, candidate{id: id, next: next})
+		}
+	}
+	for id, probe := range m.largeProbes {
+		if !m.inFlightIDs[id] && !now.Before(probe.next) {
+			due = append(due, candidate{id: id, next: probe.next, large: true})
 		}
 	}
 	sort.Slice(due, func(i, j int) bool {
-		left, right := m.nextProbe[due[i]], m.nextProbe[due[j]]
+		left, right := due[i].next, due[j].next
 		if !left.Equal(right) {
 			return left.Before(right)
 		}
-		return due[i] < due[j]
+		if due[i].id != due[j].id {
+			return due[i].id < due[j].id
+		}
+		return !due[i].large && due[j].large
 	})
-	if len(due) > available {
-		due = due[:available]
-	}
 	pending := make([]probeDispatch, 0, len(due))
-	for _, id := range due {
-		pending = append(pending, probeDispatch{ctx: ctx, id: id, target: m.targets[id], window: m.windows[id]})
+	for _, candidate := range due {
+		if len(pending) == available {
+			break
+		}
+		id := candidate.id
+		if m.inFlightIDs[id] {
+			continue
+		}
+		pending = append(pending, probeDispatch{ctx: ctx, id: id, target: m.targets[id], window: m.windows[id], large: candidate.large})
 		m.inFlight++
 		m.inFlightIDs[id] = true
 	}
@@ -327,7 +363,11 @@ func (m *Manager) finishProbe(job probeDispatch, now time.Time) {
 	}
 	m.releaseInFlightLocked(id)
 	if m.windows[id] == job.window {
-		m.nextProbe[id] = now.Add(m.jitteredInterval())
+		if job.large {
+			m.largeProbes[id].next = now.Add(m.jitteredDuration(m.cfg.Large.Interval))
+		} else {
+			m.nextProbe[id] = now.Add(m.jitteredInterval())
+		}
 	}
 }
 
@@ -356,10 +396,19 @@ func (m *Manager) NextDue(now time.Time) (time.Time, bool) {
 			earliest = next
 		}
 	}
+	for id, probe := range m.largeProbes {
+		if !m.inFlightIDs[id] && (earliest.IsZero() || probe.next.Before(earliest)) {
+			earliest = probe.next
+		}
+	}
 	return earliest, !earliest.IsZero()
 }
 
 func (m *Manager) applyResult(job probeDispatch, result ProbeResult, now time.Time) {
+	if job.large {
+		m.applyLargeResult(job, result, now)
+		return
+	}
 	instanceID := job.id
 	m.mu.Lock()
 	window := m.windows[instanceID]
@@ -439,6 +488,7 @@ func (m *Manager) Snapshot(now time.Time) []LinkHealth {
 			NextProbeAt:     next,
 			CutoverBlocking: t.Staged && m.cutoverBlockingLocked(id),
 			Labels:          labels,
+			LargeProbe:      m.largeHealthLocked(id),
 		}
 		out = append(out, h)
 	}
@@ -502,6 +552,7 @@ func (m *Manager) HealthFor(instanceID string, now time.Time) (LinkHealth, bool)
 		NextProbeAt:     m.nextProbe[instanceID],
 		CutoverBlocking: t.Staged && m.cutoverBlockingLocked(instanceID),
 		Labels:          labels,
+		LargeProbe:      m.largeHealthLocked(instanceID),
 	}, true
 }
 
@@ -596,11 +647,18 @@ func (m *Manager) lossWindow() int {
 }
 
 func (m *Manager) jitteredInterval() time.Duration {
-	if m.cfg.Jitter <= 0 {
-		return m.cfg.Interval
+	return m.jitteredDuration(m.cfg.Interval)
+}
+
+func (m *Manager) jitteredDuration(interval time.Duration) time.Duration {
+	// Clamp jitter so a short configured interval cannot create an immediate
+	// redispatch loop. Negative intervals remain useful to synchronous tests.
+	jitter := min(m.cfg.Jitter, interval/2)
+	if jitter <= 0 {
+		return interval
 	}
-	delta := time.Duration(rand.Int63n(int64(m.cfg.Jitter*2))) - m.cfg.Jitter
-	return m.cfg.Interval + delta
+	delta := time.Duration(rand.Int63n(int64(jitter*2))) - jitter
+	return interval + delta
 }
 
 func generationLabel(g uint64) string {

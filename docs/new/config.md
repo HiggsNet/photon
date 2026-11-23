@@ -195,9 +195,9 @@ ipsec:
 
 **无入站映射的 NAT 后节点**通常只需配置 `ipsec.role: out`，三种 announce 均可省略。`out` 不发布供对端拨入的地址，仍发布身份、密钥、端口和双栈 overlay 能力，由本节点主动连接 `in`/`both` 节点。`role` 默认仍为 `both`，留空地址不自动推断为 `out`；双方均为 `out` 时不建立直连。
 
-移动 Linux 节点可以在 `role: out` 下加 `ipsec.mobike: true`。Linux 网关也需配置
-`ipsec.mobike: true`，它会为本地 overlay 策略选中且签名 profile 同时声明 `role: out`
-和 `mobike: true` 的 peer 开启 StrongSwan MOBIKE。网关互联和省略选项的连接继续使用原配置。
+Linux 网关默认对本地 overlay 策略允许、且签名 profile 声明 `role: out` 和 `mobike: true`
+的对端启用 StrongSwan MOBIKE。设置 `ipsec.mobike: false` 可关闭。`in` / `both` 网关互联
+使用 `mobike=no`。Linux 主动接入节点仍需在 `role: out` 下显式设置 `ipsec.mobike: true`。
 双方在 IKE_AUTH 中协商能力。已有 SA 在该网关端口代次内迁移，端口换代沿用 Rotate。
 
 ## Overlay Link Policy
@@ -388,6 +388,11 @@ health:
   loss_threshold: "0.2"
   down_loss_threshold: "0.6"
   recover_consecutive: 5
+  large_probe:
+    enabled: false
+    interval: 1m
+    packet_size: 1200
+    loss_window: 60
   metrics:
     # Metrics persistence is disabled unless explicitly enabled.
     enabled: false
@@ -399,6 +404,10 @@ health:
 
 - `interval` / `timeout` / `burst`：探测间隔、单次超时和连续探测次数。
 - `loss_window`：滑动窗口保留的 burst 数；窗口内 sent/received/lost 和 loss ratio 按真实 ICMP 包数累计。
+- `large_probe.enabled`：显式启用持续大包往返采样；默认关闭，单独写 interval 不会启用。
+- `large_probe.interval`：大包独立探测间隔，默认 `1m`，必须为正；每轮固定发送 1 个请求，不触发异常加测。
+- `large_probe.packet_size`：隧道内完整 IP 报文大小（含 IP、ICMP 头，不含外层 IP/IPsec），默认 `1200`，允许 `68..1400` 字节。raw ICMP 和 exec-ping fallback 使用一致的大小。
+- `large_probe.loss_window`：大包单独保留的样本数，默认 `60`，允许 `1..10000`；窗口内 sent/received/lost 不与小包混合。窗口按样本数，不是固定时间。
 - `jitter`：RTT 抖动阈值，用于判断链路质量。
 - `max_concurrent_probes`：同时进行的探测数量上限。
 - `fail_threshold_consecutive` / `recover_consecutive`：连续失败/恢复多少次后切换状态。

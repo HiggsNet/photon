@@ -19,19 +19,28 @@ type healthConfig struct {
 
 // healthConfigYAML is the YAML representation of healthConfig.
 type healthConfigYAML struct {
-	Enabled            *bool              `yaml:"enabled"`
-	Disabled           *bool              `yaml:"disabled"`
-	Interval           string             `yaml:"interval"`
-	Timeout            string             `yaml:"timeout"`
-	Burst              *int               `yaml:"burst"`
-	LossWindow         *int               `yaml:"loss_window"`
-	Jitter             string             `yaml:"jitter"`
-	MaxConcurrent      *int               `yaml:"max_concurrent_probes"`
-	FailThreshold      *int               `yaml:"fail_threshold_consecutive"`
-	LossThreshold      string             `yaml:"loss_threshold"`
-	DownLossThreshold  string             `yaml:"down_loss_threshold"`
-	RecoverConsecutive *int               `yaml:"recover_consecutive"`
-	Metrics            *healthMetricsYAML `yaml:"metrics"`
+	Enabled            *bool                 `yaml:"enabled"`
+	Disabled           *bool                 `yaml:"disabled"`
+	Interval           string                `yaml:"interval"`
+	Timeout            string                `yaml:"timeout"`
+	Burst              *int                  `yaml:"burst"`
+	LossWindow         *int                  `yaml:"loss_window"`
+	Jitter             string                `yaml:"jitter"`
+	MaxConcurrent      *int                  `yaml:"max_concurrent_probes"`
+	FailThreshold      *int                  `yaml:"fail_threshold_consecutive"`
+	LossThreshold      string                `yaml:"loss_threshold"`
+	DownLossThreshold  string                `yaml:"down_loss_threshold"`
+	RecoverConsecutive *int                  `yaml:"recover_consecutive"`
+	Metrics            *healthMetricsYAML    `yaml:"metrics"`
+	LargeProbe         *healthLargeProbeYAML `yaml:"large_probe"`
+}
+
+type healthLargeProbeYAML struct {
+	Enabled    *bool  `yaml:"enabled"`
+	Disabled   *bool  `yaml:"disabled"`
+	Interval   string `yaml:"interval"`
+	PacketSize *int   `yaml:"packet_size"`
+	LossWindow *int   `yaml:"loss_window"`
 }
 
 type healthMetricsYAML struct {
@@ -61,6 +70,34 @@ func parseHealthConfig(y *healthConfigYAML) (healthConfig, error) {
 		return healthConfig{}, err
 	}
 	out.Enabled = enabled
+	if y.LargeProbe != nil {
+		large := &out.Probe.Large
+		large.Enabled, err = enabledFromPresence("health.large_probe.enabled", "health.large_probe.disabled", false, y.LargeProbe.Enabled, y.LargeProbe.Disabled)
+		if err != nil {
+			return healthConfig{}, err
+		}
+		if y.LargeProbe.Interval != "" {
+			large.Interval, err = parseConfigDuration(y.LargeProbe.Interval, "health.large_probe.interval")
+			if err != nil {
+				return healthConfig{}, err
+			}
+			if large.Interval <= 0 {
+				return healthConfig{}, fmt.Errorf("health.large_probe.interval must be positive")
+			}
+		}
+		if y.LargeProbe.PacketSize != nil {
+			large.PacketSize = *y.LargeProbe.PacketSize
+		}
+		if large.PacketSize < 68 || large.PacketSize > 1400 {
+			return healthConfig{}, fmt.Errorf("health.large_probe.packet_size must be between 68 and 1400 bytes (inner IP packet)")
+		}
+		if y.LargeProbe.LossWindow != nil {
+			large.LossWindow = *y.LargeProbe.LossWindow
+		}
+		if large.LossWindow < 1 || large.LossWindow > 10000 {
+			return healthConfig{}, fmt.Errorf("health.large_probe.loss_window must be between 1 and 10000 samples")
+		}
+	}
 	if y.Interval != "" {
 		d, err := parseConfigDuration(y.Interval, "health.interval")
 		if err != nil {

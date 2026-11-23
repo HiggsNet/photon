@@ -117,6 +117,85 @@ func TestLocalTransportPersistsSignsAndRestarts(t *testing.T) {
 	}
 }
 
+func TestLocalTransportRepublishesMOBIKEOnRestart(t *testing.T) {
+	source, config, plan, now := transportIdentityFixture(t)
+	endpoint := netip.MustParseAddrPort("127.0.0.1:12345")
+	identity, err := source.EnsureLocalTransport(t.Context(), config, now, plan, endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := source.Store().ReadView()
+	for _, enabled := range []bool{true, false} {
+		if err := source.Close(); err != nil {
+			t.Fatal(err)
+		}
+		config.Gateway.MOBIKE = enabled
+		source, err = OpenState(config.State.Path, config.ManagedZone, config.TrustedRootPublicKey, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reopened := source
+		t.Cleanup(func() { reopened.Close() })
+		now = now.Add(time.Second)
+		plan = PlanGateway(t.Context(), config, view, now)
+		updated, err := source.EnsureLocalTransport(t.Context(), config, now, plan, endpoint)
+		if err != nil || !bytes.Equal(updated.PrivateKey, identity.PrivateKey) {
+			t.Fatalf("MOBIKE = %t: transport identity changed or unavailable: %v", enabled, err)
+		}
+		after := source.Store().ReadView()
+		beforeZone, afterZone := view.State.Network.Zones[config.ManagedZone], after.State.Network.Zones[config.ManagedZone]
+		previous, current := beforeZone.Records[ipsec.RecordKeyProfile], afterZone.Records[ipsec.RecordKeyProfile]
+		profile, err := ipsec.ParseProfileRecord(current)
+		if err != nil || profile.MOBIKE != enabled || current.Version != previous.Version+1 || !bytes.Equal(current.PrevHash, photoncrypto.RecordHash(previous)) || after.Revision != view.Revision+1 {
+			t.Fatalf("MOBIKE = %t: signed profile did not advance correctly: %v", enabled, err)
+		}
+		if err := photoncrypto.VerifyRecord(current, afterZone.Authority, now); err != nil {
+			t.Fatal(err)
+		}
+		for key, record := range beforeZone.Records {
+			if key == ipsec.RecordKeyProfile {
+				continue
+			}
+			published := afterZone.Records[key]
+			if published == nil || !bytes.Equal(photoncrypto.RecordHash(published), photoncrypto.RecordHash(record)) {
+				t.Fatalf("MOBIKE = %t: %s changed", enabled, key)
+			}
+		}
+		plan = PlanGateway(t.Context(), config, after, now)
+		if _, err := source.EnsureLocalTransport(t.Context(), config, now, plan, endpoint); err != nil || source.Store().VerifiedRevision() != after.Revision {
+			t.Fatalf("MOBIKE = %t: unchanged setting republished profile: %v", enabled, err)
+		}
+		view = after
+	}
+}
+
+func TestLocalTransportMOBIKEChangeRejectsForeignProfile(t *testing.T) {
+	source, config, plan, now := transportIdentityFixture(t)
+	endpoint := netip.MustParseAddrPort("127.0.0.1:12345")
+	if _, err := source.EnsureLocalTransport(t.Context(), config, now, plan, endpoint); err != nil {
+		t.Fatal(err)
+	}
+	view := source.Store().ReadView()
+	profile, err := ipsec.ParseProfileRecord(view.State.Network.Zones[config.ManagedZone].Records[ipsec.RecordKeyProfile])
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile.IKEIdentity = "other.catofes."
+	value, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.Store().ApplyLocalIntent(t.Context(), corestate.PutProtocolRecordIntent{Kind: corestate.ProtocolRecordIPsec, Zone: config.ManagedZone, Key: ipsec.RecordKeyProfile, Type: ipsec.RecordTypeProfile, Value: value}, now); err != nil {
+		t.Fatal(err)
+	}
+	view = source.Store().ReadView()
+	config.Gateway.MOBIKE = true
+	plan = PlanGateway(t.Context(), config, view, now)
+	if _, err := source.EnsureLocalTransport(t.Context(), config, now, plan, endpoint); err == nil || source.Store().VerifiedRevision() != view.Revision {
+		t.Fatalf("MOBIKE change overwrote a different local profile: %v", err)
+	}
+}
+
 func TestLocalTransportResumesPrivateCommitBeforePublic(t *testing.T) {
 	source, config, plan, now := transportIdentityFixture(t)
 	key, record, err := ipsec.GenerateTransportKeyRecord(ipsec.AlgorithmEd25519, now, 0)

@@ -33,8 +33,10 @@ const (
 )
 
 type LinkPlannerOptions struct {
-	Now                 time.Time
-	MOBIKE              bool
+	Now time.Time
+	// Nil allows MOBIKE as a responder for opted-in outbound peers.
+	// Initiating MOBIKE requires an explicit true.
+	MOBIKE              *bool
 	DNSResolver         DNSResolver
 	AllowPrivateLocal   bool
 	ContactPointQuality map[zone.ZonePath]map[string]ContactPointQuality
@@ -304,12 +306,16 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 
 	localGeneration := localPortGeneration(ns, local, now)
 	localIKE := localIKEPortFromState(ns, local, now)
+	var mobike bool
+	switch {
+	case localRole == RoleOut && role == InitiatorRolePrimary:
+		mobike = opts.MOBIKE != nil && *opts.MOBIKE
+	case role == "" && remoteRole == RoleOut && records.Profile.MOBIKE:
+		mobike = opts.MOBIKE == nil || *opts.MOBIKE
+	}
 	for i := range specs {
 		spec := &specs[i]
-		// The authorized outbound-only node is always the MOBIKE initiator.
-		// For responders, the peer must also opt in through its signed profile.
-		spec.MOBIKE = opts.MOBIKE && (localRole == RoleOut && role == InitiatorRolePrimary ||
-			role == "" && remoteRole == RoleOut && records.Profile.MOBIKE)
+		spec.MOBIKE = mobike
 		if IsActiveInitiatorRole(spec.InitiatorRole) {
 			if point, ok := firstContactPoint(spec.ContactPoints); ok {
 				spec.Generation = point.Generation

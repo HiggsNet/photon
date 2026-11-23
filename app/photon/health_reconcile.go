@@ -183,6 +183,7 @@ func healthSpoolSamples(links []inspect.HealthSample) []healthspool.Sample {
 			Sent:          link.Sent,
 			Received:      link.Received,
 			Lost:          link.Lost,
+			LargeProbe:    link.LargeProbe,
 		})
 	}
 	return samples
@@ -221,9 +222,30 @@ func healthSamplesFromSnapshot(snapshot []health.LinkHealth) []inspect.HealthSam
 			LastFailure:     inspect.BuildFailure(inspect.FailureCodeHealthProbe, h.LastFailure),
 			NextProbeUnix:   h.NextProbeAt.Unix(),
 			CutoverBlocking: h.CutoverBlocking,
+			LargeProbe:      largeProbeSample(h.LargeProbe),
 		})
 	}
 	return out
+}
+
+func largeProbeSample(h *health.LargeProbeHealth) *inspect.LargeProbeSample {
+	if h == nil {
+		return nil
+	}
+	sample := &inspect.LargeProbeSample{
+		PacketSize: h.PacketSize, IntervalSeconds: h.Interval.Seconds(), LossWindow: h.LossWindow,
+		Sent: h.Sent, Received: h.Received, Lost: h.Lost, LossRatioPct: h.LossRatio * 100,
+		LastRTTMs:   h.LastRTT.Milliseconds(),
+		LastFailure: inspect.BuildFailure(inspect.FailureCodeHealthProbe, h.LastFailure),
+	}
+	if !h.LastProbeAt.IsZero() {
+		sample.LastProbeUnix = h.LastProbeAt.Unix()
+		sample.LastProbeUnixMs = h.LastProbeAt.UnixMilli()
+	}
+	if !h.NextProbeAt.IsZero() {
+		sample.NextProbeUnix = h.NextProbeAt.Unix()
+	}
+	return sample
 }
 
 // showHealth prints the current link health state to stdout.

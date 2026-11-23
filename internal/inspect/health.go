@@ -45,26 +45,42 @@ type HealthLinkView struct {
 }
 
 type HealthSample struct {
-	ProbeID         string       `json:"probe_id,omitempty"`
-	InstanceID      string       `json:"instance_id"`
-	ProbeRole       string       `json:"probe_role,omitempty"`
-	InterfaceName   string       `json:"interface_name,omitempty"`
-	State           string       `json:"state"`
-	ProbeType       string       `json:"probe_type"`
+	ProbeID         string            `json:"probe_id,omitempty"`
+	InstanceID      string            `json:"instance_id"`
+	ProbeRole       string            `json:"probe_role,omitempty"`
+	InterfaceName   string            `json:"interface_name,omitempty"`
+	State           string            `json:"state"`
+	ProbeType       string            `json:"probe_type"`
+	Sent            int               `json:"sent"`
+	Received        int               `json:"received"`
+	Lost            int               `json:"lost"`
+	LossRatio       int               `json:"loss_ratio_pct"`
+	LastRTTMs       int64             `json:"last_rtt_ms"`
+	EWMARTTMs       int64             `json:"ewma_rtt_ms"`
+	P50RTTMs        int64             `json:"p50_rtt_ms"`
+	P95RTTMs        int64             `json:"p95_rtt_ms"`
+	P99RTTMs        int64             `json:"p99_rtt_ms"`
+	JitterMs        int64             `json:"jitter_ms"`
+	ConsecutiveFail int               `json:"consecutive_fail"`
+	LastFailure     *FailureView      `json:"last_failure,omitempty"`
+	NextProbeUnix   int64             `json:"next_probe_unix,omitempty"`
+	CutoverBlocking bool              `json:"cutover_blocking,omitempty"`
+	LargeProbe      *LargeProbeSample `json:"large_probe,omitempty"`
+}
+
+type LargeProbeSample struct {
+	PacketSize      int          `json:"packet_size"`
+	IntervalSeconds float64      `json:"interval_seconds"`
+	LossWindow      int          `json:"loss_window"`
 	Sent            int          `json:"sent"`
 	Received        int          `json:"received"`
 	Lost            int          `json:"lost"`
-	LossRatio       int          `json:"loss_ratio_pct"`
+	LossRatioPct    float64      `json:"loss_ratio_pct"`
 	LastRTTMs       int64        `json:"last_rtt_ms"`
-	EWMARTTMs       int64        `json:"ewma_rtt_ms"`
-	P50RTTMs        int64        `json:"p50_rtt_ms"`
-	P95RTTMs        int64        `json:"p95_rtt_ms"`
-	P99RTTMs        int64        `json:"p99_rtt_ms"`
-	JitterMs        int64        `json:"jitter_ms"`
-	ConsecutiveFail int          `json:"consecutive_fail"`
-	LastFailure     *FailureView `json:"last_failure,omitempty"`
+	LastProbeUnix   int64        `json:"last_probe_unix,omitempty"`
+	LastProbeUnixMs int64        `json:"last_probe_unix_ms,omitempty"`
 	NextProbeUnix   int64        `json:"next_probe_unix,omitempty"`
-	CutoverBlocking bool         `json:"cutover_blocking,omitempty"`
+	LastFailure     *FailureView `json:"last_failure,omitempty"`
 }
 
 func BuildHealthView(input HealthInput) HealthView {

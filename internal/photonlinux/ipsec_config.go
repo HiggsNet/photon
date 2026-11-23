@@ -92,7 +92,7 @@ type IPsecConfig struct {
 	DefaultNetNS              ipsec.NetNSSpec
 	LinkGroups                []ipsec.LinkGroupSpec
 	Role                      string
-	MOBIKE                    bool
+	MOBIKE                    *bool
 	Driver                    string
 	VICISocket                string
 	PortMode                  string
@@ -175,7 +175,7 @@ func (raw IPsecConfigYAML) Apply(config *IPsecConfig) error {
 		return fmt.Errorf("ipsec.accept is deprecated; use ipsec.role")
 	}
 	if raw.MOBIKE != nil {
-		config.MOBIKE = *raw.MOBIKE
+		config.MOBIKE = raw.MOBIKE
 	}
 	if raw.VICISocket != "" {
 		config.VICISocket = raw.VICISocket

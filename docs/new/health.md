@@ -182,6 +182,32 @@ health:
 
 丢包率字段在 YAML 中是字符串形式（如 `"0.2"`），由 `parseFloatRatio` 解析并校验范围。
 
+### 3.4 持续大包往返采样
+
+大包用于观察“小包正常、大包持续丢失”的尺寸相关质量问题，默认关闭。显式启用后独立调度，每轮只发一个请求；不会在失败后自动提高采样频率：
+
+```yaml
+health:
+  # 小包的间隔和 burst 仍独立可调；这里仅示例，不改变默认值。
+  interval: 6s
+  burst: 1
+  large_probe:
+    enabled: true
+    interval: 1m
+    packet_size: 1200
+    loss_window: 60
+```
+
+- `interval` 必须为正。与小包一样，下一轮从完成时刻起计算间隔，并应用有界 jitter；实际间隔还包括探测耗时与并发排队。
+- `packet_size` 是**隧道内完整 IP 报文**大小，范围 `68..1400` 字节，默认 `1200`。例如 IPv6 的 1200 字节报文包含 40 字节 IP 头、8 字节 ICMP 头、1152 字节载荷；公网流量还要加外层 IP、ESP、可选 UDP 等封装。raw ICMP 和 exec-ping fallback 均保持此语义，不允许本地 IP 分片掩盖报文尺寸；不能据此断言外层 IPsec 路径绝无分片。
+- `loss_window` 是单独保留的最近样本数，默认 `60`，范围 `1..10000`。包数、丢包率、最后 RTT、最后错误和下一次时间均与小包分开。未采样不显示为 0% 丢包；少量样本不能精确估算低丢包率。
+- 两个流共享 worker pool、每目标并发限制和已安装 CHILD_SA/XFRM 的资格检查。接口或 generation 更换时两类历史一起清除，旧请求结果不能污染新目标。
+- 大包仅增加质量观测，不改变既有小包健康状态、Babel metric 或 rotate readiness。
+- Web health 按现有 zone 排序规则分组，同一 zone 下排列各 group 与 active/old/staged。错误状态不会打乱顺序。每条链路可分别查看大小包统计与历史（历史需要显式配置本地 spool）。
+- OpenMetrics 额外输出 `photon_link_large_probe_packet_size_bytes`、`photon_link_large_probe_packets_sent/received/lost`、`photon_link_large_probe_loss_ratio`、`photon_link_large_probe_rtt_seconds`，包数仍为窗口 gauge。JSON 在原有小包字段旁增加可选的 `large_probe`，旧记录没有该字段时按无大包样本处理。历史接口增加 `metric=large_loss` / `large_rtt`，只按实际大包探测时间生成点，不把小包触发的重复快照当成新测量。
+
+频率按**本端每条隧道**设置，两端不会自动协商或轮流。一次请求与回复经过两个方向；若两端都启用，都会产生流量。估算每条隧道的大包收发合计：`2 × 封装后单包字节数 ÷ interval` 字节/秒（仅本端发起）；两端相同配置时再乘 2。这里只提供可调采样，不提供节点月流量硬上限。
+
 ---
 
 ## 4. 主动探测（Prober）

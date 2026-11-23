@@ -40,6 +40,20 @@ func CollectMetrics(healths []LinkHealth) MetricsSnapshot {
 			snapshot.Samples = append(snapshot.Samples, MetricSample{Name: "photon_link_probe_jitter_seconds", Value: link.Jitter.Seconds(), Labels: labels})
 		}
 		snapshot.Samples = append(snapshot.Samples, MetricSample{Name: "photon_link_health_state", Value: healthStateValue(link.State), Labels: labels})
+		if large := link.LargeProbe; large != nil {
+			snapshot.Samples = append(snapshot.Samples, MetricSample{Name: "photon_link_large_probe_packet_size_bytes", Value: float64(large.PacketSize), Labels: labels})
+			if large.Sent > 0 {
+				snapshot.Samples = append(snapshot.Samples,
+					MetricSample{Name: "photon_link_large_probe_packets_sent", Value: float64(large.Sent), Labels: labels},
+					MetricSample{Name: "photon_link_large_probe_packets_received", Value: float64(large.Received), Labels: labels},
+					MetricSample{Name: "photon_link_large_probe_packets_lost", Value: float64(large.Lost), Labels: labels},
+					MetricSample{Name: "photon_link_large_probe_loss_ratio", Value: large.LossRatio, Labels: labels},
+				)
+			}
+			if large.LastRTT > 0 {
+				snapshot.Samples = append(snapshot.Samples, MetricSample{Name: "photon_link_large_probe_rtt_seconds", Value: large.LastRTT.Seconds(), Labels: labels})
+			}
+		}
 	}
 	return snapshot
 }
@@ -87,6 +101,18 @@ func RenderOpenMetrics(w io.Writer, snapshot MetricsSnapshot, errorsTotal map[st
 
 func healthMetricMeta(name string) (string, string) {
 	switch name {
+	case "photon_link_large_probe_packet_size_bytes":
+		return "Configured large probe inner IP packet size, including IP and ICMP headers.", "gauge"
+	case "photon_link_large_probe_packets_sent":
+		return "Large ICMP packets sent in the separate rolling sample window.", "gauge"
+	case "photon_link_large_probe_packets_received":
+		return "Large ICMP replies received in the separate rolling sample window.", "gauge"
+	case "photon_link_large_probe_packets_lost":
+		return "Large ICMP packets lost in the separate rolling sample window.", "gauge"
+	case "photon_link_large_probe_loss_ratio":
+		return "Round-trip packet loss ratio in the large probe sample window.", "gauge"
+	case "photon_link_large_probe_rtt_seconds":
+		return "Last large probe RTT, omitted when the latest probe had no reply.", "gauge"
 	case "photon_link_probe_rtt_seconds":
 		return "Last successful reply RTT from the latest probe burst.", "gauge"
 	case "photon_link_probe_packets_sent":

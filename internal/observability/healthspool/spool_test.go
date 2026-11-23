@@ -3,7 +3,51 @@ package healthspool
 import (
 	"testing"
 	"time"
+
+	"github.com/HiggsNet/photon/internal/inspect"
 )
+
+func TestLargeSeriesExcludeLegacyAndRepeatedSnapshots(t *testing.T) {
+	store := New(Config{Enabled: true, Path: t.TempDir(), MaxAge: time.Hour})
+	now := time.Unix(2000, 0)
+	if err := store.Append(now.Add(-time.Minute), []Sample{{InstanceID: "link", Sent: 3}}); err != nil {
+		t.Fatal(err)
+	}
+	large := &inspect.LargeProbeSample{PacketSize: 1200, Sent: 5, Received: 4, Lost: 1, LossRatioPct: 20, LastRTTMs: 12, LastProbeUnix: now.Add(-20 * time.Second).Unix()}
+	for _, at := range []time.Time{now.Add(-20 * time.Second), now} {
+		if err := store.Append(at, []Sample{{InstanceID: "link", ProbeID: "link", LargeProbe: large}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, metric := range []string{"large_loss", "large_rtt"} {
+		result, err := store.Query("link", SeriesQuery{Metric: metric, Range: 5 * time.Minute, Step: time.Second, Now: now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := float64(20)
+		if metric == "large_rtt" {
+			want = 12
+		}
+		if len(result.Points) != 1 || result.Points[0].Value != want || result.Points[0].UnixMs != large.LastProbeUnix*1000 {
+			t.Fatalf("%s invented large measurements: %+v", metric, result)
+		}
+	}
+}
+
+func TestLargeSeriesKeepDistinctSubsecondMeasurements(t *testing.T) {
+	now := time.Unix(2000, 0)
+	samples := []Sample{}
+	for _, offset := range []time.Duration{100 * time.Millisecond, 300 * time.Millisecond} {
+		at := now.Add(offset)
+		samples = append(samples, Sample{UnixMs: at.UnixMilli(), InstanceID: "link", LargeProbe: &inspect.LargeProbeSample{
+			Sent: 1, LossRatioPct: 20, LastProbeUnix: at.Unix(), LastProbeUnixMs: at.UnixMilli(),
+		}})
+	}
+	points := bucketHealthSamples(samples, "large_loss", now, 100*time.Millisecond)
+	if len(points) != 2 {
+		t.Fatalf("distinct measurements in one second were merged: %+v", points)
+	}
+}
 
 func TestStoreAppendAndQuerySeries(t *testing.T) {
 	store := New(Config{Enabled: true, Path: t.TempDir(), MaxAge: time.Hour})

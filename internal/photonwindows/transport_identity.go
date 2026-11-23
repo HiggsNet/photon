@@ -196,10 +196,12 @@ func (source *State) EnsureLocalTransport(ctx context.Context, config *Config, n
 			}
 			currentBytes, _ := json.Marshal(current)
 			wantedBytes, _ := json.Marshal(wanted)
-			if !bytes.Equal(currentBytes, wantedBytes) {
+			if bytes.Equal(currentBytes, wantedBytes) {
+				continue
+			}
+			if record.kind != ipsec.RecordTypeProfile || !windowsProfileMatchesAfterMOBIKEChange(current, wantedBytes, profile.MOBIKE) {
 				return out, fmt.Errorf("local transport: existing %s differs from Windows identity", record.key)
 			}
-			continue
 		}
 		intents = append(intents, corestate.PutProtocolRecordIntent{Kind: corestate.ProtocolRecordIPsec, Zone: config.ManagedZone, Key: record.key, Type: record.kind, Value: encoded})
 	}
@@ -240,6 +242,26 @@ func (source *State) EnsureLocalTransport(ctx context.Context, config *Config, n
 		return out, corestate.ErrVerifiedRevisionStale
 	}
 	return LocalTransportIdentity{ID: string(config.ManagedZone), PrivateKey: bytes.Clone(private)}, nil
+}
+
+func windowsProfileMatchesAfterMOBIKEChange(current any, wanted []byte, enabled bool) bool {
+	fields, ok := current.(map[string]any)
+	if !ok {
+		return false
+	}
+	value, present := fields["mobike"]
+	previous, valid := value.(bool)
+	if (present && !valid) || previous == enabled {
+		return false
+	}
+	// Compare the entire signed payload after changing just this capability.
+	if enabled {
+		fields["mobike"] = true
+	} else {
+		delete(fields, "mobike")
+	}
+	updated, _ := json.Marshal(fields)
+	return bytes.Equal(updated, wanted)
 }
 
 func sharedOverlayPathKey(local, peer *ipsec.OverlayIntentRecord, contact ipsec.ContactPoint) (string, error) {

@@ -119,12 +119,13 @@ IKE 实测组合可用 StrongSwan 名称 `aes128-sha256-prfsha256-ecp256` 表达
 
 **构建与配置边界。** Photon 的 `BuildStrongSwanConnection` / `routeBasedChildSA` 不设置
 `proposals` / `esp_proposals`，由 StrongSwan 默认 proposal 与对端共同决定结果；当前使用
-`version=2`、`auth=pubkey`、`encap=yes`、`mobike=no`、`mode=tunnel`。Go 构建产物本身不内嵌
+`version=2`、`auth=pubkey`、`encap=yes`、`mode=tunnel`。MOBIKE 由每条连接的策略决定。Go 构建产物本身不内嵌
 StrongSwan：Docker 安装 Ubuntu 24.04 的发行版包，native/NixOS 使用宿主机包。
 不能用 less 上的 6.0.7 代替 Docker/Ubuntu 构建的版本与插件验收。
 
 配置 `gateway.mobike: true` 可让 Windows 发布签名的 `role: out, mobike: true` profile，
-并在 IKE_AUTH 提议 MOBIKE。Linux 网关通过 `ipsec.mobike: true` 对获准的移动 peer 接受协商。
+并在 IKE_AUTH 提议 MOBIKE。Linux 网关默认对获准的 `role: out, mobike: true` peer 接受协商，
+可通过 `ipsec.mobike: false` 关闭。
 开启后，使用通配地址监听的 Windows 客户端在换网或唤醒时复用 UDP socket，在同一个网关端口
 代次内更新客户端的外层路径。原 IKE/CHILD、ESP 序号和 Wintun/Babel 会话继续有效。
 上游 NAT 单独改写映射时，公网网关可从有效的 ESP 包更新地址，客户端也会用带 NAT 检测的

@@ -150,6 +150,22 @@ func TestICMProberRunsBurstInOneProcess(t *testing.T) {
 	}
 }
 
+func TestLargeExecProbePreservesInnerPacketSizeAndDF(t *testing.T) {
+	for _, tc := range []struct{ address, payload string }{
+		{"192.0.2.2", "1172"}, {"fd00::2", "1152"},
+	} {
+		t.Run(tc.address, func(t *testing.T) {
+			runner := &recordingCommandRunner{out: []byte("1 packets transmitted, 1 received\n")}
+			prober := NewICMProber(runner)
+			got := prober.Probe(t.Context(), ProbeTarget{PeerTunnelAddr: netip.MustParseAddr(tc.address)}, ProbeConfig{PacketSize: 1200, Burst: 1})
+			args := strings.Join(runner.args, " ")
+			if got.Err != nil || got.Sent != 1 || !strings.Contains(args, "-s "+tc.payload+" -M do") {
+				t.Fatalf("result=%+v args=%s", got, args)
+			}
+		})
+	}
+}
+
 func TestICMProberUnansweredBurstIsReachabilityFailure(t *testing.T) {
 	// With -W the ping process exits on its own with a loss summary instead of
 	// lingering until the context deadline kills it ("signal: killed").

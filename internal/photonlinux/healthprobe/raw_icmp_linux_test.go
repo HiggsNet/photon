@@ -434,6 +434,40 @@ func TestMakeICMPEchoPacketHasValidIPv4Checksum(t *testing.T) {
 	}
 }
 
+func TestLargeEchoWireSizeChecksumAndShortReplyRejection(t *testing.T) {
+	for _, tc := range []struct {
+		family   int
+		address  string
+		icmpSize int
+	}{
+		{unix.AF_INET, "192.0.2.2", 1180}, {unix.AF_INET6, "fd00::2", 1160},
+	} {
+		t.Run(tc.address, func(t *testing.T) {
+			size, err := icmpPacketSize(ProbeTarget{PeerTunnelAddr: netip.MustParseAddr(tc.address)}, ProbeConfig{PacketSize: 1200})
+			if err != nil || size != tc.icmpSize {
+				t.Fatalf("ICMP size = %d %v", size, err)
+			}
+			packet := makeICMPEchoPacket(tc.family, 0x1234, 7, size)
+			if len(packet) != size {
+				t.Fatalf("wire size = %d, want %d", len(packet), size)
+			}
+			if tc.family == unix.AF_INET && internetChecksum(packet) != 0 {
+				t.Fatal("large IPv4 checksum is invalid")
+			}
+			packet[0] = 0
+			if tc.family == unix.AF_INET6 {
+				packet[0] = 129
+			}
+			if seq, ok := parseRawICMPReply(packet, tc.family, 0x1234, size); !ok || seq != 7 {
+				t.Fatal("full-sized reply rejected")
+			}
+			if _, ok := parseRawICMPReply(packet[:8], tc.family, 0x1234, size); ok {
+				t.Fatal("short reply counted as large success")
+			}
+		})
+	}
+}
+
 type fakeRawICMPWorker struct {
 	result rawProbeResult
 	calls  int

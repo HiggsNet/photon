@@ -134,7 +134,7 @@ func TestReconcileResponderPortRotation(t *testing.T) {
 		UpdatedAt: now.Unix(),
 	})
 	group := LinkGroupSpec{ID: "ipsec-main"}
-	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now, MOBIKE: true})
+	plan, err := PlanTransportLinks(context.Background(), ns, "node-a.catofes.", []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
 	if err != nil || len(plan.Desired) != 2 {
 		t.Fatalf("plan = %+v, error = %v, want two passive family paths", plan, err)
 	}

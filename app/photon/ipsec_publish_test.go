@@ -541,6 +541,48 @@ func TestLocalIPsecOverlayIntentUsesDNSFamilies(t *testing.T) {
 	}
 }
 
+func TestLocalIPsecMOBIKEAdvertisementRequiresOutboundOptIn(t *testing.T) {
+	verified := &corestate.VerifiedState{ManagedZone: "node-a.catofes.", Network: zone.NewNetworkState()}
+	key := &ipsec.TransportKeyRecord{Fingerprint: "sha256:test"}
+	for _, tc := range []struct {
+		name, yaml   string
+		wantExplicit bool
+		wantEnabled  bool
+		wantProfile  bool
+	}{
+		{name: "gateway default", yaml: "ipsec: {role: both}"},
+		{name: "gateway disabled", yaml: "ipsec: {role: in, mobike: false}", wantExplicit: true},
+		{name: "gateway enabled", yaml: "ipsec: {role: both, mobike: true}", wantExplicit: true, wantEnabled: true},
+		{name: "outbound default", yaml: "ipsec: {role: out}"},
+		{name: "outbound enabled", yaml: "ipsec: {role: out, mobike: true}", wantExplicit: true, wantEnabled: true, wantProfile: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config := defaultAppConfig()
+			if err := parseConfigYAML(tc.yaml, config); err != nil {
+				t.Fatal(err)
+			}
+			normalizeAppConfig(config)
+			setting := config.IPsec.MOBIKE
+			if (setting != nil) != tc.wantExplicit || setting != nil && *setting != tc.wantEnabled {
+				t.Fatalf("explicit setting was not preserved for %s", tc.yaml)
+			}
+			records, err := localIPsecRecords(config, verified, key, time.Unix(5000, 0))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, record := range records {
+				if profile, ok := record.value.(ipsec.ProfileRecord); ok {
+					if profile.MOBIKE != tc.wantProfile {
+						t.Fatalf("published MOBIKE = %t, want %t", profile.MOBIKE, tc.wantProfile)
+					}
+					return
+				}
+			}
+			t.Fatal("missing IPsec profile")
+		})
+	}
+}
+
 func TestLocalIPsecAddressRecordFollowsGossipEndpoints(t *testing.T) {
 	verified, _, _, _ := buildTestDaemonOwners(t)
 	verified.ManagedZone = "node-b.catofes."

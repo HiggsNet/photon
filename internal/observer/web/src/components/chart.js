@@ -30,10 +30,13 @@ export function healthChartLines(series) {
 }
 
 export function healthChart(series, range, step) {
+    const percent = series && series.unit === 'percent';
+    const formatValue = value => percent ? `${Number(value).toFixed(1)}%` : (Number(value) === 0 ? '0ms' : ms(value));
+    const label = percent ? 'Loss' : 'RTT';
     const lines = healthChartLines(series);
     const all = lines.flatMap(line => line.points);
     if (all.length === 0) {
-        return `<div class="empty-state compact">No RTT samples for ${esc(range)}.</div>`;
+        return `<div class="empty-state compact">No ${label} samples for ${esc(range)}.</div>`;
     }
     const width = 720;
     const height = 220;
@@ -60,18 +63,18 @@ export function healthChart(series, range, step) {
     const end = new Date(maxX).toLocaleTimeString();
     return `
         <div class="chart-meta">
-            <span>Latest ${ms(latest.value)}</span>
-            <span>Avg ${ms(avg)}</span>
-            <span>Max ${ms(maxY)}</span>
+            <span>Latest ${formatValue(latest.value)}</span>
+            <span>Avg ${formatValue(avg)}</span>
+            <span>Max ${formatValue(maxY)}</span>
             <span>${esc(range)} · ${esc(step)}</span>
         </div>
         <div class="chart-legend">
             ${lines.map((line, i) => `<span><i class="legend-swatch line-${i % 4}"></i>${esc(line.label)}</span>`).join('')}
         </div>
-        <svg class="history-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="RTT history chart">
+        <svg class="history-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${label} history chart">
             ${yTicks.map(tick => `
                 <line class="chart-grid" x1="${pad.left}" y1="${y(tick).toFixed(1)}" x2="${width - pad.right}" y2="${y(tick).toFixed(1)}"></line>
-                <text class="chart-label" x="${pad.left - 8}" y="${(y(tick) + 4).toFixed(1)}" text-anchor="end">${esc(ms(tick))}</text>`).join('')}
+                <text class="chart-label" x="${pad.left - 8}" y="${(y(tick) + 4).toFixed(1)}" text-anchor="end">${esc(formatValue(tick))}</text>`).join('')}
             <line class="chart-axis" x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}"></line>
             <line class="chart-axis" x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}"></line>
             ${lines.map((line, i) => `

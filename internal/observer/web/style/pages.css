@@ -213,6 +213,32 @@
     white-space: nowrap;
 }
 
+.health-layout { grid-template-columns: minmax(340px, 420px) minmax(0, 1fr); }
+.health-layout > *, .health-layout .detail-panel { min-width: 0; }
+.health-layout .detail-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); }
+.health-zone-group { margin-bottom: var(--sp-3); min-width: 0; }
+.health-zone-title {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--sp-2);
+    margin: 0;
+    padding: var(--sp-2);
+    font-size: var(--fs-sm);
+    overflow-wrap: anywhere;
+}
+.health-link { width: 100%; margin-bottom: 2px; text-align: left; font: inherit; font-size: var(--fs-sm); }
+.health-loss { min-width: 54px; white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-1); }
+.health-layout [data-health-metric] {
+    padding: var(--sp-1) var(--sp-2);
+    color: var(--text-0);
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font: inherit;
+}
+@media (max-width: 480px) { .health-link { flex-wrap: wrap; } }
+@media (max-width: 1000px) { .health-layout { grid-template-columns: 1fr; } }
+
 .inspect-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));

@@ -120,21 +120,44 @@ func TestPlanTransportLinksMOBIKERequiresOutboundRoleAndOptIn(t *testing.T) {
 		profile.MOBIKE = true
 		ns.Zones[peer].Records[RecordKeyProfile] = record(t, peer, RecordKeyProfile, RecordTypeProfile, profile)
 	}
-	for _, allowed := range []bool{false, true} {
-		plan, err := PlanTransportLinks(t.Context(), ns, local, []LinkGroupSpec{{ID: "ipsec-main"}}, LinkPlannerOptions{Now: now, MOBIKE: allowed})
-		if err != nil {
-			t.Fatal(err)
-		}
-		seen := map[zone.ZonePath]bool{}
-		for _, spec := range plan.Desired {
-			seen[spec.PeerZone] = true
-			if want := allowed && spec.PeerZone == mobile; spec.MOBIKE != want {
-				t.Fatalf("MOBIKE for %s = %t, want %t", spec.PeerZone, spec.MOBIKE, want)
+	on, off := true, false
+	groups := []LinkGroupSpec{{ID: "ipsec-main"}}
+	for _, tc := range []struct {
+		name          string
+		setting       *bool
+		wantResponder bool
+		wantInitiator bool
+	}{
+		{name: "default", wantResponder: true},
+		{name: "disabled", setting: &off},
+		{name: "enabled", setting: &on, wantResponder: true, wantInitiator: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := LinkPlannerOptions{Now: now, MOBIKE: tc.setting}
+			plan, err := PlanTransportLinks(t.Context(), ns, local, groups, opts)
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
-		if !seen[mobile] || !seen[stationary] || !seen[gateway] {
-			t.Fatalf("missing peers: %+v", plan.Skipped)
-		}
+			seen := make(map[zone.ZonePath]bool)
+			for _, spec := range plan.Desired {
+				seen[spec.PeerZone] = true
+				if want := tc.wantResponder && spec.PeerZone == mobile; spec.MOBIKE != want {
+					t.Fatalf("gateway MOBIKE for %s = %t, want %t", spec.PeerZone, spec.MOBIKE, want)
+				}
+			}
+			if !seen[mobile] || !seen[stationary] || !seen[gateway] {
+				t.Fatalf("missing peers: %+v", plan.Skipped)
+			}
+			plan, err = PlanTransportLinks(t.Context(), ns, mobile, groups, opts)
+			if err != nil || len(plan.Desired) != 2 {
+				t.Fatalf("client plan = %+v, error = %v, want two gateways", plan, err)
+			}
+			for _, spec := range plan.Desired {
+				if spec.MOBIKE != tc.wantInitiator {
+					t.Fatalf("client MOBIKE for %s = %t, want %t", spec.PeerZone, spec.MOBIKE, tc.wantInitiator)
+				}
+			}
+		})
 	}
 }
 

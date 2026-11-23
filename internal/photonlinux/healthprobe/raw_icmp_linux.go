@@ -87,6 +87,9 @@ func (p *RawICMProber) Probe(ctx context.Context, target ProbeTarget, cfg ProbeC
 	if !target.PeerTunnelAddr.IsValid() {
 		return ProbeResult{InstanceID: target.InstanceID, Err: errors.New("peer address missing")}
 	}
+	if _, err := icmpPacketSize(target, cfg); err != nil {
+		return ProbeResult{InstanceID: target.InstanceID, Err: err}
+	}
 	worker, err := p.worker(target.NetNS)
 	if err != nil {
 		return p.fallbackOrError(ctx, target, cfg, err)
@@ -469,6 +472,10 @@ func rawSocketKeyForTarget(target ProbeTarget) rawSocketKey {
 }
 
 func probeRawICMP(job rawICMPJob, key rawSocketKey, socket *rawICMPSocket) rawProbeResult {
+	packetSize, err := icmpPacketSize(job.target, job.cfg)
+	if err != nil {
+		return rawProbeResult{err: err}
+	}
 	burst := job.cfg.Burst
 	if burst <= 0 {
 		burst = 3
@@ -488,7 +495,7 @@ func probeRawICMP(job rawICMPJob, key rawSocketKey, socket *rawICMPSocket) rawPr
 	var lastRTT time.Duration
 	drain := func() bool {
 		for {
-			seq, ok := readRawICMPReply(socket.fd, key.family, job.id)
+			seq, ok := readRawICMPReply(socket.fd, key.family, job.id, packetSize)
 			if !ok {
 				return sent == burst && len(pending) == 0
 			}
@@ -506,7 +513,7 @@ func probeRawICMP(job rawICMPJob, key rawSocketKey, socket *rawICMPSocket) rawPr
 			return rawProbeResult{sent: sent, received: received, lastRTT: lastRTT, err: err}
 		}
 		sequence := uint16(job.seq.Add(1))
-		packet := makeICMPEchoPacket(key.family, job.id, sequence)
+		packet := makeICMPEchoPacket(key.family, job.id, sequence, packetSize)
 		if err := unix.Sendto(socket.fd, packet, 0, rawDestination(job.target, key.family, socket.zoneID)); err != nil {
 			reopen := shouldReopenRawICMPSocket(err)
 			return rawProbeResult{
@@ -570,6 +577,15 @@ func openRawICMPFD(key rawSocketKey) (int, uint32, error) {
 	closeOnError := func(err error) (int, uint32, error) {
 		_ = unix.Close(fd)
 		return -1, 0, err
+	}
+	// Preserve packet size: silently fragmenting a large probe would conceal
+	// the very size-dependent path behavior it is intended to measure.
+	level, option := unix.IPPROTO_IP, unix.IP_MTU_DISCOVER
+	if key.family == unix.AF_INET6 {
+		level, option = unix.IPPROTO_IPV6, unix.IPV6_MTU_DISCOVER
+	}
+	if err := unix.SetsockoptInt(fd, level, option, unix.IP_PMTUDISC_DO); err != nil {
+		return closeOnError(err)
 	}
 	if key.iface != "" {
 		if err := unix.SetsockoptString(fd, unix.SOL_SOCKET, unix.SO_BINDTODEVICE, key.iface); err != nil {
@@ -645,8 +661,15 @@ var netInterfaceByName = func(name string) (int, error) {
 	return iface.Index, nil
 }
 
-func makeICMPEchoPacket(family int, id, seq uint16) []byte {
-	packet := make([]byte, 8)
+func makeICMPEchoPacket(family int, id, seq uint16, sizes ...int) []byte {
+	size := 8
+	if len(sizes) > 0 {
+		size = max(size, sizes[0])
+	}
+	packet := make([]byte, size)
+	for i := 8; i < len(packet); i++ {
+		packet[i] = byte(i + int(seq))
+	}
 	if family == unix.AF_INET6 {
 		packet[0] = 128 // ICMPv6 Echo Request
 	} else {
@@ -677,7 +700,7 @@ func internetChecksum(packet []byte) uint16 {
 
 // readRawICMPReply returns one matching echo sequence. The socket is
 // non-blocking; false means no more packets are currently available.
-func readRawICMPReply(fd, family int, id uint16) (uint16, bool) {
+func readRawICMPReply(fd, family int, id uint16, sizes ...int) (uint16, bool) {
 	buf := make([]byte, 1500)
 	for {
 		n, err := recvRawICMPNonblocking(fd, buf)
@@ -687,13 +710,13 @@ func readRawICMPReply(fd, family int, id uint16) (uint16, bool) {
 		if err != nil || n == 0 {
 			return 0, false
 		}
-		if seq, ok := parseRawICMPReply(buf[:n], family, id); ok {
+		if seq, ok := parseRawICMPReply(buf[:n], family, id, sizes...); ok {
 			return seq, true
 		}
 	}
 }
 
-func parseRawICMPReply(packet []byte, family int, id uint16) (uint16, bool) {
+func parseRawICMPReply(packet []byte, family int, id uint16, sizes ...int) (uint16, bool) {
 	if family == unix.AF_INET && len(packet) >= 20 && packet[0]>>4 == 4 {
 		headerLen := int(packet[0]&0x0f) * 4
 		if headerLen > len(packet) {
@@ -702,6 +725,11 @@ func parseRawICMPReply(packet []byte, family int, id uint16) (uint16, bool) {
 		packet = packet[headerLen:]
 	}
 	if len(packet) < 8 {
+		return 0, false
+	}
+	// A shortened echo is not evidence that the configured large packet made
+	// the round trip. Ignore it just like an unrelated ID or sequence.
+	if len(sizes) > 0 && len(packet) != sizes[0] {
 		return 0, false
 	}
 	wantType := byte(0)

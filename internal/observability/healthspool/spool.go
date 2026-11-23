@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/HiggsNet/photon/internal/inspect"
 )
 
 const SamplesFile = "samples.jsonl"
@@ -19,19 +21,20 @@ const SamplesFile = "samples.jsonl"
 var ErrNotConfigured = errors.New("health local spool not configured")
 
 type Sample struct {
-	UnixMs        int64  `json:"unix_ms"`
-	ProbeID       string `json:"probe_id,omitempty"`
-	InstanceID    string `json:"instance_id"`
-	ProbeRole     string `json:"probe_role,omitempty"`
-	InterfaceName string `json:"interface_name,omitempty"`
-	State         string `json:"state"`
-	ProbeType     string `json:"probe_type,omitempty"`
-	RTTMs         int64  `json:"rtt_ms,omitempty"`
-	LossRatioPct  int    `json:"loss_ratio_pct"`
-	JitterMs      int64  `json:"jitter_ms,omitempty"`
-	Sent          int    `json:"sent,omitempty"`
-	Received      int    `json:"received,omitempty"`
-	Lost          int    `json:"lost,omitempty"`
+	UnixMs        int64                     `json:"unix_ms"`
+	ProbeID       string                    `json:"probe_id,omitempty"`
+	InstanceID    string                    `json:"instance_id"`
+	ProbeRole     string                    `json:"probe_role,omitempty"`
+	InterfaceName string                    `json:"interface_name,omitempty"`
+	State         string                    `json:"state"`
+	ProbeType     string                    `json:"probe_type,omitempty"`
+	RTTMs         int64                     `json:"rtt_ms,omitempty"`
+	LossRatioPct  int                       `json:"loss_ratio_pct"`
+	JitterMs      int64                     `json:"jitter_ms,omitempty"`
+	Sent          int                       `json:"sent,omitempty"`
+	Received      int                       `json:"received,omitempty"`
+	Lost          int                       `json:"lost,omitempty"`
+	LargeProbe    *inspect.LargeProbeSample `json:"large_probe,omitempty"`
 }
 
 type SeriesPoint struct {
@@ -206,6 +209,10 @@ func normalizeHealthSeriesMetric(metric string) (string, string, error) {
 		return "rtt", "ms", nil
 	case "loss":
 		return "loss", "percent", nil
+	case "large_loss":
+		return "large_loss", "percent", nil
+	case "large_rtt":
+		return "large_rtt", "ms", nil
 	case "jitter":
 		return "jitter", "ms", nil
 	case "state":
@@ -312,12 +319,40 @@ func bucketHealthSamples(samples []Sample, metric string, start time.Time, step 
 		count int
 	}
 	buckets := map[int64]*aggregate{}
+	seenLarge := map[string]map[int64]bool{}
 	startMs := start.UnixMilli()
 	stepMs := step.Milliseconds()
 	if stepMs <= 0 {
 		stepMs = 1000
 	}
 	for _, sample := range samples {
+		// Spool rows are snapshots flushed by either stream. Only plot an
+		// actual large probe once, at its measurement time, rather than making
+		// every small probe look like another large sample.
+		if metric == "large_loss" || metric == "large_rtt" {
+			if sample.LargeProbe == nil || sample.LargeProbe.LastProbeUnix <= 0 {
+				continue
+			}
+			at := sample.LargeProbe.LastProbeUnix * 1000
+			if sample.LargeProbe.LastProbeUnixMs > 0 {
+				at = sample.LargeProbe.LastProbeUnixMs
+			}
+			if at < startMs || at > sample.UnixMs {
+				continue
+			}
+			id := sample.ProbeID
+			if id == "" {
+				id = probeID(sample.InstanceID, sample.ProbeRole)
+			}
+			if seenLarge[id] == nil {
+				seenLarge[id] = map[int64]bool{}
+			}
+			if seenLarge[id][at] {
+				continue
+			}
+			seenLarge[id][at] = true
+			sample.UnixMs = at
+		}
 		value, ok := healthSampleValue(sample, metric)
 		if !ok {
 			continue
@@ -353,6 +388,14 @@ func healthSampleValue(sample Sample, metric string) (float64, bool) {
 		return float64(sample.RTTMs), sample.RTTMs > 0
 	case "loss":
 		return float64(sample.LossRatioPct), true
+	case "large_loss":
+		if sample.LargeProbe != nil && sample.LargeProbe.Sent > 0 {
+			return sample.LargeProbe.LossRatioPct, true
+		}
+	case "large_rtt":
+		if sample.LargeProbe != nil && sample.LargeProbe.LastRTTMs > 0 {
+			return float64(sample.LargeProbe.LastRTTMs), true
+		}
 	case "jitter":
 		return float64(sample.JitterMs), sample.JitterMs > 0
 	case "state":
@@ -360,6 +403,7 @@ func healthSampleValue(sample Sample, metric string) (float64, bool) {
 	default:
 		return 0, false
 	}
+	return 0, false
 }
 
 func healthStateCode(state string) float64 {

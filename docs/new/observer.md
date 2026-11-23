@@ -195,6 +195,8 @@ type Provider interface {
 - 列表：daemon 把 health.Manager 样本、探测目标、已脱敏 link instance 和 IPsec desired state 一次传给 `inspect.BuildHealthView`；control、CLI 文本与 Observer 共用最终 `HealthView`。每条 `HealthLinkView` 按 probe 区分 rotation 状态，并按 `(instance_id, probe_role, probe_id)` 排序；没有样本的 link 以 `state: "unknown"` 补齐，原始 `ipsec.LinkInstance` 不进入查询模型。
 - 响应同时携带 `datasource` 信息（见第 7 节），前端据此决定是否展示历史曲线。
 - 单 link：`link_id` 可匹配 `instance_id` 或 `probe_id`（含 `#old` / `#staged` 后缀形式），未命中 404。
+- Web 按 zone 的既有后缀排序规则分组，同一 zone 内按 group、instance、active/old/staged 固定排列；不按严重程度重排。大小包丢包率在同一隧道行展示，详情里的大包 `large_probe` 单独包含包长、间隔、样本窗口、收发丢包数、RTT、错误和最后/下次时间；没有大包样本时显示等待，不显示为 0%。大包启用与配置见 [health.md](health.md#34-持续大包往返采样)。
+- 大小包历史可分别选择 RTT / loss；大包指标使用 `metric=large_rtt` / `large_loss`，旧 spool 行没有大包字段时不生成大包测量点。
 
 ### 4.6 Routes / Bird
 

@@ -201,7 +201,8 @@ func localIPsecRecords(config *appConfig, verified *corestate.VerifiedState, key
 		return nil, err
 	}
 	profile := ipsec.BuildProfileRecord(verified.ManagedZone, key.Fingerprint, config.IPsec.Role, config.IPsec.LinkGroups, addresses)
-	profile.MOBIKE = profile.Role == ipsec.RoleOut && config.IPsec.MOBIKE
+	mobike := config.IPsec.MOBIKE
+	profile.MOBIKE = profile.Role == ipsec.RoleOut && mobike != nil && *mobike
 
 	records := []localIPsecRecord{
 		{key: ipsec.RecordKeyTransportKey, recordType: ipsec.RecordTypeTransportKey, value: *key},

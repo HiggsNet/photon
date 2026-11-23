@@ -324,3 +324,35 @@ func (packetCountHealthProber) Probe(_ context.Context, target health.ProbeTarge
 }
 
 func (packetCountHealthProber) Type() string { return health.ProbeTypeICMP }
+
+func TestLargeHealthProjectionSpoolAndMetrics(t *testing.T) {
+	now := time.Unix(1500, 0)
+	h := health.LinkHealth{
+		InstanceID: "link-1", ProbeID: "link-1#staged", ProbeRole: "staged", Sent: 60, Received: 59, Lost: 1,
+		LargeProbe: &health.LargeProbeHealth{
+			PacketSize: 1200, Interval: time.Minute, LossWindow: 60,
+			Sent: 60, Received: 48, Lost: 12, LossRatio: .2, LastRTT: 10 * time.Millisecond,
+			LastProbeAt: now, NextProbeAt: now.Add(time.Minute),
+		},
+	}
+	samples := healthSamplesFromSnapshot([]health.LinkHealth{h})
+	large := samples[0].LargeProbe
+	if large == nil || large.LossRatioPct != 20 || large.Sent != 60 || large.Lost != 12 || large.PacketSize != 1200 || large.LastProbeUnix != now.Unix() {
+		t.Fatalf("large view = %+v", large)
+	}
+	spool := healthSpoolSamples(samples)
+	if spool[0].LargeProbe == nil || spool[0].LargeProbe.Lost != 12 || spool[0].Lost != 1 {
+		t.Fatalf("spool mixed packet sizes: %+v", spool)
+	}
+	metrics := health.CollectMetrics([]health.LinkHealth{h})
+	values := map[string]float64{}
+	for _, sample := range metrics.Samples {
+		values[sample.Name] = sample.Value
+	}
+	if values["photon_link_large_probe_loss_ratio"] != .2 || values["photon_link_large_probe_packets_sent"] != 60 || values["photon_link_probe_packets_lost"] != 1 {
+		t.Fatalf("metrics mixed packet sizes: %+v", values)
+	}
+	if empty := largeProbeSample(&health.LargeProbeHealth{}); empty.LastProbeUnix != 0 || empty.NextProbeUnix != 0 {
+		t.Fatal("zero timestamps leaked as negative Unix times")
+	}
+}

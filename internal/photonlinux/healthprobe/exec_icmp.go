@@ -53,11 +53,14 @@ func (p *ICMProber) Probe(ctx context.Context, target ProbeTarget, cfg ProbeConf
 	if !target.PeerTunnelAddr.IsValid() {
 		return ProbeResult{InstanceID: target.InstanceID, Err: errors.New("peer address missing")}
 	}
+	if _, err := icmpPacketSize(target, cfg); err != nil {
+		return ProbeResult{InstanceID: target.InstanceID, Err: err}
+	}
 	burst := cfg.Burst
 	if burst <= 0 {
 		burst = 3
 	}
-	received, lastRTT, err := p.pingBurstExec(ctx, target, cfg.Timeout, burst)
+	received, lastRTT, err := p.pingBurstExec(ctx, target, cfg.Timeout, burst, cfg.PacketSize)
 	if err != nil {
 		return ProbeResult{InstanceID: target.InstanceID, Err: err}
 	}
@@ -80,7 +83,7 @@ func (p *ICMProber) Probe(ctx context.Context, target ProbeTarget, cfg ProbeConf
 // pingBurstExec executes one ping process for a whole probe burst. Starting a
 // separate `ip netns exec ping -c 1` process for every packet is expensive:
 // each invocation forks, enters the netns and performs mount setup.
-func (p *ICMProber) pingBurstExec(ctx context.Context, target ProbeTarget, timeout time.Duration, burst int) (int, time.Duration, error) {
+func (p *ICMProber) pingBurstExec(ctx context.Context, target ProbeTarget, timeout time.Duration, burst int, sizes ...int) (int, time.Duration, error) {
 	if timeout <= 0 {
 		timeout = time.Second
 	}
@@ -93,7 +96,7 @@ func (p *ICMProber) pingBurstExec(ctx context.Context, target ProbeTarget, timeo
 		deadline, cancel := context.WithTimeout(ctx, timeout*time.Duration(burst))
 		defer cancel()
 		start := time.Now()
-		out, err := p.runner.Run(deadline, "ip", pingArgsForCount(target, includeSource, burst, timeout))
+		out, err := p.runner.Run(deadline, "ip", pingArgsForCount(target, includeSource, burst, timeout, sizes...))
 		received, lastRTT := parsePingBurstOutput(out)
 		if received == 0 && err == nil {
 			// Successful ping implementations always report replies, but tolerate
@@ -140,7 +143,7 @@ func parsePingBurstOutput(out []byte) (int, time.Duration) {
 	return len(replies), lastRTT
 }
 
-func pingArgsForCount(target ProbeTarget, includeSource bool, count int, replyWait time.Duration) []string {
+func pingArgsForCount(target ProbeTarget, includeSource bool, count int, replyWait time.Duration, sizes ...int) []string {
 	if count <= 0 {
 		count = 1
 	}
@@ -153,6 +156,10 @@ func pingArgsForCount(target ProbeTarget, includeSource bool, count int, replyWa
 		args = append(args, "-6")
 	}
 	args = append(args, "-n", "-c", strconv.Itoa(count))
+	if len(sizes) > 0 && sizes[0] > 0 {
+		icmpSize, _ := icmpPacketSize(target, ProbeConfig{PacketSize: sizes[0]})
+		args = append(args, "-s", strconv.Itoa(icmpSize-8), "-M", "do")
+	}
 	if count > 1 {
 		args = append(args, "-i", formatPingBurstInterval(pingBurstInterval))
 	}

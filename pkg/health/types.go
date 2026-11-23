@@ -62,12 +62,29 @@ type ProbeConfig struct {
 	Interval time.Duration
 	Timeout  time.Duration
 	Burst    int
+	// PacketSize is the inner IP packet size, including IP and ICMP headers.
+	// Zero preserves the legacy small-packet behavior.
+	PacketSize int
+	Large      LargeProbeConfig
 	// LossWindow is the number of probe bursts retained. Packet counters inside
 	// each burst are summed, so loss ratios are packet-level while the time
 	// horizon remains compatible with the previous burst-level window.
 	LossWindow    int
 	Jitter        time.Duration
 	MaxConcurrent int
+}
+
+// LargeProbeConfig enables a separately scheduled, single-packet quality
+// sample. It never contributes to small-packet health or rotation readiness.
+type LargeProbeConfig struct {
+	Enabled    bool
+	Interval   time.Duration
+	PacketSize int
+	LossWindow int
+}
+
+func DefaultLargeProbeConfig() LargeProbeConfig {
+	return LargeProbeConfig{Interval: time.Minute, PacketSize: 1200, LossWindow: 60}
 }
 
 // DefaultProbeConfig returns conservative defaults. Low-frequency by default
@@ -80,6 +97,7 @@ func DefaultProbeConfig() ProbeConfig {
 		LossWindow:    20,
 		Jitter:        500 * time.Millisecond,
 		MaxConcurrent: 8,
+		Large:         DefaultLargeProbeConfig(),
 	}
 }
 
@@ -149,6 +167,23 @@ type LinkHealth struct {
 	NextProbeAt     time.Time
 	CutoverBlocking bool
 	Labels          MetricsLabels
+	LargeProbe      *LargeProbeHealth
+}
+
+// LargeProbeHealth keeps size-specific packet counts separate from the small
+// probe window. Counts cover the latest LossWindow samples, not process totals.
+type LargeProbeHealth struct {
+	PacketSize  int
+	Interval    time.Duration
+	LossWindow  int
+	Sent        int
+	Received    int
+	Lost        int
+	LossRatio   float64
+	LastRTT     time.Duration
+	LastProbeAt time.Time
+	LastFailure error
+	NextProbeAt time.Time
 }
 
 // BabelObservation is passive data collected from BIRD/Babel. It augments the

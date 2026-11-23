@@ -122,6 +122,9 @@ ipsec:
   # It also determines whether this node initiates links.
   # Default is both (accept and initiate links).
   # role: both
+  # Gateways allow MOBIKE by default for authorized outbound peers that opt in.
+  # Set mobike: false to disable it, or mobike: true to opt in on a role: out client.
+  # mobike: false
   #
   # Default driver is strongswan. For unprivileged development or CI without
   # charon/VICI/XFRM, explicitly set driver: dry-run.
@@ -366,6 +369,14 @@ firewall:
 #   loss_threshold: "0.2"
 #   down_loss_threshold: "0.6"
 #   recover_consecutive: 5
+#   large_probe:
+#     # Explicit opt-in; merely configuring an interval does not send traffic.
+#     enabled: false
+#     interval: 1m
+#     # Inner IP packet size, including IP and ICMP headers; excludes IPsec.
+#     packet_size: 1200
+#     # Separate window of the latest N large probes, one packet per probe.
+#     loss_window: 60
 #   metrics:
 #     # Disabled unless enabled is explicitly set to true.
 #     enabled: false
