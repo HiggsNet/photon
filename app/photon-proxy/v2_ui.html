@@ -22,18 +22,26 @@
     <div class="table-wrap">
       <table><thead><tr><th>名称</th><th>监听地址</th><th>路径</th><th>操作</th></tr></thead><tbody id="routes"></tbody></table>
     </div>
-    <form id="route-test" hidden>
+    <div id="route-test" hidden>
       <div class="section-head line">
         <h3 id="test-title"></h3>
         <button type="button" id="close-test">关闭测试</button>
       </div>
-      <div class="test-fields">
-        <label>协议 <select id="protocol"><option value="tcp">TCP 连接</option><option value="udp">UDP DNS</option></select></label>
-        <label>测试目标 <input id="target" placeholder="例如 192.168.50.10:443" required></label>
-        <button id="probe" class="primary">开始测试</button>
+      <div class="probe-actions">
+        <button type="button" data-probe="connectivity">TCP 通断 <small>Google 204</small></button>
+        <button type="button" data-probe="dns">UDP DNS <small>1.1.1.1</small></button>
+        <button type="button" data-probe="download">下载 4 MiB <small>Cloudflare</small></button>
       </div>
       <p id="result" role="status" aria-live="polite"></p>
-    </form>
+      <details>
+        <summary>自定义测试目标</summary>
+        <form id="custom-probe" class="test-fields">
+          <label>协议 <select id="protocol"><option value="tcp">TCP 连接</option><option value="udp">UDP DNS</option></select></label>
+          <label>测试目标 <input id="target" placeholder="例如 192.168.50.10:443" required></label>
+          <button id="probe" class="primary">测试目标</button>
+        </form>
+      </details>
+    </div>
   </section>
   <div class="panels">
     <section aria-labelledby="edit-title">
@@ -41,8 +49,9 @@
       <form id="route-form">
         <div class="fields">
           <label>路径名 <input id="name" required maxlength="80"></label>
-          <label>SOCKS5 监听地址 <input id="listen" placeholder="留空自动分配"></label>
+          <label>SOCKS5 监听地址 <input id="listen" aria-describedby="listen-hint" placeholder="留空使用默认地址"></label>
         </div>
+        <p id="listen-hint" class="muted"></p>
         <fieldset>
           <legend>出口</legend>
           <div id="exit"></div>

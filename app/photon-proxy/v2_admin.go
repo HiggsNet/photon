@@ -2,11 +2,9 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"log"
@@ -18,7 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/HiggsNet/photon/internal/trusttunnel"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/service"
 )
@@ -49,19 +46,6 @@ type v2EndpointDirectory struct {
 type v2DirectoryNode struct {
 	v2DirectoryEndpoint
 	check service.ProxyV2RelayACL
-}
-
-type v2ProbeRequest struct {
-	Protocol string   `json:"protocol"`
-	Target   string   `json:"target"`
-	Hops     []string `json:"hops,omitempty"`
-}
-
-type v2ProbeResult struct {
-	OK        bool   `json:"ok"`
-	ElapsedMS int64  `json:"elapsed_ms"`
-	Error     string `json:"error,omitempty"`
-	FailedHop *int   `json:"failed_hop,omitempty"`
 }
 
 func (n *v2Node) startV2Admin(manager *routeManager) error {
@@ -114,7 +98,10 @@ func (n *v2Node) v2AdminHandler(manager *routeManager, listen string, isTCP bool
 	mux := http.NewServeMux()
 	mux.Handle("/", routeAdminHandler(manager))
 	mux.HandleFunc("GET /v1/admin", func(w http.ResponseWriter, _ *http.Request) {
-		writeRouteJSON(w, http.StatusOK, map[string]string{"listen": listen})
+		writeRouteJSON(w, http.StatusOK, map[string]any{
+			"listen": listen, "socks5_default_listen": manager.defaultListen,
+			"socks5_allowed_sources": n.config.Client.AllowedSources,
+		})
 	})
 	mux.HandleFunc("GET /v1/endpoints", func(w http.ResponseWriter, _ *http.Request) {
 		writeRouteJSON(w, http.StatusOK, v2ListEndpoints(n.directory.snapshotV2(), time.Now()))
@@ -146,7 +133,13 @@ func (n *v2Node) v2AdminHandler(manager *routeManager, listen string, isTCP bool
 			return
 		}
 		var opener tunnelOpener
-		if name := r.PathValue("name"); name != "" {
+		name := r.PathValue("name")
+		timeout, err := request.timeout(name != "")
+		if err != nil {
+			writeRouteError(w, fmt.Errorf("%w: %v", errRouteInvalid, err))
+			return
+		}
+		if name != "" {
 			manager.mu.Lock()
 			binding := manager.listeners[name]
 			if binding != nil {
@@ -170,9 +163,13 @@ func (n *v2Node) v2AdminHandler(manager *routeManager, listen string, isTCP bool
 			}
 			opener = &v2Client{directory: n.directory, pool: n.pool, key: n.key, route: v2RouteString(request.Hops), udp: scope}
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+		if request.Kind == "download" {
+			// Extend the normal admin write deadline for a slow transfer.
+			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(timeout + 2*time.Second))
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
-		writeRouteJSON(w, http.StatusOK, probeV2(ctx, opener, request.Protocol, request.Target))
+		writeRouteJSON(w, http.StatusOK, probeV2(ctx, opener, request))
 	}
 	mux.HandleFunc("POST /v1/probe", handleProbe)
 	mux.HandleFunc("POST /v1/routes/{name}/probe", handleProbe)
@@ -362,67 +359,4 @@ func v2ListCandidates(view service.ProxyDirectory, protocol string, target netip
 		}
 	}
 	return list
-}
-
-func probeV2(ctx context.Context, opener tunnelOpener, protocol, target string) v2ProbeResult {
-	start := time.Now()
-	var err error
-	switch protocol {
-	case "", "tcp":
-		if _, err = splitTarget(target); err == nil {
-			var stream *tunnelStream
-			stream, err = opener.open(ctx, target)
-			if err == nil {
-				_ = stream.Close()
-			}
-		}
-	case "udp":
-		var destination netip.AddrPort
-		destination, err = netip.ParseAddrPort(target)
-		if err == nil && destination.Port() == 0 {
-			err = errors.New("invalid DNS probe port")
-		}
-		if err == nil {
-			err = probeV2UDP(ctx, opener, destination)
-		}
-	default:
-		err = errors.New("protocol must be tcp or udp")
-	}
-	result := v2ProbeResult{OK: err == nil, ElapsedMS: time.Since(start).Milliseconds()}
-	if err != nil {
-		var hop *v2HopError
-		result.Error = err.Error()
-		if errors.As(err, &hop) && hop.index >= 0 {
-			result.FailedHop = &hop.index
-		}
-	}
-	return result
-}
-
-func probeV2UDP(ctx context.Context, opener tunnelOpener, target netip.AddrPort) error {
-	stream, err := opener.open(ctx, trusttunnel.UDPAuthority)
-	if err != nil {
-		return err
-	}
-	defer stream.Close()
-	// A DNS A query for example.com. The transaction ID is matched on
-	// the response as well as the packet's source and destination.
-	payload := []byte{0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0, 1, 0, 1}
-	if _, err := rand.Read(payload[:2]); err != nil {
-		return err
-	}
-	source := netip.MustParseAddrPort("127.0.0.1:49152")
-	if err := trusttunnel.WriteRequest(stream, trusttunnel.Datagram{Source: source, Destination: target, Payload: payload}); err != nil {
-		return err
-	}
-	for {
-		reply, err := trusttunnel.ReadResponse(stream)
-		if err != nil {
-			return err
-		}
-		if reply.Source == target && reply.Destination == source && len(reply.Payload) >= 12 &&
-			binary.BigEndian.Uint16(reply.Payload) == binary.BigEndian.Uint16(payload) && reply.Payload[2]&0x80 != 0 {
-			return nil
-		}
-	}
 }

@@ -141,8 +141,23 @@ Unix socket. A TCP listener requires a configured `token` or explicit
 port zero with discovery via `GET /v1/admin` on the Unix socket. Nginx can
 terminate HTTPS. A configured token is passed as `Authorization: Bearer <token>`.
 With `web: true`, the built-in panel is at `/ui`. Select an exit and any
-optional relays from the Gossip directory. The test action on a saved SOCKS5
-route uses that route's configured hops.
+optional relays from the Gossip directory. The actions on a saved route let
+you switch its hops, test it, or delete its SOCKS5 listener.
+
+New routes use `client.default_listen` if the address is left blank. The
+default is `127.0.0.1:0`. A port of 0 allocates an available port.
+To expose SOCKS5 to other machines, add the allowed IP prefixes to
+`client.allowed_sources` and set an address such as `0.0.0.0:1080` or
+`192.168.10.2:1080` when creating the route. Use `[IPv6]:port` for IPv6.
+To change an existing listener address, delete and recreate the route.
+For a YAML-defined route, change its YAML entry and delete its saved instance
+before restarting.
+
+The saved-route probes use the configured hops. TCP connectivity checks for
+HTTP 204 at `https://www.google.com/generate_204`. UDP queries
+`example.com` at `1.1.1.1:53`. The Cloudflare download counts exactly
+4,194,304 bytes and reports the body transfer rate and total elapsed time.
+Custom targets can check private exits with a TCP connection or a DNS query.
 
 TCP and UDP share the same route. The exit applies its destination policy to
 both. An existing explicit `udp_prefixes` list further limits UDP destinations
@@ -150,6 +165,7 @@ for that route.
 
 | Method and path | Behavior |
 | --- | --- |
+| `GET /v1/admin` | Management listener, default SOCKS5 listener, and allowed SOCKS5 sources |
 | `GET /v1/routes` | List current SOCKS5 routes and actual ports |
 | `POST /v1/routes` | Create a named route, with optional `listen` for a fixed port |
 | `PUT /v1/routes/{name}` | Change the path while retaining its SOCKS5 port |
@@ -157,7 +173,7 @@ for that route.
 | `GET /v1/endpoints` | List advertised relays and exits separately, with their connection methods |
 | `GET /v1/candidates?protocol=tcp&target=192.168.50.10:443` | Read matching advertised endpoints and a bounded list of candidate paths |
 | `POST /v1/probe` | Test explicit `hops` and a `protocol` / `target` |
-| `POST /v1/routes/{name}/probe` | Test a saved route; UDP sends a DNS query to an IP and port |
+| `POST /v1/routes/{name}/probe` | Test a saved route with `{"kind":"connectivity"}`, `{"kind":"dns"}`, `{"kind":"download"}`, or a custom `protocol` / `target` |
 
 Candidates come from verified advertisements. An Exit whose policy is private
 can be named in a route directly. Actual authentication and destination checks

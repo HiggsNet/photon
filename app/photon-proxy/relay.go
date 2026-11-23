@@ -137,14 +137,22 @@ func (c *zoneTunnelClient) dialRelay(ctx context.Context, outer *tunnelClient, r
 		}
 		return nil, err
 	}
-	inner, bridge := net.Pipe()
-	stopLifetime := context.AfterFunc(lifetime, func() { _ = bridge.Close() })
-	closeBridge := sync.OnceFunc(func() {
-		_ = bridge.Close()
-		stopLifetime()
-		_ = stream.Close()
+	return tunnelStreamConn(lifetime, stream, func() {
 		release()
 		cancel()
+	}), nil
+}
+
+func tunnelStreamConn(ctx context.Context, stream *tunnelStream, onClose func()) net.Conn {
+	inner, bridge := net.Pipe()
+	stop := context.AfterFunc(ctx, func() { _ = bridge.Close() })
+	closeBridge := sync.OnceFunc(func() {
+		_ = bridge.Close()
+		stop()
+		_ = stream.Close()
+		if onClose != nil {
+			onClose()
+		}
 	})
 	go func() {
 		defer closeBridge()
@@ -154,7 +162,7 @@ func (c *zoneTunnelClient) dialRelay(ctx context.Context, outer *tunnelClient, r
 		defer closeBridge()
 		_, _ = io.Copy(bridge, stream)
 	}()
-	return inner, nil
+	return inner
 }
 
 type relayConnection struct {

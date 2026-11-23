@@ -4,17 +4,19 @@ const aliases = { "public-v4": "h24", "public-v6": "h26", photon: "h2p" };
 const relayLimit = 7;
 let token = "";
 let directory = { origin: "", ready: false, exits: [], relays: [] };
+let settings = null;
 let editing = null;
 let testing = null;
+let pendingProbe = null;
 let exitRow;
 let relayRows = [];
 
 function status(message) { get("status").textContent = message; }
-async function api(path, method = "GET", body) {
+async function api(path, method = "GET", body, signal) {
   const headers = new Headers();
   if (token) headers.set("Authorization", "Bearer " + token);
   if (body !== undefined) headers.set("Content-Type", "application/json");
-  const response = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  const response = await fetch(path, { method, headers, signal, body: body === undefined ? undefined : JSON.stringify(body) });
   if (response.status === 401) throw new Error("请输入正确的管理令牌。");
   if (!response.ok) {
     const data = await response.text();
@@ -175,6 +177,12 @@ function formHops() {
     return item.node.value + "@" + item.link.value;
   });
 }
+function updateListenHint() {
+  get("listen").placeholder = settings?.socks5_default_listen || "留空使用默认地址";
+  get("listen-hint").textContent = editing ? "切换路径时保留当前监听地址。"
+    : settings?.socks5_allowed_sources?.length ? "可填写 0.0.0.0:1080 或指定本机 IP 和端口。端口填 0 可自动分配。"
+    : settings ? "当前仅允许本机监听。监听其他地址需配置 client.allowed_sources。" : "";
+}
 function edit(route = null) {
   editing = route;
   get("edit-title").textContent = route ? "切换路径" : "新建路径";
@@ -183,6 +191,7 @@ function edit(route = null) {
   get("name").readOnly = Boolean(route);
   get("listen").value = route?.listen || "";
   get("listen").readOnly = Boolean(route);
+  updateListenHint();
   exitRow = hopRow("exit", route?.hops.at(-1));
   get("exit").replaceChildren(exitRow.row);
   relayRows = (route?.hops.slice(0, -1) || []).map((hop) => hopRow("relay", hop));
@@ -205,8 +214,10 @@ function renderRoutes(routes) {
     path.textContent = describePath(route.hops);
     path.title = route.hops.join(" → ");
     const actions = row.insertCell();
+    const remove = button("删除", () => attempt(() => deleteRoute(route)));
+    remove.className = "danger";
     actions.append(button("切换", () => { edit(route); exitRow.node.focus(); }), " ",
-      button("测试", () => selectTestRoute(route)));
+      button("测试", () => selectTestRoute(route)), " ", remove);
   }
   if (testing && !routes.some((route) => route.name === testing.name)) closeTest();
 }
@@ -240,39 +251,71 @@ function renderDirectory(data) {
   preview();
 }
 async function refresh() {
-  const [routes, peers] = await Promise.all([api("/v1/routes"), api("/v1/endpoints")]);
+  const [routes, peers, admin] = await Promise.all([api("/v1/routes"), api("/v1/endpoints"), api("/v1/admin")]);
+  settings = admin;
+  updateListenHint();
   renderDirectory(peers);
   renderRoutes(routes);
   status("");
 }
+async function deleteRoute(route) {
+  if (!window.confirm("删除「" + route.name + "」并关闭它的 SOCKS5 入口？")) return;
+  await api("/v1/routes/" + encodeURIComponent(route.name), "DELETE");
+  if (editing?.name === route.name) edit();
+  if (testing?.name === route.name) closeTest();
+  await refresh();
+  status("已删除路径 " + route.name + "。");
+}
 function selectTestRoute(route) {
+  closeTest();
   testing = route;
   get("route-test").hidden = false;
   get("test-title").textContent = "测试 " + route.name + " · " + route.listen;
-  get("result").textContent = "";
-  get("target").focus();
+  document.querySelector("[data-probe=connectivity]").focus();
+}
+const probeButtons = document.querySelectorAll("[data-probe], #probe");
+function setProbing(busy) {
+  for (const button of probeButtons) button.disabled = busy;
 }
 function closeTest() {
+  pendingProbe?.abort();
+  pendingProbe = null;
+  setProbing(false);
   testing = null;
   get("route-test").hidden = true;
   get("result").textContent = "";
 }
-async function probe() {
+function probeSummary(kind, result) {
+  if (!result.ok) {
+    const hop = result.failed_hop === undefined ? "" : " · 第 " + (result.failed_hop + 1) + " 跳";
+    return "测试失败" + hop + " · " + result.error;
+  }
+  const total = result.elapsed_ms + " ms";
+  switch (kind) {
+    case "connectivity": return "HTTP " + result.http_status + " · " + total;
+    case "dns": return "DNS 查询成功 · " + total;
+    case "download":
+      return (result.bytes / 1048576).toFixed(2) + " MiB · " + result.download_mbps.toFixed(2) + " Mbps · 总耗时 " + total;
+    default: return "连接成功 · " + total;
+  }
+}
+async function probe(request) {
   const route = testing;
-  const target = get("target").value.trim();
-  if (!route || !target) return;
-  const protocol = get("protocol").value;
+  if (!route || pendingProbe) return;
+  const controller = new AbortController();
+  pendingProbe = controller;
+  setProbing(true);
   get("result").textContent = "正在测试 " + route.name + "…";
-  get("probe").disabled = true;
   try {
-    const result = await api("/v1/routes/" + encodeURIComponent(route.name) + "/probe", "POST", { protocol, target });
-    if (testing !== route) return;
-    get("result").textContent = result.ok ? "连接成功 · " + result.elapsed_ms + " ms"
-      : "连接失败" + (result.failed_hop === undefined ? "" : " · 第 " + (result.failed_hop + 1) + " 跳") + " · " + result.error;
+    const result = await api("/v1/routes/" + encodeURIComponent(route.name) + "/probe", "POST", request, controller.signal);
+    if (pendingProbe === controller) get("result").textContent = probeSummary(request.kind, result);
   } catch (error) {
-    if (testing === route) get("result").textContent = error.message;
+    if (pendingProbe === controller) get("result").textContent = error.message;
   } finally {
-    get("probe").disabled = false;
+    if (pendingProbe === controller) {
+      pendingProbe = null;
+      setProbing(false);
+    }
   }
 }
 async function attempt(action) {
@@ -288,7 +331,12 @@ get("refresh").onclick = () => attempt(refresh);
 get("add-relay").onclick = () => attempt(() => addRelay());
 get("reset").onclick = () => edit();
 get("close-test").onclick = closeTest;
-get("route-test").addEventListener("submit", (event) => { event.preventDefault(); probe(); });
+for (const button of document.querySelectorAll("[data-probe]")) button.onclick = () => probe({ kind: button.dataset.probe });
+get("custom-probe").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const target = get("target").value.trim();
+  if (target) probe({ protocol: get("protocol").value, target });
+});
 get("protocol").addEventListener("change", () => {
   get("target").placeholder = get("protocol").value === "udp" ? "例如 1.1.1.1:53" : "例如 192.168.50.10:443";
 });

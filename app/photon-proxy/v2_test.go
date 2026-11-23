@@ -242,7 +242,8 @@ func TestV2RelayExitAndRotation(t *testing.T) {
 		PortGroups: map[string]v2PortConfig{"mesh": {Bind: []string{"127.0.0.1"}, Port: exitPort}},
 	}, "")
 	a, _ := newV2FixtureNode(t, fixture, origin, v2Config{Client: &v2ClientConfig{
-		DefaultListen: "127.0.0.1:0", Admin: v2AdminConfig{Token: "test-secret", Web: true},
+		DefaultListen: "0.0.0.0:0", AllowedSources: []string{"127.0.0.1/32"},
+		Admin: v2AdminConfig{Token: "test-secret", Web: true},
 	}}, "")
 	refresh := func() {
 		for path, node := range map[zone.ZonePath]*v2Node{origin: a, relay: b, exit: c} {
@@ -284,6 +285,27 @@ func TestV2RelayExitAndRotation(t *testing.T) {
 		}
 	}
 	assertEcho(stream)
+	probeSite := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/generate_204":
+			w.WriteHeader(http.StatusNoContent)
+		case "/__down":
+			_, _ = w.Write(make([]byte, v2DownloadBytes))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer probeSite.Close()
+	testTLS := probeSite.Client().Transport.(*http.Transport).TLSClientConfig
+	var connectivity, download v2ProbeResult
+	if err := probeV2HTTPS(ctx, client, probeSite.URL+"/generate_204", http.StatusNoContent, 0, testTLS, &connectivity); err != nil ||
+		connectivity.HTTPStatus != http.StatusNoContent {
+		t.Fatalf("HTTPS connectivity probe: %+v, %v", connectivity, err)
+	}
+	if err := probeV2HTTPS(ctx, client, probeSite.URL+"/__down", http.StatusOK, v2DownloadBytes, testTLS, &download); err != nil ||
+		download.Bytes != v2DownloadBytes || download.DownloadMbps <= 0 {
+		t.Fatalf("HTTPS download probe: %+v, %v", download, err)
+	}
 	socksManager, err := b.startClient(map[string]clientRoute{"local": {Listen: "127.0.0.1:0", Hops: []string{"c/truenas@photon"}}})
 	if err != nil {
 		t.Fatal(err)
@@ -349,9 +371,18 @@ func TestV2RelayExitAndRotation(t *testing.T) {
 	defer udp.Close()
 	go func() {
 		var payload [64]byte
-		length, from, err := udp.ReadFromUDP(payload[:])
-		if err == nil {
-			_, _ = udp.WriteToUDP(payload[:length], from)
+		for {
+			length, from, err := udp.ReadFromUDP(payload[:])
+			if err != nil {
+				return
+			}
+			reply := payload[:length]
+			if length == 29 {
+				reply[2] |= 0x80
+				reply[7] = 1
+				reply = append(reply, 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 192, 0, 2, 1)
+			}
+			_, _ = udp.WriteToUDP(reply, from)
 		}
 	}()
 	datagrams, err := client.open(ctx, trusttunnel.UDPAuthority)
@@ -372,12 +403,27 @@ func TestV2RelayExitAndRotation(t *testing.T) {
 		t.Fatalf("unexpected direct and relay paths: %v", list.Paths)
 	}
 
-	manager := newRouteManager(t.Context(), a.db, func(entry clientEntry) *v2Client {
-		return &v2Client{directory: a.directory, pool: a.pool, key: a.key, route: entry.v2Route, udp: entry.udp}
-	})
-	manager.prepare = v2PrepareEntry(origin, false)
+	manager, err := a.startClient(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer manager.close()
 	handler := a.v2AdminHandler(manager, "127.0.0.1:1234", true)
+	callAdmin := func(method, path, body string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(method, path, strings.NewReader(body))
+		request.Header.Set("Authorization", "Bearer test-secret")
+		if body != "" {
+			request.Header.Set("Content-Type", "application/json")
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+	admin := callAdmin(http.MethodGet, "/v1/admin", "")
+	if admin.Code != http.StatusOK || !strings.Contains(admin.Body.String(), `"socks5_default_listen":"0.0.0.0:0"`) ||
+		!strings.Contains(admin.Body.String(), `"socks5_allowed_sources":["127.0.0.1/32"]`) {
+		t.Fatalf("admin settings %d: %s", admin.Code, admin.Body)
+	}
 	request := httptest.NewRequest(http.MethodGet, "/v1/endpoints", nil)
 	request.Header.Set("Authorization", "Bearer test-secret")
 	result := httptest.NewRecorder()
@@ -407,8 +453,42 @@ func TestV2RelayExitAndRotation(t *testing.T) {
 		t.Fatalf("create %d %s", result.Code, result.Body)
 	}
 	before := manager.list()[0].Listen
+	listen, err := netip.ParseAddrPort(before)
+	if err != nil || listen.Addr() != netip.IPv4Unspecified() || listen.Port() == 0 {
+		t.Fatalf("expected IPv4 wildcard bind with an allocated port, got %s (%v)", before, err)
+	}
+	loopback := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), listen.Port()).String()
+	if conn, err := net.DialTimeout("tcp4", loopback, time.Second); err != nil {
+		t.Fatalf("IPv4 wildcard listener: %v", err)
+	} else {
+		_ = conn.Close()
+	}
+	const probePath = "/v1/routes/test/probe"
+	dns := callAdmin(http.MethodPost, probePath, fmt.Sprintf(`{"protocol":"udp","target":%q}`, udp.LocalAddr().String()))
+	var dnsResult v2ProbeResult
+	if err := json.Unmarshal(dns.Body.Bytes(), &dnsResult); err != nil || dns.Code != http.StatusOK || !dnsResult.OK {
+		t.Fatalf("saved-route UDP DNS probe %d: %s (%v)", dns.Code, dns.Body, err)
+	}
+	if response := callAdmin(http.MethodPost, "/v1/probe", `{"kind":"download"}`); response.Code != http.StatusBadRequest {
+		t.Fatalf("preset without a saved route: %d %s", response.Code, response.Body)
+	}
 	if _, err := manager.replace("test", clientRoute{Hops: []string{"c/truenas@h2p"}}); err != nil || manager.list()[0].Listen != before {
 		t.Fatalf("replace failed: %v", err)
+	}
+	fixed := fmt.Sprintf("127.0.0.1:%d", v2TestPortRange(t, 1))
+	response := callAdmin(http.MethodPost, "/v1/routes", fmt.Sprintf(`{"name":"fixed","listen":%q,"hops":["c/truenas@h2p"]}`, fixed))
+	if response.Code != http.StatusCreated || manager.listeners["fixed"].listener.Addr().String() != fixed {
+		t.Fatalf("fixed listener %s returned %d %s", fixed, response.Code, response.Body)
+	}
+	if response := callAdmin(http.MethodDelete, "/v1/routes/test", ""); response.Code != http.StatusNoContent {
+		t.Fatalf("delete %d %s", response.Code, response.Body)
+	}
+	if conn, err := net.DialTimeout("tcp4", loopback, time.Second); err == nil {
+		_ = conn.Close()
+		t.Fatal("deleted route still accepts connections")
+	}
+	if response := callAdmin(http.MethodPost, probePath, `{"kind":"dns"}`); response.Code != http.StatusNotFound {
+		t.Fatalf("deleted route still eligible for testing: %d %s", response.Code, response.Body)
 	}
 	result = httptest.NewRecorder()
 	handler.ServeHTTP(result, httptest.NewRequest(http.MethodGet, "/ui", nil))

@@ -111,7 +111,7 @@ func newRouteManager[T tunnelOpener](ctx context.Context, state *routeState, new
 // initial routes. A port conflict leaves the stored configuration intact.
 func (m *routeManager) start(routes map[string]clientRoute, entries []clientEntry) error {
 	for _, entry := range entries {
-		listener, err := net.Listen("tcp", entry.listen.String())
+		listener, err := listenSOCKSRoute(entry.listen)
 		if err != nil {
 			m.closeListeners()
 			return fmt.Errorf("route %q: %w", entry.name, err)
@@ -186,7 +186,7 @@ func (m *routeManager) create(name string, route clientRoute) (routeInfo, error)
 	if err != nil {
 		return routeInfo{}, fmt.Errorf("%w: %w", errRouteInvalid, err)
 	}
-	listener, err := net.Listen("tcp", entry.listen.String())
+	listener, err := listenSOCKSRoute(entry.listen)
 	if err != nil {
 		return routeInfo{}, fmt.Errorf("%w: %w", errRouteConflict, err)
 	}
@@ -200,6 +200,15 @@ func (m *routeManager) create(name string, route clientRoute) (routeInfo, error)
 	m.listeners[name] = binding
 	m.serve(name, binding)
 	return routeInfo{Name: name, clientRoute: route}, nil
+}
+
+func listenSOCKSRoute(address netip.AddrPort) (net.Listener, error) {
+	network := "tcp"
+	if address.Addr().Is4() {
+		// The generic TCP listener may turn 0.0.0.0 into a dual-stack socket.
+		network = "tcp4"
+	}
+	return net.Listen(network, address.String())
 }
 
 func (m *routeManager) replace(name string, route clientRoute) (routeInfo, error) {
