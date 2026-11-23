@@ -251,7 +251,7 @@ func TestV2RelayExitAndRotation(t *testing.T) {
 		}
 	}
 	refresh()
-	client := &v2Client{directory: a.directory, pool: a.pool, key: a.key, route: "b@h2p,c/truenas@h2p", udp: "127.0.0.1/32"}
+	client := &v2Client{directory: a.directory, pool: a.pool, key: a.key, route: "b@h2p,c/truenas@h2p"}
 	target, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -378,9 +378,22 @@ func TestV2RelayExitAndRotation(t *testing.T) {
 	manager.prepare = v2PrepareEntry(origin, false)
 	defer manager.close()
 	handler := a.v2AdminHandler(manager, "127.0.0.1:1234", true)
-	request := httptest.NewRequest(http.MethodPost, "/v1/routes", strings.NewReader(`{"name":"test","hops":["b@h2p","c/truenas@h2p"]}`))
-	request.Header.Set("Content-Type", "application/json")
+	request := httptest.NewRequest(http.MethodGet, "/v1/endpoints", nil)
+	request.Header.Set("Authorization", "Bearer test-secret")
 	result := httptest.NewRecorder()
+	handler.ServeHTTP(result, request)
+	var peers v2EndpointDirectory
+	if err := json.Unmarshal(result.Body.Bytes(), &peers); err != nil || result.Code != http.StatusOK {
+		t.Fatalf("endpoints response %d: %s, %v", result.Code, result.Body, err)
+	}
+	if !peers.Ready || peers.Origin != origin || len(peers.Relays) != 1 || peers.Relays[0].Zone != relay ||
+		len(peers.Exits) != 2 || peers.Exits[0].Zone != relay || peers.Exits[0].Discoverable ||
+		peers.Exits[1].Zone != exit || !peers.Exits[1].Discoverable || strings.Contains(result.Body.String(), `"paths"`) {
+		t.Fatalf("directory mixed path suggestions with announced endpoints: %s", result.Body)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/v1/routes", strings.NewReader(`{"name":"test","hops":["b@h2p","c/truenas@h2p"]}`))
+	request.Header.Set("Content-Type", "application/json")
+	result = httptest.NewRecorder()
 	handler.ServeHTTP(result, request)
 	if result.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated API returned %d", result.Code)

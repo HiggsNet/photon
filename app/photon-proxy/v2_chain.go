@@ -397,7 +397,13 @@ func (c *v2Client) open(ctx context.Context, target string) (*tunnelStream, erro
 	targetHeader := "tcp=" + target
 	protocol := "tcp"
 	if target == trusttunnel.UDPAuthority {
-		targetHeader, protocol = "udp="+c.udp, "udp"
+		scope := c.udp
+		if scope == "" {
+			// The same configured route carries both protocols. The exit
+			// still applies its current ACL to every UDP destination.
+			scope = "0.0.0.0/0,::/0"
+		}
+		targetHeader, protocol = "udp="+scope, "udp"
 	}
 	headers, err := signV2Route(c.key, origin, c.route, targetHeader, time.Now())
 	if err != nil {

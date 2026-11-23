@@ -1,8 +1,13 @@
 const get = (id) => document.getElementById(id);
-const links = { h24: "公网 IPv4 · H2", h26: "公网 IPv6 · H2", h2p: "Photon Mesh · H2" };
+const links = { h24: "公网 IPv4", h26: "公网 IPv6", h2p: "Photon Mesh" };
+const aliases = { "public-v4": "h24", "public-v6": "h26", photon: "h2p" };
+const relayLimit = 7;
 let token = "";
-let endpoints = [];
-let editing = "";
+let directory = { origin: "", ready: false, exits: [], relays: [] };
+let editing = null;
+let testing = null;
+let exitRow;
+let relayRows = [];
 
 function status(message) { get("status").textContent = message; }
 async function api(path, method = "GET", body) {
@@ -10,15 +15,12 @@ async function api(path, method = "GET", body) {
   if (token) headers.set("Authorization", "Bearer " + token);
   if (body !== undefined) headers.set("Content-Type", "application/json");
   const response = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  if (response.status === 401) throw new Error("请输入正确的管理令牌。");
   if (!response.ok) {
     const data = await response.text();
-    try {
-      const detail = JSON.parse(data);
-      throw new Error(detail.error || detail.message || data.trim());
-    } catch (error) {
-      if (!(error instanceof SyntaxError)) throw error;
-      throw new Error(response.status === 401 ? "请输入正确的管理令牌。" : data.trim());
-    }
+    let detail;
+    try { detail = JSON.parse(data); } catch {}
+    throw new Error(detail?.error || detail?.message || data.trim() || "请求失败");
   }
   if (response.status !== 204) return response.json();
 }
@@ -30,121 +32,248 @@ function button(label, onClick) {
   element.addEventListener("click", onClick);
   return element;
 }
-function splitHop(hop) {
-  const [selector, link] = hop.split("@");
-  const [zone, id] = selector.split("/");
-  const aliases = { "public-v4": "h24", "public-v6": "h26", photon: "h2p" };
-  return { zone, id: id || "", link: aliases[link] || link || "h2p" };
+function textElement(tag, text, className = "") {
+  const element = document.createElement(tag);
+  element.textContent = text;
+  if (className) element.className = className;
+  return element;
 }
-function hopRow(hop = "") {
-  const value = splitHop(hop);
+function field(label, input) {
+  const element = document.createElement("label");
+  element.append(label, input);
+  return element;
+}
+function parentZone() { return directory.origin.split(".").slice(1).join("."); }
+function fullZone(zone) {
+  return !zone || zone.endsWith(".") ? zone : zone + "." + parentZone();
+}
+function shortZone(zone) {
+  const parent = parentZone();
+  return parent && zone.endsWith("." + parent) ? zone.slice(0, -parent.length - 1) : zone;
+}
+function selector(node) {
+  return node.zone + (node.role === "exit" && node.endpoint !== "exit" ? "/" + node.endpoint : "");
+}
+function nodeName(value) {
+  const [zone, id] = value.split("/");
+  return shortZone(zone) + (id && id !== "exit" ? " / " + id : "");
+}
+function splitHop(hop) {
+  const [name, link = ""] = hop.split("@");
+  const [zone, id] = name.split("/");
+  return { node: fullZone(zone) + (id && id !== "exit" ? "/" + id : ""), link: aliases[link] || link };
+}
+
+function hopRow(role, hop = "") {
+  const initial = splitHop(hop);
   const row = document.createElement("div");
   row.className = "hop";
-  const zoneInput = Object.assign(document.createElement("input"), { value: value.zone, required: true, placeholder: "Zone" });
-  const exitInput = Object.assign(document.createElement("input"), { value: value.id, placeholder: "默认" });
-  const linkInput = document.createElement("select");
-  Object.entries(links).forEach(([key, label]) => linkInput.append(new Option(label, key, false, key === value.link)));
-  const idList = "zones";
-  zoneInput.setAttribute("list", idList);
-  const constrain = () => {
-    const node = endpoints.find((item) => item.zone === zoneInput.value && item.endpoint === (exitInput.value || "exit"))
-      || endpoints.find((item) => item.zone === zoneInput.value);
-    for (const option of linkInput.options) {
-      option.disabled = Boolean(node && !node.links.includes(option.value));
+  const node = document.createElement("select");
+  const link = document.createElement("select");
+  node.required = true;
+  link.required = true;
+  function renderLinks(selected) {
+    const known = directory[role === "exit" ? "exits" : "relays"].find((candidate) => selector(candidate) === node.value);
+    link.replaceChildren(new Option("选择连接方式", ""));
+    for (const code of known?.links || []) link.append(new Option(links[code] || code, code));
+    if (selected && !known?.links.includes(selected)) {
+      link.append(new Option((links[selected] || selected) + "（目录未提供）", selected, false, true));
     }
-    if (linkInput.selectedOptions[0]?.disabled && node) linkInput.value = node.links[0];
-  };
-  zoneInput.addEventListener("change", constrain);
-  exitInput.addEventListener("change", constrain);
-  function field(label, input) {
-    const element = document.createElement("label");
-    element.append(label, input);
-    return element;
+    link.value = selected || "";
+    link.disabled = !node.value;
   }
-  row.append(field("Zone", zoneInput), field("出口名", exitInput), field("连接方式", linkInput),
-    button("移除", () => { row.remove(); if (!get("hops").children.length) hopRow(); }));
-  row.read = () => [zoneInput.value.trim(), exitInput.value.trim(), linkInput.value];
-  get("hops").append(row);
-  constrain();
+  function renderNodes(selected, selectedLink) {
+    node.replaceChildren(new Option(role === "exit" ? "选择出口" : "选择中继", ""));
+    for (const candidate of directory[role === "exit" ? "exits" : "relays"]) {
+      const value = selector(candidate);
+      node.append(new Option(nodeName(value), value));
+    }
+    if (selected && ![...node.options].some((option) => option.value === selected)) {
+      node.append(new Option(nodeName(selected) + "（目录未提供）", selected));
+    }
+    node.value = selected || "";
+    renderLinks(selectedLink);
+  }
+  const item = {
+    row, node, link,
+    refresh() { renderNodes(node.value, link.value); },
+    choose(value) {
+      const previousLink = node.value === value ? link.value : "";
+      renderNodes(value, previousLink);
+      link.focus();
+    },
+  };
+  node.addEventListener("change", () => { renderLinks(""); preview(); });
+  link.addEventListener("change", preview);
+  row.append(field(role === "exit" ? "出口节点" : "中继节点", node), field("连接方式", link));
+  if (role === "relay") {
+    const actions = document.createElement("div");
+    actions.className = "hop-actions";
+    const move = (offset) => {
+      const index = relayRows.indexOf(item);
+      const next = index + offset;
+      if (next < 0 || next >= relayRows.length) return;
+      [relayRows[index], relayRows[next]] = [relayRows[next], relayRows[index]];
+      renderRelays();
+      item.node.focus();
+    };
+    item.up = button("上移", () => move(-1));
+    item.down = button("下移", () => move(1));
+    actions.append(item.up, item.down, button("移除", () => {
+      relayRows = relayRows.filter((candidate) => candidate !== item);
+      renderRelays();
+      get("add-relay").focus();
+    }));
+    row.append(actions);
+  }
+  renderNodes(initial.node, initial.link);
+  return item;
+}
+function renderRelays() {
+  for (const [index, row] of relayRows.entries()) {
+    row.up.hidden = relayRows.length < 2;
+    row.down.hidden = relayRows.length < 2;
+    row.up.disabled = index === 0;
+    row.down.disabled = index === relayRows.length - 1;
+  }
+  get("relays").replaceChildren(...relayRows.map((item) => item.row));
+  get("add-relay").disabled = relayRows.length >= relayLimit;
+  preview();
+}
+function addRelay(value = "") {
+  if (relayRows.length >= relayLimit) throw new Error("一条路径最多经过七个中继。");
+  const existing = value && relayRows.find((item) => item.node.value === value);
+  if (existing) { existing.link.focus(); return; }
+  const item = hopRow("relay");
+  relayRows.push(item);
+  renderRelays();
+  if (value) { item.choose(value); preview(); }
+  else item.node.focus();
+}
+function describeHop(hop, index, length) {
+  const value = splitHop(hop);
+  const role = index === length - 1 ? "出口" : "中继";
+  return role + " " + nodeName(value.node) + " · " + (links[value.link] || value.link);
+}
+function describePath(hops) {
+  return hops.map((hop, index) => describeHop(hop, index, hops.length)).join(" → ");
+}
+function preview() {
+  const rows = [...relayRows, exitRow].filter((item) => item?.node.value);
+  const parts = rows.map((item) => {
+    const role = item === exitRow ? "出口" : "中继";
+    return role + " " + nodeName(item.node.value) + " · " + (links[item.link.value] || "待选连接方式");
+  });
+  get("preview").textContent = parts.length ? "本机 → " + parts.join(" → ") : "";
+  get("preview").hidden = !parts.length;
 }
 function formHops() {
-  return [...get("hops").children].map((row, index, all) => {
-    const [zone, exit, link] = row.read();
-    if (!zone) throw new Error("请填写每一跳的 Zone。");
-    if (exit && index !== all.length - 1) throw new Error("只有最后一跳可以指定出口名。");
-    return zone + (exit ? "/" + exit : "") + "@" + link;
+  if (!exitRow.node.value) throw new Error("请选择出口。");
+  return [...relayRows, exitRow].map((item, index) => {
+    if (!item.node.value) throw new Error("请选择第 " + (index + 1) + " 个中继。");
+    if (!item.link.value) throw new Error("请选择 " + nodeName(item.node.value) + " 的连接方式。");
+    return item.node.value + "@" + item.link.value;
   });
 }
-function edit(route) {
-  editing = route?.name || "";
-  get("edit-title").textContent = editing ? "切换路径" : "新建路径";
-  get("save").textContent = editing ? "保存切换" : "创建路径";
-  get("name").value = editing;
-  get("name").readOnly = Boolean(editing);
+function edit(route = null) {
+  editing = route;
+  get("edit-title").textContent = route ? "切换路径" : "新建路径";
+  get("save").textContent = route ? "保存切换" : "创建路径";
+  get("name").value = route?.name || "";
+  get("name").readOnly = Boolean(route);
   get("listen").value = route?.listen || "";
-  get("listen").readOnly = Boolean(editing);
-  get("udp-prefixes").value = (route?.udp_prefixes || []).join(", ");
-  get("hops").replaceChildren();
-  (route?.hops || [""]).forEach(hopRow);
+  get("listen").readOnly = Boolean(route);
+  exitRow = hopRow("exit", route?.hops.at(-1));
+  get("exit").replaceChildren(exitRow.row);
+  relayRows = (route?.hops.slice(0, -1) || []).map((hop) => hopRow("relay", hop));
+  renderRelays();
 }
 function renderRoutes(routes) {
   const body = get("routes");
   body.replaceChildren();
   if (!routes.length) {
     const cell = body.insertRow().insertCell();
-    cell.colSpan = 4; cell.className = "empty"; cell.textContent = "暂无路径";
+    cell.colSpan = 4;
+    cell.className = "muted";
+    cell.textContent = "暂无已保存路径";
   }
   for (const route of routes) {
     const row = body.insertRow();
     row.insertCell().textContent = route.name;
     row.insertCell().textContent = route.listen;
-    row.insertCell().textContent = route.hops.join(" → ");
+    const path = row.insertCell();
+    path.textContent = describePath(route.hops);
+    path.title = route.hops.join(" → ");
     const actions = row.insertCell();
-    actions.append(button("切换", () => { edit(route); get("name").focus(); }), " ",
-      button("测试", () => attempt(() => probe(route.name))));
+    actions.append(button("切换", () => { edit(route); exitRow.node.focus(); }), " ",
+      button("测试", () => selectTestRoute(route)));
   }
+  if (testing && !routes.some((route) => route.name === testing.name)) closeTest();
 }
-function renderCandidates(data) {
-  endpoints = data.endpoints;
-  let zones = get("zones");
-  if (!zones) { zones = document.createElement("datalist"); zones.id = "zones"; document.body.append(zones); }
-  zones.replaceChildren(...[...new Set(endpoints.map((node) => node.zone))].map((zone) => new Option(zone)));
-  const list = get("candidates");
-  list.replaceChildren();
-  for (const path of data.paths) {
-    const item = document.createElement("li");
-    item.append(button(path.join(" → "), () => {
-      get("hops").replaceChildren();
-      path.forEach(hopRow);
-      get("name").focus();
-    }));
-    list.append(item);
+function renderDirectory(data) {
+  directory = data;
+  get("directory-status").textContent = data.ready ? "节点来自 Gossip 公告。" : "Gossip 目录暂不可用。";
+  for (const [key, role] of [["exits", "exit"], ["relays", "relay"]]) {
+    const list = get("directory-" + key);
+    list.replaceChildren();
+    if (!directory[key].length && data.ready) {
+      list.append(textElement("li", role === "exit" ? "未发现可选出口" : "未发现可选中继", "muted"));
+    }
+    for (const candidate of directory[key]) {
+      const value = selector(candidate);
+      const row = document.createElement("li");
+      const title = textElement("strong", nodeName(value));
+      title.title = value;
+      const details = ["连接方式 " + candidate.links.map((code) => links[code] || code).join(" / ")];
+      if (role === "exit" && !candidate.discoverable) details.push("目标范围未公告");
+      const info = document.createElement("div");
+      info.append(title, textElement("p", details.join(" · "), "muted"));
+      row.append(info, button(role === "exit" ? "选为出口" : "添加到路径", () => attempt(() => {
+        if (role === "exit") { exitRow.choose(value); preview(); }
+        else addRelay(value);
+      })));
+      list.append(row);
+    }
   }
-}
-async function discover() {
-  const target = get("target").value.trim();
-  const query = new URLSearchParams({ protocol: get("protocol").value });
-  if (target) query.set("target", target);
-  const data = await api("/v1/candidates?" + query);
-  renderCandidates(data);
-  get("result").textContent = "找到 " + data.paths.length + " 条候选路径。";
+  exitRow.refresh();
+  relayRows.forEach((item) => item.refresh());
+  preview();
 }
 async function refresh() {
-  const [routes, data] = await Promise.all([api("/v1/routes"), api("/v1/candidates")]);
+  const [routes, peers] = await Promise.all([api("/v1/routes"), api("/v1/endpoints")]);
+  renderDirectory(peers);
   renderRoutes(routes);
-  renderCandidates(data);
   status("");
 }
-async function probe(name = "") {
+function selectTestRoute(route) {
+  testing = route;
+  get("route-test").hidden = false;
+  get("test-title").textContent = "测试 " + route.name + " · " + route.listen;
+  get("result").textContent = "";
+  get("target").focus();
+}
+function closeTest() {
+  testing = null;
+  get("route-test").hidden = true;
+  get("result").textContent = "";
+}
+async function probe() {
+  const route = testing;
   const target = get("target").value.trim();
-  if (!target) throw new Error("请填写测试目标。");
-  const request = { protocol: get("protocol").value, target };
-  if (!name) request.hops = formHops();
-  get("result").textContent = "正在测路…";
-  const path = name ? "/v1/routes/" + encodeURIComponent(name) + "/probe" : "/v1/probe";
-  const result = await api(path, "POST", request);
-  get("result").textContent = result.ok ? "连接成功 · " + result.elapsed_ms + " ms"
-    : "连接失败" + (result.failed_hop === undefined ? "" : " · 第 " + (result.failed_hop + 1) + " 跳") + " · " + result.error;
+  if (!route || !target) return;
+  const protocol = get("protocol").value;
+  get("result").textContent = "正在测试 " + route.name + "…";
+  get("probe").disabled = true;
+  try {
+    const result = await api("/v1/routes/" + encodeURIComponent(route.name) + "/probe", "POST", { protocol, target });
+    if (testing !== route) return;
+    get("result").textContent = result.ok ? "连接成功 · " + result.elapsed_ms + " ms"
+      : "连接失败" + (result.failed_hop === undefined ? "" : " · 第 " + (result.failed_hop + 1) + " 跳") + " · " + result.error;
+  } catch (error) {
+    if (testing === route) get("result").textContent = error.message;
+  } finally {
+    get("probe").disabled = false;
+  }
 }
 async function attempt(action) {
   try { await action(); } catch (error) { status(error.message); }
@@ -152,19 +281,26 @@ async function attempt(action) {
 get("auth").addEventListener("submit", (event) => {
   event.preventDefault();
   token = get("token").value.trim();
+  get("token").value = "";
   attempt(refresh);
 });
 get("refresh").onclick = () => attempt(refresh);
-get("add-hop").onclick = () => hopRow();
+get("add-relay").onclick = () => attempt(() => addRelay());
 get("reset").onclick = () => edit();
-get("discover").addEventListener("submit", (event) => { event.preventDefault(); attempt(discover); });
-get("probe").onclick = () => attempt(() => probe());
+get("close-test").onclick = closeTest;
+get("route-test").addEventListener("submit", (event) => { event.preventDefault(); probe(); });
+get("protocol").addEventListener("change", () => {
+  get("target").placeholder = get("protocol").value === "udp" ? "例如 1.1.1.1:53" : "例如 192.168.50.10:443";
+});
 get("route-form").addEventListener("submit", (event) => {
   event.preventDefault();
   attempt(async () => {
-    const body = { hops: formHops(), udp_prefixes: get("udp-prefixes").value.split(",").map((value) => value.trim()).filter(Boolean) };
-    if (editing) await api("/v1/routes/" + encodeURIComponent(editing), "PUT", body);
-    else {
+    const body = { hops: formHops() };
+    if (editing) {
+      if (editing.udp_prefixes?.length) body.udp_prefixes = editing.udp_prefixes;
+      await api("/v1/routes/" + encodeURIComponent(editing.name), "PUT", body);
+      if (testing?.name === editing.name) closeTest();
+    } else {
       body.name = get("name").value.trim();
       body.listen = get("listen").value.trim();
       await api("/v1/routes", "POST", body);

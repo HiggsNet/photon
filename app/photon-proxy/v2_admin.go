@@ -39,6 +39,18 @@ type v2CandidateList struct {
 	Paths     [][]string            `json:"paths"`
 }
 
+type v2EndpointDirectory struct {
+	Origin zone.ZonePath         `json:"origin"`
+	Ready  bool                  `json:"ready"`
+	Relays []v2DirectoryEndpoint `json:"relays"`
+	Exits  []v2DirectoryEndpoint `json:"exits"`
+}
+
+type v2DirectoryNode struct {
+	v2DirectoryEndpoint
+	check service.ProxyV2RelayACL
+}
+
 type v2ProbeRequest struct {
 	Protocol string   `json:"protocol"`
 	Target   string   `json:"target"`
@@ -103,6 +115,9 @@ func (n *v2Node) v2AdminHandler(manager *routeManager, listen string, isTCP bool
 	mux.Handle("/", routeAdminHandler(manager))
 	mux.HandleFunc("GET /v1/admin", func(w http.ResponseWriter, _ *http.Request) {
 		writeRouteJSON(w, http.StatusOK, map[string]string{"listen": listen})
+	})
+	mux.HandleFunc("GET /v1/endpoints", func(w http.ResponseWriter, _ *http.Request) {
+		writeRouteJSON(w, http.StatusOK, v2ListEndpoints(n.directory.snapshotV2(), time.Now()))
 	})
 	mux.HandleFunc("GET /v1/candidates", func(w http.ResponseWriter, r *http.Request) {
 		protocol := r.URL.Query().Get("protocol")
@@ -171,6 +186,7 @@ func (n *v2Node) v2AdminHandler(manager *routeManager, listen string, isTCP bool
 				w.Header().Set("Content-Security-Policy", "default-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 				w.Header().Set("Referrer-Policy", "no-referrer")
 				w.Header().Set("X-Content-Type-Options", "nosniff")
+				w.Header().Set("Cache-Control", "no-cache")
 				if strings.HasSuffix(name, ".html") {
 					w.Header().Set("Content-Type", "text/html; charset=utf-8")
 				}
@@ -214,34 +230,48 @@ func (n *v2Node) v2AdminHandler(manager *routeManager, listen string, isTCP bool
 	})
 }
 
-func v2ListCandidates(view service.ProxyDirectory, protocol string, target netip.AddrPort, now time.Time) v2CandidateList {
-	list := v2CandidateList{Endpoints: []v2DirectoryEndpoint{}, Paths: [][]string{}}
+func v2ListEndpoints(view service.ProxyDirectory, now time.Time) v2EndpointDirectory {
+	list := v2EndpointDirectory{
+		Origin: view.ManagedZone,
+		Ready:  view.ValidUntil.After(now),
+		Relays: []v2DirectoryEndpoint{},
+		Exits:  []v2DirectoryEndpoint{},
+	}
+	relays, exits := v2DirectoryNodes(view, "", netip.AddrPort{}, now)
+	for _, relay := range relays {
+		list.Relays = append(list.Relays, relay.v2DirectoryEndpoint)
+	}
+	for _, exit := range exits {
+		list.Exits = append(list.Exits, exit.v2DirectoryEndpoint)
+	}
+	return list
+}
+
+func v2DirectoryNodes(view service.ProxyDirectory, protocol string, target netip.AddrPort, now time.Time) (relays, exits []v2DirectoryNode) {
 	if !view.ValidUntil.After(now) {
-		return list
+		return nil, nil
 	}
-	type node struct {
-		v2DirectoryEndpoint
-		check service.ProxyV2RelayACL
+	protocols := []string{protocol}
+	if protocol == "" {
+		protocols = []string{"tcp", "udp"}
 	}
-	var relays, exits []node
 	for owner, peer := range view.V2 {
 		if owner == view.ManagedZone || !validV2ZoneName(owner.String()) {
 			continue
 		}
 		for id, endpoint := range peer.Endpoints {
-			candidate := node{v2DirectoryEndpoint: v2DirectoryEndpoint{
+			candidate := v2DirectoryNode{v2DirectoryEndpoint: v2DirectoryEndpoint{
 				Zone: owner, Endpoint: id, Role: endpoint.Role, Discoverable: true, Links: []string{},
 			}}
 			for _, link := range []string{"h24", "h26", "h2p"} {
 				hop := v2Hop{Zone: owner, Endpoint: id, Link: link}
-				binding, ok := resolveV2Endpoint(view, hop, protocol, endpoint.Role, now)
-				if !ok {
-					continue
+				for _, allowedProtocol := range protocols {
+					binding, ok := resolveV2Endpoint(view, hop, allowedProtocol, endpoint.Role, now)
+					if ok && (binding.via != "photon" || len(binding.mesh) != 0) {
+						candidate.Links = append(candidate.Links, link)
+						break
+					}
 				}
-				if binding.via == "photon" && len(binding.mesh) == 0 {
-					continue
-				}
-				candidate.Links = append(candidate.Links, link)
 			}
 			if len(candidate.Links) == 0 {
 				continue
@@ -270,15 +300,21 @@ func v2ListCandidates(view service.ProxyDirectory, protocol string, target netip
 			}
 		}
 	}
-	compare := func(a, b node) int {
+	compare := func(a, b v2DirectoryNode) int {
 		return strings.Compare(a.Zone.String()+"/"+a.Endpoint, b.Zone.String()+"/"+b.Endpoint)
 	}
 	slices.SortFunc(relays, compare)
 	slices.SortFunc(exits, compare)
+	return relays, exits
+}
+
+func v2ListCandidates(view service.ProxyDirectory, protocol string, target netip.AddrPort, now time.Time) v2CandidateList {
+	list := v2CandidateList{Endpoints: []v2DirectoryEndpoint{}, Paths: [][]string{}}
+	relays, exits := v2DirectoryNodes(view, protocol, target, now)
 	for _, candidate := range append(slices.Clone(relays), exits...) {
 		list.Endpoints = append(list.Endpoints, candidate.v2DirectoryEndpoint)
 	}
-	name := func(n node) string {
+	name := func(n v2DirectoryNode) string {
 		value := n.Zone.String()
 		if n.Role == "exit" && n.Endpoint != "exit" {
 			value += "/" + n.Endpoint
@@ -287,18 +323,18 @@ func v2ListCandidates(view service.ProxyDirectory, protocol string, target netip
 	}
 	// Breadth first so direct paths and one-relay paths precede longer
 	// alternatives. Bound the graph walk independently of returned paths.
-	type candidatePath []node
+	type candidatePath []v2DirectoryNode
 	queue := []candidatePath{nil}
 	const maxExplored = 1024
 	for explored := 0; len(queue) != 0 && len(list.Paths) < 64 && explored < maxExplored; explored++ {
 		path := queue[0]
 		queue = queue[1:]
-		allowed := func(next node) bool {
+		allowed := func(next v2DirectoryNode) bool {
 			if len(path) == 0 {
 				return true
 			}
 			prior := path[len(path)-1]
-			return prior.check.Allows(view.ManagedZone, next.Zone) && !slices.ContainsFunc(path, func(hop node) bool { return hop.Zone == next.Zone })
+			return prior.check.Allows(view.ManagedZone, next.Zone) && !slices.ContainsFunc(path, func(hop v2DirectoryNode) bool { return hop.Zone == next.Zone })
 		}
 		for _, exit := range exits {
 			if len(list.Paths) == 64 {

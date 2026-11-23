@@ -51,7 +51,6 @@ client:
     via-quark:
       listen: 192.168.10.2:1080
       hops: [quark@h26, child/internet@h2p]
-      udp_prefixes: ["0.0.0.0/0", "::/0"]
 
 port_groups:
   wan:
@@ -141,7 +140,13 @@ Unix socket. A TCP listener requires a configured `token` or explicit
 `disable_auth: true`. Use a fixed management address for a remote system, or
 port zero with discovery via `GET /v1/admin` on the Unix socket. Nginx can
 terminate HTTPS. A configured token is passed as `Authorization: Bearer <token>`.
-With `web: true`, the built-in panel is at `/ui`.
+With `web: true`, the built-in panel is at `/ui`. Select an exit and any
+optional relays from the Gossip directory. The test action on a saved SOCKS5
+route uses that route's configured hops.
+
+TCP and UDP share the same route. The exit applies its destination policy to
+both. An existing explicit `udp_prefixes` list further limits UDP destinations
+for that route.
 
 | Method and path | Behavior |
 | --- | --- |
@@ -149,6 +154,7 @@ With `web: true`, the built-in panel is at `/ui`.
 | `POST /v1/routes` | Create a named route, with optional `listen` for a fixed port |
 | `PUT /v1/routes/{name}` | Change the path while retaining its SOCKS5 port |
 | `DELETE /v1/routes/{name}` | Remove a SOCKS5 route; entries seeded by YAML are restored on startup |
+| `GET /v1/endpoints` | List advertised relays and exits separately, with their connection methods |
 | `GET /v1/candidates?protocol=tcp&target=192.168.50.10:443` | Read matching advertised endpoints and a bounded list of candidate paths |
 | `POST /v1/probe` | Test explicit `hops` and a `protocol` / `target` |
 | `POST /v1/routes/{name}/probe` | Test a saved route; UDP sends a DNS query to an IP and port |
