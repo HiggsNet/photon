@@ -7,6 +7,7 @@ const TONE = {
     connecting: 'warn', degraded: 'warn', stale: 'warn', pending: 'warn', polling: 'warn',
     idle: 'warn', shared: 'warn',
     down: 'err', error: 'err', revoked: 'err', offline: 'err', failed: 'err',
+    synced: 'ok', syncing: 'warn', backoff: 'warn', retry_pending: 'warn',
 };
 
 export function toneFor(state) {

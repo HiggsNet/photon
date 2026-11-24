@@ -3,14 +3,14 @@
 
 import * as store from '../store.js';
 import { fetchAPI } from '../api.js';
-import { navigate } from '../router.js';
 import { onItemInvalidate } from '../events.js';
 import { esc, ms, pct, relTime, compareZones } from '../format.js';
-import { pageHeader, filterInput, emptyState, loading, errorMsg } from '../components/card.js';
+import { pageHeader, filterInput, emptyState, errorMsg } from '../components/card.js';
 import { kvTable } from '../components/kv.js';
 import { stateBadge, badge, dot } from '../components/badge.js';
 import { sparkline } from '../components/chart.js';
 import { historyPanel, bindHistory } from './health_history.js';
+import { directoryRow, linkDirectory, renderInspector, renderInspectorLoading, underlayLabel } from '../components/inspector.js';
 
 export const deps = ['/health'];
 
@@ -43,42 +43,29 @@ function roleBadge(h) {
     return badge(role, tone);
 }
 
-function linkRow(item, selected, showRole) {
+function linkRow(item, selected, showRole, showGroup) {
     const h = healthValue(item) || {};
     const large = h.large_probe;
-    return `<button type="button" class="link-item health-link${selected ? ' selected' : ''}" data-link="${esc(probeID(item))}" aria-pressed="${selected}">
-        ${dot(h.state || 'unknown')}
-        <span class="link-family" title="${esc(probeID(item))}">${esc(item.group_id || item.underlay_family || '-')}</span>
-        ${showRole ? roleBadge(h) : ''}
-        ${stateBadge(h.state || 'unknown')}
-        <span class="health-loss" title="Small-packet round-trip loss">S ${h.sent > 0 ? pct(h.loss_ratio_pct) : '-'}</span>
-        <span class="health-loss" title="Large-packet round-trip loss">L ${large && large.sent > 0 ? pct(Number(large.loss_ratio_pct).toFixed(1)) : '-'}</span>
-    </button>`;
-}
-
-function groupedLinks(links, selected, instanceCount) {
-    const groups = new Map();
-    links.forEach(item => {
-        const zone = item.peer_zone || '-';
-        if (!groups.has(zone)) groups.set(zone, []);
-        groups.get(zone).push(item);
-    });
-    return Array.from(groups, ([zone, items]) => `<section class="health-zone-group">
-        <h2 class="health-zone-title"><span>${esc(zone)}</span><span class="muted">${new Set(items.map(item => healthValue(item).instance_id)).size}</span></h2>
-        ${items.map(item => linkRow(item, item === selected, instanceCount.get((healthValue(item) || {}).instance_id || '') > 1)).join('')}
-    </section>`).join('') || emptyState('No health data available');
+    const state = h.state || 'unknown';
+    const path = [underlayLabel(item), showGroup && item.group_id].filter(Boolean).join(' · ');
+    return directoryRow(probeID(item), probeID(item), selected, `
+        <span class="directory-path"><span title="${esc(path)}">${esc(path)}</span>${showRole ? roleBadge(h) : ''}</span>
+        <span class="directory-status">${dot(state)}<span>${esc(state)}</span></span>
+        <span class="directory-number">${h.sent > 0 ? pct(h.loss_ratio_pct) : '–'}</span>
+        <span class="directory-number">${large && large.sent > 0 ? pct(Number(large.loss_ratio_pct).toFixed(1)) : '–'}</span>
+    `);
 }
 
 function largeProbePanel(large) {
     if (!large) return '<div class="muted">Large-packet probing is disabled.</div>';
     const samples = large.sent > 0;
     return kvTable([
+        ['Round-trip Loss', samples ? pct(Number(large.loss_ratio_pct).toFixed(1)) : 'Waiting for samples'],
+        ['Last RTT', ms(large.last_rtt_ms)],
+        ['Samples', esc(`${large.sent || 0} sent · ${large.received || 0} received · ${large.lost || 0} lost`)],
         ['Packet Size', `${esc(large.packet_size)} bytes (inner IP)`],
         ['Interval', `${esc(large.interval_seconds)}s · 1 packet per sample`],
         ['Window', `Latest ${esc(large.loss_window)} samples`],
-        ['Samples', esc(`${large.sent || 0} sent · ${large.received || 0} received · ${large.lost || 0} lost`)],
-        ['Round-trip Loss', samples ? pct(Number(large.loss_ratio_pct).toFixed(1)) : 'Waiting for samples'],
-        ['Last RTT', ms(large.last_rtt_ms)],
         ['Last Probe', relTime(large.last_probe_unix)],
         ['Next Probe', relTime(large.next_probe_unix)],
         ['Last Error', `<code>${esc((large.last_failure || {}).message || '-')}</code>`],
@@ -94,12 +81,12 @@ function detailPanel(item, datasource) {
         ? historyPanel(h.instance_id, !!h.large_probe)
         : '<div class="muted">No local health history datasource configured.</div>';
     const probe = kvTable([
+        ['State', stateBadge(h.state)],
+        ['Loss', h.sent > 0 ? pct(h.loss_ratio_pct) : 'Waiting for samples'],
+        ['Samples', esc(`${h.sent || 0} sent · ${h.received || 0} received · ${h.lost || 0} lost`)],
         ['Probe ID', `<code>${esc(h.probe_id || h.instance_id || '-')}</code>`],
         ['Role', esc(h.probe_role || 'active')],
-        ['State', stateBadge(h.state)],
         ['Probe', esc(h.probe_type || '-')],
-        ['Samples', esc(`${h.sent || 0} sent · ${h.received || 0} received · ${h.lost || 0} lost`)],
-        ['Loss', h.sent > 0 ? pct(h.loss_ratio_pct) : 'Waiting for samples'],
         ['Consecutive Failures', esc(h.consecutive_fail || 0)],
         ['Cutover Blocking', h.cutover_blocking ? 'Yes' : 'No'],
         ['Next Probe', relTime(h.next_probe_unix)],
@@ -120,13 +107,14 @@ function detailPanel(item, datasource) {
         ['Endpoint', `<code>${esc(item.endpoint || desired.endpoint || '-')}</code>`],
     ]);
     return `<section class="detail-panel">
-        <h2>${esc(item.peer_zone || '-')} · ${esc(item.group_id || item.underlay_family || '-')} ${roleBadge(h)}</h2>
+        <h2>${esc(item.peer_zone || '-')} · ${esc(underlayLabel(item))} ${roleBadge(h)}</h2>
         <div class="detail-grid">
             <section><h3>Small Packets</h3>${probe}</section>
-            <section><h3>Large Packets</h3>${largeProbePanel(h.large_probe)}</section>
             <section><h3>Latency</h3>${latency}</section>
+            ${h.large_probe ? `<section><h3>Large Packets</h3>${largeProbePanel(h.large_probe)}</section>` : ''}
             <section><h3>Link</h3>${link}</section>
         </div>
+        ${h.large_probe ? '' : largeProbePanel(null)}
         <section class="health-history-section"><h3>Probe History</h3>${history}</section>
     </section>`;
 }
@@ -157,14 +145,14 @@ function setupSparklines(root) {
         entries.forEach(entry => {
             if (entry.isIntersecting) { observer.unobserve(entry.target); load(entry.target); }
         });
-    }, { root: document.getElementById('content') });
+    }, { root: root.querySelector('.inspector-detail') });
     slots.forEach(slot => observer.observe(slot));
 }
 
 export function render(container, route) {
-    const header = pageHeader('Health · Data Plane', 'Probe state, latency and loss', filterInput(route, 'Filter links…'));
+    const header = pageHeader('Health · Data Plane', '', filterInput(route, 'Filter links…'));
     const entry = store.get('/health');
-    if (!entry) { container.innerHTML = header + loading(); return; }
+    if (!entry) return renderInspectorLoading(container, route.page, header);
     if (entry.error && !entry.data) { container.innerHTML = header + errorMsg(`Failed to load health: ${entry.error.message}`); return; }
     const data = entry.data || {};
     const filter = (route.filter || '').toLowerCase();
@@ -175,6 +163,7 @@ export function render(container, route) {
                 || (h.instance_id || '').toLowerCase().includes(filter)
                 || (h.probe_id || '').toLowerCase().includes(filter)
                 || (h.probe_role || '').toLowerCase().includes(filter)
+                || underlayLabel(item).toLowerCase().includes(filter)
                 || (item.peer_zone || '').toLowerCase().includes(filter)
                 || (item.group_id || '').toLowerCase().includes(filter);
         })
@@ -186,29 +175,27 @@ export function render(container, route) {
             || probeID(a).localeCompare(probeID(b)));
     // Select by probe id (unique per active/staged/old probe); fall back to
     // the active probe when a deep link carries only the link instance id.
-    const selected = links.find(item => probeID(item) === route.selected)
+    const requested = links.find(item => probeID(item) === route.selected)
         || links.find(item => {
             const h = healthValue(item) || {};
             return h.instance_id === route.selected && (!h.probe_role || h.probe_role === 'active');
-        })
-        || null;
+        });
+    const selected = requested || links[0];
     // Rotation: several probes share one instance id — mark each row's role.
     const instanceCount = new Map();
-    links.forEach(item => {
+    (data.links || []).forEach(item => {
         const id = (healthValue(item) || {}).instance_id || '';
         instanceCount.set(id, (instanceCount.get(id) || 0) + 1);
     });
-    container.innerHTML = `
-        ${header}
-        <div class="overlay-layout health-layout">
-            <div class="link-list">${groupedLinks(links, selected, instanceCount)}</div>
-            <div id="health-detail">${detailPanel(selected, data.datasource)}</div>
-        </div>`;
-    container.querySelector('#page-filter').addEventListener('input', ev => {
-        navigate(route.page, route.selected, ev.target.value);
+    const list = linkDirectory(links, (item, showGroup) => {
+        const h = healthValue(item) || {};
+        const showRole = h.probe_role && (h.probe_role !== 'active' || instanceCount.get(h.instance_id) > 1);
+        return linkRow(item, item === selected, showRole, showGroup);
     });
-    container.querySelectorAll('[data-link]').forEach(item => {
-        item.addEventListener('click', () => navigate('health', item.dataset.link, route.filter));
+    renderInspector(container, route, {
+        header, columns: ['Probe', 'State', 'Small loss', 'Large loss'],
+        list, empty: 'No health data available',
+        detail: detailPanel(selected, data.datasource), selection: probeID(selected), openDetail: !!requested,
     });
     setupSparklines(container);
     bindHistory(container, data.datasource);

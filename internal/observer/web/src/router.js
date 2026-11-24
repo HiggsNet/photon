@@ -31,11 +31,11 @@ export function navigate(page, selected, filter) {
     let hash = `#/${page}`;
     if (selected) hash += `/${encodeURIComponent(selected)}`;
     if (filter) hash += `?f=${encodeURIComponent(filter)}`;
-    if (window.location.hash === hash) {
-        handleHashChange();
-    } else {
-        window.location.hash = hash;
+    if (window.location.hash !== hash) {
+        // Keep hash URLs without triggering native fragment scrolling.
+        window.history.pushState(null, '', hash);
     }
+    handleHashChange();
 }
 
 export function currentRoute() {

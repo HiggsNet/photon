@@ -1,17 +1,32 @@
 // gossip.js — peer cards + side detail panel (endpoints, diagnostics kv).
 
 import * as store from '../store.js';
-import { navigate } from '../router.js';
 import { esc, relTime, formatTime } from '../format.js';
-import { pageHeader, filterInput, emptyState, loading, errorMsg } from '../components/card.js';
+import { pageHeader, filterInput, emptyState, errorMsg } from '../components/card.js';
 import { tableWrap, emptyRow } from '../components/table.js';
 import { kvTable } from '../components/kv.js';
 import { dot } from '../components/badge.js';
+import { directoryGroup, directoryGroups, directoryRow, renderInspector, renderInspectorLoading } from '../components/inspector.js';
 
 export const deps = ['/peers'];
 
 function lastSuccess(peer) {
     return peer.last_sync_unix ? new Date(peer.last_sync_unix * 1000).toISOString().slice(0, 19) + 'Z' : 'never';
+}
+
+function parentZone(id) {
+    const separator = id.indexOf('.');
+    return separator > 0 ? id.slice(separator + 1) || '.' : '.';
+}
+
+function peerRow(peer, selected) {
+    const status = peer.sync_status || 'unknown';
+    const name = peer.peer_id.split('.')[0] || peer.peer_id;
+    return directoryRow(peer.peer_id, peer.peer_id, peer === selected, `
+        <span class="directory-name">${esc(name)}</span>
+        <span class="directory-status">${dot(status)}<span>${esc(status.replaceAll('_', ' '))}</span></span>
+        <span class="directory-number">${peer.last_sync_unix ? relTime(peer.last_sync_unix) : 'Never'}</span>
+    `);
 }
 
 function kvFromObject(obj) {
@@ -82,29 +97,21 @@ function detailPanel(selected, peer) {
 }
 
 export function render(container, route) {
-    const header = pageHeader('Gossip', 'Peer exchange and discovery', filterInput(route, 'Filter peers…'));
+    const header = pageHeader('Gossip', '', filterInput(route, 'Filter peers…'));
     const entry = store.get('/peers');
-    if (!entry) { container.innerHTML = header + loading(); return; }
+    if (!entry) return renderInspectorLoading(container, route.page, header);
     if (entry.error && !entry.data) { container.innerHTML = header + errorMsg(`Failed to load peers: ${entry.error.message}`); return; }
     const filter = (route.filter || '').toLowerCase();
 	const allPeers = entry.data.peers || [];
     const peers = allPeers.filter(p =>
         !filter || (p.peer_id || '').toLowerCase().includes(filter) || (p.source || '').toLowerCase().includes(filter));
-    const cards = peers.map(p =>
-        `<div class="peer-item${route.selected === p.peer_id ? ' selected' : ''}" data-peer="${esc(p.peer_id)}">
-            <span class="peer-id">${esc(p.peer_id)}</span>
-            <span class="peer-sub">${esc(p.sync_status)} · ${esc(lastSuccess(p))}</span>
-        </div>`).join('');
-    container.innerHTML = `
-        ${header}
-        <div class="gossip-layout">
-            <div class="peer-list">${cards || emptyState('No peers match')}</div>
-            <div id="peer-detail">${detailPanel(route.selected, allPeers.find(p => p.peer_id === route.selected))}</div>
-        </div>`;
-    container.querySelector('#page-filter').addEventListener('input', ev => {
-        navigate(route.page, route.selected, ev.target.value);
-    });
-    container.querySelectorAll('[data-peer]').forEach(card => {
-        card.addEventListener('click', () => navigate('gossip', card.dataset.peer, route.filter));
+    const requested = allPeers.find(p => p.peer_id === route.selected);
+    const selected = route.selected ? requested : peers[0];
+    const list = directoryGroups(peers, p => parentZone(p.peer_id), (zone, group) =>
+        directoryGroup(zone === '.' ? 'Root zone' : zone, group.map(p => peerRow(p, selected)).join('')));
+    const selection = route.selected || selected?.peer_id || '';
+    renderInspector(container, route, {
+        header, columns: ['Peer', 'Status', 'Last sync'], list, empty: 'No peers match',
+        detail: detailPanel(selection, selected), selection, openDetail: !!route.selected,
     });
 }

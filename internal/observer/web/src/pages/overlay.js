@@ -4,26 +4,28 @@
 // Layout: narrow dense link list (sorted by peer zone) + side detail panel.
 
 import * as store from '../store.js';
-import { navigate } from '../router.js';
 import { esc, relTime, copyable, compareZones } from '../format.js';
-import { pageHeader, filterInput, emptyState, loading, errorMsg } from '../components/card.js';
+import { pageHeader, filterInput, emptyState, errorMsg } from '../components/card.js';
 import { kvTable } from '../components/kv.js';
 import { jsonViewer } from '../components/jsonview.js';
 import { stateBadge, dot } from '../components/badge.js';
+import { tableWrap } from '../components/table.js';
+import { directoryRow, linkDirectory, renderInspector, renderInspectorLoading, underlayLabel } from '../components/inspector.js';
 
 export const deps = ['/links'];
 
 function desiredValue(link) { return (link && link.desired) || {}; }
 function actualSAValue(link) { return (link && link.actual_sa) || {}; }
 
-function linkRow(li, selected) {
-    const state = li.state || li.actual_state || '';
-    return `<div class="link-item${selected ? ' selected' : ''}" data-link="${esc(li.id || '')}">
-        ${dot(state || 'unknown')}
-        <span class="link-zone">${esc(li.peer_zone || '-')}</span>
-        <span class="link-family">${esc(li.group_id || '-')}</span>
-        ${stateBadge(state || 'unknown')}
-    </div>`;
+const reconcileKey = ':reconcile';
+
+function linkRow(li, selected, showGroup) {
+    const state = li.state || li.actual_state || 'unknown';
+    const path = [underlayLabel(li), showGroup && li.group_id].filter(Boolean).join(' · ');
+    return directoryRow(li.id, li.id, selected, `
+        <span class="directory-name" title="${esc(path)}">${esc(path)}</span>
+        <span class="directory-status">${dot(state)}<span>${esc(state)}</span></span>
+    `);
 }
 
 function detailPanel(li) {
@@ -38,9 +40,9 @@ function detailPanel(li) {
     const ifId = li.xfrm_if_id || desired.xfrm_if_id || '-';
 	const healthID = (li.health && li.health.instance_id) || '';
     return `<section class="detail-panel">
-        <h2>${esc(li.id || '-')}</h2>
+        <h2>${esc(li.peer_zone || '-')} · ${esc(underlayLabel(li))}</h2>
         ${kvTable([
-            ['Peer', `${esc(li.peer_zone || '-')} · ${esc(li.group_id || '-')}`],
+            ['Group', esc(li.group_id || '-')],
             ['State', stateBadge(state || 'unknown')],
             ['Interface', `<code>${esc(iface)}</code> <span class="muted">if_id ${esc(ifId)}</span>`],
             ['Endpoint', `<code>${esc(li.endpoint || desired.endpoint || '-')}</code>`],
@@ -48,6 +50,7 @@ function detailPanel(li) {
             ['Rotate', esc(rotation.phase || 'idle')],
             ['Failures', esc(li.failure_count || 0)],
             ['Health', `<a href="#/health/${encodeURIComponent(healthID)}">data plane →</a>`],
+            ['Link ID', copyable(li.id, li.id)],
         ])}
         <div class="inspect-grid">
             <section>
@@ -136,25 +139,30 @@ function skippedTable(skipped) {
 }
 
 export function render(container, route) {
-    const header = pageHeader('Overlay · Control Plane', 'Planner, SAs and reconcile', filterInput(route, 'Filter links…'));
+    const reconcile = route.selected === reconcileKey;
+    const header = pageHeader('Overlay · Control Plane', '', `
+        ${filterInput(route, 'Filter links…')}
+        <button type="button" class="btn${reconcile ? ' active' : ''}"
+            data-directory-key="${reconcileKey}" aria-pressed="${reconcile}">Reconcile</button>
+    `);
     const entry = store.get('/links');
-    if (!entry) { container.innerHTML = header + loading(); return; }
+    if (!entry) return renderInspectorLoading(container, route.page, header);
     if (entry.error && !entry.data) { container.innerHTML = header + errorMsg(`Failed to load links: ${entry.error.message}`); return; }
     const data = entry.data || {};
     const filter = (route.filter || '').toLowerCase();
     const instances = (data.instances || []).filter(li => !filter
         || (li.id || '').toLowerCase().includes(filter)
         || (li.peer_zone || '').toLowerCase().includes(filter)
+        || underlayLabel(li).toLowerCase().includes(filter)
         || (li.group_id || '').toLowerCase().includes(filter));
     instances.sort((a, b) => compareZones(b.peer_zone, a.peer_zone)
+        || String(a.group_id || '').localeCompare(String(b.group_id || ''))
+        || underlayLabel(a).localeCompare(underlayLabel(b))
         || String(a.id || '').localeCompare(String(b.id || '')));
-    const selected = instances.find(li => li.id === route.selected) || null;
-    container.innerHTML = `
-        ${header}
-        <div class="overlay-layout">
-            <div class="link-list">${instances.map(li => linkRow(li, li.id === route.selected)).join('') || emptyState('No link instances match')}</div>
-            <div id="link-detail">${detailPanel(selected)}</div>
-        </div>
+    const requested = instances.find(li => li.id === route.selected);
+    const selected = reconcile ? null : requested || instances[0];
+    const list = linkDirectory(instances, (item, showGroup) => linkRow(item, item === selected, showGroup));
+    const detail = reconcile ? `<section class="detail-panel">
         <h2>Reconcile</h2>
         ${kvTable([
             ['Last Run', relTime(data.last_run_unix)],
@@ -162,12 +170,11 @@ export function render(container, route) {
             ['Actual SAs', esc(data.actual_sas || 0)],
 			['Last Error', `<code>${esc((data.last_failure || {}).message || '-')}</code>`],
         ])}
-        <details class="record-details"><summary>Actions (${(data.actions || []).length})</summary>${actionTable(data.actions)}</details>
-        <details class="record-details"><summary>Skipped (${(data.skipped || []).length})</summary>${skippedTable(data.skipped)}</details>`;
-    container.querySelector('#page-filter').addEventListener('input', ev => {
-        navigate(route.page, route.selected, ev.target.value);
-    });
-    container.querySelectorAll('[data-link]').forEach(item => {
-        item.addEventListener('click', () => navigate('overlay', item.dataset.link, route.filter));
+        <details class="record-details"><summary>Actions (${(data.actions || []).length})</summary>${tableWrap(actionTable(data.actions))}</details>
+        <details class="record-details"><summary>Skipped (${(data.skipped || []).length})</summary>${tableWrap(skippedTable(data.skipped))}</details>
+    </section>` : detailPanel(selected);
+    renderInspector(container, route, {
+        header, columns: ['Path', 'State'], list, empty: 'No link instances match',
+        detail, selection: reconcile ? reconcileKey : selected?.id || '', openDetail: reconcile || !!requested,
     });
 }
