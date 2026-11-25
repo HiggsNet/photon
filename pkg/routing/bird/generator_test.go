@@ -269,8 +269,9 @@ func TestRenderMultipleInterfacePatterns(t *testing.T) {
 
 func TestRenderConcreteInterfacePoliciesBeforeCatchAll(t *testing.T) {
 	spec := testBirdInstanceSpec()
+	spec.BabelRTTCost = 80
 	spec.InterfacePolicies = []BabelInterfacePolicy{
-		{InterfaceName: "phx-new", Metric: 100},
+		{InterfaceName: "phx-new", Metric: 100, RTT: &BabelRTTPolicy{Cost: 0, Min: time.Millisecond, Max: 10 * time.Millisecond}},
 		{InterfaceName: "phx-old", Metric: 500},
 	}
 
@@ -279,8 +280,8 @@ func TestRenderConcreteInterfacePoliciesBeforeCatchAll(t *testing.T) {
 		t.Fatalf("Generate failed: %v", err)
 	}
 	s := string(cfg)
-	oldBlock := "interface \"phx-old\" {\n        type wireless;\n        rxcost 500;"
-	newBlock := "interface \"phx-new\" {\n        type wireless;\n        rxcost 100;"
+	oldBlock := "interface \"phx-old\" {\n        type wireless;\n        rxcost 500;\n        rtt cost 80;"
+	newBlock := "interface \"phx-new\" {\n        type wireless;\n        rxcost 100;\n        rtt cost 0;\n        rtt min 1 ms;\n        rtt max 10 ms;"
 	catchAll := `interface "phx*" {`
 	if !strings.Contains(s, oldBlock) || !strings.Contains(s, newBlock) {
 		t.Fatalf("missing concrete interface policies:\n%s", s)

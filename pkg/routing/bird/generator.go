@@ -134,13 +134,18 @@ func validateSpec(spec BirdInstanceSpec) error {
 		if policy.Metric == 0 || policy.Metric > BabelInfinity {
 			return fmt.Errorf("bird: Babel receive cost for %q must be in 1..%d", policy.InterfaceName, BabelInfinity)
 		}
+		if policy.RTT != nil {
+			if err := validateBabelRTT(policy.RTT.Cost, policy.RTT.Min, policy.RTT.Max); err != nil {
+				return fmt.Errorf("interface %q: %w", policy.InterfaceName, err)
+			}
+		}
 		if _, exists := seenInterfaces[policy.InterfaceName]; exists {
 			return fmt.Errorf("bird: duplicate interface policy for %q", policy.InterfaceName)
 		}
 		seenInterfaces[policy.InterfaceName] = struct{}{}
 	}
-	if spec.BabelRTTCost >= 65535 {
-		return fmt.Errorf("bird: Babel RTT cost must be less than 65535")
+	if err := validateBabelRTT(spec.BabelRTTCost, spec.BabelRTTMin, spec.BabelRTTMax); err != nil {
+		return err
 	}
 	if spec.BabelRTTDecay < 1 || spec.BabelRTTDecay > 256 {
 		return fmt.Errorf("bird: Babel RTT decay must be between 1 and 256")
@@ -150,15 +155,6 @@ func validateSpec(spec BirdInstanceSpec) error {
 	}
 	if spec.BabelHysteresisMargin != nil && *spec.BabelHysteresisMargin >= 65535 {
 		return fmt.Errorf("bird: Babel hysteresis margin must be less than 65535")
-	}
-	if err := validateBabelDuration("RTT min", spec.BabelRTTMin); err != nil {
-		return err
-	}
-	if err := validateBabelDuration("RTT max", spec.BabelRTTMax); err != nil {
-		return err
-	}
-	if spec.BabelRTTMax <= spec.BabelRTTMin {
-		return fmt.Errorf("bird: Babel RTT max must be greater than RTT min")
 	}
 	if err := validateBabelDuration("Hello interval", spec.BabelHelloInterval); err != nil {
 		return err
@@ -179,6 +175,22 @@ func validateSpec(spec BirdInstanceSpec) error {
 	}
 	if !filepath.IsAbs(spec.ConfigPath) {
 		return fmt.Errorf("bird: config path must be absolute")
+	}
+	return nil
+}
+
+func validateBabelRTT(cost uint, min, max time.Duration) error {
+	if cost >= BabelInfinity {
+		return fmt.Errorf("bird: Babel RTT cost must be less than %d", BabelInfinity)
+	}
+	if err := validateBabelDuration("RTT min", min); err != nil {
+		return err
+	}
+	if err := validateBabelDuration("RTT max", max); err != nil {
+		return err
+	}
+	if max <= min {
+		return fmt.Errorf("bird: Babel RTT max must be greater than RTT min")
 	}
 	return nil
 }
@@ -238,7 +250,7 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 	}
 	interfaceBlocks := make([]BabelInterfaceBlock, 0, len(spec.InterfacePolicies))
 	for _, policy := range spec.InterfacePolicies {
-		interfaceBlocks = append(interfaceBlocks, BabelInterfaceBlock{
+		block := BabelInterfaceBlock{
 			InterfacePattern: policy.InterfaceName,
 			InterfaceType:    BabelInterfaceTypeWireless,
 			RTTMetrics:       true,
@@ -249,7 +261,11 @@ func buildConfig(spec BirdInstanceSpec, importSet, exportSet []netip.Prefix) Bir
 			RTTDecay:         spec.BabelRTTDecay,
 			HelloInterval:    spec.BabelHelloInterval,
 			UpdateInterval:   spec.BabelUpdateInterval,
-		})
+		}
+		if rtt := policy.RTT; rtt != nil {
+			block.RTTCost, block.RTTMin, block.RTTMax = rtt.Cost, rtt.Min, rtt.Max
+		}
+		interfaceBlocks = append(interfaceBlocks, block)
 	}
 	sort.Slice(interfaceBlocks, func(i, j int) bool {
 		return interfaceBlocks[i].InterfacePattern < interfaceBlocks[j].InterfacePattern

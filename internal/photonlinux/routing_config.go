@@ -1,6 +1,7 @@
 package photonlinux
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"fmt"
 	"net/netip"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/HiggsNet/photon/pkg/core/zone"
 	"github.com/HiggsNet/photon/pkg/firewall"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -133,6 +135,20 @@ type RoutingInstance struct {
 	RouterIDLabel  string // required for path netns
 	Bird           bird.BirdInstanceSpec
 	Upstream       *UpstreamConfig
+	babelLinkCosts map[babelLinkCostKey]babelLinkCost
+}
+
+type babelLinkCostKey struct {
+	overlay string
+	peer    zone.ZonePath
+	family  string
+}
+
+type babelLinkCost struct {
+	rxCost  *uint
+	rttCost *uint
+	rttMin  time.Duration
+	rttMax  time.Duration
 }
 
 // UpstreamConfig holds optional veth upstream configuration that connects
@@ -253,6 +269,7 @@ type RoutingInstanceYAML struct {
 	MetricBase       uint                `yaml:"metric_base"`
 	MetricStaged     uint                `yaml:"metric_staged"`
 	MetricDraining   uint                `yaml:"metric_draining"`
+	BabelLinkCosts   []babelLinkCostYAML `yaml:"babel_link_costs"`
 	RTTCost          uint                `yaml:"rtt_cost"`
 	RTTMin           string              `yaml:"rtt_min"`
 	RTTMax           string              `yaml:"rtt_max"`
@@ -266,6 +283,16 @@ type RoutingInstanceYAML struct {
 	InterfacePat     string              `yaml:"interface_pattern"`
 	RouterIDLabel    string              `yaml:"router_id_label"`
 	Upstream         *UpstreamConfigYAML `yaml:"upstream"`
+}
+
+type babelLinkCostYAML struct {
+	Overlay        string `yaml:"overlay"`
+	Peer           string `yaml:"peer"`
+	UnderlayFamily string `yaml:"underlay_family"`
+	RXCost         *uint  `yaml:"rx_cost"`
+	RTTCost        *uint  `yaml:"rtt_cost"`
+	RTTMin         string `yaml:"rtt_min"`
+	RTTMax         string `yaml:"rtt_max"`
 }
 
 // UpstreamConfigYAML is the raw YAML model for routing.instances[].upstream.
@@ -398,6 +425,13 @@ func parseRoutingInstance(yi RoutingInstanceYAML, netnsCfg NetNSConfig, dataDir 
 	if rttMax <= rttMin {
 		return RoutingInstance{}, fmt.Errorf("rtt_max must be greater than rtt_min")
 	}
+	linkCosts, err := parseBabelLinkCosts(yi.BabelLinkCosts, rttMin, rttMax)
+	if err != nil {
+		return RoutingInstance{}, err
+	}
+	if enabled && mode == ipsec.RoutingModeExternal && len(linkCosts) > 0 {
+		return RoutingInstance{}, fmt.Errorf("babel_link_costs require managed BIRD")
+	}
 	rttDecay := yi.RTTDecay
 	if rttDecay == 0 {
 		rttDecay = bird.DefaultBabelRTTDecay
@@ -478,6 +512,7 @@ func parseRoutingInstance(yi RoutingInstanceYAML, netnsCfg NetNSConfig, dataDir 
 		ShutdownPolicy: shutdownPolicy,
 		RouterIDLabel:  yi.RouterIDLabel,
 		Upstream:       upstream,
+		babelLinkCosts: linkCosts,
 		Bird: bird.BirdInstanceSpec{
 			NetNS:                   bird.NetNSSpec{Kind: spec.Kind, Name: spec.Name, Path: spec.Path, Create: spec.Create},
 			NetNSName:               netnsName,
@@ -504,6 +539,81 @@ func parseRoutingInstance(yi RoutingInstanceYAML, netnsCfg NetNSConfig, dataDir 
 			InterfacePatterns:       []string{ifacePat},
 		},
 	}, nil
+}
+
+func parseBabelLinkCosts(entries []babelLinkCostYAML, defaultRTTMin, defaultRTTMax time.Duration) (map[babelLinkCostKey]babelLinkCost, error) {
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	costs := make(map[babelLinkCostKey]babelLinkCost, len(entries))
+	keys := make([]babelLinkCostKey, 0, len(entries))
+	for i, entry := range entries {
+		key := babelLinkCostKey{overlay: entry.Overlay, peer: zone.ZonePath(entry.Peer), family: entry.UnderlayFamily}
+		switch {
+		case strings.TrimSpace(key.overlay) == "":
+			return nil, fmt.Errorf("babel_link_costs[%d]: overlay is required", i)
+		case !key.peer.Valid() || strings.ContainsAny(entry.Peer, "*?[] \t\r\n"):
+			return nil, fmt.Errorf("babel_link_costs[%d]: peer must be an exact node zone with a trailing dot", i)
+		case key.family != "" && key.family != ipsec.FamilyIPv4 && key.family != ipsec.FamilyIPv6:
+			return nil, fmt.Errorf("babel_link_costs[%d]: underlay_family must be ipv4 or ipv6", i)
+		case entry.RXCost != nil && (*entry.RXCost == 0 || *entry.RXCost >= bird.BabelInfinity):
+			return nil, fmt.Errorf("babel_link_costs[%d]: rx_cost must be in 1..%d", i, bird.BabelInfinity-1)
+		case entry.RTTCost != nil && *entry.RTTCost >= bird.BabelInfinity:
+			return nil, fmt.Errorf("babel_link_costs[%d]: rtt_cost must be in 0..%d", i, bird.BabelInfinity-1)
+		}
+		if _, exists := costs[key]; exists {
+			return nil, fmt.Errorf("babel_link_costs[%d]: duplicate rule for overlay %q, peer %q and underlay_family %q", i, key.overlay, key.peer, key.family)
+		}
+		rttMin, err := parseRoutingBabelDuration(entry.RTTMin, 0, "rtt_min")
+		if err != nil {
+			return nil, fmt.Errorf("babel_link_costs[%d]: %w", i, err)
+		}
+		rttMax, err := parseRoutingBabelDuration(entry.RTTMax, 0, "rtt_max")
+		if err != nil {
+			return nil, fmt.Errorf("babel_link_costs[%d]: %w", i, err)
+		}
+		cost := babelLinkCost{rxCost: entry.RXCost, rttCost: entry.RTTCost, rttMin: rttMin, rttMax: rttMax}
+		if cost == (babelLinkCost{}) {
+			return nil, fmt.Errorf("babel_link_costs[%d]: at least one of rx_cost, rtt_cost, rtt_min or rtt_max is required", i)
+		}
+		costs[key] = cost
+		keys = append(keys, key)
+	}
+	for i, key := range keys {
+		cost := effectiveBabelLinkCost(costs, key)
+		if cmp.Or(cost.rttMax, defaultRTTMax) <= cmp.Or(cost.rttMin, defaultRTTMin) {
+			return nil, fmt.Errorf("babel_link_costs[%d]: effective rtt_max must be greater than rtt_min", i)
+		}
+	}
+	return costs, nil
+}
+
+func effectiveBabelLinkCost(costs map[babelLinkCostKey]babelLinkCost, key babelLinkCostKey) babelLinkCost {
+	specific := costs[key]
+	key.family = ""
+	common := costs[key]
+	return babelLinkCost{
+		rxCost:  cmp.Or(specific.rxCost, common.rxCost),
+		rttCost: cmp.Or(specific.rttCost, common.rttCost),
+		rttMin:  cmp.Or(specific.rttMin, common.rttMin),
+		rttMax:  cmp.Or(specific.rttMax, common.rttMax),
+	}
+}
+
+// ValidateBabelLinkCostOverlays checks that each rule targets the instance's mesh.
+func (config RoutingConfig) ValidateBabelLinkCostOverlays(groups []ipsec.LinkGroupSpec) error {
+	overlayNetNS := make(map[string]string, len(groups))
+	for _, group := range groups {
+		overlayNetNS[group.ID] = NetNSTarget(group.NetNS)
+	}
+	for _, inst := range config.EnabledInstances() {
+		for key := range inst.babelLinkCosts {
+			if namespace, exists := overlayNetNS[key.overlay]; !exists || namespace != inst.Bird.NetNSName {
+				return fmt.Errorf("routing instance %q: babel_link_costs overlay %q is not configured in netns %q", inst.ID, key.overlay, inst.Bird.NetNSName)
+			}
+		}
+	}
+	return nil
 }
 
 func parseRoutingBabelDuration(raw string, fallback time.Duration, field string) (time.Duration, error) {

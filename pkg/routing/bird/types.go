@@ -110,7 +110,7 @@ type BirdInstanceSpec struct {
 	BabelETXLossScale     *uint `yaml:"babel_etx_loss_scale,omitempty" json:"babel_etx_loss_scale,omitempty"`
 	BabelHysteresisMargin *uint `yaml:"babel_hysteresis_margin,omitempty" json:"babel_hysteresis_margin,omitempty"`
 
-	// InterfacePolicies override the metric for concrete runtime interfaces.
+	// InterfacePolicies override receive and RTT costs for concrete runtime interfaces.
 	// They are rendered before the catch-all interface patterns because BIRD
 	// applies the first matching interface definition.
 	InterfacePolicies []BabelInterfacePolicy `yaml:"interface_policies,omitempty" json:"interface_policies,omitempty"`
@@ -289,11 +289,19 @@ const (
 	BabelInterfaceTypeWireless BabelInterfaceType = "wireless"
 )
 
-// BabelInterfacePolicy assigns a receive cost to one concrete Babel-facing
-// runtime interface.
+// BabelInterfacePolicy assigns directional costs to a concrete Babel-facing interface.
 type BabelInterfacePolicy struct {
-	InterfaceName string `yaml:"interface_name" json:"interface_name"`
-	Metric        uint   `yaml:"metric" json:"metric"`
+	InterfaceName string          `yaml:"interface_name" json:"interface_name"`
+	Metric        uint            `yaml:"metric" json:"metric"`
+	RTT           *BabelRTTPolicy `yaml:"rtt,omitempty" json:"rtt,omitempty"`
+}
+
+// BabelRTTPolicy overrides the RTT cost and thresholds for an interface.
+// A zero cost disables the RTT contribution on that interface.
+type BabelRTTPolicy struct {
+	Cost uint          `yaml:"cost" json:"cost"`
+	Min  time.Duration `yaml:"min" json:"min"`
+	Max  time.Duration `yaml:"max" json:"max"`
 }
 
 // BabelInterfaceBlock describes one "interface ... { ... }" block inside a

@@ -437,6 +437,9 @@ func applyConfigYAML(config *appConfig, file configYAML, topLevelKeys map[string
 		}
 		config.IPsec.LinkGroups = groups
 	}
+	if err := config.Routing.ValidateBabelLinkCostOverlays(config.IPsec.LinkGroups); err != nil {
+		return err
+	}
 	if err := photonlinux.ValidateIPsecRotateWindows(config.IPsec.LinkGroups, config.IPsec.PortPreviousGrace); err != nil {
 		return err
 	}

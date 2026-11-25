@@ -317,6 +317,7 @@ routing:
 - `table`：BIRD 主路由表名。
 - `metric_base`：Babel 每跳基础接收 cost，默认 `32`。轮换期间，验证中的新隧道或排空中的旧隧道默认使用 `2 × metric_base`，默认即 `64`。BIRD 通过 IHU 把接收 cost 告知对端，链路实际 cost 仍受 ETX 和 RTT 影响。此轮换行为使用 BIRD 原生 `rxcost`。
 - `metric_staged` / `metric_draining`：可选的 `rxcost` 覆盖。非零值继续生效，Photon 启动时会记录包含实例名称的 warning。移除这两项或设为 `0` 即可使用两倍基础值。
+- `babel_link_costs`：可选的逐链路 cost 设置，仅由本机的 managed BIRD 应用，见下方示例。
 - `rtt_cost`：mesh 接口的最大 RTT 附加 cost，默认 `1024`，必须小于 `65535`。按默认参数，在 RTT 线性区间内，约 `15ms` 的 RTT 改善可抵消一跳无丢包链路的基础 cost。
 - `rtt_min` / `rtt_max`：RTT 附加 cost 的线性区间，默认 `10ms` / `500ms`。低于 min 不加 cost，高于 max 使用完整 `rtt_cost`。
 - `rtt_decay`：BIRD RTT 指数移动平均的衰减因子，范围 `1..256`，默认 `12`；数值越小，保留历史越久、对短时抖动越不敏感。
@@ -336,6 +337,34 @@ routing:
 - 旧字段 `ipam.auto_announce_assigned_ips: true` 仍兼容，含义是自动管理全部本地 assignment；不能与 `ipam.announce` 同时使用。
 
 在 managed 模式下，Photon 先验证候选配置，再替换磁盘上的配置。已有 BIRD 通过控制 socket 执行 `configure check`，新实例由即将使用的 BIRD 二进制执行 `-p -c`。这两个命令只解析配置。若配置包含 `etx_loss_scale` 或 `hysteresis_margin` 且预检失败，Photon 只省略这两项，再验证候选配置。通过后记录 warning 并照常应用其余配置；仍然失败时保留当前配置和运行中的实例。当前实例的后续更新继续省略这两项，显式重载或启动实例时会重新检查。Babel 自己进行的路由切换不会触发配置预检。
+
+### 逐链路 Babel cost
+
+假设 A 到 D 可以经 B 或 C。下面的配置只设在 A 上。A 到 B 的 RTT 达到 `10ms` 时，在这条链路上加满 `32` 分。A 向 C 通告较高的接收 cost，使 D 的回程偏向 B。若其他各跳的有效 cost 都是 `32`，去程偏向 C。逐链路配置生成原生 BIRD 接口选项。
+
+```yaml
+routing:
+  instances:
+    - id: main
+      metric_base: 32
+      babel_link_costs:
+        - overlay: ipsec-main
+          peer: b.example.
+          rtt_cost: 32
+          rtt_min: 1ms
+          rtt_max: 10ms
+        - overlay: ipsec-main
+          peer: c.example.
+          rx_cost: 64
+```
+
+- `overlay` 引用此 routing instance 所在 netns 的 overlay ID。`peer` 使用带末尾点的完整节点名。
+- `rx_cost` 取值为 `1..65534`，省略时使用 `metric_base`。本机通过 IHU 把接收 cost 告诉对端，影响对端发往本机的方向。
+- `rtt_cost`、`rtt_min` 和 `rtt_max` 调整本机对该链路计算的 RTT 惩罚。逐链路 `rtt_cost: 0` 可以关闭 RTT 惩罚。时长使用正整数毫秒，合并后 `rtt_max` 必须大于 `rtt_min`。省略的字段继承 routing instance 的设置。
+- `underlay_family` 可选 `ipv4` 或 `ipv6`，匹配有对应地址族标识的 IPsec 外层路径，例如 `family-redundant` 的两条路径。省略时匹配该 peer 的全部链路。地址族专用规则中省略的字段继承同一 peer 的通用规则。
+- 轮换时新旧接口使用同一份 RTT 参数，让路接口的接收 cost 默认使用两倍该链路的基础 `rx_cost`，上限为 `65534`。非零的 `metric_staged` / `metric_draining` 仍优先。
+
+规则影响经过对应邻接的各个前缀。最终下一跳取决于整条路径的 metric 和 Babel 的切换阈值。验证时可在 A 和 D 分别查询到对方前缀的路由。
 
 ## Firewall
 

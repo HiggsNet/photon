@@ -143,7 +143,7 @@ func (d *Daemon) reconcileRoutingForInstance(ctx context.Context, verified *core
 
 	spec := photonlinux.BuildBirdInstanceSpec(inst, routerID, config.IPsec.LinkGroups, ars, verified.ManagedZone)
 	instState.Overlays = spec.Overlays
-	spec.InterfacePolicies = photonlinux.BirdRotateInterfacePolicies(links, buildLinkOutputs(links, reconcile), spec)
+	spec.InterfacePolicies = inst.BirdInterfacePolicies(links, buildLinkOutputs(links, reconcile), spec)
 	instState.ConfigPath = spec.ConfigPath
 	instState.ControlSocket = spec.ControlSocketPath
 	instState.PIDFile = spec.PIDFilePath

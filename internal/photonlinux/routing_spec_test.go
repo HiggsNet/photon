@@ -5,11 +5,13 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	photonstate "github.com/HiggsNet/photon/internal/state"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/routing/bird"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
+	"gopkg.in/yaml.v3"
 )
 
 func TestBirdSpecUsesParsedNamespaceWithoutOverlay(t *testing.T) {
@@ -124,7 +126,7 @@ func TestBirdRotateInterfacePoliciesPromoteStagedAndDrainOld(t *testing.T) {
 		instance := observationLinks["link-1"]
 		instance.RotatePhase = phase
 		observationLinks["link-1"] = instance
-		got := BirdRotateInterfacePolicies(observationLinks, outputs, routingInst.Bird)
+		got := routingInst.BirdInterfacePolicies(observationLinks, outputs, routingInst.Bird)
 		gotMap := make(map[string]uint, len(got))
 		for _, policy := range got {
 			gotMap[policy.InterfaceName] = policy.Metric
@@ -166,15 +168,81 @@ func TestBirdRotateInterfacePoliciesFiltersAndMerges(t *testing.T) {
 		{ID: "link-a", GroupID: "main"},
 	}
 	want := []bird.BabelInterfacePolicy{{InterfaceName: "new-a", Metric: 100}, {InterfaceName: "new-b", Metric: 200}, {InterfaceName: "shared", Metric: 500}}
-	if got := BirdRotateInterfacePolicies(instances, outputs, spec); !reflect.DeepEqual(got, want) {
+	if got := (RoutingInstance{}).BirdInterfacePolicies(instances, outputs, spec); !reflect.DeepEqual(got, want) {
 		t.Fatalf("policies = %v, want %v", got, want)
 	}
 	slices.Reverse(outputs)
-	if got := BirdRotateInterfacePolicies(instances, outputs, spec); !reflect.DeepEqual(got, want) {
+	if got := (RoutingInstance{}).BirdInterfacePolicies(instances, outputs, spec); !reflect.DeepEqual(got, want) {
 		t.Fatalf("reversed input policies = %v", got)
 	}
 	// No overlay filter accepts every overlay, but never a different namespace.
 	if !LinkOutputBelongsToBirdInstance(photonstate.LinkOutput{GroupID: "other"}, "mesh", nil) || LinkOutputBelongsToBirdInstance(photonstate.LinkOutput{NetNS: "other"}, "mesh", nil) {
 		t.Fatal("unfiltered overlay changed namespace matching")
+	}
+}
+
+func TestBabelLinkCostsFollowPathAndPortGeneration(t *testing.T) {
+	var raw RoutingConfigYAML
+	if err := yaml.Unmarshal([]byte(`
+instances:
+  - id: main
+    babel_link_costs:
+      - overlay: mesh
+        peer: edge.example.
+        rx_cost: 64
+        rtt_cost: 32
+        rtt_min: 1ms
+        rtt_max: 10ms
+      - overlay: mesh
+        peer: edge.example.
+        underlay_family: ipv4
+        rx_cost: 80
+        rtt_min: 2ms
+      - overlay: mesh
+        peer: edge.example.
+        underlay_family: ipv6
+        rtt_cost: 0
+`), &raw); err != nil {
+		t.Fatal(err)
+	}
+	ns := ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: "photon"}
+	config, err := ParseRoutingConfig(raw.Instances, NetNSConfig{Names: map[string]ipsec.NetNSSpec{"default": ns}}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups := []ipsec.LinkGroupSpec{{ID: "mesh", NetNS: ns}}
+	if err := config.ValidateBabelLinkCostOverlays(groups); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.ValidateBabelLinkCostOverlays(nil); err == nil {
+		t.Fatal("accepted a rule for an unknown overlay")
+	}
+	inst := config.Instances[0]
+	spec := BuildBirdInstanceSpec(inst, 1, groups, nil, "")
+
+	links := map[string]ipsec.LinkInstance{
+		"v4": {StagedInterfaceName: "phx-new", RotatePhase: ipsec.RotatePhaseDualRunning},
+	}
+	outputs := []photonstate.LinkOutput{
+		{ID: "v4", GroupID: "mesh", PeerZone: "edge.example.", PathKey: "family:ipv4", InterfaceName: "phx-old"},
+		{ID: "v4#staged", GroupID: "mesh", PeerZone: "edge.example.", PathKey: "family:ipv4", InterfaceName: "phx-new", RuntimeRole: photonstate.LinkRuntimeStaged},
+		{ID: "v6", GroupID: "mesh", PeerZone: "edge.example.", PathKey: "family:ipv6", InterfaceName: "phx-v6"},
+		{ID: "default", GroupID: "mesh", PeerZone: "edge.example.", PathKey: ipsec.DefaultPathKey, InterfaceName: "phx-default"},
+		{ID: "other", GroupID: "mesh", PeerZone: "other.example.", PathKey: "family:ipv4", InterfaceName: "phx-other"},
+	}
+	want := []bird.BabelInterfacePolicy{
+		{InterfaceName: "phx-default", Metric: 64, RTT: &bird.BabelRTTPolicy{Cost: 32, Min: time.Millisecond, Max: 10 * time.Millisecond}},
+		{InterfaceName: "phx-new", Metric: 160, RTT: &bird.BabelRTTPolicy{Cost: 32, Min: 2 * time.Millisecond, Max: 10 * time.Millisecond}},
+		{InterfaceName: "phx-old", Metric: 80, RTT: &bird.BabelRTTPolicy{Cost: 32, Min: 2 * time.Millisecond, Max: 10 * time.Millisecond}},
+		{InterfaceName: "phx-v6", Metric: 64, RTT: &bird.BabelRTTPolicy{Cost: 0, Min: time.Millisecond, Max: 10 * time.Millisecond}},
+	}
+	if got := inst.BirdInterfacePolicies(links, outputs, spec); !reflect.DeepEqual(got, want) {
+		t.Fatalf("dual running policies = %v, want %v", got, want)
+	}
+	links["v4"] = ipsec.LinkInstance{StagedInterfaceName: "phx-new", RotatePhase: ipsec.RotatePhaseDraining}
+	spec.MetricDraining = 200
+	want[1].Metric, want[2].Metric = 80, 200
+	if got := inst.BirdInterfacePolicies(links, outputs, spec); !reflect.DeepEqual(got, want) {
+		t.Fatalf("draining policies = %v, want %v", got, want)
 	}
 }

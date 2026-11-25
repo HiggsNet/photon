@@ -82,6 +82,34 @@ instances:
 	}
 }
 
+func TestParseBabelLinkCostsRejectsInvalidRules(t *testing.T) {
+	validCost, zero, infinity := uint(32), uint(0), uint(bird.BabelInfinity)
+	valid := babelLinkCostYAML{Overlay: "mesh", Peer: "edge.example.", RXCost: &validCost}
+	tests := map[string][]babelLinkCostYAML{
+		"missing overlay":           {{Peer: valid.Peer, RXCost: &validCost}},
+		"wildcard peer":             {{Overlay: valid.Overlay, Peer: "*.example.", RXCost: &validCost}},
+		"invalid family":            {{Overlay: valid.Overlay, Peer: valid.Peer, UnderlayFamily: "dual", RXCost: &validCost}},
+		"no cost":                   {{Overlay: valid.Overlay, Peer: valid.Peer}},
+		"zero rx cost":              {{Overlay: valid.Overlay, Peer: valid.Peer, RXCost: &zero}},
+		"infinite rx":               {{Overlay: valid.Overlay, Peer: valid.Peer, RXCost: &infinity}},
+		"infinite RTT cost":         {{Overlay: valid.Overlay, Peer: valid.Peer, RTTCost: &infinity}},
+		"fractional threshold":      {{Overlay: valid.Overlay, Peer: valid.Peer, RTTMin: "500us"}},
+		"invalid instance fallback": {{Overlay: valid.Overlay, Peer: valid.Peer, RTTMax: "10ms"}},
+		"invalid peer fallback": {
+			{Overlay: valid.Overlay, Peer: valid.Peer, RTTMin: "20ms"},
+			{Overlay: valid.Overlay, Peer: valid.Peer, UnderlayFamily: "ipv4", RTTMax: "15ms"},
+		},
+		"duplicate": {valid, valid},
+	}
+	for name, entries := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseBabelLinkCosts(entries, bird.DefaultBabelRTTMin, bird.DefaultBabelRTTMax); err == nil {
+				t.Fatal("invalid Babel link cost rule was accepted")
+			}
+		})
+	}
+}
+
 func TestRoutingInstancesCannotShareUpstreamOwnership(t *testing.T) {
 	netns := NetNSConfig{Names: map[string]ipsec.NetNSSpec{"mesh": {Kind: ipsec.NetNSName, Name: "mesh"}}}
 	instances := []RoutingInstanceYAML{

@@ -1,6 +1,7 @@
 package photonlinux
 
 import (
+	"cmp"
 	"net/netip"
 	"slices"
 	"strings"
@@ -67,22 +68,9 @@ func BuildBirdInstanceSpec(inst RoutingInstance, routerID uint32, groups []ipsec
 	return spec
 }
 
-// BirdRotateInterfacePolicies selects interface costs while old and staged links coexist.
-func BirdRotateInterfacePolicies(instances map[string]ipsec.LinkInstance, outputs []photonstate.LinkOutput, spec bird.BirdInstanceSpec) []bird.BabelInterfacePolicy {
-	// The receive cost advertised in IHU influences the peer's outgoing route.
-	base := spec.MetricBase
-	deprioritized := base
-	if base < bird.BabelInfinity {
-		deprioritized = min(2*base, bird.BabelInfinity-1)
-	}
-	stagedMetric, drainingMetric := spec.MetricStaged, spec.MetricDraining
-	if stagedMetric == 0 {
-		stagedMetric = deprioritized
-	}
-	if drainingMetric == 0 {
-		drainingMetric = deprioritized
-	}
-	metrics := make(map[string]uint)
+// BirdInterfacePolicies applies configured link costs and rotation costs to current interfaces.
+func (inst RoutingInstance) BirdInterfacePolicies(instances map[string]ipsec.LinkInstance, outputs []photonstate.LinkOutput, spec bird.BirdInstanceSpec) []bird.BabelInterfacePolicy {
+	byInterface := make(map[string]bird.BabelInterfacePolicy)
 	for _, link := range outputs {
 		if link.InterfaceName == "" || !LinkOutputBelongsToBirdInstance(link, spec.NetNSName, spec.Overlays) {
 			continue
@@ -101,27 +89,52 @@ func BirdRotateInterfacePolicies(instances map[string]ipsec.LinkInstance, output
 				}
 			}
 		}
-		if !ok || instance.StagedInterfaceName == "" {
+		rotating := ok && instance.StagedInterfaceName != ""
+		cost := effectiveBabelLinkCost(inst.babelLinkCosts, babelLinkCostKey{
+			overlay: link.GroupID, peer: link.PeerZone, family: photonstate.LinkPathFamily(link.PathKey),
+		})
+		if !rotating && cost == (babelLinkCost{}) {
 			continue
 		}
-		metric := base
-		if link.RuntimeRole == photonstate.LinkRuntimeStaged {
-			metric = stagedMetric
+		metric := spec.MetricBase
+		if cost.rxCost != nil {
+			metric = *cost.rxCost
 		}
-		if instance.RotatePhase == ipsec.RotatePhaseDraining {
-			if link.RuntimeRole == photonstate.LinkRuntimeStaged {
-				metric = base
-			} else {
-				metric = drainingMetric
+		if rotating {
+			deprioritized := metric
+			if metric < bird.BabelInfinity {
+				deprioritized = min(2*metric, bird.BabelInfinity-1)
+			}
+			staged := link.RuntimeRole == photonstate.LinkRuntimeStaged
+			if instance.RotatePhase == ipsec.RotatePhaseDraining {
+				if !staged {
+					metric = cmp.Or(spec.MetricDraining, deprioritized)
+				}
+			} else if staged {
+				metric = cmp.Or(spec.MetricStaged, deprioritized)
 			}
 		}
-		if previous := metrics[link.InterfaceName]; metric > previous {
-			metrics[link.InterfaceName] = metric
+		previous := byInterface[link.InterfaceName]
+		rtt := previous.RTT
+		if rtt == nil && (cost.rttCost != nil || cost.rttMin != 0 || cost.rttMax != 0) {
+			rtt = &bird.BabelRTTPolicy{
+				Cost: spec.BabelRTTCost,
+				Min:  cmp.Or(cost.rttMin, spec.BabelRTTMin),
+				Max:  cmp.Or(cost.rttMax, spec.BabelRTTMax),
+			}
+			if cost.rttCost != nil {
+				rtt.Cost = *cost.rttCost
+			}
+		}
+		byInterface[link.InterfaceName] = bird.BabelInterfacePolicy{
+			InterfaceName: link.InterfaceName,
+			Metric:        max(metric, previous.Metric),
+			RTT:           rtt,
 		}
 	}
-	policies := make([]bird.BabelInterfacePolicy, 0, len(metrics))
-	for iface, metric := range metrics {
-		policies = append(policies, bird.BabelInterfacePolicy{InterfaceName: iface, Metric: metric})
+	policies := make([]bird.BabelInterfacePolicy, 0, len(byInterface))
+	for _, policy := range byInterface {
+		policies = append(policies, policy)
 	}
 	slices.SortFunc(policies, func(a, b bird.BabelInterfacePolicy) int {
 		return strings.Compare(a.InterfaceName, b.InterfaceName)

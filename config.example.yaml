@@ -254,6 +254,15 @@ routing:
       # metric_base: 32
       # Rotation uses 2 × metric_base on the interface being deprioritized.
       # Optional metric_staged and metric_draining override that receive cost.
+      # Optional link costs override routing preferences between this node and a peer.
+      # babel_link_costs:
+      #   - overlay: ipsec-main
+      #     peer: edge.catofes.
+      #     underlay_family: ipv4  # omit to match all paths to this peer
+      #     rx_cost: 64            # advertised to the peer via Babel IHU
+      #     rtt_cost: 32           # maximum local RTT penalty
+      #     rtt_min: 1ms
+      #     rtt_max: 10ms
       # Optional overrides for BIRD builds with the Photon Babel patch.
       # etx_loss_scale: 128
       # hysteresis_margin: 24
