@@ -191,6 +191,13 @@ ipsec:
 #     #   - manual-dns
 #     #   - discovery
 #     #   - reflector
+#     # Per-peer role is signed in the overlay intent. Dial endpoints are local.
+#     # peer_overrides:
+#     #   - peer: edge.catofes.
+#     #     role: out
+#     #     endpoints:
+#     #       ipv4: {address: 192.0.2.40, natt_port: 44500}
+#     #       ipv6: {address: "2001:db8::40"}
 #     # max_peers defaults to unlimited. Set a positive value to cap selected
 #     # peers in this link group.
 #     # max_peers: 256

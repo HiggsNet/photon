@@ -21,6 +21,41 @@ func parseOverlayYAML(input string) ([]ipsec.LinkGroupSpec, error) {
 	return ParseOverlayConfigs(file.Overlays, NetNSConfig{}, ipsec.NetNSSpec{})
 }
 
+func TestOverlayPeerOverrides(t *testing.T) {
+	const prefix = "overlays:\n  - id: ipsec-main\n    peer_overrides:\n"
+	groups, err := parseOverlayYAML(prefix + `      - peer: edge.example.
+        role: out
+        endpoints:
+          ipv4: {address: 192.0.2.40, natt_port: 44500}
+          ipv6: {address: "2001:db8::40"}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	override := groups[0].PeerOverrides[0]
+	ipv4, ipv6 := override.Endpoints[ipsec.FamilyIPv4], override.Endpoints[ipsec.FamilyIPv6]
+	if override.Peer != "edge.example." || override.Role != ipsec.RoleOut ||
+		ipv4.Address != netip.MustParseAddr("192.0.2.40") || ipv4.NATTPort == nil || *ipv4.NATTPort != 44500 ||
+		ipv6.Address != netip.MustParseAddr("2001:db8::40") || ipv6.NATTPort != nil {
+		t.Fatalf("unexpected peer override: %+v", override)
+	}
+	for _, input := range []string{
+		"      - {peer: '*.example.', role: out}\n",
+		"      - {peer: edge.example, role: out}\n",
+		"      - {peer: edge.example., role: server}\n",
+		"      - {peer: edge.example.}\n",
+		"      - {peer: edge.example., role: out}\n      - {peer: edge.example., role: in}\n",
+		"      - {peer: edge.example., endpoints: {ipv4: {address: '2001:db8::40'}}}\n",
+		"      - {peer: edge.example., endpoints: {ipv6: {address: 'fe80::40'}}}\n",
+		"      - {peer: edge.example., endpoints: {ipv4: {address: 192.0.2.40, natt_port: 500}}}\n",
+		"      - {peer: edge.example., endpoints: {ipv4: {address: 192.0.2.40, natt_port: 0}}}\n",
+	} {
+		if _, err := parseOverlayYAML(prefix + input); err == nil {
+			t.Errorf("accepted invalid override %s", input)
+		}
+	}
+}
+
 func TestOverlayConfigOverlayDirectionDeprecated(t *testing.T) {
 	input := `
 overlays:

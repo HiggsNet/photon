@@ -26,6 +26,7 @@ type OverlayConfigYAML struct {
 	Reconcile          overlayReconcileYAML    `yaml:"reconcile"`
 	Connect            configStringList        `yaml:"connect"`
 	Deny               configStringList        `yaml:"deny"`
+	PeerOverrides      []ipsec.PeerOverride    `yaml:"peer_overrides"`
 }
 
 type overlayReconcileYAML struct {
@@ -93,6 +94,7 @@ func parseOverlayConfig(overlay OverlayConfigYAML, netnsCfg NetNSConfig, default
 		AddressSourceOrder: append([]string(nil), overlay.AddressSourceOrder...),
 		ConnectRules:       append([]string(nil), overlay.Connect...),
 		DenyRules:          append([]string(nil), overlay.Deny...),
+		PeerOverrides:      overlay.PeerOverrides,
 	}
 	if group.ID == "" {
 		group.ID = group.Name

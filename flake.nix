@@ -219,6 +219,34 @@
                     role = "both";
                     driver = "strongswan";
                   };
+                  overlays = [
+                    {
+                      id = "ipsec-main";
+                      peer_overrides = [
+                        {
+                          peer = "node-b.example.";
+                          role = "out";
+                          endpoints.ipv4 = {
+                            address = "192.0.2.2";
+                            natt_port = 44500;
+                          };
+                        }
+                      ];
+                    }
+                  ];
+                  routing.instances = [
+                    {
+                      id = "main";
+                      babel_link_costs = [
+                        {
+                          overlay = "ipsec-main";
+                          peer = "node-b.example.";
+                          underlay_family = "ipv4";
+                          rx_cost = 64;
+                        }
+                      ];
+                    }
+                  ];
                 }
               '';
               description = ''

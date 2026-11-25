@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -692,6 +693,15 @@ func TestDaemonStrongSwanPortRotationSmoke(t *testing.T) {
 }
 
 func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
+	testDaemonRunGossipStrongSwan(t, false)
+}
+
+func TestDaemonRunGossipStrongSwanPeerOverrideSmoke(t *testing.T) {
+	testDaemonRunGossipStrongSwan(t, true)
+}
+
+func testDaemonRunGossipStrongSwan(t *testing.T, peerOverride bool) {
+	t.Helper()
 	if os.Getenv("PHOTON_IPSEC_XFRM_SMOKE") != "1" {
 		t.Skip("set PHOTON_IPSEC_XFRM_SMOKE=1 to run the root/system daemon gossip StrongSwan smoke")
 	}
@@ -724,6 +734,11 @@ func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
 		{"netns", "exec", nsB, "ip", "link", "set", "hgdrunb", "up"},
 	} {
 		runAppCommand(t, ctx, "ip", args...)
+	}
+	if peerOverride {
+		runAppCommand(t, ctx, "ip", "netns", "exec", nsA, "nft", "add", "table", "ip", "photon_pin_smoke")
+		runAppCommand(t, ctx, "ip", "netns", "exec", nsA, "nft", "add", "chain", "ip", "photon_pin_smoke", "prerouting", "{ type nat hook prerouting priority dstnat; }")
+		runAppCommand(t, ctx, "ip", "netns", "exec", nsA, "nft", "add", "rule", "ip", "photon_pin_smoke", "prerouting", "udp", "dport", "44500", "redirect", "to", ":4500")
 	}
 
 	confA, err := writeDaemonStrongSwanConf(viciA)
@@ -806,11 +821,23 @@ func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
 	groupB.ConnectRules = nil
 	groupB.NetNS = ipsec.NetNSSpec{Kind: ipsec.NetNSName, Name: nsB, Create: false}
 	groupB.TunnelAddressSpec = ipsec.TunnelAddressSpec{Mode: ipsec.TunnelAddressDerivedLinkLocal, Family: ipsec.FamilyIPv6}
-	rtA := &testApp{Config: testDaemonIPsecAppConfig(t.TempDir(), "192.0.2.1:4500", groupA), Clock: time.Now}
-	rtA.Config.IPsec.Role = ipsec.RoleOut
+	roleA, roleB, announceA := ipsec.RoleOut, ipsec.RoleIn, "192.0.2.1:4500"
+	if peerOverride {
+		// Without the override, A would initiate and B would be standby.
+		roleA, roleB, announceA = ipsec.RoleBoth, ipsec.RoleBoth, "192.0.2.254:4500"
+		natt := uint16(44500)
+		groupB.PeerOverrides = []ipsec.PeerOverride{{
+			Peer: "node-a.catofes.", Role: ipsec.RoleOut,
+			Endpoints: map[string]ipsec.EndpointOverride{ipsec.FamilyIPv4: {
+				Address: netip.MustParseAddr("192.0.2.1"), NATTPort: &natt,
+			}},
+		}}
+	}
+	rtA := &testApp{Config: testDaemonIPsecAppConfig(t.TempDir(), announceA, groupA), Clock: time.Now}
+	rtA.Config.IPsec.Role = roleA
 	rtA.Config.ListenAddr = gossipA
 	rtB := &testApp{Config: testDaemonIPsecAppConfig(t.TempDir(), "192.0.2.2:4500", groupB), Clock: time.Now}
-	rtB.Config.IPsec.Role = ipsec.RoleIn
+	rtB.Config.IPsec.Role = roleB
 	rtB.Config.ListenAddr = gossipB
 	serviceA := newTestDaemonFromOwners(rtA, verifiedA, nil, runtimeA, configA, 200*time.Millisecond)
 	serviceA.ControlSocketPath = filepath.Join(t.TempDir(), controlSocketName)
@@ -840,6 +867,28 @@ func TestDaemonRunGossipStrongSwanBringupSmoke(t *testing.T) {
 	specB := daemonSystemDesiredSpec(t, commonB.State, persistedB.IPsecTransportKey, groupB, time.Now())
 	assertGossipedIPsecRecords(t, commonA.State.Network, "node-b.catofes.")
 	assertGossipedIPsecRecords(t, commonB.State.Network, "node-a.catofes.")
+	if peerOverride {
+		records, err := ipsec.ExtractNodeRecords(commonA.State.Network, "node-b.catofes.", time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if records.Profile.Role != ipsec.RoleBoth || records.OverlayIntents[groupB.ID].PeerRoles["node-a.catofes."] != ipsec.RoleOut {
+			t.Fatalf("A did not receive B's per-peer role: %+v", records)
+		}
+		if specA.InitiatorRole != "" || specB.InitiatorRole != ipsec.InitiatorRolePrimary {
+			t.Fatalf("expected B to initiate and A to respond, got A=%q B=%q", specA.InitiatorRole, specB.InitiatorRole)
+		}
+		states, err := (&ipsec.StrongSwanDriver{VICI: clientB}).ListSAs(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.ContainsFunc(states, func(state ipsec.SAState) bool {
+			return state.Name == specB.TransportID && state.Established &&
+				state.InitiatorKnown && state.Initiator && state.RemoteEndpoint == "192.0.2.1:44500"
+		}) {
+			t.Fatalf("B's SA did not use the fixed dial endpoint: %+v", states)
+		}
+	}
 	assertDaemonSystemLinkUp(t, latestALinks, latestAReconcile, specA)
 	assertDaemonSystemLinkUp(t, latestBLinks, latestBReconcile, specB)
 

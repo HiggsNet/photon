@@ -152,9 +152,11 @@ type OverlayIntentRecord struct {
 	PolicyTags    []string          `json:"policy_tags,omitempty"`
 	// Connect and Deny select permitted peers, independently of initiator roles.
 	// Absent rules retain the unrestricted behavior of older advertisements.
-	Connect   []string `json:"connect,omitempty"`
-	Deny      []string `json:"deny,omitempty"`
-	UpdatedAt int64    `json:"updated_at,omitempty"`
+	Connect []string `json:"connect,omitempty"`
+	Deny    []string `json:"deny,omitempty"`
+	// PeerRoles overrides the profile role when planning a link to an exact peer.
+	PeerRoles map[zone.ZonePath]string `json:"peer_roles,omitempty"`
+	UpdatedAt int64                    `json:"updated_at,omitempty"`
 }
 
 type NodeRecords struct {
@@ -207,6 +209,9 @@ type ContactPoint struct {
 	BackoffUntil time.Time
 	RankReason   string
 }
+
+// SourcePeerOverride is a local planner source, never an address advertisement.
+const SourcePeerOverride = "peer-override"
 
 type DNSResolver interface {
 	LookupIPAddr(context.Context, string) ([]net.IPAddr, error)
@@ -363,7 +368,7 @@ func (p ProfileRecord) Validate(owner zone.ZonePath) error {
 	if p.TransportKeyFingerprint == "" {
 		return errors.New("transport_key_fingerprint is required")
 	}
-	if !oneOf(p.Role, RoleOut, RoleIn, RoleBoth) {
+	if !validRole(p.Role) {
 		return fmt.Errorf("unsupported ipsec role %q", p.Role)
 	}
 	if p.NAT.Hint != "" && !oneOf(p.NAT.Hint, NATHintPublic, NATHintBehindNAT, NATHintUnknown) {
@@ -512,6 +517,11 @@ func (r OverlayIntentRecord) Validate(keyOverlayID string) error {
 	}
 	if _, err := ParseMeshPolicyRules(r.Deny); err != nil {
 		return fmt.Errorf("deny: %w", err)
+	}
+	for peer, role := range r.PeerRoles {
+		if !validOverridePeer(peer) || !validRole(role) {
+			return fmt.Errorf("invalid peer_roles entry %q: %q", peer, role)
+		}
 	}
 	if r.Version != 1 {
 		return fmt.Errorf("unsupported ipsec overlay intent version %d", r.Version)
@@ -706,7 +716,13 @@ func ResolveContactPoints(ctx context.Context, addresses *AddressRecord, ports *
 	if err != nil {
 		return nil, err
 	}
-	portAds := PortAdvertisements(ports, now)
+	out := contactPointsForAdvertisements(addressCandidates, PortAdvertisements(ports, now))
+	annotateContactPoints(out, opts)
+	sortContactPoints(out, opts)
+	return out, nil
+}
+
+func contactPointsForAdvertisements(addressCandidates []AddressCandidate, portAds []PortAdvertisement) []ContactPoint {
 	out := make([]ContactPoint, 0, len(addressCandidates)*len(portAds))
 	for _, address := range addressCandidates {
 		if address.Address == "" {
@@ -730,9 +746,7 @@ func ResolveContactPoints(ctx context.Context, addresses *AddressRecord, ports *
 			})
 		}
 	}
-	annotateContactPoints(out, opts)
-	sortContactPoints(out, opts)
-	return out, nil
+	return out
 }
 
 func SelectContactPointsWithOptions(points []ContactPoint, mode string, opts AddressCandidateOptions) []ContactPoint {
@@ -819,6 +833,10 @@ func inferIPFamily(address string) string {
 
 func validFamily(family string) bool {
 	return family == FamilyIPv4 || family == FamilyIPv6
+}
+
+func validRole(role string) bool {
+	return oneOf(role, RoleOut, RoleIn, RoleBoth)
 }
 
 func addressExpired(address AddressAdvertisement, recordUpdatedAt int64, now time.Time) bool {

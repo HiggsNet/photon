@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
@@ -22,6 +23,7 @@ const (
 	SkipUnsupportedFamily     = "unsupported_address_family"
 	SkipRoleMismatch          = "role_mismatch"
 	SkipNoContactPoints       = "no_contact_points"
+	SkipPeerOverrideEndpoint  = "peer_override_endpoint"
 	SkipNoInboundNATEvidence  = "no_inbound_nat_evidence"
 	SkipMissingOverlayIntent  = "missing_overlay_intent"
 	SkipOverlayIntentMismatch = "overlay_intent_mismatch"
@@ -111,8 +113,10 @@ func PlanTransportLinks(ctx context.Context, ns *zone.NetworkState, local zone.Z
 				plan.skip(group.ID, peer, SkipPlannerError, err.Error())
 				continue
 			}
-			if !ok {
+			if skip.Reason != "" {
 				plan.Skipped = append(plan.Skipped, skip)
+			}
+			if !ok {
 				continue
 			}
 			for _, spec := range specs {
@@ -185,33 +189,47 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 	if !oneOf(group.DefaultPathMode, records.Profile.PathModes...) {
 		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipUnsupportedPathMode, Detail: group.DefaultPathMode}, linkIndex, nil
 	}
-	localRole := localRoleFromState(ns, local, now)
-	remoteRole := records.Profile.Role
+	override := group.peerOverride(peer)
+	remoteRoleOverride := intent.PeerRoles[local]
+	localRole := override.Role
+	if localRole == "" {
+		localRole = localRoleFromState(ns, local, now)
+	}
+	remoteRole := firstNonEmptyString(remoteRoleOverride, records.Profile.Role)
 	role := InitiatorRoleForPeer(local, peer, localRole, remoteRole)
-	if role == "" && !canLoadResponder(localRole) {
+	bothPassiveOverrides := (override.Role != "" || remoteRoleOverride != "") && localRole == RoleIn && remoteRole == RoleIn
+	if role == "" && (!canLoadResponder(localRole) || bothPassiveOverrides) {
 		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipRoleMismatch, Detail: fmt.Sprintf("local=%s remote=%s", localRole, remoteRole)}, linkIndex, nil
 	}
-	if role != "" && !familiesOverlap(records.Profile.AddressFamilies, recordFamilies(records.Addresses)) {
+	if role != "" && len(override.Endpoints) == 0 && !familiesOverlap(records.Profile.AddressFamilies, recordFamilies(records.Addresses)) {
 		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipUnsupportedFamily}, linkIndex, nil
 	}
 
 	var contacts []ContactPoint
+	var endpointSkip PlanSkip
 	// Both primary and secondary-standby need contact points: primary dials
 	// immediately, secondary-standby may need them for takeover. Responder-only
 	// roles (empty role) do not resolve remote contacts.
 	if role != "" {
-		allContacts, err := ResolveContactPoints(ctx, records.Addresses, records.Ports, now, AddressCandidateOptions{
+		candidateOpts := AddressCandidateOptions{
 			DNSResolver:       opts.DNSResolver,
 			SourceOrder:       group.AddressSourceOrder,
 			AllowedSources:    group.AddressSourceOrder,
 			AllowPrivateLocal: opts.AllowPrivateLocal,
 			Now:               now,
 			ContactQuality:    opts.ContactPointQuality[peer],
-		})
+		}
+		allContacts, overrideDetail, err := resolvePeerContactPoints(ctx, records, override, group.AllowedAddressFamilies, now, candidateOpts)
 		if err != nil {
 			return nil, false, PlanSkip{}, linkIndex, err
 		}
 		allContacts = filterContactPointsByFamily(allContacts, group.AllowedAddressFamilies)
+		if overrideDetail != "" {
+			endpointSkip = PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipPeerOverrideEndpoint, Detail: overrideDetail}
+			if len(allContacts) == 0 {
+				return nil, false, endpointSkip, linkIndex, nil
+			}
+		}
 		if remoteNeedsInboundNATEvidence(records.Profile) {
 			allContacts = filterInboundNATEvidence(allContacts)
 			if len(allContacts) == 0 {
@@ -264,7 +282,7 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 			// Responder-only specs do not carry contact points, but still need
 			// the same family path key the active side will derive from the
 			// group's allowed remote address sources.
-			families := responderPathFamilies(records, group.AddressSourceOrder, group.AllowedAddressFamilies)
+			families := responderPathFamilies(records, remoteRole, group.AddressSourceOrder, group.AllowedAddressFamilies)
 			if len(families) == 0 {
 				families = []string{""}
 			}
@@ -316,6 +334,12 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 	for i := range specs {
 		spec := &specs[i]
 		spec.MOBIKE = mobike
+		for _, point := range spec.ContactPoints {
+			if point.Source == SourcePeerOverride {
+				spec.MOBIKE = false
+				break
+			}
+		}
 		if IsActiveInitiatorRole(spec.InitiatorRole) {
 			if point, ok := firstContactPoint(spec.ContactPoints); ok {
 				spec.Generation = point.Generation
@@ -334,7 +358,7 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 	if len(specs) == 0 {
 		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipOverlayIntentMismatch, Detail: fmt.Sprintf("path_keys=%v", intent.PathKeys)}, linkIndex, nil
 	}
-	return specs, true, PlanSkip{}, nextIndex, nil
+	return specs, true, endpointSkip, nextIndex, nil
 }
 
 func newSpecForFamily(local, peer zone.ZonePath, group LinkGroupSpec, records *NodeRecords, contacts []ContactPoint, family string, linkIndex int) (TransportLinkSpec, error) {
@@ -514,11 +538,11 @@ func sortedFamilies(byFamily map[string][]ContactPoint) []string {
 	return families
 }
 
-func responderPathFamilies(records *NodeRecords, allowedSources, allowedFamilies []string) []string {
+func responderPathFamilies(records *NodeRecords, remoteRole string, allowedSources, allowedFamilies []string) []string {
 	if records == nil || records.Addresses == nil {
 		return nil
 	}
-	if records.Profile != nil && records.Profile.Role == RoleOut && len(records.Addresses.Addresses) == 0 {
+	if records.Profile != nil && remoteRole == RoleOut && len(records.Addresses.Addresses) == 0 {
 		var out []string
 		for _, family := range records.Profile.AddressFamilies {
 			if len(allowedFamilies) > 0 && !oneOf(family, allowedFamilies...) {
@@ -724,6 +748,76 @@ func familiesOverlap(left, right []string) bool {
 	return false
 }
 
+func resolvePeerContactPoints(ctx context.Context, records *NodeRecords, override PeerOverride, allowedFamilies []string, now time.Time, opts AddressCandidateOptions) ([]ContactPoint, string, error) {
+	if len(override.Endpoints) == 0 {
+		points, err := ResolveContactPoints(ctx, records.Addresses, records.Ports, now, opts)
+		return points, "", err
+	}
+	addresses := *records.Addresses
+	addresses.Addresses = nil
+	for _, address := range records.Addresses.Addresses {
+		families := make([]string, 0, 2)
+		for _, family := range addressFamilies(address) {
+			if _, pinned := override.Endpoints[family]; !pinned &&
+				familyAllowed(family, records.Profile.AddressFamilies) &&
+				(len(allowedFamilies) == 0 || familyAllowed(family, allowedFamilies)) {
+				families = append(families, family)
+			}
+		}
+		if len(families) > 0 {
+			address.Families = families
+			addresses.Addresses = append(addresses.Addresses, address)
+		}
+	}
+	points, resolveErr := ResolveContactPoints(ctx, &addresses, records.Ports, now, opts)
+	points = slices.DeleteFunc(points, func(point ContactPoint) bool {
+		// A signed literal with an inconsistent family hint must not become
+		// a fallback for its pinned address family.
+		return point.Family != inferIPFamily(point.Address)
+	})
+	var problems []string
+	ports := PortAdvertisements(records.Ports, now)
+	for _, family := range []string{FamilyIPv4, FamilyIPv6} {
+		endpoint, pinned := override.Endpoints[family]
+		if !pinned {
+			continue
+		}
+		if !familyAllowed(family, records.Profile.AddressFamilies) ||
+			(len(allowedFamilies) != 0 && !familyAllowed(family, allowedFamilies)) {
+			problems = append(problems, family+" is unavailable under the peer profile or local family policy")
+			continue
+		}
+		pinPorts := ports
+		if endpoint.NATTPort != nil {
+			if records.Ports.Mode != PortModeFixed {
+				problems = append(problems, family+" natt_port requires the peer to advertise fixed port mode")
+				continue
+			}
+			// A single fixed UDP mapping terminates on the current responder generation.
+			pinPorts = nil
+			if len(ports) > 0 && ports[0].Current {
+				port := ports[0]
+				port.IKE = PortBinding{}
+				port.NATT = PortBinding{Advertised: *endpoint.NATTPort}
+				port.Observed = false
+				pinPorts = []PortAdvertisement{port}
+			}
+		}
+		if len(pinPorts) == 0 {
+			problems = append(problems, family+" has no applicable signed port generation")
+			continue
+		}
+		points = append(points, contactPointsForAdvertisements([]AddressCandidate{{
+			ID: SourcePeerOverride + ":" + family, Source: SourcePeerOverride,
+			Address: endpoint.Address.String(), Family: family,
+		}}, pinPorts)...)
+	}
+	if len(points) != 0 || len(problems) != 0 {
+		return points, strings.Join(problems, "; "), nil
+	}
+	return nil, "", resolveErr
+}
+
 func remoteNeedsInboundNATEvidence(profile *ProfileRecord) bool {
 	if profile == nil {
 		return false
@@ -742,7 +836,7 @@ func filterInboundNATEvidence(points []ContactPoint) []ContactPoint {
 }
 
 func contactHasInboundNATEvidence(point ContactPoint) bool {
-	if point.Reachability == ReachabilityPublic {
+	if point.Source == SourcePeerOverride || point.Reachability == ReachabilityPublic {
 		return true
 	}
 	if point.Reachability == ReachabilityNATObserved && point.ObservedPort {

@@ -1,6 +1,7 @@
 package ipsec
 
 import (
+	"maps"
 	"net/netip"
 	"slices"
 	"time"
@@ -14,7 +15,7 @@ func BuildProfileRecord(localZone zone.ZonePath, fingerprint, role string, group
 		role = RoleBoth
 	}
 	families := addresses.PublicationFamilies()
-	if role == RoleOut && len(addresses.Addresses) == 0 {
+	if len(addresses.Addresses) == 0 && HasOutboundRole(role, groups) {
 		families = []string{FamilyIPv4, FamilyIPv6}
 	}
 	return ProfileRecord{
@@ -53,12 +54,22 @@ func BuildOverlayIntentRecords(groups []LinkGroupSpec, families []string, existi
 			PathKeys: pathKeys, TunnelAddress: group.TunnelAddressSpec, UpdatedAt: now.Unix(),
 			Connect: slices.Clone(group.ConnectRules), Deny: slices.Clone(group.DenyRules),
 		}
+		for _, override := range group.PeerOverrides {
+			if override.Role == "" {
+				continue
+			}
+			if intent.PeerRoles == nil {
+				intent.PeerRoles = make(map[zone.ZonePath]string)
+			}
+			intent.PeerRoles[override.Peer] = override.Role
+		}
 		if record := existing[OverlayIntentRecordKey(group.ID)]; record != nil {
 			if previous, err := ParseOverlayIntentRecord(record); err == nil && previous.Version == intent.Version &&
 				previous.OverlayID == intent.OverlayID && previous.Provider == intent.Provider &&
 				slices.Equal(previous.PathKeys, intent.PathKeys) && previous.TunnelAddress == intent.TunnelAddress &&
 				slices.Equal(previous.PolicyTags, intent.PolicyTags) &&
-				slices.Equal(previous.Connect, intent.Connect) && slices.Equal(previous.Deny, intent.Deny) {
+				slices.Equal(previous.Connect, intent.Connect) && slices.Equal(previous.Deny, intent.Deny) &&
+				maps.Equal(previous.PeerRoles, intent.PeerRoles) {
 				intent.UpdatedAt = previous.UpdatedAt
 			}
 		}

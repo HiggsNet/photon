@@ -83,6 +83,18 @@ type LinkGroupSpec struct {
 	Reconcile              ReconcilePolicy
 	ConnectRules           []string
 	DenyRules              []string
+	PeerOverrides          []PeerOverride `json:"-"`
+}
+
+type PeerOverride struct {
+	Peer      zone.ZonePath               `yaml:"peer"`
+	Role      string                      `yaml:"role"`
+	Endpoints map[string]EndpointOverride `yaml:"endpoints"`
+}
+
+type EndpointOverride struct {
+	Address  netip.Addr `yaml:"address"`
+	NATTPort *uint16    `yaml:"natt_port"`
 }
 
 type TransportLinkSpec struct {
@@ -233,6 +245,29 @@ func (g LinkGroupSpec) Validate() error {
 			return fmt.Errorf("unsupported link group address family %q", family)
 		}
 	}
+	seenPeers := make(map[zone.ZonePath]bool, len(g.PeerOverrides))
+	for _, override := range g.PeerOverrides {
+		if !validOverridePeer(override.Peer) || seenPeers[override.Peer] {
+			return fmt.Errorf("invalid or duplicate peer_overrides peer %q", override.Peer)
+		}
+		seenPeers[override.Peer] = true
+		if override.Role != "" && !validRole(override.Role) {
+			return fmt.Errorf("peer_overrides %s: unsupported role %q", override.Peer, override.Role)
+		}
+		if len(override.Endpoints) == 0 && override.Role == "" {
+			return fmt.Errorf("peer_overrides %s: endpoints or role is required", override.Peer)
+		}
+		for family, endpoint := range override.Endpoints {
+			addr := endpoint.Address
+			if !validFamily(family) || (family == FamilyIPv4) != addr.Is4() || addr.Is4In6() ||
+				!(addr.IsGlobalUnicast() || addr.IsLoopback()) || addr.Zone() != "" {
+				return fmt.Errorf("peer_overrides %s: invalid %s endpoint address %q", override.Peer, family, addr)
+			}
+			if endpoint.NATTPort != nil && (*endpoint.NATTPort == 0 || *endpoint.NATTPort == DefaultIKEPort) {
+				return fmt.Errorf("peer_overrides %s %s: invalid natt_port %d", override.Peer, family, *endpoint.NATTPort)
+			}
+		}
+	}
 	if g.MaxPeers < 0 {
 		return fmt.Errorf("max peers must be non-negative")
 	}
@@ -263,6 +298,35 @@ func (g LinkGroupSpec) Validate() error {
 		return fmt.Errorf("tunnel address mode %q requires a pool", spec.Mode)
 	}
 	return nil
+}
+
+func validOverridePeer(peer zone.ZonePath) bool {
+	return peer.Valid() && !peer.IsRoot() && !strings.ContainsAny(string(peer), "*?[] \t\r\n")
+}
+
+func (g LinkGroupSpec) peerOverride(peer zone.ZonePath) PeerOverride {
+	for _, override := range g.PeerOverrides {
+		if override.Peer == peer {
+			return override
+		}
+	}
+	return PeerOverride{}
+}
+
+// HasOutboundRole reports whether the global role or a scoped override can
+// advertise initiator capabilities.
+func HasOutboundRole(role string, groups []LinkGroupSpec) bool {
+	if role == RoleOut {
+		return true
+	}
+	for _, group := range groups {
+		for _, override := range group.PeerOverrides {
+			if override.Role == RoleOut {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (g LinkGroupSpec) Normalized() LinkGroupSpec {
