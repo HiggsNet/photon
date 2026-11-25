@@ -247,7 +247,7 @@ overlays:
 - `address_source_order`：可选的对端地址来源允许列表及顺序，例如 `manual-address`、`manual-dns`、`discovery`、`reflector`。默认不区分三种显式来源的先后，按宣告的 priority 选择；显式配置时未列出的来源被排除，同层候选按该来源顺序选择。它不把 Gossip 兜底提升到显式层，也不阻止对退避来源进行回退。
 - `max_peers` / `max_links_per_peer`：限制本 group 参与的 peer 数量和每个 peer 的 link 数量。
 - `peer_overrides` 按 overlay 和完整 peer zone 覆盖本机建链配置，`role` 与 `endpoints` 可分别设置。
-  - `role` 取 `out`、`in` 或 `both`，省略时使用本机的 `ipsec.role`。双方从签名的 `ipsec/overlays/<id>` 读取彼此的覆盖角色。配置 `out` 且对端使用 `both` 时，本机主动拨号，对端仅应答。双方都要求 `out` 或都要求 `in` 时，planner 报告 `role_mismatch`。旧版 Photon 和 `connect` / `deny` 的角色筛选继续读取全局角色。角色覆盖控制 Photon 的拨号调度，StrongSwan 的入站认证规则照常生效。
+  - `role` 取 `out`、`in` 或 `both`，省略时使用本机的 `ipsec.role`。双方从签名的 `ipsec/overlays/<id>` 读取彼此的覆盖角色，再按既有规则选角。配置 `out` 且对端使用 `both` 时，本机主动拨号，对端仅应答。两端都是 `out` 时跳过该链路并报告 `role_mismatch`。两端都是 `in` 时都加载应答配置，等待入站。旧版 Photon 和 `connect` / `deny` 的角色筛选继续读取全局角色。角色覆盖控制 Photon 的拨号调度，StrongSwan 的入站认证规则照常生效。
   - `endpoints.ipv4` 和 `endpoints.ipv6` 只用于本机向该 peer 拨号。配置其中一个地址族后，同族只拨指定的 IP，其他地址族沿用原规则。省略 `natt_port` 时沿用对端签名的端口和 generation。显式端口要求对端使用 `fixed` 模式，并且指定端口能到达对端当前的 NAT-T 监听。固定端点不发布到 Gossip，对端签名身份、传输密钥、overlay 准入和地址族限制仍然生效。
 - `tunnel_address`：隧道接口地址分配方式。IPv6 默认 `derived-link-local`；显式地址池优先用 `derived-pool`。`sequential-pool` 只适合旧配置迁移或测试。
 - `reconcile.interval`：周期安全扫频，用于 SA 观察和恢复；它不是每次变更的唯一触发，daemon 也会按 state/config/VICI 事件触发 reconcile。

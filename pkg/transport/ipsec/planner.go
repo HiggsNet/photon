@@ -190,15 +190,13 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipUnsupportedPathMode, Detail: group.DefaultPathMode}, linkIndex, nil
 	}
 	override := group.peerOverride(peer)
-	remoteRoleOverride := intent.PeerRoles[local]
 	localRole := override.Role
 	if localRole == "" {
 		localRole = localRoleFromState(ns, local, now)
 	}
-	remoteRole := firstNonEmptyString(remoteRoleOverride, records.Profile.Role)
+	remoteRole := firstNonEmptyString(intent.PeerRoles[local], records.Profile.Role)
 	role := InitiatorRoleForPeer(local, peer, localRole, remoteRole)
-	bothPassiveOverrides := (override.Role != "" || remoteRoleOverride != "") && localRole == RoleIn && remoteRole == RoleIn
-	if role == "" && (!canLoadResponder(localRole) || bothPassiveOverrides) {
+	if role == "" && !canLoadResponder(localRole) {
 		return nil, false, PlanSkip{GroupID: group.ID, Peer: peer, Reason: SkipRoleMismatch, Detail: fmt.Sprintf("local=%s remote=%s", localRole, remoteRole)}, linkIndex, nil
 	}
 	if role != "" && len(override.Endpoints) == 0 && !familiesOverlap(records.Profile.AddressFamilies, recordFamilies(records.Addresses)) {

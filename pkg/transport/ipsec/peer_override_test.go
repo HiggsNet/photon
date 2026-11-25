@@ -27,7 +27,7 @@ func TestPeerOverrideRoles(t *testing.T) {
 		{name: "reverse with A passive", aRole: RoleIn, bInitiator: InitiatorRolePrimary},
 		{name: "explicit compatible roles", aRole: RoleIn, bRole: RoleOut, bInitiator: InitiatorRolePrimary},
 		{name: "two initiators", aRole: RoleOut, bRole: RoleOut, conflict: true},
-		{name: "two responders", aRole: RoleIn, bRole: RoleIn, conflict: true},
+		{name: "two responders wait for inbound", aRole: RoleIn, bRole: RoleIn},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ns := zone.NewNetworkState()
