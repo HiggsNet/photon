@@ -58,6 +58,11 @@ class _PhotonTemplateHelp extends StatefulWidget {
 class _PhotonTemplateHelpState extends State<_PhotonTemplateHelp> {
   bool _exporting = false;
 
+  Future<void> _copy(String text) => globalState.safeRun(() async {
+    await Clipboard.setData(ClipboardData(text: text));
+    if (mounted) dialogs.showBanner(context.appLocalizations.copySuccess);
+  });
+
   Future<void> _export() async {
     if (_exporting) return;
     setState(() => _exporting = true);
@@ -101,6 +106,17 @@ class _PhotonTemplateHelpState extends State<_PhotonTemplateHelp> {
           spacing: 16,
           children: [
             Text(l.photonTemplateHelpIntro),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              spacing: 6,
+              children: [
+                Text(l.photonTemplateAiHint),
+                TextButton(
+                  onPressed: () => _copy(l.photonTemplateAiPrompt),
+                  child: Text(l.photonTemplateCopyAiPrompt),
+                ),
+              ],
+            ),
             for (final (title, body) in sections)
               Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -119,12 +135,7 @@ class _PhotonTemplateHelpState extends State<_PhotonTemplateHelp> {
               spacing: 8,
               children: [
                 TextButton(
-                  onPressed: () => globalState.safeRun(() async {
-                    await Clipboard.setData(
-                      const ClipboardData(text: photonProxyTemplateExample),
-                    );
-                    if (context.mounted) dialogs.showBanner(l.copySuccess);
-                  }),
+                  onPressed: () => _copy(photonProxyTemplateExample),
                   child: Text(l.copy),
                 ),
                 TextButton(

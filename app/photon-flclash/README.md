@@ -33,6 +33,8 @@
 
 打开 **Photon → 代理服务 → 规则模板 → 编辑** 菜单。用 **导入 YAML 模板** 选择已有的 Mihomo YAML，或用 **编辑 YAML 模板** 打开 FlClash 自带的编辑器。验证通过后，模板保存为 Photon 配置旁的同名 `.proxy.yaml`，例如 `photon.yaml` 对应 `photon.proxy.yaml`。也可直接编辑这个文件。Photon 读取其中的 `proxies`、`proxy-providers`、`proxy-groups`、`rules`、`rule-providers`、`sub-rules`、`dns` 和 `tun`。DNS、TUN 缺少的字段使用内置默认值，再应用 FlClash 选定的覆写项；TUN 开关、设备和协议栈等仍由 FlClash 界面控制。最后合并 Photon 必需的内网及端点路由排除，并把防回环直连规则放在其他规则之前，避免被覆写移除。模板需要至少一条规则，最多 4 MiB。点击 **使用内置规则** 可以移除模板。
 
+在 **模板处理说明** 中点击 **复制 AI 提示词**，把提示词和已隐去凭据及私人订阅链接的现有 Clash/Mihomo YAML 一起交给 AI。将生成的 YAML 保存为文件，补回需要的值后用 **导入 YAML 模板** 验证。
+
 ```yaml
 proxy-groups:
   - name: Nodes
