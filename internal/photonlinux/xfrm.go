@@ -80,23 +80,23 @@ func (r *LinuxDriver) ObserveXFRMLinks(ctx context.Context, desired []transporti
 	return observed, nil
 }
 
-func (r *LinuxDriver) FilterSAsWithMissingXFRMLinks(ctx context.Context, desired []transportipsec.TransportLinkSpec, instances map[string]transportipsec.LinkInstance, sas []transportipsec.SAState, observed *XFRMObservations) ([]transportipsec.SAState, map[string]transportipsec.TransportLinkSpec, error) {
+func (r *LinuxDriver) FilterSAsWithMissingXFRMLinks(ctx context.Context, desired []transportipsec.TransportLinkSpec, instances map[string]transportipsec.LinkInstance, sas []transportipsec.SAState, observed *XFRMObservations) ([]transportipsec.SAState, map[string]transportipsec.TransportLinkSpec, map[string]bool, error) {
 	driver := r.xfrmDriver
 	if inspector, ok := driver.(transportipsec.XFRMLinkInspector); ok && len(instances) > 0 {
 		return filterSAsWithMissingRuntimeLinks(ctx, inspector, desired, instances, sas, observed, r.logger)
 	}
 	filter, ok := driver.(transportipsec.XFRMSAFilter)
 	if !ok {
-		return sas, nil, nil
+		return sas, nil, nil, nil
 	}
 	filtered, missing, err := filter.FilterSAsWithMissingLinks(ctx, desired, sas)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	for _, spec := range missing {
 		logDebug(r.logger, "xfrm_link_missing", missingLinkFields(spec, "driver_filter", 0))
 	}
-	return filtered, missing, nil
+	return filtered, missing, nil, nil
 }
 
 func (r *LinuxDriver) MaintainXFRMInterfaces(ctx context.Context, desired []transportipsec.TransportLinkSpec, instances map[string]transportipsec.LinkInstance, actions []transportipsec.ReconcileAction, groups []transportipsec.LinkGroupSpec, diagnosticPrefixes []netip.Prefix, observed *XFRMObservations) error {
@@ -227,26 +227,31 @@ func (r *LinuxDriver) assignDiagnosticAddresses(ctx context.Context, spec transp
 	return nil
 }
 
-func filterSAsWithMissingRuntimeLinks(ctx context.Context, inspector transportipsec.XFRMLinkInspector, desired []transportipsec.TransportLinkSpec, instances map[string]transportipsec.LinkInstance, sas []transportipsec.SAState, observed *XFRMObservations, logger Logger) ([]transportipsec.SAState, map[string]transportipsec.TransportLinkSpec, error) {
+func filterSAsWithMissingRuntimeLinks(ctx context.Context, inspector transportipsec.XFRMLinkInspector, desired []transportipsec.TransportLinkSpec, instances map[string]transportipsec.LinkInstance, sas []transportipsec.SAState, observed *XFRMObservations, logger Logger) ([]transportipsec.SAState, map[string]transportipsec.TransportLinkSpec, map[string]bool, error) {
 	if len(desired) == 0 {
-		return sas, nil, nil
+		return sas, nil, nil, nil
 	}
 	missing := make(map[string]transportipsec.TransportLinkSpec)
+	missingDesired := make(map[string]bool)
 	missingCandidates := make(map[string][]transportipsec.TransportLinkSpec)
 	for _, spec := range desired {
 		id := transportipsec.LinkInstanceID(spec)
 		candidates := xfrmLinkInspectCandidates(spec, instances[id])
 		found := false
-		for _, candidate := range candidates {
+		for i, candidate := range candidates {
 			state, err := inspectXFRMLink(ctx, inspector, observed, candidate)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			matches, reason := XFRMLinkStateMatchReason(state, candidate)
 			logDebug(logger, "xfrm_runtime_observed", observationFields("pre_reconcile_filter", id, xfrmCandidateRuntime(spec, candidate, instances[id]), candidate, state, matches, reason))
 			if matches {
 				found = true
 				break
+			}
+			if i == 0 {
+				// A working old interface does not make the desired generation ready.
+				missingDesired[id] = true
 			}
 		}
 		if found {
@@ -257,7 +262,7 @@ func filterSAsWithMissingRuntimeLinks(ctx context.Context, inspector transportip
 		logDebug(logger, "xfrm_link_missing", missingLinkFields(spec, "no_candidate_matched", len(candidates)))
 	}
 	if len(missing) == 0 || len(sas) == 0 {
-		return sas, missing, nil
+		return sas, missing, missingDesired, nil
 	}
 	filtered := sas[:0]
 	for _, sa := range sas {
@@ -265,7 +270,7 @@ func filterSAsWithMissingRuntimeLinks(ctx context.Context, inspector transportip
 			filtered = append(filtered, sa)
 		}
 	}
-	return filtered, missing, nil
+	return filtered, missing, missingDesired, nil
 }
 
 func inspectXFRMLink(ctx context.Context, inspector transportipsec.XFRMLinkInspector, observed *XFRMObservations, spec transportipsec.TransportLinkSpec) (transportipsec.XFRMLinkState, error) {
@@ -358,7 +363,7 @@ func ipsecActionAppliesXFRM(action string) bool {
 	switch action {
 	case transportipsec.ReconcileActionCreate, transportipsec.ReconcileActionUpdate, transportipsec.ReconcileActionRepair,
 		transportipsec.ReconcileActionPrepareStandby, transportipsec.ReconcileActionTeardown, transportipsec.ReconcileActionPrepareRotate,
-		transportipsec.ReconcileActionCommitRotate, transportipsec.ReconcileActionRollbackRotate, transportipsec.ReconcileActionCleanupRotate:
+		transportipsec.ReconcileActionCommitRotate, transportipsec.ReconcileActionCleanupRotate:
 		return true
 	default:
 		return false

@@ -507,7 +507,7 @@ func TestReconcileSecondaryStandbyPreparesResponderRotate(t *testing.T) {
 		t.Fatalf("expected secondary standby plan: %+v", plan)
 	}
 	spec := plan.Desired[0]
-	existing := NewLinkInstance(spec, LinkStateUp, now)
+	existing := NewLinkInstance(mustRuntimeSpecForPortGeneration(spec, 1), LinkStateUp, now)
 	existing.RemoteGeneration = 1
 	existing.InitiatorRole = InitiatorRoleConverged
 
@@ -532,6 +532,19 @@ func TestReconcileSecondaryStandbyPreparesResponderRotate(t *testing.T) {
 	inst := result.Instances[existing.ID]
 	if inst.RotatePhase != RotatePhasePreparing || inst.StagedGeneration != 2 {
 		t.Fatalf("instance = %+v", inst)
+	}
+	RecordActionResult(result.Instances, *action, BackoffPolicy{}, now, nil)
+	result = ReconcileLinkInstances(ReconcileInputs{
+		Desired:   []TransportLinkSpec{spec},
+		Instances: result.Instances,
+		Connections: []ConnectionState{{
+			Name: action.Spec.TransportID, LocalIdentity: string(spec.LocalZone), RemoteIdentity: string(spec.PeerZone),
+		}},
+		Now:   now.Add(10 * time.Minute),
+		Roles: plan.Roles,
+	})
+	if firstAction(result, ReconcileActionCommitRotate) == nil || result.Instances[existing.ID].InitiatorRole != InitiatorRoleSecondaryStandby || result.Instances[existing.ID].ActualState != LinkStateDown {
+		t.Fatalf("instance = %+v, actions = %+v, want new generation ready for ordinary standby", result.Instances[existing.ID], result.Actions)
 	}
 }
 
@@ -1197,7 +1210,7 @@ func TestReconcileUpdatesWhenEstablishedSAIdentityIsStale(t *testing.T) {
 	}
 }
 
-func TestReconcileRollbackRotateOnTimeout(t *testing.T) {
+func TestReconcileRotateTimeoutRetriesWithoutTearingDown(t *testing.T) {
 	now := time.Unix(1717171717, 0)
 	ns := zone.NewNetworkState()
 	addIPsecNode(t, ns, "node-b.catofes.", RoleIn, []AddressAdvertisement{{
@@ -1232,26 +1245,56 @@ func TestReconcileRollbackRotateOnTimeout(t *testing.T) {
 	existing.RotatePhase = RotatePhaseTestingNew
 	existing.RotateDeadline = now.Add(-time.Second).Unix()
 
-	result := ReconcileLinkInstances(ReconcileInputs{
-		Desired:   []TransportLinkSpec{newSpec},
-		Instances: map[string]LinkInstance{existing.ID: existing},
-		SAs:       []SAState{{Name: existing.IKEName, Established: true}},
-		Now:       now,
-	})
+	inputs := ReconcileInputs{
+		Desired:      []TransportLinkSpec{newSpec},
+		Instances:    map[string]LinkInstance{existing.ID: existing},
+		SAs:          []SAState{{Name: existing.IKEName, Established: true}},
+		Now:          now,
+		GroupBackoff: map[string]BackoffPolicy{group.ID: {InitialSeconds: 5}},
+	}
+	result := ReconcileLinkInstances(inputs)
 
-	action := firstAction(result, ReconcileActionRollbackRotate)
-	if action == nil {
-		t.Fatalf("expected rollback_rotate action, got %+v", result.Actions)
+	if len(result.Actions) != 1 || result.Actions[0].Action != ReconcileActionNoop || result.Actions[0].Reason != "staged sa deadline exceeded" {
+		t.Fatalf("actions = %+v, want timeout without applying resources", result.Actions)
 	}
 	inst := result.Instances[existing.ID]
-	if inst.RemoteGeneration != 1 {
-		t.Fatalf("remote generation changed on rollback = %d", inst.RemoteGeneration)
+	if inst.RemoteGeneration != 1 || inst.StagedGeneration != 2 || inst.RotatePhase != RotatePhaseTestingNew || inst.ActualState != LinkStateUp {
+		t.Fatalf("instance = %+v, want both generations and the old forwarding path", inst)
 	}
-	if inst.StagedGeneration != 0 {
-		t.Fatalf("staged generation not cleared = %d", inst.StagedGeneration)
+	if inst.BackoffUntil != now.Add(5*time.Second).Unix() || inst.FailureCount != 1 || inst.LastFailure == nil {
+		t.Fatalf("instance = %+v, want recorded timeout and configured backoff", inst)
 	}
-	if inst.RotatePhase != RotatePhaseRollback {
-		t.Fatalf("rotate phase = %q, want rollback", inst.RotatePhase)
+	inputs.Instances = result.Instances
+	inputs.Now = now.Add(time.Second)
+	waiting := ReconcileLinkInstances(inputs)
+	if firstAction(waiting, ReconcileActionNoop) == nil {
+		t.Fatalf("actions = %+v, want retry backoff", waiting.Actions)
+	}
+	inputs.Now = now.Add(5 * time.Second)
+	retry := ReconcileLinkInstances(inputs)
+	action := firstAction(retry, ReconcileActionInitiateRotate)
+	if len(retry.Actions) != 1 || action == nil || action.Spec.TransportID != stagedSpec.TransportID {
+		t.Fatalf("actions = %+v, want to retry on the same staged configuration", retry.Actions)
+	}
+	RecordActionResult(retry.Instances, *action, BackoffPolicy{}, inputs.Now, nil)
+	got := retry.Instances[existing.ID]
+	if got.ActualState != LinkStateUp || got.StagedAttemptCount != 1 || got.RotateDeadline != inputs.Now.Add(rotateTimeout()).Unix() || got.FailureCount != 1 {
+		t.Fatalf("instance = %+v, want old path and a new negotiation window", got)
+	}
+	inputs.Instances = retry.Instances
+	inputs.Now = time.Unix(got.RotateDeadline, 0)
+	again := ReconcileLinkInstances(inputs).Instances[existing.ID]
+	if again.FailureCount != 2 || again.BackoffUntil != inputs.Now.Add(10*time.Second).Unix() || again.StagedGeneration != 2 {
+		t.Fatalf("instance = %+v, want increasing backoff with staged configuration retained", again)
+	}
+	got.StagedSpecHash = TransportLinkSpecHash(*action.Spec)
+	inputs.Instances = map[string]LinkInstance{existing.ID: got}
+	newSpec.ContactPoints = append([]ContactPoint(nil), newSpec.ContactPoints...)
+	newSpec.ContactPoints[0].Address = "198.51.100.21"
+	inputs.Desired = []TransportLinkSpec{newSpec}
+	changed := ReconcileLinkInstances(inputs)
+	if action := firstAction(changed, ReconcileActionPrepareRotate); action == nil || action.Spec.ContactPoints[0].Address != "198.51.100.21" {
+		t.Fatalf("actions = %+v, want to apply the changed endpoint for the same generation", changed.Actions)
 	}
 }
 

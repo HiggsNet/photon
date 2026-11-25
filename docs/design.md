@@ -391,7 +391,7 @@ Phase 4 当前把端口作为独立公告对象建模，并支持固定/范围/c
 1. **入口端口公告层**：`ipsec/ports.current.generation` 表示远端应优先尝试的新入口端口；`previous[].valid_until` 只表示远端还能尝试旧入口端口，不保证本机 StrongSwan 单实例已经同时监听 old/current。真正的 inbound 入口无断切换仍需要后续 DNAT/redirect grace 或多 listener 能力。
 2. **XFRM 数据面预备层**：reconcile 发现远端 generation 变化后，派生 staged connection/CHILD_SA/interface，也就是“先并排试建的新链路”。primary/outbound 或 secondary-takeover owner 会主动建立 staged generation；`inbound` / `secondary-standby` 只加载 responder/trap staged config，不主动拨号。
 3. **双 running 与迁流量层**：下一轮 reconcile 通过 VICI `list-sas` 观测到 staged SA established 后进入 `dual_running`。此时新接口默认使用两倍 `metric_base`。当 staged 健康探测与 Babel neighbor 就绪后进入 `draining`，改由旧接口使用两倍基础值。实际选路仍受 ETX 和 RTT 影响。旧 generation 默认按 `overlays[].reconcile.rotate_retention` 保留 1h，保留窗口内 secondary-standby 不会因 takeover delay 到期而抢拨。保留期到期后，`RotateCutoverReady` 还要求 staged 已学到路由且本机没有路由继续选择旧接口。若 staged 健康或 neighbor 回退，状态返回 `dual_running`。
-4. **回滚和清理层**：staged SA 在 prepare deadline 前未建立则 `rollback_rotate`，只清 staged artifacts、保留旧 generation 并进入 backoff；retention 到期且 route manager 已允许 cutover，或旧 SA 已不存在且 staged SA 已 established，则 `commit_rotate` promote staged generation 并清理旧 connection/interface。
+4. **重试和清理层**：主动端协商超时按退避策略重试，保留 staged connection/interface。被动端持续等待对端拨入。新代已有 SA 或被动配置和接口已就绪，且旧 SA 已不存在时，直接 `commit_rotate` 并清理旧资源。旧 SA 仍在时，等待 retention 和路由切换条件满足再清理。
 
 endpoint 改变由外层 reconcile 先归类：如果 ContactPoint 地址/DNS 解析结果变化但 port generation 不变，它是普通 desired spec 变化，走 `update` / `repair`，不进入 rotate 子状态机；如果 endpoint 改变同时伴随 `ipsec/ports.current.generation` 改变，则新的 endpoint 会进入 staged spec，rotate 子状态机用这条候选新链路测试新地址/端口，旧链路在 testing/retention 窗口内保持可用。
 
@@ -401,7 +401,8 @@ stateDiagram-v2
     Idle --> Preparing: desired generation changes
     Preparing --> TestingNew: prepare_rotate applied
     TestingNew --> DualRunning: staged SA observed
-    TestingNew --> Rollback: prepare deadline exceeded
+    TestingNew --> TestingNew: active negotiation times out and retries after backoff
+    TestingNew --> Cutover: passive config ready and no old SA
     DualRunning --> DualRunning: rotate_retention active
     DualRunning --> Draining: staged health + Babel neighbor ready
     Draining --> DualRunning: staged health/neighbor regressed
@@ -409,13 +410,12 @@ stateDiagram-v2
     Draining --> Cutover: retention expired + staged route selected
     DualRunning --> Cutover: old SA already gone
     Cutover --> Idle: commit_rotate promotes staged generation
-    Rollback --> Idle: rollback_rotate clears staged artifacts
     Preparing --> Cleanup: stale staged generation
     TestingNew --> Cleanup: stale staged generation
     Cleanup --> Idle: cleanup_rotate
 ```
 
-`LinkInstance` 记录 selected ContactPoint、remote/staged port generation、rotation phase（`idle`、`preparing`、`testing_new`、`dual_running`、`cutover`、`rollback`、`cleanup`）、staged ike/child name、staged interface/if_id、rollback/retention deadline 和最近 rotate error；`photon debug links` 可显示当前 rotate phase、staged generation、staged interface、deadline 和 error。staged connection/child 名称稳定可推导：`RotateConnectionName(transportID, generation)` / `RotateChildSAName(transportID, generation)`。revocation/policy deny/transport key mismatch 仍走强制 teardown，不进入 rotate 状态机。
+`LinkInstance` 记录 selected ContactPoint、remote/staged port generation、rotation phase、staged IKE/CHILD 名称、staged interface/if_id、协商与保留期的时间信息和最近 rotate error。`photon debug links` 显示本轮的轮换状态。staged connection/child 名称可由 generation 推导。revocation/policy deny/transport key mismatch 仍走强制 teardown。
 
 #### 2.4.3 本地 MeshPolicy rule DSL
 

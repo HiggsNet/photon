@@ -97,7 +97,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		d.recordIPsecReconcileError(now.Unix(), err)
 		return err
 	}
-	sas, missingXFRMLinks, err := platformDriver.FilterSAsWithMissingXFRMLinks(ctx, plan.Desired, instances, sas, xfrmObservations)
+	sas, missingXFRMLinks, missingDesiredXFRM, err := platformDriver.FilterSAsWithMissingXFRMLinks(ctx, plan.Desired, instances, sas, xfrmObservations)
 	if err != nil {
 		d.recordIPsecReconcileError(now.Unix(), err)
 		return fmt.Errorf("inspect xfrm links: %w", err)
@@ -159,6 +159,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 		Connections:           connections,
 		SAs:                   sas,
 		MissingXFRMLinks:      missingXFRMLinks,
+		MissingDesiredXFRM:    missingDesiredXFRM,
 		Now:                   now,
 		Revoked:               collectRevokedPeerZones(verified.Network, instances, common.Gossip, now),
 		Roles:                 plan.Roles,
@@ -190,7 +191,7 @@ func (d *Daemon) reconcileIPsecLinks(ctx context.Context) error {
 			}
 		case ipsec.ReconcileActionCreate, ipsec.ReconcileActionUpdate, ipsec.ReconcileActionRepair, ipsec.ReconcileActionPrepareStandby,
 			ipsec.ReconcileActionTeardown, ipsec.ReconcileActionPrepareRotate, ipsec.ReconcileActionInitiateRotate, ipsec.ReconcileActionCommitRotate,
-			ipsec.ReconcileActionRollbackRotate, ipsec.ReconcileActionCleanupRotate:
+			ipsec.ReconcileActionCleanupRotate:
 			group := groupForAction(action, groups)
 			_, err := platformDriver.ApplyIPsecAction(ctx, action, group.NetNS, diagnosticPrefixes)
 			ipsec.RecordActionResult(result.Instances, action, group.Reconcile.Backoff, now, err)

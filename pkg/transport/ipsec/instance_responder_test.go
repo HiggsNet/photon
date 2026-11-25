@@ -178,19 +178,49 @@ func TestReconcileResponderPortRotation(t *testing.T) {
 			}
 			RecordActionResult(result.Instances, *action, BackoffPolicy{}, now, nil)
 			staged := result.Instances[existing.ID]
-			if staged.IKEName != existing.IKEName || staged.StagedGeneration != 2 || staged.ActualState != LinkStateUp {
+			if staged.IKEName != existing.IKEName || staged.StagedGeneration != 2 || staged.ActualState != LinkStateUp || staged.RotateDeadline != 0 {
 				t.Fatalf("instance = %+v, want old runtime retained and generation 2 staged", staged)
 			}
+			inputs.Connections, _ = driver.ListConnections(t.Context())
+			inputs.Connections[0].DPDDelay = mobikeDPDDelay(desired)
+			// Also cover a deadline recorded by the previous implementation.
+			staged.RotateDeadline = now.Add(rotateTimeout()).Unix()
 			inputs.Instances[existing.ID] = staged
-			inputs.Now = now.Add(10 * time.Second)
+			inputs.Now = now.Add(24 * time.Hour)
 			waiting := ReconcileLinkInstances(inputs)
 			if len(waiting.Actions) != 1 || waiting.Actions[0].Action != ReconcileActionNoop || waiting.Actions[0].Reason != "awaiting staged sa" {
 				t.Fatalf("actions = %+v, want responder to await peer negotiation", waiting.Actions)
 			}
 			inputs.SAs = nil
+			inputs.MissingDesiredXFRM = map[string]bool{existing.ID: true}
+			repair := ReconcileLinkInstances(inputs)
+			if firstAction(repair, ReconcileActionPrepareRotate) == nil || firstAction(repair, ReconcileActionCommitRotate) != nil {
+				t.Fatalf("actions = %+v, want to repair the missing new interface before promoting", repair.Actions)
+			}
+			inputs.MissingDesiredXFRM = nil
 			waiting = ReconcileLinkInstances(inputs)
-			if firstAction(waiting, ReconcileActionNoop) == nil || waiting.Instances[existing.ID].ActualState != LinkStateWaitingInbound {
-				t.Fatalf("old SA disappeared: instance=%+v actions=%+v", waiting.Instances[existing.ID], waiting.Actions)
+			commit := firstAction(waiting, ReconcileActionCommitRotate)
+			if commit == nil || commit.Spec.TransportID != previous.TransportID {
+				t.Fatalf("actions = %+v, want to retire only the old generation", waiting.Actions)
+			}
+			_, err = ApplyReconcileAction(t.Context(), driver, driver, *commit, NetNSSpec{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			RecordActionResult(waiting.Instances, *commit, BackoffPolicy{}, inputs.Now, nil)
+			got := waiting.Instances[existing.ID]
+			if got.ActualState != LinkStateWaitingInbound || got.RemoteGeneration != 2 || got.StagedGeneration != 0 || got.FailureCount != 0 {
+				t.Fatalf("instance = %+v, want generation 2 ready for inbound with no SA", got)
+			}
+			if len(driver.Connections) != 1 || driver.Connections[0].TransportID != staged.StagedIKEName || len(driver.Initiated) != 0 {
+				t.Fatalf("connections = %+v, initiated = %v, want the same passive config", driver.Connections, driver.Initiated)
+			}
+			inputs.Instances = waiting.Instances
+			inputs.Now = now.Add(48 * time.Hour)
+			inputs.SAs = []SAState{{Name: got.IKEName, XFRMIfID: got.XFRMIfID, Established: true}}
+			connected := ReconcileLinkInstances(inputs)
+			if firstAction(connected, ReconcileActionAdopt) == nil || connected.Instances[existing.ID].ActualState != LinkStateUp {
+				t.Fatalf("late inbound SA = %+v, actions = %+v", connected.Instances[existing.ID], connected.Actions)
 			}
 		})
 	}

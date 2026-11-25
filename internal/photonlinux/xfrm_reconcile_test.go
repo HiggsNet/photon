@@ -104,7 +104,7 @@ func TestXFRMReconcileReusesHealthyBatchObservation(t *testing.T) {
 	if observed == nil || driver.batchCalls != 1 {
 		t.Fatalf("batch observation = %v, calls = %d", observed, driver.batchCalls)
 	}
-	if _, missing, err := platformDriver.FilterSAsWithMissingXFRMLinks(context.Background(), []ipsec.TransportLinkSpec{spec}, instances, nil, observed); err != nil {
+	if _, missing, _, err := platformDriver.FilterSAsWithMissingXFRMLinks(context.Background(), []ipsec.TransportLinkSpec{spec}, instances, nil, observed); err != nil {
 		t.Fatalf("filterSAsWithMissingXFRMLinks: %v", err)
 	} else if len(missing) != 0 {
 		t.Fatalf("missing = %+v, want none", missing)
@@ -131,11 +131,29 @@ func TestXFRMReconcileFallsBackWhenBatchObservationFails(t *testing.T) {
 	if observed != nil {
 		t.Fatal("failed batch observation should return nil for fail-closed fallback")
 	}
-	if _, _, err := platformDriver.FilterSAsWithMissingXFRMLinks(context.Background(), []ipsec.TransportLinkSpec{spec}, instances, nil, observed); err != nil {
+	if _, _, _, err := platformDriver.FilterSAsWithMissingXFRMLinks(context.Background(), []ipsec.TransportLinkSpec{spec}, instances, nil, observed); err != nil {
 		t.Fatalf("fallback filter: %v", err)
 	}
 	if driver.inspectCalls == 0 {
 		t.Fatal("fallback did not use per-interface inspection")
+	}
+}
+
+func TestXFRMReconcileReportsMissingDesiredDuringRotation(t *testing.T) {
+	desired := ipsec.TransportLinkSpec{LinkID: "link-a", TransportID: "ipsec-a-r2", InterfaceName: "phx-new", XFRMIfID: 2}
+	previous := desired
+	previous.TransportID, previous.InterfaceName, previous.XFRMIfID = "ipsec-a", "phx-old", 1
+	inst := ipsec.NewLinkInstance(previous, ipsec.LinkStateUp, time.Unix(4000, 0))
+	observed := &XFRMObservations{links: map[string]ipsec.XFRMLinkState{
+		xfrmObservationKey(desired):  {NamespaceExists: true},
+		xfrmObservationKey(previous): healthyObservedXFRMState(previous),
+	}}
+	driver := &batchObservedIPsecDriver{}
+	platformDriver := mustNewLinuxDriver(t, LinuxDriverOptions{IPsecDriver: driver, XFRMDriver: driver})
+	sas := []ipsec.SAState{{Name: previous.TransportID, XFRMIfID: previous.XFRMIfID, Established: true}}
+	filtered, missing, missingDesired, err := platformDriver.FilterSAsWithMissingXFRMLinks(t.Context(), []ipsec.TransportLinkSpec{desired}, map[string]ipsec.LinkInstance{inst.ID: inst}, sas, observed)
+	if err != nil || len(filtered) != 1 || len(missing) != 0 || !missingDesired[inst.ID] || driver.inspectCalls != 0 {
+		t.Fatalf("sas = %+v, missing = %+v, missing desired = %+v, inspect calls = %d, err = %v", filtered, missing, missingDesired, driver.inspectCalls, err)
 	}
 }
 

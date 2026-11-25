@@ -331,7 +331,7 @@ type LinkInstance struct {
     LastFailure     error
     Owner           ResourceOwner
     // rotate 相关
-    RotatePhase           string   // idle / preparing / testing_new / dual_running / cutover / rollback / cleanup
+    RotatePhase           string   // idle / preparing / testing_new / dual_running / draining / cleanup
     StagedGeneration      uint64
     StagedIKEName         string
     StagedChildSAName     string
@@ -382,7 +382,7 @@ type LinkInstance struct {
                        Action graph（按 link/rotate phase 顺序执行）
                          | create/update/repair/adopt/noop
                          | teardown
-                         | prepare_rotate/commit_rotate/rollback/cleanup_rotate
+                         | prepare_rotate/initiate_rotate/commit_rotate/cleanup_rotate
                          v
                     ipsec.ApplyReconcileAction
                          |
@@ -473,7 +473,7 @@ owner + Photon resource marker verified
    - `repair` — link 处于 `degraded`/`error` 且 backoff 已到期；
    - `noop` — 已经 up 且 desired 没变；
    - `teardown` — 不再 desired（peer revoked、配置删除、record 过期）；
-   - `prepare_rotate` / `commit_rotate` / `rollback_rotate` / `cleanup_rotate` — staged rotate 各阶段。
+   - `prepare_rotate` / `initiate_rotate` / `commit_rotate` / `cleanup_rotate` — 准备新代、重试拨号、提交与清理。
 
 6. **执行 actions**
    遍历 `Actions`，对每个需要实际改系统的动作：
@@ -502,7 +502,7 @@ Staged connection 的 apply 有两个额外边界：复用已加载的 transport
 
 ### Staged Rotate（4.4+）
 
-当远端 `ipsec/ports.current.generation` 变化时，进入 staged rotate 状态机：
+主动端跟随远端的端口 generation，被动端跟随本机的端口 generation。轮换期间，新配置就绪的被动链路持续接受拨入。没有旧 SA 时，直接提交新代并显示 `waiting_inbound`。主动拨号超时进入退避，随后在同一份新代配置上继续协商。
 
 ```text
 Idle → Preparing（加载独立 staged connection/SA/XFRM interface）
@@ -511,7 +511,7 @@ Idle → Preparing（加载独立 staged connection/SA/XFRM interface）
              → Draining（staged 健康且 Babel 邻居可用；优先新接口）
                  → Cutover（保留期到期，staged 已学到路由，且已无路由选择旧接口）
                  → DualRunning（staged 健康或邻居回退，恢复 old 优先）
-             → Rollback（staged SA 在规定时限内未建立，清理 staged 保留旧链路）
+         → TestingNew（主动协商超时，退避后重试，保留 staged 配置）
 ```
 
 staged generation 使用独立的 `TransportID`、XFRM `if_id` 和 interface name，dual_running/draining 期间 overlay netns 同时有两个 `phx*` interface。验证阶段新接口使用两倍 `metric_base`，排空阶段旧接口使用两倍 `metric_base`。另一端通过 Babel IHU 收到这份接收 cost，再按链路质量选路。显式的 `metric_staged` 和 `metric_draining` 继续覆盖对应接口的 `rxcost`。

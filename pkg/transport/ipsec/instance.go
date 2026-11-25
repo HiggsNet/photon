@@ -37,7 +37,6 @@ const (
 	ReconcileActionPrepareRotate      = "prepare_rotate"
 	ReconcileActionInitiateRotate     = "initiate_rotate"
 	ReconcileActionCommitRotate       = "commit_rotate"
-	ReconcileActionRollbackRotate     = "rollback_rotate"
 	ReconcileActionCleanupRotate      = "cleanup_rotate"
 	ReconcileActionCleanupDuplicateSA = "cleanup_duplicate_sa"
 	ReconcileActionPrepareStandby     = "prepare_standby"
@@ -48,7 +47,6 @@ const (
 	RotatePhaseDualRunning = "dual_running"
 	RotatePhaseDraining    = "draining"
 	RotatePhaseCutover     = "cutover"
-	RotatePhaseRollback    = "rollback"
 	RotatePhaseCleanup     = "cleanup"
 
 	TakeoverPhaseIdle     = ""
@@ -82,6 +80,7 @@ type LinkInstance struct {
 	SelectedContact       ContactPoint
 	RemoteGeneration      uint64
 	StagedGeneration      uint64
+	StagedSpecHash        string
 	RotatePhase           string
 	StagedIKEName         string
 	StagedChildSAName     string
@@ -124,6 +123,7 @@ type ReconcileInputs struct {
 	Connections           []ConnectionState
 	SAs                   []SAState
 	MissingXFRMLinks      map[string]TransportLinkSpec
+	MissingDesiredXFRM    map[string]bool
 	Now                   time.Time
 	Revoked               map[zone.ZonePath]bool
 	Roles                 map[string]string
@@ -422,7 +422,7 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			if sa.Established && !saIdentityMatchesSpec(sa, spec) {
 				sa = SAState{}
 			}
-			result.reconcileSecondaryStandby(id, spec, existing, exists, sa, in.SAs, groupSpecForSpec(spec, in.GroupSpecs), in.GroupBackoff, in.GroupRotateRetention, in.RotateActivationReady, in.RotateCutoverReady, in.PrepareStandby, in.TakeoverNotBefore, now)
+			result.reconcileSecondaryStandby(id, spec, existing, exists, sa, in, now)
 			if result.Err != nil {
 				return result
 			}
@@ -459,8 +459,7 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 			existing.RemoteGeneration = desiredGen
 		}
 		if existing.RemoteGeneration != desiredGen {
-			activationReady, activationGated := rotateActivationReady(id, in.RotateActivationReady)
-			result.handleRotate(id, spec, existing, in.SAs, groupSpecForSpec(spec, in.GroupSpecs), rotateRetentionForSpec(spec, in.GroupRotateRetention), activationReady, activationGated, rotateCutoverReady(id, in.RotateCutoverReady), now, role)
+			result.handleRotate(id, spec, existing, in, now, role)
 			if result.Err != nil {
 				return result
 			}
@@ -645,8 +644,8 @@ func ReconcileLinkInstances(in ReconcileInputs) ReconcileResult {
 	return result
 }
 
-func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLinkSpec, existing LinkInstance, exists bool, sa SAState, sas []SAState, group LinkGroupSpec, groupBackoff map[string]BackoffPolicy, groupRotateRetention map[string]int, rotateActivation, rotateCutover map[string]bool, prepareStandby bool, takeoverNotBefore time.Time, now time.Time) {
-	policy := groupBackoffForSpec(spec, groupBackoff)
+func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLinkSpec, existing LinkInstance, exists bool, sa SAState, in ReconcileInputs, now time.Time) {
+	policy := groupBackoffForSpec(spec, in.GroupBackoff)
 	if exists {
 		desiredGen := contactGeneration(spec)
 		if existing.RemoteGeneration == 0 {
@@ -657,8 +656,7 @@ func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLin
 			if (sa.InitiatorKnown && sa.Initiator) || (!sa.InitiatorKnown && existing.InitiatorRole == InitiatorRoleSecondaryTakeover) {
 				rotateRole = InitiatorRoleSecondaryTakeover
 			}
-			activationReady, activationGated := rotateActivationReady(id, rotateActivation)
-			r.handleRotate(id, spec, existing, sas, group, rotateRetentionForSpec(spec, groupRotateRetention), activationReady, activationGated, rotateCutoverReady(id, rotateCutover), now, rotateRole)
+			r.handleRotate(id, spec, existing, in, now, rotateRole)
 			return
 		}
 	}
@@ -680,10 +678,10 @@ func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLin
 		if sa.InitiatorKnown && sa.Initiator {
 			inst.InitiatorRole = InitiatorRoleSecondaryTakeover
 			inst.TakeoverPhase = TakeoverPhaseActive
-			if prepareStandby || inst.TakeoverStartedAt == 0 {
+			if in.PrepareStandby || inst.TakeoverStartedAt == 0 {
 				inst.TakeoverStartedAt = now.Unix()
 			}
-			if prepareStandby || inst.TakeoverUntil == 0 {
+			if in.PrepareStandby || inst.TakeoverUntil == 0 {
 				inst.TakeoverUntil = now.Add(TakeoverLeaseDuration(policy)).Unix()
 			}
 		} else {
@@ -710,7 +708,7 @@ func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLin
 		return
 	}
 	inst := existing
-	if prepareStandby {
+	if in.PrepareStandby {
 		inst.InitiatorRole = InitiatorRoleSecondaryStandby
 		inst.TakeoverPhase = TakeoverPhaseIdle
 		inst.TakeoverStartedAt = 0
@@ -789,7 +787,7 @@ func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLin
 	}
 	inst = noteSecondarySAAbsent(inst, now)
 	r.Instances[id] = inst
-	ok, reason := shouldSecondaryTakeover(inst, InitiatorRoleSecondaryStandby, spec, sa, policy, takeoverNotBefore, now)
+	ok, reason := shouldSecondaryTakeover(inst, InitiatorRoleSecondaryStandby, spec, sa, policy, in.TakeoverNotBefore, now)
 	if !ok {
 		r.add(ReconcileActionNoop, &spec, &inst, reason)
 		return
@@ -808,7 +806,8 @@ func (r *ReconcileResult) reconcileSecondaryStandby(id string, spec TransportLin
 	r.add(ReconcileActionCreate, &takeoverSpec, &inst, reason)
 }
 
-func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existing LinkInstance, sas []SAState, group LinkGroupSpec, retention time.Duration, activationReady, activationGated, cutoverReady bool, now time.Time, initiatorRole string) {
+func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existing LinkInstance, in ReconcileInputs, now time.Time, initiatorRole string) {
+	group := groupSpecForSpec(spec, in.GroupSpecs)
 	spec.InitiatorRole = initiatorRole
 	desiredGen := contactGeneration(spec)
 	if existing.StagedGeneration != 0 && existing.StagedGeneration != desiredGen {
@@ -823,25 +822,32 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 		r.add(ReconcileActionCleanupRotate, &stagedSpec, &inst, "stale staged generation")
 		return
 	}
+	oldSA := findInstanceSA(in.SAs, existing)
 	if existing.StagedGeneration == desiredGen {
-		stagedSA := findStagedSA(sas, existing)
+		stagedSA := findStagedSA(in.SAs, existing)
 		stagedSpec, err := RuntimeSpecForPortGeneration(spec, group, existing.StagedGeneration)
 		if err != nil {
 			r.Err = fmt.Errorf("derive staged runtime for %s generation %d: %w", id, existing.StagedGeneration, err)
 			return
 		}
-		stagedInterfaceName := firstNonEmptyString(existing.StagedInterfaceName, stagedSpec.InterfaceName)
-		stagedXFRMIfID := firstNonZeroUint32(existing.StagedXFRMIfID, stagedSpec.XFRMIfID)
-		if stagedSA.Established {
-			oldSA := findInstanceSA(sas, existing)
-			oldSAWasStaged := false
-			if sameSARuntime(oldSA, stagedSA) {
-				oldSAWasStaged = true
-				oldSA = SAState{}
-			}
+		oldSAWasStaged := sameSARuntime(oldSA, stagedSA)
+		if oldSAWasStaged {
+			oldSA = SAState{}
+		}
+		stagedXFRMReady := !in.MissingDesiredXFRM[id]
+		stagedLoaded := hasMatchingConnection(in.Connections, stagedSpec)
+		stagedSpecChanged := existing.StagedSpecHash != "" && existing.StagedSpecHash != TransportLinkSpecHash(stagedSpec)
+		stagedNeedsRepair := !stagedXFRMReady || (in.Connections != nil && !stagedLoaded)
+		stagedEstablished := stagedSA.Established && stagedXFRMReady
+		passiveReady := !IsActiveInitiatorRole(initiatorRole) && !oldSA.Established &&
+			stagedLoaded && stagedXFRMReady && !stagedSpecChanged && existing.RotatePhase != RotatePhasePreparing
+		if stagedEstablished || passiveReady {
+			retention := rotateRetentionForSpec(spec, in.GroupRotateRetention)
+			activationReady, activationGated := rotateActivationReady(id, in.RotateActivationReady)
+			cutoverReady := rotateCutoverReady(id, in.RotateCutoverReady)
 			retentionStarted := existing.RotatePhase == RotatePhaseDualRunning || existing.RotatePhase == RotatePhaseDraining
 			if oldSA.Established && retention > 0 && (!retentionStarted || existing.RotateDeadline == 0) {
-				inst := existing
+				inst := MarkLinkApplySuccess(existing, now)
 				inst.ActualState = LinkStateUp
 				inst.RotatePhase = RotatePhaseDualRunning
 				if activationGated && activationReady {
@@ -880,16 +886,21 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 				r.add(ReconcileActionNoop, &spec, &inst, "route_cutover_pending")
 				return
 			}
+			if inLinkBackoff(existing, now) {
+				r.add(ReconcileActionNoop, &stagedSpec, &existing, "rotate backoff active")
+				return
+			}
 			inst := existing
 			inst.RemoteGeneration = desiredGen
 			inst.IKEName = existing.StagedIKEName
 			inst.ChildSAName = existing.StagedChildSAName
-			inst.InterfaceName = stagedInterfaceName
-			inst.XFRMIfID = stagedXFRMIfID
+			inst.InterfaceName = firstNonEmptyString(existing.StagedInterfaceName, stagedSpec.InterfaceName)
+			inst.XFRMIfID = firstNonZeroUint32(existing.StagedXFRMIfID, stagedSpec.XFRMIfID)
 			inst.LocalTunnelAddr = stagedSpec.LocalTunnelAddr
 			inst.PeerTunnelAddr = stagedSpec.PeerTunnelAddr
 			inst.ActualState = LinkStateUp
 			inst.Endpoint = stagedSA.Endpoint
+			inst.SelectedContact = ContactPoint{}
 			if point, ok := firstContactPointForGeneration(spec, desiredGen); ok {
 				inst.SelectedContact = point
 				inst.Endpoint = contactEndpoint(point)
@@ -900,8 +911,23 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 			inst.BackoffUntil = 0
 			inst.LastFailure = nil
 			inst.LastTransition = now.Unix()
+			reason := "staged sa established"
+			if !stagedEstablished {
+				inst.ActualState = LinkStateWaitingInbound
+				inst.Endpoint = ""
+				inst.SelectedContact = ContactPoint{}
+				if initiatorRole == InitiatorRoleSecondaryStandby {
+					// Resume the ordinary standby takeover policy on the new generation.
+					inst.ActualState = LinkStateDown
+					inst.InitiatorRole = InitiatorRoleSecondaryStandby
+					inst.TakeoverPhase = TakeoverPhaseIdle
+					inst.TakeoverStartedAt = 0
+					inst.TakeoverUntil = 0
+				}
+				reason = "responder configuration ready without an old sa"
+			}
 			r.Instances[id] = inst
-			if oldSAWasStaged {
+			if oldSAWasStaged || existing.IKEName == inst.IKEName {
 				r.add(ReconcileActionNoop, &spec, &inst, "staged sa already current")
 				return
 			}
@@ -912,19 +938,18 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 				XFRMIfID:      existing.XFRMIfID,
 				ContactPoints: []ContactPoint{existing.SelectedContact},
 			}
-			r.add(ReconcileActionCommitRotate, &oldSpec, &inst, "staged sa established")
+			r.add(ReconcileActionCommitRotate, &oldSpec, &existing, reason)
 			return
 		}
-		if existing.RotateDeadline != 0 && now.After(time.Unix(existing.RotateDeadline, 0)) {
-			inst := existing
-			inst.clearStaged(RotatePhaseRollback)
-			inst.LastFailure = errors.New("staged sa not established by deadline")
-			inst.FailureCount++
-			inst.BackoffUntil = now.Add(nextLinkBackoff(BackoffPolicy{}, inst.FailureCount)).Unix()
-			inst.LastTransition = now.Unix()
-			r.Instances[id] = inst
-			r.add(ReconcileActionRollbackRotate, &stagedSpec, &inst, "staged sa deadline exceeded")
-			return
+		if existing.RotatePhase == RotatePhaseDualRunning || existing.RotatePhase == RotatePhaseDraining {
+			// The new path disappeared before cutover. Give the surviving path
+			// preference again and restart negotiation independently of retention.
+			existing.RotatePhase = RotatePhaseTestingNew
+			existing.RotateDeadline = 0
+			existing.StagedAttemptCount = 0
+			existing.StagedNextAttempt = 0
+			existing.LastTransition = now.Unix()
+			r.Instances[id] = existing
 		}
 		if inLinkBackoff(existing, now) {
 			r.add(ReconcileActionNoop, &stagedSpec, &existing, "rotate backoff active")
@@ -935,10 +960,10 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 			// local port record. The deadline is a fallback opportunity, never
 			// evidence that Gossip delivery has completed. If the old path
 			// disappears, do not delay recovery for the primary's benefit.
-			if now.Before(time.Unix(existing.StagedNextAttempt, 0)) && findInstanceSA(sas, existing).Established {
+			if now.Before(time.Unix(existing.StagedNextAttempt, 0)) && oldSA.Established {
 				stagedSpec.InitiatorRole = InitiatorRoleSecondaryStandby
 				stagedSpec.ContactPoints = nil
-				if existing.RotatePhase == RotatePhasePreparing {
+				if existing.RotatePhase == RotatePhasePreparing || stagedNeedsRepair {
 					r.add(ReconcileActionPrepareRotate, &stagedSpec, &existing, "resume passive staged preparation")
 				} else {
 					r.add(ReconcileActionNoop, &stagedSpec, &existing, "awaiting primary rotation")
@@ -948,6 +973,7 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 			inst := existing
 			inst.StagedAttemptCount = 1
 			inst.StagedNextAttempt = now.Add(stagedInitiateBackoff(1)).Unix()
+			inst.RotateDeadline = now.Add(rotateTimeout()).Unix()
 			inst.RotatePhase = RotatePhasePreparing
 			inst.LastTransition = now.Unix()
 			r.Instances[id] = inst
@@ -960,22 +986,63 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 			r.add(ReconcileActionPrepareRotate, &stagedSpec, &existing, "resume staged sa preparation")
 			return
 		}
+		if stagedNeedsRepair || stagedSpecChanged {
+			existing.RotatePhase = RotatePhasePreparing
+			existing.ActualState = LinkStateConfiguring
+			if oldSA.Established {
+				existing.ActualState = LinkStateUp
+			}
+			r.Instances[id] = existing
+			r.add(ReconcileActionPrepareRotate, &stagedSpec, &existing, "repair staged configuration or xfrm")
+			return
+		}
 		if !IsActiveInitiatorRole(stagedSpec.InitiatorRole) {
+			existing.RotateDeadline = 0
 			if initiatorRole == "" {
 				state, endpoint := LinkStateWaitingInbound, ""
-				if oldSA := findInstanceSA(sas, existing); oldSA.Established {
+				if oldSA.Established {
 					state, endpoint = LinkStateUp, oldSA.Endpoint
 				}
 				if existing.ActualState != state {
 					existing.ActualState, existing.Endpoint = state, endpoint
 					existing.LastTransition = now.Unix()
-					r.Instances[id] = existing
 				}
 			}
+			r.Instances[id] = existing
 			r.add(ReconcileActionNoop, &stagedSpec, &existing, "awaiting staged sa")
 			return
 		}
 		inst := existing
+		if oldSA.Established {
+			inst.ActualState = LinkStateUp
+		} else {
+			inst.ActualState = LinkStateConnecting
+		}
+		if inst.RotateDeadline != 0 && !now.Before(time.Unix(inst.RotateDeadline, 0)) {
+			inst.RotateDeadline = 0
+			inst.StagedAttemptCount = 0
+			inst.StagedNextAttempt = 0
+			inst.LastFailure = errors.New("staged sa not established by deadline")
+			inst.FailureCount++
+			policy := groupBackoffForSpec(spec, in.GroupBackoff)
+			inst.BackoffUntil = now.Add(nextLinkBackoff(policy, inst.FailureCount)).Unix()
+			inst.LastTransition = now.Unix()
+			if !oldSA.Established {
+				inst.ActualState = LinkStateError
+			}
+			r.Instances[id] = inst
+			r.add(ReconcileActionNoop, &stagedSpec, &inst, "staged sa deadline exceeded")
+			return
+		}
+		if inst.RotateDeadline == 0 {
+			inst.RotateDeadline = now.Add(rotateTimeout()).Unix()
+			inst.StagedAttemptCount = 1
+			inst.StagedNextAttempt = now.Add(stagedInitiateBackoff(1)).Unix()
+			inst.LastTransition = now.Unix()
+			r.Instances[id] = inst
+			r.add(ReconcileActionInitiateRotate, &stagedSpec, &inst, "retry staged sa")
+			return
+		}
 		// State written by older versions has no staged attempt metadata. Treat
 		// the already prepared connection as the first attempt and wait before
 		// retrying it, so an upgrade cannot immediately recreate the old loop.
@@ -1019,9 +1086,13 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 	inst.StagedLocalTunnelAddr = stagedSpec.LocalTunnelAddr
 	inst.StagedPeerTunnelAddr = stagedSpec.PeerTunnelAddr
 	inst.RotatePhase = RotatePhasePreparing
-	inst.RotateDeadline = now.Add(rotateTimeout()).Unix()
+	inst.ActualState = LinkStateConfiguring
+	if oldSA.Established {
+		inst.ActualState = LinkStateUp
+	}
 	if IsActiveInitiatorRole(stagedSpec.InitiatorRole) {
-		if initiatorRole == InitiatorRoleSecondaryTakeover && findInstanceSA(sas, existing).Established {
+		inst.RotateDeadline = now.Add(rotateTimeout()).Unix()
+		if initiatorRole == InitiatorRoleSecondaryTakeover && oldSA.Established {
 			wait := takeoverDelayFor(group.Reconcile.Backoff, existing.FailureCount)
 			inst.StagedNextAttempt = now.Add(wait).Unix()
 			inst.RotateDeadline = now.Add(wait + rotateTimeout()).Unix()
@@ -1041,6 +1112,7 @@ func (r *ReconcileResult) handleRotate(id string, spec TransportLinkSpec, existi
 // resulting phase and retain ownership of failure/backoff and transition time.
 func (inst *LinkInstance) clearStaged(phase string) {
 	inst.StagedGeneration = 0
+	inst.StagedSpecHash = ""
 	inst.StagedIKEName = ""
 	inst.StagedChildSAName = ""
 	inst.StagedInterfaceName = ""
@@ -1125,9 +1197,17 @@ func RecordActionResult(instances map[string]LinkInstance, action ReconcileActio
 		}
 	}
 	if err != nil {
+		if action.Action == ReconcileActionCommitRotate && action.Instance != nil && action.Instance.StagedGeneration != 0 {
+			// Keep both runtime identities until old-generation cleanup succeeds.
+			inst = *action.Instance
+		}
+		oldPathUp := inst.ActualState == LinkStateUp && (action.Action == ReconcileActionPrepareRotate || action.Action == ReconcileActionInitiateRotate)
 		inst = MarkLinkApplyFailure(inst, policy, now, err)
+		if oldPathUp {
+			inst.ActualState = LinkStateUp
+		}
 		switch action.Action {
-		case ReconcileActionPrepareRotate, ReconcileActionInitiateRotate, ReconcileActionCommitRotate, ReconcileActionRollbackRotate, ReconcileActionCleanupRotate:
+		case ReconcileActionPrepareRotate, ReconcileActionInitiateRotate, ReconcileActionCommitRotate, ReconcileActionCleanupRotate:
 			if inst.RotatePhase != "" && inst.LastFailure != nil {
 				inst.LastFailure = fmt.Errorf("rotate %s: %w", inst.RotatePhase, inst.LastFailure)
 			}
@@ -1141,43 +1221,39 @@ func RecordActionResult(instances map[string]LinkInstance, action ReconcileActio
 		instances[id] = inst
 		return
 	}
-	// A successful rollback means the staged resources were cleaned up, not
-	// that the failed rotation recovered. Preserve the failure/backoff recorded
-	// by the planner so the same generation is not prepared again immediately.
-	if action.Action != ReconcileActionRollbackRotate {
-		inst = MarkLinkApplySuccess(inst, now)
+	// Scheduling another negotiation does not confirm that a timed-out SA recovered.
+	if action.Action == ReconcileActionInitiateRotate {
+		return
 	}
+	inst = MarkLinkApplySuccess(inst, now)
 	switch action.Action {
-	case ReconcileActionCreate, ReconcileActionUpdate, ReconcileActionRepair, ReconcileActionPrepareStandby, ReconcileActionPrepareRotate, ReconcileActionInitiateRotate:
+	case ReconcileActionCreate, ReconcileActionUpdate, ReconcileActionRepair, ReconcileActionPrepareStandby, ReconcileActionPrepareRotate:
+		if action.Action == ReconcileActionPrepareRotate && action.Spec != nil {
+			inst.RotatePhase = RotatePhaseTestingNew
+			inst.StagedSpecHash = TransportLinkSpecHash(*action.Spec)
+			if IsActiveInitiatorRole(action.Spec.InitiatorRole) {
+				inst.RotateDeadline = now.Add(rotateTimeout()).Unix()
+				inst.StagedAttemptCount = 1
+				inst.StagedNextAttempt = now.Add(stagedInitiateBackoff(1)).Unix()
+			}
+			if inst.ActualState == LinkStateUp {
+				break
+			}
+		}
 		if inst.InitiatorRole == InitiatorRoleSecondaryStandby ||
 			(action.Spec != nil && action.Spec.InitiatorRole == InitiatorRoleSecondaryStandby) {
 			inst.ActualState = LinkStateDown
 		} else if action.Spec != nil && action.Spec.InitiatorRole == "" {
-			if action.Action != ReconcileActionPrepareRotate || inst.ActualState != LinkStateUp {
-				inst.ActualState = LinkStateWaitingInbound
-				inst.Endpoint = ""
-			}
+			inst.ActualState = LinkStateWaitingInbound
+			inst.Endpoint = ""
 		} else {
 			inst.ActualState = LinkStateConnecting
 		}
 		inst.LastTransition = now.Unix()
-		if inst.StagedGeneration != 0 {
-			inst.RotatePhase = RotatePhaseTestingNew
-		}
 	case ReconcileActionCommitRotate:
-		// The staged SA was already established before commit; after tearing
-		// down the old connection the link is up and rotation is complete.
-		inst.ActualState = LinkStateUp
 		inst.RotatePhase = RotatePhaseIdle
 		inst.LastTransition = now.Unix()
-	case ReconcileActionRollbackRotate, ReconcileActionCleanupRotate:
-		if action.Action == ReconcileActionRollbackRotate {
-			inst.ActualState = LinkStateConnecting
-			if action.Spec != nil && action.Spec.InitiatorRole == "" && inst.InitiatorRole == "" {
-				inst.ActualState = LinkStateConfiguring
-			}
-			inst.LastTransition = now.Unix()
-		}
+	case ReconcileActionCleanupRotate:
 		inst.clearStaged(RotatePhaseIdle)
 	}
 	instances[id] = inst
@@ -1573,7 +1649,7 @@ func ApplyReconcileAction(ctx context.Context, ipsec IPsecDriver, xfrm XFRMDrive
 			return plan, err
 		}
 		return plan, nil
-	case ReconcileActionCommitRotate, ReconcileActionRollbackRotate, ReconcileActionCleanupRotate:
+	case ReconcileActionCommitRotate, ReconcileActionCleanupRotate:
 		if action.Spec == nil {
 			return ApplyPlan{}, fmt.Errorf("%s action requires spec", action.Action)
 		}
@@ -1783,7 +1859,7 @@ func RecoverObservedLinkInstance(spec TransportLinkSpec, group LinkGroupSpec, ge
 	active.StagedLocalTunnelAddr = staged.spec.LocalTunnelAddr
 	active.StagedPeerTunnelAddr = staged.spec.PeerTunnelAddr
 	active.RotatePhase = RotatePhaseTestingNew
-	if !staged.established {
+	if !staged.established && IsActiveInitiatorRole(active.InitiatorRole) {
 		// A loaded current connection without an SA is an in-flight prepare.
 		// Restart its bounded deadline from startup; no stale deadline or
 		// backoff is recovered from disk.
