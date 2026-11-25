@@ -15,7 +15,16 @@ proxy_directory_socket: /run/photon-proxy/directory.sock
 proxy_publish_socket: /run/photon-proxy/publish.sock
 ```
 
-The read socket returns the locally verified directory. The write socket can
+The read socket serves the committed records and public authorization state.
+The proxy validates authorization and keeps the resulting directory in memory.
+It checks the daemon's revision every 60 seconds by default
+(`directory_refresh: 60s`) and fetches records when the revision changes.
+Known authorization and lease deadlines are applied locally, including during
+a refresh interval. A newly learned update can take up to one refresh period
+to reach the proxy. Upgrade the daemon and proxy together because the read
+socket uses a versioned request and response.
+
+The write socket can
 replace this Zone's v2 proxy records and has no general Photon management
 methods. Both sockets use mode `0660`. Put them in a directory with a dedicated
 proxy group and restrict write-socket access to the local proxy publisher.
@@ -102,6 +111,46 @@ address locally. `source: ipsec` uses the Zone's verified IPsec address and DNS
 announcements. A static address uses `host: <IPv4, IPv6 or DNS>` instead. The
 dialing hop resolves DNS in the selected family, merges static candidates, and
 applies the matching proxy port group.
+
+## Direct IPsec hops
+
+`h2l4` and `h2l6` use the direct Photon IPsec link to the next node, with IPv4
+or IPv6 as the outer IPsec family. Both dial an IPv6 link-local address scoped
+to the selected link interface. Each hop requires an installed direct SA of
+the requested family.
+
+Direct hops use links configured in IPsec's `family-redundant` mode. On Linux,
+set `link_namespace: photon` when the XFRM interfaces are in the
+`photon` network namespace. Use `link_namespace: host` for host interfaces.
+The option enables outbound direct hops, including on client-only proxies.
+When the process runs in a different namespace, it needs permission to enter
+the link namespace (`CAP_SYS_ADMIN`) and access its handle in `/run/netns`. The proxy creates
+only direct-hop TCP sockets there. It uses its normal network namespace for
+SOCKS listeners, other connection methods, and exit traffic.
+
+To receive direct hops, add a dedicated port group and binding address. Allow
+the configured TCP port in the link namespace on the Photon tunnel interfaces.
+
+```yaml
+link_namespace: photon
+port_groups:
+  direct:
+    link_local: true
+    port: 24540
+relay:
+  bindings:
+    - transport: trusttunnel+h2
+      addresses:
+        - {source: link-local, via: [link-local-v4, link-local-v6], port_set: direct}
+  accept_from: ['*.catofes.']
+  accept_to: ['*.catofes.']
+```
+
+For example, use `hops: [less@h2l4, table/exit@h2l6]` when each adjacent pair
+has the corresponding direct link. The proxy checks local IPsec state every
+five seconds independently of the directory. On rotation, new streams switch
+once a TLS-pinned HTTP/2 probe succeeds through the staged link. Existing
+streams can drain while the old tunnel remains installed.
 
 Zone ACL expressions accept exact names, the existing leftmost subtree wildcard,
 and `re:` followed by a full-name Go regular expression. An empty accept list

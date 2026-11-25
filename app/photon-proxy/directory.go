@@ -16,10 +16,15 @@ import (
 
 	"github.com/HiggsNet/photon/internal/trusttunnel"
 	"github.com/HiggsNet/photon/pkg/core/zone"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/HiggsNet/photon/pkg/service"
 )
 
-const directoryRefresh = time.Second
+const (
+	directoryRefresh = time.Minute
+	directoryTimeout = time.Second
+	directoryRetry   = 5 * time.Second
+)
 
 type proxyPeer struct {
 	zone          zone.ZonePath
@@ -59,59 +64,128 @@ type proxyDirectory struct {
 }
 
 func openProxyDirectory(ctx context.Context, socket string) (*proxyDirectory, error) {
-	view, err := fetchProxyDirectory(ctx, socket)
+	return openProxyDirectoryWithRefresh(ctx, socket, directoryRefresh)
+}
+
+func openProxyDirectoryWithRefresh(ctx context.Context, socket string, refresh time.Duration) (*proxyDirectory, error) {
+	request := service.ProxyReadRequest{Kind: service.ProxyReadDirectory}
+	reply, err := readProxyData(ctx, socket, request)
 	if err != nil {
 		return nil, err
 	}
-	directory := &proxyDirectory{view: view, sessions: make(map[*watchedSession]struct{})}
-	go func() {
-		ticker := time.NewTicker(directoryRefresh)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				empty := service.ProxyDirectory{}
-				directory.update(&empty, time.Now())
-				return
-			case <-ticker.C:
-				view, err := fetchProxyDirectory(ctx, socket)
-				if err != nil {
-					directory.update(nil, time.Now())
-					continue
-				}
-				directory.update(&view, time.Now())
-			}
-		}
-	}()
+	if reply.Network == nil || !reply.ManagedZone.Valid() {
+		return nil, errors.New("proxy daemon did not provide a directory snapshot")
+	}
+	now := time.Now()
+	cache := directoryCache{source: reply}
+	cache.refresh(refresh, now)
+	directory := &proxyDirectory{view: cache.view, sessions: make(map[*watchedSession]struct{})}
+	go directory.run(ctx, socket, refresh, &cache)
 	return directory, nil
 }
 
-func fetchProxyDirectory(ctx context.Context, socket string) (service.ProxyDirectory, error) {
-	var view service.ProxyDirectory
-	ctx, cancel := context.WithTimeout(ctx, directoryRefresh)
+type directoryCache struct {
+	source    service.ProxyReadResponse
+	view      service.ProxyDirectory
+	verifier  photoncrypto.Verifier
+	expiry    time.Time
+	checkedAt time.Time
+	boundary  time.Time
+}
+
+func (c *directoryCache) refresh(interval time.Duration, now time.Time) {
+	c.expiry = now.Add(interval).Add(directoryRetry)
+	c.rebuild(now)
+}
+
+func (c *directoryCache) rebuild(now time.Time) {
+	c.view = buildProxyDirectory(c.source.Network, now, &c.verifier)
+	c.view.ManagedZone = c.source.ManagedZone
+	c.view.V2, c.view.MeshPrefixes = buildProxyV2Directory(c.source.Network, c.source.ManagedZone, now, &c.verifier)
+	c.checkedAt = now
+	c.boundary = nextDirectoryBoundary(c.source.Network, now)
+	c.setLifetime()
+}
+
+func (c *directoryCache) setLifetime() {
+	c.view.ValidUntil = c.expiry
+	if !c.boundary.IsZero() && c.boundary.Before(c.expiry) {
+		c.view.ValidUntil = c.boundary
+	}
+}
+
+func (d *proxyDirectory) run(ctx context.Context, socket string, refresh time.Duration, cache *directoryCache) {
+	nextRefresh := cache.checkedAt.Add(refresh)
+	timer := time.NewTimer(0)
+	defer timer.Stop()
+	defer d.update(&service.ProxyDirectory{}, time.Time{})
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		now := time.Now()
+		rebuild := now.Before(cache.checkedAt) || !cache.boundary.IsZero() && !now.Before(cache.boundary)
+		if !now.Before(nextRefresh) {
+			request := service.ProxyReadRequest{Kind: service.ProxyReadDirectory, Epoch: cache.source.Epoch, Revision: cache.source.Revision}
+			reply, err := readProxyData(ctx, socket, request)
+			now = time.Now()
+			switch {
+			case err == nil && reply.Network != nil && reply.ManagedZone.Valid():
+				cache.source = reply
+				cache.refresh(refresh, now)
+				rebuild = false
+				nextRefresh = now.Add(refresh)
+			case err == nil && reply.Network == nil && reply.Epoch == request.Epoch && reply.Revision == request.Revision:
+				cache.expiry = now.Add(refresh).Add(directoryRetry)
+				nextRefresh = now.Add(refresh)
+			default:
+				nextRefresh = now.Add(min(directoryRetry, refresh))
+			}
+		}
+		if rebuild || !cache.boundary.IsZero() && !now.Before(cache.boundary) {
+			cache.rebuild(now)
+		} else {
+			cache.setLifetime()
+		}
+		d.update(&cache.view, now)
+		next := nextRefresh
+		if cache.view.ValidUntil.After(now) && cache.view.ValidUntil.Before(next) {
+			next = cache.view.ValidUntil
+		}
+		timer.Reset(time.Until(next))
+	}
+}
+
+func readProxyData(ctx context.Context, socket string, request service.ProxyReadRequest) (service.ProxyReadResponse, error) {
+	var reply service.ProxyReadResponse
+	ctx, cancel := context.WithTimeout(ctx, directoryTimeout)
 	defer cancel()
 	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", socket)
 	if err != nil {
-		return view, err
+		return reply, err
 	}
 	defer conn.Close()
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
-	data, err := io.ReadAll(io.LimitReader(conn, service.ProxyDirectoryMaxBytes))
+	if err := json.NewEncoder(conn).Encode(request); err != nil {
+		return reply, err
+	}
+	data, err := io.ReadAll(io.LimitReader(conn, service.ProxyReadMaxBytes))
 	if err != nil {
-		return view, err
+		return reply, err
 	}
-	if len(data) == service.ProxyDirectoryMaxBytes {
-		return view, errors.New("proxy directory exceeds size limit")
+	if len(data) == service.ProxyReadMaxBytes {
+		return reply, errors.New("proxy read response exceeds size limit")
 	}
-	if err := json.Unmarshal(data, &view); err != nil {
-		return view, err
+	if err := json.Unmarshal(data, &reply); err != nil {
+		return reply, err
 	}
-	now := time.Now()
-	if !view.ValidUntil.After(now) || view.ValidUntil.After(now.Add(service.ProxyDirectoryTTL)) {
-		return view, errors.New("invalid proxy directory validity window")
+	if reply.Epoch == "" {
+		return reply, errors.New("proxy daemon does not support versioned read requests")
 	}
-	return view, nil
+	return reply, nil
 }
 
 func (d *proxyDirectory) record(path zone.ZonePath, now time.Time) (service.ProxyCapability, bool) {

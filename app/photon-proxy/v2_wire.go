@@ -43,6 +43,10 @@ func v2Link(link string) (transport, via string) {
 		return "h2", "public-v6"
 	case "h2p":
 		return "h2", "photon"
+	case "h2l4":
+		return "h2", "link-local-v4"
+	case "h2l6":
+		return "h2", "link-local-v6"
 	default:
 		return "", ""
 	}

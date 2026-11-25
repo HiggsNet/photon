@@ -69,7 +69,7 @@ photon-proxy publish -tls-cert egress.pem -endpoint proxy.example.net:8443
 
 出口在上一节 `serve` 命令上增加 `-directory-socket /run/photon-proxy/directory.sock -allow-zones client.example.`。入口在上一节 `socks5` 命令上用 `-server-zone exit.example. -directory-socket /run/photon-proxy/directory.sock` 替换 `-server`。示例 Zone 要换成实际 Zone。证书 CA 和证书名称验证仍生效，代理再校验已签名的公钥绑定。出口允许的 Zone 共享本机 `-allow` 目的前缀规则。
 
-代理约每秒刷新本机目录。撤销命令为 `photon-proxy withdraw`，可加 `-expect-version` 避免旧操作覆盖新公告。撤销或者公钥绑定变化被本机目录观察到后，代理拒绝新会话并关闭关联的现有会话。本机目录失联时，最后一次获取的快照有五秒有效期。快照到期后拒绝新会话，并在下一次目录检查时关闭关联的旧会话。各站点看到更新的时间仍取决于 Gossip 收敛。
+代理从本机目录读取已提交的记录和公开授权数据，在内存中构建可用端点。启动时读取一次，随后每 60 秒检查 revision，版本变化时重新读取。已知的授权和租约到期由代理本地处理。撤销命令为 `photon-proxy withdraw`，可加 `-expect-version` 避免旧操作覆盖新公告。代理发现撤销或公钥绑定变化后，拒绝新会话并关闭关联的现有会话。目录失联后，快照最多保留到上次成功检查后的 65 秒，且受记录自身的到期时间约束。各站点收到新记录的时间取决于 Gossip 收敛和本地刷新周期。daemon 与 proxy 需要一起升级以使用新的目录 socket 协议。
 
 ### 自动续期
 

@@ -153,6 +153,8 @@ type v2DialPool struct {
 	connections              map[v2Hop]v2PooledEndpoint
 	dns                      map[string]v2DNSAnswer
 	publicDevice, meshDevice string
+	directLinks              *directLinks
+	direct                   *directPool
 }
 
 type v2PooledEndpoint struct {
@@ -170,6 +172,9 @@ type v2DNSAnswer struct {
 type v2DialAddresses struct{ current, previous []netip.AddrPort }
 
 func (p *v2DialPool) close() {
+	if p.direct != nil {
+		p.direct.close()
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, entry := range p.connections {
@@ -300,20 +305,7 @@ func (p *v2DialPool) candidates(ctx context.Context, spec v2Endpoint, meshPrefix
 	return v2DialAddresses{current: current, previous: previous}
 }
 
-func (p *v2DialPool) dial(ctx context.Context, spec v2Endpoint, addresses v2DialAddresses, retryAt *atomic.Int64) (net.Conn, error) {
-	ctx, cancel := context.WithTimeout(ctx, setupTimeout)
-	defer cancel()
-	current, previous := slices.Clone(addresses.current), slices.Clone(addresses.previous)
-	rand.Shuffle(len(current), func(i, j int) { current[i], current[j] = current[j], current[i] })
-	rand.Shuffle(len(previous), func(i, j int) { previous[i], previous[j] = previous[j], previous[i] })
-	candidates := append(current, previous...)
-	if len(candidates) == 0 {
-		return nil, &v2HopError{code: "no_candidate", index: -1}
-	}
-	device := p.publicDevice
-	if spec.via == "photon" {
-		device = p.meshDevice
-	}
+func v2HopTLS(spec v2Endpoint) *tls.Config {
 	config := &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true, NextProtos: []string{"h2"}}
 	// The certificate's key is authenticated by the verified Zone and
 	// referenced TLS record rather than by a CA.
@@ -328,6 +320,24 @@ func (p *v2DialPool) dial(ctx context.Context, spec v2Endpoint, addresses v2Dial
 		}
 		return nil
 	}
+	return config
+}
+
+func (p *v2DialPool) dial(ctx context.Context, spec v2Endpoint, addresses v2DialAddresses, retryAt *atomic.Int64) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(ctx, setupTimeout)
+	defer cancel()
+	current, previous := slices.Clone(addresses.current), slices.Clone(addresses.previous)
+	rand.Shuffle(len(current), func(i, j int) { current[i], current[j] = current[j], current[i] })
+	rand.Shuffle(len(previous), func(i, j int) { previous[i], previous[j] = previous[j], previous[i] })
+	candidates := append(current, previous...)
+	if len(candidates) == 0 {
+		return nil, &v2HopError{code: "no_candidate", index: -1}
+	}
+	device := p.publicDevice
+	if spec.via == "photon" {
+		device = p.meshDevice
+	}
+	config := v2HopTLS(spec)
 	dialer := &tls.Dialer{NetDialer: &net.Dialer{}, Config: config}
 	if device != "" {
 		dialer.NetDialer.Control = bindChainDevice(device)
@@ -363,10 +373,16 @@ func (p *v2DialPool) connect(ctx context.Context, view service.ProxyDirectory, h
 	}
 	headers = headers.Clone()
 	headers.Set("User-Agent", "")
-	resolveCtx, cancel := context.WithTimeout(ctx, setupTimeout)
-	addresses := p.candidates(resolveCtx, spec, view.MeshPrefixes)
-	cancel()
-	stream, err := p.client(hop, spec, addresses).connect(ctx, v2Authority, headers, protocol == "udp")
+	var stream *tunnelStream
+	var err error
+	if v2DirectFamily(spec.via) != "" {
+		stream, err = p.connectDirect(ctx, hop, spec, headers, protocol == "udp")
+	} else {
+		resolveCtx, cancel := context.WithTimeout(ctx, setupTimeout)
+		addresses := p.candidates(resolveCtx, spec, view.MeshPrefixes)
+		cancel()
+		stream, err = p.client(hop, spec, addresses).connect(ctx, v2Authority, headers, protocol == "udp")
+	}
 	if err == nil {
 		return stream, nil
 	}
@@ -439,7 +455,7 @@ type v2Server struct {
 	internal  atomic.Pointer[[]netip.Prefix]
 }
 
-func (s *v2Server) serve(w http.ResponseWriter, r *http.Request, group string, active func() bool) {
+func (s *v2Server) serve(w http.ResponseWriter, r *http.Request, group string, linkLocal bool, active func() bool) {
 	defer r.Body.Close()
 	if r.Method != http.MethodConnect || r.ProtoMajor != 2 || r.TLS == nil || r.Host != v2Authority {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -490,6 +506,18 @@ func (s *v2Server) serve(w http.ResponseWriter, r *http.Request, group string, a
 	if !ok || !slices.Contains(local.groups[group], via) {
 		v2WriteError(w, http.StatusForbidden, "policy_denied", index)
 		return
+	}
+	family := v2DirectFamily(via)
+	if linkLocal || family != "" {
+		previous := grant.origin
+		if index > 0 {
+			previous = hops[index-1].Zone
+		}
+		local, _ := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
+		if !linkLocal || family == "" || local == nil || !s.pool.directLinks.accepts(local.String(), r.RemoteAddr, previous, family) {
+			v2WriteError(w, http.StatusForbidden, "policy_denied", index)
+			return
+		}
 	}
 	isExit := index == len(hops)-1
 	if (isExit && !local.exit.AllowsSource(grant.origin)) || (!isExit && !local.relay.Allows(grant.origin, hops[index+1].Zone)) {
@@ -562,6 +590,10 @@ func v2RouteString(items []string) string {
 			link = "h26"
 		case "photon":
 			link = "h2p"
+		case "link-local-v4":
+			link = "h2l4"
+		case "link-local-v6":
+			link = "h2l6"
 		}
 		if ok {
 			hops[i] = name + "@" + link

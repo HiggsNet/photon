@@ -32,8 +32,23 @@ const v2ReadyPath = "/_photon_proxy_ready"
 
 func (n *v2Node) listen(key v2ListenerKey) ([]*v2Listener, error) {
 	var listeners []*v2Listener
-	for _, ip := range n.config.PortGroups[key.group].Bind {
-		listener, err := (&net.ListenConfig{}).Listen(n.ctx, "tcp", net.JoinHostPort(ip, strconv.Itoa(int(key.port))))
+	group := n.config.PortGroups[key.group]
+	addresses := group.Bind
+	if group.LinkLocal {
+		addresses = []string{"::"}
+	}
+	for _, ip := range addresses {
+		address := net.JoinHostPort(ip, strconv.Itoa(int(key.port)))
+		config := &net.ListenConfig{}
+		var listener net.Listener
+		var err error
+		if group.LinkLocal {
+			listener, err = inLinkNamespace(n.pool.directLinks.namespace, func() (net.Listener, error) {
+				return config.Listen(n.ctx, "tcp6", address)
+			})
+		} else {
+			listener, err = config.Listen(n.ctx, "tcp", address)
+		}
 		if err != nil {
 			for _, started := range listeners {
 				_ = started.http.Close()
@@ -47,10 +62,27 @@ func (n *v2Node) listen(key v2ListenerKey) ([]*v2Listener, error) {
 			BaseContext: func(net.Listener) context.Context { return n.ctx },
 			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == v2ReadyPath && r.Method == http.MethodGet && r.ProtoMajor == 2 {
-					w.WriteHeader(http.StatusNoContent)
+					if address, err := netip.ParseAddrPort(r.RemoteAddr); !group.LinkLocal || err == nil && address.Addr().IsLoopback() {
+						w.WriteHeader(http.StatusNoContent)
+					} else {
+						w.WriteHeader(http.StatusForbidden)
+					}
 					return
 				}
-				n.server.serve(w, r, key.group, binding.enabled.Load)
+				if group.LinkLocal && r.URL.Path == directProbePath && r.Method == http.MethodGet && r.ProtoMajor == 2 {
+					via := r.Header.Get("Photon-Proxy-Via")
+					endpoint := n.server.endpoints[r.Header.Get("Photon-Proxy-Endpoint")]
+					family := v2DirectFamily(via)
+					local, _ := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
+					if binding.enabled.Load() && family != "" && local != nil && slices.Contains(endpoint.groups[key.group], via) &&
+						n.pool.directLinks.accepts(local.String(), r.RemoteAddr, "", family) {
+						w.WriteHeader(http.StatusNoContent)
+					} else {
+						w.WriteHeader(http.StatusServiceUnavailable)
+					}
+					return
+				}
+				n.server.serve(w, r, key.group, group.LinkLocal, binding.enabled.Load)
 			}),
 		}
 		n.workers.Go(func() {
@@ -61,7 +93,15 @@ func (n *v2Node) listen(key v2ListenerKey) ([]*v2Listener, error) {
 			}
 		})
 		ctx, cancel := context.WithTimeout(n.ctx, 2*time.Second)
-		err = v2CheckListener(ctx, binding.listener, n.certificate.Load())
+		var dial func(context.Context, string, string) (net.Conn, error)
+		if group.LinkLocal {
+			dial = func(ctx context.Context, _, address string) (net.Conn, error) {
+				return inLinkNamespace(n.pool.directLinks.namespace, func() (net.Conn, error) {
+					return (&net.Dialer{}).DialContext(ctx, "tcp6", address)
+				})
+			}
+		}
+		err = v2CheckListener(ctx, binding.listener, n.certificate.Load(), dial)
 		cancel()
 		if err != nil {
 			_ = binding.http.Close()
@@ -76,11 +116,12 @@ func (n *v2Node) listen(key v2ListenerKey) ([]*v2Listener, error) {
 	return listeners, nil
 }
 
-func v2CheckListener(ctx context.Context, listener net.Listener, cert *tls.Certificate) error {
+func v2CheckListener(ctx context.Context, listener net.Listener, cert *tls.Certificate, dial func(context.Context, string, string) (net.Conn, error)) error {
 	dialAddress := v2ProbeBindAddress(listener.Addr())
 	pin := service.ProxyPublicKeyID(cert.Leaf)
 	transport := &http.Transport{
 		ForceAttemptHTTP2: true,
+		DialContext:       dial,
 		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true,
 			VerifyConnection: func(state tls.ConnectionState) error {
 				if len(state.PeerCertificates) == 0 || service.ProxyPublicKeyID(state.PeerCertificates[0]) != pin {
@@ -135,6 +176,9 @@ func (n *v2Node) checkMeshAddresses(ports map[string]service.ProxyV2Ports) map[s
 	}
 	ready := make(map[string]bool)
 	for group, set := range ports {
+		if n.config.PortGroups[group].LinkLocal {
+			continue
+		}
 		for _, listener := range n.listeners[v2ListenerKey{group, set.Current.Port}] {
 			ip := listener.listener.Addr().(*net.TCPAddr).AddrPort().Addr()
 			if ip.IsUnspecified() || slices.Contains(local, ip.Unmap().String()) {

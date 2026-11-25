@@ -2,16 +2,118 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/x509"
+	"encoding/json"
 	"io"
+	"net"
 	"net/netip"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/HiggsNet/photon/pkg/core/zone"
+	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/HiggsNet/photon/pkg/service"
 )
+
+func TestDirectoryRefreshKeepsCachedRevisionAndExpiresLeaseLocally(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	now := time.Now()
+	leaseUntil := now.Add(2 * time.Second).Truncate(time.Second)
+	network := zone.NewNetworkState()
+	rootPublic, rootKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerPublic, peerKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := zone.RootZone
+	peer := zone.ZonePath("test.")
+	network.Zones[root] = zone.NewZoneState(root, &zone.ZoneAuthority{Zone: root, Epoch: 1, Threshold: 1, Keys: []zone.AuthorizedKey{{Key: rootPublic}}})
+	authority := zone.ZoneAuthority{Zone: peer, Epoch: 1, Threshold: 1, Keys: []zone.AuthorizedKey{{
+		Key: peerPublic, Capabilities: []zone.Capability{{Permissions: []zone.Permission{zone.PermWrite}}},
+	}}}
+	delegation := &zone.Delegation{ZoneName: peer, Authority: authority}
+	if err := photoncrypto.SignDelegation(delegation, root, rootKey); err != nil {
+		t.Fatal(err)
+	}
+	network.Zones[root].Delegations[peer] = delegation
+	network.Zones[peer] = zone.NewZoneState(peer, &authority)
+	body, err := json.Marshal(service.ProxyV2Identity{
+		ProxyV2Lease: service.ProxyV2Lease{Active: true, ExpiresAt: leaseUntil.Unix()},
+		PublicKey:    delegationEncoding.EncodeToString(peerPublic),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := &zone.Record{Zone: peer, Key: service.ProxyV2IdentityKey, Type: service.ProxyV2IdentityType, Version: 1, Value: body}
+	if err := photoncrypto.SignRecord(record, peerKey); err != nil {
+		t.Fatal(err)
+	}
+	network.Zones[peer].Records[record.Key] = record
+	socket := filepath.Join(t.TempDir(), "read.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := make(chan service.ProxyReadRequest, 10)
+	defer listener.Close()
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			var request service.ProxyReadRequest
+			if json.NewDecoder(conn).Decode(&request) == nil {
+				requests <- request
+				reply := service.ProxyReadResponse{Epoch: "test-epoch", Revision: 7}
+				if request.Epoch == "" {
+					reply.ManagedZone, reply.Network = peer, network
+				}
+				_ = json.NewEncoder(conn).Encode(reply)
+			}
+			_ = conn.Close()
+		}
+	}()
+	dir, err := openProxyDirectoryWithRefresh(ctx, socket, 250*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first := <-requests; first.Kind != service.ProxyReadDirectory || first.Epoch != "" {
+		t.Fatalf("initial request = %+v", first)
+	}
+	watch, release, ok := dir.watchV2(ctx, func(view service.ProxyDirectory, now time.Time) bool {
+		identity := view.V2[peer].Identity
+		return identity != nil && identity.ValidAt(now)
+	})
+	if !ok {
+		t.Fatal("initial signed record was unavailable")
+	}
+	defer release()
+	select {
+	case next := <-requests:
+		if next.Epoch != "test-epoch" || next.Revision != 7 {
+			t.Fatalf("next request = %+v", next)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no conditional refresh")
+	}
+	select {
+	case <-watch.Done():
+		if time.Now().Before(leaseUntil) || dir.snapshotV2().V2[peer].Identity != nil {
+			t.Fatal("lease did not expire locally at its boundary")
+		}
+	case <-time.After(time.Until(leaseUntil) + time.Second):
+		t.Fatal("expired lease retained the active session")
+	}
+}
 
 func TestZoneTunnelPortUpdateAndRevocation(t *testing.T) {
 	clientZone, serverZone := zone.ZonePath("client.example."), zone.ZonePath("exit.example.")

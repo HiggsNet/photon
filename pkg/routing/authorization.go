@@ -645,3 +645,31 @@ func LocalAssignedPrefixes(ars *AuthorizedRouteSet, managedZone zone.ZonePath, i
 	})
 	return out
 }
+
+// ExternalUpstreamSourcePrefixes returns the node's addresses from non-shared assignments.
+func ExternalUpstreamSourcePrefixes(ars *AuthorizedRouteSet, managedZone zone.ZonePath) []netip.Prefix {
+	// Source identities belong to the node itself. Shared/anycast prefixes are
+	// served behind the upstream veth and must remain routes, not addresses on
+	// the veth endpoint itself.
+	localAssigned := LocalAssignedPrefixes(ars, managedZone, false)
+	out := make([]netip.Prefix, 0, len(localAssigned))
+	seen := make(map[netip.Prefix]struct{}, len(localAssigned))
+	for _, prefix := range localAssigned {
+		addr := prefix.Addr()
+		if prefix.Bits() < addr.BitLen() {
+			if next := addr.Next(); next.IsValid() && prefix.Contains(next) {
+				addr = next
+			}
+		}
+		source := netip.PrefixFrom(addr, prefix.Bits())
+		if _, ok := seen[source]; ok {
+			continue
+		}
+		seen[source] = struct{}{}
+		out = append(out, source)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Addr().Less(out[j].Addr()) || (out[i].Addr() == out[j].Addr() && out[i].Bits() < out[j].Bits())
+	})
+	return out
+}

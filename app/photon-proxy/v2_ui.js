@@ -1,6 +1,6 @@
 const get = (id) => document.getElementById(id);
-const links = { h24: "公网 IPv4", h26: "公网 IPv6", h2p: "Photon Mesh" };
-const aliases = { "public-v4": "h24", "public-v6": "h26", photon: "h2p" };
+const links = { h24: "公网 IPv4", h26: "公网 IPv6", h2p: "Photon Mesh", h2l4: "Photon IPsec 直连 IPv4", h2l6: "Photon IPsec 直连 IPv6" };
+const aliases = { "public-v4": "h24", "public-v6": "h26", photon: "h2p", "link-local-v4": "h2l4", "link-local-v6": "h2l6" };
 const relayLimit = 7;
 let token = "";
 let directory = { origin: "", ready: false, exits: [], relays: [] };

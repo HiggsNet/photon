@@ -67,7 +67,7 @@ type ProxyV2Binding struct {
 
 type ProxyV2Address struct {
 	Host    string   `json:"host,omitempty" yaml:"host,omitempty"`
-	Source  string   `json:"source,omitempty" yaml:"source,omitempty"` // ipsec or route-local
+	Source  string   `json:"source,omitempty" yaml:"source,omitempty"`
 	Via     []string `json:"via" yaml:"via"`
 	PortSet string   `json:"port_set" yaml:"port_set"`
 }
@@ -240,8 +240,8 @@ func (a ProxyV2Address) validate() error {
 		strings.Contains(a.Host, ":") && !validProxyV2IP(a.Host)) {
 		return errors.New("invalid proxy host")
 	}
-	if a.Source != "" && (a.Host != "" || a.Source != "ipsec" && a.Source != "route-local") {
-		return errors.New("proxy address source must be ipsec or route-local")
+	if a.Source != "" && (a.Host != "" || a.Source != "ipsec" && a.Source != "route-local" && a.Source != "link-local") {
+		return errors.New("proxy address source must be ipsec, route-local or link-local")
 	}
 	for _, via := range a.Via {
 		switch via {
@@ -250,13 +250,17 @@ func (a ProxyV2Address) validate() error {
 				return errors.New("photon addresses must come from route-local")
 			}
 		case "public-v4", "public-v6":
-			if a.Source == "route-local" {
-				return errors.New("route-local requires the photon dial mode")
+			if a.Source == "route-local" || a.Source == "link-local" {
+				return errors.New("public addresses must be static or come from IPsec announcements")
 			}
 			if address, err := netip.ParseAddr(a.Host); err == nil {
 				if address.Unmap().Is4() != (via == "public-v4") {
 					return errors.New("proxy address family and dial mode differ")
 				}
+			}
+		case "link-local-v4", "link-local-v6":
+			if a.Source != "link-local" {
+				return errors.New("direct Photon addresses must come from link-local")
 			}
 		default:
 			return fmt.Errorf("unknown proxy dial mode %q", via)

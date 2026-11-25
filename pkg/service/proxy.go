@@ -22,7 +22,6 @@ const (
 	RecordTypeProxy        = "service.proxy.v1"
 	ProxyTransport         = "trusttunnel+h2"
 	ProxyDirectoryMaxBytes = 1 << 20
-	ProxyDirectoryTTL      = 5 * time.Second
 )
 
 // ProxyCapability binds a data-plane identity to the Zone that signs the record.
@@ -141,7 +140,7 @@ func ParseProxyCapability(record *zone.Record) (ProxyCapability, error) {
 	return value, value.Validate()
 }
 
-// ProxyDirectory is a bounded-lifetime projection from the local daemon.
+// ProxyDirectory is a bounded-lifetime view built by the local proxy.
 type ProxyDirectory struct {
 	ManagedZone  zone.ZonePath                     `json:"managed_zone"`
 	ValidUntil   time.Time                         `json:"valid_until"`

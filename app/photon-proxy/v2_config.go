@@ -19,16 +19,18 @@ import (
 )
 
 type v2Config struct {
-	DirectorySocket string                  `yaml:"directory_socket"`
-	PublishSocket   string                  `yaml:"publish_socket"`
-	StateDir        string                  `yaml:"state_dir"`
-	PublicDevice    string                  `yaml:"public_device"`
-	PhotonDevice    string                  `yaml:"photon_device"`
-	Client          *v2ClientConfig         `yaml:"client"`
-	Relay           *v2RelayConfig          `yaml:"relay"`
-	Exits           map[string]v2ExitConfig `yaml:"exits"`
-	PortGroups      map[string]v2PortConfig `yaml:"port_groups"`
-	TLS             v2TLSConfig             `yaml:"tls"`
+	DirectoryRefresh time.Duration           `yaml:"directory_refresh"`
+	LinkNamespace    string                  `yaml:"link_namespace"`
+	DirectorySocket  string                  `yaml:"directory_socket"`
+	PublishSocket    string                  `yaml:"publish_socket"`
+	StateDir         string                  `yaml:"state_dir"`
+	PublicDevice     string                  `yaml:"public_device"`
+	PhotonDevice     string                  `yaml:"photon_device"`
+	Client           *v2ClientConfig         `yaml:"client"`
+	Relay            *v2RelayConfig          `yaml:"relay"`
+	Exits            map[string]v2ExitConfig `yaml:"exits"`
+	PortGroups       map[string]v2PortConfig `yaml:"port_groups"`
+	TLS              v2TLSConfig             `yaml:"tls"`
 }
 
 type v2TLSConfig struct {
@@ -64,6 +66,7 @@ type v2ExitConfig struct {
 }
 
 type v2PortConfig struct {
+	LinkLocal      bool          `yaml:"link_local"`
 	Bind           []string      `yaml:"bind"`
 	Port           uint16        `yaml:"port"`
 	Range          []uint16      `yaml:"range"`
@@ -105,6 +108,12 @@ func readV2Config(path string) (v2Config, error) {
 	if config.DirectorySocket == config.PublishSocket {
 		return config, errors.New("directory_socket and publish_socket must be distinct")
 	}
+	if config.DirectoryRefresh == 0 {
+		config.DirectoryRefresh = directoryRefresh
+	}
+	if config.DirectoryRefresh < time.Second {
+		return config, errors.New("directory_refresh must be at least one second")
+	}
 	if config.Client != nil {
 		client := config.Client
 		if client.DefaultListen == "" {
@@ -142,8 +151,8 @@ func readV2Config(path string) (v2Config, error) {
 	}
 
 	for name, ports := range config.PortGroups {
-		if !service.ProxyV2ID(name) || len(ports.Bind) == 0 {
-			return config, errors.New("port groups require an ID and one or more bind IPs")
+		if !service.ProxyV2ID(name) || !ports.LinkLocal && len(ports.Bind) == 0 || ports.LinkLocal && len(ports.Bind) != 0 {
+			return config, errors.New("port groups require an ID and either bind IPs or link_local")
 		}
 		for _, address := range ports.Bind {
 			if ip, err := netip.ParseAddr(address); err != nil || ip.Zone() != "" {
@@ -159,6 +168,21 @@ func readV2Config(path string) (v2Config, error) {
 		}
 	}
 	return config, nil
+}
+
+func (c v2Config) directNamespace() (string, bool) {
+	if c.LinkNamespace == "host" {
+		return "", true
+	}
+	if c.LinkNamespace != "" {
+		return c.LinkNamespace, true
+	}
+	for _, group := range c.PortGroups {
+		if group.LinkLocal {
+			return "", true
+		}
+	}
+	return "", false
 }
 
 func parseV2SourcePrefixes(values []string) ([]netip.Prefix, error) {
@@ -230,6 +254,9 @@ func (c v2Config) v2Endpoints(ports map[string]service.ProxyV2Ports) (map[string
 				set, ok := ports[address.PortSet]
 				if !ok {
 					return fmt.Errorf("endpoint %s: unknown port group %q", id, address.PortSet)
+				}
+				if c.PortGroups[address.PortSet].LinkLocal != (address.Source == "link-local") {
+					return fmt.Errorf("endpoint %s: link-local addresses require a dedicated link-local port group", id)
 				}
 				binding.PortSets[address.PortSet] = set
 				acl.groups[address.PortSet] = append(acl.groups[address.PortSet], address.Via...)

@@ -1,12 +1,13 @@
 package main
 
 import (
+	"encoding/json"
+	"math"
 	"net/netip"
 	"slices"
 	"strings"
 	"time"
 
-	"github.com/HiggsNet/photon/internal/photonlinux"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/HiggsNet/photon/pkg/routing"
@@ -14,7 +15,79 @@ import (
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
 )
 
-func buildProxyV2Directory(network *zone.NetworkState, local zone.ZonePath, now time.Time) (map[zone.ZonePath]service.ProxyV2Peer, []string) {
+// Policy can change as time crosses these boundaries without a store commit.
+func nextDirectoryBoundary(network *zone.NetworkState, now time.Time) time.Time {
+	var next time.Time
+	add := func(at time.Time) {
+		if at.After(now) && (next.IsZero() || at.Before(next)) {
+			next = at
+		}
+	}
+	addUnix := func(at int64) {
+		if at > 0 {
+			add(time.Unix(at, 0))
+		}
+	}
+	for _, state := range network.Zones {
+		if state == nil {
+			continue
+		}
+		if state.Authority != nil {
+			for _, key := range state.Authority.Keys {
+				addUnix(key.NotBefore)
+				if key.NotAfter > 0 && key.NotAfter < math.MaxInt64 {
+					addUnix(key.NotAfter + 1)
+				}
+			}
+		}
+		for _, delegation := range state.Delegations {
+			if delegation != nil && delegation.ExpiresAt != nil {
+				add(*delegation.ExpiresAt)
+			}
+		}
+		for _, delegation := range state.ParentProof {
+			if delegation != nil && delegation.ExpiresAt != nil {
+				add(*delegation.ExpiresAt)
+			}
+		}
+		for _, revocation := range state.Revocations {
+			if revocation != nil {
+				addUnix(revocation.RevokedAt)
+			}
+		}
+		for key, record := range state.Records {
+			if record == nil {
+				continue
+			}
+			switch {
+			case key == service.RecordKeyProxy:
+				if capability, err := service.ParseProxyCapability(record); err == nil {
+					add(capability.ExpiresAt)
+				}
+			case strings.HasPrefix(key, service.ProxyV2Prefix):
+				var lease service.ProxyV2Lease
+				if json.Unmarshal(record.Value, &lease) == nil {
+					addUnix(lease.ExpiresAt)
+				}
+			case key == ipsec.RecordKeyAddresses:
+				if addresses, err := ipsec.ParseAddressRecord(record); err == nil {
+					for _, address := range addresses.Addresses {
+						base := address.LastObserved
+						if base == 0 {
+							base = addresses.UpdatedAt
+						}
+						if base > 0 && address.TTLSeconds > 0 && base <= math.MaxInt64-address.TTLSeconds {
+							add(time.Unix(base+address.TTLSeconds, 1))
+						}
+					}
+				}
+			}
+		}
+	}
+	return next
+}
+
+func buildProxyV2Directory(network *zone.NetworkState, local zone.ZonePath, now time.Time, verifier *photoncrypto.Verifier) (map[zone.ZonePath]service.ProxyV2Peer, []string) {
 	peers := make(map[zone.ZonePath]service.ProxyV2Peer)
 	authorized, _ := routing.BuildAuthorizedRouteSet(network, now)
 	var mesh []string
@@ -24,7 +97,6 @@ func buildProxyV2Directory(network *zone.NetworkState, local zone.ZonePath, now 
 		}
 		slices.Sort(mesh)
 	}
-	verifier := new(photoncrypto.Verifier)
 	for owner, zs := range network.Zones {
 		if zs == nil || owner.IsRoot() {
 			continue
@@ -61,7 +133,7 @@ func buildProxyV2Directory(network *zone.NetworkState, local zone.ZonePath, now 
 			continue
 		}
 		if authorized != nil {
-			for _, local := range photonlinux.ExternalUpstreamSourcePrefixes(authorized, owner) {
+			for _, local := range routing.ExternalUpstreamSourcePrefixes(authorized, owner) {
 				for _, ann := range authorized.Announced[owner] {
 					if !ann.SharedAssignment && ann.Prefix.Contains(local.Addr()) {
 						peer.Mesh = append(peer.Mesh, local.Addr().String())
@@ -96,4 +168,32 @@ func buildProxyV2Directory(network *zone.NetworkState, local zone.ZonePath, now 
 		peers[owner] = peer
 	}
 	return peers, mesh
+}
+
+func buildProxyDirectory(network *zone.NetworkState, now time.Time, verifier *photoncrypto.Verifier) service.ProxyDirectory {
+	view := service.ProxyDirectory{Peers: make(map[zone.ZonePath]service.ProxyCapability)}
+	seen := make(map[string]zone.ZonePath)
+	for owner, zs := range network.Zones {
+		if zs == nil {
+			continue
+		}
+		raw := zs.Records[service.RecordKeyProxy]
+		if raw == nil || raw.Zone != owner {
+			continue
+		}
+		record, err := service.ParseProxyCapability(raw)
+		if err != nil || !record.Active || !record.ExpiresAt.After(now) ||
+			verifier.VerifyChain(network, owner, now) != nil || verifier.VerifyRecord(raw, zs.Authority, now) != nil {
+			continue
+		}
+		if record.SPKI != "" {
+			if previous, ok := seen[record.SPKI]; ok {
+				delete(view.Peers, previous)
+				continue
+			}
+			seen[record.SPKI] = owner
+		}
+		view.Peers[owner] = record
+	}
+	return view
 }

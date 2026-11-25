@@ -260,7 +260,7 @@ func v2DirectoryNodes(view service.ProxyDirectory, protocol string, target netip
 			candidate := v2DirectoryNode{v2DirectoryEndpoint: v2DirectoryEndpoint{
 				Zone: owner, Endpoint: id, Role: endpoint.Role, Discoverable: true, Links: []string{},
 			}}
-			for _, link := range []string{"h24", "h26", "h2p"} {
+			for _, link := range []string{"h24", "h26", "h2p", "h2l4", "h2l6"} {
 				hop := v2Hop{Zone: owner, Endpoint: id, Link: link}
 				for _, allowedProtocol := range protocols {
 					binding, ok := resolveV2Endpoint(view, hop, allowedProtocol, endpoint.Role, now)

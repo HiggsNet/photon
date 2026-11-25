@@ -73,7 +73,7 @@ func runV2(ctx context.Context, args []string) error {
 		return err
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	directory, err := openProxyDirectory(ctx, config.DirectorySocket)
+	directory, err := openProxyDirectoryWithRefresh(ctx, config.DirectorySocket, config.DirectoryRefresh)
 	if err != nil {
 		cancel()
 		return err
@@ -96,6 +96,16 @@ func runV2(ctx context.Context, args []string) error {
 		node.workers.Wait()
 		node.pool.close()
 	}()
+	if namespace, ok := config.directNamespace(); ok {
+		node.pool.directLinks = &directLinks{namespace: namespace}
+		node.pool.direct = &directPool{ctx: ctx, entries: make(map[directPoolKey]*directPoolEntry)}
+		node.pool.directLinks.refresh(ctx, config.DirectorySocket)
+		node.workers.Go(func() {
+			node.pool.directLinks.run(ctx, config.DirectorySocket, func() {
+				node.pool.direct.warmStaged(directory.snapshotV2(), node.pool.directLinks.current())
+			})
+		})
+	}
 	if err := node.start(); err != nil {
 		return err
 	}

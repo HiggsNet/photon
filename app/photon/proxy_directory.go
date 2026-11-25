@@ -2,20 +2,22 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	photonstate "github.com/HiggsNet/photon/internal/state"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
-	"github.com/HiggsNet/photon/pkg/core/zone"
-	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
 	"github.com/HiggsNet/photon/pkg/routing"
 	"github.com/HiggsNet/photon/pkg/service"
 	"github.com/HiggsNet/photon/pkg/transport/ipsec"
@@ -52,7 +54,10 @@ func (d *Daemon) startProxyDirectory(ctx context.Context) (func(), error) {
 	if d.Config == nil || d.Config.ProxyDirectorySocket == "" {
 		return func() {}, nil
 	}
-	return startProxySocket(ctx, d.Config.ProxyDirectorySocket, d.writeProxyDirectory)
+	epoch := rand.Text()
+	return startProxySocket(ctx, d.Config.ProxyDirectorySocket, func(conn net.Conn) {
+		d.writeProxyData(conn, epoch)
+	})
 }
 
 func (d *Daemon) startProxyPublisher(ctx context.Context) (func(), error) {
@@ -131,54 +136,105 @@ func startProxySocket(ctx context.Context, path string, serve func(net.Conn)) (f
 	}, nil
 }
 
-func (d *Daemon) writeProxyDirectory(conn net.Conn) {
+func (d *Daemon) writeProxyData(conn net.Conn, epoch string) {
 	defer conn.Close()
-	_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
-	prefixes := []string{service.RecordKeyProxy}
-	if d.Config.ProxyPublishSocket != "" {
-		prefixes = append(prefixes, routing.RecordKeyPrefixRoutes, routing.RecordKeyPrefixIPAMAssignments,
-			routing.RecordKeyPrefixIPAMPools, ipsec.RecordKeyAddresses)
-	}
-	view := d.State.Common.ReadDiscoveryRecordPrefixes("", prefixes...)
-	if view == nil {
+	_ = conn.SetDeadline(time.Now().Add(time.Second))
+	var request service.ProxyReadRequest
+	if err := json.NewDecoder(io.LimitReader(conn, 4096)).Decode(&request); err != nil {
 		return
 	}
-	directory := buildProxyDirectory(view.Network, d.now())
-	if d.Config.ProxyPublishSocket != "" {
-		directory.V2, directory.MeshPrefixes = buildProxyV2Directory(view.Network, view.ManagedZone, d.now())
+	reply := service.ProxyReadResponse{Epoch: epoch}
+	switch request.Kind {
+	case service.ProxyReadDirectory:
+		store := d.State.Common
+		reply.Revision = uint64(store.VerifiedRevision())
+		if request.Epoch != epoch || request.Revision != reply.Revision {
+			view := store.ReadDiscoveryRecordPrefixes("", service.RecordKeyProxy,
+				routing.RecordKeyPrefixRoutes, routing.RecordKeyPrefixIPAMAssignments, routing.RecordKeyPrefixIPAMPools,
+				ipsec.RecordKeyAddresses)
+			if view == nil {
+				return
+			}
+			reply.Revision = uint64(view.Revision)
+			reply.ManagedZone, reply.Network = view.ManagedZone, view.Network
+		}
+	case service.ProxyReadLinks:
+		reply.Links = d.proxyDirectLinks()
+	default:
+		return
 	}
-	directory.ManagedZone = view.ManagedZone
-	data, err := json.Marshal(directory)
-	if err == nil && len(data) < service.ProxyDirectoryMaxBytes {
+	data, err := json.Marshal(reply)
+	if err == nil && len(data) < service.ProxyReadMaxBytes {
 		_, _ = conn.Write(data)
 	}
 }
 
-func buildProxyDirectory(network *zone.NetworkState, now time.Time) service.ProxyDirectory {
-	view := service.ProxyDirectory{ValidUntil: now.Add(service.ProxyDirectoryTTL), Peers: make(map[zone.ZonePath]service.ProxyCapability)}
-	seen := make(map[string]zone.ZonePath)
-	verifier := new(photoncrypto.Verifier)
-	for owner, zs := range network.Zones {
-		if zs == nil {
-			continue
-		}
-		raw := zs.Records[service.RecordKeyProxy]
-		if raw == nil || raw.Zone != owner {
-			continue
-		}
-		record, err := service.ParseProxyCapability(raw)
-		if err != nil || !record.Active || !record.ExpiresAt.After(now) ||
-			verifier.VerifyChain(network, owner, now) != nil || verifier.VerifyRecord(raw, zs.Authority, now) != nil {
-			continue
-		}
-		if record.SPKI != "" {
-			if previous, ok := seen[record.SPKI]; ok {
-				delete(view.Peers, previous)
-				continue
-			}
-			seen[record.SPKI] = owner
-		}
-		view.Peers[owner] = record
+func (d *Daemon) proxyDirectLinks() []service.ProxyDirectLink {
+	instances, observation := d.linuxObservation.ipsecSnapshot()
+	if observation == nil {
+		return nil
 	}
-	return view
+	type sessionKey struct {
+		name string
+		id   uint32
+	}
+	families := make(map[sessionKey]string)
+	for _, sa := range observation.ActualSAs {
+		if !sa.Established || sa.Name == "" || sa.XFRMIfID == 0 || !strings.EqualFold(sa.ChildState, "INSTALLED") {
+			continue
+		}
+		remote, _, err := net.SplitHostPort(sa.RemoteEndpoint)
+		if err != nil {
+			remote = sa.RemoteEndpoint
+		}
+		address, err := netip.ParseAddr(remote)
+		if err != nil {
+			if endpoint, err := netip.ParseAddrPort(sa.Endpoint); err == nil {
+				address = endpoint.Addr()
+			}
+		}
+		if !address.IsValid() {
+			continue
+		}
+		family := "ipv6"
+		if address.Unmap().Is4() {
+			family = "ipv4"
+		}
+		families[sessionKey{sa.Name, sa.XFRMIfID}] = family
+	}
+	byID := make(map[string]ipsec.LinkInstance, len(instances))
+	for _, instance := range instances {
+		id := instance.LinkID
+		if id == "" {
+			id = instance.ID
+		}
+		byID[id] = instance
+	}
+	var links []service.ProxyDirectLink
+	for _, link := range buildLinkOutputs(instances, observation) {
+		if link.Readiness.Session != photonstate.LinkReadyReady || link.InterfaceName == "" ||
+			!link.LocalAddr.Is6() || !link.LocalAddr.IsLinkLocalUnicast() ||
+			!link.PeerAddr.Is6() || !link.PeerAddr.IsLinkLocalUnicast() {
+			continue
+		}
+		staged := link.RuntimeRole == photonstate.LinkRuntimeStaged
+		id := strings.TrimSuffix(link.ID, "#"+photonstate.LinkRuntimeStaged)
+		instance, ok := byID[id]
+		if !ok {
+			continue
+		}
+		session := sessionKey{instance.IKEName, instance.XFRMIfID}
+		if staged {
+			session = sessionKey{instance.StagedIKEName, instance.StagedXFRMIfID}
+		}
+		family := families[session]
+		if family == "" || family != photonstate.LinkPathFamily(link.PathKey) {
+			continue
+		}
+		links = append(links, service.ProxyDirectLink{
+			ID: id, Peer: link.PeerZone, Family: family, Generation: link.Generation, Staged: staged,
+			NetNS: link.NetNS, Interface: link.InterfaceName, Local: link.LocalAddr, Remote: link.PeerAddr,
+		})
+	}
+	return links
 }

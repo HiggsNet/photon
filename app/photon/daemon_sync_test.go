@@ -190,21 +190,42 @@ func TestDaemonEventLoopSyncSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer stopDirectory()
-	conn, err := net.DialTimeout("unix", serviceB.Config.ProxyDirectorySocket, time.Second)
-	if err != nil {
-		t.Fatal(err)
+	read := func(request service.ProxyReadRequest) service.ProxyReadResponse {
+		t.Helper()
+		conn, err := net.DialTimeout("unix", serviceB.Config.ProxyDirectorySocket, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(time.Second))
+		if err := json.NewEncoder(conn).Encode(request); err != nil {
+			t.Fatal(err)
+		}
+		var reply service.ProxyReadResponse
+		if err := json.NewDecoder(conn).Decode(&reply); err != nil {
+			t.Fatal(err)
+		}
+		return reply
 	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(time.Second))
-	var directory service.ProxyDirectory
-	if err := json.NewDecoder(conn).Decode(&directory); err != nil {
-		t.Fatal(err)
+	data := read(service.ProxyReadRequest{Kind: service.ProxyReadDirectory})
+	if data.Network == nil || data.Network.Zones["node-a.catofes."] == nil {
+		t.Fatalf("remote proxy records not returned: %+v", data)
 	}
-	if got := directory.Peers["node-a.catofes."]; got.Address != capability.Address || got.SPKI != capability.SPKI {
-		t.Fatalf("remote proxy discovery = %+v", got)
+	records := data.Network.Zones["node-a.catofes."].Records
+	if got, err := service.ParseProxyCapability(records[service.RecordKeyProxy]); err != nil || got.Address != capability.Address || got.SPKI != capability.SPKI {
+		t.Fatalf("remote proxy discovery = %+v (%v)", got, err)
 	}
-	if got := directory.V2["node-a.catofes."].Identity; got == nil || *got != identity {
+	var got service.ProxyV2Identity
+	if record := records[service.ProxyV2IdentityKey]; record == nil || json.Unmarshal(record.Value, &got) != nil || got != identity {
 		t.Fatalf("remote v2 proxy identity = %+v", got)
+	}
+	unchanged := read(service.ProxyReadRequest{Kind: service.ProxyReadDirectory, Epoch: data.Epoch, Revision: data.Revision})
+	if unchanged.Network != nil || unchanged.Epoch != data.Epoch || unchanged.Revision != data.Revision {
+		t.Fatalf("unchanged revision returned unexpected data: %+v", unchanged)
+	}
+	linkState := read(service.ProxyReadRequest{Kind: service.ProxyReadLinks})
+	if linkState.Network != nil || linkState.Epoch != data.Epoch {
+		t.Fatalf("link request returned unexpected data: %+v", linkState)
 	}
 }
 

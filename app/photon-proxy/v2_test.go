@@ -84,7 +84,7 @@ func (f *v2Fixture) view(path zone.ZonePath) service.ProxyDirectory {
 	if _, ok := copy[path]; !ok {
 		copy[path] = service.ProxyV2Peer{Mesh: []string{"127.0.0.1"}}
 	}
-	return service.ProxyDirectory{ManagedZone: path, ValidUntil: time.Now().Add(service.ProxyDirectoryTTL), V2: copy}
+	return service.ProxyDirectory{ManagedZone: path, ValidUntil: time.Now().Add(time.Minute), V2: copy}
 }
 
 func (f *v2Fixture) publisher(conn net.Conn, path zone.ZonePath) {
@@ -128,27 +128,22 @@ func newV2FixtureNode(t *testing.T, f *v2Fixture, path zone.ZonePath, config v2C
 	if config.TLS.Lifetime == 0 {
 		config.TLS = v2TLSConfig{Lifetime: 365 * 24 * time.Hour, RenewBefore: 30 * 24 * time.Hour, Overlap: time.Minute}
 	}
-	for socket, respond := range map[string]func(net.Conn){
-		config.PublishSocket:   func(conn net.Conn) { f.publisher(conn, path) },
-		config.DirectorySocket: func(conn net.Conn) { defer conn.Close(); _ = json.NewEncoder(conn).Encode(f.view(path)) },
-	} {
-		listener, err := net.Listen("unix", socket)
-		if err != nil {
-			t.Fatal(err)
-		}
-		fixtureWorkers.Go(func() {
-			defer listener.Close()
-			stop := context.AfterFunc(ctx, func() { _ = listener.Close() })
-			defer stop()
-			for {
-				conn, err := listener.Accept()
-				if err != nil {
-					return
-				}
-				respond(conn)
-			}
-		})
+	listener, err := net.Listen("unix", config.PublishSocket)
+	if err != nil {
+		t.Fatal(err)
 	}
+	fixtureWorkers.Go(func() {
+		defer listener.Close()
+		stop := context.AfterFunc(ctx, func() { _ = listener.Close() })
+		defer stop()
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			f.publisher(conn, path)
+		}
+	})
 	db, _, err := openRouteState(filepath.Join(dir, "state.db"), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -157,12 +152,13 @@ func newV2FixtureNode(t *testing.T, f *v2Fixture, path zone.ZonePath, config v2C
 	if err != nil {
 		t.Fatal(err)
 	}
-	directory, err := openProxyDirectory(ctx, config.DirectorySocket)
-	if err != nil {
-		t.Fatal(err)
-	}
+	directory := &proxyDirectory{view: f.view(path)}
 	node := &v2Node{ctx: ctx, config: config, db: db, state: state, directory: directory, pool: &v2DialPool{},
 		listeners: map[v2ListenerKey][]*v2Listener{}, errors: make(chan error, 1)}
+	if namespace, ok := config.directNamespace(); ok {
+		node.pool.directLinks = &directLinks{namespace: namespace}
+		node.pool.direct = &directPool{ctx: ctx, entries: make(map[directPoolKey]*directPoolEntry)}
+	}
 	var once sync.Once
 	stopNode := func() {
 		once.Do(func() {
