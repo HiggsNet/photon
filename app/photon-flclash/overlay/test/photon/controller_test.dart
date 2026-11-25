@@ -120,6 +120,32 @@ void main() {
   });
 
   test(
+    'proxy publication and cleanup failures keep the Photon lease',
+    () async {
+      const problem = FormatException('Invalid proxy template');
+      controller.onServicesChanged = (_) async => throw problem;
+      controller.onServicesInvalidated = () async {
+        throw StateError('Could not pause the Photon proxy profile');
+      };
+
+      await controller.start(allowed: true);
+      expect(controller.hasLease, isTrue);
+      expect(controller.observation?['tunnel_ready'], isTrue);
+      expect(controller.directory, isNull);
+      expect(controller.error.toString(), contains(problem.message));
+      expect(controller.error.toString(), contains('Could not pause'));
+      expect(backends.single.calls, ['start', 'status']);
+
+      controller.onServicesChanged = null;
+      controller.onServicesInvalidated = null;
+      await controller.refresh();
+      expect(controller.error, isNull);
+      expect(controller.directoryFresh, isTrue);
+      expect(backends.single.calls, ['start', 'status', 'status']);
+    },
+  );
+
+  test(
     'terminal close during startup joins the child and prohibits a restart',
     () async {
       final gate = Completer<void>();

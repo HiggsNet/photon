@@ -42,6 +42,38 @@ void main() {
     child: PhotonView(controller: controller, isWindows: true),
   );
 
+  photonTest('template editing and reset are offered without a tunnel', (
+    tester,
+  ) async {
+    final directory = Directory.systemTemp.createTempSync('photon-template-');
+    addTearDown(() => directory.deleteSync(recursive: true));
+    final file = File('${directory.path}/photon.proxy.yaml');
+    file.writeAsStringSync('rules: [');
+    controller.selectConfig('${directory.path}/photon.yaml');
+
+    await tester.pumpWidget(view());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Proxy services').first);
+    await tester.pumpAndSettle();
+    await tester.runAsync(() => file.exists());
+    await tester.pumpAndSettle();
+    expect(find.text('photon.proxy.yaml'), findsOneWidget);
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.widgetWithText(FilledButton, 'Switch to Photon profile'),
+          )
+          .onPressed,
+      isNull,
+    );
+
+    await tester.tap(find.widgetWithText(TextButton, 'Edit'));
+    await tester.pumpAndSettle();
+    expect(find.text('Edit YAML template', findRichText: true), findsOneWidget);
+    expect(find.text('Built-in rules', findRichText: true), findsOneWidget);
+    expect(backend.calls, isEmpty);
+  });
+
   testWidgets('new Photon users can start with settings or use existing YAML', (
     tester,
   ) async {

@@ -962,7 +962,7 @@ index 3a2f9df..5ca6dee 100644
  import 'package:fl_clash/providers/mitm.dart';
  import 'package:fl_clash/providers/providers.dart';
 diff --git a/lib/providers/actions/setup.dart b/lib/providers/actions/setup.dart
-index 3f1e2c6..e75bb72 100644
+index 3f1e2c6..747f613 100644
 --- a/lib/providers/actions/setup.dart
 +++ b/lib/providers/actions/setup.dart
 @@ -185,13 +185,17 @@ class SetupAction extends _$SetupAction {
@@ -996,7 +996,15 @@ index 3f1e2c6..e75bb72 100644
  
    /// An excluded SSID parks the listener without ending the run.
    void syncSuspend() {
-@@ -498,13 +503,15 @@ class SetupAction extends _$SetupAction {
+@@ -482,6 +487,7 @@ class SetupAction extends _$SetupAction {
+   Future<BuiltProfile> getProfile({
+     required SetupState setupState,
+     required PatchClashConfig patchConfig,
++    bool useBuiltinPhotonRules = false,
+   }) async {
+     final profileId = setupState.profileId;
+     if (profileId == null) {
+@@ -498,13 +504,15 @@ class SetupAction extends _$SetupAction {
        ),
      );
      final appendSystemDns = networkSetting.appendSystemDns;
@@ -1014,16 +1022,33 @@ index 3f1e2c6..e75bb72 100644
          ? await _core.getProfileBase(profileId)
          : null;
      Map<String, dynamic> rawConfig = isCustom
-@@ -521,6 +528,8 @@ class SetupAction extends _$SetupAction {
+@@ -515,19 +523,34 @@ class SetupAction extends _$SetupAction {
+               groups: setupState.proxyGroups,
+             ),
+           }
++        : photon
++        ? await readPhotonProfile(profileId).onError<Object>((error, stack) {
++            if (useBuiltinPhotonRules) return <String, dynamic>{};
++            Error.throwWithStackTrace(error, stack);
++          })
+         : profileBase?.base.config ?? await _core.readConfig(profileId);
+     final proxyGroups = isCustom ? setupState.proxyGroups : <ProxyGroup>[];
+     final rules = isCustom ? setupState.rules : <Rule>[];
      if (hasScript) {
        rawConfig = await handleEvaluate(scriptContent!, rawConfig);
      }
-+    final blocked = photon && !photonProxyBridge.ready;
-+    if (blocked) rawConfig = blockedPhotonProfile(rawConfig);
++    final blocked =
++        photon && (useBuiltinPhotonRules || !photonProxyBridge.ready);
++    if (blocked) {
++      rawConfig = blockedPhotonProfile(
++        rawConfig,
++        keepTemplate:
++            !useBuiltinPhotonRules && await photonProxyBridge.templateExists(),
++      );
++    }
      final directory = await appPath.profilesPath;
      final injected = await _resolveInjectedProviders(
        setupState,
-@@ -527,7 +536,8 @@ class SetupAction extends _$SetupAction {
        proxyGroups: proxyGroups,
        rules: rules,
      );
@@ -1033,7 +1058,7 @@ index 3f1e2c6..e75bb72 100644
        MakeRealProfileState(
          rules: rules,
          proxyGroups: proxyGroups,
-@@ -536,21 +545,24 @@ class SetupAction extends _$SetupAction {
+@@ -536,21 +559,24 @@ class SetupAction extends _$SetupAction {
          profilesPath: directory,
          profileId: profileId,
          rawConfig: rawConfig,
@@ -1064,7 +1089,7 @@ index 3f1e2c6..e75bb72 100644
        ),
      );
      if (profileBase == null) {
-@@ -638,6 +650,10 @@ class SetupAction extends _$SetupAction {
+@@ -638,6 +664,10 @@ class SetupAction extends _$SetupAction {
    }
  
    PatchClashConfig _effectivePatchConfig(PatchClashConfig patchConfig) {
@@ -1075,6 +1100,83 @@ index 3f1e2c6..e75bb72 100644
      if (ref.read(safeModeProvider)) {
        return patchConfig.copyWith(
          tun: patchConfig.tun.copyWith(enable: false),
+@@ -719,10 +749,26 @@ class SetupAction extends _$SetupAction {
+   Future<_SetupTaskResult> _setupConfig({
+     bool force = false,
+     bool silence = false,
++    bool useBuiltinPhotonRules = false,
+     Future<void> Function()? preloadInvoke,
+     FutureOr Function()? onUpdated,
+   }) async {
+     var profile = ref.read(currentProfileProvider) ?? recoverMissingProfile();
++    final profileId = profile?.id;
++    final blockedPhoton =
++        profile?.url == photonProfileSource && !photonProxyBridge.ready;
++    bool canRetryWithBuiltinRules() =>
++        !useBuiltinPhotonRules &&
++        blockedPhoton &&
++        ref.read(currentProfileIdProvider) == profileId &&
++        !photonProxyBridge.ready;
++    Future<_SetupTaskResult> retryWithBuiltinRules() => _setupConfig(
++      force: force,
++      silence: silence,
++      useBuiltinPhotonRules: true,
++      preloadInvoke: preloadInvoke,
++      onUpdated: onUpdated,
++    );
+     // A refresh failure is surfaced by safeRun; setup keeps the old profile.
+     final nextProfile = await globalState.safeRun(
+       () => profile?.checkAndUpdateAndCopy(
+@@ -746,9 +792,16 @@ class SetupAction extends _$SetupAction {
+     final realProfile = await globalState.safeRun(() async {
+       final state = await ref.read(setupStateProvider(profile?.id).future);
+       setupState = state;
+-      return getProfile(setupState: state, patchConfig: realPatchConfig);
++      return getProfile(
++        setupState: state,
++        patchConfig: realPatchConfig,
++        useBuiltinPhotonRules: useBuiltinPhotonRules,
++      );
+     }, title: 'build profile');
+     final profileFailed = realProfile == null;
++    if (profileFailed && canRetryWithBuiltinRules()) {
++      return retryWithBuiltinRules();
++    }
+     final setupParams = _setupParams.copyWith(base: realProfile?.base);
+     final inputs = switch (setupState) {
+       final state? when !profileFailed => (
+@@ -780,6 +833,7 @@ class SetupAction extends _$SetupAction {
+     // Recaptured so _start's catch can roll back after safeRun swallows it.
+     (Object, StackTrace)? handoffFailure;
+     var setupFailed = false;
++    var configRejected = false;
+     await globalState.loadingRun(
+       () async {
+         try {
+@@ -809,6 +863,8 @@ class SetupAction extends _$SetupAction {
+             if (error.code != 'config_rejected') {
+               rethrow;
+             }
++            configRejected = true;
++            if (canRetryWithBuiltinRules()) return;
+             globalState.lastConfigCounts = configCountsOf(const {});
+             await globalState.safeRun(() => onUpdated?.call());
+             throw MessageException(error.message);
+@@ -833,10 +889,13 @@ class SetupAction extends _$SetupAction {
+       tag: !silence ? LoadingTag.proxies : null,
+     );
+     _lastPushDuration = pushWatch.elapsed;
++    if (configRejected && canRetryWithBuiltinRules()) {
++      return retryWithBuiltinRules();
++    }
+     if (handoffFailure != null) {
+       Error.throwWithStackTrace(handoffFailure!.$1, handoffFailure!.$2);
+     }
+-    if (setupFailed || profileFailed) {
++    if (setupFailed || profileFailed || configRejected) {
+       return _SetupTaskResult.failed;
+     }
+     return _SetupTaskResult.completed;
 diff --git a/lib/providers/actions/system.dart b/lib/providers/actions/system.dart
 index df905f7..990086b 100644
 --- a/lib/providers/actions/system.dart

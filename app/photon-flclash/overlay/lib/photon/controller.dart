@@ -117,12 +117,7 @@ final class PhotonController extends ChangeNotifier {
           error is PhotonControlException && error.code == 'unavailable';
       if (error is! TimeoutException && !unavailable) rethrow;
       _observation = null;
-      _error = error;
-      try {
-        await _invalidateServices();
-      } catch (cleanupError) {
-        _error = StateError('Proxy cleanup failed: $cleanupError');
-      }
+      await _invalidateServicesAfterError(error);
       return;
     }
     await _refreshServices(backend);
@@ -154,13 +149,21 @@ final class PhotonController extends ChangeNotifier {
       });
       await onServicesChanged?.call(next);
     } catch (error) {
-      _error = error;
-      await _invalidateServices();
+      await _invalidateServicesAfterError(error);
     }
   }
 
   Future<void> applyProxies(Future<void> Function() apply) =>
       _enqueue(apply, cleanupOnError: false);
+
+  Future<void> _invalidateServicesAfterError(Object error) async {
+    _error = error;
+    try {
+      await _invalidateServices();
+    } catch (cleanupError) {
+      _error = StateError('$error\nProxy cleanup failed: $cleanupError');
+    }
+  }
 
   Future<void> _invalidateServices() async {
     _expiry?.cancel();

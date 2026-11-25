@@ -180,7 +180,8 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
                             onChanged: (value) =>
                                 setState(() => _filter = value.toLowerCase()),
                           ),
-                        if (_page == _Page.services && status != null)
+                        if (_page == _Page.services &&
+                            (status != null || (config != null && allowed)))
                           _proxyControls(l, status, config, allowed),
                         if (_page == _Page.overview && config == null)
                           Card(
@@ -506,13 +507,13 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
 
   Widget _proxyControls(
     AppLocalizations l,
-    Map<String, dynamic> status,
+    Map<String, dynamic>? status,
     String? config,
     bool allowed,
   ) {
     final directory = owner.directory;
     final hasEndpoints = directory?.endpoints.isNotEmpty == true;
-    final ready = status['tunnel_ready'] == true;
+    final ready = status?['tunnel_ready'] == true;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -552,14 +553,15 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
               ],
             ),
             if (config != null && allowed) ...[
-              PhotonProxySelectionView(
-                directory: directory,
-                load: photonProxyBridge.loadSelection,
-                onSave: (selection) => owner.applyProxies(
-                  () => photonProxyBridge.saveSelection(selection),
+              if (status != null)
+                PhotonProxySelectionView(
+                  directory: directory,
+                  load: photonProxyBridge.loadSelection,
+                  onSave: (selection) => owner.applyProxies(
+                    () => photonProxyBridge.saveSelection(selection),
+                  ),
+                  enabled: !owner.busy && !owner.closed,
                 ),
-                enabled: !owner.busy && !owner.closed,
-              ),
               _templateControls(l, config),
             ],
           ],
@@ -710,23 +712,25 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
       try {
         if (source == null) {
           if (await file.exists()) await file.delete();
+          changed = true;
+          if (widget.controller == null) {
+            await photonProxyBridge.templateRemoved();
+          }
         } else {
           await photonProxyBridge.saveTemplate(config, source);
+          changed = true;
         }
-        changed = true;
       } catch (error) {
         problem = error;
       }
     });
     if (!mounted) return changed;
+    if (changed) setState(() => _hasTemplate = file.exists());
     if (problem != null) {
       await dialogs.showAlert(message: TextSpan(text: '$problem'));
       return false;
     }
-    if (changed) {
-      setState(() => _hasTemplate = file.exists());
-      await owner.refresh();
-    }
+    if (changed) await owner.refresh();
     return changed;
   }
 

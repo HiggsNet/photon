@@ -666,9 +666,14 @@ Iterable<String> _whitelistFakeIPRules(String pattern) sync* {
 String encodePhotonProfile(Map<String, dynamic> profile) =>
     const JsonEncoder.withIndent('  ').convert(profile);
 
-Map<String, dynamic> blockedPhotonProfile(Map<String, dynamic> profile) {
+Map<String, dynamic> blockedPhotonProfile(
+  Map<String, dynamic> profile, {
+  bool keepTemplate = true,
+}) {
   final providers = profile['proxy-providers'];
-  if (providers is Map && providers.containsKey(_photonProvider)) {
+  final hasTemplate =
+      providers is Map && providers.containsKey(_photonProvider);
+  if (keepTemplate && hasTemplate) {
     return {
       ...profile,
       'proxy-providers': {
@@ -691,6 +696,14 @@ Map<String, dynamic> blockedPhotonProfile(Map<String, dynamic> profile) {
           else
             group,
       ],
+    };
+  }
+  final protection = profile[_photonProtection];
+  if (!keepTemplate && hasTemplate && protection is Map) {
+    return {
+      'ipv6': true,
+      _photonProtection: protection,
+      'rules': ['MATCH,REJECT'],
     };
   }
   return {

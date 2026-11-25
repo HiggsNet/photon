@@ -142,6 +142,19 @@ final class PhotonProxyBridge {
     return _template;
   }
 
+  Future<bool> templateExists() async {
+    final configPath =
+        photonController.configPath ??
+        await photonController.preferences?.configPath();
+    return configPath != null &&
+        await photonProxyTemplateFile(configPath).exists();
+  }
+
+  Future<void> templateRemoved() async {
+    _blockedProfileId = null;
+    if (!ready) await _invalidate();
+  }
+
   /// Called on the controller queue so an in-flight refresh cannot publish
   /// between validating and replacing the template.
   Future<void> saveTemplate(String configPath, String source) async {
