@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -23,11 +24,13 @@ const (
 	xfrmDisableAddrGen
 	xfrmReplaceAddr
 	xfrmDeleteAddr
+	xfrmSetMTU
 )
 
 type xfrmMutation struct {
 	kind   xfrmMutationKind
 	ifID   uint32
+	mtu    uint32
 	target NetNSSpec
 	prefix netip.Prefix
 }
@@ -117,17 +120,7 @@ func (d SystemXFRMDriver) ensureInterface(ctx context.Context, spec TransportLin
 	if err := d.EnsureNamespace(ctx, netns); err != nil {
 		return err
 	}
-	if d.linkExists(ctx, netns, spec.InterfaceName) {
-		if err := d.disableIPv6AddrGen(ctx, netns, spec.InterfaceName); err != nil {
-			return err
-		}
-		if err := d.enableMulticast(ctx, netns, spec.InterfaceName); err != nil {
-			return err
-		}
-		if err := d.setLinkUp(ctx, netns, spec.InterfaceName); err != nil {
-			return err
-		}
-	} else {
+	if !d.linkExists(ctx, netns, spec.InterfaceName) {
 		stateNetNS := d.stateNetNS()
 		if d.linkExists(ctx, stateNetNS, spec.InterfaceName) {
 			if err := d.moveLinkFrom(ctx, stateNetNS, spec.InterfaceName, netns); err != nil {
@@ -141,15 +134,20 @@ func (d SystemXFRMDriver) ensureInterface(ctx context.Context, spec TransportLin
 				return err
 			}
 		}
-		if err := d.disableIPv6AddrGen(ctx, netns, spec.InterfaceName); err != nil {
+	}
+	if spec.InterfaceMTU != 0 {
+		if err := d.setLinkMTU(ctx, netns, spec.InterfaceName, spec.InterfaceMTU); err != nil {
 			return err
 		}
-		if err := d.enableMulticast(ctx, netns, spec.InterfaceName); err != nil {
-			return err
-		}
-		if err := d.setLinkUp(ctx, netns, spec.InterfaceName); err != nil {
-			return err
-		}
+	}
+	if err := d.disableIPv6AddrGen(ctx, netns, spec.InterfaceName); err != nil {
+		return err
+	}
+	if err := d.enableMulticast(ctx, netns, spec.InterfaceName); err != nil {
+		return err
+	}
+	if err := d.setLinkUp(ctx, netns, spec.InterfaceName); err != nil {
+		return err
 	}
 	return d.enableInterfaceForwarding(ctx, netns, spec.InterfaceName)
 }
@@ -188,6 +186,7 @@ func (d SystemXFRMDriver) inspectLink(ctx context.Context, spec TransportLinkSpe
 	state.FlagsKnown = link.flagsKnown
 	state.InterfaceUp = link.up
 	state.Multicast = link.multicast
+	state.MTU = link.mtu
 	if state.InterfaceExists {
 		state.Addresses, err = d.inspectInterfaceAddresses(ctx, netns, spec.InterfaceName)
 		if err != nil {
@@ -389,13 +388,14 @@ type xfrmInterfaceLinkState struct {
 	flagsKnown bool
 	up         bool
 	multicast  bool
+	mtu        uint32
 }
 
 func (d SystemXFRMDriver) inspectInterfaceLink(ctx context.Context, netns NetNSSpec, name string) (xfrmInterfaceLinkState, error) {
 	if link, found, ok := d.lookupNetlink(ctx, netns, name); ok {
 		return xfrmInterfaceLinkState{
 			exists: found, flagsKnown: link.state.FlagsKnown,
-			up: link.state.InterfaceUp, multicast: link.state.Multicast,
+			up: link.state.InterfaceUp, multicast: link.state.Multicast, mtu: link.state.MTU,
 		}, nil
 	}
 	out, err := d.outputInNetNS(ctx, netns, "link", "show", "dev", name)
@@ -403,11 +403,20 @@ func (d SystemXFRMDriver) inspectInterfaceLink(ctx context.Context, netns NetNSS
 		return xfrmInterfaceLinkState{}, nil
 	}
 	flags, ok := parseIPLinkFlags(string(out))
+	var mtu uint64
+	fields := strings.Fields(string(out))
+	for i := 0; i+1 < len(fields); i++ {
+		if fields[i] == "mtu" {
+			mtu, _ = strconv.ParseUint(fields[i+1], 10, 32)
+			break
+		}
+	}
 	return xfrmInterfaceLinkState{
 		exists:     true,
 		flagsKnown: ok,
 		up:         flags["UP"],
 		multicast:  flags["MULTICAST"],
+		mtu:        uint32(mtu),
 	}, nil
 }
 
@@ -555,6 +564,10 @@ func (d SystemXFRMDriver) addXFRMInterface(ctx context.Context, netns NetNSSpec,
 
 func (d SystemXFRMDriver) setLinkUp(ctx context.Context, netns NetNSSpec, name string) error {
 	return d.mutateLink(ctx, netns, name, xfrmMutation{kind: xfrmUp}, "link", "set", name, "up")
+}
+
+func (d SystemXFRMDriver) setLinkMTU(ctx context.Context, netns NetNSSpec, name string, mtu uint32) error {
+	return d.mutateLink(ctx, netns, name, xfrmMutation{kind: xfrmSetMTU, mtu: mtu}, "link", "set", name, "mtu", strconv.FormatUint(uint64(mtu), 10))
 }
 
 func (d SystemXFRMDriver) enableMulticast(ctx context.Context, netns NetNSSpec, name string) error {

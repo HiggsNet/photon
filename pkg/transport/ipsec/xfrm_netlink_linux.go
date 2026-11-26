@@ -183,6 +183,11 @@ func decodeRouteLink(netns NetNSSpec, data []byte) (observedInterface, uint32, e
 		switch kind {
 		case unix.IFLA_IFNAME:
 			link.state.InterfaceName = string(bytes.TrimRight(value, "\x00"))
+		case unix.IFLA_MTU:
+			if len(value) != 4 {
+				return unix.EINVAL
+			}
+			link.state.MTU = binary.NativeEndian.Uint32(value)
 		case unix.IFLA_LINKINFO:
 			var info []byte
 			if err := visitRouteAttrs(value, func(kind uint16, value []byte) error {

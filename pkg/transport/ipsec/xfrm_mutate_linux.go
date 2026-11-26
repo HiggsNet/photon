@@ -76,6 +76,8 @@ func encodeXFRMMutation(index int, name string, op xfrmMutation, targetFD int) (
 		return unix.RTM_DELLINK, 0, payload
 	case xfrmMove:
 		payload = appendRouteAttr(payload, unix.IFLA_NET_NS_FD, routeUint32(uint32(targetFD)))
+	case xfrmSetMTU:
+		payload = appendRouteAttr(payload, unix.IFLA_MTU, routeUint32(op.mtu))
 	case xfrmUp, xfrmMulticast:
 		flag := uint32(unix.IFF_UP)
 		if op.kind == xfrmMulticast {

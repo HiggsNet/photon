@@ -19,6 +19,7 @@ type xfrmBatchGroup struct {
 
 type ipJSONLink struct {
 	IfName          string   `json:"ifname"`
+	MTU             uint32   `json:"mtu"`
 	Flags           []string `json:"flags"`
 	IPv6AddrGenMode string   `json:"inet6_addr_gen_mode"`
 	LinkInfo        struct {
@@ -232,6 +233,7 @@ func (d SystemXFRMDriver) inspectLinksInNamespace(ctx context.Context, netns Net
 		state.InterfaceExists = exists
 		if exists {
 			state.XFRMIfID = observed.XFRMIfID
+			state.MTU = observed.MTU
 			state.FlagsKnown = observed.FlagsKnown
 			state.InterfaceUp = observed.InterfaceUp
 			state.Multicast = observed.Multicast
@@ -294,6 +296,7 @@ func observedXFRMLink(netns NetNSSpec, link ipJSONLink, addresses []netip.Prefix
 		NetNS:                netns,
 		InterfaceName:        link.IfName,
 		XFRMIfID:             uint32(link.LinkInfo.InfoData.IfID),
+		MTU:                  link.MTU,
 		NamespaceExists:      true,
 		InterfaceExists:      true,
 		FlagsKnown:           link.Flags != nil,
@@ -427,6 +430,11 @@ func (d SystemXFRMDriver) ensureObservedInterfaces(ctx context.Context, observed
 					return err
 				}
 				continue
+			}
+			if item.Spec.InterfaceMTU != 0 && state.MTU != item.Spec.InterfaceMTU {
+				if err := d.setLinkMTU(ctx, netns, item.Spec.InterfaceName, item.Spec.InterfaceMTU); err != nil {
+					return err
+				}
 			}
 			if !state.IPv6AddrGenModeKnown || !state.IPv6AddrGenDisabled {
 				if err := d.disableIPv6AddrGen(ctx, netns, item.Spec.InterfaceName); err != nil {

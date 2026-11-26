@@ -39,6 +39,14 @@ func TestOverlayPeerOverrides(t *testing.T) {
 		ipv6.Address != netip.MustParseAddr("2001:db8::40") || ipv6.NATTPort != nil {
 		t.Fatalf("unexpected peer override: %+v", override)
 	}
+	groups, err = parseOverlayYAML(prefix + "      - {peer: edge.example., mtu: 1420, mtu_by_family: {ipv4: 1400}}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	override = groups[0].PeerOverrides[0]
+	if override.MTU == nil || *override.MTU != 1420 || override.MTUByFamily[ipsec.FamilyIPv4] != 1400 {
+		t.Fatalf("unexpected MTU override: %+v", override)
+	}
 	for _, input := range []string{
 		"      - {peer: '*.example.', role: out}\n",
 		"      - {peer: edge.example, role: out}\n",
@@ -49,6 +57,11 @@ func TestOverlayPeerOverrides(t *testing.T) {
 		"      - {peer: edge.example., endpoints: {ipv6: {address: 'fe80::40'}}}\n",
 		"      - {peer: edge.example., endpoints: {ipv4: {address: 192.0.2.40, natt_port: 500}}}\n",
 		"      - {peer: edge.example., endpoints: {ipv4: {address: 192.0.2.40, natt_port: 0}}}\n",
+		"      - {peer: edge.example., mtu: 0}\n",
+		"      - {peer: edge.example., mtu: 1279}\n",
+		"      - {peer: edge.example., mtu: 65536}\n",
+		"      - {peer: edge.example., mtu_by_family: {dual: 1400}}\n",
+		"      - {peer: edge.example., mtu_by_family: {ipv6: 0}}\n",
 	} {
 		if _, err := parseOverlayYAML(prefix + input); err == nil {
 			t.Errorf("accepted invalid override %s", input)

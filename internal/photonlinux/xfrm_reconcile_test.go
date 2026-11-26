@@ -139,6 +139,32 @@ func TestXFRMReconcileFallsBackWhenBatchObservationFails(t *testing.T) {
 	}
 }
 
+func TestXFRMReconcileRepairsMTUWithoutFilteringSA(t *testing.T) {
+	spec := ipsec.TransportLinkSpec{
+		OverlayID: "main", LinkID: "link-a", TransportID: "ipsec-a",
+		InterfaceName: "phx1", NetNS: "photon", XFRMIfID: 1, InterfaceMTU: 1400,
+	}
+	inst := ipsec.NewLinkInstance(spec, ipsec.LinkStateUp, time.Unix(4000, 0))
+	instances := map[string]ipsec.LinkInstance{inst.ID: inst}
+	state := healthyObservedXFRMState(spec)
+	state.MTU = 1500
+	observed := &XFRMObservations{links: map[string]ipsec.XFRMLinkState{xfrmObservationKey(spec): state}}
+	driver := &batchObservedIPsecDriver{}
+	platform := mustNewLinuxDriver(t, LinuxDriverOptions{IPsecDriver: driver, XFRMDriver: driver})
+	desired := []ipsec.TransportLinkSpec{spec}
+	sas := []ipsec.SAState{{Name: spec.TransportID, XFRMIfID: spec.XFRMIfID, Established: true}}
+	filtered, missing, missingDesired, err := platform.FilterSAsWithMissingXFRMLinks(t.Context(), desired, instances, sas, observed)
+	if err != nil || len(filtered) != 1 || len(missing) != 0 || len(missingDesired) != 0 {
+		t.Fatalf("sas = %+v, missing = %+v, missingDesired = %+v, err = %v", filtered, missing, missingDesired, err)
+	}
+	if err := platform.MaintainXFRMInterfaces(t.Context(), desired, instances, nil, nil, nil, observed); err != nil {
+		t.Fatal(err)
+	}
+	if driver.observedEnsureCall != 1 || driver.inspectCalls != 0 || len(driver.Interfaces) != 0 {
+		t.Fatalf("repair calls = %d, extra inspections = %d, full ensures = %v", driver.observedEnsureCall, driver.inspectCalls, driver.Interfaces)
+	}
+}
+
 func TestXFRMReconcileReportsMissingDesiredDuringRotation(t *testing.T) {
 	desired := ipsec.TransportLinkSpec{LinkID: "link-a", TransportID: "ipsec-a-r2", InterfaceName: "phx-new", XFRMIfID: 2}
 	previous := desired

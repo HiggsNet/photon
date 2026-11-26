@@ -87,9 +87,11 @@ type LinkGroupSpec struct {
 }
 
 type PeerOverride struct {
-	Peer      zone.ZonePath               `yaml:"peer"`
-	Role      string                      `yaml:"role"`
-	Endpoints map[string]EndpointOverride `yaml:"endpoints"`
+	Peer        zone.ZonePath               `yaml:"peer"`
+	Role        string                      `yaml:"role"`
+	Endpoints   map[string]EndpointOverride `yaml:"endpoints"`
+	MTU         *uint32                     `yaml:"mtu"`
+	MTUByFamily map[string]uint32           `yaml:"mtu_by_family"`
 }
 
 type EndpointOverride struct {
@@ -145,6 +147,10 @@ type TransportLinkSpec struct {
 	// InitiatorRole is a runtime planner/reconcile hint. It does not affect the
 	// StrongSwan configuration and is excluded from the spec hash.
 	InitiatorRole string
+
+	// InterfaceMTU is local XFRM state, excluded from the connection spec
+	// hash. Zero leaves the interface MTU unmanaged.
+	InterfaceMTU uint32 `json:"-"`
 }
 
 type TransportLinkOptions struct {
@@ -254,8 +260,19 @@ func (g LinkGroupSpec) Validate() error {
 		if override.Role != "" && !validRole(override.Role) {
 			return fmt.Errorf("peer_overrides %s: unsupported role %q", override.Peer, override.Role)
 		}
-		if len(override.Endpoints) == 0 && override.Role == "" {
-			return fmt.Errorf("peer_overrides %s: endpoints or role is required", override.Peer)
+		if len(override.Endpoints) == 0 && override.Role == "" && override.MTU == nil && len(override.MTUByFamily) == 0 {
+			return fmt.Errorf("peer_overrides %s: endpoints, role, mtu or mtu_by_family is required", override.Peer)
+		}
+		if override.MTU != nil && !validInterfaceMTU(*override.MTU) {
+			return fmt.Errorf("peer_overrides %s: mtu %d is outside [1280, 65535]", override.Peer, *override.MTU)
+		}
+		for family, mtu := range override.MTUByFamily {
+			if !validFamily(family) {
+				return fmt.Errorf("peer_overrides %s: unsupported mtu_by_family address family %q", override.Peer, family)
+			}
+			if !validInterfaceMTU(mtu) {
+				return fmt.Errorf("peer_overrides %s: mtu_by_family.%s value %d is outside [1280, 65535]", override.Peer, family, mtu)
+			}
 		}
 		for family, endpoint := range override.Endpoints {
 			addr := endpoint.Address
@@ -302,6 +319,10 @@ func (g LinkGroupSpec) Validate() error {
 
 func validOverridePeer(peer zone.ZonePath) bool {
 	return peer.Valid() && !peer.IsRoot() && !strings.ContainsAny(string(peer), "*?[] \t\r\n")
+}
+
+func validInterfaceMTU(mtu uint32) bool {
+	return mtu >= 1280 && mtu <= 65535
 }
 
 func (g LinkGroupSpec) peerOverride(peer zone.ZonePath) PeerOverride {

@@ -78,7 +78,7 @@ func TestXFRMNetlinkMatchesIP(t *testing.T) {
 		return nil, fmt.Errorf("unexpected fallback to %s %v", command, args)
 	}
 	spec := TransportLinkSpec{
-		InterfaceName: "phxnl1", XFRMIfID: 424243, NetNS: ns,
+		InterfaceName: "phxnl1", XFRMIfID: 424243, NetNS: ns, InterfaceMTU: 1400,
 		LocalTunnelAddr: netip.MustParseAddr("fd00:4242::2"),
 	}
 	if err := driver.EnsureInterface(ctx, spec); err != nil {
@@ -94,9 +94,17 @@ func TestXFRMNetlinkMatchesIP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(states) != 1 || !states[0].InterfaceForwarding || !states[0].NamespaceForwarding ||
+	if len(states) != 1 || states[0].MTU != 1400 || !states[0].InterfaceForwarding || !states[0].NamespaceForwarding ||
 		!reflect.DeepEqual(states[0].Addresses, []netip.Prefix{netip.MustParsePrefix("fd00:4242::2/64")}) {
 		t.Fatalf("unexpected state %+v", states)
+	}
+	spec.InterfaceMTU = 1420
+	if err := driver.EnsureObservedInterfaces(ctx, []XFRMObservedInterface{{Spec: spec, State: states[0]}}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := driver.InspectLink(ctx, spec)
+	if err != nil || state.MTU != 1420 || !state.InterfaceUp || !reflect.DeepEqual(state.Addresses, states[0].Addresses) {
+		t.Fatalf("after changing MTU: state = %+v, err = %v", state, err)
 	}
 	if err := driver.DeleteInterface(ctx, spec.InterfaceName); err != nil {
 		t.Fatal(err)

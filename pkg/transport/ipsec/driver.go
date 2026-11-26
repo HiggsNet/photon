@@ -117,6 +117,7 @@ type XFRMLinkState struct {
 	NetNS                    NetNSSpec
 	InterfaceName            string
 	XFRMIfID                 uint32
+	MTU                      uint32
 	NamespaceExists          bool
 	InterfaceExists          bool
 	FlagsKnown               bool

@@ -216,6 +216,7 @@ overlays:
     peer_overrides:
       - peer: edge.catofes.
         role: out
+        mtu_by_family: {ipv4: 1400}
         endpoints:
           ipv4: {address: 192.0.2.40, natt_port: 44500}
           ipv6: {address: "2001:db8::40"}
@@ -246,9 +247,10 @@ overlays:
 - `default_path_mode`：远端候选地址的建链模式，常用 `family-redundant`，按 IPv4/IPv6 family 选 contact point；`exhaustive` 会保留更多候选。
 - `address_source_order`：可选的对端地址来源允许列表及顺序，例如 `manual-address`、`manual-dns`、`discovery`、`reflector`。默认不区分三种显式来源的先后，按宣告的 priority 选择；显式配置时未列出的来源被排除，同层候选按该来源顺序选择。它不把 Gossip 兜底提升到显式层，也不阻止对退避来源进行回退。
 - `max_peers` / `max_links_per_peer`：限制本 group 参与的 peer 数量和每个 peer 的 link 数量。
-- `peer_overrides` 按 overlay 和完整 peer zone 覆盖本机建链配置，`role` 与 `endpoints` 可分别设置。
+- `peer_overrides` 按 overlay 和完整 peer zone 覆盖本机建链配置，各字段可单独设置。
   - `role` 取 `out`、`in` 或 `both`，省略时使用本机的 `ipsec.role`。双方从签名的 `ipsec/overlays/<id>` 读取彼此的覆盖角色，再按既有规则选角。配置 `out` 且对端使用 `both` 时，本机主动拨号，对端仅应答。两端都是 `out` 时跳过该链路并报告 `role_mismatch`。两端都是 `in` 时都加载应答配置，等待入站。旧版 Photon 和 `connect` / `deny` 的角色筛选继续读取全局角色。角色覆盖控制 Photon 的拨号调度，StrongSwan 的入站认证规则照常生效。
   - `endpoints.ipv4` 和 `endpoints.ipv6` 只用于本机向该 peer 拨号。配置其中一个地址族后，同族只拨指定的 IP，其他地址族沿用原规则。省略 `natt_port` 时沿用对端签名的端口和 generation。显式端口要求对端使用 `fixed` 模式，并且指定端口能到达对端当前的 NAT-T 监听。固定端点不发布到 Gossip，对端签名身份、传输密钥、overlay 准入和地址族限制仍然生效。
+  - `mtu` 设置该 peer 所有本机 XFRM 接口的内层 IP MTU，单位为字节，范围为 1280–65535。`mtu_by_family.ipv4` 和 `mtu_by_family.ipv6` 匹配 `family-redundant` 模式下各自的外层地址族，优先于 `mtu`。`exhaustive` 模式使用 `mtu`。Photon 用本机配置创建接口，并在 reconcile 时原地修正已存在接口的 MTU。需要双向限制时在两端分别设置。某条路径省略这两项时，Photon 保留该接口当前 MTU，新接口使用内核默认值。
 - `tunnel_address`：隧道接口地址分配方式。IPv6 默认 `derived-link-local`；显式地址池优先用 `derived-pool`。`sequential-pool` 只适合旧配置迁移或测试。
 - `reconcile.interval`：周期安全扫频，用于 SA 观察和恢复；它不是每次变更的唯一触发，daemon 也会按 state/config/VICI 事件触发 reconcile。
 - `reconcile.rotate_retention`：staged rotate 成功后，本地继续保留旧 generation 的窗口。

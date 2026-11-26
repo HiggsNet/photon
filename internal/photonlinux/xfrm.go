@@ -141,6 +141,11 @@ func (r *LinuxDriver) MaintainXFRMInterfaces(ctx context.Context, desired []tran
 			return fmt.Errorf("inspect xfrm interface %q: %w", candidate.InterfaceName, err)
 		}
 		matches, reason := XFRMLinkStateMatchReason(state, candidate)
+		// An MTU mismatch calls for interface maintenance. It does not make
+		// the associated SA unusable for the link reconciler.
+		if matches && candidate.InterfaceMTU != 0 && state.MTU != candidate.InterfaceMTU {
+			matches, reason = false, "mtu_mismatch"
+		}
 		logDebug(r.logger, "xfrm_runtime_observed", observationFields("runtime_ensure", id, "active", candidate, state, matches, reason))
 		if !state.NamespaceExists || !state.InterfaceExists {
 			logDebug(r.logger, "xfrm_maintenance_skip_missing", map[string]any{
@@ -500,6 +505,10 @@ func saMatchesMissingXFRMCandidate(sa transportipsec.SAState, missing map[string
 
 func observationFields(phase, instanceID, runtime string, spec transportipsec.TransportLinkSpec, state transportipsec.XFRMLinkState, matches bool, reason string) map[string]any {
 	fields := map[string]any{"phase": phase, "instance_id": instanceID, "runtime": runtime, "matched": matches, "reason": reason, "peer": spec.PeerZone.String(), "group": spec.OverlayID, "transport_id": spec.TransportID, "interface": spec.InterfaceName, "xfrm_if_id": spec.XFRMIfID, "requested_netns": spec.NetNS, "observed_netns": state.NetNS.Target(), "namespace_exists": state.NamespaceExists, "interface_exists": state.InterfaceExists, "flags_known": state.FlagsKnown, "interface_up": state.InterfaceUp, "multicast": state.Multicast, "addresses": prefixStrings(state.Addresses)}
+	if spec.InterfaceMTU != 0 {
+		fields["expected_mtu"] = spec.InterfaceMTU
+		fields["observed_mtu"] = state.MTU
+	}
 	if spec.LocalTunnelAddr.IsValid() {
 		fields["expected_local_tunnel_addr"] = spec.LocalTunnelAddr.String()
 	}

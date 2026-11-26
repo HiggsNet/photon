@@ -331,6 +331,11 @@ func planPeerLink(ctx context.Context, ns *zone.NetworkState, local, peer zone.Z
 	}
 	for i := range specs {
 		spec := &specs[i]
+		if mtu, ok := override.MTUByFamily[strings.TrimPrefix(spec.PathKey, "family:")]; ok {
+			spec.InterfaceMTU = mtu
+		} else if override.MTU != nil {
+			spec.InterfaceMTU = *override.MTU
+		}
 		spec.MOBIKE = mobike
 		for _, point := range spec.ContactPoints {
 			if point.Source == SourcePeerOverride {

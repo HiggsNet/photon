@@ -191,10 +191,11 @@ ipsec:
 #     #   - manual-dns
 #     #   - discovery
 #     #   - reflector
-#     # Per-peer role is signed in the overlay intent. Dial endpoints are local.
+#     # Per-peer role is signed in the overlay intent. Dial endpoints and MTU are local.
 #     # peer_overrides:
 #     #   - peer: edge.catofes.
 #     #     role: out
+#     #     mtu_by_family: {ipv4: 1400} # Or mtu: 1400 for all paths to this peer.
 #     #     endpoints:
 #     #       ipv4: {address: 192.0.2.40, natt_port: 44500}
 #     #       ipv6: {address: "2001:db8::40"}

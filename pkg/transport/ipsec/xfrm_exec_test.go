@@ -38,8 +38,8 @@ func TestSystemXFRMDriverBatchObserveHealthyInterfacesIsMutationFree(t *testing.
 						return []byte(`[{"name":"photon"}]`), nil
 					case "netns exec photon ip -j -d link show":
 						return []byte(fmt.Sprintf(`[
-					{"ifname":"phx1","flags":["MULTICAST","UP"],"inet6_addr_gen_mode":"none","linkinfo":{"info_kind":"xfrm","info_data":{"if_id":%s}}},
-					{"ifname":"phx2","flags":["MULTICAST","UP"],"inet6_addr_gen_mode":"none","linkinfo":{"info_kind":"xfrm","info_data":{"if_id":%s}}},
+					{"ifname":"phx1","mtu":1400,"flags":["MULTICAST","UP"],"inet6_addr_gen_mode":"none","linkinfo":{"info_kind":"xfrm","info_data":{"if_id":%s}}},
+					{"ifname":"phx2","mtu":1500,"flags":["MULTICAST","UP"],"inet6_addr_gen_mode":"none","linkinfo":{"info_kind":"xfrm","info_data":{"if_id":%s}}},
 					{"ifname":"phx-not-xfrm","linkinfo":{"info_kind":"dummy"}}
 				]`, ids.first, ids.second)), nil
 					case "netns exec photon ip -j addr show":
@@ -56,7 +56,7 @@ func TestSystemXFRMDriverBatchObserveHealthyInterfacesIsMutationFree(t *testing.
 				},
 			}
 			specs := []TransportLinkSpec{
-				{InterfaceName: "phx1", NetNS: "photon", LocalTunnelAddr: netip.MustParseAddr("fe80::1")},
+				{InterfaceName: "phx1", NetNS: "photon", InterfaceMTU: 1400, LocalTunnelAddr: netip.MustParseAddr("fe80::1")},
 				{InterfaceName: "phx2", NetNS: "photon", LocalTunnelAddr: netip.MustParseAddr("fe80::2")},
 			}
 
@@ -69,6 +69,9 @@ func TestSystemXFRMDriverBatchObserveHealthyInterfacesIsMutationFree(t *testing.
 			}
 			if len(states) != 2 || !states[0].InterfaceUp || !states[0].Multicast || !states[0].IPv6AddrGenDisabled || !states[0].NamespaceForwarding || !states[0].InterfaceForwarding {
 				t.Fatalf("states = %+v, want healthy observed links", states)
+			}
+			if states[0].MTU != 1400 || states[1].MTU != 1500 || inventory[0].MTU != 1400 {
+				t.Fatalf("observed MTU: states=%+v inventory=%+v", states, inventory)
 			}
 			if got := states[0].Addresses; len(got) != 2 || got[1] != netip.MustParsePrefix("fd00::fff4/128") {
 				t.Fatalf("phx1 addresses = %+v", got)
@@ -131,11 +134,12 @@ func TestSystemXFRMDriverEnsureObservedInterfacesRepairsOnlyKnownDrift(t *testin
 			return nil, nil
 		},
 	}
-	spec := TransportLinkSpec{InterfaceName: "phx1", NetNS: "photon"}
+	spec := TransportLinkSpec{InterfaceName: "phx1", NetNS: "photon", InterfaceMTU: 1400}
 	state := XFRMLinkState{
 		NetNS:                    NetNSSpec{Kind: NetNSName, Name: "photon"},
 		NamespaceExists:          true,
 		InterfaceExists:          true,
+		MTU:                      1500,
 		FlagsKnown:               true,
 		InterfaceUp:              false,
 		Multicast:                true,
@@ -151,6 +155,7 @@ func TestSystemXFRMDriverEnsureObservedInterfacesRepairsOnlyKnownDrift(t *testin
 		t.Fatalf("EnsureObservedInterfaces: %v", err)
 	}
 	want := []string{
+		"ip netns exec photon ip link set phx1 mtu 1400",
 		"ip netns exec photon ip link set phx1 up",
 		"ip netns exec photon sysctl -w net.ipv4.conf.phx1.forwarding=1",
 		"ip netns exec photon sysctl -w net.ipv6.conf.phx1.forwarding=1",
@@ -185,6 +190,7 @@ func TestSystemXFRMDriverCreatesHostBornXFRMInterfaceForNamedNamespace(t *testin
 		TransportID:     "ipsec-1",
 		InterfaceName:   "phx1",
 		XFRMIfID:        42,
+		InterfaceMTU:    1400,
 		NetNS:           "photontesth2",
 		LocalTunnelAddr: netip.MustParseAddr("fd00:1234::1"),
 	}
@@ -208,6 +214,7 @@ func TestSystemXFRMDriverCreatesHostBornXFRMInterfaceForNamedNamespace(t *testin
 		"ip link show dev phx1",
 		"ip link add phx1 type xfrm if_id 42",
 		"ip link set phx1 netns photontesth2",
+		"ip netns exec photontesth2 ip link set phx1 mtu 1400",
 		"ip netns exec photontesth2 ip link set phx1 addrgenmode none",
 		"ip netns exec photontesth2 ip link set phx1 multicast on",
 		"ip netns exec photontesth2 ip link set phx1 up",

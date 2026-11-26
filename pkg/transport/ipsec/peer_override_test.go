@@ -70,6 +70,52 @@ func TestPeerOverrideRoles(t *testing.T) {
 	}
 }
 
+func TestPeerOverrideMTU(t *testing.T) {
+	const (
+		dialer    zone.ZonePath = "node-a.catofes."
+		responder zone.ZonePath = "node-b.catofes."
+	)
+	now := time.Unix(5000, 0)
+	ns := zone.NewNetworkState()
+	addIPsecNode(t, ns, dialer, RoleOut, nil, now)
+	addIPsecNode(t, ns, responder, RoleIn, []AddressAdvertisement{
+		{ID: "v4", Source: SourceManualAddress, Address: "192.0.2.2"},
+		{ID: "v6", Source: SourceManualAddress, Address: "2001:db8::2"},
+	}, now)
+	peerMTU := uint32(1420)
+	for _, side := range []struct {
+		local, peer zone.ZonePath
+		peerMTU     *uint32
+		wantIPv6    uint32
+	}{
+		{local: dialer, peer: responder, peerMTU: &peerMTU, wantIPv6: 1420},
+		{local: responder, peer: dialer},
+	} {
+		group := LinkGroupSpec{ID: "ipsec-main", PeerOverrides: []PeerOverride{{
+			Peer: side.peer, MTU: side.peerMTU, MTUByFamily: map[string]uint32{FamilyIPv4: 1400},
+		}}}
+		plan, err := PlanTransportLinks(t.Context(), ns, side.local, []LinkGroupSpec{group}, LinkPlannerOptions{Now: now})
+		if err != nil || len(plan.Desired) != 2 {
+			t.Fatalf("%s plan = %+v, error = %v", side.local, plan, err)
+		}
+		for _, spec := range plan.Desired {
+			wantMTU := side.wantIPv6
+			if spec.PathKey == "family:ipv4" {
+				wantMTU = 1400
+			}
+			rotated, err := RuntimeSpecForPortGeneration(spec, group, 2)
+			if err != nil || spec.InterfaceMTU != wantMTU || rotated.InterfaceMTU != wantMTU {
+				t.Fatalf("%s %s MTU = %d, rotated = %d, want %d, error = %v", side.local, spec.PathKey, spec.InterfaceMTU, rotated.InterfaceMTU, wantMTU, err)
+			}
+			unmanaged := spec
+			unmanaged.InterfaceMTU = 0
+			if TransportLinkSpecHash(spec) != TransportLinkSpecHash(unmanaged) {
+				t.Fatalf("%s %s MTU changed the connection hash", side.local, spec.PathKey)
+			}
+		}
+	}
+}
+
 func TestPeerOverrideEndpoints(t *testing.T) {
 	const (
 		local zone.ZonePath = "node-a.catofes."
