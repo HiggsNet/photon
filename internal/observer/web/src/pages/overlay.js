@@ -10,7 +10,7 @@ import { kvTable } from '../components/kv.js';
 import { jsonViewer } from '../components/jsonview.js';
 import { stateBadge, dot } from '../components/badge.js';
 import { tableWrap } from '../components/table.js';
-import { directoryRow, linkDirectory, renderInspector, renderInspectorLoading, underlayLabel } from '../components/inspector.js';
+import { directoryGroup, directoryGroups, renderInspector, renderInspectorLoading, underlayLabel } from '../components/inspector.js';
 
 export const deps = ['/links'];
 
@@ -19,13 +19,36 @@ function actualSAValue(link) { return (link && link.actual_sa) || {}; }
 
 const reconcileKey = ':reconcile';
 
-function linkRow(li, selected, showGroup) {
-    const state = li.state || li.actual_state || 'unknown';
-    const path = [underlayLabel(li), showGroup && li.group_id].filter(Boolean).join(' · ');
-    return directoryRow(li.id, li.id, selected, `
-        <span class="directory-name" title="${esc(path)}">${esc(path)}</span>
-        <span class="directory-status">${dot(state)}<span>${esc(state)}</span></span>
-    `);
+function rotationLabel(li) {
+    const rotation = li.rotation || {};
+    if (rotation.phase === 'draining') return 'Old draining';
+    if (rotation.phase === 'cleanup') return 'Old cleanup';
+    if (rotation.phase === 'dual_running') return 'Active / staged';
+    if (rotation.phase) return rotation.phase.replaceAll('_', ' ');
+    return rotation.staged_generation ? 'Staged' : '–';
+}
+
+function linkRow(links, selected) {
+    const states = links.map(li => li.state || li.actual_state || 'unknown');
+    const rotations = links.map(rotationLabel);
+    const state = value => `<span class="directory-status">${dot(value)}<span>${esc(value)}</span></span>`;
+    return `<div class="directory-row overlay-row">
+        <span class="overlay-paths">${links.map(li => `<button type="button" class="overlay-path"
+            data-directory-key="${esc(li.id)}" aria-pressed="${li === selected}">${esc(underlayLabel(li))}</button>`).join('<span aria-hidden="true">/</span>')}</span>
+        <span class="overlay-summary">${states[0] === states.at(-1) ? state(states[0]) : states.map(state).join('<span aria-hidden="true">/</span>')}</span>
+        <span class="directory-name" title="${esc(rotations.join(' / '))}">${esc(rotations[0] === rotations.at(-1) ? rotations[0] : rotations.join(' / '))}</span>
+    </div>`;
+}
+
+function linkList(instances, selected) {
+    return directoryGroups(instances, li => li.peer_zone || '-', (peer, items) =>
+        directoryGroups(items, li => li.group_id || '', (group, links) => {
+            const ipv4 = links.filter(li => underlayLabel(li) === 'IPv4');
+            const ipv6 = links.filter(li => underlayLabel(li) === 'IPv6');
+            const pair = ipv4.length === 1 && ipv6.length === 1 ? [ipv4[0], ipv6[0]] : [];
+            const rows = pair.length ? linkRow(pair, selected) : '';
+            return directoryGroup(peer, rows + links.filter(li => !pair.includes(li)).map(li => linkRow([li], selected)).join(''), group);
+        }));
 }
 
 function detailPanel(li) {
@@ -155,13 +178,13 @@ export function render(container, route) {
         || (li.peer_zone || '').toLowerCase().includes(filter)
         || underlayLabel(li).toLowerCase().includes(filter)
         || (li.group_id || '').toLowerCase().includes(filter));
-    instances.sort((a, b) => compareZones(b.peer_zone, a.peer_zone)
+    instances.sort((a, b) => compareZones(a.peer_zone, b.peer_zone)
         || String(a.group_id || '').localeCompare(String(b.group_id || ''))
         || underlayLabel(a).localeCompare(underlayLabel(b))
         || String(a.id || '').localeCompare(String(b.id || '')));
     const requested = instances.find(li => li.id === route.selected);
     const selected = reconcile ? null : requested || instances[0];
-    const list = linkDirectory(instances, (item, showGroup) => linkRow(item, item === selected, showGroup));
+    const list = linkList(instances, selected);
     const detail = reconcile ? `<section class="detail-panel">
         <h2>Reconcile</h2>
         ${kvTable([
@@ -174,7 +197,7 @@ export function render(container, route) {
         <details class="record-details"><summary>Skipped (${(data.skipped || []).length})</summary>${tableWrap(skippedTable(data.skipped))}</details>
     </section>` : detailPanel(selected);
     renderInspector(container, route, {
-        header, columns: ['Path', 'State'], list, empty: 'No link instances match',
+        header, columns: ['Path', 'State', 'Rotation'], list, empty: 'No link instances match',
         detail, selection: reconcile ? reconcileKey : selected?.id || '', openDetail: reconcile || !!requested,
     });
 }

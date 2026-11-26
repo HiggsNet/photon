@@ -1,5 +1,4 @@
-// routes.js — authorization errors first, export set, IPAM pools and
-// assignments with zone filtering.
+// routes.js — URL-addressable views of authorized routes, IPAM and errors.
 
 import * as store from '../store.js';
 import { navigate } from '../router.js';
@@ -9,6 +8,20 @@ import { tableWrap, emptyRow } from '../components/table.js';
 import { stateBadge } from '../components/badge.js';
 
 export const deps = ['/routes'];
+
+const tabs = new Map([
+    ['authorized', 'Authorized routes'],
+    ['ipam', 'IPAM'],
+    ['errors', 'Authorization errors'],
+]);
+
+function routeTabs(selected, filter, errorCount) {
+    const query = filter ? `?f=${encodeURIComponent(filter)}` : '';
+    return `<nav class="route-tabs" aria-label="Route views">${Array.from(tabs, ([key, label]) => `
+        <a href="#/routes/${key}${esc(query)}"${key === selected ? ' aria-current="page"' : ''}>
+            ${label}${key === 'errors' && errorCount ? ` <span class="badge badge-err">${errorCount}</span>` : ''}
+        </a>`).join('')}</nav>`;
+}
 
 function errorsSection(errors) {
     if (!errors.length) {
@@ -49,35 +62,49 @@ function participantList(members) {
 }
 
 export function render(container, route) {
-    const header = pageHeader('Routes', 'Prefix authorization and IPAM', filterInput(route, 'Filter by zone / prefix…'));
     const entry = store.get('/routes');
+    const data = entry?.data || {};
+    const selected = tabs.has(route.selected) ? route.selected : 'authorized';
+    const header = pageHeader('Routes', '', filterInput(route, 'Filter by zone / prefix…'))
+        + routeTabs(selected, route.filter, data.errors?.length || 0);
     if (!entry) { container.innerHTML = header + loading(); return; }
     if (entry.error && !entry.data) { container.innerHTML = header + errorMsg(`Failed to load routes: ${entry.error.message}`); return; }
-    const data = entry.data || {};
     const filter = (route.filter || '').toLowerCase();
     const match = (...fields) => !filter || fields.some(f => (f || '').toLowerCase().includes(filter));
 
+    const errors = data.errors || [];
+    const errorBanner = errors.length && selected !== 'errors'
+        ? banner(`${errors.length} authorization error${errors.length === 1 ? '' : 's'}`, 'err')
+        : '';
+    const body = selected === 'authorized' ? authorizedSection(data, match)
+        : selected === 'ipam' ? ipamSection(data, match)
+        : errorsSection(errors.filter(e => match(e.prefix, e.zone, e.code, e.detail))
+            .sort((a, b) => comparePrefixes(a.prefix, b.prefix) || compareZones(a.zone, b.zone)));
+    container.innerHTML = header + errorBanner + body;
+    container.querySelector('#page-filter').addEventListener('input', ev => {
+        navigate(route.page, route.selected, ev.target.value);
+    });
+}
+
+function allAssignments(data) {
+    return data.ipam_assignments || Object.entries(data.assignments || {}).map(([prefix, info]) => ({
+        prefix,
+        source: info.source,
+        assigned_to: info.assigned_to,
+    }));
+}
+
+function authorizedSection(data, match) {
     const exportSet = (data.export_set || []).filter(p => match(p)).sort(comparePrefixes);
     const authorized = Object.entries(data.authorized || {}).filter(([zone, prefixes]) =>
         match(zone, ...(prefixes || [])))
         .sort(([a], [b]) => compareZones(a, b));
     const authorizedRoutes = (data.authorized_routes || authorized.flatMap(([zone, prefixes]) =>
         (prefixes || []).map(prefix => ({ prefix, zone }))));
-    const pools = (data.ipam_pools || []).filter(p => match(p.prefix, p.source, p.delegated_to))
-        .sort((a, b) => comparePrefixes(a.prefix, b.prefix) || compareZones(a.source, b.source) || compareZones(a.delegated_to, b.delegated_to));
-    const allAssignments = data.ipam_assignments || Object.entries(data.assignments || {}).map(([prefix, info]) => ({
-        prefix,
-        source: info.source,
-        assigned_to: info.assigned_to,
-    }));
-    const assignments = allAssignments.filter(a => match(a.prefix, a.source, a.assigned_to, a.tag))
-        .sort((a, b) => comparePrefixes(a.prefix, b.prefix) || compareZones(a.assigned_to, b.assigned_to) || compareZones(a.source, b.source));
-    const nonSharedAssignments = assignments.filter(a => !a.shared);
-    const sharedAssignmentGroups = groupSharedAssignments(assignments);
     const sharedAuthorizedGroups = data.shared_authorized || {};
     const sharedPrefixes = new Set(Object.keys(sharedAuthorizedGroups));
     if (!sharedPrefixes.size) {
-        for (const assignment of allAssignments.filter(a => a.shared)) sharedPrefixes.add(assignment.prefix);
+        for (const assignment of allAssignments(data).filter(a => a.shared)) sharedPrefixes.add(assignment.prefix);
     }
     const nonSharedAuthorized = authorizedRoutes.filter(item => !item.shared && !sharedPrefixes.has(item.prefix) && match(item.prefix, item.zone, item.tag))
         .sort((a, b) => comparePrefixes(a.prefix, b.prefix) || compareZones(a.zone, b.zone));
@@ -89,17 +116,7 @@ export function render(container, route) {
     const sharedAuthorized = [...sharedAuthorizedByPrefix.entries()]
         .map(([prefix, members]) => ({ prefix, members: members.sort((a, b) => compareZones(a.assigned_to, b.assigned_to)) }))
         .sort((a, b) => comparePrefixes(a.prefix, b.prefix));
-    const errors = (data.errors || []).slice()
-        .sort((a, b) => comparePrefixes(a.prefix, b.prefix) || compareZones(a.zone, b.zone));
-
-    const errorBanner = errors.length
-        ? banner(`${errors.length} authorization error${errors.length === 1 ? '' : 's'}`, 'err')
-        : '';
-
-    container.innerHTML = `
-        ${header}
-        ${errorBanner}
-        ${errorsSection(errors)}
+    return `
         <h2>Local Export Set</h2>
         <div>${exportSet.map(p => `<span class="chip">${esc(p)}</span>`).join('') || emptyState('No exports')}</div>
         <h2>Non-shared Authorized Prefixes by Zone</h2>
@@ -113,7 +130,17 @@ export function render(container, route) {
             <thead><tr><th>Prefix</th><th>Participating Nodes</th></tr></thead>
             <tbody>${sharedAuthorized.map(group => `
                 <tr><td><code>${esc(group.prefix || '-')}</code></td><td>${participantList(group.members)}</td></tr>`).join('') || emptyRow(2)}</tbody>
-        </table>`)}
+        </table>`)}`;
+}
+
+function ipamSection(data, match) {
+    const pools = (data.ipam_pools || []).filter(p => match(p.prefix, p.source, p.delegated_to))
+        .sort((a, b) => comparePrefixes(a.prefix, b.prefix) || compareZones(a.source, b.source) || compareZones(a.delegated_to, b.delegated_to));
+    const assignments = allAssignments(data).filter(a => match(a.prefix, a.source, a.assigned_to, a.tag))
+        .sort((a, b) => comparePrefixes(a.prefix, b.prefix) || compareZones(a.assigned_to, b.assigned_to) || compareZones(a.source, b.source));
+    const nonSharedAssignments = assignments.filter(a => !a.shared);
+    const sharedAssignmentGroups = groupSharedAssignments(assignments);
+    return `
         <h2>IPAM Pools</h2>
         ${tableWrap(`<table class="routes-table">
             <thead><tr><th>Prefix</th><th class="zone-column">Source</th><th class="zone-column">Delegated To</th></tr></thead>
@@ -137,7 +164,4 @@ export function render(container, route) {
             <tbody>${sharedAssignmentGroups.map(group => `
                 <tr><td><code>${esc(group.prefix || '-')}</code></td><td>${participantList(group.members)}</td></tr>`).join('') || emptyRow(2)}</tbody>
         </table>`)}`;
-    container.querySelector('#page-filter').addEventListener('input', ev => {
-        navigate(route.page, route.selected, ev.target.value);
-    });
 }

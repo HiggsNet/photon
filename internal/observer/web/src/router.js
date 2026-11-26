@@ -43,7 +43,11 @@ export function currentRoute() {
 }
 
 export function handleHashChange() {
+    const previous = route;
     route = parseHash();
+    if (route.page !== previous.page || (route.page === 'routes' && route.selected !== previous.selected)) {
+        document.getElementById('content').scrollTop = 0;
+    }
     document.querySelectorAll('.nav-link').forEach(link => {
         link.classList.toggle('active', link.dataset.page === route.page);
     });

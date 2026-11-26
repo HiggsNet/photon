@@ -47,12 +47,20 @@ function linkRow(item, selected, showRole, showGroup) {
     const h = healthValue(item) || {};
     const large = h.large_probe;
     const state = h.state || 'unknown';
-    const path = [underlayLabel(item), showGroup && item.group_id].filter(Boolean).join(' · ');
+    const family = underlayLabel(item);
+    const familyColumn = family === 'IPv4' || family === 'IPv6';
+    const probe = [h.probe_type, !familyColumn && family, showGroup && item.group_id].filter(Boolean).join(' · ');
+    const rtt = h.last_rtt_ms > 0 ? ms(h.last_rtt_ms) : 'No RTT';
+    const issue = h.last_failure || large?.last_failure;
+    const problem = issue?.message || issue?.code || '';
     return directoryRow(probeID(item), probeID(item), selected, `
-        <span class="directory-path"><span title="${esc(path)}">${esc(path)}</span>${showRole ? roleBadge(h) : ''}</span>
+        <span class="directory-path">${showRole ? roleBadge(h) : ''}<span title="${esc(probe)}">${esc(probe || '–')}</span></span>
+        <span class="directory-name directory-problem" title="${esc(problem)}">${esc(problem || '–')}</span>
         <span class="directory-status">${dot(state)}<span>${esc(state)}</span></span>
         <span class="directory-number">${h.sent > 0 ? pct(h.loss_ratio_pct) : '–'}</span>
         <span class="directory-number">${large && large.sent > 0 ? pct(Number(large.loss_ratio_pct).toFixed(1)) : '–'}</span>
+        <span class="directory-number">${family === 'IPv4' ? rtt : '–'}</span>
+        <span class="directory-number">${family === 'IPv6' ? rtt : '–'}</span>
     `);
 }
 
@@ -168,8 +176,9 @@ export function render(container, route) {
                 || (item.group_id || '').toLowerCase().includes(filter);
         })
         .slice()
-        .sort((a, b) => compareZones(b.peer_zone, a.peer_zone)
+        .sort((a, b) => compareZones(a.peer_zone, b.peer_zone)
             || String(a.group_id || '').localeCompare(String(b.group_id || ''))
+            || underlayLabel(a).localeCompare(underlayLabel(b))
             || String((healthValue(a) || {}).instance_id || '').localeCompare(String((healthValue(b) || {}).instance_id || ''))
             || roleOrder(healthValue(a)) - roleOrder(healthValue(b))
             || probeID(a).localeCompare(probeID(b)));
@@ -193,7 +202,7 @@ export function render(container, route) {
         return linkRow(item, item === selected, showRole, showGroup);
     });
     renderInspector(container, route, {
-        header, columns: ['Probe', 'State', 'Small loss', 'Large loss'],
+        header, columns: ['Probe', 'Problem', 'State', 'Small loss', 'Large loss', 'IPv4 RTT', 'IPv6 RTT'],
         list, empty: 'No health data available',
         detail: detailPanel(selected, data.datasource), selection: probeID(selected), openDetail: !!requested,
     });

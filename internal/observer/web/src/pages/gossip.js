@@ -1,9 +1,9 @@
 // gossip.js — peer cards + side detail panel (endpoints, diagnostics kv).
 
 import * as store from '../store.js';
-import { esc, relTime, formatTime } from '../format.js';
+import { esc, relTime, formatTime, compareZones } from '../format.js';
 import { pageHeader, filterInput, emptyState, errorMsg } from '../components/card.js';
-import { tableWrap, emptyRow } from '../components/table.js';
+import { tableWrap } from '../components/table.js';
 import { kvTable } from '../components/kv.js';
 import { dot } from '../components/badge.js';
 import { directoryGroup, directoryGroups, directoryRow, renderInspector, renderInspectorLoading } from '../components/inspector.js';
@@ -70,9 +70,8 @@ function endpointTable(endpoints) {
     </table>`);
 }
 
-function detailPanel(selected, peer) {
-    if (!selected) return emptyState('Select a peer to inspect endpoints and diagnostics');
-    if (!peer) return emptyState('Peer is no longer in the current sample');
+function detailPanel(peer) {
+    if (!peer) return emptyState('Select a peer to inspect endpoints and diagnostics');
     return `<section class="detail-panel">
         <h2>${esc(peer.peer_id)}</h2>
         ${kvTable([
@@ -102,16 +101,18 @@ export function render(container, route) {
     if (!entry) return renderInspectorLoading(container, route.page, header);
     if (entry.error && !entry.data) { container.innerHTML = header + errorMsg(`Failed to load peers: ${entry.error.message}`); return; }
     const filter = (route.filter || '').toLowerCase();
-	const allPeers = entry.data.peers || [];
+    const allPeers = (entry.data.peers || [])
+        .filter(p => p.sync_status !== 'revoked' && p.authorization !== 'revoked')
+        .sort((a, b) => compareZones(a.peer_id, b.peer_id));
     const peers = allPeers.filter(p =>
         !filter || (p.peer_id || '').toLowerCase().includes(filter) || (p.source || '').toLowerCase().includes(filter));
     const requested = allPeers.find(p => p.peer_id === route.selected);
-    const selected = route.selected ? requested : peers[0];
+    const selected = requested || peers[0];
     const list = directoryGroups(peers, p => parentZone(p.peer_id), (zone, group) =>
         directoryGroup(zone === '.' ? 'Root zone' : zone, group.map(p => peerRow(p, selected)).join('')));
-    const selection = route.selected || selected?.peer_id || '';
+    const selection = selected?.peer_id || '';
     renderInspector(container, route, {
         header, columns: ['Peer', 'Status', 'Last sync'], list, empty: 'No peers match',
-        detail: detailPanel(selection, selected), selection, openDetail: !!route.selected,
+        detail: detailPanel(selected), selection, openDetail: !!requested,
     });
 }
