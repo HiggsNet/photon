@@ -113,19 +113,31 @@ final class PhotonController extends ChangeNotifier {
     try {
       _observation = await backend.status();
     } catch (error) {
-      final unavailable =
-          error is PhotonControlException && error.code == 'unavailable';
-      if (error is! TimeoutException && !unavailable) rethrow;
+      if (!_temporaryControlError(error)) rethrow;
       _observation = null;
-      await _invalidateServicesAfterError(error);
-      return;
+      _error = error;
     }
     await _refreshServices(backend);
   }
 
+  bool _temporaryControlError(Object error) =>
+      error is TimeoutException ||
+      error is PhotonControlException && error.code == 'unavailable';
+
   Future<void> _refreshServices(PhotonBackend backend) async {
+    Map<String, dynamic> response;
     try {
-      final next = PhotonDirectory.fromJson(await backend.services());
+      response = await backend.services();
+    } catch (error) {
+      if (_temporaryControlError(error) && directoryFresh) {
+        _error = error;
+      } else {
+        await _invalidateServicesAfterError(error);
+      }
+      return;
+    }
+    try {
+      final next = PhotonDirectory.fromJson(response);
       if (!next.fresh(DateTime.now())) {
         throw StateError('Photon service information expired');
       }

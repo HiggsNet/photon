@@ -713,9 +713,6 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
         if (source == null) {
           if (await file.exists()) await file.delete();
           changed = true;
-          if (widget.controller == null) {
-            await photonProxyBridge.templateRemoved();
-          }
         } else {
           await photonProxyBridge.saveTemplate(config, source);
           changed = true;

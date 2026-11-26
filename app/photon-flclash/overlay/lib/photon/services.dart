@@ -666,6 +666,69 @@ Iterable<String> _whitelistFakeIPRules(String pattern) sync* {
 String encodePhotonProfile(Map<String, dynamic> profile) =>
     const JsonEncoder.withIndent('  ').convert(profile);
 
+List<dynamic> _appliedProxyEntries(Map<String, dynamic> profile) {
+  final providers = profile['proxy-providers'] as Map?;
+  final photon = providers?[_photonProvider] as Map?;
+  return (photon == null ? profile['proxies'] : photon['payload']) as List? ??
+      const [];
+}
+
+Set<String> unauthorizedPhotonProxies(
+  Map<String, dynamic> profile,
+  PhotonDirectory? directory,
+) {
+  final allowed = {
+    for (final endpoint
+        in directory?.proxyEndpoints ?? const <PhotonEndpoint>[])
+      (
+        endpoint.type,
+        endpoint.address,
+        endpoint.port,
+        endpoint.serverName,
+        endpoint.fingerprint,
+        directory!.adapterName,
+      ),
+  };
+  return {
+    for (final proxy in _appliedProxyEntries(profile).whereType<Map>())
+      if (proxy['name'] is String &&
+          proxy['type'] != 'reject' &&
+          !allowed.contains((
+            proxy['type'],
+            proxy['server'],
+            proxy['port'],
+            proxy['sni'] ?? '',
+            proxy['fingerprint'] ?? '',
+            proxy['interface-name'],
+          )))
+        proxy['name'] as String,
+  };
+}
+
+Map<String, dynamic> restrictPhotonProxies(
+  Map<String, dynamic> profile,
+  Set<String> blocked,
+) {
+  if (blocked.isEmpty) return profile;
+  final proxies = [
+    for (final proxy in _appliedProxyEntries(profile))
+      if (proxy is Map && blocked.contains(proxy['name']))
+        {'name': proxy['name'], 'type': 'reject'}
+      else
+        proxy,
+  ];
+  final providers = profile['proxy-providers'] as Map?;
+  final photon = providers?[_photonProvider] as Map?;
+  if (photon == null) return {...profile, 'proxies': proxies};
+  return {
+    ...profile,
+    'proxy-providers': {
+      ...providers!,
+      _photonProvider: {...photon, 'payload': proxies},
+    },
+  };
+}
+
 Map<String, dynamic> blockedPhotonProfile(
   Map<String, dynamic> profile, {
   bool keepTemplate = true,

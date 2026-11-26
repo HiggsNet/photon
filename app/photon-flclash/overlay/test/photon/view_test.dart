@@ -61,7 +61,7 @@ void main() {
     expect(
       tester
           .widget<FilledButton>(
-            find.widgetWithText(FilledButton, 'Switch to Photon profile'),
+            find.widgetWithText(FilledButton, 'Apply Photon profile'),
           )
           .onPressed,
       isNull,
@@ -764,7 +764,7 @@ void main() {
     expect(find.text('United States'), findsOneWidget);
     expect(find.text('custom'), findsOneWidget);
     expect(find.text('Global'), findsOneWidget);
-    expect(find.text('Switch to Photon profile'), findsOneWidget);
+    expect(find.text('Apply Photon profile'), findsOneWidget);
     expect(find.text('Import YAML template'), findsNothing);
     expect(find.text('Edit YAML template'), findsNothing);
     expect(
