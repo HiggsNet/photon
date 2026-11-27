@@ -132,7 +132,8 @@ func BenchmarkPacketSocketDemux(b *testing.B) {
 				b.Cleanup(func() { s.Close(); <-readDone })
 				packet := make([]byte, 1200)
 				copy(packet, []byte{0x12, 0x34, 0x56, 0x78, 0, 0, 0, 1})
-				queue := s.espPackets
+				espQueue := s.espPackets
+				var ikeQueue <-chan ikeDatagram
 				if kind == "IKE" {
 					request, err := ike.NewInitiator()
 					if err != nil {
@@ -142,7 +143,7 @@ func BenchmarkPacketSocketDemux(b *testing.B) {
 					if err != nil {
 						b.Fatal(err)
 					}
-					queue = s.ikePackets
+					espQueue, ikeQueue = nil, s.ikePackets
 				}
 				timer := time.NewTimer(time.Second)
 				timer.Stop()
@@ -155,17 +156,20 @@ func BenchmarkPacketSocketDemux(b *testing.B) {
 					if _, err := peer.WriteToUDPAddrPort(packet, destination); err != nil {
 						b.Fatal(err)
 					}
+					var received tunnelDatagram
 					select {
-					case received := <-queue:
-						if received.generation != generation || received.peer != endpoint {
-							b.Fatal("shared socket admitted a stale packet")
-						}
+					case received = <-espQueue:
+					case response := <-ikeQueue:
+						received = response.tunnelDatagram
 					case err := <-readDone:
 						// Keep cleanup able to join an already returned reader.
 						readDone <- err
 						b.Fatal("shared socket receiver stopped", err)
 					case <-timer.C:
 						b.Fatal(context.DeadlineExceeded)
+					}
+					if received.generation != generation || received.peer != endpoint {
+						b.Fatal("shared socket admitted a stale packet")
 					}
 					timer.Stop()
 				}

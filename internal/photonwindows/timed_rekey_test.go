@@ -52,7 +52,7 @@ func verifyMeshTimedRekey(t *testing.T, ctx context.Context, socket *packetSocke
 				if packet.generation != tunnel.generation {
 					continue
 				}
-				if err := tunnel.handle(packet, tunnel.plan, time.Now()); err != nil {
+				if err := tunnel.handle(packet.tunnelDatagram, tunnel.plan, time.Now()); err != nil {
 					t.Fatal("timed IKE exchange", err)
 				}
 			}

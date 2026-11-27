@@ -141,7 +141,7 @@ func runStrongSwanWindowsMeshTunnels(t *testing.T, timed, dualOuter bool) {
 		case packet := <-socket.ikePackets:
 			for _, tunnel := range tunnels {
 				if tunnel.generation == packet.generation {
-					if err := tunnel.handle(packet, tunnel.plan, time.Now()); err != nil {
+					if err := tunnel.handle(packet.tunnelDatagram, tunnel.plan, time.Now()); err != nil {
 						t.Fatal(err)
 					}
 				}

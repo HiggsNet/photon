@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/HiggsNet/photon/internal/logoutput"
 
@@ -169,6 +170,72 @@ func TestRuntimeLoggerOwnedFileAndConcurrentClose(t *testing.T) {
 	}
 	if bytes.Contains(content, []byte("not recorded")) || !bytes.Contains(content, []byte("event_id=201")) || string(content) != text.String() {
 		t.Fatalf("file/console mismatch: %s %q", content, text.String())
+	}
+}
+
+type heldRuntimeLogWriter struct {
+	bytes.Buffer
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (w *heldRuntimeLogWriter) Write(data []byte) (int, error) {
+	w.once.Do(func() {
+		close(w.entered)
+		<-w.release
+	})
+	return w.Buffer.Write(data)
+}
+
+func TestRuntimeLoggerSlowSinkDoesNotBlockProducers(t *testing.T) {
+	config := &Config{State: StateConfig{Path: filepath.Join(t.TempDir(), "state.db")}}
+	sink := &heldRuntimeLogWriter{entered: make(chan struct{}), release: make(chan struct{})}
+	logger, closer, err := NewRuntimeLogger(config, sink, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var release sync.Once
+	unblock := func() { release.Do(func() { close(sink.release) }) }
+	t.Cleanup(func() {
+		unblock()
+		if err := closer.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	go logger.Info("gossip_started")
+	select {
+	case <-sink.entered:
+	case <-time.After(time.Second):
+		t.Fatal("writer did not reach held sink")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		fields := map[string]string{"value": "before"}
+		logger.Info("gateway_plan_changed", "plan", fields)
+		fields["value"] = "after"
+		for range logQueueCapacity {
+			logger.Warn("gossip_receive_failed")
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("log producer waited for the sink")
+	}
+	unblock()
+	if err := closer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	log := sink.String()
+	if !strings.Contains(log, "map[value:before]") || strings.Contains(log, "map[value:after]") {
+		t.Fatal("async write did not retain the submitted snapshot")
+	}
+	if strings.Count(log, "event=gossip_receive_failed") != logQueueCapacity-1 ||
+		!strings.Contains(log, "event=runtime_log_overflow event_id=105 dropped_events=1") {
+		t.Fatal("full log queue did not account for its dropped event")
 	}
 }
 

@@ -132,7 +132,7 @@ func TestMeshSocketReservationsSurviveOtherPeerRetirement(t *testing.T) {
 	a, b := s.reserveTunnel(endpoint, endpoint), s.reserveTunnel(endpoint, endpoint)
 	packet := []byte{1, 2, 3, 4, 0, 0, 0, 1, 0x42}
 	s.mu.Lock()
-	consumed := s.demuxLocked(packet, endpoint)
+	consumed := s.demuxLocked(packet, endpoint, nil)
 	s.mu.Unlock()
 	if !consumed || len(s.espPackets) != 2 {
 		t.Fatal("shared endpoint did not reach both authenticated SA owners")
@@ -147,7 +147,7 @@ func TestMeshSocketReservationsSurviveOtherPeerRetirement(t *testing.T) {
 	}
 	s.releaseTunnel(a)
 	s.mu.Lock()
-	s.demuxLocked(packet, endpoint)
+	s.demuxLocked(packet, endpoint, nil)
 	s.mu.Unlock()
 	if got := <-s.espPackets; got.generation != b || len(s.espPackets) != 0 {
 		t.Fatal("retired peer still receives, or healthy peer was cleared")

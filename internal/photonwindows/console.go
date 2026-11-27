@@ -29,8 +29,8 @@ func RunConsole(ctx context.Context, config *Config, logger *slog.Logger) error 
 	return RunControlled(ctx, NewDaemon(config, logger), config.State.Path)
 }
 
-// Daemon owns one run of the Windows composition. Rebind is serialized with
-// gossip event processing; it does not recreate state or the protocol driver.
+// Daemon owns one run of the Windows composition. The event loop coordinates
+// socket replacement with tunnel state while a worker owns the socket I/O.
 type Daemon struct {
 	instanceID       string
 	config           *Config
@@ -48,6 +48,7 @@ type Daemon struct {
 	deviceFactory    packetDeviceFactory
 	watchResume      func(context.Context) (<-chan struct{}, func() error, error)
 	resolveBootstrap func(context.Context, *Config, netip.AddrPort) (map[string]*net.UDPAddr, error)
+	rebindSocket     func(*packetSockets, context.Context) error
 }
 
 type rebindRequest struct {
@@ -56,7 +57,7 @@ type rebindRequest struct {
 }
 
 func NewDaemon(config *Config, logger *slog.Logger) *Daemon {
-	return &Daemon{instanceID: rand.Text(), config: config, logger: logger, ready: make(chan struct{}), observations: make(chan meshObservationRequest), rebind: make(chan rebindRequest), serviceInputs: make(chan chan serviceInputs), done: make(chan struct{}), planGateway: planGateway, deviceFactory: openConfiguredPacketDevice, watchResume: watchPowerResume, resolveBootstrap: resolveGossipBootstrap}
+	return &Daemon{instanceID: rand.Text(), config: config, logger: logger, ready: make(chan struct{}), observations: make(chan meshObservationRequest), rebind: make(chan rebindRequest), serviceInputs: make(chan chan serviceInputs), done: make(chan struct{}), planGateway: planGateway, deviceFactory: openConfiguredPacketDevice, watchResume: watchPowerResume, resolveBootstrap: resolveGossipBootstrap, rebindSocket: (*packetSockets).Rebind}
 }
 
 // Rebind waits for a local socket replacement, bounded by the caller's context.
@@ -120,6 +121,8 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	defer func() { err = errors.Join(err, state.Close()) }()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	ikeTrace := startIKETrace(logger)
+	defer ikeTrace.close()
 	if _, ok := ctx.Value(outboundDNSKey{}).(outboundDNS); !ok {
 		ctx = context.WithValue(ctx, outboundDNSKey{}, newControlDNS())
 	}
@@ -148,6 +151,7 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		return fmt.Errorf("listen gossip UDP: %w", err)
 	}
 	defer packet.Close()
+	packet.ikeTrace = ikeTrace
 	packet.configureOutboundRoutes(listenAddr.Addr(), config.Overlay.SplitRoutes)
 	transport, err := gossip.NewTransport(gossip.Config{PeerID: string(config.ManagedZone), KnownPeers: bootstrap}, packet)
 	if err != nil {
@@ -265,9 +269,19 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	}(bootstrap)
 	var generation uint64
 	var networkGeneration uint64
+	type socketReplacement struct {
+		done   <-chan error
+		reply  chan<- error
+		cancel context.CancelFunc
+		reason string
+	}
+	var replacement socketReplacement
 	cancelPlan := func() {}
 	defer func() { cancelPlan(); stopPlanner(); plannerWG.Wait() }()
 	requestPlan := func() {
+		if replacement.done != nil {
+			return
+		}
 		cancelPlan()
 		generation++
 		var requestCtx context.Context
@@ -311,33 +325,53 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		}
 	}
 	var rebindPending string
-	rebind := func(rebindCtx context.Context, reason string) error {
-		rebindCtx, cancelRebind := context.WithCancel(rebindCtx)
-		stopCancel := context.AfterFunc(ctx, cancelRebind)
-		defer stopCancel()
-		defer cancelRebind()
+	rebindRequests := d.rebind
+	startRebind := func(rebindCtx context.Context, reason string, reply chan<- error) {
+		if replacement.done != nil {
+			return
+		}
+		if err := rebindCtx.Err(); err != nil {
+			if reply != nil {
+				reply <- err
+			}
+			return
+		}
+		// Deny old tunnel generations and discard planner results from the
+		// old network before the worker can replace the shared endpoint.
+		cancelPlan()
+		generation++
+		networkGeneration++
+		lastPlan = GatewayPlan{}
+		rebindPending = ""
 		mesh.stateMu.Lock()
 		mesh.reset(reason)
 		observeReady()
 		mesh.stateMu.Unlock()
-		err := packet.Rebind(rebindCtx)
-		lastPlan = GatewayPlan{}
-		rebindPending = ""
-		if err != nil {
-			if ctx.Err() == nil {
-				rebindPending = reason
-			}
-			gossipLog.Warn("gossip_rebind_failed", "reason", reason, "error", err)
-		} else {
-			gossipLog.Info("gossip_rebound", "reason", reason, "address", packet.LocalAddr().String())
-		}
-		networkGeneration++
-		requestPlan()
-		return err
+		workCtx, cancelRebind := context.WithCancel(rebindCtx)
+		stopCancel := context.AfterFunc(ctx, cancelRebind)
+		done := make(chan error, 1)
+		replacement = socketReplacement{done: done, reply: reply, cancel: cancelRebind, reason: reason}
+		// Concurrent manual requests keep their caller deadline and wait
+		// for the event loop to accept them after this replacement.
+		rebindRequests = nil
+		go func() {
+			defer cancelRebind()
+			defer stopCancel()
+			done <- d.rebindSocket(packet, workCtx)
+		}()
 	}
-	roam := func(reason string) error {
+	defer func() {
+		if replacement.done != nil {
+			replacement.cancel()
+			<-replacement.done
+		}
+	}()
+	roam := func(reason string) (bool, error) {
+		if replacement.done != nil {
+			return false, nil
+		}
 		mesh.stateMu.Lock()
-		preserved := rebindPending == "" && mesh.roam(time.Now())
+		preserved := rebindPending == "" && packet.bound() && mesh.roam(time.Now())
 		var err error
 		if preserved {
 			err = mesh.tick()
@@ -348,9 +382,9 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			networkGeneration++
 			requestPlan()
 		} else {
-			_ = rebind(ctx, reason)
+			startRebind(ctx, reason, nil)
 		}
-		return err
+		return preserved, err
 	}
 	gossipCtx, stopGossip := context.WithCancel(ctx)
 	gossipRefresh := make(chan map[string]*net.UDPAddr, 1)
@@ -447,6 +481,9 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				return finishErr
 			}
 		case datagram := <-packet.ikePackets:
+			if datagram.trace != nil {
+				ikeTrace.ingress(time.Now(), "ingress_dequeued", datagram, slog.Int("depth_after", len(packet.ikePackets)))
+			}
 			mesh.stateMu.Lock()
 			handleErr := mesh.handleIKE(datagram)
 			if handleErr == nil {
@@ -463,8 +500,16 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			if openErr != nil {
 				return openErr
 			}
-		case <-tunnelTicker.C:
+		case scheduled := <-tunnelTicker.C:
 			mesh.stateMu.Lock()
+			if ikeTrace != nil {
+				now := time.Now()
+				if delay := now.Sub(scheduled); delay >= 250*time.Millisecond {
+					ikeTrace.emit(ikeTrace.event(now, "tick_delayed", 0, netip.AddrPort{},
+						slog.Time("scheduled_at", scheduled), slog.Int64("delay_us", delay.Microseconds()),
+						slog.Int("ingress_depth", len(packet.ikePackets))))
+				}
+			}
 			tickErr := mesh.tick()
 			if tickErr == nil {
 				observeReady()
@@ -511,13 +556,29 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				paths = slices.Compact(paths)
 			}
 			networkTargets.publish(paths)
-		case request := <-d.rebind:
-			request.result <- rebind(request.ctx, "manual_rebind")
+		case request := <-rebindRequests:
+			startRebind(request.ctx, "manual_rebind", request.result)
+		case rebindErr := <-replacement.done:
+			reason, reply := replacement.reason, replacement.reply
+			replacement = socketReplacement{}
+			rebindRequests = d.rebind
+			if rebindErr == nil && !packet.bound() {
+				rebindErr = net.ErrClosed
+			}
+			if rebindErr != nil {
+				rebindPending = reason
+				gossipLog.Warn("gossip_rebind_failed", "reason", reason, "error", rebindErr)
+			} else {
+				gossipLog.Info("gossip_rebound", "reason", reason, "address", packet.LocalAddr().String())
+			}
+			requestPlan()
 			refreshGossip()
+			if reply != nil {
+				reply <- rebindErr
+			}
 		case <-packet.failed:
-			if ctx.Err() == nil {
-				_ = rebind(ctx, "socket_failed")
-				refreshGossip()
+			if ctx.Err() == nil && !packet.bound() {
+				startRebind(ctx, "socket_failed", nil)
 			}
 		case _, ok := <-powerResumes:
 			if !ok {
@@ -527,10 +588,13 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 			if ctx.Err() == nil {
 				logger.Info("power_resumed")
 				packet.outboundRoutes.invalidate()
-				if err := roam("system_resumed"); err != nil {
+				preserved, err := roam("system_resumed")
+				if err != nil {
 					return err
 				}
-				refreshGossip()
+				if preserved {
+					refreshGossip()
+				}
 			}
 		case _, ok := <-networkChanges:
 			if !ok {
@@ -538,16 +602,17 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 				continue
 			}
 			if ctx.Err() == nil {
-				if err := roam("outer_path_changed"); err != nil {
+				preserved, err := roam("outer_path_changed")
+				if err != nil {
 					return err
 				}
-				refreshGossip()
+				if preserved {
+					refreshGossip()
+				}
 			}
 		case <-ticker.C:
 			if rebindPending != "" {
-				if err := rebind(ctx, rebindPending); err == nil {
-					refreshGossip()
-				}
+				startRebind(ctx, rebindPending, nil)
 			}
 			requestPlan()
 		case <-gossipPublished:

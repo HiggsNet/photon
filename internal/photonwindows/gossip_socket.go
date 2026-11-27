@@ -3,6 +3,7 @@ package photonwindows
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"net/netip"
 	"sync"
@@ -17,6 +18,9 @@ import (
 // It owns no protocol state, workers or database handles.
 // A failed replacement leaves both protocols unavailable until the next retry.
 type packetSockets struct {
+	// Replacement and close own the old descriptors through completion.
+	// Neither data path lock is held across close or bind.
+	replaceMu sync.Mutex
 	// Every mutation of udp, closed, tunnelGeneration and reservations
 	// holds writeMu then mu. Either lock protects reads of those fields. The
 	// Windows overlapped path holds writeMu only through submission, and the
@@ -36,8 +40,10 @@ type packetSockets struct {
 	tunnels                 map[uint64]tunnelEndpoints
 	tunnelPeers             map[netip.AddrPort]map[uint64]bool
 	controlWrites           map[*udpControlWrite]struct{} // Windows overlapped sends, guarded by writeMu.
-	ikePackets              chan tunnelDatagram
+	ikePackets              chan ikeDatagram
 	espPackets              chan tunnelDatagram
+	ikeTrace                *ikeTrace // Set before starting the reader.
+	ikeIngressDrops         atomic.Uint64
 }
 
 // These are bounded ingress queues, not protocol workers. The GossipDriver's
@@ -49,8 +55,13 @@ type tunnelDatagram struct {
 	packet     []byte
 }
 
+type ikeDatagram struct {
+	tunnelDatagram
+	trace *ikeTraceDatagram
+}
+
 func openPacketSockets(ctx context.Context, address string) (*packetSockets, error) {
-	s := &packetSockets{address: address, changed: make(chan struct{}), failed: make(chan struct{}, 1), ikePackets: make(chan tunnelDatagram, 16), espPackets: make(chan tunnelDatagram, 64)}
+	s := &packetSockets{address: address, changed: make(chan struct{}), failed: make(chan struct{}, 1), ikePackets: make(chan ikeDatagram, 16), espPackets: make(chan tunnelDatagram, 64)}
 	if err := s.Rebind(ctx); err != nil {
 		s.Close()
 		return nil, err
@@ -59,34 +70,33 @@ func openPacketSockets(ctx context.Context, address string) (*packetSockets, err
 }
 
 // Rebind closes the old generation before binding the same local endpoint.
-// Holding writeMu serializes rebind with writes and close; mu protects the
-// replacement. Bind performs only numeric local I/O under a deadline.
+// Detach first so readers and socket state queries can continue while the
+// old descriptors wait for outstanding I/O to finish.
 func (s *packetSockets) Rebind(ctx context.Context) error {
-	s.outboundRoutes.invalidate()
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
+	s.replaceMu.Lock()
+	defer s.replaceMu.Unlock()
+	s.outboundRoutes.invalidate()
 	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
+		s.writeMu.Unlock()
 		return net.ErrClosed
 	}
 	if err := ctx.Err(); err != nil {
+		s.mu.Unlock()
+		s.writeMu.Unlock()
 		return err
 	}
-	s.udpSegmentationDisabled.Store(false)
-	s.clearTunnelLocked()
-	s.cancelUDPControlLocked(0, true)
-	if s.udp != nil {
-		_ = s.udp.Close()
-		s.udp = nil
+	oldUDP, oldTCP := s.detachLocked()
+	s.mu.Unlock()
+	s.writeMu.Unlock()
+	_ = closeSocketPair(oldUDP, oldTCP)
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	if s.tcp != nil {
-		_ = s.tcp.Close()
-		s.tcp = nil
-	}
-	defer func() { close(s.changed); s.changed = make(chan struct{}) }()
 	lc := net.ListenConfig{}
 	// UDP port zero does not reserve the same TCP port. It may already be
 	// occupied or excluded by Windows for TCP. Retry only the first dynamic
@@ -112,43 +122,77 @@ func (s *packetSockets) Rebind(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := s.installSocketPair(ctx, udp, listener); err != nil {
+		_ = closeSocketPair(udp, listener)
+		return err
+	}
+	return nil
+}
+
+func (s *packetSockets) installSocketPair(ctx context.Context, udp *net.UDPConn, listener net.Listener) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err := ctx.Err(); err != nil {
-		_ = udp.Close()
-		_ = listener.Close()
 		return err
 	}
 	if err := udp.SetReadDeadline(s.readDeadline); err != nil {
-		_ = udp.Close()
-		_ = listener.Close()
 		return err
 	}
 	s.udp, s.tcp = udp, listener
 	// Port zero is resolved once, then retained for every replacement.
 	s.address = udp.LocalAddr().String()
+	close(s.changed)
+	s.changed = make(chan struct{})
 	return nil
 }
 
 func (s *packetSockets) Close() error {
+	s.replaceMu.Lock()
+	defer s.replaceMu.Unlock()
 	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
+		s.writeMu.Unlock()
 		return nil
 	}
 	s.closed = true
+	udp, tcp := s.detachLocked()
+	s.mu.Unlock()
+	s.writeMu.Unlock()
+	return closeSocketPair(udp, tcp)
+}
+
+// detachLocked requires writeMu and mu. Its caller closes the returned pair
+// outside those locks while holding replaceMu to retain the listening port.
+func (s *packetSockets) detachLocked() (*net.UDPConn, net.Listener) {
+	s.udpSegmentationDisabled.Store(false)
 	s.clearTunnelLocked()
 	s.cancelUDPControlLocked(0, true)
-	var err error
-	if s.udp != nil {
-		err = errors.Join(err, s.udp.Close())
-	}
-	if s.tcp != nil {
-		err = errors.Join(err, s.tcp.Close())
-	}
+	udp, tcp := s.udp, s.tcp
 	s.udp, s.tcp = nil, nil
 	close(s.changed)
+	s.changed = make(chan struct{})
+	return udp, tcp
+}
+
+func closeSocketPair(udp *net.UDPConn, tcp net.Listener) error {
+	var err error
+	if tcp != nil {
+		err = tcp.Close()
+	}
+	if udp != nil {
+		err = errors.Join(err, udp.Close())
+	}
 	return err
+}
+
+func (s *packetSockets) bound() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.udp != nil
 }
 
 func (s *packetSockets) ReadDatagram(b []byte) (int, *net.UDPAddr, error) {
@@ -177,11 +221,18 @@ func (s *packetSockets) ReadDatagram(b []byte) (int, *net.UDPAddr, error) {
 			continue
 		}
 		n, peer, err := conn.ReadFromUDPAddrPort(wire[:])
+		var received *ikeTraceDatagram
+		if err == nil && s.ikeTrace != nil {
+			received = s.ikeTrace.read(wire[:n])
+		}
 		s.mu.Lock()
 		current := conn == s.udp
-		consumed := current && err == nil && s.demuxLocked(wire[:n], peer)
+		consumed := current && err == nil && s.demuxLocked(wire[:n], peer, received)
 		s.mu.Unlock()
 		if !current {
+			if received != nil {
+				s.ikeTrace.ingress(time.Now(), "obsolete_socket", ikeDatagram{tunnelDatagram: tunnelDatagram{peer: peer}, trace: received})
+			}
 			continue
 		} // discard packets/errors from an obsolete socket
 		if consumed {
@@ -209,29 +260,23 @@ func (s *packetSockets) ReadDatagram(b []byte) (int, *net.UDPAddr, error) {
 // loop. The driver then waits for replacement instead of spinning on errors or
 // terminating its sole accept worker permanently.
 func (s *packetSockets) invalidate(udp *net.UDPConn, tcp net.Listener) {
+	s.replaceMu.Lock()
+	defer s.replaceMu.Unlock()
 	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed || (udp != nil && udp != s.udp) || (tcp != nil && tcp != s.tcp) {
+		s.mu.Unlock()
+		s.writeMu.Unlock()
 		return
 	}
-	s.clearTunnelLocked()
-	s.cancelUDPControlLocked(0, true)
-	if s.udp != nil {
-		_ = s.udp.Close()
-		s.udp = nil
-	}
-	if s.tcp != nil {
-		_ = s.tcp.Close()
-		s.tcp = nil
-	}
-	close(s.changed)
-	s.changed = make(chan struct{})
+	oldUDP, oldTCP := s.detachLocked()
+	s.mu.Unlock()
+	s.writeMu.Unlock()
 	select {
 	case s.failed <- struct{}{}:
 	default:
 	}
+	_ = closeSocketPair(oldUDP, oldTCP)
 }
 
 func (s *packetSockets) WriteDatagram(b []byte, addr *net.UDPAddr) (int, error) {
@@ -280,51 +325,79 @@ func (s *packetSockets) SelectTunnel(ikePeer, nattPeer netip.AddrPort) uint64 {
 	return s.tunnelGeneration
 }
 
-func (s *packetSockets) demuxLocked(packet []byte, peer netip.AddrPort) bool {
+func (s *packetSockets) demuxLocked(packet []byte, peer netip.AddrPort, received *ikeTraceDatagram) bool {
 	peer = netip.AddrPortFrom(peer.Addr().Unmap(), peer.Port())
 	reservations := s.tunnelPeers[peer]
 	if len(reservations) == 0 {
+		if received != nil {
+			s.ikeTrace.ingress(time.Now(), "no_reservation", ikeDatagram{tunnelDatagram: tunnelDatagram{peer: peer}, trace: received})
+		}
 		return false
 	}
 	for generation := range reservations {
-		s.demuxTunnelLocked(packet, peer, generation, s.tunnels[generation])
+		s.demuxTunnelLocked(packet, peer, generation, s.tunnels[generation], received)
 	}
 	return true
 }
 
-func (s *packetSockets) demuxTunnelLocked(packet []byte, peer netip.AddrPort, generation uint64, endpoints tunnelEndpoints) bool {
+func (s *packetSockets) demuxTunnelLocked(packet []byte, peer netip.AddrPort, generation uint64, endpoints tunnelEndpoints, received *ikeTraceDatagram) bool {
 	peer = netip.AddrPortFrom(peer.Addr().Unmap(), peer.Port())
 	if peer != endpoints.ike && peer != endpoints.natt {
 		return false
 	}
-	queue := s.ikePackets
+	datagram := ikeDatagram{tunnelDatagram: tunnelDatagram{generation: generation, peer: peer}, trace: received}
 	if peer == endpoints.natt {
 		kind, body, err := ike.ParseNATDatagram(packet)
-		if err != nil || kind == ike.NATDatagramKeepalive {
+		if err != nil {
+			if received != nil {
+				s.ikeTrace.ingress(time.Now(), "demux_rejected", datagram, slog.String("reason", err.Error()))
+			}
+			return true
+		}
+		if kind == ike.NATDatagramKeepalive {
 			return true
 		}
 		packet = body
 		if kind == ike.NATDatagramESP {
-			queue = s.espPackets
+			s.queueTunnelESP(datagram.tunnelDatagram, body)
+			return true
 		}
 	} else if _, _, err := ike.DecodeHeader(packet); err != nil {
+		if received != nil {
+			s.ikeTrace.ingress(time.Now(), "demux_rejected", datagram, slog.String("reason", err.Error()))
+		}
 		return true
 	}
-	// Full queues drop datagrams; IKE retransmission recovers without blocking
-	// gossip reception, and ESP never creates an unbounded backlog.
-	var timing fixturePacketTiming
-	if queue == s.espPackets {
-		// Admission attempt precedes the existing detach and channel send. It
-		// is not an exact timestamp after the packet entered the queue.
-		timing = beginFixturePacketTimingQueue(fixturePacketTimingInbound)
+	// A full IKE queue drops the datagram without blocking the socket reader.
+	depth, capacity := len(s.ikePackets), cap(s.ikePackets)
+	stage := "ingress_queued"
+	var at time.Time
+	if received != nil {
+		at = time.Now()
 	}
-	if len(queue) < cap(queue) {
-		queue <- tunnelDatagram{timing: timing, generation: generation, peer: peer, packet: append([]byte(nil), packet...)}
-	} else if queue == s.espPackets {
-		timing.QueueRejected()
-		recordESPIngressDrop()
+	if depth < capacity {
+		datagram.packet = append([]byte(nil), packet...)
+		s.ikePackets <- datagram
+	} else {
+		s.ikeIngressDrops.Add(1)
+		stage = "ingress_queue_full"
+	}
+	if received != nil {
+		s.ikeTrace.ingress(at, stage, datagram, slog.Int("depth_before", depth), slog.Int("capacity", capacity))
 	}
 	return true
+}
+
+func (s *packetSockets) queueTunnelESP(datagram tunnelDatagram, packet []byte) {
+	// Admission timing precedes the detach and channel send.
+	datagram.timing = beginFixturePacketTimingQueue(fixturePacketTimingInbound)
+	if len(s.espPackets) < cap(s.espPackets) {
+		datagram.packet = append([]byte(nil), packet...)
+		s.espPackets <- datagram
+	} else {
+		datagram.timing.QueueRejected()
+		recordESPIngressDrop()
+	}
 }
 
 // WriteTunnel is serialized with rebind/selection and has the same one-second

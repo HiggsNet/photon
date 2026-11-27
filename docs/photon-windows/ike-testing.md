@@ -177,3 +177,24 @@ SKF 单次最多 64 片、65507 字节、30 秒，先验完整性后占用重组
 Wintun 路由。当前业务 packet 缺 B4 verdict 默认拒绝，`tunnel_ready=false` 保持诚实；
 Wintun/SADR/Babel、系统路由与 SCM 仍须各自完成。没有将这些测试应用到生产网关，
 没有 push、打 tag、发布或部署。
+
+## 对齐 Windows 网卡与 IKE 超时
+
+在测试实例的 YAML 中打开 `log.level: debug`，从状态数据库旁的 `*.db.log`
+查找 `event=ike_trace`。在 Windows 用 [PktMon](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/pktmon-start)
+选择实际承载隧道的网卡，按 Photon 本地 UDP 端口和测试网关地址过滤。保留 ETL 并导出
+pcapng。先用正常握手或保活确认采集文件中有两方向的逐包记录。如果 PktMon
+只导出出站包，可用 [netsh trace](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/netsh-trace)
+采集同一网卡的 NDIS 入站事件，使用原始 ETL 的 UTC 时间与 Photon 对齐。
+对照同一交换的远端地址和端口、双方 SPI、`exchange`、`message_id`、
+`flags` 和时间。收到的每个副本有自己的 `rx_id`，同一端点如有多个隧道预留，
+用 `generation` 区分日志所指的隧道。
+
+- `socket_read_at` 是 UDP 读出时间。`ingress_queue_full` 表示 Photon 已读出但未进入共享队列。
+- `ingress_dequeued`、`owner_received`、`inbox_queued` 和 `worker_started` 区分共享队列等待、事件循环处理以及每隧道或 worker 队列等待。
+- `worker_finished` 到 `owner_applied` 可见结果回传延迟。`pending_cleared=true` 且 `error=<nil>` 表示当前待重传请求已完成。
+- `tunnel_stopping` 记录当时等待的 IKE 请求、重传次数、截止时间和队列深度。`generation_retired` 表示取到应答时该代隧道已经失效。
+- `send_queued`、`send_started`、`send_finished` 区分发送队列等待与 UDP 写调用；网卡抓包确认实际出站。
+
+追踪时间取自各阶段，后台输出的行可能交错，按 `ts` 和 `rx_id` 排序。
+`ike_trace_overflow` 表示 IKE 追踪队列丢了事件，`runtime_log_overflow` 表示后台运行日志队列丢了记录。两者都带有丢弃计数。追踪只记录 IKE 公开头部和时间等元数据。

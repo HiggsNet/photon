@@ -50,19 +50,19 @@ func TestFixturePacketDropsConcurrentSnapshots(t *testing.T) {
 
 func TestFixturePacketDropsESPAdmission(t *testing.T) {
 	before := ReadFixturePacketDrops()
-	s := &packetSockets{ikePackets: make(chan tunnelDatagram, 16), espPackets: make(chan tunnelDatagram, 64)}
+	s := &packetSockets{ikePackets: make(chan ikeDatagram, 16), espPackets: make(chan tunnelDatagram, 64)}
 	ikePeer := netip.MustParseAddrPort("192.0.2.1:500")
 	nattPeer := netip.MustParseAddrPort("192.0.2.1:4500")
 	generation := s.SelectTunnel(ikePeer, nattPeer)
 	esp := []byte{0x12, 0x34, 0x56, 0x78, 0, 0, 0, 1}
 	for range cap(s.espPackets) {
-		if !s.demuxLocked(esp, nattPeer) {
+		if !s.demuxLocked(esp, nattPeer, nil) {
 			t.Fatal("selected ESP bypassed demux")
 		}
 	}
 	assertFixtureDropDelta(t, before, FixturePacketDrops{})
 	for range 3 {
-		if !s.demuxLocked(esp, nattPeer) {
+		if !s.demuxLocked(esp, nattPeer, nil) {
 			t.Fatal("full ESP queue bypassed demux")
 		}
 	}
@@ -75,17 +75,17 @@ func TestFixturePacketDropsESPAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range cap(s.ikePackets) + 2 {
-		if !s.demuxLocked(wrapped, nattPeer) || !s.demuxLocked(request.Request(), ikePeer) {
+		if !s.demuxLocked(wrapped, nattPeer, nil) || !s.demuxLocked(request.Request(), ikePeer, nil) {
 			t.Fatal("selected IKE bypassed demux")
 		}
 	}
 	for _, packet := range [][]byte{{255}, {0}, {0, 0, 0, 0}, {0, 0, 0, 0, 1}} {
-		if !s.demuxLocked(packet, nattPeer) {
+		if !s.demuxLocked(packet, nattPeer, nil) {
 			t.Fatal("selected keepalive or malformed NAT packet bypassed demux")
 		}
 	}
 	foreign := netip.MustParseAddrPort("192.0.2.2:4500")
-	if s.demuxLocked(esp, foreign) || s.demuxLocked([]byte("gossip"), foreign) {
+	if s.demuxLocked(esp, foreign, nil) || s.demuxLocked([]byte("gossip"), foreign, nil) {
 		t.Fatal("unselected peer was consumed as tunnel traffic")
 	}
 	assertFixtureDropDelta(t, before, FixturePacketDrops{ESPIngress: 3})
@@ -101,7 +101,7 @@ func TestFixturePacketDropsESPAdmission(t *testing.T) {
 	// Once the existing consumer frees capacity, admission resumes without a
 	// reset or another drop; a new selection keeps its original generation gate.
 	generation = s.SelectTunnel(netip.AddrPort{}, nattPeer)
-	if !s.demuxLocked(esp, nattPeer) || (<-s.espPackets).generation != generation {
+	if !s.demuxLocked(esp, nattPeer, nil) || (<-s.espPackets).generation != generation {
 		t.Fatal("selection or capacity recovery changed")
 	}
 	assertFixtureDropDelta(t, before, FixturePacketDrops{ESPIngress: 3})

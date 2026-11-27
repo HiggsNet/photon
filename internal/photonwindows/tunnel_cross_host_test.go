@@ -90,7 +90,7 @@ func TestWindowsStrongSwanCrossHost(t *testing.T) {
 		for !done() {
 			select {
 			case packet := <-socket.ikePackets:
-				if err := tunnel.handle(packet, plan, time.Now()); err != nil {
+				if err := tunnel.handle(packet.tunnelDatagram, plan, time.Now()); err != nil {
 					t.Fatalf("%s: %v", label, err)
 				}
 			case <-ticker.C:
@@ -146,7 +146,7 @@ func TestWindowsStrongSwanCrossHost(t *testing.T) {
 		for {
 			select {
 			case packet := <-socket.ikePackets:
-				if err := tunnel.handle(packet, plan, time.Now()); err != nil {
+				if err := tunnel.handle(packet.tunnelDatagram, plan, time.Now()); err != nil {
 					t.Fatal(err)
 				}
 			case packet := <-socket.espPackets:

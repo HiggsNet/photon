@@ -149,18 +149,23 @@ func TestPacketSocketReceiveDuringBlockedWrite(t *testing.T) {
 			case <-time.After(500 * time.Millisecond):
 				t.Fatal("a blocked send prevented Gossip/ESP/IKE reception")
 			}
-			for _, expected := range []struct {
-				queue  <-chan tunnelDatagram
-				packet []byte
-			}{{s.espPackets, outbound}, {s.ikePackets, request.Request()}} {
-				select {
-				case got := <-expected.queue:
-					if got.generation != generation || got.peer != endpoint || !bytes.Equal(got.packet, expected.packet) {
-						t.Fatal("concurrent ingress changed content, source or generation")
-					}
-				default:
-					t.Fatal("tunnel packet was not admitted before send completed")
+			checkIngress := func(got tunnelDatagram, want []byte) {
+				t.Helper()
+				if got.generation != generation || got.peer != endpoint || !bytes.Equal(got.packet, want) {
+					t.Fatal("concurrent ingress changed content, source or generation")
 				}
+			}
+			select {
+			case got := <-s.espPackets:
+				checkIngress(got, outbound)
+			default:
+				t.Fatal("ESP was not admitted before send completed")
+			}
+			select {
+			case got := <-s.ikePackets:
+				checkIngress(got.tunnelDatagram, request.Request())
+			default:
+				t.Fatal("IKE was not admitted before send completed")
 			}
 			unblock()
 			if !nativeControl {

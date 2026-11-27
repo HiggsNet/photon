@@ -28,6 +28,7 @@ type meshRuntime struct {
 	state            *State
 	socket           *packetSockets
 	logger           *slog.Logger
+	ikeTrace         *ikeTrace
 	peers            map[meshPath]*meshPeer
 	peerOrder        []*meshPeer
 	routeSelections  map[meshRouteKey]*meshRouteSelection
@@ -72,11 +73,14 @@ type meshPeer struct {
 	starting     *meshIKEStart
 	responding   *meshIKEResponse
 	heldResponse *meshIKEResponseResult
-	ikeInbox     []tunnelDatagram
+	ikeInbox     []ikeDatagram
 }
 
 func newMeshRuntime(ctx context.Context, config *Config, state *State, socket *packetSockets, factory packetDeviceFactory, logger *slog.Logger, onPublication func()) *meshRuntime {
 	m := &meshRuntime{ctx: ctx, config: config, state: state, socket: socket, logger: logger, peers: make(map[meshPath]*meshPeer), byData: make(map[*gatewayDataplane]*meshPeer), device: newMeshDevice(ctx, factory), opened: make(chan leafOpenResult, 64), jobs: make(chan dataplaneJob, dataplaneQueueSize), onPublication: onPublication}
+	if socket != nil {
+		m.ikeTrace = socket.ikeTrace
+	}
 	m.ikeStarts = make(chan *meshIKEStart, 4)
 	m.txWake.ready = make(chan struct{}, 1)
 	m.device.wake = m.txWake.signal
@@ -248,6 +252,25 @@ func (p *meshPeer) cancelWork() {
 }
 
 func (m *meshRuntime) stopPeerWithEvent(p *meshPeer, event, reason string) {
+	t := p.tunnel
+	if m.ikeTrace != nil && t.phase != 0 {
+		now := time.Now()
+		r := m.ikeTrace.event(now, "tunnel_stopping", t.generation, t.peer,
+			slog.String("peer", string(p.config.Gateway.AllowedZones[0])), slog.String("reason", reason),
+			slog.Int("phase", int(t.phase)), slog.Int("attempts", t.attempts), slog.Time("retry_at", t.retryAt),
+			slog.Int("ingress_depth", len(m.socket.ikePackets)), slog.Uint64("ingress_drops_total", m.socket.ikeIngressDrops.Load()),
+			slog.Int("inbox_depth", len(p.ikeInbox)), slog.Int("worker_depth", len(m.ikeResponses)),
+			slog.Bool("worker_leased", p.responding != nil), slog.Bool("waiting_policy", p.heldResponse != nil))
+		if len(t.pending) != 0 {
+			if header, ok := ikeTraceHeader(t.pending[0]); ok {
+				addIKETraceHeader(&r, header)
+			}
+		}
+		m.ikeTrace.emit(r)
+		for _, queued := range p.ikeInbox {
+			m.ikeTrace.ingress(now, "inbox_discarded_on_stop", queued)
+		}
+	}
 	p.cancelWork()
 	if err := p.leaf.stop(); err != nil {
 		m.logger.Warn("leaf_cleanup_failed", "peer", p.config.Gateway.AllowedZones[0], "error", err)
@@ -444,16 +467,25 @@ func (m *meshRuntime) findGeneration(generation uint64) *meshPeer {
 	return nil
 }
 
-func (m *meshRuntime) handleIKE(packet tunnelDatagram) error {
+func (m *meshRuntime) handleIKE(packet ikeDatagram) error {
 	p := m.findGeneration(packet.generation)
 	if p == nil {
+		if packet.trace != nil {
+			m.ikeTrace.ingress(time.Now(), "generation_retired", packet)
+		}
 		return nil
 	}
 	now := time.Now()
+	if packet.trace != nil {
+		m.ikeTrace.ingress(now, "owner_received", packet, slog.String("peer", string(p.config.Gateway.AllowedZones[0])),
+			slog.Int("phase", int(p.tunnel.phase)), slog.Int("inbox_depth", len(p.ikeInbox)))
+	}
 	plan, pending := m.projectedPlan(p, now)
 	if pending {
-		if packet.peer == p.tunnel.peer && len(p.ikeInbox) < meshIKEPendingResponses {
-			p.ikeInbox = append(p.ikeInbox, packet)
+		if packet.peer == p.tunnel.peer {
+			m.queuePendingIKE(p, packet, now, "policy_pending")
+		} else if packet.trace != nil {
+			m.ikeTrace.ingress(now, "owner_rejected", packet, slog.String("reason", "remote changed while policy pending"))
 		}
 		return nil
 	}

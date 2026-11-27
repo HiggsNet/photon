@@ -94,7 +94,7 @@ func runStrongSwanWindowsTunnel(t *testing.T, gateway, local string, mobike bool
 	for tunnel.phase != 3 {
 		select {
 		case packet := <-socket.ikePackets:
-			if err := tunnel.handle(packet, plan, time.Now()); err != nil {
+			if err := tunnel.handle(packet.tunnelDatagram, plan, time.Now()); err != nil {
 				t.Fatal(err)
 			}
 		case <-ticker.C:
@@ -117,7 +117,7 @@ func runStrongSwanWindowsTunnel(t *testing.T, gateway, local string, mobike bool
 	for len(tunnel.pending) != 0 {
 		select {
 		case packet := <-socket.ikePackets:
-			if err := tunnel.handle(packet, plan, time.Now()); err != nil {
+			if err := tunnel.handle(packet.tunnelDatagram, plan, time.Now()); err != nil {
 				t.Fatal(err)
 			}
 		case <-ctx.Done():
@@ -187,7 +187,7 @@ func runStrongSwanWindowsTunnel(t *testing.T, gateway, local string, mobike bool
 		for !tunnel.mobikeDeadline.IsZero() {
 			select {
 			case packet := <-socket.ikePackets:
-				if err := tunnel.handle(packet, plan, time.Now()); err != nil {
+				if err := tunnel.handle(packet.tunnelDatagram, plan, time.Now()); err != nil {
 					t.Fatal(err)
 				}
 			case <-ticker.C:
@@ -211,7 +211,7 @@ func runStrongSwanWindowsTunnel(t *testing.T, gateway, local string, mobike bool
 	for tunnel.child.InitiatorSPI == oldSPI || len(tunnel.pending) != 0 {
 		select {
 		case packet := <-socket.ikePackets:
-			if err := tunnel.handle(packet, plan, time.Now()); err != nil {
+			if err := tunnel.handle(packet.tunnelDatagram, plan, time.Now()); err != nil {
 				t.Fatal(err)
 			}
 		case <-ticker.C:
@@ -228,7 +228,7 @@ func runStrongSwanWindowsTunnel(t *testing.T, gateway, local string, mobike bool
 	for data.sas[oldSPI] != nil {
 		select {
 		case packet := <-socket.ikePackets:
-			if err := tunnel.handle(packet, plan, time.Now()); err != nil {
+			if err := tunnel.handle(packet.tunnelDatagram, plan, time.Now()); err != nil {
 				t.Fatal(err)
 			}
 		case <-ticker.C:
@@ -251,7 +251,7 @@ func runStrongSwanWindowsTunnel(t *testing.T, gateway, local string, mobike bool
 	for tunnel.session == oldSession {
 		select {
 		case packet := <-socket.ikePackets:
-			if err := tunnel.handle(packet, plan, time.Now()); err != nil {
+			if err := tunnel.handle(packet.tunnelDatagram, plan, time.Now()); err != nil {
 				t.Fatal(err)
 			}
 		case <-ticker.C:
@@ -267,7 +267,7 @@ func runStrongSwanWindowsTunnel(t *testing.T, gateway, local string, mobike bool
 	for !tunnel.probeAt.After(probeStarted) || len(tunnel.pending) != 0 {
 		select {
 		case packet := <-socket.ikePackets:
-			if err := tunnel.handle(packet, plan, time.Now()); err != nil {
+			if err := tunnel.handle(packet.tunnelDatagram, plan, time.Now()); err != nil {
 				t.Fatal(err)
 			}
 		case <-ticker.C:
@@ -290,7 +290,7 @@ func runStrongSwanWindowsTunnel(t *testing.T, gateway, local string, mobike bool
 		for !complete() {
 			select {
 			case packet := <-socket.ikePackets:
-				if err := tunnel.handle(packet, plan, time.Now()); err != nil {
+				if err := tunnel.handle(packet.tunnelDatagram, plan, time.Now()); err != nil {
 					t.Fatalf("peer %s rekey: %v", kind, err)
 				}
 			case <-ticker.C:
@@ -316,7 +316,7 @@ func runStrongSwanWindowsTunnel(t *testing.T, gateway, local string, mobike bool
 	for !tunnel.probeAt.After(probeStarted) || len(tunnel.pending) != 0 {
 		select {
 		case packet := <-socket.ikePackets:
-			if err := tunnel.handle(packet, plan, time.Now()); err != nil {
+			if err := tunnel.handle(packet.tunnelDatagram, plan, time.Now()); err != nil {
 				t.Fatal(err)
 			}
 		case <-ticker.C:

@@ -99,16 +99,16 @@ func TestSharedUDPDemuxBoundsAndKeepalive(t *testing.T) {
 	s.SelectTunnel(netip.AddrPort{}, peer)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.demuxLocked([]byte{0xff}, peer) || len(s.ikePackets) != 0 || len(s.espPackets) != 0 {
+	if !s.demuxLocked([]byte{0xff}, peer, nil) || len(s.ikePackets) != 0 || len(s.espPackets) != 0 {
 		t.Fatal("keepalive produced authenticated traffic")
 	}
 	for range 1000 {
-		s.demuxLocked([]byte{0x12, 0x34, 0x56, 0x78, 0, 0, 0, 1}, peer)
+		s.demuxLocked([]byte{0x12, 0x34, 0x56, 0x78, 0, 0, 0, 1}, peer, nil)
 	}
 	if len(s.espPackets) != 64 {
 		t.Fatal("unbounded queue")
 	}
-	if s.demuxLocked([]byte{0xff}, netip.MustParseAddrPort("127.0.0.2:4500")) {
+	if s.demuxLocked([]byte{0xff}, netip.MustParseAddrPort("127.0.0.2:4500"), nil) {
 		t.Fatal("unselected endpoint accepted")
 	}
 }

@@ -12,21 +12,27 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/HiggsNet/photon/internal/logoutput"
 )
 
-const logFileLimit = 8 << 20
+const (
+	logFileLimit     = 8 << 20
+	logQueueCapacity = 1024
+)
 
 // Event IDs are fixed and independent of peers, addresses and error text.
 // EventCreate's installed message resources cover these IDs (1..1000).
 var runtimeEventIDs = map[string]uint32{
 	"runtime_started": 101, "runtime_start_failed": 102, "runtime_stopped": 103, "runtime_stop_failed": 104,
-	"gossip_started": 201, "gossip_rebound": 202, "gossip_rebind_failed": 203, "gossip_event_failed": 204,
+	"runtime_log_overflow": 105,
+	"gossip_started":       201, "gossip_rebound": 202, "gossip_rebind_failed": 203, "gossip_event_failed": 204,
 	"gossip_receive_failed": 205, "gossip_sync_failed": 206, "gossip_bootstrap_refresh_failed": 207,
 	"gateway_candidates_changed": 301, "gateway_plan_changed": 302,
 	"tunnel_authenticated": 401, "tunnel_ready_changed": 402, "tunnel_stopped": 403, "tunnel_packet_rejected": 404, "tunnel_local_identity_unavailable": 405,
+	"ike_trace": 406, "ike_trace_overflow": 407,
 	"leaf_unavailable": 501, "leaf_device_failed": 502, "leaf_read_failed": 503, "leaf_packet_failed": 504, "leaf_cleanup_failed": 505,
 	"power_resumed": 601,
 }
@@ -69,18 +75,21 @@ func NewRuntimeLogger(config *Config, console io.Writer, serviceName string) (*s
 		handlers = append(handlers, logoutput.TextHandler(console, level))
 	}
 	handler := &runtimeLogHandler{handlers: handlers, event: event, level: level}
-	return slog.New(handler), &runtimeLogCloser{file: file, event: event}, nil
+	handler.queue = newRuntimeLogQueue(level, handler.write)
+	return slog.New(handler), &runtimeLogCloser{file: file, event: event, queue: handler.queue}, nil
 }
 
 type runtimeLogCloser struct {
 	file  *runtimeLogFile
 	event runtimeEventSink
+	queue *runtimeLogQueue
 	once  sync.Once
 	err   error
 }
 
 func (c *runtimeLogCloser) Close() error {
 	c.once.Do(func() {
+		c.queue.close()
 		c.err = c.file.Close()
 		if c.event != nil {
 			c.err = errors.Join(c.err, c.event.Close())
@@ -95,6 +104,7 @@ type runtimeLogHandler struct {
 	level    slog.Level
 	attrs    []slog.Attr
 	groups   []string
+	queue    *runtimeLogQueue
 }
 
 func (h *runtimeLogHandler) Enabled(_ context.Context, level slog.Level) bool {
@@ -126,17 +136,92 @@ func (h *runtimeLogHandler) Handle(ctx context.Context, record slog.Record) erro
 	}
 	safe.AddAttrs(slog.Uint64("event_id", uint64(id)))
 	safe.AddAttrs(attrs...)
+	if h.queue != nil {
+		// Sanitization above detaches mutable values before handing a record
+		// to the writer. Neither file nor Event Log I/O runs on the caller.
+		h.queue.enqueue(safe)
+		return nil
+	}
+	return h.write(ctx, safe)
+}
+
+func (h *runtimeLogHandler) write(ctx context.Context, record slog.Record) error {
 	var result error
 	for _, handler := range h.handlers {
-		result = errors.Join(result, handler.Handle(ctx, safe))
+		result = errors.Join(result, handler.Handle(ctx, record))
 	}
 	if h.event != nil && record.Level >= slog.LevelInfo {
 		// Use the same sanitized representation, never the original record.
 		var text strings.Builder
-		_ = logoutput.TextHandler(&text, slog.LevelInfo).Handle(ctx, safe)
+		_ = logoutput.TextHandler(&text, slog.LevelInfo).Handle(ctx, record)
+		id := runtimeEventIDs[record.Message]
+		if id == 0 {
+			id = 999
+		}
 		result = errors.Join(result, h.event.Report(record.Level, id, text.String()))
 	}
 	return result
+}
+
+type runtimeLogQueue struct {
+	mu      sync.Mutex
+	records chan slog.Record
+	done    chan struct{}
+	closed  bool
+	dropped atomic.Uint64
+}
+
+func newRuntimeLogQueue(level slog.Level, write func(context.Context, slog.Record) error) *runtimeLogQueue {
+	q := &runtimeLogQueue{records: make(chan slog.Record, logQueueCapacity), done: make(chan struct{})}
+	go q.run(max(level, slog.LevelWarn), write)
+	return q
+}
+
+func (q *runtimeLogQueue) enqueue(record slog.Record) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed {
+		return
+	}
+	select {
+	case q.records <- record:
+	default:
+		q.dropped.Add(1)
+	}
+}
+
+func (q *runtimeLogQueue) run(overflowLevel slog.Level, write func(context.Context, slog.Record) error) {
+	defer close(q.done)
+	ctx := context.Background()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	reportDrops := func() {
+		if dropped := q.dropped.Swap(0); dropped != 0 {
+			record := slog.NewRecord(time.Now(), overflowLevel, "runtime_log_overflow", 0)
+			record.AddAttrs(slog.Uint64("event_id", uint64(runtimeEventIDs[record.Message])), slog.Uint64("dropped_events", dropped))
+			_ = write(ctx, record)
+		}
+	}
+	for {
+		select {
+		case record, ok := <-q.records:
+			if !ok {
+				reportDrops()
+				return
+			}
+			_ = write(ctx, record)
+		case <-ticker.C:
+			reportDrops()
+		}
+	}
+}
+
+func (q *runtimeLogQueue) close() {
+	q.mu.Lock()
+	q.closed = true
+	close(q.records)
+	q.mu.Unlock()
+	<-q.done
 }
 
 func sensitiveLogKey(key string) bool {

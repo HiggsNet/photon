@@ -168,14 +168,14 @@ func TestPacketTimingConsumerFreshGatesAndDelivery(t *testing.T) {
 
 func TestPacketTimingQueueAdmissionAndStop(t *testing.T) {
 	t.Run("ESP full and non-ESP excluded", func(t *testing.T) {
-		s := &packetSockets{ikePackets: make(chan tunnelDatagram, 16), espPackets: make(chan tunnelDatagram, 64)}
+		s := &packetSockets{ikePackets: make(chan ikeDatagram, 16), espPackets: make(chan tunnelDatagram, 64)}
 		peer := netip.MustParseAddrPort("192.0.2.1:4500")
 		s.SelectTunnel(netip.AddrPort{}, peer)
 		for range cap(s.espPackets) {
 			s.espPackets <- tunnelDatagram{}
 		}
 		startConsumerTiming(t)
-		if !s.demuxLocked([]byte{255}, peer) || s.demuxLocked([]byte("gossip"), netip.MustParseAddrPort("192.0.2.2:4500")) {
+		if !s.demuxLocked([]byte{255}, peer, nil) || s.demuxLocked([]byte("gossip"), netip.MustParseAddrPort("192.0.2.2:4500"), nil) {
 			t.Fatal("keepalive or foreign behavior changed")
 		}
 		initiator, err := ike.NewInitiator()
@@ -186,7 +186,7 @@ func TestPacketTimingQueueAdmissionAndStop(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !s.demuxLocked(request, peer) || !s.demuxLocked([]byte{1, 2, 3, 4, 0, 0, 0, 1}, peer) {
+		if !s.demuxLocked(request, peer, nil) || !s.demuxLocked([]byte{1, 2, 3, 4, 0, 0, 0, 1}, peer, nil) {
 			t.Fatal("selected tunnel datagrams bypassed demux")
 		}
 		report := StopFixturePacketTiming()

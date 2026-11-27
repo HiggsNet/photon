@@ -8,6 +8,7 @@ import (
 	"net"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -61,6 +62,104 @@ func TestDaemonRebindKeepsStateAndObjectPull(t *testing.T) {
 	// Closing the daemon releases the original database handle.
 	state := fixture.openState(t, fixture.leftPath, "node-a.catofes.")
 	state.Close()
+}
+
+func TestDaemonServesControlWhileOldSocketCloses(t *testing.T) {
+	fixture := newWindowsGossipFixture(t)
+	config := &Config{State: StateConfig{Path: fixture.leftPath}, ManagedZone: "node-a.catofes.", TrustedRootPublicKey: fixture.rootPublic, GossipListen: "127.0.0.1:0"}
+	logs := consoleLog{ready: make(chan string, 1)}
+	d := NewDaemon(config, slog.New(slog.NewJSONHandler(logs, nil)))
+	pinned := make(chan *packetSockets, 1)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unpin := func() { releaseOnce.Do(func() { close(release) }) }
+	d.rebindSocket = func(sockets *packetSockets, ctx context.Context) error {
+		sockets.mu.Lock()
+		conn := sockets.udp
+		sockets.mu.Unlock()
+		raw, err := conn.SyscallConn()
+		if err != nil {
+			return err
+		}
+		held := make(chan struct{})
+		go func() {
+			_ = raw.Control(func(uintptr) {
+				close(held)
+				<-release
+			})
+		}()
+		select {
+		case <-held:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		pinned <- sockets
+		return sockets.Rebind(ctx)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- d.Run(ctx) }()
+	t.Cleanup(func() {
+		unpin()
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Error(err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Error("daemon did not stop")
+		}
+	})
+	var original string
+	select {
+	case original = <-logs.ready:
+	case <-time.After(3 * time.Second):
+		t.Fatal("daemon did not start")
+	}
+	rebound := make(chan error, 1)
+	go func() { rebound <- d.Rebind(ctx) }()
+	var sockets *packetSockets
+	select {
+	case sockets = <-pinned:
+	case <-time.After(time.Second):
+		t.Fatal("old socket was not pinned")
+	}
+	detached := make(chan struct{})
+	go func() {
+		defer close(detached)
+		for sockets.bound() && ctx.Err() == nil {
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	select {
+	case <-detached:
+	case <-time.After(time.Second):
+		t.Fatal("socket state was blocked behind close")
+	}
+	query, stopQuery := context.WithTimeout(ctx, time.Second)
+	defer stopQuery()
+	if sample, err := d.Observe(query); err != nil || !sample.Running {
+		t.Fatalf("event loop did not serve an observation while the socket was closing: running=%t, err=%v", sample.Running, err)
+	}
+	select {
+	case err := <-rebound:
+		t.Fatalf("replacement completed while old socket was pinned: %v", err)
+	default:
+	}
+	unpin()
+	select {
+	case err := <-rebound:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("replacement did not complete after unpinning the old socket")
+	}
+	response, err := (objectPullClient{}).Exchange(ctx, original, &gossip.ObjectPullRequest{Type: gossip.ObjectPullZone, Zone: "node-a.catofes."})
+	if err != nil || !response.OK {
+		t.Fatalf("same endpoint did not resume after replacement: %v %v", response, err)
+	}
 }
 
 type daemonPlanLog struct {
