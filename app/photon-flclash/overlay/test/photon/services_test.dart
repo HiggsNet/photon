@@ -387,6 +387,69 @@ rule-providers:
     expect(template.containsKey('proxy-providers'), isFalse);
   });
 
+  test('template group positions survive preview, apply and disconnect', () {
+    final now = DateTime.now();
+    final directory = PhotonDirectory.fromJson(directoryFixture(now: now));
+    final template = Map<String, dynamic>.from(
+      loadYaml('''
+proxy-groups:
+  - name: Photon Paths
+  - {name: Nodes, type: select, proxies: [Photon, DIRECT]}
+  - name: Photon
+  - name: Photon Balance
+rules:
+  - DOMAIN-SUFFIX,example.org,Photon Paths
+  - MATCH,Nodes
+''') as Map,
+    );
+    final profile = photonProxyProfile(
+      directory: directory,
+      now: now,
+      splitRoutes: [],
+      adapter: directory.adapterName,
+      backendPath: 'backend',
+      template: template,
+    );
+    final preview = photonProxyTemplatePreview(template);
+    final offline = blockedPhotonProfile(profile);
+    for (final config in [preview, profile, offline]) {
+      final groups = (config['proxy-groups'] as List).cast<Map>();
+      expect(groups.map((group) => group['name']), [
+        'Photon Paths',
+        'Nodes',
+        'Photon',
+        'Photon Balance',
+        'Photon Auto',
+      ]);
+      expect(groups.first['proxies'], ['REJECT']);
+      expect(groups[1]['proxies'], ['Photon', 'DIRECT']);
+      final rules = config['rules'] as List;
+      expect(rules.sublist(rules.length - 2), template['rules']);
+    }
+    final groups = profile['proxy-groups'] as List;
+    expect(groups[2]['use'], ['photon-services']);
+    expect(groups[3]['type'], 'load-balance');
+    expect(groups[4]['type'], 'url-test');
+    expect((template['proxy-groups'] as List).first, {'name': 'Photon Paths'});
+  });
+
+  test('generated proxy group positions reject duplicates and overrides', () {
+    for (final yaml in [
+      'proxy-groups: [{name: Photon}, {name: Photon}]',
+      'proxy-groups: [{name: Photon, type: select}]',
+      'proxies: [{name: Photon}]',
+    ]) {
+      final template = Map<String, dynamic>.from(
+        loadYaml('$yaml\nrules: ["MATCH,Photon"]') as Map,
+      );
+      expect(
+        () => photonProxyTemplatePreview(template),
+        throwsFormatException,
+        reason: yaml,
+      );
+    }
+  });
+
   test('all authorized SOCKS5 endpoints form stable manual, auto and balance groups', () {
     final directory = PhotonDirectory.fromJson(directoryFixture());
     Map<String, dynamic> build(PhotonDirectory directory) => photonProxyProfile(

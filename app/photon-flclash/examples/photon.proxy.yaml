@@ -70,6 +70,8 @@ dns:
     respect-rules: true
 
 proxy-groups:
+  - name: Photon
+  - name: Photon Paths
   - empty-fallback: REJECT
     name: Nodes
     proxies:

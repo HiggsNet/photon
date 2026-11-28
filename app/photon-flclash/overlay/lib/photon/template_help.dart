@@ -14,6 +14,8 @@ tun:
   route-exclude-address:
     - 192.168.0.0/16
 proxy-groups:
+  - name: Photon
+  - name: Photon Paths
   - name: My Proxy
     type: select
     proxies: [Photon, Photon Auto, Photon Balance, Photon Paths, DIRECT]

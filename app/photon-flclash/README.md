@@ -45,6 +45,8 @@
 
 ```yaml
 proxy-groups:
+  - name: Photon
+  - name: Photon Paths
   - name: Nodes
     type: select
     proxies: [Photon, Photon Paths, DIRECT]
@@ -53,6 +55,8 @@ rules:
   - DOMAIN-SUFFIX,example.org,Photon Paths
   - MATCH,DIRECT
 ```
+
+在 `proxy-groups` 中用只含 `name` 的条目给内置组指定在**代理**页的位置。上例把 `Photon` 和 `Photon Paths` 放在 `Nodes` 前。`Photon Auto` 和 `Photon Balance` 也可以这样排序，未指定位置的内置组追加在末尾。分流仍按 `rules` 的顺序匹配。
 
 `Photon`、`Photon Auto`、`Photon Balance`、`Photon Paths` 和 `photon-services` 由 Photon 提供。`Photon Paths` 包含勾选 **加入 Photon 配置** 的路径，组为空时会拒绝流量。自定义组也可以用 `use: [photon-services]` 引入所有节点，再用 Mihomo 的 `filter` 筛选地区。建议为这类组设置 `empty-fallback: REJECT`，让筛选后为空的组拒绝连接。模板由用户编辑，生成的配置由 FlClash 管理。模板启用后，Photon 断开时只停用 Photon 出口，用户规则和其他出口继续可用。
 

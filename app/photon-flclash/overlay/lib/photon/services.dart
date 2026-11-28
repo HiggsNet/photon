@@ -357,12 +357,18 @@ void validatePhotonProxyTemplate(Map<String, dynamic> template) {
         items.any((item) => item is! Map || item['name'] is! String)) {
       throw FormatException('Invalid Photon proxy template section: $section');
     }
-    if (items.any(
-      (item) => photonProxyGroups.contains((item as Map)['name']),
-    )) {
-      throw const FormatException(
-        'The Photon proxy template uses a reserved name',
-      );
+    final placed = <String>{};
+    for (final item in items.cast<Map>()) {
+      final name = item['name'] as String;
+      if (!photonProxyGroups.contains(name)) continue;
+      if (section != 'proxy-groups' || item.length != 1) {
+        throw FormatException(
+          'Generated group "$name" only accepts a name in proxy-groups',
+        );
+      }
+      if (!placed.add(name)) {
+        throw FormatException('Duplicate generated group "$name"');
+      }
     }
   }
   for (final section in [
@@ -516,6 +522,48 @@ Map<String, dynamic> _renderPhotonProxyProfile({
           'use': [photonServiceProvider],
           'empty-fallback': 'REJECT',
         };
+  final generatedGroups = <String, Map<String, dynamic>>{
+    'Photon': {
+      'name': 'Photon',
+      'type': 'select',
+      ...groupEndpoints,
+      'proxies': [
+        'Photon Auto',
+        'Photon Balance',
+        if (paths.isNotEmpty) _pathGroup,
+        if (template == null) ...names,
+      ],
+    },
+    'Photon Auto': {
+      'name': 'Photon Auto',
+      'type': 'url-test',
+      ...groupEndpoints,
+      'url': 'https://www.gstatic.com/generate_204',
+      'interval': 300,
+      'tolerance': 80,
+    },
+    'Photon Balance': {
+      'name': 'Photon Balance',
+      'type': 'load-balance',
+      'strategy': 'consistent-hashing',
+      ...groupEndpoints,
+      'url': 'https://www.gstatic.com/generate_204',
+      'interval': 300,
+    },
+    if (showPaths)
+      _pathGroup: {
+        'name': _pathGroup,
+        'type': 'select',
+        'proxies': paths.isEmpty
+            ? ['REJECT']
+            : [for (final route in paths) route['name']],
+      },
+  };
+  final groups = [
+    for (final group in templateGroups)
+      generatedGroups.remove(group['name']) ?? group,
+  ];
+  groups.addAll(generatedGroups.values);
   final protection = {
     'route-exclude-address': exclusions,
     'rules': bypassRules,
@@ -564,44 +612,7 @@ Map<String, dynamic> _renderPhotonProxyProfile({
     if (template?['rule-providers'] case final Map providers)
       'rule-providers': providers,
     if (template?['sub-rules'] case final Map subRules) 'sub-rules': subRules,
-    'proxy-groups': [
-      ...templateGroups,
-      {
-        'name': 'Photon',
-        'type': 'select',
-        ...groupEndpoints,
-        'proxies': [
-          'Photon Auto',
-          'Photon Balance',
-          if (paths.isNotEmpty) _pathGroup,
-          if (template == null) ...names,
-        ],
-      },
-      {
-        'name': 'Photon Auto',
-        'type': 'url-test',
-        ...groupEndpoints,
-        'url': 'https://www.gstatic.com/generate_204',
-        'interval': 300,
-        'tolerance': 80,
-      },
-      {
-        'name': 'Photon Balance',
-        'type': 'load-balance',
-        'strategy': 'consistent-hashing',
-        ...groupEndpoints,
-        'url': 'https://www.gstatic.com/generate_204',
-        'interval': 300,
-      },
-      if (showPaths)
-        {
-          'name': _pathGroup,
-          'type': 'select',
-          'proxies': paths.isEmpty
-              ? ['REJECT']
-              : [for (final route in paths) route['name']],
-        },
-    ],
+    'proxy-groups': groups,
     'rules': [
       ...bypassRules,
       ...(templateRules ?? ['MATCH,Photon']),
