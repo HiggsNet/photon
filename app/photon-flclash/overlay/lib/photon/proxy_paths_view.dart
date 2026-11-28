@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:fl_clash/features/form/form_page.dart';
 import 'package:fl_clash/l10n/l10n.dart';
 import 'package:fl_clash/providers/app.dart';
 import 'package:fl_clash/ui/icons/icons.dart';
@@ -103,9 +104,9 @@ class _PhotonProxyPathsState extends ConsumerState<PhotonProxyPathsView> {
     PhotonPathSnapshot snapshot, [
     PhotonProxyPath? path,
   ]) async {
-    await showFloatingDialog<void>(
+    await showFormSheet<void>(
       context: context,
-      child: _PathEditor(
+      builder: (_) => _PathEditor(
         snapshot: snapshot,
         path: path,
         onSave: (edit) async {
@@ -335,30 +336,70 @@ Widget _choiceMenu<T>({
   required List<(T, String)> choices,
   required ValueChanged<T> onSelected,
   bool enabled = true,
-  Glyph? buttonGlyph,
   ButtonStyle? style,
 }) => PopupAnchor(
-  targetBuilder: (open) {
-    final onPressed = enabled && choices.isNotEmpty ? open : null;
-    return buttonGlyph != null
-        ? IconButton(
-            tooltip: title,
-            onPressed: onPressed,
-            icon: GlyphIcon(buttonGlyph),
-          )
-        : TextButton.icon(
-            onPressed: onPressed,
-            style: style,
-            icon: const GlyphIcon(AppGlyphs.chevronDown, size: 14),
-            label: Text(title),
-          );
-  },
+  targetBuilder: (open) => TextButton.icon(
+    onPressed: enabled && choices.isNotEmpty ? open : null,
+    style: style,
+    icon: const GlyphIcon(AppGlyphs.chevronDown, size: 14),
+    label: Text(title),
+  ),
   popupBuilder: (_) => PopupMenu(
     maxVisibleItems: 8,
     items: [
       for (final (value, label) in choices)
         PopupMenuItem(label: label, onPressed: () => onSelected(value)),
     ],
+  ),
+);
+
+Widget _nodeMenu(
+  BuildContext context,
+  List<PhotonPathEndpoint> choices,
+  ValueChanged<PhotonPathEndpoint> onSelected,
+) => PopupAnchor(
+  targetBuilder: (open) => IconButton(
+    tooltip: _text(context, '选节点', 'Choose node'),
+    onPressed: open,
+    icon: const GlyphIcon(AppGlyphs.connections),
+  ),
+  popupBuilder: (popupContext) => Surface(
+    color: SurfaceLevel.floatingOf(popupContext.colorScheme)
+        .colorOf(popupContext.colorScheme),
+    shape: AppShape.xl,
+    clipBehavior: Clip.antiAlias,
+    child: SizedBox(
+      width: 300,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 336),
+        child: PrismListView(
+          controller: sheetScrollController(popupContext),
+          shrinkWrap: true,
+          padding: const EdgeInsets.all(8),
+          itemCount: choices.length,
+          itemBuilder: (context, index) {
+            final endpoint = choices[index];
+            return PressSurface(
+              fill: const Color(0x00000000),
+              shape: AppShape.sm,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+              onPressed: () {
+                Navigator.pop(popupContext);
+                onSelected(endpoint);
+              },
+              child: SizedBox(
+                width: double.infinity,
+                child: Text(
+                  endpoint.label,
+                  textAlign: TextAlign.right,
+                  textDirection: TextDirection.ltr,
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    ),
   ),
 );
 
@@ -442,6 +483,7 @@ class _PathEditorState extends State<_PathEditor> {
   }) {
     final nodeField = TextFormField(
       controller: draft.node,
+      textAlign: TextAlign.right,
       validator: (value) => value == null || value.trim().isEmpty
           ? _text(context, '请选择或输入节点', 'Choose or enter a node')
           : null,
@@ -450,11 +492,10 @@ class _PathEditorState extends State<_PathEditor> {
     final nodeControls = [
       Expanded(child: nodeField),
       if (choices.isNotEmpty)
-        _choiceMenu(
-          title: _text(context, '选节点', 'Choose node'),
-          buttonGlyph: relayIndex == null ? null : AppGlyphs.connections,
-          choices: [for (final endpoint in choices) (endpoint, endpoint.label)],
-          onSelected: (endpoint) => setState(() {
+        _nodeMenu(
+          context,
+          choices,
+          (endpoint) => setState(() {
             draft.node.text = endpoint.endpoint == 'relay'
                 ? endpoint.zone
                 : '${endpoint.zone}/${endpoint.endpoint}';
@@ -539,82 +580,63 @@ class _PathEditorState extends State<_PathEditor> {
   );
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
+  Widget build(BuildContext context) => FormPage(
     title: widget.path == null
         ? _text(context, '新建路径', 'New path')
         : _text(context, '编辑路径', 'Edit path'),
-    hasFields: true,
-    actions: [
-      TextButton(
-        onPressed: () => Navigator.pop(context),
-        child: Text(_text(context, '取消', 'Cancel')),
-      ),
-      FilledButton(
-        onPressed: _saving ? null : _save,
-        child: Text(_text(context, '保存', 'Save')),
-      ),
-    ],
-    child: ConstrainedBox(
-      constraints: BoxConstraints(
-        maxWidth: 550,
-        maxHeight: MediaQuery.sizeOf(context).height * 0.62,
-      ),
-      child: SingleChildScrollView(
-        child: Form(
-          key: _form,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            spacing: 12,
-            children: [
-              TextFormField(
-                controller: _name,
-                readOnly: widget.path != null,
-                decoration: InputDecoration(
-                  hintText: _text(context, '路径名称', 'Path name'),
-                ),
-                validator: (value) => value == null || value.trim().isEmpty
-                    ? _text(context, '请输入名称', 'Enter a name')
-                    : null,
+    onSave: _save,
+    saving: _saving,
+    error: _error?.toString(),
+    children: [
+      Form(
+        key: _form,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          spacing: 12,
+          children: [
+            TextFormField(
+              controller: _name,
+              readOnly: widget.path != null,
+              decoration: InputDecoration(
+                hintText: _text(context, '路径名称', 'Path name'),
               ),
-              for (final (i, draft) in _relays.indexed)
-                _hop(
-                  draft,
-                  widget.snapshot.relays,
-                  _text(context, '中继 ${i + 1}', 'Relay ${i + 1}'),
-                  relayIndex: i,
-                ),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton.icon(
-                  onPressed: _relays.length >= 7
-                      ? null
-                      : () => setState(() => _relays.add(_HopDraft())),
-                  icon: const GlyphIcon(AppGlyphs.add),
-                  label: Text(_text(context, '添加中继', 'Add relay')),
+              validator: (value) => value == null || value.trim().isEmpty
+                  ? _text(context, '请输入名称', 'Enter a name')
+                  : null,
+            ),
+            Align(
+              alignment: AlignmentDirectional.centerEnd,
+              child: TextButton.icon(
+                onPressed: _relays.length >= 7
+                    ? null
+                    : () => setState(() => _relays.add(_HopDraft())),
+                icon: const GlyphIcon(AppGlyphs.add),
+                label: Text(_text(context, '添加中继', 'Add relay')),
+              ),
+            ),
+            for (final (i, draft) in _relays.indexed)
+              _hop(
+                draft,
+                widget.snapshot.relays,
+                _text(context, '中继 ${i + 1}', 'Relay ${i + 1}'),
+                relayIndex: i,
+              ),
+            _hop(_exit, widget.snapshot.exits, _text(context, '出口', 'Exit')),
+            TextField(
+              controller: _udp,
+              decoration: InputDecoration(
+                hintText: _text(
+                  context,
+                  'UDP 目标前缀（可留空）',
+                  'UDP destination prefixes (optional)',
                 ),
               ),
-              _hop(_exit, widget.snapshot.exits, _text(context, '出口', 'Exit')),
-              TextField(
-                controller: _udp,
-                decoration: InputDecoration(
-                  hintText: _text(
-                    context,
-                    'UDP 目标前缀（可留空）',
-                    'UDP destination prefixes (optional)',
-                  ),
-                ),
-              ),
-              if (_error case final error?)
-                Text(
-                  '$error',
-                  style: TextStyle(color: context.colorScheme.error),
-                ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
-    ),
+    ],
   );
 }
 

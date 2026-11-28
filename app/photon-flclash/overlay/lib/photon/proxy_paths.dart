@@ -40,7 +40,7 @@ final class PhotonPathEndpoint {
   final List<String> links;
 
   String get label =>
-      '${zone.split('.').first}${endpoint == 'relay' || endpoint == 'exit' ? '' : '/$endpoint'}';
+      endpoint == 'relay' || endpoint == 'exit' ? zone : '$zone/$endpoint';
 }
 
 final class PhotonPathSnapshot {
@@ -58,8 +58,34 @@ final class PhotonPathSnapshot {
   final List<PhotonPathEndpoint> exits;
   final Map? probe;
 
-  static List<PhotonPathEndpoint> _endpoints(Map data, String role) => [
-    for (final value in (data['directory'] as Map)[role] as List)
-      PhotonPathEndpoint.fromJson(value as Map),
-  ];
+  static List<PhotonPathEndpoint> _endpoints(Map data, String role) =>
+      [
+        for (final value in (data['directory'] as Map)[role] as List)
+          PhotonPathEndpoint.fromJson(value as Map),
+      ]..sort((a, b) {
+        final zoneOrder = _compareZones(a.zone, b.zone);
+        return zoneOrder == 0 ? a.endpoint.compareTo(b.endpoint) : zoneOrder;
+      });
+}
+
+final _zoneSeparators = RegExp(r'[.-]');
+
+// Match Observer Web's compareZones, including its full-zone tie-breaker.
+int _compareZones(String a, String b) {
+  final aLabels = a
+      .split(_zoneSeparators)
+      .where((part) => part.isNotEmpty)
+      .toList();
+  final bLabels = b
+      .split(_zoneSeparators)
+      .where((part) => part.isNotEmpty)
+      .toList();
+  for (var i = 1; i <= aLabels.length && i <= bLabels.length; i++) {
+    final order = aLabels[aLabels.length - i].compareTo(
+      bLabels[bLabels.length - i],
+    );
+    if (order != 0) return order;
+  }
+  final lengthOrder = aLabels.length.compareTo(bLabels.length);
+  return lengthOrder == 0 ? a.compareTo(b) : lengthOrder;
 }

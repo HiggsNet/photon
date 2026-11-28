@@ -5,32 +5,36 @@
 <title>Photon Proxy</title>
 <link rel="stylesheet" href="/ui/style.css">
 <script type="module" src="/ui/app.js"></script>
-<header>
-  <h1>Photon Proxy</h1>
-  <form id="auth" class="line">
-    <label>管理令牌 <input id="token" type="password" autocomplete="off"></label>
-    <button>连接</button>
-  </form>
+<header class="masthead">
+  <div class="frame masthead-inner">
+    <h1>Photon Proxy</h1>
+    <form id="auth" class="line">
+      <label>管理令牌 <input id="token" type="password" autocomplete="off"></label>
+      <button>连接</button>
+    </form>
+  </div>
 </header>
-<main>
+<main class="frame">
   <p id="status" role="status" aria-live="polite"></p>
-  <section aria-labelledby="routes-title">
-    <div class="line section-head">
-      <h2 id="routes-title">已保存的 SOCKS5 路径</h2>
-      <button type="button" id="refresh">刷新</button>
+  <section class="panel" aria-labelledby="routes-title">
+    <div class="section-head">
+      <h2 id="routes-title">SOCKS5 路径</h2>
+      <div class="line">
+        <button type="button" id="refresh">刷新</button>
+        <button type="button" id="new-route" class="primary">新建路径</button>
+      </div>
     </div>
-    <div class="table-wrap">
-      <table><thead><tr><th>名称</th><th>监听地址</th><th>路径</th><th>操作</th></tr></thead><tbody id="routes"></tbody></table>
-    </div>
-    <div id="route-test" hidden>
-      <div class="section-head line">
+    <p id="empty-routes" class="empty" hidden>暂无已保存路径</p>
+    <ul id="routes" class="routes"></ul>
+    <div id="route-test" class="test-panel" aria-labelledby="test-title" hidden>
+      <div class="section-head">
         <h3 id="test-title"></h3>
         <button type="button" id="close-test">关闭测试</button>
       </div>
       <div class="probe-actions">
-        <button type="button" data-probe="connectivity">TCP 通断 <small>Google 204</small></button>
+        <button type="button" data-probe="connectivity">连通性 <small>TCP · Google 204</small></button>
         <button type="button" data-probe="dns">UDP DNS <small>1.1.1.1</small></button>
-        <button type="button" data-probe="download">下载 4 MiB <small>Cloudflare</small></button>
+        <button type="button" data-probe="download">下载测速 <small>Cloudflare · 4 MiB</small></button>
       </div>
       <p id="result" role="status" aria-live="polite"></p>
       <details>
@@ -43,40 +47,48 @@
       </details>
     </div>
   </section>
-  <div class="panels">
-    <section aria-labelledby="edit-title">
-      <h2 id="edit-title">新建路径</h2>
-      <form id="route-form">
-        <div class="fields">
-          <label>路径名 <input id="name" required maxlength="80"></label>
-          <label>SOCKS5 监听地址 <input id="listen" aria-describedby="listen-hint" placeholder="留空使用默认地址"></label>
+  <dialog id="route-editor" aria-labelledby="edit-title">
+    <div class="section-head editor-bar">
+      <h2 id="edit-title" tabindex="-1">新建路径</h2>
+      <button id="close-editor" type="button" aria-label="关闭">×</button>
+    </div>
+    <p id="editor-status" role="status" aria-live="polite"></p>
+    <div class="panels">
+      <div>
+        <form id="route-form">
+          <div class="fields">
+            <label>路径名 <input id="name" required maxlength="80"></label>
+            <label>SOCKS5 监听地址 <input id="listen" aria-describedby="listen-hint" placeholder="留空使用默认地址"></label>
+          </div>
+          <p id="listen-hint" class="muted"></p>
+          <div class="hop-group" role="group" aria-labelledby="relay-title">
+            <div class="section-head">
+              <h3 id="relay-title">中继 <small>可选</small></h3>
+              <button type="button" id="add-relay">＋ 添加中继</button>
+            </div>
+            <div id="relays"></div>
+          </div>
+          <div class="hop-group" role="group" aria-labelledby="exit-title">
+            <h3 id="exit-title">出口</h3>
+            <div id="exit"></div>
+          </div>
+          <p id="preview" class="preview" hidden></p>
+          <div class="line form-actions"><button type="button" id="reset">清空</button><button class="primary" id="save">创建路径</button></div>
+        </form>
+      </div>
+      <section class="directory-panel" aria-labelledby="directory-title">
+        <h3 id="directory-title">Gossip 节点目录</h3>
+        <p id="directory-status" class="muted" role="status"></p>
+        <div class="directory-group">
+          <h4>出口</h4>
+          <ul id="directory-exits" class="directory"></ul>
         </div>
-        <p id="listen-hint" class="muted"></p>
-        <fieldset>
-          <legend>出口</legend>
-          <div id="exit"></div>
-        </fieldset>
-        <fieldset>
-          <legend>中继（可选）</legend>
-          <div id="relays"></div>
-          <button type="button" id="add-relay">添加中继</button>
-        </fieldset>
-        <p id="preview" class="preview" hidden></p>
-        <div class="line"><button class="primary" id="save">创建路径</button><button type="button" id="reset">清空</button></div>
-      </form>
-    </section>
-    <section aria-labelledby="directory-title">
-      <h2 id="directory-title">Gossip 节点目录</h2>
-      <p id="directory-status" class="muted" role="status"></p>
-      <div class="directory-group">
-        <h3>出口</h3>
-        <ul id="directory-exits" class="directory"></ul>
-      </div>
-      <div class="directory-group">
-        <h3>中继</h3>
-        <ul id="directory-relays" class="directory"></ul>
-      </div>
-    </section>
-  </div>
+        <div class="directory-group">
+          <h4>中继</h4>
+          <ul id="directory-relays" class="directory"></ul>
+        </div>
+      </section>
+    </div>
+  </dialog>
 </main>
 </html>

@@ -18,6 +18,7 @@ class _PathBackend extends FakeBackend implements PhotonPathBackend {
   Map<String, dynamic>? path;
   Map<String, dynamic>? probe;
   List<Map<String, dynamic>> relays = [];
+  List<Map<String, dynamic>> exits = [];
 
   @override
   Future<Map<String, dynamic>> proxyV2(Map<String, dynamic> request) async {
@@ -41,7 +42,7 @@ class _PathBackend extends FakeBackend implements PhotonPathBackend {
     }
     return {
       'routes': [?path],
-      'directory': {'exits': [], 'relays': relays},
+      'directory': {'exits': exits, 'relays': relays},
       'probe': ?probe,
     };
   }
@@ -61,7 +62,10 @@ void main() {
       await tester.pumpWidget(
         TestApp(
           locale: const Locale('en'),
-          overrides: [safeModeProvider.overrideWith((_) => false)],
+          overrides: [
+            safeModeProvider.overrideWith((_) => false),
+            isMobileViewProvider.overrideWith((_) => false),
+          ],
           child: PhotonProxyPathsView(controller: controller, bridge: bridge),
         ),
       );
@@ -69,6 +73,10 @@ void main() {
       expect(find.text('Apply Photon profile'), findsNothing);
       await tester.tap(find.text('New path'));
       await tester.pumpAndSettle();
+      expect(
+        tester.getSize(find.byType(TextFormField).first).width,
+        greaterThan(380),
+      );
       await tester.enterText(find.byType(TextFormField).at(0), 'home');
       await tester.enterText(
         find.byType(TextFormField).at(1),
@@ -109,6 +117,12 @@ void main() {
           'endpoint': 'relay',
           'links': ['h26'],
         },
+        {'zone': 'z-pek.catofes.', 'endpoint': 'relay'},
+        {'zone': 'n-hkg.example.', 'endpoint': 'relay'},
+      ]
+      ..exits = [
+        {'zone': 'a-lax.example.', 'endpoint': 'backup'},
+        {'zone': 'gateway.catofes.', 'endpoint': 'exit'},
       ];
     final controller = PhotonController(createBackend: () => backend)
       ..selectConfig('/test/photon.yaml');
@@ -150,6 +164,9 @@ void main() {
         final upCenter = tester.getCenter(up.first);
         final downCenter = tester.getCenter(down.first);
         final removeCenter = tester.getCenter(remove.first);
+        final addCenter = tester.getCenter(find.text('Add relay'));
+        expect(addCenter.dy, lessThan(fieldCenter.dy));
+        expect(addCenter.dx, greaterThan(fieldCenter.dx));
         expect(upCenter.dy, downCenter.dy);
         expect(downCenter.dy, removeCenter.dy);
         expect(removeCenter.dx, greaterThan(downCenter.dx));
@@ -164,14 +181,29 @@ void main() {
       expect(tester.widget<IconButton>(down.last).onPressed, isNull);
       await tester.enterText(fields.at(0), 'home');
       await tester.enterText(fields.at(2), 'manual-relay');
-      await tester.enterText(fields.at(3), 'gateway.catofes./exit');
       await tester.pumpAndSettle();
       final chooseNode = button('Choose node').first;
       await tester.ensureVisible(chooseNode);
       await tester.pumpAndSettle();
       await tester.tap(chooseNode);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('directory-relay'));
+      final relayOptions = [
+        find.text('z-pek.catofes.'),
+        find.text('n-hkg.example.'),
+        find.text('directory-relay.example.'),
+      ];
+      for (final option in relayOptions) {
+        expect(tester.widget<Text>(option).textAlign, TextAlign.right);
+      }
+      expect(
+        tester.getTopLeft(relayOptions[0]).dy,
+        lessThan(tester.getTopLeft(relayOptions[1]).dy),
+      );
+      expect(
+        tester.getTopLeft(relayOptions[1]).dy,
+        lessThan(tester.getTopLeft(relayOptions[2]).dy),
+      );
+      await tester.tap(relayOptions.last);
       await tester.pumpAndSettle();
       await tester.tap(down.first);
       await tester.pumpAndSettle();
@@ -187,9 +219,22 @@ void main() {
       );
       await tester.tap(remove.last);
       await tester.pumpAndSettle();
+      final chooseExit = button('Choose node').last;
+      await tester.ensureVisible(chooseExit);
+      await tester.tap(chooseExit);
+      await tester.pumpAndSettle();
+      final primaryExit = find.text('gateway.catofes.');
+      final backupExit = find.text('a-lax.example./backup');
+      expect(tester.widget<Text>(primaryExit).textAlign, TextAlign.right);
+      expect(
+        tester.getTopLeft(primaryExit).dy,
+        lessThan(tester.getTopLeft(backupExit).dy),
+      );
+      await tester.tap(primaryExit);
+      await tester.pumpAndSettle();
       tester.view.physicalSize = const Size(428, 850);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Save'));
+      await tester.tap(find.byTooltip('Save'));
       await tester.pumpAndSettle();
       expect(
         backend.requests.lastWhere(
