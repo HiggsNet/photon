@@ -13,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/HiggsNet/photon/internal/photonproxy"
 )
 
 const ControlVersion = 1
@@ -65,7 +67,7 @@ func ControlEndpoint(statePath string) (string, error) {
 
 func controlMethod(method string) bool {
 	switch method {
-	case "status", "peers", "routes", "diagnostics", "services", "stop":
+	case "status", "peers", "routes", "diagnostics", "services", "stop", "proxy_v2":
 		return true
 	}
 	return false
@@ -106,25 +108,31 @@ func writeControlFrame(w io.Writer, body []byte) error {
 	return nil
 }
 
-// The two-field request deliberately has no payload, mutable config or raw
-// record access. Reject duplicate keys as well as unknown fields and versions.
 func decodeControlRequest(body []byte) (string, error) {
+	method, _, err := readControlRequest(body)
+	return method, err
+}
+
+// Only the proxy operation accepts a typed payload. Reject duplicate envelope
+// keys as well as unknown fields and versions.
+func readControlRequest(body []byte) (string, json.RawMessage, error) {
 	d := json.NewDecoder(bytes.NewReader(body))
 	first, err := d.Token()
 	if err != nil || first != json.Delim('{') {
-		return "", errors.New("request must be an object")
+		return "", nil, errors.New("request must be an object")
 	}
 	seen := map[string]bool{}
 	var version int
 	var method string
+	var request json.RawMessage
 	for d.More() {
 		key, err := d.Token()
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		name, ok := key.(string)
 		if !ok || seen[name] {
-			return "", errors.New("duplicate request field")
+			return "", nil, errors.New("duplicate request field")
 		}
 		seen[name] = true
 		switch name {
@@ -132,23 +140,54 @@ func decodeControlRequest(body []byte) (string, error) {
 			err = d.Decode(&version)
 		case "method":
 			err = d.Decode(&method)
+		case "request":
+			err = d.Decode(&request)
 		default:
-			return "", errors.New("unknown request field")
+			return "", nil, errors.New("unknown request field")
 		}
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 	}
 	if _, err := d.Token(); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if _, err := d.Token(); err != io.EOF {
-		return "", errors.New("trailing request data")
+		return "", nil, errors.New("trailing request data")
 	}
-	if version != ControlVersion || !controlMethod(method) {
-		return "", errors.New("unsupported control version or method")
+	if version != ControlVersion || !controlMethod(method) || (method == "proxy_v2") != (request != nil) {
+		return "", nil, errors.New("unsupported control version or method")
 	}
-	return method, nil
+	return method, request, nil
+}
+
+func proxyControlResult(daemon ControlDaemon, raw json.RawMessage) ControlResponse {
+	response := ControlResponse{Version: ControlVersion, Method: "proxy_v2"}
+	fail := func(code, message string) ControlResponse {
+		response.Error = &ControlError{Code: code, Message: message}
+		return response
+	}
+	owner, ok := daemon.(interface {
+		ProxyV2(photonproxy.EmbeddedClientRequest) (any, error)
+	})
+	if !ok {
+		return fail("unavailable", "Proxy routes require the frontend connection")
+	}
+	var request photonproxy.EmbeddedClientRequest
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil || request.Action == "" {
+		return fail("invalid_request", "expected a Proxy v2 route operation")
+	}
+	result, err := owner.ProxyV2(request)
+	if err != nil {
+		return fail("proxy_v2", err.Error())
+	}
+	response.Result, err = json.Marshal(result)
+	if err != nil {
+		return fail("unavailable", "proxy routes could not be encoded")
+	}
+	return response
 }
 
 func controlResult(ctx context.Context, daemon ControlDaemon, method string) ControlResponse {
@@ -209,10 +248,12 @@ func serveControlRequest(ctx context.Context, stream io.ReadWriter, daemon Contr
 	if err != nil {
 		return err
 	}
-	method, err := decodeControlRequest(body)
+	method, request, err := readControlRequest(body)
 	var response ControlResponse
 	if err != nil {
 		response = ControlResponse{Version: ControlVersion, Error: &ControlError{Code: "invalid_request", Message: "expected a supported v1 control method"}}
+	} else if method == "proxy_v2" {
+		response = proxyControlResult(daemon, request)
 	} else {
 		response = controlResult(ctx, daemon, method)
 	}

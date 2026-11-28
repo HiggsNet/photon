@@ -19,7 +19,7 @@ func TestFrontendWorkerRejectsConfigChangedDuringElevation(t *testing.T) {
 	}
 	var output bytes.Buffer
 	stream := frontendStream{Reader: strings.NewReader(""), Writer: &output}
-	if code := runFrontendBackend(context.Background(), path, stream, strings.Repeat("0", 64), io.Discard); code != 1 {
+	if code := runFrontendBackend(context.Background(), path, stream, strings.Repeat("0", 64), io.Discard, false); code != 1 {
 		t.Fatalf("exit code = %d", code)
 	}
 	if _, err := photonwindows.ReadControlReady(&output); err == nil || !strings.Contains(err.Error(), "configuration changed during elevation") {

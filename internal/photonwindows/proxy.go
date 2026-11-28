@@ -45,6 +45,7 @@ func (d *Daemon) runProxyV2(ctx context.Context, logger *slog.Logger, store *cor
 			return err
 		},
 		DialDirect: direct.dial, ListenDirect: direct.listen,
+		ClientReady: d.proxyClient.Store,
 		DialPeer: func(ctx context.Context, via, device string, address netip.AddrPort) (net.Conn, error) {
 			return dialProxyPeer(ctx, resolver, d.config.Wintun.AdapterName, via, device, address)
 		},

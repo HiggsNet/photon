@@ -2,13 +2,14 @@ diff --git a/arb/intl_en.arb b/arb/intl_en.arb
 index cbda0e3..2a3ba35 100644
 --- a/arb/intl_en.arb
 +++ b/arb/intl_en.arb
-@@ -1076,5 +1076,129 @@
+@@ -1076,5 +1076,130 @@
    "fakeipFilterDesc": "These domains get real IPs instead of Fake-IPs. In whitelist mode, only they get Fake-IPs.",
    "fallbackFilterGeositeDesc": "Domains in these GeoSite categories are resolved by Fallback directly.",
    "fallbackFilterIpcidrDesc": "When Nameserver returns an IP in these ranges, the Fallback answer is used.",
 -  "fallbackFilterDomainDesc": "These domains are resolved by Fallback directly."
 +  "fallbackFilterDomainDesc": "These domains are resolved by Fallback directly.",
 +  "photonName": "Photon",
++  "photonProxyPaths": "Proxy paths",
 +  "photonTunnel": "Tunnels",
 +  "photonTunnelReady": "Tunnel ready",
 +  "photonTunnelNotReady": "Tunnel not ready",
@@ -137,13 +138,14 @@ diff --git a/arb/intl_es.arb b/arb/intl_es.arb
 index 417db6b..81876a3 100644
 --- a/arb/intl_es.arb
 +++ b/arb/intl_es.arb
-@@ -1076,5 +1076,129 @@
+@@ -1076,5 +1076,130 @@
    "fakeipFilterDesc": "Estos dominios reciben su IP real en lugar de una Fake-IP. En modo whitelist, solo ellos reciben Fake-IP.",
    "fallbackFilterGeositeDesc": "Los dominios de estas categorías GeoSite se resuelven directamente con Fallback.",
    "fallbackFilterIpcidrDesc": "Si Nameserver devuelve una IP de estos rangos, se usa la respuesta de Fallback.",
 -  "fallbackFilterDomainDesc": "Estos dominios se resuelven directamente con Fallback."
 +  "fallbackFilterDomainDesc": "Estos dominios se resuelven directamente con Fallback.",
 +  "photonName": "Photon",
++  "photonProxyPaths": "Rutas de proxy",
 +  "photonTunnel": "Túneles",
 +  "photonTunnelReady": "Túnel listo",
 +  "photonTunnelNotReady": "Túnel no listo",
@@ -272,13 +274,14 @@ diff --git a/arb/intl_fr.arb b/arb/intl_fr.arb
 index aa4e778..ca7f191 100644
 --- a/arb/intl_fr.arb
 +++ b/arb/intl_fr.arb
-@@ -1076,5 +1076,129 @@
+@@ -1076,5 +1076,130 @@
    "fakeipFilterDesc": "Ces domaines reçoivent leur vraie IP au lieu d’une Fake-IP. En mode whitelist, eux seuls reçoivent une Fake-IP.",
    "fallbackFilterGeositeDesc": "Les domaines de ces catégories GeoSite sont résolus directement par Fallback.",
    "fallbackFilterIpcidrDesc": "Si Nameserver renvoie une IP de ces plages, la réponse de Fallback est utilisée.",
 -  "fallbackFilterDomainDesc": "Ces domaines sont résolus directement par Fallback."
 +  "fallbackFilterDomainDesc": "Ces domaines sont résolus directement par Fallback.",
 +  "photonName": "Photon",
++  "photonProxyPaths": "Chemins proxy",
 +  "photonTunnel": "Tunnels",
 +  "photonTunnelReady": "Tunnel prêt",
 +  "photonTunnelNotReady": "Tunnel non prêt",
@@ -407,13 +410,14 @@ diff --git a/arb/intl_ja.arb b/arb/intl_ja.arb
 index d6ff2b3..0b23907 100644
 --- a/arb/intl_ja.arb
 +++ b/arb/intl_ja.arb
-@@ -1076,5 +1076,129 @@
+@@ -1076,5 +1076,130 @@
    "fakeipFilterDesc": "これらのドメインには Fake-IP ではなく実際の IP を返します。whitelist モードでは、これらだけが Fake-IP を使います。",
    "fallbackFilterGeositeDesc": "これらの GeoSite カテゴリのドメインは、直接 Fallback で解決します。",
    "fallbackFilterIpcidrDesc": "Nameserver がこれらの範囲の IP を返したときは、Fallback の結果を使います。",
 -  "fallbackFilterDomainDesc": "これらのドメインは、直接 Fallback で解決します。"
 +  "fallbackFilterDomainDesc": "これらのドメインは、直接 Fallback で解決します。",
 +  "photonName": "Photon",
++  "photonProxyPaths": "プロキシ経路",
 +  "photonTunnel": "トンネル",
 +  "photonTunnelReady": "トンネル準備完了",
 +  "photonTunnelNotReady": "トンネル準備未完了",
@@ -542,13 +546,14 @@ diff --git a/arb/intl_ko.arb b/arb/intl_ko.arb
 index ead8d29..5d79325 100644
 --- a/arb/intl_ko.arb
 +++ b/arb/intl_ko.arb
-@@ -1076,5 +1076,129 @@
+@@ -1076,5 +1076,130 @@
    "fakeipFilterDesc": "이 도메인에는 Fake-IP 대신 실제 IP를 반환합니다. whitelist 모드에서는 이 도메인만 Fake-IP를 사용합니다.",
    "fallbackFilterGeositeDesc": "이 GeoSite 분류의 도메인은 바로 Fallback으로 확인합니다.",
    "fallbackFilterIpcidrDesc": "Nameserver가 이 범위의 IP를 반환하면 Fallback 결과를 사용합니다.",
 -  "fallbackFilterDomainDesc": "이 도메인은 바로 Fallback으로 확인합니다."
 +  "fallbackFilterDomainDesc": "이 도메인은 바로 Fallback으로 확인합니다.",
 +  "photonName": "Photon",
++  "photonProxyPaths": "프록시 경로",
 +  "photonTunnel": "터널",
 +  "photonTunnelReady": "터널 준비 완료",
 +  "photonTunnelNotReady": "터널 준비 안 됨",
@@ -677,13 +682,14 @@ diff --git a/arb/intl_ru.arb b/arb/intl_ru.arb
 index 58e77e7..290f9ec 100644
 --- a/arb/intl_ru.arb
 +++ b/arb/intl_ru.arb
-@@ -1076,5 +1076,129 @@
+@@ -1076,5 +1076,130 @@
    "fakeipFilterDesc": "Эти домены получают реальные IP вместо Fake-IP. В режиме whitelist Fake-IP получают только они.",
    "fallbackFilterGeositeDesc": "Домены из этих категорий GeoSite сразу разрешаются через Fallback.",
    "fallbackFilterIpcidrDesc": "Если Nameserver возвращает IP из этих диапазонов, используется ответ Fallback.",
 -  "fallbackFilterDomainDesc": "Эти домены сразу разрешаются через Fallback."
 +  "fallbackFilterDomainDesc": "Эти домены сразу разрешаются через Fallback.",
 +  "photonName": "Photon",
++  "photonProxyPaths": "Маршруты прокси",
 +  "photonTunnel": "Туннели",
 +  "photonTunnelReady": "Туннель готов",
 +  "photonTunnelNotReady": "Туннель не готов",
@@ -812,13 +818,14 @@ diff --git a/arb/intl_zh_CN.arb b/arb/intl_zh_CN.arb
 index b44010c..fe3da58 100644
 --- a/arb/intl_zh_CN.arb
 +++ b/arb/intl_zh_CN.arb
-@@ -1076,5 +1076,129 @@
+@@ -1076,5 +1076,130 @@
    "fakeipFilterDesc": "这些域名不使用 Fake-IP，返回真实 IP；过滤模式为 whitelist 时则只有它们使用 Fake-IP。",
    "fallbackFilterGeositeDesc": "属于这些 GeoSite 分类的域名直接使用 Fallback 解析。",
    "fallbackFilterIpcidrDesc": "Nameserver 返回这些网段内的 IP 时，改用 Fallback 的结果。",
 -  "fallbackFilterDomainDesc": "这些域名直接使用 Fallback 解析。"
 +  "fallbackFilterDomainDesc": "这些域名直接使用 Fallback 解析。",
 +  "photonName": "Photon",
++  "photonProxyPaths": "代理路径",
 +  "photonTunnel": "隧道",
 +  "photonTunnelReady": "隧道就绪",
 +  "photonTunnelNotReady": "隧道未就绪",
@@ -947,11 +954,12 @@ diff --git a/lib/common/l10n_labels.dart b/lib/common/l10n_labels.dart
 index 9a69b8d..d1169ed 100644
 --- a/lib/common/l10n_labels.dart
 +++ b/lib/common/l10n_labels.dart
-@@ -9,6 +9,7 @@ extension PageLabelL10n on PageLabel {
+@@ -9,6 +9,8 @@ extension PageLabelL10n on PageLabel {
      final appLocalizations = currentAppLocalizations;
      return switch (this) {
        PageLabel.dashboard => appLocalizations.dashboard,
 +      PageLabel.photon => appLocalizations.photonName,
++      PageLabel.photonProxyPaths => appLocalizations.photonProxyPaths,
        PageLabel.proxies => appLocalizations.proxies,
        PageLabel.profiles => appLocalizations.profiles,
        PageLabel.tools => appLocalizations.tools,
@@ -959,11 +967,12 @@ diff --git a/lib/enum/enum.dart b/lib/enum/enum.dart
 index 75b35bd..70edb2d 100644
 --- a/lib/enum/enum.dart
 +++ b/lib/enum/enum.dart
-@@ -524,6 +524,7 @@ extension GeoResourceExt on GeoResource {
+@@ -524,6 +524,8 @@ extension GeoResourceExt on GeoResource {
  
  enum PageLabel {
    dashboard,
 +  photon,
++  photonProxyPaths,
    proxies,
    profiles,
    tools,
@@ -1231,17 +1240,18 @@ diff --git a/lib/views/navigation.dart b/lib/views/navigation.dart
 index 757c9e1..0301f4a 100644
 --- a/lib/views/navigation.dart
 +++ b/lib/views/navigation.dart
-@@ -1,6 +1,9 @@
+@@ -1,6 +1,10 @@
 +import 'dart:io';
 +
  import 'package:fl_clash/common/app_ports.dart';
  import 'package:fl_clash/enum/enum.dart';
  import 'package:fl_clash/models/models.dart';
++import 'package:fl_clash/photon/proxy_paths_view.dart';
 +import 'package:fl_clash/photon/view.dart';
  import 'package:fl_clash/ui/icons/app_glyphs.dart';
  import 'package:fl_clash/views/views.dart';
  
-@@ -18,6 +21,12 @@ class Navigation implements NavigationPort {
+@@ -18,6 +22,18 @@ class Navigation implements NavigationPort {
          label: PageLabel.dashboard,
          builder: (_) => const DashboardView(),
        ),
@@ -1250,6 +1260,12 @@ index 757c9e1..0301f4a 100644
 +          glyph: AppGlyphs.vpn,
 +          label: PageLabel.photon,
 +          builder: (_) => const PhotonView(),
++        ),
++      if (Platform.isWindows)
++        NavigationItem(
++          glyph: AppGlyphs.proxies,
++          label: PageLabel.photonProxyPaths,
++          builder: (_) => const PhotonProxyPathsView(),
 +        ),
        NavigationItem(
          glyph: AppGlyphs.proxies,

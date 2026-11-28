@@ -55,6 +55,7 @@ func TestControlStrictRequest(t *testing.T) {
 		`{"version":1,"method":"status","config":{}}`, `{"version":1,"version":1,"method":"status"}`,
 		`{"version":1,"method":"status","method":"stop"}`, `{"version":1,"method":"status"}{}`,
 		`{"version":1.0,"method":"status"}`, `{"version":"1","method":"status"}`,
+		`{"version":1,"method":"status","request":{"action":"list"}}`, `{"version":1,"method":"proxy_v2"}`,
 	} {
 		if _, err := decodeControlRequest([]byte(body)); err == nil {
 			t.Errorf("accepted %s", body)
@@ -65,6 +66,19 @@ func TestControlStrictRequest(t *testing.T) {
 		if err != nil || got != method {
 			t.Fatalf("%s: %q %v", method, got, err)
 		}
+	}
+}
+
+func TestProxyV2ControlIsPrivate(t *testing.T) {
+	method, payload, err := readControlRequest([]byte(`{"version":1,"method":"proxy_v2","request":{"action":"list"}}`))
+	if err != nil || method != "proxy_v2" {
+		t.Fatalf("proxy request: %q %v", method, err)
+	}
+	if response := proxyControlResult(&controlTestDaemon{}, payload); response.Error == nil || response.Error.Code != "unavailable" {
+		t.Fatalf("non-frontend proxy request: %+v", response)
+	}
+	if response := proxyControlResult(&streamControlDaemon{Daemon: &Daemon{}}, payload); response.Error == nil || response.Error.Code != "proxy_v2" {
+		t.Fatalf("frontend with no live proxy client: %+v", response)
 	}
 }
 func TestControlFramesBounded(t *testing.T) {

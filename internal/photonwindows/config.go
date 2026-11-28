@@ -162,6 +162,12 @@ func (config *Config) ResolvePaths(configPath string) error {
 	return nil
 }
 
+func (config *Config) EnableDesktopProxy() {
+	if config.proxyV2 == nil {
+		config.proxyV2 = photonproxy.NewDesktopClient(config.State.Path)
+	}
+}
+
 func ParseConfig(r io.Reader) (*Config, error) {
 	if r == nil {
 		return nil, errors.New("config input is nil")

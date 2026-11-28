@@ -43,7 +43,7 @@ func readFrontendConfig(path string) ([]byte, error) {
 	return data, err
 }
 
-func runFrontendBackend(ctx context.Context, path string, stream io.ReadWriteCloser, expectedDigest string, stderr io.Writer) int {
+func runFrontendBackend(ctx context.Context, path string, stream io.ReadWriteCloser, expectedDigest string, stderr io.Writer, proxyV2 bool) int {
 	fail := func(err error) int {
 		_ = photonwindows.WriteControlReady(stream, photonwindows.ControlReady{}, err)
 		fmt.Fprintln(stderr, err)
@@ -66,6 +66,9 @@ func runFrontendBackend(ctx context.Context, path string, stream io.ReadWriteClo
 	}
 	if err := config.ResolvePaths(path); err != nil {
 		return fail(err)
+	}
+	if proxyV2 {
+		config.EnableDesktopProxy()
 	}
 	logger, closer, err := photonwindows.NewRuntimeLogger(config, nil, "")
 	if err != nil {

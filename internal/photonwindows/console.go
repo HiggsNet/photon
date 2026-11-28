@@ -11,8 +11,10 @@ import (
 	"reflect"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonproxy"
 	"github.com/HiggsNet/photon/pkg/core/gossip"
 	corehost "github.com/HiggsNet/photon/pkg/core/host"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
@@ -43,6 +45,7 @@ type Daemon struct {
 	runErr           error
 	rebind           chan rebindRequest
 	serviceInputs    chan chan serviceInputs
+	proxyClient      atomic.Pointer[photonproxy.EmbeddedClient]
 	done             chan struct{}
 	planGateway      func(context.Context, *Config, corestate.View, time.Time, ipsec.DNSResolver) GatewayPlan
 	deviceFactory    packetDeviceFactory

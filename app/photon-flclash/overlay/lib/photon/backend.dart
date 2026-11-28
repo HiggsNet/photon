@@ -21,11 +21,16 @@ abstract interface class PhotonBackend {
   Future<void> stop();
 }
 
-final class PhotonProcess implements PhotonBackend {
+abstract interface class PhotonPathBackend {
+  Future<Map<String, dynamic>> proxyV2(Map<String, dynamic> request);
+}
+
+final class PhotonProcess implements PhotonBackend, PhotonPathBackend {
   PhotonProcess({
     required this.executable,
     this.arguments = const [],
     this.requestElevation = false,
+    this.enableProxyPaths = false,
     this.timeout = const Duration(seconds: 10),
     this.startupTimeout = const Duration(seconds: 10),
     this.shutdownTimeout = const Duration(seconds: 10),
@@ -34,6 +39,7 @@ final class PhotonProcess implements PhotonBackend {
   final String executable;
   final List<String> arguments;
   final bool requestElevation;
+  final bool enableProxyPaths;
   final Duration timeout;
   final Duration startupTimeout;
   final Duration shutdownTimeout;
@@ -70,6 +76,7 @@ final class PhotonProcess implements PhotonBackend {
       ...arguments,
       'run',
       '--stdio',
+      if (enableProxyPaths) '--proxy-v2',
       if (requestElevation) '--elevate',
       '--config',
       config.path,
@@ -109,6 +116,10 @@ final class PhotonProcess implements PhotonBackend {
   @override
   Future<Map<String, dynamic>> services() => _request('services');
 
+  @override
+  Future<Map<String, dynamic>> proxyV2(Map<String, dynamic> request) =>
+      _exchange('proxy_v2', request: request).timeout(timeout);
+
   Future<Map<String, dynamic>> _request(String method) {
     // A delayed reply still belongs to its original exchange. Keep draining
     // and acknowledging it, and let repeated polls share the outstanding read.
@@ -128,7 +139,18 @@ final class PhotonProcess implements PhotonBackend {
     );
   }
 
-  Future<Map<String, dynamic>> _exchange(String method) {
+  Future<Map<String, dynamic>> _exchange(
+    String method, {
+    Map<String, dynamic>? request,
+  }) {
+    final bytes = utf8.encode(
+      jsonEncode({'version': 1, 'method': method, 'request': ?request}),
+    );
+    if (bytes.length > 4096) {
+      return Future.error(
+        const FormatException('Photon control request is too large'),
+      );
+    }
     final process = _process;
     final reader = _reader;
     final operation = _tail.then((_) async {
@@ -136,7 +158,6 @@ final class PhotonProcess implements PhotonBackend {
         throw StateError('Photon backend is unavailable');
       }
       try {
-        final bytes = utf8.encode(jsonEncode({'version': 1, 'method': method}));
         final header = ByteData(4)..setUint32(0, bytes.length);
         process.stdin.add(header.buffer.asUint8List());
         process.stdin.add(bytes);
@@ -160,10 +181,19 @@ final class PhotonProcess implements PhotonBackend {
     Map<String, dynamic> response,
     String method,
   ) {
+    final error = response['error'];
+    if (response['version'] == 1 &&
+        response['method'] == null &&
+        error is Map &&
+        error['code'] == 'invalid_request') {
+      throw const PhotonControlException(
+        'invalid_request',
+        'Unsupported backend request',
+      );
+    }
     if (response['version'] != 1 || response['method'] != method) {
       throw const FormatException('Invalid Photon response');
     }
-    final error = response['error'];
     final result = response['result'];
     if ((error == null) == (result == null)) {
       throw const FormatException('Invalid Photon response envelope');

@@ -76,6 +76,30 @@ final class PhotonProxyBridge {
     _selection = selection;
   }
 
+  Future<Set<String>> includedPaths() async {
+    final configPath = _controller.configPath;
+    if (configPath == null) return {};
+    final preferences = await SharedPreferences.getInstance();
+    return (preferences.getStringList('photon.v2.paths.$configPath') ?? [])
+        .toSet();
+  }
+
+  Future<void> includePath(String name, bool include) async {
+    final configPath = _controller.configPath;
+    if (configPath == null) throw StateError('Select a Photon configuration');
+    final preferences = await SharedPreferences.getInstance();
+    final key = 'photon.v2.paths.$configPath';
+    final paths = (preferences.getStringList(key) ?? []).toSet();
+    if (include) {
+      paths.add(name);
+    } else {
+      paths.remove(name);
+    }
+    if (!await preferences.setStringList(key, paths.toList()..sort())) {
+      throw StateError('Could not save Photon path selection');
+    }
+  }
+
   bool _attached = false;
   String? _templateText;
   Map<String, dynamic>? _template;
@@ -104,6 +128,7 @@ final class PhotonProxyBridge {
   Map<String, dynamic> _profile(
     PhotonDirectory directory, {
     Map<String, dynamic>? template,
+    Set<String> includedPaths = const {},
     PhotonProxyCardTitles? cardTitles,
   }) => photonProxyProfile(
     directory: directory,
@@ -119,6 +144,7 @@ final class PhotonProxyBridge {
     ),
     template: template,
     selection: _selection,
+    includedPaths: includedPaths,
     cardTitles: cardTitles,
   );
 
@@ -146,12 +172,14 @@ final class PhotonProxyBridge {
     final template = await compute(_parseTemplate, source);
     final directory = _controller.directory;
     final now = DateTime.now();
+    final paths = await includedPaths();
     final profile =
         directory != null &&
             directory.fresh(now) &&
-            directory.endpoints.isNotEmpty &&
-            directory.adapterName.isNotEmpty
-        ? _profile(directory, template: template)
+            ((directory.endpoints.isNotEmpty &&
+                    directory.adapterName.isNotEmpty) ||
+                directory.proxyPaths.any((route) => paths.contains(route.name)))
+        ? _profile(directory, template: template, includedPaths: paths)
         : photonProxyTemplatePreview(template);
     await _validateProfile(
       encodePhotonProfile(profile),
@@ -192,7 +220,10 @@ final class PhotonProxyBridge {
   Future<void> apply() async {
     attach();
     final directory = _authorizedDirectory;
-    if (directory == null || _controller.observation?['tunnel_ready'] != true) {
+    final paths = await includedPaths();
+    if (directory == null ||
+        (_controller.observation?['tunnel_ready'] != true &&
+            directory.proxyPaths.isEmpty)) {
       throw StateError('Establish the Photon tunnel before using proxies');
     }
     await loadSelection();
@@ -201,6 +232,7 @@ final class PhotonProxyBridge {
     final generated = _profile(
       directory,
       template: template,
+      includedPaths: paths,
       cardTitles: cardTitles,
     );
     final content = encodePhotonProfile(generated);

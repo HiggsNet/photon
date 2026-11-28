@@ -168,6 +168,18 @@ final class PhotonController extends ChangeNotifier {
   Future<void> applyProxies(Future<void> Function() apply) =>
       _enqueue(apply, cleanupOnError: false);
 
+  Future<Map<String, dynamic>> proxyPaths(Map<String, dynamic> request) async {
+    final backend = _backend;
+    if (backend is! PhotonPathBackend) {
+      throw StateError('Connect to Photon to manage proxy paths');
+    }
+    final result = await (backend as PhotonPathBackend).proxyV2(request);
+    if (!identical(backend, _backend)) {
+      throw StateError('Photon connection changed');
+    }
+    return result;
+  }
+
   Future<void> _invalidateServicesAfterError(Object error) async {
     _error = error;
     try {
@@ -251,6 +263,7 @@ final photonController = PhotonController(
     return PhotonProcess(
       executable: photonExecutable,
       requestElevation: true,
+      enableProxyPaths: true,
       startupTimeout: const Duration(minutes: 2),
     );
   },

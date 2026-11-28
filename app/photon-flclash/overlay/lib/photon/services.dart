@@ -5,9 +5,11 @@ import 'package:crypto/crypto.dart';
 import 'package:fl_clash/common/string.dart' show StringExtension;
 
 import 'proxy_selection.dart';
+import 'proxy_paths.dart';
 
 const _photonProvider = 'photon-services';
-const _photonGroups = ['Photon', 'Photon Auto', 'Photon Balance'];
+const _pathGroup = 'Photon Paths';
+const _photonGroups = ['Photon', 'Photon Auto', 'Photon Balance', _pathGroup];
 const _photonProtection = 'x-photon-protection';
 
 typedef PhotonProxyCardTitles = Map<({String? provider, String name}), String>;
@@ -26,6 +28,7 @@ final class PhotonDirectory {
     required this.overlayPrefixes,
     required this.bypassPrefixes,
     required this.bypassDomains,
+    required this.proxyPaths,
   });
 
   factory PhotonDirectory.fromJson(Map<String, dynamic> data) {
@@ -71,6 +74,10 @@ final class PhotonDirectory {
       ),
       bypassPrefixes: List<String>.from(data['bypass_prefixes'] as List? ?? []),
       bypassDomains: List<String>.from(data['bypass_domains'] as List? ?? []),
+      proxyPaths: List.unmodifiable([
+        for (final route in data['proxy_v2_routes'] as List? ?? const [])
+          PhotonProxyPath.fromJson(route as Map),
+      ]),
     );
   }
 
@@ -86,6 +93,7 @@ final class PhotonDirectory {
   final List<String> overlayPrefixes;
   final List<String> bypassPrefixes;
   final List<String> bypassDomains;
+  final List<PhotonProxyPath> proxyPaths;
 
   bool fresh(DateTime now) =>
       now.toUtc().isBefore(validUntil) &&
@@ -378,12 +386,16 @@ Map<String, dynamic> photonProxyProfile({
   required String backendPath,
   Map<String, dynamic>? template,
   PhotonProxySelection? selection,
+  Set<String> includedPaths = const {},
   PhotonProxyCardTitles? cardTitles,
 }) {
   if (!directory.fresh(now)) {
     throw StateError('Photon service information expired');
   }
   final available = directory.proxyEndpoints;
+  final paths = directory.proxyPaths
+      .where((route) => includedPaths.contains(route.name))
+      .toList();
   final endpoints = available
       .where(
         (e) =>
@@ -391,7 +403,7 @@ Map<String, dynamic> photonProxyProfile({
             selection.allows(type: e.type, region: e.region, owner: e.owner),
       )
       .toList();
-  if (available.isEmpty || adapter.isEmpty) {
+  if ((available.isEmpty || adapter.isEmpty) && directory.proxyPaths.isEmpty) {
     throw StateError('No authorized Photon proxy endpoints are available');
   }
   final exclusions = <String>{
@@ -409,6 +421,16 @@ Map<String, dynamic> photonProxyProfile({
     'PROCESS-PATH-REGEX,${RegExp.escape(backendPath).replaceAll(',', r'\x2c')},DIRECT',
   ];
   if (template != null) validatePhotonProxyTemplate(template);
+  final templateNames = {
+    for (final section in ['proxies', 'proxy-groups'])
+      for (final item in template?[section] as List? ?? const [])
+        (item as Map)['name'],
+  };
+  if (paths.any((route) => templateNames.contains(route.proxyName))) {
+    throw const FormatException(
+      'A Photon path name conflicts with the proxy template',
+    );
+  }
   final names = _proxyNames(endpoints, template, cardTitles: cardTitles);
   final proxies = [
     if (endpoints.isEmpty)
@@ -432,6 +454,16 @@ Map<String, dynamic> photonProxyProfile({
   ];
   return _renderPhotonProxyProfile(
     proxies: proxies,
+    paths: [
+      for (final route in paths)
+        {
+          'name': route.proxyName,
+          'type': 'socks5',
+          'server': route.address,
+          'port': route.port,
+          'udp': true,
+        },
+    ],
     exclusions: orderedExclusions,
     bypassDomains: directory.underlayRouting
         ? const []
@@ -457,6 +489,7 @@ Map<String, dynamic> photonProxyTemplatePreview(Map<String, dynamic> template) {
 
 Map<String, dynamic> _renderPhotonProxyProfile({
   required List<Map<String, dynamic>> proxies,
+  List<Map<String, dynamic>> paths = const [],
   required List<String> exclusions,
   required List<String> bypassDomains,
   required List<String> bypassRules,
@@ -467,6 +500,18 @@ Map<String, dynamic> _renderPhotonProxyProfile({
   final templateGroups = template?['proxy-groups'] as List? ?? const [];
   final templateProviders = template?['proxy-providers'] as Map? ?? const {};
   final templateRules = template?['rules'] as List?;
+  final showPaths =
+      paths.isNotEmpty ||
+      (templateRules?.any(
+            (rule) => (rule as String)
+                .split(',')
+                .any((part) => part.trim() == _pathGroup),
+          ) ??
+          false) ||
+      templateGroups.any(
+        (group) =>
+            ((group as Map)['proxies'] as List?)?.contains(_pathGroup) == true,
+      );
   final groupEndpoints = template == null
       ? {'proxies': names}
       : {
@@ -477,6 +522,8 @@ Map<String, dynamic> _renderPhotonProxyProfile({
     'route-exclude-address': exclusions,
     'rules': bypassRules,
     'bypass-domains': bypassDomains,
+    if (paths.isNotEmpty)
+      'proxy-paths': [for (final path in paths) path['name']],
   };
   return protectPhotonProxyProfile({
     'ipv6': true,
@@ -502,7 +549,7 @@ Map<String, dynamic> _renderPhotonProxyProfile({
       'route-exclude-address': exclusions,
       ...?template?['tun'] as Map?,
     },
-    'proxies': template == null ? proxies : templateProxies,
+    'proxies': [...(template == null ? proxies : templateProxies), ...paths],
     if (template != null)
       'proxy-providers': {
         ...templateProviders,
@@ -528,6 +575,7 @@ Map<String, dynamic> _renderPhotonProxyProfile({
         'proxies': [
           'Photon Auto',
           'Photon Balance',
+          if (paths.isNotEmpty) _pathGroup,
           if (template == null) ...names,
         ],
       },
@@ -547,6 +595,14 @@ Map<String, dynamic> _renderPhotonProxyProfile({
         'url': 'https://www.gstatic.com/generate_204',
         'interval': 300,
       },
+      if (showPaths)
+        {
+          'name': _pathGroup,
+          'type': 'select',
+          'proxies': paths.isEmpty
+              ? ['REJECT']
+              : [for (final route in paths) route['name']],
+        },
     ],
     'rules': [
       ...bypassRules,
@@ -669,9 +725,18 @@ String encodePhotonProfile(Map<String, dynamic> profile) =>
 List<dynamic> _appliedProxyEntries(Map<String, dynamic> profile) {
   final providers = profile['proxy-providers'] as Map?;
   final photon = providers?[_photonProvider] as Map?;
-  return (photon == null ? profile['proxies'] : photon['payload']) as List? ??
-      const [];
+  final proxies = profile['proxies'] as List? ?? const [];
+  if (photon == null) return proxies;
+  final paths = _appliedPathNames(profile);
+  return [
+    ...(photon['payload'] as List? ?? const []),
+    for (final proxy in proxies)
+      if (proxy is Map && paths.contains(proxy['name'])) proxy,
+  ];
 }
+
+List _appliedPathNames(Map<String, dynamic> profile) =>
+    (profile[_photonProtection] as Map?)?['proxy-paths'] as List? ?? const [];
 
 Set<String> unauthorizedPhotonProxies(
   Map<String, dynamic> profile,
@@ -689,18 +754,30 @@ Set<String> unauthorizedPhotonProxies(
         directory!.adapterName,
       ),
   };
+  final allowedPaths = {
+    for (final route in directory?.proxyPaths ?? const <PhotonProxyPath>[])
+      (route.proxyName, route.address, route.port),
+  };
+  final pathNames = _appliedPathNames(profile);
   return {
     for (final proxy in _appliedProxyEntries(profile).whereType<Map>())
       if (proxy['name'] is String &&
           proxy['type'] != 'reject' &&
-          !allowed.contains((
-            proxy['type'],
-            proxy['server'],
-            proxy['port'],
-            proxy['sni'] ?? '',
-            proxy['fingerprint'] ?? '',
-            proxy['interface-name'],
-          )))
+          (pathNames.contains(proxy['name'])
+              ? proxy['type'] != 'socks5' ||
+                    !allowedPaths.contains((
+                      proxy['name'],
+                      proxy['server'],
+                      proxy['port'],
+                    ))
+              : !allowed.contains((
+                  proxy['type'],
+                  proxy['server'],
+                  proxy['port'],
+                  proxy['sni'] ?? '',
+                  proxy['fingerprint'] ?? '',
+                  proxy['interface-name'],
+                ))))
         proxy['name'] as String,
   };
 }
@@ -710,8 +787,8 @@ Map<String, dynamic> restrictPhotonProxies(
   Set<String> blocked,
 ) {
   if (blocked.isEmpty) return profile;
-  final proxies = [
-    for (final proxy in _appliedProxyEntries(profile))
+  List<dynamic> restrict(List proxies) => [
+    for (final proxy in proxies)
       if (proxy is Map && blocked.contains(proxy['name']))
         {'name': proxy['name'], 'type': 'reject'}
       else
@@ -719,12 +796,17 @@ Map<String, dynamic> restrictPhotonProxies(
   ];
   final providers = profile['proxy-providers'] as Map?;
   final photon = providers?[_photonProvider] as Map?;
+  final proxies = restrict(profile['proxies'] as List? ?? const []);
   if (photon == null) return {...profile, 'proxies': proxies};
   return {
     ...profile,
+    'proxies': proxies,
     'proxy-providers': {
       ...providers!,
-      _photonProvider: {...photon, 'payload': proxies},
+      _photonProvider: {
+        ...photon,
+        'payload': restrict(photon['payload'] as List? ?? const []),
+      },
     },
   };
 }
@@ -737,8 +819,16 @@ Map<String, dynamic> blockedPhotonProfile(
   final hasTemplate =
       providers is Map && providers.containsKey(_photonProvider);
   if (keepTemplate && hasTemplate) {
+    final paths = _appliedPathNames(profile);
     return {
       ...profile,
+      'proxies': [
+        for (final proxy in profile['proxies'] as List? ?? const [])
+          if (proxy is Map && paths.contains(proxy['name']))
+            {'name': proxy['name'], 'type': 'reject'}
+          else
+            proxy,
+      ],
       'proxy-providers': {
         ...providers,
         _photonProvider: {

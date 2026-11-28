@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/HiggsNet/photon/internal/photonproxy"
 )
 
 type ControlReady struct {
@@ -63,6 +65,10 @@ func ReadControlReady(r io.Reader) (ControlReady, error) {
 type streamControlDaemon struct {
 	*Daemon
 	stopped atomic.Bool
+}
+
+func (d *streamControlDaemon) ProxyV2(request photonproxy.EmbeddedClientRequest) (any, error) {
+	return d.proxyClient.Load().Request(request)
 }
 
 func (d *streamControlDaemon) Stop(ctx context.Context) error {

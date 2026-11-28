@@ -129,6 +129,10 @@ func runV2Node(ctx context.Context, config v2Config, host Host) error {
 			return err
 		}
 		defer manager.close()
+		if host.ClientReady != nil {
+			host.ClientReady(&EmbeddedClient{node: node, manager: manager})
+			defer host.ClientReady(nil)
+		}
 		routeErrors = manager.errors
 	}
 	ticker := time.NewTicker(2 * time.Second)

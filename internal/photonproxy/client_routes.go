@@ -237,13 +237,28 @@ func (m *routeManager) replace(name string, route clientRoute) (routeInfo, error
 }
 
 func (m *routeManager) remove(name string) error {
+	return m.removeBinding(name, nil)
+}
+
+func (m *routeManager) localBinding(name string) *listeningRoute {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if binding := m.listeners[name]; binding != nil {
+		if address, err := netip.ParseAddrPort(binding.listener.Addr().String()); err == nil && address.Addr().IsLoopback() {
+			return binding
+		}
+	}
+	return nil
+}
+
+func (m *routeManager) removeBinding(name string, expected *listeningRoute) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := m.ctx.Err(); err != nil {
 		return err
 	}
 	binding, exists := m.listeners[name]
-	if !exists {
+	if !exists || expected != nil && binding != expected {
 		return errRouteNotFound
 	}
 	next := maps.Clone(m.routes)

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonproxy"
 	corestate "github.com/HiggsNet/photon/pkg/core/state"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	photoncrypto "github.com/HiggsNet/photon/pkg/crypto"
@@ -20,18 +21,19 @@ import (
 )
 
 type ServiceDirectory struct {
-	InstanceID      string         `json:"instance_id"`
-	RootFingerprint string         `json:"root_fingerprint"`
-	ManagedZone     zone.ZonePath  `json:"managed_zone"`
-	Revision        uint64         `json:"revision"`
-	ObservedAt      time.Time      `json:"observed_at"`
-	ValidUntil      time.Time      `json:"valid_until"`
-	Services        []ServiceEntry `json:"services"`
-	AdapterName     string         `json:"adapter_name"`
-	UnderlayRouting bool           `json:"underlay_routing,omitempty"`
-	OverlayPrefixes []netip.Prefix `json:"overlay_prefixes,omitempty"`
-	BypassPrefixes  []netip.Prefix `json:"bypass_prefixes"`
-	BypassDomains   []string       `json:"bypass_domains"`
+	InstanceID      string                      `json:"instance_id"`
+	RootFingerprint string                      `json:"root_fingerprint"`
+	ManagedZone     zone.ZonePath               `json:"managed_zone"`
+	Revision        uint64                      `json:"revision"`
+	ObservedAt      time.Time                   `json:"observed_at"`
+	ValidUntil      time.Time                   `json:"valid_until"`
+	Services        []ServiceEntry              `json:"services"`
+	AdapterName     string                      `json:"adapter_name"`
+	UnderlayRouting bool                        `json:"underlay_routing,omitempty"`
+	OverlayPrefixes []netip.Prefix              `json:"overlay_prefixes,omitempty"`
+	BypassPrefixes  []netip.Prefix              `json:"bypass_prefixes"`
+	BypassDomains   []string                    `json:"bypass_domains"`
+	ProxyV2Routes   []photonproxy.EmbeddedRoute `json:"proxy_v2_routes,omitempty"`
 }
 
 type ServiceEntry struct {
@@ -81,6 +83,7 @@ func (d *Daemon) Services(ctx context.Context) (ServiceDirectory, error) {
 			return ServiceDirectory{}, err
 		}
 		directory.UnderlayRouting = sample.underlay
+		directory.ProxyV2Routes = d.proxyClient.Load().Routes()
 		for _, candidate := range sample.plan.Candidates {
 			for _, contact := range candidate.Contacts {
 				if host := proxyBypassDomain(contact.Host); host != "" {

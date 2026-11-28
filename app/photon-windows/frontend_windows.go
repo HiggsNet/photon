@@ -20,18 +20,18 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func runElevatedFrontend(ctx context.Context, path string, stream io.ReadWriteCloser, stderr io.Writer) int {
+func runElevatedFrontend(ctx context.Context, path string, stream io.ReadWriteCloser, stderr io.Writer, proxyV2 bool) int {
 	if !photonwindows.FrontendNeedsElevation() {
-		return runFrontendBackend(ctx, path, stream, "", stderr)
+		return runFrontendBackend(ctx, path, stream, "", stderr, proxyV2)
 	}
-	if err := bridgeFrontend(ctx, path, stream); err != nil {
+	if err := bridgeFrontend(ctx, path, stream, proxyV2); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	return 0
 }
 
-func bridgeFrontend(ctx context.Context, path string, stream io.ReadWriteCloser) error {
+func bridgeFrontend(ctx context.Context, path string, stream io.ReadWriteCloser, proxyV2 bool) error {
 	fail := func(err error) error {
 		_ = photonwindows.WriteControlReady(stream, photonwindows.ControlReady{}, err)
 		return err
@@ -53,9 +53,11 @@ func bridgeFrontend(ctx context.Context, path string, stream io.ReadWriteCloser)
 		return fail(err)
 	}
 	defer windows.CloseHandle(handle)
-	worker, err := launchFrontendWorker(executable, []string{
-		"frontend-worker", strconv.Itoa(os.Getpid()), name, digest, path,
-	})
+	args := []string{"frontend-worker", strconv.Itoa(os.Getpid()), name, digest, path}
+	if proxyV2 {
+		args = append(args, "--proxy-v2")
+	}
+	worker, err := launchFrontendWorker(executable, args)
 	if err != nil {
 		return fail(err)
 	}
@@ -113,7 +115,8 @@ func bridgeFrontend(ctx context.Context, path string, stream io.ReadWriteCloser)
 }
 
 func runFrontendWorker(ctx context.Context, args []string, stderr io.Writer) int {
-	if len(args) != 4 || photonwindows.FrontendNeedsElevation() {
+	proxyV2 := len(args) == 5 && args[4] == "--proxy-v2"
+	if (len(args) != 4 && !proxyV2) || photonwindows.FrontendNeedsElevation() {
 		return 2
 	}
 	pid, err := strconv.ParseUint(args[0], 10, 32)
@@ -138,7 +141,7 @@ func runFrontendWorker(ctx context.Context, args []string, stderr io.Writer) int
 		return 1
 	}
 	defer windows.CloseHandle(handle)
-	return runFrontendBackend(ctx, args[3], photonwindows.FrontendPipeStream(ctx, handle), args[2], stderr)
+	return runFrontendBackend(ctx, args[3], photonwindows.FrontendPipeStream(ctx, handle), args[2], stderr, proxyV2)
 }
 
 type shellExecuteInfo struct {

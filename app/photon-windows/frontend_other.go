@@ -8,8 +8,8 @@ import (
 	"io"
 )
 
-func runElevatedFrontend(ctx context.Context, path string, stream io.ReadWriteCloser, stderr io.Writer) int {
-	return runFrontendBackend(ctx, path, stream, "", stderr)
+func runElevatedFrontend(ctx context.Context, path string, stream io.ReadWriteCloser, stderr io.Writer, proxyV2 bool) int {
+	return runFrontendBackend(ctx, path, stream, "", stderr, proxyV2)
 }
 
 func runFrontendWorker(_ context.Context, _ []string, stderr io.Writer) int {
