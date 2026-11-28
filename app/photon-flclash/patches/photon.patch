@@ -1416,7 +1416,7 @@ diff --git a/lib/common/app_update.dart b/lib/common/app_update.dart
 diff --git a/lib/common/constant.dart b/lib/common/constant.dart
 --- a/lib/common/constant.dart
 +++ b/lib/common/constant.dart
-@@ -129,7 +129,9 @@
+@@ -129,7 +129,10 @@
  const bootRecordKey = 'boot_record';
  const appliedConfigMd5Key = 'applied_config_md5';
  const defaultSystemDnsFallback = '223.5.5.5';
@@ -1424,9 +1424,33 @@ diff --git a/lib/common/constant.dart b/lib/common/constant.dart
 +const repository = bool.fromEnvironment('PHOTON_BUILD')
 +    ? 'HiggsNet/photon'
 +    : 'chen08209/FlClash';
++const photonPackageVersion = String.fromEnvironment('PHOTON_PACKAGE_VERSION');
  const maxMobileWidth = 600;
  const maxLaptopWidth = 840;
  const defaultTestUrl = 'https://www.gstatic.com/generate_204';
+diff --git a/lib/views/about.dart b/lib/views/about.dart
+--- a/lib/views/about.dart
++++ b/lib/views/about.dart
+@@ -189,10 +189,18 @@
+             runSpacing: 8,
+             alignment: WrapAlignment.center,
+             children: [
++              if (photonPackageVersion.isNotEmpty)
++                _Pill(
++                  label: 'Photon-FlClash $photonPackageVersion',
++                  color: colorScheme.primary,
++                  foregroundColor: colorScheme.onPrimary,
++                ),
+               _Pill(
+-                label: 'v${globalState.packageInfo.version}',
++                label: photonPackageVersion.isEmpty
++                    ? 'v${globalState.packageInfo.version}'
++                    : '$appName v${globalState.packageInfo.version}',
+                 color: colorScheme.primary,
+                 foregroundColor: colorScheme.onPrimary,
+               ),
+               _Pill(
+                 label: 'GPL-3.0',
 diff --git a/lib/views/proxies/card.dart b/lib/views/proxies/card.dart
 index 6e309a8f..c7e83a87 100644
 --- a/lib/views/proxies/card.dart

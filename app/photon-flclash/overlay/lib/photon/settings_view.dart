@@ -82,6 +82,17 @@ class PhotonSettings extends StatelessWidget {
             ],
           ),
         PhotonStorage(owner: owner, allowed: allowed),
+        if (photonPackageVersion.isNotEmpty)
+          generateSection(
+            title: l.about,
+            items: const [
+              ListItem(
+                leading: GlyphIcon(AppGlyphs.info),
+                title: Text('Photon-FlClash'),
+                subtitle: SelectableText(photonPackageVersion),
+              ),
+            ],
+          ),
       ],
     );
   }

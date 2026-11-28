@@ -109,6 +109,7 @@ jobs:
     timeout-minutes: 30
     env:
       CARGO_BUILD_JOBS: '4'
+      PACKAGE_VERSION: ${{ needs.metadata.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - name: Install Flutter Linux dependencies
@@ -124,7 +125,9 @@ jobs:
           flutter pub get
           dart run intl_utils:generate
           flutter analyze --no-fatal-infos
-          flutter test --dart-define=PHOTON_BUILD=true test/photon test/providers/action_test.dart test/providers/system_action_test.dart test/l10n test/lint
+          flutter test --dart-define=PHOTON_BUILD=true \
+            --dart-define="PHOTON_PACKAGE_VERSION=$PACKAGE_VERSION" \
+            test/photon test/providers/action_test.dart test/providers/system_action_test.dart test/l10n test/lint
 
   flclash:
     name: Build and test Photon-FlClash amd64 ZIP and installer
@@ -162,7 +165,8 @@ jobs:
           ./app/photon-flclash/build-windows.ps1 `
             -Checkout build/photon-flclash/upstream `
             -BackendDirectory build/windows-amd64 `
-            -ArchivePath "dist/photon-flclash-$env:PACKAGE_VERSION-windows-amd64.zip"
+            -ArchivePath "dist/photon-flclash-$env:PACKAGE_VERSION-windows-amd64.zip" `
+            -PackageVersion $env:PACKAGE_VERSION
           Move-Item -LiteralPath "dist/photon-flclash-$env:PACKAGE_VERSION-windows-amd64.zip.sha256" `
             -Destination dist/photon-flclash-windows-amd64.sha256
       - name: Analyze Windows frontend

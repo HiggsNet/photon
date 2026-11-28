@@ -42,6 +42,25 @@ void main() {
     child: PhotonView(controller: controller, isWindows: true),
   );
 
+  photonTest('settings shows the package version while disconnected', (
+    tester,
+  ) async {
+    const version = String.fromEnvironment('PHOTON_PACKAGE_VERSION');
+    await tester.pumpWidget(view());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Settings'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Photon-FlClash'),
+      version.isEmpty ? findsNothing : findsOneWidget,
+    );
+    if (version.isNotEmpty) {
+      expect(find.text(version), findsOneWidget);
+    }
+    expect(backend.calls, isEmpty);
+  });
+
   photonTest('template editing and reset are offered without a tunnel', (
     tester,
   ) async {

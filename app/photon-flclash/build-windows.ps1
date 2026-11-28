@@ -4,9 +4,11 @@ param(
     [Parameter(Mandatory=$true)][string]$BackendDirectory,
     [Parameter(Mandatory=$true, ParameterSetName='Directory')][string]$OutputDirectory,
     [Parameter(Mandatory=$true, ParameterSetName='Archive')][string]$ArchivePath,
-    [string]$SigningCertificateThumbprint = $env:PHOTON_FLCLASH_SIGNING_THUMBPRINT
+    [string]$SigningCertificateThumbprint = $env:PHOTON_FLCLASH_SIGNING_THUMBPRINT,
+    [string]$PackageVersion = ('v' + (Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../VERSION') -Raw).Trim())
 )
 $ErrorActionPreference = 'Stop'
+if ($PackageVersion -notmatch '^[0-9A-Za-z][0-9A-Za-z.+-]{0,79}$') { throw 'Invalid package version' }
 $Checkout = (Resolve-Path -LiteralPath $Checkout).Path
 $BackendDirectory = (Resolve-Path -LiteralPath $BackendDirectory).Path
 $stage = $null
@@ -103,7 +105,10 @@ Push-Location $Checkout
 try {
     Invoke-BuildTool 'flutter' @('pub', 'get')
     Invoke-BuildTool 'dart' @('run', 'intl_utils:generate')
-    Invoke-BuildTool 'flutter' @('build', 'windows', '--release', '--dart-define=PHOTON_BUILD=true', '--verbose')
+    Invoke-BuildTool 'flutter' @(
+        'build', 'windows', '--release', '--dart-define=PHOTON_BUILD=true',
+        "--dart-define=PHOTON_PACKAGE_VERSION=$PackageVersion", '--verbose'
+    )
     $bundle = Join-Path $Checkout 'build\windows\x64\runner\Release'
     if (!(Test-Path -LiteralPath (Join-Path $bundle 'FlClash.exe'))) { throw 'Windows x64 bundle missing' }
     if ($stage) { [IO.Directory]::CreateDirectory($stage) | Out-Null }
