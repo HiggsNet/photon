@@ -4,7 +4,7 @@ import 'package:fl_clash/photon/proxy_bridge.dart';
 import 'package:fl_clash/photon/proxy_paths_view.dart';
 import 'package:fl_clash/photon/services.dart';
 import 'package:fl_clash/providers/app.dart';
-import 'package:fl_clash/widgets/widgets.dart' show TextFormField;
+import 'package:fl_clash/widgets/widgets.dart' show IconButton, TextFormField;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -17,6 +17,7 @@ class _PathBackend extends FakeBackend implements PhotonPathBackend {
   final requests = <Map<String, dynamic>>[];
   Map<String, dynamic>? path;
   Map<String, dynamic>? probe;
+  List<Map<String, dynamic>> relays = [];
 
   @override
   Future<Map<String, dynamic>> proxyV2(Map<String, dynamic> request) async {
@@ -40,7 +41,7 @@ class _PathBackend extends FakeBackend implements PhotonPathBackend {
     }
     return {
       'routes': [?path],
-      'directory': {'exits': [], 'relays': []},
+      'directory': {'exits': [], 'relays': relays},
       'probe': ?probe,
     };
   }
@@ -89,6 +90,112 @@ void main() {
       await tester.tap(find.text('Connectivity'));
       await tester.pumpAndSettle();
       expect(find.text('52 ms'), findsOneWidget);
+    } finally {
+      await tester.pumpWidget(const SizedBox());
+      await controller.close();
+      controller.dispose();
+    }
+  });
+
+  testWidgets('relay actions stay together and edit the matching relay', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final backend = _PathBackend()
+      ..relays = [
+        {
+          'zone': 'directory-relay.example.',
+          'endpoint': 'relay',
+          'links': ['h26'],
+        },
+      ];
+    final controller = PhotonController(createBackend: () => backend)
+      ..selectConfig('/test/photon.yaml');
+    final bridge = PhotonProxyBridge(controller: controller);
+    await controller.start(allowed: true);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetPhysicalSize);
+
+    Finder button(String tooltip) => find.byWidgetPredicate(
+      (widget) => widget is IconButton && widget.tooltip == tooltip,
+    );
+
+    try {
+      tester.view.physicalSize = const Size(428, 850);
+      await tester.pumpWidget(
+        TestApp(
+          locale: const Locale('en'),
+          overrides: [safeModeProvider.overrideWith((_) => false)],
+          child: PhotonProxyPathsView(controller: controller, bridge: bridge),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('New path'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add relay'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add relay'));
+      await tester.pumpAndSettle();
+
+      final fields = find.byType(TextFormField);
+      final up = button('Move up');
+      final down = button('Move down');
+      final remove = button('Remove relay');
+      for (final (width, inline) in [(428.0, true), (320.0, false)]) {
+        tester.view.physicalSize = Size(width, 850);
+        await tester.pumpAndSettle();
+        final fieldCenter = tester.getCenter(fields.at(1));
+        final upCenter = tester.getCenter(up.first);
+        final downCenter = tester.getCenter(down.first);
+        final removeCenter = tester.getCenter(remove.first);
+        expect(upCenter.dy, downCenter.dy);
+        expect(downCenter.dy, removeCenter.dy);
+        expect(removeCenter.dx, greaterThan(downCenter.dx));
+        expect(
+          upCenter.dy,
+          inline ? fieldCenter.dy : greaterThan(fieldCenter.dy),
+        );
+        expect(tester.takeException(), isNull);
+      }
+
+      expect(tester.widget<IconButton>(up.first).onPressed, isNull);
+      expect(tester.widget<IconButton>(down.last).onPressed, isNull);
+      await tester.enterText(fields.at(0), 'home');
+      await tester.enterText(fields.at(2), 'manual-relay');
+      await tester.enterText(fields.at(3), 'gateway.catofes./exit');
+      await tester.pumpAndSettle();
+      final chooseNode = button('Choose node').first;
+      await tester.ensureVisible(chooseNode);
+      await tester.pumpAndSettle();
+      await tester.tap(chooseNode);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('directory-relay'));
+      await tester.pumpAndSettle();
+      await tester.tap(down.first);
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<TextFormField>(fields.at(1)).controller?.text,
+        'manual-relay',
+      );
+      await tester.tap(up.last);
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<TextFormField>(fields.at(1)).controller?.text,
+        'directory-relay.example.',
+      );
+      await tester.tap(remove.last);
+      await tester.pumpAndSettle();
+      tester.view.physicalSize = const Size(428, 850);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(
+        backend.requests.lastWhere(
+          (request) => request['action'] == 'create',
+        )['hops'],
+        ['directory-relay.example.@h26', 'gateway.catofes./exit@h2l4'],
+      );
     } finally {
       await tester.pumpWidget(const SizedBox());
       await controller.close();

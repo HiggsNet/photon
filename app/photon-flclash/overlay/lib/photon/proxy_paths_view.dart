@@ -374,12 +374,24 @@ Widget _choiceMenu<T>({
   required List<(T, String)> choices,
   required ValueChanged<T> onSelected,
   bool enabled = true,
+  Glyph? buttonGlyph,
+  ButtonStyle? style,
 }) => PopupAnchor(
-  targetBuilder: (open) => TextButton.icon(
-    onPressed: enabled && choices.isNotEmpty ? open : null,
-    icon: const GlyphIcon(AppGlyphs.chevronDown, size: 14),
-    label: Text(title),
-  ),
+  targetBuilder: (open) {
+    final onPressed = enabled && choices.isNotEmpty ? open : null;
+    return buttonGlyph != null
+        ? IconButton(
+            tooltip: title,
+            onPressed: onPressed,
+            icon: GlyphIcon(buttonGlyph),
+          )
+        : TextButton.icon(
+            onPressed: onPressed,
+            style: style,
+            icon: const GlyphIcon(AppGlyphs.chevronDown, size: 14),
+            label: Text(title),
+          );
+  },
   popupBuilder: (_) => PopupMenu(
     maxVisibleItems: 8,
     items: [
@@ -461,46 +473,109 @@ class _PathEditorState extends State<_PathEditor> {
     }
   }
 
-  Widget _hop(_HopDraft draft, List<PhotonPathEndpoint> choices, String label) {
-    return Row(
-      key: ObjectKey(draft),
-      spacing: 12,
-      children: [
-        Expanded(
-          child: TextFormField(
-            controller: draft.node,
-            validator: (value) => value == null || value.trim().isEmpty
-                ? _text(context, '请选择或输入节点', 'Choose or enter a node')
-                : null,
-            decoration: InputDecoration(hintText: label),
-          ),
-        ),
-        if (choices.isNotEmpty)
-          _choiceMenu(
-            title: _text(context, '选节点', 'Choose node'),
-            choices: [
-              for (final endpoint in choices) (endpoint, endpoint.label),
-            ],
-            onSelected: (endpoint) => setState(() {
-              draft.node.text = endpoint.endpoint == 'relay'
-                  ? endpoint.zone
-                  : '${endpoint.zone}/${endpoint.endpoint}';
-              if (!endpoint.links.contains(draft.link) &&
-                  endpoint.links.isNotEmpty) {
-                draft.link = endpoint.links.first;
-              }
-            }),
-          ),
+  Widget _hop(
+    _HopDraft draft,
+    List<PhotonPathEndpoint> choices,
+    String label, {
+    int? relayIndex,
+  }) {
+    final nodeField = TextFormField(
+      controller: draft.node,
+      validator: (value) => value == null || value.trim().isEmpty
+          ? _text(context, '请选择或输入节点', 'Choose or enter a node')
+          : null,
+      decoration: InputDecoration(hintText: label),
+    );
+    final nodeControls = [
+      Expanded(child: nodeField),
+      if (choices.isNotEmpty)
         _choiceMenu(
-          title: draft.link,
-          choices: [
-            for (final link in {..._links, draft.link}) (link, link),
-          ],
-          onSelected: (value) => setState(() => draft.link = value),
+          title: _text(context, '选节点', 'Choose node'),
+          buttonGlyph: relayIndex == null ? null : AppGlyphs.connections,
+          choices: [for (final endpoint in choices) (endpoint, endpoint.label)],
+          onSelected: (endpoint) => setState(() {
+            draft.node.text = endpoint.endpoint == 'relay'
+                ? endpoint.zone
+                : '${endpoint.zone}/${endpoint.endpoint}';
+            if (!endpoint.links.contains(draft.link) &&
+                endpoint.links.isNotEmpty) {
+              draft.link = endpoint.links.first;
+            }
+          }),
         ),
+    ];
+    final linkMenu = _choiceMenu(
+      title: draft.link,
+      style: relayIndex == null
+          ? null
+          : const ButtonStyle(padding: EdgeInsets.symmetric(horizontal: 4)),
+      choices: [
+        for (final link in {..._links, draft.link}) (link, link),
       ],
+      onSelected: (value) => setState(() => draft.link = value),
+    );
+    if (relayIndex == null) {
+      return Row(
+        key: ObjectKey(draft),
+        spacing: 12,
+        children: [...nodeControls, linkMenu],
+      );
+    }
+    final actions = _relayActions(relayIndex);
+    return LayoutBuilder(
+      key: ObjectKey(draft),
+      builder: (context, constraints) =>
+          constraints.maxWidth >= 300 &&
+              MediaQuery.textScalerOf(context).scale(16) <= 20
+          ? Row(spacing: 4, children: [...nodeControls, linkMenu, actions])
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(spacing: 4, children: nodeControls),
+                Wrap(
+                  alignment: WrapAlignment.end,
+                  spacing: 4,
+                  children: [linkMenu, actions],
+                ),
+              ],
+            ),
     );
   }
+
+  Widget _relayActions(int index) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      IconButton(
+        tooltip: _text(context, '上移', 'Move up'),
+        onPressed: index == 0
+            ? null
+            : () => setState(
+                () => _relays.insert(index - 1, _relays.removeAt(index)),
+              ),
+        icon: const GlyphIcon(AppGlyphs.arrowUp),
+      ),
+      IconButton(
+        tooltip: _text(context, '下移', 'Move down'),
+        onPressed: index == _relays.length - 1
+            ? null
+            : () => setState(
+                () => _relays.insert(index + 1, _relays.removeAt(index)),
+              ),
+        icon: const GlyphIcon(AppGlyphs.arrowDown),
+      ),
+      IconButton(
+        tooltip: _text(context, '移除中继', 'Remove relay'),
+        onPressed: () => setState(() {
+          // The text field disposes its listener on the next frame.
+          final removed = _relays.removeAt(index);
+          WidgetsBinding.instance.addPostFrameCallback(
+            (_) => removed.node.dispose(),
+          );
+        }),
+        icon: const GlyphIcon(AppGlyphs.remove),
+      ),
+    ],
+  );
 
   @override
   Widget build(BuildContext context) => AlertDialog(
@@ -541,47 +616,13 @@ class _PathEditorState extends State<_PathEditor> {
                     ? _text(context, '请输入名称', 'Enter a name')
                     : null,
               ),
-              for (final (i, draft) in _relays.indexed) ...[
+              for (final (i, draft) in _relays.indexed)
                 _hop(
                   draft,
                   widget.snapshot.relays,
                   _text(context, '中继 ${i + 1}', 'Relay ${i + 1}'),
+                  relayIndex: i,
                 ),
-                Wrap(
-                  alignment: WrapAlignment.end,
-                  children: [
-                    IconButton(
-                      tooltip: _text(context, '上移', 'Move up'),
-                      onPressed: i == 0
-                          ? null
-                          : () => setState(
-                              () => _relays.insert(i - 1, _relays.removeAt(i)),
-                            ),
-                      icon: const GlyphIcon(AppGlyphs.arrowUp),
-                    ),
-                    IconButton(
-                      tooltip: _text(context, '下移', 'Move down'),
-                      onPressed: i == _relays.length - 1
-                          ? null
-                          : () => setState(
-                              () => _relays.insert(i + 1, _relays.removeAt(i)),
-                            ),
-                      icon: const GlyphIcon(AppGlyphs.arrowDown),
-                    ),
-                    IconButton(
-                      tooltip: _text(context, '移除中继', 'Remove relay'),
-                      onPressed: () => setState(() {
-                        // The text field disposes its listener on the next frame.
-                        final removed = _relays.removeAt(i);
-                        WidgetsBinding.instance.addPostFrameCallback(
-                          (_) => removed.node.dispose(),
-                        );
-                      }),
-                      icon: const GlyphIcon(AppGlyphs.remove),
-                    ),
-                  ],
-                ),
-              ],
               Align(
                 alignment: Alignment.centerLeft,
                 child: TextButton.icon(
