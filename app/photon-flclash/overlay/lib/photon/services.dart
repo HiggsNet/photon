@@ -7,9 +7,14 @@ import 'package:fl_clash/common/string.dart' show StringExtension;
 import 'proxy_selection.dart';
 import 'proxy_paths.dart';
 
-const _photonProvider = 'photon-services';
+const photonServiceProvider = 'photon-services';
 const _pathGroup = 'Photon Paths';
-const _photonGroups = ['Photon', 'Photon Auto', 'Photon Balance', _pathGroup];
+const photonProxyGroups = [
+  'Photon',
+  'Photon Auto',
+  'Photon Balance',
+  _pathGroup,
+];
 const _photonProtection = 'x-photon-protection';
 
 typedef PhotonProxyCardTitles = Map<({String? provider, String name}), String>;
@@ -262,13 +267,13 @@ Map<PhotonEndpoint, String> _proxyNames(
   Map<String, dynamic>? template, {
   PhotonProxyCardTitles? cardTitles,
 }) {
-  final provider = template == null ? null : _photonProvider;
+  final provider = template == null ? null : photonServiceProvider;
   final byLabel = <String, List<PhotonEndpoint>>{};
   for (final endpoint in endpoints) {
     (byLabel[endpoint._proxyLabel] ??= []).add(endpoint);
   }
   final used = {
-    ..._photonGroups,
+    ...photonProxyGroups,
     'GLOBAL',
     'DIRECT',
     'REJECT',
@@ -352,7 +357,9 @@ void validatePhotonProxyTemplate(Map<String, dynamic> template) {
         items.any((item) => item is! Map || item['name'] is! String)) {
       throw FormatException('Invalid Photon proxy template section: $section');
     }
-    if (items.any((item) => _photonGroups.contains((item as Map)['name']))) {
+    if (items.any(
+      (item) => photonProxyGroups.contains((item as Map)['name']),
+    )) {
       throw const FormatException(
         'The Photon proxy template uses a reserved name',
       );
@@ -370,7 +377,9 @@ void validatePhotonProxyTemplate(Map<String, dynamic> template) {
       throw FormatException('Invalid Photon proxy template section: $section');
     }
   }
-  if ((template['proxy-providers'] as Map?)?.containsKey(_photonProvider) ==
+  if ((template['proxy-providers'] as Map?)?.containsKey(
+        photonServiceProvider,
+      ) ==
       true) {
     throw const FormatException(
       'The Photon proxy template uses a reserved name',
@@ -500,22 +509,11 @@ Map<String, dynamic> _renderPhotonProxyProfile({
   final templateGroups = template?['proxy-groups'] as List? ?? const [];
   final templateProviders = template?['proxy-providers'] as Map? ?? const {};
   final templateRules = template?['rules'] as List?;
-  final showPaths =
-      paths.isNotEmpty ||
-      (templateRules?.any(
-            (rule) => (rule as String)
-                .split(',')
-                .any((part) => part.trim() == _pathGroup),
-          ) ??
-          false) ||
-      templateGroups.any(
-        (group) =>
-            ((group as Map)['proxies'] as List?)?.contains(_pathGroup) == true,
-      );
+  final showPaths = paths.isNotEmpty || template != null;
   final groupEndpoints = template == null
       ? {'proxies': names}
       : {
-          'use': [_photonProvider],
+          'use': [photonServiceProvider],
           'empty-fallback': 'REJECT',
         };
   final protection = {
@@ -553,7 +551,7 @@ Map<String, dynamic> _renderPhotonProxyProfile({
     if (template != null)
       'proxy-providers': {
         ...templateProviders,
-        _photonProvider: {
+        photonServiceProvider: {
           'type': 'inline',
           'payload': proxies,
           'health-check': {
@@ -724,7 +722,7 @@ String encodePhotonProfile(Map<String, dynamic> profile) =>
 
 List<dynamic> _appliedProxyEntries(Map<String, dynamic> profile) {
   final providers = profile['proxy-providers'] as Map?;
-  final photon = providers?[_photonProvider] as Map?;
+  final photon = providers?[photonServiceProvider] as Map?;
   final proxies = profile['proxies'] as List? ?? const [];
   if (photon == null) return proxies;
   final paths = _appliedPathNames(profile);
@@ -795,7 +793,7 @@ Map<String, dynamic> restrictPhotonProxies(
         proxy,
   ];
   final providers = profile['proxy-providers'] as Map?;
-  final photon = providers?[_photonProvider] as Map?;
+  final photon = providers?[photonServiceProvider] as Map?;
   final proxies = restrict(profile['proxies'] as List? ?? const []);
   if (photon == null) return {...profile, 'proxies': proxies};
   return {
@@ -803,7 +801,7 @@ Map<String, dynamic> restrictPhotonProxies(
     'proxies': proxies,
     'proxy-providers': {
       ...providers!,
-      _photonProvider: {
+      photonServiceProvider: {
         ...photon,
         'payload': restrict(photon['payload'] as List? ?? const []),
       },
@@ -817,7 +815,7 @@ Map<String, dynamic> blockedPhotonProfile(
 }) {
   final providers = profile['proxy-providers'];
   final hasTemplate =
-      providers is Map && providers.containsKey(_photonProvider);
+      providers is Map && providers.containsKey(photonServiceProvider);
   if (keepTemplate && hasTemplate) {
     final paths = _appliedPathNames(profile);
     return {
@@ -831,7 +829,7 @@ Map<String, dynamic> blockedPhotonProfile(
       ],
       'proxy-providers': {
         ...providers,
-        _photonProvider: {
+        photonServiceProvider: {
           'type': 'inline',
           'payload': [
             {'name': 'Photon Offline', 'type': 'reject'},
@@ -840,7 +838,7 @@ Map<String, dynamic> blockedPhotonProfile(
       },
       'proxy-groups': [
         for (final group in profile['proxy-groups'] as List)
-          if (_photonGroups.contains((group as Map)['name']))
+          if (photonProxyGroups.contains((group as Map)['name']))
             {
               'name': group['name'],
               'type': 'select',

@@ -145,6 +145,8 @@ void main() {
           if (template == null) {
             final members = group['proxies'] as List;
             expect(members.where((name) => name == names.first), hasLength(1));
+          } else if (group['name'] == 'Photon Paths') {
+            expect(group['proxies'], ['REJECT']);
           } else {
             expect(group['use'], ['photon-services']);
           }

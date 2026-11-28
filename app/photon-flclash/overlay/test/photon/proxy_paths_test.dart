@@ -218,7 +218,7 @@ void main() {
         'rules': ['MATCH,Photon Paths'],
       };
       Map<String, dynamic> fixture({required bool include}) => {
-        ...directoryFixture(withdrawn: true),
+        ...directoryFixture(),
         'proxy_v2_routes': [
           if (include)
             {
@@ -247,6 +247,17 @@ void main() {
       expect(path['port'], 10801);
       expect(path['udp'], true);
       expect(path, isNot(contains('interface-name')));
+      final groups = (profile['proxy-groups'] as List).cast<Map>();
+      expect(
+        groups.singleWhere(
+          (group) => group['name'] == 'Photon Paths',
+        )['proxies'],
+        ['Photon Path / home'],
+      );
+      expect(
+        (profile['proxy-providers'] as Map)['photon-services']['payload'],
+        contains(containsPair('type', 'socks5')),
+      );
       expect(unauthorizedPhotonProxies(profile, live), isEmpty);
       final removed = PhotonDirectory.fromJson(fixture(include: false));
       final blocked = unauthorizedPhotonProxies(profile, removed);

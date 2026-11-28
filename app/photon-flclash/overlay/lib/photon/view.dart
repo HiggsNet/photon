@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:fl_clash/common/common.dart';
 import 'package:fl_clash/l10n/l10n.dart';
-import 'package:fl_clash/pages/editor.dart';
 import 'package:fl_clash/providers/app.dart';
 import 'package:fl_clash/ui/icons/icons.dart';
 import 'package:fl_clash/widgets/widgets.dart';
@@ -13,13 +12,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'controller.dart';
 import 'proxy_bridge.dart';
-import 'proxy_selection_view.dart';
-import 'services.dart';
-import 'setup_view.dart';
 import 'settings_view.dart';
-import 'template_help.dart';
+import 'status_table.dart';
 
-enum _Page { overview, tunnels, peers, routes, services, diagnostics, settings }
+enum _Page { overview, tunnels, peers, routes, diagnostics, settings }
 
 class PhotonView extends ConsumerStatefulWidget {
   const PhotonView({super.key, this.controller, this.isWindows});
@@ -35,8 +31,6 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
   _Page _page = _Page.overview;
   String _filter = '';
   bool _advanced = false;
-  String? _templateConfig;
-  Future<bool>? _hasTemplate;
   final _expandedRoutes = <({String prefix, String source})>{};
 
   PhotonController get owner => widget.controller ?? photonController;
@@ -147,7 +141,7 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
                           ),
                         ),
                         if (owner.error != null)
-                          _DetailCard(
+                          PhotonDetailCard(
                             title: l.error,
                             lines: [(l.errorDetails, owner.error.toString())],
                           ),
@@ -157,7 +151,6 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
                             (_Page.tunnels, l.photonTunnel),
                             (_Page.peers, l.photonGossipPeers),
                             (_Page.routes, l.photonRoutes),
-                            (_Page.services, l.photonServices),
                             (_Page.diagnostics, l.photonDiagnostics),
                             (_Page.settings, l.settings),
                           ],
@@ -169,8 +162,7 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
                         ),
                         if (_page == _Page.tunnels ||
                             _page == _Page.peers ||
-                            _page == _Page.routes ||
-                            _page == _Page.services)
+                            _page == _Page.routes)
                           TextField(
                             key: ValueKey(_page),
                             decoration: InputDecoration(
@@ -180,9 +172,6 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
                             onChanged: (value) =>
                                 setState(() => _filter = value.toLowerCase()),
                           ),
-                        if (_page == _Page.services &&
-                            (status != null || (config != null && allowed)))
-                          _proxyControls(l, status, config, allowed),
                         if (_page == _Page.overview && config == null)
                           Card(
                             onPressed: () =>
@@ -198,7 +187,7 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
                         if (_page == _Page.overview &&
                             status == null &&
                             config != null)
-                          _DetailCard(
+                          PhotonDetailCard(
                             title: l.disconnected,
                             lines: [(l.photonName, l.photonOffline)],
                           ),
@@ -219,7 +208,6 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
                     ),
                     _Page.peers when status != null => _gossipTable(l, status),
                     _Page.routes when status != null => _routeTable(l, status),
-                    _Page.services when status != null => _proxyTable(l),
                     _ => SliverPrismList(
                       itemCount: items.length,
                       itemBuilder: (context, index) => Padding(
@@ -250,7 +238,7 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
     switch (_page) {
       case _Page.overview:
         return [
-          () => _DetailCard(
+          () => PhotonDetailCard(
             title: l.photonIdentity,
             lines: [
               (l.photonIdentity, _text(admission['managed_zone'])),
@@ -266,7 +254,7 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
                 (l.errorDetails, _text(admission['reason_detail'])),
             ],
           ),
-          () => _DetailCard(
+          () => PhotonDetailCard(
             title: l.ipAddress,
             lines: [
               (l.ipAddress, _strings(wintun['addresses'])),
@@ -276,7 +264,7 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
           ),
           if (admission['pending'] == true &&
               _text(admission['join_request_b64']).isNotEmpty)
-            () => _DetailCard(
+            () => PhotonDetailCard(
               title: l.photonWaiting,
               lines: [(l.photonIdentity, _text(admission['managed_zone']))],
               footer: TextButton(
@@ -290,13 +278,12 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
       case _Page.settings:
       case _Page.tunnels:
       case _Page.peers:
-      case _Page.services:
       case _Page.routes:
         return [];
       case _Page.diagnostics:
         final readiness = _map(status['readiness']);
         return [
-          () => _DetailCard(
+          () => PhotonDetailCard(
             title: l.photonDiagnostics,
             lines: [
               (
@@ -328,7 +315,7 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
             ),
           ),
           if (_advanced)
-            () => _DetailCard(
+            () => PhotonDetailCard(
               title: l.photonAdvanced,
               lines: [],
               footer: SelectableText(
@@ -359,8 +346,8 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
           _ikeState(l, ike),
         ]);
       });
-    }).toList()..sort(_compareGatewayNames);
-    return _PhotonTable(
+    }).toList()..sort(comparePhotonNodeNames);
+    return PhotonTable(
       columns: [
         TableColumn('gateway', l.photonGateway, flex: 2.6, end: true),
         TableColumn('ready', l.status, flex: 1.15),
@@ -400,7 +387,7 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
             .where((value) => value.isNotEmpty)
             .join(' / ');
         final colors = context.colorScheme;
-        return _PhotonTableRow(
+        return PhotonTableRow(
           title: peer,
           id: peer,
           cells: [
@@ -412,13 +399,13 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
               ),
             ),
             Text(ikeState),
-            _statusMark(_linkState(l, esp), esp),
-            _statusMark(_linkState(l, babel), babel),
-            _statusMark(
+            photonStatusMark(_linkState(l, esp), esp),
+            photonStatusMark(_linkState(l, babel), babel),
+            photonStatusMark(
               '${l.photonInnerIPv4Route} · ${_routeState(l, ipv4)}',
               ipv4,
             ),
-            _statusMark(
+            photonStatusMark(
               '${l.photonInnerIPv6Route} · ${_routeState(l, ipv6)}',
               ipv6,
             ),
@@ -440,7 +427,7 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
                         : live == true
                         ? l.photonTunnelReady
                         : l.photonTunnelNotReady;
-                    return _statusMark('$family · $label', live);
+                    return photonStatusMark('$family · $label', live);
                   }(),
               ],
             ),
@@ -472,10 +459,12 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
             )
             .toList()
           ..sort(
-            (a, b) =>
-                _compareGatewayNames(_text(a['peer_id']), _text(b['peer_id'])),
+            (a, b) => comparePhotonNodeNames(
+              _text(a['peer_id']),
+              _text(b['peer_id']),
+            ),
           );
-    return _PhotonTable(
+    return PhotonTable(
       columns: [
         TableColumn('peer', l.photonNode, flex: 3, end: true),
         TableColumn('state', l.status, flex: 2),
@@ -490,7 +479,7 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
         final state = _text(entry['sync_status']);
         final lastSync = _unix(entry['last_sync_unix']);
         final failure = _map(entry['last_failure']);
-        return _PhotonTableRow(
+        return PhotonTableRow(
           title: peer,
           cells: [Text(peer), Text(state), Text(lastSync)],
           details: [
@@ -499,286 +488,6 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
             (l.address, _text(entry['selected_addr'])),
             (l.photonLastSync, lastSync),
             (l.photonLastFailure, _text(failure['message'] ?? failure['code'])),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _proxyControls(
-    AppLocalizations l,
-    Map<String, dynamic>? status,
-    String? config,
-    bool allowed,
-  ) {
-    final directory = owner.directory;
-    final hasEndpoints = directory?.endpoints.isNotEmpty == true;
-    final ready = status?['tunnel_ready'] == true;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          spacing: 16,
-          children: [
-            Row(
-              spacing: 12,
-              children: [
-                Expanded(
-                  child: Text(
-                    !ready
-                        ? l.photonProxyRequiresTunnel
-                        : !owner.directoryFresh
-                        ? l.photonStale
-                        : l.photonMultiTip,
-                    style: AppTextStyle.caption1.of(context),
-                  ),
-                ),
-                IconButton(
-                  tooltip: l.photonTemplateHelp,
-                  onPressed: () => showPhotonTemplateHelp(context),
-                  icon: const GlyphIcon(AppGlyphs.info, size: 20),
-                ),
-                FilledButton(
-                  onPressed:
-                      widget.controller != null ||
-                          owner.busy ||
-                          !owner.directoryFresh ||
-                          !hasEndpoints ||
-                          !ready
-                      ? null
-                      : () => owner.applyProxies(photonProxyBridge.apply),
-                  child: Text(l.photonApply),
-                ),
-              ],
-            ),
-            if (config != null && allowed) ...[
-              if (status != null)
-                PhotonProxySelectionView(
-                  directory: directory,
-                  load: photonProxyBridge.loadSelection,
-                  onSave: (selection) => owner.applyProxies(
-                    () => photonProxyBridge.saveSelection(selection),
-                  ),
-                  enabled: !owner.busy && !owner.closed,
-                ),
-              _templateControls(l, config),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _templateControls(AppLocalizations l, String config) {
-    final file = photonProxyTemplateFile(config);
-    if (_templateConfig != config) {
-      _templateConfig = config;
-      _hasTemplate = file.exists();
-    }
-    return FutureBuilder<bool>(
-      key: ValueKey(config),
-      future: _hasTemplate,
-      builder: (context, snapshot) {
-        final hasTemplate = snapshot.data == true;
-        final editable =
-            !owner.busy &&
-            !owner.closed &&
-            snapshot.connectionState == ConnectionState.done;
-        return Row(
-          spacing: 16,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                spacing: 4,
-                children: [
-                  Text(
-                    l.photonProxyTemplate,
-                    style: AppTextStyle.callout.of(context, emphasized: true),
-                  ),
-                  Text(
-                    hasTemplate
-                        ? file.uri.pathSegments.last
-                        : l.photonBuiltinRules,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppTextStyle.caption1.of(context),
-                  ),
-                ],
-              ),
-            ),
-            PopupAnchor(
-              targetBuilder: (open) => TextButton(
-                onPressed: editable ? open : null,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  spacing: 6,
-                  children: [
-                    Text(l.edit),
-                    const GlyphIcon(AppGlyphs.chevronDown, size: 14),
-                  ],
-                ),
-              ),
-              popupBuilder: (_) => PopupMenu(
-                items: [
-                  PopupMenuItem(
-                    label: l.photonImportTemplate,
-                    glyph: AppGlyphs.importFile,
-                    onPressed: () => _importTemplate(config),
-                  ),
-                  PopupMenuItem(
-                    label: l.photonEditTemplate,
-                    glyph: AppGlyphs.edit,
-                    onPressed: () => _editTemplate(config, file),
-                  ),
-                  if (hasTemplate)
-                    PopupMenuItem(
-                      label: l.photonBuiltinRules,
-                      onPressed: () => _resetTemplate(config),
-                    ),
-                ],
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Future<void> _resetTemplate(String config) async {
-    final l = context.appLocalizations;
-    final confirmed = await dialogs.showMessage(
-      title: l.photonBuiltinRules,
-      message: TextSpan(text: l.photonRemoveTemplate),
-      destructive: true,
-    );
-    if (confirmed == true && mounted) await _changeTemplate(config, null);
-  }
-
-  Future<void> _importTemplate(String config) async {
-    try {
-      final input = await choosePhotonConfig();
-      if (input == null || !mounted) return;
-      final source = await readPhotonProxyTemplate(File(input));
-      if (!mounted) return;
-      await _changeTemplate(config, source);
-    } catch (error) {
-      if (mounted) await dialogs.showAlert(message: TextSpan(text: '$error'));
-    }
-  }
-
-  Future<void> _editTemplate(String config, File file) async {
-    try {
-      final source = await file.exists()
-          ? await readPhotonProxyTemplate(file)
-          : 'rules:\n  - MATCH,Photon\n';
-      if (!mounted) return;
-      final l = context.appLocalizations;
-      await BaseNavigator.push<void>(
-        context,
-        EditorPage(
-          title: l.photonEditTemplate,
-          content: source,
-          onSave: (context, _, content) async {
-            final saved = await _changeTemplate(
-              config,
-              await content.readText(),
-            );
-            if (saved && context.mounted) Navigator.of(context).pop();
-          },
-          onPop: (context, _, content) async {
-            final answer = await dialogs.showSaveChanges(
-              title: l.photonEditTemplate,
-            );
-            if (answer == null || !context.mounted) return false;
-            return !answer ||
-                await _changeTemplate(config, await content.readText());
-          },
-        ),
-      );
-    } catch (error) {
-      if (mounted) await dialogs.showAlert(message: TextSpan(text: '$error'));
-    }
-  }
-
-  Future<bool> _changeTemplate(String config, String? source) async {
-    if (!mounted || owner.closed || owner.configPath != config) return false;
-    final file = photonProxyTemplateFile(config);
-    Object? problem;
-    var changed = false;
-    await owner.applyProxies(() async {
-      if (owner.closed || owner.configPath != config) return;
-      try {
-        if (source == null) {
-          if (await file.exists()) await file.delete();
-          changed = true;
-        } else {
-          await photonProxyBridge.saveTemplate(config, source);
-          changed = true;
-        }
-      } catch (error) {
-        problem = error;
-      }
-    });
-    if (!mounted) return changed;
-    if (changed) setState(() => _hasTemplate = file.exists());
-    if (problem != null) {
-      await dialogs.showAlert(message: TextSpan(text: '$problem'));
-      return false;
-    }
-    if (changed) await owner.refresh();
-    return changed;
-  }
-
-  Widget _proxyTable(AppLocalizations l) {
-    final endpoints = owner.directoryFresh ? owner.directory?.endpoints : null;
-    final byNode = <String, Set<String>>{};
-    for (final endpoint in endpoints ?? const <PhotonEndpoint>[]) {
-      (byNode[endpoint.owner] ??= {}).add(endpoint.region);
-    }
-    final regions =
-        {
-          'local',
-          for (final published in byNode.values) ...published,
-          'global',
-        }.toList()..sort((a, b) {
-          if (a == b) return 0;
-          if (a == 'local' || b == 'global') return -1;
-          if (b == 'local' || a == 'global') return 1;
-          return a.compareTo(b);
-        });
-    final nodes =
-        byNode.keys
-            .where(
-              (node) => _matches([
-                node,
-                ...byNode[node]!,
-                for (final region in byNode[node]!)
-                  _proxyRegionLabel(l, region),
-              ]),
-            )
-            .toList()
-          ..sort(_compareGatewayNames);
-    return _PhotonTable(
-      columns: [
-        TableColumn('node', l.photonNode, flex: 3, end: true),
-        for (final region in regions)
-          TableColumn('region-$region', _proxyRegionLabel(l, region), flex: 1),
-      ],
-      length: nodes.length,
-      rowAt: (context, index) {
-        final node = nodes[index];
-        final published = byNode[node]!;
-        return _PhotonTableRow(
-          title: node,
-          cells: [
-            Text(node),
-            for (final region in regions)
-              _statusMark(
-                _proxyRegionLabel(l, region),
-                published.contains(region),
-              ),
           ],
         );
       },
@@ -827,7 +536,7 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
             ),
           ),
         ),
-        _PhotonTable(
+        PhotonTable(
           columns: [
             TableColumn('prefix', l.routeAddress, flex: 2.5),
             TableColumn('next_hop', l.photonNextHop, flex: 3),
@@ -847,7 +556,7 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
                 .map(_routeNextHop)
                 .toSet()
                 .join(' / ');
-            return _PhotonTableRow(
+            return PhotonTableRow(
               title: group.key.prefix,
               id: group.key,
               onPressed: () => setState(() {
@@ -874,177 +583,6 @@ class _PhotonViewState extends ConsumerState<PhotonView> {
           },
         ),
       ],
-    );
-  }
-}
-
-class _PhotonTableRow {
-  const _PhotonTableRow({
-    required this.title,
-    required this.cells,
-    this.id,
-    this.details = const [],
-    this.detailSections = const [],
-    this.onPressed,
-    this.expanded,
-  });
-
-  final String title;
-  final Object? id;
-  final List<Widget> cells;
-  final List<(String, String)> details;
-  final List<({String title, List<(String, String)> lines})> detailSections;
-  final VoidCallback? onPressed;
-  final Widget? expanded;
-}
-
-class _PhotonTable extends StatelessWidget {
-  const _PhotonTable({
-    required this.columns,
-    required this.length,
-    required this.rowAt,
-    this.wideColumn,
-    this.detailsTitle,
-    this.truncated = false,
-  });
-
-  final List<TableColumn> columns;
-  final int length;
-  final _PhotonTableRow Function(BuildContext, int) rowAt;
-  final TableColumn? wideColumn;
-  final String? detailsTitle;
-  final bool truncated;
-
-  @override
-  Widget build(BuildContext context) {
-    final l = context.appLocalizations;
-    return SliverLayoutBuilder(
-      builder: (context, constraints) {
-        final width = constraints.crossAxisExtent;
-        final scale = MediaQuery.textScalerOf(context);
-        final showWide = wideColumn != null && width >= scale.scale(780);
-        final headers = [
-          ...columns,
-          if (showWide) wideColumn!,
-          if (detailsTitle != null) const TableColumn('details', '', width: 30),
-        ];
-        final widths = tableColumnWidths(headers, width);
-        final colors = context.colorScheme;
-        final stripe = SurfaceLevel.block.colorOf(colors);
-        Widget cells(List<Widget> content, {bool header = false}) =>
-            DefaultTextStyle.merge(
-              style: AppTextStyle.caption1.of(context, emphasized: header),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              child: TableCells(
-                columns: headers,
-                widths: widths,
-                height: scale.scale(header ? 32 : 36),
-                inset: 6,
-                cells: content,
-              ),
-            );
-
-        return SliverMainAxisGroup(
-          slivers: [
-            if (truncated) SliverToBoxAdapter(child: Text(l.photonTruncated)),
-            SliverToBoxAdapter(
-              child: DecoratedBox(
-                decoration: ShapeDecoration(
-                  color: stripe,
-                  shape: AppShape.top(AppCorner.md),
-                ),
-                child: cells([
-                  for (final column in headers)
-                    Semantics(
-                      header: true,
-                      child: Tooltip(
-                        message: column.label,
-                        child: Text(column.label),
-                      ),
-                    ),
-                ], header: true),
-              ),
-            ),
-            if (length == 0)
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  child: Text(l.photonEmpty, textAlign: TextAlign.center),
-                ),
-              ),
-            SliverPrismList(
-              itemCount: length,
-              itemBuilder: (context, index) {
-                final row = rowAt(context, index);
-                final fill = index.isEven
-                    ? SurfaceLevel.card.colorOf(colors)
-                    : stripe;
-                final title = detailsTitle;
-                final content = cells([
-                  ...row.cells.take(columns.length + (showWide ? 1 : 0)),
-                  if (title != null)
-                    GlyphIcon(
-                      row.onPressed == null
-                          ? AppGlyphs.chevronForward
-                          : row.expanded == null
-                          ? AppGlyphs.chevronDown
-                          : AppGlyphs.chevronUp,
-                      size: 14,
-                    ),
-                ]);
-                if (title == null) {
-                  return ColoredBox(color: fill, child: content);
-                }
-                final button = PressSurface(
-                  key: ValueKey(row.id ?? row.title),
-                  fill: fill,
-                  shape: AppShape.none,
-                  onPressed:
-                      row.onPressed ??
-                      () => showSheet<void>(
-                        context: context,
-                        builder: (context) => Scaffold(
-                          title: row.title,
-                          body: SingleChildScrollView(
-                            padding: EdgeInsets.fromLTRB(
-                              16,
-                              context.sectionsTopPadding,
-                              16,
-                              16,
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              spacing: 16,
-                              children: [
-                                if (row.detailSections.isEmpty)
-                                  _DetailCard(title: title, lines: row.details),
-                                for (final section in row.detailSections)
-                                  _DetailCard(
-                                    title: section.title,
-                                    lines: section.lines,
-                                  ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                  child: content,
-                );
-                if (row.onPressed == null) return button;
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Semantics(expanded: row.expanded != null, child: button),
-                    if (row.expanded case final expanded?)
-                      ColoredBox(color: fill, child: expanded),
-                  ],
-                );
-              },
-            ),
-          ],
-        );
-      },
     );
   }
 }
@@ -1129,17 +667,6 @@ class _RoutePathsTable extends StatelessWidget {
   }
 }
 
-String _proxyRegionLabel(AppLocalizations l, String region) => switch (region) {
-  'local' => l.local,
-  'cn' => l.photonChina,
-  'hk' => l.photonHongKong,
-  'jp' => l.photonJapan,
-  'sg' => l.photonSingapore,
-  'us' => l.photonUnitedStates,
-  'global' => l.global,
-  _ => region,
-};
-
 String _routeNextHop(Map<String, dynamic> route) =>
     _text(route['peer']).isNotEmpty
     ? _text(route['peer'])
@@ -1153,28 +680,12 @@ int _routeMetric(Map<String, dynamic> route) =>
 int _compareRoutePaths(Map<String, dynamic> a, Map<String, dynamic> b) {
   final metric = _routeMetric(a).compareTo(_routeMetric(b));
   if (metric != 0) return metric;
-  final peer = _compareGatewayNames(_routeNextHop(a), _routeNextHop(b));
+  final peer = comparePhotonNodeNames(_routeNextHop(a), _routeNextHop(b));
   if (peer != 0) return peer;
   final family = _text(a['outer_family']).compareTo(_text(b['outer_family']));
   return family != 0
       ? family
       : _text(a['next_hop']).compareTo(_text(b['next_hop']));
-}
-
-int _compareGatewayNames(String a, String b) {
-  final aLabels = a.split('.').reversed.toList();
-  final bLabels = b.split('.').reversed.toList();
-  for (var i = 0; i < aLabels.length && i < bLabels.length; i++) {
-    final aParts = aLabels[i].split('-').reversed.toList();
-    final bParts = bLabels[i].split('-').reversed.toList();
-    for (var j = 0; j < aParts.length && j < bParts.length; j++) {
-      final order = bParts[j].compareTo(aParts[j]);
-      if (order != 0) return order;
-    }
-    final order = bParts.length.compareTo(aParts.length);
-    if (order != 0) return order;
-  }
-  return bLabels.length.compareTo(aLabels.length);
 }
 
 Object? _combinedState(Iterable<Object?> values) {
@@ -1257,13 +768,6 @@ String _routeState(AppLocalizations l, Object? value) => switch (value) {
   _ => l.unknown,
 };
 
-Widget _statusMark(String label, Object? value) => Tooltip(
-  message: label,
-  child: value == true
-      ? const GlyphIcon(AppGlyphs.check, size: 14)
-      : Text(value == false ? '—' : '?'),
-);
-
 String _tunnelFailure(AppLocalizations l, Object? value) {
   final failure = _map(value);
   final message = _failure(failure);
@@ -1280,53 +784,6 @@ String _tunnelFailure(AppLocalizations l, Object? value) {
     'mobike_not_negotiated' => l.photonMobikeRebind,
     _ => message,
   };
-}
-
-class _DetailCard extends StatelessWidget {
-  const _DetailCard({required this.title, required this.lines, this.footer});
-
-  final String title;
-  final List<(String, String)> lines;
-  final Widget? footer;
-
-  @override
-  Widget build(BuildContext context) => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        spacing: 12,
-        children: [
-          Text(
-            title,
-            style: AppTextStyle.headline.of(context, emphasized: true),
-          ),
-          for (final (label, value) in lines)
-            if (value.isNotEmpty)
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                spacing: 16,
-                children: [
-                  SizedBox(
-                    width: 132,
-                    child: Text(
-                      label,
-                      style: AppTextStyle.subheadline.of(context),
-                    ),
-                  ),
-                  Expanded(
-                    child: SelectableText(
-                      value,
-                      style: AppTextStyle.body.of(context),
-                    ),
-                  ),
-                ],
-              ),
-          ?footer,
-        ],
-      ),
-    ),
-  );
 }
 
 Map<String, dynamic> _map(dynamic value) =>

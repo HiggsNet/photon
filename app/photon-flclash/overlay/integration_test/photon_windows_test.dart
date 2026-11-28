@@ -8,6 +8,8 @@ import 'package:fl_clash/main.dart' as application;
 import 'package:fl_clash/photon/controller.dart';
 import 'package:fl_clash/photon/proxy_bridge.dart';
 import 'package:fl_clash/photon/services.dart';
+import 'package:fl_clash/photon/services_view.dart';
+import 'package:fl_clash/photon/template_view.dart';
 import 'package:fl_clash/photon/view.dart';
 import 'package:fl_clash/providers/providers.dart';
 import 'package:fl_clash/state.dart';
@@ -95,7 +97,16 @@ void main() {
         await settings.writeAsBytes(originalConfig);
         await photonController.pickConfig(() async => settings.path);
         await tester.pump();
-        await tester.tap(find.text(labels.photonSettings));
+        final photonPage = find.byType(PhotonView);
+        await tester.tap(
+          find.descendant(of: photonPage, matching: find.text(labels.settings)),
+        );
+        final editSettings = find.descendant(
+          of: photonPage,
+          matching: find.text(labels.edit),
+        );
+        await waitFor(() => editSettings.evaluate().isNotEmpty, 'Settings tab');
+        await tester.tap(editSettings);
         await waitFor(
           () => find.byType(FormPage).evaluate().isNotEmpty,
           'settings form',
@@ -132,7 +143,7 @@ void main() {
         await phase('settings-saved');
         await photonController.pickConfig(() async => _config);
         await tester.pump();
-        await tester.tap(find.text(labels.start).first);
+        await tester.tap(find.text(labels.photonConnect));
         await waitFor(
           () => photonController.observation?['tunnel_ready'] == true,
           'existing identity admission and tunnel',
@@ -144,7 +155,6 @@ void main() {
           labels.photonGossipPeers,
           labels.photonRoutes,
           labels.photonDiagnostics,
-          labels.photonServices,
         ];
         for (final label in tabs) {
           await tester.tap(find.text(label).first);
@@ -152,6 +162,20 @@ void main() {
           expect(find.byType(PhotonView), findsOneWidget);
           await phase('tab-$label');
         }
+        final page = container.read(currentPageLabelProvider.notifier);
+        page.toPage(PageLabel.photonTemplate);
+        await waitFor(
+          () => find.byType(PhotonTemplateView).evaluate().isNotEmpty,
+          'Template page',
+        );
+        expect(find.text(labels.photonEditTemplate), findsOneWidget);
+        await phase('page-template');
+        page.toPage(PageLabel.photonServices);
+        await waitFor(
+          () => find.byType(PhotonServicesView).evaluate().isNotEmpty,
+          'Services page',
+        );
+        await phase('page-services');
         final directory = photonController.directory!;
         final selection = await photonProxyBridge.loadSelection();
         final available = directory.proxyEndpoints
@@ -179,7 +203,7 @@ void main() {
         expect(endpoints, hasLength(3));
         final scrollable = find
             .descendant(
-              of: find.byType(PhotonView),
+              of: find.byType(PhotonServicesView),
               matching: find.byType(Scrollable),
             )
             .first;

@@ -1,6 +1,6 @@
-# Import through Photon > Proxy services > Import YAML template.
+# Import through Template > Import YAML template.
 # Based on system/photon-trusttunnel/android.sops.yaml.
-# Photon supplies photon-services dynamically; no credentials are needed here.
+# Photon supplies photon-services and Photon Paths from the selected services and paths.
 # Auto keeps fallback mode, but now considers all available Photon endpoints,
 # rather than the original fixed Anycast list.
 # DNS follows the source policy. FlClash settings can override individual keys.
@@ -74,6 +74,7 @@ proxy-groups:
     name: Nodes
     proxies:
       - Auto
+      - Photon Paths
     type: select
     use:
       - photon-services
@@ -156,6 +157,8 @@ rules:
   - RULE-SET,private,DIRECT
   - RULE-SET,reject,AD
   - RULE-SET,openai,OpenAI
+  # Enable after selecting paths to include in the Photon profile.
+  # - DOMAIN-SUFFIX,example.org,Photon Paths
   - RULE-SET,icloud,Apple
   - RULE-SET,apple,Apple
   - RULE-SET,google,Google

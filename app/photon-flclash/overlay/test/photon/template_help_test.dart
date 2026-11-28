@@ -34,12 +34,23 @@ void main() {
           'Photon',
           'Photon Auto',
           'Photon Balance',
+          'Photon Paths',
         ]),
       );
       expect(groups.singleWhere((group) => group['name'] == 'JP')['use'], [
         'photon-services',
       ]);
       expect(preview['rules'], contains('DOMAIN-SUFFIX,example.com,My Proxy'));
+      expect(
+        preview['rules'],
+        contains('DOMAIN-SUFFIX,example.org,Photon Paths'),
+      );
+      expect(
+        groups.singleWhere(
+          (group) => group['name'] == 'Photon Paths',
+        )['proxies'],
+        ['REJECT'],
+      );
       expect((preview['rules'] as List).first, 'RULE-SET,openai,OpenAI');
       expect(
         (preview['rule-providers'] as Map)['openai'],
@@ -102,6 +113,7 @@ void main() {
       tester.element(copyPrompt).appLocalizations.photonTemplateAiPrompt,
     );
     expect(copied, contains('use: [photon-services]'));
+    expect(copied, contains('use Photon Paths as a rule target'));
     expect(copied, contains('Existing YAML and requested changes:'));
 
     final copy = find.widgetWithText(TextButton, 'Copy');

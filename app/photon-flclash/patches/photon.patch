@@ -2,14 +2,14 @@ diff --git a/arb/intl_en.arb b/arb/intl_en.arb
 index cbda0e3..2a3ba35 100644
 --- a/arb/intl_en.arb
 +++ b/arb/intl_en.arb
-@@ -1076,5 +1076,130 @@
+@@ -1076,5 +1076,133 @@
    "fakeipFilterDesc": "These domains get real IPs instead of Fake-IPs. In whitelist mode, only they get Fake-IPs.",
    "fallbackFilterGeositeDesc": "Domains in these GeoSite categories are resolved by Fallback directly.",
    "fallbackFilterIpcidrDesc": "When Nameserver returns an IP in these ranges, the Fallback answer is used.",
 -  "fallbackFilterDomainDesc": "These domains are resolved by Fallback directly."
 +  "fallbackFilterDomainDesc": "These domains are resolved by Fallback directly.",
 +  "photonName": "Photon",
-+  "photonProxyPaths": "Proxy paths",
++  "photonProxyPaths": "Paths",
 +  "photonTunnel": "Tunnels",
 +  "photonTunnelReady": "Tunnel ready",
 +  "photonTunnelNotReady": "Tunnel not ready",
@@ -20,7 +20,8 @@ index cbda0e3..2a3ba35 100644
 +  "photonGossipPeers": "Gossip peers",
 +  "photonLastFailure": "Last failure",
 +  "photonRoutes": "Routes",
-+  "photonServices": "Proxy services",
++  "photonServices": "Services",
++  "photonTemplate": "Template",
 +  "photonDiagnostics": "Diagnostics",
 +  "photonIdentity": "Network identity",
 +  "photonWaiting": "Waiting for authorization",
@@ -55,22 +56,24 @@ index cbda0e3..2a3ba35 100644
 +  "photonApply": "Apply Photon profile",
 +  "photonProxyTemplate": "Rules template",
 +  "photonBuiltinRules": "Built-in rules",
-+  "photonTemplateHint": "Choose Photon, Photon Auto or Photon Balance as rule targets.",
++  "photonTemplateHint": "The current Photon configuration uses one template for paths and services. Rules can target Photon, Photon Auto, Photon Balance or Photon Paths.",
++  "photonTemplatePathsHint": "Select Include in Photon profile on the Paths page, then apply the Photon profile. Use Photon Paths as a rule target or as a member of a proxy group. It rejects traffic when no paths are included.",
++  "photonTemplateNeedsConfig": "Create or import a configuration in Photon settings to edit its template.",
 +  "photonTemplateHelp": "How templates work",
 +  "photonTemplateHelpIntro": "Import a Mihomo proxy rules template, separate from the Photon node configuration. After validation, a copy is saved beside photon.yaml as photon.proxy.yaml. Other profiles and subscriptions stay independent.",
 +  "photonTemplateCopyAiPrompt": "Copy AI prompt",
 +  "photonTemplateAiHint": "Paste the prompt into your AI chat and append your existing Clash/Mihomo YAML with credentials and private subscription URLs redacted.",
-+  "photonTemplateAiPrompt": "Convert the existing Clash/Mihomo YAML below into a Photon-FlClash rules template that I can import. Make the smallest changes needed and follow any routing changes I request.\n\n1. Output a single YAML mapping, up to 4 MiB, with at least one rule in rules. Photon-FlClash reads these top-level keys: proxies, proxy-providers, proxy-groups, rules, rule-providers, sub-rules, dns and tun. App-wide options such as ports, controller and TUN enable, device and stack belong in FlClash settings.\n2. Preserve rule order, the existing MATCH behavior, group behavior, DNS/TUN settings and other proxies or providers unless my request requires a change. If the main select group is clear and I do not specify another integration, append Photon as an option and keep the existing default. Change rule targets only where requested.\n3. Photon provides the groups Photon, Photon Auto and Photon Balance and the provider photon-services. Reference them without defining them. Rename conflicting definitions and update their references. For a group that consumes Photon exits directly, use use: [photon-services] and empty-fallback: REJECT. Do not hard-code Photon endpoint addresses or credentials.\n4. Check that rule targets, group members and provider references resolve and that groups have no cycles. Photon adds its required direct-routing rules and TUN exclusions automatically.\n5. Return the complete YAML for import and a short list of changes separately. Keep redacted values as placeholders and tell me which ones I need to restore locally before importing. Ask about any routing choice that cannot be inferred from the original configuration or my request.\n\nExisting YAML and requested changes:\n",
++  "photonTemplateAiPrompt": "Convert the existing Clash/Mihomo YAML below into a Photon-FlClash rules template that I can import. Make the smallest changes needed and follow any routing changes I request.\n\n1. Output a single YAML mapping, up to 4 MiB, with at least one rule in rules. Photon-FlClash reads these top-level keys: proxies, proxy-providers, proxy-groups, rules, rule-providers, sub-rules, dns and tun. App-wide options such as ports, controller and TUN enable, device and stack belong in FlClash settings.\n2. Preserve rule order, the existing MATCH behavior, group behavior, DNS/TUN settings and other proxies or providers unless my request requires a change. If the main select group is clear and I do not specify another integration, append Photon as an option and keep the existing default. Change rule targets only where requested.\n3. Photon provides the groups Photon, Photon Auto and Photon Balance and the provider photon-services. Reference them without defining them. Rename conflicting definitions and update their references. For a group that consumes Photon exits directly, use use: [photon-services] and empty-fallback: REJECT. Do not hard-code Photon endpoint addresses or credentials. For traffic that should use a path, use Photon Paths as a rule target or proxy group member. Photon generates this reserved group from the paths selected for inclusion in the Photon profile. It rejects traffic when empty. Do not define the group yourself or hard-code local SOCKS5 ports.\n4. Check that rule targets, group members and provider references resolve and that groups have no cycles. Photon adds its required direct-routing rules and TUN exclusions automatically.\n5. Return the complete YAML for import and a short list of changes separately. Keep redacted values as placeholders and tell me which ones I need to restore locally before importing. Ask about any routing choice that cannot be inferred from the original configuration or my request.\n\nExisting YAML and requested changes:\n",
 +  "photonTemplateKept": "Kept or merged",
 +  "photonTemplateKeptHint": "proxies, proxy-providers, proxy-groups, rules, rule-providers and sub-rules are retained. dns and tun are merged with defaults; FlClash settings can then override individual options.",
 +  "photonTemplateManaged": "Generated by Photon",
-+  "photonTemplateManagedHint": "Applying the Photon profile fills photon-services with authorized endpoints. Photon, Photon Auto and Photon Balance are generated groups. These names are reserved: redefining them in a template is rejected.",
++  "photonTemplateManagedHint": "Applying the Photon profile fills photon-services with authorized endpoints. Photon, Photon Auto, Photon Balance and Photon Paths are generated groups. These names are reserved: redefining them in a template is rejected.",
 +  "photonTemplateSafeguards": "Required routing safeguards",
 +  "photonTemplateSafeguardsHint": "Photon places its direct-routing rules before your rules and merges its required exclusions into tun.route-exclude-address. When an older backend needs gateway DNS exceptions, Photon also adjusts fake-ip-filter and nameserver-policy. These safeguards are restored after FlClash overrides.",
 +  "photonTemplateIgnored": "Controlled by the app",
 +  "photonTemplateIgnoredHint": "Other top-level fields, such as mixed-port, external-controller, secret, mode, allow-lan and ipv6, are not imported from the template. FlClash controls TUN enable, device and stack. Use its settings for those options.",
 +  "photonTemplateExample": "Example YAML",
-+  "photonTemplateExampleHint": "This example uses the generated Photon groups and a JP group filtered from photon-services. No service addresses or credentials are needed. Copy it or export the YAML, edit it, then import it as a template. Templates require at least one rule and must not exceed 4 MiB.",
++  "photonTemplateExampleHint": "This example combines authorized services from photon-services with routing through Photon Paths. Templates require at least one rule and must not exceed 4 MiB.",
 +  "photonTemplateExportExample": "Export example YAML",
 +  "photonLocalIdentity": "Local node identity",
 +  "photonLocalIdentityHint": "Photon generates this node’s key locally on first connection. Get the trusted root public key from your administrator.",
@@ -138,14 +141,14 @@ diff --git a/arb/intl_es.arb b/arb/intl_es.arb
 index 417db6b..81876a3 100644
 --- a/arb/intl_es.arb
 +++ b/arb/intl_es.arb
-@@ -1076,5 +1076,130 @@
+@@ -1076,5 +1076,133 @@
    "fakeipFilterDesc": "Estos dominios reciben su IP real en lugar de una Fake-IP. En modo whitelist, solo ellos reciben Fake-IP.",
    "fallbackFilterGeositeDesc": "Los dominios de estas categorías GeoSite se resuelven directamente con Fallback.",
    "fallbackFilterIpcidrDesc": "Si Nameserver devuelve una IP de estos rangos, se usa la respuesta de Fallback.",
 -  "fallbackFilterDomainDesc": "Estos dominios se resuelven directamente con Fallback."
 +  "fallbackFilterDomainDesc": "Estos dominios se resuelven directamente con Fallback.",
 +  "photonName": "Photon",
-+  "photonProxyPaths": "Rutas de proxy",
++  "photonProxyPaths": "Rutas",
 +  "photonTunnel": "Túneles",
 +  "photonTunnelReady": "Túnel listo",
 +  "photonTunnelNotReady": "Túnel no listo",
@@ -156,7 +159,8 @@ index 417db6b..81876a3 100644
 +  "photonGossipPeers": "Pares de Gossip",
 +  "photonLastFailure": "Último fallo",
 +  "photonRoutes": "Rutas",
-+  "photonServices": "Servicios proxy",
++  "photonServices": "Servicios",
++  "photonTemplate": "Plantilla",
 +  "photonDiagnostics": "Diagnóstico",
 +  "photonIdentity": "Identidad de red",
 +  "photonWaiting": "Esperando autorización",
@@ -191,22 +195,24 @@ index 417db6b..81876a3 100644
 +  "photonApply": "Aplicar el perfil Photon",
 +  "photonProxyTemplate": "Plantilla de reglas",
 +  "photonBuiltinRules": "Usar reglas integradas",
-+  "photonTemplateHint": "Usa Photon, Photon Auto o Photon Balance como destinos de reglas.",
++  "photonTemplateHint": "La configuración de Photon actual comparte una plantilla para rutas y servicios. Las reglas pueden apuntar a Photon, Photon Auto, Photon Balance o Photon Paths.",
++  "photonTemplatePathsHint": "En Rutas, selecciona Incluir en el perfil Photon y aplica ese perfil. Usa Photon Paths como destino de una regla o miembro de un grupo proxy. Si no hay rutas incluidas, rechaza el tráfico.",
++  "photonTemplateNeedsConfig": "Crea o importa una configuración en los ajustes de Photon para editar su plantilla.",
 +  "photonTemplateHelp": "Cómo funcionan las plantillas",
 +  "photonTemplateHelpIntro": "Importa una plantilla de reglas de proxy Mihomo, separada de la configuración del nodo Photon. Tras validarla, se guarda una copia junto a photon.yaml como photon.proxy.yaml. Los demás perfiles y suscripciones son independientes.",
 +  "photonTemplateCopyAiPrompt": "Copiar prompt para IA",
 +  "photonTemplateAiHint": "Pega el prompt en el chat de IA y añade tu YAML actual de Clash/Mihomo con las credenciales y las URL privadas de suscripción ocultas.",
-+  "photonTemplateAiPrompt": "Convierte el YAML de Clash/Mihomo que aparece abajo en una plantilla de reglas que pueda importar en Photon-FlClash. Haz los cambios mínimos y sigue los ajustes de enrutamiento que pida.\n\n1. Devuelve un único mapa YAML de hasta 4 MiB con al menos una regla en rules. Photon-FlClash lee estas claves de nivel superior: proxies, proxy-providers, proxy-groups, rules, rule-providers, sub-rules, dns y tun. Los puertos, el controlador y la activación, el dispositivo y la pila de TUN se ajustan en FlClash.\n2. Conserva el orden de las reglas, el comportamiento de MATCH y de los grupos, el DNS/TUN y los demás proxies o proveedores salvo que mi petición requiera cambios. Si el selector principal está claro y no pido otra integración, añade Photon al final de sus opciones y conserva la opción predeterminada. Cambia los destinos de las reglas solo cuando lo pida.\n3. Photon proporciona los grupos Photon, Photon Auto y Photon Balance y el proveedor photon-services. Úsalos por referencia. Renombra las definiciones que entren en conflicto y actualiza sus referencias. Para un grupo que consuma directamente las salidas de Photon, usa use: [photon-services] y empty-fallback: REJECT. Evita fijar direcciones o credenciales de Photon.\n4. Comprueba que los destinos, miembros y proveedores existan y que los grupos no formen ciclos. Photon añade automáticamente las reglas de enrutamiento directo y las exclusiones TUN que necesita.\n5. Devuelve el YAML completo y, por separado, una lista breve de cambios. Conserva los valores ocultos como marcadores e indica cuáles debo restaurar localmente antes de importar. Pregunta si queda alguna decisión de enrutamiento sin aclarar.\n\nYAML actual y cambios solicitados:\n",
++  "photonTemplateAiPrompt": "Convierte el YAML de Clash/Mihomo que aparece abajo en una plantilla de reglas que pueda importar en Photon-FlClash. Haz los cambios mínimos y sigue los ajustes de enrutamiento que pida.\n\n1. Devuelve un único mapa YAML de hasta 4 MiB con al menos una regla en rules. Photon-FlClash lee estas claves de nivel superior: proxies, proxy-providers, proxy-groups, rules, rule-providers, sub-rules, dns y tun. Los puertos, el controlador y la activación, el dispositivo y la pila de TUN se ajustan en FlClash.\n2. Conserva el orden de las reglas, el comportamiento de MATCH y de los grupos, el DNS/TUN y los demás proxies o proveedores salvo que mi petición requiera cambios. Si el selector principal está claro y no pido otra integración, añade Photon al final de sus opciones y conserva la opción predeterminada. Cambia los destinos de las reglas solo cuando lo pida.\n3. Photon proporciona los grupos Photon, Photon Auto y Photon Balance y el proveedor photon-services. Úsalos por referencia. Renombra las definiciones que entren en conflicto y actualiza sus referencias. Para un grupo que consuma directamente las salidas de Photon, usa use: [photon-services] y empty-fallback: REJECT. Evita fijar direcciones o credenciales de Photon. Para enviar tráfico por una ruta, usa Photon Paths como destino de regla o miembro de un grupo proxy. Photon genera este grupo reservado con las rutas incluidas en el perfil. Si está vacío, rechaza el tráfico. No definas el grupo ni fijes los puertos SOCKS5 locales.\n4. Comprueba que los destinos, miembros y proveedores existan y que los grupos no formen ciclos. Photon añade automáticamente las reglas de enrutamiento directo y las exclusiones TUN que necesita.\n5. Devuelve el YAML completo y, por separado, una lista breve de cambios. Conserva los valores ocultos como marcadores e indica cuáles debo restaurar localmente antes de importar. Pregunta si queda alguna decisión de enrutamiento sin aclarar.\n\nYAML actual y cambios solicitados:\n",
 +  "photonTemplateKept": "Campos conservados o combinados",
 +  "photonTemplateKeptHint": "Se conservan proxies, proxy-providers, proxy-groups, rules, rule-providers y sub-rules. dns y tun se combinan con los valores predeterminados; los ajustes de FlClash pueden sobrescribir opciones individuales.",
 +  "photonTemplateManaged": "Contenido generado por Photon",
-+  "photonTemplateManagedHint": "Al aplicar el perfil Photon, photon-services se rellena con los endpoints autorizados. Photon, Photon Auto y Photon Balance son grupos generados. Estos nombres están reservados: se rechazan sus redefiniciones en la plantilla.",
++  "photonTemplateManagedHint": "Al aplicar el perfil Photon, photon-services se rellena con los endpoints autorizados. Photon, Photon Auto, Photon Balance y Photon Paths son grupos generados. Estos nombres están reservados: se rechazan sus redefiniciones en la plantilla.",
 +  "photonTemplateSafeguards": "Protecciones de enrutamiento necesarias",
 +  "photonTemplateSafeguardsHint": "Photon coloca sus reglas de conexión directa antes de tus reglas y combina las exclusiones necesarias en tun.route-exclude-address. Si un backend antiguo necesita excepciones DNS de la puerta de enlace, también ajusta fake-ip-filter y nameserver-policy. Las protecciones se restauran después de aplicar los ajustes de FlClash.",
 +  "photonTemplateIgnored": "Campos controlados por la aplicación",
 +  "photonTemplateIgnoredHint": "No se importan otros campos de nivel superior, como mixed-port, external-controller, secret, mode, allow-lan e ipv6. FlClash controla enable, device y stack de TUN. Modifícalos en sus ajustes.",
 +  "photonTemplateExample": "Ejemplo YAML",
-+  "photonTemplateExampleHint": "El ejemplo usa los grupos Photon generados y un grupo JP filtrado de photon-services. No necesita direcciones de servicio ni credenciales. Copia o exporta el YAML, edítalo e impórtalo como plantilla. Debe incluir al menos una regla y no superar 4 MiB.",
++  "photonTemplateExampleHint": "Este ejemplo combina servicios autorizados de photon-services con el encaminamiento mediante Photon Paths. La plantilla debe contener al menos una regla y no superar 4 MiB.",
 +  "photonTemplateExportExample": "Exportar ejemplo YAML",
 +  "photonLocalIdentity": "Identidad del nodo local",
 +  "photonLocalIdentityHint": "La clave del nodo se genera en la primera conexión. Pide la clave pública raíz al administrador.",
@@ -274,14 +280,14 @@ diff --git a/arb/intl_fr.arb b/arb/intl_fr.arb
 index aa4e778..ca7f191 100644
 --- a/arb/intl_fr.arb
 +++ b/arb/intl_fr.arb
-@@ -1076,5 +1076,130 @@
+@@ -1076,5 +1076,133 @@
    "fakeipFilterDesc": "Ces domaines reçoivent leur vraie IP au lieu d’une Fake-IP. En mode whitelist, eux seuls reçoivent une Fake-IP.",
    "fallbackFilterGeositeDesc": "Les domaines de ces catégories GeoSite sont résolus directement par Fallback.",
    "fallbackFilterIpcidrDesc": "Si Nameserver renvoie une IP de ces plages, la réponse de Fallback est utilisée.",
 -  "fallbackFilterDomainDesc": "Ces domaines sont résolus directement par Fallback."
 +  "fallbackFilterDomainDesc": "Ces domaines sont résolus directement par Fallback.",
 +  "photonName": "Photon",
-+  "photonProxyPaths": "Chemins proxy",
++  "photonProxyPaths": "Chemins",
 +  "photonTunnel": "Tunnels",
 +  "photonTunnelReady": "Tunnel prêt",
 +  "photonTunnelNotReady": "Tunnel non prêt",
@@ -292,7 +298,8 @@ index aa4e778..ca7f191 100644
 +  "photonGossipPeers": "Pairs Gossip",
 +  "photonLastFailure": "Dernier échec",
 +  "photonRoutes": "Routes",
-+  "photonServices": "Services proxy",
++  "photonServices": "Services",
++  "photonTemplate": "Modèle",
 +  "photonDiagnostics": "Diagnostic",
 +  "photonIdentity": "Identité réseau",
 +  "photonWaiting": "En attente d’autorisation",
@@ -327,22 +334,24 @@ index aa4e778..ca7f191 100644
 +  "photonApply": "Appliquer le profil Photon",
 +  "photonProxyTemplate": "Modèle de règles",
 +  "photonBuiltinRules": "Utiliser les règles intégrées",
-+  "photonTemplateHint": "Utilisez Photon, Photon Auto ou Photon Balance comme cibles des règles.",
++  "photonTemplateHint": "La configuration Photon actuelle utilise le même modèle pour les chemins et les services. Les règles peuvent cibler Photon, Photon Auto, Photon Balance ou Photon Paths.",
++  "photonTemplatePathsHint": "Dans Chemins, sélectionnez les chemins à inclure dans le profil Photon, puis appliquez le profil. Utilisez Photon Paths comme cible d’une règle ou membre d’un groupe proxy. Sans chemin inclus, le trafic est rejeté.",
++  "photonTemplateNeedsConfig": "Créez ou importez une configuration dans les réglages Photon pour modifier son modèle.",
 +  "photonTemplateHelp": "Fonctionnement des modèles",
 +  "photonTemplateHelpIntro": "Importez un modèle de règles proxy Mihomo, distinct de la configuration du nœud Photon. Après validation, une copie est enregistrée à côté de photon.yaml sous photon.proxy.yaml. Les autres profils et abonnements restent indépendants.",
 +  "photonTemplateCopyAiPrompt": "Copier le prompt IA",
 +  "photonTemplateAiHint": "Collez le prompt dans le chat IA, puis ajoutez votre YAML Clash/Mihomo en masquant les identifiants et les URL d’abonnement privées.",
-+  "photonTemplateAiPrompt": "Convertis le YAML Clash/Mihomo ci-dessous en un modèle de règles que je pourrai importer dans Photon-FlClash. Limite les modifications au nécessaire et respecte mes demandes de routage.\n\n1. Produis un unique mapping YAML de 4 Mio maximum contenant au moins une règle dans rules. Photon-FlClash lit les clés de premier niveau proxies, proxy-providers, proxy-groups, rules, rule-providers, sub-rules, dns et tun. Les ports, le contrôleur, l’activation de TUN, son périphérique et sa pile se règlent dans FlClash.\n2. Conserve l’ordre des règles, le comportement de MATCH et des groupes, les réglages DNS/TUN et les autres proxys et fournisseurs, sauf si ma demande impose un changement. Si le sélecteur principal est clair et que je ne demande pas une autre intégration, ajoute Photon à la fin de ses options et conserve le choix par défaut. Modifie les cibles des règles uniquement à ma demande.\n3. Photon fournit les groupes Photon, Photon Auto et Photon Balance et le fournisseur photon-services. Référence-les sans les redéfinir. Renomme les définitions en conflit et mets à jour leurs références. Pour utiliser directement les sorties Photon dans un groupe, utilise use: [photon-services] et empty-fallback: REJECT. Évite de coder en dur les adresses ou identifiants Photon.\n4. Vérifie les cibles des règles, les membres des groupes et les références aux fournisseurs ainsi que l’absence de cycles entre groupes. Photon ajoute automatiquement ses règles de routage direct et exclusions TUN.\n5. Fournis le YAML complet et une courte liste de modifications à part. Garde les valeurs masquées sous forme de marqueurs et indique celles que je dois rétablir localement. Demande-moi de préciser les choix de routage encore ambigus.\n\nYAML actuel et modifications souhaitées :\n",
++  "photonTemplateAiPrompt": "Convertis le YAML Clash/Mihomo ci-dessous en un modèle de règles que je pourrai importer dans Photon-FlClash. Limite les modifications au nécessaire et respecte mes demandes de routage.\n\n1. Produis un unique mapping YAML de 4 Mio maximum contenant au moins une règle dans rules. Photon-FlClash lit les clés de premier niveau proxies, proxy-providers, proxy-groups, rules, rule-providers, sub-rules, dns et tun. Les ports, le contrôleur, l’activation de TUN, son périphérique et sa pile se règlent dans FlClash.\n2. Conserve l’ordre des règles, le comportement de MATCH et des groupes, les réglages DNS/TUN et les autres proxys et fournisseurs, sauf si ma demande impose un changement. Si le sélecteur principal est clair et que je ne demande pas une autre intégration, ajoute Photon à la fin de ses options et conserve le choix par défaut. Modifie les cibles des règles uniquement à ma demande.\n3. Photon fournit les groupes Photon, Photon Auto et Photon Balance et le fournisseur photon-services. Référence-les sans les redéfinir. Renomme les définitions en conflit et mets à jour leurs références. Pour utiliser directement les sorties Photon dans un groupe, utilise use: [photon-services] et empty-fallback: REJECT. Évite de coder en dur les adresses ou identifiants Photon. Pour acheminer le trafic par un chemin, utilisez Photon Paths comme cible de règle ou membre de groupe proxy. Photon génère ce groupe réservé à partir des chemins inclus dans le profil. Il rejette le trafic s’il est vide. Ne définissez pas ce groupe et ne fixez pas les ports SOCKS5 locaux.\n4. Vérifie les cibles des règles, les membres des groupes et les références aux fournisseurs ainsi que l’absence de cycles entre groupes. Photon ajoute automatiquement ses règles de routage direct et exclusions TUN.\n5. Fournis le YAML complet et une courte liste de modifications à part. Garde les valeurs masquées sous forme de marqueurs et indique celles que je dois rétablir localement. Demande-moi de préciser les choix de routage encore ambigus.\n\nYAML actuel et modifications souhaitées :\n",
 +  "photonTemplateKept": "Champs conservés ou fusionnés",
 +  "photonTemplateKeptHint": "proxies, proxy-providers, proxy-groups, rules, rule-providers et sub-rules sont conservés. dns et tun sont fusionnés avec les valeurs par défaut ; les réglages FlClash peuvent ensuite remplacer certaines options.",
 +  "photonTemplateManaged": "Contenu généré par Photon",
-+  "photonTemplateManagedHint": "À l’application du profil Photon, photon-services reçoit les points de terminaison autorisés. Photon, Photon Auto et Photon Balance sont des groupes générés. Ces noms sont réservés : leur redéfinition dans un modèle est refusée.",
++  "photonTemplateManagedHint": "À l’application du profil Photon, photon-services reçoit les points de terminaison autorisés. Photon, Photon Auto, Photon Balance et Photon Paths sont des groupes générés. Ces noms sont réservés : leur redéfinition dans un modèle est refusée.",
 +  "photonTemplateSafeguards": "Protections de routage requises",
 +  "photonTemplateSafeguardsHint": "Photon place ses règles de routage direct avant vos règles et fusionne ses exclusions dans tun.route-exclude-address. Si un ancien backend nécessite des exceptions DNS pour la passerelle, il ajuste aussi fake-ip-filter et nameserver-policy. Les protections sont rétablies après les réglages FlClash.",
 +  "photonTemplateIgnored": "Champs contrôlés par l’application",
 +  "photonTemplateIgnoredHint": "Les autres champs de premier niveau, comme mixed-port, external-controller, secret, mode, allow-lan et ipv6, ne sont pas importés. FlClash contrôle enable, device et stack du TUN. Modifiez-les dans ses réglages.",
 +  "photonTemplateExample": "Exemple YAML",
-+  "photonTemplateExampleHint": "Cet exemple utilise les groupes Photon générés et un groupe JP filtré depuis photon-services. Aucune adresse de service ni information secrète n’est nécessaire. Copiez ou exportez le YAML, modifiez-le puis importez-le comme modèle. Il doit contenir au moins une règle et ne pas dépasser 4 MiB.",
++  "photonTemplateExampleHint": "Cet exemple combine les services autorisés de photon-services et le routage via Photon Paths. Le modèle doit contenir au moins une règle et ne pas dépasser 4 MiB.",
 +  "photonTemplateExportExample": "Exporter l’exemple YAML",
 +  "photonLocalIdentity": "Identité du nœud local",
 +  "photonLocalIdentityHint": "La clé du nœud est créée à la première connexion. La clé publique racine vient de votre administrateur.",
@@ -410,14 +419,14 @@ diff --git a/arb/intl_ja.arb b/arb/intl_ja.arb
 index d6ff2b3..0b23907 100644
 --- a/arb/intl_ja.arb
 +++ b/arb/intl_ja.arb
-@@ -1076,5 +1076,130 @@
+@@ -1076,5 +1076,133 @@
    "fakeipFilterDesc": "これらのドメインには Fake-IP ではなく実際の IP を返します。whitelist モードでは、これらだけが Fake-IP を使います。",
    "fallbackFilterGeositeDesc": "これらの GeoSite カテゴリのドメインは、直接 Fallback で解決します。",
    "fallbackFilterIpcidrDesc": "Nameserver がこれらの範囲の IP を返したときは、Fallback の結果を使います。",
 -  "fallbackFilterDomainDesc": "これらのドメインは、直接 Fallback で解決します。"
 +  "fallbackFilterDomainDesc": "これらのドメインは、直接 Fallback で解決します。",
 +  "photonName": "Photon",
-+  "photonProxyPaths": "プロキシ経路",
++  "photonProxyPaths": "経路",
 +  "photonTunnel": "トンネル",
 +  "photonTunnelReady": "トンネル準備完了",
 +  "photonTunnelNotReady": "トンネル準備未完了",
@@ -428,7 +437,8 @@ index d6ff2b3..0b23907 100644
 +  "photonGossipPeers": "Gossip ピア",
 +  "photonLastFailure": "最後の失敗",
 +  "photonRoutes": "ルート",
-+  "photonServices": "プロキシサービス",
++  "photonServices": "サービス",
++  "photonTemplate": "テンプレート",
 +  "photonDiagnostics": "診断",
 +  "photonIdentity": "ネットワーク ID",
 +  "photonWaiting": "承認待ち",
@@ -463,22 +473,24 @@ index d6ff2b3..0b23907 100644
 +  "photonApply": "Photon プロファイルを適用",
 +  "photonProxyTemplate": "ルールテンプレート",
 +  "photonBuiltinRules": "組み込みルールを使う",
-+  "photonTemplateHint": "ルールの宛先には Photon、Photon Auto、Photon Balance を使えます。",
++  "photonTemplateHint": "現在の Photon 設定では、経路とサービスが同じテンプレートを使用します。ルールの宛先には Photon、Photon Auto、Photon Balance、Photon Paths を指定できます。",
++  "photonTemplatePathsHint": "「経路」で Photon プロファイルに含める経路を選んでからプロファイルを適用します。Photon Paths はルールの宛先やプロキシグループのメンバーに指定できます。経路が含まれていない場合、通信は拒否されます。",
++  "photonTemplateNeedsConfig": "テンプレートを編集するには、Photon の設定で構成を作成かインポートしてください。",
 +  "photonTemplateHelp": "テンプレートの処理について",
 +  "photonTemplateHelpIntro": "Photon ノード設定とは別の Mihomo プロキシルールテンプレートを読み込みます。検証後、photon.yaml の隣に photon.proxy.yaml としてコピーを保存します。他のプロファイルやサブスクリプションは独立しています。",
 +  "photonTemplateCopyAiPrompt": "AI プロンプトをコピー",
 +  "photonTemplateAiHint": "AI チャットにプロンプトを貼り付け、認証情報と非公開の購読 URL を伏せた既存の Clash/Mihomo YAML を追加します。",
-+  "photonTemplateAiPrompt": "以下の Clash/Mihomo YAML を Photon-FlClash にインポートできるルールテンプレートに変換してください。変更は必要最小限にし、私が指定したルーティング変更に従ってください。\n\n1. rules に 1 件以上のルールを含む、4 MiB 以下の単一の YAML マッピングを出力してください。Photon-FlClash が読み込む最上位キーは proxies、proxy-providers、proxy-groups、rules、rule-providers、sub-rules、dns、tun です。ポート、コントローラー、TUN の有効化、デバイス、スタックは FlClash 側で設定します。\n2. 要求に変更が含まれない限り、ルール順と MATCH の動作、グループの動作、DNS/TUN 設定、その他のプロキシとプロバイダーを維持してください。メインの選択グループが明確で、別の指定がない場合は、その選択肢の末尾に Photon を追加し、既定の選択は維持してください。ルールの宛先は指定がある場合だけ変更してください。\n3. Photon は Photon、Photon Auto、Photon Balance グループと photon-services プロバイダーを提供します。再定義せずに参照し、名前が衝突する既存定義とその参照を変更してください。Photon 出口を直接使うグループでは use: [photon-services] と empty-fallback: REJECT を設定してください。Photon のアドレスや認証情報は固定値にしないでください。\n4. ルールの宛先、グループのメンバー、プロバイダーの参照先が存在し、グループ参照が循環しないことを確認してください。Photon に必要な直接ルーティングルールと TUN 除外は自動追加されます。\n5. 完全な YAML と短い変更一覧を分けて返してください。伏せた値はプレースホルダーのままにし、インポート前にローカルで戻すべきものを示してください。判断できないルーティングの選択は質問してください。\n\n既存 YAML と希望する変更：\n",
++  "photonTemplateAiPrompt": "以下の Clash/Mihomo YAML を Photon-FlClash にインポートできるルールテンプレートに変換してください。変更は必要最小限にし、私が指定したルーティング変更に従ってください。\n\n1. rules に 1 件以上のルールを含む、4 MiB 以下の単一の YAML マッピングを出力してください。Photon-FlClash が読み込む最上位キーは proxies、proxy-providers、proxy-groups、rules、rule-providers、sub-rules、dns、tun です。ポート、コントローラー、TUN の有効化、デバイス、スタックは FlClash 側で設定します。\n2. 要求に変更が含まれない限り、ルール順と MATCH の動作、グループの動作、DNS/TUN 設定、その他のプロキシとプロバイダーを維持してください。メインの選択グループが明確で、別の指定がない場合は、その選択肢の末尾に Photon を追加し、既定の選択は維持してください。ルールの宛先は指定がある場合だけ変更してください。\n3. Photon は Photon、Photon Auto、Photon Balance グループと photon-services プロバイダーを提供します。再定義せずに参照し、名前が衝突する既存定義とその参照を変更してください。Photon 出口を直接使うグループでは use: [photon-services] と empty-fallback: REJECT を設定してください。Photon のアドレスや認証情報は固定値にしないでください。 経路に通信を流す場合は Photon Paths をルールの宛先やプロキシグループのメンバーにしてください。Photon がプロファイルに含める経路からこの予約済みグループを生成します。空の場合は通信を拒否します。このグループを定義したり、ローカル SOCKS5 ポートを固定値で記述したりしないでください。\n4. ルールの宛先、グループのメンバー、プロバイダーの参照先が存在し、グループ参照が循環しないことを確認してください。Photon に必要な直接ルーティングルールと TUN 除外は自動追加されます。\n5. 完全な YAML と短い変更一覧を分けて返してください。伏せた値はプレースホルダーのままにし、インポート前にローカルで戻すべきものを示してください。判断できないルーティングの選択は質問してください。\n\n既存 YAML と希望する変更：\n",
 +  "photonTemplateKept": "保持・統合する項目",
 +  "photonTemplateKeptHint": "proxies、proxy-providers、proxy-groups、rules、rule-providers、sub-rules は保持します。dns と tun は既定値と統合した後、FlClash の設定で個別の項目を上書きできます。",
 +  "photonTemplateManaged": "Photon が自動生成する項目",
-+  "photonTemplateManagedHint": "Photon プロファイルの適用時に、認可済みエンドポイントを photon-services に追加します。Photon、Photon Auto、Photon Balance グループは自動生成されます。これらは予約名のため、テンプレートでの再定義は拒否されます。",
++  "photonTemplateManagedHint": "Photon プロファイルの適用時に、認可済みエンドポイントを photon-services に追加します。Photon、Photon Auto、Photon Balance、Photon Paths グループは自動生成されます。これらは予約名のため、テンプレートでの再定義は拒否されます。",
 +  "photonTemplateSafeguards": "必要なループ防止設定",
 +  "photonTemplateSafeguardsHint": "Photon の直接接続ルールをユーザールールより前に置き、必要な除外アドレスを tun.route-exclude-address に統合します。旧バックエンドでゲートウェイの DNS 例外が必要な場合は fake-ip-filter と nameserver-policy も調整します。FlClash の設定適用後に保護を再適用します。",
 +  "photonTemplateIgnored": "アプリが管理する項目",
 +  "photonTemplateIgnoredHint": "mixed-port、external-controller、secret、mode、allow-lan、ipv6 など、その他の最上位項目は読み込みません。TUN の enable、device、stack は FlClash の設定で管理します。",
 +  "photonTemplateExample": "YAML の例",
-+  "photonTemplateExampleHint": "自動生成された Photon グループと、photon-services から抽出する JP グループの例です。サービスアドレスや認証情報は不要です。YAML をコピーまたはエクスポートし、編集してテンプレートとして読み込んでください。1 件以上のルールが必要で、上限は 4 MiB です。",
++  "photonTemplateExampleHint": "この例は、photon-services の認可済みサービスと Photon Paths を使ったルーティングを組み合わせています。テンプレートには 1 件以上のルールが必要で、上限は 4 MiB です。",
 +  "photonTemplateExportExample": "YAML の例をエクスポート",
 +  "photonLocalIdentity": "ローカルノードの ID",
 +  "photonLocalIdentityHint": "初回接続時にノード鍵を自動生成します。ルート公開鍵は管理者から入手してください。",
@@ -546,14 +558,14 @@ diff --git a/arb/intl_ko.arb b/arb/intl_ko.arb
 index ead8d29..5d79325 100644
 --- a/arb/intl_ko.arb
 +++ b/arb/intl_ko.arb
-@@ -1076,5 +1076,130 @@
+@@ -1076,5 +1076,133 @@
    "fakeipFilterDesc": "이 도메인에는 Fake-IP 대신 실제 IP를 반환합니다. whitelist 모드에서는 이 도메인만 Fake-IP를 사용합니다.",
    "fallbackFilterGeositeDesc": "이 GeoSite 분류의 도메인은 바로 Fallback으로 확인합니다.",
    "fallbackFilterIpcidrDesc": "Nameserver가 이 범위의 IP를 반환하면 Fallback 결과를 사용합니다.",
 -  "fallbackFilterDomainDesc": "이 도메인은 바로 Fallback으로 확인합니다."
 +  "fallbackFilterDomainDesc": "이 도메인은 바로 Fallback으로 확인합니다.",
 +  "photonName": "Photon",
-+  "photonProxyPaths": "프록시 경로",
++  "photonProxyPaths": "경로",
 +  "photonTunnel": "터널",
 +  "photonTunnelReady": "터널 준비 완료",
 +  "photonTunnelNotReady": "터널 준비 안 됨",
@@ -564,7 +576,8 @@ index ead8d29..5d79325 100644
 +  "photonGossipPeers": "Gossip 피어",
 +  "photonLastFailure": "마지막 실패",
 +  "photonRoutes": "경로",
-+  "photonServices": "프록시 서비스",
++  "photonServices": "서비스",
++  "photonTemplate": "템플릿",
 +  "photonDiagnostics": "진단",
 +  "photonIdentity": "네트워크 ID",
 +  "photonWaiting": "승인 대기 중",
@@ -599,22 +612,24 @@ index ead8d29..5d79325 100644
 +  "photonApply": "Photon 프로필 적용",
 +  "photonProxyTemplate": "규칙 템플릿",
 +  "photonBuiltinRules": "기본 규칙 사용",
-+  "photonTemplateHint": "규칙 대상으로 Photon, Photon Auto 또는 Photon Balance를 사용하세요.",
++  "photonTemplateHint": "현재 Photon 구성에서 경로와 서비스는 같은 템플릿을 사용합니다. 규칙 대상으로 Photon, Photon Auto, Photon Balance 또는 Photon Paths를 사용할 수 있습니다.",
++  "photonTemplatePathsHint": "경로 페이지에서 Photon 프로필에 포함할 경로를 선택한 후 프로필을 적용하세요. Photon Paths는 규칙 대상이나 프록시 그룹의 구성원으로 사용할 수 있습니다. 포함된 경로가 없으면 트래픽을 거부합니다.",
++  "photonTemplateNeedsConfig": "템플릿을 편집하려면 Photon 설정에서 구성을 만들거나 가져오세요.",
 +  "photonTemplateHelp": "템플릿 처리 안내",
 +  "photonTemplateHelpIntro": "Photon 노드 설정과 별개인 Mihomo 프록시 규칙 템플릿을 가져옵니다. 검증 후 photon.yaml 옆에 photon.proxy.yaml로 사본을 저장합니다. 다른 프로필과 구독은 독립적으로 유지됩니다.",
 +  "photonTemplateCopyAiPrompt": "AI 프롬프트 복사",
 +  "photonTemplateAiHint": "AI 채팅에 프롬프트를 붙여넣고, 인증 정보와 비공개 구독 URL을 가린 기존 Clash/Mihomo YAML을 덧붙이세요.",
-+  "photonTemplateAiPrompt": "아래 Clash/Mihomo YAML을 Photon-FlClash로 가져올 수 있는 규칙 템플릿으로 변환해 주세요. 필요한 부분만 바꾸고 제가 요청한 라우팅 변경을 반영해 주세요.\n\n1. rules에 규칙이 하나 이상 포함된 단일 YAML 매핑을 4 MiB 이하로 출력해 주세요. Photon-FlClash가 읽는 최상위 키는 proxies, proxy-providers, proxy-groups, rules, rule-providers, sub-rules, dns, tun입니다. 포트, 컨트롤러, TUN 활성화, 장치 및 스택은 FlClash 설정에서 관리합니다.\n2. 요청에서 변경할 필요가 없는 규칙 순서, MATCH 및 그룹 동작, DNS/TUN 설정, 다른 프록시와 공급자는 유지해 주세요. 기본 선택 그룹이 분명하고 다른 요청이 없다면 선택 항목 끝에 Photon을 추가하고 기존 기본값을 유지해 주세요. 규칙 대상은 제가 요청한 경우에만 바꿔 주세요.\n3. Photon은 Photon, Photon Auto, Photon Balance 그룹과 photon-services 공급자를 제공합니다. 이 이름은 재정의하지 않고 참조해 주세요. 이름이 겹치는 기존 정의와 그 참조는 함께 변경해 주세요. Photon 출구를 직접 쓰는 그룹에는 use: [photon-services]과 empty-fallback: REJECT를 설정해 주세요. Photon 주소나 인증 정보를 고정해서 넣지 마세요.\n4. 규칙 대상, 그룹 멤버, 공급자 참조가 유효하고 그룹 간 순환이 없는지 확인해 주세요. Photon은 필요한 직접 라우팅 규칙과 TUN 제외 경로를 자동으로 추가합니다.\n5. 가져올 전체 YAML과 짧은 변경 목록을 따로 제공해 주세요. 가린 값은 자리표시자로 두고 가져오기 전에 로컬에서 복원할 항목을 알려 주세요. 라우팅 의도를 판단할 수 없으면 질문해 주세요.\n\n기존 YAML 및 요청 사항:\n",
++  "photonTemplateAiPrompt": "아래 Clash/Mihomo YAML을 Photon-FlClash로 가져올 수 있는 규칙 템플릿으로 변환해 주세요. 필요한 부분만 바꾸고 제가 요청한 라우팅 변경을 반영해 주세요.\n\n1. rules에 규칙이 하나 이상 포함된 단일 YAML 매핑을 4 MiB 이하로 출력해 주세요. Photon-FlClash가 읽는 최상위 키는 proxies, proxy-providers, proxy-groups, rules, rule-providers, sub-rules, dns, tun입니다. 포트, 컨트롤러, TUN 활성화, 장치 및 스택은 FlClash 설정에서 관리합니다.\n2. 요청에서 변경할 필요가 없는 규칙 순서, MATCH 및 그룹 동작, DNS/TUN 설정, 다른 프록시와 공급자는 유지해 주세요. 기본 선택 그룹이 분명하고 다른 요청이 없다면 선택 항목 끝에 Photon을 추가하고 기존 기본값을 유지해 주세요. 규칙 대상은 제가 요청한 경우에만 바꿔 주세요.\n3. Photon은 Photon, Photon Auto, Photon Balance 그룹과 photon-services 공급자를 제공합니다. 이 이름은 재정의하지 않고 참조해 주세요. 이름이 겹치는 기존 정의와 그 참조는 함께 변경해 주세요. Photon 출구를 직접 쓰는 그룹에는 use: [photon-services]과 empty-fallback: REJECT를 설정해 주세요. Photon 주소나 인증 정보를 고정해서 넣지 마세요. 경로를 통해 전송할 트래픽에는 Photon Paths를 규칙 대상 또는 프록시 그룹의 구성원으로 사용하세요. Photon은 프로필에 포함하도록 선택한 경로로 이 예약 그룹을 생성합니다. 그룹이 비어 있으면 트래픽을 거부합니다. 그룹을 직접 정의하거나 로컬 SOCKS5 포트를 하드코딩하지 마세요.\n4. 규칙 대상, 그룹 멤버, 공급자 참조가 유효하고 그룹 간 순환이 없는지 확인해 주세요. Photon은 필요한 직접 라우팅 규칙과 TUN 제외 경로를 자동으로 추가합니다.\n5. 가져올 전체 YAML과 짧은 변경 목록을 따로 제공해 주세요. 가린 값은 자리표시자로 두고 가져오기 전에 로컬에서 복원할 항목을 알려 주세요. 라우팅 의도를 판단할 수 없으면 질문해 주세요.\n\n기존 YAML 및 요청 사항:\n",
 +  "photonTemplateKept": "유지하거나 병합하는 항목",
 +  "photonTemplateKeptHint": "proxies, proxy-providers, proxy-groups, rules, rule-providers, sub-rules를 유지합니다. dns와 tun은 기본값과 병합한 뒤 FlClash 설정으로 개별 항목을 덮어쓸 수 있습니다.",
 +  "photonTemplateManaged": "Photon이 자동 생성하는 항목",
-+  "photonTemplateManagedHint": "Photon 프로필을 적용할 때 허가된 엔드포인트가 photon-services에 추가됩니다. Photon, Photon Auto, Photon Balance 그룹은 자동 생성됩니다. 이 이름은 예약되어 있어 템플릿에서 다시 정의하면 거부됩니다.",
++  "photonTemplateManagedHint": "Photon 프로필을 적용할 때 허가된 엔드포인트가 photon-services에 추가됩니다. Photon, Photon Auto, Photon Balance, Photon Paths 그룹은 자동 생성됩니다. 이 이름은 예약되어 있어 템플릿에서 다시 정의하면 거부됩니다.",
 +  "photonTemplateSafeguards": "필수 라우팅 보호 설정",
 +  "photonTemplateSafeguardsHint": "Photon 직접 연결 규칙은 사용자 규칙 앞에 배치되고 필요한 제외 주소는 tun.route-exclude-address에 병합됩니다. 이전 백엔드에 게이트웨이 DNS 예외가 필요하면 fake-ip-filter와 nameserver-policy도 조정합니다. FlClash 설정 적용 후 보호 설정을 다시 적용합니다.",
 +  "photonTemplateIgnored": "앱에서 관리하는 항목",
 +  "photonTemplateIgnoredHint": "mixed-port, external-controller, secret, mode, allow-lan, ipv6 등 다른 최상위 항목은 가져오지 않습니다. TUN의 enable, device, stack은 FlClash 설정에서 관리합니다.",
 +  "photonTemplateExample": "YAML 예제",
-+  "photonTemplateExampleHint": "자동 생성된 Photon 그룹과 photon-services에서 필터링한 JP 그룹을 사용합니다. 서비스 주소나 자격 증명은 필요하지 않습니다. YAML을 복사하거나 내보내고 수정한 뒤 템플릿으로 가져오세요. 규칙이 하나 이상 필요하며 최대 크기는 4 MiB입니다.",
++  "photonTemplateExampleHint": "이 예제는 photon-services의 허가된 서비스와 Photon Paths를 통한 라우팅을 함께 사용합니다. 템플릿에는 규칙이 하나 이상 필요하며 최대 크기는 4 MiB입니다.",
 +  "photonTemplateExportExample": "YAML 예제 내보내기",
 +  "photonLocalIdentity": "로컬 노드 ID",
 +  "photonLocalIdentityHint": "첫 연결 시 노드 키가 자동 생성됩니다. 루트 공개 키는 관리자가 제공합니다.",
@@ -682,14 +697,14 @@ diff --git a/arb/intl_ru.arb b/arb/intl_ru.arb
 index 58e77e7..290f9ec 100644
 --- a/arb/intl_ru.arb
 +++ b/arb/intl_ru.arb
-@@ -1076,5 +1076,130 @@
+@@ -1076,5 +1076,133 @@
    "fakeipFilterDesc": "Эти домены получают реальные IP вместо Fake-IP. В режиме whitelist Fake-IP получают только они.",
    "fallbackFilterGeositeDesc": "Домены из этих категорий GeoSite сразу разрешаются через Fallback.",
    "fallbackFilterIpcidrDesc": "Если Nameserver возвращает IP из этих диапазонов, используется ответ Fallback.",
 -  "fallbackFilterDomainDesc": "Эти домены сразу разрешаются через Fallback."
 +  "fallbackFilterDomainDesc": "Эти домены сразу разрешаются через Fallback.",
 +  "photonName": "Photon",
-+  "photonProxyPaths": "Маршруты прокси",
++  "photonProxyPaths": "Пути",
 +  "photonTunnel": "Туннели",
 +  "photonTunnelReady": "Туннель готов",
 +  "photonTunnelNotReady": "Туннель не готов",
@@ -700,7 +715,8 @@ index 58e77e7..290f9ec 100644
 +  "photonGossipPeers": "Узлы Gossip",
 +  "photonLastFailure": "Последний сбой",
 +  "photonRoutes": "Маршруты",
-+  "photonServices": "Прокси-сервисы",
++  "photonServices": "Сервисы",
++  "photonTemplate": "Шаблон",
 +  "photonDiagnostics": "Диагностика",
 +  "photonIdentity": "Сетевая идентичность",
 +  "photonWaiting": "Ожидание авторизации",
@@ -735,22 +751,24 @@ index 58e77e7..290f9ec 100644
 +  "photonApply": "Применить профиль Photon",
 +  "photonProxyTemplate": "Шаблон правил",
 +  "photonBuiltinRules": "Использовать встроенные правила",
-+  "photonTemplateHint": "Используйте Photon, Photon Auto или Photon Balance в правилах.",
++  "photonTemplateHint": "Текущая конфигурация Photon использует общий шаблон для путей и сервисов. Целями правил могут быть Photon, Photon Auto, Photon Balance и Photon Paths.",
++  "photonTemplatePathsHint": "На странице «Пути» выберите пути для включения в профиль Photon и примените профиль. Используйте Photon Paths как цель правила или участника группы прокси. Если пути не включены, трафик отклоняется.",
++  "photonTemplateNeedsConfig": "Создайте или импортируйте конфигурацию в настройках Photon, чтобы изменить её шаблон.",
 +  "photonTemplateHelp": "Как работают шаблоны",
 +  "photonTemplateHelpIntro": "Импортируется шаблон правил прокси Mihomo, отдельный от конфигурации узла Photon. После проверки копия сохраняется рядом с photon.yaml как photon.proxy.yaml. Другие профили и подписки остаются независимыми.",
 +  "photonTemplateCopyAiPrompt": "Скопировать запрос для ИИ",
 +  "photonTemplateAiHint": "Вставьте запрос в чат с ИИ и добавьте свой YAML Clash/Mihomo, скрыв учётные данные и приватные URL подписок.",
-+  "photonTemplateAiPrompt": "Преобразуй YAML Clash/Mihomo ниже в шаблон правил для импорта в Photon-FlClash. Внеси минимальные изменения и учти мои пожелания по маршрутизации.\n\n1. Верни одно отображение YAML до 4 МиБ хотя бы с одним правилом в rules. Photon-FlClash читает ключи верхнего уровня proxies, proxy-providers, proxy-groups, rules, rule-providers, sub-rules, dns и tun. Порты, контроллер, включение TUN, его устройство и стек настраиваются во FlClash.\n2. Сохрани порядок правил, поведение MATCH и групп, настройки DNS/TUN и другие прокси и поставщиков, если запрос не требует изменений. Если основная группа выбора очевидна и я не указал другой вариант, добавь Photon в конец её списка и сохрани выбор по умолчанию. Меняй цели правил только по запросу.\n3. Photon предоставляет группы Photon, Photon Auto и Photon Balance и поставщика photon-services. Ссылайся на них без повторного определения. Переименуй конфликтующие определения и обнови ссылки. Для группы, использующей выходы Photon напрямую, задай use: [photon-services] и empty-fallback: REJECT. Не прописывай адреса или учётные данные Photon.\n4. Проверь цели правил, участников групп, ссылки на поставщиков и отсутствие циклов между группами. Photon автоматически добавляет необходимые правила прямой маршрутизации и исключения TUN.\n5. Верни полный YAML для импорта и отдельно краткий список изменений. Оставь заглушки вместо скрытых значений и укажи, что восстановить локально перед импортом. Уточни неясные требования к маршрутизации.\n\nИсходный YAML и желаемые изменения:\n",
++  "photonTemplateAiPrompt": "Преобразуй YAML Clash/Mihomo ниже в шаблон правил для импорта в Photon-FlClash. Внеси минимальные изменения и учти мои пожелания по маршрутизации.\n\n1. Верни одно отображение YAML до 4 МиБ хотя бы с одним правилом в rules. Photon-FlClash читает ключи верхнего уровня proxies, proxy-providers, proxy-groups, rules, rule-providers, sub-rules, dns и tun. Порты, контроллер, включение TUN, его устройство и стек настраиваются во FlClash.\n2. Сохрани порядок правил, поведение MATCH и групп, настройки DNS/TUN и другие прокси и поставщиков, если запрос не требует изменений. Если основная группа выбора очевидна и я не указал другой вариант, добавь Photon в конец её списка и сохрани выбор по умолчанию. Меняй цели правил только по запросу.\n3. Photon предоставляет группы Photon, Photon Auto и Photon Balance и поставщика photon-services. Ссылайся на них без повторного определения. Переименуй конфликтующие определения и обнови ссылки. Для группы, использующей выходы Photon напрямую, задай use: [photon-services] и empty-fallback: REJECT. Не прописывай адреса или учётные данные Photon. Для трафика, который должен идти по пути, используйте Photon Paths как цель правила или участника группы прокси. Photon формирует эту зарезервированную группу из путей, выбранных для включения в профиль. Пустая группа отклоняет трафик. Не определяйте эту группу и не указывайте локальные порты SOCKS5 вручную.\n4. Проверь цели правил, участников групп, ссылки на поставщиков и отсутствие циклов между группами. Photon автоматически добавляет необходимые правила прямой маршрутизации и исключения TUN.\n5. Верни полный YAML для импорта и отдельно краткий список изменений. Оставь заглушки вместо скрытых значений и укажи, что восстановить локально перед импортом. Уточни неясные требования к маршрутизации.\n\nИсходный YAML и желаемые изменения:\n",
 +  "photonTemplateKept": "Сохраняемые и объединяемые поля",
 +  "photonTemplateKeptHint": "Сохраняются proxies, proxy-providers, proxy-groups, rules, rule-providers и sub-rules. dns и tun объединяются со значениями по умолчанию, затем настройки FlClash могут переопределить отдельные параметры.",
 +  "photonTemplateManaged": "Создаётся Photon автоматически",
-+  "photonTemplateManagedHint": "При применении профиля Photon в photon-services добавляются авторизованные адреса сервисов. Группы Photon, Photon Auto и Photon Balance создаются программой. Эти имена зарезервированы: повторное определение в шаблоне отклоняется.",
++  "photonTemplateManagedHint": "При применении профиля Photon в photon-services добавляются авторизованные адреса сервисов. Группы Photon, Photon Auto, Photon Balance и Photon Paths создаются программой. Эти имена зарезервированы: повторное определение в шаблоне отклоняется.",
 +  "photonTemplateSafeguards": "Обязательная защита маршрутизации",
 +  "photonTemplateSafeguardsHint": "Photon ставит свои правила прямого соединения перед вашими правилами и добавляет обязательные исключения в tun.route-exclude-address. Если старому бэкенду нужны DNS-исключения шлюза, также корректируются fake-ip-filter и nameserver-policy. Защита восстанавливается после применения настроек FlClash.",
 +  "photonTemplateIgnored": "Поля под управлением приложения",
 +  "photonTemplateIgnoredHint": "Другие поля верхнего уровня, например mixed-port, external-controller, secret, mode, allow-lan и ipv6, не импортируются. Параметры TUN enable, device и stack задаются в настройках FlClash.",
 +  "photonTemplateExample": "Пример YAML",
-+  "photonTemplateExampleHint": "Пример использует созданные группы Photon и группу JP с фильтрацией из photon-services. Адреса сервисов и учётные данные не нужны. Скопируйте или экспортируйте YAML, измените его и импортируйте как шаблон. Нужны хотя бы одно правило и размер не более 4 MiB.",
++  "photonTemplateExampleHint": "В этом примере авторизованные сервисы из photon-services сочетаются с маршрутизацией через Photon Paths. Шаблон должен содержать хотя бы одно правило и занимать не более 4 MiB.",
 +  "photonTemplateExportExample": "Экспортировать пример YAML",
 +  "photonLocalIdentity": "Идентификация локального узла",
 +  "photonLocalIdentityHint": "Ключ узла создаётся при первом подключении. Корневой открытый ключ предоставляет администратор.",
@@ -818,14 +836,14 @@ diff --git a/arb/intl_zh_CN.arb b/arb/intl_zh_CN.arb
 index b44010c..fe3da58 100644
 --- a/arb/intl_zh_CN.arb
 +++ b/arb/intl_zh_CN.arb
-@@ -1076,5 +1076,130 @@
+@@ -1076,5 +1076,133 @@
    "fakeipFilterDesc": "这些域名不使用 Fake-IP，返回真实 IP；过滤模式为 whitelist 时则只有它们使用 Fake-IP。",
    "fallbackFilterGeositeDesc": "属于这些 GeoSite 分类的域名直接使用 Fallback 解析。",
    "fallbackFilterIpcidrDesc": "Nameserver 返回这些网段内的 IP 时，改用 Fallback 的结果。",
 -  "fallbackFilterDomainDesc": "这些域名直接使用 Fallback 解析。"
 +  "fallbackFilterDomainDesc": "这些域名直接使用 Fallback 解析。",
 +  "photonName": "Photon",
-+  "photonProxyPaths": "代理路径",
++  "photonProxyPaths": "路径",
 +  "photonTunnel": "隧道",
 +  "photonTunnelReady": "隧道就绪",
 +  "photonTunnelNotReady": "隧道未就绪",
@@ -836,7 +854,8 @@ index b44010c..fe3da58 100644
 +  "photonGossipPeers": "Gossip 节点",
 +  "photonLastFailure": "最近一次失败",
 +  "photonRoutes": "路由",
-+  "photonServices": "代理服务",
++  "photonServices": "服务",
++  "photonTemplate": "模板",
 +  "photonDiagnostics": "诊断",
 +  "photonIdentity": "网络身份",
 +  "photonWaiting": "等待入网授权",
@@ -871,22 +890,24 @@ index b44010c..fe3da58 100644
 +  "photonApply": "应用 Photon 配置",
 +  "photonProxyTemplate": "规则模板",
 +  "photonBuiltinRules": "使用内置规则",
-+  "photonTemplateHint": "规则目标可选 Photon、Photon Auto 或 Photon Balance。",
++  "photonTemplateHint": "当前 Photon 配置的路径和服务共用这份模板。规则目标可以使用 Photon、Photon Auto、Photon Balance 或 Photon Paths。",
++  "photonTemplatePathsHint": "在「路径」页为所需路径勾选「加入 Photon 配置」，再应用 Photon 配置。Photon Paths 可用作规则目标，也可加入自定义代理组。没有纳入的路径时，该组会拒绝流量。",
++  "photonTemplateNeedsConfig": "先到 Photon 的「设置」创建或导入配置，即可编辑模板。",
 +  "photonTemplateHelp": "模板处理说明",
 +  "photonTemplateHelpIntro": "这里导入的是 Mihomo 代理规则模板，与 Photon 节点配置分开。验证后会将副本保存到 photon.yaml 旁的 photon.proxy.yaml，其他配置和订阅保持独立。",
 +  "photonTemplateCopyAiPrompt": "复制 AI 提示词",
 +  "photonTemplateAiHint": "把提示词粘贴到 AI 对话中，再附上已隐去凭据和私人订阅链接的现有 Clash/Mihomo YAML。",
-+  "photonTemplateAiPrompt": "请把下面的现有 Clash/Mihomo YAML 改成我可以导入 Photon-FlClash 的代理规则模板。只做兼容或满足我指定分流需求所需的修改。\n\n1. 输出一个不超过 4 MiB 的 YAML 对象，rules 至少包含一条规则。Photon-FlClash 读取的顶层字段为 proxies、proxy-providers、proxy-groups、rules、rule-providers、sub-rules、dns 和 tun。监听端口、控制器、TUN 开关、设备和协议栈在 FlClash 设置中管理。\n2. 保留原有规则顺序、MATCH 兜底行为、分组行为、DNS/TUN 策略及其他节点和订阅。若主选择组明确且我没有其他要求，将 Photon 追加到可选出口列表末尾，保留原有默认出口。仅按我的明确要求修改现有规则指向。\n3. Photon 会自动生成 Photon、Photon Auto、Photon Balance 三个代理组和 photon-services 代理提供者。直接引用这些名称，避免重新定义。已有定义重名时，重命名已有定义并同步更新其引用。分组要直接使用 Photon 出口时，设置 use: [photon-services] 和 empty-fallback: REJECT。避免写死 Photon 出口地址或凭据。\n4. 检查所有规则目标、分组成员和提供者引用都能解析，分组之间没有循环引用。Photon 所需的防回环直连规则和 TUN 排除会自动补上。\n5. 给出完整的 YAML 和单独的简短改动说明。原配置里隐去的值保留为占位符，并指出我在本地导入前需要补回哪些值。对无法从原配置或我的要求判断的分流选择，先向我确认。\n\n现有 YAML 和希望调整的内容：\n",
++  "photonTemplateAiPrompt": "请把下面的现有 Clash/Mihomo YAML 改成我可以导入 Photon-FlClash 的代理规则模板。只做兼容或满足我指定分流需求所需的修改。\n\n1. 输出一个不超过 4 MiB 的 YAML 对象，rules 至少包含一条规则。Photon-FlClash 读取的顶层字段为 proxies、proxy-providers、proxy-groups、rules、rule-providers、sub-rules、dns 和 tun。监听端口、控制器、TUN 开关、设备和协议栈在 FlClash 设置中管理。\n2. 保留原有规则顺序、MATCH 兜底行为、分组行为、DNS/TUN 策略及其他节点和订阅。若主选择组明确且我没有其他要求，将 Photon 追加到可选出口列表末尾，保留原有默认出口。仅按我的明确要求修改现有规则指向。\n3. Photon 会自动生成 Photon、Photon Auto、Photon Balance 三个代理组和 photon-services 代理提供者。直接引用这些名称，避免重新定义。已有定义重名时，重命名已有定义并同步更新其引用。分组要直接使用 Photon 出口时，设置 use: [photon-services] 和 empty-fallback: REJECT。避免写死 Photon 出口地址或凭据。 需要走路径的流量可将 Photon Paths 用作规则目标或自定义代理组的成员。Photon 根据勾选「加入 Photon 配置」的路径生成这个保留组。组为空时会拒绝流量。请直接引用该组，避免重复定义分组或写死本地 SOCKS5 端口。\n4. 检查所有规则目标、分组成员和提供者引用都能解析，分组之间没有循环引用。Photon 所需的防回环直连规则和 TUN 排除会自动补上。\n5. 给出完整的 YAML 和单独的简短改动说明。原配置里隐去的值保留为占位符，并指出我在本地导入前需要补回哪些值。对无法从原配置或我的要求判断的分流选择，先向我确认。\n\n现有 YAML 和希望调整的内容：\n",
 +  "photonTemplateKept": "保留或合并的字段",
 +  "photonTemplateKeptHint": "保留 proxies、proxy-providers、proxy-groups、rules、rule-providers 和 sub-rules。dns 和 tun 先与默认值合并，再应用 FlClash 设置中的对应覆盖项。",
 +  "photonTemplateManaged": "Photon 自动生成的内容",
-+  "photonTemplateManagedHint": "应用 Photon 配置时，已授权的服务端点会填入 photon-services。Photon、Photon Auto 和 Photon Balance 代理组由程序生成。这些名称为保留名称，在模板中重复定义会被拒绝。",
++  "photonTemplateManagedHint": "应用 Photon 配置时，已授权的服务端点会填入 photon-services。Photon、Photon Auto、 Photon Balance、Photon Paths 代理组由程序生成。这些名称为保留名称，在模板中重复定义会被拒绝。",
 +  "photonTemplateSafeguards": "必要的防回环设置",
 +  "photonTemplateSafeguardsHint": "Photon 的直连规则排在用户规则之前，必要的地址排除项会合并到 tun.route-exclude-address。连接旧后台、需要排除网关域名时，还会调整 fake-ip-filter 和 nameserver-policy。这些保护会在 FlClash 应用覆盖设置后重新补齐。",
 +  "photonTemplateIgnored": "由应用设置控制的字段",
 +  "photonTemplateIgnoredHint": "其他顶层字段不从模板导入，例如 mixed-port、external-controller、secret、mode、allow-lan 和 ipv6。TUN 的 enable、device 和 stack 由 FlClash 控制，请在应用设置中调整。",
 +  "photonTemplateExample": "YAML 示例",
-+  "photonTemplateExampleHint": "示例引用自动生成的 Photon 代理组，并用 photon-services 筛选 JP 分组，无需填写服务地址或凭据。可以复制或导出 YAML，修改后再导入模板。模板须包含至少一条规则，最大为 4 MiB。",
++  "photonTemplateExampleHint": "示例同时使用 photon-services 的授权服务和 Photon Paths 的路径分流。模板至少需要一条规则，最大为 4 MiB。",
 +  "photonTemplateExportExample": "导出示例 YAML",
 +  "photonLocalIdentity": "本地节点身份",
 +  "photonLocalIdentityHint": "首次连接自动生成本机密钥，无需填写。根公钥由管理员提供。",
@@ -954,12 +975,14 @@ diff --git a/lib/common/l10n_labels.dart b/lib/common/l10n_labels.dart
 index 9a69b8d..d1169ed 100644
 --- a/lib/common/l10n_labels.dart
 +++ b/lib/common/l10n_labels.dart
-@@ -9,6 +9,8 @@ extension PageLabelL10n on PageLabel {
+@@ -9,6 +9,10 @@ extension PageLabelL10n on PageLabel {
      final appLocalizations = currentAppLocalizations;
      return switch (this) {
        PageLabel.dashboard => appLocalizations.dashboard,
 +      PageLabel.photon => appLocalizations.photonName,
 +      PageLabel.photonProxyPaths => appLocalizations.photonProxyPaths,
++      PageLabel.photonServices => appLocalizations.photonServices,
++      PageLabel.photonTemplate => appLocalizations.photonTemplate,
        PageLabel.proxies => appLocalizations.proxies,
        PageLabel.profiles => appLocalizations.profiles,
        PageLabel.tools => appLocalizations.tools,
@@ -967,12 +990,14 @@ diff --git a/lib/enum/enum.dart b/lib/enum/enum.dart
 index 75b35bd..70edb2d 100644
 --- a/lib/enum/enum.dart
 +++ b/lib/enum/enum.dart
-@@ -524,6 +524,8 @@ extension GeoResourceExt on GeoResource {
+@@ -524,6 +524,10 @@ extension GeoResourceExt on GeoResource {
  
  enum PageLabel {
    dashboard,
 +  photon,
 +  photonProxyPaths,
++  photonServices,
++  photonTemplate,
    proxies,
    profiles,
    tools,
@@ -1240,33 +1265,45 @@ diff --git a/lib/views/navigation.dart b/lib/views/navigation.dart
 index 757c9e1..0301f4a 100644
 --- a/lib/views/navigation.dart
 +++ b/lib/views/navigation.dart
-@@ -1,6 +1,10 @@
+@@ -1,6 +1,12 @@
 +import 'dart:io';
 +
  import 'package:fl_clash/common/app_ports.dart';
  import 'package:fl_clash/enum/enum.dart';
  import 'package:fl_clash/models/models.dart';
 +import 'package:fl_clash/photon/proxy_paths_view.dart';
++import 'package:fl_clash/photon/services_view.dart';
++import 'package:fl_clash/photon/template_view.dart';
 +import 'package:fl_clash/photon/view.dart';
  import 'package:fl_clash/ui/icons/app_glyphs.dart';
  import 'package:fl_clash/views/views.dart';
  
-@@ -18,6 +22,18 @@ class Navigation implements NavigationPort {
+@@ -18,6 +24,28 @@ class Navigation implements NavigationPort {
          label: PageLabel.dashboard,
          builder: (_) => const DashboardView(),
        ),
-+      if (Platform.isWindows)
++      if (Platform.isWindows) ...[
 +        NavigationItem(
 +          glyph: AppGlyphs.vpn,
 +          label: PageLabel.photon,
 +          builder: (_) => const PhotonView(),
 +        ),
-+      if (Platform.isWindows)
 +        NavigationItem(
-+          glyph: AppGlyphs.proxies,
++          glyph: AppGlyphs.split,
 +          label: PageLabel.photonProxyPaths,
 +          builder: (_) => const PhotonProxyPathsView(),
 +        ),
++        NavigationItem(
++          glyph: AppGlyphs.connections,
++          label: PageLabel.photonServices,
++          builder: (_) => const PhotonServicesView(),
++        ),
++        NavigationItem(
++          glyph: AppGlyphs.code,
++          label: PageLabel.photonTemplate,
++          builder: (_) => const PhotonTemplateView(),
++        ),
++      ],
        NavigationItem(
          glyph: AppGlyphs.proxies,
          label: PageLabel.proxies,
@@ -1520,3 +1557,109 @@ index 6e309a8f..c7e83a87 100644
      final typeStyle = AppTextStyle.footnote
          .of(context)
          .copyWith(
+diff --git a/lib/features/editor/clash_schema.dart b/lib/features/editor/clash_schema.dart
+--- a/lib/features/editor/clash_schema.dart
++++ b/lib/features/editor/clash_schema.dart
+@@ -84,6 +84,7 @@
+ 
+ enum EditorSchema {
+   config(clashConfigSchema),
++  photonTemplate(clashConfigSchema),
+   dns(_dns, 'dns'),
+   ntp(_ntp, 'ntp'),
+   sniffer(_sniffer, 'sniffer'),
+diff --git a/lib/features/editor/completion.dart b/lib/features/editor/completion.dart
+--- a/lib/features/editor/completion.dart
++++ b/lib/features/editor/completion.dart
+@@ -1,5 +1,7 @@
+ import 'package:code_forge/code_forge.dart' show CodeForgeCompletionSource;
+ import 'package:fl_clash/enum/enum.dart';
++import 'package:fl_clash/photon/services.dart'
++    show photonProxyGroups, photonServiceProvider;
+ 
+ import 'clash_completion.dart';
+ import 'clash_schema.dart';
+@@ -9,6 +11,12 @@
+   Language language,
+   EditorSchema schema,
+ ) => switch (language) {
++  Language.yaml when schema == EditorSchema.photonTemplate =>
++    ClashCompletionSource(
++      schema.root,
++      additionalPolicies: photonProxyGroups,
++      additionalProxyProviders: const [photonServiceProvider],
++    ).call,
+   Language.yaml => ClashCompletionSource(schema.root).call,
+   Language.javaScript => ScriptCompletionSource().call,
+   Language.json || Language.ini || Language.xml || Language.text => null,
+diff --git a/lib/features/editor/clash_completion.dart b/lib/features/editor/clash_completion.dart
+--- a/lib/features/editor/clash_completion.dart
++++ b/lib/features/editor/clash_completion.dart
+@@ -20,7 +20,14 @@
+ class ClashCompletionSource {
+   final YamlSchema root;
+ 
+-  ClashCompletionSource(this.root);
++  final List<String> additionalPolicies;
++  final List<String> additionalProxyProviders;
++
++  ClashCompletionSource(
++    this.root, {
++    this.additionalPolicies = const [],
++    this.additionalProxyProviders = const [],
++  });
+ 
+   int _version = -1;
+   YamlDocumentLines? _lines;
+@@ -188,7 +195,10 @@
+     final candidates = switch (schema.scalar) {
+       YamlScalar.policy => _policies(request),
+       YamlScalar.outbound => _policies(request, withGlobal: true),
+-      YamlScalar.proxyProvider => _plain(_namesOf(request).proxyProviders),
++      YamlScalar.proxyProvider => _plain({
++        ..._namesOf(request).proxyProviders,
++        ...additionalProxyProviders,
++      }),
+       YamlScalar.ruleProvider => _plain(_namesOf(request).ruleProviders),
+       YamlScalar.subRule => _plain(_namesOf(request).subRules),
+       _ => [
+@@ -289,6 +299,10 @@
+         CodeForgeSuggestion(label: key, detail: value),
+       for (final MapEntry(:key, :value) in names.proxies.entries)
+         CodeForgeSuggestion(label: key, detail: value),
++      for (final policy in additionalPolicies)
++        if (!names.groups.containsKey(policy) &&
++            !names.proxies.containsKey(policy))
++          CodeForgeSuggestion(label: policy),
+       for (final policy
+           in withGlobal
+               ? RuleTarget.ruleTargetNames
+diff --git a/test/features/editor_completion_test.dart b/test/features/editor_completion_test.dart
+--- a/test/features/editor_completion_test.dart
++++ b/test/features/editor_completion_test.dart
+@@ -132,6 +132,25 @@
+       final completion = _complete('rules:\n- dsuf|');
+       expect(_labels(completion).first, 'DOMAIN-SUFFIX');
+       expect(_inserted(completion, 'DOMAIN-SUFFIX'), 'DOMAIN-SUFFIX,');
++    });
++
++    test('completes generated Photon targets and providers in templates', () {
++      const schema = EditorSchema.photonTemplate;
++      const rule = 'rules:\n  - DOMAIN-SUFFIX,example.org,Photon P|';
++      const group = 'proxy-groups:\n  - name: Custom\n    type: select\n';
++      expect(
++        _labels(_complete(rule, schema: schema)),
++        contains('Photon Paths'),
++      );
++      expect(
++        _labels(_complete('$group    proxies: [Photon P|', schema: schema)),
++        contains('Photon Paths'),
++      );
++      expect(
++        _labels(_complete('$group    use: [photon-|', schema: schema)),
++        contains('photon-services'),
++      );
++      expect(_labels(_complete(rule)), isNot(contains('Photon Paths')));
+     });
+ 
+     test('completes rule payloads, policies and options', () {

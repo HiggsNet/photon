@@ -232,7 +232,7 @@ class _PhotonProxyPathsState extends ConsumerState<PhotonProxyPathsView> {
                         children: [
                           FilledButton.icon(
                             onPressed: _busy ? null : () => _edit(snapshot),
-                            icon: const GlyphIcon(AppGlyphs.add),
+                            icon: const GlyphIcon(AppGlyphs.add, fill: 1),
                             label: Text(_text(context, '新建路径', 'New path')),
                           ),
                           OutlinedButton(

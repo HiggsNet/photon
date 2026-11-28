@@ -4,15 +4,17 @@
 
 ## 使用
 
-### 代理路径
+### 路径
 
-侧栏的 **代理路径** 与 **Photon** 是独立入口。连接 Photon 后可以新建路径，选择出口和中继，指定每一跳的地址族或传输方式，也可以手工输入未公开的出口。已保存的路径显示它的本地 SOCKS5 地址，并可进行连通性、UDP DNS、下载速度或自定义目标探测。编辑同名路径会保留端口，已有连接可以继续使用原路径。
+从侧栏进入 **路径**。连接 Photon 后可以新建路径，选择出口和中继，指定每一跳的地址族或传输方式，也可以手工输入未公开的出口。已保存的路径显示它的本地 SOCKS5 地址，并可进行连通性、UDP DNS、下载速度或自定义目标探测。编辑同名路径会保留端口，已有连接可以继续使用原路径。
 
 勾选 **加入 Photon 配置**，再点击 **应用 Photon 配置**，会把路径追加到模板生成的配置中。代理页的 `Photon Paths` 可手选路径，模板规则也可以使用 `MATCH,Photon Paths` 或把它放进其他选择组。默认客户端由 FlClash 随 Photon 后台启动，路径保存在 Photon 身份数据库旁的 `.proxy-v2` 状态目录。手工配置了 `proxy_v2_config` 时，界面使用其中已有的客户端。
 
+### Photon
+
 1. 打开 FlClash，进入侧栏 **Photon**。首次使用进入 **设置** 标签，点 **新建 Photon 配置**，填写管理员提供的节点名、可信根公钥和至少一条内网路由。首次自动入网还需要引导地址。保存后应用会在数据目录下管理 `photon/photon.yaml`。已有配置可用 **导入 Photon YAML** 复制配置、规则模板及已有身份；要继续直接读取原文件，选择 **引用外部 Photon YAML**。
-2. 顶部显示隧道数量，使用 **连接**、**断开** 控制 Photon。在 **概览、隧道、Gossip 节点、路由、代理服务、诊断** 中查看实时状态。网关同时提供已授权的 IPv4、IPv6 地址且本地支持双栈时，Photon 分别尝试建立两条隧道，单条也能承载内层双栈。隧道表按外层连接显示，每行的 IPv4 和 IPv6 分别表示内层是否已有可用路由，「外层」表示连网关使用的地址族。点击一行可查看完整远端地址、ESP 到期时间和最近一次失败或重连原因。Gossip 节点表显示同步状态，代理服务表按发布节点汇总地区和端点数。数据采样被截断时会显示提示。
-3. Photon 将当前有效、已授权且符合出口选择的端点加入代理组，支持 SOCKS5、HTTP 和 TrustTunnel。在代理服务中点击 **应用 Photon 配置**，FlClash 会生成并选用独立的 Photon 配置；无需先导入其他配置。前往 **代理** 页使用 `Photon` 手选组、`Photon Auto` 自动择优或 `Photon Balance` 负载均衡，再按需要开启 FlClash 的代理接管。已有配置和订阅不会被覆盖，可以在 **配置** 页随时切回。
+2. 顶部显示隧道数量，使用 **连接**、**断开** 控制 Photon。在 **概览、隧道、Gossip 节点、路由、诊断** 中查看实时状态。网关同时提供已授权的 IPv4、IPv6 地址且本地支持双栈时，Photon 分别尝试建立两条隧道，单条也能承载内层双栈。隧道表按外层连接显示，每行的 IPv4 和 IPv6 分别表示内层是否已有可用路由，「外层」表示连网关使用的地址族。点击一行可查看完整远端地址、ESP 到期时间和最近一次失败或重连原因。Gossip 节点表显示同步状态。数据采样被截断时会显示提示。
+3. Photon 将当前有效、已授权且符合出口选择的端点加入代理组，支持 SOCKS5、HTTP 和 TrustTunnel。在侧栏 **服务** 中点击 **应用 Photon 配置**，FlClash 会生成并选用独立的 Photon 配置；无需先导入其他配置。前往 **代理** 页使用 `Photon` 手选组、`Photon Auto` 自动择优或 `Photon Balance` 负载均衡，再按需要开启 FlClash 的代理接管。已有配置和订阅不会被覆盖，可以在 **配置** 页随时切回。
 4. Photon 连接、代理接管、系统代理和 TUN 通过各自的入口控制。仅连接 Photon 可以访问内网。关闭 Photon 后，普通代理配置继续运行。使用 Photon 配置时，接管保持开启，无法经 Photon 转发的代理流量会被拒绝，节点在隧道重连后自动恢复。
 
 首次连接后可在概览复制待授权的入网请求。如果管理员已提供离线授权包和与之匹配的现有密钥，可以在连接前用 **导入授权** 安装，目标配置须指向尚无数据库的状态目录。已有身份直接使用原配置即可。
@@ -29,15 +31,15 @@
 
 ## 代理出口选择
 
-在 **Photon → 代理服务** 分别勾选 SOCKS5、HTTP 和 TrustTunnel，再按实际发布的地区及固定节点筛选，点击 **保存出口选择**。首次使用默认只开启 SOCKS5，其他协议需要自行勾选。页面显示当前选择的出口数量；选择保存在本应用中，重启后继续使用，也适用于切换后的 Photon 配置。
+侧栏的 **服务** 按发布节点汇总出口地区。在这里分别勾选 SOCKS5、HTTP 和 TrustTunnel，再按实际发布的地区及固定节点筛选，点击 **保存出口选择**。首次使用默认只开启 SOCKS5，其他协议需要自行勾选。页面显示当前选择的出口数量；选择保存在本应用中，重启后继续使用，也适用于切换后的 Photon 配置。
 
 地区选择控制该地区的全部协议入口；固定节点选择只控制该节点的 `local` 出口。Global 和地区任播入口按协议、目的地址和端口合并，不受某个发布节点的固定出口勾选影响。新发现的地区和节点默认纳入已开启的协议，取消勾选的地区、节点在撤回或重新发布后仍保持排除。
 
-保存出口选择或规则模板后，点击 **应用 Photon 配置** 才会应用变更。筛选同时作用于内置代理组及规则模板引用的 `photon-services`。没有选中出口时，Photon 出口进入拒绝状态。HTTP 不承载 UDP，需要认证且尚未提供凭据的 HTTP 入口不加入候选；TrustTunnel 保留服务发布的证书指纹验证。
+保存出口选择或规则模板后，在 **服务** 或 **路径** 点击 **应用 Photon 配置** 才会应用变更。筛选同时作用于内置代理组及规则模板引用的 `photon-services`。没有选中出口时，Photon 出口进入拒绝状态。HTTP 不承载 UDP，需要认证且尚未提供凭据的 HTTP 入口不加入候选；TrustTunnel 保留服务发布的证书指纹验证。
 
 ## 自定义代理规则
 
-打开 **Photon → 代理服务 → 规则模板 → 编辑** 菜单。用 **导入 YAML 模板** 选择已有的 Mihomo YAML，或用 **编辑 YAML 模板** 打开 FlClash 自带的编辑器。验证通过后，模板保存为 Photon 配置旁的同名 `.proxy.yaml`，例如 `photon.yaml` 对应 `photon.proxy.yaml`。也可直接编辑这个文件。Photon 读取其中的 `proxies`、`proxy-providers`、`proxy-groups`、`rules`、`rule-providers`、`sub-rules`、`dns` 和 `tun`。DNS、TUN 缺少的字段使用内置默认值，再应用 FlClash 选定的覆写项；TUN 开关、设备和协议栈等仍由 FlClash 界面控制。最后合并 Photon 必需的内网及端点路由排除，并把防回环直连规则放在其他规则之前，避免被覆写移除。模板需要至少一条规则，最多 4 MiB。点击 **使用内置规则** 可以移除模板。
+打开侧栏 **模板**。当前 Photon 配置的路径和服务共用这份模板，断开时也可以编辑。用 **导入 YAML 模板** 选择已有的 Mihomo YAML，或用 **编辑 YAML 模板** 打开 FlClash 自带的编辑器。验证通过后，模板保存为 Photon 配置旁的同名 `.proxy.yaml`，例如 `photon.yaml` 对应 `photon.proxy.yaml`。也可直接编辑这个文件。Photon 读取其中的 `proxies`、`proxy-providers`、`proxy-groups`、`rules`、`rule-providers`、`sub-rules`、`dns` 和 `tun`。DNS、TUN 缺少的字段使用内置默认值，再应用 FlClash 选定的覆写项；TUN 开关、设备和协议栈等仍由 FlClash 界面控制。最后合并 Photon 必需的内网及端点路由排除，并把防回环直连规则放在其他规则之前，避免被覆写移除。模板需要至少一条规则，最多 4 MiB。点击 **使用内置规则** 可以移除模板。
 
 在 **模板处理说明** 中点击 **复制 AI 提示词**，把提示词和已隐去凭据及私人订阅链接的现有 Clash/Mihomo YAML 一起交给 AI。将生成的 YAML 保存为文件，补回需要的值后用 **导入 YAML 模板** 验证。
 
@@ -45,13 +47,14 @@
 proxy-groups:
   - name: Nodes
     type: select
-    proxies: [Photon, DIRECT]
+    proxies: [Photon, Photon Paths, DIRECT]
 rules:
   - DOMAIN-SUFFIX,google.com,Nodes
+  - DOMAIN-SUFFIX,example.org,Photon Paths
   - MATCH,DIRECT
 ```
 
-`Photon`、`Photon Auto`、`Photon Balance` 和 `photon-services` 由 Photon 提供。自定义组也可以用 `use: [photon-services]` 引入所有节点，再用 Mihomo 的 `filter` 筛选地区。建议为这类组设置 `empty-fallback: REJECT`，让筛选后为空的组拒绝连接。模板由用户编辑，生成的配置由 FlClash 管理。模板启用后，Photon 断开时只停用 Photon 出口，用户规则和其他出口继续可用。
+`Photon`、`Photon Auto`、`Photon Balance`、`Photon Paths` 和 `photon-services` 由 Photon 提供。`Photon Paths` 包含勾选 **加入 Photon 配置** 的路径，组为空时会拒绝流量。自定义组也可以用 `use: [photon-services]` 引入所有节点，再用 Mihomo 的 `filter` 筛选地区。建议为这类组设置 `empty-fallback: REJECT`，让筛选后为空的组拒绝连接。模板由用户编辑，生成的配置由 FlClash 管理。模板启用后，Photon 断开时只停用 Photon 出口，用户规则和其他出口继续可用。
 
 注入代理时，相同地址和端口的 Global、地区任播入口会合并为一个，名称为 `Anycast / global / 地址:端口` 或 `Anycast / jp / 地址:端口`，不随发布节点变化。`local` 入口保留节点名，便于选择固定出口；原始服务发布记录仍按节点保留供诊断。完整示例和界面内示例均包含 `OpenAI` 选择组，通过 MetaCubeX 的 OpenAI 域名规则集单独分流，可在代理页为该组选择出口。
 

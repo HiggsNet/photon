@@ -16,7 +16,7 @@ tun:
 proxy-groups:
   - name: My Proxy
     type: select
-    proxies: [Photon, Photon Auto, Photon Balance, DIRECT]
+    proxies: [Photon, Photon Auto, Photon Balance, Photon Paths, DIRECT]
   - name: JP
     type: url-test
     use: [photon-services]
@@ -32,6 +32,7 @@ proxy-groups:
 rules:
   - RULE-SET,openai,OpenAI
   - DOMAIN-SUFFIX,example.com,My Proxy
+  - DOMAIN-SUFFIX,example.org,Photon Paths
   - MATCH,Photon
 rule-providers:
   openai:
@@ -85,8 +86,8 @@ class _PhotonTemplateHelpState extends State<_PhotonTemplateHelp> {
   Widget build(BuildContext context) {
     final l = context.appLocalizations;
     final sections = [
-      (l.photonServices, '${l.photonMultiTip}\n${l.photonServiceKindsHint}'),
       (l.photonProxyTemplate, l.photonTemplateHint),
+      (l.photonProxyPaths, l.photonTemplatePathsHint),
       (l.photonTemplateKept, l.photonTemplateKeptHint),
       (l.photonTemplateManaged, l.photonTemplateManagedHint),
       (l.photonTemplateSafeguards, l.photonTemplateSafeguardsHint),

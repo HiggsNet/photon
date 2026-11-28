@@ -1,14 +1,17 @@
 import 'dart:io';
 
 import 'package:fl_clash/photon/controller.dart';
+import 'package:fl_clash/photon/services_view.dart';
 import 'package:fl_clash/photon/setup.dart';
 import 'package:fl_clash/photon/setup_view.dart';
+import 'package:fl_clash/photon/template_view.dart';
 import 'package:fl_clash/photon/view.dart';
 import 'package:fl_clash/providers/app.dart';
 import 'package:fl_clash/ui/icons/icons.dart';
 import 'package:fl_clash/widgets/widgets.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../helpers/test_app.dart';
 import 'controller_test.dart' show FakeBackend;
@@ -36,10 +39,10 @@ void main() {
     });
   }
 
-  Widget view({bool safe = false}) => TestApp(
+  Widget view({bool safe = false, Widget? child}) => TestApp(
     locale: const Locale('en'),
     overrides: [safeModeProvider.overrideWith((_) => safe)],
-    child: PhotonView(controller: controller, isWindows: true),
+    child: child ?? PhotonView(controller: controller, isWindows: true),
   );
 
   photonTest('settings shows the package version while disconnected', (
@@ -70,9 +73,9 @@ void main() {
     file.writeAsStringSync('rules: [');
     controller.selectConfig('${directory.path}/photon.yaml');
 
-    await tester.pumpWidget(view());
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Proxy services').first);
+    await tester.pumpWidget(
+      view(child: PhotonTemplateView(controller: controller)),
+    );
     await tester.pumpAndSettle();
     await tester.runAsync(() => file.exists());
     await tester.pumpAndSettle();
@@ -80,16 +83,21 @@ void main() {
     expect(
       tester
           .widget<FilledButton>(
-            find.widgetWithText(FilledButton, 'Apply Photon profile'),
+            find.widgetWithText(FilledButton, 'Edit YAML template'),
           )
           .onPressed,
-      isNull,
+      isNotNull,
     );
 
-    await tester.tap(find.widgetWithText(TextButton, 'Edit'));
-    await tester.pumpAndSettle();
-    expect(find.text('Edit YAML template', findRichText: true), findsOneWidget);
-    expect(find.text('Built-in rules', findRichText: true), findsOneWidget);
+    expect(
+      find.widgetWithText(OutlinedButton, 'Import YAML template'),
+      findsOneWidget,
+    );
+    expect(find.widgetWithText(TextButton, 'Built-in rules'), findsOneWidget);
+    expect(
+      find.textContaining('Use Photon Paths as a rule target'),
+      findsOneWidget,
+    );
     expect(backend.calls, isEmpty);
   });
 
@@ -737,6 +745,7 @@ void main() {
   photonTest('proxy services group all authorized endpoints by publisher', (
     tester,
   ) async {
+    SharedPreferences.setMockInitialValues({});
     tester.view.physicalSize = const Size(1400, 1100);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -772,17 +781,22 @@ void main() {
     await tester.pumpWidget(view());
     await tester.tap(find.text('Connect'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Proxy services').first);
+    expect(find.text('Services'), findsNothing);
+    await tester.pumpWidget(
+      view(child: PhotonServicesView(controller: controller)),
+    );
     await tester.pumpAndSettle();
+    Finder tableText(String text) =>
+        find.descendant(of: find.byType(TableCells), matching: find.text(text));
     expect(find.text('Endpoints'), findsNothing);
-    expect(find.text('Local'), findsOneWidget);
-    expect(find.text('Hong Kong'), findsOneWidget);
-    expect(find.text('Mainland China'), findsOneWidget);
-    expect(find.text('Japan'), findsOneWidget);
-    expect(find.text('Singapore'), findsOneWidget);
-    expect(find.text('United States'), findsOneWidget);
-    expect(find.text('custom'), findsOneWidget);
-    expect(find.text('Global'), findsOneWidget);
+    expect(tableText('Local'), findsOneWidget);
+    expect(tableText('Hong Kong'), findsOneWidget);
+    expect(tableText('Mainland China'), findsOneWidget);
+    expect(tableText('Japan'), findsOneWidget);
+    expect(tableText('Singapore'), findsOneWidget);
+    expect(tableText('United States'), findsOneWidget);
+    expect(tableText('custom'), findsOneWidget);
+    expect(tableText('Global'), findsOneWidget);
     expect(find.text('Apply Photon profile'), findsOneWidget);
     expect(find.text('Import YAML template'), findsNothing);
     expect(find.text('Edit YAML template'), findsNothing);
@@ -790,27 +804,8 @@ void main() {
       find.textContaining('Checks indicate supported exit types'),
       findsNothing,
     );
-    await tester.runAsync(() => File('/test/config.proxy.yaml').exists());
-    await tester.pumpAndSettle();
-    expect(
-      tester
-          .widget<TextButton>(find.widgetWithText(TextButton, 'Edit'))
-          .onPressed,
-      isNotNull,
-    );
-    await tester.tap(find.widgetWithText(TextButton, 'Edit'));
-    await tester.pumpAndSettle();
-    expect(find.byType(PopupMenu), findsOneWidget);
-    expect(
-      find.text('Import YAML template', findRichText: true),
-      findsOneWidget,
-    );
-    expect(find.text('Edit YAML template', findRichText: true), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('photon-tunnel-count')));
-    await tester.pumpAndSettle();
-    final help = find.byTooltip('How templates work');
-    expect(help, findsOneWidget);
-    expect(find.byType(Checkbox), findsNothing);
+    expect(find.text('How templates work'), findsNothing);
+    expect(find.byType(Checkbox), findsWidgets);
     const ordered = [
       'short.other.',
       'a-aws-pek.catofes.',
@@ -819,16 +814,16 @@ void main() {
       'b-aws-hnd.catofes.',
     ];
     for (var i = 0; i < ordered.length; i++) {
-      final name = find.text(ordered[i]);
+      final name = tableText(ordered[i]);
       expect(name, findsOneWidget);
       expect(
         tester.getTopRight(name).dx,
-        closeTo(tester.getTopRight(find.text('Node')).dx, 0.01),
+        closeTo(tester.getTopRight(tableText('Node')).dx, 0.01),
       );
       if (i > 0) {
         expect(
           tester.getCenter(name).dy,
-          greaterThan(tester.getCenter(find.text(ordered[i - 1])).dy),
+          greaterThan(tester.getCenter(tableText(ordered[i - 1])).dy),
         );
       }
       final row = find.ancestor(of: name, matching: find.byType(TableCells));
@@ -853,16 +848,13 @@ void main() {
     }
     await tester.enterText(find.byType(TextField), 'Singapore');
     await tester.pumpAndSettle();
-    expect(find.text('b-aws-hnd.catofes.'), findsOneWidget);
+    expect(tableText('b-aws-hnd.catofes.'), findsOneWidget);
     for (final node in ordered.take(ordered.length - 1)) {
-      expect(find.text(node), findsNothing);
+      expect(tableText(node), findsNothing);
     }
     await tester.enterText(find.byType(TextField), '');
     await tester.pumpAndSettle();
     expect(find.textContaining('fd42:1::2'), findsNothing);
-    await tester.tap(help);
-    await tester.pumpAndSettle();
-    expect(find.text('Generated by Photon'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }
