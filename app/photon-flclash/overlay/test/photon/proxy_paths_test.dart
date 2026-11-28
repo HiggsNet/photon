@@ -66,6 +66,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      expect(find.text('Apply Photon profile'), findsNothing);
       await tester.tap(find.text('New path'));
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextFormField).at(0), 'home');

@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'controller.dart';
 import 'proxy_bridge.dart';
+import 'proxy_connection.dart';
 import 'proxy_selection_view.dart';
 import 'services.dart';
 import 'status_table.dart';
@@ -57,10 +58,13 @@ class _PhotonServicesViewState extends ConsumerState<PhotonServicesView> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     spacing: 16,
                     children: [
-                      if (safeMode)
-                        Text(l.safeMode)
+                      if (safeMode || !owner.hasLease)
+                        PhotonProxyConnection(owner: owner, safeMode: safeMode)
                       else ...[
-                        _proxyControls(l, status),
+                        if (status == null)
+                          Text(l.loading)
+                        else
+                          _proxyControls(l, status),
                         if (owner.error case final error?)
                           PhotonDetailCard(
                             title: l.error,
@@ -95,10 +99,9 @@ class _PhotonServicesViewState extends ConsumerState<PhotonServicesView> {
     );
   }
 
-  Widget _proxyControls(AppLocalizations l, Map<String, dynamic>? status) {
+  Widget _proxyControls(AppLocalizations l, Map<String, dynamic> status) {
     final directory = owner.directory;
-    final hasEndpoints = directory?.endpoints.isNotEmpty == true;
-    final ready = status?['tunnel_ready'] == true;
+    final ready = status['tunnel_ready'] == true;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -106,41 +109,19 @@ class _PhotonServicesViewState extends ConsumerState<PhotonServicesView> {
           crossAxisAlignment: CrossAxisAlignment.start,
           spacing: 16,
           children: [
-            Row(
-              spacing: 12,
-              children: [
-                Expanded(
-                  child: Text(
-                    !ready
-                        ? l.photonProxyRequiresTunnel
-                        : !owner.directoryFresh
-                        ? l.photonStale
-                        : l.photonMultiTip,
-                    style: AppTextStyle.caption1.of(context),
-                  ),
-                ),
-                FilledButton(
-                  onPressed:
-                      widget.controller != null ||
-                          owner.busy ||
-                          !owner.directoryFresh ||
-                          !hasEndpoints ||
-                          !ready
-                      ? null
-                      : () => owner.applyProxies(photonProxyBridge.apply),
-                  child: Text(l.photonApply),
-                ),
-              ],
-            ),
-            if (status != null)
-              PhotonProxySelectionView(
-                directory: directory,
-                load: photonProxyBridge.loadSelection,
-                onSave: (selection) => owner.applyProxies(
-                  () => photonProxyBridge.saveSelection(selection),
-                ),
-                enabled: !owner.busy && !owner.closed,
+            if (!ready || !owner.directoryFresh)
+              Text(
+                !ready ? l.photonProxyRequiresTunnel : l.photonStale,
+                style: AppTextStyle.caption1.of(context),
               ),
+            PhotonProxySelectionView(
+              directory: directory,
+              load: photonProxyBridge.loadSelection,
+              onSave: (selection) => owner.applyProxies(
+                () => photonProxyBridge.saveSelection(selection),
+              ),
+              enabled: !owner.busy && !owner.closed,
+            ),
           ],
         ),
       ),

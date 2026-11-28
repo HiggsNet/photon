@@ -201,21 +201,16 @@ void main() {
             )
             .toList();
         expect(endpoints, hasLength(3));
-        final scrollable = find
-            .descendant(
-              of: find.byType(PhotonServicesView),
-              matching: find.byType(Scrollable),
-            )
-            .first;
-        await tester.scrollUntilVisible(
-          find.text(labels.photonApply),
-          -400,
-          scrollable: scrollable,
-          maxScrolls: 30,
+        expect(find.text(labels.photonApply), findsNothing);
+        page.toPage(PageLabel.photonTemplate);
+        final apply = find.text(labels.photonApply).hitTestable();
+        await waitFor(
+          () => apply.evaluate().isNotEmpty,
+          'Template apply action',
         );
         final setup = container.read(setupActionProvider.notifier);
         await setup.setRunning(false);
-        await tester.tap(find.text(labels.photonApply));
+        await tester.tap(apply);
         await waitFor(
           () =>
               photonProxyBridge.ready &&

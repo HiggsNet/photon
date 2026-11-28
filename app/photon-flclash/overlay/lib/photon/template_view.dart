@@ -4,7 +4,6 @@ import 'package:fl_clash/common/common.dart';
 import 'package:fl_clash/enum/enum.dart';
 import 'package:fl_clash/pages/editor.dart';
 import 'package:fl_clash/providers/app.dart';
-import 'package:fl_clash/ui/icons/icons.dart';
 import 'package:fl_clash/widgets/widgets.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -20,9 +19,10 @@ const _starterRules = '''rules:
 ''';
 
 class PhotonTemplateView extends ConsumerStatefulWidget {
-  const PhotonTemplateView({super.key, this.controller});
+  const PhotonTemplateView({super.key, this.controller, this.applyProfile});
 
   final PhotonController? controller;
+  final Future<void> Function()? applyProfile;
 
   @override
   ConsumerState<PhotonTemplateView> createState() => _PhotonTemplateViewState();
@@ -31,12 +31,14 @@ class PhotonTemplateView extends ConsumerStatefulWidget {
 class _PhotonTemplateViewState extends ConsumerState<PhotonTemplateView> {
   String? _templateConfig;
   Future<bool>? _hasTemplate;
+  bool _applying = false;
 
   PhotonController get owner => widget.controller ?? photonController;
 
   @override
   void initState() {
     super.initState();
+    if (widget.controller == null) photonProxyBridge.attach();
     owner.initialize();
   }
 
@@ -64,9 +66,14 @@ class _PhotonTemplateViewState extends ConsumerState<PhotonTemplateView> {
               children: [
                 if (safeMode)
                   Text(l.safeMode)
-                else if (config != null)
-                  _templateControls(config)
-                else if (!owner.busy) ...[
+                else if (config != null) ...[
+                  _templateControls(config),
+                  if (owner.error case final error?)
+                    Text(
+                      '$error',
+                      style: TextStyle(color: context.colorScheme.error),
+                    ),
+                ] else if (!owner.busy) ...[
                   Text(l.photonTemplateNeedsConfig),
                   Align(
                     alignment: Alignment.centerLeft,
@@ -78,16 +85,7 @@ class _PhotonTemplateViewState extends ConsumerState<PhotonTemplateView> {
                     ),
                   ),
                 ],
-                Text(l.photonTemplateHint),
-                Text(l.photonTemplatePathsHint),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: TextButton.icon(
-                    onPressed: () => showPhotonTemplateHelp(context),
-                    icon: const GlyphIcon(AppGlyphs.info, size: 20),
-                    label: Text(l.photonTemplateHelp),
-                  ),
-                ),
+                const PhotonTemplateHelp(),
               ],
             ),
           );
@@ -108,49 +106,56 @@ class _PhotonTemplateViewState extends ConsumerState<PhotonTemplateView> {
       future: _hasTemplate,
       builder: (context, snapshot) {
         final hasTemplate = snapshot.data == true;
+        final idle = !_applying && !owner.busy && !owner.closed;
         final editable =
-            !owner.busy &&
-            !owner.closed &&
-            snapshot.connectionState == ConnectionState.done;
-        return Card(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            spacing: 12,
-            children: [
-              if (snapshot.connectionState == ConnectionState.done)
-                Text(
-                  hasTemplate
-                      ? file.uri.pathSegments.last
-                      : l.photonBuiltinRules,
-                  style: AppTextStyle.headline.of(context),
-                ),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  FilledButton(
-                    onPressed: editable
-                        ? () => _editTemplate(config, file)
-                        : null,
-                    child: Text(l.photonEditTemplate),
-                  ),
-                  OutlinedButton(
-                    onPressed: editable ? () => _importTemplate(config) : null,
-                    child: Text(l.photonImportTemplate),
-                  ),
-                  if (hasTemplate)
-                    TextButton(
-                      onPressed: editable ? () => _resetTemplate(config) : null,
-                      child: Text(l.photonBuiltinRules),
-                    ),
-                ],
+            idle && snapshot.connectionState == ConnectionState.done;
+        final directory = owner.directory;
+        final canApply =
+            idle &&
+            owner.hasLease &&
+            directory != null &&
+            (directory.proxyPaths.isNotEmpty ||
+                (owner.observation?['tunnel_ready'] == true &&
+                    directory.endpoints.isNotEmpty &&
+                    directory.adapterName.isNotEmpty));
+        return Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            FilledButton(
+              onPressed: canApply ? _applyProfile : null,
+              child: Text(l.photonApply),
+            ),
+            OutlinedButton(
+              onPressed: editable ? () => _editTemplate(config, file) : null,
+              child: Text(l.photonEditTemplate),
+            ),
+            OutlinedButton(
+              onPressed: editable ? () => _importTemplate(config) : null,
+              child: Text(l.photonImportTemplate),
+            ),
+            if (hasTemplate)
+              TextButton(
+                onPressed: editable ? () => _resetTemplate(config) : null,
+                child: Text(l.photonBuiltinRules),
               ),
-            ],
-          ),
+          ],
         );
       },
     );
+  }
+
+  Future<void> _applyProfile() async {
+    if (_applying) return;
+    final controller = owner;
+    final apply = widget.applyProfile ?? photonProxyBridge.apply;
+    setState(() => _applying = true);
+    try {
+      await controller.refresh();
+      await controller.applyProxies(apply);
+    } finally {
+      if (mounted) setState(() => _applying = false);
+    }
   }
 
   Future<void> _resetTemplate(String config) async {

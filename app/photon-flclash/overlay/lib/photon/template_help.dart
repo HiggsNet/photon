@@ -44,19 +44,14 @@ rule-providers:
     interval: 86400
 ''';
 
-Future<void> showPhotonTemplateHelp(BuildContext context) => showSheet<void>(
-  context: context,
-  builder: (_) => const _PhotonTemplateHelp(),
-);
-
-class _PhotonTemplateHelp extends StatefulWidget {
-  const _PhotonTemplateHelp();
+class PhotonTemplateHelp extends StatefulWidget {
+  const PhotonTemplateHelp({super.key});
 
   @override
-  State<_PhotonTemplateHelp> createState() => _PhotonTemplateHelpState();
+  State<PhotonTemplateHelp> createState() => _PhotonTemplateHelpState();
 }
 
-class _PhotonTemplateHelpState extends State<_PhotonTemplateHelp> {
+class _PhotonTemplateHelpState extends State<PhotonTemplateHelp> {
   bool _exporting = false;
 
   Future<void> _copy(String text) => globalState.safeRun(() async {
@@ -86,74 +81,56 @@ class _PhotonTemplateHelpState extends State<_PhotonTemplateHelp> {
   Widget build(BuildContext context) {
     final l = context.appLocalizations;
     final sections = [
-      (l.photonProxyTemplate, l.photonTemplateHint),
-      (l.photonProxyPaths, l.photonTemplatePathsHint),
       (l.photonTemplateKept, l.photonTemplateKeptHint),
       (l.photonTemplateManaged, l.photonTemplateManagedHint),
       (l.photonTemplateSafeguards, l.photonTemplateSafeguardsHint),
       (l.photonTemplateIgnored, l.photonTemplateIgnoredHint),
     ];
-    return Scaffold(
-      title: l.photonTemplateHelp,
-      body: SingleChildScrollView(
-        padding: EdgeInsets.fromLTRB(
-          20,
-          context.sectionsTopPadding,
-          20,
-          20 + context.bottomInset,
+    final heading = AppTextStyle.headline.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      spacing: 12,
+      children: [
+        Text(l.photonTemplateHelp, style: heading),
+        Text(l.photonTemplateHint),
+        Text(l.photonTemplatePathsHint),
+        Text(l.photonTemplateAiHint),
+        TextButton(
+          onPressed: () => _copy(l.photonTemplateAiPrompt),
+          child: Text(l.photonTemplateCopyAiPrompt),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          spacing: 16,
+        for (final (title, body) in sections)
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            spacing: 6,
+            children: [
+              Text(title, style: heading),
+              SelectableText(body),
+            ],
+          ),
+        Text(l.photonTemplateExample, style: heading),
+        Text(l.photonTemplateExampleHint),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
           children: [
-            Text(l.photonTemplateHelpIntro),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              spacing: 6,
-              children: [
-                Text(l.photonTemplateAiHint),
-                TextButton(
-                  onPressed: () => _copy(l.photonTemplateAiPrompt),
-                  child: Text(l.photonTemplateCopyAiPrompt),
-                ),
-              ],
+            TextButton(
+              onPressed: () => _copy(photonProxyTemplateExample),
+              child: Text(l.copy),
             ),
-            for (final (title, body) in sections)
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                spacing: 6,
-                children: [
-                  Text(title, style: AppTextStyle.headline.of(context)),
-                  SelectableText(body),
-                ],
-              ),
-            Text(
-              l.photonTemplateExample,
-              style: AppTextStyle.headline.of(context),
-            ),
-            Text(l.photonTemplateExampleHint),
-            Wrap(
-              spacing: 8,
-              children: [
-                TextButton(
-                  onPressed: () => _copy(photonProxyTemplateExample),
-                  child: Text(l.copy),
-                ),
-                TextButton(
-                  onPressed: _exporting ? null : _export,
-                  child: Text(l.photonTemplateExportExample),
-                ),
-              ],
-            ),
-            SelectableText(
-              photonProxyTemplateExample,
-              style: AppTextStyle.body
-                  .of(context)
-                  .copyWith(fontFamily: 'monospace'),
+            TextButton(
+              onPressed: _exporting ? null : _export,
+              child: Text(l.photonTemplateExportExample),
             ),
           ],
         ),
-      ),
+        SelectableText(
+          photonProxyTemplateExample,
+          style: AppTextStyle.body
+              .of(context)
+              .copyWith(fontFamily: 'monospace'),
+        ),
+      ],
     );
   }
 }

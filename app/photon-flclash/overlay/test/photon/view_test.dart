@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:fl_clash/photon/controller.dart';
+import 'package:fl_clash/photon/proxy_paths_view.dart';
 import 'package:fl_clash/photon/services_view.dart';
 import 'package:fl_clash/photon/setup.dart';
 import 'package:fl_clash/photon/setup_view.dart';
@@ -79,11 +81,14 @@ void main() {
     await tester.pumpAndSettle();
     await tester.runAsync(() => file.exists());
     await tester.pumpAndSettle();
-    expect(find.text('photon.proxy.yaml'), findsOneWidget);
+    expect(find.textContaining('photon.proxy.yaml'), findsNothing);
+    expect(find.byType(Scaffold), findsOneWidget);
+    expect(find.text('Usage'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'Copy AI prompt'), findsOneWidget);
     expect(
       tester
-          .widget<FilledButton>(
-            find.widgetWithText(FilledButton, 'Edit YAML template'),
+          .widget<OutlinedButton>(
+            find.widgetWithText(OutlinedButton, 'Edit YAML template'),
           )
           .onPressed,
       isNotNull,
@@ -95,11 +100,61 @@ void main() {
     );
     expect(find.widgetWithText(TextButton, 'Built-in rules'), findsOneWidget);
     expect(
+      tester
+          .widget<FilledButton>(
+            find.widgetWithText(FilledButton, 'Apply Photon profile'),
+          )
+          .onPressed,
+      isNull,
+    );
+    expect(
       find.textContaining('Use Photon Paths as a rule target'),
       findsOneWidget,
     );
     expect(backend.calls, isEmpty);
   });
+
+  for (final pathsOnly in [false, true]) {
+    photonTest(
+      pathsOnly
+          ? 'template applies with a path and no tunnel'
+          : 'template applies with authorized services',
+      (tester) async {
+        backend.sample['tunnel_ready'] = !pathsOnly;
+        backend.serviceSample = {
+          ...directoryFixture(withdrawn: pathsOnly),
+          if (pathsOnly)
+            'proxy_v2_routes': [
+              {
+                'name': 'home',
+                'address': '127.0.0.1',
+                'port': 10801,
+                'hops': ['gateway@h2l4'],
+              },
+            ],
+        };
+        var applied = 0;
+        await controller.start(allowed: true);
+        await tester.pumpWidget(
+          view(
+            child: PhotonTemplateView(
+              controller: controller,
+              applyProfile: () async {
+                applied++;
+              },
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.widgetWithText(FilledButton, 'Apply Photon profile'),
+        );
+        await tester.pumpAndSettle();
+        expect(applied, 1);
+        expect(backend.calls.where((call) => call == 'status'), hasLength(2));
+      },
+    );
+  }
 
   testWidgets('new Photon users can start with settings or use existing YAML', (
     tester,
@@ -742,6 +797,41 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  photonTest('paths and services offer the same disconnected action', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final connect = find.widgetWithText(FilledButton, 'Connect Photon');
+    for (final width in [428.0, 1400.0]) {
+      tester.view.physicalSize = Size(width, 850);
+      await tester.pumpWidget(
+        view(child: PhotonProxyPathsView(controller: controller)),
+      );
+      await tester.pumpAndSettle();
+      final pathButton = tester.getTopLeft(connect);
+      await tester.pumpWidget(
+        view(child: PhotonServicesView(controller: controller)),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.getTopLeft(connect), pathButton);
+      expect(find.text('Apply Photon profile'), findsNothing);
+    }
+    final starting = backend.starting = Completer<void>();
+    try {
+      await tester.tap(connect);
+      await tester.pumpAndSettle();
+      expect(backend.calls, contains('start'));
+      expect(connect, findsNothing);
+      expect(find.text('Apply Photon profile'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    } finally {
+      starting.complete();
+    }
+  });
+
   photonTest('proxy services group all authorized endpoints by publisher', (
     tester,
   ) async {
@@ -797,14 +887,14 @@ void main() {
     expect(tableText('United States'), findsOneWidget);
     expect(tableText('custom'), findsOneWidget);
     expect(tableText('Global'), findsOneWidget);
-    expect(find.text('Apply Photon profile'), findsOneWidget);
+    expect(find.text('Apply Photon profile'), findsNothing);
     expect(find.text('Import YAML template'), findsNothing);
     expect(find.text('Edit YAML template'), findsNothing);
     expect(
       find.textContaining('Checks indicate supported exit types'),
       findsNothing,
     );
-    expect(find.text('How templates work'), findsNothing);
+    expect(find.text('Usage'), findsNothing);
     expect(find.byType(Checkbox), findsWidgets);
     const ordered = [
       'short.other.',

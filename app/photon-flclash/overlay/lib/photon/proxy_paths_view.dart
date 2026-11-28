@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:fl_clash/enum/enum.dart';
 import 'package:fl_clash/l10n/l10n.dart';
 import 'package:fl_clash/providers/app.dart';
 import 'package:fl_clash/ui/icons/icons.dart';
@@ -11,6 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'controller.dart';
 import 'proxy_bridge.dart';
+import 'proxy_connection.dart';
 import 'proxy_paths.dart';
 
 String _text(BuildContext context, String zh, String en) =>
@@ -186,36 +186,18 @@ class _PhotonProxyPathsState extends ConsumerState<PhotonProxyPathsView> {
               24,
             ),
             child: Align(
-              alignment: Alignment.topCenter,
+              alignment: AlignmentDirectional.topStart,
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 880),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   spacing: 12,
                   children: [
-                    if (safeMode)
-                      Text(
-                        _text(context, '安全模式下不可用', 'Unavailable in safe mode'),
-                      )
-                    else if (!_owner.hasLease)
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: FilledButton(
-                          onPressed: _busy || _owner.busy
-                              ? null
-                              : () => _run(() async {
-                                  if (_owner.configPath == null) {
-                                    ref
-                                        .read(currentPageLabelProvider.notifier)
-                                        .toPage(PageLabel.photon);
-                                    return;
-                                  }
-                                  await _owner.start(allowed: true);
-                                }),
-                          child: Text(
-                            _text(context, '连接 Photon', 'Connect Photon'),
-                          ),
-                        ),
+                    if (safeMode || !_owner.hasLease)
+                      PhotonProxyConnection(
+                        owner: _owner,
+                        safeMode: safeMode,
+                        enabled: !_busy,
                       )
                     else if (snapshot == null)
                       Text(
@@ -226,41 +208,20 @@ class _PhotonProxyPathsState extends ConsumerState<PhotonProxyPathsView> {
                         ),
                       )
                     else ...[
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          FilledButton.icon(
-                            onPressed: _busy ? null : () => _edit(snapshot),
-                            icon: const GlyphIcon(AppGlyphs.add, fill: 1),
-                            label: Text(_text(context, '新建路径', 'New path')),
-                          ),
-                          OutlinedButton(
-                            onPressed: _busy
-                                ? null
-                                : () => _run(() async {
-                                    await _owner.refresh();
-                                    await _owner.applyProxies(_bridge.apply);
-                                    if (_owner.error case final error?) {
-                                      throw StateError('$error');
-                                    }
-                                  }),
-                            child: Text(
-                              _text(
-                                context,
-                                '应用 Photon 配置',
-                                'Apply Photon profile',
-                              ),
-                            ),
-                          ),
-                        ],
+                      Align(
+                        alignment: AlignmentDirectional.centerStart,
+                        child: FilledButton.icon(
+                          onPressed: _busy ? null : () => _edit(snapshot),
+                          icon: const GlyphIcon(AppGlyphs.add, fill: 1),
+                          label: Text(_text(context, '新建路径', 'New path')),
+                        ),
                       ),
                       if (snapshot.routes.isEmpty)
                         Text(_text(context, '暂无已保存的路径', 'No saved paths')),
                       for (final path in snapshot.routes)
                         _routeCard(snapshot, path),
                     ],
-                    if (!safeMode)
+                    if (!safeMode && _owner.hasLease)
                       if ((_error ?? _owner.error) case final error?)
                         Text(
                           '$error',
