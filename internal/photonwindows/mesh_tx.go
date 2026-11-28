@@ -3,6 +3,7 @@ package photonwindows
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -160,7 +161,19 @@ func (m *meshRuntime) sendTXJob(writer *meshPacketWriter, job dataplaneJob) {
 		return
 	}
 	pipeline := p.leaf.pipeline
-	packet, peer, outbound, ok := pipeline.authorizeCompletion(&facts, &completion)
+	var packet []byte
+	var peer netip.AddrPort
+	var outbound, ok bool
+	if link := job.proxyDirect; link != nil {
+		key := meshPath{zone: link.link.Peer, family: link.link.Family}
+		if link.ctx.Err() == nil && proxyPeerLink(key, p, &facts) == link.link {
+			packet, peer, outbound, ok = p.tunnel.data.accept(completion, facts.plan, func(packet []byte, outbound bool) bool {
+				return proxyDirectPacket(link.link, packet, outbound)
+			})
+		}
+	} else {
+		packet, peer, outbound, ok = pipeline.authorizeCompletion(&facts, &completion)
+	}
 	m.stateMu.Unlock()
 	if ok && outbound && job.ctx.Err() == nil {
 		completion.timing.MarkDeliveryBegin()

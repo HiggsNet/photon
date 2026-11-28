@@ -9,6 +9,9 @@ gossip_listen: 0.0.0.0:33434
 state:
   path: 'C:\ProgramData\HiggsNet\Photon Windows\photon.db'
 
+# Optional Photon Proxy v2 roles. Paths are relative to this YAML.
+# proxy_v2_config: proxy-v2.yaml
+
 overlay:
   # Must match the gateway's signed overlay ID. This matches the Linux example.
   id: ipsec-main

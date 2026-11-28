@@ -6,9 +6,58 @@ the originating Client. For example, `less@h26,child/truenas@h2p` reaches Less
 over public IPv6, then Child's `truenas` Exit over Photon Mesh. The first release
 supports TrustTunnel HTTP/2 for TCP streams and UDP datagrams.
 
+## Photon Windows
+
+Set `proxy_v2_config: proxy-v2.yaml` in the Photon Windows YAML and start
+the backend as usual. The path is relative to the Photon Windows YAML. The
+proxy YAML uses the same `client`, `relay`, `exits`, `port_groups`, `tls`, and
+`directory_refresh` settings as Linux. Windows supplies the directory, signed
+publication and direct IPsec transport from its daemon, so omit
+`directory_socket`, `publish_socket`, and `link_namespace`.
+
+For example, a Windows client can use the following `proxy-v2.yaml`:
+
+```yaml
+state_dir: proxy-state
+directory_refresh: 2s
+client:
+  admin:
+    listen: 127.0.0.1:19573
+    socket: '\\.\pipe\photon-proxy-v2'
+    token: replace-with-a-private-token
+    web: true
+  routes:
+    via-less:
+      listen: 127.0.0.1:1080
+      hops: [less@h2l4, child/internet@h2l6]
+```
+
+Open `http://127.0.0.1:19573/ui` to manage and probe routes. The named pipe
+provides private access to the same HTTP API for local pipe clients. To use
+the route in Mihomo or FlClash, add `127.0.0.1:1080` as a SOCKS5 outbound
+with UDP enabled. Replacing its hops preserves the port. A Windows node can
+also configure Relay and Exit bindings, including the `link_local` port groups
+shown below. A direct hop needs an authenticated Photon link to the adjacent
+node in the requested outer address family. The Windows daemon carries direct
+TCP over that link independently of Wintun business routes and Babel selection.
+
+The proxy creates a private Windows ACL on a new `state_dir`. Use a dedicated
+directory on NTFS and keep the state and configuration available to the
+account that runs the daemon. Installations using SCM and the desktop backend
+should give each running Zone a unique state directory, ports and pipe name.
+Copying a Photon Windows profile keeps its reference to the existing Proxy v2
+YAML and state. To move them, copy the proxy configuration and its private
+state directory while the backend is stopped and update the reference.
+Manual port and TLS rotations address the running Windows configuration:
+
+```powershell
+photon-windows.exe proxy rotate --config photon.yaml --port-group wan
+photon-windows.exe proxy rotate --config photon.yaml --tls
+```
+
 ## Daemon and local state
 
-Configure two local Photon daemon sockets:
+On Linux, configure two local Photon daemon sockets:
 
 ```yaml
 proxy_directory_socket: /run/photon-proxy/directory.sock
@@ -34,7 +83,8 @@ the Zone's local proxy records.
 
 Use a persistent private `state_dir` (mode `0700`). Its `state.db` stores the
 SOCKS5 routing state, signing key, TLS certificate and private key, and port and
-key rotation state. Back it up with the same controls as private keys. DNS and
+key rotation state. Relay and Exit nodes also store accepted signature nonces
+until their acceptance window ends. Back it up with the same controls as private keys. DNS and
 live connection state are kept in memory.
 
 ## Example node
@@ -266,4 +316,11 @@ one byte of lifetime in seconds (up to 120), a 16-byte nonce, and a 64-byte
 Ed25519 signature. Sign the NUL-separated protocol label
 `photon.proxy.chain.v2`, origin, route Header value, target Header value, and
 first 33 bytes of the authorization bytes. Relays carry the three values
-unchanged. Request expiry limits stream establishment.
+unchanged. Request expiry limits stream establishment. A receiver allows two
+minutes of clock skew in either direction and persists accepted nonces across
+restarts. The signed lifetime remains at most 120 seconds. After the first
+upgrade of a Relay or Exit that used an in-memory replay cache, the receiver
+requires signatures issued after the upgrade cutover so old requests cannot
+be replayed under the expanded window. A sender whose clock is behind may
+have to wait for its clock to reach that cutover. Each receiving Relay and
+Exit must be updated to apply the larger tolerance.

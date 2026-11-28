@@ -48,12 +48,13 @@ type dataplaneSA struct {
 }
 
 type dataplaneJob struct {
-	owner      *gatewayDataplane
-	ctx        context.Context
-	generation uint64
-	sa         *dataplaneSA
-	packet     []byte
-	outbound   bool
+	owner       *gatewayDataplane
+	ctx         context.Context
+	generation  uint64
+	sa          *dataplaneSA
+	packet      []byte
+	proxyDirect *proxyDirectStack
+	outbound    bool
 }
 
 type dataplaneCompletion struct {
@@ -288,6 +289,10 @@ func (d *gatewayDataplane) submit(sa *dataplaneSA, packet []byte, outbound bool)
 	if !ok {
 		return false
 	}
+	return d.enqueue(job)
+}
+
+func (d *gatewayDataplane) enqueue(job dataplaneJob) bool {
 	select {
 	case d.jobs <- job:
 		if d.jobReady != nil {

@@ -35,6 +35,7 @@ type meshRuntime struct {
 	seqno            uint16
 	byData           map[*gatewayDataplane]*meshPeer
 	device           *meshDevice
+	proxyDirect      *proxyDirectHost
 	opened           chan leafOpenResult
 	jobs             chan dataplaneJob
 	onPublication    func()

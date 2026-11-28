@@ -76,3 +76,40 @@ func TestCopyRejectsInvalidIdentityAndLeavesNoPartialConfiguration(t *testing.T)
 		t.Fatalf("failed copy left files: %v %v", entries, err)
 	}
 }
+
+func TestProxyV2ConfigSurvivesDesktopSettingsAndCopy(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "photon.yaml")
+	proxy := filepath.Join(filepath.Dir(source), "proxy-v2.yaml")
+	if err := os.WriteFile(proxy, []byte("state_dir: proxy-state\nclient: {}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	form := DefaultForm(source)
+	form.RootPublicKey, form.ManagedZone, form.SplitRoutes = strings.Repeat("01", 32), "leaf.catofes.", "10.16.0.0/16"
+	text, err := formText(form, filepath.Base(proxy))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(source, []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+	editor := New(source)
+	form, err = editor.LoadForm()
+	if err != nil {
+		t.Fatal(err)
+	}
+	form.LogLevel = "debug"
+	if err := editor.SaveForm(form); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "photon.yaml")
+	if err := Copy(source, target); err != nil {
+		t.Fatal(err)
+	}
+	config, err := photonwindows.LoadConfig(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.ProxyV2ConfigPath != proxy || config.Log.Level != "debug" {
+		t.Fatalf("copied configuration lost edited settings or Proxy v2: %+v", config)
+	}
+}

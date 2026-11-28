@@ -90,8 +90,13 @@ func Lines(text string) []string {
 }
 
 func FormText(form Form) (string, error) {
+	return formText(form, "")
+}
+
+func formText(form Form, proxyV2 string) (string, error) {
 	var options photonwindows.ConfigOptions
 	options.SchemaVersion = photonwindows.ConfigSchemaVersion
+	options.ProxyV2ConfigPath = proxyV2
 	options.TrustedRootPublicKey, options.ManagedZone = form.RootPublicKey, form.ManagedZone
 	options.State.Path, options.GossipListen = form.StatePath, form.GossipListen
 	options.Overlay.ID, options.Overlay.SplitRoutes = form.OverlayID, Lines(form.SplitRoutes)
@@ -127,6 +132,7 @@ func (b *Editor) LoadForm() (Form, error) {
 	if errors.Is(err, os.ErrNotExist) {
 		b.formLoaded = true
 		b.formMOBIKE = false
+		b.formProxyV2 = ""
 		form := DefaultForm(b.path)
 		form.NewConfig = true
 		return form, nil
@@ -140,6 +146,7 @@ func (b *Editor) LoadForm() (Form, error) {
 	}
 	b.formLoaded = true
 	b.formMOBIKE = config.Gateway.MOBIKE
+	b.formProxyV2 = config.ProxyV2ConfigPath
 	return FromConfig(config), nil
 }
 
@@ -152,7 +159,7 @@ func (b *Editor) SaveForm(form Form) error {
 		mobike = *form.MOBIKE
 	}
 	form.MOBIKE = &mobike
-	text, err := FormText(form)
+	text, err := formText(form, b.formProxyV2)
 	if err != nil {
 		return err
 	}

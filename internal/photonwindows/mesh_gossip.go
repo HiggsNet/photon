@@ -17,7 +17,7 @@ import (
 // runMeshGossip owns protocol dispatch and discovery after startup. The mesh
 // consumes a notification of the latest committed revision and never waits
 // for Gossip verification, persistence, or outbound synchronization.
-func runMeshGossip(ctx context.Context, config *Config, state *State, driver *corehost.GossipDriver, transport *gossip.Transport, logger *slog.Logger, bootstrap map[string]*net.UDPAddr, refresh <-chan map[string]*net.UDPAddr, leafIntents <-chan struct{}, published chan<- struct{}) error {
+func runMeshGossip(ctx context.Context, config *Config, state *State, driver *corehost.GossipDriver, transport *gossip.Transport, logger *slog.Logger, bootstrap map[string]*net.UDPAddr, refresh <-chan map[string]*net.UDPAddr, leafIntents, proxyUpdates <-chan struct{}, published chan<- struct{}) error {
 	store := state.Store()
 	gossipLog := logger.With("component", "gossip")
 	syncPeers := func() {
@@ -35,6 +35,8 @@ func runMeshGossip(ctx context.Context, config *Config, state *State, driver *co
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-proxyUpdates:
+			driver.RelayGossipUpdate(ctx, "", time.Now())
 		case <-leafIntents:
 			now := time.Now()
 			if err := state.EnsureLocalLeafRoutes(ctx, config, now); err != nil &&

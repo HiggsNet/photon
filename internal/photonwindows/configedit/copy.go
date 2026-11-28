@@ -13,7 +13,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Copy installs a self-contained configuration without overwriting or removing originals.
+// Copy copies the Photon identity and rule template, preserving references to
+// separately managed proxy configurations.
 func Copy(source, destination string) (err error) {
 	if !filepath.IsAbs(source) || !filepath.IsAbs(destination) {
 		return errors.New("configuration paths must be absolute")
@@ -95,6 +96,10 @@ func Copy(source, destination string) (err error) {
 	}
 	mapping := document.Content[0]
 	for i := 0; i < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == "proxy_v2_config" && config.ProxyV2ConfigPath != "" {
+			mapping.Content[i+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: config.ProxyV2ConfigPath}
+			continue
+		}
 		if mapping.Content[i].Value != "state" {
 			continue
 		}
@@ -118,6 +123,9 @@ func Copy(source, destination string) (err error) {
 	}
 	if relocated.State.Path != stateName {
 		return errors.New("cannot relocate state.path in this YAML; use a direct state mapping")
+	}
+	if relocated.ProxyV2ConfigPath != config.ProxyV2ConfigPath {
+		return errors.New("cannot preserve proxy_v2_config in this YAML; use a direct path")
 	}
 	current, _, err := Read(source)
 	if err != nil {

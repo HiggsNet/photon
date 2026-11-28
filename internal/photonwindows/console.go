@@ -296,6 +296,11 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	var lastPlan GatewayPlan
 	mesh := newMeshRuntime(ctx, config, state, packet, d.deviceFactory, logger, requestPlan)
 	defer func() { err = errors.Join(err, mesh.close()) }()
+	proxyCtx, stopProxy := context.WithCancel(ctx)
+	if config.proxyV2 != nil {
+		mesh.proxyDirect = newProxyDirectHost(proxyCtx, mesh)
+	}
+	defer stopProxy()
 	ikeCtx, stopIKE := context.WithCancel(ctx)
 	var ikeWorkers sync.WaitGroup
 	ikeWorkers.Go(func() { mesh.runIKEStarts(ikeCtx) })
@@ -389,9 +394,10 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 	gossipCtx, stopGossip := context.WithCancel(ctx)
 	gossipRefresh := make(chan map[string]*net.UDPAddr, 1)
 	gossipPublished := make(chan struct{}, 1)
+	proxyPublished := make(chan struct{}, 1)
 	gossipDone := make(chan error, 1)
 	go func(initial map[string]*net.UDPAddr) {
-		gossipDone <- runMeshGossip(gossipCtx, config, state, driver, transport, logger, initial, gossipRefresh, mesh.leafIntents, gossipPublished)
+		gossipDone <- runMeshGossip(gossipCtx, config, state, driver, transport, logger, initial, gossipRefresh, mesh.leafIntents, proxyPublished, gossipPublished)
 	}(bootstrap)
 	gossipExited := false
 	defer func() {
@@ -433,6 +439,14 @@ func (d *Daemon) Run(ctx context.Context) (err error) {
 		stopPackets()
 		packetWorkers.Wait()
 	}()
+	if mesh.proxyDirect != nil {
+		var proxyWorkers sync.WaitGroup
+		proxyWorkers.Go(mesh.proxyDirect.run)
+		proxyWorkers.Go(func() {
+			d.runProxyV2(proxyCtx, logger, state.Store(), mesh.proxyDirect, packet.outboundRoutes, proxyPublished)
+		})
+		defer func() { stopProxy(); proxyWorkers.Wait() }()
+	}
 	close(d.ready)
 	for {
 		select {

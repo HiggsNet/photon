@@ -8,6 +8,7 @@ on:
       - '.github/workflows/windows.yml'
       - '.github/actions/setup-flclash/**'
       - 'app/photon-flclash/**'
+      - 'internal/photonproxy/**'
       - 'docs/scripts/windows-*.ps1'
   workflow_call:
   workflow_dispatch:
@@ -101,6 +102,8 @@ jobs:
             -OutputDirectory portable -RunVersionChecks
       - name: Run Windows native tests
         run: go test -count=1 ./pkg/core/gossip ./pkg/core/host ./internal/photonwindows ./app/photon-windows ./app/photon-windows-gui
+      - name: Test Windows Proxy v2 state, replay protection and named pipe
+        run: go test -count=1 -run '^(TestWindowsProxy|TestV2Replay|TestV2CompactSignedRoute)' ./internal/photonproxy
 
   frontend-tests:
     name: Test Photon frontend on Linux

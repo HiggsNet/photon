@@ -30,7 +30,7 @@ unzip -q "$build/photon-windows-amd64.zip" -d "$fixture/unpacked"
     cd "$fixture/unpacked"
     sha256sum --check --status SHA256SUMS
 )
-expected=(photon-windows.exe photon-windows-gui.exe wintun.dll README.zh-CN.txt config.example.yaml SHA256SUMS third_party/wintun/README.md third_party/wintun/LICENSE-go.txt third_party/wintun/LICENSE-binary.txt third_party/ranet-lite/README.md third_party/ranet-lite/LICENSE)
+expected=(photon-windows.exe photon-windows-gui.exe wintun.dll README.zh-CN.txt config.example.yaml SHA256SUMS third_party/wintun/README.md third_party/wintun/LICENSE-go.txt third_party/wintun/LICENSE-binary.txt third_party/ranet-lite/README.md third_party/ranet-lite/LICENSE third_party/windows-proxy-licenses.txt)
 diff -u <(printf '%s\n' "${expected[@]}" | LC_ALL=C sort) <(unzip -Z1 "$build/photon-windows-amd64.zip" | LC_ALL=C sort)
 cmp "$output/photon-windows.exe" "$fixture/unpacked/photon-windows.exe"
 cmp "$output/photon-windows-gui.exe" "$fixture/unpacked/photon-windows-gui.exe"

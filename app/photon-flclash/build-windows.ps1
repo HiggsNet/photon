@@ -97,7 +97,7 @@ if ((Get-Content -LiteralPath (Join-Path $Checkout 'pubspec.yaml') -Raw) -match 
 foreach ($name in @('photon-windows.exe','wintun.dll')) {
     if (!(Test-Path -LiteralPath (Join-Path $BackendDirectory $name) -PathType Leaf)) { throw "Missing $name" }
 }
-$notices = @('wintun\README.md', 'wintun\LICENSE-go.txt', 'wintun\LICENSE-binary.txt', 'ranet-lite\README.md', 'ranet-lite\LICENSE')
+$notices = @('wintun\README.md', 'wintun\LICENSE-go.txt', 'wintun\LICENSE-binary.txt', 'ranet-lite\README.md', 'ranet-lite\LICENSE', 'windows-proxy-licenses.txt')
 foreach ($notice in $notices) {
     if (!(Test-Path -LiteralPath (Join-Path $BackendDirectory ('third_party\' + $notice)) -PathType Leaf)) { throw "Missing backend notice: $notice" }
 }

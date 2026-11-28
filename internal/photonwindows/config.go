@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/HiggsNet/photon/internal/photonproxy"
 	"github.com/HiggsNet/photon/pkg/core/zone"
 	"gopkg.in/yaml.v3"
 )
@@ -35,6 +36,8 @@ type Config struct {
 	Log                  LogConfig
 	Reconnect            ReconnectConfig
 	GossipListen         string
+	ProxyV2ConfigPath    string
+	proxyV2              *photonproxy.EmbeddedConfig
 }
 
 type StateConfig struct {
@@ -80,6 +83,7 @@ type ReconnectConfig struct {
 // editors. Normalization and validation remain shared with ParseConfig.
 type ConfigOptions struct {
 	GossipListen         string `yaml:"gossip_listen"`
+	ProxyV2ConfigPath    string `yaml:"proxy_v2_config,omitempty"`
 	SchemaVersion        int    `yaml:"schema_version"`
 	TrustedRootPublicKey string `yaml:"trusted_root_public_key"`
 	ManagedZone          string `yaml:"managed_zone"`
@@ -142,6 +146,19 @@ func (config *Config) ResolvePaths(configPath string) error {
 		config.State.Path = filepath.Join(filepath.Dir(absolute), config.State.Path)
 	}
 	config.State.Path = filepath.Clean(config.State.Path)
+	config.proxyV2 = nil
+	if config.ProxyV2ConfigPath == "" {
+		return nil
+	}
+	if !filepath.IsAbs(config.ProxyV2ConfigPath) {
+		config.ProxyV2ConfigPath = filepath.Join(filepath.Dir(absolute), config.ProxyV2ConfigPath)
+	}
+	config.ProxyV2ConfigPath = filepath.Clean(config.ProxyV2ConfigPath)
+	proxy, err := photonproxy.LoadEmbeddedConfig(config.ProxyV2ConfigPath)
+	if err != nil {
+		return fmt.Errorf("proxy_v2_config: %w", err)
+	}
+	config.proxyV2 = proxy
 	return nil
 }
 
@@ -189,6 +206,7 @@ func normalizeConfig(raw ConfigOptions) (*Config, error) {
 
 	config := &Config{
 		GossipListen:         strings.TrimSpace(raw.GossipListen),
+		ProxyV2ConfigPath:    strings.TrimSpace(raw.ProxyV2ConfigPath),
 		SchemaVersion:        raw.SchemaVersion,
 		TrustedRootPublicKey: root,
 		ManagedZone:          managed,

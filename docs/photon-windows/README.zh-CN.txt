@@ -28,6 +28,9 @@ Photon Windows（Windows 11 amd64）
 - 需要排查时从侧栏打开 Gossip、Tunnel、Babel 或日志；“诊断”提供概览、节点地址和原始 JSON。
 
 独立代理
+- 如需 Photon Proxy v2 的签名多跳路径，可在 Photon Windows 配置中设置
+  proxy_v2_config: proxy-v2.yaml，由后台启动客户端、Relay 或 Exit。
+  路径管理与监听端口见仓库 docs/photon-proxy-v2.md 的 Photon Windows 一节。
 - 在主窗口或托盘打开“代理管理”。将官方 Windows amd64 Mihomo 解压并命名为
   mihomo.exe，放在 photon-windows-gui.exe 旁边。试用包如果已带 Mihomo 可直接使用。
 - 选择端口（默认 17890），点击“启动代理”。在需要代理的应用里使用

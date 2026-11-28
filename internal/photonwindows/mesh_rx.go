@@ -30,12 +30,17 @@ func (m *meshRuntime) receiveESP(packet tunnelDatagram) {
 		return
 	}
 	completion := openOwnedInbound(job, packet.packet, packet.timing)
-	device, pipeline := m.prepareRXDelivery(&completion)
-	if device == nil {
+	device, pipeline, direct := m.prepareRXDelivery(&completion)
+	if device == nil && direct == nil {
 		return
 	}
 	if job.ctx.Err() != nil {
 		completion.timing.Finish(fixturePacketTimingCanceled)
+		return
+	}
+	if direct != nil {
+		direct.inject(completion.packet)
+		completion.timing.Finish(fixturePacketTimingDelivered)
 		return
 	}
 	// The fresh gate committed delivery before releasing the state lock. The
@@ -83,18 +88,34 @@ func openOwnedInbound(job dataplaneJob, packet []byte, timing fixturePacketTimin
 	return result
 }
 
-func (m *meshRuntime) prepareRXDelivery(completion *dataplaneCompletion) (packetDevice, *gatewayBabelPipeline) {
+func (m *meshRuntime) prepareRXDelivery(completion *dataplaneCompletion) (packetDevice, *gatewayBabelPipeline, *proxyDirectStack) {
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
 	var facts packetAuthorization
 	p := m.prepareCompletion(completion, time.Now(), &facts)
 	if p == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	pipeline := p.leaf.pipeline
+	if m.proxyDirect != nil && facts.plan.Selected != nil && len(completion.packet) >= 60 && completion.packet[6] == 6 {
+		key := meshPath{zone: facts.plan.Selected.Zone, family: facts.plan.outerFamily}
+		link := proxyPeerLink(key, p, &facts)
+		if link.ID != "" && proxyDirectPacket(link, completion.packet, false) {
+			if direct := m.proxyDirect.lookup(link); direct != nil {
+				_, _, _, ok := p.tunnel.data.accept(*completion, facts.plan, func(packet []byte, outbound bool) bool {
+					return !outbound && proxyDirectPacket(link, packet, false)
+				})
+				if ok {
+					return nil, nil, direct
+				}
+			}
+			completion.timing.Finish(fixturePacketTimingRejected)
+			return nil, nil, nil
+		}
+	}
 	packet, _, _, ok := pipeline.authorizeCompletion(&facts, completion)
 	if !ok {
-		return nil, nil
+		return nil, nil, nil
 	}
 	device, accepted, err := pipeline.prepareInboundDelivery(&facts, packet, &completion.timing)
 	if err != nil {
@@ -103,7 +124,7 @@ func (m *meshRuntime) prepareRXDelivery(completion *dataplaneCompletion) (packet
 		m.noteSequence(p)
 		m.refreshRouteSelections(corestate.View{}, facts.now)
 	}
-	return device, pipeline
+	return device, pipeline, nil
 }
 
 // prepareInboundDelivery processes Babel messages under the route owner's

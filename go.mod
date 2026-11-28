@@ -3,6 +3,8 @@ module github.com/HiggsNet/photon
 go 1.25.0
 
 require (
+	github.com/Microsoft/go-winio v0.6.2
+	github.com/metacubex/gvisor v0.0.0-20260922041103-e2cbcd6e7400
 	github.com/strongswan/govici v0.8.2
 	github.com/urfave/cli/v3 v3.9.0
 	github.com/vmihailenco/msgpack/v5 v5.4.1
@@ -14,6 +16,8 @@ require (
 )
 
 require (
+	github.com/google/btree v1.1.2 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	golang.org/x/sync v0.10.0 // indirect
+	golang.org/x/time v0.10.0 // indirect
 )

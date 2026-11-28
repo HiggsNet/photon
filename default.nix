@@ -30,7 +30,7 @@
       pname = "photon";
       inherit version;
       src = cleanSrc;
-      vendorHash = "sha256-ZR8wBHmOH/or25G7Py1I/zxonMTtF2Gc/jAowlSsoQw=";
+      vendorHash = "sha256-pkfdlxgI69+IalTVd7PIte44NmNSwK9It/xUS8Wp0FY=";
       subPackages = [ "app/photon" "app/photon-services" ];
       doCheck = false;
       ldflags = [

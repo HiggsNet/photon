@@ -77,7 +77,7 @@ verify_hash "$dll_hash" "$stage/package/wintun.dll"
 cp -- docs/photon-windows/README.zh-CN.txt "$stage/package/README.zh-CN.txt"
 cp -- docs/photon-windows/config.example.yaml "$stage/package/config.example.yaml"
 files=(photon-windows.exe photon-windows-gui.exe wintun.dll README.zh-CN.txt config.example.yaml)
-for file in third_party/wintun/README.md third_party/wintun/LICENSE-go.txt third_party/wintun/LICENSE-binary.txt third_party/ranet-lite/README.md third_party/ranet-lite/LICENSE; do
+for file in third_party/wintun/README.md third_party/wintun/LICENSE-go.txt third_party/wintun/LICENSE-binary.txt third_party/ranet-lite/README.md third_party/ranet-lite/LICENSE third_party/windows-proxy-licenses.txt; do
     cp -- "$file" "$stage/package/$file"
     files+=("$file")
 done

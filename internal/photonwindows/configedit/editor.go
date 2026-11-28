@@ -21,6 +21,7 @@ type Editor struct {
 	loadAttempted bool
 	formLoaded    bool
 	formMOBIKE    bool
+	formProxyV2   string
 	digest        [32]byte
 }
 

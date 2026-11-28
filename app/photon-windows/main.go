@@ -35,6 +35,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runServiceCommand(args[1:], stdout, stderr)
 	case "state":
 		return runState(args[1:], stdout, stderr)
+	case "proxy":
+		return runProxy(args[1:], stderr)
 	case "gateways":
 		return runGateways(args[1:], stdout, stderr)
 	case "run":
@@ -62,6 +64,35 @@ func run(args []string, stdout, stderr io.Writer) int {
 		writeUsage(stderr)
 		return 2
 	}
+}
+
+func runProxy(args []string, stderr io.Writer) int {
+	const usage = "Usage: photon-windows proxy rotate --config <path> (--port-group <name> | --tls)"
+	if len(args) == 0 || args[0] != "rotate" {
+		fmt.Fprintln(stderr, usage)
+		return 2
+	}
+	flags := flag.NewFlagSet("photon-windows proxy rotate", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	path := flags.String("config", "", "path to Photon Windows YAML config")
+	group := flags.String("port-group", "", "rotating TCP port group")
+	key := flags.Bool("tls", false, "stage a new proxy TLS private key")
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if *path == "" || (*group == "") == !*key || flags.NArg() != 0 {
+		fmt.Fprintln(stderr, usage)
+		return 2
+	}
+	config, err := photonwindows.LoadConfig(*path)
+	if err == nil {
+		err = config.RotateProxy(*group, *key)
+	}
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return 0
 }
 
 func runConsole(ctx context.Context, args []string, stdout, stderr io.Writer) (code int) {
@@ -170,6 +201,7 @@ func writeUsage(w io.Writer) {
 	fmt.Fprintln(w, "  routes --config <path> --destination <IP>          Filter the Babel route sample")
 	fmt.Fprintln(w, "  gateways --config <path>         Inspect signed gateway contacts offline (no route authorization)")
 	fmt.Fprintln(w, "  state import --config <path> --bundle <file> --key <file>  Initialize a new state database")
+	fmt.Fprintln(w, "  proxy rotate --config <path> (--port-group <name> | --tls)  Stage a Proxy v2 rotation")
 	fmt.Fprintln(w, "  run --console --config <path>    Run the Windows leaf daemon in the foreground")
 	fmt.Fprintln(w, "  run --service --config <path>    SCM service entrypoint")
 	fmt.Fprintln(w, "  run --stdio --config <path>      Frontend-owned backend (framed private IPC)")
